@@ -79,7 +79,7 @@ func TestDelegatedRowNeverBecomesTheResumedContextGauge(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	total, lastTurn, err := SessionUsageDetail(path)
+	total, lastTurn, _, err := SessionUsageDetail(path)
 	if err != nil {
 		t.Fatalf("SessionUsageDetail: %v", err)
 	}

@@ -667,9 +667,9 @@ func (s *agentServer) handleSessionLoad(ctx context.Context, params json.RawMess
 
 	// Seed cost from the on-disk usage rows so the editor's usage view and
 	// our own cumulative meter resume at the right figure rather than zero.
-	if cum, last, uerr := core.SessionUsageDetail(p.SessionID); uerr == nil {
+	if cum, _, resume, uerr := core.SessionUsageDetail(p.SessionID); uerr == nil {
 		ag.SeedCost(cum)
-		ag.SeedLastTurnUsage(last)
+		ag.SeedLastTurnUsage(resume)
 	}
 
 	sess := s.bindSession(p.SessionID, cwd, sa, confirmer)

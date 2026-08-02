@@ -661,9 +661,9 @@ func openOrCreateSession(args build.Args, r build.Resolved, ag *core.Agent, vers
 		if seedFresh {
 			seedCardGreeting(s, ag, r.CardGreeting)
 		}
-		if cum, last, uerr := core.SessionUsageDetail(s.Path); uerr == nil {
+		if cum, _, resume, uerr := core.SessionUsageDetail(s.Path); uerr == nil {
 			ag.SeedCost(cum)
-			ag.SeedLastTurnUsage(last)
+			ag.SeedLastTurnUsage(resume)
 		}
 		return s, nil
 	}

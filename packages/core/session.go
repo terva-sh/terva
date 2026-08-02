@@ -336,6 +336,12 @@ type sessionLine struct {
 	Tail       *tailRecord             `json:"tail,omitempty"`
 	Prefix     *prefixDivergenceRecord `json:"prefix,omitempty"`
 	ToolGroup  *toolGroupRecord        `json:"tool_group,omitempty"`
+	// Net rides a "net" row: which connection/edge the adjacent dispatch
+	// physically rode (provider.TransportInfo verbatim — one source of truth,
+	// the way Usage rides). Informational like prefix: never in the
+	// transcript, skipped by the loader. Its `at` against the usage row either
+	// side of it is what correlates a cache collapse with a re-dial.
+	Net *provider.TransportInfo `json:"net,omitempty"`
 
 	// Strategy and FallbackReason ride "compaction" rows only, and only when the
 	// cache-aware summarizer is in play ("cold" is the default and stays
@@ -355,6 +361,15 @@ type sessionLine struct {
 	// model changed and never WHEN. Aligning a settings change against the message
 	// timeline was impossible; a dogfooding review could not distinguish deliberate
 	// model verification from a picker that failed to confirm what it had done.
+	//
+	// Usage rows need it for the same reason and one more: they are the only
+	// record of what a request cost and how much of it hit the prefix cache, and
+	// the questions asked of that record are about RATES — was the gap before
+	// this dispatch long enough to age the cached prefix out, did the collapse
+	// start before the overload in the error sidecar or after it. Both need a
+	// clock, and neither is answerable from row order alone. A cache collapse
+	// analyzed in 2026-08 could establish WHERE the match died but not whether
+	// idle time explained it, because the usage rows carried no time.
 	//
 	// A pointer so omitempty actually omits it: a zero time.Time is not "empty" to
 	// encoding/json, and every other row kind must stay byte-identical.
@@ -545,6 +560,7 @@ const (
 	recordTail            = "tail"
 	recordPrefix          = "prefix"
 	recordToolGroup       = "tool_group"
+	recordNet             = "net"
 )
 
 // Amend op values for [Session.AppendAmend], exported so callers that persist a
@@ -602,6 +618,11 @@ type wireBlock struct {
 	ID        string          `json:"id,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
+	// RawArguments preserves argument text that never parsed. Without it the
+	// row records a call with "{}" and the evidence of what the model actually
+	// sent is gone — which is precisely what made the original defect hard to
+	// read back out of a session.
+	RawArguments string `json:"raw_arguments,omitempty"`
 	// tool_result (Content nests text/image blocks)
 	CallID  string      `json:"call_id,omitempty"`
 	Content []wireBlock `json:"content,omitempty"`
@@ -640,7 +661,24 @@ func encodeWireBlocks(blocks []provider.Content) []wireBlock {
 		case provider.ImageBlock:
 			out = append(out, wireBlock{Type: blockImage, MimeType: b.MimeType, Data: b.Data, ImageID: b.ID})
 		case provider.ToolCallBlock:
-			out = append(out, wireBlock{Type: blockToolCall, ID: b.ID, Name: b.Name, Arguments: b.Arguments})
+			// Belt and braces on the invariant provider.FinalizeToolArguments
+			// establishes. An invalid RawMessage does not corrupt one field: it
+			// makes json.Marshal of the WHOLE message fail, returning zero
+			// bytes, so AppendMessage errors and the assistant turn never
+			// reaches disk while its tool_result does — leaving an orphan
+			// result no reader can attribute. ToolCallBlock is also built
+			// outside the provider package (the SDK, tests, replay), so the
+			// row's writability is guaranteed here rather than assumed of every
+			// producer. The original text moves to RawArguments instead of
+			// being dropped, because it is the only record of what was sent.
+			args, rawArgs := b.Arguments, b.RawArguments
+			if len(args) == 0 || !json.Valid(args) {
+				if rawArgs == "" {
+					rawArgs = string(args)
+				}
+				args = json.RawMessage("{}")
+			}
+			out = append(out, wireBlock{Type: blockToolCall, ID: b.ID, Name: b.Name, Arguments: args, RawArguments: rawArgs})
 		case provider.ToolResultBlock:
 			out = append(out, wireBlock{
 				Type:    blockToolResult,
@@ -918,20 +956,30 @@ func ReadSessionMeta(path string) (SessionMeta, error) {
 // latest row's cumulative field is the session total. Missing usage rows
 // are valid for old/empty sessions and return the zero value.
 func SessionUsage(path string) (provider.Usage, error) {
-	cum, _, err := SessionUsageDetail(path)
+	cum, _, _, err := SessionUsageDetail(path)
 	return cum, err
 }
 
-// SessionUsageDetail returns the latest cumulative usage and the
-// per-turn usage of the final completed turn. The per-turn row drives
-// the live "context used" gauge in the status bar (input + cache
-// approximates the prompt size the model just saw), letting the TUI
-// rehydrate the gauge on resume instead of starting at 0% until the
-// next turn lands.
-func SessionUsageDetail(path string) (cumulative, lastTurn provider.Usage, err error) {
+// SessionUsageDetail returns the latest cumulative usage, the per-turn usage of
+// the final completed turn, and the baseline a resuming host should seed the
+// context gauge with.
+//
+// lastTurn and resumeContext are separate because they answer different
+// questions and only usually agree. lastTurn is what the final turn SPENT —
+// history, and a compaction that ran afterwards has no business rewriting it.
+// resumeContext is what the NEXT prompt will roughly cost, which is a claim
+// about the transcript as it stands on disk. They diverge in exactly one case:
+// a compaction after the newest turn, where lastTurn describes a transcript
+// that no longer exists.
+//
+// The gauge wants resumeContext (input + cache approximates the prompt size the
+// model is about to see), so the TUI rehydrates on resume instead of starting
+// at 0% until the next turn lands. Anything reporting what a turn cost wants
+// lastTurn.
+func SessionUsageDetail(path string) (cumulative, lastTurn, resumeContext provider.Usage, err error) {
 	f, ferr := os.Open(path)
 	if ferr != nil {
-		return provider.Usage{}, provider.Usage{}, ferr
+		return provider.Usage{}, provider.Usage{}, provider.Usage{}, ferr
 	}
 	defer f.Close()
 
@@ -964,6 +1012,13 @@ func SessionUsageDetail(path string) (cumulative, lastTurn provider.Usage, err e
 	var haveCum bool
 	var sinceLastTurn provider.Usage // compaction spend after the newest usage row
 	var betweenLastTwo provider.Usage
+	// A compaction after the newest usage row SUPERSEDES lastTurn as the resume
+	// baseline — see resumeContext below. Tracked as a flag beside the estimate
+	// because /clear writes AppendCompaction(nil), whose estimate is legitimately
+	// 0: "the transcript is empty now" and "no compaction happened" are opposite
+	// facts that a bare int cannot tell apart.
+	var trailingCompaction bool
+	var trailingCompactionTokens int
 	if ierr := forEachJSONLLine(f, func(line []byte) error {
 		var head sessionLineHead
 		if err := json.Unmarshal(line, &head); err != nil {
@@ -971,6 +1026,15 @@ func SessionUsageDetail(path string) (cumulative, lastTurn provider.Usage, err e
 		}
 		switch head.Type {
 		case "compaction":
+			// Hydrate and re-serialize rather than measuring the raw JSON line:
+			// this must produce the SAME number the in-memory re-baseline did
+			// (compact.go's SetLastTurn(estimateTokens(next))), or the gauge
+			// jumps at the moment you resume. Cheap — a compaction row holds the
+			// post-compaction transcript, which is a handful of messages.
+			if msgs, herr := hydrateCompaction(line, nil); herr == nil {
+				trailingCompaction = true
+				trailingCompactionTokens = estimateTokens(msgs)
+			}
 			var row struct {
 				Usage *provider.Usage `json:"usage"`
 			}
@@ -1003,12 +1067,18 @@ func SessionUsageDetail(path string) (cumulative, lastTurn provider.Usage, err e
 			}
 			betweenLastTwo = sinceLastTurn
 			sinceLastTurn = provider.Usage{}
+			// A real turn ran after that compaction, so its provider-reported
+			// prompt size is the truth again and the estimate is superseded in
+			// its turn. Same handoff as in memory, where the next completed
+			// request overwrites the estimate SetLastTurn seeded.
+			trailingCompaction = false
+			trailingCompactionTokens = 0
 			cumulative = row.Cumulative
 			haveCum = true
 		}
 		return nil
 	}); ierr != nil {
-		return provider.Usage{}, provider.Usage{}, ierr
+		return provider.Usage{}, provider.Usage{}, provider.Usage{}, ierr
 	}
 	if haveCum {
 		// Charge the compactions that ran between the final two turns to the
@@ -1033,9 +1103,32 @@ func SessionUsageDetail(path string) (cumulative, lastTurn provider.Usage, err e
 		}
 	}
 	// A compaction after the newest turn never reached a cumulative row. Fold
-	// it into the total — but NOT into lastTurn, which is the context gauge.
+	// it into the total — but NOT into lastTurn, which reports what that turn
+	// actually spent and is not the compaction's to rewrite.
 	cumulative = cumulative.Add(sinceLastTurn)
-	return cumulative, lastTurn, nil
+
+	// resumeContext is what a resuming host should SEED the gauge with, and it
+	// is lastTurn only while lastTurn still describes the transcript on disk.
+	//
+	// A compaction after the newest turn breaks that. Compacting and quitting
+	// for the day leaves the gauge reporting the prompt size of a transcript
+	// that no longer exists — measured on a real session, 98k against a ~5.8k
+	// checkpoint, 17× high — and the first threshold check on resume then fires
+	// a pointless auto-compact on an already-condensed transcript. That is the
+	// same stale-high failure the corrections above defend against, arriving
+	// through the one door they left open.
+	//
+	// Compaction spend is still never the answer: its input is transcript-sized
+	// by construction, so seeding FROM the compaction's own usage would read
+	// even higher. The answer is the compaction's RESULT — exactly what
+	// compact.go does in memory, and this is that same re-baseline recovered
+	// from the file so a resumed session does not disagree with the one that
+	// wrote it.
+	resumeContext = lastTurn
+	if trailingCompaction {
+		resumeContext = provider.Usage{InputTokens: trailingCompactionTokens}
+	}
+	return cumulative, lastTurn, resumeContext, nil
 }
 
 func nonNegDelta(cur, prev int) int {
@@ -2470,6 +2563,18 @@ func (s *Session) AppendPrefixDivergence(d PrefixDivergence) error {
 	}})
 }
 
+// AppendTransport records which connection and edge a dispatch rode — the
+// half of a cache miss the usage row cannot see. Written per dispatch on
+// providers that report it (openai-codex today); the analysis it exists for
+// reads it against the usage rows either side.
+func (s *Session) AppendTransport(ti provider.TransportInfo) error {
+	if s == nil {
+		return nil
+	}
+	rec := ti
+	return s.writeLine(sessionLine{Type: recordNet, Net: &rec})
+}
+
 // AppendToolGroupActivation records that a capability group was activated, so a
 // resume can re-mark it (Load collects these into Session.ActiveToolGroups).
 //
@@ -2486,10 +2591,7 @@ func (s *Session) AppendToolGroupActivation(group string) error {
 
 // AppendUsage writes a usage row to the session.
 func (s *Session) AppendUsage(u, cum provider.Usage) error {
-	if s == nil {
-		return nil
-	}
-	return s.writeLine(sessionLine{Type: "usage", Usage: &u, Cumulative: &cum})
+	return s.appendUsage(u, cum, false)
 }
 
 // AppendDelegatedUsage writes a usage row for spend a SUB-AGENT incurred on this
@@ -2502,10 +2604,18 @@ func (s *Session) AppendUsage(u, cum provider.Usage) error {
 // (transcript-sized input, nothing cached) is otherwise indistinguishable from
 // this session's cache collapsing.
 func (s *Session) AppendDelegatedUsage(u, cum provider.Usage) error {
+	return s.appendUsage(u, cum, true)
+}
+
+// appendUsage is the single writer behind both, so the timestamp cannot be
+// forgotten by whichever one the next caller reaches for — the same reason every
+// meta writer funnels through writeMeta. See sessionLine.At.
+func (s *Session) appendUsage(u, cum provider.Usage, delegated bool) error {
 	if s == nil {
 		return nil
 	}
-	return s.writeLine(sessionLine{Type: "usage", Usage: &u, Cumulative: &cum, Delegated: true})
+	now := time.Now().UTC()
+	return s.writeLine(sessionLine{Type: "usage", Usage: &u, Cumulative: &cum, Delegated: delegated, At: &now})
 }
 
 // SessionError is one row of the error sidecar (see LogError). Exported
@@ -2779,7 +2889,7 @@ func decodeWireBlock(b wireBlock) (provider.Content, bool) {
 	case blockImage:
 		return provider.ImageBlock{MimeType: b.MimeType, Data: b.Data, ID: b.ImageID}, true
 	case blockToolCall:
-		return provider.ToolCallBlock{ID: b.ID, Name: b.Name, Arguments: b.Arguments}, true
+		return provider.ToolCallBlock{ID: b.ID, Name: b.Name, Arguments: b.Arguments, RawArguments: b.RawArguments}, true
 	case blockToolResult:
 		block := provider.ToolResultBlock{CallID: b.CallID, IsError: b.IsError}
 		for _, inner := range b.Content {

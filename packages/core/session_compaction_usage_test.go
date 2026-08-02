@@ -64,7 +64,7 @@ func TestSessionUsageDetailSubtractsCompactionBetweenTurns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cumulative, lastTurn, err := SessionUsageDetail(path)
+	cumulative, lastTurn, _, err := SessionUsageDetail(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestSessionUsageDetailFoldsTrailingCompactionIntoCumulative(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cumulative, lastTurn, err := SessionUsageDetail(path)
+	cumulative, lastTurn, resume, err := SessionUsageDetail(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,6 +130,150 @@ func TestSessionUsageDetailFoldsTrailingCompactionIntoCumulative(t *testing.T) {
 	if lastTurn.InputTokens != turn1.InputTokens {
 		t.Errorf("lastTurn.InputTokens = %d; want %d (trailing compaction must not seed the gauge)",
 			lastTurn.InputTokens, turn1.InputTokens)
+	}
+
+	// ...and the gauge must not seed from lastTurn EITHER, which is the half
+	// that used to be missing. turn1 described a transcript the compaction
+	// replaced, so resuming on it reports the size of something that is no
+	// longer there — 1000 tokens against a one-line checkpoint here, 98k
+	// against a ~5.8k checkpoint on the real session that surfaced this.
+	if resume.InputTokens >= turn1.InputTokens {
+		t.Errorf("resumeContext.InputTokens = %d; want well under turn1's %d — the gauge resumed on a transcript that no longer exists",
+			resume.InputTokens, turn1.InputTokens)
+	}
+	if resume.InputTokens == 0 {
+		t.Error("resumeContext is 0 on a non-empty checkpoint — the summary has a size and the gauge should show it")
+	}
+}
+
+// The resume baseline must equal what the LIVE re-baseline produced, or the
+// gauge jumps at the moment you reopen the session: compact.go seeds
+// estimateTokens(next) in memory, and this recovers the same number from the
+// file. Asserted against estimateTokens itself rather than a literal, so the
+// two cannot drift apart if the heuristic is ever retuned.
+func TestAResumedGaugeAgreesWithTheLiveOne(t *testing.T) {
+	s, path := newUsageSession(t)
+
+	if err := s.AppendUsage(provider.Usage{InputTokens: 50_000}, provider.Usage{InputTokens: 50_000}); err != nil {
+		t.Fatal(err)
+	}
+	kept := []provider.Message{
+		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "## Context Summary\nwe decided on the tri-state"}}},
+		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "acknowledged"}}},
+	}
+	if err := s.AppendCompaction(kept, CompactResult{Usage: provider.Usage{InputTokens: 40_000}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, resume, err := SessionUsageDetail(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := estimateTokens(kept); resume.InputTokens != want {
+		t.Errorf("resumed gauge = %d, live re-baseline = %d — reopening the session would move the gauge on its own",
+			resume.InputTokens, want)
+	}
+}
+
+// /clear writes AppendCompaction(nil): the transcript really is empty, and the
+// gauge must say so. This is why the trailing compaction is tracked by a FLAG
+// and not by "the estimate is non-zero" — 0 here is the right answer, and a
+// bare int cannot tell it apart from "no compaction happened".
+func TestClearResumesAtAnEmptyGauge(t *testing.T) {
+	s, path := newUsageSession(t)
+
+	if err := s.AppendUsage(provider.Usage{InputTokens: 80_000}, provider.Usage{InputTokens: 80_000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendCompaction(nil, CompactResult{}); err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately NOT closed. Close prunes a session whose messagesAppended is
+	// 0, and AppendCompaction(nil) sets exactly that — the /clear shape. Every
+	// line is flushed at write time (writeLineLocked), so the file on disk is
+	// already complete; closing here would delete the case under test.
+
+	_, lastTurn, resume, err := SessionUsageDetail(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resume.InputTokens != 0 {
+		t.Errorf("gauge resumes at %d after /clear; want 0 — the transcript is empty", resume.InputTokens)
+	}
+	if lastTurn.InputTokens != 80_000 {
+		t.Errorf("lastTurn = %d; want 80000 — what the turn spent is history and /clear does not rewrite it", lastTurn.InputTokens)
+	}
+}
+
+// A real turn after the compaction hands the gauge back to provider-reported
+// numbers. The estimate is a stand-in for a measurement that has not happened
+// yet, not a preference — same handoff as in memory, where the next completed
+// request overwrites what SetLastTurn seeded.
+func TestATurnAfterTheCompactionTakesTheGaugeBack(t *testing.T) {
+	s, path := newUsageSession(t)
+
+	turn1 := provider.Usage{InputTokens: 50_000, CostUSD: 0.1}
+	if err := s.AppendUsage(turn1, turn1); err != nil {
+		t.Fatal(err)
+	}
+	compact := provider.Usage{InputTokens: 40_000, CostUSD: 0.2}
+	if err := s.AppendCompaction([]provider.Message{
+		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "## Context Summary"}}},
+	}, CompactResult{Usage: compact}); err != nil {
+		t.Fatal(err)
+	}
+	turn2 := provider.Usage{InputTokens: 6_000, CacheReadTokens: 1_000, CostUSD: 0.02}
+	if err := s.AppendUsage(turn2, turn1.Add(compact).Add(turn2)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, lastTurn, resume, err := SessionUsageDetail(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resume != lastTurn {
+		t.Errorf("resumeContext %+v != lastTurn %+v — a measured turn should win over the estimate it replaced", resume, lastTurn)
+	}
+	if resume.InputTokens != turn2.InputTokens {
+		t.Errorf("resumeContext.InputTokens = %d; want %d", resume.InputTokens, turn2.InputTokens)
+	}
+}
+
+// With no compaction anywhere the two are the same value, so nothing that reads
+// resumeContext changes behaviour on an ordinary session.
+func TestWithoutACompactionTheTwoAgree(t *testing.T) {
+	s, path := newUsageSession(t)
+
+	turn1 := provider.Usage{InputTokens: 1_000, CostUSD: 0.01}
+	if err := s.AppendUsage(turn1, turn1); err != nil {
+		t.Fatal(err)
+	}
+	turn2 := provider.Usage{InputTokens: 2_000, CacheReadTokens: 500, CostUSD: 0.02}
+	if err := s.AppendUsage(turn2, turn1.Add(turn2)); err != nil {
+		t.Fatal(err)
+	}
+	// A message so Close keeps the file: it discards a fresh session that
+	// appended none, and a session with usage rows and no messages is a shape
+	// only a test makes.
+	if err := s.AppendMessage(provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hi"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, lastTurn, resume, err := SessionUsageDetail(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resume != lastTurn {
+		t.Errorf("resumeContext %+v != lastTurn %+v on a session with no compaction", resume, lastTurn)
 	}
 }
 
@@ -193,7 +337,7 @@ func TestSessionUsageDetailUnchangedForLegacyCompactionRows(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cumulative, lastTurn, err := SessionUsageDetail(path)
+	cumulative, lastTurn, _, err := SessionUsageDetail(path)
 	if err != nil {
 		t.Fatal(err)
 	}
