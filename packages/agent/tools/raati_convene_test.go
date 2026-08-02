@@ -245,7 +245,7 @@ func TestRaatiToolReportInquiries(t *testing.T) {
 			{Unit: "MAGATAMA-3", Question: "Does the draft prohibit re-identification?", Source: raati.SourceUnanswered, Round: 1},
 		},
 	}
-	text := raatiToolReport(res, "")
+	text := raatiToolReport(res, nil, "")
 	for _, want := range []string{
 		"the panel asked:",
 		"YATA-1: Is the exit fee specified?",
@@ -261,7 +261,7 @@ func TestRaatiToolReportInquiries(t *testing.T) {
 	}
 
 	// No inquiries -> no section, and no stray open-question coaching.
-	if text := raatiToolReport(&raati.Result{}, ""); strings.Contains(text, "the panel asked") || strings.Contains(text, "unmet evidence") {
+	if text := raatiToolReport(&raati.Result{}, nil, ""); strings.Contains(text, "the panel asked") || strings.Contains(text, "unmet evidence") {
 		t.Errorf("empty docket rendered an inquiry section:\n%s", text)
 	}
 
@@ -269,8 +269,48 @@ func TestRaatiToolReportInquiries(t *testing.T) {
 	answered := &raati.Result{Inquiries: []raati.Inquiry{
 		{Unit: "YATA-1", Question: "Q?", Answer: "A.", Source: raati.SourceRecord, Round: 1},
 	}}
-	if text := raatiToolReport(answered, ""); strings.Contains(text, "unmet evidence") {
+	if text := raatiToolReport(answered, nil, ""); strings.Contains(text, "unmet evidence") {
 		t.Errorf("fully answered docket still coached about open questions:\n%s", text)
+	}
+
+	// An approved verdict with an open question must NOT coach a
+	// reconvene — that once bought a full second panel to turn
+	// 3-approve into 3-approve. It coaches the decision record instead.
+	approved := &raati.Result{Inquiries: res.Inquiries}
+	approved.Outcome.Decision = "approved"
+	if text := raatiToolReport(approved, nil, ""); strings.Contains(text, "unmet evidence") {
+		t.Errorf("approved verdict still coached a reconvene:\n%s", text)
+	} else if !strings.Contains(text, "answer them in your decision record") {
+		t.Errorf("approved verdict with open questions lost its coaching:\n%s", text)
+	}
+}
+
+// TestRaatiToolReportCorrelationWarning: when the dealt pool shares
+// weights, the caveat goes IN THE TRANSCRIPT, not just in the agent's
+// judgment — the first mass-usage session blessed binding contracts
+// with three copies of one model reporting 3-0 approvals that read
+// exactly like a decorrelated panel's.
+func TestRaatiToolReportCorrelationWarning(t *testing.T) {
+	res := &raati.Result{}
+	copies := []raati.Binding{
+		{Provider: "p", Model: "m"}, {Provider: "p", Model: "m"}, {Provider: "p", Model: "m"},
+	}
+	if text := raatiToolReport(res, copies, ""); !strings.Contains(text, "correlated panel") {
+		t.Errorf("same-model pool rendered no correlation warning:\n%s", text)
+	}
+	ladder := []raati.Binding{
+		{Provider: "p", Model: "m", Reasoning: "off"},
+		{Provider: "p", Model: "m", Reasoning: "medium"},
+		{Provider: "p", Model: "m", Reasoning: "high"},
+	}
+	if text := raatiToolReport(res, ladder, ""); !strings.Contains(text, "thinking effort") || strings.Contains(text, "correlated panel") {
+		t.Errorf("thinking-ladder pool wants its own warning, not the copies one:\n%s", text)
+	}
+	mixed := []raati.Binding{
+		{Provider: "p1", Model: "m1"}, {Provider: "p2", Model: "m2"}, {Provider: "p3", Model: "m3"},
+	}
+	if text := raatiToolReport(res, mixed, ""); strings.Contains(text, "correlated") || strings.Contains(text, "thinking effort") {
+		t.Errorf("decorrelated pool must not carry a warning:\n%s", text)
 	}
 }
 
@@ -366,11 +406,23 @@ func TestRaatiConveneDescriptionEnumeratesProfiles(t *testing.T) {
 	if strings.Contains(bare.Description(), "profiles") {
 		t.Errorf("no-profile description mentions profiles:\n%s", bare.Description())
 	}
+	// The failure-disclosure rule holds with or without profiles; the
+	// omit-level coaching only makes sense when there is a profile to
+	// resolve the level.
+	if !strings.Contains(bare.Description(), "NO panel ran") {
+		t.Errorf("no-profile description lost the failure-disclosure rule:\n%s", bare.Description())
+	}
+	if strings.Contains(bare.Description(), "omit 'level'") {
+		t.Errorf("no-profile description coaches omitting level with nothing to resolve it:\n%s", bare.Description())
+	}
 	tool := &RaatiConveneTool{Profiles: map[string]raati.Profile{
 		"triage": {Description: "cheap advisory eight-ball"},
 		"ethics": {Description: "slow frontier panel"},
 	}}
 	d := tool.Description()
+	if !strings.Contains(d, "omit 'level'") {
+		t.Errorf("profile description lost the omit-level coaching:\n%s", d)
+	}
 	for _, want := range []string{"[ethics — slow frontier panel]", "[triage — cheap advisory eight-ball]"} {
 		if !strings.Contains(d, want) {
 			t.Errorf("description missing %q:\n%s", want, d)
@@ -438,5 +490,96 @@ func TestRaatiConveneBuiltinAutoLevel(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("level2 gate report missing %q:\n%s", want, text)
 		}
+	}
+}
+
+// Every surface whose window on a tool call is its progress string gets the
+// board, not the newest fragment of it — and it gets it whether or not the web
+// board claimed the deliberation, since a busy board is exactly when the TUI
+// is the only place anyone can see what is happening.
+func TestRaatiConveneProgressCarriesTheBoard(t *testing.T) {
+	for _, busy := range []bool{false, true} {
+		eng := &fakeRaatiEngine{
+			units: map[string]*fakeRaatiUnit{},
+			votes: map[string]string{
+				"raati-crew:yata":     "approve",
+				"raati-crew:kusanagi": "approve",
+				"raati-crew:magatama": "reject",
+			},
+		}
+		var mu sync.Mutex
+		last := ""
+		tool := &RaatiConveneTool{
+			Engine: eng, Enabled: func() bool { return true }, Board: &fakeBoard{busy: busy},
+			HostProvider: "ollama", HostModel: "qwen3:8b",
+		}
+		res, err := tool.Execute(context.Background(), json.RawMessage(`{"question":"ship it?","class":"advisory"}`),
+			func(s string) { mu.Lock(); last = s; mu.Unlock() })
+		if err != nil || res.IsError {
+			t.Fatalf("busy=%v: err=%v res=%s", busy, err, firstText(res.Content))
+		}
+		mu.Lock()
+		got := last
+		mu.Unlock()
+		// Every seat, its binding, and the shape of the convening — the things
+		// the web board has always shown and a one-line progress never could.
+		for _, want := range []string{
+			"YATA-1", "KUSANAGI-2", "MAGATAMA-3",
+			"ollama/qwen3:8b",
+			"kaiku", "advisory",
+			"approve", "reject",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("busy=%v: progress missing %q:\n%s", busy, want, got)
+			}
+		}
+		if strings.Count(got, "\n") == 0 {
+			t.Errorf("busy=%v: progress is still a single line: %q", busy, got)
+		}
+	}
+}
+
+// raati.spare_host, read through the tool: an explicit level-1 convening
+// on a host with an alternative full ladder seats the ALTERNATIVE's
+// ladder, keeping panel traffic off the session's provider account (and
+// its provider-side prompt cache). Asserted through the report's own seat
+// line, the same text the convening agent reads.
+func TestRaatiConveneSparesTheHostProvider(t *testing.T) {
+	eng := &fakeRaatiEngine{
+		units: map[string]*fakeRaatiUnit{},
+		votes: map[string]string{
+			"raati-crew:yata":     "approve",
+			"raati-crew:kusanagi": "approve",
+			"raati-crew:magatama": "approve",
+		},
+	}
+	ladder := func(w, m, s string) map[string]TierPick {
+		return map[string]TierPick{"weak": {Model: w}, "medium": {Model: m}, "strong": {Model: s}}
+	}
+	tool := &RaatiConveneTool{
+		Engine:       eng,
+		Enabled:      func() bool { return true },
+		SpareHost:    func() bool { return true },
+		HostProvider: "hostprov",
+		HostModel:    "hostmodel",
+		Tiers: SwarmTierMap{
+			"hostprov":  ladder("hw", "hm", "hs"),
+			"otherprov": ladder("ow", "om", "os"),
+		},
+		Persist: func(res *raati.Result) (string, error) { return "/records/r.json", nil },
+	}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"question":"ship it?","class":"advisory","level":1}`), nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("tool errored: %s", firstText(res.Content))
+	}
+	text := firstText(res.Content)
+	if !strings.Contains(text, "otherprov/os") {
+		t.Errorf("seats should ride otherprov's ladder:\n%s", text)
+	}
+	if strings.Contains(text, "hostprov/") {
+		t.Errorf("a seat landed on the host account sparing exists to avoid:\n%s", text)
 	}
 }

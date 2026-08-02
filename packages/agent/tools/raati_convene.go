@@ -41,6 +41,12 @@ type RaatiConveneTool struct {
 	// without rebuilding the agent. Nil = disabled.
 	Enabled func() bool
 
+	// SpareHost reads the live raati.spare_host knob at call time: seat
+	// auto-resolved panels off the session's provider account so panel
+	// traffic does not evict the session's provider-side prompt cache
+	// (SpareHostLadder). Nil = off.
+	SpareHost func() bool
+
 	// HostProvider / HostModel seat rigor level 0 and anchor the level-1
 	// ladder.
 	HostProvider string
@@ -125,7 +131,7 @@ const raatiConveneSchema = `{
     },
     "profile": {
       "type": "string",
-      "description": "Named convening profile from the user's config (raati.profiles); the tool description lists what is configured and what each is for. A profile supplies defaults for level, class, and deliberation shape, and may pin the panel's seats; anything you set explicitly in this call overrides the profile — except seat composition, which is config-owned."
+      "description": "Named convening profile from the user's config (raati.profiles); the tool description lists what is configured and what each is for. A profile supplies defaults for level, class, and deliberation shape, and may pin the panel's seats; anything you set explicitly in this call overrides the profile — except seat composition, which is config-owned. Prefer a profile plus question and evidence ALONE: restating a knob the profile already sets buys nothing, and an explicit level blocks the profile from auto-seating the strongest panel this config supports."
     },
     "class": {
       "type": "string",
@@ -135,7 +141,7 @@ const raatiConveneSchema = `{
     "level": {
       "type": "integer",
       "enum": [0, 1, 2],
-      "description": "Rigor level. 0 (default): all seats on this session's model — cheapest, but the judgments are CORRELATED (same weights, different priors); fine for triage. 1: the provider's weak/medium/strong ladder. 2: three different providers — real independence; needs raati.level2 in the user config."
+      "description": "Rigor level. OMIT THIS when you pass a profile: the profile resolves it, auto-seating the highest rigor the user's config supports — you cannot see that config, so an explicit level can only cap the panel below it or demand one that does not exist (and error). Set it only to deliberately force a rung. 0 (the default without a profile): all seats on this session's model — cheapest, but the judgments are CORRELATED (same weights, different priors); fine for triage. 1: the provider's weak/medium/strong ladder. 2: three different providers — real independence; needs raati.level2 in the user config."
     },
     "evidence": {
       "type": "string",
@@ -160,7 +166,7 @@ const raatiConveneSchema = `{
 func (t *RaatiConveneTool) Name() string { return "raati_convene" }
 
 func (t *RaatiConveneTool) Description() string {
-	d := "Convene a three-unit deliberation panel (a raati) on ONE decisive question and wait for its verdict. Three panelists with deliberately different priors — truth, consequence, human impact — deliberate blind, cross-examine, and cast ballots tallied under the decision class. EXPENSIVE AND SLOW: roughly six sub-agent model turns and minutes of wall clock. Convene only when independent judgment changes what you do next: a high-stakes or hard-to-reverse decision, a genuinely ambiguous call, or a gate the user asked to be checked. Never for routine choices, questions the evidence at hand already answers, or repeatedly on the same question. A split verdict is information, not failure — ALWAYS read the minority report before acting, and if the panel posed questions, treat open ones as unmet evidence: reconvene with answers, don't re-roll the same packet. An 'escalated' decision means the panel could not decide: take it to the user, don't re-roll it."
+	d := "Convene a three-unit deliberation panel (a raati) on ONE decisive question and wait for its verdict. Three panelists with deliberately different priors — truth, consequence, human impact — deliberate blind, cross-examine, and cast ballots tallied under the decision class. EXPENSIVE AND SLOW: roughly six sub-agent model turns and minutes of wall clock. Convene only when independent judgment changes what you do next: a high-stakes or hard-to-reverse decision, a genuinely ambiguous call, or a gate the user asked to be checked. Never for routine choices, questions the evidence at hand already answers, or repeatedly on the same question. A split verdict is information, not failure — ALWAYS read the minority report before acting, and if the panel posed questions, treat open ones as unmet evidence: reconvene with answers, don't re-roll the same packet. An 'escalated' decision means the panel could not decide: take it to the user, don't re-roll it. A refused or failed convening means NO panel ran: say so wherever you report the decision, and never describe the work as reviewed on the strength of a panel that didn't happen."
 	if len(t.Profiles) == 0 {
 		return d
 	}
@@ -169,7 +175,7 @@ func (t *RaatiConveneTool) Description() string {
 	// agent names a profile, the config decides what that means.
 	var sb strings.Builder
 	sb.WriteString(d)
-	sb.WriteString(" Configured convening profiles (pass one as 'profile'; pick by what it is for):")
+	sb.WriteString(" Convene BY PROFILE: pass a profile plus question and evidence, and omit 'level' — a profile resolves the level itself, auto-seating the highest rigor the user's config supports, which you cannot see and an explicit level can only cap or overshoot. Configured convening profiles (pick by what it is for):")
 	for _, name := range raati.ProfileNames(t.Profiles) {
 		sb.WriteString(" [")
 		sb.WriteString(raati.ProfileLine(name, t.Profiles[name]))
@@ -216,14 +222,17 @@ func (t *RaatiConveneTool) Execute(ctx context.Context, raw json.RawMessage, pro
 		return toolErr("raati_convene: " + err.Error()), nil
 	}
 	hostProvider, hostModel := t.host()
-	level := 0
+	// The ladder provider level 1 rides: the host's own unless the user
+	// asked panels to spare the session's account (raati.spare_host).
+	// Auto-level resolves against the same choice, so sparing can seat a
+	// real off-account level 1 where the host alone would degrade to a
+	// correlated level 0.
+	ladderProv := SpareHostLadder(hostProvider, t.SpareHost != nil && t.SpareHost(), t.Tiers, t.Level2)
+	level, viaAuto := 0, false
 	if a.Level != nil {
 		level = *a.Level
-	} else if v, ok, viaAuto := prof.PickLevel(HighestRaatiLevel(hostProvider, t.Tiers, t.Level2, len(raati.DefaultPanel()))); ok {
-		if err := RefuseCorrelatedGate(a.Profile, class, v, viaAuto); err != nil {
-			return toolErr("raati_convene: " + err.Error()), nil
-		}
-		level = v
+	} else if v, ok, auto := prof.PickLevel(HighestRaatiLevel(ladderProv, t.Tiers, t.Level2, len(raati.DefaultPanel()))); ok {
+		level, viaAuto = v, auto
 	}
 	singleRound := prof.SingleRound != nil && *prof.SingleRound
 	if a.SingleRound != nil {
@@ -254,8 +263,14 @@ func (t *RaatiConveneTool) Execute(ctx context.Context, raw json.RawMessage, pro
 		level2 = prof.Seats
 	}
 
-	pool, err := ResolveRaatiBindings(level, hostProvider, hostModel, t.Tiers, level2, len(raati.DefaultPanel()))
+	pool, err := ResolveRaatiBindings(level, hostProvider, hostModel, ladderProv, t.Tiers, level2, len(raati.DefaultPanel()))
 	if err != nil {
+		return toolErr("raati_convene: " + err.Error()), nil
+	}
+	// The gate honesty check reads the resolved SEATS, not the level: a
+	// level whose ladder is one model at three efforts is a real advisory
+	// panel and not three independent judges.
+	if err := RefuseCorrelatedGate(a.Profile, class, pool, viaAuto); err != nil {
 		return toolErr("raati_convene: " + err.Error()), nil
 	}
 
@@ -274,11 +289,15 @@ func (t *RaatiConveneTool) Execute(ctx context.Context, raw json.RawMessage, pro
 	if len(prof.SeatMap) > 0 {
 		seatMap = prof.SeatMap
 	}
-	resolvedOrder, err := raati.ParseSeatOrder(string(seatOrder))
+	resolvedOrder, err := raati.SeatOrderFor(string(seatOrder), pool)
 	if err != nil {
 		return toolErr("raati_convene: " + err.Error()), nil
 	}
 	watched := t.Board != nil && t.Board.Begin(question, string(class), RaatiLevelName(level), string(resolvedOrder))
+	// The live view for every surface whose window on a tool call is its
+	// progress string. It folds the SAME event feed the web board folds, so
+	// the two cannot drift into disagreeing about what the panel is doing.
+	board := newRaatiLiveBoard(RaatiLevelName(level), string(class), string(resolvedOrder), raati.DefaultPanel(), progress)
 	cfg := raati.Config{
 		Engine:       t.Engine,
 		Class:        class,
@@ -287,7 +306,10 @@ func (t *RaatiConveneTool) Execute(ctx context.Context, raw json.RawMessage, pro
 		SeatMap:      seatMap,
 		RoundTimeout: t.RoundTimeout,
 		SingleRound:  singleRound,
-		Progress:     progress,
+		// Narration goes THROUGH the board rather than around it: both feeds
+		// describe the same deliberation, and only one of them can be what a
+		// surface shows.
+		Progress: board.Narrate,
 	}
 	if converge {
 		cfg.MaxRounds = 3
@@ -298,8 +320,13 @@ func (t *RaatiConveneTool) Execute(ctx context.Context, raw json.RawMessage, pro
 			return t.Answer(ctx, question, evidence, qs)
 		}
 	}
+	cfg.OnEvent = board.Event
 	if watched {
-		cfg.OnEvent = t.Board.Event
+		hook := t.Board
+		cfg.OnEvent = func(ev raati.Event) {
+			board.Event(ev)
+			hook.Event(ev)
+		}
 	}
 	res, err := raati.Convene(ctx, cfg, question, evidence)
 	if watched {
@@ -314,7 +341,7 @@ func (t *RaatiConveneTool) Execute(ctx context.Context, raw json.RawMessage, pro
 		recordPath, _ = t.Persist(res) // best-effort; the verdict stands without it
 	}
 	return core.ToolResult{
-		Content: []provider.Content{provider.TextBlock{Text: raatiToolReport(res, recordPath)}},
+		Content: []provider.Content{provider.TextBlock{Text: raatiToolReport(res, pool, recordPath)}},
 		Details: map[string]any{
 			"decision": string(res.Outcome.Decision),
 			"rule":     res.Outcome.Rule,
@@ -329,8 +356,13 @@ func (t *RaatiConveneTool) Execute(ctx context.Context, raw json.RawMessage, pro
 // and the inquiry docket. The last two are the parts the description
 // orders the agent to read: dissent says why the panel disagreed, and
 // open inquiries say what evidence was missing — the difference between
-// re-rolling the same packet and reconvening with a better one.
-func raatiToolReport(res *raati.Result, recordPath string) string {
+// re-rolling the same packet and reconvening with a better one. The
+// resolved pool rides along because the record's units don't carry
+// thinking effort: the correlation caveat has to come from the seats
+// as they were actually dealt, in the transcript itself — a warning
+// only the convening agent's judgment carries is a warning the next
+// compaction loses.
+func raatiToolReport(res *raati.Result, pool []raati.Binding, recordPath string) string {
 	var sb strings.Builder
 	o := res.Outcome
 	fmt.Fprintf(&sb, "verdict: %s (rule %s; %d approve / %d reject / %d abstain / %d absent)\n",
@@ -346,6 +378,17 @@ func raatiToolReport(res *raati.Result, recordPath string) string {
 	}
 	if len(seats) > 0 {
 		fmt.Fprintf(&sb, "seats: %s\n", strings.Join(seats, "  "))
+	}
+	// Correlation cuts one way: a correlated panel finding a gap found a
+	// real gap, but a correlated panel agreeing is one model agreeing
+	// with itself, and an approval is exactly when the agent wants to
+	// stop looking.
+	if len(pool) > 1 && raati.SameWeights(pool) {
+		if raati.SameEffort(pool) {
+			sb.WriteString("correlated panel: every seat is the same model, so the priors differ but the judgment does not — weigh an approval as one opinion, not three\n")
+		} else {
+			sb.WriteString("one-model panel: the seats differ only in thinking effort — a real advisory spread, but not independent judges; weigh an approval accordingly\n")
+		}
 	}
 	for _, b := range res.Final {
 		if b.Absent {
@@ -372,8 +415,17 @@ func raatiToolReport(res *raati.Result, recordPath string) string {
 			}
 			fmt.Fprintf(&sb, "    answer (%s): %s\n", q.Source, q.Answer)
 		}
+		// The reconvene coaching is for verdicts the open questions might
+		// have changed. On an approval it once talked an agent into buying
+		// a whole second panel to turn 3-approve into 3-approve — there the
+		// cheap honest move is answering the question in the decision
+		// record, not re-convening.
 		if open > 0 {
-			sb.WriteString("open questions are unmet evidence — reconvening with answers beats re-rolling the same packet\n")
+			if o.Decision == "approved" {
+				sb.WriteString("the panel approved despite these — answer them in your decision record; reconvene only if an answer could plausibly flip a ballot\n")
+			} else {
+				sb.WriteString("open questions are unmet evidence — reconvening with answers beats re-rolling the same packet\n")
+			}
 		}
 	}
 	if o.Decision == "escalated" {
