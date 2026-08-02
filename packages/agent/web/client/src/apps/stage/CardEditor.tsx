@@ -7,8 +7,22 @@ import { fieldLabel } from './carddiff'
 import { Hint } from './Hint'
 import { ModelPick } from './ModelPick'
 
+// greetingIndex reads the index out of an indexed alternate-greeting field
+// (`alternate_greetings[0]`), or null when the field is not one. Mirrors the Go
+// greetingIndex; the bracket spelling is the wire contract the doctor is told
+// to emit, so both ends parse it the same way or a proposal silently no-ops.
+export function greetingIndex(field: string): number | null {
+  const m = /^alternate_greetings\[(\d+)\]$/.exec(field)
+  if (!m) return null
+  const i = Number(m[1])
+  return Number.isInteger(i) && i >= 0 ? i : null
+}
+
 // The card fields the doctor may edit (mirrors the server's allow-list) — the
 // scalar text fields, so a proposal's `after` is a whole new string value.
+// Alternate greetings are NOT here: they are addressed by index and routed
+// through greetingIndex above, because the target is one element of an array
+// rather than a form key.
 const DOCTOR_FIELDS = new Set<keyof EditForm>([
   'name',
   'description',
@@ -212,6 +226,11 @@ export function CardEditor(props: {
 
   const setGreeting = (i: number, v: string) => set('alternate_greetings', form!.alternate_greetings.map((g, j) => (j === i ? v : g)))
   const addGreeting = () => set('alternate_greetings', [...form!.alternate_greetings, ''])
+  // addGreetingWith appends a greeting that already has text — what applying a
+  // doctor proposal at the append index does. Distinct from addGreeting, which
+  // opens an empty box for the author to type into: an accepted proposal must
+  // land its text in one step, or "apply all" would leave a row of blanks.
+  const addGreetingWith = (v: string) => set('alternate_greetings', [...form!.alternate_greetings, v])
   const removeGreeting = (i: number) => set('alternate_greetings', form!.alternate_greetings.filter((_, j) => j !== i))
 
   // Ask the card doctor (the Seppä persona) for structured per-field edits over
@@ -232,12 +251,24 @@ export function CardEditor(props: {
   }
 
   // Apply a proposal: stage its `after` into the editor field (saved with the
-  // rest on "Save changes"). Only the known scalar text fields are targets.
-  // Applying clears any prior decline of the same proposal.
+  // rest on "Save changes"). Applying clears any prior decline of the same
+  // proposal.
+  //
+  // Alternate greetings arrive indexed (alternate_greetings[0]) because a
+  // greeting is one whole string like every other proposal target — see
+  // greetingIndex. An index one past the end is an ADD, which is how the doctor
+  // creates a greeting rather than only rewriting existing ones.
   const applyProposal = (p: DoctorProposal) => {
-    const key = p.field as keyof EditForm
-    if (!DOCTOR_FIELDS.has(key)) return
-    set(key, p.after as never)
+    const gi = greetingIndex(p.field)
+    if (gi !== null) {
+      if (!form || gi > form.alternate_greetings.length) return
+      if (gi === form.alternate_greetings.length) addGreetingWith(p.after)
+      else setGreeting(gi, p.after)
+    } else {
+      const key = p.field as keyof EditForm
+      if (!DOCTOR_FIELDS.has(key)) return
+      set(key, p.after as never)
+    }
     setApplied((a) => ({ ...a, [p.id]: true }))
     setDeclined(({ [p.id]: _drop, ...rest }) => rest)
     if (decliningId === p.id) setDecliningId(null)

@@ -87,6 +87,11 @@ export interface FieldChange {
 
 /** fieldLabel is the English source label for a card field, or the field name. */
 export function fieldLabel(field: string): string {
+  // Indexed alternate greetings (alternate_greetings[0]) are addressed one at a
+  // time by the card doctor. Numbered from 1 for the label: the author counting
+  // greetings on screen is not counting from zero.
+  const g = /^alternate_greetings\[(\d+)\]$/.exec(field)
+  if (g) return `${FIELD_LABELS.alternate_greetings} #${Number(g[1]) + 1}`
   return FIELD_LABELS[field] ?? field
 }
 

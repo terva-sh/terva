@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,12 +29,17 @@ const doctorPersona = "seppa"
 const editorPersona = "toimittaja"
 
 // doctorFields maps a proposal's field name to the current value of that field
-// on a card. It is the allow-list of fields the doctor may edit — the editable
-// TEXT fields the Stage editor exposes (arrays like alternate_greetings/tags and
-// pure metadata are out of scope for a before/after text edit). A proposal
-// naming anything else is dropped.
+// on a card. It is the allow-list of fields the doctor may edit, and the source
+// of every proposal's Before. A proposal naming anything else is dropped.
+//
+// Alternate greetings are addressed by INDEX — alternate_greetings[0] — because
+// the proposal contract is one field, one whole string, and a greeting IS one
+// whole string. That makes them fit the existing before/after shape, the
+// existing negotiation loop, and the existing removal flag with no new proposal
+// type: only the naming had to change. Tags and pure metadata stay out of
+// scope; they are lists of atoms, not prose an editor can improve.
 func doctorFields(c card.Card) map[string]string {
-	return map[string]string{
+	f := map[string]string{
 		"name":                      c.Name,
 		"description":               c.Description,
 		"personality":               c.Personality,
@@ -44,6 +50,44 @@ func doctorFields(c card.Card) map[string]string {
 		"post_history_instructions": c.PostHistoryInstructions,
 		"creator_notes":             c.CreatorNotes,
 	}
+	for i, g := range c.AlternateGreetings {
+		f[greetingField(i)] = g
+	}
+	// ONE append slot, at the index one past the end. That is what lets the
+	// doctor CREATE a greeting rather than only rewrite existing ones: an empty
+	// current value is still an editable field, so a proposal naming it passes
+	// the allow-list and reads as "add this".
+	//
+	// Exactly one, not several. Proposals are accepted individually, so two
+	// append slots let an author accept the second and decline the first,
+	// leaving a hole at the end of the array that nothing downstream expects. A
+	// second greeting is one "Save & ask again" away, which costs a round and
+	// cannot produce a gap.
+	f[greetingField(len(c.AlternateGreetings))] = ""
+	return f
+}
+
+// greetingField names the nth alternate greeting as a proposal field. One
+// spelling, used by the allow-list, the prompt, and the tests, so the wire name
+// cannot drift from what the model is told to emit.
+func greetingField(i int) string { return fmt.Sprintf("alternate_greetings[%d]", i) }
+
+// greetingIndex is greetingField's inverse: the index a field addresses, and
+// whether it is a greeting field at all.
+func greetingIndex(field string) (int, bool) {
+	rest, ok := strings.CutPrefix(field, "alternate_greetings[")
+	if !ok {
+		return 0, false
+	}
+	num, ok := strings.CutSuffix(rest, "]")
+	if !ok {
+		return 0, false
+	}
+	i, err := strconv.Atoi(num)
+	if err != nil || i < 0 {
+		return 0, false
+	}
+	return i, true
 }
 
 // CardsDoctor runs the LLM card doctor over a stored card: it feeds the card and
@@ -184,7 +228,7 @@ Respond with ONLY a JSON object (no prose, no code fences) of this exact shape:
   "proposals": [
     {
       "id": "<short stable id, e.g. p1>",
-      "field": "<one of: name, description, personality, scenario, first_mes, mes_example, system_prompt, post_history_instructions, creator_notes>",
+      "field": "<one of: name, description, personality, scenario, first_mes, mes_example, system_prompt, post_history_instructions, creator_notes, or alternate_greetings[N]>",
       "severity": "<warn | info | suggestion>",
       "rationale": "<short, concrete reason for the change>",
       "after": "<the COMPLETE new value for that field — it replaces the field wholesale>",
@@ -198,6 +242,8 @@ Rules:
 - To propose deleting a field's content, set "remove": true and leave "after" empty. An empty "after" WITHOUT "remove" is discarded, so a removal has to be stated, never implied.
 - When the author gives an instruction for this pass, it outranks your own taste: propose what they asked for first, then lint fixes, then improvements of your own.
 - Only propose fields from the list above. Preserve {{char}} / {{user}} macros; fix broken ones to that exact form.
+- Alternate greetings are addressed one at a time by index: alternate_greetings[0], alternate_greetings[1], and so on, exactly as the card dump names them. Each is a COMPLETE alternative opening — an interchangeable substitute for first_mes, not a continuation of it.
+- One index past the last existing greeting is shown as empty; proposing there ADDS a greeting. Use it when the card would genuinely play better with another way in — a different mood, a different moment of first contact — not to pad the count. At most one addition per round.
 - Example dialogue (mes_example) uses the <START> convention: every example conversation begins with a <START> line — even a single one. If examples run together without it, insert <START> before each so they read as separate examples, not one merged block.
 - Address the lint findings first, then propose taste improvements. Use "warn" severity for a lint warning you are fixing, "info" for a lint info, "suggestion" for an improvement the lint did not flag.
 - Make the smallest edit that does the job; keep the author's tone and intent.
@@ -216,7 +262,7 @@ Respond with ONLY a JSON object (no prose, no code fences) of this exact shape:
   "proposals": [
     {
       "id": "<short stable id, e.g. p1>",
-      "field": "<one of: name, description, personality, scenario, first_mes, mes_example, system_prompt, post_history_instructions, creator_notes>",
+      "field": "<one of: name, description, personality, scenario, first_mes, mes_example, system_prompt, post_history_instructions, creator_notes, or alternate_greetings[N]>",
       "severity": "<warn | info | suggestion>",
       "rationale": "<what in the scene warrants this — name the moment>",
       "after": "<the COMPLETE new value for that field — it replaces the field wholesale>",
@@ -228,6 +274,8 @@ Respond with ONLY a JSON object (no prose, no code fences) of this exact shape:
 Rules:
 - The played scene is your warrant: every proposal's rationale must trace to something that actually happened in it. Do not invent facts the scene doesn't show.
 - Removal ("remove": true with an empty "after") is for reconciling a contradiction the scene settled, or for what the author explicitly asked you to cut — not for trimming a card you find overlong. An empty "after" without "remove" is discarded.
+- Alternate greetings are addressed one at a time by index: alternate_greetings[0], alternate_greetings[1], and so on, exactly as the card dump names them. Each is a COMPLETE alternative opening — an interchangeable substitute for first_mes, not a continuation of it.
+- One index past the last existing greeting is shown as empty; proposing there ADDS a greeting. The scene is the warrant here too: add one when the played scene showed a way this character opens that the card cannot currently produce. At most one addition per round.
 - When the author gives an instruction for this pass, it outranks your own reading of the scene: propose what they asked for first, still grounded in what was played.
 - ENRICH, don't rewrite: extend fields with what play established (voice, relationships, learned facts, example dialogue lifted from their actual lines); keep the author's tone, format conventions, and every {{char}}/{{user}} macro. "after" is still the entire new value of the field.
 - A minimal character may grow personality/example dialogue from nothing; a rich one should change only where the scene genuinely moved them.
@@ -306,6 +354,22 @@ func renderDoctorPrompt(fields map[string]string, findings []card.Finding, decis
 		v := strings.TrimSpace(fields[f])
 		if v == "" {
 			b.WriteString(f + ": " + i18n.P("stage.doctor.empty", "(empty)") + "\n")
+			continue
+		}
+		b.WriteString(f + ":\n" + v + "\n\n")
+	}
+	// The alternate greetings, in index order, under the exact names a proposal
+	// must use. The empty append slot is shown too — a doctor that cannot see
+	// where the array ends has no way to know which index means "add one", and
+	// the card most in need of a second opening is the one that has none.
+	for i := 0; ; i++ {
+		f := greetingField(i)
+		v, ok := fields[f]
+		if !ok {
+			break
+		}
+		if strings.TrimSpace(v) == "" {
+			b.WriteString(f + ": " + i18n.P("stage.doctor.empty_slot", "(empty — this index does not exist yet; propose here to ADD a greeting)") + "\n")
 			continue
 		}
 		b.WriteString(f + ":\n" + v + "\n\n")
