@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -62,8 +63,10 @@ func TestLoopTextFallbackAsk(t *testing.T) {
 		if r.err != nil {
 			t.Fatalf("Ask: %v", r.err)
 		}
+		// DeepEqual, not ==: Answer carries a Keys slice since multi-select
+		// landed, so the struct is no longer comparable.
 		want := Answer{Key: "approve", UserID: "7", Username: "u7", Attestation: AttestationBestEffort}
-		if r.ans != want {
+		if !reflect.DeepEqual(r.ans, want) {
 			t.Errorf("answer = %+v, want %+v", r.ans, want)
 		}
 	case <-time.After(5 * time.Second):
@@ -173,6 +176,159 @@ func TestMatchAskOption(t *testing.T) {
 		if key != c.key || ok != c.ok {
 			t.Errorf("matchAskOption(%q) = %q,%v want %q,%v", c.in, key, ok, c.key, c.ok)
 		}
+	}
+}
+
+// parseAskReply is where the floor earns its keep: it is the only path
+// that can carry a multi-select or a written-in answer, so every shape
+// of reply has to resolve here or nowhere.
+func TestParseAskReply(t *testing.T) {
+	opts := []AskOption{
+		{Key: "logs", Label: "Logs"},
+		{Key: "traces", Label: "Traces"},
+		{Key: "metrics", Label: "Metrics"},
+	}
+	cases := []struct {
+		name string
+		ask  Ask
+		in   string
+		want Answer
+		ok   bool
+	}{
+		{"single unchanged", Ask{Options: opts}, "2", Answer{Key: "traces"}, true},
+		{"single rejects prose", Ask{Options: opts}, "the second one", Answer{}, false},
+
+		{"multi one", Ask{Options: opts, MultiSelect: true},
+			"2", Answer{Key: "traces", Keys: []string{"traces"}}, true},
+		{"multi several", Ask{Options: opts, MultiSelect: true},
+			"1,3", Answer{Key: "logs", Keys: []string{"logs", "metrics"}}, true},
+		{"multi spaces and labels", Ask{Options: opts, MultiSelect: true},
+			" Logs , 2 ", Answer{Key: "logs", Keys: []string{"logs", "traces"}}, true},
+		// Order is the responder's, not the option list's — "3,1" means they
+		// named metrics first and nothing should reorder that.
+		{"multi keeps reply order", Ask{Options: opts, MultiSelect: true},
+			"3,1", Answer{Key: "metrics", Keys: []string{"metrics", "logs"}}, true},
+		{"multi dedupes", Ask{Options: opts, MultiSelect: true},
+			"2,2", Answer{Key: "traces", Keys: []string{"traces"}}, true},
+		// All-or-nothing: taking the recognised half would silently drop a
+		// choice the user made, and they would never learn it.
+		{"multi rejects partial", Ask{Options: opts, MultiSelect: true},
+			"1,banana", Answer{}, false},
+
+		// Option matching wins over custom text: the list was offered, so a
+		// bare number is a pick, not the literal character.
+		{"custom yields to an option", Ask{Options: opts, AllowCustom: true},
+			"2", Answer{Key: "traces"}, true},
+		{"custom takes prose", Ask{Options: opts, AllowCustom: true},
+			"none of those, use syslog", Answer{Text: "none of those, use syslog"}, true},
+		{"custom trims", Ask{Options: opts, AllowCustom: true},
+			"  syslog  ", Answer{Text: "syslog"}, true},
+		{"custom rejects empty", Ask{Options: opts, AllowCustom: true}, "   ", Answer{}, false},
+		// No options at all: pure free text, which is what a question with an
+		// empty option list means in core.UserQuestion.
+		{"custom with no options", Ask{AllowCustom: true},
+			"call it gamma", Answer{Text: "call it gamma"}, true},
+
+		{"multi and custom together", Ask{Options: opts, MultiSelect: true, AllowCustom: true},
+			"1,2", Answer{Key: "logs", Keys: []string{"logs", "traces"}}, true},
+		{"multi and custom falls to text", Ask{Options: opts, MultiSelect: true, AllowCustom: true},
+			"whatever you think", Answer{Text: "whatever you think"}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := parseAskReply(c.ask, c.in)
+			if ok != c.ok {
+				t.Fatalf("ok = %v, want %v (answer %+v)", ok, c.ok, got)
+			}
+			if ok && !reflect.DeepEqual(got, c.want) {
+				t.Errorf("answer = %+v, want %+v", got, c.want)
+			}
+		})
+	}
+}
+
+// The routing inversion, and the reason widgetCanExpress is not just a
+// capability check: a connector WITH the native widget must still be
+// handed a multi-select question over the text floor, because the wire's
+// answer frame returns one key and would silently narrow the question.
+func TestLoopRichAskBypassesTheWidget(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		ask  Ask
+	}{
+		{"multi-select", Ask{ChatID: "100", Text: "which?", Options: approvalOptions(), MultiSelect: true}},
+		{"free text", Ask{ChatID: "100", Text: "what name?", AllowCustom: true}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			conn := &askFakeConnector{
+				fakeConnector: newFakeConnector(Capabilities{Asks: true}),
+				asked:         make(chan Ask, 1),
+				answer:        Answer{Key: "approve"},
+			}
+			l := &Loop{Connector: conn, Info: func(string) {}, Warn: func(string) {}}
+
+			ask := c.ask
+			ask.Timeout = 60 * time.Millisecond
+			_, _ = l.Ask(context.Background(), ask)
+
+			select {
+			case a := <-conn.asked:
+				t.Fatalf("the widget was handed a question it cannot express: %+v", a)
+			default:
+			}
+			// It went to the floor instead — the question was SENT as text.
+			if got := conn.sends(); len(got) == 0 {
+				t.Fatal("neither path ran: the ask reached nobody")
+			} else if !strings.Contains(got[0].Text, "reply with") {
+				t.Errorf("floor question = %q", got[0].Text)
+			}
+		})
+	}
+}
+
+// The floor's instruction line is the ONLY place a responder learns what
+// shapes of reply this question takes, so each combination must say its
+// own thing rather than defaulting to "reply with a number".
+//
+// 🪤 The Contains checks alone are NOT enough, and this test proved it by
+// passing while the strings were broken: i18n.T takes the English text as
+// its source and everything after as printf args, so an id-plus-default
+// call rendered "ask.reply_multi%!(EXTRA string=…, or several separated by
+// commas.)" — which still contains "commas". A substring assertion cannot
+// see a mangled string that happens to embed the words it wants, so the
+// rendering is checked for damage separately.
+func TestAskReplyInstruction(t *testing.T) {
+	cases := []struct {
+		ask       Ask
+		wantParts []string
+	}{
+		{Ask{}, []string{"a number"}},
+		{Ask{MultiSelect: true}, []string{"several", "commas"}},
+		{Ask{AllowCustom: true}, []string{"your own"}},
+		{Ask{MultiSelect: true, AllowCustom: true}, []string{"commas", "your own"}},
+	}
+	seen := make(map[string]bool, len(cases))
+	for _, c := range cases {
+		got := askReplyInstruction(c.ask)
+		for _, part := range c.wantParts {
+			if !strings.Contains(got, part) {
+				t.Errorf("instruction for %+v = %q, missing %q", c.ask, got, part)
+			}
+		}
+		// A leftover formatting verb or an unconsumed argument means the
+		// string was assembled wrongly, however well it greps.
+		if strings.Contains(got, "%!") || strings.Contains(got, "%s") || strings.Contains(got, "%d") {
+			t.Errorf("instruction for %+v is mangled: %q", c.ask, got)
+		}
+		// A dotted id leaking through means i18n.T was called as if it took
+		// a key and a default. It does not.
+		if strings.HasPrefix(got, "ask.") {
+			t.Errorf("instruction for %+v rendered an id, not text: %q", c.ask, got)
+		}
+		if seen[got] {
+			t.Errorf("instruction for %+v duplicates another case: %q", c.ask, got)
+		}
+		seen[got] = true
 	}
 }
 

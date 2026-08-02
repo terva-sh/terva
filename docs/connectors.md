@@ -229,8 +229,20 @@ Connector to host:
 
 Interactive asks (protocol 2, feature `"asks"`) — declare the feature
 in your hello `capabilities.features` AND implement the rendering, and
-terva can pose constrained questions (tool approvals, confirmations)
-with the best widget your service has:
+terva can pose constrained questions with the best widget your service
+has. **Two kinds of question ride this one frame:**
+
+- **Tool approvals** — the confirm gate asking whether a call may run.
+  Fail-closed: an unanswered approval **denies** the call.
+- **Agent questions** — `ask_user_question`, and the prefix-change
+  guard's compaction offer. Fail-*open* by design: an unanswered
+  question is a **dismissal**, so the agent decides for itself and the
+  turn continues. A bot whose owner is asleep must not hang, and must
+  not surface a failure the model would retry into a loop.
+
+That difference is the only thing that distinguishes them on your side:
+the frames are identical, so a connector implements `"asks"` once and
+gets both.
 
 ```json
 → {"type":"ask","id":"a1","chat_id":"...","reply_to":"...",
@@ -263,6 +275,31 @@ feature still work: terva falls back to a numbered plain-text question
 and parses the next matching reply, so approvals-over-chat reach every
 service from day one — the feature only upgrades the widget and the
 attestation.
+
+**One case where the fallback is the RICHER path, not the poorer one.**
+The ask frame carries a fixed option list and returns one key, so a
+question that wants a *written-in* answer, or one that lets the user
+pick *several* options, cannot round-trip through the widget however
+good your connector is. The numbered-text floor has no such limit —
+"reply 1,3" is several choices and free text is just text — so terva
+routes those two kinds to the floor **even on a connector that declares
+`"asks"`**. You will see a plain-text question where you expected your
+buttons; that is deliberate.
+
+The reasoning is worth stating, because it decides which way every
+future degradation goes: narrowing the RENDERING is visible to anyone
+reading the chat and costs a nicer widget, while narrowing the QUESTION
+would hand the model one choice where the user wanted three, with
+nothing recording the difference. The first is recoverable, the second
+is invisible. The cost is attestation — floor answers are
+`best_effort` — which is safe here only because approvals never ask
+these kinds, and approvals are the only decision that grants anything
+durable. Do not build a policy that needs attested identity on top of a
+multi-select.
+
+Rendering these natively is tracked work and will arrive behind its own
+feature string (select menus, modals), so nothing you implement today
+changes.
 
 Speaker identity (protocol 2, feature `"speaker:full"` or
 `"speaker:name_only"`) — personas and the `--play` cast want different

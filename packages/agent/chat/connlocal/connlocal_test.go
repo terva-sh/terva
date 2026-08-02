@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -274,8 +275,10 @@ func TestConnLocalAsk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
 	}
+	// DeepEqual, not ==: chat.Answer carries a Keys slice since multi-select
+	// landed, so the struct is no longer comparable.
 	want := chat.Answer{Key: "approve", UserID: "u1", Username: "drew", Attestation: chat.AttestationAttested}
-	if ans != want {
+	if !reflect.DeepEqual(ans, want) {
 		t.Errorf("answer = %+v, want %+v", ans, want)
 	}
 

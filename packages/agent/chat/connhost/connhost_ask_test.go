@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -156,8 +157,10 @@ func TestSessionAsk(t *testing.T) {
 		if r.err != nil {
 			t.Fatalf("Ask: %v", r.err)
 		}
+		// DeepEqual, not ==: chat.Answer carries a Keys slice since
+		// multi-select landed, so the struct is no longer comparable.
 		want := chat.Answer{Key: "approve", UserID: "u1", Username: "drew", Attestation: chat.AttestationAttested}
-		if r.ans != want {
+		if !reflect.DeepEqual(r.ans, want) {
 			t.Errorf("answer = %+v, want %+v", r.ans, want)
 		}
 	case <-time.After(3 * time.Second):

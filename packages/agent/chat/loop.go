@@ -577,11 +577,39 @@ func (l *Loop) sendStatus(ctx context.Context, m Message) {
 // next matching message, best-effort by definition. Approvals over
 // chat therefore work with EVERY connector; capability only upgrades
 // the UX and the attestation.
+//
+// 🔑 With ONE exception, which is why this is not a plain capability
+// check: an ask the widget cannot express goes to the floor even on a
+// connector that has the widget. See widgetCanExpress.
 func (l *Loop) Ask(ctx context.Context, a Ask) (Answer, error) {
-	if asker, ok := l.Connector.(Asker); ok && l.Connector.Capabilities().Asks {
+	if asker, ok := l.Connector.(Asker); ok && l.Connector.Capabilities().Asks && widgetCanExpress(a) {
 		return asker.Ask(ctx, a)
 	}
 	return l.textFallbackAsk(ctx, a)
+}
+
+// widgetCanExpress reports whether the native ask widget can carry
+// this question. The wire's answer frame returns exactly ONE option
+// key, so a multi-select or write-your-own question structurally
+// cannot round-trip through it, however good the connector is.
+//
+// 🔑 The floor is the MORE expressive path for those two, which is
+// backwards from every other capability here and the reason this
+// check exists at all. Degrading the RENDERING (buttons become a
+// numbered list) keeps the question intact; degrading the QUESTION to
+// fit the buttons would hand the model one choice where the user
+// wanted three, with nothing recording the difference. The first is
+// recoverable by a human reading the chat, the second is invisible.
+//
+// The cost is attestation: floor answers are best-effort, so a policy
+// requiring attested identity must not depend on these kinds. Nothing
+// does today — approvals never set either flag, and they are the only
+// caller whose decision is durable. Lifting this means extending the
+// ask frame behind its own feature string (Discord select menus,
+// modals), at which point this predicate consults the connector's
+// features instead of answering false outright.
+func widgetCanExpress(a Ask) bool {
+	return !a.MultiSelect && !a.AllowCustom
 }
 
 // AskTarget returns where an owner-directed ask should go: the chat
@@ -637,7 +665,8 @@ func (l *Loop) textFallbackAsk(ctx context.Context, a Ask) (Answer, error) {
 	for i, o := range a.Options {
 		fmt.Fprintf(&b, "\n%d — %s", i+1, o.Label)
 	}
-	b.WriteString("\n\nreply with a number to answer.")
+	b.WriteString("\n\n")
+	b.WriteString(askReplyInstruction(a))
 	if err := l.Connector.Send(ctx, Outgoing{ChatID: a.ChatID, ReplyTo: a.ReplyTo, Text: b.String()}); err != nil {
 		return Answer{}, err
 	}
@@ -659,10 +688,33 @@ func (l *Loop) textFallbackAsk(ctx context.Context, a Ask) (Answer, error) {
 	}
 }
 
+// askReplyInstruction tells the responder what shape of reply this ask
+// accepts. The floor is the only path that can offer more than one
+// pick or a written-in answer, so it is also the only place that has
+// to say so.
+func askReplyInstruction(a Ask) string {
+	switch {
+	case a.MultiSelect && a.AllowCustom:
+		return i18n.T("reply with numbers separated by commas, or write your own answer instead.")
+	case a.MultiSelect:
+		return i18n.T("reply with a number to answer, or several separated by commas.")
+	case a.AllowCustom:
+		return i18n.T("reply with a number to answer, or write your own answer instead.")
+	default:
+		return i18n.T("reply with a number to answer.")
+	}
+}
+
 // takeTextAnswer consumes m as the answer to the pending text ask
-// when it is one: same chat, allowed responder, and text matching an
-// option by number, key, or label. Anything else returns false and
-// the message flows on as a normal prompt.
+// when it is one: same chat, allowed responder, and a reply this ask
+// can accept. Anything else returns false and the message flows on as
+// a normal prompt.
+//
+// ⚠️ An AllowCustom ask accepts ANY text from an allowed responder, so
+// while one is outstanding no message from them flows on as a prompt.
+// That is the point — they were asked a question — but it is the one
+// case where a pending ask swallows conversation rather than letting
+// it past.
 func (l *Loop) takeTextAnswer(m Message) bool {
 	l.mu.Lock()
 	p := l.textAsk
@@ -673,16 +725,65 @@ func (l *Loop) takeTextAnswer(m Message) bool {
 	if len(p.ask.RestrictTo) > 0 && !containsUserID(p.ask.RestrictTo, m.UserID) {
 		return false
 	}
-	key, ok := matchAskOption(p.ask.Options, m.Text)
+	ans, ok := parseAskReply(p.ask, m.Text)
 	if !ok {
 		return false
 	}
+	ans.UserID, ans.Username = m.UserID, m.Username
+	ans.Attestation = AttestationBestEffort
 	select {
-	case p.answers <- Answer{Key: key, UserID: m.UserID, Username: m.Username,
-		Attestation: AttestationBestEffort}:
+	case p.answers <- ans:
 	default:
 	}
 	return true
+}
+
+// parseAskReply resolves a reply against the ask. Option matching runs
+// FIRST and wins: on an AllowCustom question a bare "2" is option two,
+// not the literal string "2" — the list was offered, so choosing from
+// it is the likelier intent, and a responder who really means the
+// character can say more than one character.
+//
+// A multi-select reply splits on commas and keeps the order given,
+// deduplicated. It is all-or-nothing: if any element matches no
+// option the whole reply is rejected, because taking the recognised
+// half of "1, 4, banana" would silently drop a choice the user made.
+func parseAskReply(a Ask, text string) (Answer, bool) {
+	if a.MultiSelect {
+		if keys, ok := matchAskOptions(a.Options, text); ok {
+			return Answer{Key: keys[0], Keys: keys}, true
+		}
+	} else if key, ok := matchAskOption(a.Options, text); ok {
+		return Answer{Key: key}, true
+	}
+	if a.AllowCustom {
+		if t := strings.TrimSpace(text); t != "" {
+			return Answer{Text: t}, true
+		}
+	}
+	return Answer{}, false
+}
+
+// matchAskOptions resolves a comma-separated multi-select reply. Every
+// element must match; duplicates collapse so "1,1" is one choice.
+func matchAskOptions(opts []AskOption, text string) ([]string, bool) {
+	parts := strings.Split(text, ",")
+	keys := make([]string, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	for _, part := range parts {
+		key, ok := matchAskOption(opts, part)
+		if !ok {
+			return nil, false
+		}
+		if !seen[key] {
+			seen[key] = true
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		return nil, false
+	}
+	return keys, true
 }
 
 // matchAskOption resolves a reply against the options: the 1-based

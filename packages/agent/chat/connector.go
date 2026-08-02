@@ -296,11 +296,39 @@ type Ask struct {
 	// TimeoutOutcome is rendered into the withdrawn question on
 	// expiry; "" uses a neutral default.
 	TimeoutOutcome string
+	// MultiSelect invites several options at once; the answer carries
+	// them in Keys. AllowCustom invites an answer that is not on the
+	// list at all, arriving as Text.
+	//
+	// 🔑 Only the TEXT FLOOR can express either today — a widget that
+	// returns one key structurally cannot, so Loop.Ask routes an ask
+	// that sets one of these to the floor even on a connector that
+	// renders asks natively. That is backwards from the usual
+	// arrangement and deliberate: answering the question that was
+	// actually asked beats a prettier answer to a narrower one. Adding
+	// the widget path is a wire change behind its own feature string
+	// (Discord select menus and modals); until then a rich question
+	// costs the button UI and drops attestation to best-effort, which
+	// approvals never pay because they never set either flag.
+	MultiSelect bool
+	AllowCustom bool
 }
 
 // Answer is the winning response to an Ask.
 type Answer struct {
-	Key      string
+	// Key is the chosen option, and for a multi-select answer it is
+	// the FIRST of Keys — so a caller that only knows about single
+	// choice (every approval path) keeps working unchanged rather
+	// than silently reading an empty string.
+	Key string
+	// Keys carries every option chosen when the Ask set MultiSelect.
+	// Empty for a single-choice answer; read Key there.
+	Keys []string
+	// Text carries a written-in answer when the Ask set AllowCustom
+	// and the reply matched no option. Key is empty in that case:
+	// "they picked nothing from the list" and "they picked the option
+	// whose key is the empty string" must not look alike.
+	Text     string
 	UserID   string
 	Username string
 	// Attestation grades how sure the platform is about who answered:
