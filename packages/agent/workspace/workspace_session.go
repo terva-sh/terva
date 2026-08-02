@@ -498,6 +498,18 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	// persistence hooks, not OnEvent, so it composes with the fan-out above.
 	build.WireHeadlessSessionPersist(ag, sess)
 
+	// A provider-side cache outage — append-only dispatches billed at full
+	// price — is invisible everywhere else: no error, no transcript trace,
+	// just usage rows quietly 5–10× their healthy cost. One measured session
+	// burned ~$65 of re-reads before anyone noticed. Surface it while it is
+	// happening as a keyed note (warn), and retract it the moment a dispatch
+	// hits cache again; the detector fires the retract, so the note cannot
+	// outlive the state it describes.
+	sessID := s.id
+	ag.AddCacheCliffObserver(func(cc core.CacheCliff) {
+		w.note(cacheCliffNoteKey(sessID), cacheCliffNote(cc), "warn")
+	})
+
 	// Mirror each assistant message's visible text out to a bound chat bridge.
 	// Registered after persistence, and additive: an observer cannot unwire the
 	// durable transcript (that is what AddMessageObserver bought us). One chat
@@ -518,9 +530,9 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 
 	if len(msgs) > 0 {
 		ag.SetMessages(msgs)
-		if cum, last, e := core.SessionUsageDetail(sess.Path); e == nil {
+		if cum, _, resume, e := core.SessionUsageDetail(sess.Path); e == nil {
 			ag.SeedCost(cum)
-			ag.SeedLastTurnUsage(last)
+			ag.SeedLastTurnUsage(resume)
 		}
 	} else if sess.Meta.Experience != "" && len(r.CardGreetings) > 0 {
 		// A brand-new immersive session: seed the card's openings — first_mes plus
@@ -675,6 +687,7 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 			r.ToolRegistry["raati_convene"] = &tools.RaatiConveneTool{
 				Engine:       raati.SwarmEngine{Swarm: w.swarm},
 				Enabled:      raatiConveneEnabled,
+				SpareHost:    raatiSpareHost,
 				HostProvider: r.Provider,
 				HostModel:    r.Model,
 				Tiers:        build.SwarmTierMap(cfg.SwarmTiers),
@@ -2443,6 +2456,10 @@ func (s *wsSession) close() {
 	// A mirror without a session has nowhere to deliver.
 	if s.ws != nil {
 		s.ws.chatStopForSession(s.id)
+		// The cache-cliff note describes THIS session's live dispatches; a
+		// session that closes mid-cliff must take its warning down with it,
+		// because the observer that would retract it dies here too.
+		s.ws.note(cacheCliffNoteKey(s.id), "", "warn")
 	}
 	// Drop any open /btw snapshots: they pin a frozen transcript and a client,
 	// and there is nothing to open them against once the session is gone.

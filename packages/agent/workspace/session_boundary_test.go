@@ -77,6 +77,7 @@ var sessionMayReachWorkspace = map[string]string{
 	"chatStopForSession": "tears down this session's bridges out of that workspace-owned registry",
 	"AuthProviders":      "the providers pane reports DAEMON credential state — a credential belongs to the workspace, not a conversation",
 	"canLogin":           "whether that pane may render login controls at all, which only the workspace knows (EnableAuth)",
+	"note":               "the keyed note surface is the HOST's (one sticky block per daemon); a session posts its cache-cliff warning there and close() retracts it, because the note must not outlive the session it describes",
 }
 
 // The two members that must NEVER appear. They are not merely undeclared — they are

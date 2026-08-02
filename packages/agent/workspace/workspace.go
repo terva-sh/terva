@@ -164,10 +164,66 @@ type Workspace struct {
 	// which is right for the web/ACP daemons, but the in-process TUI carrier
 	// overrides it via SetDiag — a stray stderr write would corrupt the
 	// full-screen alternate-screen UI. Always non-nil after NewWorkspace.
-	diag func(string)
+	//
+	// diag and noteSink are guarded by noteMu, NOT mu: notes fire from inside
+	// teardown paths that already hold mu (wsSession.close retracting the
+	// cache-cliff note under Workspace.Close), and taking mu again there is a
+	// self-deadlock. The dedicated mutex keeps the install-vs-fire race
+	// protection without coupling the sinks to the workspace lock.
+	noteMu sync.Mutex
+	diag   func(string)
+
+	// noteSink, when set, receives notes that REPLACE their predecessor under
+	// a key rather than appending — the swarm worktree record and the cache
+	// cliff warning. Optional: a host that has no such surface (the web/ACP
+	// daemons) leaves it nil and the note falls through to diag, which
+	// appends. Both are honest; only one can rewrite itself. level is the
+	// note surface's severity vocabulary ("info" | "warn").
+	noteSink func(key, msg, level string)
+
+	// swarmBatch is every worktree leased since the last one was released, in
+	// lease order, and swarmLive is how many of them are still running. Both
+	// guarded by mu. Together they are the note's content: a run of leases
+	// counts up, each release counts down, and the batch resets when a lease
+	// arrives with nothing live — so a second swarm later in the session
+	// starts from its own count instead of continuing the first one's.
+	swarmBatch []worktreeProvenance
+	swarmLive  int
+
+	// swarmTrustWatch marks the trust-store watcher as started (guarded by
+	// mu, set once). The watcher keeps the batch's grant hint tracking the
+	// LIVE store — see startSwarmTrustWatchLocked.
+	swarmTrustWatch bool
 
 	// authRefreshStop halts the proactive OAuth refresher (see NewWorkspace).
 	authRefreshStop func()
+}
+
+// SetNoteSink installs the host's replace-by-key note surface. A nil fn (the
+// default, and every non-TUI host) leaves notes falling through to diag.
+func (w *Workspace) SetNoteSink(fn func(key, msg, level string)) {
+	w.noteMu.Lock()
+	w.noteSink = fn
+	w.noteMu.Unlock()
+}
+
+// note posts a keyed, self-replacing note, falling back to diag on a host with
+// no such surface. An empty msg retracts; on the diag fallback there is nothing
+// to retract, so it is dropped rather than printed as a blank line.
+//
+// Reads the sink UNDER THE LOCK for the same reason diagf does — a lease can
+// land on a swarm goroutine while the host is still installing its surface.
+func (w *Workspace) note(key, msg, level string) {
+	w.noteMu.Lock()
+	sink, diag := w.noteSink, w.diag
+	w.noteMu.Unlock()
+	if sink != nil {
+		sink(key, msg, level)
+		return
+	}
+	if msg != "" && diag != nil {
+		diag(msg)
+	}
 }
 
 // diagf reports a host-side diagnostic, reading the sink UNDER THE LOCK.
@@ -176,9 +232,9 @@ type Workspace struct {
 // since landed. The refresher does not: it fires on its own goroutine and can
 // race the host installing its sink, which is a plain data race on the field.
 func (w *Workspace) diagf(format string, args ...any) {
-	w.mu.Lock()
+	w.noteMu.Lock()
 	fn := w.diag
-	w.mu.Unlock()
+	w.noteMu.Unlock()
 	if fn != nil {
 		fn(fmt.Sprintf(format, args...))
 	}
@@ -378,9 +434,9 @@ func (w *Workspace) SetDiag(fn func(string)) {
 	if fn == nil {
 		fn = func(string) {}
 	}
-	w.mu.Lock()
+	w.noteMu.Lock()
 	w.diag = fn
-	w.mu.Unlock()
+	w.noteMu.Unlock()
 }
 
 // CredentialErr reports the boot-time credential-resolution failure, nil once
@@ -615,8 +671,8 @@ func (w *Workspace) sessionLocked(id string) (*wsSession, error) {
 	// diagnostics before it is felt (stage-inline-editing.md §9). Silent for plain
 	// sessions (no amends).
 	if st := sess.LoadStats; st.Amends > 0 {
-		w.diag(fmt.Sprintf("session %s reconstructed: %d msgs, %d amends, %d tail takes in %s",
-			id, st.Messages, st.Amends, st.TailTakes, st.Elapsed.Round(time.Microsecond)))
+		w.diagf("session %s reconstructed: %d msgs, %d amends, %d tail takes in %s",
+			id, st.Messages, st.Amends, st.TailTakes, st.Elapsed.Round(time.Microsecond))
 	}
 	// The daemon is picking this session back up to keep talking in it, so the
 	// rows it is about to write belong to THIS build, not the one that created
@@ -1417,7 +1473,7 @@ func (w *Workspace) Usage(ctx context.Context, sess string) (core.WireUsage, err
 	if _, err := os.Stat(path); err != nil {
 		return core.WireUsage{}, ctrlproto.ErrNoSession
 	}
-	cum, _, err := core.SessionUsageDetail(path)
+	cum, _, _, err := core.SessionUsageDetail(path)
 	if err != nil {
 		return core.WireUsage{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "usage: %v", err)
 	}

@@ -227,6 +227,35 @@ func (a *Agent) AddPrefixDivergenceObserver(fn func(PrefixDivergence)) {
 	a.obsMu.Unlock()
 }
 
+// AddCacheCliffObserver registers fn to fire when consecutive append-only
+// dispatches collapse to a fraction of the cache they should have hit — the
+// provider-side outage the prefix ladder proves is not terva's bytes. Fires
+// with Ongoing=true on every collapse past the threshold (the run's numbers
+// grow), and exactly once with the zero CacheCliff when the run ends, so a
+// host can put up a note while it is true and take it down when it is not.
+// nil is a no-op.
+func (a *Agent) AddCacheCliffObserver(fn func(CacheCliff)) {
+	if fn == nil {
+		return
+	}
+	a.obsMu.Lock()
+	a.cacheCliffObs = append(a.cacheCliffObs, fn)
+	a.obsMu.Unlock()
+}
+
+// AddTransportObserver registers fn to fire once per dispatch on providers
+// that report transport forensics (which connection/edge the request rode —
+// see provider.TransportInfo). Hosts persist a "net" session row so a cache
+// collapse can be read against a re-dial after the fact. nil is a no-op.
+func (a *Agent) AddTransportObserver(fn func(provider.TransportInfo)) {
+	if fn == nil {
+		return
+	}
+	a.obsMu.Lock()
+	a.transportObs = append(a.transportObs, fn)
+	a.obsMu.Unlock()
+}
+
 // AddQueueDrainedObserver registers fn to fire when the agent loop consumes
 // queued user messages at a mid-turn safe boundary, carrying what it took.
 //
@@ -350,6 +379,26 @@ func (a *Agent) firePrefixDivergence(d PrefixDivergence) {
 	a.obsMu.RUnlock()
 	for _, fn := range obs {
 		fn(d)
+	}
+}
+
+func (a *Agent) fireCacheCliff(cc CacheCliff) {
+	a.obsMu.RLock()
+	obs := make([]func(CacheCliff), len(a.cacheCliffObs))
+	copy(obs, a.cacheCliffObs)
+	a.obsMu.RUnlock()
+	for _, fn := range obs {
+		fn(cc)
+	}
+}
+
+func (a *Agent) fireTransport(ti provider.TransportInfo) {
+	a.obsMu.RLock()
+	obs := make([]func(provider.TransportInfo), len(a.transportObs))
+	copy(obs, a.transportObs)
+	a.obsMu.RUnlock()
+	for _, fn := range obs {
+		fn(ti)
 	}
 }
 
