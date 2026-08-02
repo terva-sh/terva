@@ -539,6 +539,19 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 		fmt.Fprintf(os.Stderr, "terva: %s login expired and could not be refreshed (%v) — sign in again with /login\n", provider, err)
 	})()
 
+	// Questions over chat (connproto stage G, feature "asks"): the same ask
+	// surface the confirmer uses for approvals, bound to the agent LOOP so
+	// ask_user_question and the prefix-change guard work on a bot instead of
+	// reporting "no interactive channel".
+	//
+	// Declared before the agent on purpose. SetAsker must run BEFORE NewAgent
+	// (the agent copies the channel at construction) while the loop takes the
+	// agent, so the two cannot both be built first — the getter breaks the
+	// cycle, and every agent this Resolved mints afterwards, including each
+	// per-group NewChatAgent, picks the channel up the same way.
+	var loop *chat.Loop
+	resolved.SetAsker(chat.NewChatAsker(ctx, func() *chat.Loop { return loop }))
+
 	agent := resolved.NewAgent()
 	wireBotAgentExtHooks(ctx, agent, extMgr, gate, args, &resolved, resolved.Tasks)
 
@@ -564,7 +577,6 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	// build.BindSession. This site used to announce first.
 	build.BindSession(build.SessionBinding{Agent: agent, Tasks: resolved.Tasks, Ext: extMgr, Session: sess})
 
-	var loop *chat.Loop
 	loop = &chat.Loop{
 		Connector:  conn,
 		Agent:      agent,
