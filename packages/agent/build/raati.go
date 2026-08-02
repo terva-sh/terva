@@ -61,8 +61,22 @@ func WriteRaatiRecord(res *raati.Result) (string, error) {
 }
 
 // RaatiLevel2Bindings maps the user config's raati.level2 seats onto the
-// coordinator's binding type.
+// coordinator's binding type, falling through to the auto-seated panel when
+// the config names no seats and raati.auto_panel is on.
+//
+// The fall-through lives HERE rather than at each surface because this one
+// function is what all three convening paths read (the CLI, the web board,
+// and the convene tool's wiring). A second copy would be a second answer to
+// "which models are on the panel", which is the one question about a raati
+// that must have exactly one.
+//
+// An explicit raati.level2 always wins: it is the operator writing the seats
+// down, and a derivation must never overrule that.
 func RaatiLevel2Bindings(uc config.Config) []raati.Binding {
+	if len(uc.Raati.Level2) == 0 {
+		panel, _ := AutoRaatiPanel(uc, len(raati.DefaultPanel()))
+		return panel
+	}
 	out := make([]raati.Binding, 0, len(uc.Raati.Level2))
 	for _, b := range uc.Raati.Level2 {
 		out = append(out, raati.Binding{Provider: b.Provider, Model: b.Model})

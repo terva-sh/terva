@@ -49,6 +49,13 @@ opt-in and approval-gated, because a convening spends real sub-agent turns:
 The tool's description tells the agent when a panel is worth it (high-stakes,
 ambiguous, or gate-classed decisions — never routine ones), what it costs, and
 that the minority report and any open panel questions must be read, not skimmed.
+It also coaches the agent to convene **by profile and omit `level`** — the
+agent can't see your config, so an explicit level can only cap the panel below
+what auto would seat, or demand a rung that doesn't exist. When a panel does
+seat correlated (level 0, or a one-model thinking ladder), the verdict itself
+says so, so the caveat survives in the transcript; and the description orders
+a refused convening to be surfaced as "no panel ran" rather than silently
+absorbed into "reviewed".
 
 ## Decision classes
 
@@ -65,11 +72,36 @@ Who sits on the panel is the difference between theater and an instrument:
 | level | nickname | seats | honest label |
 |---|---|---|---|
 | 0 | *kaiku* (echo) | every seat on the invocation's provider/model | **correlated** — same weights, different priors; triage and fun, never a gate |
-| 1 | *kuoro* (choir) | the host provider's weak/medium/strong tier ladder | partial decorrelation (shared lineage) |
+| 1 | *kuoro* (choir) | the host provider's weak/medium/strong tier ladder | partial decorrelation (shared lineage — or, on a thinking ladder, shared weights) |
 | 2 | *käräjät* (assembly) | three exact cross-provider seats from `raati.level2` | real error decorrelation — gate-grade |
 
-Level 1 needs a full ladder for the provider (`terva models tiers`, config
-`swarm_tiers`). Level 2 needs three seats in the user config:
+### A level-1 ladder can be one model at three thinking levels
+
+`swarm_tiers` rungs can name a *reasoning effort* as well as a model ([models.md](models.md#a-rung-can-name-a-thinking-level-instead-of-a-model)), and level 1 seats whatever the ladder resolves to. So a provider with one good model still has a panel:
+
+```json
+{ "swarm_tiers": { "kimi": {
+  "weak":   { "model": "k3", "reasoning": "off" },
+  "medium": { "model": "k3", "reasoning": "medium" },
+  "strong": { "model": "k3", "reasoning": "high" } } } }
+```
+
+A reasoning model with thinking off really is a different judge from the same weights at high — different failure modes, different confidence, different appetite for saying "I don't know". That is a genuine advisory panel, and the verdict's seats line names each seat's effort (`kimi/k3 @off`) so a reader can weigh it.
+
+It is **not three independent judges**, and two things follow:
+
+- **It cannot hold an auto-resolved gate.** The honesty rule reads the resolved seats, not the level number: a gate whose seats all carry the same weights refuses, and says which of the two problems it is — identical seats, or one model spanning efforts. An *explicit* level is still your call, as it always has been.
+- **Its default seat order becomes `turn`.** With three different models, shuffling once per convening is enough — the weights disagree on their own. With one model at three efforts the *only* thing distinguishing the seats is the effort, so holding it fixed for a whole deliberation fuses "the benevolence seat" with "the one that wasn't thinking". Rotating per round keeps the effort a property of the round instead of the prior. Only the default moves: `turn` respawns every seat cold in round two (no cross-round prompt cache, evidence re-read per seat), and writing `"seat_order": "convene"` refuses that trade.
+
+Level 1 needs a **full** weak/medium/strong ladder for the host provider.
+terva ships one for Anthropic, GitHub Copilot, Google, OpenAI and Codex, so on
+those a fresh install convenes at level 1 with no configuration — which is also
+what lets a gate-class profile like `code-review` run at all (see the gate
+honesty rule below). DeepSeek and Kimi ship two rungs, which is enough for a
+cheap swarm spawn but **not** a ladder; on those, and on every gateway, either
+configure `swarm_tiers` or go to level 2. Check with `terva models tiers`.
+
+Level 2 needs three seats in the user config:
 
 ```json
 {
@@ -82,6 +114,50 @@ Level 1 needs a full ladder for the provider (`terva models tiers`, config
   }
 }
 ```
+
+### Letting terva seat level 2 for you
+
+Writing three bindings by hand is the only way to reach level 2, and a model
+that reaches for a gate profile before you have done so gets a refusal that
+reads like being denied permission. `raati.auto_panel` closes that: with it on
+and no `raati.level2`, terva seats the panel from the **strong tier rung of
+each provider you are logged into**.
+
+```json
+{
+  "raati": {
+    "auto_panel": true,
+    "auto_panel_providers": ["anthropic", "openai-codex", "kimi"]
+  }
+}
+```
+
+`terva models tiers` prints exactly what it would seat, and what it passed over
+and why — run it before you rely on it.
+
+Three things it will not do:
+
+- **It will not turn itself on.** Every other raati default is a *shape* (how
+  many rounds, which vote rule). This one **spends**, at each provider's most
+  expensive model, six sub-agent turns at a time, on credentials you may have
+  added for something else entirely. Off until you say so; while off, level 2
+  is exactly as unavailable as it is today.
+- **It will not seat the same weights twice.** Anthropic and GitHub Copilot are
+  two logins, two bills, and one set of Claude. A panel of three Claudes is
+  level 0 wearing level 2's label — and the label is what a gate is trusted on.
+  One seat per model lineage.
+- **It will not under-fill.** Two providers is not a three-seat panel, and
+  padding the third seat from a provider already seated rebuilds the exact
+  correlation the level rules out. It seats every seat or none, and says which
+  provider was missing.
+
+`auto_panel_providers` restricts and orders the draw. Without it the order is
+the provider registry's — the order `terva models tiers` lists in, which is
+arbitrary with respect to quality. terva does not rank your providers; if you
+have five and want a particular three, name them.
+
+An explicit `raati.level2` always wins. Writing the seats down is you deciding,
+and a derivation must never overrule that.
 
 The seats line on every verdict says exactly which model held which prior —
 that mapping is part of the verdict's meaning. How the level's model pool deals
@@ -133,10 +209,13 @@ install convenes correlated today and upgrades itself the day you configure
 tiers or level2, no profile edits. `"auto:1"` caps the climb (keep a profile on
 one provider's ladder even when cross-provider seats exist).
 
-**The gate honesty rule:** a gate-class profile whose auto level lands on 0
-refuses with guidance — a correlated panel cannot hold a gate. An *explicit*
-level-0 gate still convenes; that's your deliberate call. Veto proceeds at 0
-with the usual disclosure.
+**The gate honesty rule:** a gate-class profile whose auto level resolves to
+seats that all carry the same weights refuses with guidance — a correlated
+panel cannot hold a gate. It reads the resolved SEATS, not the level number,
+because a level-1 ladder can now be one model at three thinking efforts (see
+above); the two cases get different messages because they have different
+fixes. An *explicit* level still convenes; that's your deliberate call. Veto
+proceeds with the usual disclosure.
 
 Your own profiles live under `raati.profiles`; a profile with a built-in's
 name replaces it wholesale, and `"builtin_profiles": false` hides the shipped
@@ -193,6 +272,8 @@ prefix at byte zero), but each unit caches normally across its own rounds.
 |---|---|
 | `raati.convene_tool` | offer the opt-in `raati_convene` agent tool (default off) |
 | `raati.level2` | the three exact cross-provider seats for level 2 |
+| `raati.auto_panel` | seat level 2 from your logged-in providers' strong tiers (default **off** — it spends) |
+| `raati.auto_panel_providers` | restrict and order the auto panel's draw |
 | `raati.seat_order` | `convene` (default) / `fixed` / `turn` — pool→seat policy |
 | `raati.seat_map` | index permutation for `fixed` (e.g. `[2,0,1]`) |
 | `raati.profiles` | named convening bundles (see above) |
