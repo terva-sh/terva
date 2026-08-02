@@ -78,7 +78,9 @@ func PanelLines(res *ListResult, selected int) []string {
 }
 
 // PanelFooter is the static key-hint line.
-func PanelFooter() string { return "↑/↓ select · ↵ cd · c collect · r refresh · esc close" }
+func PanelFooter() string {
+	return "↑/↓ select · ↵ cd · x remove · X remove all available · c collect · r refresh · esc close"
+}
 
 // StatusGlance is the short TUI status-bar segment (not model-facing): worktree
 // count and how many this session holds.

@@ -143,3 +143,43 @@ func (i *Interactive) openWorktreeDialog(collect bool) {
 	i.worktreeDialog.Open(i.worktreeListRows, i.worktreeCollectRows, collect)
 	i.invalidate()
 }
+
+// removeWorktree deletes one managed worktree and refreshes the panel.
+//
+// The engine refuses a worktree with uncommitted changes or unmerged work, and
+// that refusal is shown rather than retried with force: terva does not delete
+// work that exists nowhere else, and the panel is not the place to override
+// that. Runs off the key handler because it shells out to git.
+func (i *Interactive) removeWorktree(name string) {
+	i.worktreeSurfaceAction("remove", map[string]string{"name": name},
+		i18n.T("removed worktree %s", name))
+}
+
+// removeAvailableWorktrees sweeps every available worktree in the repo.
+//
+// "available" is the engine's word and already covers the stale ones — a claim
+// whose owning process is gone or whose TTL expired is available with a reason,
+// never silently reclaimed — so this is the "clear out the unclaimed ones"
+// action without needing a second notion of staleness. A live claim is not in
+// the set, and the sweep keeps whatever it cannot remove and says which.
+func (i *Interactive) removeAvailableWorktrees() {
+	i.worktreeSurfaceAction("remove_available", nil, i18n.T("removed the available worktrees"))
+}
+
+// worktreeSurfaceAction issues one worktrees-surface action, reports the
+// outcome on the status line, and refreshes the panel either way — a failed
+// removal still needs the list re-read, since a sweep can remove some and keep
+// others, and a panel left showing the pre-sweep list would misreport which.
+func (i *Interactive) worktreeSurfaceAction(action string, args map[string]string, ok string) {
+	if i.cfg.Carrier == nil {
+		i.setStatusErr(i18n.T("worktrees are unavailable in this mode"))
+		return
+	}
+	err := i.cfg.Carrier.SurfaceAction(context.Background(), i.carrierSession(), "worktrees", action, args)
+	if err != nil {
+		i.setStatusErr(err.Error())
+	} else {
+		i.setStatusOK(ok)
+	}
+	i.refreshCarrierWorktrees()
+}

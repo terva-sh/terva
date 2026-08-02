@@ -360,6 +360,9 @@ func (s *wsSession) surfaceAction(id, action string, args map[string]string) err
 	if id == "memory" {
 		return s.memoryAction(action, args)
 	}
+	if id == "worktrees" {
+		return s.worktreeAction(action, args)
+	}
 	if id == "chat" {
 		// The issuing session is the bind target for connect: the mirror lands
 		// where the user asked for it, and stays there.
