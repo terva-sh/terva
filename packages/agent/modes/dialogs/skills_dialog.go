@@ -31,11 +31,22 @@ const (
 // ChromeRows is the non-body rows Render emits. The two views differ — the
 // reading view spends a row on the scroll indicator the list does not — so this
 // reports whichever is showing rather than one number for both.
+//
+// The reading view's optional metadata lines (argument hint, shadowed-by note)
+// have to be counted here too: undercounting hands the viewport a body budget
+// the dialog then overruns, and an oversized dialog squeezes the transcript.
 func (d *SkillsDialog) ChromeRows() int {
-	if d.viewing != nil {
-		return 4
+	if d.viewing == nil {
+		return 3
 	}
-	return 3
+	n := 4
+	if d.viewing.ArgumentHint != "" {
+		n++
+	}
+	if d.viewing.ShadowedBy != nil {
+		n++
+	}
+	return n
 }
 
 func NewSkillsDialog() *SkillsDialog { return &SkillsDialog{} }
@@ -141,14 +152,35 @@ func (d *SkillsDialog) Render(th tui.Theme, width int) []string {
 	return out
 }
 
+// shadowSourceLabel names what beat a skill, in the terms a user can act on:
+// the winner's namespace, which is also the prefix that would reach IT.
+func shadowSourceLabel(winner *skills.Skill) string {
+	if winner == nil {
+		return ""
+	}
+	if winner.Namespace != "" {
+		return winner.Namespace
+	}
+	return winner.Source
+}
+
 func (d *SkillsDialog) renderBody(th tui.Theme, width int) []string {
 	s := d.viewing
 	out := []string{
-		FrameHeader(th, i18n.T("skill: %s  (esc / enter to go back)", s.Name), width),
+		FrameHeader(th, i18n.T("skill: %s  (esc / enter to go back)", s.Ref()), width),
 		"  " + th.FG256(th.Muted, s.Description),
 		"  " + th.FG256(th.Muted, i18n.T("source: %s  (%s)", s.Source, s.Path)),
-		"",
 	}
+	if s.ArgumentHint != "" {
+		out = append(out, "  "+th.FG256(th.Muted, i18n.T("argument: %s", s.ArgumentHint)))
+	}
+	// The collision is the whole reason this entry looks unusual, so say it
+	// where the user landed to find out, not only in the one-line row.
+	if s.ShadowedBy != nil {
+		out = append(out, "  "+th.FG256(th.Muted, i18n.T("shadowed: %q is taken by the %s skill; load this one as %s",
+			s.Name, shadowSourceLabel(s.ShadowedBy), s.Qualified())))
+	}
+	out = append(out, "")
 
 	rendered := tui.RenderMarkdown(s.Body, th, width-4)
 	bodyLines := strings.Split(rendered, "\n")
@@ -174,13 +206,20 @@ func (d *SkillsDialog) renderBody(th tui.Theme, width int) []string {
 }
 
 func formatSkillRow(s *skills.Skill, maxWidth int) string {
-	left := fmt.Sprintf("%-20s  ", truncateLineSafe(s.Name, 20))
+	// Ref, not Name: for a shadowed skill the bare name belongs to somebody
+	// else, and this row is where the user reads what to type.
+	left := fmt.Sprintf("%-20s  ", truncateLineSafe(s.Ref(), 20))
 	src := "  " + truncateLineSafe(s.Source, 16)
 	room := maxWidth - len(left) - len(src)
 	if room < 10 {
 		room = 10
 	}
 	desc := s.Description
+	// A shadowed row without this reads as a duplicate entry rather than a
+	// collision: same description, no clue why the name is spelled oddly.
+	if s.ShadowedBy != nil {
+		desc = i18n.T("shadowed by %s — %s", shadowSourceLabel(s.ShadowedBy), desc)
+	}
 	if len(desc) > room {
 		if room <= 3 {
 			desc = strings.Repeat(".", room)

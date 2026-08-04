@@ -79,12 +79,21 @@ func (s *slashSuggester) SetExtra(cmds []slashCommand) {
 	s.extra = sorted
 }
 
-// SkillCompletion is one `/skill <name>` argument suggestion: a bare skill
-// name and its one-line description. The suggester turns it into a
-// "/skill <name>" replacement entry while the command's argument is typed.
+// SkillCompletion is one `/skill <name>` argument suggestion: the skill
+// reference to insert and its one-line description. The suggester turns it
+// into a "/skill <name>" replacement entry while the command's argument is
+// typed.
+//
+// Name is what gets inserted, so it is the QUALIFIED spelling for a skill
+// that lost its bare name to a higher tier — completing to a bare name that
+// resolves to a different skill would be a trap.
 type SkillCompletion struct {
 	Name string
 	Desc string
+	// Hint is the skill's argument-hint frontmatter, if any: a one-liner
+	// saying what the skill wants after its name. Appended to Desc in the
+	// popup so the user sees it before typing the argument, not after.
+	Hint string
 }
 
 // SetSkills updates the skill names offered as `/skill <name>` argument
@@ -238,18 +247,32 @@ func skillArgPrefix(input string) (arg string, ok bool) {
 // skillMatches builds the `/skill <name>` argument suggestions whose name has
 // arg as a case-insensitive prefix. Each entry's Name is the full
 // "/skill <name>" replacement (what Tab inserts / Enter runs); Display is the
-// bare name shown in the popup.
+// name shown in the popup.
+//
+// A qualified name also matches on its bare tail, so typing "handoff" offers
+// "claude:handoff" — the user who lost a name to a collision is exactly the
+// user who will type the bare one and wonder where their skill went.
 func (s *slashSuggester) skillMatches(arg string) []slashCommand {
 	arg = strings.ToLower(arg)
 	out := make([]slashCommand, 0, len(s.skills))
 	for _, sk := range s.skills {
-		if arg == "" || strings.HasPrefix(strings.ToLower(sk.Name), arg) {
-			out = append(out, slashCommand{
-				Name:    "/skill " + sk.Name,
-				Display: sk.Name,
-				Desc:    sk.Desc,
-			})
+		name := strings.ToLower(sk.Name)
+		tail := name
+		if i := strings.LastIndex(name, ":"); i >= 0 {
+			tail = name[i+1:]
 		}
+		if arg != "" && !strings.HasPrefix(name, arg) && !strings.HasPrefix(tail, arg) {
+			continue
+		}
+		desc := sk.Desc
+		if sk.Hint != "" {
+			desc = strings.TrimSpace(sk.Hint + " — " + desc)
+		}
+		out = append(out, slashCommand{
+			Name:    "/skill " + sk.Name,
+			Display: sk.Name,
+			Desc:    desc,
+		})
 	}
 	return out
 }

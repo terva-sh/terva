@@ -1,16 +1,21 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"runtime"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/permissions"
+	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/buildinfo"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/privfs"
+	"terva.sh/terva/packages/secrets"
 )
 
 // runDoctorCommand dispatches `terva doctor`: a read-only report of this
@@ -57,8 +62,10 @@ usage:
 Reports process identity (uid/euid), whether new privileges are blocked
 (no_new_privs), whether core dumps are disabled, whether passwordless sudo is
 available (a 'sudo -n true' probe), and whether the config/credential root is
-owner-only (with a chmod repair when it is group/other-accessible). It reads
-only process and directory metadata and never prints a secret value; the sudo
+owner-only (with a chmod repair when it is group/other-accessible). It also
+reports how many skills this directory loads and which ones lost their name to
+a same-named skill in a higher-priority directory. It reads only process,
+directory, and SKILL.md metadata and never prints a secret value; the sudo
 probe runs a no-op command and discards its output. Linux-only facts report
 "unknown" on other platforms.`))
 }
@@ -80,7 +87,76 @@ func runDoctor(w io.Writer, opts doctorOptions) error {
 		doctorLine(w, "sudo -n true", sudoProbe())
 	}
 	reportConfigPerms(w)
+	reportSecretsPosture(w)
+	reportSkillCollisions(w)
 	return nil
+}
+
+// reportSkillCollisions reports how many skills this directory would load and,
+// crucially, which ones lost their bare name to a higher tier. A collision is
+// otherwise invisible: the loser simply never appears in the model's manifest,
+// and the only symptom is a skill quietly behaving like a different one. That
+// makes it exactly the class of fact `doctor` exists to surface.
+//
+// Read-only, and it resolves against the SAME trust verdict a session here
+// would: reporting skills an untrusted workspace never loads would be a lie in
+// the reassuring direction.
+func reportSkillCollisions(w io.Writer) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		doctorLine(w, "skills", "unknown — "+err.Error())
+		return
+	}
+	userHome, _ := os.UserHomeDir()
+	trusted := permissions.ResolveTrustState(cwd, false).IsTrusted()
+	found, errs := skills.Discover(config.TervaHome(), cwd, userHome, true, true, trusted)
+
+	summary := fmt.Sprintf("%d active", len(found))
+	if !trusted {
+		summary += " (workspace untrusted — project skills not loaded)"
+	}
+	if len(errs) > 0 {
+		summary += fmt.Sprintf(" · %d unreadable", len(errs))
+	}
+	collisions := skills.Collisions(found)
+	if len(collisions) == 0 {
+		doctorLine(w, "skills", summary+" · no name collisions")
+		return
+	}
+	doctorLine(w, "skills", fmt.Sprintf("%s · %d name collision(s)", summary, len(collisions)))
+	for _, winner := range collisions {
+		for _, loser := range winner.Shadowed {
+			doctorLine(w, "", fmt.Sprintf("%q resolves to %s; %s is shadowed (load it as %s)",
+				winner.Name, winner.Qualified(), loser.Source, loser.Qualified()))
+		}
+	}
+}
+
+// reportSecretsPosture reports the at-rest encryption posture: whether a
+// secrets key is configured (and its file mode), and whether auth.json is
+// encrypted or still plaintext. Shape-only like everything else here — the
+// sniff reads leading bytes, never a value. `terva secret status` gives the
+// fuller report; this line exists so the posture shows up where operators
+// already look.
+func reportSecretsPosture(w io.Writer) {
+	keyPath := config.SecretsKeyPath()
+	_, err := config.SecretsIdentity()
+	switch {
+	case err == nil:
+		doctorLine(w, "secrets key", keyPath+"  "+keyFileMode(keyPath))
+	case errors.Is(err, secrets.ErrNoKey):
+		doctorLine(w, "secrets key", "absent — secrets at rest are plaintext (see `terva secret init`)")
+	default:
+		doctorLine(w, "secrets key", "UNUSABLE: "+err.Error())
+	}
+	doctorLine(w, "auth.json", fileEncryptionState(config.AuthPath()))
+	if cwd, err := os.Getwd(); err == nil {
+		if ok, why := build.ConfigReadableByAgent(cwd); ok {
+			doctorLine(w, "config.json", "no plaintext secrets — readable by the agent")
+		} else {
+			doctorLine(w, "config.json", "denied to the agent — "+why)
+		}
+	}
 }
 
 // reportConfigPerms diagnoses the permission posture of the directories that

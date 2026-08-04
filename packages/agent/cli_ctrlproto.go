@@ -245,6 +245,13 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		},
 	})
 
+	// The secrets group, unconditionally, where `terva web` needs
+	// --web-allow-secrets. The flag exists to keep a REMOTE peer from enumerating
+	// the host's scopes and components; a user at this terminal already has
+	// `terva secret status` and the credential home itself, so gating the same
+	// report behind a flag would protect nothing from anyone.
+	w.EnableSecrets()
+
 	// Forward-declared so the session-group closures below can re-point the
 	// running TUI (the legacy entry point uses the same pattern).
 	var iv *modes.Interactive
@@ -295,10 +302,14 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		SkillSnapshot: func() []*skills.Skill { return w.SkillSnapshot(iv.CarrierSessionID()) },
 		ReloadSkills:  func() []*skills.Skill { return w.ReloadSkills(iv.CarrierSessionID()) },
 		SkillCompletions: func() []modes.SkillCompletion {
-			vis := w.SessionSkills(iv.CarrierSessionID())
+			// VisibleSkills drops the built-ins and folds in the skills
+			// they shadowed, so a name lost to a higher tier is still
+			// completable — under its qualified spelling, which is the
+			// only form that resolves back to it.
+			vis := skills.VisibleSkills(w.SessionSkills(iv.CarrierSessionID()))
 			out := make([]modes.SkillCompletion, 0, len(vis))
 			for _, sk := range vis {
-				out = append(out, modes.SkillCompletion{Name: sk.Name, Desc: sk.Description})
+				out = append(out, modes.SkillCompletion{Name: sk.Ref(), Desc: sk.Description, Hint: sk.ArgumentHint})
 			}
 			return out
 		},
@@ -317,6 +328,7 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		AutoSwarmEnabled: initialCfg.AutoSwarmEnabled,
 		CWD:              w.CWD(),
 		TervaHome:        config.TervaHome(),
+		AuthStore:        config.AuthStoreFor(),
 		Version:          version,
 		BootNotice:       bootNotice,
 		// A credential-less boot defers the first session until /login, so the

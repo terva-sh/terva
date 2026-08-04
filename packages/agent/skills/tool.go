@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -53,7 +54,7 @@ func (*Tool) Name() string { return "skill" }
 // Description tells the model what this tool does. Kept blunt so the
 // model reliably uses it instead of guessing what a "skill" is.
 func (*Tool) Description() string {
-	return "Load a named skill's instructions. Use when the user's request matches a skill listed above."
+	return i18n.D("tool.skill.description", "Load the instructions of a skill by name. Use this tool when the request of the user agrees with a skill in the list above.")
 }
 
 // Schema is one required string parameter: the skill name.
@@ -80,7 +81,8 @@ func (t *Tool) Execute(ctx context.Context, args json.RawMessage, progress func(
 	}
 
 	t.mu.RLock()
-	s := FindByName(t.skills, in.Name)
+	s := Resolve(t.skills, in.Name)
+	alts := shadowedNames(t.skills, in.Name)
 	t.mu.RUnlock()
 	if s == nil {
 		return core.ToolResult{
@@ -88,8 +90,18 @@ func (t *Tool) Execute(ctx context.Context, args json.RawMessage, progress func(
 			Content: []provider.Content{provider.TextBlock{Text: fmt.Sprintf("skill: no skill named %q (run /skills in terva to see what's available)", in.Name)}},
 		}, nil
 	}
+	// Teach the qualified syntax HERE rather than in the system prompt:
+	// a shadowed skill is rare enough that standing manifest text would
+	// cost tokens every turn to prepare for a turn that mostly never
+	// comes. The name the model asked for resolved — this only tells it
+	// what else answers to that name, in case it wanted the other one.
+	var note string
+	if len(alts) > 0 {
+		note = fmt.Sprintf("\n\n(Note: %q also names %s. This result is %s; load one of the others by its qualified name if that is what you meant.)",
+			in.Name, strings.Join(alts, ", "), s.Qualified())
+	}
 
-	header := fmt.Sprintf("# Skill: %s\n\n%s\n\n---\n\n", s.Name, s.Description)
+	header := fmt.Sprintf("# Skill: %s\n\n%s\n\n---\n\n", s.Ref(), s.Description)
 	body := s.Body
 
 	// Skill-driven tool activation (retro H2·b step 5): if the skill declares the
@@ -109,10 +121,35 @@ func (t *Tool) Execute(ctx context.Context, args json.RawMessage, progress func(
 	}
 
 	return core.ToolResult{
-		Content: []provider.Content{provider.TextBlock{Text: header + body}},
+		Content: []provider.Content{provider.TextBlock{Text: header + body + note}},
 		Details: map[string]any{
-			"skill": s.Name,
-			"path":  s.Path,
+			"skill":     s.Name,
+			"qualified": s.Qualified(),
+			"path":      s.Path,
 		},
 	}, nil
+}
+
+// shadowedNames returns the qualified names that the given reference
+// ALSO matches but did not resolve to — the losers of a bare-name
+// collision. Empty for the overwhelmingly common uncontested name, and
+// always empty when the caller already qualified the reference (it
+// asked for a specific tier, so there is nothing to disambiguate).
+func shadowedNames(active []*Skill, ref string) []string {
+	if _, _, qualified := splitQualified(ref); qualified {
+		return nil
+	}
+	var out []string
+	for _, s := range active {
+		if s == nil || !strings.EqualFold(s.Name, strings.TrimSpace(ref)) {
+			continue
+		}
+		for _, sh := range s.Shadowed {
+			if sh != nil {
+				out = append(out, sh.Qualified())
+			}
+		}
+		break
+	}
+	return out
 }

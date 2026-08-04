@@ -48,15 +48,22 @@ func (i *Interactive) openMigrateDialog() {
 // tool's catalog is refreshed so a newly-added skill is loadable by name.
 // Neither touches the system prompt, so the prompt cache survives.
 func (i *Interactive) openSkillsDialog() {
-	var list []*skills.Skill
+	i.skillsDialog.Open(skills.VisibleSkills(i.currentSkills()))
+	i.invalidate()
+}
+
+// currentSkills returns the session's ACTIVE catalog — built-ins included,
+// each winner carrying what it shadowed. Callers that render a list filter it
+// through skills.VisibleSkills; callers that resolve a name must not, or
+// /skill could never reach a built-in.
+func (i *Interactive) currentSkills() []*skills.Skill {
 	switch {
 	case i.cfg.ReloadSkills != nil:
-		list = i.cfg.ReloadSkills()
+		return i.cfg.ReloadSkills()
 	case i.cfg.SkillSnapshot != nil:
-		list = i.cfg.SkillSnapshot()
+		return i.cfg.SkillSnapshot()
 	}
-	i.skillsDialog.Open(list)
-	i.invalidate()
+	return nil
 }
 
 // reloadSkillsDialog re-discovers skills (refreshing the live skill tool's
@@ -66,9 +73,9 @@ func (i *Interactive) reloadSkillsDialog() {
 	if i.cfg.ReloadSkills == nil {
 		return
 	}
-	list := i.cfg.ReloadSkills()
-	i.skillsDialog.Open(list)
-	i.setStatusOK(fmt.Sprintf("skills reloaded — %d available", len(list)))
+	vis := skills.VisibleSkills(i.cfg.ReloadSkills())
+	i.skillsDialog.Open(vis)
+	i.setStatusOK(fmt.Sprintf("skills reloaded — %d available", len(vis)))
 	i.invalidate()
 }
 
@@ -88,27 +95,20 @@ func (i *Interactive) slashSkill(_ context.Context, parts []string, _ string) bo
 	}
 	name := parts[1]
 
-	var list []*skills.Skill
-	switch {
-	case i.cfg.ReloadSkills != nil:
-		list = i.cfg.ReloadSkills()
-	case i.cfg.SkillSnapshot != nil:
-		list = i.cfg.SkillSnapshot()
-	}
-	// Case-insensitive for typing convenience; echo the canonical name.
-	var match *skills.Skill
-	for _, s := range list {
-		if strings.EqualFold(s.Name, name) {
-			match = s
-			break
-		}
-	}
+	// Resolve accepts the bare name and the namespace-qualified spelling
+	// ("claude:handoff"), case-insensitively, over the ACTIVE catalog —
+	// built-ins included, since a bare name now commonly resolves to one.
+	list := i.currentSkills()
+	match := skills.Resolve(list, name)
 	if match == nil {
 		i.setStatusErr(i18n.T("no skill named %q — /skills to list", name))
 		return false
 	}
 
-	i.ed.SetValue(skillDirective(match.Name, strings.TrimSpace(strings.Join(parts[2:], " "))))
+	// Ref, not Name: the directive has to name the skill the way the `skill`
+	// tool will resolve it back, and for a shadowed skill the bare name
+	// belongs to somebody else.
+	i.ed.SetValue(skillDirective(match.Ref(), strings.TrimSpace(strings.Join(parts[2:], " "))))
 	i.invalidate()
 	return false
 }

@@ -588,7 +588,10 @@ func runSkillsCommand(_ context.Context, sess *session, _ string) string {
 			continue
 		}
 		b.WriteString("  ")
-		b.WriteString(sk.Name)
+		// Ref, not Name: a skill that lost its bare name is listed under the
+		// qualified one, since printing the bare name here would hand back a
+		// string that resolves to a DIFFERENT skill.
+		b.WriteString(sk.Ref())
 		if sk.Description != "" {
 			b.WriteString(" — ")
 			b.WriteString(sk.Description)

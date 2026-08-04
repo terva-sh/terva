@@ -9,9 +9,13 @@ import (
 
 // builtinFS holds the SKILL.md files terva ships with the binary.
 // They appear in the catalogue as ordinary skills — same on-demand
-// load via the `skill` tool, same /skills picker — but never need
-// to be installed by the user. A user-installed skill with the same
-// name shadows the built-in one (Discover's first-match-wins).
+// load via the `skill` tool — but never need to be installed by the
+// user, and they stay out of the /skills picker.
+//
+// A NATIVELY-installed skill of the same name (./.terva/skills or
+// $TERVA_HOME/skills) shadows the built-in; a .claude/.agents compat
+// skill or an extension bundle does not, since those rank below the
+// built-in rung. See discoveryTiers.
 //
 //go:embed all:builtin
 var builtinFS embed.FS
@@ -36,14 +40,16 @@ func loadBuiltins() []*Skill {
 		}
 		front, body := splitFrontmatter(string(raw))
 		s := &Skill{
-			Path:    "builtin:" + e.Name(),
-			Source:  "built-in",
-			Body:    strings.TrimSpace(body),
-			Builtin: true,
+			Path:      "builtin:" + e.Name(),
+			Source:    "built-in",
+			Namespace: NamespaceBuiltin,
+			Body:      strings.TrimSpace(body),
+			Builtin:   true,
 		}
 		parseFrontmatter(front, s)
+		s.Name = sanitizeName(s.Name)
 		if s.Name == "" {
-			s.Name = e.Name()
+			s.Name = sanitizeName(e.Name())
 		}
 		out = append(out, s)
 	}

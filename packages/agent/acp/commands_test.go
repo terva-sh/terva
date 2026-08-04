@@ -236,6 +236,41 @@ func TestACPSlashSkillsExecutesNatively(t *testing.T) {
 	}
 }
 
+// A listing that prints an identifier has to print one that resolves back.
+// For a skill that lost its bare name to a higher tier, only the qualified
+// spelling does — the bare one now belongs to whatever beat it.
+func TestACPSlashSkillsListsShadowedByQualifiedName(t *testing.T) {
+	winner := &skills.Skill{Name: "handoff", Namespace: skills.NamespaceBuiltin, Builtin: true, Description: "ours"}
+	loser := &skills.Skill{Name: "handoff", Namespace: skills.NamespaceClaude, Description: "theirs", ShadowedBy: winner}
+	winner.Shadowed = []*skills.Skill{loser}
+
+	client := &countingTextClient{}
+	factory := &fakeFactory{
+		client:     client,
+		tools:      core.Registry{},
+		withSkills: true,
+		// The ACP snapshot hands over what VisibleSkills produced, exactly as
+		// acpFactory.skillSnapshot does.
+		skillList: skills.VisibleSkills([]*skills.Skill{winner}),
+	}
+	h, sid, teardown := commandSetup(t, factory)
+	defer teardown()
+	_ = h.drainUpdates()
+
+	h.call(MethodSessionPromptName, map[string]any{
+		"sessionId": sid,
+		"prompt":    []map[string]any{{"type": "text", "text": "/skills"}},
+	})
+	text := drainChunkText(h.drainUpdates())
+	if !strings.Contains(text, "claude:handoff") {
+		t.Errorf("/skills must list the shadowed skill under its qualified name, got: %q", text)
+	}
+	// The built-in that won stays out of the listing, as always.
+	if strings.Contains(text, "ours") {
+		t.Errorf("a built-in leaked into the /skills listing: %q", text)
+	}
+}
+
 // TestACPSlashSkillsNoneDiscovered proves the empty path: with a skills source
 // but no skills, /skills still degrades to a non-empty note (not silence).
 func TestACPSlashSkillsNoneDiscovered(t *testing.T) {
