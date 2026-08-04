@@ -103,7 +103,11 @@ describe('ctrlproto Client', () => {
         // history-window: windowed snapshots. Without it the daemon ships the WHOLE
         // transcript — image bytes and all — on every subscribe AND at the end of
         // every turn, which is the network tax this client pays and the TUI does not.
-        groups: ['conversation', 'session', 'control', 'auth'],
+        // secrets: the at-rest posture, on the same terms as auth — off the
+        // daemon's base hello, so asking costs nothing when it is not served,
+        // while not asking makes the Secrets tab's one call fail with "method
+        // group not negotiated" on a daemon that WOULD have served it.
+        groups: ['conversation', 'session', 'control', 'auth', 'secrets'],
         features: ['images', 'image-data', 'resolve-events', 'workspace-events', 'history-window'],
       },
     })

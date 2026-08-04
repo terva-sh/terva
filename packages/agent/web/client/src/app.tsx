@@ -1,4 +1,4 @@
-import type { VNode } from 'preact'
+import type { ComponentChildren, VNode } from 'preact'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { ADDR_WORKSPACE, Client } from './ctrlproto'
 import type { ClientLike, ConnectableClient } from './ctrlproto'
@@ -28,6 +28,7 @@ import type {
   PermissionsView,
   ProviderInfo,
   ProvidersView,
+  SecretsStatus,
   RaatiHistoryItem,
   RaatiInquiry,
   RaatiUnit,
@@ -271,6 +272,13 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   const [queued, setQueued] = useState<string[]>([])
   // Whether the daemon advertised the self-restart capability (--web-allow-restart).
   const [canRestart, setCanRestart] = useState(false)
+  // Whether the daemon SERVES the secrets group (--web-allow-secrets). A GROUP
+  // rather than a feature, so the check is hello.groups: it decides whether the
+  // verbs exist at all, and a tab that calls one the daemon never negotiated is
+  // a tab whose every control answers "method group not negotiated".
+  const [canReadSecrets, setCanReadSecrets] = useState(false)
+  const [wsSecrets, setWsSecrets] = useState<SecretsStatus | null>(null)
+  const [wsSecretsErr, setWsSecretsErr] = useState('')
   // Whether the daemon serves the Stage app (--web-stage). When set, the topbar
   // shows a link across to /stage/; the panel is otherwise unaware of Stage.
   const [stageEnabled, setStageEnabled] = useState(false)
@@ -316,7 +324,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   // The workspace drawer's own state — the landing has no session, so it cannot
   // ask for surfaces (every one of them is served through a session handle, and
   // an empty address MINTS one). It asks the session-independent verbs instead.
-  const [wsTab, setWsTab] = useState<'providers' | 'about'>('providers')
+  const [wsTab, setWsTab] = useState<'providers' | 'secrets' | 'about'>('providers')
   const [wsProviders, setWsProviders] = useState<ProvidersView | null>(null)
   const [wsProvidersErr, setWsProvidersErr] = useState('')
   // The provider-login flow in progress, if any: the daemon hands us a step to
@@ -734,6 +742,25 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     }
   }, [])
 
+  // The at-rest posture, without a session — a fact about the daemon, like the
+  // provider picture beside it. Session-independent by construction: the verb
+  // ignores the address (a key belongs to the home, not to a conversation).
+  //
+  // Called only when the daemon negotiated the group. Nothing here is a secret
+  // value; the daemon builds this report to be safe on a screen someone else
+  // can see, which is exactly what a browser pane is.
+  const loadWorkspaceSecrets = useCallback(async () => {
+    const c = clientRef.current
+    if (!c) return
+    setWsSecretsErr('')
+    try {
+      setWsSecrets(await c.send<SecretsStatus>('secrets.status', null, ''))
+    } catch (e) {
+      setWsSecrets(null)
+      setWsSecretsErr(String(e))
+    }
+  }, [])
+
   const loadSurface = useCallback(async (id: string) => {
     const c = clientRef.current
     if (!c || !curRef.current) return
@@ -1019,6 +1046,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       const lang = setLocale(hello?.locale ?? 'en')
       document.documentElement.lang = lang
       setCanRestart(!!hello?.features?.includes('restart'))
+      setCanReadSecrets(!!hello?.groups?.includes('secrets'))
       setStageEnabled(!!hello?.features?.includes('stage'))
       canListFiles.current = !!hello?.features?.includes('files-list')
       // Whether this carrier has an upload route at all, and what it will take.
@@ -1708,6 +1736,15 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     void loadWorkspaceProviders()
   }, [paneOpen, curSess, loadWorkspaceProviders])
 
+  // The posture is fetched on demand rather than beside the providers above:
+  // it walks the credential home, the component registry and every component's
+  // state file, so a drawer opened to read "what version is this" should not
+  // pay for it.
+  useEffect(() => {
+    if (!paneOpen || curSess || wsTab !== 'secrets' || !canReadSecrets) return
+    void loadWorkspaceSecrets()
+  }, [paneOpen, curSess, wsTab, canReadSecrets, loadWorkspaceSecrets])
+
   const rename = useCallback(
     async (s: SessionInfo) => {
       const title = window.prompt(t('Rename session'), s.title || '')
@@ -2164,11 +2201,17 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
               removeEndpoint,
             }}
             onClose={() => setPaneOpen(false)}
-            onRefresh={() => void loadWorkspaceProviders()}
+            onRefresh={() => {
+              void loadWorkspaceProviders()
+              if (canReadSecrets) void loadWorkspaceSecrets()
+            }}
             onRestart={canRestart ? restart : undefined}
             version={serverVersion}
             trusted={!!curInfo?.trusted}
             onTrust={trustWorkspace}
+            canReadSecrets={canReadSecrets}
+            secrets={wsSecrets}
+            secretsErr={wsSecretsErr}
           />
         )}
         {paneOpen && curSess && (
@@ -2338,9 +2381,12 @@ export function WorkspaceDrawer({
   version,
   trusted,
   onTrust,
+  canReadSecrets,
+  secrets,
+  secretsErr,
 }: {
-  tab: 'providers' | 'about'
-  onTab: (tab: 'providers' | 'about') => void
+  tab: 'providers' | 'secrets' | 'about'
+  onTab: (tab: 'providers' | 'secrets' | 'about') => void
   providers: ProvidersView | null
   err: string
   auth?: AuthPaneProps
@@ -2350,6 +2396,11 @@ export function WorkspaceDrawer({
   version?: string
   trusted?: boolean
   onTrust?: (trust: boolean) => void
+  // Whether the daemon negotiated the secrets group (--web-allow-secrets).
+  // The tab is absent otherwise, rather than present and failing.
+  canReadSecrets?: boolean
+  secrets?: SecretsStatus | null
+  secretsErr?: string
 }) {
   return (
     <aside class="pane-rail">
@@ -2360,6 +2411,12 @@ export function WorkspaceDrawer({
               <span class="pane-tab-icon">🔑</span>
               <span class="pane-tab-label">{t('Providers')}</span>
             </button>
+            {canReadSecrets && (
+              <button class={`pane-tab${tab === 'secrets' ? ' active' : ''}`} onClick={() => onTab('secrets')}>
+                <span class="pane-tab-icon">🔒</span>
+                <span class="pane-tab-label">{t('Secrets')}</span>
+              </button>
+            )}
             <button class={`pane-tab${tab === 'about' ? ' active' : ''}`} onClick={() => onTab('about')}>
               <span class="pane-tab-icon">☰</span>
               <span class="pane-tab-label">{t('About')}</span>
@@ -2388,6 +2445,13 @@ export function WorkspaceDrawer({
                 error={auth?.error ?? ''}
               />
             )}
+          </>
+        )}
+        {tab === 'secrets' && (
+          <>
+            {secretsErr && <div class="pick-empty">{secretsErr}</div>}
+            {!secrets && !secretsErr && <div class="pick-empty">{t('loading…')}</div>}
+            {secrets && <SecretsBody v={secrets} />}
           </>
         )}
         {tab === 'about' && (
@@ -2422,6 +2486,168 @@ export function WorkspaceDrawer({
         )}
       </div>
     </aside>
+  )
+}
+
+// ---- secrets: terva's at-rest posture (workspace drawer) ----
+//
+// What is encrypted, what is still plaintext, and what the agent may read. It
+// renders `secrets.status`, which the CLI renders too — one producer, so this
+// pane and `terva secret status` cannot disagree about whether a file is
+// sealed.
+//
+// NOTHING here is a secret value: paths, modes, counts, names, states and
+// reasons only. That is a property of the wire, not of this component — the
+// daemon never sends one — which is what makes a posture report safe on a
+// screen someone else can see. Rotation is deliberately absent from the group,
+// so there is no control here that could destroy a key.
+
+// SecretsRow is one labelled finding. `tone` drives the dot: a report whose
+// whole job is to say what is wrong should not make the reader parse prose to
+// find it.
+function SecretsRow({ label, tone, children }: { label: string; tone: 'ok' | 'warn' | 'bad'; children: ComponentChildren }) {
+  return (
+    <div class={`secrets-row secrets-row--${tone}`}>
+      <div class="secrets-row__label">{label}</div>
+      <div class="secrets-row__value">{children}</div>
+    </div>
+  )
+}
+
+export function SecretsBody({ v }: { v: SecretsStatus }) {
+  const key = v.key
+  // The absent/missing split is the one distinction here a reader can act on
+  // wrongly, so it gets two different tones and two different sentences:
+  // absent means encryption was never turned on, missing means ciphertext
+  // exists that this key was meant to open.
+  const keyTone = key.state === 'present' ? (key.owner_only === false ? 'warn' : 'ok') : key.state === 'absent' ? 'warn' : 'bad'
+  const plaintext = v.config.plaintext ?? []
+  const grants = v.grants ?? []
+  // An expired grant is a finding — it is the thing a reader came to renew or
+  // remove — so the row cannot sit under an "all fine" dot while the only red
+  // text in it says otherwise.
+  const grantsTone = grants.some((g) => g.expired) ? 'warn' : 'ok'
+  const files = v.files ?? []
+  const reads = (v.reads ?? []).filter((r) => !r.readable)
+
+  return (
+    <div class="secrets-pane">
+      <p class="ws-about__lead">
+        {t('What is encrypted at rest on this daemon, and what its own agent may read. No secret value is sent here.')}
+      </p>
+
+      <SecretsRow label={t('Key')} tone={keyTone}>
+        {key.state === 'present' && (
+          <>
+            <code>{key.path}</code>
+            {key.from_env && <span class="secrets-note"> {t('(supplied via environment)')}</span>}
+            {!key.from_env && key.owner_only && <span class="secrets-note"> {key.mode} {t('owner-only')}</span>}
+            {!key.from_env && key.owner_only === false && <div class="secrets-note secrets-note--bad">{key.reason}</div>}
+          </>
+        )}
+        {key.state !== 'present' && <div class="secrets-note">{key.reason || key.state}</div>}
+      </SecretsRow>
+
+      {v.recipient && (
+        <SecretsRow label={t('Recipient')} tone="ok">
+          {/* A PUBLIC key. Shown because a component operator needs to read it
+              off the screen to seal a value by hand. */}
+          <code class="secrets-recipient">{v.recipient}</code>
+        </SecretsRow>
+      )}
+
+      {/* Not a warning: a lazy `terva secret rotate` is DESIGNED to leave these,
+          and files heal onto the new key as they are rewritten. Flagging the
+          normal outcome of a supported operation would train the reader to
+          ignore the dots. The sentence says what they still do. */}
+      {!!v.retired_keys && (
+        <SecretsRow label={t('Retired keys')} tone="ok">
+          {tn(
+            v.retired_keys,
+            '%d retired key still opens files that have not been rewritten, and never seals',
+            '%d retired keys still open files that have not been rewritten, and never seal',
+          )}
+        </SecretsRow>
+      )}
+
+      {files.map((f) => (
+        <SecretsRow key={f.name} label={f.name} tone={f.state === 'encrypted' || f.state === 'absent' ? 'ok' : 'warn'}>
+          {f.state}
+          {f.note && <div class="secrets-note">{f.note}</div>}
+        </SecretsRow>
+      ))}
+
+      <SecretsRow label={t('Store')} tone={v.store.present && !v.store.encrypted ? 'warn' : 'ok'}>
+        {v.store.error && <div class="secrets-note secrets-note--bad">{v.store.error}</div>}
+        {!v.store.error && !v.store.present && t('absent — no scoped secrets stored')}
+        {!v.store.error && v.store.present && (
+          <>
+            <div>{v.store.encrypted ? t('encrypted') : t('PLAINTEXT')}</div>
+            <ul class="secrets-list">
+              {(v.store.scopes ?? []).map((sc) => (
+                <li key={sc.scope}>
+                  <code>{sc.scope}</code> <span class="secrets-note">{tn(sc.keys, '%d key', '%d keys')}</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </SecretsRow>
+
+      <SecretsRow label={t('config.json')} tone={plaintext.length ? 'warn' : 'ok'}>
+        {v.config.total === 0 && t('no secret-bearing values')}
+        {v.config.total > 0 &&
+          plaintext.length === 0 &&
+          tn(v.config.total, '%d secret value, all encrypted', '%d secret values, all encrypted')}
+        {plaintext.length > 0 && (
+          <>
+            <div>{t('%d of %d still plaintext', plaintext.length, v.config.total)}</div>
+            <ul class="secrets-list">
+              {plaintext.map((p) => (
+                <li key={p}>
+                  <code>{p}</code>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+        {!!v.config.unclassified?.length && (
+          <div class="secrets-note">{t('unclassifiable (no manifest): %s', v.config.unclassified.join(', '))}</div>
+        )}
+      </SecretsRow>
+
+      <SecretsRow label={t('Agent reads')} tone={v.config.agent_can_read && reads.length === 0 ? 'ok' : 'warn'}>
+        <div>
+          {v.config.agent_can_read
+            ? t('config.json readable (nothing secret left in it)')
+            : t('config.json denied — %s', v.config.reason ?? '')}
+        </div>
+        {/* Only the components that are NOT plainly readable. A row per healthy
+            component would bury the ones that need action. */}
+        {reads.map((r) => (
+          <div key={r.scope} class="secrets-note">
+            <code>{r.scope}</code>{' '}
+            {r.enforced ? t('denied —') : t('will be denied in a future release —')} {r.reason}
+          </div>
+        ))}
+      </SecretsRow>
+
+      <SecretsRow label={t('Grants')} tone={grantsTone}>
+        {grants.length === 0 && t('none — every scope is reachable only by its own principal')}
+        <ul class="secrets-list">
+          {grants.map((g) => (
+            <li key={`${g.principal}:${g.scope}`}>
+              <code>{g.principal}</code> → <code>{g.scope}</code> <span class="secrets-note">({g.mode})</span>
+              {g.expired && <span class="secrets-note secrets-note--bad"> {t('expired')}</span>}
+            </li>
+          ))}
+        </ul>
+      </SecretsRow>
+
+      <p class="secrets-note">
+        {t('Rotating or replacing the key is a terminal-only operation: run `terva secret rotate`.')}
+      </p>
+    </div>
   )
 }
 

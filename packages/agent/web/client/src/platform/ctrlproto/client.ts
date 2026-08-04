@@ -142,7 +142,13 @@ export class Client implements ConnectableClient {
             // the pane reads can_login before showing a single control) — but NOT
             // asking for it means every login call is refused with "method group
             // not negotiated", which is a Providers pane whose buttons all fail.
-            groups: ['conversation', 'session', 'control', 'auth'],
+            // secrets = the at-rest posture and the store's grants. Off the
+            // daemon's base hello too, served only under --web-allow-secrets,
+            // and asked for on the same terms as auth: intersecting costs
+            // nothing when the daemon does not offer it, while NOT asking
+            // guarantees "method group not negotiated" for a pane we do show.
+            // The pane itself reads the negotiated groups before rendering.
+            groups: ['conversation', 'session', 'control', 'auth', 'secrets'],
             // images = inbound attachments on prompt; image-data = outbound
             // image payloads in the transcript (agent-generated images, echoed
             // attachments, tool-result screenshots) render as real pixels.

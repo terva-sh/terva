@@ -670,6 +670,36 @@ button.ident-home:hover .persona { text-decoration: underline; }
 .ws-about__facts dd { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
 .ws-about__actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
+/* The workspace drawer's Secrets tab — terva's at-rest posture. Rows rather
+   than the About tab's definition list, because each one is a FINDING with a
+   state, and the state has to be legible without reading the prose: the tone
+   dot carries it. Nothing rendered here is a secret value; the daemon never
+   sends one. */
+.secrets-pane { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+.secrets-row { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: baseline; }
+.secrets-row__label { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.secrets-row__label::before {
+  content: '';
+  display: inline-block;
+  width: 7px; height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: middle;
+  background: var(--muted);
+}
+.secrets-row--ok .secrets-row__label::before { background: var(--ok); }
+.secrets-row--warn .secrets-row__label::before { background: var(--warning); }
+.secrets-row--bad .secrets-row__label::before { background: var(--danger); }
+.secrets-row__value { font-size: 13px; overflow-wrap: anywhere; min-width: 0; }
+.secrets-row__value code { font-size: 12px; }
+/* A recipient is a long unbroken age1… string; let it wrap rather than widen
+   the rail past the viewport. */
+.secrets-recipient { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
+.secrets-note { color: var(--muted); font-size: 12px; line-height: 1.45; }
+.secrets-note--bad { color: var(--danger); }
+.secrets-list { margin: 4px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
+.secrets-list li { font-size: 12px; overflow-wrap: anywhere; }
+
 /* context / usage pane body */
 .ctx-body { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
 .ctx-bar-wrap { display: flex; flex-direction: column; gap: 4px; }
