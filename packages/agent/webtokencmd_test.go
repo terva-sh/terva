@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -37,7 +38,9 @@ func TestWebTokenInitMintsAnOwnerOnlyToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fi.Mode().Perm()&0o077 != 0 {
+	// Windows reports 0666 regardless of ACL; guard the mode half only, so the
+	// token-secrecy assertions below still run on every platform.
+	if runtime.GOOS != "windows" && fi.Mode().Perm()&0o077 != 0 {
 		t.Fatalf("token file is not owner-only: %v", fi.Mode())
 	}
 	// Under `go test` stdout is not a terminal, so the value must NOT be

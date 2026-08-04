@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -730,6 +731,12 @@ func keyFileMode(path string) string {
 	if err != nil {
 		// The identity resolved but not from this path (env-supplied).
 		return "(supplied via environment)"
+	}
+	// Windows carries no POSIX permission bits: Stat reports 0666 for every
+	// file whatever its ACL says, so an owner-only verdict would be a fiction
+	// and the chmod repair names a command the platform does not have.
+	if runtime.GOOS == "windows" {
+		return "permissions not checked on Windows — POSIX modes are not the access mechanism there"
 	}
 	mode := fi.Mode().Perm()
 	if mode&0o077 != 0 {

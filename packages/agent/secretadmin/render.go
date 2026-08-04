@@ -57,6 +57,11 @@ func writeKey(w io.Writer, k ctrlproto.SecretsKey) {
 			line(w, "key", k.Path+"  (supplied via environment)")
 		case k.OwnerOnly:
 			line(w, "key", fmt.Sprintf("%s  %s  owner-only", k.Path, k.Mode))
+		case k.Mode == "":
+			// A platform that reports no usable mode (Windows) still has a
+			// reason worth printing; an empty column between them would read
+			// as a missing value rather than an absent concept.
+			line(w, "key", fmt.Sprintf("%s  %s", k.Path, k.Reason))
 		default:
 			line(w, "key", fmt.Sprintf("%s  %s  %s", k.Path, k.Mode, k.Reason))
 		}

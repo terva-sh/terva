@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -76,6 +77,15 @@ func keyState() ctrlproto.SecretsKey {
 			// The identity resolved, but not from this path: it came from the
 			// environment. Reporting a mode nobody set would be a fiction.
 			k.FromEnv = true
+			return k
+		}
+		// Windows carries no POSIX permission bits: Stat reports 0666 for every
+		// file whatever its ACL says. Deriving an owner-only verdict from that
+		// would fail every key on the platform and prescribe a chmod that does
+		// not exist there — so report the same way an env-supplied identity
+		// does, by declining to state a mode nobody set.
+		if runtime.GOOS == "windows" {
+			k.Reason = "permissions not checked on Windows — POSIX modes are not the access mechanism there"
 			return k
 		}
 		mode := fi.Mode().Perm()

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -34,7 +35,11 @@ func TestSecretInitEncryptsExistingAuthFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init did not write the key file: %v", err)
 	}
-	if fi.Mode().Perm()&0o077 != 0 {
+	// Windows reports 0666 for every file whatever its ACL says, so the mode
+	// half of this assertion can only fail there. Guarded the way
+	// config/trust_test.go guards the same claim, rather than skipping the
+	// whole test — everything below it is platform-independent and still runs.
+	if runtime.GOOS != "windows" && fi.Mode().Perm()&0o077 != 0 {
 		t.Fatalf("key file is not owner-only: %v", fi.Mode())
 	}
 	cfg, err := config.LoadConfig()
@@ -173,7 +178,14 @@ func TestSecretStatusReportsShapeOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	out = after.String()
-	if !strings.Contains(out, stateEncrypted) || !strings.Contains(out, "owner-only") || !strings.Contains(out, "age1") {
+	// The key's posture line reads differently per platform, because Windows
+	// has no POSIX mode to report and status declines to invent one. Assert
+	// the line each platform actually owes, so neither arm goes vacuous.
+	wantPosture := "owner-only"
+	if runtime.GOOS == "windows" {
+		wantPosture = "permissions not checked on Windows"
+	}
+	if !strings.Contains(out, stateEncrypted) || !strings.Contains(out, wantPosture) || !strings.Contains(out, "age1") {
 		t.Fatalf("post-init status wrong:\n%s", out)
 	}
 	if strings.Contains(out, "sk-status-1") || strings.Contains(out, "AGE-SECRET-KEY") {

@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 const (
@@ -127,7 +128,7 @@ type DirPerm struct {
 	Path    string      // the directory inspected
 	Exists  bool        // false when nothing is on disk yet
 	Mode    os.FileMode // the permission bits (Perm()); zero when absent
-	TooOpen bool        // true when any group or other bit is set
+	TooOpen bool        // any group/other bit is set; always false on Windows, which has no POSIX bits
 }
 
 // RepairCommand is the safe, explicit shell command an operator can run to
@@ -152,5 +153,9 @@ func InspectDir(dir string) DirPerm {
 		return DirPerm{Path: dir}
 	}
 	perm := info.Mode().Perm()
-	return DirPerm{Path: dir, Exists: true, Mode: perm, TooOpen: perm&0o077 != 0}
+	// Windows carries no POSIX permission bits — Stat reports the same mode for
+	// every directory whatever its ACL says — so perm&0o077 would flag every
+	// config root on the platform and prescribe a chmod that does not exist
+	// there. Report the mode as observed but make no accessibility finding.
+	return DirPerm{Path: dir, Exists: true, Mode: perm, TooOpen: runtime.GOOS != "windows" && perm&0o077 != 0}
 }
