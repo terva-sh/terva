@@ -24,6 +24,39 @@ In-tree and external connectors register into the same service
 registry and are indistinguishable to the chat loop, the TUI's
 `/connect`, and `terva bot`.
 
+## Secrets in a connector's own state
+
+A standalone connector keeps its credentials in
+`$TERVA_HOME/connectors/<name>/config.json`. When the host has at-rest
+encryption set up, `connsdk.SealedState` seals the values the connector
+declares — **in place, per value**, not the whole file:
+
+```go
+var state = connsdk.SealedState{Name: "discord-ext", Paths: []string{"/bot_token"}}
+```
+
+`Paths` are JSON Pointers. Everything not declared stays plaintext and
+inspectable, which is the point: sealing the file whole would hand terva the
+connector's entire state — chat ids, pairing claims, message history — when all
+it needs is the credentials.
+
+Each declared value is sealed to **two** recipients: the connector's own key
+(`connectors/<name>/secrets.key`, minted on first save) and terva's public
+recipient, read from `config.json`. That means:
+
+- terva never hands out its private key, and the connector never holds it;
+- terva can still rotate or audit those values while the connector is stopped,
+  disabled, or uninstalled — which is why the co-recipient is not optional;
+- a sealed value is **bound to its path** and will not open anywhere else, so
+  moving one within the file breaks it rather than redirecting it.
+
+A host with no key configured writes plaintext exactly as before — a connector
+must stay configurable on a machine that never ran `terva secret init` — and
+converts on the next save once a key exists.
+
+Both key files (`secrets.key` in any component directory) are on the agent's
+read deny-list. The config beside them stays readable.
+
 ## Installing a connector
 
 A connector ships a manifest:
@@ -135,13 +168,30 @@ connector (the handshake examples below use it).
 
 ## Protocol reference (versions 1 and 2)
 
-One JSON object per LF-terminated line; max line 4 MiB. The schema is
-pinned by golden tests in `packages/agent/connproto`; breaking it
-means bumping the protocol version. (Version 1 was deliberately
-DM-shaped — it began life as the built-in telegram bot's seam. The
-design rationale for everything version 2 added lives in
+One JSON object per LF-terminated line; frames up to 4 MiB are
+accepted. The cap is RECOVERABLE, not fatal, in either direction: an
+over-limit frame is skipped with a warning and the stream continues, so
+a runaway text field or an oversized caption costs you that one frame
+rather than the session. Do the same on your side — a reader that dies
+on an over-limit line turns a recoverable event into a reconnect. The
+schema is pinned by golden tests in `packages/agent/connproto`;
+breaking it means bumping the protocol version. (Version 1 was
+deliberately DM-shaped — it began life as the built-in telegram bot's
+seam. The design rationale for everything version 2 added lives in
 `docs/proposals/connector-protocol-v2.md`, now an as-built spec; THIS
 file is the maintained frame reference.)
+
+**The golden corpus is published** at
+`packages/agent/connproto/testdata/golden.jsonl` — one
+`{"name":…,"frame":…}` object per line, where `frame` is the exact
+bytes terva emits, carried as a JSON string so it survives the envelope
+intact. Point your conformance suite at that file rather than copying
+the frames by hand: a copy drifts silently, and a fetch cannot. Note
+that terva encodes with Go's `encoding/json`, which escapes `<`, `>`
+and `&` where most encoders emit them literally — both are valid JSON
+and every reader here accepts either, so this never matters on the live
+wire, but it does mean the corpus is deliberately kept free of those
+characters so byte-exact comparison stays meaningful across languages.
 
 **Protocol 2 is live and additive.** The handshake negotiates the
 highest version both sides speak (hello carries
@@ -196,8 +246,10 @@ connector-SDK deprecation window; the Go SDK already handles this for you.
 
 Versioning is negotiated, not announce-only: hello carries
 `protocol_min`/`protocol_max`, and terva refuses the spawn with a clear
-error when its own version falls outside the range. terva kills a child
-that sends no hello within 3 seconds.
+error when its own version falls outside the range. terva kills a
+spawned connector that sends no hello within 3 seconds; a connector
+carried inside an extension gets 5, measured after the extension
+registers the connector role (itself allowed 3).
 
 Connector processes start from a sanitized environment: terva strips
 loader/interpreter injection vars (`LD_*`, `DYLD_*`, `PYTHONPATH`,
@@ -226,6 +278,15 @@ Connector to host:
 {"type":"result","id":"42","error":""}
 {"type":"warn","message":"gateway reconnecting"}
 ```
+
+`warn` frames are **operator-facing, not user-facing**: they surface in
+terva's own output — the terminal under `bot run`,
+`$TERVA_HOME/logs/bot.log` under `bot start` — and never reach a chat.
+Use `warn` for what an operator must see live (degraded auth, a
+reconnecting gateway, a dropped attachment) and your own stderr, which
+lands in `$TERVA_HOME/logs/connector-<name>.log`, for everything else.
+Nothing you emit on either channel is visible to the humans in the
+chat; to reach them, send a message.
 
 Interactive asks (protocol 2, feature `"asks"`) — declare the feature
 in your hello `capabilities.features` AND implement the rendering, and
@@ -265,16 +326,19 @@ it as `ask_id`, and its `result` acknowledges the RENDERING
 frames whenever users interact — zero or more — until `ask_close`
 tells you to withdraw the controls and render `outcome` into the
 question message (the audit trail lives in the channel). Set
-`attestation` honestly: `"attested"` only when your platform proves
-who answered (button interactions, callback queries); `"best_effort"`
-for parsed text or reactions — durable grants (allow-always) require
-attested answers, so an inflated grade is a security lie. Filter
-`restrict_to` service-side where you can (an ephemeral "not for you"
-beats silence); terva re-filters regardless. Connectors WITHOUT the
-feature still work: terva falls back to a numbered plain-text question
-and parses the next matching reply, so approvals-over-chat reach every
-service from day one — the feature only upgrades the widget and the
-attestation.
+`attestation` honestly, and grade it by PROOF rather than by widget:
+`"attested"` when your platform authoritatively proves who answered,
+and only then — button interactions and callback queries qualify, and
+so does a signed event whose sender the platform authenticates (a
+Matrix reaction does; document where your platform lands).
+`"best_effort"` for anything parsed out of text, or otherwise
+spoofable — durable grants (allow-always) require attested answers, so
+an inflated grade is a security lie. Filter `restrict_to` service-side
+where you can (an ephemeral "not for you" beats silence); terva
+re-filters regardless. Connectors WITHOUT the feature still work: terva
+falls back to a numbered plain-text question and parses the next
+matching reply, so approvals-over-chat reach every service from day one
+— the feature only upgrades the widget and the attestation.
 
 **One case where the fallback is the RICHER path, not the poorer one.**
 The ask frame carries a fixed option list and returns one key, so a
@@ -345,6 +409,13 @@ it instead of at the first awkward message:
  "change":"added","by_user_id":"u1","by_username":"drew"}
 ```
 
+Re-announcing current membership on reconnect is safe, and is how you
+self-heal a frame terva missed: a duplicate `added` for a chat terva
+has already approved is a no-op, and one for a chat the owner has
+already been asked about does not ask again. That suppression is per
+host RUN and lives in memory, so the one cost of over-announcing is
+that a chat the owner ignored will prompt again after terva restarts.
+
 Both are optional enrichment: without entities terva falls back to
 scanning for `@username`, and without membership events the owner
 admits chats with `/approve` when the first message arrives. Group
@@ -367,7 +438,22 @@ implement):
 
 Edits always reference the ORIGINAL message id (collapse edit chains
 latest-wins yourself), and `min_edit_interval_ms` in your capabilities
-tells terva how fast it may stream edits. Reaction `key` is an opaque
+tells terva how fast it may stream edits.
+
+**`chat_id` on these three frames is load-bearing.** terva matches
+edits and deletes to queued and delivered messages on the compound key
+(`chat_id`, `id`), and routes reaction notes by `chat_id`. Emit the
+same `chat_id` the target message was delivered under — not merely a
+chat that contains it. This bites platforms where one message is
+addressable in more than one scope (a thread and its parent room, say):
+the platform's edit/delete/reaction event often does not re-state the
+sub-chat, so your connector must remember, or re-derive, the delivered
+scope. A frame under the wrong chat id is not rejected. For edits and
+deletes it silently misses the match — a queued message keeps its stale
+text, and a deleted one can still become an agent turn. For reactions
+the note is simply filed against the wrong conversation.
+
+Reaction `key` is an opaque
 string — unicode emoji is the interoperable subset (what terva emits);
 key custom emoji on their platform ID, not their name. Removal is
 first-class (`removed: true`); never recompute it by absence. Apply
@@ -382,7 +468,14 @@ bracketed (`[chat event: message_edited] …`) so it reads them as
 connector state rather than user text; no-op edits (embed unfurls) and
 re-deliveries coalesce; and edits/deletes of the bot's OWN messages —
 ask outcomes rendering, streaming edits — are dropped host-side, so a
-connector that misses that echo case is still covered. Each chat's
+connector that misses that echo case is still covered — **provided you
+return `result.message_id`**. That field is the only thing that tells
+terva which messages are the bot's, so omitting it costs you more than
+correlation: your own ask-outcome re-renders come back as "the user
+edited a message", and reactions stop becoming notes entirely, since
+only reactions on the bot's own messages ever do. The record is bounded
+to the most recent few hundred sends of a session, so the net covers
+recent messages rather than your whole history. Each chat's
 first prompt also carries a one-time `[chat context]` line (service,
 chat title, and a formatting reminder that chat apps don't render
 tables), and messages in multi-user chats are attributed
@@ -399,20 +492,41 @@ request/response pair opens a thread so a busy chat stays readable:
 
 The result's `chat_id` is a NEW chat of kind `thread`; sends, asks,
 and speakers target it like any chat, and messages inside it arrive as
-ordinary `message` frames with the thread as their `chat_id`.
+ordinary `message` frames with the thread as their `chat_id` — and
+edits, deletes, and reactions touching those messages must carry that
+same thread `chat_id`, per the correlation rule above.
 `from_message_id` anchors the thread where your service supports it
 and may be absent. Flat services simply don't declare the feature.
 
 Rules:
 
-- Answer `connect` with exactly one `connected` or `connect_error`.
-  `connect_error` means *permanently* broken (bad token); transient
-  network trouble is yours to retry inside the session, surfaced via
-  `warn`.
+- Answer `connect` with exactly one `connected` or `connect_error` —
+  **within 30 seconds**. Budget that for the service dial and auth
+  round-trip only: push anything long-polling (an initial sync, a
+  gateway resume) into the session *after* `connected` goes out, or a
+  warm reconnect will quietly eat the whole budget and read as a hang.
+  Blowing it fails the bridge immediately on a first connect; during
+  crash recovery it costs one of the three restarts allowed per 60
+  seconds. `connect_error` means *permanently* broken (bad token);
+  transient network trouble is yours to retry inside the session,
+  surfaced via `warn`.
 - Every `send`/`send_image`/`send_file` gets exactly one `result`
   echoing its `id` (empty `error` = success). terva times a send out
   after 30s. `typing` carries no id and gets no result. `ask` and
   `ask_close` are commands with results too; only `answer` flows free.
+- **Owner-directed frames may carry a chat id you never sent.** Until
+  the owner's first inbound DM of a host run, terva addresses the
+  frames aimed at the owner — the group-admission ask, tool approvals,
+  the idle nudge — using the paired **user** id as the `chat_id`, so a
+  freshly started bot can reach its owner cold. Where a user id is also
+  a valid DM chat id (telegram) that costs you nothing; where it is not
+  (a Matrix MXID is not a room id), resolve it to the owner's EXISTING
+  DM chat, or fail the frame with a clear `result.error` — don't create
+  a room to satisfy one, the owner didn't ask for it. Failing is
+  fail-closed, not fatal: an admission ask terva could not deliver does
+  not count as asked, so it returns on the next `chat_membership added`
+  for that chat once a real inbound DM has corrected the id. A tool
+  approval that cannot be delivered is simply denied.
 - **Attachments travel by path, both directions** (same-host
   assumption). Inbound: write the bytes under your `data_dir` and
   reference the path; terva takes ownership — images are read and
@@ -429,6 +543,25 @@ Rules:
 - Crashes are loud, not silent: terva restarts a crashed connector with
   backoff and surfaces every attempt, but gives up after 3 crashes in
   60 seconds and reports the bridge as broken.
+- **Reconnects recover, first connect discards.** On the first-ever
+  connect after setup, discard history — never replay messages that
+  predate that first connect into agent turns. On every later connect,
+  deliver what arrived while you were down, bounded by whatever
+  "recent" means on your platform. Silently eating a restart's worth of
+  messages reads as a broken bridge, not as discipline. On the boundary
+  a connector chooses between possibly delivering twice and possibly
+  dropping once; terva does not yet dedupe re-deliveries, so the
+  contract only names the trade-off — a duplicate is visible and
+  recoverable, a silently swallowed message is neither.
+- **Inbound messages queue, and the queue is bounded.** terva buffers a
+  few hundred normalized messages between your stream and the agent
+  loop; past that, overflow is dropped with a warning in terva's own
+  output — not in your connector log, which only ever carries your
+  process's stderr. Only `message` frames queue here: `result`,
+  `answer`, `chat_membership`, and the edit/delete/reaction streams are
+  dispatched directly and never contend for it. So pace a large
+  recovery burst rather than emitting it in one batch — the bound is
+  generous for conversation and finite for a backlog.
 
 Pairing state for external connectors persists host-side under
 `$TERVA_HOME/connectors/<name>/pairing.json`; your process never sees
@@ -598,11 +731,14 @@ no turn running), the loop injects a cue as a synthetic prompt and the agent
 replies in its persona's voice. `--idle-prompt` overrides the default cue.
 
 It nudges, it doesn't nag: it fires **once per silence** and re-arms only when
-the paired user speaks again. The paired chat is seeded from pairing (for a DM
-connector the chat is the user) so it can open a conversation cold. Pair this
-with a `--persona` so the nudge has a voice — see [personas](personas.md). The
-flag works with any connector (`--connector matrix`, …) since the nudge lives in
-the transport-agnostic loop.
+the paired user speaks again. The paired chat is seeded from pairing — the
+user-id-as-chat-id guess the protocol rules above describe under
+*owner-directed frames* — so it can open a conversation cold, and a real
+inbound DM corrects it. Pair this with a `--persona` so the nudge has a voice —
+see [personas](personas.md). The nudge itself lives in the transport-agnostic
+loop, so it works with any connector whose DM chat ids are user ids, or that
+resolves a user id to the owner's DM; elsewhere it starts nudging once the owner
+has sent one DM.
 
 ## Connector extensions (one process, both roles)
 
