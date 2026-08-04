@@ -43,6 +43,8 @@ Flags:
 | `--web-stage` | off | mount **Stage**, the immersive chat/play surface, at `/stage/` — a second web app alongside the panel, gated by the same auth, opted into per deployment (see [Stage](#stage-the-immersive-chatplay-surface)) |
 | `--web-allow-login` | off | serve the provider-login group so the web UI can add / repair / revoke the **model-provider** credential (Anthropic/OpenAI/Kimi/…). Off by default and, like `--allow-restart`, must never ride an unauthenticated listener — writing a credential is more authority than driving a conversation. **Also decides what a credential-less start means**: with login on, the daemon boots with no credential at all and you sign in from the panel; with it off there is no route to one, so that start is refused (see [Auth](#auth)) |
 
+| `--web-allow-secrets` | off | serve the **secrets** group: terva's at-rest encryption posture (what is sealed, what is still plaintext, which components hold a key) and the secret store's grants. Its own flag rather than a corner of `--web-allow-login`, because the two grant different authority — login writes the credential terva uses to reach a model provider, while this reports on the key that opens *everything*. **No verb returns a secret value**, and neither rotation mode is on the wire at all; both stay on the CLI, where a bug in a client cannot brick the install. Refused on an unauthenticated listener for the same reason login is: the report names every scope, component and grant on the host, which is a map worth withholding from a stranger who can reach an open port. The control panel shows it as a **Secrets** tab in the workspace drawer, beside Providers; the tab is absent entirely when the daemon did not negotiate the group |
+
 Standard flags apply too: `--cwd` pins the workspace, `--model` / `--provider`
 pick the default, `--yolo` runs without approval prompts, `--jail` / `--no-jail`
 set the sandbox default.
@@ -118,7 +120,20 @@ address with no auth mode is refused unless you pass `--web-insecure`.
             --web-trusted-proxy 10.0.0.0/24
   ```
 
-- **Bearer token (proxy-less).** For quick remote access over Tailscale/WireGuard:
+- **Bearer token (proxy-less).** For quick remote access over Tailscale/WireGuard.
+  The shortest safe route is to let terva issue the token, which writes it
+  owner-only to `$TERVA_HOME/web-token` and shows the value once:
+
+  ```bash
+  terva secret web-token init          # mint it (see cli.md)
+  terva web --web-addr 0.0.0.0:8730    # picks the file up automatically
+  ```
+
+  That file is the LAST source in the resolution order below, so it never
+  overrides an explicit one, and `terva attach` on the same `$TERVA_HOME`
+  finds it too. `terva secret web-token rotate` replaces it — a running daemon
+  keeps accepting the old token until it restarts. Supplying your own token
+  works exactly as before:
 
   ```bash
   terva web --web-addr 0.0.0.0:8730 --web-token "$(openssl rand -hex 24)"
@@ -148,7 +163,16 @@ address with no auth mode is refused unless you pass `--web-insecure`.
   error, never a silent fall back to no auth. For a host that has committed to the
   file route, `--web-token-require-file` (off by default) turns `--web-token` and
   `TERVA_WEB_TOKEN` into a startup error, so a later change can't silently regress
-  to a leaky source.
+  to a leaky source. The minted `$TERVA_HOME/web-token` satisfies it: it is a
+  file, and its value never passes through argv or the environment.
+
+  **Resolution order** (daemon): `--web-token` → `--web-token-file` →
+  `TERVA_WEB_TOKEN` → `$TERVA_HOME/web-token`. The attach client reads the same
+  chain under its own spellings (`--token`, `--token-file`). The minted file is
+  last, so it turns auth on when nothing else is configured and gets out of the
+  way when something is. Both the secrets key and this token file are on the
+  agent's read deny-list — reading the token is reading a live grant to drive
+  the agent.
 
   **In the browser, just open the panel.** An unauthenticated page load gets a
   login form; type the token and the daemon exchanges it for an HttpOnly,

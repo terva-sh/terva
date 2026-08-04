@@ -3,6 +3,7 @@ module terva.sh/terva
 go 1.25.0
 
 require (
+	filippo.io/age v1.3.1
 	github.com/alecthomas/chroma/v2 v2.23.1
 	github.com/disgoorg/disgo v0.19.6
 	github.com/disgoorg/snowflake/v2 v2.0.3
@@ -22,6 +23,7 @@ require (
 )
 
 require (
+	filippo.io/hpke v0.4.0 // indirect
 	github.com/disgoorg/godave v0.1.0 // indirect
 	github.com/disgoorg/json/v2 v2.0.0 // indirect
 	github.com/disgoorg/omit v1.0.0 // indirect

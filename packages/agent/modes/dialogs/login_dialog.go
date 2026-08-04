@@ -2,7 +2,6 @@ package dialogs
 
 import (
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -79,11 +78,13 @@ func (d *LoginDialog) Active() bool { return d != nil && d.step != loginStepClos
 
 // Open starts the dialog from scratch and captures the current
 // login status for each provider so the picker can show it.
-// tervaHome is the terva state directory ($TERVA_HOME); auth.json
-// lives inside it. Passing the path in (instead of importing
-// the agent package to call AuthPath()) avoids a cyclic import
-// between agent and agent/modes.
-func (d *LoginDialog) Open(tervaHome string) {
+// store is the shared auth store (config.AuthStoreFor()); passing it in
+// (instead of importing the agent package to call AuthPath()) avoids a
+// cyclic import between agent and agent/modes, and — unlike the path this
+// used to take — hands the dialog a store that can decrypt an
+// encrypted-at-rest auth.json instead of misreading it as logged-out.
+// A nil store simply leaves the status column empty.
+func (d *LoginDialog) Open(store *auth.Store) {
 	d.step = loginStepMethod
 	d.method = ""
 	d.provider = ""
@@ -103,7 +104,10 @@ func (d *LoginDialog) Open(tervaHome string) {
 	// used to be reconstructed here by hand, and again in the logout dialog.
 	// Describe owns it now.
 	d.status = map[string]string{}
-	creds, _ := auth.NewStore(filepath.Join(tervaHome, "auth.json")).Load()
+	if store == nil {
+		return
+	}
+	creds, _ := store.Load()
 	for id, st := range auth.Describe(creds) {
 		d.status[id] = st.Method
 	}

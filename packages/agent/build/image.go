@@ -59,6 +59,16 @@ func buildImageRegistry(cfg config.Config) (*imagegen.Registry, string) {
 // buildImageBackend constructs one backend from its config, defaulting the
 // protocol and the OpenAI base/model.
 func buildImageBackend(id string, bc config.ImageBackendConfig) (imagegen.Backend, error) {
+	// The key is opened at the moment the backend is constructed, not when the
+	// config loads — the same point-of-use rule the extension delivery path
+	// follows. An unopenable key fails the backend (and the caller turns image
+	// generation off with a named reason) rather than sending ciphertext as a
+	// bearer token and surfacing it as a 401 from the provider.
+	key, err := config.DecryptFieldValue(config.ImageBackendKeyPath(id), bc.APIKey)
+	if err != nil {
+		return nil, err
+	}
+	bc.APIKey = key
 	proto := bc.Protocol
 	if proto == "" {
 		proto = protocolOpenAIImages

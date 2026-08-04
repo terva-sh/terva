@@ -3,14 +3,20 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"filippo.io/age"
+
+	"terva.sh/terva/packages/secrets"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -160,5 +166,165 @@ func TestParseArgs(t *testing.T) {
 	}
 	if _, err := parseArgs([]string{"a", "b"}); err == nil {
 		t.Error("two positionals must error")
+	}
+}
+
+// keyedHome writes an at-rest key into a fresh home, the way `terva secret
+// init` would, and returns both.
+func keyedHome(t *testing.T) (string, *age.X25519Identity) {
+	t.Helper()
+	dir := testsupport.TempDir(t)
+	id, err := secrets.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, secrets.KeyFileName), []byte(id.String()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir, id
+}
+
+// The bridge is a separate binary that deliberately imports no core packages,
+// yet it holds OAuth access and refresh tokens plus a client_secret. With
+// terva's key configured its store is sealed WHOLE — nothing but the bridge
+// reads it, so there is no structure worth leaving legible.
+func TestTokenStoreIsSealedWhenAKeyExists(t *testing.T) {
+	dir, _ := keyedHome(t)
+	store, err := newTokenStore(dir, "https://mcp.example.com/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := storedTokens{
+		AccessToken:  "at-secret",
+		RefreshToken: "rt-secret",
+		Client:       oauthClient{ClientID: "c", ClientSecret: "cs-secret"},
+	}
+	if err := store.save(want); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !secrets.IsAgeFile(raw) {
+		t.Fatal("token store is not encrypted on a home that has a key")
+	}
+	for _, leaked := range []string{"at-secret", "rt-secret", "cs-secret"} {
+		if strings.Contains(string(raw), leaked) {
+			t.Errorf("%q is readable on disk", leaked)
+		}
+	}
+
+	got, ok, err := store.load()
+	if err != nil || !ok {
+		t.Fatalf("load: ok=%v err=%v", ok, err)
+	}
+	if got.AccessToken != "at-secret" || got.RefreshToken != "rt-secret" || got.Client.ClientSecret != "cs-secret" {
+		t.Errorf("round trip through the seal lost data: %+v", got)
+	}
+}
+
+// The sniff is on CONTENT, not configuration: a store written before
+// `terva secret init` must keep loading afterwards, and the next save seals it.
+func TestPlaintextStoreStillLoadsAfterAKeyAppears(t *testing.T) {
+	dir := testsupport.TempDir(t)
+	store, err := newTokenStore(dir, "https://mcp.example.com/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.save(storedTokens{AccessToken: "before"}); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(store.path); secrets.IsAgeFile(raw) {
+		t.Fatal("wrote ciphertext with no key configured")
+	}
+
+	// The operator runs `terva secret init` afterwards.
+	id, err := secrets.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, secrets.KeyFileName), []byte(id.String()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok, err := store.load()
+	if err != nil || !ok || got.AccessToken != "before" {
+		t.Fatalf("plaintext store stopped loading once a key existed: %+v ok=%v err=%v", got, ok, err)
+	}
+	if err := store.save(got); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(store.path); !secrets.IsAgeFile(raw) {
+		t.Fatal("the next save did not seal the store")
+	}
+}
+
+// Ciphertext with no key must fail LOUDLY. Degrading to "no tokens" would look
+// to the bridge like an expired session, and it would quietly re-authenticate
+// — abandoning credentials that were only unreadable, never gone.
+func TestSealedStoreWithNoKeyFailsClosed(t *testing.T) {
+	dir, _ := keyedHome(t)
+	store, err := newTokenStore(dir, "https://mcp.example.com/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.save(storedTokens{AccessToken: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, secrets.KeyFileName)); err != nil {
+		t.Fatal(err)
+	}
+
+	_, ok, err := store.load()
+	if err == nil {
+		t.Fatal("an unreadable store loaded as empty; the bridge would re-authenticate over live credentials")
+	}
+	if ok {
+		t.Error("reported usable tokens it could not read")
+	}
+	if !strings.Contains(err.Error(), "encrypted") {
+		t.Errorf("error does not say the file is encrypted: %v", err)
+	}
+}
+
+// Two bridges refreshing the same resource at once used to write the same
+// "<path>.tmp" scratch file, so one could rename the other's half-written bytes
+// into place. The temp must be unique per writer.
+func TestConcurrentSavesDoNotShareATempFile(t *testing.T) {
+	dir, _ := keyedHome(t)
+	store, err := newTokenStore(dir, "https://mcp.example.com/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := store.save(storedTokens{AccessToken: fmt.Sprintf("token-%d", i)}); err != nil {
+				t.Errorf("save: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	got, ok, err := store.load()
+	if err != nil || !ok {
+		t.Fatalf("store unreadable after concurrent saves: ok=%v err=%v", ok, err)
+	}
+	if !strings.HasPrefix(got.AccessToken, "token-") {
+		t.Errorf("store holds a torn value: %q", got.AccessToken)
+	}
+	// No scratch files survive.
+	entries, err := os.ReadDir(filepath.Dir(store.path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("leftover temp file %q", e.Name())
+		}
 	}
 }

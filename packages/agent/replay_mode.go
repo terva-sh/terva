@@ -67,6 +67,7 @@ func runReplayMode(ctx context.Context, args build.Args, version string) error {
 		Provider:            info.Provider,
 		CWD:                 cwd,
 		TervaHome:           config.TervaHome(),
+		AuthStore:           config.AuthStoreFor(),
 		Version:             version,
 		Ready:               false, // read-only replay: no prompting, the transport replaces the turn loop
 		Carrier:             carrier,

@@ -26,6 +26,12 @@ import (
 // (the field was removed) is kept on disk but dropped from delivery.
 // Returns nil when the extension declares no schema or nothing resolves.
 // Matches extdriver.ConfigResolver so it wires straight into the driver.
+//
+// This is also where a value encrypted at rest is OPENED — the last moment
+// before it leaves the host, covering both delivery paths (hello_ack and the
+// live config_update, which both resolve through here). Decrypting at load
+// instead would put plaintext secrets back into every Config the process holds,
+// which is the thing the encryption exists to prevent.
 func ResolveExtensionConfig(name string, schema []extdriver.ConfigField) map[string]json.RawMessage {
 	if len(schema) == 0 {
 		return nil
@@ -37,7 +43,16 @@ func ResolveExtensionConfig(name string, schema []extdriver.ConfigField) map[str
 	out := map[string]json.RawMessage{}
 	for _, f := range schema {
 		if v, ok := stored[f.Key]; ok && len(v) > 0 {
-			out[f.Key] = v
+			opened, err := openStoredValue(config.ExtensionFieldPath(name, f.Key), v)
+			if err != nil {
+				// Delivering the ciphertext would hand the extension a
+				// password-shaped string that cannot work, and it would fail
+				// somewhere far from here. Drop the field instead: a missing
+				// required value is a diagnosis the extension already knows how
+				// to report.
+				continue
+			}
+			out[f.Key] = opened
 			continue
 		}
 		if f.Default != nil {
@@ -50,6 +65,28 @@ func ResolveExtensionConfig(name string, schema []extdriver.ConfigField) map[str
 		return nil
 	}
 	return out
+}
+
+// openStoredValue decrypts one stored config value when it carries the at-rest
+// marker, and passes anything else through byte-for-byte. Only JSON strings can
+// be encrypted, so a bool or number never even parses here.
+func openStoredValue(path string, raw json.RawMessage) (json.RawMessage, error) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return raw, nil
+	}
+	opened, err := config.DecryptFieldValue(path, s)
+	if err != nil {
+		return nil, err
+	}
+	if opened == s {
+		return raw, nil
+	}
+	b, err := json.Marshal(opened)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
 }
 
 // ApplyExtensionConfigLive delivers the just-saved config to a running

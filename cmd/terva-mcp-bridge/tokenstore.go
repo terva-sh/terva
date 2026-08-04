@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"terva.sh/terva/packages/secrets"
 )
 
 // oauthClient is the discovered authorization-server metadata plus the client
@@ -55,7 +58,20 @@ func (t storedTokens) expired() bool {
 // $TERVA_HOME/mcp-bridge/<host-hash>/tokens.json at 0600. The directory is keyed
 // by host plus a short hash of the full URL so two MCP servers on the same host
 // (different paths) don't clobber each other's credentials.
-type tokenStore struct{ path string }
+//
+// The file is encrypted WHOLE when terva's at-rest key is configured, the same
+// shape auth.json uses and for the same reason: nothing but this bridge reads
+// it, so there is no structure worth leaving legible, and hiding which servers
+// you have authenticated to is free. Per-value sealing is for files a SECOND
+// party also owns — see docs/proposals/secrets-at-rest.md §8.3.
+//
+// home is kept so the key can be resolved at each load and save rather than
+// cached: a cached identity outlives a rotation and would seal a later save to
+// the retired key.
+type tokenStore struct {
+	path string
+	home string
+}
 
 func newTokenStore(baseDir, resourceURL string) (*tokenStore, error) {
 	if baseDir == "" {
@@ -68,7 +84,10 @@ func newTokenStore(baseDir, resourceURL string) (*tokenStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &tokenStore{path: filepath.Join(baseDir, "mcp-bridge", key, "tokens.json")}, nil
+	return &tokenStore{
+		path: filepath.Join(baseDir, "mcp-bridge", key, "tokens.json"),
+		home: baseDir,
+	}, nil
 }
 
 // resourceKey is the per-resource directory name: the sanitized host plus a
@@ -92,6 +111,22 @@ func (s *tokenStore) load() (storedTokens, bool, error) {
 	if err != nil {
 		return storedTokens{}, false, err
 	}
+	// Sniff rather than remember: the file may predate `terva secret init`, and
+	// a store that decides by configuration instead of by content would refuse
+	// a plaintext file the moment a key appears.
+	if secrets.IsAgeFile(b) {
+		id, keyErr := secrets.IdentityIn(s.home)
+		if keyErr != nil {
+			// Fail CLOSED and loudly. Falling through to "no tokens" would send
+			// the bridge to re-authenticate, which looks like an expired
+			// session and quietly abandons working credentials.
+			return storedTokens{}, false, fmt.Errorf("bridge: token store at %s is encrypted and the key is unavailable: %w", s.path, keyErr)
+		}
+		b, err = secrets.Decrypt(id, b)
+		if err != nil {
+			return storedTokens{}, false, fmt.Errorf("bridge: token store at %s could not be decrypted: %w", s.path, err)
+		}
+	}
 	var t storedTokens
 	if err := json.Unmarshal(b, &t); err != nil {
 		return storedTokens{}, false, fmt.Errorf("bridge: token store at %s is corrupt: %w", s.path, err)
@@ -100,17 +135,49 @@ func (s *tokenStore) load() (storedTokens, bool, error) {
 }
 
 func (s *tokenStore) save(t storedTokens) error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+	dir := filepath.Dir(s.path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(t, "", "  ")
 	if err != nil {
 		return err
 	}
-	// Write-then-rename so a crash mid-write never leaves a truncated token file,
-	// and create the temp at 0600 so the secret is never briefly world-readable.
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	// Seal when a key is configured. ErrNoKey means encryption is simply not
+	// set up and plaintext is correct, as before; any OTHER resolver error is a
+	// present-but-broken key and must fail the write rather than silently
+	// downgrade it to plaintext.
+	id, keyErr := secrets.IdentityIn(s.home)
+	switch {
+	case keyErr == nil:
+		if b, err = secrets.Encrypt(b, id.Recipient()); err != nil {
+			return fmt.Errorf("bridge: encrypting the token store: %w", err)
+		}
+	// keyErr != nil is stated rather than implied: errors.Is(nil, ErrNoKey) is
+	// false, so without it this arm would fire on a nil error if the arms were
+	// ever reordered, and wrap it into a message about a broken key.
+	case keyErr != nil && !errors.Is(keyErr, secrets.ErrNoKey):
+		return fmt.Errorf("bridge: a secrets key is configured but unusable, refusing to write tokens in the clear: %w", keyErr)
+	}
+	// Write-then-rename so a crash mid-write never leaves a truncated token
+	// file. A UNIQUE temp, not "<path>.tmp": two bridges refreshing the same
+	// resource at once would otherwise write the same scratch path and one
+	// would rename the other's half-written bytes into place.
+	f, err := os.CreateTemp(dir, ".tokens-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // no-op once the rename succeeds
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp, s.path)

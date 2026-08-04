@@ -1,18 +1,20 @@
 package dialogs
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/modes/widgets"
+	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/testsupport"
 	"terva.sh/terva/packages/tui"
 )
 
 func TestLoginDialogCursorPosMatchesPaddedInputRow(t *testing.T) {
 	d := NewLoginDialog()
-	d.Open(testsupport.TempDir(t))
+	d.Open(auth.NewStore(filepath.Join(testsupport.TempDir(t), "auth.json")))
 	d.method = "oauth"
 	d.provider = "anthropic"
 	d.ShowStep(ctrlproto.AuthFlowStep{

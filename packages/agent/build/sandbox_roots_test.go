@@ -7,6 +7,8 @@ import (
 
 	"terva.sh/terva/packages/agent/attach"
 	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/secrets"
+	"terva.sh/terva/packages/secretstore"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -25,15 +27,31 @@ func restrictedSandbox(t *testing.T) (sb *tools.Sandbox, home, cwd string) {
 			t.Fatal(err)
 		}
 	}
-	for _, f := range []string{"auth.json", "config.json", "trusted.json", "unjailed.json"} {
+	for _, f := range []string{"auth.json", "config.json", "trusted.json", "unjailed.json", "secrets.key", "secrets.keyring", "web-token"} {
 		if err := os.WriteFile(filepath.Join(home, f), []byte("{}"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	sb = tools.NewSandbox(cwd)
-	restrictSensitiveReads(sb, home)
+	restrictSensitiveReads(sb, home, cwd, false)
+	// Mirrors build.go's wiring. handoffs/ is deliberately NOT in the
+	// MkdirAll list above: a fresh home has none until the first handoff is
+	// written, and the grant must already hold then.
+	allowHandoffWrites(sb, home)
 	sb.Lock()
 	return sb, home, cwd
+}
+
+// The same sandbox with config.json judged secret-free — the one entry that
+// lifts once nothing in the file is plaintext.
+func restrictedSandboxConfigReadable(t *testing.T) (sb *tools.Sandbox, home, cwd string) {
+	t.Helper()
+	sb, home, cwd = restrictedSandbox(t)
+	sb2 := tools.NewSandbox(cwd)
+	restrictSensitiveReads(sb2, home, cwd, true)
+	allowHandoffWrites(sb2, home)
+	sb2.Lock()
+	return sb2, home, cwd
 }
 
 // The shared, non-sensitive state a jailed agent is meant to reach — including
@@ -77,6 +95,9 @@ func TestRestrictSensitiveReadsRefusesSensitiveState(t *testing.T) {
 		"config.json",
 		"trusted.json",
 		"unjailed.json",
+		"secrets.key",
+		"secrets.keyring",
+		"web-token",
 		"sessions/abc/session.jsonl",
 		"swarm/agent-1/events.jsonl",
 		"logs/bot.log",
@@ -87,6 +108,26 @@ func TestRestrictSensitiveReadsRefusesSensitiveState(t *testing.T) {
 	} {
 		if err := sb.CheckPathRead(filepath.Join(home, rel)); err == nil {
 			t.Errorf("CheckPathRead(%s) was allowed, want it refused", rel)
+		}
+	}
+}
+
+// With every secret in it encrypted, config.json is readable — and NOTHING
+// else moves with it. auth.json holds credentials whether or not they are
+// sealed, and the trust files govern the agent's own permissions, so both stay
+// denied in exactly the state that frees config.json.
+func TestRestrictSensitiveReadsLiftsOnlyConfigWhenClean(t *testing.T) {
+	sb, home, _ := restrictedSandboxConfigReadable(t)
+
+	if err := sb.CheckPathRead(filepath.Join(home, "config.json")); err != nil {
+		t.Errorf("config.json should be readable when it holds no plaintext secret: %v", err)
+	}
+	if err := sb.CheckCommand("cat " + filepath.Join(home, "config.json")); err != nil {
+		t.Errorf("bash should reach a secret-free config.json too: %v", err)
+	}
+	for _, rel := range []string{"auth.json", "secrets.key", "secrets.keyring", "web-token", "trusted.json", "unjailed.json"} {
+		if err := sb.CheckPathRead(filepath.Join(home, rel)); err == nil {
+			t.Errorf("%s was allowed; only config.json may lift", rel)
 		}
 	}
 }
@@ -142,6 +183,33 @@ func TestJailedReadsReachOutsideTheRoot(t *testing.T) {
 	}
 }
 
+// handoffs/ is the one $TERVA_HOME surface a jailed agent may write: the
+// built-in handoff skill both writes and reads it, and neither direction may
+// demand /unjail or extra trust — a built-in skill that needs the jail lifted
+// teaches the model the jail is an obstacle. The grant must hold before the
+// directory exists (fresh home, first handoff) and must not leak to siblings.
+func TestHandoffsDirNeedsNoUnjail(t *testing.T) {
+	sb, home, _ := restrictedSandbox(t)
+	doc := filepath.Join(home, "handoffs", "2026-08-02-conn-matrix.md")
+
+	if err := sb.CheckPath(doc); err != nil {
+		t.Errorf("CheckPath(handoffs doc) = %v, want it writable while jailed", err)
+	}
+	if err := sb.CheckPathRead(doc); err != nil {
+		t.Errorf("CheckPathRead(handoffs doc) = %v, want it readable while jailed", err)
+	}
+	// The write grant is handoffs/ alone; the rest of home stays jailed.
+	for _, rel := range []string{
+		"config.json",
+		"skills/release/SKILL.md",
+		"docs/web.md",
+	} {
+		if err := sb.CheckPath(filepath.Join(home, rel)); err == nil {
+			t.Errorf("CheckPath(%s) was allowed, want writes outside handoffs/ still jailed", rel)
+		}
+	}
+}
+
 // The jail root itself: still readable, still writable. A regression here
 // would be far worse than an over-broad read.
 func TestRestrictSensitiveReadsLeavesJailRootWritable(t *testing.T) {
@@ -153,5 +221,58 @@ func TestRestrictSensitiveReadsLeavesJailRootWritable(t *testing.T) {
 	}
 	if err := sb.CheckPath(target); err != nil {
 		t.Errorf("CheckPath(jail root) = %v, want nil", err)
+	}
+}
+
+// A component's OWN key must be unreadable wherever it put it. A standalone
+// connector mints an age identity beside its config so terva never has to hand
+// out its key — but that identity opens the connector's secrets, and its
+// directory stays readable on purpose, so sealing the token while leaving the
+// key one `cat` away would be worse than not sealing it: same exposure, plus a
+// false sense of security.
+//
+// Denied by NAME because the directories cannot be enumerated ahead of time —
+// they are named after connectors that may be configured long after startup,
+// and AddSecretRoot skips paths that do not exist yet.
+func TestComponentKeysAreDeniedWhereverTheyLive(t *testing.T) {
+	home := testsupport.TempDir(t)
+	sb := &tools.Sandbox{Root: testsupport.TempDir(t)}
+	sb.Lock()
+	restrictSensitiveReads(sb, home, home, true)
+
+	for _, rel := range []string{
+		filepath.Join("connectors", "discord-ext", "secrets.key"),
+		filepath.Join("connectors", "a-connector-installed-later", "secrets.key"),
+		filepath.Join("ext-data", "memory", "secrets.key"),
+	} {
+		p := filepath.Join(home, rel)
+		if err := sb.CheckPathRead(p); err == nil {
+			t.Errorf("CheckPathRead(%s) was allowed; the key opens that component's secrets", rel)
+		}
+	}
+
+	// The state beside it stays readable — that is why this is a name deny and
+	// not a directory deny.
+	//
+	// Earning that readability is now a separate rule (componentReadGuard): the
+	// connector has to have registered which of its values are secret, and they
+	// have to be sealed. Set that up here so a denial below can only be about
+	// the NAME rule, which is what this test is for.
+	dir := filepath.Join(home, "connectors", "discord-ext")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	readable := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(readable, []byte(`{"bot_token":"`+secrets.FieldPrefix+`sealed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := secretstore.NewRegistry(home).Record(secretstore.Component{
+		Name: "discord-ext", Kind: "conn", Recipient: "age1discordrecipient",
+		Paths: []string{"/bot_token"}, File: filepath.Join("connectors", "discord-ext", "config.json"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sb.CheckPathRead(readable); err != nil {
+		t.Errorf("connector config became unreadable: %v", err)
 	}
 }

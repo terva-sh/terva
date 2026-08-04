@@ -76,13 +76,19 @@ func TestConfigFormToleratesAMissingDirectory(t *testing.T) {
 // That is what lets a client edit every other field while never holding the
 // secret — and therefore what lets the secret stay off the wire entirely.
 func TestABlankSecretKeepsTheStoredValue(t *testing.T) {
+	// Own home: at-rest encryption would seal the submitted secret, and the
+	// assertions below are on cleartext.
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	schema := []extdriver.ConfigField{
 		{Key: "api_key", Type: "secret"},
 		{Key: "units", Type: "string"},
 	}
-	out := TypeExtensionConfigValues(schema,
+	out, err := TypeExtensionConfigValues("weather", schema,
 		map[string]string{"api_key": "", "units": "celsius"},
 		map[string]json.RawMessage{"api_key": json.RawMessage(`"sk-live"`)})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(out["api_key"]) != `"sk-live"` {
 		t.Errorf("a blank secret cleared the stored value: %s", out["api_key"])
 	}
@@ -91,9 +97,12 @@ func TestABlankSecretKeepsTheStoredValue(t *testing.T) {
 	}
 
 	// A non-blank secret replaces it, so rotating a key still works.
-	out = TypeExtensionConfigValues(schema,
+	out, err = TypeExtensionConfigValues("weather", schema,
 		map[string]string{"api_key": "sk-new"},
 		map[string]json.RawMessage{"api_key": json.RawMessage(`"sk-live"`)})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(out["api_key"]) != `"sk-new"` {
 		t.Errorf("a submitted secret did not replace the stored one: %s", out["api_key"])
 	}

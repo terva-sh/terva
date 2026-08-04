@@ -148,7 +148,7 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 		return false
 	},
 	"/login": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-		i.dialog.Open(i.cfg.TervaHome)
+		i.dialog.Open(i.cfg.AuthStore)
 		return false
 	},
 	"/logout": func(i *Interactive, _ context.Context, parts []string, _ string) bool {

@@ -391,6 +391,7 @@ func runAttachMode(ctx context.Context, args build.Args, version string) error {
 		Trusted:             cur.Trusted,
 		CWD:                 cwd,
 		TervaHome:           config.TervaHome(),
+		AuthStore:           config.AuthStoreFor(),
 		Version:             version,
 		BootNotice:          i18n.T("attached to %s — terva v%s", endpoint.String(), hello.Version),
 		Ready:               true,

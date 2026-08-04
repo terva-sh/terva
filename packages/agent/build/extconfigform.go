@@ -109,7 +109,11 @@ func SetExtensionConfigFormIn(dir, name string, values map[string]string) error 
 	if c, err := config.LoadConfig(); err == nil {
 		existing = c.Extensions[name]
 	}
-	return SetExtensionConfigValues(name, TypeExtensionConfigValues(schema, values, existing))
+	typed, err := TypeExtensionConfigValues(name, schema, values, existing)
+	if err != nil {
+		return err
+	}
+	return SetExtensionConfigValues(name, typed)
 }
 
 // SetExtensionConfigValues writes one extension's saved values into the user
@@ -172,7 +176,19 @@ func ClearExtensionConfigKey(name, key string) error {
 // blank SECRET keeps the existing stored value — an empty submit never clears a
 // secret, which is what lets a client edit the other fields without ever
 // holding the secret, and is why the secret need not be sent to render the form.
-func TypeExtensionConfigValues(schema []extdriver.ConfigField, values map[string]string, existing map[string]json.RawMessage) map[string]json.RawMessage {
+//
+// A secret is SEALED here when at-rest encryption is configured, so what lands
+// in config.json is an enc:age:v1 string rather than the password itself. The
+// blank-secret branch above passes the stored value through untouched, which
+// means an already-sealed value is never opened just to be resealed. With no
+// key configured the value is stored plaintext exactly as before; a key that
+// exists but cannot be used fails the save rather than quietly writing the
+// secret in the clear.
+func TypeExtensionConfigValues(name string, schema []extdriver.ConfigField, values map[string]string, existing map[string]json.RawMessage) (map[string]json.RawMessage, error) {
+	sealing, err := config.SecretsFieldEncryptionOn()
+	if err != nil {
+		return nil, err
+	}
 	out := map[string]json.RawMessage{}
 	for _, f := range schema {
 		v := values[f.Key]
@@ -183,6 +199,13 @@ func TypeExtensionConfigValues(schema []extdriver.ConfigField, values map[string
 				}
 				continue
 			}
+			if sealing {
+				sealed, err := config.EncryptFieldValue(config.ExtensionFieldPath(name, f.Key), v)
+				if err != nil {
+					return nil, err
+				}
+				v = sealed
+			}
 			out[f.Key] = jsonStringRaw(v)
 			continue
 		}
@@ -191,7 +214,7 @@ func TypeExtensionConfigValues(schema []extdriver.ConfigField, values map[string
 		}
 		out[f.Key] = typeScalar(f, v)
 	}
-	return out
+	return out, nil
 }
 
 // NormalizeFormValue turns one value typed on a command line into the display

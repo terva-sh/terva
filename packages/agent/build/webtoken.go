@@ -1,10 +1,13 @@
 package build
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"sync"
+
+	"terva.sh/terva/packages/agent/config"
 )
 
 // WebTokenEnv carries the web bearer token — the daemon's --web-token and the
@@ -103,6 +106,34 @@ func ResolveWebToken(args Args) (string, error) {
 		if webTokenInProcEnviron() {
 			fmt.Fprintf(os.Stderr, "terva web: note: %s was scrubbed from the environment, but its value remains in /proc/<pid>/environ, where any same-UID process (including the agent's own shell) can read it. Use --web-token-file to keep the token out of process memory.\n", WebTokenEnv)
 		}
+		return tok, nil
+	}
+	return defaultWebToken()
+}
+
+// defaultWebToken reads the token `terva secret web-token` mints, when nothing
+// more explicit was given.
+//
+// Absent is not an error: a loopback daemon with no token is still the
+// documented default, and this fallback exists so that MINTING a token is
+// enough to turn authentication on — rather than minting one and then
+// discovering it does nothing without a flag. It is last in the chain, so it
+// never overrides an operator who named a source.
+//
+// It satisfies --web-token-require-file: this is a file, on the same footing
+// as --web-token-file, and it never passes through argv or the environment.
+func defaultWebToken() (string, error) {
+	path := config.WebTokenPath()
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", path, err)
+	}
+	tok := strings.TrimSpace(string(b))
+	if tok == "" {
+		return "", fmt.Errorf("%s: holds no token (refusing to fall back to no auth); remove it, or run `terva secret web-token rotate`", path)
 	}
 	return tok, nil
 }
@@ -124,6 +155,11 @@ func ResolveWebToken(args Args) (string, error) {
 // (see readTokenFile): a silent fall-through to a token-less dial would surface
 // only as a confusing handshake rejection, not the missing credential the operator
 // meant to supply.
+//
+// The default token file is the last resort here for the same reason it is for
+// the daemon, and it pays off twice over locally: attaching to a daemon on the
+// same $TERVA_HOME finds the very token that daemon is gating on, with nothing
+// to pass and nothing to copy.
 func ResolveAttachToken(args Args) (string, error) {
 	if args.Token != "" {
 		fmt.Fprintf(os.Stderr, "terva attach: note: --token puts the token in this process's command line, where any local user can read it (ps, /proc/<pid>/cmdline). Prefer %s or --token-file.\n", WebTokenEnv)
@@ -132,5 +168,8 @@ func ResolveAttachToken(args Args) (string, error) {
 	if path := args.WebTokenFile; path != "" {
 		return readTokenFile("--token-file", path)
 	}
-	return webTokenFromEnv(), nil
+	if tok := webTokenFromEnv(); tok != "" {
+		return tok, nil
+	}
+	return defaultWebToken()
 }

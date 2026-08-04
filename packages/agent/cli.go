@@ -90,6 +90,11 @@ func Run(rawArgs []string, version string) error {
 		fmt.Fprintf(os.Stderr, "note: tightened permissions on %d private file(s) under %s\n", n, config.TervaHome())
 	}
 
+	// A brand-new home gets at-rest encryption without being asked, so its
+	// credentials are born encrypted rather than rewritten later. Existing
+	// homes are never touched — see initSecretsForFreshHome.
+	initSecretsForFreshHome()
+
 	// External chat connectors ($TERVA_HOME/connectors — global only,
 	// never project-local) register before any dispatch so `terva bot`
 	// and the TUI's /connect both see them alongside the compiled-in
@@ -154,6 +159,9 @@ func Run(rawArgs []string, version string) error {
 	if handled, err := runDoctorCommand(rawArgs); handled {
 		return err
 	}
+	if handled, err := runSecretCommand(rawArgs); handled {
+		return err
+	}
 	if handled, err := runUnjailCommand(rawArgs); handled {
 		return err
 	}
@@ -206,6 +214,12 @@ func Run(rawArgs []string, version string) error {
 	if err != nil {
 		PrintHelp(version)
 		return err
+	}
+	// Pin the at-rest encryption key path before anything resolves
+	// credentials — the auth store's codec asks config for the key lazily,
+	// so the flag only needs to be recorded, not threaded.
+	if args.SecretsKeyFile != "" {
+		config.SetSecretsKeyFile(args.SecretsKeyFile)
 	}
 	if args.Help {
 		// Mode-scoped help: `terva web --help` documents the web flags rather
@@ -318,6 +332,7 @@ func setupNonInteractiveExtensions(ctx context.Context, args build.Args, r *buil
 	}
 	extMgr.SetConfigResolver(build.ResolveExtensionConfig) // hello_ack config delivery
 	build.WireSessionReader(extMgr, config.TervaHome(), r.CWD)
+	build.WireExtensionSecrets(extMgr, config.TervaHome())
 	for _, e := range extMgr.LoadExplicit(ctx, args.Exts) {
 		fmt.Fprintln(os.Stderr, "extension load:", e)
 	}

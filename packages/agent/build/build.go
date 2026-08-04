@@ -910,8 +910,12 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	examplesDir, _ := tervaexamples.EnsureInstalled(config.TervaHome())
 	home := config.TervaHome()
 	// docsDir/examplesDir no longer need a grant: a jailed agent may read
-	// anywhere except the secret roots registered here.
-	restrictSensitiveReads(sandbox, home)
+	// anywhere except the secret roots registered here. config.json comes off
+	// that list only when it holds no plaintext secret — decided once here,
+	// for the life of this session's sandbox.
+	configReadable, _ := ConfigReadableByAgent(args.CWD)
+	restrictSensitiveReads(sandbox, home, args.CWD, configReadable)
+	allowHandoffWrites(sandbox, home)
 
 	// Skill discovery: scan project + global locations + built-in
 	// skills shipped with the binary. If any are found, register
@@ -935,7 +939,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		// .terva|.claude|.agents/skills are skipped so a cloned repo can't
 		// inject SKILL.md instructions. Built-in/user/global skills load
 		// regardless.
-		discovered, _ = skills.Discover(config.TervaHome(), args.CWD, homeDir, args.WithSkills, trusted)
+		discovered, _ = skills.Discover(config.TervaHome(), args.CWD, homeDir, args.WithSkills, !args.NoBuiltinSkills, trusted)
 		if len(discovered) > 0 {
 			skillTool = skills.NewTool(discovered)
 			reg[skillTool.Name()] = skillTool
@@ -1635,6 +1639,10 @@ func (r Resolved) NewAgent() *core.Agent {
 	// adopted one) makes the ledger treat every tool as state-changing, which
 	// over-reports rather than under-reports — the right way to be wrong.
 	a.ReadOnly = r.readOnlySet
+	// The directory bash runs in, for the ledger's `cd`-to-nowhere elision. Same
+	// args.CWD BuildToolRegistry hands BashTool, so the two cannot drift into
+	// eliding a `cd` that actually moved the command.
+	a.CWD = r.CWD
 	// The auto_compact knob, read live per threshold check — every agent
 	// funnels through here, so the policy is universal (TUI, web, acp,
 	// chat, swarm children).

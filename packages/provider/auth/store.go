@@ -16,6 +16,7 @@ import (
 
 	"terva.sh/terva/packages/filelock"
 	"terva.sh/terva/packages/privfs"
+	"terva.sh/terva/packages/secrets"
 )
 
 // Credentials is the on-disk schema.
@@ -284,8 +285,9 @@ func (c *Credentials) setAdditional(provider string, p ProviderCreds) {
 // instances share one $TERVA_HOME, and refreshing an OAuth token is a write
 // each of them makes on its own schedule. See packages/filelock.
 type Store struct {
-	path string
-	mu   sync.Mutex
+	path  string
+	codec *secrets.Codec
+	mu    sync.Mutex
 }
 
 // NewStore returns a Store bound to path.
@@ -293,6 +295,15 @@ type Store struct {
 // Prefer config.AuthStoreFor: two Stores on one path have two mutexes and
 // therefore order nothing between them.
 func NewStore(path string) *Store { return &Store{path: path} }
+
+// NewStoreWithCodec returns a Store that decrypts loads and encrypts saves
+// through codec. A nil codec behaves exactly like NewStore; a codec whose key
+// resolves to secrets.ErrNoKey reads and writes plaintext until a key exists
+// (the codec re-resolves per operation, so `terva secret init` takes effect
+// without rebuilding the store).
+func NewStoreWithCodec(path string, codec *secrets.Codec) *Store {
+	return &Store{path: path, codec: codec}
+}
 
 // lockPath is the cross-process lock guarding this file. It sits beside
 // auth.json rather than inside it — a lock is not a credential, and a
@@ -350,6 +361,21 @@ func (s *Store) loadLocked() (Credentials, error) {
 	}
 	if err != nil {
 		return c, err
+	}
+	// Content sniff, not a codec-enabled check: the file's own bytes say
+	// whether it is encrypted. A plaintext file under an enabled codec still
+	// loads (the pre-migration state); an encrypted file is unreadable without
+	// the key no matter what the codec thinks, so a nil codec is a hard error
+	// naming the file rather than a JSON parse failure on ciphertext.
+	if secrets.IsAgeFile(b) {
+		if s.codec == nil {
+			return c, fmt.Errorf("%s is encrypted but this store has no secrets codec", s.path)
+		}
+		plain, err := s.codec.Decrypt(b)
+		if err != nil {
+			return c, fmt.Errorf("decrypt %s: %w", s.path, err)
+		}
+		b = plain
 	}
 	if err := json.Unmarshal(b, &c); err != nil {
 		return c, fmt.Errorf("parse %s: %w", s.path, err)
@@ -550,6 +576,21 @@ func (s *Store) saveLocked(c Credentials) error {
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
+	}
+	// Encrypt when a key is configured. A broken key configuration fails the
+	// write rather than downgrading it to plaintext — Enabled distinguishes
+	// "no key anywhere" (plaintext operation) from "key present but unusable"
+	// (refuse; see secrets.Codec.Enabled).
+	if s.codec != nil {
+		on, err := s.codec.Enabled()
+		if err != nil {
+			return fmt.Errorf("save %s: %w", s.path, err)
+		}
+		if on {
+			if b, err = s.codec.Encrypt(b); err != nil {
+				return fmt.Errorf("encrypt %s: %w", s.path, err)
+			}
+		}
 	}
 	// privfs.WriteFile, not a hand-rolled temp+rename. The fixed "auth.json.tmp"
 	// this used was a shared name: two processes both O_TRUNC'd it and wrote

@@ -82,6 +82,7 @@ all in [Modes](#modes) below.
 | `--mcp <csv>` | Only start the listed MCP servers, by name (repeatable). Same restrict-only semantics; the `/mcp` dialog can't live-enable an excluded server for the run. |
 | `--no-tools` | All three building blocks above together (plus the `skill` tool) — no tools at all. |
 | `--no-skill` | Disable all skills, including built-ins. No `skill` tool is registered and the system prompt has no skill manifest. |
+| `--no-builtin-skills` | Drop only the skills compiled into the binary; user and project skills still load. |
 | `--tools <csv>` | Only enable the listed (built-in) tools. |
 | `--chat` | Conversational meta-mode: all tools off + a talk-naturally, non-coding identity, for fronting a conversation with a persona or card. Mutually exclusive with `--play`. See [personas.md](personas.md#chat-and-play-modes). |
 | `--play` | Roleplay/simulation meta-mode: extensions + MCP only (like `--no-workspace-tools`) + an embodied identity, for acting in a [world extension](extensions.md). Mutually exclusive with `--chat`. |
@@ -222,6 +223,7 @@ own detailed screen — `terva <command> --help`.
 | `terva trust` / `terva untrust` | Manage which directories may load project-local extensions, skills, hooks, MCP servers, and context files. `--trust` does it for one run without persisting. See `docs/plans/workspace-trust.md`. |
 | `terva unjail` / `terva jail` | Record which directories run without the filesystem sandbox, so tools there may read and write outside the working directory. `--parent` covers descendants; `--list` shows the list. `--no-jail` does it for one run without persisting. Not the same as trust — see [permissions.md](permissions.md#unjailing-a-directory-for-good). |
 | `terva project ...` | Project-scoped agents: data and extensions pinned to a directory (login and trust stay global). See [extensions.md](extensions.md#project-scoped-agents). |
+| `terva secret ...` | Secret management: `init` generates an age key and encrypts `auth.json` plus the secrets in `config.json`; `status` reports encrypted-vs-plaintext without printing a value; `migrate` encrypts what a key already covers; `encrypt` seals one value read on stdin; `rotate` moves everything onto a fresh key; `list` names the stored scopes and key names; `grant`/`revoke` manage who may reach a scope; `forget` drops terva's record of a component; `web-token init\|rotate\|path` issues the bearer token for `terva web`. See [Data directory](#data-directory) below. |
 | `terva migrate` | Migrate a legacy install's data into the terva data directory. |
 | `terva update` | Download and install the latest release. |
 
@@ -240,7 +242,11 @@ All data lives under `$TERVA_HOME`:
 ```
 $TERVA_HOME/
 ├── config.json         # last-used provider/model/theme, saved automatically
-├── auth.json           # api keys and oauth tokens (mode 0600)
+├── auth.json           # api keys and oauth tokens (mode 0600; encrypted when a key exists)
+├── secrets.json        # scoped secrets terva owns — bot tokens, grants (encrypted when a key exists)
+├── secrets.key         # at-rest encryption key (age identity, mode 0600; auto-created on a new install)
+├── secrets.keyring     # retired keys: they OPEN files not yet rewritten, never seal (mode 0600)
+├── web-token           # bearer token for `terva web` (mode 0600; `terva secret web-token init`)
 ├── sessions/           # jsonl transcripts, one dir per cwd
 ├── models-cache.json   # live /v1/models discovery cache (6h ttl)
 ├── SYSTEM.md           # optional: replaces the default system prompt
@@ -263,6 +269,155 @@ Credentials and trust verdicts resolve against the *global* home even when
 `--project` pins everything else to a project-local one. That is what lets a
 project-scoped agent inherit your login instead of re-authenticating per
 directory — and it keeps the trust store out of the repo, so a project can
-never trust itself.
+never trust itself. `secrets.key` follows the same rule: it lives in the
+credential home, so a project-scoped run can decrypt the auth file it
+inherits.
+
+### Secrets at rest (`terva secret`)
+
+**A new install encrypts itself.** The first time terva starts against a data
+directory that does not exist yet, it generates an
+[age](https://age-encryption.org) X25519 identity at `secrets.key`, records its
+public half in `config.json` (`secrets.recipient`), and says so on stderr — so
+credentials written from then on are born encrypted. **Back that key up:
+everything it encrypts is unrecoverable without it.**
+
+An **existing** data directory is never converted behind your back, because
+that step rewrites credentials that are already there and is the one that can
+strand them. Turn it on with `terva secret init` (or `terva secret migrate`,
+which is the same sweep once a key exists): it generates the identity, records
+the recipient, and encrypts the secrets already on disk. Running `init` on a
+directory that is already set up is a no-op that re-sweeps for anything
+plaintext — replacing a key is `terva secret rotate`, a different and
+destructive verb.
+
+Afterwards, reading those files yields ciphertext, and only terva's own
+credential path decrypts it (in memory, at the moment of use).
+`terva secret status` reports what is encrypted and what is still plaintext
+without printing a value.
+
+**Rotation comes in two kinds, because hygiene and a leak want opposite
+things.**
+
+- `terva secret rotate` — *hygiene.* A new key becomes the active one and the
+  old key is retired to `secrets.keyring`, where it can still **open** files but
+  never seals anything. Nothing is rewritten: each file heals onto the new key
+  the next time it is written. Cheap, and safe to run on a schedule.
+- `terva secret rotate --revoke` — *the old key leaked.* Everything is
+  re-encrypted onto the new key immediately and the retired keys are destroyed,
+  so the old key opens nothing. It refuses up front if any value cannot be
+  opened, rather than leaving a half-rotated directory.
+
+Both are interruptible: at no point does the key on disk fail to open the files
+beside it, so an interrupted rotation costs a re-run, never a re-login.
+
+**Who may reach what.** The store's scopes default to deny: a principal reaches
+the scope whose name matches its own and nothing else. `terva secret grant
+PRINCIPAL SCOPE use|read [--ttl 720h]` opens one more — `use` means "may ask
+terva to act with this secret, may not receive the material", `read` means the
+value itself — and `terva secret revoke PRINCIPAL SCOPE` takes it back.
+`terva secret list` names the scopes and their key names, never a value.
+
+**`terva secret forget SCOPE`** drops terva's record of a component: its entry
+in the recipient registry and every grant naming it. Nothing is ever reaped
+automatically, because "not seen for N days" is indistinguishable from a
+seasonal connector — and forgetting matters beyond tidiness: an uninstalled
+component never acks a new key generation, so it pins every retired key open
+forever, and this is the unblock. It leaves the component's stored values in
+place and says how many; `--purge` deletes those too.
+
+The same report and the same grant management are available over
+[ctrlproto](controllers.md#method-groups) as the optional `secrets` group, which
+`terva web` serves only under `--web-allow-secrets`. Rotation is **not** on that
+wire in any form: it supersedes or destroys a key, so it stays here, where a
+human is at a terminal.
+
+Three shapes, because the files are used differently:
+
+- **`auth.json` is encrypted whole.** Nothing but terva reads it, so hiding
+  the provider inventory costs nothing.
+- **`secrets.json` is encrypted whole**, for the same reason. It holds the
+  scoped secrets terva owns — today the Telegram and Discord bot tokens, which
+  used to sit in the clear in `bot.json` and `discord.json` beside ordinary
+  state like the bot username and poll offset. Only the credential moved; the
+  rest of those files stays plaintext and inspectable. A token still sitting in
+  the old place is reported by `terva secret status` and moved by
+  `terva secret migrate`.
+- **`config.json` is encrypted per value.** Only the secrets become
+  `enc:age:v2:…` strings; structure, comments, and ordinary settings stay
+  readable, so the file is still editable by hand — and by the agent. Covered:
+  extension fields the manifest marks `secret`, and
+  `image.backends.<id>.api_key`. To seal a value by hand, name the path it will
+  live at and pipe the value in:
+
+  ```
+  printf %s "$TOKEN" | terva secret encrypt extensions.weather.api_key
+  ```
+
+  It needs only the public recipient, so it works on a machine that has no key.
+
+  **A sealed value is bound to its path** and will not open anywhere else.
+  That is deliberate: whoever can write `config.json` can also move a value
+  they cannot read, and without binding they could park a provider key at a
+  path whose consumer hands it somewhere visible. Move a value and it stops
+  working; re-seal it at its new path instead. `terva secret migrate` upgrades
+  values sealed by an older terva (`enc:age:v1:…`, unbound) in place.
+
+MCP `env` and `headers` values are deliberately NOT encrypted — the sanctioned
+way to keep a token out of that file is the existing `${ENV}` reference or
+`auth.bearer_env`.
+
+**The payoff: the agent may read a clean `config.json`.** It is normally on the
+tool read deny-list because it carries credentials inline. Once every secret in
+it is sealed, that denial lifts automatically, so you can ask the agent to help
+with your own configuration. The check fails closed and re-runs each session —
+one plaintext secret, one extension config block whose manifest is missing, or
+one literal MCP `env`/`headers` value keeps the file denied, and `terva secret
+status` (and `terva doctor`) name the exact reason. `auth.json` and
+`secrets.key` stay denied unconditionally.
+
+Supply your own key instead of generating one — the web-token pattern:
+
+| Source | Description |
+|---|---|
+| `--secrets-key-file <path>` | Read the key from a file you manage. Missing or unreadable is a startup error, never a silent fall back to plaintext. Pairs with systemd `LoadCredential=`. |
+| `TERVA_SECRETS_KEY` (env) | The identity itself, for `EnvironmentFile=`/containers. Scrubbed from `os.Environ()` once read (the value still lingers in `/proc/<pid>/environ` — prefer the file routes). |
+| `TERVA_SECRETS_KEY_FILE` (env) | Path to the key file, when a flag is awkward (service managers, wrappers). |
+
+The agent's read deny-list covers `secrets.key` wherever it resolves. **Back
+the key up**: encrypted material is unrecoverable without it — losing the key
+means logging in again and re-entering extension secrets.
+
+**Rotating the key.** `terva secret rotate` mints a new identity and moves
+everything onto it. It verifies first — a value it cannot open aborts the
+rotation before anything is written — then seals every file to the old *and*
+new key, swaps the key file, and re-seals to the new key alone. No point on
+that path leaves the key on disk unable to open the files beside it, so an
+interrupted rotation costs a re-run rather than your credentials. Afterwards
+the previous key opens nothing; replace your backup.
+
+### The web bearer token (`terva secret web-token`)
+
+`terva web` is unauthenticated on loopback by default; a bearer token is what
+lets it be reached from anywhere else (see [web.md](web.md)). terva can now
+issue that token instead of you generating one out of band:
+
+| Command | Description |
+|---|---|
+| `terva secret web-token init` | Mint a token into `$TERVA_HOME/web-token` (owner-only). Refuses if one exists. |
+| `terva secret web-token rotate` | Replace it. A **running** daemon keeps accepting the old token until it restarts; every signed-in browser session is signed out once it does. |
+| `terva secret web-token path` | Print the file's location. |
+
+The value is printed **once**, at creation, and **only to a terminal** — pipe
+the command into anything else and you get the path instead, so the token
+cannot land in a log or an agent transcript by accident. `cat` the file if you
+need it again, or rotate if it is lost.
+
+`terva web` and `terva attach` fall back to this file when no
+`--web-token-file` / `--token-file` flag and no `TERVA_WEB_TOKEN` are set, so
+minting a token is enough to turn authentication on at the next start — and a
+local `terva attach` finds the same token with nothing to pass. An explicit
+source always wins; an empty token file is a startup error rather than a
+silent drop to no auth. The file is on the agent's read deny-list.
 
 Drop a `SYSTEM.md` in `$TERVA_HOME` to replace the built-in identity and guidelines for every run. `--system-prompt` still wins per-invocation. Delete the file to revert to the default.

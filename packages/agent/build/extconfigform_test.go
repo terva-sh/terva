@@ -8,6 +8,7 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/extdriver"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // The extension config form and its typing rules. These moved here from the CLI
@@ -77,6 +78,9 @@ func TestSetExtensionConfigValuesRoundTrip(t *testing.T) {
 
 // typeExtensionConfigValues types per-field and keeps a blank secret.
 func TestTypeExtensionConfigValues(t *testing.T) {
+	// A home of its own: with at-rest encryption configured, a submitted
+	// secret is SEALED, and this test asserts the cleartext it typed.
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	schema := []extdriver.ConfigField{
 		{Key: "api_key", Type: "secret"},
 		{Key: "flag", Type: "bool"},
@@ -92,7 +96,10 @@ func TestTypeExtensionConfigValues(t *testing.T) {
 		"units":   "fahrenheit", // select → string
 		"note":    "",           // blank non-secret → omitted
 	}
-	out := TypeExtensionConfigValues(schema, values, existing)
+	out, err := TypeExtensionConfigValues("weather", schema, values, existing)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(out["api_key"]) != `"old-secret"` {
 		t.Errorf("blank secret should keep existing, got %s", out["api_key"])
 	}

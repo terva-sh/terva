@@ -18,6 +18,7 @@ import (
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/relaunch"
 	"terva.sh/terva/packages/tui"
 )
@@ -185,6 +186,16 @@ type InteractiveConfig struct {
 	// TervaHome is the root directory for sessions/, used by /sessions
 	// and the update-check cache.
 	TervaHome string
+
+	// AuthStore reads stored credentials for the login dialog's status
+	// column. Injected rather than derived from TervaHome: credentials live
+	// in the CREDENTIAL home (global even when project-scoping redirects
+	// TervaHome), and the shared store is the one carrying the at-rest
+	// decryption codec — a store built here by path would read an encrypted
+	// auth.json as unparseable and report every provider logged out. Nil
+	// leaves the status column empty, which is what a test harness with no
+	// credential home wants.
+	AuthStore *auth.Store
 
 	// Version is the binary's current version (from main.version).
 	// Used only for display; the update check itself is done outside
@@ -1255,7 +1266,7 @@ func (i *Interactive) Run(ctx context.Context) error {
 	// no agent at all), so skip it there.
 	if !i.ready() && (i.cfg.Carrier == nil || i.cfg.CarrierLogin != nil) {
 		i.statusErr = i18n.T("not logged in. pick a login method below or press esc to dismiss.")
-		i.dialog.Open(i.cfg.TervaHome)
+		i.dialog.Open(i.cfg.AuthStore)
 	} else if i.cfg.JailNotice != "" {
 		// A saved rule took the sandbox down for this directory. Say it before
 		// the trust nag: trust withholds capability (the safe direction, and

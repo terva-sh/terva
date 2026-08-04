@@ -357,6 +357,11 @@ type Config struct {
 	// the user layer) — honored even when the workspace is untrusted,
 	// since refusing to spawn a server is always safe. See mcpdialog.go.
 	DisableMCP []string `json:"disable_mcp,omitempty"`
+
+	// Secrets configures encryption of secret material at rest. Written by
+	// `terva secret init`; user layer only. See config/secrets.go and
+	// docs/proposals/secrets-at-rest.md.
+	Secrets *SecretsConfig `json:"secrets,omitempty"`
 }
 
 // EndpointConfig defines one user-supplied OpenAI-compatible backend. The
@@ -1424,7 +1429,10 @@ func AuthStoreFor() *auth.Store {
 	if s, ok := authStores[path]; ok {
 		return s
 	}
-	s := auth.NewStore(path)
+	// The codec makes loads decrypt and saves encrypt once a secrets key
+	// exists (terva secret init); with no key configured it is inert and the
+	// store reads/writes plaintext exactly as before. See config/secrets.go.
+	s := auth.NewStoreWithCodec(path, SecretsCodec())
 	authStores[path] = s
 	return s
 }
