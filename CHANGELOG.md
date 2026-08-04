@@ -11,6 +11,47 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.131.1](https://github.com/terva-sh/terva/releases/tag/v0.131.1) — 2026-08-02
+
+### Features
+
+- ask: a question offers its choices, and an option set stays open
+- cache: a cache cliff warns while it is still burning
+- chat: a chat can answer a multi-select or written-in question
+- chat: the agent can ask its user a question over a connector
+- docs: the installed docs mirror ships the design and practices tiers
+- models: the anthropic catalog knows Claude Opus 5
+- raati: a convened verdict discloses a correlated panel
+- raati: a fresh install can hold a gate on more than one provider
+- raati: a panel can spare its convening session's provider
+- raati: terva can seat a cross-provider panel from your logins
+- session: a usage row now records when it was billed
+- session: every codex dispatch records which connection it rode
+- stage: the card doctor can now write alternate greetings
+- tiers: a ladder rung can name a thinking level, not just a model
+- tools: lazy tool visibility is on by default
+- tui: a running raati shows its panel, not its newest line
+- tui: one scroll implementation for every dialog that scrolls
+- tui: the /context panel leads with the two numbers you opened it for
+- usage: /usage reports the anthropic subscription windows
+- worktree: /worktree can remove the worktrees nothing is using
+
+### Fixes
+
+- docs: the jail confines writes, not reads
+- provider: a malformed tool call is repaired when possible and refused out loud when not
+- raati: a panelist no longer leases a git worktree it cannot use
+- session: a compacted session resumes on the transcript it actually has
+- swarm: the worktree record retracts when the sub-agents stop
+- tui: a dialog can no longer squeeze the transcript off the screen
+- tui: esc sweeps the status lines without stealing the press
+- web: the RAATI ticker no longer yanks the view back mid-deliberation
+- workspace: the worktree note notices the trust grant it asked for
+
+### Other
+
+- tui: the cursor-follow policy is now named, not inherited
+
 ## [v0.130.1](https://github.com/terva-sh/terva/releases/tag/v0.130.1) — 2026-08-01
 
 ### Features
