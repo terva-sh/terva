@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -52,6 +53,16 @@ type CompactResult struct {
 	// than a comfortable assumption. See docs/plans/cache-aware-compaction-ab.md.
 	Strategy       CompactStrategy
 	FallbackReason string
+	// Truncated reports the summarizer hit compactMaxTokens and the checkpoint
+	// stops mid-thought.
+	//
+	// It is recorded rather than repaired because the alternative — re-running
+	// the summarization at a larger cap — pays the transcript-sized read a second
+	// time, and the compaction that truncates is by definition the one whose
+	// transcript is largest. The cost of saying so is a sentence; the cost of
+	// silence is a checkpoint that reads as complete, which is exactly the claim
+	// the executed-actions ledger refuses to make about its own overflow.
+	Truncated bool
 }
 
 // CompactStrategy names which summarizer produced a compaction.
@@ -146,6 +157,7 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 		usage          provider.Usage
 		strategy       = CompactCold
 		fallbackReason string
+		truncated      bool
 	)
 
 	// One transient-retry allowance for the WHOLE compaction, shared by both
@@ -192,6 +204,12 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 		switch {
 		case werr == nil && s != "":
 			summary, strategy = s, CompactWarm
+			// A summary that ran into the cap is still the best checkpoint
+			// available — it is most of one — so it is kept, not discarded. What
+			// must not happen is keeping it SILENTLY: this branch tested only
+			// "no error, some text", so a cut summary was indistinguishable from
+			// a whole one.
+			truncated = stop == provider.StopLength
 		default:
 			strategy = CompactWarmFellBack
 			fallbackReason = warmFallbackReason(stop, werr)
@@ -209,7 +227,7 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 		// a full-price cold re-read of the whole conversation. That is the cost
 		// cache_aware_compaction (shipped on) exists to remove; this path now
 		// serves the warm arm's fallbacks and explicit opt-outs.
-		s, u, _, cerr := a.drainSummaryRetrying(ctx, prefix.client, coldCompactRequest(prefix, transcript, midTurn), sink, &retries)
+		s, u, stop, cerr := a.drainSummaryRetrying(ctx, prefix.client, coldCompactRequest(prefix, transcript, midTurn), sink, &retries)
 		usage = usage.Add(u)
 		if cerr != nil {
 			return CompactResult{}, cerr
@@ -218,6 +236,10 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 			return CompactResult{}, i18n.Errorf("empty summary from model")
 		}
 		summary = s
+		// The cold path discarded its stop reason entirely. It is the FALLBACK,
+		// so it runs for the compactions that already went wrong once — the
+		// least safe place to lose the signal that this one ended early too.
+		truncated = stop == provider.StopLength
 	}
 
 	// Estimate token count before compaction (rough: 1 token ~ 4 chars).
@@ -233,6 +255,7 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 		Usage:          usage,
 		Strategy:       strategy,
 		FallbackReason: fallbackReason,
+		Truncated:      truncated,
 	}
 
 	// Replace transcript: one synthetic user message with the summary, the
@@ -243,7 +266,25 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 	// disagree about whether something ran, this wins — a model can forget a line
 	// it was asked to write, and the transcript cannot forget a block it contains.
 	body := "## Context Summary (compacted)\n\n" + summary
-	if ledger := executedActionsLedger(summarizable, a.ReadOnly); ledger != "" {
+	// Say it in the transcript, not only on the row. The row serves forensics
+	// after the fact; this serves the model that has to work from a checkpoint
+	// which stops mid-sentence, and which would otherwise read the last complete
+	// thought it can see as the end of the account.
+	ledger := executedActionsLedger(summarizable, a.ReadOnly, a.CWD)
+	if truncated {
+		// Which notice depends on whether a ledger actually follows. Pointing at
+		// a list of executed calls is the most useful thing the notice can say —
+		// that list is the one part of the checkpoint a token limit cannot cut
+		// short — but a read-only stretch produces no ledger, and a notice that
+		// promises a list which is not there is worse than one that stays quiet
+		// about it.
+		if ledger != "" {
+			body += "\n\n" + i18n.P("compact.truncated", compactTruncatedNotice)
+		} else {
+			body += "\n\n" + i18n.P("compact.truncated.noledger", compactTruncatedNoticeBare)
+		}
+	}
+	if ledger != "" {
 		body += "\n\n" + ledger
 	}
 	synthetic := provider.Message{
@@ -302,10 +343,25 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 	return res, nil
 }
 
-// compactMaxTokens caps a summary. Generous: a truncated checkpoint is worse
-// than a slightly expensive one, and output tokens are a rounding error next to
-// the transcript-sized read that precedes them.
-const compactMaxTokens = 4096
+// compactMaxTokens caps a summary. A truncated checkpoint is worse than a
+// slightly expensive one, and output tokens are a rounding error next to the
+// transcript-sized read that precedes them.
+//
+// 4096 was called generous and was not. It caps REASONING PLUS ANSWER, not the
+// answer, and an adaptive-thinking model (Opus 4.7+) is sent no explicit
+// thinking budget at all — it spends the cap however it likes and the summary
+// gets the remainder. Measured on a dogfooded session: three of ten compactions
+// reported exactly 4096 output tokens and ended mid-word, one of them mid-`**`,
+// while carrying only ~10k characters of prose. About 2,500 tokens of summary,
+// about 1,600 of thinking, and the checkpoint cut where the two collided.
+//
+// Nothing about the old value came from a provider limit. The models this bites
+// advertise MaxOutput 128000, and both the anthropic and openai builders already
+// clamp max_tokens down to what a model actually accepts, so a larger number
+// here cannot produce a rejected request — only a longer summary when the model
+// wants one. Sized to leave the observed ~2,500-token summary intact behind a
+// thinking budget several times the observed ~1,600.
+const compactMaxTokens = 16384
 
 // coldCompactRequest builds the bespoke summarization request: a purpose-built
 // system prompt, no tools, and the transcript flattened into a single user
@@ -396,7 +452,7 @@ func warmCompactInstruction(keepTail int, midTurn bool) string {
 	if keepTail > 0 {
 		sb.WriteString("\n\n")
 		sb.WriteString(i18n.P("compact.warm.keeptail",
-			"The %d most recent messages above will be preserved verbatim alongside your summary. Account for them, but do not reproduce them at length.", keepTail))
+			"terva keeps the %d most recent messages above verbatim alongside your summary. Account for them, but do not reproduce them at length.", keepTail))
 	}
 	return sb.String()
 }
@@ -598,7 +654,10 @@ const (
 // readOnly may be nil, and then every tool counts as state-changing. That is the
 // safe direction: over-reporting costs tokens, under-reporting invites a repeated
 // side effect.
-func executedActionsLedger(msgs []provider.Message, readOnly *ReadOnlySet) string {
+//
+// cwd is the directory bash commands run in, used only to recognize a shell
+// preamble that identifies nothing (see ledgerArgs). Empty elides nothing.
+func executedActionsLedger(msgs []provider.Message, readOnly *ReadOnlySet, cwd string) string {
 	// Pair each call with its outcome. A FAILED call is the case that matters
 	// most and is the easiest to get backwards: its effect does NOT exist, so an
 	// agent told only "you already ran this" would skip work it still has to do.
@@ -627,10 +686,10 @@ func executedActionsLedger(msgs []provider.Message, readOnly *ReadOnlySet) strin
 			if !ok || readOnly.Has(tc.Name) {
 				continue
 			}
-			line := "- " + tc.Name + " " + clip(strings.TrimSpace(string(tc.Arguments)), ledgerMaxArgChars)
+			line := "- " + tc.Name + " " + clip(ledgerArgs(tc.Name, tc.Arguments, cwd), ledgerMaxArgChars)
 			switch {
 			case failed[tc.ID]:
-				line += "  → FAILED (its effect does NOT exist; it may still need doing)"
+				line += "  → " + failureNote(tc.Name)
 			case !resolved[tc.ID]:
 				line += "  → OUTCOME UNKNOWN (dispatched, no result recorded)"
 			}
@@ -659,7 +718,7 @@ func executedActionsLedger(msgs []provider.Message, readOnly *ReadOnlySet) strin
 	sb.WriteString("\n\n")
 	if omitted > 0 {
 		sb.WriteString(i18n.P("compact.ledger.omitted",
-			"(%d earlier state-changing calls are not listed individually — the summary above is the only record of those.)\n\n",
+			"(this list omits %d earlier calls that changed state. The summary above is the only record of those.)\n\n",
 			omitted))
 	}
 	for _, line := range order {
@@ -670,6 +729,136 @@ func executedActionsLedger(msgs []provider.Message, readOnly *ReadOnlySet) strin
 		sb.WriteString("\n")
 	}
 	return strings.TrimRight(sb.String(), "\n")
+}
+
+// failureNote describes what a failed call's failure actually implies about its
+// effects. For every ordinary tool that is "nothing happened": an edit that
+// fails writes no bytes, and telling the resuming agent it already ran would
+// make it skip work it still has to do.
+//
+// A SHELL COMMAND IS NOT ONE ACTION. Its result is the exit status of the last
+// stage, and a command that failed can have changed the workspace several times
+// before it got there. Measured on a dogfooded session: 12 bash calls were
+// marked failed in compaction ledgers and ALL TWELVE were composite — six of
+// them `gofmt -w <file> && go test <pkg>`, where the rewrite certainly happened
+// and only the test that followed failed. The ledger told the resuming agent
+// that its effect did not exist.
+//
+// That is the same wrong claim the ledger exists to prevent, pointed the other
+// way, so the note says what the harness actually knows: a non-zero exit, and
+// an unknown amount of work already done.
+func failureNote(tool string) string {
+	if tool == "bash" {
+		return i18n.T("FAILED (non-zero exit; earlier stages of the command may still have taken effect)")
+	}
+	return i18n.T("FAILED (its effect does NOT exist; it may still need doing)")
+}
+
+// ledgerArgs renders one call's arguments for the ledger, eliding the shell
+// preamble that identifies nothing.
+//
+// A model that believes a shell's working directory carries over between calls
+// re-anchors every command with `cd <cwd>`. It does not carry over — BashTool
+// sets cmd.Dir on every call — so that `cd` is a no-op, and so is a leading
+// `set +e` (the tool runs `sh -c`, which starts with errexit already off).
+// Measured on a dogfooded session: 1,090 of 1,112 `cd`s pointed at the agent's
+// own cwd, and the preamble averaged 92 of the 160 characters below, so more
+// than half of this ledger's identification budget was spent on bytes that say
+// nothing about WHICH command ran. The clip then fell inside the boilerplate and
+// the entry named no command at all.
+//
+// Only a `cd` to cwd is elided; `cd /tmp/build && make` changes WHERE the work
+// happened and survives whole. Anything unparseable, unrecognized, or merely
+// prefix-similar (`cd /srv/app2` against /srv/app) is left exactly as sent —
+// under-eliding costs characters, over-eliding would misreport the action.
+func ledgerArgs(name string, args json.RawMessage, cwd string) string {
+	raw := strings.TrimSpace(string(args))
+	if name != "bash" || cwd == "" {
+		return raw
+	}
+	var m map[string]any
+	if err := json.Unmarshal(args, &m); err != nil {
+		return raw
+	}
+	cmd, ok := m["command"].(string)
+	if !ok {
+		return raw
+	}
+	stripped := stripShellPreamble(cmd, cwd)
+	if stripped == cmd {
+		return raw
+	}
+	m["command"] = stripped
+	// Without SetEscapeHTML(false) the encoder writes `&&` as `&&`,
+	// spending 12 of the 160 characters below on a two-character operator. Shell
+	// commands are chained with `&&`, so a handful per entry pushed the clip back
+	// past the preamble elision it is paired with here. The ledger is prose the
+	// model reads, never JSON anything parses, so the plain byte is strictly
+	// better. A trailing newline is the encoder's, not ours.
+	var buf strings.Builder
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(m); err != nil {
+		return raw
+	}
+	return strings.TrimRight(buf.String(), "\n")
+}
+
+// stripShellPreamble removes every leading no-op statement from cmd. It loops
+// because the two forms appear in either order and in either combination.
+func stripShellPreamble(cmd, dir string) string {
+	for {
+		rest, cut := cutShellNoop(cmd, dir)
+		if !cut {
+			return cmd
+		}
+		cmd = rest
+	}
+}
+
+// cutShellNoop strips ONE leading no-op statement together with the separator
+// that ends it, reporting whether it found one.
+//
+// The separator is required. Without it the match was not a whole statement —
+// `cd /srv/app2` shares a prefix with /srv/app and `set +export` with `set +e` —
+// and stripping either would rewrite the command into something that never ran.
+func cutShellNoop(cmd, dir string) (string, bool) {
+	s := strings.TrimLeft(cmd, " \t\r\n")
+	n := noopStatementLen(s, dir)
+	if n == 0 {
+		return cmd, false
+	}
+	rest := strings.TrimLeft(s[n:], " \t")
+	switch {
+	case strings.HasPrefix(rest, "&&"):
+		rest = rest[2:]
+	case strings.HasPrefix(rest, ";"), strings.HasPrefix(rest, "\n"):
+		rest = rest[1:]
+	default:
+		return cmd, false
+	}
+	return strings.TrimLeft(rest, " \t\r\n"), true
+}
+
+// noopStatementLen returns the byte length of a leading no-op statement in s, or
+// 0. A `cd` counts only when its argument is exactly dir, bare or quoted; a
+// trailing slash does not match, which under-elides rather than guessing.
+func noopStatementLen(s, dir string) int {
+	if strings.HasPrefix(s, "set +e") {
+		return len("set +e")
+	}
+	const cd = "cd "
+	if !strings.HasPrefix(s, cd) {
+		return 0
+	}
+	arg := strings.TrimLeft(s[len(cd):], " \t")
+	off := len(s) - len(arg)
+	for _, cand := range []string{dir, `"` + dir + `"`, `'` + dir + `'`} {
+		if strings.HasPrefix(arg, cand) {
+			return off + len(cand)
+		}
+	}
+	return 0
 }
 
 // clip truncates on a rune boundary so a multi-byte argument can't be cut in
@@ -685,11 +874,32 @@ func clip(s string, max int) string {
 	return string(r[:max]) + "…"
 }
 
-const executedActionsHeader = `## Executed Tool Calls (harness record — authoritative)
+// compactTruncatedNotice rides the checkpoint when the summarizer ran into
+// compactMaxTokens. It points at the ledger deliberately: the one part of the
+// checkpoint a token limit cannot cut short is the part the harness appends
+// after generation.
+const compactTruncatedNotice = `**The summary above stops early.** The model reached its output limit before it
+completed the account. The last section breaks off, and an earlier section can
+omit a fact. The list of tool calls below still records every call. Check the
+workspace, or ask the user. A gap in the summary is not proof that something did
+not happen.`
 
-Extracted from the transcript by the harness, not written by a model. Every call
-below has ALREADY been dispatched and its effects already exist, unless marked
-otherwise. Do NOT repeat any of them.`
+// compactTruncatedNoticeBare is the same notice for a compaction that produced
+// no ledger, and so has no list to point the model at.
+const compactTruncatedNoticeBare = `**The summary above stops early.** The model reached its output limit before it
+completed the account. The last section breaks off, and an earlier section can
+omit a fact. Check the workspace, or ask the user. A gap in the summary is not
+proof that something did not happen.`
+
+const executedActionsHeader = `## Executed Tool Calls (authoritative harness record)
+
+The harness extracted this list from the transcript. No model wrote it. Every
+call below already ran, and its effects already exist, unless the entry says
+otherwise. Do not repeat any of them.
+
+A shell command can start with ` + "`cd`" + ` into the directory it already runs in, or
+with ` + "`set +e`" + `. The harness removes both from the entry. Neither one changes
+what the command does.`
 
 // estimateTokens is the crude transcript-size heuristic used to
 // re-baseline the context gauge right after compaction (1 token ≈ 4
@@ -841,9 +1051,9 @@ func serializeTranscript(msgs []provider.Message) string {
 	return sb.String()
 }
 
-const summarizationSystem = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI coding assistant, then produce a structured summary following the exact format specified.
+const summarizationSystem = `Do not continue the conversation. Do not answer any question in the conversation. Output only the structured summary.
 
-Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`
+You are a context summarization assistant. Read the conversation between the user and a coding assistant. Then produce a structured summary in the exact format that the instruction gives.`
 
 // warmCompactionPreamble opens the cache-aware summarization ask. The cold path
 // gets to say "you are a summarization assistant" in a system prompt it owns;
@@ -854,18 +1064,18 @@ Do NOT continue the conversation. Do NOT respond to any questions in the convers
 // a better one.
 const warmCompactionPreamble = `[compaction] Stop. Do not continue the task above, and do not call any tool.
 
-The conversation above is about to be discarded and REPLACED by the summary you are about to write. Nothing else survives: your summary is the only context the next model — probably you — will have to continue this work from. Write it accordingly.`
+The summary you write now replaces the conversation above, and terva then discards that conversation. Nothing else survives. Your summary is the only context that the next model, probably you, will have to continue this work from. Write it with that in mind.`
 
-const compactionPrompt = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
+const compactionPrompt = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that the next model will use to continue the work.
 
-Use this EXACT format:
+Use this format exactly:
 
 ## Goal
-[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
+[What does the user want to accomplish? Can be multiple items if the session covers different tasks.]
 
 ## Constraints & Preferences
-- [Any constraints, preferences, or requirements mentioned by user]
-- [Or "(none)" if none were mentioned]
+- [Any constraints, preferences, or requirements that the user gave]
+- [Or "(none)" if the user gave none]
 
 ## Progress
 ### Done
@@ -875,7 +1085,7 @@ Use this EXACT format:
 - [ ] [Current work]
 
 ### Blocked
-- [Issues preventing progress, if any]
+- [Issues that block progress, if any]
 
 ## Key Decisions
 - **[Decision]**: [Brief rationale]
@@ -889,9 +1099,9 @@ Use this EXACT format:
 
 Keep each section concise. Preserve exact file paths, function names, and error messages.`
 
-const midTurnCompactionAddendum = `IMPORTANT: this summary interrupts an agent MID-TASK. The conversation is inside an active tool-use loop; after your summary, the agent resumes directly from the most recent tool results (kept verbatim). Add one extra section, and make it exhaustive:
+const midTurnCompactionAddendum = `This summary interrupts an agent in the middle of a task. The conversation is inside an active tool-use loop. After your summary, the agent resumes directly from the most recent tool results, which terva keeps verbatim. Add one extra section, and make it exhaustive:
 
 ## Actions Already Executed
-- [Every state-changing action already performed: files created/edited/deleted (exact paths), commands run (the exact command and its outcome), messages sent, sub-agents spawned. The resuming agent must NEVER repeat one of these — any ambiguity here causes duplicated side effects.]
+- [Every action that changed state: files created, edited, or deleted (exact paths). Commands run (the exact command and its outcome). Messages sent. Sub-agents started. The agent that resumes must never repeat one of these. Any ambiguity here causes duplicated side effects.]
 
-Under In Progress, record the precise current step: what the agent was about to do next, with exact file paths, line numbers, symbol names, and any error text it was responding to. Do NOT restate large file contents — name the file and the relevant location instead.`
+Under In Progress, record the precise current step: what the agent was about to do next. Include exact file paths, line numbers, symbol names, and any error text the agent responded to. Do not restate large file contents. Name the file and the relevant location instead.`

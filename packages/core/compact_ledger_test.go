@@ -39,7 +39,7 @@ func TestLedgerRecordsStateChangingCallsAndSkipsReads(t *testing.T) {
 		call("4", "write", `{"path":"pkg/auth.go"}`), result("4", "written", false),
 	}
 
-	led := executedActionsLedger(msgs, ro)
+	led := executedActionsLedger(msgs, ro, "")
 	if !strings.Contains(led, "npm install") || !strings.Contains(led, "pkg/auth.go") {
 		t.Errorf("the ledger dropped a state-changing call:\n%s", led)
 	}
@@ -62,7 +62,7 @@ func TestLedgerDistinguishesFailedAndUnresolvedCalls(t *testing.T) {
 		call("3", "bash", `{"command":"deploy staging"}`), // dispatched; compaction landed here
 	}
 
-	led := executedActionsLedger(msgs, nil)
+	led := executedActionsLedger(msgs, nil, "")
 
 	lines := map[string]string{}
 	for _, l := range strings.Split(led, "\n") {
@@ -87,12 +87,55 @@ func TestLedgerDistinguishesFailedAndUnresolvedCalls(t *testing.T) {
 	}
 }
 
+// A shell command is not one action, and its failure does not mean nothing
+// happened. The exit status belongs to the LAST stage, so a command that failed
+// can have changed the workspace several times on the way there.
+//
+// Measured on a dogfooded session: 12 bash calls were marked failed in
+// compaction ledgers and all 12 were composite — six of them
+// `gofmt -w <file> && go test <pkg>`, where the rewrite certainly happened and
+// only the test after it failed. Each was recorded as "its effect does NOT
+// exist", which is the ledger's own worst-case claim aimed the wrong way.
+func TestLedgerDoesNotClaimAFailedShellCommandDidNothing(t *testing.T) {
+	msgs := []provider.Message{
+		call("1", "bash", `{"command":"gofmt -w pkg/auth_test.go && go test ./pkg"}`), result("1", "FAIL", true),
+		call("2", "edit", `{"path":"pkg/auth.go"}`), result("2", "oldText not found", true),
+	}
+
+	led := executedActionsLedger(msgs, nil, "")
+	var shell, edit string
+	for _, l := range strings.Split(led, "\n") {
+		switch {
+		case strings.Contains(l, "gofmt -w"):
+			shell = l
+		case strings.Contains(l, "pkg/auth.go"):
+			edit = l
+		}
+	}
+
+	if !strings.Contains(shell, "FAILED") {
+		t.Fatalf("a failed shell command must still be marked failed: %q", shell)
+	}
+	if strings.Contains(shell, "does NOT exist") {
+		t.Errorf("the ledger claims a composite shell command had no effect; the `gofmt -w` in it ran: %q", shell)
+	}
+	if !strings.Contains(shell, "may still have taken effect") {
+		t.Errorf("the shell note does not warn that earlier stages ran: %q", shell)
+	}
+	// The ordinary case must NOT drift: for a tool that either applies or does
+	// not, "nothing happened" is exactly right, and softening it would invite
+	// the resuming agent to skip work it still owes.
+	if !strings.Contains(edit, "does NOT exist") {
+		t.Errorf("a failed edit writes no bytes and the ledger must keep saying so: %q", edit)
+	}
+}
+
 // nil ReadOnly means "assume everything mutates". Over-reporting costs tokens;
 // under-reporting invites a repeated side effect. Extensions and MCP servers
 // register arbitrary tools, so an unknown tool is the common case.
 func TestLedgerFailsClosedWithoutAReadOnlySet(t *testing.T) {
 	msgs := []provider.Message{call("1", "some_mcp_tool", `{"x":1}`), result("1", "ok", false)}
-	if led := executedActionsLedger(msgs, nil); !strings.Contains(led, "some_mcp_tool") {
+	if led := executedActionsLedger(msgs, nil, ""); !strings.Contains(led, "some_mcp_tool") {
 		t.Errorf("an unknown tool must be assumed state-changing:\n%s", led)
 	}
 }
@@ -109,13 +152,13 @@ func TestLedgerIsBoundedAndSaysWhenItTruncates(t *testing.T) {
 		id := fmt.Sprintf("c%d", i)
 		msgs = append(msgs, call(id, "bash", fmt.Sprintf(`{"command":"step-%d"}`, i)), result(id, "ok", false))
 	}
-	led := executedActionsLedger(msgs, nil)
+	led := executedActionsLedger(msgs, nil, "")
 
 	entries := strings.Count(led, "\n- ")
 	if entries > ledgerMaxEntries {
 		t.Errorf("ledger listed %d entries; capped at %d", entries, ledgerMaxEntries)
 	}
-	if !strings.Contains(led, fmt.Sprintf("%d earlier state-changing calls are not listed", overflow)) {
+	if !strings.Contains(led, fmt.Sprintf("omits %d earlier calls that changed state", overflow)) {
 		t.Errorf("the ledger truncated silently, which reads as completeness:\n%s", led)
 	}
 	// The most recent survive — they are the likeliest to be re-attempted the
@@ -150,7 +193,7 @@ func TestLedgerCollapsesRepeatedIdenticalCalls(t *testing.T) {
 		id := fmt.Sprintf("c%d", i)
 		msgs = append(msgs, call(id, "write", `{"path":"a.go"}`), result(id, "ok", false))
 	}
-	led := executedActionsLedger(msgs, nil)
+	led := executedActionsLedger(msgs, nil, "")
 	if strings.Count(led, "\n- ") != 1 {
 		t.Errorf("identical calls did not collapse:\n%s", led)
 	}
@@ -164,7 +207,7 @@ func TestLedgerCollapsesRepeatedIdenticalCalls(t *testing.T) {
 func TestLedgerClipsLongArgumentsSafely(t *testing.T) {
 	long := strings.Repeat("é", 400)
 	msgs := []provider.Message{call("1", "bash", `{"command":"`+long+`"}`), result("1", "ok", false)}
-	led := executedActionsLedger(msgs, nil)
+	led := executedActionsLedger(msgs, nil, "")
 	if !strings.Contains(led, "…") {
 		t.Error("a long argument was not clipped")
 	}
@@ -178,12 +221,94 @@ func TestLedgerClipsLongArgumentsSafely(t *testing.T) {
 	}
 }
 
+// The preamble elision, and the reason it exists: a `cd` into the directory the
+// command already runs in identifies nothing, and it lands in front of the clip.
+//
+// Measured on a dogfooded session — 1,090 of 1,112 `cd`s pointed at the agent's
+// own cwd, eating 92 of the 160 characters the ledger allots to naming a call.
+// The assertion is the one that matters: after eliding, the clip reaches the
+// command. Before it, the entry named no command at all.
+func TestLedgerElidesTheCdThatGoesNowhere(t *testing.T) {
+	const cwd = "/Users/dev/Workspace/git.example.com/someone/a-project"
+	cmd := "cd " + cwd + "\\nset +e\\ngo test ./internal/world/spec -run TestContestResolution"
+	msgs := []provider.Message{call("1", "bash", `{"command":"`+cmd+`"}`), result("1", "ok", false)}
+
+	// Scope to the entries. The header legitimately NAMES `set +e` when it
+	// explains the elision, so a Contains over the whole ledger matches the
+	// chrome and reports a failure that is not there.
+	entries := ledgerEntries(executedActionsLedger(msgs, nil, cwd))
+
+	if strings.Contains(entries, cwd) {
+		t.Errorf("the no-op cd survived into the entry:\n%s", entries)
+	}
+	if strings.Contains(entries, "set +e") {
+		t.Errorf("the no-op `set +e` survived into the entry:\n%s", entries)
+	}
+	// The point of the whole exercise.
+	if !strings.Contains(entries, "TestContestResolution") {
+		t.Errorf("the clip still fell inside the preamble; the entry names no command:\n%s", entries)
+	}
+}
+
+// ledgerEntries returns only the "- " action lines, dropping the heading. The
+// heading discusses the elision in prose, so an assertion about what an ENTRY
+// contains has to be made against the entries.
+func ledgerEntries(led string) string {
+	var out []string
+	for _, l := range strings.Split(led, "\n") {
+		if strings.HasPrefix(l, "- ") {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// The other direction, and the one that must never break: a `cd` somewhere else
+// changed WHERE the work happened. Eliding it would misreport the action — a
+// `make` in /tmp/build is not the `make` this ledger would then claim ran.
+func TestLedgerKeepsACdThatMoved(t *testing.T) {
+	const cwd = "/srv/app"
+	for _, tc := range []struct{ name, command, keep string }{
+		{"elsewhere", "cd /tmp/build && make install", "/tmp/build"},
+		// Shares a prefix with cwd. Requiring a separator after the match is what
+		// stops HasPrefix from rewriting this into a command that never ran.
+		{"prefix-similar", "cd /srv/app2 && make install", "/srv/app2"},
+		// Same, one character the other way.
+		{"trailing-slash", "cd /srv/app/ && make install", "/srv/app/"},
+		// Not a statement: `set +export` merely starts like `set +e`.
+		{"set-lookalike", "set +export FOO=1; make", "+export"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msgs := []provider.Message{call("1", "bash", `{"command":"`+tc.command+`"}`), result("1", "ok", false)}
+			if led := executedActionsLedger(msgs, nil, cwd); !strings.Contains(led, tc.keep) {
+				t.Errorf("elided %q, which changes what the entry claims ran:\n%s", tc.keep, led)
+			}
+		})
+	}
+}
+
+// Elision is bash-only and cwd-gated. A path-shaped argument to another tool is
+// not a shell command, and an agent with no configured cwd has nothing to
+// compare against — both must pass through byte-identical.
+func TestLedgerElidesOnlyForBashAndOnlyWithACWD(t *testing.T) {
+	const cwd = "/srv/app"
+	msgs := []provider.Message{call("1", "write", `{"path":"/srv/app","body":"x"}`), result("1", "ok", false)}
+	if led := executedActionsLedger(msgs, nil, cwd); !strings.Contains(led, `"/srv/app"`) {
+		t.Errorf("a non-bash argument was rewritten:\n%s", led)
+	}
+
+	msgs = []provider.Message{call("1", "bash", `{"command":"cd /srv/app && make"}`), result("1", "ok", false)}
+	if led := executedActionsLedger(msgs, nil, ""); !strings.Contains(led, "cd /srv/app") {
+		t.Errorf("an unset cwd elided anyway, which cannot be verified as a no-op:\n%s", led)
+	}
+}
+
 // A read-only stretch of conversation needs no ledger, and must not get an empty
 // heading that implies actions were taken.
 func TestLedgerIsEmptyWhenNothingMutated(t *testing.T) {
 	ro := NewReadOnlySet("read")
 	msgs := []provider.Message{call("1", "read", `{"path":"a.go"}`), result("1", "ok", false)}
-	if led := executedActionsLedger(msgs, ro); led != "" {
+	if led := executedActionsLedger(msgs, ro, ""); led != "" {
 		t.Errorf("a read-only stretch produced a ledger:\n%s", led)
 	}
 }
@@ -217,7 +342,7 @@ func TestCompactionAttachesTheLedgerToTheSummary(t *testing.T) {
 	if !strings.Contains(tb.Text, "npm install") || !strings.Contains(tb.Text, "pkg/auth.go") {
 		t.Errorf("the model's summary forgot the executed actions and the harness did not correct it:\n%s", tb.Text)
 	}
-	if !strings.Contains(tb.Text, "Do NOT repeat any of them") {
+	if !strings.Contains(tb.Text, "Do not repeat any of them") {
 		t.Errorf("the ledger reached the transcript without its instruction:\n%s", tb.Text)
 	}
 }
