@@ -1,0 +1,65 @@
+package tools
+
+// Dumps every tool's REAL Name()+Description() as a tools-catalog overlay.
+// Run in a worktree at the pre-STE commit to capture the old wording exactly
+// as the model received it — including bash's interpolated shell and cwd,
+// which no source-scraping approach reconstructs correctly.
+//
+//	go test ./packages/agent/tools/ -run TestDumpDescriptions -v
+//
+// Not committed; this file is copied in by the eval harness.
+
+import (
+	"encoding/json"
+	"os"
+	"testing"
+)
+
+func TestDumpDescriptions(t *testing.T) {
+	out := os.Getenv("DUMP_DESC_OUT")
+	if out == "" {
+		t.Skip("set DUMP_DESC_OUT")
+	}
+	type namedTool interface {
+		Name() string
+		Description() string
+	}
+	// A fixed cwd so the bash description is byte-stable between arms: the
+	// eval compares wording, and a differing cwd would show up as a diff
+	// that has nothing to do with wording.
+	const cwd = "/work/project"
+	tools := []namedTool{
+		&ReadTool{}, &WriteTool{}, &EditTool{}, &BashTool{CWD: cwd}, &GrepTool{}, &GlobTool{},
+		&AskUserTool{}, &MemoryTool{}, &SessionInspectTool{}, &SessionSearchTool{},
+		&SwarmSpawnTool{}, &RaatiConveneTool{}, &StatusTool{}, &RestartTool{},
+		&ArmRestartTool{}, &ActivateToolsTool{}, &GenerateImageTool{}, &ShareFileTool{},
+		&DeliverResultTool{}, &ActorSpawnTool{}, &ChatSendImageTool{}, &ChatSendFileTool{},
+		&WorktreeListTool{}, &WorktreeCreateTool{}, &WorktreeClaimTool{},
+		&WorktreeReleaseTool{}, &WorktreeRemoveTool{},
+	}
+	m := map[string]string{}
+	for _, tl := range tools {
+		m["tool."+tl.Name()+".description"] = tl.Description()
+	}
+	b, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(out, append(b, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("wrote %d descriptions to %s", len(m), out)
+}
+
+// HOW TO CAPTURE AN ARM
+//
+//   git worktree add --detach /tmp/old <commit>
+//   cp scripts/eval/capture-descriptions.go.txt /tmp/old/packages/agent/tools/zz_capture_test.go
+//   DUMP_DESC_OUT=$PWD/scripts/eval/overlays/<name>.json \
+//     go test -C /tmp/old ./packages/agent/tools/ -run TestDumpDescriptions -count=1
+//   git worktree remove /tmp/old
+//
+// Capture from the RUNNING BINARY, never by scraping source. A regex over the
+// Go source swept quote characters out of comments and produced a control arm
+// whose bash description was corrupt — which would have made the whole
+// comparison lie while looking perfectly reasonable.

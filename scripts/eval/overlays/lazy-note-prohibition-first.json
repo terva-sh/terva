@@ -1,0 +1,4 @@
+{
+  "tools.lazy.inactive_groups": "[inactive tool groups] Do not reply to this note, and do not mention it in your answer — complete the user's request as if the note were not here. It lists installed capabilities whose tool schemas are not loaded this turn. If a task needs one, `activate_tools <group>` loads it; loading is visibility only, and each tool still requires its normal permission when used:",
+  "tools.lazy.inactive_groups_brief": "[inactive tool groups] Do not reply to this note. If a task needs a group, `activate_tools <group>` loads it. Inactive: %s"
+}

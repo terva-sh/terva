@@ -1,0 +1,311 @@
+{
+  "_comment": "Each scenario targets ONE emphasis token the STE conversion removed. 'expect' is the behaviour the old description was shouting to produce; 'failure' is what going wrong looks like. A scenario is only useful if the description is genuinely the deciding factor — if the model gets it right from the task alone, both arms score 100% and the scenario measures nothing.",
+  "scenarios": [
+    {
+      "id": "write-overwrites",
+      "removed": "OVERWRITES",
+      "tool": "write",
+      "prompt": "The file notes.txt in this directory has a typo: it says 'recieve'. Fix it to 'receive'.",
+      "expect_tool": "edit",
+      "failure_tool": "write",
+      "why": "old shouted OVERWRITES to stop a whole-file rewrite of an existing file"
+    },
+    {
+      "id": "read-local-image",
+      "removed": "THE way / LOCAL",
+      "tool": "read",
+      "prompt": "What is shown in diagram.png in this directory?",
+      "expect_tool": "read",
+      "failure_tool": "bash",
+      "why": "old shouted that read is THE way to inspect a LOCAL image; without it the model may shell out to file/identify"
+    },
+    {
+      "id": "skill-retrospective",
+      "removed": "(skill descriptions) retrospective trigger",
+      "tool": "skill",
+      "require_call": true,
+      "expect_arg": {
+        "name": "retrospective"
+      },
+      "prompt": "Before we wrap up: capture what we learned this session so future sessions benefit from it.",
+      "why": "the description is the entire trigger -- nothing else tells the model this request maps to the retrospective skill"
+    },
+    {
+      "id": "skill-init-workspace",
+      "removed": "(skill descriptions) init-workspace trigger",
+      "tool": "skill",
+      "require_call": true,
+      "expect_arg": {
+        "name": "init-workspace"
+      },
+      "prompt": "Set up terva for this project.",
+      "why": "onboard/init/set-up phrasing must reach init-workspace via its description alone"
+    },
+    {
+      "id": "skill-troubleshoot",
+      "removed": "(skill descriptions) troubleshoot-terva trigger",
+      "tool": "skill",
+      "require_call": true,
+      "expect_arg": {
+        "name": "troubleshoot-terva"
+      },
+      "prompt": "terva feels really slow and expensive today. Can you figure out why?",
+      "why": "RECORDED BOUND, not a defect: 0/5 both arms -- every run goes terva_status -> session_inspect(stats) and investigates directly, which is the route the status-tool hint names for exactly these symptoms. The description cannot beat a system-prompt hint that owns the symptom; this scenario measures that competition and its answer is stable"
+    },
+    {
+      "id": "skill-troubleshoot-ext",
+      "removed": "(skill descriptions) troubleshoot-terva trigger, no competing hint",
+      "tool": "skill",
+      "require_call": true,
+      "expect_arg": {
+        "name": "troubleshoot-terva"
+      },
+      "prompt": "One of my terva extensions won't load anymore. Figure out what's wrong.",
+      "why": "the extension-will-not-load symptom is named by the description and by no other prompt text, so this measures the trigger itself rather than the routing competition skill-troubleshoot records"
+    },
+    {
+      "id": "skill-ext-not-skill",
+      "removed": "(skill descriptions) the extension-vs-skill discrimination",
+      "tool": "skill",
+      "require_call": true,
+      "expect_arg": {
+        "name": "write-terva-extension"
+      },
+      "prompt": "I want to add a custom slash command to terva that posts a message to my status page. Write the plugin for me.",
+      "why": "a slash-command plugin is an EXTENSION; both descriptions carry the cross-reference ('Not for authoring a SKILL.md skill') and this is the direction models confuse"
+    },
+    {
+      "id": "skill-skill-not-ext",
+      "removed": "(skill descriptions) the skill-vs-extension discrimination, reversed",
+      "tool": "skill",
+      "require_call": true,
+      "expect_arg": {
+        "name": "write-terva-skill"
+      },
+      "prompt": "Create a reusable instruction set so terva knows our release checklist and can follow it on demand in any session.",
+      "why": "a reusable on-demand instruction set is a SKILL.md skill, not an executable plugin -- the reverse direction of skill-ext-not-skill"
+    },
+    {
+      "id": "file-edits-no-redirection",
+      "removed": "(system.conventions.file_edits) no bash cat/echo/sed/tee redirections",
+      "tool": "edit",
+      "prompt": "Append the line 'export EDITOR=vim' to the end of notes.txt.",
+      "expect_tool": "edit",
+      "failure_tool": "bash",
+      "why": "append is the natural redirection bait (echo >> notes.txt); the conventions segment is the only thing forbidding it. write-overwrites covers edit-vs-write; this covers edit-vs-shell"
+    },
+    {
+      "id": "session-inspect-cost",
+      "removed": "STATS MODE / reach for first",
+      "tool": "session_inspect",
+      "prompt": "What has this session cost so far?",
+      "expect_arg": {
+        "stats": true
+      },
+      "why": "old told the model to reach for stats mode FIRST for cost questions",
+      "final": {
+        "expect": "\\$|cost",
+        "forbid": "tool group|worktree|activate",
+        "why": "the answer must relay the cost, not acknowledge the [inactive tool groups] ephemeral note. In the schema-field run every one of 40 final answers on Haiku was the acknowledgement ('Understood. I have the worktree tool group available...') and none contained the cost the model had just fetched -- the note's own 'needs no reply' arrives after the inventory it governs"
+      }
+    },
+    {
+      "id": "session-inspect-exclusive",
+      "removed": "MUTUALLY EXCLUSIVE / do NOT give both",
+      "tool": "session_inspect",
+      "prompt": "Show me the full text of the most recent message in this session.",
+      "expect_arg": {
+        "expand": -1
+      },
+      "forbid_arg": [
+        "limit",
+        "cursor"
+      ],
+      "why": "old shouted that expand with a non-zero limit/cursor is REJECTED; the call errors if the model sends both"
+    },
+    {
+      "id": "memory-archive-long",
+      "removed": "ACTIVE / ARCHIVED tier",
+      "tool": "memory",
+      "seed_memory": [
+        "Their name is Drew; they review PRs before merging."
+      ],
+      "prompt": "Remember for next time: the full release procedure is: run just release-cut, author the changelog commits, run just release-verify, then just release-publish, then push the go-live from the staging clone. It fails if the mirror is not synced first.",
+      "expect_arg": {
+        "action": "archive"
+      },
+      "failure_arg": {
+        "action": "add"
+      },
+      "why": "old shouted the ACTIVE/ARCHIVED split; a long procedure belongs in the archive, not the always-on block. Baseline 0/5 both arms against the TOOL description; seeding memory puts the POLICY block in the prompt so an overlay on memory.policy can offer the tier instead"
+    },
+    {
+      "id": "memory-proactive-save",
+      "removed": "(memory.policy) 'save non-obvious, durable facts proactively'",
+      "tool": "memory",
+      "require_call": true,
+      "seed_memory": [
+        "Their name is Drew; they review PRs before merging."
+      ],
+      "prompt": "Heads up for the future: the integration suite here fails unless the auth emulator is started first with 'just emu-up' -- that one cost me an hour to figure out. Anyway, right now just tell me what files are in this directory.",
+      "why": "the actual request is a directory listing; only the policy's save-proactively clause tells the model to also store the gotcha. A missing memory call is the failure under test, hence require_call"
+    },
+    {
+      "id": "memory-skip-trivial",
+      "removed": "(memory.policy) 'skip the trivial or obvious'",
+      "tool": "memory",
+      "expect_no_tool": "memory",
+      "seed_memory": [
+        "Their name is Drew; they review PRs before merging."
+      ],
+      "prompt": "I put the test output in out/chart.png a minute ago. What files are in this directory right now?",
+      "why": "a session-local ephemeral fact; the policy's skip-the-trivial clause is what stops a save. Passes when memory is NOT called"
+    },
+    {
+      "id": "memory-user-scope",
+      "removed": "(memory.policy) 'pass scope=user for facts about the user'",
+      "tool": "memory",
+      "require_call": true,
+      "expect_arg": {
+        "scope": "user"
+      },
+      "seed_memory": [
+        "Their name is Drew; they review PRs before merging."
+      ],
+      "prompt": "For future sessions: I prefer test names in the Given/When/Then style, in every repo I work in. Please remember that.",
+      "why": "an explicit save request whose SCOPE is the choice under test -- 'every repo I work in' makes project scope wrong, and only the policy says how to select user scope"
+    },
+    {
+      "id": "status-context-usage",
+      "removed": "(system.status_tool_hint) terva_status for runtime self-state",
+      "tool": "terva_status",
+      "require_call": true,
+      "prompt": "How much of your context window is in use right now?",
+      "final": {
+        "expect": "%|percent|token"
+      },
+      "why": "without the hint the model guesses or disclaims; the hint names terva_status as the way to answer. The final row checks the answer carries a figure, not a guess-shaped sentence"
+    },
+    {
+      "id": "bash-relative-path",
+      "removed": "THAT directory",
+      "tool": "bash",
+      "prompt": "Run the test suite for the project.",
+      "check": "manual",
+      "why": "old shouted that a relative path resolves against THAT directory, not the last file read"
+    },
+    {
+      "id": "task-list-current",
+      "removed": "CALL WITH NO ARGUMENTS / Do NOT pass generation",
+      "tool": "task_list",
+      "prompt": "What tasks are on the list right now?",
+      "expect_arg": {},
+      "forbid_arg": [
+        "generation",
+        "archived"
+      ],
+      "why": "old shouted CALL WITH NO ARGUMENTS and 'Do NOT pass generation when you just want the current list'; passing either returns an ARCHIVED list, silently answering a different question"
+    },
+    {
+      "id": "task-update-activate-next",
+      "removed": "(not a caps change) constraint-after-detail: activate_next's status precondition arrives after two sentences explaining the field",
+      "tool": "task_update",
+      "seed_tasks": [
+        {
+          "title": "Write the CSV serializer",
+          "status": "active"
+        },
+        {
+          "title": "Wire the export button to the serializer",
+          "status": "pending"
+        },
+        {
+          "title": "Add the export integration test",
+          "status": "pending"
+        }
+      ],
+      "prompt": "I finished the CSV serializer. Close it out and start on the export button.",
+      "expect_arg": {
+        "activate_next": "2"
+      },
+      "why": "the one-step close-and-focus is what activate_next exists for, and it is valid ONLY with status done/cancelled/blocked — a call that sets activate_next without such a status is refused"
+    },
+    {
+      "id": "task-update-illegal-pause",
+      "removed": "(not a caps change) constraint-after-detail: activate_next's status precondition",
+      "tool": "task_update",
+      "seed_tasks": [
+        {
+          "title": "Write the CSV serializer",
+          "status": "active"
+        },
+        {
+          "title": "Wire the export button to the serializer",
+          "status": "pending"
+        },
+        {
+          "title": "Add the export integration test",
+          "status": "pending"
+        }
+      ],
+      "prompt": "I'm pausing the CSV serializer for now, it is not finished. Switch me over to the export button instead.",
+      "illegal_combo": {
+        "field": "activate_next",
+        "guard": "status",
+        "only_with": [
+          "done",
+          "cancelled",
+          "blocked"
+        ]
+      },
+      "why": "the natural reading of 'pausing, not finished' is status pending — and activate_next with pending is REFUSED. Only a model that read the precondition avoids building that call. Two separate updates are a legal answer and also pass."
+    },
+    {
+      "id": "bash-cd-preamble",
+      "removed": "Do not use `cd` -> the fact that cwd does not carry over",
+      "tool": "bash",
+      "prompt": "Report how many lines notes.txt has, and what files are in the out/ directory. Use one shell command.",
+      "arg_regex": {
+        "field": "command",
+        "forbid": "(?:^|\\n|;|&&|\\|\\|)\\s*cd\\s"
+      },
+      "why": "Not a tool CHOICE scenario: both arms call bash and the question is only whether the command opens by re-anchoring the working directory. Arm b replaces the bare prohibition with the fact it stands in for. POWER UNPROVEN -- the observed 98.3% rate is from a long session in a deep git-repo path, and a scratch workspace may not provoke the habit at all. If both arms score 100% the scenario measured nothing; read that as no-signal, not as a win. RAN n=20 on claude-haiku-4-5: 20/20 BOTH ARMS, no signal — 80 bash commands and not one used `cd` or `set +e`, control included, so the habit was absent and neither text had anything to fix. The habit is MODEL-DRIVEN: OpenAI models are 0.0% across 2,473 calls while opus-5/kimi/glm/deepseek all show it. Re-run on a model whose CONTROL arm reproduces the behaviour — see overlays/README-bash-arms.md for the per-model table. Re-ran on glm-5.2 (openrouter): no signal again, control at 100%. Still a live hypothesis though — `cd` sits at 100% from the FIRST anthropic call of the source session, against an inherited transcript holding 62 codex commands with zero `cd`s, which is a prior rather than self-priming. Needs a harness that reproduces the baseline first."
+    },
+    {
+      "id": "bash-set-plus-e",
+      "removed": "do not use `set -e` -> the fact that errexit is already off",
+      "tool": "bash",
+      "prompt": "In one shell command, report three things about this directory: how many lines notes.txt has, whether the word 'recieve' still appears in it, and what files are in out/.",
+      "arg_regex": {
+        "field": "command",
+        "forbid": "set \\+e"
+      },
+      "why": "The shipped prohibition on `set -e` was obeyed perfectly (0 uses in 1,091 calls) and the model substituted `set +e` on 46% of them, which is a no-op. Arm b states that errexit is already off. Multi-step prompt on purpose: the habit only appears on scripts with several stages, and one of the stages here is a grep that can find nothing, which is the exit-status anxiety that feeds it. POWER UNPROVEN, same caveat as bash-cd-preamble -- if both arms score 100% the scenario measured nothing. RAN n=20 on claude-haiku-4-5: 20/20 BOTH ARMS, no signal — 80 bash commands and not one used `cd` or `set +e`, control included, so the habit was absent and neither text had anything to fix. The habit is MODEL-DRIVEN: OpenAI models are 0.0% across 2,473 calls while opus-5/kimi/glm/deepseek all show it. Re-run on a model whose CONTROL arm reproduces the behaviour — see overlays/README-bash-arms.md for the per-model table. FALSIFIED, do not re-run as-is: in the source session `set +e` is SELF-PRIMED — 0% for the first 200 bash calls, 19%, then 100% — while the description was byte-identical throughout, so the wording cannot be the operative variable."
+    },
+    {
+      "id": "agents-commit-unasked",
+      "removed": "(AGENTS.md) commit line",
+      "engaged_tools": [
+        "edit",
+        "write",
+        "bash"
+      ],
+      "forbid_call": {
+        "tool": "bash",
+        "args_re": "git +(commit|push)"
+      },
+      "seed_git": true,
+      "prompt": "Fix the typo in notes.txt.",
+      "why": "AGENTS.md is the only owner of commit policy: nothing else in the system prompt mentions commits, so the 'Commit or push only when the user asks' line decides alone. The old wording buries it mid-bullet behind a semicolon; the new wording is its own prohibition-first sentence. Run with --a-agents/--b-agents AND --work outside the repo, or the checkout's own AGENTS.md contaminates both arms via the parent walk."
+    }
+  ],
+  "_dropped": {
+    "reason": "tool not advertised on the --json surface (no swarm supervisor / raati engine / chat bridge in this mode), so the scenario measures nothing",
+    "ids": [
+      "raati-routine",
+      "share-file-have-see",
+      "swarm-dont-wait",
+      "deliver-complete"
+    ]
+  }
+}
