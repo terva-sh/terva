@@ -15,12 +15,26 @@ import (
 	"os"
 	"path/filepath"
 
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/privfs"
+	"terva.sh/terva/packages/secretstore"
 )
 
-// Config is the on-disk state for the telegram bridge.
+// Scope is where the bot token lives in the secret store. The rest of this
+// file's state — bot id, username, pairing claim, poll offset — stays in
+// bot.json, plaintext and inspectable; only the credential moves.
+const Scope = "core:bot.telegram"
+
+// tokenKey is the token's key within Scope.
+const tokenKey = "token"
+
+// Config is the in-memory state for the telegram bridge. BotToken is NOT
+// persisted in bot.json: it round-trips through the secret store, so a home
+// with at-rest encryption on has no bot token readable on disk. Every caller
+// keeps using the field exactly as before.
 type Config struct {
-	BotToken      string `json:"bot_token,omitempty"`
+	BotToken      string `json:"-"`
+	LegacyToken   string `json:"bot_token,omitempty"` // pre-store homes only; see LoadConfig
 	BotUsername   string `json:"bot_username,omitempty"`
 	BotID         int64  `json:"bot_id,omitempty"`
 	AllowedUserID int64  `json:"allowed_user_id,omitempty"`
@@ -32,27 +46,51 @@ func ConfigPath(tervaHome string) string {
 	return filepath.Join(tervaHome, "bot.json")
 }
 
-// LoadConfig reads bot.json, returning a zero Config if it doesn't exist.
+// LoadConfig reads bot.json and fills BotToken from the secret store.
+//
+// A token still sitting in bot.json (a home that predates the store) is
+// honoured and wins nothing: it is used as-is and moves into the store on the
+// next SaveConfig, so an existing install keeps working and converts itself
+// without a migration step anyone has to run.
 func LoadConfig(tervaHome string) (Config, error) {
 	var c Config
 	b, err := os.ReadFile(ConfigPath(tervaHome))
-	if errors.Is(err, os.ErrNotExist) {
-		return c, nil
-	}
-	if err != nil {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return c, err
 	}
-	if err := json.Unmarshal(b, &c); err != nil {
-		return c, err
+	if err == nil {
+		if err := json.Unmarshal(b, &c); err != nil {
+			return c, err
+		}
+	}
+	v, storeErr := config.SecretStoreIn(tervaHome).Get(Scope, tokenKey)
+	switch {
+	case storeErr == nil:
+		c.BotToken = v.Value
+	case errors.Is(storeErr, secretstore.ErrNotFound):
+		c.BotToken = c.LegacyToken // may be "" — that is simply "not configured"
+	default:
+		// A store that exists but cannot be opened must not read as "no bot
+		// configured", which would send the user through setup again and
+		// overwrite a working token.
+		return c, storeErr
 	}
 	return c, nil
 }
 
-// SaveConfig writes bot.json atomically.
+// SaveConfig writes the token to the secret store and bot.json atomically.
+//
+// The store write comes FIRST: if it fails the token is still in bot.json from
+// the previous save, which is recoverable. The reverse order would clear the
+// legacy copy and then fail to record the new one, losing the credential.
 func SaveConfig(tervaHome string, c Config) error {
 	if err := privfs.MkdirAll(tervaHome); err != nil {
 		return err
 	}
+	if err := config.SecretStoreIn(tervaHome).Set(Scope, tokenKey, c.BotToken); err != nil {
+		return err
+	}
+	c.LegacyToken = "" // it lives in the store now
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
