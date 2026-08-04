@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -33,16 +34,16 @@ type globArgs struct {
 }
 
 const globSchema = `{"type":"object","properties":{` +
-	`"pattern":{"type":"string","description":"Glob pattern matched against each file's path relative to the search root. ** matches any number of directories: use \"**/*.go\" to recurse, \"*.go\" for top-level only."},` +
-	`"path":{"type":"string","description":"Directory to search under, relative to cwd. Defaults to cwd."},` +
-	`"include_ignored":{"type":"boolean","description":"Include files normally pruned by .gitignore (.git is always skipped)."},` +
-	`"max_results":{"type":"integer","description":"Max paths to return (default 1000)."},` +
-	`"offset":{"type":"integer","description":"Skip this many matches before returning; use the next_offset from a truncated result to page."}` +
+	`"pattern":{"type":"string","description":"A glob pattern. The tool compares it with the path of each file, relative to the search root. Two stars match any number of directories. Use \"**/*.go\" to search all the subdirectories. Use \"*.go\" to search the top level only."},` +
+	`"path":{"type":"string","description":"The directory to search, relative to the working directory. The default is the working directory."},` +
+	`"include_ignored":{"type":"boolean","description":"Also search the files that .gitignore usually removes. The tool always ignores the .git directory."},` +
+	`"max_results":{"type":"integer","description":"The maximum number of paths to return. The default is 1000."},` +
+	`"offset":{"type":"integer","description":"The number of matches to skip before the tool returns results. To get the next page, use the next_offset value from a result that the tool cut short."}` +
 	`},"required":["pattern"]}`
 
 func (t *GlobTool) Name() string { return "glob" }
 func (t *GlobTool) Description() string {
-	return "Find files whose path matches a glob pattern (e.g. \"**/*.go\", \"src/**/test_*.py\"). Returns paths relative to cwd in lexical order, honoring .gitignore. Prefer this over `bash find`/`ls`."
+	return i18n.D("tool.glob.description", "Find the files with a path that agrees with a glob pattern. Examples of a pattern are \"**/*.go\" and \"src/**/test_*.py\". The tool returns the paths relative to the working directory, in lexical order. The tool obeys .gitignore. Use this tool instead of the `find` or `ls` commands in `bash`.")
 }
 func (t *GlobTool) Schema() json.RawMessage { return json.RawMessage(globSchema) }
 

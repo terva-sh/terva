@@ -149,7 +149,7 @@ func TestResolve_SwarmChildDeliverableAddendum(t *testing.T) {
 	if !hasSeg(child) {
 		t.Fatal("swarm child must carry the deliverable-contract segment")
 	}
-	if !strings.Contains(child.SystemPrompt, "ONLY your final assistant message") {
+	if !strings.Contains(child.SystemPrompt, "only your final assistant message") {
 		t.Error("child system prompt missing the deliverable contract text")
 	}
 	if hasSeg(resolve(mode.Interactive)) {

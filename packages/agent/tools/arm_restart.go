@@ -9,6 +9,7 @@ import (
 	"terva.sh/terva/packages/agent/restartmarker"
 	"terva.sh/terva/packages/buildinfo"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -46,11 +47,11 @@ const (
 func (t *ArmRestartTool) Name() string { return "terva_arm_restart" }
 
 func (t *ArmRestartTool) Description() string {
-	return "Declare that an intentional supervisor restart of the terva daemon is imminent for THIS session, immediately before you run the supervisor command yourself (e.g. `systemctl --user restart` to apply a changed unit — terva_restart only re-execs the same binary and cannot apply a unit change). Prompts the operator for approval. Within the arm window the SIGTERM that replaces the process is treated as planned: the interrupted command is reconciled as expected (not a failure), clients see a restart notice instead of a crash, and this session resumes. Arm, then run the restart command within the window; do not use for a plain binary restart (use terva_restart)."
+	return i18n.D("tool.terva_arm_restart.description", "Declare that a supervisor restart of the terva daemon will occur for this session. Call this tool immediately before you run the supervisor command yourself. An example of such a command is `systemctl --user restart`, which applies a changed unit. The terva_restart tool starts the same binary again and cannot apply a change to a unit.\n\nThe tool asks the operator for approval. In the armed period, the tool treats the SIGTERM signal that stops the process as planned. The interrupted command is then expected and is not a failure. Clients see a notice about the restart and do not see a failure, and this session continues.\n\nFirst arm the restart, then run the restart command in the armed period. For a restart of the binary only, use terva_restart instead.")
 }
 
 func (t *ArmRestartTool) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"reason":{"type":"string","description":"short note on why the restart is planned (shown to the operator and in the recovered notice)"},"window_seconds":{"type":"integer","minimum":1,"maximum":120,"description":"how long the planned window stays open before the restart must fire (default 15, max 120)"}},"additionalProperties":false}`)
+	return json.RawMessage(`{"type":"object","properties":{"reason":{"type":"string","description":"A short note that tells why you plan the restart. The tool shows this note to the operator and in the notice after the restart."},"window_seconds":{"type":"integer","minimum":1,"maximum":120,"description":"The number of seconds that the armed period stays open. The restart must start in this period. The default is 15 seconds, and the maximum is 120 seconds."}},"additionalProperties":false}`)
 }
 
 func (t *ArmRestartTool) Execute(_ context.Context, args json.RawMessage, _ func(string)) (core.ToolResult, error) {

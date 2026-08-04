@@ -301,7 +301,7 @@ func loadRaatiEvidence(paths []string) (string, error) {
 		}
 		fmt.Fprintf(&sb, "--- %s ---\n%s\n", p, body)
 		if truncated {
-			sb.WriteString(i18n.P("raati.evidence.truncated", "[evidence truncated at 24KiB — the panel judges what it was shown]"))
+			sb.WriteString(i18n.P("raati.evidence.truncated", "[evidence stops at 24KiB. The panel judges only what appears above]"))
 			sb.WriteString("\n")
 		}
 	}

@@ -260,9 +260,10 @@ func Configure(lang, home string) error {
 
 // englishOverlayPresent reports whether the operator has opted into an
 // English overlay — a $TERVA_HOME/locales/en.json (UI) or any keyed
-// catalog's locales/<catalog>/en.json (prompts, help) — so Configure only
-// leaves the isEN fast path for English when there is actually something
-// to override.
+// catalog's locales/<catalog>/en.json (prompts, help, tools) — so Configure
+// only leaves the isEN fast path for English when there is actually
+// something to override. It reads keyedCatalogs rather than naming them, so
+// a new catalog gets the English overlay without a second edit here.
 func englishOverlayPresent(home string) bool {
 	if _, err := os.Stat(filepath.Join(home, "locales", "en.json")); err == nil {
 		return true

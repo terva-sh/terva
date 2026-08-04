@@ -268,6 +268,7 @@ func TestEveryHeldBackDocGivesAReason(t *testing.T) {
 // entry left behind by a rename, which is the failure these guards exist to catch.
 var excludesNamingNothingTracked = map[string]string{
 	"web-tools-evaluation-report.md": "gitignored by /*-report.md, so it can never be committed and never reaches the overlay; the entry is belt-and-braces against the ignore rule changing",
+	".ste/approved-words.txt":        "the ASD-STE100 approved-word list for terva-ste-lint, gitignored because it is copyright ASD with no published redistribution grant; the entry is the second lock, so a local copy can never ride a cut into the public tree",
 }
 
 // trackedPaths is every path git tracks. Tracked-ness — not presence on disk —
@@ -334,6 +335,12 @@ func TestEveryExcludeStillStripsSomething(t *testing.T) {
 // instead of shipping unexamined. The root is where a maintainer note or a
 // scratch directory lands first, and there are only ~30 of them.
 var rootThatShips = []string{
+	// .ste holds terva-ste-lint's accepted-findings baseline, which SHIPS:
+	// the lint runs in `just lint`, so a public tree without the baseline
+	// fails its own CI on the findings the baseline exists to hold. The one
+	// thing in there that must never ship — the ASD-copyright approved-word
+	// list — is excluded by path, not by keeping the directory private.
+	".ste",
 	".gitattributes", ".gitignore", ".goreleaser.yaml", "CHANGELOG.md", "Dockerfile",
 	"LICENSE", "README.md", "assets", "cmd", "docs", "docs.go", "docs_test.go", "e2e",
 	"examples", "go.mod", "go.sum", "install.ps1", "install.sh", "justfile", "packages",

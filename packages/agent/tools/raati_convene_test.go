@@ -409,7 +409,7 @@ func TestRaatiConveneDescriptionEnumeratesProfiles(t *testing.T) {
 	// The failure-disclosure rule holds with or without profiles; the
 	// omit-level coaching only makes sense when there is a profile to
 	// resolve the level.
-	if !strings.Contains(bare.Description(), "NO panel ran") {
+	if !strings.Contains(bare.Description(), "no panel ran") {
 		t.Errorf("no-profile description lost the failure-disclosure rule:\n%s", bare.Description())
 	}
 	if strings.Contains(bare.Description(), "omit 'level'") {

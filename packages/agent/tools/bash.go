@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -49,7 +50,18 @@ type bashArgs struct {
 	Timeout int    `json:"timeout,omitempty"`
 }
 
-const bashSchema = `{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","description":"Maximum run time in seconds before the command is killed. Defaults to 120 if omitted."}},"required":["command"]}`
+const bashSchema = `{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","description":"The maximum run time in seconds. The tool then stops the command. If you omit this, the maximum run time is 120 seconds."}},"required":["command"]}`
+
+// bashDesc is the English default for tool.bash.description. The two %s are
+// the resolved shell name and the directory commands run in, both filled at
+// call time by Description(). It is a const so the i18n extractor can record
+// it: an inline concatenation would not resolve, and an unresolvable default
+// is an entry nobody can translate or override.
+const bashDesc = "Run a shell command with %s. The tool merges stdout and stderr.\n\n" +
+	"Use the dedicated tools instead of the equivalent shell commands. Use read, write, and edit for files, and do not use cat, sed -i, or echo. Use grep and glob to search, and do not use the grep, find, or ls commands. The dedicated tools are safer, easier to review, and cheaper.\n\n" +
+	"Commands run in %s. A relative path applies to that directory. It does not apply to the directory of the file that you read or changed last. For a path outside that directory, give an absolute path or use `git -C`. Do not use `cd`.\n\n" +
+	"Do not force-push and do not run `reset --hard`. Do not amend a commit, bypass hooks, or run `git add -A`. Do these git operations only if the user asks for them. Do not print or send out secrets such as .env files, tokens, or credentials.\n\n" +
+	"For a slow command, set the timeout. The default timeout is 120 seconds, and then the tool stops the command. In a script with many steps, do not use `set -e`. One failed step stops the full script and hides the other results. Examine the exit code of each step instead. The tool puts $TERVA_HOME in the environment."
 
 // effectiveCWD is the directory commands actually run in: the configured CWD,
 // or the process working directory when the host left it empty. Both
@@ -80,7 +92,12 @@ func (t *BashTool) Description() string {
 	// reflexive ${PIPESTATUS[0]} and <(...) are syntax errors rather than
 	// features. Saying so is the difference between the model writing POSIX
 	// and the model discovering the dialect one dead turn at a time.
-	return "Run a shell command under " + shellName() + " (stdout+stderr merged). Prefer the dedicated tools over shell equivalents: read/write/edit for files (not cat, sed -i, echo >file), grep/glob for search (not grep, find, ls) — they are safer, reviewable, and cheaper. Commands run in " + where + "; a relative path resolves against THAT directory, not the file you last read or edited — pass absolute paths (or `git -C`) for anything outside it, and avoid `cd`. Git safety: never force-push, `reset --hard`, amend, skip hooks, or `git add -A` unless the user explicitly asks. Do not print or export secrets (.env, tokens, credentials). Slow commands should set an explicit timeout; the default kill is 120s. In exploratory multi-step scripts avoid `set -e` (one failing probe aborts the whole script and hides the rest); check exit codes explicitly instead. $TERVA_HOME is exported into the environment."
+	// One %s template rather than English glue around two values: the
+	// extractor refuses a concatenated default (it would vanish from the
+	// reference and become unoverridable), and a translator or an operator
+	// tuning this text needs the whole paragraph in one piece to move the
+	// shell name and the directory where their language puts them.
+	return i18n.D("tool.bash.description", bashDesc, shellName(), where)
 }
 func (t *BashTool) Schema() json.RawMessage { return json.RawMessage(bashSchema) }
 

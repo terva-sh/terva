@@ -514,7 +514,7 @@ func TestBashDescriptionNamesTheRealCWD(t *testing.T) {
 		t.Fatalf("description does not name the cwd: %q", desc)
 	}
 	// An unset CWD must still describe the tool, not print an empty path.
-	if generic := (&BashTool{}).Description(); strings.Contains(generic, "Commands run in ;") {
+	if generic := (&BashTool{}).Description(); strings.Contains(generic, "Commands run in .") {
 		t.Fatalf("empty CWD produced a blank directory in the description: %q", generic)
 	}
 }

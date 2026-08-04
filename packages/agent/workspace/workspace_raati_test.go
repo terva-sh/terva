@@ -161,7 +161,7 @@ func TestAssembleRaatiEvidence(t *testing.T) {
 
 	// Oversized pasted evidence is cut WITH disclosure.
 	got = w.assembleRaatiEvidence("q", raatiEvidenceSpec{user: strings.Repeat("a", raatiUserEvidenceCap+10)})
-	if !strings.Contains(got, "truncated at 32KiB") {
+	if !strings.Contains(got, "stops at 32KiB") {
 		t.Errorf("oversized evidence not disclosed: %d bytes", len(got))
 	}
 
@@ -188,7 +188,7 @@ func TestAssembleRaatiEvidence(t *testing.T) {
 		conversation: "summary",
 		messages:     []provider.Message{msgText(provider.RoleUser, "we discussed Z")},
 	})
-	if !strings.Contains(got, "could not be produced") {
+	if !strings.Contains(got, "the summary failed") {
 		t.Errorf("summary failure not disclosed: %q", got)
 	}
 }

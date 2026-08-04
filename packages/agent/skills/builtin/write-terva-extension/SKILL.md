@@ -1,6 +1,6 @@
 ---
 name: write-terva-extension
-description: Help the user create a new terva extension — an executable plugin (any language) that adds a slash command, an LLM tool, or a guard hook. Not for authoring a SKILL.md skill (use write-terva-skill for that).
+description: Help the user create a new terva extension. An extension is an executable plugin in any language. It adds a slash command, a tool for the model, or a guard hook. Do not use this skill to author a `SKILL.md` skill. For that, use write-terva-skill.
 ---
 
 # Writing a terva extension

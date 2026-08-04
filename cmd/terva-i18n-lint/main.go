@@ -199,20 +199,25 @@ func mustMarshal(m map[string]json.RawMessage) []byte {
 // catalogs. entries (UI): a singular source maps to itself; a TC
 // context+source maps to the source; a TN pair maps to an object of its
 // English one/other forms. keyed[catalog] (i18n.P → "prompts", i18n.H →
-// "help"): each dotted key maps to its English default template.
+// "help", i18n.D → "tools"): each dotted key maps to its English default
+// template.
 // extract returns ui (the English-as-key UI references, keyed by catalog name —
 // "" is the root/core catalog, other keys are the merged UI subcatalogs a
-// //i18n:catalog directive routed to) and keyed (the dotted-key prompts/help
-// catalogs). dirCat maps a directory to its UI catalog (from catalogDirs).
+// //i18n:catalog directive routed to) and keyed (the dotted-key catalogs).
+// dirCat maps a directory to its UI catalog (from catalogDirs).
 func extract(roots []string, consts map[string]string, dirCat map[string]string) (ui map[string]map[string]json.RawMessage, keyed map[string]map[string]json.RawMessage, err error) {
 	fset := token.NewFileSet()
 	ui = map[string]map[string]json.RawMessage{"": {}}
 	for _, cat := range i18n.MergedUICatalogs() {
 		ui[cat] = map[string]json.RawMessage{}
 	}
-	keyed = map[string]map[string]json.RawMessage{
-		"prompts": {},
-		"help":    {},
+	// Derived from i18n rather than listed here, so adding a keyed catalog
+	// stays the one-line change keyed.go advertises. A hardcoded list would
+	// silently drop a new catalog's keys from the reference, and a catalog
+	// with no reference is a catalog nothing can check.
+	keyed = map[string]map[string]json.RawMessage{}
+	for _, cat := range i18n.KeyedCatalogs() {
+		keyed[cat] = map[string]json.RawMessage{}
 	}
 	walk := func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -262,14 +267,18 @@ func extract(roots []string, consts map[string]string, dirCat map[string]string)
 						putPlural(entries, one, other)
 					}
 				}
-			case "P", "H":
+			case "P", "H", "D":
 				// P → the model-facing prompt catalog, H → the operator-
-				// facing help catalog. Both are dotted-key: arg0 the key,
-				// arg1 the English default (a string literal or a named
-				// const — large blocks are kept as documented consts).
+				// facing help catalog, D → the tool-description catalog.
+				// All are dotted-key: arg0 the key, arg1 the English
+				// default (a string literal or a named const — large
+				// blocks are kept as documented consts).
 				cat := "prompts"
-				if fn == "H" {
+				switch fn {
+				case "H":
 					cat = "help"
+				case "D":
+					cat = "tools"
 				}
 				if key, ok := litArg(call, 0); ok {
 					if english, ok := stringOrConstArg(call, 1, consts); ok {
@@ -298,12 +307,15 @@ func extract(roots []string, consts map[string]string, dirCat map[string]string)
 }
 
 // stringConsts collects package-level `const/var NAME = "literal"` string
-// declarations across the tree so an i18n.P call whose english default is a
-// named const (large prompts are kept as documented consts, not inlined)
-// still contributes that const's value to the prompt reference. Only a
-// single string BasicLit resolves — concatenations and fmt-built values are
-// skipped. On a name collision the last decl scanned wins; prompt-default
-// consts are uniquely named, so this is not a concern in practice.
+// declarations across the tree so an i18n.P/H/D call whose english default is
+// a named const (large prompts and tool descriptions are kept as documented
+// consts, not inlined) still contributes that const's value to the reference.
+// staticString does the resolving, so a chain of string literals joined with
+// `+` folds too — which is how every long block in this tree is actually
+// written. A value with a function call or a non-const operand in it does not
+// resolve, because its value is not knowable here. On a name collision the
+// last decl scanned wins; these consts are uniquely named, so this is not a
+// concern in practice.
 func stringConsts(roots []string) (map[string]string, error) {
 	fset := token.NewFileSet()
 	out := map[string]string{}
@@ -425,7 +437,7 @@ func i18nFunc(call *ast.CallExpr) string {
 		return ""
 	}
 	switch sel.Sel.Name {
-	case "T", "TC", "TN", "M", "Errorf", "P", "H":
+	case "T", "TC", "TN", "M", "Errorf", "P", "H", "D":
 		return sel.Sel.Name
 	}
 	return ""

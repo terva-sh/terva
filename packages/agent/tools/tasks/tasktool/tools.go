@@ -6,6 +6,7 @@ import (
 
 	"terva.sh/terva/packages/agent/tools/tasks/handlers"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -26,8 +27,10 @@ func result(text string, isErr bool) core.ToolResult {
 
 type listTool struct{ c *Controller }
 
-func (t listTool) Name() string            { return "task_list" }
-func (t listTool) Description() string     { return descList }
+func (t listTool) Name() string { return "task_list" }
+func (t listTool) Description() string {
+	return i18n.D("tool.task_list.description", descList)
+}
 func (t listTool) Schema() json.RawMessage { return schemaList() }
 func (t listTool) Execute(_ context.Context, raw json.RawMessage, _ func(string)) (core.ToolResult, error) {
 	text, isErr := handlers.List(t.c.store, raw)
@@ -36,8 +39,10 @@ func (t listTool) Execute(_ context.Context, raw json.RawMessage, _ func(string)
 
 type createTool struct{ c *Controller }
 
-func (t createTool) Name() string            { return "task_create" }
-func (t createTool) Description() string     { return descCreate }
+func (t createTool) Name() string { return "task_create" }
+func (t createTool) Description() string {
+	return i18n.D("tool.task_create.description", descCreate)
+}
 func (t createTool) Schema() json.RawMessage { return schemaCreate() }
 func (t createTool) Execute(_ context.Context, raw json.RawMessage, _ func(string)) (core.ToolResult, error) {
 	text, isErr := handlers.Create(t.c.store, raw)
@@ -46,8 +51,10 @@ func (t createTool) Execute(_ context.Context, raw json.RawMessage, _ func(strin
 
 type updateTool struct{ c *Controller }
 
-func (t updateTool) Name() string            { return "task_update" }
-func (t updateTool) Description() string     { return descUpdate }
+func (t updateTool) Name() string { return "task_update" }
+func (t updateTool) Description() string {
+	return i18n.D("tool.task_update.description", descUpdate)
+}
 func (t updateTool) Schema() json.RawMessage { return schemaUpdate() }
 func (t updateTool) Execute(_ context.Context, raw json.RawMessage, _ func(string)) (core.ToolResult, error) {
 	text, isErr := handlers.Update(t.c.store, raw)
@@ -56,8 +63,10 @@ func (t updateTool) Execute(_ context.Context, raw json.RawMessage, _ func(strin
 
 type archiveTool struct{ c *Controller }
 
-func (t archiveTool) Name() string            { return "task_archive" }
-func (t archiveTool) Description() string     { return descArchive }
+func (t archiveTool) Name() string { return "task_archive" }
+func (t archiveTool) Description() string {
+	return i18n.D("tool.task_archive.description", descArchive)
+}
 func (t archiveTool) Schema() json.RawMessage { return schemaArchive() }
 func (t archiveTool) Execute(_ context.Context, raw json.RawMessage, _ func(string)) (core.ToolResult, error) {
 	text, isErr := handlers.Archive(t.c.store, raw)
@@ -100,41 +109,50 @@ const contextPolicy = "You have a task list (task_create / task_update / task_li
 	"archive only finished tasks and keep your open ones. Don't archive open work you mean " +
 	"to keep unless you set keep_open."
 
-const descList = "Inspect task lists (never mutates). CALL WITH NO ARGUMENTS to get the " +
-	"current list (id, status, title) — that is the usual case; use it to reorient or to " +
-	"decide what remains before finishing. Only when you want to browse archives: pass " +
-	"`archived: true` for the index of archived lists, or `generation: N` to read archived " +
-	"list number N (generations are numbered from 1). Do NOT pass `generation` when you " +
-	"just want the current list — omit it. Pass `format: \"markdown\"` to render a " +
-	"checkbox worklog instead of the compact text — most useful with `archived: true` " +
-	"(the whole archived worklog as one Markdown document) or `generation: N`."
+const descList = "Examine the task lists. This tool changes nothing.\n\n" +
+	"Usually, call this tool with no arguments. It then gives the current list with the id, " +
+	"the status, and the title of each task. Use this to find your position in the work, or " +
+	"to see what remains before you finish.\n\n" +
+	"Give `archived: true` to get the index of the archived lists. Give `generation: N` to " +
+	"read archived list number N. The first archived list is number 1. Do not give " +
+	"`generation` when you want the current list.\n\n" +
+	"Give `format: \"markdown\"` to get a worklog with checkboxes instead of the compact " +
+	"text. This format is most useful with `archived: true`, which gives the full archived " +
+	"worklog as one Markdown document, or with `generation: N`."
 
-const descArchive = "Archive the current task list to start a clean board for the " +
-	"next phase of work. DEFAULT (no arguments): archives EVERYTHING — including open " +
-	"(pending/active/blocked) tasks — and leaves the current list EMPTY. Archived lists " +
-	"stay readable (task_list archived / generation:N) but cannot yet be resumed, so any " +
-	"unfinished task you still intend to do must be recreated afterward. Set `keep_open: " +
-	"true` to archive only finished (done/cancelled) tasks and KEEP your open tasks in the " +
-	"current list — use that to clear completed clutter mid-phase. Optional `label` names " +
-	"the archived list. Archive at the END of a phase or BEFORE starting a new one; if open " +
-	"work should survive, pass keep_open."
+const descArchive = "Archive the current task list, to start an empty task list for the " +
+	"next phase of work.\n\n" +
+	"With no arguments, the tool archives all the tasks. This includes the open tasks, which " +
+	"have the status pending, active, or blocked. The current list then becomes empty. You " +
+	"can still read an archived list with task_list and `archived` or `generation: N`. But " +
+	"you cannot continue an archived task. Therefore you must make each unfinished task " +
+	"again after the archive operation.\n\n" +
+	"Set `keep_open: true` to archive the finished tasks only, which have the status done or " +
+	"cancelled. The tool then keeps your open tasks in the current list. Use this to remove " +
+	"the finished tasks in the middle of a phase. The optional field `label` gives a name to " +
+	"the archived list.\n\n" +
+	"Archive at the end of a phase, or before you start a new phase. Give keep_open when the " +
+	"open work must continue."
 
-const descCreate = "Create tasks for multi-step work. Decompose the job and pass each " +
-	"step as a separate array item in one call — one task per step, not a single " +
-	"'develop' / 'implement everything' task. Each needs an imperative `title` naming a " +
-	"specific, checkable outcome; optional `active_form` (present-continuous), `status` " +
-	"(default 'pending'), and `note`. Ids are system-assigned — never supply your own. " +
-	"Don't create tasks for trivial one-step requests."
+const descCreate = "Make tasks for work that has more than one step. Divide the work, and " +
+	"give each step as a separate item of the array in one call. Make one task for each " +
+	"step. Do not make one large task such as 'develop' or 'implement everything'.\n\n" +
+	"Each task needs a `title` in the imperative form, which names a specific result that " +
+	"you can check. The optional fields are `active_form`, `status`, and `note`. The " +
+	"default status is 'pending'. The system gives an id to each task, and you must not " +
+	"supply your own id. Do not make tasks for a small request of one step."
 
-const descUpdate = "Update a task by `id` — mainly status transitions. `id` alone " +
-	"changes nothing and is rejected: always send the field you want to change with it. " +
-	"Mark a task " +
-	"'active' before working it; only one task is active at a time. Provide " +
-	"`evidence` when setting 'done' or 'blocked', and use 'blocked' (not 'done') if " +
-	"the work is failing or incomplete. May also patch `title`, `active_form`, `note`. " +
-	"When you step away from a task (done, cancelled, or blocked) and know which task " +
-	"is next, pass `activate_next` with its id — that closes/parks this one and focuses " +
-	"the next in a single step (valid only with status 'done', 'cancelled', or 'blocked')."
+const descUpdate = "Change a task by `id`. Usually you change the status. An `id` with no " +
+	"other field changes nothing, and the tool refuses the call. Therefore always send the " +
+	"field that you want to change.\n\n" +
+	"Set the status to 'active' before you start a task. One task only can be active. Give " +
+	"`evidence` when you set the status to 'done' or 'blocked'. Use 'blocked' and not " +
+	"'done' when the work fails or is not complete. You can also change `title`, " +
+	"`active_form`, and `note`.\n\n" +
+	"When you stop work on a task and you know the next task, give `activate_next` with the " +
+	"id of that task. The tool then closes or parks this task and activates the next task " +
+	"in one step. This field is valid only with the status 'done', 'cancelled', or " +
+	"'blocked'."
 
 var statusEnum = []string{"pending", "active", "blocked", "done", "cancelled"}
 
@@ -147,16 +165,16 @@ func schemaList() json.RawMessage {
 		"properties": map[string]any{
 			"archived": map[string]any{
 				"type":        "boolean",
-				"description": "List the archived generations instead of the current list.",
+				"description": "List the archived generations, and do not list the current list.",
 			},
 			"generation": map[string]any{
 				"type":        "integer",
-				"description": "Read one archived list by its number (numbered from 1). Omit to get the current list.",
+				"description": "Read one archived list by its number. The first list is number 1. Omit this field to get the current list.",
 			},
 			"format": map[string]any{
 				"type":        "string",
 				"enum":        []string{"text", "markdown"},
-				"description": "Output format. \"text\" (default) is the compact inline view. \"markdown\" renders a checkbox worklog — pair with archived:true for the whole archived worklog, or generation:N for one slice.",
+				"description": "The output format. The format \"text\" is the default, and it gives a compact view. The format \"markdown\" gives a worklog with checkboxes. Give \"markdown\" with archived:true for the full archived worklog, or with generation:N for one part of it.",
 			},
 		},
 	})
@@ -209,7 +227,7 @@ func schemaUpdate() json.RawMessage {
 			"note":        map[string]any{"type": "string"},
 			"activate_next": map[string]any{
 				"type":        "string",
-				"description": "When you step away from this task (status \"done\", \"cancelled\", or \"blocked\"), the id of the next task to focus, activated in the same step. Closes/parks this task and activates that one. Omit if there is no obvious next task.",
+				"description": "The id of the next task to work on. Give this field when you stop work on this task, which is a status of \"done\", \"cancelled\", or \"blocked\". The tool closes or parks this task and activates the next task in the same step. Omit this field when there is no obvious next task.",
 			},
 		},
 		"required": []string{"id"},

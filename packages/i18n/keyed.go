@@ -1,7 +1,7 @@
 package i18n
 
 // Keyed catalogs are the OTHER translatable surface: large, stable text
-// keyed by a stable dotted id rather than English-as-key. There are two,
+// keyed by a stable dotted id rather than English-as-key. There are three,
 // split by audience into separate file sets under locales/<catalog>/ so
 // different hands never share a file:
 //
@@ -9,6 +9,23 @@ package i18n
 //             request (the /study task, the auto-swarm summary, the base
 //             system-prompt segments, compaction instructions).
 //   help    — operator-facing (H): the large `terva <cmd> --help` screens.
+//   tools   — model-facing (D): each tool's description, which is the text
+//             the model reads to decide whether to call it.
+//
+// tools is kept apart from prompts, though both are model-facing, because
+// they are edited for different reasons. A prompt changes what terva SAYS;
+// a tool description changes what the model DOES, and the effect shows up
+// in tool-call behaviour. One file would mean an operator tuning a
+// description reads past the compaction instructions to find it, and a
+// diff to either would look like a diff to the other.
+//
+// The overlay is the point of this one. A tool description is the highest-
+// leverage model-facing text in the system — a recorded session had the
+// model pin raati to level 1 for its whole run because the text never
+// offered the alternative — and until now it could only be changed by
+// rebuilding the binary. $TERVA_HOME/locales/tools/en.json now overrides
+// any description in place, which also makes an A/B of two wordings a file
+// swap instead of two builds.
 //
 // Both differ from UI strings (T) the same way: UI text uses English-as-
 // key — low-churn, self-describing for translators — but these are large
@@ -30,7 +47,7 @@ import (
 // (embedded locales/<name>/<lang>.json + $TERVA_HOME overlay). Adding a
 // catalog here + a wrapper like P/H is all it takes to introduce a new
 // keyed surface.
-var keyedCatalogs = []string{"prompts", "help"}
+var keyedCatalogs = []string{"prompts", "help", "tools"}
 
 // KeyedCatalogs returns the named keyed catalogs, for the command/lint
 // layers that iterate them (init, coverage, -check).
@@ -46,6 +63,19 @@ func P(key, english string, args ...any) string {
 // block keyed by a stable dotted id. See keyedText.
 func H(key, english string, args ...any) string {
 	return keyedText("help", key, english, args...)
+}
+
+// D returns the active-language rendering of a tool description keyed by a
+// stable dotted id. See keyedText.
+//
+// Call it from the tool's Description() method, never from a package-level
+// var: Description() is invoked per request by Registry.SpecsVisible, which
+// is after Configure has chosen a language, whereas a var initialiser runs
+// before it and would freeze the English. A large description held as a
+// documented const is fine — pass the const as the english default, which
+// is what the extractor records.
+func D(key, english string, args ...any) string {
+	return keyedText("tools", key, english, args...)
 }
 
 // keyedText resolves key in the named catalog, falling back to the built-in

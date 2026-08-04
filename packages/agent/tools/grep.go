@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -42,19 +43,19 @@ type grepArgs struct {
 }
 
 const grepSchema = `{"type":"object","properties":{` +
-	`"pattern":{"type":"string","description":"RE2 regular expression to search for."},` +
-	`"path":{"type":"string","description":"File or directory to search, relative to cwd. Defaults to cwd."},` +
-	`"glob":{"type":"string","description":"Only search files whose path (relative to the search root) matches this glob, e.g. \"**/*.go\"."},` +
-	`"case_sensitive":{"type":"boolean","description":"Match case-sensitively. Default false (case-insensitive)."},` +
-	`"context":{"type":"integer","description":"Lines of surrounding context to show around each match (like grep -C)."},` +
-	`"max_results":{"type":"integer","description":"Max matches to return (default 200)."},` +
-	`"offset":{"type":"integer","description":"Skip this many matches before returning; use next_offset from a truncated result to page."},` +
-	`"include_ignored":{"type":"boolean","description":"Search files normally pruned by .gitignore (.git is always skipped)."}` +
+	`"pattern":{"type":"string","description":"The RE2 regular expression to find."},` +
+	`"path":{"type":"string","description":"The file or directory to search, relative to the working directory. The default is the working directory."},` +
+	`"glob":{"type":"string","description":"Search only the files with a path that agrees with this glob. The path is relative to the search root. An example is \"**/*.go\"."},` +
+	`"case_sensitive":{"type":"boolean","description":"Make the match sensitive to letter case. The default is false, and the tool ignores letter case."},` +
+	`"context":{"type":"integer","description":"The number of adjacent lines to show before and after each match. This is the same as the -C option of the grep command."},` +
+	`"max_results":{"type":"integer","description":"The maximum number of matches to return. The default is 200."},` +
+	`"offset":{"type":"integer","description":"The number of matches to skip before the tool returns results. To get the next page, use the next_offset value from a result that the tool cut short."},` +
+	`"include_ignored":{"type":"boolean","description":"Also search the files that .gitignore usually removes. The tool always ignores the .git directory."}` +
 	`},"required":["pattern"]}`
 
 func (t *GrepTool) Name() string { return "grep" }
 func (t *GrepTool) Description() string {
-	return "Search file contents for a regular expression (RE2). Returns path:line:text in deterministic order, honoring .gitignore and skipping binary files. Prefer this over `bash grep`/`rg`."
+	return i18n.D("tool.grep.description", "Search the content of files for an RE2 regular expression. The tool returns each match as path:line:text, in a constant order. The tool obeys .gitignore and does not search binary files. Use this tool instead of the `grep` or `rg` commands in `bash`.")
 }
 func (t *GrepTool) Schema() json.RawMessage { return json.RawMessage(grepSchema) }
 

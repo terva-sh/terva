@@ -1,6 +1,6 @@
 ---
 name: write-terva-skill
-description: Author a new terva skill (a reusable SKILL.md instruction set terva loads on demand) and install it where terva discovers it (project .terva/skills/ or global $TERVA_HOME/skills/). Use for create/add/write-a-skill requests, not extensions.
+description: Author a new terva skill, a reusable `SKILL.md` instruction set that terva loads on demand. Install it where terva discovers it, in the project `.terva/skills/` or the global `$TERVA_HOME/skills/`. Use for create/add/write-a-skill requests, not extensions.
 ---
 
 # Writing a terva skill

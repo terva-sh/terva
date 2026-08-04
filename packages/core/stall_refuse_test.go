@@ -77,7 +77,7 @@ func TestStallRefusesTheCallOnceTheNotesHaveFailed(t *testing.T) {
 	if !strings.Contains(reason, "task_update") {
 		t.Errorf("the refusal must name the call:\n%s", reason)
 	}
-	if !strings.Contains(reason, "NOT run") {
+	if !strings.Contains(reason, "did not run") {
 		t.Errorf("a model that thinks the call landed will go looking for its effects:\n%s", reason)
 	}
 	if !strings.Contains(reason, "turn ends") {

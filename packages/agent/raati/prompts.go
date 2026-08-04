@@ -16,7 +16,7 @@ import (
 func round1Prompt(u Unit, panel int, class Class, question, evidence string, inquire bool) string {
 	var sb strings.Builder
 	sb.WriteString(i18n.P("raati.round1.header",
-		"A raati — a deliberation panel — has been convened, and you sit on it as %s, one of %d panelists. This round is blind: the others are deliberating the same question in parallel, you cannot see them, and they cannot see you. Deliberate strictly through your charter's lens, then end your reply with your ballot exactly as your charter specifies — a fenced code block tagged `ballot`.",
+		"A raati (a deliberation panel) is in session, and you sit on it as %s, one of %d panelists. This round is blind: the other panelists deliberate the same question in parallel, and no panelist can see another. Deliberate strictly through the lens of your charter. Then end your reply with your ballot exactly as your charter specifies: a fenced code block tagged `ballot`.",
 		u.Name, panel))
 	sb.WriteString("\n\n")
 	sb.WriteString(i18n.P("raati.round1.class", "Decision class: %s.", string(class)))
@@ -30,7 +30,7 @@ func round1Prompt(u Unit, panel int, class Class, question, evidence string, inq
 		sb.WriteString("\n")
 		sb.WriteString(evidence)
 	} else {
-		sb.WriteString(i18n.P("raati.round1.no_evidence", "No evidence was submitted; judge from the question and your own reasoning, and weigh what is unknowable accordingly."))
+		sb.WriteString(i18n.P("raati.round1.no_evidence", "The requester submitted no evidence. Judge from the question and your own reasoning, and weigh what is unknowable accordingly."))
 	}
 	if inquire {
 		sb.WriteString("\n\n")
@@ -45,7 +45,7 @@ func round1Prompt(u Unit, panel int, class Class, question, evidence string, inq
 // never mention it.
 func inquirySolicitation() string {
 	return i18n.P("raati.inquire",
-		"If specific missing information would change your ballot, you may add an `inquiries` array (up to two short questions) inside your ballot JSON. The clerk answers between rounds, strictly from the record; a question the record cannot answer is recorded as open. Ask only what is decision-relevant — vote on what you have either way.")
+		"Specific missing information can change your ballot. If so, you may add an `inquiries` array inside your ballot JSON, with up to two short questions. The clerk answers between rounds, strictly from the record. A question that the record cannot answer stays on the record as open. Ask only what is decision-relevant, and vote on what you have either way.")
 }
 
 // inquiryDigest renders one round's resolved docket as the pooled Q&A
@@ -54,13 +54,13 @@ func inquirySolicitation() string {
 // should weigh, not a private disappointment).
 func inquiryDigest(docket []Inquiry) string {
 	var sb strings.Builder
-	sb.WriteString(i18n.P("raati.digest.header", "The clerk's answers to the panel's questions:"))
+	sb.WriteString(i18n.P("raati.digest.header", "Answers from the clerk to the questions of the panel:"))
 	sb.WriteString("\n")
 	for _, q := range docket {
 		fmt.Fprintf(&sb, "- %s: %s\n", q.Unit, q.Question)
 		if q.Source == SourceUnanswered || strings.TrimSpace(q.Answer) == "" {
 			sb.WriteString("  → ")
-			sb.WriteString(i18n.P("raati.digest.unanswered", "the record does not answer this — weigh the gap accordingly"))
+			sb.WriteString(i18n.P("raati.digest.unanswered", "the record does not answer this. Weigh the gap accordingly"))
 		} else {
 			sb.WriteString("  → ")
 			sb.WriteString(q.Answer)
@@ -79,7 +79,7 @@ func inquiryDigest(docket []Inquiry) string {
 func round2ColdPrompt(u Unit, panel int, class Class, question, evidence string, own vote.Ballot, revealed []vote.Ballot, digest string, solicit bool) string {
 	var sb strings.Builder
 	sb.WriteString(i18n.P("raati.round2cold.header",
-		"A raati — a deliberation panel — is in session, and you now hold the seat of %s, one of %d panelists, for the FINAL round. The blind round is complete. Re-examine this seat's provisional position through your charter's lens against the other panelists' arguments below — rebut the strongest one, or be genuinely persuaded by it. Then end your reply with your FINAL ballot as a fenced code block tagged `ballot`. Revise the verdict only if an argument changes your assessment; never to close the gap with the panel. Your confidence is your own calibration — the panel's certainty is not evidence.",
+		"A raati (a deliberation panel) is in session. The blind round is complete. You now hold the seat of %s, one of %d panelists, for the final round.\n\nRe-examine the provisional position of this seat through the lens of your charter. Weigh it against the arguments of the other panelists below. Rebut the strongest argument, or let it truly persuade you. Then end your reply with your final ballot as a fenced code block tagged `ballot`. Revise the verdict only if an argument changes your assessment, never to close the gap with the panel. Your confidence is your own calibration, and the certainty of the panel is not evidence.",
 		u.Name, panel))
 	sb.WriteString("\n\n")
 	sb.WriteString(i18n.P("raati.round1.class", "Decision class: %s.", string(class)))
@@ -94,7 +94,7 @@ func round2ColdPrompt(u Unit, panel int, class Class, question, evidence string,
 		sb.WriteString(evidence)
 		sb.WriteString("\n\n")
 	}
-	sb.WriteString(i18n.P("raati.round2cold.own", "This seat's provisional ballot from the blind round: %s — %s", string(own.Verdict), own.Rationale))
+	sb.WriteString(i18n.P("raati.round2cold.own", "The provisional ballot of this seat from the blind round: %s. Rationale: %s", string(own.Verdict), own.Rationale))
 	sb.WriteString("\n\n")
 	for _, b := range revealed {
 		if b.Absent {
@@ -126,7 +126,7 @@ func round2ColdPrompt(u Unit, panel int, class Class, question, evidence string,
 func round2Prompt(u Unit, revealed []vote.Ballot, digest string, solicit bool) string {
 	var sb strings.Builder
 	sb.WriteString(i18n.P("raati.round2.header",
-		"The blind round is complete. The other panelists' provisional ballots follow. Weigh the strongest argument against your position — rebut it, or be genuinely persuaded by it, through your own charter's lens. Then end your reply with your FINAL ballot as a fenced code block tagged `ballot`. Revise your verdict only if an argument changes your assessment; never to close the gap with the panel. Your confidence is your own calibration — the panel's certainty is not evidence."))
+		"The blind round is complete, and the provisional ballots of the other panelists follow. Weigh the strongest argument against your position through the lens of your own charter. Rebut it, or let it truly persuade you. Then end your reply with your final ballot as a fenced code block tagged `ballot`. Revise your verdict only if an argument changes your assessment, never to close the gap with the panel. Your confidence is your own calibration, and the certainty of the panel is not evidence."))
 	sb.WriteString("\n\n")
 	for _, b := range revealed {
 		if b.Absent {
@@ -155,7 +155,7 @@ func round2Prompt(u Unit, revealed []vote.Ballot, digest string, solicit bool) s
 func round3Prompt(revealed []vote.Ballot, digest string) string {
 	var sb strings.Builder
 	sb.WriteString(i18n.P("raati.round3.header",
-		"Cross-examination changed positions on the panel; this one CONVERGENCE round lets you respond to the final configuration below — it is the last round either way. Hold your position unless an argument genuinely changes your assessment; do not move to close the gap with the panel. End your reply with your FINAL ballot as a fenced code block tagged `ballot`."))
+		"Cross-examination changed positions on the panel. This one convergence round permits you to respond to the configuration below, and it is the last round either way. Hold your position unless an argument truly changes your assessment. Do not move to close the gap with the panel. End your reply with your final ballot as a fenced code block tagged `ballot`."))
 	sb.WriteString("\n\n")
 	for _, b := range revealed {
 		if b.Absent {

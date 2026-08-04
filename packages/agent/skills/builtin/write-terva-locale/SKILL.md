@@ -1,6 +1,6 @@
 ---
 name: write-terva-locale
-description: Translate terva's UI into another language, complete or fix a locale, or wrap new strings for translation. Use when the user wants to localize terva, add/finish a language (fi, pt-BR, …), edit translated text, or contribute a translation upstream.
+description: Translate the terva interface into another language, complete or fix a locale, or wrap new strings for translation. Use when the user asks to localize terva or to add or finish a language (`fi`, `pt-BR`, ...). Also use to edit translated text or to contribute a translation upstream.
 ---
 
 # Translating terva

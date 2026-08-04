@@ -24,10 +24,18 @@ const blockMaxBytes = 24000
 // survives. Saying so stops the model from re-reading memory to check that a
 // write landed.
 func Policy() string {
+	// The curation commands lead and the scope taxonomy follows (the position
+	// rule). This wording also names the archive tier, which the old text
+	// never did — a policy cannot be followed on a tier it does not mention.
+	// Measured against the old text on Haiku (scripts/eval, tier-A prompts
+	// run, 2026-08): behaviourally neutral everywhere, including the archive
+	// sentence (tier choice 2/20 in both arms — the sentence is carried for
+	// completeness, not for a measured effect; wording is not the lever there).
+	//
 	// One literal, not a concatenation: the catalog extractor needs the English
 	// default to be a single literal or it cannot pull the string.
 	return i18n.P("memory.policy",
-		"You have a durable memory shown to you here at session start, in two scopes. PROJECT memory: facts about this repo — conventions, gotchas, architecture decisions, where things live. USER memory: cross-project facts about the person you work with — their preferences, environment, and how they like to work. Curate both with the memory tool (scope defaults to project; pass scope=user for facts about the user). Save non-obvious, durable facts proactively after discovering something a future session would otherwise re-learn; skip the trivial or obvious; keep entries to one or two lines; remove stale ones. The tool returns the updated list so you see your change immediately; this block refreshes at the next session and after a compaction.")
+		"You have a durable memory. terva shows it to you here at session start. Save non-obvious, durable facts proactively when you discover something that a future session would have to learn again. Do not save trivial or obvious facts. Keep each entry to one or two lines. Remove stale entries.\n\nA fact too long for two lines belongs in the archive tier. Pass action=archive for it, and retrieve it later by keyword. There are two scopes. Project memory holds facts about this repository: conventions, gotchas, architecture decisions, where things live. User memory holds cross-project facts about the person you work with: their preferences, environment, and how they like to work.\n\nCurate both scopes with the memory tool. Scope defaults to project. Pass scope=user for a fact about the user. The tool returns the updated list, so you see your change immediately. This block refreshes at the next session and after a compaction.")
 }
 
 // RenderBlock is the single static block injected into the cached system prompt
@@ -48,7 +56,7 @@ func RenderBlock(user, project []string) string {
 	var b strings.Builder
 	b.WriteString(Policy())
 	writeSection(&b, i18n.P("memory.section.user", "User memory (cross-project facts about the person you work with):"), user)
-	writeSection(&b, i18n.P("memory.section.project", "Project memory (durable facts about this repo):"), project)
+	writeSection(&b, i18n.P("memory.section.project", "Project memory (durable facts about this repository):"), project)
 	out := b.String()
 	if len(out) > blockMaxBytes {
 		out = strings.ToValidUTF8(out[:blockMaxBytes], "") + "\n…(truncated)"

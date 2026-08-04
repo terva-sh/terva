@@ -287,7 +287,7 @@ func TestRecapNamesATurnErrorFailure(t *testing.T) {
 	for _, want := range []string{
 		"status: failed",
 		"turn error: openai-codex: Our servers are currently overloaded.",
-		"findings: none — this sub-agent produced no answer",
+		"findings: none. This sub-agent produced no answer",
 	} {
 		if !strings.Contains(recap, want) {
 			t.Errorf("recap missing %q:\n%s", want, recap)

@@ -1,6 +1,6 @@
 ---
 name: write-terva-persona
-description: Author a terva persona — a Markdown identity (YAML frontmatter + a behavioral charter) that shapes who the agent is and how it focuses. Use to create/add/write a persona, a custom agent identity, or a specialist role (reviewer, tester, docs, etc.).
+description: Author a terva persona, a Markdown identity with frontmatter and a behavioral charter. The persona shapes who the agent is and how it focuses. Use to create/add/write a persona, a custom agent identity, or a specialist role like reviewer or tester.
 ---
 
 # Writing a terva persona

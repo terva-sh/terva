@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -50,15 +51,15 @@ type shareFileArgs struct {
 }
 
 const shareFileSchema = `{"type":"object","properties":{` +
-	`"path":{"type":"string","description":"absolute or cwd-relative path to a local file"},` +
-	`"name":{"type":"string","description":"optional filename to show the user instead of the file's own"},` +
-	`"caption":{"type":"string","description":"optional one-line note displayed with the file"}` +
+	`"path":{"type":"string","description":"The path to a local file. Give an absolute path, or a path relative to the working directory."},` +
+	`"name":{"type":"string","description":"An optional file name to show to the user instead of the name of the file."},` +
+	`"caption":{"type":"string","description":"An optional note of one line. The tool shows it with the file."}` +
 	`},"required":["path"]}`
 
 func (t *ShareFileTool) Name() string { return "share_file" }
 
 func (t *ShareFileTool) Description() string {
-	return "Share a local file with the user, who gets it in the conversation as an image to view, audio/video to play, or a file to download. Use when they should HAVE or SEE the file itself — an export, a report, a chart, a clip — rather than a path they would have to open themselves. A copy is taken, so editing the original afterwards does not change what they received."
+	return i18n.D("tool.share_file.description", "Send a local file to the user in the conversation. The user can look at an image, play audio or video, or download a file. Use this tool when the user must have or see the file itself, for example an export, a report, a chart, or a clip. Do not use it when a path that the user must open is sufficient. The tool sends a copy, and a later change to the original file does not change the copy.")
 }
 
 func (t *ShareFileTool) Schema() json.RawMessage { return json.RawMessage(shareFileSchema) }

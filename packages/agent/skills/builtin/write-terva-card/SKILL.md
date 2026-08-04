@@ -1,6 +1,6 @@
 ---
 name: write-terva-card
-description: Author or assemble a SillyTavern Character Card V2 (CCv2) for terva — a portable .json/.png character identity for chat/play, optionally carrying lore. Use to create/add/write a character card, import one, or convert a character concept into CCv2.
+description: Author or assemble a SillyTavern Character Card V2 (CCv2) for terva. A card is a portable .json/.png character identity for chat/play, and it can also carry lore. Use to create/add/write a character card, import one, or convert a character concept into CCv2.
 ---
 
 # Writing a terva character card

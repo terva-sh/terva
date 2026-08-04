@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -34,11 +35,11 @@ type ActivateToolsTool struct{}
 func (t *ActivateToolsTool) Name() string { return "activate_tools" }
 
 func (t *ActivateToolsTool) Description() string {
-	return "Activate an installed tool group so its tools become available to call. Inactive groups and their tools are listed in the [inactive tool groups] context note; pass one group name (e.g. \"mail\" or \"mcp:github\"). Visibility only — activating a group never grants authority, so each revealed tool still requires its normal permission when used. Tool calls already emitted in this same reply can't change, but the activated group is available on your very next step (by default): call its tools directly then, and do not call activate_tools again for that group."
+	return i18n.D("tool.activate_tools.description", "Activate an installed tool group. You can then call the tools in that group. The [inactive tool groups] context note lists the inactive groups and their tools. Give the name of one group, for example \"mail\" or \"mcp:github\".\n\nThis tool controls visibility only. It does not give authority. Each tool that becomes visible still needs its usual permission when you call it.\n\nYou cannot change the tool calls that you sent in this same reply. The group becomes available on your next step. Call the tools of the group directly then. Do not call activate_tools again for that group.")
 }
 
 func (t *ActivateToolsTool) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"group":{"type":"string","description":"the capability group to activate, e.g. \"mail\" or \"mcp:github\" (see the [inactive tool groups] note)"}},"required":["group"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"group":{"type":"string","description":"The capability group to activate, for example \"mail\" or \"mcp:github\". The [inactive tool groups] note lists the groups."}},"required":["group"]}`)
 }
 
 func (t *ActivateToolsTool) Execute(ctx context.Context, raw json.RawMessage, _ func(string)) (core.ToolResult, error) {

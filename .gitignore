@@ -1,3 +1,11 @@
+# The ASD-STE100 approved-word list, brought in by hand for terva-ste-lint's
+# vocabulary rule. The specification is free to download from asd-ste100.org
+# but is copyright ASD with no published redistribution grant, so the word list
+# never enters this repository — and never reaches the public mirror. The lint
+# skips the vocabulary rule when it is absent, which is the normal state.
+# See cmd/terva-ste-lint/dictionary.go.
+.ste/approved-words.txt
+
 .DS_Store
 ._*
 Icon
@@ -112,3 +120,7 @@ npm/
 # here for background tasks and removes them when done. Ignore so an
 # in-progress agent run never dirties the tree (or the build's version stamp).
 .claude/worktrees/
+
+# terva-ste-lint / eval scratch: transcripts and scratch homes from
+# scripts/eval, which are large, per-run, and never worth committing.
+.eval/

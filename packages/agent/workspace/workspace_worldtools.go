@@ -26,8 +26,18 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
+
+// worldNoteDesc is the English default for tool.world_note.description. The
+// single %s is the reserved scene-state entry name, filled at call time. A
+// const because the extractor cannot resolve an inline concatenation, and a
+// default it cannot resolve is one nobody can override.
+const worldNoteDesc = "Record a new piece of world knowledge that the scene establishes. This can be a fact, an event, or something that a character now remembers. The knowledge becomes a World lore entry, and the tool puts it in a later generation when it is relevant.\n\n" +
+	"You can only append. Select a new name, because you cannot change or remove an entry that exists. Give `audience` when only some characters know the fact.\n\n" +
+	"If an entry already holds this fact, and the scene exposes the fact to a new person, do not record the fact again under a new name. Use world_reveal to add that person to the audience of the entry.\n\n" +
+	"There is one exception to the append-only rule. The entry with the name \"%s\" is the pinned scene-state card. It holds the date and the time in the fiction, the location, the facts in the ledger, and the active routines. When you write to that name, the tool replaces the content of the card. Therefore keep the card correct and short each time that the clock, the place, or the ledger of the scene changes."
 
 // worldNoteTool appends one World lore entry, model-flagged.
 type worldNoteTool struct{ s *wsSession }
@@ -45,7 +55,7 @@ func (t *worldNoteTool) Description() string {
 	// The scene-state sentence is the SD4 write path: the proposal's "model-
 	// writable through world_note" is exactly this carve-out, and the
 	// description is the only place the director learns the pin exists.
-	return "Record a NEW piece of world knowledge the scene just established — a fact, an event, something a character now remembers. It becomes a World lore entry injected into future generations when relevant. Append-only: pick a fresh name; you cannot edit or remove existing entries. Scope it with `audience` when only some characters would know it. If an existing entry already covers this fact and the scene just exposed it to someone new, do not re-record it under a fresh name — use world_reveal to add them to that entry's audience instead. One exception to append-only: the entry named \"" + core.SceneStateName + "\" is the pinned scene-state card (in-fiction date and time, location, ledger facts, active routines) — writing that name REPLACES its content, so keep it current and compact whenever the scene's clock, place, or ledger moves."
+	return i18n.D("tool.world_note.description", worldNoteDesc, core.SceneStateName)
 }
 
 func (t *worldNoteTool) Schema() json.RawMessage {
@@ -54,21 +64,21 @@ func (t *worldNoteTool) Schema() json.RawMessage {
   "properties": {
     "name": {
       "type": "string",
-      "description": "A short, fresh title for this entry (e.g. \"The guildmaster's betrayal\"). Must not collide with an existing entry."
+      "description": "A short, new title for this entry, for example \"The guildmaster's betrayal\". The title must be different from the title of each entry that exists."
     },
     "content": {
       "type": "string",
-      "description": "The knowledge itself, one tight paragraph, written as scene truth (not as narration)."
+      "description": "The knowledge, in one short paragraph. Write it as truth in the scene, and not as narration."
     },
     "keys": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Trigger keywords: the entry injects when one appears in recent messages. Omit for always-on knowledge."
+      "description": "The keywords that make the entry appear. The tool puts the entry in the context when one keyword occurs in a recent message. Omit this field for knowledge that is always in the context."
     },
     "audience": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "The characters who know this, by name. Omit for world-shared knowledge everyone on stage sees."
+      "description": "The names of the characters who know this. Omit this field for knowledge that all the characters in the scene know."
     }
   },
   "required": ["name", "content"]
@@ -149,7 +159,7 @@ type worldRevealTool struct{ s *wsSession }
 func (t *worldRevealTool) Name() string { return "world_reveal" }
 
 func (t *worldRevealTool) Description() string {
-	return "A character LEARNS an existing piece of targeted world knowledge — use it the moment the scene exposes a secret to someone new. They join the entry's audience (their future generations can draw on it) and the moment is recorded. Only targeted entries can be revealed; world-shared knowledge is already known to everyone."
+	return i18n.D("tool.world_reveal.description", "A character learns a piece of world knowledge that has a target audience. Use this tool immediately when the scene shows a secret to a new person. The character joins the audience of the entry, and a later generation for that character can then use the knowledge. The tool records the moment. You can reveal an entry with a target audience only, because all the characters already know the knowledge that the world shares.")
 }
 
 func (t *worldRevealTool) Schema() json.RawMessage {
@@ -158,11 +168,11 @@ func (t *worldRevealTool) Schema() json.RawMessage {
   "properties": {
     "entry": {
       "type": "string",
-      "description": "The name of the existing World lore entry being learned."
+      "description": "The name of the World lore entry that the character learns."
     },
     "character": {
       "type": "string",
-      "description": "The character who just learned it, by name."
+      "description": "The name of the character who learns the knowledge."
     }
   },
   "required": ["entry", "character"]

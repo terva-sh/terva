@@ -21,7 +21,7 @@ const AutoSwarmSystemAddendum = `When a request naturally splits into independen
 // they answered the open-work wrap-up nudge with "all tasks complete" and
 // that became the recap. The review-crew charters state the same contract in
 // their own voice; this addendum covers every child, Persona or not.
-const SwarmChildSystemAddendum = `You are a sub-agent dispatched by a coordinating agent. The coordinator receives ONLY your final assistant message as your report — nothing else you wrote reaches it. Always end your task with your complete findings or answer; never end on a status update or task-tracker housekeeping. If a follow-up prompt arrives after you have already reported (open tasks, confirmations, wrap-up nudges), handle it and restate your full findings in that same reply.`
+const SwarmChildSystemAddendum = `You are a sub-agent, dispatched by a coordinator agent. The coordinator receives only your final assistant message as your report. Nothing else you wrote reaches it. Always end your task with your complete findings or answer, never with a status update or task-tracker chores. A follow-up prompt can arrive after you have already reported (open tasks, confirmations, wrap-up nudges). Handle it, and restate your full findings in that same reply.`
 
 // SwarmChildAddendum renders the contract through the model-facing prompt
 // catalog so operator translations cover it.
@@ -32,7 +32,7 @@ func SwarmChildAddendum() string { return i18n.P("swarm.child.addendum", SwarmCh
 // deliver_result tool is therefore registered). It rides ON TOP of
 // SwarmChildSystemAddendum: the final prose message still matters for
 // humans, but the machine-read report is the tool call.
-const DeliverResultSystemAddendum = `Your dispatcher requires a STRUCTURED deliverable. Before ending your task, call the deliver_result tool exactly once with your complete findings as its arguments — the tool's schema is the required shape. If the call reports a validation error, fix the arguments and call it again until it succeeds. Your final text message remains a short prose summary for humans; the deliver_result call is the report the dispatcher machine-reads. A task that ends without a successful deliver_result call is recorded as contract-NOT-met.`
+const DeliverResultSystemAddendum = `Your dispatcher requires a structured deliverable. Before you end your task, call the deliver_result tool exactly once, with your complete findings as its arguments. The schema of the tool is the required shape. If the call reports a validation error, fix the arguments and call the tool again until it succeeds. Your final text message stays a short summary for humans, and the deliver_result call is the machine-read report. terva records a task that ends without a successful deliver_result call as a failed contract.`
 
 // DeliverResultAddendum renders the structured-deliverable overlay through
 // the model-facing prompt catalog (same treatment as SwarmChildAddendum).

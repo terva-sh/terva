@@ -29,7 +29,7 @@ func liveDelegatedLine(sw *swarm.Swarm) string {
 	}
 	if u.CostUSD > 0 {
 		return i18n.P("swarm.inflight.cost",
-			"in flight: %d sub-agent(s) still running, $%.4f spent so far (not yet in this session's delegated total, which counts finished ones)",
+			"in flight: %d sub-agent(s) at work, $%.4f spent so far (finished ones move into the delegated total)",
 			n, u.CostUSD)
 	}
 	// A provider that reports tokens without pricing them — a subscription, or a
@@ -40,7 +40,7 @@ func liveDelegatedLine(sw *swarm.Swarm) string {
 		return ""
 	}
 	return i18n.P("swarm.inflight.tokens",
-		"in flight: %d sub-agent(s) still running, %s in / %s out so far, unpriced (not yet in this session's delegated total, which counts finished ones)",
+		"in flight: %d sub-agent(s) at work, %s in / %s out so far, unpriced (finished ones move into the delegated total)",
 		n, fmtTokens(in), fmtTokens(u.OutputTokens))
 }
 

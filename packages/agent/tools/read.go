@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -114,7 +115,7 @@ const readSchema = `{"type":"object","properties":{"path":{"type":"string"},"off
 
 func (t *ReadTool) Name() string { return "read" }
 func (t *ReadTool) Description() string {
-	return "Read a file from disk. This is also THE way to inspect or analyze a LOCAL image: pass an image path (png/jpg/gif/webp) and its pixels are returned inline for a vision-capable model to see."
+	return i18n.D("tool.read.description", "Read a file from disk. Use this tool also to examine a local image. Give the path to a png, jpg, gif, or webp file. The tool returns the pixels of the image in your context, and a model with vision can see them.")
 }
 func (t *ReadTool) Schema() json.RawMessage { return json.RawMessage(readSchema) }
 

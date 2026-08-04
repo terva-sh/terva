@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -54,13 +55,13 @@ type askArgs struct {
 // The schema is a hand-written JSON literal, so a description may not
 // contain a double quote — it lands inside a JSON string and invalidates
 // the whole document. Use single quotes.
-const slugDesc = `Optional 1-3 word name for this question ('auth method', 'rollout order'), used where a front end has room for a label but not the whole question — the terminal shows it on the question's tab. Name the DECISION, not the answer. Optional, dropped if longer than 3 words or 24 characters, and never a substitute for a clear question.`
+const slugDesc = `An optional name for this question, of one to three words, for example 'auth method' or 'rollout order'. A front end shows this name where it has space for a label but not for the full question. The terminal shows it on the tab of the question. Name the decision, and do not name the answer. The tool removes a name longer than three words or 24 characters. A name is never a replacement for a clear question.`
 
 // multiSelectDesc is shared by both shapes for the same reason slugDesc is.
 // Phrased around whether the options are mutually EXCLUSIVE rather than around
 // how many the user may tick: that is the property the model actually knows,
 // and it is the one nothing else can recover afterwards.
-const multiSelectDesc = `Set true when the options are NOT mutually exclusive and the user may pick any number of them ('which of these should I enable?'). Leave false — the default — when exactly one answer makes sense ('which of these should I use?'). Only you can say which it is; nothing infers it from the option text.`
+const multiSelectDesc = `Set this to true when the options are not mutually exclusive. The user can then select any number of them, as in 'which of these should I enable?'. Keep the default of false when one answer only is correct, as in 'which of these should I use?'. You must decide this, because the tool cannot get it from the text of the options.`
 
 // optionsDesc is shared by both shapes, and says the thing the old wording
 // left to inference.
@@ -78,7 +79,7 @@ const multiSelectDesc = `Set true when the options are NOT mutually exclusive an
 // 380-character option cleanly with a hanging indent. Nor is free text the
 // co-equal alternative the old wording implied — only 8 of the 288 are
 // genuinely open questions.
-const optionsDesc = `Multiple-choice answers. If you are about to write '(a) … (b) …', 'Options:', or any enumerated list of choices INTO the question text, those are the options — put them here instead, one entry each, and keep the question itself to what is being decided. An option may be a full sentence with its rationale; the interface wraps it. A confirmation is a question too: 'Confirm as canon?' has options like 'confirm' and 'revise', and offering them turns four keystrokes into one. Omit only for a genuinely open question with no candidate answers ('what should this be called?').`
+const optionsDesc = `The answers for the user to select. Do not write a list of choices in the text of the question, such as '(a) … (b) …' or 'Options:'. Put each choice here instead, as one entry, and keep the question itself to the decision only. An option can be a full sentence with its reason, and the interface breaks the line. A confirmation is also a question: give 'Confirm as canon?' the options 'confirm' and 'revise', which changes four keystrokes to one. Omit this field only for an open question that has no candidate answers, such as 'what should this be called?'.`
 
 // allowCustomDesc is shared by both shapes, and is phrased around CLOSING the
 // question because closing it is now the only thing saying this changes.
@@ -89,17 +90,17 @@ const optionsDesc = `Multiple-choice answers. If you are about to write '(a) …
 // time the field was spent asking for the common case; the remaining quarter
 // reads as inattention rather than a deliberately closed set, and each one of
 // those left the user with no way to say the options had missed something.
-const allowCustomDesc = `Whether the user may type an answer of their own INSTEAD OF picking one of the options. Defaults to true, which is nearly always what you want — options are your best guesses, not the full space of answers. Set it false only when the options genuinely are the complete set and anything outside them would be meaningless: a fixed enum, the files that actually exist, the three branches there are. Closing a set that only looks complete is the expensive mistake — the user picks the nearest wrong answer and cannot tell you it was wrong.`
+const allowCustomDesc = `This field tells if the user can write an answer instead of a selection from the options. The default is true, and this is almost always correct, because your options are estimates and not the full set of answers. Set this to false only when the options are the complete set and no other answer has a meaning. Examples are a fixed enum, the files that exist, and the branches that exist. A set that only looks complete is an expensive mistake, because the user then selects the nearest wrong answer and cannot tell you about the error.`
 
 const askSchema = `{"type":"object","properties":{` +
-	`"question":{"type":"string","description":"The question to ask the user. Be specific. Use this for a single question; use 'questions' to ask several at once."},` +
+	`"question":{"type":"string","description":"The question for the user. Be specific. Use this field for one question. To ask more than one question, use 'questions'."},` +
 	`"slug":{"type":"string","description":"` + slugDesc + `"},` +
 	`"options":{"type":"array","items":{"type":"string"},"description":"` + optionsDesc + `"},` +
 	`"multi_select":{"type":"boolean","description":"` + multiSelectDesc + `"},` +
 	`"allow_custom":{"type":"boolean","description":"` + allowCustomDesc + `"},` +
-	`"questions":{"type":"array","maxItems":8,"description":"Ask several related questions in ONE interruption instead of stalling the turn once per question. The user sees them together and answers at their own pace before submitting. Prefer this whenever more than one thing is unclear.","items":{"type":"object","properties":{` +
-	`"question":{"type":"string","description":"The question to ask. Be specific."},` +
-	`"slug":{"type":"string","description":"` + slugDesc + ` Most useful here: a set is navigated by tab, and named tabs say what is behind each one."},` +
+	`"questions":{"type":"array","maxItems":8,"description":"Ask several related questions in one interruption. Do not stop the turn one time for each question. The user sees all the questions together and answers them before they send the result. Use this field when more than one item is not clear.","items":{"type":"object","properties":{` +
+	`"question":{"type":"string","description":"The question for the user. Be specific."},` +
+	`"slug":{"type":"string","description":"` + slugDesc + ` A name is very useful here, because the user moves through a set with the tab key, and a name tells what each tab contains."},` +
 	`"options":{"type":"array","items":{"type":"string"},"description":"` + optionsDesc + `"},` +
 	`"multi_select":{"type":"boolean","description":"` + multiSelectDesc + `"},` +
 	`"allow_custom":{"type":"boolean","description":"` + allowCustomDesc + `"}` +
@@ -108,7 +109,7 @@ const askSchema = `{"type":"object","properties":{` +
 
 func (t *AskUserTool) Name() string { return "ask_user_question" }
 func (t *AskUserTool) Description() string {
-	return "Ask the user clarifying questions and wait for their answers, instead of guessing when requirements are ambiguous. Pass 'questions' to ask several at once — they are shown together and answered in one pass, which costs the user one interruption instead of several. Optionally offer multiple-choice options. Use sparingly, for decisions you genuinely cannot make yourself; it pauses the turn for a human."
+	return i18n.D("tool.ask_user_question.description", "Ask the user one or more questions and wait for the answers. Use this tool when the requirements are not clear, and do not make a guess.\n\nTo ask more than one question, give 'questions'. The tool shows these questions together, and the user answers them in one operation. This interrupts the user one time only. You can also give options for the user to select.\n\nUse this tool only for a decision that you cannot make yourself, because the tool stops the turn until a person answers.")
 }
 func (t *AskUserTool) Schema() json.RawMessage { return json.RawMessage(askSchema) }
 

@@ -10,6 +10,7 @@ import (
 
 	"terva.sh/terva/packages/agent/imagegen"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -38,18 +39,18 @@ type generateImageArgs struct {
 }
 
 const generateImageSchema = `{"type":"object","properties":{` +
-	`"prompt":{"type":"string","description":"What to generate."},` +
-	`"path":{"type":"string","description":"Optional workspace-relative path to save the image to (e.g. assets/hero.png). Omit to only display it inline. With n>1 an index is inserted before the extension."},` +
-	`"size":{"type":"string","description":"Optional size like 1024x1024; defaults to the backend's configured size."},` +
-	`"n":{"type":"integer","description":"Number of images to generate (default 1)."},` +
-	`"backend":{"type":"string","description":"Optional image backend id; defaults to the configured backend."},` +
-	`"negative_prompt":{"type":"string","description":"Optional description of what to avoid (only used by backends that support it)."}` +
+	`"prompt":{"type":"string","description":"A description of the image to make."},` +
+	`"path":{"type":"string","description":"An optional path to save the image to, relative to the workspace. An example is assets/hero.png. If you omit this, the tool only shows the image. If n is more than 1, the tool puts an index before the extension."},` +
+	`"size":{"type":"string","description":"An optional size, for example 1024x1024. The default is the configured size of the backend."},` +
+	`"n":{"type":"integer","description":"The number of images to make. The default is 1."},` +
+	`"backend":{"type":"string","description":"An optional id of an image backend. The default is the configured backend."},` +
+	`"negative_prompt":{"type":"string","description":"An optional description of what to keep out of the image. Only some backends obey this."}` +
 	`},"required":["prompt"]}`
 
 func (t *GenerateImageTool) Name() string { return "generate_image" }
 
 func (t *GenerateImageTool) Description() string {
-	return "Generate an image from a text prompt via the configured image backend. Returns the image inline; if `path` is given, also saves it into the workspace. Uses an external image service (costs money on hosted backends)."
+	return i18n.D("tool.generate_image.description", "Make an image from a text description with the configured image backend. The tool returns the image in your context. If you give `path`, the tool also saves the image in the workspace. This tool uses an external image service, and a hosted backend costs money.")
 }
 
 func (t *GenerateImageTool) Schema() json.RawMessage { return json.RawMessage(generateImageSchema) }

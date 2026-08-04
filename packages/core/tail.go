@@ -176,7 +176,7 @@ func (a *Agent) contextPressureText(f float64) string {
 	// come.
 	if a.autoCompactMode() == AutoCompactOff {
 		return i18n.P("context.pressure.no_autocompact",
-			"[context pressure] Your context window is %d%% full (%s of %s tokens). Be economical: prefer targeted reads over whole-file dumps, and summarize or persist important findings now. Automatic compaction is disabled for this session: past the limit, requests fail until the transcript is compacted — wrap up, or suggest the user run /compact.",
+			"[context pressure] Your context window is %d%% full (%s of %s tokens). Be economical: use targeted reads, not whole-file dumps. Summarize or persist important findings now. This session has automatic compaction off. Past the limit, requests fail until a compaction occurs. Wrap up, or suggest that the user run /compact.",
 			int(f*100), fmtTokenCount(used), fmtTokenCount(window))
 	}
 	// Delegation guidance deliberately does NOT ride this note: by 70% it's too
@@ -184,7 +184,7 @@ func (a *Agent) contextPressureText(f float64) string {
 	// always-on swarm system addendum instead (AutoSwarmSystemAddendum), where it
 	// shapes the plan from turn one.
 	return i18n.P("context.pressure",
-		"[context pressure] Your context window is %d%% full (%s of %s tokens). Be economical: prefer targeted reads over whole-file dumps, and summarize or persist important findings now. Past %d%% the transcript is auto-compacted.",
+		"[context pressure] Your context window is %d%% full (%s of %s tokens). Be economical: use targeted reads, not whole-file dumps. Summarize or persist important findings now. Past %d%% terva auto-compacts the transcript.",
 		int(f*100), fmtTokenCount(used), fmtTokenCount(window), int(AutoCompactThreshold*100))
 }
 

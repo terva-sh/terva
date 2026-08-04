@@ -293,7 +293,7 @@ const escalationDetailMax = 200
 
 func handoffMarker(toModel, reason string) string {
 	return i18n.P("stall.handoff",
-		"[handoff] The previous model was %s and has been replaced with `%s` for this step. Its failing attempts are above — complete the pending work, then continue normally.",
+		"[handoff] The previous model was %s. `%s` now takes this step. The failed attempts of the previous model are above. Complete the pending work, then continue normally.",
 		reason, toModel)
 }
 

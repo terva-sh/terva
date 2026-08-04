@@ -761,11 +761,11 @@ func normalizeError(s string) string {
 func stallHoldOffNudge(tool string, count int, detail string) string {
 	if detail != "" {
 		return i18n.P("stall.holdoff.error",
-			"[loop check] `%s` has now failed %d times with the same result: %q. The earlier note did not break this. Stop calling it — say what is blocking you and either take a different route or report that you are stuck.",
+			"[loop check] `%s` has now failed %d times with the same result: %q. The earlier note did not break this. Stop. Say what blocks you, and either take a different route or report that you are stuck.",
 			tool, count, detail)
 	}
 	return i18n.P("stall.holdoff.repeat",
-		"[loop check] `%s` has now been called %d times with the same arguments and the same result. The earlier note did not break this. Stop repeating it — use what you already have, take a different route, or report that you are stuck.",
+		"[loop check] You have now called `%s` %d times with the same arguments and the same result. The earlier note did not break this. Stop. Use what you already have, take a different route, or report that you are stuck.",
 		tool, count)
 }
 
@@ -783,11 +783,11 @@ func stallHoldOffNudge(tool string, count int, detail string) string {
 func stallRefusal(tool string, count, remaining int) string {
 	if remaining <= 0 {
 		return i18n.P("stall.refusal.final",
-			"[loop check] `%s` was NOT run. This exact call has returned the same result %d times and neither note broke the loop, so terva stopped dispatching it. Nothing changed, and this turn ends here.",
+			"[loop check] terva did not run `%s`. This exact call returned the same result %d times, and neither note broke the loop. terva stopped the dispatch. Nothing changed, and this turn ends here.",
 			tool, count)
 	}
 	return i18n.P("stall.refusal",
-		"[loop check] `%s` was NOT run — terva refused to dispatch it. This exact call has already returned the same result %d times, so running it again cannot tell you anything new. Nothing changed. Use what you already have, take a different route, or stop and say what is blocking you. Repeat it %d more time(s) and the turn ends.",
+		"[loop check] terva did not run `%s`. It refused the dispatch. This exact call already returned the same result %d times, so one more run cannot tell you anything new. Nothing changed. Use what you already have, take a different route, or stop and say what blocks you. Repeat it %d more time(s) and the turn ends.",
 		tool, count, remaining)
 }
 
@@ -800,11 +800,11 @@ func stallGiveUpNote(tool string, refusals, count int) string {
 func stallNudge(tool string, count int, detail string) string {
 	if detail != "" {
 		return i18n.P("stall.nudge.error",
-			"[loop check] You have called `%s` %d times with the same result: %q. Retrying it unchanged will not help — read the current state (e.g. task_list) or take a different action.",
+			"[loop check] You have called `%s` %d times with the same result: %q. One more unchanged try will not help. Read the current state (e.g. task_list) or take a different action.",
 			tool, count, detail)
 	}
 	return i18n.P("stall.nudge.repeat",
-		"[loop check] You have called `%s` with the same arguments %d times. You already have the result; use what you have or do something different rather than repeat it.",
+		"[loop check] You have called `%s` with the same arguments %d times. You already have the result. Use what you have, or do something different.",
 		tool, count)
 }
 

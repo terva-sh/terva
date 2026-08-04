@@ -11,6 +11,7 @@ import (
 
 	"terva.sh/terva/packages/agent/jsengine"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -44,11 +45,11 @@ type codeExecArgs struct {
 	Timeout int    `json:"timeout,omitempty"`
 }
 
-const codeExecSchema = `{"type":"object","properties":{"script":{"type":"string","description":"A short JavaScript program. Available functions: read(path[,offset,limit]), grep(pattern[,path]), glob(pattern[,path]) — each returns the tool's text output as a string. print(...) what you want returned."},"timeout":{"type":"integer","description":"Maximum run time in seconds before the script is interrupted. Defaults to 30, capped at 120."}},"required":["script"]}`
+const codeExecSchema = `{"type":"object","properties":{"script":{"type":"string","description":"A short JavaScript program. You can call read(path[,offset,limit]), grep(pattern[,path]), and glob(pattern[,path]). Each function returns the text output of the tool as a string. Use print(...) to return a result."},"timeout":{"type":"integer","description":"The maximum run time in seconds. The tool then stops the program. The default is 30 seconds, and the maximum is 120 seconds."}},"required":["script"]}`
 
 func (t *CodeExecutionTool) Name() string { return "code_execution" }
 func (t *CodeExecutionTool) Description() string {
-	return "Run a short JavaScript program that calls read(path[,offset,limit]), grep(pattern[,path]), and glob(pattern[,path]) as functions and print(...)s what it wants returned. Only printed output comes back — intermediate tool results never enter your context, so use this for multi-step read-only lookups where you need a small answer derived from large output (count matches, extract a field, join results across files). The script has no filesystem, network, require, or other globals; each read/grep/glob call passes through the normal permission gate. Limits: 50 host calls, 32KB printed output, 30s default timeout."
+	return i18n.D("tool.code_execution.description", "Run a short JavaScript program. The program can call read(path[,offset,limit]), grep(pattern[,path]), and glob(pattern[,path]) as functions. Use print(...) to return a result.\n\nThe tool returns the printed output only. The results of the calls in the program do not enter your context. Therefore use this tool for a read-only task with many steps, when a large output gives a small answer. Examples are to count the matches, to extract one field, or to join the results from several files.\n\nThe program has no access to the file system, the network, require, or other globals. Each read, grep, and glob call obeys the usual permission gate. The program can make 50 calls to the host and can print 32KB. The default time limit is 30 seconds.")
 }
 func (t *CodeExecutionTool) Schema() json.RawMessage { return json.RawMessage(codeExecSchema) }
 

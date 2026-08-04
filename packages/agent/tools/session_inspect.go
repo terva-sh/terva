@@ -13,6 +13,7 @@ import (
 
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -116,28 +117,54 @@ func expandTarget(expand int) *int {
 
 func (t *SessionInspectTool) Name() string { return "session_inspect" }
 
+// sessionInspectDesc is the English default for
+// tool.session_inspect.description. A const for the same reason memoryDesc
+// is one: the extractor resolves a named const, not an inline concatenation.
+const sessionInspectDesc = "Examine the transcript of this session in a structured form, with a limit on the output. Use this tool to see what occurred, and do not read the full transcript again. Each argument is optional, and a value of 0 means that you did not set it. Therefore you can safely send all the arguments as zeros, which gives the default list.\n\n" +
+	"Stats mode occurs when you set stats to true. Use this mode first when you want to know what occurred in this session, or what the session cost. The mode gives one summary of the full session: the cost, the cache hit rate, the dead turns, the counts of tool calls and failures, and the provider errors. To calculate these numbers from the events is expensive.\n\n" +
+	"List mode and expand mode are mutually exclusive, and they use the same filters. The filter failures_only selects the tool results that failed. The filter tool_name selects one tool. The filter event_kinds selects some of \"tool_call\", \"tool_result\", \"message\", \"usage\", and \"error\".\n\n" +
+	"List mode is the default, and it occurs when expand is 0. The mode shows a window of the events that agree with the filters: the tool calls, the tool results with their pass or fail status, the text of messages, and the usage of each turn. The most recent events are the default. A usage event gives the cost of a turn, and the quantity of its input that came from the prefix cache. Use event_kinds with \"usage\" alone to find where this session spent money, because no other part of the transcript gives this. Expand a usage event to see its full token counts.\n\n" +
+	"To move through the list, use limit and cursor. The default limit is 40, and the maximum is 200. The cursor is a position in the events that agree with the filters, and the oldest event is position 1. A cursor of 0 gives the most recent window. The tool returns next_cursor when more events remain, and you must then use the same filters. Each event in the list has an index that starts at #1.\n\n" +
+	// The prohibition leads this section, and the section leads with the
+	// task that selects the mode. Both orderings are load-bearing, and the
+	// A/B measured what happens without them: on Haiku, 20 of 20 runs used
+	// expand mode correctly when the old description SHOUTED the rule in
+	// capitals, against 10 of 20 once the capitals went. Six of the ten
+	// failures set expand AND limit, which the tool refuses; the other four
+	// never reached expand mode at all and asked for a one-item list, which
+	// silently returns a listing where the user asked for full text.
+	//
+	// STE has no typographic emphasis, so salience has to come from
+	// position: state the prohibition as a command BEFORE the detail it
+	// governs, and name the task that selects the mode before explaining
+	// the mode. See scripts/eval/ to re-measure after editing this.
+	"To read the full text of one event, use expand mode. Set expand, and do not set limit or cursor. If you set expand together with a limit or a cursor that is not 0, the tool refuses the call. The tool does not silently make the call more narrow.\n\n" +
+	"Expand mode occurs when expand is not 0. The mode reads the full text of one event, for example all the findings of a sub-agent. Give an #n from a list that used the same filters. A negative value counts from the end, and -1 is the most recent match. For example, event_kinds \"message\" with expand -1 gives the most recent message in full, and you do not need a list first. If the text is long, use text_offset to read more of it.\n\n" +
+	"The default for session_id is the current session. You can give another id from this project, which is a file name without .jsonl, as terva_status shows. You can also give the id of a swarm sub-agent, as swarm_spawn and the [auto-swarm update] message show. To examine a transcript file instead, give path. Use this for a transcript from another machine, or for a transcript that the user gives to you. The path can be any .jsonl file that you can open with the read tool.\n\n" +
+	"Do not give path together with session_id, because they are mutually exclusive. The tool removes secrets and limits the size of the output."
+
 func (t *SessionInspectTool) Description() string {
-	return "Inspect THIS session's transcript in a structured, bounded way — to see what happened without re-reading everything. EVERY argument is optional and 0 means \"not set\", so it is always safe to send them all as zeros: that is the default listing. STATS MODE (stats true) is the one to reach for first when the question is \"what happened in this session / what did it cost\": one bounded rollup — cost, cache hit rate, dead turns, tool-call and failure histograms, provider errors — that no amount of paging through events would give you cheaply. The other two modes are MUTUALLY EXCLUSIVE and share the filters: failures_only (only failed/errored tool results), tool_name, or event_kinds ([\"tool_call\",\"tool_result\",\"message\",\"usage\",\"error\"]). LIST MODE (the default — expand 0): shows a window of matching events (tool calls, tool results with pass/fail, message text, and per-turn usage), most recent by default. USAGE events carry what a turn cost and how much of its input hit the prefix cache — event_kinds [\"usage\"] alone is how you answer \"where did this session's money go\", which nothing else in the transcript can tell you; expand one for its full token breakdown. Page with limit (default 40, cap 200) and cursor (a 1-based position in the matching events, oldest=1; cursor 0 means the most recent window; a next_cursor is returned when more remain — reuse the same filters). Each listed event carries its index (#n, starting at #1). EXPAND MODE (expand non-zero): reads ONE event's full text — pass an #n from a listing (paged with text_offset when long), e.g. a sub-agent's complete findings; negative counts from the end (event_kinds [\"message\"] with expand -1 is the most recent message in full, no listing needed). EXPAND ignores cursor/limit, so do NOT give both a real value — a call that sets expand AND a non-zero cursor/limit is rejected, not silently narrowed. session_id defaults to the current session; pass another id from this project (a filename without .jsonl, as terva_status prints) or a swarm sub-agent id (as swarm_spawn and the [auto-swarm update] recap print) to inspect that transcript. To inspect a transcript FILE instead — one downloaded from another machine, or handed to you by the user — pass path (any .jsonl you could open with the read tool); it is mutually exclusive with session_id. Secrets are redacted and output is size-bounded."
+	return i18n.D("tool.session_inspect.description", sessionInspectDesc)
 }
 
 func (t *SessionInspectTool) Schema() json.RawMessage {
 	b, _ := json.Marshal(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"session_id":    map[string]any{"type": "string", "description": "Session to inspect (filename without .jsonl), or a swarm sub-agent id spawned from this project. Omit for the current session."},
-			"path":          map[string]any{"type": "string", "description": "Path to a session .jsonl anywhere you could read it with the read tool — e.g. a transcript downloaded from another machine. Mutually exclusive with session_id. Another project's sessions under $TERVA_HOME stay unreadable."},
-			"failures_only": map[string]any{"type": "boolean", "description": "Only failed/errored tool results."},
-			"tool_name":     map[string]any{"type": "string", "description": "Only events for this tool."},
+			"session_id":    map[string]any{"type": "string", "description": "The session to examine. Give a file name without .jsonl, or the id of a swarm sub-agent from this project. Omit this field for the current session."},
+			"path":          map[string]any{"type": "string", "description": "The path to a session .jsonl file that you can read with the read tool, for example a transcript from another machine. Do not give this field with session_id, because they are mutually exclusive. You cannot read the sessions of another project in $TERVA_HOME."},
+			"failures_only": map[string]any{"type": "boolean", "description": "Show the tool results that failed only."},
+			"tool_name":     map[string]any{"type": "string", "description": "Show the events for this tool only."},
 			"event_kinds": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string", "enum": []string{"tool_call", "tool_result", "message", "usage", "error"}},
-				"description": "Restrict to these event kinds. \"usage\" is a turn's cost and cache accounting; use it alone to see where a session spent its money. \"error\" is a provider failure from the error sidecar (auth, overload, rate limit), placed against the turn it killed.",
+				"description": "Show these event kinds only. The kind \"usage\" gives the cost and the cache accounting of a turn. Use it alone to see where a session spent money. The kind \"error\" is a provider failure such as an authentication error, an overload, or a rate limit. The tool puts each error against the turn that it stopped.",
 			},
-			"limit":       map[string]any{"type": "integer", "description": "Max events (default 40, cap 200)."},
-			"cursor":      map[string]any{"type": "integer", "description": "LIST MODE only. 1-based position in the matching events (oldest = 1). 0 (or omitted) means the most recent window. Do not combine with a non-zero expand (rejected)."},
-			"expand":      map[string]any{"type": "integer", "description": "EXPAND MODE. One matching event to read in full: an #n from a listing with the SAME filters (1-based), or negative to count from the end (-1 = most recent match). 0 (or omitted) means list mode instead. Ignores — and must not be combined with — a non-zero limit/cursor (rejected)."},
-			"text_offset": map[string]any{"type": "integer", "description": "With expand: byte offset into that event's text (default 0). Use the offset from the previous truncation notice to continue."},
-			"stats":       map[string]any{"type": "boolean", "description": "STATS MODE. Return a whole-session rollup instead of events: message counts, span, cost, cache hit rate, dead turns, tool-call and failure histograms, provider errors. Ignores the other filters — the numbers always describe the whole session. Start here when the question is \"what happened / what did this cost\" rather than \"show me event N\"."},
+			"limit":       map[string]any{"type": "integer", "description": "The maximum number of events. The default is 40, and the maximum is 200."},
+			"cursor":      map[string]any{"type": "integer", "description": "For list mode only. A position in the events that agree with the filters, where the oldest event is position 1. A value of 0, or no value, gives the most recent window. Do not give this field with an expand value that is not 0, because the tool refuses such a call."},
+			"expand":      map[string]any{"type": "integer", "description": "For expand mode. One event to read in full. Give an #n from a list that used the same filters, where the first event is 1. A negative value counts from the end, and -1 is the most recent match. A value of 0, or no value, selects list mode. Do not give this field with a limit or a cursor that is not 0, because the tool refuses such a call."},
+			"text_offset": map[string]any{"type": "integer", "description": "For expand mode. The offset in bytes into the text of the event. The default is 0. To continue, use the offset from the notice that the tool sent with the previous part."},
+			"stats":       map[string]any{"type": "boolean", "description": "For stats mode. The tool returns a summary of the full session instead of events: the message counts, the period, the cost, the cache hit rate, the dead turns, the counts of tool calls and failures, and the provider errors. The tool ignores the other filters, because the numbers always describe the full session. Start here when you want to know what occurred or what the session cost, and not to see one event."},
 		},
 		"additionalProperties": false,
 	})

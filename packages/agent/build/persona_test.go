@@ -92,7 +92,7 @@ func TestBuildSystemPrompt_IntroOverride(t *testing.T) {
 	if strings.Contains(got, "operating inside terva") {
 		t.Errorf("branded intro should be replaced by the override:\n%s", got)
 	}
-	if !strings.Contains(got, "Summarise what you did and the outcome") {
+	if !strings.Contains(got, "Summarize what you did and the result") {
 		t.Errorf("terva conventions should still bracket the end:\n%s", got)
 	}
 	segs := SystemSegments(opts)
@@ -126,7 +126,7 @@ func TestMieliCharter_IntentFirst(t *testing.T) {
 	if strings.Contains(got, "Act first") {
 		t.Errorf("the old \"Act first\" convention must not survive alongside intent-first:\n%s", got)
 	}
-	if !strings.Contains(got, "let tool calls carry the operational detail") {
+	if !strings.Contains(got, "tool calls carry the operational detail") {
 		t.Errorf("output discipline (concise, no per-call narration) should still ship:\n%s", got)
 	}
 }
@@ -186,7 +186,7 @@ func TestBuildSystemPrompt_CharterPlacement(t *testing.T) {
 	// Anchor on the surface-independent half of the conventions: the opening
 	// sentence now varies with where the output lands (see Surface), so keying
 	// the ordering check on it would make this test a hostage to the audience.
-	conv := strings.Index(got, "let tool calls carry the operational detail")
+	conv := strings.Index(got, "tool calls carry the operational detail")
 	if intro < 0 || charter < 0 || conv < 0 {
 		t.Fatalf("missing a section: intro=%d charter=%d conv=%d\n%s", intro, charter, conv, got)
 	}

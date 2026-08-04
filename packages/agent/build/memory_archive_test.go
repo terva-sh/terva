@@ -82,15 +82,15 @@ func TestRecalledMemoryIsFramedAsReferenceNotState(t *testing.T) {
 	}
 	got := r.PerTurnContext(said("let's deploy this"))()
 
-	if !strings.Contains(got, "RECALLED FROM YOUR ARCHIVED MEMORY") {
+	if !strings.Contains(got, "[recalled from your archived memory]") {
 		t.Fatalf("the recall block is unframed:\n%s", got)
 	}
-	if strings.Index(got, "RECALLED FROM") > strings.Index(got, "staging first") {
+	if strings.Index(got, "[recalled from") > strings.Index(got, "staging first") {
 		t.Errorf("the frame must introduce the block it frames:\n%s", got)
 	}
 	// The tiebreak clause is the load-bearing half. Without it the block reads as
 	// the present simply because it arrives last.
-	if !strings.Contains(got, "the conversation is what is actually happening") {
+	if !strings.Contains(got, "trust the conversation") {
 		t.Errorf("the frame does not hand the tiebreak to the transcript:\n%s", got)
 	}
 	// The id has to travel with the content: this block is the only place a

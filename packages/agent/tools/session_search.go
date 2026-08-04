@@ -11,6 +11,7 @@ import (
 
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -48,17 +49,17 @@ type SessionSearchTool struct {
 func (t *SessionSearchTool) Name() string { return "session_search" }
 
 func (t *SessionSearchTool) Description() string {
-	return "Search THIS project's past sessions — and the swarm sub-agents they spawned — for a phrase. Cross-session recall for decisions, file locations, commands, and errors from earlier work, including work that was delegated out. Searches the FULL transcript: message text, tool-call arguments (so a file path, command, or grep pattern from a previous session is findable even when nobody wrote it in prose), and tool-result output. Pass `query`; matching is case-insensitive substring, so prefer a distinctive fragment (a filename, an identifier, an error string) over a sentence. Optional `kinds` narrows to any of [\"message\",\"tool_call\",\"tool_result\"], `session_id` restricts to one session, and `limit` caps hits (default 20, max 100). Results are grouped newest session first and name the session id and row of each hit — pass that session_id to session_inspect to read around it. Secrets are redacted and every snippet is length-bounded. This session's own transcript is included; use session_inspect for a structured view of it instead."
+	return i18n.D("tool.session_search.description", "Search the earlier sessions of this project for a text fragment. The search includes the swarm sub-agents that these sessions started. Use this tool to find decisions, file locations, commands, and errors from earlier work, and from work that you gave to a sub-agent.\n\nThe tool searches all of each transcript: the text of messages, the arguments of tool calls, and the output of tool results. Therefore you can find a file path, a command, or a grep pattern from an earlier session, even if no person wrote it in prose.\n\nGive `query`. The tool ignores letter case and finds the text in any position, so give a distinctive fragment such as a file name, an identifier, or an error string. Do not give a full sentence. `kinds` limits the search to some of [\"message\",\"tool_call\",\"tool_result\"], `session_id` limits it to one session, and `limit` sets the maximum number of results. The default limit is 20, and the maximum is 100.\n\nThe tool puts the results in groups, and the most recent session is first. Each result gives the session id and the row. Give that session id to session_inspect to read the adjacent events. The tool removes secrets and limits the length of each fragment. The results include the transcript of this session, but session_inspect gives a better view of it.")
 }
 
 func (t *SessionSearchTool) Schema() json.RawMessage {
 	return json.RawMessage(`{
   "type": "object",
   "properties": {
-    "query": {"type": "string", "description": "case-insensitive substring to find; prefer a distinctive fragment"},
-    "kinds": {"type": "array", "items": {"type": "string", "enum": ["message", "tool_call", "tool_result"]}, "description": "restrict to these event kinds (default: all three)"},
-    "session_id": {"type": "string", "description": "restrict to one session (a filename without .jsonl)"},
-    "limit": {"type": "integer", "description": "max hits to return (default 20, max 100)"}
+    "query": {"type": "string", "description": "The text to find. The tool ignores letter case and finds the text in any position. Give a distinctive fragment."},
+    "kinds": {"type": "array", "items": {"type": "string", "enum": ["message", "tool_call", "tool_result"]}, "description": "Search these event kinds only. The default is all three kinds."},
+    "session_id": {"type": "string", "description": "Search one session only. Give a file name without .jsonl."},
+    "limit": {"type": "integer", "description": "The maximum number of results to return. The default is 20, and the maximum is 100."}
   },
   "required": ["query"]
 }`)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/relaunch"
 )
@@ -26,11 +27,11 @@ type RestartTool struct{}
 func (t *RestartTool) Name() string { return "terva_restart" }
 
 func (t *RestartTool) Description() string {
-	return "Restart the terva process into the currently-installed binary to pick up a fresh build (e.g. after terva's own code was changed and reinstalled). Prompts the operator for approval in every gating approval mode, and interrupts the current session; connected clients reconnect automatically and the transcript is restored from disk. Use only when asked to restart or apply a new build."
+	return i18n.D("tool.terva_restart.description", "Start the terva process again, and use the binary from the current installation. Use this tool to load a new build. An example is a build after you change the code of terva.\n\nThe tool asks the operator for approval in each approval mode that has a gate. The tool interrupts the current session. Connected clients connect again automatically, and the tool reads the transcript from the disk. Use this tool only when the user asks you to restart terva or to apply a new build.")
 }
 
 func (t *RestartTool) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"reason":{"type":"string","description":"short note on why a restart is needed (shown in the server log)"}},"additionalProperties":false}`)
+	return json.RawMessage(`{"type":"object","properties":{"reason":{"type":"string","description":"A short note that tells why the restart is necessary. The tool writes this note in the server log."}},"additionalProperties":false}`)
 }
 
 func (t *RestartTool) Execute(ctx context.Context, args json.RawMessage, _ func(string)) (core.ToolResult, error) {

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/ignore"
 	"terva.sh/terva/packages/provider"
 )
@@ -28,11 +29,11 @@ type writeArgs struct {
 	Mode    string `json:"mode"`
 }
 
-const writeSchema = `{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"mode":{"type":"string","description":"optional octal permission bits, e.g. \"0755\" to create an executable script. Range 0o000–0o777 (setuid/setgid/sticky are not allowed here). Omit to keep the secure default: a new file honors the umask, an existing file keeps its current mode."}},"required":["path","content"]}`
+const writeSchema = `{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"mode":{"type":"string","description":"Optional octal permission bits. For example, use \"0755\" to make an executable script. The permitted range is 0o000 to 0o777. The tool does not permit the setuid, setgid, or sticky bits. If you omit this, the tool keeps the secure default: a new file obeys the umask, and a file that exists keeps its mode."}},"required":["path","content"]}`
 
 func (t *WriteTool) Name() string { return "write" }
 func (t *WriteTool) Description() string {
-	return "Write a file, creating parent directories. OVERWRITES the entire file. For an existing file, prefer `edit` to change part of it; use `write` only to create a new file or when you intend to fully replace one. Pass `mode` (octal, e.g. \"0755\") to set the file's permission bits in the same step — for creating an executable script — instead of a follow-up `chmod`; omit it to keep the secure default (new files honor the umask, existing files keep their mode)."
+	return i18n.D("tool.write.description", "Write a file. The tool makes the parent directories if they do not exist. This tool replaces all the content of the file.\n\nTo change part of a file that exists, use the `edit` tool. Use `write` only to make a new file, or to replace all of a file.\n\nTo set the permission bits in the same step, give `mode` as an octal value. For example, use \"0755\" to make an executable script, instead of a `chmod` command later. If you omit `mode`, the tool keeps the secure default. A new file obeys the umask, and a file that exists keeps its mode.")
 }
 func (t *WriteTool) Schema() json.RawMessage { return json.RawMessage(writeSchema) }
 

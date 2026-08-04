@@ -231,13 +231,13 @@ func SystemSegments(o SystemPromptOpts) []PromptSegment {
 	// chat/play (and any --no-tools run) there's nothing to read it with, so the
 	// hint would just be a dead instruction — drop it.
 	if d := strings.TrimSpace(o.TervaDocsDir); d != "" && hasTool(o.Tools, "read") {
-		add(SourceTervaDocsHint, i18n.P("system.docs_hint", "Terva's own docs are installed under %s; read README.md there for the index, and design/ for how the harness works and why. Use the read tool when you need details about terva RPC, extensions, skills, or built-in behaviour.", d))
+		add(SourceTervaDocsHint, i18n.P("system.docs_hint", "The terva documentation is at %s. Read `README.md` there for the index. Read `design/` for how the harness works and why. Use the read tool when you need details about terva RPC, extensions, skills, or built-in behaviour.", d))
 	}
 	if d := strings.TrimSpace(o.TervaExamplesDir); d != "" && hasTool(o.Tools, "read") {
-		add(SourceTervaExamplesHint, i18n.P("system.examples_hint", "Deployment and setup examples — systemd units, reverse-proxy configs, container recipes — are installed under %s; read them when bootstrapping or configuring a terva host.", d))
+		add(SourceTervaExamplesHint, i18n.P("system.examples_hint", "Deployment and setup examples are at %s: systemd units, reverse-proxy configs, container recipes. Read them when you set up or configure a terva host.", d))
 	}
 	if o.StatusTool {
-		add(SourceStatusToolHint, i18n.P("system.status_tool_hint", "Call the terva_status tool (no arguments) to check your own runtime state — current model, provider, working directory, reasoning effort, and how full your context window is — for example to decide whether to summarise before the context fills. Its tool description lists every field it returns."))
+		add(SourceStatusToolHint, i18n.P("system.status_tool_hint", "To answer a question about your own runtime state, call the terva_status tool with no arguments. It reports the current model, the provider, the working directory, and the reasoning effort. It also reports the quantity of your context window that is in use. Use it, for example, to decide if you must summarize before the context fills. Its tool description lists every field that it returns."))
 	}
 	for _, a := range o.Append {
 		addSeg(a)
@@ -409,13 +409,13 @@ func surfaceConventions(s Surface) string {
 	}
 }
 
-const renderedSurface = `Your output is rendered as markdown for a person reading it, with tool output shown as plain text alongside it. Use markdown freely.`
+const renderedSurface = `The client renders your output as markdown for a person. It shows tool output as plain text alongside. Use markdown freely.`
 
-const chatSurface = `Your output is posted as a chat message. Chat clients render only light markdown — emphasis, code spans, fenced blocks — so skip headings and tables, and keep messages short enough to read on a phone.`
+const chatSurface = `Your output goes out as a chat message. Chat clients render only light markdown: emphasis, code spans, fenced blocks. Skip headings and tables. Keep each message short enough to read on a phone.`
 
-const plainSurface = `Your output is written straight to a plain-text stream with nothing in the path to render it: markdown reaches the reader exactly as you typed it. Keep formatting light.`
+const plainSurface = `Your output goes straight to a plain-text stream. Nothing in the path renders it: markdown reaches the reader exactly as you typed it. Keep the format light.`
 
-const programSurface = `Your output is handed to a program as structured events, and that program decides how — or whether — to display it. Do not count on markdown being rendered.`
+const programSurface = `Your output goes to a program as structured events. That program decides how to display it, or whether to display it at all. Do not expect the program to render markdown.`
 
 // codingOutputConventions is the half of the old conventions paragraph that was
 // never about the surface at all: it is true whoever is reading. It no longer
@@ -424,14 +424,18 @@ const programSurface = `Your output is handed to a program as structured events,
 // (personas/builtin/mieli.md — orient the user before the first tool call of a
 // multi-step task). The persona now owns when to speak; this owns the output
 // shape — concise, no per-call narration, summarise the result after.
-const codingOutputConventions = `Keep answers concise, and let tool calls carry the operational detail rather than narrating each one in prose. Summarise what you did and the outcome.`
+// Simplified Technical English form measured behaviourally neutral
+// (scripts/eval, tier-A prompts run, 2026-08).
+const codingOutputConventions = `Keep answers short. Do not narrate each tool call in prose. The tool calls carry the operational detail. Summarize what you did and the result.`
 
 // fileEditConventions names terva's edit and write tools, so it ships only when
 // they do. The rationale it gives used to be a rendering claim ("edit renders as
 // a readable diff") — true in the TUI, meaningless down a pipe. The real reason
 // survives the move: an edit is a structured, reviewable change and a shell
 // redirection is an opaque overwrite, wherever you are watching from.
-const fileEditConventions = `When changing file contents, prefer the edit tool for in-place changes and the write tool for creating or fully replacing files. Do not use bash with cat/echo/sed/tee redirections to mutate files: an edit is a legible, reviewable change, while a shell redirection lands as an opaque overwrite.`
+// The prohibition leads (the position rule); the redirection-bait scenario
+// held 5/5 in both wordings (scripts/eval, tier-A prompts run, 2026-08).
+const fileEditConventions = `Do not use bash with cat, echo, sed, or tee redirections to change a file. Use the edit tool to change a file in place. Use the write tool to make a new file or to replace all of a file. An edit is a legible change that a person can review. A shell redirection lands as an opaque overwrite.`
 
 // experienceFraming is the brand-free framing of the situation for an
 // Experience — what a character card's `{{original}}` macro expands to, and

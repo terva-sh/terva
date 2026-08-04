@@ -29,6 +29,7 @@ two-thirds of all UI text):
 | **UI — stage** | the Stage play surface (the installable `/stage/` PWA) | the **English text itself** | `locales/stage/<lang>.json` |
 | **Prompts** | canned English terva sends *to the model*: the `/study` task, the auto-swarm result summary, the base system-prompt segments, the compaction instructions | a stable **dotted id** (`study.file`, `system.identity.default`) | `locales/prompts/<lang>.json` |
 | **Help** | the large `terva <cmd> --help` screens (`terva bot`, `terva models`, …) | a stable **dotted id** (`help.bot`, `help.models`) | `locales/help/<lang>.json` |
+| **Tools** | each tool's description — the text the model reads to decide whether to call it | a stable **dotted id** (`tool.read.description`, `tool.bash.description`) | `locales/tools/<lang>.json` |
 
 Short UI text uses English-as-key so a translator sees the sentence, not an
 invented id, and the UI catalog is split by surface (core / tui / web / stage)
@@ -56,8 +57,9 @@ embedded default            (shipped in the binary)
 
 Each non-core catalog overlays the same way under its own subdirectory —
 `$TERVA_HOME/locales/tui/<lang>.json`, `.../web/<lang>.json`,
-`.../stage/<lang>.json`, `.../prompts/<lang>.json`, `.../help/<lang>.json` — so
-you can drop in just the surface you want to translate.
+`.../stage/<lang>.json`, `.../prompts/<lang>.json`, `.../help/<lang>.json`,
+`.../tools/<lang>.json` — so you can drop in just the surface you want to
+translate.
 
 - **Per-key, not whole-file.** Override `"quit"` alone; every other string
   still resolves.
@@ -228,6 +230,44 @@ see the full set. The families:
 Keep any `%s`/`%d` in a template — they're filled at runtime (a path, an agent
 id, the persona name). `terva locale validate
 $TERVA_HOME/locales/prompts/en.json` checks that parity.
+
+---
+
+## Retuning a tool description
+
+The **tools** catalog is the same seam pointed at a different surface: the
+description each tool advertises to the model. One key per tool, named for the
+tool itself — `tool.read.description`, `tool.bash.description`,
+`tool.raati_convene.description`.
+
+This is a separate catalog from **prompts** because the two are edited for
+different reasons. A prompt changes what terva *says*; a tool description
+changes what the model *does*, and the effect shows up directly in which tools
+get called and how. It is the highest-leverage model-facing text terva has: a
+recorded session had the model pin [raati](raati.md) to level 1 for its entire
+run because the description never offered the alternative.
+
+It overlays in English exactly like prompts do:
+
+```json
+// $TERVA_HOME/locales/tools/en.json
+{
+  "tool.bash.description": "Run a shell command with %s. Commands run in %s. Prefer read/write/edit and grep/glob over shell equivalents."
+}
+```
+
+Two things to keep:
+
+- **The `%s` verbs.** `tool.bash.description` is handed the resolved shell name
+  and the directory commands run in, and `tool.world_note.description` the
+  reserved scene-state entry name. Drop a verb and the model loses the one fact
+  a relative path depends on. `terva locale validate` checks the parity.
+- **Whatever the tool's own schema depends on.** A description that stops
+  mentioning an argument is an argument the model stops passing.
+
+Because it is per-key, an overlay naming one tool leaves every other
+description at its shipped English — so trying one rewording is a one-key file,
+and comparing two is a file swap rather than two builds.
 
 > **Careful with structural tokens.** A few model-facing strings are left in
 > English on purpose because the model (or terva) parses them positionally —

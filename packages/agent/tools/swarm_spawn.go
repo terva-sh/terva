@@ -9,6 +9,7 @@ import (
 
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -144,36 +145,36 @@ const swarmSpawnSchema = `{
   "properties": {
     "task": {
       "type": "string",
-      "description": "The full task description for the sub-agent. Be specific: the sub-agent has the same tools (read/write/edit/bash) and shares this working directory, but starts with NO context from this conversation."
+      "description": "The full description of the task for the sub-agent. Be specific. The sub-agent has the same tools: read, write, edit, and bash. It uses this working directory. But it starts with no context from this conversation."
     },
     "persona": {
       "type": "string",
-      "description": "Optional persona to boot the sub-agent as a specialist. Pick the one whose focus matches the sub-task (your instructions list what each is good for when there are any); omit for a general-purpose sub-agent."
+      "description": "An optional persona that makes the sub-agent a specialist. Select the persona with a purpose that agrees with the task. Your instructions tell what each persona does well. Omit this field for a sub-agent with a general purpose."
     },
     "deliverable_schema": {
       "type": "object",
-      "description": "Optional JSON schema the sub-agent's report must match (top-level \"type\" must be \"object\"). The sub-agent gets a deliver_result tool bound to it, and the validated JSON is surfaced in the recap and on the swarm dashboard. Use when you will machine-read the result (findings lists, counts, verdicts); omit for prose answers."
+      "description": "An optional JSON schema. The report of the sub-agent must agree with this schema, and the \"type\" at the top level must be \"object\". The sub-agent then gets a deliver_result tool for this schema. The tool shows the JSON in the summary and on the swarm dashboard. Use this field when a program reads the result, for example a list of findings, a count, or a verdict. Omit it for an answer in prose."
     },
     "tier": {
       "type": "string",
       "enum": ["weak", "medium", "strong"],
-      "description": "Optional model strength for the sub-agent: weak (cheap/fast, e.g. Haiku), medium (e.g. Sonnet), strong (e.g. Opus). Resolved for the host provider and PINNED to it (the sub-agent runs on the host provider at this strength), never stronger than the host model. Use weak for routine sub-tasks to save cost. Only valid when model+provider are omitted; if the provider has no tier mapping the host model is used."
+      "description": "An optional model strength for the sub-agent. A weak model is cheap and fast, for example Haiku. A medium model is, for example, Sonnet, and a strong model is, for example, Opus. The tool selects a model of this strength from the host provider, and the sub-agent stays on that provider. The model is never stronger than the host model. Use weak for a routine task to decrease the cost. This field is valid only when you omit model and provider. If the provider has no model of this strength, the tool uses the host model."
     },
     "model": {
       "type": "string",
-      "description": "Optional model id to pin the sub-agent to. Normally OMIT both model and provider so the sub-agent inherits the host session's resolved provider/model/auth route. A model id is only valid for its provider, so if you set this you must also set provider. Do not infer the provider from the model name."
+      "description": "An optional model id for the sub-agent. Usually omit model and provider, and the sub-agent then uses the provider, model, and authentication of the host session. A model id is valid for its provider only. Therefore, if you give this field, you must also give provider. Do not get the provider from the name of the model."
     },
     "provider": {
       "type": "string",
-      "description": "Optional provider id. Normally OMIT both model and provider so the sub-agent inherits the host session. If you set this you must also set model."
+      "description": "An optional provider id. Usually omit model and provider, and the sub-agent then uses the host session. If you give this field, you must also give model."
     },
     "allow_untrusted": {
       "type": "boolean",
-      "description": "Set true ONLY after the user has explicitly declined to trust this workspace but still wants sub-agents: spawns them degraded (no project extensions, skills, or context files). Normally leave unset — if the workspace is untrusted, ask the user to run 'terva trust' first."
+      "description": "Set this to true only after the user refuses to trust this workspace but still wants sub-agents. The tool then starts each sub-agent with less capability: no project extensions, no skills, and no context files. Usually omit this field. If the workspace is not trusted, ask the user to run 'terva trust' first."
     },
     "backend": {
       "type": "string",
-      "description": "Optional. Hand this task to an EXTERNAL coding agent instead of a native terva sub-agent — e.g. \"claude\" for Claude Code. The external agent works in its own leased checkout, brings its own tools and credentials, and reports back its result the same way a native sub-agent does. Only available when the user has enabled external workers; omit for a normal terva sub-agent (the right default almost always)."
+      "description": "Optional. Give this task to an external coding agent instead of a terva sub-agent, for example \"claude\" for Claude Code. The external agent works in its own checkout and uses its own tools and credentials. It reports its result in the same way as a terva sub-agent. This field is available only when the user permits external workers. Omit it for a usual terva sub-agent, which is almost always correct."
     }
   },
   "required": ["task"]
@@ -181,7 +182,7 @@ const swarmSpawnSchema = `{
 
 func (t *SwarmSpawnTool) Name() string { return "swarm_spawn" }
 func (t *SwarmSpawnTool) Description() string {
-	return "Spawn a background sub-agent to work on an independent sub-task in parallel. Returns the sub-agent's id immediately and keeps running while this conversation continues — do NOT wait for it before moving on to your next piece of work. The sub-agent shares this working directory and has the same tools, but starts with NO context from this conversation, so give it a self-contained task description. Good for splitting genuinely independent work (write the tests while implementing the feature; investigate three files at once); not for trivial single-step work, for steps that depend on each other in sequence, or when the user asked you to do the work yourself. When every sub-agent you spawned finishes, you'll receive a single [auto-swarm update] recapping each one's outcome to summarize."
+	return i18n.D("tool.swarm_spawn.description", "Start a sub-agent in the background to do an independent task at the same time as your own work. The tool returns the id of the sub-agent immediately, and the sub-agent continues while this conversation continues. Do not wait for the sub-agent before you start your next task.\n\nThe sub-agent uses this working directory and has the same tools. But it starts with no context from this conversation. Therefore give it a complete description of its task.\n\nUse this tool to divide work that is fully independent. For example, write the tests while you write the feature, or examine three files at the same time. Do not use this tool for a task of one small step, for steps that must occur in sequence, or when the user asks you to do the work yourself.\n\nWhen all of your sub-agents stop, you get one [auto-swarm update] message. This message gives the result of each sub-agent for you to summarize.")
 }
 
 // Schema injects the dispatchable persona names as the `persona` enum when the

@@ -298,6 +298,24 @@ lint:
     # must match the wrapped T/P calls in packages/ and cmd/. Regenerate with
     # `go run ./cmd/terva-i18n-lint` and commit the result if this fails.
     go run ./cmd/terva-i18n-lint -check
+    # Model-visible tool text stays in Simplified Technical English. This fails
+    # on a finding .ste/baseline.json does not already hold — and equally on a
+    # baseline entry that no longer fires, so the accepted set can only shrink.
+    # See `just ste-lint` for the full report.
+    go run ./cmd/terva-ste-lint -check -q
+
+# Report every STE finding in the enrolled tool text, baseline included.
+ste-lint *FLAGS:
+    go run ./cmd/terva-ste-lint {{FLAGS}}
+
+# Print the tool text the lint actually reads — the model's-eye view.
+ste-lint-text:
+    go run ./cmd/terva-ste-lint -list
+
+# Re-record the accepted findings. Run after improving text the baseline holds,
+# and commit the shrunk .ste/baseline.json with the change that earned it.
+ste-lint-baseline:
+    go run ./cmd/terva-ste-lint -write-baseline
 
 # Format all Go sources in place.
 #

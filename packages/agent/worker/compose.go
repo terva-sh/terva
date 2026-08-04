@@ -161,7 +161,7 @@ func rerootIntoWorkspace(path, cwd, workspace string) string {
 func pointerNote(source string) string {
 	switch source {
 	case build.SourceAgentsMD:
-		return i18n.P("worker.pointer.agents_md", "the project's own conventions — follow them")
+		return i18n.P("worker.pointer.agents_md", "the conventions of the project, which you must follow")
 	case build.SourceContextFiles:
 		return i18n.P("worker.pointer.context_files", "context the person who dispatched you wanted you to have")
 	}
@@ -178,9 +178,9 @@ func pointerNote(source string) string {
 //
 // It names no tool. Rule 1 applies most sharply to the text terva itself writes.
 func reportingContract() string {
-	return i18n.P("worker.reporting", `## Reporting back
+	return i18n.P("worker.reporting", `## Your report
 
-When you are done, your final message is the whole report — it is the only thing the person who dispatched you will read. Summarise what you changed and why, and name the files you touched. If you could not finish, say so plainly and say what blocked you; a clear account of a failure is worth more than an optimistic summary of one.
+Your final message is the whole report. It is the only thing the person who dispatched you will read. Summarize what you changed and why, and name the files you touched. If you could not finish, say so plainly, and say what blocked you. A clear account of a failure is worth more than an optimistic summary of one.
 
-Leave your work in the workspace on its branch. Do not push it, and do not open a pull request — someone will review it where it stands.`)
+Leave your work in the workspace on its branch. Do not push it, and do not open a pull request. Someone will review the work where it stands.`)
 }

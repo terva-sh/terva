@@ -58,7 +58,7 @@ func TestConventionsDoNotClaimAnUnrenderedSurfaceRenders(t *testing.T) {
 // A bot's user is a chat room, and chat clients render a subset of markdown.
 func TestBotIsToldItIsSpeakingIntoAChat(t *testing.T) {
 	text := conventions(SystemPromptOpts{Surface: SurfaceOf(mode.Bot)})
-	for _, want := range []string{"chat message", "skip headings and tables"} {
+	for _, want := range []string{"chat message", "Skip headings and tables"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("bot conventions should mention %q:\n%s", want, text)
 		}
@@ -93,15 +93,15 @@ func TestFileEditConventionsOnlyWhenTheToolsExist(t *testing.T) {
 		Surface: SurfaceRendered,
 		Tools:   []ToolSummary{{Name: "edit"}, {Name: "write"}, {Name: "read"}},
 	})
-	if !strings.Contains(withTools, "prefer the edit tool") {
+	if !strings.Contains(withTools, "Use the edit tool") {
 		t.Errorf("edit/write are registered; the guidance should ship:\n%s", withTools)
 	}
 	noTools := conventions(SystemPromptOpts{Surface: SurfaceRendered})
-	if strings.Contains(noTools, "prefer the edit tool") {
+	if strings.Contains(noTools, "Use the edit tool") {
 		t.Errorf("--no-tools: the prompt must not name tools the model cannot call:\n%s", noTools)
 	}
 	// The output discipline is not about tools and survives either way.
-	if !strings.Contains(noTools, "let tool calls carry the operational detail") {
+	if !strings.Contains(noTools, "tool calls carry the operational detail") {
 		t.Errorf("output discipline is surface- and tool-independent:\n%s", noTools)
 	}
 }
@@ -120,9 +120,9 @@ func TestResolveDerivesTheSurfaceFromTheMode(t *testing.T) {
 		want string
 	}{
 		{mode.Interactive, "Use markdown freely"},
-		{mode.Bot, "posted as a chat message"},
+		{mode.Bot, "as a chat message"},
 		{mode.Print, "plain-text stream"},
-		{mode.RPC, "handed to a program"},
+		{mode.RPC, "to a program as structured events"},
 	}
 	for _, c := range cases {
 		r, err := Resolve(Args{Mode: c.mode, CWD: testsupport.TempDir(t)}, false)

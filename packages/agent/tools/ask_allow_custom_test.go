@@ -114,7 +114,7 @@ func TestClosingOneQuestionLeavesTheOthersOpen(t *testing.T) {
 // only decides what an unstated field means, and the schema is the only place
 // the model is told there is a decision to make.
 func TestTheSchemaSaysWhatAnUnstatedAllowCustomMeans(t *testing.T) {
-	for _, want := range []string{"Defaults to true", "false only when"} {
+	for _, want := range []string{"The default is true", "false only when"} {
 		if !strings.Contains(allowCustomDesc, want) {
 			t.Errorf("allow_custom description never says %q:\n%s", want, allowCustomDesc)
 		}

@@ -9,6 +9,7 @@ import (
 
 	"terva.sh/terva/packages/agent/tools/memory"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -91,13 +92,20 @@ type memoryArgs struct {
 
 func (t *MemoryTool) Name() string { return "memory" }
 
+// memoryDesc is the English default for tool.memory.description. A const so
+// the i18n extractor can resolve it: a concatenation passed inline as the
+// argument does not resolve, and an unresolvable default cannot be
+// overridden or translated.
+const memoryDesc = "Keep a memory that stays after this session. The memory has two scopes and two tiers.\n\n" +
+	"The scope is project or user. The default is project, which holds facts about this repository: its conventions, its dangers, and the location of each part. The user scope holds facts about the person that you work with, in all projects: their preferences, their environment, and their method of work.\n\n" +
+	"The active tier is always in your context. Therefore keep it small and short. Use add to append `text`. Use replace to put `text` in the position of the entry that contains `match`. Use remove to delete the entry that contains `match`.\n\n" +
+	"The archived tier is not in your context until its keys agree with the conversation. Therefore an archived entry can be long and can hold much detail. Use archive to store `text` with `keys`, or to move the active entry that agrees with `match`. Use search to find the archived entries that agree with `text`. Use recall to read the archived entry with the name in `match`. Use promote to move an archived entry into the active tier. Use forget to delete an archived entry.\n\n" +
+	"The choice of keys is difficult, and it decides if you find the memory again. Use the words that a person types when they need the fact. Do not use the identifiers in the fact itself. For example, put a note about the internal parts of the model catalog on the keys \"model\", \"catalog\", and \"add a model\". The person who asks does not know the name of the function yet, and this is the reason for the question. Exact error text and file paths are good keys, because a person copies them into a question.\n\n" +
+	"Use `secondary_keys` to make a wide primary key more narrow. An entry fires when a primary key agrees and at least one secondary key also agrees.\n\n" +
+	"Archive the facts that are worth storage but not worth space in each turn: procedures, investigations, and any text longer than two lines. Keep in the active tier the facts that apply to each conversation. The tool returns the new memory for the scope that you changed, so that you see your change immediately. The memory block at the start of a session does not change until the next session or a compaction."
+
 func (t *MemoryTool) Description() string {
-	return "Curate durable memory that survives this session, in two scopes and two tiers.\n\n" +
-		"scope: project (default; facts about this repo — conventions, gotchas, where things live) or user (cross-project facts about the person you work with — preferences, environment, how they like to work).\n\n" +
-		"ACTIVE tier — always in your context, so it stays small and terse. add (append `text`), replace (swap the entry containing `match` for `text`), remove (delete the entry containing `match`).\n\n" +
-		"ARCHIVED tier — not in your context until its keys match the conversation, so it can be long and detailed. archive (store `text`, or move the active entry matching `match`, with `keys`), search (find archived entries matching `text`), recall (read the archived entry named by `match`), promote (move an archived entry back into the active tier), forget (delete an archived entry).\n\n" +
-		"Choosing keys is the hard part and it decides whether the memory is ever seen again. Key on what someone would TYPE when they need the fact, not on the identifiers inside it: a note about model-catalog internals belongs on keys like \"model\", \"catalog\", \"add a model\" — the person asking does not know the function name yet, which is why they are asking. Exact error text and file paths are good keys when someone would paste them. Use `secondary_keys` to narrow a broad primary key; an entry fires when a primary matches AND at least one secondary does.\n\n" +
-		"Archive what is worth keeping but not worth carrying every turn: procedures, investigations, anything longer than a line or two. Keep the active tier for what shapes every conversation. Returns the updated memory for the scope you touched, so you see your change immediately — the block shown at session start does not refresh until the next session or a compaction."
+	return i18n.D("tool.memory.description", memoryDesc)
 }
 
 func (t *MemoryTool) Schema() json.RawMessage {
@@ -107,34 +115,34 @@ func (t *MemoryTool) Schema() json.RawMessage {
 			"action": map[string]any{
 				"type":        "string",
 				"enum":        []string{"add", "replace", "remove", "archive", "search", "recall", "promote", "forget"},
-				"description": "active tier: add | replace | remove — archived tier: archive | search | recall | promote | forget",
+				"description": "The operation to do. For the active tier, use add, replace, or remove. For the archived tier, use archive, search, recall, promote, or forget.",
 			},
 			"scope": map[string]any{
 				"type":        "string",
 				"enum":        []string{memory.ScopeProject, memory.ScopeUser},
-				"description": "project (default) | user — which memory to curate",
+				"description": "The memory to change. Use project for this repository, or user for the person. The default is project.",
 			},
 			"text": map[string]any{
 				"type":        "string",
-				"description": "the entry to add or archive, the new text for replace, or the query for search",
+				"description": "For add and archive, the entry. For replace, the new text. For search, the query.",
 			},
 			"match": map[string]any{
 				"type":        "string",
-				"description": "which entry to act on: a unique substring for the active tier, or an archived entry's id",
+				"description": "The entry to operate on. For the active tier, give a unique fragment of its text. For the archived tier, give the id of the entry.",
 			},
 			"name": map[string]any{
 				"type":        "string",
-				"description": "archive only: a short title for the entry (it also becomes the entry's id)",
+				"description": "For archive only. A short title for the entry. The title becomes the id of the entry.",
 			},
 			"keys": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
-				"description": "archive only, required: the words someone would type when they need this fact",
+				"description": "For archive only. This field is necessary. Give the words that a person types when they need this fact.",
 			},
 			"secondary_keys": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
-				"description": "archive only: narrows a broad primary key — the entry fires when a key matches AND at least one of these does",
+				"description": "For archive only. These keys make a wide primary key more narrow. The entry fires when a primary key agrees and at least one of these keys also agrees.",
 			},
 		},
 		"required": []string{"action"},

@@ -560,7 +560,7 @@ func (w *Workspace) assembleRaatiEvidence(question string, spec raatiEvidenceSpe
 	var sb strings.Builder
 	if user := strings.TrimSpace(spec.user); user != "" {
 		if len(user) > raatiUserEvidenceCap {
-			user = user[:raatiUserEvidenceCap] + "\n" + i18n.P("raati.evidence.truncated32", "[evidence truncated at 32KiB — the panel judges what it was shown]")
+			user = user[:raatiUserEvidenceCap] + "\n" + i18n.P("raati.evidence.truncated32", "[evidence stops at 32KiB. The panel judges only what appears above]")
 		}
 		fmt.Fprintf(&sb, "--- %s ---\n%s\n\n", i18n.P("raati.evidence.submitted", "evidence submitted with the question"), user)
 	}
@@ -593,7 +593,7 @@ func (w *Workspace) assembleRaatiEvidence(question string, spec raatiEvidenceSpe
 			w.diag(i18n.T("raati: conversation summary failed: %s", err.Error()))
 			fmt.Fprintf(&sb, "--- %s ---\n%s\n",
 				i18n.P("raati.evidence.summary_failed_hdr", "conversation summary"),
-				i18n.P("raati.evidence.summary_failed", "[a summary of the originating conversation was requested but could not be produced; the panel deliberates without it]"))
+				i18n.P("raati.evidence.summary_failed", "[terva asked for a summary of the source conversation, and the summary failed. The panel deliberates without it]"))
 			break
 		}
 		fmt.Fprintf(&sb, "--- %s ---\n%s\n", i18n.P("raati.evidence.summary", "the conversation this question arose from (summarized for this panel)"), summary)
@@ -656,7 +656,7 @@ func (w *Workspace) raatiSummarizeConversation(question, conversation string) (s
 	ag := core.NewAgent(r.NewClient(), r.Model,
 		i18n.P("raati.summarizer.system", "You prepare evidence briefs for a deliberation panel. You summarize faithfully and never recommend a verdict."), nil)
 	prompt := i18n.P("raati.summarizer.prompt",
-		"A three-member deliberation panel will decide the following question:\n%s\n\nSummarize the conversation below as an evidence brief for that panel: the relevant facts, constraints, decisions already made, and points of genuine disagreement. Do not argue for a verdict. Keep it under 400 words.\n\nConversation:\n%s",
+		"A three-member deliberation panel will decide the following question:\n%s\n\nSummarize the conversation below as an evidence brief for that panel. Include the relevant facts, constraints, decisions already made, and points of genuine disagreement. Do not argue for a verdict. Keep the brief under 400 words.\n\nConversation:\n%s",
 		question, conversation)
 	ctx, cancel := context.WithTimeout(w.ctx, 3*time.Minute)
 	defer cancel()
@@ -701,17 +701,17 @@ func (w *Workspace) raatiClerkAnswer(ctx context.Context, question, evidence str
 		return unanswered()
 	}
 	ag := core.NewAgent(r.NewClient(), r.Model,
-		i18n.P("raati.clerk.system", "You are the clerk of a deliberation panel. You answer the panel's questions STRICTLY from the record provided — never from your own knowledge, never by guessing, and you never recommend a verdict. For any question the record does not answer, reply exactly NOT_IN_RECORD for that item."), nil)
+		i18n.P("raati.clerk.system", "You are the clerk of a deliberation panel. Answer the questions of the panel from the record alone. Never answer from your own knowledge, and never guess. Never recommend a verdict. For any question that the record does not answer, reply exactly NOT_IN_RECORD for that item."), nil)
 	record := evidence
 	if strings.TrimSpace(record) == "" {
-		record = i18n.P("raati.clerk.no_record", "(no evidence was submitted — only the question itself is on the record)")
+		record = i18n.P("raati.clerk.no_record", "(the requester submitted no evidence. Only the question itself is on the record)")
 	}
 	var list strings.Builder
 	for i, q := range qs {
 		fmt.Fprintf(&list, "%d. (%s) %s\n", i+1, q.Unit, q.Question)
 	}
 	prompt := i18n.P("raati.clerk.prompt",
-		"The deliberation panel is deciding:\n%s\n\nThe record before the panel:\n%s\n\nThe panel's questions:\n%s\nAnswer each question from the record only. Reply with a fenced code block tagged `answers` holding a JSON array of strings, one per question, in order; use exactly NOT_IN_RECORD where the record does not answer.",
+		"The deliberation panel must decide:\n%s\n\nThe record before the panel:\n%s\n\nThe questions of the panel:\n%s\nAnswer each question from the record only. Reply with a fenced code block tagged `answers`. The block holds a JSON array of strings, one per question, in order. Use exactly NOT_IN_RECORD where the record does not answer.",
 		question, record, list.String())
 	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()

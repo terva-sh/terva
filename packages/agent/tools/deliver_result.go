@@ -10,6 +10,7 @@ import (
 	"terva.sh/terva/packages/agent/deliverable"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/envcompat"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -40,7 +41,7 @@ type DeliverResultTool struct {
 
 func (t *DeliverResultTool) Name() string { return "deliver_result" }
 func (t *DeliverResultTool) Description() string {
-	return "Record your structured deliverable for the dispatcher that spawned you. Call exactly once, near the end of your task, with your COMPLETE findings as the arguments — they must match this tool's schema. If the call reports a validation error, fix the arguments and call again. This does not end your turn: after a successful call, finish with a short prose summary for humans."
+	return i18n.D("tool.deliver_result.description", "Record your structured result for the dispatcher that started you. Call this tool one time only, near the end of your task. Give all of your findings as the arguments, and make sure that they agree with the schema of this tool. If the tool reports an error in the arguments, correct them and call the tool again. This call does not end your turn. After a successful call, write a short summary in prose for the human reader.")
 }
 func (t *DeliverResultTool) Schema() json.RawMessage { return t.ArgSchema }
 

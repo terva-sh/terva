@@ -1002,7 +1002,7 @@ func TestConveneConvergenceRound(t *testing.T) {
 	if len(turns) != 2 {
 		t.Fatalf("yata turns = %d, want 2", len(turns))
 	}
-	if !strings.Contains(turns[1], "CONVERGENCE") {
+	if !strings.Contains(turns[1], "convergence round") {
 		t.Errorf("round-3 prompt missing convergence framing:\n%s", turns[1])
 	}
 }

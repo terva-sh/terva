@@ -212,7 +212,7 @@ func (s *wsSession) flushSwarmSummary(batch []*swarmWatchEntry) {
 		if task == "" {
 			task = e.task
 		}
-		sb.WriteString(i18n.P("swarm.summary.agent_line", "%d. agent %s — status: %s", idx+1, snap.ID, status))
+		sb.WriteString(i18n.P("swarm.summary.agent_line", "%d. agent %s, status: %s", idx+1, snap.ID, status))
 		sb.WriteByte('\n')
 		if snap.Persona != "" {
 			sb.WriteString(i18n.P("swarm.summary.persona", "   persona: %s", snap.Persona))
@@ -247,7 +247,7 @@ func (s *wsSession) flushSwarmSummary(batch []*swarmWatchEntry) {
 			// from an empty one, and the old tail fallback existed precisely
 			// because silence looked worse than noise. Silence is not the
 			// alternative; a statement is.
-			sb.WriteString(i18n.P("swarm.summary.no_findings", "   findings: none — this sub-agent produced no answer"))
+			sb.WriteString(i18n.P("swarm.summary.no_findings", "   findings: none. This sub-agent produced no answer"))
 			sb.WriteByte('\n')
 		}
 		// Structured-deliverable verdict (schema spawns only): the free-text
@@ -256,10 +256,10 @@ func (s *wsSession) flushSwarmSummary(batch []*swarmWatchEntry) {
 		// from the deleted modes twin, where c7c22551 had landed it in code
 		// nothing called — this recap never said it in production before.
 		if len(snap.Deliverable) > 0 {
-			sb.WriteString(i18n.P("swarm.summary.deliverable_ok", "   deliverable: validated structured report (%d bytes; full JSON via the tasks surface)", len(snap.Deliverable)))
+			sb.WriteString(i18n.P("swarm.summary.deliverable_ok", "   deliverable: validated structured report, %d bytes. The full JSON is on the tasks surface", len(snap.Deliverable)))
 			sb.WriteByte('\n')
 		} else if snap.DeliverableError != "" {
-			sb.WriteString(i18n.P("swarm.summary.deliverable_err", "   deliverable: contract NOT met — %s", truncateForSummary(snap.DeliverableError, 240)))
+			sb.WriteString(i18n.P("swarm.summary.deliverable_err", "   deliverable: the contract is not met: %s", truncateForSummary(snap.DeliverableError, 240)))
 			sb.WriteByte('\n')
 		}
 		// The retrieval handle for the findings the 1500-byte budget cut off:
@@ -267,7 +267,7 @@ func (s *wsSession) flushSwarmSummary(batch []*swarmWatchEntry) {
 		// otherwise guess it is a project session id and hit "no such
 		// session"). Only when the child actually has a transcript.
 		if snap.SessionPath != "" {
-			sb.WriteString(i18n.P("swarm.summary.inspect", "   full transcript: session_inspect with session_id %q (it is a sub-agent id, not a project session; expand an event's #n for its complete text)", snap.ID))
+			sb.WriteString(i18n.P("swarm.summary.inspect", "   full transcript: session_inspect with session_id %q. The id names a sub-agent, not a project session. Expand the #n of an event for its complete text", snap.ID))
 			sb.WriteByte('\n')
 		}
 		sb.WriteString("\n")
@@ -276,10 +276,10 @@ func (s *wsSession) flushSwarmSummary(batch []*swarmWatchEntry) {
 	// delegated spend against a launching session that recorded $5.36 — the
 	// coordinator could have reported the small number in good faith.
 	if batchUsage.CostUSD > 0 {
-		sb.WriteString(i18n.P("swarm.summary.batch_cost", "Batch cost: $%.4f across %d sub-agent(s), spent on this session's credentials.", batchUsage.CostUSD, len(batch)))
+		sb.WriteString(i18n.P("swarm.summary.batch_cost", "Batch cost: $%.4f across %d sub-agent(s), spent on the credentials of this session.", batchUsage.CostUSD, len(batch)))
 		sb.WriteString("\n\n")
 	}
-	sb.WriteString(i18n.P("swarm.summary.instruction", "This is observed state from sub-agents you spawned, not a new user request. Briefly summarise the collective outcome for the user, referencing the agents by id. If any failed, suggest a follow-up; otherwise confirm completion. Do not spawn new sub-agents unless the user asks."))
+	sb.WriteString(i18n.P("swarm.summary.instruction", "This note reports the state of sub-agents you started. It is not a new user request. Summarize the collective outcome for the user in brief, and reference the agents by id. If any failed, suggest a follow-up. Otherwise confirm completion. Do not start new sub-agents unless the user asks."))
 	s.queue(sb.String())
 }
 

@@ -130,7 +130,7 @@ func (t *ActorSpawnTool) composeTask(name, situation string) string {
 func (t *ActorSpawnTool) Name() string { return "actor_spawn" }
 
 func (t *ActorSpawnTool) Description() string {
-	return "Voice a member of the cast: dispatch a named actor to respond, in character, to the current situation, and return their line so you can weave it into the scene. The actor is a separate performer that sees ONLY the situations you give it — describe what is happening and what it should react to. An actor REMEMBERS your earlier exchanges with it this scene and builds on them, so its voice and choices stay consistent from turn to turn (you may still restate context freely — memory is a continuity bonus, not something to rely on). You remain the narrator and the source of truth about the world."
+	return i18n.D("tool.actor_spawn.description", "Speak as a member of the cast. The tool sends the current situation to a named actor, and the actor responds in character. The tool returns the line of the actor for you to put in the scene.\n\nThe actor is a separate performer. It sees only the situations that you give to it. Therefore describe the events and tell the actor what to respond to.\n\nAn actor remembers your earlier exchanges with it in this scene and continues from them. Its voice and its choices thus stay the same from turn to turn. You can still repeat the context, because the memory of the actor is an advantage and not a guarantee.\n\nYou stay the narrator, and you are the source of truth about the world.")
 }
 
 func (t *ActorSpawnTool) Schema() json.RawMessage {
@@ -141,16 +141,16 @@ func (t *ActorSpawnTool) Schema() json.RawMessage {
     "actor": {
       "type": "string",
       "enum": %s,
-      "description": "The cast member to voice — one of the declared actor names. A NAME only, never a path."
+      "description": "The cast member to speak as. Give one of the declared actor names. Give a name only, and never give a path."
     },
     "situation": {
       "type": "string",
-      "description": "What is happening and what the actor should respond to, in enough detail to react in character. The actor remembers earlier turns and stays consistent, but keep each situation self-contained enough to stand on its own."
+      "description": "The events, and what the actor must respond to. Give sufficient detail for a response in character. The actor remembers the earlier turns and stays the same, but make each situation complete without other information."
     },
     "tier": {
       "type": "string",
       "enum": ["weak", "medium", "strong"],
-      "description": "Optional model strength for the actor on its FIRST appearance (weak = cheap/fast). Resolved for the host provider, never stronger than the host. Omit to inherit the host model; ignored once the actor is live."
+      "description": "An optional model strength for the actor at its first appearance. A weak model is cheap and fast. The tool selects a model of this strength from the host provider, and the model is never stronger than the host model. Omit this field to use the host model. The tool ignores this field after the actor starts."
     }
   },
   "required": ["actor", "situation"]

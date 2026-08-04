@@ -248,8 +248,8 @@ func TestContextPressureNoteRespectsAutoCompactOff(t *testing.T) {
 	if strings.Contains(eph, "auto-compacted") {
 		t.Errorf("off-mode note still promises auto-compaction: %q", eph)
 	}
-	if !strings.Contains(eph, "disabled") || !strings.Contains(eph, "/compact") {
-		t.Errorf("off-mode note should say compaction is disabled and point at manual /compact: %q", eph)
+	if !strings.Contains(eph, "automatic compaction off") || !strings.Contains(eph, "/compact") {
+		t.Errorf("off-mode note should say compaction is off and point at manual /compact: %q", eph)
 	}
 }
 

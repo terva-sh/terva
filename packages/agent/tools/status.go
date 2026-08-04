@@ -11,6 +11,7 @@ import (
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/buildinfo"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -132,7 +133,7 @@ func (t *StatusTool) SetProvider(provider, authMethod, baseURL string) {
 func (t *StatusTool) Name() string { return "terva_status" }
 
 func (t *StatusTool) Description() string {
-	return "Report your own runtime status: model, provider, the running terva binary's version/commit/build-date, the loaded extensions and their versions, process uptime, working directory, session id and transcript file, reasoning effort, and how full your context window is. Takes no arguments. Useful for deciding whether to summarize or wrap up before the context fills, and for reporting which build and which extension versions are serving this session — name them in anything you write down, so a later reader can check it against what actually shipped."
+	return i18n.D("tool.terva_status.description", "Report your own status. The report gives the model, the provider, and the version, commit, and build date of the terva binary. It also gives the loaded extensions and their versions, the run time of the process, the working directory, the session id, the transcript file, the reasoning effort, and the quantity of your context window that is in use. This tool takes no arguments.\n\nUse this tool to decide if you must summarize or stop before the context becomes full. Use it also to report which build and which extension versions serve this session. Give these values in each record that you write, so that a later reader can compare them with the release.")
 }
 
 // No arguments. Providers that require an object schema accept an

@@ -1,6 +1,6 @@
 ---
 name: write-terva-themes
-description: Help the user create, install, or package terva themes, including theme-only extensions.
+description: Help the user create, install, or package terva themes, and also theme-only extensions.
 ---
 
 # Writing terva themes

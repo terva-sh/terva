@@ -395,7 +395,7 @@ func Manifest(refs []Ref, missing int) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(i18n.P("chat.attachment_preamble", "(the user attached files, saved locally — read them with your tools if relevant:"))
+	b.WriteString(i18n.P("chat.attachment_preamble", "(the user attached files, and terva saved them locally. Read them with your tools if relevant:"))
 	b.WriteByte('\n')
 	for _, r := range refs {
 		fmt.Fprintf(&b, "  %s — %s", flatten(r.Path), r.Kind)
@@ -412,7 +412,7 @@ func Manifest(refs []Ref, missing int) string {
 	}
 	if missing > 0 {
 		b.WriteString(i18n.P("chat.attachment_expired",
-			"  (%d further attachment(s) are no longer on disk — ask the user to re-attach them if you need them)", missing))
+			"  (%d further attachment(s) are no longer on disk. Ask the user to re-attach them if you need them)", missing))
 		b.WriteByte('\n')
 	}
 	b.WriteString(")\n")

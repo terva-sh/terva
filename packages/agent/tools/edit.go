@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -34,11 +35,11 @@ type editArgs struct {
 	Edits []editOp `json:"edits"`
 }
 
-const editSchema = `{"type":"object","properties":{"path":{"type":"string"},"edits":{"type":"array","items":{"type":"object","properties":{"oldText":{"type":"string"},"newText":{"type":"string"},"replaceAll":{"type":"boolean","description":"replace every occurrence instead of requiring oldText to be unique"}},"required":["oldText","newText"]}}},"required":["path","edits"]}`
+const editSchema = `{"type":"object","properties":{"path":{"type":"string"},"edits":{"type":"array","items":{"type":"object","properties":{"oldText":{"type":"string"},"newText":{"type":"string"},"replaceAll":{"type":"boolean","description":"Replace all the occurrences of oldText. If you set this, oldText does not have to be unique."}},"required":["oldText","newText"]}}},"required":["path","edits"]}`
 
 func (t *EditTool) Name() string { return "edit" }
 func (t *EditTool) Description() string {
-	return "Edit a file via exact-match replacements. Read the file first so each oldText matches the on-disk bytes exactly. Each oldText must be unique in the file unless replaceAll is set (use replaceAll to change every occurrence). If nothing matches exactly, a whitespace-tolerant match (same lines, one uniform indent shift) is applied when unambiguous."
+	return i18n.D("tool.edit.description", "Change a file with exact-match replacements. First, read the file. Then make sure that each oldText value agrees exactly with the bytes on the disk. Each oldText value must occur one time only in the file. To change all the occurrences, set replaceAll to true.\n\nIf no text agrees exactly, the tool tries a match that permits different whitespace. This match applies only when the lines are the same and the indent moves by one equal amount. If the result is ambiguous, the tool does not change the file.")
 }
 func (t *EditTool) Schema() json.RawMessage { return json.RawMessage(editSchema) }
 

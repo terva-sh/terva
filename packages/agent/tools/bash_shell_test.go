@@ -73,7 +73,7 @@ func TestResolveShellFallsBackToSh(t *testing.T) {
 func TestBashDescriptionNamesTheShell(t *testing.T) {
 	tool := &BashTool{CWD: testsupport.TempDir(t)}
 	desc := tool.Description()
-	if !strings.Contains(desc, "under "+shellName()) {
+	if !strings.Contains(desc, "with "+shellName()) {
 		t.Fatalf("description does not name the resolved shell %q:\n%s", shellName(), desc)
 	}
 }

@@ -53,7 +53,7 @@ func personaRoster(ps []persona.Persona) string {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString(i18n.P("swarm.roster.intro", "Specialist personas you can dispatch — pass the name as swarm_spawn's `persona` parameter to boot a sub-agent as that specialist:"))
+	sb.WriteString(i18n.P("swarm.roster.intro", "Specialist personas you can dispatch. Pass the name as the `persona` parameter of swarm_spawn to boot a sub-agent as that specialist:"))
 	sb.WriteByte('\n')
 	for _, p := range ps {
 		fmt.Fprintf(&sb, "- %s", p.Ref())
@@ -68,7 +68,7 @@ func personaRoster(ps []persona.Persona) string {
 		}
 		sb.WriteByte('\n')
 	}
-	sb.WriteString(i18n.P("swarm.roster.footer", "Dispatch a persona only by a name from this list, picking the one whose focus matches the sub-task; omit `persona` for a general-purpose sub-agent."))
+	sb.WriteString(i18n.P("swarm.roster.footer", "Dispatch a persona only by a name from this list. Pick the one whose focus matches the task. Omit `persona` for a general-purpose sub-agent."))
 	return sb.String()
 }
 

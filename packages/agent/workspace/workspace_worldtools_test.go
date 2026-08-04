@@ -217,12 +217,12 @@ func TestWorldNoteDescriptionRedirectsToReveal(t *testing.T) {
 	if !strings.Contains(desc, "world_reveal") {
 		t.Fatalf("world_note's description must steer semantic duplicates to world_reveal:\n%s", desc)
 	}
-	if !strings.Contains(desc, "already covers") {
-		t.Errorf("the redirect should name the failure mode (an entry that already covers the fact):\n%s", desc)
+	if !strings.Contains(desc, "already holds this fact") {
+		t.Errorf("the redirect should name the failure mode (an entry that already holds the fact):\n%s", desc)
 	}
 	// The SD4 write path: the description is the ONLY place the director
 	// learns the pin exists and that its name is the append-only exception.
-	if !strings.Contains(desc, core.SceneStateName) || !strings.Contains(desc, "REPLACES") {
+	if !strings.Contains(desc, core.SceneStateName) || !strings.Contains(desc, "replaces the content") {
 		t.Errorf("the description must teach the scene-state carve-out:\n%s", desc)
 	}
 }

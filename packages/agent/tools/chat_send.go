@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -49,11 +50,11 @@ type chatSendImageArgs struct {
 	Caption string `json:"caption,omitempty"`
 }
 
-const chatSendImageSchema = `{"type":"object","properties":{"path":{"type":"string","description":"absolute or cwd-relative path to a local image file (png/jpg/gif/webp)"},"caption":{"type":"string","description":"optional caption sent alongside the image"}},"required":["path"]}`
+const chatSendImageSchema = `{"type":"object","properties":{"path":{"type":"string","description":"The path to a local png, jpg, gif, or webp file. Give an absolute path, or a path relative to the working directory."},"caption":{"type":"string","description":"An optional caption. The tool sends it with the image."}},"required":["path"]}`
 
 func (t *ChatSendImageTool) Name() string { return "chat_send_image" }
 func (t *ChatSendImageTool) Description() string {
-	return "Send a local image file to the paired chat (e.g. Telegram) as an inline image. Use when the user, chatting remotely, asks to see an image rather than have it described."
+	return i18n.D("tool.chat_send_image.description", "Send a local image file to the paired chat, for example Telegram. The chat shows the image. Use this tool when a user in a remote chat asks to see an image. Do not use it when a description is sufficient.")
 }
 func (t *ChatSendImageTool) Schema() json.RawMessage {
 	return json.RawMessage(chatSendImageSchema)
@@ -114,11 +115,11 @@ type chatSendFileArgs struct {
 	Caption string `json:"caption,omitempty"`
 }
 
-const chatSendFileSchema = `{"type":"object","properties":{"path":{"type":"string","description":"absolute or cwd-relative path to any local file"},"caption":{"type":"string","description":"optional caption sent alongside the file"}},"required":["path"]}`
+const chatSendFileSchema = `{"type":"object","properties":{"path":{"type":"string","description":"The path to any local file. Give an absolute path, or a path relative to the working directory."},"caption":{"type":"string","description":"An optional caption. The tool sends it with the file."}},"required":["path"]}`
 
 func (t *ChatSendFileTool) Name() string { return "chat_send_file" }
 func (t *ChatSendFileTool) Description() string {
-	return "Send a local file to the paired chat (e.g. Telegram) as a document attachment (no compression). Use for non-image files or when the recipient needs the original bytes."
+	return i18n.D("tool.chat_send_file.description", "Send a local file to the paired chat, for example Telegram. The chat shows the file as an attachment and does not compress it. Use this tool for a file that is not an image, or when the reader needs the original bytes.")
 }
 func (t *ChatSendFileTool) Schema() json.RawMessage {
 	return json.RawMessage(chatSendFileSchema)

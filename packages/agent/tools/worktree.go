@@ -15,6 +15,7 @@ import (
 
 	"terva.sh/terva/packages/agent/worktree"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -57,7 +58,7 @@ func worktreeResult(v any, err error) (core.ToolResult, error) {
 	return core.ToolResult{Content: []provider.Content{provider.TextBlock{Text: string(b)}}}, nil
 }
 
-const worktreeRepoRootDesc = "optional path to the target git repo (absolute, or relative to cwd) to operate on instead of the cwd's repo; omit to use cwd. cwd_worktree still reflects your real cwd, not this override"
+const worktreeRepoRootDesc = "An optional path to the git repository to operate on. Give an absolute path, or a path relative to the working directory. Omit this field to use the repository of the working directory. The value of cwd_worktree always shows your true working directory, and not this path."
 
 func worktreeRepoRootProp() map[string]any {
 	return map[string]any{"type": "string", "description": worktreeRepoRootDesc}
@@ -86,7 +87,7 @@ type worktreeListArgs struct {
 
 func (t *WorktreeListTool) Name() string { return "worktree_list" }
 func (t *WorktreeListTool) Description() string {
-	return "List git worktrees for the current repo. Read-only. Returns JSON: each worktree's name, path, branch, base_commit/base_ref, head_commit, status (available|claimed), claimed_by (self|<session>|null), stale_reason, dirty, and unmanaged; plus repo_key and cwd_worktree (the one you're in, or null). Optional `match` filters the results by {status, base_ref, mine} (e.g. available worktrees branched from main). Call this before worktree_create to reuse an existing worktree."
+	return i18n.D("tool.worktree_list.description", "List the git worktrees of the current repository. This tool only reads, and it changes nothing. The tool returns JSON. For each worktree it gives the name, the path, the branch, base_commit, base_ref, head_commit, the status, claimed_by, stale_reason, dirty, and unmanaged. The status is available or claimed. The value of claimed_by is self, a session id, or null. The JSON also gives repo_key and cwd_worktree, which is the worktree that you are in, or null.\n\nThe optional field `match` selects the results by status, base_ref, and mine. For example, it can select the available worktrees with a branch from main. Call this tool before worktree_create, so that you can use a worktree that exists.")
 }
 func (t *WorktreeListTool) ToolGroupName() string { return "worktree" }
 func (t *WorktreeListTool) Schema() json.RawMessage {
@@ -95,11 +96,11 @@ func (t *WorktreeListTool) Schema() json.RawMessage {
 		"properties": map[string]any{
 			"match": map[string]any{
 				"type":        "object",
-				"description": "optional filter for the returned worktrees (does not affect cwd_worktree)",
+				"description": "An optional filter for the worktrees that the tool returns. The filter does not change cwd_worktree.",
 				"properties": map[string]any{
-					"status":   map[string]any{"type": "string", "enum": []string{"available", "claimed"}, "description": "only worktrees with this status"},
-					"base_ref": map[string]any{"type": "string", "description": "only worktrees branched from this ref"},
-					"mine":     map[string]any{"type": "boolean", "description": "only worktrees claimed by this session"},
+					"status":   map[string]any{"type": "string", "enum": []string{"available", "claimed"}, "description": "Return the worktrees with this status only."},
+					"base_ref": map[string]any{"type": "string", "description": "Return the worktrees with a branch from this ref only."},
+					"mine":     map[string]any{"type": "boolean", "description": "Return the worktrees that this session claimed only."},
 				},
 			},
 			"repo_root": worktreeRepoRootProp(),
@@ -132,16 +133,16 @@ type worktreeCreateArgs struct {
 
 func (t *WorktreeCreateTool) Name() string { return "worktree_create" }
 func (t *WorktreeCreateTool) Description() string {
-	return "Create (or reuse) a git worktree and claim it for this session. Provide `name` (slugged; becomes branch wt/<name>). Optional `base` (ref/SHA to branch from; default current HEAD) and `reuse_if_available` (default true: if <name> exists and is available, claim and return it instead of erroring). Returns the worktree JSON incl. `reused`. Errors if <name> is claimed by another live session."
+	return i18n.D("tool.worktree_create.description", "Make a git worktree, or use one that exists, and claim it for this session. Give `name`. The tool makes a slug from the name, and the branch becomes wt/<name>.\n\nThe optional field `base` gives the ref or the SHA for the branch, and the default is the current HEAD. The optional field `reuse_if_available` has the default true. With this default, if <name> exists and is available, the tool claims it and returns it, and does not report an error.\n\nThe tool returns the worktree JSON, which includes `reused`. The tool reports an error if another live session claimed <name>.")
 }
 func (t *WorktreeCreateTool) ToolGroupName() string { return "worktree" }
 func (t *WorktreeCreateTool) Schema() json.RawMessage {
 	return mustSchema(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"name":               map[string]any{"type": "string", "description": "worktree name; slugged into branch wt/<name>"},
-			"base":               map[string]any{"type": "string", "description": "ref or SHA to branch from (default: current HEAD)"},
-			"reuse_if_available": map[string]any{"type": "boolean", "description": "if <name> exists and is available, claim and return it (default true)"},
+			"name":               map[string]any{"type": "string", "description": "The name of the worktree. The tool makes a slug from it for the branch wt/<name>."},
+			"base":               map[string]any{"type": "string", "description": "The ref or the SHA for the branch. The default is the current HEAD."},
+			"reuse_if_available": map[string]any{"type": "boolean", "description": "If <name> exists and is available, claim it and return it. The default is true."},
 			"repo_root":          worktreeRepoRootProp(),
 		},
 		"required": []string{"name"},
@@ -184,11 +185,11 @@ type WorktreeClaimTool struct{ *WorktreeCore }
 
 func (t *WorktreeClaimTool) Name() string { return "worktree_claim" }
 func (t *WorktreeClaimTool) Description() string {
-	return "Claim an existing available worktree for this session by `name`, without creating one — use it to take over an idle worktree another agent left (see worktree_list). Idempotent if you already hold it; errors if it is claimed by another live session. Returns the worktree JSON."
+	return i18n.D("tool.worktree_claim.description", "Claim an available worktree for this session by `name`, and do not make a new worktree. Use this tool to take a worktree that another agent left, as worktree_list shows. If you already hold the worktree, the tool changes nothing. The tool reports an error if another live session claimed the worktree. The tool returns the worktree JSON.")
 }
 func (t *WorktreeClaimTool) ToolGroupName() string { return "worktree" }
 func (t *WorktreeClaimTool) Schema() json.RawMessage {
-	return worktreeNameSchema("name of an existing worktree to claim")
+	return worktreeNameSchema("The name of a worktree that exists, for the tool to claim.")
 }
 
 func (t *WorktreeClaimTool) Execute(ctx context.Context, raw json.RawMessage, progress func(string)) (core.ToolResult, error) {
@@ -203,11 +204,11 @@ type WorktreeReleaseTool struct{ *WorktreeCore }
 
 func (t *WorktreeReleaseTool) Name() string { return "worktree_release" }
 func (t *WorktreeReleaseTool) Description() string {
-	return "Release this session's claim on a worktree by `name` so another agent can take it, without removing the worktree. Clears a stale claim too; errors only if the worktree is held by another live session. Returns JSON { name, released, status }."
+	return i18n.D("tool.worktree_release.description", "Release the claim of this session on a worktree by `name`, so that another agent can take it. The tool does not remove the worktree. The tool also releases a claim that is stale. The tool reports an error only if another live session holds the worktree. The tool returns JSON with name, released, and status.")
 }
 func (t *WorktreeReleaseTool) ToolGroupName() string { return "worktree" }
 func (t *WorktreeReleaseTool) Schema() json.RawMessage {
-	return worktreeNameSchema("name of the worktree to release")
+	return worktreeNameSchema("The name of the worktree to release.")
 }
 
 func (t *WorktreeReleaseTool) Execute(ctx context.Context, raw json.RawMessage, progress func(string)) (core.ToolResult, error) {
@@ -231,16 +232,16 @@ type worktreeRemoveArgs struct {
 
 func (t *WorktreeRemoveTool) Name() string { return "worktree_remove" }
 func (t *WorktreeRemoveTool) Description() string {
-	return "Remove a managed git worktree by `name`. Refuses if it has uncommitted changes or unmerged/unpushed commits unless `force` is true. Leaves the branch by default; set `delete_branch` to also delete wt/<name>. Returns JSON { name, removed, branch_deleted }."
+	return i18n.D("tool.worktree_remove.description", "Remove a managed git worktree by `name`. The tool refuses if the worktree has changes that you did not commit, or commits that you did not merge or push. To remove the worktree in these conditions, set `force` to true. The tool keeps the branch by default. To also delete the branch wt/<name>, set `delete_branch`. The tool returns JSON with name, removed, and branch_deleted.")
 }
 func (t *WorktreeRemoveTool) ToolGroupName() string { return "worktree" }
 func (t *WorktreeRemoveTool) Schema() json.RawMessage {
 	return mustSchema(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"name":          map[string]any{"type": "string", "description": "name of the worktree to remove"},
-			"force":         map[string]any{"type": "boolean", "description": "remove even with uncommitted or unmerged/unpushed work"},
-			"delete_branch": map[string]any{"type": "boolean", "description": "also delete the wt/<name> branch (default false)"},
+			"name":          map[string]any{"type": "string", "description": "The name of the worktree to remove."},
+			"force":         map[string]any{"type": "boolean", "description": "Remove the worktree also when it holds work that you did not commit, merge, or push."},
+			"delete_branch": map[string]any{"type": "boolean", "description": "Also delete the branch wt/<name>. The default is false."},
 			"repo_root":     worktreeRepoRootProp(),
 		},
 		"required": []string{"name"},

@@ -63,7 +63,7 @@ func TestLiveDelegatedLineReportsCost(t *testing.T) {
 	if !strings.Contains(line, "1 sub-agent") {
 		t.Errorf("line does not say how many are running: %q", line)
 	}
-	if !strings.Contains(line, "not yet in this session's delegated total") {
+	if !strings.Contains(line, "finished ones move into the delegated total") {
 		t.Errorf("line does not disclaim double-counting: %q", line)
 	}
 }

@@ -10,6 +10,7 @@ import (
 
 	"terva.sh/terva/packages/agent/raati"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -127,37 +128,37 @@ const raatiConveneSchema = `{
   "properties": {
     "question": {
       "type": "string",
-      "description": "The ONE decisive question before the panel, phrased so approve/reject is meaningful. Panelists have no tools and no context from this conversation — the question plus evidence must stand alone."
+      "description": "The one decisive question for the panel. Write the question so that approval or rejection has a meaning. The panelists have no tools and no context from this conversation. Therefore the question and the evidence must be complete without other information."
     },
     "profile": {
       "type": "string",
-      "description": "Named convening profile from the user's config (raati.profiles); the tool description lists what is configured and what each is for. A profile supplies defaults for level, class, and deliberation shape, and may pin the panel's seats; anything you set explicitly in this call overrides the profile — except seat composition, which is config-owned. Prefer a profile plus question and evidence ALONE: restating a knob the profile already sets buys nothing, and an explicit level blocks the profile from auto-seating the strongest panel this config supports."
+      "description": "A named convening profile from the configuration of the user, in raati.profiles. The description of this tool lists the configured profiles and the purpose of each one. A profile gives defaults for the level, the class, and the form of the deliberation, and it can also set the seats of the panel. A value that you give in this call replaces the value from the profile, but the configuration always controls the seats. Give a profile with the question and the evidence only. A value that the profile already sets gives no advantage. An explicit level also stops the profile, and the profile then cannot seat the strongest panel that the configuration permits."
     },
     "class": {
       "type": "string",
       "enum": ["advisory", "gate", "veto"],
-      "description": "Decision class. advisory (default): majority decides, dissent attached. gate: unanimity to pass, fails closed on any dissent, abstention, or missing unit — use when the user asked for a hard check. veto: majority, but the benevolence seat can block."
+      "description": "The decision class. With advisory, which is the default, the majority decides and the tool attaches the dissent. With gate, all the panelists must agree, and the result is a failure if a unit dissents, abstains, or is absent. Use gate when the user asks for a strict check. With veto, the majority decides, but the benevolence seat can stop the decision."
     },
     "level": {
       "type": "integer",
       "enum": [0, 1, 2],
-      "description": "Rigor level. OMIT THIS when you pass a profile: the profile resolves it, auto-seating the highest rigor the user's config supports — you cannot see that config, so an explicit level can only cap the panel below it or demand one that does not exist (and error). Set it only to deliberately force a rung. 0 (the default without a profile): all seats on this session's model — cheapest, but the judgments are CORRELATED (same weights, different priors); fine for triage. 1: the provider's weak/medium/strong ladder. 2: three different providers — real independence; needs raati.level2 in the user config."
+      "description": "The rigor level. Omit this field when you give a profile, because the profile then selects the level. The profile seats the highest rigor that the configuration of the user permits. You cannot see that configuration, so an explicit level can only make the panel weaker, or ask for a level that does not exist and cause an error. Give this field only when you must force one level. Level 0 is the default without a profile, and all the seats use the model of this session. Level 0 is the cheapest, but the judgments correlate, because the seats have the same weights and different priors. Level 0 is sufficient for triage. Level 1 uses the weak, medium, and strong models of the provider. Level 2 uses three different providers and gives true independence, and it needs raati.level2 in the configuration of the user."
     },
     "evidence": {
       "type": "string",
-      "description": "The decision-relevant material, inlined (diffs, logs, constraints, prior decisions). Do not assume the panel can see anything you haven't put here."
+      "description": "The material for the decision, written in full in this field: the diffs, the logs, the constraints, and the earlier decisions. The panel sees only the material that you put here."
     },
     "single_round": {
       "type": "boolean",
-      "description": "Skip the cross-examination round: blind ballots are final. Roughly halves cost and time, at the price of no rebuttal — for quick triage only."
+      "description": "Do not run the cross-examination round, and make the first ballots final. This decreases the cost and the time by approximately one half, but no panelist can answer another panelist. Use this field for quick triage only."
     },
     "inquire": {
       "type": "boolean",
-      "description": "Let panelists pose up to two questions each; a clerk answers between rounds STRICTLY from the evidence you supplied (one extra model pass). Questions the evidence cannot answer are recorded as open — supply better evidence instead of enabling this to paper over gaps."
+      "description": "Permit each panelist to ask a maximum of two questions. A clerk answers them between the rounds, and uses only the evidence that you supplied. This needs one more model pass. The tool records as open each question that the evidence cannot answer. Give better evidence instead of this field when the evidence has a gap."
     },
     "converge": {
       "type": "boolean",
-      "description": "Permit ONE extra reveal round, run only if cross-examination flipped a verdict — stabilizes mutual revisions. Never resolves an escalated split; costs up to three more sub-agent turns when triggered."
+      "description": "Permit one more reveal round. The tool runs this round only if the cross-examination changed a verdict, and the round makes mutual changes stable. This round never corrects a split that the panel escalated. The round costs a maximum of three more sub-agent turns when it runs."
     }
   },
   "required": ["question"]
@@ -165,8 +166,26 @@ const raatiConveneSchema = `{
 
 func (t *RaatiConveneTool) Name() string { return "raati_convene" }
 
+// raatiConveneDesc is the English default for tool.raati_convene.description:
+// the part that is true whatever the user has configured.
+const raatiConveneDesc = "Convene a deliberation panel of three units, which is a raati, on one decisive question, and wait for its verdict. The three panelists have different priors: truth, consequence, and human impact. They deliberate without knowledge of each other, then cross-examine, then cast ballots. The tool counts the ballots under the decision class.\n\n" +
+	"This tool is expensive and slow. It uses approximately six sub-agent model turns and some minutes of time.\n\n" +
+	"Convene a panel only when an independent judgment changes your next action. Examples are a decision with a large effect, a decision that is difficult to reverse, a decision that is truly ambiguous, and a check that the user asks for. Do not convene a panel for a routine choice. Do not convene a panel for a question that your evidence answers. Do not convene a panel more than one time on the same question.\n\n" +
+	"A split verdict is information and not a failure. Always read the minority report before you act. If the panel asks questions, an open question shows that the evidence is not sufficient. Convene the panel again with the answers, and do not send the same evidence again.\n\n" +
+	"An escalated decision means that the panel could not decide. Give such a decision to the user, and do not convene the panel again.\n\n" +
+	"If the tool refuses to convene a panel, or if the convening fails, no panel ran. Say this each time that you report the decision. Never say that a panel reviewed the work if no panel ran."
+
+// raatiProfilesDesc is the addendum shown only when the user has configured
+// convening profiles. Its single %s is the rendered profile list.
+//
+// It is a SECOND key rather than English glue appended to the first, because
+// glue is what makes a keyed entry untranslatable and unoverridable: an
+// operator who rewrote the base description would find this paragraph still
+// in the shipped English, welded on after their text.
+const raatiProfilesDesc = "\n\nTo convene a panel by profile, give a profile with the question and the evidence, and omit 'level'. A profile selects the level itself, and it seats the highest rigor that the configuration of the user permits. You cannot see that configuration. Therefore an explicit level can only make the panel weaker, or ask for a level that does not exist. These are the configured convening profiles. Select one by its purpose: %s."
+
 func (t *RaatiConveneTool) Description() string {
-	d := "Convene a three-unit deliberation panel (a raati) on ONE decisive question and wait for its verdict. Three panelists with deliberately different priors — truth, consequence, human impact — deliberate blind, cross-examine, and cast ballots tallied under the decision class. EXPENSIVE AND SLOW: roughly six sub-agent model turns and minutes of wall clock. Convene only when independent judgment changes what you do next: a high-stakes or hard-to-reverse decision, a genuinely ambiguous call, or a gate the user asked to be checked. Never for routine choices, questions the evidence at hand already answers, or repeatedly on the same question. A split verdict is information, not failure — ALWAYS read the minority report before acting, and if the panel posed questions, treat open ones as unmet evidence: reconvene with answers, don't re-roll the same packet. An 'escalated' decision means the panel could not decide: take it to the user, don't re-roll it. A refused or failed convening means NO panel ran: say so wherever you report the decision, and never describe the work as reviewed on the strength of a panel that didn't happen."
+	d := i18n.D("tool.raati_convene.description", raatiConveneDesc)
 	if len(t.Profiles) == 0 {
 		return d
 	}
@@ -174,15 +193,15 @@ func (t *RaatiConveneTool) Description() string {
 	// by purpose. The description is the whole selection surface: the
 	// agent names a profile, the config decides what that means.
 	var sb strings.Builder
-	sb.WriteString(d)
-	sb.WriteString(" Convene BY PROFILE: pass a profile plus question and evidence, and omit 'level' — a profile resolves the level itself, auto-seating the highest rigor the user's config supports, which you cannot see and an explicit level can only cap or overshoot. Configured convening profiles (pick by what it is for):")
 	for _, name := range raati.ProfileNames(t.Profiles) {
-		sb.WriteString(" [")
+		if sb.Len() > 0 {
+			sb.WriteString(" ")
+		}
+		sb.WriteString("[")
 		sb.WriteString(raati.ProfileLine(name, t.Profiles[name]))
 		sb.WriteString("]")
 	}
-	sb.WriteString(".")
-	return sb.String()
+	return d + i18n.D("tool.raati_convene.profiles", raatiProfilesDesc, sb.String())
 }
 
 func (t *RaatiConveneTool) Schema() json.RawMessage { return json.RawMessage(raatiConveneSchema) }

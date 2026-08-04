@@ -1,6 +1,6 @@
 ---
 name: write-terva-lore
-description: Author terva lore — authored, file-backed context that terva injects only when it is keyword-relevant (or always-on). Use to create/add/write lore, "world info", a lorebook entry, keyed background, or a character's book of facts.
+description: Author terva lore. Lore is context that a person authors in files. terva injects it only when it is keyword-relevant, or always-on. Use to create/add/write lore, "world info", a lorebook entry, keyed background, or a book of facts for a character.
 ---
 
 # Writing terva lore
