@@ -86,7 +86,7 @@ Adding a carrier is a binding, not new protocol work.
 
 ## Method groups
 
-The surface is split into five **capability-negotiated groups** with different
+The surface is split into six **capability-negotiated groups** with different
 rates of change and audiences. A client declares which groups it speaks in its
 hello; a minimal client (the mobile PWA) negotiates only the first two.
 
@@ -96,6 +96,7 @@ hello; a minimal client (the mobile PWA) negotiates only the first two.
 | **session** | session lifecycle (list/create/resume/fork/rename/delete/archive/restore/export), usage (incl. snapshots and reset credits), context breakdown + tree nodes, side chat, surfaces, i18n catalog, the workspace file listing, the read-only provider-credential view, and the model-backed advisory verbs (suggest, the doctors, next scene, realize) | frontend-driving |
 | **control** | host-reconfiguring management: models (incl. per-model overrides and defaults), trust, restart, reset-credit redemption, the content library (cards, personas, user personas, backgrounds, groups, Worlds), World lore and settings — and (future) prompt/system overrides, templates, jail | **categorically higher** — see [Security & authority](#security--authority) |
 | **auth** | MODEL-PROVIDER credential mutation: establish, repair, and revoke the credential terva uses to reach Anthropic / OpenAI / Kimi, plus forgetting a named endpoint | **categorically higher, and separate from control** — see below. **Optional**: off the base server hello; `terva web` advertises it only under `--web-allow-login`, and never on an unauthenticated listener |
+| **secrets** | terva's **at-rest** encryption posture (what is sealed, what is still plaintext, which components hold a key) and the secret store's grant model | **categorically higher, and separate from auth** — see below. **Optional**: off the base server hello; `terva web` advertises it only under `--web-allow-secrets`, and never on an unauthenticated listener |
 | **replay** | a recorded session's transport (`replay.control` / `replay.state`) and its `replay_state` broadcast | frontend-driving, but **optional**: it is off the base server hello — only a carrier backing a `ReplayController` advertises it, so a client that negotiates it is guaranteed the group is served |
 
 `auth` is its own group rather than a corner of `control` because **the group is
@@ -318,6 +319,37 @@ or revoke it, but nothing on this wire hands the token back.
 | `auth.login.cancel` | `{flow}` | abandon a flow in progress |
 | `auth.logout` | `{provider}` | clear a stored credential; `all` clears every one. `openai` and `openai-codex` are separate logins sharing one slot on disk — a platform API key and a ChatGPT subscription — and clearing one leaves the other standing |
 | `auth.endpoint.remove` | `{id}` | forget a named openai-compatible endpoint: its entry in config.json's `endpoints`, and any key stored under that id. **Deliberately not a logout.** A logout forgets a secret and the provider is still there to sign back into; this forgets the operator's *definition* of a server — which host, which port, which context window. Making "sign out" do that silently would be a trap, so the two verbs stay apart even though the same pane offers both |
+
+**secrets** (optional — served only by a carrier backing a `SecretsController`,
+which advertises the group in its hello; otherwise `unsupported`. `terva web`
+advertises it only under `--web-allow-secrets`, and refuses to on an
+unauthenticated listener. The in-process TUI serves it unconditionally: the flag
+exists to keep a *remote* peer from enumerating the host, and a user at that
+terminal already has `terva secret status`)
+
+terva's **at-rest** posture — what is encrypted, what is still plaintext, which
+components hold a key — and the secret store's grant model. Separate from
+**auth** by the argument that separated **auth** from **control**, one rung
+further: `auth` writes the credential terva uses to reach a model provider,
+while this reports on the key that opens *everything*, including material `auth`
+never touches.
+
+**No verb here returns a secret value**, and two things are deliberately absent.
+**Rotation**, in either mode: `terva secret rotate` supersedes the key and
+`--revoke` destroys it, so a bug in a client — or a hostile one — bricks the
+install; it is rare and operator-initiated, so it stays on the CLI. And **`init`
+/ `migrate`**, for a weaker form of the same reason: both rewrite every
+secret-bearing file in the home, and a fresh install now seals itself, so the
+on-ramp needs no wire verb. Both are trivial to add later and impossible to
+un-ship.
+
+| Method | Params → Result | Effect |
+|---|---|---|
+| `secrets.status` | → `{SecretsStatus}` | the whole posture as a struct — key state and permissions, the public recipient, retired-key count, per-file encrypted/plaintext state, the store's scopes and counts, config.json's secret locations, the registered components, the per-component **read verdicts** (`reads`), and the grants. **Shape only**: paths, modes, counts, names, states and reasons; no value anywhere, so it is safe to paste into an issue. `key.state` distinguishes `absent` (encryption was never on — `terva secret init` is right) from `missing` (ciphertext exists that this key was meant to open — minting a new one would strand it permanently), which is the one field a reader can act on wrongly. A component with `registered: false` holds sealed values that no registry entry claims a recipient for, so a rotation cannot re-seal it. `reads` is a **different axis**: whether the agent's own tools may read inside each component's directory, which a component earns by being verifiably free of plaintext secrets. A `reads` row with `enforced: false` is a verdict that is reported but not yet applied — a declaration requirement still in its grace period, surfaced so the change is visible before it bites. `grants[].expired` is computed by the **daemon**, because a client's clock is not the daemon's. This is the same struct `terva secret status` renders — one producer, so a pane and a terminal cannot disagree about what is encrypted |
+| `secrets.list` | → `{scopes: [{scope, keys}]}` | the store's scopes and the **key names** under each. A key name is schema, not material — `bot_token` says what a slot is for and nothing about what is in it, which is the line that lets `list` exist while a `get` never will |
+| `secrets.grant` | `{principal, scope, mode, ttl?}` | authorize `principal` against `scope`. `mode` is `use` (may ask the host to act with the secret, may not receive the material) or `read`. `ttl` is a **duration** (`720h`), not a timestamp: the daemon computes the deadline against its own clock, because a caller supplying an absolute time would be asserting agreement about *now* with a machine it may share neither a timezone nor an accurate clock with. Default is deny — there is no ambient tier a component reads without being named |
+| `secrets.revoke` | `{principal, scope}` | withdraw one grant. Both halves are required: a principal may hold grants on several scopes, and dropping all of them because one was named would be a surprise in the direction that matters |
+| `secrets.forget` | `{scope, purge?}` → `{component?, grants?, values?, remaining?}` | drop terva's record of a component: its registry entry and every grant naming it. **Never automatic** — "not seen for N days" is indistinguishable from a seasonal connector — and it has teeth beyond tidying: an uninstalled component never acks a new generation, so it pins every retired key in the ring open forever, and this is the unblock. `purge` additionally **deletes the values it stored**; without it they are left in place and counted in `remaining`, because a user unblocking a rotation would be badly surprised to lose a still-installed component's credential. The result says what was actually removed, so a forget against a typo'd scope does not read the same as one that worked |
 
 **replay** (optional — served only by a carrier backing a `ReplayController`,
 which advertises the group in its hello; otherwise `unsupported`)

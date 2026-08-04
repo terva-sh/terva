@@ -54,6 +54,13 @@ type Options struct {
 	// unauthenticated listener (see web_mode.go).
 	AllowLogin bool
 
+	// AllowSecrets advertises the SECRETS GROUP: this daemon will report its
+	// at-rest encryption posture and manage the secret store's grants. Off the
+	// base ServerHello for the same reason AllowLogin is, and separate from it
+	// because the two grant different authority — see [ctrlproto.GroupSecrets].
+	// Never enabled on an unauthenticated listener (see web_mode.go).
+	AllowSecrets bool
+
 	// AllowStage mounts the Stage app at /stage/ and advertises the `stage`
 	// feature in the hello, so the panel offers an "open in Stage" link. Off by
 	// default (--web-stage) — Stage is the immersive chat/play surface, a distinct
@@ -478,6 +485,9 @@ func serveWS(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options, 
 	}
 	if opts.AllowLogin {
 		hello.Groups = append(hello.Groups, ctrlproto.GroupAuth)
+	}
+	if opts.AllowSecrets {
+		hello.Groups = append(hello.Groups, ctrlproto.GroupSecrets)
 	}
 	if opts.AllowStage {
 		hello.Features = append(hello.Features, ctrlproto.FeatureStage)

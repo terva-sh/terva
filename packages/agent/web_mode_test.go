@@ -36,3 +36,24 @@ func TestWebCredentialBootFailsOnlyWhenNothingCanSignIn(t *testing.T) {
 		t.Errorf("the refusal should name the flag that makes it recoverable, got: %v", err)
 	}
 }
+
+// Both categorically-higher groups answer to ONE listener rule, so a third
+// cannot arrive with a laxer one. The bar is self-restart's: a bounded audience
+// (loopback, or a scoped CIDR) is fine; blanket --web-insecure with no auth is
+// not, and a stranger reaching an open port must not inherit the operator's
+// authority over credentials.
+func TestPrivilegedGroupsAreRefusedOnAnOpenListener(t *testing.T) {
+	for _, what := range []string{"provider login", "secret management"} {
+		if servePrivilegedGroup(true, true, what) {
+			t.Errorf("%s must be refused on an unauthenticated open listener", what)
+		}
+		if !servePrivilegedGroup(true, false, what) {
+			t.Errorf("%s must be served when the listener authenticates", what)
+		}
+		// A flag that was never passed stays off either way — the refusal must
+		// not be the only reason it is off, or the test above proves nothing.
+		if servePrivilegedGroup(false, false, what) {
+			t.Errorf("%s must stay off when its flag was not passed", what)
+		}
+	}
+}

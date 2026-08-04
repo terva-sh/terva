@@ -314,6 +314,44 @@ func (s *Service) AuthEndpointRemove(ctx context.Context, p ctrlproto.AuthEndpoi
 	return s.c.Call(ctx, "", ctrlproto.MethodAuthEndpointRemove, p, nil)
 }
 
+// --- secrets group (optional; served only when the daemon advertised
+// GroupSecrets) ---
+//
+// Forwarded rather than answered locally, which is the whole point: `terva
+// attach` runs on a machine that is not the daemon's, and a posture report
+// assembled from THIS host's credential home would describe the wrong home
+// confidently. The daemon owns the answer, exactly as it owns the login.
+//
+// Nothing here returns a secret value, and there is no rotate verb to forward.
+
+var _ ctrlproto.SecretsController = (*Service)(nil)
+
+func (s *Service) SecretsStatus(ctx context.Context) (ctrlproto.SecretsStatus, error) {
+	var r ctrlproto.SecretsStatus
+	err := s.c.Call(ctx, "", ctrlproto.MethodSecretsStatus, nil, &r)
+	return r, err
+}
+
+func (s *Service) SecretsList(ctx context.Context) (ctrlproto.SecretsListResult, error) {
+	var r ctrlproto.SecretsListResult
+	err := s.c.Call(ctx, "", ctrlproto.MethodSecretsList, nil, &r)
+	return r, err
+}
+
+func (s *Service) SecretsGrant(ctx context.Context, p ctrlproto.SecretsGrantParams) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodSecretsGrant, p, nil)
+}
+
+func (s *Service) SecretsRevoke(ctx context.Context, p ctrlproto.SecretsRevokeParams) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodSecretsRevoke, p, nil)
+}
+
+func (s *Service) SecretsForget(ctx context.Context, p ctrlproto.SecretsForgetParams) (ctrlproto.SecretsForgetResult, error) {
+	var r ctrlproto.SecretsForgetResult
+	err := s.c.Call(ctx, "", ctrlproto.MethodSecretsForget, p, &r)
+	return r, err
+}
+
 // --- model params (models.json overrides) ---
 
 var _ ctrlproto.ModelParamsController = (*Service)(nil)

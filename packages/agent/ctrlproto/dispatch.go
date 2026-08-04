@@ -151,6 +151,10 @@ var (
 	noLogin       = unsupportedMsg(func() string { return i18n.T("login not supported") })
 	noModelParams = unsupportedMsg(func() string { return i18n.T("editing model settings is not supported here") })
 	noContinue    = unsupportedMsg(func() string { return i18n.T("continue is not available here") })
+	// Localized rather than plain(): unlike the web-only surfaces below, the
+	// secrets group is reachable from the TUI's in-process carrier and from
+	// `terva attach`, so a user can meet this answer in a terminal.
+	noSecrets = unsupportedMsg(func() string { return i18n.T("secret management is not available here") })
 
 	noCards       = plain("the card library is not available here")
 	noCardGroups  = plain("card groups are not available here")

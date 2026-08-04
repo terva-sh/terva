@@ -1640,6 +1640,148 @@ export interface ProvidersView {
   can_login?: boolean
 }
 
+// The secrets group (optional, served only under --web-allow-secrets): terva's
+// AT-REST encryption posture and the secret store's grants.
+//
+// Separate from the auth group above by the same argument that separates auth
+// from control, one rung further: auth writes the credential terva uses to
+// reach a model provider, while this reports on the key that opens EVERYTHING.
+//
+// Nothing here is a secret value — paths, modes, counts, names, states and
+// reasons only. And there is no rotate verb: rotation supersedes or destroys a
+// key, so it stays on the CLI where a bug in this client cannot brick an
+// install.
+
+// SecretsKey is where the at-rest key came from and whether it is usable.
+//
+// `absent` and `missing` are the one distinction here a reader can act on
+// wrongly: absent means encryption was never turned on (`terva secret init` is
+// right), while missing means ciphertext exists that this key was meant to
+// open, and minting a new one would strand it permanently. Render them
+// differently.
+export interface SecretsKey {
+  state: 'present' | 'absent' | 'missing' | 'unusable'
+  path?: string
+  // Permission bits ('0600'), absent when the identity did not come from a file.
+  mode?: string
+  owner_only?: boolean
+  // The identity came from the environment, so there is no mode to show.
+  from_env?: boolean
+  reason?: string
+}
+
+// SecretsFile is one whole-file-sealed store's state, from a content sniff
+// rather than a configuration check: a home configured for encryption can still
+// hold plaintext written before it was.
+export interface SecretsFile {
+  name: string
+  state: 'absent' | 'encrypted' | 'plaintext' | 'unreadable'
+  // The actionable half, when there is one.
+  note?: string
+}
+
+// SecretsScope is one scope in the store, by name and count. Key NAMES are
+// secrets.list — a separate call, because a status pane wants the summary.
+export interface SecretsScope {
+  scope: string
+  keys: number
+}
+
+export interface SecretsStore {
+  present: boolean
+  encrypted: boolean
+  scopes?: SecretsScope[]
+  error?: string
+}
+
+// config.json's secret-bearing values, by location and state. Paths only.
+export interface SecretsConfigScan {
+  total: number
+  plaintext?: string[]
+  // Values no manifest could classify, so nothing can say whether they are
+  // secret. Reported because unknown is not clean.
+  unclassified?: string[]
+  // The payoff verdict: with nothing secret left in the file, the agent's own
+  // tools may read it.
+  agent_can_read: boolean
+  reason?: string
+}
+
+// SecretsComponent is one secret-holding component terva knows about.
+export interface SecretsComponent {
+  scope: string
+  paths: number
+  file?: string
+  // Absent when the component has never handshaked — not a zero date.
+  last_seen?: string
+  // False for a component whose file holds sealed values while no registry
+  // entry claims a recipient. That is the row that matters: a rotation cannot
+  // re-seal it, so `rotate --revoke` would leave terva unable to read it.
+  // Starting the component once fixes it.
+  registered: boolean
+}
+
+// SecretsComponentRead is one component DIRECTORY's readability: may the agent's
+// own tools read inside it?
+//
+// A different axis from SecretsComponent, which answers "can terva rotate this
+// component's secrets?". A component can be perfectly registered for rotation
+// and still hold a plaintext value that keeps its tree denied, and an extension
+// has no registry entry at all yet still has a data directory. Merging the two
+// would make "not registered" mean two unrelated things.
+export interface SecretsComponentRead {
+  scope: string
+  dir?: string
+  readable: boolean
+  // What is blocking, and what to do about it. Empty when readable.
+  reason?: string
+  // Whether `readable` is actually applied. False while a declaration
+  // requirement is still in its grace period — reported so the change is
+  // visible before it bites, rather than arriving as a directory that
+  // silently went dark.
+  enforced: boolean
+}
+
+// SecretsGrant is one authorization. `expired` is computed by the DAEMON — our
+// clock is not its clock.
+export interface SecretsGrant {
+  principal: string
+  scope: string
+  mode: 'use' | 'read'
+  expires?: string
+  expired?: boolean
+}
+
+// SecretsStatus is `terva secret status` as a struct — the same paths, modes,
+// counts and reasons, with no value anywhere. The CLI renders this exact shape,
+// so the pane and the terminal cannot disagree about what is encrypted.
+export interface SecretsStatus {
+  key: SecretsKey
+  // The PUBLIC half recorded in config.json: safe to display, and the thing a
+  // component seals to.
+  recipient?: string
+  // Keys that still OPEN files not yet rewritten and never seal. Non-zero is
+  // normal after a lazy rotation.
+  retired_keys?: number
+  files?: SecretsFile[]
+  store: SecretsStore
+  config: SecretsConfigScan
+  components?: SecretsComponent[]
+  // Whether the agent may read each component's own directory. Those trees stay
+  // readable, and each component earns it by being verifiably free of plaintext
+  // secrets.
+  reads?: SecretsComponentRead[]
+  grants?: SecretsGrant[]
+}
+
+// SecretsScopeKeys is one scope and its key NAMES. A key name is schema, not
+// material — 'bot_token' says what a slot is for and nothing about what is in
+// it, which is why this can exist while a `get` never will.
+export interface SecretsScopeKeys {
+  scope: string
+  keys?: string[]
+}
+
 // AuthFlowStep is what the daemon asks us to render for a login. One shape for
 // every provider — the client does not know, and must not need to know, which
 // fields Anthropic wants versus an OpenAI-compatible endpoint. Add a provider
@@ -2033,6 +2175,11 @@ export type Verb =
   | 'sessions.rename'
   | 'sessions.restore'
   | 'sessions.resume'
+  | 'secrets.forget'
+  | 'secrets.grant'
+  | 'secrets.list'
+  | 'secrets.revoke'
+  | 'secrets.status'
   | 'sidechat.ask'
   | 'sidechat.close'
   | 'sidechat.open'

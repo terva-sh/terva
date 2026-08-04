@@ -102,7 +102,20 @@ const MaxToolCallBytes = 1 << 20 // 1 MiB
 // emits it. Such events need no version bump and no RequireProtocol. Only
 // request/response features (whose caller blocks for a host answer) gate
 // on the version.
-const ProtocolVersion = 5
+//
+//	6 — extension secrets. secret_set / secret_get / secret_delete /
+//	    secret_list let an extension keep credentials it acquires at RUNTIME
+//	    (an OAuth token it negotiated, an API key a user pasted into its own
+//	    UI) without writing them to ext-data/ in the clear, where a model
+//	    reading files finds them. The host seals them into its own scoped
+//	    store, so unlike a connector an extension needs no key of its own —
+//	    it never runs when terva does not, so a key to generate, store, back
+//	    up and rotate would buy nothing. Scoping is HOST-enforced: the driver
+//	    substitutes the calling extension's manifest name and the frames carry
+//	    no scope to forge. These BLOCK on a reply, so an extension that needs
+//	    them declares RequireProtocol(6) rather than hanging against a v5
+//	    host.
+const ProtocolVersion = 6
 
 // Lifecycle event names the host emits to subscribed extensions. These
 // constants are the single source of truth: the emit sites use them, the
@@ -286,6 +299,69 @@ type HostToolResultFromHost struct {
 	ID      string         `json:"id"`
 	Content []ContentBlock `json:"content"`
 	IsError bool           `json:"is_error,omitempty"`
+}
+
+// SecretSetFromExt stores one secret for the calling extension. The frame
+// carries no scope: the host substitutes the extension's manifest name, so
+// there is nothing here to forge.
+type SecretSetFromExt struct {
+	Type  string `json:"type"` // "secret_set"
+	ID    string `json:"id"`
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// SecretGetFromExt reads back one secret the extension itself stored.
+//
+// Deliberately NOT a way to read config secrets: those already arrive opened,
+// through hello_ack and PushConfigUpdate, and a third path to one value is how
+// they drift. It would also bypass the one thing delivery does that matters —
+// an unopenable value is DROPPED, not delivered — so an extension asking
+// directly would get an error where delivery gives an absence.
+type SecretGetFromExt struct {
+	Type string `json:"type"` // "secret_get"
+	ID   string `json:"id"`
+	Key  string `json:"key"`
+}
+
+// SecretDeleteFromExt forgets one secret.
+type SecretDeleteFromExt struct {
+	Type string `json:"type"` // "secret_delete"
+	ID   string `json:"id"`
+	Key  string `json:"key"`
+}
+
+// SecretListFromExt asks for the extension's own key NAMES.
+type SecretListFromExt struct {
+	Type string `json:"type"` // "secret_list"
+	ID   string `json:"id"`
+}
+
+// SecretValueFromHost answers SecretGetFromExt. Found distinguishes "absent"
+// from "present and empty" without overloading Value.
+type SecretValueFromHost struct {
+	Type  string `json:"type"` // "secret_value"
+	ID    string `json:"id"`
+	Found bool   `json:"found"`
+	Value string `json:"value,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+// SecretKeysFromHost answers SecretListFromExt with key NAMES only. Never
+// values: a listing surface that returns values is one mistake away from being
+// a listing surface that leaks.
+type SecretKeysFromHost struct {
+	Type  string   `json:"type"` // "secret_keys"
+	ID    string   `json:"id"`
+	Keys  []string `json:"keys"`
+	Error string   `json:"error,omitempty"`
+}
+
+// SecretAckFromHost answers secret_set and secret_delete.
+type SecretAckFromHost struct {
+	Type  string `json:"type"` // "secret_ack"
+	ID    string `json:"id"`
+	Error string `json:"error,omitempty"`
 }
 
 // ListSessionsFromExt asks the host for the past sessions of a project

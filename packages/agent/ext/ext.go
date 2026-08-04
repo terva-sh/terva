@@ -46,6 +46,7 @@ import (
 	"bufio"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -58,6 +59,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/privfs"
 )
 
 func base64Encode(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
@@ -739,7 +741,12 @@ func (h HostInfo) ProjectDataDir() (string, error) {
 		proj = "_noproject"
 	}
 	dir := filepath.Join(h.DataDir, "projects", proj)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// Owner-only, matching the data dir the host created above it. An
+	// extension's state is as private as the host's own: it routinely holds
+	// tokens an extension obtained at runtime, and a 0755 subdirectory under
+	// a 0700 parent is a mode that only looks safe — the parent is what is
+	// stopping the traversal, and nothing guarantees it always will.
+	if err := privfs.MkdirAll(dir); err != nil {
 		return "", err
 	}
 	return dir, nil
@@ -809,7 +816,13 @@ func (f DataFS) ReadFile(name string) ([]byte, error) {
 }
 
 // WriteFile writes name to the writable layer (copy-on-write), creating
-// parent directories. It never touches the read-only install layer.
+// parent directories owner-only.
+//
+// perm is yours: an extension that stages a helper binary wants 0755 and
+// should get it. The DIRECTORIES are not yours — they are private like the
+// data dir the host created, because the alternative is a 0755 tree under a
+// 0700 parent, which is a mode that only looks safe. It never touches the
+// read-only install layer.
 func (f DataFS) WriteFile(name string, data []byte, perm os.FileMode) error {
 	rel, err := cleanRel(name)
 	if err != nil {
@@ -819,7 +832,7 @@ func (f DataFS) WriteFile(name string, data []byte, perm os.FileMode) error {
 		return fmt.Errorf("ext: no writable data dir")
 	}
 	p := filepath.Join(f.upper, rel)
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(p)); err != nil {
 		return err
 	}
 	return os.WriteFile(p, data, perm)
@@ -2157,4 +2170,104 @@ func (e *Extension) dispatchIntercept(ei extproto.EventInterceptFromHost) {
 	}
 
 	_ = e.send(resp)
+}
+
+// Secrets an extension acquires at RUNTIME — an OAuth token it negotiated, an
+// API key a user pasted into its own UI — are the one class terva's at-rest
+// encryption could not reach before protocol 6. An extension could only write
+// them to its ext-data/ directory, in the clear, at whatever mode it chose, and
+// a model reading files under $TERVA_HOME would find them.
+//
+// The host brokers them instead: they live in terva's own scoped store, sealed
+// with terva's key. An extension gets no key of its own, deliberately — it
+// never runs when terva does not, so a key to generate, store, back up and
+// rotate would buy nothing that brokering does not already give, and brokered
+// storage means a rotation reaches a STOPPED extension's secrets too.
+//
+// Scoping is host-enforced: the frames carry no scope, and the driver
+// substitutes this extension's manifest name. One extension cannot name
+// another's.
+//
+// These are NOT for config secrets. Those already arrive opened, in the
+// register phase and on every config change, and a second path to one value is
+// how the two drift.
+//
+// All four require host protocol 6; gate with RequireProtocol(6).
+
+// SetSecret stores one secret under this extension's own scope. An empty value
+// deletes, so a caller clearing a credential need not pick a verb.
+func (e *Extension) SetSecret(key, value string) error {
+	id := e.nextID()
+	line, err := e.request(id, extproto.SecretSetFromExt{
+		Type: "secret_set", ID: id, Key: key, Value: value,
+	}, defaultRequestTimeout)
+	if err != nil {
+		return err
+	}
+	var resp extproto.SecretAckFromHost
+	if err := json.Unmarshal(line, &resp); err != nil {
+		return err
+	}
+	if resp.Error != "" {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
+// Secret reads back one secret this extension stored. The second return is
+// false when nothing is stored under key — distinct from a stored empty value,
+// so a caller can tell "never configured" from "explicitly cleared".
+func (e *Extension) Secret(key string) (string, bool, error) {
+	id := e.nextID()
+	line, err := e.request(id, extproto.SecretGetFromExt{
+		Type: "secret_get", ID: id, Key: key,
+	}, defaultRequestTimeout)
+	if err != nil {
+		return "", false, err
+	}
+	var resp extproto.SecretValueFromHost
+	if err := json.Unmarshal(line, &resp); err != nil {
+		return "", false, err
+	}
+	if resp.Error != "" {
+		return "", false, errors.New(resp.Error)
+	}
+	return resp.Value, resp.Found, nil
+}
+
+// DeleteSecret forgets one secret. Missing is not an error.
+func (e *Extension) DeleteSecret(key string) error {
+	id := e.nextID()
+	line, err := e.request(id, extproto.SecretDeleteFromExt{
+		Type: "secret_delete", ID: id, Key: key,
+	}, defaultRequestTimeout)
+	if err != nil {
+		return err
+	}
+	var resp extproto.SecretAckFromHost
+	if err := json.Unmarshal(line, &resp); err != nil {
+		return err
+	}
+	if resp.Error != "" {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
+// SecretKeys lists the names of this extension's stored secrets. Names only —
+// values never travel on this call.
+func (e *Extension) SecretKeys() ([]string, error) {
+	id := e.nextID()
+	line, err := e.request(id, extproto.SecretListFromExt{Type: "secret_list", ID: id}, defaultRequestTimeout)
+	if err != nil {
+		return nil, err
+	}
+	var resp extproto.SecretKeysFromHost
+	if err := json.Unmarshal(line, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Error != "" {
+		return nil, errors.New(resp.Error)
+	}
+	return resp.Keys, nil
 }

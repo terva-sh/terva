@@ -43,6 +43,22 @@ import (
 // Without login there is no route to a credential at all, so the failure stands.
 // It names the flag rather than only the problem, because "start it differently"
 // is the actionable half and the operator is already at a shell.
+// servePrivilegedGroup decides whether a categorically-higher method group may
+// be served on this listener, and says so when it refuses.
+//
+// One predicate for every such group — the auth group and the secrets group
+// today — so a third cannot quietly arrive with a laxer rule. The bar is the
+// same one self-restart answers to: loopback-only or a scoped CIDR is a bounded
+// audience; blanket --web-insecure with no auth is not, and a stranger who can
+// reach an open port must not inherit the operator's authority over credentials.
+func servePrivilegedGroup(want, noListenerAuth bool, what string) bool {
+	if want && noListenerAuth {
+		fmt.Fprintf(os.Stderr, "terva web: refusing %s on an insecure (no-auth) listener — add --web-token, --web-auth-header, or scope it with --web-insecure-cidr\n", what)
+		return false
+	}
+	return want
+}
+
 func webCredentialBoot(credErr error, allowLogin bool) error {
 	if credErr == nil || allowLogin {
 		return nil
@@ -79,11 +95,13 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 	// blanket --web-insecure with no auth is not.
 	unscopedInsecure := args.WebInsecure && len(args.WebInsecureCIDRs) == 0
 	noListenerAuth := unscopedInsecure && args.WebToken == "" && args.WebAuthHeader == ""
-	allowLogin := args.AllowWebLogin
-	if allowLogin && noListenerAuth {
-		fmt.Fprintln(os.Stderr, "terva web: refusing provider login on an insecure (no-auth) listener — add --web-token, --web-auth-header, or scope it with --web-insecure-cidr")
-		allowLogin = false
-	}
+	allowLogin := servePrivilegedGroup(args.AllowWebLogin, noListenerAuth, "provider login")
+	// The secrets group answers to the same rule, for a related reason a rung
+	// along: it returns no secret VALUE and cannot rotate a key — neither is on
+	// the wire — but the report names every scope, component and grant on the
+	// host. That is a map of what is worth stealing, and not something to hand to
+	// whoever reaches an open port.
+	allowSecrets := servePrivilegedGroup(args.AllowWebSecrets, noListenerAuth, "secret management")
 	// Workspace prep below (credential resolve, MCP server spawn + tool listing)
 	// runs BEFORE the listener binds, so a refreshing browser sees
 	// connection-refused until it finishes — announce it, and time it so a slow
@@ -203,6 +221,11 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 		fmt.Fprintln(os.Stderr, "terva web: provider login enabled (the Providers pane can add, repair, and revoke credentials)")
 	}
 
+	if allowSecrets {
+		ws.EnableSecrets()
+		fmt.Fprintln(os.Stderr, "terva web: secret management enabled (posture and grants; no value is served and rotation stays on the CLI)")
+	}
+
 	trustedProxies, err := web.ParseTrustedProxies(args.WebTrustedProxies)
 	if err != nil {
 		return err
@@ -249,6 +272,7 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 		Jailed:         ws.Sandbox().Locked(),
 		AllowRestart:   allowRestart,
 		AllowLogin:     allowLogin,
+		AllowSecrets:   allowSecrets,
 		AllowStage:     allowStage,
 	})
 }

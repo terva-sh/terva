@@ -254,6 +254,7 @@ manifest tells terva how to launch it:
 | `permissions` | optional **bundle contribution**: suggested permission rules (see below). |
 | `config` | optional. a schema of settings the user fills in via `/extensions` (see below). |
 | `connector` | optional, experimental. declares the extension is ALSO a chat connector (see [connector role](#connector-role-experimental)); without it the host refuses the role at the wire. Global installs only. |
+| `data_secrets` | optional **tri-state**. declares whether your `ext-data/<name>/` directory may hold secret material, and so whether the agent's own tools may read in there. `false` — it holds none (say this; it is what keeps your data dir the debugging surface it was meant to be). `true` — it does, and the directory is denied. **Absent — undeclared, and unknown is not clean.** See [Declaring your data directory](#declaring-your-data-directory). |
 
 ## Project-scoped agents
 
@@ -388,9 +389,80 @@ the dialog and never logged.
 **Where values live.** In the user config at `$TERVA_HOME/config.json`
 under `extensions.<name>`, **user layer only** — a project's
 `.terva/config.json` may *disable* an extension but never set its values
-(a value is an escalation, not a restriction). Secret values are stored
-**plaintext** there (user-scoped); the UI masks them and the host never
-logs them, but treat the file as you would any credential store.
+(a value is an escalation, not a restriction). The UI masks secret values
+and the host never logs them.
+
+### Secrets your extension acquires at runtime (protocol 6)
+
+Config secrets are the ones the *user* types into your settings form. A secret
+your extension obtains while running — an OAuth token it negotiated, a key
+someone pasted into its own UI — is a different class, and before protocol 6
+the only place to put it was your `ext-data/` directory, in the clear, where a
+model reading files finds it.
+
+The host brokers those instead. They live in terva's own store, sealed with
+terva's key:
+
+```go
+if err := e.SetSecret("oauth_token", tok); err != nil { … }
+tok, ok, err := e.Secret("oauth_token")   // ok=false means never stored
+names, err := e.SecretKeys()              // names only, never values
+err = e.DeleteSecret("oauth_token")
+```
+
+Declare `RequireProtocol(6)` if your extension needs them — these block on a
+reply, so against an older host they would hang rather than degrade.
+
+### Declaring your data directory
+
+`$TERVA_HOME/ext-data/<name>/` has always been readable by the agent, on
+purpose: your extension's own state is a legitimate thing for it to debug with.
+That is only safe if the directory holds nothing secret — and terva cannot
+prove that by looking. Scanning finds what *is* sealed; it can never show that
+nothing else should have been. An `access_token` left in the clear by an old
+version is indistinguishable from a `homeserver_url` that is public by design.
+
+So you declare it, in the manifest:
+
+```json
+{ "name": "my-ext", "exec": "./my-ext", "data_secrets": false }
+```
+
+`false` is the honest answer for a new extension, because you have somewhere
+better to put a secret — the broker above, where a rotation can reach it even
+while your extension is stopped. `true` says the directory does hold secret
+material and denies the agent access to it; treat that as a bug to fix by
+moving them, not as a setting.
+
+**Leaving it out is not neutral.** An undeclared data directory is unknown, and
+unknown is not clean. It stays readable in this release and `terva secret
+status` names it, so you can see the change coming:
+
+```
+  reads        ext:my-ext — will be denied to the agent in a future release:
+               its manifest does not declare "data_secrets"; add
+               "data_secrets": false if its data dir holds no secret material
+```
+
+Scoping is **host-enforced**: the frames carry no scope, and the host
+substitutes your manifest name. One extension cannot read another's secrets,
+however it spells the request.
+
+Your extension gets no key of its own, deliberately. It never runs when terva
+does not, so a key would be one more thing to generate, store, back up and
+rotate for a process that is never awake alone — and brokered storage means a
+key rotation reaches your secrets even while your extension is stopped.
+
+`e.Secret` is **not** a way to read config values. Those already arrive opened,
+in the register phase and on every config change; a second path to one value is
+how the two drift.
+
+Secret values are stored **plaintext** unless at-rest encryption is set up.
+After `terva secret init` a `secret`-typed field is stored as an
+`enc:age:v2:…` string and decrypted only on its way to the extension, so
+`config.json` stops being a credential store — see
+[cli.md](cli.md#secrets-at-rest-terva-secret). Nothing changes for the
+extension: it receives the same cleartext value it always did.
 
 **Delivery.** The resolved values (manifest defaults overlaid with the
 user's) arrive in the `hello_ack` handshake, and again on every change as

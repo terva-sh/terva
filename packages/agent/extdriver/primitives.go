@@ -309,3 +309,92 @@ func newCorrelationID() string {
 	ts := strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "")
 	return ts + "-" + strconv.FormatUint(corrSeq.Add(1), 10)
 }
+
+// handleSecretFrame serves the protocol-6 secret_* frames.
+//
+// The SCOPE is substituted here, from the extension's manifest name, and the
+// frames carry no scope field — so one extension cannot name another's secrets
+// however it spells the request. This is the same enforcement shape as
+// list_sessions, which passes ext.Manifest.Name rather than trusting the frame.
+//
+// A nil broker answers with an error rather than silence: an extension blocking
+// on a reply that never comes is the failure mode the protocol note warns
+// about, and "unsupported" is something it can act on.
+func (d *Driver) handleSecretFrame(ext *Extension, kind string, line []byte) {
+	d.mu.RLock()
+	broker := d.secretBroker
+	d.mu.RUnlock()
+	scope := "ext:" + ext.Manifest.Name
+
+	go func() {
+		switch kind {
+		case "secret_get":
+			var req extproto.SecretGetFromExt
+			if json.Unmarshal(line, &req) != nil || req.ID == "" {
+				return
+			}
+			resp := extproto.SecretValueFromHost{Type: "secret_value", ID: req.ID}
+			switch {
+			case broker == nil:
+				resp.Error = "this host does not broker extension secrets"
+			default:
+				v, found, err := broker.GetSecret(scope, req.Key)
+				if err != nil {
+					resp.Error = err.Error()
+				} else {
+					resp.Value, resp.Found = v, found
+				}
+			}
+			_ = ext.writeFrame(resp)
+
+		case "secret_list":
+			var req extproto.SecretListFromExt
+			if json.Unmarshal(line, &req) != nil || req.ID == "" {
+				return
+			}
+			resp := extproto.SecretKeysFromHost{Type: "secret_keys", ID: req.ID}
+			switch {
+			case broker == nil:
+				resp.Error = "this host does not broker extension secrets"
+			default:
+				keys, err := broker.SecretKeys(scope)
+				if err != nil {
+					resp.Error = err.Error()
+				} else {
+					resp.Keys = keys
+				}
+			}
+			_ = ext.writeFrame(resp)
+
+		case "secret_set", "secret_delete":
+			var id, key, value string
+			if kind == "secret_set" {
+				var req extproto.SecretSetFromExt
+				if json.Unmarshal(line, &req) != nil || req.ID == "" {
+					return
+				}
+				id, key, value = req.ID, req.Key, req.Value
+			} else {
+				var req extproto.SecretDeleteFromExt
+				if json.Unmarshal(line, &req) != nil || req.ID == "" {
+					return
+				}
+				id, key = req.ID, req.Key
+			}
+			resp := extproto.SecretAckFromHost{Type: "secret_ack", ID: id}
+			switch {
+			case broker == nil:
+				resp.Error = "this host does not broker extension secrets"
+			case kind == "secret_delete" || value == "":
+				if err := broker.DeleteSecret(scope, key); err != nil {
+					resp.Error = err.Error()
+				}
+			default:
+				if err := broker.SetSecret(scope, key, value); err != nil {
+					resp.Error = err.Error()
+				}
+			}
+			_ = ext.writeFrame(resp)
+		}
+	}()
+}

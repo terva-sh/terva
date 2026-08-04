@@ -217,6 +217,29 @@ var dispatch = map[Method]handler{
 		return c.AuthEndpointRemove(ctx, p)
 	}),
 
+	// -------------------------------------------------------------------- secrets
+	//
+	// Optional, and gated by GroupSecrets as well as by the controller. None of
+	// these returns a secret VALUE, and rotation is absent on purpose — see
+	// secrets.go. Separate from the auth group so a carrier can grant one without
+	// the other.
+
+	MethodSecretsStatus: get(noSecrets, func(c SecretsController, ctx context.Context, f Frame) (SecretsStatus, error) {
+		return c.SecretsStatus(ctx)
+	}),
+	MethodSecretsList: get(noSecrets, func(c SecretsController, ctx context.Context, f Frame) (SecretsListResult, error) {
+		return c.SecretsList(ctx)
+	}),
+	MethodSecretsGrant: act(noSecrets, func(c SecretsController, ctx context.Context, f Frame, p SecretsGrantParams) error {
+		return c.SecretsGrant(ctx, p)
+	}),
+	MethodSecretsRevoke: act(noSecrets, func(c SecretsController, ctx context.Context, f Frame, p SecretsRevokeParams) error {
+		return c.SecretsRevoke(ctx, p)
+	}),
+	MethodSecretsForget: ask(noSecrets, func(c SecretsController, ctx context.Context, f Frame, p SecretsForgetParams) (SecretsForgetResult, error) {
+		return c.SecretsForget(ctx, p)
+	}),
+
 	// --------------------------------------------------------------------- replay
 
 	MethodReplayControl: ask(noReplay, func(c ReplayController, ctx context.Context, f Frame, p ReplayControlParams) (ReplayStateResult, error) {

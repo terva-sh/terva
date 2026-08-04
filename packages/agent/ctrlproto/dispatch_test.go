@@ -79,6 +79,28 @@ func (r *recorder) AuthEndpointRemove(_ context.Context, p AuthEndpointRemovePar
 	return nil
 }
 
+// --- SecretsController ---
+func (r *recorder) SecretsStatus(context.Context) (SecretsStatus, error) {
+	r.note("SecretsStatus", "", nil)
+	return SecretsStatus{}, nil
+}
+func (r *recorder) SecretsList(context.Context) (SecretsListResult, error) {
+	r.note("SecretsList", "", nil)
+	return SecretsListResult{}, nil
+}
+func (r *recorder) SecretsGrant(_ context.Context, p SecretsGrantParams) error {
+	r.note("SecretsGrant", "", p)
+	return nil
+}
+func (r *recorder) SecretsRevoke(_ context.Context, p SecretsRevokeParams) error {
+	r.note("SecretsRevoke", "", p)
+	return nil
+}
+func (r *recorder) SecretsForget(_ context.Context, p SecretsForgetParams) (SecretsForgetResult, error) {
+	r.note("SecretsForget", "", p)
+	return SecretsForgetResult{}, nil
+}
+
 // --- BackgroundsController ---
 func (r *recorder) BackgroundsList(context.Context) (BackgroundsListResult, error) {
 	r.note("BackgroundsList", "", nil)
@@ -548,6 +570,20 @@ func dispatchCases() []dispatchCase {
 		{MethodAuthLoginCancel, AuthFlowRef{}, "AuthLoginCancel", nil},
 		{MethodAuthLogout, AuthLogoutParams{Provider: "openai"}, "AuthLogout", AuthLogoutParams{Provider: "openai"}},
 		{MethodAuthEndpointRemove, AuthEndpointRemoveParams{}, "AuthEndpointRemove", nil},
+
+		// --- secrets: grant and revoke both carry {principal, scope} and differ
+		// only by a mode, so a swapped pair of entries binds cleanly and inverts
+		// what the verb MEANS. Distinct values in every field is what makes that
+		// legible here rather than in an audit log. ---
+		{MethodSecretsStatus, nil, "SecretsStatus", nil},
+		{MethodSecretsList, nil, "SecretsList", nil},
+		{MethodSecretsGrant, SecretsGrantParams{Principal: "remote:builder-3", Scope: "core:provider.anthropic", Mode: "use", TTL: "720h"},
+			"SecretsGrant", SecretsGrantParams{Principal: "remote:builder-3", Scope: "core:provider.anthropic", Mode: "use", TTL: "720h"}},
+		{MethodSecretsRevoke, SecretsRevokeParams{Principal: "ext:memory", Scope: "conn:matrix"},
+			"SecretsRevoke", SecretsRevokeParams{Principal: "ext:memory", Scope: "conn:matrix"}},
+		{MethodSecretsForget, SecretsForgetParams{Scope: "conn:discord-ext", Purge: true},
+			"SecretsForget", SecretsForgetParams{Scope: "conn:discord-ext", Purge: true}},
+
 		{MethodReplayState, nil, "ReplayState", nil},
 	}
 	// The mandatory WorkspaceService surface runs through the same assertions;
@@ -560,7 +596,7 @@ func dispatchCases() []dispatchCase {
 func allGroups() Contract {
 	return Contract{
 		Protocol: Protocol,
-		Groups:   []Group{GroupConversation, GroupSession, GroupControl, GroupReplay, GroupAuth},
+		Groups:   []Group{GroupConversation, GroupSession, GroupControl, GroupReplay, GroupAuth, GroupSecrets},
 	}
 }
 

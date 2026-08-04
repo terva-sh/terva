@@ -40,6 +40,19 @@ const (
 	// negotiates it is guaranteed the group works. `terva web` advertises it only
 	// under --web-allow-login, and refuses to on an unauthenticated listener.
 	GroupAuth Group = "auth"
+	// GroupSecrets carries terva's AT-REST encryption posture and the secret
+	// store's authorization model: what is sealed, what is still plaintext, which
+	// components hold a key, and who may reach which scope.
+	//
+	// Separate from GroupAuth by the same argument that separated GroupAuth from
+	// GroupControl, one rung further up: `auth` writes the credential terva uses
+	// to reach a model provider, while this reports on the key that opens
+	// EVERYTHING — including material `auth` never touches. Nothing here returns
+	// a secret value, and rotation is not on the wire at all; see secrets.go.
+	//
+	// Optional and off the base ServerHello. `terva web` advertises it only under
+	// --web-allow-secrets, and refuses to on an unauthenticated listener.
+	GroupSecrets Group = "secrets"
 )
 
 // Feature strings name additive capabilities negotiated on top of the groups.

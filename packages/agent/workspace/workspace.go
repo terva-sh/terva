@@ -120,6 +120,12 @@ type Workspace struct {
 	// rather than controls that fail.
 	auth wsAuth
 
+	// secrets is the at-rest management group, live only when the composition
+	// root called EnableSecrets (`terva web --web-allow-secrets`, or the
+	// in-process TUI). Zero value = the group is not served and every secrets
+	// verb answers CodeUnsupported.
+	secrets wsSecrets
+
 	mu       sync.Mutex
 	sessions map[string]*wsSession
 
@@ -2001,7 +2007,7 @@ func (w *Workspace) titleClient(prov, model string) (bool, provider.Client, stri
 	return true, r.NewClient(), r.Model
 }
 
-const titleSystem = "You write concise, specific titles for chat sessions. Reply with only the title — at most six words, no surrounding quotes, no trailing punctuation."
+const titleSystem = "You write concise, specific titles for chat sessions. Reply with only the title. Use at most six words. Do not add quotes. Do not end with punctuation."
 
 // generateTitle asks the model for a short title from a pre-budgeted,
 // self-labeled seed (core.BuildTitleSeed — the old head-only byte slice here

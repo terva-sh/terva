@@ -79,6 +79,7 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	extMgr.SetDisabledExtensions(r.DisableExtensions) // before Discover/LoadExplicit
 	extMgr.SetAllowedExtensions(args.WithExtensions)  // --extensions allowlist; --ext paths bypass
 	build.WireSessionReader(extMgr, config.TervaHome(), r.CWD)
+	build.WireExtensionSecrets(extMgr, config.TervaHome())
 	extMgr.SetProjectTrusted(r.Trusted) // gate project ext dirs on Workspace Trust
 	// Start the subprocesses in the background rather than blocking the whole
 	// launch on their handshakes: rpc is a long-lived server a driver spawns

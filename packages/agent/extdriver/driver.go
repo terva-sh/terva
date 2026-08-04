@@ -145,6 +145,11 @@ type Driver struct {
 	// are unsupported (an empty list / not-found). Guarded by mu.
 	sessionReader SessionReader
 
+	// secretBroker, if set, serves an extension's secret_* frames
+	// (protocol 6). nil leaves them unsupported, and the handlers say so
+	// rather than hanging.
+	secretBroker SecretBroker
+
 	// configResolver, if set, resolves an extension's host-supplied config
 	// (manifest defaults overlaid with the user's saved values) at spawn
 	// time, for the hello_ack Config field. The driver is dependency-light
@@ -354,6 +359,32 @@ func (d *Driver) SetOnMalformedFrame(fn func(extName, raw, reason string)) {
 func (d *Driver) SetHostToolDispatcher(fn HostToolDispatcher) {
 	d.mu.Lock()
 	d.hostToolDispatch = fn
+	d.mu.Unlock()
+}
+
+// SecretBroker stores secrets an extension acquired at runtime, scoped by the
+// host to the calling extension.
+//
+// An interface rather than the store itself so extdriver keeps knowing nothing
+// about data homes or codecs — the same shape SessionReader uses, and the same
+// reason.
+//
+// The scope is passed in by the driver, never by the extension: the frames
+// carry no scope field, so there is nothing on the wire to forge.
+type SecretBroker interface {
+	// GetSecret reports the value and whether anything is stored.
+	GetSecret(scope, key string) (string, bool, error)
+	SetSecret(scope, key, value string) error
+	DeleteSecret(scope, key string) error
+	SecretKeys(scope string) ([]string, error)
+}
+
+// SetSecretBroker installs the broker that serves extension secret_* frames
+// (protocol 6). nil (the default) leaves them unsupported. Set before loading
+// extensions.
+func (d *Driver) SetSecretBroker(b SecretBroker) {
+	d.mu.Lock()
+	d.secretBroker = b
 	d.mu.Unlock()
 }
 
@@ -1404,6 +1435,12 @@ func (d *Driver) readLoop(ext *Extension, reader *bufio.Reader) {
 			if err := json.Unmarshal(line, &ls); err == nil {
 				d.handleListSessions(ext, ls)
 			}
+		case "secret_set", "secret_get", "secret_delete", "secret_list":
+			// Protocol 6. Dispatched off the read loop like every other
+			// ext→host request: the store takes a file lock, and blocking the
+			// read loop on it would stall every other frame from this
+			// extension.
+			d.handleSecretFrame(ext, frame.Type, line)
 		case "read_session":
 			var rs extproto.ReadSessionFromExt
 			if err := json.Unmarshal(line, &rs); err == nil {

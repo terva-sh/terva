@@ -130,6 +130,16 @@ const (
 	// will talk to is at least as privileged as holding its key.
 	MethodAuthEndpointRemove Method = "auth.endpoint.remove" // params AuthEndpointRemoveParams
 
+	// --- secrets group (optional; advertised only when the daemon will serve it).
+	// The AT-REST posture and the store's authorization model. Nothing here
+	// returns a secret value, and rotation is not on this wire at all — see
+	// secrets.go for why.
+	MethodSecretsStatus Method = "secrets.status" // result SecretsStatus
+	MethodSecretsList   Method = "secrets.list"   // result SecretsListResult (names, never values)
+	MethodSecretsGrant  Method = "secrets.grant"  // params SecretsGrantParams
+	MethodSecretsRevoke Method = "secrets.revoke" // params SecretsRevokeParams
+	MethodSecretsForget Method = "secrets.forget" // params SecretsForgetParams, result SecretsForgetResult
+
 	// Per-model overrides (models.json): context window, max tokens, temperature.
 	// In the control group — they change what the running agent talks to, and a
 	// base URL among them points it at a different machine entirely.
@@ -356,6 +366,9 @@ func (m Method) Group() Group {
 	case MethodAuthLoginStart, MethodAuthLoginSubmit, MethodAuthLoginCancel, MethodAuthLogout,
 		MethodAuthEndpointRemove:
 		return GroupAuth
+	case MethodSecretsStatus, MethodSecretsList, MethodSecretsGrant, MethodSecretsRevoke,
+		MethodSecretsForget:
+		return GroupSecrets
 	}
 	return ""
 }

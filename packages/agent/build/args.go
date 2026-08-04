@@ -41,6 +41,7 @@ type Args struct {
 	WebToken            string   // bearer token required on requests when no forward-auth is used; leaks via ps/cmdline, prefer the two below
 	WebTokenFile        string   // read the bearer token from this file (systemd LoadCredential=); never enters the environment. --web-token-file (web) / --token-file (attach)
 	WebTokenRequireFile bool     // hardening opt-in: accept the token only from --web-token-file, refusing --web-token (argv) and TERVA_WEB_TOKEN (/proc/environ)
+	SecretsKeyFile      string   // read the at-rest encryption key (age identity) from this file; overrides TERVA_SECRETS_KEY[_FILE] and the default <credential home>/secrets.key
 	WebInsecure         bool     // allow binding a non-loopback address with no auth mode (dangerous)
 	WebInsecureCIDRs    []string // IPs/CIDRs granted no-auth access (besides loopback) — the scoped, safer form of --web-insecure (e.g. a tailnet range)
 
@@ -63,6 +64,23 @@ type Args struct {
 	// one on a machine is established at the TUI or pre-seeded. This is for the
 	// SECOND provider, and for the subscription that expired.
 	AllowWebLogin bool
+
+	// AllowWebSecrets lets `terva web` serve the ctrlproto secrets group:
+	// reporting terva's AT-REST encryption posture and managing the secret
+	// store's grants. --web-allow-secrets. Off by default.
+	//
+	// Its own flag rather than a corner of --web-allow-login, for the reason the
+	// two are separate GROUPS: login writes the credential terva uses to reach a
+	// model provider, while this reports on the key that opens everything —
+	// including material login never touches. An operator who wants a panel that
+	// can re-authenticate an expired subscription has not thereby asked for one
+	// that can enumerate every scope in the store.
+	//
+	// Refused on an unauthenticated listener, like login and self-restart. It
+	// returns no secret VALUE and cannot rotate a key (neither is on the wire at
+	// all), but the report names every scope, component and grant, and that is a
+	// map worth withholding from a stranger who can reach an open port.
+	AllowWebSecrets bool
 
 	// WebStage mounts the Stage app (the immersive chat/play surface) at /stage/
 	// and advertises it in the hello. --web-stage. Off by default: Stage is a
@@ -283,6 +301,12 @@ type Args struct {
 	// skill discovery, including built-ins.
 	WithSkills bool
 
+	// NoBuiltinSkills drops only the skills compiled into the binary;
+	// user and project skills still load. The narrow sibling of
+	// --no-skill, for when the built-in manifest lines are unwanted
+	// but your own skills should keep working.
+	NoBuiltinSkills bool
+
 	// NoLore disables the lore keyed-context primitive for this run: no
 	// discovery from any tier and no injection (cached prefix or per-turn
 	// tail), including a loaded card's character_book. Sibling of
@@ -498,6 +522,12 @@ func ParseArgs(in []string) (Args, error) {
 			a.WebTokenFile = v
 		case "--web-token-require-file":
 			a.WebTokenRequireFile = true
+		case "--secrets-key-file":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.SecretsKeyFile = v
 		case "--web-insecure":
 			a.WebInsecure = true
 		case "--web-insecure-cidr":
@@ -514,6 +544,8 @@ func ParseArgs(in []string) (Args, error) {
 			a.AllowRestart = true
 		case "--web-allow-login":
 			a.AllowWebLogin = true
+		case "--web-allow-secrets":
+			a.AllowWebSecrets = true
 		case "--web-stage":
 			a.WebStage = true
 		case "-c", "--continue":
@@ -708,6 +740,8 @@ func ParseArgs(in []string) (Args, error) {
 			a.ConnectorManifests = append(a.ConnectorManifests, v)
 		case "--no-skill", "--no-skills":
 			a.NoSkill = true
+		case "--no-builtin-skills", "--no-builtin-skill":
+			a.NoBuiltinSkills = true
 		case "--no-lore":
 			a.NoLore = true
 		case "--no-memory":
@@ -933,6 +967,9 @@ Web-specific flags:
                                 app alongside the panel, gated by the same auth (off by default)
   --web-allow-login             serve the provider-login group: add / repair / revoke the model-provider
                                 credential from the web UI (off by default; never on an unauthenticated bind)
+  --web-allow-secrets           serve the secrets group: report what is encrypted at rest and manage the
+                                store's grants (off by default; never on an unauthenticated bind). Returns
+                                no secret value, and key rotation stays on the CLI
   --web-insecure                allow binding a non-loopback address with NO auth (dangerous)
   --web-insecure-cidr CIDR      grant NO-auth access to these source IP/CIDR(s) only (comma-separated; loopback always
                                 allowed) — the scoped, safer form of --web-insecure for a trusted overlay (e.g. a tailnet
