@@ -36,6 +36,7 @@ import (
 
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/connproto"
+	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -62,6 +63,15 @@ type Config struct {
 	DataDir string
 	// HostVersion fills hello_ack's version fields.
 	HostVersion string
+	// OnSecrets receives the connector's secrets declaration from hello — its
+	// own recipient and the paths in its state file that hold sealed values.
+	// Optional; a connector that keeps no sealed state sends none.
+	//
+	// A callback rather than a registry write here: connhost speaks the
+	// protocol and knows nothing about data homes, and the handshake is the
+	// only source of a recipient the host may trust (the state file is
+	// writable by anything that can write $TERVA_HOME).
+	OnSecrets func(connproto.SecretsDecl)
 	// Conn carries the frames.
 	Conn FrameConn
 	// Deliver receives each gated-ready inbound message. Called from
@@ -236,6 +246,9 @@ func (s *Session) Start(helloTimeout time.Duration) error {
 		// Trust the configured name (it names the state dirs); just
 		// leave a trace.
 		s.logf("hello name %q != %q; using the configured name", hello.Name, s.cfg.Name)
+	}
+	if hello.Secrets != nil && s.cfg.OnSecrets != nil {
+		s.cfg.OnSecrets(*hello.Secrets)
 	}
 	// Negotiated versioning, not announce-only: pick the highest
 	// version both sides speak; refuse a disjoint range with a clear
@@ -635,7 +648,7 @@ func (s *Session) ingestAttachments(msgID string, atts []connproto.Attachment) (
 			name = filepath.Base(real)
 		}
 		destDir := filepath.Join(s.cfg.DataDir, "incoming", sanitizeMsgDir(msgID))
-		if err := os.MkdirAll(destDir, 0o755); err != nil {
+		if err := privfs.MkdirAll(destDir); err != nil {
 			s.warnf("connector %q: stage attachment dir: %v", s.cfg.Name, err)
 			continue
 		}

@@ -368,6 +368,31 @@ type Config struct {
 	// Configured backs `terva bot`'s configured probe; nil means
 	// always configured (e.g. config via env vars).
 	Configured func() bool
+
+	// Secrets, when set, declares this connector's sealed state in the
+	// handshake, so the host can re-seal it during a key rotation without
+	// holding the connector's key. Set it to the same SealedState the
+	// connector loads and saves with.
+	//
+	// The handshake is the ONLY source the host trusts for a recipient: the
+	// state file is writable by anything that can write $TERVA_HOME, so
+	// reading it from there would turn write access into future read access.
+	Secrets *SealedState
+}
+
+// secretsDecl builds the handshake declaration, or nil when this connector
+// keeps no sealed state or has not been configured yet. A connector with no key
+// of its own has nothing to declare — announcing a recipient it does not have
+// would register a component terva could never re-seal to.
+func (c Config) secretsDecl() *connproto.SecretsDecl {
+	if c.Secrets == nil || len(c.Secrets.Paths) == 0 {
+		return nil
+	}
+	r, err := c.Secrets.Recipient()
+	if err != nil || r == "" {
+		return nil
+	}
+	return &connproto.SecretsDecl{Recipient: r, Paths: c.Secrets.Paths}
 }
 
 // Main dispatches the lifecycle verb (the LAST argv element — terva
@@ -460,6 +485,7 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 			Features:          cfg.Capabilities.Features,
 			MinEditIntervalMS: int(cfg.Capabilities.MinEditInterval / time.Millisecond),
 		},
+		Secrets: cfg.secretsDecl(),
 	}); err != nil {
 		return err
 	}

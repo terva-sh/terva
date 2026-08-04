@@ -112,6 +112,30 @@ type HelloFromConn struct {
 	ProtocolMin  int          `json:"protocol_min"`
 	ProtocolMax  int          `json:"protocol_max"`
 	Capabilities Capabilities `json:"capabilities"`
+	// Secrets declares the connector's OWN age recipient and the JSON
+	// Pointers in its state file that hold sealed values, so the host can
+	// re-seal them during a key rotation without ever holding the connector's
+	// private key.
+	//
+	// Additive and optional: an older connector omits it and an older host
+	// ignores it, so this needs no protocol bump. It is a DECLARATION, not a
+	// request — nothing waits on a reply.
+	//
+	// The handshake is the only source the host trusts for a recipient. The
+	// state file itself is writable by anything that can write $TERVA_HOME, so
+	// a recipient read from there would upgrade "can write this file" into
+	// "can read everything written to it from now on".
+	Secrets *SecretsDecl `json:"secrets,omitempty"`
+}
+
+// SecretsDecl is a connector's declaration of how it keeps its own secrets.
+type SecretsDecl struct {
+	// Recipient is the connector's age public key (age1…).
+	Recipient string `json:"recipient"`
+	// Paths are JSON Pointers into the connector's state file. Declared
+	// rather than discovered: scanning for the encryption marker proves what
+	// IS sealed, never what SHOULD have been.
+	Paths []string `json:"paths,omitempty"`
 }
 
 // ConnectedFromConn answers ConnectFromHost on success with the

@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"terva.sh/terva/packages/agent/connsdk"
@@ -39,34 +38,37 @@ type extConfig struct {
 	BotToken string `json:"bot_token,omitempty"`
 }
 
-func configPath() string {
-	return filepath.Join(connsdk.StateDir(name), "config.json")
-}
+// state seals the bot token in place, to this connector's own key AND terva's,
+// so the host can rotate or audit it while this process is not running — and so
+// a model reading connectors/discord-ext/config.json finds ciphertext. The
+// declared path is what lets the file be called clean rather than unscanned.
+var state = connsdk.SealedState{Name: name, Paths: []string{"/bot_token"}}
+
+func configPath() string { return state.Path() }
 
 func loadToken() (string, error) {
-	b, err := os.ReadFile(configPath())
-	if errors.Is(err, os.ErrNotExist) {
-		return "", nil
-	}
+	doc, err := state.Load()
 	if err != nil {
 		return "", err
 	}
 	var c extConfig
-	if err := json.Unmarshal(b, &c); err != nil {
+	if err := json.Unmarshal(doc, &c); err != nil {
 		return "", err
 	}
 	return c.BotToken, nil
 }
 
 func saveToken(token string) error {
-	if err := os.MkdirAll(connsdk.StateDir(name), 0o755); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(extConfig{BotToken: token}, "", "  ")
+	// Owner-only: this directory exists to hold a bot token. The file is
+	// 0600, but a 0755 directory around it leaves the whole state dir
+	// listable, and the token's own mode is then the only thing standing
+	// between it and every other local user. SealedState keeps that and adds
+	// the seal.
+	b, err := json.Marshal(extConfig{BotToken: token})
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath(), append(b, '\n'), 0o600)
+	return state.Save(b)
 }
 
 func main() {

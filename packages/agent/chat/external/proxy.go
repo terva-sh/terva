@@ -16,6 +16,7 @@ import (
 	"terva.sh/terva/packages/agent/connproto"
 	"terva.sh/terva/packages/agent/procenv"
 	"terva.sh/terva/packages/privfs"
+	"terva.sh/terva/packages/secretstore"
 )
 
 // Tunables. Fields on the Proxy (not consts) so tests can shrink them.
@@ -126,6 +127,33 @@ func (p *Proxy) warnf(format string, args ...any) {
 // dataDir is the child's scratch directory for inbound attachments,
 // announced in hello_ack. Separate from the connector's own state so
 // the host's read-and-delete sweep can't eat credentials.
+// recordSecrets registers what the connector declared in its handshake: its own
+// age recipient and the paths in its state file that hold sealed values.
+//
+// This is the only source terva trusts for a recipient. The state file is
+// writable by anything that can write $TERVA_HOME — the model reaches it
+// through bash regardless of the write jail — so a recipient read from there
+// would turn write access into future READ access: plant a recipient, wait for
+// a rotation, open the ciphertext.
+//
+// A failure here is logged and dropped rather than failing the connection. The
+// cost of not registering is that a later `terva secret rotate --revoke` cannot
+// re-seal this connector's file, which `terva secret status` reports; the cost
+// of refusing the connection is a chat service that will not start.
+func (p *Proxy) recordSecrets(decl connproto.SecretsDecl) {
+	err := secretstore.NewRegistry(p.tervaHome).Record(secretstore.Component{
+		Name:      p.manifest.Name,
+		Kind:      "conn",
+		Recipient: decl.Recipient,
+		Paths:     decl.Paths,
+		File:      filepath.Join("connectors", p.manifest.Name, "config.json"),
+		LastSeen:  time.Now().UTC(),
+	})
+	if err != nil {
+		p.warnf("connector %q: could not record its secrets declaration: %v", p.manifest.Name, err)
+	}
+}
+
 func (p *Proxy) dataDir() string {
 	return filepath.Join(ConnectorsDir(p.tervaHome), p.manifest.Name, "data")
 }
@@ -271,6 +299,7 @@ func (p *Proxy) spawnAndConnect(ctx context.Context) error {
 		Name:              p.manifest.Name,
 		DataDir:           p.dataDir(),
 		HostVersion:       getTervaVersion(),
+		OnSecrets:         p.recordSecrets,
 		Conn:              &childConn{c: c, fr: fr},
 		Deliver:           p.deliverInbound,
 		DeliverMembership: p.deliverMembership,
