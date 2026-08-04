@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -180,7 +181,37 @@ func (s *tokenStore) save(t storedTokens) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	return replaceFile(tmp, s.path)
+}
+
+// renameAttempts / renameBackoff bound the Windows retry below. Eight
+// concurrent savers is the documented contention case; a handful of
+// millisecond-scale retries covers it without turning a genuine permission
+// error into a visible stall.
+const (
+	renameAttempts = 8
+	renameBackoff  = 2 * time.Millisecond
+)
+
+// replaceFile moves src onto dst, which must already be written and closed.
+//
+// os.Rename is atomic on POSIX and always wins a race with a concurrent
+// replace. On Windows it is MoveFileEx, which reports ERROR_ACCESS_DENIED
+// while another writer briefly holds the destination open — so two bridges
+// refreshing the same resource would lose a save that POSIX keeps. Retry only
+// that class; every other error is returned as it arrives, so a genuinely
+// unwritable path still fails fast. On POSIX the first attempt succeeds and
+// the loop costs nothing.
+func replaceFile(src, dst string) error {
+	var err error
+	for attempt := 0; attempt < renameAttempts; attempt++ {
+		err = os.Rename(src, dst)
+		if err == nil || !errors.Is(err, fs.ErrPermission) {
+			return err
+		}
+		time.Sleep(time.Duration(attempt+1) * renameBackoff)
+	}
+	return err
 }
 
 // tervaHome resolves terva's data home the same way the main binary does, so a
