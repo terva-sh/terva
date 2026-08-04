@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
@@ -188,6 +190,14 @@ type Agent struct {
 	// common case, not the edge one.
 	ReadOnly *ReadOnlySet
 
+	// CWD is the directory the bash tool runs commands in. Compaction is its only
+	// reader, and only to recognize a `cd` that went nowhere (see ledgerArgs);
+	// nothing here dispatches or resolves a path against it. It must be the SAME
+	// value BashTool.CWD gets — a stale or unset one under-elides, which costs
+	// ledger characters, while a wrong one would elide a `cd` that did move the
+	// command and misreport where the work happened.
+	CWD string
+
 	// Asker, if set, is the front end's question channel — the same seam the
 	// ask_user_question tool uses, wired onto the agent so the LOOP can ask too.
 	// Today its one caller is the prefix-change guard, which offers a compaction
@@ -343,6 +353,13 @@ type Agent struct {
 	// transcript is literally named session.json — concurrent children
 	// keyed by basename share one cache route and evict each other.
 	// Falls back to the basename for legacy files with no meta id.
+	//
+	// NEVER empty. A live-only agent (--no-session, bot-mode group chats)
+	// has no session id to key on, so it carries a synthetic one — see
+	// newLiveCacheID. The two properties that matter are STABLE for the
+	// conversation's life and UNIQUE across concurrent ones; reproducible
+	// is not among them, which is why this is a random UUID and not a
+	// digest of anything.
 	cacheID string
 
 	// lastSent is the prompt prefix of the most recent request actually
@@ -412,18 +429,44 @@ func NewAgent(client provider.Client, model, system string, tools Registry) *Age
 		MaxRetries:      6,
 		RetryBaseDelay:  2 * time.Second,
 		transcriptEpoch: agentEpochSeq.Add(1) << 32,
+		// Keyed from birth: NewAgent runs before the session is known (see
+		// build.BindSession), so an agent can dispatch while still live-only,
+		// and an unkeyed request forfeits the reliable prefix matching
+		// GPT-5.6+ only offers when prompt_cache_key is set.
+		cacheID: newLiveCacheID(),
 	}
 }
+
+// newLiveCacheID mints the cache-routing key for a conversation with no
+// session to borrow one from.
+//
+// Random, deliberately. The key is a routing bucket, so it needs to be stable
+// across a conversation and distinct between concurrent ones — and nothing
+// more. A deterministic key (a constant, or a digest of cwd/model/opening
+// message) would buy reattachment across restarts, which a live-only agent
+// cannot use because it persists nothing, and would pay for it in collisions:
+// see TestPromptCacheKeyPrefersMetaUUID, where sharing one key across
+// concurrent agents produced alternating ~10%/~99% hit rates. Bot-mode group
+// chats are the main live-only caller and would collide hardest, being many
+// concurrent conversations off one system prompt. Keeping it content-free
+// also keeps user text out of a string sent to the provider.
+func newLiveCacheID() string { return "live-" + uuid.NewString() }
 
 // AdoptSessionIdentity records which transcript file this agent's
 // conversation persists to; terva_status surfaces it to the model.
 // Call it when binding or swapping the agent's session. Nil clears
-// both fields — the conversation is live-only from here.
+// the identity fields — the conversation is live-only from here.
+//
+// Nil does NOT clear the cache route, it re-mints it. Sending no
+// prompt_cache_key gives up the reliable matching GPT-5.6+ gates behind it,
+// and a fresh key is right rather than merely harmless: unbinding means this
+// is a different conversation from here on, so it should route as one.
 func (a *Agent) AdoptSessionIdentity(s *Session) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if s == nil {
-		a.sessionID, a.sessionPath, a.cacheID = "", "", ""
+		a.sessionID, a.sessionPath = "", ""
+		a.cacheID = newLiveCacheID()
 		return
 	}
 	a.sessionPath = s.Path
@@ -1029,18 +1072,21 @@ func inactiveGroupNote(reg Registry, active map[string]bool) string {
 	// Model-facing prompt injection (rides the ephemeral tail like the
 	// context-pressure note), so it is translatable via the prompts catalog.
 	//
-	// Phrased as an INVENTORY, and explicitly excused from reply. The previous
-	// wording opened "Call activate_tools with a group name to load them" — an
-	// imperative, arriving every single turn, which a model reads as a question
-	// being re-asked. One reviewed session shows exactly that: after the model
-	// answered it once, 109 of the next 217 assistant messages opened by
-	// answering it again, 44 of them with the identical sentence "Same answer
-	// on the tool groups — not needed." The note itself is ephemeral and costs
-	// no cache; the model's ANSWER is an assistant message, so it lands in the
-	// transcript, is re-sent every turn thereafter, and survives compaction.
-	// A construct designed to cost nothing generated permanent transcript debt.
+	// The prohibition comes FIRST, before the inventory it governs, and that
+	// order is measured — do not reorder it without re-running the A/B
+	// (scripts/eval, `session-inspect-cost` final-answer row). Both
+	// predecessors failed differently. The original imperative opener ("Call
+	// activate_tools with a group name to load them") read as a question
+	// re-asked every turn: one reviewed session answered it 109 times in 217
+	// assistant messages — the note is ephemeral and costs no cache, but the
+	// model's ANSWER lands in the transcript, is re-sent every turn, and
+	// survives compaction. The inventory phrasing that fixed that buried
+	// "needs no reply" mid-block, and on first exposure Haiku answered the
+	// note INSTEAD of the user in 20 of 20 runs — right tool call, right
+	// result, answer displaced on the way out. Prohibition-first recovered
+	// 20 of 20 answers on the same A/B (2026-08).
 	b.WriteString(i18n.P("tools.lazy.inactive_groups",
-		"[inactive tool groups] Installed capabilities whose tool schemas are not loaded this turn. This is an inventory, not a request — it needs no reply and no acknowledgement. If a task calls for one, `activate_tools <group>` loads it; loading is visibility only, and each tool still requires its normal permission when used:"))
+		"[inactive tool groups] Do not reply to this note. Do not mention it in your answer. Complete the request of the user as if the note were not here. The note lists installed capabilities whose tool schemas are not loaded this turn. If a task needs one, `activate_tools <group>` loads it. The load changes visibility only, and each tool still requires its normal permission when used:"))
 	for _, g := range groups {
 		names := byGroup[g]
 		sort.Strings(names)
@@ -1061,7 +1107,7 @@ func inactiveGroupBrief(reg Registry, active map[string]bool) string {
 		return ""
 	}
 	return i18n.P("tools.lazy.inactive_groups_brief",
-		"[inactive tool groups] %s — `activate_tools <group>` loads one if a task needs it. Informational; no reply needed.",
+		"[inactive tool groups] Do not reply to this note. If a task needs a group, `activate_tools <group>` loads it. Inactive: %s",
 		strings.Join(groups, ", "))
 }
 

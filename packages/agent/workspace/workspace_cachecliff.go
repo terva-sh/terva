@@ -27,11 +27,20 @@ func cacheCliffNoteKey(sessionID string) string {
 // cacheCliffNote renders the detector's event into the note line, or "" for
 // the retract. Pure, so the wording and the retract contract are testable
 // without a daemon.
+//
+// On the advice: compaction is NOT a fix and the note must not imply it is.
+// Session 20260803-160431 (gpt-5.6-sol) took two compactions and never cached
+// conversation content again — 120 consecutive dispatches pinned at the
+// system+tools floor, $72.81, across an 8-hour gap. What compaction changes is
+// the SIZE of each miss, because the transcript being re-read is smaller; the
+// misses themselves are provider-side routing and outlive it. Offering
+// "/compact" alone sends someone to spend a summarization round-trip on a run
+// it cannot stop.
 func cacheCliffNote(cc core.CacheCliff) string {
 	if !cc.Ongoing {
 		return ""
 	}
-	return i18n.T("provider cache misses: the last %d dispatches re-read ~%s tokens the cache should have served — /compact cuts the cost if it keeps up",
+	return i18n.T("provider cache misses: the last %d dispatches re-read ~%s tokens the cache should have served — /compact makes each miss cheaper but does not end the run; that needs a new session or another model",
 		cc.Dispatches, roughTokens(cc.RereadTokens))
 }
 

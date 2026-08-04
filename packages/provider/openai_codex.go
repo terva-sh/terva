@@ -987,18 +987,42 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 							OutputTokens       int `json:"output_tokens"`
 							InputTokensDetails struct {
 								CachedTokens int `json:"cached_tokens"`
+								// GPT-5.6+ reports the prefix it WROTE to cache
+								// here, billed at 1.25x uncached input
+								// (PriceCacheWrite 6.25 against PriceInput 5).
+								// Dropping it understates the bill and leaves
+								// the cache-cliff detector reading writes as 0
+								// forever — openai/codex shipped the same bug
+								// (openai/codex#32479). Absent pre-5.6, where it
+								// decodes to 0 and every line below is a no-op.
+								CacheWriteTokens int `json:"cache_write_tokens"`
 							} `json:"input_tokens_details"`
 						} `json:"usage"`
 						Status string `json:"status"`
 					} `json:"response"`
 				}
 				_ = json.Unmarshal([]byte(ev.Data), &p)
-				usage.InputTokens = p.Response.Usage.InputTokens - p.Response.Usage.InputTokensDetails.CachedTokens
-				if usage.InputTokens < 0 {
-					usage.InputTokens = p.Response.Usage.InputTokens
-				}
+				// Usage's three prompt fields are DISJOINT — PromptTokens sums
+				// them and ComputeCost prices each at its own rate — so every
+				// detail the wire breaks out has to come off the total.
+				//
+				// cached_tokens is a documented subset of input_tokens. Whether
+				// cache_write_tokens is one too is NOT documented, so each
+				// subtraction stands only while it keeps the remainder
+				// non-negative: if writes turn out to be reported alongside the
+				// total rather than inside it, this degrades to the pre-5.6
+				// arithmetic instead of inventing a negative input count.
+				det := p.Response.Usage.InputTokensDetails
+				usage.InputTokens = p.Response.Usage.InputTokens
 				usage.OutputTokens = p.Response.Usage.OutputTokens
-				usage.CacheReadTokens = p.Response.Usage.InputTokensDetails.CachedTokens
+				usage.CacheReadTokens = det.CachedTokens
+				usage.CacheWriteTokens = det.CacheWriteTokens
+				if n := usage.InputTokens - det.CachedTokens; n >= 0 {
+					usage.InputTokens = n
+				}
+				if n := usage.InputTokens - det.CacheWriteTokens; n >= 0 {
+					usage.InputTokens = n
+				}
 
 				hadTool := false
 				for _, it := range items {

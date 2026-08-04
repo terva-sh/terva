@@ -211,12 +211,23 @@ func TestContinuationGateCapAndPromptReset(t *testing.T) {
 }
 
 // The session id rides every request as the provider cache-routing key
-// (provider.Request.PromptCacheKey); live-only agents send nothing.
+// (provider.Request.PromptCacheKey). A live-only agent has no session id to
+// borrow, so it carries a synthetic one — stable across its dispatches, and
+// replaced by the real id the moment a session binds.
+//
+// It used to send nothing at all. On GPT-5.6+ that forfeits the reliable
+// prefix matching the provider gates behind prompt_cache_key, and --no-session
+// and bot-mode group chats were paying it.
 func TestPromptCacheKeyFollowsSessionIdentity(t *testing.T) {
 	client := &ephemeralCaptureClient{}
 	a := NewAgent(client, "fake-model", "system", Registry{})
 
+	// Two dispatches while live-only: the key has to hold still between them,
+	// or every turn routes somewhere new and the key is worse than useless.
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if err := a.Prompt(context.Background(), "hello again", nil, nil); err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}
 	a.AdoptSessionIdentity(&Session{Path: "/sessions/x/20260708-abc123.jsonl"})
@@ -226,14 +237,65 @@ func TestPromptCacheKeyFollowsSessionIdentity(t *testing.T) {
 
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	if len(client.cacheKeys) < 2 {
-		t.Fatalf("want 2 captured requests, got %d", len(client.cacheKeys))
+	if len(client.cacheKeys) < 3 {
+		t.Fatalf("want 3 captured requests, got %d", len(client.cacheKeys))
 	}
-	if client.cacheKeys[0] != "" {
-		t.Errorf("live-only agent sent PromptCacheKey %q, want empty", client.cacheKeys[0])
+	if client.cacheKeys[0] == "" {
+		t.Error("live-only agent sent an empty PromptCacheKey — that is the gap this closes")
+	}
+	if client.cacheKeys[0] != client.cacheKeys[1] {
+		t.Errorf("live-only key changed between dispatches: %q then %q",
+			client.cacheKeys[0], client.cacheKeys[1])
 	}
 	if got := client.cacheKeys[len(client.cacheKeys)-1]; got != "20260708-abc123" {
 		t.Errorf("PromptCacheKey = %q, want the session id 20260708-abc123", got)
+	}
+}
+
+// The synthetic key is per-agent, not per-process. Two concurrent live-only
+// conversations sharing one key would share one provider cache route and evict
+// each other — the same failure TestPromptCacheKeyPrefersMetaUUID exists to
+// prevent, and the reason this key is random rather than derived from anything
+// reproducible. Bot-mode group chats run exactly this shape: many concurrent
+// live-only agents off one system prompt.
+func TestLiveOnlyCacheKeysAreDistinctPerAgent(t *testing.T) {
+	client := &ephemeralCaptureClient{}
+	a := NewAgent(client, "fake-model", "system", Registry{})
+	b := NewAgent(client, "fake-model", "system", Registry{})
+
+	// Identical openings: a content-derived key would collide right here.
+	for _, ag := range []*Agent{a, b} {
+		if err := ag.Prompt(context.Background(), "hello", nil, nil); err != nil {
+			t.Fatalf("Prompt: %v", err)
+		}
+	}
+
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if len(client.cacheKeys) != 2 {
+		t.Fatalf("want 2 captured requests, got %d", len(client.cacheKeys))
+	}
+	if client.cacheKeys[0] == client.cacheKeys[1] {
+		t.Errorf("two live-only agents shared PromptCacheKey %q — one cache route, mutual eviction",
+			client.cacheKeys[0])
+	}
+}
+
+// Unbinding re-mints the route rather than clearing it: a cleared key means
+// every later dispatch of this conversation goes out unkeyed.
+func TestUnbindingKeepsACacheKey(t *testing.T) {
+	client := &ephemeralCaptureClient{}
+	a := NewAgent(client, "fake-model", "system", Registry{})
+	a.AdoptSessionIdentity(&Session{ID: "uuid-real", Path: "/sessions/x/20260708-abc123.jsonl"})
+	a.AdoptSessionIdentity(nil)
+
+	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if got := client.cacheKeys[0]; got == "" || got == "uuid-real" {
+		t.Errorf("after unbind PromptCacheKey = %q; want a fresh synthetic key", got)
 	}
 }
 

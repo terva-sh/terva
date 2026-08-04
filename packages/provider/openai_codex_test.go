@@ -298,3 +298,82 @@ func TestCodexImageToolResultMirror(t *testing.T) {
 		t.Fatalf("mirrored user image was not serialized as input_image")
 	}
 }
+
+// GPT-5.6+ reports the prefix it wrote to cache in
+// input_tokens_details.cache_write_tokens, billed at 1.25x uncached input.
+// Usage's three prompt fields are disjoint (PromptTokens sums them), so the
+// written and read prefixes both come off the wire total. Dropping the field
+// — which is what openai/codex#32479 is — silently understates the bill and
+// pins the cache-cliff detector's write term at zero forever.
+//
+// Driven through runStream rather than the struct: the subtraction only
+// matters because a real response.completed frame is what feeds it.
+func TestCodexSplitsCacheWriteTokensOutOfInput(t *testing.T) {
+	usageFor := func(t *testing.T, details string) Usage {
+		t.Helper()
+		c := NewOpenAICodex("token", "acct", "").(*codexClient)
+		frame := `data: {"type":"response.completed","response":{"status":"completed",` +
+			`"usage":{"input_tokens":10000,"output_tokens":7` + details + `}}}` + "\n\n"
+		resp := &http.Response{Body: io.NopCloser(strings.NewReader(frame))}
+		out := make(chan Event, 16)
+		go c.runStream(context.Background(), resp, Request{Model: "gpt-5.6-sol"}, out)
+		var got Usage
+		for ev := range out {
+			if u, ok := ev.(EventUsage); ok {
+				got = u.Usage
+			}
+		}
+		return got
+	}
+
+	t.Run("5.6 splits read and write out of the total", func(t *testing.T) {
+		u := usageFor(t, `,"input_tokens_details":{"cached_tokens":6000,"cache_write_tokens":3000}`)
+		if u.CacheWriteTokens != 3000 {
+			t.Errorf("CacheWriteTokens = %d, want 3000 (the field openai/codex drops)", u.CacheWriteTokens)
+		}
+		if u.CacheReadTokens != 6000 {
+			t.Errorf("CacheReadTokens = %d, want 6000", u.CacheReadTokens)
+		}
+		if u.InputTokens != 1000 {
+			t.Errorf("InputTokens = %d, want 1000 (10000 - 6000 read - 3000 written)", u.InputTokens)
+		}
+		if got := u.PromptTokens(); got != 10000 {
+			t.Errorf("PromptTokens() = %d, want 10000 — the three fields must stay disjoint", got)
+		}
+		// The whole point of carrying the field: it is priced at a premium.
+		m, err := FindModel("openai-codex", "gpt-5.6-sol")
+		if err != nil {
+			t.Fatalf("gpt-5.6-sol missing from the price sheet: %v", err)
+		}
+		if m.PriceCacheWrite <= m.PriceInput {
+			t.Fatalf("PriceCacheWrite %v should exceed PriceInput %v", m.PriceCacheWrite, m.PriceInput)
+		}
+		u.OutputTokens = 0
+		flat := u
+		flat.InputTokens, flat.CacheWriteTokens = u.InputTokens+u.CacheWriteTokens, 0
+		if ComputeCost(m, u) <= ComputeCost(m, flat) {
+			t.Error("pricing a written prefix as plain input should cost LESS — that is the understatement")
+		}
+	})
+
+	t.Run("pre-5.6 responses are unchanged", func(t *testing.T) {
+		u := usageFor(t, `,"input_tokens_details":{"cached_tokens":6000}`)
+		if u.CacheWriteTokens != 0 || u.CacheReadTokens != 6000 || u.InputTokens != 4000 {
+			t.Errorf("got in=%d read=%d write=%d, want 4000/6000/0",
+				u.InputTokens, u.CacheReadTokens, u.CacheWriteTokens)
+		}
+	})
+
+	t.Run("details that would drive input negative are not applied", func(t *testing.T) {
+		// If the wire ever reports these ALONGSIDE the total rather than
+		// inside it, degrade to the pre-5.6 arithmetic — never a negative
+		// input count that would read as a credit.
+		u := usageFor(t, `,"input_tokens_details":{"cached_tokens":9000,"cache_write_tokens":9000}`)
+		if u.InputTokens < 0 {
+			t.Errorf("InputTokens = %d, must never go negative", u.InputTokens)
+		}
+		if u.InputTokens != 1000 {
+			t.Errorf("InputTokens = %d, want 1000 (cached applied, write declined)", u.InputTokens)
+		}
+	})
+}

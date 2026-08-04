@@ -30,6 +30,30 @@ func TestCacheCliffNoteNamesTheRun(t *testing.T) {
 	}
 }
 
+// Compaction shrinks each miss; it does not end the run (a measured session
+// took two compactions and stayed pinned at the floor for 120 more
+// dispatches). The note may therefore mention /compact, but must not offer it
+// as the remedy — someone who reads it that way spends a summarization
+// round-trip on a provider-side outage it cannot stop.
+func TestCacheCliffNoteDoesNotSellCompactAsTheFix(t *testing.T) {
+	msg := cacheCliffNote(core.CacheCliff{Dispatches: 12, RereadTokens: 1_400_000, Ongoing: true})
+	if !strings.Contains(msg, "does not end the run") {
+		t.Errorf("note %q must say plainly that compaction does not end the run", msg)
+	}
+	// The escape hatch that does work has to be named, or the note reports a
+	// problem with no action attached.
+	if !strings.Contains(msg, "new session") && !strings.Contains(msg, "another model") {
+		t.Errorf("note %q names no action that actually ends the run", msg)
+	}
+	// A conditional promise ("cuts the cost IF it keeps up") is the exact
+	// wording that read as a fix. Guard the shape, not just the old string.
+	for _, banned := range []string{"cuts the cost", "if it keeps up"} {
+		if strings.Contains(msg, banned) {
+			t.Errorf("note %q still promises %q", msg, banned)
+		}
+	}
+}
+
 func TestRoughTokens(t *testing.T) {
 	for _, tc := range []struct {
 		n    int
