@@ -11,6 +11,13 @@ examples/cards/*.png binary
 # frame. Pin the goldens to LF.
 packages/agent/ctrlproto/testdata/*.json text eol=lf
 
+# The connproto golden corpus is the same shape and the same trap:
+# TestGoldenFixtureMatchesCorpus byte-compares the published file against the
+# in-source frames, so a CRLF checkout marks a correct fixture stale. This one
+# is also PUBLISHED for connector authors to test against, which makes its line
+# endings part of what is being distributed, not just a local build detail.
+packages/agent/connproto/testdata/*.jsonl text eol=lf
+
 # i18n reference catalogs are byte-compared against the linter's LF
 # output (`terva-i18n-lint -check`, the CI gate); a CRLF checkout (the
 # Windows CI default) marks every catalog stale. Pin them to LF.
