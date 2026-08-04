@@ -6,5 +6,6 @@
   "language": "go",
   "description": "one process, both roles: a filesystem-backed chat connector (drop a file in inbox/ → an agent turn) that ALSO serves a tool reading the same live state",
   "enabled": true,
-  "connector": true
+  "connector": true,
+  "data_secrets": false
 }

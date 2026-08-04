@@ -24,10 +24,25 @@ type Sandbox struct {
 	// set-once-at-setup contract as readOnlyRoots.
 	secretRoots []string
 
+	// secretNames deny by base NAME within a subtree, for keys whose
+	// directories cannot be enumerated ahead of time. See AddSecretNameUnder.
+	secretNames []roGlob
+
 	// secretExceptions are paths carved back OUT of secretRoots — the
 	// ext-*.log inside an otherwise-denied logs/. Checked before
 	// secretRoots so the narrower rule wins.
 	secretExceptions []roGlob
+
+	// guardedRoots are subtrees whose readability is DECIDED AT READ TIME
+	// rather than at setup. See AddGuardedRoot.
+	guardedRoots []guardedRoot
+
+	// writableRoots are directories OUTSIDE Root that mutating tools may
+	// still target when jailed — terva-owned surfaces that exist to be
+	// agent-written (the handoffs dir). Nothing here loosens containment
+	// for the rest of the filesystem. Same set-once-at-setup contract as
+	// secretRoots.
+	writableRoots []string
 
 	locked atomic.Bool
 }
@@ -37,6 +52,30 @@ type Sandbox struct {
 type roGlob struct {
 	dir     string
 	pattern string
+}
+
+// ReadGuard decides whether one path may be read, and says why not.
+//
+// It is consulted on EVERY read rather than once at setup, which is the whole
+// reason it is a function. The subtrees it governs are component-owned — a
+// connector's state directory, an extension's data directory — and a component
+// is a live process that can write a plaintext credential into its own file at
+// any moment. A verdict computed at startup would still be reporting "clean"
+// for the rest of the session, which is precisely the wrong direction to be
+// stale in.
+//
+// rel is the read target relative to the directory the guard was registered on,
+// slash-separated. Relative rather than absolute so a guard never re-derives
+// the path itself: the sandbox canonicalizes targets (resolving symlinks — on
+// macOS every temp dir is one), and a guard comparing against an
+// unresolved root silently matched NOTHING and allowed everything. Handing it
+// an already-relative path removes the mismatch rather than documenting it.
+type ReadGuard func(rel string) (allow bool, reason string)
+
+// guardedRoot is one subtree and the guard that decides it.
+type guardedRoot struct {
+	dir   string
+	guard ReadGuard
 }
 
 // NewSandbox returns a Sandbox rooted at cwd. It starts unlocked.
@@ -107,7 +146,70 @@ func (s *Sandbox) CheckPathRead(path string) error {
 			return fmt.Errorf("jailed: path %q holds credentials or transcripts and is never readable by tools (bash cannot read it either; /unjail does not lift this)", path)
 		}
 	}
+	// Denied by NAME within a subtree: a component's private key is created at
+	// a path nobody can enumerate ahead of time (connectors/<any-name>/), and
+	// AddSecretRoot skips paths that do not exist yet, so an exact list would
+	// silently miss every connector configured after startup.
+	for _, g := range s.secretNames {
+		if base == g.pattern && isUnder(g.dir, target) {
+			return fmt.Errorf("jailed: path %q is a private key and is never readable by tools (bash cannot read it either; /unjail does not lift this)", path)
+		}
+	}
+	// Decided at read time, and LAST: a guard can only ever add a denial, never
+	// lift one. The absolute rules above have already run, so a component tree
+	// that a guard would happily allow still cannot hand back the private key
+	// sitting inside it.
+	for _, g := range s.guardedRoots {
+		if !isUnder(g.dir, target) || target == g.dir {
+			continue
+		}
+		rel, err := filepath.Rel(g.dir, target)
+		if err != nil {
+			continue
+		}
+		if allow, reason := g.guard(filepath.ToSlash(rel)); !allow {
+			return fmt.Errorf("jailed: path %q is in a component directory that is not verifiably free of plaintext secrets — %s (bash cannot read it either; /unjail does not lift this)", path, reason)
+		}
+	}
 	return nil
+}
+
+// AddSecretNameUnder denies every file with this exact base name anywhere
+// beneath dir, however deep and whether or not it exists yet.
+//
+// For keys a component mints for itself: their directories are named after the
+// component, so the set is open-ended, and denying the directory wholesale
+// would hide state that is meant to stay inspectable.
+func (s *Sandbox) AddSecretNameUnder(dir, name string) {
+	c, err := canonicalOrParent(dir)
+	if err != nil {
+		return
+	}
+	s.secretNames = append(s.secretNames, roGlob{dir: c, pattern: name})
+}
+
+// AddGuardedRoot registers a subtree whose readability is decided per read by
+// guard, rather than fixed at setup.
+//
+// For the component-owned trees — connectors/, ext-data/ — where the answer is
+// not a property of the path but of what is currently IN it, and where the
+// component is a live process that can change that answer mid-session. See
+// [ReadGuard], and build.componentReadGuard for the verdict itself.
+//
+// A guard can only deny. Everything on the absolute lists is refused before any
+// guard runs, so registering one can never widen what is readable.
+func (s *Sandbox) AddGuardedRoot(dir string, guard ReadGuard) {
+	if guard == nil {
+		return
+	}
+	// Kept even when the directory does not exist yet, unlike AddSecretRoot: a
+	// connector configured after startup creates its directory then, and a
+	// guard skipped for absence would be exactly the one that mattered.
+	c, err := canonicalOrParent(dir)
+	if err != nil {
+		return
+	}
+	s.guardedRoots = append(s.guardedRoots, guardedRoot{dir: c, guard: guard})
 }
 
 // AddSecretRoot registers a path the read tools must always refuse, even
@@ -125,6 +227,25 @@ func (s *Sandbox) AddSecretRoot(paths ...string) {
 			continue
 		}
 		s.secretRoots = append(s.secretRoots, c)
+	}
+}
+
+// AddWritableRoot registers a directory outside Root that mutating tools
+// may still write while jailed. Unlike AddSecretRoot it keeps paths that
+// do not exist yet — the write tool creates missing parents, and a fresh
+// home has no handoffs/ until the first handoff is written; skipping the
+// grant then would jail exactly the first use. Call during setup, before
+// any tool runs.
+func (s *Sandbox) AddWritableRoot(paths ...string) {
+	for _, p := range paths {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		c, err := canonicalOrParent(p)
+		if err != nil {
+			continue
+		}
+		s.writableRoots = append(s.writableRoots, c)
 	}
 }
 
@@ -162,6 +283,14 @@ func (s *Sandbox) checkUnder(path string) error {
 	}
 	if isUnder(rootAbs, target) {
 		return nil
+	}
+	// Symlink escapes cannot ride a grant: target is already canonical, so
+	// a link inside a writable root that points elsewhere resolves outside
+	// it and falls through to the refusal.
+	for _, w := range s.writableRoots {
+		if isUnder(w, target) {
+			return nil
+		}
 	}
 	return fmt.Errorf("jailed: cannot WRITE %q — it is outside the sandbox root %q (reading it is allowed; use /unjail to lift the write jail)", path, s.Root)
 }
@@ -252,7 +381,12 @@ func (s *Sandbox) checkCommandScope(cmd string) error {
 // starting with ~ or $HOME — so a bare word that happens to read "sessions"
 // costs nothing. Matching reuses CheckPathRead so the two routes cannot drift.
 func (s *Sandbox) checkSecretArgs(cmd string) error {
-	if len(s.secretRoots) == 0 {
+	// Every kind of denial, not just secretRoots. The original test was written
+	// when roots were the only kind; secretNames and guardedRoots would each
+	// have been skipped by it on a sandbox that registered nothing else, so bash
+	// would have walked past a rule the file tools enforce. Unreachable today
+	// (restrictSensitiveReads always adds roots) and wrong to leave load-bearing.
+	if len(s.secretRoots) == 0 && len(s.secretNames) == 0 && len(s.guardedRoots) == 0 {
 		return nil
 	}
 	for _, tok := range strings.Fields(cmd) {

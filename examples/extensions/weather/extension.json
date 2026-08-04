@@ -21,5 +21,6 @@
       "default": "celsius",
       "description": "Temperature units to report."
     }
-  ]
+  ],
+  "data_secrets": false
 }

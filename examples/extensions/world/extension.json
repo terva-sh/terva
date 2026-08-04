@@ -14,5 +14,6 @@
       "default": "wayfarer",
       "description": "Seeds the procedural land. Same seed = same world."
     }
-  ]
+  ],
+  "data_secrets": false
 }

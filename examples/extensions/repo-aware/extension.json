@@ -4,5 +4,6 @@
   "exec": "./repo-aware",
   "language": "go",
   "description": "adapts its context block and tool visibility to whether the workspace is a git repo; demonstrates the per-session, cache-safe context/tool pattern",
-  "enabled": true
+  "enabled": true,
+  "data_secrets": false
 }

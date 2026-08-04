@@ -4,5 +4,6 @@
   "exec": "./guard",
   "language": "go",
   "description": "audits lifecycle events and refuses dangerous bash patterns",
-  "enabled": true
+  "enabled": true,
+  "data_secrets": false
 }

@@ -4,5 +4,6 @@
   "exec": "./approve",
   "language": "go",
   "description": "human-in-the-loop approval gate: the model must get user sign-off before a tool runs",
-  "enabled": true
+  "enabled": true,
+  "data_secrets": false
 }

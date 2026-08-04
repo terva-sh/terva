@@ -53,6 +53,27 @@ type Manifest struct {
 	// extensions are offered as chat services (never project-local ones);
 	// see docs/proposals/connector-extensions.md.
 	Connector bool `json:"connector,omitempty"`
+	// DataSecrets declares whether this extension's DATA DIRECTORY
+	// ($TERVA_HOME/ext-data/<name>/) may hold secret material. It decides
+	// whether the agent's own tools may read in there.
+	//
+	//	false  — it holds none; the directory stays readable, which is what
+	//	         makes it the debugging surface it was always meant to be
+	//	true   — it does; the directory is denied
+	//	absent — undeclared, and unknown is not clean (see §8.5 of
+	//	         docs/proposals/secrets-at-rest.md)
+	//
+	// A TRI-STATE pointer, not a bool, because absent and false must not
+	// collapse: "I checked, there are none" is a claim the author makes, and a
+	// zero value would make it for every extension that never considered the
+	// question.
+	//
+	// The honest answer for a new extension is false, because it has somewhere
+	// better to put a secret: the host brokers them over the protocol's
+	// secret_* frames, sealed into terva's own store, where a rotation can
+	// reach them even while the extension is stopped. A true here is a bug
+	// worth fixing rather than a configuration.
+	DataSecrets *bool `json:"data_secrets,omitempty"`
 }
 
 // ConfigField is one declared setting in an extension's manifest. The host

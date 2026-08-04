@@ -4,5 +4,6 @@
   "exec": "./hello",
   "language": "go",
   "description": "registers /hello and /summon as a starter example",
-  "enabled": true
+  "enabled": true,
+  "data_secrets": false
 }
