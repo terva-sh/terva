@@ -973,6 +973,7 @@ func (f *acpFactory) setupACPExtensions(ctx context.Context, args build.Args, r 
 	extMgr.SetAllowedExtensions(args.WithExtensions)       // --extensions allowlist; --ext paths bypass
 	extMgr.SetConfigResolver(build.ResolveExtensionConfig) // hello_ack config delivery
 	build.WireSessionReader(extMgr, config.TervaHome(), r.CWD)
+	build.WireExtensionSecrets(extMgr, config.TervaHome())
 	extMgr.SetProjectTrusted(r.Trusted) // gate project ext dirs on Workspace Trust
 	// --ext paths first so they win against installed extensions of the same
 	// name (loadOne's first-write-wins semantics).
@@ -1007,7 +1008,7 @@ func (f *acpFactory) skillSnapshot(cwd string) func() []*skills.Skill {
 	trusted := permissions.ResolveTrustState(cwd, f.args.Trust).IsTrusted()
 	return func() []*skills.Skill {
 		userHome, _ := os.UserHomeDir()
-		list, _ := skills.Discover(config.TervaHome(), cwd, userHome, f.args.WithSkills, trusted)
+		list, _ := skills.Discover(config.TervaHome(), cwd, userHome, f.args.WithSkills, !f.args.NoBuiltinSkills, trusted)
 		return skills.VisibleSkills(list)
 	}
 }

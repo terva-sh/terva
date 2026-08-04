@@ -50,7 +50,7 @@ func TestBundleSkillsDiscovered(t *testing.T) {
 	writeExtension(t, home, "researcher", map[string]any{}, map[string]string{
 		"web-research": "Chain search into fetch.",
 	})
-	found, errs := skills.Discover(home, testsupport.TempDir(t), "", true, true)
+	found, errs := skills.Discover(home, testsupport.TempDir(t), "", true, true, true)
 	if len(errs) > 0 {
 		t.Fatalf("discover errors: %v", errs)
 	}
@@ -70,7 +70,7 @@ func TestBundleSkillsSkipDisabledExtension(t *testing.T) {
 	writeExtension(t, home, "off", map[string]any{"enabled": false}, map[string]string{
 		"ghost-skill": "should not load",
 	})
-	found, _ := skills.Discover(home, testsupport.TempDir(t), "", true, true)
+	found, _ := skills.Discover(home, testsupport.TempDir(t), "", true, true, true)
 	for _, s := range found {
 		if s.Name == "ghost-skill" {
 			t.Fatal("disabled extension's bundle skill was discovered")
@@ -92,7 +92,7 @@ func TestBundleSkillsNeverShadowUserSkills(t *testing.T) {
 	writeExtension(t, home, "researcher", map[string]any{}, map[string]string{
 		"web-research": "bundle body",
 	})
-	found, _ := skills.Discover(home, testsupport.TempDir(t), "", true, true)
+	found, _ := skills.Discover(home, testsupport.TempDir(t), "", true, true, true)
 	for _, s := range found {
 		if s.Name == "web-research" {
 			if strings.Contains(s.Source, "extension") {

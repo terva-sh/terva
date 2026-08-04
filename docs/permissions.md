@@ -21,7 +21,10 @@ The jail is a **write** boundary plus a set of command heuristics. It is
 deliberately not a read boundary:
 
 - **Writes** (`write`, `edit`, image output, chat attachments) are confined
-  to the working directory.
+  to the working directory — plus `$TERVA_HOME/handoffs/`, the one terva-owned
+  surface that exists to be agent-written (the built-in `handoff` skill parks
+  session-to-session documents there; requiring `/unjail` for a built-in
+  skill would make the jail an obstacle to route around).
 - **Reads** (`read`, `grep`, `glob`, `share_file`) are not confined. The
   `bash` tool has never been path-jailed — it cannot be, short of not
   shipping a shell — so a refused read was always one `cat` away. Enforcing

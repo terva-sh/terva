@@ -151,6 +151,72 @@ func TestParseArgsSwarmWorktreesFlag(t *testing.T) {
 	}
 }
 
+// Every --no-* boolean in the family parses, under every accepted spelling.
+// A typo'd or dropped switch case would otherwise surface as "unknown flag"
+// only when a user hits it.
+func TestParseArgsNoFamilyBooleans(t *testing.T) {
+	cases := []struct {
+		flags []string
+		field func(Args) bool
+	}{
+		{[]string{"--no-session"}, func(a Args) bool { return a.NoSess }},
+		{[]string{"--no-tools"}, func(a Args) bool { return a.NoTools }},
+		{[]string{"--no-workspace-tools"}, func(a Args) bool { return a.NoWorkspaceTools }},
+		{[]string{"--no-project"}, func(a Args) bool { return a.NoProject }},
+		{[]string{"--no-jail"}, func(a Args) bool { return a.NoJail }},
+		{[]string{"--no-ext", "--no-extensions"}, func(a Args) bool { return a.NoExt }},
+		{[]string{"--no-mcp"}, func(a Args) bool { return a.NoMCP }},
+		{[]string{"--no-skill", "--no-skills"}, func(a Args) bool { return a.NoSkill }},
+		{[]string{"--no-builtin-skills", "--no-builtin-skill"}, func(a Args) bool { return a.NoBuiltinSkills }},
+		{[]string{"--no-lore"}, func(a Args) bool { return a.NoLore }},
+		{[]string{"--no-memory"}, func(a Args) bool { return a.NoMemory }},
+		{[]string{"--no-yolo"}, func(a Args) bool { return a.NoYolo }},
+	}
+	for _, tc := range cases {
+		for _, flag := range tc.flags {
+			a, err := ParseArgs([]string{flag})
+			if err != nil {
+				t.Errorf("%s: %v", flag, err)
+				continue
+			}
+			if !tc.field(a) {
+				t.Errorf("%s parsed but did not set its field", flag)
+			}
+		}
+		// Default off.
+		a, err := ParseArgs(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.field(a) {
+			t.Errorf("%v: field true with no flags", tc.flags)
+		}
+	}
+}
+
+func TestParseArgsNoBuiltinSkills(t *testing.T) {
+	a, err := ParseArgs(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.NoBuiltinSkills {
+		t.Fatal("NoBuiltinSkills should default to false")
+	}
+	// Both spellings, mirroring the --no-skill/--no-skills pair.
+	for _, flag := range []string{"--no-builtin-skills", "--no-builtin-skill"} {
+		a, err = ParseArgs([]string{flag})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !a.NoBuiltinSkills {
+			t.Fatalf("%s should set NoBuiltinSkills", flag)
+		}
+		if a.NoSkill {
+			t.Fatalf("%s must not imply NoSkill — user skills stay loaded", flag)
+		}
+	}
+}
+
 func TestParseArgsTUIBackendFlags(t *testing.T) {
 	// The legacy direct *core.Agent TUI driver was removed; the ctrlproto
 	// carrier is the only backend. The old --tui-legacy / --tui-ctrlproto
@@ -181,6 +247,19 @@ func TestParseArgsTokenFileSpellings(t *testing.T) {
 	}
 	if _, err := ParseArgs([]string{"--token-file"}); err == nil {
 		t.Error("--token-file with no value should error, not silently take an empty path")
+	}
+}
+
+func TestParseArgsSecretsKeyFile(t *testing.T) {
+	a, err := ParseArgs([]string{"--secrets-key-file", "/etc/terva/secrets-key"})
+	if err != nil {
+		t.Fatalf("ParseArgs errored: %v", err)
+	}
+	if a.SecretsKeyFile != "/etc/terva/secrets-key" {
+		t.Errorf("SecretsKeyFile = %q, want the path to be stored", a.SecretsKeyFile)
+	}
+	if _, err := ParseArgs([]string{"--secrets-key-file"}); err == nil {
+		t.Error("--secrets-key-file with no value should error, not silently take an empty path")
 	}
 }
 
@@ -317,5 +396,35 @@ func TestParseArgsApprovalHTTP(t *testing.T) {
 	b, _ := ParseArgs([]string{})
 	if b.ApprovalHTTP != "" {
 		t.Error("ApprovalHTTP should default empty (no HTTP approval carrier)")
+	}
+}
+
+// The two privileged web flags are independent, which is the whole of §8.13 Q8:
+// `auth` writes the credential terva uses to reach a model provider, while
+// `secrets` reports on the key that opens everything, including material auth
+// never touches. An operator who wants a panel that can re-authenticate an
+// expired subscription has not thereby asked for one that can enumerate every
+// scope in the store.
+func TestWebLoginAndWebSecretsAreIndependentFlags(t *testing.T) {
+	login, err := ParseArgs([]string{"--web-allow-login"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !login.AllowWebLogin {
+		t.Fatal("--web-allow-login did not set its own flag")
+	}
+	if login.AllowWebSecrets {
+		t.Error("--web-allow-login must not grant the secrets group")
+	}
+
+	sec, err := ParseArgs([]string{"--web-allow-secrets"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sec.AllowWebSecrets {
+		t.Fatal("--web-allow-secrets did not set its own flag")
+	}
+	if sec.AllowWebLogin {
+		t.Error("--web-allow-secrets must not grant the auth group")
 	}
 }

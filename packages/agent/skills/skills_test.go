@@ -108,7 +108,7 @@ func TestDiscoverProjectAndGlobalPriorityAndDedup(t *testing.T) {
 	// Unique skill in global only.
 	mk(filepath.Join(tervaHome, "skills"), "global-only", "from global")
 
-	skills, errs := Discover(tervaHome, cwd, "", true /* includeUser */, true /* trustProject */)
+	skills, errs := Discover(tervaHome, cwd, "", true /* includeUser */, true /* includeBuiltin */, true /* trustProject */)
 	if len(errs) > 0 {
 		t.Fatalf("errs: %v", errs)
 	}
@@ -131,6 +131,47 @@ func TestDiscoverProjectAndGlobalPriorityAndDedup(t *testing.T) {
 		if FindByName(skills, b.Name) == nil {
 			t.Errorf("built-in skill %q missing from Discover output", b.Name)
 		}
+	}
+}
+
+// --no-builtin-skills: includeBuiltin=false drops every compiled-in skill
+// while user skills — including one squatting on a built-in's name — load
+// exactly as before.
+func TestDiscoverExcludesBuiltinsOnRequest(t *testing.T) {
+	tmp := testsupport.TempDir(t)
+	tervaHome := filepath.Join(tmp, "home")
+	cwd := filepath.Join(tmp, "proj")
+
+	mk := func(dir, name, desc string) {
+		full := filepath.Join(dir, name)
+		if err := os.MkdirAll(full, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := "---\nname: " + name + "\ndescription: " + desc + "\n---\n# " + name + "\n"
+		if err := os.WriteFile(filepath.Join(full, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk(filepath.Join(tervaHome, "skills"), "mine", "a user skill")
+	// Shadow a real built-in by name: with built-ins excluded the user's
+	// version must still load (it is a user skill, not a built-in).
+	shadowed := loadBuiltins()[0].Name
+	mk(filepath.Join(tervaHome, "skills"), shadowed, "user shadow")
+
+	got, errs := Discover(tervaHome, cwd, "", true, false /* includeBuiltin */, true)
+	if len(errs) > 0 {
+		t.Fatalf("errs: %v", errs)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected exactly the 2 user skills, got %d (%v)", len(got), got)
+	}
+	for _, s := range got {
+		if s.Builtin {
+			t.Errorf("built-in %q leaked past includeBuiltin=false", s.Name)
+		}
+	}
+	if s := FindByName(got, shadowed); s == nil || s.Description != "user shadow" {
+		t.Errorf("user skill shadowing a built-in name should survive, got %v", s)
 	}
 }
 
@@ -161,7 +202,7 @@ func TestDiscoverUntrustedDropsProjectSkills(t *testing.T) {
 	mk(filepath.Join(tervaHome, "skills"), "user-global", "from the user home")
 
 	// Untrusted: none of the project skills, but the global one is present.
-	restricted, errs := Discover(tervaHome, cwd, "", true, false /* trustProject */)
+	restricted, errs := Discover(tervaHome, cwd, "", true, true, false /* trustProject */)
 	if len(errs) > 0 {
 		t.Fatalf("errs: %v", errs)
 	}
@@ -175,7 +216,7 @@ func TestDiscoverUntrustedDropsProjectSkills(t *testing.T) {
 	}
 
 	// Trusted: the same project skills now load.
-	trusted, errs := Discover(tervaHome, cwd, "", true, true /* trustProject */)
+	trusted, errs := Discover(tervaHome, cwd, "", true, true, true /* trustProject */)
 	if len(errs) > 0 {
 		t.Fatalf("errs: %v", errs)
 	}

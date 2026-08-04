@@ -226,6 +226,49 @@ func TestSandboxSecretRootAndException(t *testing.T) {
 	}
 }
 
+// A writable root is a narrow write grant outside the jail root: the granted
+// directory (even one that does not exist yet — the first handoff creates it)
+// accepts writes, its siblings stay jailed, and a symlink planted inside it
+// cannot smuggle a write elsewhere because targets resolve before matching.
+func TestSandboxWritableRootGrantsNarrowWrites(t *testing.T) {
+	root := testsupport.TempDir(t)
+	home := testsupport.TempDir(t)
+	handoffs := filepath.Join(home, "handoffs")
+
+	sb := NewSandbox(root)
+	sb.AddWritableRoot(handoffs) // deliberately before the dir exists
+	sb.Lock()
+
+	if err := sb.CheckPath(filepath.Join(handoffs, "2026-08-02-x.md")); err != nil {
+		t.Errorf("write into the granted dir should be allowed pre-creation: %v", err)
+	}
+	if err := sb.CheckPath(filepath.Join(handoffs, "nested", "y.md")); err != nil {
+		t.Errorf("write into a granted subdir should be allowed: %v", err)
+	}
+	// The grant is the directory alone — siblings and the home root stay jailed.
+	if err := sb.CheckPath(filepath.Join(home, "config.json")); err == nil {
+		t.Error("a sibling of the granted dir must stay write-jailed")
+	}
+	if err := sb.CheckPath(home); err == nil {
+		t.Error("the parent of the granted dir must stay write-jailed")
+	}
+	// A symlink inside the grant pointing outside resolves outside and is refused.
+	outside := testsupport.TempDir(t)
+	os.MkdirAll(handoffs, 0o755)
+	link := filepath.Join(handoffs, "evil")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink unsupported here: %v", err)
+	}
+	if err := sb.CheckPath(filepath.Join(link, "z.md")); err == nil {
+		t.Error("a symlink escape through the granted dir must be refused")
+	}
+	// Unlocked sandboxes are unchanged: everything allowed, grant or not.
+	sb.Unlock()
+	if err := sb.CheckPath(filepath.Join(home, "config.json")); err != nil {
+		t.Errorf("unlocked write should be allowed: %v", err)
+	}
+}
+
 func mustJSONRaw(t *testing.T, v any) []byte {
 	t.Helper()
 	return mustJSON(t, v)
