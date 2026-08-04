@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // PIDPath returns the location of a service's bot pid file. The
@@ -34,7 +36,7 @@ func LogPath(tervaHome, service string) string {
 // existing file.
 func WritePID(tervaHome, service string, pid int) error {
 	p := PIDPath(tervaHome, service)
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(p)); err != nil {
 		return err
 	}
 	return os.WriteFile(p, []byte(strconv.Itoa(pid)+"\n"), 0o644)

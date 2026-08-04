@@ -15,10 +15,25 @@ import (
 // so it needs no API key or tokens — a debugging + offline-assertion tool.
 // Output goes to stdout so `--dump-prompt=json | jq ...` works.
 func runPromptDump(args build.Args) error {
-	r, err := build.Resolve(args, false)
+	out, err := promptDumpText(args)
 	if err != nil {
 		return err
 	}
+	fmt.Fprintln(os.Stdout, out)
+	return nil
+}
+
+// promptDumpText renders the dump for the requested mode. Split from the
+// printing so a test can assert on the assembled output.
+func promptDumpText(args build.Args) (string, error) {
+	r, err := build.Resolve(args, false)
+	if err != nil {
+		return "", err
+	}
+	// The live flow injects durable memory into the cached prefix at session
+	// bind (RefreshMemory); a dump binds no session, so mirror that here or
+	// the dump under-reports every home that has memory by the whole block.
+	build.RefreshMemory(&r)
 	var msgs []provider.Message
 	// A card greeting shows as messages[0], mirroring a fresh session.
 	if g := strings.TrimSpace(r.CardGreeting); g != "" {
@@ -37,17 +52,15 @@ func runPromptDump(args build.Args) error {
 		})
 	}
 	if args.DumpPrompt == "sizes" {
-		fmt.Fprintln(os.Stdout, r.BuildPromptSizes(msgs).Text())
-		return nil
+		return r.BuildPromptSizes(msgs).Text(), nil
 	}
 	m := r.BuildPromptManifest(msgs)
 	switch args.DumpPrompt {
 	case "json":
-		fmt.Fprintln(os.Stdout, m.JSON())
+		return m.JSON(), nil
 	case "raw":
-		fmt.Fprintln(os.Stdout, m.Raw())
+		return m.Raw(), nil
 	default:
-		fmt.Fprintln(os.Stdout, m.Text())
+		return m.Text(), nil
 	}
-	return nil
 }

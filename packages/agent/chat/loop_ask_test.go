@@ -109,10 +109,17 @@ type askFakeConnector struct {
 	// real connector does, and a fake that did not would let a confirmer pass
 	// these tests while ignoring cancellation.
 	hold chan struct{}
+	// err, when non-nil, fails the ask instead of answering it: a question
+	// that never reached a human (a chat id the connector rejects, a dead
+	// session), which is a different outcome from one that expired.
+	err error
 }
 
 func (f *askFakeConnector) Ask(ctx context.Context, a Ask) (Answer, error) {
 	f.asked <- a
+	if f.err != nil {
+		return Answer{}, f.err
+	}
 	if f.hold != nil {
 		select {
 		case <-f.hold:
@@ -408,5 +415,129 @@ func TestLoopAdmissionAskIgnored(t *testing.T) {
 	}
 	if len(conn.sends()) != 0 {
 		t.Errorf("sends = %v, want none on ignore", conn.sends())
+	}
+}
+
+// newAdmissionLoop builds a Loop wired for admission asks. owner/ownerDM
+// empty models a run where nobody has paired (or the owner has not DM'd)
+// yet — the state in which the ask cannot be delivered.
+func newAdmissionLoop(conn Connector, adm *Admissions, owner, ownerDM string) *Loop {
+	l := &Loop{Connector: conn, Admissions: adm, Info: func(string) {}, Warn: func(string) {}}
+	l.mu.Lock()
+	l.ownerID = owner
+	l.pairedChatID = ownerDM
+	l.mu.Unlock()
+	return l
+}
+
+// TestLoopAdmissionAskUnpairedStaysPromptable: a membership frame that
+// arrives before anyone is paired must not consume the chat's one ask.
+// It used to — the suppression flag was written before the owner guard —
+// so the owner was never prompted for that chat again, and the
+// re-announcement the contract advertises as a self-heal hit the
+// suppression rather than the ask.
+func TestLoopAdmissionAskUnpairedStaysPromptable(t *testing.T) {
+	conn := &askFakeConnector{
+		fakeConnector: newFakeConnector(Capabilities{Asks: true}),
+		asked:         make(chan Ask, 4),
+		answer:        Answer{Key: "approve", UserID: "7", Username: "u7"},
+	}
+	adm := LoadAdmissions("")
+	l := newAdmissionLoop(conn, adm, "", "") // unpaired
+
+	mb := Membership{ChatID: "g9", ChatKind: "group", ChatTitle: "ops", Change: "added"}
+	l.onMembership(context.Background(), mb)
+	select {
+	case a := <-conn.asked:
+		t.Fatalf("asked while unpaired: %+v", a)
+	default:
+	}
+
+	// The owner pairs, the connector re-announces: NOW the ask must fire.
+	l.mu.Lock()
+	l.ownerID, l.pairedChatID = "7", "100"
+	l.mu.Unlock()
+	l.onMembership(context.Background(), mb)
+	select {
+	case a := <-conn.asked:
+		if a.ChatID != "100" {
+			t.Errorf("ask chat = %q, want the owner DM", a.ChatID)
+		}
+	default:
+		t.Fatal("re-announcement after pairing did not prompt — the ask was burned while unpaired")
+	}
+	if mode, ok := adm.Mode("g9"); !ok || mode != ModeMention {
+		t.Errorf("admission = %q,%v want mention", mode, ok)
+	}
+}
+
+// TestLoopAdmissionAskUndeliveredStaysPromptable: an ask the owner never
+// saw (the connector rejected the chat id — the paired chat is seeded
+// from the USER id until the first inbound DM) must not count as asked.
+func TestLoopAdmissionAskUndeliveredStaysPromptable(t *testing.T) {
+	conn := &askFakeConnector{
+		fakeConnector: newFakeConnector(Capabilities{Asks: true}),
+		asked:         make(chan Ask, 4),
+		answer:        Answer{Key: "approve", UserID: "7", Username: "u7"},
+		err:           errors.New(`bad chat id "@bot:example.org"`),
+	}
+	adm := LoadAdmissions("")
+	l := newAdmissionLoop(conn, adm, "7", "@bot:example.org")
+
+	mb := Membership{ChatID: "g9", ChatKind: "group", Change: "added"}
+	l.onMembership(context.Background(), mb)
+	if _, ok := <-conn.asked; !ok {
+		t.Fatal("no ask attempted")
+	}
+	if _, ok := adm.Mode("g9"); ok {
+		t.Error("a failed ask must not approve")
+	}
+
+	// The owner's first DM corrects the chat id; the retry must land.
+	conn.err = nil
+	l.mu.Lock()
+	l.pairedChatID = "!dm:example.org"
+	l.mu.Unlock()
+	l.onMembership(context.Background(), mb)
+	select {
+	case a := <-conn.asked:
+		if a.ChatID != "!dm:example.org" {
+			t.Errorf("retry chat = %q, want the corrected DM", a.ChatID)
+		}
+	default:
+		t.Fatal("retry did not prompt — the undelivered ask was burned")
+	}
+	if _, ok := adm.Mode("g9"); !ok {
+		t.Error("the retry's approval did not persist")
+	}
+}
+
+// TestLoopAdmissionAskTimeoutStaysBurned is the other half of the rule:
+// a question the owner SAW and let expire is an answer, so it must not
+// come back. Without this, releasing the claim on error would turn every
+// ignored invite into a nag on the next membership frame.
+func TestLoopAdmissionAskTimeoutStaysBurned(t *testing.T) {
+	conn := &askFakeConnector{
+		fakeConnector: newFakeConnector(Capabilities{Asks: true}),
+		asked:         make(chan Ask, 4),
+		err:           ErrAskTimeout,
+	}
+	adm := LoadAdmissions("")
+	l := newAdmissionLoop(conn, adm, "7", "100")
+
+	mb := Membership{ChatID: "g9", ChatKind: "group", Change: "added"}
+	l.onMembership(context.Background(), mb)
+	if _, ok := <-conn.asked; !ok {
+		t.Fatal("no ask attempted")
+	}
+
+	l.onMembership(context.Background(), mb)
+	select {
+	case a := <-conn.asked:
+		t.Fatalf("expired ask was re-asked: %+v", a)
+	default:
+	}
+	if _, ok := adm.Mode("g9"); ok {
+		t.Error("an expired admission must not approve")
 	}
 }

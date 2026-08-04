@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // Admission modes for an approved non-DM chat.
@@ -139,7 +141,7 @@ func (a *Admissions) save() error {
 	if a.path == "" {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(a.path), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(a.path)); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(a.chats, "", "  ")

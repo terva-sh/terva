@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // Pairing for external connectors persists HOST-side, under the
@@ -38,7 +40,7 @@ func loadPairing(tervaHome, name string) string {
 // credential-adjacent file.
 func savePairing(tervaHome, name, userID string) error {
 	path := pairingPath(tervaHome, name)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(path)); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(pairingState{AllowedUserID: userID}, "", "  ")

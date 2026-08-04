@@ -353,9 +353,22 @@ type sessionLine struct {
 	// were billed at full price behind a label promising otherwise.
 	Strategy       string `json:"strategy,omitempty"`
 	FallbackReason string `json:"fallback_reason,omitempty"`
+	// Truncated marks a compaction whose summary ran into compactMaxTokens. The
+	// silent version of this was measurable only by arithmetic — output_tokens
+	// exactly equal to the cap, prose ending mid-word — which is not a signal any
+	// reader should have to reconstruct.
+	Truncated bool `json:"truncated,omitempty"`
 
-	// At stamps WHEN this row was written, for row kinds whose payload carries no
-	// time of its own. Meta rows are the case that needs it: they are an
+	// At stamps WHEN this row was written. writeLineLocked fills it on every row
+	// that did not set one itself, so the rule is universal: a reader asks any row
+	// for its time without first knowing which kind it is. Message rows carry a
+	// second, semantically different time inside the payload (wireMessage.Time,
+	// when the message was made rather than when the row was flushed); the two
+	// agree in the ordinary case and diverge exactly where a message is
+	// re-persisted, which is worth being able to see.
+	//
+	// It was not always universal, and the reasons it became so are worth keeping.
+	// Meta rows forced it first: they are an
 	// append-only timeline of what changed, but SessionMeta carries only Started —
 	// the session's birth, identical on every row — so a reader could see THAT the
 	// model changed and never WHEN. Aligning a settings change against the message
@@ -371,8 +384,15 @@ type sessionLine struct {
 	// analyzed in 2026-08 could establish WHERE the match died but not whether
 	// idle time explained it, because the usage rows carried no time.
 	//
-	// A pointer so omitempty actually omits it: a zero time.Time is not "empty" to
-	// encoding/json, and every other row kind must stay byte-identical.
+	// The diagnostic rows — net, prefix, stall, tail, retry, escalation — are what
+	// made it universal. Reviewing a live session in 2026-08 meant attributing
+	// tool calls to a provider era after a mid-session model switch, and with no
+	// clock on those rows the only handle left was the call-id PREFIX (`toolu_`
+	// against `call_`). That works by coincidence and collapses the moment two
+	// providers share a wire format, which anthropic-compatible ones do.
+	//
+	// A pointer so an explicit stamp still wins over the funnel's, and so "unset"
+	// is expressible at all: a zero time.Time is not "empty" to encoding/json.
 	At *time.Time `json:"at,omitempty"`
 }
 
@@ -1956,6 +1976,7 @@ func (s *Session) AppendCompaction(messages []provider.Message, res CompactResul
 		Usage:          &u,
 		Strategy:       string(res.Strategy),
 		FallbackReason: res.FallbackReason,
+		Truncated:      res.Truncated,
 	}); err != nil {
 		return err
 	}
@@ -2775,11 +2796,32 @@ func (s *Session) writeLine(row sessionLine) error {
 	return s.writeLineLocked(row)
 }
 
+// marshalLine encodes a session row, filling its write time when it did not set
+// one itself.
+//
+// Every path that puts a sessionLine on disk goes through here: writeLineLocked
+// for a live session, and the import/branch writers that build a new file by
+// hand. Those writers are the reason it is a helper rather than four lines
+// inside writeLineLocked — a second writer that formats its own rows is exactly
+// how a format rule quietly stops being universal, and the guard reading a live
+// session would never have seen it.
+//
+// A row that arrives already stamped keeps its own time. Import and branch copy
+// message rows whose payload time is the ORIGINAL moment; the stamp added here
+// is when this file was materialized, and the two are meant to differ.
+func marshalLine(row sessionLine) ([]byte, error) {
+	if row.At == nil {
+		now := time.Now().UTC()
+		row.At = &now
+	}
+	return json.Marshal(row)
+}
+
 // writeLineLocked is writeLine's body; the caller must hold writeMu. Used by the
 // Append* methods that also mutate messagesAppended under the same lock, so the
 // buffer write and the counter update are one atomic critical section.
 func (s *Session) writeLineLocked(row sessionLine) error {
-	b, err := json.Marshal(row)
+	b, err := marshalLine(row)
 	if err != nil {
 		return err
 	}

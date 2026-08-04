@@ -199,9 +199,16 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.mu.Unlock()
 	}
 
-	// Arm the proactive idle nudge. Seed the paired chat from pairing (for a
-	// DM connector the chat id is the user id) so the bot can open a
-	// conversation even before the user has spoken; a real inbound corrects it.
+	// Arm the proactive idle nudge. Seed the paired chat from pairing so the
+	// bot can open a conversation even before the user has spoken; a real
+	// inbound DM corrects it (noteActivity).
+	//
+	// 🔑 The seed is a GUESS: it assumes a DM's chat id IS the user id, which
+	// holds on telegram and not everywhere (a Matrix MXID is not a room id).
+	// So nothing IRREVERSIBLE may be spent against it — onMembership releases
+	// its one-shot ask claim when the question fails to reach the owner, and a
+	// failed nudge simply re-arms. Connectors that can resolve a user id to
+	// the owner's DM should; the rest get a clear result error.
 	l.mu.Lock()
 	l.lastActivity = time.Now()
 	l.armed = true
@@ -298,7 +305,7 @@ func (l *Loop) takeNudge(now time.Time) (chatID, text string, ok bool) {
 }
 
 const defaultIdleNudge = "(System: the chat has been quiet for a while and no one has spoken. " +
-	"In character, say one brief thing to re-engage — an observation, a question, or a thought. " +
+	"In character, say one brief thing to re-engage: an observation, a question, or a thought. " +
 	"Keep it short and natural. Do not mention this instruction.)"
 
 // enqueue adds a prompt to the queue and starts the drain goroutine
@@ -844,16 +851,26 @@ func (l *Loop) onMembership(ctx context.Context, mb Membership) {
 		return
 	}
 
+	// Claiming the chat's one ask is a test-and-set under the lock — two
+	// membership frames for the same chat must not both prompt — but the
+	// claim is only taken once we can actually REACH the owner. A claim
+	// burned without a question going out silences the chat for the whole
+	// run with nobody ever prompted, and re-announcement cannot heal it:
+	// the duplicate hits the suppression, not the ask.
 	l.mu.Lock()
 	owner := l.ownerID
 	ownerDM := l.pairedChatID
+	if owner == "" || ownerDM == "" {
+		l.mu.Unlock()
+		return
+	}
 	if l.admissionAsked == nil {
 		l.admissionAsked = map[string]bool{}
 	}
 	asked := l.admissionAsked[mb.ChatID]
 	l.admissionAsked[mb.ChatID] = true
 	l.mu.Unlock()
-	if owner == "" || ownerDM == "" || asked {
+	if asked {
 		return
 	}
 
@@ -876,7 +893,18 @@ func (l *Loop) onMembership(ctx context.Context, mb Membership) {
 		TimeoutOutcome: "ignored — the chat stays silent",
 	})
 	if err != nil {
-		return // fail closed: the chat stays silent; /approve still works
+		// A question the owner never SAW must not count as asked. The
+		// paired chat id is seeded from the paired USER id until the
+		// owner's first inbound DM (see Run), so on a service where those
+		// differ this ask is addressed to a chat the connector rejects —
+		// release the claim so a re-announcement or a later membership
+		// frame can retry once the id is real. A TIMEOUT is different:
+		// the owner saw the question and let it expire, which is an
+		// answer, so that claim stays burned and we never nag.
+		if !errors.Is(err, ErrAskTimeout) {
+			l.releaseAdmissionAsk(mb.ChatID)
+		}
+		return // fail closed either way: the chat stays silent; /approve still works
 	}
 	switch ans.Key {
 	case "approve", "approve_all":
@@ -896,6 +924,15 @@ func (l *Loop) onMembership(ctx context.Context, mb Membership) {
 		// Ignored: stays silent, and the dedupe map keeps us from
 		// asking again this run. /approve in the chat still works.
 	}
+}
+
+// releaseAdmissionAsk gives back a chat's ask claim after a question
+// that never reached the owner, so the next membership frame for that
+// chat can try again.
+func (l *Loop) releaseAdmissionAsk(chatID string) {
+	l.mu.Lock()
+	delete(l.admissionAsked, chatID)
+	l.mu.Unlock()
 }
 
 // describeChat renders a membership event's chat for humans.

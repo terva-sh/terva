@@ -61,10 +61,13 @@ func TestCapabilityNoteDecaysToOneLine(t *testing.T) {
 	}
 }
 
-// Both forms must read as inventory rather than instruction, and say so. The tic
-// is a model answering what it takes to be a question; the wording is half the
-// fix and the decay is the other half.
-func TestCapabilityNoteReadsAsInventory(t *testing.T) {
+// Both forms must prohibit a reply BEFORE the inventory the prohibition
+// governs. The tic is a model answering what it takes to be a question, and
+// the order is measured, not stylistic: with the excusal mid-block Haiku
+// answered the note instead of the user in 20 of 20 runs, and with the
+// prohibition first it answered the user in 20 of 20 (scripts/eval,
+// session-inspect-cost final-answer row, 2026-08).
+func TestCapabilityNoteProhibitsReplyFirst(t *testing.T) {
 	reg := decayRegistry()
 	active := map[string]bool{}
 	full := inactiveGroupNote(reg, active)
@@ -75,8 +78,13 @@ func TestCapabilityNoteReadsAsInventory(t *testing.T) {
 			t.Fatalf("%s note is empty", name)
 		}
 		lower := strings.ToLower(note)
-		if !strings.Contains(lower, "no reply") && !strings.Contains(lower, "informational") {
+		at := strings.Index(lower, "do not reply")
+		if at < 0 {
 			t.Errorf("%s note does not excuse the model from replying: %q", name, note)
+			continue
+		}
+		if inv := strings.Index(lower, "activate_tools"); inv >= 0 && inv < at {
+			t.Errorf("%s note buries the prohibition after the detail it governs: %q", name, note)
 		}
 	}
 	// The old opener was an imperative directed at the model, which is what it

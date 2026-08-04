@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // Manifest is the connector.json file describing one external
@@ -129,7 +131,7 @@ func Link(tervaHome, manifestPath string) (string, error) {
 	if _, err := os.Lstat(dst); err == nil {
 		return "", fmt.Errorf("connector %q already installed at %s (run `terva bot reset --connector %s` first)", m.Name, dst, m.Name)
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(dst)); err != nil {
 		return "", err
 	}
 	if err := os.Symlink(abs, dst); err != nil {

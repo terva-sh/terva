@@ -32,6 +32,7 @@ import (
 	"terva.sh/terva/packages/agent/modes/telegram"
 	"terva.sh/terva/packages/envcompat"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -133,7 +134,8 @@ func (t *transport) writeAttachment(img provider.ImageBlock) (string, error) {
 	case "image/webp":
 		ext = ".webp"
 	}
-	if err := os.MkdirAll(t.dataDir, 0o755); err != nil {
+	// Owner-only: inbound attachments are the user's private chat content.
+	if err := privfs.MkdirAll(t.dataDir); err != nil {
 		return "", err
 	}
 	path := filepath.Join(t.dataDir, fmt.Sprintf("in-%d%s", t.seq.Add(1), ext))

@@ -260,7 +260,7 @@ func ImportSession(srcPath, root, cwd, version string) (string, error) {
 		Started:  time.Now().UTC(),
 		Version:  version,
 	}
-	metaLine, err := json.Marshal(sessionLine{Type: "meta", Meta: &importMeta})
+	metaLine, err := marshalLine(sessionLine{Type: "meta", Meta: &importMeta})
 	if err != nil {
 		return "", fmt.Errorf("import: marshal meta: %w", err)
 	}
@@ -450,7 +450,7 @@ func BranchSession(parentPath, root, cwd, version string, upToMessageIdx int) (s
 	if len(parentLore) > 0 {
 		branchMeta.FormatVersion = sessionFormatVersionLore
 	}
-	metaLine, err := json.Marshal(sessionLine{Type: "meta", Meta: &branchMeta})
+	metaLine, err := marshalLine(sessionLine{Type: "meta", Meta: &branchMeta})
 	if err != nil {
 		return "", fmt.Errorf("branch: marshal meta: %w", err)
 	}
@@ -464,7 +464,7 @@ func BranchSession(parentPath, root, cwd, version string, upToMessageIdx int) (s
 	// history is its own; the child starts from the state, not the story of how
 	// it got there.
 	if len(parentLore) > 0 {
-		loreLine, err := json.Marshal(sessionLine{Type: recordLore, Lore: &sessionLore{Op: LoreOpSet, Entries: parentLore}})
+		loreLine, err := marshalLine(sessionLine{Type: recordLore, Lore: &sessionLore{Op: LoreOpSet, Entries: parentLore}})
 		if err != nil {
 			return "", fmt.Errorf("branch: marshal lore: %w", err)
 		}
@@ -525,7 +525,7 @@ func BranchSession(parentPath, root, cwd, version string, upToMessageIdx int) (s
 		}
 		for i := 0; i < limit; i++ {
 			w := encodeWireMessage(effective[i])
-			line, err := json.Marshal(sessionLine{Type: "message", Message: &w})
+			line, err := marshalLine(sessionLine{Type: "message", Message: &w})
 			if err != nil {
 				return "", fmt.Errorf("branch: marshal message: %w", err)
 			}

@@ -121,18 +121,26 @@ func TestLoopFileManifestAndCleanup(t *testing.T) {
 
 	conn.inbound <- m
 	conn.waitSends(t, 1)
+	// Wait for BOTH, not just the file. cleanupFiles removes the files in one
+	// loop and their now-empty directories in a second one, so there is a real
+	// window where the file is gone and the directory is not. Polling only the
+	// file and then testing the directory with no tolerance passes on an idle
+	// machine — 800 local runs, `-race`, `-cpu 1` — and fails on a loaded runner
+	// that gets descheduled between the two loops. It did, once, on CI.
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		if _, err := os.Stat(staged); os.IsNotExist(err) {
+		_, fileErr := os.Stat(staged)
+		_, dirErr := os.Stat(dir)
+		if os.IsNotExist(fileErr) && os.IsNotExist(dirErr) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("staged file not cleaned after the turn")
+			if !os.IsNotExist(fileErr) {
+				t.Fatal("staged file not cleaned after the turn")
+			}
+			t.Fatal("empty per-message dir not removed after the turn")
 		}
 		time.Sleep(5 * time.Millisecond)
-	}
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Error("empty per-message dir should be removed")
 	}
 }
 

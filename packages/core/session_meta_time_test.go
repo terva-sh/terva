@@ -70,13 +70,8 @@ func TestMetaRowsCarryTheirOwnTimestamp(t *testing.T) {
 	}
 }
 
-// stampedRowKinds are the row kinds that carry `at`. Every other kind already
-// has a time of its own (messages) or is never read as a timeline, and adding a
-// field to one would change bytes that other readers pin.
-//
-// Keep this list and the guard below in step: adding a kind here is a deliberate
-// format change, and the test failing is how an accidental one gets noticed.
-var stampedRowKinds = map[string]bool{"meta": true, "usage": true}
+// Every row kind carries `at` now — see TestEveryRowCarriesAStamp, which
+// enumerates nothing and so cannot fall out of step with the writers.
 
 // Usage rows are stamped for the same reason meta rows are, plus one: the
 // questions asked of them are about rates — the idle gap before a dispatch, and
@@ -132,14 +127,124 @@ func TestUsageRowsCarryAStamp(t *testing.T) {
 	}
 }
 
-// Rows outside stampedRowKinds must stay byte-identical.
-func TestUnstampedRowsAreUnchanged(t *testing.T) {
+// The branch writer builds a new file by hand instead of appending through the
+// live session, so it is the one place the stamping rule can quietly stop
+// applying. A guard that only ever reads a live session would not notice.
+//
+// It also pins the one case where the two times are MEANT to disagree: a copied
+// message keeps the payload time of the moment it was originally made, while
+// `at` records when this branch materialized.
+func TestBranchedRowsAreStampedToo(t *testing.T) {
+	root := testsupport.TempDir(t)
+	parent, err := NewSession(root, "/project", "anthropic", "claude-opus-4-8", "0.0.0-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().UTC().Add(-72 * time.Hour)
+	for _, txt := range []string{"first", "first reply", "second"} {
+		if err := parent.AppendMessage(provider.Message{
+			Role:    provider.RoleUser,
+			Content: []provider.Content{provider.TextBlock{Text: txt}},
+			Time:    old,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An amend is what forces the branch to RE-SERIALIZE the prefix instead of
+	// copying the parent's rows verbatim. Without it this test passes against a
+	// writer with the stamping removed, because verbatim copies inherit the
+	// parent's stamps — it would assert the rule while exercising none of it.
+	edited := provider.Message{
+		Role:    provider.RoleUser,
+		Content: []provider.Content{provider.TextBlock{Text: "edited"}},
+		Time:    old,
+	}
+	if err := parent.AppendAmend(AmendReplace, 1, &edited, "edit"); err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	before := time.Now().UTC().Add(-time.Minute)
+	branchPath, err := BranchSession(parent.Path, root, "/project", "0.0.0-test", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := os.ReadFile(branchPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows int
+	for _, line := range strings.Split(strings.TrimSpace(string(blob)), "\n") {
+		var row struct {
+			Type    string     `json:"type"`
+			At      *time.Time `json:"at"`
+			Message *struct {
+				Time time.Time `json:"time"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &row) != nil {
+			continue
+		}
+		rows++
+		if row.At == nil {
+			t.Errorf("the branch writer emitted an unstamped %q row:\n%s", row.Type, line)
+			continue
+		}
+		if row.At.Before(before) {
+			t.Errorf("a branched %q row is stamped %s, before the branch was taken", row.Type, row.At)
+		}
+		if row.Message != nil && !row.Message.Time.Equal(old) {
+			t.Errorf("a copied message lost its original time: want %s, got %s", old, row.Message.Time)
+		}
+	}
+	if rows == 0 {
+		t.Fatal("the branch file had no rows to check")
+	}
+}
+
+// Every row carries a stamp, and the guard NAMES NO KINDS — it reads back
+// whatever the writers below produced and holds all of it to the rule. A guard
+// with a list is a guard that silently stops covering the next row kind someone
+// adds; this one enrolls it automatically, and the first run is the audit.
+//
+// The rule is universal because the diagnostic rows are the ones that needed it
+// most and had it least. Attributing tool calls to a provider era after a
+// mid-session model switch, with no clock on those rows, left only the call-id
+// prefix (`toolu_` against `call_`) — which works by coincidence between two
+// providers and collapses the moment they share a wire format.
+func TestEveryRowCarriesAStamp(t *testing.T) {
 	dir := testsupport.TempDir(t)
+	before := time.Now().UTC().Add(-time.Minute)
 	s, err := NewSession(dir, dir, "anthropic", "claude-opus-4-8", "v1")
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A spread of writers, deliberately across both funnels (writeLine and
+	// writeLineLocked) and both stamping paths (explicit and filled-in).
+	if err := s.UpdateModel("openai-codex", "gpt-5.6-sol"); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.AppendUsage(provider.Usage{InputTokens: 10}, provider.Usage{InputTokens: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendStall(StallRecord{Axis: "churn", Tool: "edit", Detail: "invalid args"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendPrefixDivergence(PrefixDivergence{Rung: 3, Label: "message 0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendTail(TailRecord{Blocks: []TailBlock{{ID: "host", Text: "x"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendToolGroupActivation("web"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendTransport(provider.TransportInfo{RemoteAddr: "10.0.0.1:443", Proto: "HTTP/2.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendRetry(RetryRecord{Provider: "anthropic", Attempt: 1, Max: 3, Err: "overloaded"}); err != nil {
 		t.Fatal(err)
 	}
 	// A session with no messages is reclaimed by Close, so give it one.
@@ -149,19 +254,32 @@ func TestUnstampedRowsAreUnchanged(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
+
 	blob, err := os.ReadFile(s.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	seen := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(string(blob)), "\n") {
 		var row struct {
-			Type string `json:"type"`
+			Type string     `json:"type"`
+			At   *time.Time `json:"at"`
 		}
 		if json.Unmarshal([]byte(line), &row) != nil {
 			continue
 		}
-		if !stampedRowKinds[row.Type] && strings.Contains(line, `"at":`) {
-			t.Errorf("a %q row grew an `at` field: %s", row.Type, line)
+		seen[row.Type] = true
+		if row.At == nil {
+			t.Errorf("a %q row has no `at` stamp; its place in the timeline is unreadable:\n%s", row.Type, line)
+			continue
 		}
+		if row.At.Before(before) || row.At.After(time.Now().UTC().Add(time.Minute)) {
+			t.Errorf("a %q row stamped %s, not a plausible write time", row.Type, row.At)
+		}
+	}
+	// Guard the guard: a session that somehow wrote almost nothing would pass the
+	// loop above vacuously.
+	if len(seen) < 8 {
+		t.Fatalf("only %d row kinds reached the file (%v); the rule was barely exercised", len(seen), seen)
 	}
 }
