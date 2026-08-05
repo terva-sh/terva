@@ -11,6 +11,30 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.131.3](https://github.com/terva-sh/terva/releases/tag/v0.131.3) — 2026-08-04
+
+### Features
+
+- eval: a wording change to model-facing text is now measurable
+- i18n: the model-facing text is measured prose, and a lint keeps it that way
+- secrets: a component directory stays readable by earning it, per read
+- secrets: a scoped secret store, with grants and a keyring from day one
+- secrets: config files become safe to read — auth.json and config.json are encrypted at rest
+- secrets: extensions store runtime secrets, and the posture is readable over the wire
+- secrets: the shared-file envelope, so two parties can hold one secret
+- skills: a shadowed skill keeps a name that reaches it
+- skills: four standing-workflow builtins, and a flag that drops only them
+- web: the at-rest posture gets a pane, where the daemon's own facts live
+
+### Fixes
+
+- agent: six sharp edges — private state, prompt dumps, and asks nobody saw
+- cache: a miss is routed, priced, and survives compaction
+- compact: the ledger says what a command did, and when it ran out of room
+- connproto: the published golden corpus keeps its line endings
+- mcp-bridge: a concurrent token save survives Windows' rename
+- secrets: terva makes no POSIX permission claim on Windows
+
 ## [v0.131.1](https://github.com/terva-sh/terva/releases/tag/v0.131.1) — 2026-08-02
 
 ### Features
