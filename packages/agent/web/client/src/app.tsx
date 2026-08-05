@@ -22,6 +22,8 @@ import type {
   ChatServiceInfo,
   ModelInfo,
   ModelParamsView,
+  ModelsResult,
+  ReasoningRungInfo,
   AuthFlowStep,
   PanelView,
   PermissionRequest,
@@ -97,6 +99,7 @@ import {
 import { PACE_INTERVAL_MS, StreamPacer } from './platform/conversation/pacer'
 import { buildConveneArgs, raatiResultCopyText, raatiUnitCopyText, raatiVerdictWord } from './raati'
 import { applyServerCatalog, setLocale, t, tn } from './i18n'
+import { ReasoningPick, reasoningLabel } from './ui/ReasoningPick'
 import { CopyButton } from './ui/CopyButton'
 import { ConnectionBanner } from './ui/Loading'
 import { deadlineClass, deadlineOf, deadlineStyle } from './ui/deadline'
@@ -207,6 +210,16 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   const [loadingEarlier, setLoadingEarlier] = useState(false)
   const loadingEarlierRef = useRef(false)
   const [models, setModels] = useState<ModelInfo[]>([])
+  // The reasoning ladders that came with the model list. Held beside `models`
+  // rather than inside it because they are shared: 440 catalog models resolve
+  // to a dozen ladders, and ModelInfo.ladder is the key into this table.
+  const [ladders, setLadders] = useState<Record<string, ReasoningRungInfo[]>>({})
+  // The workspace-wide thinking level, so the picker's inherit row can name what
+  // inheriting would actually mean instead of pointing at "the global setting"
+  // without saying what it is. It lives in the settings surface (the daemon's
+  // own `reasoning` SettingItem) rather than in a field of its own — the value
+  // was already on the wire, just behind a pane nobody opens to read it.
+  const [globalReasoning, setGlobalReasoning] = useState('')
   const [busy, setBusy] = useState(false)
   const [cost, setCost] = useState(0)
   const [permission, setPermission] = useState<PermissionRequest | null>(null)
@@ -306,6 +319,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   // Available skills (from the snapshot), for /skill autocomplete.
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [reasoningOpen, setReasoningOpen] = useState(false)
   // The per-model overrides (models.json). Held here rather than in the picker so
   // a failed save keeps its error next to the form that produced it.
   const [modelParams, setModelParams] = useState<ModelParamsView | null>(null)
@@ -384,8 +398,9 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     try {
       // Frame the focused session so the daemon flags Current from THIS
       // session's model, not a workspace-global value (empty = the default).
-      const res = await c.send<{ models: ModelInfo[] }>('models.list', null, curRef.current)
+      const res = await c.send<ModelsResult>('models.list', null, curRef.current)
       setModels(res.models ?? [])
+      setLadders(res.reasoning_ladders ?? {})
     } catch {
       /* control group optional */
     }
@@ -774,6 +789,35 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     }
   }, [])
 
+  // refreshGlobalReasoning reads the workspace thinking level out of the
+  // settings surface.
+  //
+  // It is a separate fetch rather than a read of `surfaceData` because that
+  // holds only the ONE pane currently open, and the reasoning button sits in the
+  // topbar where no pane need ever have been opened. Failure is silent and
+  // leaves the level empty, which the picker already renders honestly as an
+  // unnamed global.
+  const refreshGlobalReasoning = useCallback(async () => {
+    const c = clientRef.current
+    if (!c || !curRef.current) return
+    try {
+      const res = await c.send<{ surface: Surface }>('surface.get', { id: 'settings' }, curRef.current)
+      const item = res.surface?.settings?.items?.find((i) => i.key === 'reasoning')
+      setGlobalReasoning(item?.value ?? '')
+    } catch {
+      /* the picker degrades to an unnamed global */
+    }
+  }, [])
+
+  // Keyed on the session rather than fired during the bootstrap: surface.get is
+  // framed by a session, and at bootstrap time none has been adopted yet — the
+  // call would return early and the level would stay empty for the whole
+  // connection. Re-running on a session change also keeps it right for a daemon
+  // whose settings differ per workspace.
+  useEffect(() => {
+    if (curSess) void refreshGlobalReasoning()
+  }, [curSess, refreshGlobalReasoning])
+
   // loadUsageSnapshot mirrors the provider's subscription picture from the
   // usage.snapshot verb.
   //
@@ -893,6 +937,10 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         if (paneOpenRef.current && ev.surface_id === activeSurfaceRef.current) {
           loadSurface(activeSurfaceRef.current)
         }
+        // The cached thinking level rides the settings surface, and it has to
+        // follow a change made there whether or not that pane is the open one —
+        // otherwise the picker keeps naming a global the user just replaced.
+        if (ev.surface_id === 'settings') void refreshGlobalReasoning()
         // The board's swarm lane rides the tasks surface (the daemon diffs the
         // swarm every 800ms and pushes this) — keep it live while the board's up.
         if (viewModeRef.current === 'board' && ev.surface_id === 'tasks') {
@@ -1085,8 +1133,9 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       reI18n()
       refreshI18n()
       try {
-        const res = await c.send<{ models: ModelInfo[] }>('models.list', null, curRef.current)
+        const res = await c.send<ModelsResult>('models.list', null, curRef.current)
         setModels(res.models ?? [])
+        setLadders(res.reasoning_ladders ?? {})
       } catch {
         /* control group optional */
       }
@@ -1300,6 +1349,13 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     setAsk(null)
   }, [])
 
+  // The session's own thinking depth. '' clears the override and puts the
+  // session back under the global setting — a real choice, not a no-op, which
+  // is why it is sent rather than skipped.
+  const setSessionReasoning = useCallback((level: string) => {
+    clientRef.current?.fire('models.reasoning', { level }, curRef.current)
+  }, [])
+
   const switchModel = useCallback((id: string, provider?: string) => {
     // provider qualifies the id: model ids are not globally unique across
     // providers, and the daemon may hold a credential for only one of them.
@@ -1369,8 +1425,9 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         // after the next reconnect — refresh the catalog now. Non-fatal: the
         // login already succeeded.
         try {
-          const res = await c.send<{ models: ModelInfo[] }>('models.list', null, curRef.current)
+          const res = await c.send<ModelsResult>('models.list', null, curRef.current)
           setModels(res.models ?? [])
+          setLadders(res.reasoning_ladders ?? {})
         } catch {
           /* a models refresh failure does not undo the login */
         }
@@ -1656,6 +1713,22 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       },
     },
     {
+      name: 'reasoning',
+      arg: '[level]',
+      desc: t("Set this session's thinking depth, or open the picker"),
+      run: (arg) => {
+        const lv = arg.trim().toLowerCase()
+        if (!lv) {
+          setReasoningOpen(true)
+          return
+        }
+        // 'inherit' is spelled out here rather than mapped to '' by the caller:
+        // the daemon accepts both, and typing the word is how someone clears an
+        // override without guessing that an empty argument would do it.
+        setSessionReasoning(lv === 'inherit' || lv === 'default' ? '' : lv)
+      },
+    },
+    {
       name: 'login',
       desc: t('Open the Providers pane to sign in'),
       // The TUI's /login opens a dialog; here the Providers pane IS that dialog,
@@ -1865,6 +1938,10 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   // board subscriptions. One merged map for the tiles.
   const liveBusy = curSess ? { ...boardBusy, [curSess]: busy } : boardBusy
   const curModel = models.find((m) => m.current)
+  // The session's own reasoning override, '' when it follows the global. Read
+  // from the session row rather than kept locally so a change made in another
+  // client (or the TUI) shows up here through session_updated.
+  const curSessReasoning = sessions.find((s) => s.id === curSess)?.reasoning ?? ''
   const ctxTok = curInfo?.context_tokens ?? 0
   const ctxWin = curInfo?.context_window ?? 0
   const ctxPct = ctxWin > 0 ? Math.min(100, (ctxTok / ctxWin) * 100) : -1
@@ -1935,6 +2012,20 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         {curSess && (
           <button class="model-btn" title={t('Switch model')} onClick={() => setPickerOpen(true)}>
             {curModel ? (curModel.favorite ? '★ ' : '') + modelLabel(curModel) : t('model')}
+          </button>
+        )}
+        {/* Always present once there is a session to set it ON. Gating the
+            button on the label being non-empty meant it appeared only after an
+            override already existed — and the picker was the thing that set
+            one, so the first override could never be made here at all. The
+            glyph is the fallback for a workspace with no global level either. */}
+        {curSess && (
+          <button
+            class="reasoning-btn"
+            title={t("Reasoning for this session")}
+            onClick={() => setReasoningOpen(true)}
+          >
+            {reasoningLabel(curSessReasoning, globalReasoning) || '◐'}
           </button>
         )}
         {ctxPct >= 0 && ctxTok > 0 && (
@@ -2018,6 +2109,16 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
             />
           </div>
         </div>
+      ) : reasoningOpen ? (
+        <ReasoningPick
+          override={curSessReasoning}
+          global={globalReasoning}
+          modelDefault={curModel?.default_reasoning}
+          maxIsNative={curModel?.max_native}
+          rungs={curModel?.ladder ? ladders[curModel.ladder] : undefined}
+          onPick={setSessionReasoning}
+          onClose={() => setReasoningOpen(false)}
+        />
       ) : pickerOpen ? (
         <ModelPicker
           groups={modelGroups}

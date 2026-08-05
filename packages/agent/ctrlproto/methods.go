@@ -168,9 +168,15 @@ const (
 	// touches no config: this writes to disk and outlives the daemon, which is
 	// why it sits in the control group rather than the session one.
 	MethodModelSetDefault Method = "models.set_default" // params SetDefaultParams
-	MethodTrust           Method = "control.trust"      // params TrustParams; grant Workspace Trust to cwd
-	MethodUntrust         Method = "control.untrust"    // no params; revoke Workspace Trust for cwd
-	MethodRestart         Method = "control.restart"    // no params; re-execs the daemon (Tier-1 self-restart)
+	// MethodSessionReasoning sets ONE session's thinking depth. It stands to the
+	// settings "reasoning" control exactly as MethodModelSwitch stands to
+	// MethodModelSetDefault: this changes a single live session and writes no
+	// config, while the settings control moves the default every session
+	// inherits and leaves an overridden one alone.
+	MethodSessionReasoning Method = "models.reasoning" // params ReasoningSetParams (sess in frame)
+	MethodTrust            Method = "control.trust"    // params TrustParams; grant Workspace Trust to cwd
+	MethodUntrust          Method = "control.untrust"  // no params; revoke Workspace Trust for cwd
+	MethodRestart          Method = "control.restart"  // no params; re-execs the daemon (Tier-1 self-restart)
 	// MethodResetsConsume redeems a usage-reset credit — irreversible and spends
 	// a scarce provider grant, so it sits in the control group (categorically
 	// higher authority than the read-only usage.resets.list in the session
@@ -180,17 +186,18 @@ const (
 	// The character-card library (optional; served only by a CardsController).
 	// In the control group: a card is workspace-wide state that outlives any one
 	// session, like the model defaults above.
-	MethodCardsList     Method = "cards.list"     // result CardsListResult
-	MethodCardsGet      Method = "cards.get"      // params CardGetParams, result CardView
-	MethodCardsImport   Method = "cards.import"   // params CardImportParams, result CardView
-	MethodCardsEdit     Method = "cards.edit"     // params CardEditParams, result CardView
-	MethodCardsDelete   Method = "cards.delete"   // params CardDeleteParams
-	MethodCardsExport   Method = "cards.export"   // params CardExportParams, result CardExport
-	MethodCardsLint     Method = "cards.lint"     // params CardLintParams, result CardLintResult
-	MethodCardsFavorite Method = "cards.favorite" // params CardFavoriteParams
-	MethodCardsHistory  Method = "cards.history"  // params CardHistoryParams, result CardHistoryResult
-	MethodCardsRestore  Method = "cards.restore"  // params CardRestoreParams, result CardView
-	MethodCardsRevision Method = "cards.revision" // params CardRevisionParams, result CardRevisionView
+	MethodCardsList      Method = "cards.list"      // result CardsListResult
+	MethodCardsGet       Method = "cards.get"       // params CardGetParams, result CardView
+	MethodCardsImport    Method = "cards.import"    // params CardImportParams, result CardView
+	MethodCardsEdit      Method = "cards.edit"      // params CardEditParams, result CardView
+	MethodCardsDuplicate Method = "cards.duplicate" // params CardDuplicateParams, result CardView
+	MethodCardsDelete    Method = "cards.delete"    // params CardDeleteParams
+	MethodCardsExport    Method = "cards.export"    // params CardExportParams, result CardExport
+	MethodCardsLint      Method = "cards.lint"      // params CardLintParams, result CardLintResult
+	MethodCardsFavorite  Method = "cards.favorite"  // params CardFavoriteParams
+	MethodCardsHistory   Method = "cards.history"   // params CardHistoryParams, result CardHistoryResult
+	MethodCardsRestore   Method = "cards.restore"   // params CardRestoreParams, result CardView
+	MethodCardsRevision  Method = "cards.revision"  // params CardRevisionParams, result CardRevisionView
 
 	// The LLM card doctor (optional; served only by a DoctorController). Reads a
 	// card + its deterministic lint and proposes structured per-field edits.
@@ -346,11 +353,11 @@ func (m Method) Group() Group {
 		MethodSessionsNextScene, MethodSessionsRealize, MethodSessionsExport,
 		MethodWorkflowsList, MethodWorkflowsGet:
 		return GroupSession
-	case MethodModelsList, MethodModelSwitch, MethodModelFavorite, MethodModelSetDefault,
+	case MethodModelsList, MethodModelSwitch, MethodModelFavorite, MethodModelSetDefault, MethodSessionReasoning,
 		MethodModelParams, MethodModelParamsSet, MethodModelParamsReset,
 		MethodTrust, MethodUntrust, MethodRestart, MethodResetsConsume,
 		MethodCardsList, MethodCardsGet, MethodCardsImport, MethodCardsEdit, MethodCardsDelete, MethodCardsExport, MethodCardsLint, MethodCardsFavorite, MethodCardsDoctor,
-		MethodCardsHistory, MethodCardsRestore, MethodCardsRevision,
+		MethodCardsHistory, MethodCardsRestore, MethodCardsRevision, MethodCardsDuplicate,
 		MethodPersonasList, MethodPersonasGet, MethodPersonasCreate, MethodPersonasEdit, MethodPersonasDelete,
 		MethodBackgroundsList, MethodBackgroundsImport, MethodBackgroundsDelete, MethodBackgroundBind, MethodBackgroundGenerate,
 		MethodNoteSet, MethodUserBind, MethodCastAdd, MethodCastRemove, MethodCastSpeak,
@@ -461,6 +468,19 @@ type ModelSwitchParams struct {
 	Model    string `json:"model"`
 }
 
+// ReasoningSetParams is the payload of [MethodSessionReasoning]. Level is a
+// ladder rung as the user types it ("off", "minimum", "low", "medium", "high",
+// "maximum", "max"), or "inherit" (equivalently "") to drop the override and
+// follow the global setting again.
+//
+// Raw rather than normalized, because "off" and "no override" are different
+// states that normalization collapses into the same empty string — and the
+// difference is exactly what decides whether a later change to the global
+// setting moves this session.
+type ReasoningSetParams struct {
+	Level string `json:"level"`
+}
+
 // SurfaceGetParams is the payload of [MethodSurfaceGet].
 type SurfaceGetParams struct {
 	ID string `json:"id"`
@@ -559,6 +579,40 @@ type UsageResult struct {
 // ModelsResult is the payload of a [MethodModelsList] response.
 type ModelsResult struct {
 	Models []ModelInfo `json:"models"`
+	// ReasoningLadders is the deduplicated set of ladders the listed models
+	// point at through ModelInfo.Ladder. Absent when no listed model reasons.
+	//
+	// This is on the wire because a rung's NAME is not its meaning and only the
+	// daemon knows the difference: the same "medium" is 8192 thinking tokens on
+	// one model, effort "medium" on another, and effort "HIGH" — indistinguishable
+	// from three other rungs — on Gemini 3. A client that hardcodes the ladder
+	// gets it wrong for most models and cannot tell that it has.
+	ReasoningLadders map[string][]ReasoningRungInfo `json:"reasoning_ladders,omitempty"`
+}
+
+// ReasoningRungInfo is one rung of a model's reasoning ladder: what picking it
+// actually sends.
+//
+// It carries STRUCTURE, not prose. The rendered sentence ("~8k tokens of
+// thinking", "effort: HIGH — same as high on this model") is assembled by the
+// client from these fields through its own i18n, because the two frontends
+// translate independently and a pre-rendered English string would arrive
+// untranslatable in both.
+type ReasoningRungInfo struct {
+	// Level is the rung as a user types it: "off", "minimum", … "max".
+	Level string `json:"level"`
+	// Budget is the thinking-token budget actually sent, already clamped by
+	// this model's own ceiling — so it is what the request carries, not the
+	// ladder constant. 0 when this backend takes no budget.
+	Budget int `json:"budget,omitempty"`
+	// Effort is the effort/level enum actually sent ("low", "HIGH", "xhigh"),
+	// or "" when this backend takes no effort knob. Case is the wire's, not a
+	// display choice: Gemini sends "HIGH" and Codex sends "high".
+	Effort string `json:"effort,omitempty"`
+	// SameAs names the rung this one collapses onto, empty when this rung is
+	// the canonical one for its wire value. A picker shows it so four rungs
+	// that are one choice do not read as four.
+	SameAs string `json:"same_as,omitempty"`
 }
 
 // UsageSnapshotParams is the payload of [MethodUsageSnapshot]. Refresh=true

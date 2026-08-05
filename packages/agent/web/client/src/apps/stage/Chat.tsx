@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
-import type { AskRequest, CardSummary, CardView, CreateOpts, SessionInfo } from '../../platform/ctrlproto/types'
+import type {
+  AskRequest,
+  CardSummary,
+  CardView,
+  CreateOpts,
+  ModelsResult,
+  ReasoningRungInfo,
+  SessionInfo,
+  Surface,
+} from '../../platform/ctrlproto/types'
 import type { Item } from '../../platform/conversation/store'
 import { t, tn } from '../../i18n'
 import { panelHref } from '../../ui/navlinks'
@@ -10,6 +19,7 @@ import { ImageGallery } from '../../ui/ImageGallery'
 import { usePinnedTail } from '../../ui/pinnedtail'
 import { ConnectionBanner, Placeholder } from '../../ui/Loading'
 import { Markdown } from '../../ui/Markdown'
+import { ReasoningPick, reasoningLabel } from '../../ui/ReasoningPick'
 import { useConversation } from './useConversation'
 import { useAutoGrow } from './autogrow'
 import { ModelPick } from './ModelPick'
@@ -100,6 +110,20 @@ export function Chat(props: {
   const { client, sessionId, onOpenSession } = props
   const { items, loaded, busy, info, tail, msgMarks, permission, ask, send, edit, deleteAt, swipe, swipeAt, pruneAt, dropAt, retry, continueTurn, advance, cancel, decide, answerAsk, fork, discardDraft } = useConversation(client, sessionId, props.generation)
   const [draft, setDraft] = useState('')
+  const [reasoningOpen, setReasoningOpen] = useState(false)
+  // What each rung of the ladder sends on THIS scene's model. The daemon owns
+  // that answer — a rung's name is not its meaning, and the same "medium" is a
+  // token budget on one model and an effort enum on another — so it arrives
+  // with the model list rather than being guessed here.
+  //
+  // Held as ONE value because both halves describe the same model: setting them
+  // separately is how the rows could end up describing one model while the
+  // "native on this model" note described another.
+  const [reasoningOf, setReasoningOf] = useState<{
+    rungs?: ReasoningRungInfo[]
+    maxNative?: boolean
+    global?: string
+  }>({})
   const [character, setCharacter] = useState<Character | null>(null)
   // The full bound card, kept so the header can open its detail sheet without a
   // round-trip to the Library. Editing is NOT a sheet over this screen: ✎ hands
@@ -128,6 +152,51 @@ export function Chat(props: {
   // The composer grows with its content (up to the CSS cap); keyed on `draft` so
   // it also fits text dropped in by ✨ Suggest and shrinks back after a send.
   const composerRef = useAutoGrow(draft)
+
+  // Load the ladder whenever the picker opens, for the model this scene is
+  // actually on. Same shape as ModelPick's lazy catalog load: a chat that never
+  // opens the picker never pays for it, and reopening refetches so a model
+  // switched since the last open describes the NEW model rather than the old.
+  // Failure leaves rungs undefined, which the picker renders honestly as "no
+  // thinking setting" rather than inventing budgets.
+  useEffect(() => {
+    if (!reasoningOpen) return
+    let live = true
+    // Two reads, resolved together: the ladder says what each rung SENDS on this
+    // model, and the workspace level says what "inherit" would land on. The
+    // global lives in the settings surface — the daemon's own `reasoning`
+    // SettingItem — because it is workspace state Stage holds no copy of.
+    //
+    // allSettled, not all: a daemon that refuses the settings surface must still
+    // yield a ladder. Failing both because one is unavailable would trade a
+    // named global for the whole explanation.
+    Promise.allSettled([
+      client.send<ModelsResult>('models.list', {}, sessionId),
+      client.send<{ surface: Surface }>('surface.get', { id: 'settings' }, sessionId),
+    ])
+      .then(([listed, settings]) => {
+        if (!live) return
+        const r = listed.status === 'fulfilled' ? listed.value : { models: [] }
+        const cur = (r.models ?? []).find(
+          (m) => m.id === info?.model && m.provider === info?.provider,
+        )
+        const item =
+          settings.status === 'fulfilled'
+            ? settings.value.surface?.settings?.items?.find((i) => i.key === 'reasoning')
+            : undefined
+        setReasoningOf({
+          rungs: cur?.ladder ? r.reasoning_ladders?.[cur.ladder] : undefined,
+          maxNative: cur?.max_native,
+          global: item?.value ?? '',
+        })
+      })
+      .catch(() => {
+        if (live) setReasoningOf({})
+      })
+    return () => {
+      live = false
+    }
+  }, [client, sessionId, reasoningOpen, info?.model, info?.provider])
 
   // Resolve the character from the session's card, for the avatar-anchored rows,
   // the header, and the card sheets it opens. Kept as a callback so an edit that
@@ -307,6 +376,26 @@ export function Chat(props: {
               testing loop, now zero clicks to read and one to switch — the same
               live models.switch the Steering drawer fires, surfaced here. */}
           <ModelPick client={client} sessionId={sessionId} currentProvider={info?.provider} currentModel={info?.model} compact />
+          {/* Thinking depth for THIS scene, beside the model: the other half of
+              "how does this one run", and the knob a long play session is most
+              likely to want different from the global default. */}
+          <button
+            class="stage-reasoning-btn"
+            title={t("Reasoning for this session")}
+            onClick={() => setReasoningOpen((v) => !v)}
+          >
+            {reasoningLabel(info?.reasoning ?? '', '') || '◐'}
+          </button>
+          {reasoningOpen && (
+            <ReasoningPick
+              override={info?.reasoning ?? ''}
+              global={reasoningOf.global ?? ''}
+              rungs={reasoningOf.rungs}
+              maxIsNative={reasoningOf.maxNative}
+              onPick={(level) => client.fire('models.reasoning', { level }, sessionId)}
+              onClose={() => setReasoningOpen(false)}
+            />
+          )}
           {/* Carries the session, so the panel lands on THIS chat rather than
               whichever one it considers current. */}
           <a

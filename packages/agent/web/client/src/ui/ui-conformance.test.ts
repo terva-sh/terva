@@ -252,3 +252,56 @@ describe('wide markdown content is contained, not overflowing', () => {
     })
   }
 })
+
+// The token contract only ever checked that the --ui-* names the base consumes
+// are mapped by both apps. It never checked the other direction: that the base
+// consumes NOTHING ELSE.
+//
+// That gap shipped a real bug. The .reasoning-pick rules were written in ui.css
+// against --panel/--line/--muted/--fg/--accent — the PANEL's private palette.
+// The panel app defines those, so it looked right there; Stage does not import
+// styles.css at all, so every one of them resolved to nothing and the picker
+// rendered with no background and no border, its rows floating over the
+// transcript. Nothing failed, because none of the offending names starts with
+// --ui-.
+//
+// So the rule is the whole vocabulary, not just the part already spoken: a
+// shared sheet may read a --ui-* token, or a property it declares itself, and
+// nothing else. An app-private token in here is a rule that silently applies to
+// exactly one app.
+describe('the base consumes only shared tokens', () => {
+  const selfDeclared = declaredProps(base)
+
+  // Every custom property the sheet READS, --ui-* or not.
+  //
+  // Comments are stripped first: this sheet DOCUMENTS its conventions in prose
+  // ("consume var(--safe-*), never env() directly"), and a scanner that counts
+  // prose as code reports a violation nobody can fix by editing a rule.
+  function consumedProps(sheet: string): string[] {
+    const code = sheet.replace(/\/\*[\s\S]*?\*\//g, ' ')
+    const s = new Set<string>()
+    for (const m of code.matchAll(/var\(\s*(--[a-z0-9-]+)/g)) s.add(m[1])
+    return [...s]
+  }
+
+  it('reads no app-private custom property', () => {
+    const foreign = consumedProps(base).filter(
+      (t) => !t.startsWith('--ui-') && !selfDeclared.has(t),
+    )
+    expect(
+      foreign,
+      `ui.css reads ${foreign.join(', ')}, which no app is obliged to define. ` +
+        `A shared rule may only read a --ui-* token from the contract, or a ` +
+        `property ui.css declares itself — anything else resolves to nothing in ` +
+        `whichever app happens not to define it, and fails silently.`,
+    ).toEqual([])
+  })
+
+  // Teeth for the scan: a regex that matched nothing would make the assertion
+  // above pass over an empty list forever.
+  it('actually finds the properties the base reads', () => {
+    const all = consumedProps(base)
+    expect(all.length).toBeGreaterThan(5)
+    expect(all.some((t) => t.startsWith('--ui-'))).toBe(true)
+  })
+})

@@ -36,7 +36,8 @@ func TestModelsListsAKeylessNamedEndpointsModels(t *testing.T) {
 	}})
 
 	w := &Workspace{ctx: context.Background(), diag: func(string) {}, sessions: map[string]*wsSession{}}
-	models, err := w.Models(context.Background(), "")
+	res, err := w.Models(context.Background(), "")
+	models := res.Models
 	if err != nil {
 		t.Fatalf("Models: %v", err)
 	}
@@ -77,7 +78,8 @@ func TestModelsCurrentReflectsFramedSession(t *testing.T) {
 
 	currentID := func(sess string) string {
 		t.Helper()
-		models, err := w.Models(context.Background(), sess)
+		res, err := w.Models(context.Background(), sess)
+		models := res.Models
 		if err != nil {
 			t.Fatalf("Models(%q): %v", sess, err)
 		}
@@ -135,7 +137,8 @@ func TestModelsCarryProviderAuthSoDuplicateIDsAreDistinguishable(t *testing.T) {
 	})
 
 	w := &Workspace{ctx: context.Background(), diag: func(string) {}, sessions: map[string]*wsSession{}}
-	models, err := w.Models(context.Background(), "")
+	res, err := w.Models(context.Background(), "")
+	models := res.Models
 	if err != nil {
 		t.Fatalf("Models: %v", err)
 	}
@@ -186,7 +189,8 @@ func TestModelsCarryTheOperatorsDisplayName(t *testing.T) {
 	})
 
 	w := &Workspace{ctx: context.Background(), diag: func(string) {}, sessions: map[string]*wsSession{}}
-	models, err := w.Models(context.Background(), "")
+	res, err := w.Models(context.Background(), "")
+	models := res.Models
 	if err != nil {
 		t.Fatalf("Models: %v", err)
 	}

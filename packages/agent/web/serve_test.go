@@ -572,10 +572,13 @@ func (f *fakeWS) ListFiles(ctx context.Context, opts ctrlproto.FilesListParams) 
 func (f *fakeWS) AuthProviders(ctx context.Context) (ctrlproto.ProvidersView, error) {
 	return ctrlproto.ProvidersView{}, nil
 }
-func (f *fakeWS) Models(ctx context.Context, sess string) ([]ctrlproto.ModelInfo, error) {
-	return nil, nil
+func (f *fakeWS) Models(ctx context.Context, sess string) (ctrlproto.ModelsResult, error) {
+	return ctrlproto.ModelsResult{}, nil
 }
 func (f *fakeWS) SwitchModel(ctx context.Context, sess, providerName, modelID string) error {
+	return nil
+}
+func (f *fakeWS) SetSessionReasoning(ctx context.Context, sess, level string) error {
 	return nil
 }
 func (f *fakeWS) SetFavoriteModel(ctx context.Context, provider, model string, on bool) error {

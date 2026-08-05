@@ -703,11 +703,19 @@ func (f *fakeSvc) SurfaceAction(ctx context.Context, sess, id, action string, ar
 	return nil
 }
 
-func (f *fakeSvc) Models(ctx context.Context, sess string) ([]ModelInfo, error) {
-	return []ModelInfo{{ID: "claude-opus-4-8", Provider: "anthropic", Current: true}}, nil
+func (f *fakeSvc) Models(ctx context.Context, sess string) (ModelsResult, error) {
+	return ModelsResult{
+		Models: []ModelInfo{{ID: "claude-opus-4-8", Provider: "anthropic", Current: true, Ladder: "l0"}},
+		ReasoningLadders: map[string][]ReasoningRungInfo{
+			"l0": {{Level: "off"}, {Level: "low", Budget: 2048}},
+		},
+	}, nil
 }
 
 func (f *fakeSvc) SwitchModel(ctx context.Context, sess, providerName, modelID string) error {
+	return nil
+}
+func (f *fakeSvc) SetSessionReasoning(ctx context.Context, sess, level string) error {
 	return nil
 }
 func (f *fakeSvc) SetFavoriteModel(ctx context.Context, provider, model string, on bool) error {

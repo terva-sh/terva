@@ -168,6 +168,12 @@ export interface SessionInfo {
   provider?: string
   model?: string
   persona?: string
+  // reasoning is this session's thinking-level override as the user chose it
+  // ('off' | 'minimum' | 'low' | 'medium' | 'high' | 'maximum' | 'max'), or ''
+  // when the session follows the global setting. Raw rather than normalized:
+  // an explicit 'off' and 'no override' are different states, and a client that
+  // conflated them would show the wrong one.
+  reasoning?: string
   // experience tags an immersive (Stage) session — 'chat' | 'play' — empty for a
   // coding session, so a client badges it distinctly. background is the bound
   // scene backdrop id, fetched from /media/backgrounds/<id>. Both persisted in
@@ -264,6 +270,21 @@ export interface ModelInfo {
   context_window?: number
   max_output?: number
   reasoning?: boolean
+  // max_native says the 'max' rung reaches this model as a native max effort
+  // rather than being clamped to 'maximum' — the one thing about the ladder a
+  // client cannot work out from the rung names alone.
+  max_native?: boolean
+  // default_reasoning is the level this model thinks at when neither the
+  // session nor the global sets one, so an 'inherit' row can name what would
+  // actually apply.
+  default_reasoning?: string
+  // ladder keys into ModelsResult.reasoning_ladders: what each rung of the
+  // ladder actually becomes on THIS model. Absent means the model accepts no
+  // reasoning control at all — render that as 'takes no thinking setting',
+  // NOT as 'off', which is a choice the user made rather than one they lack.
+  //
+  // Opaque and per-response: never persist it or compare it across calls.
+  ladder?: string
   current?: boolean
   favorite?: boolean
   // default marks the model NEW sessions start on — not the one this session is
@@ -280,6 +301,36 @@ export interface ModelInfo {
   // would replace, so preferring them makes the list harder to scan.
   display_name?: string
   renamed?: boolean
+}
+
+// ReasoningRungInfo is one rung of a model's reasoning ladder: what picking it
+// actually sends. Mirrors ctrlproto.ReasoningRungInfo.
+//
+// It is STRUCTURE, not prose — the daemon knows what the request carries, this
+// client owns how to say it, and its own i18n does the saying. A pre-rendered
+// sentence from the daemon would arrive in the daemon's locale and be stuck
+// there.
+export interface ReasoningRungInfo {
+  // level is the rung as a user types it: 'off', 'minimum', … 'max'.
+  level: string
+  // budget is the thinking-token budget actually sent, ALREADY CLAMPED by this
+  // model's own ceiling — what the request carries, not the ladder constant.
+  // Absent when this backend takes no budget, which is most of them.
+  budget?: number
+  // effort is the effort enum actually sent. Case is the wire's, not a display
+  // choice: Gemini sends 'HIGH' where Codex sends 'high'.
+  effort?: string
+  // same_as names the rung this one collapses onto, absent when this rung is
+  // the canonical one. Gemini 3 lands medium/high/maximum/max on one value, so
+  // without this the picker offers four choices that are one.
+  same_as?: string
+}
+
+// ModelsResult is the models.list payload. The ladders arrive WITH the models
+// because a ModelInfo.ladder key is meaningless without the table it indexes.
+export interface ModelsResult {
+  models: ModelInfo[]
+  reasoning_ladders?: Record<string, ReasoningRungInfo[]>
 }
 
 export interface PermissionRequest {
@@ -2109,6 +2160,7 @@ export type Verb =
   | 'cardmodel.set'
   | 'cards.delete'
   | 'cards.doctor'
+  | 'cards.duplicate'
   | 'cards.edit'
   | 'cards.export'
   | 'cards.favorite'
@@ -2142,6 +2194,7 @@ export type Verb =
   | 'models.params'
   | 'models.params.reset'
   | 'models.params.set'
+  | 'models.reasoning'
   | 'models.set_default'
   | 'models.switch'
   | 'note.set'
@@ -2315,6 +2368,7 @@ export interface VerbParams {
   'sessiongroups.set_members': SessionGroupSetMembersParams
   'personas.create': PersonaWriteParams
   'personas.edit': PersonaWriteParams
+  'cards.duplicate': CardDuplicateParams
   'cards.favorite': CardFavoriteParams
   'cards.history': CardHistoryParams
   'cards.restore': CardRestoreParams
@@ -2384,6 +2438,17 @@ export interface CardHistoryResult {
 export interface CardRestoreParams {
   id: string
   ref: string
+}
+
+// CardDuplicateParams copies a card under a new name, portrait included, as a
+// card of its own. `name` is required and must differ from the original's: an id
+// is a stem of the name plus a hash of the contents, so an unchanged name over
+// unchanged contents names the card being copied rather than a second one, and
+// the daemon refuses it rather than reporting a copy it did not make. The caller
+// picks a free name (copyName in the Library proposes one).
+export interface CardDuplicateParams {
+  id: string
+  name: string
 }
 
 // CardFavoriteParams toggles a card's favorite flag (highlight + pin to top).

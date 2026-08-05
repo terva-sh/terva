@@ -488,11 +488,14 @@ func (c *Carrier) ListFiles(ctx context.Context, opts ctrlproto.FilesListParams)
 func (c *Carrier) AuthProviders(ctx context.Context) (ctrlproto.ProvidersView, error) {
 	return ctrlproto.ProvidersView{}, unsupported("auth.providers")
 }
-func (c *Carrier) Models(ctx context.Context, sess string) ([]ctrlproto.ModelInfo, error) {
-	return nil, unsupported("models")
+func (c *Carrier) Models(ctx context.Context, sess string) (ctrlproto.ModelsResult, error) {
+	return ctrlproto.ModelsResult{}, unsupported("models")
 }
 func (c *Carrier) SwitchModel(ctx context.Context, sess, providerName, modelID string) error {
 	return unsupported("switch model")
+}
+func (c *Carrier) SetSessionReasoning(ctx context.Context, sess, level string) error {
+	return unsupported("set reasoning")
 }
 func (c *Carrier) SetFavoriteModel(ctx context.Context, provider, model string, on bool) error {
 	return unsupported("favorite model")
