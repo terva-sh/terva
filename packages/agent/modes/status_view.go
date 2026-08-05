@@ -52,7 +52,7 @@ func (i *Interactive) slashStatus() {
 		Uptime:    time.Since(buildinfo.Started()).Round(time.Second),
 		Provider:  i.cfg.Provider,
 		Model:     i.cfg.Model,
-		Reasoning: i.cfg.Reasoning,
+		Reasoning: i.effectiveReasoning(),
 		CWD:       i.cfg.CWD,
 		Trusted:   i.cfg.Trusted,
 	}
@@ -164,6 +164,14 @@ func statusRows(th tui.Theme, f statusFacts) []string {
 	totalIn := f.Cumulative.Input + f.Cumulative.CacheRead + f.Cumulative.CacheWrite
 	if totalIn > 0 || f.Cumulative.Output > 0 {
 		totals := i18n.T("%s in / %s out", humanCount(totalIn), humanCount(f.Cumulative.Output))
+		// Reasoning is inside the out figure, not beside it, so it reads as a
+		// breakdown rather than an addend. Shown only when the provider
+		// actually reported it: a silent "0 thinking" on Anthropic — which
+		// keeps thinking inside output_tokens and never breaks it out — would
+		// state a fact terva does not have.
+		if f.Cumulative.ReasoningKnown && f.Cumulative.Reasoning > 0 {
+			totals += i18n.T(" (%s thinking)", humanCount(f.Cumulative.Reasoning))
+		}
 		if f.Cumulative.CostUSD > 0 {
 			totals += fmt.Sprintf(", $%.4f", f.Cumulative.CostUSD)
 		}

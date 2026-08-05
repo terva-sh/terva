@@ -92,6 +92,70 @@ type ReasoningBlock struct {
 
 func (ReasoningBlock) isContent() {}
 
+// CompactionBlock carries a server-side compaction summary: an opaque blob
+// in which the backend has encoded the conversation it compacted away, to be
+// replayed on later requests in place of the turns it replaces.
+//
+// It exists because the OpenAI Responses backend compacts through its own
+// endpoint (POST <base>/compact) rather than leaving it to the client, and
+// answers with items to send back as input — the last of which is this. Terva
+// has always summarized client-side into a synthetic user message instead,
+// which is a shape the backend never produced and, on the codex backend, is
+// where every measured prompt-cache collapse begins. See
+// docs/reviews/2026-08-04-gpt56-post-compaction-cache-collapse.md §9.1.
+//
+// 🪤 The wire type is `compaction_summary`, NOT `compaction` — the published
+// write-ups say otherwise and a live probe says this. Encrypted is opaque:
+// terva must round-trip it byte for byte and can never inspect or rebuild it,
+// so any surface that drops this block silently discards the only record of
+// what the compaction removed.
+type CompactionBlock struct {
+	ID        string `json:"compaction_id,omitempty"`
+	Encrypted string `json:"encrypted_content,omitempty"`
+	// Provider names who issued the blob. Only that provider can decrypt it,
+	// so this is what lets a later dispatch tell "replayable" from "so much
+	// opaque text" BEFORE handing the transcript to a serializer.
+	//
+	// Provider, not provider+model: measured 2026-08-04, a blob compacted on
+	// gpt-5.6-terra replays on sol and on gpt-5.5, all three recalling content
+	// that existed only inside it. A /model switch within one provider is
+	// safe; a provider switch is not.
+	Provider string `json:"provider,omitempty"`
+}
+
+func (CompactionBlock) isContent() {}
+
+// ForeignCompactions reports the indices of messages carrying a compaction
+// blob that provider cannot replay.
+//
+// This lives above the serializers on purpose. Every provider's content switch
+// is a type switch with no default arm, so an unrecognized block is dropped
+// silently — and for a compaction that is not degradation but amnesia: the blob
+// is the only encoding of the assistant turns it replaced, so the model receives
+// a conversation that reads continuous and is missing half its history, with
+// nothing raised anywhere. Leaving this to each provider to remember is how it
+// stayed invisible; asking once, here, is what makes it a decision.
+//
+// A blob with no recorded provider is treated as foreign to everyone: it
+// predates provenance, and guessing that it belongs to whoever is asking is the
+// answer that loses data.
+func ForeignCompactions(msgs []Message, providerName string) []int {
+	var out []int
+	for i, m := range msgs {
+		for _, c := range m.Content {
+			cb, ok := c.(CompactionBlock)
+			if !ok {
+				continue
+			}
+			if cb.Provider == "" || cb.Provider != providerName {
+				out = append(out, i)
+				break
+			}
+		}
+	}
+	return out
+}
+
 // RepairOrphanedToolResults removes tool_result content blocks (and
 // entire messages that become empty) when the matching tool_use ID
 // does not appear anywhere in the given messages. Resume tails,
@@ -235,18 +299,74 @@ type Usage struct {
 	// invalidating its prefix and re-writing it genuinely runs negative —
 	// which is the single most useful thing this number can say.
 	CacheSavedUSD float64 `json:"cache_saved_usd,omitempty"`
+
+	// ReasoningTokens is how much of OutputTokens the model spent thinking.
+	//
+	// A SUBSET of OutputTokens, not a fourth disjoint bucket. The prompt
+	// fields above are disjoint because each is billed at its own rate;
+	// reasoning is billed at the output rate and is already inside
+	// OutputTokens, so subtracting it here would silently change every bill.
+	// ComputeCost does not read this field, and a guard pins that.
+	//
+	// Informational on purpose: it is the one part of a reasoning model's
+	// spend that is otherwise invisible, and on this codebase the question
+	// "how much of that output was thinking?" comes up whenever a session
+	// costs more than its transcript explains.
+	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+
+	// ReasoningTokensKnown separates "the model reported 0 reasoning tokens"
+	// from "this provider does not break reasoning out at all".
+	//
+	// Anthropic is the second case: thinking rides inside output_tokens with
+	// no separate count, so a 0 there is an absence of information rather
+	// than a measurement. Without this flag a session total would quietly
+	// understate, which is the failure mode a cost breakdown exists to avoid.
+	ReasoningTokensKnown bool `json:"reasoning_tokens_known,omitempty"`
 }
 
 // Add returns u plus v.
 func (u Usage) Add(v Usage) Usage {
 	return Usage{
-		InputTokens:      u.InputTokens + v.InputTokens,
-		OutputTokens:     u.OutputTokens + v.OutputTokens,
-		CacheReadTokens:  u.CacheReadTokens + v.CacheReadTokens,
-		CacheWriteTokens: u.CacheWriteTokens + v.CacheWriteTokens,
-		CostUSD:          u.CostUSD + v.CostUSD,
-		CacheSavedUSD:    u.CacheSavedUSD + v.CacheSavedUSD,
+		InputTokens:          u.InputTokens + v.InputTokens,
+		OutputTokens:         u.OutputTokens + v.OutputTokens,
+		CacheReadTokens:      u.CacheReadTokens + v.CacheReadTokens,
+		CacheWriteTokens:     u.CacheWriteTokens + v.CacheWriteTokens,
+		CostUSD:              u.CostUSD + v.CostUSD,
+		CacheSavedUSD:        u.CacheSavedUSD + v.CacheSavedUSD,
+		ReasoningTokens:      u.ReasoningTokens + v.ReasoningTokens,
+		ReasoningTokensKnown: mergeReasoningKnown(u, v),
 	}
+}
+
+// mergeReasoningKnown folds the known-ness of two usage reports.
+//
+// A total is only fully known when every component reported a reasoning
+// count — one Anthropic turn in a session makes the session's reasoning
+// figure a floor rather than a total, and it must say so.
+//
+// The zero Usage is the exception, and it is not a special case for its own
+// sake: CostTracker accumulates with `total = total.Add(turn)` starting from
+// Usage{}, so a plain AND would mark every total unknown no matter what the
+// providers reported. An empty accumulator has not reported anything, so it
+// carries no opinion.
+func mergeReasoningKnown(u, v Usage) bool {
+	if u.isZero() {
+		return v.ReasoningTokensKnown
+	}
+	if v.isZero() {
+		return u.ReasoningTokensKnown
+	}
+	return u.ReasoningTokensKnown && v.ReasoningTokensKnown
+}
+
+// isZero reports whether u carries no measurement at all — the state of a
+// freshly constructed accumulator, as distinct from a turn that genuinely
+// billed nothing but was still reported.
+func (u Usage) isZero() bool {
+	return u.InputTokens == 0 && u.OutputTokens == 0 &&
+		u.CacheReadTokens == 0 && u.CacheWriteTokens == 0 &&
+		u.ReasoningTokens == 0 && !u.ReasoningTokensKnown &&
+		u.CostUSD == 0 && u.CacheSavedUSD == 0
 }
 
 // PromptTokens is everything the model read: the uncached remainder plus

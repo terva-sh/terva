@@ -380,6 +380,12 @@ type WireBlock struct {
 	ReasoningID string `json:"reasoning_id,omitempty"`
 	Summary     string `json:"summary,omitempty"`
 	Encrypted   string `json:"encrypted_content,omitempty"`
+
+	// compaction_summary — who issued the encrypted blob. Only that provider
+	// can replay it, and a blob that arrives without provenance is treated as
+	// replayable by nobody, so this must survive the wire round-trip or a
+	// client hands back a compaction that looks foreign to its own issuer.
+	Provider string `json:"provider,omitempty"`
 }
 
 // WireUsage is per-turn or cumulative token / cost counts.
@@ -393,6 +399,12 @@ type WireUsage struct {
 	// per response by the model that answered it (provider.ApplyCost). Signed:
 	// negative means cache writes outran the reads they bought.
 	CacheSavedUSD float64 `json:"cache_saved_usd,omitempty"`
+	// Reasoning is how much of Output the model spent thinking — a SUBSET of
+	// Output, not a fifth bucket, since it is billed at the output rate.
+	// ReasoningKnown separates a reported zero from a provider that does not
+	// break reasoning out at all (Anthropic keeps it inside output_tokens).
+	Reasoning      int  `json:"reasoning,omitempty"`
+	ReasoningKnown bool `json:"reasoning_known,omitempty"`
 }
 
 // EventToWire converts an AgentEvent to its canonical wire form. Image
@@ -591,6 +603,16 @@ func contentToWire(blocks []provider.Content, imageData bool) []WireBlock {
 				IsError: v.IsError,
 				Content: contentToWire(v.Content, imageData),
 			})
+		case provider.CompactionBlock:
+			// Carried over ctrlproto for the same reason reasoning is: the
+			// blob must survive a round-trip through the TUI/web backend or
+			// the next request replays a compaction with its contents gone.
+			out = append(out, WireBlock{
+				Type:      "compaction_summary",
+				ID:        v.ID,
+				Encrypted: v.Encrypted,
+				Provider:  v.Provider,
+			})
 		case provider.ReasoningBlock:
 			out = append(out, WireBlock{
 				Type:        "reasoning",
@@ -668,6 +690,8 @@ func ContentFromWire(blocks []WireBlock) []provider.Content {
 			})
 		case "reasoning":
 			out = append(out, provider.ReasoningBlock{ID: b.ReasoningID, Summary: b.Summary, Encrypted: b.Encrypted})
+		case "compaction_summary":
+			out = append(out, provider.CompactionBlock{ID: b.ID, Encrypted: b.Encrypted, Provider: b.Provider})
 		}
 	}
 	return out
@@ -681,12 +705,14 @@ func ContentFromWire(blocks []WireBlock) []provider.Content {
 // went through this one. One converter, both callers.
 func UsageToWire(u provider.Usage) WireUsage {
 	return WireUsage{
-		Input:         u.InputTokens,
-		Output:        u.OutputTokens,
-		CacheRead:     u.CacheReadTokens,
-		CacheWrite:    u.CacheWriteTokens,
-		CostUSD:       u.CostUSD,
-		CacheSavedUSD: u.CacheSavedUSD,
+		Input:          u.InputTokens,
+		Output:         u.OutputTokens,
+		CacheRead:      u.CacheReadTokens,
+		CacheWrite:     u.CacheWriteTokens,
+		CostUSD:        u.CostUSD,
+		CacheSavedUSD:  u.CacheSavedUSD,
+		Reasoning:      u.ReasoningTokens,
+		ReasoningKnown: u.ReasoningTokensKnown,
 	}
 }
 

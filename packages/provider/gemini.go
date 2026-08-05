@@ -743,6 +743,12 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 				}
 				usage.InputTokens = input
 				usage.OutputTokens = um.CandidatesTokenCount + um.ThoughtsTokenCount
+				// Gemini is the one backend that already reported this and
+				// then merged it away. Kept INSIDE OutputTokens above (it is
+				// billed at the output rate); this only makes the split
+				// visible.
+				usage.ReasoningTokens = um.ThoughtsTokenCount
+				usage.ReasoningTokensKnown = true
 				usage.CacheReadTokens = um.CachedContentTokenCount
 			}
 			// Promote ToolUse stop when tool calls are present and

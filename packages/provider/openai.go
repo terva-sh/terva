@@ -685,6 +685,12 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 					PromptTokensDetails struct {
 						CachedTokens int `json:"cached_tokens"`
 					} `json:"prompt_tokens_details"`
+					// A pointer: most OpenAI-compatible gateways omit this
+					// block entirely, and an absent block must stay "not
+					// reported" rather than becoming a measured zero.
+					CompletionTokensDetails *struct {
+						ReasoningTokens int `json:"reasoning_tokens"`
+					} `json:"completion_tokens_details"`
 				} `json:"usage"`
 				Error *struct {
 					Message string `json:"message"`
@@ -714,6 +720,12 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 				}
 				usage.OutputTokens = chunk.Usage.CompletionTokens
 				usage.CacheReadTokens = chunk.Usage.PromptTokensDetails.CachedTokens
+				// Reasoning stays INSIDE OutputTokens — it is billed at the
+				// output rate, and subtracting it here would change the bill.
+				if d := chunk.Usage.CompletionTokensDetails; d != nil {
+					usage.ReasoningTokens = d.ReasoningTokens
+					usage.ReasoningTokensKnown = true
+				}
 			}
 			for _, ch := range chunk.Choices {
 				if ch.Delta.ReasoningContent != "" {
