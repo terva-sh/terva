@@ -202,6 +202,68 @@ func (s *CardStore) ImportBytes(data []byte) (StoredCard, error) {
 	return sc, nil
 }
 
+// Duplicate copies a stored card under a new name — portrait included — and
+// files the copy as a card of its own, with its own empty revision history.
+//
+// It exists because both obvious ways to copy a card fail QUIETLY. Ids are
+// content-addressed and ImportBytes is idempotent by content, so exporting a
+// card and re-importing it returns the card you already had rather than a copy.
+// And a copy assembled client-side from the card JSON does mint a new id, but
+// leaves the portrait behind — the avatar lives outside the card document, so
+// only a PNG import carries pixels.
+//
+// The rename is therefore not cosmetic: it is the whole reason the copy is a
+// different card. Both checks below exist so that a rename which fails to do
+// that job is REFUSED rather than written, because either write would land on a
+// card that already exists and report success — the failure mode this method
+// was added to remove, reintroduced one level up.
+func (s *CardStore) Duplicate(id, name string) (StoredCard, error) {
+	if err := slug.ValidID(id); err != nil {
+		return StoredCard{}, err
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return StoredCard{}, fmt.Errorf("a duplicate needs a name")
+	}
+	src, err := s.Get(id)
+	if err != nil {
+		return StoredCard{}, err
+	}
+	// A shallow copy is enough because Name is the only field that changes;
+	// nothing here reaches into the slices, the character book, or extensions,
+	// which the copy shares by value with what Marshal is about to serialize.
+	c := src.Card
+	c.Name = name
+	raw, err := card.Marshal(c)
+	if err != nil {
+		return StoredCard{}, err
+	}
+	dup := slug.ID(c.Name, raw)
+	// These two refusals cover ONE unsafe write, not two: when the name is
+	// unchanged the id is unchanged, so the card.json the collision check stats
+	// is this card's own and it would refuse anyway. The first check exists for
+	// what it SAYS. "Another card already holds these contents" is false when
+	// the other card is the one you are copying, and it leaves the author
+	// guessing at a fix that is simply "pick a different name".
+	if dup == id {
+		return StoredCard{}, fmt.Errorf("%q is the name this card already has — a duplicate needs a different one", name)
+	}
+	// A collision here means a DIFFERENT card with this name and these contents
+	// is already filed: writing would snapshot it into history and overwrite it,
+	// which is a merge wearing a copy's clothes.
+	if _, err := os.Stat(filepath.Join(s.dir, dup, cardJSONName)); err == nil {
+		return StoredCard{}, fmt.Errorf("a card named %q with these contents is already in your library", name)
+	}
+	// Read the portrait rather than re-deriving it: the stored avatar.png has
+	// already been through normalizeAvatar, so the copy inherits the picture the
+	// original actually shows, not a second downscale of it. A JSON-imported
+	// card has none, and write treats empty bytes as "no portrait".
+	avatar, _ := os.ReadFile(filepath.Join(s.dir, id, cardAvatarName))
+	// noteReplacement false: the two checks above are what guarantee this id is
+	// unwritten, so there is nothing displaced to warn about.
+	return s.write(dup, c, raw, avatar, false)
+}
+
 // Edit replaces a stored card's fields with a full edited card document
 // (CCv2 wrapper or flat), re-serializing it canonically. The id (directory) and
 // any avatar are unchanged — editing card data never moves or reshoots the

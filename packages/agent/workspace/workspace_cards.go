@@ -173,6 +173,27 @@ func fetchCardBytes(ctx context.Context, guard *egress.Guard, rawURL string, max
 	return data, nil
 }
 
+// CardsDuplicate copies a card under a new name so a design can be iterated on
+// without overwriting the version that works.
+//
+// The refusals below are the point of the verb, not paperwork around it. A card
+// id is content-addressed, so the two things a person would naturally try —
+// export then re-import, or rebuild the card from its JSON — respectively return
+// the original card and lose the portrait. Both look like they worked. The store
+// rejects a name that would reproduce either outcome, and those rejections reach
+// the author as bad requests rather than being smoothed over here.
+func (w *Workspace) CardsDuplicate(_ context.Context, p ctrlproto.CardDuplicateParams) (ctrlproto.CardView, error) {
+	if strings.TrimSpace(p.Name) == "" {
+		return ctrlproto.CardView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("cards.duplicate needs a name for the copy"))
+	}
+	sc, err := w.cardStore().Duplicate(p.ID, p.Name)
+	if err != nil {
+		return ctrlproto.CardView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "duplicate card: %v", err)
+	}
+	w.broadcastLibraryChanged()
+	return cardView(sc), nil
+}
+
 // CardsEdit replaces a card's data with an edited document.
 func (w *Workspace) CardsEdit(_ context.Context, p ctrlproto.CardEditParams) (ctrlproto.CardView, error) {
 	if len(p.Card) == 0 {

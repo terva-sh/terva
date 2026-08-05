@@ -61,6 +61,11 @@ export function CardSheet(props: {
   onClose: () => void
   onStart: (greeting: number) => void
   onEdit?: () => void
+  // Copy this card under a new name, portrait included — the way to iterate on a
+  // design without overwriting the version that works. Sits with the other
+  // whole-card actions rather than beside ✎ Edit, because it makes a SECOND card
+  // rather than changing this one.
+  onDuplicate?: () => void
   // Delete lives here rather than on the grid tile: the tile's one corner slot is
   // already the "⋯ Details" button, and a destructive action reached by mistake
   // from a grid is worse than one reached deliberately from the detail sheet.
@@ -71,7 +76,7 @@ export function CardSheet(props: {
   groups?: Group[]
   onToggleGroup?: (groupId: string) => void
 }) {
-  const { client, card, busy, onClose, onStart, onEdit, onDelete, groups, onToggleGroup } = props
+  const { client, card, busy, onClose, onStart, onEdit, onDuplicate, onDelete, groups, onToggleGroup } = props
   const [view, setView] = useState<CardView | null>(null)
   const [findings, setFindings] = useState<CardLintFinding[] | null>(null)
   const [greeting, setGreeting] = useState(0)
@@ -337,6 +342,11 @@ export function CardSheet(props: {
           )}
         </div>
 
+        {onDuplicate && (
+          <button class="stage-sheet__duplicate" title={t('Copy this card, portrait and all, so you can change the copy')} onClick={onDuplicate}>
+            {t('⧉ Duplicate card')}
+          </button>
+        )}
         <button class="stage-sheet__export" onClick={() => void exportCard()}>
           {t('Export card')}
         </button>

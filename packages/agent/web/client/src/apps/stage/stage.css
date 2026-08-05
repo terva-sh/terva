@@ -1129,6 +1129,21 @@ button:disabled {
   color: var(--stage-on-accent);
   font-weight: 600;
 }
+/* Duplicate sits ABOVE Export, which sits above Delete: the footer runs from the
+   action that creates, through the one that copies out, to the one that
+   destroys. Same calm secondary shape as Export — neither is the sheet's primary
+   act (Start is), and two competing filled buttons would say otherwise. */
+.stage-sheet__duplicate {
+  width: 100%;
+  margin-top: 0.5rem;
+  padding: 0.6rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  background: var(--stage-surface);
+  color: var(--stage-fg);
+  cursor: pointer;
+}
+
 .stage-sheet__export {
   width: 100%;
   margin-top: 0.5rem;
@@ -3725,6 +3740,19 @@ button:disabled {
   color: var(--stage-fg);
   font-size: 1.1rem;
   line-height: 1;
+}
+
+/* Its OWN class, not .stage-steer-btn: sharing that one made the Steering
+   locator resolve to two elements and broke every smoke that opens the drawer.
+   A control that looks like another is not the same control. */
+.stage-reasoning-btn {
+  border: none;
+  background: none;
+  color: var(--stage-fg);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
 }
 
 .stage-drawer-backdrop {

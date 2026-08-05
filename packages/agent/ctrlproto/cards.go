@@ -27,6 +27,12 @@ type CardsController interface {
 	// a remote URL) into the library, keeping a PNG's pixels as the avatar.
 	// Idempotent by content: re-importing the same card returns the same id.
 	CardsImport(ctx context.Context, p CardImportParams) (CardView, error)
+	// CardsDuplicate copies a stored card under a new name, portrait included,
+	// as a card of its own. The rename is required and is what makes the copy a
+	// separate card at all: ids are content-addressed, so a name that would land
+	// back on the original — or on some other card already holding these exact
+	// contents — is refused rather than silently merged into it.
+	CardsDuplicate(ctx context.Context, p CardDuplicateParams) (CardView, error)
 	// CardsEdit replaces a stored card's fields with an edited document,
 	// re-serializing it; the id and avatar are unchanged.
 	CardsEdit(ctx context.Context, p CardEditParams) (CardView, error)
@@ -171,6 +177,21 @@ type CardImportParams struct {
 	Path  string `json:"path,omitempty"`
 	Bytes []byte `json:"bytes,omitempty"`
 	URL   string `json:"url,omitempty"`
+}
+
+// CardDuplicateParams names the card to copy and what to call the copy. Name is
+// REQUIRED and must differ from the original's, because an id is a stem of the
+// name plus a hash of the contents — an unchanged name over unchanged contents
+// is not a second card, it is the first one, and copying onto it would report
+// success while creating nothing.
+//
+// The caller picks the free name (the Stage sheet proposes "<name> (copy)" and
+// counts upward), so this carries a name rather than deriving one: the client
+// holds the library listing the name has to be free WITHIN, and it is the client
+// that has to show the author what the copy will be called before they commit.
+type CardDuplicateParams struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // CardEditParams replaces a card's data. Card is a full edited card document

@@ -158,6 +158,31 @@ export function cardDeleteWarning(name: string): string {
   return t('Delete “%s”? The card and its avatar are removed for good.', name)
 }
 
+// copyName proposes a free name for a duplicated card, counting upward past any
+// copy already made.
+//
+// The daemon REFUSES a copy that would land on a card already in the library,
+// and it is right to: an id is a stem of the name plus a hash of the contents,
+// so a copy under an unchanged name is not a second card — it is the first one,
+// and writing it would report success while creating nothing. That refusal is a
+// backstop, though, not a workflow. Proposing a free name is what keeps an
+// author from meeting it for no reason on the very first click.
+//
+// Distinct from the persona flow's duplicateName, which says "(my copy)" because
+// a persona copy exists to fork a BUILT-IN and the wording marks whose it now
+// is. A card copy is just a copy, so it says so.
+// Exported for its own test.
+export function copyName(base: string, taken: string[]): string {
+  const used = new Set(taken.map((n) => n.trim().toLowerCase()))
+  const candidate = t('%s (copy)', base)
+  if (!used.has(candidate.trim().toLowerCase())) return candidate
+  for (let n = 2; n < 100; n++) {
+    const next = t('%s (copy %d)', base, n)
+    if (!used.has(next.trim().toLowerCase())) return next
+  }
+  return candidate
+}
+
 // cardInUseMessage explains a delete that will not happen, and what to do about
 // it. Shown INSTEAD of the confirm — asking "are you sure?" about something the
 // daemon is going to refuse teaches a user that yes means no.
@@ -782,6 +807,40 @@ export function Library(props: {
     }
   }
 
+  // Copy a card so a variant can be worked on without overwriting the version
+  // that already works (cards.duplicate).
+  //
+  // This is a daemon verb rather than a get-rename-import right here because the
+  // portrait lives OUTSIDE the card document: a copy assembled client-side would
+  // mint a real new card and arrive faceless. (Re-importing an export is worse —
+  // ids are content-addressed, so it returns the card you already had and looks
+  // like it worked.)
+  //
+  // Lands in the editor, because a copy exists in order to be changed; the
+  // studio's back button returns here. The prompt matches the Library's dialog
+  // idiom (saveAsWorld), pre-filled with a name that is already free.
+  const duplicateCard = async (card: CardSummary) => {
+    const proposed = copyName(
+      card.name,
+      cards.map((c) => c.name),
+    )
+    // Dismissing the prompt and clearing it both mean "not this time", so they
+    // take ONE path. Written as `?? ''` rather than a null guard followed by a
+    // trim because the two-step version hides a null dereference behind the
+    // guard: drop the guard and the crash produces the same "nothing happened"
+    // the guard did, which no test can tell apart.
+    const trimmed = (window.prompt(t('Name the copy of “%s”:', card.name), proposed) ?? '').trim()
+    if (!trimmed) return
+    try {
+      const copy = await client.send<CardView>('cards.duplicate', { id: card.id, name: trimmed })
+      setSheet(null)
+      load()
+      onEditCharacter(copy)
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
   // Delete a persona of yours (personas.delete). Built-ins are not offered this
   // — the sheet gates it on `editable` — and the daemon refuses them anyway.
   //
@@ -1393,6 +1452,7 @@ export function Library(props: {
             setSheet(null)
             onEditCharacter(sheet)
           }}
+          onDuplicate={() => void duplicateCard(sheet)}
           onDelete={() => void deleteCard(sheet)}
         />
       )}

@@ -140,6 +140,10 @@ func (r *recorder) CardsEdit(_ context.Context, p CardEditParams) (CardView, err
 	r.note("CardsEdit", "", p)
 	return CardView{}, nil
 }
+func (r *recorder) CardsDuplicate(_ context.Context, p CardDuplicateParams) (CardView, error) {
+	r.note("CardsDuplicate", "", p)
+	return CardView{}, nil
+}
 func (r *recorder) CardsDelete(_ context.Context, p CardDeleteParams) error {
 	r.note("CardsDelete", "", p)
 	return nil
@@ -449,6 +453,12 @@ func dispatchCases() []dispatchCase {
 		{MethodModelParamsSet, ModelParamsSetParams{Provider: "openai", Model: "gpt"}, "ModelParamsSet", nil},
 		{MethodModelParamsReset, ModelParamsParams{Provider: "gemini", Model: "flash"}, "ModelParamsReset", ModelParamsParams{Provider: "gemini", Model: "flash"}},
 
+		// The per-session thinking depth. "max" rather than a middle rung on
+		// purpose: it is the one value that differs between the ladder's top two
+		// spellings, so a params struct bound from the wrong verb cannot match
+		// it by coincidence.
+		{MethodSessionReasoning, ReasoningSetParams{Level: "max"}, "SetSessionReasoning", reasoningArgs{Level: "max"}},
+
 		// --- cards: default: used to fall through to Delete ---
 		{MethodCardsList, nil, "CardsList", nil},
 		{MethodCardsGet, CardGetParams{ID: "kobeni"}, "CardsGet", CardGetParams{ID: "kobeni"}},
@@ -460,6 +470,12 @@ func dispatchCases() []dispatchCase {
 			CardEditParams{ID: "edited", Card: json.RawMessage(`{"name":"k"}`)},
 			"CardsEdit",
 			CardEditParams{ID: "edited", Card: json.RawMessage(`{"name":"k"}`)},
+		},
+		{
+			MethodCardsDuplicate,
+			CardDuplicateParams{ID: "copied", Name: "Kobeni (copy)"},
+			"CardsDuplicate",
+			CardDuplicateParams{ID: "copied", Name: "Kobeni (copy)"},
 		},
 		{MethodCardsExport, CardExportParams{ID: "exported"}, "CardsExport", CardExportParams{ID: "exported"}},
 		{MethodCardsLint, CardLintParams{ID: "linted"}, "CardsLint", CardLintParams{ID: "linted"}},

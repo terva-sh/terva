@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -157,6 +158,95 @@ func TestWorkspaceCardsErrors(t *testing.T) {
 	}
 	if _, err := w.CardsEdit(ctx, ctrlproto.CardEditParams{ID: "x-1"}); err == nil {
 		t.Error("edit with an empty body should error")
+	}
+	if _, err := w.CardsDuplicate(ctx, ctrlproto.CardDuplicateParams{ID: "x-1"}); err == nil {
+		t.Error("duplicate with no name should error")
+	}
+	if _, err := w.CardsDuplicate(ctx, ctrlproto.CardDuplicateParams{ID: "missing-000000000000", Name: "Copy"}); err == nil {
+		t.Error("duplicate of a missing card should error")
+	}
+}
+
+// TestWorkspaceCardsDuplicate drives cards.duplicate through a real Workspace.
+// The verb exists because the two obvious ways to copy a card fail quietly —
+// re-importing an export returns the original (ids are content-addressed), and
+// rebuilding from the card JSON loses the portrait — so the two things asserted
+// here are that the copy is genuinely a second card and that it kept its face.
+func TestWorkspaceCardsDuplicate(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	w, err := NewWorkspace(build.Args{Provider: "openai", Model: "gpt-5", CWD: testsupport.TempDir(t)}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	ctx := context.Background()
+
+	// A real card PNG, so the portrait under test is one the store actually
+	// retained rather than a fixture shaped to pass.
+	png, err := os.ReadFile("../../../examples/cards/aava-v2.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := w.CardsImport(ctx, ctrlproto.CardImportParams{Bytes: png})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src.AvatarURL == "" {
+		t.Fatal("setup: a PNG import should carry an avatar")
+	}
+
+	copyName := src.Name + " (copy)"
+	dup, err := w.CardsDuplicate(ctx, ctrlproto.CardDuplicateParams{ID: src.ID, Name: copyName})
+	if err != nil {
+		t.Fatalf("duplicate: %v", err)
+	}
+	if dup.ID == src.ID {
+		t.Fatal("the copy landed on the original's id")
+	}
+	if dup.Name != copyName {
+		t.Errorf("copy name = %q, want %q", dup.Name, copyName)
+	}
+	if dup.AvatarURL == "" {
+		t.Error("the copy has no portrait — the reason this is a server verb and not a client trick")
+	}
+	// The name is the ONLY thing that changed. Asserting the whole document
+	// rather than a field or two is what catches a copy that quietly drops
+	// `extensions` or the character book — the parts no editor renders, and so
+	// the parts a hand-rolled copy loses without anyone noticing.
+	srcCard, err := card.ParseJSON(src.Raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dupCard, err := card.ParseJSON(dup.Raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dupCard.Name = srcCard.Name
+	if !reflect.DeepEqual(srcCard, dupCard) {
+		t.Error("the copy differs from the original in more than its name")
+	}
+
+	// Both are in the library and the original is unchanged.
+	list, err := w.CardsList(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Cards) != 2 {
+		t.Fatalf("library should hold both cards, has %d", len(list.Cards))
+	}
+	orig, err := w.CardsGet(ctx, ctrlproto.CardGetParams{ID: src.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if orig.Name != src.Name {
+		t.Errorf("duplicating renamed the original: %q", orig.Name)
+	}
+
+	// The trap the verb exists for: a "copy" that changes nothing is the card
+	// you already have, so it must be refused rather than reported as created.
+	if _, err := w.CardsDuplicate(ctx, ctrlproto.CardDuplicateParams{ID: src.ID, Name: src.Name}); err == nil {
+		t.Error("duplicating under the original's name must be refused")
 	}
 }
 
