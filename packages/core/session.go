@@ -169,6 +169,15 @@ type SessionMeta struct {
 	// persisted so a daemon restart re-materializes the session as the chosen
 	// persona rather than falling back to the workspace default.
 	Persona string `json:"persona,omitempty"`
+	// Reasoning is this session's thinking-level override as the user typed it
+	// ("off", "high", "max", …), or "" to inherit the global level. Raw rather
+	// than normalized so an explicit "off" stays distinguishable from an absent
+	// override, which normalization would collapse into the same empty string.
+	//
+	// Persisted for the reason Persona is: a session deliberately set to a
+	// different depth must come back at that depth after a daemon restart, not
+	// silently drop to whatever the global default happens to be.
+	Reasoning string `json:"reasoning,omitempty"`
 	// Experience, Card, Cast, and Greeting persist how an immersive (Stage)
 	// session was created — its --chat/--play mode, character card, declared
 	// cast, and selected opening — so a restart rebuilds the same session rather
@@ -336,6 +345,11 @@ type sessionLine struct {
 	Tail       *tailRecord             `json:"tail,omitempty"`
 	Prefix     *prefixDivergenceRecord `json:"prefix,omitempty"`
 	ToolGroup  *toolGroupRecord        `json:"tool_group,omitempty"`
+	// Cliff rides a "cliff" row: a provider-side cache collapse opened or
+	// closed. Pointer-and-omitempty like the rest, so the closing row's
+	// ongoing:false is carried by the record rather than by the field's
+	// absence — a bare false would be indistinguishable from "no cliff here".
+	Cliff *cacheCliffRecord `json:"cliff,omitempty"`
 	// Net rides a "net" row: which connection/edge the adjacent dispatch
 	// physically rode (provider.TransportInfo verbatim — one source of truth,
 	// the way Usage rides). Informational like prefix: never in the
@@ -353,6 +367,15 @@ type sessionLine struct {
 	// were billed at full price behind a label promising otherwise.
 	Strategy       string `json:"strategy,omitempty"`
 	FallbackReason string `json:"fallback_reason,omitempty"`
+	// Superseded is how many transcript messages this checkpoint replaced.
+	//
+	// Redundant on a client-summarized row — the summary above it describes the
+	// same turns in prose — and the only thing a reader has on a server-compacted
+	// one, where the checkpoint is an encrypted blob and the row's own messages
+	// say nothing about the size of what is missing. Recording it is what lets
+	// the file stay auditable without paying a second summarizer to describe a
+	// transcript for a human that the model already has.
+	Superseded int `json:"superseded,omitempty"`
 	// Truncated marks a compaction whose summary ran into compactMaxTokens. The
 	// silent version of this was measurable only by arithmetic — output_tokens
 	// exactly equal to the cap, prose ending mid-word — which is not a signal any
@@ -562,6 +585,37 @@ type prefixDivergenceRecord struct {
 	CachedTokens int `json:"cached_tokens,omitempty"`
 }
 
+// cacheCliffRecord rides a "cliff" row: the detector in cachecliff.go opened or
+// closed a run of append-only dispatches whose cache reads collapsed while the
+// prompt kept growing.
+//
+// This is the row the investigation in
+// docs/reviews/2026-08-04-gpt56-post-compaction-cache-collapse.md could not
+// find. The detector shipped observer-only — it raised a sticky note and left
+// nothing behind — so a finished session could not answer "did this fire", and
+// the collapses in that document had to be reconstructed by re-deriving the
+// signature from usage rows. Worse, the one experiment that would settle the
+// cause has to run WHILE a session is collapsed, and nothing announced that a
+// session currently was.
+//
+// Two rows per run, not one per dispatch. The detector deliberately fires on
+// every collapse past the threshold so the note's numbers stay current, but a
+// 95-dispatch run does not want 95 rows — the same reasoning recordTail applies
+// to the ephemeral tail. The opening row marks the run; the closing row carries
+// the totals it reached. A run still open when the session ends leaves an
+// opening row and no close, which is itself the fact worth recording.
+type cacheCliffRecord struct {
+	// Ongoing is true on the row that opens a run and false on the row that
+	// closes it — the same discriminator the note renders on, so a reader and
+	// the user are never told different things.
+	Ongoing bool `json:"ongoing"`
+	// Dispatches is the run length and RereadTokens the input the provider
+	// re-read that the previous prompt already covered. On the closing row
+	// these are the run's final totals.
+	Dispatches   int `json:"dispatches"`
+	RereadTokens int `json:"reread_tokens"`
+}
+
 // toolGroupRecord rides a "tool_group" row: a capability group the model
 // brought into view this session (activate_tools, or a skill surfacing its
 // allowed-tools). Replayed on load so a resume advertises the same tools array
@@ -581,6 +635,7 @@ const (
 	recordPrefix          = "prefix"
 	recordToolGroup       = "tool_group"
 	recordNet             = "net"
+	recordCliff           = "cliff"
 )
 
 // Amend op values for [Session.AppendAmend], exported so callers that persist a
@@ -647,6 +702,11 @@ type wireBlock struct {
 	CallID  string      `json:"call_id,omitempty"`
 	Content []wireBlock `json:"content,omitempty"`
 	IsError bool        `json:"is_error,omitempty"`
+	// compaction_summary — Provider names who issued the encrypted blob, and
+	// only that provider can replay it. Its own field rather than borrowing
+	// Name (the tool_call name): a reader of a session file should not have to
+	// know which block type is being decoded to know what a field means.
+	Provider string `json:"provider,omitempty"`
 	// reasoning
 	ReasoningID string `json:"reasoning_id,omitempty"`
 	Summary     string `json:"summary,omitempty"`
@@ -660,6 +720,9 @@ const (
 	blockToolCall   = "tool_call"
 	blockToolResult = "tool_result"
 	blockReasoning  = "reasoning"
+	// blockCompaction matches the provider's own wire name so a session file
+	// and a request body read the same way side by side.
+	blockCompaction = "compaction_summary"
 )
 
 // encodeWireMessage converts a provider.Message to its typed on-disk
@@ -708,6 +771,12 @@ func encodeWireBlocks(blocks []provider.Content) []wireBlock {
 			})
 		case provider.ReasoningBlock:
 			out = append(out, wireBlock{Type: blockReasoning, ReasoningID: b.ID, Summary: b.Summary, Encrypted: b.Encrypted})
+		case provider.CompactionBlock:
+			// Losing this block loses the compaction itself: the blob is the
+			// backend's only encoding of the turns it replaced, and terva
+			// cannot rebuild one. A resume that dropped it would silently
+			// resume a conversation with a hole where its history was.
+			out = append(out, wireBlock{Type: blockCompaction, ID: b.ID, Encrypted: b.Encrypted, Provider: b.Provider})
 		}
 	}
 	return out
@@ -1204,10 +1273,94 @@ func OpenSessionReconciled(path string, stub InterruptStub) (*Session, []provide
 	return openSession(path, stub)
 }
 
+// sessionReplay is everything reconstructing a session file yields BEFORE the
+// file is opened for writing. It exists so a read-only caller
+// (ReadSessionMessages, and through it `--dump-prompt`) can replay a transcript
+// without taking an O_APPEND|O_WRONLY handle on a file another process may be
+// appending to right now, and without owning a buffer that Close would flush.
+// An inspection command should not need write permission on its subject.
+//
+// It is NOT protection against Close deleting the file: that is gated on
+// freshFile && messagesAppended == 0, and a resumed session is never fresh.
+type sessionReplay struct {
+	meta           SessionMeta
+	messages       []provider.Message
+	titleGenerated bool
+	report         *loadReport
+	lore           []WorldLoreEntry
+	activeGroups   []string
+	amends         int
+	tailTakes      int
+	elapsed        time.Duration
+}
+
+// ReadSessionMessages replays a session file into its transcript and returns
+// it, opening the file read-only. It is the inspection counterpart to
+// OpenSession: same replay, same repair, no writer, no Close, no chance of
+// mutating or deleting the session being read.
+func ReadSessionMessages(path string) ([]provider.Message, error) {
+	r, err := replaySession(path, defaultInterruptStub)
+	if err != nil {
+		return nil, err
+	}
+	return r.messages, nil
+}
+
+// ReadSessionPreCompaction returns the transcript as it stood immediately
+// before the LAST compaction in the file, and whether there was one.
+//
+// This is what makes a compaction recoverable rather than a one-way door. A
+// compaction row supersedes the turns it replaces in the rebuilt transcript
+// (session_walk.go: `effective = out`) but the file is append-only and the
+// original rows are still in it — so a conversation compacted by a provider
+// whose blob another provider cannot decrypt can be rebuilt from source and
+// compacted again for the new target, instead of silently losing the assistant
+// turns the blob was the only copy of.
+//
+// The LAST compaction, not the first: earlier ones are already folded into it,
+// and re-running the whole history would undo compactions that were fine.
+func ReadSessionPreCompaction(path string) ([]provider.Message, bool, error) {
+	var before []provider.Message
+	var found bool
+	_, err := replaySessionWith(path, defaultInterruptStub, func(_ []provider.Message, prior []provider.Message) {
+		// Snapshot each time: the last call wins, which is the most recent
+		// compaction. Cloned because the walker keeps mutating its slice.
+		before = append([]provider.Message(nil), prior...)
+		found = true
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return before, found, nil
+}
+
 func openSession(path string, stub InterruptStub) (*Session, []provider.Message, error) {
-	f, err := os.Open(path)
+	r, err := replaySession(path, stub)
 	if err != nil {
 		return nil, nil, err
+	}
+	out, err := privfs.OpenFile(path, os.O_APPEND|os.O_WRONLY)
+	if err != nil {
+		return nil, nil, err
+	}
+	s := &Session{ID: r.meta.ID, Path: path, Meta: r.meta, TitleGenerated: r.titleGenerated, writer: out, buf: bufio.NewWriter(out), LoadWarnings: r.report.warnings(path),
+		persistedLore:    cloneLore(r.lore),
+		ActiveToolGroups: r.activeGroups,
+		LoadStats:        LoadStats{Elapsed: r.elapsed, Messages: len(r.messages), Amends: r.amends, TailTakes: r.tailTakes}}
+	return s, r.messages, nil
+}
+
+func replaySession(path string, stub InterruptStub) (*sessionReplay, error) {
+	return replaySessionWith(path, stub, nil)
+}
+
+// replaySessionWith is replaySession with an optional observer for each
+// compaction checkpoint, receiving the transcript that compaction replaced.
+// Read-only callers use it to recover history a compaction superseded.
+func replaySessionWith(path string, stub InterruptStub, onCompact func(out, before []provider.Message)) (*sessionReplay, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
 	}
 	defer f.Close()
 
@@ -1229,6 +1382,11 @@ func openSession(path string, stub InterruptStub) (*Session, []provider.Message,
 	activeGroupSeen := map[string]bool{}
 	start := time.Now()
 	messages, walkErr = walkSession(f, rep, sessionWalkHooks{
+		onCompaction: func(out, before []provider.Message, _ int, _ []byte) {
+			if onCompact != nil {
+				onCompact(out, before)
+			}
+		},
 		onMeta: func(m SessionMeta, _ []byte) {
 			meta = m
 			titleGenerated = false
@@ -1261,7 +1419,7 @@ func openSession(path string, stub InterruptStub) (*Session, []provider.Message,
 		onTail:  func(_ int, takes [][]provider.Message, _ int) { tailTakes = len(takes) },
 	})
 	if walkErr != nil {
-		return nil, nil, walkErr
+		return nil, walkErr
 	}
 	// The folded book is the session's lore, whichever form carried it.
 	meta.WorldLore = book
@@ -1276,16 +1434,17 @@ func openSession(path string, stub InterruptStub) (*Session, []provider.Message,
 	}
 	messages = repairToolUseResultPairsWith(messages, stub)
 	backfillZeroTimes(messages, meta.Started)
-	elapsed := time.Since(start)
-	out, err := privfs.OpenFile(path, os.O_APPEND|os.O_WRONLY)
-	if err != nil {
-		return nil, nil, err
-	}
-	s := &Session{ID: meta.ID, Path: path, Meta: meta, TitleGenerated: titleGenerated, writer: out, buf: bufio.NewWriter(out), LoadWarnings: rep.warnings(path),
-		persistedLore:    cloneLore(book),
-		ActiveToolGroups: activeGroups,
-		LoadStats:        LoadStats{Elapsed: elapsed, Messages: len(messages), Amends: amends, TailTakes: tailTakes}}
-	return s, messages, nil
+	return &sessionReplay{
+		meta:           meta,
+		messages:       messages,
+		titleGenerated: titleGenerated,
+		report:         rep,
+		lore:           book,
+		activeGroups:   activeGroups,
+		amends:         amends,
+		tailTakes:      tailTakes,
+		elapsed:        time.Since(start),
+	}, nil
 }
 
 // backfillZeroTimes gives a Time-less message its neighbor's timestamp — the
@@ -1977,6 +2136,7 @@ func (s *Session) AppendCompaction(messages []provider.Message, res CompactResul
 		Strategy:       string(res.Strategy),
 		FallbackReason: res.FallbackReason,
 		Truncated:      res.Truncated,
+		Superseded:     res.SupersededMessages,
 	}); err != nil {
 		return err
 	}
@@ -2001,6 +2161,31 @@ func (s *Session) UpdateModel(providerName, model string) error {
 	}
 	s.Meta.Provider = providerName
 	s.Meta.Model = model
+	return s.writeMeta()
+}
+
+// UpdateReasoning records this session's reasoning override in the session
+// file, so a daemon restart re-materializes the session at the level the user
+// chose rather than dropping it back to the global default.
+//
+// level is the RAW ladder token ("off", "high", "max", …) rather than the
+// normalized form, because normalization folds "off" into "" and this field
+// needs to tell an explicit off apart from an absent override. "" means
+// inherit the global level — the same two-state distinction core.Agent carries
+// as Reasoning plus ReasoningSet, spelled with one field because a session file
+// is read by things that cannot see a Go bool.
+//
+// Writes nothing when the level is unchanged, for the reason UpdateModel does:
+// meta rows are a timeline of what changed, and re-applying the same value on
+// every resume turns that timeline into noise.
+func (s *Session) UpdateReasoning(level string) error {
+	if s == nil {
+		return nil
+	}
+	if s.Meta.Reasoning == level {
+		return nil
+	}
+	s.Meta.Reasoning = level
 	return s.writeMeta()
 }
 
@@ -2584,6 +2769,25 @@ func (s *Session) AppendPrefixDivergence(d PrefixDivergence) error {
 	}})
 }
 
+// AppendCacheCliff records that a provider-side cache collapse opened
+// (ongoing) or closed (see cacheCliffRecord). Append only and informational;
+// the loader skips it, so it never affects the rebuilt transcript or resume.
+//
+// Takes ongoing explicitly rather than reading cc.Ongoing: the closing row
+// reports the totals the run REACHED, and the detector's end-of-run event
+// carries the zero CacheCliff by contract. The caller holds the last ongoing
+// event and passes it back here with ongoing=false.
+func (s *Session) AppendCacheCliff(cc CacheCliff, ongoing bool) error {
+	if s == nil {
+		return nil
+	}
+	return s.writeLine(sessionLine{Type: recordCliff, Cliff: &cacheCliffRecord{
+		Ongoing:      ongoing,
+		Dispatches:   cc.Dispatches,
+		RereadTokens: cc.RereadTokens,
+	}})
+}
+
 // AppendTransport records which connection and edge a dispatch rode — the
 // half of a cache miss the usage row cannot see. Written per dispatch on
 // providers that report it (openai-codex today); the analysis it exists for
@@ -2942,6 +3146,8 @@ func decodeWireBlock(b wireBlock) (provider.Content, bool) {
 		return block, true
 	case blockReasoning:
 		return provider.ReasoningBlock{ID: b.ReasoningID, Summary: b.Summary, Encrypted: b.Encrypted}, true
+	case blockCompaction:
+		return provider.CompactionBlock{ID: b.ID, Encrypted: b.Encrypted, Provider: b.Provider}, true
 	}
 	return nil, false
 }

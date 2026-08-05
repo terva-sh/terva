@@ -851,6 +851,36 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 		defer mu.Unlock()
 		_ = sess.AppendTransport(ti)
 	})
+	// A provider-side cache collapse opened or closed. The detector shipped
+	// observer-only, raising a sticky note and leaving nothing on disk, which
+	// cost the cache investigation twice: a finished session could not say
+	// whether it had fired, and the experiment that would settle the cause has
+	// to run while a session IS collapsed — with nothing announcing that one
+	// currently was.
+	//
+	// The write-once policy lives here rather than in core because core's event
+	// cadence is right for what it serves: the note tracks a changing fact and
+	// wants every update. The file wants the two transitions. Holding the last
+	// ongoing event is what lets the closing row carry the totals the run
+	// reached, since the end-of-run event is the zero CacheCliff by contract.
+	var cliffPeak core.CacheCliff
+	cliffOpen := false
+	ag.AddCacheCliffObserver(func(cc core.CacheCliff) {
+		mu.Lock()
+		defer mu.Unlock()
+		if cc.Ongoing {
+			cliffPeak = cc
+			if !cliffOpen {
+				cliffOpen = true
+				_ = sess.AppendCacheCliff(cc, true)
+			}
+			return
+		}
+		if cliffOpen {
+			cliffOpen = false
+			_ = sess.AppendCacheCliff(cliffPeak, false)
+		}
+	})
 }
 
 // mcpAllowSet folds the --mcp names into a set; nil when no allowlist.

@@ -30,17 +30,57 @@ that's a bug.
 terva --card examples/cards/aava-v2.json --dump-prompt -p "tell me about the fog-bell"
 ```
 
-Four formats:
+Five formats:
 
 - **`--dump-prompt`** (text, default) — annotated, each segment tagged with its
   `[source · portability]`. The *"where did this come from"* view.
 - **`--dump-prompt=json`** — the structured manifest, for assertions/tooling.
 - **`--dump-prompt=raw`** — segment text concatenated, unlabeled: the logical
-  prompt. (Not the literal wire payload — no `cache_control` markers or JSON
-  escaping; a wire-level dump is a planned follow-up.)
+  prompt. Not the wire payload — for that use `wire`.
 - **`--dump-prompt=sizes`** — per-section and per-tool byte + token weight. The
   *"what's eating my context"* view: no prompt text, just the attribution, so a
   bloated tool schema or an oversized context file is one command away.
+- **`--dump-prompt=wire`** — the serialized provider request as JSONL. The
+  *"what actually goes on the wire"* view, and the one to reach for when a
+  prompt cache is missing.
+
+### `wire`: finding where a cached prefix diverges
+
+A provider prompt cache matches on an exact byte **prefix**, so the only useful
+question about two requests is *which item is the first that differs*. `wire`
+answers it by construction: one header line carrying every field except the
+input array, then **one line per input item**.
+
+```sh
+terva --dump-prompt=wire --session ~/…/a.jsonl -p next > a.jsonl
+terva --dump-prompt=wire --session ~/…/b.jsonl -p next > b.jsonl
+diff a.jsonl b.jsonl        # first changed line = first changed item
+```
+
+There is deliberately no per-line index: a pure append leaves every earlier line
+byte-identical, so `diff` reports the minimal edit. Numbering would renumber the
+whole file whenever an item was inserted early, turning the one signal worth
+having into noise.
+
+Two things it does not show, both because neither can change the answer it
+exists to give. The **ephemeral tail** is appended *after* the cache breakpoint,
+so it is not prefix bytes (and composing it needs a live agent). The
+**`prompt_cache_key`** is a routing hint rather than a cache partition, so it is
+not prefix bytes either — though it is filled in from `--session` when there is
+one.
+
+⚠️ **Comparing two dumps: drop the pending turn.** The `-p` argument becomes the
+last input item, and it is *your* synthetic turn, not what the conversation
+really did next. Compare `head -n -1` of the earlier dump against the later one,
+or every pair will report a difference on its final line. Two other artifacts
+bite the same way: cutting a transcript mid-tool-call makes the loader fill the
+gap with `tool call was aborted; no result recorded.`, which the next cut
+replaces with the real output; and consecutive same-role messages are **merged**
+into one item by the codex/chat builders, so a fixture of two user turns in a
+row does not produce two items.
+
+`--session` is replayed **read-only** — no append handle is taken, and a session
+that is live, or that you cannot write, dumps fine.
 
 The manifest is the **source of truth**: the flat system-prompt string is
 *derived* from the same labeled segments the dump shows, so the dump can't

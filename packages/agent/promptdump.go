@@ -6,8 +6,46 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
+
+// promptDumpWire renders the request as the provider would serialize it, in the
+// diffable JSONL shape DumpRequestJSONL documents.
+//
+// Two fields are deliberately absent, and both are absent for the same reason —
+// they cannot change the answer this mode exists to give:
+//
+//   - EphemeralContext (the per-turn tail) is appended AFTER the prompt-cache
+//     breakpoint, so it is not part of the prefix a cache matches on. It also
+//     needs a live agent and an extension manager to compose, neither of which
+//     a credential-free dump has.
+//   - PromptCacheKey is a routing hint rather than a cache partition (measured;
+//     a key that had never been sent reads back another key's payload), so it
+//     is not prefix bytes either. It is still filled in from --session when
+//     there is one, because a dump that can show it should.
+func promptDumpWire(args build.Args, r build.Resolved, msgs []provider.Message) (string, error) {
+	req := provider.Request{
+		Model:            r.Model,
+		System:           r.SystemPrompt,
+		Messages:         msgs,
+		Tools:            r.ToolRegistry.Specs(),
+		Reasoning:        r.Reasoning,
+		ReasoningSet:     r.ReasoningSet,
+		ReasoningSummary: r.ReasoningSummary,
+		Temperature:      r.Temperature,
+	}
+	if p := strings.TrimSpace(args.Session); p != "" {
+		if meta, err := core.ReadSessionMeta(p); err == nil {
+			req.PromptCacheKey = meta.ID
+		}
+	}
+	b, err := provider.DumpRequestJSONL(r.Provider, req)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(string(b), "\n"), nil
+}
 
 // runPromptDump implements --dump-prompt: assemble the prompt that would be
 // sent for the pending turn, render the source-of-truth manifest, print it to
@@ -43,6 +81,20 @@ func promptDumpText(args build.Args) (string, error) {
 			Meta:    map[string]string{"source": "card:greeting"},
 		})
 	}
+	// A --session on the command line means "the prompt for the pending turn of
+	// THIS conversation". Without replaying it the dump answers a question
+	// nobody asked — the prompt for turn 1 of a session that is on turn 80 —
+	// which is exactly the gap that made it useless for the prompt-cache work.
+	// ReadSessionMessages is the read-only loader, so pointing a dump at a
+	// session that is live (or that the user cannot write) neither takes an
+	// append handle on it nor needs one.
+	if p := strings.TrimSpace(args.Session); p != "" {
+		prior, err := core.ReadSessionMessages(p)
+		if err != nil {
+			return "", err
+		}
+		msgs = append(msgs, prior...)
+	}
 	// The pending user turn (from -p / positional) so the tail keyword scan and
 	// the messages section reflect the turn being assembled.
 	if p := strings.TrimSpace(args.Prompt); p != "" {
@@ -53,6 +105,9 @@ func promptDumpText(args build.Args) (string, error) {
 	}
 	if args.DumpPrompt == "sizes" {
 		return r.BuildPromptSizes(msgs).Text(), nil
+	}
+	if args.DumpPrompt == "wire" {
+		return promptDumpWire(args, r, msgs)
 	}
 	m := r.BuildPromptManifest(msgs)
 	switch args.DumpPrompt {
