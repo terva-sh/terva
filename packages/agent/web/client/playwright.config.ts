@@ -79,6 +79,11 @@ export default defineConfig({
     // "localhost" (IPv6 ::1 on some machines), which the 127.0.0.1 url never sees.
     command: `npm run build && npm run preview -- --host 127.0.0.1 --port ${PORT} --strictPort`,
     url: `http://127.0.0.1:${PORT}`,
+    // Local reuse is a speed choice for repeat runs, and it has a sharp edge: a
+    // server left over from an earlier build serves THAT bundle, so the suite
+    // silently reports on code you are no longer running. `just ci-web-smoke`
+    // refuses to start when this port is occupied for exactly that reason —
+    // keep the two in step if this line or PORT changes.
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },

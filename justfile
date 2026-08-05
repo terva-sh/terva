@@ -434,11 +434,66 @@ ci-web-client:
         echo "  with Node before you push."; \
     fi
 
+# The Playwright smokes, on a DEV machine only. Node-, browser- and CI-gated.
+#
+# Why it is in `ci` at all: a green local gate should mean what a green remote
+# one means. It did not. Two new buttons were given the class of an EXISTING
+# control (.stage-steer-btn, .model-btn) — both are locators the smokes use, so
+# they started resolving to two elements and every Stage drawer smoke failed a
+# strict-mode check. `just ci` was green throughout, because the smokes were
+# nowhere in it. That is the same hole ci-web-client was folded in to close, and
+# this closes the other half of it.
+#
+# Why it SKIPS under CI: the remote gate has a dedicated "Web Client Smoke" job
+# with a musl-chromium setup this recipe cannot reproduce, and running both
+# would double a two-minute job for no extra signal. `CI` is the same signal
+# playwright.config.ts already keys forbidOnly/retries/reporter on.
+#
+# Every skip is LOUD and says what to run instead. A quiet skip is exactly how
+# a gate comes to certify a surface it never touched.
+#
+# And it REFUSES — nonzero, not a skip — when the preview port is already
+# serving. playwright.config.ts sets reuseExistingServer locally (a deliberate
+# speed choice: `just web-smoke` should not rebuild and re-serve for a run you
+# are repeating), which means a leftover `vite preview` gets attached to instead
+# of the current dist. The suite then reports on whatever bundle that process is
+# holding, and the verdict is wrong in BOTH directions: green on stale-but-good
+# code, red on new-and-good code. I hit the red half once while testing this
+# recipe. A gate cannot be allowed to answer for a bundle it did not build, so
+# this one declines to answer at all.
+ci-web-smoke:
+    @if [ -n "${CI:-}" ]; then \
+        echo "ci-web-smoke: SKIPPED — under CI, where the 'Web Client Smoke' job owns this."; \
+    elif ! command -v npm >/dev/null 2>&1; then \
+        echo "ci-web-smoke: SKIPPED — no npm on this machine."; \
+        echo "  The ci workflow DOES run the Playwright smokes. If you touched the"; \
+        echo "  panel or Stage UI, run 'just web-smoke' somewhere with Node."; \
+    elif [ ! -d packages/agent/web/client/node_modules ]; then \
+        echo "ci-web-smoke: SKIPPED — packages/agent/web/client/node_modules is absent."; \
+        echo "  Run 'npm --prefix packages/agent/web/client ci' first."; \
+    elif ! (cd packages/agent/web/client && node -e "try{require('fs').accessSync(require('@playwright/test').chromium.executablePath())}catch(e){process.exit(1)}") >/dev/null 2>&1; then \
+        echo "ci-web-smoke: SKIPPED — no Playwright browser on this machine."; \
+        echo "  'just web-smoke' installs the browsers and runs the full suite;"; \
+        echo "  after that this gate runs chromium-only in ~30s on every 'just ci'."; \
+        echo "  Until then a green 'just ci' says NOTHING about the panel or Stage UI."; \
+    elif node -e "const n=require('net'),s=n.connect(Number(process.env.SMOKE_PORT||4173),'127.0.0.1');s.on('connect',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1));setTimeout(()=>{s.destroy();process.exit(1)},1500)" 2>/dev/null; then \
+        echo "ci-web-smoke: REFUSED — 127.0.0.1:${SMOKE_PORT:-4173} is already serving."; \
+        echo "  The suite reuses an existing server locally, so it would attach to that"; \
+        echo "  one instead of building and serving the current dist — and report on"; \
+        echo "  whichever bundle it is holding. That is wrong in both directions: green"; \
+        echo "  on stale-but-good code, red on new-and-good code."; \
+        echo "  Stop it (a leftover 'vite preview' is the usual culprit), or send this"; \
+        echo "  run somewhere else with SMOKE_PORT=<free port>."; \
+        exit 1; \
+    else \
+        npm --prefix packages/agent/web/client run test:smoke -- --project=chromium; \
+    fi
+
 # fmt-check + vet + race tests + connector tag-matrix build + acp + web tag
 # build/test + the web client's vitest suite and dist determinism check
-# (Node-gated) + terva_pprof tag build + public packaging drift check, as a
-# pre-push gate.
-ci: lint test ci-acp ci-web ci-scripting ci-workflows ci-web-client
+# (Node-gated) + the Playwright smokes (Node-, browser- and CI-gated) +
+# terva_pprof tag build + public packaging drift check, as a pre-push gate.
+ci: lint test ci-acp ci-web ci-scripting ci-workflows ci-web-client ci-web-smoke
     go build -tags terva_no_telegram,terva_no_discord ./...
     # terva_pprof guard: the profiling endpoint (cmd/terva/pprof.go) only
     # compiles under this tag, so the default build can't catch a break in
