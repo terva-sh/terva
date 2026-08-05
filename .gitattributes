@@ -18,6 +18,13 @@ packages/agent/ctrlproto/testdata/*.json text eol=lf
 # endings part of what is being distributed, not just a local build detail.
 packages/agent/connproto/testdata/*.jsonl text eol=lf
 
+# extproto publishes one too, for extension authors, and it arrived a release
+# after connproto's — same shape, same test name, same trap, and unpinned. A
+# CRLF checkout marks the fixture stale on Windows only, which is the release
+# gate, which is the most expensive place to learn it. golden_pin_test.go now
+# fails on the commit that adds an unpinned corpus instead.
+packages/agent/extproto/testdata/*.jsonl text eol=lf
+
 # i18n reference catalogs are byte-compared against the linter's LF
 # output (`terva-i18n-lint -check`, the CI gate); a CRLF checkout (the
 # Windows CI default) marks every catalog stale. Pin them to LF.
