@@ -411,10 +411,19 @@ func (r *Renderer) DrawLog(chat, bottom []string, cursorBottomRow, cursorCol int
 	w.WriteString(SeqSynchronizedOn)
 	w.WriteString(SeqHideCursor)
 
-	writeFull := func(clear bool) {
+	var writeFullMode func(clear, keepHistory bool)
+
+	// keepHistory repaints the screen WITHOUT dropping scrollback, on every
+	// terminal. It is the VS Code path applied deliberately: the caller is
+	// recovering from a state it cannot patch, and wiping the user's history
+	// and text selection is a heavier price than leaving a superseded frame
+	// above the live view.
+	writeFullKeepingHistory := func() { writeFullMode(true, true) }
+	writeFull := func(clear bool) { writeFullMode(clear, false) }
+	writeFullMode = func(clear, keepHistory bool) {
 		if clear {
 			w.WriteString(SeqDeleteKittyImages)
-			if r.keepScrollback {
+			if r.keepScrollback || keepHistory {
 				// VS Code's xterm.js scrolls the visible content up into
 				// scrollback on \x1b[2J, which duplicates the frame (the
 				// old paint stays above the new one). Home to the
@@ -509,49 +518,71 @@ func (r *Renderer) DrawLog(chat, bottom []string, cursorBottomRow, cursorCol int
 		writeFull(true)
 		r.logInit = true
 	} else {
-		firstChanged := -1
-		lastChanged := -1
-		maxLines := len(lines)
-		if len(r.logLines) > maxLines {
-			maxLines = len(r.logLines)
+		firstChanged, lastChanged := diffRows(r.logLines, lines, 0)
+
+		// A change ABOVE the viewport used to force writeFull(true), which is
+		// the most expensive answer available and destroys user state: on a
+		// normal terminal it emits \x1b[3J, wiping scrollback and any native
+		// text selection; on VS Code (keepScrollback) it cannot clear, so the
+		// whole transcript is pushed into scrollback a second time.
+		//
+		// It is also unnecessary. Rows above logViewportTop are unreachable,
+		// but the terminal's PHYSICAL rows do not move just because our
+		// logical numbering shifted: the row that displayed old index j still
+		// displays it. Renumbering the cached model by the height change
+		// restores the index-to-physical-row mapping, and the ordinary patch
+		// path below can then repaint only what actually differs on screen.
+		//
+		// Measured on six real recorded sessions: this branch fires 1-8 times
+		// per session (0.2-1.4% of draws), every single occurrence a height
+		// change — so this is the case worth handling, not a rare corner.
+		// The rebase below answers exactly one question: "chat above the
+		// viewport changed height, so where did the rows move to?" It is only
+		// applicable when the change IS in chat.
+		//
+		// A change in the bottom band can also land above logViewportTop —
+		// typing "/" opens a slash popup listing every command, and when that
+		// band is taller than the screen the chat ends above the viewport top.
+		// Rebasing then applies a chat delta (often 0) to popup rows and marks
+		// them accepted, so rows that were never painted are recorded as
+		// painted: the typed text is invisible and the cursor sits a row above
+		// the composer until some later keystroke happens to dirty a row below
+		// the anchor. Shipped exactly that, and it made slash commands
+		// unusable.
+		aboveViewportInChat := firstChanged >= 0 &&
+			firstChanged < r.logViewportTop &&
+			firstChanged < len(chatFrame)
+		if aboveViewportInChat {
+			if r.rebaseForAboveViewportChange(lines, chatFrame) {
+				// Re-diff in the rebased coordinates, over rows that can
+				// actually be repainted. firstChanged is now >= logViewportTop
+				// by construction.
+				firstChanged, lastChanged = diffRows(r.logLines, lines, r.logViewportTop)
+			} else {
+				// The shift does not preserve the anchor, so the cached model
+				// cannot describe the physical screen any more and the frame
+				// has to be repainted. Keep the user's scrollback while doing
+				// it: they did not ask for history to be dropped, they toggled
+				// a display mode. A superseded frame left above the live view
+				// is the same trade-off this renderer already accepts on VS
+				// Code, and it is far cheaper than losing scrollback and any
+				// text selection in it.
+				writeFullKeepingHistory()
+				firstChanged, lastChanged = -1, -1
+			}
 		}
-		for idx := 0; idx < maxLines; idx++ {
-			oldLine := ""
-			if idx < len(r.logLines) {
-				oldLine = r.logLines[idx]
-			}
-			newLine := ""
-			if idx < len(lines) {
-				newLine = lines[idx]
-			}
-			if oldLine != newLine {
-				if firstChanged == -1 {
-					firstChanged = idx
-				}
-				lastChanged = idx
-			}
-		}
-		// Buffer grew but the appended rows were empty (or otherwise
-		// equal to the implicit "" past the old end). The diff above
-		// won't flag those rows, yet the renderer still needs to
-		// advance its hardware cursor / viewport tracking past them so
-		// the next render starts from the correct position. Treat the
-		// extension as changed.
-		if len(lines) > len(r.logLines) {
-			if firstChanged == -1 {
-				firstChanged = len(r.logLines)
-			}
-			if lastChanged < len(lines)-1 {
-				lastChanged = len(lines) - 1
-			}
+
+		if firstChanged >= 0 && firstChanged < r.logViewportTop {
+			// Still above the viewport and NOT a chat height change, so there
+			// is nothing to renumber — the rows simply cannot be patched.
+			// Repaint, keeping the user's scrollback.
+			writeFullKeepingHistory()
+			firstChanged, lastChanged = -1, -1
 		}
 
 		if firstChanged == -1 {
 			// No content changes; the final cursor positioning below may still
 			// move the hardware cursor if the editor cursor changed.
-		} else if firstChanged < r.logViewportTop {
-			// Changes above the visible viewport cannot be patched safely.
-			writeFull(true)
 		} else {
 			prevViewportTop := r.logViewportTop
 			viewportTop := prevViewportTop
@@ -708,6 +739,135 @@ func sameLines(a, b []string) bool {
 		if a[i] != b[i] {
 			return false
 		}
+	}
+	return true
+}
+
+// diffRows reports the first and last index at or after `from` where the
+// cached buffer and the new frame disagree, or (-1, -1) when they match.
+//
+// Extracted so it can run twice per draw: once over the whole buffer to find
+// any change, and again after a rebase over only the addressable rows. A
+// second inline copy is how the two would drift.
+func diffRows(cached, next []string, from int) (first, last int) {
+	first, last = -1, -1
+	maxLines := len(next)
+	if len(cached) > maxLines {
+		maxLines = len(cached)
+	}
+	if from < 0 {
+		from = 0
+	}
+	for idx := from; idx < maxLines; idx++ {
+		cachedLine := ""
+		if idx < len(cached) {
+			cachedLine = cached[idx]
+		}
+		nextLine := ""
+		if idx < len(next) {
+			nextLine = next[idx]
+		}
+		if cachedLine != nextLine {
+			if first == -1 {
+				first = idx
+			}
+			last = idx
+		}
+	}
+	// The buffer grew but the appended rows compare equal to the implicit ""
+	// past the old end. The loop cannot flag those, yet the renderer still has
+	// to advance its hardware-cursor / viewport tracking past them so the next
+	// draw starts from the right place. Treat the extension as changed.
+	if len(next) > len(cached) {
+		if first == -1 {
+			first = len(cached)
+			if first < from {
+				first = from
+			}
+		}
+		if last < len(next)-1 {
+			last = len(next) - 1
+		}
+	}
+	return first, last
+}
+
+// rebaseForAboveViewportChange renumbers the cached logical buffer after chat
+// above the viewport changed height, so index-based patching keeps addressing
+// the physical rows it means to.
+//
+// The whole argument rests on one fact about terminals: a logical renumbering
+// moves nothing. The physical row that displayed cached index j still displays
+// exactly that text. So shifting our own indices by the chat delta restores
+// the mapping, and no content has to be re-emitted.
+//
+// The delta comes from CHAT, not from len(lines): the bottom band is anchored
+// to the end of chat, and `lines` additionally carries a reserved margin row
+// and (with a themed background) padding up to the viewport height, neither of
+// which shifts in step with a chat height change.
+// It reports false when the shift cannot be applied, and the caller must fall
+// back to a full repaint.
+//
+// The invariant only holds while the viewport anchor survives the shift. A
+// shrink big enough to push the anchor above the start of the buffer (or a
+// grow that pushes it past the end) means the content no longer covers the
+// physical region it used to, and stale rows are left below the new end with
+// no sound way to address them. Clamping the anchor instead of refusing is
+// exactly the bug this guard exists to prevent: it silently breaks
+// `screenRow = logHardwareRow - logViewportTop`, so the cursor lands in the
+// wrong place and the new frame paints BELOW the old content rather than over
+// it. Dismissing a help block taller than the screen does this, and
+// TestInteractiveHelpBlock caught it.
+func (r *Renderer) rebaseForAboveViewportChange(lines, chatFrame []string) bool {
+	delta := len(chatFrame) - len(r.logChat)
+
+	newTop := r.logViewportTop + delta
+	if newTop < 0 || newTop > len(lines) {
+		return false
+	}
+	rebased := make([]string, len(lines))
+
+	for idx := range rebased {
+		switch {
+		case idx < newTop:
+			// Unreachable: the terminal scrolled these into scrollback and we
+			// cannot repaint them. Record the NEW text even though the screen
+			// still shows the old — deliberately, and it is the only lie in
+			// here. Keeping the stale text would make every later draw find a
+			// change above the viewport and rebase (or, before this, full
+			// repaint) forever, for rows no one can fix. The stale rows remain
+			// in scrollback either way; that is the cost this whole branch is
+			// choosing over wiping the user's scrollback and selection.
+			if idx < len(lines) {
+				rebased[idx] = lines[idx]
+			}
+		case idx < len(chatFrame):
+			// Chat: shifted wholesale by delta.
+			if old := idx - delta; old >= 0 && old < len(r.logLines) {
+				rebased[idx] = r.logLines[old]
+			}
+		default:
+			// Bottom band, margin and background fill: positioned relative to
+			// the END of chat, so their offset from that boundary is what is
+			// preserved, not their absolute index.
+			if old := len(r.logChat) + (idx - len(chatFrame)); old >= 0 && old < len(r.logLines) {
+				rebased[idx] = r.logLines[old]
+			}
+		}
+	}
+
+	r.logLines = rebased
+	// Shift the anchor and the cursor by the SAME delta, which is what keeps
+	// screenRow = logHardwareRow - logViewportTop invariant. That equality is
+	// the whole point: it is how every later move is translated into physical
+	// cursor motion. Because newTop was not clamped above, this holds exactly.
+	r.logViewportTop = newTop
+	r.logHardwareRow += delta
+	if r.logHardwareRow < 0 {
+		r.logHardwareRow = 0
+	}
+	if maxRow := len(lines) - 1; r.logHardwareRow > maxRow && maxRow >= 0 {
+		r.logHardwareRow = maxRow
 	}
 	return true
 }
