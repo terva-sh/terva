@@ -257,3 +257,50 @@ func TestTransportRecordingShipsOnAndCanBeSwitchedOff(t *testing.T) {
 		t.Error("engine_features.transport_recording=false must switch it off at build")
 	}
 }
+
+// Provider compaction ships OFF and must be switchable ON.
+//
+// The inverse of every test above, and it needs one more assertion than they
+// do. A default-ON feature has a test that fails the moment the default flips;
+// a default-OFF one has a test that would keep passing if the feature were
+// deleted outright, since "off" and "absent" resolve identically at the agent.
+// So the declaration is asserted separately from the behavior.
+//
+// What the default is protecting: this strategy's checkpoint is an encrypted
+// blob only the issuing provider can read, and unlike cache_aware_compaction —
+// which shipped on with its cost side measured and only summary quality open —
+// the saving this exists for has not been measured at all. Nobody gets an
+// unportable transcript they did not ask for.
+func TestProviderCompactionShipsOffAndCanBeSwitchedOn(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	f, ok := EngineFeatureByID("provider_compaction")
+	if !ok {
+		t.Fatal("provider_compaction must be a declared engine feature — without the declaration there is no way to turn it on, and the off assertion below would pass vacuously")
+	}
+	if f.Default {
+		t.Error("provider_compaction must default OFF until the cache saving it exists for is measured")
+	}
+
+	r, err := Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if r.NewAgent().ProviderCompactionEnabled() {
+		t.Error("provider_compaction is on at build with no override asking for it")
+	}
+
+	if err := config.MutateConfig(func(c *config.Config) {
+		c.EngineFeatures = map[string]bool{"provider_compaction": true}
+	}); err != nil {
+		t.Fatalf("override config: %v", err)
+	}
+	r, err = Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	if err != nil {
+		t.Fatalf("Resolve with override: %v", err)
+	}
+	if !r.NewAgent().ProviderCompactionEnabled() {
+		t.Error("engine_features.provider_compaction=true must switch it on at build — an A/B that cannot enable its own arm cannot be run")
+	}
+}

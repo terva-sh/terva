@@ -348,3 +348,70 @@ func TestSessionUsageDetailUnchangedForLegacyCompactionRows(t *testing.T) {
 		t.Errorf("cumulative.InputTokens = %d; want %d", cumulative.InputTokens, cum2.InputTokens)
 	}
 }
+
+// A server-side compaction's row has to say how big the thing it replaced was,
+// because nothing else on it can.
+//
+// The client strategies leave a prose summary in the row's own messages: read it
+// back and you know roughly what was there. This one leaves an encrypted blob
+// terva cannot decrypt, so the row is otherwise an opaque item of unknown
+// provenance replacing an unknown amount of history. The count plus the
+// append-only file — the superseded turns are still above this row — is what
+// keeps such a session auditable without paying a summarizer to describe, for a
+// human, a transcript the model already has.
+func TestServerCompactedRowSaysWhatItReplaced(t *testing.T) {
+	s, path := newUsageSession(t)
+
+	if err := s.AppendCompaction(
+		[]provider.Message{{Role: provider.RoleAssistant, Content: []provider.Content{
+			provider.CompactionBlock{ID: "cmp_1", Encrypted: "gAAAAABopaque==", Provider: "openai-codex"}}}},
+		CompactResult{
+			Usage:              provider.Usage{InputTokens: 12_000, OutputTokens: 800, CostUSD: 0.02},
+			Strategy:           CompactProvider,
+			SupersededMessages: 47,
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"strategy":"provider"`,
+		`"superseded":47`,
+		// Provenance rides the block itself: a blob whose issuing provider is
+		// unknown cannot be told apart from one this provider can replay, and
+		// guessing is the guess that loses the conversation.
+		`"provider":"openai-codex"`,
+		`"encrypted_content":"gAAAAABopaque=="`,
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("the compaction row is missing %s:\n%s", want, raw)
+		}
+	}
+
+	// Omitted where it says nothing, like every other optional key on the row: a
+	// zero would have to be read as "replaced nothing", which no compaction did.
+	s2, path2 := newUsageSession(t)
+	if err := s2.AppendCompaction(
+		[]provider.Message{{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "## Context Summary"}}}},
+		CompactResult{Strategy: CompactWarm},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := s2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw2, err := os.ReadFile(path2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw2), `"superseded"`) {
+		t.Errorf("an unset count was written anyway:\n%s", raw2)
+	}
+}

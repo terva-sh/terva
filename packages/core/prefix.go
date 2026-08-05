@@ -319,6 +319,44 @@ func (a *Agent) CacheAwareCompactionEnabled() bool {
 
 func (a *Agent) cacheAwareCompactionOn() bool { return a.CacheAwareCompactionEnabled() }
 
+// SetProviderCompaction toggles handing compaction to the backend (the engine
+// feature provider_compaction). Off in both places — core's zero value and the
+// shipped default — which is the point rather than an oversight.
+//
+// What it changes is not which summarizer runs but what a checkpoint IS. The
+// client strategies produce prose: terva can read it, store it, show it, and
+// replay it against any model on any provider. This produces an encrypted blob
+// only the issuing backend can decrypt, standing in for the assistant turns it
+// removed — cheaper, bounded, and not portable. A conversation compacted this
+// way and then pointed at a different provider has to be rebuilt from the
+// session file and compacted again (ReadSessionPreCompaction), because the
+// alternative is a transcript that reads continuous while missing half its
+// history.
+//
+// The reason it ships off is narrower than that, and worth stating plainly: the
+// saving it exists for is UNMEASURED. That the endpoint works, what it returns,
+// how the blob scales, and that the result is provider-bound but not
+// model-bound are all measured. Whether replacing a client summary with it
+// actually recovers the cache reads a compaction currently costs is not, and
+// that is the only question a default flip should turn on.
+func (a *Agent) SetProviderCompaction(on bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.providerCompaction = on
+}
+
+// ProviderCompactionEnabled reports whether compaction is handed to the
+// backend. Exported for the same reason as CacheAwareCompactionEnabled: a host
+// can show which strategy is in play, and the build funnel's default — the only
+// place the shipped default lives — becomes testable.
+func (a *Agent) ProviderCompactionEnabled() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.providerCompaction
+}
+
+func (a *Agent) providerCompactionOn() bool { return a.ProviderCompactionEnabled() }
+
 // SetPrefixChangeGuard toggles the pre-turn prefix-change guard (the engine
 // feature prefix_change_guard, default ON — but see the economics below, which
 // keep it inert until cache-aware compaction is enabled too).

@@ -53,6 +53,17 @@ type CompactResult struct {
 	// than a comfortable assumption. See docs/plans/cache-aware-compaction-ab.md.
 	Strategy       CompactStrategy
 	FallbackReason string
+	// SupersededMessages is how many transcript messages this compaction
+	// replaced.
+	//
+	// It exists for the provider strategy, where the checkpoint is an opaque
+	// blob: the row's own messages tell a reader nothing about the size of what
+	// is missing, and TokensBefore is a chars/4 estimate rather than a count of
+	// turns. Recording it makes the row self-describing — "this replaced 47
+	// messages, and they are still above it in the file" — which is what keeps a
+	// server-compacted session auditable without paying for a second, human-
+	// readable summary of the same transcript.
+	SupersededMessages int
 	// Truncated reports the summarizer hit compactMaxTokens and the checkpoint
 	// stops mid-thought.
 	//
@@ -81,7 +92,30 @@ const (
 	// first-class result of the A/B, not an error count — it directly discounts
 	// the saving the warm arm appears to deliver.
 	CompactWarmFellBack CompactStrategy = "warm_fallback_cold"
+	// CompactProvider is the backend's own compaction: terva hands the
+	// transcript to the provider and gets a replacement transcript back, instead
+	// of summarizing anything itself.
+	//
+	// It is a different KIND of compaction from the two above, not a third
+	// summarizer. Those produce prose terva can read, store, translate and
+	// replay against any model. This produces an opaque blob only the issuing
+	// provider can decrypt, standing in for the assistant turns it removed —
+	// which is why it is gated, off by default, and why the file it writes has
+	// to stay recoverable (see ReadSessionPreCompaction).
+	CompactProvider CompactStrategy = "provider"
 )
+
+// providerFellBackTo names a compaction that TRIED the backend, failed, and was
+// finished by one of the client-side summarizers.
+//
+// The name composes rather than collapsing, the way warm_fallback_cold does:
+// the "provider_fallback_" prefix says the backend attempt happened and did not
+// land, and the suffix says which summarizer paid for the result. Both halves
+// are answers the A/B needs — how often the endpoint refuses, and what the
+// refusal costs — and a single flat "it fell back" would keep neither.
+func providerFellBackTo(client CompactStrategy) CompactStrategy {
+	return CompactStrategy("provider_fallback_" + string(client))
+}
 
 // Compact summarizes the agent's transcript via the LLM and replaces
 // it with a single synthetic user message carrying the summary. A
@@ -159,6 +193,44 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 		fallbackReason string
 		truncated      bool
 	)
+
+	// The backend's own compaction, when the client has one and the operator
+	// asked for it.
+	//
+	// Tried FIRST because it subsumes both summarizers rather than competing
+	// with them: it produces the checkpoint itself, so there is no summarization
+	// call for the warm path to make cheap. And tried BEFORE keepTail is applied
+	// — the backend decides what it keeps verbatim (measured: every user turn),
+	// so terva's tail policy has nothing to say here.
+	//
+	// Every failure is a fallback, never an error. A compaction is usually
+	// running because the conversation has already outgrown its window, which is
+	// the worst possible moment to refuse one — and the client summarizers below
+	// are still there, still correct, and merely more expensive.
+	var providerReason string
+	if a.providerCompactionOn() {
+		if sc, ok := provider.ServerCompactorFor(prefix.client); ok {
+			next, pres, perr := compactViaProvider(ctx, sc, prefix, msgs, a.ReadOnly, a.CWD)
+			// The attempt is billed whether or not it lands, so its spend joins
+			// the total either way — a failed compaction that reported nothing
+			// would hide real money in exactly the arm being evaluated.
+			//
+			// AddTotalOnly, not Add: this is the same invariant the summarizer
+			// paths hold (drainSummary), and it matters MORE here. The endpoint
+			// reads the whole transcript, so its input count is transcript-sized
+			// by construction — as a context sample it would re-arm every
+			// threshold at stale-high on the transcript that was just condensed,
+			// and fire another compaction on the next turn.
+			a.cost.AddTotalOnly(pres.Usage)
+			usage = usage.Add(pres.Usage)
+			if perr == nil {
+				pres.Usage = usage
+				a.installCompaction(next, pres)
+				return pres, nil
+			}
+			providerReason = providerFallbackReason(perr)
+		}
+	}
 
 	// One transient-retry allowance for the WHOLE compaction, shared by both
 	// summarizers. See drainSummaryRetrying for why it is shared rather than
@@ -249,13 +321,23 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 	// SessionUsageDetail subtracts this row's usage back out of the last-turn
 	// delta. Report less than was spent and the context gauge inherits the
 	// difference.
+	// An abandoned server-side attempt is recorded on the row that DID produce
+	// the checkpoint, because it has no row of its own — the compaction row is
+	// written once, by whoever finished. Composing the names keeps both facts:
+	// that the backend was asked and declined, and what the decline cost.
+	if providerReason != "" {
+		strategy = providerFellBackTo(strategy)
+		fallbackReason = joinFallbackReasons(providerReason, fallbackReason)
+	}
+
 	res = CompactResult{
-		Summary:        summary,
-		TokensBefore:   tokensBefore,
-		Usage:          usage,
-		Strategy:       strategy,
-		FallbackReason: fallbackReason,
-		Truncated:      truncated,
+		Summary:            summary,
+		TokensBefore:       tokensBefore,
+		Usage:              usage,
+		Strategy:           strategy,
+		FallbackReason:     fallbackReason,
+		Truncated:          truncated,
+		SupersededMessages: len(summarizable),
 	}
 
 	// Replace transcript: one synthetic user message with the summary, the
@@ -319,6 +401,21 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 	next = append(next, synthetic)
 	next = append(next, tail...)
 
+	a.installCompaction(next, res)
+	return res, nil
+}
+
+// installCompaction swaps next in as the live transcript and publishes the
+// compaction: re-baseline the gauge, then fire the observer that persists the
+// checkpoint.
+//
+// Shared by every strategy on purpose. The three steps are separable in
+// appearance and not in fact — a transcript replaced without the re-baseline
+// re-fires auto-compact on the condensed transcript, and one replaced without
+// the observer is condensed in memory and whole on disk, so the next resume
+// silently un-compacts it. A second strategy that open-coded two of the three
+// would be the obvious place for that to go wrong.
+func (a *Agent) installCompaction(next []provider.Message, res CompactResult) {
 	a.mu.Lock()
 	a.messages = next
 	a.rev++
@@ -339,8 +436,6 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 	// along so the durable checkpoint can record what the compaction cost —
 	// on the compaction row, NOT a usage row (see CompactResult).
 	a.fireTranscriptCompacted(persisted, res)
-
-	return res, nil
 }
 
 // compactMaxTokens caps a summary. A truncated checkpoint is worse than a
@@ -485,6 +580,150 @@ func warmFallbackReason(stop provider.StopReason, err error) string {
 	default:
 		return "empty_summary"
 	}
+}
+
+// providerCompactionMaxShare caps how big a server-side compaction's result may
+// be, as a share of what it replaced, before terva throws it away and
+// summarizes client-side instead.
+//
+// This is not defensive programming against a hypothetical. Measured against the
+// codex endpoint, the returned blob is BOUNDED (~2.1–3.5 KB across a 33x range
+// of input size) but the user turns come back VERBATIM, every one of them — so
+// the compaction ratio is entirely a function of how much of the transcript the
+// user typed. On a 4-turn prose fixture the result was LARGER than its input;
+// break-even landed around 20 turns; only past that does it win. A tool-heavy
+// coding session sits far on the winning side, and a chat-heavy one does not.
+//
+// Without a floor, the losing case is not merely disappointing, it LOOPS:
+// auto-compact fires on a context fraction, a compaction that reclaims nothing
+// leaves the fraction where it was, and the next turn fires another one. The
+// client summarizer is more expensive per call and bounds everything, which is
+// the right trade exactly when the backend's is not paying.
+const providerCompactionMaxShare = 0.8
+
+// compactViaProvider runs one server-side compaction and assembles the
+// transcript it replaces the conversation with.
+//
+// Returns the replacement transcript and a partly-filled CompactResult. The
+// result carries Usage even on the error paths, because the call is billed
+// before it can be judged unusable.
+func compactViaProvider(ctx context.Context, sc provider.ServerCompactor, prefix promptPrefix, msgs []provider.Message, readOnly *ReadOnlySet, cwd string) ([]provider.Message, CompactResult, error) {
+	// No tools, no reasoning config: the endpoint takes neither. What it does
+	// take is the same model, instructions and cache key the conversation has
+	// been running on, and repairToolUseResultPairs because those are the bytes
+	// the provider has already seen (see warmCompactRequest, same reasoning).
+	out, usage, err := sc.CompactServerSide(ctx, provider.Request{
+		Model:          prefix.model,
+		System:         prefix.system,
+		PromptCacheKey: prefix.cacheKey,
+		Messages:       repairToolUseResultPairs(msgs),
+	})
+	res := CompactResult{Usage: usage}
+	if err != nil {
+		return nil, res, err
+	}
+
+	// The ledger rides along here for the reason it rides along on the client
+	// paths, only more so: the backend drops the assistant turns wholesale, so
+	// EVERY executed tool call is inside the blob rather than the last few. It is
+	// terva's own evidence of what ran — a model can omit a line from a summary,
+	// and the harness cannot omit a block it recorded — and it is what stops a
+	// mid-turn compaction from ending with the resuming agent re-running a side
+	// effect it has already had.
+	//
+	// Over all of msgs, not a summarizable prefix of it: nothing survives
+	// verbatim on this path, so there is no tail whose calls are still visible.
+	next := append([]provider.Message(nil), out...)
+	next = append(next, providerCompactionNotice(executedActionsLedger(msgs, readOnly, cwd)))
+
+	before, after := estimateTokens(msgs), estimateTokens(next)
+	if after > int(float64(before)*providerCompactionMaxShare) {
+		return nil, res, fmt.Errorf("%w: %d tokens in, %d out", errCompactionNotWorthIt, before, after)
+	}
+
+	res.Strategy = CompactProvider
+	// Sized over msgs rather than over a keepTail-trimmed slice, because msgs is
+	// what was actually compacted away. The number means the same thing as on
+	// the other rows — how big the thing this replaced was — and is measured on
+	// the set each strategy really consumed.
+	res.TokensBefore = len(serializeTranscript(msgs)) / 4
+	res.SupersededMessages = len(msgs)
+	// Deliberately NOT a summary of the conversation. Generating one would mean
+	// paying the transcript-sized read this strategy exists to avoid, purely so a
+	// human could read what the model already has. The auditable copy is the
+	// session file, which is append-only: the turns are still above the
+	// compaction row, and ReadSessionPreCompaction reads them back.
+	res.Summary = i18n.T("The provider compacted this conversation on its side. The summary is encrypted and cannot be shown here; the original turns remain in the session file.")
+	return next, res, nil
+}
+
+// errCompactionNotWorthIt marks a server-side compaction that came back too
+// large to be worth keeping. A sentinel rather than a string so the fallback
+// classifier can name it without matching prose.
+var errCompactionNotWorthIt = errors.New("server-side compaction reclaimed too little")
+
+// providerCompactionNotice is the divider a server-side compaction leaves in
+// the transcript, carrying the executed-actions ledger when there is one.
+//
+// It is APPENDED, after the replacement transcript, not prepended like the
+// client paths' synthetic summary. That ordering is the whole feature: the
+// backend's items have to stay the exact prefix of the next request, and a
+// message inserted in front of them would invalidate the cached prefix this
+// strategy exists to preserve.
+//
+// It is written even with an empty ledger, because the transcript must say a
+// compaction happened. Display surfaces render a MetaCompaction message as a
+// divider rather than as a user turn, and on this path there is no other
+// message to carry that mark — the blob is opaque and the user turns around it
+// are genuinely the user's.
+func providerCompactionNotice(ledger string) provider.Message {
+	body := compactionSummaryHeader + "\n\n" +
+		i18n.P("compact.provider.notice",
+			"The provider compacted the conversation above. The compaction summary holds the earlier assistant turns and their tool calls. You cannot read it as text.")
+	if ledger != "" {
+		body += "\n\n" + ledger
+	}
+	return provider.Message{
+		Role:    provider.RoleUser,
+		Content: []provider.Content{provider.TextBlock{Text: body}},
+		Time:    time.Now(),
+		Meta:    map[string]string{MetaCompaction: "true"},
+	}
+}
+
+// providerFallbackReason classifies why the server-side compaction was
+// abandoned, in the same terms warmFallbackReason uses and for the same reason:
+// the A/B needs to separate "the endpoint refused" from "the endpoint answered
+// and the answer was not worth keeping". The first is a availability ceiling,
+// the second is the measured shape of the strategy (see
+// providerCompactionMaxShare) and says the workload was wrong for it.
+func providerFallbackReason(err error) string {
+	switch {
+	case errors.Is(err, errCompactionNotWorthIt):
+		return "provider_reclaimed_too_little"
+	case IsPayloadTooLargeError(err) || IsContextLengthError(err):
+		return "provider_rejected_too_large"
+	default:
+		var pe *provider.ProviderError
+		if (errors.As(err, &pe) && pe.Transient) || provider.IsTransportError(err) {
+			return "provider_unavailable"
+		}
+		return "provider_error"
+	}
+}
+
+// joinFallbackReasons keeps both halves of a two-stage fallback. Dropping
+// either would make the row lie by omission: only the server-side reason says
+// why the cheap path was not taken, and only the client one says why the
+// expensive path then cost what it did.
+func joinFallbackReasons(reasons ...string) string {
+	var kept []string
+	for _, r := range reasons {
+		if r != "" {
+			kept = append(kept, r)
+		}
+	}
+	return strings.Join(kept, "; ")
 }
 
 // drainSummary runs one summarization request to completion and returns the
@@ -906,7 +1145,21 @@ what the command does.`
 // chars of serialized text). Only threshold checks consume it, and the
 // next completed request overwrites it with provider-reported usage.
 func estimateTokens(msgs []provider.Message) int {
-	return len(serializeTranscript(msgs)) / 4
+	n := len(serializeTranscript(msgs))
+	// A compaction blob serializes to a short marker, which is right for a
+	// summarizer's prompt and wrong for a size estimate: it is real prompt on the
+	// wire (measured at ~2.1–3.5 KB), and this number is what decides when the
+	// NEXT compaction fires. Counted at its own size so a transcript whose
+	// history lives entirely inside a blob does not read as nearly empty — which
+	// would park the gauge at the floor and let the context grow unwatched.
+	for _, m := range msgs {
+		for _, c := range m.Content {
+			if cb, ok := c.(provider.CompactionBlock); ok {
+				n += len(cb.Encrypted)
+			}
+		}
+	}
+	return n / 4
 }
 
 // KeepTailMaxFraction bounds the keep-tail by SIZE as well as by count.
@@ -1010,6 +1263,15 @@ func serializeTranscript(msgs []provider.Message) string {
 				sb.WriteString("\n")
 			case provider.ImageBlock:
 				fmt.Fprintf(&sb, "[image: %s, %d bytes]\n", v.MimeType, len(v.Data))
+			case provider.CompactionBlock:
+				// A marker, like an image, and for the same reason: the content
+				// cannot be rendered as text. What matters is that it is rendered
+				// at ALL — a transcript already compacted by the backend, being
+				// summarized again for a different provider, would otherwise read
+				// as though the assistant simply never spoke, and the client
+				// summarizer would faithfully report a conversation with no
+				// assistant in it.
+				fmt.Fprintf(&sb, "[compaction summary by %s: %d bytes, not readable here]\n", v.Provider, len(v.Encrypted))
 			case provider.ToolCallBlock:
 				fmt.Fprintf(&sb, "[tool_call %s %s]\n", v.Name, string(v.Arguments))
 			case provider.ToolResultBlock:

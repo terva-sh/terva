@@ -71,6 +71,38 @@ var EngineFeatures = []EngineFeature{
 		Apply:   func(a *core.Agent, on bool) { a.SetCacheAwareCompaction(on) },
 	},
 	{
+		ID:    "provider_compaction",
+		Title: i18n.M("Let the provider compact the conversation"),
+		Desc:  i18n.M("Some backends compact a conversation themselves and hand back a replacement transcript: your messages verbatim, and one encrypted summary standing in for everything the assistant said. It is cheaper than writing a summary, and it is not portable — only the provider that made it can read it, so switching providers means rebuilding the conversation from the session file and compacting again. Off by default: the strategy works, but whether it actually buys back the prompt cache has not been measured yet. Only OpenAI Codex offers it today; on every other provider this does nothing."),
+		// OFF, and the A/B that was supposed to decide this has now been RUN
+		// (2026-08-04, 3 reps, $2.82 live — docs/reviews/…-cache-collapse.md §10).
+		// It came back against the feature, so this default is a result rather
+		// than a placeholder:
+		//
+		//   - /responses/compact NEVER reads the prompt cache. Cache read was 0
+		//     in 3 of 3 reps, on a transcript the backend demonstrably held —
+		//     the warm summarizer read that same content at 97% on the next
+		//     call. It is a different route and does not participate.
+		//   - So the compaction call is ~4.7x MORE expensive, repeatably:
+		//     median $0.0731 against the warm summarizer's $0.0154, which is
+		//     cheap precisely because it reuses the conversation's own prefix.
+		//   - And the post-compaction saving that was supposed to pay for that
+		//     is undetectable at n=3 (medians 74.9k vs 84.0k full-price tokens,
+		//     ranges overlapping).
+		//
+		// The honest boundary: the harness reproduced the cache SCATTER but
+		// never the collapse, so it cannot say the strategy fails to fix the
+		// collapse — only that it costs more and buys nothing measurable in a
+		// healthy session. Re-open it against a REAL collapsed session, which
+		// needs the recovery trigger wired first.
+		//
+		// The risk being held back is unchanged and independent of cost: a blob
+		// replayed to a provider that cannot decrypt it is amnesia with no
+		// symptom, and the recovery path that catches it is not wired yet.
+		Default: false,
+		Apply:   func(a *core.Agent, on bool) { a.SetProviderCompaction(on) },
+	},
+	{
 		ID:    "prefix_change_guard",
 		Title: i18n.M("Offer to compact before a cache-invalidating change"),
 		Desc:  i18n.M("When something changes the prompt the provider has cached — switching model, reloading an extension — the next message silently re-reads the whole conversation at full price. Ask first, and offer to condense it while the old prompt is still cached. Needs cache-aware compaction to be on: without it, compacting costs the same full-price read as sending, so there would be nothing to offer."),
