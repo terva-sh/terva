@@ -331,14 +331,9 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 				out.OutputConfig = &anthOutputConfig{Effort: effort}
 			}
 		} else {
-			budget := anthropicReasoningBudget(eff)
+			budget := anthropicThinkingBudget(m, eff)
 			if budget > 0 {
-				// Reasoning requires max_tokens > budget. Keep at least a small
-				// answer budget while respecting the model's advertised output cap.
-				const minAnswerTokens = 1024
-				if m.MaxOutput > minAnswerTokens && budget >= m.MaxOutput {
-					budget = m.MaxOutput - minAnswerTokens
-				}
+				const minAnswerTokens = anthropicMinAnswerTokens
 				out.Thinking = &anthThinking{Type: "enabled", BudgetTokens: budget}
 				if out.MaxTokens <= budget {
 					out.MaxTokens = budget + minAnswerTokens
@@ -497,6 +492,31 @@ func markLastBlockEphemeral(blocks []interface{}) {
 
 func anthropicReasoningBudget(level string) int {
 	return ReasoningBudget(level)
+}
+
+// anthropicMinAnswerTokens is the answer headroom kept below max_tokens when a
+// thinking budget is in play: reasoning requires max_tokens > budget, so the
+// budget cannot consume the model's whole output cap.
+const anthropicMinAnswerTokens = 1024
+
+// anthropicThinkingBudget is the thinking budget actually sent for m at this
+// level — the ladder value clamped to what the model's output cap leaves room
+// for. Returns 0 when no budget is sent.
+//
+// Extracted from buildRequest so the surface that EXPLAINS a rung
+// (ReasoningEffectFor, and through it the /reasoning dialog) and the code that
+// ENFORCES it are the same code. Duplicating the clamp is how a dialog ends up
+// promising a budget the request never carries — the exact drift MaxIsNative
+// was written to prevent for the top rung.
+func anthropicThinkingBudget(m Model, level string) int {
+	budget := anthropicReasoningBudget(level)
+	if budget <= 0 {
+		return 0
+	}
+	if m.MaxOutput > anthropicMinAnswerTokens && budget >= m.MaxOutput {
+		budget = m.MaxOutput - anthropicMinAnswerTokens
+	}
+	return budget
 }
 
 func filterAnthAssistantContent(blocks []Content) []Content {
