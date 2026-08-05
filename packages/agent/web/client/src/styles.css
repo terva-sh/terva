@@ -628,6 +628,12 @@ button.ident-home:hover .persona { text-decoration: underline; }
 /* model picker trigger in the top bar */
 .model-btn { flex: none; max-width: clamp(96px, 22vw, 180px); font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .model-btn:hover { border-color: var(--muted); }
+/* The reasoning button borrows the model button's look but NOT its class:
+   two smokes locate `button.model-btn`, and a second element answering to it
+   makes that locator ambiguous. Sharing a class with a different control is
+   how the Stage header broke every drawer smoke in this same change. */
+.reasoning-btn { flex: none; font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); cursor: pointer; white-space: nowrap; }
+.reasoning-btn:hover { border-color: var(--muted); color: var(--fg); }
 
 /* generic centered modal (model picker, context) */
 .modal-scrim { position: fixed; inset: 0; background: #0006; z-index: 40; display: flex; align-items: flex-start; justify-content: center; padding: 8vh 12px 12px; }

@@ -51,6 +51,12 @@ var sessionMayMutateArgs = map[string]string{
 	"Model":    "the other half of that identity — a rebuild that re-resolves the launch model routes every later sub-agent at it",
 	"APIKey":   "cleared when a switch rebuilds the client: a launch-time key pins the endpoint the session has just left",
 	"BaseURL":  "cleared for the same reason, and reported to the model by terva_status when it is not",
+
+	// The per-session thinking depth. build.Resolve reads this AHEAD of the
+	// global config (firstNonEmpty(args.Reasoning, cfg.Reasoning)), so leaving
+	// it behind would let the next rebuild silently put the session back on the
+	// global level — the same class of bug setModel's comment describes.
+	"Reasoning": "a per-session reasoning override; Resolve reads it ahead of the global level, so a rebuild that re-resolved the launch value would drop the override",
 }
 
 // argsFieldsAssigned returns every X in an `<expr>.args.X = ...` assignment

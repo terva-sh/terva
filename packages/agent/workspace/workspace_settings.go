@@ -12,6 +12,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/provider"
 )
 
 // The settings pane — the first management surface (see docs/proposals/
@@ -598,6 +599,16 @@ func (w *Workspace) applyAutoSwarm() {
 
 // applyReasoning sets the reasoning level live on every session's agent (a
 // lock-guarded field write), so a change takes effect immediately everywhere.
+//
+// A session that set its OWN level is skipped. The global control is the
+// default new sessions inherit and the value un-overridden sessions follow —
+// not a re-level of every conversation, which would make a deliberate
+// per-session choice evaporate the next time the default moved. This is the
+// same division models already draw: models.set_default writes the default and
+// leaves a switched session on the model it was switched to.
+//
+// level is the RAW global value, so "" here means the global itself is unset
+// and the un-overridden sessions should fall back to their model's default.
 func (w *Workspace) applyReasoning(level string) {
 	w.mu.Lock()
 	sess := make([]*wsSession, 0, len(w.sessions))
@@ -606,10 +617,28 @@ func (w *Workspace) applyReasoning(level string) {
 	}
 	w.mu.Unlock()
 	for _, s := range sess {
-		if s.agent != nil {
-			s.agent.SetReasoning(level)
+		if s.agent == nil || s.currentReasoning() != "" {
+			continue
 		}
+		applyRawReasoning(s.agent, level)
 	}
+}
+
+// applyRawReasoning puts a RAW level onto an agent with the same set-signal the
+// build path uses: a non-empty raw level (including "off", which normalizes to
+// "") is an explicit choice that beats the model's DefaultReasoning, while an
+// empty one means nothing was chosen and the model's default should apply.
+//
+// One helper because getting this wrong is invisible — SetReasoning("") and
+// ClearReasoning() produce the same Reasoning field and differ only in
+// ReasoningSet, so a mix-up shows up as a model quietly thinking at the wrong
+// depth rather than as an error.
+func applyRawReasoning(a *core.Agent, raw string) {
+	if raw == "" {
+		a.ClearReasoning()
+		return
+	}
+	a.SetReasoning(provider.NormalizeReasoning(raw))
 }
 
 // applyReasoningSummary switches reasoning-summary persistence live on every

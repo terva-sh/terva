@@ -448,6 +448,12 @@ func (s *Service) CardsRevision(ctx context.Context, p ctrlproto.CardRevisionPar
 	return r, err
 }
 
+func (s *Service) CardsDuplicate(ctx context.Context, p ctrlproto.CardDuplicateParams) (ctrlproto.CardView, error) {
+	var r ctrlproto.CardView
+	err := s.c.Call(ctx, "", ctrlproto.MethodCardsDuplicate, p, &r)
+	return r, err
+}
+
 // --- persona library ---
 
 var _ ctrlproto.PersonasController = (*Service)(nil)
@@ -512,15 +518,21 @@ func (s *Service) BackgroundsGenerate(ctx context.Context, sess string, p ctrlpr
 
 // --- control group ---
 
-func (s *Service) Models(ctx context.Context, sess string) ([]ctrlproto.ModelInfo, error) {
+func (s *Service) Models(ctx context.Context, sess string) (ctrlproto.ModelsResult, error) {
 	var r ctrlproto.ModelsResult
 	err := s.c.Call(ctx, sess, ctrlproto.MethodModelsList, nil, &r)
-	return r.Models, err
+	return r, err
 }
 
 func (s *Service) SwitchModel(ctx context.Context, sess, providerName, modelID string) error {
 	return s.c.Call(ctx, sess, ctrlproto.MethodModelSwitch, ctrlproto.ModelSwitchParams{
 		Provider: providerName, Model: modelID,
+	}, nil)
+}
+
+func (s *Service) SetSessionReasoning(ctx context.Context, sess, level string) error {
+	return s.c.Call(ctx, sess, ctrlproto.MethodSessionReasoning, ctrlproto.ReasoningSetParams{
+		Level: level,
 	}, nil)
 }
 

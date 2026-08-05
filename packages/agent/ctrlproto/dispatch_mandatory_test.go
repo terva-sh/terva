@@ -109,6 +109,10 @@ type switchModelArgs struct {
 	Model    string
 }
 
+type reasoningArgs struct {
+	Level string
+}
+
 type favoriteArgs struct {
 	Provider string
 	Model    string
@@ -320,13 +324,18 @@ func (r *recorder) AuthProviders(_ context.Context) (ProvidersView, error) {
 	return ProvidersView{}, nil
 }
 
-func (r *recorder) Models(_ context.Context, sess string) ([]ModelInfo, error) {
+func (r *recorder) Models(_ context.Context, sess string) (ModelsResult, error) {
 	r.note("Models", sess, nil)
-	return nil, nil
+	return ModelsResult{}, nil
 }
 
 func (r *recorder) SwitchModel(_ context.Context, sess, providerName, modelID string) error {
 	r.note("SwitchModel", sess, switchModelArgs{Provider: providerName, Model: modelID})
+	return nil
+}
+
+func (r *recorder) SetSessionReasoning(_ context.Context, sess, level string) error {
+	r.note("SetSessionReasoning", sess, reasoningArgs{Level: level})
 	return nil
 }
 

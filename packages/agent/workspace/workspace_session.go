@@ -87,14 +87,24 @@ type wsSession struct {
 	// never clobbered. Seeded from the session file's rename rows.
 	titleGenerated bool
 	persona        string
-	turnCtx        context.Context
-	turnCancel     context.CancelFunc                     // non-nil while a turn runs
-	compacting     bool                                   // true while compact() holds the agent; the session's SECOND busy state (see compact)
-	permPark       core.ParkTable[core.ConfirmDecision]   // parked webConfirmer/workerConfirmer waits
-	askPark        core.ParkTable[[]core.UserAnswer]      // parked webAsker waits (one answer per question)
-	permReq        map[string]ctrlproto.PermissionRequest // details for the snapshot
-	askReq         map[string]ctrlproto.AskRequest        // details for the snapshot
-	askSeq         uint64
+	// reasoning is this session's thinking-level override as the user typed it
+	// ("off", "high", "max", …), or "" to inherit the global level. Raw rather
+	// than normalized so an explicit "off" stays distinguishable from "no
+	// override" — the distinction the whole feature turns on.
+	//
+	// Its presence is also what protects the session from the global fan-out:
+	// applyReasoning re-levels only the sessions that never chose for
+	// themselves, the same way models.set_default leaves a switched session on
+	// the model it was switched to.
+	reasoning  string
+	turnCtx    context.Context
+	turnCancel context.CancelFunc                     // non-nil while a turn runs
+	compacting bool                                   // true while compact() holds the agent; the session's SECOND busy state (see compact)
+	permPark   core.ParkTable[core.ConfirmDecision]   // parked webConfirmer/workerConfirmer waits
+	askPark    core.ParkTable[[]core.UserAnswer]      // parked webAsker waits (one answer per question)
+	permReq    map[string]ctrlproto.PermissionRequest // details for the snapshot
+	askReq     map[string]ctrlproto.AskRequest        // details for the snapshot
+	askSeq     uint64
 	// tail is the current tail span's swipe state — the ONE switchable span.
 	// Seeded from the session file at materialize (a session may load with
 	// retract/select rows already written: pre-seeded greetings, or a retry from
@@ -171,6 +181,14 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	if sess.Meta.Persona != "" {
 		args.Persona = sess.Meta.Persona
 		replayedPersona = sess.Meta.Persona
+	}
+	// A reasoning override is part of that same per-session spec. Resolve reads
+	// args.Reasoning ahead of the global config, so seeding it here is the whole
+	// of "the session comes back at the depth it was set to" — including after a
+	// daemon restart. Empty leaves the global in charge, which is what an
+	// un-overridden session wants.
+	if sess.Meta.Reasoning != "" {
+		args.Reasoning = sess.Meta.Reasoning
 	}
 	if sess.Meta.Experience != "" {
 		args.Experience = sess.Meta.Experience
@@ -396,6 +414,12 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	s.imageRegistry = r.ImageRegistry
 	s.trusted.Store(r.Trusted)
 	s.persona = r.Persona.Name
+	// The reasoning override is read back from meta, not from the resolve: args
+	// carries the EFFECTIVE level (global included, via firstNonEmpty), while
+	// this field means specifically "this session chose for itself". Seeding it
+	// from args would make every session look overridden the moment a global
+	// level was set, and applyReasoning would then skip all of them.
+	s.reasoning = s.sess.Meta.Reasoning
 	// Discover the authored lore for the read-only inspector pane (respecting the
 	// lore-enabled gate, mirroring build.go). Resolve keeps only the triggered
 	// subset, so re-Discover here for the full set.
@@ -2345,6 +2369,7 @@ func (s *wsSession) skillList() []ctrlproto.SkillInfo {
 func (s *wsSession) info() ctrlproto.SessionInfo {
 	s.mu.Lock()
 	prov, model, title, persona, sub := s.provider, s.model, s.title, s.persona, s.subscription
+	reasoning := s.reasoning
 	busy := s.turnCancel != nil
 	s.mu.Unlock()
 	info := ctrlproto.SessionInfo{
@@ -2353,6 +2378,7 @@ func (s *wsSession) info() ctrlproto.SessionInfo {
 		Provider:        prov,
 		Model:           model,
 		Persona:         persona,
+		Reasoning:       reasoning,
 		Experience:      s.sess.Meta.Experience,
 		Background:      s.sess.Meta.Background,
 		Note:            s.sess.Meta.Note,
@@ -2399,6 +2425,28 @@ func (s *wsSession) personaName() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.persona
+}
+
+// currentReasoning returns this session's raw reasoning override, or "" when it
+// inherits the global level.
+func (s *wsSession) currentReasoning() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reasoning
+}
+
+// setReasoning records this session's reasoning override — on the session AND
+// in the args every later Resolve reads, for the reason setModel updates
+// s.args: rebuildTools re-resolves from it on every extension reload and trust
+// flip, so a value left at its launch state would be silently restored by the
+// next rebuild.
+//
+// level is raw ("off" … "max"), or "" to go back to inheriting the global.
+func (s *wsSession) setReasoning(level string) {
+	s.mu.Lock()
+	s.reasoning = level
+	s.args.Reasoning = level
+	s.mu.Unlock()
 }
 
 // busyNow reports whether a turn is in flight (a running turn holds

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1622,7 +1623,7 @@ func (w *Workspace) cancelAndDrainTurns(ctx context.Context, timeout time.Durati
 	}
 }
 
-func (w *Workspace) Models(ctx context.Context, sess string) ([]ctrlproto.ModelInfo, error) {
+func (w *Workspace) Models(ctx context.Context, sess string) (ctrlproto.ModelsResult, error) {
 	// Current reflects the FRAMED session's own model, so the picker shows the
 	// model of the session the client is viewing rather than a workspace-global
 	// last-switched value. existing() has no side effects — unlike resolve, which
@@ -1646,28 +1647,91 @@ func (w *Workspace) Models(ctx context.Context, sess string) ([]ctrlproto.ModelI
 	favs := favoriteModelSet()
 	defProv, defModel, defScope := w.defaultModel()
 	var out []ctrlproto.ModelInfo
+	ladders := newLadderTable()
 	for _, m := range provider.Active() {
 		if !authed[m.Provider] {
 			continue
 		}
 		info := ctrlproto.ModelInfo{
-			ID:            m.ID,
-			Provider:      m.Provider,
-			ContextWindow: m.ContextWindow,
-			MaxOutput:     m.MaxOutput,
-			Reasoning:     m.Reasoning,
-			Current:       m.ID == curModel && m.Provider == curProv,
-			Favorite:      favs[favModelKey(m.Provider, m.ID)],
-			Auth:          authMethod[m.Provider],
-			DisplayName:   m.DisplayName,
-			Renamed:       m.DisplayNameSet,
+			ID:               m.ID,
+			Provider:         m.Provider,
+			ContextWindow:    m.ContextWindow,
+			MaxOutput:        m.MaxOutput,
+			Reasoning:        m.Reasoning,
+			MaxNative:        provider.MaxIsNative(m),
+			DefaultReasoning: m.DefaultReasoning,
+			Ladder:           ladders.keyFor(m),
+			Current:          m.ID == curModel && m.Provider == curProv,
+			Favorite:         favs[favModelKey(m.Provider, m.ID)],
+			Auth:             authMethod[m.Provider],
+			DisplayName:      m.DisplayName,
+			Renamed:          m.DisplayNameSet,
 		}
 		if m.ID == defModel && m.Provider == defProv {
 			info.Default, info.DefaultScope = true, defScope
 		}
 		out = append(out, info)
 	}
-	return out, nil
+	return ctrlproto.ModelsResult{Models: out, ReasoningLadders: ladders.table()}, nil
+}
+
+// ladderTable deduplicates the reasoning ladders across a model list.
+//
+// It exists for a measurement, not for tidiness: the built-in catalog's 440
+// reasoning-capable models resolve to ELEVEN distinct ladders, so inlining the
+// rows on every ModelInfo added 94 KB to a 99 KB models.list — nearly doubling
+// it — while the shared table costs 2.5 KB once. Keys are assigned in
+// first-seen order and are meaningful only within the response that carries
+// them.
+type ladderTable struct {
+	keys map[string]string // ladder identity -> assigned key
+	rows map[string][]ctrlproto.ReasoningRungInfo
+}
+
+func newLadderTable() *ladderTable {
+	return &ladderTable{keys: map[string]string{}, rows: map[string][]ctrlproto.ReasoningRungInfo{}}
+}
+
+// keyFor returns the key for m's ladder, interning it on first sight. The empty
+// string means m accepts no reasoning control at all — a client must render
+// that as "no thinking setting", not as "off".
+func (t *ladderTable) keyFor(m provider.Model) string {
+	ladder := provider.ReasoningLadderFor(m)
+	if len(ladder) == 0 {
+		return ""
+	}
+	rows := make([]ctrlproto.ReasoningRungInfo, 0, len(ladder))
+	// The identity is built from the WIRE rows rather than from the model, so
+	// two models with different ids but identical ladders share one entry —
+	// which is the whole saving, since most of the catalog reaches the same few
+	// mappers.
+	var ident strings.Builder
+	for _, r := range ladder {
+		row := ctrlproto.ReasoningRungInfo{
+			Level:  r.Level,
+			Budget: r.Effect.Budget,
+			Effort: r.Effect.Effort,
+			SameAs: r.SameAs,
+		}
+		rows = append(rows, row)
+		fmt.Fprintf(&ident, "%s\x00%d\x00%s\x00%s\x1e", row.Level, row.Budget, row.Effort, row.SameAs)
+	}
+	if k, ok := t.keys[ident.String()]; ok {
+		return k
+	}
+	k := "l" + strconv.Itoa(len(t.keys))
+	t.keys[ident.String()] = k
+	t.rows[k] = rows
+	return k
+}
+
+// table returns the ladders to put on the wire, or nil when nothing reasons —
+// omitempty then keeps the field off a list that has no use for it.
+func (t *ladderTable) table() map[string][]ctrlproto.ReasoningRungInfo {
+	if len(t.rows) == 0 {
+		return nil
+	}
+	return t.rows
 }
 
 // favModelKey is the "provider/id" key format the config's FavoriteModels list
@@ -1811,6 +1875,75 @@ func (w *Workspace) SwitchModel(ctx context.Context, sess, providerName, modelID
 		return err
 	}
 	return w.switchModel(s, providerName, modelID, false)
+}
+
+// SetSessionReasoning sets one live session's thinking level, for the next
+// turn, and persists it so a daemon restart brings it back.
+//
+// level is a raw ladder token ("off" … "max"), or "" / "inherit" to drop the
+// override and follow the global setting again. It is the reasoning twin of
+// SwitchModel: it changes ONLY this session and never touches config — moving
+// the default every session inherits is the settings control's job, exactly as
+// models.set_default is the default-mover for models.
+func (w *Workspace) SetSessionReasoning(ctx context.Context, sess, level string) error {
+	s, err := w.resolve(sess)
+	if err != nil {
+		return err
+	}
+	raw, err := normalizeSessionReasoning(level)
+	if err != nil {
+		return err
+	}
+	// Clearing means "follow the global again", so the live agent has to be put
+	// where a fresh build would put it: on the global raw value, which may
+	// itself be empty and hand the session back to its model's own default.
+	effective := raw
+	if effective == "" {
+		// A config read that fails leaves effective empty, which hands the
+		// session to its model's default — the same place a fresh build with no
+		// global level lands. Degrading to "no explicit level" is right here;
+		// refusing the clear would strand the session on its override.
+		if cfg, cerr := config.LoadConfig(); cerr == nil {
+			effective = cfg.Reasoning
+		}
+	}
+	s.setReasoning(raw)
+	if s.agent != nil {
+		applyRawReasoning(s.agent, effective)
+	}
+	if err := s.sess.UpdateReasoning(raw); err != nil {
+		return ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("save session reasoning: %v", err))
+	}
+	s.broadcast(ctrlproto.SessionUpdatedEvent(s.info()))
+	return nil
+}
+
+// normalizeSessionReasoning maps what a surface sends onto the raw token stored
+// on the session: a ladder rung stays itself, "inherit" (and "") clear the
+// override, and anything else is refused by name.
+//
+// Refusing rather than silently normalizing is deliberate: NormalizeReasoning
+// passes unknown values through unchanged, so a typo would otherwise be stored,
+// persisted, and sent to the provider as a reasoning level it has never heard
+// of — failing at request time, one layer away from the mistake.
+func normalizeSessionReasoning(level string) (string, error) {
+	v := strings.ToLower(strings.TrimSpace(level))
+	if v == "" || v == "inherit" || v == "default" {
+		return "", nil
+	}
+	if slices.Contains(provider.ReasoningLevels, v) {
+		return v, nil
+	}
+	// The aliases the flag accepts are accepted here too, so a user who learned
+	// "minimal" from one surface is not refused by another.
+	if n := provider.NormalizeReasoning(v); slices.Contains(provider.ReasoningLevels, n) {
+		return n, nil
+	}
+	if n := provider.NormalizeReasoning(v); n == "" {
+		return "off", nil
+	}
+	return "", ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s",
+		i18n.T("unknown reasoning level %q (%s, or \"inherit\")", level, provider.ReasoningLadder()))
 }
 
 // overrideClient builds a provider.Client + resolved model id for an optional

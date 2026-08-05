@@ -12,6 +12,7 @@ import (
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/provider"
 )
 
 // Portable-mode values for Args.Portable / SystemPromptOpts.Portable.
@@ -785,7 +786,10 @@ func ParseArgs(in []string) (Args, error) {
 			case "", "off", "minimum", "minimal", "low", "medium", "high", "maximum", "max":
 				a.Reasoning = strings.ToLower(v)
 			default:
-				return a, i18n.Errorf("--reasoning must be off|minimum|low|medium|high|maximum")
+				// The ladder is rendered from provider.ReasoningLevels rather
+				// than spelled out here: a hand-written copy is how "max" came
+				// to be accepted but never advertised.
+				return a, i18n.Errorf("--reasoning must be %s", provider.ReasoningLadder())
 			}
 		case "--temperature":
 			v, err := want(&i, arg)
@@ -868,10 +872,10 @@ func ParseArgs(in []string) (Args, error) {
 			if strings.HasPrefix(arg, "--dump-prompt=") {
 				v := strings.TrimPrefix(arg, "--dump-prompt=")
 				switch v {
-				case "text", "json", "raw", "sizes":
+				case "text", "json", "raw", "sizes", "wire":
 					a.DumpPrompt = v
 				default:
-					return a, i18n.Errorf("--dump-prompt must be text|json|raw|sizes")
+					return a, i18n.Errorf("--dump-prompt must be text|json|raw|sizes|wire")
 				}
 				continue
 			}

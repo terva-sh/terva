@@ -376,6 +376,12 @@ type Agent struct {
 	// agent. See SetCacheAwareCompaction.
 	cacheAwareCompaction bool
 
+	// providerCompaction hands compaction to the backend instead of summarizing
+	// client-side (engine feature provider_compaction; off by default in BOTH
+	// places, unlike the two above — the strategy is measured but the cache
+	// payoff it exists for is not). Guarded by mu; see SetProviderCompaction.
+	providerCompaction bool
+
 	// prefixGuard offers a compaction before a cache-invalidating change lands
 	// (engine feature prefix_change_guard). Guarded by mu; see
 	// SetPrefixChangeGuard and offerCompactOnPrefixChange.
@@ -1317,6 +1323,26 @@ func (a *Agent) SetReasoning(level string) {
 	// control), so it wins over any per-model DefaultReasoning from here on —
 	// including when level is "" (the user chose off).
 	a.ReasoningSet = true
+}
+
+// ClearReasoning drops an explicit level so the per-model DefaultReasoning
+// applies again. It is the inverse of SetReasoning and exists because "" is not
+// its own inverse: SetReasoning("") means the user chose OFF, and the two must
+// stay distinguishable.
+//
+// A session clearing its per-session override needs this. Without it, "clear"
+// could only mean "set to whatever the global happens to be right now", which
+// would freeze the session at that value instead of letting it follow the
+// global — and would override the model's own default forever after.
+//
+// This is the live twin of the build path, where the set-signal is the RAW
+// level being non-empty (see build.Resolve): clearing here is the same state a
+// rebuild reaches when args.Reasoning and cfg.Reasoning are both empty.
+func (a *Agent) ClearReasoning() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.Reasoning = ""
+	a.ReasoningSet = false
 }
 
 // SetReasoningSummary switches reasoning-summary persistence live ("" = off).

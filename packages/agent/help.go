@@ -7,6 +7,7 @@ import (
 
 	"golang.org/x/term"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -118,7 +119,7 @@ func PrintHelp(version string) {
 		row{"--model ID", i18n.T("model id (see --list-models)")},
 		row{"--api-key KEY", i18n.T("api key for this run (env / auth.json fallback)")},
 		row{"--base-url URL", i18n.T("override provider api base url")},
-		row{"--reasoning off|minimum|low|medium|high|maximum", i18n.T("set thinking level on supported models")},
+		row{"--reasoning " + provider.ReasoningLadder(), i18n.T("set thinking level; max is a tier above maximum, native on gpt-5.6 and adaptive claude")},
 		row{"--temperature N", i18n.T("sampling temperature, 0 to 2 (omit for provider default)")},
 		row{"--insecure", i18n.T("skip TLS verification for the inference --base-url (openai-compatible/ollama only)")},
 	)
@@ -166,7 +167,7 @@ func PrintHelp(version string) {
 		row{"--allow-restart", i18n.T("enable Tier-1 self-restart: the agent (terva_restart) or the control plane can re-exec terva into the currently-installed binary; the TUI resumes its session, web clients reconnect")},
 		row{"--swarm-worktrees", i18n.T("give each swarm sub-agent its own git worktree (leased from the built-in worktree engine; cwd must be a git repo)")},
 		row{"--max-steps N", i18n.T("agent loop iteration cap (default: unlimited)")},
-		row{"--dump-prompt[=text|json|raw|sizes]", i18n.T("print the assembled prompt for the pending turn and exit (no model call); sizes shows per-section/per-tool byte+token weight")},
+		row{"--dump-prompt[=text|json|raw|sizes|wire]", i18n.T("print the assembled prompt for the pending turn and exit (no model call); sizes shows per-section/per-tool byte+token weight; wire dumps the serialized provider request as JSONL (one line per input item) so two dumps can be diffed")},
 		row{"--list-models[=FILTER]", i18n.T("print known models and exit. FILTER: comma list of user|live|catalog|speculative, a tier threshold like live+ (that tier and above), or available (only providers your credentials can use right now)")},
 		row{"-h, --help", i18n.T("show this help")},
 		row{"-v, --version", i18n.T("show version info")},

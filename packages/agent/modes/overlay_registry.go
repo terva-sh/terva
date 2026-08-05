@@ -600,6 +600,23 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				return i.skillsDialog.Render(i.cfg.Theme, cols)
 			},
 		},
+		{ // reasoning depth for this session
+			active: i.reasoningDialog.Active,
+			ctrlC:  func() bool { i.reasoningDialog.Close(); return true },
+			handleKey: func(k tui.Key) bool {
+				// The dialog reports the pick; sending it is the host's job, so
+				// the dialog stays a pure widget with no daemon in it.
+				if lv, chose := i.reasoningDialog.HandleKey(k); chose {
+					i.applyReasoningSelection(lv)
+				}
+				return false
+			},
+			render: func(cols int) []string {
+				_, rows := i.cfg.Terminal.Size()
+				i.reasoningDialog.MaxRows = dialogs.BodyBudget(rows, i.reasoningDialog.ChromeRows())
+				return i.reasoningDialog.Render(i.cfg.Theme, cols)
+			},
+		},
 		{ // changelog overlay
 			active: i.changelogDialog.Active,
 			// No ctrlC: any key dismisses via HandleKey, and the

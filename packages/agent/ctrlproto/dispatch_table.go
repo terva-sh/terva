@@ -173,8 +173,7 @@ var dispatch = map[Method]handler{
 	// -------------------------------------------------------------------- control
 
 	MethodModelsList: get(base, func(svc WorkspaceService, ctx context.Context, f Frame) (ModelsResult, error) {
-		m, err := svc.Models(ctx, f.Sess)
-		return ModelsResult{Models: m}, err
+		return svc.Models(ctx, f.Sess)
 	}),
 	MethodModelSwitch: act(base, func(svc WorkspaceService, ctx context.Context, f Frame, p ModelSwitchParams) error {
 		return svc.SwitchModel(ctx, f.Sess, p.Provider, p.Model)
@@ -184,6 +183,9 @@ var dispatch = map[Method]handler{
 	}),
 	MethodModelSetDefault: act(base, func(svc WorkspaceService, ctx context.Context, f Frame, p SetDefaultParams) error {
 		return svc.SetDefaultModel(ctx, p.Provider, p.Model, p.Scope)
+	}),
+	MethodSessionReasoning: act(base, func(svc WorkspaceService, ctx context.Context, f Frame, p ReasoningSetParams) error {
+		return svc.SetSessionReasoning(ctx, f.Sess, p.Level)
 	}),
 	MethodTrust: act(base, func(svc WorkspaceService, ctx context.Context, f Frame, p TrustParams) error {
 		return svc.Trust(ctx, p.Parent)
@@ -279,6 +281,9 @@ var dispatch = map[Method]handler{
 	}),
 	MethodCardsEdit: ask(noCards, func(c CardsController, ctx context.Context, f Frame, p CardEditParams) (CardView, error) {
 		return c.CardsEdit(ctx, p)
+	}),
+	MethodCardsDuplicate: ask(noCards, func(c CardsController, ctx context.Context, f Frame, p CardDuplicateParams) (CardView, error) {
+		return c.CardsDuplicate(ctx, p)
 	}),
 	MethodCardsExport: ask(noCards, func(c CardsController, ctx context.Context, f Frame, p CardExportParams) (CardExport, error) {
 		return c.CardsExport(ctx, p)

@@ -147,6 +147,14 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 		i.modelDialog.Open(i.cfg.Model, loggedIn, favs)
 		return false
 	},
+	"/reasoning": func(i *Interactive, _ context.Context, parts []string, _ string) bool {
+		if len(parts) >= 2 {
+			i.applyReasoningSelection(parts[1])
+			return false
+		}
+		i.openReasoningDialog()
+		return false
+	},
 	"/login": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 		i.dialog.Open(i.cfg.AuthStore)
 		return false

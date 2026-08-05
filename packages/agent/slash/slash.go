@@ -88,6 +88,9 @@ var registry = []Spec{
 	{Name: "/worktree", Group: groupContext, Desc: "managed git worktrees: list, cd into one, or review the merge-back overview"},
 
 	{Name: "/model", Group: groupModel, Desc: "pick a model (or /model <id>)", Hint: "model id (optional)", CancelsTurn: true},
+	{Name: "/reasoning", Group: groupModel, Aliases: []string{"/think"},
+		Desc: "set this session's thinking depth (or /reasoning <level>; \"inherit\" follows the global)",
+		Hint: "off | minimum | low | medium | high | maximum | max | inherit (optional)"},
 	{Name: "/login", Group: groupModel, Desc: "log in via api key or subscription", CancelsTurn: true},
 	{Name: "/logout", Group: groupModel, Desc: "clear a provider's credentials", Hint: "provider (anthropic | openai | all)", CancelsTurn: true},
 	{Name: "/usage", Group: groupModel, Desc: "subscription usage limits and reset windows"},

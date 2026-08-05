@@ -65,7 +65,7 @@ all in [Modes](#modes) below.
 | `--append-system-prompt <text>` | Append text to the system prompt (repeatable). |
 | `--persona <name\|path>` | Load a persona — a built-in/on-disk name, or a path to a `.md` file — as the agent's identity. Omitted, it resolves via `Persona.md`, the `default_persona` config key, then the built-in default. See [personas.md](personas.md). |
 | `--context-file <path>` | Inject a file's contents into the system prompt (repeatable). |
-| `--reasoning off\|minimal\|minimum\|low\|medium\|high\|maximum\|max` | Set thinking level on supported models (default: off). `minimal` and `max` are accepted aliases at the ends of the ladder. |
+| `--reasoning off\|minimal\|minimum\|low\|medium\|high\|maximum\|max` | Set thinking level on supported models (default: off). `minimal` is an accepted alias for `minimum`. `maximum` and `max` are DIFFERENT rungs: `maximum` is the long-standing top (sent as `xhigh`), while `max` is a tier above it, sent natively only to models that have one (gpt-5.6, adaptive Claude) and clamped to `maximum` elsewhere. This sets the level for the run; a single session can override it — see [Per-session reasoning](#per-session-reasoning). |
 | `-c`, `--continue` | Resume the latest session for this cwd. |
 | `-r`, `--resume [id]` | Open the session picker at startup — titles, age, model, size, cost; Esc keeps the fresh session. With an `id` (the transcript's filename stem), resume that session directly, no picker. Also works attached: `terva attach -r`. |
 | `--session <path>` | Resume a specific session file. |
@@ -104,7 +104,7 @@ all in [Modes](#modes) below.
 | `--swarm-worktrees` | Give each swarm sub-agent its own git worktree instead of sharing the host tree, leased from the built-in worktree engine (the cwd must be a git repo). Overrides the config's `swarm_worktrees` for this run. |
 | `--swarm-agent <socket>` | Internal: marks this process a swarm-spawned agent and points it at its supervisor inbox socket. Set by the swarm engine, not by hand. |
 | `--substrate <scheme>:<ref>` | Reserved: binds a dispatched actor to a shared authoritative state surface (a world instance, a task board). Threaded through the swarm boot spec; nothing resolves it yet — empty means the parent projects the substrate. |
-| `--dump-prompt[=text\|json\|raw\|sizes]` | Assemble the prompt for the pending turn, print it, and exit before any model call. `sizes` reports per-section and per-tool byte/token weight. Needs no credential — a debugging and assertion tool. See [debugging-prompts.md](debugging-prompts.md). |
+| `--dump-prompt[=text\|json\|raw\|sizes\|wire]` | Assemble the prompt for the pending turn, print it, and exit before any model call. `sizes` reports per-section and per-tool byte/token weight; `wire` prints the serialized provider request as JSONL, one line per input item, so two dumps can be diffed to find where a cached prefix diverges. Honors `--session` (read-only). Needs no credential — a debugging and assertion tool. See [debugging-prompts.md](debugging-prompts.md). |
 | `-h`, `--help` | Show the help screen (modes, commands, flags). |
 | `-v`, `--version` | Print the version, commit, and build date. |
 
@@ -421,3 +421,37 @@ source always wins; an empty token file is a startup error rather than a
 silent drop to no auth. The file is on the agent's read deny-list.
 
 Drop a `SYSTEM.md` in `$TERVA_HOME` to replace the built-in identity and guidelines for every run. `--system-prompt` still wins per-invocation. Delete the file to revert to the default.
+
+## Per-session reasoning
+
+The thinking level has two scopes, the same split models have.
+
+The **global** level is `--reasoning` (this run) or the `reasoning` setting in
+the settings surface (persisted). It is the default every session starts at,
+and un-overridden sessions follow it live when it changes.
+
+A **session** can override it and keep that override:
+
+```
+/reasoning max        # this session only
+/reasoning inherit    # drop the override, follow the global again
+/reasoning            # open the picker
+```
+
+The same control is in the web control panel (a button beside the model, or
+`/reasoning`) and in Stage's scene header.
+
+Three things worth knowing:
+
+- **An override survives a change to the global.** Setting the global re-levels
+  only the sessions that never chose for themselves. This mirrors models, where
+  `models.set_default` leaves a switched session on the model it was switched
+  to — thinking harder in one conversation should not move every other one.
+- **It persists.** The level is written to session meta, so a daemon restart
+  brings the session back at the depth you set, not at the global default.
+- **`off` is a rung, not an absence.** A session set to `off` is *overridden*
+  and stays off; a session with no override is a different state, and only the
+  second one follows the global. `inherit` is how you get back to the second.
+
+With no global level set either, an un-overridden session falls back to the
+model's own `defaultReasoning` (see [Models](models.md)).

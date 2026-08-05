@@ -279,3 +279,21 @@ button { font: inherit; color: inherit; cursor: pointer; }
   .ui-placeholder__row, .ui-conn-banner__spinner { animation: none; }
   .ui-placeholder__row { opacity: .7; }
 }
+
+/* The per-session reasoning picker. Sized and positioned like the model
+   picker it sits beside — the two answer the same shape of question ("how does
+   THIS session run") and should not look like different kinds of control. */
+.reasoning-pick { position: absolute; z-index: 40; right: 12px; top: 52px; width: min(420px, calc(100vw - 24px)); background: var(--ui-surface); border: 1px solid var(--ui-line); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.35); overflow: hidden; }
+.reasoning-pick-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--ui-line); font-size: 13px; color: var(--ui-muted); }
+.reasoning-pick-close { background: none; border: none; color: var(--ui-muted); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 4px; }
+.reasoning-pick-list { list-style: none; margin: 0; padding: 4px; max-height: min(60vh, 380px); overflow-y: auto; }
+.reasoning-row { display: flex; align-items: baseline; gap: 10px; width: 100%; text-align: left; background: none; border: none; color: var(--ui-fg); font: inherit; font-size: 13px; padding: 7px 8px; border-radius: 6px; cursor: pointer; }
+/* A neutral wash rather than a token: this needs to read as a hover over
+   EITHER app's surface, and the contract has no hover token to map. */
+.reasoning-row:hover { background: rgba(127,127,127,.12); }
+/* The active row is marked with weight and a rule rather than colour alone:
+   this list is read to answer "which one am I on", and colour is the first
+   thing to go on a dim screen. */
+.reasoning-row.is-active { font-weight: 600; box-shadow: inset 2px 0 0 var(--ui-accent, currentColor); }
+.reasoning-row-label { flex: 0 0 76px; }
+.reasoning-row-detail { color: var(--ui-muted); font-size: 12px; }

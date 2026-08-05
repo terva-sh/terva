@@ -285,7 +285,13 @@ type WorkspaceService interface {
 	// session whose model is flagged Current, so a picker reflects the model of
 	// the session the client is viewing; an empty sess (or one naming no live
 	// session) falls back to the workspace default.
-	Models(ctx context.Context, sess string) ([]ModelInfo, error)
+	//
+	// It returns the whole ModelsResult rather than just the slice because the
+	// reasoning ladders travel WITH the list: a ModelInfo.Ladder key means
+	// nothing without the table it indexes, and a signature that returned only
+	// the models would let an implementation drop the table on the floor —
+	// which is exactly what the ctrlproto client used to do.
+	Models(ctx context.Context, sess string) (ModelsResult, error)
 
 	// SwitchModel changes the model backing sess, live, for the next turn.
 	// providerName qualifies modelID — model ids are not globally unique
@@ -293,6 +299,16 @@ type WorkspaceService interface {
 	// same id), and an unqualified lookup may land on a provider the
 	// workspace holds no credential for. Empty = resolve across all.
 	SwitchModel(ctx context.Context, sess, providerName, modelID string) error
+
+	// SetSessionReasoning sets the thinking depth backing sess, live, for the
+	// next turn, and persists it so a daemon restart brings it back. level is a
+	// raw ladder rung ("off" … "max") or "inherit"/"" to drop the override.
+	//
+	// The reasoning twin of SwitchModel, and separate from the settings
+	// "reasoning" control for the same reason SwitchModel is separate from
+	// SetDefaultModel: thinking harder in one conversation should not move the
+	// depth every other conversation runs at.
+	SetSessionReasoning(ctx context.Context, sess, level string) error
 
 	// SetFavoriteModel pins or unpins a model in the user's favorites (the ★
 	// favorites view), persisted to config.
@@ -336,6 +352,12 @@ type SessionInfo struct {
 	Provider string `json:"provider,omitempty"`
 	Model    string `json:"model,omitempty"`
 	Persona  string `json:"persona,omitempty"` // loaded persona/agent name
+	// Reasoning is this session's thinking-level override as the user chose it
+	// ("off", "high", "max", …), or "" when the session follows the global
+	// setting. Raw rather than normalized so a client can tell an explicit
+	// "off" from "no override" — they are different states and a client that
+	// conflated them would show the wrong thing for one of them.
+	Reasoning string `json:"reasoning,omitempty"`
 	// Experience tags an immersive session — "chat" or "play" — so a client
 	// badges it distinctly from a coding session (empty). Persisted at creation.
 	Experience string `json:"experience,omitempty"`
@@ -1381,8 +1403,29 @@ type ModelInfo struct {
 	ContextWindow int    `json:"context_window,omitempty"`
 	MaxOutput     int    `json:"max_output,omitempty"`
 	Reasoning     bool   `json:"reasoning,omitempty"`
-	Current       bool   `json:"current,omitempty"`
-	Favorite      bool   `json:"favorite,omitempty"` // pinned by the user (the ★ favorites view)
+	// MaxNative says the "max" rung reaches this model as a native max effort
+	// rather than being clamped to the "maximum" tier. It is on the wire
+	// because it is the one thing about the ladder a client cannot work out
+	// from the names, and both frontends need to say it (see
+	// provider.MaxIsNative, which is where the rule actually lives).
+	MaxNative bool `json:"max_native,omitempty"`
+	// DefaultReasoning is the level this model thinks at when neither the
+	// session nor the global sets one, so an "inherit" row can name what would
+	// actually apply instead of pointing at a global that may not exist.
+	DefaultReasoning string `json:"default_reasoning,omitempty"`
+	// Ladder keys into ModelsResult.ReasoningLadders: what each rung of the
+	// ladder actually becomes on THIS model. Empty means the model accepts no
+	// reasoning control at all — which is not the same as a ladder that is
+	// switched off, so a client renders "takes no thinking setting" rather
+	// than "off".
+	//
+	// It is a key into a shared table rather than the rows themselves because
+	// 440 catalog models share 11 distinct ladders: inlining them nearly
+	// DOUBLES a full models.list (+94 KB on 99 KB), while the table costs
+	// 2.5 KB once. The key is opaque and per-response — never persist it.
+	Ladder   string `json:"ladder,omitempty"`
+	Current  bool   `json:"current,omitempty"`
+	Favorite bool   `json:"favorite,omitempty"` // pinned by the user (the ★ favorites view)
 	// Default marks the model new sessions start on, and DefaultScope says
 	// where that came from — "global" (the user's config) or "project" (this
 	// workspace's, which only applies while it is trusted). A project default
