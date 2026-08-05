@@ -1,0 +1,89 @@
+{"name":"bootstrap","dir":"ext_to_host","frame":"{\"type\":\"bootstrap\",\"message\":\"compiling extension\"}"}
+{"name":"bootstrap bare","dir":"ext_to_host","frame":"{\"type\":\"bootstrap\"}"}
+{"name":"hello","dir":"ext_to_host","frame":"{\"type\":\"hello\",\"name\":\"guard\",\"version\":\"1.0.0\",\"capabilities\":[\"commands\"]}"}
+{"name":"hello with min_protocol","dir":"ext_to_host","frame":"{\"type\":\"hello\",\"name\":\"vault\",\"version\":\"2.1.0\",\"min_protocol\":6}"}
+{"name":"register_command","dir":"ext_to_host","frame":"{\"type\":\"register_command\",\"name\":\"deploy\",\"description\":\"ship it\"}"}
+{"name":"register_tool","dir":"ext_to_host","frame":"{\"type\":\"register_tool\",\"name\":\"lookup\",\"schema\":{\"type\":\"object\"}}"}
+{"name":"register_tool read-only","dir":"ext_to_host","frame":"{\"type\":\"register_tool\",\"name\":\"peek\",\"schema\":{\"type\":\"object\"},\"read_only\":true}"}
+{"name":"register_tool authority","dir":"ext_to_host","frame":"{\"type\":\"register_tool\",\"name\":\"web_fetch\",\"schema\":{\"type\":\"object\"},\"authority\":\"network-read\"}"}
+{"name":"register_tool essential","dir":"ext_to_host","frame":"{\"type\":\"register_tool\",\"name\":\"search_index\",\"description\":\"search the index\",\"schema\":{\"type\":\"object\"},\"read_only\":true,\"authority\":\"local-read\",\"essential\":true}"}
+{"name":"register_context","dir":"ext_to_host","frame":"{\"type\":\"register_context\",\"text\":\"keep one task active\"}"}
+{"name":"subscribe","dir":"ext_to_host","frame":"{\"type\":\"subscribe\",\"events\":[\"turn_end\"],\"intercept\":[\"tool_call\"]}"}
+{"name":"ready","dir":"ext_to_host","frame":"{\"type\":\"ready\"}"}
+{"name":"refresh_context","dir":"ext_to_host","frame":"{\"type\":\"refresh_context\",\"text\":\"project notes\"}"}
+{"name":"set_withdrawn_tools","dir":"ext_to_host","frame":"{\"type\":\"set_withdrawn_tools\",\"tools\":[\"apply_patch\",\"run\"],\"all\":false}"}
+{"name":"set_withdrawn_tools restore","dir":"ext_to_host","frame":"{\"type\":\"set_withdrawn_tools\",\"tools\":[],\"all\":false}"}
+{"name":"set_withdrawn_tools all","dir":"ext_to_host","frame":"{\"type\":\"set_withdrawn_tools\",\"tools\":[],\"all\":true}"}
+{"name":"host_tool_call","dir":"ext_to_host","frame":"{\"type\":\"host_tool_call\",\"id\":\"c1\",\"name\":\"read\",\"args\":{\"path\":\"x\"},\"silent\":true}"}
+{"name":"list_sessions","dir":"ext_to_host","frame":"{\"type\":\"list_sessions\",\"id\":\"s1\",\"project_id\":\"proj\"}"}
+{"name":"read_session","dir":"ext_to_host","frame":"{\"type\":\"read_session\",\"id\":\"s2\",\"session_id\":\"abc\"}"}
+{"name":"tool_result","dir":"ext_to_host","frame":"{\"type\":\"tool_result\",\"id\":\"2\",\"content\":[{\"type\":\"text\",\"text\":\"hit\"}]}"}
+{"name":"tool_result error","dir":"ext_to_host","frame":"{\"type\":\"tool_result\",\"id\":\"7\",\"content\":[{\"type\":\"text\",\"text\":\"no such index\"}],\"is_error\":true}"}
+{"name":"tool_result image","dir":"ext_to_host","frame":"{\"type\":\"tool_result\",\"id\":\"8\",\"content\":[{\"type\":\"image\",\"mime_type\":\"image/png\",\"data\":\"QUJD\"}]}"}
+{"name":"command_response","dir":"ext_to_host","frame":"{\"type\":\"command_response\",\"id\":\"1\",\"action\":\"display\",\"display\":\"done\"}"}
+{"name":"command_response prompt","dir":"ext_to_host","frame":"{\"type\":\"command_response\",\"id\":\"1\",\"action\":\"prompt\",\"prompt\":\"summarise the diff\"}"}
+{"name":"command_response open_panel","dir":"ext_to_host","frame":"{\"type\":\"command_response\",\"id\":\"1\",\"action\":\"open_panel\",\"open_panel\":{\"id\":\"todos-main\",\"title\":\"Todos\",\"lines\":[\"1. ship it\"],\"footer\":\"q to close\"}}"}
+{"name":"command_response noop","dir":"ext_to_host","frame":"{\"type\":\"command_response\",\"id\":\"1\",\"action\":\"noop\"}"}
+{"name":"command_response error","dir":"ext_to_host","frame":"{\"type\":\"command_response\",\"id\":\"1\",\"action\":\"error\",\"error\":\"no such target\"}"}
+{"name":"event_intercept_response","dir":"ext_to_host","frame":"{\"type\":\"event_intercept_response\",\"id\":\"3\",\"block\":true,\"reason\":\"nope\"}"}
+{"name":"event_intercept_response modified args","dir":"ext_to_host","frame":"{\"type\":\"event_intercept_response\",\"id\":\"4\",\"modified_args\":{\"cmd\":\"ls -a\"}}"}
+{"name":"event_intercept_response replace text","dir":"ext_to_host","frame":"{\"type\":\"event_intercept_response\",\"id\":\"5\",\"replace_text\":\"redacted\"}"}
+{"name":"notify","dir":"ext_to_host","frame":"{\"type\":\"notify\",\"level\":\"warn\",\"message\":\"careful\"}"}
+{"name":"clear_notes","dir":"ext_to_host","frame":"{\"type\":\"clear_notes\"}"}
+{"name":"submit","dir":"ext_to_host","frame":"{\"type\":\"submit\",\"text\":\"review the failing test\"}"}
+{"name":"submit_slash","dir":"ext_to_host","frame":"{\"type\":\"submit_slash\",\"text\":\"/compact\"}"}
+{"name":"context_card","dir":"ext_to_host","frame":"{\"type\":\"context_card\",\"id\":\"tasks\",\"label\":\"Tasks\",\"text\":\"active foo\",\"priority\":1}"}
+{"name":"context_card minimal","dir":"ext_to_host","frame":"{\"type\":\"context_card\",\"id\":\"tasks\",\"text\":\"active foo\"}"}
+{"name":"context_card blocking","dir":"ext_to_host","frame":"{\"type\":\"context_card\",\"id\":\"tasks\",\"text\":\"active foo\",\"blocking\":true}"}
+{"name":"context_card_clear","dir":"ext_to_host","frame":"{\"type\":\"context_card_clear\",\"id\":\"tasks\"}"}
+{"name":"status_segment","dir":"ext_to_host","frame":"{\"type\":\"status_segment\",\"id\":\"tasks\",\"text\":\"▸ patch (1/4)\"}"}
+{"name":"status_segment clear","dir":"ext_to_host","frame":"{\"type\":\"status_segment\",\"id\":\"tasks\"}"}
+{"name":"shutdown_ack","dir":"ext_to_host","frame":"{\"type\":\"shutdown_ack\"}"}
+{"name":"open_panel","dir":"ext_to_host","frame":"{\"type\":\"open_panel\",\"panel\":{\"id\":\"todos-main\",\"title\":\"Todos\",\"lines\":[\"1. ship it\"],\"footer\":\"q to close\"}}"}
+{"name":"panel_render","dir":"ext_to_host","frame":"{\"type\":\"panel_render\",\"panel_id\":\"todos-main\",\"title\":\"Todos\",\"lines\":[\"1. ship it\"],\"footer\":\"q to close\"}"}
+{"name":"panel_render with widgets","dir":"ext_to_host","frame":"{\"type\":\"panel_render\",\"panel_id\":\"todos-main\",\"title\":\"Todos\",\"lines\":[\"1. ship it\"],\"footer\":\"q to close\",\"widgets\":[{\"type\":\"heading\",\"text\":\"Todos\",\"level\":1},{\"type\":\"text\",\"text\":\"3 of 8 done\",\"tone\":\"muted\"},{\"type\":\"meter\",\"label\":\"done\",\"value\":3,\"max\":8,\"unit\":\"tasks\"},{\"type\":\"keyvalue\",\"rows\":[{\"key\":\"branch\",\"value\":\"main\",\"mono\":true},{\"key\":\"open\",\"value\":\"5\",\"note\":\"since Monday\"}]},{\"type\":\"table\",\"columns\":[\"id\",\"state\"],\"cells\":[[\"t1\",\"open\"],[\"t2\",\"done\"]]},{\"type\":\"list\",\"items\":[{\"text\":\"ship it\",\"note\":\"today\",\"tone\":\"warn\",\"action_id\":\"open-t1\"},{\"text\":\"write it up\"}]},{\"type\":\"group\",\"children\":[{\"type\":\"note\",\"text\":\"nested\",\"tone\":\"ok\"}]},{\"type\":\"divider\"},{\"type\":\"action\",\"text\":\"Refresh\",\"action_id\":\"refresh\"}]}"}
+{"name":"panel_close from ext","dir":"ext_to_host","frame":"{\"type\":\"panel_close\",\"panel_id\":\"todos-main\"}"}
+{"name":"secret_set","dir":"ext_to_host","frame":"{\"type\":\"secret_set\",\"id\":\"q1\",\"key\":\"oauth_token\",\"value\":\"tok-123\"}"}
+{"name":"secret_set empty value","dir":"ext_to_host","frame":"{\"type\":\"secret_set\",\"id\":\"q2\",\"key\":\"oauth_token\",\"value\":\"\"}"}
+{"name":"secret_get","dir":"ext_to_host","frame":"{\"type\":\"secret_get\",\"id\":\"q3\",\"key\":\"oauth_token\"}"}
+{"name":"secret_delete","dir":"ext_to_host","frame":"{\"type\":\"secret_delete\",\"id\":\"q4\",\"key\":\"oauth_token\"}"}
+{"name":"secret_list","dir":"ext_to_host","frame":"{\"type\":\"secret_list\",\"id\":\"q5\"}"}
+{"name":"register_connector","dir":"ext_to_host","frame":"{\"type\":\"register_connector\"}"}
+{"name":"chat envelope","dir":"both","frame":"{\"type\":\"chat\",\"id\":\"s1\",\"frame\":{\"type\":\"connect\"}}"}
+{"name":"chat_down clean","dir":"ext_to_host","frame":"{\"type\":\"chat_down\",\"id\":\"s1\"}"}
+{"name":"chat_down error","dir":"ext_to_host","frame":"{\"type\":\"chat_down\",\"id\":\"s1\",\"error\":\"auth revoked\"}"}
+{"name":"hello_ack","dir":"host_to_ext","frame":"{\"type\":\"hello_ack\",\"protocol_version\":1,\"zot_version\":\"1.2.3\",\"provider\":\"anthropic\",\"model\":\"claude-sonnet-4-5\",\"cwd\":\"/work\",\"extension_dir\":\"/x\",\"data_dir\":\"/x\"}"}
+{"name":"hello_ack both naming eras","dir":"host_to_ext","frame":"{\"type\":\"hello_ack\",\"protocol_version\":1,\"zot_version\":\"1.2.3\",\"terva_version\":\"1.2.3\",\"provider\":\"anthropic\",\"model\":\"m\",\"cwd\":\"/work\"}"}
+{"name":"hello_ack with supported_events and config","dir":"host_to_ext","frame":"{\"type\":\"hello_ack\",\"protocol_version\":6,\"zot_version\":\"1.2.3\",\"terva_version\":\"1.2.3\",\"provider\":\"anthropic\",\"model\":\"m\",\"cwd\":\"/work\",\"extension_dir\":\"/install/todos\",\"data_dir\":\"/home/u/.terva/ext-data/todos\",\"supported_events\":[\"session_start\",\"turn_end\",\"config_update\"],\"config\":{\"api_base\":\"https://api.example.com\",\"verbose\":true}}"}
+{"name":"host_tool_result","dir":"host_to_ext","frame":"{\"type\":\"host_tool_result\",\"id\":\"c1\",\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}"}
+{"name":"host_tool_result error","dir":"host_to_ext","frame":"{\"type\":\"host_tool_result\",\"id\":\"c2\",\"content\":[{\"type\":\"text\",\"text\":\"denied by policy\"}],\"is_error\":true}"}
+{"name":"session_list","dir":"host_to_ext","frame":"{\"type\":\"session_list\",\"id\":\"s1\",\"sessions\":[{\"session_id\":\"abc\",\"title\":\"hi\",\"messages\":3,\"mtime\":42}]}"}
+{"name":"session_data","dir":"host_to_ext","frame":"{\"type\":\"session_data\",\"id\":\"s2\",\"messages\":[{\"role\":\"user\",\"text\":\"hi\"}]}"}
+{"name":"session_data not found","dir":"host_to_ext","frame":"{\"type\":\"session_data\",\"id\":\"s2\",\"messages\":null,\"not_found\":true}"}
+{"name":"command_invoked","dir":"host_to_ext","frame":"{\"type\":\"command_invoked\",\"id\":\"1\",\"name\":\"deploy\",\"args\":\"prod\"}"}
+{"name":"tool_call","dir":"host_to_ext","frame":"{\"type\":\"tool_call\",\"id\":\"2\",\"name\":\"lookup\",\"args\":{\"q\":\"x\"}}"}
+{"name":"event","dir":"host_to_ext","frame":"{\"type\":\"event\",\"event\":\"tool_call\",\"tool_id\":\"t1\",\"tool_name\":\"bash\",\"tool_args\":{}}"}
+{"name":"event session_start","dir":"host_to_ext","frame":"{\"type\":\"event\",\"event\":\"session_start\",\"session_id\":\"s-1\",\"session_path\":\"/p.tervasession\",\"session_title\":\"My Session\"}"}
+{"name":"event session_start with workspace","dir":"host_to_ext","frame":"{\"type\":\"event\",\"event\":\"session_start\",\"session_id\":\"s-1\",\"session_path\":\"/p.tervasession\",\"session_title\":\"My Session\",\"cwd\":\"/work/terva\",\"project_id\":\"terva-9f2c\"}"}
+{"name":"event session_start no session","dir":"host_to_ext","frame":"{\"type\":\"event\",\"event\":\"session_start\"}"}
+{"name":"event turn_end","dir":"host_to_ext","frame":"{\"type\":\"event\",\"event\":\"turn_end\",\"step\":2,\"stop\":\"end_turn\"}"}
+{"name":"event tool_result error","dir":"host_to_ext","frame":"{\"type\":\"event\",\"event\":\"tool_result\",\"tool_id\":\"t1\",\"tool_name\":\"bash\",\"text\":\"exit status 1\",\"is_error\":true}"}
+{"name":"event workspace_changed","dir":"host_to_ext","frame":"{\"type\":\"event\",\"event\":\"workspace_changed\",\"files\":[{\"path\":\"packages/agent/extproto/extproto.go\",\"change\":\"modified\"},{\"path\":\"docs/notes.md\",\"change\":\"added\"}]}"}
+{"name":"event config_update","dir":"host_to_ext","frame":"{\"type\":\"event\",\"event\":\"config_update\",\"config\":{\"api_base\":\"https://api.example.com\",\"verbose\":false}}"}
+{"name":"event run_end","dir":"host_to_ext","frame":"{\"type\":\"event\",\"event\":\"run_end\",\"error\":\"context canceled\"}"}
+{"name":"event_intercept tool_call","dir":"host_to_ext","frame":"{\"type\":\"event_intercept\",\"id\":\"i1\",\"event\":\"tool_call\",\"tool_id\":\"t1\",\"tool_name\":\"bash\",\"tool_args\":{\"cmd\":\"ls\"}}"}
+{"name":"event_intercept turn_start","dir":"host_to_ext","frame":"{\"type\":\"event_intercept\",\"id\":\"i2\",\"event\":\"turn_start\",\"step\":3}"}
+{"name":"event_intercept assistant_message","dir":"host_to_ext","frame":"{\"type\":\"event_intercept\",\"id\":\"i3\",\"event\":\"assistant_message\",\"text\":\"the draft reply\"}"}
+{"name":"secret_value found","dir":"host_to_ext","frame":"{\"type\":\"secret_value\",\"id\":\"q3\",\"found\":true,\"value\":\"tok-123\"}"}
+{"name":"secret_value absent","dir":"host_to_ext","frame":"{\"type\":\"secret_value\",\"id\":\"q3\",\"found\":false}"}
+{"name":"secret_value error","dir":"host_to_ext","frame":"{\"type\":\"secret_value\",\"id\":\"q3\",\"found\":false,\"error\":\"this host does not broker extension secrets\"}"}
+{"name":"secret_keys","dir":"host_to_ext","frame":"{\"type\":\"secret_keys\",\"id\":\"q5\",\"keys\":[\"cursor\",\"oauth_token\"]}"}
+{"name":"secret_keys empty","dir":"host_to_ext","frame":"{\"type\":\"secret_keys\",\"id\":\"q5\",\"keys\":null}"}
+{"name":"secret_ack","dir":"host_to_ext","frame":"{\"type\":\"secret_ack\",\"id\":\"q1\"}"}
+{"name":"secret_ack error","dir":"host_to_ext","frame":"{\"type\":\"secret_ack\",\"id\":\"q1\",\"error\":\"this host does not broker extension secrets\"}"}
+{"name":"panel_key","dir":"host_to_ext","frame":"{\"type\":\"panel_key\",\"panel_id\":\"todos-main\",\"key\":\"rune\",\"text\":\"y\"}"}
+{"name":"panel_resize","dir":"host_to_ext","frame":"{\"type\":\"panel_resize\",\"panel_id\":\"todos-main\",\"width\":80,\"height\":24}"}
+{"name":"panel_close from host","dir":"host_to_ext","frame":"{\"type\":\"panel_close\",\"panel_id\":\"todos-main\"}"}
+{"name":"chat_open","dir":"host_to_ext","frame":"{\"type\":\"chat_open\",\"id\":\"s1\"}"}
+{"name":"chat_close","dir":"host_to_ext","frame":"{\"type\":\"chat_close\",\"id\":\"s1\"}"}
+{"name":"shutdown","dir":"host_to_ext","frame":"{\"type\":\"shutdown\"}"}

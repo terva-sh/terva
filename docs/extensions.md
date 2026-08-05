@@ -921,7 +921,44 @@ either way — `Sequential()` is about *logical* ordering, not data races.
 
 All frames are one JSON object per line. Top-level `type` is the
 discriminator. Optional `id` correlates request frames with their
-responses.
+responses. The schema is pinned by golden tests in
+`packages/agent/extproto`; breaking it means bumping
+`extproto.ProtocolVersion`, never a rename sweep — third-party
+extensions are deployed independently of terva and cannot be recompiled
+in lockstep (see [fork.md](fork.md)).
+
+**The golden corpus is published** at
+`packages/agent/extproto/testdata/golden.jsonl` — one
+`{"name":…,"dir":…,"frame":…}` object per line, where `frame` is the
+exact bytes terva emits, carried as a JSON string so it survives the
+envelope intact. Point your conformance suite at that file rather than
+copying frames by hand: a copy drifts silently, and a fetch cannot. It
+covers every frame type in the protocol, and a test refuses to let it
+fall behind — a frame added to `extproto.go` without a corpus entry
+fails on the commit that adds it.
+
+`dir` is `ext_to_host`, `host_to_ext`, or `both`. An extension only ever
+*encodes* `ext_to_host` frames, so the useful split is to assert those
+byte-exact against the corpus and the rest on decode.
+
+Two things to know before byte-comparing:
+
+- terva encodes with Go's `encoding/json`, which escapes `<`, `>` and
+  `&` where most encoders emit them literally. Both are valid JSON and
+  every reader here accepts either, so this never matters on the live
+  wire — real frames carry those characters constantly — but the corpus
+  is deliberately kept free of them so byte-exact comparison stays
+  meaningful across languages.
+- Map-valued fields (`config` on `hello_ack` and on a `config_update`
+  event) are emitted with their **keys sorted**, because Go marshals maps
+  that way. A language whose map preserves insertion order has to sort
+  to reproduce these bytes.
+
+The corpus also pins the shapes that are easy to guess wrong. Several
+array fields carry no `omitempty`, and Go marshals a nil slice as
+`null`, not `[]` — `secret_keys` for an extension holding no secrets is
+`{"keys":null}`, and a not-found `session_data` is `{"messages":null}`.
+Model those as nullable.
 
 ### Frame size limits
 
