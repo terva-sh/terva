@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Codex (ChatGPT subscription) client. Uses OpenAI's Responses API via
@@ -21,7 +23,9 @@ import (
 // Wire protocol notes:
 //   - Endpoint: POST https://chatgpt.com/backend-api/codex/responses
 //   - Headers: Authorization: Bearer <access_token>, chatgpt-account-id: <id>,
-//     OpenAI-Beta: responses=experimental, originator: terva
+//     OpenAI-Beta: responses=experimental, originator: terva,
+//     session-id: <uuid> (see codexSessionID — the backend's prompt cache
+//     serves requests carrying one far more often than requests without)
 //   - Body: OpenAI Responses API shape (not chat/completions).
 //     input: [{role, content: [{type: "input_text" | "input_image" | ... }]}]
 //     instructions: <system prompt>
@@ -36,6 +40,49 @@ import (
 // claim; see auth/oauth.go.
 
 const codexDefaultBaseURL = "https://chatgpt.com/backend-api/codex/responses"
+
+// codexSessionNamespace seeds the UUIDv5 derivation in codexSessionID. Its
+// only job is to keep the derived ids in a space of terva's own, so a session
+// id can never collide with an unrelated identifier that happens to share a
+// cache key string.
+var codexSessionNamespace = uuid.MustParse("6f1a2b3c-8d4e-5f60-9a1b-2c3d4e5f6071")
+
+// codexSessionID derives this conversation's session-id header from its
+// prompt-cache key.
+//
+// Why the header exists at all: measured live against
+// chatgpt.com/backend-api/codex/responses, the backend's prompt cache serves
+// requests carrying a session-id far more often than requests without one —
+// 25/30 against 3/18 across three runs, with originator and user-agent held at
+// terva's own values. terva sent no session-id at all — and the collapse
+// investigation had until then been looking inside the request BODY, which
+// --dump-prompt=wire eventually showed was byte-identical across a collapse.
+// The discriminator was never in the body.
+// See packages/provider/codex_identity_ab_test.go for the harness.
+//
+// Derived rather than minted, and that is the whole correctness argument. The
+// header only helps if it is STABLE across a conversation's dispatches: a
+// fresh id per request reproduces the no-header hit rate while looking like
+// the fix is in. cacheKey (core.Agent.cacheID) already guarantees exactly the
+// two properties needed — stable for the conversation's life, unique across
+// concurrent ones — and prefers the session's persisted meta UUID, so a
+// --resume rejoins its own cache route instead of stranding it.
+//
+// UUIDv5 because cacheKey is not always UUID-shaped (legacy transcripts key on
+// a file basename, live-only agents on "live-<uuid>") and the Codex CLI sends
+// a UUID. Hashing normalizes every shape to one the backend certainly accepts
+// without inventing per-request entropy.
+//
+// Returns "" when cacheKey is empty, and the caller then sends no header. That
+// is deliberate: with no stable conversation identity there is nothing to
+// derive from, and a random id would be strictly worse than none — it would
+// look applied and measure like the baseline.
+func codexSessionID(cacheKey string) string {
+	if cacheKey == "" {
+		return ""
+	}
+	return uuid.NewSHA1(codexSessionNamespace, []byte(cacheKey)).String()
+}
 
 type codexClient struct {
 	cred      CredentialSource
@@ -148,6 +195,16 @@ type codexFunctionCallOutput struct {
 // We capture it on incoming streams and replay it verbatim on follow-up
 // requests: the API rejects assistant tool-call replays without it when
 // thinking is enabled.
+// codexCompactionItem replays a server-side compaction summary. The item id
+// is echoed back as issued (the backend stamps them `cmp_…`), and the
+// encrypted blob is opaque — it is the backend's encoding of the turns it
+// compacted away, so it goes back exactly as it arrived.
+type codexCompactionItem struct {
+	Type             string `json:"type"` // "compaction_summary"
+	ID               string `json:"id,omitempty"`
+	EncryptedContent string `json:"encrypted_content,omitempty"`
+}
+
 type codexReasoningItem struct {
 	Type             string `json:"type"` // "reasoning"
 	ID               string `json:"id,omitempty"`
@@ -336,6 +393,16 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 			droppedImg := 0
 			for _, c := range msg.Content {
 				switch v := c.(type) {
+				case CompactionBlock:
+					// Replayed verbatim. The blob is the backend's own
+					// encoding of the turns it compacted away, so a
+					// re-serialization that "tidied" it would destroy the
+					// only copy of that context.
+					body.Input = append(body.Input, codexCompactionItem{
+						Type:             "compaction_summary",
+						ID:               v.ID,
+						EncryptedContent: v.Encrypted,
+					})
 				case ReasoningBlock:
 					// The summary is deliberately NOT replayed, even when we
 					// have one. The encrypted blob carries the reasoning the
@@ -529,6 +596,15 @@ func (c *codexClient) Stream(ctx context.Context, req Request) (<-chan Event, er
 		httpReq.Header.Set("openai-beta", "responses=experimental")
 		httpReq.Header.Set("originator", "terva")
 		httpReq.Header.Set("user-agent", codexUserAgent())
+		// Deliberately NOT accompanied by an originator/user-agent change.
+		// The upstream project terva forked from moved to the full
+		// codex_cli_rs identity for this (commit b58450d9); the
+		// decomposition measured originator and user-agent contributing
+		// nothing (1/4 each against a 0/4 baseline), so terva keeps naming
+		// itself honestly and sends only the field it was omitting.
+		if sid := codexSessionID(req.PromptCacheKey); sid != "" {
+			httpReq.Header.Set("session-id", sid)
+		}
 		return httpReq, nil
 	}
 
@@ -983,8 +1059,11 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 				var p struct {
 					Response struct {
 						Usage struct {
-							InputTokens        int `json:"input_tokens"`
-							OutputTokens       int `json:"output_tokens"`
+							InputTokens         int `json:"input_tokens"`
+							OutputTokens        int `json:"output_tokens"`
+							OutputTokensDetails *struct {
+								ReasoningTokens int `json:"reasoning_tokens"`
+							} `json:"output_tokens_details"`
 							InputTokensDetails struct {
 								CachedTokens int `json:"cached_tokens"`
 								// GPT-5.6+ reports the prefix it WROTE to cache
@@ -1015,6 +1094,12 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 				det := p.Response.Usage.InputTokensDetails
 				usage.InputTokens = p.Response.Usage.InputTokens
 				usage.OutputTokens = p.Response.Usage.OutputTokens
+				// A pointer, so an absent block stays "not reported" rather
+				// than becoming a measured zero.
+				if d := p.Response.Usage.OutputTokensDetails; d != nil {
+					usage.ReasoningTokens = d.ReasoningTokens
+					usage.ReasoningTokensKnown = true
+				}
 				usage.CacheReadTokens = det.CachedTokens
 				usage.CacheWriteTokens = det.CacheWriteTokens
 				if n := usage.InputTokens - det.CachedTokens; n >= 0 {
