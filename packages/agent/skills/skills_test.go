@@ -227,20 +227,41 @@ func TestDiscoverUntrustedDropsProjectSkills(t *testing.T) {
 	}
 }
 
-func TestVisibleSkillsHidesBuiltins(t *testing.T) {
+// Built-ins are listed, and they sort AFTER the user's own skills so the first
+// screen of the picker stays the set the user installed. The ordering is the
+// whole reason listing eleven more entries is tolerable, so it is asserted
+// rather than left to sort's incidental behaviour.
+func TestVisibleSkillsListsBuiltinsAfterUserSkills(t *testing.T) {
 	in := []*Skill{
-		{Name: "user-one"},
 		{Name: "built-one", Builtin: true},
 		{Name: "user-two"},
+		{Name: "built-two", Builtin: true},
+		{Name: "user-one"},
 	}
 	out := VisibleSkills(in)
-	if len(out) != 2 {
-		t.Fatalf("expected 2 visible skills, got %d (%v)", len(out), out)
+	if len(out) != 4 {
+		t.Fatalf("expected all 4 skills visible, got %d (%v)", len(out), out)
 	}
+	var got []string
+	for _, s := range out {
+		got = append(got, s.Name)
+	}
+	want := []string{"user-one", "user-two", "built-one", "built-two"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("visible order = %v, want %v", got, want)
+		}
+	}
+	// A built-in reaching the picker is the point; assert one is actually
+	// there so a regression to filtering cannot pass on ordering alone.
+	var builtins int
 	for _, s := range out {
 		if s.Builtin {
-			t.Errorf("built-in %q leaked into visible set", s.Name)
+			builtins++
 		}
+	}
+	if builtins != 2 {
+		t.Errorf("expected both built-ins in the visible set, got %d", builtins)
 	}
 }
 

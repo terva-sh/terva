@@ -201,18 +201,25 @@ four are standing workflows:
 
 They are fully active: they appear in the system-prompt manifest (tagged
 `[builtin]`) and the model loads them through the `skill` tool like any
-other. They are deliberately **hidden from `/skills`** and the other
-user-facing pickers, which show only skills you installed or shipped in
-your project. A skill of your own in a **native** dir shadows the
-built-in of the same name; a `.claude`/`.agents` skill or an extension
-bundle does not — see the ladder above.
+other. They are also listed in `/skills` and offered by `/skill`
+completion, tagged `built-in` and sorted **after** your own skills, so
+the first screen of the picker stays the set you installed. A skill of
+your own in a **native** dir shadows the built-in of the same name; a
+`.claude`/`.agents` skill or an extension bundle does not — see the
+ladder above.
 
 ## Inspecting installed skills
 
-In terva, run `/skills`. A picker lists the discovered skills — the ones
-you installed or shipped, with their description and source path; the
-built-ins stay out of it. Press enter on a row to view the full body
-inline. Press esc to go back.
+In terva, run `/skills`. A picker lists every discovered skill with its
+description and source — yours and your extensions' first, then the
+built-ins. Press enter on a row to view the full body inline. Press esc
+to go back.
+
+Built-ins are listed because `/skill <name>` has always resolved them:
+a picker that hid what you could type understated what was there. It
+also has to show them to stay coherent — a row tagged `shadowed by
+builtin` names a tier, and that tier needs to be somewhere you can look
+at.
 
 A skill that lost its name to a higher tier appears under its qualified
 name (`claude:handoff`) with a `shadowed by …` tag, so the picker

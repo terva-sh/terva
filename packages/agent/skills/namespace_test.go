@@ -153,7 +153,11 @@ func TestRefRoundTripsThroughResolve(t *testing.T) {
 
 // A skill that lost its bare name still has to be findable by a human: the
 // picker is where they go to ask "where did my skill go?".
-func TestVisibleSkillsIncludesShadowedButNotBuiltins(t *testing.T) {
+//
+// Both halves of the collision must be on screen. The shadowed entry names the
+// tier that beat it ("shadowed by builtin"), so that tier has to be reachable
+// in the same list or the row points at something the user cannot see.
+func TestVisibleSkillsShowsBothHalvesOfACollision(t *testing.T) {
 	name := anyBuiltinName(t)
 	tmp := testsupport.TempDir(t)
 	tervaHome := filepath.Join(tmp, "home")
@@ -163,17 +167,22 @@ func TestVisibleSkillsIncludesShadowedButNotBuiltins(t *testing.T) {
 	got, _ := Discover(tervaHome, "", userHome, true, true, true)
 	vis := VisibleSkills(got)
 
-	var found *Skill
+	var found, winner *Skill
 	for _, s := range vis {
-		if s.Builtin {
-			t.Fatalf("built-in %q leaked into the picker", s.Name)
+		if s.Name != name {
+			continue
 		}
-		if s.Name == name {
+		if s.Builtin {
+			winner = s
+		} else {
 			found = s
 		}
 	}
 	if found == nil {
 		t.Fatalf("the shadowed %q is missing from the picker — the collision would be invisible", name)
+	}
+	if winner == nil {
+		t.Fatalf("the built-in %q that took the name is missing — the shadowed row would name a tier the picker never shows", name)
 	}
 	if found.ShadowedBy == nil || !found.ShadowedBy.Builtin {
 		t.Fatalf("shadowed entry must point at the built-in that beat it, got %+v", found.ShadowedBy)

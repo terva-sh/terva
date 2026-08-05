@@ -1,7 +1,6 @@
 package dialogs
 
 import (
-	"fmt"
 	"strings"
 
 	"terva.sh/terva/packages/agent/skills"
@@ -122,7 +121,10 @@ func (d *SkillsDialog) Render(th tui.Theme, width int) []string {
 
 	out := []string{FrameHeader(th, i18n.T("skills (enter to view, r to reload, esc to close)"), width)}
 	if len(d.skills) == 0 {
-		out = append(out, "  "+th.FG256(th.Muted, i18n.T("no user skills loaded")))
+		// Built-ins are listed now, so an empty picker means nothing loaded
+		// at all — --no-skill, or --no-builtin-skills with no skills of your
+		// own. "no user skills" would send someone looking in the wrong place.
+		out = append(out, "  "+th.FG256(th.Muted, i18n.T("no skills loaded")))
 		out = append(out, "  "+th.FG256(th.Muted, i18n.T("add SKILL.md under $TERVA_HOME/skills, .terva/skills, .claude/skills, or .agents/skills")))
 		out = append(out, FrameRule(th, width))
 		return out
@@ -208,9 +210,9 @@ func (d *SkillsDialog) renderBody(th tui.Theme, width int) []string {
 func formatSkillRow(s *skills.Skill, maxWidth int) string {
 	// Ref, not Name: for a shadowed skill the bare name belongs to somebody
 	// else, and this row is where the user reads what to type.
-	left := fmt.Sprintf("%-20s  ", truncateLineSafe(s.Ref(), 20))
+	left := padRunes(truncateLineSafe(s.Ref(), 20), 20) + "  "
 	src := "  " + truncateLineSafe(s.Source, 16)
-	room := maxWidth - len(left) - len(src)
+	room := maxWidth - runeLen(left) - runeLen(src)
 	if room < 10 {
 		room = 10
 	}
@@ -220,14 +222,27 @@ func formatSkillRow(s *skills.Skill, maxWidth int) string {
 	if s.ShadowedBy != nil {
 		desc = i18n.T("shadowed by %s — %s", shadowSourceLabel(s.ShadowedBy), desc)
 	}
-	if len(desc) > room {
-		if room <= 3 {
-			desc = strings.Repeat(".", room)
-		} else {
-			desc = desc[:room-3] + "..."
-		}
+	// Truncate AND pad to the same column. Only truncating leaves a short
+	// description pulling its source tag left, which reads as a ragged column
+	// once the list is long and the descriptions vary in length — the state
+	// the picker is in now that it carries the eleven built-ins.
+	//
+	// Widths are counted in runes throughout: descriptions here routinely
+	// carry em dashes, which are three bytes each, so a byte count both
+	// over-truncates and mis-pads.
+	return left + padRunes(truncateLineSafe(desc, room), room) + src
+}
+
+// runeLen is the display width of s in runes rather than bytes.
+func runeLen(s string) int { return len([]rune(s)) }
+
+// padRunes right-pads s with spaces to n runes. Shorter is left alone; longer
+// is returned unchanged, since truncation is the caller's decision.
+func padRunes(s string, n int) string {
+	if d := n - runeLen(s); d > 0 {
+		return s + strings.Repeat(" ", d)
 	}
-	return left + desc + src
+	return s
 }
 
 // truncateLineSafe limits s to n runes (not bytes) so multibyte

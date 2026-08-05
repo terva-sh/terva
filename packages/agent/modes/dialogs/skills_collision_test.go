@@ -13,11 +13,12 @@ import (
 // where a ~/.claude/skills/handoff meets the built-in of the same name.
 func collidingCatalog() []*skills.Skill {
 	winner := &skills.Skill{
-		Name:      "handoff",
-		Namespace: skills.NamespaceBuiltin,
-		Source:    "built-in",
-		Path:      "builtin:handoff",
-		Builtin:   true,
+		Name:        "handoff",
+		Namespace:   skills.NamespaceBuiltin,
+		Description: "Compact the current conversation into a handoff document.",
+		Source:      "built-in",
+		Path:        "builtin:handoff",
+		Builtin:     true,
 	}
 	loser := &skills.Skill{
 		Name:         "handoff",
@@ -64,9 +65,24 @@ func TestSkillsDialogRendersCollisionRow(t *testing.T) {
 	if !strings.Contains(row, "shadowed by builtin") {
 		t.Errorf("collision row does not say what beat it:\n%q", row)
 	}
-	// The built-in itself must stay out of the picker.
-	if strings.Contains(joined, "built-in") {
-		t.Errorf("a built-in leaked into the picker:\n%s", joined)
+	// The tier the row blames must itself be on screen, or "shadowed by
+	// builtin" points at something the user has no way to look at.
+	if !strings.Contains(joined, "built-in") {
+		t.Errorf("the built-in that took the name is absent — the collision row blames a tier the picker never shows:\n%s", joined)
+	}
+	// And it sorts BELOW the user's own skills, which is what keeps eleven
+	// shipped skills from pushing the installed ones off the first screen.
+	shadowedAt, builtinAt := -1, -1
+	for i, l := range out {
+		if shadowedAt < 0 && strings.Contains(l, "claude:handoff") {
+			shadowedAt = i
+		}
+		if builtinAt < 0 && strings.Contains(l, "built-in") {
+			builtinAt = i
+		}
+	}
+	if builtinAt >= 0 && shadowedAt >= 0 && builtinAt < shadowedAt {
+		t.Errorf("built-in row %d sorts above the user's skill at %d:\n%s", builtinAt, shadowedAt, joined)
 	}
 	// Width is measured on the PRINTABLE text: the escape sequences a theme
 	// emits are bytes the terminal never spends a column on, so len() would

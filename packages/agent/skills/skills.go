@@ -175,10 +175,19 @@ func (s *Skill) Ref() string {
 	return s.Name
 }
 
-// VisibleSkills returns the subset of skills users should see in
-// pickers, /skills, and other interactive surfaces. Built-ins are
-// hidden because they're implementation detail; the model still
-// loads them through the system-prompt manifest + the skill tool.
+// VisibleSkills returns the skills users should see in pickers,
+// /skills, completions, and other interactive surfaces.
+//
+// Built-ins ARE included. They used to be hidden as implementation
+// detail, which stopped being true twice over: four of them are
+// standing workflows a person invokes by hand (handoff,
+// init-workspace, retrospective, troubleshoot-terva), and `/skill
+// <name>` has always resolved them — so omitting them here made the
+// surfaces understate what the user could actually type. Worse, a
+// picker that tags a collision "shadowed by builtin" while refusing to
+// show any builtin names a tier the user cannot see, which is only
+// half an answer to the "where did my skill go?" question the row
+// exists to answer.
 //
 // Shadowed skills are flattened in beside the winner that beat them:
 // a skill that lost its bare name is not a skill that vanished, and
@@ -187,7 +196,7 @@ func (s *Skill) Ref() string {
 func VisibleSkills(in []*Skill) []*Skill {
 	out := make([]*Skill, 0, len(in))
 	keep := func(s *Skill) {
-		if s == nil || s.Builtin {
+		if s == nil {
 			return
 		}
 		out = append(out, s)
@@ -201,9 +210,16 @@ func VisibleSkills(in []*Skill) []*Skill {
 			keep(sh)
 		}
 	}
-	// Name-primary so a shadowed entry sorts next to the winner that
-	// took its name, rather than drifting off under its namespace.
+	// The user's own skills first, terva's built-ins after: the first
+	// screen of the picker stays the set the user installed, and the
+	// eleven that ship in the binary do not push it off the top.
+	// Name-primary within each group so a shadowed entry sorts next to
+	// the winner that took its name rather than drifting off under its
+	// namespace.
 	sort.Slice(out, func(i, j int) bool {
+		if out[i].Builtin != out[j].Builtin {
+			return !out[i].Builtin
+		}
 		if out[i].Name != out[j].Name {
 			return out[i].Name < out[j].Name
 		}

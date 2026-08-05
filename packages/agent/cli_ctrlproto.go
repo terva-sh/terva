@@ -302,10 +302,13 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		SkillSnapshot: func() []*skills.Skill { return w.SkillSnapshot(iv.CarrierSessionID()) },
 		ReloadSkills:  func() []*skills.Skill { return w.ReloadSkills(iv.CarrierSessionID()) },
 		SkillCompletions: func() []modes.SkillCompletion {
-			// VisibleSkills drops the built-ins and folds in the skills
+			// VisibleSkills carries the built-ins and folds in the skills
 			// they shadowed, so a name lost to a higher tier is still
 			// completable — under its qualified spelling, which is the
-			// only form that resolves back to it.
+			// only form that resolves back to it. Completions answer
+			// "what resolves if I type it?", and `/skill handoff` has
+			// always reached the built-in, so leaving them out made the
+			// popup understate what was valid.
 			vis := skills.VisibleSkills(w.SessionSkills(iv.CarrierSessionID()))
 			out := make([]modes.SkillCompletion, 0, len(vis))
 			for _, sk := range vis {

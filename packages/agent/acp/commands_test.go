@@ -265,9 +265,16 @@ func TestACPSlashSkillsListsShadowedByQualifiedName(t *testing.T) {
 	if !strings.Contains(text, "claude:handoff") {
 		t.Errorf("/skills must list the shadowed skill under its qualified name, got: %q", text)
 	}
-	// The built-in that won stays out of the listing, as always.
-	if strings.Contains(text, "ours") {
-		t.Errorf("a built-in leaked into the /skills listing: %q", text)
+	// The built-in that won is listed too: the shadowed entry is only
+	// intelligible next to the thing that took its name, and `/skill handoff`
+	// resolves to it, so a listing that omits it understates what resolves.
+	if !strings.Contains(text, "ours") {
+		t.Errorf("the built-in that took the name is absent from /skills: %q", text)
+	}
+	// Each is listed under a spelling that resolves back to IT — the bare name
+	// belongs to the winner, the qualified one to the skill it shadowed.
+	if !strings.Contains(text, "handoff — ours") {
+		t.Errorf("the winner must appear under its bare name: %q", text)
 	}
 }
 
