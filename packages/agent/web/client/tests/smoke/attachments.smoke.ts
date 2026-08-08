@@ -57,6 +57,24 @@ test('pasting an image adds an attachment chip', async ({ page }) => {
 // feature whose failure mode is visual — a name long enough to push the row, a
 // × sitting on top of the text. The width assertion below is what a component
 // test cannot make.
+
+// An in-flight upload renders a PLACEHOLDER chip that also carries
+// .composer-chip--file (Composer.tsx, the `uploading` map). It has the name and
+// the size, so most assertions cannot tell it from the settled chip — but it has
+// no remove button, and it is guaranteed to be torn down and replaced the moment
+// the upload lands.
+//
+// Waiting on the bare class therefore resolves to a doomed node. Anything that
+// then MEASURES it is racing the swap: Playwright resolves the locator to a
+// handle and reads its box as two steps, and a detached node has no box, so the
+// read comes back null. That is a load-dependent failure — it went red twice in
+// one loaded local suite and stayed green in 38 later runs, which is exactly the
+// signature that gets miscalled a flake.
+//
+// Wait for the SETTLED chip instead. Nothing is pending behind it, so there is
+// no swap to lose the race to.
+const SETTLED_FILE_CHIP = '.composer-chip--file:not(.is-uploading)'
+
 async function dropFile(page: import('@playwright/test').Page, name: string, type: string) {
   await page.evaluate(
     ({ name, type }) => {
@@ -87,7 +105,10 @@ test('dropping a document uploads it and chips it by name', async ({ page }) => 
 
   await dropFile(page, 'filters.xml', 'application/xml')
 
-  const chip = page.locator('.composer-chip--file')
+  // The settled chip specifically: the placeholder is labelled with the DROPPED
+  // name, which here is spelled the same, so the bare class would let this pass
+  // without the upload's answer ever being rendered.
+  const chip = page.locator(SETTLED_FILE_CHIP)
   await expect(chip).toHaveCount(1)
   await expect(chip.locator('.chip-name')).toHaveText('filters.xml')
   // The upload is addressed to the session the composer is on — not the blank
@@ -113,10 +134,11 @@ test('a long attachment name truncates instead of widening the composer', async 
   await expect(page.locator('footer.composer textarea')).toBeVisible()
 
   await dropFile(page, longName, 'application/xml')
-  await expect(page.locator('.composer-chip--file')).toHaveCount(1)
+  const settled = page.locator(SETTLED_FILE_CHIP)
+  await expect(settled).toHaveCount(1)
 
   const composer = page.locator('footer.composer')
-  const chipWidth = (await page.locator('.composer-chip--file').boundingBox())!.width
+  const chipWidth = (await settled.boundingBox())!.width
   const composerWidth = (await composer.boundingBox())!.width
   expect(chipWidth).toBeLessThanOrEqual(composerWidth)
   // And the page itself must not have gained a horizontal scrollbar.
@@ -144,7 +166,7 @@ test('the remove button is centred on a file chip and clear of its text', async 
   await expect(page.locator('footer.composer textarea')).toBeVisible()
 
   await dropFile(page, 'debug.log', 'text/plain')
-  const chip = page.locator('.composer-chip--file')
+  const chip = page.locator(SETTLED_FILE_CHIP)
   await expect(chip).toHaveCount(1)
 
   const chipBox = (await chip.boundingBox())!
@@ -157,6 +179,45 @@ test('the remove button is centred on a file chip and clear of its text', async 
   // The label must end before the button starts — an overlap is unreadable text
   // and an unclickable corner, which is what a 24px right padding produced.
   expect(closeBox.x).toBeGreaterThan(sizeBox.x + sizeBox.width)
+})
+
+// Pins the distinction the two measuring tests above depend on. Holding the
+// upload open makes the placeholder window arbitrarily wide, so this is
+// deterministic where the failure it prevents is not: if the placeholder ever
+// stops being separable from the settled chip — the class renamed, the button
+// added to it, the `uploading` map dropped — SETTLED_FILE_CHIP silently goes
+// back to matching a doomed node and the geometry tests go back to flaking.
+test('an in-flight upload is a placeholder chip, distinguishable from the settled one', async ({ page }) => {
+  await installMockBackend(page, { features: ['attachments'], maxAttachmentBytes: 100 << 20 })
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => (release = resolve))
+  await page.route('**/upload*', async (route) => {
+    await held
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'att_1', name: 'debug.log', mime: 'text/plain', kind: 'document', size: 402 }),
+    })
+  })
+  await page.goto(panelSessionURL)
+  await expect(page.locator('footer.composer textarea')).toBeVisible()
+
+  await dropFile(page, 'debug.log', 'text/plain')
+
+  // The bare class matches while the upload is still in flight...
+  const anyFileChip = page.locator('.composer-chip--file')
+  await expect(anyFileChip).toHaveCount(1)
+  await expect(anyFileChip).toHaveClass(/is-uploading/)
+  // ...and what it matched carries no remove button to measure.
+  await expect(anyFileChip.locator('.chip-x')).toHaveCount(0)
+  // The settled selector correctly declines to match it.
+  await expect(page.locator(SETTLED_FILE_CHIP)).toHaveCount(0)
+
+  release()
+
+  const settled = page.locator(SETTLED_FILE_CHIP)
+  await expect(settled).toHaveCount(1)
+  await expect(settled.locator('.chip-x')).toHaveCount(1)
 })
 
 // Silently discarding the file is the behavior this feature removes, so a daemon

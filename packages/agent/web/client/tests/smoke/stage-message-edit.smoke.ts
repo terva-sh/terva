@@ -53,15 +53,42 @@ test('stage: a message can be selected and copied without becoming an editor', a
   await scene(page)
 
   const bubble = page.locator('.stage-bubble', { hasText: 'The lamp gutters' })
-  const box = (await bubble.boundingBox())!
+  // hover() first because it is the only step here with an actionability wait:
+  // Playwright holds until the element's box is unchanged across two animation
+  // frames. mouse.move() has no such check, so measuring before the transcript
+  // has settled and then dragging at those coordinates is a race.
+  await bubble.hover()
 
-  // A real drag across the first line — press, move, move, release. A synthesized
+  // Measure the TEXT, not the bubble. The old drag ran along `box.y + 10` — ten
+  // pixels below the bubble's top edge, which is inside its padding rather than
+  // reliably on a line of prose. It selected the whole line ~98% of the time and
+  // one character the rest (1 failure in 45 runs), and which of those you got
+  // depended on where the padding happened to end.
+  //
+  // A Range over the text node gives the real line boxes, so the drag runs
+  // through the vertical middle of the FIRST line whatever the padding, the font,
+  // or the number of lines the bubble wrapped to.
+  const line = await bubble.evaluate((el) => {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (!n.textContent?.includes('lamp')) continue
+      const r = document.createRange()
+      r.selectNodeContents(n)
+      const first = r.getClientRects()[0]
+      if (first) return { x: first.x, y: first.y, width: first.width, height: first.height }
+    }
+    return null
+  })
+  expect(line, 'no rendered line box for the message text — the drag would have nothing to cross').not.toBeNull()
+  const midY = line!.y + line!.height / 2
+
+  // A real drag across that line — press, move, move, release. A synthesized
   // click() would collapse the selection on mousedown and prove nothing, the
   // lesson the suggest-sheet backdrop guard already cost once.
-  await page.mouse.move(box.x + 8, box.y + 10)
+  await page.mouse.move(line!.x + 2, midY)
   await page.mouse.down()
-  await page.mouse.move(box.x + box.width * 0.4, box.y + 10, { steps: 8 })
-  await page.mouse.move(box.x + box.width * 0.8, box.y + 10, { steps: 8 })
+  await page.mouse.move(line!.x + line!.width * 0.4, midY, { steps: 8 })
+  await page.mouse.move(line!.x + line!.width * 0.8, midY, { steps: 8 })
   await page.mouse.up()
 
   const selected = await page.evaluate(() => window.getSelection()?.toString() ?? '')
