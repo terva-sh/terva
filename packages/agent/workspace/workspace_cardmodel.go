@@ -29,16 +29,23 @@ func (w *Workspace) cardModelStore() *build.CardModelStore { return build.NewCar
 //
 //	card    — the card's stored pref (cardmodel.set), if it resolves to a model
 //	          this workspace can run
-//	world   — RESERVED: no world-level default model exists yet (WorldDoc carries
-//	          only per-character pins), so worldID changes nothing today. Wired so
-//	          the day one is added it slots in here with no caller change.
+//	world   — the saved World's own default (worlds.set_model), for anything
+//	          happening inside that World that the card does not speak for
 //	workspace — the configured default (models.set_default; project shadows global),
 //	          else the boot-resolved default (launch --model + catalog fallback).
 //
-// The card rung is resolved through the catalog (provider.FindModel) exactly like
-// an explicit pick, so a pref naming an unqualified or now-uncredentialed model
-// degrades to the workspace floor instead of seeding an unrunnable session. The
-// workspace rung is trusted as-is, matching createSeededLocked's original base.
+// The card rung sits ABOVE the world rung because it is the narrower statement:
+// "this character runs on X" is about the character wherever they appear, and a
+// World naming a model is setting the room's floor, not overruling a cast member
+// who was given a voice on purpose. A World that wants the last word on one
+// character says so per-character (worlds.set_character_model), which is a pin on
+// the routing path and outranks all of this.
+//
+// Both the card and world rungs are resolved through the catalog
+// (provider.FindModel) exactly like an explicit pick, so a pref naming an
+// unqualified or now-uncredentialed model degrades to the next rung down instead
+// of seeding an unrunnable session. The workspace rung is trusted as-is, matching
+// createSeededLocked's original base.
 func (w *Workspace) effectiveDefaultModel(cardID, worldID string) (prov, model string, source ctrlproto.DefaultSource) {
 	prov, model = w.provider, w.model
 	if dp, dm, _ := w.defaultModel(); dp != "" && dm != "" {
@@ -46,7 +53,13 @@ func (w *Workspace) effectiveDefaultModel(cardID, worldID string) (prov, model s
 	}
 	source = ctrlproto.DefaultSourceWorkspace
 
-	_ = worldID // reserved rung; see the doc comment.
+	if worldID = strings.TrimSpace(worldID); worldID != "" {
+		if doc, err := build.NewWorldStore().Get(worldID); err == nil && strings.TrimSpace(doc.Model.Model) != "" {
+			if m, e := provider.FindModel(doc.Model.Provider, doc.Model.Model); e == nil {
+				prov, model, source = m.Provider, m.ID, ctrlproto.DefaultSourceWorld
+			}
+		}
+	}
 
 	if cardID = strings.TrimSpace(cardID); cardID != "" {
 		if cm, ok, _ := w.cardModelStore().Get(cardID); ok {

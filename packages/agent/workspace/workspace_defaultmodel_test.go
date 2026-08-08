@@ -7,6 +7,7 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -154,6 +155,105 @@ func TestEffectiveDefaultModelCardRung(t *testing.T) {
 	}
 	if p, m, src := w.effectiveDefaultModel("carol-777aaa", ""); p != "openai" || m != "gpt-5" || src != ctrlproto.DefaultSourceWorkspace {
 		t.Errorf("unresolvable pref should fall through: %s/%s@%s, want openai/gpt-5@workspace", p, m, src)
+	}
+}
+
+// The world rung, which stood reserved and unreachable until worlds.set_model
+// gave it a writer. Every assertion here is about ORDER, because a ladder whose
+// rungs are all wired but mis-ranked reads as working until two of them disagree.
+func TestEffectiveDefaultModelWorldRung(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	w := bareWorkspace(testsupport.TempDir(t), true)
+	w.provider, w.model = "openai", "gpt-5" // the workspace floor
+
+	store := build.NewWorldStore()
+	doc, err := store.Save(build.WorldDoc{Name: "Bellhaven"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A World with no default of its own changes nothing — the floor shows
+	// through, and the source still names the workspace.
+	if p, m, src := w.effectiveDefaultModel("", doc.ID); p != "openai" || m != "gpt-5" || src != ctrlproto.DefaultSourceWorkspace {
+		t.Fatalf("world with no default: %s/%s@%s, want openai/gpt-5@workspace", p, m, src)
+	}
+
+	// Given one, it outranks the workspace.
+	doc.Model = core.CastRoute{Provider: "openai", Model: "gpt-5.5"}
+	if doc, err = store.Save(doc); err != nil {
+		t.Fatal(err)
+	}
+	if p, m, src := w.effectiveDefaultModel("", doc.ID); p != "openai" || m != "gpt-5.5" || src != ctrlproto.DefaultSourceWorld {
+		t.Errorf("world default: %s/%s@%s, want openai/gpt-5.5@world", p, m, src)
+	}
+
+	// ...and is in turn outranked by a card's own pref. This is the ordering
+	// decision the ladder encodes: "this character runs on X" is the narrower
+	// statement, so a World setting the room's floor does not overrule a cast
+	// member who was given a voice on purpose.
+	if err := build.NewCardModelStore().Set("alice-abc123", "anthropic", "claude-opus-4-8"); err != nil {
+		t.Fatal(err)
+	}
+	if p, m, src := w.effectiveDefaultModel("alice-abc123", doc.ID); p != "anthropic" || m != "claude-opus-4-8" || src != ctrlproto.DefaultSourceCard {
+		t.Errorf("card over world: %s/%s@%s, want anthropic/claude-opus-4-8@card", p, m, src)
+	}
+
+	// A card with no pref of its own falls to the WORLD rung, not past it to the
+	// workspace — the case that makes the middle rung worth having at all.
+	if p, m, src := w.effectiveDefaultModel("bob-def456", doc.ID); p != "openai" || m != "gpt-5.5" || src != ctrlproto.DefaultSourceWorld {
+		t.Errorf("unpinned card in a World: %s/%s@%s, want openai/gpt-5.5@world", p, m, src)
+	}
+
+	// A World naming a model this workspace cannot run degrades to the floor,
+	// exactly like the card rung — a default that resolves to nothing must not
+	// seed an unrunnable session.
+	doc.Model = core.CastRoute{Provider: "openai", Model: "no-such-model-xyz"}
+	if _, err = store.Save(doc); err != nil {
+		t.Fatal(err)
+	}
+	if p, m, src := w.effectiveDefaultModel("", doc.ID); p != "openai" || m != "gpt-5" || src != ctrlproto.DefaultSourceWorkspace {
+		t.Errorf("unresolvable world default should fall through: %s/%s@%s, want openai/gpt-5@workspace", p, m, src)
+	}
+
+	// A world id that names nothing is not an error — the ladder is consulted on
+	// paths where the World is simply absent.
+	if _, _, src := w.effectiveDefaultModel("", "no-such-world"); src != ctrlproto.DefaultSourceWorkspace {
+		t.Errorf("unknown world should inherit the workspace, got source %s", src)
+	}
+}
+
+// The whole point of the world rung: a scene started in a World opens on the
+// World's model. Through CreateSession, not through the resolver directly —
+// five tests once passed against a helper while the one production caller had a
+// bug, so the assertion has to travel the path the author does.
+func TestSessionCreatedInAWorldOpensOnItsModel(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	store := build.NewWorldStore()
+	doc, err := store.Save(build.WorldDoc{Name: "Bellhaven", Model: core.CastRoute{Provider: "openai", Model: "gpt-5.5"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := NewWorkspace(build.Args{Provider: "openai", Model: "gpt-5", CWD: testsupport.TempDir(t), NoExt: true, NoMCP: true}, "test")
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	info, err := w.CreateSession(context.Background(), ctrlproto.CreateOpts{World: doc.ID})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if info.Model != "gpt-5.5" {
+		t.Errorf("scene in a World = %s, want gpt-5.5 (the World's default, not boot gpt-5)", info.Model)
+	}
+
+	// And an explicit pick still wins over the World — the author asking for a
+	// model in the moment is the narrowest statement of all.
+	info, err = w.CreateSession(context.Background(), ctrlproto.CreateOpts{World: doc.ID, Provider: "openai", Model: "gpt-5"})
+	if err != nil {
+		t.Fatalf("CreateSession with a pick: %v", err)
+	}
+	if info.Model != "gpt-5" {
+		t.Errorf("explicit pick = %s, want gpt-5 — the World must not override it", info.Model)
 	}
 }
 

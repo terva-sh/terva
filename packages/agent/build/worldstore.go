@@ -46,6 +46,21 @@ type WorldDoc struct {
 	// character model pins — the session Cast/CastModels shape, unchanged.
 	Characters      map[string]string         `json:"characters,omitempty"`
 	CharacterModels map[string]core.CastRoute `json:"character_models,omitempty"`
+	// Model is the World's OWN default model — the middle rung of the
+	// Card → World → Workspace ladder Workspace.effectiveDefaultModel walks.
+	// Empty means the World states no preference and the workspace default
+	// shows through. It is deliberately NOT lifted from a session on promotion
+	// (see saveWorld): a session's model is wherever it was last switched to,
+	// which is a fact about that afternoon, not about the World.
+	//
+	// The omitempty below is INERT — encoding/json does not omit an empty struct
+	// — so a World with no default writes "model":{}. That unmarshals back to the
+	// zero value and every reader tests Model.Model for emptiness, so it is noise
+	// rather than a second state. Kept a value rather than a pointer because that
+	// is how CastRoute is held everywhere else (CharacterModels above,
+	// SessionMeta.CastModels), and nil would mean nothing here that the zero
+	// value does not already mean.
+	Model core.CastRoute `json:"model,omitempty"`
 	// Lore is the World's lorebook, audience scoping and learned-when ledger
 	// included — the whole point of saving is that this survives the session.
 	Lore         []core.WorldLoreEntry `json:"lore,omitempty"`
