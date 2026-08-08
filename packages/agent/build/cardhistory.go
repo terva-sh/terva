@@ -204,6 +204,38 @@ func (s *CardHistoryStore) List(cardID string, currentAvatar []byte) ([]CardVers
 	return out, nil
 }
 
+// LastEdited reports when this card's content last CHANGED, and whether it ever
+// has. A card with no history has never been edited since it was imported, which
+// the caller reads as "modified when it was added".
+//
+// It opens nothing. refs reads directory entry NAMES and the timestamp IS the
+// name, so the whole answer comes from one ReadDir of a small directory — which
+// matters because the library list calls this once per card, and for most cards
+// the directory does not exist at all and ReadDir fails straight through.
+//
+// The newest ref is the right answer because Snapshot runs at the moment of an
+// edit, and ONLY when something actually changed: CardStore.write skips it on a
+// byte-identical save so an idle re-save cannot consume a retention slot. That
+// makes this strictly better than card.json's mtime for "modified" — write
+// rewrites card.json unconditionally, so its mtime records the last write
+// ATTEMPT rather than the last change.
+func (s *CardHistoryStore) LastEdited(cardID string) (time.Time, bool) {
+	refs, err := s.refs(cardID)
+	if err != nil || len(refs) == 0 {
+		return time.Time{}, false
+	}
+	// refs sorts ascending, so the last one is the most recent edit. Note that a
+	// ref is an ORDERING token first and a clock reading second: Snapshot issues
+	// strictly-increasing refs, so a burst of edits inside one millisecond is
+	// future-dated by a millisecond or two. Ordering — the only thing a sort key
+	// needs — is exact; treat the value as "when", not as an audit timestamp.
+	ms, err := strconv.ParseInt(refs[len(refs)-1], 10, 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return time.UnixMilli(ms), true
+}
+
 // Get loads one retained revision's card JSON.
 func (s *CardHistoryStore) Get(cardID, ref string) ([]byte, error) {
 	if err := slug.ValidID(cardID); err != nil {

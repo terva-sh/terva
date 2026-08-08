@@ -244,10 +244,52 @@ type CardSummary struct {
 	// Added is when the card entered the library (its directory mtime) — the sort
 	// key for "recently added". Zero/omitted if unknown.
 	Added time.Time `json:"added,omitempty"`
+	// Updated is when the card's CONTENT last changed — the sort key for
+	// "recently updated". A card nobody has edited since importing it reports its
+	// Added time rather than nothing, so the ordering is total and a fresh
+	// library still sorts sensibly.
+	//
+	// Read from the newest card-history revision, NOT from a file mtime. Two
+	// mtimes are the tempting sources and both are wrong: the card DIRECTORY's
+	// mtime is Added and deliberately does not move on an edit, and card.json's
+	// mtime moves on every write INCLUDING one that changes nothing, because
+	// CardStore.write rewrites it unconditionally. The history store already
+	// draws the line this field needs — it snapshots only when the bytes
+	// actually differ.
+	//
+	// Also not the card's own CCv3 modification_date: that is author-supplied,
+	// arrives with an imported card, and terva never stamps it, so it would
+	// order this library by other people's edits.
+	Updated time.Time `json:"updated,omitempty"`
 	// Favorite is whether the card is favorited: the client highlights it and
 	// pins it to the top of the library. A per-library preference toggled by
 	// cards.favorite, never part of the card JSON.
 	Favorite bool `json:"favorite,omitempty"`
+	// VariantOf is the saved World this card is a World-scoped variant of, or ""
+	// for an ordinary card. A variant is what worlds.edit_character produces:
+	// a fork made so an edit inside one World does not rewrite the character
+	// every other World is playing. The library hides variants from the main
+	// shelf, because they are that World's business rather than shelf furniture.
+	//
+	// DERIVED, not stored: a card is a variant while its origin record names a
+	// World that still exists AND still rosters it. That is what makes deleting
+	// a World un-orphan its variants automatically, with no cleanup pass to be
+	// forgotten.
+	VariantOf string `json:"variant_of,omitempty"`
+	// WorldOf is the saved World this card BELONGS to, or "" for an ordinary
+	// card. Set for both kinds of belonging: a variant (above) and a character
+	// the World created (worlds.create_character).
+	//
+	// Separate from VariantOf because they drive different things. VariantOf is
+	// about HIDING — a copy whose original is still on the shelf. WorldOf is
+	// about SAYING SO: a card born in a World stays on the shelf, because there
+	// is no original to fall back to, and gets a badge instead. A variant has
+	// both; a born character has only this one.
+	//
+	// The id, not the name: a World can be renamed and a card summary that
+	// carried a stale name would be a caption slowly going wrong. Surfaces that
+	// show the badge already list Worlds and resolve it themselves.
+	WorldOf string `json:"world_of,omitempty"`
 }
 
 // CardView is one card in full: its summary plus the normalized card JSON, so a

@@ -688,3 +688,50 @@ func TestConsecutivePortraitSwapsAreEachRecorded(t *testing.T) {
 		t.Errorf("the older revision should still hold portrait A")
 	}
 }
+
+// LastEdited is the library's "recently updated" sort key, and the reason it
+// reads the history rather than a file mtime is the no-op case below: write
+// rewrites card.json unconditionally, so card.json's mtime moves on a save that
+// changed nothing. If this key ever moved on such a save, re-opening the editor
+// and pressing save would shuffle a character to the top of the shelf without
+// anything about it having changed.
+func TestCardHistoryLastEditedTracksRealChangesOnly(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	st := NewCardStore()
+
+	imported, err := st.ImportBytes([]byte(cardWith("Mara", "one")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if when, ok := st.history().LastEdited(imported.ID); ok {
+		t.Fatalf("an unedited card has never been edited, got %v", when)
+	}
+
+	if _, err := st.Edit(imported.ID, []byte(cardWith("Mara", "two"))); err != nil {
+		t.Fatal(err)
+	}
+	first, ok := st.history().LastEdited(imported.ID)
+	if !ok {
+		t.Fatal("an edited card reports when it was edited")
+	}
+
+	// A byte-identical save. write() skips the snapshot, so the key must not move.
+	if _, err := st.Edit(imported.ID, []byte(cardWith("Mara", "two"))); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := st.history().LastEdited(imported.ID); !again.Equal(first) {
+		t.Errorf("a save that changed nothing moved the key: %v -> %v", first, again)
+	}
+
+	// A real second edit does move it, and forward.
+	if _, err := st.Edit(imported.ID, []byte(cardWith("Mara", "three"))); err != nil {
+		t.Fatal(err)
+	}
+	second, ok := st.history().LastEdited(imported.ID)
+	if !ok {
+		t.Fatal("still edited after a second edit")
+	}
+	if !second.After(first) {
+		t.Errorf("the second edit must be newer: first=%v second=%v", first, second)
+	}
+}

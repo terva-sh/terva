@@ -517,3 +517,69 @@ func TestCardSummaryAvatarURL(t *testing.T) {
 		t.Errorf("no-avatar url should be empty, got %q", noAvatar.AvatarURL)
 	}
 }
+
+// The library's "recently updated" sort reads CardSummary.Updated, so this
+// drives it THROUGH CardsList rather than through the history store directly —
+// the join is the part that can break, and a store-level test would not see it.
+//
+// Asserted against LastEdited rather than against a clock window on purpose:
+// Added is a filesystem mtime (nanoseconds) and Updated is a millisecond ref, so
+// a card imported and edited inside the same millisecond can legitimately report
+// an Updated a fraction BEFORE its Added. Comparing the two timestamps would be
+// a real, if rare, flake; comparing the wiring is exact.
+func TestCardsListReportsWhenTheCardWasLastUpdated(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	w, err := NewWorkspace(build.Args{Provider: "openai", Model: "gpt-5", CWD: testsupport.TempDir(t)}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	ctx := context.Background()
+
+	src := `{"spec":"chara_card_v2","spec_version":"2.0","data":{"name":"Iris","first_mes":"hi"}}`
+	view, err := w.CardsImport(ctx, ctrlproto.CardImportParams{Bytes: []byte(src)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Never edited: it reports when it arrived, so the sort stays total.
+	r, err := w.CardsList(ctx)
+	if err != nil || len(r.Cards) != 1 {
+		t.Fatalf("list after import: %v, %d", err, len(r.Cards))
+	}
+	fresh := r.Cards[0]
+	if fresh.Updated.IsZero() {
+		t.Fatal("an unedited card must still carry an Updated, or it sorts as undated")
+	}
+	if !fresh.Updated.Equal(fresh.Added) {
+		t.Errorf("an unedited card reports its added time: added=%v updated=%v", fresh.Added, fresh.Updated)
+	}
+
+	edited := `{"spec":"chara_card_v2","spec_version":"2.0","data":{"name":"Iris","first_mes":"hello again"}}`
+	if _, err := w.CardsEdit(ctx, ctrlproto.CardEditParams{ID: view.ID, Card: []byte(edited)}); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err = w.CardsList(ctx)
+	if err != nil || len(r.Cards) != 1 {
+		t.Fatalf("list after edit: %v, %d", err, len(r.Cards))
+	}
+	got := r.Cards[0]
+	want, ok := w.cardHistory().LastEdited(view.ID)
+	if !ok {
+		t.Fatal("the edit must have been recorded")
+	}
+	if !got.Updated.Equal(want) {
+		t.Errorf("Updated must track the newest revision: got %v want %v", got.Updated, want)
+	}
+	if got.Updated.Equal(got.Added) {
+		t.Error("after an edit, Updated must no longer be the added-time fallback")
+	}
+	// Added is the card DIRECTORY's mtime and the fallback above depends on an
+	// edit leaving it alone. If this ever fires, "recently added" has quietly
+	// become a second "recently updated".
+	if !got.Added.Equal(fresh.Added) {
+		t.Errorf("an edit moved Added: %v -> %v", fresh.Added, got.Added)
+	}
+}
