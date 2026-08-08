@@ -11,6 +11,29 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.131.5](https://github.com/terva-sh/terva/releases/tag/v0.131.5) — 2026-08-05
+
+### Features
+
+- cards,stage: duplicate a card, portrait and all
+- codex: the session-id header, and the cache reads that were waiting on it
+- compaction: a third strategy, where the provider does the compacting
+- debug: a cache collapse says so on disk, and the wire can be diffed
+- reasoning: a rung now says what this model actually receives
+- reasoning: a session can choose its own thinking depth
+- skills: the built-ins are listed where they can be invoked
+- usage: how much of the output was thinking
+
+### Fixes
+
+- extproto: the published golden corpus keeps its line endings
+- tui: a reflow above the viewport stops repainting the world
+- web: the reasoning picker stops inventing token budgets
+
+### Other
+
+- ci: just ci runs the Playwright smokes, and refuses a stale bundle
+
 ## [v0.131.3](https://github.com/terva-sh/terva/releases/tag/v0.131.3) — 2026-08-04
 
 ### Features
