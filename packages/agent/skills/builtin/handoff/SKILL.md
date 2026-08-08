@@ -71,6 +71,25 @@ Only what the next session cannot cheaply re-derive:
 - If the user said what the next session will focus on, weight the document
   accordingly — lead with what that session needs, compress the rest.
 
+## Park the task board
+
+The task list belongs to *this* session — the next one starts with an empty
+board, so nothing on it travels. Carry every unfinished task into the
+document first (**Next steps** for work to resume, **Open loops** for work
+waiting on something or someone else), then park it: `task_update` each
+pending or active task to `blocked`, with `evidence` naming what parks it and
+where the work now lives — the handoff's filename. "Handed off" is a reason;
+use it.
+
+Never mark a task `done` that isn't, and don't `task_archive` the board just
+to clear it: an archived task cannot be continued, and the archive is scoped
+to this session too, so filing one away reaches no one.
+
+Parking is also what lets the turn end. Pending and active tasks are what the
+host counts as open work, so a handoff that leaves one gets re-prompted to
+finish it or justify it — `blocked` is an acknowledged park, and it ends the
+turn clean.
+
 ## Finish
 
 End your reply with the handoff's absolute path and a one-line kickoff the
