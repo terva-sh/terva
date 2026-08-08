@@ -1,6 +1,28 @@
 package ctrlproto
 
-import "context"
+import (
+	"context"
+	"sort"
+)
+
+// ServedMethods returns every verb the dispatch table answers, sorted.
+//
+// The TABLE is the authority, not the Method constants: a constant with no
+// entry is a verb the server does not serve, and listing it would send a caller
+// after something that answers "unknown method". Which is exactly the question
+// `terva ctl --list` is asked.
+//
+// subscribe/unsubscribe are absent for the reason they are absent from the map —
+// serveState answers them itself, so they are not commands a one-shot caller can
+// usefully send.
+func ServedMethods() []Method {
+	out := make([]Method, 0, len(dispatch))
+	for m := range dispatch {
+		out = append(out, m)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
 
 // dispatch is every verb this server answers, keyed by [Method].
 //
@@ -318,6 +340,9 @@ var dispatch = map[Method]handler{
 	MethodSessionsDoctor: ask(noSessionDoctor, func(c DoctorController, ctx context.Context, f Frame, p SessionDoctorParams) (SessionDoctorResult, error) {
 		return c.SessionsDoctor(ctx, f.Sess, p)
 	}),
+	MethodWorldsDoctor: ask(noWorldDoctor, func(c DoctorController, ctx context.Context, f Frame, p WorldDoctorParams) (WorldDoctorResult, error) {
+		return c.WorldsDoctor(ctx, p)
+	}),
 	MethodSessionsNextScene: ask(noNextScene, func(c DoctorController, ctx context.Context, f Frame, p NextSceneParams) (NextSceneResult, error) {
 		return c.SessionsNextScene(ctx, f.Sess, p)
 	}),
@@ -461,6 +486,9 @@ var dispatch = map[Method]handler{
 	MethodWorldSetCharacterModel: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldSetCharacterModelParams) (WorldView, error) {
 		return c.WorldSetCharacterModel(ctx, p)
 	}),
+	MethodWorldSetModel: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldSetModelParams) (WorldView, error) {
+		return c.WorldSetModel(ctx, p)
+	}),
 	MethodWorldsExport: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldExportParams) (WorldExport, error) {
 		return c.WorldsExport(ctx, p)
 	}),
@@ -469,6 +497,27 @@ var dispatch = map[Method]handler{
 	}),
 	MethodWorldDelete: act(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldDeleteParams) error {
 		return c.WorldDelete(ctx, p)
+	}),
+	MethodWorldsLorePut: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldsLorePutParams) (WorldView, error) {
+		return c.WorldsLorePut(ctx, p)
+	}),
+	MethodWorldsLoreDelete: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldsLoreDeleteParams) (WorldView, error) {
+		return c.WorldsLoreDelete(ctx, p)
+	}),
+	MethodWorldsSet: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldsSetParams) (WorldView, error) {
+		return c.WorldsSet(ctx, p)
+	}),
+	MethodWorldsAddCharacter: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldsAddCharacterParams) (WorldView, error) {
+		return c.WorldsAddCharacter(ctx, p)
+	}),
+	MethodWorldsRemoveCharacter: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldsRemoveCharacterParams) (WorldView, error) {
+		return c.WorldsRemoveCharacter(ctx, p)
+	}),
+	MethodWorldsEditCharacter: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldsEditCharacterParams) (WorldsEditCharacterResult, error) {
+		return c.WorldsEditCharacter(ctx, p)
+	}),
+	MethodWorldsCreateCharacter: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldsCreateCharacterParams) (WorldsCreateCharacterResult, error) {
+		return c.WorldsCreateCharacter(ctx, p)
 	}),
 
 	// ---------------------------------------------------------------------- groups

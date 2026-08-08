@@ -30,13 +30,11 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/agent/ctrlproto/ctrlclient"
 	"terva.sh/terva/packages/i18n"
 )
 
@@ -351,71 +349,21 @@ type daemonExtConfigStore struct {
 }
 
 func dialExtConfig(ctx context.Context, name, raw, token, version string, timeout time.Duration) (extConfigStore, error) {
-	endpoint, err := normalizeAttachURL(raw)
+	// The dial, the run loop, and the wait-for-handshake live in ctrldial.go —
+	// `terva ctl` needed the same forty lines, and the failure text (which of
+	// "cannot reach" and "no handshake" it was) is the part nobody re-derives
+	// correctly the second time.
+	conn, err := dialCtrl(ctx, raw, token, "terva-ext-config", version, timeout)
 	if err != nil {
-		return nil, err
+		return nil, i18n.Errorf("ext config: %v", err)
 	}
-	dial := ctrlclient.DialWebSocket(endpoint.URL, token)
-	if endpoint.UnixPath != "" {
-		dial = ctrlclient.DialWebSocketUnix(endpoint.UnixPath, token)
-	}
-	// The dial runs on the client's own goroutine and the wait below runs on
-	// this one, so the last dial error crosses a goroutine boundary and needs
-	// the lock — it is read while a reconnect may be writing it.
-	var (
-		dialMu  sync.Mutex
-		dialErr error
-	)
-	lastDialErr := func() error {
-		dialMu.Lock()
-		defer dialMu.Unlock()
-		return dialErr
-	}
-	client, err := ctrlclient.New(ctrlclient.Options{
-		Dial: func(ctx context.Context) (ctrlproto.FrameConn, error) {
-			conn, derr := dial(ctx)
-			if derr != nil {
-				dialMu.Lock()
-				dialErr = derr
-				dialMu.Unlock()
-			}
-			return conn, derr
-		},
-		Hello: ctrlproto.Hello{Agent: "terva-ext-config", Version: version},
-	})
-	if err != nil {
-		return nil, err
-	}
-	runCtx, cancelRun := context.WithCancel(ctx)
-	go func() { _ = client.Run(runCtx) }()
-	stop := func() {
-		cancelRun()
-		_ = client.Close()
-	}
-
-	deadline := time.Now().Add(timeout)
-	for !client.Connected() {
-		if time.Now().After(deadline) {
-			stop()
-			if derr := lastDialErr(); derr != nil {
-				return nil, i18n.Errorf("ext config: cannot reach a terva at %s: %v (is it running there? does it need --token?)", endpoint, derr)
-			}
-			return nil, i18n.Errorf("ext config: no ctrlproto handshake from %s within %s", endpoint, timeout)
-		}
-		select {
-		case <-ctx.Done():
-			stop()
-			return nil, ctx.Err()
-		case <-time.After(25 * time.Millisecond):
-		}
-	}
-	svc := client.Service()
+	svc := conn.Client.Service()
 	sess, err := extConfigSession(ctx, svc)
 	if err != nil {
-		stop()
+		conn.Stop()
 		return nil, i18n.Errorf("ext config: sessions.list: %v", err)
 	}
-	return &daemonExtConfigStore{svc: svc, sess: sess, name: name, addr: endpoint.String(), closeFn: stop}, nil
+	return &daemonExtConfigStore{svc: svc, sess: sess, name: name, addr: conn.Addr, closeFn: conn.Stop}, nil
 }
 
 // extConfigSession picks the session to address. The extensions surface is

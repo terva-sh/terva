@@ -135,6 +135,9 @@ func Run(rawArgs []string, version string) error {
 	if handled, err := runExtCommand(rawArgs, version); handled {
 		return err
 	}
+	if handled, err := runCtlCommand(rawArgs, version); handled {
+		return err
+	}
 	if handled, err := runPersonaCommand(rawArgs); handled {
 		return err
 	}

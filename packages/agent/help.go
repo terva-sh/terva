@@ -109,6 +109,7 @@ func PrintHelp(version string) {
 		row{"terva attach [URL]", i18n.T("run the TUI as a client of a running terva web daemon (default ws://127.0.0.1:8730/ws; --token / --token-file / TERVA_WEB_TOKEN for auth). Survives daemon restarts; quit and re-attach without disturbing the agent")},
 		row{"terva trust / untrust", i18n.T("manage which directories load project extensions/skills/context")},
 		row{"terva doctor", i18n.T("report effective privilege & deployment posture (uid, no-new-privs, sudo)")},
+		row{"terva ctl VERB", i18n.T("send one control-plane verb to a running terva and print the reply (--shape prints structure and sizes, never values; --list names every verb)")},
 		row{"terva secret ...", i18n.T("secret management: encryption at rest (init / status / migrate / rotate) and the web-token issuer")},
 		row{"terva project ...", i18n.T("project-scoped agents (data + extensions pinned to a directory)")},
 		row{"terva migrate", i18n.T("migrate a legacy install's data to the terva location")},
