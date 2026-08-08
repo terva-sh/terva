@@ -52,13 +52,82 @@ func (w *Workspace) CardsList(_ context.Context) (ctrlproto.CardsListResult, err
 		return ctrlproto.CardsListResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "list cards: %v", err)
 	}
 	favs, _ := store.Favorites() // best-effort: a read error just means nothing is highlighted
+	owned := worldCards()        // best-effort for the same reason: a read error just means nothing is marked
+	hist := w.cardHistory()
 	out := make([]ctrlproto.CardSummary, 0, len(stored))
 	for _, sc := range stored {
 		s := cardSummary(sc)
 		s.Favorite = favs[sc.ID]
+		// "Modified" falls back to "added" for a card nobody has edited, so the
+		// recency sort is total rather than dumping every untouched card into an
+		// undated clump. One cheap ReadDir per card; see LastEdited.
+		s.Updated = sc.Added
+		if t, ok := hist.LastEdited(sc.ID); ok {
+			s.Updated = t
+		}
+		if o, ok := owned[sc.ID]; ok {
+			s.WorldOf = o.world
+			if o.forked {
+				s.VariantOf = o.world
+			}
+		}
 		out = append(out, s)
 	}
 	return ctrlproto.CardsListResult{Cards: out}, nil
+}
+
+// worldCards maps card id → the World it belongs to, for every card whose
+// origin record names a World that still exists AND still rosters it.
+//
+// TWO kinds of belonging come out of one walk, and the difference is whether the
+// origin carries a ForkedFrom:
+//
+//	forked — a COPY made so an edit inside one World would not rewrite the
+//	         character every other World is playing. Its original is still on the
+//	         shelf, so the copy is hidden there: two near-identical cards with
+//	         nothing to tell them apart is worse than one.
+//	born   — created BY this World (worlds.create_character). There is no
+//	         original. Hiding it would mean a card that exists only inside one
+//	         World — unfindable, unexportable, impossible to reuse — so it stays
+//	         on the shelf and is badged with the World instead.
+//
+// Both halves of the liveness test matter, and neither needs a cleanup pass —
+// which is the point, because a cleanup pass is a thing that can be forgotten.
+// Delete the World and its cards become ordinary again; take the character off
+// the roster and the same.
+func worldCards() map[string]struct {
+	world  string
+	forked bool
+} {
+	origins, err := build.NewCardOriginStore().All()
+	if err != nil || len(origins) == 0 {
+		return nil
+	}
+	docs, err := build.NewWorldStore().List()
+	if err != nil {
+		return nil
+	}
+	rostered := make(map[string]map[string]bool, len(docs))
+	for _, d := range docs {
+		refs := make(map[string]bool, len(d.Characters))
+		for _, ref := range d.Characters {
+			refs[ref] = true
+		}
+		rostered[d.ID] = refs
+	}
+	out := make(map[string]struct {
+		world  string
+		forked bool
+	}, len(origins))
+	for id, o := range origins {
+		if refs, ok := rostered[o.World]; ok && refs[id] {
+			out[id] = struct {
+				world  string
+				forked bool
+			}{world: o.World, forked: strings.TrimSpace(o.ForkedFrom) != ""}
+		}
+	}
+	return out
 }
 
 // CardsGet returns one card in full.

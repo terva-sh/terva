@@ -1,5 +1,6 @@
 import { render } from 'preact'
 import { Stage } from './Stage'
+import { applyPortraits, portraitsOn } from './portraits'
 import { applyTheme, currentTheme } from './theme'
 import { trackSafeArea } from '../../ui/safearea'
 // ui/ui.css first: it styles what the shared ui/ components and markdown.ts
@@ -10,6 +11,9 @@ import './stage.css'
 // Apply the saved theme before the first paint, so there is no flash of the
 // default palette on a re-skinned install.
 applyTheme(currentTheme())
+// Stamped before the first paint, or a library with portraits off flashes its
+// art on every load.
+applyPortraits(portraitsOn())
 
 // Freeze the notch insets into --safe-* before first paint so a top bar or sheet
 // survives a fixed overlay (see ui/safearea.ts).

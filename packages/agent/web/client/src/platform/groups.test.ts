@@ -1,20 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Group, SessionInfo } from './ctrlproto/types'
-import {
-  applyGroupFilter,
-  bulkMembers,
-  bulkState,
-  cycleGroup,
-  emptyFilter,
-  SYS_UNGROUPED,
-  ungroupedGroup,
-  groupState,
-  originGroups,
-  pruneFilter,
-  setExcluded,
-  stageSystemGroup,
-  SYS_STAGE,
-} from './groups'
+import { SYS_STAGE, SYS_UNGROUPED, applyGroupFilter, bulkMembers, bulkState, cycleGroup, emptyFilter, groupState, originGroups, pruneFilter, setExcluded, stageSystemGroup, ungroupedGroup, worldGroups } from './groups'
 
 const g = (id: string, members: string[]): Group => ({ id, name: id, members })
 // Minimal fixture — cast past SessionInfo's required wire fields the filter never reads.
@@ -257,5 +243,36 @@ describe('ungroupedGroup', () => {
 
   it('is marked system, so its chip carries no edit affordance', () => {
     expect(ungroupedGroup(items, [], 'Ungrouped', idOf).system).toBe(true)
+  })
+})
+
+describe('worldGroups', () => {
+  type C = { id: string; world?: string }
+  const NAMES: Record<string, string> = { 'w-1': 'Bellhaven', 'w-2': 'Lowtown' }
+  const nameOf = (id: string) => NAMES[id] ?? ''
+  const of = (items: C[]) => worldGroups(items, (c) => c.id, (c) => c.world, nameOf)
+
+  it('makes one chip per World, named and sorted', () => {
+    const got = of([{ id: 'a', world: 'w-2' }, { id: 'b', world: 'w-1' }, { id: 'c' }])
+    expect(got.map((g) => g.name)).toEqual(['Bellhaven', 'Lowtown'])
+    expect(got[0].members).toEqual(['b'])
+  })
+
+  it('marks them system, so they filter but cannot be edited', () => {
+    // A chip whose membership is a FACT about the cards has nothing to rename,
+    // recolour, or hand-file into — and letting the UI offer that would promise
+    // an edit the next listing silently discards.
+    expect(of([{ id: 'a', world: 'w-1' }]).every((g) => g.system)).toBe(true)
+  })
+
+  it('leaves out cards that belong to no World', () => {
+    expect(of([{ id: 'a' }, { id: 'b' }])).toEqual([])
+  })
+
+  // The World listing arrives on its own fetch, so there is a beat where a card
+  // knows its World id and nothing knows the name. A chip reading
+  // "lowtown-abc123" is noise the author cannot act on.
+  it('skips a World whose name has not loaded yet', () => {
+    expect(of([{ id: 'a', world: 'w-unknown' }])).toEqual([])
   })
 })

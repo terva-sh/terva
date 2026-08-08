@@ -22,6 +22,11 @@ export const SYS_STAGE = 'sys:stage'
 // user group yet. Derived like the others, so it needs no verb and no storage.
 export const SYS_UNGROUPED = 'sys:ungrouped'
 
+// SYS_WORLD prefixes one synthesized chip per World that owns cards. Prefixed
+// rather than a single bucket because "which World" is the question — a lone
+// "From a World" chip would answer the one nobody asks.
+export const SYS_WORLD = 'sys:world:'
+
 // GroupFilter is include/exclude by group id. include empty ⇒ every item is in
 // scope; a non-empty include narrows to the union of those groups. exclude then
 // subtracts anything in any listed group. Both are plain id lists so the filter
@@ -229,6 +234,46 @@ export function originGroups(
 // exists degrades to "show everything" (see applyGroupFilter), which for this
 // chip would mean the moment you file the last card, the whole library floods
 // back — the opposite of the "you're done" the empty queue should report.
+// worldGroups synthesizes one chip per World that owns cards on this shelf, so
+// a character a World created can be filtered to (or away from) with the
+// machinery that already exists for user groups.
+//
+// DERIVED, never stored, and that is the point rather than a shortcut. A real
+// Group would be a second record of the same fact: the author edits it, the
+// World's roster changes, and the two disagree with nothing to reconcile them.
+// A synthesized chip cannot drift, and deleting a World makes its chip vanish
+// on the next listing with no cleanup pass to forget.
+//
+// system: true, so the chip filters but cannot be renamed, recoloured, deleted,
+// or hand-filed — none of which would mean anything for a bucket whose
+// membership is a fact about the cards.
+export function worldGroups<T>(
+  items: T[],
+  idOf: (item: T) => string,
+  worldOf: (item: T) => string | undefined,
+  nameOf: (worldID: string) => string,
+): Group[] {
+  const byWorld = new Map<string, string[]>()
+  for (const it of items) {
+    const w = worldOf(it)
+    if (!w) continue
+    const list = byWorld.get(w) ?? []
+    list.push(idOf(it))
+    byWorld.set(w, list)
+  }
+  const out: Group[] = []
+  for (const [world, members] of byWorld) {
+    // A World whose name has not loaded yet is skipped rather than shown as its
+    // id: a chip reading "lowtown-abc123" is noise the author cannot act on, and
+    // the listing that names it is already on its way.
+    const name = nameOf(world)
+    if (!name) continue
+    out.push({ id: SYS_WORLD + world, name, members, system: true })
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name))
+  return out
+}
+
 export function ungroupedGroup<T>(items: T[], groups: Group[], label: string, idOf: (item: T) => string): Group {
   const filed = new Set<string>()
   for (const g of groups) {
