@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -704,5 +705,134 @@ func TestPlayInWorldWarmsCardActors(t *testing.T) {
 	eliraBlock := live.worldLoreBlock("night falls over the quarter", "Elira")
 	if !strings.Contains(eliraBlock, "curfew") || strings.Contains(eliraBlock, "informant") {
 		t.Errorf("Elira's block must exclude Rook's secret: %q", eliraBlock)
+	}
+}
+
+// The World's default model is NOT session state — no session carries one — so
+// it is absent from the doc worlds.save builds. Without an explicit carry-over,
+// every save-back from a member scene would silently clear a setting the author
+// made on the World screen, and the loss would only surface as a scene opening
+// on the wrong model days later.
+func TestWorldSaveKeepsTheWorldsOwnModel(t *testing.T) {
+	w := draftWorkspace(t)
+	ctx := context.Background()
+	imported, err := w.CardsImport(ctx, ctrlproto.CardImportParams{Bytes: []byte(`{"name":"Elira","first_mes":"hi"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := w.CreateSession(ctx, ctrlproto.CreateOpts{Experience: "chat", Card: imported.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := w.WorldSave(ctx, info.ID, ctrlproto.WorldSaveParams{Name: "Lowtown"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.WorldSetModel(ctx, ctrlproto.WorldSetModelParams{ID: view.ID, Provider: "openai", Model: "gpt-5.5"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A save-back from the member scene. The session is on the workspace model
+	// and knows nothing about the World's choice.
+	if _, err := w.WorldSave(ctx, info.ID, ctrlproto.WorldSaveParams{}); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := build.NewWorldStore().Get(view.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.Model.Model != "gpt-5.5" {
+		t.Errorf("save-back cleared the World's model: got %q, want gpt-5.5", doc.Model.Model)
+	}
+}
+
+// Every field on build.WorldDoc must be classified: does a session own it (the
+// working copy is authoritative, and saveWorld assigns it), or does the World
+// own it (it survives a save-back untouched)?
+//
+// This is a census, not a list — the fields are read off the struct by
+// reflection, so a new one enrolls itself and turns this red until its author
+// writes down which side it is on. That is the whole point. saveWorld's default
+// used to be "cleared", now it is "kept", and BOTH defaults are wrong for half
+// the fields: a World-owned field under the old default reset itself on the
+// next save-back, and a session-owned field under the new one goes stale. Either
+// way the failure is silent and days late, and no test would have caught it,
+// because the test that would catch it is the one nobody thought to write.
+//
+// Adding a field to WorldDoc? Put it in one of the two maps below with a reason,
+// and if it is session-owned, assign it in saveWorld. If it is World-owned, give
+// it a preservation test of its own — TestWorldSaveKeepsTheWorldsOwnModel is the
+// shape.
+func TestWorldSaveClassifiesEveryWorldDocField(t *testing.T) {
+	sessionOwned := map[string]string{
+		"Characters":      "the cast is the session's working copy; a character dropped mid-scene has to leave the World",
+		"CharacterModels": "the per-actor pins ride with the cast they key by name",
+		"Lore":            "the lorebook is played IN the session — learned-when entries are written there",
+		"Coordination":    "the meta-narrator mode is steered mid-scene and saved back",
+		"Name":            "taken from the REQUEST rather than the session, and only when given (see saveWorld)",
+		"Description":     "same as Name — worlds.save carries it, worlds.update owns clearing it",
+	}
+	worldOwned := map[string]string{
+		"ID":      "minted at creation and stable; a save-back updates in place",
+		"Model":   "the World's default model — set on the World page, never derived from a session's current model",
+		"Created": "stamped by WorldStore.Save, which re-reads it from disk",
+		"Updated": "stamped by WorldStore.Save on every write",
+	}
+
+	typ := reflect.TypeOf(build.WorldDoc{})
+	for i := range typ.NumField() {
+		name := typ.Field(i).Name
+		_, session := sessionOwned[name]
+		_, world := worldOwned[name]
+		switch {
+		case session && world:
+			t.Errorf("WorldDoc.%s is classified both ways — pick one", name)
+		case !session && !world:
+			t.Errorf("WorldDoc.%s is unclassified: does a session own it (assign it in saveWorld) "+
+				"or does the World (give it a preservation test)? Add it to one of the maps in this test with a reason.", name)
+		}
+	}
+	// The maps must not outlive their fields either — a stale entry is a reason
+	// recorded for something that no longer exists, which reads as coverage.
+	for _, m := range []map[string]string{sessionOwned, worldOwned} {
+		for name := range m {
+			if _, ok := typ.FieldByName(name); !ok {
+				t.Errorf("%q is classified here but is no longer a field on WorldDoc", name)
+			}
+		}
+	}
+}
+
+// The studio's save-back sends neither name nor description, so both must be
+// left alone rather than written empty. Name was already covered by the
+// promote/update test only because WorldStore.Save refuses an empty one —
+// description has no such backstop, so a regression there would clear it
+// silently.
+func TestWorldSaveKeepsADescriptionItWasNotGiven(t *testing.T) {
+	w := draftWorkspace(t)
+	ctx := context.Background()
+	imported, err := w.CardsImport(ctx, ctrlproto.CardImportParams{Bytes: []byte(`{"name":"Elira","first_mes":"hi"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := w.CreateSession(ctx, ctrlproto.CreateOpts{Experience: "chat", Card: imported.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := w.WorldSave(ctx, info.ID, ctrlproto.WorldSaveParams{Name: "Lowtown", Description: "The guild quarter after dark."})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A save-back with neither field — what the studio sends.
+	again, err := w.WorldSave(ctx, info.ID, ctrlproto.WorldSaveParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Name != "Lowtown" || again.Description != "The guild quarter after dark." {
+		t.Errorf("save-back blanked the World's metadata: name=%q description=%q", again.Name, again.Description)
+	}
+	if doc, _ := build.NewWorldStore().Get(view.ID); doc.Description != "The guild quarter after dark." {
+		t.Errorf("stored description = %q", doc.Description)
 	}
 }

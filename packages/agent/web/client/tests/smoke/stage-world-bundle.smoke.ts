@@ -63,32 +63,34 @@ test('stage: World rename, cover, export bundle, and import', async ({ page }) =
   const worldTile = page.locator('.stage-world', { hasText: 'Lowtown' })
   await expect(worldTile).toBeVisible()
 
-  // Rename + describe via the sheet's ✎.
+  // Rename + describe via the studio's ✎.
   await worldTile.click()
-  const sheet = page.locator('.stage-worldsheet')
-  await expect(sheet).toBeVisible()
-  await sheet.locator('button[title="Rename or describe this World"]').click()
-  await sheet.locator('.stage-worldedit__name').fill('Lowtown at Dusk')
-  await sheet.locator('.stage-worldedit__desc').fill('Grimmer still.')
-  await sheet.locator('.stage-worldedit__save').click()
+  const studio = page.locator('.stage-worldstudio')
+  await expect(studio).toBeVisible()
+  await studio.locator('button[title="Rename or describe this World"]').click()
+  await studio.locator('.stage-worldedit__name').fill('Lowtown at Dusk')
+  await studio.locator('.stage-worldedit__desc').fill('Grimmer still.')
+  await studio.locator('.stage-worldedit__save').click()
   await expect.poll(() => updates.length).toBe(1)
   expect(updates[0]).toMatchObject({ id: 'lowtown-abc123', name: 'Lowtown at Dusk', description: 'Grimmer still.' })
-  await expect(sheet.locator('h3')).toContainText('Lowtown at Dusk')
+  await expect(studio.locator('.stage-worldstudio__title h2')).toContainText('Lowtown at Dusk')
 
-  // Set a cover: the file rides worlds.update as base64; the sheet shows it.
-  await sheet
+  // Set a cover: the file rides worlds.update as base64; the screen shows it.
+  await studio
     .locator('.stage-worldsheet__coverbtn input[type="file"]')
     .setInputFiles({ name: 'cover.png', mimeType: 'image/png', buffer: Buffer.from('png-bytes') })
   await expect.poll(() => updates.length).toBe(2)
   expect(updates[1]).toMatchObject({ id: 'lowtown-abc123', cover: Buffer.from('png-bytes').toString('base64') })
-  await expect(sheet.locator('.stage-worldsheet__cover')).toBeVisible()
+  await expect(studio.locator('.stage-worldstudio__cover')).toBeVisible()
 
   // Export downloads the bundle.
   const download = page.waitForEvent('download')
-  await sheet.locator('.stage-worldsheet__export').click()
+  await studio.locator('.stage-worldsheet__export').click()
   expect((await download).suggestedFilename()).toBe('Lowtown.world.json')
   expect(exported).toBe(1)
-  await sheet.locator('.stage-drawer__close').click()
+  // Back to the Library — the studio is a screen now, so leaving it is a
+  // navigation rather than dismissing a drawer.
+  await studio.locator('.stage-back').click()
 
   // Import: a bundle file posts worlds.import (base64) and refreshes the shelf.
   const bundle = JSON.stringify({ spec: 'terva.world_bundle.v1', world: { name: 'Harbor' } })
@@ -102,7 +104,7 @@ test('stage: World rename, cover, export bundle, and import', async ({ page }) =
   // 🎭 Play here (W6): a play session created INSIDE the World — the roster
   // warms as the director's actors server-side.
   await page.locator('.stage-world', { hasText: 'Lowtown' }).click()
-  await sheet.locator('.stage-worldsheet__play').click()
+  await studio.locator('.stage-worldsheet__play').click()
   await expect.poll(() => createOpts).toMatchObject({ experience: 'play', world: 'lowtown-abc123' })
   await expect(page.locator('.stage-composer')).toBeVisible()
 })

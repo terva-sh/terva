@@ -6,13 +6,13 @@ import { PersonaEditor } from './PersonaEditor'
 import { CharacterChats } from './CharacterChats'
 import { GroupSheet } from './GroupSheet'
 import { SessionGroupSheet } from './SessionGroupSheet'
-import { ModelPick } from './ModelPick'
 import { CREATOR_PERSONA } from './creator'
+import { applyPortraits, portraitsOn } from './portraits'
 import { relativeTime } from './format'
 import { t, tn, tr } from '../../i18n'
 import { panelHref } from '../../ui/navlinks'
 import { ConnectionBanner, Placeholder } from '../../ui/Loading'
-import { downloadExport } from '../../ui/browser'
+import { fileToBase64 } from '../../ui/browser'
 // Stage's own formatBytes is gone: it is ui/formatting's humanBytes, which took
 // this one's translated units with it rather than dropping them.
 import { humanBytes } from '../../ui/formatting'
@@ -27,6 +27,7 @@ import {
   hasFilter,
   originGroups,
   ungroupedGroup,
+  worldGroups,
   type GroupFilter,
 } from '../../platform/groups'
 import { cardQueryTerms, matchesCardQuery } from '../../platform/cardsearch'
@@ -43,8 +44,6 @@ import type {
   CreateOpts,
   WorldView,
   WorldsListResult,
-  WorldExport,
-  WorldUpdateParams,
   Group,
   CardGroupsResult,
 } from '../../platform/ctrlproto/types'
@@ -54,9 +53,22 @@ type SessionsResult = { sessions: SessionInfo[] }
 // Card sort modes. Each has a NATURAL order (the label reads in that direction) —
 // name A→Z, the rest most-recent / most-first — and `reversed` flips it. Favorites
 // always float to the top, sorted among themselves by the same order.
-const CARD_SORT_MODES = ['name', 'added', 'used', 'chats'] as const
+// 'updated' is when the character was last CHANGED — a doctor apply, an enrich,
+// a hand edit — as opposed to 'added' (when it arrived) or 'used' (when it was
+// last played). Distinct from both: the character you have been working on is
+// usually neither the newest nor the most recently chatted with.
+const CARD_SORT_MODES = ['name', 'added', 'updated', 'used', 'chats'] as const
 type CardSortMode = (typeof CARD_SORT_MODES)[number]
 type CardSort = { mode: CardSortMode; reversed: boolean }
+
+// The shelf opens on what you last worked on. Alphabetical was the old default
+// and it is a filing order, not a working one: it puts the same names at the top
+// every day regardless of what you have been doing, so the character you just
+// spent an hour on is wherever the alphabet left it.
+//
+// See the key comment where this is read — the version suffix is load-bearing.
+const CARD_SORT_KEY = 'terva_card_sort_2'
+const CARD_SORT_DEFAULT: CardSort = { mode: 'updated', reversed: false }
 
 // A row of group chips that doubles as the filter. Tapping a chip cycles its
 // state (off → show-only → hide → off); the "⋯" opens a user group for editing.
@@ -104,20 +116,6 @@ function GroupFilterChips(props: {
   )
 }
 
-// Base64-encode a file's bytes for cards.import (Go decodes []byte from base64).
-// Built in chunks: a character card is a PNG whose pixels can run to tens of MB,
-// and appending a megabyte of single characters to a string one at a time is
-// both slow and a good way to blow the argument limit on String.fromCharCode.
-async function fileToBase64(file: File): Promise<string> {
-  const buf = new Uint8Array(await file.arrayBuffer())
-  const CHUNK = 0x8000
-  const parts: string[] = []
-  for (let i = 0; i < buf.length; i += CHUNK) {
-    parts.push(String.fromCharCode(...buf.subarray(i, i + CHUNK)))
-  }
-  return btoa(parts.join(''))
-}
-
 
 // importError turns a failed cards.import into something a user can act on.
 //
@@ -156,6 +154,20 @@ export function importError(e: unknown, file?: File): string {
 // Exported for its own test.
 export function cardDeleteWarning(name: string): string {
   return t('Delete “%s”? The card and its avatar are removed for good.', name)
+}
+
+// worldDeleteWarning is the confirm text for worlds.delete, shared by the two
+// surfaces that offer it: the shelf tile here and the World studio's own button.
+//
+// Shared rather than written twice because the two are one promise about what
+// survives, and a World is the case where that promise is the whole reassurance
+// — deleting one does NOT take the chats played in it. A session copies its
+// World in at creation and keeps that copy; what it loses is the grouping. Two
+// copies of this sentence would eventually disagree about that, and the surface
+// that got it wrong would be the one talking someone out of a safe delete or
+// into an unsafe one.
+export function worldDeleteWarning(name: string): string {
+  return t('Delete the World “%s”? Its chats keep their own copies — only the saved World goes.', name)
 }
 
 // copyName proposes a free name for a duplicated card, counting upward past any
@@ -244,6 +256,10 @@ export function Library(props: {
   // The studio's other tab: the identities you play AS. Reachable from here and
   // not only from inside a scene, because they outlive any one scene.
   onEditYou: () => void
+  // A World opens its own screen. It used to open a drawer over this one, which
+  // made it a property of the shelf; it has a cast, a lorebook, and a history of
+  // scenes, so it navigates like a character does.
+  onOpenWorld: (id: string) => void
 }) {
   const { client, ready, status, onOpenChat, onEditCharacter } = props
   const [cards, setCards] = useState<CardSummary[]>([])
@@ -274,13 +290,9 @@ export function Library(props: {
   const [charSheet, setCharSheet] = useState<CardSummary | null>(null)
   const [showAllChats, setShowAllChats] = useState(false)
   const [worlds, setWorlds] = useState<WorldView[]>([])
-  const [worldSheet, setWorldSheet] = useState<WorldView | null>(null)
   // The daemon serves the Worlds verbs (an older one answers "unsupported" and
   // the whole shelf, import included, stays absent).
   const [worldsSupported, setWorldsSupported] = useState(false)
-  const [worldEdit, setWorldEdit] = useState(false)
-  const [worldEditName, setWorldEditName] = useState('')
-  const [worldEditDesc, setWorldEditDesc] = useState('')
   // Card groups (a library-organizing membership bucket, distinct from a card's
   // embedded tags). An older daemon answers "unsupported" and the whole shelf
   // stays absent.
@@ -295,20 +307,41 @@ export function Library(props: {
   // chip to cycle show-only → hide → off; see platform/groups.
   const [cardFilter, setCardFilter] = useState<GroupFilter>(emptyFilter)
   const [cardQuery, setCardQuery] = useState('')
-  // The grid sort, persisted across reloads. Defaults to the store's own order
-  // (alphabetical); a malformed stored value falls back to it.
+  // Portraits on/off, mirrored into state so the toggle re-renders; the document
+  // root (stamped at boot by main.tsx) is what actually drives the CSS.
+  const [portraits, setPortraits] = useState(portraitsOn())
+  // The grid sort, persisted across reloads. Defaults to what you last CHANGED,
+  // and a malformed stored value falls back to the default.
+  //
+  // The key is versioned, and it has to be. The previous default was
+  // alphabetical and the previous implementation persisted from an effect that
+  // ran on MOUNT — so every library that has ever been opened already has
+  // {"mode":"name"} on disk, written on the user's behalf before they expressed
+  // any preference. Changing the default alone would therefore change nothing
+  // for anybody who has used Stage: correct in the diff, invisible in the
+  // browser. A new key is the only honest way to hand out a new default once.
   const [cardSort, setCardSort] = useState<CardSort>(() => {
     try {
-      const p = JSON.parse(localStorage.getItem('terva_card_sort') || '')
+      const p = JSON.parse(localStorage.getItem(CARD_SORT_KEY) || '')
       if (CARD_SORT_MODES.includes(p?.mode) && typeof p?.reversed === 'boolean') return p
     } catch {
       /* fall through */
     }
-    return { mode: 'name', reversed: false }
+    return { ...CARD_SORT_DEFAULT }
   })
-  useEffect(() => {
-    localStorage.setItem('terva_card_sort', JSON.stringify(cardSort))
-  }, [cardSort])
+  // Persisted on an explicit change ONLY — never on mount. Absence now means
+  // "this reader has no preference", which is what lets a future default reach
+  // them instead of being pinned by a value they never chose. This is the bug
+  // the key bump above exists to undo; do not reintroduce it by moving the write
+  // back into an effect keyed on cardSort.
+  const changeCardSort = (next: CardSort) => {
+    setCardSort(next)
+    try {
+      localStorage.setItem(CARD_SORT_KEY, JSON.stringify(next))
+    } catch {
+      // A storage-blocked browser still honours the choice for this session.
+    }
+  }
   // A group opened for its contents (members + rename/recolour/delete).
   const [groupSheet, setGroupSheet] = useState<Group | null>(null)
   // Session groups — the same buckets over chats/plays. Same absence rule.
@@ -404,46 +437,6 @@ export function Library(props: {
     }
   }
 
-  // Start a chat inside a saved World (W5): the World's roster, lore, and
-  // coordination seed the new session; the picked character is who you talk to.
-  const startChatInWorld = async (world: WorldView, cardRef: string) => {
-    setBusy(true)
-    setError('')
-    try {
-      const res = await client.send<{ session: SessionInfo }>('sessions.create', { experience: 'chat', card: cardRef, world: world.id } as CreateOpts)
-      setWorldSheet(null)
-      onOpenChat(res.session.id)
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-  // Start a PLAY session inside the World (W6): the roster warms as the
-  // director's actors, the lore travels — the ensemble half of chat-in-World.
-  const startPlayInWorld = async (world: WorldView) => {
-    setBusy(true)
-    setError('')
-    try {
-      const res = await client.send<{ session: SessionInfo }>('sessions.create', { experience: 'play', world: world.id } as CreateOpts)
-      setWorldSheet(null)
-      onOpenChat(res.session.id)
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-  const deleteWorld = async (world: WorldView) => {
-    if (!window.confirm(t('Delete the World “%s”? Its chats keep their own copies — only the saved World goes.', world.name))) return
-    try {
-      await client.send('worlds.delete', { id: world.id })
-      setWorldSheet(null)
-      load()
-    } catch (e) {
-      setError(String(e))
-    }
-  }
 
   // Import a World bundle (W5b): one JSON file carrying the WorldDoc plus its
   // characters' cards. The cards land in the card library (deduped by
@@ -467,44 +460,7 @@ export function Library(props: {
     }
   }
 
-  // Download a World as a bundle.
-  const exportWorld = async (world: WorldView) => {
-    setError('')
-    try {
-      downloadExport(await client.send<WorldExport>('worlds.export', { id: world.id }))
-    } catch (e) {
-      setError(String(e))
-    }
-  }
 
-  // Metadata edits from the sheet (worlds.update): rename, description, cover.
-  // Description rides VERBATIM — callers pass the current text when leaving it
-  // unchanged.
-  const updateWorld = async (p: WorldUpdateParams): Promise<boolean> => {
-    try {
-      const view = await client.send<WorldView>('worlds.update', p)
-      setWorldSheet(view)
-      load()
-      return true
-    } catch (e) {
-      setError(String(e))
-      return false
-    }
-  }
-
-  // Pin (or clear) one roster character's World-scoped default model: the model
-  // every new chat/play started in this World will give that character. Empty
-  // provider+model clears it back to inherit. Reuses the returned view to
-  // re-render the sheet without a reload round-trip.
-  const setCharacterModel = async (character: string, provider: string, model: string) => {
-    if (!worldSheet) return
-    try {
-      const view = await client.send<WorldView>('worlds.set_character_model', { id: worldSheet.id, character, provider, model })
-      setWorldSheet(view)
-    } catch (e) {
-      setError(String(e))
-    }
-  }
 
   const importFiles = async (files: FileList) => {
     setError('')
@@ -590,14 +546,40 @@ export function Library(props: {
   // It must be in the list handed to applyGroupFilter as well as to the chips:
   // the filter drops any id it cannot find a group for, so a chip that filtered
   // through a list it was not in would silently do nothing.
-  const cardChipGroups = [...cardGroups, ungroupedGroup(cards, cardGroups, t('Ungrouped'), (c) => c.id)]
+  // World-scoped variants are off the shelf.
+  //
+  // A variant is a fork worlds.edit_character made so an edit inside one World
+  // would not rewrite the character every other World is playing. It is a real
+  // card, but it is that World's business — on the shelf it would read as a
+  // near-duplicate of a character you already have, with no way to tell which is
+  // which. The World's own studio lists it, under the character it plays.
+  //
+  // Filtered HERE rather than at load: `cards` still has to be complete, because
+  // a chat seeded by a variant resolves its name through the same list and would
+  // otherwise render as an unknown card.
+  const shelfCards = cards.filter((c) => !c.variant_of)
+  const hiddenVariants = cards.length - shelfCards.length
+  // The badge resolves the World id CLIENT-SIDE. The summary carries the id
+  // rather than the name so a rename cannot leave a stale caption on a card, and
+  // this shelf already lists Worlds — there is nothing to fetch.
+  const worldName = (id?: string) => (id ? (worlds.find((w) => w.id === id)?.name ?? '') : '')
+  // World chips sit between the user's groups and Ungrouped: derived, so they
+  // cannot drift out of step with the rosters they describe, and filterable with
+  // the machinery the stored groups already use.
+  const worldChips = worldGroups(
+    shelfCards,
+    (c) => c.id,
+    (c) => c.world_of,
+    (id) => worldName(id),
+  )
+  const cardChipGroups = [...cardGroups, ...worldChips, ungroupedGroup(shelfCards, cardGroups, t('Ungrouped'), (c) => c.id)]
 
   // Free text narrows on top of the groups, over name / creator / tags. Tags
   // are the ones that earn their place: an imported library arrives tagged,
   // which is how it was organized where it came from, so a query can pull a
   // cluster out of a flat import in one go — search, select all, file.
   const cardTerms = cardQueryTerms(cardQuery)
-  const visibleCards = applyGroupFilter(cards, cardChipGroups, cardFilter, (c) => c.id).filter((c) =>
+  const visibleCards = applyGroupFilter(shelfCards, cardChipGroups, cardFilter, (c) => c.id).filter((c) =>
     matchesCardQuery(c, cardTerms),
   )
   // Whether the grid is narrowed AT ALL — either half can be the reason it is
@@ -617,6 +599,11 @@ export function Library(props: {
         break
       case 'added':
         d = (b.added ?? '').localeCompare(a.added ?? '')
+        break
+      case 'updated':
+        // The daemon falls back to `added` for a never-edited card, so this is
+        // already total; the ?? '' is only for a daemon too old to send it.
+        d = (b.updated ?? '').localeCompare(a.updated ?? '')
         break
       case 'used':
         d = lastUsed(b.id).localeCompare(lastUsed(a.id))
@@ -801,6 +788,23 @@ export function Library(props: {
     try {
       await client.send('cards.delete', { id: card.id })
       setSheet(null)
+      load()
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  // Delete a saved World from the shelf (worlds.delete).
+  //
+  // Unlike deleteCard there is no in-use check, and that is not an omission: a
+  // session copies its World in at creation and keeps that copy, so a chat
+  // played in a deleted World still opens and still plays. What it loses is the
+  // grouping. That is exactly what the confirm says, which is why the sentence
+  // is shared with the studio rather than retyped here.
+  const deleteWorld = async (wld: WorldView) => {
+    if (!window.confirm(worldDeleteWarning(wld.name))) return
+    try {
+      await client.send('worlds.delete', { id: wld.id })
       load()
     } catch (e) {
       setError(String(e))
@@ -1039,17 +1043,18 @@ export function Library(props: {
               <select
                 class="stage-cardsort__mode"
                 value={cardSort.mode}
-                onChange={(e) => setCardSort((s) => ({ ...s, mode: (e.target as HTMLSelectElement).value as CardSortMode }))}
+                onChange={(e) => changeCardSort({ ...cardSort, mode: (e.target as HTMLSelectElement).value as CardSortMode })}
                 title={t('Sort characters')}
               >
                 <option value="name">{t('Alphabetical')}</option>
                 <option value="added">{t('Recently added')}</option>
+                <option value="updated">{t('Recently updated')}</option>
                 <option value="used">{t('Recently used')}</option>
                 <option value="chats">{t('Most chats')}</option>
               </select>
               <button
                 class="stage-cardsort__dir"
-                onClick={() => setCardSort((s) => ({ ...s, reversed: !s.reversed }))}
+                onClick={() => changeCardSort({ ...cardSort, reversed: !cardSort.reversed })}
                 title={t('Reverse order')}
                 aria-pressed={cardSort.reversed}
               >
@@ -1057,6 +1062,22 @@ export function Library(props: {
               </button>
             </div>
           )}
+          {/* Portraits on/off. Beside the sort control because it is the same
+              kind of thing — how you want to READ the shelf, not what is on it.
+              Persisted and applied at the document root, so the studio roster,
+              the cast strip, and the sheets follow without being told. */}
+          <button
+            class="stage-portraits-toggle"
+            aria-pressed={!portraits}
+            title={portraits ? t('Hide character portraits everywhere') : t('Show character portraits again')}
+            onClick={() => {
+              const next = !portraits
+              setPortraits(next)
+              applyPortraits(next)
+            }}
+          >
+            {portraits ? t('🖼 Images on') : t('🖼 Images off')}
+          </button>
           {cards.length > 1 && (
             <button
               class="stage-import"
@@ -1123,7 +1144,20 @@ export function Library(props: {
         {/* Either half can be the reason nothing shows, so the message names
             the one that is actually on rather than sending the user to clear a
             chip when it was the search that emptied the grid. */}
-        {cards.length > 0 && cardsNarrowed && visibleCards.length === 0 && (
+        {/* Say that variants exist rather than hiding them silently: a fork the
+            author accepted in a World is a card they may go looking for, and a
+            shelf that simply does not contain it reads as a lost edit. */}
+        {hiddenVariants > 0 && (
+          <p class="stage-hint">
+            {tn(
+              hiddenVariants,
+              '%d character is a World’s own version — open that World to see it.',
+              '%d characters are a World’s own version — open that World to see them.',
+              hiddenVariants,
+            )}
+          </p>
+        )}
+        {shelfCards.length > 0 && cardsNarrowed && visibleCards.length === 0 && (
           <p class="stage-empty">
             {cardTerms.length > 0 && hasFilter(cardFilter)
               ? t('No characters match the search and the group filter.')
@@ -1220,6 +1254,19 @@ export function Library(props: {
                   <div class="stage-card__avatar stage-card__avatar--blank" aria-hidden="true" />
                 )}
                 <span class="stage-card__name">{card.name}</span>
+                {/* Which World this character came from, said on the tile so the
+                    shelf is legible at a glance. Its OWN line rather than inside
+                    the meta row below, which is a space-between pair and would
+                    put the creator in the middle with a third child.
+
+                    NOT folded into the name: card.name is the {{char}} macro and
+                    an input to the card's content-addressed id, so "Kira
+                    (Bellhaven)" would be what the model calls her in dialogue. */}
+                {worldName(card.world_of) && (
+                  <span class="stage-card__world" title={t('Created in the World “%s”', worldName(card.world_of))}>
+                    🌍 {worldName(card.world_of)}
+                  </span>
+                )}
                 <span class="stage-card__meta">
                   {card.creator && <span class="stage-card__creator">{card.creator}</span>}
                   {chatsFor(card.id) > 0 && <span class="stage-card__count">·{chatsFor(card.id)}</span>}
@@ -1267,8 +1314,11 @@ export function Library(props: {
             )}
             <ul class="stage-worlds">
               {worlds.map((wld) => (
-                <li key={wld.id}>
-                  <button class="stage-world" disabled={busy} title={wld.description || wld.name} onClick={() => setWorldSheet(wld)}>
+                // The tile and its delete are SIBLINGS, not nested: the tile is
+                // a <button> and a button inside a button is invalid markup that
+                // browsers resolve by dropping one of them.
+                <li key={wld.id} class="stage-world__row">
+                  <button class="stage-world" disabled={busy} title={wld.description || wld.name} onClick={() => props.onOpenWorld(wld.id)}>
                     {wld.cover_url ? (
                       <img class="stage-world__cover" src={wld.cover_url} alt="" />
                     ) : (
@@ -1281,6 +1331,26 @@ export function Library(props: {
                         {(wld.sessions ?? 0) > 0 && <span> · {tn(wld.sessions ?? 0, '%d chat', '%d chats')}</span>}
                       </span>
                     </span>
+                  </button>
+                  {/* Deleting a World is a SHELF act — you do it while looking at
+                      the ones you want gone, usually several in a row. It moved
+                      into the studio when the World drawer became a screen, which
+                      turned "clear out four test Worlds" into four navigations,
+                      four scrolls past the cast and the lorebook, and four trips
+                      back. Nothing on the shelf said the operation still existed.
+
+                      Always visible rather than revealed on hover: Stage is used
+                      on phones, where there is no hover and a hidden control is
+                      an absent one. Quiet enough not to compete with the tile,
+                      and the confirm carries the weight. */}
+                  <button
+                    class="stage-world__del"
+                    disabled={busy}
+                    title={t('Delete the World “%s”', wld.name)}
+                    aria-label={t('Delete the World “%s”', wld.name)}
+                    onClick={() => void deleteWorld(wld)}
+                  >
+                    ✕
                   </button>
                 </li>
               ))}
@@ -1523,149 +1593,6 @@ export function Library(props: {
         />
       )}
 
-      {/* The World sheet (W5): who lives here, the chats inside it, and a way
-          in — start a new chat as any of its characters. */}
-      {worldSheet && (
-        <div class="stage-drawer-backdrop" onClick={() => setWorldSheet(null)}>
-          <aside class="stage-drawer stage-worldsheet" onClick={(e) => e.stopPropagation()}>
-            <header class="stage-drawer__head">
-              <h3>🌍 {worldSheet.name}</h3>
-              <button
-                class="stage-worldlore__act"
-                title={t('Rename or describe this World')}
-                onClick={() => {
-                  setWorldEditName(worldSheet.name)
-                  setWorldEditDesc(worldSheet.description ?? '')
-                  setWorldEdit(true)
-                }}
-              >
-                ✎
-              </button>
-              <button class="stage-drawer__close" onClick={() => setWorldSheet(null)}>✕</button>
-            </header>
-            {worldSheet.cover_url && <img class="stage-worldsheet__cover" src={worldSheet.cover_url} alt="" />}
-            {worldEdit ? (
-              <form
-                class="stage-worldedit"
-                onSubmit={(e) => {
-                  e.preventDefault()
-                  void updateWorld({ id: worldSheet.id, name: worldEditName.trim(), description: worldEditDesc.trim() }).then((ok) => {
-                    if (ok) setWorldEdit(false)
-                  })
-                }}
-              >
-                <input
-                  class="stage-worldedit__name"
-                  placeholder={t('World name')}
-                  value={worldEditName}
-                  onInput={(e) => setWorldEditName((e.target as HTMLInputElement).value)}
-                />
-                <textarea
-                  class="stage-worldedit__desc"
-                  placeholder={t('What is this World? (shown on the shelf)')}
-                  value={worldEditDesc}
-                  onInput={(e) => setWorldEditDesc((e.target as HTMLTextAreaElement).value)}
-                />
-                <div class="stage-worldedit__actions">
-                  <button type="submit" class="stage-worldedit__save" disabled={!worldEditName.trim()}>
-                    {t('Save')}
-                  </button>
-                  <button type="button" class="stage-worldedit__cancel" onClick={() => setWorldEdit(false)}>
-                    {t('Cancel')}
-                  </button>
-                </div>
-              </form>
-            ) : (
-              worldSheet.description && <p class="stage-hint">{worldSheet.description}</p>
-            )}
-            <section class="stage-drawer__section">
-              <h4>{t('Characters')}</h4>
-              {Object.keys(worldSheet.characters ?? {}).length === 0 && <p class="stage-empty">{t('No characters saved in this World.')}</p>}
-              <ul class="stage-cast">
-                {Object.entries(worldSheet.characters ?? {}).map(([name, ref]) => (
-                  <li key={name} class="stage-cast__member stage-worldroster__member">
-                    <span class="stage-cast__name">{name}</span>
-                    <button class="stage-worldsheet__chat" disabled={busy} title={t('New chat with %s in %s', name, worldSheet.name)} onClick={() => void startChatInWorld(worldSheet, ref)}>
-                      {t('Chat')}
-                    </button>
-                    {/* This character's default model in this World — every new
-                        chat/play here seeds their route from it. "Inherit" = the
-                        session's own model. */}
-                    <ModelPick
-                      client={client}
-                      sessionId=""
-                      currentProvider={worldSheet.character_models?.[name]?.provider}
-                      currentModel={worldSheet.character_models?.[name]?.model}
-                      onSelect={(p, m) => void setCharacterModel(name, p, m)}
-                      defaultLabel={t('Inherit')}
-                    />
-                  </li>
-                ))}
-              </ul>
-            </section>
-            <section class="stage-drawer__section">
-              <h4>{t('Chats in this World')}</h4>
-              {sessions.filter((s) => s.world === worldSheet.id).length === 0 && <p class="stage-empty">{t('None yet.')}</p>}
-              <ul class="stage-yourchats">
-                {sessions
-                  .filter((s) => s.world === worldSheet.id)
-                  .map((s) => (
-                    <li key={s.id} class="stage-yourchats__row">
-                      <button class="stage-yourchats__item" onClick={() => onOpenChat(s.id)}>
-                        <span class="stage-yourchats__text">
-                          <span class="stage-yourchats__title">{s.title || t('Untitled')}</span>
-                          <span class="stage-yourchats__sub">{(s.messages ?? 0) > 0 && <span>{t('%d msg', s.messages ?? 0)}</span>}</span>
-                        </span>
-                        {relativeTime(s.updated) && <span class="stage-yourchats__when">{relativeTime(s.updated)}</span>}
-                      </button>
-                    </li>
-                  ))}
-              </ul>
-            </section>
-            <div class="stage-worldsheet__actions">
-              {Object.keys(worldSheet.characters ?? {}).length > 0 && (
-                <button
-                  class="stage-worldsheet__play"
-                  disabled={busy}
-                  title={t('Run a play session in %s — the whole roster on stage, you direct', worldSheet.name)}
-                  onClick={() => void startPlayInWorld(worldSheet)}
-                >
-                  {t('🎭 Play here')}
-                </button>
-              )}
-              <button class="stage-worldsheet__export" title={t("Download this World as a bundle — its characters' cards ride along")} onClick={() => void exportWorld(worldSheet)}>
-                {t('⬇ Export bundle')}
-              </button>
-              <label class="stage-worldsheet__coverbtn">
-                🖼 {worldSheet.cover_url ? t('Change cover') : t('Set cover')}
-                <input
-                  type="file"
-                  accept="image/*"
-                  hidden
-                  onChange={(e) => {
-                    const f = (e.target as HTMLInputElement).files?.[0]
-                    if (!f) return
-                    void fileToBase64(f).then((b64) =>
-                      updateWorld({ id: worldSheet.id, description: worldSheet.description ?? '', cover: b64 }),
-                    )
-                  }}
-                />
-              </label>
-              {worldSheet.cover_url && (
-                <button
-                  class="stage-worldsheet__coverbtn"
-                  onClick={() => void updateWorld({ id: worldSheet.id, description: worldSheet.description ?? '', remove_cover: true })}
-                >
-                  {t('Remove cover')}
-                </button>
-              )}
-            </div>
-            <button class="stage-worldsheet__delete" onClick={() => void deleteWorld(worldSheet)}>
-              {t('Delete this World')}
-            </button>
-          </aside>
-        </div>
-      )}
     </div>
   )
 }

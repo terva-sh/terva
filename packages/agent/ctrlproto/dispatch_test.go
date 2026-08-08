@@ -270,6 +270,10 @@ func (r *recorder) SessionsRealize(_ context.Context, sess string, p RealizePara
 	r.note("SessionsRealize", sess, p)
 	return RealizeResult{}, nil
 }
+func (r *recorder) WorldsDoctor(_ context.Context, p WorldDoctorParams) (WorldDoctorResult, error) {
+	r.note("WorldsDoctor", "", p)
+	return WorldDoctorResult{}, nil
+}
 
 // --- ModelParamsController ---
 func (r *recorder) ModelParams(_ context.Context, p ModelParamsParams) (ModelParamsView, error) {
@@ -385,6 +389,11 @@ func (r *recorder) WorldSetCharacterModel(_ context.Context, p WorldSetCharacter
 	r.note("WorldSetCharacterModel", "", p)
 	return WorldView{}, nil
 }
+
+func (r *recorder) WorldSetModel(_ context.Context, p WorldSetModelParams) (WorldView, error) {
+	r.note("WorldSetModel", "", p)
+	return WorldView{}, nil
+}
 func (r *recorder) WorldsExport(_ context.Context, p WorldExportParams) (WorldExport, error) {
 	r.note("WorldsExport", "", p)
 	return WorldExport{}, nil
@@ -392,6 +401,35 @@ func (r *recorder) WorldsExport(_ context.Context, p WorldExportParams) (WorldEx
 func (r *recorder) WorldsImport(_ context.Context, p WorldImportParams) (WorldView, error) {
 	r.note("WorldsImport", "", p)
 	return WorldView{}, nil
+}
+func (r *recorder) WorldsLorePut(_ context.Context, p WorldsLorePutParams) (WorldView, error) {
+	r.note("WorldsLorePut", "", p)
+	return WorldView{}, nil
+}
+func (r *recorder) WorldsLoreDelete(_ context.Context, p WorldsLoreDeleteParams) (WorldView, error) {
+	r.note("WorldsLoreDelete", "", p)
+	return WorldView{}, nil
+}
+func (r *recorder) WorldsSet(_ context.Context, p WorldsSetParams) (WorldView, error) {
+	r.note("WorldsSet", "", p)
+	return WorldView{}, nil
+}
+func (r *recorder) WorldsAddCharacter(_ context.Context, p WorldsAddCharacterParams) (WorldView, error) {
+	r.note("WorldsAddCharacter", "", p)
+	return WorldView{}, nil
+}
+func (r *recorder) WorldsRemoveCharacter(_ context.Context, p WorldsRemoveCharacterParams) (WorldView, error) {
+	r.note("WorldsRemoveCharacter", "", p)
+	return WorldView{}, nil
+}
+func (r *recorder) WorldsEditCharacter(_ context.Context, p WorldsEditCharacterParams) (WorldsEditCharacterResult, error) {
+	r.note("WorldsEditCharacter", "", p)
+	return WorldsEditCharacterResult{}, nil
+}
+
+func (r *recorder) WorldsCreateCharacter(_ context.Context, p WorldsCreateCharacterParams) (WorldsCreateCharacterResult, error) {
+	r.note("WorldsCreateCharacter", "", p)
+	return WorldsCreateCharacterResult{}, nil
 }
 func (r *recorder) CardGroupsList(context.Context) (CardGroupsResult, error) {
 	r.note("CardGroupsList", "", nil)
@@ -528,9 +566,17 @@ func dispatchCases() []dispatchCase {
 		{MethodWorldSave, WorldSaveParams{Name: "w-saved"}, "WorldSave", WorldSaveParams{Name: "w-saved"}},
 		{MethodWorldUpdate, WorldUpdateParams{ID: "w-upd", Name: "renamed"}, "WorldUpdate", WorldUpdateParams{ID: "w-upd", Name: "renamed"}},
 		{MethodWorldSetCharacterModel, WorldSetCharacterModelParams{ID: "w-cm", Character: "Elira", Model: "gpt-5"}, "WorldSetCharacterModel", WorldSetCharacterModelParams{ID: "w-cm", Character: "Elira", Model: "gpt-5"}},
+		{MethodWorldSetModel, WorldSetModelParams{ID: "w-dm", Provider: "openai", Model: "gpt-5"}, "WorldSetModel", WorldSetModelParams{ID: "w-dm", Provider: "openai", Model: "gpt-5"}},
 		{MethodWorldsExport, WorldExportParams{ID: "w-exp"}, "WorldsExport", WorldExportParams{ID: "w-exp"}},
 		{MethodWorldsImport, WorldImportParams{Path: "/w-imp"}, "WorldsImport", nil},
 		{MethodWorldDelete, WorldDeleteParams{ID: "w-del"}, "WorldDelete", WorldDeleteParams{ID: "w-del"}},
+		{MethodWorldsLorePut, WorldsLorePutParams{ID: "w-lp", Replace: "saved-lore-in"}, "WorldsLorePut", WorldsLorePutParams{ID: "w-lp", Replace: "saved-lore-in"}},
+		{MethodWorldsLoreDelete, WorldsLoreDeleteParams{ID: "w-ld", Name: "saved-lore-out"}, "WorldsLoreDelete", WorldsLoreDeleteParams{ID: "w-ld", Name: "saved-lore-out"}},
+		{MethodWorldsSet, WorldsSetParams{ID: "w-set", Coordination: "focus:Elira"}, "WorldsSet", WorldsSetParams{ID: "w-set", Coordination: "focus:Elira"}},
+		{MethodWorldsAddCharacter, WorldsAddCharacterParams{ID: "w-add", Name: "Rilla", Ref: "rilla-abc123"}, "WorldsAddCharacter", WorldsAddCharacterParams{ID: "w-add", Name: "Rilla", Ref: "rilla-abc123"}},
+		{MethodWorldsRemoveCharacter, WorldsRemoveCharacterParams{ID: "w-rm", Name: "Rilla"}, "WorldsRemoveCharacter", WorldsRemoveCharacterParams{ID: "w-rm", Name: "Rilla"}},
+		{MethodWorldsEditCharacter, WorldsEditCharacterParams{ID: "w-ec", Character: "Rilla", Card: json.RawMessage(`{"name":"Rilla"}`)}, "WorldsEditCharacter", WorldsEditCharacterParams{ID: "w-ec", Character: "Rilla", Card: json.RawMessage(`{"name":"Rilla"}`)}},
+		{MethodWorldsCreateCharacter, WorldsCreateCharacterParams{ID: "w-cc", Name: "Kira", Card: json.RawMessage(`{"name":"Kira"}`)}, "WorldsCreateCharacter", WorldsCreateCharacterParams{ID: "w-cc", Name: "Kira", Card: json.RawMessage(`{"name":"Kira"}`)}},
 		{MethodCardGroupsList, nil, "CardGroupsList", nil},
 		{MethodCardGroupSave, CardGroupSaveParams{Name: "cg-new"}, "CardGroupSave", CardGroupSaveParams{Name: "cg-new"}},
 		{MethodCardGroupSetMembers, CardGroupSetMembersParams{ID: "cg-mem", Members: []string{"card-a"}}, "CardGroupSetMembers", CardGroupSetMembersParams{ID: "cg-mem", Members: []string{"card-a"}}},
@@ -579,6 +625,7 @@ func dispatchCases() []dispatchCase {
 		{MethodSuggestReply, SuggestParams{}, "SuggestReply", nil},
 		{MethodCardsDoctor, DoctorParams{ID: "checked"}, "CardsDoctor", DoctorParams{ID: "checked"}},
 		{MethodSessionsDoctor, SessionDoctorParams{}, "SessionsDoctor", nil},
+		{MethodWorldsDoctor, WorldDoctorParams{ID: "w-doc", Steer: "give her a rival"}, "WorldsDoctor", WorldDoctorParams{ID: "w-doc", Steer: "give her a rival"}},
 		{MethodSessionsNextScene, NextSceneParams{Title: "scene 2"}, "SessionsNextScene", nil},
 		{MethodSessionsRealize, RealizeParams{}, "SessionsRealize", nil},
 		{MethodAuthLoginStart, AuthLoginStartParams{Provider: "anthropic"}, "AuthLoginStart", AuthLoginStartParams{Provider: "anthropic"}},

@@ -45,7 +45,7 @@ function stub() {
 
 function library() {
   const client = stub()
-  render(<Library client={client} ready status="open" onOpenChat={() => {}} onEditCharacter={() => {}} onEditYou={() => {}} />)
+  render(<Library client={client} ready status="open" onOpenChat={() => {}} onEditCharacter={() => {}} onEditYou={() => {}} onOpenWorld={() => {}} />)
   return client
 }
 

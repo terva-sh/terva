@@ -264,6 +264,88 @@ func (s *CardStore) Duplicate(id, name string) (StoredCard, error) {
 	return s.write(dup, c, raw, avatar, false)
 }
 
+// Fork writes an edited card document as a NEW card, leaving the original
+// exactly as it was — the copy-on-write half of Duplicate.
+//
+// Duplicate answers "give me a second copy of this character to take in another
+// direction", and so demands a new NAME: a copy under the same name with the
+// same contents is the same card, and writing it would report success while
+// creating nothing. Fork answers a different question — "apply this change here
+// WITHOUT it reaching everywhere else" — where the name is usually the one thing
+// that must not change. Kobeni in one World and Kobeni in another are both
+// Kobeni; only their contents diverge.
+//
+// The id falls out of content-addressing, which is what makes this safe without
+// any new bookkeeping:
+//
+//   - an edit that changes the bytes hashes to a new id, so the fork is a new
+//     card and the original's card.json is never opened for writing;
+//   - an edit that changes NOTHING hashes to the SAME id, and rather than
+//     rewriting the card (which would burn a revision slot recording no change)
+//     this returns the stored card untouched. A caller that forks
+//     speculatively — the world doctor accepting a proposal that turned out to
+//     be a no-op — gets the original back instead of a duplicate.
+//
+// The portrait travels, for Duplicate's reason: the stored avatar has already
+// been through normalizeAvatar, so the fork inherits the picture the original
+// actually shows rather than a second downscale of it.
+//
+// Fork does NOT record where the fork came from. That is deliberate: provenance
+// is terva-owned metadata ABOUT a card, so it lives outside the card directory
+// like history and model prefs do (see cardorigin.go). Keeping it out of here
+// also means an exported or shared fork carries no trace of the local World it
+// was made for.
+func (s *CardStore) Fork(id string, cardJSON []byte) (StoredCard, error) {
+	if err := slug.ValidID(id); err != nil {
+		return StoredCard{}, err
+	}
+	if _, err := os.Stat(filepath.Join(s.dir, id, cardJSONName)); err != nil {
+		if os.IsNotExist(err) {
+			return StoredCard{}, fmt.Errorf("card %q not found", id)
+		}
+		return StoredCard{}, err
+	}
+	c, err := card.ParseJSON(cardJSON)
+	if err != nil {
+		return StoredCard{}, err
+	}
+	raw, err := card.Marshal(c)
+	if err != nil {
+		return StoredCard{}, err
+	}
+	// "Did anything change?" is answered against the card's STORED BYTES, never
+	// against a re-derived id. A card's id is minted at IMPORT and never
+	// re-derived (Edit rewrites the same directory), so after a single edit the
+	// id no longer equals the hash of its contents. Comparing derived ids would
+	// then call a document identical to what is stored a change, and fork a
+	// perfect twin of the card — which is exactly what a caller writing the
+	// current document back expects not to happen.
+	stored, err := os.ReadFile(filepath.Join(s.dir, id, cardJSONName))
+	if err != nil {
+		return StoredCard{}, err
+	}
+	if bytes.Equal(stored, raw) {
+		return s.Get(id)
+	}
+	forked := slug.ID(c.Name, raw)
+	if existing, err := os.ReadFile(filepath.Join(s.dir, forked, cardJSONName)); err == nil {
+		// A card is already filed here. If it holds byte-for-byte what the fork
+		// would write, it IS the fork — hand it back, nothing is displaced.
+		if bytes.Equal(existing, raw) {
+			return s.Get(forked)
+		}
+		// Otherwise writing would overwrite a DIFFERENT card, which is a merge
+		// wearing a fork's clothes. Reachable when the edit restores a card to
+		// contents it once had: those contents hash back to the id they were
+		// imported under, and writing them would silently revert the card every
+		// other World is reading — the precise failure this method exists to
+		// prevent.
+		return StoredCard{}, fmt.Errorf("these contents already belong to another card in your library (%s)", forked)
+	}
+	avatar, _ := os.ReadFile(filepath.Join(s.dir, id, cardAvatarName))
+	return s.write(forked, c, raw, avatar, false)
+}
+
 // Edit replaces a stored card's fields with a full edited card document
 // (CCv2 wrapper or flat), re-serializing it canonically. The id (directory) and
 // any avatar are unchanged — editing card data never moves or reshoots the

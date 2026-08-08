@@ -179,6 +179,7 @@ var (
 	// DoctorController's four, one per verb.
 	noCardDoctor    = plain("the card doctor is not available here")
 	noSessionDoctor = plain("the session doctor is not available here")
+	noWorldDoctor   = plain("the world doctor is not available here")
 	noNextScene     = plain("scene breaks are not available here")
 	noRealize       = plain("realize is not available here")
 )

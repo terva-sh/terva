@@ -7,6 +7,8 @@ import { Library } from './Library'
 import { Chat } from './Chat'
 import { CharacterStudio } from './CharacterStudio'
 import type { StudioTab } from './CharacterStudio'
+import { WorldStudio } from './WorldStudio'
+import type { WorldTab } from './WorldStudio'
 import type { ScenePersona } from './YouEditor'
 
 // The Stage app owns one shared platform Client and switches between three screens
@@ -29,10 +31,16 @@ import type { ScenePersona } from './YouEditor'
 // character, "playing as …" in a scene header opens you. `scene` is the session
 // whose persona the You tab steers, carried down because a cold sessions.list row
 // has no user fields — only the live chat knows who you are in it.
+// The world studio is the fourth, and it is a screen for the same reason the
+// character studio is: a World is an authoring subject with its own cast, lore,
+// and scenes, not a property of the shelf that opened it. It carries `back` on
+// the same rule — a World opened from the Library returns there, one opened from
+// a scene returns to that scene — and `tab` is which part of it the trip is for.
 type View =
   | { screen: 'library' }
   | { screen: 'chat'; session: string }
   | { screen: 'character'; card: CardSummary | null; tab: StudioTab; scene: ScenePersona | null; back: View }
+  | { screen: 'world'; id: string; tab: WorldTab; back: View }
 
 // Read before first render so the initial view is the linked chat, never a
 // flash of the library. takeNavParams also strips the param from the address
@@ -117,6 +125,28 @@ export function Stage() {
     )
   }
 
+  if (view.screen === 'world') {
+    const back = view.back
+    return (
+      <WorldStudio
+        // Key by id so opening a different World resets the screen rather than
+        // carrying the previous one's open lore entry into it.
+        key={view.id}
+        client={client}
+        ready={ready}
+        id={view.id}
+        tab={view.tab}
+        onTab={(tab) => setView({ ...view, tab })}
+        backLabel={back.screen === 'chat' ? t('Scene') : t('Library')}
+        onBack={() => setView(back)}
+        onOpenChat={(session) => setView({ screen: 'chat', session })}
+        // ✎ on a cast member goes to the one character editor, and comes back
+        // here — the same navigate-in rule the Library and a scene already use.
+        onEditCharacter={(card) => setView({ screen: 'character', card, tab: 'character', scene: null, back: view })}
+      />
+    )
+  }
+
   if (view.screen === 'chat') {
     // key by session so a branch (which switches to a new session) remounts the
     // chat with clean local state instead of carrying the old draft/edit over.
@@ -140,6 +170,7 @@ export function Stage() {
       status={status}
       onOpenChat={(session) => setView({ screen: 'chat', session })}
       onEditCharacter={(card) => setView({ screen: 'character', card, tab: 'character', scene: null, back: { screen: 'library' } })}
+      onOpenWorld={(id) => setView({ screen: 'world', id, tab: 'roster', back: { screen: 'library' } })}
       // No scene behind it, so the You tab edits the saved library rather than
       // steering a session.
       onEditYou={() => setView({ screen: 'character', card: null, tab: 'you', scene: null, back: { screen: 'library' } })}

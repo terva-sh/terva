@@ -648,6 +648,18 @@ button:disabled {
 .stage-card__name {
   font-weight: 600;
 }
+/* The World a character was created in. Quieter than the name and louder than
+   the creator: it answers "why is this here" without competing with what the
+   card IS. Truncates rather than wraps — a long World name must not make one
+   tile taller than its neighbours in a fixed grid. */
+.stage-card__world {
+  font-size: 0.78rem;
+  color: var(--stage-accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
 .stage-card__meta {
   display: flex;
   justify-content: space-between;
@@ -4617,6 +4629,37 @@ button:disabled {
   flex-wrap: wrap;
   gap: 0.6rem;
 }
+/* The tile and its delete read as ONE pill: the tile squares off its right
+   corners and drops its right border, the ✕ takes the rounding over. Joined
+   rather than spaced so the ✕ is unmistakably attached to the World beside it —
+   a floating ✕ between two tiles belongs to neither. */
+.stage-world__row {
+  display: flex;
+  align-items: stretch;
+}
+.stage-world__row .stage-world {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: none;
+}
+.stage-world__del {
+  padding: 0 0.65rem;
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  border-radius: 0 10px 10px 0;
+  color: var(--stage-muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.stage-world__del:hover:not(:disabled),
+.stage-world__del:focus-visible {
+  color: var(--stage-danger);
+  border-color: var(--stage-danger);
+}
+.stage-world__del:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
 .stage-world {
   display: flex;
   align-items: center;
@@ -5078,6 +5121,55 @@ button:disabled {
 .stage-doctor__content {
   margin: 0.25rem 0;
 }
+
+/* --- world doctor (SD6) --- */
+
+/* The text an accept REPLACES. Struck and muted so the pair reads as a
+   direction — this becomes that — rather than as two competing paragraphs. */
+.stage-doctor__before {
+  margin: 0.25rem 0 0;
+  font-size: 0.9em;
+  color: var(--stage-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--stage-line);
+}
+/* Two families in one panel, so each gets a heading that outranks a proposal's
+   own head without becoming a second section title. */
+.stage-doctor__family {
+  margin: 0.75rem 0 0.25rem;
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--stage-muted);
+}
+.stage-doctor__group {
+  margin-bottom: 0.5rem;
+}
+/* Whose card this group of proposals is about. Sits INSIDE the family, so it
+   is quieter than the family heading and louder than a row. */
+.stage-doctor__who {
+  margin: 0.35rem 0 0.15rem;
+  font-size: 0.95em;
+  color: var(--stage-fg);
+}
+.stage-doctor__steerbox {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0.35rem 0;
+  font-size: 0.85em;
+  color: var(--stage-muted);
+}
+.stage-doctor__steerbox textarea {
+  box-sizing: border-box;
+  padding: 0.45rem 0.55rem;
+  background: var(--stage-surface-2);
+  color: var(--stage-fg);
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  font: inherit;
+  resize: vertical;
+}
+
 .stage-doctor__promo {
   display: grid;
   gap: 0.35rem;
@@ -5581,4 +5673,410 @@ button:disabled {
 .stage-cardhistory__yes:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+/* The studio pane is a flex row centering ONE child — that is right for the card
+   editor it was built for, and wrong for a World, whose panes stack a list on top
+   of a form. Left as-is the roster and the add-a-character form became two
+   side-by-side columns stretched to the full height of the pane. Stack them. */
+.stage-worldstudio .stage-studio__pane {
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+}
+.stage-worldstudio .stage-studio__pane > * {
+  width: min(48rem, 100%);
+  flex: none;
+}
+
+/* ---------------------------------------------------------------- world studio
+
+   The World as a screen rather than a drawer over the shelf. It borrows the
+   character studio's frame (.stage-studio topbar/tabs/body), so what is added
+   here is only what a World has and a character does not: a cover-and-title
+   header, a cast list with faces, and a footer holding the World-wide settings
+   and the destructive actions. */
+.stage-worldstudio__head {
+  padding: 0.75rem 1rem 0;
+}
+.stage-worldstudio__cover {
+  display: block;
+  width: 100%;
+  max-height: 11rem;
+  object-fit: cover;
+  border-radius: 10px;
+  margin-bottom: 0.6rem;
+}
+.stage-worldstudio__title h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.25rem;
+  font-size: 1.15rem;
+}
+.stage-worldstudio__foot {
+  border-top: 1px solid var(--stage-line);
+  padding: 0.75rem 1rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.stage-worldstudio__coord {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--stage-muted);
+  flex-wrap: wrap;
+}
+.stage-worldstudio__coord select {
+  flex: 1;
+  min-width: 12rem;
+}
+/* The World's default-model row sits beside coordination and should read as its
+   peer, so it borrows the same row layout — with three corrections the shared
+   rule cannot make, because the picker is a disclosure and a <select> is not.
+   The row's own label names the setting, so the picker's generic "Model" is
+   hidden: side by side the two read as two different settings. The open list is
+   in flow (only the chat header's copy floats), so the row aligns to the TOP —
+   otherwise the label drifts to the vertical middle of the open list and stops
+   looking attached to anything. */
+.stage-worldstudio__model {
+  align-items: flex-start;
+}
+.stage-worldstudio__model .stage-modelpick {
+  flex: 1;
+  min-width: 12rem;
+}
+.stage-worldstudio__model .stage-modelpick__label {
+  display: none;
+}
+.stage-worldstudio__model .stage-modelpick__head {
+  justify-content: flex-end;
+}
+
+/* Form controls across the studio. A browser-default select renders bright
+   white, which on a dark stage reads as a hole in the page — the same reason
+   .stage-coordination__select exists for the drawer's copy of this control. */
+.stage-worldstudio__coord select,
+.stage-worldroster__add select,
+.stage-worldroster__add input,
+.stage-lorebook__field input[type='text'],
+.stage-lorebook__field input:not([type]),
+.stage-lorebook__field textarea {
+  box-sizing: border-box;
+  padding: 0.45rem 0.55rem;
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  color: var(--stage-fg);
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+/* Buttons match the World's other actions (.stage-worldsheet__export) rather
+   than the browser default, which was near-invisible against the surface. */
+.stage-lorebook__new,
+.stage-lorebook__save,
+.stage-lorebook__cancel {
+  padding: 0.4rem 0.9rem;
+  background: none;
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  color: var(--stage-fg);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.stage-lorebook__new:hover:not(:disabled),
+.stage-lorebook__save:hover:not(:disabled),
+.stage-lorebook__cancel:hover:not(:disabled) {
+  border-color: var(--stage-accent);
+}
+.stage-lorebook__save:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The cast. A face column keeps the list scannable by WHO rather than by name
+   length, which is what an ensemble is actually navigated by. */
+.stage-worldroster {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.stage-worldroster__row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+.stage-worldroster__face {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+}
+.stage-worldroster__face--none {
+  background: var(--stage-surface-3, var(--stage-line));
+}
+.stage-worldroster__who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.stage-worldroster__name {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.stage-worldroster__missing {
+  font-size: 0.75rem;
+  color: var(--stage-warn, #c80);
+}
+.stage-worldroster__act {
+  background: none;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  color: var(--stage-muted);
+  cursor: pointer;
+  padding: 0.2rem 0.45rem;
+  font-size: 0.8rem;
+}
+.stage-worldroster__act:hover:not(:disabled) {
+  color: var(--stage-fg);
+  border-color: var(--stage-accent);
+}
+.stage-worldroster__act--drop:hover:not(:disabled) {
+  color: var(--stage-danger, #c33);
+  border-color: var(--stage-danger, #c33);
+}
+.stage-worldroster__add {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+  flex-wrap: wrap;
+}
+.stage-worldroster__add select,
+.stage-worldroster__add input {
+  flex: 1;
+  min-width: 8rem;
+}
+
+/* ------------------------------------------------------------------- lorebook
+
+   Deliberately NOT .stage-worldlore__*: that namespace is the steering drawer's
+   read-mostly entry list, and two surfaces sharing a class name would mean
+   restyling one silently restyles the other. */
+.stage-lorebook__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.stage-lorebook__head .stage-hint {
+  flex: 1;
+  margin: 0;
+}
+.stage-lorebook__new {
+  flex: none;
+}
+.stage-lorebook__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.stage-lorebook__row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.3rem;
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-line);
+  border-radius: 8px;
+}
+.stage-lorebook__row--open {
+  border-color: var(--stage-accent);
+}
+.stage-lorebook__open {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 0.15rem;
+  text-align: left;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0.45rem 0.55rem;
+}
+.stage-lorebook__name {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.stage-lorebook__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+.stage-lorebook__badge,
+.stage-lorebook__key {
+  font-size: 0.7rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  background: var(--stage-surface-3, var(--stage-line));
+  color: var(--stage-muted);
+}
+.stage-lorebook__key {
+  font-family: var(--stage-mono, monospace);
+}
+/* One line of the entry's text, so the list reads as content rather than as a
+   column of names you have to open to identify. */
+.stage-lorebook__snippet {
+  font-size: 0.78rem;
+  color: var(--stage-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stage-lorebook__del {
+  flex: none;
+  background: none;
+  border: none;
+  border-left: 1px solid var(--stage-line);
+  color: var(--stage-muted);
+  cursor: pointer;
+  padding: 0 0.55rem;
+}
+.stage-lorebook__del:hover:not(:disabled) {
+  color: var(--stage-danger, #c33);
+}
+.stage-lorebook__form {
+  margin-top: 0.6rem;
+  padding: 0.65rem;
+  background: var(--stage-surface-2);
+  border: 1px solid var(--stage-accent);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.stage-lorebook__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.8rem;
+  color: var(--stage-muted);
+}
+.stage-lorebook__field--check {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+}
+.stage-lorebook__field textarea {
+  resize: vertical;
+  font: inherit;
+}
+.stage-lorebook__actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+/* This World's own version of a character (WS-3): a fork made so an edit here
+   did not rewrite the character every other World is playing. Marked, not
+   hidden — the author has to know which copy they are editing. */
+.stage-worldroster__variant {
+  font-size: 0.72rem;
+  color: var(--stage-accent);
+}
+
+/* The doctor's scene picker (WS-4): which nights inform the run. Offered rather
+   than assumed — a World's evidence is its whole history of play. */
+.stage-doctor__scenes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+  align-items: center;
+  margin: 0.5rem 0;
+}
+.stage-doctor__sceneslabel {
+  font-size: 0.8rem;
+  color: var(--stage-muted);
+  width: 100%;
+}
+.stage-doctor__scene {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+}
+
+/* ── Portraits off ────────────────────────────────────────────────────────────
+   The whole of the no-images mode, keyed off the root attribute portraits.ts
+   stamps. One place rather than a prop threaded through the Library, the
+   studio, the cast strip, and the sheets — the surface that got missed would be
+   the one still showing a face.
+
+   `display: none` rather than `visibility: hidden` or opacity: the point is to
+   reclaim the space, and a hidden-but-laid-out portrait leaves a tile that is
+   mostly nothing. Nothing here changes the GRID: the tiles keep their columns
+   and their chrome and lose the picture, because the geometry is what makes the
+   shelf scannable and reflowing it would be a different view rather than this
+   one with the images off. */
+:root[data-portraits='off'] .stage-card__avatar,
+:root[data-portraits='off'] .stage-cardsheet__avatar,
+:root[data-portraits='off'] .stage-chat__cardavatar,
+:root[data-portraits='off'] .stage-groupsheet__avatar,
+:root[data-portraits='off'] .stage-worldroster__face,
+:root[data-portraits='off'] .stage-yourchats__avatar,
+:root[data-portraits='off'] .stage-world__cover,
+:root[data-portraits='off'] .stage-worldstudio__cover,
+:root[data-portraits='off'] .stage-avatar {
+  display: none;
+}
+
+/* A tile with no picture has nothing holding it open, so give the text room to
+   breathe rather than letting the name sit against the border.
+
+   The padding is not cosmetic: .stage-card__fav and .stage-card__more are
+   ABSOLUTE at top 0.5rem, sized to float over the portrait. Take the portrait
+   away and they land on top of the name — which every assertion passed and only
+   a screenshot showed. The reserve clears both (0.5rem offset + 1.9rem control),
+   and the tile is still a third the height of one with art. */
+:root[data-portraits='off'] .stage-card {
+  gap: 0.15rem;
+  min-height: 4.5rem;
+  padding-top: 2.5rem;
+  justify-content: center;
+}
+
+/* The World tile is a horizontal pill whose icon was doing the left-edge
+   spacing; without it the name would butt against the border. */
+:root[data-portraits='off'] .stage-world {
+  padding-left: 0.9rem;
+}
+
+/* The toggle itself, beside the sort control it belongs with. */
+.stage-portraits-toggle {
+  padding: 0.25rem 0.5rem;
+  background: none;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  color: var(--stage-muted);
+  font-size: 0.78rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.stage-portraits-toggle[aria-pressed='true'] {
+  color: var(--stage-accent);
+  border-color: var(--stage-accent);
 }

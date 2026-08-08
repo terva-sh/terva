@@ -1141,7 +1141,29 @@ export interface CardSummary {
   // the "recently added" sort key. favorite is whether it is favorited: the
   // library highlights it and pins it to the top. Toggled by cards.favorite.
   added?: string
+  // updated is when the card's CONTENT last changed (RFC 3339) — the "recently
+  // updated" sort key. Read server-side from the newest card-history revision,
+  // so a save that changed nothing does not move it the way a file mtime would.
+  // A card nobody has edited reports its added time, which keeps the ordering
+  // total instead of clumping every untouched card at one end.
+  updated?: string
   favorite?: boolean
+  // variant_of is the saved World this card is a World-scoped variant of, or
+  // absent for an ordinary card. A variant is what worlds.edit_character
+  // produces: a fork made so an edit inside one World does not rewrite the
+  // character every other World is playing. The library hides variants from the
+  // main shelf — they are that World's business, and its studio is where they
+  // belong.
+  //
+  // DERIVED server-side, not stored: a card is a variant while its origin record
+  // names a World that still exists AND still rosters it.
+  variant_of?: string
+  // world_of is the saved World this card BELONGS to — set for a variant AND
+  // for a character the World created. Separate from variant_of because they
+  // drive different things: variant_of HIDES a copy whose original is still on
+  // the shelf, world_of SAYS SO for a card that stays. The id, not the name;
+  // surfaces showing the badge already list Worlds and resolve it.
+  world_of?: string
 }
 
 // CardView is one card in full: its summary plus the normalized card JSON, so an
@@ -1185,6 +1207,27 @@ export interface DoctorProposal {
   remove?: boolean
 }
 
+// WorldCardProposal is one worlds.doctor proposal about one roster character's
+// card: the card doctor's proposal shape, plus which card it belongs to.
+//
+// It carries DoctorProposal's fields rather than referring to it because Go
+// EMBEDS the struct, so the two flatten into one JSON object on the wire.
+//
+// `card` is the library id an accept sends to cards.edit; `character` is that
+// card's display name, so a review sheet can group proposals by who they are
+// about without resolving every ref.
+export interface WorldCardProposal {
+  id: string
+  field: string
+  severity: string
+  rationale: string
+  before: string
+  after: string
+  remove?: boolean
+  card: string
+  character: string
+}
+
 // DoctorResult is the payload of cards.doctor: the structured proposals plus an
 // optional overall note.
 export interface DoctorResult {
@@ -1214,7 +1257,11 @@ export interface SessionProposal {
   // lore_retire (SD6) carries name only and applies through world.lore.delete —
   // the one kind whose acceptance REMOVES something, so its accept button says
   // so rather than reading as another "Accept".
-  kind: 'lore_entry' | 'open_thread' | 'cast_promotion' | 'scene_state' | 'scene_break' | 'lore_retire'
+  // character_new (SD6) is worlds.doctor's own kind: a character the World's
+  // cast is missing. Same payload and same cards.import + cast.add accept path
+  // as cast_promotion — the difference is the warrant, which is the ensemble
+  // rather than played lines.
+  kind: 'lore_entry' | 'open_thread' | 'cast_promotion' | 'scene_state' | 'scene_break' | 'lore_retire' | 'character_new'
   rationale: string
   // lore_entry / open_thread; scene_state uses name+content only
   name?: string
@@ -1242,6 +1289,16 @@ export interface SessionDoctorParams {
 
 export interface SessionDoctorResult {
   proposals: SessionProposal[]
+  note?: string
+}
+
+// WorldDoctorResult is the payload of worlds.doctor (SD6). Two families, kept
+// apart because they apply through different verbs: a card proposal is a field
+// edit through cards.edit, a world proposal a typed entry through
+// world.lore.put/delete — or, for character_new, cards.import + cast.add.
+export interface WorldDoctorResult {
+  card_proposals: WorldCardProposal[]
+  world_proposals: SessionProposal[]
   note?: string
 }
 
@@ -1500,7 +1557,16 @@ export interface WorldView {
   // a new session in this World seeds its cast from; empty = that actor inherits
   // the session model. Edited via worlds.set_character_model.
   character_models?: Record<string, CastRoute>
+  // model is the World's OWN default model — the floor a scene started here, a
+  // worlds.doctor run, and any character without a pin of their own fall back
+  // to. Empty means the World states no preference; ask models.default_for to
+  // see what actually shows through. Written by worlds.set_model.
+  model?: CastRoute
   lore?: WorldLoreEntry[]
+  // coordination is the World's saved meta-narrator mode (W3): '' (auto),
+  // 'off', or 'focus:<roster name>' — the seed a new session here starts from.
+  // Written by worlds.set.
+  coordination?: string
   sessions?: number
   created?: string
   updated?: string
@@ -1542,6 +1608,97 @@ export interface WorldSetCharacterModelParams {
   character: string
   provider?: string
   model?: string
+}
+
+// WorldSetModelParams sets (or clears) the World's own default model — the
+// `world` rung of the card → world → workspace ladder. Empty provider AND model
+// clears it. A different question from WorldSetCharacterModelParams: that pins
+// one actor's voice, this sets what everything in the World falls back to.
+export interface WorldSetModelParams {
+  id: string
+  provider?: string
+  model?: string
+}
+
+// The sessionless saved-World CONTENT params (WS-1). Each carries the World's
+// id where the session-scoped `world.*` twin takes the session from the frame —
+// that is the whole difference between the two families. All answer with the
+// stored WorldView, so a client re-renders from the write's own result rather
+// than re-listing.
+
+// WorldsLorePutParams adds or updates one lore entry on a saved World. replace
+// names the entry this one supersedes (a rename edits in place); empty upserts
+// by entry.name.
+export interface WorldsLorePutParams {
+  id: string
+  entry: WorldLoreEntry
+  replace?: string
+}
+
+// WorldsLoreDeleteParams names the saved World's entry to remove.
+export interface WorldsLoreDeleteParams {
+  id: string
+  name: string
+}
+
+// WorldsSetParams sets a saved World's coordination mode: '' (auto), 'off', or
+// 'focus:<roster name>'.
+export interface WorldsSetParams {
+  id: string
+  coordination: string
+}
+
+// WorldsAddCharacterParams puts name on the roster pointing at ref (a card
+// library id). A name already on the roster is re-pointed, which is how a swap
+// is spelled.
+export interface WorldsAddCharacterParams {
+  id: string
+  name: string
+  ref: string
+}
+
+// WorldsRemoveCharacterParams names the roster character to drop; their model
+// pin goes with them.
+export interface WorldsRemoveCharacterParams {
+  id: string
+  name: string
+}
+
+// WorldsEditCharacterParams edits one roster character's card, World-scoped.
+// card is a full edited card document — the same shape cards.edit takes.
+export interface WorldsEditCharacterParams {
+  id: string
+  character: string
+  card: unknown
+  // also_library additionally writes the edit onto the ORIGINAL library card, so
+  // it reaches every World and session using it. Off by default: the safe
+  // reading has to be the one you get by not deciding.
+  also_library?: boolean
+}
+
+// WorldsCreateCharacterParams imports a NEW card and rosters it into the World
+// in one operation, recording that the character was born there. One verb
+// rather than cards.import + worlds.add_character: the pair can half-apply, and
+// provenance written by the client is provenance the client can forget.
+export interface WorldsCreateCharacterParams {
+  id: string
+  name: string
+  card: unknown
+}
+
+export interface WorldsCreateCharacterResult {
+  world: WorldView
+  card_id: string
+}
+
+// WorldsEditCharacterResult reports where the edit landed. card_id is the
+// roster's ref AFTER the edit — a new id when it forked, the same id when the
+// document changed nothing. forked says which happened, so a client can tell the
+// author their World now has its own copy.
+export interface WorldsEditCharacterResult {
+  world: WorldView
+  card_id: string
+  forked?: boolean
 }
 
 // WorldExport is a World bundle serialized for download (worlds.export) — the
@@ -2260,12 +2417,21 @@ export type Verb =
   | 'world.lore.delete'
   | 'world.lore.put'
   | 'world.set'
+  | 'worlds.add_character'
   | 'worlds.delete'
+  | 'worlds.doctor'
+  | 'worlds.edit_character'
+  | 'worlds.create_character'
   | 'worlds.export'
   | 'worlds.import'
   | 'worlds.list'
+  | 'worlds.lore.delete'
+  | 'worlds.lore.put'
+  | 'worlds.remove_character'
   | 'worlds.save'
+  | 'worlds.set'
   | 'worlds.set_character_model'
+  | 'worlds.set_model'
   | 'worlds.update'
   | 'workflows.get'
   | 'workflows.list'
@@ -2357,7 +2523,15 @@ export interface VerbParams {
   'worlds.save': WorldSaveParams
   'worlds.update': WorldUpdateParams
   'worlds.set_character_model': WorldSetCharacterModelParams
+  'worlds.set_model': WorldSetModelParams
   'worlds.import': WorldImportParams
+  'worlds.lore.put': WorldsLorePutParams
+  'worlds.lore.delete': WorldsLoreDeleteParams
+  'worlds.set': WorldsSetParams
+  'worlds.add_character': WorldsAddCharacterParams
+  'worlds.remove_character': WorldsRemoveCharacterParams
+  'worlds.edit_character': WorldsEditCharacterParams
+  'worlds.create_character': WorldsCreateCharacterParams
   'cardgroups.save': CardGroupSaveParams
   'cardgroups.delete': CardGroupDeleteParams
   'cardgroups.set_members': CardGroupSetMembersParams

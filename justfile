@@ -426,10 +426,12 @@ ci-web-client:
             npm --prefix packages/agent/web/client ci; \
         fi; \
         npm --prefix packages/agent/web/client test; \
+        npm --prefix packages/agent/web/client run typecheck; \
         ./scripts/web-dist.sh check; \
     else \
         echo "ci-web-client: SKIPPED — no npm on this machine."; \
-        echo "  The ci workflow DOES run vitest and the dist determinism check. If you"; \
+        echo "  The ci workflow DOES run vitest, the typecheck, and the dist determinism"; \
+        echo "  check. If you"; \
         echo "  touched packages/agent/web/client/src, run 'just web-check' somewhere"; \
         echo "  with Node before you push."; \
     fi

@@ -42,7 +42,7 @@ function stub() {
 // Render the library and open Kobeni's detail sheet, where the action lives.
 async function openSheet(onEditCharacter = () => {}) {
   const client = stub()
-  render(<Library client={client} ready status="open" onOpenChat={() => {}} onEditCharacter={onEditCharacter} onEditYou={() => {}} />)
+  render(<Library client={client} ready status="open" onOpenChat={() => {}} onEditCharacter={onEditCharacter} onEditYou={() => {}} onOpenWorld={() => {}} />)
   const grid = await waitFor(() => document.querySelector('.stage-grid') as HTMLElement)
   fireEvent.click(within(grid).getByTitle('Details'))
   await waitFor(() => expect(screen.getByText('⧉ Duplicate card')).toBeTruthy())
@@ -70,7 +70,10 @@ afterEach(() => {
 
 describe('duplicating a card from the library', () => {
   it('proposes a free name and sends what the author confirmed', async () => {
-    const prompt = vi.fn(() => 'Kobeni, braver')
+    // Typed with the arguments window.prompt actually receives: an
+    // argument-less vi.fn infers an empty tuple, so mock.calls[0][1] —
+    // the pre-filled default this test exists to check — cannot be indexed.
+    const prompt = vi.fn((_message?: string, _default?: string) => 'Kobeni, braver')
     vi.stubGlobal('prompt', prompt)
     const client = await openSheet()
 
@@ -135,7 +138,7 @@ describe('duplicating a card from the library', () => {
         }
       },
     })
-    render(<Library client={client} ready status="open" onOpenChat={() => {}} onEditCharacter={onEditCharacter} onEditYou={() => {}} />)
+    render(<Library client={client} ready status="open" onOpenChat={() => {}} onEditCharacter={onEditCharacter} onEditYou={() => {}} onOpenWorld={() => {}} />)
     const grid = await waitFor(() => document.querySelector('.stage-grid') as HTMLElement)
     fireEvent.click(within(grid).getByTitle('Details'))
     fireEvent.click(await waitFor(() => screen.getByText('⧉ Duplicate card')))

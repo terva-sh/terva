@@ -1,20 +1,14 @@
 import { useEffect, useState } from 'preact/hooks'
 import { t, tn } from '../../i18n'
-import { copyToClipboard, downloadExport } from '../../ui/browser'
+import { copyToClipboard, downloadExport, fileToBase64 } from '../../ui/browser'
 import { panelHref } from '../../ui/navlinks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { SessionInfo, BackgroundView, BackgroundsListResult, CardView, DoctorProposal, DoctorResult, LoreView, SessionExport, Surface, UserPersonaView, UserPersonasListResult } from '../../platform/ctrlproto/types'
 import { ModelPick } from './ModelPick'
+import { applyCardFields } from './cardraw'
 import { SessionDoctor } from './SessionDoctor'
 import { SCENE_STATE_NAME, sceneStateOf, scenePinDrift } from './SceneState'
 import { IdentityField, PRONOUN_OPTIONS, GENDER_OPTIONS } from './identity'
-
-async function fileToBase64(file: File): Promise<string> {
-  const buf = new Uint8Array(await file.arrayBuffer())
-  let binary = ''
-  for (let i = 0; i < buf.length; i++) binary += String.fromCharCode(buf[i])
-  return btoa(binary)
-}
 
 // The steering drawer — the progressive-disclosure power surface. This pass
 // carries what exists over Phase-2 primitives: session details, a live scene
@@ -372,12 +366,11 @@ export function Steering(props: {
   // empty for a removal, which is the point of it), save through the ordinary
   // cards.edit.
   //
-  // The fields of a CCv2 document live under `data`, and cards.edit RE-PARSES
-  // what it is given: a field written at the top level of a v2 wrapper is parsed
-  // off and lost, so every accepted edit here used to be silently discarded
-  // while the panel closed as though it had landed. Mirror the parser's own
-  // branch — nested for a spec'd document, flat for a bare v1 one — rather than
-  // assuming either shape.
+  // Writing the accepted fields back is delegated to applyCardFields, which
+  // owns the CCv2 nested-vs-flat branch this flow once got wrong silently (a
+  // field written at the top level of a v2 wrapper is parsed off by cards.edit
+  // and lost, while the panel closes as though it had landed). The world doctor
+  // needs the same write, so the rule lives in one place with one test.
   const enrichApply = async () => {
     if (!enrich || !enrichProposals) return
     const accepted = enrichProposals.filter((p) => enrichVerdicts[p.id])
@@ -386,13 +379,9 @@ export function Steering(props: {
     setError('')
     try {
       const view = await client.send<CardView>('cards.get', { id: enrich.ref })
-      const raw = { ...((view.raw ?? {}) as Record<string, unknown>) }
-      const spec = typeof raw.spec === 'string' ? raw.spec : ''
-      const nested = spec.startsWith('chara_card_v') && typeof raw.data === 'object' && raw.data !== null
-      const fields = nested ? { ...(raw.data as Record<string, unknown>) } : raw
-      for (const p of accepted) fields[p.field] = p.after
-      if (nested) raw.data = fields
-      await client.send('cards.edit', { id: enrich.ref, card: raw })
+      const edits: Record<string, string> = {}
+      for (const p of accepted) edits[p.field] = p.after
+      await client.send('cards.edit', { id: enrich.ref, card: applyCardFields(view.raw, edits) })
       resetEnrich()
     } catch (e) {
       setError(String(e))
@@ -825,6 +814,10 @@ export function Steering(props: {
           defaultModel={info?.model}
           onSceneBreak={props.onNextScene ? (title) => { onClose(); props.onNextScene?.(title) } : undefined}
         />
+        {/* Its sibling, one level up: the session doctor reads THIS SCENE, the
+            world doctor reads the cast and the lorebook the scene is played in.
+            Adjacent because the choice between them is "what am I fixing" — the
+            story so far, or the world it happens in. */}
 
         {props.onNextScene && (
           <section class="stage-drawer__section">

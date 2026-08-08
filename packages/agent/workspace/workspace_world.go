@@ -36,13 +36,29 @@ func (w *Workspace) WorldLorePut(_ context.Context, sess string, p ctrlproto.Wor
 	if err != nil {
 		return err
 	}
-	replace := strings.TrimSpace(p.Replace)
+	next, err := putWorldLore(s.sess.Meta.WorldLore, entry, p.Replace)
+	if err != nil {
+		return err
+	}
+	return s.setWorldLore(next)
+}
+
+// putWorldLore is THE upsert rule for a World lorebook, shared by the
+// session-scoped world.lore.put above and the saved-World worlds.lore.put
+// (workspace_worldedit.go). Shared rather than written twice because a saved
+// World and a session's working copy hold the same book: if the two scopes
+// disagreed about what a put means, promoting or seeding one from the other
+// would quietly reshape it.
+//
+// replace names the entry this one supersedes; empty upserts by entry.Name.
+func putWorldLore(book []core.WorldLoreEntry, entry core.WorldLoreEntry, replace string) ([]core.WorldLoreEntry, error) {
+	replace = strings.TrimSpace(replace)
 	if replace == "" {
 		replace = entry.Name
 	}
-	next := make([]core.WorldLoreEntry, 0, len(s.sess.Meta.WorldLore)+1)
+	next := make([]core.WorldLoreEntry, 0, len(book)+1)
 	placed := false
-	for _, e := range s.sess.Meta.WorldLore {
+	for _, e := range book {
 		// The scene-state pin (SD4) matches its slot case-insensitively: there
 		// is one card, however an import spelled it, and a put addressed to the
 		// pin must update that card, never stand a second one beside it.
@@ -63,7 +79,7 @@ func (w *Workspace) WorldLorePut(_ context.Context, sess string, p ctrlproto.Wor
 			// A rename onto an existing entry's name would leave two entries
 			// answering to one name; the later put/delete verbs key on names,
 			// so refuse rather than silently shadow.
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("a World lore entry named %q already exists", entry.Name))
+			return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("a World lore entry named %q already exists", entry.Name))
 		default:
 			next = append(next, e)
 		}
@@ -71,7 +87,46 @@ func (w *Workspace) WorldLorePut(_ context.Context, sess string, p ctrlproto.Wor
 	if !placed {
 		next = append(next, entry)
 	}
-	return s.setWorldLore(next)
+	return next, nil
+}
+
+// deleteWorldLore drops the entry named name, refusing when nothing matched —
+// the other half of the shared rule (see putWorldLore). Returns nil (not an
+// empty slice) for an emptied book, so the field marshals away.
+func deleteWorldLore(book []core.WorldLoreEntry, name string) ([]core.WorldLoreEntry, error) {
+	name = strings.TrimSpace(name)
+	next := make([]core.WorldLoreEntry, 0, len(book))
+	for _, e := range book {
+		if e.Name != name {
+			next = append(next, e)
+		}
+	}
+	if len(next) == len(book) {
+		return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("no World lore entry named %q", name))
+	}
+	if len(next) == 0 {
+		next = nil
+	}
+	return next, nil
+}
+
+// checkCoordination validates a W3 coordination mode against a roster — ""
+// (auto), "off", or "focus:<name>" where the name is really on it. Shared by
+// world.set and worlds.set so a mode a session accepts is one a saved World
+// accepts, and vice versa.
+func checkCoordination(mode string, roster map[string]string) error {
+	switch {
+	case mode == "" || mode == CoordinationOff:
+		return nil
+	case strings.HasPrefix(mode, coordinationFocus):
+		name := strings.TrimSpace(strings.TrimPrefix(mode, coordinationFocus))
+		if _, ok := roster[name]; !ok {
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("no roster character %q to focus on", name))
+		}
+		return nil
+	default:
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("coordination must be \"\", %q, or %q<name>", CoordinationOff, coordinationFocus))
+	}
 }
 
 // WorldLoreDelete removes the World lore entry named p.Name.
@@ -83,18 +138,9 @@ func (w *Workspace) WorldLoreDelete(_ context.Context, sess string, p ctrlproto.
 	if s.worldLore == nil {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("World lore is only available for chat/play sessions"))
 	}
-	name := strings.TrimSpace(p.Name)
-	next := make([]core.WorldLoreEntry, 0, len(s.sess.Meta.WorldLore))
-	for _, e := range s.sess.Meta.WorldLore {
-		if e.Name != name {
-			next = append(next, e)
-		}
-	}
-	if len(next) == len(s.sess.Meta.WorldLore) {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("no World lore entry named %q", name))
-	}
-	if len(next) == 0 {
-		next = nil
+	next, err := deleteWorldLore(s.sess.Meta.WorldLore, p.Name)
+	if err != nil {
+		return err
 	}
 	return s.setWorldLore(next)
 }
@@ -112,16 +158,8 @@ func (w *Workspace) WorldSet(_ context.Context, sess string, p ctrlproto.WorldSe
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the World is only available for chat/play sessions"))
 	}
 	mode := strings.TrimSpace(p.Coordination)
-	switch {
-	case mode == "" || mode == CoordinationOff:
-		// valid
-	case strings.HasPrefix(mode, coordinationFocus):
-		name := strings.TrimSpace(strings.TrimPrefix(mode, coordinationFocus))
-		if _, ok := s.castRefs()[name]; !ok {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("no roster character %q to focus on", name))
-		}
-	default:
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("coordination must be \"\", %q, or %q<name>", CoordinationOff, coordinationFocus))
+	if err := checkCoordination(mode, s.castRefs()); err != nil {
+		return err
 	}
 	if err := s.sess.SetCoordination(mode); err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "set coordination: %v", err)
@@ -183,15 +221,48 @@ func (s *wsSession) saveWorld(name, description string) (build.WorldDoc, error) 
 	}
 	p := ctrlproto.WorldSaveParams{Name: name, Description: description}
 	store := build.NewWorldStore()
-	doc := build.WorldDoc{
-		ID:              s.sess.Meta.World,
-		Name:            strings.TrimSpace(p.Name),
-		Description:     strings.TrimSpace(p.Description),
-		Characters:      s.castRefs(),
-		CharacterModels: s.castModels(),
-		Lore:            s.sess.Meta.WorldLore,
-		Coordination:    s.sess.Meta.Coordination,
+
+	// A save-back STARTS FROM THE STORED WORLD, then overwrites the fields a
+	// session owns. The direction matters more than it looks: this function used
+	// to build a fresh WorldDoc literal, which made "cleared" the default for
+	// every field and meant each World-owned setting needed its own line here to
+	// survive. Three already did (name, description, the default model), each
+	// added after the fact — and the one that was missed would not have failed a
+	// test. It would have surfaced days later as a setting that reset itself.
+	//
+	// Starting from prev inverts that: a World-owned field survives because
+	// nothing touched it. What the inversion does NOT do is fix the mirror-image
+	// mistake — a new SESSION-owned field that nobody assigns below would now go
+	// stale instead of being cleared. Neither direction is safe by inspection, so
+	// TestWorldSaveClassifiesEveryWorldDocField makes the classification a thing
+	// you have to write down.
+	doc := build.WorldDoc{ID: s.sess.Meta.World}
+	if doc.ID != "" {
+		if prev, err := store.Get(doc.ID); err == nil {
+			doc = prev
+		} else {
+			doc.ID = "" // the saved World vanished from disk — re-promote fresh
+		}
 	}
+
+	// Session-owned: the working copy is authoritative, so these are assigned
+	// unconditionally. A character taken off the cast has to leave the World.
+	doc.Characters = s.castRefs()
+	doc.CharacterModels = s.castModels()
+	doc.Lore = s.sess.Meta.WorldLore
+	doc.Coordination = s.sess.Meta.Coordination
+
+	// Name and description come from the REQUEST, not the session, and only when
+	// given: worlds.save with neither is the save-back the studio sends, and it
+	// must not rename the World to "". (A rename to empty is therefore not
+	// expressible here — it never was, and worlds.update owns that surface.)
+	if n := strings.TrimSpace(p.Name); n != "" {
+		doc.Name = n
+	}
+	if d := strings.TrimSpace(p.Description); d != "" {
+		doc.Description = d
+	}
+
 	// The World lifts the WHOLE stage: the bound character joins the saved
 	// roster (the cast deliberately excludes them in-session), so the World
 	// sheet lists every character and chat-in-World can bind any of them.
@@ -200,18 +271,6 @@ func (s *wsSession) saveWorld(name, description string) (build.WorldDoc, error) 
 			if _, in := doc.Characters[boundName]; !in {
 				doc.Characters[boundName] = boundRef
 			}
-		}
-	}
-	if doc.ID != "" {
-		if prev, err := store.Get(doc.ID); err == nil {
-			if doc.Name == "" {
-				doc.Name = prev.Name
-			}
-			if doc.Description == "" {
-				doc.Description = prev.Description
-			}
-		} else {
-			doc.ID = "" // the saved World vanished from disk — re-promote fresh
 		}
 	}
 	if doc.ID == "" && doc.Name == "" {
@@ -429,7 +488,9 @@ func worldDocToView(d build.WorldDoc, sessions int) ctrlproto.WorldView {
 		Description:     d.Description,
 		Characters:      d.Characters,
 		CharacterModels: castRoutesToView(d.CharacterModels),
+		Model:           ctrlproto.CastRoute{Provider: d.Model.Provider, Model: d.Model.Model},
 		Lore:            worldLoreToView(d.Lore),
+		Coordination:    d.Coordination,
 		Sessions:        sessions,
 		Created:         ctrlTimeString(d.Created),
 		Updated:         ctrlTimeString(d.Updated),

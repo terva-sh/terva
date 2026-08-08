@@ -24,6 +24,25 @@ export function downloadExport(res: DownloadPayload): void {
   URL.revokeObjectURL(url)
 }
 
+// Base64-encodes a file's bytes for the *.import verbs (Go decodes []byte from
+// base64).
+//
+// Extracted for the same reason downloadExport was, and after the same near
+// miss: two copies existed (the Library and the steering drawer) and the World
+// studio's cover upload was about to be a third. They had already drifted — one
+// built the binary string a character at a time, which is slow enough to matter
+// on a multi-megabyte portrait. This is the chunked one; CHUNK stays well under
+// the argument limit that String.fromCharCode(...) blows past on a large card.
+export async function fileToBase64(file: File): Promise<string> {
+  const buf = new Uint8Array(await file.arrayBuffer())
+  const CHUNK = 0x8000
+  const parts: string[] = []
+  for (let i = 0; i < buf.length; i += CHUNK) {
+    parts.push(String.fromCharCode(...buf.subarray(i, i + CHUNK)))
+  }
+  return btoa(parts.join(''))
+}
+
 // Writes text to the clipboard, falling back to a hidden textarea for insecure
 // plain-HTTP contexts where navigator.clipboard is unavailable.
 export async function copyToClipboard(text: string): Promise<boolean> {

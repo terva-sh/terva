@@ -201,7 +201,8 @@ const (
 
 	// The LLM card doctor (optional; served only by a DoctorController). Reads a
 	// card + its deterministic lint and proposes structured per-field edits.
-	MethodCardsDoctor Method = "cards.doctor" // params DoctorParams, result DoctorResult
+	MethodCardsDoctor  Method = "cards.doctor"  // params DoctorParams, result DoctorResult
+	MethodWorldsDoctor Method = "worlds.doctor" // params WorldDoctorParams, result WorldDoctorResult (sess in frame)
 
 	// MethodSessionsDoctor runs the session doctor (Dramaturgi) over a live
 	// immersive session — typed proposals in the card doctor's negotiation
@@ -285,8 +286,23 @@ const (
 	MethodWorldDelete            Method = "worlds.delete"              // params WorldDeleteParams
 	MethodWorldUpdate            Method = "worlds.update"              // params WorldUpdateParams, result WorldView
 	MethodWorldSetCharacterModel Method = "worlds.set_character_model" // params WorldSetCharacterModelParams, result WorldView
+	MethodWorldSetModel          Method = "worlds.set_model"           // params WorldSetModelParams, result WorldView
 	MethodWorldsExport           Method = "worlds.export"              // params WorldExportParams, result WorldExport
 	MethodWorldsImport           Method = "worlds.import"              // params WorldImportParams, result WorldView
+	// Saved-World CONTENT, sessionless (WS-1) — the roster, lorebook, and
+	// coordination a saved World carries, editable without opening a scene in
+	// it. The naming carries the scope: `world.*` writes the session's working
+	// copy, `worlds.*` writes the saved World by id.
+	MethodWorldsLorePut         Method = "worlds.lore.put"         // params WorldsLorePutParams, result WorldView
+	MethodWorldsLoreDelete      Method = "worlds.lore.delete"      // params WorldsLoreDeleteParams, result WorldView
+	MethodWorldsSet             Method = "worlds.set"              // params WorldsSetParams, result WorldView
+	MethodWorldsAddCharacter    Method = "worlds.add_character"    // params WorldsAddCharacterParams, result WorldView
+	MethodWorldsRemoveCharacter Method = "worlds.remove_character" // params WorldsRemoveCharacterParams, result WorldView
+	// A roster character's card edited WITHOUT the change escaping the World:
+	// the card is forked and the roster re-pointed, so the shared library card
+	// other Worlds are playing is never rewritten.
+	MethodWorldsEditCharacter   Method = "worlds.edit_character"   // params WorldsEditCharacterParams, result WorldsEditCharacterResult
+	MethodWorldsCreateCharacter Method = "worlds.create_character" // params WorldsCreateCharacterParams, result WorldsCreateCharacterResult
 
 	// Card groups (optional; served only by a CardGroupsController). A group is a
 	// terva-owned membership bucket for browsing the card library — workspace-wide
@@ -362,7 +378,8 @@ func (m Method) Group() Group {
 		MethodBackgroundsList, MethodBackgroundsImport, MethodBackgroundsDelete, MethodBackgroundBind, MethodBackgroundGenerate,
 		MethodNoteSet, MethodUserBind, MethodCastAdd, MethodCastRemove, MethodCastSpeak,
 		MethodWorldLorePut, MethodWorldLoreDelete, MethodWorldSet,
-		MethodWorldsList, MethodWorldSave, MethodWorldDelete, MethodWorldUpdate, MethodWorldSetCharacterModel, MethodWorldsExport, MethodWorldsImport,
+		MethodWorldsList, MethodWorldSave, MethodWorldDelete, MethodWorldUpdate, MethodWorldSetCharacterModel, MethodWorldSetModel, MethodWorldsExport, MethodWorldsImport, MethodWorldsDoctor,
+		MethodWorldsLorePut, MethodWorldsLoreDelete, MethodWorldsSet, MethodWorldsAddCharacter, MethodWorldsRemoveCharacter, MethodWorldsEditCharacter, MethodWorldsCreateCharacter,
 		MethodCardGroupsList, MethodCardGroupSave, MethodCardGroupDelete, MethodCardGroupSetMembers,
 		MethodSessionGroupsList, MethodSessionGroupSave, MethodSessionGroupDelete, MethodSessionGroupSetMembers,
 		MethodModelDefaultFor, MethodCardModelSet,

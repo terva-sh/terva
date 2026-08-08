@@ -41,6 +41,28 @@ type DoctorController interface {
 	// persona and the cold open standing in for the greeting, spending nothing.
 	// Same posture as the doctors and next_scene, so it rides this controller.
 	SessionsRealize(ctx context.Context, sess string, p RealizeParams) (RealizeResult, error)
+
+	// WorldsDoctor runs Dramaturgi over a World as an ENSEMBLE (SD6): the
+	// roster's cards read together with the World's lorebook, proposing
+	// character edits beside world edits and, where the cast has a hole, a new
+	// character to fill it.
+	//
+	// It runs on a SAVED World by id, with no session anywhere, and that is a
+	// design decision rather than a convenience: the World studio is a Library
+	// screen, and a doctor that demanded an open scene could not be reached
+	// from it.
+	//
+	// That was not always possible. This verb first shipped session-scoped
+	// because a saved World had no sessionless write path, so a run from the
+	// shelf could only have produced proposals nothing could apply — the one
+	// thing this family refuses to ship. The worlds.* content verbs closed that,
+	// and the scope moved to where it belonged.
+	//
+	// The scenes it reads are CHOSEN (p.Sessions), not implied by a frame. A
+	// World's evidence is the whole history of play in it, and which nights
+	// matter is the author's call rather than an accident of which chat happened
+	// to be open.
+	WorldsDoctor(ctx context.Context, p WorldDoctorParams) (WorldDoctorResult, error)
 }
 
 // DoctorParams names the card to examine and, on a follow-up round, the user's
@@ -186,6 +208,18 @@ const (
 	SessionProposalState     = "scene_state"
 	SessionProposalBreak     = "scene_break"
 	SessionProposalRetire    = "lore_retire"
+	// SessionProposalCharacterNew is worlds.doctor's own kind (SD6): a character
+	// the World needs and does not have, seeded from the roster and lore the way
+	// cast_promotion is seeded from played lines. Same payload, same
+	// cards.import + cast.add accept path, same prefilled editor — the
+	// difference is only where the warrant comes from, which is why it is a
+	// separate kind rather than a cast_promotion with no scene behind it.
+	//
+	// It exists because no path led from "a character and a world" to "a cast":
+	// the card doctor improves a card that exists, cast_promotion needs the
+	// character to have been PLAYED, and realize needs a planning conversation
+	// to harvest.
+	SessionProposalCharacterNew = "character_new"
 )
 
 // SessionDoctorResult is the payload of sessions.doctor.
@@ -249,4 +283,74 @@ type NextSceneResult struct {
 	// name to prefill the offer with (the bound character, else the session's
 	// title). Only a suggestion: the author names it.
 	WorldName string `json:"world_name,omitempty"`
+}
+
+// WorldDoctorParams drives worlds.doctor, which runs on a saved World by id
+// with no session in the frame.
+//
+// There is no Focus or Promote here. Those narrow a run over a PLAYED scene to
+// one moment or one walk-on; a World has no moments, and the equivalent
+// narrowing is Steer, which is standing direction rather than an index.
+type WorldDoctorParams struct {
+	// ID is the saved World to read.
+	ID string `json:"id"`
+	// Sessions are the scenes played in this World to read as evidence, chosen
+	// by the author. Empty reads none, which is a normal state: a World
+	// assembled but never played is exactly the case this doctor was asked for.
+	//
+	// Plural and explicit because a World's evidence is its whole history of
+	// play, and the scenes worth reading are a judgement — a run aimed at "what
+	// has Bellhaven established that isn't in the lorebook" wants the nights
+	// that established it, not the most recent one. Ids not belonging to this
+	// World are ignored rather than refused: the picker offers only members, so
+	// a stray id is a stale client rather than a request to honour.
+	Sessions  []string         `json:"sessions,omitempty"`
+	Decisions []DoctorDecision `json:"decisions,omitempty"`
+	// Steer is the author's instruction for the pass — "give her a rival and a
+	// mentor", "the harbor politics are thin", "nobody here has anything to
+	// lose". Re-sent on each revise, and it outranks the mechanical signals.
+	//
+	// Load-bearing rather than decorative, unlike the card doctor's, because a
+	// World with one character and a page of lore is thin evidence: there is
+	// little for an unguided pass to be led BY. "Grow me a cast" is not a
+	// refinement of a question the doctor already asked — it is the question.
+	Steer string `json:"steer,omitempty"`
+	// Provider/Model optionally run on a specific model. Empty = the workspace
+	// default, since there is no session to inherit from.
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+}
+
+// WorldCardProposal is one proposed edit to one roster character's card: the
+// card doctor's proposal, plus which card it belongs to.
+//
+// It embeds DoctorProposal rather than restating it because an edit to a
+// character's `personality` is the same object whether Seppä proposed it from
+// lint or Dramaturgi proposed it from the ensemble — same before/after/remove
+// contract, same field allow-list, and the same cards.edit on accept. Only the
+// addressing is new: the card doctor already knew which card it was reading,
+// and this one is reading five.
+type WorldCardProposal struct {
+	DoctorProposal
+	// Card is the library id the edit applies to — what an accept sends to
+	// cards.edit. Character is that card's display name, so a review sheet can
+	// group proposals by who they are about without resolving every ref.
+	Card      string `json:"card"`
+	Character string `json:"character"`
+}
+
+// WorldDoctorResult carries the two proposal families, kept apart because they
+// apply through different verbs and a client accepts them differently: a card
+// proposal is a field edit through cards.edit, a world proposal is a typed
+// entry through world.lore.put/delete or an import through cards.import.
+//
+// Splitting them here rather than tagging one flat list means neither side has
+// to carry the other's empty fields, and a client cannot accidentally route a
+// lore entry into a card edit.
+type WorldDoctorResult struct {
+	CardProposals  []WorldCardProposal `json:"card_proposals"`
+	WorldProposals []SessionProposal   `json:"world_proposals"`
+	// Note is Dramaturgi's overall remark — e.g. that the World is coherent and
+	// the cast has no obvious hole, which is a real answer and not a failure.
+	Note string `json:"note,omitempty"`
 }
