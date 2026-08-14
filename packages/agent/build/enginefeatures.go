@@ -73,28 +73,81 @@ var EngineFeatures = []EngineFeature{
 	{
 		ID:    "provider_compaction",
 		Title: i18n.M("Let the provider compact the conversation"),
-		Desc:  i18n.M("Some backends compact a conversation themselves and hand back a replacement transcript: your messages verbatim, and one encrypted summary standing in for everything the assistant said. It is cheaper than writing a summary, and it is not portable — only the provider that made it can read it, so switching providers means rebuilding the conversation from the session file and compacting again. Off by default: the strategy works, but whether it actually buys back the prompt cache has not been measured yet. Only OpenAI Codex offers it today; on every other provider this does nothing."),
-		// OFF, and the A/B that was supposed to decide this has now been RUN
-		// (2026-08-04, 3 reps, $2.82 live — docs/reviews/…-cache-collapse.md §10).
-		// It came back against the feature, so this default is a result rather
-		// than a placeholder:
+		Desc:  i18n.M("Some backends compact a conversation themselves and hand back a replacement transcript: your messages verbatim, and one encrypted summary standing in for everything the assistant said. It is not portable — only the provider that made it can read it, so switching providers means rebuilding the conversation from the session file and compacting again. Off by default, because it is measurably more expensive: this endpoint does not use the prompt cache, so it re-reads the whole conversation at full price where the ordinary summarizer reads it from cache. Only OpenAI Codex offers it today; on every other provider this does nothing."),
+		// OFF, on a measurement, and the measurement has now been made TWICE —
+		// the second time after the cause of the collapse this feature was built
+		// to route around was found and fixed.
 		//
-		//   - /responses/compact NEVER reads the prompt cache. Cache read was 0
-		//     in 3 of 3 reps, on a transcript the backend demonstrably held —
-		//     the warm summarizer read that same content at 97% on the next
-		//     call. It is a different route and does not participate.
-		//   - So the compaction call is ~4.7x MORE expensive, repeatably:
-		//     median $0.0731 against the warm summarizer's $0.0154, which is
-		//     cheap precisely because it reuses the conversation's own prefix.
-		//   - And the post-compaction saving that was supposed to pay for that
-		//     is undetectable at n=3 (medians 74.9k vs 84.0k full-price tokens,
-		//     ranges overlapping).
+		// Round 1 (2026-08-04, 3 reps, $2.82 — review doc §10) said: the
+		// endpoint never reads the prompt cache, so it costs several times the
+		// warm summarizer, and the post-compaction saving meant to pay for that
+		// is undetectable. It also had to admit its harness reproduced the cache
+		// SCATTER but never the COLLAPSE, so it could not say whether the
+		// strategy fixed one.
 		//
-		// The honest boundary: the harness reproduced the cache SCATTER but
-		// never the collapse, so it cannot say the strategy fails to fix the
-		// collapse — only that it costs more and buys nothing measurable in a
-		// healthy session. Re-open it against a REAL collapsed session, which
-		// needs the recovery trigger wired first.
+		// Round 2 (2026-08-05, 3 reps, $1.34 — §11) settles that, because the
+		// collapse turned out to be a missing session-id header (24f5eb9d), and
+		// round 1 was measured through the client that omitted it:
+		//
+		//   - /responses/compact STILL reads nothing from the cache, 3 of 3,
+		//     post-fix — and the control is now airtight: the dispatch right
+		//     before each compaction read 98.9% of a 32k prompt, and /compact on
+		//     that same content, seconds later in the same process with the same
+		//     session-id, read 0.
+		//   - ~5.4x the cost, repeatably: median $0.0719 against $0.0134.
+		//   - Round 2 ALSO claimed the collapse was cured. That claim is
+		//     RETRACTED (review doc §12): a build six commits past the fix went
+		//     to the floor for 14 straight dispatches after a compaction and
+		//     never recovered, re-reading 341k tokens in 3.2 minutes. The
+		//     session-id header fixed the STEADY STATE (103 dispatches at 96.3%
+		//     in that same session) and not this.
+		//
+		// 🪤 The retracted claim came from a harness that had NEVER induced a
+		// collapse, pre-fix or post-fix — so "reads climb cleanly after a
+		// compaction" was never evidence the collapse was gone. An instrument
+		// with no demonstrated sensitivity to a phenomenon cannot evidence its
+		// absence. The gap is scale: real collapses happen on 200k+ transcripts
+		// compacting to ~20k, and the harness ran at 32k.
+		//
+		// Round 3 (2026-08-06, DOGFOODED — §13) is the first evidence FOR this
+		// feature, and it is the only configuration that has ever reproduced the
+		// collapse: a real session with the toggle on, paired against §12's
+		// counter-example on the same build, model and account.
+		//
+		//   - warm:     34 of 37 post-compaction dispatches pinned at the 9,728
+		//               floor — zero conversation content cached — never recovered.
+		//   - provider:  1 of 27 at the floor. Off it by the second dispatch,
+		//               89,600 by the fifth, 81.8% hit over the window.
+		//   - Full-price tokens including the compaction call: 1,753,518 warm
+		//               against 618,710 provider. ~65% fewer, despite the
+		//               compaction call being ~67x more expensive uncached.
+		//
+		// A mechanism this suggests and does not prove: the warm path replaces
+		// the history with one synthetic message the backend has never seen, so
+		// the prefix match dies at message 0 by construction (the prefix row says
+		// exactly that). The provider path keeps the user turns verbatim at the
+		// head — which is why the divider must stay APPENDED, and why the test
+		// that pins that ordering is load-bearing rather than fussy.
+		//
+		// Round 4 (2026-08-06, §14) WITHDRAWS round 3's headline. One dogfooded
+		// session took FOUR provider compactions and two of them collapsed
+		// outright — 30 of 30 dispatches at the 9,728 floor, the same integer as
+		// every warm collapse in the corpus. A server-side compaction is not
+		// immune. At n=4 independent trials, 3 recovered, against sol's 65% warm
+		// baseline: indistinguishable.
+		//
+		// 🪤 Round 3 flagged itself as a ~23% coincidence and appears to have
+		// been exactly that. The floor-count metric it proposed is what caught
+		// this, in one session and with no harness — that part was worth keeping.
+		//
+		// What the data now says: the outcome is BIMODAL — either ~95% over 80+
+		// dispatches or ~12% pinned at the floor, nothing between — and the
+		// compaction strategy does not select the mode. Both arms produce both
+		// outcomes. So this feature is off because it is not known to help, its
+		// compaction call costs several times the warm summarizer, and its
+		// checkpoint is unportable. The variable that DOES select the mode is
+		// unidentified and is a different question from the one this feature
+		// was built to answer.
 		//
 		// The risk being held back is unchanged and independent of cost: a blob
 		// replayed to a provider that cannot decrypt it is amnesia with no
