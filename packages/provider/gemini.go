@@ -836,6 +836,32 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 				case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY":
 					stop = StopError
 					finalErr = NewAPIError("google", "response blocked ("+cand.FinishReason+")", false)
+				case "MALFORMED_FUNCTION_CALL":
+					// 🪤 The model tried to call a tool and produced a call the
+					// backend could not parse. It emits NO content with it — the
+					// whole response is one empty text part — so before this arm
+					// existed the turn fell through to the default StopEnd with a
+					// nil error and terva exited 0 having printed NOTHING. Caught
+					// live 2026-08-14 on gemini-3.1-pro-preview: the identical
+					// prompt succeeded twice and produced this on the third run,
+					// which is why it reads as a flake rather than a failure.
+					//
+					// Transient on that evidence: it is a generation-side glitch
+					// and a retry clears it, so the loop should re-attempt rather
+					// than hand the user an empty answer.
+					stop = StopError
+					finalErr = NewAPIError("google", "the model emitted a malformed function call (MALFORMED_FUNCTION_CALL)", true)
+				default:
+					// Any OTHER terminal reason is abnormal by construction:
+					// STOP and MAX_TOKENS are the only two normal ends, and the
+					// named blocks are handled above. Google keeps adding to this
+					// enum (UNEXPECTED_TOOL_CALL, TOO_MANY_TOOL_CALLS, LANGUAGE,
+					// OTHER …), and every one that lands here without an arm used
+					// to become a silent successful empty turn. Naming the
+					// unrecognized reason is strictly better than printing
+					// nothing: it costs one visible error and it cannot hide.
+					stop = StopError
+					finalErr = NewAPIError("google", "response ended abnormally ("+cand.FinishReason+")", false)
 				}
 			}
 			if chunk.UsageMetadata != nil {
