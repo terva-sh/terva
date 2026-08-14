@@ -155,15 +155,29 @@ var builtinCatalog = []Model{
 	{Provider: "github-copilot", ID: "gpt-5.5", DisplayName: "GPT-5.5", ContextWindow: 400000, MaxOutput: 128000, Reasoning: true, PriceInput: 0, PriceOutput: 0, PriceCacheRead: 0, BaseURL: "https://api.individual.githubcopilot.com"},
 	{Provider: "github-copilot", ID: "grok-code-fast-1", DisplayName: "Grok Code Fast 1", ContextWindow: 128000, MaxOutput: 64000, Reasoning: true, PriceInput: 0, PriceOutput: 0, PriceCacheRead: 0, BaseURL: "https://api.individual.githubcopilot.com"},
 	// ----- google -----
+	// Prices below are the Standard paid tier, text input, per 1M tokens, read
+	// from ai.google.dev/gemini-api/docs/pricing on 2026-08-14. 3.6/3.7 Flash
+	// carry an INTRODUCTORY rate that expires 2026-12-31, after which input
+	// doubles to $1.50 and output to $7.50 — revisit these two rows in January.
+	// gemini-3-pro-preview was removed: the live API answers 404 "no longer
+	// available" for it, so the row only ever produced a failed session.
 	{Provider: "google", ID: "gemini-3-flash-preview", DisplayName: "Gemini 3 Flash Preview", ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true, PriceInput: 0.5, PriceOutput: 3, PriceCacheRead: 0.05, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
-	{Provider: "google", ID: "gemini-3-pro-preview", DisplayName: "Gemini 3 Pro Preview", ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true, PriceInput: 2, PriceOutput: 12, PriceCacheRead: 0.2, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
 	{Provider: "google", ID: "gemini-3.1-flash-lite", DisplayName: "Gemini 3.1 Flash Lite", ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true, PriceInput: 0.25, PriceOutput: 1.5, PriceCacheRead: 0.025, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
 	{Provider: "google", ID: "gemini-3.1-flash-lite-preview", DisplayName: "Gemini 3.1 Flash Lite Preview", ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true, PriceInput: 0.25, PriceOutput: 1.5, PriceCacheRead: 0.025, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
 	{Provider: "google", ID: "gemini-3.1-pro-preview", DisplayName: "Gemini 3.1 Pro Preview", ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true, PriceInput: 2, PriceOutput: 12, PriceCacheRead: 0.2, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
 	{Provider: "google", ID: "gemini-3.1-pro-preview-customtools", DisplayName: "Gemini 3.1 Pro Preview Custom Tools", ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true, PriceInput: 2, PriceOutput: 12, PriceCacheRead: 0.2, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
 	{Provider: "google", ID: "gemini-3.5-flash", DisplayName: "Gemini 3.5 Flash", ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true, PriceInput: 1.5, PriceOutput: 9, PriceCacheRead: 0.15, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
-	{Provider: "google", ID: "gemini-flash-latest", DisplayName: "Gemini Flash Latest", ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true, PriceInput: 0.3, PriceOutput: 2.5, PriceCacheRead: 0.075, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
-	{Provider: "google", ID: "gemini-flash-lite-latest", DisplayName: "Gemini Flash-Lite Latest", ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true, PriceInput: 0.1, PriceOutput: 0.4, PriceCacheRead: 0.025, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
+	{Provider: "google", ID: "gemini-3.5-flash-lite", DisplayName: "Gemini 3.5 Flash Lite", ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true, PriceInput: 0.3, PriceOutput: 2.5, PriceCacheRead: 0.03, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
+	{Provider: "google", ID: "gemini-3.6-flash", DisplayName: "Gemini 3.6 Flash", ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true, PriceInput: 0.75, PriceOutput: 3.75, PriceCacheRead: 0.075, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
+	{Provider: "google", ID: "gemini-3.7-flash", DisplayName: "Gemini 3.7 Flash", ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true, PriceInput: 0.75, PriceOutput: 3.75, PriceCacheRead: 0.075, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
+	// 🪤 The rolling aliases have NO pricing section of their own: they bill as
+	// whatever they resolve to, and both rows here were priced a full tier too
+	// cheap. Probed 2026-08-14 via the `modelVersion` field on a live response:
+	// gemini-flash-latest -> gemini-3.7-flash, gemini-flash-lite-latest ->
+	// gemini-3.5-flash-lite. Re-probe that field before trusting these numbers;
+	// the whole point of an alias is that its target moves.
+	{Provider: "google", ID: "gemini-flash-latest", DisplayName: "Gemini Flash Latest", ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true, PriceInput: 0.75, PriceOutput: 3.75, PriceCacheRead: 0.075, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
+	{Provider: "google", ID: "gemini-flash-lite-latest", DisplayName: "Gemini Flash-Lite Latest", ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true, PriceInput: 0.3, PriceOutput: 2.5, PriceCacheRead: 0.03, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
 	{Provider: "google", ID: "gemma-4-26b-a4b-it", DisplayName: "Gemma 4 26B A4B IT", ContextWindow: 262144, MaxOutput: 32768, Reasoning: true, PriceInput: 0, PriceOutput: 0, PriceCacheRead: 0, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
 	{Provider: "google", ID: "gemma-4-31b-it", DisplayName: "Gemma 4 31B IT", ContextWindow: 262144, MaxOutput: 32768, Reasoning: true, PriceInput: 0, PriceOutput: 0, PriceCacheRead: 0, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
 	// ----- google-vertex -----

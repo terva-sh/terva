@@ -118,9 +118,18 @@ var providerSpecs = []providerSpec{
 		newClient:    func(c clientConfig) provider.Client { return provider.NewDeepSeek(c.Credential, c.BaseURL) },
 	},
 	{
-		id:           "google",
-		aliases:      []string{"gemini", "googleai", "google-ai"},
-		defaultModel: "gemini-2.5-pro",
+		id:      "google",
+		aliases: []string{"gemini", "googleai", "google-ai"},
+		// A rolling alias on purpose. The previous default, gemini-2.5-pro, was
+		// retired under a fresh key (404 "no longer available to new users"), so
+		// a first `terva --provider google` failed before it sent a token — and a
+		// pinned id guarantees that recurs at every retirement. "latest" only
+		// moves forward, so this default cannot go stale the same way.
+		//
+		// It resolves to gemini-3.7-flash today (probed via the modelVersion
+		// field on a live response, 2026-08-14); its catalog row must be repriced
+		// whenever that target moves.
+		defaultModel: "gemini-flash-latest",
 		envHint:      "GEMINI",
 		apiKeyEnv:    []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"},
 		newClient:    func(c clientConfig) provider.Client { return provider.NewGemini(c.Credential, c.BaseURL) },

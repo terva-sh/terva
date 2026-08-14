@@ -415,31 +415,18 @@ var Catalog = []Model{
 	},
 
 	// ---- Google / Gemini ----
-	{
-		Provider: "google", ID: "gemini-2.5-pro", DisplayName: "Gemini 2.5 Pro",
-		ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true,
-		PriceInput: 1.25, PriceOutput: 10, PriceCacheRead: 0.125,
-	},
-	{
-		Provider: "google", ID: "gemini-2.5-flash", DisplayName: "Gemini 2.5 Flash",
-		ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true,
-		PriceInput: 0.3, PriceOutput: 2.5, PriceCacheRead: 0.03,
-	},
-	{
-		Provider: "google", ID: "gemini-2.5-flash-lite", DisplayName: "Gemini 2.5 Flash-Lite",
-		ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true,
-		PriceInput: 0.1, PriceOutput: 0.4, PriceCacheRead: 0.01,
-	},
-	{
-		Provider: "google", ID: "gemini-2.0-flash", DisplayName: "Gemini 2.0 Flash",
-		ContextWindow: 1048576, MaxOutput: 8192, Reasoning: false,
-		PriceInput: 0.1, PriceOutput: 0.4, PriceCacheRead: 0.025,
-	},
-	{
-		Provider: "google", ID: "gemini-2.0-flash-lite", DisplayName: "Gemini 2.0 Flash-Lite",
-		ContextWindow: 1048576, MaxOutput: 8192, Reasoning: false,
-		PriceInput: 0.075, PriceOutput: 0.3, PriceCacheRead: 0,
-	},
+	//
+	// Deliberately empty. This block held the 2.5 and 2.0 families, and every
+	// one of them is now RETIRED on the Generative Language API — probed
+	// 2026-08-14 with a live key, all five answered 404: the 2.5 rows with "no
+	// longer available to new users", the 2.0 rows with "no longer available".
+	// A curated row outranks the built-in catalog on an (provider, id) match,
+	// so these five did not merely sit unused: they were the FIRST thing a
+	// model lookup found, and gemini-2.5-pro was the provider default, which
+	// is why a fresh `terva --provider google` 404'd before it sent a token.
+	//
+	// The live google rows live in catalog_builtin.go. Nothing needs a seed row
+	// here; this comment exists so the next person does not "restore" them.
 
 	// ---- OpenRouter ----
 	// Seed entry only: the default model returned by defaultModelForProvider

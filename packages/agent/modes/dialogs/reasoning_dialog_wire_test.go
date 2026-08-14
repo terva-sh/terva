@@ -35,7 +35,10 @@ func detailFor(t *testing.T, d *ReasoningDialog, rung string) string {
 func TestEffortWireModelsAreNeverDescribedInTokens(t *testing.T) {
 	for _, tc := range []struct{ provider_, id string }{
 		{"openai-codex", "gpt-5.6-sol"},
-		{"google", "gemini-3-pro-preview"},
+		// A Gemini 3.x model: that generation takes thinkingLevel (an enum) and
+		// no budget. Was gemini-3-pro-preview until Google retired it upstream
+		// (404 "no longer available") and it left the catalog.
+		{"google", "gemini-3.1-pro-preview"},
 		{"groq", "deepseek-r1-distill-llama-70b"},
 	} {
 		d := NewReasoningDialog()

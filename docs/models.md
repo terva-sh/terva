@@ -214,10 +214,14 @@ terva --provider google
 
 By default this uses:
 
-- model: `gemini-2.5-pro`
+- model: `gemini-flash-latest`
 - base URL: `https://generativelanguage.googleapis.com`
 
-The catalog spans the 3.x line (`gemini-3-pro-preview`, `gemini-3.1-pro-preview`, `gemini-3.5-flash`, the Flash-Lite previews), the rolling `gemini-flash-latest` / `gemini-flash-lite-latest` aliases, the 2.x line (`gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.0-flash`, `gemini-2.0-flash-lite`), and the open Gemma models. It moves with every Google release — run `terva --list-models` for the current set. Live discovery against `/v1beta/models` adds anything else your key can see.
+The default is deliberately a *rolling alias*. A pinned id goes stale the moment Google retires it, and a retired default fails a first run before it sends a token — which is exactly what `gemini-2.5-pro` did once it became unavailable to new keys. `gemini-flash-latest` only ever moves forward. It resolves to `gemini-3.7-flash` today; a response's `modelVersion` field tells you what it points at now.
+
+The catalog spans the 3.x line (`gemini-3.1-pro-preview`, `gemini-3.5-flash`, `gemini-3.6-flash`, `gemini-3.7-flash`, the Flash-Lite models and previews), the rolling `gemini-flash-latest` / `gemini-flash-lite-latest` aliases, and the open Gemma models. It moves with every Google release — run `terva --list-models` for the current set. Live discovery against `/v1beta/models` adds anything else your key can see.
+
+The Gemini 2.x and 2.0 families are **gone** from the catalog: the API now answers 404 for all of them (`gemini-2.5-*` with "no longer available to new users", `gemini-2.0-*` with "no longer available"). If your key predates the change and still has 2.5 access, add the ids back through `models.json` — a user entry wins over the built-in catalog.
 
 Credential lookup order for Google:
 
@@ -230,9 +234,9 @@ Use `/login` and pick **api key** to paste an AI Studio key. terva probes `/v1be
 
 > **Auth model: API key only.** Google does not issue OAuth tokens for consumer Gemini Advanced / Google One AI Premium subscriptions, so there is no "log in with your Google subscription" flow. Programmatic access requires either an AI Studio API key (this provider) or a Vertex AI / GCP service-account credential (not yet wired up in terva). Google is therefore absent from the `/login subscription` list entirely; pick it under `/login → api key`.
 
-> **Free-tier rate limits.** AI Studio's free tier has tight per-minute and per-day caps that vary by model: `gemini-2.5-pro` is the strictest (a few requests per minute, ~50 per day), Flash and Flash-Lite are far more generous. If a Pro turn 429s with `"You exceeded your current quota"` while Flash on the same key still works, you've hit the Pro free-tier RPD. Either switch to Flash for agent loops, or [enable billing](https://aistudio.google.com/app/apikey) on your AI Studio project to flip the same key from free to pay-as-you-go pricing (`$1.25/M` input, `$10/M` output for Pro).
+> **Free-tier rate limits.** AI Studio's free tier has tight per-minute and per-day caps that vary by model: the Pro models are the strictest (a few requests per minute, ~50 per day), Flash and Flash-Lite are far more generous. If a Pro turn 429s with `"You exceeded your current quota"` while Flash on the same key still works, you've hit the Pro free-tier RPD. Either switch to Flash for agent loops, or [enable billing](https://aistudio.google.com/app/apikey) on your AI Studio project to flip the same key from free to pay-as-you-go pricing.
 
-Reasoning levels (`--reasoning off|minimum|low|medium|high|maximum|max`, also configurable in `/settings` as **thinking level**) map differently per generation. Budget-based providers use roughly 1k/2k/8k/16k/32k thinking tokens for minimum/low/medium/high/maximum, with provider/model caps applied (Gemini 2.5 Pro caps at 32k; Flash at 24k). Gemini 3.x uses the `thinkingLevel` enum (`MINIMAL`/`LOW`/`MEDIUM`/`HIGH`), with Gemini-3-Pro pinned to `LOW` minimum and `HIGH` for any "medium" or higher request. Effort-based OpenAI-compatible chat providers map minimum to `low`, low/medium directly, and high/maximum to `high`; the Codex/Responses backend maps maximum to `xhigh` where supported. `max` is a seventh tier *above* `maximum`, opt-in on purpose: it is sent natively only where the model has an effort above `xhigh` (GPT-5.6, adaptive-thinking Claude) and is clamped back to the `maximum` effort everywhere else. `off` sends no reasoning config. 2.0-family Gemini models have no thinking config at all.
+Reasoning levels (`--reasoning off|minimum|low|medium|high|maximum|max`, also configurable in `/settings` as **thinking level**) map differently per generation. Budget-based providers use roughly 1k/2k/8k/16k/32k thinking tokens for minimum/low/medium/high/maximum, with provider/model caps applied. Gemini 3.x uses the `thinkingLevel` enum (`MINIMAL`/`LOW`/`MEDIUM`/`HIGH`), with the Pro models pinned to `LOW` minimum and `HIGH` for any "medium" or higher request. The rolling `-latest` aliases are treated as 3.x, since they always point at a current model. Effort-based OpenAI-compatible chat providers map minimum to `low`, low/medium directly, and high/maximum to `high`; the Codex/Responses backend maps maximum to `xhigh` where supported. `max` is a seventh tier *above* `maximum`, opt-in on purpose: it is sent natively only where the model has an effort above `xhigh` (GPT-5.6, adaptive-thinking Claude) and is clamped back to the `maximum` effort everywhere else. `off` sends no reasoning config. 2.0-family Gemini models have no thinking config at all.
 
 You can add additional Gemini model IDs to `models.json` under the `google` provider.
 

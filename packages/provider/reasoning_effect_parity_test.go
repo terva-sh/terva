@@ -141,7 +141,11 @@ func (o *anthOutputConfig) effortOrEmpty() string {
 // budget on one model generation and an enum on another — the case a
 // single-shape explanation gets wrong.
 func TestReasoningEffectMatchesGeminiThinkingConfig(t *testing.T) {
-	for _, id := range []string{"gemini-3-pro-preview", "gemini-3-flash-preview"} {
+	// A pro id and a flash id, because the pro rung clamps (medium → HIGH) and
+	// the flash one does not. gemini-3-pro-preview held the pro slot until it
+	// was retired upstream (404 "no longer available") and left the catalog;
+	// gemini-3.1-pro-preview is the live pro model and keeps the contrast.
+	for _, id := range []string{"gemini-3.1-pro-preview", "gemini-3-flash-preview"} {
 		m, err := FindModel("google", id)
 		if err != nil {
 			t.Fatalf("FindModel(google, %q): %v", id, err)
