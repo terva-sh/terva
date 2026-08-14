@@ -109,7 +109,9 @@ func TestMessageWireRoundTrip(t *testing.T) {
 		Meta: map[string]string{MetaSynthetic: "true"},
 		Content: []provider.Content{
 			provider.TextBlock{Text: "plan"},
-			provider.ToolCallBlock{ID: "t1", Name: "edit", Arguments: []byte(`{"path":"a.go"}`)},
+			// Signature: the provider's opaque per-call token (Gemini 3's
+			// thoughtSignature), which a client must hand back intact.
+			provider.ToolCallBlock{ID: "t1", Name: "edit", Arguments: []byte(`{"path":"a.go"}`), Signature: "SIG-OPAQUE"},
 			provider.ReasoningBlock{ID: "rs_1", Summary: "weighing", Encrypted: "OPAQUE"},
 			provider.ImageBlock{MimeType: "image/png", Data: []byte{1, 2, 3}},
 		},
@@ -124,7 +126,7 @@ func TestMessageWireRoundTrip(t *testing.T) {
 	if tb := got.Content[0].(provider.TextBlock); tb.Text != "plan" {
 		t.Errorf("text = %+v", tb)
 	}
-	if tc := got.Content[1].(provider.ToolCallBlock); tc.ID != "t1" || tc.Name != "edit" || string(tc.Arguments) != `{"path":"a.go"}` {
+	if tc := got.Content[1].(provider.ToolCallBlock); tc.ID != "t1" || tc.Name != "edit" || string(tc.Arguments) != `{"path":"a.go"}` || tc.Signature != "SIG-OPAQUE" {
 		t.Errorf("tool_call = %+v", tc)
 	}
 	if rb := got.Content[2].(provider.ReasoningBlock); rb.ID != "rs_1" || rb.Summary != "weighing" || rb.Encrypted != "OPAQUE" {

@@ -30,7 +30,10 @@ func TestSessionRoundTripAllBlockKinds(t *testing.T) {
 		Content: []provider.Content{
 			provider.TextBlock{Text: "let me check"},
 			provider.ReasoningBlock{ID: "r1", Summary: "thinking", Encrypted: "blob"},
-			provider.ToolCallBlock{ID: "call_1", Name: "read", Arguments: json.RawMessage(`{"path":"a.txt"}`)},
+			// Signature is the provider's opaque per-call token (Gemini 3's
+			// thoughtSignature). A resume replays the transcript, so if this
+			// does not survive the file, the resumed session 400s on turn one.
+			provider.ToolCallBlock{ID: "call_1", Name: "read", Arguments: json.RawMessage(`{"path":"a.txt"}`), Signature: "SIG-OPAQUE"},
 			// An assistant-emitted image carries its generation id, which
 			// must survive the round trip so a later turn can edit it.
 			provider.ImageBlock{MimeType: "image/png", Data: []byte{4, 5, 6}, ID: "ig_abc123"},

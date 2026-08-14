@@ -64,6 +64,18 @@ type ToolCallBlock struct {
 	// tried to send survives for the transcript and for the error the model is
 	// given back.
 	RawArguments string `json:"raw_arguments,omitempty"`
+	// Signature is an opaque provider-issued token that must be replayed
+	// verbatim on the request that carries this call back in history.
+	//
+	// 🪤 Gemini 3 issues a `thoughtSignature` on the part that carries a
+	// functionCall and REJECTS the next request with HTTP 400 "Function call is
+	// missing a thought_signature in functionCall parts" if it does not come
+	// back. The signature is the model's sealed reasoning for that call, so it
+	// cannot be reconstructed — any surface that drops this field turns a
+	// working tool loop into a hard 400 on the very next turn, which is exactly
+	// how it was found. Round-trip it byte for byte; never inspect or synthesize
+	// one.
+	Signature string `json:"signature,omitempty"`
 }
 
 func (ToolCallBlock) isContent() {}

@@ -82,6 +82,12 @@ type gemPart struct {
 	// Thought: true marks a thought-summary part. Outgoing parts
 	// from terva never set this; incoming chunks might.
 	Thought bool `json:"thought,omitempty"`
+	// ThoughtSignature is the opaque token Gemini 3 attaches to the part
+	// that carries a functionCall. It MUST be echoed on that same part when
+	// the call is replayed in history, or the API answers HTTP 400
+	// "Function call is missing a thought_signature in functionCall parts".
+	// See https://ai.google.dev/gemini-api/docs/thought-signatures.
+	ThoughtSignature string `json:"thoughtSignature,omitempty"`
 }
 
 type gemContent struct {
@@ -310,6 +316,11 @@ func convertGemAssistantParts(blocks []Content, functionsEnabled bool) []gemPart
 					Name: v.Name,
 					Args: args,
 				},
+				// Replayed verbatim: Gemini 3 rejects a functionCall in
+				// history whose signature is missing. Empty for models that
+				// never issued one (2.5 and older), where the field is
+				// omitted from the wire entirely.
+				ThoughtSignature: v.Signature,
 			})
 		}
 	}
@@ -519,6 +530,9 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 		toolID    string
 		toolName  string
 		toolArgs  strings.Builder
+		// toolSig is the part's thoughtSignature, kept so the next request
+		// can replay this call with it. Gemini 3 makes it mandatory.
+		toolSig string
 	}
 	var (
 		blocks      []*blockEntry
@@ -556,7 +570,7 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 		currentText = nil
 	}
 
-	startTool := func(name string, providedID string, args json.RawMessage) *blockEntry {
+	startTool := func(name string, providedID string, args json.RawMessage, sig string) *blockEntry {
 		toolCounter++
 		id := providedID
 		if id == "" {
@@ -566,6 +580,7 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 			kind:     "tool_use",
 			toolID:   id,
 			toolName: name,
+			toolSig:  sig,
 		}
 		if len(args) > 0 && json.Valid(args) {
 			t.toolArgs.Write(args)
@@ -595,6 +610,7 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 				args, unparsed := FinalizeToolArguments(b.toolArgs.String())
 				content = append(content, ToolCallBlock{
 					ID: b.toolID, Name: b.toolName, Arguments: args, RawArguments: unparsed,
+					Signature: b.toolSig,
 				})
 			}
 		}
@@ -645,6 +661,7 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 							Text             string           `json:"text"`
 							InlineData       *gemInlineData   `json:"inlineData"`
 							Thought          bool             `json:"thought"`
+							ThoughtSignature string           `json:"thoughtSignature"`
 							FunctionCall     *gemFunctionCall `json:"functionCall"`
 							FunctionCallID   string           `json:"id"`
 							FunctionCallName string           `json:"name"`
@@ -693,7 +710,7 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 						} else {
 							args = json.RawMessage("{}")
 						}
-						t := startTool(part.FunctionCall.Name, part.FunctionCallID, args)
+						t := startTool(part.FunctionCall.Name, part.FunctionCallID, args, part.ThoughtSignature)
 						out <- EventToolStart{ID: t.toolID, Name: t.toolName}
 						out <- EventToolArgs{ID: t.toolID, Delta: t.toolArgs.String()}
 						out <- EventToolEnd{ID: t.toolID}

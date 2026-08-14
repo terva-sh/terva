@@ -356,7 +356,9 @@ type WireMessage struct {
 //     client negotiated the "image-data" feature. Data also serves
 //     INBOUND payloads (SDK SetMessages).
 //   - "text"        → Text
-//   - "tool_call"   → ID + Name + Args
+//   - "tool_call"   → ID + Name + Args + Signature (the provider's opaque
+//     per-call token; Gemini 3 rejects a replayed call whose
+//     thoughtSignature is missing, so it round-trips like Encrypted does)
 //   - "tool_result" → CallID + IsError + Content (recursive)
 //   - "reasoning"   → ReasoningID + Summary + Encrypted (assistant
 //     chain-of-thought metadata; some providers, e.g. OpenAI Codex with
@@ -375,6 +377,12 @@ type WireBlock struct {
 	CallID   string          `json:"call_id,omitempty"`
 	IsError  bool            `json:"is_error,omitempty"`
 	Content  []WireBlock     `json:"content,omitempty"`
+
+	// tool_call — the provider's opaque token for the call (Gemini 3's
+	// thoughtSignature). Carried for the same reason Encrypted is: a client
+	// that renders and returns a transcript must hand back the exact call it
+	// received, or the next request is rejected outright.
+	Signature string `json:"signature,omitempty"`
 
 	// reasoning
 	ReasoningID string `json:"reasoning_id,omitempty"`
@@ -606,7 +614,7 @@ func contentToWire(blocks []provider.Content, imageData bool) []WireBlock {
 			}
 			out = append(out, w)
 		case provider.ToolCallBlock:
-			out = append(out, WireBlock{Type: "tool_call", ID: v.ID, Name: v.Name, Args: v.Arguments})
+			out = append(out, WireBlock{Type: "tool_call", ID: v.ID, Name: v.Name, Args: v.Arguments, Signature: v.Signature})
 		case provider.ToolResultBlock:
 			out = append(out, WireBlock{
 				Type:    "tool_result",
@@ -692,7 +700,7 @@ func ContentFromWire(blocks []WireBlock) []provider.Content {
 		case "image":
 			out = append(out, provider.ImageBlock{MimeType: b.MimeType, Data: b.Data})
 		case "tool_call":
-			out = append(out, provider.ToolCallBlock{ID: b.ID, Name: b.Name, Arguments: b.Args})
+			out = append(out, provider.ToolCallBlock{ID: b.ID, Name: b.Name, Arguments: b.Args, Signature: b.Signature})
 		case "tool_result":
 			out = append(out, provider.ToolResultBlock{
 				CallID:  b.CallID,

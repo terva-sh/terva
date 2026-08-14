@@ -72,7 +72,10 @@ func rebuildContent(blocks []ContentBlock) []provider.Content {
 			if len(args) == 0 {
 				args = json.RawMessage("{}")
 			}
-			out = append(out, provider.ToolCallBlock{ID: b.ID, Name: b.Name, Arguments: args})
+			// Signature is the provider's opaque per-call token (Gemini 3's
+			// thoughtSignature): an embedder that hands a transcript back must
+			// return the call intact, or the next request is rejected.
+			out = append(out, provider.ToolCallBlock{ID: b.ID, Name: b.Name, Arguments: args, Signature: b.Signature})
 		case "tool_result":
 			out = append(out, provider.ToolResultBlock{
 				CallID:  b.CallID,

@@ -698,6 +698,10 @@ type wireBlock struct {
 	// sent is gone — which is precisely what made the original defect hard to
 	// read back out of a session.
 	RawArguments string `json:"raw_arguments,omitempty"`
+	// Signature is the provider's opaque token for the call (Gemini 3's
+	// thoughtSignature). A resumed session replays its transcript, so losing
+	// this on disk means every resumed Gemini 3 session 400s on its first turn.
+	Signature string `json:"signature,omitempty"`
 	// tool_result (Content nests text/image blocks)
 	CallID  string      `json:"call_id,omitempty"`
 	Content []wireBlock `json:"content,omitempty"`
@@ -761,7 +765,7 @@ func encodeWireBlocks(blocks []provider.Content) []wireBlock {
 				}
 				args = json.RawMessage("{}")
 			}
-			out = append(out, wireBlock{Type: blockToolCall, ID: b.ID, Name: b.Name, Arguments: args, RawArguments: rawArgs})
+			out = append(out, wireBlock{Type: blockToolCall, ID: b.ID, Name: b.Name, Arguments: args, RawArguments: rawArgs, Signature: b.Signature})
 		case provider.ToolResultBlock:
 			out = append(out, wireBlock{
 				Type:    blockToolResult,
@@ -3135,7 +3139,7 @@ func decodeWireBlock(b wireBlock) (provider.Content, bool) {
 	case blockImage:
 		return provider.ImageBlock{MimeType: b.MimeType, Data: b.Data, ID: b.ImageID}, true
 	case blockToolCall:
-		return provider.ToolCallBlock{ID: b.ID, Name: b.Name, Arguments: b.Arguments, RawArguments: b.RawArguments}, true
+		return provider.ToolCallBlock{ID: b.ID, Name: b.Name, Arguments: b.Arguments, RawArguments: b.RawArguments, Signature: b.Signature}, true
 	case blockToolResult:
 		block := provider.ToolResultBlock{CallID: b.CallID, IsError: b.IsError}
 		for _, inner := range b.Content {

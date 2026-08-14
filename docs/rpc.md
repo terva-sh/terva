@@ -284,12 +284,14 @@ Used by `get_messages` and inside `user_message` / `assistant_message` events â€
 ```json
 {"type": "text", "text": "..."}
 {"type": "image", "mime_type": "image/png", "bytes": 12345}
-{"type": "tool_call", "id": "toolu_xyz", "name": "read", "args": {"path": "..."}}
+{"type": "tool_call", "id": "toolu_xyz", "name": "read", "args": {"path": "..."}, "signature": "..."}
 {"type": "tool_result", "call_id": "toolu_xyz", "is_error": false, "content": [<content_block>...]}
 {"type": "reasoning", "reasoning_id": "...", "summary": "...", "encrypted_content": "..."}
 ```
 
 Image bytes are reported as a count rather than embedded base64 to keep transcript dumps small. Tool results may nest text and image blocks. A `reasoning` block carries assistant chain-of-thought metadata; some providers (e.g. OpenAI Codex with thinking enabled) require its `encrypted_content` replayed on follow-up requests, so it must survive a wire round-trip.
+
+A `tool_call` block's `signature` is the provider's opaque per-call token, present only for providers that issue one and omitted otherwise. It exists for the same reason `encrypted_content` does: Gemini 3 attaches a `thoughtSignature` to each function call and rejects the next request with HTTP 400 (`Function call is missing a thought_signature in functionCall parts`) if the call is replayed without it. A client that receives a transcript and hands it back must return this field byte for byte; it cannot be inspected or reconstructed.
 
 ## Reference clients
 
