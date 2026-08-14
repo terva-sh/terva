@@ -161,8 +161,78 @@ var builtinCatalog = []Model{
 	// doubles to $1.50 and output to $7.50 — revisit these two rows in January.
 	// gemini-3-pro-preview was removed: the live API answers 404 "no longer
 	// available" for it, so the row only ever produced a failed session.
+	//
+	// The *-image rows are the nano-banana family. They bill output at TWO
+	// rates — text/thinking, and the picture itself — so they carry
+	// PriceOutputImage; see Model.PriceOutputImage. Without a row here the
+	// resolver silently substitutes a TEXT model for them, which answers an
+	// image request with an SVG in a code fence.
+	//
+	// Windows and MaxOutput are the live inputTokenLimit/outputTokenLimit
+	// read from the API on 2026-08-14, not the 1M of their text siblings.
+	// Reasoning was probed per model, not inferred: 2.5-flash-image answers
+	// 400 "Thinking is not enabled for this model", the 3.x image models all
+	// return thought tokens. No image model publishes a context-caching rate,
+	// so PriceCacheRead stays 0 rather than carrying an invented number.
+	{
+		// The one image model that bills a flat $0.039 per image rather than
+		// a token rate. It emits 1024x1024 only, measured at 1290 image
+		// tokens, so $0.039/1290 tokens = $30.23/1M reproduces the published
+		// per-image price exactly.
+		//
+		// PriceOutput (text) is 0 because Google publishes NO text output
+		// rate for this model — the pricing table has an input row and a
+		// per-image row and nothing else. A 0 leaves the small text tail
+		// unbilled, which beats inventing a plausible number.
+		Provider: "google", ID: "gemini-2.5-flash-image", DisplayName: "Nano Banana (Gemini 2.5 Flash Image)",
+		ContextWindow: 32768, MaxOutput: 32768, Reasoning: false,
+		PriceInput: 0.3, PriceOutput: 0, PriceOutputImage: 30.23,
+		BaseURL: "https://generativelanguage.googleapis.com/v1beta",
+		Caps:    map[Capability]bool{CapImageOutput: true},
+	},
 	{Provider: "google", ID: "gemini-3-flash-preview", DisplayName: "Gemini 3 Flash Preview", ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true, PriceInput: 0.5, PriceOutput: 3, PriceCacheRead: 0.05, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
+	{
+		// "Nano Banana Pro". The -preview id is the same model under its
+		// pre-GA name: the live API reports an identical displayName and
+		// identical token limits for both, and the pricing page lists one
+		// entry, so they share a price sheet.
+		Provider: "google", ID: "gemini-3-pro-image", DisplayName: "Nano Banana Pro (Gemini 3 Pro Image)",
+		ContextWindow: 131072, MaxOutput: 32768, Reasoning: true,
+		PriceInput: 2, PriceOutput: 12, PriceOutputImage: 120,
+		BaseURL: "https://generativelanguage.googleapis.com/v1beta",
+		Caps:    map[Capability]bool{CapImageOutput: true},
+	},
+	{
+		Provider: "google", ID: "gemini-3-pro-image-preview", DisplayName: "Nano Banana Pro Preview (Gemini 3 Pro Image)",
+		ContextWindow: 131072, MaxOutput: 32768, Reasoning: true,
+		PriceInput: 2, PriceOutput: 12, PriceOutputImage: 120,
+		BaseURL: "https://generativelanguage.googleapis.com/v1beta",
+		Caps:    map[Capability]bool{CapImageOutput: true},
+	},
+	{
+		// "Nano Banana 2", and the same stable/-preview pairing as above.
+		Provider: "google", ID: "gemini-3.1-flash-image", DisplayName: "Nano Banana 2 (Gemini 3.1 Flash Image)",
+		ContextWindow: 65536, MaxOutput: 65536, Reasoning: true,
+		PriceInput: 0.5, PriceOutput: 3, PriceOutputImage: 60,
+		BaseURL: "https://generativelanguage.googleapis.com/v1beta",
+		Caps:    map[Capability]bool{CapImageOutput: true},
+	},
+	{
+		Provider: "google", ID: "gemini-3.1-flash-image-preview", DisplayName: "Nano Banana 2 Preview (Gemini 3.1 Flash Image)",
+		ContextWindow: 65536, MaxOutput: 65536, Reasoning: true,
+		PriceInput: 0.5, PriceOutput: 3, PriceOutputImage: 60,
+		BaseURL: "https://generativelanguage.googleapis.com/v1beta",
+		Caps:    map[Capability]bool{CapImageOutput: true},
+	},
 	{Provider: "google", ID: "gemini-3.1-flash-lite", DisplayName: "Gemini 3.1 Flash Lite", ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true, PriceInput: 0.25, PriceOutput: 1.5, PriceCacheRead: 0.025, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
+	{
+		// "Nano Banana 2 Lite". No -preview twin is live.
+		Provider: "google", ID: "gemini-3.1-flash-lite-image", DisplayName: "Nano Banana 2 Lite (Gemini 3.1 Flash Lite Image)",
+		ContextWindow: 65536, MaxOutput: 65536, Reasoning: true,
+		PriceInput: 0.25, PriceOutput: 1.5, PriceOutputImage: 30,
+		BaseURL: "https://generativelanguage.googleapis.com/v1beta",
+		Caps:    map[Capability]bool{CapImageOutput: true},
+	},
 	{Provider: "google", ID: "gemini-3.1-flash-lite-preview", DisplayName: "Gemini 3.1 Flash Lite Preview", ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true, PriceInput: 0.25, PriceOutput: 1.5, PriceCacheRead: 0.025, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
 	{Provider: "google", ID: "gemini-3.1-pro-preview", DisplayName: "Gemini 3.1 Pro Preview", ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true, PriceInput: 2, PriceOutput: 12, PriceCacheRead: 0.2, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
 	{Provider: "google", ID: "gemini-3.1-pro-preview-customtools", DisplayName: "Gemini 3.1 Pro Preview Custom Tools", ContextWindow: 1048576, MaxOutput: 65536, Reasoning: true, PriceInput: 2, PriceOutput: 12, PriceCacheRead: 0.2, BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
