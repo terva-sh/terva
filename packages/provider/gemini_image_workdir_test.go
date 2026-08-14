@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // geminiImageFrame is an SSE frame carrying one inline image, the shape Gemini
@@ -70,11 +72,11 @@ func streamGeminiImage(t *testing.T, workingDir string) string {
 // launchdir. The model then reported a bare filename the read tool could not
 // open, because the read tool resolves against the workspace.
 func TestAGeneratedImageLandsInTheWorkingDir(t *testing.T) {
-	ws := t.TempDir()
+	ws := testsupport.TempDir(t)
 
 	// Run from a DIFFERENT process cwd, which is the whole point: if the two
 	// were the same the defect would be invisible.
-	launch := t.TempDir()
+	launch := testsupport.TempDir(t)
 	restore := chdir(t, launch)
 	defer restore()
 
@@ -110,7 +112,7 @@ func TestAGeneratedImageLandsInTheWorkingDir(t *testing.T) {
 // helper request that never sets the field still works, writing to the process
 // cwd as it always did.
 func TestAnEmptyWorkingDirStillWritesToTheProcessCwd(t *testing.T) {
-	launch := t.TempDir()
+	launch := testsupport.TempDir(t)
 	restore := chdir(t, launch)
 	defer restore()
 
@@ -133,7 +135,7 @@ func TestAnEmptyWorkingDirStillWritesToTheProcessCwd(t *testing.T) {
 // The path handed back must be usable, and the extension must follow the mime
 // type rather than defaulting to .png for a JPEG.
 func TestTheReportedImagePathMatchesTheMimeType(t *testing.T) {
-	ws := t.TempDir()
+	ws := testsupport.TempDir(t)
 	path := streamGeminiImage(t, ws)
 	if !strings.HasSuffix(path, ".jpg") {
 		t.Errorf("path %q does not end in .jpg for an image/jpeg payload", path)
