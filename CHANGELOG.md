@@ -11,6 +11,19 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.131.7](https://github.com/terva-sh/terva/releases/tag/v0.131.7) — 2026-08-14
+
+### Features
+
+- core: a ! command's result can reach the model, off by default
+- core: a prompt cancelled before anything happened goes back to the composer
+- tui: a quiet composer is offered a next step, which Tab accepts
+
+### Fixes
+
+- core: the harness stops speaking in the user's voice
+- tui: the shell prompt comes back below the transcript, not on top of it
+
 ## [v0.131.6](https://github.com/terva-sh/terva/releases/tag/v0.131.6) — 2026-08-08
 
 ### Features
