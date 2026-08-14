@@ -158,6 +158,12 @@ const (
 	// aid that never writes the transcript. Session rides the frame's sess.
 	MethodSuggestReply Method = "suggest.reply" // params SuggestParams, result SuggestResult (sess in frame)
 
+	// Suggest the user's next line (optional; served only by a
+	// NextStepController). One ephemeral completion on the session's own
+	// prefix, offered as ghost text while the user is idle; records nothing.
+	// No params — the session rides the frame's sess.
+	MethodSuggestNextStep Method = "suggest.next_step" // result NextStepResult (sess in frame)
+
 	// --- control group ---
 
 	MethodModelsList    Method = "models.list"     // result ModelsResult
@@ -249,6 +255,11 @@ const (
 	// The author's note (optional; served only by a NoteController). Per-session
 	// steering injected into the uncached tail — set live, no cache bust.
 	MethodNoteSet Method = "note.set" // params NoteSetParams (sess in frame)
+
+	// A "!" shell escape's result (optional; served only by a
+	// ShellResultController). The client ran the command; this offers its output
+	// to the session's next request. Rides the uncached tail and is spent once.
+	MethodShellResult Method = "shell.result" // params ShellResultParams (sess in frame)
 
 	// The user persona (optional; served only by a UserController). Binds who the
 	// user is in the story — the description rides the free tail, the name rebuilds
@@ -358,14 +369,15 @@ func (m Method) Group() Group {
 	switch m {
 	case MethodPrompt, MethodQueue, MethodQueueSet, MethodCancel, MethodCompact,
 		MethodClear, MethodMessageEdit, MethodMessageDelete, MethodTurnSwipe, MethodTurnRetry, MethodTurnContinue, MethodApprove, MethodAnswer,
-		MethodPostLine, MethodDirectTurn, MethodTurnAdvance, MethodVariantsPrune, MethodVariantsDrop, MethodSubscribe, MethodUnsubscribe:
+		MethodPostLine, MethodDirectTurn, MethodTurnAdvance, MethodVariantsPrune, MethodVariantsDrop, MethodSubscribe, MethodUnsubscribe,
+		MethodShellResult:
 		return GroupConversation
 	case MethodSessionsList, MethodSessionCreate, MethodSessionResume, MethodSessionFork,
 		MethodSessionRename, MethodSessionGenerateTitle, MethodSessionDelete, MethodSessionDiscardDraft,
 		MethodSessionArchive, MethodSessionsArchived, MethodSessionRestore, MethodUsageGet, MethodUsageSnapshot, MethodResetsList, MethodContextGet,
 		MethodContextNode, MethodSurfacesList, MethodSurfaceGet, MethodSurfaceAction, MethodI18nCatalog,
 		MethodFilesList, MethodAuthProviders, MethodConversationReveal, MethodConversationHistory,
-		MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose, MethodSuggestReply, MethodSessionsDoctor,
+		MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose, MethodSuggestReply, MethodSuggestNextStep, MethodSessionsDoctor,
 		MethodSessionsNextScene, MethodSessionsRealize, MethodSessionsExport,
 		MethodWorkflowsList, MethodWorkflowsGet:
 		return GroupSession

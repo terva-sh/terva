@@ -358,6 +358,9 @@ var dispatch = map[Method]handler{
 	MethodSuggestReply: ask(noSuggest, func(c SuggestController, ctx context.Context, f Frame, p SuggestParams) (SuggestResult, error) {
 		return c.SuggestReply(ctx, f.Sess, p)
 	}),
+	MethodSuggestNextStep: get(noNextStep, func(c NextStepController, ctx context.Context, f Frame) (NextStepResult, error) {
+		return c.SuggestNextStep(ctx, f.Sess)
+	}),
 
 	// -------------------------------------------------------------------- personas
 
@@ -401,6 +404,9 @@ var dispatch = map[Method]handler{
 
 	MethodNoteSet: act(noNote, func(c NoteController, ctx context.Context, f Frame, p NoteSetParams) error {
 		return c.NoteSet(ctx, f.Sess, p)
+	}),
+	MethodShellResult: act(noShellResult, func(c ShellResultController, ctx context.Context, f Frame, p ShellResultParams) error {
+		return c.ShellResult(ctx, f.Sess, p)
 	}),
 	MethodUserBind: act(noUser, func(c UserController, ctx context.Context, f Frame, p UserBindParams) error {
 		return c.UserBind(ctx, f.Sess, p)

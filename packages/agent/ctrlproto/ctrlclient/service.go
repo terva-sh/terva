@@ -486,6 +486,28 @@ func (s *Service) PersonasDelete(ctx context.Context, p ctrlproto.PersonaDeleteP
 	return s.c.Call(ctx, "", ctrlproto.MethodPersonasDelete, p, nil)
 }
 
+// --- shell results ---
+
+var _ ctrlproto.NextStepController = (*Service)(nil)
+
+// SuggestNextStep asks the daemon for a line the user might type next. The TUI
+// is the primary caller: it notices the idle composer, the daemon holds the
+// model.
+func (s *Service) SuggestNextStep(ctx context.Context, sess string) (ctrlproto.NextStepResult, error) {
+	var out ctrlproto.NextStepResult
+	err := s.c.Call(ctx, sess, ctrlproto.MethodSuggestNextStep, nil, &out)
+	return out, err
+}
+
+var _ ctrlproto.ShellResultController = (*Service)(nil)
+
+// Forwarded rather than allow-listed, unlike the other session-scoped optional
+// controllers above: the "!" shell escape is the TUI's own affordance, so the
+// Go client is the PRIMARY caller here and not a hypothetical one.
+func (s *Service) ShellResult(ctx context.Context, sess string, p ctrlproto.ShellResultParams) error {
+	return s.c.Call(ctx, sess, ctrlproto.MethodShellResult, p, nil)
+}
+
 // --- backgrounds ---
 
 var _ ctrlproto.BackgroundsController = (*Service)(nil)

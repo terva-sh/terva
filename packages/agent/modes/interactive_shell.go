@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
@@ -44,8 +45,14 @@ func shellEscapeCommand(text string) (string, bool) {
 // It shares the busy/cancel state with the agent: esc cancels it, and
 // it refuses to start while a turn or another shell escape is already
 // in flight. The terminal-log output is parked in i.shellBlock below
-// the transcript until the next prompt or /clear, so it never enters
-// the model conversation.
+// the transcript until the next prompt or /clear.
+//
+// The output does not enter the model conversation, and with the
+// shell_result_context engine feature ON it is additionally OFFERED to
+// the session as an ephemeral block that rides the user's next request
+// once (offerShellResult). That feature ships OFF: it is the difference
+// between output that stays on this machine and output that reaches a
+// provider.
 func (i *Interactive) startShellEscape(parent context.Context, cmd string) {
 	if parent == nil {
 		parent = i.runCtx
@@ -100,6 +107,13 @@ func (i *Interactive) startShellEscape(parent context.Context, cmd string) {
 			out += "\n\n[cancelled]"
 		}
 
+		// Offer the RAW output to the session before it is styled. `out` and the
+		// block below differ only by ANSI escape sequences, which makes sending
+		// the wrong one invisible in every assertion that reads for content —
+		// hence offerShellResult takes the unstyled string and the guard for it
+		// compares bytes.
+		i.offerShellResult(cmd, out)
+
 		block := i.renderShellBlock(out, failed)
 
 		// Release the local slot. A prompt typed while the shell command ran
@@ -126,6 +140,47 @@ func (i *Interactive) startShellEscape(parent context.Context, cmd string) {
 		}
 		i.mu.Unlock()
 		i.invalidate()
+	}()
+}
+
+// offerShellResult hands a finished escape's output to the session, so the
+// user's next message can be a question about what they just ran. See
+// docs/proposals/shell-escape-context.md.
+//
+// Three ways this declines, and the order matters:
+//
+//  1. The feature is off. Checked HERE and not only in the daemon, because a
+//     daemon reached over `terva serve` can be on another host: gating there
+//     alone would send `!cat ~/.aws/credentials` across the network and then
+//     discard it at the far end. Core enforces it too — a client that skips this
+//     check must not get to decide it for the user — but by then the output has
+//     already travelled.
+//  2. No carrier serves the verb. An older daemon answers `unsupported`, which
+//     is a fact about the peer and not something the user did wrong.
+//  3. The call fails. Silently. The escape's own output is already on screen and
+//     the command itself succeeded or failed on its own terms; an error toast
+//     about a context offer the user did not ask for would be noise about a
+//     feature working exactly as well as it can.
+func (i *Interactive) offerShellResult(cmd, raw string) {
+	i.mu.Lock()
+	on := i.shellResultContext
+	i.mu.Unlock()
+	if !on || i.cfg.Carrier == nil {
+		return
+	}
+	sc, ok := i.cfg.Carrier.(ctrlproto.ShellResultController)
+	if !ok {
+		return
+	}
+	sess := i.carrierSession()
+	if sess == "" {
+		return
+	}
+	go func() {
+		_ = sc.ShellResult(context.Background(), sess, ctrlproto.ShellResultParams{
+			Command: cmd,
+			Output:  raw,
+		})
 	}()
 }
 

@@ -163,6 +163,27 @@ var EngineFeatures = []EngineFeature{
 		Apply:   func(a *core.Agent, on bool) { a.SetPrefixDivergenceRecording(on) },
 	},
 	{
+		ID:    "shell_result_context",
+		Title: i18n.M("Show ! command results to the agent"),
+		Desc:  i18n.M("When you run a command with !, hand its output to the agent along with your next message, so you can ask about what you just ran instead of pasting it back in. The output rides one request and is never written to the conversation. Off by default because it changes where that output goes: today a ! command's result stays on this machine, and turning this on sends it to your model provider — including whatever `!env` or `!cat` happens to print."),
+		// OFF, and this one is not a taste question. Every other feature here is
+		// off or on according to whether it HELPS; this one is off according to
+		// where data goes. The escape's output is local today — its comment in
+		// interactive_shell.go says the block is parked "so it never enters the
+		// model conversation" — and enabling this sends it to a provider. That is
+		// the leak vector the secrets-at-rest work is built around, arrived at
+		// without the model doing anything.
+		//
+		// So the default is off, the description says what enabling it means
+		// rather than only what it does, and the client checks before sending: a
+		// daemon reached over `terva serve` may be on another host, and gating
+		// only here would put the output on the wire to that host before
+		// discarding it there. Core is the authority anyway, because a client
+		// that skips the check must not get to decide this for the user.
+		Default: false,
+		Apply:   func(a *core.Agent, on bool) { a.SetShellResultContext(on) },
+	},
+	{
 		ID:    "transport_recording",
 		Title: i18n.M("Record which connection each request rode"),
 		Desc:  i18n.M("Some cache misses have nothing to do with the prompt: the request simply reached the provider over a fresh connection or a different edge, and landed on a machine that had never seen the conversation. This records the transport picture of each request — connection reuse, edge identifier, the provider's request id — next to its usage row, on providers that report it, so an unexplained expensive stretch can be read against how those requests physically travelled."),
