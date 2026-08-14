@@ -237,7 +237,19 @@ func SystemSegments(o SystemPromptOpts) []PromptSegment {
 		add(SourceTervaExamplesHint, i18n.P("system.examples_hint", "Deployment and setup examples are at %s: systemd units, reverse-proxy configs, container recipes. Read them when you set up or configure a terva host.", d))
 	}
 	if o.StatusTool {
-		add(SourceStatusToolHint, i18n.P("system.status_tool_hint", "To answer a question about your own runtime state, call the terva_status tool with no arguments. It reports the current model, the provider, the working directory, and the reasoning effort. It also reports the quantity of your context window that is in use. Use it, for example, to decide if you must summarize before the context fills. Its tool description lists every field that it returns."))
+		// The fourth sentence used to read "Use it, for example, to decide if you
+		// must summarize before the context fills." It is dropped for the reason
+		// the tool's own description dropped its twin: this hint is in the cached
+		// system prefix, so it rode every request telling the model to self-monitor
+		// its window, and a recorded session had it doing exactly that. The
+		// harness pushes a context-pressure note when it matters (see
+		// core.contextPressureBands); the model does not have to pull for it.
+		//
+		// This hint, not the tool description, is what the status-context-usage
+		// eval scenario measures — "a description cannot beat a system-prompt hint
+		// that owns the symptom". The first sentence is that route and is left
+		// exactly as it was.
+		add(SourceStatusToolHint, i18n.P("system.status_tool_hint", "To answer a question about your own runtime state, call the terva_status tool with no arguments. It reports the current model, the provider, the working directory, and the reasoning effort. It also reports the quantity of your context window that is in use. Do not call it to watch your own context, because terva warns you when the window fills. Its tool description lists every field that it returns."))
 	}
 	for _, a := range o.Append {
 		addSeg(a)

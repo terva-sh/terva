@@ -17,7 +17,7 @@ func OpenWorkGate(extMgr *extensions.Manager, tasks *tasktool.Controller) core.C
 		Cause: "open-work",
 		Fire: func(provider.StopReason) (string, bool) {
 			if (extMgr != nil && extMgr.HasBlockingContext()) || (tasks != nil && tasks.HasBlocking()) {
-				return OpenWorkGateMessage, true
+				return OpenWorkGateMessage(), true
 			}
 			return "", false
 		},

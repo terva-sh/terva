@@ -527,7 +527,7 @@ func applyEventToSink(ev Event, sink Sink) {
 						// answer it already gave is its deliverable — pin
 						// it so a housekeeping reply can't clobber the
 						// recap findings.
-						if txt == OpenWorkGateMessage {
+						if IsOpenWorkGateNudge(txt) {
 							sink.GuardNudge()
 						}
 					}

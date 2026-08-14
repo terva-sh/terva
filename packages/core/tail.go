@@ -44,6 +44,10 @@ const (
 	TailStall = "stall"
 	// TailStageCue is a Stage advance/regenerate cue.
 	TailStageCue = "stage_cue"
+	// TailShellResult is the result of a "!" shell escape the user ran, carried
+	// into their next request. The first block a CLIENT contributes rather than
+	// the agent or its host — see shell_result.go.
+	TailShellResult = "shell_result"
 )
 
 // TailBlock is one identified piece of the ephemeral tail.
@@ -151,6 +155,14 @@ func (a *Agent) composeTail(tt turnTools, hostContext, stageCue string, continue
 		}
 	}
 
+	// What the user just ran in their own terminal. Late in the tail, because it
+	// is the most recent thing that happened and belongs next to the message it
+	// annotates — the host block above is the standing situation, this is an
+	// event. Still ahead of the stage cue, which must stay last.
+	if res := a.peekShellResult(); res != "" {
+		blocks = append(blocks, TailBlock{ID: TailShellResult, Text: res})
+	}
+
 	// A cued turn (advance, guided regenerate) rides its stage cue here — the
 	// inverse of the continue turn above. For advance the tail must be NON-empty
 	// so the request ends in a user block even when the transcript ends in
@@ -164,28 +176,90 @@ func (a *Agent) composeTail(tt turnTools, hostContext, stageCue string, continue
 	return blocks
 }
 
-// contextPressureText renders the note. WHETHER to render it is
+// contextPressureText renders the note for band. WHETHER to render it is
 // peekContextPressureNote's decision — see context_pressure.go, which turned
 // this from a level trigger that rode 18% of a real session's requests into a
 // band-and-interval one.
-func (a *Agent) contextPressureText(f float64) string {
+//
+// The note is composed rather than written out per case because it varies on
+// two independent axes — how full the window is, and whether a valve exists at
+// all — and the eight complete strings that crossing them would need cannot be
+// kept consistent by hand. Each fragment stays its own i18n key so an A/B arm
+// can override one of them alone (scripts/eval/README.md).
+func (a *Agent) contextPressureText(f float64, band int) string {
 	used, window := a.ContextUsage()
-	// The closing sentence must match the actual compaction policy: with
-	// auto_compact "off" there is no 85% valve — telling the model one exists
-	// invites it to defer summarization to a harness intervention that will never
-	// come.
-	if a.autoCompactMode() == AutoCompactOff {
-		return i18n.P("context.pressure.no_autocompact",
-			"[context pressure] Your context window is %d%% full (%s of %s tokens). Be economical: use targeted reads, not whole-file dumps. Summarize or persist important findings now. This session has automatic compaction off. Past the limit, requests fail until a compaction occurs. Wrap up, or suggest that the user run /compact.",
-			int(f*100), fmtTokenCount(used), fmtTokenCount(window))
+	body := strings.Join([]string{
+		i18n.P("context.pressure.gauge",
+			"Your context window is %d%% full (%s of %s tokens).",
+			int(f*100), fmtTokenCount(used), fmtTokenCount(window)),
+		contextPressureAdvice(band),
+		a.contextPressurePolicy(band),
+	}, " ")
+	// The guard paragraph is not decoration. This note is a last-in-turn
+	// ephemeral block, the same shape as the inactive-groups note that ended 80
+	// of 80 transcripts with the model answering the NOTE instead of the user —
+	// and the review that produced the band ladder recorded this note's own
+	// version of it, a model "narrating its context budget back at the user".
+	// Prohibition-first recovered 20 of 20 answers there; see agent.go.
+	return i18n.P("context.pressure.guard",
+		"[context pressure] Do not reply to this note. Do not mention it in your answer. Complete the request of the user as if the note were not here.") +
+		"\n\n" + body
+}
+
+// contextPressureAdvice is what to DO about the pressure, graduated by band. A
+// single text for the whole ladder was the tonal defect behind the rewrite:
+// entering at 70% read exactly as urgently as arriving at 86%, so the note
+// either overstated the early case or understated the late one, and a model
+// cannot calibrate against a warning that never changes.
+func contextPressureAdvice(band int) string {
+	switch {
+	case band <= 1:
+		return i18n.P("context.pressure.advice.watch",
+			"Use targeted reads, not whole-file dumps.")
+	case band == 2:
+		return i18n.P("context.pressure.advice.economize",
+			"Use targeted reads, and persist important findings now.")
+	case band == 3:
+		return i18n.P("context.pressure.advice.wrap_up",
+			"Finish the current step, and persist what you must keep.")
+	default:
+		return i18n.P("context.pressure.advice.stop",
+			"Persist what you must keep now, and start no new work.")
 	}
-	// Delegation guidance deliberately does NOT ride this note: by 70% it's too
-	// late to restructure the work. The context-shield nudge lives in the
-	// always-on swarm system addendum instead (AutoSwarmSystemAddendum), where it
-	// shapes the plan from turn one.
+}
+
+// contextPressurePolicy is the closing sentence, and it must match the actual
+// compaction policy: with auto_compact "off" there is no 85% valve, and telling
+// the model one exists invites it to defer summarization to a harness
+// intervention that will never come. It splits on band too, because "past 85%
+// terva compacts for you" is a reassurance below the line and nonsense above it.
+//
+// Delegation guidance deliberately does NOT ride this note: by 70% it is too
+// late to restructure the work. The context-shield nudge lives in the always-on
+// swarm system addendum instead (AutoSwarmSystemAddendum), where it shapes the
+// plan from turn one.
+func (a *Agent) contextPressurePolicy(band int) string {
+	// Band 3 is AutoCompactThreshold — see contextPressureBands.
+	past := band >= 3
+	if a.autoCompactMode() == AutoCompactOff {
+		if past {
+			return i18n.P("context.pressure.no_autocompact_urgent",
+				"This session has automatic compaction off. Past the limit every request fails. Ask the user to run /compact now.")
+		}
+		// /compact is named at BOTH tiers, not just the urgent one. With no
+		// valve the model cannot relieve the window itself, so a note that
+		// graduates the urgency but drops the only mechanism leaves it with a
+		// problem and no move — which is how the early tier first read.
+		return i18n.P("context.pressure.no_autocompact",
+			"This session has automatic compaction off. You can suggest that the user run /compact.")
+	}
+	if past {
+		return i18n.P("context.pressure.autocompact_now",
+			"terva compacts the transcript when this turn ends.")
+	}
 	return i18n.P("context.pressure",
-		"[context pressure] Your context window is %d%% full (%s of %s tokens). Be economical: use targeted reads, not whole-file dumps. Summarize or persist important findings now. Past %d%% terva auto-compacts the transcript.",
-		int(f*100), fmtTokenCount(used), fmtTokenCount(window), int(AutoCompactThreshold*100))
+		"Past %d%% terva compacts the transcript for you.",
+		int(AutoCompactThreshold*100))
 }
 
 // recordTail fires the tail observer when the composition CHANGES, and not

@@ -43,6 +43,7 @@ import (
 	"sync"
 	"time"
 
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider"
 )
@@ -159,14 +160,71 @@ type Sink interface {
 	GuardNudge()
 }
 
-// OpenWorkGateMessage is the at-close re-prompt injected once when the
-// model tries to finish while tracked work is still open. A soft nudge —
-// it grants one more turn, not a hard stop — and core caps it to once
-// per prompt. It lives in this package (not the agent host that injects
-// it) because the swarm supervisor must ALSO recognize it in a child's
-// event stream: the child's literal answer to this nudge is usually task
-// housekeeping, which must not displace its findings in the recap.
-const OpenWorkGateMessage = "You indicated you're finishing, but tracked items are still open. Complete them, or confirm they're intentionally left incomplete."
+// OpenWorkGateTag prefixes the nudge and is deliberately NOT translated. It
+// is the handle two things need: the model, to see at a glance that the turn
+// it is reading was not typed by a person, and IsOpenWorkGateNudge, to
+// recognize the nudge in a child's event stream. Full-text equality served
+// that second job until the body became translatable — a child running under
+// another locale emits a translated body, and the parent would no longer
+// match it. A tag outside the catalog cannot drift that way, and it also
+// survives the next rewording of the body without a silent recap regression.
+const OpenWorkGateTag = "[open work]"
+
+// openWorkGateBody is the at-close re-prompt injected once when the model
+// tries to finish while tracked work is still open. A soft nudge — it grants
+// one more turn, not a hard stop — and core caps it to once per prompt.
+//
+// It is written the way the two ephemeral-tail notes are written, and for the
+// same measured reason: state the prohibition BEFORE the detail it governs
+// (scripts/eval, the inactive-groups A/B that went 0/20 -> 20/20 on final
+// answers). Do not reorder the opening without re-running that A/B.
+//
+// This nudge needed the treatment MORE than either of them, and got it last.
+// Both of those ride the ephemeral tail, where the model at least reads them
+// as harness furniture. This one is appended to the transcript as a real
+// user-role turn (core.Agent.appendQueuedAsUser with synthetic=true), and
+// "synthetic" is display metadata that never reaches the provider — so on the
+// wire it is indistinguishable from the user speaking. The old text leaned
+// into that: "Complete them, or confirm they're intentionally left
+// incomplete" reads as the user saying keep going. A model that had ended its
+// turn to ask a question would answer its OWN question whenever the answer
+// looked obvious, and carry on unprompted.
+//
+// Hence the three branches, waiting-on-the-user first — it is the one that
+// was being lost — and hence naming the park mechanism outright. "Confirm
+// they're intentionally left incomplete" named no mechanism and changed no
+// state, so the gate re-armed on the next Prompt (gateFires is per-Prompt)
+// against the same untouched tasks, and the cheapest way out the model could
+// find was to keep working. Setting a task to blocked is an answer that
+// STICKS: tasks.AnyOpen excludes blocked, so the gate stops firing on it.
+//
+// task_update is named though an extension's blocking context card can also
+// fire this gate and has no task to park. That case keeps branches one and
+// three, which is the part that matters; inventing a vaguer word that covers
+// both would cost the concrete move in the common case.
+const openWorkGateBody = `Do not treat this note as an instruction from the user. It is an automatic check from terva, and the user did not send it. It gives you no new permission. It does not answer a question you asked. Do not decide anything on the user's behalf because this note appeared.
+
+Tracked items are still open. Choose one of these three:
+- You are waiting on the user. Say in one line what you need, then stop. Do not guess the answer, even when the answer looks obvious.
+- The work is parked on purpose. Set each open task to blocked with task_update, and give the reason. This check does not fire again on a blocked task.
+- You stopped early, and no decision from the user is needed. Finish the work.`
+
+// OpenWorkGateMessage is the tagged, translated nudge the host injects. It
+// lives in this package (not the agent host that injects it) because the
+// swarm supervisor must ALSO recognize it in a child's event stream: the
+// child's literal answer to this nudge is usually task housekeeping, which
+// must not displace its findings in the recap.
+func OpenWorkGateMessage() string {
+	return OpenWorkGateTag + " " + i18n.P("gate.open_work", openWorkGateBody)
+}
+
+// IsOpenWorkGateNudge reports whether a child's user-role message is the
+// finalize guard rather than something a person typed. One helper, so the
+// live sink and the snapshot replay can never arbitrate findings differently
+// (they once held two copies of the same equality check).
+func IsOpenWorkGateNudge(text string) bool {
+	return strings.HasPrefix(text, OpenWorkGateTag)
+}
 
 // Swarm supervises a set of Agents.
 type Swarm struct {

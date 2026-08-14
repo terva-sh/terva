@@ -17,11 +17,50 @@ import (
 // single [auto-swarm update] recap as a queued turn so the coordinator can
 // synthesize their outcomes.
 
-// swarmWaitGateMessage re-prompts a coordinator that tried to finish while its
-// spawned sub-agents are still running (see the swarm-hold continuation gate). Injected
-// once per batch — long enough to stop it racing off; the queued [auto-swarm
-// update] recap does the rest.
-const swarmWaitGateMessage = "You indicated you're finishing, but sub-agents you spawned are still running. Do NOT write your final answer yet — when they finish you'll receive an [auto-swarm update] with each one's outcome, and you should fold their findings into your response. For now, briefly note you're awaiting them; that update will re-engage you."
+// swarmHoldTag prefixes the nudge and, like swarm.OpenWorkGateTag, sits
+// OUTSIDE the catalog entry so no translation can carry it away. It joins the
+// tag family the model already reads — [auto-swarm update], [open work],
+// [context pressure], [inactive tool groups] — whose shared job is to be the
+// first thing on the line that says a person did not write this.
+const swarmHoldTag = "[swarm hold]"
+
+// swarmHoldBody re-prompts a coordinator that tried to finish while its
+// sub-agents are still active (see the swarm-hold continuation gate). Injected
+// once per batch — long enough to stop it racing off, and the queued
+// [auto-swarm update] recap does the rest.
+//
+// It is the sibling of swarm.openWorkGateBody and had the same defect. Both
+// are injected as user-role turns (appendQueuedAsUser with synthetic=true),
+// and "synthetic" never reaches the provider, so the model has only the text
+// to tell it no person typed this. Both opened "You indicated you're
+// finishing, but …", which is the shape a model reads as the user pushing it.
+//
+// The failure it invites is milder than the open-work gate's — this text at
+// least says to wait rather than to continue — but a model that believes the
+// user sent it answers the USER instead of noting the hold, and treats the
+// sentence as a new instruction it must reconcile with whatever the user
+// actually asked for. So: prohibition first, then who sent it, then the fact.
+//
+// The last sentence is not padding. A coordinator told only to wait tends to
+// poll its children (session_inspect's own "you do not need to watch it at
+// all" exists for the same reason), and the recap is a push.
+//
+// packages/agent/workspace is STE-enrolled, so this text is held to the house
+// register by cmd/terva-ste-lint — no contractions, no capitalised emphasis,
+// no em-dash or semicolon asides, no participles. "Do NOT" and "you'll" and
+// the em-dash aside in the old string were each a finding waiting for the
+// directory's enrollment to reach a bare const.
+const swarmHoldBody = `Do not write your final answer yet. This is an automatic check from terva, and the user did not send it. Sub-agents that you started are still active.
+
+When they all stop, you get one [auto-swarm update] message with the result of each one. Put those results into your answer at that time. That message starts your turn again, so you do not need to watch for it.
+
+For now, write one line to say that you wait for the sub-agents. Then stop.`
+
+// swarmWaitGateMessage is the tagged, translated nudge the swarm-hold gate
+// injects.
+func swarmWaitGateMessage() string {
+	return swarmHoldTag + " " + i18n.P("gate.swarm_hold", swarmHoldBody)
+}
 
 // swarmWatchEntry is one tracked sub-agent (daemon side).
 type swarmWatchEntry struct {

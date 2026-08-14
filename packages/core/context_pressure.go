@@ -16,17 +16,74 @@ package core
 // What the model actually needs is: tell me when I enter a new band, remind me
 // occasionally while I stay there, and stop entirely once a compaction has
 // genuinely relieved the pressure.
+//
+// The band ladder fixed the CADENCE and left two halves of the same symptom
+// standing, both closed later:
+//
+//   - The note said the same thing at every height. Entering at 70% read as
+//     urgently as arriving at 86%, so it overstated the early case and
+//     understated the late one, and a model cannot calibrate against a warning
+//     that never changes. The advice is graduated per band now — see
+//     contextPressureAdvice in tail.go.
+//   - It had no do-not-reply guard, and "narrating its context budget back at
+//     the user" is that failure exactly: a last-in-turn ephemeral note winning
+//     the reply away from the user's question. Its sibling — the inactive-groups
+//     note — measured 0-of-20 final answers before prohibition-first wording and
+//     20-of-20 after. The note leads with the same guard now.
+//
+// The third half was never in this file at all: terva_status's own description
+// and the system prompt's status hint both told the model to call the tool to
+// decide whether to summarize, from the CACHED prefix, on 100% of requests. The
+// note going quiet could not stop a model that had standing instructions to
+// poll. See StatusTool.Description and system.status_tool_hint.
 
-// contextPressureBands are the fractions that each warrant saying something
-// again. Crossing one is news; sitting inside one is not. 0.85 is
-// AutoCompactThreshold, the point the harness intervenes on its own.
-var contextPressureBands = []float64{0.70, 0.80, 0.85, 0.90, 0.95}
+// pressureBand is one rung of the ladder: the fraction that enters it, and how
+// often to say so again while the model sits there.
+type pressureBand struct {
+	at float64
+	// repeatEvery re-issues the note after this many requests inside the SAME
+	// band. Without it a long stretch at 72% would be warned about exactly once
+	// and then never again, and a model many turns past that reminder behaves
+	// like one that was never told.
+	//
+	// It TIGHTENS as the ceiling approaches, because the interval is really a
+	// bet on how long the model has to react: at 0.70 that is a whole phase of
+	// work, at 0.92 it is a few requests. A flat interval spends the same words
+	// on both and is wrong at one end or the other.
+	repeatEvery int
+}
 
-// contextPressureRepeatEvery re-issues the note after this many requests inside
-// the SAME band. Without it a long stretch at 72% would be warned about exactly
-// once and then never again, and a model many turns past that reminder behaves
-// like one that was never told.
-const contextPressureRepeatEvery = 10
+// contextPressureBands is the ladder. Crossing a rung is news; sitting on one is
+// not.
+//
+// The rungs are closer together than they look like they should be at the
+// bottom for a reason: the old ladder ran 0.70 then 0.80, and a model climbing
+// 71% to 79% burned eight points of window — the single largest stretch in the
+// table — hearing nothing but the flat reminder. 0.78 splits it.
+//
+// Two rungs are load-bearing and pinned by TestLadderMatchesPolicy: the first
+// must be ContextWarnFraction, since commitContextPressure clears against it,
+// and 0.85 must be AutoCompactThreshold, the point the harness intervenes on
+// its own. With auto-compaction ON the top rung is nearly unreachable — the
+// harness compacts at 0.85 when the turn ends — so 0.92 is really the
+// AutoCompactOff ladder, where nothing intervenes and the model self-manages
+// all the way to the wall.
+var contextPressureBands = []pressureBand{
+	{at: 0.70, repeatEvery: 15},
+	{at: 0.78, repeatEvery: 12},
+	{at: 0.85, repeatEvery: 8},
+	{at: 0.92, repeatEvery: 5},
+}
+
+// contextPressureRepeatEvery is band's reminder interval. band is 1-based, as
+// contextPressureBand returns it; 0 is below the ladder entirely and has no
+// interval to give.
+func contextPressureRepeatEvery(band int) int {
+	if band <= 0 || band > len(contextPressureBands) {
+		return 0
+	}
+	return contextPressureBands[band-1].repeatEvery
+}
 
 // contextPressureClearMargin is the hysteresis below ContextWarnFraction that
 // the gauge must fall past before the tracker forgets what it has announced.
@@ -50,8 +107,8 @@ type pressureTracker struct {
 // the warning line entirely".
 func contextPressureBand(f float64) int {
 	band := 0
-	for _, t := range contextPressureBands {
-		if f >= t {
+	for _, b := range contextPressureBands {
+		if f >= b.at {
 			band++
 		}
 	}
@@ -86,10 +143,15 @@ func (a *Agent) peekContextPressureNote() string {
 	// A newly crossed band is always worth saying; otherwise only on the
 	// repeat interval. Note this compares against the highest band ANNOUNCED,
 	// so a gauge that dips and recovers within the same band stays quiet.
-	if band <= a.pressure.band && a.pressure.sinceLast < contextPressureRepeatEvery {
+	//
+	// The interval is the CURRENT band's, not the announced one's: a transcript
+	// that fell back to 71% after a partial relief is a 71% situation, and
+	// reminding it at 0.92's urgent cadence would describe a high-water mark
+	// rather than where the model actually is.
+	if band <= a.pressure.band && a.pressure.sinceLast < contextPressureRepeatEvery(band) {
 		return ""
 	}
-	return a.contextPressureText(f)
+	return a.contextPressureText(f, band)
 }
 
 // commitContextPressure records what the composed request actually carried.

@@ -316,7 +316,7 @@ func replayEventsIntoAgent(a *Agent, evs []Event) {
 							// Mirror applyEventToSink: a reloaded agent's
 							// snapshot must arbitrate findings the same
 							// way as a live one.
-							if txt == OpenWorkGateMessage {
+							if IsOpenWorkGateNudge(txt) {
 								a.noteGuardNudge()
 							}
 						}

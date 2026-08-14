@@ -353,7 +353,11 @@ func FanoutAgentEvent(mgr *extensions.Manager, ev core.AgentEvent) {
 // in the swarm package: the supervisor must recognize the nudge in a
 // child's event stream so the child's housekeeping answer to it can't
 // clobber the recap findings (swarm.AgentSnapshot.Findings).
-const OpenWorkGateMessage = swarm.OpenWorkGateMessage
+//
+// A function, not a const, since the body became a prompts-catalog entry:
+// i18n resolves at render time, so the text must be built per call rather
+// than frozen at init (a package-level var would bind the boot locale).
+func OpenWorkGateMessage() string { return swarm.OpenWorkGateMessage() }
 
 // EmitSessionStart fires the session_start lifecycle event carrying the
 // active session's identity, so session-aware extensions (protocol 2+)

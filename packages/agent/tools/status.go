@@ -132,8 +132,21 @@ func (t *StatusTool) SetProvider(provider, authMethod, baseURL string) {
 
 func (t *StatusTool) Name() string { return "terva_status" }
 
+// The description used to invite the model to poll this tool for context: "Use
+// this tool to decide if you must summarize or stop before the context becomes
+// full." That sentence sat in the always-on tools array, so it rode 100% of
+// requests — and the session review that rebuilt the context-pressure note
+// recorded the behaviour it produced, a model "spending turns polling
+// terva_status". The note itself was fixed then; this half of the same symptom
+// was left standing.
+//
+// The replacement names the POSITIVE trigger before the prohibition, and that
+// order is load-bearing. A flat "do not call this to check your context" also
+// suppresses the call when the user asks outright, which is a measured scenario
+// (status-context-usage in scripts/eval/scenarios.json). Naming "the user asks"
+// first keeps that route open and closes only the unprompted one.
 func (t *StatusTool) Description() string {
-	return i18n.D("tool.terva_status.description", "Report your own status. The report gives the model, the provider, and the version, commit, and build date of the terva binary. It also gives the loaded extensions and their versions, the run time of the process, the working directory, the session id, the transcript file, the reasoning effort, and the quantity of your context window that is in use. This tool takes no arguments.\n\nUse this tool to decide if you must summarize or stop before the context becomes full. Use it also to report which build and which extension versions serve this session. Give these values in each record that you write, so that a later reader can compare them with the release.")
+	return i18n.D("tool.terva_status.description", "Report your own status. Call this tool when the user asks about your runtime state. Do not call it to watch your own context, because terva warns you when the window fills. The report gives the model, the provider, and the version, commit, and build date of the terva binary. It also gives the loaded extensions and their versions, the run time of the process, the working directory, the session id, the transcript file, the reasoning effort, and the quantity of your context window that is in use. This tool takes no arguments.\n\nUse it also to report which build and which extension versions serve this session. Give these values in each record that you write, so that a later reader can compare them with the release.")
 }
 
 // No arguments. Providers that require an object schema accept an

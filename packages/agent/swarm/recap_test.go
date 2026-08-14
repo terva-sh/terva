@@ -141,7 +141,7 @@ func TestGuardNudgeEventPinsDeliverable(t *testing.T) {
 	a := &Agent{}
 	sink := agentSink{a: a}
 	applyEventToSink(msg("assistant_message", report), sink)
-	applyEventToSink(msg("user_message", OpenWorkGateMessage), sink)
+	applyEventToSink(msg("user_message", OpenWorkGateMessage()), sink)
 	applyEventToSink(msg("assistant_message", "Confirmed: all tracked items are complete."), sink)
 	if got := a.Snapshot().Findings(); got != report {
 		t.Errorf("live Findings after guard = %q; want the report", got)
@@ -160,7 +160,7 @@ func TestGuardNudgeEventPinsDeliverable(t *testing.T) {
 	b := &Agent{}
 	replayEventsIntoAgent(b, []Event{
 		msg("assistant_message", report),
-		msg("user_message", OpenWorkGateMessage),
+		msg("user_message", OpenWorkGateMessage()),
 		msg("assistant_message", "Confirmed: all tracked items are complete."),
 	})
 	if got := b.Snapshot().Findings(); got != report {
