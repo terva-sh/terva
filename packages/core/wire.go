@@ -413,6 +413,12 @@ type WireUsage struct {
 	// break reasoning out at all (Anthropic keeps it inside output_tokens).
 	Reasoning      int  `json:"reasoning,omitempty"`
 	ReasoningKnown bool `json:"reasoning_known,omitempty"`
+	// ImageOutput is how much of Output was image data — also a SUBSET of
+	// Output, on the image-generating models that bill images and text at
+	// different rates. Unlike Reasoning it does move the bill, so it is the
+	// one breakdown field that explains a cost rather than just annotating
+	// it (provider.Model.PriceOutputImage).
+	ImageOutput int `json:"image_output,omitempty"`
 }
 
 // EventToWire converts an AgentEvent to its canonical wire form. Image
@@ -732,6 +738,7 @@ func UsageToWire(u provider.Usage) WireUsage {
 		CacheSavedUSD:  u.CacheSavedUSD,
 		Reasoning:      u.ReasoningTokens,
 		ReasoningKnown: u.ReasoningTokensKnown,
+		ImageOutput:    u.ImageOutputTokens,
 	}
 }
 

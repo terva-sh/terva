@@ -334,6 +334,21 @@ type Usage struct {
 	// than a measurement. Without this flag a session total would quietly
 	// understate, which is the failure mode a cost breakdown exists to avoid.
 	ReasoningTokensKnown bool `json:"reasoning_tokens_known,omitempty"`
+
+	// ImageOutputTokens is how much of OutputTokens was image data.
+	//
+	// A SUBSET of OutputTokens, exactly like ReasoningTokens above, and for
+	// the same reason: Gemini reports it as a breakdown of the same
+	// candidate total (candidatesTokensDetails[].modality), not as an extra
+	// bucket beside it. Measured on a 1024x1024 generation:
+	// candidatesTokenCount 1450, of which modality IMAGE 1120 — the
+	// remaining 330 are the text and thinking that came with the picture.
+	//
+	// UNLIKE ReasoningTokens, ComputeCost does read this one, because these
+	// tokens are billed at their own rate (Model.PriceOutputImage). It is
+	// subtracted from the text-rate base rather than added to it, so the two
+	// rates partition OutputTokens instead of double-counting it.
+	ImageOutputTokens int `json:"image_output_tokens,omitempty"`
 }
 
 // Add returns u plus v.
@@ -347,6 +362,7 @@ func (u Usage) Add(v Usage) Usage {
 		CacheSavedUSD:        u.CacheSavedUSD + v.CacheSavedUSD,
 		ReasoningTokens:      u.ReasoningTokens + v.ReasoningTokens,
 		ReasoningTokensKnown: mergeReasoningKnown(u, v),
+		ImageOutputTokens:    u.ImageOutputTokens + v.ImageOutputTokens,
 	}
 }
 

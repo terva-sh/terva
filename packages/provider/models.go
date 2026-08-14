@@ -43,6 +43,23 @@ type Model struct {
 	PriceCacheRead  float64
 	PriceCacheWrite float64
 
+	// PriceOutputImage is the output rate for IMAGE tokens, for the
+	// image-generating models that bill their output at two different
+	// rates depending on what they emitted.
+	//
+	// Gemini's nano-banana family is the case: gemini-3.1-flash-image
+	// bills text and thinking at $3/1M but images at $60/1M, on the same
+	// model, in the same response. One rate cannot describe that. Pricing
+	// every output token at the text rate understates an image turn 20x;
+	// pricing them all at the image rate overstates a text turn by the
+	// same factor, and these models hold ordinary conversations between
+	// pictures.
+	//
+	// 0 means "this model has one output rate", which is every other model
+	// in the catalog, and ComputeCost then prices output exactly as it
+	// always did. So a model that never sets this is untouched by it.
+	PriceOutputImage float64
+
 	// Speculative marks models whose ids are known from the upstream
 	// vendor's CLI but not yet live on their public API. They'll 404
 	// today but start working the moment the provider flips the switch.
@@ -746,12 +763,42 @@ func ModelsForProvider(provider string) []Model {
 }
 
 // ComputeCost returns the USD cost for the given usage on model m.
+//
+// Output is billed at one rate unless the model sets PriceOutputImage, in
+// which case the image tokens inside OutputTokens are split out and billed
+// at their own rate. See Model.PriceOutputImage and Usage.ImageOutputTokens:
+// the image models bill the two 10-20x apart, and both directions of getting
+// it wrong are real money.
 func ComputeCost(m Model, u Usage) float64 {
 	const per = 1_000_000.0
 	return float64(u.InputTokens)*m.PriceInput/per +
-		float64(u.OutputTokens)*m.PriceOutput/per +
+		outputCost(m, u) +
 		float64(u.CacheReadTokens)*m.PriceCacheRead/per +
 		float64(u.CacheWriteTokens)*m.PriceCacheWrite/per
+}
+
+// outputCost prices OutputTokens, splitting image tokens onto their own rate
+// when the model has one.
+//
+// ImageOutputTokens is a subset of OutputTokens, so the text-rate base is the
+// remainder. Anything else would bill the image tokens twice.
+func outputCost(m Model, u Usage) float64 {
+	const per = 1_000_000.0
+	if m.PriceOutputImage == 0 {
+		// Every model with a single output rate, which is all of them
+		// but the image generators. Byte-identical to the old formula.
+		return float64(u.OutputTokens) * m.PriceOutput / per
+	}
+	image := u.ImageOutputTokens
+	if image > u.OutputTokens {
+		// A provider that reports a bigger subset than its own total is
+		// describing something this code does not model. Bill the whole
+		// output at the image rate rather than let the remainder go
+		// negative and refund the difference.
+		image = u.OutputTokens
+	}
+	text := u.OutputTokens - image
+	return float64(text)*m.PriceOutput/per + float64(image)*m.PriceOutputImage/per
 }
 
 // CacheSavings returns what the prompt cache was worth on this response:

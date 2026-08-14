@@ -27,6 +27,7 @@ import (
 //	          "priceInput": 2.50,
 //	          "priceOutput": 15.00,
 //	          "priceCacheRead": 0.25,
+//	          "priceOutputImage": 60.00,
 //	          "capabilities": { "image-input": true }
 //	        }
 //	      ]
@@ -70,6 +71,7 @@ type UserModel struct {
 	PriceOutput          float64         `json:"priceOutput"`
 	PriceCacheRead       float64         `json:"priceCacheRead"`
 	PriceCacheWrite      float64         `json:"priceCacheWrite"`
+	PriceOutputImage     float64         `json:"priceOutputImage"` // output rate for IMAGE tokens; 0 = one output rate
 	BaseURL              string          `json:"baseUrl,omitempty"`
 	Temperature          *float32        `json:"temperature,omitempty"`      // default sampling temperature (0–2); nil = inherit
 	DefaultReasoning     string          `json:"defaultReasoning,omitempty"` // per-model reasoning level when no global level is set; "" = inherit
@@ -169,6 +171,7 @@ func LoadUserModelsWithWarnings(path string) ([]UserOverride, []string) {
 				PriceOutput:          um.PriceOutput,
 				PriceCacheRead:       um.PriceCacheRead,
 				PriceCacheWrite:      um.PriceCacheWrite,
+				PriceOutputImage:     um.PriceOutputImage,
 				BaseURL:              um.BaseURL,
 				Temperature:          um.Temperature,
 				DefaultReasoning:     um.DefaultReasoning,
@@ -306,6 +309,9 @@ func applyUserOverrides(base []Model, overrides []UserOverride) []Model {
 		}
 		if um.PriceCacheWrite > 0 {
 			existing.PriceCacheWrite = um.PriceCacheWrite
+		}
+		if um.PriceOutputImage > 0 {
+			existing.PriceOutputImage = um.PriceOutputImage
 		}
 		// Scalar overrides (display name, base url, context window, max
 		// tokens, temperature) merge through the shared registry, so adding a
