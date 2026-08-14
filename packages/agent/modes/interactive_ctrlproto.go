@@ -1791,13 +1791,28 @@ func wireImageBlocks(blocks []core.WireBlock) []provider.ImageBlock {
 }
 
 // usageFromWire reconstructs provider.Usage from the wire form (the inverse of
-// core's usageToWire), so the status bar's usage picture is fed off the stream.
+// core's UsageToWire), so the status bar's usage picture is fed off the stream.
+//
+// Every field, including the ones nothing renders yet. It carried five of nine
+// and called itself the inverse, which is the shape that turns a later addition
+// into a silent wrong number: ImageOutputTokens is a SUBSET of OutputTokens
+// billed at its own rate, 10-20x the text one, so a surface that reconstructed
+// a Usage here and re-priced it would under-report an image turn by that
+// factor. Nothing does today. The field is carried so that nothing has to
+// notice before it can.
+//
+// TestTheUsageWireRoundTripCarriesEveryField enrolls new fields by itself
+// rather than by anyone remembering to extend a fixture.
 func usageFromWire(w *core.WireUsage) provider.Usage {
 	return provider.Usage{
-		InputTokens:      w.Input,
-		OutputTokens:     w.Output,
-		CacheReadTokens:  w.CacheRead,
-		CacheWriteTokens: w.CacheWrite,
-		CostUSD:          w.CostUSD,
+		InputTokens:          w.Input,
+		OutputTokens:         w.Output,
+		CacheReadTokens:      w.CacheRead,
+		CacheWriteTokens:     w.CacheWrite,
+		CostUSD:              w.CostUSD,
+		CacheSavedUSD:        w.CacheSavedUSD,
+		ReasoningTokens:      w.Reasoning,
+		ReasoningTokensKnown: w.ReasoningKnown,
+		ImageOutputTokens:    w.ImageOutput,
 	}
 }
