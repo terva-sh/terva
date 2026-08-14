@@ -13,7 +13,12 @@ import (
 // result. It's a WIRE-FORMAT fact; whether a given MODEL can see
 // images is the separate per-model capability the loop checks
 // (docs/plans/model-capabilities.md). Providers that carry tool
-// images natively (Anthropic, Gemini) must NOT declare it.
+// images natively (Anthropic) must NOT declare it.
+//
+// Gemini was listed as native here and is not: its functionResponse
+// carries text only, so it declares the mirror too. Measured live
+// 2026-08-14 — a tool-returned image reached the model ONLY through
+// the mirror; the native path answered about an image it never saw.
 func TestClientCapabilitiesDeclared(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -29,6 +34,10 @@ func TestClientCapabilitiesDeclared(t *testing.T) {
 		// capability now — ContinuesAssistantPrefill — so it implements the
 		// interface; MirrorsToolImages stays false.
 		{"anthropic", NewAnthropic("k", ""), true, false},
+		// Gemini's functionResponse is text-only: it drops ImageBlocks on the
+		// wire, so it needs the mirror. Declaring nothing here is what made a
+		// tool-returned image vanish with no error at all.
+		{"google", NewGemini("k", ""), true, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -71,6 +80,13 @@ func TestClientMirrorsToolImagesThroughWrappers(t *testing.T) {
 		// openai-responses is a codexClient behind renamedClient — the
 		// unwrap walk must still reach the codex capability.
 		{"openai-responses", NewOpenAIResponses("k", ""), true},
+
+		// Gemini needs the mirror (text-only functionResponse), and Vertex
+		// ships that same client behind renamedClient. Built inline rather
+		// than through NewVertex, which needs GOOGLE_CLOUD_PROJECT in the
+		// environment and degrades to an unimplementedClient without it.
+		{"raw-gemini", NewGemini("k", ""), true},
+		{"google-vertex", &renamedClient{inner: NewGemini("k", ""), name: "google-vertex"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

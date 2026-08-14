@@ -80,6 +80,32 @@ func NewGemini(apiKey, baseURL string) Client {
 
 func (c *geminiClient) Name() string { return "google" }
 
+// Capabilities declares that Gemini needs the tool-image mirror.
+//
+// 🪤 The agent loop's comment used to claim Gemini "carries tool-result images
+// natively" and left it untouched. It does not: convertGemToolResultParts
+// flattens a ToolResultBlock to TEXT ONLY and silently drops every ImageBlock,
+// and because no Capabilities() existed here, MirrorsToolImages defaulted to
+// false and the loop skipped the mirror too. Both halves failed, so a
+// screenshot tool's output reached the model as nothing at all — no error, no
+// warning, just a model answering about an image it never saw.
+//
+// Measured live 2026-08-14 on gemini-3.5-flash with a solid-blue PNG and the
+// question "what colour did the tool return?":
+//
+//	tool result text only (today)          -> "Black", twice     (never saw it)
+//	inlineData beside the functionResponse -> "0blue", ""        (garbage)
+//	inlineData nested in response.parts[]  -> "White", raw zlib  (garbage)
+//	following user message (this mirror)   -> "Blue", "blue"     (correct)
+//
+// A plain user turn with the same image answers "Red"/"Blue" correctly, so the
+// model and the encoding were never in doubt — only the tool-result path was.
+// The mirror is therefore the one shape that works, which is exactly what this
+// capability turns on.
+func (c *geminiClient) Capabilities() ClientCapabilities {
+	return ClientCapabilities{MirrorsToolImages: true}
+}
+
 // ---- wire types ----
 //
 // Subset of Gemini's Content / Part / GenerateContentRequest schema.

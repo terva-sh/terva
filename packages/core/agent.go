@@ -2303,8 +2303,13 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			// so when a tool result contains images we mirror them into a
 			// synthetic user message immediately after the tool result, where
 			// they DO serialize correctly and reach vision models. Providers
-			// that carry tool-result images natively (Anthropic, Gemini)
-			// declare nothing and are left untouched.
+			// that carry tool-result images natively (Anthropic) declare
+			// nothing and are left untouched.
+			//
+			// Gemini used to be named here as native, and it is not: its
+			// functionResponse carries TEXT only, so it declares the
+			// capability too. Measured 2026-08-14, a tool-returned image
+			// reached the model only through this mirror.
 			var imageMirror provider.Message
 			// Use the unwrapping helper: openai-responses is wrapped in
 			// a renamedClient (openai-responses), so a
