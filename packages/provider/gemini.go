@@ -252,6 +252,11 @@ func (c *geminiClient) buildRequest(req Request) (*gemRequest, string, error) {
 	msgs := req.Messages
 	if functionsEnabled {
 		msgs = RepairOrphanedToolResults(req.Messages)
+		if geminiRequiresThoughtSignature(m.ID) {
+			// After the orphan repair, so a call and its result are already
+			// paired up and the flattening cannot create a new orphan.
+			msgs = geminiFlattenUnsignedToolCalls(msgs)
+		}
 	}
 	// Gemini enforces strict alternation: merge any same-role adjacency an
 	// edit/delete left behind. A card's seeded greeting is a leading assistant
@@ -461,6 +466,23 @@ func saveGeminiImageToWorkingDir(dir, mimeType string, data []byte) (string, err
 func convertGemToolResultParts(blocks []Content) []gemPart {
 	var parts []gemPart
 	for _, b := range blocks {
+		if tb, ok := b.(TextBlock); ok {
+			// A flattened tool result (see geminiFlattenUnsignedToolCalls).
+			// Nothing else puts text in a tool message, so this arm is
+			// reachable only through that path.
+			//
+			// The narration rides the SAME content as any functionResponse
+			// that survived beside it, so flattening changes block types and
+			// nothing else: same message count, same roles, same order. A
+			// separate message would have to be role user, which is what a
+			// tool message already becomes here, and then the merge and
+			// leading-turn passes would be reasoning about a shape the agent
+			// never produced.
+			if strings.TrimSpace(tb.Text) != "" {
+				parts = append(parts, gemPart{Text: tb.Text})
+			}
+			continue
+		}
 		tr, ok := b.(ToolResultBlock)
 		if !ok {
 			continue
@@ -522,7 +544,20 @@ func convertGemToolResultParts(blocks []Content) []gemPart {
 // An alias that names an OLDER generation explicitly still routes to the
 // budget knob; "latest" only ever moves forward, so an unnumbered alias is
 // treated as current.
-func geminiUsesThinkingLevel(id string) bool {
+func geminiUsesThinkingLevel(id string) bool { return geminiIsGeneration3(id) }
+
+// geminiRequiresThoughtSignature reports whether a model rejects a replayed
+// functionCall that arrives without its thoughtSignature.
+//
+// The same generation test as the thinking knob today, and a separate name on
+// purpose: "which thinking parameter does this take" and "does this reject an
+// unsigned call" are two questions about one model, and Google is free to
+// answer them differently. One shared predicate, two named callers, so the day
+// they diverge the change is a body rather than an archaeology exercise.
+func geminiRequiresThoughtSignature(id string) bool { return geminiIsGeneration3(id) }
+
+// geminiIsGeneration3 reports whether an id names the Gemini 3 generation.
+func geminiIsGeneration3(id string) bool {
 	if strings.Contains(id, "gemini-3") {
 		return true
 	}
@@ -535,6 +570,113 @@ func geminiUsesThinkingLevel(id string) bool {
 		return true
 	}
 	return false
+}
+
+// Tags marking a flattened call or result as transcript history rather than a
+// live one. The model reads these in a role it cannot tell apart from ordinary
+// content, so they have to say what they are — the same reason every other
+// block terva inserts on its own account carries a tag.
+const (
+	geminiFlattenedCallTag   = "[earlier tool call]"
+	geminiFlattenedResultTag = "[earlier tool result]"
+	geminiFlattenedErrorTag  = "[earlier tool error]"
+)
+
+// geminiFlattenUnsignedToolCalls rewrites function calls that carry no thought
+// signature — and the results answering them — into plain text, for the models
+// that reject an unsigned call.
+//
+// 🪤 A signature is the model's sealed reasoning and cannot be reconstructed,
+// so a call that arrives without one can NEVER be replayed as a functionCall
+// part: the API answers 400 "Function call is missing a thought_signature in
+// functionCall parts". That is not hypothetical. Agent.SetModel exists to swap
+// the model id inside a live session and keeps the transcript, so
+// gemini-2.5-pro → gemini-3.x after any tool loop walked into exactly the 400
+// this file's signature round-trip was written to prevent. History assembled by
+// another provider, or handed back by an SDK embedder, arrives the same way.
+//
+// Flattened to text rather than dropped. Dropping is what the !functionsEnabled
+// path does and it is the wrong trade here: the model would see a turn where it
+// said nothing, having in fact read a file. The text keeps the narrative and
+// gives up only the structured form, which was unusable on this model anyway.
+//
+// Inert on the ordinary path — a Gemini 3 session's own calls carry their
+// signatures, nothing matches, and the messages are returned untouched.
+func geminiFlattenUnsignedToolCalls(msgs []Message) []Message {
+	unsigned := make(map[string]bool)
+	for _, m := range msgs {
+		if m.Role != RoleAssistant {
+			continue
+		}
+		for _, b := range m.Content {
+			if tc, ok := b.(ToolCallBlock); ok && tc.Signature == "" {
+				unsigned[tc.ID] = true
+			}
+		}
+	}
+	if len(unsigned) == 0 {
+		return msgs
+	}
+	out := make([]Message, 0, len(msgs))
+	for _, m := range msgs {
+		switch m.Role {
+		case RoleAssistant:
+			m.Content = geminiFlattenCalls(m.Content, unsigned)
+		case RoleTool:
+			m.Content = geminiFlattenResults(m.Content, unsigned)
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// geminiFlattenCalls replaces each unsigned ToolCallBlock with its text form.
+// Builds a new slice: the caller's messages belong to the agent, not to this
+// request.
+func geminiFlattenCalls(blocks []Content, unsigned map[string]bool) []Content {
+	out := make([]Content, 0, len(blocks))
+	for _, b := range blocks {
+		tc, ok := b.(ToolCallBlock)
+		if !ok || !unsigned[tc.ID] {
+			out = append(out, b)
+			continue
+		}
+		args := strings.TrimSpace(string(tc.Arguments))
+		if args == "" || !json.Valid(tc.Arguments) {
+			args = "{}"
+		}
+		out = append(out, TextBlock{Text: geminiFlattenedCallTag + " " + tc.Name + " " + args})
+	}
+	return out
+}
+
+// geminiFlattenResults replaces the result answering an unsigned call with its
+// text form. A functionResponse whose functionCall is gone is an orphan, and
+// the API rejects those too.
+func geminiFlattenResults(blocks []Content, unsigned map[string]bool) []Content {
+	out := make([]Content, 0, len(blocks))
+	for _, b := range blocks {
+		tr, ok := b.(ToolResultBlock)
+		if !ok || !unsigned[tr.CallID] {
+			out = append(out, b)
+			continue
+		}
+		var sb strings.Builder
+		for _, c := range tr.Content {
+			if tb, ok := c.(TextBlock); ok {
+				if sb.Len() > 0 {
+					sb.WriteString("\n")
+				}
+				sb.WriteString(tb.Text)
+			}
+		}
+		tag := geminiFlattenedResultTag
+		if tr.IsError {
+			tag = geminiFlattenedErrorTag
+		}
+		out = append(out, TextBlock{Text: tag + " " + sb.String()})
+	}
+	return out
 }
 
 // geminiThinkingConfig maps terva's reasoning level ("low"/"medium"/"high")
