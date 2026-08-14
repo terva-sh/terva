@@ -264,14 +264,33 @@ func TestRefusedDispatchDoesNotDrainTheWholeQueue(t *testing.T) {
 	s.agent.QueueMessage("first follow-up")
 	s.agent.QueueMessage("second follow-up")
 
-	// A racing dispatch that the agent will refuse.
+	// A racing dispatch the compaction turns away — either queue() sees
+	// s.compacting and never dispatches, or it loses the race and the agent
+	// refuses with ErrBusy. Both are "turned away"; neither reaches a provider.
 	if err := s.prompt("racer", nil, core.UserMessageExtras{}); err != nil {
 		t.Fatalf("prompt claimed no slot: %v", err)
 	}
+	// A settle window, because the assertion below is a NEGATIVE — that nothing
+	// drained the queue — and there is no positive edge to wait for.
 	time.Sleep(200 * time.Millisecond)
 
+	// Assert the PREMISE before the conclusion. blockingCompactClient answers
+	// every call after the first with a complete turn, so a racer that reached
+	// the provider runs a real turn and legitimately shifts the queue behind it.
+	// That is a different failure from the one this test exists to catch, and
+	// without this check it reported as "a refused dispatch drained the queue" —
+	// sending the next reader to the drop rule in endTurn, which would be
+	// working correctly. A test whose setup silently stopped holding does not
+	// get to name the cause of its own failure.
+	if calls := atomic.LoadInt32(&cl.calls); calls != 1 {
+		t.Fatalf("the racer reached the provider: client calls = %d, want 1 (the compaction's own). "+
+			"It was served, not turned away, so this run says nothing about the drop rule", calls)
+	}
+
 	if got := s.agent.QueuedMessageCount(); got < 2 {
-		t.Fatalf("queued messages after a refused dispatch = %d, want the 2 follow-ups intact", got)
+		t.Fatalf("queued messages after a refused dispatch = %d, want the 2 follow-ups intact "+
+			"(client calls = %d, so the racer was correctly turned away and the queue was drained anyway)",
+			got, atomic.LoadInt32(&cl.calls))
 	}
 
 	close(cl.release)
