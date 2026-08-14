@@ -11,6 +11,17 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.131.6](https://github.com/terva-sh/terva/releases/tag/v0.131.6) — 2026-08-08
+
+### Features
+
+- cards,web: the shelf opens on what you were last working on
+- cli: terva ctl sends one control-plane verb, and can look before it reads
+- handoff: a handoff parks the board it is leaving behind
+- worlds: a World can set the default model its characters inherit
+- worlds: a World gets a studio, and a doctor that reads the scenes played in it
+- worlds,web: a card says which World made it, and portraits can be turned off
+
 ## [v0.131.5](https://github.com/terva-sh/terva/releases/tag/v0.131.5) — 2026-08-05
 
 ### Features
