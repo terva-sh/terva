@@ -431,6 +431,39 @@ func convertGemToolResultParts(blocks []Content) []gemPart {
 	return parts
 }
 
+// geminiUsesThinkingLevel reports whether a model takes Gemini 3's enum
+// `thinkingLevel` knob rather than the 2.5 family's token `thinkingBudget`.
+//
+// 🪤 A plain `strings.Contains(id, "gemini-3")` test is not enough, because
+// Google's rolling aliases name no generation at all. "gemini-flash-latest"
+// and "gemini-flash-lite-latest" missed that test, fell through the 2.5
+// switch to its `default: return nil`, and terva sent them NO thinkingConfig
+// whatsoever — so `--reasoning` was a silent no-op on two catalogued models
+// that advertise Reasoning: true. Nothing failed and nothing was logged; the
+// thinking simply never happened. Measured live 2026-08-14 on
+// gemini-flash-latest: no config → 107 thought tokens (the model's own
+// default), thinkingLevel LOW → 134, HIGH → 345. On gemini-flash-lite-latest
+// the default was 0 thought tokens and HIGH produced 407, so the knob is the
+// only thing that turns thinking on there at all.
+//
+// An alias that names an OLDER generation explicitly still routes to the
+// budget knob; "latest" only ever moves forward, so an unnumbered alias is
+// treated as current.
+func geminiUsesThinkingLevel(id string) bool {
+	if strings.Contains(id, "gemini-3") {
+		return true
+	}
+	if strings.HasPrefix(id, "gemini-") && strings.HasSuffix(id, "-latest") {
+		for _, older := range []string{"1.0", "1.5", "2.0", "2.5"} {
+			if strings.Contains(id, older) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 // geminiThinkingConfig maps terva's reasoning level ("low"/"medium"/"high")
 // to Gemini's thinkingConfig. The right knob depends on the model
 // generation: 2.5 family uses thinkingBudget (tokens), 3.x uses
@@ -440,7 +473,7 @@ func geminiThinkingConfig(modelID, level string) *gemThinkingConfig {
 	id := strings.ToLower(modelID)
 
 	// Gemini 3.x: enum-based thinkingLevel. Pro can't go below LOW.
-	if strings.Contains(id, "gemini-3") {
+	if geminiUsesThinkingLevel(id) {
 		isPro := strings.Contains(id, "-pro")
 		var lvl string
 		switch level {

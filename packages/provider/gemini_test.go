@@ -307,6 +307,21 @@ func TestGeminiThinkingConfig(t *testing.T) {
 		{"gemini-2.5-flash", "minimum", "", 1024},
 		{"gemini-2.5-flash", "low", "", 2048},
 		{"gemini-2.0-flash", "high", "", 0}, // 2.0 has no thinking → nil
+
+		// Google's rolling aliases name no generation, so a
+		// Contains(id, "gemini-3") test missed them and they fell through
+		// the 2.5 switch to nil — terva sent NO thinkingConfig and
+		// --reasoning was a silent no-op on two catalogued models that
+		// advertise Reasoning: true. Measured live 2026-08-14:
+		// gemini-flash-latest ran 107 thought tokens with no config, 134 at
+		// LOW and 345 at HIGH; gemini-flash-lite-latest ran 0 by default and
+		// 407 at HIGH, so the knob is what enables thinking there at all.
+		{"gemini-flash-latest", "low", "LOW", 0},
+		{"gemini-flash-latest", "medium", "MEDIUM", 0},
+		{"gemini-flash-latest", "high", "HIGH", 0},
+		{"gemini-flash-lite-latest", "medium", "MEDIUM", 0},
+		// An alias that names an older generation keeps the budget knob.
+		{"gemini-2.5-flash-latest", "low", "", 2048},
 	}
 	for _, tc := range cases {
 		got := geminiThinkingConfig(tc.modelID, tc.level)
