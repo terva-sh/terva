@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -27,6 +28,35 @@ import (
 // implemented in terva).
 
 const geminiDefaultBaseURL = "https://generativelanguage.googleapis.com"
+
+// geminiVersionSuffix matches an API version segment already present at the end
+// of a base URL: "/v1", "/v1beta", "/v1alpha", "/v1beta2".
+var geminiVersionSuffix = regexp.MustCompile(`/v\d+(alpha|beta)?\d*$`)
+
+// geminiAPIURL joins a base URL with a version-relative path such as
+// "models/gemini-3.5-flash:streamGenerateContent". A base that already carries
+// a version segment is used as-is; a bare host gets the default "/v1beta".
+//
+// 🪤 This is not defensive tidying. Every `google` row in the built-in catalog
+// carries a BaseURL ending in "/v1beta", and that value reaches this client, so
+// appending the prefix unconditionally produced "/v1beta/v1beta/models/..." and
+// EVERY catalogued Gemini model 404'd before it ever reached Google. The failure
+// is near-invisible from the outside: that path answers 404 with an EMPTY body,
+// so terva printed a bare "http 404:" with nothing after the colon, while a
+// genuine upstream 404 always carries a JSON error object. Measured 2026-08-14
+// on one key and model: the correct path returned 200, the doubled path 404.
+// Google's own docs quote the versioned URL, so a user pasting it into
+// --base-url walked into the same wall.
+func geminiAPIURL(baseURL, relPath string) string {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if base == "" {
+		base = geminiDefaultBaseURL
+	}
+	if geminiVersionSuffix.MatchString(base) {
+		return base + "/" + relPath
+	}
+	return base + "/v1beta/" + relPath
+}
 
 // geminiClient implements Client against the Gemini Generative Language API.
 type geminiClient struct {
@@ -476,8 +506,7 @@ func (c *geminiClient) Stream(ctx context.Context, req Request) (<-chan Event, e
 	// an EventSource-compatible response. Without alt=sse the
 	// server returns a JSON array (one element per chunk), which
 	// we'd need a different parser for.
-	apiPath := fmt.Sprintf("/v1beta/models/%s:streamGenerateContent", modelID)
-	url := c.baseURL + apiPath + "?alt=sse"
+	url := geminiAPIURL(c.baseURL, fmt.Sprintf("models/%s:streamGenerateContent", modelID)) + "?alt=sse"
 
 	newReq := func() (*http.Request, error) {
 		httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))

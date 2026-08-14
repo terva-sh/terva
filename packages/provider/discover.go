@@ -123,7 +123,10 @@ func DiscoverGoogle(ctx context.Context, apiKey, baseURL string) ([]Model, error
 	var out []Model
 	pageToken := ""
 	for {
-		url := strings.TrimRight(baseURL, "/") + "/v1beta/models?pageSize=200"
+		// Shares geminiAPIURL with the streaming client so a base URL that
+		// already names its version (as every catalog row does) cannot double
+		// the prefix here either.
+		url := geminiAPIURL(baseURL, "models?pageSize=200")
 		if pageToken != "" {
 			url += "&pageToken=" + pageToken
 		}
