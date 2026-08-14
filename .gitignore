@@ -60,6 +60,12 @@ go.work.sum
 
 bin/
 dist/
+# Staging area for package manifests a release signs before uploading.
+# Signing embeds the signature INTO the manifest, so the release copies
+# the sources here and signs the copies — signing them in place would
+# dirty the tree and trip goreleaser's dirty-state check. Not dist/,
+# which `--clean` wipes at the start of the run.
+.fpkg-stage/
 # ...but the web control panel's built client IS committed: it is embedded into
 # the terva_web binary via go:embed, so a plain `go build -tags terva_web` (and
 # CI / the release) needs no Node.js. Re-include it despite the blanket dist/.

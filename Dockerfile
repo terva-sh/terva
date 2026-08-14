@@ -4,8 +4,11 @@
 # block in .goreleaser.yaml): the build context is a temp dir holding
 # the prebuilt linux binaries per platform ($TARGETPLATFORM/terva), so
 # this is NOT a standalone `docker build .` — to build the image
-# locally, run `goreleaser release --snapshot --clean --skip=publish`
-# and pick the snapshot tag it prints.
+# locally, run `goreleaser release --snapshot --clean --skip=publish,sign`
+# and pick the snapshot tag it prints. (`--skip=sign` because a snapshot
+# has no signing key: goreleaser runs the sign pipe under --snapshot too,
+# so a config carrying a `signs:` block fails without it. Harmless where
+# there is none.)
 #
 # alpine over distroless on purpose: terva is a coding agent, and its
 # bash tool wants a real shell with the usual companions (git, curl) —

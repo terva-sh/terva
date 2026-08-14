@@ -234,9 +234,15 @@ goreleaser-check:
     goreleaser check
 
 # Full local snapshot release into dist/ (all targets, archives, checksums; no publish).
+#
+# --skip=sign is REQUIRED, not tidiness. goreleaser runs the sign pipe
+# under --snapshot too (it is NOT snapshot-skipped), and a snapshot has no
+# signing key, so a config carrying a `signs:` block dies here with "could
+# not sign artifact". Harmless where there is none. Only a tag-triggered
+# release, which puts the key in place first, signs for real.
 release-snapshot:
     @command -v goreleaser >/dev/null 2>&1 || { echo "installing goreleaser..."; go install github.com/goreleaser/goreleaser/v2@latest; }
-    goreleaser release --snapshot --clean
+    goreleaser release --snapshot --clean --skip=sign
 
 # Run the full test suite with the race detector. Extra args pass through: `just test -run TestFoo`.
 test *ARGS:
