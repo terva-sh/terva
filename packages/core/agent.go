@@ -29,6 +29,25 @@ import (
 // append, corrupting the transcript.
 var ErrBusy = errors.New("agent is busy")
 
+// ErrUserInterrupted is the cancellation CAUSE a host sets when a person
+// deliberately stopped the turn — Esc, /stop, a client's cancel verb — as
+// opposed to the turn dying with the process. Hosts pass it to
+// context.CancelCauseFunc; core reads it with context.Cause.
+//
+// It exists because a cancel is not one thing, and the difference decides
+// whether a prompt is withdrawn (docs/proposals/withdraw-cancelled-prompt.md).
+// A person who stops their own turn before the model answered is saying they did
+// not mean to send it. A restart drain, a deadline, or a dying parent context is
+// saying nothing at all on the user's behalf, and silently deleting what they
+// typed would be terva discarding input nobody asked it to discard — worst of
+// all on a provider failure, which is exactly when they want it back.
+//
+// Requiring the cause makes that an opt-in a host states rather than a default
+// core infers: a host that never sets it never withdraws, which is right for
+// --print, rpc and a swarm child, none of which have a composer to return
+// anything to.
+var ErrUserInterrupted = errors.New("turn interrupted by the user")
+
 // Agent is a stateful conversation bound to a provider client, a model,
 // and a set of tools.
 type Agent struct {
@@ -255,6 +274,14 @@ type Agent struct {
 	// tail last recorded, so a tail row is written when the composition CHANGES
 	// and not once per request. Guarded by mu; see recordTail.
 	tailFP string
+	// pendingShell/deliveredShell carry a "!" shell escape's result into the
+	// user's next request, at most once, and shellResultOn gates the whole
+	// feature (engine feature shell_result_context, shipped OFF). Guarded by mu;
+	// see shell_result.go for why the delivered copy is kept rather than dropped
+	// on the spot.
+	shellResultOn  bool
+	pendingShell   string
+	deliveredShell string
 	// lastLadder is the digest ladder of the last dispatched prefix, so the next
 	// dispatch can locate where it diverged. Guarded by mu; see prefixwatch.go.
 	// prefixDivRecording gates the comparison (engine feature
@@ -1620,14 +1647,84 @@ func (a *Agent) PromptExtra(ctx context.Context, text string, images []provider.
 		user.Meta = withMeta(user.Meta, MetaPreamble, "true")
 	}
 
+	// Anything a PREVIOUS prompt delivered is now genuinely spent: this one is
+	// the next request, so no withdrawal from here on can be talking about it.
+	// Without this the delivered slot outlives its turn and a withdrawal three
+	// prompts later would re-arm a shell result the model read long ago.
+	a.forgetDeliveredShell()
+
 	a.mu.Lock()
 	a.messages = append(a.messages, user)
 	a.rev++
+	revAfterUser := a.rev
 	a.mu.Unlock()
 	a.fireMessageAppended(user)
 	sink(EvUserMessage{Message: user})
 
-	return a.runLoop(ctx, sink)
+	err := a.runLoop(ctx, sink)
+
+	// A PERSON stopped the turn and nothing at all was recorded after the
+	// prompt: take it back out and hand the text to the host, which decides
+	// whether it has a composer to return it to. See
+	// docs/proposals/withdraw-cancelled-prompt.md.
+	//
+	// The cause, not ctx.Err(), is the test — see ErrUserInterrupted. Every
+	// cancel would be the wrong rule twice over: a restart drain would delete
+	// what the user typed on its way past, and a host that survives its own
+	// drain (Workspace.Restart does, when relaunch refuses after it) would be
+	// left with the message gone from memory and still on disk.
+	//
+	// It is also why this cannot key off err. runLoop returns ctx.Err() from
+	// most cancel paths but nil from the terminal-stop one, so a cancel landing
+	// exactly on a turn boundary comes back clean — an error check would miss
+	// precisely the fastest Esc.
+	//
+	// Index is reported rather than left to be inferred. It is len(messages)
+	// after the removal by construction, but a host that re-derived "it was the
+	// last one" would delete the wrong durable row the day this rule changes,
+	// and silently.
+	if errors.Is(context.Cause(ctx), ErrUserInterrupted) {
+		if idx, ok := a.withdrawLastUserMessage(revAfterUser); ok {
+			// The prompt goes back to the composer, so anything it consumed on
+			// the way out has to go back too. A shell result is the only such
+			// thing today: taking back a mistyped question would otherwise cost
+			// the user the `!git status` they ran to ask it about.
+			a.restoreShellResult()
+			sink(EvUserMessageWithdrawn{Text: text, Images: images, Index: idx})
+		}
+	}
+	return err
+}
+
+// withdrawLastUserMessage drops the trailing message if and only if rev is
+// still what it was when that message was appended — proof that nothing has
+// touched the transcript since. Reports whether it removed anything.
+//
+// rev is the right test and a length compare is not: len(a.messages) can return
+// to its old value after a compaction or a SetMessages, so equal length does not
+// mean untouched, while rev is monotonic over every transcript mutation and
+// cannot coincide. It moves for an appended assistant message, a tool result, a
+// queued prompt, a compaction — every way this could stop being the last message
+// — and, deliberately, not for editor typing (it is also the TUI's redraw cache
+// key).
+//
+// The check and the removal share ONE lock acquisition on purpose. Split into
+// check-then-delete, a queued prompt could be appended between them and the
+// delete would take the wrong message off the end.
+func (a *Agent) withdrawLastUserMessage(revAfterAppend uint64) (int, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.rev != revAfterAppend || len(a.messages) == 0 {
+		return 0, false
+	}
+	idx := len(a.messages) - 1
+	a.messages = a.messages[:idx]
+	// Same bookkeeping DeleteMessage does, and for the same reason: rev because
+	// the transcript changed, transcriptEpoch because it SHRANK — a consumer
+	// holding an index into it must know its indices moved.
+	a.rev++
+	a.transcriptEpoch++
+	return idx, true
 }
 
 // Continue runs the agent loop against the existing transcript. Used
@@ -2677,6 +2774,12 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 	// the whole tail, counts as "not delivered" instead of silently spending
 	// the interval.
 	a.commitContextPressure(tailHas(tail, TailPressure))
+
+	// The shell result has now been shown once, which is all it gets. Gated on
+	// what the tail CARRIED for the capability note's reason: a continue turn
+	// suppresses the whole tail, and spending the result there would burn it on
+	// a request the model never saw it in.
+	a.commitShellResult(tailHas(tail, TailShellResult))
 
 	// Record what the model was shown, if it differs from last time. The tail is
 	// otherwise unauditable — composed per request and discarded — which left a

@@ -132,7 +132,7 @@ func TestSessionInfoReportsLiveAndBusy(t *testing.T) {
 		t.Fatalf("idle live session: want Live && !Busy, got Live=%v Busy=%v", info.Live, info.Busy)
 	}
 
-	_, s.turnCancel = context.WithCancel(context.Background())
+	_, s.turnCancel = context.WithCancelCause(context.Background())
 	if info := s.info(); !info.Busy {
 		t.Error("a session with an in-flight turn must report Busy")
 	}

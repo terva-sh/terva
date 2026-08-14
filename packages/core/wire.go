@@ -471,6 +471,17 @@ func eventToWire(ev AgentEvent, imageData bool) WireEvent {
 		// surface (web, --json).
 		out.Text = e.Reason
 		out.Rejected = e.Text
+	case EvUserMessageWithdrawn:
+		// The withdrawn prompt itself, in full, on Text. Unlike a rejection
+		// there is no second string to carry — nobody supplied a reason, the
+		// user simply cancelled — so the prompt takes the plain field rather
+		// than borrowing Rejected, which would report a withdrawal as something
+		// that had been refused.
+		//
+		// Images are deliberately absent: raw bytes do not ride this wire, and a
+		// remote client that restored text while silently dropping attachments
+		// would be worse than one that knows it only has the text.
+		out.Text = e.Text
 	case EvTurnEnd:
 		out.Stop = string(e.Stop)
 		if e.Err != nil {

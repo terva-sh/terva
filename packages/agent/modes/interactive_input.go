@@ -52,6 +52,11 @@ func (i *Interactive) clearFileSuggestQuery() {
 }
 
 func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
+	// Every key, before any branch can consume it: the idle window is about
+	// whether the user is AT the keyboard, so a keystroke that turns out to be
+	// a no-op still counts as presence.
+	i.noteUserActivity()
+
 	// Re-evaluate the draft-stash nudge on the way out of every key,
 	// whichever branch consumed it — the arming condition (a bit of
 	// draft typed while a turn is in flight) and the disarming ones
@@ -240,6 +245,12 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 		// the text attach their image, deleted markers drop theirs. Only
 		// rewrites the text when something was actually pasted.
 		var clipImages []provider.ImageBlock
+		// Snapshot what the user is actually looking at before any of it is
+		// consumed: SubmitValue expanded the paste placeholders, the reconcile
+		// below empties the pending images, and Clear takes the rest. A prompt
+		// withdrawn a moment from now is restored from THIS, not from the
+		// expanded string on the wire (see withdrawableDraft).
+		preSubmitEd, preSubmitImages := i.ed.State(), i.clipboardImages
 		if len(i.clipboardImages) > 0 {
 			text, clipImages = preparePromptWithClipboardImages(text, i.clipboardImages)
 			i.clipboardImages = nil
@@ -305,6 +316,9 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 			return false
 		}
 		i.recordInput(text, true)
+		// Armed only here, past the slash-command and shell-escape returns:
+		// those never become a prompt, so nothing about them can be withdrawn.
+		i.armWithdrawableDraft(preSubmitEd, preSubmitImages, text)
 		// The chat mirror lives daemon-side: Workspace.Prompt echoes a
 		// client-originated prompt into the paired chat, so every client
 		// mirrors, not just this keyboard.

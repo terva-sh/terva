@@ -579,7 +579,7 @@ func (h *chatWsHost) SubmitOrQueue(text string, images []provider.ImageBlock) {
 
 func (h *chatWsHost) CancelTurn() {
 	if s := h.bound(); s != nil {
-		s.cancelTurn()
+		s.interruptTurn()
 	}
 }
 

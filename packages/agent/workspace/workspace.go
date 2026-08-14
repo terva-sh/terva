@@ -1037,7 +1037,7 @@ func (w *Workspace) SetQueue(ctx context.Context, sess string, texts []string) e
 
 func (w *Workspace) Cancel(ctx context.Context, sess string) error {
 	if s := w.live(sess); s != nil {
-		s.cancelTurn()
+		s.interruptTurn()
 	}
 	return nil
 }

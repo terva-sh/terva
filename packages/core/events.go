@@ -58,6 +58,40 @@ type EvUserMessageRejected struct {
 
 func (EvUserMessageRejected) Type() string { return "user_message_rejected" }
 
+// EvUserMessageWithdrawn fires when a prompt is taken back OUT of the
+// transcript because its turn was cancelled before anything at all was
+// recorded — the message sent by accident, caught before the model answered.
+// The message is gone from the transcript by the time this arrives.
+//
+// It is the late twin of EvUserMessageRejected. That one fires when a guard
+// refuses a prompt before it is recorded; this one fires when the user refuses
+// it after. Both end with a prompt that never reached the model and is not in
+// the transcript, and both hand the text back so a surface can restore it to
+// its composer rather than making the user retype it.
+//
+// Text is the prompt as it was RECORDED, so a BeforeUserMessage replacement is
+// what comes back — the guard rewrote it deliberately, and returning the
+// pre-guard text would quietly undo that. A host preamble is never included:
+// those are the host's words, not the user's, and nothing should offer to put
+// them in a composer.
+//
+// Images ride in-process only. Raw bytes do not cross the event wire (see
+// WireEvent), so a remote surface can restore the text and must say that the
+// attachments went.
+type EvUserMessageWithdrawn struct {
+	Text   string
+	Images []provider.ImageBlock
+
+	// Index is where the message was in the transcript, so a host persisting
+	// the removal names the same row core dropped instead of re-deriving it.
+	// Today that is always the last index, and a host that assumed so would be
+	// right — until the rule changes, at which point it would delete the wrong
+	// durable row and say nothing.
+	Index int
+}
+
+func (EvUserMessageWithdrawn) Type() string { return "user_message_withdrawn" }
+
 type EvAssistantStart struct{}
 
 func (EvAssistantStart) Type() string { return "assistant_start" }

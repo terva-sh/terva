@@ -98,7 +98,7 @@ type wsSession struct {
 	// the model it was switched to.
 	reasoning  string
 	turnCtx    context.Context
-	turnCancel context.CancelFunc                     // non-nil while a turn runs
+	turnCancel context.CancelCauseFunc                // non-nil while a turn runs; the cause says who stopped it
 	compacting bool                                   // true while compact() holds the agent; the session's SECOND busy state (see compact)
 	permPark   core.ParkTable[core.ConfirmDecision]   // parked webConfirmer/workerConfirmer waits
 	askPark    core.ParkTable[[]core.UserAnswer]      // parked webAsker waits (one answer per question)
@@ -486,7 +486,7 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 		Cause: "swarm-hold",
 		Fire: func(provider.StopReason) (string, bool) {
 			if s.swarmGuardHold() {
-				return swarmWaitGateMessage, true
+				return swarmWaitGateMessage(), true
 			}
 			return "", false
 		},
@@ -508,6 +508,15 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 		s.broadcast(ctrlproto.ConversationEvent(core.EventToWireFull(ev)))
 	})
 	ag.AddEventObserver(wsObserve)
+	// A withdrawn prompt has to leave the FILE too, or it comes back on the next
+	// reload. Registered after the broadcast above so clients see the withdrawal
+	// event before the snapshot that reflects it, and before the extension
+	// fan-out so the durable record is settled by the time anything can react.
+	ag.AddEventObserver(func(ev core.AgentEvent) {
+		if w, ok := ev.(core.EvUserMessageWithdrawn); ok {
+			s.persistWithdrawal(w.Index)
+		}
+	})
 	ag.AddEventObserver(func(ev core.AgentEvent) { build.FanoutAgentEvent(extMgr, ev) })
 	ag.AddEventObserver(func(ev core.AgentEvent) { build.ObserveAgentEventForHooks(hookEng, ev) })
 	// The queue is mirrored, not tracked, so every mutation has to announce
@@ -893,7 +902,9 @@ func (s *wsSession) beginTurn() (context.Context, error) {
 	if s.turnCancel != nil {
 		return nil, ctrlproto.ErrBusy
 	}
-	turnCtx, cancel := context.WithCancel(s.ws.ctx)
+	// WithCancelCause, so a cancel can say WHY: core withdraws a not-yet-answered
+	// prompt only for core.ErrUserInterrupted. See cancelTurn / interruptTurn.
+	turnCtx, cancel := context.WithCancelCause(s.ws.ctx)
 	s.turnCtx, s.turnCancel = turnCtx, cancel
 	return turnCtx, nil
 }
@@ -1607,6 +1618,31 @@ func (s *wsSession) deleteMessage(epoch uint64, index int) error {
 	return nil
 }
 
+// persistWithdrawal is deleteMessage's automatic twin: core has already taken a
+// cancelled-before-it-was-answered prompt out of the live transcript
+// (core.EvUserMessageWithdrawn), and this makes the durable record agree.
+// Without it the message returns the moment the session is reloaded, which is
+// the in-memory/file-replay split this codebase has been bitten by before.
+//
+// Deliberately NOT routed through deleteMessage: that is the client verb, and
+// its reviseGuard refuses while a turn is running. This fires from inside the
+// sink of the turn that is still unwinding, which that guard would reject —
+// correctly, for a client, and wrongly here. There is no epoch to check either;
+// the caller is core, which just performed the removal it is reporting.
+//
+// Errors are best-effort in the same way the amend writes around them are: a
+// failed amend leaves the prompt on disk, which is the pre-feature behaviour and
+// not a reason to fail a turn that is already over.
+func (s *wsSession) persistWithdrawal(index int) {
+	disk, ok := s.diskIndex(index)
+	if !ok {
+		return
+	}
+	_ = s.sess.AppendAmend(core.AmendDelete, disk, nil, "withdrawn")
+	s.clearTail()
+	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
+}
+
 // tailVariants holds the current tail span's swipe state in memory — the span's
 // start index in the effective transcript, its alternative takes (creation
 // order), and which take is currently live. The takes are materialized here for
@@ -2253,13 +2289,27 @@ func (s *wsSession) broadcastQueue() {
 	s.broadcast(ctrlproto.QueueUpdatedEvent(s.agent.PendingQueuedMessages()))
 }
 
-// cancelTurn interrupts the active turn, if any.
-func (s *wsSession) cancelTurn() {
+// cancelTurn stops the active turn, if any, WITHOUT claiming a person asked for
+// it — the restart drain, where the turn is collateral. Use interruptTurn for a
+// cancel a user actually performed.
+//
+// The distinction is not decoration: it decides whether a prompt cancelled
+// before the model answered is withdrawn from the transcript
+// (core.ErrUserInterrupted, docs/proposals/withdraw-cancelled-prompt.md). A
+// drain that spoke for the user would delete what they typed on its way past,
+// and Restart can survive its own drain when relaunch refuses after it.
+func (s *wsSession) cancelTurn() { s.cancelTurnCause(nil) }
+
+// interruptTurn stops the active turn because a PERSON asked — Esc, /stop, a
+// client's cancel verb, the chat bridge's stop command.
+func (s *wsSession) interruptTurn() { s.cancelTurnCause(core.ErrUserInterrupted) }
+
+func (s *wsSession) cancelTurnCause(cause error) {
 	s.mu.Lock()
 	c := s.turnCancel
 	s.mu.Unlock()
 	if c != nil {
-		c()
+		c(cause)
 	}
 }
 
@@ -2514,12 +2564,9 @@ func (s *wsSession) close() {
 	s.sidechatMu.Lock()
 	s.sidechats = nil
 	s.sidechatMu.Unlock()
-	s.mu.Lock()
-	c := s.turnCancel
-	s.mu.Unlock()
-	if c != nil {
-		c()
-	}
+	// Teardown, not an interrupt: the session itself is going away, so this
+	// speaks for the host and not for the user (see cancelTurn).
+	s.cancelTurn()
 	if s.stopExt != nil {
 		s.stopExt()
 	}

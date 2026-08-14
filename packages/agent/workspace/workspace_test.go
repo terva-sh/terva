@@ -1374,7 +1374,7 @@ func TestWorkspaceRestartRefusalIsNonDestructive(t *testing.T) {
 	w := &Workspace{sessions: map[string]*wsSession{}}
 	s := &wsSession{}
 	cancelled := false
-	s.turnCancel = func() { cancelled = true }
+	s.turnCancel = func(error) { cancelled = true }
 	w.sessions["s1"] = s
 
 	if err := w.Restart(context.Background()); err == nil {
@@ -1397,7 +1397,7 @@ func TestCancelAndDrainTurnsWaitsForIdle(t *testing.T) {
 	s := &wsSession{}
 	// Cancelling schedules the turn to reach endTurn (clear turnCancel) shortly
 	// after, modeling a real turn unwinding and persisting.
-	s.turnCancel = func() {
+	s.turnCancel = func(error) {
 		go func() {
 			time.Sleep(20 * time.Millisecond)
 			s.mu.Lock()
@@ -1423,7 +1423,7 @@ func TestCancelAndDrainTurnsBounded(t *testing.T) {
 	w := &Workspace{sessions: map[string]*wsSession{}}
 	cancelled := false
 	s := &wsSession{}
-	s.turnCancel = func() { cancelled = true } // never clears turnCancel: stays busy
+	s.turnCancel = func(error) { cancelled = true } // never clears turnCancel: stays busy
 	w.sessions["s1"] = s
 
 	start := time.Now()
@@ -1457,7 +1457,7 @@ func TestWorkspaceCompact(t *testing.T) {
 
 	// A running turn blocks compaction.
 	s.mu.Lock()
-	s.turnCancel = func() {}
+	s.turnCancel = func(error) {}
 	s.mu.Unlock()
 	if err := s.compact(context.Background()); !errors.Is(err, ctrlproto.ErrBusy) {
 		t.Fatalf("compact while busy should be ErrBusy, got %v", err)
@@ -1945,7 +1945,7 @@ func TestWorkspaceClear(t *testing.T) {
 
 	// A running turn blocks it.
 	s.mu.Lock()
-	s.turnCancel = func() {}
+	s.turnCancel = func(error) {}
 	s.mu.Unlock()
 	if err := s.clear(); !errors.Is(err, ctrlproto.ErrBusy) {
 		t.Fatalf("clear while busy should be ErrBusy, got %v", err)

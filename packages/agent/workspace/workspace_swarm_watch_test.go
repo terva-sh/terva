@@ -95,7 +95,7 @@ func TestSwarmWatcherFinalisesOnTerminalCrash(t *testing.T) {
 		agent: core.NewAgent(nil, "fake-model", "", core.Registry{}),
 		hub:   &wsHub{},
 	}
-	s.turnCancel = func() {}
+	s.turnCancel = func(error) {}
 
 	a, err := f.Spawn(context.Background(), "crash task")
 	if err != nil {
@@ -158,7 +158,7 @@ func TestCarrierRecapFlowsToSessionQueue(t *testing.T) {
 	}
 	// A live turnCancel makes s.queue take the QueueMessage branch (queue
 	// onto the running turn) instead of starting a real prompt.
-	s.turnCancel = func() {}
+	s.turnCancel = func(error) {}
 
 	a1, err := f.Spawn(context.Background(), "review the QA surface")
 	if err != nil {
@@ -265,7 +265,7 @@ func TestRecapNamesATurnErrorFailure(t *testing.T) {
 		agent: core.NewAgent(nil, "fake-model", "", core.Registry{}),
 		hub:   &wsHub{},
 	}
-	s.turnCancel = func() {}
+	s.turnCancel = func(error) {}
 
 	// A live daemon that produced nothing, whose turn carried the error.
 	s.flushSwarmSummary([]*swarmWatchEntry{{
