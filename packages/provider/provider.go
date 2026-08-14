@@ -534,6 +534,21 @@ type Request struct {
 	// (OpenAI-compatible backends may reject unknown parameters).
 	PromptCacheKey string
 
+	// WorkingDir is the directory a provider writes generated files into.
+	//
+	// It exists because Gemini returns a generated image as inline base64 in
+	// the response body, and the client saves it to disk so the assistant
+	// message can carry a path. That save used to join against "." — the
+	// PROCESS working directory, which terva never changes (see
+	// packages/relaunch: --cwd moves the AGENT's workspace, not the process).
+	// So a session started from one directory against a workspace in another
+	// dropped its images wherever the binary happened to be launched.
+	//
+	// Empty preserves that old behavior (the process cwd), which keeps every
+	// caller that does not set it — tests, embedders, one-shot helper
+	// requests — working exactly as before.
+	WorkingDir string
+
 	// ImageOutput, when non-nil, enables native (in-protocol) image output
 	// for this request: the model may draw images inline in its own turn via
 	// the provider's built-in image tool (OpenAI Responses image_generation),

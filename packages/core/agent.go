@@ -209,12 +209,15 @@ type Agent struct {
 	// common case, not the edge one.
 	ReadOnly *ReadOnlySet
 
-	// CWD is the directory the bash tool runs commands in. Compaction is its only
-	// reader, and only to recognize a `cd` that went nowhere (see ledgerArgs);
-	// nothing here dispatches or resolves a path against it. It must be the SAME
-	// value BashTool.CWD gets — a stale or unset one under-elides, which costs
-	// ledger characters, while a wrong one would elide a `cd` that did move the
-	// command and misreport where the work happened.
+	// CWD is the directory the bash tool runs commands in. Two readers:
+	// compaction, to recognize a `cd` that went nowhere (see ledgerArgs), and
+	// the provider request below, which passes it as Request.WorkingDir so a
+	// provider that saves a generated file writes it into the workspace rather
+	// than wherever the binary was launched. Neither dispatches or resolves a
+	// tool path against it. It must be the SAME value BashTool.CWD gets — a
+	// stale or unset one under-elides, which costs ledger characters, while a
+	// wrong one would elide a `cd` that did move the command and misreport
+	// where the work happened.
 	CWD string
 
 	// Asker, if set, is the front end's question channel — the same seam the
@@ -2737,6 +2740,13 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 		// children) stop evicting each other's cached prefixes. Empty
 		// (live-only agents) sends nothing — today's behavior.
 		PromptCacheKey: cacheKey,
+		// Where a provider that writes a generated file should put it.
+		// Gemini returns images as inline base64 and saves them to disk; the
+		// save joined against the PROCESS cwd, which terva never changes, so
+		// `terva --cwd ~/project` run from elsewhere dropped its images in
+		// the launch directory. Empty (an embedder that never sets CWD)
+		// keeps the old behavior.
+		WorkingDir: a.CWD,
 	}
 	stream, err := client.Stream(ctx, req)
 	if err != nil {

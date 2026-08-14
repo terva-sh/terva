@@ -393,7 +393,12 @@ func geminiSupportsFunctionCalling(modelID string) bool {
 	return true
 }
 
-func saveGeminiImageToWorkingDir(mimeType string, data []byte) (string, error) {
+// saveGeminiImageToWorkingDir writes a generated image into dir.
+//
+// An empty dir means the process working directory, which is what this did
+// unconditionally before Request.WorkingDir existed — and terva never chdirs,
+// so that was the launch directory rather than the session's workspace.
+func saveGeminiImageToWorkingDir(dir, mimeType string, data []byte) (string, error) {
 	ext := ".png"
 	switch strings.ToLower(mimeType) {
 	case "image/jpeg", "image/jpg":
@@ -404,7 +409,10 @@ func saveGeminiImageToWorkingDir(mimeType string, data []byte) (string, error) {
 		ext = ".gif"
 	}
 	name := "terva-gemini-image-" + uuid.NewString() + ext
-	path := filepath.Join(".", name)
+	if dir == "" {
+		dir = "."
+	}
+	path := filepath.Join(dir, name)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return "", err
 	}
@@ -652,7 +660,7 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 			return
 		}
 		img := ImageBlock{MimeType: mimeType, Data: data}
-		path, _ := saveGeminiImageToWorkingDir(mimeType, data)
+		path, _ := saveGeminiImageToWorkingDir(req.WorkingDir, mimeType, data)
 		blocks = append(blocks, &blockEntry{kind: "image", image: &img, imagePath: path})
 		// Image blocks break the current text run.
 		currentText = nil
