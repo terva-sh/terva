@@ -100,24 +100,18 @@ func (r *Renderer) SetTheme(th Theme) {
 	r.Invalidate()
 }
 
-// Resize tells the renderer the current terminal size.
-//
-// On a real size change we also issue a clear-screen so the next
-// DrawLog starts from a blank slate. Without the clear, characters from the
-// old (wider) layout linger past the new right edge and rows from
-// before the new bottom hang around as garbage.
-func (r *Renderer) ResetScrollRegion() {
-	if r.out != nil {
-		_, _ = io.WriteString(r.out, SeqResetScrollRegion)
-	}
-}
-
 // Size returns the terminal dimensions the renderer is currently laid out
 // for — the size the last Resize settled on. Callers use it to tell a real
 // resize (dimensions changed) from a same-size SIGWINCH (a multiplexer
 // reattach), which want different repaint handling.
 func (r *Renderer) Size() (cols, rows int) { return r.cols, r.rows }
 
+// Resize tells the renderer the current terminal size.
+//
+// On a real size change we also issue a clear-screen so the next
+// DrawLog starts from a blank slate. Without the clear, characters from the
+// old (wider) layout linger past the new right edge and rows from
+// before the new bottom hang around as garbage.
 func (r *Renderer) Resize(cols, rows int) {
 	if cols != r.cols || rows != r.rows {
 		r.cols = cols

@@ -118,6 +118,20 @@ func (h *harness) waitGone(snippet string) {
 	})
 }
 
+// waitExit blocks until Run has returned, so a test can assert on the
+// terminal state teardown left behind rather than on a half-written exit.
+// The result goes back on the channel: t.Cleanup receives from it too, and
+// draining it here would strand the cleanup on an empty channel.
+func (h *harness) waitExit() {
+	h.t.Helper()
+	select {
+	case err := <-h.done:
+		h.done <- err
+	case <-time.After(5 * time.Second):
+		h.t.Fatal("Interactive.Run did not exit")
+	}
+}
+
 // dismissLoginDialog scripts past the auto-opened login dialog that
 // every agent-less startup shows.
 func (h *harness) dismissLoginDialog() {

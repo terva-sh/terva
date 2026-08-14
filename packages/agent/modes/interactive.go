@@ -683,6 +683,21 @@ type Interactive struct {
 	// shellBlock holds the rendered terminal-log lines of the most
 	// recent !command shell escape. It lives below the transcript
 	// (under extNotes) until the user sends their next prompt or runs
+	// Idle next-step suggestion (docs/proposals/idle-suggestions.md stage 3).
+	// nextStepEnabled is the gate; nothing sets it yet, so the trigger is inert
+	// until the setting lands in stage 4 — no commit on this branch spends a
+	// completion the user did not ask for. nextStepArmedAt is the reply that is
+	// waiting out its silence (zero = nothing armed, which is also how a spent
+	// arm is recorded, giving once-per-reply). nextStepTurnBad marks a turn that
+	// ended cancelled or failed, so its close does not arm one.
+	nextStepEnabled  bool
+	nextStepArmedAt  time.Time
+	nextStepTurnBad  bool
+	nextStepInFlight bool
+	// lastInputAt is the last keystroke of any kind, which is what the idle
+	// window is measured from.
+	lastInputAt time.Time
+
 	// /clear. shellRunning is true while a !command is executing; it
 	// shares the turn engine's busy slot so esc cancels it and no turn or
 	// other shell escape can start while one is in flight.
@@ -727,6 +742,11 @@ type Interactive struct {
 	stash          *draftStash
 	stashHintArmed bool
 
+	// withdrawDraft is the editor state the in-flight prompt was dispatched
+	// from, held so a withdrawal can put it back (withdraw_restore.go).
+	// Main-loop-only, like ed and stash.
+	withdrawDraft *withdrawableDraft
+
 	// carrierPerm / carrierAsk track the ctrlproto path's pending
 	// permission/ask round-trips by wire id, so an EventPermissionResolved /
 	// EventAskResolved (another client answered; the turn cancelled) can
@@ -755,6 +775,14 @@ type Interactive struct {
 	// Refreshed on snapshot (every (re)subscribe) and on the daemon's
 	// surface_updated("settings") broadcast. Guarded by mu.
 	carrierApprovalMode string
+
+	// shellResultContext caches the daemon's shell_result_context engine feature
+	// (default OFF), refreshed alongside the approval mode above. Read before a
+	// "!" escape's output is sent, so output the daemon would discard never goes
+	// on the wire at all — with `terva serve` that daemon can be on another host,
+	// and `!cat ~/.aws/credentials` reaching it before being dropped there is the
+	// whole thing this feature is careful about. Guarded by mu.
+	shellResultContext bool
 
 	// The bound session's wire-reported metadata the status bar reads every
 	// frame: the transcript path (sess segment — cached here so an attached
@@ -1064,13 +1092,23 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 // mode. Once-only: it runs on Run's exit defer AND from the self-restart
 // pre-exec hook — syscall.Exec skips defers, so a restart must tear down
 // eagerly or the next image inherits a raw, half-painted terminal.
+//
+// Order matters here, and one of these sequences moves the cursor.
+// TeardownLog's whole job is to leave the cursor parked on the fresh line
+// below the transcript, because that is where the returning shell prints its
+// prompt. DECSTBM (\x1b[r) homes the cursor to (1,1) as a documented side
+// effect of setting the scrolling region — so emitting it afterwards drops the
+// shell prompt at the TOP of the screen, on top of the conversation, with the
+// rest of the frame still painted below it. Save and restore around it: the
+// scroll region still gets reset (a stray region from rendered tool output
+// would wreck the shell), but the parking survives.
 func (i *Interactive) teardownTerminal() {
 	i.teardownOnce.Do(func() {
 		i.shuttingDown.Store(true)
 		if i.rend != nil {
 			i.rend.TeardownLog()
 		}
-		_, _ = i.cfg.Terminal.Write([]byte(tui.SeqResetScrollRegion + tui.SeqDeleteKittyImages + tui.SeqEnhancedKeyboardOff + tui.SeqBracketedPasteOff + tui.SeqShowCursor))
+		_, _ = i.cfg.Terminal.Write([]byte(tui.SeqSaveCursor + tui.SeqResetScrollRegion + tui.SeqRestoreCursor + tui.SeqDeleteKittyImages + tui.SeqEnhancedKeyboardOff + tui.SeqBracketedPasteOff + tui.SeqShowCursor))
 		if i.restoreRaw != nil {
 			_ = i.restoreRaw()
 		}
@@ -1083,6 +1121,12 @@ func (i *Interactive) teardownTerminal() {
 // a failed self-restart — the exact inverse of the *Off sequences teardown
 // writes. It deliberately does NOT clear the screen or scrollback, so recovery
 // keeps the chat transcript intact.
+//
+// The scroll-region reset here homes the cursor (see teardownTerminal), which
+// is harmless only because both callers position the cursor themselves right
+// afterwards: startup follows with a clear plus an explicit MoveTo, and the
+// recovery path repaints in full. A caller that arms modes and then expects
+// the cursor to have stayed put would be the exit bug over again.
 func (i *Interactive) armTerminalModes() {
 	_, _ = i.cfg.Terminal.Write([]byte(tui.SeqBracketedPasteOn + tui.SeqEnhancedKeyboardOn + tui.SeqResetScrollRegion + tui.SeqDeleteKittyImages))
 }
@@ -1495,6 +1539,11 @@ func (i *Interactive) Run(ctx context.Context) error {
 			if i.turns.Busy() || i.overlayAnimating() {
 				requestRedraw()
 			}
+			// The idle offer rides the same tick rather than its own timer:
+			// nothing here needs 120ms precision, and a tick that already runs
+			// is cheaper than a timer that has to be armed and cancelled from
+			// every path that changes the answer.
+			i.maybeOfferNextStep()
 			// Minute-boundary refresh: the status bar renders minute-
 			// granular text (↻ reset countdowns, the burn rate) that
 			// otherwise goes stale while idle — nothing else invalidates
