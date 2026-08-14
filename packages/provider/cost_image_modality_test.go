@@ -104,6 +104,32 @@ func TestATextOnlyTurnOnAnImageModelPaysTheTextRate(t *testing.T) {
 	}
 }
 
+// gemini-2.5-flash-image has no published text output rate, so its row carries
+// PriceOutput 0 rather than an invented number — and the consequence is bigger
+// than the comment there used to admit. A turn on that model that draws nothing
+// reports no output cost at all, however long the answer runs, because these
+// models hold ordinary conversations between pictures.
+//
+// Pinned deliberately, in the state it is actually in. The value of this guard
+// is that the day Google publishes a text rate, the zero is a decision someone
+// walks into rather than a number nobody remembers is there.
+func TestATextOnlyTurnOnThisImageModelIsFree(t *testing.T) {
+	m, err := FindModel("google", "gemini-2.5-flash-image")
+	if err != nil {
+		t.Fatalf("gemini-2.5-flash-image is not in the catalog: %v", err)
+	}
+	if m.PriceOutput != 0 {
+		t.Skipf("PriceOutput is now %v — Google published a text rate; drop this guard "+
+			"and price the text tail like any other model", m.PriceOutput)
+	}
+	u := Usage{InputTokens: 1000, OutputTokens: 5000} // a long answer, no picture
+	const per = 1_000_000.0
+	want := 1000 * m.PriceInput / per // input only
+	if got := ComputeCost(m, u); !nearlyEqual(got, want) {
+		t.Fatalf("cost = %.10f, want %.10f (input only) — the output rate is not the 0 this row documents", got, want)
+	}
+}
+
 // A provider that reports a subset larger than its own total is describing
 // something this code does not model. The clamp must not let the text
 // remainder go negative and refund the difference.

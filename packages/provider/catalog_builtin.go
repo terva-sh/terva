@@ -14,6 +14,25 @@ package provider
 
 func init() { Catalog = append(Catalog, builtinCatalog...) }
 
+// The Gemini 3.6/3.7 Flash rows are priced at an INTRODUCTORY rate that Google
+// publishes an end date for. After it, input and output both double.
+//
+// Every other stale price in this file announces itself: the model 404s, or a
+// user notices a number that looks wrong. This one does not. The request keeps
+// working and the bill is quietly half of what was actually charged, which is
+// the failure a cost breakdown exists to prevent — so the date is a constant a
+// test reads rather than a note in a comment.
+const (
+	geminiIntroRateExpiry      = "2026-12-31"
+	geminiFlashIntroInput      = 0.75
+	geminiFlashIntroOutput     = 3.75
+	geminiFlashPostIntroInput  = 1.50
+	geminiFlashPostIntroOutput = 7.50
+)
+
+// geminiIntroRateModels are the rows those constants govern.
+var geminiIntroRateModels = []string{"gemini-3.6-flash", "gemini-3.7-flash"}
+
 var builtinCatalog = []Model{
 	// ----- amazon-bedrock -----
 	{Provider: "amazon-bedrock", ID: "amazon.nova-2-lite-v1:0", DisplayName: "Nova 2 Lite", ContextWindow: 128000, MaxOutput: 4096, Reasoning: false, PriceInput: 0.33, PriceOutput: 2.75, PriceCacheRead: 0, BaseURL: "https://bedrock-runtime.us-east-1.amazonaws.com"},
@@ -157,8 +176,12 @@ var builtinCatalog = []Model{
 	// ----- google -----
 	// Prices below are the Standard paid tier, text input, per 1M tokens, read
 	// from ai.google.dev/gemini-api/docs/pricing on 2026-08-14. 3.6/3.7 Flash
-	// carry an INTRODUCTORY rate that expires 2026-12-31, after which input
-	// doubles to $1.50 and output to $7.50 — revisit these two rows in January.
+	// carry an INTRODUCTORY rate that expires on geminiIntroRateExpiry, after
+	// which input doubles to geminiFlashPostIntroInput and output to
+	// geminiFlashPostIntroOutput. Those constants are not decoration:
+	// TestTheIntroductoryFlashRatesExpireLoudly reads them and turns the day
+	// after the expiry into a failing build, because a date that lives only in
+	// a comment is a date nobody meets.
 	// gemini-3-pro-preview was removed: the live API answers 404 "no longer
 	// available" for it, so the row only ever produced a failed session.
 	//
@@ -182,8 +205,16 @@ var builtinCatalog = []Model{
 		//
 		// PriceOutput (text) is 0 because Google publishes NO text output
 		// rate for this model — the pricing table has an input row and a
-		// per-image row and nothing else. A 0 leaves the small text tail
-		// unbilled, which beats inventing a plausible number.
+		// per-image row and nothing else. Leaving it 0 beats inventing a
+		// plausible number, but be clear what it costs: this is not merely
+		// the text tail that rides along with a picture. A turn on this model
+		// that draws NOTHING — and these models hold ordinary conversations
+		// between pictures, which is the whole argument for two rates —
+		// reports $0.00 of output cost however long the answer is. Input is
+		// still billed, so the turn does not vanish from the bill entirely.
+		// TestATextOnlyTurnOnThisImageModelIsFree pins it, so the day Google
+		// publishes a text rate the zero is a decision someone revisits
+		// rather than a number nobody remembers is there.
 		Provider: "google", ID: "gemini-2.5-flash-image", DisplayName: "Nano Banana (Gemini 2.5 Flash Image)",
 		ContextWindow: 32768, MaxOutput: 32768, Reasoning: false,
 		PriceInput: 0.3, PriceOutput: 0, PriceOutputImage: 30.23,

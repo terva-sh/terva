@@ -88,6 +88,58 @@ func TestGeminiUnknownFinishReasonIsAnError(t *testing.T) {
 // The normal ends must stay normal — the default arm above must not swallow
 // them. STOP with content is a clean turn; MAX_TOKENS is a length stop, not an
 // error, because the partial content is still worth keeping.
+// 🪤 The catch-all arm's most dangerous neighbour is the EMPTY finish reason,
+// which every intermediate chunk of every stream carries. It is claimed by the
+// STOP arm, and if it ever were not, `default` would end the first chunk of
+// each turn as an error — the whole provider, not an edge case.
+//
+// That is a load-bearing detail of a switch someone will eventually reorder or
+// tidy, and it was the one thing the comment there asserted with nothing
+// checking it. So this drives a real multi-chunk stream: two content chunks
+// with no finish reason, then a terminal one.
+func TestGeminiIntermediateChunksAreNotAbnormalEndings(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		for _, frame := range []string{
+			`{"candidates":[{"content":{"role":"model","parts":[{"text":"one "}]}}]}`,
+			`{"candidates":[{"content":{"role":"model","parts":[{"text":"two "}]}}]}`,
+			`{"candidates":[{"content":{"role":"model","parts":[{"text":"three"}]},"finishReason":"STOP"}]}`,
+		} {
+			_, _ = w.Write([]byte("data: " + frame + "\n\n"))
+		}
+	}))
+	defer srv.Close()
+
+	evs, err := NewGemini("k", srv.URL).Stream(context.Background(), Request{
+		Model:    "gemini-3.1-pro-preview",
+		Messages: []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var done EventDone
+	for ev := range evs {
+		if e, ok := ev.(EventDone); ok {
+			done = e
+		}
+	}
+	if done.Stop != StopEnd || done.Err != nil {
+		t.Fatalf("stop=%v err=%v, want a clean StopEnd — a chunk with no finishReason was read as a terminal one",
+			done.Stop, done.Err)
+	}
+	// And the whole answer survived, not just the chunk that carried STOP.
+	var sb strings.Builder
+	for _, b := range done.Message.Content {
+		if tb, ok := b.(TextBlock); ok {
+			sb.WriteString(tb.Text)
+		}
+	}
+	if sb.String() != "one two three" {
+		t.Fatalf("assembled text = %q, want the three chunks joined", sb.String())
+	}
+}
+
 func TestGeminiNormalFinishReasonsUnaffected(t *testing.T) {
 	done := geminiFinish(t, `{"candidates":[{"content":{"role":"model","parts":[{"text":"hello"}]},"finishReason":"STOP"}]}`)
 	if done.Stop != StopEnd || done.Err != nil {

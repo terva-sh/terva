@@ -1057,6 +1057,24 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 					// to become a silent successful empty turn. Naming the
 					// unrecognized reason is strictly better than printing
 					// nothing: it costs one visible error and it cannot hide.
+					//
+					// Not purely additive, and worth knowing which way: the
+					// StopToolUse promotion below only runs on StopEnd, so a
+					// reason that arrives ALONGSIDE usable tool calls ends the
+					// turn as an error instead of continuing the loop. The
+					// content is still assembled and still reaches the caller —
+					// nothing is thrown away — but the calls are not executed.
+					// For the two the enum names that could do this, that is
+					// the wanted answer: TOO_MANY_TOOL_CALLS and
+					// UNEXPECTED_TOOL_CALL both say the model went somewhere it
+					// should not have, and running the calls would compound it.
+					// The rule to keep is that an unknown reason is refused
+					// rather than obeyed.
+					//
+					// "" never reaches here — the STOP arm above claims it — so
+					// an intermediate chunk cannot be mistaken for a terminal
+					// one. That is load-bearing, not incidental: without it
+					// every streaming chunk would end the turn as an error.
 					stop = StopError
 					finalErr = NewAPIError("google", "response ended abnormally ("+cand.FinishReason+")", false)
 				}
