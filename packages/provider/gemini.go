@@ -383,11 +383,50 @@ func convertGemAssistantParts(blocks []Content, functionsEnabled bool) []gemPart
 	return parts
 }
 
+// geminiSupportsFunctionCalling reports whether tools may be sent to a model.
+//
+// 🪤 This used to match the substring "flash-image", which is wrong in BOTH
+// directions once the nano-banana family arrived. Measured against the live
+// API on 2026-08-14, one identical prompt per model, with and without a
+// function declaration:
+//
+//	gemini-2.5-flash-image          200 IMAGE   400 "Function calling is not
+//	                                            enabled for this model"
+//	gemini-3-pro-image              200 IMAGE   200 IMAGE
+//	gemini-3-pro-image-preview      200 IMAGE   200 IMAGE
+//	gemini-3.1-flash-image          200 IMAGE   200 IMAGE
+//	gemini-3.1-flash-image-preview  200 IMAGE   200 IMAGE
+//	gemini-3.1-flash-lite-image     200 IMAGE   200 IMAGE
+//
+// Of the six, the substring matched three: gemini-2.5-flash-image (correctly)
+// and gemini-3.1-flash-image plus its -preview twin (wrongly). So two models
+// that accept tools had every tool stripped from every request. An agent on
+// gemini-3.1-flash-image could not read a file or run a command; it had no
+// tools and no way to say so, which reads as a model that refuses to work
+// rather than a client that disarmed it.
+//
+// The other three (gemini-3-pro-image, its -preview, and
+// gemini-3.1-flash-lite-image) never matched the substring at all, so they
+// were already correct — by luck of spelling rather than by design, which is
+// why the rule below is a measurement and not a pattern.
+//
+// Suppression is now an explicit list of what was MEASURED to reject tools.
+// A new image model therefore keeps its tools by default: the cost of being
+// wrong that way is one legible 400 naming the reason, while the cost of the
+// old default was a silently crippled agent.
 func geminiSupportsFunctionCalling(modelID string) bool {
 	id := strings.ToLower(modelID)
-	// Gemini image generation/editing models accept direct multimodal
-	// prompts but reject tools/function declarations.
-	if strings.Contains(id, "flash-image") || strings.Contains(id, "image-generation") {
+	// The whole 2.5 image family predates function calling on these models.
+	// A prefix, so a dated or -preview variant of the same generation is
+	// covered without another live probe.
+	if strings.HasPrefix(id, "gemini-2.5-flash-image") {
+		return false
+	}
+	// The retired 2.0-era ids (gemini-2.0-flash-exp-image-generation and
+	// friends). No id on the live list matches this today, so it is inert
+	// for a current key; it stays for a grandfathered one, where it cannot
+	// be re-probed and a wrong guess costs a 400 on every turn.
+	if strings.Contains(id, "image-generation") {
 		return false
 	}
 	return true
