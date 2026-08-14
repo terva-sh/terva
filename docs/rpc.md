@@ -249,7 +249,7 @@ Stream notifications during a `prompt` or `compact`. None carry an `id`.
 | `tool_progress` | `id`, `text` | Optional progress line from the tool while it runs |
 | `tool_result` | `id`, `is_error`, `content`, optional `lines_added` / `lines_removed` | Tool finished; the line-change counts (present on edits) feed the status-bar Δ segment |
 | `assistant_message` | `message` | Final assistant message after the model turn ends (see Message shape) |
-| `usage` | `usage`, `cumulative` | Per-turn + cumulative tokens / cost, each `{input, output, cache_read, cache_write, cost_usd}` |
+| `usage` | `usage`, `cumulative` | Per-turn + cumulative tokens / cost, each `{input, output, cache_read, cache_write, cost_usd}` plus the optional fields below |
 | `turn_end` | `stop`, optional `error` | One model call finished. `stop` is `end`, `tool_use`, `length`, `error`, or `aborted` |
 | `done` | (none) | The sole terminal event of a `prompt` or `compact` — exactly one per operation, on every outcome (success, no-op, error, or cancellation) |
 | `error` | `error` | Error message under the canonical `error` field (prompt failures and explicit-`compact` failures alike) |
@@ -261,6 +261,22 @@ Stream notifications during a `prompt` or `compact`. None carry an `id`.
 | `ext_notify` | `extension`, `level`, `message` | An extension raised a note (its `notify` frame). RPC-specific, not a `core.WireEvent` |
 | `ext_display` | `extension`, `text` | An extension asked to show text (its `display` frame) |
 | `ext_clear_notes` | `extension` | An extension cleared the notes it had raised |
+
+### Usage fields
+
+Every `usage` payload carries `input`, `output`, `cache_read`, `cache_write`, and
+`cost_usd`. The rest are omitted when zero, so a client that ignores them sees
+exactly the object it saw before:
+
+| Field | Meaning |
+| --- | --- |
+| `cache_saved_usd` | What the prompt cache was worth on this response, priced by the model that answered. **Signed**: negative means cache writes outran the reads they bought |
+| `reasoning` | How much of `output` the model spent thinking. A **subset** of `output`, not a sixth bucket — it is billed at the output rate and is already counted there |
+| `reasoning_known` | Distinguishes "the model reported 0 reasoning tokens" from "this provider does not break reasoning out at all" (Anthropic keeps it inside `output`) |
+| `image_output` | How much of `output` was image data. Also a **subset** of `output`. Unlike `reasoning` this one moves the bill: models that generate images charge image tokens at their own rate, often 10–20x the text rate on the same model |
+
+Both `reasoning` and `image_output` are subsets of `output`, so summing them
+alongside it double-counts. Subtract, don't add.
 
 The three `ext_*` events are the RPC surface of the extension host hooks — the RPC loop has no TUI to draw notes in, so they go on the stream for the client to render. Unlike the rest of the table they are driven by the extension, not the turn, so they can arrive outside a `prompt` / `compact`. See [extensions.md](extensions.md).
 

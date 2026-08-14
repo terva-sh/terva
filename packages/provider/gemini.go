@@ -763,6 +763,14 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 					ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
 					CachedContentTokenCount int `json:"cachedContentTokenCount"`
 					TotalTokenCount         int `json:"totalTokenCount"`
+					// CandidatesTokensDetails breaks the candidate total down
+					// by modality. The image models bill IMAGE tokens at a
+					// different rate from the text they arrive with, and this
+					// is the only field that says which is which.
+					CandidatesTokensDetails []struct {
+						Modality   string `json:"modality"`
+						TokenCount int    `json:"tokenCount"`
+					} `json:"candidatesTokensDetails"`
 				} `json:"usageMetadata"`
 				Error *struct {
 					Code    int    `json:"code"`
@@ -881,6 +889,19 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 				usage.ReasoningTokens = um.ThoughtsTokenCount
 				usage.ReasoningTokensKnown = true
 				usage.CacheReadTokens = um.CachedContentTokenCount
+				// The image models bill IMAGE output at their own rate
+				// (Model.PriceOutputImage), 10-20x the text rate on the
+				// same model. This breakdown is the only thing that says
+				// how much of the candidate total was picture, so without
+				// it every image turn is priced as if it were prose.
+				// A subset of OutputTokens, like ReasoningTokens above.
+				imageTokens := 0
+				for _, d := range um.CandidatesTokensDetails {
+					if strings.EqualFold(d.Modality, "IMAGE") {
+						imageTokens += d.TokenCount
+					}
+				}
+				usage.ImageOutputTokens = imageTokens
 			}
 			// Promote ToolUse stop when tool calls are present and
 			// the candidate finished cleanly.
