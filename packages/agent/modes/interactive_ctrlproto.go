@@ -264,12 +264,17 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 		if i.turns.reclaimCarrier(i.carrierCancel()) {
 			i.runOnMain(i.resetTurnUI)
 		}
+		// A new turn: whatever the last one did to the idle offer is over.
+		i.freshNextStepTurn()
 	case "done":
 		// The workspace's guaranteed turn-over signal (every path, including
 		// errors and cancels; duplicates possible — releaseCarrier is
 		// idempotent). Status/queue/persistence are daemon-side or handled by
 		// the accompanying error/turn_end events.
 		i.turns.releaseCarrier()
+		// The reply has landed: start the silence that may end in an offer.
+		// Refused inside if this turn was cancelled or failed.
+		i.armNextStep()
 		// A turn may have moved the provider's plan windows (codex reports them
 		// in response headers). Cached read, no network.
 		i.refreshUsageAsync(false)
@@ -293,6 +298,16 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 				i.mu.Unlock()
 			}
 		}
+	case "user_message_withdrawn":
+		// The turn was interrupted before the model said anything, so the
+		// daemon took the prompt back out of the transcript. It has already
+		// vanished from the screen; hand the text back rather than making the
+		// user retype what they only just sent.
+		//
+		// Marshalled: this runs on the pump goroutine and the editor is
+		// main-loop-only state.
+		text := ev.Text
+		i.runOnMain(func() { i.restoreWithdrawnPrompt(text) })
 	case "user_message_rejected":
 		// An extension's intercept (BeforeUserMessage) refused the prompt:
 		// it never reached the model or the transcript, so without this
@@ -310,6 +325,9 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 		// provider failures open the rescue picker — model-switch-and-retry,
 		// reconstructed from the wire error text (ClassifyRecoverable's prose
 		// heuristics) — everything else lands on the status banner.
+		// A failed turn has no reply to build on, and the trailing "done" must
+		// not arm an offer off the back of it.
+		i.spoilNextStep()
 		err := errors.New(ev.Error)
 		if ok, reason := core.ClassifyRecoverable(err); ok {
 			i.mu.Lock()
@@ -845,6 +863,16 @@ func (i *Interactive) refreshCarrierApprovalMode() {
 					changed = changed || i.cfg.Reasoning != it.Value
 					i.cfg.Reasoning = it.Value
 				}
+			case "next_step":
+				// No `changed` bump, same as shell_result_context below: this
+				// paints nothing on its own, it only decides whether an offer is
+				// ever asked for.
+				i.nextStepEnabled = it.Value == "true"
+			case "shell_result_context":
+				// No `changed` bump: this one paints nothing, it only decides
+				// whether a "!" result is offered. Flagging a redraw for it would
+				// repaint the screen every time the settings surface moves.
+				i.shellResultContext = it.Value == "true"
 			}
 		}
 		i.mu.Unlock()
@@ -1709,6 +1737,10 @@ func (i *Interactive) handleWireEvent(ev ctrlproto.Event) {
 			i.turns.ResetStream()
 			i.statusErr = ""
 			i.statusOK = i18n.T("cancelled")
+			// The user pressed Esc. Answering that with "here is what to do
+			// next" is the wrong read of the room. Locked variant: this
+			// function holds i.mu across its whole body.
+			i.spoilNextStepLocked()
 		case string(provider.StopLength):
 			i.statusErr = i18n.T("response hit the model's output-token limit and was cut off, ask it to continue")
 			i.statusOK = ""

@@ -200,9 +200,17 @@ func (r *recorder) NoteSet(_ context.Context, sess string, p NoteSetParams) erro
 	r.note("NoteSet", sess, p)
 	return nil
 }
+func (r *recorder) ShellResult(_ context.Context, sess string, p ShellResultParams) error {
+	r.note("ShellResult", sess, p)
+	return nil
+}
 func (r *recorder) SuggestReply(_ context.Context, sess string, p SuggestParams) (SuggestResult, error) {
 	r.note("SuggestReply", sess, p)
 	return SuggestResult{}, nil
+}
+func (r *recorder) SuggestNextStep(_ context.Context, sess string) (NextStepResult, error) {
+	r.note("SuggestNextStep", sess, nil)
+	return NextStepResult{}, nil
 }
 func (r *recorder) UserBind(_ context.Context, sess string, p UserBindParams) error {
 	r.note("UserBind", sess, p)
@@ -621,8 +629,10 @@ func dispatchCases() []dispatchCase {
 		// --- remaining optional controllers ---
 		{MethodCastSpeak, CastSpeakParams{Actor: "speaker"}, "CastSpeak", CastSpeakParams{Actor: "speaker"}},
 		{MethodNoteSet, NoteSetParams{Text: "a note"}, "NoteSet", NoteSetParams{Text: "a note"}},
+		{MethodShellResult, ShellResultParams{Command: "git status", Output: "3 files changed"}, "ShellResult", ShellResultParams{Command: "git status", Output: "3 files changed"}},
 		{MethodUserBind, UserBindParams{Name: "bound"}, "UserBind", UserBindParams{Name: "bound"}},
 		{MethodSuggestReply, SuggestParams{}, "SuggestReply", nil},
+		{MethodSuggestNextStep, nil, "SuggestNextStep", nil},
 		{MethodCardsDoctor, DoctorParams{ID: "checked"}, "CardsDoctor", DoctorParams{ID: "checked"}},
 		{MethodSessionsDoctor, SessionDoctorParams{}, "SessionsDoctor", nil},
 		{MethodWorldsDoctor, WorldDoctorParams{ID: "w-doc", Steer: "give her a rival"}, "WorldsDoctor", WorldDoctorParams{ID: "w-doc", Steer: "give her a rival"}},
@@ -712,7 +722,8 @@ func TestDispatchForwardsTheFrameSession(t *testing.T) {
 		"PostLine": true, "DirectTurn": true, "AdvanceTurn": true, "NoteSet": true,
 		"UserBind": true, "WorldLorePut": true, "WorldLoreDelete": true, "WorldSet": true,
 		"WorldSave": true, "PruneVariants": true, "DropVariant": true, "SuggestReply": true,
-		"SessionsDoctor": true, "SessionsNextScene": true, "ReplayState": true,
+		"SuggestNextStep": true,
+		"SessionsDoctor":  true, "SessionsNextScene": true, "ReplayState": true,
 		"SessionsExport": true,
 
 		// The mandatory surface's session-scoped verbs. Everything that mutates or

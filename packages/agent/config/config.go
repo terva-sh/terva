@@ -292,6 +292,16 @@ type Config struct {
 	// effect on the next launch (the /stage/ route is mounted at startup).
 	WebStage bool `json:"web_stage,omitempty"`
 
+	// NextStepSuggestions offers a suggested next line in the composer after the
+	// agent replies and the user has been quiet for a moment
+	// (docs/proposals/idle-suggestions.md). Off by default, and the default is
+	// the point rather than caution: it spends one extra completion per reply
+	// the user is idle after, so a user who never asked for it never pays for
+	// it. Client-side — the trigger, the composer and the offer are all in the
+	// frontend — so it is a plain config bool rather than an engine feature,
+	// which would imply it reshapes the agent loop.
+	NextStepSuggestions bool `json:"next_step_suggestions,omitempty"`
+
 	// LazyToolActive lists capability groups to advertise from the start when
 	// LazyTools is on (beyond the always-on core group), by extension name or
 	// "mcp:<server>". Everything else stays hidden until the model activates it.

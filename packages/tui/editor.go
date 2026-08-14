@@ -51,6 +51,32 @@ type Editor struct {
 	fileSeq int
 	dirs    map[int]string
 	dirSeq  int
+
+	// ghost is an offered next line the user has not accepted: rendered
+	// where their text would go, never part of the buffer. Stage 2 of
+	// docs/proposals/idle-suggestions.md.
+	//
+	// It is NOT a line in Lines, and that is the whole design. Value(),
+	// SubmitValue(), IsEmpty() and every cursor computation are untouched by
+	// it, so a suggestion the user ignores cannot be submitted, cannot be
+	// walked into with the arrow keys, and cannot change where the caret
+	// sits. Accepting it is the only thing that turns it into text.
+	//
+	// Shown only while the buffer is empty, which is what gives the proposal's
+	// hold-and-restore behaviour for free: type and it is hidden behind your
+	// own words, delete back to empty and it is there again. No timer, no
+	// second slot, and nothing to re-fetch — a stored ghost that is merely not
+	// currently drawn.
+	ghost string
+
+	// GhostStyle renders the ghost for display, dimming it so it reads as an
+	// offer rather than as text already typed. nil renders it plain.
+	//
+	// A hook rather than a stored styled string because the ghost has to stay
+	// PLAIN: accepting it inserts it into the buffer, and escape sequences in
+	// the buffer would be submitted to the model and counted by every width
+	// computation in this file.
+	GhostStyle func(string) string
 }
 
 // NewEditor returns an empty editor with the given prompt.
@@ -129,7 +155,14 @@ func (e *Editor) State() EditorState {
 
 // Restore reinstates a snapshot taken by State, cursor position and
 // placeholder bodies included.
+//
+// A snapshot carries no ghost, and restoring one drops any offer standing:
+// State/Restore park the user's OWN writing and bring it back, and the user's
+// writing outranks a suggestion every time it is a contest. The offer is
+// discarded rather than parked, because it costs nothing to ask for another
+// and it was never the user's text to keep.
 func (e *Editor) Restore(s EditorState) {
+	e.ghost = ""
 	e.Lines = append([]string(nil), s.lines...)
 	if len(e.Lines) == 0 {
 		e.Lines = []string{""}
@@ -182,10 +215,51 @@ func (e *Editor) SetValue(s string) {
 	e.fileSeq = 0
 	e.dirs = nil
 	e.dirSeq = 0
+	// Whoever installs a buffer owns the composer, so the offer is over. This
+	// covers submit and Clear as well, both of which come through here: a
+	// suggestion must not outlive the message that was actually sent, because a
+	// line proposed against a conversation that has since moved on is worse
+	// than no line at all — it still looks current.
+	e.ghost = ""
 }
 
 // Clear resets the buffer.
 func (e *Editor) Clear() { e.SetValue("") }
+
+// SetGhost offers text as the next line, or clears the offer when empty.
+//
+// Stored plain and flattened to a single line: it is drawn on one row, and
+// accepting it must insert exactly what was shown.
+func (e *Editor) SetGhost(text string) {
+	text = strings.TrimSpace(strings.ReplaceAll(normalizeEditorText(text), "\n", " "))
+	e.ghost = text
+}
+
+// Ghost returns the offered line, or "" when there is none. It reports what is
+// HELD, not what is currently drawn — the two differ while the user is typing
+// over it.
+func (e *Editor) Ghost() string { return e.ghost }
+
+// ghostVisible reports whether the offer is currently on screen. Held is not
+// shown: an offer waits behind whatever the user is writing.
+func (e *Editor) ghostVisible() bool { return e.ghost != "" && e.IsEmpty() }
+
+// AcceptGhost turns a visible offer into ordinary text and reports whether it
+// did. The offer is consumed either way it goes from here: accepted it becomes
+// the user's own line to edit or send, and there is nothing left to re-offer.
+//
+// Refuses while the buffer is non-empty, which is the same rule as drawing it.
+// Accepting an offer the user cannot see would insert text they did not know
+// was on hand.
+func (e *Editor) AcceptGhost() bool {
+	if !e.ghostVisible() {
+		return false
+	}
+	text := e.ghost
+	e.ghost = ""
+	e.insert(text)
+	return true
+}
 
 // IsEmpty reports whether the buffer has no visible content.
 func (e *Editor) IsEmpty() bool {
@@ -197,6 +271,16 @@ func (e *Editor) IsEmpty() bool {
 // should read SubmitValue() and then Clear().
 func (e *Editor) HandleKey(k Key) (submit bool) {
 	switch k.Kind {
+	case KeyTab:
+		// Tab accepts a visible offer, and Tab is where the decision was made
+		// to put it: Enter on an empty composer is a reflex, so an offer that
+		// arrived in the gap between the reflex starting and finishing would
+		// send the model's idea as the user's message. One extra keystroke
+		// buys no accidental sends, and a chance to edit the wording first.
+		//
+		// With no offer showing this stays the no-op Tab has always been in
+		// the editor, so nothing that reaches here today changes.
+		e.AcceptGhost()
 	case KeyRune:
 		if k.Alt && (k.Rune == '\r' || k.Rune == '\n') {
 			e.newline()
@@ -918,7 +1002,65 @@ func (e *Editor) Render(width int) (lines []string, visualRow, visualCol int) {
 		}
 		lines = append(lines, wrapped...)
 	}
+	// The offer is drawn LAST, onto the finished first row. It is not in Lines,
+	// so the loop above laid the buffer out without it and the caret is already
+	// where the user's own first character goes; painting into the tail of that
+	// row cannot move it.
+	//
+	// What this ordering actually buys is the row count, which is worth being
+	// precise about: feeding the offer through wrapLine instead would wrap a
+	// long one across three rows, and the composer's height feeds the chat
+	// viewport, so the transcript above would resize while the user sat still.
+	// (It would NOT move the caret — the caret is at rune 0 and the offer goes
+	// after it. The caret only moves under the other implementation of this
+	// feature, the one where the suggestion is put in the buffer; that is what
+	// the field comment on `ghost` is arguing against, and what the guard in
+	// editor_ghost_test.go pins.)
+	if e.ghostVisible() && len(lines) > 0 {
+		if room := width - promptLen; room > 0 {
+			lines[0] += e.styleGhost(fitGhost(e.ghost, room))
+		}
+	}
 	return lines, visualRow, visualCol
+}
+
+// styleGhost applies the display styling, if a caller supplied any.
+func (e *Editor) styleGhost(s string) string {
+	if e.GhostStyle == nil {
+		return s
+	}
+	return e.GhostStyle(s)
+}
+
+// fitGhost bounds the offer to one row's worth of columns, marking a cut with
+// an ellipsis so a trimmed suggestion cannot be mistaken for a complete one.
+//
+// Width, not runes: the composer is a terminal row, and a line of CJK or emoji
+// occupies two columns per rune. Accepting still inserts the whole line — what
+// is trimmed here is the view of it, the same way the buffer's own long lines
+// are shown.
+func fitGhost(s string, room int) string {
+	if runewidth.StringWidth(s) <= room {
+		return s
+	}
+	const ellipsis = "…"
+	budget := room - runewidth.RuneWidth('…')
+	if budget < 1 {
+		// No room for even one column plus the marker: show the marker alone,
+		// which still says "there is an offer here" without lying about it.
+		return ellipsis
+	}
+	var b strings.Builder
+	used := 0
+	for _, r := range s {
+		w := runewidth.RuneWidth(r)
+		if used+w > budget {
+			break
+		}
+		b.WriteRune(r)
+		used += w
+	}
+	return b.String() + ellipsis
 }
 
 // locateCursor finds the wrapped row + visible column corresponding to

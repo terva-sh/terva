@@ -168,6 +168,15 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 			Note:        i18n.T("applies to new sessions"),
 		},
 		{
+			Key: "next_step", Label: i18n.T("Suggest a next step"), Type: "bool",
+			Value: boolStr(cfg.NextStepSuggestions),
+			// The cost is stated rather than left to be inferred: this is the
+			// one setting in the pane that spends money on its own initiative,
+			// without the user having sent anything.
+			Description: i18n.T("After a reply, if you go quiet with an empty composer, offer a short suggested next message as ghost text. Tab accepts it, and nothing is sent until you send it. Costs one extra model call per reply you pause on."),
+			Note:        i18n.T("off by default — applies live"),
+		},
+		{
 			Key: "web_stage", Label: i18n.T("Stage surface"), Type: "bool",
 			Value:       boolStr(cfg.WebStage),
 			Description: i18n.T("Serve the Stage immersive chat/play surface at /stage/ (the config twin of --web-stage). Off by default while Stage stabilizes."),
@@ -443,6 +452,15 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 		// so it applies to new sessions rather than reshaping a running one.
 		on := val == "true"
 		if err := config.MutateConfig(func(c *config.Config) { c.LazyTools = &on }); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
+	case "next_step":
+		// Persisted here and mirrored into the client by the settings pump
+		// (refreshCarrierApprovalMode), because the trigger, the composer and
+		// the offer all live in the frontend. "Applies live" is that mirror:
+		// nothing has to be rebuilt for a toggle to take effect.
+		on := val == "true"
+		if err := config.MutateConfig(func(c *config.Config) { c.NextStepSuggestions = on }); err != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
 		}
 	case "web_stage":

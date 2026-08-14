@@ -75,6 +75,17 @@ type fakeCarrier struct {
 	// compactGate, when non-nil, parks Compact until closed — so a test can
 	// observe the busy slot held across the round-trip.
 	compactGate chan struct{}
+	// nextSteps receives one send per SuggestNextStep call, and nextStepLine is
+	// what the daemon answers with. Both belong to the idle-suggestion trigger
+	// (interactive_nextstep_test.go); a nil nextSteps means nobody is watching.
+	nextSteps    chan struct{}
+	nextStepLine string
+	// nextStepGate, when non-nil, parks the ask until closed — so a test can
+	// hold the completion open and change the composer underneath it.
+	nextStepGate chan struct{}
+	// settingsExtra is appended to the settings surface, so a test can serve a
+	// row the hardcoded fixture does not carry.
+	settingsExtra []ctrlproto.SettingItem
 	// stream, when non-nil, is what SubscribeReliable returns — the test
 	// plays the daemon by feeding events into it. When nil, each subscribe
 	// gets its own channel, closed when its ctx cancels (like the real hub).
@@ -304,8 +315,11 @@ func (f *fakeCarrier) Surface(ctx context.Context, sess, id string) (ctrlproto.S
 			},
 		}}, nil
 	case "settings":
+		f.mu.Lock()
+		extra := append([]ctrlproto.SettingItem(nil), f.settingsExtra...)
+		f.mu.Unlock()
 		return ctrlproto.Surface{ID: id, Kind: "settings", Settings: &ctrlproto.SettingsView{
-			Items: []ctrlproto.SettingItem{
+			Items: append([]ctrlproto.SettingItem{
 				{Key: "approval", Label: "Approval mode", Type: "enum", Value: "workspace",
 					Description: "How tool calls are gated for this session.",
 					Note:        "per-session — not saved",
@@ -317,7 +331,7 @@ func (f *fakeCarrier) Surface(ctx context.Context, sess, id string) (ctrlproto.S
 						{Value: "yolo", Label: "yolo"},
 					}},
 				{Key: "lazy_tools", Label: "Lazy tool loading", Type: "bool", Value: "true"},
-			},
+			}, extra...),
 		}}, nil
 	case "lore":
 		return ctrlproto.Surface{ID: id, Kind: "lore", Lore: &ctrlproto.LoreView{
@@ -373,6 +387,22 @@ func (f *fakeCarrier) ResumeSession(ctx context.Context, sess string) (ctrlproto
 		return info, nil
 	}
 	return ctrlproto.SessionInfo{ID: sess}, nil
+}
+
+// SuggestNextStep plays the daemon's one-shot ask. The trigger reaches it by
+// type-asserting the carrier, so this method existing is what makes the fixture
+// a NextStepController at all.
+func (c *fakeCarrier) SuggestNextStep(_ context.Context, _ string) (ctrlproto.NextStepResult, error) {
+	c.mu.Lock()
+	line, ch, gate := c.nextStepLine, c.nextSteps, c.nextStepGate
+	c.mu.Unlock()
+	if ch != nil {
+		ch <- struct{}{}
+	}
+	if gate != nil {
+		<-gate
+	}
+	return ctrlproto.NextStepResult{Line: line}, nil
 }
 
 func recv[T any](t *testing.T, ch <-chan T, what string) T {
