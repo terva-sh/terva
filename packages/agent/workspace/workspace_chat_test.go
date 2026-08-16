@@ -299,6 +299,13 @@ func waitFor(t *testing.T, what string, pred func() bool, diag ...func() string)
 // provider that answers immediately.
 func chatTestWorkspace(t *testing.T, id string) (*Workspace, *wsSession, *fakeChatClient) {
 	t.Helper()
+	// 🪤 The settings pane reads the AMBIENT config, so a test asserting a
+	// DEFAULT is otherwise asserting whatever the developer has configured.
+	// TestTheNextStepSettingIsOffByDefault failed for exactly one class of
+	// person — anyone who had turned that setting on — green in CI and red on
+	// their machine. root below is NOT this: that is the workspace root, not the
+	// credential home config resolves against.
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	cl := &fakeChatClient{}
 	root := testsupport.TempDir(t)
 	w := &Workspace{ctx: context.Background(), root: root, cwd: root,
@@ -314,6 +321,12 @@ func chatTestWorkspace(t *testing.T, id string) (*Workspace, *wsSession, *fakeCh
 	s.cwd = root
 	s.agent = core.NewAgent(cl, "fake-model", "", core.Registry{})
 	w.sessions[id] = s
+	// Join any dial this test starts. Nothing here calls Close, so without it a
+	// chatDial goroutine outlives the test body and keeps rebuilding tools —
+	// which installs the docs tree into the TERVA_HOME pinned above, racing the
+	// harness's own RemoveAll. That is the flake this pairs with the pin to
+	// prevent; the pin alone reproduced it about one run in three under -race.
+	t.Cleanup(w.chatWaitDials)
 	return w, s, cl
 }
 

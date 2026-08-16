@@ -42,6 +42,21 @@ import (
 type wsChat struct {
 	mu      sync.Mutex
 	bridges map[string]*boundBridge
+	// dials counts chatDial goroutines still in flight.
+	//
+	// 🪤 Stopping the BRIDGES is not the same as stopping the connect, and the
+	// gap is not idle time: a dial that is past its handshake goes on to rebuild
+	// the bound session's tools, which installs terva's docs tree into
+	// TERVA_HOME. So a dial racing teardown keeps WRITING after the thing that
+	// started it is gone — invisible in production, where the home outlives the
+	// process, and a "TempDir RemoveAll: directory not empty" flake in any test
+	// that points TERVA_HOME at a directory it then removes.
+	//
+	// Waited on in chatWaitDials rather than in chatStopAll, because that runs
+	// BEFORE the workspace context is cancelled and a connector handshake is a
+	// network round-trip: joining there would trade a leaked goroutine for a
+	// Close that blocks up to the connector's timeout.
+	dials sync.WaitGroup
 }
 
 // boundBridge is one live (or dialing) bridge and the session it serves.
@@ -206,14 +221,23 @@ func (w *Workspace) chatConnect(sessID, name string) error {
 	w.chat.mu.Unlock()
 	w.chatChanged()
 
+	w.chat.dials.Add(1)
 	go w.chatDial(svc, sessID)
 	return nil
 }
+
+// chatWaitDials blocks until every in-flight dial has returned.
+//
+// Called from Close AFTER the workspace context is cancelled: a dial parked in
+// its handshake aborts on that context, so this joins promptly instead of
+// waiting out a network timeout. Safe to call with no dial running.
+func (w *Workspace) chatWaitDials() { w.chat.dials.Wait() }
 
 // chatDial performs the blocking half of a connect: build the connector, run the
 // handshake, start receiving, then re-derive the bound session's tools so the
 // model gains chat_send_image / chat_send_file on its next turn.
 func (w *Workspace) chatDial(svc chat.Service, sessID string) {
+	defer w.chat.dials.Done()
 	host := &chatWsHost{w: w, service: svc.Name}
 	conn, pairing, err := svc.NewConnector(w.root, func(msg string) { host.Notify("warn", msg) })
 	if err == nil {

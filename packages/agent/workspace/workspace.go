@@ -522,6 +522,11 @@ func (w *Workspace) Close() error {
 		w.authRefreshStop()
 	}
 	w.cancel()
+	// After cancel, so a dial parked in its handshake aborts instead of being
+	// waited out. chatStopAll above stopped the bridges; this joins the dials
+	// that had not produced one yet, which would otherwise keep rebuilding
+	// tools — and writing into TERVA_HOME — after Close returned.
+	w.chatWaitDials()
 	if w.mcpStop != nil {
 		w.mcpStop() // StopAll + closeLogs, once for the daemon
 	}
