@@ -421,7 +421,18 @@ func TestOpenAICompatAnthropicReasoningEffort(t *testing.T) {
 	}
 }
 
-func TestOpenAIBuildRequestSkipsReasoningOnlyAssistantMessages(t *testing.T) {
+// Kimi rejects an assistant message carrying neither text nor tool calls
+// ("assistant must not be empty"). That invariant is what this test has always
+// guarded, and it still holds — but the turn is now kept rather than dropped.
+//
+// A reasoning-only turn used to be skipped outright, which tore a hole in the
+// replayed history exactly where an answer had been: a server that classifies
+// a whole reply as reasoning (a thinking channel that never closes) produced
+// turns the model could no longer see, and it apologised for lapses it had no
+// record of. The reasoning is that turn's only substance, so it is promoted
+// into the visible content — which satisfies Kimi too, because the message is
+// no longer empty.
+func TestOpenAIBuildRequestPromotesReasoningOnlyAssistantMessages(t *testing.T) {
 	c := NewKimi("token", "").(*openaiClient)
 	wire, err := c.buildRequest(Request{
 		Model: "kimi-for-coding",
@@ -434,13 +445,37 @@ func TestOpenAIBuildRequestSkipsReasoningOnlyAssistantMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The original invariant, unchanged: nothing empty ever reaches Kimi.
 	for i, msg := range wire.Messages {
 		if msg.Role == "assistant" && msg.Content == nil && len(msg.ToolCalls) == 0 {
 			t.Fatalf("message %d is empty assistant: %+v", i, msg)
 		}
 	}
+	if got := len(wire.Messages); got != 3 {
+		t.Fatalf("messages=%d want 3: the reasoning-only turn must survive replay", got)
+	}
+	if got, _ := wire.Messages[1].Content.(string); got != "thinking only" {
+		t.Fatalf("assistant content=%q want the promoted reasoning", got)
+	}
+}
+
+// An assistant turn with no substance at all still has nothing to promote, so
+// the skip survives for the case that actually trips Kimi's validator.
+func TestOpenAIBuildRequestSkipsTrulyEmptyAssistantMessages(t *testing.T) {
+	c := NewKimi("token", "").(*openaiClient)
+	wire, err := c.buildRequest(Request{
+		Model: "kimi-for-coding",
+		Messages: []Message{
+			{Role: RoleUser, Content: []Content{TextBlock{Text: "first"}}},
+			{Role: RoleAssistant, Content: []Content{TextBlock{Text: "   "}}},
+			{Role: RoleUser, Content: []Content{TextBlock{Text: "second"}}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := len(wire.Messages); got != 2 {
-		t.Fatalf("messages=%d want 2 after skipping reasoning-only assistant", got)
+		t.Fatalf("messages=%d want 2 after skipping the empty assistant", got)
 	}
 }
 

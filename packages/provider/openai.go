@@ -185,6 +185,72 @@ type oaiRequest struct {
 	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
 }
 
+// reasoningMarker is one thinking-channel delimiter pair that a server may hand
+// back inside reasoning_content when its parser never matched the closer.
+//
+// namesChannel marks an opener that is followed by the channel's name on the
+// rest of its line ("<|channel>thought\n"). Removing only the marker would
+// leave that name reading as the first word of the answer, so the opener
+// consumes through the end of its line.
+type reasoningMarker struct {
+	opener       string
+	closer       string
+	namesChannel bool
+}
+
+// reasoningMarkers is deliberately short and literal: these are the pairs
+// actually seen in the wild. A general "anything that looks like a control
+// marker" rule would eat legitimate prose — this codebase discusses these very
+// tags in its own comments.
+var reasoningMarkers = []reasoningMarker{
+	{opener: "<think>", closer: "</think>"},
+	{opener: "<|channel>", closer: "<channel|>", namesChannel: true},
+}
+
+// stripReasoningMarkers removes thinking-channel delimiters from reasoning text
+// that is about to be promoted into an assistant message's visible content.
+//
+// A server that splits a thinking channel out of the token stream can return
+// the whole reply in reasoning_content, markers included, when the channel
+// never closes. Promoting that verbatim replays the markers as if the model had
+// written them in its answer, and the model then imitates the pattern — the
+// contamination compounds with every promoted turn.
+//
+// When a closer is present, everything up to and including it is deliberation
+// and the text after it is the answer the user was meant to see, so only the
+// tail survives. When no closer is present the parser swallowed the entire
+// reply: the words are all there is, so they are kept and only a stray opener
+// is removed. Losing the turn is what the promotion exists to prevent.
+//
+// This runs on the promotion path only. Text the model emitted as ordinary
+// content is never touched.
+func stripReasoningMarkers(s string) string {
+	for _, m := range reasoningMarkers {
+		// The last closer wins: deliberation can mention an earlier one, and
+		// what follows the final closer is the answer.
+		if i := strings.LastIndex(s, m.closer); i >= 0 {
+			s = s[i+len(m.closer):]
+		}
+		for {
+			i := strings.Index(s, m.opener)
+			if i < 0 {
+				break
+			}
+			rest := s[i+len(m.opener):]
+			if m.namesChannel {
+				if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
+					rest = rest[nl+1:]
+				} else {
+					// No newline: the whole remainder is the channel name.
+					rest = ""
+				}
+			}
+			s = s[:i] + rest
+		}
+	}
+	return strings.TrimSpace(s)
+}
+
 // ---- request building ----
 
 func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
@@ -365,8 +431,15 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 			// It goes in content, not reasoning_content: the endpoints that
 			// read that field only accept it beside a tool call, and Kimi
 			// rejects a message whose sole substance is reasoning_content.
+			//
+			// The thinking markers are stripped on the way: promoting them
+			// verbatim replays them as words the model appears to have written
+			// in its own answer, and it then imitates the pattern, so the
+			// contamination compounds with every promoted turn.
 			if am.Content == nil && len(am.ToolCalls) == 0 && reasoning.Len() > 0 {
-				am.Content = reasoning.String()
+				if promoted := stripReasoningMarkers(reasoning.String()); promoted != "" {
+					am.Content = promoted
+				}
 			}
 			// Kimi rejects assistant messages with neither visible text nor
 			// tool calls ("assistant must not be empty"). Nothing survives the
