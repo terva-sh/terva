@@ -993,7 +993,16 @@ every download on a mixed-version deployment.
 The card renders where the daemon advertises the `shared-files` hello feature —
 the web carrier, because the web carrier is what mounts the route. The record
 itself reaches every client either way; the feature is only whether there is a
-link behind it.
+**link** behind it.
+
+A link is not the only way to get at the bytes. The TUI has no HTTP route to
+fetch from, which is why it showed a bare tool call and nothing else for as long
+as this feature existed there. It now renders its own card under the tool box —
+name, kind, size, expiry, and an inline preview for an image it can pull — and
+`/shared` lists the session's whole set with copy-path, open, and save-here. Both
+resolve handles over two read-only ctrlproto verbs, `shared.list` and
+`shared.fetch` (see [controllers.md](controllers.md)), which any carrier can
+serve because they need no route at all. See [tui.md](tui.md#slash-commands).
 
 `$TERVA_HOME/shared` is deliberately **not** a sandbox root, unlike the inbound
 `attachments/`. The agent publishes through the tool, never by writing there, so

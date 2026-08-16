@@ -118,6 +118,29 @@ func (h *harness) waitGone(snippet string) {
 	})
 }
 
+// pressUntil types seq repeatedly until pred holds, and returns how many
+// presses it took.
+//
+// It exists so a test can assert that a key MOVES something without asserting
+// how far — the distance is usually a function of how many entries a catalog
+// happens to hold, and pinning it turns every added command into a failure of
+// a test that is about key routing.
+func (h *harness) pressUntil(desc, seq string, max int, pred func(*tuitest.Screen) bool) int {
+	h.t.Helper()
+	for n := 1; n <= max; n++ {
+		h.term.Type(seq)
+		deadline := time.Now().Add(500 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			if pred(h.term.Screen()) {
+				return n
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	h.t.Fatalf("timed out waiting for %s after %d presses; screen:\n%s", desc, max, h.term.Screen().Text())
+	return 0
+}
+
 // waitExit blocks until Run has returned, so a test can assert on the
 // terminal state teardown left behind rather than on a half-written exit.
 // The result goes back on the channel: t.Cleanup receives from it too, and
@@ -182,13 +205,18 @@ func TestInteractiveSlashPopupPagination(t *testing.T) {
 	h.dismissLoginDialog()
 	h.term.Type("/")
 	h.waitText("/new") // page 1 (session group, top of the catalog)
-	// The window is centered on the cursor, so with the grouped
-	// catalog it takes two page-steps to move a full window past the
-	// session group into model & account.
-	h.term.Type("\x1b[6~\x1b[6~") // PageDown x2
-	h.waitText("/model")          // model & account group content
+	// Page down until the window has travelled past the session and context
+	// groups into model & account. How MANY steps that takes is deliberately
+	// not asserted: it is a function of how many commands the catalog holds,
+	// so pinning it made adding any slash command fail a test that is about
+	// PageDown reaching the popup at all.
+	steps := h.pressUntil("the popup to page into model & account", "\x1b[6~", 16, func(s *tuitest.Screen) bool {
+		return strings.Contains(s.Text(), "/model")
+	})
 	h.waitGone("/new")
-	h.term.Type("\x1b[5~\x1b[5~") // PageUp back
+	for range steps { // PageUp back over the same distance
+		h.term.Type("\x1b[5~")
+	}
 	h.waitText("/new")
 	h.term.Type("\x1b") // Esc closes the popup and clears the editor
 	h.waitGone("/new")

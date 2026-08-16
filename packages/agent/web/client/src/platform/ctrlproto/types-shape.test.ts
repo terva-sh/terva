@@ -78,6 +78,7 @@ const notMirrored: Record<string, string> = {
   Image: 'a prompt attachment, sent inline inside prompt params',
   RealizeWorld: 'mirrored inline as RealizeProposal.world',
   Resolved: 'mirrored inline as WireEvent.resolved',
+  SharedFileRef: 'a bare share id, sent inline as shared.fetch params (like AttachmentRef)',
   SideChatTurn: 'side chat is a TUI-only surface today; no web caller names it',
   UserPersonaRef: 'a single-field ref, sent inline inside userpersonas params',
 }

@@ -32,6 +32,39 @@ func ReadClipboardImagePNG() ([]byte, bool, error) {
 	}
 }
 
+// WriteClipboardText puts s on the system clipboard.
+//
+// Same backend selection as the image read above, pointed the other way, and
+// the same reason each branch exists: WSL has no native Linux clipboard, so it
+// goes to Windows' own through interop; Wayland and X11 have their own tools.
+// A missing backend is a real error rather than a silent success — a "copied"
+// message for a clipboard that never received anything is worse than saying so.
+func WriteClipboardText(s string) error {
+	switch {
+	case isWSL():
+		return runClipboardWrite(s, "clip.exe")
+	case os.Getenv("WAYLAND_DISPLAY") != "":
+		return runClipboardWrite(s, "wl-copy")
+	case os.Getenv("DISPLAY") != "":
+		return runClipboardWrite(s, "xclip", "-selection", "clipboard")
+	default:
+		return fmt.Errorf("no clipboard backend detected (need WSL interop, Wayland, or X11)")
+	}
+}
+
+// runClipboardWrite feeds s to a clipboard tool's stdin.
+func runClipboardWrite(s, name string, args ...string) error {
+	if _, err := exec.LookPath(name); err != nil {
+		return fmt.Errorf("%s not found — install it to copy to the clipboard", name)
+	}
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = strings.NewReader(s)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
 // isWSL reports whether we're under the Windows Subsystem for Linux, where
 // the only clipboard is Windows' own (reached via powershell.exe).
 func isWSL() bool {

@@ -384,10 +384,15 @@ type WireBlock struct {
 	// received, or the next request is rejected outright.
 	Signature string `json:"signature,omitempty"`
 
-	// reasoning
+	// reasoning — Shape names the provider block this was captured from, and
+	// is what says where it may be replayed. A client that renders and returns
+	// a transcript must hand back the tag with the block: without it an
+	// Anthropic thinking block is indistinguishable from a Codex one, and the
+	// serializer's only safe move is to drop it.
 	ReasoningID string `json:"reasoning_id,omitempty"`
 	Summary     string `json:"summary,omitempty"`
 	Encrypted   string `json:"encrypted_content,omitempty"`
+	Shape       string `json:"shape,omitempty"`
 
 	// compaction_summary — who issued the encrypted blob. Only that provider
 	// can replay it, and a blob that arrives without provenance is treated as
@@ -646,6 +651,7 @@ func contentToWire(blocks []provider.Content, imageData bool) []WireBlock {
 				ReasoningID: v.ID,
 				Summary:     v.Summary,
 				Encrypted:   v.Encrypted,
+				Shape:       v.Shape,
 			})
 		}
 	}
@@ -731,7 +737,7 @@ func ContentFromWire(blocks []WireBlock) []provider.Content {
 				Content: ContentFromWire(b.Content),
 			})
 		case "reasoning":
-			out = append(out, provider.ReasoningBlock{ID: b.ReasoningID, Summary: b.Summary, Encrypted: b.Encrypted})
+			out = append(out, provider.ReasoningBlock{ID: b.ReasoningID, Summary: b.Summary, Encrypted: b.Encrypted, Shape: b.Shape})
 		case "compaction_summary":
 			out = append(out, provider.CompactionBlock{ID: b.ID, Encrypted: b.Encrypted, Provider: b.Provider})
 		}

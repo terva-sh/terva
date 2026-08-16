@@ -540,6 +540,35 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			},
 			hideCaretFallback: true,
 		},
+		{ // shared files: /shared (the session's deliverables + copy/open/save)
+			active: i.sharedDialog.Active,
+			ctrlC:  func() bool { i.sharedDialog.Close(); return true },
+			handleKey: func(k tui.Key) bool {
+				act := i.sharedDialog.HandleKey(k)
+				switch {
+				case act.Close:
+					i.sharedDialog.Close()
+				case act.Refresh:
+					go func() { _ = i.refreshSharedFiles() }()
+				case act.CopyID != "":
+					i.copySharedPath(act.CopyID)
+				case act.OpenID != "":
+					i.openSharedFile(act.OpenID)
+				case act.SaveID != "":
+					// Off the key handler: this one fetches the bytes over the
+					// wire and writes them, and the panel must stay painted
+					// while that happens.
+					go i.saveSharedFile(act.SaveID)
+				}
+				return false
+			},
+			render: func(cols int) []string {
+				_, rows := i.cfg.Terminal.Size()
+				i.sharedDialog.MaxRows = dialogs.BodyBudget(rows, i.sharedDialog.ChromeRows())
+				return i.sharedDialog.Render(i.cfg.Theme, cols)
+			},
+			hideCaretFallback: true,
+		},
 		{ // jump-to-turn picker (also backs /fork's turn selection)
 			active: i.jumpDialog.Active,
 			ctrlC: func() bool {

@@ -438,6 +438,16 @@ var dispatch = map[Method]handler{
 		return c.WorkflowRun(ctx, p)
 	}),
 
+	// ----------------------------------------------------------------- shared files
+
+	MethodSharedList: get(noShared, func(c SharedFilesController, ctx context.Context, f Frame) (SharedFilesResult, error) {
+		list, err := c.SharedFiles(ctx, f.Sess)
+		return SharedFilesResult{Files: list}, err
+	}),
+	MethodSharedFetch: ask(noShared, func(c SharedFilesController, ctx context.Context, f Frame, p SharedFileRef) (SharedFileContent, error) {
+		return c.SharedFileFetch(ctx, f.Sess, p)
+	}),
+
 	// --------------------------------------------------------------- user personas
 
 	MethodUserPersonasList: get(noUserPers, func(c UserPersonasController, ctx context.Context, f Frame) (UserPersonasListResult, error) {

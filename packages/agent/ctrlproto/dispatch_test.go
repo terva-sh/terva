@@ -261,6 +261,16 @@ func (r *recorder) WorkflowRun(_ context.Context, p WorkflowGetParams) (Workflow
 	return WorkflowRunView{}, nil
 }
 
+// --- SharedFilesController ---
+func (r *recorder) SharedFiles(_ context.Context, sess string) ([]SharedFileEntry, error) {
+	r.note("SharedFiles", sess, nil)
+	return nil, nil
+}
+func (r *recorder) SharedFileFetch(_ context.Context, sess string, p SharedFileRef) (SharedFileContent, error) {
+	r.note("SharedFileFetch", sess, p)
+	return SharedFileContent{}, nil
+}
+
 // --- DoctorController ---
 func (r *recorder) CardsDoctor(_ context.Context, p DoctorParams) (DoctorResult, error) {
 	r.note("CardsDoctor", "", p)
@@ -620,6 +630,13 @@ func dispatchCases() []dispatchCase {
 		{MethodWorkflowsList, nil, "WorkflowRuns", nil},
 		{MethodWorkflowsGet, WorkflowGetParams{ID: "wf_abc123"}, "WorkflowRun", WorkflowGetParams{ID: "wf_abc123"}},
 
+		// --- shared files: the same two-verbs-one-controller shape, and both are
+		// session-scoped — a share belongs to the conversation that produced it,
+		// so a frame's sess reaching the wrong one would hand a user another
+		// session's deliverables. The sessionScoped check below covers that. ---
+		{MethodSharedList, nil, "SharedFiles", nil},
+		{MethodSharedFetch, SharedFileRef{ID: "shr_abc123"}, "SharedFileFetch", SharedFileRef{ID: "shr_abc123"}},
+
 		// --- draft (optional, takes no params — it must still reach the right arm) ---
 		{MethodSessionDiscardDraft, nil, "DiscardDraft", nil},
 
@@ -741,6 +758,7 @@ func TestDispatchForwardsTheFrameSession(t *testing.T) {
 		"Context": true, "Node": true, "History": true, "Reveal": true,
 		"Surfaces": true, "Surface": true, "SurfaceAction": true,
 		"Models": true, "SwitchModel": true, "ReplayControl": true,
+		"SharedFiles": true, "SharedFileFetch": true,
 	}
 	for _, tc := range dispatchCases() {
 		if !sessionScoped[tc.want] {

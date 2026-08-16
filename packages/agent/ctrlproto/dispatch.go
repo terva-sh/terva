@@ -176,7 +176,11 @@ var (
 	noExport      = plain("session export is not available here")
 	noArchive     = plain("session archiving is not available here")
 	noWorkflows   = plain("workflow runs are not available here")
-	noReplay      = plain("replay not supported")
+	// Localized rather than plain(): the TUI's /shared dialog reaches this
+	// through the in-process carrier and through `terva attach`, so a user can
+	// meet this answer in a terminal — the same reason noSecrets is localized.
+	noShared = unsupportedMsg(func() string { return i18n.T("shared files are not available here") })
+	noReplay = plain("replay not supported")
 
 	// DoctorController's four, one per verb.
 	noCardDoctor    = plain("the card doctor is not available here")

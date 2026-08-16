@@ -34,6 +34,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -252,6 +253,63 @@ func (s *Store) Resolve(sess, id string) (Ref, error) {
 		return s.refFor(filepath.Join(s.SessionDir(sess), e.Name()), clean, info.Size(), info.ModTime()), nil
 	}
 	return Ref{}, ErrNotFound
+}
+
+// List returns every file this session holds, newest first.
+//
+// The counterpart to Resolve for a caller that has no ids to resolve — a client
+// showing what a conversation produced rather than following a record it was
+// already handed. A session with nothing in it (or no directory yet) is an
+// empty list and no error: never having shared anything is not a failure.
+//
+// Entries whose name does not carry an id of this store's own prefix are
+// skipped. The directory is the store's to own, so anything else in it was not
+// put there by Stage, and inventing a Ref for it would hand a caller a handle
+// that Resolve then refuses.
+//
+// Newest first because the ids are random: there is no order in them to read,
+// and the useful question about a share is nearly always "what did it just give
+// me". mtime is the same clock Sweep ages files by, so the row nearest the top
+// is also the one furthest from being swept.
+func (s *Store) List(sess string) ([]Ref, error) {
+	dir := s.SessionDir(sess)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%s list: %w", s.label, err)
+	}
+	type row struct {
+		ref Ref
+		mod time.Time
+	}
+	var rows []row
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		id, _, ok := strings.Cut(e.Name(), "-")
+		if !ok || !strings.HasPrefix(id, s.idPrefix) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			// Raced with the sweeper, most likely. One unreadable entry is not
+			// a reason to refuse the whole listing.
+			continue
+		}
+		rows = append(rows, row{
+			ref: s.refFor(filepath.Join(dir, e.Name()), id, info.Size(), info.ModTime()),
+			mod: info.ModTime(),
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].mod.After(rows[j].mod) })
+	out := make([]Ref, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.ref)
+	}
+	return out, nil
 }
 
 // ResolveAll maps ids to Refs, silently skipping those that no longer resolve,

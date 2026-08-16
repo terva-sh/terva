@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/mattn/go-runewidth"
@@ -101,6 +102,18 @@ type View struct {
 	Theme      Theme
 	ImageProto ImageProtocol // how to render inline images in this terminal
 	Messages   []provider.Message
+	// SharedPreviews holds the image bytes this client has fetched for a
+	// shared file (share_file), keyed by the share id. A card draws a preview
+	// only for an id present here, so an image whose fetch has not landed —
+	// or that this carrier cannot serve — renders as a complete card without
+	// one. Never populated by the renderer: a share is a handle the DAEMON
+	// resolves, and the daemon may be another machine (terva attach), so the
+	// bytes arrive through the carrier or not at all.
+	SharedPreviews map[string][]byte
+	// Now is the clock the shared-file expiry column reads. Nil means
+	// time.Now; a test pins it so "6d left" is assertable rather than a race
+	// against the store's TTL.
+	Now func() time.Time
 	// toolPaths maps tool_use_id to the "path" argument of the call, if
 	// any, so tool_result rendering can pick the right syntax language.
 	// Rebuilt on each Build().
@@ -933,7 +946,11 @@ func hashMessage(m provider.Message) uint64 {
 	// render differently, so hashing content only served the stale row back from the
 	// cache forever. Same latent trap for a compaction whose token count changes
 	// under an unchanged summary. Anything renderMessage reads must be hashed.
-	for _, k := range []string{"compaction", "tokens_before", "clear"} {
+	// "shared" is here for a reason the others are not: it ARRIVES LATE. The
+	// live fold appends a share to a tool-role message that is already in the
+	// transcript, so without hashing it the cache serves back the row it
+	// rendered a moment earlier and the card never appears at all.
+	for _, k := range []string{"compaction", "tokens_before", "clear", MetaSharedKey} {
 		if val := m.Meta[k]; val != "" {
 			h = fnv64aWriteByte(h, 'm')
 			h = fnv64aWrite(h, []byte(k))
@@ -1134,6 +1151,10 @@ func (v *View) renderMessage(m provider.Message, width int, turnOpen bool) []str
 			}
 		}
 	case provider.RoleTool:
+		// The files this step's calls handed to the user. Parsed once for the
+		// message and filtered per call below, because one tool-role message
+		// batches a whole step's results.
+		shares := parseSharedFiles(m.Meta)
 		for _, c := range m.Content {
 			if tr, ok := c.(provider.ToolResultBlock); ok {
 				// Reduced tool display: swap the whole box for a one-line
@@ -1151,6 +1172,10 @@ func (v *View) renderMessage(m provider.Message, width int, turnOpen bool) []str
 					continue
 				case ToolDisplayHidden:
 					if !tr.IsError {
+						// Hidden suppresses the call's mechanics, not its
+						// deliverable: the file the user asked for is the one
+						// thing here that is not noise.
+						lines = append(lines, v.sharedCardRows(sharedFilesFor(shares, tr.CallID), width)...)
 						continue
 					}
 					fallthrough
@@ -1160,6 +1185,11 @@ func (v *View) renderMessage(m provider.Message, width int, turnOpen bool) []str
 						label = v.toolCallLabels[tr.CallID]
 					}
 					lines = append(lines, minimalToolLine(v.Theme, label, toolResultSummary(tr.Content), tr.IsError, width))
+					// The cards survive the reduced displays. Those modes hide
+					// tool MECHANICS, which is not what a shared file is: the
+					// user asked the agent for a thing, and "tool output is
+					// noisy" is no reason to withhold the thing itself.
+					lines = append(lines, v.sharedCardRows(sharedFilesFor(shares, tr.CallID), width)...)
 					continue
 				}
 				color := v.Theme.ToolOut
@@ -1208,10 +1238,31 @@ func (v *View) renderMessage(m provider.Message, width int, turnOpen bool) []str
 				}
 				lines = append(lines, toolBoxSide(v.Theme, "", width))
 				lines = append(lines, toolBoxBottom(v.Theme, width))
+				// Cards go BELOW the closed box: the box is what the call did,
+				// the card is what the user got.
+				lines = append(lines, v.sharedCardRows(sharedFilesFor(shares, tr.CallID), width)...)
 			}
 		}
 	}
 	return lines
+}
+
+// sharedCardRows renders one call's shared-file cards for the transcript,
+// resolving the image-footprint tagging the card rows may carry.
+//
+// The cards are unboxed, so a preview's footprint rows are emitted bare rather
+// than wrapped in │ edges — an image's graphics rectangle paints over anything
+// drawn beside it, which is what the sentinel exists to prevent.
+func (v *View) sharedCardRows(files []SharedFile, width int) []string {
+	if len(files) == 0 {
+		return nil
+	}
+	var out []string
+	for _, row := range v.renderSharedFileCards(files, width) {
+		_, stripped := parseImageFootprint(row)
+		out = append(out, stripped)
+	}
+	return out
 }
 
 func (v *View) renderToolCall(tc ToolCallView, width int) []string {
@@ -1967,13 +2018,23 @@ func (v *View) renderDiffRow(line string, width, color int, lineNo int, mark byt
 // content from being drawn on top of the image, we pad with blank rows
 // so the image's real footprint is reflected in the frame height.
 func (v *View) renderImageBlock(b provider.ImageBlock, width int) []string {
-	w, h := ImageDimensions(b.Data)
-	kb := len(b.Data) / 1024
+	return v.renderImageBlockData(b.Data, b.MimeType, width)
+}
+
+// renderImageBlockData is renderImageBlock over raw bytes rather than a
+// transcript block. Split out so a surface that holds pixels which never were
+// a provider.ImageBlock — a shared-file preview, fetched by id — draws them
+// through exactly this path, footprint reservation and sentinel tagging
+// included. Two copies of that escape/reservation dance is how one of them
+// ends up painting over the rows below it.
+func (v *View) renderImageBlockData(data []byte, mimeType string, width int) []string {
+	w, h := ImageDimensions(data)
+	kb := len(data) / 1024
 	// Four-space indent matches every other tool-output row
 	// (renderRawFile, renderBashResult, diff rows, "... N more
 	// lines" footers). Keeps the image's metadata line vertically
 	// aligned with the file content above / below it.
-	info := fmt.Sprintf("    image - %s - %dx%d - %d KB", b.MimeType, w, h, kb)
+	info := fmt.Sprintf("    image - %s - %dx%d - %d KB", mimeType, w, h, kb)
 
 	if v.ImageProto != ImageProtocolNone {
 		// Clamp rendered width so the image never overflows the chat
@@ -1987,8 +2048,8 @@ func (v *View) renderImageBlock(b provider.ImageBlock, width int) []string {
 			cells = 10
 		}
 		const maxRows = 20
-		if seq := RenderInlineImageScaled(v.ImageProto, b.Data, b.MimeType, cells, maxRows); seq != "" {
-			rows, actualCells := InlineImageFootprint(b.Data, cells, maxRows)
+		if seq := RenderInlineImageScaled(v.ImageProto, data, mimeType, cells, maxRows); seq != "" {
+			rows, actualCells := InlineImageFootprint(data, cells, maxRows)
 			if rows < 1 {
 				rows = 1
 			}

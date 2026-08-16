@@ -185,3 +185,19 @@ unchanged — the backstop is about not letting a runaway agent fill the disk, a
 that concern does not care which way the files were going. Each store carries its
 own `attach.Policy` and starts its own sweeper, so neither retention can silently
 become the other's.
+
+Reading a shared file back over the **control plane** (`shared.fetch`, the verb
+a non-web client uses because it has no HTTP route) is bounded separately at
+**8 MiB**, and the bound is checked by a stat before the read rather than after.
+It is not a limit on what may be shared: the store takes far larger files, the
+web route serves them with range requests, and a local client has the path. It
+is a limit on what may be inlined into a single wire frame, which both ends read
+into memory whole — so the refusal names the file and points at the path
+instead. The TUI applies a tighter **2 MiB** ceiling to the image previews it
+pulls automatically, for a different reason: a card that is merely on screen has
+not asked you to wait for it.
+
+A preview is fetched **once per share**, with the claim taken before the request
+goes out. A card is re-rendered on every frame, so an unclaimed fetch would
+become one request per repaint; a failure is remembered too, which is what stops
+a swept file from being asked for forever.

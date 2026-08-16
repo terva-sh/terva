@@ -45,6 +45,20 @@ on run argv
 end run
 `
 
+// WriteClipboardText puts s on the system clipboard.
+//
+// pbcopy rather than osascript: it takes the text on stdin, so a path with
+// quotes, backslashes, or newlines needs no escaping into a script body — which
+// is exactly the class of filename an agent can produce.
+func WriteClipboardText(s string) error {
+	cmd := exec.Command("/usr/bin/pbcopy")
+	cmd.Stdin = strings.NewReader(s)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("pbcopy: %w", err)
+	}
+	return nil
+}
+
 // ReadClipboardImagePNG returns the system clipboard's image as PNG bytes.
 // ok is false with a nil error when the clipboard holds no image; a non-nil
 // error means osascript itself failed. macOS hands images out as PNG or

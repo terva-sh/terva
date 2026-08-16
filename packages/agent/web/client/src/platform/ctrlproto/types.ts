@@ -134,6 +134,37 @@ export interface SharedFile {
   expires_at?: string
 }
 
+// SharedFileEntry is one row of shared.list: the record the transcript already
+// carries, plus where the bytes sit on the DAEMON's disk. Mirrors
+// ctrlproto.SharedFileEntry.
+//
+// path is host-local and often absent. It is what lets a client running ON the
+// daemon's machine (the TUI, terva attach to localhost) open the file in a
+// system viewer or put a real path on the clipboard. A browser is never that
+// client: this panel fetches instead, because a path from another machine is at
+// best useless and at worst names a different file with the same name.
+export interface SharedFileEntry extends SharedFile {
+  path?: string
+}
+
+// SharedFileContent is one shared file's bytes, the result of shared.fetch.
+// Mirrors ctrlproto.SharedFileContent.
+//
+// data is base64 on the wire (encoding/json renders Go's []byte that way) and
+// bounded by ctrlproto.MaxSharedFetchBytes — 8 MiB, what fits in one control
+// frame. name and mime ride along so a caller can write the file out or pick a
+// renderer without joining back to a listing it may never have fetched.
+//
+// The panel reaches shares over its own GET /shared/<sess>/<id> route, which
+// streams and supports ranges; this verb is how a client with no HTTP route
+// (the TUI on a unix socket) gets at the same bytes.
+export interface SharedFileContent {
+  id: string
+  name: string
+  mime?: string
+  data?: string
+}
+
 // CastRoute is one cast member's pinned provider+model (Phase 7); empty fields
 // mean the actor inherits the session/host model.
 export interface CastRoute {
@@ -2390,6 +2421,8 @@ export type Verb =
   | 'secrets.list'
   | 'secrets.revoke'
   | 'secrets.status'
+  | 'shared.fetch'
+  | 'shared.list'
   | 'shell.result'
   | 'sidechat.ask'
   | 'sidechat.close'

@@ -143,6 +143,47 @@ func TestMessageToWireLiftsSharesOutOfMeta(t *testing.T) {
 	}
 }
 
+// The other half of the replay path. MessageToWire lifting the record out of
+// Meta is only useful if MessageFromWire puts it back: a control-plane client
+// (the TUI) rebuilds its whole transcript through this pair on every snapshot,
+// so a share that survives the trip out and dies on the trip back is a card
+// that vanishes the moment the session is resumed or the carrier reconnects.
+func TestMessageFromWireRestoresShares(t *testing.T) {
+	msg := provider.Message{
+		Role:    provider.RoleTool,
+		Content: []provider.Content{provider.ToolResultBlock{CallID: "call_1"}},
+		Meta:    map[string]string{MetaShared: `[{"id":"shr_a","call_id":"call_1","name":"a.mp3","kind":"audio"}]`},
+	}
+
+	back := MessageFromWire(MessageToWire(msg))
+
+	var got []SharedFile
+	if raw := back.Meta[MetaShared]; raw != "" {
+		if err := json.Unmarshal([]byte(raw), &got); err != nil {
+			t.Fatalf("Meta[%s] = %q: %v", MetaShared, raw, err)
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("shares after the round trip = %+v, want the one that was recorded", got)
+	}
+	if got[0].ID != "shr_a" || got[0].CallID != "call_1" || got[0].Kind != "audio" {
+		t.Errorf("restored share = %+v, want the recorded one intact", got[0])
+	}
+}
+
+// A message that shared nothing must not grow a Meta bag on the way back, for
+// the reason the execute path must not: every key in there is something a
+// client may key off, and an empty one is a lie about what the turn did.
+func TestMessageFromWireLeavesMetaAloneWithoutShares(t *testing.T) {
+	back := MessageFromWire(MessageToWire(provider.Message{
+		Role:    provider.RoleTool,
+		Content: []provider.Content{provider.ToolResultBlock{CallID: "call_1"}},
+	}))
+	if back.Meta != nil {
+		t.Errorf("Meta = %v on a message that shared nothing, want nil", back.Meta)
+	}
+}
+
 // A record that will not parse costs the user a download card. Costing them the
 // whole transcript instead would be the worse trade, so the message still
 // renders — the same tolerance the attachments field gets.

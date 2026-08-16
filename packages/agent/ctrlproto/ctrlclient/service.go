@@ -176,6 +176,30 @@ func (s *Service) WorkflowRun(ctx context.Context, p ctrlproto.WorkflowGetParams
 	return r, err
 }
 
+var _ ctrlproto.SharedFilesController = (*Service)(nil)
+
+// The files an agent handed to the user, read-only. SESSION-scoped, unlike the
+// workflow pair above: a share belongs to the conversation that produced it,
+// and the daemon resolves an id only within the session the frame names.
+//
+// This forwarder is what makes the TUI's shared-file surface work over `terva
+// attach` rather than only in-process. It also makes the remote case the honest
+// one: a listing's Path names the DAEMON's disk, so a remote client ignores it
+// and calls SharedFileFetch, which is the only route to the bytes from another
+// machine.
+
+func (s *Service) SharedFiles(ctx context.Context, sess string) ([]ctrlproto.SharedFileEntry, error) {
+	var r ctrlproto.SharedFilesResult
+	err := s.c.Call(ctx, sess, ctrlproto.MethodSharedList, nil, &r)
+	return r.Files, err
+}
+
+func (s *Service) SharedFileFetch(ctx context.Context, sess string, p ctrlproto.SharedFileRef) (ctrlproto.SharedFileContent, error) {
+	var r ctrlproto.SharedFileContent
+	err := s.c.Call(ctx, sess, ctrlproto.MethodSharedFetch, p, &r)
+	return r, err
+}
+
 func (s *Service) Usage(ctx context.Context, sess string) (core.WireUsage, error) {
 	var r ctrlproto.UsageResult
 	err := s.c.Call(ctx, sess, ctrlproto.MethodUsageGet, nil, &r)

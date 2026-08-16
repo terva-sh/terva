@@ -12,3 +12,10 @@ import "fmt"
 func ReadClipboardImagePNG() ([]byte, bool, error) {
 	return nil, false, fmt.Errorf("clipboard image paste is not supported on this platform yet")
 }
+
+// WriteClipboardText is not implemented on this platform yet, for the reason
+// above. An explicit refusal keeps a caller from reporting "copied" about a
+// clipboard that received nothing.
+func WriteClipboardText(string) error {
+	return fmt.Errorf("copying to the clipboard is not supported on this platform yet")
+}

@@ -69,6 +69,13 @@ const (
 	MethodWorkflowsList Method = "workflows.list" // result WorkflowRunsResult; read-only
 	MethodWorkflowsGet  Method = "workflows.get"  // params WorkflowGetParams, result WorkflowRunView; read-only
 
+	// The files this session's agent handed to the user with share_file
+	// (optional; served only by a SharedFilesController). Read-only, and in the
+	// session group because a share is scoped to the conversation that produced
+	// it. See shared.go.
+	MethodSharedList  Method = "shared.list"  // result SharedFilesResult (sess in frame); read-only
+	MethodSharedFetch Method = "shared.fetch" // params SharedFileRef, result SharedFileContent (sess in frame); read-only
+
 	// MethodConversationReveal returns the turns a compaction checkpoint
 	// summarized away. They are not gone: a compaction row is an append-only
 	// checkpoint the loader honors, never a rewrite of the rows above it, so the
@@ -379,7 +386,8 @@ func (m Method) Group() Group {
 		MethodFilesList, MethodAuthProviders, MethodConversationReveal, MethodConversationHistory,
 		MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose, MethodSuggestReply, MethodSuggestNextStep, MethodSessionsDoctor,
 		MethodSessionsNextScene, MethodSessionsRealize, MethodSessionsExport,
-		MethodWorkflowsList, MethodWorkflowsGet:
+		MethodWorkflowsList, MethodWorkflowsGet,
+		MethodSharedList, MethodSharedFetch:
 		return GroupSession
 	case MethodModelsList, MethodModelSwitch, MethodModelFavorite, MethodModelSetDefault, MethodSessionReasoning,
 		MethodModelParams, MethodModelParamsSet, MethodModelParamsReset,
