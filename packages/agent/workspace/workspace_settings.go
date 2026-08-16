@@ -179,7 +179,7 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 			// The cost is stated rather than left to be inferred: this is the
 			// one setting in the pane that spends money on its own initiative,
 			// without the user having sent anything.
-			Description: i18n.T("After a reply, if you go quiet with an empty composer, offer a short suggested next message as ghost text. Tab accepts it, and nothing is sent until you send it. Costs one extra model call per reply you pause on."),
+			Description: i18n.T("After a reply, if you go quiet with an empty composer, offer a short suggested next message as ghost text. Tab or the right arrow accepts it, and nothing is sent until you send it. Costs one extra model call per reply you pause on."),
 			Note:        i18n.T("off by default — applies live"),
 		},
 		{

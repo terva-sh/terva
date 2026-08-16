@@ -244,6 +244,16 @@ func (e *Editor) Ghost() string { return e.ghost }
 // shown: an offer waits behind whatever the user is writing.
 func (e *Editor) ghostVisible() bool { return e.ghost != "" && e.IsEmpty() }
 
+// GhostVisible reports whether an offer is on screen right now, as opposed to
+// merely held.
+//
+// Exported because the host intercepts some keys before the editor ever sees
+// them, and one of those keys accepts the offer. An interceptor that has to
+// decide whether to yield must ask the SAME question Render asks — not a
+// lookalike built from Ghost() and IsEmpty(), which is the version that drifts
+// the first time either rule changes.
+func (e *Editor) GhostVisible() bool { return e.ghostVisible() }
+
 // AcceptGhost turns a visible offer into ordinary text and reports whether it
 // did. The offer is consumed either way it goes from here: accepted it becomes
 // the user's own line to edit or send, and there is nothing left to re-offer.
@@ -325,10 +335,25 @@ func (e *Editor) HandleKey(k Key) (submit bool) {
 		}
 	case KeyRight:
 		if k.Alt {
+			// Alt+Right stays word navigation. Accepting is the PLAIN gesture,
+			// which is what shell autosuggestion trained everyone to reach for.
 			e.moveWordRight()
-		} else {
-			e.moveRight()
+			break
 		}
+		// Right accepts a visible offer, the same as Tab. It costs nothing to
+		// give it away: an offer is only ever drawn while the buffer is EMPTY,
+		// and on an empty buffer moveRight has nothing to move toward — the
+		// caret is at rune 0 of the only line, so both of its branches decline.
+		// So this takes no movement away from the user; it fills in a keystroke
+		// that was previously inert at exactly the moment an offer is showing.
+		//
+		// AcceptGhost self-guards on the same visibility rule that draws it,
+		// so with nothing offered this falls straight through to the movement
+		// it has always done.
+		if e.AcceptGhost() {
+			break
+		}
+		e.moveRight()
 	case KeyUp:
 		// Visual-row navigation. When a single logical line wraps
 		// to several visual rows, Up needs to climb one visual

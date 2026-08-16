@@ -48,3 +48,25 @@ func TestTheNextStepSettingSaysWhatItCosts(t *testing.T) {
 		t.Fatalf("the description does not say nothing is sent without the user: %q", it.Description)
 	}
 }
+
+// The description names every key that accepts, because this row is the only
+// place the feature is explained — an offer draws no hint of its own, so a key
+// missing here is a key nobody finds.
+//
+// It drifted once already. Right joined Tab as a second accept key and this
+// text still said "Tab accepts it", which the guards above could not catch:
+// they pin the cost claim and the nothing-is-sent promise, and both survive a
+// description that names the wrong keys.
+func TestTheNextStepSettingNamesEveryAcceptKey(t *testing.T) {
+	_, s, _ := chatTestWorkspace(t, "s1")
+	it := findSetting(s.settingsView(), "next_step")
+	if it == nil {
+		t.Fatal("no next_step row in the settings pane")
+	}
+	d := strings.ToLower(it.Description)
+	for _, key := range []string{"tab", "right arrow"} {
+		if !strings.Contains(d, key) {
+			t.Errorf("the description does not name %q as an accept key: %q", key, it.Description)
+		}
+	}
+}

@@ -343,6 +343,22 @@ func (i *Interactive) handleInputHistoryKey(k tui.Key) bool {
 	if k.Kind != tui.KeyLeft && k.Kind != tui.KeyRight {
 		return false
 	}
+	// A visible offer owns the plain Right key, because Right accepts it.
+	//
+	// This branch runs BEFORE the editor sees the key, and its Right path ends
+	// in Clear() on an empty composer — which drops the offer instead of taking
+	// it. Both conditions are met at exactly the moment an offer is drawn: the
+	// composer is empty, and history is non-empty because an offer only follows
+	// a reply, which the user's own message provoked. So without this the
+	// accept gesture would delete the thing it was aimed at, and an
+	// editor-level test would never see it.
+	//
+	// Right only, and Left still opens history: browsing installs a buffer, and
+	// whoever installs a buffer owns the composer, so the offer is over by the
+	// same rule that ends it on submit.
+	if k.Kind == tui.KeyRight && !k.Alt && i.ed.GhostVisible() {
+		return false
+	}
 	// Do not steal normal cursor movement. History browsing can only
 	// start from an empty editor; once active, Left/Right keep walking
 	// the ring so repeated presses work even though the editor now

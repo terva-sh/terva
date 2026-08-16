@@ -72,7 +72,7 @@
   "API key": "API key",
   "Activation continuation": "Activation continuation",
   "Advertise only the core coding tools at first and let the agent load extension/MCP tool groups on demand (activate_tools), trimming the tool schemas that fill context every turn.": "Advertise only the core coding tools at first and let the agent load extension/MCP tool groups on demand (activate_tools), trimming the tool schemas that fill context every turn.",
-  "After a reply, if you go quiet with an empty composer, offer a short suggested next message as ghost text. Tab accepts it, and nothing is sent until you send it. Costs one extra model call per reply you pause on.": "After a reply, if you go quiet with an empty composer, offer a short suggested next message as ghost text. Tab accepts it, and nothing is sent until you send it. Costs one extra model call per reply you pause on.",
+  "After a reply, if you go quiet with an empty composer, offer a short suggested next message as ghost text. Tab or the right arrow accepts it, and nothing is sent until you send it. Costs one extra model call per reply you pause on.": "After a reply, if you go quiet with an empty composer, offer a short suggested next message as ghost text. Tab or the right arrow accepts it, and nothing is sent until you send it. Costs one extra model call per reply you pause on.",
   "Agents": "Agents",
   "Always (this tool)": "Always (this tool)",
   "An unrecognized macro is not expanded and will be sent literally.": "An unrecognized macro is not expanded and will be sent literally.",
