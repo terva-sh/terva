@@ -13,6 +13,7 @@ package modes
 // styling is present in both, so any surplus came from the name.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,8 +58,8 @@ func TestOpenedNoticeNeutralisesAHostileName(t *testing.T) {
 	}
 }
 
-// The saved name comes back from the filesystem, and a control byte in a
-// filename is legal there. The notice still must not carry it to the terminal.
+// The saved name is chosen by terva, so it is printable before it is written —
+// and the notice sanitizes anyway, because the two decisions are separate.
 func TestSavedNoticeNeutralisesAHostileName(t *testing.T) {
 	saved := func(name string) (*Interactive, string) {
 		cwd := testsupport.TempDir(t)
@@ -94,5 +95,50 @@ func TestSavedNoticeNeutralisesAHostileName(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join(cwd, entries[0].Name()))
 	if err != nil || string(body) != "BODY" {
 		t.Errorf("the saved copy is wrong: %q (err %v)", body, err)
+	}
+
+	// And the name on DISK is printable. Windows rejects a control byte in a
+	// filename outright, so leaving one in did not preserve the save there, it
+	// prevented it — the create failed and the user got nothing. Everywhere
+	// else the name still reaches a terminal the moment anything lists the
+	// directory, which is a surface that never opted in.
+	if n := entries[0].Name(); strings.ContainsFunc(n, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		t.Errorf("a control byte reached the filename on disk: %q", n)
+	}
+}
+
+// The FAILURE notices print the error verbatim, and on `terva attach` that text
+// came off a daemon this client does not control. Sanitizing the success notice
+// and not the failure one leaves the guard above reachable by making the save
+// fail — which is not an exotic condition: a full disk, a read-only directory
+// or a refused permission gets there on any platform.
+//
+// The error is the carrier here rather than the filename, because the filename
+// no longer reaches this path: sanitizeSavedName cleans it before the create is
+// attempted. A test that smuggled the name in would pass without asserting
+// anything about the notice.
+func TestFailedSaveNoticeNeutralisesAHostileError(t *testing.T) {
+	failed := func(msg string) *Interactive {
+		c := newShareCarrier(map[string][]byte{"shr_a": []byte("BODY")})
+		c.err = errors.New(msg)
+		i := sharedActionInteractive(t, c, testsupport.TempDir(t), true, []ctrlproto.SharedFileEntry{
+			entry("shr_a", "report.pdf", "/daemon/side/shr_a-report.pdf"),
+		})
+		i.saveSharedFile("shr_a")
+		return i
+	}
+
+	benign := rawNotice(failed("disk full"))
+	hostile := rawNotice(failed("disk\x1b[31m\x1b[2J\x1b]0;pwned\x07full"))
+
+	// The fixture has to actually fail, or this asserts nothing at all.
+	if !strings.Contains(stripANSICodes(benign), "save failed") {
+		t.Fatalf("the fixture did not produce a failure notice:\n%s", stripANSICodes(benign))
+	}
+	if got, want := strings.Count(hostile, "\x1b"), strings.Count(benign, "\x1b"); got != want {
+		t.Errorf("the error text contributed %d escape bytes to the notice", got-want)
+	}
+	if strings.Contains(hostile, "pwned") {
+		t.Errorf("the OSC payload reached the failure notice:\n%s", hostile)
 	}
 }

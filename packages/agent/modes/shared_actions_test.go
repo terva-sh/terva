@@ -245,6 +245,15 @@ func TestSanitizeSavedName(t *testing.T) {
 		"":               "shared-file",
 		"..":             "shared-file",
 		".":              "shared-file",
+		// An escape sequence goes whole. Windows rejects the control byte in a
+		// filename outright, so a name carrying one could not be saved there at
+		// all — and everywhere else it paints itself into any listing of the
+		// directory. Dropping only the ESC would leave "[31m" printing as text,
+		// which is why this delegates to the sequence-aware pass.
+		"report\x1b[31m\x1b[2J\x1b]0;pwned\x07.pdf": "report.pdf",
+		// A name that is nothing BUT a sequence reduces to nothing, so it takes
+		// the fallback rather than an empty filename.
+		"\x1b[2J": "shared-file",
 	} {
 		if got := sanitizeSavedName(in); got != want {
 			t.Errorf("sanitizeSavedName(%q) = %q, want %q", in, got, want)

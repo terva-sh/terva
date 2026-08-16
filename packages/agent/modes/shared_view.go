@@ -308,7 +308,7 @@ func (i *Interactive) openSharedDialog() {
 			i.setStatusErr(i18n.T("shared files are not available in this mode"))
 			return
 		}
-		i.setStatusErr(i18n.T("shared files: %s", err.Error()))
+		i.setStatusErr(i18n.T("shared files: %s", tui.SanitizeLabel(err.Error())))
 		return
 	}
 	i.sharedDialog.Open(i.sharedFileRows)
@@ -334,7 +334,7 @@ func (i *Interactive) copySharedPath(id string) {
 		return
 	}
 	if err := writeClipboard(file.Path); err != nil {
-		i.sharedDialog.Notice(i18n.T("copy failed: %s", err.Error()), true)
+		i.sharedDialog.Notice(i18n.T("copy failed: %s", tui.SanitizeLabel(err.Error())), true)
 		i.invalidate()
 		return
 	}
@@ -359,7 +359,7 @@ func (i *Interactive) openSharedFile(id string) {
 		return
 	}
 	if err := openSystemViewer(file.Path); err != nil {
-		i.sharedDialog.Notice(i18n.T("open failed: %s", err.Error()), true)
+		i.sharedDialog.Notice(i18n.T("open failed: %s", tui.SanitizeLabel(err.Error())), true)
 		i.invalidate()
 		return
 	}
@@ -397,14 +397,14 @@ func (i *Interactive) saveSharedFile(id string) {
 			i.invalidate()
 			return
 		}
-		i.sharedDialog.Notice(i18n.T("save failed: %s", err.Error()), true)
+		i.sharedDialog.Notice(i18n.T("save failed: %s", tui.SanitizeLabel(err.Error())), true)
 		i.invalidate()
 		return
 	}
 	name := sanitizeSavedName(content.Name)
 	f, path, err := createUnique(filepath.Join(i.cfg.CWD, name))
 	if err != nil {
-		i.sharedDialog.Notice(i18n.T("save failed: %s", err.Error()), true)
+		i.sharedDialog.Notice(i18n.T("save failed: %s", tui.SanitizeLabel(err.Error())), true)
 		i.invalidate()
 		return
 	}
@@ -417,7 +417,7 @@ func (i *Interactive) saveSharedFile(id string) {
 		// leaves a truncated copy that nobody asked for. Take it back rather
 		// than leave a plausible-looking short file beside the real one.
 		_ = os.Remove(path)
-		i.sharedDialog.Notice(i18n.T("save failed: %s", werr.Error()), true)
+		i.sharedDialog.Notice(i18n.T("save failed: %s", tui.SanitizeLabel(werr.Error())), true)
 		i.invalidate()
 		return
 	}
@@ -436,8 +436,28 @@ func (i *Interactive) saveSharedFile(id string) {
 // this writes to the USER's tree, so it is checked again here rather than
 // trusted across a machine boundary. Only the base survives, and a name that
 // reduces to nothing becomes a fixed fallback.
+//
+// Control bytes are removed, which this deliberately did NOT do before. The
+// argument for keeping them was that a control character in a filename is legal
+// and refusing to save is worse than saving it — true on a unix filesystem, and
+// false on Windows, where bytes 1 through 31 are rejected outright. There the
+// old rule did not preserve the save, it made the save impossible: every
+// attempt failed at create, so the user got no file at all. "Refusing to save
+// is worse" argues for stripping here, not against it.
+//
+// It is not a Windows-only rule, because the name is not only written. Anything
+// that lists this directory paints the name — ls, a file manager, the shell's
+// own completion — so an escape sequence smuggled into a filename is a terminal
+// injection on every platform, aimed at tools that never chose to receive it.
+// terva picked this name for the user's own tree, so it picks a printable one.
 func sanitizeSavedName(name string) string {
-	clean := filepath.Base(strings.TrimSpace(name))
+	// tui.SanitizeLabel rather than a control-byte filter, because dropping the
+	// ESC alone leaves "[31m" behind as literal text — the parameters of the
+	// sequence, now printing as part of the filename. That function drops the
+	// whole sequence, and it is the same pass the notice below uses, so the
+	// name on disk and the name on screen cannot disagree.
+	clean := filepath.Base(tui.SanitizeLabel(strings.TrimSpace(name)))
+	clean = strings.TrimSpace(clean)
 	clean = strings.TrimLeft(clean, ".")
 	if clean == "" || clean == "." || clean == ".." || strings.ContainsRune(clean, os.PathSeparator) {
 		return "shared-file"
