@@ -102,6 +102,22 @@ type Model struct {
 	// when no thinking is sent, so their catalog rows set this to "high".
 	DefaultReasoning string
 
+	// DefaultReasoningSet marks a DefaultReasoning the OPERATOR chose in
+	// models.json, as opposed to one the catalog shipped. Set by
+	// applyUserOverrides; never by the catalog. Same distinction, and for the
+	// same reason, as DisplayNameSet below.
+	//
+	// 🪤 The two are not interchangeable and collapsing them breaks one of the
+	// callers. A catalog DefaultReasoning is terva's FALLBACK — the k3 rows
+	// carry "high" only so the endpoint stops silently downgrading to K2, and
+	// the comment on those rows says in as many words that it applies "unless
+	// the user sets a global level". So the catalog value must stay BELOW the
+	// global setting. An operator's models.json value is the opposite: it is a
+	// deliberate per-model choice, and a global default that overrode it would
+	// make the field unreachable for anyone who has ever touched /settings.
+	// Hence one field, two precedence slots, told apart by this flag.
+	DefaultReasoningSet bool
+
 	// DisplayNameSet marks a DisplayName the operator chose in models.json
 	// (`name`), as opposed to one the catalog or live discovery supplied.
 	// The distinction is what lets a surface that shows the raw id — the

@@ -221,6 +221,9 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   // was already on the wire, just behind a pane nobody opens to read it.
   const [globalReasoning, setGlobalReasoning] = useState('')
   const [busy, setBusy] = useState(false)
+  // The model's live thinking summary for the turn in flight. Not in `items`:
+  // it is shown while the turn runs and dropped when it ends.
+  const [reasoning, setReasoning] = useState('')
   const [cost, setCost] = useState(0)
   const [permission, setPermission] = useState<PermissionRequest | null>(null)
   const [ask, setAsk] = useState<AskRequest | null>(null)
@@ -1032,13 +1035,24 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       case 'turn_start':
         setBusy(true)
         return
+      case 'reasoning_delta':
+        // Ephemeral: held outside items so it never becomes a transcript row.
+        setReasoning((r) => r + (ev.delta ?? ''))
+        return
+      case 'assistant_start':
+        // Each assistant segment's thinking supersedes the previous one's.
+        // applyEvent has no case for this event, so nothing else is lost.
+        setReasoning('')
+        return
       case 'turn_end':
       case 'done':
         setBusy(false)
+        setReasoning('')
         return
       case 'error':
         setToast(ev.error ?? 'error')
         setBusy(false)
+        setReasoning('')
         setItems((it) => applyEvent(it, ev))
         return
       default:
@@ -2244,6 +2258,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
               <ConversationTimeline
                 items={items}
                 busy={busy}
+                reasoning={reasoning}
                 toolView={toolView}
                 queued={queued}
                 onEditQueued={editQueued}

@@ -51,7 +51,11 @@ type Resolved struct {
 	// "concise" | "detailed"), or "" when off. Forwarded on every request; only
 	// the codex client asks for it, and only where reasoning is itself enabled.
 	ReasoningSummary string
-	Temperature      *float32
+	// ShowReasoning displays the model's reasoning summary while the turn runs
+	// without recording it. It turns the request flag on by itself, so it works
+	// with ReasoningSummary off; see core.Agent.ShowReasoning.
+	ShowReasoning bool
+	Temperature   *float32
 	// ImageOutput carries the resolved native image-output config (from the
 	// opt-in native_output block), or nil when off. The core agent forwards it
 	// only on a model that advertises CapImageOutput.
@@ -1190,11 +1194,23 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	sysSegs := SystemSegments(sysOpts)
 	sys := joinSegmentTexts(sysSegs)
 
+	// Reasoning fall-through: --reasoning / session override > per-model
+	// (models.json `defaultReasoning`) > global config > the model's CATALOG
+	// default > off. The last two rungs live in provider.EffectiveReasoning,
+	// which sees the model; the first three are resolved here, where the
+	// explicit level and the global one are still distinguishable.
+	//
+	// 🪤 Only an OPERATOR's per-model value sits above the global setting.
+	// A catalog DefaultReasoning must stay below it — the k3 rows carry one so
+	// the endpoint stops downgrading to K2, and yielding to an explicit global
+	// choice is exactly what their comment promises. Reading the raw field here
+	// instead of DefaultReasoningSet would silently make a global "low"
+	// unreachable on those models. See Model.DefaultReasoningSet.
+	//
 	// The set-signal is the RAW value (before normalizing): a non-empty raw
-	// level — including "off"/"none", which normalize to "" — means the user
-	// explicitly chose a global level, so it wins over a model's
-	// DefaultReasoning. Empty raw ⇒ unset ⇒ fall back to the per-model default.
-	rawReasoning := firstNonEmpty(args.Reasoning, cfg.Reasoning)
+	// level — including "off"/"none", which normalize to "" — is an explicit
+	// choice. Empty raw ⇒ unset ⇒ fall through to the catalog default.
+	rawReasoning := resolveRawReasoning(args.Reasoning, resolvedModel, cfg.Reasoning)
 	reasoning := provider.NormalizeReasoning(rawReasoning)
 	reasoningSet := rawReasoning != ""
 	// Temperature fall-through: --temperature flag > per-model (models.json) >
@@ -1237,6 +1253,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		Reasoning:                reasoning,
 		ReasoningSet:             reasoningSet,
 		ReasoningSummary:         provider.NormalizeReasoningSummary(cfg.ReasoningSummary),
+		ShowReasoning:            cfg.ShowReasoning,
 		Temperature:              temperature,
 		ImageOutput:              imageOutput,
 		Insecure:                 args.Insecure,
@@ -1620,6 +1637,7 @@ func (r Resolved) NewAgent() *core.Agent {
 	a.Reasoning = r.Reasoning
 	a.ReasoningSet = r.ReasoningSet
 	a.ReasoningSummary = r.ReasoningSummary
+	a.ShowReasoning = r.ShowReasoning
 	a.Temperature = r.Temperature
 	a.ImageOutput = r.ImageOutput
 	// The front end's question channel, when there is one. The prefix-change
@@ -1957,4 +1975,25 @@ func noCredentialError(prov string, picked bool) error {
 		return fmt.Errorf("no credential for %s; set %s, pass --api-key, or sign in with /login", prov, env)
 	}
 	return fmt.Errorf("no credential for %s; pass --api-key, or sign in with /login", prov)
+}
+
+// resolveRawReasoning picks the raw reasoning level from the layers only the
+// builder can tell apart: an explicit choice (--reasoning or a session
+// override), then an operator's per-model models.json value, then the global
+// config. Returns "" when the user chose none of them, which lets
+// provider.EffectiveReasoning fall through to the model's CATALOG default.
+//
+// Named rather than inlined because the ORDER is the policy, and the middle
+// rung is the one that is easy to get wrong in both directions: reading
+// m.DefaultReasoning here instead of gating on DefaultReasoningSet would put a
+// catalog default above the global setting and make a global "low" unreachable
+// on the k3 rows; dropping the rung entirely is the bug this fixes, where an
+// operator's per-model value became dead config the moment /settings was
+// touched. See provider.Model.DefaultReasoningSet.
+func resolveRawReasoning(explicit string, m provider.Model, global string) string {
+	perModel := ""
+	if m.DefaultReasoningSet {
+		perModel = m.DefaultReasoning
+	}
+	return firstNonEmpty(explicit, perModel, global)
 }

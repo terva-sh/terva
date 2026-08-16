@@ -972,6 +972,11 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 				_ = json.Unmarshal([]byte(ev.Data), &p)
 				if it, ok := items[p.OutputIndex]; ok && it.kind == "reasoning" && it.summary.Len() > 0 {
 					it.summary.WriteString("\n\n")
+					// The separator rides the delta stream too: a live
+					// consumer finds the current section by taking the text
+					// after the last blank line, so the boundary has to be
+					// visible there and not only in the assembled buffer.
+					out <- EventReasoningDelta{Delta: "\n\n"}
 				}
 			case "response.reasoning_summary_text.delta":
 				var p struct {
@@ -981,6 +986,7 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 				_ = json.Unmarshal([]byte(ev.Data), &p)
 				if it, ok := items[p.OutputIndex]; ok && it.kind == "reasoning" {
 					it.summary.WriteString(p.Delta)
+					out <- EventReasoningDelta{Delta: p.Delta}
 				}
 			case "response.reasoning_summary_text.done":
 				// summary text already accumulated via deltas

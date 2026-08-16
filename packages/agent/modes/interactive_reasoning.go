@@ -54,12 +54,12 @@ func (i *Interactive) applyReasoningSelection(level string) {
 	i.mu.Lock()
 	if applied == "" {
 		if g := strings.TrimSpace(i.cfg.Reasoning); g != "" {
-			i.statusOK = i18n.T("reasoning: following the global setting (%s)", g)
+			i.statusOK = i18n.T("thinking: following the global setting (%s)", g)
 		} else {
-			i.statusOK = i18n.T("reasoning: following the model's default")
+			i.statusOK = i18n.T("thinking: following the model's default")
 		}
 	} else {
-		i.statusOK = i18n.T("reasoning for this session: %s", applied)
+		i.statusOK = i18n.T("thinking for this session: %s", applied)
 	}
 	i.statusErr = ""
 	i.mu.Unlock()

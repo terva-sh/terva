@@ -54,6 +54,17 @@ export interface SessionState {
   win: { epoch: number; base: number; total: number }
   /** A turn is in flight. */
   busy: boolean
+  /**
+   * The model's live thinking summary for the turn in flight, accumulated from
+   * `reasoning_delta`.
+   *
+   * It lives here rather than in `items` because it is NOT transcript: it is
+   * shown while the turn runs and dropped when it ends, and the same text
+   * arrives again — assembled — on the finished message, so folding it into
+   * items would render it twice and persist a row for something deliberately
+   * ephemeral.
+   */
+  reasoning: string
   info: SessionInfo | null
   /** Tail variant span (the swipe control on the last response). */
   tail?: TailInfo
@@ -68,6 +79,7 @@ export const emptySessionState: SessionState = {
   loaded: false,
   win: { epoch: 0, base: 0, total: 0 },
   busy: false,
+  reasoning: '',
   info: null,
   tail: undefined,
   msgMarks: new Map(),
@@ -155,6 +167,16 @@ export function reduceSession(state: SessionState, ev: WireEvent): SessionState 
     case 'turn_start':
       return state.busy ? state : { ...state, busy: true }
 
+    case 'reasoning_delta':
+      return { ...state, reasoning: state.reasoning + (ev.delta ?? '') }
+
+    case 'assistant_start':
+      // Fires at the top of every assistant segment, including the follow-ups
+      // after tool use. Each segment's thinking supersedes the last, so the
+      // previous one is dropped rather than appended to. No items case exists
+      // for this event, so returning here loses nothing.
+      return state.reasoning ? { ...state, reasoning: '' } : state
+
     case 'turn_end':
     case 'done':
       // The second clearing path, and the reason a lost frame is no longer fatal.
@@ -166,12 +188,14 @@ export function reduceSession(state: SessionState, ev: WireEvent): SessionState 
       // the engine released the turn slot, so clearing here opens a sub-millisecond
       // window where a follow-up could return ErrBusy. That is recoverable and no
       // human can click inside it; a permanently wedged composer is not.
-      return state.busy ? { ...state, busy: false } : state
+      // Reasoning clears with busy: the work it narrated is over, and a thought
+      // left on screen past the turn reads as a step still running.
+      return state.busy || state.reasoning ? { ...state, busy: false, reasoning: '' } : state
 
     case 'error':
       // An error ends the turn as surely as a done does. Folding the row while
       // leaving busy set is exactly the wedge described above.
-      return { ...state, busy: false, items: applyEvent(state.items, ev) }
+      return { ...state, busy: false, reasoning: '', items: applyEvent(state.items, ev) }
 
     default: {
       const items = applyEvent(state.items, ev)

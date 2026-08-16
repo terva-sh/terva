@@ -86,10 +86,16 @@ var registry = []Spec{
 	{Name: "/memory", Group: groupContext, Desc: "the agent's durable memory — facts it carries into future sessions; prune or clear them"},
 	{Name: "/tasks", Group: groupContext, Desc: "show the agent's task list (the built-in task tracker)"},
 	{Name: "/worktree", Group: groupContext, Desc: "managed git worktrees: list, cd into one, or review the merge-back overview"},
+	{Name: "/shared", Group: groupContext, Desc: "files the agent handed you this session: copy the path, open one, or save a copy here"},
 
 	{Name: "/model", Group: groupModel, Desc: "pick a model (or /model <id>)", Hint: "model id (optional)", CancelsTurn: true},
-	{Name: "/reasoning", Group: groupModel, Aliases: []string{"/think"},
-		Desc: "set this session's thinking depth (or /reasoning <level>; \"inherit\" follows the global)",
+	// Canonical spelling is "thinking": that is the word every surface a user
+	// meets already uses (the status bar, /settings, this command's own
+	// description). "/reasoning" was the odd one out and stays as an alias —
+	// it is what the muscle memory and every older doc say, and renaming a
+	// command out from under someone is not worth a tidier table.
+	{Name: "/thinking", Group: groupModel, Aliases: []string{"/reasoning", "/think"},
+		Desc: "set this session's thinking depth (or /thinking <level>; \"inherit\" follows the global)",
 		Hint: "off | minimum | low | medium | high | maximum | max | inherit (optional)"},
 	{Name: "/login", Group: groupModel, Desc: "log in via api key or subscription", CancelsTurn: true},
 	{Name: "/logout", Group: groupModel, Desc: "clear a provider's credentials", Hint: "provider (anthropic | openai | all)", CancelsTurn: true},

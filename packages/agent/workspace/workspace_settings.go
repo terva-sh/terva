@@ -140,6 +140,12 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 			Description: i18n.T("Reasoning effort. Applies live and becomes the default for new sessions."),
 		},
 		{
+			Key: "show_reasoning", Label: i18n.T("Show thinking"), Type: "bool",
+			Value:       boolStr(cfg.ShowReasoning),
+			Description: i18n.T("Show what the model is working on, on its own line, while it works. Nothing is written to the session file."),
+			Note:        i18n.T("openai-codex and google only — shown while the turn runs, then gone"),
+		},
+		{
 			Key: "reasoning_summary", Label: i18n.T("Record thinking"), Type: "enum",
 			Value: cfg.ReasoningSummary, Options: localizeOptions(reasoningSummaryOptions),
 			Description: i18n.T("Persist a readable summary of the model's reasoning, so an unattended run can be reviewed for why it acted."),
@@ -425,6 +431,12 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
 		}
 		s.ws.applyReasoningSummary(val) // live to every session's agent
+	case "show_reasoning":
+		on := val == "true"
+		if err := config.MutateConfig(func(c *config.Config) { c.ShowReasoning = on }); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
+		s.ws.applyShowReasoning(on) // live to every session's agent
 	case "auto_title":
 		on := val == "true"
 		if err := config.MutateConfig(func(c *config.Config) { c.AutoTitle = &on }); err != nil {
@@ -672,6 +684,22 @@ func (w *Workspace) applyReasoningSummary(mode string) {
 	for _, s := range sess {
 		if s.agent != nil {
 			s.agent.SetReasoningSummary(mode)
+		}
+	}
+}
+
+// applyShowReasoning flips live reasoning display on every session's agent, the
+// same fan-out as applyReasoningSummary.
+func (w *Workspace) applyShowReasoning(on bool) {
+	w.mu.Lock()
+	sess := make([]*wsSession, 0, len(w.sessions))
+	for _, s := range w.sessions {
+		sess = append(sess, s)
+	}
+	w.mu.Unlock()
+	for _, s := range sess {
+		if s.agent != nil {
+			s.agent.SetShowReasoning(on)
 		}
 	}
 }

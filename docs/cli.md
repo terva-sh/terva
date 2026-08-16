@@ -65,7 +65,7 @@ all in [Modes](#modes) below.
 | `--append-system-prompt <text>` | Append text to the system prompt (repeatable). |
 | `--persona <name\|path>` | Load a persona — a built-in/on-disk name, or a path to a `.md` file — as the agent's identity. Omitted, it resolves via `Persona.md`, the `default_persona` config key, then the built-in default. See [personas.md](personas.md). |
 | `--context-file <path>` | Inject a file's contents into the system prompt (repeatable). |
-| `--reasoning off\|minimal\|minimum\|low\|medium\|high\|maximum\|max` | Set thinking level on supported models (default: off). `minimal` is an accepted alias for `minimum`. `maximum` and `max` are DIFFERENT rungs: `maximum` is the long-standing top (sent as `xhigh`), while `max` is a tier above it, sent natively only to models that have one (gpt-5.6, adaptive Claude) and clamped to `maximum` elsewhere. This sets the level for the run; a single session can override it — see [Per-session reasoning](#per-session-reasoning). |
+| `--thinking off\|minimal\|minimum\|low\|medium\|high\|maximum\|max` | Set thinking level on supported models (default: off). `minimal` is an accepted alias for `minimum`. `maximum` and `max` are DIFFERENT rungs: `maximum` is the long-standing top (sent as `xhigh`), while `max` is a tier above it, sent natively only to models that have one (gpt-5.6, adaptive Claude) and clamped to `maximum` elsewhere. This sets the level for the run; a single session can override it — see [Per-session thinking](#per-session-thinking). |
 | `-c`, `--continue` | Resume the latest session for this cwd. |
 | `-r`, `--resume [id]` | Open the session picker at startup — titles, age, model, size, cost; Esc keeps the fresh session. With an `id` (the transcript's filename stem), resume that session directly, no picker. Also works attached: `terva attach -r`. |
 | `--session <path>` | Resume a specific session file. |
@@ -423,20 +423,20 @@ silent drop to no auth. The file is on the agent's read deny-list.
 
 Drop a `SYSTEM.md` in `$TERVA_HOME` to replace the built-in identity and guidelines for every run. `--system-prompt` still wins per-invocation. Delete the file to revert to the default.
 
-## Per-session reasoning
+## Per-session thinking
 
 The thinking level has two scopes, the same split models have.
 
-The **global** level is `--reasoning` (this run) or the `reasoning` setting in
+The **global** level is `--thinking` (this run) or the `reasoning` setting in
 the settings surface (persisted). It is the default every session starts at,
 and un-overridden sessions follow it live when it changes.
 
 A **session** can override it and keep that override:
 
 ```
-/reasoning max        # this session only
-/reasoning inherit    # drop the override, follow the global again
-/reasoning            # open the picker
+/thinking max         # this session only
+/thinking inherit     # drop the override, follow the global again
+/thinking             # open the picker
 ```
 
 The same control is in the web control panel (a button beside the model, or
@@ -456,3 +456,18 @@ Three things worth knowing:
 
 With no global level set either, an un-overridden session falls back to the
 model's own `defaultReasoning` (see [Models](models.md)).
+
+The full order, highest first:
+
+1. `--thinking`, or a session override
+2. `defaultReasoning` for that model **in your `models.json`**
+3. the global level (`/settings` → Thinking, or `"reasoning"` in `config.json`)
+4. the model's `defaultReasoning` **as shipped in terva's catalog**
+5. off
+
+Rungs 2 and 4 are the same field on opposite sides of the global level, and the
+split is deliberate. A value *you* wrote is a decision about that model and
+outranks a global default. A value terva ships is a fallback — some endpoints
+answer as an older model when a request carries no thinking at all, so the
+catalog sets a level to stop that, and it yields the moment you choose one
+yourself.

@@ -1917,7 +1917,7 @@ func (w *Workspace) SetSessionReasoning(ctx context.Context, sess, level string)
 		applyRawReasoning(s.agent, effective)
 	}
 	if err := s.sess.UpdateReasoning(raw); err != nil {
-		return ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("save session reasoning: %v", err))
+		return ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("save session thinking level: %v", err))
 	}
 	s.broadcast(ctrlproto.SessionUpdatedEvent(s.info()))
 	return nil
@@ -1948,7 +1948,7 @@ func normalizeSessionReasoning(level string) (string, error) {
 		return "off", nil
 	}
 	return "", ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s",
-		i18n.T("unknown reasoning level %q (%s, or \"inherit\")", level, provider.ReasoningLadder()))
+		i18n.T("unknown thinking level %q (%s, or \"inherit\")", level, provider.ReasoningLadder()))
 }
 
 // overrideClient builds a provider.Client + resolved model id for an optional

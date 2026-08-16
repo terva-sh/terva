@@ -54,6 +54,7 @@ var sessionMayReachWorkspace = map[string]string{
 	"rebuildAllSessions":    "an extension/MCP reload rebuilds every session's agent, not just the caller's",
 	"applyReasoning":        "a reasoning-effort change goes live to every session's agent, not only the settings pane's",
 	"applyReasoningSummary": "same, for the reasoning-summary setting",
+	"applyShowReasoning":    "same, for the live reasoning-display setting",
 	"applyEngineFeature":    "same, for an engine feature toggle out of the settings pane",
 	"applyAutoSwarm":        "auto-swarm config is resolved once for the workspace and applied to the spawning session",
 	"injectExtraTools":      "the spawn gate reads workspace trust, which is workspace-scoped and moves live",

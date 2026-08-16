@@ -178,7 +178,7 @@ func (d *ReasoningDialog) Render(th tui.Theme, width int) []string {
 	if !d.Active() {
 		return nil
 	}
-	out := []string{FrameHeader(th, i18n.T("reasoning for this session (enter to set, esc to close)"), width)}
+	out := []string{FrameHeader(th, i18n.T("thinking for this session (enter to set, esc to close)"), width)}
 
 	maxRows := d.MaxRows
 	if maxRows <= 0 {

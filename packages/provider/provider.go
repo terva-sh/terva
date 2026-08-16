@@ -447,6 +447,35 @@ type EventTextDelta struct {
 
 func (EventTextDelta) isEvent() {}
 
+// EventReasoningDelta carries a piece of the model's reasoning SUMMARY as it
+// streams — the same text that lands in [ReasoningBlock.Summary], delivered
+// while the turn is still running instead of only once it finishes.
+//
+// It exists because the summary was already arriving in pieces and terva was
+// throwing the timing away: both openai clients accumulate these deltas into a
+// buffer and emit one block at the end, so the stream was there and nothing
+// could watch it. A summary read after the turn is of little use — the common
+// shape is a progress headline ("**Inspecting commit before push**") whose
+// whole value is being visible during the silence BEFORE the tool call it
+// describes.
+//
+// 🪤 This is the provider's own précis, never raw chain-of-thought, and never
+// the opaque reasoning payload ([ReasoningBlock.Encrypted]). A provider that
+// streams no summary emits no events here, which is not an error: the openai
+// backends return an empty summary unless [Request.ReasoningSummary] asked for
+// one.
+//
+// Consumers accumulate. Providers separate one summary section from the next
+// with a blank line, so the CURRENT headline is the text after the last "\n\n"
+// — the boundary rides the delta stream rather than a second event type,
+// because a renderer that only wants the latest section should not have to
+// track state that the text already carries.
+type EventReasoningDelta struct {
+	Delta string
+}
+
+func (EventReasoningDelta) isEvent() {}
+
 type EventToolStart struct {
 	ID   string
 	Name string

@@ -147,7 +147,9 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 		i.modelDialog.Open(i.cfg.Model, loggedIn, favs)
 		return false
 	},
-	"/reasoning": func(i *Interactive, _ context.Context, parts []string, _ string) bool {
+	// Keyed by the CANONICAL name (see init: run: slashHandlers[s.Name]).
+	// "/reasoning" still dispatches here, as an alias on the spec.
+	"/thinking": func(i *Interactive, _ context.Context, parts []string, _ string) bool {
 		if len(parts) >= 2 {
 			i.applyReasoningSelection(parts[1])
 			return false
@@ -195,6 +197,10 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 	},
 	"/workflows": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 		i.openWorkflowsDialog()
+		return false
+	},
+	"/shared": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.openSharedDialog()
 		return false
 	},
 	"/extensions": func(i *Interactive, _ context.Context, _ []string, _ string) bool {

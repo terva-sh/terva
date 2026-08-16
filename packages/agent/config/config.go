@@ -37,8 +37,19 @@ type Config struct {
 	// of exposure, but it does make the file more quotable — worth a decision
 	// rather than a default. Only the openai-codex path implements it; other
 	// providers ignore it. See docs/models.md § Persisting reasoning summaries.
-	ReasoningSummary string   `json:"reasoning_summary,omitempty"`
-	Temperature      *float32 `json:"temperature,omitempty"`
+	ReasoningSummary string `json:"reasoning_summary,omitempty"`
+	// ShowReasoning displays the model's reasoning summary on its own line
+	// while the turn runs, and records NOTHING: the text is blanked before the
+	// message is persisted, so the session file is byte-identical to a run with
+	// this off. That is the whole reason it is separate from ReasoningSummary
+	// above — seeing the work and keeping the work are different decisions with
+	// different costs, and only one of them is permanent.
+	//
+	// Off by default, because switching it on asks the provider for a summary
+	// on every request where it was not asked before. Only the openai-codex and
+	// google paths produce one today; other providers ignore it.
+	ShowReasoning bool     `json:"show_reasoning,omitempty"`
+	Temperature   *float32 `json:"temperature,omitempty"`
 	// FavoriteModels are "provider/id" keys pinned to the top of the /model
 	// picker (and surfaced as a cross-provider ★ Favorites view). Order is
 	// not significant; membership is.

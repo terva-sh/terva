@@ -78,11 +78,17 @@ func NormalizeReasoningSummary(mode string) string {
 }
 
 // EffectiveReasoning resolves the reasoning level for a turn against model m: an
-// explicitly-set global level (reasoningSet==true, incl. "" meaning the user
-// chose off) wins; otherwise the model's DefaultReasoning applies; otherwise
-// off. The result is NORMALIZED, so callers gate on `!= ""` and pass it to the
-// budget/effort mappers unchanged. Single home of the global-vs-model precedence,
-// shared by every backend's request builder.
+// explicitly-set level (reasoningSet==true, incl. "" meaning the user chose off)
+// wins; otherwise the model's DefaultReasoning applies; otherwise off. The
+// result is NORMALIZED, so callers gate on `!= ""` and pass it to the
+// budget/effort mappers unchanged. Shared by every backend's request builder.
+//
+// This is the BOTTOM of the chain, not all of it. reqReasoning arrives already
+// resolved across the layers that need to be told apart — the flag / session
+// override, an operator's per-model models.json value, and the global config —
+// because only the builder can distinguish them (see build.Resolve). What
+// remains here is the last rung: a model's CATALOG default, which applies when
+// the user chose nothing at all.
 func EffectiveReasoning(reqReasoning string, reasoningSet bool, m Model) string {
 	if reasoningSet {
 		return NormalizeReasoning(reqReasoning)

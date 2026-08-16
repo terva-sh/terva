@@ -196,3 +196,30 @@ describe('reduceSession — identity', () => {
     expect(JSON.stringify({ ...before, msgMarks: [...before.msgMarks] })).toBe(snapshotOfState)
   })
 })
+
+// Live reasoning is held OUTSIDE items on purpose: it is shown while a turn
+// runs and dropped when it ends. Anything that folded it into the transcript
+// would render it twice — the assembled summary arrives again on the finished
+// message — and would persist a row for something deliberately ephemeral.
+describe('live reasoning', () => {
+  const delta = (d: string) => ev({ type: 'reasoning_delta', delta: d })
+
+  it('accumulates deltas without touching items', () => {
+    const s = fold([delta('**Reading '), delta('the config**')])
+    expect(s.reasoning).toBe('**Reading the config**')
+    expect(s.items).toHaveLength(0)
+  })
+
+  it('drops the previous segment when the next one starts', () => {
+    const s = fold([delta('**First**'), ev({ type: 'assistant_start' }), delta('**Second**')])
+    expect(s.reasoning).toBe('**Second**')
+  })
+
+  for (const ending of ['turn_end', 'done', 'error']) {
+    it(`clears on ${ending}, so no thought outlives the work it narrated`, () => {
+      const s = fold([ev({ type: 'turn_start' }), delta('**Still going**'), ev({ type: ending })])
+      expect(s.reasoning).toBe('')
+      expect(s.busy).toBe(false)
+    })
+  }
+})

@@ -135,7 +135,7 @@ func statusRows(th tui.Theme, f statusFacts) []string {
 		rows = append(rows, row(i18n.T("auth"), f.Auth))
 	}
 	if f.Reasoning != "" {
-		rows = append(rows, row(i18n.T("reasoning"), f.Reasoning))
+		rows = append(rows, row(i18n.T("thinking"), f.Reasoning))
 	}
 	if f.CWD != "" {
 		cwd := f.CWD

@@ -462,9 +462,15 @@ type Interactive struct {
 	// so submit-or-queue and turn-end transitions are atomic. See
 	// turn_engine.go for the lock discipline (i.mu → engine.mu is
 	// the one allowed nesting; never the reverse).
-	turns        *turnEngine
-	toolCalls    map[string]*tui.ToolCallView
-	toolOrder    []string
+	turns     *turnEngine
+	toolCalls map[string]*tui.ToolCallView
+	toolOrder []string
+	// reasoning is the model's live thinking summary for the turn in flight,
+	// accumulated from reasoning_delta. It is deliberately NOT part of the
+	// transcript: it renders on its own row above the status bar while the
+	// turn runs and is dropped when the turn ends, so nothing about it reaches
+	// scrollback, the session file, or a resumed session.
+	reasoning    string
 	statusErr    string
 	statusOK     string
 	liveBlock    []string // live streaming/tool progress rendered outside scrollback
@@ -557,6 +563,7 @@ type Interactive struct {
 	tasksDialog       *dialogs.TasksDialog
 	worktreeDialog    *dialogs.WorktreeDialog
 	workflowDialog    *dialogs.WorkflowDialog
+	sharedDialog      *dialogs.SharedDialog
 
 	// overlays is the priority-ordered modal registry: key routing,
 	// rendering, cursor ownership, and tick animation for every
@@ -848,6 +855,27 @@ type Interactive struct {
 	carrierWorktrees        *ctrlproto.WorktreeView
 	carrierWorktreesSession string
 
+	// sharedPreviews caches the image bytes fetched for a shared-file card,
+	// keyed by share id, plus the ids already asked for (fetched) so a card that
+	// is on screen every frame produces exactly one request per share.
+	//
+	// fetched is separate from the byte map on purpose: it also remembers the
+	// asks that FAILED or came back too large, which is what stops a card the
+	// daemon cannot serve from re-requesting on every repaint forever.
+	//
+	// Keyed by session like the caches above, and dropped on a session switch:
+	// a share id is only meaningful inside the conversation that produced it.
+	sharedPreviews        map[string][]byte
+	sharedPreviewsFetched map[string]bool
+	sharedPreviewsSession string
+
+	// sharedFiles caches the shared.list answer backing the /shared panel.
+	// Filled on open and on the panel's r key: no push event exists for a
+	// share landing, so the panel's freshness is the same as /worktree's.
+	// Keyed by session for the reason every cache above is.
+	sharedFiles        []ctrlproto.SharedFileEntry
+	sharedFilesSession string
+
 	// workflowRuns / workflowView cache the /workflows panel's two fetches.
 	// Workspace-scoped, not session-scoped (a run belongs to the host, not to a
 	// conversation), so unlike the worktree cache above there is no session key
@@ -1046,6 +1074,7 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		tasksDialog:       dialogs.NewTasksDialog(),
 		worktreeDialog:    dialogs.NewWorktreeDialog(),
 		workflowDialog:    dialogs.NewWorkflowDialog(),
+		sharedDialog:      dialogs.NewSharedDialog(),
 		suggest:           newSlashSuggester(),
 		fileSuggest:       widgets.NewFileSuggester(),
 		spin:              widgets.NewSpinner(cfg.Theme),

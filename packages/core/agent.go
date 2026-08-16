@@ -70,6 +70,23 @@ type Agent struct {
 	// Reasoning; only the codex client acts on it.
 	ReasoningSummary string
 
+	// ShowReasoning asks for the same summary in order to DISPLAY it while the
+	// turn runs (EvReasoningDelta), without writing it to the session record.
+	//
+	// It is separate from ReasoningSummary because the two costs are different
+	// and only one of them is permanent. Watching a model work is ephemeral —
+	// the text is on screen and then it is gone. Persisting it makes the
+	// session file quotable, which is why ReasoningSummary is opt-in, and
+	// forcing that trade on anyone who merely wants to see the work would be
+	// the wrong bargain.
+	//
+	// 🔑 A provider will not send a summary unless it was ASKED, so display
+	// turns the request flag on by itself (see reasoningSummaryRequest). What
+	// keeps it off disk is stripSummariesForDisplayOnly, which blanks the text
+	// after the turn and leaves the block itself alone. Read at turn start
+	// under a.mu alongside Reasoning.
+	ShowReasoning bool
+
 	// VisibleTool, when non-nil, reports whether a registered tool is
 	// ADVERTISED to the model on a turn. It filters only the tool specs sent
 	// in the request (SpecsVisible, in oneTurn); it never touches dispatch or
@@ -1384,6 +1401,55 @@ func (a *Agent) SetReasoningSummary(mode string) {
 	a.ReasoningSummary = mode
 }
 
+// SetShowReasoning switches live reasoning display on or off for the next turn.
+func (a *Agent) SetShowReasoning(on bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.ShowReasoning = on
+}
+
+// reasoningSummaryRequest is the value that rides the provider request: the
+// persistence setting when one is chosen, otherwise "auto" when the only reason
+// to ask is live display.
+//
+// 🪤 persist WINS when both are set. The two settings do not conflict about
+// whether to ask, only about how much detail, and honouring the persisted
+// choice keeps the session record exactly what the operator asked for rather
+// than what a display toggle happened to imply.
+func reasoningSummaryRequest(persist string, show bool) string {
+	if persist != "" {
+		return persist
+	}
+	if show {
+		return "auto"
+	}
+	return ""
+}
+
+// stripSummariesForDisplayOnly blanks ReasoningBlock summaries on a message
+// about to be persisted, for the case where the summary was requested only so
+// it could be shown live.
+//
+// 🪤 It clears the TEXT and keeps the BLOCK. A ReasoningBlock also carries the
+// provider's opaque ID and Encrypted payload, which have to round-trip on the
+// next request exactly like a gemini thought signature — dropping the block to
+// hide the text would strand the reasoning item and break the following turn.
+// The result is byte-identical to what a build with display switched off
+// records today: a reasoning block with an empty summary.
+func stripSummariesForDisplayOnly(m provider.Message) provider.Message {
+	out := make([]provider.Content, 0, len(m.Content))
+	for _, c := range m.Content {
+		if r, ok := c.(provider.ReasoningBlock); ok {
+			r.Summary = ""
+			out = append(out, r)
+			continue
+		}
+		out = append(out, c)
+	}
+	m.Content = out
+	return m
+}
+
 // SetClientAndModel atomically swaps both the provider client and the
 // model, for hosts that re-resolve a fresh client (a different endpoint,
 // rotated credentials) while keeping the same transcript. Both fields
@@ -2670,6 +2736,7 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 	reasoning := a.Reasoning
 	reasoningSet := a.ReasoningSet
 	reasoningSummary := a.ReasoningSummary
+	showReasoning := a.ShowReasoning
 	maxTokens := a.MaxTokens
 	temperature := a.Temperature
 	imageOutput := a.ImageOutput
@@ -2730,7 +2797,7 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 		Tools:            tools.SpecsVisible(tt.visible),
 		Reasoning:        reasoning,
 		ReasoningSet:     reasoningSet,
-		ReasoningSummary: reasoningSummary,
+		ReasoningSummary: reasoningSummaryRequest(reasoningSummary, showReasoning),
 		MaxTokens:        maxTokens,
 		Temperature:      temperature,
 		ImageOutput:      imageOutput,
@@ -2816,6 +2883,8 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 			// nothing
 		case provider.EventTextDelta:
 			sink(EvTextDelta{Delta: e.Delta})
+		case provider.EventReasoningDelta:
+			sink(EvReasoningDelta{Delta: e.Delta})
 		case provider.EventToolStart:
 			sink(EvToolUseStart{ID: e.ID, Name: e.Name})
 		case provider.EventToolArgs:
@@ -2836,6 +2905,13 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 			finalErr = e.Err
 			finalMsg = e.Message
 		}
+	}
+
+	// The summary was requested for the screen, not the record: blank the text
+	// before anything downstream can persist it. Done here, on the one message
+	// every path takes, rather than at each save site.
+	if reasoningSummary == "" && showReasoning {
+		finalMsg = stripSummariesForDisplayOnly(finalMsg)
 	}
 
 	// Append assistant message to transcript. Aborted turns (Esc / Ctrl+C)

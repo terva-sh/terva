@@ -23,7 +23,7 @@ You'll see one JSON object per line on stdout: a response acknowledging the prom
 
 ## Flags
 
-`terva rpc` accepts the same flags as the other modes: `--provider`, `--model`, `--cwd`, `--api-key`, `--base-url`, `--system-prompt`, `--append-system-prompt`, `--reasoning`, `--max-steps`, `--no-tools`, `--tools`, `--session <path>` (opt into a durable, resumable session — see below).
+`terva rpc` accepts the same flags as the other modes: `--provider`, `--model`, `--cwd`, `--api-key`, `--base-url`, `--system-prompt`, `--append-system-prompt`, `--thinking`, `--max-steps`, `--no-tools`, `--tools`, `--session <path>` (opt into a durable, resumable session — see below).
 
 [Extensions](extensions.md) and [MCP servers](mcp.md) load on the same lifecycle as every other mode, with the same flags — `--ext DIR` (repeatable), `--extensions a,b` (allowlist), `--no-ext`; `--mcp git,jira` (restrict-only), `--no-mcp`. Their tools join the registry like any other, and an extension's notes surface on the stream as the `ext_notify` / `ext_display` / `ext_clear_notes` events (the RPC loop has no editor, so an extension's `submit`/`insert` are no-ops).
 

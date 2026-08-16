@@ -173,6 +173,10 @@ var scalarParams = []ScalarParam{
 		Merge: func(dst *Model, src Model) {
 			if src.DefaultReasoning != "" {
 				dst.DefaultReasoning = src.DefaultReasoning
+				// Marks this as the OPERATOR's choice, which outranks the
+				// global level; a catalog value does not. See
+				// Model.DefaultReasoningSet.
+				dst.DefaultReasoningSet = true
 			}
 		},
 	},

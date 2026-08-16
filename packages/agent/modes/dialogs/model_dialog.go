@@ -380,7 +380,7 @@ func (d *ModelDialog) renderModels(th tui.Theme, width int) []string {
 	if !d.single {
 		back = i18n.T("esc back")
 	}
-	base := i18n.T("↑/↓, enter, ctrl+f favorite, ctrl+e edit, ctrl+d set-default, %s - type to filter, :img/:reasoning", back)
+	base := i18n.T("↑/↓, enter, ctrl+f favorite, ctrl+e edit, ctrl+d set-default, %s - type to filter, :img/:thinking", back)
 	lines = append(lines, th.FG256(th.Muted, d.p.hintLine(base)))
 
 	if len(d.p.view) == 0 {

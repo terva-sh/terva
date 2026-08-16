@@ -120,7 +120,7 @@ func PrintHelp(version string) {
 		row{"--model ID", i18n.T("model id (see --list-models)")},
 		row{"--api-key KEY", i18n.T("api key for this run (env / auth.json fallback)")},
 		row{"--base-url URL", i18n.T("override provider api base url")},
-		row{"--reasoning " + provider.ReasoningLadder(), i18n.T("set thinking level; max is a tier above maximum, native on gpt-5.6 and adaptive claude")},
+		row{"--thinking " + provider.ReasoningLadder(), i18n.T("set thinking level; max is a tier above maximum, native on gpt-5.6 and adaptive claude")},
 		row{"--temperature N", i18n.T("sampling temperature, 0 to 2 (omit for provider default)")},
 		row{"--insecure", i18n.T("skip TLS verification for the inference --base-url (openai-compatible/ollama only)")},
 	)

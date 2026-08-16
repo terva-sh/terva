@@ -327,6 +327,32 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .msg.err { align-self: stretch; color: var(--danger); border: 1px solid var(--danger); background: transparent; font-size: 13px; }
 .working { align-self: flex-start; color: var(--muted); font-size: 13px; font-style: italic; }
 
+/* The model's live thinking summary. One line, always — the same field carries
+   multi-paragraph prose from some providers, and this row sits between the
+   transcript and the composer where growth would push the input off screen.
+   Clipped rather than wrapped for that reason; it is ambient, and the text it
+   describes is superseded seconds later anyway. */
+.reasoning-line {
+  align-self: flex-start;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 13px;
+  font-style: italic;
+  opacity: 0.8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The marker earns its place: this row and `working…` are both muted italics
+   at the same size, and stacked without it the model's voice is indistinguishable
+   from terva's. Same glyph the TUI uses. In ::before so it stays out of the
+   DOM's text content — the row is the model's words and nothing else. */
+.reasoning-line::before {
+  content: '· ';
+  opacity: 0.7;
+}
+
 /* assistant reply + copy button: the wrapper shrink-wraps the bubble so the
    button pins to the bubble's top-right, not the column edge. */
 .msg-wrap { position: relative; display: flex; flex-direction: column; }

@@ -102,6 +102,22 @@ type EvTextDelta struct {
 
 func (EvTextDelta) Type() string { return "text_delta" }
 
+// EvReasoningDelta fires for each fragment of the model's reasoning SUMMARY
+// while the turn runs. It is a DISPLAY signal and nothing else: the same text
+// arrives again, assembled, as a ReasoningBlock on the finished message, which
+// is what persistence and replay read. A surface that shows these is expected
+// to drop them when the turn ends rather than keep them in its transcript.
+//
+// 🪤 Concatenating the deltas reproduces the block's summary, so a consumer
+// that both renders these AND renders the finished block will show the same
+// text twice. Providers separate sections with a blank line; the live section
+// is the text after the last "\n\n".
+type EvReasoningDelta struct {
+	Delta string
+}
+
+func (EvReasoningDelta) Type() string { return "reasoning_delta" }
+
 type EvToolCall struct {
 	ID   string
 	Name string

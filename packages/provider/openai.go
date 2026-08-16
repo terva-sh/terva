@@ -346,11 +346,31 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 			if reasoning.Len() > 0 && len(am.ToolCalls) > 0 {
 				am.ReasoningContent = reasoning.String()
 			}
+			// A turn whose only substance is reasoning. A server that splits a
+			// thinking channel out of the token stream puts the whole reply in
+			// reasoning_content and leaves content empty whenever that channel
+			// never closes: every token after the opener stays classified as
+			// reasoning. The marker pair is model-specific (<think>…</think>,
+			// <|channel>thought…<channel|>, others), and a chat template can
+			// force the condition by prefilling an opener it never closes. The
+			// text is a real answer, so promote it to the visible content and
+			// let the model see its own turn on the next request.
+			//
+			// It used to be dropped, which left a hole in the history exactly
+			// where the answer had been: the model then apologised for a lapse
+			// it had no record of, and every such turn silently cost its own
+			// context. Promotion also keeps the prefix stable — a turn that
+			// vanishes from replay invalidates the cached prefix behind it.
+			//
+			// It goes in content, not reasoning_content: the endpoints that
+			// read that field only accept it beside a tool call, and Kimi
+			// rejects a message whose sole substance is reasoning_content.
+			if am.Content == nil && len(am.ToolCalls) == 0 && reasoning.Len() > 0 {
+				am.Content = reasoning.String()
+			}
 			// Kimi rejects assistant messages with neither visible text nor
-			// tool calls ("assistant must not be empty"). This can happen when
-			// a previous stream produced only reasoning_content, which terva keeps
-			// internally for provider replay but cannot send back as standalone
-			// assistant content on OpenAI-compatible chat-completions APIs.
+			// tool calls ("assistant must not be empty"). Nothing survives the
+			// promotion above, so there is genuinely nothing to send.
 			if am.Content == nil && len(am.ToolCalls) == 0 {
 				continue
 			}
@@ -730,6 +750,7 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 			for _, ch := range chunk.Choices {
 				if ch.Delta.ReasoningContent != "" {
 					reasoningBuf.WriteString(ch.Delta.ReasoningContent)
+					out <- EventReasoningDelta{Delta: ch.Delta.ReasoningContent}
 				}
 				if ch.Delta.Content != "" {
 					appendText(ch.Delta.Content)

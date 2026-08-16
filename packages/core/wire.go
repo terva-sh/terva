@@ -448,6 +448,8 @@ func eventToWire(ev AgentEvent, imageData bool) WireEvent {
 		out.Message = &m
 	case EvTextDelta:
 		out.Delta = e.Delta
+	case EvReasoningDelta:
+		out.Delta = e.Delta
 	case EvToolUseStart:
 		out.ID = e.ID
 		out.Name = e.Name
@@ -689,6 +691,21 @@ func MessageFromWire(w WireMessage) provider.Message {
 		setMeta(MetaSource, MetaRouted)
 		if w.Actor != "" {
 			setMeta(MetaActor, w.Actor)
+		}
+	}
+	// The shares this message's tool calls published, back into the Meta key
+	// messageToWire lifted them out of. Without this a client that rebuilds its
+	// transcript through this pair — every ctrlproto snapshot, so every resume
+	// and every reconnect — loses the cards it was rendering a moment ago.
+	//
+	// Re-marshalled rather than carried as the raw bytes, because the wire form
+	// is the parsed one: a record that arrived malformed was already dropped by
+	// the encoder, and re-encoding what survived is what keeps the two
+	// directions describing the same set. A marshal failure leaves the key
+	// absent, which is the same tolerance the encoder applies.
+	if len(w.Shared) > 0 {
+		if raw, err := json.Marshal(w.Shared); err == nil {
+			setMeta(MetaShared, string(raw))
 		}
 	}
 	return m

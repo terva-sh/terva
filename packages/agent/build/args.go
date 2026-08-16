@@ -777,7 +777,10 @@ func ParseArgs(in []string) (Args, error) {
 				return a, perr
 			}
 			a.Approval = strings.ToLower(v)
-		case "--reasoning":
+		// "--thinking" is the documented spelling; "--reasoning" is what
+		// shipped and keeps working. Same rule as /thinking: the word a user
+		// meets is "thinking", and an accepted flag is never withdrawn.
+		case "--thinking", "--reasoning":
 			v, err := want(&i, arg)
 			if err != nil {
 				return a, err
@@ -789,7 +792,7 @@ func ParseArgs(in []string) (Args, error) {
 				// The ladder is rendered from provider.ReasoningLevels rather
 				// than spelled out here: a hand-written copy is how "max" came
 				// to be accepted but never advertised.
-				return a, i18n.Errorf("--reasoning must be %s", provider.ReasoningLadder())
+				return a, i18n.Errorf("--thinking must be %s", provider.ReasoningLadder())
 			}
 		case "--temperature":
 			v, err := want(&i, arg)

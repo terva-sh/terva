@@ -72,6 +72,9 @@ type frameSnapshot struct {
 	carrierSubscription bool
 	carrierJailed       bool
 
+	// reasoningLine is the model's live thinking summary, already squashed to
+	// one line. Empty when the model sent none or the turn is not running.
+	reasoningLine string
 	// busyPrefix is the pre-rendered spinner segment of the status
 	// bar; the spinner's state is mutated by turn goroutines under
 	// i.mu, so it must be formatted inside the snapshot hold.
@@ -110,6 +113,7 @@ func (i *Interactive) snapshotFrameLocked(ts turnRenderState) frameSnapshot {
 		}
 	}
 	if ts.busy {
+		snap.reasoningLine = reasoningLineText(i.reasoning)
 		snap.busyPrefix = fmt.Sprintf("%s %s %s %s",
 			i.cfg.Theme.FG256(i.cfg.Theme.Assistant, i.spin.Frame()),
 			i.cfg.Theme.FG256(i.cfg.Theme.Assistant, i.spin.Message()),
@@ -236,6 +240,13 @@ func (i *Interactive) buildChat(cols int, snap frameSnapshot) []string {
 	// "before" the tools.
 	i.view.ToolCalls = append(i.view.ToolCalls[:0], snap.toolViews...)
 	i.view.Err = snap.statusErr
+	// Shared-file cards: hand the renderer whatever preview bytes have already
+	// landed, and ask for the ones that have not. The ask is a no-op for a share
+	// already requested, so a card sitting on screen costs one fetch, not one
+	// per frame; the fetch itself runs off this goroutine and repaints when it
+	// lands, because the render path must never block on the wire.
+	i.view.SharedPreviews = i.sharedPreviewBytes()
+	i.fetchSharedPreviews(transcriptShares(i.view.Messages))
 	// Live streaming/tool rows are appended to the chat buffer (not
 	// hoisted into a separate live block above the editor). That keeps
 	// the renderer's diff view append-only: when a tool finishes the
@@ -628,6 +639,7 @@ func (i *Interactive) redraw() {
 		bottom = append(bottom, suggest...)
 		bottom = append(bottom, queue...)
 		bottom = append(bottom, stashRows...)
+		bottom = append(bottom, reasoningRows(i.cfg.Theme, snap.reasoningLine, cols)...)
 		bottom = append(bottom, "")
 		bottom = append(bottom, statusLines...)
 		bottom = append(bottom, "")

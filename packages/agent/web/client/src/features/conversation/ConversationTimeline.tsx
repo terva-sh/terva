@@ -1,5 +1,6 @@
 import { useCallback } from 'preact/hooks'
 import { t, tn } from '../../i18n'
+import { reasoningLineText } from '../../platform/conversation/reasoning'
 import type { Item } from '../../platform/conversation/store'
 import { handleCodeCopyClick } from '../../ui/codecopy'
 import { usePinnedTail } from '../../ui/pinnedtail'
@@ -11,6 +12,7 @@ import type { ToolView } from './types'
 export function ConversationTimeline({
   items,
   busy,
+  reasoning,
   toolView,
   queued,
   onEditQueued,
@@ -25,6 +27,9 @@ export function ConversationTimeline({
 }: {
   items: Item[]
   busy: boolean
+  // The model's live thinking summary, raw off the wire. Shown only while busy
+  // and never added to items — it is deliberately not transcript.
+  reasoning?: string
   toolView: ToolView
   queued: string[]
   onEditQueued: (index: number, text: string) => void
@@ -44,6 +49,10 @@ export function ConversationTimeline({
   // Land at the newest message and follow the stream, unless the reader has
   // scrolled up to read something (ui/pinnedtail).
   const { ref, onScroll, showJump, jumpToLatest: jump } = usePinnedTail<HTMLDivElement>([items, busy, queued])
+  // Shaped here rather than in the reducer so the raw accumulation stays
+  // intact: only the current section is displayed, but the deltas that built
+  // the earlier ones still have to concatenate correctly.
+  const reasoningLine = reasoningLineText(reasoning ?? '')
 
   // Delegated copy for code blocks: markdown renders a .code-copy button per
   // block (see markdown.ts), and one listener here copies the adjacent <pre>'s
@@ -73,6 +82,7 @@ export function ConversationTimeline({
           canDownload={canDownload}
         />
         {busy && items[items.length - 1]?.kind !== 'assistant' && <div class="working">{t('working…')}</div>}
+        {busy && !!reasoningLine && <div class="reasoning-line">{reasoningLine}</div>}
         {queued.map((text, index) => (
           <QueuedMessage
             key={'q' + index}

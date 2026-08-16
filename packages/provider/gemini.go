@@ -818,6 +818,12 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 		stop        StopReason = StopEnd
 		finalErr    error
 		toolCounter int
+		// reasoningBuf collects the thought-summary parts (thought=true) that
+		// arrive interleaved with the answer. They are held apart from the
+		// text blocks rather than appended to them: a thought summary is not
+		// something the model said, and folding it into a TextBlock would put
+		// it back into the reply on the next turn.
+		reasoningBuf strings.Builder
 		// sawFinish tracks whether any candidate carried an explicit
 		// terminal finishReason. The Gemini SSE wire has no [DONE]
 		// sentinel — a clean stream always ends with a non-empty
@@ -890,6 +896,9 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 					Signature: b.toolSig,
 				})
 			}
+		}
+		if reasoningBuf.Len() > 0 {
+			content = append(content, ReasoningBlock{Summary: reasoningBuf.String()})
 		}
 		return Message{Role: RoleAssistant, Content: content, Time: time.Now()}
 	}
@@ -1006,9 +1015,16 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 					}
 					if part.Thought {
 						// Thinking summaries arrive as text parts
-						// with thought=true. Not surfaced to the
-						// user in v1; could be exposed via a
-						// future ReasoningBlock if useful.
+						// with thought=true. terva asks for them on
+						// every generation-3 request
+						// (includeThoughts), so discarding them here
+						// meant paying to have them generated and
+						// returned and then dropping them. They ride
+						// EventReasoningDelta live and land in a
+						// ReasoningBlock on the assembled message;
+						// they are never appended as reply text.
+						reasoningBuf.WriteString(part.Text)
+						out <- EventReasoningDelta{Delta: part.Text}
 						continue
 					}
 					appendText(part.Text)

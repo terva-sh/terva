@@ -228,6 +228,14 @@ func (i *Interactive) SwitchCarrierSession(id string) error {
 	i.carrierTaskBoardSession = id
 	i.carrierMemory = nil
 	i.carrierMemorySession = id
+	// Shared-file previews go with the thread too: a share id resolves only
+	// inside the session that published it, so carrying the old session's bytes
+	// across a switch would at best draw a picture belonging to another
+	// conversation. Dropping `fetched` with them re-arms the fetch for whatever
+	// the new binding's transcript turns out to contain.
+	i.sharedPreviews = nil
+	i.sharedPreviewsFetched = nil
+	i.sharedPreviewsSession = id
 	i.armCarrierBind()
 	if info.Provider != "" {
 		i.cfg.Provider = info.Provider
@@ -1586,7 +1594,41 @@ func (i *Interactive) appendCarrierToolResultLocked(ev ctrlproto.Event) {
 			Content: []provider.Content{block},
 		})
 	}
+	appendSharesLocked(&i.carrierMessages[len(i.carrierMessages)-1], ev.Shared)
 	i.carrierMessagesRev++
+}
+
+// appendSharesLocked records the files this tool_result published onto the
+// tool-role message it folded into, in the Meta key the agent loop uses on the
+// server side (core.MetaShared). The renderer reads the message, not the event,
+// because the live tool-call overlay is suppressed the moment a result reaches
+// the transcript — a card hung off the overlay would flash and vanish.
+//
+// It MERGES rather than assigns: one tool-role message batches a whole step's
+// results, so the second share of a step would otherwise erase the first. Each
+// record carries its own CallID (stamped by the loop), which is what lets the
+// renderer put each card under the row that produced it.
+//
+// A message that shared nothing keeps its nil Meta, matching executeTools: an
+// empty bag is a claim about the turn that isn't true.
+func appendSharesLocked(m *provider.Message, shared []core.SharedFile) {
+	if len(shared) == 0 {
+		return
+	}
+	var have []core.SharedFile
+	if raw := m.Meta[core.MetaShared]; raw != "" {
+		// A record we cannot re-read is one we drop rather than one we fail the
+		// transcript over; the same trade core.messageToWire makes.
+		_ = json.Unmarshal([]byte(raw), &have)
+	}
+	raw, err := json.Marshal(append(have, shared...))
+	if err != nil {
+		return
+	}
+	if m.Meta == nil {
+		m.Meta = map[string]string{}
+	}
+	m.Meta[core.MetaShared] = string(raw)
 }
 
 // carrierTranscript returns the pump transcript for the render pass. The
@@ -1642,8 +1684,13 @@ func (i *Interactive) handleWireEvent(ev ctrlproto.Event) {
 		i.turns.BeginAssistant()
 		i.toolCalls = map[string]*tui.ToolCallView{}
 		i.toolOrder = nil
+		i.reasoning = ""
 	case "text_delta":
 		i.turns.AppendDelta(ev.Delta)
+	case "reasoning_delta":
+		// Ephemeral by construction: accumulated here and rendered from here,
+		// never handed to i.turns. Nothing about it can reach scrollback.
+		i.reasoning += ev.Delta
 	case "assistant_message":
 		// The daemon transcript gained the finalized reply (with its tool_use
 		// and reasoning blocks): mirror it into the pump transcript — the
@@ -1732,6 +1779,9 @@ func (i *Interactive) handleWireEvent(ev ctrlproto.Event) {
 	case "turn_end":
 		i.pokeGitProber()
 		i.pokeStatusScripts()
+		// The work it described is finished; leaving the last thought on screen
+		// would read as a step still in progress.
+		i.reasoning = ""
 		switch ev.Stop {
 		case string(provider.StopAborted):
 			i.turns.ResetStream()
