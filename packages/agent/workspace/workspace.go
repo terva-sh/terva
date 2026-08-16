@@ -2076,10 +2076,13 @@ func (w *Workspace) switchModel(s *wsSession, providerName, modelID string, forc
 	// base URL — so it is also the answer to whether the launch-time key/URL
 	// overrides still describe this session. setModel takes it because the args
 	// it updates are what the next rebuild re-resolves from.
+	// The session record rides the shared event now (ModelSwap.Session), which
+	// is what stops a host from performing the swap and forgetting the file.
+	// This recorded currentModel() after setModel, which is the same pair by
+	// construction: setModel assigns exactly what it is handed.
+	swap.Session = s.sess
 	swap.After = func() {
 		s.setModel(swap.Provider, swap.Model, swap.Client != nil)
-		prov, model := s.currentModel()
-		_ = s.sess.UpdateModel(prov, model)
 	}
 	build.ApplyModelSwap(swap)
 	// A per-session switch changes ONLY this session; it must not move the

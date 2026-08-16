@@ -3,11 +3,15 @@ package build
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // oldClient reports a usage snapshot, standing in for the client being
@@ -175,4 +179,104 @@ func TestTheHostTailRunsLast(t *testing.T) {
 
 func TestANilAgentIsANoOp(t *testing.T) {
 	ApplyModelSwap(ModelSwap{Provider: "p", Model: "m"}) // must not panic
+}
+
+// The session record is part of the event, not a host chore. It was a host
+// chore, and bot mode never did it: a bot that switched model wrote every later
+// turn under the old route and resumed onto it.
+func TestTheSwapRecordsTheNewRouteOnTheSession(t *testing.T) {
+	ag, _, _ := swapFixture()
+	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
+	sess, err := core.NewSessionAtPath(path, "/ws", "old-prov", "old-model", "0.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	ApplyModelSwap(ModelSwap{
+		Agent: ag, Provider: "new-prov", Model: "new-model", Session: sess,
+	})
+
+	if sess.Meta.Provider != "new-prov" || sess.Meta.Model != "new-model" {
+		t.Errorf("session meta = %s/%s, want new-prov/new-model",
+			sess.Meta.Provider, sess.Meta.Model)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"model":"new-model"`) {
+		t.Error("the new route never reached the file, so a resume would restore the old one")
+	}
+}
+
+// Recorded only once the agent is actually on the new route: a file naming a
+// model the agent had not moved to would resume onto the wrong one.
+func TestTheRouteIsRecordedAfterTheAgentHasMoved(t *testing.T) {
+	ag, routed, _ := swapFixture()
+	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
+	sess, err := core.NewSessionAtPath(path, "/ws", "old-prov", "old-model", "0.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	_ = routed
+	// Read the file's idea of the model at the instant the client is installed.
+	// The record must not have landed yet: a swap that fails partway would
+	// otherwise leave a session naming a model nothing is running.
+	var modelAtSwap string
+	ApplyModelSwap(ModelSwap{
+		Agent: ag, Client: &swapClient{}, Provider: "new-prov", Model: "new-model", Session: sess,
+		Swap: func(c provider.Client, m string) {
+			modelAtSwap = sess.Meta.Model
+			ag.SetClientAndModel(c, m)
+		},
+	})
+	if modelAtSwap != "old-model" {
+		t.Errorf("the session already said %q while the client was still being installed; "+
+			"the record ran before the agent moved", modelAtSwap)
+	}
+	if sess.Meta.Model != "new-model" {
+		t.Errorf("session meta model = %q, want new-model", sess.Meta.Model)
+	}
+}
+
+// A host with no durable session (bot mode before it had one, an ephemeral
+// per-chat agent) must still swap.
+func TestASwapWithNoSessionIsFine(t *testing.T) {
+	ag, routed, _ := swapFixture()
+	ApplyModelSwap(ModelSwap{Agent: ag, Provider: "new-prov", Model: "new-model"})
+	if routed.prov != "new-prov" {
+		t.Errorf("dispatch route = %q, want new-prov", routed.prov)
+	}
+}
+
+// Re-applying the same route writes nothing. This is what makes the record safe
+// on the resume path, where the swap is onto the model the file already names —
+// otherwise every resume would append a meta row saying nothing changed.
+func TestReRecordingTheSameRouteWritesNothing(t *testing.T) {
+	ag, _, _ := swapFixture()
+	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
+	sess, err := core.NewSessionAtPath(path, "/ws", "same-prov", "same-model", "0.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ApplyModelSwap(ModelSwap{
+		Agent: ag, Provider: "same-prov", Model: "same-model", Session: sess,
+	})
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Errorf("an unchanged route appended %d bytes; resume would grow the file every open",
+			len(after)-len(before))
+	}
 }

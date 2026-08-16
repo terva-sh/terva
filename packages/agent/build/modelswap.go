@@ -49,8 +49,29 @@ type ModelSwap struct {
 	// agent, which it does through its Loop. Nil means Agent.SetClientAndModel.
 	Swap func(client provider.Client, model string)
 
-	// After is this host's own tail — recording the new model on the session,
-	// telling clients, whatever only it has.
+	// Session is the durable session to record the new route on, or nil for a
+	// host that has none.
+	//
+	// 🪤 This was a host tail (see After) and drifted exactly as everything else
+	// on this struct did before it moved here: of the hosts holding a session,
+	// bot mode never recorded, so a bot that switched model wrote every later
+	// turn under the OLD route and resumed onto it. The record belongs to the
+	// event because "the agent moved" and "the file says where it moved" are
+	// one fact, and a host cannot opt out of half of it.
+	//
+	// A no-op when the route is unchanged (Session.UpdateModel), which is what
+	// makes it safe on the resume path, where the swap is onto the model the
+	// file already names.
+	//
+	// ACP is the one host that leaves this nil on purpose: its swap arrives as
+	// a closure built by acp_mode.go, one layer above the package that owns the
+	// durable session, so it records in acp/config.go right after invoking the
+	// closure. Setting this there too would write the row twice.
+	Session *core.Session
+
+	// After is this host's own tail: telling clients, refreshing a menu —
+	// whatever genuinely only it has. Recording the model is NOT that; use
+	// Session above.
 	After func()
 }
 
@@ -110,7 +131,15 @@ func ApplyModelSwap(s ModelSwap) {
 		}
 	}
 
-	// 5. Whatever only this host has.
+	// 5. Record the new route, AFTER the agent is actually on it. A session
+	//    file that named a model the agent had not moved to would resume onto
+	//    the wrong one, and the swap above can still be a partial move if a
+	//    host's Swap fans out and fails halfway.
+	if s.Session != nil {
+		_ = s.Session.UpdateModel(s.Provider, s.Model)
+	}
+
+	// 6. Whatever only this host has.
 	if s.After != nil {
 		s.After()
 	}

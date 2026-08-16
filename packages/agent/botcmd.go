@@ -630,6 +630,10 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 				AuthMethod: next.AuthMethod,
 				BaseURL:    next.BaseURL,
 				Swap:       func(c provider.Client, m string) { loop.SetClientAndModel(c, m) },
+				// The owner's DM is the one durable session here; group agents
+				// are ephemeral. Without this a bot that switched model wrote
+				// every later turn under the old route and resumed onto it.
+				Session: sess,
 				// UpdateStatusContext refreshes the /status CONNECTOR command,
 				// which is bot mode's alone — terva_status, what the model sees,
 				// is the event's job.

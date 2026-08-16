@@ -738,6 +738,11 @@ func applyResumedModel(ag *core.Agent, base build.Args, sess *core.Session, buil
 		Model:      r.Model,
 		AuthMethod: r.AuthMethod,
 		BaseURL:    r.BaseURL,
+		// Normally a no-op: the swap is onto the model the file already names.
+		// It writes only when Resolve landed somewhere else than the stored
+		// pair — an alias that now points at a different id — and then the file
+		// names the model actually running rather than the one asked for.
+		Session: sess,
 	})
 	return r.Provider, r.Model, ""
 }
