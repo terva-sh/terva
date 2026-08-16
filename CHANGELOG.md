@@ -11,6 +11,27 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.131.8](https://github.com/terva-sh/terva/releases/tag/v0.131.8) — 2026-08-14
+
+### Features
+
+- cost: an image model bills its pictures at the image rate
+
+### Fixes
+
+- gemini: --reasoning stops being a silent no-op on the rolling aliases
+- gemini: a generated image lands in the workspace
+- gemini: a model swap does not strand a tool call without its signature
+- gemini: a tool call carries its thought signature back
+- gemini: a tool-returned image reaches the model
+- gemini: an abnormal finish reason stops being a silent empty turn
+- gemini: the api version prefix is not doubled onto a versioned base url
+- gemini: the image/text token split reaches the bill
+- gemini: tools stop being stripped from models that accept them
+- models: the gemini image models are reachable at all
+- models: the google default model is one that still exists
+- tui: the usage round-trip stops dropping the fields that cost money
+
 ## [v0.131.7](https://github.com/terva-sh/terva/releases/tag/v0.131.7) — 2026-08-14
 
 ### Features
