@@ -72,11 +72,36 @@ func TestPromptDumpWireReflectsTheSessionTranscript(t *testing.T) {
 
 // An unsupported provider must fail loudly rather than emit an empty or
 // half-built dump that would read as "this request carries nothing".
+//
+// google, not anthropic: anthropic was this test's example until it gained a
+// dumper, which is how a refusal test quietly stops testing a refusal. Pick a
+// subject from the providers wireBody does NOT list, and expect to move again
+// when this one is implemented.
 func TestPromptDumpWireRefusesAProviderItCannotSerialize(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	args := build.Args{DumpPrompt: "wire", Prompt: "hi",
-		Provider: "anthropic", Model: "claude-haiku-4-5-20251001"}
+		Provider: "google", Model: "gemini-3-flash-preview"}
 	if out, err := promptDumpText(args); err == nil {
 		t.Fatalf("want an error for a provider with no wire dumper, got:\n%s", out)
+	}
+}
+
+// The other half, and the one that would have caught anthropic's dumper landing
+// without this file noticing: a provider that HAS a dumper must produce one
+// through the same entry point. A refusal test alone passes just as well on a
+// build where every provider refuses.
+func TestPromptDumpWireServesAProviderItCanSerialize(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	args := build.Args{DumpPrompt: "wire", Prompt: "hi",
+		Provider: "anthropic", Model: "claude-haiku-4-5-20251001"}
+	out, err := promptDumpText(args)
+	if err != nil {
+		t.Fatalf("anthropic has a wire dumper but promptDumpText refused: %v", err)
+	}
+	if !strings.Contains(out, `"_provider":"anthropic"`) {
+		t.Errorf("dump is not labeled as anthropic:\n%s", out)
+	}
+	if !strings.Contains(out, `"_field":"messages"`) {
+		t.Errorf("anthropic's input array is `messages`; header says otherwise:\n%s", out)
 	}
 }

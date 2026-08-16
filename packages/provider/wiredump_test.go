@@ -29,7 +29,7 @@ func assistantMsg(text string) Message {
 // the whole request is one line and "which item first differs" is back to
 // reading a few hundred kilobytes by eye.
 func TestDumpRequestJSONLSplitsHeaderFromItems(t *testing.T) {
-	out, err := DumpRequestJSONL("openai-codex", wireReq(userMsg("one"), assistantMsg("two"), userMsg("three")))
+	out, err := DumpRequestJSONL("openai-codex", "", wireReq(userMsg("one"), assistantMsg("two"), userMsg("three")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,11 +75,11 @@ func TestDumpRequestJSONLSplitsHeaderFromItems(t *testing.T) {
 // the request build ever became order- or time-dependent.
 func TestDumpRequestJSONLIsAppendOnlyWhenAMessageIsAppended(t *testing.T) {
 	base := []Message{userMsg("one"), assistantMsg("two")}
-	before, err := DumpRequestJSONL("openai-codex", wireReq(base...))
+	before, err := DumpRequestJSONL("openai-codex", "", wireReq(base...))
 	if err != nil {
 		t.Fatal(err)
 	}
-	after, err := DumpRequestJSONL("openai-codex", wireReq(append(append([]Message{}, base...), userMsg("three"))...))
+	after, err := DumpRequestJSONL("openai-codex", "", wireReq(append(append([]Message{}, base...), userMsg("three"))...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,12 +98,12 @@ func TestDumpRequestJSONLIsAppendOnlyWhenAMessageIsAppended(t *testing.T) {
 // the wireBody comment promises when it says the builders stay pure.
 func TestDumpRequestJSONLIsDeterministic(t *testing.T) {
 	req := wireReq(userMsg("one"), assistantMsg("two"))
-	first, err := DumpRequestJSONL("openai-codex", req)
+	first, err := DumpRequestJSONL("openai-codex", "", req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 8; i++ {
-		again, err := DumpRequestJSONL("openai-codex", req)
+		again, err := DumpRequestJSONL("openai-codex", "", req)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -116,12 +116,143 @@ func TestDumpRequestJSONLIsDeterministic(t *testing.T) {
 // An unsupported provider must SAY so. Returning an empty dump would read as
 // "this request carries nothing", which is the worst possible answer from a
 // tool whose whole job is showing what goes on the wire.
+// google, not anthropic: anthropic used to be this test's example of an
+// unsupported provider and is now implemented, which is exactly the way a
+// refusal test rots into one that asserts nothing.
 func TestDumpRequestJSONLRefusesUnknownProvider(t *testing.T) {
-	out, err := DumpRequestJSONL("anthropic", wireReq(userMsg("one")))
+	out, err := DumpRequestJSONL("google", "", wireReq(userMsg("one")))
 	if err == nil {
 		t.Fatalf("want an error for an unsupported provider, got a dump:\n%s", out)
 	}
-	if !strings.Contains(err.Error(), "anthropic") || !strings.Contains(err.Error(), "openai-codex") {
+	if !strings.Contains(err.Error(), "google") || !strings.Contains(err.Error(), "openai-codex") {
 		t.Errorf("error should name the provider asked for AND the supported ones, got: %v", err)
+	}
+}
+
+// Non-vacuity for the refusal above: the provider it names as supported must
+// actually BE supported. Without this, a typo in the error string's list would
+// leave the refusal test passing while the list it prints is fiction.
+func TestDumpRequestJSONLRefusalNamesRealSupport(t *testing.T) {
+	if _, err := DumpRequestJSONL("openai-codex", "", wireReq(userMsg("one"))); err != nil {
+		t.Fatalf("the refusal message advertises openai-codex, but it does not work: %v", err)
+	}
+}
+
+// Anthropic support, and the reason it needed a mode argument.
+//
+// The dump's contract is "exactly as providerName would put it on the wire".
+// For every other provider the body is a function of the request alone. Anthropic
+// has two bodies: a subscription request leads with the Claude Code identity
+// system block and renames tools to Anthropic's canonical casing, and an api-key
+// request does neither. Dumping one shape for the other misreports the two
+// things a dump is most often opened to check — the cached prefix and the tools.
+func TestDumpRequestJSONLAnthropicShowsTheModeItWouldSend(t *testing.T) {
+	req := wireReq(userMsg("one"))
+
+	apikey, err := DumpRequestJSONL("anthropic", "apikey", req)
+	if err != nil {
+		t.Fatalf("api-key dump: %v", err)
+	}
+	oauth, err := DumpRequestJSONL("anthropic", "oauth", req)
+	if err != nil {
+		t.Fatalf("oauth dump: %v", err)
+	}
+
+	if bytes.Equal(apikey, oauth) {
+		t.Fatal("the two auth modes dumped identical bodies; the mode argument is doing nothing")
+	}
+	// The identity line is the concrete difference, and it must appear in the
+	// subscription dump only. Asserting on it rather than on inequality alone
+	// keeps this from passing on any incidental difference.
+	if !bytes.Contains(oauth, []byte(claudeCodeIdentity)) {
+		t.Error("the oauth dump is missing the Claude Code identity system block")
+	}
+	if bytes.Contains(apikey, []byte(claudeCodeIdentity)) {
+		t.Error("the api-key dump carries the Claude Code identity block, which that mode never sends")
+	}
+	// Tool renaming is the other half: "read" goes out as "Read" under OAuth.
+	if !bytes.Contains(oauth, []byte(`"name":"Read"`)) {
+		t.Errorf("oauth dump did not rename the tool to Anthropic's casing:\n%s", oauth)
+	}
+	if !bytes.Contains(apikey, []byte(`"name":"read"`)) {
+		t.Errorf("api-key dump should keep terva's own tool casing:\n%s", apikey)
+	}
+}
+
+// The header/item split has to hold for Anthropic too — that is the whole
+// reason the mode exists, and "messages" is a different input field name from
+// the Codex "input" the split was first built against.
+func TestDumpRequestJSONLAnthropicSplitsMessagesOut(t *testing.T) {
+	out, err := DumpRequestJSONL("anthropic", "apikey", wireReq(userMsg("one"), assistantMsg("two"), userMsg("three")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(lines) < 4 {
+		t.Fatalf("want a header plus one line per message, got %d lines:\n%s", len(lines), out)
+	}
+	var head struct {
+		Provider string                     `json:"_provider"`
+		Field    string                     `json:"_field"`
+		Request  map[string]json.RawMessage `json:"request"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &head); err != nil {
+		t.Fatalf("header is not JSON: %v\n%s", err, lines[0])
+	}
+	if head.Provider != "anthropic" || head.Field != "messages" {
+		t.Errorf("header mislabeled: %+v", head)
+	}
+	if _, dup := head.Request["messages"]; dup {
+		t.Error("header still carries the messages array; it must be lifted out")
+	}
+	if _, ok := head.Request["system"]; !ok {
+		t.Error("header lost the system prompt")
+	}
+	for i, ln := range lines[1:] {
+		if !json.Valid([]byte(ln)) {
+			t.Errorf("item line %d is not valid JSON: %s", i, ln)
+		}
+	}
+}
+
+// 🪤 Anthropic is NOT append-only, and that is the provider's behavior rather
+// than the dumper's. terva marks the cache breakpoint on the LAST user message
+// (tagLastUserCache), so appending a turn moves the mark and rewrites the line
+// that used to carry it. The Codex dump's "a pure append leaves every earlier
+// line byte-identical" does not transfer.
+//
+// Asserting the weaker true property instead of the stronger false one: the
+// breakpoint is the ONLY thing that moves. Anyone diffing two Anthropic dumps
+// sees exactly one line of expected churn, and this is what says so — if a
+// second kind of rewrite ever appeared, the stripped comparison below catches
+// it while a plain HasPrefix would just keep failing for the reason it already
+// fails.
+func TestDumpRequestJSONLAnthropicRewritesOnlyTheCacheBreakpoint(t *testing.T) {
+	base := []Message{userMsg("one"), assistantMsg("two")}
+	before, err := DumpRequestJSONL("anthropic", "oauth", wireReq(base...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := DumpRequestJSONL("anthropic", "oauth", wireReq(append(append([]Message{}, base...), userMsg("three"))...))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The documented-but-provider-specific expectation, stated so a reader knows
+	// the next assertion is deliberate and not a weakened workaround.
+	if bytes.HasPrefix(after, before) {
+		t.Fatal("Anthropic dumps became append-only; the cache breakpoint no longer moves, " +
+			"which means tagLastUserCache changed and this test's premise is stale")
+	}
+
+	strip := func(b []byte) string {
+		return strings.ReplaceAll(string(b), `,"cache_control":{"type":"ephemeral"}`, "")
+	}
+	sb, sa := strip(before), strip(after)
+	if !strings.HasPrefix(sa, sb) {
+		t.Fatalf("appending rewrote earlier lines for a reason OTHER than the cache breakpoint.\nbefore:\n%s\nafter:\n%s", sb, sa)
+	}
+	if len(sa) <= len(sb) {
+		t.Errorf("appending a message did not add lines: %d -> %d bytes", len(sb), len(sa))
 	}
 }

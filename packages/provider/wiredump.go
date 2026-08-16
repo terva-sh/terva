@@ -24,10 +24,22 @@ import (
 // file whenever an item was inserted early, turning the one signal worth having
 // into noise.
 //
+// 🪤 That append-only property is the OpenAI/Codex wire's, not a guarantee of
+// this function. Anthropic marks its cache breakpoint on the last user message,
+// so appending a turn moves the mark and rewrites the line that used to carry
+// it — one line of expected churn on every diff, before any real change. See
+// TestDumpRequestJSONLAnthropicRewritesOnlyTheCacheBreakpoint, which pins that
+// to the breakpoint alone.
+//
+// authMethod ("apikey" | "oauth" | "") selects the auth MODE to build for. It
+// is not a credential and nothing is resolved from it — but on Anthropic the
+// mode changes the body itself (see wireBody), so a dump that ignored it would
+// show a subscription user a request they never send.
+//
 // This builds the body only. It opens no connection, needs no credential, and
 // is safe to run against a session file that is in use.
-func DumpRequestJSONL(providerName string, req Request) ([]byte, error) {
-	body, inputField, err := wireBody(providerName, req)
+func DumpRequestJSONL(providerName, authMethod string, req Request) ([]byte, error) {
+	body, inputField, err := wireBody(providerName, authMethod, req)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +97,7 @@ func DumpRequestJSONL(providerName string, req Request) ([]byte, error) {
 // client's own name — which is what buildRequestPurity's test asserts, so a
 // builder that starts reading connection state fails there rather than silently
 // dumping something the wire would never carry.
-func wireBody(providerName string, req Request) (any, string, error) {
+func wireBody(providerName, authMethod string, req Request) (any, string, error) {
 	switch providerName {
 	case "openai-codex":
 		b, err := (&codexClient{}).buildRequest(req)
@@ -93,7 +105,16 @@ func wireBody(providerName string, req Request) (any, string, error) {
 	case "openai", "kimi", "deepseek", "openai-compatible", "ollama":
 		b, err := (&openaiClient{name: providerName}).buildRequest(req)
 		return b, "messages", err
+	case "anthropic":
+		// 🪤 The only provider whose MODE changes the body, which is why
+		// authMethod exists at all. A subscription request carries the Claude
+		// Code identity as its first system block — on its own cache
+		// breakpoint — and renames tools to Anthropic's canonical casing. Dump
+		// the api-key shape for an OAuth user and the two things most worth
+		// looking at, the cached prefix and the tool names, are both wrong.
+		b, err := (&anthropicClient{oauth: authMethod == "oauth"}).buildRequest(req)
+		return b, "messages", err
 	default:
-		return nil, "", fmt.Errorf("wire dump is not implemented for provider %q (supported: openai-codex, openai, kimi, deepseek, openai-compatible, ollama)", providerName)
+		return nil, "", fmt.Errorf("wire dump is not implemented for provider %q (supported: openai-codex, openai, anthropic, kimi, deepseek, openai-compatible, ollama)", providerName)
 	}
 }

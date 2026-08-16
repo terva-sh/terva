@@ -40,7 +40,9 @@ func promptDumpWire(args build.Args, r build.Resolved, msgs []provider.Message) 
 			req.PromptCacheKey = meta.ID
 		}
 	}
-	b, err := provider.DumpRequestJSONL(r.Provider, req)
+	// r.AuthMethod, not a credential: on Anthropic the subscription body differs
+	// from the api-key one, and the dump has to show the one this run would send.
+	b, err := provider.DumpRequestJSONL(r.Provider, r.AuthMethod, req)
 	if err != nil {
 		return "", err
 	}

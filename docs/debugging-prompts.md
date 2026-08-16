@@ -62,6 +62,18 @@ byte-identical, so `diff` reports the minimal edit. Numbering would renumber the
 whole file whenever an item was inserted early, turning the one signal worth
 having into noise.
 
+⚠️ **On Anthropic, expect one line of churn before you find a real one.** terva
+marks the cache breakpoint on the *last user message*, so appending a turn moves
+the mark and rewrites the line that previously carried it. The change is only a
+`cache_control` field appearing and disappearing; if an earlier line differs for
+any other reason, that is the divergence you came for.
+
+Anthropic also has **two** request shapes, and the dump builds the one your
+credential selects: a subscription (OAuth) request leads with the Claude Code
+identity system block and renames tools to Anthropic's canonical casing, while an
+API-key request does neither. Two dumps taken under different auth modes are not
+comparable.
+
 Two things it does not show, both because neither can change the answer it
 exists to give. The **ephemeral tail** is appended *after* the cache breakpoint,
 so it is not prefix bytes (and composing it needs a live agent). The
