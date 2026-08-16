@@ -52,6 +52,18 @@ type Theme struct {
 	SelectionBG  int // background for highlighted rows
 	SelectionFG  int // foreground for highlighted rows
 
+	// Ghost colours an offered next line in the composer that the user has
+	// not accepted yet. It must read as an OFFER rather than as text already
+	// typed: the two occupy the same row in the same place, and the shade is
+	// the only thing telling them apart.
+	//
+	// Dimmer than Muted, which is not the same as darker. On a light theme
+	// the foreground is dark, so receding means going LIGHTER — each built-in
+	// picks the direction that moves away from its own FG. Zero falls back to
+	// Muted, so a bare Theme literal and every theme file written before this
+	// slot existed still draw an offer that is distinguishable from typing.
+	Ghost int
+
 	// MeterLow/Mid/High color the status bar's consumption meters
 	// (context window, subscription usage) by stage: <70%, 70-90%,
 	// >=90%. Staged whole-meter colors rather than per-cell gradients:
@@ -191,6 +203,7 @@ var Dark = Theme{
 	Spinner:           183, // soft purple
 	SelectionBG:       24,  // deep blue background
 	SelectionFG:       231, // near-white foreground
+	Ghost:             240, // an un-accepted offer: darker than Muted, well under FG 253
 	MeterLow:          244, // muted
 	MeterMid:          214, // amber
 	MeterHigh:         203, // red
@@ -255,6 +268,7 @@ var Light = Theme{
 	Spinner:           91,  // purple
 	SelectionBG:       153, // light blue
 	SelectionFG:       232, // near-black
+	Ghost:             248, // an un-accepted offer: LIGHTER here, receding from the dark FG 236
 	MeterLow:          244, // muted
 	MeterMid:          166, // amber
 	MeterHigh:         160, // red
@@ -271,6 +285,29 @@ var Light = Theme{
 // FG256 wraps s in foreground color c using ANSI 256-color SGR.
 func (t Theme) FG256(c int, s string) string {
 	return sgrFG(c) + s + reset
+}
+
+// GhostColor returns the colour for an un-accepted composer offer. A zero
+// slot falls back to Muted, so a bare Theme literal and every theme file
+// written before the slot existed still draw the offer as secondary text
+// rather than as the user's own typing.
+func (t Theme) GhostColor() int {
+	if t.Ghost == 0 {
+		return t.Muted
+	}
+	return t.Ghost
+}
+
+// GhostText styles an un-accepted composer offer for display. Assign it as a
+// method value — `ed.GhostStyle = th.GhostText` — which binds this theme the
+// same way the editor's Prompt binds one, so both refresh together when the
+// theme changes.
+//
+// It exists so the two places that hook up an editor cannot disagree about
+// what an offer looks like. The colour lives here, with the theme, rather than
+// in a closure written out twice.
+func (t Theme) GhostText(s string) string {
+	return t.FG256(t.GhostColor(), s)
 }
 
 // MeterColor returns the staged meter color for pct consumed: MeterLow

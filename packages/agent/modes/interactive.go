@@ -1082,6 +1082,11 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		carrierPerm:       map[string]*dialogs.ConfirmRequest{},
 		carrierAsk:        map[string]*dialogs.QuestionRequest{},
 	}
+	// The offer the idle trigger writes into the composer is drawn where the
+	// user's own text goes, so it is dimmed to read as an offer rather than as
+	// something already typed. A method value on the theme, like Prompt above,
+	// so applyTheme can rebind both together.
+	i.ed.GhostStyle = cfg.Theme.GhostText
 	i.overlays = i.buildOverlays()
 	i.keymap = i.buildGlobalKeymap()
 	if cfg.PersonaAccent != "" {

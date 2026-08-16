@@ -205,6 +205,11 @@ Most color fields are xterm-256 indexes (`0`–`255`).
 - `spinner` — reserved spinner color slot.
 - `selection_bg` — highlighted row background.
 - `selection_fg` — highlighted row foreground.
+- `ghost` — an offered next line in the composer that the user has not
+  accepted. It sits where their own text goes, so it has to read as an
+  offer rather than as typing: pick a shade that recedes from `fg`, which
+  means darker on a dark theme and lighter on a light one. Missing falls
+  back to `muted`.
 - `meter_low`, `meter_mid`, `meter_high` — the status bar's staged
   meter ramp (context window, subscription usage): the whole meter
   takes `meter_low` below 70% consumed, `meter_mid` from 70, and

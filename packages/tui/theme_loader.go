@@ -94,6 +94,7 @@ type ThemeOverrides struct {
 	Spinner           *int                 `json:"spinner,omitempty"`
 	SelectionBG       *int                 `json:"selection_bg,omitempty"`
 	SelectionFG       *int                 `json:"selection_fg,omitempty"`
+	Ghost             *int                 `json:"ghost,omitempty"`
 	MeterLow          *int                 `json:"meter_low,omitempty"`
 	MeterMid          *int                 `json:"meter_mid,omitempty"`
 	MeterHigh         *int                 `json:"meter_high,omitempty"`
@@ -415,6 +416,9 @@ func applyThemeOverrides(th Theme, o ThemeOverrides) Theme {
 	}
 	if o.SelectionFG != nil {
 		th.SelectionFG = *o.SelectionFG
+	}
+	if o.Ghost != nil {
+		th.Ghost = *o.Ghost
 	}
 	if o.MeterLow != nil {
 		th.MeterLow = *o.MeterLow

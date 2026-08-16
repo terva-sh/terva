@@ -349,6 +349,11 @@ func (i *Interactive) applyThemeNow(name string) {
 	i.view.Theme = th
 	i.view.InvalidateRenderCache()
 	i.ed.Prompt = th.AccentBar(th.Accent)
+	// Rebound with the prompt, not left as the old theme's method value: a
+	// ghost standing while the user switches themes would otherwise keep the
+	// previous palette's dim shade, which on the opposite background is the
+	// one colour that does not recede.
+	i.ed.GhostStyle = th.GhostText
 	i.spin.Configure(th)
 	if i.rend != nil {
 		i.rend.SetTheme(th)
