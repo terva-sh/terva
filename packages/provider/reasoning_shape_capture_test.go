@@ -176,3 +176,102 @@ func TestAnthropicTranscriptReplayedToChatCarriesNoChainOfThought(t *testing.T) 
 		}
 	}
 }
+
+// geminiSealedThoughtStream is a live-shaped Gemini 3 response: thought
+// summaries, the answer, then a TRAILING part carrying the turn's signature and
+// an empty text. Taken from a real gemini-3-flash-preview response, with the
+// 7472-character signature truncated.
+//
+// 🪤 That trailing part is the whole point. terva read thoughtSignature only off
+// functionCall parts, and every other part hit an `if part.Text == "" continue`
+// before anything looked at the signature — so a text-only turn's seal was
+// dropped on the floor.
+const geminiSealedThoughtStream = `data: {"candidates":[{"content":{"role":"model","parts":[{"text":"**Analyzing Factorial Zeros**\n\nLegendre's formula gives the count.","thought":true}]}}]}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"The answer is 405."}]}}]}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"","thoughtSignature":"Et8rCtwrARFNMg+6LhfTaJ6Gk3F8HAZ9gQg6hwzh"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":35,"candidatesTokenCount":2233,"thoughtsTokenCount":1643}}
+
+`
+
+func TestGeminiKeepsTheSealOnATextOnlyTurn(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(geminiSealedThoughtStream))
+	}))
+	defer srv.Close()
+
+	c := NewGemini("k", srv.URL)
+	evs, err := c.Stream(context.Background(), Request{Model: "gemini-3-flash-preview"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var text strings.Builder
+	var msg Message
+	var usage Usage
+	for ev := range evs {
+		switch e := ev.(type) {
+		case EventTextDelta:
+			text.WriteString(e.Delta)
+		case EventUsage:
+			usage = e.Usage
+		case EventDone:
+			msg = e.Message
+		}
+	}
+
+	rb := firstReasoningBlock(t, msg)
+	if rb.Shape != ReasoningShapeGeminiThoughtSummary {
+		t.Errorf("Shape = %q, want %q", rb.Shape, ReasoningShapeGeminiThoughtSummary)
+	}
+	if rb.Encrypted != "Et8rCtwrARFNMg+6LhfTaJ6Gk3F8HAZ9gQg6hwzh" {
+		t.Errorf("Encrypted = %q, want the trailing thoughtSignature", rb.Encrypted)
+	}
+	if !strings.Contains(rb.Summary, "Legendre") {
+		t.Errorf("Summary = %q, want the thought text", rb.Summary)
+	}
+	// The seal's empty text must not reach the answer, and the answer must not
+	// reach the summary.
+	if text.String() != "The answer is 405." {
+		t.Errorf("answer text = %q", text.String())
+	}
+	if usage.ReasoningTokens != 1643 || !usage.ReasoningTokensKnown {
+		t.Errorf("reasoning tokens = %d known=%v, want 1643 true", usage.ReasoningTokens, usage.ReasoningTokensKnown)
+	}
+}
+
+// A turn that thinks without summarizing still gets sealed, and the seal is
+// what is replayed — so the block has to survive with no readable half at all.
+// Measured live: a short tool-call turn spent 66 thinking tokens and returned
+// zero thought parts.
+func TestGeminiKeepsASealWithNoSummary(t *testing.T) {
+	frames := strings.Replace(geminiSealedThoughtStream,
+		`{"text":"**Analyzing Factorial Zeros**\n\nLegendre's formula gives the count.","thought":true}`,
+		`{"text":"","thought":true}`, 1)
+	if frames == geminiSealedThoughtStream {
+		t.Fatal("fixture no longer contains the thought part this test blanks")
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(frames))
+	}))
+	defer srv.Close()
+
+	c := NewGemini("k", srv.URL)
+	evs, err := c.Stream(context.Background(), Request{Model: "gemini-3-flash-preview"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, msg := collectReasoningDeltas(t, evs)
+
+	rb := firstReasoningBlock(t, msg)
+	if rb.Summary != "" {
+		t.Errorf("Summary = %q, want empty", rb.Summary)
+	}
+	if rb.Encrypted == "" {
+		t.Error("the seal was dropped because there was no summary beside it")
+	}
+}

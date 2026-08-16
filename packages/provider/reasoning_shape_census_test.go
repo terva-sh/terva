@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -11,7 +12,7 @@ import (
 // This is the same forced decision reasoning_wire_census_test.go makes about
 // which wire a provider's reasoning KNOB rides, one layer down and about the
 // reasoning BLOCK. It exists because a transcript outlives a /model switch, so
-// all three serializers are reached holding blocks they did not issue — and
+// every serializer is reached holding blocks it did not issue — and
 // they are indistinguishable in Go, being summary-plus-opaque-string in every
 // case. Before the tags, the Anthropic serializer was the only one that
 // checked: Codex replayed an Anthropic signature as its own encrypted_content
@@ -30,7 +31,7 @@ import (
 // make you, and the wire will not tell you until a request fails.
 var reasoningShapeOwners = []struct {
 	shape string
-	owner string // "anthropic" | "codex" | "chat" | "" (never replayed)
+	owner string // "anthropic" | "codex" | "chat" | "gemini" | "" (never replayed)
 	block ReasoningBlock
 }{
 	{ReasoningShapeAnthropicThinking, "anthropic",
@@ -43,10 +44,10 @@ var reasoningShapeOwners = []struct {
 		ReasoningBlock{ID: "rs_1", Summary: "précis", Encrypted: "OPAQUE", Shape: ReasoningShapeOpenAIResponses}},
 	{ReasoningShapeOpenAIChat, "chat",
 		ReasoningBlock{Summary: "deliberation", Shape: ReasoningShapeOpenAIChat}},
-	// Gemini's replay token is thoughtSignature and it rides on
-	// ToolCallBlock.Signature, not here. The summary is for the record only.
-	{ReasoningShapeGeminiThoughtSummary, "",
-		ReasoningBlock{Summary: "checking the handler", Shape: ReasoningShapeGeminiThoughtSummary}},
+	// Gemini seals a text-only turn with a trailing signature part. The
+	// SIGNATURE is replayed; the summary beside it never is.
+	{ReasoningShapeGeminiThoughtSummary, "gemini",
+		ReasoningBlock{Summary: "checking the handler", Encrypted: "GEMSIG", Shape: ReasoningShapeGeminiThoughtSummary}},
 }
 
 // replayedByAnthropic reports whether convertAnthContent emits anything for b.
@@ -127,6 +128,46 @@ func replayedByChat(t *testing.T, b ReasoningBlock) bool {
 	return false
 }
 
+// replayedByGemini reports whether the Gemini builder emits a part for b. Only
+// the signature is ever sent, so this looks for a thoughtSignature that is not
+// riding a functionCall.
+func replayedByGemini(t *testing.T, b ReasoningBlock) bool {
+	t.Helper()
+	parts := convertGemAssistantParts([]Content{b, TextBlock{Text: "answer"}}, true)
+	for _, p := range parts {
+		if p.ThoughtSignature != "" && p.FunctionCall == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// The summary is a human-facing précis the model does not consume; replaying it
+// would re-bill it as input on every following turn and buy nothing. Only the
+// seal goes back, so a block carrying no seal is replayed nowhere.
+func TestGeminiReplaysTheSignatureAndNeverTheSummary(t *testing.T) {
+	withSig := ReasoningBlock{Summary: "the readable thinking", Encrypted: "GEMSIG", Shape: ReasoningShapeGeminiThoughtSummary}
+	parts := convertGemAssistantParts([]Content{withSig, TextBlock{Text: "answer"}}, true)
+
+	var sawSig bool
+	for _, p := range parts {
+		if strings.Contains(p.Text, "the readable thinking") {
+			t.Errorf("replayed the thought summary as text: %q", p.Text)
+		}
+		if p.ThoughtSignature == "GEMSIG" {
+			sawSig = true
+		}
+	}
+	if !sawSig {
+		t.Error("the signature never reached the wire")
+	}
+
+	summaryOnly := ReasoningBlock{Summary: "no seal here", Shape: ReasoningShapeGeminiThoughtSummary}
+	if replayedByGemini(t, summaryOnly) {
+		t.Error("a block with no signature produced a part; there is nothing to replay")
+	}
+}
+
 func TestEveryReasoningShapeHasExactlyOneSerializer(t *testing.T) {
 	if len(reasoningShapeOwners) == 0 {
 		t.Fatal("no shapes listed — this census is vacuous")
@@ -137,6 +178,7 @@ func TestEveryReasoningShapeHasExactlyOneSerializer(t *testing.T) {
 				"anthropic": replayedByAnthropic(t, tc.block),
 				"codex":     replayedByCodex(t, tc.block),
 				"chat":      replayedByChat(t, tc.block),
+				"gemini":    replayedByGemini(t, tc.block),
 			}
 			for name, accepted := range got {
 				switch {
@@ -168,6 +210,9 @@ func TestAnUnknownReasoningShapeIsReplayedNowhere(t *testing.T) {
 	if replayedByChat(t, b) {
 		t.Error("chat replayed an unknown shape")
 	}
+	if replayedByGemini(t, b) {
+		t.Error("gemini replayed an unknown shape")
+	}
 }
 
 // Non-vacuity for the two above. The helpers must be able to answer YES, or
@@ -181,6 +226,9 @@ func TestReplayProbesDetectARealReplay(t *testing.T) {
 	}
 	if !replayedByChat(t, ReasoningBlock{Summary: "x", Shape: ReasoningShapeOpenAIChat}) {
 		t.Error("the chat probe cannot see a replay it should")
+	}
+	if !replayedByGemini(t, ReasoningBlock{Encrypted: "SIG", Shape: ReasoningShapeGeminiThoughtSummary}) {
+		t.Error("the gemini probe cannot see a replay it should")
 	}
 }
 

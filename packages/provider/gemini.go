@@ -138,11 +138,18 @@ type gemPart struct {
 	// Thought: true marks a thought-summary part. Outgoing parts
 	// from terva never set this; incoming chunks might.
 	Thought bool `json:"thought,omitempty"`
-	// ThoughtSignature is the opaque token Gemini 3 attaches to the part
-	// that carries a functionCall. It MUST be echoed on that same part when
-	// the call is replayed in history, or the API answers HTTP 400
+	// ThoughtSignature is the opaque token Gemini 3 attaches to the part that
+	// follows its thinking. It MUST be echoed on that same part when a
+	// functionCall is replayed in history, or the API answers HTTP 400
 	// "Function call is missing a thought_signature in functionCall parts".
 	// See https://ai.google.dev/gemini-api/docs/thought-signatures.
+	//
+	// 🪤 It is NOT only a functionCall thing, which is what the 400 message
+	// makes it look like. A text-only answer is sealed by a TRAILING part
+	// carrying the signature and an empty text — measured live, part 27 of 27,
+	// 6116 chars. Replaying without it is accepted (also measured), so that
+	// half is continuity rather than validity, and terva dropped it for as
+	// long as it read the signature only off functionCall parts.
 	ThoughtSignature string `json:"thoughtSignature,omitempty"`
 }
 
@@ -383,6 +390,20 @@ func convertGemAssistantParts(blocks []Content, functionsEnabled bool) []gemPart
 				// omitted from the wire entirely.
 				ThoughtSignature: v.Signature,
 			})
+		case ReasoningBlock:
+			// This wire's own reasoning only — a transcript outlives a /model
+			// switch, and another provider's opaque payload is meaningless
+			// here (and its readable thinking is not ours to forward).
+			if v.Shape != ReasoningShapeGeminiThoughtSummary || v.Encrypted == "" {
+				continue
+			}
+			// The SIGNATURE goes back, never the summary. Gemini seals a
+			// text-only turn with a trailing empty-text part, so that is the
+			// shape it is handed back in — and the summary is a human-facing
+			// précis the model does not consume, which replaying would only
+			// re-bill as input on every following turn (the same call the
+			// Codex builder makes about its own summaries).
+			parts = append(parts, gemPart{ThoughtSignature: v.Encrypted})
 		}
 	}
 	return parts
@@ -824,6 +845,13 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 		// something the model said, and folding it into a TextBlock would put
 		// it back into the reply on the next turn.
 		reasoningBuf strings.Builder
+		// thoughtSig is the turn's thought signature when it did NOT ride a
+		// functionCall part. On a text-only answer Gemini seals the turn with a
+		// trailing part carrying an EMPTY text and the signature alone —
+		// measured live on gemini-3-flash-preview: part 27 of 27, text "",
+		// signature 6116 chars. It used to be discarded by the empty-text skip
+		// below, which runs before anything reads the signature.
+		thoughtSig string
 		// sawFinish tracks whether any candidate carried an explicit
 		// terminal finishReason. The Gemini SSE wire has no [DONE]
 		// sentinel — a clean stream always ends with a non-empty
@@ -897,10 +925,15 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 				})
 			}
 		}
-		if reasoningBuf.Len() > 0 {
+		// Either half is worth keeping, and they arrive independently: a short
+		// turn thinks without summarizing (66 thinking tokens, zero thought
+		// parts, measured), and a summarized turn is sealed by a signature that
+		// is not part of any summary. Encrypted is the half that gets replayed.
+		if reasoningBuf.Len() > 0 || thoughtSig != "" {
 			content = append(content, ReasoningBlock{
-				Summary: reasoningBuf.String(),
-				Shape:   ReasoningShapeGeminiThoughtSummary,
+				Summary:   reasoningBuf.String(),
+				Encrypted: thoughtSig,
+				Shape:     ReasoningShapeGeminiThoughtSummary,
 			})
 		}
 		return Message{Role: RoleAssistant, Content: content, Time: time.Now()}
@@ -1012,6 +1045,14 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 						out <- EventToolArgs{ID: t.toolID, Delta: t.toolArgs.String()}
 						out <- EventToolEnd{ID: t.toolID}
 						continue
+					}
+					// Before the empty-text skip, and deliberately: the part
+					// that seals a text-only turn carries the signature and
+					// nothing else, so reading it after the skip reads it
+					// never. A functionCall part never reaches here — it takes
+					// its own signature and continues above.
+					if part.ThoughtSignature != "" {
+						thoughtSig = part.ThoughtSignature
 					}
 					if part.Text == "" {
 						continue
