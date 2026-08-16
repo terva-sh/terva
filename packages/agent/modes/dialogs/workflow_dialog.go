@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/i18n"
@@ -35,14 +36,34 @@ type WorkflowDialog struct {
 	selected int
 	vp       Viewport
 
+	tab wfTab
+
+	listFn func() []ctrlproto.WorkflowRunInfo
+	viewFn func() *ctrlproto.WorkflowRunView
+
+	// mu guards open, err and loading — the three fields a background goroutine
+	// touches, and no others.
+	//
+	// The host runs `go i.refreshWorkflowRuns()` and `go i.fetchWorkflowRun(id)`
+	// so the panel stays painted while the wire call runs. Both report back
+	// through SetError, which writes err and loading while the render goroutine
+	// is reading them. And fetchWorkflowRun asks Opened() whether its answer is
+	// still wanted — reading `open` from that goroutine while the main one is
+	// writing it with every Enter and Esc. That staleness check is the guard
+	// against a slow read painting over the run an operator has moved to, so it
+	// racing the thing it checks is the worst place for it.
+	//
+	// NEVER hold this across listFn() or viewFn(). Those reach back into the
+	// host and take the host's lock, while the host calls Opened() while holding
+	// it — workflowRunView() does exactly that. A lock held across a callback
+	// closes that cycle and wedges the TUI silently. Render therefore reads the
+	// triple ONCE, up front, and passes it down to the renderers rather than
+	// letting them reach for it mid-callback.
+	mu sync.Mutex
 	// open is the run currently opened, "" while the list is showing. Kept as an
 	// id rather than an index so a refresh that reorders the list (a new run
 	// lands newest-first) cannot silently swap which run is on screen.
 	open string
-	tab  wfTab
-
-	listFn func() []ctrlproto.WorkflowRunInfo
-	viewFn func() *ctrlproto.WorkflowRunView
 	// loading distinguishes "the fetch has not answered yet" from "this run has
 	// no results", which look identical in an empty view and mean opposite things.
 	loading bool
@@ -87,10 +108,8 @@ func (d *WorkflowDialog) Open(listFn func() []ctrlproto.WorkflowRunInfo, viewFn 
 	d.active = true
 	d.selected = 0
 	d.vp.Reset()
-	d.open = ""
 	d.tab = wfOverview
-	d.err = ""
-	d.loading = false
+	d.setOpen("", false)
 	d.listFn = listFn
 	d.viewFn = viewFn
 }
@@ -99,23 +118,54 @@ func (d *WorkflowDialog) Close() {
 	d.active = false
 	d.listFn = nil
 	d.viewFn = nil
-	d.open = ""
-	d.err = ""
-	d.loading = false
+	d.setOpen("", false)
 	d.selected = 0
 	d.vp.Reset()
 }
 
 // SetError shows a fetch failure in place of the body. Cleared by any
 // navigation, so a transient error does not stick to a panel that has moved on.
+//
+// Called from the host's fetch goroutines, which is why the triple is guarded.
 func (d *WorkflowDialog) SetError(msg string) {
-	d.err = msg
-	d.loading = false
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.err, d.loading = msg, false
 }
 
 // Opened reports the run id currently open ("" on the list), so the host knows
-// which run a refresh should re-fetch.
-func (d *WorkflowDialog) Opened() string { return d.open }
+// which run a refresh should re-fetch — and whether an answer still in flight
+// is still wanted.
+func (d *WorkflowDialog) Opened() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.open
+}
+
+// viewState reads the guarded triple as ONE consistent snapshot.
+//
+// One read rather than three, because a panel that saw a new `open` beside the
+// previous run's `err` would render a failure against the wrong title.
+func (d *WorkflowDialog) viewState() (open, errMsg string, loading bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.open, d.err, d.loading
+}
+
+// setOpen moves the panel to a run (or back to the list with ""), clearing the
+// previous run's error as it goes: an error belongs to the run it happened on.
+func (d *WorkflowDialog) setOpen(id string, loading bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.open, d.err, d.loading = id, "", loading
+}
+
+// clearError drops a stale failure without disturbing the loading flag.
+func (d *WorkflowDialog) clearError() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.err = ""
+}
 
 // WorkflowAction reports what the host should do after a key.
 type WorkflowAction struct {
@@ -135,39 +185,43 @@ func (d *WorkflowDialog) runs() []ctrlproto.WorkflowRunInfo {
 }
 
 func (d *WorkflowDialog) HandleKey(k tui.Key) WorkflowAction {
+	// One read for the whole keypress. Every arm below branches on whether a run
+	// is open, and re-reading per arm would let a background SetError land in
+	// the middle of one decision.
+	open := d.Opened()
 	switch k.Kind {
 	case tui.KeyEsc:
 		// Esc backs out one level: from a run to the list, from the list to gone.
 		// Closing outright from a run would make the panel a one-shot viewer and
 		// force a re-open to compare two runs.
-		if d.open != "" {
-			d.open = ""
-			d.err = ""
-			d.loading = false
+		if open != "" {
+			d.setOpen("", false)
 			d.vp.Reset()
 			return WorkflowAction{}
 		}
 		return WorkflowAction{Close: true}
 	case tui.KeyEnter:
-		if d.open == "" {
+		if open == "" {
 			rs := d.runs()
 			if d.selected >= 0 && d.selected < len(rs) {
-				d.open = rs[d.selected].ID
+				id := rs[d.selected].ID
 				d.tab = wfOverview
 				d.vp.Reset()
-				d.err = ""
-				d.loading = true
-				return WorkflowAction{OpenRun: d.open}
+				d.setOpen(id, true)
+				return WorkflowAction{OpenRun: id}
 			}
 		}
 	case tui.KeyRune:
 		switch k.Rune {
 		case 'r', 'R':
-			d.err = ""
-			if d.open != "" {
-				d.loading = true
-				return WorkflowAction{OpenRun: d.open}
+			if open != "" {
+				// Re-opening the same run: same state as Enter, so the error
+				// clears and the body says loading rather than showing the
+				// failure being retried.
+				d.setOpen(open, true)
+				return WorkflowAction{OpenRun: open}
 			}
+			d.clearError()
 			return WorkflowAction{Refresh: true}
 		case '\t':
 			d.cycleTab(1)
@@ -181,13 +235,13 @@ func (d *WorkflowDialog) HandleKey(k tui.Key) WorkflowAction {
 	case tui.KeyRight:
 		d.cycleTab(1)
 	case tui.KeyUp, tui.KeyMouseWheelUp:
-		if d.open != "" {
+		if open != "" {
 			d.vp.HandleKey(k)
 		} else if d.selected > 0 {
 			d.selected--
 		}
 	case tui.KeyDown, tui.KeyMouseWheelDown:
-		if d.open != "" {
+		if open != "" {
 			d.vp.HandleKey(k)
 		} else if n := len(d.runs()); d.selected < n-1 {
 			d.selected++
@@ -195,7 +249,7 @@ func (d *WorkflowDialog) HandleKey(k tui.Key) WorkflowAction {
 	default:
 		// PgUp/PgDn/Home/End only mean anything inside an opened run; on the
 		// list the selection is the cursor and there is no body to scroll.
-		if d.open != "" {
+		if open != "" {
 			d.vp.HandleKey(k)
 		}
 	}
@@ -206,7 +260,7 @@ func (d *WorkflowDialog) HandleKey(k tui.Key) WorkflowAction {
 // there is nothing to tab through, and ←/→ there would silently do nothing
 // visible while looking like it should.
 func (d *WorkflowDialog) cycleTab(delta int) {
-	if d.open == "" {
+	if d.Opened() == "" {
 		return
 	}
 	n := len(wfTabs)
@@ -218,18 +272,24 @@ func (d *WorkflowDialog) Render(th tui.Theme, width int) []string {
 	if !d.Active() {
 		return nil
 	}
+	// ONE read of the guarded triple for the whole frame, taken before any
+	// callback into the host. Re-reading per renderer would both reopen the
+	// lock-ordering hazard and let a background SetError land mid-frame, so the
+	// title said one run and the body reported the other one's failure.
+	open, errMsg, loading := d.viewState()
+
 	var title, footer string
 	var body []string
-	if d.open == "" {
-		title, body, footer = d.renderList(th)
+	if open == "" {
+		title, body, footer = d.renderList(th, errMsg)
 	} else {
-		title, body, footer = d.renderRun(th, width)
+		title, body, footer = d.renderRun(th, width, open, errMsg, loading)
 	}
 
 	out := []string{FrameHeader(th, title, width)}
 	d.vp.Fit(len(body), d.MaxRows)
 	if d.MaxRows > 0 && d.vp.Scrollable() {
-		if d.open == "" {
+		if open == "" {
 			// One body line per run, so the selection maps 1:1 and the cursor
 			// must stay inside the window (the WorktreeDialog rule).
 			d.vp.RevealPadded(d.selected, cursorPadRows)
@@ -246,7 +306,7 @@ func (d *WorkflowDialog) Render(th tui.Theme, width int) []string {
 	return out
 }
 
-func (d *WorkflowDialog) renderList(th tui.Theme) (title string, body []string, footer string) {
+func (d *WorkflowDialog) renderList(th tui.Theme, errMsg string) (title string, body []string, footer string) {
 	rs := d.runs()
 	if d.selected >= len(rs) {
 		d.selected = len(rs) - 1
@@ -255,8 +315,8 @@ func (d *WorkflowDialog) renderList(th tui.Theme) (title string, body []string, 
 		d.selected = 0
 	}
 	title = i18n.T("Workflow runs")
-	if d.err != "" {
-		return title, []string{th.FG256(th.Error, "  "+d.err)}, i18n.T("r refresh · esc close")
+	if errMsg != "" {
+		return title, []string{th.FG256(th.Error, "  "+errMsg)}, i18n.T("r refresh · esc close")
 	}
 	if len(rs) == 0 {
 		return title, []string{th.FG256(th.Muted, i18n.T("  no workflow runs recorded yet — `terva workflow run <script.js>` records one."))},
@@ -289,23 +349,25 @@ func (d *WorkflowDialog) renderList(th tui.Theme) (title string, body []string, 
 	return title, body, i18n.T("↑/↓ select · ↵ open · r refresh · esc close")
 }
 
-func (d *WorkflowDialog) renderRun(th tui.Theme, width int) (title string, body []string, footer string) {
+func (d *WorkflowDialog) renderRun(th tui.Theme, width int, open, errMsg string, loading bool) (title string, body []string, footer string) {
 	var v *ctrlproto.WorkflowRunView
 	if d.viewFn != nil {
+		// Deliberately NOT under d.mu: this reaches into the host, which takes
+		// its own lock and may call back into this dialog.
 		v = d.viewFn()
 	}
-	title = i18n.T("Workflow %s", d.open)
+	title = i18n.T("Workflow %s", open)
 	if v != nil && v.Run.Name != "" {
-		title = i18n.T("Workflow %s — %s", d.open, v.Run.Name)
+		title = i18n.T("Workflow %s — %s", open, v.Run.Name)
 	}
 	body = append(body, d.tabRow(th))
 	body = append(body, "")
 
 	switch {
-	case d.err != "":
-		body = append(body, th.FG256(th.Error, "  "+d.err))
+	case errMsg != "":
+		body = append(body, th.FG256(th.Error, "  "+errMsg))
 		return title, body, i18n.T("r retry · esc back")
-	case v == nil && d.loading:
+	case v == nil && loading:
 		body = append(body, th.FG256(th.Muted, i18n.T("  loading…")))
 		return title, body, i18n.T("esc back")
 	case v == nil:
