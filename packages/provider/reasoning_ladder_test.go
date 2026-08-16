@@ -9,9 +9,23 @@ import "testing"
 //
 // Scanned from the catalog rather than a typed-out list of models: the first
 // run IS the audit, and a model added later enrolls itself.
+//
+// 🪤 Catalog, NOT builtinCatalog. This scanned builtinCatalog, the third-party
+// EXTENDED list, so every CURATED row in models.go went unaudited — 322 rungs
+// across 46 models, measured, and openai-codex / kimi / deepseek entirely,
+// since those three have no builtinCatalog rows at all. (anthropic, openai and
+// google do have rows there, so they were partly covered; the file header's
+// "not duplicated here" describes intent more than the data.) Catalog is the
+// union — models.go plus builtinCatalog, appended in catalog_builtin.go's init.
+//
+// The same hole in reasoning_wire_census_test.go is what let kimi's
+// misclassification survive: that guard dedupes by provider, and kimi had zero
+// rows to dedupe from, so it was never examined at all.
 func TestLadderNeverDisagreesWithTheEffectMappers(t *testing.T) {
 	checked := 0
-	for _, m := range builtinCatalog {
+	seen := map[string]bool{}
+	for _, m := range Catalog {
+		seen[m.Provider] = true
 		ladder := ReasoningLadderFor(m)
 		if ladder == nil {
 			// nil is a claim in its own right: NO rung may be supported.
@@ -43,7 +57,23 @@ func TestLadderNeverDisagreesWithTheEffectMappers(t *testing.T) {
 	if checked == 0 {
 		t.Fatal("no rungs checked — the catalog scan found nothing, so this guard is vacuous")
 	}
-	t.Logf("checked %d rungs", checked)
+
+	// 🪤 checked > 0 is NOT enough to prove this scanned the right slice. The
+	// builtinCatalog version checked 2786 rungs — a large, reassuring number
+	// that cleared that floor while auditing no curated row at all. So name the
+	// providers that exist ONLY in the curated list: if the scan ever narrows
+	// back, their absence says so instead of a big number saying nothing.
+	//
+	// Deliberately not anthropic/openai/google, which also have builtinCatalog
+	// rows and so would stay "seen" through exactly the regression this catches.
+	for _, p := range []string{"openai-codex", "kimi", "deepseek"} {
+		if !seen[p] {
+			t.Errorf("provider %q was not scanned. It lives only in the curated Catalog rows, "+
+				"so this guard is reading builtinCatalog (the third-party extended list) and "+
+				"auditing none of the providers most worth auditing.", p)
+		}
+	}
+	t.Logf("checked %d rungs across %d providers", checked, len(seen))
 }
 
 // The collapse annotation has to be self-consistent or a picker built on it
@@ -51,8 +81,9 @@ func TestLadderNeverDisagreesWithTheEffectMappers(t *testing.T) {
 // the rung it names, and the rung it names must itself be unannotated.
 // Otherwise "same as low" could point at a rung that is itself "same as
 // minimum", and neither row would say what it sends.
+// Catalog, not builtinCatalog — same reason as the guard above.
 func TestCollapseAnnotationsPointAtARealCanonicalRung(t *testing.T) {
-	for _, m := range builtinCatalog {
+	for _, m := range Catalog {
 		ladder := ReasoningLadderFor(m)
 		byLevel := map[string]ReasoningRung{}
 		for _, r := range ladder {
@@ -83,20 +114,64 @@ func TestCollapseAnnotationsPointAtARealCanonicalRung(t *testing.T) {
 // The teeth for the pair above: a model whose rungs genuinely collapse must
 // actually be annotated. Without this, deleting the SameAs computation
 // altogether would leave both guards green.
+//
+// 🪤 This named gemini-3-pro-preview and t.Skipf'd when it was missing. The
+// catalog renamed that row to gemini-3.1-pro-preview, so the guard with the
+// teeth had been SKIPPING — passing by not running, which is the one outcome a
+// guard must never have. A named fixture in a catalog that turns over is a
+// scheduled skip.
+//
+// So it enrolls itself: find every model whose ladder genuinely sends one wire
+// value for several rungs, and require each to be annotated. It cannot skip, it
+// cannot rot on a rename, and a catalog with no collapsing model at all fails
+// loudly rather than passing on an empty set.
 func TestACollapsingModelIsActuallyAnnotated(t *testing.T) {
-	m, err := FindModel("google", "gemini-3-pro-preview")
-	if err != nil {
-		t.Skipf("fixture model missing: %v", err)
-	}
-	annotated := 0
-	for _, r := range ReasoningLadderFor(m) {
-		if r.SameAs != "" {
-			annotated++
+	collapsing := 0
+	for _, m := range Catalog {
+		ladder := ReasoningLadderFor(m)
+		if ladder == nil {
+			continue
+		}
+		// Collapse means two rungs landing on the same wire value — under the
+		// SAME exclusions the builder applies, or this becomes the second
+		// opinion the file exists to prevent. ReasoningLadderFor never
+		// annotates an Off() rung: several rungs sending nothing is the normal
+		// shape of a low ladder, and "same as off" would be noise, not
+		// information.
+		firstAt := map[ReasoningEffect]string{}
+		collapsed := ""
+		for _, r := range ladder {
+			if !r.Effect.Supported || r.Effect.Off() {
+				continue
+			}
+			if prev, dup := firstAt[r.Effect]; dup {
+				collapsed = prev + "/" + r.Level
+				break
+			}
+			firstAt[r.Effect] = r.Level
+		}
+		if collapsed == "" {
+			continue
+		}
+		collapsing++
+
+		annotated := false
+		for _, r := range ladder {
+			if r.SameAs != "" {
+				annotated = true
+				break
+			}
+		}
+		if !annotated {
+			t.Errorf("%s/%s: rungs %s send the same wire value, but no rung is annotated — "+
+				"a picker built on this ladder shows two rows that look different and are not",
+				m.Provider, m.ID, collapsed)
 		}
 	}
-	// gemini-3 lands minimum on low and medium/maximum/max on high.
-	if annotated < 2 {
-		t.Errorf("gemini-3-pro-preview has %d collapsed rungs; it sends one enum for "+
-			"several rungs, so the annotation is missing", annotated)
+	if collapsing == 0 {
+		t.Fatal("no model in the catalog collapses any rung, so this guard proved nothing. " +
+			"Either the ladder mappers stopped collapsing (unlikely) or the scan is reading " +
+			"the wrong slice")
 	}
+	t.Logf("checked %d models whose rungs collapse", collapsing)
 }
