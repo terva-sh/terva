@@ -102,9 +102,25 @@ func wireBody(providerName, authMethod string, req Request) (any, string, error)
 	case "openai-codex":
 		b, err := (&codexClient{}).buildRequest(req)
 		return b, "input", err
-	case "openai", "kimi", "deepseek", "openai-compatible", "ollama":
+	case "openai", "deepseek", "openai-compatible", "ollama":
 		b, err := (&openaiClient{name: providerName}).buildRequest(req)
 		return b, "messages", err
+	case "kimi":
+		// 🪤 Kimi Code is Kimi behind the ANTHROPIC Messages API, and the
+		// registry builds it that way in every auth mode. It sat in the
+		// OpenAI arm above and dumped a body terva has never sent it.
+		//
+		// Always non-oauth: kimi authenticates with x-api-key rather than
+		// Bearer, so NewKimiCodingSourceWithHeaders leaves the client in
+		// api-key mode even when the CREDENTIAL is a subscription token.
+		// Honoring authMethod here would put Anthropic's identity block in a
+		// kimi dump, which is the same class of lie in the other direction.
+		// The name is what routes cost and catalog lookup to kimi's own rows.
+		b, err := (&anthropicClient{name: "kimi"}).buildRequest(req)
+		return b, "messages", err
+	case "google":
+		b, _, err := (&geminiClient{}).buildRequest(req)
+		return b, "contents", err
 	case "anthropic":
 		// 🪤 The only provider whose MODE changes the body, which is why
 		// authMethod exists at all. A subscription request carries the Claude
@@ -115,6 +131,6 @@ func wireBody(providerName, authMethod string, req Request) (any, string, error)
 		b, err := (&anthropicClient{oauth: authMethod == "oauth"}).buildRequest(req)
 		return b, "messages", err
 	default:
-		return nil, "", fmt.Errorf("wire dump is not implemented for provider %q (supported: openai-codex, openai, anthropic, kimi, deepseek, openai-compatible, ollama)", providerName)
+		return nil, "", fmt.Errorf("wire dump is not implemented for provider %q (supported: openai-codex, openai, anthropic, google, kimi, deepseek, openai-compatible, ollama)", providerName)
 	}
 }

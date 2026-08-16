@@ -116,15 +116,18 @@ func TestDumpRequestJSONLIsDeterministic(t *testing.T) {
 // An unsupported provider must SAY so. Returning an empty dump would read as
 // "this request carries nothing", which is the worst possible answer from a
 // tool whose whole job is showing what goes on the wire.
-// google, not anthropic: anthropic used to be this test's example of an
-// unsupported provider and is now implemented, which is exactly the way a
-// refusal test rots into one that asserts nothing.
+//
+// 🪤 The subject is DELIBERATELY not a real provider. This test named anthropic,
+// then google, and each time that provider gained a dumper it stopped testing a
+// refusal and started failing for the wrong reason. Any real id is a future
+// implementation; a fictional one is the only stable way to ask "what happens
+// when wireBody has no arm for this?" — which is the actual behavior under test.
 func TestDumpRequestJSONLRefusesUnknownProvider(t *testing.T) {
-	out, err := DumpRequestJSONL("google", "", wireReq(userMsg("one")))
+	out, err := DumpRequestJSONL("not-a-provider", "", wireReq(userMsg("one")))
 	if err == nil {
 		t.Fatalf("want an error for an unsupported provider, got a dump:\n%s", out)
 	}
-	if !strings.Contains(err.Error(), "google") || !strings.Contains(err.Error(), "openai-codex") {
+	if !strings.Contains(err.Error(), "not-a-provider") || !strings.Contains(err.Error(), "openai-codex") {
 		t.Errorf("error should name the provider asked for AND the supported ones, got: %v", err)
 	}
 }
@@ -254,5 +257,43 @@ func TestDumpRequestJSONLAnthropicRewritesOnlyTheCacheBreakpoint(t *testing.T) {
 	}
 	if len(sa) <= len(sb) {
 		t.Errorf("appending a message did not add lines: %d -> %d bytes", len(sb), len(sa))
+	}
+}
+
+// Gemini's body names its input array `contents`, not `messages` or `input` —
+// a third field name, which is the part of the header/item split most likely to
+// be got wrong by copying an existing arm.
+func TestDumpRequestJSONLGoogleSplitsContentsOut(t *testing.T) {
+	out, err := DumpRequestJSONL("google", "", wireReq(userMsg("one"), assistantMsg("two"), userMsg("three")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(lines) < 4 {
+		t.Fatalf("want a header plus one line per content, got %d lines:\n%s", len(lines), out)
+	}
+	var head struct {
+		Provider string                     `json:"_provider"`
+		Field    string                     `json:"_field"`
+		Request  map[string]json.RawMessage `json:"request"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &head); err != nil {
+		t.Fatalf("header is not JSON: %v\n%s", err, lines[0])
+	}
+	if head.Provider != "google" || head.Field != "contents" {
+		t.Errorf("header mislabeled: %+v", head)
+	}
+	if _, dup := head.Request["contents"]; dup {
+		t.Error("header still carries the contents array; it must be lifted out")
+	}
+	// Gemini carries the system prompt as systemInstruction, not a system role
+	// inside contents — so losing it is invisible in the item lines.
+	if _, ok := head.Request["systemInstruction"]; !ok {
+		t.Errorf("header lost the systemInstruction:\n%s", lines[0])
+	}
+	for i, ln := range lines[1:] {
+		if !json.Valid([]byte(ln)) {
+			t.Errorf("item line %d is not valid JSON: %s", i, ln)
+		}
 	}
 }

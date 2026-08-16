@@ -74,6 +74,12 @@ identity system block and renames tools to Anthropic's canonical casing, while a
 API-key request does neither. Two dumps taken under different auth modes are not
 comparable.
 
+`kimi` is **Kimi Code**, which speaks the Anthropic Messages API rather than an
+OpenAI-compatible one, so its dump is Anthropic-shaped — but *without* the
+subscription framing above, because Kimi authenticates by API key even when the
+credential is a subscription token. `moonshotai` is the OpenAI-wire Kimi; they
+are different providers and their dumps do not compare.
+
 Two things it does not show, both because neither can change the answer it
 exists to give. The **ephemeral tail** is appended *after* the cache breakpoint,
 so it is not prefix bytes (and composing it needs a live agent). The

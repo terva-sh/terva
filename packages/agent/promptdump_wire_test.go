@@ -73,16 +73,23 @@ func TestPromptDumpWireReflectsTheSessionTranscript(t *testing.T) {
 // An unsupported provider must fail loudly rather than emit an empty or
 // half-built dump that would read as "this request carries nothing".
 //
-// google, not anthropic: anthropic was this test's example until it gained a
-// dumper, which is how a refusal test quietly stops testing a refusal. Pick a
-// subject from the providers wireBody does NOT list, and expect to move again
-// when this one is implemented.
+// 🪤 Two ways this test rots, and both have already happened once. Its subject
+// keeps gaining a dumper (anthropic, then google), and — worse — `err != nil`
+// passes just as well when resolution fails for a reason that has nothing to do
+// with wire dumping, which is the likely outcome of naming a provider that does
+// not exist. So: a real provider terva can resolve, and an assertion on the
+// REFUSAL ITSELF. If openrouter ever gains a dumper this fails loudly on the
+// missing substring rather than passing for the wrong reason.
 func TestPromptDumpWireRefusesAProviderItCannotSerialize(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	args := build.Args{DumpPrompt: "wire", Prompt: "hi",
-		Provider: "google", Model: "gemini-3-flash-preview"}
-	if out, err := promptDumpText(args); err == nil {
+		Provider: "openrouter", Model: "anthropic/claude-sonnet-4.5"}
+	out, err := promptDumpText(args)
+	if err == nil {
 		t.Fatalf("want an error for a provider with no wire dumper, got:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "wire dump is not implemented") {
+		t.Errorf("the error should be the wire-dump refusal, not an unrelated failure: %v", err)
 	}
 }
 

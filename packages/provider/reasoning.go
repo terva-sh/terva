@@ -384,6 +384,15 @@ var reasoningWireWiring = map[string]reasoningWire{
 	"minimax":    reasoningWireAnthropic,
 	"minimax-cn": reasoningWireAnthropic,
 	"fireworks":  reasoningWireAnthropic,
+	// 🪤 kimi is Kimi CODE — Kimi behind the Anthropic Messages API at
+	// api.kimi.com/coding, built by NewKimiCodingWithHeaders in every auth
+	// mode. It reads like an OpenAI-compatible vendor and is not one. Absent
+	// from this table it fell through to the default and /reasoning reported
+	// an effort enum for k3 while the request carried
+	// thinking{enabled, budget_tokens:16384} — the exact wrong answer this
+	// table exists to prevent. moonshotai is the OpenAI-wire Kimi; they are
+	// different providers.
+	"kimi": reasoningWireAnthropic,
 
 	"openai-codex":           reasoningWireCodex,
 	"openai-responses":       reasoningWireCodex,

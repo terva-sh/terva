@@ -22,9 +22,16 @@ func TestEveryReasoningProviderIsClassified(t *testing.T) {
 	// Providers whose reasoning models legitimately take the OpenAI-compatible
 	// effort knob. Listing them here is the deliberate act; the failure message
 	// explains what a newcomer has to decide.
+	//
+	// 🪤 "kimi" was listed here and should never have been: its client is
+	// Anthropic-wire (Kimi Code). This set is the census's escape hatch, so a
+	// wrong entry in it is invisible — the guard passes and the /reasoning
+	// dialog quietly describes a knob the provider does not accept. Before
+	// adding a provider here, check which client the registry actually builds
+	// for it, not what its name suggests.
 	openAICompat := map[string]bool{
 		"openai": true, "openrouter": true, "opencode": true, "opencode-go": true,
-		"kimi": true, "moonshotai": true, "moonshotai-cn": true, "deepseek": true,
+		"moonshotai": true, "moonshotai-cn": true, "deepseek": true,
 		"cerebras": true, "groq": true, "xai": true, "together": true,
 		"huggingface": true, "mistral": true, "zai": true, "xiaomi": true,
 		"xiaomi-token-plan-ams": true, "xiaomi-token-plan-cn": true,
@@ -33,8 +40,18 @@ func TestEveryReasoningProviderIsClassified(t *testing.T) {
 		"cloudflare-workers-ai": true, "azure-openai": true,
 	}
 
+	// 🪤 Catalog, NOT builtinCatalog. This scanned builtinCatalog, which is the
+	// third-party EXTENDED list and says so at the top of its own file: the
+	// curated rows — anthropic, openai, openai-codex, kimi, deepseek, google —
+	// "are not duplicated here". So the census structurally could not see the
+	// providers most worth auditing, and kimi's misclassification survived it
+	// for exactly that reason. Catalog is the union (models.go plus
+	// builtinCatalog, appended in catalog_builtin.go's init).
+	//
+	// A census that cannot see its subject is worse than no census: it reports
+	// a clean audit of a list it was never shown.
 	seen := map[string]bool{}
-	for _, m := range builtinCatalog {
+	for _, m := range Catalog {
 		if !m.Reasoning || seen[m.Provider] {
 			continue
 		}
