@@ -26,7 +26,7 @@ func TestOAIBuildRequest_PromotedReasoningDropsThinkMarkers(t *testing.T) {
 		Model: "gemma-4-26b-a4b-it-qat",
 		Messages: []Message{
 			{Role: RoleUser, Content: []Content{TextBlock{Text: "what is that note?"}}},
-			{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: raw}}},
+			{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: raw, Shape: ReasoningShapeOpenAIChat}}},
 			{Role: RoleUser, Content: []Content{TextBlock{Text: "thanks"}}},
 		},
 	})
@@ -58,7 +58,7 @@ func TestOAIBuildRequest_PromotedReasoningDropsChannelMarkers(t *testing.T) {
 		Model: "gemma-4-26b-a4b-it-qat",
 		Messages: []Message{
 			{Role: RoleUser, Content: []Content{TextBlock{Text: "go"}}},
-			{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: raw}}},
+			{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: raw, Shape: ReasoningShapeOpenAIChat}}},
 		},
 	})
 	if err != nil {
@@ -84,7 +84,7 @@ func TestOAIBuildRequest_PromotedReasoningWithoutCloserKeepsWords(t *testing.T) 
 		Model: "gemma-4-26b-a4b-it-qat",
 		Messages: []Message{
 			{Role: RoleUser, Content: []Content{TextBlock{Text: "go"}}},
-			{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: raw}}},
+			{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: raw, Shape: ReasoningShapeOpenAIChat}}},
 		},
 	})
 	if err != nil {
@@ -112,7 +112,7 @@ func TestOAIBuildRequest_MarkerOnlyReasoningIsStillDropped(t *testing.T) {
 		Model: "gemma-4-26b-a4b-it-qat",
 		Messages: []Message{
 			{Role: RoleUser, Content: []Content{TextBlock{Text: "first"}}},
-			{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: "<think>\n</think>"}}},
+			{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: "<think>\n</think>", Shape: ReasoningShapeOpenAIChat}}},
 			{Role: RoleUser, Content: []Content{TextBlock{Text: "second"}}},
 		},
 	})
@@ -143,7 +143,7 @@ func TestOAIBuildRequest_PromotedReasoningWithoutMarkersUnchanged(t *testing.T) 
 		Model: "gemma-4-26b-a4b-it-qat",
 		Messages: []Message{
 			{Role: RoleUser, Content: []Content{TextBlock{Text: "go"}}},
-			{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: raw}}},
+			{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: raw, Shape: ReasoningShapeOpenAIChat}}},
 		},
 	})
 	if err != nil {

@@ -438,7 +438,7 @@ func TestOpenAIBuildRequestPromotesReasoningOnlyAssistantMessages(t *testing.T) 
 		Model: "kimi-for-coding",
 		Messages: []Message{
 			{Role: RoleUser, Content: []Content{TextBlock{Text: "first"}}},
-			{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: "thinking only"}}},
+			{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: "thinking only", Shape: ReasoningShapeOpenAIChat}}},
 			{Role: RoleUser, Content: []Content{TextBlock{Text: "second"}}},
 		},
 	})

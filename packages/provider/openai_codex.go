@@ -404,6 +404,16 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 						EncryptedContent: v.Encrypted,
 					})
 				case ReasoningBlock:
+					// Replayed only where it came from. A transcript outlives a
+					// /model switch, so this is reached holding Anthropic and
+					// Gemini reasoning too — and an Anthropic block would arrive
+					// here as {id:"", encrypted_content:<Anthropic signature>},
+					// a foreign seal handed to OpenAI as if it were its own.
+					// Same argument convertAnthContent makes in the other
+					// direction; this side simply had no guard.
+					if v.Shape != ReasoningShapeOpenAIResponses {
+						continue
+					}
 					// The summary is deliberately NOT replayed, even when we
 					// have one. The encrypted blob carries the reasoning the
 					// model actually consumes; the summary is a human-facing
@@ -868,6 +878,7 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 					ID:        it.rawID,
 					Summary:   it.summary.String(),
 					Encrypted: it.encrypted,
+					Shape:     ReasoningShapeOpenAIResponses,
 				})
 			}
 		}

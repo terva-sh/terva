@@ -138,18 +138,60 @@ type ReasoningBlock struct {
 // A stripped Thinking block and a native ThinkingOpaque one are byte-identical
 // in Go; the first is unreplayable and the second is fine. Hence the tag rather
 // than a Summary == "" test.
+// Every capture site sets one of these, and every replay site accepts only the
+// ones it issued. An empty Shape means one thing and one thing only: the block
+// was written before terva tagged them (see NormalizeLegacyReasoningShape).
+//
+// 🪤 There is deliberately NO "unknown means OpenAI-compatible" default. That
+// default is what let kimi be recorded as an OpenAI-wire provider when its
+// client speaks Anthropic — the census in reasoning_wire_census_test.go exists
+// to force the decision instead. A default here would reintroduce the same
+// silent-plausible-answer failure one layer down, in the data.
 const (
 	ReasoningShapeAnthropicThinking       = "anthropic.thinking"
 	ReasoningShapeAnthropicThinkingOpaque = "anthropic.thinking_opaque"
 	ReasoningShapeAnthropicRedacted       = "anthropic.redacted_thinking"
+	// ReasoningShapeOpenAIResponses is the Responses/Codex `reasoning` item:
+	// an id plus an encrypted payload, replayed verbatim. Omitting it on
+	// replay makes the backend reject the following tool call.
+	ReasoningShapeOpenAIResponses = "openai.responses"
+	// ReasoningShapeOpenAIChat is chat-completions `reasoning_content` —
+	// prose, replayed as text beside a tool call rather than as a payload.
+	ReasoningShapeOpenAIChat = "openai.chat"
+	// ReasoningShapeGeminiThoughtSummary is a Gemini thought summary. It is
+	// never replayed: Gemini's replay token is thoughtSignature, and that
+	// rides on ToolCallBlock.Signature, not here.
+	ReasoningShapeGeminiThoughtSummary = "google.thought_summary"
 )
 
-// ReasoningIsAnthropic reports whether b was captured off the Anthropic wire
-// and can therefore be replayed to it.
-func ReasoningIsAnthropic(b ReasoningBlock) bool {
-	return b.Shape == ReasoningShapeAnthropicThinking ||
-		b.Shape == ReasoningShapeAnthropicThinkingOpaque ||
-		b.Shape == ReasoningShapeAnthropicRedacted
+// NormalizeLegacyReasoningShape fills in Shape for a block written before terva
+// tagged them, and leaves a tagged block alone.
+//
+// The legacy population is FROZEN — every capture site tags at the source now —
+// so this only has to be right about what already exists on disk, and it can be
+// deleted once those sessions have aged out.
+//
+// 🔑 The discriminator is a payload, not a timeline. A session records only its
+// OPENING provider (SessionMeta) and writes no row at all for a /model switch,
+// so "which provider was active" is not recoverable from the file. But before
+// tagging existed, the Responses/Codex path was the only one that set ID or
+// Encrypted — the chat and Gemini paths are summary-only, and Anthropic blocks
+// have carried a Shape since capture for them was added. So a payload on an
+// untagged block identifies it exactly.
+//
+// Getting this wrong in the other direction is the expensive one: an untagged
+// Codex block that stops being replayed makes the backend reject the next tool
+// call in a resumed session, while a misfiled summary costs only some prose.
+func NormalizeLegacyReasoningShape(b ReasoningBlock) ReasoningBlock {
+	if b.Shape != "" {
+		return b
+	}
+	if b.ID != "" || b.Encrypted != "" {
+		b.Shape = ReasoningShapeOpenAIResponses
+		return b
+	}
+	b.Shape = ReasoningShapeOpenAIChat
+	return b
 }
 
 func (ReasoningBlock) isContent() {}

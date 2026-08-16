@@ -29,7 +29,12 @@ func TestSessionRoundTripAllBlockKinds(t *testing.T) {
 		Time: when,
 		Content: []provider.Content{
 			provider.TextBlock{Text: "let me check"},
-			provider.ReasoningBlock{ID: "r1", Summary: "thinking", Encrypted: "blob"},
+			// Shape is what the replay serializers route on, so it has to
+			// survive the file like the payload does. Tagged rather than bare:
+			// an untagged block is legacy by definition now, and the loader
+			// back-fills those on purpose — see
+			// TestLegacyUntaggedReasoningIsBackfilled.
+			provider.ReasoningBlock{ID: "r1", Summary: "thinking", Encrypted: "blob", Shape: provider.ReasoningShapeOpenAIResponses},
 			// Signature is the provider's opaque per-call token (Gemini 3's
 			// thoughtSignature). A resume replays the transcript, so if this
 			// does not survive the file, the resumed session 400s on turn one.
@@ -253,5 +258,70 @@ func TestSessionNewerFormatWarns(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("newer format not reported; warnings: %v", s.LoadWarnings)
+	}
+}
+
+// A session written before terva tagged reasoning blocks still has to replay.
+// The loader back-fills the tag from the block's payload, because the file
+// cannot answer the question any other way: a session records only its OPENING
+// provider, and a /model switch appends a meta row on just two of the surfaces
+// that can perform one — so "which provider was live for this message" is not
+// reliably recoverable, while "this block carries an encrypted payload" is.
+//
+// The Codex case is the one that matters. Its reasoning items MUST be replayed
+// or the backend rejects the next tool call in the resumed session; a misfiled
+// summary only costs some prose.
+func TestLegacyUntaggedReasoningIsBackfilled(t *testing.T) {
+	path := filepath.Join(testsupport.TempDir(t), "legacy.jsonl")
+	s, err := NewSessionAtPath(path, "/ws", "openai-codex", "gpt-5.6-sol", "0.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Written with no Shape, exactly as every pre-tagging release wrote it.
+	if err := s.AppendMessage(provider.Message{
+		Role: provider.RoleAssistant,
+		Time: time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
+		Content: []provider.Content{
+			provider.ReasoningBlock{ID: "rs_1", Encrypted: "OPAQUE"},
+			provider.ReasoningBlock{Summary: "thinking out loud"},
+			provider.TextBlock{Text: "done"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"shape"`) {
+		t.Fatal("the fixture wrote a shape; it is meant to stand in for a pre-tagging file")
+	}
+
+	reopened, msgs, err := OpenSession(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+
+	var shapes []string
+	for _, m := range msgs {
+		for _, c := range m.Content {
+			if rb, ok := c.(provider.ReasoningBlock); ok {
+				shapes = append(shapes, rb.Shape)
+			}
+		}
+	}
+	want := []string{provider.ReasoningShapeOpenAIResponses, provider.ReasoningShapeOpenAIChat}
+	if len(shapes) != len(want) {
+		t.Fatalf("loaded %d reasoning blocks, want %d: %v", len(shapes), len(want), shapes)
+	}
+	for i := range want {
+		if shapes[i] != want[i] {
+			t.Errorf("block %d shape = %q, want %q", i, shapes[i], want[i])
+		}
 	}
 }

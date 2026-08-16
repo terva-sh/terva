@@ -21,7 +21,7 @@ func TestOAIBuildRequest_ReasoningOnlyTurnSurvivesReplay(t *testing.T) {
 		Model: "qwen3.8-27b",
 		Messages: []Message{
 			{Role: RoleUser, Content: []Content{TextBlock{Text: "how is this one?"}}},
-			{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: "the answer the user never saw"}}},
+			{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: "the answer the user never saw", Shape: ReasoningShapeOpenAIChat}}},
 			{Role: RoleUser, Content: []Content{TextBlock{Text: "thoughts on that?"}}},
 		},
 	})
@@ -76,7 +76,7 @@ func TestOAIBuildRequest_PromotedReasoningIsNotAlsoReasoningContent(t *testing.T
 		Model: "qwen3.8-27b",
 		Messages: []Message{
 			{Role: RoleUser, Content: []Content{TextBlock{Text: "go"}}},
-			{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: "promoted"}}},
+			{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: "promoted", Shape: ReasoningShapeOpenAIChat}}},
 		},
 	})
 	if err != nil {
@@ -101,7 +101,7 @@ func TestOAIBuildRequest_ReasoningWithToolCallUnchanged(t *testing.T) {
 			{Role: RoleAssistant, Content: []Content{
 				TextBlock{Text: "Let me look."},
 				ToolCallBlock{ID: "call_1", Name: "web_search", Arguments: []byte(`{"q":"x"}`)},
-				ReasoningBlock{Summary: "deliberation"},
+				ReasoningBlock{Summary: "deliberation", Shape: ReasoningShapeOpenAIChat},
 			}},
 		},
 	})

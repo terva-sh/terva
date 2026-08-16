@@ -898,7 +898,10 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 			}
 		}
 		if reasoningBuf.Len() > 0 {
-			content = append(content, ReasoningBlock{Summary: reasoningBuf.String()})
+			content = append(content, ReasoningBlock{
+				Summary: reasoningBuf.String(),
+				Shape:   ReasoningShapeGeminiThoughtSummary,
+			})
 		}
 		return Message{Role: RoleAssistant, Content: content, Time: time.Now()}
 	}

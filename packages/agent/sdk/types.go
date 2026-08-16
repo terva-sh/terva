@@ -86,12 +86,15 @@ func rebuildContent(blocks []ContentBlock) []provider.Content {
 			// Shape says which provider's wire this block belongs to; an
 			// embedder that drops it hands back reasoning the serializer can
 			// no longer place, and the block is discarded on the next request.
-			out = append(out, provider.ReasoningBlock{
+			// Normalized for the same reason the session loader is: an
+			// embedder replaying a pre-tagging transcript would otherwise
+			// lose its Codex reasoning items.
+			out = append(out, provider.NormalizeLegacyReasoningShape(provider.ReasoningBlock{
 				ID:        b.ReasoningID,
 				Summary:   b.Summary,
 				Encrypted: b.Encrypted,
 				Shape:     b.Shape,
-			})
+			}))
 		}
 	}
 	return out

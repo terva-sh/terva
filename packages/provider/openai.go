@@ -398,6 +398,24 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 						},
 					})
 				case ReasoningBlock:
+					// This wire's own reasoning only. A transcript outlives a
+					// /model switch, and an Anthropic thinking block carries the
+					// model's verbatim chain-of-thought in Summary — replaying
+					// that here would hand one vendor's private deliberation to
+					// another, dressed as this model's own prior turn.
+					//
+					// 🪤 Knock-on for the promotion below: a FOREIGN turn whose
+					// only substance was reasoning now has nothing to promote,
+					// so it is dropped rather than replayed. That is the lesser
+					// of the two evils — promoting another vendor's raw
+					// chain-of-thought as this model's visible answer is the
+					// leak this guard exists to stop — and the prefix argument
+					// in that comment does not apply here, since a
+					// cross-provider switch has already invalidated the cache.
+					// A turn from THIS wire still promotes exactly as before.
+					if v.Shape != ReasoningShapeOpenAIChat {
+						continue
+					}
 					if v.Summary != "" {
 						if reasoning.Len() > 0 {
 							reasoning.WriteString("\n")
@@ -714,7 +732,10 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 			}
 		}
 		if reasoningBuf.Len() > 0 {
-			content = append(content, ReasoningBlock{Summary: reasoningBuf.String()})
+			content = append(content, ReasoningBlock{
+				Summary: reasoningBuf.String(),
+				Shape:   ReasoningShapeOpenAIChat,
+			})
 		}
 		return Message{Role: RoleAssistant, Content: content, Time: time.Now()}
 	}

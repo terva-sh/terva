@@ -171,7 +171,7 @@ func TestCodexReplayKeepsBlobAndDropsSummary(t *testing.T) {
 		Messages: []Message{
 			{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}},
 			{Role: RoleAssistant, Content: []Content{
-				ReasoningBlock{ID: "rs_1", Summary: "**A**\n\n**B**", Encrypted: "OPAQUE"},
+				ReasoningBlock{ID: "rs_1", Summary: "**A**\n\n**B**", Encrypted: "OPAQUE", Shape: ReasoningShapeOpenAIResponses},
 				TextBlock{Text: "hello"},
 			}},
 		},

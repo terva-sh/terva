@@ -3153,7 +3153,9 @@ func decodeWireBlock(b wireBlock) (provider.Content, bool) {
 		}
 		return block, true
 	case blockReasoning:
-		return provider.ReasoningBlock{ID: b.ReasoningID, Summary: b.Summary, Encrypted: b.Encrypted, Shape: b.Shape}, true
+		return provider.NormalizeLegacyReasoningShape(provider.ReasoningBlock{
+			ID: b.ReasoningID, Summary: b.Summary, Encrypted: b.Encrypted, Shape: b.Shape,
+		}), true
 	case blockCompaction:
 		return provider.CompactionBlock{ID: b.ID, Encrypted: b.Encrypted, Provider: b.Provider}, true
 	}
@@ -3204,12 +3206,12 @@ func hydrateMessageObject(rawMessage []byte, rep *loadReport) (provider.Message,
 		}
 		switch {
 		case head.ReasoningID != "" || head.Encrypted != "":
-			msg.Content = append(msg.Content, provider.ReasoningBlock{
+			msg.Content = append(msg.Content, provider.NormalizeLegacyReasoningShape(provider.ReasoningBlock{
 				ID:        head.ReasoningID,
 				Summary:   head.Summary,
 				Encrypted: head.Encrypted,
 				Shape:     head.Shape,
-			})
+			}))
 		case head.Name != "" && head.ID != "":
 			var tc struct {
 				ID        string          `json:"id"`

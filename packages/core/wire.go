@@ -737,7 +737,9 @@ func ContentFromWire(blocks []WireBlock) []provider.Content {
 				Content: ContentFromWire(b.Content),
 			})
 		case "reasoning":
-			out = append(out, provider.ReasoningBlock{ID: b.ReasoningID, Summary: b.Summary, Encrypted: b.Encrypted, Shape: b.Shape})
+			out = append(out, provider.NormalizeLegacyReasoningShape(provider.ReasoningBlock{
+				ID: b.ReasoningID, Summary: b.Summary, Encrypted: b.Encrypted, Shape: b.Shape,
+			}))
 		case "compaction_summary":
 			out = append(out, provider.CompactionBlock{ID: b.ID, Encrypted: b.Encrypted, Provider: b.Provider})
 		}
