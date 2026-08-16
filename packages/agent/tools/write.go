@@ -43,7 +43,7 @@ func (t *WriteTool) Execute(ctx context.Context, raw json.RawMessage, progress f
 		return core.ToolResult{}, fmt.Errorf("invalid args: %w", err)
 	}
 	if a.Path == "" {
-		return core.ToolResult{}, fmt.Errorf("path is required")
+		return core.ToolResult{}, fmt.Errorf("path is required%s", argHint(raw, writeSchema))
 	}
 	path := resolvePath(t.CWD, a.Path)
 	if err := t.Sandbox.CheckPath(path); err != nil {

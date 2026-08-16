@@ -49,10 +49,10 @@ func (t *EditTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		return core.ToolResult{}, fmt.Errorf("invalid args: %w", err)
 	}
 	if a.Path == "" {
-		return core.ToolResult{}, fmt.Errorf("path is required")
+		return core.ToolResult{}, fmt.Errorf("path is required%s", argHint(raw, editSchema))
 	}
 	if len(a.Edits) == 0 {
-		return core.ToolResult{}, fmt.Errorf("at least one edit is required")
+		return core.ToolResult{}, fmt.Errorf("at least one edit is required%s", argHint(raw, editSchema))
 	}
 	path := resolvePath(t.CWD, a.Path)
 	if err := t.Sandbox.CheckPath(path); err != nil {

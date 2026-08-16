@@ -125,7 +125,7 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		return core.ToolResult{}, fmt.Errorf("invalid args: %w", err)
 	}
 	if a.Path == "" {
-		return core.ToolResult{}, fmt.Errorf("path is required")
+		return core.ToolResult{}, fmt.Errorf("path is required%s", argHint(raw, readSchema))
 	}
 	path := resolvePath(t.CWD, a.Path)
 	// Read-side check: a deny list over the secret roots, not containment.

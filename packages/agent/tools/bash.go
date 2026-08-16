@@ -107,7 +107,7 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		return core.ToolResult{}, fmt.Errorf("invalid args: %w", err)
 	}
 	if strings.TrimSpace(a.Command) == "" {
-		return core.ToolResult{}, fmt.Errorf("command is required")
+		return core.ToolResult{}, fmt.Errorf("command is required%s", argHint(raw, bashSchema))
 	}
 	if err := t.Sandbox.CheckCommand(a.Command); err != nil {
 		return core.ToolResult{}, err

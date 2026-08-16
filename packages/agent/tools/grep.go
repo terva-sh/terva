@@ -71,7 +71,7 @@ func (t *GrepTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		return core.ToolResult{}, fmt.Errorf("invalid args: %w", err)
 	}
 	if strings.TrimSpace(a.Pattern) == "" {
-		return core.ToolResult{}, fmt.Errorf("pattern is required")
+		return core.ToolResult{}, fmt.Errorf("pattern is required%s", argHint(raw, grepSchema))
 	}
 	if a.Offset < 0 {
 		a.Offset = 0
