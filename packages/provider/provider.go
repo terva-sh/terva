@@ -100,6 +100,56 @@ type ReasoningBlock struct {
 	ID        string `json:"reasoning_id,omitempty"`
 	Summary   string `json:"summary,omitempty"`
 	Encrypted string `json:"encrypted_content,omitempty"`
+
+	// Shape names the provider block this reasoning was captured from, and
+	// is empty for every provider whose reasoning terva does not replay
+	// verbatim (Codex replays by ID + Encrypted, which needs no tag).
+	//
+	// 🪤 It exists because a transcript outlives a /model switch. Reasoning
+	// blocks from one provider are meaningless to another — a Codex item id
+	// replayed as an Anthropic thinking block is a 400 on every turn that
+	// follows — and Summary+Encrypted alone cannot tell the two apart. Any
+	// serializer that replays a ReasoningBlock verbatim MUST check Shape
+	// first and drop what it does not recognize, which is also what keeps
+	// today's behavior for the untagged case.
+	//
+	// This is CompactionBlock.Provider's reason, one type over: the block is
+	// only replayable where it came from.
+	Shape string `json:"shape,omitempty"`
+}
+
+// Reasoning shapes. Anthropic is the only wire terva replays reasoning to
+// verbatim, so it is the only one that needs naming today.
+//
+// 🪤 None of the three is derivable from the block's contents, which is the
+// whole reason they are tagged. All three can present as "no readable text plus
+// an opaque string", and they are not interchangeable on the wire:
+//
+//   - Thinking: readable text sealed BY the signature. Blanking the text
+//     invalidates the block; recording it means recording the model's
+//     unabridged chain-of-thought.
+//   - ThinkingOpaque: a thinking block whose text Anthropic withheld —
+//     adaptive-thinking models (Opus 4.7+, Sonnet 5) sign the reasoning and
+//     send `thinking:""`. Replayable, and it carries nothing readable to
+//     record, so it is NOT subject to the recording-off drop.
+//   - Redacted: thinking Anthropic's safety systems encrypted, replayed under
+//     a different block type entirely.
+//
+// A stripped Thinking block and a native ThinkingOpaque one are byte-identical
+// in Go; the first is unreplayable and the second is fine. Hence the tag rather
+// than a Summary == "" test.
+const (
+	ReasoningShapeAnthropicThinking       = "anthropic.thinking"
+	ReasoningShapeAnthropicThinkingOpaque = "anthropic.thinking_opaque"
+	ReasoningShapeAnthropicRedacted       = "anthropic.redacted_thinking"
+)
+
+// ReasoningIsAnthropic reports whether b was captured off the Anthropic wire
+// and can therefore be replayed to it.
+func ReasoningIsAnthropic(b ReasoningBlock) bool {
+	return b.Shape == ReasoningShapeAnthropicThinking ||
+		b.Shape == ReasoningShapeAnthropicThinkingOpaque ||
+		b.Shape == ReasoningShapeAnthropicRedacted
 }
 
 func (ReasoningBlock) isContent() {}
@@ -327,12 +377,15 @@ type Usage struct {
 	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
 
 	// ReasoningTokensKnown separates "the model reported 0 reasoning tokens"
-	// from "this provider does not break reasoning out at all".
+	// from "this provider does not break reasoning out at all". Without the
+	// flag a session total would quietly understate, which is the failure
+	// mode a cost breakdown exists to avoid.
 	//
-	// Anthropic is the second case: thinking rides inside output_tokens with
-	// no separate count, so a 0 there is an absence of information rather
-	// than a measurement. Without this flag a session total would quietly
-	// understate, which is the failure mode a cost breakdown exists to avoid.
+	// 🪤 Anthropic is BOTH cases depending on the model, which is why this
+	// cannot be decided per-provider. Budget-thinking models fold thinking
+	// into output_tokens with no separate count; adaptive-thinking ones
+	// report usage.output_tokens_details.thinking_tokens. Measured live on
+	// sonnet-5: 258 output tokens, 254 of them thinking.
 	ReasoningTokensKnown bool `json:"reasoning_tokens_known,omitempty"`
 
 	// ImageOutputTokens is how much of OutputTokens was image data.

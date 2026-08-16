@@ -83,10 +83,14 @@ func rebuildContent(blocks []ContentBlock) []provider.Content {
 				Content: rebuildContent(b.Content),
 			})
 		case "reasoning":
+			// Shape says which provider's wire this block belongs to; an
+			// embedder that drops it hands back reasoning the serializer can
+			// no longer place, and the block is discarded on the next request.
 			out = append(out, provider.ReasoningBlock{
 				ID:        b.ReasoningID,
 				Summary:   b.Summary,
 				Encrypted: b.Encrypted,
+				Shape:     b.Shape,
 			})
 		}
 	}

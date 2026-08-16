@@ -138,6 +138,24 @@ type anthTextBlock struct {
 	CacheControl *anthCacheCtrl `json:"cache_control,omitempty"`
 }
 
+// anthThinkingBlock replays a thinking block exactly as it was received.
+//
+// 🪤 Signature seals Thinking. Anthropic verifies the pair, so neither half may
+// be edited, truncated or re-wrapped on the way back out — a "tidied" thinking
+// text fails the check as surely as a corrupted signature.
+type anthThinkingBlock struct {
+	Type      string `json:"type"` // "thinking"
+	Thinking  string `json:"thinking"`
+	Signature string `json:"signature"`
+}
+
+// anthRedactedThinkingBlock replays reasoning Anthropic itself encrypted. There
+// is no readable half: Data is the entire block.
+type anthRedactedThinkingBlock struct {
+	Type string `json:"type"` // "redacted_thinking"
+	Data string `json:"data"`
+}
+
 type anthImageSource struct {
 	Type      string `json:"type"` // "base64"
 	MediaType string `json:"media_type"`
@@ -561,6 +579,42 @@ func convertAnthContent(blocks []Content, renameTools bool) []interface{} {
 			out = append(out, anthToolUseBlock{
 				Type: "tool_use", ID: v.ID, Name: name, Input: args,
 			})
+		case ReasoningBlock:
+			// Replayed only where it came from. A transcript outlives a
+			// /model switch, so this is reached with Codex and Gemini
+			// reasoning in hand too — untagged blocks are dropped, which is
+			// what this function has always done with every ReasoningBlock.
+			switch v.Shape {
+			case ReasoningShapeAnthropicThinking:
+				// Half a pair is worse than none: the signature seals this
+				// exact text, so a block stripped for display-only recording
+				// is dropped here rather than sent to fail the whole request.
+				if v.Summary == "" || v.Encrypted == "" {
+					continue
+				}
+				out = append(out, anthThinkingBlock{
+					Type: "thinking", Thinking: v.Summary, Signature: v.Encrypted,
+				})
+			case ReasoningShapeAnthropicThinkingOpaque:
+				// Anthropic withheld the text itself, so an empty Thinking is
+				// what it signed and what it expects back — verified live: a
+				// captured {thinking:"", signature} replays and is accepted.
+				// The emptiness is native rather than the result of stripping,
+				// which is precisely what the separate shape records.
+				if v.Encrypted == "" {
+					continue
+				}
+				out = append(out, anthThinkingBlock{
+					Type: "thinking", Thinking: "", Signature: v.Encrypted,
+				})
+			case ReasoningShapeAnthropicRedacted:
+				if v.Encrypted == "" {
+					continue
+				}
+				out = append(out, anthRedactedThinkingBlock{
+					Type: "redacted_thinking", Data: v.Encrypted,
+				})
+			}
 		case ToolResultBlock:
 			// Flatten content to a string if all text; else array of blocks.
 			content, _ := anthBuildToolResultContent(v.Content)
@@ -746,10 +800,17 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 	// interleaved order the model emitted them in (text may come
 	// before OR after tool_use; mixing both happens frequently).
 	type blockEntry struct {
-		kind     string // "text" | "tool_use"
+		kind     string // "text" | "tool_use" | "thinking" | "redacted_thinking"
 		textBuf  strings.Builder
 		toolCall ToolCallBlock
 		toolArgs strings.Builder
+		// sigBuf accumulates signature_delta for a thinking block. The
+		// signature is Anthropic's seal over the thinking TEXT, so the two
+		// only mean anything together — see assembleMsg.
+		sigBuf strings.Builder
+		// redacted is the opaque payload of a redacted_thinking block, which
+		// arrives whole on content_block_start and never deltas.
+		redacted string
 	}
 	var (
 		blocks     = map[int]*blockEntry{}
@@ -789,6 +850,42 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 				tc := be.toolCall
 				tc.Arguments, tc.RawArguments = FinalizeToolArguments(be.toolArgs.String())
 				content = append(content, tc)
+			case "thinking":
+				// The SIGNATURE is what makes the block replayable, and it is
+				// the half that must be here. A stream cut mid-thinking is the
+				// ordinary way to lose it — it is the last thing Anthropic
+				// sends — and such a block is dropped rather than carried as
+				// something that will 400 on every following turn.
+				//
+				// 🪤 The TEXT is legitimately empty on adaptive-thinking models
+				// (Opus 4.7+, Sonnet 5): they withhold the readable
+				// chain-of-thought and send one empty thinking_delta followed by
+				// a real signature. Requiring text here threw those blocks away
+				// — measured live, sonnet-5 spent 254 thinking tokens and terva
+				// kept none of it, then had nothing to hand back.
+				//
+				// Which shape it is has to be decided HERE, while "no text ever
+				// arrived" is still knowable. Downstream the two are identical.
+				if be.sigBuf.Len() == 0 {
+					continue
+				}
+				shape := ReasoningShapeAnthropicThinking
+				if be.textBuf.Len() == 0 {
+					shape = ReasoningShapeAnthropicThinkingOpaque
+				}
+				content = append(content, ReasoningBlock{
+					Summary:   be.textBuf.String(),
+					Encrypted: be.sigBuf.String(),
+					Shape:     shape,
+				})
+			case "redacted_thinking":
+				if be.redacted == "" {
+					continue
+				}
+				content = append(content, ReasoningBlock{
+					Encrypted: be.redacted,
+					Shape:     ReasoningShapeAnthropicRedacted,
+				})
 			}
 		}
 		return Message{Role: RoleAssistant, Content: content, Time: time.Now()}
@@ -836,10 +933,12 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 					_ = json.Unmarshal(b, &idx)
 				}
 				var block struct {
-					Type  string          `json:"type"`
-					ID    string          `json:"id"`
-					Name  string          `json:"name"`
-					Text  string          `json:"text"`
+					Type string `json:"type"`
+					ID   string `json:"id"`
+					Name string `json:"name"`
+					Text string `json:"text"`
+					// Data is the whole payload of a redacted_thinking block.
+					Data  string          `json:"data"`
 					Input json.RawMessage `json:"input"`
 				}
 				if b, ok := payload["content_block"]; ok {
@@ -858,7 +957,12 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 				case "text":
 					registerBlock(idx, "text")
 				case "thinking":
-					// not surfaced
+					registerBlock(idx, "thinking")
+				case "redacted_thinking":
+					// Arrives whole: Anthropic encrypted the reasoning, so
+					// there is nothing to stream and no text to show. Kept
+					// only so the turn can be replayed intact.
+					registerBlock(idx, "redacted_thinking").redacted = block.Data
 				}
 			case "content_block_delta":
 				var idx int
@@ -870,6 +974,7 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 					Text        string `json:"text"`
 					PartialJSON string `json:"partial_json"`
 					Thinking    string `json:"thinking"`
+					Signature   string `json:"signature"`
 				}
 				if b, ok := payload["delta"]; ok {
 					_ = json.Unmarshal(b, &d)
@@ -886,7 +991,16 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 						out <- EventToolArgs{ID: be.toolCall.ID, Delta: d.PartialJSON}
 					}
 				case "thinking_delta":
-					// Not surfaced in v1.
+					if be, ok := blocks[idx]; ok && be.kind == "thinking" {
+						be.textBuf.WriteString(d.Thinking)
+					}
+					out <- EventReasoningDelta{Delta: d.Thinking}
+				case "signature_delta":
+					// The seal over the text above. It is not reasoning to
+					// show, so it is accumulated and never emitted.
+					if be, ok := blocks[idx]; ok && be.kind == "thinking" {
+						be.sigBuf.WriteString(d.Signature)
+					}
 				}
 			case "content_block_stop":
 				var idx int
@@ -927,6 +1041,14 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 						OutputTokens             int `json:"output_tokens"`
 						CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 						CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+						// Adaptive-thinking models break thinking out here.
+						// A POINTER because the flag below means "this
+						// provider reported a number", and a plain int cannot
+						// tell an absent field from a measured zero — the
+						// distinction ReasoningTokensKnown exists to carry.
+						OutputTokensDetails *struct {
+							ThinkingTokens int `json:"thinking_tokens"`
+						} `json:"output_tokens_details"`
 					} `json:"usage"`
 				}
 				_ = json.Unmarshal([]byte(ev.Data), &m)
@@ -944,6 +1066,15 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 				}
 				if m.Usage.CacheCreationInputTokens > 0 {
 					usage.CacheWriteTokens = m.Usage.CacheCreationInputTokens
+				}
+				// 🪤 Anthropic DOES break thinking out, on adaptive models.
+				// It was documented as the provider that never does, so a
+				// turn that spent 254 of its 258 output tokens thinking
+				// reported "not measured" and the one number that explains
+				// the bill was invisible.
+				if d := m.Usage.OutputTokensDetails; d != nil {
+					usage.ReasoningTokens = d.ThinkingTokens
+					usage.ReasoningTokensKnown = true
 				}
 				switch m.Delta.StopReason {
 				case "end_turn", "stop_sequence":

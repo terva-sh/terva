@@ -711,10 +711,14 @@ type wireBlock struct {
 	// Name (the tool_call name): a reader of a session file should not have to
 	// know which block type is being decoded to know what a field means.
 	Provider string `json:"provider,omitempty"`
-	// reasoning
+	// reasoning — Shape names the provider block this came off. A resumed
+	// session replays its transcript, and an Anthropic thinking block is only
+	// replayable to Anthropic, so losing this on disk turns a resumable turn
+	// into one that is silently dropped from the request.
 	ReasoningID string `json:"reasoning_id,omitempty"`
 	Summary     string `json:"summary,omitempty"`
 	Encrypted   string `json:"encrypted_content,omitempty"`
+	Shape       string `json:"shape,omitempty"`
 }
 
 // Block type discriminator values (wireBlock.Type).
@@ -774,7 +778,7 @@ func encodeWireBlocks(blocks []provider.Content) []wireBlock {
 				IsError: b.IsError,
 			})
 		case provider.ReasoningBlock:
-			out = append(out, wireBlock{Type: blockReasoning, ReasoningID: b.ID, Summary: b.Summary, Encrypted: b.Encrypted})
+			out = append(out, wireBlock{Type: blockReasoning, ReasoningID: b.ID, Summary: b.Summary, Encrypted: b.Encrypted, Shape: b.Shape})
 		case provider.CompactionBlock:
 			// Losing this block loses the compaction itself: the blob is the
 			// backend's only encoding of the turns it replaced, and terva
@@ -3149,7 +3153,7 @@ func decodeWireBlock(b wireBlock) (provider.Content, bool) {
 		}
 		return block, true
 	case blockReasoning:
-		return provider.ReasoningBlock{ID: b.ReasoningID, Summary: b.Summary, Encrypted: b.Encrypted}, true
+		return provider.ReasoningBlock{ID: b.ReasoningID, Summary: b.Summary, Encrypted: b.Encrypted, Shape: b.Shape}, true
 	case blockCompaction:
 		return provider.CompactionBlock{ID: b.ID, Encrypted: b.Encrypted, Provider: b.Provider}, true
 	}
@@ -3191,6 +3195,7 @@ func hydrateMessageObject(rawMessage []byte, rep *loadReport) (provider.Message,
 			ReasoningID string `json:"reasoning_id"`
 			Summary     string `json:"summary"`
 			Encrypted   string `json:"encrypted_content"`
+			Shape       string `json:"shape"`
 			// ToolCallBlock also has Arguments, ToolResultBlock has Content + IsError
 		}
 		if err := json.Unmarshal(raw, &head); err != nil {
@@ -3203,6 +3208,7 @@ func hydrateMessageObject(rawMessage []byte, rep *loadReport) (provider.Message,
 				ID:        head.ReasoningID,
 				Summary:   head.Summary,
 				Encrypted: head.Encrypted,
+				Shape:     head.Shape,
 			})
 		case head.Name != "" && head.ID != "":
 			var tc struct {

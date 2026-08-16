@@ -1436,12 +1436,50 @@ func reasoningSummaryRequest(persist string, show bool) string {
 // hide the text would strand the reasoning item and break the following turn.
 // The result is byte-identical to what a build with display switched off
 // records today: a reasoning block with an empty summary.
+// 🪤 Blanking is only meaningful where the text and the replay payload are
+// separable. An Anthropic thinking block is sealed by a signature over its own
+// text, so a blanked one is not a quieter block, it is an unreplayable one.
+// Those are removed outright by dropUnrecordableThinking, which runs on every
+// path this does — so this function never has to reason about them.
 func stripSummariesForDisplayOnly(m provider.Message) provider.Message {
 	out := make([]provider.Content, 0, len(m.Content))
 	for _, c := range m.Content {
 		if r, ok := c.(provider.ReasoningBlock); ok {
 			r.Summary = ""
 			out = append(out, r)
+			continue
+		}
+		out = append(out, c)
+	}
+	m.Content = out
+	return m
+}
+
+// dropUnrecordableThinking removes reasoning whose readable text cannot be
+// separated from its replay payload, for turns where recording is off.
+//
+// Only Anthropic thinking qualifies. Its signature seals the text, so the block
+// is all-or-nothing: keeping it means keeping the model's unabridged
+// chain-of-thought in the session file, which is the exact trade "Record
+// thinking" is default-off to avoid. Dropping it returns this provider to where
+// it was before terva captured thinking at all.
+//
+// 🪤 The cost is real and worth stating: the block is what Anthropic wants
+// replayed alongside a tool call, so a recording-off session hands none back —
+// unchanged from every terva release to date, but no longer for lack of having
+// it. Turning "Record thinking" on is what makes replay possible.
+//
+// 🔑 ThinkingOpaque is deliberately NOT dropped, and the shape test rather than
+// a Summary == "" test is what makes that possible. Adaptive-thinking models
+// sign reasoning whose text Anthropic withholds, so there is no
+// chain-of-thought in the block to decline to record — keeping it costs the
+// user nothing and preserves replay on the default setting. Redacted blocks
+// survive for the same reason. Dropping either would be privacy theatre paid
+// for in fidelity.
+func dropUnrecordableThinking(m provider.Message) provider.Message {
+	out := make([]provider.Content, 0, len(m.Content))
+	for _, c := range m.Content {
+		if r, ok := c.(provider.ReasoningBlock); ok && r.Shape == provider.ReasoningShapeAnthropicThinking {
 			continue
 		}
 		out = append(out, c)
@@ -2910,8 +2948,19 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 	// The summary was requested for the screen, not the record: blank the text
 	// before anything downstream can persist it. Done here, on the one message
 	// every path takes, rather than at each save site.
+	//
+	// 🪤 showReasoning is deliberately NOT part of the second condition. A Codex
+	// summary only exists because it was asked for, so with recording off and
+	// display off there is nothing to strip; Anthropic's thinking arrives
+	// unbidden the moment thinking is enabled, so "nobody asked to record this"
+	// is reached with the text already in hand. Gating on display would let
+	// recording-off keep it, which is the setting saying one thing and the file
+	// saying another.
 	if reasoningSummary == "" && showReasoning {
 		finalMsg = stripSummariesForDisplayOnly(finalMsg)
+	}
+	if reasoningSummary == "" {
+		finalMsg = dropUnrecordableThinking(finalMsg)
 	}
 
 	// Append assistant message to transcript. Aborted turns (Esc / Ctrl+C)
