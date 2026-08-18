@@ -436,8 +436,16 @@ func readFromFS(fsys fs.FS, root string, sourceFor, nsFor func(rel string) strin
 // stemOf returns the file stem of a Source, handling all three source
 // shapes: "embedded:review-crew/vartija.md", "ext:websearch:deep-researcher.md"
 // (colons, not path separators, prefix the bundle), and "/path/to/vartija.md".
+//
+// A persona with no Source has no stem. Said explicitly because path.Base("")
+// is ".", not "" — so without this the legacy name-only persona (the
+// TERVA_PERSONA_NAME swap, which carries a name and nothing else) reported a
+// stem of ".", and Ref's `st == ""` fallback to the name could never fire.
 func stemOf(source string) string {
 	s := source
+	if strings.TrimSpace(s) == "" {
+		return ""
+	}
 	switch {
 	case strings.HasPrefix(s, "embedded:"):
 		s = strings.TrimPrefix(s, "embedded:")

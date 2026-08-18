@@ -1,3 +1,4 @@
+import { errText } from '../../platform/ctrlproto/errors'
 import { useEffect, useState } from 'preact/hooks'
 import { t } from '../../i18n'
 import type { ClientLike } from '../../platform/ctrlproto/client'
@@ -43,10 +44,10 @@ function ListField(props: { label: string; items?: string[]; tone?: 'good' | 'av
 //
 // That asymmetry is deliberate and is not what the daemon would enforce on its
 // own — personas.edit on a built-in succeeds, writing a user file that shadows
-// it by slug. The shadow is permanent and invisible: a later terva release that
-// improves that charter would never reach you, and no screen would ever explain
-// why. Duplicating under a new name gets the same customization while leaving
-// the built-in live.
+// it by its ref. The shadow is permanent and invisible: a later terva release
+// that improves that charter would never reach you, and no screen would ever
+// explain why. Duplicating under a new name gets the same customization while
+// leaving the built-in live.
 export function PersonaSheet(props: {
   client: ClientLike
   persona: PersonaSummary
@@ -62,12 +63,10 @@ export function PersonaSheet(props: {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    // Name accepts a bare name or a namespace:name ref — pass the ref so a
-    // namespaced persona resolves unambiguously.
     client
-      .send<PersonaView>('personas.get', { name: persona.ref })
+      .send<PersonaView>('personas.get', { ref: persona.ref })
       .then(setView)
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
   }, [persona.ref])
 
   const v = view ?? persona

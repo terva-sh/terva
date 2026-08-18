@@ -135,7 +135,9 @@ func (s *wsSession) reloadLore() {
 	var entries []lore.Entry
 	if !args.NoLore {
 		if cfg, _ := config.LoadConfig(); cfg.Lore == nil || *cfg.Lore {
-			entries, _, _ = lore.Discover(config.TervaHome(), s.cwd, s.trusted.Load())
+			trusted := s.trusted.Load()
+			entries, _, _ = lore.Discover(config.TervaHome(), s.cwd,
+				lore.Gate{TrustProject: trusted, Disabled: config.ResolveConfig(s.cwd, trusted).Config.DisableExtensions})
 		}
 	}
 	s.mu.Lock()

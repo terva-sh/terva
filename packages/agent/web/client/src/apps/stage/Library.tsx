@@ -1,3 +1,4 @@
+import { errText } from '../../platform/ctrlproto/errors'
 import { useEffect, useState } from 'preact/hooks'
 import { THEMES, applyTheme, currentTheme } from './theme'
 import { CardSheet } from './CardSheet'
@@ -128,7 +129,7 @@ function GroupFilterChips(props: {
 // hint the size was the problem. A pre-flight check catches that before we send,
 // but a stale limit or a differently-bounded proxy can still get us here.
 export function importError(e: unknown, file?: File): string {
-  const msg = e instanceof Error ? e.message : String(e)
+  const msg = e instanceof Error ? e.message : errText(e)
   if (/not connected|connection closed/i.test(msg)) {
     const size = file ? ` (${humanBytes(file.size)})` : ''
     return t(
@@ -362,7 +363,7 @@ export function Library(props: {
     client
       .send<CardsListResult>('cards.list', {})
       .then((r) => setCards(r.cards ?? []))
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
       .finally(() => didLoad('cards'))
     client
       .send<PersonasListResult>('personas.list', {})
@@ -413,7 +414,7 @@ export function Library(props: {
       setCharSheet(null)
       onOpenChat(res.session.id)
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     } finally {
       setBusy(false)
     }
@@ -432,7 +433,7 @@ export function Library(props: {
       const res = await client.send<{ session: SessionInfo }>('sessions.create', opts)
       onOpenChat(res.session.id)
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
       setBusy(false)
     }
   }
@@ -454,7 +455,7 @@ export function Library(props: {
       }
       load()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     } finally {
       setBusy(false)
     }
@@ -632,7 +633,7 @@ export function Library(props: {
       setGroupSheet(g)
       load()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
   }
   // Rename or recolour a group (metadata only; members are untouched).
@@ -642,7 +643,7 @@ export function Library(props: {
       setGroupSheet(g)
       load()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
   }
   const deleteCardGroup = async (g: Group) => {
@@ -653,7 +654,7 @@ export function Library(props: {
       setGroupSheet(null)
       load()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
   }
   // Add or remove one card from a group. The sole membership mutation is the
@@ -665,7 +666,7 @@ export function Library(props: {
       if (groupSheet?.id === g.id) setGroupSheet(saved)
       load()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
   }
   // Add or remove the WHOLE selection to/from a group in one request. The
@@ -679,7 +680,7 @@ export function Library(props: {
       if (groupSheet?.id === g.id) setGroupSheet(saved)
       load()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
   }
 
@@ -691,7 +692,7 @@ export function Library(props: {
     try {
       await Promise.all(ids.map((id) => client.send('cards.favorite', { id, favorite })))
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
     load()
   }
@@ -720,7 +721,7 @@ export function Library(props: {
     try {
       await client.send('cards.favorite', { id: card.id, favorite })
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
       load()
     }
   }
@@ -736,7 +737,7 @@ export function Library(props: {
       setSessionGroupSheet(g)
       load()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
   }
   const saveSessionGroup = async (id: string, name: string, color: string) => {
@@ -745,7 +746,7 @@ export function Library(props: {
       setSessionGroupSheet(g)
       load()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
   }
   const deleteSessionGroup = async (g: Group) => {
@@ -756,7 +757,7 @@ export function Library(props: {
       setSessionGroupSheet(null)
       load()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
   }
   const toggleSessionInGroup = async (sessionId: string, g: Group) => {
@@ -766,7 +767,7 @@ export function Library(props: {
       if (sessionGroupSheet?.id === g.id) setSessionGroupSheet(saved)
       load()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
   }
 
@@ -790,7 +791,7 @@ export function Library(props: {
       setSheet(null)
       load()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
   }
 
@@ -807,7 +808,7 @@ export function Library(props: {
       await client.send('worlds.delete', { id: wld.id })
       load()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
   }
 
@@ -841,7 +842,7 @@ export function Library(props: {
       load()
       onEditCharacter(copy)
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
   }
 
@@ -865,7 +866,7 @@ export function Library(props: {
     let used = 0
     if (!shadows) {
       try {
-        const view = (await client.send('personas.get', { name: p.ref })) as PersonaView
+        const view = (await client.send('personas.get', { ref: p.ref })) as PersonaView
         used = view?.sessions_using ?? 0
       } catch {
         // leave the count at zero and ask the plain question
@@ -873,11 +874,11 @@ export function Library(props: {
     }
     if (!window.confirm(personaDeleteWarning(p.name, used, shadows))) return
     try {
-      await client.send('personas.delete', { name: p.ref })
+      await client.send('personas.delete', { ref: p.ref })
       setPersonaSheet(null)
       load()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
   }
 
@@ -900,7 +901,7 @@ export function Library(props: {
       await client.send('sessions.delete', null, s.id)
       load()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
   }
 
@@ -913,7 +914,7 @@ export function Library(props: {
       await client.send('sessions.archive', null, s.id)
       load()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
   }
 
@@ -933,7 +934,7 @@ export function Library(props: {
       await client.send<{ name: string }>('worlds.save', { name: trimmed }, s.id)
       load()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
   }
 

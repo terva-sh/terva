@@ -33,7 +33,9 @@ func (w *Workspace) skillsForSession(sess string, refresh bool) []*skills.Skill 
 		return nil
 	}
 	userHome, _ := os.UserHomeDir()
-	full, _ := skills.Discover(config.TervaHome(), s.cwd, userHome, s.args.WithSkills, !s.args.NoBuiltinSkills, s.trusted.Load())
+	trusted := s.trusted.Load()
+	full, _ := skills.Discover(config.TervaHome(), s.cwd, userHome, s.args.WithSkills, !s.args.NoBuiltinSkills,
+		skills.Gate{TrustProject: trusted, Disabled: config.ResolveConfig(s.cwd, trusted).Config.DisableExtensions})
 	if refresh && s.skillTool != nil {
 		s.skillTool.SetSkills(full)
 	}

@@ -358,8 +358,8 @@ var dispatch = map[Method]handler{
 	MethodSuggestReply: ask(noSuggest, func(c SuggestController, ctx context.Context, f Frame, p SuggestParams) (SuggestResult, error) {
 		return c.SuggestReply(ctx, f.Sess, p)
 	}),
-	MethodSuggestNextStep: get(noNextStep, func(c NextStepController, ctx context.Context, f Frame) (NextStepResult, error) {
-		return c.SuggestNextStep(ctx, f.Sess)
+	MethodSuggestNextStep: ask(noNextStep, func(c NextStepController, ctx context.Context, f Frame, p NextStepParams) (NextStepResult, error) {
+		return c.SuggestNextStep(ctx, f.Sess, p)
 	}),
 
 	// -------------------------------------------------------------------- personas
@@ -373,7 +373,7 @@ var dispatch = map[Method]handler{
 	MethodPersonasCreate: ask(noPersonas, func(c PersonasController, ctx context.Context, f Frame, p PersonaWriteParams) (PersonaView, error) {
 		return c.PersonasCreate(ctx, p)
 	}),
-	MethodPersonasEdit: ask(noPersonas, func(c PersonasController, ctx context.Context, f Frame, p PersonaWriteParams) (PersonaView, error) {
+	MethodPersonasEdit: ask(noPersonas, func(c PersonasController, ctx context.Context, f Frame, p PersonaEditParams) (PersonaView, error) {
 		return c.PersonasEdit(ctx, p)
 	}),
 	// The verb the outer-case trap actually bit: reached only through the group's

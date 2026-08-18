@@ -1823,9 +1823,17 @@ export interface PersonaView extends PersonaSummary {
   sessions_using?: number
 }
 
+// PersonaRefParams identifies one persona for personas.get / personas.delete:
+// its ref ("<namespace>:<stem>"), as personas.list publishes it. A bare stem or
+// display name still resolves, but the ref is the one that always names exactly
+// one persona.
+export interface PersonaRefParams {
+  ref: string
+}
+
 // PersonaWriteParams is the editable form — what personas.create/edit accept.
-// Deliberately NOT PersonaView: ref/namespace/origin/editable are server-derived
-// and sending them back is noise the binder ignores.
+// Deliberately NOT PersonaView: namespace/origin/editable are server-derived and
+// sending them back is noise the binder ignores.
 //
 // ⚠️ A write REPLACES the whole file. Every field must be re-sent on an edit or
 // it is ERASED, not preserved — there is no partial update.
@@ -1846,6 +1854,20 @@ export interface PersonaWriteParams {
   // A persona whose charter this one builds on. Subject to the same warning as
   // every other field above: an edit that does not send it back DELETES it.
   extends?: string
+}
+
+// PersonaEditParams is a write plus the persona it OVERWRITES.
+//
+// Separate from PersonaWriteParams because `ref` is not part of the persona:
+// everything in a write is content that must survive the file round trip, and a
+// daemon test enrolls those fields and requires exactly that. The split also
+// means a CREATE cannot carry a target — it has nowhere to put one.
+//
+// `ref` identifies, `name` is content: an edit that changes the name still
+// targets the persona `ref` resolves to, which is what keeps a save from
+// landing on a different persona that happens to share the new name.
+export interface PersonaEditParams extends PersonaWriteParams {
+  ref: string
 }
 
 export interface PersonasListResult {
@@ -2599,7 +2621,9 @@ export interface VerbParams {
   'sessiongroups.delete': SessionGroupDeleteParams
   'sessiongroups.set_members': SessionGroupSetMembersParams
   'personas.create': PersonaWriteParams
-  'personas.edit': PersonaWriteParams
+  'personas.edit': PersonaEditParams
+  'personas.get': PersonaRefParams
+  'personas.delete': PersonaRefParams
   'cards.duplicate': CardDuplicateParams
   'cards.favorite': CardFavoriteParams
   'cards.history': CardHistoryParams

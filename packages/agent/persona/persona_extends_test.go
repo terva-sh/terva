@@ -11,14 +11,18 @@ import (
 )
 
 // writeUserPersona drops a persona into $TERVA_HOME/personas so the tier
-// machinery (and therefore Lookup) can see it.
+// machinery (and therefore Lookup) can see it. stem may name a team
+// subdirectory ("review-crew/vartija") — that is what `terva persona init`
+// writes, and it is the layout the store had to learn to resolve.
+//
+// Through Dir() rather than the TERVA_HOME env var, so a test that forgot to
+// set a home writes nowhere near the developer's own library.
 func writeUserPersona(t *testing.T, stem, body string) string {
 	t.Helper()
-	dir := filepath.Join(os.Getenv("TERVA_HOME"), "personas")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	p := filepath.Join(Dir(), filepath.FromSlash(stem)+".md")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	p := filepath.Join(dir, stem+".md")
 	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}

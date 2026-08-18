@@ -519,7 +519,7 @@ func (s *Service) PersonasCreate(ctx context.Context, p ctrlproto.PersonaWritePa
 	return r, err
 }
 
-func (s *Service) PersonasEdit(ctx context.Context, p ctrlproto.PersonaWriteParams) (ctrlproto.PersonaView, error) {
+func (s *Service) PersonasEdit(ctx context.Context, p ctrlproto.PersonaEditParams) (ctrlproto.PersonaView, error) {
 	var r ctrlproto.PersonaView
 	err := s.c.Call(ctx, "", ctrlproto.MethodPersonasEdit, p, &r)
 	return r, err
@@ -536,9 +536,9 @@ var _ ctrlproto.NextStepController = (*Service)(nil)
 // SuggestNextStep asks the daemon for a line the user might type next. The TUI
 // is the primary caller: it notices the idle composer, the daemon holds the
 // model.
-func (s *Service) SuggestNextStep(ctx context.Context, sess string) (ctrlproto.NextStepResult, error) {
+func (s *Service) SuggestNextStep(ctx context.Context, sess string, p ctrlproto.NextStepParams) (ctrlproto.NextStepResult, error) {
 	var out ctrlproto.NextStepResult
-	err := s.c.Call(ctx, sess, ctrlproto.MethodSuggestNextStep, nil, &out)
+	err := s.c.Call(ctx, sess, ctrlproto.MethodSuggestNextStep, p, &out)
 	return out, err
 }
 

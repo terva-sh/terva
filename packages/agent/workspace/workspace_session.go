@@ -433,7 +433,8 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	// subset, so re-Discover here for the full set.
 	if !args.NoLore {
 		if lcfg, _ := config.LoadConfig(); lcfg.Lore == nil || *lcfg.Lore {
-			s.loreEntries, _, _ = lore.Discover(config.TervaHome(), r.CWD, r.Trusted)
+			s.loreEntries, _, _ = lore.Discover(config.TervaHome(), r.CWD,
+				lore.Gate{TrustProject: r.Trusted, Disabled: r.DisableExtensions})
 		}
 	}
 

@@ -1789,7 +1789,7 @@ func TestLoreEditing(t *testing.T) {
 		t.Fatal("saved entry should be a user file")
 	}
 	// It parses back as a real entry.
-	got, _, _ := lore.Discover(home, home, false)
+	got, _, _ := lore.Discover(home, home, lore.Gate{TrustProject: false})
 	var found *lore.Entry
 	for i := range got {
 		if got[i].Name == "Deploy Steps" {

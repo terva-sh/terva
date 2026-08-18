@@ -1,3 +1,4 @@
+import { errText } from '../../platform/ctrlproto/errors'
 import { useEffect, useState } from 'preact/hooks'
 import { t } from '../../i18n'
 import type { ClientLike } from '../../platform/ctrlproto/client'
@@ -284,9 +285,9 @@ function PersonaDetail(props: {
   useEffect(() => {
     if (!client) return
     client
-      .send<PersonaView>('personas.get', { name: persona.ref }, '')
+      .send<PersonaView>('personas.get', { ref: persona.ref }, '')
       .then(setView)
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
   }, [client, persona.ref])
 
   const v = view ?? persona

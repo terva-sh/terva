@@ -108,7 +108,7 @@ func TestDiscoverProjectAndGlobalPriorityAndDedup(t *testing.T) {
 	// Unique skill in global only.
 	mk(filepath.Join(tervaHome, "skills"), "global-only", "from global")
 
-	skills, errs := Discover(tervaHome, cwd, "", true /* includeUser */, true /* includeBuiltin */, true /* trustProject */)
+	skills, errs := Discover(tervaHome, cwd, "", true /* includeUser */, true /* includeBuiltin */, Gate{TrustProject: true /* trustProject */})
 	if len(errs) > 0 {
 		t.Fatalf("errs: %v", errs)
 	}
@@ -158,7 +158,7 @@ func TestDiscoverExcludesBuiltinsOnRequest(t *testing.T) {
 	shadowed := loadBuiltins()[0].Name
 	mk(filepath.Join(tervaHome, "skills"), shadowed, "user shadow")
 
-	got, errs := Discover(tervaHome, cwd, "", true, false /* includeBuiltin */, true)
+	got, errs := Discover(tervaHome, cwd, "", true, false /* includeBuiltin */, Gate{TrustProject: true})
 	if len(errs) > 0 {
 		t.Fatalf("errs: %v", errs)
 	}
@@ -202,7 +202,7 @@ func TestDiscoverUntrustedDropsProjectSkills(t *testing.T) {
 	mk(filepath.Join(tervaHome, "skills"), "user-global", "from the user home")
 
 	// Untrusted: none of the project skills, but the global one is present.
-	restricted, errs := Discover(tervaHome, cwd, "", true, true, false /* trustProject */)
+	restricted, errs := Discover(tervaHome, cwd, "", true, true, Gate{TrustProject: false /* trustProject */})
 	if len(errs) > 0 {
 		t.Fatalf("errs: %v", errs)
 	}
@@ -216,7 +216,7 @@ func TestDiscoverUntrustedDropsProjectSkills(t *testing.T) {
 	}
 
 	// Trusted: the same project skills now load.
-	trusted, errs := Discover(tervaHome, cwd, "", true, true, true /* trustProject */)
+	trusted, errs := Discover(tervaHome, cwd, "", true, true, Gate{TrustProject: true /* trustProject */})
 	if len(errs) > 0 {
 		t.Fatalf("errs: %v", errs)
 	}

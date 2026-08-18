@@ -13,6 +13,18 @@ import (
 	"terva.sh/terva/packages/testsupport"
 )
 
+// editParams is an edit that names its target the pre-ref way, by the name in
+// the form. Most of these tests have one persona of the name in play, so the
+// two identifiers agree and the shorter call reads better — and it keeps the
+// name-fallback path exercised by everything, not by one test that could be
+// deleted without anyone noticing the path went with it.
+//
+// The tests where they DISAGREE pass a ref explicitly; that is the whole point
+// of the field, and it is where the target is spelled out.
+func editParams(p ctrlproto.PersonaWriteParams) ctrlproto.PersonaEditParams {
+	return ctrlproto.PersonaEditParams{PersonaWriteParams: p}
+}
+
 func newPersonaWorkspace(t *testing.T) *Workspace {
 	t.Helper()
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
@@ -102,7 +114,7 @@ func TestWorkspacePersonaCreateAndEditWhenTrusted(t *testing.T) {
 		t.Error("re-creating an existing persona should conflict")
 	}
 
-	edited, err := w.PersonasEdit(ctx, ctrlproto.PersonaWriteParams{Name: "Custom", Summary: "updated", Charter: "New charter."})
+	edited, err := w.PersonasEdit(ctx, editParams(ctrlproto.PersonaWriteParams{Name: "Custom", Summary: "updated", Charter: "New charter."}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +122,7 @@ func TestWorkspacePersonaCreateAndEditWhenTrusted(t *testing.T) {
 		t.Errorf("edit not applied: %q", edited.Summary)
 	}
 
-	if _, err := w.PersonasEdit(ctx, ctrlproto.PersonaWriteParams{Name: "Ghost", Charter: "x"}); err == nil {
+	if _, err := w.PersonasEdit(ctx, editParams(ctrlproto.PersonaWriteParams{Name: "Ghost", Charter: "x"})); err == nil {
 		t.Error("editing a nonexistent persona should error (create it instead)")
 	}
 }
@@ -124,9 +136,9 @@ func TestWorkspacePersonaCopyToEditBuiltin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	edited, err := w.PersonasEdit(ctx, ctrlproto.PersonaWriteParams{
+	edited, err := w.PersonasEdit(ctx, editParams(ctrlproto.PersonaWriteParams{
 		Name: "Mieli", Summary: "my mieli", Charter: "Custom Mieli.",
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +216,7 @@ func TestWorkspacePersonaDeleteUnshadowsABuiltin(t *testing.T) {
 	if err := config.TrustPath(w.cwd, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.PersonasEdit(ctx, ctrlproto.PersonaWriteParams{Name: "Mieli", Summary: "mine", Charter: "Custom."}); err != nil {
+	if _, err := w.PersonasEdit(ctx, editParams(ctrlproto.PersonaWriteParams{Name: "Mieli", Summary: "mine", Charter: "Custom."})); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.PersonasDelete(ctx, ctrlproto.PersonaDeleteParams{Name: "Mieli"}); err != nil {
@@ -287,9 +299,9 @@ func TestWorkspacePersonaExtendsSurvivesTheEditRoundTrip(t *testing.T) {
 	}
 
 	// The editor sends the view back, whole. That is the flow this guards.
-	edited, err := w.PersonasEdit(ctx, ctrlproto.PersonaWriteParams{
+	edited, err := w.PersonasEdit(ctx, editParams(ctrlproto.PersonaWriteParams{
 		Name: got.Name, Extends: got.Extends, Charter: "Track what is in flight, and what is blocked.",
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -255,7 +255,14 @@ func (r *Runtime) Model() string { r.mu.Lock(); defer r.mu.Unlock(); return r.mo
 // CWD returns the working directory the agent operates in.
 func (r *Runtime) CWD() string { r.mu.Lock(); defer r.mu.Unlock(); return r.cwd }
 
-// Messages returns a copy of the current transcript.
+// Messages returns a copy of the current transcript, in the FULL wire form —
+// image payloads included.
+//
+// The lean form is what a carrier sends when the recipient can fetch the bytes
+// another way. An embedder cannot: this package's doc points them at
+// Messages/SetMessages as the way to persist and restore a conversation, so the
+// lean form made that documented round-trip lossy. A message came back with
+// Data:[] and the next request replayed an image with no pixels.
 func (r *Runtime) Messages() []Message {
 	if r.agent == nil {
 		return nil
@@ -263,23 +270,26 @@ func (r *Runtime) Messages() []Message {
 	src := r.agent.Messages()
 	out := make([]Message, len(src))
 	for i, m := range src {
-		out[i] = core.MessageToWire(m)
+		out[i] = core.MessageToWireFull(m)
 	}
 	return out
 }
 
 // SetMessages replaces the transcript. Use to seed history from a
 // session file or to clear with nil.
+//
+// core.MessageFromWire, not a hand-rolled struct literal. The literal carried
+// Role and Content and dropped everything else on the message: Time, and the
+// whole Meta map — so MetaSynthetic and MetaCompaction were gone. A harness
+// nudge came back indistinguishable from real user input, and the compaction
+// checkpoint marker title_seed.go keys on simply disappeared.
 func (r *Runtime) SetMessages(msgs []Message) {
 	if r.agent == nil {
 		return
 	}
 	out := make([]provider.Message, 0, len(msgs))
 	for _, m := range msgs {
-		out = append(out, provider.Message{
-			Role:    provider.Role(m.Role),
-			Content: rebuildContent(m.Content),
-		})
+		out = append(out, core.MessageFromWire(m))
 	}
 	r.agent.SetMessages(out)
 }

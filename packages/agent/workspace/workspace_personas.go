@@ -39,9 +39,10 @@ func (w *Workspace) PersonasList(_ context.Context) (ctrlproto.PersonasListResul
 // created with it (see PersonaView.SessionsUsing) — the cost of that scan is
 // why it is reported here and not on the list.
 func (w *Workspace) PersonasGet(_ context.Context, p ctrlproto.PersonaGetParams) (ctrlproto.PersonaView, error) {
-	found, ok := persona.Lookup(p.Name)
+	q := p.Query()
+	found, ok := persona.Lookup(q)
 	if !ok {
-		return ctrlproto.PersonaView{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("persona %q not found", p.Name))
+		return ctrlproto.PersonaView{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("persona %q not found", q))
 	}
 	v := personaView(found)
 	// Counted by the persona's own name rather than the requested ref: a session
@@ -52,6 +53,11 @@ func (w *Workspace) PersonasGet(_ context.Context, p ctrlproto.PersonaGetParams)
 }
 
 // PersonasCreate writes a NEW persona to the user library (trusted-tier).
+//
+// A created persona is top-level. Nothing offers authoring INTO a namespace,
+// and a namespace is not a folder the user picks: it is the identity of a team
+// the personas already belong to, which is why the only writes that carry one
+// are edits of a persona that already has it.
 func (w *Workspace) PersonasCreate(_ context.Context, p ctrlproto.PersonaWriteParams) (ctrlproto.PersonaView, error) {
 	if err := w.guardPersonaWrite(p.Name); err != nil {
 		return ctrlproto.PersonaView{}, err
@@ -59,19 +65,36 @@ func (w *Workspace) PersonasCreate(_ context.Context, p ctrlproto.PersonaWritePa
 	if _, exists := persona.UserPath(p.Name); exists {
 		return ctrlproto.PersonaView{}, ctrlproto.Errorf(ctrlproto.CodeConflict, "%s", i18n.T("persona %q already exists — edit it instead", p.Name))
 	}
-	return w.writePersona(p)
+	return w.writePersona(p, persona.Persona{})
 }
 
 // PersonasEdit overwrites an existing persona; copy-to-edit for a built-in
 // (trusted-tier).
-func (w *Workspace) PersonasEdit(_ context.Context, p ctrlproto.PersonaWriteParams) (ctrlproto.PersonaView, error) {
+//
+// The edit is filed as the persona it resolved (persona.Overwrite), and that is
+// what makes copy-to-edit true rather than nearly true. A user file shadows a
+// built-in by Key — "<namespace>:<stem>" — and a form off the wire carries
+// neither half, so rebuilding both from the display name landed the copy beside
+// the original instead of over it: the roster grew a second Vartija, every
+// qualified reference kept resolving to the built-in, and the library reported
+// the edit as saved. Ten of the sixteen shipped personas were affected.
+//
+// Which persona is being edited comes from the REF, not from the name in the
+// form — they are separate fields for that reason (PersonaEditParams). The name
+// is content an edit may change, and resolving by it meant the editor opened a
+// persona by ref and saved it by name, so with two personas sharing a name it
+// could write over the one you were not looking at. A client that sends no ref
+// identifies by name, as it always did.
+func (w *Workspace) PersonasEdit(_ context.Context, p ctrlproto.PersonaEditParams) (ctrlproto.PersonaView, error) {
 	if err := w.guardPersonaWrite(p.Name); err != nil {
 		return ctrlproto.PersonaView{}, err
 	}
-	if _, ok := persona.Lookup(p.Name); !ok {
-		return ctrlproto.PersonaView{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("persona %q not found — create it instead", p.Name))
+	target := p.Target()
+	found, ok := persona.Lookup(target)
+	if !ok {
+		return ctrlproto.PersonaView{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("persona %q not found — create it instead", target))
 	}
-	return w.writePersona(p)
+	return w.writePersona(p.PersonaWriteParams, found)
 }
 
 // PersonasDelete removes a persona from the user library (trusted-tier).
@@ -83,21 +106,34 @@ func (w *Workspace) PersonasEdit(_ context.Context, p ctrlproto.PersonaWritePara
 // reappears in the roster; that is the only way back from a copy-to-edit, and
 // the reason the refusal message names it.
 func (w *Workspace) PersonasDelete(_ context.Context, p ctrlproto.PersonaDeleteParams) error {
-	if err := w.guardPersonaWrite(p.Name); err != nil {
+	q := p.Query()
+	if err := w.guardPersonaWrite(q); err != nil {
 		return err
 	}
-	removed, err := persona.Delete(p.Name)
+	removed, err := persona.Delete(q)
 	if err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "delete persona: %v", err)
 	}
 	if !removed {
-		// Distinguish the two ways there is nothing to delete: a name you never
-		// had, versus a built-in you cannot remove (and did not customize).
-		if found, ok := persona.Lookup(p.Name); ok {
+		// Distinguish the ways there is nothing to delete: a name you never had,
+		// versus a built-in you cannot remove (and did not customize).
+		if found, ok := persona.Lookup(q); ok {
+			// 🪤 A third way, and it used to be the common one. The roster
+			// resolves a file of YOURS that Delete could not find, and the
+			// refusal below then told you your own persona was not yours —
+			// naming its origin, "user", in the sentence refusing you. That was
+			// UserPath ignoring namespaces while the roster honoured them, so
+			// every persona under a team subdirectory was undeletable. It is
+			// fixed at the source; this says so rather than reprinting the lie
+			// if the two ever drift apart again.
+			if personaEditable(found) {
+				return ctrlproto.Errorf(ctrlproto.CodeInternal,
+					"%s", i18n.T("persona %q resolves to your file %s, but the library could not find it to delete", q, found.Source))
+			}
 			return ctrlproto.Errorf(ctrlproto.CodeBadRequest,
-				"%s", i18n.T("persona %q is %s, not yours to delete — duplicate it under a new name instead", p.Name, personaOrigin(found)))
+				"%s", i18n.T("persona %q is %s, not yours to delete — duplicate it under a new name instead", q, personaOrigin(found)))
 		}
-		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("persona %q not found", p.Name))
+		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("persona %q not found", q))
 	}
 	w.broadcastLibraryChanged()
 	return nil
@@ -115,13 +151,19 @@ func (w *Workspace) guardPersonaWrite(name string) error {
 	return nil
 }
 
-func (w *Workspace) writePersona(p ctrlproto.PersonaWriteParams) (ctrlproto.PersonaView, error) {
-	if _, err := persona.Write(paramsToPersona(p)); err != nil {
+// writePersona writes the form, filed as `into` — the persona being overwritten,
+// or the zero value for a create, which files it under its own new name.
+func (w *Workspace) writePersona(p ctrlproto.PersonaWriteParams, into persona.Persona) (ctrlproto.PersonaView, error) {
+	dest, err := persona.Write(persona.Overwrite(paramsToPersona(p), into))
+	if err != nil {
 		return ctrlproto.PersonaView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "write persona: %v", err)
 	}
 	// Re-read through the roster so the returned view carries the resolved
-	// provenance (the on-disk file now wins over any shadowed built-in).
-	saved, ok := persona.Lookup(p.Name)
+	// provenance (the on-disk file now wins over any shadowed built-in) — by
+	// FILE, because a write targeted by ref can land on a persona the form's
+	// name does not resolve to, and answering by name would then describe a
+	// persona this call never touched.
+	saved, ok := persona.ByFile(dest)
 	if !ok {
 		return ctrlproto.PersonaView{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("persona %q vanished after write", p.Name))
 	}

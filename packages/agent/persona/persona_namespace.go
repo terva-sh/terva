@@ -1,12 +1,12 @@
 package persona
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/extroots"
 )
 
 // nsFromRel derives a Persona's namespace from its path relative to the scan
@@ -52,6 +52,23 @@ func (p Persona) Key() string {
 	return strings.ToLower(p.Namespace) + ":" + strings.ToLower(p.stem())
 }
 
+// splitRef splits a persona query into its namespace and name halves:
+// "review-crew:vartija" → ("review-crew", "vartija"), "vartija" → ("", "vartija").
+// A bare query carries no namespace, which is NOT the same as naming the
+// top-level one — see matches and UserPath for what each does with that.
+//
+// Shared rather than parsed twice: matches decides which roster entry a query
+// selects and UserPath decides which FILE it selects, and the two disagreeing
+// about where the colon is would mean a query that resolves to one persona and
+// writes over another.
+func splitRef(query string) (ns, name string) {
+	q := strings.TrimSpace(query)
+	if i := strings.IndexByte(q, ':'); i >= 0 {
+		return q[:i], q[i+1:]
+	}
+	return "", q
+}
+
 // matches reports whether p satisfies a Persona query — a bare "name"/"stem" or
 // a qualified "namespace:name" — case-insensitive, matching the name part
 // against the frontmatter name or the file stem.
@@ -60,10 +77,7 @@ func (p Persona) matches(query string) bool {
 	if q == "" {
 		return false
 	}
-	ns, name := "", q
-	if i := strings.IndexByte(q, ':'); i >= 0 {
-		ns, name = q[:i], q[i+1:]
-	}
+	ns, name := splitRef(q)
 	if ns != "" && ns != strings.ToLower(p.Namespace) {
 		return false
 	}
@@ -99,73 +113,39 @@ func Tiers() [][]Persona {
 	return [][]Persona{listOnDisk(), listExtensionPersonas(), listEmbedded()}
 }
 
-// extPersonaRoot is one enabled extension's personas/ directory + its namespace.
-type extPersonaRoot struct {
-	namespace string
-	dir       string
-}
-
-// extensionPersonaRoots returns the personas/ dir of every globally-installed
-// extension that is enabled (manifest `enabled` != false) and not in the user's
-// disable_extensions list — mirroring skills.extensionSkillDirs. Phase A scans
-// $TERVA_HOME/extensions only; project extensions (trust-gated) are Phase B.
-func extensionPersonaRoots(tervaHome string, userDisabled map[string]bool) []extPersonaRoot {
-	if tervaHome == "" {
-		return nil
-	}
-	root := filepath.Join(tervaHome, "extensions")
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return nil
-	}
-	var out []extPersonaRoot
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		extDir := filepath.Join(root, e.Name())
-		mb, err := os.ReadFile(filepath.Join(extDir, "extension.json"))
-		if err != nil {
-			continue
-		}
-		var m struct {
-			Name    string `json:"name"`
-			Enabled *bool  `json:"enabled"`
-		}
-		if json.Unmarshal(mb, &m) != nil {
-			continue
-		}
-		if m.Enabled != nil && !*m.Enabled {
-			continue // manifest-disabled: follow skills
-		}
-		ns := strings.TrimSpace(m.Name)
-		if ns == "" {
-			ns = e.Name()
-		}
-		if userDisabled[strings.ToLower(ns)] || userDisabled[strings.ToLower(e.Name())] {
-			continue // config disable_extensions (user layer)
-		}
-		pdir := filepath.Join(extDir, "personas")
-		if st, err := os.Stat(pdir); err == nil && st.IsDir() {
-			out = append(out, extPersonaRoot{namespace: ns, dir: pdir})
-		}
-	}
-	return out
-}
-
-// listExtensionPersonas discovers personas shipped by enabled global extensions,
-// namespaced by the extension name and sourced "ext:<name>:<rel>".
+// listExtensionPersonas discovers personas shipped by enabled global
+// extensions, namespaced by the extension name and sourced "ext:<name>:<rel>".
+//
+// 🪤 Two limits here are DECISIONS, not omissions, and both are visible as
+// arguments below rather than as a scanner that quietly lacks the capability:
+//
+//   - Global roots only (no cwd, no project trust). A project extension's personas
+//     are not discovered even in a trusted workspace, while its skills are.
+//   - The USER layer of disable_extensions only. A project config that disables
+//     an extension hides its tools and its skills; its personas stay listed.
+//
+// Both follow from what this package is: a library with no cwd and no trust
+// verdict — its own doc calls reading neither the property that let it leave
+// package build — so the resolved (user ∪ project) config is not available
+// here without threading a resolver through every caller of All/Lookup/Resolve.
+// The exposure differs in kind, which is why the trade was taken: a skill is
+// injected into the prompt whether or not you asked for it, and a persona is
+// something you pick.
 func listExtensionPersonas() []Persona {
-	userDisabled := map[string]bool{}
+	userDisabled := []string{}
 	if cfg, err := config.LoadConfig(); err == nil {
-		for _, n := range cfg.DisableExtensions {
-			userDisabled[strings.ToLower(strings.TrimSpace(n))] = true
-		}
+		userDisabled = cfg.DisableExtensions
 	}
 	var out []Persona
-	for _, er := range extensionPersonaRoots(config.TervaHome(), userDisabled) {
-		ns := er.namespace
-		out = append(out, readFromFS(os.DirFS(er.dir), ".",
+	for _, r := range extroots.Enabled(config.TervaHome(), "", extroots.Gate{Disabled: userDisabled}) {
+		pdir, ok := r.SubDir("personas")
+		if !ok {
+			continue
+		}
+		// The manifest name, where skills use the directory name — see the note
+		// on extroots.Root.Name.
+		ns := r.Name()
+		out = append(out, readFromFS(os.DirFS(pdir), ".",
 			func(rel string) string { return "ext:" + ns + ":" + rel },
 			func(string) string { return ns })...)
 	}

@@ -8,8 +8,14 @@ import (
 	"path/filepath"
 	"strings"
 
+	"terva.sh/terva/packages/agent/extroots"
 	"terva.sh/terva/packages/envcompat"
 )
+
+// Gate is extroots.Gate — what this workspace is allowed to contribute.
+// Aliased so lore, skills and the extension scanner cannot drift into three
+// shapes of the same answer.
+type Gate = extroots.Gate
 
 // Discover loads lore entries from the active tiers plus the effective
 // collection Config. Every entry from every tier contributes — unlike
@@ -19,21 +25,25 @@ import (
 //
 // Tiers, highest priority first:
 //
-//	<cwd>/.terva/lore (+ rename-aware spellings)  — project, gated on trustProject
+//	<cwd>/.terva/lore (+ rename-aware spellings)  — project, gated on the trust half of the gate
 //	$TERVA_HOME/lore                              — personal
 //	<ext>/lore for each enabled extension         — bundle (project exts gated)
 //
-// A caller that has already resolved Workspace Trust passes trustProject;
+// "Enabled" is the gate's Disabled set as well as the manifest flag. It used to
+// be the manifest alone, so a disabled extension kept contributing lore to the
+// prompt after its tools and personas had gone.
+//
+// A caller that has already resolved Workspace Trust passes it in the gate;
 // an untrusted workspace contributes no project-local or project-extension
 // lore, exactly like skills/extensions.
-func Discover(tervaHome, cwd string, trustProject bool) ([]Entry, Config, []error) {
+func Discover(tervaHome, cwd string, gate Gate) ([]Entry, Config, []error) {
 	var (
 		entries []Entry
 		errs    []error
 		cfg     Config
 		cfgSet  bool
 	)
-	for _, dir := range loreDirs(tervaHome, cwd, trustProject) {
+	for _, dir := range loreDirs(tervaHome, cwd, gate) {
 		es, c, hasCfg, derrs := readLoreDir(dir)
 		entries = append(entries, es...)
 		errs = append(errs, derrs...)
@@ -45,7 +55,8 @@ func Discover(tervaHome, cwd string, trustProject bool) ([]Entry, Config, []erro
 }
 
 // loreDirs lists the lore directories in priority order.
-func loreDirs(tervaHome, cwd string, trustProject bool) []string {
+func loreDirs(tervaHome, cwd string, gate Gate) []string {
+	trustProject := gate.TrustProject
 	var dirs []string
 	if cwd != "" && trustProject {
 		for _, name := range envcompat.ProjectDirNames() {
@@ -55,7 +66,7 @@ func loreDirs(tervaHome, cwd string, trustProject bool) []string {
 	if tervaHome != "" {
 		dirs = append(dirs, filepath.Join(tervaHome, "lore"))
 	}
-	dirs = append(dirs, extensionLoreDirs(tervaHome, cwd, trustProject)...)
+	dirs = append(dirs, extensionLoreDirs(tervaHome, cwd, gate)...)
 	return dirs
 }
 
@@ -139,45 +150,17 @@ func parseConfig(data []byte) (Config, error) {
 // extensionLoreDirs lists <extension>/lore for every enabled installed
 // extension: global ($TERVA_HOME/extensions) always, project
 // (.terva/extensions, rename-aware) only when the workspace is trusted.
-// Mirrors skills.extensionSkillDirs.
-func extensionLoreDirs(tervaHome, cwd string, trustProject bool) []string {
-	var roots []string
-	if tervaHome != "" {
-		roots = append(roots, filepath.Join(tervaHome, "extensions"))
-	}
-	if cwd != "" && trustProject {
-		for _, name := range envcompat.ProjectDirNames() {
-			roots = append(roots, filepath.Join(cwd, name, "extensions"))
-		}
-	}
+//
+// Enabled-ness is extroots' answer. This used to be its own copy of the walk —
+// its comment said "Mirrors skills.extensionSkillDirs", and it did, including
+// the part where neither honoured disable_extensions. Lore is keyed context
+// injected into the prompt, so a disabled extension went on contributing it
+// after its tools and its personas had gone.
+func extensionLoreDirs(tervaHome, cwd string, gate Gate) []string {
 	var out []string
-	for _, root := range roots {
-		ents, err := os.ReadDir(root)
-		if err != nil {
-			continue
-		}
-		for _, e := range ents {
-			if !e.IsDir() {
-				continue
-			}
-			extDir := filepath.Join(root, e.Name())
-			mb, err := os.ReadFile(filepath.Join(extDir, "extension.json"))
-			if err != nil {
-				continue
-			}
-			var m struct {
-				Enabled *bool `json:"enabled"`
-			}
-			if json.Unmarshal(mb, &m) != nil {
-				continue
-			}
-			if m.Enabled != nil && !*m.Enabled {
-				continue
-			}
-			loreDir := filepath.Join(extDir, "lore")
-			if st, err := os.Stat(loreDir); err == nil && st.IsDir() {
-				out = append(out, loreDir)
-			}
+	for _, r := range extroots.Enabled(tervaHome, cwd, gate) {
+		if loreDir, ok := r.SubDir("lore"); ok {
+			out = append(out, loreDir)
 		}
 	}
 	return out

@@ -146,6 +146,68 @@ describe('PersonaEditor', () => {
     expect(client.send.mock.calls.find((c) => c[0] === 'personas.edit')![1]).toMatchObject({ name: 'Scratch' })
   })
 
+  // 🔑 A save says WHICH persona it is overwriting, and the ref is the only
+  // thing that says it unambiguously. The name is content the form may change,
+  // and with two personas sharing one, the daemon resolving by name wrote over
+  // the persona you were not looking at — while this editor had opened the other
+  // by ref one call earlier.
+  it('sends the ref of the persona it opened, so the save targets that one', async () => {
+    const namespaced: PersonaSummary = { name: 'Vartija', ref: 'review-crew:vartija', origin: 'user', editable: true }
+    const client = stubClient({ ...VIEW, ...namespaced })
+    render(<PersonaEditor client={client} persona={namespaced} taken={['Vartija']} onClose={() => {}} onSaved={() => {}} />)
+
+    await screen.findByDisplayValue('Vartija')
+    fireEvent.click(screen.getByText('Save changes'))
+    await waitFor(() => expect(client.send.mock.calls.some((c) => c[0] === 'personas.edit')).toBe(true))
+    expect(client.send.mock.calls.find((c) => c[0] === 'personas.edit')![1]).toMatchObject({
+      ref: 'review-crew:vartija',
+      name: 'Vartija',
+    })
+  })
+
+  // A duplicate CREATES. Carrying the copied persona's ref would say it was
+  // overwriting the thing it is deliberately not overwriting — and a create has
+  // nowhere to put one, so the ref must not be on the form at all.
+  it('sends no ref when duplicating, so the original is never the target', async () => {
+    const client = stubClient()
+    render(<PersonaEditor client={client} persona={BUILTIN} duplicate taken={['Seppä']} onClose={() => {}} onSaved={() => {}} />)
+
+    await screen.findByDisplayValue('Seppä (my copy)')
+    fireEvent.click(screen.getByText('Create persona'))
+    await waitFor(() => expect(client.send.mock.calls.some((c) => c[0] === 'personas.create')).toBe(true))
+    const params = client.send.mock.calls.find((c) => c[0] === 'personas.create')![1] as Record<string, unknown>
+    expect(params).not.toHaveProperty('ref')
+  })
+
+  // The ref comes from the persona the editor OPENED, not from the form. A
+  // rename is the case that separates them: save a new name and the write must
+  // still land on the persona you were editing, not on whatever the new name
+  // would resolve to.
+  it('keeps targeting the opened persona when the name is changed', async () => {
+    const client = stubClient({ ...VIEW, ...MINE })
+    render(<PersonaEditor client={client} persona={MINE} taken={['Scratch']} onClose={() => {}} onSaved={() => {}} />)
+
+    await screen.findByDisplayValue('Scratch')
+    fireEvent.input(screen.getByLabelText(/Name/i, { selector: 'input' }), { target: { value: 'Renamed' } })
+    fireEvent.click(screen.getByText('Save changes'))
+    await waitFor(() => expect(client.send.mock.calls.some((c) => c[0] === 'personas.edit')).toBe(true))
+    expect(client.send.mock.calls.find((c) => c[0] === 'personas.edit')![1]).toMatchObject({
+      ref: 'Scratch',
+      name: 'Renamed',
+    })
+  })
+
+  // Reads name the persona the same way writes do. Sending `name` here was not
+  // wrong — the daemon accepts either — but two spellings of one idea is how
+  // the write path came to mean something different by the same field.
+  it('reads a persona by ref', async () => {
+    const client = stubClient({ ...VIEW, ...MINE })
+    render(<PersonaEditor client={client} persona={MINE} taken={[]} onClose={() => {}} onSaved={() => {}} />)
+
+    await screen.findByDisplayValue('Scratch')
+    expect(client.send.mock.calls.find((c) => c[0] === 'personas.get')![1]).toEqual({ ref: 'Scratch' })
+  })
+
   // A write REPLACES the persona file, so a field the editor forgets to re-send
   // is ERASED. Group is the newest such field, and the failure would be silent:
   // save an unrelated typo fix and the persona quietly falls off its shelf.

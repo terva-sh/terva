@@ -1300,6 +1300,14 @@ summarization, a handler has time to read the full session (`read_session`)
 and harvest detail before it's summarized away — the window the post-event
 misses. The Go SDK exposes it as `OnCompactStart`.
 
+That read works from inside the handler. In the Go SDK, event handlers run on
+their own serial lane rather than on the frame-reading loop, so a handler may
+issue `read_session` (or any other ext→host request) and wait for the reply.
+Until that lane existed the recommendation above deadlocked: the reply could
+only be delivered by the loop the handler was blocking, so the extension went
+wire-dead for 30 seconds and harvested nothing. If you write an SDK in another
+language, dispatch event handlers off your read loop for the same reason.
+
 `user_message` fires for every genuine user prompt — the initial submit
 and any queued follow-ups — the symmetric counterpart to
 `assistant_message`. Use it to harvest intent for a memory store or feed

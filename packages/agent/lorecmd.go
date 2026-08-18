@@ -64,7 +64,8 @@ scanning) live in a lore.json at the directory root. Disable for a run with
 func loreList() error {
 	cwd, _ := os.Getwd()
 	trusted := permissions.ResolveTrustState(cwd, false).IsTrusted()
-	entries, _, errs := lore.Discover(config.TervaHome(), cwd, trusted)
+	entries, _, errs := lore.Discover(config.TervaHome(), cwd,
+		lore.Gate{TrustProject: trusted, Disabled: config.ResolveConfig(cwd, trusted).Config.DisableExtensions})
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}

@@ -69,7 +69,7 @@ func TestBuiltinOutranksCompatDirsButNotNativeDirs(t *testing.T) {
 		mkSkill(t, filepath.Join(userHome, ".claude", "skills"), name, "the foreign one")
 		mkSkill(t, filepath.Join(cwd, ".claude", "skills"), name, "the foreign project one")
 
-		got, _ := Discover(tervaHome, cwd, userHome, true, true, true)
+		got, _ := Discover(tervaHome, cwd, userHome, true, true, Gate{TrustProject: true})
 		s := FindByName(got, name)
 		if s == nil {
 			t.Fatalf("%q vanished entirely", name)
@@ -84,7 +84,7 @@ func TestBuiltinOutranksCompatDirsButNotNativeDirs(t *testing.T) {
 		userHome := filepath.Join(tmp, "user")
 		mkSkill(t, filepath.Join(userHome, ".agents", "skills"), name, "the agents one")
 
-		got, _ := Discover(filepath.Join(tmp, "home"), "", userHome, true, true, true)
+		got, _ := Discover(filepath.Join(tmp, "home"), "", userHome, true, true, Gate{TrustProject: true})
 		if s := FindByName(got, name); s == nil || !s.Builtin {
 			t.Fatalf("built-in %q lost its name to a .agents skill: %+v", name, s)
 		}
@@ -95,7 +95,7 @@ func TestBuiltinOutranksCompatDirsButNotNativeDirs(t *testing.T) {
 		tervaHome := filepath.Join(tmp, "home")
 		mkExtension(t, filepath.Join(tervaHome, "extensions"), "widgets", name, "from a bundle")
 
-		got, _ := Discover(tervaHome, "", "", true, true, true)
+		got, _ := Discover(tervaHome, "", "", true, true, Gate{TrustProject: true})
 		if s := FindByName(got, name); s == nil || !s.Builtin {
 			t.Fatalf("built-in %q lost its name to an extension bundle: %+v", name, s)
 		}
@@ -106,7 +106,7 @@ func TestBuiltinOutranksCompatDirsButNotNativeDirs(t *testing.T) {
 		tervaHome := filepath.Join(tmp, "home")
 		mkSkill(t, filepath.Join(tervaHome, "skills"), name, "deliberately mine")
 
-		got, _ := Discover(tervaHome, "", "", true, true, true)
+		got, _ := Discover(tervaHome, "", "", true, true, Gate{TrustProject: true})
 		s := FindByName(got, name)
 		if s == nil {
 			t.Fatalf("%q vanished entirely", name)
@@ -124,7 +124,7 @@ func TestBuiltinOutranksCompatDirsButNotNativeDirs(t *testing.T) {
 		userHome := filepath.Join(tmp, "user")
 		mkSkill(t, filepath.Join(userHome, ".claude", "skills"), name, "the foreign one")
 
-		got, _ := Discover(filepath.Join(tmp, "home"), "", userHome, true, false /* includeBuiltin */, true)
+		got, _ := Discover(filepath.Join(tmp, "home"), "", userHome, true, false /* includeBuiltin */, Gate{TrustProject: true})
 		s := FindByName(got, name)
 		if s == nil || s.Description != "the foreign one" {
 			t.Fatalf("with built-ins dropped the .claude skill should take the name, got %+v", s)
@@ -140,7 +140,7 @@ func TestExtensionBundleStillLosesToUserSkills(t *testing.T) {
 	mkSkill(t, filepath.Join(tervaHome, "skills"), "shared", "mine")
 	mkExtension(t, filepath.Join(tervaHome, "extensions"), "widgets", "shared", "the bundle's")
 
-	got, _ := Discover(tervaHome, "", "", true, true, true)
+	got, _ := Discover(tervaHome, "", "", true, true, Gate{TrustProject: true})
 	if s := FindByName(got, "shared"); s == nil || s.Description != "mine" {
 		t.Fatalf("a bundle shadowed a deliberately-written skill: %+v", s)
 	}

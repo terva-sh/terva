@@ -1,3 +1,4 @@
+import { errText } from '../../platform/ctrlproto/errors'
 import { useEffect, useState } from 'preact/hooks'
 import { t } from '../../i18n'
 import type { ClientLike } from '../../platform/ctrlproto/client'
@@ -126,9 +127,10 @@ export function formFromView(v: PersonaView): PersonaForm {
 
 // duplicateName proposes a free name for a copy. The daemon will NOT stop you
 // from creating a persona whose name matches a built-in — personas.create only
-// checks the USER layer — and such a persona silently shadows the built-in by
-// slug, which is exactly the fork this flow exists to avoid. So the collision
-// check is the client's, against the whole roster.
+// checks the USER layer — and the result is either a silent fork of that
+// built-in or a second roster entry wearing its name, depending on whether the
+// built-in is top-level. Both are what this flow exists to avoid, so the
+// collision check is the client's, against the whole roster.
 export function duplicateName(base: string, taken: string[]): string {
   const used = new Set(taken.map((n) => n.trim().toLowerCase()))
   const candidate = t('%s (my copy)', base)
@@ -157,7 +159,7 @@ export function slugPreview(name: string): string {
 //
 // It deliberately does NOT offer in-place editing of a built-in. The daemon
 // allows it — personas.edit on a built-in writes a user file that shadows it by
-// slug — but the result is a permanent, invisible fork: a later terva release
+// its ref — but the result is a permanent, invisible fork: a later terva release
 // that improves that charter would never reach you, and nothing in the UI would
 // ever say why. The sheet offers Duplicate for built-ins instead, which lands
 // here in create mode under a new name, so the built-in keeps flowing.
@@ -189,7 +191,7 @@ export function PersonaEditor(props: {
   useEffect(() => {
     if (!persona) return
     client
-      .send<PersonaView>('personas.get', { name: persona.ref })
+      .send<PersonaView>('personas.get', { ref: persona.ref })
       .then((v) => {
         const f = formFromView(v)
         // A duplicate keeps the charter and every other field — that is the
@@ -197,7 +199,7 @@ export function PersonaEditor(props: {
         // either conflict with your own or shadow the built-in it copied.
         setForm(duplicate ? { ...f, name: duplicateName(f.name, taken) } : f)
       })
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
   }, [persona?.ref, duplicate])
 
   const set = <K extends keyof PersonaForm>(key: K, value: PersonaForm[K]) => {
@@ -218,11 +220,18 @@ export function PersonaEditor(props: {
       // The whole form, always: a write replaces the file, so anything omitted
       // is erased rather than left alone.
       const params: PersonaWriteParams = { ...form }
-      await client.send<PersonaView>(creating ? 'personas.create' : 'personas.edit', params)
+      // An edit also says WHICH persona it overwrites, and the ref comes from
+      // the persona this editor opened rather than from the form — the name in
+      // the form is content the user may have just changed, and with two
+      // personas sharing one it names the wrong persona. A create sends no ref:
+      // there is nothing to overwrite, and duplicating is a create.
+      await (creating
+        ? client.send<PersonaView>('personas.create', params)
+        : client.send<PersonaView>('personas.edit', { ...params, ref: persona!.ref }))
       setSavedAt(true)
       onSaved()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     } finally {
       setSaving(false)
     }

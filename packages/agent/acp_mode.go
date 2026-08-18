@@ -1005,7 +1005,8 @@ func (f *acpFactory) skillSnapshot(cwd string) func() []*skills.Skill {
 	trusted := permissions.ResolveTrustState(cwd, f.args.Trust).IsTrusted()
 	return func() []*skills.Skill {
 		userHome, _ := os.UserHomeDir()
-		list, _ := skills.Discover(config.TervaHome(), cwd, userHome, f.args.WithSkills, !f.args.NoBuiltinSkills, trusted)
+		list, _ := skills.Discover(config.TervaHome(), cwd, userHome, f.args.WithSkills, !f.args.NoBuiltinSkills,
+			skills.Gate{TrustProject: trusted, Disabled: config.ResolveConfig(cwd, trusted).Config.DisableExtensions})
 		return skills.VisibleSkills(list)
 	}
 }

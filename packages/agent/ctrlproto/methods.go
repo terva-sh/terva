@@ -256,7 +256,7 @@ const (
 	MethodPersonasList   Method = "personas.list"   // result PersonasListResult
 	MethodPersonasGet    Method = "personas.get"    // params PersonaGetParams, result PersonaView
 	MethodPersonasCreate Method = "personas.create" // params PersonaWriteParams, result PersonaView
-	MethodPersonasEdit   Method = "personas.edit"   // params PersonaWriteParams, result PersonaView
+	MethodPersonasEdit   Method = "personas.edit"   // params PersonaEditParams, result PersonaView
 	MethodPersonasDelete Method = "personas.delete" // params PersonaDeleteParams
 
 	// Scene backdrops (optional; served only by a BackgroundsController). The

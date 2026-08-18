@@ -38,7 +38,6 @@
 package skills
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -47,6 +46,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"terva.sh/terva/packages/agent/extroots"
 	"terva.sh/terva/packages/envcompat"
 )
 
@@ -256,18 +256,28 @@ func Collisions(in []*Skill) []*Skill {
 	return out
 }
 
+// Gate is extroots.Gate — what this workspace is allowed to contribute.
+// Aliased rather than redeclared so skills, lore and the extension scanner
+// cannot drift into three shapes of the same answer, which is the failure this
+// whole seam exists to prevent.
+type Gate = extroots.Gate
+
 // Discover returns the merged skill set. When includeUser is true,
 // user-installed SKILL.md files are loaded; includeBuiltin controls
 // the skills compiled into the binary. Callers normally pass true for
 // both; --no-skill skips discovery entirely before this function is
 // called.
 //
-// trustProject gates the PROJECT-local skill dirs (./.terva|.claude|
+// gate.TrustProject gates the PROJECT-local skill dirs (./.terva|.claude|
 // .agents/skills and extension-bundled skills under .terva/extensions).
 // When false (an untrusted workspace — the default), those project
 // dirs are dropped: a cloned repo cannot inject SKILL.md instructions
 // into the model's prompt. Built-in, user, and global skills load
 // regardless. See docs/plans/workspace-trust.md.
+//
+// gate.Disabled drops every skill shipped by an extension the operator has
+// switched off. It used to be absent, so a disabled extension went on
+// injecting its instructions after its tools and personas had gone.
 //
 // First-match-wins per name, in the ladder order of discoveryTiers.
 // The loser is NOT discarded: it is attached to the winner's Shadowed
@@ -276,10 +286,10 @@ func Collisions(in []*Skill) []*Skill {
 //
 // Errors per skill are returned alongside the partial result so a
 // single broken file doesn't suppress the rest.
-func Discover(tervaHome, cwd, userHome string, includeUser, includeBuiltin, trustProject bool) ([]*Skill, []error) {
+func Discover(tervaHome, cwd, userHome string, includeUser, includeBuiltin bool, gate Gate) ([]*Skill, []error) {
 	var errs []error
 	var candidates []*Skill
-	for _, t := range discoveryTiers(tervaHome, cwd, userHome, includeUser, includeBuiltin, trustProject) {
+	for _, t := range discoveryTiers(tervaHome, cwd, userHome, includeUser, includeBuiltin, gate) {
 		if t.builtin {
 			candidates = append(candidates, loadBuiltins()...)
 			continue
@@ -489,7 +499,8 @@ type tier struct {
 // a different runtime and were not authored against terva's built-ins
 // at all. --no-builtin-skills removes the rung entirely, handing the
 // bare names back to the tiers underneath.
-func discoveryTiers(tervaHome, cwd, userHome string, includeUser, includeBuiltin, trustProject bool) []tier {
+func discoveryTiers(tervaHome, cwd, userHome string, includeUser, includeBuiltin bool, gate Gate) []tier {
+	trustProject := gate.TrustProject
 	var out []tier
 	add := func(dir, label, namespace string) {
 		if dir == "" {
@@ -520,10 +531,10 @@ func discoveryTiers(tervaHome, cwd, userHome string, includeUser, includeBuiltin
 	// contribution — see docs/extensions.md). Ranked after the user's
 	// own dirs and the built-ins so a bundle can never shadow either,
 	// before the foreign-tool compat dirs. Project-ext bundles are
-	// gated on trust (extensionSkillTiers honors trustProject); the
+	// gated on trust (extensionSkillTiers honors the gate); the
 	// project extension wouldn't load untrusted anyway, so its skills
 	// can't either.
-	out = append(out, extensionSkillTiers(tervaHome, cwd, trustProject)...)
+	out = append(out, extensionSkillTiers(tervaHome, cwd, gate)...)
 	if cwd != "" && trustProject {
 		add(filepath.Join(cwd, ".claude", "skills"), "project (claude)", NamespaceClaude)
 	}
@@ -575,56 +586,33 @@ func scanTier(t tier) ([]*Skill, []error) {
 
 // extensionSkillTiers lists <extension>/skills for every enabled
 // installed extension, global ($TERVA_HOME/extensions) before
-// project (.terva/extensions, rename-aware spellings). Enabled-ness
-// comes from a minimal read of each extension.json — a disabled
-// extension contributes nothing, skills included.
-// trustProject gates the project extension roots: an untrusted workspace
-// contributes no project-ext-bundled skills (the project extension would
-// not load there either). Global ($TERVA_HOME/extensions) bundles always
-// contribute.
-func extensionSkillTiers(tervaHome, cwd string, trustProject bool) []tier {
-	var roots []string
-	if tervaHome != "" {
-		roots = append(roots, filepath.Join(tervaHome, "extensions"))
-	}
-	if cwd != "" && trustProject {
-		for _, dirName := range envcompat.ProjectDirNames() {
-			roots = append(roots, filepath.Join(cwd, dirName, "extensions"))
-		}
-	}
+// project (.terva/extensions, rename-aware spellings).
+//
+// Enabled-ness is extroots' answer, not one of three: the manifest's own
+// `enabled` flag AND the operator's resolved disable_extensions. Skills used to
+// honour only the first, so switching an extension off left it injecting
+// instructions into the prompt after its tools and personas had gone.
+//
+// gate.TrustProject gates the project extension roots: an untrusted workspace
+// contributes no project-ext-bundled skills (the project extension would not
+// load there either). Global ($TERVA_HOME/extensions) bundles always
+// contribute, subject to the same disable list.
+func extensionSkillTiers(tervaHome, cwd string, gate Gate) []tier {
 	var out []tier
-	for _, root := range roots {
-		entries, err := os.ReadDir(root)
-		if err != nil {
+	for _, r := range extroots.Enabled(tervaHome, cwd, gate) {
+		skillsDir, ok := r.SubDir("skills")
+		if !ok {
 			continue
 		}
-		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			extDir := filepath.Join(root, e.Name())
-			mb, err := os.ReadFile(filepath.Join(extDir, "extension.json"))
-			if err != nil {
-				continue
-			}
-			var m struct {
-				Enabled *bool `json:"enabled"`
-			}
-			if json.Unmarshal(mb, &m) != nil {
-				continue
-			}
-			if m.Enabled != nil && !*m.Enabled {
-				continue
-			}
-			skillsDir := filepath.Join(extDir, "skills")
-			if st, err := os.Stat(skillsDir); err == nil && st.IsDir() {
-				out = append(out, tier{
-					dir:       skillsDir,
-					label:     "extension",
-					namespace: NamespaceExtPrefix + sanitizeName(e.Name()),
-				})
-			}
-		}
+		out = append(out, tier{
+			dir:   skillsDir,
+			label: "extension",
+			// 🪤 The DIRECTORY name, not extroots' preferred name. Persona
+			// namespaces by the manifest name; changing either here would
+			// rename live refs, so the mismatch is recorded in extroots.Root
+			// rather than resolved on the way past.
+			namespace: NamespaceExtPrefix + sanitizeName(r.DirName),
+		})
 	}
 	return out
 }

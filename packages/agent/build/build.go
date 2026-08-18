@@ -572,14 +572,30 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		trusted = *args.TrustPin
 	}
 
-	// eff is the layered (project-over-user) read view; cfg is the pristine,
-	// writable user layer. Every existing read/repair below stays on cfg so
-	// behaviour is unchanged and the model-repair paths only ever persist the
-	// user config. eff.ContextFiles (project-or-user, resolved absolute) feeds
-	// startup context-file injection; the project context_files layer is
-	// dropped when the workspace is untrusted (trusted=false).
+	// THE RULE, and it is one sentence: read through eff.Config, write through
+	// cfg. Nothing below reads a setting off cfg to decide behaviour.
+	//
+	// eff.Config is the layered project-over-user view; cfg is the pristine,
+	// writable user layer, and it exists here only so the model-repair paths
+	// persist to the USER config rather than writing a project's value back
+	// into someone's home.
+	//
+	// This comment used to say the opposite — "every existing read/repair below
+	// stays on cfg" — and was already false when written: Provider, Model,
+	// LazyToolsOn, EngineFeatures and Escalation all read eff.Config. The two
+	// views were interchangeable for everything ResolveConfig does not layer,
+	// so ~15 reads picked one arbitrarily and nothing noticed.
+	//
+	// What that cost, latently: ResolveConfig layers seven fields today. Add an
+	// eighth — "pin the thinking level per repo" is the obvious request — and
+	// every read still on cfg silently ignores the project's value. No error,
+	// no warning, and build tests seed the USER config, so nothing fails.
+	//
+	// Whether a project may override a setting is therefore decided in exactly
+	// one place, config.ResolveConfig, where the trust gate already lives.
+	// TestResolveReadsSettingsThroughTheLayeredView holds this.
 	eff := config.ResolveConfig(args.CWD, trusted)
-	cfg := eff.User
+	cfg := eff.User // repairs only — see the rule above
 
 	// User-requested provider (explicit > config > default).
 	// Normalise common aliases (e.g. "bedrock" -> "amazon-bedrock")
@@ -644,7 +660,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	if provName == "ollama" {
 		cred = firstNonEmpty(args.APIKey, "ollama")
 		method = "apikey"
-	} else if ep, ok := cfg.Endpoints[provName]; ok {
+	} else if ep, ok := eff.Config.Endpoints[provName]; ok {
 		// A user-defined named OpenAI-compatible endpoint: like
 		// openai-compatible, but its base URL + default context come from the
 		// config entry, and its Key (if any) resolves from APIKeyEnv/auth.json.
@@ -699,7 +715,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 			// could actually reach and report "no credential for anthropic".
 			// Endpoints sort after the built-ins in ProviderIDs, so this is the
 			// last resort it should be.
-			if ep, ok := cfg.Endpoints[other]; ok {
+			if ep, ok := eff.Config.Endpoints[other]; ok {
 				// Only if it can actually run something. An endpoint whose models
 				// have not been discovered has no model id to offer, and falling
 				// back onto it would trade "not logged in" — which boots, and
@@ -952,7 +968,8 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		// .terva|.claude|.agents/skills are skipped so a cloned repo can't
 		// inject SKILL.md instructions. Built-in/user/global skills load
 		// regardless.
-		discovered, _ = skills.Discover(config.TervaHome(), args.CWD, homeDir, args.WithSkills, !args.NoBuiltinSkills, trusted)
+		discovered, _ = skills.Discover(config.TervaHome(), args.CWD, homeDir, args.WithSkills, !args.NoBuiltinSkills,
+			skills.Gate{TrustProject: trusted, Disabled: eff.Config.DisableExtensions})
 		if len(discovered) > 0 {
 			skillTool = skills.NewTool(discovered)
 			reg[skillTool.Name()] = skillTool
@@ -1002,8 +1019,9 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	var loreTriggered []lore.Entry
 	var loreConfig lore.Config
 	var loreActive []lore.Entry
-	if !args.NoLore && (cfg.Lore == nil || *cfg.Lore) {
-		loreEntries, lc, _ := lore.Discover(config.TervaHome(), args.CWD, trusted)
+	if !args.NoLore && (eff.Config.Lore == nil || *eff.Config.Lore) {
+		loreEntries, lc, _ := lore.Discover(config.TervaHome(), args.CWD,
+			lore.Gate{TrustProject: trusted, Disabled: eff.Config.DisableExtensions})
 		loreConfig = lc
 		var constant []lore.Entry
 		constant, loreTriggered = lore.Partition(loreEntries)
@@ -1155,7 +1173,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		cardIntroOverride = ci.introOverride
 		cardIntroSource = ci.introSource
 		cardPostHistory = ci.postHistory
-		if !args.NoLore && (cfg.Lore == nil || *cfg.Lore) {
+		if !args.NoLore && (eff.Config.Lore == nil || *eff.Config.Lore) {
 			cc, ct := lore.Partition(ci.lore)
 			if blk := lore.PlaceConstant(cc); blk != "" {
 				append_ = append(append_, PromptSegment{Source: SourceCardCharacterBook, Text: blk})
@@ -1228,7 +1246,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// The set-signal is the RAW value (before normalizing): a non-empty raw
 	// level — including "off"/"none", which normalize to "" — is an explicit
 	// choice. Empty raw ⇒ unset ⇒ fall through to the catalog default.
-	rawReasoning := resolveRawReasoning(args.Reasoning, resolvedModel, cfg.Reasoning)
+	rawReasoning := resolveRawReasoning(args.Reasoning, resolvedModel, eff.Config.Reasoning)
 	reasoning := provider.NormalizeReasoning(rawReasoning)
 	reasoningSet := rawReasoning != ""
 	// Temperature fall-through: --temperature flag > per-model (models.json) >
@@ -1239,7 +1257,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		temperature = resolvedModel.Temperature
 	}
 	if temperature == nil {
-		temperature = cfg.Temperature
+		temperature = eff.Config.Temperature
 	}
 	if resolvedModel.AdaptiveThinking {
 		temperature = nil
@@ -1249,11 +1267,11 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// enabled; the per-model CapImageOutput gate is applied per-turn in the
 	// core agent so a model swap toggles it without a rebuild.
 	var imageOutput *provider.ImageOutputConfig
-	if cfg.NativeOutput.IsEnabled() {
+	if eff.Config.NativeOutput.IsEnabled() {
 		imageOutput = &provider.ImageOutputConfig{
-			Size:        cfg.NativeOutput.Size,
-			Quality:     cfg.NativeOutput.Quality,
-			EditHistory: cfg.NativeOutput.EditHistoryOr(1),
+			Size:        eff.Config.NativeOutput.Size,
+			Quality:     eff.Config.NativeOutput.Quality,
+			EditHistory: eff.Config.NativeOutput.EditHistoryOr(1),
 		}
 	}
 
@@ -1270,8 +1288,8 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		CWD:                      args.CWD,
 		Reasoning:                reasoning,
 		ReasoningSet:             reasoningSet,
-		ReasoningSummary:         provider.NormalizeReasoningSummary(cfg.ReasoningSummary),
-		ShowReasoning:            cfg.ShowReasoning,
+		ReasoningSummary:         provider.NormalizeReasoningSummary(eff.Config.ReasoningSummary),
+		ShowReasoning:            eff.Config.ShowReasoning,
 		Temperature:              temperature,
 		ImageOutput:              imageOutput,
 		Insecure:                 args.Insecure,

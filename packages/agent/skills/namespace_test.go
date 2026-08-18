@@ -21,7 +21,7 @@ func TestShadowedSkillsAreRecordedNotDropped(t *testing.T) {
 	mkSkill(t, filepath.Join(cwd, ".claude", "skills"), name, "the foreign project one")
 	mkSkill(t, filepath.Join(userHome, ".claude", "skills"), name, "the foreign global one")
 
-	got, _ := Discover(tervaHome, cwd, userHome, true, true, true)
+	got, _ := Discover(tervaHome, cwd, userHome, true, true, Gate{TrustProject: true})
 	winner := FindByName(got, name)
 	if winner == nil || !winner.Builtin {
 		t.Fatalf("expected the built-in to win %q, got %+v", name, winner)
@@ -47,7 +47,7 @@ func TestShadowedSkillsAreRecordedNotDropped(t *testing.T) {
 	}
 	// An uncontested skill carries neither.
 	mkSkill(t, filepath.Join(userHome, ".claude", "skills"), "uncontested", "alone")
-	got, _ = Discover(tervaHome, cwd, userHome, true, true, true)
+	got, _ = Discover(tervaHome, cwd, userHome, true, true, Gate{TrustProject: true})
 	solo := FindByName(got, "uncontested")
 	if solo == nil || len(solo.Shadowed) != 0 || solo.ShadowedBy != nil {
 		t.Errorf("an uncontested skill should carry no collision state, got %+v", solo)
@@ -66,7 +66,7 @@ func TestResolveBareAndQualified(t *testing.T) {
 	mkSkill(t, filepath.Join(userHome, ".agents", "skills"), "solo", "only in agents")
 	mkExtension(t, filepath.Join(tervaHome, "extensions"), "web", "research", "bundled research")
 
-	got, _ := Discover(tervaHome, cwd, userHome, true, true, true)
+	got, _ := Discover(tervaHome, cwd, userHome, true, true, Gate{TrustProject: true})
 
 	cases := []struct {
 		ref         string
@@ -120,7 +120,7 @@ func TestResolveTervaPrefersNativeOverBuiltin(t *testing.T) {
 	tervaHome := filepath.Join(tmp, "home")
 	mkSkill(t, filepath.Join(tervaHome, "skills"), name, "mine")
 
-	got, _ := Discover(tervaHome, "", "", true, true, true)
+	got, _ := Discover(tervaHome, "", "", true, true, Gate{TrustProject: true})
 	s := Resolve(got, NamespaceTerva+":"+name)
 	if s == nil || s.Description != "mine" {
 		t.Fatalf("terva:%s = %+v, want the native skill", name, s)
@@ -141,7 +141,7 @@ func TestRefRoundTripsThroughResolve(t *testing.T) {
 	mkSkill(t, filepath.Join(userHome, ".claude", "skills"), name, "the claude one")
 	mkSkill(t, filepath.Join(userHome, ".claude", "skills"), "solo", "alone")
 
-	got, _ := Discover(tervaHome, "", userHome, true, true, true)
+	got, _ := Discover(tervaHome, "", userHome, true, true, Gate{TrustProject: true})
 	for _, s := range got {
 		for _, want := range append([]*Skill{s}, s.Shadowed...) {
 			if back := Resolve(got, want.Ref()); back != want {
@@ -164,7 +164,7 @@ func TestVisibleSkillsShowsBothHalvesOfACollision(t *testing.T) {
 	userHome := filepath.Join(tmp, "user")
 	mkSkill(t, filepath.Join(userHome, ".claude", "skills"), name, "the claude one")
 
-	got, _ := Discover(tervaHome, "", userHome, true, true, true)
+	got, _ := Discover(tervaHome, "", userHome, true, true, Gate{TrustProject: true})
 	vis := VisibleSkills(got)
 
 	var found, winner *Skill
@@ -201,7 +201,7 @@ func TestSystemPromptAddendumOmitsShadowed(t *testing.T) {
 	userHome := filepath.Join(tmp, "user")
 	mkSkill(t, filepath.Join(userHome, ".claude", "skills"), name, "SHADOWED-MARKER")
 
-	got, _ := Discover(filepath.Join(tmp, "home"), "", userHome, true, true, true)
+	got, _ := Discover(filepath.Join(tmp, "home"), "", userHome, true, true, Gate{TrustProject: true})
 	addendum := SystemPromptAddendum(got)
 	if strings.Contains(addendum, "SHADOWED-MARKER") {
 		t.Errorf("a shadowed skill must not reach the model's manifest:\n%s", addendum)
@@ -227,7 +227,7 @@ func TestReservedSeparatorInNameIsRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, errs := Discover(tervaHome, "", "", true, false, true)
+	got, errs := Discover(tervaHome, "", "", true, false, Gate{TrustProject: true})
 	if len(got) != 1 {
 		t.Fatalf("expected the skill to still load, got %d", len(got))
 	}
@@ -251,7 +251,7 @@ func TestCollisionsReportsWinnersOnly(t *testing.T) {
 	mkSkill(t, filepath.Join(userHome, ".claude", "skills"), name, "collides")
 	mkSkill(t, filepath.Join(userHome, ".claude", "skills"), "uncontested", "no collision")
 
-	got, _ := Discover(tervaHome, "", userHome, true, true, true)
+	got, _ := Discover(tervaHome, "", userHome, true, true, Gate{TrustProject: true})
 	col := Collisions(got)
 	if len(col) != 1 {
 		t.Fatalf("expected exactly 1 collision, got %d", len(col))

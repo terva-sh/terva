@@ -401,13 +401,18 @@ type Extension struct {
 	stderr  io.Writer
 	writeMu sync.Mutex
 
-	mu                 sync.Mutex
-	commands           map[string]CommandHandler
-	descriptions       []descTuple // ordered so register frames arrive in registration order
-	tools              map[string]ToolHandler
-	toolDefs           []toolDef       // ordered so register frames arrive in registration order
-	orderedTools       map[string]bool // tools marked Sequential() — run through the serial lane
-	serial             *serialLane     // single FIFO lane for Sequential tools; nil until Run if none
+	mu           sync.Mutex
+	commands     map[string]CommandHandler
+	descriptions []descTuple // ordered so register frames arrive in registration order
+	tools        map[string]ToolHandler
+	toolDefs     []toolDef       // ordered so register frames arrive in registration order
+	orderedTools map[string]bool // tools marked Sequential() — run through the serial lane
+	serial       *serialLane     // single FIFO lane for Sequential tools; nil until Run if none
+	// eventLane runs host EVENT handlers off the read loop, one at a time in
+	// arrival order. See the note at the dispatch site: handlers used to run
+	// inline on the read loop, so a request issued from one could never be
+	// answered.
+	eventLane          *serialLane
 	eventHandlers      map[string]EventHandler
 	eventNames         []string // declared subscription order
 	onSession          func(Session)
@@ -1094,8 +1099,19 @@ func (e *Extension) OnCompaction(fn func(Compaction)) {
 // OnCompactStart registers a handler that fires when the host is ABOUT to
 // compact the transcript — the pre-event paired with OnCompaction (post).
 // Because compaction runs a slow LLM summarization, the handler has time
-// to read the full session (read_session) and harvest detail before it's
+// to read the full session (ReadSession) and harvest detail before it's
 // summarized away. Purely additive and opt-in.
+//
+// That read genuinely works: every On* handler runs on the SDK's event lane,
+// not on the read loop, so a handler may issue host requests (ReadSession,
+// ListSessions, HostToolCall, the Secret verbs) and wait for their replies.
+// It did not always — handlers ran inline on the read loop, which is the only
+// goroutine that can deliver a reply, so this exact recommendation deadlocked
+// until the 30s request timeout and harvested nothing.
+//
+// Handlers are SERIALIZED in arrival order, so a slow one delays later events
+// (not tool calls, panels, or the wire). Do the bounded part here and hand
+// anything long-running to your own goroutine.
 func (e *Extension) OnCompactStart(fn func(CompactStart)) {
 	e.mu.Lock()
 	e.onCompactStart = fn
@@ -1377,9 +1393,14 @@ func (e *Extension) withSessionBoundary(fn func()) {
 // extension *initiates* that expect a reply. nextID mints a correlation
 // id; request registers a reply slot, sends the frame, and blocks until
 // the matching reply lands (routed by the Run loop), the timeout fires,
-// or the wire is sent but never answered. Tool/command handlers already
-// run on their own goroutines, so blocking here blocks that handler, not
-// the read loop.
+// or the wire is sent but never answered.
+//
+// Blocking here is safe from every handler the SDK dispatches: tool and command
+// handlers run on their own goroutines, and EVENT handlers run on the event lane
+// (see Run). None of them is the read loop, which is what must stay free to
+// deliver the reply being waited on. Event handlers were the exception until the
+// lane existed — this note used to read "Tool/command handlers already run on
+// their own goroutines", which was true and was read as covering everything.
 
 const defaultRequestTimeout = 30 * time.Second
 
@@ -1412,6 +1433,16 @@ func (e *Extension) request(id string, frame any, timeout time.Duration) (json.R
 
 // deliverReply routes a reply frame to the waiting request by id. Called
 // from the Run loop for host_tool_result / session_list / session_data.
+// isPending reports whether a caller is waiting on this request id. It is what
+// lets the read loop recognise a reply by the fact that someone asked, rather
+// than by the reply's verb appearing in a hand-written list.
+func (e *Extension) isPending(id string) bool {
+	e.pendingMu.Lock()
+	_, ok := e.pending[id]
+	e.pendingMu.Unlock()
+	return ok
+}
+
 func (e *Extension) deliverReply(id string, line json.RawMessage) {
 	e.pendingMu.Lock()
 	ch := e.pending[id]
@@ -1715,6 +1746,11 @@ func (e *Extension) Run() error {
 	// single oversized inbound frame (e.g. a huge tool-call argument the
 	// host forwards) is logged and skipped instead of killing Run() and
 	// taking every tool and panel down with it.
+	// The event lane. Created here rather than lazily so the read loop never has
+	// to nil-check it, and closed on the way out so queued handlers finish.
+	e.eventLane = newSerialLane()
+	defer e.eventLane.close()
+
 	reader := bufio.NewReaderSize(e.in, 64*1024)
 	for {
 		line, tooLong, rerr := extproto.ReadFrame(reader)
@@ -1870,112 +1906,138 @@ func (e *Extension) Run() error {
 				onConfig = e.onConfig
 			}
 			e.mu.Unlock()
-			if onSession != nil {
-				e.withSessionBoundary(func() {
-					defer func() {
-						if r := recover(); r != nil {
-							e.Logf("OnSession handler panicked: %v", r)
-						}
-					}()
-					onSession(Session{ID: ef.SessionID, Path: ef.SessionPath, Title: ef.SessionTitle, CWD: ef.CWD, ProjectID: ef.ProjectID, e: e})
-				})
-			}
-			if onSessionEnd != nil {
-				e.withSessionBoundary(func() {
-					defer func() {
-						if r := recover(); r != nil {
-							e.Logf("OnSessionEnd handler panicked: %v", r)
-						}
-					}()
-					onSessionEnd(Session{ID: ef.SessionID, Path: ef.SessionPath, Title: ef.SessionTitle, CWD: ef.CWD, ProjectID: ef.ProjectID, e: e})
-				})
-			}
-			if onCompaction != nil {
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							e.Logf("OnCompaction handler panicked: %v", r)
-						}
-					}()
-					onCompaction(Compaction{})
-				}()
-			}
-			if onCompactStart != nil {
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							e.Logf("OnCompactStart handler panicked: %v", r)
-						}
-					}()
-					onCompactStart(CompactStart{Reason: ef.Text})
-				}()
-			}
-			if onRunEnd != nil {
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							e.Logf("OnRunEnd handler panicked: %v", r)
-						}
-					}()
-					onRunEnd(RunEnd{})
-				}()
-			}
-			if onUserMessage != nil {
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							e.Logf("OnUserMessage handler panicked: %v", r)
-						}
-					}()
-					onUserMessage(UserMessage{Text: ef.Text})
-				}()
-			}
-			if onWorkspaceChanged != nil {
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							e.Logf("OnWorkspaceChanged handler panicked: %v", r)
-						}
-					}()
-					files := make([]FileChange, len(ef.Files))
-					for i, fc := range ef.Files {
-						files[i] = FileChange{Path: fc.Path, Change: fc.Change}
-					}
-					onWorkspaceChanged(WorkspaceChange{Files: files})
-				}()
-			}
-			if onConfig != nil {
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							e.Logf("OnConfig handler panicked: %v", r)
-						}
-					}()
-					onConfig(Config(ef.Config))
-				}()
-			}
-			if handler != nil {
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							e.Logf("event %s handler panicked: %v", ef.Event, r)
-						}
-					}()
-					evFiles := make([]FileChange, len(ef.Files))
-					for i, fc := range ef.Files {
-						evFiles[i] = FileChange{Path: fc.Path, Change: fc.Change}
-					}
-					handler(Event{
-						Name: ef.Event, Step: ef.Step, Stop: ef.Stop,
-						Error: ef.Error, ToolID: ef.ToolID, ToolName: ef.ToolName,
-						ToolArgs: ef.ToolArgs, Text: ef.Text,
-						SessionID: ef.SessionID, SessionPath: ef.SessionPath, SessionTitle: ef.SessionTitle,
-						CWD: ef.CWD, ProjectID: ef.ProjectID,
-						Files:  evFiles,
-						Config: Config(ef.Config),
+			// Off the read loop, onto the event lane.
+			//
+			// These handlers used to run INLINE here, and the read loop is the
+			// only goroutine that can deliver a reply to a request a handler
+			// makes. So the pattern OnCompactStart's own godoc recommends — "the
+			// handler has time to read the full session (read_session) and
+			// harvest detail before it's summarized away" — deadlocked: the host
+			// answered promptly, the reply sat unread in the pipe, and the
+			// extension went wire-dead for 30s (no tool_call, no event, no
+			// panel_key) before ReadSession returned a timeout. The memory and
+			// index extensions the feature exists for harvested nothing. The same
+			// trap applied to every On* handler, to HostToolCall and to the
+			// Secret verbs.
+			//
+			// A SERIAL lane rather than a goroutine per event: handlers stay in
+			// arrival order, which inline dispatch guaranteed and which
+			// OnSession/OnSessionEnd depend on. Unbounded in memory, so
+			// submitting can never block the read loop — a bounded queue would
+			// reintroduce the same deadlock at a lower rate, which is worse than
+			// either answer.
+			//
+			// Host()'s session fields are still updated inline above, before this
+			// is queued, so a tool handler racing an event sees the same session
+			// either way.
+			e.eventLane.submit(func() {
+				if onSession != nil {
+					e.withSessionBoundary(func() {
+						defer func() {
+							if r := recover(); r != nil {
+								e.Logf("OnSession handler panicked: %v", r)
+							}
+						}()
+						onSession(Session{ID: ef.SessionID, Path: ef.SessionPath, Title: ef.SessionTitle, CWD: ef.CWD, ProjectID: ef.ProjectID, e: e})
 					})
-				}()
-			}
+				}
+				if onSessionEnd != nil {
+					e.withSessionBoundary(func() {
+						defer func() {
+							if r := recover(); r != nil {
+								e.Logf("OnSessionEnd handler panicked: %v", r)
+							}
+						}()
+						onSessionEnd(Session{ID: ef.SessionID, Path: ef.SessionPath, Title: ef.SessionTitle, CWD: ef.CWD, ProjectID: ef.ProjectID, e: e})
+					})
+				}
+				if onCompaction != nil {
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								e.Logf("OnCompaction handler panicked: %v", r)
+							}
+						}()
+						onCompaction(Compaction{})
+					}()
+				}
+				if onCompactStart != nil {
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								e.Logf("OnCompactStart handler panicked: %v", r)
+							}
+						}()
+						onCompactStart(CompactStart{Reason: ef.Text})
+					}()
+				}
+				if onRunEnd != nil {
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								e.Logf("OnRunEnd handler panicked: %v", r)
+							}
+						}()
+						onRunEnd(RunEnd{})
+					}()
+				}
+				if onUserMessage != nil {
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								e.Logf("OnUserMessage handler panicked: %v", r)
+							}
+						}()
+						onUserMessage(UserMessage{Text: ef.Text})
+					}()
+				}
+				if onWorkspaceChanged != nil {
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								e.Logf("OnWorkspaceChanged handler panicked: %v", r)
+							}
+						}()
+						files := make([]FileChange, len(ef.Files))
+						for i, fc := range ef.Files {
+							files[i] = FileChange{Path: fc.Path, Change: fc.Change}
+						}
+						onWorkspaceChanged(WorkspaceChange{Files: files})
+					}()
+				}
+				if onConfig != nil {
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								e.Logf("OnConfig handler panicked: %v", r)
+							}
+						}()
+						onConfig(Config(ef.Config))
+					}()
+				}
+				if handler != nil {
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								e.Logf("event %s handler panicked: %v", ef.Event, r)
+							}
+						}()
+						evFiles := make([]FileChange, len(ef.Files))
+						for i, fc := range ef.Files {
+							evFiles[i] = FileChange{Path: fc.Path, Change: fc.Change}
+						}
+						handler(Event{
+							Name: ef.Event, Step: ef.Step, Stop: ef.Stop,
+							Error: ef.Error, ToolID: ef.ToolID, ToolName: ef.ToolName,
+							ToolArgs: ef.ToolArgs, Text: ef.Text,
+							SessionID: ef.SessionID, SessionPath: ef.SessionPath, SessionTitle: ef.SessionTitle,
+							CWD: ef.CWD, ProjectID: ef.ProjectID,
+							Files:  evFiles,
+							Config: Config(ef.Config),
+						})
+					}()
+				}
+			})
 		case "event_intercept":
 			var ei extproto.EventInterceptFromHost
 			if err := json.Unmarshal(line, &ei); err != nil {
@@ -2004,10 +2066,17 @@ func (e *Extension) Run() error {
 			if h != nil {
 				go h()
 			}
-		case "host_tool_result", "session_list", "session_data":
-			// Replies to an ext-initiated request (protocol 3). Route to
-			// the waiting HostToolCall / ListSessions / ReadSession by id.
-			// ReadFrame returns a fresh copy, so the line is safe to hand off.
+		case "host_tool_result", "session_list", "session_data",
+			"secret_value", "secret_keys", "secret_ack":
+			// Replies to an ext-initiated request (protocol 3, and the
+			// protocol-6 secret verbs). Route to the waiting HostToolCall /
+			// ListSessions / ReadSession / Secret call by id. ReadFrame returns
+			// a fresh copy, so the line is safe to hand off.
+			//
+			// This list is now belt-and-braces: the default arm below routes any
+			// frame whose id is pending, so a reply verb added tomorrow works
+			// without being named here. Naming these keeps a reply that arrives
+			// AFTER its caller timed out from being logged as an unknown frame.
 			var f extproto.Frame
 			if err := json.Unmarshal(line, &f); err == nil && f.ID != "" {
 				e.deliverReply(f.ID, append(json.RawMessage(nil), line...))
@@ -2037,6 +2106,28 @@ func (e *Extension) Run() error {
 			_ = e.send(extproto.ShutdownAckFromExt{Type: "shutdown_ack"})
 			return nil
 		default:
+			// THE CHOKEPOINT for ext-initiated replies. A frame carrying an id
+			// that a caller is waiting on IS that caller's reply, whatever the
+			// verb is called.
+			//
+			// This exists because the hand-kept case list above was the bug. The
+			// protocol-6 secret verbs shipped with the host answering correctly
+			// and the SDK routing only three verb names, so secret_value,
+			// secret_keys and secret_ack all landed here and were logged as
+			// unknown. All four public Secret APIs blocked the full 30s request
+			// timeout and returned "timed out waiting for host reply" — an error
+			// that blames the host, which had replied. Shipped that way in every
+			// release from v0.131.2 to v0.131.10, and the observable behaviour
+			// pushed extension authors back to the plaintext token storage the
+			// feature exists to remove.
+			//
+			// A list of verbs cannot fail when a verb is added. Routing on the
+			// pending map can.
+			var f extproto.Frame
+			if err := json.Unmarshal(line, &f); err == nil && f.ID != "" && e.isPending(f.ID) {
+				e.deliverReply(f.ID, append(json.RawMessage(nil), line...))
+				continue
+			}
 			e.Logf("unknown frame type %q", frame.Type)
 		}
 	}

@@ -109,7 +109,8 @@ func reportSkillCollisions(w io.Writer) {
 	}
 	userHome, _ := os.UserHomeDir()
 	trusted := permissions.ResolveTrustState(cwd, false).IsTrusted()
-	found, errs := skills.Discover(config.TervaHome(), cwd, userHome, true, true, trusted)
+	found, errs := skills.Discover(config.TervaHome(), cwd, userHome, true, true,
+		skills.Gate{TrustProject: trusted, Disabled: config.ResolveConfig(cwd, trusted).Config.DisableExtensions})
 
 	summary := fmt.Sprintf("%d active", len(found))
 	if !trusted {

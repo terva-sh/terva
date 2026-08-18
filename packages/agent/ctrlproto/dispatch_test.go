@@ -218,8 +218,8 @@ func (r *recorder) SuggestReply(_ context.Context, sess string, p SuggestParams)
 	r.note("SuggestReply", sess, p)
 	return SuggestResult{}, nil
 }
-func (r *recorder) SuggestNextStep(_ context.Context, sess string) (NextStepResult, error) {
-	r.note("SuggestNextStep", sess, nil)
+func (r *recorder) SuggestNextStep(_ context.Context, sess string, p NextStepParams) (NextStepResult, error) {
+	r.note("SuggestNextStep", sess, p)
 	return NextStepResult{}, nil
 }
 func (r *recorder) UserBind(_ context.Context, sess string, p UserBindParams) error {
@@ -330,7 +330,7 @@ func (r *recorder) PersonasCreate(_ context.Context, p PersonaWriteParams) (Pers
 	r.note("PersonasCreate", "", p)
 	return PersonaView{}, nil
 }
-func (r *recorder) PersonasEdit(_ context.Context, p PersonaWriteParams) (PersonaView, error) {
+func (r *recorder) PersonasEdit(_ context.Context, p PersonaEditParams) (PersonaView, error) {
 	r.note("PersonasEdit", "", p)
 	return PersonaView{}, nil
 }
@@ -565,7 +565,7 @@ func dispatchCases() []dispatchCase {
 		{MethodPersonasList, nil, "PersonasList", nil},
 		{MethodPersonasGet, PersonaGetParams{Name: "kertoja"}, "PersonasGet", PersonaGetParams{Name: "kertoja"}},
 		{MethodPersonasCreate, PersonaWriteParams{Name: "made"}, "PersonasCreate", PersonaWriteParams{Name: "made"}},
-		{MethodPersonasEdit, PersonaWriteParams{Name: "changed"}, "PersonasEdit", PersonaWriteParams{Name: "changed"}},
+		{MethodPersonasEdit, PersonaEditParams{Ref: "changed"}, "PersonasEdit", PersonaEditParams{Ref: "changed"}},
 		// The incident itself: delete must NOT arrive as an empty-bodied edit.
 		{MethodPersonasDelete, PersonaDeleteParams{Name: "removed"}, "PersonasDelete", PersonaDeleteParams{Name: "removed"}},
 
@@ -668,7 +668,10 @@ func dispatchCases() []dispatchCase {
 		{MethodShellResult, ShellResultParams{Command: "git status", Output: "3 files changed"}, "ShellResult", ShellResultParams{Command: "git status", Output: "3 files changed"}},
 		{MethodUserBind, UserBindParams{Name: "bound"}, "UserBind", UserBindParams{Name: "bound"}},
 		{MethodSuggestReply, SuggestParams{}, "SuggestReply", nil},
-		{MethodSuggestNextStep, nil, "SuggestNextStep", nil},
+		// on_demand decides what the daemon tells the model about who asked, so a
+		// dropped param would silently downgrade every explicit /nextstep into an
+		// idle one — bound args asserted, not just the arm reached.
+		{MethodSuggestNextStep, NextStepParams{OnDemand: true}, "SuggestNextStep", NextStepParams{OnDemand: true}},
 		{MethodCardsDoctor, DoctorParams{ID: "checked"}, "CardsDoctor", DoctorParams{ID: "checked"}},
 		{MethodSessionsDoctor, SessionDoctorParams{}, "SessionsDoctor", nil},
 		{MethodWorldsDoctor, WorldDoctorParams{ID: "w-doc", Steer: "give her a rival"}, "WorldsDoctor", WorldDoctorParams{ID: "w-doc", Steer: "give her a rival"}},

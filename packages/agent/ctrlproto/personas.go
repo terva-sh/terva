@@ -1,6 +1,9 @@
 package ctrlproto
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // The persona library on the wire — the identity half of the content library.
 // Personas were CLI-only (terva persona list/validate/init); this brings them
@@ -22,9 +25,10 @@ type PersonasController interface {
 	// PersonasCreate writes a NEW persona to the user library. Trusted-tier;
 	// errors if a user persona of that name already exists (edit it instead).
 	PersonasCreate(ctx context.Context, p PersonaWriteParams) (PersonaView, error)
-	// PersonasEdit overwrites an existing persona (copy-to-edit for a built-in).
-	// Trusted-tier; errors if no persona of that name exists (create it instead).
-	PersonasEdit(ctx context.Context, p PersonaWriteParams) (PersonaView, error)
+	// PersonasEdit overwrites the persona its Ref names (copy-to-edit for a
+	// built-in). Trusted-tier; errors if no persona of that ref exists (create it
+	// instead).
+	PersonasEdit(ctx context.Context, p PersonaEditParams) (PersonaView, error)
 	// PersonasDelete removes a persona from the USER library. Trusted-tier.
 	//
 	// Only an on-disk user file can be deleted — the embedded crew and extension
@@ -36,15 +40,44 @@ type PersonasController interface {
 	PersonasDelete(ctx context.Context, p PersonaDeleteParams) error
 }
 
-// PersonaDeleteParams names the persona to remove from the user library.
-type PersonaDeleteParams struct {
-	Name string `json:"name"`
+// Every persona verb identifies a persona by its REF — "<namespace>:<stem>",
+// what personas.list publishes and what Persona.Ref() prints. A bare stem or
+// display name still resolves, because the library's matcher accepts both.
+//
+// It is spelled `ref` and not `name` because on a WRITE the two are different
+// things: the ref says which persona is being overwritten, the name is content
+// the write may change. They were the same field, and the conflation is not
+// theoretical — the editor opened a persona by ref and saved it by name, so
+// with two personas sharing a name it could write over the wrong one.
+//
+// `name` is still accepted wherever it used to be, so a client that predates
+// this keeps working; personaQuery is the single place that prefers one.
+func personaQuery(ref, name string) string {
+	if r := strings.TrimSpace(ref); r != "" {
+		return r
+	}
+	return strings.TrimSpace(name)
 }
 
-// PersonaGetParams names a persona by a bare name/stem or "namespace:name" ref.
-type PersonaGetParams struct {
-	Name string `json:"name"`
+// PersonaDeleteParams names the persona to remove from the user library.
+type PersonaDeleteParams struct {
+	Ref string `json:"ref,omitempty"`
+	// Name is the pre-ref spelling of Ref. Deprecated; still honoured.
+	Name string `json:"name,omitempty"`
 }
+
+// Query is the persona this call names.
+func (p PersonaDeleteParams) Query() string { return personaQuery(p.Ref, p.Name) }
+
+// PersonaGetParams names a persona to read.
+type PersonaGetParams struct {
+	Ref string `json:"ref,omitempty"`
+	// Name is the pre-ref spelling of Ref. Deprecated; still honoured.
+	Name string `json:"name,omitempty"`
+}
+
+// Query is the persona this call names.
+func (p PersonaGetParams) Query() string { return personaQuery(p.Ref, p.Name) }
 
 // PersonaWriteParams is the editable persona form. Name is required; Charter is
 // the behavioral body. Immersive makes the charter own the whole system prompt
@@ -69,6 +102,29 @@ type PersonaWriteParams struct {
 	// the same class of quiet loss `extends` exists to fix.
 	Extends string `json:"extends,omitempty"`
 }
+
+// PersonaEditParams is a write plus the persona it OVERWRITES.
+//
+// Split from PersonaWriteParams rather than being one more field on it, because
+// Ref is not part of the persona: everything in a write params is content that
+// must survive the file round trip, and a workspace test enrolls those fields
+// and requires exactly that. A ref would have had to be argued out of it.
+//
+// The split says the same thing in the type system, and says one thing more —
+// a create has nothing to overwrite, so it cannot be handed a ref to obey by
+// mistake. That is why personas.create keeps taking the bare write params.
+//
+// Ref is identity and Name is content, which is the distinction the single
+// `name` field could not express: an edit that changes the name still targets
+// the persona Ref resolves to. An empty Ref falls back to Name, so a client
+// written before this keeps working.
+type PersonaEditParams struct {
+	Ref string `json:"ref,omitempty"`
+	PersonaWriteParams
+}
+
+// Target is the persona this edit overwrites.
+func (p PersonaEditParams) Target() string { return personaQuery(p.Ref, p.Name) }
 
 // PersonasListResult is the payload of personas.list.
 type PersonasListResult struct {

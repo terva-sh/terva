@@ -18,7 +18,7 @@ func TestDisableModelInvocationHidesFromManifestOnly(t *testing.T) {
 	mkSkill(t, dir, "human-only", "Only by hand.", "disable-model-invocation: true")
 	mkSkill(t, dir, "ordinary", "Anyone may pick this.")
 
-	got, _ := Discover(tervaHome, "", "", true, false, true)
+	got, _ := Discover(tervaHome, "", "", true, false, Gate{TrustProject: true})
 	addendum := SystemPromptAddendum(got)
 	if strings.Contains(addendum, "human-only") {
 		t.Errorf("a disable-model-invocation skill must not be advertised to the model:\n%s", addendum)
@@ -49,7 +49,7 @@ func TestDisableModelInvocationUnderscoreSpelling(t *testing.T) {
 	tervaHome := filepath.Join(tmp, "home")
 	mkSkill(t, filepath.Join(tervaHome, "skills"), "human-only-alt", "Only by hand.", "disable_model_invocation: true")
 
-	got, _ := Discover(tervaHome, "", "", true, false, true)
+	got, _ := Discover(tervaHome, "", "", true, false, Gate{TrustProject: true})
 	if strings.Contains(SystemPromptAddendum(got), "human-only-alt") {
 		t.Error("the underscore spelling of disable-model-invocation was ignored")
 	}
@@ -62,7 +62,7 @@ func TestSystemPromptAddendumEmptyWhenAllHidden(t *testing.T) {
 	tervaHome := filepath.Join(tmp, "home")
 	mkSkill(t, filepath.Join(tervaHome, "skills"), "hidden", "Nope.", "disable-model-invocation: true")
 
-	got, _ := Discover(tervaHome, "", "", true, false, true)
+	got, _ := Discover(tervaHome, "", "", true, false, Gate{TrustProject: true})
 	if len(got) != 1 {
 		t.Fatalf("expected the skill to load, got %d", len(got))
 	}
@@ -100,7 +100,7 @@ func TestArgumentHintDoesNotDisableModelInvocation(t *testing.T) {
 	tervaHome := filepath.Join(tmp, "home")
 	mkSkill(t, filepath.Join(tervaHome, "skills"), "hinted", "Still pickable.", `argument-hint: "a target"`)
 
-	got, _ := Discover(tervaHome, "", "", true, false, true)
+	got, _ := Discover(tervaHome, "", "", true, false, Gate{TrustProject: true})
 	if !strings.Contains(SystemPromptAddendum(got), "hinted") {
 		t.Error("an argument-hint must not remove a skill from the model's manifest")
 	}

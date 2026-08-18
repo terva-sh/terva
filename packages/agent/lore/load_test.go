@@ -43,7 +43,7 @@ func TestDiscover_TiersAndTrustGating(t *testing.T) {
 	writeFile(t, filepath.Join(cwd, ".terva", "lore", "proj.md"), "---\nname: Proj\nkeys: [proj]\n---\nproj body")
 
 	// Trusted: personal, extension, and project tiers all contribute.
-	entries, cfg, errs := Discover(home, cwd, true)
+	entries, cfg, errs := Discover(home, cwd, Gate{TrustProject: true})
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errors: %v", errs)
 	}
@@ -60,7 +60,7 @@ func TestDiscover_TiersAndTrustGating(t *testing.T) {
 	}
 
 	// Untrusted: project tier withheld, global tiers intact.
-	entries, _, _ = Discover(home, cwd, false)
+	entries, _, _ = Discover(home, cwd, Gate{TrustProject: false})
 	if entryByName(entries, "Proj") {
 		t.Errorf("untrusted workspace must not load project lore")
 	}
@@ -77,7 +77,7 @@ func TestDiscover_ProjectConfigWins(t *testing.T) {
 	writeFile(t, filepath.Join(cwd, ".terva", "lore", "lore.json"), `{"token_budget": 200}`)
 	writeFile(t, filepath.Join(cwd, ".terva", "lore", "b.md"), "---\nname: B\nconstant: true\n---\ny")
 
-	_, cfg, _ := Discover(home, cwd, true)
+	_, cfg, _ := Discover(home, cwd, Gate{TrustProject: true})
 	if cfg.TokenBudget != 200 {
 		t.Errorf("project lore.json should win: got budget %d, want 200", cfg.TokenBudget)
 	}
@@ -87,7 +87,7 @@ func TestDiscover_BadEntryReportedNotFatal(t *testing.T) {
 	home := testsupport.TempDir(t)
 	writeFile(t, filepath.Join(home, "lore", "good.md"), "---\nname: Good\nkeys: [g]\n---\nok")
 	writeFile(t, filepath.Join(home, "lore", "bad.md"), "---\nname: Bad\n---\nno keys, not constant")
-	entries, _, errs := Discover(home, "", false)
+	entries, _, errs := Discover(home, "", Gate{TrustProject: false})
 	if len(errs) == 0 {
 		t.Errorf("expected an error for the bad entry")
 	}
@@ -123,7 +123,7 @@ func TestExtensionLoreIgnoresTheRunAllowlist(t *testing.T) {
 	// A disabled manifest is the mechanism that DOES exclude a bundle.
 	ext("archive", "archive", `,"enabled":false`, "archive-lore")
 
-	dirs := extensionLoreDirs(home, "", false)
+	dirs := extensionLoreDirs(home, "", Gate{TrustProject: false})
 	has := func(want string) bool {
 		for _, d := range dirs {
 			if filepath.Base(filepath.Dir(d)) == want {
