@@ -1388,6 +1388,9 @@ func replaySessionWith(path string, stub InterruptStub, onCompact func(out, befo
 	// symptom this replay removes) and the restore path wants the set.
 	var activeGroups []string
 	activeGroupSeen := map[string]bool{}
+	// renamed records that a rename row has been folded, so a later meta row
+	// cannot revert the title it set. See the onMeta hook below.
+	renamed := false
 	start := time.Now()
 	messages, walkErr = walkSession(f, rep, sessionWalkHooks{
 		onCompaction: func(out, before []provider.Message, _ int, _ []byte) {
@@ -1396,8 +1399,25 @@ func replaySessionWith(path string, stub InterruptStub, onCompact func(out, befo
 			}
 		},
 		onMeta: func(m SessionMeta, _ []byte) {
-			meta = m
-			titleGenerated = false
+			// A rename row is an explicit naming act and outranks any LATER
+			// meta row's Title, which is stale by construction: no rename path
+			// writes the new name back into the live Session.Meta (RenameSession
+			// is a path-based append with no live session to update, and the
+			// workspace's setTitle only touches wsSession state). So the next
+			// writeMeta emits whatever Title the session started with —
+			// usually "" — and folding it last silently reverted the user's
+			// name on the very next load.
+			//
+			// The triggers are ordinary: /model (UpdateModel), /note (SetNote),
+			// a background change, StampVersion on an upgraded resume, and
+			// bumpFormatForAmend on the FIRST edit or retry.
+			if renamed {
+				m.Title = meta.Title
+				meta = m
+			} else {
+				meta = m
+				titleGenerated = false
+			}
 			book = foldMetaLore(book, m)
 		},
 		onLore: func(op sessionLore, _ []byte) {
@@ -1410,6 +1430,7 @@ func replaySessionWith(path string, stub InterruptStub, onCompact func(out, befo
 			if title != "" {
 				meta.Title = title
 				titleGenerated = source == renameSourceGenerated
+				renamed = true
 			}
 		},
 		onDirective: func(d sessionDirective, _ []byte) {
@@ -1897,6 +1918,8 @@ func describeSession(path string) SessionSummary {
 // archive browser growing a second, drifting description of what a session is.
 func describeSessionFrom(path string, r io.Reader) SessionSummary {
 	s := SessionSummary{Path: path}
+	// See replaySessionWith: a rename outranks a later meta row's stale Title.
+	renamed := false
 	_ = forEachJSONLLine(r, func(line []byte) error {
 		var head sessionLineHead
 		if err := json.Unmarshal(line, &head); err != nil {
@@ -1911,8 +1934,15 @@ func describeSessionFrom(path string, r io.Reader) SessionSummary {
 				s.Started = row.Meta.Started
 				s.Model = row.Meta.Model
 				s.Provider = row.Meta.Provider
-				s.Title = row.Meta.Title
-				s.TitleGenerated = false
+				// A rename outranks a LATER meta row's Title, which is stale by
+				// construction — no rename path writes back into Session.Meta.
+				// This fold is byte-identical to replaySessionWith's and had the
+				// same bug, so the listing and the opened session agreed on the
+				// wrong answer, which is the worst way for two readers to agree.
+				if !renamed {
+					s.Title = row.Meta.Title
+					s.TitleGenerated = false
+				}
 				// Meta is a last-wins timeline, so the final row's spec wins.
 				s.Experience = row.Meta.Experience
 				s.Card = row.Meta.Card
@@ -1940,6 +1970,7 @@ func describeSessionFrom(path string, r io.Reader) SessionSummary {
 			if err := json.Unmarshal(line, &row); err == nil && row.Title != "" {
 				s.Title = row.Title
 				s.TitleGenerated = row.Source == renameSourceGenerated
+				renamed = true
 			}
 		case "usage":
 			var row struct {
@@ -2009,15 +2040,16 @@ func PruneEmptySessions(root, cwd string) {
 }
 
 // isSessionTranscriptName reports whether a directory entry name is a
-// session transcript. Error sidecars (<session>.errors.jsonl, see
-// LogError) share the .jsonl extension so they sort next to their
-// transcript, but they are NOT sessions: listing them would surface
-// blank entries in /sessions and /continue, and pruning them would
-// silently destroy the failure record (sidecar rows carry no "message"
-// lines, so sessionHasNoMessages reads them as empty). Every scan of a
-// sessions directory must use this filter, not a bare .jsonl check.
+// session transcript. Sidecars (see sessionSidecars — the error log at
+// <session>.errors.jsonl is one) share the transcript's base name, and some
+// share its .jsonl extension so they sort next to it, but they are NOT
+// sessions: listing them would surface blank entries in /sessions and
+// /continue, and pruning them would silently destroy the record they hold
+// (sidecar rows carry no "message" lines, so sessionHasNoMessages reads them
+// as empty). Every scan of a sessions directory must use this filter, not a
+// bare .jsonl check.
 func isSessionTranscriptName(name string) bool {
-	return strings.HasSuffix(name, ".jsonl") && !strings.HasSuffix(name, ".errors.jsonl")
+	return strings.HasSuffix(name, ".jsonl") && !isSessionSidecarName(name)
 }
 
 // sessionHasNoMessages returns true when the file at path contains
@@ -2925,7 +2957,7 @@ func ErrorLogPathFor(transcriptPath string) string {
 	if transcriptPath == "" {
 		return ""
 	}
-	return strings.TrimSuffix(transcriptPath, ".jsonl") + ".errors.jsonl"
+	return strings.TrimSuffix(transcriptPath, ".jsonl") + errorSidecarSuffix
 }
 
 // LogError records a turn/provider failure to the session's error sidecar — a
@@ -2992,9 +3024,12 @@ func (s *Session) Close() error {
 		// remove error: if it fails (file already gone, perms changed)
 		// the worst case is one stale empty file in the listing.
 		_ = os.Remove(s.Path)
-		// Keep the sidecar paired with the transcript: if the empty transcript
-		// is discarded, drop its error log too rather than orphan it.
-		_ = os.Remove(s.ErrorLogPath())
+		// Keep the sidecars paired with the transcript: if the empty transcript
+		// is discarded, drop them too rather than orphan them. The list is
+		// sessionSidecars, so a new sidecar is dropped here without editing this.
+		for _, sc := range SessionSidecarPaths(s.Path) {
+			_ = os.Remove(sc)
+		}
 	}
 	if flushErr != nil {
 		return flushErr

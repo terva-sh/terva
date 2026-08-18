@@ -39,11 +39,9 @@ const ArchiveDirName = "archive"
 // were ever walked, and a listing site would surface a gzip stream as a session.
 const archivedSuffix = ".jsonl.gz"
 
-// archivedErrorSuffix is the archived form of the error sidecar (LogError's
-// <session>.errors.jsonl). It travels WITH its transcript: the sidecar is that
-// session's data, and archiving one without the other orphans a failure record
-// against a session no listing shows.
-const archivedErrorSuffix = ".errors.jsonl.gz"
+// The archived form of each sidecar now lives in sessionSidecars
+// (session_sidecar.go), so archive, restore and the archived-listing filter all
+// read one list instead of naming a suffix apiece.
 
 // ArchiveDir returns the archive directory for a cwd's sessions.
 func ArchiveDir(root, cwd string) string {
@@ -114,13 +112,15 @@ func ArchiveSession(root, cwd, id string) (ArchivedSession, error) {
 		return ArchivedSession{}, fmt.Errorf("archive: remove original: %w", err)
 	}
 
-	// The sidecar rides along, best-effort: most sessions never had one, and a
-	// failure to move a failure log must not fail the archive itself.
-	if sc := ErrorLogPathFor(src); sc != "" {
-		if _, err := os.Stat(sc); err == nil {
-			if gzipFile(sc, filepath.Join(dir, id+archivedErrorSuffix)) == nil {
-				_ = os.Remove(sc)
-			}
+	// The sidecars ride along, best-effort: most sessions never had one, and a
+	// failure to move one must not fail the archive itself. Ranges over
+	// sessionSidecars, so a new sidecar is carried without touching this.
+	for _, p := range sessionSidecarPairs(src, dir, id) {
+		if _, err := os.Stat(p.Live); err != nil {
+			continue
+		}
+		if gzipFile(p.Live, p.Archived) == nil {
+			_ = os.Remove(p.Live)
 		}
 	}
 
@@ -160,12 +160,13 @@ func RestoreSession(root, cwd, id string) (string, error) {
 	if err := os.Remove(src); err != nil && !os.IsNotExist(err) {
 		return "", fmt.Errorf("restore: remove archived copy: %w", err)
 	}
-	// And the sidecar, the same way it was archived.
-	if scSrc := filepath.Join(dir, id+archivedErrorSuffix); fileExists(scSrc) {
-		if sc := ErrorLogPathFor(dst); sc != "" {
-			if gunzipFile(scSrc, sc) == nil {
-				_ = os.Remove(scSrc)
-			}
+	// And the sidecars, the same way they were archived.
+	for _, p := range sessionSidecarPairs(dst, dir, id) {
+		if !fileExists(p.Archived) {
+			continue
+		}
+		if gunzipFile(p.Archived, p.Live) == nil {
+			_ = os.Remove(p.Archived)
 		}
 	}
 	return dst, nil
@@ -186,9 +187,10 @@ func ListArchivedSessions(root, cwd string) []ArchivedSession {
 		if e.IsDir() || !strings.HasSuffix(name, archivedSuffix) {
 			continue
 		}
-		// The sidecar shares the .jsonl.gz ending and is not a session — the
-		// same trap isSessionTranscriptName exists to close on the live side.
-		if strings.HasSuffix(name, archivedErrorSuffix) {
+		// Sidecars share the .jsonl.gz ending and are not sessions — the same
+		// trap isSessionTranscriptName exists to close on the live side. The
+		// list is sessionSidecars, so a new sidecar is filtered here for free.
+		if isArchivedSessionSidecarName(name) {
 			continue
 		}
 		id := strings.TrimSuffix(name, archivedSuffix)

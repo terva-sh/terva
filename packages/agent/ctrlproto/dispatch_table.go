@@ -415,6 +415,17 @@ var dispatch = map[Method]handler{
 		return c.DiscardDraft(ctx, f.Sess)
 	}),
 
+	// ---------------------------------------------------------------- session state
+
+	// The read is whole-document and the write is one tenant. session_state.go
+	// says why there is no sessions.set_state to pair with sessions.state.
+	MethodSessionState: get(noSessionState, func(c SessionStateController, ctx context.Context, f Frame) (SessionStateResult, error) {
+		return c.SessionState(ctx, f.Sess)
+	}),
+	MethodSessionSetComposer: act(noSessionState, func(c SessionStateController, ctx context.Context, f Frame, p ComposerDraft) error {
+		return c.SetComposerDraft(ctx, f.Sess, p)
+	}),
+
 	// --------------------------------------------------------------------- archive
 
 	MethodSessionArchive: get(noArchive, func(c SessionArchiveController, ctx context.Context, f Frame) (ArchivedSessionInfo, error) {

@@ -201,6 +201,7 @@
   "disconnected": "disconnected",
   "disconnected (ready to connect)": "disconnected (ready to connect)",
   "done": "done",
+  "draft too long to keep — it will not survive a restart": "draft too long to keep — it will not survive a restart",
   "dropped by token budget last turn": "dropped by token budget last turn",
   "earlier turns are not available: %s": "earlier turns are not available: %s",
   "edit · %s": "edit · %s",

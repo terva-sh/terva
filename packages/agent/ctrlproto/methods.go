@@ -51,16 +51,24 @@ const (
 	MethodSessionsArchived    Method = "sessions.archived"      // result ArchivedSessionsResult; read-only
 	MethodSessionRestore      Method = "sessions.restore"       // params RestoreSessionParams, result SessionInfo
 	MethodSessionDiscardDraft Method = "sessions.discard_draft" // no params (sess in frame); served by an optional DraftController
-	MethodUsageGet            Method = "usage.get"              // result UsageResult (sess in frame)
-	MethodUsageSnapshot       Method = "usage.snapshot"         // params UsageSnapshotParams, result UsageSnapshotResult (sess in frame)
-	MethodResetsList          Method = "usage.resets.list"      // result ResetsListResult (sess in frame); read-only
-	MethodContextGet          Method = "context.get"            // result ContextResult (sess in frame)
-	MethodContextNode         Method = "context.node"           // params ContextNodeParams, result ContextNodeResult (sess in frame)
-	MethodSurfacesList        Method = "surfaces.list"          // result SurfacesResult (sess in frame)
-	MethodSurfaceGet          Method = "surface.get"            // params SurfaceGetParams, result SurfaceResult
-	MethodSurfaceAction       Method = "surface.action"         // params SurfaceActionParams (sess in frame)
-	MethodI18nCatalog         Method = "i18n.catalog"           // params I18nCatalogParams, result I18nCatalogResult (session-independent)
-	MethodFilesList           Method = "files.list"             // params FilesListParams, result FilesListResult (session-independent)
+	// MethodSessionState reads sess's state sidecar — durable per-session CLIENT
+	// state, kept beside the transcript. Read-only, and whole-document: a front
+	// end asks once on bind and gets every tenant it knows about.
+	MethodSessionState Method = "sessions.state" // result SessionStateResult (sess in frame); served by an optional SessionStateController
+	// MethodSessionSetComposer writes ONE tenant of that sidecar, the composer
+	// draft. Tenant-scoped rather than whole-document on purpose; see
+	// session_state.go for why there is no sessions.set_state.
+	MethodSessionSetComposer Method = "sessions.set_composer" // params ComposerDraft (sess in frame)
+	MethodUsageGet           Method = "usage.get"             // result UsageResult (sess in frame)
+	MethodUsageSnapshot      Method = "usage.snapshot"        // params UsageSnapshotParams, result UsageSnapshotResult (sess in frame)
+	MethodResetsList         Method = "usage.resets.list"     // result ResetsListResult (sess in frame); read-only
+	MethodContextGet         Method = "context.get"           // result ContextResult (sess in frame)
+	MethodContextNode        Method = "context.node"          // params ContextNodeParams, result ContextNodeResult (sess in frame)
+	MethodSurfacesList       Method = "surfaces.list"         // result SurfacesResult (sess in frame)
+	MethodSurfaceGet         Method = "surface.get"           // params SurfaceGetParams, result SurfaceResult
+	MethodSurfaceAction      Method = "surface.action"        // params SurfaceActionParams (sess in frame)
+	MethodI18nCatalog        Method = "i18n.catalog"          // params I18nCatalogParams, result I18nCatalogResult (session-independent)
+	MethodFilesList          Method = "files.list"            // params FilesListParams, result FilesListResult (session-independent)
 
 	// The workflow dashboard (optional; served only by a WorkflowsController).
 	// Read-only and session-independent: a run is a workspace artifact, not a
@@ -381,6 +389,7 @@ func (m Method) Group() Group {
 		return GroupConversation
 	case MethodSessionsList, MethodSessionCreate, MethodSessionResume, MethodSessionFork,
 		MethodSessionRename, MethodSessionGenerateTitle, MethodSessionDelete, MethodSessionDiscardDraft,
+		MethodSessionState, MethodSessionSetComposer,
 		MethodSessionArchive, MethodSessionsArchived, MethodSessionRestore, MethodUsageGet, MethodUsageSnapshot, MethodResetsList, MethodContextGet,
 		MethodContextNode, MethodSurfacesList, MethodSurfaceGet, MethodSurfaceAction, MethodI18nCatalog,
 		MethodFilesList, MethodAuthProviders, MethodConversationReveal, MethodConversationHistory,

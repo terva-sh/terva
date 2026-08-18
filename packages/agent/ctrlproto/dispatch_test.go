@@ -196,6 +196,16 @@ func (r *recorder) DiscardDraft(_ context.Context, sess string) error {
 	r.note("DiscardDraft", sess, nil)
 	return nil
 }
+
+// --- SessionStateController ---
+func (r *recorder) SessionState(_ context.Context, sess string) (SessionStateResult, error) {
+	r.note("SessionState", sess, nil)
+	return SessionStateResult{}, nil
+}
+func (r *recorder) SetComposerDraft(_ context.Context, sess string, p ComposerDraft) error {
+	r.note("SetComposerDraft", sess, p)
+	return nil
+}
 func (r *recorder) NoteSet(_ context.Context, sess string, p NoteSetParams) error {
 	r.note("NoteSet", sess, p)
 	return nil
@@ -639,6 +649,15 @@ func dispatchCases() []dispatchCase {
 
 		// --- draft (optional, takes no params — it must still reach the right arm) ---
 		{MethodSessionDiscardDraft, nil, "DiscardDraft", nil},
+
+		// --- session state: a whole-document read, a tenant-scoped write ---
+		{MethodSessionState, nil, "SessionState", nil},
+		{
+			MethodSessionSetComposer,
+			ComposerDraft{Text: "the half-typed line", Source: ComposerSourceSuggestion},
+			"SetComposerDraft",
+			ComposerDraft{Text: "the half-typed line", Source: ComposerSourceSuggestion},
+		},
 
 		// --- export (optional; session-scoped, so the frame's sess must reach it) ---
 		{MethodSessionsExport, SessionExportParams{Format: "markdown"}, "SessionsExport", SessionExportParams{Format: "markdown"}},

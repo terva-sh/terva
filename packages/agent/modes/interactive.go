@@ -705,6 +705,20 @@ type Interactive struct {
 	// window is measured from.
 	lastInputAt time.Time
 
+	// The persisted composer draft (interactive_draft.go). composerDraft is a
+	// MIRROR of the editor, refreshed on the main loop, because the paths that
+	// save on the way out (session switch, exit) run off it and the editor has
+	// no mutex. composerDraftSource tags it user/suggestion. composerDraftAt is
+	// when the mirror last changed, which is what the debounce measures.
+	// composerDraftSaved is the value the daemon already holds, so an unchanged
+	// composer costs no writes. Guarded by mu.
+	composerDraft            string
+	composerDraftSource      string
+	composerDraftAt          time.Time
+	composerDraftSaved       string
+	composerDraftSavedSource string
+	composerDraftInFlight    bool
+
 	// /clear. shellRunning is true while a !command is executing; it
 	// shares the turn engine's busy slot so esc cancels it and no turn or
 	// other shell escape can start while one is in flight.
@@ -958,6 +972,24 @@ type Interactive struct {
 	// The TUI owns no bridge: the workspace does. Guarded by mu.
 	carrierChat      ctrlproto.ChatView
 	carrierChatArmed bool
+
+	// carrierGhostArmed is the one-shot that retracts a standing idle offer when
+	// a FRESH BINDING's first snapshot lands. The offer was computed against the
+	// conversation being left, and on a composer sitting in front of a different
+	// one it would still read as current.
+	//
+	// It is armed per binding rather than fired on every snapshot because a
+	// snapshot also arrives whenever the transcript is replaced under every
+	// client (compact, auto-compact, clear) — the same conversation, where the
+	// offer deliberately stands. Guarded by mu.
+	carrierGhostArmed bool
+
+	// carrierDraftArmed is the same one-shot for the other direction: a FRESH
+	// BINDING's first snapshot fetches that session's saved draft and puts it
+	// back. Armed per binding for the same reason the retract is — a compact or
+	// a clear also sends a snapshot, and re-fetching the draft there would fight
+	// whatever the user has typed since. Guarded by mu.
+	carrierDraftArmed bool
 
 	// carrierQueued mirrors the session's pending message queue — the wire
 	// twin of the crutch agent's PendingQueuedMessages(). The daemon owns
@@ -1225,6 +1257,12 @@ func (i *Interactive) Run(ctx context.Context) error {
 		return err
 	}
 	i.restoreRaw = restore
+	// Registered BEFORE the terminal teardown so it runs AFTER it (defers are
+	// LIFO): the write can take a round trip to a daemon, and the user should be
+	// looking at their restored shell while it happens rather than at a raw
+	// screen. The session is resolved at exit time, not here — by then the user
+	// may have switched several times.
+	defer func() { i.flushComposerDraft(i.carrierSession()) }()
 	defer i.teardownTerminal()
 
 	// Enabling mouse reporting steals click-drag selection from the
@@ -1578,6 +1616,10 @@ func (i *Interactive) Run(ctx context.Context) error {
 			// is cheaper than a timer that has to be armed and cancelled from
 			// every path that changes the answer.
 			i.maybeOfferNextStep()
+			// The draft saver rides it too, and for the same reason: the
+			// debounce needs no better resolution than this, and a timer
+			// would have to be armed and cancelled from every editing path.
+			i.maybeSaveComposerDraft()
 			// Minute-boundary refresh: the status bar renders minute-
 			// granular text (↻ reset countdowns, the burn rate) that
 			// otherwise goes stale while idle — nothing else invalidates

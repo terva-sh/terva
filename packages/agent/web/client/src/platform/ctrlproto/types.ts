@@ -193,6 +193,26 @@ export interface ArchivedSessionInfo {
   world?: string
 }
 
+// ComposerDraft is the session's unsent message, kept by the DAEMON beside the
+// transcript rather than in this client's storage — which is what makes it one
+// draft: the TUI and this panel see the same half-typed text instead of each
+// holding a private copy the other never learns about.
+//
+// Read with 'sessions.state' (→ {composer?}), written with
+// 'sessions.set_composer'. Blank text clears it; a draft over the daemon's
+// 64 KiB cap is refused outright, so a failed save means the draft was NOT
+// kept and the user has to be told.
+export interface ComposerDraft {
+  text: string
+  // source decides how the text comes back. 'user' (the default when absent)
+  // restores into the composer as the user's own words; 'suggestion' is the
+  // model's line and must be offered as a ghost to accept, never planted in the
+  // composer as though a person wrote it.
+  source?: string
+  // updated_at is server-set (RFC3339), absent on a draft written without one.
+  updated_at?: string
+}
+
 export interface SessionInfo {
   id: string
   title?: string
@@ -2416,6 +2436,8 @@ export type Verb =
   | 'sessions.rename'
   | 'sessions.restore'
   | 'sessions.resume'
+  | 'sessions.set_composer'
+  | 'sessions.state'
   | 'secrets.forget'
   | 'secrets.grant'
   | 'secrets.list'
@@ -2546,6 +2568,7 @@ export interface WorkflowAgent {
 // to grow as the mirrored interfaces do, and every entry added is one more place
 // a Go-side field rename stops compiling here instead of failing silently.
 export interface VerbParams {
+  'sessions.set_composer': ComposerDraft
   'sessions.doctor': SessionDoctorParams
   'sessions.next_scene': NextSceneParams
   'sessions.realize': RealizeParams

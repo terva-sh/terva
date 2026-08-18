@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { t } from '../../i18n'
-import type { SkillInfo, WireFileEntry } from '../../platform/ctrlproto/types'
+import type { ComposerDraft, SkillInfo, WireFileEntry } from '../../platform/ctrlproto/types'
 import type { ImageAttachment } from '../../platform/conversation/images'
 import { humanBytes } from '../../ui/formatting'
 import { atComplete } from './atcomplete'
 import { fileToAttachment, tooLargeToAttach, type FileAttachment } from './attachments'
+
+// draftDebounceMs is how long the composer must sit unchanged before its draft
+// is written. The same wait the TUI uses (interactive_draft.go): long enough
+// that ordinary typing produces one write rather than one per keystroke, short
+// enough that a crash costs a word rather than a thought.
+const draftDebounceMs = 800
 
 // matchFiles ranks the workspace file list against an @-query: substring
 // hits first (earlier is better), then subsequence hits (the TUI ranks with
@@ -68,6 +74,8 @@ export function Composer({
   canAttachFiles = false,
   maxAttachmentBytes = 0,
   sessionID,
+  onLoadDraft,
+  onSaveDraft,
 }: {
   busy: boolean
   onSend: (text: string, images: ImageAttachment[], attachments: FileAttachment[]) => boolean
@@ -88,6 +96,12 @@ export function Composer({
   // when it changes, because a staged id is only meaningful against the session
   // directory it was staged into. See the effect below.
   sessionID?: string
+  // The persisted draft, injected in the same style as onUpload so the composer
+  // stays ignorant of the client. onLoadDraft resolves to the session's stored
+  // draft (null when it has none); onSaveDraft writes one, and rejects when the
+  // daemon refuses it.
+  onLoadDraft?: (sess: string) => Promise<ComposerDraft | null>
+  onSaveDraft?: (sess: string, text: string) => Promise<void>
   // files is the daemon's workspace listing for the @-stage: null while the
   // daemon doesn't serve files.list (or nothing is fetched yet). The stage
   // calls onFilesNeeded when it activates, so the fetch is lazy — nothing
@@ -111,20 +125,154 @@ export function Composer({
   // session that is current when it lands.
   const sessionRef = useRef(sessionID)
 
+  // --- the persisted draft: stage 6 of docs/proposals/session-state-sidecar.md
+  //
+  // What you typed and did not send belongs to the SESSION rather than to this
+  // tab. The daemon keeps it beside the transcript, so this panel and the TUI
+  // read one draft instead of each holding a private copy the other never
+  // learns about.
+
+  // Mirrors of the live state for the savers that run outside render — the
+  // session-change effect and the pagehide handler, neither of which can read
+  // the state variables of the render that queued them. Assigned during render
+  // so they are never a frame behind.
+  const textRef = useRef(text)
+  textRef.current = text
+  const imagesRef = useRef(images)
+  imagesRef.current = images
+  const attachRef = useRef(attachments)
+  attachRef.current = attachments
+  // The session whose draft has been read back. Until this equals sessionID,
+  // nothing may be SAVED: the composer is empty because the read has not landed
+  // yet, and writing that empty string would delete the very draft being
+  // fetched. State rather than a ref, so the save below re-runs when it lands.
+  const [restoredSess, setRestoredSess] = useState<string | undefined>(undefined)
+  // What the daemon already holds, so an unchanged composer costs no writes.
+  const savedText = useRef('')
+  // The stored draft is an unaccepted SUGGESTION, which only the TUI can have
+  // left: this panel has no ghost affordance and never makes one. So it neither
+  // shows it nor CLEARS it — wiping an offer this front end cannot even display
+  // would destroy something on the user's behalf without ever telling them it
+  // was there.
+  const storedIsSuggestion = useRef(false)
+  // At most one notice per session for each of these, because a debounced saver
+  // that toasts on every write is a stutter rather than a warning.
+  const warnedAttachments = useRef(false)
+  const warnedFailure = useRef(false)
+
+  // saveDraftNow writes immediately, for the paths with no debounce left to
+  // wait for. sess is passed rather than read, so the session-change path can
+  // name the session being LEFT.
+  const saveDraftNow = (sess: string | undefined, value: string) => {
+    if (!sess || !onSaveDraft) return
+    if (value === savedText.current) return
+    if (!value.trim() && storedIsSuggestion.current) return
+    savedText.current = value
+    // Best-effort by design: both callers run while the user is leaving, and
+    // there is nowhere left to show an error they would still be looking at.
+    void onSaveDraft(sess, value).catch(() => {})
+  }
+
   // Staged attachments do not survive a session change, because a staged id
   // means nothing outside the session directory it was written to: the daemon
   // resolves ids against the session it is prompted on, so sending these in
   // another session would report every one of them as expired.
   //
-  // Only the attachments. Text and images are session-agnostic — a draft is
-  // worth carrying across a switch, and an inline image rides the frame itself
-  // — which is why this is an effect rather than a `key` on the component, the
-  // blunter fix that would throw away a half-written message too.
+  // An effect rather than a `key` on the component, which would throw away far
+  // more than it fixed. Images stay: an inline image rides the frame itself.
+  //
+  // TEXT no longer travels either, and that is a deliberate change. It used to
+  // follow the user across a switch, on the reasoning that a half-written
+  // message is worth keeping. It still is — but it is kept in the session it
+  // was written FOR now, rather than dragged into the next one. A draft that
+  // travelled would be saved into the slot of a session it was not written for,
+  // overwriting that session's own unsent message with a stranger's.
   useEffect(() => {
+    const prev = sessionRef.current
     sessionRef.current = sessionID
     setAttachments([])
     setUploading([])
+    if (prev !== undefined && prev !== sessionID) {
+      saveDraftNow(prev, textRef.current)
+      setText('')
+    }
+    savedText.current = ''
+    storedIsSuggestion.current = false
+    warnedAttachments.current = false
+    warnedFailure.current = false
+    setRestoredSess(undefined)
+    if (!sessionID || !onLoadDraft) {
+      // Nothing to read, but the composer must still become savable.
+      setRestoredSess(sessionID)
+      return
+    }
+    let live = true
+    void onLoadDraft(sessionID)
+      .then((draft) => {
+        if (!live) return
+        if (draft && draft.text.trim()) {
+          if (draft.source === 'suggestion') {
+            storedIsSuggestion.current = true
+          } else if (!textRef.current.trim()) {
+            // Only into an EMPTY composer. The read took a round trip, and
+            // anything typed since outranks what was typed before — overwriting
+            // live keystrokes is the one way this could cost writing rather
+            // than save it.
+            setText(draft.text)
+            savedText.current = draft.text
+          }
+        }
+        setRestoredSess(sessionID)
+      })
+      .catch(() => {
+        // A draft that cannot be read is not worth a banner: nothing the user
+        // did is waiting on it. But the composer must still become savable, or
+        // one failed read would silently stop this session persisting anything.
+        if (live) setRestoredSess(sessionID)
+      })
+    return () => {
+      live = false
+    }
   }, [sessionID])
+
+  // The debounced save. A write per keystroke would be a round trip per
+  // keystroke; 800ms is what the TUI waits (interactive_draft.go), so a crash
+  // costs a word rather than a thought.
+  useEffect(() => {
+    if (!sessionID || !onSaveDraft) return
+    if (restoredSess !== sessionID) return
+    if (text === savedText.current) return
+    if (!text.trim() && storedIsSuggestion.current) return
+    const timer = setTimeout(() => {
+      if (!warnedAttachments.current && (imagesRef.current.length || attachRef.current.length)) {
+        warnedAttachments.current = true
+        onToast(t('the draft is kept for this session; attachments are not'))
+      }
+      // Claim the write BEFORE it goes out, so a slow round trip cannot be
+      // raced by the next one, and a failure cannot retry itself every 800ms
+      // for as long as it keeps failing. A later keystroke changes the text and
+      // tries again on its own, which is the retry that costs nothing.
+      savedText.current = text
+      // Writing makes the slot this panel's; any suggestion that was in it is
+      // gone, and pretending otherwise would suppress every later save.
+      storedIsSuggestion.current = false
+      void onSaveDraft(sessionID, text).catch(() => {
+        if (warnedFailure.current) return
+        warnedFailure.current = true
+        onToast(t('this draft was not kept — it will not survive a reload'))
+      })
+    }, draftDebounceMs)
+    return () => clearTimeout(timer)
+  }, [text, sessionID, restoredSess, onSaveDraft, onToast])
+
+  // The last chance a tab gets. Best-effort in a way the TUI's flush is not: a
+  // browser may cut the connection before this lands, which is why the debounce
+  // above is the real guarantee and this is only the tail of it.
+  useEffect(() => {
+    const flush = () => saveDraftNow(sessionID, textRef.current)
+    addEventListener('pagehide', flush)
+    return () => removeEventListener('pagehide', flush)
+  }, [sessionID, onSaveDraft])
   // Auto-grow to content (capped at 40% of the viewport), and shrink back when
   // cleared — so multiline is visible and signals there's more context in play.
   //

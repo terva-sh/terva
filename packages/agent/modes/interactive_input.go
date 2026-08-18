@@ -63,6 +63,13 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 	// (draft emptied, stash taken) are both reached from many paths.
 	defer i.refreshStashHint()
 
+	// And the draft mirror, for the same reason and on the same terms: the
+	// composer can change under any branch, and the paths that save on the way
+	// out (session switch, exit) read the mirror rather than the editor. Taking
+	// it here means the mirror is exact the instant a key is processed, so
+	// quitting cannot lose the last thing typed.
+	defer i.noteComposerDraft()
+
 	// Any key that isn't ctrl+c invalidates an armed ctrl+c-exit, so
 	// pressing ctrl+c then typing then ctrl+c much later doesn't quit
 	// unexpectedly. The hint message also goes stale; clear it.
@@ -258,6 +265,12 @@ func (i *Interactive) handleKey(ctx context.Context, k tui.Key) (done bool) {
 		if text == "" && len(clipImages) == 0 {
 			return false
 		}
+		// The offer dies HERE, and only here among the ways a composer empties.
+		// Clear no longer ends it — erasing what you typed brings it back, which
+		// is the point — so the send path has to say so itself. A suggestion must
+		// not outlive the message that was actually sent: proposed against a
+		// conversation that has since moved on, it still looks current.
+		i.ed.SetGhost("")
 		i.ed.Clear()
 		i.inputHistoryIndex = -1
 		i.suggest.Reset()

@@ -198,12 +198,26 @@ func (i *Interactive) SwitchCarrierSession(id string) error {
 	// it). The TUI holds no agent to swap — the daemon owns it — so binding to
 	// the session is committing the id and re-subscribing the pump.
 	id = info.ID
+	// The draft belongs to the conversation being LEFT, and this is the last
+	// moment it can be written under that session's id. Synchronous and before
+	// the lock: the mirror is about to be dropped, and a goroutine racing that
+	// drop would save an empty draft over a real one. Reads the mirror, never
+	// the editor — this runs on the caller's goroutine.
+	if old := i.carrierSession(); old != "" && old != id {
+		i.flushComposerDraft(old)
+		i.dropComposerDraftMirror()
+	}
 	// Old-session teardown: refuse pending dialogs (their forward goroutines
 	// answer the OLD session — captured at enqueue — where first-answer-wins
 	// makes a late refusal harmless) and release the local slot.
 	i.confirmDialog.CancelAll("session switched")
 	i.questionDialog.CancelAll()
 	i.turns.releaseCarrier()
+	// The offer belonged to the conversation being left, and goes with it — but
+	// NOT from here. The editor is main-loop-only state and this runs on the
+	// caller's goroutine, so the retract waits for the new binding's first
+	// snapshot and happens on the main loop: see retractOfferOnBind, armed by
+	// armCarrierBind below.
 	i.mu.Lock()
 	i.carrierPerm = map[string]*dialogs.ConfirmRequest{}
 	i.carrierAsk = map[string]*dialogs.QuestionRequest{}
@@ -384,9 +398,17 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 		} else {
 			// The transcript was replaced under the renderer: drop the tool
 			// overlay + caches like the legacy post-compact cleanup.
+			//
+			// The context gauge is NOT zeroed here. A compacted transcript is
+			// smaller, not empty, and the daemon has already re-baselined the
+			// real figure (compact.go's SetLastTurn on the post-compaction
+			// estimate). Zeroing reported an empty context for a conversation
+			// that still had one, until the next turn happened to land usage.
+			// The snapshot that accompanies a replaced transcript carries the
+			// daemon's number, and a mid-turn auto-compact that broadcasts none
+			// is corrected by the very next usage event.
 			i.statusErr = ""
 			i.statusOK = i.pendingPostCompactNote
-			i.lastCtxInput = 0
 			i.toolCalls = map[string]*tui.ToolCallView{}
 			i.toolOrder = nil
 			i.turns.ResetGates()
@@ -533,6 +555,20 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 		i.setCarrierQueue(ev.Snapshot.Queued)
 		i.seedSessionMeters(ev.Snapshot.Session)
 		i.noteSessionMeta(ev.Snapshot.Session)
+		// The transcript was replaced, so the context gauge describing the OLD
+		// one is void — and this event is the only signal that says so for every
+		// way it can happen. seedSessionMeters is bind-armed and will not do it
+		// (it must not re-baseline the $/hr clock on every resync), and
+		// noteSessionMeta deliberately takes only the window and the plan.
+		i.adoptContextTokens(ev.Snapshot.Session.ContextTokens)
+		// A fresh binding means a different conversation, so a standing offer is
+		// no longer about what is on screen. One-shot per binding: a compact or a
+		// clear sends a snapshot too, and the offer survives those.
+		i.retractOfferOnBind()
+		// ...and the draft this conversation was left with comes back. The
+		// mirror image of the retract, armed by the same one-shot: what the
+		// user typed here and did not send is theirs to find again.
+		i.restoreComposerDraft()
 		i.seedCarrierChat()
 		// The usage picture belongs to the provider client, not the session, so
 		// it does not ride the snapshot. Pull the cached one for this binding.
@@ -720,7 +756,9 @@ func (i *Interactive) runCarrierCompact(parent context.Context) {
 		default:
 			// The transcript was replaced under the renderer (the crutch
 			// renders from the same agent): the legacy post-compact cleanup.
-			i.lastCtxInput = 0
+			// The gauge is left to the snapshot the daemon broadcasts from
+			// wsSession.compact — see the compact_end twin above for why zero
+			// was the wrong answer.
 			i.toolCalls = map[string]*tui.ToolCallView{}
 			i.toolOrder = nil
 			i.turns.ResetGates()
@@ -1396,6 +1434,33 @@ func (i *Interactive) armCarrierBind() {
 	i.carrierTailPending = -1
 	i.carrierSeedArmed = true
 	i.carrierChatArmed = true
+	i.carrierGhostArmed = true
+	i.carrierDraftArmed = true
+}
+
+// retractOfferOnBind drops a standing idle offer when a fresh binding's first
+// snapshot lands, and does nothing on every later one (see carrierGhostArmed).
+//
+// The editor is MAIN-LOOP-ONLY state: Editor.Render reads it on the main loop
+// without a lock, and the Editor has none of its own. This runs on the pump
+// goroutine, so the retract is marshalled with runOnMain — the same treatment
+// restoreWithdrawnPrompt gets, for the same reason.
+//
+// 🪤 This used to live in SwitchCarrierSession, writing the editor straight from
+// whichever goroutine asked for the switch (cli_ctrlproto's resume and
+// new-session paths, interactive_auth). That is a data race against the
+// renderer, and it is a quiet one: a full local `go test -race ./...` was green
+// twice and CI still caught it, because the write sits between two locks that
+// order it against the renderer in almost every interleaving.
+func (i *Interactive) retractOfferOnBind() {
+	i.mu.Lock()
+	armed := i.carrierGhostArmed
+	i.carrierGhostArmed = false
+	i.mu.Unlock()
+	if !armed {
+		return
+	}
+	i.runOnMain(func() { i.ed.SetGhost("") })
 }
 
 // noteSessionMeta captures the per-frame session metadata off a full
@@ -1461,6 +1526,22 @@ func (i *Interactive) seedSessionMeters(info ctrlproto.SessionInfo) {
 	// spend from this instant counts toward $/hr.
 	i.costBase = i.cumUsage.CostUSD
 	i.costBaseAt = time.Now()
+}
+
+// adoptContextTokens re-seeds the context gauge alone from a snapshot's
+// SessionInfo. The bind-armed half of seedSessionMeters, split out because the
+// two have different lifetimes: the cost baseline may be taken ONCE per
+// binding (re-taking it restarts the $/hr clock and hides the session's spend),
+// while the context figure must be re-taken every time the transcript is
+// replaced under the client.
+//
+// n is adopted verbatim, zero included. Zero is a real answer here — it is what
+// an emptied conversation reports — and a "only if non-zero" guard would make
+// /clear the one case the gauge could never follow.
+func (i *Interactive) adoptContextTokens(n int) {
+	i.mu.Lock()
+	i.lastCtxInput = n
+	i.mu.Unlock()
 }
 
 // ---- prompt-readiness gate ----
@@ -1853,16 +1934,4 @@ func wireImageBlocks(blocks []core.WireBlock) []provider.ImageBlock {
 //
 // TestTheUsageWireRoundTripCarriesEveryField enrolls new fields by itself
 // rather than by anyone remembering to extend a fixture.
-func usageFromWire(w *core.WireUsage) provider.Usage {
-	return provider.Usage{
-		InputTokens:          w.Input,
-		OutputTokens:         w.Output,
-		CacheReadTokens:      w.CacheRead,
-		CacheWriteTokens:     w.CacheWrite,
-		CostUSD:              w.CostUSD,
-		CacheSavedUSD:        w.CacheSavedUSD,
-		ReasoningTokens:      w.Reasoning,
-		ReasoningTokensKnown: w.ReasoningKnown,
-		ImageOutputTokens:    w.ImageOutput,
-	}
-}
+func usageFromWire(w *core.WireUsage) provider.Usage { return core.UsageFromWire(*w) }

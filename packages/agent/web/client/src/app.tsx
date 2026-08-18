@@ -6,18 +6,22 @@ import { restartRejection } from './restart'
 import type {
   AskRequest,
   CatalogView,
+  ComposerDraft,
   CommandsView,
   CacheSample,
   ContextBreakdown,
   ContextCache,
   ContextNode,
   Decision,
+  CharactersView,
   ExtensionsView,
   ExtensionConfigField,
   FilesListResult,
   LoreEntry,
   LoreView,
   MCPView,
+  MemoryScope,
+  MemoryView,
   ChatView,
   ChatServiceInfo,
   ModelInfo,
@@ -2294,6 +2298,25 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
                 // key, and both branches of the view-mode ternary render it),
                 // so nothing else would clear them.
                 sessionID={curSess}
+                // The draft the daemon keeps beside the transcript, so this
+                // panel and the TUI share one unsent message. Passed as I/O
+                // rather than a client, matching onUpload: the composer owns
+                // WHEN to read and write, and stays ignorant of the wire.
+                onLoadDraft={(sess) => {
+                  const c = clientRef.current
+                  if (!c) return Promise.resolve(null)
+                  return c
+                    .send<{ composer?: ComposerDraft }>('sessions.state', null, sess)
+                    .then((r) => r.composer ?? null)
+                }}
+                onSaveDraft={(sess, text) => {
+                  const c = clientRef.current
+                  if (!c) return Promise.resolve()
+                  // The rejection is deliberately NOT swallowed here: an
+                  // over-cap draft is refused by the daemon, and the composer
+                  // is what decides whether that is worth telling the user.
+                  return c.send('sessions.set_composer', { text }, sess).then(() => undefined)
+                }}
               />
             </>
           )}
@@ -3625,6 +3648,10 @@ export function SurfaceView({
       return <PermissionsBody v={surface.permissions ?? { mode: '' }} onAction={onAction} trusted={trusted} onTrust={onTrust} />
     case 'lore':
       return <LoreBody v={surface.lore ?? { entries: [] }} onAction={onAction} />
+    case 'memory':
+      return surface.memory ? <MemoryBody v={surface.memory} /> : null
+    case 'characters':
+      return surface.characters ? <CharactersBody v={surface.characters} /> : null
     case 'mcp':
       return <MCPBody v={surface.mcp ?? { servers: [] }} onAction={onAction} />
     case 'chat':
@@ -4012,6 +4039,122 @@ export function CommandsBody({
 // card per installed/loaded extension with a status badge, version/scope, tool +
 // command counts, any crash reason, and an enable/disable toggle (persisted to
 // the project + applied live). Gated (untrusted) extensions can't be toggled on.
+// MemoryBody renders the 'memory' surface: the user and project scopes, each
+// with its active tier and its archived tier shown separately.
+//
+// The two tiers are NOT summed on purpose. Active entries sit in the model's
+// cached system prefix on every request and are what the byte cap refuses on;
+// archived entries are out of that prefix entirely and only reach the per-turn
+// tail when the conversation matches their triggers. Folding archived bytes
+// into the active fraction would claim that archiving moves a scope CLOSER to
+// refusing the next write, which is the opposite of what it does — the type's
+// own comment says as much, and this pane is the surface that could have
+// contradicted it.
+export function MemoryBody({ v }: { v: MemoryView }) {
+  const scopes: Array<{ key: string; scope: MemoryScope; unbound: boolean }> = [
+    { key: 'user', scope: v.user, unbound: false },
+    // project_bound false means the session has no resolvable project, so
+    // project memory is in-memory only. Say that, rather than showing a list
+    // that will never survive the session.
+    { key: 'project', scope: v.project, unbound: v.project_bound === false },
+  ]
+  return (
+    <div class="mem-body">
+      {scopes.map(({ key, scope, unbound }) => {
+        const entries = scope?.entries ?? []
+        const archived = scope?.archived ?? []
+        return (
+          <div key={key} class="mem-scope">
+            <div class="mem-head">
+              <span class="mem-label">{scope?.label || key}</span>
+              <span class="mem-count">
+                {entries.length}/{scope?.max_count ?? 0} · {scope?.bytes ?? 0}/{scope?.max_bytes ?? 0}B
+              </span>
+            </div>
+            {unbound && <div class="mem-note">{t('No project resolved — project memory is not persisted.')}</div>}
+            {entries.length === 0 ? (
+              <div class="pick-empty">{t('Nothing remembered here yet.')}</div>
+            ) : (
+              <ul class="mem-list">
+                {entries.map((e, i) => (
+                  <li key={i}>{e}</li>
+                ))}
+              </ul>
+            )}
+            {archived.length > 0 && (
+              <div class="mem-archived">
+                <div class="mem-head">
+                  <span class="mem-label">{t('Archived')}</span>
+                  <span class="mem-count">
+                    {archived.length} · {scope?.archived_bytes ?? 0}B
+                  </span>
+                </div>
+                <ul class="mem-list">
+                  {archived.map((a, i) => (
+                    <li key={i}>{a.text ?? ''}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// CharactersBody renders the 'characters' surface: the workspace's card and
+// persona libraries side by side, using the same summaries the cards.* and
+// personas.* verbs return.
+export function CharactersBody({ v }: { v: CharactersView }) {
+  const cards = v.cards ?? []
+  const personas = v.personas ?? []
+  if (!cards.length && !personas.length) return <div class="pick-empty">{t('No characters or personas yet.')}</div>
+  return (
+    <div class="chars-body">
+      <div class="chars-group">
+        <div class="mem-head">
+          <span class="mem-label">{t('Characters')}</span>
+          <span class="mem-count">{cards.length}</span>
+        </div>
+        {cards.length === 0 ? (
+          <div class="pick-empty">{t('No characters yet.')}</div>
+        ) : (
+          <ul class="chars-list">
+            {cards.map((c) => (
+              <li key={c.id} class="chars-row">
+                {c.avatar_url && <img class="chars-avatar" src={c.avatar_url} alt="" />}
+                <span class="chars-name">{c.name || c.id}</span>
+                {c.creator && <span class="chars-meta">{c.creator}</span>}
+                {c.greetings > 0 && <span class="chars-meta">{t('%d greetings', c.greetings)}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <div class="chars-group">
+        <div class="mem-head">
+          <span class="mem-label">{t('Personas')}</span>
+          <span class="mem-count">{personas.length}</span>
+        </div>
+        {personas.length === 0 ? (
+          <div class="pick-empty">{t('No personas yet.')}</div>
+        ) : (
+          <ul class="chars-list">
+            {personas.map((p) => (
+              <li key={p.ref} class="chars-row">
+                {p.emoji && <span class="chars-emoji">{p.emoji}</span>}
+                <span class="chars-name">{p.name || p.ref}</span>
+                {p.specialty && <span class="chars-meta">{p.specialty}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function ExtensionsBody({
   v,
   onAction,

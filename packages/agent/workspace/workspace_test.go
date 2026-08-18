@@ -407,10 +407,15 @@ func TestDeleteEmptyLiveSession(t *testing.T) {
 	}
 }
 
-// Deleting a session removes its error sidecar too — the sidecar is that
-// session's data, and because sidecars are filtered from session listings an
-// orphan would be invisible and never cleaned up.
-func TestDeleteSessionRemovesErrorSidecar(t *testing.T) {
+// Deleting a session removes EVERY sidecar — a sidecar is that session's data,
+// and because sidecars are filtered from session listings an orphan would be
+// invisible and never cleaned up.
+//
+// Ranges over core.SessionSidecarPaths rather than naming the error log: delete
+// is one of the six lifecycle sites that must consult the sidecar table, and a
+// guard that names one sidecar tests one sidecar. A row added to the table is
+// covered here automatically, which is the whole point of the table.
+func TestDeleteSessionRemovesEverySidecar(t *testing.T) {
 	tmp := testsupport.TempDir(t)
 	w := &Workspace{root: tmp, cwd: tmp, version: "test", sessions: map[string]*wsSession{}}
 	ctx := context.Background()
@@ -424,7 +429,17 @@ func TestDeleteSessionRemovesErrorSidecar(t *testing.T) {
 	if err := s.LogError("provider exploded"); err != nil {
 		t.Fatalf("LogError: %v", err)
 	}
-	sidecar := s.ErrorLogPath()
+	// Every sidecar, not just the one LogError happened to create: the others
+	// have no producer here, so seed them directly.
+	sidecars := core.SessionSidecarPaths(s.Path)
+	if len(sidecars) == 0 {
+		t.Fatal("no sidecars declared, so this guard proves nothing")
+	}
+	for _, p := range sidecars {
+		if err := os.WriteFile(p, []byte("belongs to this session\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	_ = s.Close()
 
 	if err := w.DeleteSession(ctx, build.SessionIDFromPath(s.Path)); err != nil {
@@ -433,8 +448,10 @@ func TestDeleteSessionRemovesErrorSidecar(t *testing.T) {
 	if _, err := os.Stat(s.Path); !os.IsNotExist(err) {
 		t.Error("transcript still present after delete")
 	}
-	if _, err := os.Stat(sidecar); !os.IsNotExist(err) {
-		t.Error("error sidecar still present after delete")
+	for _, p := range sidecars {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("sidecar %s still present after delete: it is orphaned, and no listing will ever show it", filepath.Base(p))
+		}
 	}
 }
 

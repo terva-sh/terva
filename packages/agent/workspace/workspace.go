@@ -130,6 +130,15 @@ type Workspace struct {
 	mu       sync.Mutex
 	sessions map[string]*wsSession
 
+	// stateMu serializes the read-modify-write of a session's state sidecar
+	// (workspace_state.go). privfs.WriteFile makes each write atomic, so the
+	// file is never torn — what this protects is the READ that precedes it:
+	// two front ends saving at once would otherwise each write back the
+	// document they loaded, and the loser's tenant would vanish. Separate from
+	// mu because that one guards the sessions map and must not be held across
+	// file I/O.
+	stateMu sync.Mutex
+
 	// restartMarker is a planned-restart marker recovered from disk at boot (nil
 	// unless the previous stop was an armed supervisor restart). It names the
 	// session that should resume and re-flavors that session's interrupted-call
@@ -712,13 +721,14 @@ func (w *Workspace) sessionLocked(id string) (*wsSession, error) {
 	// multi-thousand-message history — which would otherwise ride every
 	// subsequent request. The session FILE stays intact, and the per-message
 	// persistence hooks only append new rows, so nothing is lost on disk.
-	full := msgs
-	msgs = build.TrimMessagesForResume(full, 100)
 	// The trim shortens the in-memory transcript while the file keeps the full
-	// history, so record how far the two index spaces diverge — revise verbs anchor
-	// their persisted amends to the on-disk space through it (see wsSession.diskIndex).
-	base, head := reviseBaseFor(full, msgs)
-	s, err := w.buildSession(id, sess, msgs, base, head)
+	// history, so the window REPORTS how the two index spaces diverge — revise
+	// verbs anchor their persisted amends to the on-disk space through it (see
+	// wsSession.diskIndex). Asking the trim rather than subtracting lengths is
+	// the whole point: the repair it runs can remove a message from the middle,
+	// which no length delta can distinguish from a leading drop.
+	win := build.TrimMessagesForResume(msgs, 100)
+	s, err := w.buildSession(id, sess, win.Messages, win)
 	if err != nil {
 		return nil, err
 	}
@@ -939,7 +949,9 @@ func (w *Workspace) createSeededLocked(opts ctrlproto.CreateOpts, seed *sceneSee
 		}
 	}
 	id := build.SessionIDFromPath(sess.Path)
-	s, err := w.buildSession(id, sess, msgs, 0, false)
+	// Untrimmed: the in-memory transcript IS the on-disk one, so the zero
+	// window (Base 0, exact) is the identity mapping.
+	s, err := w.buildSession(id, sess, msgs, build.ResumeWindow{Messages: msgs})
 	if err != nil {
 		return nil, err
 	}
@@ -1348,7 +1360,8 @@ func (w *Workspace) forkLocked(sess string, fromIndex int) (*wsSession, error) {
 	if err != nil {
 		return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "open fork: %v", err)
 	}
-	child, err := w.buildSession(id, childSess, msgs, 0, false)
+	// A fresh fork is untrimmed, so its two index spaces coincide.
+	child, err := w.buildSession(id, childSess, msgs, build.ResumeWindow{Messages: msgs})
 	if err != nil {
 		return nil, err
 	}
@@ -1443,11 +1456,12 @@ func (w *Workspace) DeleteSession(ctx context.Context, sess string) error {
 	if err != nil && !os.IsNotExist(err) {
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "delete: %v", err)
 	}
-	// Deleting a session deletes its failure record too: the error sidecar
-	// is that session's data, and leaving it would orphan a file no scan
-	// lists (sidecars are filtered from session listings). Best-effort —
-	// most sessions never had one.
-	if sc := core.ErrorLogPathFor(w.sessionPath(sess)); sc != "" {
+	// Deleting a session deletes its sidecars too: a sidecar is that session's
+	// data, and leaving one would orphan a file no scan lists (sidecars are
+	// filtered from session listings). Best-effort — most sessions never had
+	// one. The list is core.SessionSidecarPaths, so a new sidecar is deleted
+	// here without touching this.
+	for _, sc := range core.SessionSidecarPaths(w.sessionPath(sess)) {
 		_ = os.Remove(sc)
 	}
 	// A missing file is only "not found" when we never knew the session; if it

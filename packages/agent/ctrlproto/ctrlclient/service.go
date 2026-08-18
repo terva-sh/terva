@@ -158,6 +158,25 @@ func (s *Service) RestoreSession(ctx context.Context, p ctrlproto.RestoreSession
 	return r, err
 }
 
+var _ ctrlproto.SessionStateController = (*Service)(nil)
+
+// The session state sidecar (the composer draft). FORWARDED rather than
+// exempted, unlike the other optional controllers on the not-forwarded list:
+// those are Stage surfaces a terminal has no UI for, whereas the draft belongs
+// to the composer the TUI already has. An attached TUI that could not reach
+// these two verbs would keep a private draft the daemon never sees, which is
+// the exact split the sidecar exists to close.
+
+func (s *Service) SessionState(ctx context.Context, sess string) (ctrlproto.SessionStateResult, error) {
+	var r ctrlproto.SessionStateResult
+	err := s.c.Call(ctx, sess, ctrlproto.MethodSessionState, nil, &r)
+	return r, err
+}
+
+func (s *Service) SetComposerDraft(ctx context.Context, sess string, p ctrlproto.ComposerDraft) error {
+	return s.c.Call(ctx, sess, ctrlproto.MethodSessionSetComposer, p, nil)
+}
+
 var _ ctrlproto.WorkflowsController = (*Service)(nil)
 
 // The workflow dashboard, read-only. Session-independent: a run belongs to the

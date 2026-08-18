@@ -228,23 +228,30 @@ describe('Composer attachments are session-scoped', () => {
     await waitFor(() => expect(screen.queryByText('notes.txt')).toBeNull())
   })
 
-  // Only the attachments. A half-written message is not session-specific and
-  // throwing it away would be a worse bug than the one being fixed — which is
-  // what a `key` on the component would have done.
-  it('keeps the typed draft across the same change', async () => {
+  // The text goes with the attachments now, and this test used to assert the
+  // opposite: a half-written message rode along into the next session, on the
+  // reasoning that throwing it away would be the worse bug.
+  //
+  // It is not thrown away. It is HANDED to the session it was written for
+  // (docs/proposals/session-state-sidecar.md), which is what makes keeping it
+  // safe: a draft that travelled would be saved into the slot of a session it
+  // was not written for, overwriting that session's own unsent message.
+  it('hands the typed draft to the session being left, and clears it', async () => {
     const onUpload = vi.fn().mockResolvedValue(staged)
+    const onSaveDraft = vi.fn().mockResolvedValue(undefined)
     const { container, rerender } = render(
-      <Composer {...props({ onUpload, canAttachFiles: true, sessionID: 'ses_a' })} />,
+      <Composer {...props({ onUpload, canAttachFiles: true, sessionID: 'ses_a', onSaveDraft })} />,
     )
     const textarea = screen.getByPlaceholderText('Message terva…') as HTMLTextAreaElement
     fireEvent.input(textarea, { target: { value: 'half a thought' } })
     drop(container)
     await screen.findByText('notes.txt')
 
-    rerender(<Composer {...props({ onUpload, canAttachFiles: true, sessionID: 'ses_b' })} />)
+    rerender(<Composer {...props({ onUpload, canAttachFiles: true, sessionID: 'ses_b', onSaveDraft })} />)
 
     await waitFor(() => expect(screen.queryByText('notes.txt')).toBeNull())
-    expect((screen.getByPlaceholderText('Message terva…') as HTMLTextAreaElement).value).toBe('half a thought')
+    expect((screen.getByPlaceholderText('Message terva…') as HTMLTextAreaElement).value).toBe('')
+    expect(onSaveDraft).toHaveBeenCalledWith('ses_a', 'half a thought')
   })
 
   // The case clearing state alone does NOT fix: an upload still in flight when
