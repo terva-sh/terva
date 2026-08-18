@@ -33,6 +33,7 @@
   "memory.section.project": "Project memory (durable facts about this repository):",
   "memory.section.user": "User memory (cross-project facts about the person you work with):",
   "nextstep.ask": "Do not answer this in the conversation. Do not start any work. This comes from terva, on its own account, while the user is idle. The user did not send it and has not asked you for anything.\n\nReply with one short line and nothing else. Give the smallest next step. Write it as the user would type it to you, in their voice. No preamble, no explanation, no quotes, no markdown, no list. Never more than one line. If no next step is obvious, reply with nothing.",
+  "nextstep.ask_on_demand": "Do not answer this in the conversation. Do not start any work. The user asked terva what they might send next, and this is that question. They want the line, not the work.\n\nReply with one short line and nothing else. Give the smallest next step. Write it as the user would type it to you, in their voice. No preamble, no explanation, no quotes, no markdown, no list. Never more than one line. If no next step is obvious, reply with nothing.",
   "persona.user.about": "About %s (the user you are interacting with):",
   "persona.user.by_name": "Refer to %s by name or in the second person; do not assume a gender or pronouns they have not stated.",
   "persona.user.gender": "%s's gender: %s.",

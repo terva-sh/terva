@@ -497,7 +497,6 @@
   "persona %q is no longer available, so this session opened with the default one instead; recreate it, or pick another, to change that": "persona %q is no longer available, so this session opened with the default one instead; recreate it, or pick another, to change that",
   "persona %q not found": "persona %q not found",
   "persona %q not found — create it instead": "persona %q not found — create it instead",
-  "persona %q resolves to your file %s, but the library could not find it to delete": "persona %q resolves to your file %s, but the library could not find it to delete",
   "persona %q vanished after write": "persona %q vanished after write",
   "plan — read-only": "plan — read-only",
   "post: nothing to post": "post: nothing to post",

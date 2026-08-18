@@ -78,6 +78,11 @@ var registry = []Spec{
 
 	{Name: "/study", Group: groupContext, Desc: "read every file in the cwd (or a passed file/dir) so the agent has full context", Hint: "file or directory (optional)"},
 	{Name: "/btw", Group: groupContext, Desc: "side-chat that doesn't add to the main thread (saves tokens)"},
+	// Beside /btw because it is the same class of thing: one model call that
+	// leaves the transcript alone. Where /btw asks the agent a question off the
+	// record, this asks it what YOU might say next, and the answer lands in the
+	// composer rather than on screen.
+	{Name: "/nextstep", Group: groupContext, Desc: "ask for the smallest next step and offer it in the composer (tab accepts; nothing is sent)"},
 	{Name: "/skill", Group: groupContext, Desc: "prime your next request with a specific skill", Hint: "name [request]"},
 	{Name: "/skills", Group: groupContext, Desc: "list discovered skills (SKILL.md files)"},
 	{Name: "/context", Group: groupContext, Desc: "context breakdown (token sizes) + what extensions inject"},

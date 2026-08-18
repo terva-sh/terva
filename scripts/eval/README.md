@@ -51,6 +51,7 @@ already paid for.
 |---|---|
 | a tool's `Description()` | `--a-overlay tools=<file>` |
 | a prompt (`i18n.P`) | `--a-overlay prompts=<file>` |
+| a prompt only the TUI can trigger | a probe beside the code — see `nextstep-ab.sh` |
 | a help text (`i18n.H`) | `--a-overlay help=<file>` |
 | a **schema field** `description` | binary arm — `build-arm.sh` |
 | any other string built in Go | binary arm — `build-arm.sh` |

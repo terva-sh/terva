@@ -83,6 +83,14 @@ type fakeCarrier struct {
 	// nextStepGate, when non-nil, parks the ask until closed — so a test can
 	// hold the completion open and change the composer underneath it.
 	nextStepGate chan struct{}
+	// nextStepErr, when non-nil, fails the ask — the on-demand path reports a
+	// failure to the user where the idle path swallows it.
+	nextStepErr error
+	// nextStepParams records what the last ask carried. on_demand is the whole
+	// reason the verb takes params, and the daemon frames the question to the
+	// model from it, so a test asserts it arrived rather than that a call
+	// happened.
+	nextStepParams ctrlproto.NextStepParams
 	// settingsExtra is appended to the settings surface, so a test can serve a
 	// row the hardcoded fixture does not carry.
 	settingsExtra []ctrlproto.SettingItem
@@ -392,9 +400,10 @@ func (f *fakeCarrier) ResumeSession(ctx context.Context, sess string) (ctrlproto
 // SuggestNextStep plays the daemon's one-shot ask. The trigger reaches it by
 // type-asserting the carrier, so this method existing is what makes the fixture
 // a NextStepController at all.
-func (c *fakeCarrier) SuggestNextStep(_ context.Context, _ string) (ctrlproto.NextStepResult, error) {
+func (c *fakeCarrier) SuggestNextStep(_ context.Context, _ string, p ctrlproto.NextStepParams) (ctrlproto.NextStepResult, error) {
 	c.mu.Lock()
-	line, ch, gate := c.nextStepLine, c.nextSteps, c.nextStepGate
+	c.nextStepParams = p
+	line, ch, gate, askErr := c.nextStepLine, c.nextSteps, c.nextStepGate, c.nextStepErr
 	c.mu.Unlock()
 	if ch != nil {
 		ch <- struct{}{}
@@ -402,7 +411,17 @@ func (c *fakeCarrier) SuggestNextStep(_ context.Context, _ string) (ctrlproto.Ne
 	if gate != nil {
 		<-gate
 	}
+	if askErr != nil {
+		return ctrlproto.NextStepResult{}, askErr
+	}
 	return ctrlproto.NextStepResult{Line: line}, nil
+}
+
+// lastNextStepParams reports what the most recent ask carried.
+func (c *fakeCarrier) lastNextStepParams() ctrlproto.NextStepParams {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.nextStepParams
 }
 
 func recv[T any](t *testing.T, ch <-chan T, what string) T {

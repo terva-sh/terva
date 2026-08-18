@@ -73,6 +73,27 @@ const nextStepBody = `Do not answer this in the conversation. Do not start any w
 
 Reply with one short line and nothing else. Give the smallest next step. Write it as the user would type it to you, in their voice. No preamble, no explanation, no quotes, no markdown, no list. Never more than one line. If no next step is obvious, reply with nothing.`
 
+// nextStepBodyOnDemand is the same ask when the user REQUESTED it (/nextstep).
+//
+// It exists because the body above states, as a fact the model must reason
+// from, that the user "did not send it and has not asked you for anything".
+// On this path that is false. The rest of the ask is the same job, so only the
+// provenance sentence moves — and the prohibition still comes first, which is
+// the property the eval measured rather than any particular wording of it.
+//
+// The second paragraph is duplicated verbatim rather than shared through a
+// const, and that is deliberate twice over: the extractor resolves a keyed
+// default only through string literals (a const operand does not fold), and a
+// translator needs the whole ask in one catalog entry. What duplication risks
+// is drift, so TestNextStepBodiesShareTheRequest pins the two halves equal.
+//
+// Held apart from the idle body rather than assembled from it for the same
+// reason the idle one is left untouched: that string is measured, and an edit
+// here must not be able to reach it.
+const nextStepBodyOnDemand = `Do not answer this in the conversation. Do not start any work. The user asked terva what they might send next, and this is that question. They want the line, not the work.
+
+Reply with one short line and nothing else. Give the smallest next step. Write it as the user would type it to you, in their voice. No preamble, no explanation, no quotes, no markdown, no list. Never more than one line. If no next step is obvious, reply with nothing.`
+
 var _ ctrlproto.NextStepController = (*Workspace)(nil)
 
 // SuggestNextStep runs one ephemeral completion against the session as it
@@ -82,7 +103,11 @@ var _ ctrlproto.NextStepController = (*Workspace)(nil)
 // "" is an ordinary answer, not a failure: the ask invites the model to stay
 // quiet when nothing is obvious, and an empty composer offer is exactly how
 // that should surface. Callers show nothing and must not treat it as an error.
-func (w *Workspace) SuggestNextStep(ctx context.Context, sess string) (ctrlproto.NextStepResult, error) {
+//
+// p.OnDemand switches the ask to the variant for a suggestion the user asked
+// for. It changes the question's framing and nothing else — same cap, same
+// reasoning-off, same no-tools, same nothing-recorded.
+func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlproto.NextStepParams) (ctrlproto.NextStepResult, error) {
 	s, err := w.resolve(sess)
 	if err != nil {
 		return ctrlproto.NextStepResult{}, err
@@ -103,7 +128,11 @@ func (w *Workspace) SuggestNextStep(ctx context.Context, sess string) (ctrlproto
 		return ctrlproto.NextStepResult{}, nil
 	}
 	_, model := s.currentModel()
-	msgs = append(msgs, nextStepMessage(NextStepTag+" "+i18n.P("nextstep.ask", nextStepBody)))
+	body := i18n.P("nextstep.ask", nextStepBody)
+	if p.OnDemand {
+		body = i18n.P("nextstep.ask_on_demand", nextStepBodyOnDemand)
+	}
+	msgs = append(msgs, nextStepMessage(NextStepTag+" "+body))
 
 	out, usage, err := streamText(ctx, ag.Client, provider.Request{
 		Model:     model,

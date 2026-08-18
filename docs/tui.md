@@ -19,6 +19,7 @@ Type `/` in the TUI to open the autocomplete popup. Available commands:
 | `/session` | Four ops on the current session: `export` to a portable `.tervasession` file, `import` one back in, `fork` from a past user message into a new branch, `tree` to switch between branches. Opens a picker without an argument; direct forms: `/session export [path]`, `/session import <path>`, `/session fork`, `/session tree`. Default export destination is `~/Downloads`. |
 | `/jump` | Scroll the chat to a previous turn (or `/jump <text>` to filter). |
 | `/btw` | Side chat with full context that doesn't add to the main thread. |
+| `/nextstep` | Ask what to type next. The answer arrives as a dimmed offer in the composer — `tab` or `→` accepts it, and nothing is sent until you send it. |
 | `/swarm` | Spawn, monitor, and chat with background subagents. Each runs in parallel with your main session and shares its working directory. |
 | `/worktree` | Managed git worktrees (the built-in `worktree_*` engine): the list view shows each worktree's claim state, base, and dirtiness — ↑/↓ select, ↵ `/cd`s into one, `c` switches to the merge-back **collect** overview (commits ahead of base, dirty/unpushed flags), `r` refreshes. Also fills the status bar's worktree glance. Unavailable outside a git repo. |
 | `/shared` | The files the agent handed you this session with `share_file` — name, kind, size, and how long the bytes have left. `↑`/`↓` select, `c` copies the file's path to the clipboard, `o` (or `↵`) opens it in the system viewer, `s` saves a copy into the working directory, `r` refetches, `esc` closes. `s` is the one that works from `terva attach`: the path in the listing names the **daemon's** disk, so on a remote carrier copy and open refuse and point you at save, which pulls the bytes over the control plane. A file whose deadline has passed stays listed — the session did share it — but its actions are refused rather than dispatched into a filesystem error. Saving never overwrites: an existing name gets a `-2` suffix. |
@@ -184,6 +185,19 @@ Each question fires a one-off model call against `system + main transcript + sid
 ```
 
 Inside the overlay: `enter` sends, `esc` cancels an in-flight call (or closes the overlay if idle), `ctrl+c` closes immediately. Side-chat exchanges never touch the transcript and aren't persisted to the session file.
+
+### `/nextstep`
+
+Asks the agent for the smallest next step and offers it as **ghost text** in the composer: a dimmed line you can accept with `tab` or `→`, edit, ignore, or type straight over. Nothing is sent until you send it, and the ask never enters the transcript — neither the question nor the answer, in memory or on disk. It costs one short model call, billed to the session like any other.
+
+The same offer can arrive on its own, without the command, if you switch on **Suggest a next step automatically** in `/settings`: after a reply, if you go quiet at an empty composer for half a minute, terva asks once. That setting is off by default, because it spends money on terva's own initiative. It governs only the automatic offer — `/nextstep` works whether it is on or off, since a command you typed is not unbidden.
+
+Two differences when you ask rather than wait:
+
+- **It reports back.** A failure, or an answer of "nothing obvious to suggest", shows on the status line. The automatic offer stays silent about both: you didn't ask, so an error banner would cost you more than the feature saves.
+- **It waits behind your writing.** If you start typing while the answer is in flight, the offer is held rather than thrown away, and appears if you clear the composer. It is discarded once you send something — by then it was drafted against a conversation that has moved on.
+
+Refused while a turn or a `!` shell command is still running: the reply in progress is the next step. Ghost text only ever draws on an empty composer, so an offer can never overwrite what you are writing.
 
 ### `/swarm`
 

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/i18n"
 )
 
 // nextStepIdle is how long the user must be quiet, with a reply finished and an
@@ -99,7 +100,7 @@ func (i *Interactive) maybeOfferNextStep() {
 	i.mu.Unlock()
 
 	go func() {
-		res, err := sc.SuggestNextStep(context.Background(), sess)
+		res, err := sc.SuggestNextStep(context.Background(), sess, ctrlproto.NextStepParams{})
 		i.runOnMain(func() {
 			i.mu.Lock()
 			i.nextStepInFlight = false
@@ -119,6 +120,86 @@ func (i *Interactive) maybeOfferNextStep() {
 				return
 			}
 			i.ed.SetGhost(res.Line)
+			i.invalidate()
+		})
+	}()
+}
+
+// askNextStepNow asks for a suggestion because the USER asked for one
+// (/nextstep), rather than because they went quiet.
+//
+// Four of the idle path's rules are deliberately absent, and each absence is
+// the same argument: those rules exist to keep terva from spending money and
+// screen space on something nobody requested, and here somebody did.
+//
+//   - The setting does not gate it. next_step governs the AUTOMATIC offer; a
+//     user who left it off did not thereby ask to lose a command they typed.
+//   - The idle window does not gate it. It could not: noteUserActivity runs on
+//     every keystroke, the triggering ones included, so an idle check here
+//     would refuse its own invocation every single time.
+//   - The arm does not gate it, so this works twice in a row on the same reply.
+//   - A non-empty composer does not stop it. The editor HOLDS an offer behind
+//     whatever is written and shows it when the composer empties, and a held
+//     offer dies at the next send — so nothing lingers past the moment it was
+//     about.
+//
+// What it adds instead is voice. The idle path is silent about every failure by
+// design; this one reports them, because a command that answers nothing reads
+// as broken.
+func (i *Interactive) askNextStepNow() {
+	sc, sess, ok := i.nextStepCarrier()
+	if !ok {
+		i.setStatusErr(i18n.T("next-step suggestions are not available here"))
+		return
+	}
+	if i.nextStepBusy() {
+		i.setStatusErr(i18n.T("wait for the current reply to finish — it is the next step"))
+		return
+	}
+	i.mu.Lock()
+	if i.nextStepInFlight {
+		// Claimed and released in one critical section, so two commands in quick
+		// succession cannot both think they are the one asking.
+		i.mu.Unlock()
+		i.setStatusErr(i18n.T("already asking what is next"))
+		return
+	}
+	// Spend the arm. The user now has the one suggestion this reply is owed, and
+	// letting the idle trigger land a second one thirty seconds later would
+	// overwrite the offer they asked for with one they did not, and bill them
+	// for it.
+	i.nextStepArmedAt = time.Time{}
+	i.nextStepInFlight = true
+	i.mu.Unlock()
+	i.setStatusOK(i18n.T("asking what to do next…"))
+	i.invalidate()
+
+	go func() {
+		res, err := sc.SuggestNextStep(context.Background(), sess, ctrlproto.NextStepParams{OnDemand: true})
+		i.runOnMain(func() {
+			i.mu.Lock()
+			i.nextStepInFlight = false
+			i.mu.Unlock()
+			switch {
+			case err != nil:
+				i.setStatusErr(err.Error())
+			case res.Line == "":
+				// An empty answer is the model declining, which is a legitimate
+				// answer to the question — but silence would read as a command
+				// that did not run.
+				i.setStatusOK(i18n.T("nothing obvious to suggest next"))
+			case i.nextStepBusy():
+				// They sent something while this was in flight, so the line was
+				// drafted against a conversation that has since moved. Offering it
+				// now would put a stale suggestion in front of a live turn — and
+				// that turn arms the idle trigger anyway.
+				i.setStatusOK(i18n.T("dropped the suggestion — the conversation moved on"))
+			default:
+				// The offer is its own report, so the waiting note goes away rather
+				// than being replaced by prose about a line the user can read.
+				i.setStatusOK("")
+				i.ed.SetGhost(res.Line)
+			}
 			i.invalidate()
 		})
 	}()
@@ -147,19 +228,34 @@ func (i *Interactive) nextStepReady() bool {
 	return i.nextStepOfferable()
 }
 
-// nextStepOfferable reports whether the composer is currently something we may
-// put an offer into. Checked before asking AND again before showing, because
-// the ask takes long enough for every one of these to change underneath it.
-func (i *Interactive) nextStepOfferable() bool {
+// nextStepBusy reports the two conditions under which there is no next step to
+// name yet, whoever is asking: work is in progress and the ground is moving.
+//
+// Split out of nextStepOfferable because the on-demand path needs exactly this
+// half and none of the rest — a user who typed /nextstep has answered the
+// composer and dialog questions below by asking. Sharing the predicate rather
+// than restating it keeps the two paths from disagreeing about what "busy"
+// means.
+//
+// Safe off the main loop: turns.Busy and shellRunning are both guarded.
+func (i *Interactive) nextStepBusy() bool {
 	if i.turns.Busy() {
 		// A turn is running, so the answer to "what next" is being written.
-		return false
+		return true
 	}
 	i.mu.Lock()
 	shell := i.shellRunning
 	i.mu.Unlock()
-	if shell {
-		// A `!` command is running in this process; the user is mid-errand.
+	// A `!` command is running in this process; the user is mid-errand.
+	return shell
+}
+
+// nextStepOfferable reports whether the composer is currently something we may
+// put an offer into UNASKED. Checked before asking AND again before showing,
+// because the ask takes long enough for every one of these to change underneath
+// it.
+func (i *Interactive) nextStepOfferable() bool {
+	if i.nextStepBusy() {
 		return false
 	}
 	if !i.ed.IsEmpty() {

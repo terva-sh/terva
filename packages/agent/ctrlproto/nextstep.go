@@ -10,9 +10,12 @@ import "context"
 // and the daemon answers with one line the user might type next. The client
 // offers it as ghost text; nothing is sent unless the user chooses to send it.
 //
-// No params: the session rides the frame, and the question is always the same
-// one. Served by an OPTIONAL controller, like suggest.reply beside it, so the
-// verb does not ripple out to every WorkspaceService implementer.
+// One param, and only because the ANSWER has to differ: a suggestion the user
+// asked for is not a suggestion terva volunteered, and the daemon frames the
+// question to the model accordingly (see workspace_nextstep.go). The session
+// still rides the frame. Served by an OPTIONAL controller, like suggest.reply
+// beside it, so the verb does not ripple out to every WorkspaceService
+// implementer.
 //
 // GroupSession, with suggest.reply and the side-chat trio, rather than
 // GroupConversation where shell.result sits. The distinction those two verbs
@@ -23,7 +26,24 @@ import "context"
 type NextStepController interface {
 	// SuggestNextStep returns one line the user might send next, or an empty
 	// one when there is nothing worth offering.
-	SuggestNextStep(ctx context.Context, sess string) (NextStepResult, error)
+	SuggestNextStep(ctx context.Context, sess string, p NextStepParams) (NextStepResult, error)
+}
+
+// NextStepParams says who wanted the suggestion.
+//
+// The zero value is the original caller: the idle trigger, asking on terva's
+// own initiative. So a client that predates this field, or one that never sets
+// it, gets exactly the behaviour it had — which is why the flag names the new
+// case rather than the old one.
+type NextStepParams struct {
+	// OnDemand marks a suggestion the user explicitly asked for (the TUI's
+	// /nextstep). It changes what the daemon tells the model about where the
+	// question came from, and nothing else: the answer is still one line, still
+	// recorded nowhere, still no work started. The idle prompt states as a fact
+	// that the user "has not asked you for anything", and on this path that
+	// sentence is false — a model told an untruth about its own situation is
+	// being asked to reason from it.
+	OnDemand bool `json:"on_demand,omitempty"`
 }
 
 // NextStepResult carries the offered line.

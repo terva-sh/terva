@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -104,7 +105,7 @@ func readSessionFile(t *testing.T, path string) []byte {
 func TestNextStepAsksAgainstTheSessionsOwnPrefix(t *testing.T) {
 	w, _, cl := nextStepSession(t, "s1", "run the tests")
 
-	got, err := w.SuggestNextStep(context.Background(), "s1")
+	got, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{})
 	if err != nil {
 		t.Fatalf("suggest: %v", err)
 	}
@@ -166,7 +167,7 @@ func TestNextStepRecordsNothing(t *testing.T) {
 	before := readSessionFile(t, path)
 	beforeMsgs := len(s.agent.Messages())
 
-	if _, err := w.SuggestNextStep(context.Background(), "s1"); err != nil {
+	if _, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{}); err != nil {
 		t.Fatalf("suggest: %v", err)
 	}
 
@@ -197,7 +198,7 @@ func TestNextStepRecordsNothing(t *testing.T) {
 func TestNextStepRereadsTheTranscriptOnEachCall(t *testing.T) {
 	w, s, cl := nextStepSession(t, "s1", "run the tests")
 
-	if _, err := w.SuggestNextStep(context.Background(), "s1"); err != nil {
+	if _, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{}); err != nil {
 		t.Fatalf("first suggest: %v", err)
 	}
 	if n := len(cl.lastReq(t).Messages); n != 3 {
@@ -207,7 +208,7 @@ func TestNextStepRereadsTheTranscriptOnEachCall(t *testing.T) {
 	s.agent.SetMessages(append(s.agent.Messages(),
 		provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "fixed it, what now?"}}}))
 
-	if _, err := w.SuggestNextStep(context.Background(), "s1"); err != nil {
+	if _, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{}); err != nil {
 		t.Fatalf("second suggest: %v", err)
 	}
 	req := cl.lastReq(t)
@@ -232,7 +233,7 @@ func TestNextStepReturnsOneShortLine(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w, _, _ := nextStepSession(t, "s1", tc.reply)
-			got, err := w.SuggestNextStep(context.Background(), "s1")
+			got, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{})
 			if err != nil {
 				t.Fatalf("suggest: %v", err)
 			}
@@ -249,7 +250,7 @@ func TestNextStepOnAnEmptySessionNeverCallsTheModel(t *testing.T) {
 	w, s, cl := nextStepSession(t, "s1", "run the tests")
 	s.agent.SetMessages(nil)
 
-	got, err := w.SuggestNextStep(context.Background(), "s1")
+	got, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{})
 	if err != nil {
 		t.Fatalf("suggest: %v", err)
 	}
@@ -267,7 +268,7 @@ func TestNextStepWithoutACredentialRefuses(t *testing.T) {
 	w, s, _ := nextStepSession(t, "s1", "run the tests")
 	s.agent = core.NewAgent(nil, "fake-model", "", core.Registry{})
 
-	if _, err := w.SuggestNextStep(context.Background(), "s1"); err == nil {
+	if _, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{}); err == nil {
 		t.Fatal("a session with no client should refuse, not suggest")
 	}
 }
@@ -283,10 +284,78 @@ func TestNextStepBooksItsSpend(t *testing.T) {
 	var booked provider.Usage
 	s.agent.AddUsageObserver(func(u, _ provider.Usage) { booked = u })
 
-	if _, err := w.SuggestNextStep(context.Background(), "s1"); err != nil {
+	if _, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{}); err != nil {
 		t.Fatalf("suggest: %v", err)
 	}
 	if booked.OutputTokens != 7 || booked.InputTokens != 900 {
 		t.Fatalf("booked usage = %+v, want the completion's own", booked)
+	}
+}
+
+// A suggestion the user ASKED for must not be introduced to the model as one
+// nobody asked for.
+//
+// The idle ask states "the user did not send it and has not asked you for
+// anything" as a fact to reason from, and on the /nextstep path that is false.
+// Both directions are asserted, because a variant that is selected for neither
+// case or for both would satisfy a one-sided check.
+func TestOnDemandAsksAsTheUserAsking(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		params   ctrlproto.NextStepParams
+		want     string
+		unwanted string
+	}{
+		{
+			name:     "asked for",
+			params:   ctrlproto.NextStepParams{OnDemand: true},
+			want:     "The user asked terva what they might send next",
+			unwanted: "has not asked you for anything",
+		},
+		{
+			name:     "volunteered",
+			params:   ctrlproto.NextStepParams{},
+			want:     "has not asked you for anything",
+			unwanted: "The user asked terva what they might send next",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, _, cl := nextStepSession(t, "s1", "run the tests")
+			if _, err := w.SuggestNextStep(context.Background(), "s1", tc.params); err != nil {
+				t.Fatalf("suggest: %v", err)
+			}
+			req := cl.lastReq(t)
+			ask := messageText(req.Messages[len(req.Messages)-1])
+			if !strings.Contains(ask, tc.want) {
+				t.Fatalf("the ask does not say %q:\n%s", tc.want, ask)
+			}
+			if strings.Contains(ask, tc.unwanted) {
+				t.Fatalf("the ask still says %q, which is untrue on this path:\n%s", tc.unwanted, ask)
+			}
+			// Whichever framing went out, the prohibition leads. That ORDER is the
+			// measured property (scripts/eval), not the wording around it.
+			body := strings.TrimPrefix(ask, NextStepTag+" ")
+			if !strings.HasPrefix(body, "Do not answer this in the conversation.") {
+				t.Fatalf("the ask no longer leads with the prohibition:\n%s", body)
+			}
+		})
+	}
+}
+
+// The two asks are separate literals — the extractor cannot fold a const
+// operand into a keyed default, and a translator needs the whole ask in one
+// entry. Duplication is the price, and drift is what it costs when unwatched:
+// this pins the halves that must stay equal and the half that must not.
+func TestNextStepBodiesShareTheRequest(t *testing.T) {
+	idle := strings.Split(nextStepBody, "\n\n")
+	asked := strings.Split(nextStepBodyOnDemand, "\n\n")
+	if len(idle) != 2 || len(asked) != 2 {
+		t.Fatalf("each ask should be two paragraphs; got %d and %d", len(idle), len(asked))
+	}
+	if idle[1] != asked[1] {
+		t.Fatalf("the request paragraph has drifted between the two asks:\nidle:   %q\nasked:  %q", idle[1], asked[1])
+	}
+	if idle[0] == asked[0] {
+		t.Fatal("the two asks open identically, so the on-demand variant is not saying anything different")
 	}
 }

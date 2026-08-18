@@ -1516,7 +1516,7 @@ func SetKimiCLIFallbackDisabled(disabled bool) error {
 	if err := privfs.MkdirAll(filepath.Dir(path)); err != nil {
 		return err
 	}
-	return privfs.WriteFile(path, []byte("disabled\n"))
+	return os.WriteFile(path, []byte("disabled\n"), privfs.FileMode)
 }
 
 func LoadKimiCodeCLIToken() *auth.OAuthToken {

@@ -96,6 +96,13 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 		i.openBtwDialog(parts[1:])
 		return false
 	},
+	// Not cancelsTurn: asking "what next" is not worth interrupting the reply
+	// that is still answering it. askNextStepNow refuses while a turn runs and
+	// says so.
+	"/nextstep": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.askNextStepNow()
+		return false
+	},
 	"/skill": (*Interactive).slashSkill,
 	"/skills": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 		i.openSkillsDialog()
@@ -438,12 +445,6 @@ func (i *Interactive) slashCD(_ context.Context, _ []string, _ string) bool {
 	return false
 }
 
-// slashTrust persists Workspace Trust for the current cwd (with `parent`
-// it also trusts descendants), then re-applies project content for the
-// session by re-cd-ing into the same directory — which rebuilds the
-// agent with the now-trusted Resolve (project extensions/skills/context
-// load). If the host didn't wire a rebuild path, it persists and tells
-// the user a restart will apply it. See docs/plans/workspace-trust.md.
 // wantsAlways reports whether a slash arg asked for the decision to be
 // remembered. Accepts the repo's bare-word idiom (`/unjail always`, matching
 // `/trust parent`) and the flag spelling people reach for anyway.
@@ -501,6 +502,12 @@ func (i *Interactive) slashUnjail(_ context.Context, parts []string, _ string) b
 	return false
 }
 
+// slashTrust persists Workspace Trust for the current cwd (with `parent`
+// it also trusts descendants), then re-applies project content for the
+// session by re-cd-ing into the same directory — which rebuilds the
+// agent with the now-trusted Resolve (project extensions/skills/context
+// load). If the host didn't wire a rebuild path, it persists and tells
+// the user a restart will apply it. See docs/plans/workspace-trust.md.
 func (i *Interactive) slashTrust(_ context.Context, parts []string, _ string) bool {
 	if i.cfg.TrustWorkspace == nil {
 		i.setStatusErr(i18n.T("/trust unavailable: host did not wire TrustWorkspace"))
