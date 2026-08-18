@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -76,6 +77,15 @@ var (
 	// The ASSIGNMENT, not the mention: acp_mode.go carries a comment explaining
 	// why it does not pin, and a substring match would read that as pinning.
 	pinsTrust = regexp.MustCompile(`\.TrustPin\s*=`)
+
+	// Session resume. openOrCreateSession is the shared opener: it stamps the
+	// running build, surfaces load warnings, re-points the agent at the
+	// session's OWN stored model, seeds cost and last-turn usage, and honours
+	// --session / --continue / --resume / --resume <id>. A host that opens a
+	// session itself gets none of that unless it reimplements all of it, which
+	// is what bot mode did — and it reimplemented two of the six.
+	opensSession  = regexp.MustCompile(`core\.OpenSession\(`)
+	definesOpener = regexp.MustCompile(`^func openOrCreateSession\(`)
 )
 
 // hostFile is one source file and what it does to an agent.
@@ -93,6 +103,11 @@ type hostFile struct {
 	rebuilds bool
 	live     bool // applies a trust flip through the shared event
 	pins     bool // pins the verdict for the process's lifetime
+	// opens means the file calls core.OpenSession itself rather than going
+	// through the shared opener. opener marks the file that DEFINES the shared
+	// opener, which necessarily calls it and is not a fork.
+	opens  bool
+	opener bool
 }
 
 func (h hostFile) underAgent() string { return strings.TrimPrefix(h.path, "packages/agent/") }
@@ -152,6 +167,12 @@ func census(t *testing.T) []hostFile {
 			}
 			if pinsTrust.MatchString(code) {
 				h.pins = true
+			}
+			if definesOpener.MatchString(code) {
+				h.opener = true
+			}
+			if opensSession.MatchString(code) {
+				h.opens = true
 			}
 		}
 		files = append(files, h)
@@ -510,5 +531,106 @@ func TestEveryAgentHostHasARecordedCredentialRefreshPosture(t *testing.T) {
 			t.Errorf("noRefresherHosts names %s, which no longer builds an agent — delete the entry rather "+
 				"than leaving a decision standing for a host that is gone", path)
 		}
+	}
+}
+
+// fixedSessionResumeHosts records, for every agent host that opens a session
+// ITSELF rather than through openOrCreateSession, why that is right for it.
+//
+// openOrCreateSession is not a convenience wrapper. It is the one place that
+// stamps the running build onto a resumed session, surfaces the warnings
+// OpenSession had to skip, re-points the agent at the session's OWN stored
+// model (applyResumedModel), seeds cumulative cost and last-turn usage, seeds a
+// card greeting on a fresh session, and honours --session / --continue /
+// --resume / --resume <id>. A host that opens a session itself gets none of it
+// unless it reimplements all of it.
+//
+// Bot mode is why this census exists. openOrCreateSessionForBot called
+// core.OpenSession + SetMessages and stopped, under a doc comment claiming it
+// "reuses the same logic as interactive mode". So a bot resumed with --continue
+// answered on the config default while the session file named another model, and
+// the usage observer restarted the cumulative column at ~0 — a bot restarted
+// daily wrote a timeline that stepped BACKWARDS and under-reported that
+// session's lifetime spend forever. `bot run --session PATH` silently created a
+// new session somewhere else and never wrote the named file.
+//
+// The other guards in this file census trust posture and credential refresh.
+// Neither could see this: the fork was not a trust decision or a credential one,
+// it was a host quietly answering a question nobody was asking it.
+var fixedSessionResumeHosts = map[string]string{
+	"packages/agent/acp_mode.go": "an editor names the session over the ACP wire (session/load carries the " +
+		"path), so there is no --session/--continue/--resume to honour and no picker to reach. It does its " +
+		"own StampVersion + applyResumedModel for that path; the shared opener's flag dispatch would have " +
+		"nothing to dispatch on.",
+}
+
+// Scope note. This rule reaches AGENT HOSTS — files that build a core.Agent —
+// because a fork only costs anything where a resumed transcript is about to be
+// run on. The web daemon opens sessions in workspace.go, which builds no agent
+// (workspace_session.go does), so it is out of reach here by construction rather
+// than by exemption: it materializes sessions from ids the client already chose,
+// trims to a resume window the headless opener has no concept of, and re-points
+// the model earlier by injecting sess.Meta.Model before build.Resolve — which is
+// the daemon's equivalent and is what applyResumedModel's own doc names. Reads
+// that never hydrate an agent (build/sessionread.go, tools/actor_spawn.go) are
+// out of reach for the same reason.
+
+// Every agent host either goes through the shared opener or has said why it does
+// not. Both directions: an entry naming a file that stopped opening sessions is
+// a stale decision that reads as a considered one.
+func TestEveryAgentHostHasARecordedSessionResumePosture(t *testing.T) {
+	hosts := agentHosts(t)
+	seen := map[string]bool{}
+	var forks []string
+	for _, h := range hosts {
+		if h.opener {
+			continue // the shared opener itself
+		}
+		if !h.opens {
+			continue
+		}
+		seen[h.path] = true
+		if _, ok := fixedSessionResumeHosts[h.path]; !ok {
+			forks = append(forks, h.path)
+		}
+	}
+	sort.Strings(forks)
+	if len(forks) > 0 {
+		t.Errorf("these hosts open a session themselves instead of calling openOrCreateSession, so they "+
+			"silently skip the model re-point, the usage seeding, and the --session/--resume flags. Route "+
+			"them through it, or record why not in fixedSessionResumeHosts:\n  %s",
+			strings.Join(forks, "\n  "))
+	}
+	for path := range fixedSessionResumeHosts {
+		if !seen[path] {
+			t.Errorf("fixedSessionResumeHosts names %s, which no longer opens a session as an agent host — "+
+				"a stale exemption reads as a considered decision", path)
+		}
+	}
+}
+
+// The vacuity guard for the census above: at least one host must actually reach
+// the shared opener, or "no forks" would be satisfied by nobody opening anything.
+func TestTheSharedSessionOpenerHasHosts(t *testing.T) {
+	var users, openers int
+	for _, f := range census(t) {
+		if f.opener {
+			openers++
+			continue
+		}
+		for _, code := range f.code {
+			if strings.Contains(code, "openOrCreateSession(") {
+				users++
+				break
+			}
+		}
+	}
+	if openers != 1 {
+		t.Fatalf("found %d definitions of openOrCreateSession, want exactly 1 — the shared opener has been "+
+			"renamed, duplicated, or deleted, and the census above can no longer tell a fork from it", openers)
+	}
+	if users < 3 {
+		t.Errorf("only %d hosts call the shared opener; bot, rpc, swarm and the two cli entries all should, "+
+			"so the census above is not exercising what it claims", users)
 	}
 }

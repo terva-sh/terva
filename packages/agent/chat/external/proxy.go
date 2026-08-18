@@ -124,9 +124,6 @@ func (p *Proxy) warnf(format string, args ...any) {
 	fmt.Fprintln(os.Stderr, msg)
 }
 
-// dataDir is the child's scratch directory for inbound attachments,
-// announced in hello_ack. Separate from the connector's own state so
-// the host's read-and-delete sweep can't eat credentials.
 // recordSecrets registers what the connector declared in its handshake: its own
 // age recipient and the paths in its state file that hold sealed values.
 //
@@ -154,6 +151,9 @@ func (p *Proxy) recordSecrets(decl connproto.SecretsDecl) {
 	}
 }
 
+// dataDir is the child's scratch directory for inbound attachments,
+// announced in hello_ack. Separate from the connector's own state so
+// the host's read-and-delete sweep can't eat credentials.
 func (p *Proxy) dataDir() string {
 	return filepath.Join(ConnectorsDir(p.tervaHome), p.manifest.Name, "data")
 }

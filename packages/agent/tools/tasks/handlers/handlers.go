@@ -379,9 +379,6 @@ func suggestPending(s *tasks.Store, exclude string) string {
 	return ""
 }
 
-// isSteppingAway reports whether a status takes the current task out of active
-// focus — done (finished), cancelled (abandoned), or blocked (parked) — which is
-// exactly when activate_next ("close/park this, focus the next") makes sense.
 // mutatingPatch reports whether a task_update request asks for any change at
 // all. It mirrors the store's own ignore rules rather than just testing for
 // non-nil pointers, because the one field the store silently drops is the one a
@@ -410,6 +407,9 @@ func mutatingPatch(p tasks.UpdatePatch, nextID string) bool {
 	return false
 }
 
+// isSteppingAway reports whether a status takes the current task out of active
+// focus — done (finished), cancelled (abandoned), or blocked (parked) — which is
+// exactly when activate_next ("close/park this, focus the next") makes sense.
 func isSteppingAway(s tasks.Status) bool {
 	return s == tasks.StatusDone || s == tasks.StatusCancelled || s == tasks.StatusBlocked
 }

@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"path/filepath"
 	"strings"
 
 	"terva.sh/terva/packages/agent/config"
@@ -79,12 +78,7 @@ func (s *wsSession) worktreeEnv() (worktree.Env, error) {
 	if s.agent != nil {
 		sessID, _ = s.agent.SessionIdentity()
 	}
-	return worktree.Env{
-		Root:       filepath.Join(config.TervaHome(), "worktrees"),
-		LegacyRoot: filepath.Join(config.TervaHome(), "ext-data", "git-worktree"),
-		CWD:        s.cwd,
-		SessionID:  sessID,
-	}, nil
+	return worktree.HostEnv(config.TervaHome(), s.cwd, sessID), nil
 }
 
 // worktreeAction serves the worktrees surface's mutations. Two today, both

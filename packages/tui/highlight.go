@@ -110,8 +110,6 @@ func LanguageFromPath(p string) string {
 	return extLang[ext]
 }
 
-// chooseLexer picks the best lexer for a language hint; falls back to
-// nil (no highlighting) if the hint is empty or unknown.
 // stripANSIBackgrounds removes SGR background-color attributes emitted by
 // terminal syntax formatters while preserving foreground colors and styles.
 // Chroma's inherited styles can assign black backgrounds to a few tokens
@@ -172,6 +170,8 @@ func stripANSIBackgrounds(s string) string {
 	return out.String()
 }
 
+// chooseLexer picks the best lexer for a language hint; falls back to
+// nil (no highlighting) if the hint is empty or unknown.
 func chooseLexer(lang string) chroma.Lexer {
 	if lang == "" {
 		return nil

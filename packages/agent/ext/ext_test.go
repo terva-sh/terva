@@ -170,9 +170,6 @@ func TestOpenPanelEmitsCorrectFrame(t *testing.T) {
 	h.hostW.Close()
 }
 
-// TestSubmitSlashEmitsFrame checks that e.SubmitSlash sends a
-// submit_slash frame carrying the slash text verbatim, and that a
-// non-slash string emits nothing at all.
 // decodeWithdrawn runs a withdrawal action that emits nFrames
 // set_withdrawn_tools snapshots and returns the LAST one (the settled
 // state), so a subtractive sequence can be asserted on its final wire.
@@ -355,6 +352,9 @@ func TestSessionHandleMutators(t *testing.T) {
 	})
 }
 
+// TestSubmitSlashEmitsFrame checks that e.SubmitSlash sends a
+// submit_slash frame carrying the slash text verbatim, and that a
+// non-slash string emits nothing at all.
 func TestSubmitSlashEmitsFrame(t *testing.T) {
 	h := newHarness("test-ext")
 	go h.ext.Run()

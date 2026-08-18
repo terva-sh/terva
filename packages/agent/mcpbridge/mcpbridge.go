@@ -38,8 +38,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
+
+	"terva.sh/terva/packages/lineframe"
 )
 
 const (
@@ -115,9 +118,16 @@ type jsonrpcReq struct {
 }
 
 func (s *server) run(ctx context.Context, in io.Reader) error {
-	br := bufio.NewReader(in)
+	// lineframe, not a bare bufio.Reader: this is terva's own stdio wire to a
+	// peer process, so an over-limit frame must cost that frame and not the
+	// session — and an unbounded ReadBytes buffers a wedged peer's gigabyte
+	// straight into the heap. RECOVER, because the wire is multiplexed: one
+	// oversized tools/call must not take every other call with it.
+	fr := lineframe.NewReader(in, lineframe.DefaultMaxBytes, func(msg string) {
+		fmt.Fprintf(os.Stderr, "mcp-bridge: %s\n", msg)
+	})
 	for {
-		line, err := br.ReadBytes('\n')
+		line, err := fr.Read()
 		if line = bytes.TrimSpace(line); len(line) > 0 {
 			s.handle(ctx, line)
 		}
@@ -267,7 +277,13 @@ func (s *server) ask(ctx context.Context, req Request) (Reply, error) {
 	if _, err := conn.Write(append(line, '\n')); err != nil {
 		return Reply{}, err
 	}
-	respLine, err := bufio.NewReader(conn).ReadBytes('\n')
+	// REJECT, not recover: this connection carries exactly ONE reply, so a
+	// frame skipped here is not a gap in a stream — it is the whole answer, and
+	// silently continuing would hang the approval.
+	respLine, tooLong, err := lineframe.ReadFrame(bufio.NewReader(conn), lineframe.DefaultMaxBytes)
+	if tooLong {
+		return Reply{}, fmt.Errorf("approval reply from the orchestrator exceeded %d bytes", lineframe.DefaultMaxBytes)
+	}
 	if len(bytes.TrimSpace(respLine)) == 0 {
 		if err != nil {
 			return Reply{}, err

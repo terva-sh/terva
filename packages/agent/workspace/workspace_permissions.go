@@ -1,10 +1,6 @@
 package workspace
 
 import (
-	"encoding/json"
-	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -146,55 +142,41 @@ func removeUserPermissionRule(match config.PermissionRuleConfig) error {
 }
 
 // setProjectPermissionRule adds or removes a rule in the project config's
-// permissions array (.terva/config.json), a generic-map round-trip like
-// setProjectExtensionDisabled. add=false just drops the matching rule. Project
-// rules are restrict-only and apply even in an untrusted workspace.
+// permissions array (.terva/config.json). add=false just drops the matching
+// rule. Project rules are restrict-only and apply even in an untrusted
+// workspace.
+//
+// The generic-map round-trip is config.MutateProjectConfig's, not a fourth copy
+// of it: this and the three setters in packages/agent/config edit different keys
+// of ONE document, so they have to agree about how it is read, published and
+// serialized — and being in a different package meant nothing forced them to.
 func setProjectPermissionRule(cwd string, rule config.PermissionRuleConfig, add bool) error {
-	path := config.ProjectConfigPath(cwd)
-	generic := map[string]any{}
-	if raw, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(raw, &generic); err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	var list []any
-	if arr, ok := generic["permissions"].([]any); ok {
-		for _, e := range arr {
-			if m, ok := e.(map[string]any); ok && projectRuleMatches(m, rule) {
-				continue // drop the match (dedup on add, delete on remove)
+	return config.MutateProjectConfig(cwd, func(doc map[string]any) {
+		var list []any
+		if arr, ok := doc["permissions"].([]any); ok {
+			for _, e := range arr {
+				if m, ok := e.(map[string]any); ok && projectRuleMatches(m, rule) {
+					continue // drop the match (dedup on add, delete on remove)
+				}
+				list = append(list, e)
 			}
-			list = append(list, e)
 		}
-	}
-	if add {
-		obj := map[string]any{"tool": rule.Tool, "decision": rule.Decision}
-		if rule.Args != "" {
-			obj["args"] = rule.Args
+		if add {
+			obj := map[string]any{"tool": rule.Tool, "decision": rule.Decision}
+			if rule.Args != "" {
+				obj["args"] = rule.Args
+			}
+			if rule.Reason != "" {
+				obj["reason"] = rule.Reason
+			}
+			list = append(list, obj)
 		}
-		if rule.Reason != "" {
-			obj["reason"] = rule.Reason
+		if len(list) == 0 {
+			delete(doc, "permissions")
+			return
 		}
-		list = append(list, obj)
-	}
-	if len(list) == 0 {
-		delete(generic, "permissions")
-	} else {
-		generic["permissions"] = list
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(generic, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(b, '\n'), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+		doc["permissions"] = list
+	})
 }
 
 func projectRuleMatches(m map[string]any, r config.PermissionRuleConfig) bool {

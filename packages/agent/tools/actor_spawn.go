@@ -29,15 +29,6 @@ type CastMember struct {
 	Model    string
 }
 
-// ActorSpawnTool is the --play director's skin over the swarm dispatch engine:
-// it voices a member of the declared cast. Unlike swarm_spawn (fire-and-forget
-// coding sub-agents), actor_spawn is SYNCHRONOUS — it hands the actor the
-// situation, waits for its line, and RETURNS the line so the director can weave
-// it into the scene ("director & performers", Model Y; docs/proposals/agent-dispatch.md).
-//
-// Actors are WARM: once voiced, an actor is kept alive (Warm), so it remembers
-// the scene across turns and only its first line pays spawn latency. Subsequent
-// situations are delivered to the live actor with SendUserTurn.
 // ActorEngine is the slice of the swarm supervisor the tool needs, extracted so
 // the dispatch/reuse decision is unit-testable without a live subprocess.
 // *swarm.Swarm satisfies it.
@@ -48,6 +39,15 @@ type ActorEngine interface {
 	Remove(id string) error
 }
 
+// ActorSpawnTool is the --play director's skin over the swarm dispatch engine:
+// it voices a member of the declared cast. Unlike swarm_spawn (fire-and-forget
+// coding sub-agents), actor_spawn is SYNCHRONOUS — it hands the actor the
+// situation, waits for its line, and RETURNS the line so the director can weave
+// it into the scene ("director & performers", Model Y; docs/proposals/agent-dispatch.md).
+//
+// Actors are WARM: once voiced, an actor is kept alive (Warm), so it remembers
+// the scene across turns and only its first line pays spawn latency. Subsequent
+// situations are delivered to the live actor with SendUserTurn.
 type ActorSpawnTool struct {
 	// Swarm is the dispatch engine. Nil means actors are unavailable.
 	Swarm ActorEngine

@@ -1,12 +1,23 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"os"
 	"sync"
+
+	"terva.sh/terva/packages/lineframe"
 )
+
+// bridgeMaxFrameBytes is this bridge's frame ceiling, on BOTH halves of the
+// relay. It is larger than lineframe.DefaultMaxBytes because an MCP tool result
+// legitimately carries a screenshot or a whole file read, and it lives here as
+// one constant because the two halves used to declare it separately — a limit
+// written twice is a limit that drifts, and neither copy appeared in
+// docs/resource-limits.md's inventory.
+const bridgeMaxFrameBytes = 8 << 20
 
 // stdioServer is the bridge's downstream face: a newline-delimited JSON-RPC MCP
 // server over stdin/stdout, spawned by terva like any stdio MCP command. It
@@ -29,11 +40,27 @@ func newStdioServer(up *upstream, initRes json.RawMessage, in io.Reader, out io.
 }
 
 func (s *stdioServer) serve(ctx context.Context) error {
-	sc := bufio.NewScanner(s.in)
-	sc.Buffer(make([]byte, 0, 64<<10), 8<<20)
+	// lineframe, not bufio.Scanner. A single request over the ceiling made
+	// Scan() return false and ended serve() outright — so the bridge process
+	// exited and every remaining tool call to that server failed for the rest of
+	// the session. RECOVER: this wire multiplexes every call to one MCP server,
+	// and one oversized argument list must not take the others with it.
+	//
+	// The ceiling is stated once and shared with the upstream half, which used
+	// to carry its own copy of the same number.
+	fr := lineframe.NewReader(s.in, bridgeMaxFrameBytes, func(msg string) {
+		fmt.Fprintf(os.Stderr, "terva-mcp-bridge: %s\n", msg)
+	})
 	var wg sync.WaitGroup
-	for sc.Scan() {
-		line := append([]byte(nil), sc.Bytes()...)
+	for {
+		line, err := fr.Read()
+		if err != nil {
+			wg.Wait()
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
 		if len(line) == 0 {
 			continue
 		}
@@ -52,8 +79,6 @@ func (s *stdioServer) serve(ctx context.Context) error {
 			s.handle(ctx, req)
 		}(req)
 	}
-	wg.Wait()
-	return sc.Err()
 }
 
 func (s *stdioServer) handle(ctx context.Context, req rpcRequest) {

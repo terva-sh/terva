@@ -58,24 +58,63 @@ func stripImageData(ev Event) Event {
 		ev.Result = blocks
 	}
 	if ev.Snapshot != nil && len(ev.Snapshot.Messages) > 0 {
-		var msgs []core.WireMessage
-		for i, m := range ev.Snapshot.Messages {
-			mm, changed := msgWithoutImageData(m)
-			if !changed {
-				continue
-			}
-			if msgs == nil {
-				msgs = append([]core.WireMessage(nil), ev.Snapshot.Messages...)
-			}
-			msgs[i] = mm
-		}
-		if msgs != nil {
+		if msgs, changed := messagesWithoutImageData(ev.Snapshot.Messages); changed {
 			snap := *ev.Snapshot
 			snap.Messages = msgs
 			ev.Snapshot = &snap
 		}
 	}
 	return ev
+}
+
+// stripResultImageData returns a command RESULT without outbound image
+// payloads, for a client that did not negotiate FeatureImageData.
+//
+// Stripping used to happen only on the two event pumps, so the rule held for
+// everything terva pushed and for nothing a client pulled. conversation.history
+// and conversation.reveal both answer with []core.WireMessage — the same
+// transcript rows a snapshot carries — and both shipped full image payloads to
+// a client that had declared it could not use them. Paging up through a session
+// with screenshots in it was enough to trigger it.
+//
+// The type switch is a no-op for every result that holds no messages, and a
+// census over the *Result declarations requires a new message-carrying one to
+// be added here.
+func stripResultImageData(result any) any {
+	switch r := result.(type) {
+	case HistoryResult:
+		if msgs, changed := messagesWithoutImageData(r.Messages); changed {
+			r.Messages = msgs
+			return r
+		}
+	case RevealResult:
+		if msgs, changed := messagesWithoutImageData(r.Messages); changed {
+			r.Messages = msgs
+			return r
+		}
+	}
+	return result
+}
+
+// messagesWithoutImageData strips image Data from a transcript slice, copying
+// only when something actually held data. Copy-on-strip like every helper here:
+// the caller's slice is shared and is never mutated.
+func messagesWithoutImageData(in []core.WireMessage) ([]core.WireMessage, bool) {
+	var out []core.WireMessage
+	for i, m := range in {
+		mm, changed := msgWithoutImageData(m)
+		if !changed {
+			continue
+		}
+		if out == nil {
+			out = append([]core.WireMessage(nil), in...)
+		}
+		out[i] = mm
+	}
+	if out == nil {
+		return in, false
+	}
+	return out, true
 }
 
 func msgWithoutImageData(m core.WireMessage) (core.WireMessage, bool) {

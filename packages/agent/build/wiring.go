@@ -235,20 +235,62 @@ func (a *MCPToolAdapter) AllowsThisRun(name string) bool {
 	return a.allowed == nil || a.allowed[name]
 }
 
-// FanoutAgentEvent translates a core.AgentEvent into the wire-format
-// EventFromHost and pushes it through the extension manager. Only
-// the events that have a clear extension-facing meaning are
-// forwarded; internal-only ones (text_delta, tool_progress) are
-// dropped to keep the per-extension stream sane.
-func TrimMessagesForResume(msgs []provider.Message, keepTail int) []provider.Message {
+// ResumeWindow is the in-memory transcript a resume trim produced, plus what a
+// caller needs to map its indices back onto the on-disk transcript.
+//
+// It exists because the caller used to RECONSTRUCT that mapping by subtracting
+// lengths — workspace.go did base := len(full) - len(trimmed) — which silently
+// assumes every message this function removes comes off the FRONT. That is not
+// true, and the untrimmed early return is the clearest case: it still runs
+// RepairOrphanedToolResults, which deletes any message whose content is entirely
+// orphaned tool_result blocks, from anywhere in the slice.
+//
+// The path is real. A user deletes an assistant message carrying a tool_use;
+// core's loader stubs missing tool_RESULTS but never drops orphans, so the
+// orphaned result survives on disk; the next resume of that session — under a
+// hundred messages, never trimmed — has one row quietly removed from the middle.
+// The old subtraction returned base=1, and from then on every delete and edit
+// persisted its amend one index too far, rewriting a message the user never
+// touched on the next reload. That is exactly the corruption the revise-base
+// machinery was added to prevent, re-opened from the other side.
+type ResumeWindow struct {
+	// Messages is the trimmed, repaired transcript to hydrate the agent with.
+	Messages []provider.Message
+	// Base is how many leading on-disk messages the window skips: in-memory
+	// index i is on-disk index i+Base. 0 when nothing was dropped from the
+	// front.
+	Base int
+	// Head is true when Messages[0] is the prepended compaction summary. That
+	// row maps to on-disk index 0 rather than to Base, and is not revisable.
+	Head bool
+	// Inexact reports that the Base offset does NOT describe the mapping.
+	//
+	// It is set when the orphan repair removed a message from INSIDE the
+	// window, because no single offset can express that — an index below the
+	// removal maps one way and an index above it another. A caller that cannot
+	// map indices must REFUSE to persist an amend rather than persist it at a
+	// guess: a refused edit is visible, and a misplaced one silently rewrites a
+	// message the user never touched.
+	//
+	// Stated negatively so the ZERO ResumeWindow — an untrimmed transcript,
+	// Base 0, no head — is the identity mapping and is exact, which is what a
+	// caller that never trimmed should get without having to say so.
+	Inexact bool
+}
+
+func TrimMessagesForResume(msgs []provider.Message, keepTail int) ResumeWindow {
 	if keepTail <= 0 || len(msgs) <= keepTail {
-		return provider.RepairOrphanedToolResults(msgs)
+		repaired := provider.RepairOrphanedToolResults(msgs)
+		// No leading drop on this path, so any length change came from the
+		// middle and the offset model does not hold.
+		return ResumeWindow{Messages: repaired, Inexact: len(repaired) != len(msgs)}
 	}
 	var out []provider.Message
 	start := len(msgs) - keepTail
 	// Preserve the synthetic compaction summary when present so an
 	// already-compacted session stays compacted after resume.
-	if len(msgs) > 0 && msgs[0].Meta["compaction"] == "true" && start > 1 {
+	head := len(msgs) > 0 && msgs[0].Meta["compaction"] == "true" && start > 1
+	if head {
 		out = append(out, msgs[0])
 	}
 	// Avoid hydrating a tail that starts with orphan tool_result rows;
@@ -257,9 +299,24 @@ func TrimMessagesForResume(msgs []provider.Message, keepTail int) []provider.Mes
 		start++
 	}
 	out = append(out, msgs[start:]...)
-	return provider.RepairOrphanedToolResults(out)
+	// Base is the leading count this function ACTUALLY skipped, not a length
+	// delta: the compaction head is carried over from index 0 and is not part of
+	// the offset, which is what Head marks.
+	before := len(out)
+	repaired := provider.RepairOrphanedToolResults(out)
+	return ResumeWindow{
+		Messages: repaired,
+		Base:     start,
+		Head:     head,
+		Inexact:  len(repaired) != before,
+	}
 }
 
+// FanoutAgentEvent translates a core.AgentEvent into the wire-format
+// EventFromHost and pushes it through the extension manager. Only
+// the events that have a clear extension-facing meaning are
+// forwarded; internal-only ones (text_delta, tool_progress) are
+// dropped to keep the per-extension stream sane.
 func FanoutAgentEvent(mgr *extensions.Manager, ev core.AgentEvent) {
 	if mgr == nil {
 		return

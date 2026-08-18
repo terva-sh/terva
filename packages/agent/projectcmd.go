@@ -28,6 +28,13 @@ func runProjectCommand(rawArgs []string) (handled bool, err error) {
 		sub = rawArgs[1]
 		rest = rawArgs[2:]
 	}
+	// Every subverb, before any of them reads an argument. The subverbs that
+	// take one used to persist it, so this is a state-change guard rather than
+	// a convenience.
+	if hasHelpArg(rest) {
+		printProjectHelp()
+		return true, nil
+	}
 	switch sub {
 	case "init":
 		return true, runProjectInit(rest)
@@ -50,6 +57,31 @@ func runProjectCommand(rawArgs []string) (handled bool, err error) {
 		printProjectHelp()
 		return true, i18n.Errorf("unknown 'terva project' subcommand %q (try: terva project help)", sub)
 	}
+}
+
+// hasHelpArg reports whether args carry one of the help forms every other verb
+// in this binary honors.
+//
+// `terva project`'s subverbs read their argument straight out of rest[0], and
+// only the TOP level checked for help. So a help probe became the value:
+// `terva project model --help` wrote "--help" into .terva/config.json as the
+// project's model, and `terva project ext disable --help` added it to the
+// project's disable list. A probe must never persist anything.
+//
+// The flag forms count anywhere, so `terva project ext adopt foo --help`
+// explains itself instead of adopting foo. The bare word counts only in the
+// leading verb position, because everywhere else it is a legitimate value —
+// `terva project init --persona help` names a persona.
+func hasHelpArg(args []string) bool {
+	for i, a := range args {
+		if a == "-h" || a == "--help" {
+			return true
+		}
+		if a == "help" && i == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func printProjectHelp() {

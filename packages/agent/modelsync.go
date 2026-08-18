@@ -265,7 +265,13 @@ func ValidateAndRepairConfig() {
 	}
 
 	if changed {
-		if err := config.SaveConfig(cfg); err != nil {
+		// Persist only the two fields this repaired. Writing the whole struct
+		// back would carry the copy loaded at the top of this function over any
+		// change another instance has made since.
+		provName, model := cfg.Provider, cfg.Model
+		if err := config.MutateConfig(func(c *config.Config) {
+			c.Provider, c.Model = provName, model
+		}); err != nil {
 			fmt.Fprintf(os.Stderr, "terva: config.json: failed to persist repair: %v\n", err)
 		}
 	}

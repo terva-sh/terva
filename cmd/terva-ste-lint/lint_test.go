@@ -167,12 +167,15 @@ func TestBaselineOnlyShrinks(t *testing.T) {
 		fingerprint(f): true,
 		"a.go:sentence-length:deadbeefdeadbeefff": true,
 	}
-	fresh, stale := applyBaseline([]Finding{f}, base)
+	fresh, stale, unjudged := applyBaseline([]Finding{f}, base, judgedRules("", true))
 	if len(fresh) != 0 {
 		t.Errorf("a baselined finding was reported as new: %v", fresh)
 	}
 	if len(stale) != 1 || stale[0] != "a.go:sentence-length:deadbeefdeadbeefff" {
 		t.Errorf("stale baseline entry not reported, got %v", stale)
+	}
+	if len(unjudged) != 0 {
+		t.Errorf("every rule ran, so nothing may be unjudged: %v", unjudged)
 	}
 }
 
@@ -194,6 +197,84 @@ func TestFingerprintIgnoresLineNumbers(t *testing.T) {
 func TestMissingDictionaryIsNotAnError(t *testing.T) {
 	if _, ok := loadDictionary(testsupport.TempDir(t)); ok {
 		t.Error("loadDictionary reported a dictionary in an empty directory")
+	}
+}
+
+// A baseline written on the one machine that HAS the word list carries
+// vocabulary fingerprints. No CI runner and no fresh clone has that file, so
+// the rule does not run there and those entries never fire — which the
+// staleness check read as "the text improved", failed the gate on, and told the
+// reader to fix by shrinking a baseline that describes text nobody looked at.
+// Permanently red, on every runner, for a file that is correct.
+//
+// TestMissingDictionaryIsNotAnError already asserted the absence is not an
+// error. It is scoped to loadDictionary, so it stayed green while the baseline
+// turned that same absence into a failure one layer up.
+func TestVocabularyEntriesAreNotStaleWhereTheRuleCannotRun(t *testing.T) {
+	const vocab = "a.go:vocabulary:aaaaaaaaaaaa"
+	base := map[string]bool{vocab: true}
+
+	// The CI runner: no dictionary, so the rule never ran.
+	_, stale, unjudged := applyBaseline(nil, base, judgedRules("", false))
+	if len(stale) != 0 {
+		t.Errorf("a vocabulary entry went stale on a run with no dictionary: %v\n"+
+			"every CI runner is in this state, so the gate reds permanently", stale)
+	}
+	if len(unjudged) != 1 || unjudged[0] != vocab {
+		t.Errorf("the entry should be reported unjudged, got %v", unjudged)
+	}
+}
+
+// The complement, and the half that keeps the fix from being "never report
+// anything": with the dictionary present the rule DID run, so the same entry
+// not firing is real staleness and must still fail.
+func TestVocabularyEntriesStillGoStaleWhereTheRuleDidRun(t *testing.T) {
+	const vocab = "a.go:vocabulary:aaaaaaaaaaaa"
+	base := map[string]bool{vocab: true}
+
+	_, stale, unjudged := applyBaseline(nil, base, judgedRules("", true))
+	if len(stale) != 1 || stale[0] != vocab {
+		t.Errorf("a vocabulary entry that no longer fires on a run that CHECKED it was not "+
+			"reported stale, got %v — suspension has swallowed the shrink rule", stale)
+	}
+	if len(unjudged) != 0 {
+		t.Errorf("the rule ran, so nothing may be unjudged: %v", unjudged)
+	}
+}
+
+// The second way a rule goes quiet, which the dictionary case shares a root
+// with: -rule narrows the run to one rule, and every OTHER rule's entries used
+// to go stale at once. `terva-ste-lint -rule term -check` could not pass.
+func TestNarrowingToOneRuleDoesNotStaleTheRest(t *testing.T) {
+	base := map[string]bool{
+		"a.go:term:aaaaaaaaaaaa":            true,
+		"a.go:sentence-length:bbbbbbbbbbbb": true,
+		"a.go:passive-voice:cccccccccccc":   true,
+	}
+
+	_, stale, unjudged := applyBaseline(nil, base, judgedRules("term", true))
+	if len(stale) != 1 || stale[0] != "a.go:term:aaaaaaaaaaaa" {
+		t.Errorf("stale should hold only the rule that ran, got %v", stale)
+	}
+	if len(unjudged) != 2 {
+		t.Errorf("the two rules that did not run should be unjudged, got %v", unjudged)
+	}
+}
+
+// ruleOf reads the rule out of a fingerprint, and it reads from the RIGHT
+// because the leftmost field is a path. A left-to-right split would name the
+// directory as the rule on any path containing a colon, and would then judge
+// every such entry against a rule that does not exist.
+func TestRuleOfReadsPastAColonInThePath(t *testing.T) {
+	for _, tc := range []struct{ fp, want string }{
+		{"a.go:term:aaaaaaaaaaaa", "term"},
+		{"pkg/od:d/a.go:sentence-length:bbbbbbbbbbbb", "sentence-length"},
+		{fingerprint(Finding{Text: Text{File: "x/y.go"}, Rule: "vocabulary", Quote: "w"}), "vocabulary"},
+		{"malformed", ""},
+	} {
+		if got := ruleOf(tc.fp); got != tc.want {
+			t.Errorf("ruleOf(%q) = %q, want %q", tc.fp, got, tc.want)
+		}
 	}
 }
 

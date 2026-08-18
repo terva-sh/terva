@@ -1662,11 +1662,6 @@ func (a *Agent) acquire() (release func(), ok bool) {
 	return func() { a.running.Store(false) }, true
 }
 
-// Prompt sends a user message and runs the agent loop until the model
-// stops or an error occurs. Events are delivered via sink in order.
-// sink must not block the caller for long; buffer as needed. Prompt is
-// single-flight: it returns ErrBusy if another Prompt/Continue/Compact
-// is already in progress.
 // UserMessageExtras is what a host attaches to a user turn beyond the words the
 // user typed: a preamble the host assembled, and metadata to stamp on the
 // stored message. The zero value is an ordinary prompt.
@@ -3362,9 +3357,6 @@ func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, tools
 	return res
 }
 
-// extractText concatenates all TextBlock content in a message. Used
-// by BeforeAssistantMessage so guards see a single string instead of
-// having to walk provider.Content themselves.
 func mirrorToolImagesAsUser(msg provider.Message) provider.Message {
 	var content []provider.Content
 	hasImage := false
@@ -3435,6 +3427,9 @@ func IsToolImageMirror(msg provider.Message) bool {
 	return ok && strings.TrimSpace(tb.Text) == ToolImageMirrorPrefix
 }
 
+// extractText concatenates all TextBlock content in a message. Used
+// by BeforeAssistantMessage so guards see a single string instead of
+// having to walk provider.Content themselves.
 func extractText(msg provider.Message) string {
 	var out string
 	for _, c := range msg.Content {

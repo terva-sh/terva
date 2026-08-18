@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"terva.sh/terva/packages/agent/attach"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -101,6 +102,12 @@ type Bridge struct {
 	// replies; both sides currently send bare text, but the flag is
 	// kept so the distinction stays available.
 	nextReplyFromChat bool
+
+	// pendingFiles are the staged attachments of prompts submitted since the
+	// last assistant reply, held so they can be cleaned when the turn ends.
+	// The Loop owns its files through a deferred cleanup; the Bridge had no
+	// equivalent and simply left them on disk.
+	pendingFiles []FileAttachment
 }
 
 // BridgeState is the snapshot the TUI's status dialog reports.
@@ -327,8 +334,45 @@ func (b *Bridge) handle(m Message) {
 		b.rememberChat(m.ChatID)
 		b.mu.Lock()
 		b.nextReplyFromChat = true
+		// Ownership of the staged files passes to the bridge here, and is
+		// released when the turn's reply comes back.
+		b.pendingFiles = append(b.pendingFiles, m.Files...)
 		b.mu.Unlock()
-		b.Host.SubmitOrQueue(m.Text, m.Images)
+		b.Host.SubmitOrQueue(bridgePrompt(m), m.Images)
+	}
+}
+
+// bridgePrompt is the text the agent actually receives for m.
+//
+// The gate was factored out so the Loop and the Bridge could not drift on WHAT
+// is admitted. Everything after the gate did drift: the Bridge forwarded only
+// m.Text and m.Images, so a document, audio clip or voice note the gate had
+// just approved was staged on disk by the connector and never mentioned to the
+// agent — the file was there, readable with the ordinary tools, and nothing
+// told the model it existed.
+//
+// It renders through attach.Manifest and attachRefs, the same pair the Loop
+// uses, rather than a second description of the same files.
+func bridgePrompt(m Message) string {
+	if len(m.Files) == 0 {
+		return m.Text
+	}
+	return attach.Manifest(attachRefs(m.Files), 0) + "\n" + m.Text
+}
+
+// releasePendingFiles removes the staged attachments of every prompt submitted
+// since the last reply.
+//
+// The Loop cleans its files on a deferred path that runs whichever way the turn
+// ends. The Bridge had none at all, so every attachment a bridged chat received
+// stayed in its host-owned directory for the life of the machine.
+func (b *Bridge) releasePendingFiles() {
+	b.mu.Lock()
+	files := b.pendingFiles
+	b.pendingFiles = nil
+	b.mu.Unlock()
+	for _, f := range files {
+		cleanupFiles(Message{Files: []FileAttachment{f}})
 	}
 }
 
@@ -352,6 +396,10 @@ func (b *Bridge) OnAssistantText(text string) {
 		b.nextReplyFromChat = false
 	}
 	b.mu.Unlock()
+	// The turn produced its visible answer, so the prompt's staged files have
+	// been read if they were going to be. This is the bridge's equivalent of
+	// the Loop's deferred cleanup.
+	b.releasePendingFiles()
 	b.sendToPaired(text, prefix)
 }
 

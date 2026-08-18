@@ -9,8 +9,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"terva.sh/terva/packages/i18n"
 )
 
 const githubCopilotClientID = "Iv1.b507a08c87ecfe98"
@@ -62,31 +60,15 @@ func RequestGitHubCopilotDeviceAuthorization(ctx context.Context) (GitHubCopilot
 // PollGitHubCopilotDeviceToken polls until GitHub's browser/device-code
 // login completes and returns the GitHub access token.
 func PollGitHubCopilotDeviceToken(ctx context.Context, auth GitHubCopilotDeviceAuthorization) (*OAuthToken, error) {
-	interval := time.Duration(auth.Interval) * time.Second
-	if interval <= 0 {
-		interval = 5 * time.Second
-	}
-	deadline := time.Now().Add(time.Duration(auth.ExpiresIn) * time.Second)
-	for {
-		if auth.ExpiresIn > 0 && time.Now().After(deadline) {
-			return nil, i18n.Errorf("github copilot device login expired")
-		}
-		tok, retry, err := pollGitHubCopilotDeviceTokenOnce(ctx, auth.DeviceCode, interval)
-		if err != nil {
-			return nil, err
-		}
-		if tok != nil {
-			return tok, nil
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(retry):
-		}
-	}
+	return pollDeviceToken(ctx, "github copilot",
+		time.Duration(auth.Interval)*time.Second,
+		time.Duration(auth.ExpiresIn)*time.Second,
+		func(ctx context.Context) (*OAuthToken, deviceRetry, error) {
+			return pollGitHubCopilotDeviceTokenOnce(ctx, auth.DeviceCode)
+		})
 }
 
-func pollGitHubCopilotDeviceTokenOnce(ctx context.Context, deviceCode string, interval time.Duration) (*OAuthToken, time.Duration, error) {
+func pollGitHubCopilotDeviceTokenOnce(ctx context.Context, deviceCode string) (*OAuthToken, deviceRetry, error) {
 	form := url.Values{}
 	form.Set("client_id", githubCopilotClientID)
 	form.Set("device_code", deviceCode)
@@ -118,16 +100,13 @@ func pollGitHubCopilotDeviceTokenOnce(ctx context.Context, deviceCode string, in
 			TokenType:   raw.TokenType,
 			Scope:       raw.Scope,
 			ClientID:    githubCopilotClientID,
-		}, 0, nil
+		}, deviceStop, nil
 	}
-	if raw.Error == "authorization_pending" || resp.StatusCode == http.StatusBadRequest {
-		return nil, interval, nil
-	}
-	if raw.Error == "slow_down" {
-		return nil, interval + 5*time.Second, nil
+	if retry := classifyDevicePoll(raw.Error, resp.StatusCode); retry != deviceStop {
+		return nil, retry, nil
 	}
 	if raw.Error != "" {
-		return nil, 0, fmt.Errorf("github copilot token poll: %s: %s", raw.Error, raw.ErrorDescription)
+		return nil, deviceStop, fmt.Errorf("github copilot token poll: %s: %s", raw.Error, raw.ErrorDescription)
 	}
-	return nil, 0, fmt.Errorf("github copilot token poll http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	return nil, deviceStop, fmt.Errorf("github copilot token poll http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 }

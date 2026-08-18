@@ -55,12 +55,10 @@ func dialWS(d *websocket.Dialer, url, token string) func(ctx context.Context) (c
 	}
 }
 
-// maxFrameBytes caps a single inbound WebSocket message, mirroring the server
-// side (web/conn.go): generous enough for a snapshot carrying image payloads,
-// bounded enough that one bad frame can't exhaust memory. Keep this in step with
-// web/conn.go — a client limit below the server's silently truncates a legitimate
+// maxFrameBytes is the protocol's ceiling, shared with the server rather than
+// mirrored: a client limit below the server's silently truncates a legitimate
 // snapshot into a dead connection.
-const maxFrameBytes = 32 << 20 // 32 MiB
+const maxFrameBytes = ctrlproto.MaxFrameBytes
 
 // wsConn adapts a gorilla WebSocket to a ctrlproto.FrameConn — the client
 // twin of web/conn.go's server wrapper. One ctrlproto frame per WebSocket

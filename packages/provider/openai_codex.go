@@ -191,10 +191,6 @@ type codexFunctionCallOutput struct {
 	Output string `json:"output"` // string (or ResponseFunctionCallOutputItemList for images; v1 only uses string)
 }
 
-// codexReasoningItem mirrors the Responses API "reasoning" output item.
-// We capture it on incoming streams and replay it verbatim on follow-up
-// requests: the API rejects assistant tool-call replays without it when
-// thinking is enabled.
 // codexCompactionItem replays a server-side compaction summary. The item id
 // is echoed back as issued (the backend stamps them `cmp_…`), and the
 // encrypted blob is opaque — it is the backend's encoding of the turns it
@@ -205,6 +201,10 @@ type codexCompactionItem struct {
 	EncryptedContent string `json:"encrypted_content,omitempty"`
 }
 
+// codexReasoningItem mirrors the Responses API "reasoning" output item.
+// We capture it on incoming streams and replay it verbatim on follow-up
+// requests: the API rejects assistant tool-call replays without it when
+// thinking is enabled.
 type codexReasoningItem struct {
 	Type             string `json:"type"` // "reasoning"
 	ID               string `json:"id,omitempty"`

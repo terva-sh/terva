@@ -27,6 +27,20 @@ func (s *session) translateEvent(ev core.AgentEvent) {
 			"content":       textContentBlock(e.Delta),
 		})
 
+	case core.EvReasoningDelta:
+		// §12 deferred this with a REASON: "no live source today; needs a
+		// core.EvReasoningDelta event + provider plumbing". That event now
+		// exists, so the reason expired and the deferral outlived it — the
+		// editor showed a silent gap wherever a reasoning model was thinking,
+		// while agent_thought_chunk sat declared in schema.go with zero uses.
+		s.emit(map[string]any{
+			"sessionUpdate": UpdateAgentThoughtChunk,
+			"content":       textContentBlock(e.Delta),
+		})
+
+	case core.EvUsage:
+		s.emitUsage(e)
+
 	case core.EvToolCall:
 		s.emitToolCall(e)
 
@@ -304,4 +318,35 @@ func stopReasonFor(cancelled bool, last provider.StopReason) string {
 	default:
 		return StopEndTurn
 	}
+}
+
+// emitUsage sends the §6 table's `usage_update {used, size, cost}` — cumulative
+// tokens and cost, for the editor's stats line.
+//
+// This was a row of the mapping table that was never built, not a deferral: §12
+// lists what was deliberately left out and usage is not on it. UpdateUsage sat
+// in schema.go with zero uses.
+//
+// `used` counts the PROMPT, through provider.Usage.PromptTokens, so cached
+// reads and cache writes are included — they occupy the window exactly like
+// fresh input does, and an editor drawing a gauge against `size` needs the
+// number that fills it. Cumulative, not the last request: the field is the
+// session total and a per-request value would make the editor's stats jump
+// backwards on every turn.
+//
+// `size` is provider.ContextGauge, the same effective-window number the status
+// bar and /status use, so three surfaces cannot disagree about how full the
+// window is. Zero when the model is unknown, which the spec's optional shape
+// tolerates and is honest: no window is better than a wrong one.
+func (s *session) emitUsage(e core.EvUsage) {
+	prov, model := s.currentModel()
+	update := map[string]any{
+		"sessionUpdate": UpdateUsage,
+		"used":          e.Cumulative.PromptTokens(),
+		"cost":          e.Cumulative.CostUSD,
+	}
+	if size := provider.ContextGauge(prov, model); size > 0 {
+		update["size"] = size
+	}
+	s.emit(update)
 }

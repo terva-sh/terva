@@ -111,12 +111,15 @@ func LoadTrustStore() (TrustStore, error) {
 	return s, nil
 }
 
-// SaveTrustStore writes trusted.json at mode 0600 (it encodes a
-// security decision; not world-readable), creating $TERVA_HOME.
+// SaveTrustStore writes trusted.json at mode 0600 (it encodes a security
+// decision; not world-readable), creating the directory it goes in.
+//
+// 🪤 That directory is the GLOBAL home, and in project-scoped mode it is not
+// $TERVA_HOME. Both this and SaveUnjailStore used to MkdirAll $TERVA_HOME here,
+// which created a directory the file never lands in; the write worked anyway
+// because privfs.WriteFile makes its own target. It became dead the moment
+// these moved to privfs — a line that survived in BOTH copies of this store.
 func SaveTrustStore(s TrustStore) error {
-	if err := privfs.MkdirAll(TervaHome()); err != nil {
-		return err
-	}
 	if s.Version == 0 {
 		s.Version = TrustStoreVersion
 	}
@@ -196,28 +199,86 @@ func trustPathContains(parent, child string) bool {
 	return strings.HasPrefix(child, prefix)
 }
 
+// pathDecision is one stored entry as the match rules see it: the recorded
+// canonical path, the as-entered display form it falls back to, and whether the
+// entry covers descendants.
+//
+// It exists so trusted.json and unjailed.json answer "is this the same
+// directory?" through ONE implementation. The helpers above were already
+// shared for that reason — but the rule built on them was not, and it appears
+// at three sites in each store (the resolve walk, Add, and Remove). Six copies
+// of a security-relevant comparison is what the note on canonicalEntryReal
+// warns about; these four functions are the rest of that extraction.
+//
+// The plumbing around them — Load, Save, Add, Remove — stays per-store on
+// purpose. It is dull, symmetric, and reads as what it is in the file that owns
+// it; a reader of trust.go should not have to leave to learn what trust does.
+// TestTheTwoPathStoresAgree keeps the two halves honest.
+type pathDecision struct {
+	Real    string
+	Display string
+	Parent  bool
+}
+
+// entryReal is the canonical match key, tolerating an entry that recorded only
+// the display path (a hand-edited file).
+func (d pathDecision) entryReal() string { return canonicalEntryReal(d.Real, d.Display) }
+
+// samePathDecision reports whether d names exactly the directory real — the
+// question Add and Remove ask. Parent is IGNORED here: an entry covering a
+// whole subtree is still one entry, identified by the directory it names, and
+// promoting it to Parent must update it rather than append a second.
+func samePathDecision(d pathDecision, real string) bool {
+	return real != "" && d.entryReal() == real
+}
+
+// coversPathDecision reports whether d grants its decision to real — the
+// question the resolve walk asks. An exact match, or a Parent:true entry that
+// is an ancestor. A non-parent entry covers only its own directory.
+func coversPathDecision(d pathDecision, real string) bool {
+	if real == "" {
+		return false
+	}
+	if d.Parent {
+		return trustPathContains(d.entryReal(), real)
+	}
+	return d.entryReal() == real
+}
+
+// findPathDecision returns the index of the entry naming exactly real, or -1.
+func findPathDecision[E any](entries []E, real string, of func(E) pathDecision) int {
+	for i := range entries {
+		if samePathDecision(of(entries[i]), real) {
+			return i
+		}
+	}
+	return -1
+}
+
+// resolvePathDecision returns the index of the first entry that covers real, or
+// -1. First rather than best: entries are equally authoritative, so a store
+// holding both an exact entry and a covering parent grants either way.
+func resolvePathDecision[E any](entries []E, real string, of func(E) pathDecision) int {
+	for i := range entries {
+		if coversPathDecision(of(entries[i]), real) {
+			return i
+		}
+	}
+	return -1
+}
+
+// trustDecision is the identity view of a trust entry.
+func trustDecision(e TrustEntry) pathDecision {
+	return pathDecision{Real: e.Real, Display: e.Path, Parent: e.Parent}
+}
+
 // IsTrusted reports whether path is trusted by the given store: an exact
 // canonical match, or a descendant of a Parent:true entry ("trust parent
 // trusts children"). A non-parent entry trusts only its own directory,
 // not descendants. Returns the matching entry for display.
 func (s TrustStore) IsTrusted(path string) (bool, TrustEntry) {
-	real := CanonicalTrustPath(path)
-	if real == "" {
-		return false, TrustEntry{}
-	}
-	for _, e := range s.Trusted {
-		// Tolerates an entry that recorded only the display path (a
-		// hand-edited file): canonicalized on read.
-		entryReal := canonicalEntryReal(e.Real, e.Path)
-		if e.Parent {
-			if trustPathContains(entryReal, real) {
-				return true, e
-			}
-			continue
-		}
-		if entryReal == real {
-			return true, e
-		}
+	if i := resolvePathDecision(s.Trusted, CanonicalTrustPath(path), trustDecision); i >= 0 {
+		return true, s.Trusted[i]
 	}
 	return false, TrustEntry{}
 }
@@ -231,15 +292,13 @@ func (s *TrustStore) Add(path string, parent bool) bool {
 	if real == "" {
 		return false
 	}
-	for i := range s.Trusted {
-		if canonicalEntryReal(s.Trusted[i].Real, s.Trusted[i].Path) == real {
-			if s.Trusted[i].Parent == parent {
-				return false // already present with the same scope
-			}
-			s.Trusted[i].Parent = parent
-			s.Trusted[i].TrustedAt = time.Now().UTC().Format(time.RFC3339)
-			return true
+	if i := findPathDecision(s.Trusted, real, trustDecision); i >= 0 {
+		if s.Trusted[i].Parent == parent {
+			return false // already present with the same scope
 		}
+		s.Trusted[i].Parent = parent
+		s.Trusted[i].TrustedAt = time.Now().UTC().Format(time.RFC3339)
+		return true
 	}
 	s.Trusted = append(s.Trusted, TrustEntry{
 		Path:      filepath.Clean(path),
@@ -261,7 +320,10 @@ func (s *TrustStore) Remove(path string) bool {
 	out := s.Trusted[:0]
 	changed := false
 	for _, e := range s.Trusted {
-		if canonicalEntryReal(e.Real, e.Path) == real {
+		// Every match, not the first: a hand-edited file can hold two entries
+		// for one directory, and leaving the second behind would make untrust
+		// look like it silently did nothing.
+		if samePathDecision(trustDecision(e), real) {
 			changed = true
 			continue
 		}

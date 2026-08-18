@@ -161,6 +161,15 @@ func Run(ctx context.Context, eng Engine, script []byte, opts Options) (res Resu
 			return res, err
 		}
 		runID = "wf_" + hex.EncodeToString(b)
+	} else if !runs.ValidRunID(runID) {
+		// ValidRunID's own doc says callers taking an id from anywhere but
+		// their own ListRecords must pass it through first, and this is the
+		// caller that did not. The id becomes a path element two lines below,
+		// so an unchecked one traverses out of the workflows root — and a
+		// merely mistyped --resume silently MINTED a run under the typo
+		// instead of failing, which reads as "the resume found nothing" and
+		// re-runs the whole script.
+		return res, fmt.Errorf("workflow: %q is not a run id — --resume takes one of the ids `terva workflow list` prints", runID)
 	}
 	res.RunID = runID
 	if opts.Root == "" {
@@ -200,7 +209,12 @@ func Run(ctx context.Context, eng Engine, script []byte, opts Options) (res Resu
 	// it and therefore runs before it.
 	defer func() {
 		rec.Ended = opts.now().UTC().Format(time.RFC3339)
-		rec.Agents, rec.Cached, rec.CostUSD = res.Agents, res.CachedAgents, res.CostUSD
+		// Record.Agents is the TOTAL the script asked for, which is what every
+		// reader pairs against runs.CompletedCalls — and CompletedCalls counts
+		// replays too. Result.Agents is the narrower "spawned" count, so
+		// writing it straight through made a resumed run render more completed
+		// than total: three replayed and two spawned printed "5/2".
+		rec.Agents, rec.Cached, rec.CostUSD = res.Agents+res.CachedAgents, res.CachedAgents, res.CostUSD
 		if err != nil {
 			rec.Err = err.Error()
 		}

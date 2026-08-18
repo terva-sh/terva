@@ -47,6 +47,29 @@ type SharedFilesController interface {
 // after someone connects over a socket.
 const MaxSharedFetchBytes int64 = 8 << 20
 
+// MaxFrameBytes caps a single inbound WebSocket message so one oversized frame
+// cannot exhaust memory. It lives HERE, in the protocol package, because both
+// ends must agree on it and neither end owns it.
+//
+// It used to be declared twice — once in web/conn.go for the server's read
+// limit, once in ctrlclient/ws.go for the client's — kept equal by a comment
+// asking a human to keep them in step. That is not a mechanism. A client limit
+// below the server's silently truncates a legitimate snapshot into a dead
+// connection, and the browser sees only a closed socket with nothing naming the
+// size, which is exactly how the previous 16 MiB ceiling was diagnosed.
+//
+// Note the 4/3 base64 inflation when sizing this against a file: an upload of N
+// bytes needs a frame of ~1.34N plus JSON overhead. At 16 MiB the real ceiling
+// on an attachment was ~12 MB of file, and a 19.6 MB character card (a real one
+// off chub.ai — a 7680x2160 portrait) produced a 25.0 MiB frame gorilla killed
+// the connection over.
+const MaxFrameBytes = 32 << 20 // 32 MiB
+
+// MaxUploadFileBytes is the largest FILE a client should attempt to send in one
+// frame — MaxFrameBytes discounted by base64 inflation, with headroom for the
+// surrounding JSON. Derived rather than typed, so the two cannot drift.
+const MaxUploadFileBytes = MaxFrameBytes / 4 * 3 // ~24 MiB of file
+
 // SharedFileEntry is one row of a session's share listing: the record the
 // transcript already carries, plus where the bytes are on the DAEMON's disk.
 //

@@ -49,12 +49,14 @@ var acpUntranslated = map[string]string{
 	// them. They are listed so this census can do its job (catch NEW events)
 	// without silently blessing them; removing an entry by translating it is
 	// the intended direction of travel.
-	"EvReasoningDelta": "NOT YET TRANSLATED: ACP clients see no reasoning stream",
-	"EvUsage":          "NOT YET TRANSLATED: no ACP surface for per-turn usage yet",
-	"EvRetry":          "NOT YET TRANSLATED: a transient retry is invisible to the client",
-	"EvStall":          "NOT YET TRANSLATED: a stalled turn is invisible to the client",
-	"EvEscalation":     "NOT YET TRANSLATED: escalation is invisible to the client",
-	"EvContinuation":   "NOT YET TRANSLATED: continuation is invisible to the client",
+	//
+	// EvReasoningDelta and EvUsage came off this list by being translated —
+	// which is the census working as designed: it named them until someone
+	// closed them, and then refused to let the excuse outlive the gap.
+	"EvRetry":        "NOT YET TRANSLATED: a transient retry is invisible to the client",
+	"EvStall":        "NOT YET TRANSLATED: a stalled turn is invisible to the client",
+	"EvEscalation":   "NOT YET TRANSLATED: escalation is invisible to the client",
+	"EvContinuation": "NOT YET TRANSLATED: continuation is invisible to the client",
 }
 
 func coreEventTypes(t *testing.T) []string {

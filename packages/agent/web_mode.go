@@ -22,27 +22,6 @@ import (
 	"terva.sh/terva/packages/relaunch"
 )
 
-// runWebMode runs the browser control-panel server: one in-process Workspace
-// (the ctrlproto.WorkspaceService) bound to a WebSocket carrier via web.Serve.
-// It is the sibling of runACPMode — same Resolve→NewAgent seam, but the wire is
-// ctrlproto over a WebSocket and the frontend is an embedded PWA.
-//
-// SIGINT/SIGTERM cancel the context so the server drains and ws.Close() tears
-// down every session's agent and extension subprocesses — the graceful stop a
-// systemd-managed daemon needs.
-// webCredentialBoot decides what starting with no credential means for this
-// daemon, and returns the error to die on — or nil to carry on without one.
-//
-// The question is not "is there a credential" but "can anything reachable from
-// here supply one". With provider login enabled the browser is a login flow: the
-// Providers pane stores a credential and clears this very error, so sessions
-// work from that moment without a restart. Refusing to boot would put the only
-// remedy behind the daemon that refused to start — exactly the bind a machine
-// with no terminal is in, told to log in at a TUI it does not have.
-//
-// Without login there is no route to a credential at all, so the failure stands.
-// It names the flag rather than only the problem, because "start it differently"
-// is the actionable half and the operator is already at a shell.
 // servePrivilegedGroup decides whether a categorically-higher method group may
 // be served on this listener, and says so when it refuses.
 //
@@ -66,6 +45,27 @@ func webCredentialBoot(credErr error, allowLogin bool) error {
 	return fmt.Errorf("%w\nterva web: nothing here can sign in — start with --web-allow-login (which needs --web-token or --web-auth-header) to log in from the control panel", credErr)
 }
 
+// runWebMode runs the browser control-panel server: one in-process Workspace
+// (the ctrlproto.WorkspaceService) bound to a WebSocket carrier via web.Serve.
+// It is the sibling of runACPMode — same Resolve→NewAgent seam, but the wire is
+// ctrlproto over a WebSocket and the frontend is an embedded PWA.
+//
+// SIGINT/SIGTERM cancel the context so the server drains and ws.Close() tears
+// down every session's agent and extension subprocesses — the graceful stop a
+// systemd-managed daemon needs.
+// webCredentialBoot decides what starting with no credential means for this
+// daemon, and returns the error to die on — or nil to carry on without one.
+//
+// The question is not "is there a credential" but "can anything reachable from
+// here supply one". With provider login enabled the browser is a login flow: the
+// Providers pane stores a credential and clears this very error, so sessions
+// work from that moment without a restart. Refusing to boot would put the only
+// remedy behind the daemon that refused to start — exactly the bind a machine
+// with no terminal is in, told to log in at a TUI it does not have.
+//
+// Without login there is no route to a credential at all, so the failure stands.
+// It names the flag rather than only the problem, because "start it differently"
+// is the actionable half and the operator is already at a shell.
 func runWebMode(ctx context.Context, args build.Args, version string) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()

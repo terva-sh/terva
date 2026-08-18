@@ -52,27 +52,15 @@ func RequestKimiDeviceAuthorization(ctx context.Context) (KimiDeviceAuthorizatio
 
 // PollKimiDeviceToken polls until the browser/device-code login completes.
 func PollKimiDeviceToken(ctx context.Context, auth KimiDeviceAuthorization) (*OAuthToken, error) {
-	interval := time.Duration(auth.Interval) * time.Second
-	if interval <= 0 {
-		interval = 5 * time.Second
-	}
-	for {
-		tok, retry, err := pollKimiDeviceTokenOnce(ctx, auth.DeviceCode)
-		if err != nil {
-			return nil, err
-		}
-		if tok != nil {
-			return tok, nil
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(retry):
-		}
-	}
+	return pollDeviceToken(ctx, "kimi",
+		time.Duration(auth.Interval)*time.Second,
+		time.Duration(auth.ExpiresIn)*time.Second,
+		func(ctx context.Context) (*OAuthToken, deviceRetry, error) {
+			return pollKimiDeviceTokenOnce(ctx, auth.DeviceCode)
+		})
 }
 
-func pollKimiDeviceTokenOnce(ctx context.Context, deviceCode string) (*OAuthToken, time.Duration, error) {
+func pollKimiDeviceTokenOnce(ctx context.Context, deviceCode string) (*OAuthToken, deviceRetry, error) {
 	form := bytes.NewBufferString("client_id=" + KimiOAuth.ClientID + "&device_code=" + deviceCode + "&grant_type=urn:ietf:params:oauth:grant-type:device_code")
 	req, err := http.NewRequestWithContext(ctx, "POST", KimiOAuth.TokenURL, form)
 	if err != nil {
@@ -105,13 +93,13 @@ func pollKimiDeviceTokenOnce(ctx context.Context, deviceCode string) (*OAuthToke
 			Scope:        raw.Scope,
 			ClientID:     KimiOAuth.ClientID,
 			Expiry:       time.Now().Add(time.Duration(raw.ExpiresIn) * time.Second),
-		}, 0, nil
+		}, deviceStop, nil
 	}
-	if raw.Error == "authorization_pending" || raw.Error == "slow_down" || resp.StatusCode == http.StatusBadRequest {
-		return nil, 5 * time.Second, nil
+	if retry := classifyDevicePoll(raw.Error, resp.StatusCode); retry != deviceStop {
+		return nil, retry, nil
 	}
 	if raw.Error != "" {
-		return nil, 0, fmt.Errorf("kimi token poll: %s: %s", raw.Error, raw.ErrorDescription)
+		return nil, deviceStop, fmt.Errorf("kimi token poll: %s: %s", raw.Error, raw.ErrorDescription)
 	}
-	return nil, 0, fmt.Errorf("kimi token poll http %d: %s", resp.StatusCode, string(body))
+	return nil, deviceStop, fmt.Errorf("kimi token poll http %d: %s", resp.StatusCode, string(body))
 }

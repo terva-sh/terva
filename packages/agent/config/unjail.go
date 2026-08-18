@@ -79,11 +79,9 @@ func LoadUnjailStore() (UnjailStore, error) {
 	return s, nil
 }
 
-// SaveUnjailStore writes unjailed.json at mode 0600, creating $TERVA_HOME.
+// SaveUnjailStore writes unjailed.json at mode 0600, creating the directory it
+// goes in — the GLOBAL home, which in project-scoped mode is not $TERVA_HOME.
 func SaveUnjailStore(s UnjailStore) error {
-	if err := privfs.MkdirAll(TervaHome()); err != nil {
-		return err
-	}
 	if s.Version == 0 {
 		s.Version = UnjailStoreVersion
 	}
@@ -96,25 +94,17 @@ func SaveUnjailStore(s UnjailStore) error {
 	return privfs.WriteFile(UnjailStorePath(), b)
 }
 
+// unjailDecision is the identity view of an unjail entry.
+func unjailDecision(e UnjailEntry) pathDecision {
+	return pathDecision{Real: e.Real, Display: e.Path, Parent: e.Parent}
+}
+
 // IsUnjailed reports whether path runs unjailed per this store: an exact
 // canonical match, or a descendant of a Parent:true entry. A non-parent entry
 // covers only its own directory. Returns the matching entry for display.
 func (s UnjailStore) IsUnjailed(path string) (bool, UnjailEntry) {
-	real := CanonicalTrustPath(path)
-	if real == "" {
-		return false, UnjailEntry{}
-	}
-	for _, e := range s.Unjailed {
-		entryReal := canonicalEntryReal(e.Real, e.Path)
-		if e.Parent {
-			if trustPathContains(entryReal, real) {
-				return true, e
-			}
-			continue
-		}
-		if entryReal == real {
-			return true, e
-		}
+	if i := resolvePathDecision(s.Unjailed, CanonicalTrustPath(path), unjailDecision); i >= 0 {
+		return true, s.Unjailed[i]
 	}
 	return false, UnjailEntry{}
 }
@@ -127,12 +117,9 @@ func (s *UnjailStore) Add(path string, parent bool) bool {
 	if real == "" {
 		return false
 	}
-	for i := range s.Unjailed {
-		if canonicalEntryReal(s.Unjailed[i].Real, s.Unjailed[i].Path) != real {
-			continue
-		}
+	if i := findPathDecision(s.Unjailed, real, unjailDecision); i >= 0 {
 		if s.Unjailed[i].Parent == parent {
-			return false
+			return false // already present with the same scope
 		}
 		s.Unjailed[i].Parent = parent
 		s.Unjailed[i].UnjailedAt = time.Now().UTC().Format(time.RFC3339)
@@ -157,7 +144,8 @@ func (s *UnjailStore) Remove(path string) bool {
 	out := s.Unjailed[:0]
 	changed := false
 	for _, e := range s.Unjailed {
-		if canonicalEntryReal(e.Real, e.Path) == real {
+		// Every match, not the first — see TrustStore.Remove.
+		if samePathDecision(unjailDecision(e), real) {
 			changed = true
 			continue
 		}

@@ -9,6 +9,7 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/swarm"
+	"terva.sh/terva/packages/agent/worktree"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -57,8 +58,11 @@ func TestCarrierSwarmWorktreeLeasesDirectly(t *testing.T) {
 	if _, err := os.Stat(lease.Dir); err != nil {
 		t.Fatalf("leased worktree missing on disk: %v", err)
 	}
-	if !strings.HasPrefix(lease.Dir, filepath.Join(os.Getenv("TERVA_HOME"), "worktrees")) {
-		t.Errorf("lease should live under $TERVA_HOME/worktrees, got %s", lease.Dir)
+	// Derived from the constructor, not re-spelled: an assertion that hardcodes
+	// the root keeps passing when production moves off it.
+	wantRoot, _ := worktree.HostRoots(os.Getenv("TERVA_HOME"))
+	if !strings.HasPrefix(lease.Dir, wantRoot) {
+		t.Errorf("lease should live under %s, got %s", wantRoot, lease.Dir)
 	}
 	if lease.Release == nil {
 		t.Fatal("lease has no release hook")

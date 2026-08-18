@@ -169,13 +169,30 @@ func TestCastMutation(t *testing.T) {
 		t.Error("removing an unknown cast member should error")
 	}
 
-	// A chat session has no cast to edit.
-	chat, err := w.CreateSession(ctx, ctrlproto.CreateOpts{Experience: build.ExperienceChat})
+	// A coding session has no roster. A CHAT session does — it is the
+	// directed-authorship cast (see TestChatKeepOnStage in workspace_draft_test.go,
+	// which adds one successfully).
+	//
+	// This block used to create a CHAT session and assert cast.add was refused,
+	// with the comment "A chat session has no cast to edit". It passed, and not
+	// for that reason: the refusal was `unknown character card "mieli" for "x"`,
+	// because "mieli" is a persona name and a chat roster validates refs against
+	// the card store. Any valid card would have been accepted. So the assertion
+	// agreed with two false doc comments (ctrlproto/cast.go, castSession) and
+	// contradicted a passing test one file over, and nothing noticed because it
+	// never checked WHICH refusal it got.
+	coding, err := w.CreateSession(ctx, ctrlproto.CreateOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := w.CastAdd(ctx, chat.ID, ctrlproto.CastMemberParams{Name: "x", Ref: "mieli"}); err == nil {
-		t.Error("cast.add on a chat session should be refused")
+	err = w.CastAdd(ctx, coding.ID, ctrlproto.CastMemberParams{Name: "x", Ref: "mieli"})
+	if err == nil {
+		t.Fatal("cast.add on a coding session should be refused")
+	}
+	if !strings.Contains(err.Error(), "roster is only available") {
+		t.Errorf("a coding session was refused for the wrong reason: %v\n"+
+			"It must be refused for having no roster at all. Any other error means this "+
+			"asserts something else and would keep passing if the gate were removed.", err)
 	}
 }
 

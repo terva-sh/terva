@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -15,6 +14,7 @@ import (
 	"terva.sh/terva/packages/agent/deliverable"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/lineframe"
 	"terva.sh/terva/packages/privfs"
 )
 
@@ -219,7 +219,14 @@ func (r *Runner) Run(ctx context.Context, sink swarm.Sink) error {
 	stdoutDone := make(chan struct{})
 	go func() {
 		defer close(stdoutDone)
-		br := bufio.NewReader(stdout)
+		// lineframe, not an unbounded ReadBytes: this is a FOREIGN CLI's stdout,
+		// the least trusted wire terva reads. RECOVER — one over-limit event
+		// (a large tool result, a pasted file) must cost that event, not the
+		// remainder of the worker's turn.
+		br := lineframe.NewReader(stdout, lineframe.DefaultMaxBytes, func(msg string) {
+			sink.Transcript("stdout: " + msg)
+			_ = log.Append(swarm.NewEvent("stdout", map[string]any{"text": msg}))
+		})
 		// A failed turn's error must reach the task-level OnTurnEnd, which reads it
 		// off the terminal task_end. Some backends (terva's rpc wire) report the
 		// failure as a STANDALONE `error` event followed by a bare `done`→task_end,
@@ -228,7 +235,7 @@ func (r *Runner) Run(ctx context.Context, sink swarm.Sink) error {
 		// inert for backends whose task_end already carries the error (claude).
 		var pendingErr string
 		for {
-			line, rerr := br.ReadBytes('\n')
+			line, rerr := br.Read()
 			if len(line) > 0 {
 				trimmed := strings.TrimRight(string(line), "\r\n")
 				if trimmed != "" {
@@ -264,11 +271,14 @@ func (r *Runner) Run(ctx context.Context, sink swarm.Sink) error {
 	stderrDone := make(chan struct{})
 	go func() {
 		defer close(stderrDone)
-		br := bufio.NewReader(stderr)
+		// Bounded for the same reason as stdout: a child stuck printing without
+		// a newline would otherwise grow this buffer without limit.
+		br := lineframe.NewReader(stderr, lineframe.DefaultMaxBytes, func(msg string) {
+			sink.Transcript("stderr: " + msg)
+		})
 		for {
-			line, rerr := br.ReadString('\n')
-			if line != "" {
-				txt := strings.TrimRight(line, "\r\n")
+			raw, rerr := br.Read()
+			if txt := strings.TrimRight(string(raw), "\r\n"); txt != "" {
 				sink.Transcript("stderr: " + txt)
 				_ = log.Append(swarm.NewEvent("stderr", map[string]any{"text": txt}))
 			}

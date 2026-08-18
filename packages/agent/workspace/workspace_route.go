@@ -443,10 +443,6 @@ Describe what happens next: the setting shifting, an event, an arrival, the pass
 
 Output ONLY the narration, ready to drop into the scene. No preamble, no meta-commentary. Match the scene's established narrative voice and tense — read the tense off the transcript rather than defaulting to present tense.`
 
-// renderVoiceSystem assembles the routed speaker's system prompt: the voice
-// task, who they are (card grounding), the world's shared lore, the player,
-// the bound character (context), and the recent scene. A free function for
-// testability, mirroring renderSuggestSystem.
 // userPersona is who the human in the scene is, as a side-channel prompt needs
 // to know them. A struct rather than four more positional parameters: these
 // renderers already take eight and nine arguments, and the two fields being
@@ -475,6 +471,10 @@ func (s *wsSession) userPersona() userPersona {
 	return userPersona{Name: m.UserName, Description: m.UserDescription, Gender: m.UserGender, Pronouns: m.UserPronouns}
 }
 
+// renderVoiceSystem assembles the routed speaker's system prompt: the voice
+// task, who they are (card grounding), the world's shared lore, the player,
+// the bound character (context), and the recent scene. A free function for
+// testability, mirroring renderSuggestSystem.
 func renderVoiceSystem(name string, c *card.Card, player userPersona, boundName string, bound *card.Card, loreBlock string, transcript []provider.Message, playerLabel string) string {
 	var b strings.Builder
 	if name == "" {

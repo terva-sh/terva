@@ -342,8 +342,6 @@ func TextErrorResult(s string) ToolResult {
 	return ToolResult{Content: []ToolContent{Text(s)}, IsError: true}
 }
 
-// Response tells terva how to react to a command invocation. Construct
-// one with Prompt(), Insert(), Display(), or Noop().
 type Panel struct {
 	ID     string
 	Title  string
@@ -351,6 +349,8 @@ type Panel struct {
 	Footer string
 }
 
+// Response tells terva how to react to a command invocation. Construct
+// one with Prompt(), Insert(), Display(), or Noop().
 type Response struct {
 	Action    string // "prompt", "insert", "display", "open_panel", "noop"
 	Prompt    string
@@ -1431,8 +1431,6 @@ func (e *Extension) request(id string, frame any, timeout time.Duration) (json.R
 	}
 }
 
-// deliverReply routes a reply frame to the waiting request by id. Called
-// from the Run loop for host_tool_result / session_list / session_data.
 // isPending reports whether a caller is waiting on this request id. It is what
 // lets the read loop recognise a reply by the fact that someone asked, rather
 // than by the reply's verb appearing in a hand-written list.
@@ -1443,6 +1441,8 @@ func (e *Extension) isPending(id string) bool {
 	return ok
 }
 
+// deliverReply routes a reply frame to the waiting request by id. Called
+// from the Run loop for host_tool_result / session_list / session_data.
 func (e *Extension) deliverReply(id string, line json.RawMessage) {
 	e.pendingMu.Lock()
 	ch := e.pending[id]

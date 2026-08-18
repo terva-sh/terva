@@ -24,10 +24,11 @@ import (
 // consistent view.
 type WorktreeCore struct {
 	Manager *worktree.Manager
-	// Root / LegacyRoot / CWD mirror worktree.Env — fixed at registry build.
-	Root       string
-	LegacyRoot string
-	CWD        string
+	// Base is the environment fixed at registry build — roots and cwd. It used
+	// to be three fields that "mirror worktree.Env", and a mirror is how one
+	// side gains a field the other does not: LegacyRoot is easy to leave out,
+	// and an Env without it addresses a different registry for the same repo.
+	Base worktree.Env
 }
 
 // env assembles the per-call engine environment. The claim-owner session is
@@ -38,7 +39,10 @@ func (c *WorktreeCore) env(ctx context.Context, repoRoot string) worktree.Env {
 	if ag := core.AgentFromContext(ctx); ag != nil {
 		sess, _ = ag.SessionIdentity()
 	}
-	return worktree.Env{Root: c.Root, LegacyRoot: c.LegacyRoot, CWD: c.CWD, SessionID: sess, RepoRoot: repoRoot}
+	env := c.Base
+	env.SessionID = sess
+	env.RepoRoot = repoRoot
+	return env
 }
 
 // worktreeResult marshals an engine result as the tool's JSON payload; engine

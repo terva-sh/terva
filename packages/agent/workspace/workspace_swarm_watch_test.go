@@ -12,10 +12,6 @@ import (
 	"terva.sh/terva/packages/testsupport"
 )
 
-// TestSwarmGuardHoldOnce pins the guard's spin-avoidance: it holds a
-// finalizing coordinator back exactly ONCE per batch of running sub-agents
-// (long enough to stop it racing off), then lets it idle so the queued
-// [auto-swarm update] recap re-engages it — never a loop while sub-agents run.
 // waitQueuedRecap waits for the batch flusher's recap to LAND in the session
 // queue. Waiting for swarmWatch to drain is not enough: flushSwarmSummary
 // takes the batch and nils the slice under swarmWatchMu, RELEASES the mutex,
@@ -40,6 +36,10 @@ func waitQueuedRecap(t *testing.T, s *wsSession) []string {
 	}
 }
 
+// TestSwarmGuardHoldOnce pins the guard's spin-avoidance: it holds a
+// finalizing coordinator back exactly ONCE per batch of running sub-agents
+// (long enough to stop it racing off), then lets it idle so the queued
+// [auto-swarm update] recap re-engages it — never a loop while sub-agents run.
 func TestSwarmGuardHoldOnce(t *testing.T) {
 	s := &wsSession{}
 

@@ -12,8 +12,15 @@ import "context"
 // CastController is OPTIONAL, like the other Stage controllers (NoteController,
 // UserController): a carrier without a live workspace (a replay session, a test
 // fake) simply does not implement it and the verb answers "unsupported" rather
-// than rippling to every WorkspaceService implementer. Cast is a --play concept,
-// so both verbs are a bad request on a chat or coding session.
+// than rippling to every WorkspaceService implementer.
+//
+// A roster is an IMMERSIVE concept, not a --play one: both verbs serve a chat
+// session too, where the roster is the directed-authorship cast — voiced on
+// demand, with no warm agents and no actor_spawn tool. Only a coding session
+// (Experience == "") is a bad request. This said "Cast is a --play concept, so
+// both verbs are a bad request on a chat or coding session" while
+// workspace_cast.go had long since been written the other way, down to its
+// error string: "a roster is only available in a chat or play session".
 type CastController interface {
 	// CastAdd adds or updates one cast member (actor name → ref). The ref is a
 	// persona name or a character-card path, validated before it persists; an

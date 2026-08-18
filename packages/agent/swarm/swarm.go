@@ -942,8 +942,6 @@ func (f *Swarm) Remove(id string) error {
 	return nil
 }
 
-// Snapshot returns a read-only view of one agent. Safe for the TUI
-// goroutine to call repeatedly; never blocks on the Runner.
 type AgentSnapshot struct {
 	ID   string
 	Task string

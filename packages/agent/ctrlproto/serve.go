@@ -134,6 +134,12 @@ func (s *serveState) respond(id uint64, result any, err error) {
 		s.fail(id, err)
 		return
 	}
+	// The image-data contract applies to everything crossing this boundary,
+	// not just to what the event pumps push. This is the only OKFrame writer,
+	// so it is where a pulled result gets the same treatment.
+	if !s.contract.HasFeature(FeatureImageData) {
+		result = stripResultImageData(result)
+	}
 	fr, merr := OKFrame(id, result)
 	if merr != nil {
 		s.write(ErrFrame(id, CodeInternal, merr.Error()))

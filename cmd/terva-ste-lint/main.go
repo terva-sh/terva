@@ -86,6 +86,15 @@ func main() {
 	})
 
 	if *writeBase {
+		// A narrowed run sees one rule's findings, and writeBaseline records
+		// exactly what it is given: -write-baseline -rule X would drop every
+		// other rule's accepted entry on the floor. That satisfies "the file
+		// can only shrink" in the one way the invariant did not mean.
+		if *only != "" {
+			fmt.Fprintf(os.Stderr, "terva-ste-lint: -write-baseline cannot be narrowed with -rule %s — "+
+				"it would drop every other rule's entries from %s\n", *only, baselinePath)
+			os.Exit(2)
+		}
 		if err := writeBaseline(*root, all); err != nil {
 			fmt.Fprintln(os.Stderr, "terva-ste-lint:", err)
 			os.Exit(2)
@@ -95,10 +104,10 @@ func main() {
 	}
 
 	total := len(all)
-	var stale []string
+	var stale, unjudged []string
 	if !*noBase {
 		if base, ok := loadBaseline(*root); ok {
-			all, stale = applyBaseline(all, base)
+			all, stale, unjudged = applyBaseline(all, base, judgedRules(*only, haveDict))
 		}
 	}
 
@@ -132,9 +141,45 @@ func main() {
 	if !haveDict {
 		fmt.Fprintf(os.Stderr, "  (vocabulary rule skipped: no %s — see cmd/terva-ste-lint/dictionary.go)\n", dictionaryPath)
 	}
+	reportUnjudged(unjudged)
 	reportStale(stale)
 	if *checkErr && (len(all) > 0 || len(stale) > 0) {
 		os.Exit(1)
+	}
+}
+
+// judgedRules reports, for this invocation, whether a baseline entry for a
+// given rule can be judged at all.
+//
+// A rule that did not run produces no findings. An entry for it therefore does
+// not fire — but that is not evidence the text improved, because nothing looked
+// at the text. Calling it stale is a guess, and a guess that fails the gate.
+//
+// Two things take a rule out of the run, and both have already been paid for:
+//
+//   - vocabulary needs .ste/approved-words.txt, which dictionary.go keeps
+//     OUT of the repository on purpose, so every CI runner and every fresh
+//     clone is without it. A baseline regenerated on the one machine that has
+//     the dictionary carries vocabulary entries that can never fire anywhere
+//     else, and the gate reds permanently — telling the reader to "shrink the
+//     baseline" for text that is fine. That was live from the moment the gate
+//     started running in CI.
+//   - -rule X narrows the run to one rule, so every OTHER rule's entries went
+//     stale at once. `terva-ste-lint -rule term -check` could not pass.
+//
+// This is a predicate, not a list of the rules that are active. A new
+// unconditional rule needs no change here; a new CONDITIONAL one has to state
+// its condition in the single place that decides whether it can be judged,
+// which is the decision worth making by hand.
+func judgedRules(only string, haveDict bool) func(rule string) bool {
+	return func(rule string) bool {
+		if only != "" && rule != only {
+			return false
+		}
+		if rule == vocabularyRule && !haveDict {
+			return false
+		}
+		return true
 	}
 }
 

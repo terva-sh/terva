@@ -8,27 +8,6 @@ import (
 	"terva.sh/terva/packages/i18n"
 )
 
-// Compose renders terva's resolved state into a portable Briefing.
-//
-// It reads r.SystemSegments — the labeled artifact — and lets each segment's
-// portability class decide its fate. Nothing here re-reads a file, re-resolves a
-// persona, or re-renders a prompt: every fact it needs, the assembler already
-// established and labeled. That is the whole discipline. A composer that
-// re-derives is a second assembler, and a second assembler drifts.
-//
-// Two rules govern what comes out, and both are enforced by Scrub rather than by
-// remembering:
-//
-// RULE 1 — NEVER NAME A TOOL. Not terva's (they do not exist over there) and not
-// the worker's (we do not know its exact set or version, and its own system
-// prompt already covers them). Work is stated as OUTCOMES. This single rule kills
-// most of the leak surface, because almost every harness-local segment exists to
-// tell the model about a tool.
-//
-// RULE 2 — INJECT POINTERS, NOT PAYLOADS. A worker has file-reading tools and
-// does its own project discovery. Pasting AGENTS.md into its briefing duplicates
-// what it will find itself — or contradicts its own CLAUDE.md. Naming the path
-// costs nothing and leaks nothing.
 // WorkerPosture resolves the approval posture a worker actually runs under, from
 // three inputs in strict priority:
 //
@@ -56,6 +35,27 @@ func WorkerPosture(override string, leased bool, inherited string) string {
 	return inherited
 }
 
+// Compose renders terva's resolved state into a portable Briefing.
+//
+// It reads r.SystemSegments — the labeled artifact — and lets each segment's
+// portability class decide its fate. Nothing here re-reads a file, re-resolves a
+// persona, or re-renders a prompt: every fact it needs, the assembler already
+// established and labeled. That is the whole discipline. A composer that
+// re-derives is a second assembler, and a second assembler drifts.
+//
+// Two rules govern what comes out, and both are enforced by Scrub rather than by
+// remembering:
+//
+// RULE 1 — NEVER NAME A TOOL. Not terva's (they do not exist over there) and not
+// the worker's (we do not know its exact set or version, and its own system
+// prompt already covers them). Work is stated as OUTCOMES. This single rule kills
+// most of the leak surface, because almost every harness-local segment exists to
+// tell the model about a tool.
+//
+// RULE 2 — INJECT POINTERS, NOT PAYLOADS. A worker has file-reading tools and
+// does its own project discovery. Pasting AGENTS.md into its briefing duplicates
+// what it will find itself — or contradicts its own CLAUDE.md. Naming the path
+// costs nothing and leaks nothing.
 func Compose(r build.Resolved, task Task, ws Workspace) Briefing {
 	b := Briefing{
 		Task:      task,

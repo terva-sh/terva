@@ -75,6 +75,12 @@ type Backend struct {
 	// means the backend cannot be steered once started, and the supervisor will
 	// say so rather than silently dropping the message. The runner also uses it
 	// to encode the opening turn (see Opening).
+	//
+	// The frame must end in a NEWLINE. writeStdin writes what it is given
+	// verbatim, and every worker reads its stdin a line at a time, so a frame
+	// without one either leaves the worker parked mid-line or merges with
+	// whatever is written next — a turn and an approval arriving as one
+	// unparseable line. Pinned by TestEveryBackendFramesItsLines.
 	Steer func(text string) ([]byte, error)
 
 	// RecognizeAsk inspects a translated event and, if it is an approval request
@@ -90,7 +96,8 @@ type Backend struct {
 	RecognizeAsk func(ev Event) (Ask, bool)
 
 	// EncodeApprove encodes a decision as the reply frame for the child's stdin,
-	// correlated to the Ask's id. Required when RecognizeAsk is set.
+	// correlated to the Ask's id. Required when RecognizeAsk is set, and
+	// NEWLINE-TERMINATED for the reason Steer is — these two share the pipe.
 	EncodeApprove func(askID string, d core.ConfirmDecision) ([]byte, error)
 
 	// ApprovalSocket says this backend gates tool use through terva's MCP
@@ -180,6 +187,16 @@ var (
 // Register adds a backend to the table. It panics on a duplicate name, because
 // a silently-shadowed backend would route agents to the wrong runner and there
 // is no recovering from that at runtime.
+//
+// It panics on a half-wired spec for the same reason. The inter-field contracts
+// above used to be prose alone, and every way of breaking them produces a worker
+// that HANGS rather than one that errors: a missing Steer makes pumpStdin close
+// the child's stdin outright, a RecognizeAsk without EncodeApprove leaves the
+// worker parked on an approval nothing will answer, and both carriers at once
+// gates the same tool twice. None of those surface as a failure anyone can read.
+//
+// Backends register from init(), so a spec that cannot work fails the binary at
+// startup instead of one dispatch, months later, in the field.
 func Register(b Backend) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -189,7 +206,41 @@ func Register(b Backend) {
 	if _, dup := registry[b.Name]; dup {
 		panic("worker: duplicate backend " + b.Name)
 	}
+	if err := b.validate(); err != nil {
+		panic("worker: " + err.Error())
+	}
 	registry[b.Name] = b
+}
+
+// validate enforces the spec's inter-field contracts — the ones a caller can
+// break by omission rather than by writing something wrong.
+//
+// Split from Register so a test can state a bad spec and read the refusal,
+// rather than recovering from a panic to find out which rule fired.
+//
+// Deliberately NOT checked here: that Steer and EncodeApprove return
+// newline-terminated frames. Checking it means CALLING them, at package init,
+// with invented arguments — which would make "safe to invoke at init with fake
+// input" a new unwritten contract, the exact shape of the problem this is
+// fixing. TestEveryBackendFramesItsLines calls them instead, where invented
+// arguments are what tests are for.
+func (b Backend) validate() error {
+	switch {
+	case b.Command == nil:
+		return fmt.Errorf("backend %q has no Command: nothing can build its child process", b.Name)
+	case b.Translate == nil:
+		return fmt.Errorf("backend %q has no Translate: every line of its output would be discarded", b.Name)
+	case b.Opening != nil && b.Steer == nil:
+		return fmt.Errorf("backend %q sets Opening but not Steer: the opening turn is encoded BY Steer, "+
+			"and pumpStdin closes stdin outright when Steer is nil — the task would never reach the worker", b.Name)
+	case b.RecognizeAsk != nil && b.EncodeApprove == nil:
+		return fmt.Errorf("backend %q recognises approval asks but cannot answer them (no EncodeApprove): "+
+			"a gated worker would block forever on a verdict nothing writes back", b.Name)
+	case b.ApprovalSocket && b.RecognizeAsk != nil:
+		return fmt.Errorf("backend %q carries approvals on BOTH the MCP socket and its own wire: "+
+			"a backend asks over one or the other, never both", b.Name)
+	}
+	return nil
 }
 
 // Lookup resolves a backend by name.

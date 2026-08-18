@@ -15,11 +15,11 @@ import (
 func newRemoveRepo(t *testing.T) worktree.Env {
 	t.Helper()
 	repo := newCarrierRepo(t) // sets TERVA_HOME and commits a README
-	return worktree.Env{
-		Root:      filepath.Join(os.Getenv("TERVA_HOME"), "worktrees"),
-		CWD:       repo,
-		SessionID: "test-session",
-	}
+	// Through the same constructor production uses. Hand-rolled, this set Root
+	// and omitted LegacyRoot — so it drove removeAvailableWorktrees against an
+	// env no host ever builds, and would have stayed green through a real drift
+	// in the pair it was standing in for.
+	return worktree.HostEnv(os.Getenv("TERVA_HOME"), repo, "test-session")
 }
 
 func mustCreate(t *testing.T, env worktree.Env, name string) string {

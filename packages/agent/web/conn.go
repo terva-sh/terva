@@ -21,25 +21,13 @@ type wsConn struct {
 	wmu sync.Mutex
 }
 
-// maxFrameBytes caps a single inbound WebSocket message so one oversized frame
-// can't exhaust memory. Generous enough for a prompt carrying an attached image
-// (raw bytes ride the frame base64-encoded), bounded enough to stop abuse.
-//
-// Note the 4/3 base64 inflation when sizing this against a file: an upload of N
-// bytes needs a frame of ~1.34N plus JSON overhead. At the previous 16 MiB this
-// put the real ceiling on a card/attachment at ~12 MB of file, and a 19.6 MB
-// character card (a real one off chub.ai — a 7680x2160 portrait) produced a
-// 25.0 MiB frame that gorilla killed the connection over. The browser saw only
-// a dead socket, which surfaced as "not connected" with nothing naming the size.
-// maxUploadBytes below is the pre-flight bound clients check against, and is
-// derived from this so the two cannot drift.
-const maxFrameBytes = 32 << 20 // 32 MiB
-
-// maxUploadBytes is the largest FILE a client should attempt to send in one
-// frame — maxFrameBytes discounted by base64 inflation, with headroom for the
-// surrounding JSON. Reported to clients in the hello so the panel can reject an
-// oversized file with a real message instead of posting it and losing the socket.
-const maxUploadBytes = maxFrameBytes / 4 * 3 // ~24 MiB of file
+// maxFrameBytes and maxUploadBytes are the protocol's, not this server's: both
+// ends must agree, so they live in ctrlproto rather than being declared here
+// and again in the client with a comment asking someone to keep them in step.
+const (
+	maxFrameBytes  = ctrlproto.MaxFrameBytes
+	maxUploadBytes = ctrlproto.MaxUploadFileBytes
+)
 
 // A ctrlproto connection is SILENT while the agent is thinking, and a reverse
 // proxy reads silence as death. haproxy applies `timeout client`/`timeout server`

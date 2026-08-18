@@ -121,22 +121,19 @@ func SetExtensionConfigFormIn(dir, name string, values map[string]string) error 
 // clears it. Secret values are stored plaintext — the UI masks them, and the
 // host never logs them.
 func SetExtensionConfigValues(name string, values map[string]json.RawMessage) error {
-	c, err := config.LoadConfig()
-	if err != nil {
-		return err
-	}
-	if len(values) == 0 {
-		delete(c.Extensions, name)
-		if len(c.Extensions) == 0 {
-			c.Extensions = nil
+	return config.MutateConfig(func(c *config.Config) {
+		if len(values) == 0 {
+			delete(c.Extensions, name)
+			if len(c.Extensions) == 0 {
+				c.Extensions = nil
+			}
+			return
 		}
-	} else {
 		if c.Extensions == nil {
 			c.Extensions = map[string]map[string]json.RawMessage{}
 		}
 		c.Extensions[name] = values
-	}
-	return config.SaveConfig(c)
+	})
 }
 
 // ClearExtensionConfigKey removes ONE saved value, leaving the rest of the

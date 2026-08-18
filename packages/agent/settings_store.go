@@ -38,30 +38,15 @@ func statusScriptsForTUI(cfg config.Config) map[string]modes.StatusScript {
 }
 
 func (configSettingsStore) SetInlineImages(enabled bool) error {
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		return err
-	}
-	cfg.InlineImagesEnabled = &enabled
-	return config.SaveConfig(cfg)
+	return config.MutateConfig(func(cfg *config.Config) { cfg.InlineImagesEnabled = &enabled })
 }
 
 func (configSettingsStore) SetRecursiveFileSuggest(enabled bool) error {
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		return err
-	}
-	cfg.RecursiveFileSuggest = &enabled
-	return config.SaveConfig(cfg)
+	return config.MutateConfig(func(cfg *config.Config) { cfg.RecursiveFileSuggest = &enabled })
 }
 
 func (configSettingsStore) SetRespectGitignore(enabled bool) error {
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		return err
-	}
-	cfg.RespectGitignore = &enabled
-	return config.SaveConfig(cfg)
+	return config.MutateConfig(func(cfg *config.Config) { cfg.RespectGitignore = &enabled })
 }
 
 // SetStatusLineRows persists the status-bar segment layout. nil clears
@@ -69,37 +54,29 @@ func (configSettingsStore) SetRespectGitignore(enabled bool) error {
 // status_line.scripts (the block is only dropped when nothing else
 // lives in it).
 func (configSettingsStore) SetStatusLineRows(rows [][]string) error {
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		return err
-	}
-	switch {
-	case rows == nil:
-		if cfg.StatusLine != nil {
-			cfg.StatusLine.Rows = nil
-			if len(cfg.StatusLine.Scripts) == 0 {
-				cfg.StatusLine = nil
+	return config.MutateConfig(func(cfg *config.Config) {
+		switch {
+		case rows == nil:
+			if cfg.StatusLine != nil {
+				cfg.StatusLine.Rows = nil
+				if len(cfg.StatusLine.Scripts) == 0 {
+					cfg.StatusLine = nil
+				}
 			}
+		default:
+			if cfg.StatusLine == nil {
+				cfg.StatusLine = &config.StatusLineConfig{}
+			}
+			cfg.StatusLine.Rows = rows
 		}
-	default:
-		if cfg.StatusLine == nil {
-			cfg.StatusLine = &config.StatusLineConfig{}
-		}
-		cfg.StatusLine.Rows = rows
-	}
-	return config.SaveConfig(cfg)
+	})
 }
 
 func (configSettingsStore) SetTheme(name string) error {
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		return err
-	}
 	if name == "auto" {
 		name = ""
 	}
-	cfg.Theme = name
-	return config.SaveConfig(cfg)
+	return config.MutateConfig(func(cfg *config.Config) { cfg.Theme = name })
 }
 
 // SetUserName persists what a character card's {{user}} macro resolves to (the

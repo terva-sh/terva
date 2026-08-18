@@ -1,7 +1,6 @@
 package swarm
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"terva.sh/terva/packages/lineframe"
 	"terva.sh/terva/packages/privfs"
 )
 
@@ -298,9 +298,16 @@ func (l *Listener) acceptLoop() {
 }
 
 func (l *Listener) readLoop(c net.Conn) {
-	br := bufio.NewReader(c)
+	// lineframe, not an unbounded ReadString: this is a socket peer, and a
+	// wedged or hostile supervisor emitting megabytes with no newline would
+	// otherwise be buffered whole into terva's heap. RECOVER — one over-limit
+	// instruction must not close the supervisor's channel to this agent.
+	fr := lineframe.NewReader(c, lineframe.DefaultMaxBytes, func(msg string) {
+		fmt.Fprintf(os.Stderr, "swarm inbox: %s\n", msg)
+	})
 	for {
-		line, err := br.ReadString('\n')
+		raw, err := fr.Read()
+		line := string(raw)
 		if line != "" {
 			select {
 			case l.out <- trimRightNL(line):

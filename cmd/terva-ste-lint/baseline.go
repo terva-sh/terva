@@ -86,10 +86,28 @@ func writeBaseline(root string, findings []Finding) error {
 	return os.WriteFile(root+"/"+baselinePath, append(out, '\n'), 0o644)
 }
 
+// ruleOf recovers the rule from a fingerprint, which fingerprint builds as
+// "<file>:<rule>:<hash>". It reads from the RIGHT, because the leftmost field
+// is a path and a path may contain a colon; the hash is always last and the
+// rule always sits before it.
+func ruleOf(fp string) string {
+	parts := strings.Split(fp, ":")
+	if len(parts) < 3 {
+		return ""
+	}
+	return parts[len(parts)-2]
+}
+
 // applyBaseline splits findings into the ones that are new (which fail) and
 // reports baseline entries that no longer fire (which also fail, so the file
-// cannot rot).
-func applyBaseline(findings []Finding, base map[string]bool) (fresh []Finding, stale []string) {
+// cannot rot) — but only for rules this run actually applied.
+//
+// judged answers whether an entry's rule ran at all. An entry for a rule that
+// did not run is UNJUDGED: it did not fire, but that says nothing about the
+// text, because nothing looked. Counting it stale is the bug this argument
+// exists to remove — see the comment on judgedRules in main.go for the two ways
+// a rule goes quiet and what each one used to cost.
+func applyBaseline(findings []Finding, base map[string]bool, judged func(rule string) bool) (fresh []Finding, stale, unjudged []string) {
 	fired := map[string]bool{}
 	for _, f := range findings {
 		fp := fingerprint(f)
@@ -99,12 +117,18 @@ func applyBaseline(findings []Finding, base map[string]bool) (fresh []Finding, s
 		}
 	}
 	for fp := range base {
-		if !fired[fp] {
-			stale = append(stale, fp)
+		if fired[fp] {
+			continue
 		}
+		if !judged(ruleOf(fp)) {
+			unjudged = append(unjudged, fp)
+			continue
+		}
+		stale = append(stale, fp)
 	}
 	sort.Strings(stale)
-	return fresh, stale
+	sort.Strings(unjudged)
+	return fresh, stale, unjudged
 }
 
 func reportStale(stale []string) {
@@ -121,4 +145,29 @@ func reportStale(stale []string) {
 		fmt.Fprintf(os.Stderr, "  %s\n", s)
 	}
 	fmt.Fprintln(os.Stderr, "  run: just ste-lint-baseline")
+}
+
+// reportUnjudged names the entries this run could not decide about. It never
+// fails the gate — the whole point is that we did not look — but it is printed
+// rather than dropped, so a baseline quietly accumulating entries no runner
+// ever checks stays visible instead of becoming a silent amnesty.
+func reportUnjudged(unjudged []string) {
+	if len(unjudged) == 0 {
+		return
+	}
+	byRule := map[string]int{}
+	for _, fp := range unjudged {
+		byRule[ruleOf(fp)]++
+	}
+	rules := make([]string, 0, len(byRule))
+	for r := range byRule {
+		rules = append(rules, r)
+	}
+	sort.Strings(rules)
+	var parts []string
+	for _, r := range rules {
+		parts = append(parts, fmt.Sprintf("%s %d", r, byRule[r]))
+	}
+	fmt.Fprintf(os.Stderr, "  (%d baseline entries not judged: the rule did not run — %s)\n",
+		len(unjudged), strings.Join(parts, ", "))
 }

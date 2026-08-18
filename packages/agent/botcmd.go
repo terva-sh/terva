@@ -564,8 +564,26 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	// asked to keep.
 	var sess *core.Session
 	if !args.NoSess {
-		s, _, serr := openOrCreateSessionForBot(args, resolved, agent, version)
-		if serr == nil {
+		// The SHARED opener, not a bot-local fork. The fork it replaces called
+		// core.OpenSession + SetMessages and stopped, so bot mode was the one
+		// headless host that skipped applyResumedModel (the bot answered on the
+		// config default while the session file still named another model) and
+		// skipped SeedCost/SeedLastTurnUsage (the AppendUsage observer wired
+		// below restarted the cumulative column at ~0, so a bot restarted daily
+		// wrote a usage timeline that stepped BACKWARDS and under-reported that
+		// session's lifetime spend forever). It also read only args.Continue, so
+		// `bot run --session PATH` silently created a new session elsewhere and
+		// never wrote the named file, and `--resume ID` did nothing at all.
+		//
+		// Only the interactive PICKER is out of reach here: bot mode has no tty
+		// to render it on. Refused up front rather than left to fail obscurely
+		// deep in the opener.
+		if args.Resume {
+			fmt.Fprintln(os.Stderr, "session: --resume needs a terminal to pick from; use --continue, or --resume <id> / --session <path> to name one")
+			args.Resume = false
+		}
+		s, serr := openOrCreateSession(args, resolved, agent, version)
+		if serr == nil && s != nil {
 			sess = s
 			defer sess.Close()
 			build.WireHeadlessSessionPersist(agent, sess)
@@ -710,27 +728,4 @@ func extractIdleNudgeFlags(tail []string) (rest []string, idleAfter time.Duratio
 		rest = append(rest, a)
 	}
 	return rest, idleAfter, idlePrompt
-}
-
-// openOrCreateSessionForBot reuses the same logic as interactive mode
-// but never prompts (no TTY picker); falls back to latest or new.
-func openOrCreateSessionForBot(args build.Args, r build.Resolved, ag *core.Agent, version string) (*core.Session, []any, error) {
-	if args.Continue {
-		if latest := core.LatestSession(config.TervaHome(), args.CWD); latest != "" {
-			s, msgs, err := core.OpenSession(latest)
-			if err != nil {
-				return nil, nil, err
-			}
-			if verr := s.StampVersion(version); verr != nil {
-				fmt.Fprintln(os.Stderr, "terva:", verr)
-			}
-			for _, w := range s.LoadWarnings {
-				fmt.Fprintln(os.Stderr, "terva:", w)
-			}
-			ag.SetMessages(msgs)
-			return s, nil, nil
-		}
-	}
-	s, err := core.NewSession(config.TervaHome(), args.CWD, r.Provider, r.Model, version)
-	return s, nil, err
 }

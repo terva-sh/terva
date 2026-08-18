@@ -1,7 +1,6 @@
 package swarm
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 
 	"terva.sh/terva/packages/agent/procenv"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/lineframe"
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider"
 )
@@ -371,11 +371,18 @@ func (r *execRunner) Run(ctx context.Context, sink Sink) error {
 	done := make(chan struct{}, 2)
 	go func() {
 		defer func() { done <- struct{}{} }()
-		dec := bufio.NewReader(stdout)
+		// lineframe, not an unbounded ReadBytes: this is a child process's
+		// stdout — a wire peer — and a runaway line would be buffered whole into
+		// the orchestrator's heap. RECOVER, because the stream is multiplexed:
+		// one oversized event must not cost every event after it.
+		dec := lineframe.NewReader(stdout, lineframe.DefaultMaxBytes, func(msg string) {
+			sink.Transcript("stdout: " + msg)
+			_ = log.Append(NewEvent("stdout", map[string]any{"text": msg}))
+		})
 		for {
-			line, err := dec.ReadBytes('\n')
-			if len(line) > 0 {
-				trimmed := strings.TrimRight(string(line), "\r\n")
+			raw, err := dec.Read()
+			if len(raw) > 0 {
+				trimmed := strings.TrimRight(string(raw), "\r\n")
 				if trimmed == "" {
 					goto next
 				}
@@ -409,11 +416,15 @@ func (r *execRunner) Run(ctx context.Context, sink Sink) error {
 	// without leaving the dashboard.
 	go func() {
 		defer func() { done <- struct{}{} }()
-		br := bufio.NewReader(stderr)
+		// Bounded for the same reason as stdout. Diagnostic chatter is still a
+		// peer's output: a child stuck printing without a newline would grow
+		// this buffer without limit.
+		br := lineframe.NewReader(stderr, lineframe.DefaultMaxBytes, func(msg string) {
+			sink.Transcript("stderr: " + msg)
+		})
 		for {
-			line, err := br.ReadString('\n')
-			if line != "" {
-				txt := strings.TrimRight(line, "\r\n")
+			raw, err := br.Read()
+			if txt := strings.TrimRight(string(raw), "\r\n"); txt != "" {
 				sink.Transcript("stderr: " + txt)
 				_ = log.Append(NewEvent("stderr", map[string]any{"text": txt}))
 			}

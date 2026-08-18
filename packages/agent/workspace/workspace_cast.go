@@ -104,9 +104,13 @@ func (s *wsSession) speak(actor string) error {
 	return s.promptBlocks(directive, nil, core.UserMessageExtras{})
 }
 
-// castSession resolves sess and gates cast edits: a cast is a --play concept, and
-// tearing down a live actor / swapping the actor_spawn tool mid-turn is unsafe,
-// so an idle play session is required.
+// castSession resolves sess and gates cast edits: any IDLE immersive session may
+// hold a roster — chat or play — because tearing down a live actor or swapping
+// the actor_spawn tool mid-turn is unsafe, and a coding session has no roster at
+// all.
+//
+// The doc here used to say "a cast is a --play concept ... so an idle play
+// session is required", three lines above the check that admits chat.
 func (w *Workspace) castSession(sess string) (*wsSession, error) {
 	s, err := w.resolve(sess)
 	if err != nil {

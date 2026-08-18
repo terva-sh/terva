@@ -21,13 +21,6 @@ type ChangelogInfo struct {
 	URL     string
 }
 
-// FetchChangelog hits the fork's releases API for the given version
-// (must already include the leading "v") and returns the release
-// notes body. Returns an empty ChangelogInfo on any failure or when
-// the body is empty; the caller treats either as "skip silently".
-//
-// Honours identity.ReleaseHostToken() for private-repo access. Times
-// out at 4s so startup never blocks on a flaky network.
 // semverOnly strips commit hash and date suffixes from version strings
 // like "0.1.12 (25b2bd4, 2026-04-25T09:25:45Z)" to get just "0.1.12".
 func semverOnly(v string) string {
@@ -37,6 +30,13 @@ func semverOnly(v string) string {
 	return v
 }
 
+// FetchChangelog hits the fork's releases API for the given version
+// (must already include the leading "v") and returns the release
+// notes body. Returns an empty ChangelogInfo on any failure or when
+// the body is empty; the caller treats either as "skip silently".
+//
+// Honours identity.ReleaseHostToken() for private-repo access. Times
+// out at 4s so startup never blocks on a flaky network.
 func FetchChangelog(ctx context.Context, version string) (ChangelogInfo, error) {
 	version = semverOnly(version)
 	if version == "" || version == "dev" {
@@ -186,8 +186,7 @@ func MarkChangelogShown(version string) error {
 	if semverOnly(cfg.LastChangelogShown) == v {
 		return nil
 	}
-	cfg.LastChangelogShown = v
-	return config.SaveConfig(cfg)
+	return config.MutateConfig(func(c *config.Config) { c.LastChangelogShown = v })
 }
 
 // SeedChangelogVersion sets LastChangelogShown if it's currently
@@ -206,6 +205,11 @@ func SeedChangelogVersion(version string) {
 	if cfg.LastChangelogShown != "" {
 		return
 	}
-	cfg.LastChangelogShown = version
-	_ = config.SaveConfig(cfg)
+	// Re-check inside the lock: two instances launching together would both see
+	// an empty field, and the second would overwrite the first's seed.
+	_ = config.MutateConfig(func(c *config.Config) {
+		if c.LastChangelogShown == "" {
+			c.LastChangelogShown = version
+		}
+	})
 }

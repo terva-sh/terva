@@ -3,7 +3,6 @@
 package mcp
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -51,9 +50,23 @@ type httpTransport struct {
 	closeCh   chan struct{}
 	closeOnce sync.Once
 	wg        sync.WaitGroup // in-flight Send round-trips (they push to `in`)
+
+	// stderr is the server's diagnostic sink — the same file the stdio
+	// transport gives the child. It was discarded here, which is why an
+	// over-limit SSE frame had nowhere to be reported.
+	stderr io.Writer
 }
 
-func newHTTPTransport(cfg ServerConfig, _ string, _ io.Writer) (transport, error) {
+// warnf reports a wire-level problem to the server's log. Nil-safe: a transport
+// built without a diagnostic sink drops the message rather than panicking.
+func (t *httpTransport) warnf(format string, args ...any) {
+	if t.stderr == nil {
+		return
+	}
+	fmt.Fprintf(t.stderr, "[mcp http] "+format+"\n", args...)
+}
+
+func newHTTPTransport(cfg ServerConfig, _ string, stderr io.Writer) (transport, error) {
 	headers, err := resolveHeaders(cfg)
 	if err != nil {
 		return nil, err
@@ -83,6 +96,7 @@ func newHTTPTransport(cfg ServerConfig, _ string, _ io.Writer) (transport, error
 		client:  guard.Client(0, 0),
 		in:      make(chan []byte, 16),
 		closeCh: make(chan struct{}),
+		stderr:  stderr,
 	}, nil
 }
 
@@ -159,6 +173,17 @@ func (t *httpTransport) doRequest(frame []byte, sid string, id json.RawMessage) 
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
 		t.pushError(id, fmt.Errorf("mcp http %s: %s", resp.Status, bytes.TrimSpace(body)))
+		// A 404 against a request that CARRIED a session id is the spec's way
+		// of saying the session is gone — expired, or terminated server-side.
+		// The Transport contract says Incoming() closes "when the transport
+		// disconnects (the subprocess exited, the HTTP session ended)", and
+		// only Close() ever closed it, so the http half of that sentence was
+		// never true: a dead remote session left the Client believing it was
+		// connected, re-sending against an id the server had forgotten and
+		// failing every call with a fresh 404 forever.
+		if resp.StatusCode == http.StatusNotFound && sid != "" {
+			t.sessionEnded()
+		}
 		return
 	}
 	t.readResponse(resp, id)
@@ -223,8 +248,18 @@ func (t *httpTransport) readResponse(resp *http.Response, reqID json.RawMessage)
 // would leak one goroutine + one connection per call. A nil reqID (or a stream that
 // never carries the matching id) falls back to reading to EOF as before.
 func (t *httpTransport) readSSE(body io.Reader, reqID json.RawMessage) {
-	sc := bufio.NewScanner(body)
-	sc.Buffer(make([]byte, 0, 64<<10), lineframe.DefaultMaxBytes)
+	// lineframe, not bufio.Scanner. A `data:` line over the ceiling made
+	// Scan() return false, and because sc.Err() was never read the loop exited
+	// as if the stream had ended cleanly: the pending tools/call waited out its
+	// 60s timeout and failed naming nothing. Worse, the Scanner is PERMANENTLY
+	// done after ErrTooLong, so a valid response frame emitted after the
+	// oversized one never arrived either — the whole remainder of the stream was
+	// lost. This is a multiplexed wire (progress notifications interleaved with
+	// the response), so the policy is RECOVER: drop the frame, say so, keep
+	// reading.
+	fr := lineframe.NewReader(body, lineframe.DefaultMaxBytes, func(msg string) {
+		t.warnf("%s", msg)
+	})
 	var data bytes.Buffer
 	// flush emits the accumulated event and reports whether it was the response to
 	// reqID — the caller's signal to stop reading.
@@ -238,8 +273,12 @@ func (t *httpTransport) readSSE(body io.Reader, reqID json.RawMessage) {
 		t.push(frame)
 		return len(reqID) > 0 && frameHasID(frame, reqID)
 	}
-	for sc.Scan() {
-		line := sc.Text()
+	for {
+		raw, err := fr.Read()
+		if err != nil {
+			break // io.EOF, or a real read error the pending call will time out on
+		}
+		line := string(raw)
 		switch {
 		case line == "":
 			if flush() {
@@ -290,7 +329,18 @@ func (t *httpTransport) Incoming() <-chan []byte { return t.in }
 // closes Incoming() (so the Client's dispatch loop ends) and best-effort deletes
 // the session (the spec's teardown). Waiting for in-flight sends is what makes
 // closing `in` safe with many concurrent pushers.
-func (t *httpTransport) Close() {
+func (t *httpTransport) Close() { t.shutdown(true) }
+
+// sessionEnded tears the transport down because the SERVER ended the session,
+// so Incoming() closes and the Client stops believing it is connected.
+//
+// It runs in its own goroutine because the caller is a doRequest goroutine that
+// shutdown's wg.Wait() is waiting on — calling it inline would wait for itself.
+// No DELETE: the session the teardown would name is the one the server just
+// said it does not have.
+func (t *httpTransport) sessionEnded() { go t.shutdown(false) }
+
+func (t *httpTransport) shutdown(deleteSession bool) {
 	t.closeOnce.Do(func() {
 		t.mu.Lock()
 		t.closed = true
@@ -299,7 +349,7 @@ func (t *httpTransport) Close() {
 		close(t.closeCh)
 		t.wg.Wait()
 		close(t.in)
-		if sid != "" {
+		if deleteSession && sid != "" {
 			go t.deleteSession(sid)
 		}
 	})

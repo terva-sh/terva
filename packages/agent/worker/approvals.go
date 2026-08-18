@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/mcpbridge"
+	"terva.sh/terva/packages/lineframe"
 	"terva.sh/terva/packages/privfs"
 )
 
@@ -82,7 +83,15 @@ func (al *approvalListener) Close() error {
 // verdict to return instead of a hang.
 func (r *Runner) handleApprovalConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
-	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	// REJECT, not recover: this connection carries exactly ONE question, so a
+	// skipped frame is not a gap in a stream — it is the whole request, and the
+	// bridge is blocked waiting for a verdict. Fail closed, like every other
+	// malformed-request path here.
+	line, tooLong, err := lineframe.ReadFrame(bufio.NewReader(conn), lineframe.DefaultMaxBytes)
+	if tooLong {
+		writeApprovalReply(conn, mcpbridge.Reply{Allow: false, Reason: "approval request exceeded the frame limit"})
+		return
+	}
 	if len(bytes.TrimSpace(line)) == 0 && err != nil {
 		return // the bridge hung up before asking; nothing to answer
 	}

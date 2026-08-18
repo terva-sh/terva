@@ -182,14 +182,14 @@ func (d *SwarmDialog) Open(
 	d.refresh()
 }
 
-// CursorPos returns the row/col for the terminal cursor while an
-// inline editor (spawn or prompt) is active so the caret blinks in
-// the right spot. Returns -1, -1 when no input is being captured.
 // SetArchive installs the one-way archive callback (swarm.Archive: compress the
 // record, move it out of the live tree, forget it). Optional — a dialog without
 // one does not offer the key at all, rather than offering it and failing.
 func (d *SwarmDialog) SetArchive(fn func(id string) error) { d.archive = fn }
 
+// CursorPos returns the row/col for the terminal cursor while an
+// inline editor (spawn or prompt) is active so the caret blinks in
+// the right spot. Returns -1, -1 when no input is being captured.
 func (d *SwarmDialog) CursorPos(width int) (row, col int) {
 	if !d.Active() {
 		return -1, -1

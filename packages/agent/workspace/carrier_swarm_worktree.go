@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"terva.sh/terva/packages/agent/build"
@@ -36,12 +35,7 @@ var swarmWorktreeMgr = worktree.NewManager()
 // sessions have come or gone in between.
 func (w *Workspace) acquireSwarmWorktree(ctx context.Context, req swarm.WorktreeReq) (swarm.WorktreeLease, error) {
 	name := build.SlugAgent(req.AgentID, req.Task)
-	env := worktree.Env{
-		Root:       filepath.Join(config.TervaHome(), "worktrees"),
-		LegacyRoot: filepath.Join(config.TervaHome(), "ext-data", "git-worktree"),
-		CWD:        w.cwd,
-		SessionID:  "swarm:" + req.AgentID,
-	}
+	env := worktree.HostEnv(config.TervaHome(), w.cwd, "swarm:"+req.AgentID)
 	res, err := swarmWorktreeMgr.Create(env, worktree.CreateArgs{Name: name, ReuseIfAvailable: true}) // base defaults to HEAD
 	if err != nil {
 		return swarm.WorktreeLease{}, fmt.Errorf("swarm worktree isolation: %w", err)

@@ -178,15 +178,15 @@ func (c *TerminalColorValue) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// LoadThemeFromHome applies a custom theme from $TERVA_HOME/themes/*.json
-// to detected. Empty/auto/default keeps the built-in detected theme.
-// If preferred is set, it may be a theme name, a basename without
-// .json, or an absolute/relative path.
 func DetectThemeWithCustom(tervaHome, preferred string, timeout time.Duration) (Theme, string, error) {
 	detected := DetectThemeFromBackground(timeout)
 	return LoadThemeFromHome(tervaHome, preferred, detected)
 }
 
+// LoadThemeFromHome applies a custom theme from $TERVA_HOME/themes/*.json
+// to detected. Empty/auto/default keeps the built-in detected theme.
+// If preferred is set, it may be a theme name, a basename without
+// .json, or an absolute/relative path.
 func LoadThemeFromHome(tervaHome, preferred string, detected Theme) (Theme, string, error) {
 	path, err := resolveThemePath(tervaHome, preferred)
 	if err != nil || path == "" {

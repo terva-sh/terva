@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"terva.sh/terva/packages/agent/mcp"
 	"terva.sh/terva/packages/envcompat"
+	"terva.sh/terva/packages/filelock"
 )
 
 // Extension and MCP configuration: the project-config path, the enable/disable
@@ -23,6 +25,116 @@ func ProjectConfigPath(cwd string) string {
 		dir = names[0]
 	}
 	return filepath.Join(cwd, dir, "config.json")
+}
+
+// projectConfigMu orders project-config writers inside this process, the way
+// configMu does for the user config. One mutex for every project: the pane and
+// the dialog that contend are in one process and one workspace, and a per-path
+// map would need its own lifetime rules to buy nothing.
+var projectConfigMu sync.Mutex
+
+// MutateProjectConfig applies fn to the project's .terva/config.json and writes
+// it back, atomically against every other writer.
+//
+// The project layer is deliberately NOT a struct. Unlike the user config, this
+// file is edited by hand and shared through a repository, so a round-trip
+// through map[string]any is what keeps a key this build has never heard of —
+// one a newer terva wrote, one a human added — from being dropped on the way
+// through. That is also why every caller needs the SAME round-trip, and why
+// four of them each grew their own.
+//
+// The four were byte-for-byte identical, which was the danger rather than the
+// consolation: they edit different keys of ONE document whose entire purpose is
+// preserving the keys the others own, they take no lock, and they all wrote the
+// same fixed "<path>.tmp" — a shared scratch name that provider/auth/store.go
+// and terva-mcp-bridge both document having fixed, because two writers O_TRUNC
+// the same file and the rename publishes a blend of two documents. Three tests
+// separately asserted "preserves unrelated fields" against three of the copies,
+// and none of them could see the other two.
+//
+// Modes stay 0755/0644, unlike the user config's owner-only: this file lives in
+// the user's repository and is routinely committed. Tightening it here would be
+// a surprise change to a directory terva does not own.
+func MutateProjectConfig(cwd string, fn func(doc map[string]any)) error {
+	path := ProjectConfigPath(cwd)
+	projectConfigMu.Lock()
+	defer projectConfigMu.Unlock()
+	// Degrade to the mutex when the tree cannot host a lockfile, as
+	// MutateConfigAt does: editing a project setting must not depend on it.
+	lk, err := filelock.Acquire(path + ".lock")
+	if err != nil {
+		lk = nil
+	}
+	defer lk.Release()
+
+	doc := map[string]any{}
+	// Read inside the lock; anything read before it describes the file as it
+	// was before the writer we just queued behind.
+	if raw, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	fn(doc)
+	b, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return err
+	}
+	return publishProjectConfig(path, append(b, '\n'))
+}
+
+// publishProjectConfig writes b to path via a UNIQUE temp file. Not
+// "<path>.tmp": that name is shared, so two writers truncate and fill the same
+// scratch path and the rename publishes whichever blend of the two happened to
+// be on disk.
+func publishProjectConfig(path string, b []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer func() { _ = os.Remove(name) }() // no-op once the rename succeeds
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	// CreateTemp makes 0600; the project file is 0644 like the rest of a repo.
+	if err := os.Chmod(name, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(name, path)
+}
+
+// toggleProjectStringList is the shared body of the disable_extensions and
+// disable_mcp toggles: rebuild the list without name, re-add iff disabling, and
+// drop the key entirely when nothing is left so an empty list never accumulates
+// in a file people read.
+func toggleProjectStringList(doc map[string]any, key, name string, on bool) {
+	var list []string
+	if arr, ok := doc[key].([]any); ok {
+		for _, e := range arr {
+			if s, ok := e.(string); ok && s != name {
+				list = append(list, s)
+			}
+		}
+	}
+	if on {
+		list = append(list, name)
+	}
+	if len(list) == 0 {
+		delete(doc, key)
+		return
+	}
+	doc[key] = list
 }
 
 // SetManifestEnabled flips the enabled flag in the extension manifest at
@@ -50,45 +162,9 @@ func SetManifestEnabled(dir string, enabled bool) error {
 // config's disable_extensions list (preserving other fields) and writes
 // it atomically. disabled=true disables the extension for this project.
 func SetProjectExtensionDisabled(cwd, name string, disabled bool) error {
-	path := ProjectConfigPath(cwd)
-	generic := map[string]any{}
-	if raw, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(raw, &generic); err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	// Rebuild the list without name, then re-add it iff disabling.
-	var list []string
-	if arr, ok := generic["disable_extensions"].([]any); ok {
-		for _, e := range arr {
-			if s, ok := e.(string); ok && s != name {
-				list = append(list, s)
-			}
-		}
-	}
-	if disabled {
-		list = append(list, name)
-	}
-	if len(list) == 0 {
-		delete(generic, "disable_extensions")
-	} else {
-		generic["disable_extensions"] = list
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(generic, "", "  ")
-	if err != nil {
-		return err
-	}
-	b = append(b, '\n')
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return MutateProjectConfig(cwd, func(doc map[string]any) {
+		toggleProjectStringList(doc, "disable_extensions", name, disabled)
+	})
 }
 
 // FindExtensionDirIn locates the named extension's directory under the
@@ -110,17 +186,13 @@ func FindExtensionDirIn(cwd, name string) (string, error) {
 }
 
 // SetUserMCPDisabled adds or removes name from the user config's
-// disable_mcp list and writes json. The user layer is fully
-// modeled by Config, so the structured round-trip (LoadConfig /
-// toggleStringMember / SaveConfig) is correct and matches the other
-// user-level toggles (favorites, etc.). "Enable" is just removal.
+// disable_mcp list. The user layer is fully modeled by Config, so the
+// structured round-trip is correct and matches the other user-level toggles
+// (favorites, etc.). "Enable" is just removal.
 func SetUserMCPDisabled(name string, disabled bool) error {
-	c, err := LoadConfig()
-	if err != nil {
-		return err
-	}
-	c.DisableMCP = ToggleStringMember(c.DisableMCP, name, disabled)
-	return SaveConfig(c)
+	return MutateConfig(func(c *Config) {
+		c.DisableMCP = ToggleStringMember(c.DisableMCP, name, disabled)
+	})
 }
 
 // SetProjectMCPDisabled adds or removes name from the project config's
@@ -128,45 +200,9 @@ func SetUserMCPDisabled(name string, disabled bool) error {
 // The project layer isn't a fully writable struct, so this uses the same
 // generic-map round-trip as SetProjectExtensionDisabled.
 func SetProjectMCPDisabled(cwd, name string, disabled bool) error {
-	path := ProjectConfigPath(cwd)
-	generic := map[string]any{}
-	if raw, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(raw, &generic); err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	// Rebuild the list without name, then re-add it iff disabling.
-	var list []string
-	if arr, ok := generic["disable_mcp"].([]any); ok {
-		for _, e := range arr {
-			if s, ok := e.(string); ok && s != name {
-				list = append(list, s)
-			}
-		}
-	}
-	if disabled {
-		list = append(list, name)
-	}
-	if len(list) == 0 {
-		delete(generic, "disable_mcp")
-	} else {
-		generic["disable_mcp"] = list
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(generic, "", "  ")
-	if err != nil {
-		return err
-	}
-	b = append(b, '\n')
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return MutateProjectConfig(cwd, func(doc map[string]any) {
+		toggleProjectStringList(doc, "disable_mcp", name, disabled)
+	})
 }
 
 // LocalesDir is $TERVA_HOME/locales, home to operator translation overlays
@@ -283,36 +319,19 @@ func ResolvedDisableMCP(cwd string, trusted bool) map[string]bool {
 // key. The write is unconditional, but the value is honored at launch only in
 // a trusted workspace (see ResolveConfig) — the trust gate lives at read time.
 func SetProjectModel(cwd, provider, model string) error {
-	path := ProjectConfigPath(cwd)
-	generic := map[string]any{}
-	if raw, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(raw, &generic); err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
-	} else if !os.IsNotExist(err) {
-		return err
+	return MutateProjectConfig(cwd, func(doc map[string]any) {
+		setOrDelete(doc, "provider", provider)
+		setOrDelete(doc, "model", model)
+	})
+}
+
+// setOrDelete assigns a string key, or removes it when the value is empty —
+// "clear this setting" and "set it to the empty string" must not be the same
+// document, because the empty string is a value the resolver would honour.
+func setOrDelete(doc map[string]any, key, value string) {
+	if value == "" {
+		delete(doc, key)
+		return
 	}
-	if provider != "" {
-		generic["provider"] = provider
-	} else {
-		delete(generic, "provider")
-	}
-	if model != "" {
-		generic["model"] = model
-	} else {
-		delete(generic, "model")
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(generic, "", "  ")
-	if err != nil {
-		return err
-	}
-	b = append(b, '\n')
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	doc[key] = value
 }

@@ -28,6 +28,11 @@ import (
 // lint someone deletes.
 const dictionaryPath = ".ste/approved-words.txt"
 
+// vocabularyRule names the one rule whose findings depend on an artifact the
+// repository does not carry. judgedRules keys on it, so the name lives here
+// beside the condition rather than as a literal in two files that can drift.
+const vocabularyRule = "vocabulary"
+
 // technicalWords are always in vocabulary regardless of the dictionary: our own
 // nouns and the names of things the model operates. STE calls these Technical
 // Names and Technical Verbs and expects each project to keep its own list —
@@ -92,7 +97,7 @@ func checkVocabulary(t Text, dict map[string]bool) []Finding {
 			}
 			seen[lw] = true
 			fs = append(fs, Finding{
-				Text: t, Rule: "vocabulary",
+				Text: t, Rule: vocabularyRule,
 				Msg:   "not in the approved word list, and not a technical name we declare",
 				Quote: w,
 			})
