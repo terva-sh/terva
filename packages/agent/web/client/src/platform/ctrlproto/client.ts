@@ -1,4 +1,5 @@
 import type { Frame, ParamsFor, ServerHello, Status, Verb, WireEvent } from './types'
+import { ClientCodes, WireError } from './errors'
 
 const PROTOCOL = 1
 
@@ -162,7 +163,7 @@ export class Client implements ConnectableClient {
     ws.onmessage = (e) => this.onFrame(JSON.parse(e.data as string) as Frame)
     ws.onclose = () => {
       this.onStatus('closed')
-      this.rejectAll(new Error('connection closed'))
+      this.rejectAll(new WireError(ClientCodes.connectionClosed, 'connection closed'))
       if (!this.stopped) void this.reconnect()
     }
   }
@@ -190,7 +191,7 @@ export class Client implements ConnectableClient {
       const p = this.pending.get(f.id)
       if (!p) return
       this.pending.delete(f.id)
-      if (f.error) p.reject(new Error(`${f.error.code}: ${f.error.message}`))
+      if (f.error) p.reject(new WireError(f.error.code, f.error.message))
       else p.resolve(f.result)
       return
     }
@@ -210,7 +211,7 @@ export class Client implements ConnectableClient {
       // a CONNECTING/closed socket (e.g. during a reconnect). Callers that care
       // catch this; the reconnect snapshot re-syncs state either way.
       if (!this.isOpen()) {
-        reject(new Error('not connected'))
+        reject(new WireError(ClientCodes.notConnected, 'not connected'))
         return
       }
       const id = this.nextId++

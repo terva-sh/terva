@@ -1,3 +1,4 @@
+import { errText } from '../../platform/ctrlproto/errors'
 import { useEffect, useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type {
@@ -122,7 +123,7 @@ export function CardHistory(props: {
       const v = await client.send<CardRevisionView>('cards.revision', { id: cardId, ref })
       setDetail(v)
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
       setOpen('')
     } finally {
       setLoadingDetail(false)
@@ -141,7 +142,7 @@ export function CardHistory(props: {
       const r = await client.send<CardHistoryResult>('cards.history', { id: cardId })
       setRevisions(r.revisions ?? [])
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     } finally {
       setRestoring('')
     }

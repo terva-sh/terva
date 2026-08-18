@@ -1,3 +1,4 @@
+import { errText } from '../../platform/ctrlproto/errors'
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { SuggestTurn, SuggestResult } from '../../platform/ctrlproto/types'
@@ -135,7 +136,7 @@ export function SuggestReply(props: {
       setRounds([...history, { note: guidance, draft: res.draft ?? '' }])
       setNote('')
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     } finally {
       setBusy(false)
     }
@@ -151,7 +152,7 @@ export function SuggestReply(props: {
       await client.send('post.line', { actor: target === 'actor' ? actorName.trim() : '', text: draft }, sessionId)
       onClose()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
       setBusy(false)
     }
   }
@@ -166,7 +167,7 @@ export function SuggestReply(props: {
     try {
       await client.send('cast.add', { name: actorName.trim(), ref: actorCard }, sessionId)
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
   }
 
@@ -182,7 +183,7 @@ export function SuggestReply(props: {
       await client.send('direct.turn', { text }, sessionId)
       onClose()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
       setBusy(false)
     }
   }

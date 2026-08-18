@@ -1,5 +1,5 @@
 import { t } from '../i18n'
-import type { ReasoningRungInfo } from '../platform/ctrlproto/types'
+import type { ModelInfo, ReasoningRungInfo } from '../platform/ctrlproto/types'
 
 // The ladder, lowest to highest, mirroring provider.ReasoningLevels in Go.
 // 'inherit' is the null row: it clears the session's override rather than
@@ -24,12 +24,19 @@ export const REASONING_LEVELS = [
 export interface ReasoningPickProps {
   // override is the session's own level, '' when it follows the global.
   override: string
-  // global is the workspace default, so the inherit row can say what
-  // inheriting would actually mean rather than just "inherit".
-  global: string
-  // modelDefault is the current model's own default, which is what applies
-  // when there is no global either. '' when the model states none.
-  modelDefault?: string
+  // inherit is what a session that overrides nothing actually runs at on this
+  // model, and inheritFrom is which layer decided it — both resolved by the
+  // daemon (ModelInfo.inherit_reasoning / .inherit_reasoning_from).
+  //
+  // This used to be (global, modelDefault) and the inherit row worked the chain
+  // out here: global first, model default second. That is the wrong way round
+  // for an OPERATOR's per-model models.json level, which outranks the global —
+  // and the raw model field cannot be told from a CATALOG default without a
+  // signal this component was never given. So an operator who set a per-model
+  // level was told the session would "follow the global setting", naming a
+  // value that was not deciding anything while the turn ran at theirs.
+  inherit?: string
+  inheritFrom?: ModelInfo['inherit_reasoning_from']
   // maxIsNative says whether 'max' reaches this model as a native max effort
   // or gets clamped to maximum. Mirrors provider.MaxIsNative.
   maxIsNative?: boolean
@@ -77,20 +84,42 @@ export function rungDetail(
   return base
 }
 
+// inheritDetailFor is the inherit row's sentence: a SWITCH on which layer the
+// daemon says won, never a re-derivation of the chain.
+//
+// It mirrors the same switch in packages/agent/modes/dialogs/reasoning_dialog.go
+// — both read a source the daemon resolved, so neither can disagree with the
+// turn about which rung is deciding. Each arm names its own layer: saying
+// "global" for a catalog default points the user at a setting that is not the
+// one in play, which is the whole failure this replaces.
+export function inheritDetailFor(
+  level: string,
+  from: ModelInfo['inherit_reasoning_from'],
+): string {
+  switch (from) {
+    case 'model_operator':
+      return t("follow this model's configured level (%s)", level)
+    case 'global':
+      return t('follow the global setting (now: %s)', level)
+    case 'model_catalog':
+      return t("follow the model's default (%s)", level)
+    default:
+      // Nothing set anywhere, or a source this build does not know. Naming no
+      // level beats naming the wrong one.
+      return t('follow the global setting')
+  }
+}
+
 export function ReasoningPick({
   override,
-  global,
-  modelDefault,
+  inherit,
+  inheritFrom,
   maxIsNative,
   rungs,
   onPick,
   onClose,
 }: ReasoningPickProps) {
-  const inheritDetail = global
-    ? t('follow the global setting (now: %s)', global)
-    : modelDefault
-      ? t("follow the model's default (%s)", modelDefault)
-      : t('follow the global setting')
+  const inheritDetail = inheritDetailFor(inherit ?? '', inheritFrom)
 
   const byLevel = new Map((rungs ?? []).map((r) => [r.level, r]))
 
@@ -132,10 +161,16 @@ export function ReasoningPick({
 }
 
 // reasoningLabel is the compact text for the button that opens the picker: the
-// session's own level when it has one, else the global, else nothing worth
-// showing. The trailing dot marks an override so the button distinguishes "this
-// session is deliberately here" from "this is just the default".
-export function reasoningLabel(override: string, global: string): string {
+// session's own level when it has one, else what it INHERITS, else nothing
+// worth showing. The trailing dot marks an override so the button distinguishes
+// "this session is deliberately here" from "this is just the default".
+//
+// The second argument used to be the global, which is only one of the three
+// layers a session can inherit from — so a session on a model carrying an
+// operator's per-model level showed the global's value, or, where no global was
+// passed at all, showed the ◐ placeholder as though nothing were set. Pass
+// ModelInfo.inherit_reasoning: the daemon has already picked the winner.
+export function reasoningLabel(override: string, inherit: string): string {
   if (override) return override + ' •'
-  return global
+  return inherit
 }

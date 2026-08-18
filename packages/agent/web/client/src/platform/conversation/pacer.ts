@@ -23,6 +23,7 @@
 // transcript at all (usage, turn boundaries, permission prompts) bypass the queue
 // and are delivered the moment they land.
 import type { WireEvent } from '../ctrlproto/types'
+import { TRANSCRIPT_EVENTS } from './store'
 
 // PACE_INTERVAL_MS is the tick interval. 16ms is one frame at 60Hz — the pacer
 // can't usefully release text faster than the browser paints it.
@@ -49,20 +50,22 @@ export const PACE_FLUSH_RATE = 6
 // the streamed text around them, so they must wait behind whatever the pacer has
 // not painted yet.
 //
-// `snapshot` is on this list and that is the subtle one: the authoritative
+// It is DERIVED, not written out. This was a hand-maintained duplicate of "which
+// events applyEvent turns into transcript rows", and it had already fallen three
+// behind: stall, escalation and user_message_rejected were appended as rows by
+// the store while the pacer let them jump the queue. Core emits a stall right
+// after a tool result, so during any stuck-loop nudge the hatch row landed while
+// the streaming assistant item was still last — and the next released text_delta,
+// seeing a non-streaming last item, started a SECOND assistant bubble. The reply
+// split in two around a note sitting above the prose it described, with the
+// first half still spinning until the end-of-turn snapshot.
+//
+// `snapshot` is the one addition, and it is the subtle one: the authoritative
 // snapshot lands at the END of every turn, and merging it swaps the optimistic
 // streaming row for the finalized message — in full. Let it through early and it
-// would dump the very text the pacer is still revealing, one turn at a time.
-const ORDERED = new Set<string>([
-  'text_delta',
-  'assistant_message',
-  'user_message',
-  'tool_call',
-  'tool_result',
-  'error',
-  'notice',
-  'snapshot',
-])
+// would dump the very text the pacer is still revealing, one turn at a time. It
+// is not an applyEvent case (mergeSnapshot handles it), so it is named here.
+const ORDERED = new Set<string>([...TRANSCRIPT_EVENTS, 'snapshot'])
 
 type Entry = { kind: 'text'; runes: string[] } | { kind: 'event'; ev: WireEvent }
 

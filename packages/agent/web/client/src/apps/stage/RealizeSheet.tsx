@@ -1,3 +1,4 @@
+import { errText } from '../../platform/ctrlproto/errors'
 import { useEffect, useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { RealizeCharacter, RealizeLore, RealizeProposal, RealizeResult } from '../../platform/ctrlproto/types'
@@ -42,7 +43,7 @@ export function RealizeSheet(props: {
         setP(r.proposal ?? null)
         setNote(r.proposal?.note ?? '')
       })
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
       .finally(() => setDrafting(false))
   }
   useEffect(() => {
@@ -73,7 +74,7 @@ export function RealizeSheet(props: {
         if (r.session?.id) props.onOpenSession(r.session.id)
         props.onClose()
       })
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
       .finally(() => setCommitting(false))
   }
 

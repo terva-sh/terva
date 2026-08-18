@@ -568,6 +568,40 @@ type SetDefaultParams struct {
 	Scope    DefaultScope `json:"scope"`
 }
 
+// ReasoningSource names which layer of the reasoning chain decided a level, so
+// a client can SAY which one without re-deriving the answer.
+//
+// It is the wire vocabulary for provider.ReasoningSource, spelled here because
+// ctrlproto does not import provider — deliberately, so the wire shapes stay
+// free of the catalog. The mapping between the two lives at the one place that
+// sees both (workspace.Models), and a census there fails if a provider layer
+// ever has no wire name.
+//
+// It exists because five surfaces re-derived the chain from raw inputs and all
+// five made the same mistake: with no way to tell an OPERATOR's per-model
+// models.json level from a model's CATALOG default — the same field, told apart
+// only by a set-signal — they collapsed the two into one rung and put it BELOW
+// the global. An operator who set a per-model level was told the session would
+// "follow the global setting", naming a value that was not deciding anything,
+// while the turn ran at theirs.
+type ReasoningSource string
+
+const (
+	// ReasoningFromSession is the session's own override.
+	ReasoningFromSession ReasoningSource = "session"
+	// ReasoningFromModelOperator is an operator's per-model models.json level.
+	// It sits ABOVE the global: a choice made about this model specifically.
+	ReasoningFromModelOperator ReasoningSource = "model_operator"
+	// ReasoningFromGlobal is the workspace's global thinking setting.
+	ReasoningFromGlobal ReasoningSource = "global"
+	// ReasoningFromModelCatalog is the model's shipped default. It sits BELOW
+	// the global: a fallback meant to yield to anything the user chose.
+	ReasoningFromModelCatalog ReasoningSource = "model_catalog"
+	// ReasoningFromNothing is nothing set anywhere. Empty on the wire, so a
+	// client that renders no sentence for it needs no special case.
+	ReasoningFromNothing ReasoningSource = ""
+)
+
 // TrustParams is the payload of [MethodTrust]: Parent also trusts descendant
 // directories (marking "trust everything under this parent"), matching the
 // interactive /trust parent form.

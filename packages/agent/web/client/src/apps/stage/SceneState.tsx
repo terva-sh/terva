@@ -1,3 +1,4 @@
+import { errText } from '../../platform/ctrlproto/errors'
 import { useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { WorldLoreEntry } from '../../platform/ctrlproto/types'
@@ -55,11 +56,11 @@ export function SceneStateCard(props: { client: ClientLike; sessionId: string; e
     client
       .send('world.lore.put', { entry: { name: SCENE_STATE_NAME, constant: true, content } }, sessionId)
       .then(() => setDraft(null))
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
   }
   const unpin = () => {
     if (!window.confirm(t('Unpin the scene state? The card is removed from context; the scene itself is untouched.'))) return
-    client.send('world.lore.delete', { name: entry.name }, sessionId).catch((e: unknown) => setError(String(e)))
+    client.send('world.lore.delete', { name: entry.name }, sessionId).catch((e: unknown) => setError(errText(e)))
   }
 
   const firstLine = entry.content.split('\n', 1)[0]

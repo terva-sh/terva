@@ -1,3 +1,4 @@
+import { errText } from '../../platform/ctrlproto/errors'
 import { useEffect, useState } from 'preact/hooks'
 import { t, tn } from '../../i18n'
 import { downloadExport } from '../../ui/browser'
@@ -93,7 +94,7 @@ export function CardSheet(props: {
     client
       .send<CardView>('cards.get', { id: card.id })
       .then(setView)
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
     // The deterministic lint (cards.lint) rides its own fetch — a card that
     // fails to lint (an old daemon without the verb) still shows its details.
     client
@@ -116,7 +117,7 @@ export function CardSheet(props: {
     client
       .send('cardmodel.set', { card: card.id, provider, model })
       .then(() => client.send<DefaultForResult>('models.default_for', { card: card.id }).then(setCardDefault))
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
   }
 
   const data = (view?.raw as { data?: CardData } | undefined)?.data
@@ -130,7 +131,7 @@ export function CardSheet(props: {
     try {
       downloadExport(await client.send<CardExport>('cards.export', { id: card.id }))
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
   }
 

@@ -1,3 +1,4 @@
+import { errText } from '../../platform/ctrlproto/errors'
 import { useEffect, useState } from 'preact/hooks'
 import { m, t, tr } from '../../i18n'
 import type { ClientLike } from '../../platform/ctrlproto/client'
@@ -81,7 +82,7 @@ export function ModelPick(props: {
     client
       .send<{ models: ModelInfo[] }>('models.list', {}, '')
       .then((r) => setModels(r.models ?? []))
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
 
   // Load the catalog whenever the picker opens — a chat that never touches the
   // model list never pays for it, and reopening refetches so a provider logged in
@@ -142,7 +143,7 @@ export function ModelPick(props: {
     setOpen(false)
   }
   const toggleFav = (m: ModelInfo, on: boolean) => {
-    client.send('models.favorite', { provider: m.provider, model: m.id, on }, '').catch((e: unknown) => setError(String(e)))
+    client.send('models.favorite', { provider: m.provider, model: m.id, on }, '').catch((e: unknown) => setError(errText(e)))
     setModels((ms) => ms.map((x) => (x.id === m.id && x.provider === m.provider ? { ...x, favorite: on } : x)))
   }
 

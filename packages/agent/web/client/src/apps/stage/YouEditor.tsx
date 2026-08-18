@@ -1,3 +1,4 @@
+import { errText } from '../../platform/ctrlproto/errors'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { t } from '../../i18n'
 import type { ClientLike } from '../../platform/ctrlproto/client'
@@ -75,7 +76,7 @@ export function YouEditor(props: { client: ClientLike; ready: boolean; scene: Sc
     client
       .send<UserPersonasListResult>('userpersonas.list', {})
       .then((r) => setPersonas(r.personas ?? []))
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
   useEffect(() => {
     if (!ready) return
     void load()
@@ -97,7 +98,7 @@ export function YouEditor(props: { client: ClientLike; ready: boolean; scene: Sc
     committed.current = next
     client
       .send('user.bind', { name: next.name, description: next.description, gender: next.gender, pronouns: next.pronouns }, scene.session)
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
   }
 
   // Play as a saved persona here. The daemon resolves the ref and copies its
@@ -109,7 +110,7 @@ export function YouEditor(props: { client: ClientLike; ready: boolean; scene: Sc
     setForm(next)
     committed.current = next
     setError('')
-    client.send('user.bind', { ref: p.ref }, scene.session).catch((e: unknown) => setError(String(e)))
+    client.send('user.bind', { ref: p.ref }, scene.session).catch((e: unknown) => setError(errText(e)))
   }
 
   // Save the working copy into the library. In scene mode this is "keep this
@@ -146,7 +147,7 @@ export function YouEditor(props: { client: ClientLike; ready: boolean; scene: Sc
       })
       .then(() => load())
       .then(() => flash(makeDefault ? t('Saved as your default.') : t('Saved.')))
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
   }
 
   const setDefault = (p: UserPersonaView) => {
@@ -155,7 +156,7 @@ export function YouEditor(props: { client: ClientLike; ready: boolean; scene: Sc
     client
       .send('userpersonas.set_default', { ref: p.default ? '' : p.ref })
       .then(() => load())
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
   }
 
   const remove = (p: UserPersonaView) => {
@@ -173,7 +174,7 @@ export function YouEditor(props: { client: ClientLike; ready: boolean; scene: Sc
         }
         return load()
       })
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
   }
 
   // Library mode: open a saved persona in the editor.

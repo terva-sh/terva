@@ -1,3 +1,4 @@
+import { errText } from '../../platform/ctrlproto/errors'
 import { useEffect, useState } from 'preact/hooks'
 import { ModelPick } from './ModelPick'
 import { WorldLoreEditor } from './WorldLoreEditor'
@@ -85,7 +86,7 @@ export function WorldStudio(props: {
     props.client
       .send<WorldsListResult>('worlds.list', {})
       .then((r) => setWorld((r.worlds ?? []).find((w) => w.id === props.id) ?? null))
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
       .finally(() => setLoaded(true))
     props.client
       .send<CardsListResult>('cards.list', {})
@@ -139,7 +140,7 @@ export function WorldStudio(props: {
     try {
       setWorld(await props.client.send<WorldView, M>(verb, params))
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     } finally {
       setBusy(false)
     }
@@ -156,7 +157,7 @@ export function WorldStudio(props: {
       } as CreateOpts)
       props.onOpenChat(res.session.id)
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     } finally {
       setBusy(false)
     }
@@ -456,7 +457,7 @@ export function WorldStudio(props: {
               props.client
                 .send<WorldExport>('worlds.export', { id: world.id })
                 .then(downloadExport)
-                .catch((e: unknown) => setError(String(e)))
+                .catch((e: unknown) => setError(errText(e)))
             }}
           >
             {t('⬇ Export bundle')}
@@ -490,7 +491,7 @@ export function WorldStudio(props: {
             props.client
               .send('worlds.delete', { id: world.id })
               .then(() => props.onBack())
-              .catch((e: unknown) => setError(String(e)))
+              .catch((e: unknown) => setError(errText(e)))
           }}
         >
           {t('Delete this World')}

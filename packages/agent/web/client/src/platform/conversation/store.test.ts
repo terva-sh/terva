@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyEvent, itemsFromMessages, isSafeImageMime, type Item } from './store'
+import { applyEvent, itemsFromMessages, isSafeImageMime, mergeSnapshot, type Item, type Window } from './store'
 import type { WireEvent, WireMessage } from '../ctrlproto/types'
 
 // Every message here belongs to the live transcript, starting at index 0.
@@ -278,6 +278,37 @@ describe('applyEvent — error, notice, and synthetic items', () => {
     const text = (items[0] as Extract<Item, { kind: 'notice' }>).text
     expect(text).toContain('contains a secret')
     expect(text).toContain('deploy key is XYZ')
+  })
+
+  // The rejection row's own comment calls it "a durable transcript row, not a
+  // toast", and names the case it exists for: a QUEUED message rejected while
+  // nobody is watching. It was built as a plain notice, and mergeSnapshot's
+  // keep-filter drops those BY DESIGN — the comment eleven lines up says so
+  // ("Notices have neither and are dropped, which is what they are for"). So the
+  // exact case it was introduced to prevent lost its record at the very next
+  // turn-end snapshot. Two comments in one file, opposite lifetimes, neither
+  // enforced by a type.
+  it('keeps a rejection notice across the next turn-end snapshot', () => {
+    const rejected = applyEvent([], { type: 'user_message_rejected', text: 'contains a secret', rejected: 'deploy key is XYZ' })
+    expect(rejected[0]).toMatchObject({ sticky: true })
+
+    const snap: Window = { epoch: 1, base: 0, total: 1, messages: [{ role: 'user', content: [{ type: 'text', text: 'a later turn' }] }] }
+    const merged = mergeSnapshot(rejected, snap, 1)
+
+    const kept = merged.filter((i) => i.kind === 'notice')
+    expect(kept, 'the user returns to a transcript with no trace that their prompt was refused').toHaveLength(1)
+    expect((kept[0] as Extract<Item, { kind: 'notice' }>).text).toContain('contains a secret')
+  })
+
+  // The complement: an ORDINARY notice is still ephemeral. Without this, marking
+  // everything sticky would satisfy the test above while turning every transient
+  // note into permanent clutter.
+  it('still drops an ordinary notice at the next snapshot', () => {
+    const items = applyEvent([], { type: 'notice', notice: { level: 'info', text: 'reindexed' } })
+    expect(items[0]).not.toMatchObject({ sticky: true })
+
+    const snap: Window = { epoch: 1, base: 0, total: 1, messages: [{ role: 'user', content: [{ type: 'text', text: 'a later turn' }] }] }
+    expect(mergeSnapshot(items, snap, 1).filter((i) => i.kind === 'notice')).toHaveLength(0)
   })
 
   it('clips a long rejected prompt so the notice stays a line, not a document', () => {

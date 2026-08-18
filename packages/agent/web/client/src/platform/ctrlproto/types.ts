@@ -325,10 +325,20 @@ export interface ModelInfo {
   // rather than being clamped to 'maximum' — the one thing about the ladder a
   // client cannot work out from the rung names alone.
   max_native?: boolean
-  // default_reasoning is the level this model thinks at when neither the
-  // session nor the global sets one, so an 'inherit' row can name what would
-  // actually apply.
+  // default_reasoning is the RAW per-model level, and on its own it cannot be
+  // placed in the chain: the same field holds an operator's models.json level
+  // (which outranks the global) and a model's catalog default (which yields to
+  // it). Comparing it against a global is the bug the pair below exists to end.
   default_reasoning?: string
+  // inherit_reasoning is what a session that overrides NOTHING actually runs at
+  // on this model, and inherit_reasoning_from is which layer decided it. The
+  // daemon resolves both — it is the only place the session, the operator's
+  // per-model level, the global and the catalog default are all in scope.
+  //
+  // Render from these. Do not re-derive the chain here: five surfaces did, and
+  // all five put the operator's per-model level below the global.
+  inherit_reasoning?: string
+  inherit_reasoning_from?: 'session' | 'model_operator' | 'global' | 'model_catalog'
   // ladder keys into ModelsResult.reasoning_ladders: what each rung of the
   // ladder actually becomes on THIS model. Absent means the model accepts no
   // reasoning control at all — render that as 'takes no thinking setting',

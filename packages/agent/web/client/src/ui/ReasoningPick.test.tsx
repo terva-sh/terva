@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/preact'
 import type { ReasoningRungInfo } from '../platform/ctrlproto/types'
-import { ReasoningPick, rungDetail } from './ReasoningPick'
+import { inheritDetailFor, ReasoningPick, rungDetail } from './ReasoningPick'
 
 afterEach(cleanup)
 
@@ -97,7 +97,7 @@ describe('ReasoningPick', () => {
     render(
       <ReasoningPick
         override=""
-        global=""
+        inherit=""
         rungs={geminiRungs}
         maxIsNative={false}
         onPick={() => {}}
@@ -113,9 +113,45 @@ describe('ReasoningPick', () => {
     expect(screen.queryByText(/tokens of thinking/)).toBeNull()
   })
 
+  // The inherit row names the layer the DAEMON says won. It used to work the
+  // chain out here — global first, model default second — which is the wrong
+  // way round for an operator's per-model models.json level, and could not tell
+  // that level from a catalog default at all. So an operator was told the
+  // session would "follow the global setting", naming a value that was not
+  // deciding anything while the turn ran at theirs.
+  it('names the layer that actually decided the inherited level', () => {
+    for (const [from, want] of [
+      ['model_operator', "follow this model's configured level (minimum)"],
+      ['global', 'follow the global setting (now: high)'],
+      ['model_catalog', "follow the model's default (medium)"],
+    ] as const) {
+      const level = from === 'model_operator' ? 'minimum' : from === 'global' ? 'high' : 'medium'
+      expect(inheritDetailFor(level, from), `source ${from}`).toBe(want)
+    }
+    // Nothing set anywhere: name no level rather than the wrong one.
+    expect(inheritDetailFor('', undefined)).toBe('follow the global setting')
+  })
+
+  it('renders that sentence on the inherit row', () => {
+    render(
+      <ReasoningPick
+        override=""
+        inherit="minimum"
+        inheritFrom="model_operator"
+        onPick={() => {}}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.getByText("follow this model's configured level (minimum)")).toBeTruthy()
+    expect(
+      screen.queryByText(/follow the global setting/),
+      'the global is not deciding here, so the row must not name it',
+    ).toBeNull()
+  })
+
   it('says a model takes no thinking setting when it carries no ladder', () => {
     render(
-      <ReasoningPick override="" global="" onPick={() => {}} onClose={() => {}} />,
+      <ReasoningPick override="" inherit="" onPick={() => {}} onClose={() => {}} />,
     )
     expect(screen.getAllByText('this model takes no thinking setting').length).toBe(7)
   })

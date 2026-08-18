@@ -1,3 +1,4 @@
+import { errText } from '../../platform/ctrlproto/errors'
 import { useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type {
@@ -134,7 +135,7 @@ export function WorldDoctor(props: {
         }
         setDrafts(next)
       })
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
       .finally(() => setRunning(false))
   }
 
@@ -163,7 +164,7 @@ export function WorldDoctor(props: {
       setVerdict(cardKey(p.id), 'accepted')
     } catch (e) {
       setVerdict(cardKey(p.id), undefined)
-      setError(String(e))
+      setError(errText(e))
     }
   }
 
@@ -194,7 +195,7 @@ export function WorldDoctor(props: {
       })
       .catch((e: unknown) => {
         setVerdict(worldKey(p.id), undefined)
-        setError(String(e))
+        setError(errText(e))
       })
   }
 
@@ -213,7 +214,7 @@ export function WorldDoctor(props: {
       })
       .catch((e: unknown) => {
         setVerdict(worldKey(p.id), undefined)
-        setError(String(e))
+        setError(errText(e))
       })
   }
 
@@ -246,7 +247,7 @@ export function WorldDoctor(props: {
       })
       .catch((e: unknown) => {
         setVerdict(worldKey(p.id), undefined)
-        setError(String(e))
+        setError(errText(e))
       })
   }
 

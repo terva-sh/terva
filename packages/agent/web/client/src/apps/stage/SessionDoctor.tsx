@@ -1,3 +1,4 @@
+import { errText } from '../../platform/ctrlproto/errors'
 import { useEffect, useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { CardView, DoctorDecision, SessionDoctorResult, SessionProposal } from '../../platform/ctrlproto/types'
@@ -83,7 +84,7 @@ function DoctorProposals(props: {
         }
         setPromoDrafts(drafts)
       })
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
       .finally(() => setRunning(false))
   }
 
@@ -131,7 +132,7 @@ function DoctorProposals(props: {
       .then(() => setVerdict(p.id, 'accepted'))
       .catch((e: unknown) => {
         setVerdict(p.id, undefined)
-        setError(String(e))
+        setError(errText(e))
       })
   }
 
@@ -152,7 +153,7 @@ function DoctorProposals(props: {
       .then(() => setVerdict(p.id, 'accepted'))
       .catch((e: unknown) => {
         setVerdict(p.id, undefined)
-        setError(String(e))
+        setError(errText(e))
       })
   }
 
@@ -173,7 +174,7 @@ function DoctorProposals(props: {
       .then(() => setVerdict(p.id, 'accepted'))
       .catch((e: unknown) => {
         setVerdict(p.id, undefined)
-        setError(String(e))
+        setError(errText(e))
       })
   }
 

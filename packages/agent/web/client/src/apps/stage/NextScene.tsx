@@ -1,3 +1,4 @@
+import { errText } from '../../platform/ctrlproto/errors'
 import { useEffect, useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { NextSceneResult } from '../../platform/ctrlproto/types'
@@ -63,7 +64,7 @@ export function NextSceneSheet(props: {
         setWorldID(r.world_id ?? '')
         setWorldName(r.world_name ?? '')
       })
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
       .finally(() => setDrafting(false))
   }
   useEffect(() => {
@@ -92,7 +93,7 @@ export function NextSceneSheet(props: {
         if (r.session?.id) props.onOpenSession(r.session.id)
         props.onClose()
       })
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
       .finally(() => setCommitting(false))
   }
 

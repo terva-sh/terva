@@ -1658,6 +1658,30 @@ func (w *Workspace) cancelAndDrainTurns(ctx context.Context, timeout time.Durati
 	}
 }
 
+// wireReasoningSource maps provider's reasoning-layer enum onto the wire
+// vocabulary. This is the one place both are in scope: ctrlproto does not
+// import provider, so the two spellings cannot be one type.
+//
+// A layer with no wire name would fall through to "" — which the client reads
+// as "nothing is set anywhere" and renders as the model's own default, quietly
+// naming the wrong rung. TestEveryReasoningSourceHasAWireName is the census
+// that stops a new provider layer arriving here unnoticed.
+func wireReasoningSource(s provider.ReasoningSource) ctrlproto.ReasoningSource {
+	switch s {
+	case provider.ReasoningFromSession:
+		return ctrlproto.ReasoningFromSession
+	case provider.ReasoningFromModelOperator:
+		return ctrlproto.ReasoningFromModelOperator
+	case provider.ReasoningFromGlobal:
+		return ctrlproto.ReasoningFromGlobal
+	case provider.ReasoningFromModelCatalog:
+		return ctrlproto.ReasoningFromModelCatalog
+	case provider.ReasoningFromNothing:
+		return ctrlproto.ReasoningFromNothing
+	}
+	return ctrlproto.ReasoningFromNothing
+}
+
 func (w *Workspace) Models(ctx context.Context, sess string) (ctrlproto.ModelsResult, error) {
 	// Current reflects the FRAMED session's own model, so the picker shows the
 	// model of the session the client is viewing rather than a workspace-global
@@ -1681,26 +1705,40 @@ func (w *Workspace) Models(ctx context.Context, sess string) (ctrlproto.ModelsRe
 	authMethod := build.LoggedInProviderAuth()
 	favs := favoriteModelSet()
 	defProv, defModel, defScope := w.defaultModel()
+	// The global thinking level, so each row can carry what "inherit" resolves
+	// to ON THAT MODEL. A config read that fails leaves it empty, which is the
+	// same place a build with no global level lands — the model's own default.
+	globalReasoning := ""
+	if cfg, cerr := config.LoadConfig(); cerr == nil {
+		globalReasoning = cfg.Reasoning
+	}
 	var out []ctrlproto.ModelInfo
 	ladders := newLadderTable()
 	for _, m := range provider.Active() {
 		if !authed[m.Provider] {
 			continue
 		}
+		// Asked of the one symbol that owns the order, with an empty session
+		// level: this is what a session that overrides NOTHING gets. Every
+		// client used to work it out from (global, DefaultReasoning) and every
+		// one of them put the operator's per-model level below the global.
+		inheritLevel, inheritFrom := provider.ResolveReasoning("", m, globalReasoning)
 		info := ctrlproto.ModelInfo{
-			ID:               m.ID,
-			Provider:         m.Provider,
-			ContextWindow:    m.ContextWindow,
-			MaxOutput:        m.MaxOutput,
-			Reasoning:        m.Reasoning,
-			MaxNative:        provider.MaxIsNative(m),
-			DefaultReasoning: m.DefaultReasoning,
-			Ladder:           ladders.keyFor(m),
-			Current:          m.ID == curModel && m.Provider == curProv,
-			Favorite:         favs[favModelKey(m.Provider, m.ID)],
-			Auth:             authMethod[m.Provider],
-			DisplayName:      m.DisplayName,
-			Renamed:          m.DisplayNameSet,
+			ID:                   m.ID,
+			Provider:             m.Provider,
+			ContextWindow:        m.ContextWindow,
+			MaxOutput:            m.MaxOutput,
+			Reasoning:            m.Reasoning,
+			MaxNative:            provider.MaxIsNative(m),
+			DefaultReasoning:     m.DefaultReasoning,
+			InheritReasoning:     inheritLevel,
+			InheritReasoningFrom: wireReasoningSource(inheritFrom),
+			Ladder:               ladders.keyFor(m),
+			Current:              m.ID == curModel && m.Provider == curProv,
+			Favorite:             favs[favModelKey(m.Provider, m.ID)],
+			Auth:                 authMethod[m.Provider],
+			DisplayName:          m.DisplayName,
+			Renamed:              m.DisplayNameSet,
 		}
 		if m.ID == defModel && m.Provider == defProv {
 			info.Default, info.DefaultScope = true, defScope

@@ -1,3 +1,4 @@
+import { errText } from '../../platform/ctrlproto/errors'
 import { useState } from 'preact/hooks'
 import { t } from '../../i18n'
 import type { ClientLike } from '../../platform/ctrlproto/client'
@@ -63,7 +64,7 @@ export function WorldLoreEditor(props: {
       props.onWorld(view)
       setEditing(null)
     } catch (e) {
-      props.onError(String(e))
+      props.onError(errText(e))
     } finally {
       setBusy(false)
     }
@@ -77,7 +78,7 @@ export function WorldLoreEditor(props: {
       props.onWorld(view)
       if (editing === entryName) setEditing(null)
     } catch (e) {
-      props.onError(String(e))
+      props.onError(errText(e))
     } finally {
       setBusy(false)
     }

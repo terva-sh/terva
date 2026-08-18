@@ -19,9 +19,19 @@ export { isSafeImageMime } from './images'
 //              live transcript at all, so it has no idx — and a snapshot must not
 //              sweep it away, which is exactly what the merge protects.
 //
-// A notice has neither: it is ephemeral and is meant to be dropped on the next
-// snapshot.
-type Placed = { idx?: number; history?: boolean }
+//   sticky   — a row with no place in the transcript that must SURVIVE the merge
+//              anyway. Exactly one row needs this and it is not a style choice:
+//              a prompt an extension rejected produces no user bubble and no
+//              reply, so without the row the message simply vanishes — and a
+//              QUEUED prompt can be rejected while nobody is watching. It was
+//              built as a plain notice, which mergeSnapshot drops by design, so
+//              the one case its own comment names ("while nobody is watching")
+//              lost its record at the very next turn-end snapshot.
+//
+// A notice has none of the three: it is ephemeral and is meant to be dropped on
+// the next snapshot. That is the default, and `sticky` is the deliberate,
+// type-visible exception rather than a comment claiming otherwise.
+type Placed = { idx?: number; history?: boolean; sticky?: boolean }
 
 export type Item = Placed &
   (
@@ -291,9 +301,10 @@ export type Window = { epoch: number; base: number; total: number; messages: Wir
 //     cleared). Everything the client holds describes a conversation that no longer
 //     exists, revealed history included — so rebuild, which is the correct answer here
 //     rather than a fallback.
-//   - Otherwise keep everything ABOVE the window (idx < base) and everything with no
-//     place in the live transcript at all (history), and swap in the window. Notices
-//     have neither and are dropped, which is what they are for.
+//   - Otherwise keep everything ABOVE the window (idx < base), everything with no
+//     place in the live transcript at all (history), and anything explicitly
+//     STICKY, and swap in the window. Notices have none of the three and are
+//     dropped, which is what they are for.
 //   - Display state attached to a row that is still the same row survives: a compaction
 //     divider you have already expanded must not come back offering to expand again,
 //     or clicking it would splice its history in twice.
@@ -310,7 +321,7 @@ export function mergeSnapshot(prev: Item[], snap: Window, heldEpoch: number): It
     return i
   })
 
-  const above = prev.filter((i) => i.history || (i.idx !== undefined && i.idx < snap.base))
+  const above = prev.filter((i) => i.history || i.sticky || (i.idx !== undefined && i.idx < snap.base))
   return [...above, ...merged]
 }
 
@@ -385,6 +396,30 @@ export function spliceRevealed(items: Item[], dividerID: string, span: RevealSpa
 // their real indexes, and the merge drops the unplaced ones in favour of them. So the
 // live turn paints immediately and settles onto the authoritative transcript, without
 // either half having to know about the other.
+// TRANSCRIPT_EVENTS names every event applyEvent turns into a transcript row.
+//
+// It is exported because the PACER needs the same answer: an event that becomes
+// a row has a place relative to the streamed text around it and must wait behind
+// whatever the pacer has not painted yet. pacer.ts used to keep its own
+// hand-written copy of this list, and it had already fallen three events behind
+// — stall, escalation and user_message_rejected jumped the jitter buffer, which
+// split a streaming reply in two around a note describing it.
+//
+// Keep this in step with the switch below; a test parses the case labels out of
+// this file and fails when the two disagree, so "keep in step" is not a request.
+export const TRANSCRIPT_EVENTS: ReadonlySet<string> = new Set([
+  'user_message',
+  'text_delta',
+  'assistant_message',
+  'tool_call',
+  'tool_result',
+  'error',
+  'notice',
+  'user_message_rejected',
+  'stall',
+  'escalation',
+])
+
 export function applyEvent(items: Item[], ev: WireEvent): Item[] {
   switch (ev.type) {
     case 'user_message': {
@@ -452,7 +487,9 @@ export function applyEvent(items: Item[], ev: WireEvent): Item[] {
       const text = quote
         ? t('message blocked: %s — “%s”', why, quote)
         : t('message blocked: %s', why)
-      return [...items, { kind: 'notice', id: nextID(), level: 'error', text }]
+      // sticky, because the comment above is only true if the row outlives the
+      // snapshot that would otherwise sweep it.
+      return [...items, { kind: 'notice', id: nextID(), level: 'error', text, sticky: true }]
     }
     case 'stall': {
       // The stuck-loop hatch acted. rung says what it did, and the three cases

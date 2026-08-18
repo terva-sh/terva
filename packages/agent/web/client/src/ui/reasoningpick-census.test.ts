@@ -77,28 +77,62 @@ describe('every ReasoningPick call site passes the ladder', () => {
   })
 })
 
-// `global` is a REQUIRED prop, so the type checker guarantees a call site
-// passes something — and both call sites passed the empty string, which is
-// where this bug lived. The picker's inherit row then read "follow the global
+// `global` was a REQUIRED prop, so the type checker guaranteed a call site
+// passed something — and both call sites passed the empty string, which is
+// where that bug lived. The picker's inherit row then read "follow the global
 // setting" while declining to say what the global was, on every surface, for as
 // long as the component had existed.
 //
-// The value is not the client's to invent: it is workspace state, and the
-// daemon publishes it as the `reasoning` SettingItem. An empty literal here
-// means somebody wired the prop rather than the value.
-describe('no ReasoningPick call site hardcodes an empty global', () => {
+// The prop is gone: the global was only ONE of the three layers a session can
+// inherit from, so naming it was right only when it happened to win. The daemon
+// resolves the whole chain per model and publishes the answer as
+// ModelInfo.inherit_reasoning / .inherit_reasoning_from. The rule survives in
+// the same spirit — a call site that hardcodes the resolved pair is inventing
+// an answer the daemon already gave.
+describe('no ReasoningPick call site invents what a session inherits', () => {
   const files = tsxFiles(srcRoot).filter(
     (f) => !f.endsWith('ReasoningPick.tsx') && readFileSync(f, 'utf8').includes('<ReasoningPick'),
   )
 
-  it('passes a real global everywhere', () => {
+  it('has call sites to check', () => {
+    expect(files.length, 'no <ReasoningPick> call sites found — this census is scanning nothing').toBeGreaterThan(0)
+  })
+
+  it('passes a resolved inherit everywhere', () => {
     for (const f of files) {
       for (const tag of openingTags(readFileSync(f, 'utf8'), 'ReasoningPick')) {
         expect(
-          /global=(""|'')/.test(tag),
-          `${f}: <ReasoningPick global=""> — the inherit row will say "follow the ` +
-            `global setting" without naming it. Read the daemon's \`reasoning\` ` +
-            `SettingItem from the settings surface and pass that.`,
+          /inherit=(""|''|"[a-z]+"|'[a-z]+')/.test(tag),
+          `${f}: <ReasoningPick inherit="…"> is a literal. What a session inherits ` +
+            `is the daemon's answer — pass ModelInfo.inherit_reasoning, and ` +
+            `inherit_reasoning_from beside it.`,
+        ).toBe(false)
+        expect(
+          /\binherit=/.test(tag),
+          `${f}: <ReasoningPick> renders without inherit — the row would say ` +
+            `"follow the global setting" and name nothing, which is the state ` +
+            `this whole surface was in.`,
+        ).toBe(true)
+        expect(
+          /\binheritFrom=/.test(tag),
+          `${f}: <ReasoningPick> renders without inheritFrom — without it the row ` +
+            `cannot tell an operator's per-model level from a catalog default, ` +
+            `and will name the global for both.`,
+        ).toBe(true)
+      }
+    }
+  })
+
+  // The global no longer reaches this component at all. A reintroduced prop
+  // would be a second answer to a question the daemon already answers.
+  it('no call site passes a raw global or model default any more', () => {
+    for (const f of files) {
+      for (const tag of openingTags(readFileSync(f, 'utf8'), 'ReasoningPick')) {
+        expect(
+          /\b(global|modelDefault)=/.test(tag),
+          `${f}: <ReasoningPick> is being handed a raw global or model default. ` +
+            `Those are inputs to the chain, not its answer — placing them is what ` +
+            `every surface got wrong.`,
         ).toBe(false)
       }
     }

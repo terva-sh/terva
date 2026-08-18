@@ -235,6 +235,26 @@ describe('the wire-shape mirror stays whole', () => {
     expect(problems, problems.join('\n')).toEqual([])
   })
 
+  // The layer that decided a session's thinking level is a vocabulary the client
+  // SWITCHES on: an arm it does not know falls through to "follow the global
+  // setting", which names the wrong rung rather than failing. So the two sides
+  // are compared as sets — a value added in Go and forgotten here would be a
+  // sentence the panel silently never renders.
+  it('agrees with ctrlproto on the reasoning-source domain', () => {
+    const goDomain = goWireFiles
+      .flatMap((src) => [...src.matchAll(/^\tReasoningFrom\w+\s+ReasoningSource = "(\w*)"/gm)])
+      .map((m) => m[1])
+      .filter((v) => v !== '') // ReasoningFromNothing is absent on the wire, not a value
+      .sort()
+    const block = typesTs.slice(typesTs.indexOf('export interface ModelInfo'))
+    const line = block.match(/^ {2}inherit_reasoning_from\??:([^\n]*(?:\n {4}[^\n]*)*)/m)
+    const tsDomain = [...(line?.[1] ?? '').matchAll(/'(\w+)'/g)].map((m) => m[1]).sort()
+    expect(goDomain.length, 'no ReasoningSource constants found in ctrlproto').toBeGreaterThan(3)
+    expect(tsDomain, 'ModelInfo.inherit_reasoning_from union vs ctrlproto ReasoningSource').toEqual(
+      goDomain,
+    )
+  })
+
   it('agrees with workflow/runs on the run status domain', () => {
     const goDomain = [...recordGo.matchAll(/^\tStatus\w+\s+Status = "(\w+)"/gm)]
       .map((m) => m[1])

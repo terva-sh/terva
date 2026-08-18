@@ -1,3 +1,4 @@
+import { errText } from '../../platform/ctrlproto/errors'
 import { useCallback, useEffect, useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type {
@@ -5,10 +6,10 @@ import type {
   CardSummary,
   CardView,
   CreateOpts,
+  ModelInfo,
   ModelsResult,
   ReasoningRungInfo,
   SessionInfo,
-  Surface,
 } from '../../platform/ctrlproto/types'
 import type { Item } from '../../platform/conversation/store'
 import { t, tn } from '../../i18n'
@@ -122,7 +123,13 @@ export function Chat(props: {
   const [reasoningOf, setReasoningOf] = useState<{
     rungs?: ReasoningRungInfo[]
     maxNative?: boolean
-    global?: string
+    // What a scene that sets nothing actually runs at, and which layer decided
+    // it. Resolved by the daemon per model rather than read off the global
+    // setting: an operator's per-model level outranks the global, and this
+    // screen never fetched the global for the picker anyway — it passed '',
+    // so the inherit row said "follow the global setting" and named nothing.
+    inherit?: string
+    inheritFrom?: ModelInfo['inherit_reasoning_from']
   }>({})
   const [character, setCharacter] = useState<Character | null>(null)
   // The full bound card, kept so the header can open its detail sheet without a
@@ -162,32 +169,23 @@ export function Chat(props: {
   useEffect(() => {
     if (!reasoningOpen) return
     let live = true
-    // Two reads, resolved together: the ladder says what each rung SENDS on this
-    // model, and the workspace level says what "inherit" would land on. The
-    // global lives in the settings surface — the daemon's own `reasoning`
-    // SettingItem — because it is workspace state Stage holds no copy of.
-    //
-    // allSettled, not all: a daemon that refuses the settings surface must still
-    // yield a ladder. Failing both because one is unavailable would trade a
-    // named global for the whole explanation.
-    Promise.allSettled([
-      client.send<ModelsResult>('models.list', {}, sessionId),
-      client.send<{ surface: Surface }>('surface.get', { id: 'settings' }, sessionId),
-    ])
-      .then(([listed, settings]) => {
+    // One read. The ladder says what each rung SENDS on this model, and the row
+    // now also carries what "inherit" resolves to and which layer decided it —
+    // so the second fetch this used to make against the settings surface, for
+    // the global alone, is gone. The global was never the whole answer: an
+    // operator's per-model level outranks it, and the daemon knows both.
+    client
+      .send<ModelsResult>('models.list', {}, sessionId)
+      .then((r) => {
         if (!live) return
-        const r = listed.status === 'fulfilled' ? listed.value : { models: [] }
         const cur = (r.models ?? []).find(
           (m) => m.id === info?.model && m.provider === info?.provider,
         )
-        const item =
-          settings.status === 'fulfilled'
-            ? settings.value.surface?.settings?.items?.find((i) => i.key === 'reasoning')
-            : undefined
         setReasoningOf({
           rungs: cur?.ladder ? r.reasoning_ladders?.[cur.ladder] : undefined,
           maxNative: cur?.max_native,
-          global: item?.value ?? '',
+          inherit: cur?.inherit_reasoning,
+          inheritFrom: cur?.inherit_reasoning_from,
         })
       })
       .catch(() => {
@@ -252,7 +250,7 @@ export function Chat(props: {
     send(t)
     setDraft('')
   }
-  const guard = (p: Promise<unknown>) => p.catch((e: unknown) => setError(String(e)))
+  const guard = (p: Promise<unknown>) => p.catch((e: unknown) => setError(errText(e)))
   // User-directs: pick who speaks. The narrator is directed to bring the actor
   // into the scene (a normal turn), so it reuses the transcript + attribution.
   const castSpeak = (actor: string) => guard(client.send('cast.speak', { actor }, sessionId))
@@ -384,12 +382,13 @@ export function Chat(props: {
             title={t("Reasoning for this session")}
             onClick={() => setReasoningOpen((v) => !v)}
           >
-            {reasoningLabel(info?.reasoning ?? '', '') || '◐'}
+            {reasoningLabel(info?.reasoning ?? '', reasoningOf.inherit ?? '') || '◐'}
           </button>
           {reasoningOpen && (
             <ReasoningPick
               override={info?.reasoning ?? ''}
-              global={reasoningOf.global ?? ''}
+              inherit={reasoningOf.inherit}
+              inheritFrom={reasoningOf.inheritFrom}
               rungs={reasoningOf.rungs}
               maxIsNative={reasoningOf.maxNative}
               onPick={(level) => client.fire('models.reasoning', { level }, sessionId)}

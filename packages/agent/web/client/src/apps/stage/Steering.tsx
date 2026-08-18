@@ -1,3 +1,4 @@
+import { errText } from '../../platform/ctrlproto/errors'
 import { useEffect, useState } from 'preact/hooks'
 import { t, tn } from '../../i18n'
 import { copyToClipboard, downloadExport, fileToBase64 } from '../../ui/browser'
@@ -51,7 +52,7 @@ export function Steering(props: {
     client
       .send<SessionExport>('sessions.export', { format: 'markdown' }, sessionId)
       .then(downloadExport)
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
       .finally(() => setExporting(false))
   }
   const copyRow = (which: 'id' | 'path', text: string) => {
@@ -154,7 +155,7 @@ export function Steering(props: {
 
   // Bind a saved persona to this session by ref; the daemon resolves its name +
   // description, and the snapshot fold re-seeds the fields.
-  const bindSaved = (ref: string) => client.send('user.bind', { ref }, sessionId).catch((e: unknown) => setError(String(e)))
+  const bindSaved = (ref: string) => client.send('user.bind', { ref }, sessionId).catch((e: unknown) => setError(errText(e)))
   // Save the current name + description as a reusable persona; makeDefault also
   // marks it the identity new chats pre-fill.
   const savePersona = (makeDefault: boolean) => {
@@ -168,17 +169,17 @@ export function Steering(props: {
       .send<UserPersonaView>('userpersonas.save', { name, description: userDesc.trim(), gender: userGender.trim(), pronouns: userPronouns.trim() })
       .then((saved) => (makeDefault && saved.ref ? client.send('userpersonas.set_default', { ref: saved.ref }) : undefined))
       .then(() => loadUserPersonas())
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
   }
   const deletePersona = (ref: string) =>
     client
       .send('userpersonas.delete', { ref })
       .then(() => loadUserPersonas())
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
 
   const commitNote = () => {
     if (noteDraft === (info?.note ?? '')) return // no change since the last committed value
-    client.send('note.set', { text: noteDraft }, sessionId).catch((e: unknown) => setError(String(e)))
+    client.send('note.set', { text: noteDraft }, sessionId).catch((e: unknown) => setError(errText(e)))
   }
   // Rename this chat, or ✨-regenerate its title from the conversation — the same
   // two verbs the panel's session drawer uses. Both broadcast session_updated, so
@@ -186,11 +187,11 @@ export function Steering(props: {
   const renameSession = () => {
     const next = window.prompt(t('Rename this chat'), info?.title || '')
     if (next == null) return
-    client.send('sessions.rename', { title: next.trim() }, sessionId).catch((e: unknown) => setError(String(e)))
+    client.send('sessions.rename', { title: next.trim() }, sessionId).catch((e: unknown) => setError(errText(e)))
   }
   const regenerateTitle = () => {
     setError('')
-    client.send('sessions.generate_title', null, sessionId).catch((e: unknown) => setError(String(e)))
+    client.send('sessions.generate_title', null, sessionId).catch((e: unknown) => setError(errText(e)))
   }
   // All four fields ride one verb; the daemon rebuilds the prefix only when the
   // name actually changed, so a description/gender/pronouns edit stays a free tail
@@ -206,7 +207,7 @@ export function Steering(props: {
       pronouns === (info?.user_pronouns ?? '')
     )
       return // no change since the last committed value
-    client.send('user.bind', { name: userName, description: userDesc, gender, pronouns }, sessionId).catch((e: unknown) => setError(String(e)))
+    client.send('user.bind', { name: userName, description: userDesc, gender, pronouns }, sessionId).catch((e: unknown) => setError(errText(e)))
   }
   const castAdd = () => {
     const name = castName.trim()
@@ -220,9 +221,9 @@ export function Steering(props: {
         setCastProvider('')
         setCastModel('')
       })
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
   }
-  const castRemove = (name: string) => client.send('cast.remove', { name }, sessionId).catch((e: unknown) => setError(String(e)))
+  const castRemove = (name: string) => client.send('cast.remove', { name }, sessionId).catch((e: unknown) => setError(errText(e)))
   // World lore verbs. Save clears the form only on success; the list itself
   // arrives back through the snapshot.
   const parsedLoreKeys = loreKeys
@@ -250,7 +251,7 @@ export function Steering(props: {
         sessionId,
       )
       .then(resetLoreForm)
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
   }
   const worldLoreEdit = (e: { name: string; keys?: string[]; constant?: boolean; content: string; audience?: string[] }) => {
     setLoreName(e.name)
@@ -262,11 +263,11 @@ export function Steering(props: {
   }
   const worldLoreDelete = (name: string) => {
     if (loreEditing === name) resetLoreForm()
-    client.send('world.lore.delete', { name }, sessionId).catch((e: unknown) => setError(String(e)))
+    client.send('world.lore.delete', { name }, sessionId).catch((e: unknown) => setError(errText(e)))
   }
   // The meta-narrator setting (W3): who answers a normal turn. Committed on
   // pick; the snapshot fold re-renders the current value (info.coordination).
-  const setCoordination = (mode: string) => client.send('world.set', { coordination: mode }, sessionId).catch((e: unknown) => setError(String(e)))
+  const setCoordination = (mode: string) => client.send('world.set', { coordination: mode }, sessionId).catch((e: unknown) => setError(errText(e)))
   // Saving the World (W5): promote the session's embedded World into the
   // library, or write changes back to the one it belongs to. Explicit only —
   // play never syncs live.
@@ -288,7 +289,7 @@ export function Steering(props: {
         setWorldName('')
         setWorldSavedNote(info?.world ? t('Saved to “%s”.', v.name) : t('“%s” is now a saved World — new chats can start inside it from the Library.', v.name))
       })
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
       .finally(() => setWorldSaving(false))
   }
   // The editor (W4): ✏️ enrich a character's card from THIS scene — the
@@ -351,7 +352,7 @@ export function Steering(props: {
         setEnrichVerdicts({})
         setEnrichReasons({})
       })
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
       .finally(() => setEnrichRunning(false))
   }
   const enrichRevise = () => {
@@ -384,12 +385,12 @@ export function Steering(props: {
       await client.send('cards.edit', { id: enrich.ref, card: applyCardFields(view.raw, edits) })
       resetEnrich()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     } finally {
       setEnrichApplying(false)
     }
   }
-  const bind = (id: string) => client.send('backgrounds.bind', { background: id }, sessionId).catch((e: unknown) => setError(String(e)))
+  const bind = (id: string) => client.send('backgrounds.bind', { background: id }, sessionId).catch((e: unknown) => setError(errText(e)))
   // Paint a scene from a prompt; the daemon generates, stores, and binds it, so
   // the new backdrop arrives via the snapshot. Refresh the tiles so it joins them.
   const generateScene = () => {
@@ -403,7 +404,7 @@ export function Steering(props: {
         setScenePrompt('')
         void loadBackgrounds()
       })
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
       .finally(() => setGenerating(false))
   }
   // Remove a backdrop from the workspace store (backgrounds.delete).
@@ -423,7 +424,7 @@ export function Steering(props: {
       await client.send('backgrounds.delete', { id })
       void loadBackgrounds()
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
     }
   }
   const importBg = async (files: FileList) => {
@@ -431,7 +432,7 @@ export function Steering(props: {
       try {
         await client.send('backgrounds.import', { bytes: await fileToBase64(f) })
       } catch (e) {
-        setError(String(e))
+        setError(errText(e))
       }
     }
     void loadBackgrounds()

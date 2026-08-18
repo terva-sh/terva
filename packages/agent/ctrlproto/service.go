@@ -1412,7 +1412,23 @@ type ModelInfo struct {
 	// DefaultReasoning is the level this model thinks at when neither the
 	// session nor the global sets one, so an "inherit" row can name what would
 	// actually apply instead of pointing at a global that may not exist.
+	//
+	// It is the RAW field, and on its own it is not enough to place: the same
+	// field holds an operator's per-model models.json level (which outranks the
+	// global) and a model's catalog default (which yields to it). Read
+	// InheritReasoning/InheritReasoningFrom instead of comparing this against a
+	// global — that comparison is the bug this pair exists to end.
 	DefaultReasoning string `json:"default_reasoning,omitempty"`
+	// InheritReasoning is the level a session that sets NOTHING actually runs
+	// at on this model, and InheritReasoningFrom is which layer decided it —
+	// resolved by the daemon so no client re-walks the chain.
+	//
+	// The daemon is the only place all the layers are in scope, and the answer
+	// is not derivable from the other fields here: the global is workspace
+	// state, and the two model rungs are one field on opposite sides of it.
+	// Every client that tried rendered the same wrong sentence.
+	InheritReasoning     string          `json:"inherit_reasoning,omitempty"`
+	InheritReasoningFrom ReasoningSource `json:"inherit_reasoning_from,omitempty"`
 	// Ladder keys into ModelsResult.ReasoningLadders: what each rung of the
 	// ladder actually becomes on THIS model. Empty means the model accepts no
 	// reasoning control at all — which is not the same as a ladder that is

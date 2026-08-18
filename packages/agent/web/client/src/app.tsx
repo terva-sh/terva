@@ -1,3 +1,4 @@
+import { errText } from './platform/ctrlproto/errors'
 import type { ComponentChildren, VNode } from 'preact'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { ADDR_WORKSPACE, Client } from './ctrlproto'
@@ -218,12 +219,6 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   // rather than inside it because they are shared: 440 catalog models resolve
   // to a dozen ladders, and ModelInfo.ladder is the key into this table.
   const [ladders, setLadders] = useState<Record<string, ReasoningRungInfo[]>>({})
-  // The workspace-wide thinking level, so the picker's inherit row can name what
-  // inheriting would actually mean instead of pointing at "the global setting"
-  // without saying what it is. It lives in the settings surface (the daemon's
-  // own `reasoning` SettingItem) rather than in a field of its own — the value
-  // was already on the wire, just behind a pane nobody opens to read it.
-  const [globalReasoning, setGlobalReasoning] = useState('')
   const [busy, setBusy] = useState(false)
   // The model's live thinking summary for the turn in flight. Not in `items`:
   // it is shown while the turn runs and dropped when it ends.
@@ -449,7 +444,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         await c.send('models.favorite', { provider, model: id, on }, '')
         await reloadModels()
       } catch (e) {
-        setToast(String(e))
+        setToast(errText(e))
       }
     },
     [reloadModels],
@@ -473,7 +468,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
             : t('%s is the default for new sessions', id),
         )
       } catch (e) {
-        setToast(String(e))
+        setToast(errText(e))
       }
     },
     [reloadModels],
@@ -504,7 +499,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       const g = sessionGroups.find((x) => x.id === groupId)
       if (!g) return
       const members = g.members.includes(s.id) ? g.members.filter((m) => m !== s.id) : [...g.members, s.id]
-      await c.send('sessiongroups.set_members', { id: g.id, members }, '').catch((e) => setToast(String(e)))
+      await c.send('sessiongroups.set_members', { id: g.id, members }, '').catch((e) => setToast(errText(e)))
       await refreshSessions(c)
     },
     [sessionGroups, refreshSessions],
@@ -520,7 +515,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         const g = await c.send<Group>('sessiongroups.save', { name: name.trim() }, '')
         await c.send('sessiongroups.set_members', { id: g.id, members: [s.id] }, '')
       } catch (e) {
-        setToast(String(e))
+        setToast(errText(e))
         return
       }
       await refreshSessions(c)
@@ -731,7 +726,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         await refreshSessions(cl)
         selectSession(res.session.id)
       } catch (e) {
-        setToast(String(e))
+        setToast(errText(e))
       }
     },
     [refreshSessions, selectSession],
@@ -760,7 +755,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       setWsProviders(await c.send<ProvidersView>('auth.providers', null, ''))
     } catch (e) {
       setWsProviders(null)
-      setWsProvidersErr(String(e))
+      setWsProvidersErr(errText(e))
     }
   }, [])
 
@@ -779,7 +774,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       setWsSecrets(await c.send<SecretsStatus>('secrets.status', null, ''))
     } catch (e) {
       setWsSecrets(null)
-      setWsSecretsErr(String(e))
+      setWsSecretsErr(errText(e))
     }
   }, [])
 
@@ -792,38 +787,9 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       setSurfaceData(res.surface)
     } catch (e) {
       setSurfaceData(null)
-      setSurfaceErr(String(e))
+      setSurfaceErr(errText(e))
     }
   }, [])
-
-  // refreshGlobalReasoning reads the workspace thinking level out of the
-  // settings surface.
-  //
-  // It is a separate fetch rather than a read of `surfaceData` because that
-  // holds only the ONE pane currently open, and the reasoning button sits in the
-  // topbar where no pane need ever have been opened. Failure is silent and
-  // leaves the level empty, which the picker already renders honestly as an
-  // unnamed global.
-  const refreshGlobalReasoning = useCallback(async () => {
-    const c = clientRef.current
-    if (!c || !curRef.current) return
-    try {
-      const res = await c.send<{ surface: Surface }>('surface.get', { id: 'settings' }, curRef.current)
-      const item = res.surface?.settings?.items?.find((i) => i.key === 'reasoning')
-      setGlobalReasoning(item?.value ?? '')
-    } catch {
-      /* the picker degrades to an unnamed global */
-    }
-  }, [])
-
-  // Keyed on the session rather than fired during the bootstrap: surface.get is
-  // framed by a session, and at bootstrap time none has been adopted yet — the
-  // call would return early and the level would stay empty for the whole
-  // connection. Re-running on a session change also keeps it right for a daemon
-  // whose settings differ per workspace.
-  useEffect(() => {
-    if (curSess) void refreshGlobalReasoning()
-  }, [curSess, refreshGlobalReasoning])
 
   // loadUsageSnapshot mirrors the provider's subscription picture from the
   // usage.snapshot verb.
@@ -944,10 +910,12 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         if (paneOpenRef.current && ev.surface_id === activeSurfaceRef.current) {
           loadSurface(activeSurfaceRef.current)
         }
-        // The cached thinking level rides the settings surface, and it has to
-        // follow a change made there whether or not that pane is the open one —
-        // otherwise the picker keeps naming a global the user just replaced.
-        if (ev.surface_id === 'settings') void refreshGlobalReasoning()
+        // The global thinking level is one input to every model row's resolved
+        // `inherit_reasoning`, so a change made in the settings pane invalidates
+        // the MODEL LIST, not a cached copy of the setting. It has to run
+        // whether or not that pane is the open one, otherwise the picker keeps
+        // naming a global the user just replaced.
+        if (ev.surface_id === 'settings') void reloadModels()
         // The board's swarm lane rides the tasks surface (the daemon diffs the
         // swarm every 800ms and pushes this) — keep it live while the board's up.
         if (viewModeRef.current === 'board' && ev.surface_id === 'tasks') {
@@ -1311,7 +1279,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     const c = clientRef.current
     if (!c) return
     c.send(trust ? 'control.trust' : 'control.untrust', trust ? { parent: false } : null, '').catch((e) =>
-      setToast(String(e)),
+      setToast(errText(e)),
     )
   }, [])
 
@@ -1615,7 +1583,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         // A conflict means the conversation was compacted or cleared while we scrolled;
         // the next snapshot rebuilds us at the new epoch, so there is nothing to do but
         // say so. Anything else is worth the same one line.
-        localNotice(t('could not load earlier messages: %s', String(e)))
+        localNotice(t('could not load earlier messages: %s', errText(e)))
       })
       .finally(() => {
         loadingEarlierRef.current = false
@@ -1656,7 +1624,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
               i.id === item.id && (i.kind === 'compaction' || i.kind === 'clear') ? { ...i, revealed: true } : i,
             ),
           )
-          localNotice(t('earlier turns are not available for this session: %s', String(e)))
+          localNotice(t('earlier turns are not available for this session: %s', errText(e)))
         })
         .finally(() => {
           revealingRef.current = ''
@@ -1683,14 +1651,14 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           // transcript is replaced: clear the sticky progress toast on ack.
           // Guard on the label so a newer toast set meanwhile isn't clobbered.
           .then(() => setToast((cur) => (cur === label ? '' : cur)))
-          .catch((e) => setToast(String(e)))
+          .catch((e) => setToast(errText(e)))
       },
     },
     {
       name: 'clear',
       desc: t('Wipe the conversation (no summary)'),
       run: () => {
-        clientRef.current?.send('clear', null, curRef.current).catch((e) => setToast(String(e)))
+        clientRef.current?.send('clear', null, curRef.current).catch((e) => setToast(errText(e)))
       },
     },
     {
@@ -1842,7 +1810,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       if (title == null) return
       const c = clientRef.current
       if (!c) return
-      await c.send('sessions.rename', { title }, s.id).catch((e) => setToast(String(e)))
+      await c.send('sessions.rename', { title }, s.id).catch((e) => setToast(errText(e)))
       await refreshSessions(c)
     },
     [refreshSessions],
@@ -1857,7 +1825,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         const r = await c.send<{ title: string }>('sessions.generate_title', null, s.id)
         setToast(t('Titled: %s', r.title))
       } catch (e) {
-        setToast(String(e))
+        setToast(errText(e))
         return
       }
       await refreshSessions(c)
@@ -1875,7 +1843,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       try {
         await c.send('sessions.archive', null, s.id)
       } catch (e) {
-        setToast(String(e))
+        setToast(errText(e))
         return
       }
       setArchived(null) // the archive changed; re-fetch on next open
@@ -1898,7 +1866,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       const r = await c.send<{ sessions: ArchivedSessionInfo[] }>('sessions.archived', null, '')
       setArchived(r.sessions ?? [])
     } catch (e) {
-      setToast(String(e))
+      setToast(errText(e))
       setArchived([])
     }
   }, [])
@@ -1917,7 +1885,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       try {
         await c.send('sessions.restore', { id }, '')
       } catch (e) {
-        setToast(String(e))
+        setToast(errText(e))
         return
       }
       await loadArchived()
@@ -1932,7 +1900,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       if (!window.confirm(t('Delete “%s”?', s.title || s.id))) return
       const c = clientRef.current
       if (!c) return
-      await c.send('sessions.delete', null, s.id).catch((e) => setToast(String(e)))
+      await c.send('sessions.delete', null, s.id).catch((e) => setToast(errText(e)))
       await refreshSessions(c)
       // Deleting the session you're in returns you to the landing picker rather
       // than auto-adopting another session (consistent with boot: a tab only
@@ -2043,7 +2011,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
             title={t("Reasoning for this session")}
             onClick={() => setReasoningOpen(true)}
           >
-            {reasoningLabel(curSessReasoning, globalReasoning) || '◐'}
+            {reasoningLabel(curSessReasoning, curModel?.inherit_reasoning ?? '') || '◐'}
           </button>
         )}
         {ctxPct >= 0 && ctxTok > 0 && (
@@ -2130,8 +2098,8 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       ) : reasoningOpen ? (
         <ReasoningPick
           override={curSessReasoning}
-          global={globalReasoning}
-          modelDefault={curModel?.default_reasoning}
+          inherit={curModel?.inherit_reasoning}
+          inheritFrom={curModel?.inherit_reasoning_from}
           maxIsNative={curModel?.max_native}
           rungs={curModel?.ladder ? ladders[curModel.ladder] : undefined}
           onPick={setSessionReasoning}
@@ -3695,7 +3663,7 @@ interface AuthPaneProps {
 // useful part — "that key was not accepted", "this login was superseded" — and
 // inventing our own would be strictly less informative.
 export function authMessage(e: unknown): string {
-  const m = e instanceof Error ? e.message : String(e)
+  const m = e instanceof Error ? e.message : errText(e)
   // Frames arrive as "code: message"; the code is for us, the message is for them.
   const i = m.indexOf(': ')
   return i > 0 ? m.slice(i + 2) : m
@@ -5761,7 +5729,7 @@ export function TreeNode({
       setErr('')
       onFetchNode(node.id, node.reveal || undefined)
         .then((n) => setFetched(n))
-        .catch((e) => setErr(String(e)))
+        .catch((e) => setErr(errText(e)))
         .finally(() => setLoading(false))
     }
   }

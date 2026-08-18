@@ -1,3 +1,4 @@
+import { errText } from '../../platform/ctrlproto/errors'
 import { useEffect, useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { CardSummary, CardView, CardLintFinding, CardLintResult, DefaultForResult, DoctorProposal, DoctorResult, DoctorDecision } from '../../platform/ctrlproto/types'
@@ -202,7 +203,7 @@ export function CardEditor(props: {
         setRawDoc(doc)
         setForm(formFromData(doc.data ?? {}))
       })
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => setError(errText(e)))
     lint(card.id)
     // Seed the doctor's model from the card's own default when it has one, so the
     // picker names what the doctor will run on. Unsupported (old daemon) or no
@@ -244,7 +245,7 @@ export function CardEditor(props: {
       setProposals(r.proposals ?? [])
       setDoctorNote(r.note ?? '')
     } catch (e) {
-      setDoctorError(String(e))
+      setDoctorError(errText(e))
     } finally {
       setDoctorRunning(false)
     }
@@ -319,7 +320,7 @@ export function CardEditor(props: {
       setDeclined({})
       setDecliningId(null)
     } catch (e) {
-      setDoctorError(String(e))
+      setDoctorError(errText(e))
     } finally {
       setDoctorRunning(false)
     }
@@ -373,7 +374,7 @@ export function CardEditor(props: {
       onSaved()
       return true
     } catch (e) {
-      setError(String(e))
+      setError(errText(e))
       return false
     } finally {
       setSaving(false)
