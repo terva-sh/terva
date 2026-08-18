@@ -36,6 +36,7 @@ const (
 	SourceCardCharacterBook   = "card:character_book"
 	SourceRestrictedWorkspace = "restricted-workspace"
 	SourceAutoSwarm           = "auto-swarm"
+	SourceSwarmWorktrees      = "swarm-worktrees"
 	SourceCast                = "cast"
 	SourceSwarmChild          = "swarm-child"
 	SourceTasks               = "tasks"
@@ -122,6 +123,7 @@ var segmentPortability = map[string]Portability{
 	SourceTervaExamplesHint: PortabilityHarnessLocal, // points at terva's installed deploy examples
 	SourceStatusToolHint:    PortabilityHarnessLocal, // names terva_status
 	SourceAutoSwarm:         PortabilityHarnessLocal, // advertises swarm_spawn
+	SourceSwarmWorktrees:    PortabilityHarnessLocal, // describes terva's own lease layout
 	SourceCast:              PortabilityHarnessLocal, // advertises actor_spawn
 	SourceSwarmChild:        PortabilityHarnessLocal, // the native child's protocol
 	SourceTasks:             PortabilityHarnessLocal, // terva's task-tool policy

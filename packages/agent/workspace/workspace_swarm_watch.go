@@ -259,6 +259,21 @@ func (s *wsSession) flushSwarmSummary(batch []*swarmWatchEntry) {
 		}
 		sb.WriteString(i18n.P("swarm.summary.task", "   task: %s", truncateForSummary(task, 240)))
 		sb.WriteByte('\n')
+		// Where this child's files actually are. Only for a LEASED worktree: an
+		// agent that shared the host tree has a Dir equal to the coordinator's
+		// own cwd, and printing that would invite a pointless second copy of
+		// every path. The lease survives the child (release keeps the worktree
+		// for review — carrier_swarm_worktree.go), so the path is still live
+		// when the coordinator reads this.
+		//
+		// The system prompt says what the path MEANS
+		// (build.SwarmWorktreeSystemAddendum); this is the per-agent value that
+		// makes the rule actionable. Without it a coordinator told "the files
+		// are in the sub-agent's worktree" still has nowhere to look.
+		if snap.Leased && snap.Dir != "" {
+			sb.WriteString(i18n.P("swarm.summary.worktree", "   worktree: %s. The sub-agent wrote its files in this directory, not in your working directory", snap.Dir))
+			sb.WriteByte('\n')
+		}
 		// What this one cost. Delegation is the only action whose price is
 		// unbounded by the coordinator's own turn, and the recap is where a
 		// coordinator learns the outcome — so it is where the price belongs.

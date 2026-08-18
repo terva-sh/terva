@@ -199,6 +199,14 @@ Background subagents that run alongside your main session. Each one is a separat
 > than silently sharing the host tree. Finished worktrees and branches
 > are kept for review/merge — `/worktree collect` view shows what each
 > branch carries (each lives under `$TERVA_HOME/worktrees/`).
+>
+> With isolation on, the main agent is told so in its system prompt, and
+> each sub-agent's worktree path rides its line in the `[auto-swarm
+> update]` recap. Without both, a coordinator reads a reported file path
+> in its *own* tree, finds its untouched copy, and concludes the
+> sub-agent did nothing. The prompt also states that leftovers in a
+> finished sub-agent's worktree may be deleted once their content has
+> been applied to (or verified in) the host tree.
 
 ```
 /swarm                            # open the dashboard

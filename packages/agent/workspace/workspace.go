@@ -256,6 +256,20 @@ var _ ctrlproto.WorkspaceService = (*Workspace)(nil)
 // opens /login and calls RefreshDefaults once a credential lands. Hosts that
 // cannot log in (the web daemon) fail fast on CredentialErr instead.
 func NewWorkspace(args build.Args, version string) (*Workspace, error) {
+	// PIN the worktree-isolation decision into the args every session is built
+	// from, before anything reads it.
+	//
+	// The lease hook below is installed once, here, for the life of the
+	// workspace. The system prompt's worktree block is composed per session
+	// build, and would otherwise re-read the live config — so flipping
+	// swarm_worktrees in /settings would move the prompt while leasing stayed
+	// where it started, and the model would be told its sub-agents work in
+	// worktrees that this workspace will never lease (or the reverse). Pinning
+	// through the flag-override channel makes SwarmWorktreesActive answer the
+	// same for both, and keeps the toggle's real semantics honest: it takes
+	// effect on the next launch, as leasing always did.
+	swarmWorktrees := build.SwarmWorktreesActive(args)
+	args.SwarmWorktrees = &swarmWorktrees
 	r, err := build.Resolve(args, false)
 	if err != nil {
 		return nil, err
@@ -326,7 +340,9 @@ func NewWorkspace(args build.Args, version string) (*Workspace, error) {
 	// --swarm-worktrees: lease each sub-agent its own git worktree from the
 	// built-in worktree engine (carrier_swarm_worktree.go calls it directly —
 	// no extension, no live-session requirement). Off => shared tree.
-	if uc, _ := config.LoadConfig(); build.ResolveSwarmWorktrees(args.SwarmWorktrees, uc.SwarmWorktrees) {
+	// The pinned decision from the top of this function — the same answer the
+	// system prompt's worktree block is gated on, by construction.
+	if swarmWorktrees {
 		swarmCfg.AcquireWorktree = w.acquireSwarmWorktree
 	}
 	// Route each agent to its runner by the opaque Backend label the swarm

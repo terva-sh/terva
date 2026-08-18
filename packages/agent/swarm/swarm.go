@@ -945,9 +945,16 @@ func (f *Swarm) Remove(id string) error {
 // Snapshot returns a read-only view of one agent. Safe for the TUI
 // goroutine to call repeatedly; never blocks on the Runner.
 type AgentSnapshot struct {
-	ID       string
-	Task     string
-	Dir      string
+	ID   string
+	Task string
+	Dir  string
+	// Leased distinguishes the two things Dir can be: a dedicated git worktree
+	// this agent was given (true), or the host's own tree it merely shares
+	// (false). Without it a reader cannot tell "the child's files are over
+	// there" from "the child's files are in your tree" — and the auto-swarm
+	// recap has to tell a coordinator which, or its report of a written file is
+	// a path the coordinator will look for in the wrong checkout.
+	Leased   bool
 	Status   Status
 	Activity string
 
@@ -1115,7 +1122,7 @@ func (a *Agent) Snapshot() AgentSnapshot {
 		errStr = a.lastErr.Error()
 	}
 	return AgentSnapshot{
-		ID: a.ID, Task: a.Task, Dir: a.Dir,
+		ID: a.ID, Task: a.Task, Dir: a.Dir, Leased: a.Leased,
 		Status: a.status, Activity: a.activity,
 		Turns: a.turns, ToolCalls: a.toolCalls, LastEvent: a.lastEvent,
 		Started: a.Started, Finished: a.finished,

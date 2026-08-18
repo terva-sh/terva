@@ -13,6 +13,42 @@ import "terva.sh/terva/packages/i18n"
 // give. See docs/proposals/web-i18n-authoring.md (sibling auto-swarm discussion).
 const AutoSwarmSystemAddendum = `When a request naturally splits into independent sub-tasks that can run concurrently, reach for swarm_spawn proactively rather than doing everything sequentially yourself — spawn one sub-agent per independent task and keep the coordinating work moving in parallel. Sub-agents are also your context shield: when a step would pull large content into your own context (reading a long file, sweeping many files, digesting a big log), delegate it to a sub-agent whose task says what to extract, and work from the concise summary it reports back.`
 
+// SwarmWorktreeSystemAddendum is the environment fact a coordinator cannot see
+// and cannot guess: under --swarm-worktrees (config swarm_worktrees) every
+// sub-agent boots with --cwd set to its OWN leased git worktree, and the lease
+// is RELEASED rather than removed when the child finishes
+// (carrier_swarm_worktree.go), so the child's files outlive it in a checkout
+// the coordinator never looks at.
+//
+// Without this the failure is silent and confident. A child reports "I wrote
+// packages/foo/bar.go"; the coordinator reads packages/foo/bar.go in its own
+// tree, finds its own untouched copy, and concludes the sub-agent did nothing —
+// or worse, redoes the work. `git status` agrees with the wrong answer, because
+// the changes are on another worktree's branch.
+//
+// The recap carries each child's worktree path (flushSwarmSummary), so this
+// block only has to say what that path MEANS and what may be done with what is
+// left in it. Injected only when isolation is actually on: said to a
+// shared-tree swarm it would be false, and would send a coordinator hunting for
+// a directory that does not exist.
+const SwarmWorktreeSystemAddendum = `Each sub-agent works in its own git worktree. A worktree is a separate checkout of this repository on its own branch. The recap gives the worktree path of each sub-agent that finishes.
+
+A file that a sub-agent reports is in that worktree. It is not in your working directory. The same relative path in your tree is a different file. Your own git status does not show the change. You can find your own copy unchanged. That is not evidence that the sub-agent did no work.
+
+Read the file at the worktree path of the sub-agent. You can also compare that worktree with your tree. Do this before you decide that the work is missing. Do this before you do the work a second time.
+
+terva keeps the worktree of a finished sub-agent. You can review it and take what you need. The files that remain there are not a deliverable.
+
+First apply the content to your own tree. You can also confirm that your tree already has the same content. You may then delete those files and remove the worktree.
+
+Do not keep a worktree only because it holds uncommitted changes. Check first whether your tree already has those changes. Tell the user plainly if your tree does not have them.`
+
+// SwarmWorktreeAddendum renders the worktree-isolation block through the
+// model-facing prompt catalog, like its auto-swarm and swarm-child siblings.
+func SwarmWorktreeAddendum() string {
+	return i18n.P("swarm.worktrees.addendum", SwarmWorktreeSystemAddendum)
+}
+
 // SwarmChildSystemAddendum is the sub-agent deliverable contract every swarm
 // child carries (--swarm-agent mode): the coordinator's auto-swarm recap
 // surfaces ONLY the child's final assistant message, so a child that closes

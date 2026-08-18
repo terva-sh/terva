@@ -1023,6 +1023,15 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		logPersonaRosterTripwire()
 		append_ = append(append_, PromptSegment{Source: SourceAutoSwarm, Text: autoSwarmAddendum()})
 	}
+	// Where the sub-agents' files land. Gated on the swarm TOOL (Toggle 1), not
+	// on the nudge: this is not a disposition the user can find pushy, it is a
+	// fact about the filesystem the coordinator is about to reason over, and a
+	// coordinator that spawns without the nudge needs it exactly as much. Gated
+	// on isolation actually being on, because with a shared tree every sentence
+	// in it is false.
+	if HasBaseWorkspaceTools(args) && config.AutoSwarmEnabled() && SwarmWorktreesActive(args) {
+		append_ = append(append_, PromptSegment{Source: SourceSwarmWorktrees, Text: SwarmWorktreeAddendum()})
+	}
 	// The play director's cast pacing nudge — the twin of the coding proactive
 	// nudge, gated by the same AutoSwarmNudge toggle. Only in --play with a cast
 	// (--cast and/or a trusted project's .terva/cast.json) and never under
