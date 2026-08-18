@@ -33,7 +33,25 @@ declares — **in place, per value**, not the whole file:
 
 ```go
 var state = connsdk.SealedState{Name: "discord-ext", Paths: []string{"/bot_token"}}
+
+connsdk.Main(connsdk.Config{
+	// …
+	Secrets: &state, // NOT optional — see below
+})
 ```
+
+Declaring the state in `Config.Secrets` is half the pattern, not a refinement of
+it. `SealedState.Save` works perfectly well without it and writes real
+ciphertext, so a connector that only seals looks healthy in every surface —
+right up to a key rotation. The handshake is the **only** source terva trusts
+for a connector's recipient (the state file is writable by anything that can
+write `$TERVA_HOME`, so believing a recipient found there would turn write
+access into future read access), so an undeclared connector is never recorded,
+`terva secret rotate --revoke` skips its file, and the advice that command
+prints for that case — "start it once and re-run to restore access" — cannot
+help: starting a connector that does not declare changes nothing.
+`TestAConnectorThatSealsAlsoDeclares` fails the build on a connector that seals
+without declaring.
 
 `Paths` are JSON Pointers. Everything not declared stays plaintext and
 inspectable, which is the point: sealing the file whole would hand terva the
@@ -162,9 +180,18 @@ func main() {
 handshake, verb dispatch, and result correlation.
 `cmd/terva-telegram-connector` is the worked example — the in-tree
 telegram transport wrapped for the external path (it registers as
-`telegram-ext` with its own token store, so it can run next to the
-built-in). `cmd/terva-discord-connector` is a second in-tree external
+`telegram-ext` and keeps its token in its own `SealedState`, so it can
+run next to the built-in and holds no key of terva's).
+`cmd/terva-discord-connector` is a second in-tree external
 connector (the handshake examples below use it).
+
+Note what the telegram example does **not** do: reuse the in-tree
+package's `LoadConfig`/`SaveConfig` against the connector's own
+directory. Those build the secret store with terva's codec, which
+resolves terva's private key from the ambient home whatever directory
+is passed — the argument governs the file, never the key. A connector
+that does that is a full holder of the host's at-rest key, which is
+the posture `SealedState` exists to prevent.
 
 ## Protocol reference (versions 1 and 2)
 

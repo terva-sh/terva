@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"terva.sh/terva/packages/lineframe"
 )
 
 // upstream is a synchronous Streamable-HTTP MCP client to one remote server. The
@@ -37,44 +39,60 @@ func newUpstream(remoteURL string, hc *http.Client, auth authSource, headers map
 // error). On a 401 it renews the credential once and retries — the transparent
 // refresh path.
 func (u *upstream) call(ctx context.Context, id json.RawMessage, method string, params json.RawMessage) (json.RawMessage, error) {
-	frame := marshalRequest(id, method, params)
-	for attempt := 0; attempt < 2; attempt++ {
-		body, status, wwwAuth, err := u.do(ctx, frame)
-		if status == http.StatusUnauthorized && attempt == 0 {
-			if rerr := u.auth.reauth(ctx); rerr != nil {
-				return nil, fmt.Errorf("%s: upstream 401 (%s) and %w", method, strings.TrimSpace(wwwAuth), rerr)
-			}
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		var resp rpcResponse
-		if err := json.Unmarshal(body, &resp); err != nil {
-			return nil, fmt.Errorf("%s: unparseable upstream response: %w", method, err)
-		}
-		if resp.Error != nil {
-			return nil, fmt.Errorf("%s: upstream error %d: %s", method, resp.Error.Code, resp.Error.Message)
-		}
-		return resp.Result, nil
+	body, status, wwwAuth, err := u.doWithReauth(ctx, marshalRequest(id, method, params))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", method, err)
 	}
-	return nil, fmt.Errorf("%s: upstream still unauthorized after re-auth", method)
+	if status == http.StatusUnauthorized {
+		return nil, fmt.Errorf("%s: upstream still unauthorized after re-auth (%s)", method, strings.TrimSpace(wwwAuth))
+	}
+	var resp rpcResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("%s: unparseable upstream response: %w", method, err)
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("%s: upstream error %d: %s", method, resp.Error.Code, resp.Error.Message)
+	}
+	return resp.Result, nil
 }
 
 // notify sends a JSON-RPC notification (no id, no response expected).
 func (u *upstream) notify(ctx context.Context, method string, params json.RawMessage) error {
-	frame, _ := json.Marshal(rpcRequest{JSONRPC: "2.0", Method: method, Params: params})
-	_, status, _, err := u.do(ctx, frame)
+	raw, _ := json.Marshal(rpcRequest{JSONRPC: "2.0", Method: method, Params: params})
+	_, status, wwwAuth, err := u.doWithReauth(ctx, raw)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s: %w", method, err)
 	}
 	if status == http.StatusUnauthorized {
-		if rerr := u.auth.reauth(ctx); rerr != nil {
-			return rerr
-		}
-		_, _, _, err = u.do(ctx, frame)
+		return fmt.Errorf("%s: upstream still unauthorized after re-auth (%s)", method, strings.TrimSpace(wwwAuth))
 	}
-	return err
+	return nil
+}
+
+// doWithReauth sends frame, and on a 401 re-authenticates and sends it once
+// more. It reports the FINAL status, so a caller can tell a send that landed
+// from one that is still unauthorized.
+//
+// This was written twice, fifteen lines apart, and the second copy got it
+// wrong. `do` returns a nil error for a 401 by design — that status is the
+// re-auth signal, not a failure — so notify's hand-rolled version returned the
+// second send's nil error and reported SUCCESS on a still-unauthorized send.
+// The one caller is the MCP handshake, so a bridge with a dead credential
+// announced a healthy connection and then failed every call after it.
+//
+// call's loop had a quieter version of the same hole: on the second 401 it fell
+// through to json.Unmarshal, so a 401 body that happened to be valid JSON
+// returned a nil result with no error, and the "still unauthorized" line at the
+// bottom of the loop was unreachable.
+func (u *upstream) doWithReauth(ctx context.Context, raw []byte) (body []byte, status int, wwwAuth string, err error) {
+	body, status, wwwAuth, err = u.do(ctx, raw)
+	if status != http.StatusUnauthorized {
+		return body, status, wwwAuth, err
+	}
+	if rerr := u.auth.reauth(ctx); rerr != nil {
+		return body, status, wwwAuth, fmt.Errorf("upstream 401 (%s) and %w", strings.TrimSpace(wwwAuth), rerr)
+	}
+	return u.do(ctx, raw)
 }
 
 // initialize runs the MCP handshake: the initialize request (which assigns the
@@ -153,10 +171,16 @@ func (u *upstream) do(ctx context.Context, frame []byte) (body []byte, status in
 // response). Falls back to the last data frame when none carries a matching id.
 func readResponseFrame(resp *http.Response, wantID json.RawMessage) ([]byte, error) {
 	if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		return io.ReadAll(io.LimitReader(resp.Body, bridgeMaxFrameBytes))
 	}
-	sc := bufio.NewScanner(resp.Body)
-	sc.Buffer(make([]byte, 0, 64<<10), 8<<20)
+	// lineframe's REJECT policy, and this site is why the finding called the
+	// bridge the worse half. It was a raw bufio.Scanner whose Err() was NEVER
+	// consulted: an over-limit `data:` line ended the loop, the function
+	// returned `last` — the preceding PROGRESS NOTIFICATION — and the bridge
+	// relayed a notification body to terva as the tool's result, with no error
+	// anywhere. These frames are one logical response, so a skipped frame
+	// corrupts the whole and must be reported rather than recovered from.
+	br := bufio.NewReaderSize(resp.Body, 64<<10)
 	var data bytes.Buffer
 	var last []byte
 	flush := func() {
@@ -167,8 +191,12 @@ func readResponseFrame(resp *http.Response, wantID json.RawMessage) ([]byte, err
 		data.Reset()
 		last = frame
 	}
-	for sc.Scan() {
-		line := sc.Text()
+	for {
+		raw, tooLong, err := lineframe.ReadFrame(br, bridgeMaxFrameBytes)
+		if tooLong {
+			return nil, fmt.Errorf("mcp server sent an event over the %d-byte frame limit; the response is incomplete", bridgeMaxFrameBytes)
+		}
+		line := string(lineframe.TrimCR(raw))
 		switch {
 		case line == "":
 			flush()
@@ -180,6 +208,15 @@ func readResponseFrame(resp *http.Response, wantID json.RawMessage) ([]byte, err
 				data.WriteByte('\n')
 			}
 			data.WriteString(strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+		}
+		if err != nil {
+			// The stream error is real and must not be swallowed: returning the
+			// last frame as if it were the response is exactly the silent
+			// mis-relay this reader used to perform.
+			if err != io.EOF {
+				return nil, err
+			}
+			break
 		}
 	}
 	flush()

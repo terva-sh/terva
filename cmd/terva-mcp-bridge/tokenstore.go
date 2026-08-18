@@ -10,10 +10,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
+	"terva.sh/terva/packages/envcompat"
 	"terva.sh/terva/packages/secrets"
 )
 
@@ -214,31 +214,19 @@ func replaceFile(src, dst string) error {
 	return err
 }
 
-// tervaHome resolves terva's data home the same way the main binary does, so a
-// bridge spawned by terva writes tokens where the user expects — without
-// importing core. The explicit data-home env vars win; otherwise the OS-default
-// terva dir. Kept deliberately small: this is a standalone tool.
-func tervaHome() string {
-	for _, env := range []string{"TERVA_HOME", "ZOT_HOME"} { // rename:keep — matches terva's Home() env compat
-		if v := os.Getenv(env); v != "" {
-			return v
-		}
-	}
-	switch runtime.GOOS {
-	case "darwin":
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, "Library", "Application Support", "terva")
-		}
-	case "windows":
-		if v := os.Getenv("LOCALAPPDATA"); v != "" {
-			return filepath.Join(v, "terva")
-		}
-	}
-	if v := os.Getenv("XDG_STATE_HOME"); v != "" {
-		return filepath.Join(v, "terva")
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(home, ".local", "state", "terva")
-	}
-	return ""
-}
+// tervaHome resolves terva's data home by CALLING the resolver terva itself
+// calls, rather than reproducing it.
+//
+// This used to be a hand-written copy, documented as resolving "the same way the
+// main binary does". It did not: envcompat.Home has four steps and the copy had
+// two, dropping both exists-based discovery arms. On a pre-rename install with
+// no TERVA_HOME set, terva resolves to the legacy data dir and the copy resolved
+// to the current one — so the bridge looked for secrets.key in a directory that
+// has none, took the "encryption is not set up" branch, and wrote the OAuth
+// access token, refresh token and client_secret in CLEARTEXT while
+// `terva secret status` reported at-rest encryption as ON.
+//
+// envcompat is a leaf package (stdlib plus privfs) written to be shared by
+// exactly this kind of consumer, and connsdk — the other standalone-binary SDK —
+// already resolves its state dir through it.
+func tervaHome() string { return envcompat.Home() }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/procenv"
+	"terva.sh/terva/packages/envcompat"
 	"terva.sh/terva/packages/lineframe"
 )
 
@@ -37,6 +38,15 @@ func newStdioTransport(cfg ServerConfig, cwd string, stderr io.Writer) (*stdioTr
 		cmd.Dir = cwd
 	}
 	env := procenv.Inherited()
+	// Name the data home explicitly rather than relying on the child to
+	// re-derive it. Inherited() carries TERVA_HOME when terva's own environment
+	// has it, but when terva resolved its home by DISCOVERY (no env var, an
+	// install that predates the rename) the variable is absent and the child is
+	// left to run the same four-step resolution and hope it agrees. terva-mcp-bridge
+	// looked for the at-rest key under a home resolved that way, missed it, and
+	// wrote OAuth tokens in the clear. Stated before cfg.Env so a server that
+	// deliberately pins its own home still wins.
+	env = append(env, "TERVA_HOME="+envcompat.Home())
 	for k, v := range cfg.Env {
 		// Validated at config load; belt-and-braces here because this is the
 		// actual trust boundary.

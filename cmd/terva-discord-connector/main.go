@@ -124,5 +124,12 @@ func main() {
 			token, err := loadToken()
 			return err == nil && token != ""
 		},
+		// Declaring the SAME SealedState we load and save with is what makes the
+		// seal maintainable. Sealing without declaring leaves terva holding
+		// ciphertext it can never re-seal: `terva secret rotate --revoke` skips
+		// the file, and its own advice ("start it once and re-run") is
+		// unfollowable, because starting a connector that never declares changes
+		// nothing. Enforced by TestAConnectorThatSealsAlsoDeclares.
+		Secrets: &state,
 	})
 }

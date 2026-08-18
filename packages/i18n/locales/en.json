@@ -36,6 +36,7 @@
   "%s takes the seat…": "%s takes the seat…",
   "%s.%s is a secret and is never printed — `show` reports whether one is set": "%s.%s is a secret and is never printed — `show` reports whether one is set",
   "%s: bot daemon already running (pid %d) — stop it with `terva bot stop` first": "%s: bot daemon already running (pid %d) — stop it with `terva bot stop` first",
+  "%s: could not carry the old token forward: %s — run `terva bot setup --connector %s`": "%s: could not carry the old token forward: %s — run `terva bot setup --connector %s`",
   "%s: not configured (run setup)": "%s: not configured (run setup)",
   "%s: not configured — run `terva bot setup` first": "%s: not configured — run `terva bot setup` first",
   "%s: set model and provider together, or neither": "%s: set model and provider together, or neither",

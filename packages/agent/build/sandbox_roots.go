@@ -76,6 +76,12 @@ func restrictSensitiveReads(sandbox *tools.Sandbox, home, cwd string, allowConfi
 		filepath.Join(home, "swarm"),
 		filepath.Join(home, "logs"),
 		filepath.Join(home, attach.ShareDirName),
+		// terva-mcp-bridge's OAuth token store: an access token, a refresh
+		// token and a client_secret per remote MCP server. Sealed whole when an
+		// at-rest key is configured, plaintext when one is not — and this deny
+		// list is what makes that difference not matter. Nothing but the bridge
+		// reads it, so denying the whole tree costs the agent nothing.
+		filepath.Join(home, "mcp-bridge"),
 	)
 	// Every key a COMPONENT mints for itself, wherever it put it. A standalone
 	// connector holds its own age identity beside its config
