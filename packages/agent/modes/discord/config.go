@@ -97,7 +97,10 @@ func SaveConfig(tervaHome string, c Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(ConfigPath(tervaHome), append(b, '\n'), 0o600)
+	// Atomically, matching telegram.SaveConfig. These two savers carry the same
+	// doc comment about write ORDER and had silently diverged on durability:
+	// telegram hand-rolled a temp+rename, discord truncated in place.
+	return privfs.WriteFile(ConfigPath(tervaHome), append(b, '\n'))
 }
 
 // maskToken keeps just enough of a token to recognize it.

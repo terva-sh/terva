@@ -16,6 +16,7 @@ import (
 	"terva.sh/terva/packages/agent/hooks"
 	"terva.sh/terva/packages/agent/mcp"
 	"terva.sh/terva/packages/envcompat"
+	"terva.sh/terva/packages/filelock"
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider/auth"
 )
@@ -308,7 +309,14 @@ type Config struct {
 	// (docs/proposals/idle-suggestions.md). Off by default, and the default is
 	// the point rather than caution: it spends one extra completion per reply
 	// the user is idle after, so a user who never asked for it never pays for
-	// it. Client-side — the trigger, the composer and the offer are all in the
+	// it.
+	//
+	// It governs the AUTOMATIC offer only. /nextstep asks for one whether this
+	// is on or off, which follows from what the default is for: the reason to
+	// keep this off is that terva should not spend money unbidden, and a typed
+	// command is not unbidden.
+	//
+	// Client-side — the trigger, the composer and the offer are all in the
 	// frontend — so it is a plain config bool rather than an engine feature,
 	// which would imply it reshapes the agent loop.
 	NextStepSuggestions bool `json:"next_step_suggestions,omitempty"`
@@ -972,26 +980,63 @@ func loadConfigAt(home string) (Config, error) {
 	return c, nil
 }
 
-// SaveConfig writes the config file for the active home, creating parent dirs.
+// SaveConfig writes the whole config file for the active home, creating parent
+// dirs. It REPLACES the document — it is not a setter.
+//
+// Anything that reads the config, changes a field and writes it back must use
+// MutateConfig instead. The load-then-save pair is a lost update with extra
+// steps: the window between the two is exactly where another writer's change
+// goes missing, and the atomic rename that keeps a reader from ever seeing a
+// torn file is precisely what stops anyone noticing. Ten production setters did
+// it the wrong way, including two in this package; the pairing is now enforced
+// by TestNoProductionCodeReadsAndWritesTheConfigWithoutMutateConfig.
 func SaveConfig(c Config) error { return saveConfigAt(TervaHome(), c) }
 
-// configMu serializes read-modify-write config mutations. SaveConfig is a plain
-// file overwrite, so concurrent setters (the web has N sessions) would lose
-// updates without this. Use MutateConfig for any load-mutate-save cycle.
+// configMu serializes read-modify-write config mutations inside this process.
+// It orders nothing between processes, which is what configLockPath is for.
 var configMu sync.Mutex
 
-// MutateConfig applies fn to the current config and saves it, atomically with
-// respect to other MutateConfig callers. The single safe path for toggling a
-// config field at runtime.
-func MutateConfig(fn func(*Config)) error {
+// configLockPath is the cross-process lock guarding one home's config.json. It
+// sits beside the file rather than inside it — a lock is not configuration, and
+// a crash must not leave the document it guards holding a stale claim.
+func configLockPath(home string) string { return filepath.Join(home, "config.json.lock") }
+
+// MutateConfig applies fn to the active home's config and saves it, atomically
+// against every other writer. The single safe path for changing a config field
+// at runtime.
+func MutateConfig(fn func(*Config)) error { return MutateConfigAt(TervaHome(), fn) }
+
+// MutateConfigAt is MutateConfig against a NAMED home, for the handful of
+// settings that deliberately write the user's global config even when this run
+// is project-scoped (see GlobalUserPrefs).
+//
+// Locked both ways it can be contended, the same shape and the same order as
+// provider/auth's Store.Mutate on the same home: configMu orders writers inside
+// this process — the web daemon has N sessions and the TUI has panes — and the
+// file lock orders them across processes, which a mutex cannot. Several terva
+// instances share one $TERVA_HOME, and config.json is the shared whole-file
+// document carrying provider, model, permissions, favorites and plaintext
+// extension secrets.
+//
+// The load happens INSIDE both locks. Anything read before acquiring them
+// describes the file as it was before the writer we just queued behind.
+func MutateConfigAt(home string, fn func(*Config)) error {
 	configMu.Lock()
 	defer configMu.Unlock()
-	c, err := LoadConfig()
+	// A home that cannot host a lockfile (read-only mount, exotic filesystem)
+	// must not become a home where changing a setting fails. Degrade to the
+	// in-process mutex, which is what this had before the lock existed.
+	lk, err := filelock.Acquire(configLockPath(home))
+	if err != nil {
+		lk = nil
+	}
+	defer lk.Release()
+	c, err := loadConfigAt(home)
 	if err != nil {
 		return err
 	}
 	fn(&c)
-	return SaveConfig(c)
+	return saveConfigAt(home, c)
 }
 
 // saveConfigAt writes home/config.json atomically with private (0600)
@@ -1036,12 +1081,9 @@ func GlobalUserPreferences() GlobalUserPrefs {
 // where the interactive "what should the character call you?" answer is saved,
 // so it is set once and reused across projects rather than written into a repo.
 func SetGlobalUserName(name string) error {
-	c, err := loadConfigAt(globalHome())
-	if err != nil {
-		return err
-	}
-	c.UserName = strings.TrimSpace(name)
-	return saveConfigAt(globalHome(), c)
+	return MutateConfigAt(globalHome(), func(c *Config) {
+		c.UserName = strings.TrimSpace(name)
+	})
 }
 
 // ToggleStringMember returns list with key present (on) or absent (off), with
@@ -1304,12 +1346,6 @@ func ResolveConfig(cwd string, trustProject bool) EffectiveConfig {
 	return eff
 }
 
-// TrustedProjectHooks returns the nearest project config's hooks ONLY when
-// the workspace is trusted; otherwise nil. Project hooks run arbitrary
-// commands, so an untrusted (default) cloned repo must never reach the hook
-// engine — this is the trust gate the historical "user-config only" ban was a
-// proxy for (Workspace Trust Phase 6). A malformed project config degrades to
-// nil with a stderr note rather than aborting launch, matching ResolveConfig.
 // ProjectHooksOnDisk reports the project's hook config REGARDLESS of trust —
 // "are there project hooks at all", not "do they apply".
 //
@@ -1327,6 +1363,12 @@ func ProjectHooksOnDisk(cwd string) *hooks.Config {
 	return pc.Hooks
 }
 
+// TrustedProjectHooks returns the nearest project config's hooks ONLY when
+// the workspace is trusted; otherwise nil. Project hooks run arbitrary
+// commands, so an untrusted (default) cloned repo must never reach the hook
+// engine — this is the trust gate the historical "user-config only" ban was a
+// proxy for (Workspace Trust Phase 6). A malformed project config degrades to
+// nil with a stderr note rather than aborting launch, matching ResolveConfig.
 func TrustedProjectHooks(cwd string, trustProject bool) *hooks.Config {
 	if !trustProject {
 		return nil
@@ -1474,7 +1516,7 @@ func SetKimiCLIFallbackDisabled(disabled bool) error {
 	if err := privfs.MkdirAll(filepath.Dir(path)); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte("disabled\n"), privfs.FileMode)
+	return privfs.WriteFile(path, []byte("disabled\n"))
 }
 
 func LoadKimiCodeCLIToken() *auth.OAuthToken {

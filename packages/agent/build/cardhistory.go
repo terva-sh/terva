@@ -12,6 +12,8 @@ import (
 	"terva.sh/terva/packages/agent/card"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/slug"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // A card's edit history is terva-owned metadata about a card, so — like a card
@@ -109,7 +111,7 @@ func (s *CardHistoryStore) Snapshot(cardID string, prev, prevAvatar []byte) erro
 			return nil
 		}
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := privfs.MkdirAll(dir); err != nil {
 		return err
 	}
 	// Unix millis both names and orders the revision, so a ref must be strictly
@@ -127,11 +129,11 @@ func (s *CardHistoryStore) Snapshot(cardID string, prev, prevAvatar []byte) erro
 	for {
 		path := filepath.Join(dir, strconv.FormatInt(ms, 10)+".json")
 		if _, err := os.Stat(path); os.IsNotExist(err) {
-			if err := os.WriteFile(path, prev, 0o644); err != nil {
+			if err := privfs.WriteFileMode(path, prev, 0o644); err != nil {
 				return err
 			}
 			if len(prevAvatar) > 0 {
-				if err := os.WriteFile(path[:len(path)-len(".json")]+".png", prevAvatar, 0o644); err != nil {
+				if err := privfs.WriteFileMode(path[:len(path)-len(".json")]+".png", prevAvatar, 0o644); err != nil {
 					return err
 				}
 			}

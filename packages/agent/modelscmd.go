@@ -14,6 +14,8 @@ import (
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // modelsScaffold is the starter $TERVA_HOME/models.json written by
@@ -161,10 +163,10 @@ func runModelsInit(force bool) error {
 			return fmt.Errorf("check %s: %w", path, err)
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(path)); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(path, []byte(modelsScaffold), 0o644); err != nil {
+	if err := privfs.WriteFileMode(path, []byte(modelsScaffold), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	fmt.Printf("wrote %s\n", path)
@@ -374,22 +376,24 @@ func printTierScaffold(providerID string) {
 // mergeEndpointsIntoConfig adds eps to config.json's endpoints map, skipping any
 // name that already exists (never clobbers). Returns how many were added.
 func mergeEndpointsIntoConfig(eps map[string]config.EndpointConfig) (int, error) {
-	cfg, _ := config.LoadConfig()
-	if cfg.Endpoints == nil {
-		cfg.Endpoints = map[string]config.EndpointConfig{}
-	}
+	// The merge runs INSIDE MutateConfig, not before it: an endpoint that
+	// another writer added between a load and a save is one this would not have
+	// seen, and "never clobbers" would then clobber it.
 	added := 0
-	for name, ep := range eps {
-		if _, exists := cfg.Endpoints[name]; exists {
-			continue
+	err := config.MutateConfig(func(cfg *config.Config) {
+		added = 0
+		if cfg.Endpoints == nil {
+			cfg.Endpoints = map[string]config.EndpointConfig{}
 		}
-		cfg.Endpoints[name] = ep
-		added++
-	}
-	if added == 0 {
-		return 0, nil
-	}
-	if err := config.SaveConfig(cfg); err != nil {
+		for name, ep := range eps {
+			if _, exists := cfg.Endpoints[name]; exists {
+				continue
+			}
+			cfg.Endpoints[name] = ep
+			added++
+		}
+	})
+	if err != nil {
 		return 0, err
 	}
 	return added, nil

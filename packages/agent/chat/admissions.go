@@ -148,5 +148,7 @@ func (a *Admissions) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(a.path, data, 0o600)
+	// Atomically: the admissions list is an access-control record, and a reader
+	// catching it mid-truncate would see an empty allow-list.
+	return privfs.WriteFile(a.path, data)
 }

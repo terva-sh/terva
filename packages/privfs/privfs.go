@@ -46,6 +46,29 @@ func OpenFile(path string, flag int) (*os.File, error) {
 // umask), then renames over path. The parent directory is created 0700 if
 // missing. Used for config.json, which carries plaintext secrets.
 func WriteFile(path string, data []byte) error {
+	return WriteFileMode(path, data, FileMode)
+}
+
+// WriteFileMode is WriteFile with a caller-chosen mode, for the state that is
+// deliberately not owner-only.
+//
+// Atomicity is the reason this exists rather than each caller keeping its own
+// os.WriteFile. A plain write opens O_TRUNC: the live file is empty, then
+// partially filled, and any reader in that window sees a truncated file.
+// $TERVA_HOME is explicitly shared between concurrent terva processes (see
+// packages/filelock), so that window is reachable — and the readers do not
+// degrade gracefully. config.LoadTrustStore treats a corrupt trusted.json as a
+// hard error on purpose, "so a security store is never silently treated as
+// empty", which turns a torn read into a refusal to start.
+//
+// The mode is applied by chmod on the temp file rather than passed to
+// CreateTemp, so a permissive umask cannot widen it, and the rename means an
+// EXISTING file adopts the new mode instead of keeping whatever it had. A
+// plain os.WriteFile does neither.
+//
+// Prefer WriteFile. Reach for this only when the bytes genuinely must be
+// readable by more than the owner, and say why at the call site.
+func WriteFileMode(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := MkdirAll(dir); err != nil {
 		return err
@@ -64,7 +87,7 @@ func WriteFile(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmpName, FileMode); err != nil {
+	if err := os.Chmod(tmpName, perm); err != nil {
 		return err
 	}
 	return os.Rename(tmpName, path)

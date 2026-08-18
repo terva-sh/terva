@@ -21,6 +21,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 const (
@@ -223,7 +225,7 @@ func (m *Manager) Create(env Env, args CreateArgs) (*CreateResult, error) {
 		}
 	}
 
-	if err := os.MkdirAll(r.worktreesDir(), 0o755); err != nil {
+	if err := privfs.MkdirAll(r.worktreesDir()); err != nil {
 		return nil, err
 	}
 	add := []string{"worktree", "add", "--quiet", path}

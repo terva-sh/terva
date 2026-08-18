@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 
 	"golang.org/x/text/language"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // Gap-capture records every source string shown to the operator that has
@@ -137,7 +139,7 @@ func Flush(home string) (int, error) {
 		return keyedAdded, nil
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(path)); err != nil {
 		return 0, err
 	}
 	out, err := MarshalLocale(existing)
@@ -175,7 +177,7 @@ func flushKeyed(home, lang, catalog string, misses map[string]string) (int, erro
 	if added == 0 {
 		return 0, nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(path)); err != nil {
 		return 0, err
 	}
 	out, err := MarshalLocale(existing)

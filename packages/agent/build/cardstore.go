@@ -13,6 +13,8 @@ import (
 	"terva.sh/terva/packages/agent/card"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/slug"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // The character-card library. Cards were path-only before Stage: --card pointed
@@ -439,9 +441,15 @@ func (s *CardStore) write(id string, c card.Card, raw, avatar []byte, noteReplac
 			warnings = append(warnings, replacedNote(dataChanged, avatarChanged)...)
 		}
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := privfs.MkdirAll(dir); err != nil {
 		return StoredCard{}, err
 	}
+	// 🪤 NOT privfs.WriteFileMode, and not an oversight. StoredCard.Added is the
+	// card DIRECTORY's mtime, and an atomic write creates and removes a temp
+	// entry in that directory — which bumps it. Editing a card would silently
+	// restamp it as newly added, reordering the library on every save. Writing
+	// over the existing file in place leaves the directory untouched.
+	// TestCardEditLeavesAddedAndTheCardDirAlone is the guard.
 	if err := os.WriteFile(filepath.Join(dir, cardJSONName), raw, 0o644); err != nil {
 		return StoredCard{}, err
 	}
@@ -567,10 +575,10 @@ func (s *CardStore) SetFavorite(id string, fav bool) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.favoritesPath()), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(s.favoritesPath())); err != nil {
 		return err
 	}
-	return os.WriteFile(s.favoritesPath(), raw, 0o644)
+	return privfs.WriteFileMode(s.favoritesPath(), raw, 0o644)
 }
 
 // ResolveCardRef turns a --card / CreateOpts.Card reference into a path

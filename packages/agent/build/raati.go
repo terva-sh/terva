@@ -18,6 +18,8 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/raati"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // WriteRaatiRecord persists a full deliberation record (both rounds,
@@ -26,7 +28,7 @@ import (
 // (bytes only); the filesystem and home-directory concern lives here.
 func WriteRaatiRecord(res *raati.Result) (string, error) {
 	dir := filepath.Join(config.TervaHome(), "raati")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := privfs.MkdirAll(dir); err != nil {
 		return "", err
 	}
 	raw, err := res.MarshalRecord()

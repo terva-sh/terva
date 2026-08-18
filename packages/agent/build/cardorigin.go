@@ -8,6 +8,8 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/slug"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // Where a card came from is terva-owned metadata ABOUT a card, so — like a
@@ -99,14 +101,14 @@ func (s *CardOriginStore) Set(id string, o CardOrigin) error {
 	if o.World == "" {
 		return s.Delete(id)
 	}
-	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+	if err := privfs.MkdirAll(s.dir); err != nil {
 		return err
 	}
 	raw, err := json.Marshal(o)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, raw, 0o644)
+	return privfs.WriteFileMode(p, raw, 0o644)
 }
 
 // Delete drops a card's origin record; a card without one is a no-op.

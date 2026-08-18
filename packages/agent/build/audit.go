@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/core"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // auditLog is an append-only security record of tool calls: every call the
@@ -91,7 +93,7 @@ func (a *auditLog) Record(now time.Time, via, tool string, args json.RawMessage,
 		return
 	}
 	if a.f == nil {
-		if err := os.MkdirAll(filepath.Dir(a.path), 0o755); err != nil {
+		if err := privfs.MkdirAll(filepath.Dir(a.path)); err != nil {
 			a.failed = true
 			return
 		}

@@ -151,7 +151,7 @@ func (s *WorldStore) Save(doc WorldDoc) (WorldDoc, error) {
 	if err := privfs.MkdirAll(dir); err != nil {
 		return WorldDoc{}, err
 	}
-	if err := os.WriteFile(filepath.Join(dir, worldJSONName), raw, 0o644); err != nil {
+	if err := privfs.WriteFileMode(filepath.Join(dir, worldJSONName), raw, 0o644); err != nil {
 		return WorldDoc{}, err
 	}
 	return doc, nil
@@ -194,7 +194,7 @@ func (s *WorldStore) SetCover(id string, data []byte) error {
 	if _, err := s.Get(id); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(s.dir, id, worldCoverName), data, 0o644)
+	return privfs.WriteFileMode(filepath.Join(s.dir, id, worldCoverName), data, 0o644)
 }
 
 // RemoveCover deletes a World's cover image; a World without one is a no-op.

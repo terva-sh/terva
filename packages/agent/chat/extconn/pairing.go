@@ -50,11 +50,9 @@ func savePairing(tervaHome, name, userID string) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	// Through privfs: same temp+rename, plus a chmod a permissive umask
+	// cannot widen and a unique suffix that two concurrent savers cannot collide on.
+	return privfs.WriteFile(path, b)
 }
 
 // removePairing deletes the pairing file; missing is fine.

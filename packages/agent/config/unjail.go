@@ -91,7 +91,9 @@ func SaveUnjailStore(s UnjailStore) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(UnjailStorePath(), b, 0o600)
+	// Atomically, for the reason SaveTrustStore is: this is the same kind of
+	// store, read by any concurrent terva process.
+	return privfs.WriteFile(UnjailStorePath(), b)
 }
 
 // IsUnjailed reports whether path runs unjailed per this store: an exact

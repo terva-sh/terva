@@ -95,10 +95,10 @@ func SaveConfig(tervaHome string, c Config) error {
 	if err != nil {
 		return err
 	}
-	path := ConfigPath(tervaHome)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	// Through privfs rather than the hand-rolled temp+rename this used to
+	// carry. Same guarantee, plus two the hand-rolled version lacked: the temp
+	// file is chmodded (a permissive umask could widen the 0600 it passed to
+	// CreateTemp) and a fixed ".tmp" suffix no longer collides between two
+	// concurrent savers.
+	return privfs.WriteFile(ConfigPath(tervaHome), b)
 }

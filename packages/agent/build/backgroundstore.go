@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/config"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // The scene-backdrop store. Backgrounds are plain images a session binds for the
@@ -71,10 +73,10 @@ func (s *BackgroundStore) ImportBytes(data []byte) (Background, error) {
 	}
 	sum := sha256.Sum256(data)
 	id := hex.EncodeToString(sum[:])[:16]
-	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+	if err := privfs.MkdirAll(s.dir); err != nil {
 		return Background{}, err
 	}
-	if err := os.WriteFile(filepath.Join(s.dir, id+"."+ext), data, 0o644); err != nil {
+	if err := privfs.WriteFileMode(filepath.Join(s.dir, id+"."+ext), data, 0o644); err != nil {
 		return Background{}, err
 	}
 	return Background{ID: id, Ext: ext}, nil

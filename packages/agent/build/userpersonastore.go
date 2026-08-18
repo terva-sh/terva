@@ -10,6 +10,8 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/slug"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // UserPersona is a saved "who I am in the story" identity — a name + description
@@ -113,14 +115,14 @@ func (s *UserPersonaStore) Save(p UserPersona) (UserPersona, error) {
 		return UserPersona{}, fmt.Errorf("user persona: name %q has no usable filename", p.Name)
 	}
 	p.Ref = stem
-	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+	if err := privfs.MkdirAll(s.dir); err != nil {
 		return UserPersona{}, err
 	}
 	raw, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		return UserPersona{}, err
 	}
-	if err := os.WriteFile(filepath.Join(s.dir, stem+".json"), raw, 0o644); err != nil {
+	if err := privfs.WriteFileMode(filepath.Join(s.dir, stem+".json"), raw, 0o644); err != nil {
 		return UserPersona{}, err
 	}
 	// The save lands on the folded slug; the same persona's pre-fold file

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/identity"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // updateCheckTTL is how often we hit the release API to look for a new
@@ -214,12 +216,12 @@ func readUpdateCache(path string) (updateCache, bool) {
 }
 
 func writeUpdateCache(path string, c updateCache) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(path)); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o600)
+	return privfs.WriteFile(path, b)
 }

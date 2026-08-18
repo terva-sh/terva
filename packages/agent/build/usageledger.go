@@ -11,6 +11,8 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/provider"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // The workspace usage ledger: where spend goes when there is no session to book
@@ -93,7 +95,7 @@ func (l *UsageLedger) Book(rec UsageRecord) error {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(l.path), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(l.path)); err != nil {
 		return err
 	}
 	raw, err := json.Marshal(rec)

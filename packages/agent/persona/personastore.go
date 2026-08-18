@@ -8,6 +8,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 	"terva.sh/terva/packages/agent/slug"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // The persona side of the library. Unlike cards (untrusted data), a persona
@@ -132,10 +134,10 @@ func Write(p Persona) (string, error) {
 		return "", fmt.Errorf("persona: name %q has no usable filename", p.Name)
 	}
 	dest := filepath.Join(Dir(), stem+".md")
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(dest)); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(dest, raw, 0o644); err != nil {
+	if err := privfs.WriteFileMode(dest, raw, 0o644); err != nil {
 		return "", err
 	}
 	// A file this persona minted before diacritic folding ("sepp.md") would

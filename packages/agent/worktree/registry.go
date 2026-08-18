@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // Registry is the per-repo truth, augmenting git's worktree list with what git
@@ -101,7 +103,7 @@ func readRegistryFile(path string) (*Registry, bool, error) {
 // saveRegistry writes registry.json atomically (temp + rename) so a concurrent
 // reader never sees a half-written file.
 func saveRegistry(path string, r *Registry) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(path)); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(r, "", "  ")

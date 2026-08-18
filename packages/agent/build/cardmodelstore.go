@@ -8,6 +8,8 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/slug"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // A card's default model is terva-owned metadata, kept OUTSIDE the card exactly
@@ -81,10 +83,10 @@ func (s *CardModelStore) Set(cardID, provider, model string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+	if err := privfs.MkdirAll(s.dir); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(s.dir, cardID+".json"), raw, 0o644)
+	return privfs.WriteFileMode(filepath.Join(s.dir, cardID+".json"), raw, 0o644)
 }
 
 // Delete drops a card's pref. A card that never had one is not an error — the

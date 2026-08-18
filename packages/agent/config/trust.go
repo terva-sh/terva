@@ -124,7 +124,10 @@ func SaveTrustStore(s TrustStore) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(TrustStorePath(), b, 0o600)
+	// Atomically: LoadTrustStore treats a corrupt file as a hard error rather
+	// than an empty store, so the O_TRUNC window a plain write opens is enough
+	// for a concurrent terva process to fail to start on a partial read.
+	return privfs.WriteFile(TrustStorePath(), b)
 }
 
 // CanonicalTrustPath canonicalizes a directory for identity: absolute

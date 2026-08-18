@@ -11,6 +11,8 @@ import (
 
 	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/i18n"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // personaCharterBudget is the soft size ceiling for a charter, guarding the
@@ -288,10 +290,10 @@ func personaInit(args []string) error {
 		if readErr != nil {
 			return readErr
 		}
-		if mkErr := os.MkdirAll(filepath.Dir(dest), 0o755); mkErr != nil {
+		if mkErr := privfs.MkdirAll(filepath.Dir(dest)); mkErr != nil {
 			return mkErr
 		}
-		if wErr := os.WriteFile(dest, raw, 0o644); wErr != nil {
+		if wErr := privfs.WriteFileMode(dest, raw, 0o644); wErr != nil {
 			return wErr
 		}
 		fmt.Printf("wrote %s\n", dest)

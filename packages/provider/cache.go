@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // ModelCache is the on-disk shape for discovered models.
@@ -59,7 +61,7 @@ func LoadCache(path string) (ModelCache, error) {
 
 // SaveCache writes the cache atomically.
 func SaveCache(path string, c ModelCache) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(path)); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(c, "", "  ")

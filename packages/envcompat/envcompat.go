@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 const (
@@ -166,7 +168,7 @@ func SetZotFallbackDisabled(disabled bool) error {
 		}
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(p)); err != nil {
 		return err
 	}
 	return os.WriteFile(p, []byte("written by `terva migrate`; delete to re-enable discovery of the legacy zot data dir and .zot project dirs\n"), 0o644)

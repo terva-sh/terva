@@ -13,6 +13,8 @@ import (
 	"unicode/utf8"
 
 	"terva.sh/terva/packages/agent/connsdk"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // maxAttachmentBytes bounds a single inbound attachment download; a
@@ -251,7 +253,7 @@ func download(url, path string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("attachment fetch: %s", resp.Status)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(path)); err != nil {
 		return err
 	}
 	f, err := os.Create(path)

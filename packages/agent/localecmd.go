@@ -13,6 +13,8 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/i18n"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // runLocaleCommand handles `terva locale ...`: inspect, scaffold, validate,
@@ -251,25 +253,31 @@ func localeInit(args []string) error {
 		out[k] = i18n.MarshalValue(scaffold)
 		added++
 	}
+	// The ROOT catalog being complete says nothing about the keyed catalogs or
+	// the web panel's, which the two calls below scaffold. Returning here
+	// skipped both, so once the root had settled `terva locale init <lang>`
+	// printed "nothing to add" and did exactly that — a translator could not
+	// pick up a new prompt, tool or panel string without deleting their locale
+	// file and starting over.
 	if added == 0 {
-		fmt.Printf("%s already lists all %d source string(s); nothing to add.\n", path, len(out))
-		return nil
-	}
-	blank := 0
-	for _, v := range out {
-		if !isFilled(v) {
-			blank++
-		}
-	}
-	if err := writeLocale(path, out); err != nil {
-		return err
-	}
-	if english {
-		fmt.Printf("wrote %s: %d string(s), seeded with the current English to edit in place\n", path, len(out))
-		fmt.Printf("reword the values you want to change; delete the rest (they fall back to English)\n")
+		fmt.Printf("%s already lists all %d source string(s).\n", path, len(out))
 	} else {
-		fmt.Printf("wrote %s: %d string(s), %d still to translate\n", path, len(out), blank)
-		fmt.Printf("edit it (english keys → your translations), then run: terva locale validate %s\n", path)
+		blank := 0
+		for _, v := range out {
+			if !isFilled(v) {
+				blank++
+			}
+		}
+		if err := writeLocale(path, out); err != nil {
+			return err
+		}
+		if english {
+			fmt.Printf("wrote %s: %d string(s), seeded with the current English to edit in place\n", path, len(out))
+			fmt.Printf("reword the values you want to change; delete the rest (they fall back to English)\n")
+		} else {
+			fmt.Printf("wrote %s: %d string(s), %d still to translate\n", path, len(out), blank)
+			fmt.Printf("edit it (english keys → your translations), then run: terva locale validate %s\n", path)
+		}
 	}
 	if err := localeInitKeyed(lang); err != nil {
 		return err
@@ -751,10 +759,10 @@ func writeLocale(path string, m map[string]json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(path)); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return privfs.WriteFileMode(path, data, 0o644)
 }
 
 // coverage counts how many source strings a merged locale actually

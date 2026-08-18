@@ -144,7 +144,7 @@ func (s *GroupStore) Save(doc Group) (Group, error) {
 	if err := privfs.MkdirAll(s.dir); err != nil {
 		return Group{}, err
 	}
-	if err := os.WriteFile(filepath.Join(s.dir, doc.ID+".json"), raw, 0o644); err != nil {
+	if err := privfs.WriteFileMode(filepath.Join(s.dir, doc.ID+".json"), raw, 0o644); err != nil {
 		return Group{}, err
 	}
 	return doc, nil

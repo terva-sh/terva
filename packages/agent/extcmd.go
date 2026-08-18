@@ -13,6 +13,8 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/ignore"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // runExtCommand dispatches `terva ext ...` subcommands. Returns
@@ -259,7 +261,7 @@ func cloneArgs(src, out, ref string) []string {
 // success; the caller reports the outcome.
 func installOne(src, ref, nameOverride string) (out string, err error) {
 	dest := filepath.Join(config.TervaHome(), "extensions")
-	if err := os.MkdirAll(dest, 0o755); err != nil {
+	if err := privfs.MkdirAll(dest); err != nil {
 		return "", err
 	}
 
