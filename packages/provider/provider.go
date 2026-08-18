@@ -745,6 +745,22 @@ type ClientCapabilities struct {
 	// "continue" interaction (turn.continue) is gated on this: only a
 	// prefill-continuing provider can extend the last response in place.
 	ContinuesAssistantPrefill bool
+
+	// ReasoningWire is the reasoning control this wire format actually
+	// carries: an effort enum, a thinking budget, a Responses-route enum, a
+	// thinkingBudget/thinkingLevel, or nothing. It is a WIRE-FORMAT fact and
+	// so belongs to the client, not to the provider id.
+	//
+	// reasoningWireWiring restates the same decision keyed on provider id,
+	// because /reasoning and the web picker hold only a Model and cannot reach
+	// a Client. The two must agree; TestReasoningWireTableMatchesTheRealClient
+	// in packages/agent/build is what makes them. That guard exists because
+	// the table was wrong for two providers at once — vercel-ai-gateway
+	// (anthropic client, read as OpenAI-compat) and azure-openai-responses
+	// (openai client, read as Codex) — while the census that was supposed to
+	// cover it only asserted a provider appeared SOMEWHERE, never that the
+	// answer was right, and kept both offenders in its escape set.
+	ReasoningWire reasoningWire
 }
 
 // capabilityProvider is implemented by concrete clients that declare

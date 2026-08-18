@@ -9,7 +9,14 @@ import "strings"
 // flag accepted "max" while both `--help` and the error a typo produced listed
 // only up to "maximum", so the tier that unlocks gpt-5.6's native ceiling was
 // enforced but never advertised. Printing a hand-written copy of this list is
-// how that happens, so there is no hand-written copy any more.
+// how that happens, so there is no hand-written copy in Go.
+//
+// There IS one more, and it cannot be removed: the web client's REASONING_LEVELS
+// (ui/ReasoningPick.tsx) is a different language and cannot import this. That
+// copy is held to this one by reasoning-ladder-parity.test.ts, which reads this
+// var out of this file. Until that guard existed the claim above was simply
+// false for the web surface, in the exact way it describes having already
+// happened once.
 //
 // Aliases ("min", "minimal", "hi", "none", …) are deliberately absent: they are
 // accepted by NormalizeReasoning but are not what a surface should teach.
@@ -94,6 +101,80 @@ func EffectiveReasoning(reqReasoning string, reasoningSet bool, m Model) string 
 		return NormalizeReasoning(reqReasoning)
 	}
 	return NormalizeReasoning(m.DefaultReasoning)
+}
+
+// ReasoningSource names the layer of the chain that decided a level.
+//
+// It exists because "which one won" is a different question from "what is the
+// level", and every surface that explains the setting to a user needs the
+// first. Without it a surface can only re-derive the answer from the raw
+// inputs, and the tree had five doing exactly that — all wrong the same way.
+//
+// Deliberately NOT called a rung. In this package a ReasoningRung is already
+// one row of the LEVEL ladder ("off" … "max") as it applies to one model, and
+// the two ideas are perpendicular: a level says how hard to think, a source
+// says who chose it. Reusing the word is how you end up with the drift this
+// symbol exists to end. See ResolveReasoning.
+type ReasoningSource int
+
+const (
+	// ReasoningFromSession is the --reasoning flag or a session override.
+	ReasoningFromSession ReasoningSource = iota
+	// ReasoningFromModelOperator is an operator's per-model models.json
+	// `defaultReasoning`. It sits ABOVE the global setting: it is a choice
+	// someone made about this model specifically.
+	ReasoningFromModelOperator
+	// ReasoningFromGlobal is the global config setting.
+	ReasoningFromGlobal
+	// ReasoningFromModelCatalog is the model's catalog DefaultReasoning. It
+	// sits BELOW the global setting: it is a fallback shipped with the row,
+	// meant to yield to anything the user actually chose.
+	ReasoningFromModelCatalog
+	// ReasoningFromNothing is nothing set anywhere — the chain runs out.
+	ReasoningFromNothing
+)
+
+// ResolveReasoning composes the WHOLE reasoning chain and reports which layer
+// decided it:
+//
+//	--reasoning / session > models.json per-model > global config > CATALOG default > off
+//
+// Until this existed the chain was composed nowhere in production. The turn
+// path walked it in two halves that could not see each other — build.Resolve
+// handled the first three rungs, EffectiveReasoning the last two — and the only
+// thing that ever joined them was a helper inside a test. Every display surface
+// therefore re-derived it by hand from (global, model.DefaultReasoning), and
+// every one of them made the same mistake: with no way to tell an operator's
+// per-model value from a catalog default, they collapsed the two model rungs
+// into one and put it BELOW the global.
+//
+// What that costs the operator: they set `defaultReasoning` for a model in
+// models.json, and the dialog tells them the session will "follow the global
+// setting" — naming a value that is not deciding anything. The turn then runs
+// at their per-model level, so the surface and the behaviour disagree.
+//
+// 🪤 The two model rungs are the SAME FIELD (DefaultReasoning) on opposite
+// sides of the global, told apart only by DefaultReasoningSet. Reading the raw
+// field without the set-signal makes a global "low" unreachable on every k3
+// row (they carry a catalog default so the endpoint stops downgrading to K2).
+//
+// Precedence is decided on the RAW strings, before normalizing: a non-empty raw
+// level — including "off"/"none", which normalize to "" — is an explicit
+// choice, and must beat the rungs below it. The returned level IS normalized.
+func ResolveReasoning(session string, m Model, global string) (level string, from ReasoningSource) {
+	if session != "" {
+		return NormalizeReasoning(session), ReasoningFromSession
+	}
+	if m.DefaultReasoningSet && m.DefaultReasoning != "" {
+		return NormalizeReasoning(m.DefaultReasoning), ReasoningFromModelOperator
+	}
+	if global != "" {
+		return NormalizeReasoning(global), ReasoningFromGlobal
+	}
+	if m.DefaultReasoning != "" {
+		return NormalizeReasoning(m.DefaultReasoning), ReasoningFromModelCatalog
+	}
+	return "", ReasoningFromNothing
 }
 
 // ReasoningBudget returns terva's approximate token budget for thinking-capable
@@ -362,12 +443,49 @@ func LadderWireValue(rung string) string {
 type reasoningWire int
 
 const (
-	reasoningWireOpenAICompat reasoningWire = iota // chat-completions reasoning_effort
-	reasoningWireAnthropic                         // thinking budget, or adaptive effort
-	reasoningWireCodex                             // Responses-route effort enum
-	reasoningWireGemini                            // thinkingBudget or thinkingLevel
-	reasoningWireNone                              // sends no reasoning control
+	// reasoningWireUnknown is the zero value ON PURPOSE, and nothing may map to
+	// it. A client that forgets to declare its wire must read as undeclared, not
+	// as a real wire: when OpenAI-compat sat at iota 0, every silent omission
+	// became a confident wrong answer, which is how vercel-ai-gateway spent its
+	// whole life reporting an effort enum for an Anthropic thinking budget.
+	reasoningWireUnknown      reasoningWire = iota
+	reasoningWireOpenAICompat               // chat-completions reasoning_effort
+	reasoningWireAnthropic                  // thinking budget, or adaptive effort
+	reasoningWireCodex                      // Responses-route effort enum
+	reasoningWireGemini                     // thinkingBudget or thinkingLevel
+	reasoningWireNone                       // sends no reasoning control
 )
+
+// String names the wire for cross-package comparison. The build package holds
+// the provider registry and must be able to check a table row against the
+// client the registry actually constructs, without importing an unexported
+// enum — and provider cannot import build.
+func (w reasoningWire) String() string {
+	switch w {
+	case reasoningWireOpenAICompat:
+		return "openai-compat"
+	case reasoningWireAnthropic:
+		return "anthropic"
+	case reasoningWireCodex:
+		return "codex"
+	case reasoningWireGemini:
+		return "gemini"
+	case reasoningWireNone:
+		return "none"
+	default:
+		return "unknown"
+	}
+}
+
+// ClientReasoningWire names the reasoning wire the CLIENT actually speaks, as
+// declared by the concrete client's Capabilities(). Looks through wrappers.
+// Returns "unknown" for a client that has not declared one.
+func ClientReasoningWire(c Client) string { return ClientCaps(c).ReasoningWire.String() }
+
+// ProviderReasoningWire names the wire the provider TABLE believes the given
+// provider id speaks. The pair (ClientReasoningWire, ProviderReasoningWire)
+// must agree for every registered provider; see the build-side guard.
+func ProviderReasoningWire(provider string) string { return reasoningWireFamily(provider).String() }
 
 // reasoningWireWiring maps a provider id to the wire its client speaks. It is
 // keyed on the provider because that is what decides which client is built
@@ -393,10 +511,24 @@ var reasoningWireWiring = map[string]reasoningWire{
 	// table exists to prevent. moonshotai is the OpenAI-wire Kimi; they are
 	// different providers.
 	"kimi": reasoningWireAnthropic,
+	// 🪤 vercel-ai-gateway is the SAME trap as kimi, and it went unfixed
+	// through the kimi fix: NewVercelGatewayAnthropic is NewAnthropicCompat,
+	// so the client is an anthropicClient. Absent from this table it fell
+	// through to the OpenAI-compatible default, and /reasoning reported
+	// "effort: medium" for a request carrying
+	// thinking{enabled, budget_tokens:8192} — a field the Anthropic Messages
+	// body has no slot for, and a budget the dialog never mentioned. 109
+	// catalog rows carry this provider with Reasoning:true.
+	"vercel-ai-gateway": reasoningWireAnthropic,
 
-	"openai-codex":           reasoningWireCodex,
-	"openai-responses":       reasoningWireCodex,
-	"azure-openai-responses": reasoningWireCodex,
+	"openai-codex":     reasoningWireCodex,
+	"openai-responses": reasoningWireCodex,
+	// 🪤 azure-openai-responses is NOT the Codex wire, despite the name it
+	// shares with openai-responses (which genuinely is). NewAzureOpenAIResponses
+	// builds an openaiClient, and azure_openai.go's own header states the Chat
+	// Completions choice deliberately. Classified as Codex, the ladder offered
+	// "maximum" and "high" as two rungs whose requests were byte-identical.
+	// It takes the OpenAI-compat default; the row is deliberately absent.
 
 	"google":        reasoningWireGemini,
 	"google-vertex": reasoningWireGemini,

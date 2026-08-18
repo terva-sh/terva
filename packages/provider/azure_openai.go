@@ -108,6 +108,7 @@ func NewAzureOpenAI(apiKey, baseURL string) Client {
 		return &unimplementedClient{
 			name: "azure-openai-responses",
 			hint: "set AZURE_OPENAI_BASE_URL or AZURE_OPENAI_RESOURCE_NAME (or pass --base-url)",
+			wire: reasoningWireOpenAICompat,
 		}
 	}
 	apiVersion := os.Getenv("AZURE_OPENAI_API_VERSION")

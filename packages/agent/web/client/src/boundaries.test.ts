@@ -82,40 +82,49 @@ interface Violation {
   why: string
 }
 
+// whyForbidden is THE rule. One function, called both by the tree scan and by
+// the self-test below.
+//
+// The self-test used to re-implement this logic inline, under a comment reading
+// "Mirror violationsIn exactly" — so it verified its own copy of the rule and
+// would have kept passing while the real scan drifted underneath it. A guard
+// whose self-test exercises a duplicate is not a guarded guard, and this file
+// exists to enforce exactly the sort of structural claim that fails that way.
+//
+// rel is src-relative and slash-normalized. Returns null when the import is
+// allowed.
+export function whyForbidden(rel: string, spec: string, target: string | null): string | null {
+  const layer = layerOf(rel)
+  const inApp = NON_PANEL_APP.test(rel)
+  // apps/* are 'root' by layerOf and otherwise unconstrained, but they carry
+  // one rule of their own: no importing features/ (the panel's private code).
+  if (layer === 'root' && !inApp) return null
+  if (layer === 'platform' && /^@?preact(\/|$)/.test(spec)) return 'platform must stay Preact-free'
+  if (target === null) return null
+  const targetLayer = layerOf(target)
+  if (inApp) {
+    if (targetLayer === 'features') {
+      return "an app must not import features/ — it is the panel's own code; promote the module to ui/ or platform/ first"
+    }
+    return null
+  }
+  if (COMPOSITION_ROOTS.test(target)) return `${layer} must not import the composition root`
+  if (layer === 'platform' && (targetLayer === 'features' || targetLayer === 'ui')) {
+    return 'platform must not import features/ui'
+  }
+  if (layer === 'ui' && targetLayer === 'features') {
+    return 'ui must not import features (platform is the only allowed lower layer)'
+  }
+  return null
+}
+
 function violationsIn(files: string[]): Violation[] {
   const out: Violation[] = []
   for (const file of files) {
     const rel = relative(SRC, file).replaceAll('\\', '/')
-    const layer = layerOf(rel)
-    const inApp = NON_PANEL_APP.test(rel)
-    // apps/* are 'root' by layerOf and otherwise unconstrained, but they carry
-    // one rule of their own: no importing features/ (the panel's private code).
-    if (layer === 'root' && !inApp) continue
     for (const spec of importsOf(file)) {
-      if (layer === 'platform' && /^@?preact(\/|$)/.test(spec)) {
-        out.push({ file: rel, spec, why: 'platform must stay Preact-free' })
-        continue
-      }
-      const target = srcTarget(file, spec)
-      if (target === null) continue
-      const targetLayer = layerOf(target)
-      if (inApp) {
-        if (targetLayer === 'features') {
-          out.push({
-            file: rel,
-            spec,
-            why: 'an app must not import features/ — it is the panel\'s own code; promote the module to ui/ or platform/ first',
-          })
-        }
-        continue
-      }
-      if (COMPOSITION_ROOTS.test(target)) {
-        out.push({ file: rel, spec, why: `${layer} must not import the composition root` })
-      } else if (layer === 'platform' && (targetLayer === 'features' || targetLayer === 'ui')) {
-        out.push({ file: rel, spec, why: 'platform must not import features/ui' })
-      } else if (layer === 'ui' && targetLayer === 'features') {
-        out.push({ file: rel, spec, why: 'ui must not import features (platform is the only allowed lower layer)' })
-      }
+      const why = whyForbidden(rel, spec, srcTarget(file, spec))
+      if (why) out.push({ file: rel, spec, why })
     }
   }
   return out
@@ -168,24 +177,10 @@ describe('import boundaries (docs/web.md dependency direction)', () => {
       ['main.tsx', './features/board/SessionsBoard', false],
     ]
     for (const [fakeRel, spec, wantViolation] of cases) {
-      const target = srcTarget(resolve(SRC, fakeRel), spec)
-      const layer = layerOf(fakeRel)
-      const inApp = NON_PANEL_APP.test(fakeRel)
-      let violates = false
-      // Mirror violationsIn exactly: panel roots and non-features app siblings
-      // are unconstrained here.
-      if (layer === 'root' && !inApp) violates = false
-      else if (layer === 'platform' && /^@?preact(\/|$)/.test(spec)) violates = true
-      else if (target !== null) {
-        const targetLayer = layerOf(target)
-        if (inApp) violates = targetLayer === 'features'
-        else
-          violates =
-            COMPOSITION_ROOTS.test(target) ||
-            (layer === 'platform' && (targetLayer === 'features' || targetLayer === 'ui')) ||
-            (layer === 'ui' && targetLayer === 'features')
-      }
-      expect(violates, `${fakeRel} importing "${spec}"`).toBe(wantViolation)
+      // Drives the REAL predicate, not a copy of it. If whyForbidden changes,
+      // these cases change with it or fail — which is the whole point.
+      const why = whyForbidden(fakeRel, spec, srcTarget(resolve(SRC, fakeRel), spec))
+      expect(why !== null, `${fakeRel} importing "${spec}"`).toBe(wantViolation)
     }
   })
 })

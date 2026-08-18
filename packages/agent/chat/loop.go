@@ -399,6 +399,10 @@ func (l *Loop) runTurn(ctx context.Context, m Message) {
 	// The paired user sent a photo a text-only model will never see
 	// (the provider layer drops it rather than 400-bricking the
 	// session) — tell them now, not never.
+	//
+	// "The provider layer drops it" was true only on the chat-completions
+	// wire until provider.enforceImageInput gave every builder the same
+	// rule; see provider/image_input_gate_test.go for what holds it.
 	if len(m.Images) > 0 {
 		l.mu.Lock()
 		provName := l.Provider
@@ -588,10 +592,7 @@ func (l *Loop) sendStatus(ctx context.Context, m Message) {
 	l.mu.Unlock()
 
 	model := agent.Model
-	ctxMax := 0
-	if mdl, err := provider.FindModel(providerName, model); err == nil {
-		ctxMax = mdl.ContextWindow
-	}
+	ctxMax := provider.ContextGauge(providerName, model)
 	_ = l.Connector.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID, Text: FormatStatus(StatusSnapshot{
 		Provider:     providerName,
 		Model:        model,

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -88,6 +89,47 @@ type UserOverride struct {
 	ReasoningSet bool
 }
 
+// LegacyUserModelProviderAliases maps historical models.json provider keys onto
+// the provider they were renamed to. It exists only for files written before
+// the rename; a key here must be DEAD — a name the registry no longer knows.
+//
+// Two entries were not dead, and both silently repointed an operator's override
+// onto a different provider than the one they named:
+//
+//   - "openai-responses" mapped to "openai" while being a first-class registry
+//     id with its own client (NewOpenAIResponses), its own catalog rows, its own
+//     reasoning wire and its own label. A models.json block keyed
+//     "openai-responses" landed on plain "openai" with no warning — and because
+//     the WRITE side (UpsertUserModel/FindUserModel) does not normalize at all,
+//     /model showed the value as saved while the merged catalog carried it
+//     elsewhere. baseUrl and prices ride the same path, so editing a Responses
+//     model silently repointed and repriced the operator's chat provider.
+//
+//   - "moonshot" mapped to "kimi" while the registry makes it an alias of
+//     "moonshotai" — and reasoning.go's own comment states that "moonshotai is
+//     the OpenAI-wire Kimi; they are different providers". Two hand-maintained
+//     tables, opposite answers for one string.
+//
+// TestLegacyModelAliasesAreDead in packages/agent/build is what keeps this
+// honest; the check has to live there because provider cannot import the
+// registry without a cycle.
+var LegacyUserModelProviderAliases = map[string]string{
+	"anthropic-messages": "anthropic",
+	"moonshot-ai":        "kimi",
+	"kimi-code":          "kimi",
+	"deepseek-chat":      "deepseek",
+	"deepseek-ai":        "deepseek",
+}
+
+// NormalizeUserModelProviderKey resolves a models.json provider key through the
+// legacy-alias table, returning the key unchanged when it is not a legacy name.
+func NormalizeUserModelProviderKey(key string) string {
+	if to, ok := LegacyUserModelProviderAliases[key]; ok {
+		return to
+	}
+	return key
+}
+
 // LoadUserModelsWithWarnings reads a models.json file, returning the
 // models converted to the internal Model type plus
 // human-readable warnings about every recoverable issue it found in
@@ -108,23 +150,15 @@ func LoadUserModelsWithWarnings(path string) ([]UserOverride, []string) {
 	}
 
 	var out []UserOverride
-	for providerName, prov := range file.Providers {
+	seen := map[string]string{} // normalized provider/id -> the key that claimed it
+	for _, providerName := range userModelsLoadOrder(file) {
+		prov := file.Providers[providerName]
 		if providerName == "" {
 			warnings = append(warnings, "models.json: empty provider key skipped")
 			continue
 		}
 		// Normalize legacy transport aliases to their provider names.
-		normalized := providerName
-		switch providerName {
-		case "openai-responses":
-			normalized = "openai"
-		case "anthropic-messages":
-			normalized = "anthropic"
-		case "moonshot", "moonshot-ai", "kimi-code":
-			normalized = "kimi"
-		case "deepseek-chat", "deepseek-ai":
-			normalized = "deepseek"
-		}
+		normalized := NormalizeUserModelProviderKey(providerName)
 
 		for i, um := range prov.Models {
 			if um.ID == "" {
@@ -192,10 +226,40 @@ func LoadUserModelsWithWarnings(path string) ([]UserOverride, []string) {
 			if m.DisplayName == "" {
 				m.DisplayName = m.ID
 			}
+			key := normalized + "/" + um.ID
+			if prev, dup := seen[key]; dup {
+				warnings = append(warnings, fmt.Sprintf(
+					"models.json: %s is configured under both %q and %q; the %q block wins. "+
+						"Merge them — the editor only ever writes %q.",
+					key, prev, providerName, providerName, normalized))
+			}
+			seen[key] = providerName
 			out = append(out, UserOverride{Model: m, ReasoningSet: reasoningSet})
 		}
 	}
 	return out, warnings
+}
+
+// userModelsLoadOrder returns f's provider keys in the order their overrides
+// must be applied: legacy spellings first, canonical last, each group sorted.
+//
+// Map iteration used to decide it. A file holding both "kimi-code" and "kimi"
+// blocks for one model id therefore resolved to whichever Go happened to visit
+// last, so a field set in both flipped between runs of the same binary on the
+// same file. Canonical goes last because that is the only spelling the editor
+// writes, which makes "what the settings form saved" the one that wins.
+func userModelsLoadOrder(f UserModelsFile) []string {
+	var legacy, canonical []string
+	for key := range f.Providers {
+		if NormalizeUserModelProviderKey(key) != key {
+			legacy = append(legacy, key)
+			continue
+		}
+		canonical = append(canonical, key)
+	}
+	sort.Strings(legacy)
+	sort.Strings(canonical)
+	return append(legacy, canonical...)
 }
 
 // userCaps converts one models.json entry's capability spellings into

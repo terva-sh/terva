@@ -397,17 +397,6 @@ func (r *Resolved) MergeExtensionTools(mgr ExtensionToolSource) {
 	}
 }
 
-// MergeToolsForMode folds an extension/MCP source's tools into reg for
-// the given approval mode, registering read_only-annotated tools into
-// roSet, and reports whether anything was added. Built-in tools (and
-// already-merged names) win on conflict. In plan mode only tools that
-// declare themselves side-effect-free join — the rest stay invisible
-// so the model doesn't try them, with the confirm gate as backstop.
-//
-// Shared by the startup merge and the live approval-mode switch so the
-// two cannot drift; the live switch rebuilds reg from scratch and
-// re-merges, which is why this is registry-only (no system-prompt
-// coupling).
 // ExtToolReadOnly resolves an extension tool's read-only classification: a
 // declared authority wins (local-read and local-data are auto-allowable), so a
 // network-read tool is not mistaken for a local read even if it also set the
@@ -428,6 +417,17 @@ func ExtToolRegisters(info ExtensionToolInfo, mode core.ApprovalMode) bool {
 	return mode != core.ApprovalPlan || ExtToolReadOnly(info)
 }
 
+// MergeToolsForMode folds an extension/MCP source's tools into reg for
+// the given approval mode, registering read_only-annotated tools into
+// roSet, and reports whether anything was added. Built-in tools (and
+// already-merged names) win on conflict. In plan mode only tools that
+// declare themselves side-effect-free join — the rest stay invisible
+// so the model doesn't try them, with the confirm gate as backstop.
+//
+// Shared by the startup merge and the live approval-mode switch so the
+// two cannot drift; the live switch rebuilds reg from scratch and
+// re-merges, which is why this is registry-only (no system-prompt
+// coupling).
 func MergeToolsForMode(reg core.Registry, mode core.ApprovalMode, roSet *core.ReadOnlySet, mgr ExtensionToolSource) bool {
 	if mgr == nil || reg == nil {
 		return false
@@ -618,10 +618,12 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		if _, _, _, err := ResolveCredentialFull("anthropic", ""); err == nil {
 			provName = "anthropic"
 		}
-		// Reset the saved config so this doesn't keep happening.
+		// Reset the saved config so this doesn't keep happening. Only these two
+		// fields: cfg is this run's in-memory copy and writing all of it back
+		// would undo whatever another instance changed while we were resolving.
 		cfg.Provider = provName
 		cfg.Model = ""
-		_ = config.SaveConfig(cfg)
+		_ = config.MutateConfig(func(c *config.Config) { c.Provider, c.Model = provName, "" })
 	}
 
 	var (
@@ -828,7 +830,14 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 			model, fm.ID)
 		if args.Model == "" && cfg.Model == model {
 			cfg.Model = fm.ID
-			_ = config.SaveConfig(cfg)
+			// The guard re-runs inside the lock: another instance may have
+			// changed the model since, and repairing THEIR choice to ours is
+			// the lost update this whole path exists to avoid.
+			_ = config.MutateConfig(func(c *config.Config) {
+				if c.Model == model {
+					c.Model = fm.ID
+				}
+			})
 		}
 		resolvedModel = fm
 		model = fm.ID
@@ -1764,11 +1773,6 @@ func (r Resolved) NewAgentWithFreshTasks() (*core.Agent, *tasktool.Controller) {
 	return r.NewAgent(), ctrl
 }
 
-// BuildToolRegistry assembles the built-in tool set. visionCapable is
-// the active model's image-input verdict (model.Has(CapImageInput)); it
-// flows into ReadTool so reading an image file returns inline pixels for
-// a vision model but an actionable text result otherwise. Called on
-// every agent rebuild, so a /model switch re-derives the verdict.
 // HasBaseWorkspaceTools reports whether this session ships the built-in coding
 // tool registry (read/write/edit/bash/…). Chat and play (Experience != "") start
 // pure — chat is conversation, play acts only through a world extension's tools —
@@ -1787,6 +1791,11 @@ func HasBaseWorkspaceTools(args Args) bool {
 // and the slice is never mutated after startup.
 var extraBuiltinTools []func(cwd string, sandbox *tools.Sandbox) (string, core.Tool)
 
+// BuildToolRegistry assembles the built-in tool set. visionCapable is
+// the active model's image-input verdict (model.Has(CapImageInput)); it
+// flows into ReadTool so reading an image file returns inline pixels for
+// a vision model but an actionable text result otherwise. Called on
+// every agent rebuild, so a /model switch re-derives the verdict.
 func BuildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbox *tools.Sandbox, provName, authMethod string, visionCapable bool, imageReg *imagegen.Registry) core.Registry {
 	// chat and play both drop the built-in coding tools (read/write/edit/bash/
 	// …): chat is pure conversation, play acts only through a world extension's
@@ -1844,10 +1853,8 @@ func BuildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 	// read-only, so it alone survives the plan-mode prune below.
 	if worktree.GitAvailable(cwd) {
 		wc := &tools.WorktreeCore{
-			Manager:    worktree.NewManager(),
-			Root:       filepath.Join(config.TervaHome(), "worktrees"),
-			LegacyRoot: filepath.Join(config.TervaHome(), "ext-data", "git-worktree"),
-			CWD:        cwd,
+			Manager: worktree.NewManager(),
+			Base:    worktree.HostEnv(config.TervaHome(), cwd, ""),
 		}
 		all["worktree_list"] = &tools.WorktreeListTool{WorktreeCore: wc}
 		all["worktree_create"] = &tools.WorktreeCreateTool{WorktreeCore: wc}
@@ -1992,17 +1999,25 @@ func noCredentialError(prov string, picked bool) error {
 // config. Returns "" when the user chose none of them, which lets
 // provider.EffectiveReasoning fall through to the model's CATALOG default.
 //
-// Named rather than inlined because the ORDER is the policy, and the middle
-// rung is the one that is easy to get wrong in both directions: reading
-// m.DefaultReasoning here instead of gating on DefaultReasoningSet would put a
-// catalog default above the global setting and make a global "low" unreachable
-// on the k3 rows; dropping the rung entirely is the bug this fixes, where an
-// operator's per-model value became dead config the moment /settings was
-// touched. See provider.Model.DefaultReasoningSet.
+// The ORDER is the policy, and it is not spelled out here: provider.ResolveReasoning
+// owns it, and this asks that symbol which rung won rather than walking the
+// layers a second time. Two hand-written copies of a precedence chain is how
+// the display surfaces came to disagree with the turn they were describing.
+//
+// The mapping back to a RAW value is what this adds. The turn path needs the
+// unnormalized string plus a set-signal — "off" and "none" are explicit choices
+// that normalize to "" — so the rungs the builder owns return their own raw
+// input, and the two below it return "" so provider.EffectiveReasoning applies
+// the catalog default underneath. See provider.Model.DefaultReasoningSet.
 func resolveRawReasoning(explicit string, m provider.Model, global string) string {
-	perModel := ""
-	if m.DefaultReasoningSet {
-		perModel = m.DefaultReasoning
+	switch _, from := provider.ResolveReasoning(explicit, m, global); from {
+	case provider.ReasoningFromSession:
+		return explicit
+	case provider.ReasoningFromModelOperator:
+		return m.DefaultReasoning
+	case provider.ReasoningFromGlobal:
+		return global
 	}
-	return firstNonEmpty(explicit, perModel, global)
+	// Catalog default or nothing at all: unset, so the provider decides.
+	return ""
 }

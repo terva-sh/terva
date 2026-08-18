@@ -230,9 +230,21 @@ func NewVercelGatewayAnthropic(apiKey, baseURL string) Client {
 type unimplementedClient struct {
 	name string
 	hint string
+	// wire is the reasoning wire of the client this stub STANDS IN FOR. A stub
+	// is returned when ambient configuration is missing (no vertex project, no
+	// Azure resource name, no copilot token), which means whether a provider
+	// is checkable at all would otherwise depend on the machine running the
+	// test. Declaring the wire here keeps the build-side agreement guard total:
+	// google-vertex is a gemini-wire provider whether or not this developer has
+	// GOOGLE_CLOUD_PROJECT set.
+	wire reasoningWire
 }
 
 func (c *unimplementedClient) Name() string { return c.name }
+
+func (c *unimplementedClient) Capabilities() ClientCapabilities {
+	return ClientCapabilities{ReasoningWire: c.wire}
+}
 
 func (c *unimplementedClient) Stream(ctx context.Context, req Request) (<-chan Event, error) {
 	return nil, fmt.Errorf("provider %q not yet implemented: %s", c.name, c.hint)
@@ -307,7 +319,7 @@ func NewCloudflareWorkersAI(apiKey, baseURL string) Client {
 	}
 	resolved, err := resolveCloudflareURL(baseURL)
 	if err != nil {
-		return &unimplementedClient{name: "cloudflare-workers-ai", hint: err.Error()}
+		return &unimplementedClient{name: "cloudflare-workers-ai", hint: err.Error(), wire: reasoningWireOpenAICompat}
 	}
 	return newOpenAICompat("cloudflare-workers-ai", apiKey, resolved, "")
 }
@@ -322,7 +334,7 @@ func NewCloudflareAIGateway(apiKey, baseURL string) Client {
 	}
 	resolved, err := resolveCloudflareURL(baseURL)
 	if err != nil {
-		return &unimplementedClient{name: "cloudflare-ai-gateway", hint: err.Error()}
+		return &unimplementedClient{name: "cloudflare-ai-gateway", hint: err.Error(), wire: reasoningWireOpenAICompat}
 	}
 	return &openaiClient{
 		cred:    StaticCredential(apiKey),
@@ -347,7 +359,7 @@ func NewCloudflareAIGateway(apiKey, baseURL string) Client {
 // the short-lived token's value.
 func NewGithubCopilot(apiKey, _ string) Client {
 	if apiKey == "" {
-		return &unimplementedClient{name: "github-copilot", hint: "set COPILOT_GITHUB_TOKEN"}
+		return &unimplementedClient{name: "github-copilot", hint: "set COPILOT_GITHUB_TOKEN", wire: reasoningWireOpenAICompat}
 	}
 	return NewGithubCopilotClient(apiKey)
 }

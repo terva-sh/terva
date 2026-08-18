@@ -141,7 +141,7 @@ func codexUserAgent() string {
 // only carries a string (see buildRequest), so image bytes can't ride
 // along with the tool result and are delivered via the mirror instead.
 func (c *codexClient) Capabilities() ClientCapabilities {
-	return ClientCapabilities{MirrorsToolImages: true}
+	return ClientCapabilities{MirrorsToolImages: true, ReasoningWire: reasoningWireCodex}
 }
 
 // ---- Responses API wire types (subset needed for terva's surface) ----
@@ -283,7 +283,7 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 	if err != nil {
 		return nil, err
 	}
-	_ = m
+	req.Messages = enforceImageInput(m, req.Messages)
 
 	body := &codexRequest{
 		Model:             req.Model,

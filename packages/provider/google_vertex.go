@@ -333,7 +333,7 @@ func (t *vertexTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 func NewVertex(_ string, _ string) Client {
 	cfg, err := loadVertexConfig()
 	if err != nil {
-		return &unimplementedClient{name: "google-vertex", hint: err.Error()}
+		return &unimplementedClient{name: "google-vertex", hint: err.Error(), wire: reasoningWireGemini}
 	}
 	inner := &geminiClient{
 		apiKey:  "vertex-placeholder", // overwritten by transport

@@ -29,15 +29,30 @@ func TestEveryReasoningProviderIsClassified(t *testing.T) {
 	// dialog quietly describes a knob the provider does not accept. Before
 	// adding a provider here, check which client the registry actually builds
 	// for it, not what its name suggests.
+	//
+	// That warning was written and then not heeded. "vercel-ai-gateway" sat in
+	// this set while its registry entry built an anthropicClient, and
+	// "azure-openai" sat here while being an ALIAS rather than a registry id —
+	// dead weight that could never match anything. Both are gone now:
+	// vercel-ai-gateway is classified as Anthropic in reasoningWireWiring, and
+	// azure-openai-responses takes the OpenAI-compat default deliberately
+	// (NewAzureOpenAIResponses builds an openaiClient, despite the name).
+	//
+	// This census can only ever ask whether a provider was classified. Whether
+	// it was classified CORRECTLY is checked against the constructed client by
+	// TestReasoningWireTableMatchesTheRealClient in packages/agent/build, which
+	// has no escape set at all — provider cannot import build, so the strong
+	// guard has to live over there. Prefer fixing a failure there; an entry
+	// added here only silences the weaker question.
 	openAICompat := map[string]bool{
 		"openai": true, "openrouter": true, "opencode": true, "opencode-go": true,
 		"moonshotai": true, "moonshotai-cn": true, "deepseek": true,
 		"cerebras": true, "groq": true, "xai": true, "together": true,
 		"huggingface": true, "mistral": true, "zai": true, "xiaomi": true,
 		"xiaomi-token-plan-ams": true, "xiaomi-token-plan-cn": true,
-		"xiaomi-token-plan-sgp": true, "ollama": true, "vercel-ai-gateway": true,
+		"xiaomi-token-plan-sgp": true, "ollama": true,
 		"github-copilot": true, "cloudflare-ai-gateway": true,
-		"cloudflare-workers-ai": true, "azure-openai": true,
+		"cloudflare-workers-ai": true, "azure-openai-responses": true,
 	}
 
 	// 🪤 Catalog, NOT builtinCatalog. This scanned builtinCatalog, which is the

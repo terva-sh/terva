@@ -130,6 +130,51 @@ func TestInheritRowNamesWhatWouldActuallyApply(t *testing.T) {
 	}
 }
 
+// The case the row got wrong for every operator who used it.
+//
+// An operator's per-model models.json level sits ABOVE the global setting; a
+// catalog default sits below it. They are the same field, told apart only by
+// DefaultReasoningSet — which this row never consulted. So it tested `global`
+// first and reported "follow the global setting (now: medium)" to someone whose
+// turns were actually running at their per-model "low". The surface named a
+// value that was not deciding anything, while the level it omitted was.
+//
+// Both models below carry DefaultReasoning "low" and differ ONLY in the
+// set-signal, so a row that ignores it cannot tell them apart and one of these
+// two assertions must fail.
+func TestInheritRowPrefersAnOperatorsPerModelLevelOverTheGlobal(t *testing.T) {
+	operator := gpt56()
+	operator.DefaultReasoning = "low"
+	operator.DefaultReasoningSet = true
+	d := NewReasoningDialog()
+	d.Open("", "medium", operator)
+	row := rowContaining(t, d, "inherit")
+	t.Logf("operator-set inherit row: %s", row)
+	// 🪤 The level must be matched in its INTERPOLATED form. A bare
+	// Contains(row, "low") passes on the word "fol-low" in "follow the global
+	// setting" — which is exactly the wrong answer this test exists to catch,
+	// so the naive assertion passes on the bug. Found by mutation, not review.
+	if !strings.Contains(row, "(low)") {
+		t.Errorf("the inherit row does not name the operator's per-model level, which is what will apply:\n%q", row)
+	}
+	if strings.Contains(row, "medium") {
+		t.Errorf("the inherit row names the global, which this model's per-model level overrides:\n%q", row)
+	}
+
+	catalog := gpt56()
+	catalog.DefaultReasoning = "low" // same value, no set-signal
+	c := NewReasoningDialog()
+	c.Open("", "medium", catalog)
+	crow := rowContaining(t, c, "inherit")
+	t.Logf("catalog-default inherit row: %s", crow)
+	if !strings.Contains(crow, "(now: medium)") {
+		t.Errorf("a CATALOG default must yield to the global, and the row must say so:\n%q", crow)
+	}
+	if strings.Contains(crow, "(low)") {
+		t.Errorf("the row names the catalog default, which the global overrides:\n%q", crow)
+	}
+}
+
 // rowContaining returns the single rendered row holding want. Scoped to one row
 // rather than the whole pane: a Contains over everything matches chrome, and
 // cannot see a row that truncated.

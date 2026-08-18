@@ -66,6 +66,55 @@ func TestReasoningPrecedence(t *testing.T) {
 	}
 }
 
+// What a display surface shows must be what the turn actually runs at.
+//
+// 🪤 Read what this does and does NOT hold before trusting it. resolveRawReasoning
+// now delegates to provider.ResolveReasoning, so a change to the ORDER moves both
+// sides of this comparison together and passes here vacuously. TestReasoningPrecedence
+// above is the independent oracle for the order — it asserts against a hardcoded
+// table — and TestK3CatalogDefaultStillYieldsToAGlobalLevel pins it on a live row.
+// Both catch an order change; this does not, and is not the place to add one.
+//
+// What it does hold is the cross-package seam, which is still two independent
+// implementations: ResolveReasoning's bottom two sources (catalog default, then
+// nothing) have to land on the same level EffectiveReasoning produces from an
+// unset request. That is the join the turn makes at runtime and the one no
+// single test covered — the halves could not see each other, and the only thing
+// that ever composed them was `effective` in this file, a test helper.
+func TestTheCatalogFallbackAgreesAcrossThePackageSeam(t *testing.T) {
+	models := map[string]provider.Model{
+		"catalog-default": {DefaultReasoning: "high"},
+		"catalog-alias":   {DefaultReasoning: "hi"},
+		"operator-set":    {DefaultReasoning: "low", DefaultReasoningSet: true},
+		"set-but-empty":   {DefaultReasoningSet: true},
+		"plain":           {},
+	}
+
+	checked := 0
+	for name, m := range models {
+		// Nothing chosen at any layer: both walks must reach the catalog rung
+		// and agree on what it yields.
+		shown, from := provider.ResolveReasoning("", m, "")
+		turn := provider.EffectiveReasoning("", false, m)
+		if shown != turn {
+			t.Errorf("model=%s: a surface shows %q for the fall-through while the turn sends %q", name, shown, turn)
+		}
+		wantFrom := provider.ReasoningFromModelCatalog
+		if m.DefaultReasoning == "" {
+			wantFrom = provider.ReasoningFromNothing
+		} else if m.DefaultReasoningSet {
+			wantFrom = provider.ReasoningFromModelOperator
+		}
+		if from != wantFrom {
+			t.Errorf("model=%s: fall-through attributed to source %d, want %d", name, from, wantFrom)
+		}
+		checked++
+	}
+	if checked != len(models) {
+		t.Fatalf("checked %d models; the walk is broken", checked)
+	}
+}
+
 // The k3 rows are the live instance of the catalog-default rung, and their
 // comment promises the level yields to a user's global choice. Read off the
 // real catalog so a row edit that drops DefaultReasoning — or one that starts

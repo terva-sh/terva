@@ -1,8 +1,6 @@
 package dialogs
 
 import (
-	"strings"
-
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
@@ -46,15 +44,28 @@ func (d *ReasoningDialog) Open(override, global string, model provider.Model) {
 	d.cursor = 0
 	d.rows = d.rows[:0]
 
+	// What "inherit" actually resolves to, asked of the one symbol that knows
+	// the order rather than re-derived here.
+	//
+	// This row used to test `global` first and fall back to
+	// model.DefaultReasoning, which reads the right way round and is not: an
+	// OPERATOR's per-model models.json level sits ABOVE the global, and a
+	// CATALOG default sits below it. They are the same field, told apart only
+	// by DefaultReasoningSet, which this never consulted — so an operator who
+	// set a per-model level was told the session would "follow the global
+	// setting", naming a value that was not deciding anything while the turn
+	// ran at theirs.
 	inheritDetail := i18n.T("follow the global setting")
-	if g := strings.TrimSpace(global); g != "" {
-		inheritDetail = i18n.T("follow the global setting (now: %s)", g)
-	} else {
-		// With no global level the fall-through is the MODEL's own default, and
-		// saying "global" there would name something that isn't deciding.
-		if md := strings.TrimSpace(model.DefaultReasoning); md != "" {
-			inheritDetail = i18n.T("follow the model's default (%s)", md)
-		}
+	switch lv, from := provider.ResolveReasoning("", model, global); from {
+	case provider.ReasoningFromModelOperator:
+		inheritDetail = i18n.T("follow this model's configured level (%s)", lv)
+	case provider.ReasoningFromGlobal:
+		inheritDetail = i18n.T("follow the global setting (now: %s)", lv)
+	case provider.ReasoningFromModelCatalog:
+		// Not "global": with nothing set anywhere the fall-through is the
+		// model's own shipped default, and saying "global" would name
+		// something that isn't deciding.
+		inheritDetail = i18n.T("follow the model's default (%s)", lv)
 	}
 	d.rows = append(d.rows, reasoningRow{
 		level: "", label: i18n.T("inherit"), detail: inheritDetail,

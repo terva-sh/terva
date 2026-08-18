@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // This file is the write side of $TERVA_HOME/models.json. The read
@@ -52,7 +55,7 @@ func WriteUserModelsFile(path string, f UserModelsFile) error {
 			delete(f.Providers, name)
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := privfs.MkdirAll(filepath.Dir(path)); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(f, "", "  ")
@@ -67,19 +70,53 @@ func WriteUserModelsFile(path string, f UserModelsFile) error {
 	return os.Rename(tmp, path)
 }
 
+// userModelsProviderKeysFor returns every key in f that names the same provider
+// as providerKey once legacy aliases are resolved — the canonical spelling
+// first, then any legacy spelling in sorted order.
+//
+// The read door and the write door were keyed differently for the same model.
+// LoadUserModelsWithWarnings resolves "kimi-code" to "kimi" before building the
+// Model, so an operator's legacy-keyed override IS live and shows up in the
+// picker; these three functions indexed f.Providers by the raw key, and every
+// caller reaches them holding the CANONICAL provider off the merged catalog
+// (FindModel matches Model.Provider exactly, so a client cannot even name the
+// legacy spelling). The result was a settings form that reported no override
+// while one was in force, and a Reset that removed nothing and reported success.
+//
+// Sorted, and canonical first, so a file holding both spellings resolves the
+// same way on every run — Go map order otherwise decides which entry the editor
+// shows.
+func userModelsProviderKeysFor(f UserModelsFile, providerKey string) []string {
+	canonical := NormalizeUserModelProviderKey(providerKey)
+	var legacy []string
+	for key := range f.Providers {
+		if key == canonical || NormalizeUserModelProviderKey(key) != canonical {
+			continue
+		}
+		legacy = append(legacy, key)
+	}
+	sort.Strings(legacy)
+	return append([]string{canonical}, legacy...)
+}
+
 // FindUserModel returns the raw models.json entry for providerKey/id,
 // reporting whether one exists. The editor needs the RAW entry (not the
 // merged Model) to tell "explicitly overridden" apart from "inheriting
 // the catalog default" on a per-field basis. A missing file yields
 // (zero, false, nil).
+//
+// providerKey is the canonical provider; an entry filed under a legacy
+// spelling of it is found too, because the loader treats that entry as live.
 func FindUserModel(path, providerKey, id string) (UserModel, bool, error) {
 	f, err := ReadUserModelsFile(path)
 	if err != nil {
 		return UserModel{}, false, err
 	}
-	for _, um := range f.Providers[providerKey].Models {
-		if um.ID == id {
-			return um, true, nil
+	for _, key := range userModelsProviderKeysFor(f, providerKey) {
+		for _, um := range f.Providers[key].Models {
+			if um.ID == id {
+				return um, true, nil
+			}
 		}
 	}
 	return UserModel{}, false, nil
@@ -88,6 +125,11 @@ func FindUserModel(path, providerKey, id string) (UserModel, bool, error) {
 // UpsertUserModel inserts or replaces the entry for um.ID under
 // providerKey, preserving every other entry, then writes the file
 // atomically. Provider and id are required.
+//
+// The entry always lands under the CANONICAL provider key, and the same id is
+// dropped from every legacy-spelled block on the way. Without that fold, saving
+// against a legacy-keyed file leaves two entries for one model, which the
+// loader applies in map order — so any field set by both flips between runs.
 func UpsertUserModel(path, providerKey string, um UserModel) error {
 	if providerKey == "" || um.ID == "" {
 		return fmt.Errorf("usermodels: provider and model id are required")
@@ -96,7 +138,14 @@ func UpsertUserModel(path, providerKey string, um UserModel) error {
 	if err != nil {
 		return err
 	}
-	prov := f.Providers[providerKey]
+	keys := userModelsProviderKeysFor(f, providerKey)
+	canonical := keys[0]
+	for _, key := range keys[1:] {
+		if block, dropped := userProviderWithout(f.Providers[key], um.ID); dropped {
+			f.Providers[key] = block
+		}
+	}
+	prov := f.Providers[canonical]
 	replaced := false
 	for i := range prov.Models {
 		if prov.Models[i].ID == um.ID {
@@ -108,23 +157,13 @@ func UpsertUserModel(path, providerKey string, um UserModel) error {
 	if !replaced {
 		prov.Models = append(prov.Models, um)
 	}
-	f.Providers[providerKey] = prov
+	f.Providers[canonical] = prov
 	return WriteUserModelsFile(path, f)
 }
 
-// RemoveUserModel deletes the entry for id under providerKey and writes
-// the file atomically, reporting whether an entry was actually removed.
-// The provider block is dropped when its last model goes (via
-// WriteUserModelsFile's pruning), so a reset leaves no residue.
-func RemoveUserModel(path, providerKey, id string) (bool, error) {
-	f, err := ReadUserModelsFile(path)
-	if err != nil {
-		return false, err
-	}
-	prov, ok := f.Providers[providerKey]
-	if !ok {
-		return false, nil
-	}
+// userProviderWithout returns prov with any entry for id removed, and whether
+// one was there.
+func userProviderWithout(prov UserProvider, id string) (UserProvider, bool) {
 	kept := make([]UserModel, 0, len(prov.Models))
 	removed := false
 	for _, um := range prov.Models {
@@ -135,10 +174,41 @@ func RemoveUserModel(path, providerKey, id string) (bool, error) {
 		kept = append(kept, um)
 	}
 	if !removed {
-		return false, nil
+		return prov, false
 	}
 	prov.Models = kept
-	f.Providers[providerKey] = prov
+	return prov, true
+}
+
+// RemoveUserModel deletes the entry for id under providerKey and writes
+// the file atomically, reporting whether an entry was actually removed.
+// The provider block is dropped when its last model goes (via
+// WriteUserModelsFile's pruning), so a reset leaves no residue.
+//
+// Every spelling of the provider is cleared, not just the canonical one. This
+// is the Reset button: leaving a legacy-keyed entry behind would report success
+// and leave the override in force, which is exactly what it used to do.
+func RemoveUserModel(path, providerKey, id string) (bool, error) {
+	f, err := ReadUserModelsFile(path)
+	if err != nil {
+		return false, err
+	}
+	removed := false
+	for _, key := range userModelsProviderKeysFor(f, providerKey) {
+		prov, ok := f.Providers[key]
+		if !ok {
+			continue
+		}
+		block, dropped := userProviderWithout(prov, id)
+		if !dropped {
+			continue
+		}
+		f.Providers[key] = block
+		removed = true
+	}
+	if !removed {
+		return false, nil
+	}
 	if err := WriteUserModelsFile(path, f); err != nil {
 		return false, err
 	}

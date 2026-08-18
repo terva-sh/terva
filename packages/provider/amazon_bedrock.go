@@ -132,6 +132,7 @@ func NewBedrockClient(apiKey, baseURL string) Client {
 	return &unimplementedClient{
 		name: "amazon-bedrock",
 		hint: "no Bedrock credentials found (set AWS_BEARER_TOKEN_BEDROCK, AWS_ACCESS_KEY_ID+AWS_SECRET_ACCESS_KEY, or AWS_PROFILE)",
+		wire: reasoningWireNone,
 	}
 }
 
@@ -187,6 +188,15 @@ func readAWSCredentialsFile(profile string) (*bedrockSigV4Creds, error) {
 }
 
 func (c *bedrockClient) Name() string { return "amazon-bedrock" }
+
+// Capabilities. bedrock sends no reasoning control at all — buildRequest has no
+// thinking, budget or effort field anywhere — so the wire is None rather than
+// merely undeclared. Saying so explicitly is the point: with an undeclared
+// client reading as reasoningWireUnknown, silence would fail the build-side
+// agreement guard instead of quietly passing as somebody else's wire.
+func (c *bedrockClient) Capabilities() ClientCapabilities {
+	return ClientCapabilities{ReasoningWire: reasoningWireNone}
+}
 
 // ---- request building ----
 
@@ -279,19 +289,35 @@ func normalizeBedrockToolResults(msgs []Message) []Message {
 	return out
 }
 
+// bedrockStripGeoPrefix removes the region prefix (us./eu./apac./au./global.)
+// a Bedrock inference profile carries, leaving the id the catalog is keyed by.
+func bedrockStripGeoPrefix(modelID string) string {
+	for _, p := range bedrockGeoPrefixes {
+		if strings.HasPrefix(modelID, p+".") {
+			return modelID[len(p)+1:]
+		}
+	}
+	return modelID
+}
+
+// bedrockCatalogModel resolves the catalog entry behind a wire model id.
+//
+// An id nobody has catalogued yields the zero Model, which Has() reads as the
+// capability defaults — image-input true. That is the documented safe case:
+// silently dropping images for every unknown Bedrock model would be the worse
+// regression.
+func bedrockCatalogModel(modelID string) Model {
+	m, _ := FindModel("amazon-bedrock", bedrockStripGeoPrefix(modelID))
+	return m
+}
+
 // bedrockModelSupportsCaching reports whether the resolved model ID
 // supports explicit prompt caching via cachePoint markers on Bedrock.
 // We use PriceCacheWrite > 0 as a proxy: every Bedrock-hosted Claude
 // model with a write price in the catalog supports cachePoint markers.
 // Nova models use automatic caching and don't need explicit markers.
 func bedrockModelSupportsCaching(modelID string) bool {
-	// Strip geo prefix (us./eu./apac./au./global.) before catalog lookup.
-	for _, p := range bedrockGeoPrefixes {
-		if strings.HasPrefix(modelID, p+".") {
-			modelID = modelID[len(p)+1:]
-			break
-		}
-	}
+	modelID = bedrockStripGeoPrefix(modelID)
 	if m, err := FindModel("amazon-bedrock", modelID); err == nil {
 		return m.PriceCacheWrite > 0
 	}
@@ -325,6 +351,7 @@ func (c *bedrockClient) buildRequest(req Request) (*bedrockRequest, error) {
 	// check operates on the same ID used for FindModel.
 	resolvedModel := resolveBedrockInferenceProfileID(req.Model, c.region)
 	caching := bedrockModelSupportsCaching(resolvedModel)
+	req.Messages = enforceImageInput(bedrockCatalogModel(resolvedModel), req.Messages)
 
 	if req.System != "" {
 		sysBlock := map[string]interface{}{"text": req.System}

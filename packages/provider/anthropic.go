@@ -127,7 +127,7 @@ func (c *anthropicClient) Name() string {
 // the Stage "continue" interaction), so ContinuesAssistantPrefill is true.
 // MirrorsToolImages stays false — Anthropic carries images inside tool results.
 func (c *anthropicClient) Capabilities() ClientCapabilities {
-	return ClientCapabilities{ContinuesAssistantPrefill: true}
+	return ClientCapabilities{ContinuesAssistantPrefill: true, ReasoningWire: reasoningWireAnthropic}
 }
 
 // ---- wire types ----
@@ -271,6 +271,7 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 	if err != nil {
 		return nil, err
 	}
+	req.Messages = enforceImageInput(m, req.Messages)
 	maxTok := req.MaxTokens
 	if maxTok <= 0 {
 		maxTok = m.MaxOutput

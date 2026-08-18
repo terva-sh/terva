@@ -114,7 +114,7 @@ func (c *openaiClient) Name() string {
 // can see images is the separate per-model capability the loop checks
 // alongside this.
 func (c *openaiClient) Capabilities() ClientCapabilities {
-	return ClientCapabilities{MirrorsToolImages: true}
+	return ClientCapabilities{MirrorsToolImages: true, ReasoningWire: reasoningWireOpenAICompat}
 }
 
 // ---- wire types ----
@@ -267,6 +267,7 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 			MaxOutput:     8192,
 		}
 	}
+	req.Messages = enforceImageInput(m, req.Messages)
 	out := &oaiRequest{
 		Model:         req.Model,
 		Stream:        true,
@@ -348,16 +349,6 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 		out.Messages = append(out.Messages, oaiMessage{Role: "system", Content: req.System})
 	}
 
-	// Models without the image-input capability (a vision-less local
-	// GGUF, a server that 400s on multimodal parts) get every
-	// user/tool message forced to a plain string and image blocks
-	// silently dropped, so historical sessions with screenshots still
-	// replay instead of bricking every subsequent turn. Per-model via
-	// the capability tag (docs/plans/model-capabilities.md); this
-	// replaced a provider-wide `c.name == "deepseek"` check that had
-	// gone stale against the V4 catalog entries.
-	textOnly := !m.Has(CapImageInput)
-
 	req.Messages = RepairOrphanedToolResults(req.Messages)
 	// OpenAI proper tolerates a leading assistant turn (a card's seeded
 	// greeting) and same-role adjacency, but this builder also serves every
@@ -368,7 +359,7 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 	for _, msg := range req.Messages {
 		switch msg.Role {
 		case RoleUser:
-			content := buildOAIUserContent(msg.Content, textOnly)
+			content := buildOAIUserContent(msg.Content)
 			out.Messages = append(out.Messages, oaiMessage{Role: "user", Content: content})
 		case RoleAssistant:
 			am := oaiMessage{Role: "assistant"}
@@ -506,7 +497,16 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 	return out, nil
 }
 
-func buildOAIUserContent(blocks []Content, textOnly bool) interface{} {
+// buildOAIUserContent renders a user message as chat-completions content: a
+// plain string when there is nothing but text, the multimodal array otherwise.
+//
+// It used to take a textOnly flag and drop image blocks itself for a model
+// without CapImageInput. That was the tree's ONLY enforcement of the
+// capability, on one of five wires; the drop now happens once for all of them
+// in enforceImageInput, upstream in buildRequest, so by the time blocks arrive
+// here a vision-less model's images are already notes. Keeping the flag would
+// leave the rule written twice with nothing holding the two copies together.
+func buildOAIUserContent(blocks []Content) interface{} {
 	hasImage := false
 	for _, b := range blocks {
 		if _, ok := b.(ImageBlock); ok {
@@ -514,7 +514,7 @@ func buildOAIUserContent(blocks []Content, textOnly bool) interface{} {
 			break
 		}
 	}
-	if textOnly || !hasImage {
+	if !hasImage {
 		var sb strings.Builder
 		for _, b := range blocks {
 			if tb, ok := b.(TextBlock); ok {

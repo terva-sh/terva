@@ -102,11 +102,16 @@ func (i *Interactive) startTurnWithImages(parent context.Context, prompt string,
 	if !i.ready() {
 		return
 	}
-	// Surface a dropped-image note up front: the provider layer
-	// silently strips images for models without the image-input
-	// capability (better than 400-bricking the session), but silence
-	// here would leave the user wondering why the model never saw
-	// their screenshot.
+	// Surface a dropped-image note up front: the provider layer strips
+	// images for models without the image-input capability (better than
+	// 400-bricking the session), but silence here would leave the user
+	// wondering why the model never saw their screenshot.
+	//
+	// That claim held on one of five wires when this was written — the
+	// other four sent the images and billed for them. It is enforced now
+	// in provider.enforceImageInput, called by every builder and pinned
+	// by provider/image_input_gate_test.go, which is what makes this note
+	// true rather than aspirational.
 	if len(images) > 0 {
 		i.mu.Lock()
 		provName, modelID := i.cfg.Provider, i.cfg.Model

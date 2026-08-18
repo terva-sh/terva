@@ -103,7 +103,7 @@ func (c *geminiClient) Name() string { return "google" }
 // The mirror is therefore the one shape that works, which is exactly what this
 // capability turns on.
 func (c *geminiClient) Capabilities() ClientCapabilities {
-	return ClientCapabilities{MirrorsToolImages: true}
+	return ClientCapabilities{MirrorsToolImages: true, ReasoningWire: reasoningWireGemini}
 }
 
 // ---- wire types ----
@@ -207,6 +207,7 @@ func (c *geminiClient) buildRequest(req Request) (*gemRequest, string, error) {
 			Reasoning:     strings.Contains(req.Model, "2.5") || strings.Contains(req.Model, "3"),
 		}
 	}
+	req.Messages = enforceImageInput(m, req.Messages)
 
 	out := &gemRequest{}
 
@@ -236,20 +237,45 @@ func (c *geminiClient) buildRequest(req Request) (*gemRequest, string, error) {
 	}
 
 	// Generation config.
+	//
+	// Ordered deliberately: the thinking decision is made BEFORE the cap is
+	// written, because it changes the cap. An earlier version pointed
+	// gc.MaxOutputTokens at maxTok first and adjusted the variable afterwards,
+	// which worked only by aliasing — a reader could not see that the pointer and
+	// the later assignment were the same number.
 	maxTok := req.MaxTokens
 	if maxTok <= 0 {
 		maxTok = m.MaxOutput
+	}
+	eff := EffectiveReasoning(req.Reasoning, req.ReasoningSet, m)
+	var thinking *gemThinkingConfig
+	if eff != "" && m.Reasoning {
+		thinking = geminiThinkingConfig(m.ID, eff)
+	}
+	// Gemini charges thinking to the OUTPUT cap — the stream folds
+	// thoughtsTokenCount into OutputTokens — and terva cannot switch thinking off
+	// on a current model. So a caller's cap is not an answer budget the way it
+	// reads: whatever thinking costs is taken out of it first, and a tight cap is
+	// spent entirely on thoughts.
+	//
+	// The caller asked for maxTok tokens of ANSWER. Ask for that much on top of
+	// what thinking may cost, rather than making every caller in the tree
+	// discover this and pad its own request.
+	if reserve := geminiThinkingReserve(m, eff); reserve > 0 && maxTok > 0 {
+		want := reserve + maxTok
+		if m.MaxOutput > 0 && want > m.MaxOutput {
+			want = m.MaxOutput
+		}
+		if want > maxTok {
+			maxTok = want
+		}
 	}
 	gc := &gemGenerationConfig{Temperature: req.Temperature}
 	if maxTok > 0 {
 		gc.MaxOutputTokens = &maxTok
 	}
-	eff := EffectiveReasoning(req.Reasoning, req.ReasoningSet, m)
-	if eff != "" && m.Reasoning {
-		tc := geminiThinkingConfig(m.ID, eff)
-		if tc != nil {
-			gc.ThinkingConfig = tc
-		}
+	if thinking != nil {
+		gc.ThinkingConfig = thinking
 	}
 	out.GenerationConfig = gc
 
@@ -758,6 +784,53 @@ func geminiThinkingConfig(modelID, level string) *gemThinkingConfig {
 	}
 	return &gemThinkingConfig{IncludeThoughts: true, ThinkingBudget: &budget}
 }
+
+// geminiThinkingReserve is how much of the output cap a model may spend
+// thinking, so a caller's cap can be raised clear of it.
+//
+// It is a RESERVE, not a prediction. maxOutputTokens is a ceiling and unused
+// tokens are never billed, so reserving too much costs nothing while reserving
+// too little severs the answer.
+//
+// 🚨 Thinking CANNOT be turned off on a current Gemini model, so this applies
+// even when reasoning is explicitly off. Measured live against
+// gemini-flash-latest on 2026-08-16, one-line ask, cap 200:
+//
+//	no thinkingConfig     189-273 thought tokens, answer severed at MAX_TOKENS
+//	thinkingLevel LOW     156-193 thought tokens, severed more often than not
+//	thinkingLevel MINIMAL HTTP 400 "not supported for this model"
+//	thinkingLevel OFF     HTTP 400, not a member of the ThinkingLevel enum
+//	thinkingLevel NONE    HTTP 400, not a member of the ThinkingLevel enum
+//	thinkingBudget 0      ACCEPTED AND IGNORED — 194 thoughts, answer "Update the"
+//
+// The same ask at cap 800 finished cleanly every time. So the fix is headroom,
+// and the tempting one-line fix — "send thinkingBudget 0 when reasoning is
+// off" — is a no-op the API accepts without complaint. Do not re-add it as a
+// substitute for the reserve.
+func geminiThinkingReserve(m Model, eff string) int {
+	if !m.Reasoning {
+		// An image or non-thinking model spends nothing on thoughts, so a caller's
+		// cap means what it says.
+		return 0
+	}
+	if budget := ReasoningBudget(eff); budget > 0 {
+		// A level was asked for, so reserve what that level is worth. Slightly
+		// generous against the per-model clamps in geminiThinkingConfig, which is
+		// the safe direction for a ceiling.
+		return budget
+	}
+	// Reasoning is off and the model is going to think regardless. Reserve room
+	// for the depth it chooses on its own.
+	return geminiUnstoppableThoughtReserve
+}
+
+// geminiUnstoppableThoughtReserve covers a thinking-capable model's OWN choice
+// of depth, for the case terva asked for none and cannot be obeyed.
+//
+// Four times the deepest run measured on flash-latest (273), because the
+// observed spread was wide (156-273 on identical calls) and a Pro model thinks
+// harder than a Flash one. Costs nothing when unused.
+const geminiUnstoppableThoughtReserve = 1024
 
 // ---- streaming ----
 

@@ -2,7 +2,6 @@ package modes
 
 import (
 	"context"
-	"strings"
 
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
@@ -53,9 +52,19 @@ func (i *Interactive) applyReasoningSelection(level string) {
 	applied := i.sessionReasoning()
 	i.mu.Lock()
 	if applied == "" {
-		if g := strings.TrimSpace(i.cfg.Reasoning); g != "" {
-			i.statusOK = i18n.T("thinking: following the global setting (%s)", g)
-		} else {
+		// Same chain the turn will walk, from the one symbol that owns it.
+		// Testing the global first and falling back to the model's default
+		// puts an OPERATOR's per-model level below the global, which is the
+		// wrong way round — see provider.ResolveReasoning.
+		model, _ := provider.FindModel(i.cfg.Provider, i.cfg.Model)
+		switch lv, from := provider.ResolveReasoning("", model, i.cfg.Reasoning); from {
+		case provider.ReasoningFromModelOperator:
+			i.statusOK = i18n.T("thinking: following this model's configured level (%s)", lv)
+		case provider.ReasoningFromGlobal:
+			i.statusOK = i18n.T("thinking: following the global setting (%s)", lv)
+		case provider.ReasoningFromModelCatalog:
+			i.statusOK = i18n.T("thinking: following the model's default (%s)", lv)
+		default:
 			i.statusOK = i18n.T("thinking: following the model's default")
 		}
 	} else {
