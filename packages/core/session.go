@@ -1010,21 +1010,49 @@ func forEachJSONLLineBounded(r io.Reader, perLineMax, cumulativeMax int64, onOve
 	}
 }
 
-// ReadSessionMeta reads only a session file's meta row — the cheap
-// authorization primitive a caller uses BEFORE committing to a full scan (e.g.
-// session_inspect confirming a swarm child's project ownership before parsing
-// its payload). The loader writes meta as the first row, and a later UpdateModel
-// only rewrites provider/model (never cwd), so the first meta row's cwd is
-// authoritative; the scan stops there. Per-line and cumulative bounded so a
-// damaged/crafted first row can't force unbounded work. A missing meta returns
-// the zero value (empty cwd), which authorization treats as fail-closed.
-func ReadSessionMeta(path string) (SessionMeta, error) {
+// SessionCreation is what a session file's FIRST meta row can honestly answer:
+// the three facts fixed when the file was created and never rewritten
+// afterwards.
+//
+// It exists because the cheap read used to hand back a whole SessionMeta. Meta
+// rows are an append-only last-wins timeline and writeMetaLocked emits a copy of
+// the WHOLE struct on every change, so the opening row is not a header — it is
+// the session as it was before anything happened to it. Reading Model off it
+// reports the model the session was created with, Persona reports "" for every
+// session that chose one (SetCreationSpec writes the second row), and World
+// reports "" for every session that joined one. The type is the fix: a caller
+// cannot read a field that stops being true, because the field is not there.
+//
+// The three that survive do so because nothing mutates them. ImportSession and
+// BranchSession rewrite ID/CWD/Started, but they rewrite EVERY meta row in the
+// file they produce, so the invariant holds through both.
+// TestOnlyCreationFixedFieldsSurviveTheMetaTimeline enforces it against every
+// method that writes a meta row, so a field added here has to earn its place.
+type SessionCreation struct {
+	ID      string
+	CWD     string
+	Started time.Time
+}
+
+// ReadSessionCreation reads a session file's opening meta row — the cheap
+// primitive for a caller that needs a session's identity without committing to a
+// full scan, e.g. recovering the full UUID that the filename truncates to eight
+// characters.
+//
+// Per-line and cumulative bounded so a damaged or crafted first row cannot force
+// unbounded work. A file with no meta row returns the zero value rather than an
+// error, so a caller comparing against a known id fails closed.
+//
+// A caller that wants anything else — the model in play, the persona, the World,
+// the parent — wants the FOLDED meta and must scan the file, because every one
+// of those is stamped by a row written later. describeSessionMeta does that.
+func ReadSessionCreation(path string) (SessionCreation, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return SessionMeta{}, err
+		return SessionCreation{}, err
 	}
 	defer f.Close()
-	var meta SessionMeta
+	var created SessionCreation
 	werr := forEachJSONLLineBounded(f, jsonlPerLineCeiling, jsonlPerLineCeiling, nil, func(line []byte) error {
 		var head sessionLineHead
 		if err := json.Unmarshal(line, &head); err != nil {
@@ -1037,15 +1065,15 @@ func ReadSessionMeta(path string) (SessionMeta, error) {
 			Meta SessionMeta `json:"meta"`
 		}
 		if err := json.Unmarshal(line, &row); err == nil {
-			meta = row.Meta
-			return io.EOF // first meta row is authoritative for cwd; stop
+			created = SessionCreation{ID: row.Meta.ID, CWD: row.Meta.CWD, Started: row.Meta.Started}
+			return io.EOF // these three never change; there is nothing later to learn
 		}
 		return nil
 	})
 	if werr != nil && werr != io.EOF {
-		return SessionMeta{}, werr
+		return SessionCreation{}, werr
 	}
-	return meta, nil
+	return created, nil
 }
 
 // SessionUsage returns the most recent cumulative usage row stored in
@@ -1235,7 +1263,6 @@ func nonNegDelta(cur, prev int) int {
 	return cur - prev
 }
 
-// OpenSession opens an existing session for appending.
 // LoadStats records what reconstructing a session's transcript cost — the fold's
 // wall time plus how much revision machinery it replayed. Amends counts the
 // in-place transforms (replace/delete/retract/select/truncate) applied during the
@@ -1903,12 +1930,26 @@ func SessionsUsingCard(root, cardID string) []SessionSummary {
 }
 
 func describeSession(path string) SessionSummary {
+	s, _ := describeSessionMeta(path)
+	return s
+}
+
+// describeSessionMeta is describeSession plus the FOLDED meta — the last-wins
+// result of the same pass, for a caller that needs a meta field the summary does
+// not carry.
+//
+// It exists so that caller does not open the file a second time to read the
+// FIRST meta row, which is what /session tree did: it took Parent from the
+// opening row, so a session whose lineage was stamped after creation
+// (Session.SetParent, the next-scene path) rendered as a parentless root. One
+// pass, and the answer is the one the loader would give.
+func describeSessionMeta(path string) (SessionSummary, SessionMeta) {
 	f, err := os.Open(path)
 	if err != nil {
-		return SessionSummary{Path: path}
+		return SessionSummary{Path: path}, SessionMeta{}
 	}
 	defer f.Close()
-	return describeSessionFrom(path, f)
+	return describeSessionFromMeta(path, f)
 }
 
 // describeSessionFrom summarises a transcript from an arbitrary reader.
@@ -1917,7 +1958,16 @@ func describeSession(path string) SessionSummary {
 // a gzip reader — produces the same summary as a live one, rather than the
 // archive browser growing a second, drifting description of what a session is.
 func describeSessionFrom(path string, r io.Reader) SessionSummary {
+	s, _ := describeSessionFromMeta(path, r)
+	return s
+}
+
+// describeSessionFromMeta is describeSessionFrom's body, also returning the
+// folded meta. See describeSessionMeta for why the meta comes back from this
+// pass rather than from a second read of the opening row.
+func describeSessionFromMeta(path string, r io.Reader) (SessionSummary, SessionMeta) {
 	s := SessionSummary{Path: path}
+	var meta SessionMeta
 	// See replaySessionWith: a rename outranks a later meta row's stale Title.
 	renamed := false
 	_ = forEachJSONLLine(r, func(line []byte) error {
@@ -1931,6 +1981,9 @@ func describeSessionFrom(path string, r io.Reader) SessionSummary {
 				Meta SessionMeta `json:"meta"`
 			}
 			if err := json.Unmarshal(line, &row); err == nil {
+				// Last row wins, matching the loader — see the Experience block
+				// below and replaySessionWith.
+				meta = row.Meta
 				s.Started = row.Meta.Started
 				s.Model = row.Meta.Model
 				s.Provider = row.Meta.Provider
@@ -1982,7 +2035,7 @@ func describeSessionFrom(path string, r io.Reader) SessionSummary {
 		}
 		return nil
 	})
-	return s
+	return s, meta
 }
 
 func firstUserText(line []byte) string {

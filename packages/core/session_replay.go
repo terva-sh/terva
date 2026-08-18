@@ -201,10 +201,27 @@ func StreamReplayRows(ctx context.Context, path string, maxBytes int64, fn func(
 			var urow struct {
 				Usage      provider.Usage `json:"usage"`
 				Cumulative provider.Usage `json:"cumulative"`
-				At         *time.Time     `json:"at"`
+				// Delegated marks a SUB-AGENT's spend booked against this
+				// session. It is not optional detail: this struct omitted it
+				// while its twin ReadReplayRows decoded it, and session_inspect
+				// — the only production reader of ReplayRow.Delegated — reads
+				// through THIS decoder. So `if r.Delegated` had never once been
+				// true in production, and a sub-agent's 250k cold prompt was
+				// counted as one of this session's own turns. The cache-hit
+				// rate, which the tool's own text calls "the single most
+				// actionable number here", was computed over the child's
+				// prompts — inverting the exact diagnosis the field was added
+				// to make possible.
+				Delegated bool       `json:"delegated"`
+				At        *time.Time `json:"at"`
 			}
 			if err := json.Unmarshal(line, &urow); err == nil {
-				out := ReplayRow{Kind: ReplayRowUsage, Usage: urow.Usage, Cumulative: urow.Cumulative}
+				out := ReplayRow{
+					Kind:       ReplayRowUsage,
+					Usage:      urow.Usage,
+					Cumulative: urow.Cumulative,
+					Delegated:  urow.Delegated,
+				}
 				if urow.At != nil {
 					out.At = *urow.At
 				}

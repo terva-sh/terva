@@ -57,17 +57,16 @@ func TestSessionsUsingPersonaSpansEveryProject(t *testing.T) {
 }
 
 // TestSessionsUsingPersonaReadsPastTheFirstMetaRow: SetCreationSpec writes the
-// SECOND meta row, so a reader that stops at the first — the cheap
-// ReadSessionMeta, which is authoritative for cwd and nothing else — reports
-// every session as having no persona and the count is always zero.
+// SECOND meta row, so a reader that stops at the first reports every session as
+// having no persona and the count is always zero. The cheap read is
+// ReadSessionCreation, which no longer offers a Persona to be wrong about; the
+// premise is checked here against the raw row instead.
 func TestSessionsUsingPersonaReadsPastTheFirstMetaRow(t *testing.T) {
 	root := testsupport.TempDir(t)
 	cwd := testsupport.TempDir(t)
 	path := sessionWithPersona(t, root, cwd, "kartoittaja-c")
 
-	if first, err := ReadSessionMeta(path); err != nil {
-		t.Fatalf("ReadSessionMeta: %v", err)
-	} else if first.Persona != "" {
+	if first := metaRowsOf(t, path)[0]; first.Persona != "" {
 		t.Fatal("the first meta row now carries the persona; this test's premise needs rechecking")
 	}
 	if got := SessionsUsingPersona(root, "kartoittaja-c"); len(got) != 1 {

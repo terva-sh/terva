@@ -284,6 +284,8 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 		return nil, err
 	}
 	req.Messages = enforceImageInput(m, req.Messages)
+	// Captured before the message loop, whose `c` shadows the receiver.
+	thisProvider := c.Name()
 
 	body := &codexRequest{
 		Model:             req.Model,
@@ -394,10 +396,22 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 			for _, c := range msg.Content {
 				switch v := c.(type) {
 				case CompactionBlock:
-					// Replayed verbatim. The blob is the backend's own
-					// encoding of the turns it compacted away, so a
-					// re-serialization that "tidied" it would destroy the
-					// only copy of that context.
+					// Replayed verbatim, and only when this backend issued it.
+					// The blob is the backend's own encoding of the turns it
+					// compacted away, so a re-serialization that "tidied" it
+					// would destroy the only copy of that context.
+					//
+					// The provider check is not hypothetical bookkeeping: this
+					// arm accepted ANY compaction block, so a blob from a second
+					// server-side-compacting provider would have been sent as an
+					// OpenAI compaction_summary carrying another vendor's opaque
+					// bytes. core.replaceForeignCompactions catches this before
+					// the request is built, but it is not the only caller that
+					// reaches a builder — compaction and the sidechat surface
+					// build their own — so the wire decides for itself.
+					if v.Provider != "" && v.Provider != thisProvider {
+						continue
+					}
 					body.Input = append(body.Input, codexCompactionItem{
 						Type:             "compaction_summary",
 						ID:               v.ID,

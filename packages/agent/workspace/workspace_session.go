@@ -132,13 +132,6 @@ type wsSession struct {
 	// and the common case unchanged. Set in buildSession, then immutable.
 	reviseBase int
 	reviseHead bool
-	// reviseInexact is build.ResumeWindow.Inexact: the resume repair removed a
-	// message from inside the window, so reviseBase does not describe the
-	// mapping. Every index translation below refuses in that state — a refused
-	// edit is visible, a misplaced one silently rewrites a message the user
-	// never touched. Zero value false, so an untrimmed or hand-built session is
-	// the identity mapping and revisable, which is what it is.
-	reviseInexact bool
 
 	paneMu    sync.Mutex           // guards extPanels (touched from ext driver goroutines)
 	extPanels map[string]*webPanel // surface id → open extension panel
@@ -168,7 +161,7 @@ type wsSession struct {
 // and event fan-out. msgs is the resumed transcript (nil for a fresh session);
 // reviseBase/reviseHead re-anchor its indices to the on-disk transcript when a
 // resume trimmed it (both zero for fresh/untrimmed — see wsSession.reviseBase).
-func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.Message, win build.ResumeWindow) (*wsSession, error) {
+func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.Message, reviseBase int, reviseHead bool) (*wsSession, error) {
 	args := w.args
 	if sess.Meta.Provider != "" {
 		args.Provider = sess.Meta.Provider
@@ -238,9 +231,8 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 		permReq:        map[string]ctrlproto.PermissionRequest{},
 		askReq:         map[string]ctrlproto.AskRequest{},
 		extPanels:      map[string]*webPanel{},
-		reviseBase:     win.Base,
-		reviseHead:     win.Head,
-		reviseInexact:  win.Inexact,
+		reviseBase:     reviseBase,
+		reviseHead:     reviseHead,
 	}
 
 	pol, warns := permissions.BuildPolicy(args.PermInputs())
@@ -433,8 +425,7 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	// subset, so re-Discover here for the full set.
 	if !args.NoLore {
 		if lcfg, _ := config.LoadConfig(); lcfg.Lore == nil || *lcfg.Lore {
-			s.loreEntries, _, _ = lore.Discover(config.TervaHome(), r.CWD,
-				lore.Gate{TrustProject: r.Trusted, Disabled: r.DisableExtensions})
+			s.loreEntries, _, _ = lore.Discover(config.TervaHome(), r.CWD, r.Trusted)
 		}
 	}
 
@@ -884,6 +875,10 @@ func (s *wsSession) promptBlocks(text string, imgs []provider.ImageBlock, extras
 	return nil
 }
 
+// beginTurn claims the single turn slot and returns the turn context, or ErrBusy
+// if a turn is already running. The context is derived from the workspace (not a
+// client connection), so a client disconnecting mid-turn does not abort the run
+// other clients are watching. The caller runs the turn with launchTurn.
 // awaitExtensions blocks until this session's background extension start has
 // finished and its tools have been merged into the agent, or ctx is done. A
 // session built without the async start (a bare test fixture) returns at once.
@@ -901,10 +896,6 @@ func (s *wsSession) awaitExtensions(ctx context.Context) {
 	}
 }
 
-// beginTurn claims the single turn slot and returns the turn context, or ErrBusy
-// if a turn is already running. The context is derived from the workspace (not a
-// client connection), so a client disconnecting mid-turn does not abort the run
-// other clients are watching. The caller runs the turn with launchTurn.
 func (s *wsSession) beginTurn() (context.Context, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1176,6 +1167,23 @@ func lastResponseStart(msgs []provider.Message) int {
 	return 0
 }
 
+// reviseBaseFor computes the re-anchoring offset for a resumed transcript that a
+// window trim shortened. full is the untrimmed effective transcript OpenSession
+// reconstructed; trimmed is what TrimMessagesForResume kept in memory. base is the
+// count of leading effective messages the trim dropped — add it to an in-memory
+// index to get the on-disk one. head is true when the trim prepended the
+// compaction summary as trimmed[0]: that row maps to on-disk index 0 (not base)
+// and is not a revisable message. base 0 (an untrimmed session) makes both the
+// zero value, so diskIndex is the identity and nothing downstream shifts.
+func reviseBaseFor(full, trimmed []provider.Message) (base int, head bool) {
+	base = len(full) - len(trimmed)
+	if base <= 0 {
+		return 0, false
+	}
+	head = len(trimmed) > 0 && trimmed[0].Meta["compaction"] == "true"
+	return base, head
+}
+
 // diskIndex maps an in-memory transcript index to the on-disk effective-transcript
 // index an amend must be persisted against. A resume trims the in-memory transcript
 // to a recent window while the file keeps the full history, so a revise verb that
@@ -1186,27 +1194,10 @@ func lastResponseStart(msgs []provider.Message) int {
 // which is not a revisable message. Identity when reviseBase is 0, so a session that
 // was never trimmed is unaffected.
 func (s *wsSession) diskIndex(i int) (int, bool) {
-	if s.reviseInexact {
-		return 0, false
-	}
 	if s.reviseHead && i == 0 {
 		return 0, false
 	}
 	return i + s.reviseBase, true
-}
-
-// memIndex is diskIndex's inverse: an on-disk index expressed in the live
-// agent's space. ok is false when the position sits before the window, or when
-// the mapping is not exact.
-func (s *wsSession) memIndex(disk int) (int, bool) {
-	if s.reviseInexact {
-		return 0, false
-	}
-	i := disk - s.reviseBase
-	if i < 0 {
-		return 0, false
-	}
-	return i, true
 }
 
 // endTurn atomically closes out a finished turn: it releases the busy slot and
@@ -1376,7 +1367,7 @@ func (s *wsSession) notifyPromptRebuilt(toolsChanged, systemChanged bool, reason
 		scope = "system"
 	}
 	u := s.agent.LastTurnUsage()
-	tokens := u.PromptTokens()
+	tokens := u.InputTokens + u.CacheReadTokens + u.CacheWriteTokens
 	if tokens == 0 && isAutomaticRebuild(reason) {
 		s.diag(fmt.Sprintf("prompt rebuilt (%s, scope=%s) before first turn — no cache to invalidate", reason, scope))
 		return
@@ -1464,17 +1455,6 @@ func (s *wsSession) clear() error {
 		return ctrlproto.ErrBusy
 	}
 	s.agent.SetMessages(nil)
-	// Re-baseline the context gauge, which SetMessages does not touch. Compaction
-	// gets this for free (installCompaction seeds the post-compaction estimate);
-	// a clear had nothing equivalent, so LastTurnUsage kept describing the
-	// transcript that was just thrown away. Every reader derived from it —
-	// info().ContextTokens, the status-bar gauge, the usage pane — reported a
-	// full context for an empty conversation until the next turn landed usage.
-	//
-	// Zero rather than an estimate, because unlike a compaction there is no
-	// residue to estimate: the transcript is empty. The system prompt and tools
-	// still cost something on the next request, and that request will say so.
-	s.agent.SeedLastTurnUsage(provider.Usage{})
 	s.dropAllVariants()
 	// A clear reuses the compaction row as a floor marker. No summarizer ran,
 	// so it cost nothing — zero usage, not the previous compaction's.
@@ -1916,8 +1896,8 @@ func (s *wsSession) seedTail() {
 	// SessionTail reports on-disk indices; the live agent may be a resume-trimmed
 	// window of the transcript, so re-anchor to in-memory space. A span that begins
 	// before the window (start < 0 after the shift) is not swipeable here.
-	start, ok := s.memIndex(start)
-	if !ok {
+	start -= s.reviseBase
+	if start < 0 {
 		return
 	}
 	msgs := s.agent.Messages()
@@ -1948,8 +1928,8 @@ func (s *wsSession) seedMsgVars() {
 		// SessionVariants reports on-disk indices; re-anchor to the live agent's
 		// (possibly resume-trimmed) space. A position before the window is dropped —
 		// its message is not in the in-memory transcript to swipe.
-		idx, ok := s.memIndex(v.Index)
-		if !ok {
+		idx := v.Index - s.reviseBase
+		if idx < 0 {
 			continue
 		}
 		if s.msgVars == nil {
@@ -2518,10 +2498,10 @@ func (s *wsSession) info() ctrlproto.SessionInfo {
 		info.SupportsContinue = s.agent.ContinuesAssistantPrefill()
 		info.Usage = toCtrlUsage(s.agent.Cost())
 		last := s.agent.LastTurnUsage()
-		info.ContextTokens = last.PromptTokens()
-		// The EFFECTIVE window rides the wire, so app.tsx's ctxTok/ctxWin and the
-		// session card gauge read against the number auto-compaction fires on.
-		info.ContextWindow = provider.ContextGauge(prov, model)
+		info.ContextTokens = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
+		if mdl, err := provider.FindModel(prov, model); err == nil {
+			info.ContextWindow = mdl.ContextWindow
+		}
 	}
 	return info
 }

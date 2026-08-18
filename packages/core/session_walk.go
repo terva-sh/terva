@@ -76,6 +76,57 @@ type msgVarState struct {
 	active int
 }
 
+// ShiftVariantKeysOnDelete realigns an index-keyed map after the message at
+// deleted has been removed from the transcript: the entry AT that index goes
+// with the message, and every entry above it moves down one.
+//
+// Exported and generic because the rule has to hold in two places that cannot
+// share a type. The file-replay half (walkSession, below) keeps
+// map[int]*msgVarState; the LIVE half (workspace.wsSession.msgVars) keeps
+// map[int]*msgVarLive. Only the replay half implemented the shift.
+//
+// The divergence was reachable and destructive. deleteMessage removed a message
+// and invalidated the tail span but never touched msgVars, so the daemon went on
+// advertising a VariantMark at an index that now named a DIFFERENT message.
+// Reproduced through the real verbs: with [u0,a0,u1,a1], editing index 1 and
+// then deleting index 0 left the live mark on index 1 while the file's variants
+// were on index 0 — and a swipe at the advertised index was ACCEPTED, replacing
+// the user message u1 with an unrelated assistant take. The in-memory corruption
+// then became permanent the moment the confused user revised anything.
+//
+// One function, so the two halves cannot answer differently again.
+func ShiftVariantKeysOnDelete[T any](m map[int]T, deleted int) map[int]T {
+	if len(m) == 0 {
+		return m
+	}
+	shifted := make(map[int]T, len(m))
+	for idx, v := range m {
+		if idx == deleted {
+			continue // gone with the deleted message
+		}
+		if idx > deleted {
+			idx--
+		}
+		shifted[idx] = v
+	}
+	return shifted
+}
+
+// DropVariantKeysFrom removes every entry at or above index, for a truncation.
+// The transcript above index no longer exists, so a variant keyed there names
+// nothing.
+func DropVariantKeysFrom[T any](m map[int]T, index int) map[int]T {
+	if len(m) == 0 {
+		return m
+	}
+	for idx := range m {
+		if idx >= index {
+			delete(m, idx)
+		}
+	}
+	return m
+}
+
 // walkSession replays a session JSONL from r in file order and returns the
 // effective transcript a resume would reconstruct: message rows append, a
 // compaction checkpoint replaces everything before it. Message hydration, the
@@ -273,23 +324,47 @@ func walkSession(r io.Reader, rep *loadReport, h sessionWalkHooks) ([]provider.M
 				if a.Index >= 0 && a.Index < len(effective) {
 					effective = append(effective[:a.Index], effective[a.Index+1:]...)
 					// Keep message-variant indices aligned with the shifted transcript.
-					if len(msgVars) > 0 {
-						shifted := make(map[int]*msgVarState, len(msgVars))
-						for idx, mv := range msgVars {
-							if idx == a.Index {
-								continue // gone with the deleted message
-							}
-							if idx > a.Index {
-								idx--
-							}
-							shifted[idx] = mv
-						}
-						msgVars = shifted
+					msgVars = ShiftVariantKeysOnDelete(msgVars, a.Index)
+					// And the TAIL span, for the same reason and by the same
+					// arithmetic. This branch rebased msgVars and left tailStart
+					// alone, so a delete below a live swipe span left the span
+					// pointing one message too high — permanently, since the fold
+					// re-derives it from the file on every load.
+					//
+					// The consequence is a corrupted transcript, not a bad offset.
+					// sealActiveTake seals effective[tailStart:] into the active
+					// take; with tailStart one too high that span is short (or
+					// empty), so a later AmendSelect splices at the stale index and
+					// APPENDS the swiped-away take instead of replacing the live
+					// one — the reload comes back with two consecutive assistant
+					// turns, on disk.
+					//
+					// seedTail's length check cannot catch it: it compares
+					// len(takes[active]) against len(msgs)-start, and takes[active]
+					// was sealed from effective[tailStart:] at the SAME stale
+					// start, so both sides shift together and always agree.
+					switch {
+					case tailStart < 0:
+						// no span tracked
+					case a.Index >= tailStart:
+						// The delete lands INSIDE the span. Its takes describe a
+						// message sequence that no longer exists, and nothing can
+						// re-derive them; dropping the span loses the swipe, which
+						// is the only honest outcome.
+						resetTail()
+					default:
+						tailStart--
 					}
 				}
 			case AmendTruncate:
 				if a.Index >= 0 && a.Index <= len(effective) {
 					effective = effective[:a.Index]
+					// A truncation at or below the span start removes the span
+					// itself; leaving tailStart set would seal an empty take and
+					// advertise a swipe over messages that are gone.
+					if tailStart >= 0 && a.Index <= tailStart {
+						resetTail()
+					}
 					for idx := range msgVars {
 						if idx >= a.Index {
 							delete(msgVars, idx) // truncated away

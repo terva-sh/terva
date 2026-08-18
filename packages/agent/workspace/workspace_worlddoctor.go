@@ -221,10 +221,11 @@ func (w *Workspace) bookSessionlessUsage(verb ctrlproto.Method, subject, model s
 //
 // Membership comes from the workspace's own session listing rather than from the
 // file's first meta row. A session's World is a LAST-WINS row appended when it
-// is stamped (SetWorld), so core.ReadSessionMeta — which reads only the opening
-// meta — reports "" for every session that joined a World after creation, and
-// the doctor would have silently read no scenes at all. The listing folds those
-// rows, and is the same source the Library's own member count comes from.
+// is stamped (SetWorld), so a reader of the opening meta reports "" for every
+// session that joined a World after creation, and the doctor would have silently
+// read no scenes at all. The listing folds those rows, and is the same source the
+// Library's own member count comes from. The cheap read is now
+// core.ReadSessionCreation, which does not offer a World to be wrong about.
 //
 // A stray id is IGNORED rather than refused: the picker offers only members, so
 // one arriving here is a stale client rather than a request to honour, and

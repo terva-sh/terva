@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
@@ -119,6 +120,14 @@ type session struct {
 	// activeCancel cancels the in-flight turn (Phase 2 session/cancel seam).
 	cancelMu     sync.Mutex
 	activeCancel context.CancelFunc
+	// turnDone is non-nil while a turn is in flight and is closed when it
+	// unwinds, so a supersede can WAIT for the turn's transcript rows instead
+	// of closing the file underneath them. See setCancel.
+	turnDone chan struct{}
+	// superseded marks a binding that has been replaced under its id. A turn
+	// must not start on one: its subprocesses and durable session are being
+	// torn down. See markSuperseded.
+	superseded bool
 
 	// perm carries the live permission state for this session: the
 	// in-flight turn's context (so a permission round-trip unblocks on
@@ -186,9 +195,22 @@ func (s *session) currentMode() string {
 }
 
 // setCancel / takeCancel guard the active turn's cancel func (Phase 2 seam).
+//
+// setCancel also arms and disarms turnDone, which is how anything outside the
+// turn learns one is running. activeCancel alone cannot answer that: session/cancel
+// TAKES the func and leaves nil behind while the turn is still unwinding, so a
+// reader would see "idle" during exactly the window that matters.
 func (s *session) setCancel(c context.CancelFunc) {
 	s.cancelMu.Lock()
 	s.activeCancel = c
+	if c != nil {
+		if s.turnDone == nil {
+			s.turnDone = make(chan struct{})
+		}
+	} else if s.turnDone != nil {
+		close(s.turnDone)
+		s.turnDone = nil
+	}
 	s.cancelMu.Unlock()
 }
 
@@ -198,6 +220,70 @@ func (s *session) takeCancel() context.CancelFunc {
 	c := s.activeCancel
 	s.activeCancel = nil
 	return c
+}
+
+// rebindGrace bounds how long a supersede waits for a cancelled turn to unwind.
+//
+// Generous because the wait exists to let the turn FLUSH: a cancelled turn is
+// finishing a write, not thinking. Short enough that a wedged turn cannot hang
+// session/load indefinitely — the editor gets its rebind either way, and the
+// timeout path is reported rather than silently taken.
+//
+// A var only so a test can exercise the TIMEOUT branch without spending the
+// real grace period in every CI run. The production value is asserted by
+// TestRebindGraceIsGenerousEnoughToFlush, so shortening it here is not a way to
+// make the wait disappear unnoticed.
+var rebindGrace = 10 * time.Second
+
+// cancelAndAwaitTurn cancels any in-flight turn and waits for it to unwind,
+// returning false if it did not finish within d.
+//
+// Called before a supersede tears the session's resources down. The wait is the
+// whole point: prev.cleanup() kills the MCP and extension subprocesses the
+// running tools are using, and prev.durable.Close() closes the file its message
+// observer is still appending to — and build.WireHeadlessSessionPersist
+// swallows the append error, so every row of that turn would vanish from the
+// transcript with nothing logged anywhere.
+func (s *session) cancelAndAwaitTurn(d time.Duration) bool {
+	s.cancelMu.Lock()
+	done, cancel := s.turnDone, s.activeCancel
+	s.cancelMu.Unlock()
+	if done == nil {
+		return true // no turn in flight
+	}
+	if cancel != nil {
+		// The turn cannot survive what follows, so cancelling is not a policy
+		// choice about the user's work — it is telling a doomed turn to stop
+		// cleanly rather than pulling the floor out from under it.
+		cancel()
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+// markSuperseded retires this session: a turn must not START on a binding whose
+// resources are about to be closed.
+//
+// The await above covers the turn that is already running. This covers the one
+// that arrives during the await — it would find this session still in the map,
+// block on turnMu behind the cancelled turn, and then run against subprocesses
+// that are about to be killed.
+func (s *session) markSuperseded() {
+	s.cancelMu.Lock()
+	s.superseded = true
+	s.cancelMu.Unlock()
+}
+
+func (s *session) isSuperseded() bool {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	return s.superseded
 }
 
 // beginTurnPermission records the in-flight turn's context as the one a

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -586,12 +587,52 @@ func (s *agentServer) bindSession(id, cwd string, sa SessionAgent, confirmer *ac
 
 	s.mu.Lock()
 	prev := s.sessions[id]
-	s.sessions[id] = sess
 	s.mu.Unlock()
+
 	// Replacing a live entry under the same id (e.g. a session/load of an
 	// already-open session): close the superseded durable session so its file
 	// handle isn't leaked, and stop its MCP subprocesses so they don't leak.
 	// The new binding owns the id going forward.
+	//
+	// 🪤 The teardown must not race the OLD binding's in-flight turn, and until
+	// this interlock existed it did. handleSessionPrompt resolves its session
+	// from the map and holds only that session's turnMu; this took only s.mu.
+	// So a session/load arriving mid-turn — dispatched on its own goroutine,
+	// see conn.run — killed the MCP and extension subprocesses the running
+	// tools were using and closed the durable file its message observer was
+	// still appending to. build.WireHeadlessSessionPersist swallows that append
+	// error, so every message of the turn vanished from the transcript with
+	// nothing logged. session/cancel then resolved to the NEW binding, whose
+	// activeCancel is nil, leaving the orphaned turn uncancellable and still
+	// emitting session/update for the same id.
+	//
+	// Retire the old binding first so no turn can START on it, then cancel the
+	// one already running and wait for it to flush, and only then tear down.
+	if prev != nil && prev != sess {
+		prev.markSuperseded()
+		if !prev.cancelAndAwaitTurn(rebindGrace) {
+			// Proceed anyway: the id must end up bound, and the editor is
+			// waiting. Say so — a dropped transcript tail is exactly the
+			// silence this interlock exists to end.
+			//
+			// A plain literal, not i18n.T, matching every other user-facing
+			// string in this package. This one CANNOT be translated even if it
+			// were marked: terva-i18n-lint parses the tree without terva_acp,
+			// so a T() here never reaches the catalogue and would read as
+			// coverage the string does not have.
+			sess.emit(map[string]any{
+				"sessionUpdate": UpdateAgentMessageChunk,
+				"content": textContentBlock(fmt.Sprintf(
+					"(the previous turn on this session did not stop within %s of being reloaded; "+
+						"the tail of its transcript may be missing)", rebindGrace)),
+			})
+		}
+	}
+
+	s.mu.Lock()
+	s.sessions[id] = sess
+	s.mu.Unlock()
+
 	if prev != nil && prev != sess {
 		if prev.cleanup != nil {
 			prev.cleanup()
@@ -773,6 +814,19 @@ func (s *agentServer) handleSessionPrompt(ctx context.Context, params json.RawMe
 
 	sess.turnMu.Lock()
 	defer sess.turnMu.Unlock()
+
+	// Re-checked AFTER the lock, not before: the wait to get here can be the
+	// whole of a previous turn, and a session/load may have retired this
+	// binding meanwhile. Starting now would run against subprocesses that are
+	// being killed and write to a durable session that is being closed — the
+	// rebind race from the other side. The caller is told rather than served a
+	// turn whose output goes nowhere.
+	if sess.isSuperseded() {
+		return nil, &rpcError{
+			Code:    CodeResourceNotFound,
+			Message: "session was reloaded while this prompt was queued; send it again: " + p.SessionID,
+		}
+	}
 
 	turnCtx, cancel := context.WithCancel(ctx)
 	sess.setCancel(cancel)

@@ -587,8 +587,12 @@ func BuildSessionTree(root, cwd string) []*TreeNode {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
-		summary := describeSession(path)
-		meta, _ := readSessionMeta(path)
+		// The FOLDED meta, from the same pass that builds the summary. It used
+		// to be a second read of the file that returned the OPENING row, so
+		// Parent was whatever it was at creation — empty for every session that
+		// learned its lineage afterwards (SetParent, the next-scene path), and
+		// the tree drew those as parentless roots.
+		summary, meta := describeSessionMeta(path)
 		if meta.ID == "" {
 			continue
 		}
@@ -613,33 +617,18 @@ func BuildSessionTree(root, cwd string) []*TreeNode {
 	return roots
 }
 
-// readSessionMeta opens path, reads the meta row, and returns it.
-// Empty SessionMeta when the file is missing or not a valid session.
-func readSessionMeta(path string) (SessionMeta, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return SessionMeta{}, err
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 20*1024*1024)
-	if !sc.Scan() {
-		return SessionMeta{}, errors.New("empty file")
-	}
-	var line sessionLine
-	if err := json.Unmarshal(sc.Bytes(), &line); err != nil {
-		return SessionMeta{}, err
-	}
-	if line.Type != "meta" || line.Meta == nil {
-		return SessionMeta{}, errors.New("first line is not meta")
-	}
-	return *line.Meta, nil
-}
-
-// FindSessionByID looks up a session file in root/cwd whose meta id
-// matches. Used by /session tree when the user picks an entry. O(n)
-// over the files in the dir; the list is small in practice.
+// FindSessionByID looks up a session file in root/cwd whose meta id matches.
+// O(n) over the files in the dir; the list is small in practice.
+//
+// An id is creation-fixed, so this reads only the opening row rather than
+// folding the whole timeline — the one question the cheap read can answer. An
+// empty id matches nothing: a file with no meta row reports the zero value, and
+// returning the first unreadable file for "" would be a lookup succeeding on a
+// question nobody asked.
 func FindSessionByID(root, cwd, id string) string {
+	if id == "" {
+		return ""
+	}
 	dir := SessionsDir(root, cwd)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -650,11 +639,11 @@ func FindSessionByID(root, cwd, id string) string {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
-		meta, err := readSessionMeta(path)
+		created, err := ReadSessionCreation(path)
 		if err != nil {
 			continue
 		}
-		if meta.ID == id {
+		if created.ID == id {
 			return path
 		}
 	}

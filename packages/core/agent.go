@@ -2643,6 +2643,69 @@ func retryErrMsg(err error) string {
 // the bytes that broke the turn.
 const imageRejectedNote = "[image omitted: the model's provider rejected it as an invalid or unreadable image]"
 
+// foreignCompactionNote stands in for a compaction blob the live provider
+// cannot replay.
+//
+// The blob is opaque and provider-issued, so there is nothing to translate —
+// the summarized turns cannot be recovered here at any cost. What CAN be fixed
+// is the silence. Dropping it left the model reading a continuous conversation
+// with half its history missing and no reason to doubt it; a note makes the gap
+// something the model can see and say so about.
+const foreignCompactionNote = "[a compaction summary from another provider stands here. It is an opaque " +
+	"blob only its issuer can read, so the conversation it summarized is not available on this model. " +
+	"Treat everything before this point as missing rather than as nothing having happened.]"
+
+// replaceForeignCompactions swaps a compaction blob explicitly attributed to
+// SOME OTHER provider for foreignCompactionNote.
+//
+// An UNATTRIBUTED blob is left exactly as it was, and that is a deliberate
+// narrowing of provider.ForeignCompactions, which reports one as foreign to
+// everyone. For DETECTION that paranoia is right — nothing should assume an
+// unlabelled blob is replayable. For REPLACEMENT it is not: openai-codex is the
+// only issuer in the tree, so an unattributed blob is in practice codex's own,
+// from a session compacted before CompactionBlock.Provider existed. Converting
+// those to a note would strip the summary out of every such session — silently
+// destroying, in the name of preventing amnesia, exactly the context this is
+// meant to protect. Two existing round-trip tests caught that, which is what
+// they are for.
+//
+// So: act on the case that is knowable (an explicit mismatch), and leave the
+// guess alone.
+//
+// Copy-on-write: msgs is a snapshot whose Content slices are the live
+// transcript's, and the blob must survive there — switching BACK to the issuing
+// provider has to replay it, and a session file that lost it could never be
+// resumed on the model that made it.
+func replaceForeignCompactions(msgs []provider.Message, providerName string) []provider.Message {
+	var out []provider.Message
+	for _, i := range provider.ForeignCompactions(msgs, providerName) {
+		var content []provider.Content
+		for ci, c := range msgs[i].Content {
+			cb, ok := c.(provider.CompactionBlock)
+			if !ok || cb.Provider == "" || cb.Provider == providerName {
+				continue
+			}
+			if content == nil {
+				content = make([]provider.Content, len(msgs[i].Content))
+				copy(content, msgs[i].Content)
+			}
+			content[ci] = provider.TextBlock{Text: foreignCompactionNote}
+		}
+		if content == nil {
+			continue
+		}
+		if out == nil {
+			out = make([]provider.Message, len(msgs))
+			copy(out, msgs)
+		}
+		out[i].Content = content
+	}
+	if out == nil {
+		return msgs
+	}
+	return out
+}
+
 // isImageRejectionError reports whether a failed turn was the provider refusing
 // an image we sent — either bad image data, or a content schema that doesn't
 // accept images at all — rather than a transient fault. Matched on the message
@@ -2797,6 +2860,21 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 			imageOutput = nil
 		}
 	}
+
+	// A compaction blob only the provider that issued it can read must not
+	// reach a serializer that will drop it without a word.
+	//
+	// provider.ForeignCompactions was written for this and had no caller. Its
+	// own doc explains why it belongs here — "Leaving this to each provider to
+	// remember is how it stayed invisible; asking once, here, is what makes it
+	// a decision" — and then nothing asked. Only openai-codex issues these
+	// blocks and only its builder has an arm for them; the anthropic, gemini,
+	// bedrock and openai content switches have no default arm, so the block
+	// vanished. That is not degradation, it is amnesia: the blob is the ONLY
+	// encoding of the assistant turns it replaced, so /model away from codex
+	// after a server-side compaction sent the next model a conversation that
+	// reads continuous and is missing half its history.
+	msgs = replaceForeignCompactions(msgs, client.Name())
 
 	// Pull host ephemeral context (e.g. an extension's live task card)
 	// outside the lock; it rides the request only, never the transcript.

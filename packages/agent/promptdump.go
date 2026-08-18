@@ -36,8 +36,8 @@ func promptDumpWire(args build.Args, r build.Resolved, msgs []provider.Message) 
 		Temperature:      r.Temperature,
 	}
 	if p := strings.TrimSpace(args.Session); p != "" {
-		if meta, err := core.ReadSessionMeta(p); err == nil {
-			req.PromptCacheKey = meta.ID
+		if created, err := core.ReadSessionCreation(p); err == nil {
+			req.PromptCacheKey = created.ID
 		}
 	}
 	// r.AuthMethod, not a credential: on Anthropic the subscription body differs
