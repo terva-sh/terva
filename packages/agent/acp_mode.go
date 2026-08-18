@@ -847,17 +847,14 @@ func renderPanelText(p *extproto.PanelSpec) string {
 // synthYoloPolicy builds a yolo PermissionPolicy with no rules — the policy a
 // pure-yolo launch would otherwise short-circuit to nil. ACP needs a real gate
 // even in yolo so session/set_mode can switch to a stricter mode at runtime
-// (the gate's SetMode is copy-on-write over this policy). The classification
-// maps (ReadOnly/EditTools/Builtin) are the same ones buildPermissionPolicy
-// uses, so a later switch to ask/auto-edit/workspace evaluates tools the same
-// way it would for a non-yolo launch.
+// (the gate's SetMode is copy-on-write over this policy).
+//
+// It goes through permissions.NewPolicy rather than composing the struct here.
+// The hand-built version set four of the seven fields and claimed the rest did
+// not matter; Interactive and DecomposeCommand decide what a rule MEANS once
+// the mode tightens, which is the only reason this policy exists.
 func synthYoloPolicy() *core.PermissionPolicy {
-	return &core.PermissionPolicy{
-		Mode:      core.ApprovalYolo,
-		ReadOnly:  permissions.BuiltinReadOnlySet(),
-		EditTools: permissions.EditToolSet(),
-		Builtin:   permissions.BuiltinSet(),
-	}
+	return permissions.NewPolicy(core.ApprovalYolo, nil)
 }
 
 // setupACPMCP starts the editor-provided MCP servers for one session — plus a

@@ -108,12 +108,23 @@ func Legacy(name string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-// ValidID rejects ids that could escape the library directory. Ids come off the
-// wire (cards.get / cards.edit / cards.delete), so a "../../etc" id must not
-// resolve to a real path.
+// ValidID rejects ids that could escape a library directory. Ids come off the
+// wire (cards.get / worlds.get / groups.delete / …), so a "../../etc" id must
+// not resolve to a real path.
+//
+// This is the ONE fence for every id that gets joined onto a library path. The
+// world and group stores each hand-rolled `id != filepath.Base(id)` instead,
+// and it is weaker in the way that matters: filepath.Base("..") IS "..", so
+// that predicate ACCEPTS ".." and the join then reads one directory above the
+// library. Both callers now go through here, so a future tightening — leading
+// dots, absolute-looking ids, reserved Windows names — protects all of them at
+// once rather than only whichever store the author had in mind.
+//
+// Callers wrap the error with their own noun ("invalid world id %q"), which is
+// why this message stays generic.
 func ValidID(id string) error {
 	if id == "" || strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
-		return fmt.Errorf("invalid card id %q", id)
+		return fmt.Errorf("invalid id %q", id)
 	}
 	return nil
 }

@@ -13,6 +13,8 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/slug"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // A Group is a lightweight, terva-owned membership bucket — a way to organize
@@ -99,7 +101,7 @@ func (s *GroupStore) List() ([]Group, error) {
 // Get loads one group by id.
 func (s *GroupStore) Get(id string) (Group, error) {
 	id = strings.TrimSpace(id)
-	if id == "" || id != filepath.Base(id) {
+	if err := slug.ValidID(id); err != nil {
 		return Group{}, fmt.Errorf("invalid group id %q", id)
 	}
 	raw, err := os.ReadFile(filepath.Join(s.dir, id+".json"))
@@ -139,7 +141,7 @@ func (s *GroupStore) Save(doc Group) (Group, error) {
 	if err != nil {
 		return Group{}, err
 	}
-	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+	if err := privfs.MkdirAll(s.dir); err != nil {
 		return Group{}, err
 	}
 	if err := os.WriteFile(filepath.Join(s.dir, doc.ID+".json"), raw, 0o644); err != nil {
@@ -152,7 +154,7 @@ func (s *GroupStore) Save(doc Group) (Group, error) {
 // group is a view, never a container that owns its cards or sessions.
 func (s *GroupStore) Delete(id string) error {
 	id = strings.TrimSpace(id)
-	if id == "" || id != filepath.Base(id) {
+	if err := slug.ValidID(id); err != nil {
 		return fmt.Errorf("invalid group id %q", id)
 	}
 	p := filepath.Join(s.dir, id+".json")

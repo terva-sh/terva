@@ -222,6 +222,30 @@ func (l *Loop) Run(ctx context.Context) error {
 	}
 
 	return l.Connector.Receive(ctx, func(m Message) {
+		// This handler OWNS m.Files, and hands ownership on to exactly one
+		// place: the queue.
+		//
+		// The staging happens upstream and unconditionally — connhost moves
+		// every inbound non-image attachment to disk while dispatching the
+		// frame, BEFORE any policy runs — so by the time the gate says no, the
+		// files already exist. Nothing used to remove them: cleanupFiles was
+		// reachable only from the three paths a QUEUED message takes, and the
+		// switch below has no default, so every message the gate handled itself
+		// (an unapproved group, a mention-mode chat where nobody mentioned the
+		// bot, a non-owner DM, an unpaired bot) and every message an ask
+		// swallowed left its files behind forever. A bot sitting in a busy
+		// guild it was never approved for staged every upload it could see and
+		// deleted none of them, with no ceiling and no log line.
+		//
+		// A default-clean deferral rather than a cleanup call per branch: the
+		// branch that forgets is exactly the failure this had, and a new case
+		// added below inherits the right behaviour without knowing this exists.
+		queued := false
+		defer func() {
+			if !queued {
+				cleanupFiles(m)
+			}
+		}()
 		switch g.route(ctx, l.Connector, m) {
 		case actStatus:
 			l.noteActivity(m)
@@ -233,10 +257,15 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.noteActivity(m)
 			// A pending text-fallback ask gets first claim on the
 			// message; anything that isn't an answer flows on as a
-			// prompt (asks must not eat conversation).
+			// prompt (asks must not eat conversation). An answer is
+			// TEXT — the files it arrived with are not consumed, so
+			// they fall to the deferred cleanup like any other.
 			if l.takeTextAnswer(m) {
 				return
 			}
+			// The queue takes ownership from here: runTurn cleans up after the
+			// turn, /stop purge and a delete event clean up on withdrawal.
+			queued = true
 			l.enqueue(ctx, m)
 		}
 	})

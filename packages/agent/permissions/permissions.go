@@ -536,15 +536,7 @@ func BuildPolicy(p Inputs) (*core.PermissionPolicy, []string) {
 	if mode == core.ApprovalYolo && len(rules) == 0 {
 		return nil, warns
 	}
-	return &core.PermissionPolicy{
-		Mode:             mode,
-		Rules:            rules,
-		ReadOnly:         BuiltinReadOnlySet(),
-		EditTools:        editTools,
-		Builtin:          builtin,
-		Interactive:      interactive,
-		DecomposeCommand: decomposeBashForPolicy,
-	}, warns
+	return NewPolicy(mode, rules), warns
 }
 
 // decomposeBashForPolicy is the shell splitter the permission policy
@@ -740,6 +732,49 @@ func EditToolSet() map[string]bool {
 		out[k] = v
 	}
 	return out
+}
+
+// InteractiveSet returns the ask-the-user classification as a fresh map.
+//
+// It did not exist, and its absence is why a policy built elsewhere was missing
+// the field: acp_mode.go had accessors for ReadOnly, EditTools and Builtin and
+// reached for all three, because those were the ones on offer.
+func InteractiveSet() map[string]bool {
+	out := make(map[string]bool, len(interactive))
+	for k, v := range interactive {
+		out[k] = v
+	}
+	return out
+}
+
+// NewPolicy returns a PermissionPolicy in mode carrying rules, plus EVERY
+// static field the evaluator needs.
+//
+// It exists because those fields were chosen in two places, and the second
+// place set four of the seven. acp_mode.go's synthYoloPolicy omitted:
+//
+//   - Interactive, so ask_user_question was gated behind approval — and in
+//     plan mode, which an ACP client can reach with session/set_mode, a
+//     question can never be approved at all. The field's own doc calls gating
+//     a question behind approval nonsensical.
+//   - DecomposeCommand, so a compound `git diff && rm -rf /` was judged as ONE
+//     unit against rules written per command. An allow rule scoped to `git *`
+//     covers the whole line, which is the exact attack that field's doc
+//     describes.
+//
+// Its comment claimed the maps were "the same ones buildPermissionPolicy uses,
+// so a later switch to ask/auto-edit/workspace evaluates tools the same way".
+// Three of them were; the two that decide what a rule MEANS were absent.
+func NewPolicy(mode core.ApprovalMode, rules []core.PermissionRule) *core.PermissionPolicy {
+	return &core.PermissionPolicy{
+		Mode:             mode,
+		Rules:            rules,
+		ReadOnly:         BuiltinReadOnlySet(),
+		EditTools:        EditToolSet(),
+		Builtin:          BuiltinSet(),
+		Interactive:      InteractiveSet(),
+		DecomposeCommand: decomposeBashForPolicy,
+	}
 }
 
 // BuiltinSet returns the first-party classification as a fresh map.

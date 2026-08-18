@@ -14,6 +14,8 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/slug"
 	"terva.sh/terva/packages/core"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // The saved-World library (Worlds W5). A World is the same object whether
@@ -107,7 +109,7 @@ func (s *WorldStore) List() ([]WorldDoc, error) {
 // Get loads one saved World by id.
 func (s *WorldStore) Get(id string) (WorldDoc, error) {
 	id = strings.TrimSpace(id)
-	if id == "" || id != filepath.Base(id) {
+	if err := slug.ValidID(id); err != nil {
 		return WorldDoc{}, fmt.Errorf("invalid world id %q", id)
 	}
 	raw, err := os.ReadFile(filepath.Join(s.dir, id, worldJSONName))
@@ -146,7 +148,7 @@ func (s *WorldStore) Save(doc WorldDoc) (WorldDoc, error) {
 		return WorldDoc{}, err
 	}
 	dir := filepath.Join(s.dir, doc.ID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := privfs.MkdirAll(dir); err != nil {
 		return WorldDoc{}, err
 	}
 	if err := os.WriteFile(filepath.Join(dir, worldJSONName), raw, 0o644); err != nil {
@@ -159,7 +161,7 @@ func (s *WorldStore) Save(doc WorldDoc) (WorldDoc, error) {
 // copies untouched — deleting the container never deletes the play.
 func (s *WorldStore) Delete(id string) error {
 	id = strings.TrimSpace(id)
-	if id == "" || id != filepath.Base(id) {
+	if err := slug.ValidID(id); err != nil {
 		return fmt.Errorf("invalid world id %q", id)
 	}
 	dir := filepath.Join(s.dir, id)
@@ -176,7 +178,7 @@ const worldCoverName = "cover.png"
 // result is always safe to hand to http.ServeFile).
 func (s *WorldStore) CoverPath(id string) string {
 	id = strings.TrimSpace(id)
-	if id == "" || id != filepath.Base(id) {
+	if slug.ValidID(id) != nil {
 		return ""
 	}
 	p := filepath.Join(s.dir, id, worldCoverName)
