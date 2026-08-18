@@ -11,6 +11,29 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.131.10](https://github.com/terva-sh/terva/releases/tag/v0.131.10) — 2026-08-16
+
+### Features
+
+- debug: --dump-prompt=wire covers anthropic, in the auth mode it would send
+- thinking: anthropic's thinking is captured, and only replayed where it came from
+- thinking: the model's thinking is visible, per-model, and called one name
+- tui: an un-accepted suggestion is dimmed, so it does not read as typed
+- tui: right arrow accepts a suggestion, the way a shell does
+- tui: the files an agent hands you are a thing you can open
+
+### Fixes
+
+- agent: bot mode swapped model without recording it
+- provider: a reasoning-only turn survives replay
+- provider: gemini's thought signature was dropped on a text-only turn
+- provider: kimi speaks the anthropic wire, and the census could not see it
+- provider: reasoning blocks were replayed to whichever provider came next
+- tools: a missing argument names the keys it did not recognise
+- tui: a hostile share name could not be saved on Windows, and said so loudly
+- tui: a panel's background work raced the frame drawing it
+- workspace: a dial that outlives its workspace keeps writing to the home
+
 ## [v0.131.8](https://github.com/terva-sh/terva/releases/tag/v0.131.8) — 2026-08-14
 
 ### Features

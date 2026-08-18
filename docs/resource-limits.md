@@ -150,8 +150,8 @@ silently corrupts what the script computes from it.
 Run time is not listed because the engine takes it from the caller's context —
 for `code_execution` that is 30 s, raisable to 120 s per call.
 
-The engine does **not** meter VM heap: no pure-Go interpreter can
-([decision 0008](decisions/0008-one-static-binary.md) chose a cgo-free binary).
+The engine does **not** meter VM heap: no pure-Go interpreter can (decision
+0008, *One static binary*, chose a cgo-free binary).
 So the import path is the only bound available, and it is the product of two
 rows above: at most host calls × binding return, 50 MiB, enters a run from the
 host. Nothing bounds what the script then allocates itself; the context

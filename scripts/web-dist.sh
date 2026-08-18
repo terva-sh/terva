@@ -26,7 +26,45 @@ CLIENT=packages/agent/web/client
 # expanded unquoted below; none of these paths may ever contain a space.
 ASSETS="$CLIENT/dist $CLIENT/src/locales packages/i18n/locales/web/en.json packages/i18n/locales/stage/en.json"
 
+# The oldest Node this build tolerates. vite-plugin-pwa reaches for the GLOBAL
+# `crypto` object, which Node added in v19. Below that the build dies inside a
+# rollup worker with "crypto is not defined" — and only AFTER deleting
+# dist/sw.js and dist/workbox-*.js, so the failure buries its cause in worker
+# output and leaves the tree dirty as well as unbuilt. 20 rather than 19,
+# because 19 was never an LTS line and 20 is the oldest one still supported.
+#
+# Worth a guard rather than a README line: Debian and Ubuntu still ship Node 18
+# (end-of-life April 2025), so this is a fully patched machine that cannot build
+# the panel while every Go gate on it passes. .mise.toml pins 22 for anyone
+# using mise; this is the floor for everyone else.
+NODE_MIN_MAJOR=20
+
+require_node() {
+    if ! command -v node >/dev/null 2>&1; then
+        echo "web-dist: node is not on PATH — this build needs Node >= v$NODE_MIN_MAJOR" >&2
+        exit 2
+    fi
+    major=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null) || major=''
+    case "$major" in
+    '' | *[!0-9]*)
+        echo "web-dist: could not read a Node version from '$(command -v node)'" >&2
+        exit 2
+        ;;
+    esac
+    if [ "$major" -lt "$NODE_MIN_MAJOR" ]; then
+        echo "web-dist: Node $(node --version) is too old — this build needs >= v$NODE_MIN_MAJOR." >&2
+        echo "  vite-plugin-pwa uses the global 'crypto' object, which Node added in v19." >&2
+        echo "  An older Node fails deep inside a rollup worker, having already deleted" >&2
+        echo "  dist/sw.js and dist/workbox-*.js — 'git restore' them if you have hit that." >&2
+        echo "  With mise installed, 'mise install' picks up the pin in .mise.toml." >&2
+        exit 2
+    fi
+}
+
 regen() {
+    # Before anything is written or deleted: a version failure must cost a
+    # message, not a dirty tree.
+    require_node
     npm --prefix "$CLIENT" run i18n-extract
     mkdir -p "$CLIENT/src/locales/stage"
     for f in packages/i18n/locales/web/*.json; do

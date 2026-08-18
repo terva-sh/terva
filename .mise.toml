@@ -1,0 +1,18 @@
+# The toolchain this repository expects, for mise (and asdf-compatible tools).
+#
+# Go is pinned by go.mod and the CI workflow. NODE is here because nothing else
+# states it: the web client's assets under packages/agent/web/client/dist are
+# committed and go:embed-ed, and `just ci` asserts they are the byte-identical
+# product of a fresh build — so the Node that builds them is part of the build,
+# not a local preference.
+#
+# 22 rather than "whatever is installed". The floor is really 19, where Node
+# added the global `crypto` object that vite-plugin-pwa uses, and below it the
+# build dies inside a rollup worker having already deleted dist/sw.js. 22 is the
+# active LTS line; 18 went end-of-life in April 2025 and is still what several
+# distributions ship, which is exactly how a machine ends up unable to build the
+# panel while every Go gate passes.
+#
+# scripts/web-dist.sh enforces the floor at run time, for anyone without mise.
+[tools]
+node = "22"
