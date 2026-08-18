@@ -49,19 +49,41 @@ func RedactSecrets(text string) string {
 	return text
 }
 
+// RedactAndBound redacts secrets from text and THEN bounds it to max bytes,
+// backing up to a UTF-8 rune boundary so the cut cannot emit an invalid rune.
+// It returns the bounded string and how many bytes were dropped (0 if none).
+//
+// The ORDER is the whole safety property, and it is why this is one exported
+// function rather than a convention. The redaction rules anchor on a
+// credential's PREFIX (`\bsk-ant-`, and friends), so anything that trims,
+// windows, or slices the text BEFORE redacting can cut that prefix off and the
+// rule then matches nothing — failing open, silently, on the exact input it
+// exists to catch.
+//
+// That is not hypothetical. session_search's ssSnippet redacted only a widened
+// window around its match, so a key whose prefix fell outside the window had its
+// tail returned verbatim, while its two sibling call sites redacted the whole
+// string first. Widening the window does not fix it; only redacting the whole
+// text does.
+func RedactAndBound(text string, max int) (string, int) {
+	text = RedactSecrets(text)
+	if max <= 0 || len(text) <= max {
+		return text, 0
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut], len(text) - cut
+}
+
 // redactErrorForSidecar strips secret-shaped substrings from an error string
 // and bounds its length before it is written to the durable error sidecar. It
-// never fails: worst case it returns the (still length-bounded) input. The
-// length bound runs after redaction and backs up to a UTF-8 rune boundary so
-// truncation can't emit an invalid trailing rune.
+// never fails: worst case it returns the (still length-bounded) input.
 func redactErrorForSidecar(errText string) string {
-	errText = RedactSecrets(errText)
-	if len(errText) > maxSidecarErrorLen {
-		cut := maxSidecarErrorLen
-		for cut > 0 && !utf8.RuneStart(errText[cut]) {
-			cut--
-		}
-		errText = errText[:cut] + fmt.Sprintf("… [truncated %d bytes]", len(errText)-cut)
+	bounded, dropped := RedactAndBound(errText, maxSidecarErrorLen)
+	if dropped > 0 {
+		bounded += fmt.Sprintf("… [truncated %d bytes]", dropped)
 	}
-	return errText
+	return bounded
 }

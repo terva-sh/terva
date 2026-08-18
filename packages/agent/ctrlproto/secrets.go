@@ -119,6 +119,13 @@ type SecretsScope struct {
 
 // SecretsStore summarizes secrets.json.
 type SecretsStore struct {
+	// Present means AT LEAST ONE SCOPE HOLDS A VALUE. It is not "the file
+	// exists": a home whose secrets.json holds only grants reports false.
+	//
+	// Spelled out because a renderer read it as file-existence and gated the
+	// whole grants section on it, so grants on a home with no stored values
+	// were invisible in the CLI while the wire carried them the entire time.
+	// Anything asking "is there a store" wants that question asked directly.
 	Present   bool           `json:"present"`
 	Encrypted bool           `json:"encrypted"`
 	Scopes    []SecretsScope `json:"scopes,omitempty"`

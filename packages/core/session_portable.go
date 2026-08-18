@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -237,14 +238,19 @@ func ImportSession(srcPath, root, cwd, version string) (string, error) {
 
 	// Build the destination inside the current cwd's session dir
 	// with a fresh timestamped name.
+	// A LIVE transcript in the data home, byte-identical in kind to one the
+	// session writer creates with privfs — same directory, same contents, same
+	// secrets in it. It was created 0644 under a 0755 dir, so an imported or
+	// branched session was world-readable while every session terva itself
+	// opened was 0600 under 0700.
 	dir := SessionsDir(root, cwd)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := privfs.MkdirAll(dir); err != nil {
 		return "", err
 	}
 	newID := uuid.NewString()
 	name := fmt.Sprintf("%s-%s.jsonl", time.Now().UTC().Format("20060102-150405"), newID[:8])
 	outPath := filepath.Join(dir, name)
-	dst, err := os.OpenFile(outPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	dst, err := privfs.OpenFile(outPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY)
 	if err != nil {
 		return "", fmt.Errorf("import: create dst: %w", err)
 	}
@@ -404,14 +410,16 @@ func BranchSession(parentPath, root, cwd, version string, upToMessageIdx int) (s
 	}
 
 	// Build the destination file.
+	// Same as import: this is a live transcript in the data home, not an
+	// export to a path the user named.
 	dir := SessionsDir(root, cwd)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := privfs.MkdirAll(dir); err != nil {
 		return "", err
 	}
 	newID := uuid.NewString()
 	name := fmt.Sprintf("%s-%s.jsonl", time.Now().UTC().Format("20060102-150405"), newID[:8])
 	outPath := filepath.Join(dir, name)
-	dst, err := os.OpenFile(outPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	dst, err := privfs.OpenFile(outPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY)
 	if err != nil {
 		return "", fmt.Errorf("branch: create dst: %w", err)
 	}

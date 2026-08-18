@@ -124,6 +124,11 @@ type AuthFlowStep struct {
 // presentation. That ownership is not pedantry: today the browser form and the
 // TUI dialog order openai-compatible's four fields DIFFERENTLY, because each
 // decided for itself. One descriptor ends that class of drift.
+// AuthFieldSecret is the Type of a field whose value must never be shown. Both
+// renderers key on it — the web client as <input type="password">, the TUI as a
+// masked editor — so it is a constant rather than a string spelled twice.
+const AuthFieldSecret = "secret"
+
 type AuthField struct {
 	Name  string `json:"name"` // the key in AuthLoginSubmitParams.Values
 	Label string `json:"label"`

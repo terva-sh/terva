@@ -38,11 +38,16 @@ func WriteStatus(w io.Writer, st ctrlproto.SecretsStatus) {
 		line(w, f.Name, f.State)
 	}
 	writeStore(w, st.Store)
-	// Only once a store exists. Grants live INSIDE secrets.json, so on a home
-	// that has none "no grants" restates the line above it in different words —
-	// but from the moment the store is there the section must always render,
-	// empty or not, because one that vanishes when empty reads as missing.
-	if st.Store.Present {
+	// Grants live INSIDE secrets.json, so on a home with neither "no grants"
+	// restates the line above it in different words — but a grant that EXISTS
+	// must always be shown.
+	//
+	// This used to gate on st.Store.Present alone, which does not mean what the
+	// name suggests: it means at least one scope holds a VALUE. Grant something
+	// on a home that stores no values and the whole section vanished, while
+	// secrets.status kept carrying the grants over the wire. A permission that
+	// is in force and invisible is the worst of the two states to be in.
+	if st.Store.Present || len(st.Grants) > 0 {
 		writeGrants(w, st.Grants)
 	}
 	writeConfig(w, st.Config)

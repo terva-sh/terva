@@ -365,14 +365,31 @@ func (c *Codec) opener() (age.Identity, error) {
 	return Ring(ids...), nil
 }
 
+// ErrOpenOnly is the answer to any attempt to SEAL through a codec built only
+// to open. Both Enabled and Encrypt return it, so the two cannot disagree about
+// what an opening-only codec does.
+var ErrOpenOnly = errors.New("secrets: this codec can only open, not seal")
+
 // Enabled reports whether saves should encrypt. ErrNoKey means plaintext
 // operation (false, nil); any other resolver error is returned so a broken
 // key configuration fails the write instead of silently downgrading it.
 func (c *Codec) Enabled() (bool, error) {
 	if c.resolve == nil {
-		// An opening-only codec never seals; saving through one is a caller
-		// error, and reporting "enabled" would hide it behind a write.
-		return len(c.sealTo) > 0, nil
+		if len(c.sealTo) > 0 {
+			return true, nil // a rotation codec seals to explicit recipients
+		}
+		// An opening-only codec never seals. This used to answer (false, nil),
+		// which every caller reads as "plaintext operation is correct here" —
+		// so a save through NewOpeningCodec wrote the credential file in the
+		// CLEAR and returned no error, while Encrypt one screen below refused
+		// the identical operation. The comment claimed reporting "enabled"
+		// would hide a caller error behind a write; reporting "disabled" hid a
+		// PLAINTEXT write behind one instead.
+		//
+		// A store that legitimately does not encrypt carries a nil codec, which
+		// both save paths already check. There is no case where this returns
+		// false correctly.
+		return false, ErrOpenOnly
 	}
 	_, err := c.identity()
 	if errors.Is(err, ErrNoKey) {
@@ -391,7 +408,7 @@ func (c *Codec) Encrypt(plain []byte) ([]byte, error) {
 		return Encrypt(plain, c.sealTo...)
 	}
 	if c.resolve == nil {
-		return nil, errors.New("secrets: this codec can only open, not seal")
+		return nil, ErrOpenOnly
 	}
 	id, err := c.identity()
 	if err != nil {

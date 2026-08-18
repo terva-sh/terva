@@ -75,7 +75,18 @@ func (t *ChatSendImageTool) Execute(ctx context.Context, raw json.RawMessage, _ 
 		}, nil
 	}
 	path := resolvePath(t.CWD, a.Path)
-	if err := t.Sandbox.CheckPath(path); err != nil {
+	// CheckPathRead, not CheckPath: sending a file is a READ of the source, the
+	// same as share_file. CheckPath routes to checkUnder, which only tests
+	// containment against Root and never consults secretRoots, secretNames,
+	// secretExceptions or guardedRoots — so with cwd = $HOME (or any --project
+	// run, where TERVA_HOME is under cwd unconditionally) it happily uploaded
+	// .terva/auth.json, .terva/sessions/*.jsonl and .terva/logs/* to the chat
+	// room. `read`, `bash cat` and share_file all refuse those.
+	//
+	// It was wrong in the other direction too: a file in /tmp the model may
+	// legitimately read could not be sent, because containment demanded it be
+	// under Root.
+	if err := t.Sandbox.CheckPathRead(path); err != nil {
 		return core.ToolResult{}, err
 	}
 	info, err := os.Stat(path)
@@ -140,7 +151,18 @@ func (t *ChatSendFileTool) Execute(ctx context.Context, raw json.RawMessage, _ f
 		}, nil
 	}
 	path := resolvePath(t.CWD, a.Path)
-	if err := t.Sandbox.CheckPath(path); err != nil {
+	// CheckPathRead, not CheckPath: sending a file is a READ of the source, the
+	// same as share_file. CheckPath routes to checkUnder, which only tests
+	// containment against Root and never consults secretRoots, secretNames,
+	// secretExceptions or guardedRoots — so with cwd = $HOME (or any --project
+	// run, where TERVA_HOME is under cwd unconditionally) it happily uploaded
+	// .terva/auth.json, .terva/sessions/*.jsonl and .terva/logs/* to the chat
+	// room. `read`, `bash cat` and share_file all refuse those.
+	//
+	// It was wrong in the other direction too: a file in /tmp the model may
+	// legitimately read could not be sent, because containment demanded it be
+	// under Root.
+	if err := t.Sandbox.CheckPathRead(path); err != nil {
 		return core.ToolResult{}, err
 	}
 	info, err := os.Stat(path)

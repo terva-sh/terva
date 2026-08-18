@@ -383,6 +383,22 @@ func (s *Store) Allows(principal, scope string, want Mode) (bool, error) {
 func (s *Store) Reseal(open age.Identity, sealTo ...age.Recipient) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// The same two-step lock every other writer of this file takes, in the same
+	// order. Reseal took only s.mu, and s.mu orders NOTHING across processes —
+	// nor across a single process, because config.SecretStoreIn mints a fresh
+	// Store per call, so two callers hold two different mutexes over one file.
+	// A rotation racing an ordinary Set therefore read the pre-Set bytes,
+	// re-sealed those, and published them over the Set, silently losing the
+	// secret that had just been stored.
+	lk, err := filelock.Acquire(s.lockPath())
+	if err != nil {
+		// A home that cannot host a lockfile must not become a home where
+		// rotation fails — same degradation mutate accepts.
+		lk = nil
+	}
+	defer lk.Release()
+	// Read INSIDE the lock: bytes read before acquiring it describe the file as
+	// it was before the writer we just queued behind.
 	b, err := os.ReadFile(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil

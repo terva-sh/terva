@@ -441,7 +441,16 @@ func (d *LoginDialog) editor(th tui.Theme, i int) *tui.Editor {
 		return nil
 	}
 	if d.eds[i] == nil {
-		d.eds[i] = tui.NewEditor(th.AccentBar(th.Accent))
+		ed := tui.NewEditor(th.AccentBar(th.Accent))
+		// A secret field is masked here and nowhere else, because this is the
+		// only place a login editor is built. The web client renders the same
+		// AuthField descriptor as <input type="password">; the TUI echoed the
+		// key in the clear, on the surface most likely to be on a shared screen
+		// or in a recording.
+		if i < len(d.flow.Fields) && d.flow.Fields[i].Type == ctrlproto.AuthFieldSecret {
+			ed.Mask = '•'
+		}
+		d.eds[i] = ed
 	}
 	return d.eds[i]
 }

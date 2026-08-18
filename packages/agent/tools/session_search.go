@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
@@ -374,10 +375,24 @@ func ssScanSession(ctx context.Context, s ssSource, needle string, kinds map[str
 // the head of a 40KB tool result and omit the match entirely, which is how a
 // search tool ends up reporting hits nobody can see.
 //
-// Redaction runs on the WIDER window before the cut, so a secret straddling the
-// boundary is still masked (the rule session_inspect follows for the same
-// reason).
+// Redaction runs on the WHOLE text before any windowing, which is the rule
+// session_inspect and core.redactErrorForSidecar follow.
+//
+// This function used to redact only a window widened by 64 bytes, and the
+// comment here claimed that matched session_inspect. It did not. The redaction
+// rules anchor on a credential's PREFIX (`\bsk-ant-` and friends), so a key
+// whose prefix fell outside the widened window matched nothing and its TAIL was
+// returned verbatim — to the model, and into the calling session's transcript.
+// session_search scans across sessions in a project, so a key pasted once could
+// resurface from any later session whose search term happened to sit ~70-200
+// bytes after it. Widening the constant does not fix that; only redacting the
+// whole text does.
+//
+// The needle is located in the REDACTED text on purpose: a search term that was
+// itself part of a credential correctly stops matching, rather than steering the
+// window onto the secret.
 func ssSnippet(text, needle string) string {
+	text = core.RedactSecrets(text)
 	i := strings.Index(strings.ToLower(text), needle)
 	if i < 0 {
 		i = 0
@@ -390,12 +405,18 @@ func ssSnippet(text, needle string) string {
 	if end > len(text) {
 		end = len(text)
 	}
-	// Widen before redacting, then cut back — see above.
-	wide := text[ssBackTo(text, start, 64):ssForwardTo(text, end, 64)]
-	red := core.RedactSecrets(wide)
-	if len(red) > ssSnippetMax {
-		red = red[:ssSnippetMax]
+	// Both ends of the window must land on rune boundaries: slicing a UTF-8
+	// string at an arbitrary byte splits a rune, and the old code's bare
+	// `red[:ssSnippetMax]` did exactly that. Back the start up and the end
+	// forward to the nearest boundary.
+	for start > 0 && !utf8.RuneStart(text[start]) {
+		start--
 	}
+	for end < len(text) && !utf8.RuneStart(text[end]) {
+		end++
+	}
+	// Already redacted above; RedactAndBound is used for the rune-safe cut.
+	red, _ := core.RedactAndBound(text[start:end], ssSnippetMax)
 	red = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(red, "\r", " "), "\n", " "))
 	var out strings.Builder
 	if start > 0 {
@@ -406,20 +427,6 @@ func ssSnippet(text, needle string) string {
 		out.WriteString("…")
 	}
 	return out.String()
-}
-
-func ssBackTo(s string, i, n int) int {
-	if i-n < 0 {
-		return 0
-	}
-	return i - n
-}
-
-func ssForwardTo(s string, i, n int) int {
-	if i+n > len(s) {
-		return len(s)
-	}
-	return i + n
 }
 
 func ssRender(query string, hits []ssHit, total, scanned, available int, truncated bool) string {

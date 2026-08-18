@@ -274,7 +274,7 @@ func (w *Workspace) startAPIKeyForm(m *auth.Manager, provider string, local bool
 				// lets the form say which of the two you are filling in.
 				{Name: "model", Label: i18n.T("Default model"), Type: "text", Required: true, RequiredUnless: "name", Placeholder: "qwen2.5-coder",
 					Help: i18n.T("Not needed for a named endpoint — it discovers the models the server serves.")},
-				{Name: "api_key", Label: i18n.T("API key"), Type: "secret", Help: i18n.T("Optional — many local servers ignore it.")},
+				{Name: "api_key", Label: i18n.T("API key"), Type: ctrlproto.AuthFieldSecret, Help: i18n.T("Optional — many local servers ignore it.")},
 				{Name: "context_window", Label: i18n.T("Default context window"), Type: "integer", Placeholder: "32768"},
 			},
 		}
@@ -285,7 +285,7 @@ func (w *Workspace) startAPIKeyForm(m *auth.Manager, provider string, local bool
 		Title: i18n.T("Sign in with an API key"),
 		URL:   browserURL,
 		Fields: []ctrlproto.AuthField{
-			{Name: "api_key", Label: i18n.T("API key"), Type: "secret", Required: true},
+			{Name: "api_key", Label: i18n.T("API key"), Type: ctrlproto.AuthFieldSecret, Required: true},
 		},
 	}
 }
@@ -344,7 +344,7 @@ func (w *Workspace) startOAuth(m *auth.Manager, provider string, local bool) (ct
 		Lines: []string{i18n.T("Open this page, approve the request, and paste back the code it gives you (or the whole URL from the address bar).")},
 		URL:   f.URL,
 		Fields: []ctrlproto.AuthField{
-			{Name: "code", Label: i18n.T("Authorization code"), Type: "secret", Required: true},
+			{Name: "code", Label: i18n.T("Authorization code"), Type: ctrlproto.AuthFieldSecret, Required: true},
 		},
 	}, nil
 }

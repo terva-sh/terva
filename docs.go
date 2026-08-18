@@ -6,7 +6,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
 	"strings"
+	"terva.sh/terva/packages/privfs"
 )
 
 // embeddedDocs holds terva's user-facing documentation so installed binaries do
@@ -50,7 +52,7 @@ var shippedSubdirs = []string{"design", "practices"}
 // one-segment path, and those tiers link back out with "../".
 func EnsureInstalled(tervaHome string) (string, error) {
 	dir := filepath.Join(tervaHome, "docs")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := privfs.MkdirAll(dir); err != nil {
 		return dir, err
 	}
 
@@ -76,10 +78,10 @@ func EnsureInstalled(tervaHome string) (string, error) {
 			if existing, err := os.ReadFile(dst); err == nil && bytes.Equal(existing, data) {
 				continue
 			}
-			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			if err := privfs.MkdirAll(filepath.Dir(dst)); err != nil {
 				return dir, err
 			}
-			if err := os.WriteFile(dst, data, 0o644); err != nil {
+			if err := privfs.WriteFile(dst, data); err != nil {
 				return dir, err
 			}
 		}

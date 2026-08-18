@@ -16,6 +16,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"terva.sh/terva/packages/privfs"
 )
 
 // embeddedExamples carries examples/deploy/ and examples/workflows/. Naming
@@ -61,10 +63,10 @@ func EnsureInstalled(tervaHome string) (string, error) {
 			if existing, err := os.ReadFile(dst); err == nil && bytes.Equal(existing, data) {
 				return nil
 			}
-			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			if err := privfs.MkdirAll(filepath.Dir(dst)); err != nil {
 				return err
 			}
-			return os.WriteFile(dst, data, 0o644)
+			return privfs.WriteFile(dst, data)
 		})
 		if err != nil {
 			return root, err
