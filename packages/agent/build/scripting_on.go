@@ -21,8 +21,8 @@ import (
 )
 
 // ScriptingSupported reports whether this binary carries the jsengine
-// scripting consumer (the code_execution tool). Built with terva_scripting:
-// true.
+// scripting consumers (the code_execution and code_execution_mutating
+// tools). Built with terva_scripting: true.
 func ScriptingSupported() bool { return true }
 
 func init() {
@@ -37,24 +37,52 @@ func init() {
 	extraBuiltinTools = append(extraBuiltinTools, func(cwd string, sandbox *tools.Sandbox) (string, core.Tool) {
 		return "code_execution", &tools.CodeExecutionTool{}
 	})
+
+	// code_execution_mutating is the SAME engine with write/edit added, and
+	// it is deliberately NOT registered read-only. That single omission is
+	// what keeps plan mode's promise: the registry pruning in build.go drops
+	// every tool that is neither read-only nor interactive, so the mutating
+	// tool never enters a plan-mode registry and the model does not even see
+	// it. Adding RegisterReadOnly here would hand plan mode a tool that
+	// writes files, silently — which is the regression
+	// TestMutatingScriptToolIsNotReadOnly exists to catch.
+	//
+	// It is a builtin like any other, so permission rules and the audit
+	// trail address it by name.
+	permissions.RegisterBuiltin("code_execution_mutating")
+	extraBuiltinTools = append(extraBuiltinTools, func(cwd string, sandbox *tools.Sandbox) (string, core.Tool) {
+		return "code_execution_mutating", &tools.CodeExecutionMutatingTool{}
+	})
 }
 
-// wireScriptingHostCall late-binds code_execution's gated host-tool
-// dispatcher once the live agent and confirm gate exist (the registry is
-// built before either). Each script binding call re-enters the SAME
+// wireScriptingHostCall late-binds the gated host-tool dispatcher for BOTH
+// scripting tools once the live agent and confirm gate exist (the registry
+// is built before either). Each script binding call re-enters the SAME
 // approval gate a model-issued call uses — reach, not authority, exactly
 // like ext host_tool_call — so a script never bypasses approval, and a
 // nil gate means yolo mode (allow), matching every other tool path.
+//
+// Both tools share one dispatcher deliberately: the mutating tool's write
+// and edit calls are gated by the very same code path that gates a read,
+// so a script's write prompts exactly as a model-issued write does, with
+// its own preview and its own audit line.
 func wireScriptingHostCall(ag *core.Agent, gate *core.ConfirmGate) {
-	tool, ok := ag.LookupTool("code_execution")
-	if !ok {
-		return
+	dispatch := scriptHostDispatcher(ag, gate)
+	if tool, ok := ag.LookupTool("code_execution"); ok {
+		if ce, ok := tool.(*tools.CodeExecutionTool); ok {
+			ce.HostCall = dispatch
+		}
 	}
-	ce, ok := tool.(*tools.CodeExecutionTool)
-	if !ok {
-		return
+	if tool, ok := ag.LookupTool("code_execution_mutating"); ok {
+		if cm, ok := tool.(*tools.CodeExecutionMutatingTool); ok {
+			cm.HostCall = dispatch
+		}
 	}
-	ce.HostCall = func(ctx context.Context, name string, args json.RawMessage) (core.ToolResult, error) {
+}
+
+// scriptHostDispatcher builds the gated crossing both scripting tools hold.
+func scriptHostDispatcher(ag *core.Agent, gate *core.ConfirmGate) func(context.Context, string, json.RawMessage) (core.ToolResult, error) {
+	return func(ctx context.Context, name string, args json.RawMessage) (core.ToolResult, error) {
 		target, ok := ag.LookupTool(name)
 		if !ok {
 			return core.ToolResult{}, fmt.Errorf("no such host tool %q", name)

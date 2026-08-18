@@ -83,6 +83,72 @@ func TestRunAsyncUncaughtRejectionFailsRun(t *testing.T) {
 	}
 }
 
+// A panicking AsyncBinding must fail the RUN, not the PROCESS. The binding
+// runs off the VM goroutine, so RunAsync's own recover() cannot see it, and
+// before callAsyncBinding existed this test did not fail — it killed the
+// test binary outright, taking every other test in the package with it.
+func TestRunAsyncBindingPanicFailsRunNotProcess(t *testing.T) {
+	boom := func(_ context.Context, _ []any) (any, error) {
+		panic("host binding exploded")
+	}
+	_, err := RunAsync(context.Background(), "t.js", `await boom()`,
+		AsyncOptions{AsyncBindings: map[string]AsyncBinding{"boom": boom}})
+	if err == nil {
+		t.Fatal("err = nil, want the panic surfaced as a failed run")
+	}
+	if !strings.Contains(err.Error(), "panicked") || !strings.Contains(err.Error(), "host binding exploded") {
+		t.Fatalf("err = %v, want it to name the panic and its value", err)
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v, want it to name the binding", err)
+	}
+}
+
+// The same panic, caught in-script: a panicking host operation rejects its
+// promise like any other failure, so a script may handle it.
+func TestRunAsyncBindingPanicIsCatchable(t *testing.T) {
+	boom := func(_ context.Context, _ []any) (any, error) {
+		panic("host binding exploded")
+	}
+	res, err := RunAsync(context.Background(), "t.js",
+		`try { await boom() } catch (e) { return "caught:" + String(e).includes("exploded") }`,
+		AsyncOptions{AsyncBindings: map[string]AsyncBinding{"boom": boom}})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Value != "caught:true" {
+		t.Fatalf("value = %#v", res.Value)
+	}
+}
+
+// A panic in ONE branch of a fan-out must not sink the siblings: the others
+// still settle and the script can filter, which is how parallel() behaves
+// for ordinary failures.
+func TestRunAsyncBindingPanicDoesNotSinkSiblings(t *testing.T) {
+	maybe := func(_ context.Context, args []any) (any, error) {
+		if n, _ := args[0].(int64); n == 2 {
+			panic("only the second one explodes")
+		}
+		return args[0], nil
+	}
+	res, err := RunAsync(context.Background(), "t.js",
+		`const out = await Promise.all([1,2,3].map(n => maybe(n).catch(() => null))); return out`,
+		AsyncOptions{AsyncBindings: map[string]AsyncBinding{"maybe": maybe}})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	arr, ok := res.Value.([]any)
+	if !ok || len(arr) != 3 {
+		t.Fatalf("value = %#v, want 3 results", res.Value)
+	}
+	if arr[0] == nil || arr[2] == nil {
+		t.Fatalf("value = %#v, want the surviving siblings to hold values", res.Value)
+	}
+	if arr[1] != nil {
+		t.Fatalf("value = %#v, want the panicking branch to be null", res.Value)
+	}
+}
+
 func TestRunAsyncDeadlockDetected(t *testing.T) {
 	_, err := RunAsync(context.Background(), "t.js",
 		`await new Promise(() => {}); return 1`, AsyncOptions{})

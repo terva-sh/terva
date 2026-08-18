@@ -142,7 +142,7 @@ would be wrong. The classes (`core.Authority`):
 |---|---|---|
 | `local-read` | reads files/state (not the secret deny list); no process/network/external effect | `read`, `grep`, `glob`, `terva_status`, `session_inspect`, `skill`, `worktree_list`, `code_execution` (read-only exactly as long as every function it exposes is — see [scripting.md](scripting.md#permissions)) |
 | `local-data` | reads **and writes** the tool's own host-managed data store — for an extension, its `$TERVA_HOME/ext-data/<name>` — and nothing else: never your workspace, a process, the network, or an external service. Auto-allowable like `local-read`, because the write never leaves private, host-controlled storage | `task_create`/`task_update`/`task_list`/`task_archive`; a memory/notes extension tool |
-| `workspace-mutation` | writes files / edits workspace state | `write`, `edit` |
+| `workspace-mutation` | writes files / edits workspace state | `write`, `edit`, `code_execution_mutating` (the same three read functions plus `write`/`edit`; classified by its widest binding, never read-only — see [scripting.md](scripting.md#permissions)) |
 | `process-execution` | runs commands / subprocesses | `bash` |
 | `network-read` | fetches URLs / search results (can leak, log, reach private nets) | a web-fetch extension tool |
 | `external-mutation` | writes to third-party APIs, sends messages, changes remote resources | a chat-send / PR-open tool |
@@ -344,8 +344,9 @@ Fields: `time` (UTC), `pid`, `via`, `tool`, `mode`, `decision`
 spots; filter at read time. All three doors into the gate record, and
 `via` says which one: `tool_call` (a model-issued call through the
 ladder), `host_tool_call` (an extension running a host tool), or
-`code_execution` (a script binding's read/grep/glob — up to one line
-per binding call). Lines written before `via` existed were all model
+`code_execution` (a script binding's call — up to one line per binding
+call, and stamped the same for both scripting tools, so a script's
+`write` records exactly as its `read` does). Lines written before `via` existed were all model
 tool calls; the other two doors recorded nothing then. The file is created `0600` and, like the rest of `logs/`, sits on the
 read **deny list** — never readable by `read` or by `bash`, and `/unjail`
 does not lift it — because tool arguments (bash commands, file writes)

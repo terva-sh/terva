@@ -48,22 +48,31 @@ and the connection survives.
 | extension stdio (extproto) | 4 MiB | `extproto.MaxFrameBytes` → default | skip + log |
 | extension tool-call args (host → ext) | 1 MiB | `extproto.MaxToolCallBytes` | returned to the model as a tool error |
 | MCP server stdout | 4 MiB | `mcp` (default) | skip frame; that response times out, connection lives |
+| MCP streamable-HTTP / SSE | 4 MiB | `mcp/mcp_http.go` `readSSE` (default) | skip frame + warn to the server's log; stream survives |
+| terva's own MCP approval server | 4 MiB | `mcpbridge` `server.run` (default) | skip frame + warn to stderr |
+| worker / swarm child stdout+stderr | 4 MiB | `worker`, `swarm` runners (default) | skip line, surfaced in the transcript |
+| swarm inbox socket | 4 MiB | `swarm.Listener.readLoop` (default) | skip frame + warn |
+| `terva-mcp-bridge` relay (both halves) | 8 MiB | `bridgeMaxFrameBytes` | downstream: skip + warn; upstream: **reject** (see below) |
 | ACP JSON-RPC | 16 MiB | `acp.acpMaxFrameBytes` | skip frame |
 | `terva rpc` NDJSON | 16 MiB | `rpc.rpcMaxFrameBytes` | skip frame + error frame to caller |
 | Web WebSocket message | 32 MiB | `web/conn.go` `maxFrameBytes` | **connection closed** (WebSocket `SetReadLimit`, not lineframe) |
 
 The 16 MiB tier (ACP, rpc) carries model prompts/results, which run larger than
-a control frame; the 4 MiB tier is the historical carrier ceiling. The web
+a control frame; the 4 MiB tier is the historical carrier ceiling. The bridge
+sits between them at 8 MiB because an MCP tool result legitimately carries a
+screenshot or a whole-file read, and it is one constant across both halves of
+the relay — it used to be written twice, and a limit written twice is a limit
+that drifts. The web
 carrier sits above both at 32 MiB, and advertises `Hello.MaxUploadBytes`
 (≈24 MiB, the base64-inflated file that fits inside one) so a client can refuse
 an oversized file *before* sending it — an over-limit frame is not an error, it
 closes the socket, and the request then dies with a generic dead-socket message
 that names nothing the user can act on.
 
-## Provider event streams (network-facing, reject)
+## Single-payload readers (reject)
 
-A provider's `text/event-stream` response is the one framed reader that must
-**not** skip. Its lines are not independent messages — they are deltas of a
+A provider's `text/event-stream` response is the clearest case of a framed reader
+that must **not** skip. Its lines are not independent messages — they are deltas of a
 single assistant message — so dropping one would punch an invisible hole in the
 model's output. `provider/sse.go` therefore builds a reject policy on
 `lineframe.ReadFrame` and reports *why* the stream ended.
@@ -71,6 +80,15 @@ model's output. `provider/sse.go` therefore builds a reject policy on
 | Boundary | Limit | Where | On exceed |
 | --- | --- | --- | --- |
 | SSE event line | 10 MiB | `provider.maxSSELineBytes` | **abort the stream**, permanent `ErrStreamLimit` |
+| bridge upstream SSE response | 8 MiB | `terva-mcp-bridge` `readResponseFrame` | error naming the frame limit |
+| worker approval request | 4 MiB | `worker.handleApprovalConn` (default) | **deny** (fail closed) |
+| bridge approval reply | 4 MiB | `mcpbridge.server.ask` (default) | error; the tool call fails |
+
+The last three connections each carry exactly ONE frame, so a skipped frame is
+not a gap in a stream — it is the whole answer. The bridge's upstream reader is
+why this row exists: it used to skip silently and then return whatever frame
+came *before*, so an over-limit tool result was relayed to terva as the
+preceding progress notification, with no error anywhere.
 
 Gemini is the client most likely to meet the ceiling: it streams a complete
 `GenerateContentResponse` per line, base64 inline image bytes included, where
@@ -108,6 +126,36 @@ These truncate and tell the model how to page for more.
 | `read` line count | 2000 | `tools.maxReadLines` | truncated + hint |
 | `read` inline image | 5 MiB | `tools.maxImageBytes` | rejected with a size error |
 | `grep` per-file scan | 10 MiB | `tools.maxReadFileBytes` | stops at the cap |
+
+## In-engine scripting (`jsengine`)
+
+A script running on the embedded JS engine ([scripting.md](scripting.md)) pulls
+tool results across into a VM. These bounds are the engine's defaults, in
+`packages/agent/jsengine`; a caller may tighten them per run via
+`jsengine.Limits`.
+
+| Boundary | Limit | Where | On exceed |
+| --- | --- | --- | --- |
+| binding return, one host call | 1 MiB | `jsengine.defaultMaxBindingBytes` | rejected, catchable in-script |
+| host calls per run | 50 | `jsengine.defaultMaxHostCalls` | rejected, catchable in-script |
+| printed output | 32 KiB | `jsengine.defaultMaxOutputBytes` | truncated, `Result.Truncated` set |
+| JS call-stack depth | 2048 frames | `jsengine.defaultMaxCallStack` | run fails |
+
+The binding-return cap **rejects rather than truncates**, unlike the file reads
+above, because the two stances differ by consumer: a truncated `read` result
+reaches a model that can see the "continue with offset=" hint and page, whereas
+a truncated string handed to a script is indistinguishable from a short one and
+silently corrupts what the script computes from it.
+
+Run time is not listed because the engine takes it from the caller's context —
+for `code_execution` that is 30 s, raisable to 120 s per call.
+
+The engine does **not** meter VM heap: no pure-Go interpreter can
+([decision 0008](decisions/0008-one-static-binary.md) chose a cgo-free binary).
+So the import path is the only bound available, and it is the product of two
+rows above: at most host calls × binding return, 50 MiB, enters a run from the
+host. Nothing bounds what the script then allocates itself; the context
+deadline is the backstop.
 
 ## Network response bodies (HTTP, `io.LimitReader`)
 
@@ -155,6 +203,14 @@ if the constants are ever read globally), and both routes' refusals
 (`packages/agent/web/upload_test.go` — over-cap, cross-origin, unauthenticated,
 sessionless; `shared_test.go` — unauthenticated, unresolvable, and the inline
 allowlist).
+
+Also directly exercised: the `jsengine` bounds
+(`packages/agent/jsengine/jsengine_test.go` — the binding-return cap both
+caught in-script and left uncaught, the host-call budget across both binding
+kinds, output truncation, and stack overflow). One test deliberately pins a
+**gap** rather than a bound: the return cap measures strings only, so a
+structured return passes uncounted, and that is recorded as known behaviour
+instead of left to surprise someone.
 
 Boundaries without a dedicated bound-checking test — worth adding as they're
 touched — include the image-gen body caps, the character-card cap, the Discord

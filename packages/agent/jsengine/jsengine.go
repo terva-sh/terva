@@ -34,16 +34,37 @@ import (
 )
 
 const (
-	defaultMaxHostCalls   = 50
-	defaultMaxOutputBytes = 32 * 1024
-	defaultMaxCallStack   = 2048
+	defaultMaxHostCalls    = 50
+	defaultMaxOutputBytes  = 32 * 1024
+	defaultMaxCallStack    = 2048
+	defaultMaxBindingBytes = 1 << 20
 )
+
+// reservedGlobals are the names the engine itself installs. A caller that
+// binds one of these would silently replace the engine's own function and
+// break output capture, so it is refused up front.
+var reservedGlobals = map[string]bool{"print": true, "console": true}
 
 // Binding is a host function exposed to a script by name. args are the
 // call's arguments coerced to strings (a trailing undefined/null is
 // dropped, so optional JS parameters map to a shorter args slice). An
 // error return is thrown into the script as a catchable exception.
 type Binding func(ctx context.Context, args []string) (string, error)
+
+// TypedBinding is a host function that keeps JS types instead of
+// flattening them. Its args arrive as exported Go values in call order
+// (an undefined/null argument arrives as a nil element rather than being
+// dropped, so a caller can tell f(undefined, 2) from f(2)), and its
+// return is converted back with the runtime's usual mapping, so a map
+// becomes an object and a slice an array — the script does not have to
+// JSON.parse a string the host just serialized.
+//
+// It is the synchronous profile's counterpart to the async profile's
+// RawBinding (loop.go), differing by the ctx it receives: this profile
+// re-checks the context and charges the host-call budget on every call,
+// which is exactly what a binding reaching a gated host tool needs.
+// Prefer it for new bindings; Binding stays for the string-shaped ones.
+type TypedBinding func(ctx context.Context, args []any) (any, error)
 
 // Limits bounds one run. Zero values take the package defaults.
 type Limits struct {
@@ -54,12 +75,39 @@ type Limits struct {
 	MaxOutputBytes int
 	// MaxCallStack bounds JS recursion depth (default 2048).
 	MaxCallStack int
+	// MaxBindingBytes caps the string a single binding call may return
+	// (default 1 MiB). A binding that would return more fails that call
+	// with a catchable error instead of truncating, because a silently
+	// shortened result is indistinguishable in-script from a genuinely
+	// short one and would corrupt whatever the script computes from it.
+	//
+	// This is a deliberate memory bound, not tidiness. No pure-Go
+	// interpreter can cap heap growth (docs/decisions/0008), so the only
+	// bound available is on what a run may *import*: at most
+	// MaxHostCalls x MaxBindingBytes (default 50 MiB) enters the VM
+	// through bindings. It cannot bound what the script then allocates
+	// itself — a script can still concatenate its way to trouble, and
+	// only the context deadline stops that.
+	//
+	// Structured TypedBinding returns are measured only when they are
+	// strings; a map or slice passes uncounted and stays bounded by
+	// whatever produced it (for a host tool, its own output cap).
+	MaxBindingBytes int
 }
 
 // Options configures one run.
 type Options struct {
+	// Bindings are string-shaped host functions.
 	Bindings map[string]Binding
-	Limits   Limits
+	// TypedBindings are host functions that keep JS types (preferred for
+	// new bindings). A name may appear in Bindings or TypedBindings, not
+	// both.
+	TypedBindings map[string]TypedBinding
+	// Globals are plain values set as globals before the script runs —
+	// the synchronous profile's counterpart to AsyncOptions.Globals, and
+	// the way to hand a script its input without encoding it into src.
+	Globals map[string]any
+	Limits  Limits
 }
 
 // Result reports what a completed (or failed) run produced.
@@ -95,6 +143,10 @@ func Run(ctx context.Context, name, src string, opts Options) (res Result, err e
 	start := time.Now()
 	defer func() { res.Elapsed = time.Since(start) }()
 
+	if verr := validateNames(opts); verr != nil {
+		return res, verr
+	}
+
 	prog, cerr := sobek.Compile(name, src, false)
 	if cerr != nil {
 		return res, fmt.Errorf("script does not parse: %w", cerr)
@@ -110,9 +162,40 @@ func Run(ctx context.Context, name, src string, opts Options) (res Result, err e
 	if lim.MaxCallStack <= 0 {
 		lim.MaxCallStack = defaultMaxCallStack
 	}
+	if lim.MaxBindingBytes <= 0 {
+		lim.MaxBindingBytes = defaultMaxBindingBytes
+	}
 
 	vm := sobek.New()
 	vm.SetMaxCallStackSize(lim.MaxCallStack)
+
+	// An unhandled promise rejection must not vanish. This profile is
+	// synchronous and has no host-driven async, so a script that rejects
+	// without a handler used to finish "successfully" and return whatever it
+	// had printed so far — the worst failure mode for a tool whose whole job
+	// is returning a small answer derived from output the caller never sees,
+	// because there is nothing left to check the answer against. Node treats
+	// this as fatal and the async profile already fails the run; this makes
+	// the two profiles agree.
+	//
+	// sobek reports PromiseRejectionReject when a promise is rejected with no
+	// handler, and PromiseRejectionHandle when one is attached later, so what
+	// survives after the job queue drains is the genuinely unhandled set.
+	// Both callbacks run on the VM goroutine, so this needs no locking.
+	var unhandled []*sobek.Promise
+	vm.SetPromiseRejectionTracker(func(p *sobek.Promise, op sobek.PromiseRejectionOperation) {
+		switch op {
+		case sobek.PromiseRejectionReject:
+			unhandled = append(unhandled, p)
+		case sobek.PromiseRejectionHandle:
+			for i, q := range unhandled {
+				if q == p {
+					unhandled = append(unhandled[:i], unhandled[i+1:]...)
+					break
+				}
+			}
+		}
+	})
 
 	var out strings.Builder
 	printFn := func(call sobek.FunctionCall) sobek.Value {
@@ -144,16 +227,38 @@ func Run(ctx context.Context, name, src string, opts Options) (res Result, err e
 		return res, fmt.Errorf("bind console: %w", err)
 	}
 
+	for k, v := range opts.Globals {
+		if err := vm.Set(k, v); err != nil {
+			return res, fmt.Errorf("bind global %s: %w", k, err)
+		}
+	}
+
+	// checkCall applies the preconditions every binding kind shares: the
+	// host-call budget, then a fresh context check. Panicking with a JS
+	// error is sobek's idiom for throwing from a Go function, so a script
+	// can catch these like any other exception.
+	checkCall := func(bname string) {
+		if res.HostCalls >= lim.MaxHostCalls {
+			panic(vm.NewGoError(fmt.Errorf("%s: host-call limit reached (%d)", bname, lim.MaxHostCalls)))
+		}
+		res.HostCalls++
+		if cerr := ctx.Err(); cerr != nil {
+			panic(vm.NewGoError(fmt.Errorf("%s: %w", bname, cerr)))
+		}
+	}
+	// capBindingBytes refuses an oversized return rather than truncating
+	// it: a shortened result looks exactly like a short one to the script,
+	// so silent truncation would corrupt whatever it computes next.
+	capBindingBytes := func(bname string, n int) {
+		if n > lim.MaxBindingBytes {
+			panic(vm.NewGoError(fmt.Errorf("%s: returned %d bytes, over the %d-byte limit for one binding call; narrow the request", bname, n, lim.MaxBindingBytes)))
+		}
+	}
+
 	for bname, b := range opts.Bindings {
 		bname, b := bname, b
 		fn := func(call sobek.FunctionCall) sobek.Value {
-			if res.HostCalls >= lim.MaxHostCalls {
-				panic(vm.NewGoError(fmt.Errorf("%s: host-call limit reached (%d)", bname, lim.MaxHostCalls)))
-			}
-			res.HostCalls++
-			if cerr := ctx.Err(); cerr != nil {
-				panic(vm.NewGoError(fmt.Errorf("%s: %w", bname, cerr)))
-			}
+			checkCall(bname)
 			args := make([]string, 0, len(call.Arguments))
 			for _, a := range call.Arguments {
 				if sobek.IsUndefined(a) || sobek.IsNull(a) {
@@ -165,7 +270,26 @@ func Run(ctx context.Context, name, src string, opts Options) (res Result, err e
 			if berr != nil {
 				panic(vm.NewGoError(fmt.Errorf("%s: %w", bname, berr)))
 			}
+			capBindingBytes(bname, len(text))
 			return vm.ToValue(text)
+		}
+		if err := vm.Set(bname, fn); err != nil {
+			return res, fmt.Errorf("bind %s: %w", bname, err)
+		}
+	}
+
+	for bname, b := range opts.TypedBindings {
+		bname, b := bname, b
+		fn := func(call sobek.FunctionCall) sobek.Value {
+			checkCall(bname)
+			out, berr := b(ctx, exportArgs(call))
+			if berr != nil {
+				panic(vm.NewGoError(fmt.Errorf("%s: %w", bname, berr)))
+			}
+			if s, ok := out.(string); ok {
+				capBindingBytes(bname, len(s))
+			}
+			return vm.ToValue(out)
 		}
 		if err := vm.Set(bname, fn); err != nil {
 			return res, fmt.Errorf("bind %s: %w", bname, err)
@@ -207,5 +331,60 @@ func Run(ctx context.Context, name, src string, opts Options) (res Result, err e
 		}
 		return res, fmt.Errorf("script error: %w", rerr)
 	}
+	// RunProgram has drained the job queue by now, so anything still here was
+	// never handled.
+	if len(unhandled) > 0 {
+		return res, fmt.Errorf("script error: %s", unhandledRejectionMessage(unhandled))
+	}
 	return res, nil
+}
+
+// validateNames refuses a binding or global set that would collide, before
+// a run spends a VM on it. Every case here is a host wiring error, not
+// anything a script can provoke — and each one fails silently if left
+// alone, which is why it is worth refusing rather than resolving. A name
+// bound twice makes one of the two unreachable with no error, and a
+// caller who rebinds print or console breaks output capture while every
+// run still reports success.
+func validateNames(opts Options) error {
+	for name := range opts.Bindings {
+		if reservedGlobals[name] {
+			return fmt.Errorf("binding %q is a name the engine installs itself", name)
+		}
+	}
+	for name := range opts.TypedBindings {
+		if reservedGlobals[name] {
+			return fmt.Errorf("binding %q is a name the engine installs itself", name)
+		}
+		if _, dup := opts.Bindings[name]; dup {
+			return fmt.Errorf("%q is declared as both a Binding and a TypedBinding", name)
+		}
+	}
+	for name := range opts.Globals {
+		if reservedGlobals[name] {
+			return fmt.Errorf("global %q is a name the engine installs itself", name)
+		}
+		if _, dup := opts.Bindings[name]; dup {
+			return fmt.Errorf("%q is declared as both a global and a binding", name)
+		}
+		if _, dup := opts.TypedBindings[name]; dup {
+			return fmt.Errorf("%q is declared as both a global and a binding", name)
+		}
+	}
+	return nil
+}
+
+// unhandledRejectionMessage describes the unhandled rejections a run left
+// behind, naming the first reason and counting the rest.
+func unhandledRejectionMessage(unhandled []*sobek.Promise) string {
+	reason := "(no reason given)"
+	if v := unhandled[0].Result(); v != nil {
+		if s := v.String(); s != "" {
+			reason = s
+		}
+	}
+	if n := len(unhandled) - 1; n > 0 {
+		return fmt.Sprintf("unhandled promise rejection: %s (and %d more)", reason, n)
+	}
+	return fmt.Sprintf("unhandled promise rejection: %s", reason)
 }

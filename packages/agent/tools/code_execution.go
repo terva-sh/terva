@@ -58,27 +58,54 @@ func (t *CodeExecutionTool) Schema() json.RawMessage { return json.RawMessage(co
 // so it stays off the default advertised manifest under lazy tools.
 func (t *CodeExecutionTool) ToolGroupName() string { return "scripting" }
 
-// binding adapts one allowlisted host tool to a jsengine.Binding, mapping
-// positional script arguments onto the tool's JSON args.
-func (t *CodeExecutionTool) binding(tool string, build func(args []string) (map[string]any, error)) jsengine.Binding {
+// hostCallFn is the gated dispatcher both scripting tools hold: it runs
+// one of the host's own tools through the SAME approval gate a
+// model-issued call uses.
+type hostCallFn func(ctx context.Context, tool string, args json.RawMessage) (core.ToolResult, error)
+
+// dispatchHostTool is the single crossing from a script binding to a host
+// tool. Both scripting tools route through it so the gate semantics, the
+// error shape, and the flattening of a tool result to script-visible text
+// cannot drift apart between a read-only and a mutating caller.
+func dispatchHostTool(ctx context.Context, call hostCallFn, tool string, fields map[string]any) (string, error) {
+	raw, err := json.Marshal(fields)
+	if err != nil {
+		return "", err
+	}
+	res, err := call(ctx, tool, raw)
+	if err != nil {
+		return "", err
+	}
+	text := textFromContent(res.Content)
+	if res.IsError {
+		return "", fmt.Errorf("%s", strings.TrimSpace(text))
+	}
+	return text, nil
+}
+
+// hostBinding adapts one allowlisted host tool to a string-shaped
+// jsengine.Binding, mapping positional script arguments onto the tool's
+// JSON args.
+func hostBinding(call hostCallFn, tool string, build func(args []string) (map[string]any, error)) jsengine.Binding {
 	return func(ctx context.Context, args []string) (string, error) {
 		fields, err := build(args)
 		if err != nil {
 			return "", err
 		}
-		raw, err := json.Marshal(fields)
+		return dispatchHostTool(ctx, call, tool, fields)
+	}
+}
+
+// typedHostBinding is the same crossing for a binding whose arguments do
+// not survive being flattened to strings — edit's array of replacements,
+// for one.
+func typedHostBinding(call hostCallFn, tool string, build func(args []any) (map[string]any, error)) jsengine.TypedBinding {
+	return func(ctx context.Context, args []any) (any, error) {
+		fields, err := build(args)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		res, err := t.HostCall(ctx, tool, raw)
-		if err != nil {
-			return "", err
-		}
-		text := textFromContent(res.Content)
-		if res.IsError {
-			return "", fmt.Errorf("%s", strings.TrimSpace(text))
-		}
-		return text, nil
+		return dispatchHostTool(ctx, call, tool, fields)
 	}
 }
 
@@ -108,8 +135,15 @@ func intArg(s string) (int, error) {
 }
 
 func (t *CodeExecutionTool) bindings() map[string]jsengine.Binding {
+	return readOnlyScriptBindings(t.HostCall)
+}
+
+// readOnlyScriptBindings is the read-only binding set. The mutating tool
+// takes it as the base of its superset, so a script that only looks at
+// the workspace behaves identically under either tool.
+func readOnlyScriptBindings(call hostCallFn) map[string]jsengine.Binding {
 	return map[string]jsengine.Binding{
-		"read": t.binding("read", func(args []string) (map[string]any, error) {
+		"read": hostBinding(call, "read", func(args []string) (map[string]any, error) {
 			if len(args) < 1 {
 				return nil, fmt.Errorf("read(path[,offset,limit]) needs a path")
 			}
@@ -130,7 +164,7 @@ func (t *CodeExecutionTool) bindings() map[string]jsengine.Binding {
 			}
 			return m, nil
 		}),
-		"grep": t.binding("grep", func(args []string) (map[string]any, error) {
+		"grep": hostBinding(call, "grep", func(args []string) (map[string]any, error) {
 			if len(args) < 1 {
 				return nil, fmt.Errorf("grep(pattern[,path]) needs a pattern")
 			}
@@ -140,7 +174,7 @@ func (t *CodeExecutionTool) bindings() map[string]jsengine.Binding {
 			}
 			return m, nil
 		}),
-		"glob": t.binding("glob", func(args []string) (map[string]any, error) {
+		"glob": hostBinding(call, "glob", func(args []string) (map[string]any, error) {
 			if len(args) < 1 {
 				return nil, fmt.Errorf("glob(pattern[,path]) needs a pattern")
 			}

@@ -291,16 +291,17 @@ no class that is truthful, not by skipping the classification step.
 
 ### Build-gated built-ins (compile-time conditional)
 
-One built-in's condition is decided at *compile* time, not at session
+Two built-ins have their condition decided at *compile* time, not at session
 setup — a third kind of conditionality next to "always on" and
 "host-injected":
 
 | Tool | Present when | Authority | Notes |
 |---|---|---|---|
 | `code_execution` | the binary was built with `-tags terva_scripting` (release builds are; `terva-min` and a plain `go build` are not) | local read-only | runs a short JavaScript program with `read`/`grep`/`glob` exposed as functions; only `print`ed output returns, so N-step read-only lookups cost one tool result. Read-only **because** every binding is — the classification follows the binding set, and each host call a script makes still passes the normal permission gate. Sits in the lazy group `scripting` under `lazy_tools`. See [scripting.md](scripting.md). |
+| `code_execution_mutating` | the same tag — both tools ship or neither does | mutating (workspace writes) | the same engine and the same gated crossing, with `write`/`edit` added to the binding set. A **separate tool rather than a flag** on `code_execution`, so authority stays a property of the tool: the read-only sibling keeps its class unconditionally, and this one is simply never registered read-only, which is what keeps it out of a `plan`-mode registry entirely. **No `bash`** — a command string is authority the pre-check cannot read, and with it the tool would be `bash` with extra steps. Before running, it walks the script's AST and reports the calls it will make (`read x5, write x2`); a script it cannot account for — `eval`, global-object reach, `with`, aliasing or shadowing a binding — **does not run at all**, refused before the first binding call rather than warned about. Its own lazy group `scripting_mutating`, so activating read-only scripting never also hands over the tool that writes. See [scripting.md](scripting.md). |
 
-A build without the tag has no trace of the tool: nothing registers, no
-config key exists to turn it on. The tag exists because the embedded JS
+A build without the tag has no trace of either tool: nothing registers, no
+config key exists to turn them on. The tag exists because the embedded JS
 engine costs ~6 MB of binary — capability follows the build, and the gate
 semantics stay in the permission tables like every other tool.
 

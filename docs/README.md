@@ -44,7 +44,7 @@ the field have learned about this category, generalized and evidence-graded.
 | [context-construction.md](context-construction.md) | What goes into the model's context each turn |
 | [image-generation.md](image-generation.md) | `generate_image` and its backends |
 | [native-image-output.md](native-image-output.md) | The model drawing images inline (`native_output`, Codex) |
-| [scripting.md](scripting.md) | `code_execution` — the in-engine JavaScript sandbox |
+| [scripting.md](scripting.md) | `code_execution` and `code_execution_mutating` — the in-engine JavaScript sandbox |
 | [themes.md](themes.md) | TUI themes |
 | [skills.md](skills.md) | `SKILL.md` instruction files |
 | [debugging-prompts.md](debugging-prompts.md) | Inspecting / debugging a prompt |

@@ -136,7 +136,7 @@ func RunAsync(ctx context.Context, name, src string, opts AsyncOptions) (res Asy
 			args := exportArgs(call)
 			pending++
 			go func() {
-				out, berr := ab(ctx, args)
+				out, berr := callAsyncBinding(ctx, ab, args)
 				ops <- func() {
 					pending--
 					if berr != nil {
@@ -210,6 +210,28 @@ func RunAsync(ctx context.Context, name, src string, opts AsyncOptions) (res Asy
 	}
 	res.Value = p.Result().Export()
 	return res, nil
+}
+
+// callAsyncBinding invokes one AsyncBinding on its own goroutine and
+// converts a panic into an ordinary error, which the caller turns into a
+// promise rejection (catchable in-script; a failed run when uncaught).
+//
+// This boundary is load-bearing, not defensive dressing. An AsyncBinding
+// runs OFF the VM goroutine, so RunAsync's own recover() — which sits on
+// the VM goroutine — cannot see a panic here, and an unrecovered panic in
+// any goroutine takes down the whole process. The synchronous profile has
+// no equivalent gap: its bindings run inline inside RunProgram, under that
+// recover(). Without this, a single misbehaving host operation kills a
+// session that may have been running unattended for hours, which is the
+// blast radius docs/decisions/0006 exists to keep out of the harness.
+func callAsyncBinding(ctx context.Context, ab AsyncBinding, args []any) (out any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			out = nil
+			err = fmt.Errorf("host operation panicked: %v", r)
+		}
+	}()
+	return ab(ctx, args)
 }
 
 func exportArgs(call sobek.FunctionCall) []any {
