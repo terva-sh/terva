@@ -398,16 +398,14 @@ func (s *wsSession) usageView() ctrlproto.UsageView {
 	uv := ctrlproto.UsageView{Provider: prov, Model: model, Subscription: s.subscription}
 	if ag := s.agent; ag != nil {
 		last := ag.LastTurnUsage()
-		uv.ContextTokens = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
+		uv.ContextTokens = last.PromptTokens()
 		uv.Cumulative = toCtrlUsage(ag.Cost())
 		if snap, ok := ag.Usage(); ok {
 			uv.Windows = usageWindows(snap.Windows)
 		}
 	}
 	if model != "" {
-		if mdl, err := provider.FindModel("", model); err == nil {
-			uv.Window = mdl.ContextWindow
-		}
+		uv.Window = provider.ContextGauge("", model)
 	}
 	return uv
 }

@@ -29,7 +29,8 @@ const replayStateInterval = 80 * time.Millisecond
 // with CodeUnsupported and the session is driven by transport (Play/Pause/Step/
 // Seek/SetSpeed), not prompts. Playback is pure: no model calls, no tool
 // execution, no side effects.
-//
+var _ ctrlproto.WorkspaceService = (*Carrier)(nil)
+
 // Carrier implements ctrlproto.WorkspaceService and structurally satisfies
 // modes.Carrier (it also has SubscribeReliable); the composition root
 // asserts modes.Carrier so this package need not import the TUI.
@@ -86,7 +87,11 @@ func Open(path string, opts Options) (*Carrier, error) {
 	for _, r := range rows {
 		if r.Kind == core.ReplayRowUsage {
 			c.cumUsage = toWireUsage(r.Cumulative)
-			c.ctxTokens = r.Usage.InputTokens + r.Usage.CacheReadTokens
+			// PromptTokens, not Input+CacheRead: cache WRITES are prompt the
+			// model read too. Omitting them showed ~0 context for a first turn
+			// on a long prefix — 100k written, 0 read — where the live gauge
+			// showed 100k, and every later frame inherited the gap.
+			c.ctxTokens = r.Usage.PromptTokens()
 		}
 	}
 	frames := Synthesize(rows, opts)
@@ -242,7 +247,7 @@ func (c *Carrier) onFrame(idx int, f Frame) {
 	defer c.mu.Unlock()
 	if u, ok := f.Event.(core.EvUsage); ok {
 		c.cumUsage = toWireUsage(u.Cumulative)
-		c.ctxTokens = u.Usage.InputTokens + u.Usage.CacheReadTokens
+		c.ctxTokens = u.Usage.PromptTokens() // the seed above, per frame
 	}
 	c.broadcastLocked(ctrlproto.ConversationEvent(core.EventToWire(f.Event)))
 	if f.Reset != nil {

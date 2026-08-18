@@ -678,13 +678,14 @@ func (s *rpcServer) runCompact(id string) {
 			"type":     "compact_done",
 			"summary":  res.Summary,
 			"strategy": string(res.Strategy),
-			"usage": map[string]any{
-				"input":       res.Usage.InputTokens,
-				"output":      res.Usage.OutputTokens,
-				"cache_read":  res.Usage.CacheReadTokens,
-				"cache_write": res.Usage.CacheWriteTokens,
-				"cost_usd":    res.Usage.CostUSD,
-			},
+			// core.UsageToWire, not a hand-built map. The two written here
+			// carried five of the nine fields, so the RPC driver — which
+			// persists no session and can observe usage NOWHERE else — could
+			// not see what the cache was worth, how much of the output was
+			// reasoning, or how much was image data. The four missing fields
+			// are all omitempty, so a consumer reading the old shape is
+			// unaffected and one reading the new shape gains the numbers.
+			"usage": core.UsageToWire(res.Usage),
 		}
 		if res.FallbackReason != "" {
 			ev["fallback_reason"] = res.FallbackReason
@@ -710,13 +711,7 @@ func (s *rpcServer) snapshotState() map[string]any {
 		"cwd":           s.args.CWD,
 		"message_count": len(s.agent.Messages()),
 		"busy":          s.busy(),
-		"usage": map[string]any{
-			"input":       cum.InputTokens,
-			"output":      cum.OutputTokens,
-			"cache_read":  cum.CacheReadTokens,
-			"cache_write": cum.CacheWriteTokens,
-			"cost_usd":    cum.CostUSD,
-		},
+		"usage":         core.UsageToWire(cum),
 	}
 }
 

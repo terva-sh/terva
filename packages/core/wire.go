@@ -768,3 +768,36 @@ func UsageToWire(u provider.Usage) WireUsage {
 }
 
 func usageToWire(u provider.Usage) WireUsage { return UsageToWire(u) }
+
+// UsageFromWire is UsageToWire's inverse: the ONE way to read a WireUsage back
+// into a provider.Usage.
+//
+// It is exported because it had two other lives. packages/agent/modes kept a
+// correct private copy, and packages/agent/swarm decoded the same payload with
+// the wrong key vocabulary entirely — usageFromMap read `input_tokens`,
+// `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, which are
+// provider.Usage's SESSION-ROW tags, off a core.WireUsage payload whose tags are
+// `input`, `output`, `cache_read`, `cache_write`.
+//
+// Nothing errored. Every delegated token count in the product was a hard zero —
+// Swarm.InFlightSpend, RecordDelegatedUsage, and terva_status's `delegated` and
+// `delegated_in_flight`. Worse, for a subscription-backed child (cost_usd 0) the
+// whole Usage decoded to the zero value, costFromEvent's `u != provider.Usage{}`
+// guard failed, and the child's entire spend was never recorded at all — which
+// is precisely the failure the delegated-usage feature was built to eliminate.
+//
+// A to/from pair wants one reflection guard over both halves, not two
+// hand-written field lists that can drift apart while both compile.
+func UsageFromWire(w WireUsage) provider.Usage {
+	return provider.Usage{
+		InputTokens:          w.Input,
+		OutputTokens:         w.Output,
+		CacheReadTokens:      w.CacheRead,
+		CacheWriteTokens:     w.CacheWrite,
+		CostUSD:              w.CostUSD,
+		CacheSavedUSD:        w.CacheSavedUSD,
+		ReasoningTokens:      w.Reasoning,
+		ReasoningTokensKnown: w.ReasoningKnown,
+		ImageOutputTokens:    w.ImageOutput,
+	}
+}

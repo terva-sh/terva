@@ -626,13 +626,10 @@ func (h *chatWsHost) Status() string {
 	if ag := s.agent; ag != nil {
 		usage = ag.Cost()
 		last := ag.LastTurnUsage()
-		ctxUsed = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
+		ctxUsed = last.PromptTokens()
 		queued = ag.QueuedMessageCount()
 	}
-	ctxMax := 0
-	if m, err := provider.FindModel(prov, model); err == nil {
-		ctxMax = m.ContextWindow
-	}
+	ctxMax := provider.ContextGauge(prov, model)
 	return chat.FormatStatus(chat.StatusSnapshot{
 		Provider: prov, Model: model, CWD: cwd,
 		Usage: usage, Subscription: s.subscription,

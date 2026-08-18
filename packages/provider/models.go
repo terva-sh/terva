@@ -766,6 +766,39 @@ func FindModel(provider, id string) (Model, error) {
 	return Model{}, fmt.Errorf("unknown model %q (provider=%q)", id, provider)
 }
 
+// ContextGauge is the denominator EVERY user-facing context reading must use:
+// the model's EFFECTIVE window, resolved from the active catalog. 0 when the
+// model is unknown, which callers render as "no gauge" rather than as a
+// division by zero.
+//
+// There were two context-window semantics in the tree and they disagreed.
+// Agent.ContextUsage, the auto-compaction keep-tail budget and ShouldAutoCompact
+// all divide by EffectiveContextWindow; nine gauge sites read the raw
+// ContextWindow instead — the TUI status bar, the script-mode payload, the
+// chat-bridge /status line, the web session card, the usage surface and the
+// context inspector. tools/status.go stated the contract out loud ("this
+// percentage matches the status-bar gauge and the auto-compaction threshold")
+// and it did not match.
+//
+// On a model with a DesiredContextWindow the gap is not cosmetic. gpt-5.6-luna
+// ships ContextWindow 1,050,000 against DesiredContextWindow 272,000, so
+// auto-compaction fires at 217,600 tokens while every gauge read 21% full: the
+// user watched their conversation compact at a fifth of a bar, with no surface
+// anywhere showing the number that triggered it. Any operator who sets
+// desiredContextWindow in models.json to dodge a context surcharge reproduces it
+// on any model.
+//
+// The hard ceiling keeps using Model.ContextWindow — the maxTok clamp and every
+// surface that reports the model's SPEC (`--list-models`, models.list, the rpc
+// and sdk model rows). Two meanings, two names, and the name says which.
+func ContextGauge(provider, id string) int {
+	m, err := FindModel(provider, id)
+	if err != nil {
+		return 0
+	}
+	return m.EffectiveContextWindow()
+}
+
 // ModelsForProvider returns all models for the given provider, from the
 // merged active catalog.
 func ModelsForProvider(provider string) []Model {

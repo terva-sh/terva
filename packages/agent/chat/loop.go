@@ -423,7 +423,7 @@ func (l *Loop) runTurn(ctx context.Context, m Message) {
 			replyBuilder.WriteString(e.Delta)
 		case core.EvUsage:
 			if e.Usage.InputTokens > 0 {
-				l.recordCtx(m, e.Usage.InputTokens+e.Usage.CacheReadTokens+e.Usage.CacheWriteTokens)
+				l.recordCtx(m, e.Usage.PromptTokens())
 			}
 		case core.EvAssistantMessage:
 			var sb strings.Builder

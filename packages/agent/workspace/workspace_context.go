@@ -144,9 +144,7 @@ func (s *wsSession) contextBreakdown() ctrlproto.ContextBreakdown {
 	prov, model := s.currentModel()
 	b.Provider, b.Model = prov, model
 	if model != "" {
-		if mdl, err := provider.FindModel("", model); err == nil {
-			b.Window = mdl.ContextWindow
-		}
+		b.Window = provider.ContextGauge("", model)
 	}
 
 	// The TUI status bar's live usage picture (shared with the usage surface):

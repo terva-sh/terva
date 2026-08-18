@@ -438,15 +438,23 @@ func sessionStats(ctx context.Context, path, sessID string, sideErrs []core.Sess
 	} else {
 		fmt.Fprintf(&b, "\ncost: $%.4f over %d billed turn(s)\n", usage.CostUSD+delegated.CostUSD, turns)
 	}
-	fmt.Fprintf(&b, "  uncached input %d, cache reads %d, output %d\n",
-		usage.InputTokens, usage.CacheReadTokens, usage.OutputTokens)
-	if total := usage.InputTokens + usage.CacheReadTokens; total > 0 {
+	// Cache writes are named here because they are in the denominator below —
+	// a rollup that omitted them printed three numbers that did not add up to
+	// the total the rate was taken over.
+	fmt.Fprintf(&b, "  uncached input %d, cache reads %d, cache writes %d, output %d\n",
+		usage.InputTokens, usage.CacheReadTokens, usage.CacheWriteTokens, usage.OutputTokens)
+	if rate, ok := usage.CacheHitRate(); ok {
 		// The single most actionable number here. A low rate on a long session
 		// means the context is being re-sent at full price, turn after turn.
 		// Computed over this session's OWN requests: a sub-agent starts cold by
 		// definition, so counting its prompts here would report delegation as a
 		// caching failure.
-		fmt.Fprintf(&b, "  cache hit rate %.1f%% of input\n", float64(usage.CacheReadTokens)/float64(total)*100)
+		//
+		// Through CacheHitRate so this and the /context pane cannot print two
+		// different percentages for one session under the same label — they
+		// did, because this took the rate over Input+CacheRead and the pane
+		// took it over the whole prompt.
+		fmt.Fprintf(&b, "  cache hit rate %.1f%% of prompt\n", rate*100)
 	}
 	if delegatedTurns > 0 {
 		// Inside the cost above, not added to it — the same subset relationship
@@ -454,7 +462,7 @@ func sessionStats(ctx context.Context, path, sessID string, sideErrs []core.Sess
 		// an order of magnitude more through sub-agents than on its own turns.
 		fmt.Fprintf(&b, "  of which delegated to sub-agents: $%.4f over %d record(s), %d in / %d out (excluded from the hit rate above)\n",
 			delegated.CostUSD, delegatedTurns,
-			delegated.InputTokens+delegated.CacheReadTokens+delegated.CacheWriteTokens, delegated.OutputTokens)
+			delegated.PromptTokens(), delegated.OutputTokens)
 	}
 	if deadTurns > 0 {
 		fmt.Fprintf(&b, "  %d turn(s) recorded zero tokens and zero cost — they died before reaching the model\n", deadTurns)
@@ -681,9 +689,6 @@ func newSessScan(a sessionInspectArgs) *sessScan {
 	return s
 }
 
-// addMessage flattens one transcript message into per-block events, feeding
-// each through the filters into the bounded retention. The signature matches
-// core.StreamReplayMessages' callback.
 // noteCall records a tool_call id→name, capped at siMaxOutstandingCalls with
 // oldest-first eviction. callOrder is compacted of consumed ids once it carries
 // far more than the live set, so retained state is O(cap), not O(call count).
@@ -780,6 +785,9 @@ func (s *sessScan) addUsage(row int, u, cum provider.Usage, at time.Time) {
 	s.add(sessEvent{Row: row, Kind: "usage", Usage: ev})
 }
 
+// addMessage flattens one transcript message into per-block events, feeding
+// each through the filters into the bounded retention. The signature matches
+// core.StreamReplayMessages' callback.
 func (s *sessScan) addMessage(row int, m provider.Message) {
 	role := string(m.Role)
 	for _, c := range m.Content {
@@ -901,12 +909,6 @@ func clipSnippetSource(s string) string {
 	return s
 }
 
-// resolvePath maps a session_id (or the current session) to a transcript path,
-// refusing any id that escapes the active project's sessions directory. An id
-// that is not a project session but names a swarm sub-agent resolves to that
-// child's transcript under the swarm root (swarmChild=true); the caller must
-// then enforce the project confinement the sessions-dir jail provides here,
-// against the transcript's own recorded cwd.
 // resolveFromPath admits a session-shaped JSONL by filesystem path, bounded by
 // the SAME read policy the read tool applies.
 //
@@ -944,6 +946,12 @@ func (t *SessionInspectTool) resolveFromPath(raw string) (path, id string, err e
 	return p, core.SessionIDFromPath(p), nil
 }
 
+// resolvePath maps a session_id (or the current session) to a transcript path,
+// refusing any id that escapes the active project's sessions directory. An id
+// that is not a project session but names a swarm sub-agent resolves to that
+// child's transcript under the swarm root (swarmChild=true); the caller must
+// then enforce the project confinement the sessions-dir jail provides here,
+// against the transcript's own recorded cwd.
 func (t *SessionInspectTool) resolvePath(ctx context.Context, sessionID string) (path, id string, swarmChild bool, err error) {
 	if sessionID != "" {
 		if strings.ContainsAny(sessionID, `/\`) || strings.Contains(sessionID, "..") {
@@ -1036,9 +1044,11 @@ func (u *usageEvent) detail() string {
 	fmt.Fprintf(&b, "  cache_write_tokens %d\n", u.Usage.CacheWriteTokens)
 	fmt.Fprintf(&b, "  output_tokens      %d\n", u.Usage.OutputTokens)
 	fmt.Fprintf(&b, "  cost_usd           %.6f\n", u.Usage.CostUSD)
-	if total := u.Usage.InputTokens + u.Usage.CacheReadTokens; total > 0 {
-		fmt.Fprintf(&b, "  cache hit rate     %.1f%% of input\n",
-			float64(u.Usage.CacheReadTokens)/float64(total)*100)
+	// Over the whole prompt, which includes the cache_write_tokens printed four
+	// lines above — excluding them meant this rate ignored a number it had just
+	// shown the reader.
+	if rate, ok := u.Usage.CacheHitRate(); ok {
+		fmt.Fprintf(&b, "  cache hit rate     %.1f%% of prompt\n", rate*100)
 	}
 	fmt.Fprintf(&b, "session cumulative:\n")
 	fmt.Fprintf(&b, "  input_tokens       %d\n", u.Cumulative.InputTokens)

@@ -1007,7 +1007,11 @@ func TestSessionInspectStats(t *testing.T) {
 	got := inspectText(t, res)
 	for _, want := range []string{
 		"cost: $0.5000 over 2 billed turn(s)",
-		"cache hit rate 90.0% of input",
+		// This fixture writes no cache, so 90% is the same under either
+		// denominator — TestSessionInspectHitRateCountsCacheWrites is the one
+		// that can tell them apart.
+		"cache hit rate 90.0% of prompt",
+		"uncached input 1000, cache reads 9000, cache writes 0, output 50",
 		"1 turn(s) recorded zero tokens and zero cost", // the dead turn
 		"1  read", // tool-call histogram
 		"1  bash",
@@ -1041,6 +1045,57 @@ func TestSessionInspectStats(t *testing.T) {
 	res, _ = tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess1","stats":true,"cursor":0,"limit":0,"expand":0,"text_offset":0}`), func(string) {})
 	if res.IsError {
 		t.Errorf("a fully padded stats call must work: %s", inspectText(t, res))
+	}
+}
+
+// Cache WRITES are prompt the model read, so they belong in the hit-rate
+// denominator — and this is the only fixture that can tell the two apart.
+//
+// The realistic shape is an Anthropic first turn on a long prefix: 90,000
+// tokens written to cache, 0 read, 10,000 uncached. Over the whole prompt that
+// is a 0% hit rate, which is the truth — nothing was served from cache. Over
+// Input+CacheRead it is also 0%, so the RATE alone cannot distinguish them;
+// what does is the rollup line, which must account for all 100,000 tokens
+// rather than printing 10,000 and silently dropping 90,000.
+//
+// The second turn is the payoff turn: 90,000 read, 0 written. Over the whole
+// prompt that is 90%; over Input+CacheRead it is also 90%. Cumulatively,
+// though, the two denominators diverge — 180,000 vs 90,000 prompt tokens — and
+// the cumulative rate is what stats reports.
+func TestSessionInspectHitRateCountsCacheWrites(t *testing.T) {
+	home := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
+	path := filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"type":"meta","meta":{"id":"x","cwd":"` + cwd + `","format_version":2}}
+{"type":"usage","usage":{"input_tokens":10000,"output_tokens":10,"cache_read_tokens":0,"cache_write_tokens":90000,"cost_usd":0.1},"cumulative":{"input_tokens":10000,"output_tokens":10,"cache_read_tokens":0,"cache_write_tokens":90000,"cost_usd":0.1}}
+{"type":"usage","usage":{"input_tokens":10000,"output_tokens":10,"cache_read_tokens":90000,"cache_write_tokens":0,"cost_usd":0.1},"cumulative":{"input_tokens":20000,"output_tokens":20,"cache_read_tokens":90000,"cache_write_tokens":90000,"cost_usd":0.2}}
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess1","stats":true}`), func(string) {})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := inspectText(t, res)
+
+	// 90,000 read of 200,000 prompt = 45%. Over Input+CacheRead it would be
+	// 90,000/110,000 = 81.8%, which is the number this used to print.
+	if !strings.Contains(got, "cache hit rate 45.0% of prompt") {
+		t.Errorf("hit rate must be taken over the whole prompt, cache writes included:\n%s", got)
+	}
+	if strings.Contains(got, "81.8%") {
+		t.Errorf("the rate is still over Input+CacheRead, which omits 90,000 tokens the model read:\n%s", got)
+	}
+	// The rollup must account for the cache writes too, or it prints three
+	// numbers that do not add up to the total the rate was taken over.
+	if !strings.Contains(got, "cache writes 90000") {
+		t.Errorf("the rollup does not name the cache writes it is counting:\n%s", got)
 	}
 }
 

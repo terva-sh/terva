@@ -289,7 +289,7 @@ func replayEventsIntoAgent(a *Agent, evs []Event) {
 		switch ev.Type {
 		case "assistant_message":
 			var parts []string
-			if c, ok := ev.Data["content"].([]any); ok {
+			if c, ok := eventMessageContent(ev.Data); ok {
 				for _, blk := range c {
 					m, _ := blk.(map[string]any)
 					if t, _ := m["type"].(string); t == "text" {
@@ -307,7 +307,7 @@ func replayEventsIntoAgent(a *Agent, evs []Event) {
 				a.setLastAssistant(strings.Join(parts, "\n"))
 			}
 		case "user_message":
-			if c, ok := ev.Data["content"].([]any); ok {
+			if c, ok := eventMessageContent(ev.Data); ok {
 				for _, blk := range c {
 					m, _ := blk.(map[string]any)
 					if t, _ := m["type"].(string); t == "text" {

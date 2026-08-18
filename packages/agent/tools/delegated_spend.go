@@ -35,7 +35,7 @@ func liveDelegatedLine(sw *swarm.Swarm) string {
 	// A provider that reports tokens without pricing them — a subscription, or a
 	// backend that prices nothing. Tokens are the honest figure there, and
 	// silence would be worse than an unpriced number.
-	in := u.InputTokens + u.CacheReadTokens + u.CacheWriteTokens
+	in := u.PromptTokens()
 	if in == 0 && u.OutputTokens == 0 {
 		return ""
 	}

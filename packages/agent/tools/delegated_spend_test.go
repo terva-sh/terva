@@ -2,10 +2,12 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"terva.sh/terva/packages/agent/swarm"
+	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -37,14 +39,29 @@ func runningSwarm(t *testing.T) (*swarm.Swarm, func(provider.Usage)) {
 		t.Fatal(err)
 	}
 	return f, func(u provider.Usage) {
+		// Encode the cumulative block through core.UsageToWire — the serializer
+		// a real child uses — rather than naming keys here.
+		//
+		// This fixture used to hand-write "input_tokens", "output_tokens",
+		// "cache_read_tokens" and "cache_write_tokens", which are
+		// provider.Usage's SESSION-ROW tags. The wire tags are "input",
+		// "output", "cache_read", "cache_write". The decoder read the same
+		// wrong names, so fixture and code agreed and every one of these tests
+		// passed while every delegated token count in the product was zero.
+		//
+		// A fixture that encodes the same assumption as the code asserts
+		// nothing. Going through the real encoder is what makes these tests
+		// evidence.
+		b, err := json.Marshal(core.UsageToWire(u))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cumulative map[string]any
+		if err := json.Unmarshal(b, &cumulative); err != nil {
+			t.Fatal(err)
+		}
 		swarm.IngestEvent(swarm.Event{Type: "usage", Data: map[string]any{
-			"cumulative": map[string]any{
-				"input_tokens":       float64(u.InputTokens),
-				"output_tokens":      float64(u.OutputTokens),
-				"cache_read_tokens":  float64(u.CacheReadTokens),
-				"cache_write_tokens": float64(u.CacheWriteTokens),
-				"cost_usd":           u.CostUSD,
-			},
+			"cumulative": cumulative,
 		}}, nil, nil, a)
 	}
 }

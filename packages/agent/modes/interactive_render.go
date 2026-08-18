@@ -532,7 +532,9 @@ func (i *Interactive) redraw() {
 	// showed before names existed.
 	modelLabel := i.cfg.Model
 	if m, err := provider.FindModel(i.cfg.Provider, i.cfg.Model); err == nil {
-		ctxMax = m.ContextWindow
+		// The EFFECTIVE window: this bar is a gauge, and it has to read against
+		// the same number auto-compaction fires on. See provider.ContextGauge.
+		ctxMax = m.EffectiveContextWindow()
 		modelLabel = m.Label()
 	}
 	// The daemon's answer beats the local catalog: an attach client whose

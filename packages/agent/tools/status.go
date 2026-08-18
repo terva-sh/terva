@@ -253,6 +253,13 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 	// status-bar gauge and the auto-compaction threshold. models.json
 	// overrides are reflected; usage is the most recent completed turn's
 	// input.
+	//
+	// That claim used to be false: nine gauge sites divided by the hard ceiling
+	// while this one and auto-compaction used the effective window, so on a
+	// model with a DesiredContextWindow the bar read 21% at the moment the
+	// conversation was compacted. provider.ContextGauge is the shared accessor
+	// they all go through now; this site keeps its own FindModel because it
+	// also reports the hard ceiling as an aside.
 	ctxWindow := 0
 	modelMax := 0
 	if model != "" {
@@ -261,7 +268,7 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 			modelMax = m.ContextWindow
 		}
 	}
-	used := last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
+	used := last.PromptTokens()
 	switch {
 	case !haveAgent:
 		sb.WriteString("context: live usage unavailable (no live agent)\n")
@@ -282,7 +289,7 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 
 	// Cumulative session usage, when a turn has run.
 	if haveAgent {
-		totalIn := cum.InputTokens + cum.CacheReadTokens + cum.CacheWriteTokens
+		totalIn := cum.PromptTokens()
 		if totalIn > 0 || cum.OutputTokens > 0 {
 			fmt.Fprintf(&sb, "session totals: %s in / %s out", fmtTokens(totalIn), fmtTokens(cum.OutputTokens))
 			if cum.CostUSD > 0 {
@@ -298,7 +305,7 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 		if del := agent.DelegatedCost(); del.CostUSD > 0 {
 			fmt.Fprintf(&sb, "  of which delegated to sub-agents: $%.4f", del.CostUSD)
 			if del.InputTokens > 0 || del.OutputTokens > 0 {
-				fmt.Fprintf(&sb, " (%s in / %s out)", fmtTokens(del.InputTokens+del.CacheReadTokens+del.CacheWriteTokens), fmtTokens(del.OutputTokens))
+				fmt.Fprintf(&sb, " (%s in / %s out)", fmtTokens(del.PromptTokens()), fmtTokens(del.OutputTokens))
 			}
 			sb.WriteByte('\n')
 		}

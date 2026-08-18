@@ -237,7 +237,7 @@ func (a *Agent) ContextUsage() (used, window int) {
 		window = m.EffectiveContextWindow()
 	}
 	last := a.LastTurnUsage()
-	used = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
+	used = last.PromptTokens()
 	return used, window
 }
 

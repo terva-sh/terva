@@ -321,3 +321,43 @@ func TestCarrierRejectsMutations(t *testing.T) {
 		t.Errorf("Cancel should be a no-op, got %v", err)
 	}
 }
+
+// The replayed context gauge must show what the live one showed.
+//
+// A first turn on a long prefix is the shape that exposes the difference:
+// Anthropic writes the whole prefix to cache and reads none of it, so
+// cache_write carries the tokens and cache_read is zero. Seeding ctxTokens as
+// Input+CacheRead reported ~0 where the live gauge showed the full prefix, and
+// because the seed is also the per-frame update, every later frame inherited
+// the gap. Someone comparing a replay against the session it came from would
+// see two different context sizes for the same turn.
+func TestReplayedContextGaugeCountsCacheWrites(t *testing.T) {
+	path := filepath.Join(testsupport.TempDir(t), "prefix.jsonl")
+	sess, err := core.NewSessionAtPath(path, "/cwd", "prov", "model", "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.AppendMessage(provider.Message{
+		Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hello"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 100,000 read by the model: 10,000 uncached, 90,000 written to cache.
+	u := provider.Usage{InputTokens: 10000, CacheWriteTokens: 90000, OutputTokens: 5}
+	if err := sess.AppendUsage(u, u); err != nil {
+		t.Fatal(err)
+	}
+	sess.Close()
+
+	c, err := Open(path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	const want = 100000
+	if got := c.ctxTokens; got != want {
+		t.Errorf("seeded context gauge = %d, want %d — Input+CacheRead alone drops the %d tokens "+
+			"the model read out of the cache write", got, want, u.CacheWriteTokens)
+	}
+}

@@ -152,9 +152,7 @@ func (i *Interactive) buildScriptPayload() []byte {
 	}
 	i.mu.Unlock()
 
-	if m, err := provider.FindModel(p.Provider, p.Model); err == nil {
-		p.ContextMax = m.ContextWindow
-	}
+	p.ContextMax = provider.ContextGauge(p.Provider, p.Model)
 	for _, w := range i.statusUsageWindows() {
 		pw := payloadUsageWindow{Label: w.Label, UsedPercent: w.UsedPercent}
 		if !w.ResetsAt.IsZero() {

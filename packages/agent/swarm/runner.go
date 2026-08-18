@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/procenv"
+	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider"
 )
@@ -147,21 +148,39 @@ func costFromEvent(ev Event) (provider.Usage, bool) {
 	return provider.Usage{}, false
 }
 
-// usageFromMap decodes the wire's cumulative object. JSON numbers arrive as
-// float64 through the map, so the token counts are converted rather than
-// asserted.
+// usageFromMap decodes the wire's cumulative object.
+//
+// It routes through core.WireUsage rather than reading keys by hand, because
+// reading keys by hand is what broke. This function used to pull
+// `input_tokens`, `output_tokens`, `cache_read_tokens` and `cache_write_tokens`
+// — which are provider.Usage's SESSION-ROW json tags — off a payload the child
+// encodes with core.UsageToWire, whose tags are `input`, `output`, `cache_read`
+// and `cache_write`. No terva child has ever emitted the vocabulary this
+// function was reading.
+//
+// Nothing errored, so nothing noticed. Every delegated token count in the
+// product was a hard zero: Swarm.InFlightSpend, RecordDelegatedUsage, and
+// terva_status's `delegated` / `delegated_in_flight`. For a subscription-backed
+// child, which reports cost_usd 0, the whole Usage decoded to the zero value,
+// costFromEvent's `u != provider.Usage{}` guard failed, and the child's ENTIRE
+// spend was never recorded — the exact failure delegated usage was built to
+// eliminate. And swarm/agent.go's comment reading zero-tokens-beside-dollars as
+// "the backend did not report tokens" was false precisely for the backend terva
+// ships.
+//
+// Re-marshalling costs one small allocation per usage event and buys the
+// guarantee that this decoder and core's encoder cannot disagree about a field
+// name again.
 func usageFromMap(m map[string]any) provider.Usage {
-	num := func(k string) float64 {
-		v, _ := m[k].(float64)
-		return v
+	b, err := json.Marshal(m)
+	if err != nil {
+		return provider.Usage{}
 	}
-	return provider.Usage{
-		InputTokens:      int(num("input_tokens")),
-		OutputTokens:     int(num("output_tokens")),
-		CacheReadTokens:  int(num("cache_read_tokens")),
-		CacheWriteTokens: int(num("cache_write_tokens")),
-		CostUSD:          num("cost_usd"),
+	var w core.WireUsage
+	if err := json.Unmarshal(b, &w); err != nil {
+		return provider.Usage{}
 	}
+	return core.UsageFromWire(w)
 }
 
 // swarmAgentArgsOpts captures every dynamic input to swarmAgentArgs
@@ -478,23 +497,30 @@ func parseEventLine(line string) (Event, bool) {
 	return ev, true
 }
 
+// eventMessageContent extracts the content blocks of a user/assistant message
+// event. The canonical shape (core.WireEvent) nests them under "message";
+// durable logs written before the serializer unification carried them flat
+// under "content", so both are read — old events.jsonl files replay forever.
+//
+// Package-level, and called by BOTH the live sink path and the replay path,
+// because it was a closure inside applyEventToSink and the replay path
+// re-implemented it. The copy only ever learned the LEGACY flat shape, so
+// replaying a CURRENT events.jsonl recovered nothing at all: a detached agent
+// came back with an empty transcript and no last answer. Every existing replay
+// test fed the flat shape and passed vacuously.
+func eventMessageContent(data map[string]any) ([]any, bool) {
+	if m, ok := data["message"].(map[string]any); ok {
+		c, ok := m["content"].([]any)
+		return c, ok
+	}
+	c, ok := data["content"].([]any)
+	return c, ok
+}
+
 // applyEventToSink translates an Event into Sink updates. Only a
 // few event types are interpreted; the rest still land in the
 // durable log via the caller.
 func applyEventToSink(ev Event, sink Sink) {
-	// eventMessageContent extracts the content blocks of a
-	// user/assistant message event. Canonical shape (core.WireEvent)
-	// nests them under "message"; durable logs written before the
-	// serializer unification carried them flat under "content", so
-	// keep reading both — old events.jsonl files replay forever.
-	eventMessageContent := func(data map[string]any) ([]any, bool) {
-		if m, ok := data["message"].(map[string]any); ok {
-			c, ok := m["content"].([]any)
-			return c, ok
-		}
-		c, ok := data["content"].([]any)
-		return c, ok
-	}
 	switch ev.Type {
 	case "assistant_message":
 		var parts []string
