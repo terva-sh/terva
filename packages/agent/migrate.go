@@ -16,8 +16,12 @@ import (
 // /migrate: copy the legacy zot user data dir to the terva location,
 // optionally rename a project's .zot/ to .terva/, and set the
 // envcompat marker that turns off zot config-file autoloading.
-// The CLI front-end lives in migratecmd.go; the TUI front-end is
-// dialogs.MigrateDialog, wired through dialogs.MigrationHooks in cli.go.
+// The CLI front-end in migratecmd.go is the ONLY front end. This used to name
+// dialogs.MigrateDialog "the TUI front-end, wired through
+// dialogs.MigrationHooks in cli.go"; no such wiring existed — the interactive
+// migrator belonged to the direct driver and went with it, leaving the dialog
+// unreachable and this sentence describing it anyway. The TUI's /migrate points
+// at `terva migrate` and does nothing else.
 
 // MigrationPlan is the immutable description of what a migration run
 // would do, computed up front so both front-ends can show it before

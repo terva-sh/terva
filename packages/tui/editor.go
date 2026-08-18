@@ -26,20 +26,6 @@ type Editor struct {
 	Prompt   string
 	MaxWidth int
 
-	// Mask, when non-zero, replaces every rune of the buffer with it at RENDER
-	// time. The buffer itself is untouched, so Value and SubmitValue return the
-	// real text and nothing else has to know.
-	//
-	// It exists because the login dialog had no way to hide an API key. The web
-	// client rendered the SAME AuthField descriptor as <input type="password">
-	// and the TUI echoed it in the clear, on the surface most likely to be on a
-	// shared screen or in a recording.
-	//
-	// One mask rune per real rune, so cursor arithmetic — which is rune-indexed
-	// — is unchanged. A buffer of wide runes would render narrower than it
-	// measures; an API key is not that, and hiding it matters more.
-	Mask rune
-
 	// lastRenderWidth is the column count passed to the most recent
 	// Render() call. Up/Down key handling needs this to walk the
 	// same visual layout the user sees: a logical line that wraps to
@@ -229,15 +215,29 @@ func (e *Editor) SetValue(s string) {
 	e.fileSeq = 0
 	e.dirs = nil
 	e.dirSeq = 0
-	// Whoever installs a buffer owns the composer, so the offer is over. This
-	// covers submit and Clear as well, both of which come through here: a
-	// suggestion must not outlive the message that was actually sent, because a
-	// line proposed against a conversation that has since moved on is worse
-	// than no line at all — it still looks current.
-	e.ghost = ""
+	// Whoever INSTALLS a buffer owns the composer, so the offer is over:
+	// history recall, a restored draft, a completion. A line proposed against a
+	// conversation that has since moved on is worse than no line at all,
+	// because it still looks current.
+	//
+	// Emptying is not installing, and that distinction is the whole point. A
+	// user who types over an offer and then erases what they typed has arrived
+	// back where the offer was made — they changed their mind, which is exactly
+	// when they might want it. Backspace already worked, because it edits the
+	// buffer in place and the offer waits behind whatever is written; Esc did
+	// not, purely because it routes through here. Two ways to reach an empty
+	// composer had opposite results and no reason for it.
+	//
+	// Submitting is emptying too, and there the offer MUST die. The send path
+	// says so itself rather than relying on Clear — see interactive_input.go.
+	if s != "" {
+		e.ghost = ""
+	}
 }
 
-// Clear resets the buffer.
+// Clear resets the buffer, keeping any offer standing (see SetValue: emptying
+// the composer is not the same as installing one). A caller that is ending the
+// offer as well — the send path — drops it explicitly.
 func (e *Editor) Clear() { e.SetValue("") }
 
 // SetGhost offers text as the next line, or clears the offer when empty.
@@ -996,18 +996,6 @@ func isWordSep(r rune) bool {
 
 // Render returns the editor's visible lines (wrapped to width).
 // visualRow/visualCol describe where the cursor lands within the returned lines.
-// maskRunes returns s with every rune replaced by mask, one for one.
-func maskRunes(s string, mask rune) string {
-	if s == "" {
-		return s
-	}
-	out := make([]rune, 0, len([]rune(s)))
-	for range s {
-		out = append(out, mask)
-	}
-	return string(out)
-}
-
 func (e *Editor) Render(width int) (lines []string, visualRow, visualCol int) {
 	e.lastRenderWidth = width
 	// The Prompt may carry ANSI styling (theme-coloured glyph + reset).
@@ -1025,9 +1013,6 @@ func (e *Editor) Render(width int) (lines []string, visualRow, visualCol int) {
 	indent := strings.Repeat(" ", promptLen)
 
 	for r, line := range e.Lines {
-		if e.Mask != 0 {
-			line = maskRunes(line, e.Mask)
-		}
 		var prefix string
 		if r == 0 {
 			prefix = plainPrompt

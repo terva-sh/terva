@@ -16,12 +16,15 @@ import (
 // Submit feeds text through the agent loop as if the user had typed it —
 // as a PROMPT, never as a command. A leading "!" is prose here: the shell
 // escape belongs to the editor's key path alone (see shellEscapeCommand),
-// because only there is the text known to be a human keystroke. This method
-// implements extdriver.HostHooks.Submit, so an extension reaches it; the
-// same reasoning SubmitSlash records for slash commands applies. The
-// driver invokes host hooks from its own goroutines, and turn start
-// mutates main-loop-only render state, so the submit is marshalled —
-// see SubmitOrQueue for the full story.
+// because only there is the text known to be a human keystroke. The same
+// reasoning SubmitSlash records for slash commands applies.
+//
+// This used to say it "implements extdriver.HostHooks.Submit, so an extension
+// reaches it". *Interactive has not satisfied that interface for some time (see
+// interactive_extensions.go); an extension's submit arrives through the daemon
+// surface. The marshalling below is still load-bearing regardless of caller:
+// turn start mutates main-loop-only render state, and every current caller is
+// off the main goroutine — see SubmitOrQueue for the full story.
 func (i *Interactive) Submit(text string) {
 	i.runOnMain(func() {
 		i.startTurn(i.runCtx, text)
@@ -138,6 +141,8 @@ func (i *Interactive) Confirm(ctx context.Context, toolName string, preview stri
 		return core.ConfirmDecision{Allow: false, Reason: "tool call refused: the turn was cancelled before this approval was answered"}
 	}
 }
+
+var _ core.Asker = (*Interactive)(nil)
 
 // Ask implements core.Asker. The ask_user_question tool calls this
 // synchronously; we enqueue the question set on the dialog, redraw, and

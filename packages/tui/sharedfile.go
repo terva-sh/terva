@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"terva.sh/terva/packages/provider"
 )
 
 // MetaSharedKey is the tool-role message Meta key carrying the files a step's
@@ -241,4 +243,33 @@ func (v *View) sharedPreview(id string) []byte {
 		return nil
 	}
 	return v.SharedPreviews[id]
+}
+
+// sharedPreviewSig fingerprints the preview bytes this client holds for the
+// shares m carries, for the render cache key.
+//
+// hashMessage already covers Meta["shared"], but that is the share HANDLE,
+// which arrives with the message. The picture does not: interactive fetches it
+// through the carrier afterwards and drops it into SharedPreviews, leaving the
+// handle — and so the message hash — unchanged. Without this component the
+// cache hits on the row it painted before the bytes landed, and the card keeps
+// its empty frame for the rest of the session; only a resize, ctrl+o or
+// /compact happens to evict it.
+//
+// Length rather than content, the same trade the tool-result case in
+// hashMessage makes: a fetch either has the bytes or does not, and the carrier
+// does not swap a drawn image for a different one of identical length.
+func (v *View) sharedPreviewSig(m provider.Message) uint64 {
+	// The overwhelmingly common case is a message with no shares at all, and
+	// this runs for every message on every frame — so no JSON parse unless
+	// there is something to parse.
+	if m.Meta[MetaSharedKey] == "" {
+		return 0
+	}
+	h := fnv64aInit
+	for _, f := range parseSharedFiles(m.Meta) {
+		h = fnv64aWrite(h, []byte(f.ID))
+		h = fnv64aWriteUint(h, uint64(len(v.sharedPreview(f.ID))))
+	}
+	return h
 }

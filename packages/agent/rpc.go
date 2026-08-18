@@ -14,6 +14,7 @@ import (
 	"terva.sh/terva/packages/agent/authrefresh"
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/extdriver"
 	"terva.sh/terva/packages/agent/extproto"
 	"terva.sh/terva/packages/agent/modes"
 	"terva.sh/terva/packages/agent/permissions"
@@ -263,7 +264,9 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	return server.run(os.Stdin)
 }
 
-// rpcExtHooks implements extensions.HostHooks for the headless RPC
+var _ extdriver.HostHooks = (*rpcExtHooks)(nil)
+
+// rpcExtHooks implements extdriver.HostHooks for the headless RPC
 // loop. Notify and Display surface as `event` frames so any RPC
 // client can render them; Submit and Insert are no-ops because the
 // RPC loop has no editor and the prompt comes from the client.
@@ -782,6 +785,8 @@ func (s *rpcServer) busy() bool {
 	defer s.writeMu.Unlock()
 	return s.activeCancel != nil
 }
+
+var _ core.Confirmer = (*rpcServer)(nil)
 
 // Confirm implements core.Confirmer over the rpc wire. It emits an `ask` frame
 // naming the tool and its preview, then BLOCKS until the driver answers with a

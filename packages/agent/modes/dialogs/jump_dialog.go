@@ -4,17 +4,38 @@ import (
 	"fmt"
 	"strings"
 
+	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
 
+// JumpPurpose says why the picker is open, and therefore which index domain the
+// slice handed to Open belongs to. It travels back out on the selection, so the
+// caller acts on the domain it opened with rather than on separately-held state.
+//
+// The two are not interchangeable. /jump is opened with what the chat PAINTS —
+// history paged back in through a compaction divider, prepended, and tool-image
+// mirrors dropped. /fork is opened with the effective transcript, which has
+// neither. The same conversation gives a message different indices in each, so
+// the pairing of "which slice" with "what to do about the pick" is a correctness
+// property, not a convenience.
+type JumpPurpose int
+
+const (
+	// JumpScroll scrolls the chat viewport to the picked turn.
+	JumpScroll JumpPurpose = iota
+	// JumpFork branches the session at the picked turn.
+	JumpFork
+)
+
 // jumpTarget describes one "turn" in the current session — a user
 // prompt plus the preview metadata the picker renders. MessageIdx
-// maps back into view.Messages so we can resolve the row offset via
-// view.BuildWithAnchors when the user picks a target.
+// indexes THE SLICE PASSED TO Open, which differs by purpose; see
+// JumpPurpose. For JumpScroll that resolves to a row via
+// view.BuildWithAnchors, for JumpFork to a BranchSession cut point.
 type jumpTarget struct {
-	MessageIdx int    // index into view.Messages
+	MessageIdx int    // index into the slice Open was given
 	TurnNo     int    // 1-based turn number in session order
 	Preview    string // first ~60 chars of the user prompt (one line)
 	ToolCount  int    // tools invoked by the assistant in this turn
@@ -25,6 +46,7 @@ type jumpTarget struct {
 // arrow keys move within the filtered set.
 type JumpDialog struct {
 	active  bool
+	purpose JumpPurpose
 	all     []jumpTarget
 	visible []jumpTarget // filtered subset
 	cursor  int
@@ -35,9 +57,12 @@ type JumpDialog struct {
 	filter  string
 }
 
-// jumpDialogAction is returned by HandleKey.
+// jumpDialogAction is returned by HandleKey. Purpose is the one Open was given,
+// carried back so the consumer cannot pair a MessageIdx with an action from the
+// other index domain.
 type jumpDialogAction struct {
 	Select     bool
+	Purpose    JumpPurpose
 	MessageIdx int
 	TurnNo     int
 	Close      bool
@@ -50,8 +75,13 @@ func NewJumpDialog() *JumpDialog { return &JumpDialog{} }
 // If the filter already narrows the list to exactly one match the
 // caller should check len(d.visible)==1 and treat that as an
 // immediate select rather than opening the full picker.
-func (d *JumpDialog) Open(msgs []provider.Message, initialFilter string) {
+//
+// purpose is taken here rather than held by the caller because msgs and purpose
+// have to agree: the indices this produces mean nothing without knowing which
+// slice they index. See JumpPurpose.
+func (d *JumpDialog) Open(msgs []provider.Message, initialFilter string, purpose JumpPurpose) {
 	d.all = buildJumpTargets(msgs)
+	d.purpose = purpose
 	d.filter = initialFilter
 	d.applyFilter()
 	// Start on the last (most recent) target so enter-without-typing
@@ -237,7 +267,7 @@ func (d *JumpDialog) HandleKey(k tui.Key) jumpDialogAction {
 		}
 		t := d.visible[d.cursor]
 		d.Close()
-		return jumpDialogAction{Select: true, MessageIdx: t.MessageIdx, TurnNo: t.TurnNo}
+		return jumpDialogAction{Select: true, Purpose: d.purpose, MessageIdx: t.MessageIdx, TurnNo: t.TurnNo}
 	}
 	return jumpDialogAction{}
 }
@@ -249,7 +279,16 @@ func buildJumpTargets(msgs []provider.Message) []jumpTarget {
 	var out []jumpTarget
 	turn := 0
 	for i, m := range msgs {
-		if m.Role != provider.RoleUser {
+		// core.IsUserTurn, not "role is user": four machine-authored messages
+		// also carry RoleUser, and the picker offered every one of them as a
+		// turn — a tool-image mirror previewing as the wire prefix, a /clear
+		// divider as "(empty)", a compaction summary as its own first line, and
+		// a host nudge as itself. They took turn NUMBERS too, so a transcript
+		// with any of them misnumbered every real turn after it.
+		//
+		// i still indexes msgs, so skipping a row shifts nothing: the cut point
+		// a fork resolves to is unaffected by what the picker chooses to show.
+		if !core.IsUserTurn(m) {
 			continue
 		}
 		turn++

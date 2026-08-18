@@ -180,6 +180,35 @@ const MetaRouted = "stage:routed"
 // and the conversation before it, "crossed" once you have chosen to look anyway.
 const MetaClear = "clear"
 
+// IsUserTurn reports whether msg is something the USER did — a prompt they
+// typed — rather than one of the several machine-authored messages that also
+// carry RoleUser.
+//
+// There are four of those, and they arrived one at a time: a tool-image mirror
+// (the wire artifact that re-presents images to a vision model), a compaction
+// summary (whose own doc says a display surface renders it "as a divider rather
+// than as the user message its RoleUser would otherwise imply"), a host-injected
+// nudge, and the client-side /clear divider. RoleUser is what they have in
+// common and it is not a question anybody wants answered — "did the user say
+// this" is.
+//
+// It exists because two callers were each answering it, differently and
+// incompletely: the /jump picker asked only "is the role user", so it offered
+// all four as turns you could jump to or fork at; playerTurns excluded the
+// host nudge and nothing else. A fifth machine-authored RoleUser message would
+// have had to be remembered in both.
+func IsUserTurn(msg provider.Message) bool {
+	if msg.Role != provider.RoleUser {
+		return false
+	}
+	if IsToolImageMirror(msg) {
+		return false
+	}
+	return msg.Meta[MetaSynthetic] != "true" &&
+		msg.Meta[MetaCompaction] != "true" &&
+		msg.Meta[MetaClear] == ""
+}
+
 // MetaPreamble marks a message whose FIRST content block is a host-assembled
 // preamble rather than anything the user typed (see [UserMessageExtras]).
 //

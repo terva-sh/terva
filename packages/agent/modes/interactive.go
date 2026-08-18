@@ -575,11 +575,6 @@ type Interactive struct {
 	// outside dialogs and popups). See keymap.go.
 	keymap []globalBinding
 
-	// pendingFork is true when the user ran /session fork: the next
-	// jump-picker selection should branch off that message instead
-	// of scrolling. Flag resets after the action fires or the dialog
-	// is dismissed, so repeated /jump calls don't turn into forks.
-	pendingFork bool
 	suggest     *slashSuggester
 	fileSuggest *widgets.FileSuggester
 	spin        *widgets.Spinner

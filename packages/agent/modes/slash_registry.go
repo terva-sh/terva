@@ -238,7 +238,7 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 		return false
 	},
 	"/migrate": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
-		i.openMigrateDialog()
+		i.slashMigrate()
 		return false
 	},
 	"/exit": func(*Interactive, context.Context, []string, string) bool { return true },

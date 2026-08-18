@@ -94,6 +94,8 @@ func (t *Transport) Receive(ctx context.Context, deliver func(connsdk.Message)) 
 	return nil
 }
 
+var _ connsdk.MembershipSource = (*Transport)(nil)
+
 // ReceiveMembership implements connsdk.MembershipSource: guild joins
 // and leaves surface as admission events on the guild's SYSTEM
 // channel (the closest thing a Discord server has to "the chat the
@@ -264,6 +266,8 @@ func download(url, path string) error {
 	_, err = io.Copy(f, io.LimitReader(resp.Body, maxAttachmentBytes))
 	return err
 }
+
+var _ connsdk.ChatEventSource = (*Transport)(nil)
 
 // ReceiveChatEvents implements connsdk.ChatEventSource (stage D):
 // message edits, deletions, and reaction toggles stream to the host.

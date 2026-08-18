@@ -11,13 +11,19 @@ import (
 )
 
 // newInteractiveForNewSessionTest builds the minimal Interactive that
-// startNewSession touches: a view, a turn engine, and pre-dirtied TUI state
-// so the reset is observable. No agent — the TUI holds none (plan 4.1); the
-// NewSession callback stands in for the host's carrier session switch.
+// startNewSession touches: a view, a turn engine, an editor, and pre-dirtied
+// TUI state so the reset is observable. No agent — the TUI holds none (plan
+// 4.1); the NewSession callback stands in for the host's carrier session switch.
+//
+// The editor is not optional. NewInteractive always mints one, so a fixture
+// without one models a machine that does not exist — and startNewSession now
+// reaches the composer to drop a standing next-step offer, which is exactly the
+// kind of reach such a fixture hides until it nil-panics.
 func newInteractiveForNewSessionTest() *Interactive {
 	iv := &Interactive{
 		view:  &tui.View{},
 		turns: newTurnEngine(),
+		ed:    tui.NewEditor(""),
 		// Pre-populate state that startNewSession must clear.
 		toolCalls:    map[string]*tui.ToolCallView{"x": {}},
 		cumUsage:     provider.Usage{InputTokens: 1234, OutputTokens: 56},
@@ -25,6 +31,7 @@ func newInteractiveForNewSessionTest() *Interactive {
 		statusErr:    "stale error",
 		scrollOffset: 5,
 	}
+	iv.ed.SetGhost("an offer from the old conversation")
 	iv.cfg.Provider = "anthropic"
 	iv.cfg.Model = "claude-sonnet-4-5"
 	return iv
@@ -64,6 +71,12 @@ func TestStartNewSessionResetsStateAndInvokesCallback(t *testing.T) {
 	}
 	if iv.lastCtxInput != 0 || iv.scrollOffset != 0 {
 		t.Errorf("lastCtxInput/scrollOffset not reset: %d/%d", iv.lastCtxInput, iv.scrollOffset)
+	}
+	// A suggestion computed against the conversation just left would otherwise
+	// greet the new one, still looking current. Erasing the composer no longer
+	// ends an offer, so the paths where the CONVERSATION moves must end it.
+	if got := iv.ed.Ghost(); got != "" {
+		t.Errorf("the old conversation's offer survived into the new session: %q", got)
 	}
 }
 

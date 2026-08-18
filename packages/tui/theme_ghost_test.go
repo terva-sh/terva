@@ -56,6 +56,48 @@ func TestEveryBuiltInDistinguishesAnOfferFromTyping(t *testing.T) {
 	}
 }
 
+// greyscaleFloor is the bottom of the xterm 232-255 greyscale ramp: near-black,
+// and the closest a 256-colour theme can come to naming a dark terminal's own
+// background. A theme cannot read the real background (Theme.Background is
+// optional and nil for every built-in dark), so this stands in for it.
+const greyscaleFloor = 232
+
+// Receding from the foreground is only half the requirement, and the half the
+// direction test above already covers. The other half has no test until this
+// one: an offer can recede so far that it sinks into the background instead.
+//
+// Dark shipped at 240 — 13 below FG 253, but only 8 above the ramp floor. It
+// was legible enough to prove Tab had worked and too faint to suggest that Tab
+// was worth trying, which is the whole job. So the property is a POSITION in
+// the range, not a direction: an offer belongs in the half nearer ordinary
+// text than the background.
+//
+// Asserted for the dark family only, deliberately. The light themes' mirror
+// (ghost 248 against FG 236, with 255 as the ramp ceiling) does NOT satisfy
+// it, and widening that margin is a separate judgement about a theme nobody
+// has complained about — pinning it here would either fail the build or bless
+// a number this test never examined.
+func TestADarkOfferDoesNotSinkIntoTheBackground(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		th   Theme
+	}{
+		{"Dark", Dark},
+		{"DarkDaltonized", DarkDaltonized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ghost := tc.th.GhostColor()
+			toFG := tc.th.FG - ghost
+			toBG := ghost - greyscaleFloor
+			if toBG <= toFG {
+				t.Errorf("ghost %d is nearer the background (%d away from %d) than ordinary text (%d away from fg %d): "+
+					"an offer that faint reads as nothing, so nobody learns Tab would take it",
+					ghost, toBG, greyscaleFloor, toFG, tc.th.FG)
+			}
+		})
+	}
+}
+
 // GhostText is what the editor is handed. It has to actually colour the text,
 // and it has to close the sequence — an unterminated SGR would bleed into
 // everything painted after the composer.

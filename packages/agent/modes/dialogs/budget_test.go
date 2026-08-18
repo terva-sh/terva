@@ -130,7 +130,7 @@ func budgetCases() []sized {
 				msgs[i] = provider.Message{Role: provider.RoleUser,
 					Content: []provider.Content{provider.TextBlock{Text: fmt.Sprintf("message %d", i)}}}
 			}
-			d.Open(msgs, "")
+			d.Open(msgs, "", JumpScroll)
 			d.MaxRows = BodyBudget(termRows, d.ChromeRows())
 			d.cursor = 150
 			return len(d.Render(th, w)), d.ChromeRows()

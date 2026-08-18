@@ -233,30 +233,48 @@ func (i *Interactive) extStatusSegments() []string {
 	return i.cfg.Extensions.StatusSegments()
 }
 
-// RefreshStatus is the manager's hook to redraw after a status_segment
-// changes, so a status update appears even when nothing else triggers a
-// frame. (HostHooks.)
-func (i *Interactive) RefreshStatus() { i.invalidate() }
-
 // slashContext (the /context modal) lives in interactive_context.go — it
 // now opens a tabbed dialog with the size breakdown + the per-extension
 // injected text, instead of printing the text inline.
 
-// HostHooks implementation for the extension manager. The manager
-// holds an interface, not a concrete *Interactive, so these methods
-// are the only thing the manager sees.
+// TUI-local extension-note handling. NOT a HostHooks implementation, whatever
+// this heading used to say.
+//
+// It claimed *Interactive was "the HostHooks implementation for the extension
+// manager", and that the manager "holds an interface, not a concrete
+// *Interactive, so these methods are the only thing the manager sees". None of
+// that is true and it had not been for some time: the manager never receives an
+// *Interactive, and the type cannot satisfy extdriver.HostHooks anyway — it is
+// missing RefreshContext and RefreshTools, and its UpdatePanel had never gained
+// the widgets parameter the interface added. The compiler could have said so in
+// one line; nothing asked it to, so a prose claim outlived the wiring it
+// described.
+//
+// The live implementations are webExtHooks (workspace_surfaces.go, the daemon
+// surface every TUI session now goes through), rpcExtHooks and
+// NonInteractiveExtHooks. What survives here reaches the TUI by other routes,
+// named per method below. The same removal of the direct driver is why
+// openMigrateDialog can now only report that the migrator is unavailable.
+//
+// Insert, Display, UpdatePanel, ClosePanel and RefreshStatus were removed with
+// this comment: no caller of any kind, in production or test.
 
-// Notify is the manager's NotifyFromExt entry point.
+// Notify appends an extension's status line to the bottom-sticky notes block.
+// Reached from cli_ctrlproto.go and attach_mode.go, not from the manager.
 func (i *Interactive) Notify(extName, level, message string) {
 	i.appendExtensionNote(extName, message, level)
 	i.invalidate()
 }
 
 // ClearNotes removes every note line owned by extName from the
-// bottom-sticky ext-notes block. Extensions use this to retract a
-// transient status line (e.g. an approval prompt) once it no longer
-// applies, instead of leaving it stacked forever. Notes from other
-// extensions and internal notes (auto-compact) are left untouched.
+// bottom-sticky ext-notes block. Notes from other extensions and internal
+// notes (auto-compact) are left untouched.
+//
+// It has NO production caller — kept, unlike the five removed above, only
+// because ReplaceNote's doc cites it as the contrast that explains why keyed
+// retraction exists ("it strips by EXTENSION"). An extension retracting a
+// transient line goes through the daemon surface now. Delete it with that
+// citation if a keyed-only world makes the contrast pointless.
 func (i *Interactive) ClearNotes(extName string) {
 	marker := "[" + extName + "] "
 	i.mu.Lock()
@@ -282,24 +300,8 @@ func (i *Interactive) ClearNotes(extName string) {
 	}
 }
 
-// Insert places text at the cursor in the editor. Called from
-// extension host hooks that run on background goroutines, so the
-// editor mutation is marshalled onto the main Run() goroutine —
-// tui.Editor has no internal locking and is otherwise only touched
-// by the key loop.
-func (i *Interactive) Insert(text string) {
-	i.runOnMain(func() {
-		i.ed.Insert(text)
-	})
-}
-
-// Display appends a styled note from extName to the chat without a
-// model call.
-func (i *Interactive) Display(extName, text string) {
-	i.appendExtensionNote(extName, text, "info")
-	i.invalidate()
-}
-
+// OpenPanel shows an extension panel. Its one caller is the command-result
+// handler above: an extension command whose response asks for a panel.
 func (i *Interactive) OpenPanel(extName string, spec extproto.PanelSpec) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -308,25 +310,6 @@ func (i *Interactive) OpenPanel(extName string, spec extproto.PanelSpec) {
 	// it; clear the mirror id so the carrier close check leaves it alone.
 	i.carrierPanelSurface = ""
 	i.invalidate()
-}
-
-func (i *Interactive) UpdatePanel(extName, panelID, title string, lines []string, footer string) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	if i.extPanel.Active() && i.extPanel.Ext() == extName && i.extPanel.ID() == panelID {
-		i.extPanel.Update(title, lines, footer)
-		i.invalidate()
-	}
-}
-
-func (i *Interactive) ClosePanel(extName, panelID string) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	if i.extPanel.Active() && i.extPanel.Ext() == extName && i.extPanel.ID() == panelID {
-		i.extPanel.Close()
-		i.carrierPanelSurface = ""
-		i.invalidate()
-	}
 }
 
 // runReloadExt triggers a live reload of every extension (discovered

@@ -61,6 +61,8 @@ func (c *ChatConfirmer) lock(ctx context.Context) bool {
 
 func (c *ChatConfirmer) unlock() { <-c.sem }
 
+var _ core.Confirmer = (*ChatConfirmer)(nil)
+
 // Confirm implements core.Confirmer over the connector's ask surface.
 //
 // ctx is the turn's. It bounds both the queue and the ask: a cancelled turn

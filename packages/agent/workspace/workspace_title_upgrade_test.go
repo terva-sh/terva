@@ -106,17 +106,27 @@ func TestTitleUpgradeSkipsUntitled(t *testing.T) {
 	}
 }
 
-// Harness-injected user messages are not the player speaking, so they must not
+// Machine-authored user messages are not the player speaking, so they must not
 // push a scene over the threshold.
-func TestPlayerTurnsIgnoresSyntheticMessages(t *testing.T) {
+//
+// This used to name only the harness-injected nudge, because that was the one
+// this function's author had in mind — and the count went on treating a
+// compaction summary and a tool-image mirror as the player, bringing an
+// immersive retitle forward by however many of them the scene had accumulated.
+// core.IsUserTurn is the shared answer; the cases below are what it covers.
+func TestPlayerTurnsIgnoresMachineAuthoredMessages(t *testing.T) {
 	msgs := []provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "real"}}},
 		{Role: provider.RoleUser, Meta: map[string]string{core.MetaSynthetic: "true"},
 			Content: []provider.Content{provider.TextBlock{Text: "injected"}}},
+		{Role: provider.RoleUser, Meta: map[string]string{core.MetaCompaction: "true"},
+			Content: []provider.Content{provider.TextBlock{Text: "Conversation so far: …"}}},
+		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: core.ToolImageMirrorPrefix}}},
+		{Role: provider.RoleUser, Meta: map[string]string{core.MetaClear: "true"}},
 		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "reply"}}},
 	}
 	if got := playerTurns(msgs); got != 1 {
-		t.Errorf("playerTurns = %d, want 1 (the synthetic one is not the player)", got)
+		t.Errorf("playerTurns = %d, want 1 — only the first message is the player speaking", got)
 	}
 }
 

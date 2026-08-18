@@ -12,6 +12,8 @@ import (
 	"terva.sh/terva/packages/provider"
 )
 
+var _ core.Tool = (*Tool)(nil)
+
 // Tool implements core.Tool, exposing a `skill` tool the LLM can call
 // to load the body of a discovered skill on demand. The system-prompt
 // addendum lists the available names; this tool returns the full

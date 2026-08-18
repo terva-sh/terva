@@ -391,9 +391,9 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			render: func(cols int) []string { return i.logoutDialog.Render(i.cfg.Theme, cols) },
 		},
 		// (The zot→terva migration overlay lived here. // rename:keep
-		// Its dialog could only be opened by openMigrateDialog, which lost its
-		// host hook with the direct driver and now only reports that the
-		// migrator is unavailable — so the overlay could never become active.)
+		// Its dialog lost its host hook with the direct driver, so the overlay
+		// could never become active. The dialog itself has now been deleted;
+		// /migrate points at the CLI, which is the only front end there is.)
 		{ // chat-connector ops
 			active: i.connectDialog.Active,
 			ctrlC:  func() bool { i.connectDialog.Close(); return true },
@@ -573,23 +573,26 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			active: i.jumpDialog.Active,
 			ctrlC: func() bool {
 				i.jumpDialog.Close()
-				i.pendingFork = false
 				return true
 			},
 			handleKey: func(k tui.Key) bool {
 				act := i.jumpDialog.HandleKey(k)
 				if act.Select {
-					if i.pendingFork {
+					// On the purpose the dialog was OPENED with, so a
+					// MessageIdx can only reach the action for its own index
+					// domain. This used to read a pendingFork field set by one
+					// opener and cleared by four exits, with nothing checking
+					// that the flag and the slice agreed.
+					//
+					// No default: an unhandled purpose does nothing, rather
+					// than scrolling to a fork index or forking at a display
+					// one. TestEveryJumpPurposeIsHandled fails instead.
+					switch act.Purpose {
+					case dialogs.JumpFork:
 						i.applyForkSelection(act.MessageIdx)
-					} else {
+					case dialogs.JumpScroll:
 						i.applyJumpSelection(act.MessageIdx, act.TurnNo)
 					}
-				}
-				// If the user dismissed the dialog without selecting, also
-				// clear the pending-fork flag so a later plain /jump isn't
-				// hijacked.
-				if act.Close {
-					i.pendingFork = false
 				}
 				return false
 			},

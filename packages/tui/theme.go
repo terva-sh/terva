@@ -57,11 +57,20 @@ type Theme struct {
 	// typed: the two occupy the same row in the same place, and the shade is
 	// the only thing telling them apart.
 	//
-	// Dimmer than Muted, which is not the same as darker. On a light theme
-	// the foreground is dark, so receding means going LIGHTER — each built-in
+	// Receding, which is not the same as dark. On a light theme the
+	// foreground is dark, so receding means going LIGHTER — each built-in
 	// picks the direction that moves away from its own FG. Zero falls back to
 	// Muted, so a bare Theme literal and every theme file written before this
 	// slot existed still draw an offer that is distinguishable from typing.
+	//
+	// Receding has a FLOOR, and the first dark value missed it. There are two
+	// ways to be invisible here, not one: too close to FG and the offer reads
+	// as text the user already typed; too close to the terminal's background
+	// and it reads as nothing at all. Dark's 240 sat 13 below FG 253 but only
+	// 8 above the xterm greyscale floor — legible enough to prove Tab worked,
+	// too faint to suggest that Tab was worth trying. A theme cannot measure
+	// the real background (Background is optional and usually nil), so the
+	// bottom of the greyscale ramp stands in for it.
 	Ghost int
 
 	// MeterLow/Mid/High color the status bar's consumption meters
@@ -203,7 +212,7 @@ var Dark = Theme{
 	Spinner:           183, // soft purple
 	SelectionBG:       24,  // deep blue background
 	SelectionFG:       231, // near-white foreground
-	Ghost:             240, // an un-accepted offer: darker than Muted, well under FG 253
+	Ghost:             245, // an un-accepted offer: 8 clear of FG 253, and well above a dark terminal's floor
 	MeterLow:          244, // muted
 	MeterMid:          214, // amber
 	MeterHigh:         203, // red

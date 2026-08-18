@@ -157,22 +157,18 @@ func TestAnUnseenOfferCannotBeAccepted(t *testing.T) {
 	}
 }
 
-// Whoever installs a buffer owns the composer, so the offer is over: submit and
-// Clear both come through SetValue, and Restore brings back the user's own
-// parked writing, which outranks a suggestion.
+// Whoever installs a buffer owns the composer, so the offer is over: a
+// completion or history recall writes through SetValue, and Restore brings back
+// the user's own parked writing, which outranks a suggestion.
+//
+// Clear is deliberately NOT in this list. Emptying a composer is not installing
+// one — see TestErasingWhatYouTypedBringsTheOfferBack.
 func TestInstallingABufferDropsTheOffer(t *testing.T) {
 	t.Run("SetValue", func(t *testing.T) {
 		ed := ghostEditor(t, "run the tests")
 		ed.SetValue("something else")
 		if ed.Ghost() != "" {
 			t.Fatalf("offer survived SetValue: %q", ed.Ghost())
-		}
-	})
-	t.Run("Clear", func(t *testing.T) {
-		ed := ghostEditor(t, "run the tests")
-		ed.Clear()
-		if ed.Ghost() != "" {
-			t.Fatalf("offer survived Clear: %q", ed.Ghost())
 		}
 	})
 	t.Run("Restore", func(t *testing.T) {
@@ -187,6 +183,58 @@ func TestInstallingABufferDropsTheOffer(t *testing.T) {
 		}
 		if ed.Value() != "a parked draft" {
 			t.Fatalf("Value = %q, want the restored draft", ed.Value())
+		}
+	})
+}
+
+// Changing your mind is the case the offer exists for. A user who types over a
+// suggestion and then erases what they typed is back exactly where the offer
+// was made, so it must be there again — ready for Tab, or to be adapted.
+//
+// Both routes to an empty composer must agree. Backspace always worked, because
+// it edits the buffer in place and the offer simply waits behind whatever is
+// written. Esc did not, purely because it routes through Clear, which dropped
+// the offer outright. Two gestures with the same meaning and opposite results,
+// and nothing about the second was a decision.
+func TestErasingWhatYouTypedBringsTheOfferBack(t *testing.T) {
+	t.Run("Clear", func(t *testing.T) {
+		ed := ghostEditor(t, "run the tests")
+		ed.SetValue("half a thought")
+		ed.SetGhost("run the tests")
+
+		ed.Clear()
+
+		if ed.Ghost() != "run the tests" {
+			t.Fatalf("erasing the typed text discarded the offer: %q", ed.Ghost())
+		}
+		if !ed.GhostVisible() {
+			t.Error("the offer is held but not drawn on the now-empty composer")
+		}
+		// And it is still a real offer, not a husk: Tab takes it.
+		if !ed.AcceptGhost() || ed.Value() != "run the tests" {
+			t.Errorf("the restored offer could not be accepted: value=%q", ed.Value())
+		}
+	})
+	t.Run("Esc", func(t *testing.T) {
+		ed := ghostEditor(t, "run the tests")
+		ed.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: 'x'})
+		if ed.GhostVisible() {
+			t.Fatal("fixture: the offer should be hidden behind the typed text")
+		}
+
+		ed.HandleKey(tui.Key{Kind: tui.KeyEsc})
+
+		if !ed.GhostVisible() {
+			t.Errorf("Esc erased the typed text and the offer with it: %q", ed.Ghost())
+		}
+	})
+	t.Run("backspace", func(t *testing.T) {
+		ed := ghostEditor(t, "run the tests")
+		ed.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: 'x'})
+		ed.HandleKey(tui.Key{Kind: tui.KeyBackspace})
+
+		if !ed.GhostVisible() {
+			t.Errorf("backspacing to empty lost the offer: %q", ed.Ghost())
 		}
 	})
 }

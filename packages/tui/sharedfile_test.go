@@ -174,6 +174,48 @@ func TestSharedFileCardDefeatsTheRenderCache(t *testing.T) {
 	}
 }
 
+// The other half of the same trap, and the one the message hash cannot reach.
+//
+// Above, the share HANDLE lands on a message already on screen — Meta changes,
+// so hashMessage changes and the cache misses. The picture is different: it is
+// fetched afterwards through the carrier and dropped into View.SharedPreviews,
+// which leaves the message, and therefore its hash, byte-for-byte identical.
+// Only the preview component of the cache key distinguishes the two renders, so
+// without it the user keeps the empty frame for the rest of the session unless
+// a resize or /compact happens to evict the row.
+//
+// Asserted on the metadata line rather than the inline-image escape because
+// that line is what renderImageBlockData emits on every path, including a
+// terminal with no image protocol at all — the assertion is about the card
+// having READ the bytes, not about how the pixels got drawn.
+func TestSharedFileCardShowsAPreviewThatLandsAfterTheCard(t *testing.T) {
+	const previewOnly = "image - image/png"
+	v := View{Theme: Dark, Now: func() time.Time { return pinnedNow }, Messages: []provider.Message{
+		toolCall("t1", "share_file", `{"path":"screenshot.png"}`),
+		{
+			Role:    provider.RoleTool,
+			Content: []provider.Content{toolResult("t1", false, "shared")},
+			Meta: sharedMeta(t, SharedFile{
+				ID: "shr_a", CallID: "t1", Name: "screenshot.png",
+				Kind: "image", Mime: "image/png",
+			}),
+		},
+	}}
+
+	// First paint: the handle is known, the bytes are not. The card is complete
+	// without a picture — and this cardless-but-complete row is what caches.
+	if plain := stripANSI(strings.Join(v.Build(80), "\n")); strings.Contains(plain, previewOnly) {
+		t.Fatalf("the preview cannot be there before the fetch lands:\n%s", plain)
+	}
+
+	// The carrier's fetch completes. Nothing about the message changes.
+	v.SharedPreviews = map[string][]byte{"shr_a": []byte("\x89PNG\r\n\x1a\nnot a real png, only bytes")}
+
+	if plain := stripANSI(strings.Join(v.Build(80), "\n")); !strings.Contains(plain, previewOnly) {
+		t.Errorf("the cache served back the row painted before the picture arrived:\n%s", plain)
+	}
+}
+
 // An expired share keeps its card — the transcript still records what was
 // handed over — but must say so, rather than send the user hunting for bytes
 // the sweeper already took.

@@ -198,6 +198,12 @@ type msgCacheKey struct {
 	width       int
 	expandAll   bool
 	toolDisplay ToolDisplayMode
+	// previews fingerprints the shared-file images this client has fetched
+	// for the message. Unlike everything else here it is View state rather
+	// than message state, and it is in the key for the same reason
+	// expandAll is: renderMessage reads it, so a render made without it is
+	// not interchangeable with one made with it. See sharedPreviewSig.
+	previews uint64
 	// turnOpen is true when the previous rendered message belongs to
 	// the same agent turn (assistant tool_use, or tool result). The
 	// header ("▍ terva") is suppressed in that case so a single turn
@@ -897,6 +903,7 @@ func (v *View) renderMessageCached(m provider.Message, width int, turnOpen bool)
 		expandAll:   v.ExpandAll,
 		toolDisplay: v.ToolDisplay,
 		turnOpen:    turnOpen,
+		previews:    v.sharedPreviewSig(m),
 	}
 	if v.renderCache != nil {
 		if lines, ok := v.renderCache[key]; ok {
@@ -2169,13 +2176,6 @@ func (v *View) renderNumberedFile(text, sourcePath string) []string {
 	return out
 }
 
-// looksLikeFileContent is a cheap guard to distinguish a read-tool
-// result from bash stdout or a status message. File content usually
-// contains characters that status messages don't (code punctuation,
-// longer lines, multiple lines) and rarely starts with the "  >"-
-// or "error:"-style prefixes tools emit. False positives are OK,
-// the worst case is a line-number gutter on something that isn't
-// really code.
 // renderBashResult styles a bash tool result: the "$ command" first
 // line in the accent color, the trailing "[exit N]  Took X.Ys" line
 // in muted type, everything else on the default tool-output color.
@@ -2397,6 +2397,13 @@ func (v *View) renderUnifiedDiff(text string, width int, sourcePath string) []st
 	return out
 }
 
+// looksLikeFileContent is a cheap guard to distinguish a read-tool
+// result from bash stdout or a status message. File content usually
+// contains characters that status messages don't (code punctuation,
+// longer lines, multiple lines) and rarely starts with the "  >"-
+// or "error:"-style prefixes tools emit. False positives are OK,
+// the worst case is a line-number gutter on something that isn't
+// really code.
 func looksLikeFileContent(text string) bool {
 	if strings.TrimSpace(text) == "" {
 		return false
@@ -2618,16 +2625,6 @@ func toInt(v any) (int, bool) {
 	return 0, false
 }
 
-// renderCompactionBlock renders a compaction checkpoint as a divider in the
-// conversation: the turns above it are no longer in the model's context, and
-// the summary standing in for them is collapsed behind the rule until ctrl+o.
-//
-// It renders in BOTH states on purpose. The collapsed arm used to be
-// unreachable — renderMessage skipped a compaction message outright — which,
-// combined with provider.Message.Meta not surviving the wire, meant a
-// carrier-backed TUI drew the summary as an ordinary user bubble full of raw
-// "## Context Summary" markdown. A compaction that leaves no mark reads as if
-// the conversation simply lost its history.
 // transcriptRule draws a horizontal boundary across the chat with its label inset,
 // so the eye reads a break in the conversation rather than a stray muted line:
 //
@@ -2661,6 +2658,16 @@ func (v *View) renderClearBlock(state string, width int) []string {
 	return []string{v.transcriptRule(label, '╌', width)}
 }
 
+// renderCompactionBlock renders a compaction checkpoint as a divider in the
+// conversation: the turns above it are no longer in the model's context, and
+// the summary standing in for them is collapsed behind the rule until ctrl+o.
+//
+// It renders in BOTH states on purpose. The collapsed arm used to be
+// unreachable — renderMessage skipped a compaction message outright — which,
+// combined with provider.Message.Meta not surviving the wire, meant a
+// carrier-backed TUI drew the summary as an ordinary user bubble full of raw
+// "## Context Summary" markdown. A compaction that leaves no mark reads as if
+// the conversation simply lost its history.
 func (v *View) renderCompactionBlock(m provider.Message, width int) []string {
 	th := v.Theme
 	const indent = "    "

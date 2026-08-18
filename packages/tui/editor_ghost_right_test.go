@@ -128,8 +128,11 @@ func TestGhostVisibleReportsWhatIsOnScreen(t *testing.T) {
 		t.Error("an offer behind the user's text should not report visible")
 	}
 
+	// Erasing the typed text puts the offer back on screen: the composer is
+	// empty again and the offer was never consumed, only hidden behind what the
+	// user was writing.
 	ed.Clear()
-	if ed.GhostVisible() {
-		t.Error("a cleared composer has no offer left to show")
+	if !ed.GhostVisible() {
+		t.Error("an emptied composer should show the offer it was holding again")
 	}
 }

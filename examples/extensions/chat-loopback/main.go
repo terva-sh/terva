@@ -100,6 +100,8 @@ func main() {
 	}
 }
 
+var _ connsdk.Transport = (*fileTransport)(nil)
+
 // fileTransport implements connsdk.Transport over inbox/ + outbox.txt
 // under the host-assigned data dir.
 type fileTransport struct {

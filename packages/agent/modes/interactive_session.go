@@ -25,17 +25,23 @@ import (
 // listed, plus an "all" entry when more than one is present. If
 // nothing's logged in, writes a status line instead of opening an
 // empty dialog.
-// openMigrateDialog plans a zot→terva migration and opens the staged // rename:keep
-// /migrate dialog. Project-only runs (no user dir to copy) finalize
-// the no-fallback marker right away — same rule as the CLI path.
-func (i *Interactive) openMigrateDialog() {
-	// The pre-rename data directory's interactive migrator was the direct
-	// driver's; no frontend has carried it since that driver was removed, so
-	// this notice was already the only outcome. The one-time upgrade path it
-	// served is obsolete — the CLI still handles a migration if one is somehow
-	// still pending.
+// slashMigrate points at the CLI, which is the only front end the legacy
+// data-directory migration has. // rename:keep
+//
+// It was openMigrateDialog, and the name was the last thing still claiming a
+// dialog existed: the interactive migrator belonged to the direct driver, and
+// no front end has carried it since that driver was removed. dialogs.
+// MigrateDialog and its MigrationHooks surface — 340 lines plus a 136-line test
+// — stayed in the tree for that whole time with nothing able to reach them, and
+// migrate.go went on describing them as "the TUI front-end". They are gone.
+//
+// The command stays, and now says what to run. Deleting the Spec too would have
+// been tidier, but a user who still has a pre-rename data directory and reaches
+// for /migrate is exactly who this is for, and "unknown command" tells them
+// nothing.
+func (i *Interactive) slashMigrate() {
 	i.mu.Lock()
-	i.statusErr = i18n.T("/migrate (the legacy data-directory migrator) isn't available in this TUI")
+	i.statusErr = i18n.T("/migrate is a command-line step: run `terva migrate` from a shell")
 	i.mu.Unlock()
 	i.invalidate()
 }
@@ -131,7 +137,9 @@ func (i *Interactive) openJumpDialog(args []string) {
 		return
 	}
 	filter := strings.TrimSpace(strings.Join(args, " "))
-	i.jumpDialog.Open(i.view.Messages, filter)
+	// view.Messages, so JumpScroll: these indices resolve through
+	// view.BuildWithAnchors, which anchors the same slice the chat paints.
+	i.jumpDialog.Open(i.view.Messages, filter, dialogs.JumpScroll)
 	// Shortcut: with a filter argument that matches exactly one turn,
 	// jump immediately and skip the picker.
 	if filter != "" {
@@ -243,6 +251,11 @@ func (i *Interactive) startNewSession() {
 	i.costBase = 0
 	i.costBaseAt = time.Now()
 	i.editsAdded, i.editsRemoved = 0, 0
+	// A suggestion made against the conversation just left must not greet the
+	// new one. Erasing the composer no longer ends an offer (that is what lets a
+	// user change their mind), so the places where the CONVERSATION moves have
+	// to end it themselves — here, on the switch path, and on send.
+	i.ed.SetGhost("")
 	i.lastCtxInput = 0
 	i.parkedTurn = 0
 	i.parkedTotal = 0
@@ -591,8 +604,9 @@ func (i *Interactive) doSessionFork() {
 		i.invalidate()
 		return
 	}
-	i.pendingFork = true
-	i.jumpDialog.Open(msgs, "")
+	// The effective transcript, so JumpFork: these indices are BranchSession's
+	// cut points, which it counts over the same effective stream.
+	i.jumpDialog.Open(msgs, "", dialogs.JumpFork)
 	i.invalidate()
 }
 
@@ -660,9 +674,9 @@ func (i *Interactive) applySessionTreeSelection(path string) {
 // applyForkSelection branches the current session at msgIdx+1 (so
 // the selected user message and everything before it is included
 // in the new branch), then switches the running agent to the new
-// file. Called from the jump-dialog handler when pendingFork=true.
+// file. Called from the jump-dialog handler on a JumpFork selection —
+// msgIdx indexes the effective transcript the picker was opened with.
 func (i *Interactive) applyForkSelection(msgIdx int) {
-	i.pendingFork = false
 	if i.cfg.CurrentSessionPath == nil {
 		i.mu.Lock()
 		i.statusErr = i18n.T("fork: no session is active")
