@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend, stubMedia } from './support'
 
 // Stage routed every event except `snapshot` and `session_updated` into the
 // transcript folder, where unknown types hit a silent no-op — so
@@ -10,15 +10,12 @@ import { installMockBackend, SMOKE_SESSION } from './support'
 //
 // These assert the prompt renders and its answer goes back on the wire.
 test('stage: a tool approval renders and can be answered', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#4a5a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   let approved: unknown = null
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method, params) => {
       if (method === 'cards.list') return { cards: [{ id: 'kobeni-1', name: 'Kobeni', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'The Fitting', experience: 'chat', card: 'kobeni-1' } }
       if (method === 'cards.get') return { id: 'kobeni-1', name: 'Kobeni', greetings: 1, raw: {} }
       if (method === 'approve') {
@@ -52,15 +49,12 @@ test('stage: a tool approval renders and can be answered', async ({ page }) => {
 })
 
 test('stage: an ask renders its options and answers', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#4a5a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   let answered: unknown = null
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method, params) => {
       if (method === 'cards.list') return { cards: [{ id: 'kobeni-1', name: 'Kobeni', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'The Fitting', experience: 'chat', card: 'kobeni-1' } }
       if (method === 'cards.get') return { id: 'kobeni-1', name: 'Kobeni', greetings: 1, raw: {} }
       if (method === 'answer') {
@@ -91,14 +85,11 @@ test('stage: an ask renders its options and answers', async ({ page }) => {
 // still pending, so a prompt whose event was missed comes back on re-subscribe
 // rather than stranding the turn.
 test('stage: a pending approval is recovered from the snapshot', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#4a5a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method) => {
       if (method === 'cards.list') return { cards: [{ id: 'kobeni-1', name: 'Kobeni', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'The Fitting', experience: 'chat', card: 'kobeni-1' } }
       if (method === 'cards.get') return { id: 'kobeni-1', name: 'Kobeni', greetings: 1, raw: {} }
       return undefined

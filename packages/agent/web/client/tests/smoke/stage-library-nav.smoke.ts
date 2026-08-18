@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend } from './support'
 
 // Library navigation (rough-edges #2/#3): tapping a character that already has
 // chats surfaces them to resume (auto-new only when there are none), and a
@@ -17,11 +17,10 @@ const SESSIONS = [
   { id: 'sess-play', title: 'The heist', card: 'card-1', experience: 'play', messages: 30, updated: '2026-07-17T12:00:00Z' },
 ]
 
-function backend(page: Parameters<typeof installMockBackend>[0], onCreate?: (params: { card?: string }) => void) {
-  return installMockBackend(page, {
+function backend(page: Parameters<typeof installStageBackend>[0], onCreate?: (params: { card?: string }) => void) {
+  return installStageBackend(page, {
     respond: (method, params) => {
       if (method === 'cards.list') return { cards: CARDS }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.list') return { sessions: SESSIONS }
       if (method === 'sessions.create') {
         onCreate?.(params as { card?: string })

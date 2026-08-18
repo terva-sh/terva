@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend } from './support'
+import { installStageBackend } from './support'
 
 // Deleting a session from Stage: a trash action on each "Your chats" row and in
 // the character-chats sheet, wired to sessions.delete (target rides the frame's
@@ -7,15 +7,14 @@ import { installMockBackend } from './support'
 // ids from sessions.list.
 const CARDS = [{ id: 'card-1', name: 'Ivy', greetings: 1 }]
 
-function mkBackend(page: Parameters<typeof installMockBackend>[0], deleted: Set<string>, captured: string[]) {
+function mkBackend(page: Parameters<typeof installStageBackend>[0], deleted: Set<string>, captured: string[]) {
   const ALL = [
     { id: 'sess-a', title: 'Rainy afternoon', card: 'card-1', experience: 'chat', messages: 12, updated: '2026-07-18T10:00:00Z' },
     { id: 'sess-b', title: 'First meeting', card: 'card-1', experience: 'chat', messages: 4, updated: '2026-07-17T09:00:00Z' },
   ]
-  return installMockBackend(page, {
+  return installStageBackend(page, {
     respond: (method, _params, sess) => {
       if (method === 'cards.list') return { cards: CARDS }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.list') return { sessions: ALL.filter((s) => !deleted.has(s.id)) }
       if (method === 'sessions.delete') {
         if (sess) {

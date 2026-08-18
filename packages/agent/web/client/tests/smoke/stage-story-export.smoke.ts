@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend, stubMedia } from './support'
 
 // Export the scene as a story: the Steering drawer's Session tab downloads the
 // markdown the daemon renders. Zero backend — this asserts the verb fires with
@@ -7,17 +7,14 @@ import { installMockBackend, SMOKE_SESSION } from './support'
 // daemon's suggested name. What the markdown CONTAINS is the renderer's
 // business and is pinned by Go tests; base64 here is just "some bytes".
 test('stage: export a session as a story downloads markdown', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#5a7a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   const SESSION = { id: SMOKE_SESSION, title: 'The Lowtown Job', experience: 'chat', card: 'elira-1', world_lore: [] }
   let exportSess = ''
   let exportFormat = ''
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
+    cards: [{ id: 'elira-1', name: 'Elira', greetings: 1 }],
     respond: (method, params, sess) => {
-      if (method === 'cards.list') return { cards: [{ id: 'elira-1', name: 'Elira', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'backgrounds.list') return { backgrounds: [] }
       if (method === 'sessions.create') return { session: SESSION }
       if (method === 'cards.get') return { id: 'elira-1', name: 'Elira', greetings: 1, avatar_url: '/media/cards/elira-1', raw: {} }

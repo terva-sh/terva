@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend } from './support'
 
 // The suggest sheet quotes the line you are answering — at phone height, where
 // the problem is.
@@ -21,10 +21,8 @@ const LONG_SCENE = Array.from(
 test('stage: the suggest sheet quotes the scene line, bounded and scrollable', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 780 })
   const session = { id: SMOKE_SESSION, title: 'Ivy', experience: 'chat', card: 'card-1' }
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Ivy', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'card-1', name: 'Ivy', greetings: 1, raw: {} }
       if (method === 'sessions.create') return { session }
       return undefined

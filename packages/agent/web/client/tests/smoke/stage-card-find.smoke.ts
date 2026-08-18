@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend } from './support'
+import { installStageBackend, stubMedia } from './support'
 
 // Finding and filing cards in a library too big to scroll.
 //
@@ -32,17 +32,11 @@ const CARDS = [
 const GROUPS = [{ id: 'g1', name: 'Filed', members: ['c4'] }]
 
 async function library(page: import('@playwright/test').Page) {
-  await page.route('**/media/**', (r) =>
-    r.fulfill({
-      contentType: 'image/svg+xml',
-      body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#3f5a3a"/></svg>',
-    }),
-  )
-  await installMockBackend(page, {
+  await stubMedia(page)
+  await installStageBackend(page, {
     respond: (method) => {
       if (method === 'cards.list') return { cards: CARDS }
       if (method === 'cardgroups.list') return { groups: GROUPS }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.list') return { sessions: [] }
       return {}
     },

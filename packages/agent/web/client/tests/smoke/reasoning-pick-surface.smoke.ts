@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend } from './support'
+import { installStageBackend } from './support'
 
 // The reasoning picker is a SHARED component (ui/ReasoningPick.tsx, styled in
 // ui/ui.css) that both apps render. Its rules were written against the panel's
@@ -43,13 +43,7 @@ for (const [app, path] of [
   test(`${app}: the reasoning picker paints a surface, not the page behind it`, async ({
     page,
   }) => {
-    await installMockBackend(page, {
-      respond: (method) => {
-        if (method === 'cards.list') return { cards: [] }
-        if (method === 'personas.list') return { personas: [] }
-        return undefined
-      },
-    })
+    await installStageBackend(page, { cards: [] })
     await page.goto(path)
 
     const got = await page.evaluate(surfaceOf)

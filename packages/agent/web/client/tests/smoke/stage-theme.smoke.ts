@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend } from './support'
+import { installStageBackend } from './support'
 
 // Theme presets (Phase 5): the library header's theme picker swaps the --stage-*
 // palette by setting data-theme on the document root, and the choice persists
@@ -7,13 +7,7 @@ import { installMockBackend } from './support'
 const bgVar = () => getComputedStyle(document.documentElement).getPropertyValue('--stage-bg').trim()
 
 test('stage: theme presets re-skin and persist', async ({ page }) => {
-  await installMockBackend(page, {
-    respond: (method) => {
-      if (method === 'cards.list') return { cards: [] }
-      if (method === 'personas.list') return { personas: [] }
-      return undefined
-    },
-  })
+  await installStageBackend(page, { cards: [] })
 
   await page.goto('/stage.html')
   await expect(page.locator('.stage-theme-pick')).toBeVisible()

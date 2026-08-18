@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend } from './support'
 
 // Saved user personas (rough-edges #5/#7): the steering drawer's "You (in this
 // story)" block lists reusable identities (chips to swap between, a star for the
@@ -14,10 +14,8 @@ test('stage: saved user personas in the steering drawer', async ({ page }) => {
   let saved: { name?: string; description?: string } | null = null
   let defaulted: { ref?: string } | null = null
 
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Ivy', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'card-1', name: 'Ivy', greetings: 1, raw: {} }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'Ivy', experience: 'chat', card: 'card-1' } }
       if (method === 'backgrounds.list') return { backgrounds: [] }

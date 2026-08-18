@@ -1,14 +1,12 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend, stubMedia } from './support'
 
 // The editor (Worlds W4): ✏️ on a World-tab character runs cards.doctor in
 // session mode (the Toimittaja persona, grounded in THIS scene), proposals
 // render for accept/decline, and Apply merges the accepted fields into the
 // card via cards.get → cards.edit. Zero backend.
 test('stage: enrich a character from the scene via the World tab', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#5a7a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   const SESSION = {
     id: SMOKE_SESSION,
@@ -20,10 +18,9 @@ test('stage: enrich a character from the scene via the World tab', async ({ page
   const RAW = { name: 'Elira', description: 'A fence.', personality: '' }
   let doctorCall: Record<string, unknown> | null = null
   let edited: Record<string, unknown> | null = null
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
+    cards: [{ id: 'elira-1', name: 'Elira', greetings: 1 }],
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'elira-1', name: 'Elira', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.create') return { session: SESSION }
       if (method === 'cards.get') return { id: 'elira-1', name: 'Elira', greetings: 1, avatar_url: '/media/cards/elira-1', raw: RAW }
       if (method === 'backgrounds.list') return { backgrounds: [] }

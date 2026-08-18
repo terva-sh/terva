@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend } from './support'
 
 // Directed vs routed authorship, side by side — the case from the 2026-07-19
 // dogfooding review. At L101 the user posted a narrator beat they had written
@@ -8,10 +8,9 @@ import { installMockBackend, SMOKE_SESSION } from './support'
 // screen saying which was whose. The wire has always distinguished them
 // (WireMessage.Directed vs .Routed); only the UI collapsed the two.
 test('stage: a line you wrote and a line the router invented are told apart', async ({ page }) => {
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
+    cards: [{ id: 'card-1', name: 'Kobeni', greetings: 1 }],
     respond: (method) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Kobeni', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'card-1', name: 'Kobeni', greetings: 1, raw: {} }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'Kobeni', experience: 'chat', card: 'card-1' } }
       if (method === 'backgrounds.list') return { backgrounds: [] }

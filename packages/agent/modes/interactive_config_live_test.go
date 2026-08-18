@@ -4,11 +4,14 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // InteractiveConfig is the TUI's injection seam: the host fills it in, and the
@@ -76,7 +79,18 @@ func setByAProductionCaller(t *testing.T) map[string]bool {
 	seen := false
 	for _, root := range interactiveConfigCallers {
 		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") {
+			if err != nil {
+				return nil
+			}
+			if info.IsDir() {
+				// A nested checkout under packages/agent holds somebody
+				// else's InteractiveConfig literals, on somebody else's branch.
+				if testsupport.SkipScanDir(root, path, fs.FileInfoToDirEntry(info)) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") {
 				return nil
 			}
 			if strings.HasSuffix(path, "_test.go") {

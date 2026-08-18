@@ -1,14 +1,12 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend, stubMedia } from './support'
 
 // Saved Worlds, W5b: the Library's Worlds section carries a bundle import
 // button; the World sheet renames/describes (worlds.update), sets a cover,
 // and exports the World as a downloadable bundle (worlds.export). Zero
 // backend.
 test('stage: World rename, cover, export bundle, and import', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#5a7a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   let world: Record<string, unknown> = {
     id: 'lowtown-abc123',
@@ -21,10 +19,9 @@ test('stage: World rename, cover, export bundle, and import', async ({ page }) =
   const imports: Record<string, unknown>[] = []
   let createOpts: Record<string, unknown> | null = null
   let exported = 0
-  await installMockBackend(page, {
+  await installStageBackend(page, {
+    cards: [],
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.list') return { sessions: [] }
       if (method === 'backgrounds.list') return { backgrounds: [] }
       if (method === 'worlds.list') return { worlds: [world] }

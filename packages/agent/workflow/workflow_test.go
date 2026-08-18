@@ -24,6 +24,9 @@ type fakeEngine struct {
 	// respond maps a task-substring to its outcome; unmatched tasks echo
 	// the task text as a JSON string result.
 	fail map[string]string
+	// cost bills each spawn, for the budget backstop. Zero keeps the
+	// long-standing 0.01 so every other test reads as it always did.
+	cost float64
 }
 
 type fakeHandle struct {
@@ -58,7 +61,11 @@ func (e *fakeEngine) Spawn(_ context.Context, req swarm.SpawnRequest) (Handle, e
 	} else {
 		raw, _ = json.Marshal("did: " + req.Task)
 	}
-	return fakeHandle{id: id, out: Outcome{AgentID: id, Result: raw, CostUSD: 0.01}}, nil
+	cost := e.cost
+	if cost == 0 {
+		cost = 0.01
+	}
+	return fakeHandle{id: id, out: Outcome{AgentID: id, Result: raw, CostUSD: cost}}, nil
 }
 
 const testScript = `export const meta = {

@@ -205,9 +205,10 @@ func TestDocsReferencedInSourceAreInstalled(t *testing.T) {
 		}
 		if d.IsDir() {
 			// Vendored/generated trees are not ours to police, and .claude
-			// holds scratch worktrees of this very repo.
-			switch d.Name() {
-			case "node_modules", ".git", ".claude", "dist":
+			// holds scratch worktrees of this very repo. testsupport owns the
+			// rule: this used to keep its own four-name list, which knew
+			// nothing about a checkout dropped anywhere else in the tree.
+			if testsupport.SkipScanDir(".", path, d) {
 				return fs.SkipDir
 			}
 			return nil

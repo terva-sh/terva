@@ -208,3 +208,70 @@ export async function installMockBackend(page: Page, opts: MockBackendOptions = 
 // A 1×1 transparent PNG, for exercising the image attachment path.
 export const PNG_1x1_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+
+// A card as the shelf lists it. Typed rather than an inline literal because
+// tsconfig now compiles this directory (it did not until recently), so a field
+// the daemon renames breaks the fixtures here instead of quietly serving a shape
+// nothing sends any more.
+export type SmokeCard = { id: string; name: string; greetings?: number; avatar_url?: string }
+
+// The card almost every Stage smoke boots with. Named so a test that does not
+// care which card exists says nothing, and one that does says only that.
+export const SMOKE_CARD: SmokeCard = { id: 'card-1', name: 'Ivy', greetings: 1 }
+
+export type StageBackendOptions = MockBackendOptions & {
+  // The shelf's cards. Defaults to one, SMOKE_CARD.
+  cards?: SmokeCard[]
+  // The persona roster. Defaults to empty, which is what 66 of the 67
+  // hand-rolled copies of this answer served.
+  personas?: unknown[]
+}
+
+// installStageBackend is installMockBackend plus the two answers every Stage
+// smoke needs before it can paint anything: the card shelf and the persona
+// roster.
+//
+// Those two, and deliberately no more. They are the only verbs every Stage smoke
+// served, and the only ones whose answer was uniform across them — cards.get and
+// sessions.create carry a payload the test under it is usually asserting about,
+// and installMockBackend already defaults sessions.list to the smoke session.
+// Folding those in would either change what a test sees or need an argument per
+// test, which is the copy-paste again with extra steps.
+//
+// A test's own `respond` runs FIRST and falls through on undefined, so anything
+// it names still wins. That is what makes this a strict superset of
+// installMockBackend for a call that already served the floor — and why a call
+// that did NOT serve it is left alone rather than switched: it would start
+// seeing a card where it used to see {}.
+export async function installStageBackend(
+  page: Page,
+  opts: StageBackendOptions = {},
+): Promise<MockBackend> {
+  const { cards = [SMOKE_CARD], personas = [], respond, ...rest } = opts
+  return installMockBackend(page, {
+    ...rest,
+    respond: (method, params, sess) => {
+      const own = respond?.(method, params, sess)
+      if (own !== undefined) return own
+      if (method === 'cards.list') return { cards }
+      if (method === 'personas.list') return { personas }
+      return undefined
+    },
+  })
+}
+
+// stubMedia answers every /media/** request with a small opaque square, so the
+// avatars and covers a Stage surface renders resolve without a daemon.
+//
+// The colour is arbitrary and nothing asserts on it — the thirty hand-rolled
+// copies used five different fills for no reason anyone recorded. A surface that
+// needs the response to DIFFER by URL (stage.smoke.ts serves a wide gradient for
+// backgrounds) keeps its own route and does not call this.
+export async function stubMedia(page: Page): Promise<void> {
+  await page.route('**/media/**', (route) =>
+    route.fulfill({
+      contentType: 'image/svg+xml',
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#5a7a6a"/></svg>',
+    }),
+  )
+}

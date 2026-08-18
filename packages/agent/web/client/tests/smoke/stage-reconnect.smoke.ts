@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend, stubMedia } from './support'
 
 // The reconnect regression, and the reason "I submitted and nothing rendered"
 // happened.
@@ -16,14 +16,11 @@ import { installMockBackend, SMOKE_SESSION } from './support'
 // This drops the socket and asserts Stage re-subscribes on the new connection and
 // renders events pushed down it. Before the fix the second subscribe never came.
 test('stage: re-subscribes after a reconnect and keeps rendering', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#4a5a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method) => {
       if (method === 'cards.list') return { cards: [{ id: 'kobeni-1', name: 'Kobeni', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'The Fitting', experience: 'chat', card: 'kobeni-1' } }
       if (method === 'cards.get') return { id: 'kobeni-1', name: 'Kobeni', greetings: 1, raw: {} }
       return undefined
@@ -76,14 +73,11 @@ test('stage: re-subscribes after a reconnect and keeps rendering', async ({ page
 // and submit() silently swallowed every later send, leaving the composer stuck on
 // "thinking…" with no way out but a reload. A `done` event now clears it too.
 test('stage: a done event clears busy even with no snapshot', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#4a5a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method) => {
       if (method === 'cards.list') return { cards: [{ id: 'kobeni-1', name: 'Kobeni', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'The Fitting', experience: 'chat', card: 'kobeni-1' } }
       if (method === 'cards.get') return { id: 'kobeni-1', name: 'Kobeni', greetings: 1, raw: {} }
       return undefined

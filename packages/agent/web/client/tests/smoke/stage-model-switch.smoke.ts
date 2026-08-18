@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend } from './support'
 
 // Model switching from Stage (rough-edge #1): the steering drawer's Model line is
 // a live switcher. It lists the daemon's logged-in models grouped by provider
@@ -16,10 +16,9 @@ test('stage: switch the session model from the steering drawer', async ({ page }
   let switched: { model?: string; provider?: string } | null = null
   let faved: { model?: string; provider?: string; on?: boolean } | null = null
 
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
+    cards: [{ id: 'card-1', name: 'Kobeni', greetings: 1 }],
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Kobeni', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'card-1', name: 'Kobeni', greetings: 1, raw: {} }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'Kobeni', experience: 'chat', card: 'card-1' } }
       if (method === 'backgrounds.list') return { backgrounds: [] }

@@ -15,5 +15,5 @@
     "verbatimModuleSyntax": true,
     "types": []
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src", "tests", "playwright.config.ts", "vite.config.ts"]
 }

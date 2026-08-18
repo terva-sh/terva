@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend, stubMedia } from './support'
 
 // Advance (▶): the "just go" knob. After the user narrates lines into a scene with
 // post.line, the transcript ends on their own authored beats and it is plainly the
@@ -9,16 +9,13 @@ import { installMockBackend, SMOKE_SESSION } from './support'
 // Zero backend — asserts the button renders beside ✨, sends the bare verb, and
 // stays disabled while a turn is in flight.
 test('stage: advance runs the next turn with nothing injected', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#4a5a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   let advanced = 0
   let advanceParams: unknown = 'unset'
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
+    cards: [{ id: 'kobeni-1', name: 'Kobeni', greetings: 1 }],
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'kobeni-1', name: 'Kobeni', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'The Fitting', experience: 'chat', card: 'kobeni-1' } }
       if (method === 'cards.get') return { id: 'kobeni-1', name: 'Kobeni', greetings: 1, raw: {} }
       if (method === 'turn.advance') {

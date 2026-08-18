@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend } from './support'
 
 // The Stage app end to end over a mocked control plane, zero backend/spend: the
 // library renders the Phase-2 stores, tapping a card starts a chat, and the
@@ -16,7 +16,7 @@ test('stage: library renders and a card opens an immersive chat', async ({ page 
     void route.fulfill({ contentType: 'image/svg+xml', body: svg })
   })
 
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method, params) => {
       if (method === 'cards.list')
         return {

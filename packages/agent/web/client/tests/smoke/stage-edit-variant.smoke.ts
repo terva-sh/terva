@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { editButtonFor, installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, editButtonFor, installStageBackend, stubMedia } from './support'
 
 // Edit-as-variant (inline-editing MVP): editing the last response is
 // non-destructive — the daemon keeps the original as a swipeable take, so the
@@ -7,16 +7,12 @@ import { editButtonFor, installMockBackend, SMOKE_SESSION } from './support'
 // drives the real client flow (edit the bubble → Save → counter → swipe) against
 // a mock backend that plays the pre/post-edit snapshots the daemon would send.
 test('stage: editing the last response makes it a swipeable variant', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#4a5a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   let edited: { epoch?: number; index?: number; text?: string } | null = null
   let swiped: { epoch?: number; variant?: number } | null = null
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Ivy', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'card-1', name: 'Ivy', greetings: 1, raw: {} }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'Chat', experience: 'chat', card: 'card-1' } }
       if (method === 'message.edit') {

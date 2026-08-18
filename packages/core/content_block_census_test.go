@@ -43,6 +43,63 @@ func TestEveryContentBlockIsHandledByBothEncoders(t *testing.T) {
 	}
 }
 
+// wireBlockTypeTags is the wire `type` string each content block encodes to,
+// discovered from the encoder rather than listed, so a renamed tag cannot leave
+// this census asserting against a string nothing emits.
+func wireBlockTypeTags(t *testing.T) []string {
+	t.Helper()
+	src := readFile(t, "wire.go")
+	re := regexp.MustCompile(`Type:\s*"([a-z_]+)"`)
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range re.FindAllStringSubmatch(src, -1) {
+		if !seen[m[1]] {
+			seen[m[1]] = true
+			out = append(out, m[1])
+		}
+	}
+	return out
+}
+
+// TestEveryWireBlockIsHandledByEveryDecoder is the other half of the round trip.
+//
+// The census above covered the two ENCODERS and stopped there, so the decoders
+// were never audited — and one had drifted. packages/agent/sdk kept a private
+// rebuildContent that handled five of the six blocks and silently dropped
+// compaction_summary, which meant an embedder that read a transcript through
+// Messages() and handed it back lost the backend's only encoding of everything
+// a compaction replaced. terva cannot rebuild that blob, so the loss was
+// permanent, and nothing failed: a decoder switch with no default drops what it
+// does not know, exactly like the encoders this file was written for.
+//
+// A round trip audited in one direction is not audited. Decoders are discovered
+// by scanning for the wire tags, so a new block enrolls both directions at once.
+func TestEveryWireBlockIsHandledByEveryDecoder(t *testing.T) {
+	tags := wireBlockTypeTags(t)
+	if len(tags) < 5 {
+		t.Fatalf("found only %v wire type tags — the scan is broken and this census proves nothing", tags)
+	}
+
+	for _, dec := range []struct{ what, path string }{
+		{"core (ContentFromWire)", filepath.Join("wire.go")},
+		{"sdk (rebuildContent)", filepath.Join("..", "agent", "sdk", "types.go")},
+	} {
+		src := readFile(t, dec.path)
+		// A decoder that delegates to the canonical one is covered by
+		// definition — it cannot drift, because there is only one switch.
+		if strings.Contains(src, "core.ContentFromWire(") || strings.Contains(src, "return ContentFromWire(") {
+			continue
+		}
+		for _, tag := range tags {
+			if !strings.Contains(src, `case "`+tag+`":`) {
+				t.Errorf("%s has no case for wire type %q — that block is silently dropped on the way back in.\n"+
+					"  Either add the case, or delegate to core.ContentFromWire so there is one switch instead of two.",
+					dec.what, tag)
+			}
+		}
+	}
+}
+
 // contentBlockNames returns every type in packages/provider that implements
 // Content, found by its isContent marker rather than by a list kept here.
 func contentBlockNames(t *testing.T) []string {

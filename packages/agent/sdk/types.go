@@ -1,8 +1,6 @@
 package sdk
 
 import (
-	"encoding/json"
-
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -58,44 +56,19 @@ type ModelInfo struct {
 }
 
 // ---- internal converters ----
-
+// rebuildContent decodes wire blocks back into provider.Content.
+//
+// It is core.ContentFromWire and nothing else. It used to be a private
+// second implementation of the same switch, and it had already drifted: it
+// handled five of the six content blocks and silently dropped
+// compaction_summary, so an embedder that read a transcript through
+// Messages() and handed it back lost the backend's only encoding of
+// everything a compaction replaced -- a blob terva cannot rebuild.
+//
+// ContentBlock is a type ALIAS of core.WireBlock, so the two decoders had
+// identical signatures over identical input the whole time. There was never
+// a reason for the copy; keeping the name as a thin call preserves the
+// package-local vocabulary without keeping a second switch to forget.
 func rebuildContent(blocks []ContentBlock) []provider.Content {
-	out := make([]provider.Content, 0, len(blocks))
-	for _, b := range blocks {
-		switch b.Type {
-		case "text":
-			out = append(out, provider.TextBlock{Text: b.Text})
-		case "image":
-			out = append(out, provider.ImageBlock{MimeType: b.MimeType, Data: b.Data})
-		case "tool_call":
-			args := b.Args
-			if len(args) == 0 {
-				args = json.RawMessage("{}")
-			}
-			// Signature is the provider's opaque per-call token (Gemini 3's
-			// thoughtSignature): an embedder that hands a transcript back must
-			// return the call intact, or the next request is rejected.
-			out = append(out, provider.ToolCallBlock{ID: b.ID, Name: b.Name, Arguments: args, Signature: b.Signature})
-		case "tool_result":
-			out = append(out, provider.ToolResultBlock{
-				CallID:  b.CallID,
-				IsError: b.IsError,
-				Content: rebuildContent(b.Content),
-			})
-		case "reasoning":
-			// Shape says which provider's wire this block belongs to; an
-			// embedder that drops it hands back reasoning the serializer can
-			// no longer place, and the block is discarded on the next request.
-			// Normalized for the same reason the session loader is: an
-			// embedder replaying a pre-tagging transcript would otherwise
-			// lose its Codex reasoning items.
-			out = append(out, provider.NormalizeLegacyReasoningShape(provider.ReasoningBlock{
-				ID:        b.ReasoningID,
-				Summary:   b.Summary,
-				Encrypted: b.Encrypted,
-				Shape:     b.Shape,
-			}))
-		}
-	}
-	return out
+	return core.ContentFromWire(blocks)
 }

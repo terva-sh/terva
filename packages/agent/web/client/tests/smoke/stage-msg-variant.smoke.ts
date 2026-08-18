@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { editButtonFor, installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, editButtonFor, installStageBackend, stubMedia } from './support'
 
 // Message-scoped variants (Option C): editing an OLDER message (not the last
 // response) keeps its alternatives, so a `‹n/m›` swipe control appears on THAT
@@ -7,16 +7,12 @@ import { editButtonFor, installMockBackend, SMOKE_SESSION } from './support'
 // routes to the per-message swipe. This drives the client flow against a mock that
 // plays the pre/post-edit snapshots the daemon would send.
 test('stage: an edited older message gets its own swipe control', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#4a5a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   let edited: { index?: number; text?: string } | null = null
   let swiped: { epoch?: number; index?: number; variant?: number } | null = null
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Ivy', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'card-1', name: 'Ivy', greetings: 1, raw: {} }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'Chat', experience: 'chat', card: 'card-1' } }
       if (method === 'message.edit') {

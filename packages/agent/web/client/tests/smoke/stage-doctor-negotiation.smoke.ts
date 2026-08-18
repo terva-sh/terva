@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend } from './support'
+import { installStageBackend } from './support'
 
 // The doctor negotiation (S7.3): apply some proposals, decline others WITH a
 // reason, then "Save & ask again" — which persists the staged edits (so the
@@ -10,10 +10,8 @@ test('stage: decline-with-reason feeds back into a doctor revise', async ({ page
   let edited = false
   let secondDecisions: unknown = null
 
-  const mock = await installMockBackend(page, {
+  await installStageBackend(page, {
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Ivy', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.list') return { sessions: [] }
       if (method === 'cards.get')
         return {

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend, stubMedia } from './support'
 
 // Suggest a reply (S9): the agentic composer aid. From the chat composer, ✨
 // opens a modal where the user sketches an intent, the model drafts the player's
@@ -9,15 +9,11 @@ import { installMockBackend, SMOKE_SESSION } from './support'
 // and reports how much history it was sent — proving the refinement is threaded
 // statelessly and the final draft lands in the composer.
 test('stage: suggest a reply — sketch, refine, and use it', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#4a5a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   const calls: Array<{ history: unknown[]; note: string; sess?: string }> = []
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method, params, sess) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Ivy', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'card-1', name: 'Ivy', greetings: 1, raw: {} }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'Chat', experience: 'chat', card: 'card-1' } }
       if (method === 'suggest.reply') {
@@ -87,10 +83,8 @@ test('stage: suggest a reply — sketch, refine, and use it', async ({ page }) =
 })
 
 test('stage: suggest a reply — a cold suggestion needs no sketch', async ({ page }) => {
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Ivy', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'card-1', name: 'Ivy', greetings: 1, raw: {} }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'Chat', experience: 'chat', card: 'card-1' } }
       if (method === 'suggest.reply') {
@@ -114,10 +108,8 @@ test('stage: suggest a reply — a cold suggestion needs no sketch', async ({ pa
 })
 
 test('stage: the suggest sketch box grows with content', async ({ page }) => {
-  await installMockBackend(page, {
+  await installStageBackend(page, {
     respond: (method) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Ivy', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'card-1', name: 'Ivy', greetings: 1, raw: {} }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'Chat', experience: 'chat', card: 'card-1' } }
       return undefined

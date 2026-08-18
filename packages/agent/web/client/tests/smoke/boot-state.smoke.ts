@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, panelSessionURL, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installMockBackend, panelSessionURL } from './support'
 
 // The boot state: what the panel and Stage say between painting and knowing
 // anything about the workspace.

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { editButtonFor, installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, editButtonFor, installStageBackend } from './support'
 
 // Selecting text in a message, which used to be impossible.
 //
@@ -30,10 +30,8 @@ const SNAPSHOT = {
 }
 
 async function scene(page: import('@playwright/test').Page) {
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Ivy', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'card-1', name: 'Ivy', greetings: 1, raw: {} }
       if (method === 'sessions.create')
         return { session: { id: SMOKE_SESSION, title: 'Ivy', experience: 'chat', card: 'card-1' } }

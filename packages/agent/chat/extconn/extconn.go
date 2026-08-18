@@ -28,10 +28,10 @@ package extconn
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -286,7 +286,7 @@ func (c *Conn) dial(ctx context.Context) (chat.Identity, error) {
 		}
 		if time.Now().After(deadline) {
 			return chat.Identity{}, fmt.Errorf(
-				"extension %q is not loaded or did not register the connector role (is it enabled, with \"connector\": true in its manifest?)", c.name)
+				"extension %q is not loaded or %w (is it enabled, with \"connector\": true in its manifest?)", c.name, errRoleUnregistered)
 		}
 		select {
 		case <-ctx.Done():
@@ -403,6 +403,15 @@ func (c *Conn) Receive(ctx context.Context, handle func(chat.Message)) error {
 	}
 }
 
+// errRoleUnregistered is dial's verdict that the extension is not there to be
+// dialled — not loaded, or loaded without the connector role. redial treats it
+// as "the process is gone" and asks the host to respawn; every other dial
+// failure is a live process refusing us, where a respawn would not help.
+//
+// A sentinel rather than a phrase, because the decision and the sentence that
+// used to carry it sit 185 lines apart. See the errors.Is below.
+var errRoleUnregistered = errors.New("did not register the connector role")
+
 // redial re-establishes the chat session after a death, under the
 // restart budget. cause is the dead session's Err(): non-nil means the
 // extension reported its engine dead while the process lives on (reopen
@@ -471,7 +480,14 @@ func (c *Conn) redial(ctx context.Context, cause error) error {
 			// anything else — inner connect_error, handshake failure —
 			// is a live process refusing us, where a respawn wouldn't
 			// help.
-			needRespawn = strings.Contains(err.Error(), "did not register the connector role")
+			//
+			// errors.Is, not a substring of dial's message. The two sit 185
+			// lines apart and this used to match the prose between them, so
+			// rewording that sentence would have silently stopped every
+			// subsequent crash from being recovered — and the only test that
+			// would have failed asserts the MESSAGE, which reads like a
+			// wording change to whoever updates it.
+			needRespawn = errors.Is(err, errRoleUnregistered)
 			continue
 		}
 		return nil

@@ -542,3 +542,94 @@ func TestRegisterDiscovered(t *testing.T) {
 		t.Errorf("pairing after reset = %q, want unpaired", got)
 	}
 }
+
+// TestDialsMissingRoleErrorCarriesTheRespawnSentinel pins BOTH ends of the
+// decision redial makes about whether a crashed connector needs a respawn.
+//
+// It used to be a substring match on dial's prose, 185 lines away, and the only
+// test that would have noticed a reword asserts that message — so it would have
+// failed saying "the wording changed", and whoever updated it to the new wording
+// would have silently switched crash recovery off. The sentence and the sentinel
+// are checked here together, so neither can move without the other being read.
+func TestDialsMissingRoleErrorCarriesTheRespawnSentinel(t *testing.T) {
+	tmp := testsupport.TempDir(t)
+	d := extdriver.New(tmp, "", "0.0.0-test", "anthropic", "opus", noopHooks{})
+	BindHost(d)
+	t.Cleanup(func() { BindHost(nil) })
+
+	conn := NewConn("ghost", func(string) {})
+	conn.roleWait = 200 * time.Millisecond
+	_, err := conn.Connect(context.Background())
+	if err == nil {
+		t.Fatal("Connect succeeded against an extension that never registered the role")
+	}
+	if !errors.Is(err, errRoleUnregistered) {
+		t.Errorf("dial's missing-role error does not carry errRoleUnregistered (%v) — redial will "+
+			"treat a dead process as a live one refusing us, and stop respawning it", err)
+	}
+	// And it still reads like an explanation, which is the other half of what
+	// this error is for.
+	if !strings.Contains(err.Error(), "connector") || !strings.Contains(err.Error(), "ghost") {
+		t.Errorf("Connect error = %v, want it to name the extension and the role", err)
+	}
+}
+
+// stallAfterRespawnBody scripts a process that crashes after its first connect
+// and, on every boot after, registers the connector role but never answers
+// chat_open — so the session dial fails at the inner hello rather than at the
+// role. That is a LIVE process refusing us, which a respawn cannot fix.
+const stallAfterRespawnBody = `printf '%s\n' '{"type":"register_connector"}'
+printf '%s\n' '{"type":"ready"}'
+while IFS= read -r line; do
+  case "$line" in
+    *'"type":"chat_open"'*)
+      if [ ! -f booted ]; then
+        sid=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+        printf '{"type":"chat","id":"%s","frame":{"type":"hello","name":"staller","protocol_min":1,"protocol_max":1,"capabilities":{}}}\n' "$sid"
+      fi
+      ;;
+    *'"frame":{"type":"connect"}'*)
+      printf '{"type":"chat","id":"%s","frame":{"type":"connected","id":"b","username":"b"}}\n' "$sid"
+      touch booted
+      exit 3
+      ;;
+    *'"type":"shutdown"'*) exit 0 ;;
+  esac
+done
+`
+
+// TestRedialStopsRespawningOnceTheProcessIsBackUp exercises the branch the
+// sentinel decides: after a respawn succeeds, a dial that fails for any OTHER
+// reason must stop asking for respawns.
+//
+// Without it the loop would burn its whole budget restarting a process that is
+// running perfectly well and simply refusing the session — killing a live
+// extension repeatedly to fix a problem that is not a crash.
+func TestRedialStopsRespawningOnceTheProcessIsBackUp(t *testing.T) {
+	tmp := testsupport.TempDir(t)
+	d := bindDriver(t, tmp, "staller", stallAfterRespawnBody)
+	host := &fakeRestartHost{d: d, dir: filepath.Join(tmp, "staller"), name: "staller"}
+	BindHost(host)
+
+	conn := NewConn("staller", func(string) {})
+	conn.restartDelay = 5 * time.Millisecond
+	conn.helloWait = 300 * time.Millisecond // the stall, without the full grace
+	if _, err := conn.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	// The budget runs out either way; what differs is how many respawns it
+	// spent getting there.
+	if err := conn.Receive(context.Background(), func(chat.Message) {}); err == nil {
+		t.Fatal("Receive returned nil against a process that never serves a session")
+	}
+
+	host.mu.Lock()
+	restarts := host.restarts
+	host.mu.Unlock()
+	if restarts != 1 {
+		t.Errorf("RestartExtension called %d times, want 1 — the first death is a crash, but every "+
+			"dial failure after the respawn is a live process refusing the session, and respawning "+
+			"it again kills a healthy extension", restarts)
+	}
+}

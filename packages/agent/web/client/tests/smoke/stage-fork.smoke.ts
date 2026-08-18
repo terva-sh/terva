@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { editButtonFor, installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, editButtonFor, installStageBackend, stubMedia } from './support'
 
 // Fork-from-here (§8): editing a message with a long downstream offers "Branch
 // here" — a new session that shares the transcript through that message and
@@ -7,15 +7,11 @@ import { editButtonFor, installMockBackend, SMOKE_SESSION } from './support'
 // note appears, Branch posts sessions.fork {from_index}, and the app switches to
 // the returned session.
 test('stage: a deep edit offers Branch here, which forks and navigates', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#4a5a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   let forked: { from_index?: number } | null = null
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Ivy', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'card-1', name: 'Ivy', greetings: 1, raw: {} }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'Chat', experience: 'chat', card: 'card-1' } }
       if (method === 'sessions.fork') {

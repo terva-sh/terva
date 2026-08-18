@@ -1,14 +1,12 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend, stubMedia } from './support'
 
 // The meta-narrator (Worlds W3): a chat World with a roster grows a "Who
 // replies" setting in the World tab (world.set), and a line the router handed
 // to a roster character renders 🎭-attributed to that character — like a
 // directed line, but model-produced. Zero backend.
 test('stage: the World tab sets coordination and routed lines are attributed', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#5a7a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   const SESSION = {
     id: SMOKE_SESSION,
@@ -19,10 +17,9 @@ test('stage: the World tab sets coordination and routed lines are attributed', a
     coordination: '',
   }
   let coordinationSet: unknown = null
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
+    cards: [{ id: 'kob-1', name: 'Kobeni', greetings: 1 }],
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'kob-1', name: 'Kobeni', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.create') return { session: SESSION }
       if (method === 'cards.get') return { id: 'kob-1', name: 'Kobeni', greetings: 1, avatar_url: '/media/cards/kob-1', raw: {} }
       if (method === 'backgrounds.list') return { backgrounds: [] }

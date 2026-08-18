@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend } from './support'
+import { installStageBackend } from './support'
 
 // "Recently updated" — the character you were last WORKING on, as opposed to the
 // one that arrived last ('added') or the one you last played ('used').
@@ -32,10 +32,9 @@ async function names(page: import('@playwright/test').Page) {
 }
 
 async function mockLibrary(page: import('@playwright/test').Page) {
-  await installMockBackend(page, {
+  await installStageBackend(page, {
     respond: (method) => {
       if (method === 'cards.list') return { cards: CARDS }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.list') return { sessions: [] }
       if (method === 'worlds.list') return { worlds: [] }
       return undefined
@@ -84,13 +83,12 @@ test('stage: characters can be ordered by when they were last updated', async ({
 })
 
 test('stage: favorites stay pinned above the recently-updated order', async ({ page }) => {
-  await installMockBackend(page, {
+  await installStageBackend(page, {
     respond: (method) => {
       // Cade is the OLDEST update, so if favorites did not float it would sort
       // third. Pinning is what puts it first, and the rest keep their order.
       if (method === 'cards.list')
         return { cards: CARDS.map((c) => (c.id === 'cade-1' ? { ...c, favorite: true } : c)) }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.list') return { sessions: [] }
       if (method === 'worlds.list') return { worlds: [] }
       return undefined

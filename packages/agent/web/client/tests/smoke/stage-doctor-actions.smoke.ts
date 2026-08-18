@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend, stubMedia } from './support'
 
 // The doctor's small hands (SD2/SD3): a message's edit actions carry
 // "Keep as lore" (any message → a focused sessions.doctor run) and, on an
@@ -7,19 +7,16 @@ import { installMockBackend, SMOKE_SESSION } from './support'
 // run). Both open the doctor overlay; accepts apply through the same verbs
 // as the full sweep. Zero backend.
 test('stage: keep-as-lore and promote-to-cast run narrowed doctor asks', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#5a7a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   const SESSION = { id: SMOKE_SESSION, title: 'The Lowtown Job', experience: 'chat', card: 'elira-1', cast: {}, world_lore: [] }
   const doctorCalls: Record<string, unknown>[] = []
   const puts: Record<string, unknown>[] = []
   const imports: Record<string, unknown>[] = []
   const castAdds: Record<string, unknown>[] = []
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
+    cards: [{ id: 'elira-1', name: 'Elira', greetings: 1 }],
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'elira-1', name: 'Elira', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'backgrounds.list') return { backgrounds: [] }
       if (method === 'sessions.create') return { session: SESSION }
       if (method === 'cards.get') return { id: 'elira-1', name: 'Elira', greetings: 1, avatar_url: '/media/cards/elira-1', raw: {} }

@@ -1,22 +1,19 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend, stubMedia } from './support'
 
 // Cast/director visibility (Phase 5): a play session surfaces its cast roster in
 // the steering drawer (SessionInfo.cast), and an actor_spawn tool call in the
 // transcript is attributed to the actor it brought on stage (from the call's
 // args) rather than shown as a raw "actor_spawn" row. Zero backend.
 test('stage: play session shows its cast and attributes actor lines', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#5a7a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   const CAST = { Seraphina: 'seraphina-card', Kael: 'kael' }
   let added: unknown = null
   let removed: unknown = null
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
+    cards: [{ id: 'narrator-1', name: 'Kertoja', greetings: 1 }],
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'narrator-1', name: 'Kertoja', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.create')
         return { session: { id: SMOKE_SESSION, title: 'The Pass', experience: 'play', card: 'narrator-1', cast: CAST } }
       if (method === 'cards.get') return { id: 'narrator-1', name: 'Kertoja', greetings: 1, avatar_url: '/media/cards/narrator-1', raw: {} }

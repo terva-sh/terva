@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend, stubMedia } from './support'
 
 // The World tab (Worlds W2): a chat session's steering drawer grows a World
 // tab — the roster kept on stage (W2a) plus the editable World lore (L1).
@@ -7,9 +7,7 @@ import { installMockBackend, SMOKE_SESSION } from './support'
 // world.lore.put / world.lore.delete and the list re-renders from the
 // snapshot. Zero backend.
 test('stage: the World tab lists the roster and edits World lore', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#5a7a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   const LORE = [
     { name: 'The Accord', constant: true, content: 'Magic is outlawed in the city.' },
@@ -26,10 +24,9 @@ test('stage: the World tab lists the roster and edits World lore', async ({ page
   const puts: unknown[] = []
   let deleted: unknown = null
   let removed: unknown = null
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
+    cards: [{ id: 'elira-1', name: 'Elira', greetings: 1 }],
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'elira-1', name: 'Elira', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.create') return { session: SESSION }
       if (method === 'cards.get') return { id: 'elira-1', name: 'Elira', greetings: 1, avatar_url: '/media/cards/elira-1', raw: {} }
       if (method === 'backgrounds.list') return { backgrounds: [] }

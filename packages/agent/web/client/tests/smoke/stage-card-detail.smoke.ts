@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend, stubMedia } from './support'
 
 // Character inspection (rough-edge #8): a card's ⋯ opens a detail sheet showing
 // the WHOLE card — every CCv2 field, not just the greeting — with quick-start
@@ -36,14 +36,11 @@ const SUMMARY = {
 }
 
 test('stage: inspect a character from the ⋯ detail sheet', async ({ page }) => {
-  await page.route('**/media/**', (r) =>
-    r.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#3f5a3a"/></svg>' }),
-  )
+  await stubMedia(page)
   let created = false
-  const mock = await installMockBackend(page, {
+  await installStageBackend(page, {
+    cards: [SUMMARY],
     respond: (method) => {
-      if (method === 'cards.list') return { cards: [SUMMARY] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.list') return { sessions: [] }
       if (method === 'cards.get') return { ...SUMMARY, raw: RAW }
       if (method === 'cards.lint')

@@ -1,5 +1,5 @@
-import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { test, expect, type Page } from '@playwright/test'
+import { SMOKE_SESSION, installStageBackend } from './support'
 
 // Two UI fixes: (1) a chat lands at the BOTTOM on load — where the composer is —
 // not scrolled to the top; (2) editing a message opens a full-width box whose
@@ -13,11 +13,10 @@ function longChat() {
   return messages
 }
 
-async function openChat(page) {
-  const mock = await installMockBackend(page, {
+async function openChat(page: Page) {
+  const mock = await installStageBackend(page, {
+    cards: [{ id: 'card-1', name: 'Kobeni', greetings: 1 }],
     respond: (method) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Kobeni', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'card-1', name: 'Kobeni', greetings: 1, raw: {} }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'Chat', experience: 'chat', card: 'card-1' } }
       return undefined

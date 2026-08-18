@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // A golden corpus that is byte-compared against in-source frames must be pinned
@@ -46,8 +48,16 @@ func TestEveryGoldenCorpusIsPinnedToLF(t *testing.T) {
 	// Every testdata corpus under packages/, whatever package owns it.
 	var corpora []string
 	err = filepath.WalkDir(filepath.Join(root, "packages"), func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
 			return err
+		}
+		if d.IsDir() {
+			// A worktree parked under packages/ carries its own corpora,
+			// pinned by its own .gitattributes, and is not ours to police.
+			if testsupport.SkipScanDir(root, path, d) {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		ext := filepath.Ext(path)
 		if ext != ".jsonl" && ext != ".json" {

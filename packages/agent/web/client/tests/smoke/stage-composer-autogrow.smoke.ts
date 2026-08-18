@@ -1,15 +1,13 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend } from './support'
 
 // The chat composer auto-grows with its content (up to the CSS max-height cap,
 // past which it scrolls) so a multiline reply is comfortable to write, then
 // shrinks back once the draft is cleared. Driven against a mock just far enough
 // to reach the chat view and its composer.
 test('stage: the composer grows with multiline input and shrinks back', async ({ page }) => {
-  await installMockBackend(page, {
+  await installStageBackend(page, {
     respond: (method) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Ivy', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'card-1', name: 'Ivy', greetings: 1, raw: {} }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'Chat', experience: 'chat', card: 'card-1' } }
       return undefined

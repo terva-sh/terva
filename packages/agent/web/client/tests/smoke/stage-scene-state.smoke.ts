@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend, stubMedia } from './support'
 
 // The pinned scene-state card (SD4): a reserved World-lore entry renders as a
 // card above the composer (not in the drawer's lore list), collapsed to its
@@ -7,9 +7,7 @@ import { installMockBackend, SMOKE_SESSION } from './support'
 // and the doctor's scene_state proposal applies through the same put. Zero
 // backend.
 test('stage: the scene-state card pins, edits, unpins, and takes doctor updates', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#5a7a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   const PIN = { name: 'Scene state', constant: true, content: 'Day 14, first light.\n3 silver owed to Marrow.', model: true }
   const SESSION = {
@@ -21,10 +19,9 @@ test('stage: the scene-state card pins, edits, unpins, and takes doctor updates'
   }
   const puts: Record<string, unknown>[] = []
   const deletes: Record<string, unknown>[] = []
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method, params) => {
       if (method === 'cards.list') return { cards: [{ id: 'elira-1', name: 'Elira', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'backgrounds.list') return { backgrounds: [] }
       if (method === 'sessions.create') return { session: SESSION }
       if (method === 'cards.get') return { id: 'elira-1', name: 'Elira', greetings: 1, avatar_url: '/media/cards/elira-1', raw: {} }
@@ -104,14 +101,11 @@ test('stage: the scene-state card pins, edits, unpins, and takes doctor updates'
 // No pin yet: the World tab offers to start one, prefilling the lore form
 // with the reserved name and always-on — the server normalizes the rest.
 test('stage: the World tab offers the scene-state pin when nothing is pinned', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#5a7a6a"/></svg>' }),
-  )
+  await stubMedia(page)
   const SESSION = { id: SMOKE_SESSION, title: 'Fresh', experience: 'chat', card: 'elira-1', world_lore: [] }
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method) => {
       if (method === 'cards.list') return { cards: [{ id: 'elira-1', name: 'Elira', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'backgrounds.list') return { backgrounds: [] }
       if (method === 'sessions.create') return { session: SESSION }
       if (method === 'cards.get') return { id: 'elira-1', name: 'Elira', greetings: 1, avatar_url: '/media/cards/elira-1', raw: {} }

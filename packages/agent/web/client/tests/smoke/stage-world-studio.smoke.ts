@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend } from './support'
+import { installStageBackend, stubMedia } from './support'
+import type { WorldLoreEntry, WorldView } from '../../src/platform/ctrlproto/types'
 
 // The World studio (WS-1/WS-2): a World's cast and lorebook edited from the
 // shelf with NO SESSION OPEN.
@@ -10,22 +11,24 @@ import { installMockBackend } from './support'
 // frame — because before this the only way to change a World's contents was to
 // open a scene in it first.
 test('stage: a World is edited from the shelf with no session', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#5a7a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
-  let world = {
+  // Typed as the wire shape it stands in for, not as an ad-hoc literal. The
+  // literal's inferred type had no `model` at all, so the worlds.set_model arm
+  // below was adding a field the fixture did not have — a fake quietly serving a
+  // shape the daemon does not, which is the drift the typecheck exists to catch.
+  let world: WorldView = {
     id: 'lowtown-abc123',
     name: 'Lowtown',
     description: 'The guild quarter after dark.',
-    characters: { Elira: 'elira-1' } as Record<string, string>,
-    lore: [{ name: 'The curfew', keys: ['curfew'], content: 'The bells ring at dusk.' }] as Record<string, unknown>[],
+    characters: { Elira: 'elira-1' },
+    lore: [{ name: 'The curfew', keys: ['curfew'], content: 'The bells ring at dusk.' }],
     coordination: '',
   }
   // Every call the studio makes, with the session the frame carried.
   const calls: { method: string; params: Record<string, unknown>; sess?: string }[] = []
 
-  await installMockBackend(page, {
+  await installStageBackend(page, {
     respond: (method, params, sess) => {
       calls.push({ method, params: (params ?? {}) as Record<string, unknown>, sess })
       const p = (params ?? {}) as Record<string, unknown>
@@ -53,7 +56,9 @@ test('stage: a World is edited from the shelf with no session', async ({ page })
           return world
         }
         case 'worlds.lore.put':
-          world = { ...world, lore: [...world.lore, p.entry as Record<string, unknown>] }
+          // `?? []` because lore is OPTIONAL on the wire: a World with no
+          // entries omits it, and the spread would have thrown on that World.
+          world = { ...world, lore: [...(world.lore ?? []), p.entry as WorldLoreEntry] }
           return world
         case 'worlds.delete':
           return {}

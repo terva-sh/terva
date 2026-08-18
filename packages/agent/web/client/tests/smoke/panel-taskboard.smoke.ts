@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, panelSessionURL, SMOKE_SESSION } from './support'
+import { installMockBackend, panelSessionURL } from './support'
 
 // The task board pane — what the MODEL is tracking, as opposed to the "Agents"
 // pane, which is the swarm of background sub-agents.

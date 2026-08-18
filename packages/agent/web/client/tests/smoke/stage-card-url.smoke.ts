@@ -1,16 +1,15 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend } from './support'
+import { installStageBackend } from './support'
 
 // Card URL import (Phase 5): the library's URL field posts cards.import {url};
 // the daemon fetches it through the SSRF-guarded egress client. Zero backend —
 // this asserts the client sends the URL and renders the card that comes back.
 test('stage: import a card from a URL', async ({ page }) => {
   let importedUrl = ''
-  await installMockBackend(page, {
+  await installStageBackend(page, {
     respond: (method, params) => {
       if (method === 'cards.list')
         return { cards: importedUrl ? [{ id: 'remote-1', name: 'Remote', greetings: 1 }] : [] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.import') {
         importedUrl = (params as { url?: string })?.url ?? ''
         return { id: 'remote-1', name: 'Remote', greetings: 1, raw: {} }

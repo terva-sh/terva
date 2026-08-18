@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend } from './support'
+import { installStageBackend } from './support'
 
 // Personas interactive (rough-edge #9): the Library's persona roster was
 // display-only. Tapping a persona now opens its full PersonaView (personas.get)
@@ -26,9 +26,9 @@ const VIEW = {
 }
 
 test('stage: inspect a persona from the roster', async ({ page }) => {
-  await installMockBackend(page, {
+  await installStageBackend(page, {
+    cards: [],
     respond: (method) => {
-      if (method === 'cards.list') return { cards: [] }
       if (method === 'sessions.list') return { sessions: [] }
       if (method === 'personas.list') return { personas: [PERSONA] }
       if (method === 'personas.get') return VIEW

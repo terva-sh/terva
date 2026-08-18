@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend } from './support'
 
 // The studio's You tab (plan part C): who you play AS, given the same room as
 // who you play WITH. Two doors lead here — "playing as …" in the scene header,
@@ -24,10 +24,8 @@ test('stage: the You tab steers the scene it was opened from', async ({ page }) 
     user_pronouns: 'she/her',
   }
 
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Ivy', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'card-1', name: 'Ivy', greetings: 1, raw: { spec: 'chara_card_v2', data: { name: 'Ivy' } } }
       if (method === 'cards.lint') return { findings: [] }
       if (method === 'sessions.create') return { session }
@@ -108,10 +106,8 @@ test('stage: the Library door opens the You tab in library mode', async ({ page 
   const PERSONAS = [{ ref: 'kira', name: 'Kira', description: 'A wary courier who trusts no one.', default: true }]
   let saved: { ref?: string; name?: string } | null = null
 
-  await installMockBackend(page, {
+  await installStageBackend(page, {
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Ivy', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.list') return { sessions: [] }
       if (method === 'userpersonas.list') return { personas: PERSONAS }
       if (method === 'userpersonas.save') {

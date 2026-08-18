@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend, stubMedia } from './support'
 
 // Regression for the release-review blocker: during a live turn the echoed user
 // row and the streaming assistant row arrive as OPTIMISTIC, unplaced items (no
@@ -9,14 +9,11 @@ import { installMockBackend, SMOKE_SESSION } from './support'
 // of the text. This drives exactly that state (stream, no trailing snapshot) and
 // asserts the words show and no edit box appears.
 test('stage: a streaming turn renders text, not empty edit boxes', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#7a5a8a"/></svg>' }),
-  )
+  await stubMedia(page)
 
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
+    cards: [{ id: 'seraphina-1', name: 'Seraphina', greetings: 1 }],
     respond: (method) => {
-      if (method === 'cards.list') return { cards: [{ id: 'seraphina-1', name: 'Seraphina', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'Seraphina', experience: 'chat', card: 'seraphina-1' } }
       if (method === 'cards.get') return { id: 'seraphina-1', name: 'Seraphina', greetings: 1, raw: {} }
       return undefined

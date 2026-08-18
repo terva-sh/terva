@@ -1,24 +1,21 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend, stubMedia } from './support'
 
 // The session doctor (SD1): the World tab carries Dramaturgi's button; a run
 // renders typed proposals; accepting a lore entry posts world.lore.put;
 // accepting a promotion imports the seeded card and THEN puts it on stage;
 // declining with a reason rides the next round as a decision. Zero backend.
 test('stage: the session doctor proposes, applies, and negotiates', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#5a7a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   const SESSION = { id: SMOKE_SESSION, title: 'The Lowtown Job', experience: 'chat', card: 'elira-1', world_lore: [] }
   const doctorCalls: Record<string, unknown>[] = []
   const puts: Record<string, unknown>[] = []
   const imports: Record<string, unknown>[] = []
   const castAdds: Record<string, unknown>[] = []
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
+    cards: [{ id: 'elira-1', name: 'Elira', greetings: 1 }],
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'elira-1', name: 'Elira', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'backgrounds.list') return { backgrounds: [] }
       if (method === 'sessions.create') return { session: SESSION }
       if (method === 'cards.get') return { id: 'elira-1', name: 'Elira', greetings: 1, avatar_url: '/media/cards/elira-1', raw: {} }

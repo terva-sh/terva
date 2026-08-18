@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend, stubMedia } from './support'
 
 // Directed authorship (Phase 6): the ✨ modal gains a target — Me / Character /
 // Narrator. A "Me" draft still fills the composer; a Character or Narrator draft
@@ -9,16 +9,12 @@ import { installMockBackend, SMOKE_SESSION } from './support'
 // threads through suggest.reply and the approved line is committed with its
 // actor. Zero backend.
 test('stage: directed authorship — draft a character line and post it', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#4a5a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   const drafts: Array<{ target?: string; target_name?: string; target_voice?: string }> = []
   let posted: { actor?: string; text?: string } | null = null
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Ivy', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'card-1', name: 'Ivy', greetings: 1, raw: {} }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'Chat', experience: 'chat', card: 'card-1' } }
       if (method === 'suggest.reply') {
@@ -86,15 +82,11 @@ test('stage: directed authorship — draft a character line and post it', async 
 // A narrator beat posts with no actor, and a directed message renders with 🎭
 // attribution rather than as a plain assistant bubble.
 test('stage: directed authorship — a narrator beat, and directed rows are attributed', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#4a5a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   let posted: { actor?: string; text?: string } | null = null
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Ivy', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'card-1', name: 'Ivy', greetings: 1, raw: {} }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'Chat', experience: 'chat', card: 'card-1' } }
       if (method === 'suggest.reply') return { draft: 'Night falls over the harbour.' }
@@ -148,15 +140,11 @@ test('stage: directed authorship — a narrator beat, and directed rows are attr
 // bubble, and the per-generation model picker is hidden (a Direct turn runs on the
 // session model).
 test('stage: directed authorship — Direct runs a steered turn and renders a cue', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#4a5a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   let directed: string | null = null
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Ivy', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'card-1', name: 'Ivy', greetings: 1, raw: {} }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'Chat', experience: 'chat', card: 'card-1' } }
       if (method === 'direct.turn') {
@@ -205,16 +193,13 @@ test('stage: directed authorship — Direct runs a steered turn and renders a cu
 // walk-on. Picking one threads target_card + the card's name through
 // suggest.reply, and the posted line is attributed to the card's character.
 test('stage: directed authorship — voice a library card', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#4a5a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   let draft: { target_card?: string; target_name?: string } | null = null
   let posted: { actor?: string } | null = null
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method, params) => {
       if (method === 'cards.list') return { cards: [{ id: 'ivy-1', name: 'Ivy', greetings: 1 }, { id: 'elira-1', name: 'Mistress Elira', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'ivy-1', name: 'Ivy', greetings: 1, raw: {} }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'Chat', experience: 'chat', card: 'ivy-1' } }
       if (method === 'suggest.reply') {
@@ -255,14 +240,11 @@ test('stage: directed authorship — voice a library card', async ({ page }) => 
 // Worlds W2: "keep on stage" adds a picked library character to the session
 // roster (cast.add); once on stage it's a one-tap quick-pick chip. Zero backend.
 test('stage: directed authorship — keep a character on stage', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#4a5a6a"/></svg>' }),
-  )
+  await stubMedia(page)
   let added: { name?: string; ref?: string } | null = null
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method, params) => {
       if (method === 'cards.list') return { cards: [{ id: 'ivy-1', name: 'Ivy', greetings: 1 }, { id: 'elira-1', name: 'Mistress Elira', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'ivy-1', name: 'Ivy', greetings: 1, raw: {} }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'Chat', experience: 'chat', card: 'ivy-1' } }
       if (method === 'cast.add') {

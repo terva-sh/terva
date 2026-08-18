@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend } from './support'
+import { installStageBackend } from './support'
 
 // Card doctor (S7.2): from the editor, "Ask the doctor" runs the LLM card-craft
 // pass (cards.doctor) and renders structured per-field proposals; "Apply" stages
@@ -11,11 +11,9 @@ import { installMockBackend } from './support'
 // surface has to say "cleared" rather than render a blank panel.
 test('stage: run the card doctor and apply a proposal', async ({ page }) => {
   const doctorCalls: { steer?: string }[] = []
-  const mock = await installMockBackend(page, {
+  await installStageBackend(page, {
     respond: (method, params) => {
       if (method === 'cards.doctor') doctorCalls.push(params as { steer?: string })
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Ivy', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.list') return { sessions: [] }
       if (method === 'cards.get')
         return {

@@ -1,20 +1,17 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend, stubMedia } from './support'
 
 // User-directs (Phase 5): a play chat shows a cast strip ("who speaks?"); tapping
 // an actor posts cast.speak {actor}, directing the narrator to bring them in.
 // Zero backend — asserts the strip renders and sends the right verb.
 test('stage: the cast strip directs who speaks', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#4a5a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   const CAST = { Seraphina: 'seraphina-card', Kael: 'kael' }
   let spoke: unknown = null
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
+    cards: [{ id: 'narrator-1', name: 'Kertoja', greetings: 1 }],
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'narrator-1', name: 'Kertoja', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'The Pass', experience: 'play', card: 'narrator-1', cast: CAST } }
       if (method === 'cards.get') return { id: 'narrator-1', name: 'Kertoja', greetings: 1, raw: {} }
       if (method === 'cast.speak') {

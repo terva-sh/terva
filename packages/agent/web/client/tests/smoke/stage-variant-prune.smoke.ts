@@ -1,21 +1,17 @@
 import { test, expect } from '@playwright/test'
-import { editButtonFor, installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, editButtonFor, installStageBackend, stubMedia } from './support'
 
 // Variant cleanup (§9): a message with alternatives can be tidied — ✕ on its swipe
 // control drops the current take (variants.drop), and "Keep only this" in the edit
 // box collapses to the active take and removes the marker (variants.prune). Driven
 // against a mock that plays the snapshots the daemon would send.
 test('stage: drop a take and prune a message variant', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#4a5a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   let dropped: { index?: number; variant?: number } | null = null
   let pruned: { index?: number } | null = null
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'card-1', name: 'Ivy', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'cards.get') return { id: 'card-1', name: 'Ivy', greetings: 1, raw: {} }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'Chat', experience: 'chat', card: 'card-1' } }
       if (method === 'variants.drop') {

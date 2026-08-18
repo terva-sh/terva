@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend } from './support'
+import { installStageBackend, stubMedia } from './support'
 
 // Portraits off, everywhere, persistently.
 //
@@ -8,10 +8,8 @@ import { installMockBackend } from './support'
 // portrait as present and visible whether the rule worked or not. What is being
 // asserted is COMPUTED visibility, and that the tiles keep their shape.
 test('stage: portraits can be turned off, and stay off', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#5a7a6a"/></svg>' }),
-  )
-  await installMockBackend(page, {
+  await stubMedia(page)
+  await installStageBackend(page, {
     respond: (method) => {
       if (method === 'cards.list')
         return {
@@ -20,7 +18,6 @@ test('stage: portraits can be turned off, and stay off', async ({ page }) => {
             { id: 'rook-1', name: 'Rook', greetings: 1, avatar_url: '/media/cards/rook-1' },
           ],
         }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.list') return { sessions: [] }
       if (method === 'worlds.list')
         return { worlds: [{ id: 'lowtown-1', name: 'Lowtown', characters: { Elira: 'elira-1' }, cover_url: '/media/worlds/lowtown-1' }] }

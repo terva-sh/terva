@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, panelSessionURL, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installMockBackend, panelSessionURL } from './support'
 
 // The session drawer groups its rows busy / idle / cold and collapses cold, so
 // opening it while you work shows the working set instead of every 2-message

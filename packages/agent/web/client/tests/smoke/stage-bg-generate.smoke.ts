@@ -1,20 +1,17 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend, stubMedia } from './support'
 
 // Per-chat background generation (Phase 5): the steering drawer's Scene section
 // grows a "describe a scene" prompt that posts backgrounds.generate {prompt};
 // the daemon paints it, stores it, and binds it (tested in Go). Zero backend —
 // this asserts the client sends the prompt and shows the pending state.
 test('stage: generate a scene background from a prompt', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#40506a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   let generated: unknown = null
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
+    cards: [{ id: 'c1', name: 'Iris', greetings: 1 }],
     respond: (method, params) => {
-      if (method === 'cards.list') return { cards: [{ id: 'c1', name: 'Iris', greetings: 1 }] }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'sessions.create') return { session: { id: SMOKE_SESSION, title: 'Iris', experience: 'chat', card: 'c1' } }
       if (method === 'cards.get') return { id: 'c1', name: 'Iris', greetings: 1, raw: {} }
       if (method === 'backgrounds.list') return { backgrounds: [] }

@@ -200,19 +200,14 @@ func runUpdate(version string) error {
 	// (docs/plans/rename-terva.md, phase 1) — an installed terva must be
 	// able to self-update into an archive whose member is `terva`, so
 	// this updater ships BEFORE any archive containing the new name.
-	newBin := ""
-	for _, name := range []string{"terva", "zot"} { // rename:keep — updater bridge
-		if runtime.GOOS == "windows" {
-			name += ".exe"
-		}
-		candidate := filepath.Join(extractDir, name)
-		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
-			newBin = candidate
-			break
-		}
-	}
+	newBin, tried := findExtractedBinary(extractDir, runtime.GOOS)
 	if newBin == "" {
-		return fmt.Errorf("extracted archive does not contain a terva or terva binary under %s", extractDir)
+		// Names come from the list actually searched. The hardcoded message
+		// here read "a terva or terva binary" — the second name was the legacy
+		// one before a find-and-replace flattened it, so the error named a
+		// candidate the loop never tried.
+		return fmt.Errorf("extracted archive does not contain a %s binary under %s",
+			strings.Join(tried, " or "), extractDir)
 	}
 
 	curBin, err := os.Executable()
@@ -240,14 +235,46 @@ func runUpdate(version string) error {
 	return nil
 }
 
+// findExtractedBinary locates the new binary inside an extracted release
+// archive, returning it and the names it looked for.
+//
+// Both names are accepted for the rename bridge (docs/plans/rename-terva.md,
+// phase 1): an installed terva must be able to self-update into an archive
+// whose member carries the other name, so this updater ships BEFORE any archive
+// containing the new one. Returning the candidate list is what lets the caller's
+// error name what it actually tried.
+func findExtractedBinary(extractDir, goos string) (path string, tried []string) {
+	for _, name := range []string{"terva", "zot"} { // rename:keep — updater bridge
+		if goos == "windows" {
+			name += ".exe"
+		}
+		tried = append(tried, name)
+		candidate := filepath.Join(extractDir, name)
+		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
+			return candidate, tried
+		}
+	}
+	return "", tried
+}
+
 // releaseAssetName returns the archive filename for the current
 // platform and the format (tar.gz / zip) used to extract it. Must
 // stay in sync with archives.name_template in .goreleaser.yaml:
 //
 //	{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
 func releaseAssetName(version string) (name, format string, err error) {
-	goos := runtime.GOOS
-	goarch := runtime.GOARCH
+	return releaseAssetNameFor(version, runtime.GOOS, runtime.GOARCH)
+}
+
+// releaseAssetNameFor is releaseAssetName with the platform as parameters.
+//
+// Split out because the whole matrix — including the two refusals — is
+// unreachable otherwise: a test on one machine can only ever exercise that
+// machine's goos/goarch, so the windows/arm64 refusal and the unsupported-OS
+// message were untestable by construction. The name this produces is what every
+// already-installed terva asks the release host for, so a drift here is a 404
+// for every user at once, discovered only in the field.
+func releaseAssetNameFor(version, goos, goarch string) (name, format string, err error) {
 	switch goos {
 	case "linux", "darwin":
 		// supported

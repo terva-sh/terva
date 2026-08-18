@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, SMOKE_SESSION } from './support'
+import { SMOKE_SESSION, installStageBackend, stubMedia } from './support'
 
 // Saved Worlds (W5): the Library grows a Worlds shelf; a World sheet lists its
 // characters and chats and starts a new chat INSIDE the World
@@ -7,9 +7,7 @@ import { installMockBackend, SMOKE_SESSION } from './support'
 // (worlds.save {name}) and saves changes back to a saved one (worlds.save {}).
 // Zero backend.
 test('stage: the Worlds shelf, chat-in-World, and promotion', async ({ page }) => {
-  await page.route('**/media/**', (route) =>
-    route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#5a7a6a"/></svg>' }),
-  )
+  await stubMedia(page)
 
   const WORLD = {
     id: 'lowtown-abc123',
@@ -20,7 +18,7 @@ test('stage: the Worlds shelf, chat-in-World, and promotion', async ({ page }) =
   }
   let createOpts: Record<string, unknown> | null = null
   const saves: unknown[] = []
-  const mock = await installMockBackend(page, {
+  const mock = await installStageBackend(page, {
     respond: (method, params) => {
       if (method === 'cards.list')
         return {
@@ -30,7 +28,6 @@ test('stage: the Worlds shelf, chat-in-World, and promotion', async ({ page }) =
             { id: 'kira-1', name: 'Kira', greetings: 1, world_of: 'lowtown-abc123' },
           ],
         }
-      if (method === 'personas.list') return { personas: [] }
       if (method === 'worlds.list') return { worlds: [WORLD] }
       if (method === 'sessions.list')
         return { sessions: [{ id: 'oldsess', title: 'The Ledger Job', world: 'lowtown-abc123', experience: 'chat', messages: 12, usage: {} }] }

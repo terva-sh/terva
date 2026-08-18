@@ -341,6 +341,11 @@ var rootThatShips = []string{
 	// thing in there that must never ship — the ASD-copyright approved-word
 	// list — is excluded by path, not by keeping the directory private.
 	".ste",
+	// .mise.toml pins the Node that builds the committed web assets, and SHIPS
+	// for the same reason .ste does: dist/ and scripts/web-dist.sh are both
+	// public, and the script's failure message tells the reader to consult this
+	// file. A public tree without it describes a toolchain it does not name.
+	".mise.toml",
 	".gitattributes", ".gitignore", ".goreleaser.yaml", "CHANGELOG.md", "Dockerfile",
 	"LICENSE", "README.md", "assets", "cmd", "docs", "docs.go", "docs_test.go", "e2e",
 	"examples", "go.mod", "go.sum", "install.ps1", "install.sh", "justfile", "packages",

@@ -466,6 +466,21 @@ func serveWS(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options, 
 	// and reap it if the peer stops answering. Both halves live in conn.go.
 	conn.armReadDeadline()
 	go conn.keepalive(connCtx)
+	hello := buildHello(opts, maxUploadBytes, attach.MaxBytes)
+	if _, err := ctrlproto.ServeConn(connCtx, conn, svc, hello); err != nil {
+		logConnEnd(who, err)
+	}
+}
+
+// buildHello maps this daemon's Options onto the ctrlproto hello — the
+// features, groups and limits the whole browser client keys off.
+//
+// A function rather than eighteen lines inside serveWS, because inside serveWS
+// it needed a live WebSocket to observe and so was never tested at all: the only
+// assertion made on the server hello anywhere was that its protocol is 1. A
+// wrong mapping here does not fail; it silently removes a control from every
+// client, which reads as "the feature does not exist".
+func buildHello(opts Options, maxUploadBytes, maxAttachmentBytes int64) ctrlproto.Hello {
 	hello := ctrlproto.ServerHello("terva web", opts.Version)
 	hello.Locale = opts.Locale
 	hello.CWD = opts.CWD
@@ -476,7 +491,7 @@ func serveWS(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options, 
 	// is the CARRIER that can take bytes — a native client on a unix socket has
 	// no such route, and should not offer a drop target that goes nowhere.
 	hello.Features = append(hello.Features, ctrlproto.FeatureAttachments)
-	hello.MaxAttachmentBytes = attach.MaxBytes
+	hello.MaxAttachmentBytes = maxAttachmentBytes
 	// ...and GET /shared/, so the panel can turn a share record into something
 	// the user can actually click. Same carrier-not-protocol reasoning.
 	hello.Features = append(hello.Features, ctrlproto.FeatureSharedFiles)
@@ -492,9 +507,7 @@ func serveWS(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options, 
 	if opts.AllowStage {
 		hello.Features = append(hello.Features, ctrlproto.FeatureStage)
 	}
-	if _, err := ctrlproto.ServeConn(connCtx, conn, svc, hello); err != nil {
-		logConnEnd(who, err)
-	}
+	return hello
 }
 
 // logConnEnd explains why a connection ended, for the ends that are NOT a client
