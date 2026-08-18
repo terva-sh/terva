@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
 	"go/ast"
 	"go/parser"
@@ -8,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -262,31 +262,105 @@ func metaWritingMethods(t *testing.T) map[string]bool {
 	return out
 }
 
-var driverCallRe = regexp.MustCompile(`\bs\.([A-Za-z_]\w*)\(`)
-
 // methodsCalledByTheDriver reads driveEveryMetaWriter's own source and reports
 // which methods it calls. Reading the source rather than trusting a hand-kept
 // list is the point: a name in a list can be there without the call being there.
+//
+// It reads the source as a SYNTAX TREE, not as text. The first version found the
+// function by string search and cut its body at the first "\n}\n" — which is a
+// line ending this repository does not pin for .go files. On a CRLF checkout the
+// bytes are "\r\n}\r\n", that delimiter never matched, and the cut FAILED OPEN:
+// the scan ran to the end of the file and enrolled every s.Method( it passed,
+// including calls belonging to other tests. It reported Close as driven, and the
+// Windows release gate was the first thing that ever said so.
+//
+// The tree has no such failure mode, and it also cannot match a method name that
+// merely appears inside a comment or a string literal.
 func methodsCalledByTheDriver(t *testing.T) map[string]bool {
 	t.Helper()
-	src, err := os.ReadFile("session_creation_test.go")
+	return driverCallsIn(t, "session_creation_test.go")
+}
+
+// driverCallsIn is the half that takes a path, so a guard can point it at a copy
+// with different line endings. Nothing else should need it.
+func driverCallsIn(t *testing.T, path string) map[string]bool {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
 	if err != nil {
-		t.Fatalf("read this test file: %v", err)
+		t.Fatalf("parse %s: %v", path, err)
 	}
-	body := string(src)
-	start := strings.Index(body, "func driveEveryMetaWriter(")
-	if start < 0 {
+	var body *ast.BlockStmt
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == "driveEveryMetaWriter" {
+			body = fn.Body
+			break
+		}
+	}
+	if body == nil {
 		t.Fatal("driveEveryMetaWriter is gone; this census has nothing to read")
 	}
-	rest := body[start:]
-	if end := strings.Index(rest, "\n}\n"); end >= 0 {
-		rest = rest[:end]
-	}
 	out := map[string]bool{}
-	for _, m := range driverCallRe.FindAllStringSubmatch(rest, -1) {
-		out[m[1]] = true
-	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if recv, ok := sel.X.(*ast.Ident); ok && recv.Name == "s" {
+			out[sel.Sel.Name] = true
+		}
+		return true
+	})
 	return out
+}
+
+// TestTheDriverCensusDoesNotDependOnLineEndings is the guard for the defect
+// above. .gitattributes pins a handful of fixtures to LF and says nothing about
+// .go, so a Windows runner checks this very file out with CRLF — and a census
+// that reads its own source has to survive that.
+//
+// The teeth are in the second half: it is not enough that the CRLF copy yields
+// SOMETHING, it must yield exactly what the LF copy yields. The broken version
+// returned a strict superset, so a test that only checked "not empty" would have
+// passed on the bug it exists to catch.
+func TestTheDriverCensusDoesNotDependOnLineEndings(t *testing.T) {
+	lf, err := os.ReadFile("session_creation_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(lf, []byte("\r\n")) {
+		t.Skip("this checkout is already CRLF; the comparison would be against itself")
+	}
+	dir := testsupport.TempDir(t)
+	crlf := filepath.Join(dir, "session_creation_test.go")
+	if err := os.WriteFile(crlf, bytes.ReplaceAll(lf, []byte("\n"), []byte("\r\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	want, got := driverCallsIn(t, "session_creation_test.go"), driverCallsIn(t, crlf)
+	if len(want) < 10 {
+		t.Fatalf("the LF scan found only %d call(s) — it is not reading the driver: %v", len(want), want)
+	}
+	if !reflect.DeepEqual(want, got) {
+		var extra, missing []string
+		for k := range got {
+			if !want[k] {
+				extra = append(extra, k)
+			}
+		}
+		for k := range want {
+			if !got[k] {
+				missing = append(missing, k)
+			}
+		}
+		sort.Strings(extra)
+		sort.Strings(missing)
+		t.Errorf("the census reads differently under CRLF — extra %v, missing %v; it must not depend on line endings",
+			extra, missing)
+	}
 }
 
 // metaReaderCalls invokes every reader enrolled in

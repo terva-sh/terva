@@ -143,13 +143,20 @@ func printExpr(b *strings.Builder, e ast.Expr) error {
 // constructor returning the same path twice would satisfy every caller and
 // still address one registry for two purposes.
 func TestHostRootsNamesTwoDistinctPlacesUnderTheHome(t *testing.T) {
-	root, legacy := HostRoots("/home/x/.terva")
+	// FromSlash, because HostRoots builds with filepath.Join and therefore
+	// answers in the platform's own separators. Writing the home as a POSIX
+	// literal and then joining the NATIVE separator onto it makes a prefix that
+	// exists on no platform: on Windows the roots come back "\home\x\.terva\…"
+	// while the prefix reads "/home/x/.terva\". The product code was right; the
+	// assertion was only ever true where the separator is already "/".
+	home := filepath.FromSlash("/home/x/.terva")
+	root, legacy := HostRoots(home)
 	if root == legacy {
 		t.Fatal("Root and LegacyRoot are the same path")
 	}
 	for _, p := range []string{root, legacy} {
-		if !strings.HasPrefix(p, "/home/x/.terva"+string(filepath.Separator)) {
-			t.Errorf("%q is not under the given home", p)
+		if !strings.HasPrefix(p, home+string(filepath.Separator)) {
+			t.Errorf("%q is not under the given home %q", p, home)
 		}
 	}
 }
