@@ -121,6 +121,14 @@ The fix is always the same and is stated in the refusal: call each binding
 directly by its name. That is also how ordinary scripts are already written,
 so the constraint costs little in practice.
 
+The account is scoped to the tool's own binding set. A name that the tool
+does not provide is no different from a global like `Math`: `code_execution`
+does not carry `write`, so `const w = write` there names an unknown
+identifier and the account stays clean — the call then fails at runtime,
+before it can touch anything. The same pattern under
+`code_execution_mutating`, which does carry `write`, is what the table above
+refuses. Each tool accounts for the reach it actually has.
+
 Note what this is *not*. It is not a defence against a hostile script — see
 [the threat model](#notes-for-the-curious). `eval` still exists in the
 language; the pre-check does not remove it, it declines to see through it and
