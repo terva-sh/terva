@@ -839,6 +839,35 @@ type ProvidersView struct {
 	// group lands, so the pane says "log in from the terminal" rather than
 	// showing a control that does nothing.
 	CanLogin bool `json:"can_login,omitempty"`
+	// Switch reports that boot could not use the provider config PINS and is
+	// running on another one, nil when the pin was honoured.
+	//
+	// It rides the providers view because that is the pane that answers "who can
+	// this daemon talk to", and the honest answer includes "not the one you
+	// configured". Without it the panel shows a lapsed subscription beside six
+	// others and never says which provider the next turn will actually bill.
+	Switch *ProviderSwitchView `json:"switch,omitempty"`
+}
+
+// ProviderSwitchView is the wire face of build.ProviderSwitch: the provider the
+// config pins, the one running instead, and why.
+//
+// Wire-safe by construction — provider ids, model ids, and a reason sentence.
+// The underlying error names a lapsed grant, never a token or a prefix of one.
+type ProviderSwitchView struct {
+	// From/FromModel is the pair config pins — still the default, still what a
+	// re-login would restore.
+	From      string `json:"from"`
+	FromModel string `json:"from_model,omitempty"`
+	// To/ToModel is what is running instead, on a credential boot proved usable.
+	To      string `json:"to"`
+	ToModel string `json:"to_model,omitempty"`
+	// Reason is why the pin is unusable, already a sentence for a human.
+	Reason string `json:"reason,omitempty"`
+	// Lapsed distinguishes a subscription that EXPIRED from one never configured.
+	// Only the former makes "sign in again" a real remedy, so a client keys the
+	// offered action on it rather than re-reading Reason's prose.
+	Lapsed bool `json:"lapsed,omitempty"`
 }
 
 // ProviderInfo is one provider's credential state.

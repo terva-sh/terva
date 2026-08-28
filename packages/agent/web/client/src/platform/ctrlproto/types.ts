@@ -1929,6 +1929,32 @@ export interface ProvidersView {
   // Whether the daemon will serve a login. False today — the pane reports, and
   // points you at the terminal, rather than showing a control that does nothing.
   can_login?: boolean
+  // Set when boot could not use the provider config PINS and is running on
+  // another one. Absent in the ordinary case.
+  switch?: ProviderSwitchView
+}
+
+// The provider config pins, the one running instead, and why.
+//
+// The daemon cannot ask a browser a question mid-boot the way the TUI asks a
+// terminal, so it starts on whatever works and reports this. The pane is where
+// that becomes visible — otherwise a lapsed subscription shows up as one row
+// among seven and nothing says which provider the next turn actually bills.
+//
+// Nothing here is a secret: provider ids, model ids, and a reason sentence
+// about a lapsed grant.
+export interface ProviderSwitchView {
+  // Still the default, still what a re-login restores.
+  from: string
+  from_model?: string
+  // Running instead, on a credential the daemon proved usable.
+  to: string
+  to_model?: string
+  // Why the pin is unusable, already a sentence for a human.
+  reason?: string
+  // Expired, as opposed to never configured. Only the former makes "sign in
+  // again" a real remedy — branch on this, not on reason's prose.
+  lapsed?: boolean
 }
 
 // The secrets group (optional, served only under --web-allow-secrets): terva's

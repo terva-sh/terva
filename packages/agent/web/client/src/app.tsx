@@ -1463,6 +1463,23 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     }
   }, [])
 
+  // "Start a chat on <provider>/<model>": the answer to a pinned provider the
+  // daemon cannot use.
+  //
+  // Deliberately a plain newSession with an explicit pair, not a new verb and
+  // not a config write. sessions.create already carries provider/model, so the
+  // choice lands in THAT session's meta and nowhere else — the pin stays the
+  // default, and the next chat asks again rather than inheriting a decision
+  // made once to get unblocked. It closes the pane because the useful next
+  // thing is the chat it just opened, not the pane it was started from.
+  const useOfferedProvider = useCallback(
+    (provider: string, model: string) => {
+      setPaneOpen(false)
+      void newSession({ provider, model })
+    },
+    [newSession],
+  )
+
   // Per-model settings: the daemon describes them, we render whatever it sends.
   const openModelParams = useCallback(async (provider: string, id: string) => {
     const c = clientRef.current
@@ -2306,6 +2323,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
               cancel: cancelLogin,
               logout: logoutProvider,
               removeEndpoint,
+              useProvider: useOfferedProvider,
             }}
             onClose={() => setPaneOpen(false)}
             onRefresh={() => {
@@ -2346,6 +2364,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
               cancel: cancelLogin,
               logout: logoutProvider,
               removeEndpoint,
+              useProvider: useOfferedProvider,
             }}
             trusted={!!curInfo?.trusted}
             onTrust={trustWorkspace}
@@ -2548,6 +2567,7 @@ export function WorkspaceDrawer({
                 onCancel={() => auth?.cancel()}
                 onLogout={(p) => auth?.logout(p)}
                 onRemoveEndpoint={(id) => auth?.removeEndpoint(id)}
+                onUseProvider={auth ? (p, m) => auth.useProvider(p, m) : undefined}
                 busy={auth?.busy ?? false}
                 error={auth?.error ?? ''}
               />
@@ -3636,6 +3656,7 @@ export function SurfaceView({
           onCancel={auth?.cancel ?? (() => {})}
           onLogout={auth?.logout ?? (() => {})}
           onRemoveEndpoint={auth?.removeEndpoint ?? (() => {})}
+          onUseProvider={auth?.useProvider}
         />
       )
     default:
@@ -3657,6 +3678,10 @@ interface AuthPaneProps {
   // Forgets a named endpoint's DEFINITION, not just its key — a separate verb
   // from logout on purpose. See ProviderInfo.endpoint.
   removeEndpoint: (id: string) => void
+  // Opens a chat on an explicit provider+model — the answer to a pinned
+  // provider the daemon cannot use. Not a login and not a config change: it
+  // creates ONE session on the pair, leaving the pin as the default.
+  useProvider: (provider: string, model: string) => void
 }
 
 // authMessage unwraps a ctrlproto error for display. The daemon's text is the
@@ -3667,6 +3692,16 @@ export function authMessage(e: unknown): string {
   // Frames arrive as "code: message"; the code is for us, the message is for them.
   const i = m.indexOf(': ')
   return i > 0 ? m.slice(i + 2) : m
+}
+
+// providerPairLabel renders a provider+model as one phrase, tolerating a
+// missing model.
+//
+// The model is `omitempty` on the wire, and a bare "openai/" reads like a bug
+// where "openai" reads like a provider — which, when the model is unknown, is
+// exactly all we know.
+function providerPairLabel(provider: string, model?: string): string {
+  return model ? `${provider}/${model}` : provider
 }
 
 // ProvidersBody renders the daemon's MODEL-PROVIDER credentials, and — when the
@@ -3687,6 +3722,7 @@ export function ProvidersBody({
   onCancel,
   onLogout,
   onRemoveEndpoint,
+  onUseProvider,
   busy,
   error,
 }: {
@@ -3697,6 +3733,7 @@ export function ProvidersBody({
   onCancel: () => void
   onLogout: (provider: string) => void
   onRemoveEndpoint: (id: string) => void
+  onUseProvider?: (provider: string, model: string) => void
   busy: boolean
   error: string
 }) {
@@ -3735,6 +3772,40 @@ export function ProvidersBody({
 
   return (
     <div class="ext-body">
+      {/*
+        The switch goes FIRST, above the credential list, because it is the one
+        thing on this pane that is already costing something. A lapsed
+        subscription otherwise reads as one row among seven — and the row is even
+        accurate — while the fact that turns are landing on a different account
+        appears nowhere at all.
+
+        The daemon cannot stop and ask a browser the way the TUI asks a terminal,
+        so it started on what works and said so here. The button is the same
+        answer the TUI offers, in the only form a report can take: one chat on
+        that pair, the pin left alone.
+      */}
+      {v.switch ? (
+        <div class="prov-warn">
+          <div>
+            {v.switch.lapsed
+              ? t('%s login expired — terva is running on %s for now.', v.switch.from, providerPairLabel(v.switch.to, v.switch.to_model))
+              : t('%s has no usable credential — terva is running on %s for now.', v.switch.from, providerPairLabel(v.switch.to, v.switch.to_model))}
+          </div>
+          <div>
+            {t('%s is still your default; sign in below to go back to it.', providerPairLabel(v.switch.from, v.switch.from_model))}
+          </div>
+          {v.switch.reason ? <div class="ext-desc">{v.switch.reason}</div> : null}
+          {onUseProvider ? (
+            <button
+              class="ext-act"
+              disabled={busy}
+              onClick={() => onUseProvider(v.switch!.to, v.switch!.to_model ?? '')}
+            >
+              {t('Start a chat on %s', providerPairLabel(v.switch.to, v.switch.to_model))}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {active.length === 0 ? (
         <div class="prov-warn">
           {t('terva has no model-provider credentials. It cannot reach any model until it does.')}

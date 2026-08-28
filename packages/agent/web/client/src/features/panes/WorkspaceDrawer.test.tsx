@@ -33,6 +33,7 @@ const auth = {
   cancel: vi.fn(),
   logout: vi.fn(),
   removeEndpoint: vi.fn(),
+  useProvider: vi.fn(),
 }
 
 function mountProps(over: Partial<Parameters<typeof WorkspaceDrawer>[0]> = {}) {

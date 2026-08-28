@@ -694,9 +694,17 @@ ProviderInfo
 	model	string	omitempty
 	endpoint	bool	omitempty
 	note	[]string	omitempty
+ProviderSwitchView
+	from	string
+	from_model	string	omitempty
+	to	string
+	to_model	string	omitempty
+	reason	string	omitempty
+	lapsed	bool	omitempty
 ProvidersView
 	providers	[]ProviderInfo
 	can_login	bool	omitempty
+	switch	*ProviderSwitchView	omitempty
 QueueParams
 	text	string
 QueueSetParams

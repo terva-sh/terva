@@ -97,13 +97,31 @@ func (w *Workspace) AuthProviders(_ context.Context) (ctrlproto.ProvidersView, e
 		return ia.Label < ib.Label
 	})
 
-	return ctrlproto.ProvidersView{
+	view := ctrlproto.ProvidersView{
 		Providers: out,
 		// Whether this daemon will actually serve a login. False unless the
 		// composition root called EnableAuth, so a client that sees false renders
 		// no controls rather than controls that answer CodeUnsupported.
 		CanLogin: w.canLogin(),
-	}, nil
+	}
+	// The one thing auth.Describe cannot know: it reads the store, and the store
+	// says the pinned subscription is merely expired — the same thing it says for
+	// a token a refresh would fix. Whether the refresh was actually REFUSED is a
+	// verdict only boot holds, because only boot attempted it.
+	if sw := w.ProviderSwitch(); sw != nil {
+		v := &ctrlproto.ProviderSwitchView{
+			From:      sw.From,
+			FromModel: sw.FromModel,
+			To:        sw.To,
+			ToModel:   sw.ToModel,
+			Lapsed:    sw.Lapsed(),
+		}
+		if sw.Err != nil {
+			v.Reason = sw.Err.Error()
+		}
+		view.Switch = v
+	}
+	return view, nil
 }
 
 // configEndpoints returns the operator's named openai-compatible endpoints,
