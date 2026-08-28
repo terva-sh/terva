@@ -275,6 +275,25 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 		}
 	}
 	if err != nil {
+		// A missing or lapsed credential is not an internal failure, and calling
+		// it one cost the TUI its whole recovery path. The host defers a boot-time
+		// CredentialErr and opens /login — but that verdict comes from a resolve
+		// with NO provider pinned, which is free to fall back onto whichever
+		// provider still has a credential. This resolve runs with the session's
+		// provider replayed onto the args, which is exactly what disables that
+		// fallback. So a lapsed subscription on the CONFIGURED provider resolved
+		// clean at boot and hard-failed here, one layer past the only code that
+		// knew how to ask for a login: terva exited to the shell quoting
+		// "sign in again with /login" with no /login left to reach.
+		//
+		// Tagging it lets a host with a login flow tell the two apart. See
+		// ctrlproto.CodeNoCredential.
+		var credErr *build.CredentialError
+		if errors.As(err, &credErr) {
+			// Wrap, not Errorf: the TUI is in-process here and reads the
+			// provider name off the typed error to say WHICH login lapsed.
+			return nil, ctrlproto.Wrap(ctrlproto.CodeNoCredential, err)
+		}
 		return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "resolve: %v", err)
 	}
 

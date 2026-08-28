@@ -207,6 +207,16 @@ type InteractiveConfig struct {
 	// a self-restart resume. Cleared on the next prompt, like ext notes.
 	BootNotice string
 
+	// LoginNotice, when set, replaces the generic "not logged in" status line
+	// on a credential-less boot with the host's actual reason.
+	//
+	// The generic line is a lie in the case that matters most. A LAPSED
+	// subscription still has a credential on disk, so the login dialog shows a
+	// ✓ beside that very provider — "not logged in" next to a checkmark, with
+	// nothing saying which of the seven rows is the stale one. The host knows
+	// (it holds the credential error); this carries the sentence it already has.
+	LoginNotice string
+
 	// UpdateInfoChan is an optional channel that delivers the result
 	// of the github-release update check. Interactive reads at most
 	// one value, drops it if the check reported nothing, and otherwise
@@ -1379,6 +1389,9 @@ func (i *Interactive) Run(ctx context.Context) error {
 	// no agent at all), so skip it there.
 	if !i.ready() && (i.cfg.Carrier == nil || i.cfg.CarrierLogin != nil) {
 		i.statusErr = i18n.T("not logged in. pick a login method below or press esc to dismiss.")
+		if i.cfg.LoginNotice != "" {
+			i.statusErr = i18n.T("%s — pick a login method below or press esc to dismiss.", i.cfg.LoginNotice)
+		}
 		i.dialog.Open(i.cfg.AuthStore)
 	} else if i.cfg.JailNotice != "" {
 		// A saved rule took the sandbox down for this directory. Say it before

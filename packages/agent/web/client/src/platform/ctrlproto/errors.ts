@@ -31,6 +31,7 @@ export const WireCodes = {
   unsupported: 'unsupported',
   unauthorized: 'unauthorized',
   conflict: 'conflict',
+  noCredential: 'no_credential',
   internal: 'internal',
 } as const
 
@@ -85,6 +86,7 @@ const bareCodeText: Record<string, () => string> = {
   [WireCodes.busy]: () => t('a turn is already running'),
   [WireCodes.noSession]: () => t('that session is gone'),
   [WireCodes.notFound]: () => t('not found'),
+  [WireCodes.noCredential]: () => t('sign in to a provider to continue'),
 }
 
 // errText renders any thrown value as a sentence for a human.

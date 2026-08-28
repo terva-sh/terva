@@ -42,6 +42,7 @@
   "%s mode": "%s mode",
   "%s read": "%s read",
   "%s written": "%s written",
+  "%s — pick a login method below or press esc to dismiss.": "%s — pick a login method below or press esc to dismiss.",
   "(%.2f used)": "(%.2f used)",
   "(auto)": "(auto)",
   "(cards, ephemeral)": "(cards, ephemeral)",

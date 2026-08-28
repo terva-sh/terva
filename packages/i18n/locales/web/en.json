@@ -497,6 +497,7 @@
   "set “%s” as the default for new sessions:": "set “%s” as the default for new sessions:",
   "show %d more": "show %d more",
   "show what was cleared": "show what was cleared",
+  "sign in to a provider to continue": "sign in to a provider to continue",
   "signed in to %s": "signed in to %s",
   "single round": "single round",
   "sizes are bytes; token counts are ~bytes/4 estimates": "sizes are bytes; token counts are ~bytes/4 estimates",

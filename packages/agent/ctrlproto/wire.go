@@ -50,6 +50,15 @@ type Frame struct {
 type Error struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+
+	// cause is the error this was built from, kept for an IN-PROCESS caller and
+	// never serialized (unexported, so encoding/json skips it). The wire carries
+	// {code, message} and nothing else — which is exactly why the Code is the
+	// classification a remote client branches on. But the TUI drives the
+	// Workspace directly, with no encode step in between, and a caller on that
+	// side can errors.As down to the typed error and read its fields instead of
+	// pattern-matching the sentence. See [Wrap].
+	cause error
 }
 
 func (e *Error) Error() string {
@@ -60,6 +69,16 @@ func (e *Error) Error() string {
 		return e.Code
 	}
 	return e.Code + ": " + e.Message
+}
+
+// Unwrap exposes the cause, for the in-process case only. A decoded frame has
+// none — the wire never carried it — so a remote client gets nil and must
+// branch on Code.
+func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
 }
 
 // Error codes. These are stable wire strings, not localized text.
@@ -76,7 +95,17 @@ const (
 	// there) and bad_request (the caller is wrong): the caller was right, and then
 	// the world changed. A client's answer is to resync, not to retry.
 	CodeConflict = "conflict"
-	CodeInternal = "internal" // an unexpected server-side failure
+	// CodeNoCredential: the request was well-formed, but the provider it needs
+	// has no usable credential — never configured, or a subscription whose grant
+	// lapsed. It is deliberately NOT internal: nothing failed unexpectedly, the
+	// server is fine, and the remedy is a login rather than a bug report.
+	//
+	// The distinction has to survive as a CODE rather than a wrapped error
+	// because that is all that crosses the wire (Error is {code, message}, with
+	// no chain to errors.As through). A host with a login flow keys on this to
+	// defer the request and open /login; one without it fails fast, as before.
+	CodeNoCredential = "no_credential"
+	CodeInternal     = "internal" // an unexpected server-side failure
 )
 
 // Encode serializes a frame to its compact JSON wire bytes (no trailing

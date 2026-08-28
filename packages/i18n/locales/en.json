@@ -28,6 +28,7 @@
   "%s is not on this World's roster": "%s is not on this World's roster",
   "%s is still connecting — wait for it, or disconnect first": "%s is still connecting — wait for it, or disconnect first",
   "%s is too large to fetch over the control plane (%d bytes, limit %d) — open it from its path instead": "%s is too large to fetch over the control plane (%d bytes, limit %d) — open it from its path instead",
+  "%s login expired": "%s login expired",
   "%s must be one of %s, got %q": "%s must be one of %s, got %q",
   "%s needs a character card": "%s needs a character card",
   "%s needs a value": "%s needs a value",

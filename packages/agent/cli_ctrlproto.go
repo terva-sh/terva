@@ -10,6 +10,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -29,6 +30,47 @@ import (
 	"terva.sh/terva/packages/relaunch"
 	"terva.sh/terva/packages/tui"
 )
+
+// isNoCredentialErr reports whether err is a provider-credential failure —
+// never configured, or a subscription whose grant lapsed — as opposed to
+// anything that actually went wrong.
+//
+// It checks BOTH spellings on purpose. Across the service seam the failure
+// arrives as a ctrlproto code, which is all a serialized carrier can carry;
+// in-process, a caller below that seam may still hold the typed build error.
+// One helper so the two cannot drift into disagreeing about what counts.
+func isNoCredentialErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var wire *ctrlproto.Error
+	if errors.As(err, &wire) {
+		return wire.Code == ctrlproto.CodeNoCredential
+	}
+	var cred *build.CredentialError
+	return errors.As(err, &cred)
+}
+
+// credentialNoticeText is the status line for a boot that stopped on a
+// credential — "" to keep the generic "not logged in".
+//
+// It only speaks up for a LAPSED login, because that is the case the generic
+// line gets wrong: the credential is on disk, so the dialog shows a ✓ beside
+// the provider, and "not logged in" beside a checkmark tells the user nothing
+// about which of the seven rows to redo. A provider that was never configured
+// really is "not logged in", and the generic line already says so better than
+// noCredentialError's env-var prose would.
+//
+// Built from the typed error rather than the formatted one: the full sentence
+// carries a parenthetical and a remedy clause, and the dialog opening
+// underneath it IS the remedy.
+func credentialNoticeText(err error) string {
+	var expired *build.ExpiredLoginError
+	if errors.As(err, &expired) {
+		return i18n.T("%s login expired", expired.Provider)
+	}
+	return ""
+}
 
 // runInteractiveCtrlproto builds a Workspace, creates a session, and runs the
 // interactive TUI against it through the carrier seam. Everything on the hot
@@ -114,6 +156,14 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 	// succeeds (sessions hard-require a credential); --resume's picker opens
 	// after that first login lands (finishCarrierLogin).
 	needLogin := w.CredentialErr() != nil
+	// The reason, kept for the status line. "not logged in" is actively
+	// misleading for a LAPSED subscription — the dialog puts a ✓ next to that
+	// provider, because the credential is right there on disk — so carry the
+	// sentence that names which login went stale.
+	loginNotice := ""
+	if needLogin {
+		loginNotice = credentialNoticeText(w.CredentialErr())
+	}
 	var info ctrlproto.SessionInfo
 	var sessID string
 	if !needLogin {
@@ -129,9 +179,11 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		case args.ResumeID != "":
 			// --resume <id>: direct resume, no picker. Fail loudly — a
 			// scripted resume that silently landed on a fresh session would
-			// be worse than an error.
+			// be worse than an error. A missing CREDENTIAL is the exception,
+			// handled below: it is not the resume that is wrong, and
+			// CarrierLogin replays this same selection once the login lands.
 			info, err = w.ResumeSession(ctx, build.SessionIDFromPath(args.ResumeID))
-			if err != nil {
+			if err != nil && !isNoCredentialErr(err) {
 				return fmt.Errorf("--resume %s: %w", args.ResumeID, err)
 			}
 		case args.Continue:
@@ -139,10 +191,28 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		default:
 			info, err = w.CreateSession(ctx, ctrlproto.CreateOpts{})
 		}
-		if err != nil {
+		// A session can fail on a credential the BOOT resolve was happy with,
+		// and that used to end the process. Boot resolves with no provider
+		// pinned, so its fallback walks past a lapsed subscription onto any
+		// provider that still has a credential; the session replays the
+		// configured provider onto the args (config.json's provider/model seeds
+		// a fresh session), and pinning it is precisely what turns that fallback
+		// off. Net effect for anyone whose configured subscription lapsed: a
+		// plain `terva`, no flags, printed "sign in again with /login" and
+		// exited to the shell — where there is no /login.
+		//
+		// So treat it as the credential-less boot it is. The deferral below is
+		// already built and already tested: the TUI opens with the login dialog
+		// up, and CarrierLogin re-runs this exact session selection afterwards.
+		switch {
+		case isNoCredentialErr(err):
+			needLogin, info = true, ctrlproto.SessionInfo{}
+			loginNotice = credentialNoticeText(err)
+		case err != nil:
 			return err
+		default:
+			sessID = info.ID
 		}
-		sessID = info.ID
 	}
 
 	// Status-line / banner labels before the first session exists: the
@@ -334,6 +404,7 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		AuthStore:        config.AuthStoreFor(),
 		Version:          version,
 		BootNotice:       bootNotice,
+		LoginNotice:      loginNotice,
 		// A credential-less boot defers the first session until /login, so the
 		// prompt gate opens iff a credential resolved. This was `ag != nil`
 		// before the agent crutch went away; it means the same thing.

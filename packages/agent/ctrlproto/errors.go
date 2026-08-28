@@ -26,3 +26,18 @@ var (
 func Errorf(code, format string, args ...any) *Error {
 	return &Error{Code: code, Message: fmt.Sprintf(format, args...)}
 }
+
+// Wrap builds a coded wire [*Error] that also RETAINS cause, so an in-process
+// caller can errors.As past it to the typed error underneath.
+//
+// Use it where the caller needs more than the code — the credential failure
+// that opens the TUI's login dialog wants the provider name off
+// build.ExpiredLoginError, and reading it out of the formatted sentence would
+// couple the dialog to that wording. Over the wire this is [Errorf]: the cause
+// does not serialize, and the code is what a remote client gets.
+func Wrap(code string, cause error) *Error {
+	if cause == nil {
+		return &Error{Code: code}
+	}
+	return &Error{Code: code, Message: cause.Error(), cause: cause}
+}
