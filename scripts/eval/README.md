@@ -528,6 +528,8 @@ prompt, and what the right and wrong choices look like:
 | `seed_memory` | USER-scope memory entries (`memory/user.md`) written fresh before every run. Memory is durable by design, which for an A/B means one run's save would leak into the next run's prompt — so the harness resets it per run, seeded or not. Seeding also matters for what it makes *exist*: the memory policy block renders only when a scope is non-empty, so a scenario probing `memory.policy`'s wording must seed an entry or the text under test is absent from the prompt entirely. |
 | `seed_lore` | lore entries written to `$TERVA_HOME/lore/` before every run and reset after. That is the **global, un-trust-gated** slot: the workspace's own `.terva/lore/` needs the workspace trusted, and an untrusted arm loads no lore and says nothing about it, which is two arms serving identical text. Each entry is `{name, keys, text}`. Key it on a word the **prompt** contains or it never fires. Lore rides the ephemeral tail, so the pre-flight legitimately reports silence and the behavioural row is the only readout. |
 | `seed_ext_card` | extension context cards, as `{id, label, text}`. A card cannot be written as a file — it arrives over the extension wire — so the harness **generates a minimal protocol extension** (a hello frame, one `context_card` per entry, an idle loop that acks shutdown) into the arm's `$TERVA_HOME/extensions/evalcard`, reset per run. No capability is required; the driver accepts `context_card` unconditionally. **Verify the card reached the model with a live `--json` run** — `--dump-prompt` has no extension manager at all, so on this path a card that never arrived is indistinguishable from a card the model ignored. |
+| `seed_tool_groups` | inactive tool groups, as `{name, tools[]}`. The `[inactive tool groups]` note only renders when inactive groups exist, and a group **is an extension name** (`core.ToolGroup` reads it off the tool's `Extension()`), so the harness generates one tool-registering extension per group into `$TERVA_HOME/extensions/evaltools-<name>`. Different fixture from `seed_ext_card`: cards never create a group. The tools are registered **non-essential** on purpose — `ToolEssential` keeps a tool advertised every turn and drops its group out of the note entirely, so an essential tool seeds a group the note never mentions. Lazy visibility needs no config; `config.LazyToolsOn` defaults to on. |
+| `seed_config` | a `config.json` written to the arm's `$TERVA_HOME`, reset per scenario. Added for `{"lazy_tools": false}`, which is the only way to make the `[inactive tool groups]` note **absent**: it fires on built-in optional groups (`worktree`, `scripting`, `web` opt in via `ToolGroupName()`), so no amount of fixture sweeping removes it and it otherwise rides **every** run. Any scenario that needs to attribute a hijack to its own block rather than to the note beside it must turn lazy visibility off and verify absence in the request body. |
 
 Only tools the surface actually advertises can be tested. `--json` mode builds
 no swarm supervisor, raati engine or chat bridge, so `swarm_spawn`,
@@ -542,6 +544,7 @@ the ones removed for that reason.
 | `pre-ste-2026-08.json` | tool descriptions at `091af729`, the commit before the Simplified Technical English conversion. The control arm for "did dropping the ALL-CAPS emphasis cost anything". |
 | `lazy-note-prohibition-first.json` | `tools.lazy.inactive_groups`(+`_brief`) with the same facts and the prohibition moved first. The candidate arm for the note-hijack fix. An ephemeral-tail note is invisible to `--dump-prompt=sizes`, so its pre-flight legitimately reports silence. |
 | `tier-a-prompts-ste.json` | the four on-surface decision prompts (`system.conventions.file_edits`/`output`, `memory.policy`, `system.status_tool_hint`) in Simplified Technical English with each rule's command moved before its detail. `memory.policy` also gains the archive-tier sentence the shipped text never had — so for that key the arm measures the improved text, not the conversion alone. |
+| `lazy-note-pre-fix.json` | `tools.lazy.inactive_groups`(+`_brief`) as they stood at `2884da1a^`, with the prohibition buried mid-note behind "This is an inventory, not a request". **The known-bad arm**: this is the exact catalog under which Haiku answered the note instead of the user in 20 of 20 runs. Needs `seed_tool_groups`. Use it to prove the harness can still see a regression — see "The power test" below. |
 | `tail-background-guard-off.json` | `tail.background.guard` removed, so lore and extension-card blocks ride the ephemeral tail unguarded. The control arm for the background guard shipped in `tail-ordering.md` stage 0. Needs `seed_lore`; like the lazy-note overlay it is invisible to the pre-flight. |
 | `stall-guard-off.json` | `stall.guard` cut back to the bare `[loop check]` tag, dropping the prohibition sentences but keeping the tag both arms share. The control arm for the loop-check **directive** guard. **`ab.sh` cannot reach it** — see below. |
 
@@ -770,6 +773,122 @@ scenarios has reproduced a hijack, including the ones built specifically to. Tha
 is now better evidence against the scenarios than for or against the guard — they
 may simply be too easy to fail. The next move is a scenario that *can* fail, not
 a fifth rung on this ladder.
+
+## The power test: a scenario that can fail
+
+Everything above sat at ceiling, and **a ceiling is ambiguous**. It is equally
+consistent with the guards working and with the harness seeing nothing at all.
+Nothing in six runs could tell those apart. `lazy-note-hijack` can, because it is
+built from a failure that provably happened rather than one that might.
+
+Arm a serves `overlays/lazy-note-pre-fix.json`, byte-identical to the prompt
+catalog at `2884da1a^` — the wording under which Haiku answered the note instead
+of the user in 20 of 20 runs. Arm b is shipped. The prohibition is the **same
+sentence** in both; only its position inside the note moves, from buried behind
+"This is an inventory, not a request" to leading.
+
+| row | arm a (buried) | arm b (shipped) |
+|---|---:|---:|
+| tool call | 5/5 | 5/5 |
+| **final answer** | **0/5** | **5/5** |
+
+Arm a reproduced the documented hijack verbatim, five times out of five:
+
+> Understood. I see that the `worktree` tool group is available but not currently
+> loaded. I'll activate it if a task requires worktree operations.
+
+Run 2 is the one to remember: *"I won't acknowledge this unless you ask me to use
+one of those tools"* — acknowledging the note in the act of promising not to.
+Arm b answered the user in all five. Both arms were verified at the
+**request-body level** with `TERVA_DEBUG_ANTHROPIC`, not inferred from the score.
+
+### What this does to every earlier number
+
+**The harness has power.** That retroactively settles the ambiguity hanging over
+this whole file: the six earlier runs that sat at ceiling were measuring
+something real, not staring at a wall. Those ceilings are genuine negatives. The
+background guard really does not change anything on lore or extension cards, and
+guard-last really does not hijack — those findings stand, and now stand on an
+instrument with a demonstrated floor as well as a demonstrated ceiling.
+
+A scoring note worth keeping: the call row is 5/5 in **both** arms. The model
+fetched the right answer every time and then failed to deliver it. Call-level
+scoring alone would have certified arm a as perfect.
+
+### And it sharpens the real question
+
+The note hijacks. Lore and extension cards do not — unguarded, bare, or
+guard-last. Same tail, same position, same prohibition available. So the
+difference is in the **content type**, and the untested candidate is now visible:
+the note is about the **model's own capabilities**, while lore and cards are
+about the world or the task. A block that says *"here is what you can do"* seems
+to invite *"understood, here is what I can do"* in a way that *"here is what is
+true"* does not.
+
+That is testable with the machinery that now exists: push a
+capability-inventory-shaped block through the lore path, unguarded, and see
+whether it hijacks. If it does, the governing variable is self-reference, not
+position and not wrapper — and the guard belongs wherever the harness tells the
+model about itself, rather than on background content generally.
+
+## The self-reference test: it was the header all along
+
+`lore-capability-inventory` runs that test. Same prompt and same `expect` as
+`lore-hijack-briefing`, so the pair is directly comparable; only the block's
+content changes, from world background to an inventory of the model's own tools.
+
+**First, a confound that had to be removed — and that invalidates nothing above
+but changes what it means.** The first version of this scenario assumed that with
+no `seed_tool_groups`, no inactive groups would exist. False. The
+`[inactive tool groups]` note fires on **built-in** optional groups — `worktree`,
+`scripting`, `web` opt in through `ToolGroupName()`, not through an extension —
+so the real note, prohibition-first guarded, sat in the tail of that run **and of
+every other run in this arc**. A guarded note instructing the model not to reply
+to capability inventories is exactly what could suppress the hijack under test.
+Hence `seed_config: {"lazy_tools": false}`, verified absent in the request body
+before anything was believed.
+
+With a clean rig, n=5 per rung:
+
+| rung | composition | final answer |
+|---|---|---:|
+| bare | block alone | **5/5** |
+| guard-off | header + block | **0/5** |
+| shipped | guard + header + block | **2/5**, then **4/5** |
+
+Guard-off is a total hijack in all five runs — the model answers the *block* and
+never addresses the file at all:
+
+> I understand. You're providing context that there are installed capabilities
+> (mail, calendar, worktree tools) whose schemas aren't loaded into this session…
+
+### The header causes it, and the guard repairs it
+
+This is the **first demonstration in this arc that the background guard does
+anything**, and it is not the thing the guard was written for. It is
+compensating for damage `lore.reference.frame` inflicts. The header reads
+*"setting, characters, and what came before — background the scene draws on"*,
+which on non-narrative content amounts to "here is context I am handing you" —
+and that invites "I understand, you are providing context that…". Remove the
+header and the identical block is harmless at 5/5.
+
+So the earlier reading of the bare rung needs qualifying. On world-background
+content, bare and shipped scored the same and the header looked inert. On
+capability content the header is **actively harmful**, and the guard is the only
+reason shipped is not catastrophic.
+
+The self-reference hypothesis was half right and aimed at the wrong component.
+Content type matters, but as an **interaction with the framing**, not on its own:
+world background never hijacked under any rung, capability content hijacks only
+once the header frames it.
+
+### A caveat that is part of the finding
+
+Shipped measured **2/5 and then 4/5 on the identical configuration**. That is a
+direct reading of this scenario's noise floor, and it says n=5 is too small for
+any rung whose true rate is near the middle. The 0/5-versus-5/5 contrasts are
+decisive and survive it; the shipped rate does not. Anything that turns on
+whether shipped is 40% or 80% needs n≈20 before it means anything.
 
 One operational note: an arm on this path needs `auth.json` in the arm home.
 `ab.sh` symlinks it already, but a hand-rolled probe that forgets dies with

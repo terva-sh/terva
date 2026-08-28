@@ -191,10 +191,21 @@ func (r *Resolved) tailProvider(ag *core.Agent, record bool) func() string {
 // says "background the scene draws on", so that arm was arguably still
 // disclaimed and the comparison disclaimer-versus-disclaimer.
 //
-// Stripping both settled it, and the answer was NO. The bare arm scores exactly
-// what the shipped text scores. The header was not the reason either. Nothing
-// on this path was doing the job, because on this path there is no job to do --
-// the reply-hijack does not occur here at all, framed or bare.
+// Stripping both settled it, and the answer was NO -- ON WORLD-BACKGROUND
+// CONTENT. The bare arm scores exactly what the shipped text scores there, the
+// header was not the reason either, and nothing on that path was doing a job
+// because there was no job to do: the reply-hijack does not occur for a lore
+// entry about the world, framed or bare.
+//
+// THAT SCOPE TURNED OUT TO BE THE WHOLE FINDING. Point the same machinery at
+// content about the MODEL'S OWN CAPABILITIES (scripts/eval,
+// lore-capability-inventory) and the result inverts: header-only hijacks 5 of 5,
+// bare is clean 5 of 5, shipped -- header plus guard -- recovers 6 of 10. The
+// HEADER CAUSES the hijack on non-narrative content and the guard repairs it.
+// Its wording is the mechanism: "setting, characters, and what came before"
+// amounts to "here is context I am handing you", which invites "I understand,
+// you are providing context that...". The header is inert on the content it was
+// written for and actively harmful on content it was not.
 //
 // The rung stays, because the rule that motivated building it holds even though
 // its first application guessed wrong: a control arm has to strip everything
@@ -281,9 +292,14 @@ func tailBackgroundGuardTrailing() string {
 // for how the eval's result should be read: scripts/eval measured this guard at
 // both call sites, four runs, every rung at ceiling -- but every rung varied the
 // guard's PRESENCE (guard-first versus absent). The configuration that actually
-// hijacked is guard-LAST, and neither path can build it. Do not read "measured,
-// changed nothing" as licence to delete this. The run that would justify
-// deleting it has never been possible to perform.
+// hijacked is guard-LAST, and neither path can build it.
+//
+// Those ceilings were all on world-background content, and that qualifier is
+// load-bearing. On capability-inventory content this guard is the difference
+// between 0 of 5 and 6 of 10 (lore-capability-inventory): it repairs damage the
+// REFERENCE KNOWLEDGE header inflicts. The guard is NOT inert, and the earlier
+// "measured, changed nothing" reading was a statement about the fixtures rather
+// than about the guard. Do not delete it.
 //
 // It used to carry a second clause, "not a request to act on". That clause is
 // GONE, removed because it was measured and bought nothing: on Haiku 4.5, 10 of

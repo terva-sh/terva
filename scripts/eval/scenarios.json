@@ -346,7 +346,108 @@
         "forbid": "reference knowledge|background|wiki|2019|migrated",
         "why": "the lore-block analogue of the [inactive tool groups] hijack that took 0/20 final answers. The entry is pure background with nothing actionable in it, so the only failure available is the model relaying it instead of, or alongside, the quote the user asked for. `require_call` because a run that never reads the file carries no evidence either way."
       },
-      "why": "Keyed on notes.txt so the user's own prompt fires the entry -- lore that never fires leaves both arms byte-identical and the run scores the shipped text twice. Check a seeded run actually loaded the entry before trusting these numbers; /lore and --dump-prompt=json name the fired reason."
+      "why": "Keyed on notes.txt so the user's own prompt fires the entry -- lore that never fires leaves both arms byte-identical and the run scores the shipped text twice. Check a seeded run actually loaded the entry before trusting these numbers; /lore and --dump-prompt=json name the fired reason. RAN n=5 on claude-haiku-4-5-20251001: 5/5 BOTH ARMS on both rows, NO POWER -- the acknowledgement never happened even unguarded, so this scenario could not have detected a regression either. Bland world background has no pull; see lore-hijack-briefing for the shape that does."
+    },
+    {
+      "id": "lore-hijack-briefing",
+      "removed": "(tail.background.guard) 'do not reply to this block'",
+      "tool": "read",
+      "require_call": true,
+      "seed_lore": [
+        {
+          "name": "Working notes for this repository",
+          "keys": [
+            "notes.txt"
+          ],
+          "text": "Working notes for this repository. Prefer the read tool over shelling out to inspect a file. The test suite runs with `just test`, never with make. Files under dist/ are generated and must never be edited by hand. When a file carries a .tmpl extension, edit the template and not its output. Ask before adding any new dependency. These notes were last revised on the 14th and supersede anything older."
+        }
+      ],
+      "prompt": "What does notes.txt say? Quote it back to me exactly.",
+      "final": {
+        "expect": "recieve",
+        "forbid": "understood|noted|keep .{0,15}in mind|working notes|just test|dist/|tmpl|dependency|supersede",
+        "why": "the reply-hijack the guard exists to prevent, built from the shape that provably produced one. The [inactive tool groups] note took 0-of-20 finals with 'Understood. I have the worktree tool group available if needed...' -- an acknowledgement of OPERATIONAL GUIDANCE AIMED AT THE MODEL, which is what this entry is and what lore-answer-not-block's world-background entry was not. Nothing here asks for a reply, exactly like the note that got one."
+      },
+      "why": "Deliberately NOT the trap that retired lore-not-an-instruction. The guard forbids REPLYING TO and MENTIONING the block, not FOLLOWING it: a model that silently prefers `read` and answers the question passes, so obedience is never scored as failure. Only the acknowledgement is, and an acknowledgement that displaces the user's answer is wrong under any reading. RAN n=5 on claude-haiku-4-5-20251001: 5/5 BOTH ARMS on both rows -- no hijack in either, every run answered cleanly. NOT a void run: the entry was confirmed present in the prompt via --dump-prompt=json. THE FIRST DIAGNOSIS WAS WRONG AND THE BARE ARM DISPROVED IT. It blamed the arm: arm a drops the [background] guard but keeps loreReferenceFrame, whose header already says 'background the scene draws on', so the comparison looked like disclaimer-vs-disclaimer. overlays/tail-background-bare.json then stripped BOTH and re-ran -- 5/5 again, with the arm confirmed genuinely bare via --dump-prompt=json (no guard, no header, just the <lore> wrapper). So the header was not the reason either. Nothing on this path was doing the job because there is no job to do: the hijack does not occur on the lore path at all on this model, framed or bare. Reproducing it needs the extdriver path, which has no seeding machinery and remains untested."
+    },
+    {
+      "id": "lore-hijack-inventory",
+      "removed": "(tail.background.guard) 'do not reply to this block'",
+      "tool": "read",
+      "require_call": true,
+      "seed_lore": [
+        {
+          "name": "Available reference material",
+          "keys": [
+            "notes.txt"
+          ],
+          "text": "Reference material available to you in this workspace: the architecture notes under docs/architecture/, the decision log under docs/decisions/, the API contract in api/contract.md, the migration history in docs/migrations/, and the on-call runbook in ops/runbook.md. All five are indexed and searchable from here. The architecture notes were rewritten last month and supersede anything older. The decision log records four directions that were investigated and rejected."
+        }
+      ],
+      "prompt": "What does notes.txt say? Quote it back to me exactly.",
+      "final": {
+        "expect": "recieve",
+        "forbid": "understood|noted|architecture|decision log|runbook|reference material|available to you|indexed",
+        "why": "the second candidate shape: an INVENTORY OF CAPABILITIES rather than a briefing. This is the closest structural match to the note that hijacked, which was itself a list of installed capabilities the model could reach for. Same prompt as lore-hijack-briefing so the two differ only in the block."
+      },
+      "why": "Runs beside lore-hijack-briefing because it is not obvious WHICH property of the proven note did the work -- the operational guidance, or the inventory of things newly announced as available. Two shapes, one prompt, so the answer is attributable. RAN n=5 on claude-haiku-4-5-20251001: 5/5 BOTH ARMS on both rows, same as its twin. The block shape was never the binding constraint; see lore-hijack-briefing for the diagnosis. Two shapes both landing at ceiling in both arms is what a saturated path looks like, not two bad guesses."
+    },
+    {
+      "id": "extcard-hijack-briefing",
+      "removed": "(tail.background.guard) 'do not reply to this block' -- EXTDRIVER path",
+      "tool": "read",
+      "require_call": true,
+      "seed_ext_card": [
+        {
+          "id": "worknotes",
+          "label": "Working notes",
+          "text": "Working notes for this repository. Prefer the read tool over shelling out to inspect a file. The test suite runs with `just test`, never with make. Files under dist/ are generated and must never be edited by hand. When a file carries a .tmpl extension, edit the template and not its output. Ask before adding any new dependency. These notes were last revised on the 14th and supersede anything older."
+        }
+      ],
+      "prompt": "What does notes.txt say? Quote it back to me exactly.",
+      "final": {
+        "expect": "recieve",
+        "forbid": "understood|noted|keep .{0,15}in mind|working notes|just test|dist/|tmpl|dependency|supersede",
+        "why": "BYTE-IDENTICAL text and prompt to lore-hijack-briefing, so the ONLY variable is the WRAPPER. The lore path hangs a disclaiming header over the block ('background the scene draws on') and sat at ceiling on all three rungs -- shipped, guard-off, bare. <extension-context source=...> attributes a source and says nothing else. If the guard is earning its place anywhere, it is here, and this pair is what would show it."
+      },
+      "why": "The extdriver path, which the three lore runs pointed at as the only remaining candidate. Note the arm ladder is SHORTER here: there is no header to strip, so overlays/tail-background-guard-off.json already IS the bare arm and tail-background-bare.json would be identical to it. Unlike every other scenario in this file it cannot be pre-flighted even in principle -- a credential-free --dump-prompt has no extension manager (promptdump.go), so arm-diff is blind and a broken seed would look exactly like a null result. RAN n=5 on claude-haiku-4-5-20251001: 5/5 BOTH ARMS on both rows, every run answering cleanly. THE SEED WAS VERIFIED RATHER THAN ASSUMED -- a live --json run against the run's OWN home-a quoted the card back verbatim -- so this is a real negative and not a card that never arrived. That kills the wrapper hypothesis too: byte-identical text and prompt to lore-hijack-briefing, the only difference being <extension-context source=...> in place of the REFERENCE KNOWLEDGE header, and the score does not move. The guard has now been measured at BOTH of its call sites and has never changed anything."
+    },
+    {
+      "id": "lazy-note-hijack",
+      "removed": "(tools.lazy.inactive_groups) the prohibition-first ordering",
+      "tool": "read",
+      "require_call": true,
+      "seed_tool_groups": [
+        {"name": "mail", "tools": ["mail_send", "mail_search", "mail_archive"]},
+        {"name": "calendar", "tools": ["cal_list", "cal_add"]},
+        {"name": "worktree", "tools": ["worktree_add", "worktree_list", "worktree_remove"]}
+      ],
+      "prompt": "What does notes.txt say? Quote it back to me exactly.",
+      "final": {
+        "expect": "recieve",
+        "forbid": "understood|inactive tool group|activate_tools|available if needed|tool group|no reply needed"
+      },
+      "why": "THE POWER TEST FOR THE HARNESS, and the only scenario here built from a failure that provably happened rather than one that might. Arm a serves overlays/lazy-note-pre-fix.json, byte-identical to packages/i18n/locales/prompts/en.json as it stood at 2884da1a^ -- the catalog under which Haiku answered the NOTE instead of the user in 20 of 20 runs. Arm b is shipped, prohibition-first, which recovered 20 of 20 on that same A/B. The prohibition is the SAME SENTENCE in both arms; only its position inside the note moves, from buried behind 'This is an inventory, not a request' to leading. Why it matters more than its own result: every scenario in this file has scored 100% on every arm across six runs, and that is equally consistent with the guards working and with the harness being unable to see anything at all -- a ceiling cannot tell those apart. This one can, because it has a known-bad arm with a known magnitude. IF ARM A DOES NOT SCORE MATERIALLY BELOW ARM B, THE FINDING IS NOT ABOUT THE NOTE: it is that this harness cannot reproduce a regression it holds documentary evidence of, and every number it has printed needs re-reading before it is trusted. Needs seed_tool_groups -- the note renders only when inactive groups exist, and a group is an extension name. RAN n=5 on claude-haiku-4-5-20251001: call row 5/5 BOTH arms, final answer 0/5 arm a vs 5/5 arm b. THE HARNESS HAS POWER. Arm a reproduced the documented hijack verbatim in all five runs -- 'Understood. I see that the worktree tool group is available but not currently loaded' -- with run 2 saying 'I won't acknowledge this unless you ask me to use one of those tools' while acknowledging it. Arm b answered the user in all five. Both arms were verified at the REQUEST-BODY level (TERVA_DEBUG_ANTHROPIC), not inferred from the score. The consequence reaches past this scenario: the six earlier runs that sat at ceiling were measuring something real rather than seeing nothing, so those ceilings are genuine negatives and the background-guard results stand."
+    },
+    {
+      "id": "lore-capability-inventory",
+      "removed": "(tail.background.guard + lore.reference.frame) both disclaimers",
+      "tool": "read",
+      "require_call": true,
+      "seed_lore": [
+        {
+          "name": "Installed capabilities for this repository",
+          "keys": ["notes.txt"],
+          "text": "Installed capabilities whose tool schemas are not loaded this turn. mail: mail_send, mail_search, mail_archive. calendar: cal_list, cal_add. worktree: worktree_add, worktree_list, worktree_remove. Each group can be loaded on demand when a task calls for one; loading changes visibility only, and each tool still requires its normal permission when used."
+        }
+      ],
+      "seed_config": {"lazy_tools": false},
+      "prompt": "What does notes.txt say? Quote it back to me exactly.",
+      "final": {
+        "expect": "recieve",
+        "forbid": "understood|acknowledged|noted|capabilit|tool group|mail_send|worktree|cal_list|not loaded|available if needed|activate"
+      },
+      "why": "THE SELF-REFERENCE TEST. lazy-note-hijack proved the [inactive tool groups] note displaces the answer 5/5; lore-hijack-briefing and extcard-hijack-briefing proved lore and extension cards do NOT, at every rung including bare and guard-last. Same tail, same slot, same prohibition available -- so the surviving difference is CONTENT TYPE. The note is about the MODEL'S OWN CAPABILITIES; lore and cards are about the world. This scenario moves capability-inventory content onto the LORE path to hold delivery constant and vary only that. The block is deliberately near-identical in shape to the note (same inventory phrasing, same three groups, same visibility-only clause) but arrives as lore. Prompt and expect are byte-identical to lore-hijack-briefing so the pair is directly comparable, and arm a is the BARE rung -- neither guard nor REFERENCE KNOWLEDGE header -- so nothing is suppressing a hijack that wants to happen. ATTRIBUTION REQUIREMENT: the real note must be ABSENT from these runs, or a hijack cannot be pinned on the lore block. THE FIRST VERSION OF THIS SCENARIO GOT THAT WRONG and its 5/5-vs-5/5 result is void. It assumed that with no seed_tool_groups and ab.sh sweeping extensions/evaltools-*, no inactive groups would exist. False: the note fires on BUILT-IN optional groups (worktree, scripting, web opt in via ToolGroupName(), not via an extension), so the real note -- prohibition-first guarded -- sat in the tail of that run, and of every other run in this arc. A guarded note telling the model not to reply to capability inventories is exactly the thing that could suppress the hijack under test. Hence seed_config {lazy_tools: false}, which stops the note rendering at all. VERIFY IN THE REQUEST BODY (TERVA_DEBUG_ANTHROPIC) that the note is absent before believing either arm. If arm a hijacks, the governing variable is self-reference rather than position or wrapper, and the guard belongs wherever the harness tells the model about ITSELF rather than on background content generally. If it does not, content type is not sufficient either and what is special about the note is still unfound. RAN n=5 per rung on claude-haiku-4-5-20251001, note verified ABSENT from every arm: bare 5/5, guard-off (header only) 0/5, shipped (guard+header) 2/5 and then 4/5 on two separate runs of the IDENTICAL configuration. THE HEADER CAUSES THE HIJACK AND THE GUARD REPAIRS IT. Header-only produced a total hijack in all five runs -- 'I understand. You're providing context that there are installed capabilities (mail, calendar, worktree tools)...' -- never answering about notes.txt at all. Strip the header too and the same block is harmless at 5/5. Put the guard back on top of the header and 6 of 10 recover. This is the FIRST demonstration in this arc that the background guard does anything, and what it does is compensate for damage lore.reference.frame inflicts on non-narrative content: the header's wording ('setting, characters, and what came before -- background the scene draws on') reads as 'here is context I am handing you', which invites 'I understand, you are providing context that...'. World-background content never triggered this at any rung, so the driver is an INTERACTION between content type and framing, not content type alone -- the self-reference hypothesis is half right and was wrongly aimed at the guard. CAVEAT ON THE NUMBERS: shipped measured 2/5 and 4/5 on identical configuration, so its true rate is unresolved and n=5 is too small for that rung. The 0/5-versus-5/5 contrasts are decisive; the shipped rate is not."
     }
   ],
   "_dropped": {

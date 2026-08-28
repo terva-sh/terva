@@ -318,6 +318,215 @@ open(sys.argv[2],'w').write(''.join('- '+e+'\n' for e in json.loads(sys.argv[1])
           "$seedmem" "$WORK/home-$arm/memory/user.md"
       fi
 
+      # Lore rides the EPHEMERAL TAIL, which is where the background guard
+      # under test lives. Seed it into $TERVA_HOME/lore/ -- the global,
+      # un-trust-gated slot. The workspace's own .terva/lore/ needs the
+      # workspace trusted, and an untrusted arm loads no lore at all and says
+      # nothing about it: both arms would then serve the shipped text and the
+      # run would score a comparison it never made.
+      #
+      # Reset every run for the same reason memory resets -- a stale entry from
+      # a previous scenario fires on a keyword the current one never seeded.
+      #
+      # Like the lazy-note overlay, a lore arm is INVISIBLE to the pre-flight:
+      # --dump-prompt=sizes renders no ephemeral tail, so arm-diff reports the
+      # arms identical. That silence is correct and is not evidence the arms
+      # match; the behavioural row is the only readout.
+      rm -rf "$WORK/home-$arm/lore"
+      seedlore="$(python3 -c "
+import json
+for s in json.load(open('$HERE/scenarios.json'))['scenarios']:
+    if s['id']=='$id': print(json.dumps(s.get('seed_lore') or ''))" )"
+      if [ "$seedlore" != '""' ]; then
+        mkdir -p "$WORK/home-$arm/lore"
+        python3 -c "
+import json,sys,os
+entries, d = json.loads(sys.argv[1]), sys.argv[2]
+for i, e in enumerate(entries):
+    keys = ''.join('  - %s\n' % k for k in e['keys'])
+    open(os.path.join(d, 'seed%d.md' % i), 'w').write(
+        '---\nname: %s\nkeys:\n%sorder: 100\nposition: after\n---\n%s\n'
+        % (e.get('name', 'seed%d' % i), keys, e['text']))" \
+          "$seedlore" "$WORK/home-$arm/lore"
+      fi
+
+      # Extension context cards ride the SAME ephemeral tail as lore and take the
+      # SAME [background] guard, but through a different wrapper:
+      # <extension-context source="..."> only attributes a source, where
+      # loreReferenceFrame's header editorialises ("background the scene draws
+      # on"). Three lore rungs -- shipped, guard-off, bare -- all sat at ceiling
+      # precisely because that header was doing the disclaiming. This path has no
+      # header, so it is the one place the guard could still be earning its
+      # keep, and that is what this seeding exists to test.
+      #
+      # A card cannot be seeded as a file the way lore can: it arrives over the
+      # extension wire. So the harness GENERATES a minimal protocol extension --
+      # a hello frame, then one context_card per entry, then an idle read loop
+      # that acks shutdown -- and installs it into the arm's own
+      # $TERVA_HOME/extensions/. No capability is needed; the driver accepts
+      # context_card unconditionally and filters only on the disabled set.
+      #
+      # INVISIBLE TO THE PRE-FLIGHT, and more thoroughly than lore is: a
+      # credential-free --dump-prompt has no extension manager AT ALL
+      # (promptdump.go says so), so a dump cannot render a card even in
+      # principle. arm-diff reporting these arms identical proves nothing.
+      # Verify a card arm with a live --json run, the way the seeding was.
+      rm -rf "$WORK/home-$arm/extensions/evalcard"
+      seedcard="$(python3 -c "
+import json
+for s in json.load(open('$HERE/scenarios.json'))['scenarios']:
+    if s['id']=='$id': print(json.dumps(s.get('seed_ext_card') or ''))" )"
+      if [ "$seedcard" != '""' ]; then
+        mkdir -p "$WORK/home-$arm/extensions/evalcard"
+        # A QUOTED heredoc, not python3 -c: the generated script needs its own
+        # quotes, and a `"` inside a double-quoted `-c` closes the bash string.
+        # Quoting around that by hand produced chr(116)+chr(121)+... spelling of
+        # the word "type", which is not a thing to leave in a repository. <<'PY'
+        # suppresses every expansion, so the body below is plain Python and the
+        # inputs arrive as argv.
+        python3 - "$seedcard" "$WORK/home-$arm/extensions/evalcard" <<'PY'
+import json, sys, os
+
+cards, d = json.loads(sys.argv[1]), sys.argv[2]
+
+manifest = {"name": "evalcard", "version": "1.0.0", "exec": "./card.py",
+            "language": "python", "enabled": True}
+with open(os.path.join(d, "extension.json"), "w") as fh:
+    fh.write(json.dumps(manifest, indent=2) + "\n")
+
+frames = [{"type": "hello", "name": "evalcard", "version": "1.0.0",
+           "capabilities": ["context"]}]
+for c in cards:
+    frames.append({"type": "context_card", "id": c["id"],
+                   "label": c.get("label", ""), "text": c["text"]})
+
+# json.dumps of a str/bool-only dict is also a valid Python literal, so the
+# frames can be baked straight into the generated source.
+emits = "".join("emit(%s)\n" % json.dumps(f) for f in frames)
+
+script = '''#!/usr/bin/env python3
+import json, sys
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\\n")
+    sys.stdout.flush()
+
+
+%sfor line in sys.stdin:
+    try:
+        msg = json.loads(line)
+    except Exception:
+        continue
+    if msg.get("type") == "shutdown":
+        emit({"type": "shutdown_ack"})
+        break
+''' % emits
+
+path = os.path.join(d, "card.py")
+with open(path, "w") as fh:
+    fh.write(script)
+os.chmod(path, 0o755)
+PY
+      fi
+
+      # The [inactive tool groups] note only exists when there ARE inactive
+      # groups, and a group IS an extension name -- core.ToolGroup reads it off
+      # the tool's Extension() accessor. So reproducing that note means
+      # installing extensions that register TOOLS, which is a different fixture
+      # from the card seeding above: cards never create a group.
+      #
+      # Non-essential on purpose. ToolEssential keeps a tool advertised every
+      # turn and drops it OUT of the note entirely (agent.go, inactiveGroups),
+      # so an essential tool would seed a group the note never mentions -- a
+      # fixture that looks right and tests nothing. Lazy visibility itself needs
+      # no configuration: config.LazyToolsOn defaults to on.
+      rm -rf "$WORK/home-$arm"/extensions/evaltools-*
+      seedgroups="$(python3 -c "
+import json
+for s in json.load(open('$HERE/scenarios.json'))['scenarios']:
+    if s['id']=='$id': print(json.dumps(s.get('seed_tool_groups') or ''))" )"
+      if [ "$seedgroups" != '""' ]; then
+        # Quoted heredoc, same reason as the card generator above.
+        python3 - "$seedgroups" "$WORK/home-$arm/extensions" <<'PY'
+import json, os, sys
+
+groups, root = json.loads(sys.argv[1]), sys.argv[2]
+
+for g in groups:
+    name = g["name"]
+    d = os.path.join(root, "evaltools-" + name)
+    os.makedirs(d, exist_ok=True)
+    # The MANIFEST name is the group name the note prints, so it is the thing
+    # the scenario controls; the directory prefix only keeps the fixtures
+    # sweepable by the rm above.
+    manifest = {"name": name, "version": "1.0.0", "exec": "./tools.py",
+                "language": "python", "enabled": True}
+    with open(os.path.join(d, "extension.json"), "w") as fh:
+        fh.write(json.dumps(manifest, indent=2) + "\n")
+
+    frames = [{"type": "hello", "name": name, "version": "1.0.0",
+               "capabilities": ["tools"]}]
+    for t in g["tools"]:
+        frames.append({"type": "register_tool", "name": t,
+                       "description": g.get("description", "eval fixture tool"),
+                       "schema": {"type": "object", "properties": {}}})
+    emits = "".join("emit(%s)\n" % json.dumps(f) for f in frames)
+
+    # Answers any tool_call rather than ignoring it: these tools should never
+    # be called by the scenarios that use them, but a fixture that hangs on an
+    # unexpected call would score as a model failure instead of a rig failure.
+    script = '''#!/usr/bin/env python3
+import json, sys
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\\n")
+    sys.stdout.flush()
+
+
+%sfor line in sys.stdin:
+    try:
+        msg = json.loads(line)
+    except Exception:
+        continue
+    if msg.get("type") == "tool_call":
+        emit({"type": "tool_result", "id": msg.get("id"),
+              "content": [{"type": "text", "text": "eval fixture: no-op"}]})
+        continue
+    if msg.get("type") == "shutdown":
+        emit({"type": "shutdown_ack"})
+        break
+''' % emits
+
+    path = os.path.join(d, "tools.py")
+    with open(path, "w") as fh:
+        fh.write(script)
+    os.chmod(path, 0o755)
+PY
+      fi
+
+      # Some scenarios need CONFIG, not content. Lazy tool visibility is the case
+      # that forced this field, and the reason is worth stating because it
+      # invalidated a scenario written without it: the [inactive tool groups]
+      # note fires on BUILT-IN optional groups -- worktree, scripting, web and
+      # the rest opt in through ToolGroupName(), not through an extension -- so
+      # the note is present in EVERY run by default and no amount of fixture
+      # sweeping removes it. A scenario that needs the note ABSENT, so a hijack
+      # can be attributed to its own block rather than to the note sitting
+      # beside it, has to turn lazy visibility off: {"lazy_tools": false}.
+      rm -f "$WORK/home-$arm/config.json"
+      seedcfg="$(python3 -c "
+import json
+for s in json.load(open('$HERE/scenarios.json'))['scenarios']:
+    if s['id']=='$id': print(json.dumps(s.get('seed_config') or ''))" )"
+      if [ "$seedcfg" != '""' ]; then
+        python3 -c "
+import json,sys
+json.dump(json.loads(sys.argv[1]), open(sys.argv[2],'w'), indent=2)" \
+          "$seedcfg" "$WORK/home-$arm/config.json"
+      fi
+
       # Some scenarios need state that already exists -- a task board with work
       # on it, say. Seeding beats having the model create the state first: a
       # create step doubles the cost, and the wording of the tool that creates

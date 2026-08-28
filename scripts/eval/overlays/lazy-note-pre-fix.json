@@ -1,0 +1,4 @@
+{
+  "tools.lazy.inactive_groups": "[inactive tool groups] Installed capabilities whose tool schemas are not loaded this turn. This is an inventory, not a request — it needs no reply and no acknowledgement. If a task calls for one, `activate_tools <group>` loads it; loading is visibility only, and each tool still requires its normal permission when used:",
+  "tools.lazy.inactive_groups_brief": "[inactive tool groups] %s — `activate_tools <group>` loads one if a task needs it. Informational; no reply needed."
+}
