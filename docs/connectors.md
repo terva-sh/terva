@@ -210,15 +210,24 @@ file is the maintained frame reference.)
 
 **The golden corpus is published** at
 `packages/agent/connproto/testdata/golden.jsonl` — one
-`{"name":…,"frame":…}` object per line, where `frame` is the exact
-bytes terva emits, carried as a JSON string so it survives the envelope
-intact. Point your conformance suite at that file rather than copying
-the frames by hand: a copy drifts silently, and a fetch cannot. Note
-that terva encodes with Go's `encoding/json`, which escapes `<`, `>`
-and `&` where most encoders emit them literally — both are valid JSON
-and every reader here accepts either, so this never matters on the live
-wire, but it does mean the corpus is deliberately kept free of those
-characters so byte-exact comparison stays meaningful across languages.
+`{"name":…,"dir":…,"frame":…}` object per line, where `frame` is the
+exact bytes terva emits, carried as a JSON string so it survives the
+envelope intact. Point your conformance suite at that file rather than
+copying the frames by hand: a copy drifts silently, and a fetch cannot.
+Note that terva encodes with Go's `encoding/json`, which escapes `<`,
+`>` and `&` where most encoders emit them literally — both are valid
+JSON and every reader here accepts either, so this never matters on the
+live wire, but it does mean the corpus is deliberately kept free of
+those characters so byte-exact comparison stays meaningful across
+languages.
+
+`dir` is `conn_to_host` or `host_to_conn`. The two directions are not
+symmetric in use: a connector only ever *encodes* `conn_to_host` frames,
+so the useful split is to assert those byte-exact against the corpus and
+the rest on decode. It is the same field
+[extensions.md](extensions.md)'s extproto corpus publishes — one
+envelope shape across both protocols, so a consumer speaking each needs
+only one loader.
 
 **Protocol 2 is live and additive.** The handshake negotiates the
 highest version both sides speak (hello carries

@@ -1,45 +1,45 @@
-{"name":"hello","frame":"{\"type\":\"hello\",\"name\":\"discord\",\"version\":\"1.0.0\",\"protocol_min\":1,\"protocol_max\":1,\"capabilities\":{\"max_text_len\":2000,\"typing_refresh_ms\":8000,\"sends_images\":true,\"sends_files\":true}}"}
-{"name":"hello minimal capabilities","frame":"{\"type\":\"hello\",\"name\":\"irc\",\"protocol_min\":1,\"protocol_max\":1,\"capabilities\":{}}"}
-{"name":"connected","frame":"{\"type\":\"connected\",\"id\":\"1234\",\"username\":\"zotbot\"}"}
-{"name":"connect_error","frame":"{\"type\":\"connect_error\",\"error\":\"bad token\"}"}
-{"name":"message","frame":"{\"type\":\"message\",\"chat_id\":\"c1\",\"user_id\":\"u1\",\"username\":\"drew\",\"reply_to\":\"m9\",\"text\":\"hi\",\"attachments\":[{\"mime_type\":\"image/png\",\"path\":\"/data/in/abc.png\"}]}"}
-{"name":"message bare","frame":"{\"type\":\"message\",\"chat_id\":\"c1\",\"user_id\":\"u1\"}"}
-{"name":"message v2 identity","frame":"{\"type\":\"message\",\"id\":\"m10\",\"ts\":1751469000123,\"chat_id\":\"c1\",\"chat_kind\":\"group\",\"chat_title\":\"ops\",\"user_id\":\"u1\",\"username\":\"drew\",\"reply_to\":\"m9\",\"text\":\"hi\"}"}
-{"name":"message with entities","frame":"{\"type\":\"message\",\"id\":\"m1\",\"chat_id\":\"c1\",\"chat_kind\":\"group\",\"user_id\":\"u1\",\"text\":\"hey @tervabot look\",\"entities\":[{\"kind\":\"bot_mention\",\"offset\":4,\"length\":9},{\"kind\":\"mention\",\"offset\":20,\"length\":5,\"user_id\":\"u9\"}]}"}
-{"name":"chat_membership added","frame":"{\"type\":\"chat_membership\",\"chat\":{\"id\":\"c9\",\"kind\":\"group\",\"title\":\"ops\"},\"change\":\"added\",\"by_user_id\":\"u1\",\"by_username\":\"drew\"}"}
-{"name":"chat_membership removed minimal","frame":"{\"type\":\"chat_membership\",\"chat\":{\"id\":\"c9\"},\"change\":\"removed\"}"}
-{"name":"message_edited","frame":"{\"type\":\"message_edited\",\"chat_id\":\"c1\",\"id\":\"m10\",\"ts\":1751469000123,\"text\":\"fixed typo\",\"entities\":[{\"kind\":\"bot_mention\",\"offset\":0,\"length\":4}]}"}
-{"name":"message_deleted","frame":"{\"type\":\"message_deleted\",\"chat_id\":\"c1\",\"id\":\"m10\"}"}
-{"name":"reaction added","frame":"{\"type\":\"reaction\",\"chat_id\":\"c1\",\"message_id\":\"m-90\",\"user_id\":\"u1\",\"username\":\"drew\",\"key\":\"👍\"}"}
-{"name":"reaction removed","frame":"{\"type\":\"reaction\",\"chat_id\":\"c1\",\"message_id\":\"m-90\",\"user_id\":\"u1\",\"key\":\"👍\",\"removed\":true}"}
-{"name":"message with attachment kinds","frame":"{\"type\":\"message\",\"id\":\"m1\",\"chat_id\":\"c1\",\"user_id\":\"u1\",\"attachments\":[{\"mime_type\":\"audio/ogg\",\"path\":\"/d/v.ogg\",\"kind\":\"voice\",\"name\":\"voice.ogg\",\"size\":38112,\"duration_ms\":4200,\"caption\":\"listen to this\"}]}"}
-{"name":"hello with min_edit_interval","frame":"{\"type\":\"hello\",\"name\":\"discord\",\"protocol_min\":1,\"protocol_max\":2,\"capabilities\":{\"features\":[\"edits_out\"],\"min_edit_interval_ms\":1000}}"}
-{"name":"result ok","frame":"{\"type\":\"result\",\"id\":\"42\"}"}
-{"name":"result v2 message id","frame":"{\"type\":\"result\",\"id\":\"42\",\"message_id\":\"m77\"}"}
-{"name":"result thread chat id","frame":"{\"type\":\"result\",\"id\":\"t1\",\"chat_id\":\"c1.t-99\"}"}
-{"name":"result error","frame":"{\"type\":\"result\",\"id\":\"42\",\"error\":\"rate limited\"}"}
-{"name":"warn","frame":"{\"type\":\"warn\",\"message\":\"gateway reconnecting\"}"}
-{"name":"answer attested","frame":"{\"type\":\"answer\",\"ask_id\":\"a1\",\"key\":\"approve\",\"user_id\":\"u1\",\"username\":\"drew\",\"attestation\":\"attested\"}"}
-{"name":"answer minimal","frame":"{\"type\":\"answer\",\"ask_id\":\"a1\",\"key\":\"deny\",\"user_id\":\"u2\"}"}
-{"name":"hello_ack","frame":"{\"type\":\"hello_ack\",\"protocol\":1,\"zot_version\":\"1.2.3\",\"data_dir\":\"/home/u/.zot/connectors/discord/data\"}"}
-{"name":"hello_ack both naming eras","frame":"{\"type\":\"hello_ack\",\"protocol\":1,\"zot_version\":\"1.2.3\",\"terva_version\":\"1.2.3\"}"}
-{"name":"hello_ack v2 features","frame":"{\"type\":\"hello_ack\",\"protocol\":2,\"terva_version\":\"1.2.3\",\"capabilities\":{\"features\":[\"message_ids\",\"chat_kinds\"]}}"}
-{"name":"connect","frame":"{\"type\":\"connect\"}"}
-{"name":"send","frame":"{\"type\":\"send\",\"id\":\"42\",\"chat_id\":\"c1\",\"reply_to\":\"m9\",\"text\":\"hello\"}"}
-{"name":"send empty text","frame":"{\"type\":\"send\",\"id\":\"42\",\"chat_id\":\"c1\",\"text\":\"\"}"}
-{"name":"send with speaker","frame":"{\"type\":\"send\",\"id\":\"s1\",\"chat_id\":\"c1\",\"text\":\"The airlock hisses open.\",\"speaker\":{\"key\":\"kaiku\",\"name\":\"Kaiku\",\"avatar_path\":\"/data/av/kaiku.png\"}}"}
-{"name":"send with name-only speaker","frame":"{\"type\":\"send\",\"id\":\"s2\",\"chat_id\":\"c1\",\"text\":\"hello\",\"speaker\":{\"key\":\"aava\",\"name\":\"Aava\"}}"}
-{"name":"send_image","frame":"{\"type\":\"send_image\",\"id\":\"43\",\"chat_id\":\"c1\",\"path\":\"/tmp/shot.png\",\"caption\":\"the bug\"}"}
-{"name":"send_file","frame":"{\"type\":\"send_file\",\"id\":\"44\",\"chat_id\":\"c1\",\"path\":\"/tmp/report.pdf\"}"}
-{"name":"typing","frame":"{\"type\":\"typing\",\"chat_id\":\"c1\"}"}
-{"name":"ask","frame":"{\"type\":\"ask\",\"id\":\"a1\",\"chat_id\":\"c1\",\"reply_to\":\"m12\",\"text\":\"terva wants to run `rm -rf build/` — approve?\",\"options\":[{\"key\":\"approve\",\"label\":\"Approve\",\"style\":\"affirm\",\"hint\":\"👍\"},{\"key\":\"deny\",\"label\":\"Deny\",\"style\":\"deny\",\"hint\":\"👎\"}],\"restrict_to\":[\"u1\"],\"expires_ms\":120000}"}
-{"name":"ask minimal","frame":"{\"type\":\"ask\",\"id\":\"a1\",\"chat_id\":\"c1\",\"text\":\"pick one\",\"options\":[{\"key\":\"a\",\"label\":\"A\"},{\"key\":\"b\",\"label\":\"B\"}]}"}
-{"name":"ask_close","frame":"{\"type\":\"ask_close\",\"id\":\"a2\",\"ask_id\":\"a1\",\"outcome\":\"Approve — @drew\"}"}
-{"name":"ask_close bare withdrawal","frame":"{\"type\":\"ask_close\",\"id\":\"a2\",\"ask_id\":\"a1\"}"}
-{"name":"thread_start","frame":"{\"type\":\"thread_start\",\"id\":\"t1\",\"chat_id\":\"c1\",\"from_message_id\":\"m-12\",\"name\":\"refactor: extract session core\"}"}
-{"name":"thread_start anchorless","frame":"{\"type\":\"thread_start\",\"id\":\"t2\",\"chat_id\":\"c1\",\"name\":\"sidebar\"}"}
-{"name":"edit","frame":"{\"type\":\"edit\",\"id\":\"e1\",\"chat_id\":\"c1\",\"message_id\":\"m-90\",\"text\":\"updated\"}"}
-{"name":"react","frame":"{\"type\":\"react\",\"id\":\"r1\",\"chat_id\":\"c1\",\"message_id\":\"m-12\",\"key\":\"👀\"}"}
-{"name":"react remove","frame":"{\"type\":\"react\",\"id\":\"r2\",\"chat_id\":\"c1\",\"message_id\":\"m-12\",\"key\":\"👀\",\"remove\":true}"}
-{"name":"delete","frame":"{\"type\":\"delete\",\"id\":\"d1\",\"chat_id\":\"c1\",\"message_id\":\"m-90\"}"}
-{"name":"shutdown","frame":"{\"type\":\"shutdown\"}"}
+{"name":"hello","dir":"conn_to_host","frame":"{\"type\":\"hello\",\"name\":\"discord\",\"version\":\"1.0.0\",\"protocol_min\":1,\"protocol_max\":1,\"capabilities\":{\"max_text_len\":2000,\"typing_refresh_ms\":8000,\"sends_images\":true,\"sends_files\":true}}"}
+{"name":"hello minimal capabilities","dir":"conn_to_host","frame":"{\"type\":\"hello\",\"name\":\"irc\",\"protocol_min\":1,\"protocol_max\":1,\"capabilities\":{}}"}
+{"name":"connected","dir":"conn_to_host","frame":"{\"type\":\"connected\",\"id\":\"1234\",\"username\":\"zotbot\"}"}
+{"name":"connect_error","dir":"conn_to_host","frame":"{\"type\":\"connect_error\",\"error\":\"bad token\"}"}
+{"name":"message","dir":"conn_to_host","frame":"{\"type\":\"message\",\"chat_id\":\"c1\",\"user_id\":\"u1\",\"username\":\"drew\",\"reply_to\":\"m9\",\"text\":\"hi\",\"attachments\":[{\"mime_type\":\"image/png\",\"path\":\"/data/in/abc.png\"}]}"}
+{"name":"message bare","dir":"conn_to_host","frame":"{\"type\":\"message\",\"chat_id\":\"c1\",\"user_id\":\"u1\"}"}
+{"name":"message v2 identity","dir":"conn_to_host","frame":"{\"type\":\"message\",\"id\":\"m10\",\"ts\":1751469000123,\"chat_id\":\"c1\",\"chat_kind\":\"group\",\"chat_title\":\"ops\",\"user_id\":\"u1\",\"username\":\"drew\",\"reply_to\":\"m9\",\"text\":\"hi\"}"}
+{"name":"message with entities","dir":"conn_to_host","frame":"{\"type\":\"message\",\"id\":\"m1\",\"chat_id\":\"c1\",\"chat_kind\":\"group\",\"user_id\":\"u1\",\"text\":\"hey @tervabot look\",\"entities\":[{\"kind\":\"bot_mention\",\"offset\":4,\"length\":9},{\"kind\":\"mention\",\"offset\":20,\"length\":5,\"user_id\":\"u9\"}]}"}
+{"name":"chat_membership added","dir":"conn_to_host","frame":"{\"type\":\"chat_membership\",\"chat\":{\"id\":\"c9\",\"kind\":\"group\",\"title\":\"ops\"},\"change\":\"added\",\"by_user_id\":\"u1\",\"by_username\":\"drew\"}"}
+{"name":"chat_membership removed minimal","dir":"conn_to_host","frame":"{\"type\":\"chat_membership\",\"chat\":{\"id\":\"c9\"},\"change\":\"removed\"}"}
+{"name":"message_edited","dir":"conn_to_host","frame":"{\"type\":\"message_edited\",\"chat_id\":\"c1\",\"id\":\"m10\",\"ts\":1751469000123,\"text\":\"fixed typo\",\"entities\":[{\"kind\":\"bot_mention\",\"offset\":0,\"length\":4}]}"}
+{"name":"message_deleted","dir":"conn_to_host","frame":"{\"type\":\"message_deleted\",\"chat_id\":\"c1\",\"id\":\"m10\"}"}
+{"name":"reaction added","dir":"conn_to_host","frame":"{\"type\":\"reaction\",\"chat_id\":\"c1\",\"message_id\":\"m-90\",\"user_id\":\"u1\",\"username\":\"drew\",\"key\":\"👍\"}"}
+{"name":"reaction removed","dir":"conn_to_host","frame":"{\"type\":\"reaction\",\"chat_id\":\"c1\",\"message_id\":\"m-90\",\"user_id\":\"u1\",\"key\":\"👍\",\"removed\":true}"}
+{"name":"message with attachment kinds","dir":"conn_to_host","frame":"{\"type\":\"message\",\"id\":\"m1\",\"chat_id\":\"c1\",\"user_id\":\"u1\",\"attachments\":[{\"mime_type\":\"audio/ogg\",\"path\":\"/d/v.ogg\",\"kind\":\"voice\",\"name\":\"voice.ogg\",\"size\":38112,\"duration_ms\":4200,\"caption\":\"listen to this\"}]}"}
+{"name":"hello with min_edit_interval","dir":"conn_to_host","frame":"{\"type\":\"hello\",\"name\":\"discord\",\"protocol_min\":1,\"protocol_max\":2,\"capabilities\":{\"features\":[\"edits_out\"],\"min_edit_interval_ms\":1000}}"}
+{"name":"result ok","dir":"conn_to_host","frame":"{\"type\":\"result\",\"id\":\"42\"}"}
+{"name":"result v2 message id","dir":"conn_to_host","frame":"{\"type\":\"result\",\"id\":\"42\",\"message_id\":\"m77\"}"}
+{"name":"result thread chat id","dir":"conn_to_host","frame":"{\"type\":\"result\",\"id\":\"t1\",\"chat_id\":\"c1.t-99\"}"}
+{"name":"result error","dir":"conn_to_host","frame":"{\"type\":\"result\",\"id\":\"42\",\"error\":\"rate limited\"}"}
+{"name":"warn","dir":"conn_to_host","frame":"{\"type\":\"warn\",\"message\":\"gateway reconnecting\"}"}
+{"name":"answer attested","dir":"conn_to_host","frame":"{\"type\":\"answer\",\"ask_id\":\"a1\",\"key\":\"approve\",\"user_id\":\"u1\",\"username\":\"drew\",\"attestation\":\"attested\"}"}
+{"name":"answer minimal","dir":"conn_to_host","frame":"{\"type\":\"answer\",\"ask_id\":\"a1\",\"key\":\"deny\",\"user_id\":\"u2\"}"}
+{"name":"hello_ack","dir":"host_to_conn","frame":"{\"type\":\"hello_ack\",\"protocol\":1,\"zot_version\":\"1.2.3\",\"data_dir\":\"/home/u/.zot/connectors/discord/data\"}"}
+{"name":"hello_ack both naming eras","dir":"host_to_conn","frame":"{\"type\":\"hello_ack\",\"protocol\":1,\"zot_version\":\"1.2.3\",\"terva_version\":\"1.2.3\"}"}
+{"name":"hello_ack v2 features","dir":"host_to_conn","frame":"{\"type\":\"hello_ack\",\"protocol\":2,\"terva_version\":\"1.2.3\",\"capabilities\":{\"features\":[\"message_ids\",\"chat_kinds\"]}}"}
+{"name":"connect","dir":"host_to_conn","frame":"{\"type\":\"connect\"}"}
+{"name":"send","dir":"host_to_conn","frame":"{\"type\":\"send\",\"id\":\"42\",\"chat_id\":\"c1\",\"reply_to\":\"m9\",\"text\":\"hello\"}"}
+{"name":"send empty text","dir":"host_to_conn","frame":"{\"type\":\"send\",\"id\":\"42\",\"chat_id\":\"c1\",\"text\":\"\"}"}
+{"name":"send with speaker","dir":"host_to_conn","frame":"{\"type\":\"send\",\"id\":\"s1\",\"chat_id\":\"c1\",\"text\":\"The airlock hisses open.\",\"speaker\":{\"key\":\"kaiku\",\"name\":\"Kaiku\",\"avatar_path\":\"/data/av/kaiku.png\"}}"}
+{"name":"send with name-only speaker","dir":"host_to_conn","frame":"{\"type\":\"send\",\"id\":\"s2\",\"chat_id\":\"c1\",\"text\":\"hello\",\"speaker\":{\"key\":\"aava\",\"name\":\"Aava\"}}"}
+{"name":"send_image","dir":"host_to_conn","frame":"{\"type\":\"send_image\",\"id\":\"43\",\"chat_id\":\"c1\",\"path\":\"/tmp/shot.png\",\"caption\":\"the bug\"}"}
+{"name":"send_file","dir":"host_to_conn","frame":"{\"type\":\"send_file\",\"id\":\"44\",\"chat_id\":\"c1\",\"path\":\"/tmp/report.pdf\"}"}
+{"name":"typing","dir":"host_to_conn","frame":"{\"type\":\"typing\",\"chat_id\":\"c1\"}"}
+{"name":"ask","dir":"host_to_conn","frame":"{\"type\":\"ask\",\"id\":\"a1\",\"chat_id\":\"c1\",\"reply_to\":\"m12\",\"text\":\"terva wants to run `rm -rf build/` — approve?\",\"options\":[{\"key\":\"approve\",\"label\":\"Approve\",\"style\":\"affirm\",\"hint\":\"👍\"},{\"key\":\"deny\",\"label\":\"Deny\",\"style\":\"deny\",\"hint\":\"👎\"}],\"restrict_to\":[\"u1\"],\"expires_ms\":120000}"}
+{"name":"ask minimal","dir":"host_to_conn","frame":"{\"type\":\"ask\",\"id\":\"a1\",\"chat_id\":\"c1\",\"text\":\"pick one\",\"options\":[{\"key\":\"a\",\"label\":\"A\"},{\"key\":\"b\",\"label\":\"B\"}]}"}
+{"name":"ask_close","dir":"host_to_conn","frame":"{\"type\":\"ask_close\",\"id\":\"a2\",\"ask_id\":\"a1\",\"outcome\":\"Approve — @drew\"}"}
+{"name":"ask_close bare withdrawal","dir":"host_to_conn","frame":"{\"type\":\"ask_close\",\"id\":\"a2\",\"ask_id\":\"a1\"}"}
+{"name":"thread_start","dir":"host_to_conn","frame":"{\"type\":\"thread_start\",\"id\":\"t1\",\"chat_id\":\"c1\",\"from_message_id\":\"m-12\",\"name\":\"refactor: extract session core\"}"}
+{"name":"thread_start anchorless","dir":"host_to_conn","frame":"{\"type\":\"thread_start\",\"id\":\"t2\",\"chat_id\":\"c1\",\"name\":\"sidebar\"}"}
+{"name":"edit","dir":"host_to_conn","frame":"{\"type\":\"edit\",\"id\":\"e1\",\"chat_id\":\"c1\",\"message_id\":\"m-90\",\"text\":\"updated\"}"}
+{"name":"react","dir":"host_to_conn","frame":"{\"type\":\"react\",\"id\":\"r1\",\"chat_id\":\"c1\",\"message_id\":\"m-12\",\"key\":\"👀\"}"}
+{"name":"react remove","dir":"host_to_conn","frame":"{\"type\":\"react\",\"id\":\"r2\",\"chat_id\":\"c1\",\"message_id\":\"m-12\",\"key\":\"👀\",\"remove\":true}"}
+{"name":"delete","dir":"host_to_conn","frame":"{\"type\":\"delete\",\"id\":\"d1\",\"chat_id\":\"c1\",\"message_id\":\"m-90\"}"}
+{"name":"shutdown","dir":"host_to_conn","frame":"{\"type\":\"shutdown\"}"}

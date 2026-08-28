@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -421,8 +422,76 @@ func TestEncoderNeutralityGuardHasTeeth(t *testing.T) {
 	}
 }
 
+// Frame directions as published in the fixture. A connector only ever
+// ENCODES conn_to_host frames, so a conformance suite asserts those
+// byte-exact and the rest on decode; publishing the split saves every
+// consumer from re-deriving it.
+const (
+	dirConnToHost = "conn_to_host"
+	dirHostToConn = "host_to_conn"
+)
+
+// frameDirection derives a frame's direction from its Go type name
+// rather than from a hand-kept table, so a frame added tomorrow is
+// classified without anyone remembering to classify it. Every wire type
+// in this package carries a FromConn / FromHost suffix; one that carries
+// neither fails here rather than being published with a guess.
+//
+// extproto's corpus needs an escape hatch here for ChatFrame, which both
+// sides send. This protocol has no such type today — and if one arrives,
+// this is where it announces itself.
+func frameDirection(t *testing.T, v any) string {
+	t.Helper()
+	name := reflect.TypeOf(v).Name()
+	switch {
+	case strings.HasSuffix(name, "FromConn"):
+		return dirConnToHost
+	case strings.HasSuffix(name, "FromHost"):
+		return dirHostToConn
+	}
+	t.Fatalf("cannot classify frame type %s: wire types carry a FromConn or FromHost "+
+		"suffix, and a type carrying neither needs an explicit direction here. The "+
+		"published fixture reports a direction per frame and must not guess one.", name)
+	return ""
+}
+
+// TestFrameDirectionHasTeeth proves the classifier discriminates rather
+// than defaulting. A deriver that returned one answer for everything
+// would pass the fixture test silently while publishing a corpus in
+// which half the directions are wrong.
+func TestFrameDirectionHasTeeth(t *testing.T) {
+	for _, tc := range []struct {
+		v    any
+		want string
+	}{
+		{HelloFromConn{}, dirConnToHost},
+		{ReactionFromConn{}, dirConnToHost},
+		{HelloAckFromHost{}, dirHostToConn},
+		{ShutdownFromHost{}, dirHostToConn},
+	} {
+		if got := frameDirection(t, tc.v); got != tc.want {
+			t.Errorf("%T: direction %q, want %q", tc.v, got, tc.want)
+		}
+	}
+}
+
+// TestGoldenNamesAreUnique keeps every entry addressable. Consumers key
+// the published corpus by name and assert per case, so two entries
+// sharing one name silently collapse into one there while both still
+// pass here.
+func TestGoldenNamesAreUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for _, tc := range goldenFrames {
+		if seen[tc.name] {
+			t.Errorf("duplicate golden frame name %q — names address entries in the "+
+				"published fixture and must be unique", tc.name)
+		}
+		seen[tc.name] = true
+	}
+}
+
 // goldenFixturePath is the corpus published for connectors written in
-// other languages: one JSON object per line, {"name":…,"frame":…},
+// other languages: one JSON object per line, {"name":…,"dir":…,"frame":…},
 // where frame is the exact bytes Encode produces, carried as a JSON
 // STRING. A nested object would be re-encoded by whoever read it —
 // which is the very thing this file exists to make unnecessary.
@@ -431,6 +500,10 @@ func TestEncoderNeutralityGuardHasTeeth(t *testing.T) {
 // connector hand-copies these literals into its own suite, and a
 // hand-copy drifts silently; a published file is fetched, not
 // transcribed.
+//
+// dir says which side sends the frame, and is the same field extproto's
+// corpus publishes — one envelope shape, so a consumer speaking both
+// protocols needs only one loader.
 const goldenFixturePath = "testdata/golden.jsonl"
 
 var updateGolden = flag.Bool("update-golden", false,
@@ -438,6 +511,7 @@ var updateGolden = flag.Bool("update-golden", false,
 
 type goldenFixtureEntry struct {
 	Name  string `json:"name"`
+	Dir   string `json:"dir"`
 	Frame string `json:"frame"`
 }
 
@@ -450,7 +524,8 @@ func renderGoldenFixture(t *testing.T) []byte {
 	// would not get the frame back byte-for-byte.
 	enc.SetEscapeHTML(false)
 	for _, tc := range goldenFrames {
-		if err := enc.Encode(goldenFixtureEntry{Name: tc.name, Frame: tc.want}); err != nil {
+		entry := goldenFixtureEntry{Name: tc.name, Dir: frameDirection(t, tc.v), Frame: tc.want}
+		if err := enc.Encode(entry); err != nil {
 			t.Fatalf("render %q: %v", tc.name, err)
 		}
 	}
