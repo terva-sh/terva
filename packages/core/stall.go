@@ -760,13 +760,37 @@ func normalizeError(s string) string {
 // while a provably unproductive loop runs.
 func stallHoldOffNudge(tool string, count int, detail string) string {
 	if detail != "" {
-		return i18n.P("stall.holdoff.error",
-			"[loop check] `%s` has now failed %d times with the same result: %q. The earlier note did not break this. Stop. Say what blocks you, and either take a different route or report that you are stuck.",
+		return stallGuardText() + "\n\n" + i18n.P("stall.holdoff.error",
+			"`%s` has now failed %d times with the same result: %q. The earlier note did not break this. Stop. Say what blocks you, and either take a different route or report that you are stuck.",
 			tool, count, detail)
 	}
-	return i18n.P("stall.holdoff.repeat",
-		"[loop check] You have now called `%s` %d times with the same arguments and the same result. The earlier note did not break this. Stop. Use what you already have, take a different route, or report that you are stuck.",
+	return stallGuardText() + "\n\n" + i18n.P("stall.holdoff.repeat",
+		"You have now called `%s` %d times with the same arguments and the same result. The earlier note did not break this. Stop. Use what you already have, take a different route, or report that you are stuck.",
 		tool, count)
+}
+
+// stallGuardText is the prohibition that leads every loop-check note riding the
+// ephemeral tail. It carries the [loop check] tag, so the bodies below do not:
+// each note must contain the tag exactly once, which is what escalate_test.go
+// counts to prove how many notes a turn delivered.
+//
+// It is a PARTIAL guard, and the difference from context.pressure.guard is the
+// point. That one tells the model to answer "as if the note were not here";
+// saying the same thing here would neuter the detector, because this is the one
+// tail block entitled to change what the model does next. So it prohibits the
+// NARRATION and demands the action.
+//
+// The failure it prevents is not the model obeying the nudge, it is the model
+// REPORTING it — spending the user's answer on "I noticed I was looping".
+// StallRecord already carries durable evidence that the detector fired, so a
+// silent reply costs the record nothing.
+//
+// Prohibition-first because that ordering is measured rather than assumed: the
+// sibling inactive-groups note took 0-of-20 final answers before the
+// prohibition led and 20-of-20 after. See agent.go and context_pressure.go.
+func stallGuardText() string {
+	return i18n.P("stall.guard",
+		"[loop check] Do not reply to this note and do not mention it in your answer. Act on it: change what you do next. Answer the request of the user, not this note.")
 }
 
 // stallRefusal is what a refused call gets back instead of running. It is
@@ -799,12 +823,12 @@ func stallGiveUpNote(tool string, refusals, count int) string {
 
 func stallNudge(tool string, count int, detail string) string {
 	if detail != "" {
-		return i18n.P("stall.nudge.error",
-			"[loop check] You have called `%s` %d times with the same result: %q. One more unchanged try will not help. Read the current state (e.g. task_list) or take a different action.",
+		return stallGuardText() + "\n\n" + i18n.P("stall.nudge.error",
+			"You have called `%s` %d times with the same result: %q. One more unchanged try will not help. Read the current state (e.g. task_list) or take a different action.",
 			tool, count, detail)
 	}
-	return i18n.P("stall.nudge.repeat",
-		"[loop check] You have called `%s` with the same arguments %d times. You already have the result. Use what you have, or do something different.",
+	return stallGuardText() + "\n\n" + i18n.P("stall.nudge.repeat",
+		"You have called `%s` with the same arguments %d times. You already have the result. Use what you have, or do something different.",
 		tool, count)
 }
 
