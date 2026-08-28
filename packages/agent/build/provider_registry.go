@@ -477,12 +477,15 @@ func RegisterEndpoint(id string, ep config.EndpointConfig) error {
 func RegisterOrReplaceEndpoint(id string, ep config.EndpointConfig) error {
 	registryMu.Lock()
 	defer registryMu.Unlock()
-	unregisterEndpointLocked(strings.TrimSpace(id))
+	unregisterEndpointLocked(CanonicalEndpointID(id))
 	return registerEndpointLocked(id, ep)
 }
 
 func registerEndpointLocked(id string, ep config.EndpointConfig) error {
-	id = strings.TrimSpace(id)
+	// Canonical, not merely trimmed: this is the single point every registration
+	// path reaches, so normalising it here means no caller can register a
+	// spelling that Resolve will then fail to find.
+	id = CanonicalEndpointID(id)
 	if id == "" || strings.TrimSpace(ep.BaseURL) == "" {
 		return fmt.Errorf("needs a name and baseUrl")
 	}
@@ -526,6 +529,7 @@ func UnregisterEndpoint(id string) {
 }
 
 func unregisterEndpointLocked(id string) {
+	id = CanonicalEndpointID(id)
 	if !endpointProviders[id] {
 		return
 	}
@@ -559,7 +563,7 @@ func endpointCredential(id, argsKey string) (cred, method string) {
 // serves (llama.cpp, vLLM) have exactly one, and on a server with several the
 // operator picks in /model anyway.
 func EndpointDefaultModel(id string) string {
-	for _, m := range provider.ModelsForProvider(id) {
+	for _, m := range provider.ModelsForProvider(CanonicalEndpointID(id)) {
 		if strings.TrimSpace(m.ID) != "" {
 			return m.ID
 		}
@@ -576,7 +580,13 @@ func EndpointDefaultModel(id string) string {
 // config.json says "is this the operator's own server". Startup registration
 // can have skipped a malformed entry, and the answer here must still be yes.
 func IsEndpointProvider(id string, cfg config.Config) bool {
-	_, ok := cfg.Endpoints[id]
+	if _, ok := cfg.Endpoints[id]; ok {
+		return true
+	}
+	// A config written before ids were normalised still holds the operator's
+	// original spelling until the repair migrates it, and this question is asked
+	// on the very boot that precedes the repair.
+	_, ok := cfg.Endpoints[CanonicalEndpointID(id)]
 	return ok
 }
 
@@ -608,6 +618,26 @@ func EndpointNameFor(rawURL string, used map[string]bool) string {
 	}
 	used[name] = true
 	return name
+}
+
+// CanonicalEndpointID is the one spelling of an endpoint id that the rest of
+// terva will find. It must agree with canonicalProvider, which every resolve
+// path runs a provider name through before looking it up.
+//
+// 🪤 They disagreed, and it cost a working backend. ValidEndpointName permits
+// A-Z, so an endpoint saved as "NeoT" was stored verbatim as the config key, as
+// the registry id, and as the Provider field of every model discovered from it
+// — while Resolve asked for canonicalProvider("NeoT") = "neot". Go maps are
+// case-sensitive, so the endpoint branch missed, the credential lookup missed,
+// the fallback scan ran, and the operator watched terva switch to the default
+// provider with no error naming the cause. Discovery kept working the whole
+// time, which made it look like a model-picker bug.
+//
+// Normalising here, at every point an id is STORED, is what keeps the two
+// spellings from diverging again. A tolerant lookup would have papered over it
+// only at the sites someone remembered to change.
+func CanonicalEndpointID(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 // SanitizeID lowercases s and keeps [a-z0-9-], turning separators into dashes.

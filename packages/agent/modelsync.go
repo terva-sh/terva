@@ -13,6 +13,7 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/provider/auth"
 )
 
 // ModelCachePath returns the on-disk location of the merged model cache.
@@ -224,6 +225,73 @@ func ValidateAndRepairConfig() {
 	}
 	changed := false
 
+	// Endpoint ids are canonical (lower-case) so that Resolve, which runs every
+	// provider name through canonicalProvider, can find them. A config written
+	// before that holds whatever the operator typed. Migrate the config key, the
+	// pinned provider and the stored credential TOGETHER — a rename that moved
+	// two of the three would trade one broken state for another.
+	//
+	// Its own MutateConfig, not the persist block at the end of this function:
+	// that one writes Provider and Model only, deliberately, so an Endpoints
+	// rename made there would be silently dropped.
+	var migrated [][2]string
+	var collided []string
+	if len(cfg.Endpoints) > 0 {
+		if err := config.MutateConfig(func(c *config.Config) {
+			migrated, collided = nil, nil
+			for id, ep := range c.Endpoints {
+				canon := build.CanonicalEndpointID(id)
+				if canon == id {
+					continue
+				}
+				if _, taken := c.Endpoints[canon]; taken {
+					collided = append(collided, id)
+					continue
+				}
+				c.Endpoints[canon] = ep
+				delete(c.Endpoints, id)
+				if c.Provider == id {
+					c.Provider = canon
+				}
+				migrated = append(migrated, [2]string{id, canon})
+			}
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "terva: config.json: could not normalise endpoint ids: %v\n", err)
+		}
+	}
+	for _, m := range migrated {
+		moveEndpointCredential(m[0], m[1])
+		fmt.Fprintf(os.Stderr, "terva: config.json: endpoint %q renamed to %q (endpoint ids are lower-case)\n", m[0], m[1])
+	}
+	if len(migrated) > 0 {
+		// Re-read rather than hand-patch the copy loaded above. Keeping an
+		// in-memory mirror in step with the mutation is a second implementation
+		// of the same rename, and the first version of this got it wrong in a way
+		// that mattered: it deleted the old key without adding the new one, so
+		// IsEndpointProvider said no, the open-catalogue exemption below did not
+		// apply, and the repair "fixed" the operator's model id to the endpoint's
+		// default — which is the empty string. The migration that exists to
+		// preserve a selection wiped it.
+		if reloaded, err := config.LoadConfig(); err == nil {
+			cfg = reloaded
+		}
+	}
+	for _, id := range collided {
+		fmt.Fprintf(os.Stderr, "terva: config.json: endpoints %q and %q would collide once ids are lower-cased; left %q alone\n",
+			id, build.CanonicalEndpointID(id), id)
+	}
+
+	// A pin naming an endpoint in the operator's original spelling still WORKS
+	// at every use site, because those canonicalise first. This check does not —
+	// it is a raw registry lookup — so without this it would "repair" a working
+	// pin by resetting the provider and wiping the model.
+	if cfg.Provider != "" && !build.IsKnownProvider(cfg.Provider) {
+		if canon := build.CanonicalEndpointID(cfg.Provider); canon != cfg.Provider && build.IsKnownProvider(canon) {
+			cfg.Provider = canon
+			changed = true
+		}
+	}
+
 	if cfg.Provider != "" && !build.IsKnownProvider(cfg.Provider) {
 		fmt.Fprintf(os.Stderr, "terva: config.json: unknown provider %q reset to \"anthropic\"\n", cfg.Provider)
 		cfg.Provider = "anthropic"
@@ -274,6 +342,54 @@ func ValidateAndRepairConfig() {
 		}); err != nil {
 			fmt.Fprintf(os.Stderr, "terva: config.json: failed to persist repair: %v\n", err)
 		}
+	}
+}
+
+// moveEndpointCredential carries a renamed endpoint's API key across with it.
+// Leaving it behind would strand the secret under an id nothing resolves any
+// more, and the operator would meet a keyless endpoint against a server that
+// wants a key — a 401 whose cause is two renames away.
+//
+// Best-effort by design: an endpoint is defined by its address, not its
+// credential, and most local servers want none. A store that cannot be written
+// must not stop the rename that makes the backend reachable again.
+func moveEndpointCredential(from, to string) {
+	store := config.AuthStoreFor()
+	if store == nil {
+		return
+	}
+	var stranded bool
+	if err := store.Mutate(func(c *auth.Credentials) {
+		stranded = false
+		if c.AdditionalAPIKeyCreds == nil {
+			return
+		}
+		v, ok := c.AdditionalAPIKeyCreds[from]
+		if !ok {
+			return
+		}
+		if _, taken := c.AdditionalAPIKeyCreds[to]; taken {
+			// Something already holds the canonical name — most likely an orphan
+			// left by an endpoint that was removed without its key. Overwriting
+			// it could destroy a credential in use; deleting this one destroys
+			// the credential the rename exists to carry across. Do neither.
+			//
+			// 🪤 The first version of this copied conditionally and deleted
+			// unconditionally, so exactly this case dropped the live key with no
+			// message. A secret is the wrong thing to lose quietly.
+			stranded = true
+			return
+		}
+		c.AdditionalAPIKeyCreds[to] = v
+		delete(c.AdditionalAPIKeyCreds, from)
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "terva: endpoint %q renamed, but its key was not moved: %v\n", from, err)
+		return
+	}
+	if stranded {
+		fmt.Fprintf(os.Stderr,
+			"terva: endpoint %q renamed to %q, but a credential already existed under %q — both were left in place; re-enter the key with /login if the endpoint refuses to authenticate\n",
+			from, to, to)
 	}
 }
 

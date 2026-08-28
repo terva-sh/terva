@@ -386,6 +386,9 @@ func mergeEndpointsIntoConfig(eps map[string]config.EndpointConfig) (int, error)
 			cfg.Endpoints = map[string]config.EndpointConfig{}
 		}
 		for name, ep := range eps {
+			// Store the canonical spelling: an id Resolve cannot find is worse
+			// than no endpoint at all, because it looks configured.
+			name = build.CanonicalEndpointID(name)
 			if _, exists := cfg.Endpoints[name]; exists {
 				continue
 			}

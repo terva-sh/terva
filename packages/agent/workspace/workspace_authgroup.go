@@ -505,6 +505,11 @@ func (w *Workspace) AuthLogout(_ context.Context, p ctrlproto.AuthLogoutParams) 
 // and the failure would surface as a broken conversation rather than as a typo in
 // a base URL — which is the whole reason the shared slot probes too.
 func (w *Workspace) saveEndpoint(ctx context.Context, name, baseURL, apiKey string, win int) error {
+	// Canonicalise BEFORE validating, and both checks below start meaning what
+	// they say. ValidEndpointName compares against the shipped provider ids
+	// case-sensitively, so "Anthropic" used to sail past it and collide in the
+	// registry instead — a refusal from the wrong layer, naming the wrong thing.
+	name = build.CanonicalEndpointID(name)
 	if err := ValidEndpointName(name); err != nil {
 		return err
 	}
@@ -579,7 +584,18 @@ func (w *Workspace) AuthEndpointRemove(_ context.Context, p ctrlproto.AuthEndpoi
 		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "%s", i18n.T("this daemon does not serve provider logins"))
 	}
 	id := strings.TrimSpace(p.ID)
-	if _, ok := configEndpoints()[id]; !ok {
+	// A config written before ids were normalised still holds the operator's
+	// original spelling, and a client may send either. Resolve to whichever key
+	// actually exists before refusing.
+	eps := configEndpoints()
+	if _, ok := eps[id]; !ok {
+		if canon := build.CanonicalEndpointID(id); canon != id {
+			if _, ok := eps[canon]; ok {
+				id = canon
+			}
+		}
+	}
+	if _, ok := eps[id]; !ok {
 		// Refuse rather than no-op: "removed" for something that was never there
 		// would let a typo look like a success, and the operator would go on
 		// believing a backend is gone when it is still serving the agent.
