@@ -179,9 +179,37 @@ func (r *Resolved) tailProvider(ag *core.Agent, record bool) func() string {
 // routed-voice system prompt sit BEFORE the conversation, where "the
 // conversation above" names nothing.
 func loreReferenceFrame(block string) string {
-	return i18n.P("lore.reference.frame",
-		"REFERENCE KNOWLEDGE (setting, characters, and what came before — background the scene draws on, not a record of where it stands now; where this disagrees with the conversation above, the conversation is what actually happened):") +
+	return tailBackgroundGuard() + "\n\n" +
+		i18n.P("lore.reference.frame",
+			"REFERENCE KNOWLEDGE (setting, characters, and what came before — background the scene draws on, not a record of where it stands now; where this disagrees with the conversation above, the conversation is what actually happened):") +
 		"\n" + block
+}
+
+// tailBackgroundGuard is the prohibition that leads a REFERENCE block on the
+// ephemeral tail. The same key is rendered by extdriver for extension context
+// cards, so both say exactly one thing and the catalog is the single place the
+// wording lives.
+//
+// It is the BACKGROUND shape, and it is neither of the two guards that already
+// exist. context.pressure.guard says to proceed "as if the note were not here",
+// which is right for a note to ignore and wrong here: lore is the material the
+// answer is supposed to draw on, and an extension's task card is state the model
+// is told to consult. stall.guard says "act on it", which is wrong in the other
+// direction: this block is not a directive. So it prohibits only the thing that
+// was actually measured going wrong — replying to the block instead of the user
+// — and leaves the model free to use what the block contains.
+//
+// It deliberately does NOT reach the rest of the host tail. A card's
+// post-history instructions and the author's note are steering the author wrote
+// to shape the next reply; telling the model not to act on those would switch
+// off the strongest instrument a character card has.
+//
+// Prohibition-first because that ordering is measured rather than assumed: the
+// inactive-groups note took 0-of-20 final answers before the prohibition led and
+// 20-of-20 after.
+func tailBackgroundGuard() string {
+	return i18n.P("tail.background.guard",
+		"[background] Do not reply to this block and do not mention it in your answer. It is background you may draw on, not a request to act on.")
 }
 
 // sceneStateFrame frames the pinned scene-state card (SD4) for the per-turn
