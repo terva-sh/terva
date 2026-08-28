@@ -34,6 +34,14 @@ type worktreeProvenance struct {
 	Trusted bool   // lease-time store verdict — how the sub-agent actually boots
 	Reason  string // why trusted/restricted, for the operator
 
+	// Reclaimed records that the engine took this worktree back when its
+	// sub-agent exited, because it held nothing: no uncommitted changes and no
+	// commits that existed only there. It matters to this note specifically,
+	// which exists to point an operator at a path — a reclaimed one must stop
+	// being offered for review and stop appearing in the `terva trust` hint,
+	// since the directory it names is gone.
+	Reclaimed bool
+
 	// TrustedNow is the store's CURRENT verdict for Path, re-probed whenever
 	// the trust store changes (refreshSwarmWorktreeTrust). It exists because
 	// the two facts diverge the moment the operator runs the note's own grant
@@ -193,8 +201,21 @@ func renderSwarmWorktreeNote(batch []worktreeProvenance, live int) string {
 	verb, without := "leased", "running without"
 	granted := "now trusted — new worktrees get them; the ones already running stay restricted"
 	if live == 0 {
-		verb, without = "released, kept for review", "ran without"
+		without = "ran without"
 		granted = "now trusted — the next swarm here runs with them"
+		// "kept for review" was true when every worktree survived its agent.
+		// Now a clean one is reclaimed on exit, so saying it unconditionally
+		// would send an operator to a directory that is not there — the same
+		// class of lie about tense and existence this note was built to stop.
+		kept := n - reclaimedCount(batch)
+		switch {
+		case kept == 0:
+			verb = "released and reclaimed"
+		case kept == n:
+			verb = "released, kept for review"
+		default:
+			verb = fmt.Sprintf("released, %d of %d kept for review", kept, n)
+		}
 	}
 
 	var b strings.Builder
@@ -226,12 +247,43 @@ func renderSwarmWorktreeNote(batch []worktreeProvenance, live int) string {
 	// be noise — but silently dropping the line would leave RESTRICTED looking
 	// unresolved, so the acknowledgment closes the loop instead (with the
 	// honest caveat that a grant reaches future leases, never a running agent).
-	if hint := swarmWorktreeGrantHint(batch); hint != "" {
-		b.WriteString("\n" + hint)
-	} else if swarmWorktreeAllGranted(batch) {
-		b.WriteString("\n" + granted)
+	//
+	// Only SURVIVING worktrees can be acted on: `terva trust` against a
+	// reclaimed path would create an entry for a directory that no longer
+	// exists. The restricted COUNT above still includes them, because how those
+	// sub-agents booted is a fact about the run and stays true after the
+	// checkout is gone.
+	if actionable := survivingWorktrees(batch); len(actionable) > 0 {
+		if hint := swarmWorktreeGrantHint(actionable); hint != "" {
+			b.WriteString("\n" + hint)
+		} else if swarmWorktreeAllGranted(actionable) {
+			b.WriteString("\n" + granted)
+		}
 	}
 	return b.String()
+}
+
+// reclaimedCount is how many of the batch the engine took back.
+func reclaimedCount(batch []worktreeProvenance) int {
+	n := 0
+	for _, p := range batch {
+		if p.Reclaimed {
+			n++
+		}
+	}
+	return n
+}
+
+// survivingWorktrees is the batch minus the reclaimed ones: the entries whose
+// path still exists and can therefore still be trusted, reviewed, or merged.
+func survivingWorktrees(batch []worktreeProvenance) []worktreeProvenance {
+	out := make([]worktreeProvenance, 0, len(batch))
+	for _, p := range batch {
+		if !p.Reclaimed {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // swarmWorktreeAllGranted reports whether every lease-time-restricted worktree

@@ -26,9 +26,15 @@ var swarmWorktreeMgr = worktree.NewManager()
 // daemon, a headless run, an uninstalled extension). A direct engine call has
 // no such mode: --swarm-worktrees works whenever the binary does. Worktree
 // isolation was explicitly requested, so any failure still surfaces and fails
-// the spawn rather than silently dropping back to the shared host tree. On
-// release it releases the claim (NOT remove), so the worktree + branch survive
-// for review/merge.
+// the spawn rather than silently dropping back to the shared host tree.
+//
+// On release it RECLAIMS: a worktree holding nothing — no uncommitted changes,
+// no commits that exist only there — is removed, and one holding work is kept
+// with its claim dropped, exactly as before. This used to keep every worktree
+// unconditionally, which is correct for the agent that wrote something and pure
+// litter for the many that read files and exited. The engine decides (see
+// worktree.Manager.Reclaim); the rule it applies is the one a person would:
+// keep it if this is the only place the work exists.
 //
 // The claim is owned by a per-agent identity ("swarm:<agent-id>"), not the
 // acquiring session — honest attribution, and release works no matter which
@@ -63,18 +69,33 @@ func (w *Workspace) acquireSwarmWorktree(ctx context.Context, req swarm.Worktree
 			w.recordSwarmLease(newWorktreeProvenance(ctx, store, w.cwd, res.Path, facts))
 		}
 	}
+	// Captured by name rather than reaching through the Create result inside
+	// the closure: the release path has its own result value, and two things
+	// called res one scope apart is how the wrong one gets read.
+	leasedPath := res.Path
 	return swarm.WorktreeLease{
-		Dir: res.Path,
+		Dir: leasedPath,
 		Release: func() {
-			// Release, never remove: keep the worktree + branch for
-			// review/merge. Best-effort — the agent is already terminal.
-			_, _ = swarmWorktreeMgr.Release(env, worktree.ReleaseArgs{Name: name})
+			// Reclaim first, and fall back to dropping the claim when the
+			// worktree turns out to hold work. Reclaim reports "kept" as an
+			// ordinary result rather than an error, so the only thing an error
+			// here means is that the engine could not decide — in which case
+			// keeping it is the safe answer, and the claim still has to go or
+			// the worktree reads as owned by an agent that no longer exists.
+			//
+			// Best-effort throughout: the agent is already terminal, and there
+			// is nobody left to report a failure to.
+			rec, rerr := swarmWorktreeMgr.Reclaim(env, worktree.ReclaimArgs{Name: name})
+			reclaimed := rerr == nil && rec != nil && rec.Removed
+			if !reclaimed {
+				_, _ = swarmWorktreeMgr.Release(env, worktree.ReleaseArgs{Name: name})
+			}
 			// And retract the "runs restricted" claim. Agent.finish guarantees
 			// this runs exactly once on every terminal path — done, failed,
 			// killed, Stop, StopAll, detached cleanup — which is why the record
 			// can be live state rather than a log line. Nothing else in the
 			// system knows the sub-agent stopped.
-			w.releaseSwarmLease()
+			w.releaseSwarmLease(leasedPath, reclaimed)
 		},
 	}, nil
 }
@@ -166,6 +187,11 @@ func (w *Workspace) refreshSwarmWorktreeTrust() {
 	w.mu.Lock()
 	changed := false
 	for i := range w.swarmBatch {
+		// A reclaimed worktree has no path left to probe, and its lease-time
+		// verdict is already the final word on how that sub-agent booted.
+		if w.swarmBatch[i].Reclaimed {
+			continue
+		}
 		now, _ := worktreeTrustVerdict(store, w.swarmBatch[i].Path)
 		if w.swarmBatch[i].TrustedNow != now {
 			w.swarmBatch[i].TrustedNow = now
@@ -183,17 +209,29 @@ func (w *Workspace) refreshSwarmWorktreeTrust() {
 }
 
 // releaseSwarmLease counts one lease down and rewrites the note, which flips to
-// the past tense once the last one goes. The batch is KEPT: a released worktree
-// survives for review, so its path is still the thing an operator would act on.
+// the past tense once the last one goes.
+//
+// The batch entry is KEPT either way, but a reclaimed one is marked: its path
+// is gone, so the note must stop offering it for review and stop naming it in
+// the `terva trust` hint. A worktree that survived is still the thing an
+// operator would act on and reads exactly as it did before.
 //
 // Clamped at zero rather than trusting the count. The release hook is
 // exactly-once per agent by contract, but this is host state mutated from swarm
 // goroutines, and a negative live count would render "ran" over a note that is
 // in fact still live.
-func (w *Workspace) releaseSwarmLease() {
+func (w *Workspace) releaseSwarmLease(path string, reclaimed bool) {
 	w.mu.Lock()
 	if w.swarmLive > 0 {
 		w.swarmLive--
+	}
+	if reclaimed && path != "" {
+		for i := range w.swarmBatch {
+			if w.swarmBatch[i].Path == path {
+				w.swarmBatch[i].Reclaimed = true
+				break
+			}
+		}
 	}
 	msg := renderSwarmWorktreeNote(w.swarmBatch, w.swarmLive)
 	w.mu.Unlock()

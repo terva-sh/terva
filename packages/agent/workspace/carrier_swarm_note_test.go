@@ -77,7 +77,9 @@ func TestTheLeaseRetractsItsOwnNoteWhenTheAgentFinishes(t *testing.T) {
 	if strings.Contains(done, "running without") {
 		t.Errorf("every agent finished and the note still says they are running:\n%s", done)
 	}
-	if !strings.Contains(done, "released, kept for review") {
+	// Three sub-agents that touched nothing: all three worktrees are reclaimed
+	// on release, so the note must not offer them for review.
+	if !strings.Contains(done, "released and reclaimed") {
 		t.Errorf("the note never flipped to the past tense:\n%s", done)
 	}
 	// Still ONE note, not a second one appended beside the stale first.
@@ -103,7 +105,9 @@ func TestTheNoteCountsDownAsAgentsFinish(t *testing.T) {
 	l1.Release()
 
 	// One of two done: still live, so still the present tense, and still both
-	// worktrees — the released one is kept for review and its path still matters.
+	// worktrees. The finished one was reclaimed (it held nothing), but it stays
+	// in the count — the record describes the swarm that ran, not the
+	// directories that happen to survive it.
 	got := spy.current()
 	if !strings.Contains(got, "running without") {
 		t.Errorf("one agent still running, but the note is already past-tense:\n%s", got)
@@ -151,12 +155,15 @@ func TestAnExtraReleaseCannotDriveTheCountNegative(t *testing.T) {
 	}
 	l.Release()
 	l.Release()
-	w.releaseSwarmLease()
+	// A bare extra release, carrying no reclaim outcome — the shape a stray
+	// caller would produce. It must not un-mark the worktree the first release
+	// already reclaimed.
+	w.releaseSwarmLease("", false)
 
 	if w.swarmLive != 0 {
 		t.Errorf("live count = %d, want 0", w.swarmLive)
 	}
-	if got := spy.current(); !strings.Contains(got, "released, kept for review") {
+	if got := spy.current(); !strings.Contains(got, "released and reclaimed") {
 		t.Errorf("note went wrong after extra releases:\n%s", got)
 	}
 }
@@ -185,7 +192,7 @@ func TestAHostWithoutAReplaceableNoteStillGetsTheRecord(t *testing.T) {
 	if !strings.Contains(lines[0], "leased") {
 		t.Errorf("first line is not the lease:\n%s", lines[0])
 	}
-	if !strings.Contains(lines[len(lines)-1], "released, kept for review") {
+	if !strings.Contains(lines[len(lines)-1], "released and reclaimed") {
 		t.Errorf("last line is not the release:\n%s", lines[len(lines)-1])
 	}
 }

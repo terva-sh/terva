@@ -37,7 +37,9 @@ A file that a sub-agent reports is in that worktree. It is not in your working d
 
 Read the file at the worktree path of the sub-agent. You can also compare that worktree with your tree. Do this before you decide that the work is missing. Do this before you do the work a second time.
 
-terva keeps the worktree of a finished sub-agent. You can review it and take what you need. The files that remain there are not a deliverable.
+terva keeps the worktree of a finished sub-agent only when it holds work. Work means uncommitted changes, or commits that exist nowhere else. When a sub-agent exits, terva removes a worktree that holds nothing. A missing worktree path therefore tells you the sub-agent left nothing behind. It does not tell you that terva lost the work.
+
+A worktree that survives is there for you to review. Take what you need from it. The files that remain there are not a deliverable.
 
 First apply the content to your own tree. You can also confirm that your tree already has the same content. You may then delete those files and remove the worktree.
 

@@ -177,8 +177,10 @@ type Config struct {
 	// instead of sharing the host's working tree. Off by default;
 	// nil/missing means disabled. When on, each spawned agent leases an
 	// isolated worktree from the built-in worktree engine
-	// (packages/agent/worktree; released — not removed — on completion so
-	// the branch survives for review/merge). Needs the host cwd to be a
+	// (packages/agent/worktree). On completion the worktree is reclaimed
+	// when it holds nothing, and kept — claim released, not removed — when
+	// it holds uncommitted changes or commits that exist nowhere else, so
+	// anything unique survives for review/merge. Needs the host cwd to be a
 	// git repository; outside one, spawning a sub-agent fails loudly. The
 	// --swarm-worktrees flag overrides this for a single run.
 	SwarmWorktrees *bool `json:"swarm_worktrees,omitempty"`

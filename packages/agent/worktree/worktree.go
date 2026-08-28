@@ -638,9 +638,22 @@ func (m *Manager) Remove(env Env, args RemoveArgs) (*RemoveResult, error) {
 		}
 	}
 
+	return removeEntry(r, reg, name, entry, path, known, args.Force, args.DeleteBranch)
+}
+
+// removeEntry performs the destructive half of a removal: drop the checkout,
+// prune, optionally delete the branch, and forget the registry entry.
+//
+// It holds NO policy. Remove and Reclaim each decide separately whether removal
+// is allowed at all and whether the branch goes with it — one answers a user
+// who asked for this worktree to go, the other tidies up after a sub-agent. The
+// steps below are the part that must not drift between them.
+//
+// Caller holds m.mu and the repo lock.
+func removeEntry(r *repo, reg *Registry, name string, entry *Entry, path string, known, force, deleteBranch bool) (*RemoveResult, error) {
 	if known {
 		rmArgs := []string{"worktree", "remove", path}
-		if args.Force {
+		if force {
 			rmArgs = []string{"worktree", "remove", "--force", path}
 		}
 		if _, err := runGit(r.cwd, rmArgs...); err != nil {
@@ -654,7 +667,7 @@ func (m *Manager) Remove(env Env, args RemoveArgs) (*RemoveResult, error) {
 	_, _ = runGit(r.cwd, "worktree", "prune")
 
 	branchDeleted := false
-	if args.DeleteBranch && entry.Branch != "" {
+	if deleteBranch && entry.Branch != "" {
 		if _, err := runGit(r.cwd, "branch", "-D", entry.Branch); err == nil {
 			branchDeleted = true
 		}
@@ -665,6 +678,112 @@ func (m *Manager) Remove(env Env, args RemoveArgs) (*RemoveResult, error) {
 		return nil, err
 	}
 	return &RemoveResult{Name: name, Removed: true, BranchDeleted: branchDeleted}, nil
+}
+
+// ReclaimArgs names the worktree to reclaim.
+type ReclaimArgs struct {
+	Name string
+}
+
+// ReclaimResult reports what Reclaim decided. Removed=false with a Reason is an
+// ordinary, successful outcome: the worktree had work in it and was kept.
+type ReclaimResult struct {
+	Name          string `json:"name"`
+	Removed       bool   `json:"removed"`
+	BranchDeleted bool   `json:"branch_deleted"`
+	// Reason is why the worktree was KEPT, in human words. Empty when removed.
+	Reason string `json:"reason,omitempty"`
+}
+
+// Reclaim removes a worktree that has nothing worth keeping, and reports what
+// it decided.
+//
+// It is the automatic counterpart to Remove, and the difference is who is
+// asking. Remove serves a user who named this worktree, so "it still has work
+// in it" is a refusal — an error they can act on. Reclaim runs unattended when
+// a sub-agent exits, so the same condition is a normal result: Removed=false
+// with a Reason. Callers fire it at every terminal path and never have to
+// distinguish "kept deliberately" from "broke".
+//
+// Nothing worth keeping means no uncommitted changes AND no commits that exist
+// only here. hasUnmergedWork prefers @{upstream}..HEAD when the branch tracks a
+// remote, so work that was committed AND pushed does not keep a checkout alive:
+// the commits are safe somewhere else, which is the whole question.
+//
+// The branch is deleted only when this worktree positively never committed
+// anything (ahead == 0 against a known base). Three cases deliberately keep the
+// branch instead:
+//
+//   - commits exist but are pushed — the checkout is expendable, but the branch
+//     is the handle someone uses to find that history again;
+//   - base_commit is empty (a legacy or hand-edited registry) — nothing to
+//     measure against, so nothing is destroyed;
+//   - the checkout vanished out of band — the entry is still cleaned up, but
+//     the branch was never evaluated, so it stays.
+//
+// There is no Force here on purpose. A caller that means to destroy work says
+// so with Remove{Force:true}; Reclaim is meant to be safe to call blindly.
+func (m *Manager) Reclaim(env Env, args ReclaimArgs) (*ReclaimResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	name := slugify(args.Name)
+	if name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	r, err := resolveRepo(env)
+	if err != nil {
+		return nil, err
+	}
+	lk, err := acquireLock(r.lockPath())
+	if err != nil {
+		return nil, fmt.Errorf("lock repo: %w", err)
+	}
+	defer lk.Release()
+
+	reg, err := loadRegistry(r)
+	if err != nil {
+		return nil, err
+	}
+	gwts, err := listWorktrees(r.cwd)
+	if err != nil {
+		return nil, err
+	}
+
+	entry, ok := reg.Worktrees[name]
+	if !ok {
+		return nil, fmt.Errorf("no managed worktree %q", name)
+	}
+	path := r.entryPath(name, entry)
+	_, known := gwts[canonPath(path)]
+
+	// Delete the branch only after positively measuring that nothing was ever
+	// committed on it. Every path that cannot measure leaves it alone.
+	deleteBranch := false
+	if known && dirExists(path) {
+		dirty, derr := worktreeDirty(path)
+		if derr != nil {
+			// Unreadable status is not permission to delete. Keep it, and say so.
+			return &ReclaimResult{Name: name, Reason: fmt.Sprintf("cannot read status: %v", derr)}, nil
+		}
+		if dirty {
+			return &ReclaimResult{Name: name, Reason: "uncommitted changes"}, nil
+		}
+		if unmerged, why := hasUnmergedWork(path, entry.BaseCommit); unmerged {
+			return &ReclaimResult{Name: name, Reason: why}, nil
+		}
+		if entry.BaseCommit != "" {
+			if ahead, _ := aheadCommits(path, entry.BaseCommit, 1); ahead == 0 {
+				deleteBranch = true
+			}
+		}
+	}
+
+	res, err := removeEntry(r, reg, name, entry, path, known, false, deleteBranch)
+	if err != nil {
+		return nil, err
+	}
+	return &ReclaimResult{Name: name, Removed: res.Removed, BranchDeleted: res.BranchDeleted}, nil
 }
 
 // collectMaxCommits bounds the per-worktree commit list in a collect view.

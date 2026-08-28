@@ -210,8 +210,11 @@ Background subagents that run alongside your main session. Each one is a separat
 > each sub-agent its own git worktree and branch instead. Isolation is
 > leased from the built-in worktree engine (no extension required); the
 > cwd must be a git repository — outside one, spawns fail loudly rather
-> than silently sharing the host tree. Finished worktrees and branches
-> are kept for review/merge — `/worktree collect` view shows what each
+> than silently sharing the host tree. A finished worktree is kept for
+> review/merge only when it holds work — uncommitted changes, or commits
+> that exist nowhere else; one that holds nothing is reclaimed when its
+> sub-agent exits, taking its branch with it when that branch never
+> carried a commit. `/worktree collect` view shows what each surviving
 > branch carries (each lives under `$TERVA_HOME/worktrees/`).
 >
 > With isolation on, the main agent is told so in its system prompt, and

@@ -43,10 +43,60 @@ func TestTheNoteStopsClaimingTheSubAgentsAreRunning(t *testing.T) {
 	if !strings.Contains(done, "ran") || !strings.Contains(done, "released") {
 		t.Errorf("a finished batch does not say it finished:\n%s", done)
 	}
-	// The paths survive: a released worktree is kept for review, so granting it
-	// trust is still something you might want to do.
+	// The paths survive: a worktree that holds work is kept for review, so
+	// granting it trust is still something you might want to do.
 	if !strings.Contains(done, "terva trust") {
 		t.Errorf("the grant hint vanished with the last lease:\n%s", done)
+	}
+}
+
+// A reclaimed worktree is gone from disk. The note may still COUNT it — how the
+// sub-agents booted is a fact about the run — but it must stop describing it as
+// something to go and look at.
+func TestTheNoteSaysWhichWorktreesActuallySurvived(t *testing.T) {
+	batch := batchUnder("/wt", 2, true)
+	batch[0].Reclaimed = true
+
+	got := renderSwarmWorktreeNote(batch, 0)
+	if !strings.Contains(got, "1 of 2 kept for review") {
+		t.Errorf("a partly-reclaimed batch does not say how much survived:\n%s", got)
+	}
+
+	all := batchUnder("/wt", 2, true)
+	all[0].Reclaimed, all[1].Reclaimed = true, true
+	got = renderSwarmWorktreeNote(all, 0)
+	if strings.Contains(got, "kept for review") {
+		t.Errorf("nothing survived, but the note still offers a review:\n%s", got)
+	}
+	if !strings.Contains(got, "released and reclaimed") {
+		t.Errorf("a fully-reclaimed batch does not say so:\n%s", got)
+	}
+}
+
+// The grant hint is an instruction the operator is meant to run. Naming a
+// reclaimed path would have them trust a directory that no longer exists — and
+// with two restricted paths the hint switches to the wider `--parent` form, so
+// a stale entry does not just add noise, it changes what is being asked for.
+func TestTheGrantHintNeverNamesAReclaimedPath(t *testing.T) {
+	batch := batchUnder("/wt", 2, false) // both restricted
+	batch[0].Reclaimed = true
+
+	got := renderSwarmWorktreeNote(batch, 0)
+	if strings.Contains(got, "a-worktree") {
+		t.Errorf("the hint names a reclaimed path:\n%s", got)
+	}
+	if !strings.Contains(got, "b-worktree") {
+		t.Errorf("the surviving restricted path lost its hint:\n%s", got)
+	}
+	if strings.Contains(got, "--parent") {
+		t.Errorf("one surviving path should get an exact grant, not the wider --parent form:\n%s", got)
+	}
+
+	// Every restricted worktree reclaimed: there is nothing left to grant.
+	all := batchUnder("/wt", 2, false)
+	all[0].Reclaimed, all[1].Reclaimed = true, true
+	if got := renderSwarmWorktreeNote(all, 0); strings.Contains(got, "terva trust") {
+		t.Errorf("nothing survives, but the note still asks for a grant:\n%s", got)
 	}
 }
 

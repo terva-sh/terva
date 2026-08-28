@@ -42,8 +42,15 @@ func newCarrierRepo(t *testing.T) string {
 
 // TestCarrierSwarmWorktreeLeasesDirectly: the stage-1 fold-in's payoff — the
 // carrier leases from the in-tree engine with no extension anywhere: a fresh
-// daemon with zero sessions can isolate a swarm sub-agent. Release frees the
-// claim (the worktree survives for review/merge — release, never remove).
+// daemon with zero sessions can isolate a swarm sub-agent.
+//
+// Release RECLAIMS a worktree that holds nothing. This test used to assert the
+// opposite ("release, never remove") and then check that a second acquire
+// reused the same directory. That check survives the behaviour change while
+// meaning something entirely different — the name is derived from the agent id
+// and task, so the path is identical whether the worktree was reused or
+// deleted and made again. Asserting the directory is GONE is what tells the two
+// apart.
 func TestCarrierSwarmWorktreeLeasesDirectly(t *testing.T) {
 	repo := newCarrierRepo(t)
 	w := &Workspace{cwd: repo, sessions: map[string]*wsSession{}}
@@ -69,13 +76,54 @@ func TestCarrierSwarmWorktreeLeasesDirectly(t *testing.T) {
 	}
 	lease.Release()
 
-	// Released means available: a second agent can claim the same worktree.
+	// Nothing was written in it, so nothing is worth keeping.
+	if _, err := os.Stat(lease.Dir); !os.IsNotExist(err) {
+		t.Errorf("a clean worktree survived its agent at %s (stat err: %v)", lease.Dir, err)
+	}
+
+	// And the next agent still gets a working directory at that path — rebuilt,
+	// not resurrected.
 	lease2, err := w.acquireSwarmWorktree(context.Background(), swarm.WorktreeReq{AgentID: "a1", Task: "do the thing"})
 	if err != nil {
 		t.Fatalf("re-acquire after release: %v", err)
 	}
 	if lease2.Dir != lease.Dir {
-		t.Errorf("released worktree should be reused: %s vs %s", lease2.Dir, lease.Dir)
+		t.Errorf("the derived path should be stable: %s vs %s", lease2.Dir, lease.Dir)
+	}
+	if _, err := os.Stat(lease2.Dir); err != nil {
+		t.Errorf("re-acquired worktree missing on disk: %v", err)
+	}
+}
+
+// TestCarrierKeepsAWorktreeThatHoldsWork is the other half, and the one that
+// matters if the policy is ever wrong: a sub-agent that edited a file must find
+// its work still there after it exits. Driven through the real lease hook,
+// because that is where the reclaim/keep decision is wired — a unit test of the
+// engine would pass with the hook calling the wrong thing.
+func TestCarrierKeepsAWorktreeThatHoldsWork(t *testing.T) {
+	repo := newCarrierRepo(t)
+	w := &Workspace{cwd: repo, sessions: map[string]*wsSession{}}
+
+	lease, err := w.acquireSwarmWorktree(context.Background(), swarm.WorktreeReq{AgentID: "busy", Task: "write something"})
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	scratch := filepath.Join(lease.Dir, "unsaved.txt")
+	if err := os.WriteFile(scratch, []byte("work nobody committed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	lease.Release()
+
+	if _, err := os.Stat(lease.Dir); err != nil {
+		t.Fatalf("worktree with uncommitted work was reclaimed: %v", err)
+	}
+	got, err := os.ReadFile(scratch)
+	if err != nil {
+		t.Fatalf("the uncommitted file did not survive: %v", err)
+	}
+	if string(got) != "work nobody committed\n" {
+		t.Errorf("file contents changed: %q", got)
 	}
 }
 
