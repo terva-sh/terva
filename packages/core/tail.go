@@ -25,6 +25,44 @@ import (
 // Callers that want the text join it; the recorder fingerprints the IDS, which
 // is what makes "the note decayed to its one-line form on turn 4" a fact in the
 // data instead of a claim about the code.
+//
+// Each block also has an AUTHORITY: how much power it has over what the model
+// does next. Nothing in this type models it, and that is why two blocks shipped
+// with no guard at all — the question was never forced. Until a census exists
+// (see docs/proposals/tail-ordering.md), this table is the canonical map, and a
+// NEW BLOCK MUST PICK A ROW. Getting it wrong is silent in both directions:
+// guard a directive and you switch it off, leave a report unguarded and it wins
+// the reply away from the user.
+//
+//	report      do not reply, DO NOT act        TailShellResult
+//	background  do not reply, may draw on it    TailHost (lore + ext cards)
+//	directive   do not narrate, DO act          TailStall
+//	full        do not reply, proceed as if absent
+//	                                            TailPressure, TailCapability*
+//	none        it SHOULD win the reply         TailStageCue
+//
+// TailHost is the warning in the table: it is not one block. It concatenates
+// EIGHT parts, and two of them — a card's post-history instructions and the
+// author's note — are authored STEERING that must never be guarded. Its guard
+// is therefore applied per-frame in packages/agent, never here at block level.
+// "One block, one authority" is false, and a future design that assumes
+// otherwise will silently disarm a character card.
+//
+// The eight, in the order the model reads them: the task card, extension
+// context cards, archived memory recall, lore, the scene-state card, the user
+// persona, post-history instructions, the author's note. The first two are
+// stacked by build.EphemeralTail.compose rather than appended by
+// PerTurnContext, which is why an earlier version of this comment counted six
+// and missed the task card — the only part carrying no framing at all.
+//
+// docs/proposals/tailhost-census.md is the full census: producer, wrapper and
+// guard for each part, and six findings. Two worth knowing before editing
+// anything here. Three of the eight have authorities this table does not offer
+// a row for (state, override, identity), so the taxonomy below does not span
+// what TailHost carries. And precedence policy exists in three separately
+// worded strings pointing in TWO directions — memory recall and lore lose to
+// the conversation, the scene-state card beats stale prose — so consolidating
+// them would silently invert one.
 const (
 	// TailHost is host-assembled context — an extension's live task card, the
 	// lore tail. Its text is the host's, not the harness's.
