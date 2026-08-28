@@ -11,6 +11,29 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.132.1](https://github.com/terva-sh/terva/releases/tag/v0.132.1) — 2026-08-18
+
+### Features
+
+- core: sessions carry a state sidecar, and a composer draft survives a restart
+- swarm: tell a coordinator that its sub-agents work in their own trees
+- tools: code_execution_mutating, with typed bindings and an AST pre-check
+- tui: /nextstep asks for a suggestion instead of waiting for one
+
+### Fixes
+
+- connectors: each connector holds only its own sealed key
+- core: edits and deletes could corrupt a transcript on reload
+- ext: the SDK secret APIs were dead on arrival, and a disabled extension kept injecting
+- permissions: policies and gates that set only some of their fields
+- privfs: private stores are owner-only, and replaced atomically
+- provider: images, reasoning and model identity across five wires
+- security: four surfaces disclosed credentials or private sessions
+- tui: the turn picker, the context gauge, and a dialog nothing could reach
+- usage: delegated spend was invisible, and five gauges disagreed with the session
+- web: dead panel tabs, doubled error prefixes, and a split streaming reply
+- twenty-three defects across the wire, the CLI and the build
+
 ## [v0.131.10](https://github.com/terva-sh/terva/releases/tag/v0.131.10) — 2026-08-16
 
 ### Features
