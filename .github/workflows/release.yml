@@ -86,9 +86,11 @@ jobs:
       - name: set up go
         uses: actions/setup-go@v5
         with:
-          # Current stable, matching the internal channel's builder
-          # image rather than go.mod's minimum directive.
-          go-version: stable
+          # Pinned for the same reason as ci.yml, and it matters more here:
+          # a floating toolchain means the compiler that builds a published
+          # binary can change with no commit behind it. Track the internal
+          # builder image (golang:1.25-alpine) deliberately.
+          go-version: "1.25.x"
           cache: true
 
       # Container images: qemu + buildx for the arm64 image on the

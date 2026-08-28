@@ -40,9 +40,14 @@ jobs:
       - name: set up go
         uses: actions/setup-go@v5
         with:
-          # Current stable, matching the internal channel's builder
-          # image rather than go.mod's minimum directive.
-          go-version: stable
+          # The internal channel's builder image (golang:1.25-alpine) —
+          # which is what this always meant to track. It said "stable"
+          # instead, and the two agreed only until stable moved past it:
+          # go1.27 landed, its gofmt disagreed with a tree formatted under
+          # 1.25, and `gofmt -l .` failed the public gate on a tree the
+          # internal gate had already passed. Nothing in the tree changed;
+          # the toolchain moved under it, mid-release.
+          go-version: "1.25.x"
           cache: true
 
       - name: go vet
