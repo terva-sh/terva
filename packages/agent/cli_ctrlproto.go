@@ -164,6 +164,25 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 	if needLogin {
 		loginNotice = credentialNoticeText(w.CredentialErr())
 	}
+	// A pin whose login LAPSED stops the boot too — even though Resolve found a
+	// working provider and applied it, so nothing here reports an error.
+	//
+	// That fallback is right for a host with no login flow, and wrong to take
+	// silently here. config.Provider is written only by /login, /model, or a
+	// repair, so it is the user's choice; spending a turn on a different
+	// account than the one they chose is a decision, and this host can ask.
+	// The dialog gets both answers — log the pin back in, or continue on the
+	// provider that works, for this session only.
+	//
+	// Scoped to a LAPSE on purpose. A pin that was never logged in has no
+	// account to renew, so there is no second answer to offer and no reason to
+	// interrupt: that case keeps the silent fallback it has always had.
+	var offer modes.ProviderOffer
+	if sw := r.ProviderSwitch; sw.Lapsed() {
+		needLogin = true
+		loginNotice = i18n.T("%s login expired", sw.From)
+		offer = modes.ProviderOffer{Provider: sw.To, Model: sw.ToModel}
+	}
 	var info ctrlproto.SessionInfo
 	var sessID string
 	if !needLogin {
@@ -222,6 +241,14 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 	if needLogin {
 		bootProvider, bootModel = w.Defaults()
 		bootPersona, bootTrusted = w.PersonaName(), w.Trusted()
+		// With an offer pending, the workspace defaults are the FALLBACK — and
+		// showing "(openai) gpt-5" in the chrome would answer the question the
+		// dialog is still asking. Name the pin instead: it is what the user
+		// chose, it is still the default, and the status line right above says
+		// its login expired.
+		if offer.Provider != "" && r.ProviderSwitch != nil {
+			bootProvider, bootModel = r.ProviderSwitch.From, r.ProviderSwitch.FromModel
+		}
 	}
 
 	diagMu.Lock()
@@ -398,13 +425,14 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 			}
 			_ = MarkChangelogShown(v)
 		},
-		AutoSwarmEnabled: initialCfg.AutoSwarmEnabled,
-		CWD:              w.CWD(),
-		TervaHome:        config.TervaHome(),
-		AuthStore:        config.AuthStoreFor(),
-		Version:          version,
-		BootNotice:       bootNotice,
-		LoginNotice:      loginNotice,
+		AutoSwarmEnabled:    initialCfg.AutoSwarmEnabled,
+		CWD:                 w.CWD(),
+		TervaHome:           config.TervaHome(),
+		AuthStore:           config.AuthStoreFor(),
+		Version:             version,
+		BootNotice:          bootNotice,
+		LoginNotice:         loginNotice,
+		ProviderSwitchOffer: offer,
 		// A credential-less boot defers the first session until /login, so the
 		// prompt gate opens iff a credential resolved. This was `ag != nil`
 		// before the agent crutch went away; it means the same thing.
@@ -455,6 +483,17 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 			default:
 				return w.CreateSession(ctx, ctrlproto.CreateOpts{})
 			}
+		},
+		// "continue on X/Y for this session": create the session on an explicit
+		// pair rather than the configured default.
+		//
+		// The session-scoping is the whole promise, and it is kept by what this
+		// does NOT do — there is no config write here. CreateOpts pins the pair
+		// into session meta, which buildSession replays on every materialize, so
+		// the choice survives a restart of THIS session without ever becoming
+		// the default for the next one.
+		CarrierUseProvider: func(providerID, model string) (ctrlproto.SessionInfo, error) {
+			return w.CreateSession(ctx, ctrlproto.CreateOpts{Provider: providerID, Model: model})
 		},
 
 		// --- session group (tui-on-ctrlproto.md Stage 2) ---

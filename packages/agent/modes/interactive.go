@@ -23,6 +23,15 @@ import (
 	"terva.sh/terva/packages/tui"
 )
 
+// ProviderOffer names a provider+model pair the daemon holds a working
+// credential for. The zero value means there is nothing to offer.
+//
+// A named type rather than an inline struct because it crosses a package
+// boundary: the host builds one and this package renders it, and two
+// separately-declared anonymous structs stay assignable only while their fields
+// remain letter-identical.
+type ProviderOffer struct{ Provider, Model string }
+
 // InteractiveConfig configures the interactive loop.
 type InteractiveConfig struct {
 	Terminal   tui.Terminal
@@ -133,6 +142,20 @@ type InteractiveConfig struct {
 	// presence is also what marks the carrier as login-capable (a remote or
 	// replay carrier leaves it nil: the daemon owns credentials there).
 	CarrierLogin func(current string) (ctrlproto.SessionInfo, error)
+
+	// CarrierUseProvider binds a session to an explicit provider+model instead
+	// of logging in — the "continue on X/Y for this session" row, offered when
+	// the provider config PINS has no usable credential but another one does.
+	//
+	// Session-scoped by contract: the implementation creates the session with
+	// that pair and must not write it to config.json. Nil on a carrier with no
+	// such offer (remote/replay), which simply never shows the row.
+	CarrierUseProvider func(providerID, model string) (ctrlproto.SessionInfo, error)
+
+	// ProviderSwitchOffer is the pair to put behind that row, zero when boot
+	// found nothing usable to offer. Rendered only while the TUI has no
+	// session, since the offer is about getting the first one open.
+	ProviderSwitchOffer ProviderOffer
 
 	InitialInput string
 
@@ -1393,6 +1416,12 @@ func (i *Interactive) Run(ctx context.Context) error {
 			i.statusErr = i18n.T("%s — pick a login method below or press esc to dismiss.", i.cfg.LoginNotice)
 		}
 		i.dialog.Open(i.cfg.AuthStore)
+		// After Open, which clears any previous offer. Only with a hook to run
+		// it: a carrier that cannot bind a session must not advertise a row that
+		// would do nothing.
+		if o := i.cfg.ProviderSwitchOffer; o.Provider != "" && i.cfg.CarrierUseProvider != nil {
+			i.dialog.OfferSession(o.Provider, o.Model)
+		}
 	} else if i.cfg.JailNotice != "" {
 		// A saved rule took the sandbox down for this directory. Say it before
 		// the trust nag: trust withholds capability (the safe direction, and

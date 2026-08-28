@@ -156,6 +156,15 @@ type Workspace struct {
 	// a credential (buildSession's own Resolve). Guarded by mu.
 	credErr error
 
+	// provSwitch records that boot fell back off the provider config PINS
+	// because it had no usable credential, nil otherwise. Guarded by mu, and
+	// re-derived by RefreshDefaults so logging the pin back in clears it.
+	//
+	// Kept because it cannot be recomputed cheaply: the lapse that matters is a
+	// refresh_token the server rejects, which no presence check can see and only
+	// an actual refresh attempt discovers. Boot already paid for that attempt.
+	provSwitch *build.ProviderSwitch
+
 	// trusted is the cwd's Workspace Trust verdict — resolved at construction
 	// (hosts need it before any session exists, e.g. the TUI's credential-less
 	// login boot) and MOVED by Trust/Untrust.
@@ -285,19 +294,20 @@ func NewWorkspace(args build.Args, version string) (*Workspace, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &Workspace{
-		args:     args,
-		version:  version,
-		root:     config.TervaHome(),
-		cwd:      r.CWD,
-		provider: r.Provider,
-		model:    r.Model,
-		hookEng:  build.BuildLiveTrustHookEngine(args, r.Trusted),
-		ctx:      ctx,
-		cancel:   cancel,
-		sessions: map[string]*wsSession{},
-		credErr:  r.CredentialErr,
-		sandbox:  r.Sandbox, // shared across sessions; carries the initial jail lock
-		diag:     func(m string) { fmt.Fprintln(os.Stderr, m) },
+		args:       args,
+		version:    version,
+		root:       config.TervaHome(),
+		cwd:        r.CWD,
+		provider:   r.Provider,
+		model:      r.Model,
+		hookEng:    build.BuildLiveTrustHookEngine(args, r.Trusted),
+		ctx:        ctx,
+		cancel:     cancel,
+		sessions:   map[string]*wsSession{},
+		credErr:    r.CredentialErr,
+		provSwitch: r.ProviderSwitch,
+		sandbox:    r.Sandbox, // shared across sessions; carries the initial jail lock
+		diag:       func(m string) { fmt.Fprintln(os.Stderr, m) },
 
 		attachments: attach.NewStore(),
 		shared:      attach.NewShareStore(),
@@ -490,6 +500,20 @@ func (w *Workspace) Defaults() (provider, model string) {
 	return w.provider, w.model
 }
 
+// ProviderSwitch reports that boot could not use the provider config PINS and
+// resolved a different one instead — nil when the pin was honoured (the
+// overwhelmingly common case) or when nothing was pinned at all.
+//
+// Every host has to do SOMETHING with this, because the alternative is running
+// a turn on an account the user did not choose for it without saying so. A
+// host that can ask does (the TUI offers the switch as a choice); one that
+// cannot must at least report it.
+func (w *Workspace) ProviderSwitch() *build.ProviderSwitch {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.provSwitch
+}
+
 // Trusted reports the cwd's current Workspace Trust verdict — the one verdict
 // every session-less reader consults, kept current by Trust/Untrust.
 func (w *Workspace) Trusted() bool { return w.trusted.Load() }
@@ -514,6 +538,10 @@ func (w *Workspace) RefreshDefaults() error {
 	w.mu.Lock()
 	w.provider, w.model = r.Provider, r.Model
 	w.credErr = r.CredentialErr
+	// Re-resolved, so a pin that was just logged back in stops reporting a
+	// switch. Assigned unconditionally: leaving a stale one would keep offering
+	// to move off a provider that now works.
+	w.provSwitch = r.ProviderSwitch
 	w.mu.Unlock()
 	return nil
 }

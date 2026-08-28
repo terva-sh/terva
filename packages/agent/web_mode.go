@@ -140,6 +140,16 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 		fmt.Fprintf(os.Stderr, "terva web: %v\n", err)
 		fmt.Fprintln(os.Stderr, "terva web: starting anyway — sign in from the control panel's Providers pane; sessions can start once a credential lands")
 	}
+	// A provider switch is not an error and reports none, which is exactly why
+	// it has to be said out loud here. The daemon cannot stop and ask the way
+	// the TUI does, so it does the next honest thing: name the account its turns
+	// will actually bill, rather than letting the operator infer from config.json
+	// that they are on the provider they pinned.
+	if sw := ws.ProviderSwitch(); sw != nil {
+		fmt.Fprintf(os.Stderr, "terva web: %s is unusable (%v) — running on %s/%s instead; config still says %s/%s\n",
+			sw.From, sw.Err, sw.To, sw.ToModel, sw.From, sw.FromModel)
+		fmt.Fprintln(os.Stderr, "terva web: sign in from the control panel's Providers pane to go back to your configured provider")
+	}
 	fmt.Fprintf(os.Stderr, "terva web: workspace ready (took %s)\n", time.Since(begin).Round(10*time.Millisecond))
 	cfg, _ := config.LoadConfig()
 	fmt.Fprintf(os.Stderr, "terva web: approval mode %q (tool calls that need approval prompt in the browser)\n", permissions.ResolveApprovalMode(args.PermInputs(), cfg))

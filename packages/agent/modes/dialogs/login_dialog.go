@@ -67,6 +67,16 @@ type LoginDialog struct {
 	// Open() runs, so the user can see what they are already signed in to before
 	// starting a new flow. Value is "apikey", "oauth", or "" (not logged in).
 	status map[string]string
+
+	// offerProvider/offerModel is a pair the daemon already proved it can run,
+	// offered as a third row on the method picker when the provider the config
+	// PINS turned out to be unusable. Empty when there is nothing to offer.
+	//
+	// Cleared by Open() rather than kept: the offer is a fact about one boot,
+	// and a stale one would invite the user to "continue on" a provider after
+	// they had already logged the pinned one back in. The caller re-offers each
+	// time it opens the dialog, and only while it still has no session.
+	offerProvider, offerModel string
 }
 
 func NewLoginDialog() *LoginDialog {
@@ -95,6 +105,7 @@ func (d *LoginDialog) Open(store *auth.Store) {
 	d.eds = nil
 	d.edIdx = 0
 	d.flowErr = ""
+	d.offerProvider, d.offerModel = "", ""
 	// Best-effort: if the auth file can't be read, auth.Describe still returns
 	// every loggable provider as not-logged-in. The status line just won't show
 	// anything useful in that case, which is fine — the user was about to log
@@ -113,6 +124,32 @@ func (d *LoginDialog) Open(store *auth.Store) {
 	}
 }
 
+// OfferSession adds a "continue on <provider>/<model>" row to the method
+// picker. Call it AFTER Open, which clears any previous offer.
+//
+// The pair must be one the daemon has already resolved a working credential
+// for — the whole point is that choosing it cannot fail the way the pinned
+// provider just did.
+func (d *LoginDialog) OfferSession(provider, model string) {
+	d.offerProvider, d.offerModel = provider, model
+}
+
+// methodOptions is the method picker's rows, and the ONE place their count is
+// decided. It used to be a literal `max := 2` in the key handler beside a
+// separate literal list in the renderer: adding a row meant remembering both,
+// and forgetting the handler renders a row the cursor cannot reach.
+func (d *LoginDialog) methodOptions() []string {
+	opts := []string{
+		i18n.T("api key"),
+		i18n.T("subscription (claude pro/max - chatgpt plus/pro - chatgpt codex - kimi code - github copilot)"),
+	}
+	if d.offerProvider != "" {
+		opts = append(opts, i18n.T("continue on %s/%s for this session",
+			ProviderLabel(d.offerProvider), d.offerModel))
+	}
+	return opts
+}
+
 // Close hides the dialog.
 func (d *LoginDialog) Close() {
 	d.step = loginStepClosed
@@ -127,10 +164,7 @@ func (d *LoginDialog) Render(th tui.Theme, width int) []string {
 
 	switch d.step {
 	case loginStepMethod:
-		opts := []string{
-			"api key",
-			"subscription (claude pro/max - chatgpt plus/pro - chatgpt codex - kimi code - github copilot)",
-		}
+		opts := d.methodOptions()
 		lines = append(lines, FrameHeader(th, "login", width))
 		for _, l := range d.renderStatusLines(th) {
 			lines = append(lines, l)
@@ -315,6 +349,11 @@ type loginDialogAction struct {
 	// user pressed enter on a completed form.
 	Submit map[string]string
 	Close  bool
+	// UseOffer is the third verb, and it is not a login: bind a session to
+	// Provider/Model, which the daemon already holds a working credential for.
+	// Set only when the user picks the offer row (see OfferSession).
+	UseOffer bool
+	Model    string
 }
 
 // HandleKey advances the dialog and returns an action to apply, if any.
@@ -334,7 +373,7 @@ func (d *LoginDialog) HandleKey(k tui.Key) loginDialogAction {
 }
 
 func (d *LoginDialog) handleMethodKey(k tui.Key) loginDialogAction {
-	max := 2
+	max := len(d.methodOptions())
 	switch k.Kind {
 	case tui.KeyUp:
 		if d.cursor > 0 {
@@ -348,10 +387,18 @@ func (d *LoginDialog) handleMethodKey(k tui.Key) loginDialogAction {
 		d.Close()
 		return loginDialogAction{Close: true}
 	case tui.KeyEnter:
-		if d.cursor == 0 {
+		switch d.cursor {
+		case 0:
 			d.method = "apikey"
-		} else {
+		case 1:
 			d.method = "oauth"
+		default:
+			// The offer row. Not a login at all — it binds a session to a
+			// provider that already works, so it closes the dialog rather than
+			// advancing to the provider picker.
+			p, m := d.offerProvider, d.offerModel
+			d.Close()
+			return loginDialogAction{UseOffer: true, Provider: p, Model: m}
 		}
 		d.step = loginStepProvider
 		d.cursor = 0

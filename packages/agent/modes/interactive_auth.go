@@ -273,6 +273,48 @@ func (i *Interactive) finishCarrierLogin(st ctrlproto.AuthState) {
 		i.dialog.ShowResult(false, err.Error())
 		return
 	}
+	i.bindUnlockedSession(info, i18n.T("logged in to %s via %s", st.Provider, st.Method))
+}
+
+// useOfferedProvider takes the "continue on <provider>/<model>" row: the config
+// pins a provider terva cannot currently use, and this binds the session to one
+// it CAN, for this session only.
+//
+// Deliberately not a login and deliberately not persisted. The pinned provider
+// stays pinned in config.json, so the next launch asks again rather than
+// quietly inheriting a choice made once to get unblocked — and a turn never
+// bills an account the user did not pick for it.
+func (i *Interactive) useOfferedProvider(providerID, model string) {
+	if i.cfg.CarrierUseProvider == nil {
+		return
+	}
+	// The pin, read before the rebind overwrites it — bindUnlockedSession moves
+	// cfg.Provider onto the session's. Under the mutex because that write takes
+	// it too.
+	i.mu.Lock()
+	pinned := i.cfg.Provider
+	i.mu.Unlock()
+
+	info, err := i.cfg.CarrierUseProvider(providerID, model)
+	if err != nil {
+		i.dialog.ShowResult(false, err.Error())
+		return
+	}
+	msg := i18n.T("this session is on %s/%s", info.Provider, info.Model)
+	if pinned != "" && pinned != info.Provider {
+		// Name the pin as still-default, so "continue for this session" reads as
+		// the temporary thing it is.
+		msg = i18n.T("this session is on %s/%s — %s is still your default",
+			info.Provider, info.Model, pinned)
+	}
+	i.bindUnlockedSession(info, msg)
+}
+
+// bindUnlockedSession re-points the frontend onto a session that has just
+// become usable — whether a fresh credential unlocked it or the user chose a
+// provider that already worked. Shared so the two paths cannot drift on the
+// ready gate, which is what reopens the prompt.
+func (i *Interactive) bindUnlockedSession(info ctrlproto.SessionInfo, okMsg string) {
 	if i.carrierSession() != info.ID {
 		if err := i.SwitchCarrierSession(info.ID); err != nil {
 			i.dialog.ShowResult(false, err.Error())
@@ -290,7 +332,7 @@ func (i *Interactive) finishCarrierLogin(st ctrlproto.AuthState) {
 		i.cfg.Model = info.Model
 	}
 	i.statusErr = ""
-	i.statusOK = i18n.T("logged in to %s via %s", st.Provider, st.Method)
+	i.statusOK = okMsg
 	i.mu.Unlock()
 	i.dialog.ShowResult(true, "")
 	// --resume on a credential-less boot: the picker deferred to the login dialog

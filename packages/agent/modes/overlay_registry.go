@@ -149,6 +149,9 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				if act.StartLogin {
 					i.startLogin(act.Provider, act.Method)
 				}
+				if act.UseOffer {
+					i.useOfferedProvider(act.Provider, act.Model)
+				}
 				if act.Submit != nil {
 					i.submitLogin(act.Submit)
 				}

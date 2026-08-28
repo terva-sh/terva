@@ -38,10 +38,20 @@ type Resolved struct {
 	// that boots credential-less (the TUI's Workspace) report or defer the
 	// failure without a second Resolve.
 	CredentialErr error
-	AccountID     string // ChatGPT account id (for openai oauth), "" otherwise
-	BaseURL       string
-	CWD           string
-	Reasoning     string
+	// ProviderSwitch records that boot could not use the provider config PINS
+	// and resolved a different one instead. Nil when nothing was overridden.
+	//
+	// config.Provider is only ever written by /login, /model, or a repair, so a
+	// non-empty value is a CHOICE, not a default — and quietly spending a turn
+	// on a different account than the one chosen is not terva's call to make.
+	// Resolve still APPLIES the switch (Provider/Model below are the usable
+	// pair), because a host with no login flow has nothing better to do with
+	// the news; a host that CAN ask hands the choice back instead.
+	ProviderSwitch *ProviderSwitch
+	AccountID      string // ChatGPT account id (for openai oauth), "" otherwise
+	BaseURL        string
+	CWD            string
+	Reasoning      string
 	// ReasoningSet reports the global reasoning level was explicitly chosen
 	// (--reasoning flag or config), so it wins over a model's DefaultReasoning.
 	// Derived from the RAW value before normalizing: non-empty raw (incl.
@@ -542,6 +552,39 @@ func canonicalProvider(name string) string {
 	return n
 }
 
+// ProviderSwitch describes a boot that could not use the configured provider
+// and resolved a different one instead.
+//
+// 🪤 It is recorded rather than recomputed, and that is load-bearing. The
+// lapse that matters most — a refresh_token the SERVER rejects (invalid_grant)
+// — is invisible to any cheap presence check: the token is right there on disk
+// and `hasCredential` says yes. Only an actual refresh ATTEMPT discovers it,
+// which is exactly what the fallback scan's ResolveCredentialFull already did.
+// Asking again later means either a second network round-trip and auth.json
+// write per session, or a wrong answer.
+type ProviderSwitch struct {
+	// From/FromModel is what config pins — the pair the user chose.
+	From, FromModel string
+	// To/ToModel is what boot resolved instead, on a credential it PROVED
+	// usable rather than merely present.
+	To, ToModel string
+	// Err is why From was unusable (an *ExpiredLoginError for a lapsed
+	// subscription; a plain "no credential" otherwise).
+	Err error
+}
+
+// Lapsed reports whether the pin failed because its login EXPIRED, as opposed
+// to never having been configured. Only the former is worth offering a switch
+// over: the user had this working, so "log in again" is a real remedy standing
+// beside "use the other provider just this once".
+func (s *ProviderSwitch) Lapsed() bool {
+	if s == nil {
+		return false
+	}
+	var expired *ExpiredLoginError
+	return errors.As(s.Err, &expired)
+}
+
 // CredentialError marks a credential-resolution failure: returned by
 // Resolve(requireCred=true), and carried on Resolved.CredentialErr by a
 // requireCred=false call. Hosts with a login flow (the interactive TUI) defer
@@ -696,6 +739,17 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// logged in. That way running plain `terva` after `/login` (any provider)
 	// never shows a "not logged in" banner.
 	userPickedProvider := args.Provider != ""
+	// Whether this provider is a PIN — the user's own choice — or merely the
+	// built-in default nobody selected. config.Provider is written only by
+	// /login, /model, or a repair, so a non-empty value means chosen; an empty
+	// one leaves provName at "anthropic" by default, which no one picked.
+	// Overriding a default is housekeeping; overriding a choice is a decision
+	// the user should get to make, so the two are recorded differently.
+	pinnedProvider := !userPickedProvider && canonicalProvider(eff.Config.Provider) != ""
+	// The failure that made the pin unusable, captured before the scan below
+	// overwrites credErr with the replacement's (nil) one.
+	pinnedErr := credErr
+	var switched *ProviderSwitch
 	if credErr != nil && !userPickedProvider && provName != "ollama" {
 		// Scan every known provider (not a hardcoded subset) so any
 		// env-based credential is discovered, e.g. an env-only
@@ -723,6 +777,9 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 				if EndpointDefaultModel(other) == "" {
 					continue
 				}
+				if pinnedProvider {
+					switched = &ProviderSwitch{From: provName, FromModel: eff.Config.Model, Err: pinnedErr}
+				}
 				provName = other
 				cred, method = endpointCredential(other, args.APIKey)
 				accountID, credErr = "", nil
@@ -730,6 +787,9 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 				break
 			}
 			if c, m, a, err := ResolveCredentialFull(other, args.APIKey); err == nil {
+				if pinnedProvider {
+					switched = &ProviderSwitch{From: provName, FromModel: eff.Config.Model, Err: pinnedErr}
+				}
 				provName = other
 				cred, method, accountID, credErr = c, m, a, err
 				break
@@ -780,7 +840,22 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	if !openCatalogue {
 		if _, err := provider.FindModel(provName, model); err != nil {
 			if m, err := provider.FindModel("", model); err == nil && m.Provider != provName {
-				model = DefaultModelForProvider(provName)
+				repaired := DefaultModelForProvider(provName)
+				// Say so, unless a provider switch is already being reported —
+				// that notice names both halves of the move, and a second line
+				// about the model would describe the same event twice.
+				//
+				// Silent until now, and it is the visible half of the failure:
+				// the chrome read "(openai) gpt-5" for someone who had chosen
+				// claude-opus-5, with nothing anywhere connecting the two. The
+				// sibling repair below (id not in the catalogue at all) has
+				// warned on stderr all along; this one never did.
+				if switched == nil && model != repaired {
+					fmt.Fprintf(os.Stderr,
+						"terva: model %q belongs to %q, not %q; using %q instead. Pick a different model with --model or /model.\n",
+						model, m.Provider, provName, repaired)
+				}
+				model = repaired
 			}
 		}
 	}
@@ -857,6 +932,13 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		}
 		resolvedModel = fm
 		model = fm.ID
+	}
+
+	// The destination half of a provider switch, filled once the model is
+	// final — the fallback picks the PROVIDER, and the model that goes with it
+	// is only known after the repair above has run.
+	if switched != nil {
+		switched.To, switched.ToModel = provName, model
 	}
 
 	// Base-URL precedence (highest first):
@@ -1283,6 +1365,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		Credential:               cred,
 		AuthMethod:               method,
 		CredentialErr:            credFailure,
+		ProviderSwitch:           switched,
 		AccountID:                accountID,
 		BaseURL:                  args.BaseURL,
 		CWD:                      args.CWD,
