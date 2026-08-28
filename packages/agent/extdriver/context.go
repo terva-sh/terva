@@ -141,9 +141,16 @@ func (d *Driver) EphemeralContext() string {
 	// twice while reporting a comparison. See
 	// scripts/eval/overlays/tail-background-guard-off.json.
 	guard := strings.TrimSpace(tailBackgroundGuard())
+	// Charged up front for the same reason as the leading guard: a trailing
+	// guard is still bytes this section spends, and maxEphemeralBytes has to
+	// keep meaning what it says under either arm. Absent by default.
+	trailing := strings.TrimSpace(tailBackgroundGuardTrailing())
 	total := 0
 	if guard != "" {
-		total = len(guard) + 2
+		total += len(guard) + 2
+	}
+	if trailing != "" {
+		total += len(trailing) + 2
 	}
 	for _, e := range entries {
 		block := wrapContext(e.source, e.card.label, clampBytes(e.card.text, maxCardBytes))
@@ -161,10 +168,28 @@ func (d *Driver) EphemeralContext() string {
 	if len(blocks) == 0 {
 		return ""
 	}
-	if guard == "" {
-		return strings.Join(blocks, "\n\n")
+	out := strings.Join(blocks, "\n\n")
+	if guard != "" {
+		out = guard + "\n\n" + out
 	}
-	return guard + "\n\n" + strings.Join(blocks, "\n\n")
+	if trailing != "" {
+		out = out + "\n\n" + trailing
+	}
+	return out
+}
+
+// tailBackgroundGuardTrailing renders the same prohibition as
+// tailBackgroundGuard, after the section instead of before it. Absent by
+// default -- the compiled fallback is a single space, which TrimSpace reduces
+// to "" -- so the shipped section is byte-identical to the one that predates
+// this key.
+//
+// It renders the twin of the key in packages/agent/build for the same reason
+// the leading guard does: one catalog entry, so the two call sites cannot
+// drift into two almost-identical prohibitions. The argument for why position
+// needed to become expressible at all lives on the twin.
+func tailBackgroundGuardTrailing() string {
+	return i18n.P("tail.background.guard.trailing", " ")
 }
 
 // tailBackgroundGuard leads the extension-context section on the ephemeral
@@ -186,6 +211,12 @@ func (d *Driver) EphemeralContext() string {
 // The guard therefore carries no act-prohibition. It briefly did; that clause
 // was removed after it measured as worthless on lore and read as actively
 // harmful here. See the note on the twin in packages/agent/build.
+//
+// What was NOT measured, here or on the twin, is the guard's position within
+// the block. EphemeralContext prepends it unconditionally, so no overlay can
+// produce a guard-last section, and the eval's every-rung-at-ceiling result
+// covers presence only. The hijack this guard exists to prevent was a
+// guard-last failure. The twin's comment carries the full argument.
 //
 // The built-in task board is NOT one of these cards, despite an earlier version
 // of this comment calling it the standing example. It rides as its own provider

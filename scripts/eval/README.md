@@ -527,6 +527,7 @@ prompt, and what the right and wrong choices look like:
 | `seed_tasks` | a task board that exists before the run — see "Seeding state" |
 | `seed_memory` | USER-scope memory entries (`memory/user.md`) written fresh before every run. Memory is durable by design, which for an A/B means one run's save would leak into the next run's prompt — so the harness resets it per run, seeded or not. Seeding also matters for what it makes *exist*: the memory policy block renders only when a scope is non-empty, so a scenario probing `memory.policy`'s wording must seed an entry or the text under test is absent from the prompt entirely. |
 | `seed_lore` | lore entries written to `$TERVA_HOME/lore/` before every run and reset after. That is the **global, un-trust-gated** slot: the workspace's own `.terva/lore/` needs the workspace trusted, and an untrusted arm loads no lore and says nothing about it, which is two arms serving identical text. Each entry is `{name, keys, text}`. Key it on a word the **prompt** contains or it never fires. Lore rides the ephemeral tail, so the pre-flight legitimately reports silence and the behavioural row is the only readout. |
+| `seed_ext_card` | extension context cards, as `{id, label, text}`. A card cannot be written as a file — it arrives over the extension wire — so the harness **generates a minimal protocol extension** (a hello frame, one `context_card` per entry, an idle loop that acks shutdown) into the arm's `$TERVA_HOME/extensions/evalcard`, reset per run. No capability is required; the driver accepts `context_card` unconditionally. **Verify the card reached the model with a live `--json` run** — `--dump-prompt` has no extension manager at all, so on this path a card that never arrived is indistinguishable from a card the model ignored. |
 
 Only tools the surface actually advertises can be tested. `--json` mode builds
 no swarm supervisor, raati engine or chat bridge, so `swarm_spawn`,
@@ -614,6 +615,166 @@ Four things to take from it:
 - **The guard's central claim is still untested.** Neither scenario reproduced
   the reply-hijack it exists to prevent. This run bounded one clause; it did not
   validate the guard.
+
+### Trying to reproduce the hijack: the lore path cannot
+
+A follow-up built two scenarios aimed squarely at the reply-hijack, from the
+shape that provably produced one — the `[inactive tool groups]` note took 0-of-20
+finals with *"Understood. I have the worktree tool group available if needed…"*,
+an acknowledgement of **operational guidance aimed at the model**.
+
+`lore-hijack-briefing` seeds exactly that: a briefing of working rules for the
+repository. `lore-hijack-inventory` seeds the other candidate property, an
+inventory of resources "available to you". Both use one trivial prompt whose
+answer must appear in the final text, so a displaced answer is visible.
+
+| scenario | arm a (guard off) | arm b (shipped) | verdict |
+|---|---:|---:|---|
+| `lore-hijack-briefing` | 5/5 | 5/5 | no signal (both 100%) |
+| … final answer | 5/5 | 5/5 | no signal (both 100%) |
+| `lore-hijack-inventory` | 5/5 | 5/5 | no signal (both 100%) |
+| … final answer | 5/5 | 5/5 | no signal (both 100%) |
+
+**No hijack in either arm.** Not a void run — the entries were confirmed present
+in the prompt with `--dump-prompt=json` before the numbers were trusted.
+
+The obvious suspect was the **arm**, not the block.
+`overlays/tail-background-guard-off.json` removes the `[background]` guard but
+leaves `loreReferenceFrame`, whose header already reads:
+
+> `REFERENCE KNOWLEDGE (setting, characters, and what came before — background the scene draws on…)`
+
+So arm a looked like it had never been unguarded — merely *already disclaimed*,
+making the comparison disclaimer-versus-disclaimer.
+
+**That story was wrong, and building the rung to test it is how we found out.**
+`overlays/tail-background-bare.json` strips both keys, and `loreReferenceFrame`
+treats a whitespace-only header as absent, so the bare arm serves the `<lore>`
+block with nothing above it at all:
+
+| scenario | arm a (**bare**) | arm b (shipped) | verdict |
+|---|---:|---:|---|
+| `lore-answer-not-block` | 5/5 | 5/5 | no signal (both 100%) |
+| `lore-hijack-briefing` | 5/5 | 5/5 | no signal (both 100%) |
+| `lore-hijack-inventory` | 5/5 | 5/5 | no signal (both 100%) |
+| … final answers | 15/15 | 15/15 | no signal |
+
+Arm a was confirmed genuinely bare with `--dump-prompt=json`: the entry fired, no
+guard, no header. **So the header was not the reason either.** Nothing on this
+path was doing the job, because on this path there is no job to do — the hijack
+does not occur on the lore path at all on this model, framed or bare.
+
+Four things follow:
+
+- **The lore path is saturated, not protected.** Three rungs — shipped,
+  guard-off, bare — all at ceiling. The guard cannot be shown to earn its place
+  here, and neither can the header.
+- **A control arm must strip everything that COULD do the job under test**, not
+  merely the string under test. The rule is sound and it is why the bare rung
+  exists — the same family as the empty-overlay trap above, and equally invisible
+  in the table.
+- **Do not publish a diagnosis drawn from one arm.** "Redundant with the frame"
+  was a clean, plausible story that fit every number then available. It was
+  committed, and it survived exactly one further run. A negative result explains
+  nothing on its own; it only narrows what to strip next.
+- **The hijack, if reproducible, needs the extdriver path.** An extension card's
+  `<extension-context source=…>` wrapper only attributes a source; it does not
+  editorialise. That was the last candidate — `seed_ext_card` was built to reach
+  it, and the next section is what it found.
+
+### The extdriver path: the last candidate, also negative
+
+`seed_ext_card` made that path testable, and `extcard-hijack-briefing` carries
+**byte-identical** card text, prompt and forbid regex to `lore-hijack-briefing`.
+The wrapper is the only variable: `<extension-context source="…">` in place of the
+`REFERENCE KNOWLEDGE` header. Note the ladder is shorter here — there is no header
+to strip, so `tail-background-guard-off.json` already **is** the bare arm.
+
+| scenario | arm a (guard off = bare here) | arm b (shipped) | verdict |
+|---|---:|---:|---|
+| `extcard-hijack-briefing` | 5/5 | 5/5 | no signal (both 100%) |
+| … final answer | 5/5 | 5/5 | no signal (both 100%) |
+
+**The seed was verified rather than assumed.** A live `--json` run against the
+run's own `home-a` quoted the card back verbatim. On this path that check is not
+optional: with no extension manager in a dump, a card that never arrived scores
+exactly like a card the model ignored.
+
+Three things follow:
+
+- **The wrapper hypothesis is dead.** Same text, same prompt, no disclaiming
+  header, guard removed — the score does not move.
+- **The guard is now measured at both of its call sites and has never changed
+  anything.** Four runs, two paths, every rung at ceiling.
+- **The 0-of-20 hijack was explained and fixed before this arc began, and none
+  of these runs could have reproduced it.** The cause is on the record in
+  `inactiveGroupNote` (`packages/core/agent.go`): the note's predecessor buried "needs no
+  reply" *mid-block*, after the inventory it governed, and prohibition-first
+  recovered 20 of 20 on the same A/B. The live variable is the guard's position
+  **inside** the block. Every rung above varies the guard's *presence* instead —
+  `loreReferenceFrame` and `EphemeralContext` both return `guard + "\n\n" + body`
+  unconditionally, so neither path can express a guard-last block at all. The
+  ladder ran from guard-first to no-guard, entirely inside the safe region, and
+  the failing configuration was never on the menu.
+
+So the ceiling is not a null result about the guard. It is a null result about a
+dimension these scenarios did not vary — until the rung below.
+
+## The guard-last rung: position, measured
+
+`tail.background.guard.trailing` makes position expressible through the catalog
+seam rather than a runtime knob. It is absent by default (a single space, per the
+whitespace convention), so the shipped composition is byte-identical to the one
+that predates the key; `overlays/tail-background-guard-last.json` blanks the
+leading key and sets this one to the same sentence. The arms therefore differ in
+the guard's **position and nothing else**, pinned by
+`TestGuardLastArmMovesTheGuardAndNothingElse`.
+
+| scenario | arm a (guard last) | arm b (shipped, guard first) |
+|---|---:|---:|
+| `lore-hijack-briefing` | 5/5 | 5/5 |
+| `extcard-hijack-briefing` | 5/5 | 5/5 |
+
+This is the rung where verifying the arm mattered most. The arms are
+**length-neutral by construction** — the same sentence, moved — so the pre-flight
+byte-diff is blind to them by design and reports `+0` on every row. Lore was
+confirmed with `--dump-prompt=json` (arm a TRAIL, arm b LEAD). The extdriver path
+was confirmed with `TERVA_DEBUG_ANTHROPIC`, reading the request body actually
+sent: `[background]` at offset 483, after the card, in arm a; at offset 0, before
+it, in arm b.
+
+**The first attempt at that check was wrong and would have passed.** It asked the
+model to reproduce its `<extension-context>` section and searched the reply for
+the marker — but the request itself contained the word, so the search matched the
+echo of the prompt. It also asked the model to do the one thing the guard
+forbids, so a correct refusal would have read as a missing block. The request
+dump has neither failure mode: it is what was sent, not what the model said about
+what was sent.
+
+### What this settles, and what it does not
+
+It does **not** vindicate the guard, and it does not close the question. The
+measured failure was a prohibition buried **mid-block**, after the inventory it
+governed. This rung puts it at the **end** — a third position, and by recency
+arguably a strong one. Guard-first and guard-last may both work for the same
+reason: the guard sits against a boundary the model is attending to. Mid-block
+burial is still unbuilt.
+
+There is also a length confound. The note that hijacked was a long inventory;
+these blocks are three lines, and a guard "buried" in three lines is still
+adjacent to both ends. Burial may need length to exist at all.
+
+**The sharper reading is about the scenarios, not the guard.** Six runs, four
+rungs, two call sites: every arm has scored 100%. No configuration of these
+scenarios has reproduced a hijack, including the ones built specifically to. That
+is now better evidence against the scenarios than for or against the guard — they
+may simply be too easy to fail. The next move is a scenario that *can* fail, not
+a fifth rung on this ladder.
+
+One operational note: an arm on this path needs `auth.json` in the arm home.
+`ab.sh` symlinks it already, but a hand-rolled probe that forgets dies with
+`no credential for anthropic` rather than running without one — which is the
+kinder failure.
 
 ## The prompts pass: where it stands
 

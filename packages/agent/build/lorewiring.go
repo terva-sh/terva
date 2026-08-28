@@ -178,23 +178,77 @@ func (r *Resolved) tailProvider(ag *core.Agent, record bool) func() string {
 // Only the per-turn tail is framed. The cached prefix (PlaceConstant) and the
 // routed-voice system prompt sit BEFORE the conversation, where "the
 // conversation above" names nothing.
+// Two pieces of text sit above the block, and BOTH are separately strippable
+// by an overlay. Whitespace-only means absent, for either one.
+//
+// It is spelled as whitespace rather than "" because the catalog cannot express
+// an empty override: keyedText treats "" as a miss and falls back to the
+// compiled English, so an empty overlay would silently serve the very text it
+// was written to remove.
+//
+// Why the HEADER is strippable and not just the guard: the guard-off arm
+// measured nothing, twice, and this header was the obvious suspect. It already
+// says "background the scene draws on", so that arm was arguably still
+// disclaimed and the comparison disclaimer-versus-disclaimer.
+//
+// Stripping both settled it, and the answer was NO. The bare arm scores exactly
+// what the shipped text scores. The header was not the reason either. Nothing
+// on this path was doing the job, because on this path there is no job to do --
+// the reply-hijack does not occur here at all, framed or bare.
+//
+// The rung stays, because the rule that motivated building it holds even though
+// its first application guessed wrong: a control arm has to strip everything
+// that COULD do the job under test, not merely the string under test. That is
+// what turned a plausible story into a measurement that contradicted it.
+//
+// That gives four rungs the eval can stand on:
+//
+//	shipped    guard + header + block
+//	guard-off  header + block          (overlays/tail-background-guard-off.json)
+//	bare       block                   (overlays/tail-background-bare.json)
+//	guard-last header + block + guard  (overlays/tail-background-guard-last.json)
+//
+// The first three vary the guard's PRESENCE. Only guard-last varies its
+// POSITION, which is the dimension the measured hijack actually turned on --
+// see tailBackgroundGuardTrailing.
+//
+// extdriver's section skips its guard the same way. It has no header to strip.
 func loreReferenceFrame(block string) string {
-	frame := i18n.P("lore.reference.frame",
-		"REFERENCE KNOWLEDGE (setting, characters, and what came before — background the scene draws on, not a record of where it stands now; where this disagrees with the conversation above, the conversation is what actually happened):") +
-		"\n" + block
-	// A whitespace-only guard means NO guard, and has to yield EXACTLY the
-	// pre-guard text -- not a blank line where the sentence used to be, because
-	// an arm that also differs in whitespace differs somewhere other than the
-	// sentence under test. It is spelled as whitespace rather than "" because
-	// the catalog cannot express an empty override: keyedText treats "" as a
-	// miss and falls back to the compiled English, so an empty overlay would
-	// silently serve the guard it was written to remove. That is the eval's
-	// control arm (scripts/eval/overlays/tail-background-guard-off.json), and
-	// extdriver's section skips its guard the same way.
+	frame := block
+	if header := strings.TrimSpace(i18n.P("lore.reference.frame",
+		"REFERENCE KNOWLEDGE (setting, characters, and what came before — background the scene draws on, not a record of where it stands now; where this disagrees with the conversation above, the conversation is what actually happened):")); header != "" {
+		frame = header + "\n" + block
+	}
 	if guard := strings.TrimSpace(tailBackgroundGuard()); guard != "" {
-		return guard + "\n\n" + frame
+		frame = guard + "\n\n" + frame
+	}
+	if trailing := strings.TrimSpace(tailBackgroundGuardTrailing()); trailing != "" {
+		frame = frame + "\n\n" + trailing
 	}
 	return frame
+}
+
+// tailBackgroundGuardTrailing renders the SAME prohibition as
+// tailBackgroundGuard, after the block instead of before it. It is ABSENT by
+// default: the compiled fallback is a single space, which TrimSpace reduces to
+// "", so the shipped composition is byte-identical to the one that predates
+// this key. Nothing ships trailing.
+//
+// It exists because position was the one dimension the eval could not vary.
+// Both frames concatenated guard-then-body unconditionally, so every arm
+// varied the guard's presence and none could build the configuration that
+// actually hijacked -- the inactive-groups note took 0-of-20 final answers with
+// its prohibition buried after the inventory, and 20-of-20 once it led
+// (inactiveGroupNote, packages/core/agent.go).
+//
+// Two keys rather than one position flag because the catalog is the seam the
+// eval already owns: an overlay sets this key to the guard text and blanks
+// tail.background.guard, and no runtime knob has to ship to make the arm
+// expressible. The single space is load-bearing for the same reason the other
+// overlays use one -- keyedText treats "" as a MISS and falls back to the
+// compiled English, so a genuinely empty default would serve the guard twice.
+func tailBackgroundGuardTrailing() string {
+	return i18n.P("tail.background.guard.trailing", " ")
 }
 
 // tailBackgroundGuard is the prohibition that leads a REFERENCE block on the
@@ -218,7 +272,18 @@ func loreReferenceFrame(block string) string {
 //
 // Prohibition-first because that ordering is measured rather than assumed: the
 // inactive-groups note took 0-of-20 final answers before the prohibition led and
-// 20-of-20 after.
+// 20-of-20 after (see inactiveGroupNote in packages/core/agent.go, which holds
+// the record).
+//
+// That ordering is STRUCTURAL, not a catalog choice. loreReferenceFrame and
+// extdriver's EphemeralContext both concatenate guard-then-body unconditionally,
+// so no i18n overlay can move the guard to the end of the block. Which matters
+// for how the eval's result should be read: scripts/eval measured this guard at
+// both call sites, four runs, every rung at ceiling -- but every rung varied the
+// guard's PRESENCE (guard-first versus absent). The configuration that actually
+// hijacked is guard-LAST, and neither path can build it. Do not read "measured,
+// changed nothing" as licence to delete this. The run that would justify
+// deleting it has never been possible to perform.
 //
 // It used to carry a second clause, "not a request to act on". That clause is
 // GONE, removed because it was measured and bought nothing: on Haiku 4.5, 10 of
