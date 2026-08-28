@@ -307,14 +307,14 @@ const (
 	// into it, remove one. Membership reads ride SessionInfo.World. W5b adds
 	// sessionless metadata edits (rename/description/cover) and the bundle
 	// verbs — export a World with its cards embedded, import one elsewhere.
-	MethodWorldsList             Method = "worlds.list"                // result WorldsListResult
-	MethodWorldSave              Method = "worlds.save"                // params WorldSaveParams, result WorldView (sess in frame)
-	MethodWorldDelete            Method = "worlds.delete"              // params WorldDeleteParams
-	MethodWorldUpdate            Method = "worlds.update"              // params WorldUpdateParams, result WorldView
-	MethodWorldSetCharacterModel Method = "worlds.set_character_model" // params WorldSetCharacterModelParams, result WorldView
-	MethodWorldSetModel          Method = "worlds.set_model"           // params WorldSetModelParams, result WorldView
-	MethodWorldsExport           Method = "worlds.export"              // params WorldExportParams, result WorldExport
-	MethodWorldsImport           Method = "worlds.import"              // params WorldImportParams, result WorldView
+	MethodWorldsList              Method = "worlds.list"                // result WorldsListResult
+	MethodWorldsSave              Method = "worlds.save"                // params WorldSaveParams, result WorldView (sess in frame)
+	MethodWorldsDelete            Method = "worlds.delete"              // params WorldDeleteParams
+	MethodWorldsUpdate            Method = "worlds.update"              // params WorldUpdateParams, result WorldView
+	MethodWorldsSetCharacterModel Method = "worlds.set_character_model" // params WorldSetCharacterModelParams, result WorldView
+	MethodWorldsSetModel          Method = "worlds.set_model"           // params WorldSetModelParams, result WorldView
+	MethodWorldsExport            Method = "worlds.export"              // params WorldExportParams, result WorldExport
+	MethodWorldsImport            Method = "worlds.import"              // params WorldImportParams, result WorldView
 	// Saved-World CONTENT, sessionless (WS-1) — the roster, lorebook, and
 	// coordination a saved World carries, editable without opening a scene in
 	// it. The naming carries the scope: `world.*` writes the session's working
@@ -407,7 +407,7 @@ func (m Method) Group() Group {
 		MethodBackgroundsList, MethodBackgroundsImport, MethodBackgroundsDelete, MethodBackgroundBind, MethodBackgroundGenerate,
 		MethodNoteSet, MethodUserBind, MethodCastAdd, MethodCastRemove, MethodCastSpeak,
 		MethodWorldLorePut, MethodWorldLoreDelete, MethodWorldSet,
-		MethodWorldsList, MethodWorldSave, MethodWorldDelete, MethodWorldUpdate, MethodWorldSetCharacterModel, MethodWorldSetModel, MethodWorldsExport, MethodWorldsImport, MethodWorldsDoctor,
+		MethodWorldsList, MethodWorldsSave, MethodWorldsDelete, MethodWorldsUpdate, MethodWorldsSetCharacterModel, MethodWorldsSetModel, MethodWorldsExport, MethodWorldsImport, MethodWorldsDoctor,
 		MethodWorldsLorePut, MethodWorldsLoreDelete, MethodWorldsSet, MethodWorldsAddCharacter, MethodWorldsRemoveCharacter, MethodWorldsEditCharacter, MethodWorldsCreateCharacter,
 		MethodCardGroupsList, MethodCardGroupSave, MethodCardGroupDelete, MethodCardGroupSetMembers,
 		MethodSessionGroupsList, MethodSessionGroupSave, MethodSessionGroupDelete, MethodSessionGroupSetMembers,

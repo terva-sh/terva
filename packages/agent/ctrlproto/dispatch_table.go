@@ -504,16 +504,16 @@ var dispatch = map[Method]handler{
 	MethodWorldsList: get(noWorld, func(c WorldController, ctx context.Context, f Frame) (WorldsListResult, error) {
 		return c.WorldsList(ctx)
 	}),
-	MethodWorldSave: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldSaveParams) (WorldView, error) {
+	MethodWorldsSave: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldSaveParams) (WorldView, error) {
 		return c.WorldSave(ctx, f.Sess, p)
 	}),
-	MethodWorldUpdate: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldUpdateParams) (WorldView, error) {
+	MethodWorldsUpdate: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldUpdateParams) (WorldView, error) {
 		return c.WorldUpdate(ctx, p)
 	}),
-	MethodWorldSetCharacterModel: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldSetCharacterModelParams) (WorldView, error) {
+	MethodWorldsSetCharacterModel: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldSetCharacterModelParams) (WorldView, error) {
 		return c.WorldSetCharacterModel(ctx, p)
 	}),
-	MethodWorldSetModel: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldSetModelParams) (WorldView, error) {
+	MethodWorldsSetModel: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldSetModelParams) (WorldView, error) {
 		return c.WorldSetModel(ctx, p)
 	}),
 	MethodWorldsExport: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldExportParams) (WorldExport, error) {
@@ -522,7 +522,7 @@ var dispatch = map[Method]handler{
 	MethodWorldsImport: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldImportParams) (WorldView, error) {
 		return c.WorldsImport(ctx, p)
 	}),
-	MethodWorldDelete: act(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldDeleteParams) error {
+	MethodWorldsDelete: act(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldDeleteParams) error {
 		return c.WorldDelete(ctx, p)
 	}),
 	MethodWorldsLorePut: ask(noWorld, func(c WorldController, ctx context.Context, f Frame, p WorldsLorePutParams) (WorldView, error) {

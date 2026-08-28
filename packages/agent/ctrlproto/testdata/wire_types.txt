@@ -1,0 +1,1403 @@
+Answer
+	answer	string	omitempty
+	answers	[]string	omitempty
+	note	string	omitempty
+	declined	bool	omitempty
+AnswerParams
+	ask_id	string
+	answer	Answer	omitempty
+	answers	[]Answer	omitempty
+ApproveParams
+	call_id	string
+	decision	Decision
+ArchivedSessionInfo
+	id	string
+	title	string	omitempty
+	provider	string	omitempty
+	model	string	omitempty
+	message_count	int	omitempty
+	total_cost	float64	omitempty
+	preview	string	omitempty
+	started	string	omitempty
+	archived_at	string	omitempty
+	bytes	int64	omitempty
+	original	int64	omitempty
+	experience	string	omitempty
+	card	string	omitempty
+	world	string	omitempty
+ArchivedSessionsResult
+	sessions	[]ArchivedSessionInfo
+AskQuestion
+	question	string
+	slug	string	omitempty
+	options	[]string	omitempty
+	multi_select	bool	omitempty
+	allow_custom	bool	omitempty
+AskRequest
+	ask_id	string
+	question	string
+	options	[]string	omitempty
+	multi_select	bool	omitempty
+	allow_custom	bool	omitempty
+	questions	[]AskQuestion	omitempty
+AttachmentRef
+	id	string
+AuthEndpointRemoveParams
+	id	string
+AuthField
+	name	string
+	label	string
+	type	string
+	required	bool	omitempty
+	required_unless	string	omitempty
+	default	string	omitempty
+	placeholder	string	omitempty
+	help	string	omitempty
+AuthFlowRef
+	flow	string
+AuthFlowStep
+	flow	string
+	kind	string
+	title	string	omitempty
+	lines	[]string	omitempty
+	url	string	omitempty
+	user_code	string	omitempty
+	fields	[]AuthField	omitempty
+AuthLoginStartParams
+	provider	string
+	method	string
+	local	bool	omitempty
+AuthLoginSubmitParams
+	flow	string
+	values	map[string]string
+AuthLogoutParams
+	provider	string
+AuthState
+	kind	string
+	flow	string	omitempty
+	provider	string	omitempty
+	method	string	omitempty
+	url	string	omitempty
+	user_code	string	omitempty
+	message	string	omitempty
+BackgroundBindParams
+	background	string
+BackgroundDeleteParams
+	id	string
+BackgroundGenerateParams
+	prompt	string
+	negative_prompt	string	omitempty
+	size	string	omitempty
+	backend	string	omitempty
+BackgroundImportParams
+	path	string	omitempty
+	bytes	[]byte	omitempty
+BackgroundView
+	id	string
+	url	string
+BackgroundsListResult
+	backgrounds	[]BackgroundView
+CacheSample
+	hit_rate	float64
+	prompt_tokens	int
+	write_tokens	int	omitempty
+	saved_usd	float64	omitempty
+CardDeleteParams
+	id	string
+CardDuplicateParams
+	id	string
+	name	string
+CardEditParams
+	id	string
+	card	json.RawMessage
+CardExport
+	filename	string
+	mime_type	string
+	bytes	[]byte
+CardExportParams
+	id	string
+	format	string	omitempty
+CardFavoriteParams
+	id	string
+	favorite	bool
+CardGetParams
+	id	string
+CardGroupDeleteParams
+	id	string
+CardGroupSaveParams
+	id	string	omitempty
+	name	string
+	color	string	omitempty
+CardGroupSetMembersParams
+	id	string
+	members	[]string
+CardGroupsResult
+	groups	[]GroupView
+CardHistoryParams
+	id	string
+CardHistoryResult
+	revisions	[]CardRevision
+CardImportParams
+	path	string	omitempty
+	bytes	[]byte	omitempty
+	url	string	omitempty
+CardLintFinding
+	rule	string
+	severity	string
+	field	string	omitempty
+	message	string
+	detail	string	omitempty
+CardLintParams
+	id	string
+CardLintResult
+	findings	[]CardLintFinding
+CardModelSetParams
+	card	string
+	provider	string	omitempty
+	model	string	omitempty
+CardRestoreParams
+	id	string
+	ref	string
+CardRevision
+	ref	string
+	saved	time.Time
+	bytes	int
+	name	string	omitempty
+	fields	[]string	omitempty
+	portrait	bool	omitempty
+CardRevisionParams
+	id	string
+	ref	string
+CardRevisionView
+	ref	string
+	saved	time.Time
+	name	string	omitempty
+	fields	[]string	omitempty
+	portrait	bool	omitempty
+	raw	json.RawMessage
+CardSummary
+	id	string
+	name	string
+	creator	string	omitempty
+	character_version	string	omitempty
+	spec_version	string	omitempty
+	tags	[]string	omitempty
+	avatar_url	string	omitempty
+	greetings	int
+	book_entries	int	omitempty
+	has_phi	bool	omitempty
+	added	time.Time	omitempty
+	updated	time.Time	omitempty
+	favorite	bool	omitempty
+	variant_of	string	omitempty
+	world_of	string	omitempty
+CardView
+	<embedded>	CardSummary
+	raw	json.RawMessage
+	warnings	[]string	omitempty
+CardsListResult
+	cards	[]CardSummary
+CastMemberParams
+	name	string
+	ref	string	omitempty
+	provider	string	omitempty
+	model	string	omitempty
+CastRoute
+	provider	string	omitempty
+	model	string	omitempty
+CastSpeakParams
+	actor	string
+CatalogView
+	lang	string
+	singular	map[string]string	omitempty
+	plural	map[string]map[string]string	omitempty
+CharactersView
+	cards	[]CardSummary
+	personas	[]PersonaSummary
+ChatBridgeState
+	state	string
+	connector	string	omitempty
+	username	string	omitempty
+	paired_id	string	omitempty
+	session	string	omitempty
+	error	string	omitempty
+ChatServiceInfo
+	name	string
+	kind	string	omitempty
+	dev	bool	omitempty
+	configured	bool
+	paired	bool
+ChatView
+	services	[]ChatServiceInfo	omitempty
+	bridge	ChatBridgeState
+	daemon_pid	int	omitempty
+CommandEntry
+	ext	string
+	name	string
+	description	string	omitempty
+CommandsView
+	commands	[]CommandEntry
+ComposerDraft
+	text	string
+	source	string	omitempty
+	updated_at	*time.Time	omitempty
+ContextBreakdown
+	provider	string	omitempty
+	model	string	omitempty
+	window	int
+	system_bytes	int
+	ext_guidance_bytes	int
+	tool_bytes	int
+	tool_count	int
+	tool_bytes_installed	int	omitempty
+	tool_count_installed	int	omitempty
+	ext_bytes	int
+	lazy_note_bytes	int	omitempty
+	transcript_bytes	int
+	total_bytes	int
+	messages	[]ContextMessage
+	context_tokens	int	omitempty
+	cumulative	core.WireUsage
+	subscription	bool	omitempty
+	usage_windows	[]UsageWindowInfo	omitempty
+	tree	*ContextNode	omitempty
+	rev	int	omitempty
+	lore_fired	[]ContextLoreEntry	omitempty
+	cache	*ContextCache	omitempty
+ContextCache
+	supported	bool
+	last_request	core.WireUsage
+	session	core.WireUsage
+	recent	[]CacheSample	omitempty
+ContextLoreEntry
+	name	string
+	source	string	omitempty
+	constant	bool	omitempty
+	keys	[]string	omitempty
+	dropped	bool	omitempty
+ContextMessage
+	index	int
+	kind	string
+	bytes	int
+ContextNode
+	id	string
+	kind	string
+	label	string
+	bytes	int
+	tokens	int	omitempty
+	summary	string	omitempty
+	content	string	omitempty
+	expandable	bool	omitempty
+	reveal	string	omitempty
+	meta	map[string]string	omitempty
+	children	[]ContextNode	omitempty
+ContextNodeParams
+	id	string
+	op	string	omitempty
+ContextNodeResult
+	node	ContextNode
+ContextResult
+	breakdown	ContextBreakdown
+CreateOpts
+	title	string	omitempty
+	provider	string	omitempty
+	model	string	omitempty
+	persona	string	omitempty
+	template	string	omitempty
+	experience	string	omitempty
+	card	string	omitempty
+	cast	map[string]string	omitempty
+	greeting	int	omitempty
+	world	string	omitempty
+	background	string	omitempty
+CreditsInfo
+	unlimited	bool	omitempty
+	has_credits	bool	omitempty
+	balance	float64	omitempty
+	used	float64	omitempty
+Decision
+	allow	bool
+	reason	string	omitempty
+	remember_tool	bool	omitempty
+	remember_all	bool	omitempty
+	persist_tool	bool	omitempty
+	persist_scopes	[]string	omitempty
+DefaultForParams
+	card	string	omitempty
+	world	string	omitempty
+DefaultForResult
+	provider	string
+	model	string
+	source	DefaultSource
+DirectTurnParams
+	text	string
+DoctorDecision
+	proposal_id	string
+	field	string	omitempty
+	rationale	string	omitempty
+	accepted	bool
+	reason	string	omitempty
+DoctorParams
+	id	string
+	decisions	[]DoctorDecision	omitempty
+	provider	string	omitempty
+	model	string	omitempty
+	session	string	omitempty
+	steer	string	omitempty
+DoctorProposal
+	id	string
+	field	string
+	severity	string
+	rationale	string
+	before	string
+	after	string
+	remove	bool	omitempty
+DoctorResult
+	proposals	[]DoctorProposal
+	note	string	omitempty
+Error
+	code	string
+	message	string
+Event
+	<embedded>	core.WireEvent
+	permission	*PermissionRequest	omitempty
+	ask	*AskRequest	omitempty
+	resolved	*Resolved	omitempty
+	snapshot	*Snapshot	omitempty
+	info	*SessionInfo	omitempty
+	queued	[]string	omitempty
+	surface_id	string	omitempty
+	locale	string	omitempty
+	notice	*Notice	omitempty
+	replay	*ReplayState	omitempty
+	auth	*AuthState	omitempty
+ExtensionConfigField
+	key	string
+	label	string	omitempty
+	type	string	omitempty
+	description	string	omitempty
+	required	bool	omitempty
+	secret	bool	omitempty
+	options	[]string	omitempty
+	saved	string	omitempty
+	default	string	omitempty
+	has_saved	bool	omitempty
+ExtensionInfo
+	name	string
+	version	string	omitempty
+	language	string	omitempty
+	description	string	omitempty
+	scope	string	omitempty
+	status	string
+	enabled	bool
+	tools	int	omitempty
+	commands	int	omitempty
+	note	string	omitempty
+	global_enabled	bool	omitempty
+	project_disabled	bool	omitempty
+	user_config_disabled	bool	omitempty
+	has_config	bool	omitempty
+	has_log	bool	omitempty
+	config	[]ExtensionConfigField	omitempty
+ExtensionsView
+	extensions	[]ExtensionInfo
+FavoriteParams
+	provider	string
+	model	string
+	on	bool
+FileEntry
+	path	string
+	dir	bool	omitempty
+FilesListParams
+	dir	string	omitempty
+	recursive	bool	omitempty
+	respect_gitignore	bool	omitempty
+FilesListResult
+	files	[]FileEntry
+	truncated	bool	omitempty
+Frame
+	kind	Kind
+	id	uint64	omitempty
+	sess	string	omitempty
+	hello	*Hello	omitempty
+	method	Method	omitempty
+	params	json.RawMessage	omitempty
+	result	json.RawMessage	omitempty
+	error	*Error	omitempty
+	event	*Event	omitempty
+GenerateTitleResult
+	title	string
+GrantScope
+	display	string
+	pattern	string
+GroupView
+	id	string
+	name	string
+	color	string	omitempty
+	members	[]string
+Hello
+	role	string
+	protocol	int
+	agent	string	omitempty
+	version	string	omitempty
+	groups	[]Group
+	features	[]string	omitempty
+	locale	string	omitempty
+	cwd	string	omitempty
+	jailed	bool	omitempty
+	max_upload_bytes	int64	omitempty
+	max_attachment_bytes	int64	omitempty
+HistoryParams
+	before	int
+	limit	int	omitempty
+	epoch	uint64	omitempty
+HistoryResult
+	epoch	uint64
+	base	int
+	total	int
+	messages	[]core.WireMessage
+I18nCatalogParams
+	lang	string	omitempty
+I18nCatalogResult
+	catalog	CatalogView
+Image
+	mime_type	string
+	data	[]byte
+KV
+	key	string
+	value	string
+	note	string	omitempty
+	mono	bool	omitempty
+ListItem
+	text	string
+	note	string	omitempty
+	tone	string	omitempty
+	action_id	string	omitempty
+LoreEntry
+	name	string
+	keys	[]string	omitempty
+	constant	bool	omitempty
+	source	string	omitempty
+	content	string	omitempty
+	editable	bool	omitempty
+	scope	string	omitempty
+	fired	bool	omitempty
+	matched_keys	[]string	omitempty
+	dropped_for_budget	bool	omitempty
+LoreView
+	entries	[]LoreEntry
+	can_project	bool	omitempty
+MCPServerInfo
+	name	string
+	scope	string	omitempty
+	description	string	omitempty
+	status	string
+	enabled	bool
+	tools	int	omitempty
+	note	string	omitempty
+	user_disabled	bool	omitempty
+	project_disabled	bool	omitempty
+	connected	bool	omitempty
+MCPView
+	servers	[]MCPServerInfo
+MemoryArchivedEntry
+	ref	string
+	title	string	omitempty
+	keys	[]string	omitempty
+	secondary_keys	[]string	omitempty
+	bytes	int	omitempty
+	text	string	omitempty
+	fired	bool	omitempty
+	matched_keys	[]string	omitempty
+	dropped_for_budget	bool	omitempty
+MemoryScope
+	label	string
+	entries	[]string	omitempty
+	bytes	int
+	max_bytes	int
+	max_count	int
+	archived	[]MemoryArchivedEntry	omitempty
+	archived_bytes	int	omitempty
+	archived_max_bytes	int	omitempty
+	problems	[]string	omitempty
+MemoryView
+	user	MemoryScope
+	project	MemoryScope
+	project_bound	bool	omitempty
+MessageDeleteParams
+	epoch	uint64
+	index	int
+MessageEditParams
+	epoch	uint64
+	index	int
+	text	string
+ModelInfo
+	id	string
+	provider	string
+	context_window	int	omitempty
+	max_output	int	omitempty
+	reasoning	bool	omitempty
+	max_native	bool	omitempty
+	default_reasoning	string	omitempty
+	inherit_reasoning	string	omitempty
+	inherit_reasoning_from	ReasoningSource	omitempty
+	ladder	string	omitempty
+	current	bool	omitempty
+	favorite	bool	omitempty
+	default	bool	omitempty
+	default_scope	DefaultScope	omitempty
+	auth	string	omitempty
+	display_name	string	omitempty
+	renamed	bool	omitempty
+ModelParamSpec
+	key	string
+	label	string
+	kind	string
+	default	string	omitempty
+	value	string	omitempty
+	min	float64	omitempty
+	max	float64	omitempty
+	help	string	omitempty
+ModelParamsParams
+	provider	string
+	model	string
+ModelParamsSetParams
+	provider	string
+	model	string
+	values	map[string]string
+ModelParamsView
+	provider	string
+	model	string
+	has_override	bool	omitempty
+	params	[]ModelParamSpec
+ModelSwitchParams
+	provider	string	omitempty
+	model	string
+ModelsResult
+	models	[]ModelInfo
+	reasoning_ladders	map[string][]ReasoningRungInfo	omitempty
+NextSceneParams
+	commit	bool	omitempty
+	title	string	omitempty
+	summary	string	omitempty
+	opening	string	omitempty
+	world	string	omitempty
+	provider	string	omitempty
+	model	string	omitempty
+NextSceneResult
+	title	string	omitempty
+	summary	string	omitempty
+	opening	string	omitempty
+	note	string	omitempty
+	session	*SessionInfo	omitempty
+	world_id	string	omitempty
+	world_name	string	omitempty
+NextStepParams
+	on_demand	bool	omitempty
+NextStepResult
+	line	string
+NoteSetParams
+	text	string
+Notice
+	level	string
+	text	string
+	ext	string	omitempty
+	kind	string	omitempty
+	data	map[string]string	omitempty
+PanelView
+	ext	string	omitempty
+	lines	[]string
+	footer	string	omitempty
+PermissionRequest
+	call_id	string
+	tool	string
+	preview	string	omitempty
+	agent	string	omitempty
+	scopes	[]GrantScope	omitempty
+PermissionRule
+	tool	string
+	args	string	omitempty
+	decision	string
+	reason	string	omitempty
+	source	string	omitempty
+	removable	bool	omitempty
+PermissionsView
+	mode	string
+	rules	[]PermissionRule	omitempty
+	allow_all	bool	omitempty
+	grants	[]string	omitempty
+	cwd	string	omitempty
+	trusted	bool	omitempty
+PersonaDeleteParams
+	ref	string	omitempty
+	name	string	omitempty
+PersonaEditParams
+	ref	string	omitempty
+	<embedded>	PersonaWriteParams
+PersonaGetParams
+	ref	string	omitempty
+	name	string	omitempty
+PersonaSummary
+	name	string
+	ref	string
+	namespace	string	omitempty
+	specialty	string	omitempty
+	summary	string	omitempty
+	emoji	string	omitempty
+	accent_color	string	omitempty
+	group	string	omitempty
+	immersive	bool	omitempty
+	origin	string
+	editable	bool	omitempty
+PersonaView
+	<embedded>	PersonaSummary
+	pronunciation	string	omitempty
+	recommended_skills	[]string	omitempty
+	good_for	[]string	omitempty
+	avoid_for	[]string	omitempty
+	introduction	string	omitempty
+	charter	string	omitempty
+	extends	string	omitempty
+	sessions_using	int	omitempty
+PersonaWriteParams
+	name	string
+	pronunciation	string	omitempty
+	specialty	string	omitempty
+	summary	string	omitempty
+	emoji	string	omitempty
+	accent_color	string	omitempty
+	group	string	omitempty
+	recommended_skills	[]string	omitempty
+	good_for	[]string	omitempty
+	avoid_for	[]string	omitempty
+	immersive	bool	omitempty
+	introduction	string	omitempty
+	charter	string	omitempty
+	extends	string	omitempty
+PersonasListResult
+	personas	[]PersonaSummary
+PostLineParams
+	actor	string	omitempty
+	text	string
+PromptParams
+	text	string
+	images	[]Image	omitempty
+	attachments	[]AttachmentRef	omitempty
+ProviderInfo
+	id	string
+	label	string
+	method	string	omitempty
+	expiry	string	omitempty
+	expired	bool	omitempty
+	offers	[]string	omitempty
+	base_url	string	omitempty
+	model	string	omitempty
+	endpoint	bool	omitempty
+	note	[]string	omitempty
+ProvidersView
+	providers	[]ProviderInfo
+	can_login	bool	omitempty
+QueueParams
+	text	string
+QueueSetParams
+	texts	[]string
+RaatiHistoryItem
+	id	string
+	when	string	omitempty
+	question	string
+	class	string	omitempty
+	decision	string
+	degraded	bool	omitempty
+	tally	*RaatiTally	omitempty
+	minority	[]string	omitempty
+RaatiInquiry
+	unit	string
+	question	string
+	answer	string	omitempty
+	source	string	omitempty
+	round	int	omitempty
+RaatiProfileInfo
+	name	string
+	description	string	omitempty
+RaatiTally
+	approve	int
+	reject	int
+	abstain	int
+	absent	int
+RaatiUnit
+	name	string
+	accent	string	omitempty
+	binding	string	omitempty
+	status	string
+	verdict	string	omitempty
+	confidence	float64	omitempty
+	rationale	string	omitempty
+	why	string	omitempty
+	blind	string	omitempty
+RaatiView
+	running	bool
+	question	string	omitempty
+	class	string	omitempty
+	round	int	omitempty
+	seat_order	string	omitempty
+	phase	string	omitempty
+	archived	bool	omitempty
+	when	string	omitempty
+	history	[]RaatiHistoryItem	omitempty
+	binding	string	omitempty
+	units	[]RaatiUnit	omitempty
+	decision	string	omitempty
+	degraded	bool	omitempty
+	tally	*RaatiTally	omitempty
+	minority	[]RaatiVoice	omitempty
+	inquiries	[]RaatiInquiry	omitempty
+	profiles	[]RaatiProfileInfo	omitempty
+	error	string	omitempty
+RaatiVoice
+	unit	string
+	rationale	string	omitempty
+RealizeCharacter
+	name	string
+	role	string	omitempty
+	description	string	omitempty
+	personality	string	omitempty
+	first_mes	string	omitempty
+	notes	string	omitempty
+RealizeLore
+	name	string
+	keys	[]string	omitempty
+	always_on	bool	omitempty
+	content	string
+RealizeParams
+	commit	bool	omitempty
+	proposal	*RealizeProposal	omitempty
+	provider	string	omitempty
+	model	string	omitempty
+RealizeProposal
+	world	RealizeWorld
+	protagonist	RealizeCharacter
+	roster	[]RealizeCharacter	omitempty
+	lore	[]RealizeLore	omitempty
+	cold_open	string	omitempty
+	cold_open_actor	string	omitempty
+	coordination	string	omitempty
+	given_by_author	[]string	omitempty
+	invented_by_you	[]string	omitempty
+	note	string	omitempty
+RealizeResult
+	proposal	*RealizeProposal	omitempty
+	session	*SessionInfo	omitempty
+RealizeWorld
+	name	string
+	description	string	omitempty
+ReasoningRungInfo
+	level	string
+	budget	int	omitempty
+	effort	string	omitempty
+	same_as	string	omitempty
+ReasoningSetParams
+	level	string
+RenameParams
+	title	string
+ReplayControlParams
+	action	string
+	position	int	omitempty
+	multiplier	float64	omitempty
+	unit	string	omitempty
+ReplayState
+	playing	bool
+	position	int
+	total	int
+	speed	float64
+	mode	string	omitempty
+ReplayStateResult
+	state	ReplayState
+ResetConsumeParams
+	id	string
+ResetConsumeResult
+	reset	ResetInfo
+	windows_reset	int	omitempty
+ResetInfo
+	id	string
+	kind	string	omitempty
+	title	string	omitempty
+	description	string	omitempty
+	status	string
+	granted_at	string	omitempty
+	expires_at	string	omitempty
+	redeemed_at	string	omitempty
+ResetsListResult
+	supported	bool
+	resets	[]ResetInfo	omitempty
+Resolved
+	call_id	string	omitempty
+	ask_id	string	omitempty
+RestoreSessionParams
+	id	string
+RevealParams
+	ordinal	int
+RevealResult
+	ordinal	int
+	prev_ordinal	int
+	total	int
+	messages	[]core.WireMessage
+	clear	bool	omitempty
+	prev_clear	bool	omitempty
+SecretsComponent
+	scope	string
+	paths	int
+	file	string	omitempty
+	last_seen	*time.Time	omitempty
+	registered	bool
+SecretsComponentRead
+	scope	string
+	dir	string	omitempty
+	readable	bool
+	reason	string	omitempty
+	enforced	bool
+SecretsConfigScan
+	total	int
+	plaintext	[]string	omitempty
+	unclassified	[]string	omitempty
+	agent_can_read	bool
+	reason	string	omitempty
+SecretsFile
+	name	string
+	state	string
+	note	string	omitempty
+SecretsForgetParams
+	scope	string
+	purge	bool	omitempty
+SecretsForgetResult
+	component	bool	omitempty
+	grants	int	omitempty
+	values	int	omitempty
+	remaining	int	omitempty
+SecretsGrant
+	principal	string
+	scope	string
+	mode	string
+	expires	*time.Time	omitempty
+	expired	bool	omitempty
+SecretsGrantParams
+	principal	string
+	scope	string
+	mode	string
+	ttl	string	omitempty
+SecretsKey
+	state	string
+	path	string	omitempty
+	mode	string	omitempty
+	owner_only	bool	omitempty
+	from_env	bool	omitempty
+	reason	string	omitempty
+SecretsListResult
+	scopes	[]SecretsScopeKeys	omitempty
+SecretsRevokeParams
+	principal	string
+	scope	string
+SecretsScope
+	scope	string
+	keys	int
+SecretsScopeKeys
+	scope	string
+	keys	[]string	omitempty
+SecretsStatus
+	key	SecretsKey
+	recipient	string	omitempty
+	retired_keys	int	omitempty
+	files	[]SecretsFile	omitempty
+	store	SecretsStore
+	config	SecretsConfigScan
+	components	[]SecretsComponent	omitempty
+	reads	[]SecretsComponentRead	omitempty
+	grants	[]SecretsGrant	omitempty
+SecretsStore
+	present	bool
+	encrypted	bool
+	scopes	[]SecretsScope	omitempty
+	error	string	omitempty
+SessionDoctorParams
+	decisions	[]DoctorDecision	omitempty
+	provider	string	omitempty
+	model	string	omitempty
+	focus	*int	omitempty
+	promote	string	omitempty
+SessionDoctorResult
+	proposals	[]SessionProposal
+	note	string	omitempty
+SessionExport
+	filename	string
+	mime_type	string
+	bytes	[]byte
+SessionExportParams
+	format	string	omitempty
+SessionForkParams
+	from_index	int
+SessionGroupDeleteParams
+	id	string
+SessionGroupSaveParams
+	id	string	omitempty
+	name	string
+	color	string	omitempty
+SessionGroupSetMembersParams
+	id	string
+	members	[]string
+SessionGroupsResult
+	groups	[]GroupView
+SessionInfo
+	id	string
+	title	string	omitempty
+	provider	string	omitempty
+	model	string	omitempty
+	persona	string	omitempty
+	reasoning	string	omitempty
+	experience	string	omitempty
+	background	string	omitempty
+	note	string	omitempty
+	user_name	string	omitempty
+	user_description	string	omitempty
+	user_gender	string	omitempty
+	user_pronouns	string	omitempty
+	supports_continue	bool	omitempty
+	card	string	omitempty
+	cast	map[string]string	omitempty
+	cast_models	map[string]CastRoute	omitempty
+	world_lore	[]WorldLoreEntry	omitempty
+	scene_pin_stale	int	omitempty
+	coordination	string	omitempty
+	world	string	omitempty
+	path	string	omitempty
+	created	string	omitempty
+	updated	string	omitempty
+	messages	int
+	usage	core.WireUsage
+	current	bool	omitempty
+	trusted	bool	omitempty
+	context_tokens	int	omitempty
+	context_window	int	omitempty
+	subscription	bool	omitempty
+	live	bool	omitempty
+	busy	bool	omitempty
+SessionProposal
+	id	string
+	kind	string
+	rationale	string
+	name	string	omitempty
+	content	string	omitempty
+	keys	[]string	omitempty
+	audience	[]string	omitempty
+	character	string	omitempty
+	description	string	omitempty
+	personality	string	omitempty
+	first_mes	string	omitempty
+SessionResult
+	session	SessionInfo
+SessionStateResult
+	composer	*ComposerDraft	omitempty
+SessionsResult
+	sessions	[]SessionInfo
+SetDefaultParams
+	provider	string
+	model	string
+	scope	DefaultScope
+SettingItem
+	key	string
+	label	string
+	type	string
+	value	string
+	options	[]SettingOption	omitempty
+	description	string	omitempty
+	note	string	omitempty
+SettingOption
+	value	string
+	label	string
+SettingsView
+	items	[]SettingItem
+SharedFileContent
+	id	string
+	name	string
+	mime	string	omitempty
+	data	[]byte	omitempty
+SharedFileEntry
+	<embedded>	core.SharedFile
+	path	string	omitempty
+SharedFileRef
+	id	string
+SharedFilesResult
+	files	[]SharedFileEntry
+ShellResultParams
+	command	string
+	output	string
+SideChatAskParams
+	id	string
+	prior	[]SideChatTurn	omitempty
+	question	string
+SideChatAskResult
+	text	string
+SideChatCloseParams
+	id	string
+SideChatOpenResult
+	id	string
+SideChatTurn
+	user	string
+	assistant	string
+SkillInfo
+	name	string
+	description	string	omitempty
+Snapshot
+	session	SessionInfo
+	messages	[]core.WireMessage
+	epoch	uint64	omitempty
+	base	int	omitempty
+	total	int	omitempty
+	busy	bool
+	permissions	[]PermissionRequest	omitempty
+	asks	[]AskRequest	omitempty
+	queued	[]string	omitempty
+	skills	[]SkillInfo	omitempty
+	tail	*TailInfo	omitempty
+	variant_marks	[]VariantMark	omitempty
+SuggestParams
+	history	[]SuggestTurn	omitempty
+	note	string	omitempty
+	provider	string	omitempty
+	model	string	omitempty
+	target	string	omitempty
+	target_name	string	omitempty
+	target_voice	string	omitempty
+	target_card	string	omitempty
+SuggestResult
+	draft	string
+SuggestTurn
+	note	string	omitempty
+	draft	string
+Surface
+	id	string
+	title	string
+	kind	string
+	context	*ContextBreakdown	omitempty
+	usage	*UsageView	omitempty
+	tasks	*TaskList	omitempty
+	task_board	*TaskBoardView	omitempty
+	settings	*SettingsView	omitempty
+	panel	*PanelView	omitempty
+	widgets	[]Widget	omitempty
+	commands	*CommandsView	omitempty
+	extensions	*ExtensionsView	omitempty
+	permissions	*PermissionsView	omitempty
+	lore	*LoreView	omitempty
+	memory	*MemoryView	omitempty
+	mcp	*MCPView	omitempty
+	raati	*RaatiView	omitempty
+	chat	*ChatView	omitempty
+	providers	*ProvidersView	omitempty
+	characters	*CharactersView	omitempty
+	worktrees	*WorktreeView	omitempty
+SurfaceActionParams
+	id	string
+	action	string
+	args	map[string]string	omitempty
+SurfaceGetParams
+	id	string
+SurfaceMeta
+	id	string
+	title	string
+	icon	string	omitempty
+	kind	string
+	scope	string	omitempty
+	live	bool	omitempty
+	actions	bool	omitempty
+	badge	string	omitempty
+SurfaceResult
+	surface	Surface
+SurfacesResult
+	surfaces	[]SurfaceMeta
+TailInfo
+	span_start	int
+	variants	int
+	active	int
+TaskBoardItem
+	id	string
+	status	string
+	title	string
+	active_form	string	omitempty
+	evidence	string	omitempty
+	note	string	omitempty
+TaskBoardView
+	tasks	[]TaskBoardItem
+TaskInfo
+	id	string
+	task	string
+	status	string
+	activity	string	omitempty
+	turns	int	omitempty
+	tool_calls	int	omitempty
+	last_event	string	omitempty
+	model	string	omitempty
+	provider	string	omitempty
+	persona	string	omitempty
+	backend	string	omitempty
+	dir	string	omitempty
+	started	string	omitempty
+	finished	string	omitempty
+	error	string	omitempty
+	cost_usd	float64	omitempty
+	deliverable	json.RawMessage	omitempty
+	deliverable_error	string	omitempty
+	tail	string	omitempty
+	lines	[]string	omitempty
+TaskList
+	tasks	[]TaskInfo
+	backends	[]string	omitempty
+	workers_enabled	bool	omitempty
+TrustParams
+	parent	bool	omitempty
+TurnContinueParams
+	epoch	uint64
+TurnRetryParams
+	epoch	uint64
+	guidance	string	omitempty
+	ignore_prior	bool	omitempty
+TurnSwipeParams
+	epoch	uint64
+	variant	int
+	index	*int	omitempty
+UsageInfo
+	provider	string	omitempty
+	has_data	bool	omitempty
+	windows	[]UsageWindowInfo	omitempty
+	credits	*CreditsInfo	omitempty
+	captured_at	string	omitempty
+	refreshable	bool	omitempty
+UsageResult
+	usage	core.WireUsage
+UsageSnapshotParams
+	refresh	bool	omitempty
+UsageSnapshotResult
+	usage	UsageInfo
+UsageView
+	provider	string	omitempty
+	model	string	omitempty
+	context_tokens	int	omitempty
+	window	int	omitempty
+	cumulative	core.WireUsage
+	subscription	bool	omitempty
+	windows	[]UsageWindowInfo	omitempty
+UsageWindowInfo
+	label	string
+	used_percent	float64
+	window_minutes	int	omitempty
+	resets_at	string	omitempty
+	kind	string	omitempty
+UserBindParams
+	name	string	omitempty
+	description	string	omitempty
+	gender	string	omitempty
+	pronouns	string	omitempty
+	ref	string	omitempty
+UserPersonaRef
+	ref	string
+UserPersonaView
+	ref	string	omitempty
+	name	string
+	description	string	omitempty
+	gender	string	omitempty
+	pronouns	string	omitempty
+	default	bool	omitempty
+UserPersonasListResult
+	personas	[]UserPersonaView
+VariantMark
+	index	int
+	variants	int
+	active	int
+	span	bool	omitempty
+VariantsDropParams
+	epoch	uint64
+	index	int
+	variant	int
+VariantsPruneParams
+	epoch	uint64
+	index	int
+Widget
+	type	string
+	text	string	omitempty
+	tone	string	omitempty
+	level	int	omitempty
+	label	string	omitempty
+	value	float64	omitempty
+	max	float64	omitempty
+	unit	string	omitempty
+	rows	[]KV	omitempty
+	columns	[]string	omitempty
+	cells	[][]string	omitempty
+	items	[]ListItem	omitempty
+	children	[]Widget	omitempty
+	action_id	string	omitempty
+WorkflowAgent
+	label	string	omitempty
+	agent_id	string	omitempty
+WorkflowGetParams
+	id	string
+WorkflowRunInfo
+	id	string
+	name	string	omitempty
+	status	string
+	started	string	omitempty
+	ended	string	omitempty
+	completed	int
+	agents	int	omitempty
+	cached	int	omitempty
+	cost_usd	float64	omitempty
+	cwd	string	omitempty
+	script_at	string	omitempty
+	error	string	omitempty
+	running	int	omitempty
+	resumable	bool	omitempty
+WorkflowRunResult
+	label	string	omitempty
+	agent_id	string	omitempty
+	bytes	int	omitempty
+	result	json.RawMessage	omitempty
+WorkflowRunView
+	run	WorkflowRunInfo
+	script	string	omitempty
+	args	json.RawMessage	omitempty
+	results	[]WorkflowRunResult	omitempty
+	in_flight	[]WorkflowAgent	omitempty
+WorkflowRunsResult
+	runs	[]WorkflowRunInfo
+WorktreeCollectItem
+	name	string
+	branch	string	omitempty
+	base_ref	string	omitempty
+	base_commit	string	omitempty
+	head_commit	string	omitempty
+	ahead	int
+	commits	[]string	omitempty
+	dirty	bool	omitempty
+	unpushed	bool	omitempty
+WorktreeView
+	repo_key	string
+	cwd_worktree	*string	omitempty
+	items	[]WorktreeViewItem
+	collect	[]WorktreeCollectItem	omitempty
+WorktreeViewItem
+	name	string
+	path	string
+	branch	string	omitempty
+	base_commit	string	omitempty
+	base_ref	string	omitempty
+	head_commit	string	omitempty
+	status	string
+	claimed_by	*string	omitempty
+	stale_reason	string	omitempty
+	dirty	bool	omitempty
+	unmanaged	bool	omitempty
+WorldCardProposal
+	<embedded>	DoctorProposal
+	card	string
+	character	string
+WorldDeleteParams
+	id	string
+WorldDoctorParams
+	id	string
+	sessions	[]string	omitempty
+	decisions	[]DoctorDecision	omitempty
+	steer	string	omitempty
+	provider	string	omitempty
+	model	string	omitempty
+WorldDoctorResult
+	card_proposals	[]WorldCardProposal
+	world_proposals	[]SessionProposal
+	note	string	omitempty
+WorldExport
+	filename	string
+	mime_type	string
+	bytes	[]byte
+WorldExportParams
+	id	string
+WorldImportParams
+	bytes	[]byte	omitempty
+	path	string	omitempty
+WorldLoreDeleteParams
+	name	string
+WorldLoreEntry
+	name	string
+	keys	[]string	omitempty
+	constant	bool	omitempty
+	content	string
+	audience	[]string	omitempty
+	model	bool	omitempty
+	learned	map[string]string	omitempty
+WorldLorePutParams
+	entry	WorldLoreEntry
+	replace	string	omitempty
+WorldSaveParams
+	name	string	omitempty
+	description	string	omitempty
+WorldSetCharacterModelParams
+	id	string
+	character	string
+	provider	string	omitempty
+	model	string	omitempty
+WorldSetModelParams
+	id	string
+	provider	string	omitempty
+	model	string	omitempty
+WorldSetParams
+	coordination	string
+WorldUpdateParams
+	id	string
+	name	string	omitempty
+	description	string
+	cover	[]byte	omitempty
+	remove_cover	bool	omitempty
+WorldView
+	id	string
+	name	string
+	description	string	omitempty
+	characters	map[string]string	omitempty
+	character_models	map[string]CastRoute	omitempty
+	model	CastRoute	omitempty
+	lore	[]WorldLoreEntry	omitempty
+	coordination	string	omitempty
+	sessions	int	omitempty
+	created	string	omitempty
+	updated	string	omitempty
+	cover_url	string	omitempty
+WorldsAddCharacterParams
+	id	string
+	name	string
+	ref	string
+WorldsCreateCharacterParams
+	id	string
+	name	string
+	card	json.RawMessage
+WorldsCreateCharacterResult
+	world	WorldView
+	card_id	string
+WorldsEditCharacterParams
+	id	string
+	character	string
+	card	json.RawMessage
+	also_library	bool	omitempty
+WorldsEditCharacterResult
+	world	WorldView
+	card_id	string
+	forked	bool
+WorldsListResult
+	worlds	[]WorldView
+WorldsLoreDeleteParams
+	id	string
+	name	string
+WorldsLorePutParams
+	id	string
+	entry	WorldLoreEntry
+	replace	string	omitempty
+WorldsRemoveCharacterParams
+	id	string
+	name	string
+WorldsSetParams
+	id	string
+	coordination	string
