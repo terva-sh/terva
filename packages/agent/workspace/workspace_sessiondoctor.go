@@ -119,7 +119,7 @@ func sessionsDoctor(ctx context.Context, s *wsSession, p ctrlproto.SessionDoctor
 		census := dramaturgCensus(msgs, censusKnownNames(boundName, s.playerLabel(), roster, lore))
 		user = renderDramaturgEvidence(s.playerLabel(), boundName, roster, lore, msgs, len(msgs), census)
 	}
-	user += renderSessionDoctorDecisions(p.Decisions)
+	user += renderDecisions(p.Decisions)
 
 	req := provider.Request{
 		Model:     model,
@@ -319,32 +319,6 @@ func renderDramaturgEvidence(playerLabel, boundName string, roster []string, lor
 			b.WriteString("- …" + n + "…\n")
 		}
 	}
-	return b.String()
-}
-
-// renderSessionDoctorDecisions mirrors the card doctor's decisions block: the
-// follow-up round's prompt is self-contained.
-func renderSessionDoctorDecisions(decisions []ctrlproto.DoctorDecision) string {
-	if len(decisions) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("\nYOUR PREVIOUS PROPOSALS AND THE AUTHOR'S DECISIONS\n")
-	for _, d := range decisions {
-		verdict := "ACCEPTED"
-		if !d.Accepted {
-			verdict = "DECLINED"
-			if strings.TrimSpace(d.Reason) != "" {
-				verdict += " — reason: " + strings.TrimSpace(d.Reason)
-			}
-		}
-		label := d.ProposalID
-		if d.Field != "" {
-			label += " (" + d.Field + ")"
-		}
-		b.WriteString("- " + label + ": " + verdict + "\n")
-	}
-	b.WriteString("\nRevise in light of these decisions: keep accepted proposals out of the new list, and for each decline, either withdraw it or offer something different that respects the stated reason.\n")
 	return b.String()
 }
 

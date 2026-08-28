@@ -173,7 +173,7 @@ func (w *Workspace) worldsDoctor(ctx context.Context, cl provider.Client, model 
 	}
 
 	user := renderWorldDoctorEvidence(doc.Name, doc.Description, roster, doc.Lore, w.worldDoctorScenes(ctx, doc.ID, p.Sessions), p.Steer)
-	user += renderSessionDoctorDecisions(p.Decisions)
+	user += renderDecisions(p.Decisions)
 
 	req := provider.Request{
 		Model:     model,

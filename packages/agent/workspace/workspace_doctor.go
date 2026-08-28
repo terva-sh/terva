@@ -341,6 +341,45 @@ func renderSceneTail(msgs []provider.Message, playerLabel, charLabel string, bud
 	return strings.Join(lines[start:], "\n")
 }
 
+// renderDecisions renders the follow-up round's decisions block: what the doctor
+// proposed last time, and what the author did with each proposal.
+//
+// Shared by all three doctors (card, session, World). It used to exist TWICE —
+// inline in renderDoctorPrompt with every string i18n.P-wrapped, and again as
+// renderSessionDoctorDecisions in raw English, which the session AND World
+// doctors both called. So two of the three surfaces shipped this paragraph
+// untranslated whatever the daemon's locale, while the copy that knew better sat
+// one file away. The duplication was not the bug; it was the carrier for it.
+//
+// The wording here is the card doctor's, because that is the text the five
+// stage.doctor.* keys are already translated against. The session/World variant
+// said the same thing in slightly different words and is now retired.
+//
+// Returns "" for an empty decision set, so a caller may append unconditionally.
+func renderDecisions(decisions []ctrlproto.DoctorDecision) string {
+	if len(decisions) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n" + i18n.P("stage.doctor.decisions", "YOUR PREVIOUS PROPOSALS AND THE AUTHOR'S DECISIONS") + "\n")
+	for _, d := range decisions {
+		verdict := i18n.P("stage.doctor.accepted", "ACCEPTED")
+		if !d.Accepted {
+			verdict = i18n.P("stage.doctor.declined", "DECLINED")
+			if strings.TrimSpace(d.Reason) != "" {
+				verdict = i18n.P("stage.doctor.declined_reason", "DECLINED — reason: %s", strings.TrimSpace(d.Reason))
+			}
+		}
+		label := d.ProposalID
+		if d.Field != "" {
+			label += " (" + d.Field + ")"
+		}
+		b.WriteString("- " + label + ": " + verdict + "\n")
+	}
+	b.WriteString("\n" + i18n.P("stage.doctor.revise", "Revise your proposals in light of these decisions: keep the accepted changes out of the new list, and for each decline, either withdraw it or offer a different edit that respects the stated reason.") + "\n")
+	return b.String()
+}
+
 // renderDoctorPrompt assembles the user message: the card's editable fields, the
 // deterministic lint findings, (on a follow-up round) the author's decisions,
 // and — last, so it is the final thing read before the model answers — the
@@ -391,24 +430,7 @@ func renderDoctorPrompt(fields map[string]string, findings []card.Finding, decis
 		b.WriteString(line + "\n")
 	}
 
-	if len(decisions) > 0 {
-		b.WriteString("\n" + i18n.P("stage.doctor.decisions", "YOUR PREVIOUS PROPOSALS AND THE AUTHOR'S DECISIONS") + "\n")
-		for _, d := range decisions {
-			verdict := i18n.P("stage.doctor.accepted", "ACCEPTED")
-			if !d.Accepted {
-				verdict = i18n.P("stage.doctor.declined", "DECLINED")
-				if strings.TrimSpace(d.Reason) != "" {
-					verdict = i18n.P("stage.doctor.declined_reason", "DECLINED — reason: %s", strings.TrimSpace(d.Reason))
-				}
-			}
-			label := d.ProposalID
-			if d.Field != "" {
-				label += " (" + d.Field + ")"
-			}
-			b.WriteString("- " + label + ": " + verdict + "\n")
-		}
-		b.WriteString("\n" + i18n.P("stage.doctor.revise", "Revise your proposals in light of these decisions: keep the accepted changes out of the new list, and for each decline, either withdraw it or offer a different edit that respects the stated reason.") + "\n")
-	}
+	b.WriteString(renderDecisions(decisions))
 
 	// The author's instruction goes LAST, after the decisions: it is standing
 	// direction for the whole round rather than an answer to one proposal, and
