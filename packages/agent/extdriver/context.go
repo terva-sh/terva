@@ -132,8 +132,19 @@ func (d *Driver) EphemeralContext() string {
 	var blocks []string
 	// The guard is charged to the budget up front rather than added free at the
 	// end, so maxEphemeralBytes keeps meaning what it says.
-	guard := tailBackgroundGuard()
-	total := len(guard) + 2
+	//
+	// A whitespace-only guard means NO guard. The eval's control arm has to
+	// serve the exact pre-guard text, and the i18n catalog cannot express an
+	// empty override: keyedText treats "" as a miss and falls back to the
+	// compiled English, so an empty overlay would silently serve the very
+	// sentence it was written to remove -- an arm that scores the shipped text
+	// twice while reporting a comparison. See
+	// scripts/eval/overlays/tail-background-guard-off.json.
+	guard := strings.TrimSpace(tailBackgroundGuard())
+	total := 0
+	if guard != "" {
+		total = len(guard) + 2
+	}
 	for _, e := range entries {
 		block := wrapContext(e.source, e.card.label, clampBytes(e.card.text, maxCardBytes))
 		// +2 for the join separator between blocks.
@@ -150,6 +161,9 @@ func (d *Driver) EphemeralContext() string {
 	if len(blocks) == 0 {
 		return ""
 	}
+	if guard == "" {
+		return strings.Join(blocks, "\n\n")
+	}
 	return guard + "\n\n" + strings.Join(blocks, "\n\n")
 }
 
@@ -163,12 +177,22 @@ func (d *Driver) EphemeralContext() string {
 // each card to its extension; repeating a prohibition per card would spend the
 // budget on saying the same sentence to the model five times.
 //
-// The BACKGROUND shape is the point: a card is state the model is told to
-// consult (the task board is the standing example), so it must not be told to
-// proceed as if the card were absent. Only the reply-hijack is prohibited.
+// The BACKGROUND shape is the point: a card is live guidance an extension wrote
+// to be FOLLOWED -- the installed obsidian card carries a destructive-write
+// safety rule ("echo the path back exactly, never guess") -- so it must not be
+// told to proceed as if the card were absent, and must not be told the card is
+// not to be acted on. Only the reply-hijack is prohibited.
+//
+// The guard therefore carries no act-prohibition. It briefly did; that clause
+// was removed after it measured as worthless on lore and read as actively
+// harmful here. See the note on the twin in packages/agent/build.
+//
+// The built-in task board is NOT one of these cards, despite an earlier version
+// of this comment calling it the standing example. It rides as its own provider
+// through EphemeralTail.Tasks and never passes through this section.
 func tailBackgroundGuard() string {
 	return i18n.P("tail.background.guard",
-		"[background] Do not reply to this block and do not mention it in your answer. It is background you may draw on, not a request to act on.")
+		"[background] Do not reply to this block and do not mention it in your answer. It is background you may draw on.")
 }
 
 // HasBlockingContext reports whether any context-enabled extension has

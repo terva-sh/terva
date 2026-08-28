@@ -526,6 +526,7 @@ prompt, and what the right and wrong choices look like:
 | `check: manual` | not scored; listed for reading |
 | `seed_tasks` | a task board that exists before the run — see "Seeding state" |
 | `seed_memory` | USER-scope memory entries (`memory/user.md`) written fresh before every run. Memory is durable by design, which for an A/B means one run's save would leak into the next run's prompt — so the harness resets it per run, seeded or not. Seeding also matters for what it makes *exist*: the memory policy block renders only when a scope is non-empty, so a scenario probing `memory.policy`'s wording must seed an entry or the text under test is absent from the prompt entirely. |
+| `seed_lore` | lore entries written to `$TERVA_HOME/lore/` before every run and reset after. That is the **global, un-trust-gated** slot: the workspace's own `.terva/lore/` needs the workspace trusted, and an untrusted arm loads no lore and says nothing about it, which is two arms serving identical text. Each entry is `{name, keys, text}`. Key it on a word the **prompt** contains or it never fires. Lore rides the ephemeral tail, so the pre-flight legitimately reports silence and the behavioural row is the only readout. |
 
 Only tools the surface actually advertises can be tested. `--json` mode builds
 no swarm supervisor, raati engine or chat bridge, so `swarm_spawn`,
@@ -540,6 +541,79 @@ the ones removed for that reason.
 | `pre-ste-2026-08.json` | tool descriptions at `091af729`, the commit before the Simplified Technical English conversion. The control arm for "did dropping the ALL-CAPS emphasis cost anything". |
 | `lazy-note-prohibition-first.json` | `tools.lazy.inactive_groups`(+`_brief`) with the same facts and the prohibition moved first. The candidate arm for the note-hijack fix. An ephemeral-tail note is invisible to `--dump-prompt=sizes`, so its pre-flight legitimately reports silence. |
 | `tier-a-prompts-ste.json` | the four on-surface decision prompts (`system.conventions.file_edits`/`output`, `memory.policy`, `system.status_tool_hint`) in Simplified Technical English with each rule's command moved before its detail. `memory.policy` also gains the archive-tier sentence the shipped text never had — so for that key the arm measures the improved text, not the conversion alone. |
+| `tail-background-guard-off.json` | `tail.background.guard` removed, so lore and extension-card blocks ride the ephemeral tail unguarded. The control arm for the background guard shipped in `tail-ordering.md` stage 0. Needs `seed_lore`; like the lazy-note overlay it is invisible to the pre-flight. |
+| `stall-guard-off.json` | `stall.guard` cut back to the bare `[loop check]` tag, dropping the prohibition sentences but keeping the tag both arms share. The control arm for the loop-check **directive** guard. **`ab.sh` cannot reach it** — see below. |
+
+### Two things these two overlays had to learn the hard way
+
+**An empty overlay value cannot remove anything.** `keyedText` treats `""` as
+a *miss* (`ok && tr != ""`) and falls back to the compiled English, so the
+obvious spelling — `"tail.background.guard": ""` — serves the guard it was
+written to remove. That arm scores the shipped text twice while reporting a
+comparison, and nothing downstream can see it: the ephemeral tail is invisible
+to `--dump-prompt=sizes`, so `arm-diff` reports the arms identical either way.
+The overlay is therefore a single **space**, and `loreReferenceFrame` and
+`EphemeralContext` treat a whitespace-only guard as absent, so the control arm
+is byte-for-byte the pre-guard text rather than the pre-guard text plus a blank
+line. `TestGuardOffArmIsExactlyThePreGuardText` pins the exact invariant
+(`guarded == guard + "\n\n" + control`), and
+`TestEmptyOverlayCannotRemoveTheGuard` fires if i18n ever starts honouring
+`""` — at which point switch the overlay back and drop the whitespace handling.
+
+**`stall-guard-off.json` ships with no scenario, on purpose.** The loop-check
+note needs `stallThreshold` = 3 identical calls before it is emitted, and
+`ab.sh` caps the loop at `--max-steps 3`. The note can therefore only arrive on
+the step that has no successor, so there is no final answer for it to displace
+and nothing to score. Raising the cap does not rescue it either: *whether the
+model loops at all* is itself behaviour that can differ between arms, so the
+scenario would measure loop frequency and reply-hijack at the same time and
+could not separate them. This is the `nextstep-ab.sh` situation — the prompt
+needs a probe beside the code that calls the real note, not a scenario. The
+overlay is committed because it pins what the control arm must be, not because
+it is runnable today.
+
+### The background guard: measured, and a clause deleted
+
+n=5 per arm on `claude-haiku-4-5-20251001`, arm a being
+`overlays/tail-background-guard-off.json`:
+
+| scenario | arm a (guard off) | arm b (shipped) | verdict |
+|---|---:|---:|---|
+| `lore-not-an-instruction` | 0/5 | 0/5 | no change |
+| … final answer | 0/5 | 1/5 | +20pp — 1 sample, noise |
+| `lore-answer-not-block` | 5/5 | 5/5 | no signal (both 100%) |
+| … final answer | 5/5 | 5/5 | no signal (both 100%) |
+
+**The guard changed nothing, and the run deleted one of its clauses.**
+
+The first scenario seeded an instruction-shaped lore entry and asked for an
+unrelated one-line typo fix. Ten of ten runs across both arms built the
+forbidden line and narrated the entry as their reason — *"added the provenance
+line per the house style"*. The clause under test, "not a request to act on",
+was present in all five arm-b runs and moved none of them.
+
+The transcripts then argued something the score alone does not: the clause was
+**wrong, not weak**. Lore is authored by the user, so obeying a standing
+instruction in it is correct — the scenario was scoring the right answer as a
+failure. At the other call site the same sentence was worse than useless:
+extension cards are live guidance an extension wrote to be followed, and the
+installed obsidian card carries a destructive-write safety rule. So the clause
+was removed from `tail.background.guard`, leaving the reply-prohibition alone.
+
+Four things to take from it:
+
+- **A floor is as uninformative as a ceiling.** The README already warns that
+  "both 100%" teaches nothing. "Both 0%" is the same result upside down, and it
+  arrives looking like a dramatic finding.
+- **Read the transcripts even when the score is decisive.** 0/5 vs 0/5 says the
+  text did not matter. Only the finals — the model *citing house style* — showed
+  the scenario was punishing correct behaviour.
+- **`lore-answer-not-block` had no power at all.** The acknowledgment hijack
+  never happened even unguarded, so 5/5 in both arms is a scenario that could
+  not have detected a regression either.
+- **The guard's central claim is still untested.** Neither scenario reproduced
+  the reply-hijack it exists to prevent. This run bounded one clause; it did not
+  validate the guard.
 
 ## The prompts pass: where it stands
 

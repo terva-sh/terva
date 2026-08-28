@@ -53,9 +53,15 @@ func TestLoreFrameLeadsWithTheBackgroundGuard(t *testing.T) {
 
 // The expensive regression, pinned. A character card's post-history
 // instructions are the strongest steering the format has: authored text whose
-// whole purpose is to shape the very next reply. The background guard says the
-// block is "not a request to act on", which is true of lore and an extension
-// card and catastrophically false here.
+// whole purpose is to shape the very next reply. The background guard tells the
+// model not to reply to the block and not to mention it in the answer — right
+// for a reference block, and catastrophically wrong for the one part of the tail
+// that exists to shape the reply itself.
+//
+// The guard's old second clause ("not a request to act on") was the original
+// reason this test was written. That clause is gone, measured out. This test is
+// not: the reply-prohibition ALONE still silences PHI, so the rule is unchanged
+// and the ground under it is firmer than when it was written.
 //
 // TailHost concatenates six different things, and only the reference ones are
 // framed. A guard hoisted to the head of the whole block — the obvious
@@ -73,8 +79,8 @@ func TestPostHistoryInstructionsAreNeverGuarded(t *testing.T) {
 		t.Fatalf("precondition: post-history instructions missing from the tail:\n%s", out)
 	}
 	if strings.Contains(out, "[background]") {
-		t.Errorf("the background guard reached post-history instructions; it tells the model they are "+
-			"'not a request to act on', which switches off the card's strongest steering:\n%s", out)
+		t.Errorf("the background guard reached post-history instructions; it tells the model not to reply "+
+			"to them and not to mention them, which silences the card's strongest steering:\n%s", out)
 	}
 }
 

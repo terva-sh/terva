@@ -179,10 +179,22 @@ func (r *Resolved) tailProvider(ag *core.Agent, record bool) func() string {
 // routed-voice system prompt sit BEFORE the conversation, where "the
 // conversation above" names nothing.
 func loreReferenceFrame(block string) string {
-	return tailBackgroundGuard() + "\n\n" +
-		i18n.P("lore.reference.frame",
-			"REFERENCE KNOWLEDGE (setting, characters, and what came before — background the scene draws on, not a record of where it stands now; where this disagrees with the conversation above, the conversation is what actually happened):") +
+	frame := i18n.P("lore.reference.frame",
+		"REFERENCE KNOWLEDGE (setting, characters, and what came before — background the scene draws on, not a record of where it stands now; where this disagrees with the conversation above, the conversation is what actually happened):") +
 		"\n" + block
+	// A whitespace-only guard means NO guard, and has to yield EXACTLY the
+	// pre-guard text -- not a blank line where the sentence used to be, because
+	// an arm that also differs in whitespace differs somewhere other than the
+	// sentence under test. It is spelled as whitespace rather than "" because
+	// the catalog cannot express an empty override: keyedText treats "" as a
+	// miss and falls back to the compiled English, so an empty overlay would
+	// silently serve the guard it was written to remove. That is the eval's
+	// control arm (scripts/eval/overlays/tail-background-guard-off.json), and
+	// extdriver's section skips its guard the same way.
+	if guard := strings.TrimSpace(tailBackgroundGuard()); guard != "" {
+		return guard + "\n\n" + frame
+	}
+	return frame
 }
 
 // tailBackgroundGuard is the prohibition that leads a REFERENCE block on the
@@ -207,9 +219,18 @@ func loreReferenceFrame(block string) string {
 // Prohibition-first because that ordering is measured rather than assumed: the
 // inactive-groups note took 0-of-20 final answers before the prohibition led and
 // 20-of-20 after.
+//
+// It used to carry a second clause, "not a request to act on". That clause is
+// GONE, removed because it was measured and bought nothing: on Haiku 4.5, 10 of
+// 10 runs obeyed an instruction-shaped lore entry with the clause present and 10
+// of 10 obeyed it without (scripts/eval, lore-not-an-instruction). It was also
+// wrong in principle at BOTH call sites. Lore is authored by the user, so a
+// standing instruction in it is one the user meant; and an extension card is
+// live guidance an extension wrote to be followed. Only the reply-hijack is
+// prohibited.
 func tailBackgroundGuard() string {
 	return i18n.P("tail.background.guard",
-		"[background] Do not reply to this block and do not mention it in your answer. It is background you may draw on, not a request to act on.")
+		"[background] Do not reply to this block and do not mention it in your answer. It is background you may draw on.")
 }
 
 // sceneStateFrame frames the pinned scene-state card (SD4) for the per-turn
