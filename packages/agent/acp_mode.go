@@ -460,7 +460,7 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	// correlation seam — so no wrapper records a "current call" ahead of the
 	// ladder, and nothing collides when a host_tool_call approval parks
 	// concurrently with a model call's.
-	ag.BeforeToolExecute = build.BuildBeforeToolExecute(hookEng, confirmGate, extMgr)
+	ag.BeforeToolExecute = build.BuildBeforeToolExecute(hookEng, confirmGate, extMgr, ag)
 	build.WireHostToolDispatcher(ag, extMgr, confirmGate)
 	// Apply the subset of the non-interactive extension hooks that make sense
 	// under ACP: BeforeTurn / BeforeAssistantMessage (extension turn +

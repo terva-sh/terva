@@ -36,6 +36,79 @@ func mutDetails(t *testing.T, res core.ToolResult) map[string]any {
 	return d
 }
 
+func scriptArgs(t *testing.T, script string) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{"script": script})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+	return raw
+}
+
+// The accounted plan is the one thing an approval prompt for this tool should
+// lead with. Preview computes it without running, and declines to the generic
+// BuildPreview when the analysis cannot run.
+func TestScriptToolPreviewShowsTheAccountedPlan(t *testing.T) {
+	cases := []struct {
+		name string
+		tool interface {
+			Preview(json.RawMessage, int) string
+		}
+		script string
+		want   string
+	}{
+		{"mutating plan", &CodeExecutionMutatingTool{}, `read("a"); read("b"); write("c","d")`, "accounted for: read x2, write x1"},
+		{"mutating edit", &CodeExecutionMutatingTool{}, `edit("f",[{oldText:"a",newText:"b"}])`, "accounted for: edit x1"},
+		{"mutating none", &CodeExecutionMutatingTool{}, `print("x")`, "accounted for: no host calls"},
+		{"read-only plan", &CodeExecutionTool{}, `read("a"); grep("p"); glob("g")`, "accounted for: read x1, grep x1, glob x1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.tool.Preview(scriptArgs(t, c.script), 120); got != c.want {
+				t.Errorf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// An unaccountable script is exactly when the approver most needs to know, so
+// the preview names what defeated the account rather than looking clean. Each
+// tool's script mentions a name in its OWN binding set — a name outside the
+// set is no different from an arbitrary global like Math, which the walker
+// rightly ignores.
+func TestScriptToolPreviewFlagsTheUnaccountable(t *testing.T) {
+	cases := []struct {
+		name string
+		tool interface {
+			Preview(json.RawMessage, int) string
+		}
+		script string
+	}{
+		{"mutating", &CodeExecutionMutatingTool{}, `const f = write; f("a","b")`},
+		{"read-only", &CodeExecutionTool{}, `const f = read; f("a")`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := c.tool.Preview(scriptArgs(t, c.script), 120)
+			if !strings.HasPrefix(got, "unaccountable (") {
+				t.Errorf("got %q, want an unaccountable flag", got)
+			}
+		})
+	}
+}
+
+// A script that does not parse declines to the generic preview rather than
+// inventing an account.
+func TestScriptToolPreviewFallsBackOnBadInput(t *testing.T) {
+	tool := &CodeExecutionMutatingTool{}
+	if got := tool.Preview(scriptArgs(t, `function {`), 120); got != "" {
+		t.Errorf("unparseable script: got %q, want fallback", got)
+	}
+	if got := tool.Preview(json.RawMessage(`{not json`), 120); got != "" {
+		t.Errorf("unparseable args: got %q, want fallback", got)
+	}
+}
+
 func TestMutatingToolWritesAndEditsThroughTheGate(t *testing.T) {
 	host := &fakeHost{text: map[string]string{
 		"read":  "old body",

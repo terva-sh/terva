@@ -59,7 +59,7 @@ func buildHostToolDispatcher(ag *core.Agent, gate *core.ConfirmGate, mgr hostToo
 		// call's, and a borrowed "current call" id would collide in the
 		// confirmer's pending map (the answer reaches one of them, the other
 		// wedges until turn cancel).
-		preview := core.BuildPreview(args, 120)
+		preview := core.ToolPreview(tool, args, 120)
 		callID := fmt.Sprintf("hostcall-%s-%d", extName, hostGateSeq.Add(1))
 		allowed, reason, _ := gate.Check(ctx, toolName, args, preview, callID)
 		recordGateAudit(auditViaHostToolCall, toolName, args, gate, allowed, reason)

@@ -379,13 +379,13 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 	// sources its manager from setupNonInteractiveExtensions, which always
 	// builds one; under --no-ext it is live-but-toolless precisely so the hook
 	// wiring stays uniform), and the SDK avoids the helper entirely for this
-	// reason: it calls BuildBeforeToolExecute(nil, gate, nil) directly, which is
+	// reason: it calls BuildBeforeToolExecute(nil, gate, nil, ag) directly, which is
 	// the configuration this early return would have silently disarmed.
 	//
 	// build.WireHostToolDispatcher already has this shape — it binds the
 	// scripting host call for any agent and returns early only for the
 	// extension-specific half.
-	ag.BeforeToolExecute = build.BuildBeforeToolExecute(hookEng, gate, extMgr)
+	ag.BeforeToolExecute = build.BuildBeforeToolExecute(hookEng, gate, extMgr, ag)
 	build.WireHostToolDispatcher(ag, extMgr, gate)
 
 	// The extension-shaped half, and only it, is conditional.

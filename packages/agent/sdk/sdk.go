@@ -236,7 +236,7 @@ func New(cfg Config) (*Runtime, error) {
 		// nil hook engine and nil extension manager: the SDK wires neither
 		// (see the package doc's "what an embedder owns"). The gate is the
 		// one thing the USER owns, so it is the one thing installed here.
-		ag.BeforeToolExecute = build.BuildBeforeToolExecute(nil, gate, nil)
+		ag.BeforeToolExecute = build.BuildBeforeToolExecute(nil, gate, nil, ag)
 	}
 	return &Runtime{
 		agent:    ag,

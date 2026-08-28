@@ -50,7 +50,7 @@ func callBash(fn func(context.Context, provider.ToolCallBlock) (bool, string, js
 }
 
 func TestLadderHookDenyRefusesBeforeGate(t *testing.T) {
-	fn := build.BuildBeforeToolExecute(ladderEngine(t, "deny"), nil, nil)
+	fn := build.BuildBeforeToolExecute(ladderEngine(t, "deny"), nil, nil, nil)
 	allowed, reason, _ := callBash(fn)
 	if allowed {
 		t.Fatal("hook deny must refuse")
@@ -64,19 +64,19 @@ func TestLadderHookAllowSkipsRefusingGate(t *testing.T) {
 	// A refusing gate (nil inner, ask policy) would block this call;
 	// the user hook's allow is final and skips it.
 	gate := core.NewConfirmGate(nil)
-	fn := build.BuildBeforeToolExecute(ladderEngine(t, "allow"), gate, nil)
+	fn := build.BuildBeforeToolExecute(ladderEngine(t, "allow"), gate, nil, nil)
 	if allowed, reason, _ := callBash(fn); !allowed {
 		t.Fatalf("hook allow should skip the gate, got refusal %q", reason)
 	}
 	// Sanity: without the hook the same gate refuses.
-	fn = build.BuildBeforeToolExecute(nil, gate, nil)
+	fn = build.BuildBeforeToolExecute(nil, gate, nil, nil)
 	if allowed, _, _ := callBash(fn); allowed {
 		t.Fatal("control: gate alone should refuse")
 	}
 }
 
 func TestLadderHookRewriteFlowsToModifiedArgs(t *testing.T) {
-	fn := build.BuildBeforeToolExecute(ladderEngine(t, "rewrite"), nil, nil)
+	fn := build.BuildBeforeToolExecute(ladderEngine(t, "rewrite"), nil, nil, nil)
 	allowed, _, modified := callBash(fn)
 	if !allowed {
 		t.Fatal("rewrite-only hook must not block")
@@ -99,13 +99,78 @@ func TestLadderGateSeesRewrittenArgs(t *testing.T) {
 		}
 		return core.NewPolicyGate(pol, nil)
 	}
-	fn := build.BuildBeforeToolExecute(ladderEngine(t, "rewrite"), mkGate(`^ls$`), nil)
+	fn := build.BuildBeforeToolExecute(ladderEngine(t, "rewrite"), mkGate(`^ls$`), nil, nil)
 	if allowed, _, _ := callBash(fn); !allowed {
 		t.Error("deny rule on the original args must not fire after rewrite")
 	}
-	fn = build.BuildBeforeToolExecute(ladderEngine(t, "rewrite"), mkGate(`^echo rewritten$`), nil)
+	fn = build.BuildBeforeToolExecute(ladderEngine(t, "rewrite"), mkGate(`^echo rewritten$`), nil, nil)
 	if allowed, _, _ := callBash(fn); allowed {
 		t.Error("deny rule on the rewritten args must fire")
+	}
+}
+
+// The §12.6 seam tests: a tool that contributes a Preview must have its
+// contribution reach the confirmation prompt, and — the constraint §12.6
+// calls out — the preview must be built from the SAME post-rewrite args the
+// gate checks, not the original. A stale preview would approve one thing and
+// run another.
+
+// fakePreviewTool contributes its command field as the preview, the simplest
+// contributor whose output reveals which args it was built from.
+type fakePreviewTool struct{ name string }
+
+func (f fakePreviewTool) Name() string        { return f.name }
+func (f fakePreviewTool) Description() string { return "" }
+func (f fakePreviewTool) Schema() json.RawMessage {
+	return json.RawMessage(`{}`)
+}
+func (f fakePreviewTool) Execute(ctx context.Context, args json.RawMessage, progress func(string)) (core.ToolResult, error) {
+	return core.ToolResult{}, nil
+}
+func (f fakePreviewTool) Preview(args json.RawMessage, maxLen int) string {
+	var m struct {
+		Command string `json:"command"`
+	}
+	json.Unmarshal(args, &m)
+	return "run: " + m.Command
+}
+
+// captureConfirmer records the preview each call is gated with, then allows
+// it, so a test can read back what the prompt would have shown.
+type captureConfirmer struct{ previews []string }
+
+func (c *captureConfirmer) Confirm(ctx context.Context, toolName, preview string) core.ConfirmDecision {
+	c.previews = append(c.previews, preview)
+	return core.ConfirmDecision{Allow: true}
+}
+
+func TestLadderPreviewComesFromTheTool(t *testing.T) {
+	withTempHome(t)
+	conf := &captureConfirmer{}
+	ag := core.NewAgent(nil, "test", "", core.Registry{"bash": fakePreviewTool{name: "bash"}})
+	fn := build.BuildBeforeToolExecute(nil, core.NewConfirmGate(conf), nil, ag)
+	allowed, _, _ := callBash(fn)
+	if !allowed {
+		t.Fatal("capturing confirmer must allow")
+	}
+	if len(conf.previews) != 1 || conf.previews[0] != "run: ls" {
+		t.Fatalf("previews = %v, want the tool's own contribution", conf.previews)
+	}
+}
+
+func TestLadderPreviewFollowsTheRewrite(t *testing.T) {
+	withTempHome(t)
+	conf := &captureConfirmer{}
+	ag := core.NewAgent(nil, "test", "", core.Registry{"bash": fakePreviewTool{name: "bash"}})
+	// The hook rewrites ls -> echo rewritten; the preview must describe what
+	// will run, not what was asked.
+	fn := build.BuildBeforeToolExecute(ladderEngine(t, "rewrite"), core.NewConfirmGate(conf), nil, ag)
+	allowed, _, _ := callBash(fn)
+	if !allowed {
+		t.Fatal("capturing confirmer must allow")
+	}
+	if len(conf.previews) != 1 || conf.previews[0] != "run: echo rewritten" {
+		t.Fatalf("preview = %v, want the REWRITTEN command, not the original", conf.previews)
 	}
 }
 

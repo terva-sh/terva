@@ -153,19 +153,30 @@ func scriptStringArg(args []any, i int, sig, field string) (string, error) {
 	return s, nil
 }
 
-// bindingPlan renders an accounted analysis as the line a human or a
-// transcript reads: "read x5, write x2".
-func bindingPlan(refs jsengine.BindingRefs) string {
-	parts := make([]string, 0, len(mutatingScriptBindings))
-	for _, name := range mutatingScriptBindings {
-		if n := refs.Calls[name]; n > 0 {
-			parts = append(parts, fmt.Sprintf("%s x%d", name, n))
-		}
+// Preview contributes this tool's confirmation-prompt line via the optional
+// accessor core.ToolPreview reads. Where BuildPreview can only show the raw
+// script wrapped in JSON, the accounted binding plan is the one thing an
+// approver needs and the one thing only this tool can compute.
+//
+// Pure and pre-execution: AnalyzeBindings only parses, and HostCall is not
+// consulted. Returns "" to fall back to BuildPreview when the analysis
+// cannot run — the gate enforces; a preview that cannot be computed does not
+// change what runs, only what is shown.
+func (t *CodeExecutionMutatingTool) Preview(args json.RawMessage, maxLen int) string {
+	var a codeExecArgs
+	if err := json.Unmarshal(args, &a); err != nil {
+		return ""
 	}
-	if len(parts) == 0 {
-		return "no host calls"
+	refs, aerr := jsengine.AnalyzeBindings("code_execution_mutating.js", a.Script, mutatingScriptBindings)
+	if aerr != nil {
+		return ""
 	}
-	return strings.Join(parts, ", ")
+	if refs.Complete {
+		return "accounted for: " + bindingPlanList(mutatingScriptBindings, refs)
+	}
+	// Incomplete is exactly when the approver most needs to know: say which
+	// constructs defeated the account rather than looking like a clean run.
+	return fmt.Sprintf("unaccountable (%s)", strings.Join(refs.Reasons, "; "))
 }
 
 func (t *CodeExecutionMutatingTool) Execute(ctx context.Context, raw json.RawMessage, progress func(string)) (core.ToolResult, error) {
@@ -206,7 +217,7 @@ func (t *CodeExecutionMutatingTool) Execute(ctx context.Context, raw json.RawMes
 		}, nil
 	}
 
-	plan := bindingPlan(refs)
+	plan := bindingPlanList(mutatingScriptBindings, refs)
 	if progress != nil {
 		progress("accounted for: " + plan)
 	}

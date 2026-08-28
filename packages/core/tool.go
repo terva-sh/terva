@@ -135,6 +135,39 @@ func ToolEssential(t Tool) bool {
 	return false
 }
 
+// ToolPreview returns the one-line summary a confirmation prompt shows for a
+// call to t. A tool contributes its own by implementing
+// Preview(json.RawMessage, int) string, read through a structural interface
+// like ToolGroup and ToolEssential so core need not import the implementing
+// packages. A nil tool, a tool that does not implement it, or one that
+// returns "" all fall back to BuildPreview — so a prompt changes only for a
+// tool that opts in, and a contributor may decline per call by returning "".
+//
+// This exists because BuildPreview can only read the args generically: it
+// picks the first recognisable field, which for a tool whose whole argument
+// is a program says nothing useful. The tool itself can say what the call
+// will do ("read x5, write x2") where a generic reader cannot.
+//
+// Display only. It decides nothing: the gate checks the same args this is
+// built from, and the result is truncated here rather than trusted, so a
+// contributor cannot flood the prompt. A tool that misreports its own
+// preview still passes through every rung of the ladder unchanged.
+func ToolPreview(t Tool, args json.RawMessage, maxLen int) string {
+	if maxLen <= 0 {
+		maxLen = 120
+	}
+	if t != nil {
+		if p, ok := t.(interface {
+			Preview(json.RawMessage, int) string
+		}); ok {
+			if s := p.Preview(args, maxLen); s != "" {
+				return truncatePreview(s, maxLen)
+			}
+		}
+	}
+	return BuildPreview(args, maxLen)
+}
+
 // Get looks up a tool by name.
 func (r Registry) Get(name string) (Tool, error) {
 	t, ok := r[name]

@@ -454,7 +454,7 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	// "current call" session state exists to collide when a host_tool_call
 	// approval parks concurrently with a model call's.
 	hookEng := w.hookEng
-	ag.BeforeToolExecute = build.BuildBeforeToolExecute(hookEng, gate, extMgr)
+	ag.BeforeToolExecute = build.BuildBeforeToolExecute(hookEng, gate, extMgr, ag)
 	s.bindAgentChannels(ag, gate)
 	if extMgr != nil {
 		ag.BeforeTurn = func(step int) (bool, string) {

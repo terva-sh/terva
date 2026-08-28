@@ -248,6 +248,68 @@ func hasEllipsis(s string) bool {
 	return strings.HasSuffix(s, "...")
 }
 
+// plainTool implements Tool with no Preview accessor, to pin the fallback.
+type plainTool struct{}
+
+func (plainTool) Name() string            { return "plain" }
+func (plainTool) Description() string     { return "" }
+func (plainTool) Schema() json.RawMessage { return json.RawMessage(`{}`) }
+func (plainTool) Execute(ctx context.Context, args json.RawMessage, progress func(string)) (ToolResult, error) {
+	return ToolResult{}, nil
+}
+
+// previewTool stubs the optional accessor: contribution when set, fallback
+// when empty.
+type previewTool struct{ preview string }
+
+func (p previewTool) Name() string            { return "preview_stub" }
+func (p previewTool) Description() string     { return "" }
+func (p previewTool) Schema() json.RawMessage { return json.RawMessage(`{}`) }
+func (p previewTool) Execute(ctx context.Context, args json.RawMessage, progress func(string)) (ToolResult, error) {
+	return ToolResult{}, nil
+}
+func (p previewTool) Preview(args json.RawMessage, maxLen int) string { return p.preview }
+
+// TestToolPreview pins the three properties the accessor exists for: a tool
+// that opts in is consulted, the contributed line is still truncated so a
+// contributor cannot flood the prompt, and anything that does not opt in is
+// byte-identical to BuildPreview.
+func TestToolPreview(t *testing.T) {
+	args := json.RawMessage(`{"command":"ls -la"}`)
+
+	t.Run("nil tool falls back", func(t *testing.T) {
+		if got, want := ToolPreview(nil, args, 50), BuildPreview(args, 50); got != want {
+			t.Errorf("want fallback %q, got %q", want, got)
+		}
+	})
+
+	t.Run("non-implementer is byte-identical to BuildPreview", func(t *testing.T) {
+		if got, want := ToolPreview(plainTool{}, args, 50), BuildPreview(args, 50); got != want {
+			t.Errorf("want unchanged %q, got %q", want, got)
+		}
+	})
+
+	t.Run("contribution is used", func(t *testing.T) {
+		if got := ToolPreview(previewTool{preview: "accounted for: read x2"}, args, 50); got != "accounted for: read x2" {
+			t.Errorf("got %q", got)
+		}
+	})
+
+	t.Run("empty contribution falls back", func(t *testing.T) {
+		if got, want := ToolPreview(previewTool{preview: ""}, args, 50), BuildPreview(args, 50); got != want {
+			t.Errorf("want fallback %q, got %q", want, got)
+		}
+	})
+
+	t.Run("contribution is truncated", func(t *testing.T) {
+		long := previewTool{preview: strings.Repeat("x", 200)}
+		got := ToolPreview(long, args, 50)
+		if len(got) > 50 || !hasEllipsis(got) {
+			t.Errorf("want truncated to <=50 with ellipsis, got len=%d %q", len(got), got)
+		}
+	})
+}
+
 // A call whose turn is already over must not reach a human at all.
 //
 // Every confirmer selects on the context and would deny on its own, so the

@@ -58,6 +58,47 @@ func (t *CodeExecutionTool) Schema() json.RawMessage { return json.RawMessage(co
 // so it stays off the default advertised manifest under lazy tools.
 func (t *CodeExecutionTool) ToolGroupName() string { return "scripting" }
 
+// scriptReadOnlyBindings is the read-only binding set, in reporting order.
+var scriptReadOnlyBindings = []string{"read", "grep", "glob"}
+
+// Preview contributes this tool's confirmation-prompt line via the optional
+// accessor core.ToolPreview reads. Where BuildPreview can only show the raw
+// script wrapped in JSON, the accounted binding plan is what an approver
+// needs. Pure and pre-execution: AnalyzeBindings only parses, HostCall is not
+// consulted, and "" falls back to BuildPreview when the analysis cannot run.
+// The gate enforces; a preview that cannot be computed changes only what is
+// shown, not what runs.
+func (t *CodeExecutionTool) Preview(args json.RawMessage, maxLen int) string {
+	var a codeExecArgs
+	if err := json.Unmarshal(args, &a); err != nil {
+		return ""
+	}
+	refs, aerr := jsengine.AnalyzeBindings("code_execution.js", a.Script, scriptReadOnlyBindings)
+	if aerr != nil {
+		return ""
+	}
+	if refs.Complete {
+		return "accounted for: " + bindingPlanList(scriptReadOnlyBindings, refs)
+	}
+	return fmt.Sprintf("unaccountable (%s)", strings.Join(refs.Reasons, "; "))
+}
+
+// bindingPlanList renders an accounted analysis as the line a human or a
+// transcript reads: "read x5". It is shared by both scripting tools, each
+// passing its own binding set.
+func bindingPlanList(bindings []string, refs jsengine.BindingRefs) string {
+	parts := make([]string, 0, len(bindings))
+	for _, name := range bindings {
+		if n := refs.Calls[name]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%s x%d", name, n))
+		}
+	}
+	if len(parts) == 0 {
+		return "no host calls"
+	}
+	return strings.Join(parts, ", ")
+}
+
 // hostCallFn is the gated dispatcher both scripting tools hold: it runs
 // one of the host's own tools through the SAME approval gate a
 // model-issued call uses.

@@ -628,7 +628,13 @@ func HookSpecsFor(args Args, trusted bool) *hooks.Config {
 // them running for a turn that no longer existed. The per-call context is a
 // descendant of the one the host used to pass, so anything carried in it is
 // still there; what it adds is an end.
-func BuildBeforeToolExecute(hookEng *hooks.Engine, gate *core.ConfirmGate, extMgr *extensions.Manager) func(context.Context, provider.ToolCallBlock) (bool, string, json.RawMessage) {
+//
+// ag is consulted at gate time, per call, to resolve the tool's optional
+// Preview accessor. It may be nil; a nil ag simply falls back to BuildPreview
+// like any tool that does not opt in. The handle is read per call rather
+// than captured at wiring time because the registry is live and can be
+// swapped across turns.
+func BuildBeforeToolExecute(hookEng *hooks.Engine, gate *core.ConfirmGate, extMgr *extensions.Manager, ag *core.Agent) func(context.Context, provider.ToolCallBlock) (bool, string, json.RawMessage) {
 	return func(ctx context.Context, call provider.ToolCallBlock) (allowed bool, reason string, modArgs json.RawMessage) {
 		args := call.Arguments
 		// Audit every call with the gate's decision and the mode in force, so
@@ -663,7 +669,14 @@ func BuildBeforeToolExecute(hookEng *hooks.Engine, gate *core.ConfirmGate, extMg
 			// exit 2 is the enforcement spelling.
 		}
 		if !skipGate && gate != nil {
-			ok, denyReason, _ := gate.Check(ctx, call.Name, args, core.BuildPreview(args, 120), call.ID)
+			// Resolve the tool here, per call, so a Preview contributor is found
+			// even if the registry was rebuilt since wiring. args is post-rewrite,
+			// so the preview the approver reads describes what will actually run.
+			var t core.Tool
+			if ag != nil {
+				t, _ = ag.LookupTool(call.Name)
+			}
+			ok, denyReason, _ := gate.Check(ctx, call.Name, args, core.ToolPreview(t, args, 120), call.ID)
 			if !ok {
 				return false, denyReason, nil
 			}

@@ -92,7 +92,7 @@ func scriptHostDispatcher(ag *core.Agent, gate *core.ConfirmGate) func(context.C
 		// one per binding call, reads included — and mints its own call id
 		// (see hosttool.go: a borrowed id collides in the confirmer's
 		// pending map when two parks overlap).
-		preview := core.BuildPreview(args, 120)
+		preview := core.ToolPreview(target, args, 120)
 		callID := fmt.Sprintf("script-%s-%d", name, hostGateSeq.Add(1))
 		allowed, reason, _ := gate.Check(ctx, name, args, preview, callID)
 		recordGateAudit(auditViaScriptBinding, name, args, gate, allowed, reason)

@@ -107,7 +107,7 @@ func TestBeforeToolExecuteAudits(t *testing.T) {
 	t.Cleanup(func() { auditSink.Close(); auditSink = prev })
 
 	// gate=nil → no gate check, call is allowed (mode reports empty).
-	fn := BuildBeforeToolExecute(nil, nil, nil)
+	fn := BuildBeforeToolExecute(nil, nil, nil, nil)
 	call := provider.ToolCallBlock{ID: "T1", Name: "bash", Arguments: []byte(`{"command":"echo hi"}`)}
 	if allowed, _, _ := fn(t.Context(), call); !allowed {
 		t.Fatal("expected the call to be allowed")
