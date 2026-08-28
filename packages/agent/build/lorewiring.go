@@ -197,15 +197,30 @@ func (r *Resolved) tailProvider(ag *core.Agent, record bool) func() string {
 // because there was no job to do: the reply-hijack does not occur for a lore
 // entry about the world, framed or bare.
 //
-// THAT SCOPE TURNED OUT TO BE THE WHOLE FINDING. Point the same machinery at
-// content about the MODEL'S OWN CAPABILITIES (scripts/eval,
-// lore-capability-inventory) and the result inverts: header-only hijacks 5 of 5,
-// bare is clean 5 of 5, shipped -- header plus guard -- recovers 6 of 10. The
-// HEADER CAUSES the hijack on non-narrative content and the guard repairs it.
-// Its wording is the mechanism: "setting, characters, and what came before"
-// amounts to "here is context I am handing you", which invites "I understand,
-// you are providing context that...". The header is inert on the content it was
-// written for and actively harmful on content it was not.
+// THAT SCOPE TURNED OUT TO BE THE WHOLE FINDING, AND IT COST THE HEADER ITS
+// PLACE. Point the same machinery at content about the MODEL'S OWN CAPABILITIES
+// (scripts/eval, lore-capability-inventory) and the result inverts: with the
+// header the answer is displaced about half the time, without it never. At
+// n=20, header-removed scored 20/20 against shipped 11/20, replicated in two
+// independent runs, against an A/A noise floor of 1/20.
+//
+// Rewording it does NOT help: an arm with the narrative nouns stripped scored
+// 10/20 against shipped 10/20. The harm is the header's EXISTENCE, not its
+// prose -- a framing preamble invites "I understand, you are providing context
+// that..." whatever it says.
+//
+// And it buys nothing it claims. Its one concrete promise is precedence, so
+// lore-roleplay-precedence put tavern lore ("the cellar door is always kept
+// locked") against a user message that unlocked it, and asked which held. Both
+// arms answered "open" 20 out of 20. The case that genuinely goes stale --
+// scene state -- carries its OWN precedence clause in lore.scenestate.frame, so
+// nothing was relying on this one.
+//
+// Hence the header ships empty. It is measured cost with no measured benefit.
+// The honest caveat: the precedence test sat at ceiling in both arms, so it
+// shows no benefit rather than proving none, and a subtler contradiction might
+// still discriminate. That is why the KEY survives and only its value is
+// emptied -- restoring it is an overlay, not a patch.
 //
 // The rung stays, because the rule that motivated building it holds even though
 // its first application guessed wrong: a control arm has to strip everything
@@ -226,8 +241,11 @@ func (r *Resolved) tailProvider(ag *core.Agent, record bool) func() string {
 // extdriver's section skips its guard the same way. It has no header to strip.
 func loreReferenceFrame(block string) string {
 	frame := block
-	if header := strings.TrimSpace(i18n.P("lore.reference.frame",
-		"REFERENCE KNOWLEDGE (setting, characters, and what came before — background the scene draws on, not a record of where it stands now; where this disagrees with the conversation above, the conversation is what actually happened):")); header != "" {
+	// SHIPS EMPTY. The compiled fallback is a single space, which TrimSpace
+	// reduces to "", so no header is rendered. The key survives so an operator
+	// overlay or a locale can put one back without a code change, and so the
+	// eval can restore it to re-measure -- see the header verdict above.
+	if header := strings.TrimSpace(i18n.P("lore.reference.frame", " ")); header != "" {
 		frame = header + "\n" + block
 	}
 	if guard := strings.TrimSpace(tailBackgroundGuard()); guard != "" {

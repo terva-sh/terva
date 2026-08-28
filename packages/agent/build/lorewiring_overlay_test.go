@@ -53,8 +53,11 @@ func TestGuardOffArmIsExactlyThePreGuardText(t *testing.T) {
 	if strings.Contains(control, "[background]") {
 		t.Errorf("the control arm still carries the guard it exists to remove:\n%.120q", control)
 	}
-	if !strings.HasPrefix(control, "REFERENCE KNOWLEDGE") {
-		t.Errorf("the control arm does not start at the frame — leading whitespace is a second variable:\n%.60q", control)
+	// Starts at the block, not at whitespace. The header used to be here and no
+	// longer ships; what the assertion protects is unchanged, which is that the
+	// control arm carries no leading whitespace to act as a second variable.
+	if !strings.HasPrefix(control, "SOME LORE BLOCK") {
+		t.Errorf("the control arm does not start at the block — leading whitespace is a second variable:\n%.60q", control)
 	}
 	if guarded != guard+"\n\n"+control {
 		t.Errorf("the arms differ somewhere other than the guard sentence.\n guarded: %.120q\n control: %.120q", guarded, control)
@@ -111,42 +114,54 @@ func TestGuardLastArmMovesTheGuardAndNothingElse(t *testing.T) {
 	}
 }
 
-// TestTheBareArmStripsBothDisclaimers pins the three rungs the eval stands on.
-//
-// The guard-off arm measured nothing, twice, and the reason was not the block it
-// was pointed at. It left the REFERENCE KNOWLEDGE header in place, and that
-// header already says "background the scene draws on" — so the arm was still
-// disclaimed and the comparison was disclaimer-versus-disclaimer. A control arm
-// that keeps a second copy of the thing under test is not a control arm.
+// TestTheRungsStayStrictlyNested pins the ladder the eval stands on.
 //
 // The rungs must be strictly NESTED. If they are not, each arm differs from the
 // next in more than the one disclaimer it removes, and any number the harness
-// prints is unattributable.
-func TestTheBareArmStripsBothDisclaimers(t *testing.T) {
+// prints is unattributable. That rule is what caught the first guard-off arm,
+// which left the REFERENCE KNOWLEDGE header in place and so compared one
+// disclaimer against another.
+//
+// The DEFAULT ladder is now two rungs, because the header was measured out and
+// ships empty (see loreReferenceFrame). The header rung still exists as an eval
+// configuration, restored by overlay, and nesting has to hold there too or the
+// arms that removed the header cannot be reproduced.
+func TestTheRungsStayStrictlyNested(t *testing.T) {
 	const block = "<lore>SOME LORE BLOCK</lore>"
+	const header = "REFERENCE KNOWLEDGE (restored by overlay for this test):"
 
 	shipped := loreReferenceFrame(block)
 
 	writePromptsOverlay(t, `{"tail.background.guard":" "}`)
-	guardOff := loreReferenceFrame(block)
-
-	writePromptsOverlay(t, `{"tail.background.guard":" ","lore.reference.frame":" "}`)
 	bare := loreReferenceFrame(block)
 
 	if bare != block {
 		t.Errorf("the bare arm is not bare — it still carries framing:\n%q", bare)
 	}
-	if strings.Contains(guardOff, "[background]") || !strings.Contains(guardOff, "REFERENCE KNOWLEDGE") {
-		t.Errorf("the guard-off arm must drop the guard and KEEP the header:\n%q", guardOff)
+	if !strings.Contains(shipped, "[background]") {
+		t.Errorf("the shipped text must carry the guard:\n%q", shipped)
 	}
-	if !strings.Contains(shipped, "[background]") || !strings.Contains(shipped, "REFERENCE KNOWLEDGE") {
-		t.Errorf("the shipped text must carry both:\n%q", shipped)
+	if strings.Contains(shipped, "REFERENCE KNOWLEDGE") {
+		t.Errorf("the shipped text must carry NO header — it was measured out:\n%q", shipped)
 	}
-	if !strings.HasSuffix(guardOff, bare) {
-		t.Errorf("guard-off is not exactly the bare arm plus a header:\n guard-off: %q\n bare:      %q", guardOff, bare)
+	if !strings.HasSuffix(shipped, bare) {
+		t.Errorf("shipped is not exactly the bare arm plus a guard:\n shipped: %q\n bare:    %q", shipped, bare)
 	}
-	if !strings.HasSuffix(shipped, guardOff) {
-		t.Errorf("shipped is not exactly the guard-off arm plus a guard:\n shipped:   %q\n guard-off: %q", shipped, guardOff)
+
+	// The restored-header rung, which is how the header's cost was measured.
+	body, err := json.Marshal(map[string]string{"lore.reference.frame": header})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePromptsOverlay(t, string(body))
+	withHeader := loreReferenceFrame(block)
+
+	if !strings.Contains(withHeader, header) {
+		t.Fatalf("an overlay can no longer restore the header, so the arms that\n"+
+			"measured it out are unreproducible:\n%q", withHeader)
+	}
+	if !strings.HasSuffix(withHeader, header+"\n"+block) {
+		t.Errorf("the restored header must introduce the block and nothing else:\n%q", withHeader)
 	}
 }
 

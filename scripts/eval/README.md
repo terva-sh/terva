@@ -545,6 +545,10 @@ the ones removed for that reason.
 | `lazy-note-prohibition-first.json` | `tools.lazy.inactive_groups`(+`_brief`) with the same facts and the prohibition moved first. The candidate arm for the note-hijack fix. An ephemeral-tail note is invisible to `--dump-prompt=sizes`, so its pre-flight legitimately reports silence. |
 | `tier-a-prompts-ste.json` | the four on-surface decision prompts (`system.conventions.file_edits`/`output`, `memory.policy`, `system.status_tool_hint`) in Simplified Technical English with each rule's command moved before its detail. `memory.policy` also gains the archive-tier sentence the shipped text never had — so for that key the arm measures the improved text, not the conversion alone. |
 | `lazy-note-pre-fix.json` | `tools.lazy.inactive_groups`(+`_brief`) as they stood at `2884da1a^`, with the prohibition buried mid-note behind "This is an inventory, not a request". **The known-bad arm**: this is the exact catalog under which Haiku answered the note instead of the user in 20 of 20 runs. Needs `seed_tool_groups`. Use it to prove the harness can still see a regression — see "The power test" below. |
+| `lore-frame-off.json` | `lore.reference.frame` blanked. Was the arm that measured the header out; now that the header ships empty this is a **no-op against the default**, kept because it names what that arm did. |
+| `lore-frame-neutral.json` | the header with its narrative nouns removed, precedence clause intact. The rewording candidate. Scored 10/20 against shipped 10/20 — rewording is not the fix. |
+| `lore-frame-precedence-only.json` | the header cut back to its precedence sentence alone. Also no better than shipped. Kept as the record of a rung that was tried. |
+| `aa-null.json` | `lore.reference.frame` set to its **exact shipped value**: a byte-identical no-op that satisfies `ab.sh`'s refusal to run identical arms. This is the A/A probe — use it to measure the harness's own noise floor before believing any small delta. |
 | `tail-background-guard-off.json` | `tail.background.guard` removed, so lore and extension-card blocks ride the ephemeral tail unguarded. The control arm for the background guard shipped in `tail-ordering.md` stage 0. Needs `seed_lore`; like the lazy-note overlay it is invisible to the pre-flight. |
 | `stall-guard-off.json` | `stall.guard` cut back to the bare `[loop check]` tag, dropping the prohibition sentences but keeping the tag both arms share. The control arm for the loop-check **directive** guard. **`ab.sh` cannot reach it** — see below. |
 
@@ -889,6 +893,71 @@ direct reading of this scenario's noise floor, and it says n=5 is too small for
 any rung whose true rate is near the middle. The 0/5-versus-5/5 contrasts are
 decisive and survive it; the shipped rate does not. Anything that turns on
 whether shipped is 40% or 80% needs n≈20 before it means anything.
+
+## The A/A test: which numbers are comparable, and which are not
+
+Chasing the header fix produced a control that would not sit still. Shipped, the
+same configuration on the same scenario at n=20, measured **10/20, 11/20, 2/20,
+11/20** across four runs. That is far outside binomial noise, and it makes every
+absolute rate in this file suspect until explained.
+
+An A/A test explains it. `overlays/aa-null.json` sets `lore.reference.frame` to
+its **exact shipped value**, so the rendered prompt is byte-identical while
+`ab.sh` still sees an overlay — the harness refuses genuinely identical arms, and
+a no-op overlay is the honest way past that guard. Two identical arms in one run
+scored **12/20 and 11/20**.
+
+So the variance decomposes:
+
+| comparison | spread | usable? |
+|---|---|---|
+| two arms **within** one run | ≈1/20 | **yes** — this is what A/B measures |
+| the same arm **across** runs | up to 9/20 | **no** |
+
+**The rule this sets: compare arms within a run, never rates across runs.** The
+A/B design is sound precisely because both arms ride the same conditions. The
+2/20 outlier is not a mystery once you look — *both* arms collapsed in that run
+(0 and 2), a run-level effect that cancels in the within-run delta and destroys
+any cross-run comparison.
+
+This also retroactively explains the 2/5-versus-4/5 confusion above, which was
+written off as small-n. It was not only small-n; those were different runs.
+
+## The header verdict: measured out
+
+`lore.reference.frame` now **ships empty**. The evidence, all within-run:
+
+| | header present | header removed |
+|---|---:|---:|
+| non-narrative lore (`lore-capability-inventory`) | 11/20 | **20/20** (replicated twice) |
+| narrative lore (`lore-hijack-briefing`) | 20/20 | 20/20 |
+| precedence (`lore-roleplay-precedence`) | 20/20 | 20/20 |
+
+Three things had to be true before touching shipped prompt text, and each was
+tested separately:
+
+- **Rewording does not help.** `lore-frame-neutral.json` strips the narrative
+  nouns and scored 10/20 against shipped 10/20. The harm is the header's
+  *existence*, not its prose — a framing preamble invites "I understand, you are
+  providing context that…" whatever it says.
+- **It buys nothing it promises.** Its one concrete claim is precedence, so
+  `lore-roleplay-precedence` set tavern lore ("the cellar door is always kept
+  locked") against a user message that unlocked it. Both arms answered "open"
+  20/20. The state that genuinely goes stale — scene state — carries its **own**
+  precedence clause in `lore.scenestate.frame`.
+- **Removing it costs nothing on the content it was written for.** 20/20 either
+  way on narrative lore.
+
+**The honest caveat:** the precedence test sits at ceiling in both arms, so it
+shows no measurable benefit rather than proving none. A subtler contradiction
+than an explicit "unlocked an hour ago" might still discriminate. That is exactly
+why the **key survives and only its value is emptied** — restoring the header is
+an overlay or a locale entry, not a patch.
+
+One scoring gotcha the precedence scenario exposed: `score()` treats a run that
+never called a tool as **void**, so a final-answer-only scenario reports `(0,0)`
+for both arms and is silently skipped. Mark such a scenario `"check": "manual"`
+and read the answers out of the ndjson.
 
 One operational note: an arm on this path needs `auth.json` in the arm home.
 `ab.sh` symlinks it already, but a hand-rolled probe that forgets dies with

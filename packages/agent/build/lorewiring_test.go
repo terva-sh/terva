@@ -298,8 +298,17 @@ func TestPerTurnContext_SceneStatePinned(t *testing.T) {
 // past it. A dogfooded session lost a beat exactly this way: a setup entry said
 // the lieutenant was expected at the door and should be asked her team size;
 // she had been let in eight messages earlier; the model re-staged her arrival.
-// The frame is the fix — this block is reference, and the transcript wins.
-func TestPerTurnContext_LoreFramedAsReference(t *testing.T) {
+// The frame was the fix — this block is reference, and the transcript wins.
+//
+// IT NO LONGER SHIPS, and this test now guards the reverse. The frame was
+// measured out in 2026-08: on non-narrative lore it displaced the answer about
+// half the time (header-removed 20/20 against shipped 11/20 at n=20, replicated
+// in two runs, A/A noise floor 1/20), rewording it changed nothing, and its
+// precedence promise bought nothing measurable (both arms 20/20 on
+// lore-roleplay-precedence). The bug in the story above is now held by the
+// background guard and, for the state that actually goes stale, by
+// lore.scenestate.frame's own precedence clause. See loreReferenceFrame.
+func TestPerTurnContext_LoreHeaderShipsEmpty(t *testing.T) {
 	r := &Resolved{loreFired: &LoreFiredRecord{}, worldLore: &WorldLoreRecord{}}
 	r.worldLore.Set(WorldLoreEntries([]core.WorldLoreEntry{
 		{Name: "First-Light Search", Keys: []string{"rope"}, Content: "The watch is expected at first light."},
@@ -310,17 +319,18 @@ func TestPerTurnContext_LoreFramedAsReference(t *testing.T) {
 	})
 	got := r.PerTurnContext(ag)()
 
-	if !strings.Contains(got, "REFERENCE KNOWLEDGE") {
-		t.Fatalf("the tail lore block must be framed as reference, got %q", got)
+	if strings.Contains(got, "REFERENCE KNOWLEDGE") {
+		t.Errorf("the reference header is shipping again. It was measured out, so a\n"+
+			"reappearance is a regression and not a restoration -- re-run\n"+
+			"lore-capability-inventory before putting it back. got %q", got)
 	}
-	// The frame introduces the block, so it must precede it.
-	if strings.Index(got, "REFERENCE KNOWLEDGE") > strings.Index(got, "<lore>") {
-		t.Errorf("the frame must introduce the lore block, got %q", got)
+	// What the header carried still has to arrive: the block itself, and the
+	// guard that does the work the header was wrongly credited with.
+	if !strings.Contains(got, "<lore>") {
+		t.Fatalf("the lore block must still ride the tail, got %q", got)
 	}
-	// The tiebreak is the whole point: without it the block reads as the current
-	// moment purely because it lands last.
-	if !strings.Contains(got, "the conversation is what actually happened") {
-		t.Errorf("the frame must hand the tiebreak to the transcript, got %q", got)
+	if !strings.Contains(got, "[background]") {
+		t.Errorf("the background guard must still lead the block, got %q", got)
 	}
 
 	// The cached system prefix sits BEFORE the conversation, where the frame's
