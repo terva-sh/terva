@@ -11,6 +11,25 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.132.3](https://github.com/terva-sh/terva/releases/tag/v0.132.3) — 2026-08-27
+
+### Features
+
+- context: the guard's position in the tail is expressible, and measured
+- core: a tool contributes its own preview to the approval prompt
+- swarm: a sub-agent that wrote nothing no longer leaves its worktree behind
+- web: offer the working provider when the pinned one is dead
+
+### Fixes
+
+- context: the background guard forbade acting on the user's own instructions
+- context: the host tail is six things, and only two of them wanted a guard
+- core: the loop check could win the reply it was trying to fix
+- lore: the reference header displaced the answer it was meant to frame
+- tui: a lapsed login exited to a shell that has no /login
+- tui: a lapsed pin switched providers without asking
+- workspace: two of three doctors sent a prompt paragraph untranslated
+
 ## [v0.132.1](https://github.com/terva-sh/terva/releases/tag/v0.132.1) — 2026-08-18
 
 ### Features
