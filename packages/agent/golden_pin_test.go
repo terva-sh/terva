@@ -59,8 +59,15 @@ func TestEveryGoldenCorpusIsPinnedToLF(t *testing.T) {
 			}
 			return nil
 		}
-		ext := filepath.Ext(path)
-		if ext != ".jsonl" && ext != ".json" {
+		// Scanning by ALLOWLIST (".json" and ".jsonl", which is what this
+		// was) reintroduces the hand-kept list this test exists to replace.
+		// The ctrlproto censuses published three .txt goldens, byte-compared
+		// like every other corpus, and this walk stepped over all three — the
+		// guard was in the tree, self-enrolling, and blind to them anyway.
+		// A denylist fails the safe way round: a corpus in a new text format
+		// is covered by the commit that adds it, and the worst a
+		// miscategorised binary costs is one .gitattributes line.
+		if binaryExt[strings.ToLower(filepath.Ext(path))] {
 			return nil
 		}
 		if !strings.Contains(filepath.ToSlash(path), "/testdata/") {
@@ -98,6 +105,15 @@ func TestEveryGoldenCorpusIsPinnedToLF(t *testing.T) {
 			"first signal is the public release gate. Add a pin beside the others.",
 			rel, strings.Join(pinned, "\n  "))
 	}
+}
+
+// binaryExt lists the extensions git will not line-ending-convert on checkout.
+// A corpus in one of these cannot desync the way a text one does, so it is the
+// only thing the scan above skips.
+var binaryExt = map[string]bool{
+	".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true,
+	".ico": true, ".pdf": true, ".zip": true, ".gz": true, ".tar": true,
+	".wasm": true, ".bin": true, ".exe": true, ".woff": true, ".woff2": true,
 }
 
 // packageComparesBytes reports whether any _test.go in dir compares raw bytes

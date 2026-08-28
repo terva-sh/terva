@@ -11,6 +11,15 @@ examples/cards/*.png binary
 # frame. Pin the goldens to LF.
 packages/agent/ctrlproto/testdata/*.json text eol=lf
 
+# The ctrlproto censuses pin their output as .txt beside those frames, and are
+# byte-compared the same way: TestMethodGroupsArePinned, TestWireVerbIndexIsPinned
+# and TestWireStructSchemaIsPinned all end in bytes.Equal against the bytes on
+# disk. Unpinned they desync on a Windows checkout and nowhere else, and they say
+# "method group assignments changed" and "first difference at line 1" — naming
+# nothing about line endings, which is what makes this class expensive to read at
+# a release gate. The pin above was written for .json and did not reach them.
+packages/agent/ctrlproto/testdata/*.txt text eol=lf
+
 # The connproto golden corpus is the same shape and the same trap:
 # TestGoldenFixtureMatchesCorpus byte-compares the published file against the
 # in-source frames, so a CRLF checkout marks a correct fixture stale. This one
