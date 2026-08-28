@@ -850,6 +850,21 @@ type PanelKeyFromHost struct {
 	Text    string `json:"text,omitempty"`
 }
 
+// PanelResizeFromHost would tell an extension its panel's drawing area
+// changed, so a renderer could re-wrap to the new width/height.
+//
+// SPEC-ONLY, and always has been: nothing in this tree emits it. There is
+// no producer, no Driver.SendPanelResize beside SendPanelKey/SendPanelClose,
+// and no SDK handler beside OnPanelKey — panels re-render on the
+// extension's own panel_render cadence. The type and its documentation
+// have coexisted without an implementation since the original package
+// split, and docs/extensions.md says so to extension authors outright.
+//
+// It stays because the wire spec is published (the golden corpus pins its
+// bytes, so an SDK decoding it defensively gets them right) and removing a
+// frame from a published spec costs more than carrying it. Adding a
+// producer is a behaviour change that reverses a stated decision — not a
+// loose end to tidy.
 type PanelResizeFromHost struct {
 	Type    string `json:"type"`
 	PanelID string `json:"panel_id"`

@@ -937,6 +937,11 @@ covers every frame type in the protocol, and a test refuses to let it
 fall behind — a frame added to `extproto.go` without a corpus entry
 fails on the commit that adds it.
 
+It pins the **wire spec**, which is not the same as what a host actually
+sends: [`panel_resize`](#panel_resize) has a corpus entry and no
+emitter. A corpus entry tells you the exact bytes to expect *if* the
+frame arrives — never that it will.
+
 `dir` is `ext_to_host`, `host_to_ext`, or `both`. An extension only ever
 *encodes* `ext_to_host` frames, so the useful split is to assert those
 byte-exact against the corpus and the rest on decode.

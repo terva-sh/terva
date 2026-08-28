@@ -580,6 +580,16 @@ var goldenFrames = []goldenFrame{
 		`{"type":"panel_key","panel_id":"todos-main","key":"rune","text":"y"}`,
 	},
 	{
+		// SPEC-ONLY: no host emits this frame, and none ever has — there
+		// is no producer in the tree, no Driver.SendPanelResize, and no
+		// SDK handler. Panels re-render on the extension's own
+		// panel_render cadence instead. It is pinned because the corpus
+		// publishes the wire SPEC, so an SDK that chooses to decode it
+		// defensively gets the exact bytes rather than a guess; that is
+		// not a promise it will arrive. See docs/extensions.md.
+		//
+		// Wiring a producer is a behaviour change, not a gap-fill: it
+		// would reverse a decision the docs state outright.
 		"panel_resize",
 		PanelResizeFromHost{Type: "panel_resize", PanelID: "todos-main", Width: 80, Height: 24},
 		`{"type":"panel_resize","panel_id":"todos-main","width":80,"height":24}`,
