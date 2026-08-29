@@ -8,6 +8,7 @@ import { Markdown } from '../../ui/Markdown'
 import { memo } from '../../ui/memo'
 import { ClearDivider } from './ClearDivider'
 import { CompactionDivider, type RevealFn } from './CompactionDivider'
+import { ReasoningDisclosure } from './ReasoningDisclosure'
 import type { ToolView } from './types'
 
 export type { ToolView } from './types'
@@ -68,6 +69,10 @@ function AttachedFiles({ files, missing }: { files: WireAttachment[]; missing?: 
 function AssistantMessage({ item }: { item: Extract<Item, { kind: 'assistant' }> }) {
   return (
     <div class="msg-wrap assistant-wrap">
+      {/* Thinking leads the reply, above the prose it produced. A message that
+          thought and then only called a tool carries no text at all, so this
+          can legitimately be the whole row. */}
+      {item.reasoning && <ReasoningDisclosure summary={item.reasoning} />}
       <div class="msg assistant md">
         <Markdown text={item.text} />
         {item.images && <ImageGallery images={item.images} />}

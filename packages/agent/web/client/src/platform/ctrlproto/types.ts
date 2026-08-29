@@ -42,6 +42,11 @@ export interface WireBlock {
   // the size, always present. See docs/controllers.md.
   data?: string
   bytes?: number
+  // reasoning — the readable thinking recorded on an assistant message, present
+  // only when "Record thinking" (reasoning_summary) is on. A display-only turn
+  // blanks it and leaves the block behind, so absence here is the normal case
+  // and never means the model did not think.
+  summary?: string
 }
 
 // PromptImage is one inbound attachment on a prompt (the "images" feature).

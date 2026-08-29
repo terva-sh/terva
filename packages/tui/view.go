@@ -1130,6 +1130,15 @@ func (v *View) renderMessage(m provider.Message, width int, turnOpen bool) []str
 		_ = turnOpen
 		const indent = "  "
 		inner := assistantBodyWidth(width - len(indent))
+		// Recorded thinking leads the message, ahead of the prose — see
+		// renderReasoningRows for why it is hoisted out of content order.
+		var reasoning []string
+		for _, c := range m.Content {
+			if r, ok := c.(provider.ReasoningBlock); ok && r.Summary != "" {
+				reasoning = append(reasoning, r.Summary)
+			}
+		}
+		lines = append(lines, v.renderReasoningRows(reasoning, width)...)
 		for _, c := range m.Content {
 			switch b := c.(type) {
 			case provider.TextBlock:
@@ -1155,6 +1164,11 @@ func (v *View) renderMessage(m provider.Message, width int, turnOpen bool) []str
 					_, stripped := parseImageFootprint(line)
 					lines = append(lines, indent+stripped)
 				}
+			case provider.ReasoningBlock:
+				// Already drawn above, ahead of the prose. Named here so the
+				// switch accounts for every block an assistant message can
+				// carry, and a reader can tell handled from forgotten.
+				_ = b
 			}
 		}
 	case provider.RoleTool:
@@ -2656,6 +2670,47 @@ func (v *View) renderClearBlock(state string, width int) []string {
 		label += " · " + i18n.T("/reveal to show what came before")
 	}
 	return []string{v.transcriptRule(label, '╌', width)}
+}
+
+// renderReasoningRows draws the model's RECORDED thinking for one assistant
+// message: collapsed to a single muted line, or expanded (ctrl+o, the same
+// control the compaction block and the tool boxes ride) to the summary itself.
+//
+// It draws BEFORE the message's prose regardless of where the block sits in
+// Content, because block order is provider-specific — Anthropic emits thinking
+// ahead of the text, the Responses backends emit it after — and "thinking, then
+// answer" is the only order that reads correctly on both.
+//
+// 🔑 The predicate is a non-empty Summary, never the Shape tag. Shape exists to
+// keep REPLAY honest: a stripped Thinking block and a native ThinkingOpaque one
+// are byte-identical, so only the tag tells them apart on the wire. Display asks
+// a simpler question — is there text to show. That is also what keeps the two
+// reasoning paths from colliding: a display-only turn blanks Summary
+// (stripSummariesForDisplayOnly), so nothing is drawn here and the ephemeral
+// live line remains the whole story. Only "Record thinking" puts text on screen
+// that outlives the turn.
+func (v *View) renderReasoningRows(summaries []string, width int) []string {
+	if len(summaries) == 0 {
+		return nil
+	}
+	th := v.Theme
+	const indent = "  "
+	if !v.ExpandAll {
+		label := i18n.T("thinking · ctrl+o to expand")
+		return []string{truncateToWidth(indent+th.FG256(th.Muted, "▸ "+label), width)}
+	}
+	lines := []string{indent + th.FG256(th.Muted, "▾ "+i18n.T("thinking"))}
+	inner := assistantBodyWidth(width - len(indent))
+	for _, s := range summaries {
+		md := RenderMarkdown(strings.TrimLeft(s, "\n"), th, inner)
+		for _, l := range strings.Split(md, "\n") {
+			if len(l) > 0 && l[0] == FlushLeftSentinel {
+				l = l[1:]
+			}
+			lines = append(lines, indent+l)
+		}
+	}
+	return append(lines, "")
 }
 
 // renderCompactionBlock renders a compaction checkpoint as a divider in the

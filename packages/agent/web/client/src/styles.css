@@ -1044,6 +1044,17 @@ button.ident-home:hover .persona { text-decoration: underline; }
 .compaction.cleared .compaction-rule::after { border-top: 1px dashed var(--line); background: none; height: 0; }
 .compaction-toggle.static { border-style: dashed; cursor: default; }
 
+/* Recorded thinking, above the reply it produced. Borrows the compaction
+   disclosure's shape because it is the same gesture — a muted pill that opens a
+   quieter body — but carries no rule: this belongs to one message, and a
+   full-width line would read as a boundary between turns. Only present when
+   "Record thinking" is on, so most transcripts never show it. */
+.reasoning { align-self: stretch; width: 100%; min-width: 0; margin: 0 0 6px; }
+.reasoning-toggle { display: flex; align-items: center; gap: 5px; font: inherit; font-size: var(--fs-note); color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; cursor: pointer; white-space: nowrap; }
+.reasoning-toggle:hover { color: var(--fg); }
+.reasoning-chev { font-size: 9px; }
+.reasoning-summary { margin-top: 6px; padding: 10px 12px; border-left: 2px solid var(--line); font-size: var(--fs-detail); color: var(--muted); overflow-x: auto; }
+
 /* raati pane — the deliberation board (docs/proposals/raati-deliberation.md).
    Deliberately theme-FIXED: the board is a screen-within-a-screen (tar-black
    like the terva site), so its palette does not follow prefers-color-scheme.

@@ -62,7 +62,11 @@ export type Item = Placed &
     // empty) turn — rendered with 🎭 attribution rather than as a model reply.
     // routed marks a line the meta-narrator routed to a character (Worlds W3):
     // model-produced but likewise 🎭-attributed to its actor, not the main card.
-    | { kind: 'assistant'; id: string; text: string; streaming: boolean; images?: ImageAttachment[]; directed?: boolean; routed?: boolean; actor?: string; time?: string }
+    // `reasoning` is the thinking RECORDED on the finished message, which is a
+    // different thing from `SessionState.reasoning`: that one is the live line
+    // for the turn in flight and is dropped when the turn ends. This one is
+    // transcript, so it survives a reload and a scroll away.
+    | { kind: 'assistant'; id: string; text: string; streaming: boolean; images?: ImageAttachment[]; directed?: boolean; routed?: boolean; actor?: string; time?: string; reasoning?: string }
     // `shared` are files this call published for the user (share_file). They
     // hang off the tool item because that is where the wire puts them, but they
     // are NOT rendered here — sequenceConversationItems lifts them into rows of
@@ -197,6 +201,23 @@ function blockText(blocks: WireBlock[] | undefined, skipPreamble = false): strin
   return (skipPreamble ? texts.slice(1) : texts).join('')
 }
 
+// reasoningSummary pulls the readable thinking off a finished message.
+//
+// Empty is the ordinary case and must stay indistinguishable from absent: a
+// display-only turn blanks the summary and leaves the block in place, so keying
+// off the block's PRESENCE would hang a disclosure control on every assistant
+// message with nothing behind it. Only text counts.
+//
+// A message can carry more than one block (one per assistant segment), and the
+// providers separate sections with a blank line, so joining matches how the same
+// text streams live.
+function reasoningSummary(blocks: WireBlock[] | undefined): string | undefined {
+  const parts = (blocks ?? [])
+    .filter((b) => b.type === 'reasoning' && b.summary)
+    .map((b) => b.summary as string)
+  return parts.length ? parts.join('\n\n') : undefined
+}
+
 // imageAttachments pulls the renderable image blocks out of a content list —
 // only those the carrier delivered with data (image-data negotiated); size-only
 // blocks are skipped so the result is empty rather than broken <img> tags.
@@ -232,9 +253,15 @@ export function itemsFromMessages(msgs: WireMessage[], at: Placement): Item[] {
 
     const text = blockText(m.content, !!m.preamble)
     const images = imageAttachments(m.content)
+    const reasoning = reasoningSummary(m.content)
     // A message can be nothing BUT a preamble and a lapsed-file count: the user
     // attached a file, typed no words, and it expired before the send.
-    if (text || images || m.attachments?.length || m.attachments_missing) {
+    //
+    // reasoning earns its place in this guard: a turn that thinks and then calls
+    // a tool carries thinking and a tool_call and NO text, which is the shape
+    // Anthropic emits most. Without it that message makes no item and the
+    // thinking behind every tool call is dropped on replay.
+    if (text || images || reasoning || m.attachments?.length || m.attachments_missing) {
       out.push(
         // Checked before role: a compaction summary IS role 'user', and reading
         // the role first is exactly how it used to render as a user bubble.
@@ -244,7 +271,7 @@ export function itemsFromMessages(msgs: WireMessage[], at: Placement): Item[] {
             ? { kind: 'system', id, text, ...placed }
             : m.role === 'user'
               ? userRow(text, images, id, placed, m.time, m.attachments, m.attachments_missing)
-              : { kind: 'assistant', id, text, streaming: false, images, directed: m.directed, routed: m.routed, actor: m.actor, time: m.time, ...placed },
+              : { kind: 'assistant', id, text, streaming: false, images, reasoning, directed: m.directed, routed: m.routed, actor: m.actor, time: m.time, ...placed },
       )
     }
     for (const b of m.content ?? []) {
@@ -442,12 +469,17 @@ export function applyEvent(items: Item[], ev: WireEvent): Item[] {
     case 'assistant_message': {
       // Images (agent-generated) ride the finalized message, never the deltas.
       const images = imageAttachments(ev.message?.content)
+      // Recorded thinking rides the FINALIZED message, never the deltas — the
+      // live line that streamed during the turn is a separate, ephemeral thing
+      // (SessionState.reasoning) and is cleared as this arrives.
+      const reasoning = reasoningSummary(ev.message?.content)
       const last = items[items.length - 1]
       if (last && last.kind === 'assistant' && last.streaming) {
-        return [...items.slice(0, -1), { ...last, streaming: false, images: images ?? last.images }]
+        return [...items.slice(0, -1), { ...last, streaming: false, images: images ?? last.images, reasoning }]
       }
       const text = blockText(ev.message?.content)
-      if (text || images) return [...items, { kind: 'assistant', id: nextID(), text, streaming: false, images }]
+      if (text || images || reasoning)
+        return [...items, { kind: 'assistant', id: nextID(), text, streaming: false, images, reasoning }]
       return items
     }
     case 'tool_call':
