@@ -419,6 +419,18 @@ type InteractiveConfig struct {
 	// session, but any skill is still loadable by name (e.g. via /skill).
 	ReloadSkills func() []*skills.Skill
 
+	// ReloadSkillsAndPrompt backs /reload-skills. Like ReloadSkills it
+	// re-discovers and swaps the live catalog, but it ALSO rebuilds the
+	// system prompt when the manifest the model reads actually changed — so
+	// a skill written this session becomes not merely loadable but VISIBLE,
+	// which is what makes the model reach for it unprompted.
+	//
+	// Separate from ReloadSkills because the two make opposite trades. The
+	// picker must never cost a prompt cache just for being opened; an
+	// explicit /reload-skills may, and says so. The rebuild is conditional,
+	// so the usual authoring beat — editing a body — still costs nothing.
+	ReloadSkillsAndPrompt func() SkillReload
+
 	// (LoreList, LoreFired, LoreDropped and LoreFiredReset used to live here —
 	// the direct driver's half of /lore. /lore now reads the lore surface for
 	// the authored entries; the fired/dropped sections the last three fed were

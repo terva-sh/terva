@@ -80,9 +80,67 @@ func (w *Workspace) SkillSnapshot(sess string) []*skills.Skill {
 // session-authored skill resolves by name (bound to the /skills reload key).
 //
 // Catalog only: it never rebuilds the system prompt, so opening a picker can
-// never cost the user their prompt cache.
+// never cost the user their prompt cache. /reload-skills wants the other
+// trade-off — see ReloadSkillsAndPrompt.
 func (w *Workspace) ReloadSkills(sess string) []*skills.Skill {
 	return w.skillsForSession(sess, true)
+}
+
+// SkillReloadStats reports what a /reload-skills actually did, so a front end
+// can say something more useful than "done" — and so the one case that costs
+// the user something (a dropped prompt cache) is stated rather than silent.
+type SkillReloadStats struct {
+	// Available counts what a person sees listed, matching the /skills picker's
+	// number rather than the larger set the model can load by name.
+	Available int
+	// Added and Removed are qualified names, so a project skill and a built-in
+	// sharing a bare name are never mistaken for one another.
+	Added   []string
+	Removed []string
+	// PromptRebuilt records that the manifest changed and the next turn
+	// therefore starts uncached.
+	PromptRebuilt bool
+}
+
+// ReloadSkillsAndPrompt is the /reload-skills path: re-run discovery, swap the
+// live catalog, and rebuild the system prompt ONLY when the manifest the model
+// reads actually changed.
+//
+// The two halves are deliberately separate, because they have very different
+// costs. Swapping the catalog is free and immediately makes a skill loadable by
+// name. Rebuilding the prompt discards the provider's cached request prefix, so
+// the next turn re-reads the whole transcript uncached. That is worth paying
+// when a skill APPEARED — the model will not reach for what it cannot see
+// listed — and wasted when the author merely edited a body, which is the common
+// beat of the authoring loop.
+//
+// SystemPromptAddendum is exactly the text the model sees, which makes diffing
+// it the precise test rather than an approximation: a changed name or
+// description rebuilds, a changed body does not.
+func (w *Workspace) ReloadSkillsAndPrompt(sess string) SkillReloadStats {
+	s := w.existing(sess)
+	if s == nil || s.args.NoSkill {
+		return SkillReloadStats{}
+	}
+	var before []*skills.Skill
+	if st := s.liveSkillTool(); st != nil {
+		before = st.Skills()
+	}
+	after := w.skillsForSession(sess, true)
+
+	stats := SkillReloadStats{
+		Available: len(skills.VisibleSkills(after)),
+		Added:     skills.MissingFrom(after, before),
+		Removed:   skills.MissingFrom(before, after),
+	}
+	if skills.SystemPromptAddendum(before) != skills.SystemPromptAddendum(after) {
+		// Re-runs discovery a second time inside Resolve. That is the honest
+		// price of reusing the one code path that builds a prompt, and it beats
+		// a bespoke prompt-patching seam that could drift from it.
+		s.rebuildTools("skill-reload")
+		stats.PromptRebuilt = true
+	}
+	return stats
 }
 
 // SessionSkills returns the session's live in-memory catalog — the cheap

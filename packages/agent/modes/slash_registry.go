@@ -108,6 +108,10 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 		i.openSkillsDialog()
 		return false
 	},
+	"/reload-skills": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
+		i.runReloadSkills()
+		return false
+	},
 	"/context": func(i *Interactive, _ context.Context, _ []string, _ string) bool {
 		i.slashContext()
 		return false

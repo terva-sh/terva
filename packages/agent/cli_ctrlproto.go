@@ -398,6 +398,18 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		// reads the picker + autocomplete need.
 		SkillSnapshot: func() []*skills.Skill { return w.SkillSnapshot(iv.CarrierSessionID()) },
 		ReloadSkills:  func() []*skills.Skill { return w.ReloadSkills(iv.CarrierSessionID()) },
+		// /reload-skills: the same rescan, plus a system-prompt rebuild when the
+		// manifest changed. Flattened into the modes-local type so the TUI stays
+		// independent of the workspace package.
+		ReloadSkillsAndPrompt: func() modes.SkillReload {
+			st := w.ReloadSkillsAndPrompt(iv.CarrierSessionID())
+			return modes.SkillReload{
+				Available:     st.Available,
+				Added:         st.Added,
+				Removed:       st.Removed,
+				PromptRebuilt: st.PromptRebuilt,
+			}
+		},
 		SkillCompletions: func() []modes.SkillCompletion {
 			// VisibleSkills carries the built-ins and folds in the skills
 			// they shadowed, so a name lost to a higher tier is still

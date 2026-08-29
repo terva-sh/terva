@@ -72,6 +72,44 @@ func (i *Interactive) currentSkills() []*skills.Skill {
 	return nil
 }
 
+// SkillReload is what a /reload-skills did, as the TUI needs to report it. The
+// daemon-side original is workspace.SkillReloadStats; this is the front end's
+// flattened copy, so modes stays independent of the workspace package (the same
+// arrangement acp.ReloadStats has with the extension reload).
+type SkillReload struct {
+	Available     int      // skills listed, matching the /skills picker's count
+	Added         []string // qualified names that appeared
+	Removed       []string // qualified names that went away
+	PromptRebuilt bool     // the manifest changed, so the next turn starts uncached
+}
+
+// runReloadSkills backs /reload-skills: re-scan the SKILL.md ladder, swap the
+// live catalog, and rebuild the prompt only when the manifest actually changed.
+//
+// It reports the rebuild explicitly. A dropped prompt cache is a real cost the
+// user just paid, and the reason the same act is silent on a body edit but
+// noisy on a new skill is otherwise invisible.
+func (i *Interactive) runReloadSkills() {
+	if i.cfg.ReloadSkillsAndPrompt == nil {
+		i.setStatusErr(i18n.T("skills are not available in this session"))
+		return
+	}
+	st := i.cfg.ReloadSkillsAndPrompt()
+
+	msg := i18n.T("skills reloaded — %d available", st.Available)
+	if len(st.Added) > 0 {
+		msg += i18n.T(" · added %s", strings.Join(st.Added, ", "))
+	}
+	if len(st.Removed) > 0 {
+		msg += i18n.T(" · removed %s", strings.Join(st.Removed, ", "))
+	}
+	if st.PromptRebuilt {
+		msg += i18n.T(" · prompt rebuilt, next turn starts uncached")
+	}
+	i.setStatusOK(msg)
+	i.invalidate()
+}
+
 // reloadSkillsDialog re-discovers skills (refreshing the live skill tool's
 // catalog) and re-seeds the open picker, without rebuilding the system
 // prompt. Bound to `r` in the skills dialog.
