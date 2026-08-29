@@ -62,9 +62,9 @@ func TestExpandAllRevealsRecordedReasoning(t *testing.T) {
 	}
 }
 
-// The boundary between the two reasoning paths. A display-only turn blanks
-// Summary (core.stripSummariesForDisplayOnly) and leaves the block in place, so
-// the transcript is full of reasoning blocks with nothing readable in them.
+// The boundary between the two reasoning paths. Any turn with recording off
+// blanks Summary (core.stripUnrecordedSummaries) and leaves the block in place,
+// so the transcript is full of reasoning blocks with nothing readable in them.
 // Drawing a marker for those would promise an expansion that is empty.
 //
 // 🪤 The test that would let this regress is one that keys off the Shape tag:

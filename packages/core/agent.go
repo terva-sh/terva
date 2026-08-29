@@ -80,11 +80,16 @@ type Agent struct {
 	// forcing that trade on anyone who merely wants to see the work would be
 	// the wrong bargain.
 	//
-	// 🔑 A provider will not send a summary unless it was ASKED, so display
-	// turns the request flag on by itself (see reasoningSummaryRequest). What
-	// keeps it off disk is stripSummariesForDisplayOnly, which blanks the text
-	// after the turn and leaves the block itself alone. Read at turn start
-	// under a.mu alongside Reasoning.
+	// 🔑 Most providers will not send a summary unless ASKED, so display turns
+	// the request flag on by itself (see reasoningSummaryRequest). What keeps it
+	// off disk is stripUnrecordedSummaries, which blanks the text after the turn
+	// and leaves the block itself alone. Read at turn start under a.mu alongside
+	// Reasoning.
+	//
+	// 🪤 "Unless asked" is not universal, and reading it as universal is what
+	// once leaked. Anthropic thinking, Gemini thought summaries and chat
+	// `reasoning_content` all arrive unbidden, so the strip must key on the
+	// RECORD setting alone and never on this one.
 	ShowReasoning bool
 
 	// VisibleTool, when non-nil, reports whether a registered tool is
@@ -1426,9 +1431,18 @@ func reasoningSummaryRequest(persist string, show bool) string {
 	return ""
 }
 
-// stripSummariesForDisplayOnly blanks ReasoningBlock summaries on a message
-// about to be persisted, for the case where the summary was requested only so
-// it could be shown live.
+// stripUnrecordedSummaries blanks ReasoningBlock summaries on a message about
+// to be persisted, for every turn where recording is off.
+//
+// 🪤 It was once named for the display-only case and gated on ShowReasoning,
+// because a Codex summary exists only when terva asks for one: with recording
+// and display both off there was, for that provider, nothing on hand to strip.
+// That premise is Codex's alone. Gemini thought summaries and chat
+// `reasoning_content` (DeepSeek, Kimi) arrive whether or not anyone asked,
+// exactly as Anthropic thinking does — and Anthropic was the only one the
+// shape-keyed drop below caught. So the DISPLAY toggle silently decided a
+// question the RECORD setting had already answered, and with both switched off
+// that readable text reached the session file.
 //
 // 🪤 It clears the TEXT and keeps the BLOCK. A ReasoningBlock also carries the
 // provider's opaque ID and Encrypted payload, which have to round-trip on the
@@ -1441,10 +1455,15 @@ func reasoningSummaryRequest(persist string, show bool) string {
 // text, so a blanked one is not a quieter block, it is an unreplayable one.
 // Those are removed outright by dropUnrecordableThinking, which runs on every
 // path this does — so this function never has to reason about them.
-func stripSummariesForDisplayOnly(m provider.Message) provider.Message {
+func stripUnrecordedSummaries(m provider.Message) provider.Message {
+	keepReply := chatReasoningIsTheReply(m)
 	out := make([]provider.Content, 0, len(m.Content))
 	for _, c := range m.Content {
 		if r, ok := c.(provider.ReasoningBlock); ok {
+			if keepReply && r.Shape == provider.ReasoningShapeOpenAIChat {
+				out = append(out, r)
+				continue
+			}
 			r.Summary = ""
 			out = append(out, r)
 			continue
@@ -1453,6 +1472,44 @@ func stripSummariesForDisplayOnly(m provider.Message) provider.Message {
 	}
 	m.Content = out
 	return m
+}
+
+// chatReasoningIsTheReply reports whether chat-shaped reasoning is ALL this
+// message has — in which case it is the answer, not deliberation, and blanking
+// it would delete the turn rather than quiet it.
+//
+// 🪤 This is the one exemption to "recording off means no readable text", and
+// it is not privacy losing to convenience. A chat backend whose thinking
+// channel never closes classifies every token after the opener as reasoning:
+// the whole REPLY arrives in reasoning_content with content empty. openai.go
+// promotes that back to visible text on replay precisely because dropping it
+// "left a hole in the history exactly where the answer had been" — the model
+// then apologises for a lapse it has no record of. With the summary blanked
+// there is nothing to promote, and the serializer skips a message carrying
+// neither text nor tool calls, so the turn vanishes from the conversation.
+//
+// Scoped to the chat shape on purpose. A Codex or Gemini block keeps its own
+// replay payload (ID / Encrypted) and loses nothing readable it needs, so
+// neither earns the exemption.
+func chatReasoningIsTheReply(m provider.Message) bool {
+	chatReasoning := false
+	for _, c := range m.Content {
+		switch v := c.(type) {
+		case provider.ReasoningBlock:
+			if v.Shape == provider.ReasoningShapeOpenAIChat && v.Summary != "" {
+				chatReasoning = true
+			}
+		case provider.TextBlock:
+			if strings.TrimSpace(v.Text) != "" {
+				return false
+			}
+		default:
+			// A tool call, an image, anything else: the turn has substance of
+			// its own and the reasoning beside it is deliberation.
+			return false
+		}
+	}
+	return chatReasoning
 }
 
 // dropUnrecordableThinking removes reasoning whose readable text cannot be
@@ -3018,21 +3075,20 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 		}
 	}
 
-	// The summary was requested for the screen, not the record: blank the text
-	// before anything downstream can persist it. Done here, on the one message
-	// every path takes, rather than at each save site.
+	// Recording is off, so no readable reasoning may reach the record. Blank
+	// what is separable from its replay payload, then drop what is not. Done
+	// here, on the one message every path takes, rather than at each save site.
 	//
-	// 🪤 showReasoning is deliberately NOT part of the second condition. A Codex
-	// summary only exists because it was asked for, so with recording off and
-	// display off there is nothing to strip; Anthropic's thinking arrives
-	// unbidden the moment thinking is enabled, so "nobody asked to record this"
-	// is reached with the text already in hand. Gating on display would let
-	// recording-off keep it, which is the setting saying one thing and the file
-	// saying another.
-	if reasoningSummary == "" && showReasoning {
-		finalMsg = stripSummariesForDisplayOnly(finalMsg)
-	}
+	// 🪤 showReasoning is deliberately NOT part of this condition, and it once
+	// was. The argument for gating on it was that a Codex summary exists only
+	// because terva asked for one, so with recording and display both off there
+	// is nothing on hand to strip. True for Codex, false for everyone else:
+	// Gemini thought summaries and chat `reasoning_content` arrive unbidden and
+	// were caught by neither branch, so "Record thinking: off" with display also
+	// off wrote their text to the session file anyway. One setting answers this,
+	// and it is the one whose name says so.
 	if reasoningSummary == "" {
+		finalMsg = stripUnrecordedSummaries(finalMsg)
 		finalMsg = dropUnrecordableThinking(finalMsg)
 	}
 

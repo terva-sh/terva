@@ -2685,8 +2685,8 @@ func (v *View) renderClearBlock(state string, width int) []string {
 // keep REPLAY honest: a stripped Thinking block and a native ThinkingOpaque one
 // are byte-identical, so only the tag tells them apart on the wire. Display asks
 // a simpler question — is there text to show. That is also what keeps the two
-// reasoning paths from colliding: a display-only turn blanks Summary
-// (stripSummariesForDisplayOnly), so nothing is drawn here and the ephemeral
+// reasoning paths from colliding: any turn with recording off blanks Summary
+// (core.stripUnrecordedSummaries), so nothing is drawn here and the ephemeral
 // live line remains the whole story. Only "Record thinking" puts text on screen
 // that outlives the turn.
 func (v *View) renderReasoningRows(summaries []string, width int) []string {
