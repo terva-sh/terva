@@ -1484,6 +1484,10 @@ func (i *Interactive) noteSessionMetaLocked(info ctrlproto.SessionInfo) {
 	}
 	i.carrierCtxWindow = info.ContextWindow
 	i.carrierSubscription = info.Subscription
+	// Adopted here rather than only where /thinking writes it, so an override
+	// set from another surface (the web panel, another attached client) reaches
+	// this status bar on the next snapshot instead of never.
+	i.carrierReasoning = info.Reasoning
 }
 
 // CarrierSessionPath is the bound session's transcript path as the wire last

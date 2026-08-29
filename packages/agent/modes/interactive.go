@@ -856,6 +856,15 @@ type Interactive struct {
 	carrierSessPath     string
 	carrierCtxWindow    int
 	carrierSubscription bool
+	// carrierReasoning is THIS session's thinking override as the wire last
+	// reported it, or "" when the session simply follows the global setting.
+	//
+	// It is a cache because the status bar repaints on every frame and the
+	// authoritative read (sessionReasoning) is a ResumeSession round trip. The
+	// bar showed i.cfg.Reasoning — the GLOBAL — until this existed, so /thinking
+	// changed the level the turn ran at and the bar went on reporting the old
+	// one, for exactly the sessions someone had gone out of their way to change.
+	carrierReasoning string
 
 	// carrierJailed mirrors the daemon's workspace sandbox lock for the
 	// status bar's jailed badge — an attached TUI holds no Sandbox object.

@@ -51,6 +51,10 @@ func (i *Interactive) applyReasoningSelection(level string) {
 	// the user their session is at a level that is not what the record says.
 	applied := i.sessionReasoning()
 	i.mu.Lock()
+	// Update the status bar's cache here too. noteSessionMeta would catch this
+	// on the next snapshot, but "next snapshot" can be a whole turn away, and
+	// the bar disagreeing with the change the user just made is the bug.
+	i.carrierReasoning = applied
 	if applied == "" {
 		// Same chain the turn will walk, from the one symbol that owns it.
 		// Testing the global first and falling back to the model's default

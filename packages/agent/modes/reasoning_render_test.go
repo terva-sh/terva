@@ -78,6 +78,41 @@ func TestReasoningSectionsAccumulateInTheBlock(t *testing.T) {
 	t.Log("\n----- SCREEN: sections accumulate -----\n" + screen)
 }
 
+// The status bar reports the level the NEXT turn will run at, so a session
+// override has to reach it.
+//
+// 🪤 It read i.cfg.Reasoning — the GLOBAL — which made it wrong for exactly the
+// sessions someone had gone out of their way to change with /thinking: the turn
+// ran at the override while the bar went on naming the old level, and the only
+// surface that told the truth was /status. The authoritative read is a
+// ResumeSession round trip and this is a per-frame render, so the value is
+// cached (carrierReasoning) rather than fetched here.
+func TestStatusBarShowsTheSessionThinkingOverride(t *testing.T) {
+	fc := newFakeCarrier()
+	fc.infos = map[string]ctrlproto.SessionInfo{"s1": {ID: "s1", Reasoning: "low"}}
+	h := startInteractive(t, func(cfg *InteractiveConfig) {
+		cfg.Ready = true
+		cfg.Carrier = fc
+		cfg.CarrierSession = "s1"
+		cfg.Reasoning = "maximum" // the GLOBAL setting
+	})
+
+	// Precondition: with no override applied yet, the bar names the global.
+	h.waitText("maximum")
+
+	// The same call /thinking makes.
+	h.i.applyReasoningSelection("low")
+
+	h.waitScreen("status bar names the session override", func(s *tuitest.Screen) bool {
+		return strings.Contains(s.Text(), "low")
+	})
+	h.waitScreen("status bar stops naming the global", func(s *tuitest.Screen) bool {
+		return !strings.Contains(s.Text(), "maximum")
+	})
+
+	t.Log("\n----- SCREEN: session override in the bar -----\n" + h.term.Screen().Text())
+}
+
 // The row is gone when the turn is: a thought left on screen past the work it
 // narrated reads as a step still running.
 func TestReasoningRowClearsWhenTheTurnEnds(t *testing.T) {

@@ -388,6 +388,22 @@ func (f *fakeCarrier) Context(ctx context.Context, sess string) (ctrlproto.Conte
 	}, nil
 }
 
+// SetSessionReasoning records a session's thinking override the way the daemon
+// does, so the read-back in applyReasoningSelection sees what was just set.
+// Without it the embedded interface's nil method panics.
+func (f *fakeCarrier) SetSessionReasoning(_ context.Context, sess, level string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.infos == nil {
+		f.infos = map[string]ctrlproto.SessionInfo{}
+	}
+	info := f.infos[sess]
+	info.ID = sess
+	info.Reasoning = level
+	f.infos[sess] = info
+	return nil
+}
+
 func (f *fakeCarrier) ResumeSession(ctx context.Context, sess string) (ctrlproto.SessionInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

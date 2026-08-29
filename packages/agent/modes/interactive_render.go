@@ -71,6 +71,10 @@ type frameSnapshot struct {
 	carrierCtxWindow    int
 	carrierSubscription bool
 	carrierJailed       bool
+	// carrierReasoning is this session's thinking override, "" when it follows
+	// the global setting. Snapshotted like the rest: the authoritative read is a
+	// carrier round trip and this is a per-frame render.
+	carrierReasoning string
 
 	// reasoningText is the model's live thinking for the turn in flight, RAW:
 	// every section, newlines intact. Empty when the model sent none or the
@@ -109,6 +113,7 @@ func (i *Interactive) snapshotFrameLocked(ts turnRenderState) frameSnapshot {
 		carrierCtxWindow:    i.carrierCtxWindow,
 		carrierSubscription: i.carrierSubscription,
 		carrierJailed:       i.carrierJailed,
+		carrierReasoning:    i.carrierReasoning,
 	}
 	if len(i.scriptSegs) > 0 {
 		// Value copy: the script runner mutates the live map under
@@ -550,11 +555,20 @@ func (i *Interactive) redraw() {
 	if snap.carrierCtxWindow > 0 {
 		ctxMax = snap.carrierCtxWindow
 	}
+	// The bar reports the level the NEXT turn will run at, which is this
+	// session's override when it has one and the global otherwise. The raw level
+	// only: effectiveReasoning tags an override "(this session)" for the /status
+	// prose, and thinkingLevelLabel passes an unrecognized string through
+	// verbatim, so handing it that would print the tag into the bar.
+	reasoningLabel := i.cfg.Reasoning
+	if snap.carrierReasoning != "" {
+		reasoningLabel = snap.carrierReasoning
+	}
 	statusLines := tui.StatusBar(tui.StatusBarParams{
 		Theme:            i.cfg.Theme,
 		Provider:         i.cfg.Provider,
 		Model:            modelLabel,
-		Reasoning:        i.cfg.Reasoning,
+		Reasoning:        reasoningLabel,
 		Busy:             ts.busy,
 		BusyPrefix:       snap.busyPrefix,
 		CWD:              i.cfg.CWD,
