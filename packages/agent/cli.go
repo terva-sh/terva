@@ -162,6 +162,9 @@ func Run(rawArgs []string, version string) error {
 	if handled, err := runDoctorCommand(rawArgs); handled {
 		return err
 	}
+	if handled, err := runSkillsCommand(rawArgs); handled {
+		return err
+	}
 	if handled, err := runSecretCommand(rawArgs); handled {
 		return err
 	}
