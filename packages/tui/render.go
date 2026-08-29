@@ -231,8 +231,8 @@ func paintBackgroundRow(line string, cols int, th Theme) string {
 }
 
 // truncateToWidth clips s so its on-screen width doesn't exceed cols
-// cells, preserving ANSI CSI escape sequences (which don't consume
-// cells). Lines carrying an inline-image escape are returned as-is
+// cells, preserving ANSI CSI and OSC escape sequences (which don't
+// consume cells). Lines carrying an inline-image escape are returned as-is
 // since we can't measure their painted size.
 //
 // Fast path: a byte-length <= cols is a conservative upper bound
@@ -249,48 +249,43 @@ func truncateToWidth(s string, cols int) string {
 	var out strings.Builder
 	out.Grow(len(s))
 	seen := 0
+	// Tracks an OSC 8 hyperlink left open by the bytes we keep. A row cut
+	// mid-link would otherwise hand the terminal a link target with no
+	// close, which claims every cell drawn after it.
+	linkOpen := false
 	// Walk by byte index with utf8.DecodeRuneInString instead of
 	// materialising []rune(s): the rune-slice allocation was a measurable
 	// share of redraw CPU, and only the width of each rune is needed, not
 	// random access. ANSI escapes are pure ASCII, so they're matched and
 	// copied by byte without decoding.
 	for i := 0; i < len(s); {
-		// CSI escape sequence (ESC [ ... final): zero-width.
-		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
-			out.WriteByte(s[i])
-			out.WriteByte(s[i+1])
-			i += 2
-			for i < len(s) {
-				c := s[i]
-				out.WriteByte(c)
-				i++
-				if c >= 0x40 && c <= 0x7e {
-					break
-				}
+		// CSI or OSC escape sequence: zero-width.
+		if n := escSeqLen(s, i); n > 0 {
+			seq := s[i : i+n]
+			if strings.HasPrefix(seq, "\x1b]8;") {
+				linkOpen = !isHyperlinkClose(seq)
 			}
+			out.WriteString(seq)
+			i += n
 			continue
 		}
 		r, size := utf8.DecodeRuneInString(s[i:])
 		rw := runewidthRune(r)
 		if seen+rw > cols {
-			// Flush any trailing ANSI escapes (resets, erase-to-EOL)
-			// so background colors and cleanup sequences survive.
+			// Flush any trailing ANSI escapes (resets, erase-to-EOL,
+			// a link close) so background colors and cleanup sequences
+			// survive.
 			for i < len(s) {
-				if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
-					out.WriteByte(s[i])
-					out.WriteByte(s[i+1])
-					i += 2
-					for i < len(s) {
-						c := s[i]
-						out.WriteByte(c)
-						i++
-						if c >= 0x40 && c <= 0x7e {
-							break
-						}
-					}
-				} else {
+				n := escSeqLen(s, i)
+				if n == 0 {
 					break
 				}
+				seq := s[i : i+n]
+				if strings.HasPrefix(seq, "\x1b]8;") {
+					linkOpen = !isHyperlinkClose(seq)
+				}
+				out.WriteString(seq)
+				i += n
 			}
 			break
 		}
@@ -303,6 +298,11 @@ func truncateToWidth(s string, cols int) string {
 		}
 		seen += rw
 		i += size
+	}
+	// Closing a link that was never opened is a no-op on every terminal
+	// that implements OSC 8, so this needs no second look at the input.
+	if linkOpen {
+		out.WriteString(hyperlinkClose)
 	}
 	return out.String()
 }

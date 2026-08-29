@@ -51,6 +51,13 @@ func startInteractive(t *testing.T, mutate func(*InteractiveConfig)) *harness {
 	// Pin host-environment detection so tests behave the same in any
 	// terminal (or none).
 	t.Setenv("TERM_PROGRAM", "")
+	// Run() detects OSC 8 support from the environment and stores the
+	// answer process-wide. Pin it off and put the previous value back:
+	// without this, running the suite from inside kitty or Ghostty would
+	// leave hyperlinks on for every test that follows in this binary.
+	t.Setenv("TERVA_HYPERLINKS", "off")
+	prevHyperlinks := tui.HyperlinksEnabled()
+	t.Cleanup(func() { tui.SetHyperlinks(prevHyperlinks) })
 	noImages := false
 	term := tuitest.NewFakeTerm(80, 24)
 	cfg := InteractiveConfig{

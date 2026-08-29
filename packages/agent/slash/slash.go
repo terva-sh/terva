@@ -73,6 +73,7 @@ var registry = []Spec{
 	{Name: "/sessions", Group: groupSession, Desc: i18n.M("resume a previous session for this directory")},
 	{Name: "/session", Group: groupSession, Desc: i18n.M("export the current session to a .tervasession file, or import one"), Hint: "export | import [path]"},
 	{Name: "/jump", Group: groupSession, Desc: i18n.M("scroll the chat to a previous turn (or /jump <text>)"), Hint: "text to jump to (optional)"},
+	{Name: "/copy", Group: groupSession, Desc: i18n.M("copy the last reply to the clipboard, as written (or /copy code for its last code block)"), Hint: "code (optional)"},
 	{Name: "/compact", Group: groupSession, Desc: i18n.M("summarize and replace the transcript to free up context"), CancelsTurn: true},
 	{Name: "/clear", Group: groupSession, Desc: i18n.M("clear the chat transcript"), CancelsTurn: true},
 

@@ -18,6 +18,7 @@ Type `/` in the TUI to open the autocomplete popup. Available commands:
 | `/sessions` | Resume a previous session for this directory. |
 | `/session` | Four ops on the current session: `export` to a portable `.tervasession` file, `import` one back in, `fork` from a past user message into a new branch, `tree` to switch between branches. Opens a picker without an argument; direct forms: `/session export [path]`, `/session import <path>`, `/session fork`, `/session tree`. Default export destination is `~/Downloads`. |
 | `/jump` | Scroll the chat to a previous turn (or `/jump <text>` to filter). |
+| `/copy` | Copy the last reply to the clipboard **as the model wrote it** — markdown source, no left gutter, no wrap. `/copy code` copies just the last fenced code block from that reply. See [Copying text out](#copying-text-out). |
 | `/btw` | Side chat with full context that doesn't add to the main thread. |
 | `/nextstep` | Ask what to type next. The answer arrives as a dimmed offer in the composer — `tab` or `→` accepts it, and nothing is sent until you send it. |
 | `/swarm` | Spawn, monitor, and chat with background subagents. Each runs in parallel with your main session and shares its working directory. |
@@ -340,6 +341,43 @@ This is a guardrail against accidents, not a hard security boundary. If you need
 
 `/unjail` lifts it for the session. `/unjail always` records the directory in `$TERVA_HOME/unjailed.json` so it starts unjailed every time — useful for a dotfiles repo that writes into your home — and `/jail always` takes it back. terva says so on the status line at launch when a saved rule is what lowered the jail, because otherwise the only sign is the *absence* of the `jailed` badge.
 
+## Copying text out
+
+Selecting with the mouse copies what is **on the screen**, and the screen is not
+the source. Every prose row carries terva's two-column left gutter, and any line
+longer than the pane carries a newline terva put there to make it fit. For prose
+that is cosmetic. For a block of Python it is the difference between code that
+runs and code that raises `IndentationError` on its first line, and for a URL it
+is the difference between a link and two halves of one.
+
+Two things address that.
+
+**`/copy`** hands back the source instead of the render: the reply exactly as the
+model wrote it, with no gutter and no wrap. `/copy code` narrows that to the last
+fenced code block in the reply — including one the model never finished, since a
+cancelled or truncated reply is when you are most likely to want it.
+
+Locally this runs `pbcopy` / `wl-copy` / `xclip`. Over ssh those would address the
+wrong machine, so terva instead asks **your** terminal to set **its** clipboard
+(OSC 52). That route has no reply to read, so the status line says which one ran:
+a terminal configured to refuse clipboard writes leaves you with a success
+message and an unchanged clipboard. Set `TERVA_CLIPBOARD=local` or `terminal` to
+pick the route yourself.
+
+**Hyperlinks.** On a terminal that supports OSC 8, URLs in replies and the login
+URL in `/login` are emitted as real hyperlinks: the target travels out of band, so
+cmd/ctrl+click opens the whole URL even when the visible text is split across
+rows. The dialog also binds `c` to copy the login URL, which is the answer for a
+terminal without hyperlink support, or a login you are finishing on your phone.
+
+Support is detected from the environment (iTerm2, Ghostty, kitty, WezTerm, VS
+Code, Windows Terminal, Rio, recent VTE). Detection is off inside `tmux` and
+`screen`, where a multiplexer that does not pass the sequence through would smear
+the URL across the transcript as literal text. Override with
+`TERVA_HYPERLINKS=on` or `off`. Terminals without the extension ignore the
+sequence and render exactly what they rendered before — the visible layout is
+byte-for-byte identical either way.
+
 ## Status bar
 
 The block above the editor is built from named **segments** laid out in rows. The default is three semantic rows — identity + spend, meters, ambient state — and rows with nothing to show vanish (an idle session with no tags is two rows):
@@ -455,7 +493,7 @@ Queuing covers messages you've already submitted; `ctrl+s` covers the one you ha
 
 `ctrl+s` again brings the draft back early; pressed with a draft on both sides it swaps them. A muted hint appears once you've typed a few characters of a draft while a turn is running — the situation where you're most likely to need it — and stays through the turn's end, which is when the question you have to answer actually lands.
 
-Slash commands also work while the agent is busy. Read-only ones (`/help`, `/jump`, `/btw`, `/sessions`, `/skills`, `/context`, `/lore`, `/memory`, `/tasks`, `/status`, `/usage`, `/resets`, `/settings`, `/permissions`, `/jail`, `/unjail`, `/exit`) take effect immediately. Destructive ones (`/new`, `/clear`, `/compact`, `/login`, `/logout`, `/model`, `/reload-ext`, `/reload-skills`, `/restart`, `/trust`, `/untrust`, `/migrate`, `/cd`) cancel the active turn first and then run.
+Slash commands also work while the agent is busy. Read-only ones (`/help`, `/jump`, `/copy`, `/btw`, `/sessions`, `/skills`, `/context`, `/lore`, `/memory`, `/tasks`, `/status`, `/usage`, `/resets`, `/settings`, `/permissions`, `/jail`, `/unjail`, `/exit`) take effect immediately. Destructive ones (`/new`, `/clear`, `/compact`, `/login`, `/logout`, `/model`, `/reload-ext`, `/reload-skills`, `/restart`, `/trust`, `/untrust`, `/migrate`, `/cd`) cancel the active turn first and then run.
 
 
 ## Keys (interactive mode)

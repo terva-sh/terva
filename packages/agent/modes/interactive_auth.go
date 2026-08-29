@@ -22,6 +22,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/tui"
 )
 
 // authController returns the carrier's login surface, or nil when this carrier
@@ -41,6 +42,29 @@ func (i *Interactive) authController() ctrlproto.AuthController {
 // canLogin reports whether a login can be performed from here at all. Drives
 // whether /login and the credential-less boot dialog are offered.
 func (i *Interactive) canLogin() bool { return i.authController() != nil }
+
+// copyLoginURL puts the current step's URL on the clipboard.
+//
+// The dialog already prints the URL and, on a terminal that speaks OSC 8,
+// makes it clickable. This is for the rest: a terminal without hyperlink
+// support, a login being finished on a phone, or a URL that wrapped and
+// would come out of a mouse selection with terva's own line breaks and
+// left margin baked into it. Copying from the source text is the only way
+// to get the URL that was actually issued rather than a reconstruction of
+// what the screen shows.
+func (i *Interactive) copyLoginURL() {
+	url := i.dialog.FlowURL()
+	if url == "" {
+		return
+	}
+	viaTerminal, err := i.copyText(url)
+	if err != nil {
+		i.dialog.Notice(i18n.T("copy failed: %s", tui.SanitizeLabel(err.Error())), true)
+	} else {
+		i.dialog.Notice(copiedNotice(i18n.T("the url"), viaTerminal), false)
+	}
+	i.invalidate()
+}
 
 func (i *Interactive) openLogoutDialog() {
 	if !i.canLogin() {

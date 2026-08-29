@@ -1305,6 +1305,18 @@ func (i *Interactive) Run(ctx context.Context) error {
 	defer func() { i.flushComposerDraft(i.carrierSession()) }()
 	defer i.teardownTerminal()
 
+	// OSC 8 hyperlinks, if this terminal has them. Detected once here
+	// rather than sniffed at each render: the answer cannot change
+	// mid-session, and a renderer that reads the environment is a
+	// renderer whose tests assert the machine they ran on.
+	//
+	// This is the other half of leaving selection to the terminal (see
+	// below). Native selection copies what is on screen, including the
+	// newlines terva's own wrap put inside a long URL — so a link that
+	// wraps is neither clickable nor cleanly copyable. OSC 8 carries the
+	// target out of band, which makes the wrap irrelevant to the click.
+	tui.SetHyperlinks(tui.DetectHyperlinkSupport())
+
 	// Enabling mouse reporting steals click-drag selection from the
 	// host terminal (VS Code, Ghostty, iTerm). The user prefers native
 	// selection over the wheel-speed boost, so we no longer turn it

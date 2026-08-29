@@ -204,6 +204,13 @@ type msgCacheKey struct {
 	// expandAll is: renderMessage reads it, so a render made without it is
 	// not interchangeable with one made with it. See sharedPreviewSig.
 	previews uint64
+	// hyperlinks is the OSC 8 emission state renderMessage read. Same
+	// reason as expandAll and previews: a render made with hyperlinks off
+	// is not interchangeable with one made with them on. In production
+	// this is set once before the first paint and never moves, so the
+	// field costs a comparison and buys the cache being correct if that
+	// ever stops being true.
+	hyperlinks bool
 	// turnOpen is true when the previous rendered message belongs to
 	// the same agent turn (assistant tool_use, or tool result). The
 	// header ("▍ terva") is suppressed in that case so a single turn
@@ -505,7 +512,7 @@ func (v *View) BuildLive(width int) []string {
 		inner := assistantBodyWidth(width - len(indent))
 		md := RenderMarkdown(v.Streaming, v.Theme, inner)
 		for _, l := range strings.Split(md, "\n") {
-			for _, w := range wrapANSILineKeepStyle(l, inner) {
+			for _, w := range wrapANSILineKeepStyle(LinkifyURLs(l), inner) {
 				out = append(out, indent+w)
 			}
 		}
@@ -904,6 +911,7 @@ func (v *View) renderMessageCached(m provider.Message, width int, turnOpen bool)
 		toolDisplay: v.ToolDisplay,
 		turnOpen:    turnOpen,
 		previews:    v.sharedPreviewSig(m),
+		hyperlinks:  HyperlinksEnabled(),
 	}
 	if v.renderCache != nil {
 		if lines, ok := v.renderCache[key]; ok {
@@ -1144,7 +1152,14 @@ func (v *View) renderMessage(m provider.Message, width int, turnOpen bool) []str
 			case provider.TextBlock:
 				md := RenderMarkdown(strings.TrimLeft(b.Text, "\n"), v.Theme, inner)
 				for _, l := range strings.Split(md, "\n") {
-					for _, w := range wrapANSILineKeepStyle(l, inner) {
+					// Linkify BEFORE wrapping, not after. The wrap is what
+					// splits a long URL across rows, and
+					// wrapANSILineKeepStyle re-opens a hyperlink on the
+					// continuation row with the same id — so the rows stay
+					// ONE link. Linkifying each wrapped row instead would
+					// produce a link per fragment, every one of them
+					// pointing at a truncated URL.
+					for _, w := range wrapANSILineKeepStyle(LinkifyURLs(l), inner) {
 						lines = append(lines, indent+w)
 					}
 				}

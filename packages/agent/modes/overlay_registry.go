@@ -155,6 +155,9 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				if act.Submit != nil {
 					i.submitLogin(act.Submit)
 				}
+				if act.CopyURL {
+					i.copyLoginURL()
+				}
 				if act.Close {
 					i.cancelLogin()
 				}

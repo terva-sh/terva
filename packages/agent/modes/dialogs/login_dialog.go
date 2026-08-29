@@ -62,6 +62,12 @@ type LoginDialog struct {
 	eds     []*tui.Editor
 	edIdx   int
 	flowErr string
+	// notice is the transient result of a side effect the user asked for
+	// from inside the dialog — today that is only the URL copy. Separate
+	// from flowErr because a failed copy has nothing to do with the login
+	// and must not read as one.
+	notice    string
+	noticeErr bool
 
 	// status is a snapshot of the current login state per provider, captured when
 	// Open() runs, so the user can see what they are already signed in to before
@@ -85,6 +91,25 @@ func NewLoginDialog() *LoginDialog {
 
 // Active reports whether the dialog consumes input.
 func (d *LoginDialog) Active() bool { return d != nil && d.step != loginStepClosed }
+
+// FlowURL is the URL the current step is asking the user to open, or ""
+// when it isn't asking for one.
+func (d *LoginDialog) FlowURL() string {
+	if d == nil {
+		return ""
+	}
+	return d.flow.URL
+}
+
+// Notice posts a one-line message under the flow body — "copied", or why
+// the copy failed. Cleared by the next step, since a stale "copied" over
+// a fresh form reads as a claim about the form.
+func (d *LoginDialog) Notice(text string, isErr bool) {
+	if d == nil {
+		return
+	}
+	d.notice, d.noticeErr = text, isErr
+}
 
 // Open starts the dialog from scratch and captures the current
 // login status for each provider so the picker can show it.
@@ -153,6 +178,7 @@ func (d *LoginDialog) methodOptions() []string {
 // Close hides the dialog.
 func (d *LoginDialog) Close() {
 	d.step = loginStepClosed
+	d.notice, d.noticeErr = "", false
 }
 
 // Render returns the dialog lines or nil when inactive.
@@ -349,6 +375,10 @@ type loginDialogAction struct {
 	// user pressed enter on a completed form.
 	Submit map[string]string
 	Close  bool
+	// CopyURL asks the host to put flow.URL on the clipboard. The dialog
+	// does not do it itself: a copy is a side effect on the machine, and
+	// this type is how every other side effect leaves the renderer.
+	CopyURL bool
 	// UseOffer is the third verb, and it is not a login: bind a session to
 	// Provider/Model, which the daemon already holds a working credential for.
 	// Set only when the user picks the offer row (see OfferSession).
@@ -457,6 +487,7 @@ func (d *LoginDialog) ShowStep(step ctrlproto.AuthFlowStep) {
 	d.eds = make([]*tui.Editor, len(step.Fields))
 	d.edIdx = 0
 	d.flowErr = ""
+	d.notice, d.noticeErr = "", false
 }
 
 // ShowFlowError puts the daemon's refusal in front of the user WITHOUT closing
@@ -551,9 +582,26 @@ func (d *LoginDialog) renderFlow(th tui.Theme, width int) []string {
 	}
 	if d.flow.URL != "" {
 		lines = append(lines, "")
-		lines = append(lines, th.FG256(th.Muted, i18n.T("open this URL in a browser:")))
+		// The copy hint rides the URL's own label rather than the footer:
+		// it belongs next to the thing it acts on, it costs no width in
+		// the row that is already the widest, and it appears only on a
+		// step where 'c' is bound — on a form step the same key is a
+		// character going into a field.
+		if len(d.flow.Fields) == 0 {
+			lines = append(lines, th.FG256(th.Muted, i18n.T("open this URL in a browser (c copies it):")))
+		} else {
+			lines = append(lines, th.FG256(th.Muted, i18n.T("open this URL in a browser:")))
+		}
+		// Wrap the bare URL, then hang ONE hyperlink across the pieces:
+		// every piece repeats the same OSC 8 opening sequence, id and
+		// all, which is what tells the terminal the rows are one link
+		// rather than three truncated ones. Without it a URL long enough
+		// to wrap is unclickable — the terminal only sees the fragments
+		// terva's own newlines left it. Row count is unchanged (the wrap
+		// still runs on the plain URL), so CursorPos stays honest.
+		id := tui.HyperlinkIDFor(d.flow.URL)
 		for _, seg := range tui.WrapANSILine(d.flow.URL, wrapW) {
-			lines = append(lines, th.FG256(th.Accent, seg))
+			lines = append(lines, tui.HyperlinkID(d.flow.URL, id, th.FG256(th.Accent, seg)))
 		}
 	}
 	if d.flow.UserCode != "" {
@@ -583,6 +631,17 @@ func (d *LoginDialog) renderFlow(th tui.Theme, width int) []string {
 	if d.flowErr != "" {
 		lines = append(lines, "")
 		lines = append(lines, th.FG256(th.Error, d.flowErr))
+	}
+	// Below the fields, like flowErr and for the same reason: CursorPos
+	// counts the rows ahead of the focused editor, so anything that can
+	// appear and disappear has to live after them or the caret drifts.
+	if d.notice != "" {
+		color := th.Accent
+		if d.noticeErr {
+			color = th.Error
+		}
+		lines = append(lines, "")
+		lines = append(lines, th.FG256(color, d.notice))
 	}
 
 	lines = append(lines, "")
@@ -626,7 +685,15 @@ func (d *LoginDialog) handleFlowKey(k tui.Key) loginDialogAction {
 		}
 		return loginDialogAction{}
 	}
+	// 'c' copies the URL — but only on a step with no fields. On a form
+	// step the very same keystroke is a character the user is typing into
+	// an api key, and a shortcut that eats input is worse than no
+	// shortcut. A display step (device code, browser approval) is exactly
+	// where the URL is shown and nothing is being typed.
 	if len(d.flow.Fields) == 0 {
+		if d.flow.URL != "" && k.Kind == tui.KeyRune && (k.Rune == 'c' || k.Rune == 'C') {
+			return loginDialogAction{CopyURL: true}
+		}
 		return loginDialogAction{} // a display step: nothing to type into
 	}
 	ed := d.eds[d.edIdx]

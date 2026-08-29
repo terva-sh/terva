@@ -306,6 +306,7 @@
   "convene: set provider and model together, or neither": "convene: set provider and model together, or neither",
   "convergence round could not be delivered: %s": "convergence round could not be delivered: %s",
   "coordination must be \"\", %q, or %q<name>": "coordination must be \"\", %q, or %q<name>",
+  "copy the last reply to the clipboard, as written (or /copy code for its last code block)": "copy the last reply to the clipboard, as written (or /copy code for its last code block)",
   "could not load variants at %d; reload and retry": "could not load variants at %d; reload and retry",
   "could not persist the deliberation record: %s": "could not persist the deliberation record: %s",
   "could not reach %s": "could not reach %s",

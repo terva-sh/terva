@@ -1230,20 +1230,17 @@ func visibleWidth(s string) int {
 }
 
 func stripANSI(s string) string {
-	// Minimal ANSI stripper; handles CSI sequences (ESC [ ... final).
+	// Minimal ANSI stripper; handles CSI and OSC sequences (see
+	// escSeqLenRunes). OSC matters because an OSC 8 hyperlink carries a
+	// URL that occupies no cells: counted as visible text it would make
+	// every measurement of a linkified line wrong by the length of the
+	// link target.
 	var out []rune
 	i := 0
 	runes := []rune(s)
 	for i < len(runes) {
-		if runes[i] == 0x1b && i+1 < len(runes) && runes[i+1] == '[' {
-			i += 2
-			for i < len(runes) {
-				c := runes[i]
-				i++
-				if c >= 0x40 && c <= 0x7e {
-					break
-				}
-			}
+		if n := escSeqLenRunes(runes, i); n > 0 {
+			i += n
 			continue
 		}
 		out = append(out, runes[i])
@@ -1292,18 +1289,9 @@ func wrapANSILine(s string, limit int) []string {
 			wr := []rune(word.String())
 			for i := 0; i < len(wr); {
 				r := wr[i]
-				if r == 0x1b && i+1 < len(wr) && wr[i+1] == '[' {
-					line.WriteRune(r)
-					line.WriteRune(wr[i+1])
-					i += 2
-					for i < len(wr) {
-						c := wr[i]
-						line.WriteRune(c)
-						i++
-						if c >= 0x40 && c <= 0x7e {
-							break
-						}
-					}
+				if n := escSeqLenRunes(wr, i); n > 0 {
+					line.WriteString(string(wr[i : i+n]))
+					i += n
 					continue
 				}
 				rw := runewidth.RuneWidth(r)
@@ -1326,18 +1314,9 @@ func wrapANSILine(s string, limit int) []string {
 
 	for i := 0; i < len(runes); {
 		r := runes[i]
-		if r == 0x1b && i+1 < len(runes) && runes[i+1] == '[' {
-			word.WriteRune(r)
-			word.WriteRune(runes[i+1])
-			i += 2
-			for i < len(runes) {
-				c := runes[i]
-				word.WriteRune(c)
-				i++
-				if c >= 0x40 && c <= 0x7e {
-					break
-				}
-			}
+		if n := escSeqLenRunes(runes, i); n > 0 {
+			word.WriteString(string(runes[i : i+n]))
+			i += n
 			continue
 		}
 		if r == ' ' || r == '\t' {
@@ -1378,6 +1357,11 @@ func WrapANSILineKeepStyle(s string, limit int) []string { return wrapANSILineKe
 // which terminates each row with a reset) a wrapped tail falls back to the
 // default colour.
 //
+// An OSC 8 hyperlink open at a boundary gets the same treatment, for a sharper
+// reason than colour: the pieces of a wrapped URL are one link only if every
+// piece repeats the opening sequence, id and all. That is the whole point of
+// linkifying before the wrap rather than after it.
+//
 // Use this when wrapping a PRE-STYLED line you emit directly — a coloured list
 // row, an extension-context line, a transcript line. When you instead wrap plain
 // text and colour each returned piece yourself (e.g. the login URL, the user
@@ -1391,10 +1375,20 @@ func wrapANSILineKeepStyle(s string, limit int) []string {
 	}
 	out := make([]string, 0, len(pieces))
 	active := "" // SGR sequence in effect at the start of the current piece
+	link := ""   // OSC 8 opening sequence in effect at the start of the piece
 	for _, p := range pieces {
 		start := active
+		linkStart := link
 		active = sgrStateAfter(active, p)
-		line := start + p
+		link = linkStateAfter(link, p)
+		line := start + linkStart + p
+		// A hyperlink open at the row boundary is closed here and
+		// re-opened on the next row carrying the same id, which is what
+		// makes the terminal treat the two rows as one link. Left open
+		// instead, the target would run on to whatever follows.
+		if link != "" {
+			line += hyperlinkClose
+		}
 		// Close the line only when it leaves styling open; a piece that
 		// already balances its own escapes stays byte-identical.
 		if active != "" && !strings.HasSuffix(line, reset) {
