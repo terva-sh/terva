@@ -20,8 +20,23 @@ import { renderMarkdown } from '../../markdown'
 // The control follows CompactionDivider deliberately: the panel has no
 // global expand-all to ride (the TUI's ctrl+o has no counterpart here), and a
 // per-item disclosure is the pattern this surface already teaches.
-export function ReasoningDisclosure({ summary }: { summary: string }) {
-  const [open, setOpen] = useState(false)
+export function ReasoningDisclosure({
+  summary,
+  defaultOpen = false,
+}: {
+  summary: string
+  // True when this is the NEWEST recorded thinking and no turn is currently
+  // streaming its own. The newest block earns the space because it explains the
+  // reply being read; every older one collapses so a long session does not
+  // become a wall of stale deliberation.
+  defaultOpen?: boolean
+}) {
+  // null means "follow defaultOpen". A block the reader has actually clicked
+  // keeps their choice; one they have not follows the newest-open rule as later
+  // turns supersede it. Seeding useState with defaultOpen instead would freeze
+  // the value at mount, and the block would stay open forever.
+  const [override, setOverride] = useState<boolean | null>(null)
+  const open = override ?? defaultOpen
   // Markdown, parsed once per summary rather than on every token delta of the
   // next turn — the same trap CompactionDivider documents. Cheap while closed,
   // but the body outlives the turn now, so the list re-renders around it.
@@ -34,7 +49,7 @@ export function ReasoningDisclosure({ summary }: { summary: string }) {
         type="button"
         class="reasoning-toggle"
         aria-expanded={open}
-        onClick={() => setOpen(!open)}
+        onClick={() => setOverride(!open)}
         title={t('Show the thinking recorded for this reply')}
       >
         <span class="reasoning-chev">{open ? '▾' : '▸'}</span>

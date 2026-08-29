@@ -141,9 +141,15 @@ type View struct {
 	toolArgCache    map[string]toolArgInfo
 	Streaming       string // current assistant text delta
 	StreamingActive bool
-	ToolCalls       []ToolCallView // tool calls in flight or completed
-	StatusLine      string
-	Err             string
+	// StreamingReasoning is the model's thinking for the turn IN FLIGHT,
+	// accumulated from reasoning_delta. It renders as a live thinking block
+	// above the streaming prose, in the same gutter the recorded block uses,
+	// so thinking has ONE home on screen instead of flashing past on a
+	// throwaway row above the status bar and vanishing unread.
+	StreamingReasoning string
+	ToolCalls          []ToolCallView // tool calls in flight or completed
+	StatusLine         string
+	Err                string
 
 	// liveBodyHigh tracks the tallest live-preview body height seen per
 	// tool-call id, so a streaming edit/write/bash box never shrinks
@@ -194,23 +200,21 @@ type View struct {
 // unambiguous enough for the cache (collisions produce a stale frame,
 // not wrong data, and we recompute on invalidation anyway).
 type msgCacheKey struct {
-	hash        uint64
-	width       int
-	expandAll   bool
-	toolDisplay ToolDisplayMode
+	hash      uint64
+	width     int
+	expandAll bool
+	// thinkingOpen is true when THIS message's recorded thinking draws
+	// expanded rather than as its one-line marker. Only the newest thinking
+	// block is open, so one message renders two ways over its lifetime — it
+	// belongs in the key for exactly the reason expandAll does.
+	thinkingOpen bool
+	toolDisplay  ToolDisplayMode
 	// previews fingerprints the shared-file images this client has fetched
 	// for the message. Unlike everything else here it is View state rather
 	// than message state, and it is in the key for the same reason
 	// expandAll is: renderMessage reads it, so a render made without it is
 	// not interchangeable with one made with it. See sharedPreviewSig.
 	previews uint64
-	// hyperlinks is the OSC 8 emission state renderMessage read. Same
-	// reason as expandAll and previews: a render made with hyperlinks off
-	// is not interchangeable with one made with them on. In production
-	// this is set once before the first paint and never moves, so the
-	// field costs a comparison and buys the cache being correct if that
-	// ever stops being true.
-	hyperlinks bool
 	// turnOpen is true when the previous rendered message belongs to
 	// the same agent turn (assistant tool_use, or tool result). The
 	// header ("▍ terva") is suppressed in that case so a single turn
@@ -507,12 +511,13 @@ func (v *View) Build(width int) []string {
 // so native scrolling stays stable while a turn streams.
 func (v *View) BuildLive(width int) []string {
 	var out []string
+	out = append(out, v.renderLiveThinking(width)...)
 	if v.StreamingActive && strings.TrimSpace(v.Streaming) != "" {
 		const indent = "  "
 		inner := assistantBodyWidth(width - len(indent))
 		md := RenderMarkdown(v.Streaming, v.Theme, inner)
 		for _, l := range strings.Split(md, "\n") {
-			for _, w := range wrapANSILineKeepStyle(LinkifyURLs(l), inner) {
+			for _, w := range wrapANSILineKeepStyle(l, inner) {
 				out = append(out, indent+w)
 			}
 		}
@@ -624,6 +629,28 @@ func (v *View) BuildWithAnchors(width int) ([]string, []MessageAnchor) {
 	if v.TailLimit > 0 && len(msgs) > v.TailLimit {
 		renderFrom = len(msgs) - v.TailLimit
 	}
+	// Exactly ONE thinking block is open at a time: the newest. Thinking earns
+	// its screen space while it explains the answer you are reading now, and
+	// becomes scrollback ballast immediately after — so older blocks fall back
+	// to their one-line marker and ctrl+o.
+	//
+	// A turn in flight owns that slot instead. Its thinking renders live from
+	// StreamingReasoning, and leaving the previous turn's block open too would
+	// put two expanded blocks on screen with the stale one on top.
+	newestThinking := -1
+	if strings.TrimSpace(v.StreamingReasoning) == "" && !v.StreamingActive {
+		for i, m := range msgs {
+			if m.Role != provider.RoleAssistant {
+				continue
+			}
+			for _, c := range m.Content {
+				if r, ok := c.(provider.ReasoningBlock); ok && r.Summary != "" {
+					newestThinking = i
+					break
+				}
+			}
+		}
+	}
 	for idx, m := range msgs {
 		if idx < renderFrom {
 			rendered[idx] = nil
@@ -650,7 +677,7 @@ func (v *View) BuildWithAnchors(width int) ([]string, []MessageAnchor) {
 				break
 			}
 		}
-		lines := v.renderMessageCached(m, width, turnOpen)
+		lines := v.renderMessageCached(m, width, turnOpen, idx == newestThinking)
 		rendered[idx] = lines
 		total += len(lines) + 1 // +1 for the blank separator row
 	}
@@ -776,6 +803,11 @@ func (v *View) BuildWithAnchors(width int) ([]string, []MessageAnchor) {
 	// block instead of text — in that case the live tool-call
 	// overlay below is the real content and a naked "terva" bar
 	// above it reads as a stray empty message.
+	//
+	// Live thinking is NOT gated on that check: thinking is what there is to
+	// show in the window before any prose arrives, which is exactly when the
+	// screen would otherwise be empty.
+	out = append(out, v.renderLiveThinking(width)...)
 	if v.StreamingActive && strings.TrimSpace(v.Streaming) != "" {
 		// Stream the partial assistant text through the same markdown
 		// renderer used for finalised messages so code fences, diffs,
@@ -903,22 +935,22 @@ func (v *View) refreshToolPaths() {
 // been rendered before. The slice returned is shared — callers must
 // not mutate it; Build() only ever appends to its own `out` so the
 // shared slice is safe.
-func (v *View) renderMessageCached(m provider.Message, width int, turnOpen bool) []string {
+func (v *View) renderMessageCached(m provider.Message, width int, turnOpen, thinkingOpen bool) []string {
 	key := msgCacheKey{
-		hash:        hashMessage(m),
-		width:       width,
-		expandAll:   v.ExpandAll,
-		toolDisplay: v.ToolDisplay,
-		turnOpen:    turnOpen,
-		previews:    v.sharedPreviewSig(m),
-		hyperlinks:  HyperlinksEnabled(),
+		hash:         hashMessage(m),
+		width:        width,
+		expandAll:    v.ExpandAll,
+		thinkingOpen: thinkingOpen,
+		toolDisplay:  v.ToolDisplay,
+		turnOpen:     turnOpen,
+		previews:     v.sharedPreviewSig(m),
 	}
 	if v.renderCache != nil {
 		if lines, ok := v.renderCache[key]; ok {
 			return lines
 		}
 	}
-	lines := v.renderMessage(m, width, turnOpen)
+	lines := v.renderMessage(m, width, turnOpen, thinkingOpen)
 	if v.renderCache != nil {
 		// Bound the cache: 4x the current message count is enough to
 		// survive /compact churn without leaking memory across a very
@@ -1069,7 +1101,7 @@ func fnv64aWriteUint(h uint64, n uint64) uint64 {
 	return h
 }
 
-func (v *View) renderMessage(m provider.Message, width int, turnOpen bool) []string {
+func (v *View) renderMessage(m provider.Message, width int, turnOpen, thinkingOpen bool) []string {
 	var lines []string
 
 	// Compaction summary: a divider in the conversation, not a user message.
@@ -1146,20 +1178,13 @@ func (v *View) renderMessage(m provider.Message, width int, turnOpen bool) []str
 				reasoning = append(reasoning, r.Summary)
 			}
 		}
-		lines = append(lines, v.renderReasoningRows(reasoning, width)...)
+		lines = append(lines, v.renderReasoningRows(reasoning, width, thinkingOpen)...)
 		for _, c := range m.Content {
 			switch b := c.(type) {
 			case provider.TextBlock:
 				md := RenderMarkdown(strings.TrimLeft(b.Text, "\n"), v.Theme, inner)
 				for _, l := range strings.Split(md, "\n") {
-					// Linkify BEFORE wrapping, not after. The wrap is what
-					// splits a long URL across rows, and
-					// wrapANSILineKeepStyle re-opens a hyperlink on the
-					// continuation row with the same id — so the rows stay
-					// ONE link. Linkifying each wrapped row instead would
-					// produce a link per fragment, every one of them
-					// pointing at a truncated URL.
-					for _, w := range wrapANSILineKeepStyle(LinkifyURLs(l), inner) {
+					for _, w := range wrapANSILineKeepStyle(l, inner) {
 						lines = append(lines, indent+w)
 					}
 				}
@@ -2688,8 +2713,9 @@ func (v *View) renderClearBlock(state string, width int) []string {
 }
 
 // renderReasoningRows draws the model's RECORDED thinking for one assistant
-// message: collapsed to a single muted line, or expanded (ctrl+o, the same
-// control the compaction block and the tool boxes ride) to the summary itself.
+// message: expanded when this is the NEWEST thinking block (or under ctrl+o,
+// the same control the compaction block and the tool boxes ride), and
+// otherwise collapsed to a single muted line.
 //
 // It draws BEFORE the message's prose regardless of where the block sits in
 // Content, because block order is provider-specific — Anthropic emits thinking
@@ -2704,37 +2730,95 @@ func (v *View) renderClearBlock(state string, width int) []string {
 // (core.stripUnrecordedSummaries), so nothing is drawn here and the ephemeral
 // live line remains the whole story. Only "Record thinking" puts text on screen
 // that outlives the turn.
-func (v *View) renderReasoningRows(summaries []string, width int) []string {
+func (v *View) renderReasoningRows(summaries []string, width int, open bool) []string {
 	if len(summaries) == 0 {
 		return nil
 	}
 	th := v.Theme
 	const indent = "  "
-	if !v.ExpandAll {
+	if !open && !v.ExpandAll {
 		label := i18n.T("thinking · ctrl+o to expand")
 		return []string{truncateToWidth(indent+th.FG256(th.Muted, "▸ "+label), width)}
 	}
 	lines := []string{indent + th.FG256(th.Muted, "▾ "+i18n.T("thinking"))}
-	inner := assistantBodyWidth(width - len(indent))
 	for _, s := range summaries {
-		md := RenderMarkdown(strings.TrimLeft(s, "\n"), th, inner)
-		for _, l := range strings.Split(md, "\n") {
-			if len(l) > 0 && l[0] == FlushLeftSentinel {
-				l = l[1:]
-			}
-			// Same two steps as the prose path above, and it needs both
-			// for the same reasons. RenderMarkdown does not wrap (its
-			// width argument only draws rules), so without the wrap a
-			// paragraph of thinking left here as one 160-cell row and the
-			// renderer truncated it at the pane edge — the tail was not
-			// folded onto the next line, it was gone. And linkifying has
-			// to happen BEFORE that wrap, or a URL crossing the boundary
-			// becomes two links to two halves of itself.
-			for _, w := range wrapANSILineKeepStyle(LinkifyURLs(l), inner) {
-				lines = append(lines, indent+w)
-			}
+		lines = append(lines, v.reasoningBody(s, width)...)
+	}
+	return append(lines, "")
+}
+
+// thinkingGutter is the dim bar drawn down the left of every thinking row.
+//
+// Thinking deliberately does NOT get the tool box. A box is chrome around a
+// discrete result; thinking is the model's running voice, often hundreds of
+// lines of it, and closing that in a box gives long prose two heavy edges and
+// a far corner to hunt for. The gutter marks the same boundary — where
+// thinking starts and where the reply takes over — at a fraction of the weight.
+const thinkingGutter = "│ "
+
+// LiveThinkingTailLines caps the live thinking block while a turn streams.
+//
+// Thinking runs long: a ~1.5k-char median on deepseek, a 48k outlier on codex.
+// Uncapped, the block that exists to introduce the answer would push the answer
+// off the screen. The TAIL survives rather than the head, because the model's
+// latest thought is the one that explains what it is doing right now.
+const LiveThinkingTailLines = 8
+
+// reasoningBody renders thinking text into gutter-prefixed rows.
+//
+// Shared by the recorded block and the live one so that the two are the same
+// column: a turn's thinking must not visibly reflow at the instant it stops
+// streaming and becomes history.
+func (v *View) reasoningBody(text string, width int) []string {
+	th := v.Theme
+	const indent = "  "
+	inner := assistantBodyWidth(width - len(indent) - visibleWidth(thinkingGutter))
+	if inner < 1 {
+		inner = 1
+	}
+	bar := th.FG256(th.Muted, thinkingGutter)
+	var out []string
+	md := RenderMarkdown(strings.TrimLeft(text, "\n"), th, inner)
+	for _, l := range strings.Split(md, "\n") {
+		if len(l) > 0 && l[0] == FlushLeftSentinel {
+			l = l[1:]
+		}
+		// 🪤 RenderMarkdown does NOT hard-wrap: it lays out block structure
+		// and leaves a long line long. Every other column that renders
+		// markdown follows it with this pass, and the prose arm of
+		// renderMessage is the model to copy. Without it a single reasoning
+		// paragraph rendered ~200 cells wide at width 60 and ran off screen.
+		for _, w := range wrapANSILineKeepStyle(l, inner) {
+			out = append(out, indent+bar+w)
 		}
 	}
+	return out
+}
+
+// renderLiveThinking draws the thinking of the turn IN FLIGHT, in the same
+// header and gutter the finished block uses.
+//
+// This is the whole of the live thinking display. It replaced a one-line row
+// above the status bar that squashed every summary to a single truncated line
+// and threw it away on the next delta, which made thinking unreadable in the
+// only window where it is actually new information.
+func (v *View) renderLiveThinking(width int) []string {
+	if strings.TrimSpace(v.StreamingReasoning) == "" {
+		return nil
+	}
+	th := v.Theme
+	const indent = "  "
+	body := v.reasoningBody(v.StreamingReasoning, width)
+	hidden := 0
+	if !v.ExpandAll && len(body) > LiveThinkingTailLines {
+		hidden = len(body) - LiveThinkingTailLines
+		body = body[hidden:]
+	}
+	lines := []string{indent + th.FG256(th.Muted, "▾ "+i18n.T("thinking"))}
+	if hidden > 0 {
+		lines = append(lines, indent+th.FG256(th.Muted, thinkingGutter+i18n.T("… %d earlier lines", hidden)))
+	}
+	lines = append(lines, body...)
 	return append(lines, "")
 }
 

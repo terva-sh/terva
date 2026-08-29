@@ -66,13 +66,19 @@ function AttachedFiles({ files, missing }: { files: WireAttachment[]; missing?: 
   )
 }
 
-function AssistantMessage({ item }: { item: Extract<Item, { kind: 'assistant' }> }) {
+function AssistantMessage({
+  item,
+  thinkingOpen,
+}: {
+  item: Extract<Item, { kind: 'assistant' }>
+  thinkingOpen?: boolean
+}) {
   return (
     <div class="msg-wrap assistant-wrap">
       {/* Thinking leads the reply, above the prose it produced. A message that
           thought and then only called a tool carries no text at all, so this
           can legitimately be the whole row. */}
-      {item.reasoning && <ReasoningDisclosure summary={item.reasoning} />}
+      {item.reasoning && <ReasoningDisclosure summary={item.reasoning} defaultOpen={thinkingOpen} />}
       <div class="msg assistant md">
         <Markdown text={item.text} />
         {item.images && <ImageGallery images={item.images} />}
@@ -91,11 +97,16 @@ export const MessageContent = memo(function MessageContent({
   toolView,
   onReveal,
   revealing,
+  thinkingOpen,
 }: {
   item: Item
   toolView: ToolView
   onReveal?: RevealFn
   revealing?: boolean
+  // True for the one message whose recorded thinking renders expanded. memo
+  // shallow-compares every prop, so this re-renders the two rows that change
+  // when a newer turn takes the slot, and nothing else.
+  thinkingOpen?: boolean
 }) {
   switch (item.kind) {
     case 'user':
@@ -120,7 +131,7 @@ export const MessageContent = memo(function MessageContent({
       if (item.streaming) {
         return <div class="msg assistant streaming">{item.text}</div>
       }
-      return <AssistantMessage item={item} />
+      return <AssistantMessage item={item} thinkingOpen={thinkingOpen} />
     case 'error':
       return <div class="msg err">{item.text}</div>
     case 'compaction':

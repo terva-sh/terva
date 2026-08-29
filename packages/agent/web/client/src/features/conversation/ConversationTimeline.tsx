@@ -1,11 +1,11 @@
-import { useCallback } from 'preact/hooks'
+import { useCallback, useMemo } from 'preact/hooks'
 import { t, tn } from '../../i18n'
-import { reasoningLineText } from '../../platform/conversation/reasoning'
 import type { Item } from '../../platform/conversation/store'
 import { handleCodeCopyClick } from '../../ui/codecopy'
 import { usePinnedTail } from '../../ui/pinnedtail'
 import type { RevealFn } from './CompactionDivider'
 import { ConversationItems } from './ConversationItems'
+import { LiveThinking } from './LiveThinking'
 import { QueuedMessage } from './QueuedMessage'
 import type { ToolView } from './types'
 
@@ -49,10 +49,20 @@ export function ConversationTimeline({
   // Land at the newest message and follow the stream, unless the reader has
   // scrolled up to read something (ui/pinnedtail).
   const { ref, onScroll, showJump, jumpToLatest: jump } = usePinnedTail<HTMLDivElement>([items, busy, queued])
-  // Shaped here rather than in the reducer so the raw accumulation stays
-  // intact: only the current section is displayed, but the deltas that built
-  // the earlier ones still have to concatenate correctly.
-  const reasoningLine = reasoningLineText(reasoning ?? '')
+  // Exactly ONE thinking block is open, and a turn in flight owns that slot:
+  // its thinking renders live below, and leaving the previous turn's block open
+  // as well would put two expanded blocks on screen with the stale one on top.
+  // Otherwise the newest recorded thinking is the open one, and every older
+  // block collapses back behind its chevron.
+  const liveThinking = busy && !!(reasoning ?? '').trim()
+  const openThinkingId = useMemo(() => {
+    if (liveThinking) return ''
+    for (let i = items.length - 1; i >= 0; i--) {
+      const item = items[i]
+      if (item.kind === 'assistant' && item.reasoning) return item.id
+    }
+    return ''
+  }, [items, liveThinking])
 
   // Delegated copy for code blocks: markdown renders a .code-copy button per
   // block (see markdown.ts), and one listener here copies the adjacent <pre>'s
@@ -78,11 +88,12 @@ export function ConversationTimeline({
           toolView={toolView}
           onReveal={onReveal}
           revealingID={revealingID}
+          openThinkingId={openThinkingId}
           sess={sess}
           canDownload={canDownload}
         />
         {busy && items[items.length - 1]?.kind !== 'assistant' && <div class="working">{t('working…')}</div>}
-        {busy && !!reasoningLine && <div class="reasoning-line">{reasoningLine}</div>}
+        {busy && <LiveThinking text={reasoning ?? ''} />}
         {queued.map((text, index) => (
           <QueuedMessage
             key={'q' + index}

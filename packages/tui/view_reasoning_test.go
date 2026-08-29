@@ -26,11 +26,24 @@ func reasoningView(summary, prose string) View {
 	}}}
 }
 
-// Collapsed is the default: the thinking is present and announced, but it does
-// not push the answer off the screen — the complaint that motivated the box was
-// reasoning that scrolled past unread, not reasoning nobody could find.
-func TestRecordedReasoningCollapsesToAMarker(t *testing.T) {
+// A SUPERSEDED thinking block collapses to its marker: present and announced,
+// but not pushing the answer off the screen.
+//
+// The NEWEST block now stays open instead (see
+// TestNewestThinkingIsOpenAndOlderOnesCollapse). Two complaints bound this
+// behaviour from opposite sides: thinking that scrolled past unread is why the
+// newest one is open, and a session filling with stale deliberation is why
+// every older one is not.
+func TestSupersededReasoningCollapsesToAMarker(t *testing.T) {
 	v := reasoningView("weighing two indexes", "I used the btree.")
+	// A later turn takes the open slot, superseding the block under test.
+	v.Messages = append(v.Messages,
+		provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "and then?"}}},
+		provider.Message{Role: provider.RoleAssistant, Content: []provider.Content{
+			provider.ReasoningBlock{Summary: "checking the newer path"},
+			provider.TextBlock{Text: "Then I cached it."},
+		}},
+	)
 	plain := stripANSI(strings.Join(v.Build(80), "\n"))
 
 	if !strings.Contains(plain, "thinking") {

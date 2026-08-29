@@ -12,11 +12,15 @@ export function ConversationItems({
   toolView,
   onReveal,
   revealingID,
+  openThinkingId = '',
   sess = '',
   canDownload = false,
 }: {
   items: Item[]
   toolView: ToolView
+  // The id of the one message whose recorded thinking renders expanded. Empty
+  // means none — which is the case while a turn streams its own thinking.
+  openThinkingId?: string
   // Paging in the turns behind a compaction divider. Optional so the component
   // stays renderable from a test (and from any host that has not wired it).
   onReveal?: RevealFn
@@ -47,6 +51,7 @@ export function ConversationItems({
             toolView={toolView}
             onReveal={onReveal}
             revealing={revealingID === entry.item.id}
+            thinkingOpen={!!openThinkingId && entry.item.id === openThinkingId}
           />
         ),
       )}

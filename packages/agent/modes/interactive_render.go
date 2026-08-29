@@ -72,9 +72,15 @@ type frameSnapshot struct {
 	carrierSubscription bool
 	carrierJailed       bool
 
-	// reasoningLine is the model's live thinking summary, already squashed to
-	// one line. Empty when the model sent none or the turn is not running.
-	reasoningLine string
+	// reasoningText is the model's live thinking for the turn in flight, RAW:
+	// every section, newlines intact. Empty when the model sent none or the
+	// turn is not running.
+	//
+	// It used to be squashed to a single line here, because its only consumer
+	// was a one-row display above the status bar. The view now renders it as a
+	// real block, so the shaping belongs to the renderer and the snapshot
+	// hands over what the model actually said.
+	reasoningText string
 	// busyPrefix is the pre-rendered spinner segment of the status
 	// bar; the spinner's state is mutated by turn goroutines under
 	// i.mu, so it must be formatted inside the snapshot hold.
@@ -113,7 +119,7 @@ func (i *Interactive) snapshotFrameLocked(ts turnRenderState) frameSnapshot {
 		}
 	}
 	if ts.busy {
-		snap.reasoningLine = reasoningLineText(i.reasoning)
+		snap.reasoningText = i.reasoning
 		snap.busyPrefix = fmt.Sprintf("%s %s %s %s",
 			i.cfg.Theme.FG256(i.cfg.Theme.Assistant, i.spin.Frame()),
 			i.cfg.Theme.FG256(i.cfg.Theme.Assistant, i.spin.Message()),
@@ -214,6 +220,7 @@ func (i *Interactive) buildChat(cols int, snap frameSnapshot) []string {
 	}
 	i.view.Streaming = ts.streamVisible
 	i.view.StreamingActive = ts.streamActive
+	i.view.StreamingReasoning = snap.reasoningText
 	// Guard against the narrow race where EvAssistantMessage has
 	// just promoted a streaming reply into the transcript but a
 	// render tick hasn't retired the stream state yet. Without the
@@ -641,7 +648,6 @@ func (i *Interactive) redraw() {
 		bottom = append(bottom, suggest...)
 		bottom = append(bottom, queue...)
 		bottom = append(bottom, stashRows...)
-		bottom = append(bottom, reasoningRows(i.cfg.Theme, snap.reasoningLine, cols)...)
 		bottom = append(bottom, "")
 		bottom = append(bottom, statusLines...)
 		bottom = append(bottom, "")

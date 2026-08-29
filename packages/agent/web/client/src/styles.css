@@ -327,30 +327,27 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .msg.err { align-self: stretch; color: var(--danger); border: 1px solid var(--danger); background: transparent; font-size: 13px; }
 .working { align-self: flex-start; color: var(--muted); font-size: 13px; font-style: italic; }
 
-/* The model's live thinking summary. One line, always — the same field carries
-   multi-paragraph prose from some providers, and this row sits between the
-   transcript and the composer where growth would push the input off screen.
-   Clipped rather than wrapped for that reason; it is ambient, and the text it
-   describes is superseded seconds later anyway. */
-.reasoning-line {
-  align-self: flex-start;
-  max-width: 100%;
-  color: var(--muted);
-  font-size: 13px;
-  font-style: italic;
-  opacity: 0.8;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* The live thinking block (LiveThinking). It replaced `.reasoning-line`, a
+   single clipped row that kept only the current section: the right shape for a
+   slot one row tall, and the wrong shape for the one window in which thinking
+   is new information.
+
+   The height cap is what the truncation used to buy. The same field carries a
+   short headline from one provider and multi-paragraph prose from another, and
+   this sits between the transcript and the composer, so unbounded growth would
+   push the input off screen. Capped and scrolled instead, pinned to the newest
+   thought by LiveThinking itself. */
+.reasoning-summary--live {
+  max-height: 11em;
+  overflow-y: auto;
 }
 
-/* The marker earns its place: this row and `working…` are both muted italics
-   at the same size, and stacked without it the model's voice is indistinguishable
-   from terva's. Same glyph the TUI uses. In ::before so it stays out of the
-   DOM's text content — the row is the model's words and nothing else. */
-.reasoning-line::before {
-  content: '· ';
-  opacity: 0.7;
+/* The live header is not a button — nothing is toggleable while it streams —
+   so it drops the control's border and hover affordance but keeps its shape,
+   which is what makes the live and recorded blocks read as one thing. */
+.reasoning-toggle--static {
+  border-color: transparent;
+  cursor: default;
 }
 
 /* assistant reply + copy button: the wrapper shrink-wraps the bubble so the
@@ -1053,7 +1050,10 @@ button.ident-home:hover .persona { text-decoration: underline; }
 .reasoning-toggle { display: flex; align-items: center; gap: 5px; font: inherit; font-size: var(--fs-note); color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; cursor: pointer; white-space: nowrap; }
 .reasoning-toggle:hover { color: var(--fg); }
 .reasoning-chev { font-size: 9px; }
-.reasoning-summary { margin-top: 6px; padding: 10px 12px; border-left: 2px solid var(--line); font-size: var(--fs-detail); color: var(--muted); overflow-x: auto; }
+/* overflow-wrap keeps a long unbroken token (a path, a URL) inside the column
+   instead of forcing the whole block to scroll sideways — the web counterpart
+   of the hard wrap the TUI applies to the same text. */
+.reasoning-summary { margin-top: 6px; padding: 10px 12px; border-left: 2px solid var(--line); font-size: var(--fs-detail); color: var(--muted); overflow-x: auto; overflow-wrap: anywhere; }
 
 /* raati pane — the deliberation board (docs/proposals/raati-deliberation.md).
    Deliberately theme-FIXED: the board is a screen-within-a-screen (tar-black
