@@ -73,17 +73,29 @@ func TestPromptDumpWireReflectsTheSessionTranscript(t *testing.T) {
 // An unsupported provider must fail loudly rather than emit an empty or
 // half-built dump that would read as "this request carries nothing".
 //
-// 🪤 Two ways this test rots, and both have already happened once. Its subject
-// keeps gaining a dumper (anthropic, then google), and — worse — `err != nil`
-// passes just as well when resolution fails for a reason that has nothing to do
-// with wire dumping, which is the likely outcome of naming a provider that does
-// not exist. So: a real provider terva can resolve, and an assertion on the
-// REFUSAL ITSELF. If openrouter ever gains a dumper this fails loudly on the
-// missing substring rather than passing for the wrong reason.
+// 🪤 Two ways this test rots, and both have now happened. Its subject keeps
+// gaining a dumper — anthropic, then google, then openrouter — and, worse,
+// `err != nil` passes just as well when resolution fails for a reason that has
+// nothing to do with wire dumping, which is the likely outcome of naming a
+// provider that does not exist. So: a real provider terva can resolve, and an
+// assertion on the REFUSAL ITSELF.
+//
+// openrouter was the third subject to be retired, and it went the way the
+// comment above predicted: wireBody stopped switching on provider ids and
+// started switching on the WIRE each provider speaks, which handed openrouter
+// the chat-completions dumper it had always deserved. This test failed loudly
+// on the missing substring, exactly as designed.
+//
+// amazon-bedrock should be the last subject this test ever needs. It is not
+// refused for want of an entry in a list — that is the failure mode that kept
+// retiring the others — but because it maps to reasoningWireNone, the one wire
+// with no arm. Give bedrock its own arm and this SHOULD fail again; there is
+// then nothing left to refuse, and the test has outlived its subject for the
+// fourth and final time.
 func TestPromptDumpWireRefusesAProviderItCannotSerialize(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	args := build.Args{DumpPrompt: "wire", Prompt: "hi",
-		Provider: "openrouter", Model: "anthropic/claude-sonnet-4.5"}
+		Provider: "amazon-bedrock", Model: "anthropic.claude-sonnet-4-5-20250929-v1:0"}
 	out, err := promptDumpText(args)
 	if err == nil {
 		t.Fatalf("want an error for a provider with no wire dumper, got:\n%s", out)

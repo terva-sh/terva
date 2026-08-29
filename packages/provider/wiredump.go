@@ -91,46 +91,85 @@ func DumpRequestJSONL(providerName, authMethod string, req Request) ([]byte, err
 // wireBody builds the provider-specific request body and names the field that
 // holds the input array.
 //
+// The arm is chosen by the WIRE the provider's client speaks, never by the
+// provider id. A hand-written list of ids stood here and was a third copy of a
+// mapping this package already keeps once. It named eight ids, and the tree has
+// far more than eight: groq, xai, openrouter, mistral, azure, github-copilot,
+// together, cerebras, zai and openai-responses all answered "not implemented"
+// while speaking a wire dumped right here for somebody else. Every named
+// endpoint answered the same way, and no fixed list could ever have held them,
+// because an endpoint's id is whatever the operator typed at /login.
+//
+// reasoningWireFamily is that single mapping. It is census-guarded, and
+// TestReasoningWireTableMatchesTheRealClient checks it against the client the
+// registry actually CONSTRUCTS, with no escape set — so an arm reached through
+// it cannot drift from the client that would really serialize the turn. Its
+// default is the OpenAI-compatible wire, which is correct by construction for a
+// named endpoint: registerEndpointLocked builds every one with provider.NewOpenAI.
+//
 // Every arm constructs the concrete client directly rather than taking a live
 // Client, because a dump must work with no credential and no network. That is
 // only sound while the builders stay pure functions of the request plus the
 // client's own name — which is what buildRequestPurity's test asserts, so a
 // builder that starts reading connection state fails there rather than silently
 // dumping something the wire would never carry.
+//
+// 🪤 providerName is handed to the client it builds, and that is not cosmetic.
+// anthropicClient.buildRequest resolves its model with FindModel(c.Name(), …)
+// and feeds the result to enforceImageInput, so the name decides which catalog
+// row is found, whether images survive the turn, and how max_tokens is clamped.
+// Passing a "close enough" id here would dump a body the wire never carries.
 func wireBody(providerName, authMethod string, req Request) (any, string, error) {
-	switch providerName {
-	case "openai-codex":
+	switch wire := reasoningWireFamily(providerName); wire {
+	case reasoningWireCodex:
+		// openai-codex and openai-responses both land here, and both are
+		// faithful. NewOpenAIResponses wraps a codexClient in a renamedClient,
+		// which overrides Name() on the WRAPPER only — the inner builder reports
+		// "openai-codex" in production exactly as this bare one does.
 		b, err := (&codexClient{}).buildRequest(req)
 		return b, "input", err
-	case "openai", "deepseek", "openai-compatible", "ollama":
-		b, err := (&openaiClient{name: providerName}).buildRequest(req)
-		return b, "messages", err
-	case "kimi":
-		// 🪤 Kimi Code is Kimi behind the ANTHROPIC Messages API, and the
-		// registry builds it that way in every auth mode. It sat in the
-		// OpenAI arm above and dumped a body terva has never sent it.
-		//
-		// Always non-oauth: kimi authenticates with x-api-key rather than
-		// Bearer, so NewKimiCodingSourceWithHeaders leaves the client in
-		// api-key mode even when the CREDENTIAL is a subscription token.
-		// Honoring authMethod here would put Anthropic's identity block in a
-		// kimi dump, which is the same class of lie in the other direction.
-		// The name is what routes cost and catalog lookup to kimi's own rows.
-		b, err := (&anthropicClient{name: "kimi"}).buildRequest(req)
-		return b, "messages", err
-	case "google":
+
+	case reasoningWireGemini:
+		// google and google-vertex alike: geminiClient carries no name of its
+		// own and resolves FindModel("google", …), and google-vertex is that
+		// same client behind a renamedClient.
 		b, _, err := (&geminiClient{}).buildRequest(req)
 		return b, "contents", err
-	case "anthropic":
-		// 🪤 The only provider whose MODE changes the body, which is why
-		// authMethod exists at all. A subscription request carries the Claude
-		// Code identity as its first system block — on its own cache
+
+	case reasoningWireAnthropic:
+		// 🪤 anthropic is the only provider whose MODE changes the body, which
+		// is why authMethod exists at all. A subscription request carries the
+		// Claude Code identity as its first system block — on its own cache
 		// breakpoint — and renames tools to Anthropic's canonical casing. Dump
 		// the api-key shape for an OAuth user and the two things most worth
 		// looking at, the cached prefix and the tool names, are both wrong.
-		b, err := (&anthropicClient{oauth: authMethod == "oauth"}).buildRequest(req)
+		//
+		// 🪤 The third parties on this wire (kimi, minimax, minimax-cn,
+		// fireworks, vercel-ai-gateway) are always non-oauth. Kimi Code is Kimi
+		// behind the ANTHROPIC Messages API and authenticates with x-api-key
+		// rather than Bearer, so the registry leaves the client in api-key mode
+		// even when the CREDENTIAL is a subscription token. Honouring
+		// authMethod for them would put Anthropic's identity block in a kimi
+		// dump, which is the same class of lie in the other direction.
+		b, err := (&anthropicClient{
+			name:  providerName,
+			oauth: providerName == "anthropic" && authMethod == "oauth",
+		}).buildRequest(req)
 		return b, "messages", err
+
+	case reasoningWireOpenAICompat:
+		b, err := (&openaiClient{name: providerName}).buildRequest(req)
+		return b, "messages", err
+
 	default:
-		return nil, "", fmt.Errorf("wire dump is not implemented for provider %q (supported: openai-codex, openai, anthropic, google, kimi, deepseek, openai-compatible, ollama)", providerName)
+		// reasoningWireNone (amazon-bedrock) and the unknown zero value.
+		//
+		// This is the one seam in routing a body dump through a REASONING
+		// classifier: "none" says the provider takes no reasoning knob, which
+		// is a different claim from "has no request body". bedrockClient has a
+		// buildRequest like everyone else. Bedrock keeps the answer it has
+		// always given here; giving it a real one means its own arm, and that
+		// is deliberately not smuggled into this change.
+		return nil, "", fmt.Errorf("wire dump is not implemented for provider %q (its client speaks the %q wire, which has no arm here)", providerName, wire)
 	}
 }

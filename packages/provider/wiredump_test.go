@@ -113,31 +113,49 @@ func TestDumpRequestJSONLIsDeterministic(t *testing.T) {
 	}
 }
 
-// An unsupported provider must SAY so. Returning an empty dump would read as
+// A provider with no arm must SAY so. Returning an empty dump would read as
 // "this request carries nothing", which is the worst possible answer from a
 // tool whose whole job is showing what goes on the wire.
 //
-// 🪤 The subject is DELIBERATELY not a real provider. This test named anthropic,
-// then google, and each time that provider gained a dumper it stopped testing a
-// refusal and started failing for the wrong reason. Any real id is a future
-// implementation; a fictional one is the only stable way to ask "what happens
-// when wireBody has no arm for this?" — which is the actual behavior under test.
-func TestDumpRequestJSONLRefusesUnknownProvider(t *testing.T) {
-	out, err := DumpRequestJSONL("not-a-provider", "", wireReq(userMsg("one")))
+// 🪤 The subject used to be a DELIBERATELY fictional id, because this test had
+// named anthropic and then google, and each time that provider gained a dumper
+// the test stopped testing a refusal. A fictional id is no longer the stable
+// choice — it is no longer refused at all. wireBody now picks its arm by the
+// WIRE the provider speaks, and reasoningWireFamily answers with the
+// OpenAI-compatible default for any id it does not know. That default is the
+// whole reason a NAMED ENDPOINT works here, since an endpoint's id is whatever
+// the operator typed at /login and no static table can hold it. An unknown id
+// and a runtime endpoint are the same string to this package.
+//
+// So the stable subject is a real provider whose WIRE has no arm. amazon-bedrock
+// is the only one: it maps to reasoningWireNone. That is also the seam in
+// routing a body dump through a reasoning classifier — "none" means it takes no
+// reasoning knob, not that it has no body — so if bedrock is ever given its own
+// arm, this test SHOULD fail and be re-pointed, exactly as its predecessors were.
+//
+// The CLI cannot reach the unrefused case: Resolve rejects a provider that is
+// not in the registry long before promptDumpWire runs.
+func TestDumpRequestJSONLRefusesProviderWithNoArm(t *testing.T) {
+	out, err := DumpRequestJSONL("amazon-bedrock", "", wireReq(userMsg("one")))
 	if err == nil {
-		t.Fatalf("want an error for an unsupported provider, got a dump:\n%s", out)
+		t.Fatalf("want an error for a provider with no arm, got a dump:\n%s", out)
 	}
-	if !strings.Contains(err.Error(), "not-a-provider") || !strings.Contains(err.Error(), "openai-codex") {
-		t.Errorf("error should name the provider asked for AND the supported ones, got: %v", err)
+	if !strings.Contains(err.Error(), "amazon-bedrock") {
+		t.Errorf("error should name the provider asked for, got: %v", err)
 	}
 }
 
-// Non-vacuity for the refusal above: the provider it names as supported must
-// actually BE supported. Without this, a typo in the error string's list would
-// leave the refusal test passing while the list it prints is fiction.
-func TestDumpRequestJSONLRefusalNamesRealSupport(t *testing.T) {
-	if _, err := DumpRequestJSONL("openai-codex", "", wireReq(userMsg("one"))); err != nil {
-		t.Fatalf("the refusal message advertises openai-codex, but it does not work: %v", err)
+// Non-vacuity for the refusal above: the refusal has to be specific to the
+// unsupported wire, not a dump that is broken for everyone. Without this, a
+// wireBody that failed on every input would leave the refusal test passing.
+//
+// One provider per supported wire, so a wire losing its arm fails HERE with a
+// name rather than as a mystery elsewhere.
+func TestDumpRequestJSONLRefusalIsSpecificToTheUnsupportedWire(t *testing.T) {
+	for _, p := range []string{"openai-codex", "anthropic", "google", "openai"} {
+		if _, err := DumpRequestJSONL(p, "", wireReq(userMsg("one"))); err != nil {
+			t.Errorf("%s is a supported wire but does not dump: %v", p, err)
+		}
 	}
 }
 
