@@ -25,6 +25,7 @@ Type `/` in the TUI to open the autocomplete popup. Available commands:
 | `/shared` | The files the agent handed you this session with `share_file` — name, kind, size, and how long the bytes have left. `↑`/`↓` select, `c` copies the file's path to the clipboard, `o` (or `↵`) opens it in the system viewer, `s` saves a copy into the working directory, `r` refetches, `esc` closes. `s` is the one that works from `terva attach`: the path in the listing names the **daemon's** disk, so on a remote carrier copy and open refuse and point you at save, which pulls the bytes over the control plane. A file whose deadline has passed stays listed — the session did share it — but its actions are refused rather than dispatched into a filesystem error. Saving never overwrites: an existing name gets a `-2` suffix. |
 | `/skill` | Prime your next request with a specific skill: `/skill <name> [request]` rewrites to "use the *name* skill for: request" so the model reaches for it. Autocompletes skill names after `/skill `. |
 | `/skills` | List discovered skills (SKILL.md files) and preview their bodies. |
+| `/reload-skills` | Re-scan the SKILL.md ladder so a skill written or edited this session is usable now, without a relaunch. Rebuilds the system prompt **only if the manifest changed** — a new, renamed, or re-described skill is announced to the model (and the next turn starts uncached); editing a body costs nothing. Reports what it found and whether it rebuilt. |
 | `/context` | Token breakdown of the assembled context and what each extension injects. Under lazy tool visibility it reports both numbers honestly — the *advertised* tool set that is actually on the wire, and the *installed* total that would load if every group were activated (`[4 of 31 tools · 48 KB installed]`), plus the bytes the capability note itself costs. Read-only. |
 | `/lore` | List this run's active lore (keyed-context) entries — name, trigger, and source. Read-only. It does **not** report which entries fired on the last turn: the default TUI reads lore over ctrlproto and the wire view carries no per-turn firing record. To see what actually fired, use `--dump-prompt=json` and read the `tail` sources. See [debugging-prompts.md](debugging-prompts.md). |
 | `/tasks` | Show the agent's task list — the built-in task tracker the model writes to as it works. Read-only; `esc` closes. |
@@ -35,7 +36,7 @@ Type `/` in the TUI to open the autocomplete popup. Available commands:
 | `/study` | Run the canned prompt "Read and understand everything in the current directory." so the agent has full project context before you start asking targeted questions. Pass a path — typed, drag-dropped, or selected via `@` — to target a specific file or directory instead: `/study [dir:packages/]`, `/study cmd/terva/main.go`. |
 | `/jail` | Confine tools to the current directory. (On by default in interactive sessions; `--no-jail` starts unjailed.) `/jail always` also forgets a saved unjail rule for this directory. |
 | `/unjail` | Allow tools to touch paths outside again — this session only. `/unjail always` records the directory so it starts unjailed from now on (see [permissions.md](permissions.md#unjailing-a-directory-for-good)). |
-| `/trust` | Trust the current directory so its project content — `.terva` extensions, skills, lore, context, permission rules — loads. `/trust parent` trusts the parent so every directory under it counts as trusted too. Project extensions become discoverable immediately (`/reload-ext` picks them up); prompt-baked content lands on the next launch. |
+| `/trust` | Trust the current directory so its project content — `.terva` extensions, skills, lore, context, permission rules — loads. `/trust parent` trusts the parent so every directory under it counts as trusted too. Project extensions become discoverable immediately (`/reload-ext` picks them up); project skills land with `/reload-skills`; the rest of the prompt-baked content lands on the next launch. |
 | `/untrust` | Remove the current directory from the trust list; its project content stops loading on the next launch. |
 | `/permissions` | Show the current approval mode and the active permission rules grouped by source (user/project/extension), and revoke this session's "always allow" grants: `↑`/`↓` select a grant, `r` or `del` takes it back, `R` clears them all, `esc` closes. Rules stay read-only (edit them in config). Alias: `/perms`. See [permissions.md](permissions.md). |
 | `/reload-ext` | Hot-reload all extensions (re-read manifests, respawn subprocesses, rebuild tool registry). |
@@ -311,7 +312,19 @@ Three rows are TUI-local widgets the generic surface can't drive — a terminal-
 
 ### `/skills`
 
-Opens a picker listing every discovered SKILL.md file, built-ins hidden. Each row shows the skill name, source, and description. `enter` opens the body inline (scrollable with `up`/`down`/`pgup`/`pgdn`); `esc` goes back. Re-runs discovery each time it opens, so edits to a SKILL.md during a session are reflected immediately.
+Opens a picker listing every discovered SKILL.md file, built-ins hidden. Each row shows the skill name, source, and description. `enter` opens the body inline (scrollable with `up`/`down`/`pgup`/`pgdn`); `esc` goes back. Re-runs discovery each time it opens, so edits to a SKILL.md during a session are reflected immediately, and `r` re-scans without closing.
+
+Opening the picker refreshes the *catalog* only — it never touches the system prompt, so browsing your skills can never cost you a prompt cache. That also means the model's manifest is unchanged: a skill added this way is loadable when you name it, but the model has not been told it exists. `/reload-skills` is the command that does both.
+
+### `/reload-skills`
+
+Re-runs the discovery ladder, swaps the session's live catalog, and rebuilds the system prompt **only when the manifest actually changed**.
+
+That split is the point. Making a skill loadable is free; announcing it to the model means changing the pinned prompt prefix, which discards the provider's cached request prefix so the next turn re-reads the transcript uncached. So a new skill — or a renamed one, or a changed `description` — rebuilds and says it did, while editing a skill's **body**, the usual beat of writing one, costs nothing and still serves the model the rewritten text the next time it loads the skill.
+
+It re-reads the trust verdict too, so `terva trust` followed by `/reload-skills` brings a new project skill live in the running session.
+
+Over ACP the command exists but does half the job: the catalog is swapped, so the skill loads when you name it, but the manifest cannot be rebuilt mid-session and the model only learns of the skill on a new session. The confirmation says so.
 
 ### `/compact`
 
@@ -442,7 +455,7 @@ Queuing covers messages you've already submitted; `ctrl+s` covers the one you ha
 
 `ctrl+s` again brings the draft back early; pressed with a draft on both sides it swaps them. A muted hint appears once you've typed a few characters of a draft while a turn is running — the situation where you're most likely to need it — and stays through the turn's end, which is when the question you have to answer actually lands.
 
-Slash commands also work while the agent is busy. Read-only ones (`/help`, `/jump`, `/btw`, `/sessions`, `/skills`, `/context`, `/lore`, `/memory`, `/tasks`, `/status`, `/usage`, `/resets`, `/settings`, `/permissions`, `/jail`, `/unjail`, `/exit`) take effect immediately. Destructive ones (`/new`, `/clear`, `/compact`, `/login`, `/logout`, `/model`, `/reload-ext`, `/restart`, `/trust`, `/untrust`, `/migrate`, `/cd`) cancel the active turn first and then run.
+Slash commands also work while the agent is busy. Read-only ones (`/help`, `/jump`, `/btw`, `/sessions`, `/skills`, `/context`, `/lore`, `/memory`, `/tasks`, `/status`, `/usage`, `/resets`, `/settings`, `/permissions`, `/jail`, `/unjail`, `/exit`) take effect immediately. Destructive ones (`/new`, `/clear`, `/compact`, `/login`, `/logout`, `/model`, `/reload-ext`, `/reload-skills`, `/restart`, `/trust`, `/untrust`, `/migrate`, `/cd`) cancel the active turn first and then run.
 
 
 ## Keys (interactive mode)

@@ -215,6 +215,7 @@ own detailed screen — `terva <command> --help`.
 | `terva locale ...` | Manage UI languages and translations (or set `TERVA_LANG=<tag>` to run in one). See [localization.md](localization.md). |
 | `terva persona ...` | Manage personas — the agent identities `--persona` selects. See [personas.md](personas.md). |
 | `terva lore ...` | Manage lore entries, the keyed-context store that fires on keywords in the conversation. Unaffected by `--no-lore`, which only disables injection for a run. See [debugging-prompts.md](debugging-prompts.md). |
+| `terva skills` | List every SKILL.md this workspace resolves — name, tier, file, and any name it shadows. Non-interactive and read-only, so it works in a pipe or a script. Resolves against the same trust verdict a session here would, and says so when an untrusted workspace is holding its project skills back. See [skills.md](skills.md). |
 | `terva card ...` | Inspect character cards (`.json`/`.png`) before running one with `--card`. See [personas.md](personas.md#character-cards). |
 | `terva bot ...` | Run a chat-bridge bot (Telegram, Discord, and other connectors) — `terva bot run` daemonizes an agent onto a chat platform. See [connectors.md](connectors.md). |
 | `terva raati "question"` | Convene the three-unit deliberation panel; prints the verdict and the dissent. Flags under Modes above; full guide in [raati.md](raati.md). |

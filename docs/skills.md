@@ -2,7 +2,8 @@
 
 A skill is a reusable instruction set written as a single
 `SKILL.md` file with a YAML frontmatter header. terva discovers skills
-at startup and surfaces them to the model in two ways:
+at startup — and again on demand, see [Reloading](#reloading) — and
+surfaces them to the model in two ways:
 
 1. The system prompt gains a short manifest — a header, then one line
    per skill with its source in brackets:
@@ -225,9 +226,51 @@ A skill that lost its name to a higher tier appears under its qualified
 name (`claude:handoff`) with a `shadowed by …` tag, so the picker
 doubles as the answer to "where did my skill go?".
 
-`terva doctor` reports the same thing non-interactively, including the
-count of skills the current directory actually loads and whether
-workspace trust is holding project skills back.
+`terva skills` reports the same thing non-interactively — name, tier,
+file, and any shadowing — so it works in a pipe or a script. `terva
+doctor` carries the summary line: the count of skills the current
+directory actually loads and whether workspace trust is holding project
+skills back.
+
+## Reloading
+
+Skills are discovered when a session starts, so a `SKILL.md` written
+mid-session is not there yet. You do not have to relaunch.
+
+**`/reload-skills`** re-runs the discovery ladder, swaps the session's
+live catalog, and rebuilds the system prompt when the manifest changed.
+After it, a skill you just wrote is both loadable by name and visible to
+the model.
+
+The rebuild is conditional because it is not free. The manifest lives in
+the pinned prompt prefix, so changing it discards the provider's prompt
+cache and the next turn re-reads the transcript uncached. terva pays
+that only when the manifest actually differs:
+
+| you changed | rebuilt? | why |
+|---|---|---|
+| added, deleted, or renamed a skill | yes | the list the model reads is different |
+| edited `description` | yes | it is manifest text — it is how the model decides the skill applies |
+| edited the **body** | no | the body is never in the prompt; it arrives as a tool result |
+
+So the usual authoring beat — tweak the instructions, ask again — costs
+nothing, and still serves the model the rewritten text the next time it
+loads the skill.
+
+Opening the `/skills` picker also refreshes the catalog (and `r`
+re-scans without closing), but it never rebuilds the prompt: browsing
+your skills must not cost you a cache. The consequence is that a skill
+picked up that way is loadable when you *name* it, while the model has
+not been told it exists.
+
+Because project skills are trust-gated, `/reload-skills` re-reads the
+trust verdict too — so `terva trust` followed by `/reload-skills` brings
+a new project skill live without a relaunch.
+
+Over ACP the command does only the first half: the catalog is swapped,
+but the system prompt is fixed at session build and cannot be rebuilt
+mid-session, so the model learns of the new skill on a new session. The
+confirmation says so.
 
 ## How the model uses a skill
 

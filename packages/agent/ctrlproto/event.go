@@ -150,7 +150,8 @@ const (
 	// uncached. Emitted only on a real diff (an identical rebuild is silent).
 	// Data keys: "scope" (system | tools | both), "reason" (approval-mode |
 	// auto-swarm | extension-reload | mcp-toggle | trust | tool-withdrawal |
-	// extension-context | extensions-ready | chat-connect | chat-disconnect), and "context_tokens" (the approximate token count the
+	// extension-context | extensions-ready | skill-reload | chat-connect |
+	// chat-disconnect), and "context_tokens" (the approximate token count the
 	// next turn re-reads, from the last turn's usage; omitted when no turn has
 	// run yet). The extension-driven reasons (tool-withdrawal,
 	// extension-context, extensions-ready) are suppressed to a host log when
