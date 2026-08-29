@@ -20,7 +20,6 @@ import (
 	"terva.sh/terva/packages/agent/lore"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/raati"
-	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/core"
@@ -47,7 +46,6 @@ type wsSession struct {
 	extMgr      *extensions.Manager    // this session's extension subprocesses
 	stopExt     func()                 // tears extMgr down on close
 	roSet       *core.ReadOnlySet      // the live policy's read-only set, so a rebuild's merges land where the gate reads them (nil in pure-yolo)
-	skillTool   *skills.Tool           // available skills, for /skill autocomplete (may be nil)
 	tasks       *tasktool.Controller   // the built-in task board (nil when the session has no base workspace tools)
 	memory      *tools.MemoryTool      // durable memory, bound once at session build (nil when --no-memory)
 	files       *tools.FileState       // what the model has seen of each path; survives tool rebuilds
@@ -398,7 +396,9 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	ag := r.NewAgent()
 	s.agent = ag
 	s.gate = gate
-	s.skillTool = r.SkillTool
+	// No skillTool field: the skill catalog is read back off the agent's live
+	// registry (liveSkillTool) precisely because every rebuild mints a fresh
+	// one. See carrier_skills.go.
 	s.tasks = r.Tasks
 	// Retain the memory tool for the same reason as the task board: the pane and
 	// the injected block read the stores it bound, and a rebuild must not swap
@@ -2490,10 +2490,11 @@ func (s *wsSession) snapshot() ctrlproto.Snapshot {
 
 // skillList surfaces the session's available skills for /skill autocomplete.
 func (s *wsSession) skillList() []ctrlproto.SkillInfo {
-	if s.skillTool == nil {
+	st := s.liveSkillTool()
+	if st == nil {
 		return nil
 	}
-	sk := s.skillTool.Skills()
+	sk := st.Skills()
 	out := make([]ctrlproto.SkillInfo, 0, len(sk))
 	for _, k := range sk {
 		out = append(out, ctrlproto.SkillInfo{Name: k.Name, Description: k.Description})

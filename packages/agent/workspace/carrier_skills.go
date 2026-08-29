@@ -36,10 +36,37 @@ func (w *Workspace) skillsForSession(sess string, refresh bool) []*skills.Skill 
 	trusted := s.trusted.Load()
 	full, _ := skills.Discover(config.TervaHome(), s.cwd, userHome, s.args.WithSkills, !s.args.NoBuiltinSkills,
 		skills.Gate{TrustProject: trusted, Disabled: config.ResolveConfig(s.cwd, trusted).Config.DisableExtensions})
-	if refresh && s.skillTool != nil {
-		s.skillTool.SetSkills(full)
+	if refresh {
+		if st := s.liveSkillTool(); st != nil {
+			st.SetSkills(full)
+		}
 	}
 	return full
+}
+
+// liveSkillTool returns the skill tool the MODEL currently holds, read from the
+// agent's live registry rather than from a pointer cached at session build.
+//
+// Derived, not stored, and deliberately so. Every rebuildTools installs a
+// registry that Resolve minted fresh — skill tool included — so a cached
+// pointer silently becomes an orphan at the first rebuild. The host then
+// reloads into a catalog the model cannot read, while the picker keeps looking
+// correct because it rescans disk on every call. Deriving removes that
+// invariant instead of maintaining it. Agent.LookupTool takes the agent's own
+// lock, so this is safe against a concurrent rebuild.
+//
+// nil is a normal answer: no skills discovered, --no-skill, --no-tools, a
+// chat/play session, or a bare fixture with no agent.
+func (s *wsSession) liveSkillTool() *skills.Tool {
+	if s == nil || s.agent == nil {
+		return nil
+	}
+	t, ok := s.agent.LookupTool("skill")
+	if !ok {
+		return nil
+	}
+	st, _ := t.(*skills.Tool)
+	return st
 }
 
 // SkillSnapshot re-discovers the active skills for the /skills picker and
@@ -51,6 +78,9 @@ func (w *Workspace) SkillSnapshot(sess string) []*skills.Skill {
 
 // ReloadSkills re-discovers and swaps the session's live catalog so a
 // session-authored skill resolves by name (bound to the /skills reload key).
+//
+// Catalog only: it never rebuilds the system prompt, so opening a picker can
+// never cost the user their prompt cache.
 func (w *Workspace) ReloadSkills(sess string) []*skills.Skill {
 	return w.skillsForSession(sess, true)
 }
@@ -59,8 +89,12 @@ func (w *Workspace) ReloadSkills(sess string) []*skills.Skill {
 // per-render source for `/skill <name>` completions (no disk rescan).
 func (w *Workspace) SessionSkills(sess string) []*skills.Skill {
 	s := w.existing(sess)
-	if s == nil || s.args.NoSkill || s.skillTool == nil {
+	if s == nil || s.args.NoSkill {
 		return nil
 	}
-	return s.skillTool.Skills()
+	st := s.liveSkillTool()
+	if st == nil {
+		return nil
+	}
+	return st.Skills()
 }
