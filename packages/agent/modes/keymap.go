@@ -92,6 +92,7 @@ func (i *Interactive) buildGlobalKeymap() []globalBinding {
 		{kind: tui.KeyCtrlD, name: "quit-when-idle", run: i.keyCtrlD},
 		{kind: tui.KeyCtrlL, name: "repaint", run: i.keyRepaint},
 		{kind: tui.KeyCtrlO, name: "toggle-tool-expand", run: i.keyToggleExpand},
+		{kind: tui.KeyCtrlR, name: "toggle-thinking-expand", run: i.keyToggleThinking},
 		{kind: tui.KeyCtrlS, name: "stash-draft", run: i.keyStashDraft},
 		{kind: tui.KeyCtrlT, name: "cycle-tool-display", run: i.keyCycleToolDisplay},
 		{kind: tui.KeyCtrlV, name: "paste-clipboard-image", run: i.keyPasteClipboard},
@@ -263,6 +264,31 @@ func (i *Interactive) keyRepaint(context.Context, tui.Key) keyOutcome {
 func (i *Interactive) keyToggleExpand(context.Context, tui.Key) keyOutcome {
 	i.mu.Lock()
 	i.view.ExpandAll = !i.view.ExpandAll
+	if i.rend != nil {
+		i.rend.Clear()
+	}
+	i.mu.Unlock()
+	i.invalidate()
+	return keyHandled
+}
+
+// keyToggleThinking (ctrl+r) expands or collapses RECORDED thinking, and lifts
+// the tail cap off the live block.
+//
+// Separate from ctrl+o deliberately. Thinking is prose you read; tool bodies are
+// mechanics you glance at. Reaching the model's reasoning through ctrl+o meant
+// unfolding every bash dump and diff in the transcript to get at it, so the two
+// no longer share a switch — ctrl+o covers tool results and the compaction
+// summary, and this covers thinking.
+//
+// The NEWEST block is open regardless of this flag (see newestThinking in
+// view.Build); what this reaches is every older one.
+//
+// Same clear+replay as ctrl+o: in main-screen scrollback mode this changes rows
+// that were already emitted, so editing them in place is not an option.
+func (i *Interactive) keyToggleThinking(context.Context, tui.Key) keyOutcome {
+	i.mu.Lock()
+	i.view.ExpandThinking = !i.view.ExpandThinking
 	if i.rend != nil {
 		i.rend.Clear()
 	}

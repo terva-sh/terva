@@ -49,7 +49,7 @@ func TestSupersededReasoningCollapsesToAMarker(t *testing.T) {
 	if !strings.Contains(plain, "thinking") {
 		t.Fatalf("no thinking marker on a message carrying recorded reasoning:\n%s", plain)
 	}
-	if !strings.Contains(plain, "ctrl+o") {
+	if !strings.Contains(plain, "ctrl+r") {
 		t.Errorf("marker does not say how to open it:\n%s", plain)
 	}
 	if strings.Contains(plain, "weighing two indexes") {
@@ -60,15 +60,36 @@ func TestSupersededReasoningCollapsesToAMarker(t *testing.T) {
 	}
 }
 
-// ctrl+o is the same control the compaction block and the tool boxes ride, which
-// is why the box needed no setting and no new key of its own.
-func TestExpandAllRevealsRecordedReasoning(t *testing.T) {
+// ctrl+r (ExpandThinking) is what reaches a SUPERSEDED block, and ctrl+o no
+// longer does.
+//
+// 🪤 They shared a control until thinking became something you read rather than
+// glance at: reaching one model's reasoning through ctrl+o meant unfolding every
+// bash dump and diff in the transcript to get at it. Both halves are pinned here
+// — that ctrl+r reveals it, and that ctrl+o leaves it alone — because a fix that
+// only adds the new key would silently keep the old coupling.
+func TestExpandThinkingRevealsSupersededReasoning(t *testing.T) {
 	v := reasoningView("weighing two indexes", "I used the btree.")
-	v.ExpandAll = true
-	plain := stripANSI(strings.Join(v.Build(80), "\n"))
+	// A later turn takes the newest-open slot, so the block under test is only
+	// reachable by the toggle.
+	v.Messages = append(v.Messages,
+		provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "and then?"}}},
+		provider.Message{Role: provider.RoleAssistant, Content: []provider.Content{
+			provider.ReasoningBlock{Summary: "checking the newer path"},
+			provider.TextBlock{Text: "Then I cached it."},
+		}},
+	)
 
+	v.ExpandAll = true
+	if plain := stripANSI(strings.Join(v.Build(80), "\n")); strings.Contains(plain, "weighing two indexes") {
+		t.Errorf("ctrl+o must no longer expand thinking:\n%s", plain)
+	}
+
+	v.ExpandAll = false
+	v.ExpandThinking = true
+	plain := stripANSI(strings.Join(v.Build(80), "\n"))
 	if !strings.Contains(plain, "weighing two indexes") {
-		t.Fatalf("ExpandAll did not reveal the summary:\n%s", plain)
+		t.Fatalf("ctrl+r did not reveal the superseded summary:\n%s", plain)
 	}
 	if !strings.Contains(plain, "I used the btree.") {
 		t.Errorf("revealing the thinking cost the reply:\n%s", plain)

@@ -104,7 +104,7 @@ func TestNewestThinkingIsOpenAndOlderOnesCollapse(t *testing.T) {
 	if strings.Contains(out, "OLDERTHOUGHT") {
 		t.Errorf("an older thinking block must collapse to its marker:\n%s", out)
 	}
-	if !strings.Contains(out, "ctrl+o to expand") {
+	if !strings.Contains(out, "ctrl+r to expand") {
 		t.Errorf("the collapsed block must still offer the expand affordance:\n%s", out)
 	}
 }

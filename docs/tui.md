@@ -510,7 +510,8 @@ Slash commands also work while the agent is busy. Read-only ones (`/help`, `/jum
 | `ctrl+c` | Clear the input and queue (while idle) or arm the exit hint (while busy). Press again within 2s to exit. Use `esc` to cancel a running turn. |
 | `ctrl+d` | Exit on empty input. |
 | `ctrl+l` | Redraw the screen. |
-| `ctrl+o` | Expand or collapse long tool results (read, write, edit, bash outputs over ~12 lines), the compaction summary, and any recorded thinking (`▸ thinking`, present only with **Record thinking** on). Also overrides `ctrl+t`'s minimal/grouped/hidden modes with full boxes. |
+| `ctrl+o` | Expand or collapse long tool results (read, write, edit, bash outputs over ~12 lines) and the compaction summary. Also overrides `ctrl+t`'s minimal/grouped/hidden modes with full boxes. Recorded thinking has its own key — see `ctrl+r`. |
+| `ctrl+r` | Expand or collapse recorded thinking (`▸ thinking`, present only with **Record thinking** on), and lift the height cap off the block streaming during a turn. The newest turn's thinking is already open without this; `ctrl+r` reaches the older ones. Separate from `ctrl+o` so reading the model's reasoning does not mean unfolding every bash dump and diff in the transcript. |
 | `ctrl+s` | Set the current draft aside to answer the agent first (press again to bring it back; it also returns on its own after your next message goes out). See [Setting a draft aside](#setting-a-draft-aside-ctrls). |
 | `ctrl+t` | Cycle tool display: boxes → minimal one-liners → grouped → hidden. Errors stay visible; `ctrl+o` recovers everything. |
 | `ctrl+v` | Paste an image from the system clipboard into the prompt (same as `/paste`). Text paste needs no key — it arrives as a bracketed paste. |

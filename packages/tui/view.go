@@ -165,6 +165,16 @@ type View struct {
 	// "... (N more lines, M total, ctrl+o to expand)" footer.
 	ExpandAll bool
 
+	// ExpandThinking forces EVERY recorded thinking block open, and lifts the
+	// tail cap off the live one. Toggled from the tui by ctrl+r.
+	//
+	// Deliberately not ExpandAll: thinking is prose you read, and tool bodies
+	// are mechanics you glance at. Reading a model's reasoning through ctrl+o
+	// meant unfolding every bash dump and diff in the transcript to get at it.
+	// When false the newest block is still open on its own (see newestThinking
+	// in Build) — this switch is for the older ones.
+	ExpandThinking bool
+
 	// ToolDisplay selects how tool calls render in the transcript and
 	// live overlay: full bordered boxes, a one-line muted summary per
 	// call, or nothing at all. Cycled from the tui by ctrl+t; immersive
@@ -203,6 +213,10 @@ type msgCacheKey struct {
 	hash      uint64
 	width     int
 	expandAll bool
+	// expandThinking is the ctrl+r switch. Like expandAll it is View state that
+	// renderMessage reads, so a render made without it is not interchangeable
+	// with one made with it.
+	expandThinking bool
 	// thinkingOpen is true when THIS message's recorded thinking draws
 	// expanded rather than as its one-line marker. Only the newest thinking
 	// block is open, so one message renders two ways over its lifetime — it
@@ -215,6 +229,13 @@ type msgCacheKey struct {
 	// expandAll is: renderMessage reads it, so a render made without it is
 	// not interchangeable with one made with it. See sharedPreviewSig.
 	previews uint64
+	// hyperlinks is the OSC 8 emission state renderMessage read. Same
+	// reason as expandAll and previews: a render made with hyperlinks off
+	// is not interchangeable with one made with them on. In production
+	// this is set once before the first paint and never moves, so the
+	// field costs a comparison and buys the cache being correct if that
+	// ever stops being true.
+	hyperlinks bool
 	// turnOpen is true when the previous rendered message belongs to
 	// the same agent turn (assistant tool_use, or tool result). The
 	// header ("▍ terva") is suppressed in that case so a single turn
@@ -517,7 +538,7 @@ func (v *View) BuildLive(width int) []string {
 		inner := assistantBodyWidth(width - len(indent))
 		md := RenderMarkdown(v.Streaming, v.Theme, inner)
 		for _, l := range strings.Split(md, "\n") {
-			for _, w := range wrapANSILineKeepStyle(l, inner) {
+			for _, w := range wrapANSILineKeepStyle(LinkifyURLs(l), inner) {
 				out = append(out, indent+w)
 			}
 		}
@@ -937,13 +958,15 @@ func (v *View) refreshToolPaths() {
 // shared slice is safe.
 func (v *View) renderMessageCached(m provider.Message, width int, turnOpen, thinkingOpen bool) []string {
 	key := msgCacheKey{
-		hash:         hashMessage(m),
-		width:        width,
-		expandAll:    v.ExpandAll,
-		thinkingOpen: thinkingOpen,
-		toolDisplay:  v.ToolDisplay,
-		turnOpen:     turnOpen,
-		previews:     v.sharedPreviewSig(m),
+		hash:           hashMessage(m),
+		width:          width,
+		expandAll:      v.ExpandAll,
+		expandThinking: v.ExpandThinking,
+		thinkingOpen:   thinkingOpen,
+		toolDisplay:    v.ToolDisplay,
+		turnOpen:       turnOpen,
+		previews:       v.sharedPreviewSig(m),
+		hyperlinks:     HyperlinksEnabled(),
 	}
 	if v.renderCache != nil {
 		if lines, ok := v.renderCache[key]; ok {
@@ -1184,7 +1207,14 @@ func (v *View) renderMessage(m provider.Message, width int, turnOpen, thinkingOp
 			case provider.TextBlock:
 				md := RenderMarkdown(strings.TrimLeft(b.Text, "\n"), v.Theme, inner)
 				for _, l := range strings.Split(md, "\n") {
-					for _, w := range wrapANSILineKeepStyle(l, inner) {
+					// Linkify BEFORE wrapping, not after. The wrap is what
+					// splits a long URL across rows, and
+					// wrapANSILineKeepStyle re-opens a hyperlink on the
+					// continuation row with the same id — so the rows stay
+					// ONE link. Linkifying each wrapped row instead would
+					// produce a link per fragment, every one of them
+					// pointing at a truncated URL.
+					for _, w := range wrapANSILineKeepStyle(LinkifyURLs(l), inner) {
 						lines = append(lines, indent+w)
 					}
 				}
@@ -2736,8 +2766,8 @@ func (v *View) renderReasoningRows(summaries []string, width int, open bool) []s
 	}
 	th := v.Theme
 	const indent = "  "
-	if !open && !v.ExpandAll {
-		label := i18n.T("thinking · ctrl+o to expand")
+	if !open && !v.ExpandThinking {
+		label := i18n.T("thinking · ctrl+r to expand")
 		return []string{truncateToWidth(indent+th.FG256(th.Muted, "▸ "+label), width)}
 	}
 	lines := []string{indent + th.FG256(th.Muted, "▾ "+i18n.T("thinking"))}
@@ -2783,12 +2813,18 @@ func (v *View) reasoningBody(text string, width int) []string {
 		if len(l) > 0 && l[0] == FlushLeftSentinel {
 			l = l[1:]
 		}
-		// 🪤 RenderMarkdown does NOT hard-wrap: it lays out block structure
-		// and leaves a long line long. Every other column that renders
-		// markdown follows it with this pass, and the prose arm of
-		// renderMessage is the model to copy. Without it a single reasoning
-		// paragraph rendered ~200 cells wide at width 60 and ran off screen.
-		for _, w := range wrapANSILineKeepStyle(l, inner) {
+		// 🪤 Two steps, and this column needs both for the same reasons the
+		// prose path does. RenderMarkdown does NOT hard-wrap — its width
+		// argument only draws rules — so without the wrap a paragraph of
+		// thinking left here as one 160-to-200-cell row and the renderer
+		// truncated it at the pane edge: the tail was not folded onto the
+		// next line, it was gone.
+		//
+		// LinkifyURLs runs BEFORE the wrap, exactly as on the prose path. A
+		// URL crossing the row boundary would otherwise become two links
+		// pointing at two halves of itself, and wrapANSILineKeepStyle is the
+		// only function that carries the open hyperlink across that boundary.
+		for _, w := range wrapANSILineKeepStyle(LinkifyURLs(l), inner) {
 			out = append(out, indent+bar+w)
 		}
 	}
@@ -2810,7 +2846,7 @@ func (v *View) renderLiveThinking(width int) []string {
 	const indent = "  "
 	body := v.reasoningBody(v.StreamingReasoning, width)
 	hidden := 0
-	if !v.ExpandAll && len(body) > LiveThinkingTailLines {
+	if !v.ExpandThinking && len(body) > LiveThinkingTailLines {
 		hidden = len(body) - LiveThinkingTailLines
 		body = body[hidden:]
 	}

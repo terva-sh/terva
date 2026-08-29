@@ -44,6 +44,7 @@ const (
 	KeyCtrlF
 	KeyCtrlW
 	KeyCtrlO
+	KeyCtrlR
 	KeyCtrlS
 	KeyCtrlT
 	KeyCtrlV
@@ -96,6 +97,8 @@ func (r *Reader) Read() (Key, error) {
 		return Key{Kind: KeyCtrlW}, nil
 	case b == 0x0f:
 		return Key{Kind: KeyCtrlO}, nil
+	case b == 0x12:
+		return Key{Kind: KeyCtrlR}, nil
 	case b == 0x13:
 		// XOFF under software flow control, but raw mode (term.MakeRaw)
 		// clears IXON, so the byte reaches us as an ordinary chord.
@@ -413,6 +416,8 @@ func keyFromModifiedCode(code, mod int) (Key, bool) {
 			return Key{Kind: KeyCtrlW, Shift: shift, Alt: alt, Ctrl: true}, true
 		case 'o', 'O':
 			return Key{Kind: KeyCtrlO, Shift: shift, Alt: alt, Ctrl: true}, true
+		case 'r', 'R':
+			return Key{Kind: KeyCtrlR, Shift: shift, Alt: alt, Ctrl: true}, true
 		case 't', 'T':
 			return Key{Kind: KeyCtrlT, Shift: shift, Alt: alt, Ctrl: true}, true
 		case 'v', 'V':
