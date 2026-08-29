@@ -82,3 +82,63 @@ func TestRenderCacheKeyedOnHyperlinkState(t *testing.T) {
 		t.Errorf("served a cached un-linkified render after the flag went on: %q", got)
 	}
 }
+
+// expandedReasoning is reasoningView (view_reasoning_test.go) with the
+// thinking already unfolded — the state these two care about, since the
+// collapsed arm is a single marker row with nothing to wrap or link.
+func expandedReasoning(summary string) *View {
+	v := reasoningView(summary, "done")
+	v.ExpandAll = true
+	return &v
+}
+
+// Recorded thinking is model prose like any other, so a URL in it should
+// click like one in the reply. Before this it could not: the rows were
+// emitted unwrapped, so there was no wrap boundary to carry a link
+// across — and the row never reached the wrap in the first place.
+func TestReasoningRowsLinkifyAcrossTheWrap(t *testing.T) {
+	enableHyperlinks(t)
+	const url = "https://terva.sh/docs/getting-started?ref=tui&utm_source=terminal"
+	rows := expandedReasoning("I should check " + url + " before answering.").Build(48)
+
+	var linked []string
+	for _, r := range rows {
+		if strings.Contains(r, "\x1b]8;") {
+			linked = append(linked, r)
+		}
+	}
+	if len(linked) < 2 {
+		t.Fatalf("expected the URL to wrap over at least 2 linked rows, got %d:\n%q", len(linked), rows)
+	}
+	want := "\x1b]8;id=" + HyperlinkIDFor(url) + ";" + url + "\x1b\\"
+	for n, r := range linked {
+		if !strings.Contains(r, want) {
+			t.Errorf("row %d does not carry the whole target: %q", n, r)
+		}
+	}
+}
+
+// The row that made the linkifying pointless: RenderMarkdown's width
+// argument only draws rules, so an un-wrapped paragraph of thinking left
+// here as one 160-cell row and the renderer cut it at the pane edge. The
+// tail was not folded onto the next line — it was dropped.
+func TestReasoningRowsWrapToThePane(t *testing.T) {
+	const width = 48
+	long := "I should check the docs before answering, because the auth section covers this exact case and the wording matters quite a lot here."
+	rows := expandedReasoning(long).Build(width)
+
+	body := 0
+	for _, r := range rows {
+		if w := visibleWidth(r); w > width {
+			t.Errorf("row is %d cells wide in a %d-cell pane: %q", w, width, stripANSI(r))
+		}
+		if strings.Contains(stripANSI(r), "auth section") || strings.Contains(stripANSI(r), "wording matters") {
+			body++
+		}
+	}
+	// The tail has to actually be present, not merely within width: a
+	// truncating renderer would also pass the width check above.
+	if body < 2 {
+		t.Errorf("the paragraph did not wrap onto further rows (%d body rows):\n%q", body, rows)
+	}
+}

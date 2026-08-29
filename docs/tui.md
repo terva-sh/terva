@@ -364,8 +364,8 @@ a terminal configured to refuse clipboard writes leaves you with a success
 message and an unchanged clipboard. Set `TERVA_CLIPBOARD=local` or `terminal` to
 pick the route yourself.
 
-**Hyperlinks.** On a terminal that supports OSC 8, URLs in replies and the login
-URL in `/login` are emitted as real hyperlinks: the target travels out of band, so
+**Hyperlinks.** On a terminal that supports OSC 8, URLs in replies, in recorded
+thinking, and the login URL in `/login` are emitted as real hyperlinks: the target travels out of band, so
 cmd/ctrl+click opens the whole URL even when the visible text is split across
 rows. The dialog also binds `c` to copy the login URL, which is the answer for a
 terminal without hyperlink support, or a login you are finishing on your phone.

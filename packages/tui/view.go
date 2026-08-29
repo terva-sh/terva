@@ -2722,7 +2722,17 @@ func (v *View) renderReasoningRows(summaries []string, width int) []string {
 			if len(l) > 0 && l[0] == FlushLeftSentinel {
 				l = l[1:]
 			}
-			lines = append(lines, indent+l)
+			// Same two steps as the prose path above, and it needs both
+			// for the same reasons. RenderMarkdown does not wrap (its
+			// width argument only draws rules), so without the wrap a
+			// paragraph of thinking left here as one 160-cell row and the
+			// renderer truncated it at the pane edge — the tail was not
+			// folded onto the next line, it was gone. And linkifying has
+			// to happen BEFORE that wrap, or a URL crossing the boundary
+			// becomes two links to two halves of itself.
+			for _, w := range wrapANSILineKeepStyle(LinkifyURLs(l), inner) {
+				lines = append(lines, indent+w)
+			}
 		}
 	}
 	return append(lines, "")
