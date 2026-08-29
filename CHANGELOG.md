@@ -11,6 +11,12 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.132.4](https://github.com/terva-sh/terva/releases/tag/v0.132.4) — 2026-08-28
+
+### Fixes
+
+- providers: an endpoint named with a capital letter was unreachable
+
 ## [v0.132.3](https://github.com/terva-sh/terva/releases/tag/v0.132.3) — 2026-08-27
 
 ### Features
