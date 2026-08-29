@@ -168,6 +168,29 @@ type oaiStreamOptions struct {
 	IncludeUsage bool `json:"include_usage"`
 }
 
+// oaiLooseText decodes a stream field that is a string on every server that
+// matters, but is not guaranteed to be one. A value of another shape (null,
+// an object, a number) becomes the empty string instead of failing.
+//
+// The reason is the stream decoder. It drops a chunk whose JSON does not
+// unmarshal, so one surprise shape in a reasoning field would also swallow the
+// visible text that travels in the same chunk. A server that thinks in an
+// unexpected way must lose its thinking only, never the answer.
+type oaiLooseText string
+
+func (s *oaiLooseText) UnmarshalJSON(b []byte) error {
+	*s = ""
+	if len(b) == 0 || b[0] != '"' {
+		return nil
+	}
+	var str string
+	if err := json.Unmarshal(b, &str); err != nil {
+		return nil
+	}
+	*s = oaiLooseText(str)
+	return nil
+}
+
 type oaiRequest struct {
 	Model            string            `json:"model"`
 	Messages         []oaiMessage      `json:"messages"`
@@ -779,8 +802,13 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 				Choices []struct {
 					Index int `json:"index"`
 					Delta struct {
-						Content          string `json:"content"`
-						ReasoningContent string `json:"reasoning_content"`
+						Content string `json:"content"`
+						// Two live conventions name the thinking channel on this
+						// wire. DeepSeek and Kimi send reasoning_content; OpenRouter
+						// and many local servers send reasoning. Read both, or a
+						// model that thinks appears not to think at all.
+						ReasoningContent oaiLooseText `json:"reasoning_content"`
+						Reasoning        oaiLooseText `json:"reasoning"`
 						ToolCalls        []struct {
 							Index    int    `json:"index"`
 							ID       string `json:"id"`
@@ -842,9 +870,16 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 				}
 			}
 			for _, ch := range chunk.Choices {
-				if ch.Delta.ReasoningContent != "" {
-					reasoningBuf.WriteString(ch.Delta.ReasoningContent)
-					out <- EventReasoningDelta{Delta: ch.Delta.ReasoningContent}
+				// reasoning_content wins when a server populates both, so a
+				// server that mirrors one field into the other cannot make
+				// terva record the same thought twice.
+				thinking := string(ch.Delta.ReasoningContent)
+				if thinking == "" {
+					thinking = string(ch.Delta.Reasoning)
+				}
+				if thinking != "" {
+					reasoningBuf.WriteString(thinking)
+					out <- EventReasoningDelta{Delta: thinking}
 				}
 				if ch.Delta.Content != "" {
 					appendText(ch.Delta.Content)
