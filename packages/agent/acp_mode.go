@@ -112,6 +112,7 @@ func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers
 		Model:            r.Model,
 		Sandbox:          r.Sandbox,
 		Skills:           f.skillSnapshot(r.CWD),
+		ReloadSkills:     f.reloadSkills(ag, r.CWD),
 		ObserveEvent:     observe,
 		ExtCommands:      acpExtCommands(extMgr),
 		InvokeExtCommand: acpInvokeExtCommand(extMgr),
@@ -179,6 +180,7 @@ func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd stri
 		Model:            model,
 		Sandbox:          r.Sandbox,
 		Skills:           f.skillSnapshot(r.CWD),
+		ReloadSkills:     f.reloadSkills(ag, r.CWD),
 		ObserveEvent:     observe,
 		ExtCommands:      acpExtCommands(extMgr),
 		InvokeExtCommand: acpInvokeExtCommand(extMgr),
@@ -1008,6 +1010,45 @@ func (f *acpFactory) skillSnapshot(cwd string) func() []*skills.Skill {
 		list, _ := skills.Discover(config.TervaHome(), cwd, userHome, f.args.WithSkills, !f.args.NoBuiltinSkills,
 			skills.Gate{TrustProject: trusted, Disabled: config.ResolveConfig(cwd, trusted).Config.DisableExtensions})
 		return skills.VisibleSkills(list)
+	}
+}
+
+// reloadSkills builds the SessionAgent.ReloadSkills closure: re-run the
+// discovery ladder and swap the result into the agent's LIVE skill tool, so a
+// SKILL.md written this session is loadable by name without a relaunch.
+//
+// The tool is looked up on the agent per call rather than captured, for the
+// same reason the daemon derives it instead of caching it: build.Resolve mints
+// the skill tool, so a held pointer risks writing into an instance the model no
+// longer calls.
+//
+// Trust is re-resolved per call, unlike skillSnapshot's once-at-build verdict.
+// /trust works mid-session over ACP, so `terva trust` followed by
+// /reload-skills has to bring the project skills in — which is the whole point
+// of pairing them. Returns nil under --no-skill, so the command degrades to a
+// note.
+func (f *acpFactory) reloadSkills(ag *core.Agent, cwd string) func() acp.SkillReloadStats {
+	if f.args.NoSkill || ag == nil {
+		return nil
+	}
+	return func() acp.SkillReloadStats {
+		userHome, _ := os.UserHomeDir()
+		trusted := permissions.ResolveTrustState(cwd, f.args.Trust).IsTrusted()
+		list, _ := skills.Discover(config.TervaHome(), cwd, userHome, f.args.WithSkills, !f.args.NoBuiltinSkills,
+			skills.Gate{TrustProject: trusted, Disabled: config.ResolveConfig(cwd, trusted).Config.DisableExtensions})
+
+		var before []*skills.Skill
+		if t, ok := ag.LookupTool("skill"); ok {
+			if tool, _ := t.(*skills.Tool); tool != nil {
+				before = tool.Skills()
+				tool.SetSkills(list)
+			}
+		}
+		return acp.SkillReloadStats{
+			Available: len(skills.VisibleSkills(list)),
+			Added:     skills.MissingFrom(list, before),
+			Removed:   skills.MissingFrom(before, list),
+		}
 	}
 }
 

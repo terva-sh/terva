@@ -184,6 +184,20 @@ type SessionAgent struct {
 	// it afterwards. nil when the session has no extension manager.
 	ReloadExtensions func(ctx context.Context) ReloadStats
 
+	// ReloadSkills re-runs skill discovery and swaps the session's live skill
+	// catalog, so a SKILL.md written or edited during this session becomes
+	// loadable by name straight away. The host owns the discovery ladder (the
+	// acp package can't import the skills package's config/trust dependencies),
+	// and reports back in this package's own terms.
+	//
+	// Catalog only. The system-prompt MANIFEST that tells the model which
+	// skills exist is baked at session build and cannot be re-injected
+	// mid-session over ACP — the same limit /trust states for project content.
+	// So a skill reloaded here is usable when named, and advertised to the
+	// model on a new session; the command's confirmation says exactly that.
+	// nil under --no-skill, when /reload-skills degrades to a note.
+	ReloadSkills func() SkillReloadStats
+
 	// TrustWorkspace persists the session cwd's Workspace Trust verdict and makes
 	// its project content go live for this session, so the native /trust command
 	// gives an editor user the only in-editor way to trust a workspace over ACP.
@@ -228,6 +242,15 @@ type ReloadStats struct {
 	Loaded  int // new extension processes that reached spawn
 	Ready   int // of those, how many signalled ready in time
 	Errors  int // non-fatal per-extension errors during the reload
+}
+
+// SkillReloadStats is the host's summary of a skill reload, in the acp
+// package's own terms. Added and Removed are qualified skill names, so a
+// project skill and a built-in answering to the same word stay distinct.
+type SkillReloadStats struct {
+	Available int      // skills the session can now load
+	Added     []string // qualified names that appeared
+	Removed   []string // qualified names that went away
 }
 
 // ExtCommandInfo is one extension-registered slash command, in the acp
@@ -577,6 +600,7 @@ func (s *agentServer) bindSession(id, cwd string, sa SessionAgent, confirmer *ac
 	sess.invokeExtCommand = sa.InvokeExtCommand
 	sess.extContext = sa.ExtContext
 	sess.reloadExtensions = sa.ReloadExtensions
+	sess.reloadSkills = sa.ReloadSkills
 	sess.trustWorkspace = sa.TrustWorkspace
 	sess.untrustWorkspace = sa.UntrustWorkspace
 	sess.recordSwap = sa.RecordModelSwap

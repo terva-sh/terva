@@ -132,7 +132,7 @@ func TestACPAvailableCommandsAdvertisedOnNew(t *testing.T) {
 	}
 	// The two extMgr-reading built-ins are advertised + executed natively too,
 	// even for a session with no extension manager (they degrade gracefully).
-	for _, want := range []string{"context", "reload-ext"} {
+	for _, want := range []string{"context", "reload-ext", "reload-skills"} {
 		if !names[want] {
 			t.Errorf("available_commands_update missing /%s (it is executed natively)", want)
 		}
@@ -233,6 +233,76 @@ func TestACPSlashSkillsExecutesNatively(t *testing.T) {
 	}
 	if !strings.Contains(text, "fan-out web search + synthesis") {
 		t.Errorf("/skills text missing skill descriptions: %q", text)
+	}
+}
+
+// /reload-skills is the ACP half of the skill authoring loop: re-run discovery
+// and swap the live catalog so a SKILL.md written this session loads by name.
+func TestACPSlashReloadSkillsInvokesTheHostClosure(t *testing.T) {
+	client := &countingTextClient{}
+	factory := &fakeFactory{
+		client:     client,
+		tools:      core.Registry{},
+		withSkills: true,
+		skillList: []*skills.Skill{
+			{Name: "sys-health", Description: "audit disk, memory and load"},
+		},
+	}
+	h, sid, teardown := commandSetup(t, factory)
+	defer teardown()
+	_ = h.drainUpdates()
+
+	res := h.call(MethodSessionPromptName, map[string]any{
+		"sessionId": sid,
+		"prompt":    []map[string]any{{"type": "text", "text": "/reload-skills"}},
+	})
+	if sr, _ := res["stopReason"].(string); sr != StopEndTurn {
+		t.Errorf("/reload-skills stopReason = %q; want end_turn", res["stopReason"])
+	}
+	if got := atomic.LoadInt32(&client.calls); got != 0 {
+		t.Errorf("model called %d times for /reload-skills; want 0", got)
+	}
+	if got := atomic.LoadInt32(&factory.skillReloads); got != 1 {
+		t.Errorf("ReloadSkills ran %d times; want 1 (the command must invoke the reload closure)", got)
+	}
+
+	text := drainChunkText(h.drainUpdates())
+	if !strings.Contains(text, "reloaded:") {
+		t.Errorf("/reload-skills did not emit a stats chunk: %q", text)
+	}
+	if !strings.Contains(text, "sys-health") {
+		t.Errorf("/reload-skills did not name the skill it picked up: %q", text)
+	}
+	// The honest half. ACP cannot rebuild the system-prompt manifest
+	// mid-session, so a user who is not told will keep waiting for the model to
+	// reach for a skill it was never told about.
+	if !strings.Contains(text, "NEW session") {
+		t.Errorf("/reload-skills did not disclose that the model only learns of the new "+
+			"skill on a new session: %q", text)
+	}
+}
+
+// With no skill source wired (--no-skill), the command degrades to a note:
+// end_turn, no model call, no panic.
+func TestACPSlashReloadSkillsNoSkillsDegrades(t *testing.T) {
+	client := &countingTextClient{}
+	factory := &fakeFactory{client: client, tools: core.Registry{}} // withSkills false -> nil closure
+	h, sid, teardown := commandSetup(t, factory)
+	defer teardown()
+	_ = h.drainUpdates()
+
+	res := h.call(MethodSessionPromptName, map[string]any{
+		"sessionId": sid,
+		"prompt":    []map[string]any{{"type": "text", "text": "/reload-skills"}},
+	})
+	if sr, _ := res["stopReason"].(string); sr != StopEndTurn {
+		t.Errorf("/reload-skills (no skills) stopReason = %q; want end_turn", res["stopReason"])
+	}
+	if got := atomic.LoadInt32(&client.calls); got != 0 {
+		t.Errorf("model called %d times for /reload-skills with no skills; want 0", got)
+	}
+	if text := drainChunkText(h.drainUpdates()); !strings.Contains(text, "not available") {
+		t.Errorf("/reload-skills with no skill source did not degrade gracefully: %q", text)
 	}
 }
 

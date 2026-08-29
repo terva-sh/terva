@@ -288,6 +288,11 @@ type fakeFactory struct {
 	// reload closure was actually invoked (not just that a chunk was emitted).
 	extReloads int32
 
+	// skillReloads counts how many times the SessionAgent's ReloadSkills
+	// closure ran — the /reload-skills test asserts it increments, proving the
+	// command invoked the closure rather than merely printing something.
+	skillReloads int32
+
 	// trustCalls / untrustCalls count how many times the SessionAgent's
 	// TrustWorkspace / UntrustWorkspace closures ran, and trustParent records the
 	// parent flag the last /trust passed — the /trust and /untrust tests assert
@@ -326,6 +331,30 @@ func (f *fakeFactory) skillSnapshot() func() []*skills.Skill {
 		return nil
 	}
 	return func() []*skills.Skill { return f.skillList }
+}
+
+// reloadSkillsFn returns the SessionAgent.ReloadSkills closure: nil unless
+// withSkills is set (the --no-skill degradation path), else a counter-bumping
+// closure over the seeded list.
+//
+// It reports the whole seeded list as "added", which is what a first reload
+// against an empty catalog would produce. The real add/remove diffing is
+// skills.MissingFrom, tested at the workspace layer; what matters here is the
+// ACP wiring and the wording the command emits.
+func (f *fakeFactory) reloadSkillsFn() func() SkillReloadStats {
+	if !f.withSkills {
+		return nil
+	}
+	return func() SkillReloadStats {
+		atomic.AddInt32(&f.skillReloads, 1)
+		var added []string
+		for _, s := range f.skillList {
+			if s != nil {
+				added = append(added, s.Qualified())
+			}
+		}
+		return SkillReloadStats{Available: len(f.skillList), Added: added}
+	}
 }
 
 // trustWorkspaceFn / untrustWorkspaceFn return the SessionAgent trust closures:
@@ -798,6 +827,7 @@ func (f *fakeFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServer
 			Model:            model,
 			Sandbox:          f.sandbox,
 			Skills:           f.skillSnapshot(),
+			ReloadSkills:     f.reloadSkillsFn(),
 			ObserveEvent:     observe,
 			ExtCommands:      extCommandsFor(extMgr),
 			InvokeExtCommand: invokeExtCommandFor(extMgr),
@@ -830,6 +860,7 @@ func (f *fakeFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServer
 		Model:            model,
 		Sandbox:          f.sandbox,
 		Skills:           f.skillSnapshot(),
+		ReloadSkills:     f.reloadSkillsFn(),
 		ExtContext:       f.emptyExtContextFunc(),
 		TrustWorkspace:   f.trustWorkspaceFn(),
 		UntrustWorkspace: f.untrustWorkspaceFn(),
@@ -875,6 +906,7 @@ func (f *fakeFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd str
 			Model:            model,
 			Sandbox:          f.sandbox,
 			Skills:           f.skillSnapshot(),
+			ReloadSkills:     f.reloadSkillsFn(),
 			ObserveEvent:     observe,
 			ExtCommands:      extCommandsFor(extMgr),
 			InvokeExtCommand: invokeExtCommandFor(extMgr),
@@ -909,6 +941,7 @@ func (f *fakeFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd str
 		Model:            model,
 		Sandbox:          f.sandbox,
 		Skills:           f.skillSnapshot(),
+		ReloadSkills:     f.reloadSkillsFn(),
 		TrustWorkspace:   f.trustWorkspaceFn(),
 		UntrustWorkspace: f.untrustWorkspaceFn(),
 		RecordModelSwap:  f.recordSwapFn(),

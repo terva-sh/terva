@@ -256,6 +256,30 @@ func Collisions(in []*Skill) []*Skill {
 	return out
 }
 
+// MissingFrom lists the skills in `in` whose qualified name `other` does not
+// have, sorted. It backs the "added" / "removed" halves a reload reports: call
+// it once each way round.
+//
+// Compared by qualified name rather than bare name, so a project skill and a
+// built-in that answer to the same word are never mistaken for one another —
+// swapping one for the other IS a change worth reporting.
+func MissingFrom(in, other []*Skill) []string {
+	have := make(map[string]bool, len(other))
+	for _, s := range other {
+		if s != nil {
+			have[s.Qualified()] = true
+		}
+	}
+	var out []string
+	for _, s := range in {
+		if s != nil && !have[s.Qualified()] {
+			out = append(out, s.Qualified())
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Gate is extroots.Gate — what this workspace is allowed to contribute.
 // Aliased rather than redeclared so skills, lore and the extension scanner
 // cannot drift into three shapes of the same answer, which is the failure this

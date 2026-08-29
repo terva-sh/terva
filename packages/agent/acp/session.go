@@ -62,6 +62,12 @@ type session struct {
 	extContext       func() []ContextItem
 	reloadExtensions func(ctx context.Context) ReloadStats
 
+	// reloadSkills re-runs skill discovery and swaps this session's live skill
+	// catalog so /reload-skills can make a just-written SKILL.md loadable by
+	// name. From the host (SessionAgent); nil under --no-skill, when
+	// /reload-skills degrades to a graceful note.
+	reloadSkills func() SkillReloadStats
+
 	// trustWorkspace / untrustWorkspace persist the cwd's Workspace Trust
 	// verdict and re-apply it to the live session so the native /trust and
 	// /untrust commands work from inside an editor (the only in-editor way to

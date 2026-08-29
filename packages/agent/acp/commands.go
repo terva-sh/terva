@@ -94,17 +94,18 @@ var nativeSlashCommands map[string]nativeSlash
 
 func init() {
 	nativeSlashCommands = map[string]nativeSlash{
-		"/clear":       {handle: runClearCommand},
-		"/compact":     {handle: runCompactCommand},
-		"/help":        {handle: runHelpCommand},
-		"/permissions": {handle: runPermissionsCommand},
-		"/jail":        {handle: runJailCommand},
-		"/unjail":      {handle: runUnjailCommand},
-		"/skills":      {handle: runSkillsCommand},
-		"/context":     {handle: runContextCommand},
-		"/reload-ext":  {handle: runReloadExtCommand},
-		"/trust":       {handle: runTrustCommand},
-		"/untrust":     {handle: runUntrustCommand},
+		"/clear":         {handle: runClearCommand},
+		"/compact":       {handle: runCompactCommand},
+		"/help":          {handle: runHelpCommand},
+		"/permissions":   {handle: runPermissionsCommand},
+		"/jail":          {handle: runJailCommand},
+		"/unjail":        {handle: runUnjailCommand},
+		"/skills":        {handle: runSkillsCommand},
+		"/context":       {handle: runContextCommand},
+		"/reload-ext":    {handle: runReloadExtCommand},
+		"/reload-skills": {handle: runReloadSkillsCommand},
+		"/trust":         {handle: runTrustCommand},
+		"/untrust":       {handle: runUntrustCommand},
 	}
 }
 
@@ -675,6 +676,46 @@ func runReloadExtCommand(ctx context.Context, sess *session, _ string) string {
 	// session's ExtCommands closure reads the live manager, so the freshly
 	// reloaded command set is reflected automatically.
 	sess.srv.emitAvailableCommands(sess)
+	return StopEndTurn
+}
+
+// runReloadSkillsCommand executes /reload-skills natively: it re-runs the skill
+// discovery ladder through the host's reloadSkills closure and swaps the
+// session's live catalog, so a SKILL.md written during this session becomes
+// loadable by name without a relaunch — the ACP half of the TUI's
+// /reload-skills.
+//
+// It stops short of the other half, and says so. The system-prompt manifest
+// that ADVERTISES skills to the model is baked at session build; ACP has no
+// mid-session prompt rebuild (the same limit /trust reports for project
+// content). Reporting only "reloaded" would leave a user wondering why the
+// model still never reaches for the new skill on its own, so the confirmation
+// names the gap and the workaround: ask for it by name.
+//
+// No model call; resolves end_turn. With no closure (--no-skill) it degrades to
+// a note.
+func runReloadSkillsCommand(_ context.Context, sess *session, _ string) string {
+	if sess.reloadSkills == nil {
+		sess.chunk("Skills are not available in this session; nothing to reload.")
+		return StopEndTurn
+	}
+	stats := sess.reloadSkills()
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "reloaded: %d skill(s) available", stats.Available)
+	if len(stats.Added) > 0 {
+		fmt.Fprintf(&b, "\n  added: %s", strings.Join(stats.Added, ", "))
+	}
+	if len(stats.Removed) > 0 {
+		fmt.Fprintf(&b, "\n  removed: %s", strings.Join(stats.Removed, ", "))
+	}
+	if len(stats.Added) > 0 {
+		b.WriteString("\n\nLoadable by name now. The model's list of available skills is fixed " +
+			"when a session starts and cannot be rewritten mid-session over ACP, so a new skill " +
+			"is only advertised to the model on a NEW session — until then, name it explicitly " +
+			"and it will load.")
+	}
+	sess.chunk(b.String())
 	return StopEndTurn
 }
 
