@@ -262,6 +262,141 @@ func OpenAICompatAnthropicEffort(level string) string {
 	}
 }
 
+// openAICompatEffort is the ONE decision for the chat-completions
+// reasoning_effort knob: given a model and a level, what goes on the wire.
+// An empty result means send no reasoning_effort at all.
+//
+// The wire and the ladder both call it, so the dialog cannot describe a rung
+// differently from the way the request sends it.
+//
+// 🪤 openaiClient.buildRequest must call THIS, not ReasoningEffectFor.
+// ReasoningEffectFor picks its arm from m.Provider, and buildRequest resolves
+// its model with FindModel("", id) — a lookup that ignores the requesting
+// provider on purpose, so local and custom endpoints work without a catalog
+// row of their own. The provider on the row it finds is therefore not
+// reliably the provider making the request. Routing on it would let a row
+// belonging to an Anthropic-wire provider answer with a thinking budget and
+// an empty effort, and this client would silently stop sending the knob.
+// The client already knows its wire, because it IS this wire, so it asks for
+// this arm by name instead of being routed to it.
+func openAICompatEffort(m Model, level string) string {
+	lv := NormalizeReasoning(level)
+	if len(m.ReasoningEfforts) > 0 {
+		// The model has told us its enum, so aim at what the rung MEANS and
+		// bend it onto that set. The conservative mappers below must not run
+		// first: they clamp "maximum" to "high" because an unknown server
+		// might reject xhigh, and on a model declaring {none, low, medium,
+		// xhigh} that pre-clamp lands "maximum" on medium — the cheaper
+		// neighbour of a rung the model never had — while the xhigh it
+		// actually wanted sat declared and unused.
+		return clampEffortToDeclared(m.ReasoningEfforts, idealCompatEffort(lv))
+	}
+	if usesAdaptiveThinking(m) {
+		// Some gateways expose adaptive-thinking Anthropic models through
+		// the OpenAI-compatible chat-completions wire. They accept the
+		// same reasoning_effort knob, including the top "xhigh" tier;
+		// don't clamp terva's "maximum" to "high" for those models.
+		return OpenAICompatAnthropicEffort(lv)
+	}
+	return OpenAIReasoningEffort(lv)
+}
+
+// idealCompatEffort is terva's rung said plainly on the chat-wire scale, with
+// none of the defensive clamping the blind mappers need.
+//
+// It is only ever used for a model that declares its efforts. That is what
+// makes honesty safe here: OpenAIReasoningEffort turns "minimum" into "low"
+// and both top rungs into "high" because it is guessing at a server it cannot
+// interrogate, and a wrong guess is an HTTP 400 on every turn. A declared set
+// removes the guess, so the rung can mean what it says and be bent afterwards
+// onto something the model admits to.
+func idealCompatEffort(level string) string {
+	switch level {
+	case "":
+		return "none"
+	case "minimum":
+		return "minimal"
+	case "maximum":
+		return "xhigh"
+	case "low", "medium", "high", "max":
+		return level
+	default:
+		// An unrecognized level is a server's own word. Pass it through and
+		// let the clamp leave it alone.
+		return level
+	}
+}
+
+// reasoningEffortScale orders the chat-wire effort values from least thinking
+// to most. It is the yardstick for "nearest supported rung", nothing more: a
+// value absent from this scale is passed through untouched rather than guessed
+// at, because an unknown effort is a server's own extension and terva has no
+// standing to move it.
+var reasoningEffortScale = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+// clampEffortToDeclared bends a wanted effort onto what the model says it
+// accepts. declared is Model.ReasoningEfforts; empty means unlimited and the
+// want is returned untouched.
+//
+// Two rules earn their keep:
+//
+//   - Off (want "") becomes "none" when the model declares that rung, and
+//     stays "" otherwise. This is the only way to disable thinking on a server
+//     whose default is to think — omitting the field there buys MAXIMUM
+//     effort, so terva's cheapest rung was silently its most expensive.
+//     A model that cannot be told "none" keeps omitting, which is honest:
+//     such a model reasons whatever terva does.
+//
+//   - A wanted thinking level never falls back to "none". The nearest rung to
+//     "low" on a model offering only {none, xhigh} is arithmetically "none",
+//     and answering that would turn thinking OFF for a user who just asked to
+//     think. Silence is not a degraded thought.
+func clampEffortToDeclared(declared []string, want string) string {
+	if len(declared) == 0 {
+		return want
+	}
+	ok := make(map[string]bool, len(declared))
+	for _, d := range declared {
+		ok[strings.ToLower(strings.TrimSpace(d))] = true
+	}
+	// "" and "none" are the same request — do not think — and neither may
+	// climb to a thinking rung. Bending "none" up to "minimal" because the
+	// model lacks "none" would switch thinking ON for a user who asked for
+	// off, which is the very inversion this field exists to end.
+	if want == "" || want == "none" {
+		if ok["none"] {
+			return "none"
+		}
+		return ""
+	}
+	if ok[want] {
+		return want
+	}
+	idx := -1
+	for i, s := range reasoningEffortScale {
+		if s == want {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return want // not a rung terva knows; leave the operator's word alone
+	}
+	// Walk outward from the wanted rung, preferring the cheaper side at equal
+	// distance. Index 0 is "none" and is excluded: see the doc comment.
+	for d := 1; d < len(reasoningEffortScale); d++ {
+		if lo := idx - d; lo >= 1 && ok[reasoningEffortScale[lo]] {
+			return reasoningEffortScale[lo]
+		}
+		if hi := idx + d; hi < len(reasoningEffortScale) && ok[reasoningEffortScale[hi]] {
+			return reasoningEffortScale[hi]
+		}
+	}
+	// The model declares no thinking rung at all. Send nothing and let the
+	// server pick, rather than send a value it has told us it rejects.
+	return ""
+}
+
 // OpenAICodexReasoningEffort maps terva levels onto the ChatGPT/Codex
 // Responses backend enum. That backend rejects "minimal" and uses
 // "xhigh" for the top of the GPT-5.x tier. GPT-5.6 additionally supports
@@ -317,7 +452,15 @@ type ReasoningEffect struct {
 }
 
 // Off reports whether this rung leaves reasoning disabled on this model.
-func (e ReasoningEffect) Off() bool { return e.Supported && e.Budget == 0 && e.Effort == "" }
+//
+// "none" counts as off. It is the same state as sending nothing, said out
+// loud: a model that declares the rung is told not to think, rather than left
+// to its own default. Without this arm, declaring "none" would make the off
+// rung report as a live thinking level, and the ladder would offer "off" as
+// something to think with.
+func (e ReasoningEffect) Off() bool {
+	return e.Supported && e.Budget == 0 && (e.Effort == "" || e.Effort == "none")
+}
 
 // ReasoningEffectFor resolves what level does to m.
 //
@@ -357,10 +500,7 @@ func ReasoningEffectFor(m Model, level string) ReasoningEffect {
 		return eff
 
 	default: // reasoningWireOpenAICompat
-		if usesAdaptiveThinking(m) {
-			return ReasoningEffect{Effort: OpenAICompatAnthropicEffort(lv), Supported: true}
-		}
-		return ReasoningEffect{Effort: OpenAIReasoningEffort(lv), Supported: true}
+		return ReasoningEffect{Effort: openAICompatEffort(m, lv), Supported: true}
 	}
 }
 

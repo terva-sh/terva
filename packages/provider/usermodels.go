@@ -76,6 +76,7 @@ type UserModel struct {
 	BaseURL              string          `json:"baseUrl,omitempty"`
 	Temperature          *float32        `json:"temperature,omitempty"`      // default sampling temperature (0–2); nil = inherit
 	DefaultReasoning     string          `json:"defaultReasoning,omitempty"` // per-model reasoning level when no global level is set; "" = inherit
+	ReasoningEfforts     []string        `json:"reasoningEfforts,omitempty"` // reasoning_effort values this model accepts; absent/empty = unlimited
 	Capabilities         map[string]bool `json:"capabilities,omitempty"`
 	Input                []string        `json:"input"` // legacy capability spelling, see above
 	API                  string          `json:"api"`   // informational only
@@ -209,6 +210,7 @@ func LoadUserModelsWithWarnings(path string) ([]UserOverride, []string) {
 				BaseURL:              um.BaseURL,
 				Temperature:          um.Temperature,
 				DefaultReasoning:     um.DefaultReasoning,
+				ReasoningEfforts:     um.ReasoningEfforts,
 				Source:               "user",
 				Caps:                 caps,
 			}
@@ -385,6 +387,16 @@ func applyUserOverrides(base []Model, overrides []UserOverride) []Model {
 		}
 		if o.ReasoningSet {
 			existing.Reasoning = um.Reasoning
+		}
+		// Not a scalarParams entry: the registry's three kinds are text, int
+		// and float, and it also drives the /model editor form. A list needs
+		// its own line here, and needs it BADLY — every field absent from this
+		// merge is silently discarded for any model that already exists in the
+		// catalog or live layer, which is most of them. A declaration that
+		// does nothing is worse than none: the operator reads it back from
+		// their own file and believes it.
+		if len(um.ReasoningEfforts) > 0 {
+			existing.ReasoningEfforts = um.ReasoningEfforts
 		}
 		// Capability keys merge key-wise; the user's explicit
 		// assertions win over catalog/live/extra. Key presence in the

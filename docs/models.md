@@ -108,7 +108,7 @@ Place a `models.json` in `$TERVA_HOME` (macOS: `~/Library/Application Support/te
 }
 ```
 
-Supported fields per model: `id` (required), `name`, `reasoning`, `contextWindow`, `desiredContextWindow`, `maxTokens`, `temperature`, `defaultReasoning`, `capabilities`, `baseUrl`, `priceInput`, `priceOutput`, `priceCacheRead`, `priceCacheWrite`, `priceOutputImage`. `name` is what to call the model on screen **in place of its id** — see [Renaming a model](#renaming-a-model); `contextWindow` is the model's total token budget (the hard ceiling: it drives the context gauge and clamps `maxTokens`); `desiredContextWindow` is an optional smaller *working* window that moves the auto-compaction thresholds only — compact earlier on a large-window model, e.g. to stay under a long-context pricing surcharge, without pretending the model is smaller; `maxTokens` is the cap on a single response; `temperature` (0–2) is the model's default sampling temperature, used when no `--temperature` flag is given and ignored for adaptive-thinking models (which reject sampling params); `defaultReasoning` is the thinking level for this model — a value you set here outranks the global **Thinking** setting, unlike the one terva ships in its own catalog, which yields to it (full order in [CLI](cli.md#per-session-thinking)); `capabilities` is an object of explicit capability assertions — `image-input`, `image-output`, `reasoning` — that override what terva would otherwise infer (`{"image-input": false}` on a vision-less local model, say). These are editable in-app from the `/model` picker with `Ctrl+E`. Several are especially worth setting for local / OpenAI-compatible models that aren't in the built-in catalog — see [Local models](#local-models-with-ollama).
+Supported fields per model: `id` (required), `name`, `reasoning`, `contextWindow`, `desiredContextWindow`, `maxTokens`, `temperature`, `defaultReasoning`, `reasoningEfforts`, `capabilities`, `baseUrl`, `priceInput`, `priceOutput`, `priceCacheRead`, `priceCacheWrite`, `priceOutputImage`. `name` is what to call the model on screen **in place of its id** — see [Renaming a model](#renaming-a-model); `contextWindow` is the model's total token budget (the hard ceiling: it drives the context gauge and clamps `maxTokens`); `desiredContextWindow` is an optional smaller *working* window that moves the auto-compaction thresholds only — compact earlier on a large-window model, e.g. to stay under a long-context pricing surcharge, without pretending the model is smaller; `maxTokens` is the cap on a single response; `temperature` (0–2) is the model's default sampling temperature, used when no `--temperature` flag is given and ignored for adaptive-thinking models (which reject sampling params); `defaultReasoning` is the thinking level for this model — a value you set here outranks the global **Thinking** setting, unlike the one terva ships in its own catalog, which yields to it (full order in [CLI](cli.md#per-session-thinking)); `reasoningEfforts` is the list of `reasoning_effort` values this model actually accepts (`["none", "low", "medium", "xhigh"]`, say) — see [Declaring which efforts a model accepts](#declaring-which-efforts-a-model-accepts); `capabilities` is an object of explicit capability assertions — `image-input`, `image-output`, `reasoning` — that override what terva would otherwise infer (`{"image-input": false}` on a vision-less local model, say). These are editable in-app from the `/model` picker with `Ctrl+E`. Several are especially worth setting for local / OpenAI-compatible models that aren't in the built-in catalog — see [Local models](#local-models-with-ollama).
 
 Prices are USD per 1M tokens. `priceOutputImage` is the separate output rate for **image** tokens, for models that bill a generated picture differently from the text beside it — Gemini's nano-banana family charges $3/1M for text but $60/1M for images on the same model, in the same response. Leave it unset (0) for every ordinary model: output is then billed at the single `priceOutput` rate exactly as before. When it is set, terva splits the response's output tokens by modality and bills each part at its own rate.
 
@@ -238,7 +238,7 @@ Use `/login` and pick **api key** to paste an AI Studio key. terva probes `/v1be
 
 > **Free-tier rate limits.** AI Studio's free tier has tight per-minute and per-day caps that vary by model: the Pro models are the strictest (a few requests per minute, ~50 per day), Flash and Flash-Lite are far more generous. If a Pro turn 429s with `"You exceeded your current quota"` while Flash on the same key still works, you've hit the Pro free-tier RPD. Either switch to Flash for agent loops, or [enable billing](https://aistudio.google.com/app/apikey) on your AI Studio project to flip the same key from free to pay-as-you-go pricing.
 
-Thinking levels (`--thinking off|minimum|low|medium|high|maximum|max`, also configurable in `/settings` as **Thinking**) map differently per generation. Budget-based providers use roughly 1k/2k/8k/16k/32k thinking tokens for minimum/low/medium/high/maximum, with provider/model caps applied. Gemini 3.x uses the `thinkingLevel` enum (`MINIMAL`/`LOW`/`MEDIUM`/`HIGH`), with the Pro models pinned to `LOW` minimum and `HIGH` for any "medium" or higher request. The rolling `-latest` aliases are treated as 3.x, since they always point at a current model. Effort-based OpenAI-compatible chat providers map minimum to `low`, low/medium directly, and high/maximum to `high`; the Codex/Responses backend maps maximum to `xhigh` where supported. `max` is a seventh tier *above* `maximum`, opt-in on purpose: it is sent natively only where the model has an effort above `xhigh` (GPT-5.6, adaptive-thinking Claude) and is clamped back to the `maximum` effort everywhere else. `off` sends no reasoning config. 2.0-family Gemini models have no thinking config at all.
+Thinking levels (`--thinking off|minimum|low|medium|high|maximum|max`, also configurable in `/settings` as **Thinking**) map differently per generation. Budget-based providers use roughly 1k/2k/8k/16k/32k thinking tokens for minimum/low/medium/high/maximum, with provider/model caps applied. Gemini 3.x uses the `thinkingLevel` enum (`MINIMAL`/`LOW`/`MEDIUM`/`HIGH`), with the Pro models pinned to `LOW` minimum and `HIGH` for any "medium" or higher request. The rolling `-latest` aliases are treated as 3.x, since they always point at a current model. Effort-based OpenAI-compatible chat providers map minimum to `low`, low/medium directly, and high/maximum to `high`; the Codex/Responses backend maps maximum to `xhigh` where supported. `max` is a seventh tier *above* `maximum`, opt-in on purpose: it is sent natively only where the model has an effort above `xhigh` (GPT-5.6, adaptive-thinking Claude) and is clamped back to the `maximum` effort everywhere else. `off` sends no reasoning config, unless the model declares a `none` effort — see [Declaring which efforts a model accepts](#declaring-which-efforts-a-model-accepts). 2.0-family Gemini models have no thinking config at all.
 
 You can add additional Gemini model IDs to `models.json` under the `google` provider.
 
@@ -391,6 +391,36 @@ terva --provider openai-compatible \
 ```
 
 `contextWindow` is the total token budget (drives the context gauge and auto-compaction); `maxTokens` is the cap on a single response (`max_tokens`). `models.json` values win over both the catalog and whatever `/v1/models` reports, so they're the fix when a server under-reports its limits. A `"capabilities"` map tags what the model can do — most usefully `{"image-input": false}` for a local model without vision, so terva drops image attachments with a note instead of letting the server reject every turn (see [providers.md](providers.md#capability-tags)). See [providers.md](providers.md#openai-compatible-endpoints-local-and-custom-servers) for the full reference.
+
+#### Declaring which efforts a model accepts
+
+The `reasoning_effort` enum is a property of the **model**, not of the wire. OpenAI's own guide says "some models support only a subset of these values": `gpt-5.5` takes `none`/`low`/`medium`/`high`/`xhigh` and rejects `minimal` and `max`, while a local qwen server may take `low`/`medium`/`xhigh` and reject `high` with an HTTP 400 on every turn. terva cannot interrogate an endpoint for its enum, so by default it guesses conservatively — which is why `minimum` is sent as `low` and both top rungs collapse onto `high`.
+
+`reasoningEfforts` replaces the guess with a fact:
+
+```json
+{
+  "providers": {
+    "openai-compatible": {
+      "models": [
+        {
+          "id": "qwen3.8-27b-abl",
+          "reasoning": true,
+          "reasoningEfforts": ["none", "low", "medium", "xhigh"]
+        }
+      ]
+    }
+  }
+}
+```
+
+**Leaving it out changes nothing.** An undeclared model behaves exactly as it always has, so this can never cost you a rung you had before. Only a model that declares its efforts is held to them.
+
+Once declared, two things change. Each thinking rung aims at what it *means* and is then bent onto the nearest value you listed — so `maximum` reaches the `xhigh` above, rather than being pre-clamped to a `high` this model would reject. And a rung never crosses the off boundary in either direction: a thinking level is never quietly answered with `none`, and `off` is never bent up into thinking.
+
+Declaring `none` also fixes a subtler trap. terva's `off` normally *omits* the field, which leaves the server free to apply its own default — and on a server whose default is `xhigh`, "off" silently bought the **most** expensive setting available. Listing `none` lets terva say so explicitly. A model that has no `none` keeps omitting the field, which is the honest answer: such a model reasons whatever terva does.
+
+The `/reasoning` ladder reads the same declaration as the request builder, so what the dialog shows you is what the wire sends.
 
 ## Swarm sub-agent tiers (weak / medium / strong)
 

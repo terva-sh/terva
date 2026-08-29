@@ -118,6 +118,29 @@ type Model struct {
 	// Hence one field, two precedence slots, told apart by this flag.
 	DefaultReasoningSet bool
 
+	// ReasoningEfforts is the set of reasoning_effort values this model
+	// actually accepts on the chat-completions wire ("none", "minimal",
+	// "low", "medium", "high", "xhigh", "max"). Set per-model in models.json
+	// as `reasoningEfforts`.
+	//
+	// EMPTY MEANS UNLIMITED, and that is the whole contract: a model nobody
+	// has described must never lose a rung. Only a model that declares its
+	// efforts is held to them, so this can never make an undeclared model
+	// worse than it is today.
+	//
+	// It exists because the enum is model-dependent, not wire-dependent.
+	// OpenAI's own guide says "some models support only a subset of these
+	// values": gpt-5.5 takes none/low/medium/high/xhigh and rejects minimal
+	// and max, while a local qwen server takes low/medium/xhigh and rejects
+	// high outright. One hardcoded ladder cannot be right for both, and being
+	// wrong costs an HTTP 400 on every turn.
+	//
+	// Declaring "none" is also the ONLY way terva can honour "off" on a
+	// server whose default is to think: off omits the field, and a server
+	// that defaults to thinking then thinks at full effort. See
+	// clampEffortToDeclared.
+	ReasoningEfforts []string
+
 	// DisplayNameSet marks a DisplayName the operator chose in models.json
 	// (`name`), as opposed to one the catalog or live discovery supplied.
 	// The distinction is what lets a surface that shows the raw id — the
