@@ -114,6 +114,31 @@ func (t *WriteTool) Execute(ctx context.Context, raw json.RawMessage, progress f
 			Text: fmt.Sprintf("warning: %s is ignored by .gitignore — it will not appear in workspace diffs, grep/glob, or git status.", a.Path),
 		}}, content...)
 	}
+	// A relative path that repeats the tail of the working directory usually
+	// means the caller addressed a file from the repository root while the
+	// working directory was already that subdirectory. read FAILS on such a
+	// path and names what it probably meant. write CREATES it, so without this
+	// nothing reports that the file landed where the caller will not look for
+	// it — and a later read of the intended path still misses, leaving the two
+	// tools disagreeing about what exists with nothing to explain why.
+	//
+	// Warned rather than refused, on the .gitignore precedent directly above:
+	// the tool cannot tell a mistake from a deliberately nested tree, so it
+	// reports and leaves the write alone. A fixture tree, a test corpus, and a
+	// vendored copy are all legitimate, and refusing them to catch a typo would
+	// trade a loud recoverable error for a silent impossible one.
+	//
+	// pathDoublingSuggestion speaks only when the undoubled path already
+	// EXISTS, which is what keeps this quiet for an ordinary new directory.
+	//
+	// Placed after the .gitignore block so it prepends last and reads first: a
+	// file in the wrong place matters more than one merely invisible to git.
+	if want := pathDoublingSuggestion(t.CWD, a.Path); want != "" {
+		details["path_doubled"] = true
+		content = append([]provider.Content{provider.TextBlock{
+			Text: fmt.Sprintf("warning: the path %s repeats the working directory, so the file went below it. %s already exists and is probably the file you meant. A relative path resolves against the working directory, not the repository root.", a.Path, want),
+		}}, content...)
+	}
 	return core.ToolResult{
 		Content: content,
 		Details: details,
