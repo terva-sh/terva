@@ -11,6 +11,28 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.132.5](https://github.com/terva-sh/terva/releases/tag/v0.132.5) — 2026-08-28
+
+### Features
+
+- acp: /reload-skills over ACP, with the half it cannot do stated
+- cli: terva skills lists what this workspace resolves
+- provider: let a model declare which reasoning efforts it accepts
+- skills: /reload-skills makes a skill written this session visible
+- tui: OSC 8 hyperlinks, and copy actions that bypass selection
+- tui: ctrl+r expands thinking, and ctrl+o stops doing it
+- tui,web: render the thinking that "Record thinking" records
+- tui,web: thinking is a block that wraps, marks its boundary, and streams into it
+
+### Fixes
+
+- core: make "Record thinking" authoritative for providers that never asked
+- provider: capture thinking from servers that name it `reasoning`
+- provider: route the wire dump by wire, not by a list of provider ids
+- skills: a rebuild orphaned the tool that /skills reloads into
+- tui: show the session's thinking override in the status bar
+- tui: wrap recorded thinking, and linkify it like any other prose
+
 ## [v0.132.4](https://github.com/terva-sh/terva/releases/tag/v0.132.4) — 2026-08-28
 
 ### Fixes

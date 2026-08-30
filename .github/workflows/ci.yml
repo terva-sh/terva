@@ -29,6 +29,19 @@ concurrency:
 jobs:
   test:
     name: test (${{ matrix.os }})
+    # GitHub-hosted runners only. This same branch is pushed to the
+    # internal Forgejo, whose tree has no .forgejo/workflows (the public
+    # projection strips it), so Forgejo falls back to THIS file and queues
+    # jobs asking for ubuntu-latest/macos-latest/windows-latest — labels a
+    # self-hosted runner does not offer. They never start; each release
+    # push leaves one run queued until the next one cancels it.
+    #
+    # The host is the only discriminator available: release.yml's
+    # `github.repository` gate cannot help, because the slug is
+    # terva-sh/terva on BOTH forges. An unset or foreign server_url is
+    # false, which is the safe direction — a forge that cannot supply
+    # these images skips rather than hangs.
+    if: ${{ github.server_url == 'https://github.com' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -108,6 +121,7 @@ jobs:
   # suite is platform-independent TypeScript.
   web-client:
     name: web client tests
+    if: ${{ github.server_url == 'https://github.com' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

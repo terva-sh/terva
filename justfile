@@ -527,6 +527,44 @@ ci: lint test ci-acp ci-web ci-scripting ci-workflows ci-web-client ci-web-smoke
     # Build the public tree here and scrub it, so it fails on the commit that
     # leaks it rather than on the release that would have shipped it.
     @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-scrub; else echo "ci: SKIPPED check-scrub (scripts/release.sh absent on this tree)"; fi
+    # docs/ideas/README.md and docs/proposals/README.md are generated and
+    # committed, and the Go tests over them assert membership only: every entry
+    # reaches a row, every row resolves to an entry. A merge that takes the rows
+    # from one side and the count header from the other satisfies both and still
+    # commits a table that lies — that landed on 2026-08-30 and sat on trunk for
+    # five commits. These scripts are the only byte-exact check, and they run in
+    # BOTH remote lanes, so they run in both local recipes too.
+    @if [ -x scripts/idea.sh ]; then ./scripts/idea.sh check; else echo "ci: SKIPPED idea-check (scripts/idea.sh absent on this tree)"; fi
+    @if [ -x scripts/proposal.sh ]; then ./scripts/proposal.sh check; else echo "ci: SKIPPED proposal-check (scripts/proposal.sh absent on this tree)"; fi
+
+# The documentation lane, exactly as .forgejo/workflows/ci.yml runs it for a
+# pull request that touches only docs/ and the root markdown files.
+#
+# NOT a substitute for `just ci`. Run this when the change IS the markdown and
+# you want the answer in seconds: the full gate is ~9m35s remotely and four
+# steps are 96% of it, and none of those four can read a markdown file.
+#
+# What a docs change CAN break is what runs here. The STE gate reads AGENTS.md.
+# docs.go embeds docs/*.md, and a spread of tests read the tree — docsThatShip,
+# the ideas and proposals ledgers, docs/controllers.md, docs/cli.md. The whole
+# untagged suite runs rather than that list, so a repo-introspection test added
+# later is covered without anyone having to remember this recipe. No -race: a
+# markdown edit cannot introduce a data race.
+#
+# If the change touches ANYTHING else, this recipe is not the gate for it, and
+# CI will not offer you the lane either — run `just ci`.
+#
+# STE gate + the untagged suite + the release.sh doc checks: the docs-only lane.
+ci-docs:
+    go run ./cmd/terva-ste-lint -check -q
+    go test ./...
+    @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-overlay; else echo "ci-docs: SKIPPED check-overlay (scripts/release.sh absent on this tree)"; fi
+    @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-links; else echo "ci-docs: SKIPPED check-links (scripts/release.sh absent on this tree)"; fi
+    @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-scrub; else echo "ci-docs: SKIPPED check-scrub (scripts/release.sh absent on this tree)"; fi
+    # The byte-exact gate over the two generated indexes; the `go test` above
+    # covers them for membership only, which a stale count header passes.
+    @if [ -x scripts/idea.sh ]; then ./scripts/idea.sh check; else echo "ci-docs: SKIPPED idea-check (scripts/idea.sh absent on this tree)"; fi
+    @if [ -x scripts/proposal.sh ]; then ./scripts/proposal.sh check; else echo "ci-docs: SKIPPED proposal-check (scripts/proposal.sh absent on this tree)"; fi
 
 # Pre-release gate for a public cut: the full local CI, then the public-channel
 # facts that can be established before anything is pushed.

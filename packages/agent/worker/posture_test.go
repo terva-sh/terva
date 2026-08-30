@@ -74,6 +74,12 @@ func TestWorkerPostureReachesDispatch(t *testing.T) {
 // recording backend and returns the posture its Command was dispatched with.
 func spawnAndCapturePosture(t *testing.T, dispatcher, override string, leased bool) string {
 	t.Helper()
+
+	// Isolation, and deliberately no config: this test drives leasing through
+	// AcquireWorktree's `leased` argument, so the user's own swarm_worktrees
+	// setting must not get a second vote in the answer.
+	tervaHome(t, "")
+
 	repo := testsupport.TempDir(t)
 	r, err := build.Resolve(build.Args{CWD: repo, Approval: dispatcher}, false)
 	if err != nil {

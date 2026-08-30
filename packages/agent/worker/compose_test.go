@@ -10,12 +10,42 @@ import (
 	"terva.sh/terva/packages/testsupport"
 )
 
+// tervaHome points $TERVA_HOME at a throwaway directory, holding cfg as its
+// config.json when cfg is not empty. Every test in this package that resolves
+// an assembly needs it: config.LoadConfig and the global AGENTS.md chain both
+// read that directory, so without it a test reads whoever ran it.
+func tervaHome(t *testing.T, cfg string) string {
+	t.Helper()
+	home := testsupport.TempDir(t)
+	if cfg != "" {
+		if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(cfg), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("TERVA_HOME", home)
+	return home
+}
+
 // loadedRepo resolves a project with every discovery channel populated: an
 // AGENTS.md chain, an explicit context file, a persona charter. The point is a
 // briefing composed from a MAXIMAL assembly — a leak test against a bare prompt
 // proves only that we did not leak what was not there.
 func loadedRepo(t *testing.T) build.Resolved {
 	t.Helper()
+
+	// The assembly must not depend on whose machine runs it. The real
+	// $TERVA_HOME otherwise joins in: its AGENTS.md is discovered and becomes a
+	// briefing pointer outside the lease, which fails the vessel and pointer
+	// tests below on any developer machine that has one.
+	//
+	// Emptying the home does not go far enough, and that is the interesting
+	// half. swarm-worktrees and auto-swarm are gated on config.LoadConfig, so a
+	// CLEAN home drops them and the "maximal assembly" promised above quietly
+	// shrinks — weakest on CI, which is the one machine nobody inspects. Switch
+	// them on deliberately, and every machine composes the same maximal
+	// briefing with the most harness-local segments there are to leak.
+	tervaHome(t, `{"auto_swarm_enabled":true,"swarm_worktrees":true}`)
+
 	repo := testsupport.TempDir(t)
 	write := func(name, body string) string {
 		p := filepath.Join(repo, name)
@@ -158,6 +188,30 @@ func TestDiscoveryOwnedContentIsPointedAtNotPasted(t *testing.T) {
 	}
 }
 
+// The fixture promises a MAXIMAL assembly, and two of its richest harness-local
+// segments are switched on by config rather than being there for free. That
+// makes the promise breakable in silence: drop the config from loadedRepo and
+// the leak gate still passes, having scrubbed a briefing with less in it to
+// leak. It read as "maximal" on a developer machine whose own config happened
+// to enable them, and was never maximal on CI at all.
+func TestTheLeakFixtureCarriesTheOptionalHarnessSegments(t *testing.T) {
+	r := loadedRepo(t)
+
+	for _, want := range []string{build.SourceSwarmWorktrees, build.SourceAutoSwarm} {
+		var found bool
+		for _, seg := range r.SystemSegments {
+			if seg.Source == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("the fixture no longer assembles the %q segment, so the leak gate above "+
+				"never scrubs it. Restore the config.json loadedRepo writes into $TERVA_HOME.", want)
+		}
+	}
+}
+
 // The identity crosses and the vessel does not. This is the whole thesis of the
 // identity/vessel split, and it only pays off here.
 func TestIdentityTravelsAndTheVesselStaysHome(t *testing.T) {
@@ -215,6 +269,11 @@ func TestPointersAimAtTheWorkersOwnCheckout(t *testing.T) {
 	// re-rooting goes through filepath.Join, so the workspace prefix carries the
 	// OS separator (backslash on Windows) — build it the same way, not as a literal.
 	wsPrefix := filepath.Clean("/leases/wt-7") + string(filepath.Separator)
+	// An empty pointer set satisfies every loop below without checking anything,
+	// and the set is exactly what this fixture's $TERVA_HOME isolation changed.
+	if len(b.Pointers) == 0 {
+		t.Fatal("no pointers at all — the loops below would report a clean audit of nothing")
+	}
 	for _, p := range b.Pointers {
 		if !strings.HasPrefix(p.Path, wsPrefix) {
 			t.Errorf("pointer %q is outside the worker's workspace — it names our checkout, not its own", p.Path)
