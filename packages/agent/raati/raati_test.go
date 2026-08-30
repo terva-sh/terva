@@ -816,6 +816,11 @@ func TestParseBallot(t *testing.T) {
 		{"last fence wins", ballotText("reject", 0.4, "old") + ballotText("approve", 0.9, "new"), vote.Approve, 0.9, false},
 		{"unterminated fence", "prose\n```ballot\n{\"verdict\":\"abstain\",\"confidence\":0.3,\"rationale\":\"unsure\"}", vote.Abstain, 0.3, false},
 		{"bare json fallback", `I vote thus: {"verdict":"approve","confidence":0.7,"rationale":"fine"}`, vote.Approve, 0.7, false},
+		// Regression: the bare-object path used to scan backwards without
+		// tracking string state, so a brace in the unit's own rationale read
+		// as structure and the entire ballot parsed as absent. A vote lost to
+		// a punctuation mark in prose the charter invites the unit to write.
+		{"bare json, brace in the rationale", `I vote thus: {"verdict":"approve","confidence":0.7,"rationale":"the } in block two is fine"}`, vote.Approve, 0.7, false},
 		{"confidence clamped high", ballotText("approve", 1.7, "sure"), vote.Approve, 1, false},
 		{"confidence clamped low", ballotText("approve", -0.4, "eh"), vote.Approve, 0, false},
 		{"bare json without verdict", `{"mood":"grim"}`, "", 0, true},

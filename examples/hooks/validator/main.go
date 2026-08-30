@@ -327,14 +327,14 @@ func chooseModel(resolved build.Resolved, requested string, allowHost bool) (mod
 	}
 	pick := tools.ResolveSwarmTier(resolved.Provider, resolved.Model, "weak", build.SwarmTierMap(cfg.SwarmTiers))
 
-	switch {
-	case pick.Model != "":
+	// A rung may name only an EFFORT ("the built-in model for this rung, but
+	// think this hard"), which is how a provider with one good model and no
+	// cheap sibling still gets a real ladder. No special case is needed for it
+	// here: tools.overridePick fills the model in from the built-in family
+	// table and returns nothing at all when it cannot, so a resolved pick
+	// always carries a Model and the effort rides along on Reasoning.
+	if pick.Model != "" {
 		return pick.Model, pick.Reasoning, nil
-	case pick.Reasoning != "":
-		// A rung that names only an effort means "the host model, thinking
-		// this hard". On a provider with one good model and no cheap sibling
-		// that IS the cheap rung — same weights, less compute, less money.
-		return resolved.Model, pick.Reasoning, nil
 	}
 
 	if allowHost {
@@ -390,6 +390,13 @@ func parseVerdict(s string) (verdict, error) {
 
 // lastJSONObject returns the last brace-balanced {...} span in s, tracking
 // string state so a brace inside a reason string does not end the object.
+//
+// This duplicates packages/modelreply.LastJSONObject, ON PURPOSE. A hook is a
+// binary you copy OUT of this tree and build on its own; an import of
+// terva.sh/terva/packages/... would make that copy fail to build unless you
+// vendor terva too. Self-contained is the whole point of a reference hook, so
+// the example pays forty lines to keep it. Do not "fix" this by importing.
+// If you are writing a hook, copy this function along with the rest.
 //
 // It scans FORWARD even though it wants the last match. Scanning backwards
 // looks cheaper and is a trap: a closing quote is only distinguishable from an
