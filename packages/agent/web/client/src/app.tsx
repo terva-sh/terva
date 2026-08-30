@@ -450,6 +450,25 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     [reloadModels],
   )
 
+  // Hide a model from the pickers, or bring it back. Session-independent (''),
+  // like models.favorite, and it re-lists for the same reason: the daemon owns
+  // the ordered rule list, and un-hiding a model a broad pattern covers writes
+  // an exception rather than deleting anything — an outcome the client cannot
+  // predict, so it asks rather than guesses.
+  const hideModel = useCallback(
+    async (provider: string, id: string, on: boolean) => {
+      const c = clientRef.current
+      if (!c) return
+      try {
+        await c.send('models.hide', { provider, model: id, on }, '')
+        await reloadModels()
+      } catch (e) {
+        setToast(errText(e))
+      }
+    },
+    [reloadModels],
+  )
+
   // Adopt a model as the default for NEW sessions. Session-independent (''),
   // like models.favorite — and deliberately NOT a switch: this session stays on
   // whatever it was on, because trying a model and adopting it are different
@@ -2132,6 +2151,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
             setPickerOpen(false)
           }}
           onToggleFavorite={favoriteModel}
+          onToggleHidden={hideModel}
           onSetDefault={setDefaultModel}
           onEdit={openModelParams}
           onClose={() => setPickerOpen(false)}

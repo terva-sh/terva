@@ -607,6 +607,12 @@ func (s *Service) SetFavoriteModel(ctx context.Context, provider, model string, 
 	}, nil)
 }
 
+func (s *Service) SetModelHidden(ctx context.Context, provider, model string, on bool) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodModelHide, ctrlproto.HideParams{
+		Provider: provider, Model: model, On: on,
+	}, nil)
+}
+
 func (s *Service) SetDefaultModel(ctx context.Context, provider, model string, scope ctrlproto.DefaultScope) error {
 	return s.c.Call(ctx, "", ctrlproto.MethodModelSetDefault, ctrlproto.SetDefaultParams{
 		Provider: provider, Model: model, Scope: scope,

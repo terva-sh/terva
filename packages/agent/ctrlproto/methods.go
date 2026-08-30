@@ -184,6 +184,13 @@ const (
 	MethodModelsList    Method = "models.list"     // result ModelsResult
 	MethodModelSwitch   Method = "models.switch"   // params ModelSwitchParams (sess in frame)
 	MethodModelFavorite Method = "models.favorite" // params FavoriteParams
+	// MethodModelHide hides a model from the pickers, or brings it back.
+	//
+	// The counterpart to MethodModelFavorite, and needed for the same catalogue
+	// that made favourites necessary: pinning six models does nothing about the
+	// three hundred you still scroll past. Favourites raise a few; this lowers
+	// the rest.
+	MethodModelHide Method = "models.hide" // params HideParams
 	// MethodModelSetDefault persists a model as the default for NEW sessions.
 	// Distinct from MethodModelSwitch, which changes one live session and
 	// touches no config: this writes to disk and outlives the daemon, which is
@@ -398,7 +405,7 @@ func (m Method) Group() Group {
 		MethodWorkflowsList, MethodWorkflowsGet,
 		MethodSharedList, MethodSharedFetch:
 		return GroupSession
-	case MethodModelsList, MethodModelSwitch, MethodModelFavorite, MethodModelSetDefault, MethodSessionReasoning,
+	case MethodModelsList, MethodModelSwitch, MethodModelFavorite, MethodModelHide, MethodModelSetDefault, MethodSessionReasoning,
 		MethodModelParams, MethodModelParamsSet, MethodModelParamsReset,
 		MethodTrust, MethodUntrust, MethodRestart, MethodResetsConsume,
 		MethodCardsList, MethodCardsGet, MethodCardsImport, MethodCardsEdit, MethodCardsDelete, MethodCardsExport, MethodCardsLint, MethodCardsFavorite, MethodCardsDoctor,
@@ -543,6 +550,21 @@ type SurfaceActionParams struct {
 
 // FavoriteParams is the payload of [MethodModelFavorite].
 type FavoriteParams struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	On       bool   `json:"on"`
+}
+
+// HideParams is the payload of [MethodModelHide]. On=true hides the model,
+// On=false brings it back.
+//
+// It names ONE model rather than carrying a rule, deliberately. The stored form
+// is an ordered pattern list (config.HiddenModels), but a client that could
+// send patterns would be able to hide hundreds of models in a call that reads
+// like it hides one. The daemon owns the translation from "hide this" to the
+// rules that achieve it, which is also what lets un-hiding rescue a model from
+// a pattern the client never knew about.
+type HideParams struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
 	On       bool   `json:"on"`

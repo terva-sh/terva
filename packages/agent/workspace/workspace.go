@@ -1732,6 +1732,10 @@ func (w *Workspace) Models(ctx context.Context, sess string) (ctrlproto.ModelsRe
 	// membership sweep above: an unexpired OAuth token short-circuits its refresh.
 	authMethod := build.LoggedInProviderAuth()
 	favs := favoriteModelSet()
+	// Compiled once for the whole sweep rather than per model: a big provider
+	// puts several hundred models through this loop, and re-parsing the rule
+	// list on each one is how opening a picker starts to feel slow.
+	vis := hiddenModelRules()
 	defProv, defModel, defScope := w.defaultModel()
 	// The global thinking level, so each row can carry what "inherit" resolves
 	// to ON THAT MODEL. A config read that fails leaves it empty, which is the
@@ -1768,6 +1772,10 @@ func (w *Workspace) Models(ctx context.Context, sess string) (ctrlproto.ModelsRe
 			DisplayName:          m.DisplayName,
 			Renamed:              m.DisplayNameSet,
 		}
+		// Reported, never filtered: the client needs the row to offer "show
+		// hidden" and to un-hide it, and dropping it here would also hide the
+		// model from every other reader of this list.
+		info.Hidden, info.HiddenBy = vis.HiddenBy(m.Provider, m.ID)
 		if m.ID == defModel && m.Provider == defProv {
 			info.Default, info.DefaultScope = true, defScope
 		}
@@ -1846,6 +1854,32 @@ func favoriteModelSet() map[string]bool {
 		out[k] = true
 	}
 	return out
+}
+
+// hiddenModelRules compiles the user's model-visibility rules. A config that
+// fails to load yields no rules, which shows every model: the failure mode of
+// an unreadable config must be a cluttered picker, never a picker missing the
+// model somebody needs.
+func hiddenModelRules() config.ModelVisibility {
+	cfg, _ := config.LoadConfig()
+	return config.NewModelVisibility(cfg.HiddenModels)
+}
+
+// SetModelHidden hides a model from the pickers, or brings it back, persisted
+// to config. The lowering counterpart to SetFavoriteModel's raising.
+//
+// The rule bookkeeping — rescuing a model from a broad pattern rather than
+// deleting the pattern — lives in config.ToggleHiddenModel; this is the
+// persistence half. Live sessions are deliberately untouched: hiding decides
+// what the pickers OFFER next, and yanking the model out from under a running
+// turn is never what "tidy up my menu" meant.
+func (w *Workspace) SetModelHidden(ctx context.Context, provider, model string, on bool) error {
+	if err := config.MutateConfig(func(c *config.Config) {
+		c.HiddenModels = config.ToggleHiddenModel(c.HiddenModels, provider, model, on)
+	}); err != nil {
+		return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+	}
+	return nil
 }
 
 // SetFavoriteModel pins/unpins a model in the user's favorites, persisted to

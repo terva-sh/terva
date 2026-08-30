@@ -119,6 +119,12 @@ type favoriteArgs struct {
 	On       bool
 }
 
+type hideArgs struct {
+	Provider string
+	Model    string
+	On       bool
+}
+
 type setDefaultArgs struct {
 	Provider string
 	Model    string
@@ -344,6 +350,11 @@ func (r *recorder) SetFavoriteModel(_ context.Context, provider, model string, o
 	return nil
 }
 
+func (r *recorder) SetModelHidden(_ context.Context, provider, model string, on bool) error {
+	r.note("SetModelHidden", "", hideArgs{Provider: provider, Model: model, On: on})
+	return nil
+}
+
 func (r *recorder) SetDefaultModel(_ context.Context, provider, model string, scope DefaultScope) error {
 	r.note("SetDefaultModel", "", setDefaultArgs{Provider: provider, Model: model, Scope: scope})
 	return nil
@@ -487,6 +498,12 @@ func mandatoryDispatchCases() []dispatchCase {
 			FavoriteParams{Provider: "openai", Model: "gpt", On: true},
 			"SetFavoriteModel",
 			favoriteArgs{Provider: "openai", Model: "gpt", On: true},
+		},
+		{
+			MethodModelHide,
+			HideParams{Provider: "openrouter", Model: "anthropic/claude-sonnet-4.5", On: true},
+			"SetModelHidden",
+			hideArgs{Provider: "openrouter", Model: "anthropic/claude-sonnet-4.5", On: true},
 		},
 		{
 			MethodModelSetDefault,

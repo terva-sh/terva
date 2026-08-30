@@ -27,10 +27,11 @@ const (
 
 // providerRow is one entry in the stage-1 provider list.
 type providerRow struct {
-	name  string // provider name; "" for the synthetic favorites entry
-	label string // display text
-	count int    // models in scope
-	fav   bool   // the cross-provider ★ favorites entry
+	name   string // provider name; "" for the synthetic favorites entry
+	label  string // display text
+	count  int    // VISIBLE models in scope
+	hidden int    // models in scope the visibility rules keep out of the list
+	fav    bool   // the cross-provider ★ favorites entry
 }
 
 type ModelDialog struct {
@@ -48,6 +49,7 @@ type ModelDialog struct {
 	provSet    map[string]bool  // logged-in providers, for re-reading Active()
 	allModels  []provider.Model // full logged-in catalogue, scoped per provider
 	favorites  map[string]bool  // "provider/id" -> favorited
+	hidden     map[string]bool  // "provider/id" -> hidden from the list
 	scope      providerRow      // the current stage-2 scope (for re-scoping)
 	scopeLabel string           // stage-2 breadcrumb ("openrouter" / "★ favorites")
 	single     bool             // opened straight into one provider -> esc closes
@@ -67,6 +69,8 @@ type modelDialogAction struct {
 	Scope    string // "project" | "global" when Promote
 	Favorite bool   // toggle the favorite flag for Provider/Model
 	FavOn    bool   // the new favorite state when Favorite
+	Hide     bool   // toggle the hidden flag for Provider/Model
+	HideOn   bool   // the new hidden state when Hide
 	Provider string
 	Model    string
 	Close    bool
@@ -77,7 +81,7 @@ func NewModelDialog() *ModelDialog { return &ModelDialog{} }
 // Open shows the dialog. current is the active model id (for the ● marker);
 // loggedInProviders gates which providers/models are reachable; favorites are
 // the "provider/id" keys to pin and star.
-func (d *ModelDialog) Open(current string, loggedInProviders, favorites []string) {
+func (d *ModelDialog) Open(current string, loggedInProviders, favorites, hidden []string) {
 	d.active = true
 	d.promoting = false
 	d.provQuery = ""
@@ -90,6 +94,12 @@ func (d *ModelDialog) Open(current string, loggedInProviders, favorites []string
 		d.favorites[k] = true
 	}
 	d.p.favorites = d.favorites // shared map: toggles in the picker reflect here
+
+	d.hidden = make(map[string]bool, len(hidden))
+	for _, k := range hidden {
+		d.hidden[k] = true
+	}
+	d.p.hidden = d.hidden // shared map, same as favorites above
 
 	d.provSet = map[string]bool{}
 	for _, p := range loggedInProviders {
@@ -124,8 +134,16 @@ func (d *ModelDialog) reloadModels() {
 // after a favorite toggle, and on a catalog refresh.
 func (d *ModelDialog) rebuildProviderList() {
 	counts := map[string]int{}
+	hiddenCounts := map[string]int{}
 	favCount := 0
 	for _, m := range d.allModels {
+		if d.hidden[modelKey(m)] {
+			// Counted separately, not skipped: the row still has to appear (see
+			// below), and the number is what tells the user there is something
+			// behind ":hidden" worth looking at.
+			hiddenCounts[m.Provider]++
+			continue
+		}
 		counts[m.Provider]++
 		if d.favorites[modelKey(m)] {
 			favCount++
@@ -135,13 +153,25 @@ func (d *ModelDialog) rebuildProviderList() {
 	if favCount > 0 {
 		d.providers = append(d.providers, providerRow{label: i18n.T("★ favorites"), count: favCount, fav: true})
 	}
+	// Union of both maps, so a provider whose models are ALL hidden keeps its
+	// row. Dropping it would be a trap with no way out: the only route to
+	// ":hidden" is through a provider's model list, so hiding the last model of
+	// a provider would make every model it has unreachable — unhideable except
+	// by hand-editing config.json.
 	names := make([]string, 0, len(counts))
 	for n := range counts {
 		names = append(names, n)
 	}
+	for n := range hiddenCounts {
+		if counts[n] == 0 {
+			names = append(names, n)
+		}
+	}
 	sort.Strings(names)
 	for _, n := range names {
-		d.providers = append(d.providers, providerRow{name: n, label: n, count: counts[n]})
+		d.providers = append(d.providers, providerRow{
+			name: n, label: n, count: counts[n], hidden: hiddenCounts[n],
+		})
 	}
 }
 
@@ -294,6 +324,24 @@ func (d *ModelDialog) handleModelKey(k tui.Key) modelDialogAction {
 		}
 		d.rebuildProviderList() // reflect the new ★ favorites entry/count when we back out
 		return modelDialogAction{Favorite: true, FavOn: on, Provider: m.Provider, Model: m.ID}
+	case tui.KeyCtrlK:
+		// Toggle hidden for the highlighted model. The picker keeps the cursor
+		// in place rather than re-sorting, so a restored model does not jump
+		// out from under the user mid-list; the host persists the change.
+		//
+		// Ctrl+K, not the obvious Ctrl+H, and this is not a preference: a
+		// terminal sends Ctrl+H as 0x08, which input.go maps to KeyBackspace.
+		// The two are indistinguishable here, so binding "hide" to Ctrl+H would
+		// fire it on every backspace in the type-to-filter.
+		m, on, ok := d.p.toggleHidden()
+		if !ok {
+			return modelDialogAction{}
+		}
+		// The row must leave (or join) the list it is currently in, and the
+		// provider counts have to follow it.
+		d.p.reload(d.scopeModelsFor(d.scope))
+		d.rebuildProviderList()
+		return modelDialogAction{Hide: true, HideOn: on, Provider: m.Provider, Model: m.ID}
 	case tui.KeyCtrlD:
 		m, ok := d.p.selected()
 		if !ok {
@@ -360,6 +408,9 @@ func (d *ModelDialog) renderProviders(th tui.Theme, width int) []string {
 	}
 	for i, r := range rows {
 		plain := fmt.Sprintf("  %-22s %4d", r.label, r.count)
+		if r.hidden > 0 {
+			plain += i18n.T("  (%d hidden)", r.hidden)
+		}
 		if i == d.provCursor {
 			lines = append(lines, th.PadHighlight(plain, width))
 		} else {
@@ -380,7 +431,7 @@ func (d *ModelDialog) renderModels(th tui.Theme, width int) []string {
 	if !d.single {
 		back = i18n.T("esc back")
 	}
-	base := i18n.T("↑/↓, enter, ctrl+f favorite, ctrl+e edit, ctrl+d set-default, %s - type to filter, :img/:thinking", back)
+	base := i18n.T("↑/↓, enter, ctrl+f favorite, ctrl+k hide, ctrl+e edit, ctrl+d set-default, %s - type to filter, :img/:thinking/:hidden", back)
 	lines = append(lines, th.FG256(th.Muted, d.p.hintLine(base)))
 
 	if len(d.p.view) == 0 {

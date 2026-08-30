@@ -206,6 +206,15 @@ type InteractiveConfig struct {
 	// SetFavoriteModel persists a favorite toggle for a "provider/id" key.
 	SetFavoriteModel func(key string, on bool) error
 
+	// HiddenModels returns the "provider/id" keys the user's visibility rules
+	// keep out of the /model picker. Already expanded from the stored patterns
+	// against the live catalogue, so this is flat membership like
+	// FavoriteModels above. Nil-safe.
+	HiddenModels func() []string
+
+	// SetModelHidden persists a hide toggle for a "provider/id" key.
+	SetModelHidden func(key string, on bool) error
+
 	// TervaHome is the root directory for sessions/, used by /sessions
 	// and the update-check cache.
 	TervaHome string

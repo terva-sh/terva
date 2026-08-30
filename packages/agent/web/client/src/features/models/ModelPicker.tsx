@@ -8,12 +8,19 @@ import { renamedTo } from './label'
 // per-provider groups, each row a click-to-switch with its own ★ toggle and a
 // ◉ set-as-default toggle (the TUI picker's ctrl+d, which arms the same
 // project/global choice).
+//
+// Hidden models are the counterweight to favorites: favorites raise a handful,
+// hiding lowers the many, which is what makes a 300-model provider like
+// OpenRouter usable at all. They are filtered out here rather than dropped on
+// arrival — the daemon sends them flagged precisely so "show hidden" has
+// something to offer and the un-hide has a row to act on.
 export function ModelPicker({
   groups,
   favorites,
   current,
   onSwitch,
   onToggleFavorite,
+  onToggleHidden,
   onSetDefault,
   onEdit,
   onClose,
@@ -23,6 +30,7 @@ export function ModelPicker({
   current?: string
   onSwitch: (id: string, provider?: string) => void
   onToggleFavorite: (provider: string, id: string, on: boolean) => void
+  onToggleHidden: (provider: string, id: string, on: boolean) => void
   onSetDefault: (provider: string, id: string, scope: 'global' | 'project') => void
   // Opens the per-model overrides (context window, max tokens, …). They are
   // settings ABOUT this model, so they hang off its row rather than off a pane
@@ -37,6 +45,11 @@ export function ModelPicker({
   // footer — a model appears in both the ★ group and its provider group, so an
   // inline prompt would render twice for the same choice.
   const [promoting, setPromoting] = useState<ModelInfo | null>(null)
+  // Off by default — the point of hiding is that you stop seeing them. Kept as
+  // view state rather than persisted: "show me what I tidied away" is a
+  // momentary errand, and a switch that survived a reload would quietly undo
+  // the setting it exists to manage.
+  const [showHidden, setShowHidden] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
   useEffect(() => searchRef.current?.focus(), [])
   const needle = q.trim().toLowerCase()
@@ -47,15 +60,25 @@ export function ModelPicker({
     model.id.toLowerCase().includes(needle) ||
     model.provider.toLowerCase().includes(needle) ||
     (!!model.renamed && (model.display_name ?? '').toLowerCase().includes(needle))
-  const favMatched = favorites.filter(match)
+  // Hidden is a gate ahead of the text filter, not one more predicate beside
+  // it: with the switch off a hidden model can never surface, however specific
+  // the search.
+  const visible = (model: ModelInfo) => showHidden || !model.hidden
+  const hiddenCount =
+    favorites.filter((m) => m.hidden).length +
+    groups.reduce((n, [, models]) => n + models.filter((m) => m.hidden).length, 0)
+  const favMatched = favorites.filter(visible).filter(match)
   const groupsMatched = groups
-    .map(([provider, models]) => [provider, models.filter(match)] as [string, ModelInfo[]])
+    .map(
+      ([provider, models]) =>
+        [provider, models.filter(visible).filter(match)] as [string, ModelInfo[]],
+    )
     .filter(([, models]) => models.length > 0)
 
   const row = (model: ModelInfo, keyPrefix: string) => (
     <div
       key={keyPrefix + model.provider + '/' + model.id}
-      class={`pick-row${model.id === current ? ' current' : ''}`}
+      class={`pick-row${model.id === current ? ' current' : ''}${model.hidden ? ' is-hidden' : ''}`}
       onClick={() => onSwitch(model.id, model.provider)}
     >
       <button
@@ -83,6 +106,25 @@ export function ModelPicker({
         }}
       >
         {model.default ? '◉' : '○'}
+      </button>
+      <button
+        class={`pick-default${model.hidden ? ' on' : ''}`}
+        title={
+          model.hidden
+            ? model.hidden_by && model.hidden_by !== `${model.provider}/${model.id}`
+              ? // A pattern put it here, so restoring writes an exception
+                // rather than deleting anything. Say so: the rule is the
+                // operator's and it still governs every other model it covers.
+                t('Hidden by the rule “%s” — show this one anyway', model.hidden_by)
+              : t('Hidden from the pickers — show it again')
+            : t('Hide this model from the pickers')
+        }
+        onClick={(event) => {
+          event.stopPropagation()
+          onToggleHidden(model.provider, model.id, !model.hidden)
+        }}
+      >
+        {model.hidden ? '⊘' : '◌'}
       </button>
       <button
         class="pick-default"
@@ -132,9 +174,28 @@ export function ModelPicker({
             </div>
           ))}
           {favMatched.length === 0 && groupsMatched.length === 0 && (
-            <div class="pick-empty">{t('no models match “%s”', q)}</div>
+            <div class="pick-empty">
+              {hiddenCount > 0 && !showHidden
+                ? // Never report "nothing here" when the answer is sitting
+                  // behind the switch: an empty list plus hidden models is the
+                  // one moment the user most needs to be told they exist.
+                  t('no visible models match “%s” — %d hidden', q, hiddenCount)
+                : t('no models match “%s”', q)}
+            </div>
           )}
         </div>
+        {hiddenCount > 0 && (
+          <div class="pick-showhidden">
+            <button
+              class={showHidden ? 'on' : ''}
+              aria-pressed={showHidden}
+              onClick={() => setShowHidden((on) => !on)}
+            >
+              {showHidden ? t('Hide hidden models') : t('Show hidden (%d)', hiddenCount)}
+            </button>
+            {showHidden && <span>{t('dimmed rows are hidden — ⊘ restores one')}</span>}
+          </div>
+        )}
         {promoting && (
           <div class="pick-promote">
             <span class="pick-promote-q">{t('set “%s” as the default for new sessions:', promoting.id)}</span>

@@ -203,6 +203,9 @@ var dispatch = map[Method]handler{
 	MethodModelFavorite: act(base, func(svc WorkspaceService, ctx context.Context, f Frame, p FavoriteParams) error {
 		return svc.SetFavoriteModel(ctx, p.Provider, p.Model, p.On)
 	}),
+	MethodModelHide: act(base, func(svc WorkspaceService, ctx context.Context, f Frame, p HideParams) error {
+		return svc.SetModelHidden(ctx, p.Provider, p.Model, p.On)
+	}),
 	MethodModelSetDefault: act(base, func(svc WorkspaceService, ctx context.Context, f Frame, p SetDefaultParams) error {
 		return svc.SetDefaultModel(ctx, p.Provider, p.Model, p.Scope)
 	}),

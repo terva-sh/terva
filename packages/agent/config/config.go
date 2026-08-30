@@ -68,6 +68,13 @@ type Config struct {
 	// picker (and surfaced as a cross-provider ★ Favorites view). Order is
 	// not significant; membership is.
 	FavoriteModels []string `json:"favorite_models,omitempty"`
+	// HiddenModels are ordered visibility rules that keep models out of the
+	// pickers — "provider/id" keys, "*" wildcards, and a "!" prefix to un-hide.
+	// Unlike FavoriteModels, ORDER IS SIGNIFICANT: last match wins, so a broad
+	// "openrouter/*" can be followed by the handful of rescues that survive it.
+	// See modelvis.go for the grammar and for why hiding never touches the
+	// catalogue itself.
+	HiddenModels []string `json:"hidden_models,omitempty"`
 
 	// AutoTitle, when true, has the web workspace generate a short session
 	// title from the first exchange via a small one-shot model call, instead

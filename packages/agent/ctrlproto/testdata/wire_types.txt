@@ -447,6 +447,10 @@ Hello
 	jailed	bool	omitempty
 	max_upload_bytes	int64	omitempty
 	max_attachment_bytes	int64	omitempty
+HideParams
+	provider	string
+	model	string
+	on	bool
 HistoryParams
 	before	int
 	limit	int	omitempty
@@ -544,6 +548,8 @@ ModelInfo
 	ladder	string	omitempty
 	current	bool	omitempty
 	favorite	bool	omitempty
+	hidden	bool	omitempty
+	hidden_by	string	omitempty
 	default	bool	omitempty
 	default_scope	DefaultScope	omitempty
 	auth	string	omitempty

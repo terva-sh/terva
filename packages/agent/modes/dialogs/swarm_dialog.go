@@ -95,6 +95,7 @@ type SwarmDialog struct {
 	pickingModel        bool
 	modelPicker         *ModelDialog
 	modelPickerLoggedIn []string
+	modelPickerHidden   []string
 
 	// spawnDraft remembers the editor buffer when we suspend it to
 	// show the model picker, so the user doesn't lose half-typed
@@ -139,6 +140,15 @@ func (d *SwarmDialog) SetCurrentModel(model, providerID string) {
 // behaviour.
 func (d *SwarmDialog) SetLoggedInProviders(provs []string) {
 	d.modelPickerLoggedIn = provs
+}
+
+// SetHiddenModels supplies the "provider/id" keys the user's visibility rules
+// keep out of the pickers. Forwarded to the embedded modelDialog for the same
+// reason SetLoggedInProviders is: this IS a model picker, and a model the user
+// has hidden should not be offered here just because it is reached through the
+// swarm editor rather than through /model.
+func (d *SwarmDialog) SetHiddenModels(keys []string) {
+	d.modelPickerHidden = keys
 }
 
 // Open binds the dialog to a swarm via the provided callbacks. The
@@ -677,8 +687,10 @@ func (d *SwarmDialog) openModelPicker() {
 	d.pickingModel = true
 	d.modelPicker = NewModelDialog()
 	// Favorites aren't threaded into the swarm sub-picker; two-level
-	// provider navigation still applies.
-	d.modelPicker.Open(d.pendingModel, d.modelPickerLoggedIn, nil)
+	// provider navigation still applies. Hidden models ARE threaded: a
+	// favourite left out only costs a little convenience, whereas a hidden
+	// model shown here would contradict the setting outright.
+	d.modelPicker.Open(d.pendingModel, d.modelPickerLoggedIn, nil, d.modelPickerHidden)
 }
 
 // handleModelPickerKey forwards one keystroke to the embedded model

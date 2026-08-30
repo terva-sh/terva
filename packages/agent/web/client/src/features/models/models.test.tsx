@@ -17,7 +17,7 @@ afterEach(cleanup)
 
 describe('ModelPicker', () => {
   it('filters by model or provider and shows an empty result', () => {
-    render(<ModelPicker groups={groups} favorites={[models[0]]} current="" onSwitch={() => {}} onToggleFavorite={() => {}} onSetDefault={() => {}} onEdit={() => {}} onClose={() => {}} />)
+    render(<ModelPicker groups={groups} favorites={[models[0]]} current="" onSwitch={() => {}} onToggleFavorite={() => {}} onToggleHidden={() => {}} onSetDefault={() => {}} onEdit={() => {}} onClose={() => {}} />)
     const search = screen.getByPlaceholderText('Search models…')
     expect(document.activeElement).toBe(search)
     fireEvent.input(search, { target: { value: 'beta' } })
@@ -29,7 +29,7 @@ describe('ModelPicker', () => {
 
   it('marks the current model and routes selection with its provider', () => {
     const onSwitch = vi.fn()
-    render(<ModelPicker groups={groups} favorites={[]} current="model-b" onSwitch={onSwitch} onToggleFavorite={() => {}} onSetDefault={() => {}} onEdit={() => {}} onClose={() => {}} />)
+    render(<ModelPicker groups={groups} favorites={[]} current="model-b" onSwitch={onSwitch} onToggleFavorite={() => {}} onToggleHidden={() => {}} onSetDefault={() => {}} onEdit={() => {}} onClose={() => {}} />)
     const current = screen.getByText('model-b').closest('.pick-row')
     expect(current?.classList.contains('current')).toBe(true)
     fireEvent.click(current!)
@@ -39,7 +39,7 @@ describe('ModelPicker', () => {
   it('toggles favorites without selecting the model', () => {
     const onSwitch = vi.fn()
     const onToggleFavorite = vi.fn()
-    render(<ModelPicker groups={groups} favorites={[]} current="" onSwitch={onSwitch} onToggleFavorite={onToggleFavorite} onSetDefault={() => {}} onEdit={() => {}} onClose={() => {}} />)
+    render(<ModelPicker groups={groups} favorites={[]} current="" onSwitch={onSwitch} onToggleFavorite={onToggleFavorite} onToggleHidden={() => {}} onSetDefault={() => {}} onEdit={() => {}} onClose={() => {}} />)
     fireEvent.click(screen.getByTitle('Favorite'))
     expect(onToggleFavorite).toHaveBeenCalledWith('beta', 'model-b', true)
     expect(onSwitch).not.toHaveBeenCalled()
@@ -51,7 +51,7 @@ describe('ModelPicker', () => {
   it('asks for a scope before setting a default, and never switches the session', () => {
     const onSwitch = vi.fn()
     const onSetDefault = vi.fn()
-    render(<ModelPicker groups={groups} favorites={[]} current="" onSwitch={onSwitch} onToggleFavorite={() => {}} onSetDefault={onSetDefault} onEdit={() => {}} onClose={() => {}} />)
+    render(<ModelPicker groups={groups} favorites={[]} current="" onSwitch={onSwitch} onToggleFavorite={() => {}} onToggleHidden={() => {}} onSetDefault={onSetDefault} onEdit={() => {}} onClose={() => {}} />)
 
     fireEvent.click(screen.getAllByTitle('Set as default for new sessions')[1])
     expect(onSetDefault).not.toHaveBeenCalled() // armed, not fired
@@ -65,7 +65,7 @@ describe('ModelPicker', () => {
 
   it('offers project scope, and lets the confirm be cancelled', () => {
     const onSetDefault = vi.fn()
-    render(<ModelPicker groups={groups} favorites={[]} current="" onSwitch={() => {}} onToggleFavorite={() => {}} onSetDefault={onSetDefault} onEdit={() => {}} onClose={() => {}} />)
+    render(<ModelPicker groups={groups} favorites={[]} current="" onSwitch={() => {}} onToggleFavorite={() => {}} onToggleHidden={() => {}} onSetDefault={onSetDefault} onEdit={() => {}} onClose={() => {}} />)
 
     fireEvent.click(screen.getAllByTitle('Set as default for new sessions')[0])
     fireEvent.click(screen.getByText('This project'))
@@ -84,7 +84,7 @@ describe('ModelPicker', () => {
       ['alpha', [{ id: 'model-a', provider: 'alpha', default: true, default_scope: 'global' }]],
       ['beta', [{ id: 'model-b', provider: 'beta' }]],
     ]
-    render(<ModelPicker groups={withDefault} favorites={[]} current="model-b" onSwitch={() => {}} onToggleFavorite={() => {}} onSetDefault={() => {}} onEdit={() => {}} onClose={() => {}} />)
+    render(<ModelPicker groups={withDefault} favorites={[]} current="model-b" onSwitch={() => {}} onToggleFavorite={() => {}} onToggleHidden={() => {}} onSetDefault={() => {}} onEdit={() => {}} onClose={() => {}} />)
 
     const defaultRow = screen.getByText('model-a').closest('.pick-row')
     const currentRow = screen.getByText('model-b').closest('.pick-row')
@@ -97,7 +97,7 @@ describe('ModelPicker', () => {
 
   it('closes from Escape and the backdrop but not picker content', () => {
     const onClose = vi.fn()
-    const { container } = render(<ModelPicker groups={groups} favorites={[]} current="" onSwitch={() => {}} onToggleFavorite={() => {}} onSetDefault={() => {}} onEdit={() => {}} onClose={onClose} />)
+    const { container } = render(<ModelPicker groups={groups} favorites={[]} current="" onSwitch={() => {}} onToggleFavorite={() => {}} onToggleHidden={() => {}} onSetDefault={() => {}} onEdit={() => {}} onClose={onClose} />)
     fireEvent.keyDown(screen.getByPlaceholderText('Search models…'), { key: 'Escape' })
     fireEvent.click(container.querySelector('.picker')!)
     expect(onClose).toHaveBeenCalledTimes(1)

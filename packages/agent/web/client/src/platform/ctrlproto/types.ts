@@ -353,6 +353,18 @@ export interface ModelInfo {
   ladder?: string
   current?: boolean
   favorite?: boolean
+  // hidden is whether the user's visibility rules keep this model out of the
+  // pickers, and hidden_by is the rule that decided it, as they wrote it.
+  //
+  // Hidden models are still SENT — a 'show hidden' toggle has nothing to offer
+  // otherwise, and the un-hide needs a row to act on. Filter them at render
+  // time, do not drop them on arrival.
+  //
+  // hidden_by answers 'why is this one missing?', which matters once a broad
+  // pattern like 'openrouter/*' is in play: show it beside the row rather than
+  // leaving the absence unexplained.
+  hidden?: boolean
+  hidden_by?: string
   // default marks the model NEW sessions start on — not the one this session is
   // on (that is `current`, and the two are deliberately allowed to differ).
   default?: boolean
@@ -2461,6 +2473,7 @@ export type Verb =
   | 'message.edit'
   | 'models.default_for'
   | 'models.favorite'
+  | 'models.hide'
   | 'models.list'
   | 'models.params'
   | 'models.params.reset'

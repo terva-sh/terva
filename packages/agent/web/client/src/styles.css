@@ -675,6 +675,18 @@ button.ident-home:hover .persona { text-decoration: underline; }
    reads "starred / not" and "default / not" at a glance without two loud marks. */
 .pick-default { background: none; border: none; cursor: pointer; font-size: 13px; color: var(--muted); padding: 0 2px; flex: none; }
 .pick-default.on { color: var(--user); }
+/* A hidden row is shown only while "show hidden" is on, and dimmed so it reads
+   as struck off the list rather than as one more choice — it is still clickable,
+   because hiding is about tidying the menu, not about revoking the model. */
+.pick-row.is-hidden { opacity: .5; }
+.pick-row.is-hidden:hover { opacity: .85; }
+/* Why this row is hidden, when a broad pattern rather than the row's own
+   toggle put it there. Without it a pattern-hidden model looks identical to a
+   individually-hidden one, and the un-hide behaves differently for each. */
+.pick-hidden-by { font-size: 11px; color: var(--muted); font-style: italic; flex: none; }
+.pick-showhidden { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-top: 1px solid var(--line); font-size: var(--fs-detail); color: var(--muted); background: var(--panel); }
+.pick-showhidden button { background: none; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; color: inherit; font: inherit; padding: 2px 8px; }
+.pick-showhidden button.on { color: var(--user); border-color: var(--user); }
 /* The scope confirm, in the footer rather than under the row: a model shows up
    in both the ★ group and its provider group, so an inline prompt would render
    the same question twice. */

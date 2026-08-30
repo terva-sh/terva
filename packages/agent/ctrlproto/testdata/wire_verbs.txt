@@ -49,6 +49,7 @@ message.delete	params=MessageDeleteParams	result=-
 message.edit	params=MessageEditParams	result=-
 models.default_for	params=DefaultForParams	result=DefaultForResult
 models.favorite	params=FavoriteParams	result=-
+models.hide	params=HideParams	result=-
 models.list	params=-	result=ModelsResult
 models.params	params=ModelParamsParams	result=ModelParamsView
 models.params.reset	params=ModelParamsParams	result=-

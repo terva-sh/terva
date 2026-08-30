@@ -49,6 +49,7 @@ message.delete	conversation
 message.edit	conversation
 models.default_for	control
 models.favorite	control
+models.hide	control
 models.list	control
 models.params	control
 models.params.reset	control

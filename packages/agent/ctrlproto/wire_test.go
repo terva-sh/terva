@@ -721,6 +721,9 @@ func (f *fakeSvc) SetSessionReasoning(ctx context.Context, sess, level string) e
 func (f *fakeSvc) SetFavoriteModel(ctx context.Context, provider, model string, on bool) error {
 	return nil
 }
+func (f *fakeSvc) SetModelHidden(ctx context.Context, provider, model string, on bool) error {
+	return nil
+}
 func (f *fakeSvc) SetDefaultModel(ctx context.Context, provider, model string, scope DefaultScope) error {
 	f.defaultModel = provider + "/" + model + "@" + string(scope)
 	return nil

@@ -584,6 +584,9 @@ func (f *fakeWS) SetSessionReasoning(ctx context.Context, sess, level string) er
 func (f *fakeWS) SetFavoriteModel(ctx context.Context, provider, model string, on bool) error {
 	return nil
 }
+func (f *fakeWS) SetModelHidden(ctx context.Context, provider, model string, on bool) error {
+	return nil
+}
 func (f *fakeWS) SetDefaultModel(ctx context.Context, provider, model string, scope ctrlproto.DefaultScope) error {
 	return nil
 }

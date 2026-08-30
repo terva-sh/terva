@@ -591,6 +591,17 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 			}
 			return w.SetFavoriteModel(ctx, prov, model, on)
 		},
+		HiddenModels: build.HiddenModelKeys,
+		SetModelHidden: func(key string, on bool) error {
+			// Cut on the FIRST "/" only: an OpenRouter id is itself
+			// "vendor/model", so the key has two slashes and splitting on the
+			// last one would name a provider that does not exist.
+			prov, model, ok := strings.Cut(key, "/")
+			if !ok {
+				return fmt.Errorf("malformed hidden-model key %q", key)
+			}
+			return w.SetModelHidden(ctx, prov, model, on)
+		},
 		PromoteModelDefault: promoteModelDefault,
 		TrustWorkspace: func(parent bool) error {
 			return w.Trust(ctx, parent)

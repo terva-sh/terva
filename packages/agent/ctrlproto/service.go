@@ -314,6 +314,16 @@ type WorkspaceService interface {
 	// favorites view), persisted to config.
 	SetFavoriteModel(ctx context.Context, provider, model string, on bool) error
 
+	// SetModelHidden hides a model from the pickers, or brings it back,
+	// persisted to config. The inverse of SetFavoriteModel in intent: one raises
+	// a few models, the other lowers the many.
+	//
+	// It changes what the pickers OFFER and nothing else. No live session is
+	// touched, and the catalogue is untouched, so a hidden model keeps its
+	// context window and cost data and a session already running on one carries
+	// on to the end.
+	SetModelHidden(ctx context.Context, provider, model string, on bool) error
+
 	// SetDefaultModel persists a model as the default for NEW sessions, in the
 	// given scope. It does not touch any live session — SwitchModel does that,
 	// and the two are deliberately separate: a user may well want to try a
@@ -1471,6 +1481,21 @@ type ModelInfo struct {
 	Ladder   string `json:"ladder,omitempty"`
 	Current  bool   `json:"current,omitempty"`
 	Favorite bool   `json:"favorite,omitempty"` // pinned by the user (the ★ favorites view)
+	// Hidden is whether the user's visibility rules keep this model out of the
+	// pickers, and HiddenBy is the rule that decided it, as they wrote it.
+	//
+	// A hidden model is still SENT. It has to be: a client cannot offer "show
+	// hidden" for models it never received, and the un-hide has to act on
+	// something. Filtering here would also make the list lie to every other
+	// reader of it. So the daemon reports the verdict and the client decides how
+	// to render it.
+	//
+	// HiddenBy exists because broad patterns make absence confusing: "why is
+	// this model gone?" has no answer a client can compute, and "hidden by
+	// openrouter/*" turns a mystery into an obvious edit. Empty when Hidden is
+	// false.
+	Hidden   bool   `json:"hidden,omitempty"`
+	HiddenBy string `json:"hidden_by,omitempty"`
 	// Default marks the model new sessions start on, and DefaultScope says
 	// where that came from — "global" (the user's config) or "project" (this
 	// workspace's, which only applies while it is trusted). A project default

@@ -159,7 +159,11 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 		if i.cfg.FavoriteModels != nil {
 			favs = i.cfg.FavoriteModels()
 		}
-		i.modelDialog.Open(i.cfg.Model, loggedIn, favs)
+		var hidden []string
+		if i.cfg.HiddenModels != nil {
+			hidden = i.cfg.HiddenModels()
+		}
+		i.modelDialog.Open(i.cfg.Model, loggedIn, favs, hidden)
 		return false
 	},
 	// Keyed by the CANONICAL name (see init: run: slashHandlers[s.Name]).

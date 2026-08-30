@@ -505,6 +505,9 @@ func (c *Carrier) SetSessionReasoning(ctx context.Context, sess, level string) e
 func (c *Carrier) SetFavoriteModel(ctx context.Context, provider, model string, on bool) error {
 	return unsupported("favorite model")
 }
+func (c *Carrier) SetModelHidden(ctx context.Context, provider, model string, on bool) error {
+	return unsupported("hide model")
+}
 func (c *Carrier) SetDefaultModel(ctx context.Context, provider, model string, scope ctrlproto.DefaultScope) error {
 	return unsupported("set default model")
 }

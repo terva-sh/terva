@@ -33,6 +33,16 @@ type modelPicker struct {
 	// rescue picker), so setCatalog's signature stays unchanged.
 	favorites map[string]bool
 
+	// hidden are "provider/id" keys the user's visibility rules keep out of the
+	// list. Set alongside favorites, and the exact inverse of them in intent:
+	// favorites raise a few models, this lowers the many.
+	//
+	// Hidden models stay in `all` rather than being dropped from it. The
+	// ":hidden" filter token has to be able to show them — otherwise a model
+	// hidden by a broad pattern could never be found again to un-hide — and the
+	// toggle needs a row to act on.
+	hidden map[string]bool
+
 	// Column widths are computed once in setCatalog across the entire
 	// catalog so the layout stays stable while the user scrolls or
 	// filters. Recomputing per visible window would make the columns
@@ -60,11 +70,22 @@ func (p *modelPicker) setCatalog(models []provider.Model, current string, maxRow
 // ":reasoning" — see capFilterToken); the rest fuzzy-matches
 // provider/id/name. Tokens must be split off BEFORE
 // normalizeModelQuery, which strips the ':' marker.
+//
+// ":hidden" is the one token that is not a capability. It filters TO the
+// hidden models rather than merely including them, which is what every other
+// token does (":img" shows image models, not "all models plus image ones") and
+// what the job needs: you type it to find something you hid so you can put it
+// back, and mixing it with two hundred visible rows would defeat that.
 func (p *modelPicker) refilter() {
 	var capFilters []provider.Capability
 	var textParts []string
+	showHidden := false
 	for _, tok := range strings.Fields(p.query) {
 		if strings.HasPrefix(tok, ":") {
+			if hiddenFilterToken(tok[1:]) {
+				showHidden = true
+				continue
+			}
 			if c, ok := capFilterToken(tok[1:]); ok {
 				capFilters = append(capFilters, c)
 				continue
@@ -78,6 +99,12 @@ func (p *modelPicker) refilter() {
 
 	out := make([]provider.Model, 0, len(p.all))
 	for _, m := range p.all {
+		// Hidden is a gate on every other filter, not one more predicate
+		// beside them: without ":hidden" a hidden model can never appear, and
+		// with it nothing else can.
+		if p.hidden[modelKey(m)] != showHidden {
+			continue
+		}
 		if needle != "" && !strings.Contains(normalizeModelQuery(m.Provider+" "+m.ID+" "+m.DisplayName), needle) {
 			continue
 		}
@@ -240,6 +267,16 @@ func (p *modelPicker) renderRows(th tui.Theme, width int) []string {
 		case m.Source == "live":
 			tag = i18n.T("[live] ")
 		}
+		// Prefixed AFTER the switch above, which assigns rather than appends:
+		// a hidden model that is also [live] must keep both labels, and setting
+		// this first would let the switch quietly drop it.
+		//
+		// Only reachable under ":hidden", where every row is hidden — labelled
+		// anyway, so the list cannot be mistaken for the normal one once the
+		// token has scrolled out of view.
+		if p.hidden[modelKey(m)] {
+			tag = i18n.T("[hidden] ") + tag
+		}
 		curMark := "  "
 		if p.current != "" && m.ID == p.current {
 			curMark = "● "
@@ -270,6 +307,18 @@ func (p *modelPicker) renderRows(th tui.Theme, width int) []string {
 		lines = append(lines, th.FG256(th.Muted, fmt.Sprintf("   (%d/%d)", p.cursor+1, len(p.view))))
 	}
 	return lines
+}
+
+// hiddenFilterToken reports whether a ":token" spelling asks for the hidden
+// models. Several spellings for the same reason the capability tokens have
+// them: the picker is typed blind, and guessing wrong should not silently show
+// the wrong list.
+func hiddenFilterToken(tok string) bool {
+	switch strings.ToLower(tok) {
+	case "hidden", "hide", "hides":
+		return true
+	}
+	return false
 }
 
 // capFilterToken maps a ":token" spelling (without the colon) to the
@@ -342,6 +391,37 @@ func (p *modelPicker) toggleFavorite() (provider.Model, bool, bool) {
 	}
 	// reload re-sorts for the changed favorites and keeps the cursor on m.
 	p.reload(p.all)
+	return m, on, true
+}
+
+// toggleHidden flips the selected model's hidden flag in the local set and
+// keeps the cursor where it is. Returns the model, its new state, and whether
+// anything was toggled (false when the list is empty). The caller persists it.
+//
+// The local flip is safe even though the stored form is an ordered rule list:
+// config.ToggleHiddenModel guarantees the model ends in the state asked for,
+// rescuing it from a broad pattern if need be, so the optimistic local answer
+// and the persisted one always agree.
+//
+// Unlike toggleFavorite this does NOT re-sort. Under ":hidden" the row would
+// vanish from the list the moment it was restored, taking the cursor somewhere
+// arbitrary; leaving it in place lets the user un-hide several in a row and see
+// each one change.
+func (p *modelPicker) toggleHidden() (provider.Model, bool, bool) {
+	m, ok := p.selected()
+	if !ok {
+		return provider.Model{}, false, false
+	}
+	if p.hidden == nil {
+		p.hidden = map[string]bool{}
+	}
+	key := modelKey(m)
+	on := !p.hidden[key]
+	if on {
+		p.hidden[key] = true
+	} else {
+		delete(p.hidden, key)
+	}
 	return m, on, true
 }
 

@@ -183,6 +183,9 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				if act.Favorite {
 					i.persistFavoriteModel(act.Provider, act.Model, act.FavOn)
 				}
+				if act.Hide {
+					i.persistModelHidden(act.Provider, act.Model, act.HideOn)
+				}
 				return false
 			},
 			render: func(cols int) []string { return i.modelDialog.Render(i.cfg.Theme, cols) },

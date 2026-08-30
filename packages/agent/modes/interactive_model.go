@@ -52,6 +52,28 @@ func (i *Interactive) persistFavoriteModel(prov, model string, on bool) {
 	i.setStatusOK(model + " " + verb)
 }
 
+// persistModelHidden saves a hide toggle for "provider/model". The picker has
+// already updated its own set and re-filtered; this persists the change (Ctrl+K
+// in the /model picker).
+//
+// The status line names the reveal token, because a model that has just
+// vanished from the list is the moment the user most needs to know how to get
+// it back — and the un-hide lives behind a token they have no reason to know.
+func (i *Interactive) persistModelHidden(prov, model string, on bool) {
+	if i.cfg.SetModelHidden == nil {
+		return
+	}
+	if err := i.cfg.SetModelHidden(prov+"/"+model, on); err != nil {
+		i.setStatusErr(i18n.T("hide: %s", err))
+		return
+	}
+	if on {
+		i.setStatusOK(i18n.T("%s hidden - type :hidden to show hidden models", model))
+		return
+	}
+	i.setStatusOK(i18n.T("%s shown again", model))
+}
+
 // promoteModelDefault persists the current pick as a default in the given
 // scope ("project" / "global") and surfaces the outcome on the status line.
 // Invoked from the /model picker's Ctrl+D promote prompt, after the switch.

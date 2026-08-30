@@ -111,6 +111,9 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 	i.swarmDialog.SetCurrentModel(i.cfg.Model, i.cfg.Provider)
 	if i.cfg.LoggedInProviders != nil {
 		i.swarmDialog.SetLoggedInProviders(i.cfg.LoggedInProviders())
+		if i.cfg.HiddenModels != nil {
+			i.swarmDialog.SetHiddenModels(i.cfg.HiddenModels())
+		}
 	}
 
 	switch sub {

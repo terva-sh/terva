@@ -331,6 +331,134 @@ keep a large-window model and still condense earlier.
 Changing a setting takes effect immediately; a session sitting on that model is
 re-resolved, which is what lets a changed base URL actually reach the new machine.
 
+### Hiding models you never use
+
+A gateway like OpenRouter serves several hundred models. Favourites fix half the
+problem — they pin the handful you love to the top — but you still scroll past
+the other 290 to reach anything unpinned. Hiding is the other half: favourites
+raise a few models, hiding lowers the many.
+
+- **TUI**: open `/model`, highlight a model, press **ctrl+k**. Type **`:hidden`**
+  to list what you have hidden, and ctrl+k there puts one back.
+- **Web**: open the model picker and press the **◌** on the model's row. A
+  **Show hidden (N)** switch at the foot of the picker reveals them, dimmed, with
+  **⊘** to restore one.
+
+(It is ctrl+k rather than the more obvious ctrl+h because a terminal sends ctrl+h
+as the same byte as Backspace, so that binding would fire while you typed in the
+filter box.)
+
+**Hiding is about choosing, not about capability.** The catalogue is untouched:
+a hidden model keeps its context window and cost data, gauges and budgets still
+work, and a session already running on one carries on to the end. What changes is
+what the pickers offer you next.
+
+One case is deliberately an error rather than a guess. If you hide the model that
+is also your **configured default**, terva refuses to start and says so, because
+only you can decide which half you meant. An explicit `--model` still works, and
+so does resuming a session that is already on it — refusing to reopen a
+conversation over a picker preference would be destructive out of all proportion.
+
+#### The rules behind it
+
+Hiding writes to `hidden_models` in `$TERVA_HOME/config.json`. Unlike
+`favorite_models`, **order matters: last match wins**. Entries are
+`provider/id` keys, `*` matches any run of characters (slashes included), and a
+`!` prefix un-hides:
+
+```json
+{
+  "hidden_models": [
+    "openrouter/*",
+    "!openrouter/anthropic/claude-*",
+    "openrouter/anthropic/claude-2*"
+  ]
+}
+```
+
+That reads: hide everything OpenRouter serves, keep Anthropic's models, but not
+the old Claude 2 ones. This is what makes a 300-model provider tractable without
+listing the 290 you did not want — a list that would rot every time the provider
+added a model.
+
+Because `*` crosses slashes, `openrouter/*` matches ids that contain their own
+slash, such as `openrouter/anthropic/claude-sonnet-4.5`.
+
+The per-model toggles maintain this file for you, and un-hiding a model that a
+**pattern** covers appends an explicit `!` exception rather than deleting your
+pattern — the pattern is still doing its job for every other model it matches.
+The web picker shows which rule hid a model when you hover its ⊘.
+
+#### Hiding duplicate variants
+
+OpenRouter is the provider these rules were written for, and its cheapest win
+needs no curation at all. It lists `:free` and `:batch` variants beside the
+plain id, so `openai/gpt-4o` appears three times. Two rules remove every one of
+them:
+
+```json
+{
+  "hidden_models": [
+    "openrouter/*:free",
+    "openrouter/*:batch"
+  ]
+}
+```
+
+At the time of writing that hides 59 of 396 models and loses nothing: every
+suffixed id has a plain base id that is also listed, so no model becomes
+unreachable.
+
+**Confirm that before you hide by pattern.** The tempting next rule is
+`openrouter/*-preview`, and it is a trap. Half of those ids have no
+non-preview counterpart, so it would hide the only route to
+`google/gemini-3-flash-preview`, `google/gemini-3.1-pro-preview` and
+`qwen/qwen3.6-max-preview` — current models, removed by a rule that looked like
+tidying. Before adopting a pattern, list what it matches and check each one has
+a sibling you are keeping.
+
+Expect this to trim the list, not transform it. OpenRouter's bulk is superseded
+versions *inside* the big vendors — `gpt-3.5-turbo` and `gpt-4-turbo` sit beside
+`gpt-4o` — and no pattern expresses "older", so the picker's type-to-filter
+stays the way to reach a specific model quickly.
+
+Unlike the opencode-go list below, these counts are not checked by a test:
+OpenRouter's models are discovered live and have no baked catalog to compare
+against. Re-derive them from the picker rather than trusting the numbers here.
+
+#### When there is no pattern to write
+
+Not every provider's clutter has a shape a glob can catch. OpenCode Go serves 33
+models while its landing page promotes 24. The extra nine are seven superseded
+releases (`glm-5`, where `glm-5.1` through `5.3` are current; `kimi-k2.5`, where
+`k2.6` and `k3` are), plus a preview and an experimental vision build. Nothing
+about an id says "older", so this one is a plain enumeration:
+
+```json
+{
+  "hidden_models": [
+    "opencode-go/deepseek-v4-flash-vision-exp",
+    "opencode-go/glm-5",
+    "opencode-go/grok-4.5",
+    "opencode-go/hy3-preview",
+    "opencode-go/kimi-k2.5",
+    "opencode-go/mimo-v2-omni",
+    "opencode-go/mimo-v2-pro",
+    "opencode-go/minimax-m2.5",
+    "opencode-go/qwen3.5-plus"
+  ]
+}
+```
+
+All nine still work — they are served, they keep their real context windows, and
+`--model` reaches them. This only trims the picker to the lineup OpenCode
+currently promotes.
+
+Treat it as a snapshot, not a rule. Where `openrouter/*` keeps working as that
+gateway adds models, this list goes stale the moment OpenCode retires one or
+ships another, and nothing will tell you it has. That is the trade an
+enumeration makes.
+
 ### OpenAI-compatible endpoints (LM Studio, vLLM, llama.cpp, gateways)
 
 For local servers that aren't Ollama — or any hosted OpenAI-compatible gateway — use the first-class `openai-compatible` provider. Unlike `ollama` it has no fixed base URL: you configure the endpoint through `/login`.

@@ -19,12 +19,26 @@ The code lives in `packages/agent/ctrlproto` (always built, carrier-agnostic).
 For the design rationale see the proposal:
 `docs/proposals/control-plane-protocol.md`.
 
-> **Status.** Out-of-process *programmatic* control and multi-instance
-> management are **not available yet**. The only shipped carrier is the
-> WebSocket one that backs `terva web` (a single trusted browser user, behind
-> an auth gate). The stdio / CLI carrier, the extension-tunnel carrier, and the
-> fleet controller are designed here but not built. See
+> **Status.** Out-of-process *programmatic* control **is available**. Three
+> shipped commands are ctrlproto clients of a running terva: `terva attach`
+> (`attach_mode.go`), `terva ctl` (`ctlcmd.go`) and `terva ext config`
+> (`extconfigcmd.go`). They dial through `ctrlproto/ctrlclient` over the
+> WebSocket carrier — TCP **or a unix socket** — and authenticate with a token.
+> `ctrlclient` is deliberately connection-count-agnostic and rendering-free, so
+> a fleet or orchestration frontend can hold N of them.
+>
+> Still **not** built: the **stdio/pipe carrier** (a client connects to a
+> daemon; it cannot `spawn` one and pipe it), the **extension-tunnel carrier**,
+> and **multi-instance management** — one daemon serves one workspace, and the
+> relay is design-of-record only. See
 > [Carriers & current state](#carriers--current-state).
+>
+> **Authorization is all-or-nothing today.** Group negotiation gates which
+> methods a client may *call*, but a valid token grants whatever groups that
+> client declares — including `control` (trust, restart, approval mode).
+> Per-group *authority* gating is designed and unimplemented, and it is the
+> prerequisite for handing a token to anything less trusted than yourself. See
+> [Security & authority](#security--authority).
 
 ## Interface-first, wire-second
 
@@ -78,7 +92,7 @@ The same `WorkspaceService` is bound to different transports:
 | Carrier | Client | Status |
 |---|---|---|
 | **in-process** | the TUI / any embedding host — direct interface calls, no serialization | **shipped, the only TUI backend**: the TUI binds `Workspace` through the `modes.Carrier` seam (PR #14; the legacy direct driver has since been removed, `--tui-legacy` is a deprecated no-op). The `AgentFor` crutch is **gone** (remediation plan 4.1, complete — see `modes/carrier.go`): the TUI holds no `*core.Agent`, and its whole control path is ctrlproto — prompt dispatch, the event stream, approvals/asks, transcript rendering, `/context`, `/permissions`, `/settings`, `/clear`, `/model`, login, side chat. Honest caveat: file-based session fork/tree/export stays local (out of wire scope v1) |
-| **WebSocket** | [`terva web`](web.md) — bidirectional, streaming, browser-native | **shipped** |
+| **WebSocket** | [`terva web`](web.md) (browser-native), and the out-of-process Go clients `terva attach` / `terva ctl` / `terva ext config` via `ctrlclient`. Bidirectional, streaming; dialable over TCP or a unix socket | **shipped** |
 | **stdio** | a CLI, scripts, or a fleet controller (one agent per child) | designed, **not built** |
 | **ext-tunnel** | extensions, over extproto (the `chat_open`/`chat`/`chat_close` envelope trick connproto already uses) | designed, **not built** |
 
@@ -249,6 +263,7 @@ Every command is a `cmd` frame; the server answers with a `resp` (a bare ok, a
 | `models.list` | → `{models}` | models the workspace can switch to |
 | `models.switch` | `{model, provider?}` | switch the model backing `sess`, live, for the next turn (emits `session_updated`); `provider` qualifies ids that exist under several providers |
 | `models.favorite` | `{provider, model, on}` | pin/unpin a favorite (persisted to config) |
+| `models.hide` | `{provider, model, on}` | hide a model from the pickers, or bring it back (persisted to config). The lowering counterpart to `models.favorite`'s raising, and needed for the same catalogue that made favorites necessary: pinning six models does nothing about the three hundred you still scroll past. It names **one model**, never a rule — the stored form is an ordered pattern list (`hidden_models`, last match wins), and a client that could send patterns would hide hundreds of models in a call that reads like it hides one. The daemon owns that translation, which is also what lets un-hiding rescue a model from a broad pattern the client never knew about. Hiding changes what the pickers **offer** and nothing else: the catalog is untouched, so a hidden model keeps its context window and cost data, a session already running on one carries on, and `models.list` still **sends** it (flagged `hidden`, with `hidden_by` naming the rule) so a client can offer "show hidden" and act on the row |
 | `models.reasoning` | `{level}` | set the thinking depth backing `sess`, live, for the next turn, persisted to session meta so a daemon restart brings it back (emits `session_updated`). `level` is a ladder rung as the user types it — `off`, `minimum`, `low`, `medium`, `high`, `maximum`, `max` — or `inherit` (equivalently `""`) to drop the override and follow the global setting again. Raw rather than normalized: `off` and "no override" are different states, and which one a session is in decides whether a later change to the global setting moves it. Stands to the settings `reasoning` control exactly as `models.switch` stands to `models.set_default` — one live session, no config written |
 | `models.set_default` | `{provider, model, scope}` | persist a model as the default for **new** sessions. Distinct from `models.switch`, which changes one live session and touches no config: this writes to disk and outlives the daemon, which is why it sits here rather than in **session**. `scope` is `global` (the user's config — the default in every workspace) or `project` (the workspace's project config, which takes effect only while that workspace is trusted) |
 | `models.params` | `{provider, model}` → `{provider, model, has_override?, params}` | one model's editable overrides from `models.json` — context window, max tokens, temperature — each spec carrying its key, label, kind hint, rendered default, current override, bounds, and help. **The daemon describes the form and the client renders it**: nothing on the wire names `contextWindow` or `maxTokens`, so a provider that gains a knob costs a daemon change and nothing in either frontend. `has_override` is whether "reset to defaults" would actually do anything. `provider` is required — the same id can exist under an api-key provider and a subscription one, and editing "the other one" silently is the bug `models.switch`'s qualification already guards. Optional (a `ModelParamsController`) |
@@ -498,8 +513,14 @@ conversation group must **not** thereby be allowed to reconfigure the host: the
 control group has to hook terva's authority classes (`local-read` /
 `local-data` / `workspace-mutation` / `process-execution` / `network-read` /
 `external-mutation`). The group structure exists now so this slots in additively
-rather than being bolted on under pressure — but it is not implemented, which is
-one reason out-of-process control is not yet exposed.
+rather than being bolted on under pressure — but it is not implemented.
+
+The consequence today is that **a token is all-or-nothing**: it grants whatever
+groups the client declares. The shipped out-of-process clients (`terva attach`,
+`terva ctl`, `terva ext config`) are safe because *you* run them and they carry
+your own authority. Per-group authority gating is what would remove that
+assumption — it is the prerequisite for handing a token to a tunneled extension
+or a third-party orchestrator, neither of which is you.
 
 ## The management-plane horizon
 
@@ -515,12 +536,15 @@ the envelope from the start:
   manage* them (versus fire-and-collect): one vocabulary to drive a whole fleet.
 - Getting there is **carrier work, not protocol work** — the stdio carrier (a
   CLI / controller driving one agent per child) and the ext-tunnel carrier — plus
-  the per-group authority gating above. Until those land, terva does **not**
-  allow out-of-process programmatic control; the browser panel is the only
-  frontend on the wire.
+  the per-group authority gating above. Out-of-process control itself already
+  works — `terva attach` / `terva ctl` / `terva ext config` drive a running terva
+  over the WebSocket carrier, and `ctrlclient` is built to be held N-at-a-time.
+  What is missing for a *fleet* is those two carriers, the per-group authority
+  gating that makes a token safe to delegate, and multi-workspace addressing:
+  one daemon still serves one workspace.
 
 See the platform vision in
-`docs/proposals/terva-platform.md`.
+`docs/ideas/terva-platform.md`.
 
 ## See also
 

@@ -32,6 +32,7 @@ const picker = (props: Partial<Parameters<typeof ModelPicker>[0]> = {}) => (
     current=""
     onSwitch={() => {}}
     onToggleFavorite={() => {}}
+    onToggleHidden={() => {}}
     onSetDefault={() => {}}
     onEdit={() => {}}
     onClose={() => {}}

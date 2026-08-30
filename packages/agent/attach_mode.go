@@ -478,6 +478,16 @@ func runAttachMode(ctx context.Context, args build.Args, version string) error {
 			}
 			return svc.SetFavoriteModel(ctx, prov, model, on)
 		},
+		HiddenModels: build.HiddenModelKeys,
+		SetModelHidden: func(key string, on bool) error {
+			// Cut on the FIRST "/" only — see the note in cli_ctrlproto.go: an
+			// OpenRouter id carries its own slash.
+			prov, model, ok := strings.Cut(key, "/")
+			if !ok {
+				return fmt.Errorf("malformed hidden-model key %q", key)
+			}
+			return svc.SetModelHidden(ctx, prov, model, on)
+		},
 		// The picker's ctrl+d was dead in attach mode until models.set_default
 		// existed: the promote logic lived in the local carrier's config closure,
 		// which a ctrlproto client never builds. It now lands on the daemon,

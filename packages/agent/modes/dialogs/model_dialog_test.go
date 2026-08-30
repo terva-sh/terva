@@ -125,7 +125,7 @@ func TestModelDialogTwoLevel(t *testing.T) {
 		{Provider: "beta", ID: "b-1"},
 	})
 	d := NewModelDialog()
-	d.Open("", []string{"alpha", "beta"}, nil)
+	d.Open("", []string{"alpha", "beta"}, nil, nil)
 
 	if d.stage != stageProvider {
 		t.Fatalf("want provider stage, got %d", d.stage)
@@ -160,7 +160,7 @@ func TestModelDialogSingleProviderSkips(t *testing.T) {
 		{Provider: "solo", ID: "s-1"}, {Provider: "solo", ID: "s-2"},
 	})
 	d := NewModelDialog()
-	d.Open("", []string{"solo"}, nil)
+	d.Open("", []string{"solo"}, nil, nil)
 	if d.stage != stageModel || !d.single {
 		t.Fatalf("single provider should skip to model stage (stage=%d single=%v)", d.stage, d.single)
 	}
@@ -178,7 +178,7 @@ func TestModelDialogFavoritesView(t *testing.T) {
 		{Provider: "alpha", ID: "a-1"}, {Provider: "beta", ID: "b-1"},
 	})
 	d := NewModelDialog()
-	d.Open("", []string{"alpha", "beta"}, []string{"beta/b-1"})
+	d.Open("", []string{"alpha", "beta"}, []string{"beta/b-1"}, nil)
 
 	if len(d.providers) != 3 || !d.providers[0].fav {
 		t.Fatalf("expected ★ favorites first + 2 providers, got %+v", d.providers)
@@ -198,7 +198,7 @@ func TestModelDialogFavoriteToggle(t *testing.T) {
 		{Provider: "solo", ID: "s-1"}, {Provider: "solo", ID: "s-2"},
 	})
 	d := NewModelDialog()
-	d.Open("", []string{"solo"}, nil) // single -> model stage
+	d.Open("", []string{"solo"}, nil, nil) // single -> model stage
 
 	d.HandleKey(tui.Key{Kind: tui.KeyDown}) // cursor -> s-2
 	if sel, _ := d.p.selected(); sel.ID != "s-2" {
@@ -236,7 +236,7 @@ func TestModelDialogFavoriteUpdatesProviderList(t *testing.T) {
 		{Provider: "solo", ID: "s-1"}, {Provider: "solo", ID: "s-2"},
 	})
 	d := NewModelDialog()
-	d.Open("", []string{"solo"}, nil) // single provider -> model stage, no ★ yet
+	d.Open("", []string{"solo"}, nil, nil) // single provider -> model stage, no ★ yet
 
 	for _, r := range d.providers {
 		if r.fav {
@@ -262,7 +262,7 @@ func TestModelDialogReloadsOnCatalogGrowth(t *testing.T) {
 	provider.SetLiveModels([]provider.Model{{Provider: "grow", ID: "g-1"}})
 
 	d := NewModelDialog()
-	d.Open("", []string{"grow"}, nil) // single provider, 1 model -> model stage
+	d.Open("", []string{"grow"}, nil, nil) // single provider, 1 model -> model stage
 	_ = d.Render(tui.Theme{}, 80)
 	if len(d.p.all) != 1 {
 		t.Fatalf("should start with 1 model, got %d", len(d.p.all))

@@ -64,6 +64,7 @@ func TestEveryStringConfigFieldIsClassified(t *testing.T) {
 		"escalation.model":                  "a model id",
 		"escalation.provider":               "a provider id",
 		"favorite_models[]":                 "model ids",
+		"hidden_models[]":                   "model-id visibility patterns; a picker preference, and the same shape as favorite_models",
 		"image.backend":                     "a backend id",
 		"image.backends.*.base_url":         "an endpoint URL; the credential beside it is api_key",
 		"image.backends.*.model":            "a model id",
