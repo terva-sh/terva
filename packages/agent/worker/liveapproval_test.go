@@ -61,6 +61,9 @@ func TestLiveClaudeApprovalBridge(t *testing.T) {
 
 func runLiveApproval(t *testing.T, backend Backend, decision core.ConfirmDecision, wantFile bool) {
 	repo := testsupport.TempDir(t)
+	// Isolate config, and lend the real credential: claude brings its own, but
+	// the terva this spawns as the bridge resolves against the home it inherits.
+	tervaHomeWithCredentials(t, "")
 	// An "ask" posture is what makes the bridge load-bearing: it maps to Claude's
 	// default permission mode, where every non-safe tool call is delegated to the
 	// permission tool. (A default resolve comes out yolo -> bypassPermissions, and
@@ -70,7 +73,7 @@ func runLiveApproval(t *testing.T, backend Backend, decision core.ConfirmDecisio
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	r.Model = "claude-haiku-4-5" // cheapest
+	pinWeakTier(t, &r) // the cheap rung, not a model id that will be retired
 
 	rec := &recordingConfirmer{decision: decision}
 	f := swarm.New(swarm.Config{

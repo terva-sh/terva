@@ -59,13 +59,17 @@ func TestLiveTervaPortableApprovalBridge(t *testing.T) {
 
 func runLivePortableApproval(t *testing.T, backend Backend, decision core.ConfirmDecision, wantFile bool) {
 	repo := testsupport.TempDir(t)
+	// Isolate config, and lend the real credential the child needs to log in.
+	tervaHomeWithCredentials(t, "")
 	// An "ask" posture gates every tool call, so the worker's write must consult
-	// the bridge. The child terva rpc self-resolves its provider/model from the
-	// machine's configured subscription (no override).
+	// the bridge. The PROVIDER still comes from the lent credential — which
+	// subscription this spends is the machine's business, not this file's — and
+	// pinWeakTier then holds the model to that provider's cheap rung.
 	r, err := build.Resolve(build.Args{CWD: repo, Approval: "ask"}, false)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
+	pinWeakTier(t, &r)
 
 	rec := &recordingConfirmer{decision: decision}
 	f := swarm.New(swarm.Config{

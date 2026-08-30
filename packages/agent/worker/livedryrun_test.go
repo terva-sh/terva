@@ -36,12 +36,16 @@ func TestLiveClaudeDryRun(t *testing.T) {
 		t.Skip("the inbox is a unix socket")
 	}
 	repo := testsupport.TempDir(t)
+	// Isolate config, and lend the real credential: claude brings its own, but
+	// the terva this spawns resolves against the home it inherits.
+	tervaHomeWithCredentials(t, "")
 	r, err := build.Resolve(build.Args{CWD: repo}, false)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	// Force the cheapest model regardless of the machine's configured default.
-	r.Model = "claude-haiku-4-5"
+	// Spend the least this subscription allows, whatever the machine's
+	// configured default happens to be.
+	pinWeakTier(t, &r)
 
 	backend, err := Lookup(BackendClaude)
 	if err != nil {
