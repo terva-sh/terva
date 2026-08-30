@@ -11,29 +11,34 @@ import (
 	"terva.sh/terva/packages/tui"
 )
 
-// helpKeyRows is the list of keybindings shown by /help. The key names are
-// literal; the descriptions are marked with i18n.M (declared here at init,
-// translated at render time by renderHelpBlock).
-var helpKeyRows = [][2]string{
+// helpEditorRows are the /help key rows that the global keymap does NOT
+// define: input-editing and popup chords consumed downstream of
+// dispatchGlobalKey (by the editor itself, or by the slash/@ popups).
+//
+// 🪤 This list is hand-maintained, and it has to be — these chords have no
+// globalBinding to hang a description off, and inventing table entries for
+// them would mean dummy handlers that never run. Everything that IS a global
+// binding belongs in the keymap instead, where the guard test can see it. Do
+// not add a registered chord here: it would then appear twice.
+var helpEditorRows = [][2]string{
 	{"enter", i18n.M("submit the current input")},
 	{"ctrl+j", i18n.M("insert a newline (works in every terminal)")},
-	{"shift+enter / alt+enter", i18n.M("insert a newline (needs a terminal that reports modified enter)")},
 	{"\\ then enter", i18n.M("insert a newline (the backslash is consumed)")},
 	{"tab", i18n.M("complete the highlighted slash command")},
-	{"esc", i18n.M("cancel the current turn (while busy) - clear the input (while idle)")},
-	{"ctrl+c", i18n.M("exit (while idle) - cancel the current turn (while busy)")},
 	{"ctrl+w", i18n.M("delete previous word")},
 	{"alt+backspace", i18n.M("delete previous word (same as ctrl+w)")},
 	{"ctrl+u / ctrl+k", i18n.M("delete to start / end of line")},
 	{"ctrl+a / ctrl+e", i18n.M("jump to start / end of line")},
 	{"alt+← / alt+→", i18n.M("jump one word back / forward")},
-	{"ctrl+l", i18n.M("redraw the screen")},
-	{"ctrl+o", i18n.M("expand / collapse long tool results")},
-	{"ctrl+t", i18n.M("cycle tool display (boxes - minimal - grouped - hidden)")},
-	{"ctrl+s", i18n.M("set the current draft aside / bring it back (it also returns after you send)")},
-	{"ctrl+v", i18n.M("paste a clipboard image into the prompt (also /paste)")},
-	{"pgup / pgdn", i18n.M("scroll the chat one page up / down")},
-	{"up / down", i18n.M("move within multi-line input - scroll chat at input edge")},
+}
+
+// helpKeyRows is every row the keys section prints: the editor chords
+// above, then the rows the keymap defines for itself.
+func helpKeyRows(keymap []globalBinding) [][2]string {
+	rows := make([][2]string, 0, len(helpEditorRows)+len(keymap))
+	rows = append(rows, helpEditorRows...)
+	rows = append(rows, helpBindingRows(keymap)...)
+	return rows
 }
 
 // renderHelpBlock builds the friendly /help view. Uses the shared
@@ -46,10 +51,11 @@ var helpKeyRows = [][2]string{
 // section it lives in. The width is computed from the longest label
 // across BOTH lists, with a minimum of 14 cells so changes to either
 // list don't compress the column visually.
-func renderHelpBlock(th tui.Theme, width int) []string {
+func renderHelpBlock(th tui.Theme, width int, keymap []globalBinding) []string {
 	if width < 20 {
 		width = 20
 	}
+	keyRows := helpKeyRows(keymap)
 
 	// Label column width uses display cells, not byte length, so
 	// single-cell multibyte runes (← → - ...) don't over-count and leave
@@ -67,7 +73,7 @@ func renderHelpBlock(th tui.Theme, width int) []string {
 			labelWidth = n
 		}
 	}
-	for _, k := range helpKeyRows {
+	for _, k := range keyRows {
 		if n := runewidth.StringWidth(k[0]); n > labelWidth {
 			labelWidth = n
 		}
@@ -98,9 +104,10 @@ func renderHelpBlock(th tui.Theme, width int) []string {
 			th.FG256(th.Muted, c.Desc)))
 	}
 
-	// keys section
+	// keys section. The registered chords are read off the keymap, so a
+	// new binding shows up here without anyone remembering to add it.
 	out = append(out, "", tui.Bold(i18n.T("keys:")))
-	for _, k := range helpKeyRows {
+	for _, k := range keyRows {
 		out = append(out, fmt.Sprintf("  %s  %s",
 			th.FG256(th.Accent, pad(k[0])),
 			th.FG256(th.Muted, i18n.T(k[1]))))

@@ -370,7 +370,7 @@ func (i *Interactive) slashRestart(_ context.Context, _ []string, _ string) bool
 
 func (i *Interactive) slashHelp(context.Context, []string, string) bool {
 	i.mu.Lock()
-	i.helpBlock = renderHelpBlock(i.cfg.Theme, i.lastCols())
+	i.helpBlock = renderHelpBlock(i.cfg.Theme, i.lastCols(), i.keymap)
 	i.statusErr = ""
 	i.statusOK = ""
 	// Pin the viewport to the newest content so the help block,

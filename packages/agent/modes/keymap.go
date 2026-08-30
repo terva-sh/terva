@@ -36,6 +36,14 @@ const (
 )
 
 // globalBinding maps one key chord to a named action.
+//
+// label/desc make this table the source /help renders from, so a chord
+// cannot ship undocumented. Before that, /help held a hand-written list
+// beside this one and the two drifted: ctrl+y, ctrl+r, ctrl+d, shift+tab,
+// alt+up and ctrl+enter were all registered here and absent there, and
+// ctrl+c's entry still described a turn-cancelling behaviour keyCtrlC had
+// stopped doing. helpBindingRows is the reader; TestEveryBindingIsDocumented
+// is what keeps the two in step.
 type globalBinding struct {
 	kind  tui.KeyKind
 	alt   bool   // chord requires Alt held
@@ -43,6 +51,25 @@ type globalBinding struct {
 	ctrl  bool   // chord requires Ctrl held
 	name  string // stable action name (docs, future rebind config)
 	run   func(ctx context.Context, k tui.Key) keyOutcome
+
+	// label is the chord as /help prints it. Written out rather than
+	// derived from kind+modifiers because there is no KeyKind-to-name
+	// mapping in packages/tui, and because a row often stands for a SET
+	// of chords ("pgup / pgdn") that no per-key derivation would join.
+	label string
+
+	// desc is the one-line /help description, marked with i18n.M here and
+	// translated at render time. Empty means this binding contributes no
+	// row of its own, which is how the merged rows work: the first chord
+	// of a pair carries the combined label and its partners set
+	// hideFromHelp.
+	desc string
+
+	// hideFromHelp marks a binding deliberately absent from /help — a
+	// partner of a merged row, or an alias. It exists so the guard test
+	// can tell "folded into another row" from "nobody wrote the help
+	// text", which is the failure the test is there to catch.
+	hideFromHelp bool
 }
 
 // dispatchGlobalKey runs k through the keymap. Reports whether the
@@ -84,44 +111,133 @@ func (i *Interactive) keyInsertNewline(_ context.Context, k tui.Key) keyOutcome 
 }
 
 // buildGlobalKeymap assembles the table. Order matters only where two
-// entries share a key kind (Alt+Up before Up).
+// entries share a key kind (Alt+Up before Up), and it doubles as the
+// order /help prints these rows in.
 func (i *Interactive) buildGlobalKeymap() []globalBinding {
 	return []globalBinding{
-		{kind: tui.KeyCtrlC, name: "exit-or-clear", run: i.keyCtrlC},
-		{kind: tui.KeyEsc, name: "dismiss-or-cancel", run: i.keyEsc},
-		{kind: tui.KeyCtrlD, name: "quit-when-idle", run: i.keyCtrlD},
-		{kind: tui.KeyCtrlL, name: "repaint", run: i.keyRepaint},
-		{kind: tui.KeyCtrlO, name: "toggle-tool-expand", run: i.keyToggleExpand},
-		{kind: tui.KeyCtrlR, name: "toggle-thinking-expand", run: i.keyToggleThinking},
-		{kind: tui.KeyCtrlS, name: "stash-draft", run: i.keyStashDraft},
-		{kind: tui.KeyCtrlT, name: "cycle-tool-display", run: i.keyCycleToolDisplay},
-		{kind: tui.KeyCtrlV, name: "paste-clipboard-image", run: i.keyPasteClipboard},
-		{kind: tui.KeyCtrlY, name: "copy-picker", run: i.keyOpenCopyPicker},
-		{kind: tui.KeyShiftTab, name: "cycle-approval-mode", run: i.keyCycleApprovalMode},
-		{kind: tui.KeyPageUp, name: "scroll-page-up", run: func(context.Context, tui.Key) keyOutcome {
-			// The slash popup pages its own catalog; only it gets the
-			// key (the @-file popup has no pagination, so chat
-			// scrolling stays available while it is open).
-			if i.suggest.Active(i.ed.Value()) {
-				return keyPass
-			}
-			i.scrollBy(+i.chatPage())
-			return keyHandled
-		}},
-		{kind: tui.KeyPageDown, name: "scroll-page-down", run: func(context.Context, tui.Key) keyOutcome {
-			if i.suggest.Active(i.ed.Value()) {
-				return keyPass
-			}
-			i.scrollBy(-i.chatPage())
-			return keyHandled
-		}},
-		{kind: tui.KeyUp, alt: true, name: "pop-queued-message", run: i.keyPopQueued},
-		{kind: tui.KeyUp, name: "cursor-up-or-scroll", run: i.keyUp},
-		{kind: tui.KeyDown, name: "cursor-down-or-scroll", run: i.keyDown},
-		{kind: tui.KeyEnter, alt: true, name: "insert-newline", run: i.keyInsertNewline},
-		{kind: tui.KeyEnter, shift: true, name: "insert-newline-shift", run: i.keyInsertNewline},
-		{kind: tui.KeyEnter, ctrl: true, name: "insert-newline-ctrl", run: i.keyInsertNewline},
+		{
+			kind: tui.KeyCtrlC, name: "exit-or-clear", run: i.keyCtrlC,
+			label: "ctrl+c",
+			// Deliberately does NOT say "cancel the turn": keyCtrlC stopped
+			// doing that (it arms exit and points at esc), but the old
+			// hand-written help row still promised it.
+			desc: i18n.M("clear the input - press twice to exit (esc cancels a running turn)"),
+		},
+		{
+			kind: tui.KeyEsc, name: "dismiss-or-cancel", run: i.keyEsc,
+			label: "esc",
+			desc:  i18n.M("dismiss help / notes - cancel the running turn - clear the input"),
+		},
+		{
+			kind: tui.KeyCtrlD, name: "quit-when-idle", run: i.keyCtrlD,
+			label: "ctrl+d",
+			desc:  i18n.M("exit, when the input is empty and nothing is running"),
+		},
+		{
+			kind: tui.KeyCtrlL, name: "repaint", run: i.keyRepaint,
+			label: "ctrl+l",
+			desc:  i18n.M("redraw the screen"),
+		},
+		{
+			kind: tui.KeyCtrlO, name: "toggle-tool-expand", run: i.keyToggleExpand,
+			label: "ctrl+o",
+			desc:  i18n.M("expand / collapse long tool results"),
+		},
+		{
+			kind: tui.KeyCtrlR, name: "toggle-thinking-expand", run: i.keyToggleThinking,
+			label: "ctrl+r",
+			desc:  i18n.M("expand / collapse recorded thinking (the newest stays open)"),
+		},
+		{
+			kind: tui.KeyCtrlS, name: "stash-draft", run: i.keyStashDraft,
+			label: "ctrl+s",
+			desc:  i18n.M("set the current draft aside / bring it back (it also returns after you send)"),
+		},
+		{
+			kind: tui.KeyCtrlT, name: "cycle-tool-display", run: i.keyCycleToolDisplay,
+			label: "ctrl+t",
+			desc:  i18n.M("cycle tool display (boxes - minimal - grouped - hidden)"),
+		},
+		{
+			kind: tui.KeyCtrlV, name: "paste-clipboard-image", run: i.keyPasteClipboard,
+			label: "ctrl+v",
+			desc:  i18n.M("paste a clipboard image into the prompt (also /paste)"),
+		},
+		{
+			kind: tui.KeyCtrlY, name: "copy-picker", run: i.keyOpenCopyPicker,
+			label: "ctrl+y",
+			desc:  i18n.M("copy a reply, or one block of it, from this session (also /copy)"),
+		},
+		{
+			kind: tui.KeyShiftTab, name: "cycle-approval-mode", run: i.keyCycleApprovalMode,
+			label: "shift+tab",
+			desc:  i18n.M("cycle approval mode (plan - workspace - auto-edit)"),
+		},
+		{
+			kind: tui.KeyPageUp, name: "scroll-page-up", run: func(context.Context, tui.Key) keyOutcome {
+				// The slash popup pages its own catalog; only it gets the
+				// key (the @-file popup has no pagination, so chat
+				// scrolling stays available while it is open).
+				if i.suggest.Active(i.ed.Value()) {
+					return keyPass
+				}
+				i.scrollBy(+i.chatPage())
+				return keyHandled
+			},
+			label: "pgup / pgdn",
+			desc:  i18n.M("scroll the chat one page up / down"),
+		},
+		{
+			kind: tui.KeyPageDown, name: "scroll-page-down", run: func(context.Context, tui.Key) keyOutcome {
+				if i.suggest.Active(i.ed.Value()) {
+					return keyPass
+				}
+				i.scrollBy(-i.chatPage())
+				return keyHandled
+			},
+			hideFromHelp: true, // folded into the pgup row above
+		},
+		{
+			kind: tui.KeyUp, alt: true, name: "pop-queued-message", run: i.keyPopQueued,
+			label: "alt+↑",
+			desc:  i18n.M("pop the last queued message back into the input"),
+		},
+		{
+			kind: tui.KeyUp, name: "cursor-up-or-scroll", run: i.keyUp,
+			label: "up / down",
+			desc:  i18n.M("move within multi-line input - scroll chat at input edge"),
+		},
+		{
+			kind: tui.KeyDown, name: "cursor-down-or-scroll", run: i.keyDown,
+			hideFromHelp: true, // folded into the up/down row above
+		},
+		{
+			kind: tui.KeyEnter, alt: true, name: "insert-newline", run: i.keyInsertNewline,
+			label: "alt+enter / shift+enter / ctrl+enter",
+			desc:  i18n.M("insert a newline (needs a terminal that reports modified enter)"),
+		},
+		{
+			kind: tui.KeyEnter, shift: true, name: "insert-newline-shift", run: i.keyInsertNewline,
+			hideFromHelp: true, // folded into the modified-enter row above
+		},
+		{
+			kind: tui.KeyEnter, ctrl: true, name: "insert-newline-ctrl", run: i.keyInsertNewline,
+			hideFromHelp: true, // folded into the modified-enter row above
+		},
 	}
+}
+
+// helpBindingRows returns the /help rows the keymap itself defines, in
+// table order. Bindings marked hideFromHelp contribute nothing.
+func helpBindingRows(keymap []globalBinding) [][2]string {
+	rows := make([][2]string, 0, len(keymap))
+	for _, b := range keymap {
+		if b.hideFromHelp || b.desc == "" {
+			continue
+		}
+		rows = append(rows, [2]string{b.label, b.desc})
+	}
+	return rows
 }
 
 // keyCtrlC implements the deliberate exit protocol. While busy: do
