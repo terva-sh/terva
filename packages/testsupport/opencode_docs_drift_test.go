@@ -36,10 +36,17 @@ import (
 // one that rots this way; a second such example should extend this test rather
 // than get its own.
 func TestOpenCodeGoDocSnippetMatchesCatalog(t *testing.T) {
-	doc, err := os.ReadFile("../../docs/models.md")
+	docBytes, err := os.ReadFile("../../docs/models.md")
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A Windows checkout gets CRLF — .gitattributes pins no *.md — and every
+	// pattern below is written with \n, so `` ```json\n `` matched nothing and
+	// this failed on that runner alone. The message named the heading and said
+	// the section must have been renamed, which is the wrong place to look.
+	// Normalise, so the test asserts about the document and not about the
+	// runner's line endings.
+	doc := strings.ReplaceAll(string(docBytes), "\r\n", "\n")
 	catalog, err := os.ReadFile("../../packages/provider/catalog_builtin.go")
 	if err != nil {
 		t.Fatal(err)
@@ -60,7 +67,7 @@ func TestOpenCodeGoDocSnippetMatchesCatalog(t *testing.T) {
 	// ---- what the snippet says to hide ----
 
 	blockRE := regexp.MustCompile("(?s)#### When there is no pattern to write.*?```json\n(.*?)\n```")
-	block := blockRE.FindStringSubmatch(string(doc))
+	block := blockRE.FindStringSubmatch(doc)
 	if block == nil {
 		t.Fatal("could not find the opencode-go hiding snippet in docs/models.md " +
 			`(heading "#### When there is no pattern to write" followed by a json block). ` +
@@ -104,7 +111,7 @@ func TestOpenCodeGoDocSnippetMatchesCatalog(t *testing.T) {
 	// ---- the prose arithmetic must still hold ----
 
 	claimRE := regexp.MustCompile(`OpenCode Go serves (\d+)\s+models while its landing page promotes (\d+)`)
-	claim := claimRE.FindStringSubmatch(string(doc))
+	claim := claimRE.FindStringSubmatch(doc)
 	if claim == nil {
 		t.Fatal(`could not find the "OpenCode Go serves N models while its landing page ` +
 			`promotes M" claim in docs/models.md — if the sentence was reworded, update ` +
@@ -126,7 +133,7 @@ func TestOpenCodeGoDocSnippetMatchesCatalog(t *testing.T) {
 	// the digits above: retire one hidden model and update the numbers, and
 	// "the extra nine" can survive as the only wrong thing on the page.
 	wordRE := regexp.MustCompile(`The extra ([a-z]+) are`)
-	if w := wordRE.FindStringSubmatch(string(doc)); w != nil {
+	if w := wordRE.FindStringSubmatch(doc); w != nil {
 		if n, ok := numberWords[w[1]]; !ok {
 			t.Errorf("cannot read the spelled count %q in docs/models.md; add it to "+
 				"numberWords or reword the sentence", w[1])
