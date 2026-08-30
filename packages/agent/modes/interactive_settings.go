@@ -172,6 +172,15 @@ func (i *Interactive) approvalModeLabel() string {
 	return i.carrierApprovalMode
 }
 
+// classifierModeLabel returns the live screening mode for the status bar,
+// mirrored from the same daemon settings surface as approvalModeLabel. Empty
+// or "off" renders no badge.
+func (i *Interactive) classifierModeLabel() string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.carrierClassifierMode
+}
+
 // applySettingChange routes a dialog action to its applier. The status-line
 // segment toggles, the status-line preset, and the theme picker are TUI-local
 // widgets (a terminal-only layout, dynamic theme discovery); every other item

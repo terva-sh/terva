@@ -843,6 +843,12 @@ type Interactive struct {
 	// surface_updated("settings") broadcast. Guarded by mu.
 	carrierApprovalMode string
 
+	// carrierClassifierMode caches the daemon-side gate's screening mode for
+	// the status-bar badge, fed from the same settings surface as the approval
+	// mode above. It is read-only on that surface — the classifier is set in
+	// user config, never over the wire — so this only ever mirrors. Guarded by mu.
+	carrierClassifierMode string
+
 	// shellResultContext caches the daemon's shell_result_context engine feature
 	// (default OFF), refreshed alongside the approval mode above. Read before a
 	// "!" escape's output is sent, so output the daemon would discard never goes

@@ -140,6 +140,37 @@ type Config struct {
 	// name and a preview of the call and returns the decision.
 	Confirmer core.Confirmer
 
+	// Classifier screens the tool calls the user's rules say to ask about:
+	// one cheap model call decides, BEFORE Confirmer is consulted, whether
+	// the call is refused outright or goes on to be asked about.
+	//
+	// Empty INHERITS the user's config.json setting, exactly like Provider
+	// and Model. "off", "screen", or "approve" override it for this runtime.
+	// Off is the shipped default, so empty means "no screening" unless the
+	// machine's owner asked for it.
+	//
+	// This is worth more here than in a CLI. A nil Confirmer REFUSES every
+	// call that would prompt (see above), and screening sits in front of that
+	// refusal — so an embedding with no human in it gets real verdicts on the
+	// calls it would otherwise have to decline blindly.
+	//
+	// It only bites when the user's config produces a POLICY. With no rules
+	// and no mode override there is no gate, nothing is ever gated, and there
+	// is no prompt for a classifier to stand in front of — ClassifierMode()
+	// then reports Off however this field is set. That is not a gap to route
+	// around: the classifier screens the calls a policy decided to ask about,
+	// so with nothing asked, there is nothing to screen.
+	//
+	// 🪤 It costs tokens: one model call per gated tool call, on the cheap
+	// rung of the user's swarm_tiers ladder, billed to whatever credential
+	// this runtime resolved. And because empty inherits, `approve` — a model
+	// answering YES on the user's behalf — can arrive from config that your
+	// program never set. The SDK writes no notes anywhere, deliberately, so
+	// nothing will tell you at runtime: read Runtime.ClassifierMode() at
+	// startup if your embedding gives tools real authority. Set "off" to opt
+	// out of inheritance entirely.
+	Classifier string
+
 	// Yolo runs every tool without consulting the user's permission rules.
 	// The escape hatch for an embedding that owns its own policy — a
 	// sandboxed worker, a test harness — and does not want the user's
@@ -154,11 +185,12 @@ type Config struct {
 // Runtime is one terva agent session. Safe for use from one goroutine
 // at a time per Runtime; create separate Runtimes for parallel work.
 type Runtime struct {
-	mu       sync.Mutex
-	agent    *core.Agent
-	provider string
-	model    string
-	cwd      string
+	mu         sync.Mutex
+	agent      *core.Agent
+	provider   string
+	model      string
+	cwd        string
+	classifier core.ClassifierMode
 
 	// activeCancel is set while a Prompt is streaming.
 	activeCancel context.CancelFunc
@@ -229,6 +261,19 @@ func New(cfg Config) (*Runtime, error) {
 		if pol, _ := permissions.BuildPolicy(args.PermInputs()); pol != nil {
 			gate = core.NewPolicyGate(pol, cfg.Confirmer)
 			r.AdoptReadOnlySet(pol.ReadOnly)
+			// Screening, inheriting the user's setting when Config.Classifier
+			// is empty — the same rule Provider and Model follow, and the
+			// reason a `deny` rule is honoured here too: a posture the user
+			// wrote down means the same thing in every host that runs their
+			// tools.
+			//
+			// The warnf is a NO-OP, not stderr. InstallClassifier announces
+			// itself in every other host because they are all CLIs; a library
+			// printing to its host program's stderr is a bug, and that rule
+			// does not bend for a message we happen to think is important.
+			// Runtime.ClassifierMode() is the channel instead: a read, in
+			// code, of the posture that actually resolved.
+			build.InstallClassifier(gate, r, cfg.Classifier, func(string, ...any) {})
 		}
 	}
 	ag := r.NewAgent()
@@ -243,6 +288,10 @@ func New(cfg Config) (*Runtime, error) {
 		provider: r.Provider,
 		model:    r.Model,
 		cwd:      r.CWD,
+		// gate is nil on the Yolo / no-policy fast path. ClassifierMode
+		// guards its receiver and answers Off there, which is the honest
+		// answer: no gate means nothing screens.
+		classifier: gate.ClassifierMode(),
 	}, nil
 }
 
@@ -254,6 +303,21 @@ func (r *Runtime) Model() string { r.mu.Lock(); defer r.mu.Unlock(); return r.mo
 
 // CWD returns the working directory the agent operates in.
 func (r *Runtime) CWD() string { r.mu.Lock(); defer r.mu.Unlock(); return r.cwd }
+
+// ClassifierMode reports what authority a screening classifier holds over this
+// runtime's tool calls: core.ClassifierOff, ClassifierScreen, or
+// ClassifierApprove.
+//
+// Worth reading at startup. Config.Classifier INHERITS from the user's
+// config.json when empty, so a posture your program never set can be in force
+// here — including `approve`, where a model answers yes on the user's behalf
+// and your Confirmer is never called. The SDK deliberately prints nothing
+// anywhere, so this accessor is the only thing that will tell you.
+func (r *Runtime) ClassifierMode() core.ClassifierMode {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.classifier
+}
 
 // Messages returns a copy of the current transcript, in the FULL wire form —
 // image payloads included.

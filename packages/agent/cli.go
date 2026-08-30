@@ -449,6 +449,9 @@ func runPrintMode(ctx context.Context, args build.Args, version string) error {
 	permissions.WarnRestrictedWorkspace(args.CWD, r.Trusted)
 	permissions.WarnPersistentlyUnjailed(args.PermInputs())
 	r.AdoptReadOnlySet(roSet)
+	// A headless mode has no confirmer, so a call that would prompt is
+	// otherwise refused outright — the case the classifier exists for.
+	build.InstallClassifier(confirmGate, r, args.Classifier, nil)
 	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &r, version)
 	defer stopExt()
 
@@ -490,6 +493,9 @@ func runJSONMode(ctx context.Context, args build.Args, version string) error {
 	permissions.WarnRestrictedWorkspace(args.CWD, r.Trusted)
 	permissions.WarnPersistentlyUnjailed(args.PermInputs())
 	r.AdoptReadOnlySet(roSet)
+	// A headless mode has no confirmer, so a call that would prompt is
+	// otherwise refused outright — the case the classifier exists for.
+	build.InstallClassifier(confirmGate, r, args.Classifier, nil)
 	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &r, version)
 	defer stopExt()
 

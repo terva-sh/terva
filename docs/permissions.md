@@ -75,6 +75,135 @@ isn't surprised by prompts (which it can't answer) or path confinement.
 Set `--approval` / config `approval` and `--jail`/`--no-jail` to
 override either.
 
+## The approval classifier
+
+**Off by default.** When you turn it on, a cheap model screens the tool
+calls that would otherwise prompt you, and answers some of them.
+
+It is a **third axis**, not a sixth approval mode. The mode decides
+*whether* a call runs, the sandbox bounds *what* it may touch, and the
+classifier decides only **who answers** the question the mode raised — you,
+or a model standing in for you. So it composes: `workspace` mode with
+screening on is still `workspace` mode, and the status bar shows both.
+
+> **This is not a security boundary.** It judges a call on its face, and a
+> model's judgement is neither sound nor reproducible. It catches an agent
+> that is *honestly mistaken* — the wrong directory, an overeager `rm`, a
+> migration that looked reversible — which is the common failure. Against a
+> **prompt-injected** agent it is close to worthless: whoever controls the
+> agent controls the call being judged. Keep your `deny` rules, the confirm
+> gate and the jail *underneath* it, never behind it.
+
+### The two modes
+
+| mode | what it may do | status bar |
+|---|---|---|
+| `off` | nothing; every prompt reaches you (**the default**) | — |
+| `screen` | **refuse** a call, but never permit one. An approve verdict is discarded and you are asked anyway | `⚖ screened` |
+| `approve` | also **answer yes on your behalf** — the prompt never happens | `⚖! approving` |
+
+`screen` can only ever *subtract* authority, so it is safe to leave on: the
+worst a wrong verdict costs is a call you reissue. `approve` grants
+authority you never saw, which is why it renders in the same warning colour
+`yolo` gets — the riskiest posture must never be the one with no badge.
+
+### Turning it on
+
+For one run, from the command line:
+
+```bash
+terva --classifier screen
+```
+
+This is the cheapest way to try it, and the cheapest way out: `--classifier
+off` turns screening off for a single run when a screener starts refusing
+something it should not, with no config to edit and put back.
+
+For every run, in your own `$TERVA_HOME/config.json`:
+
+```json
+{
+  "classifier": {
+    "mode": "screen"
+  }
+}
+```
+
+The flag wins over the config key, in both directions. It overrides the
+**mode only** — `provider`, `model`, `host_model` and `timeout_ms` keep coming
+from your config, so `--classifier screen` on a machine with no classifier
+block at all still resolves the cheap rung described below. There is
+deliberately no flag for the screening model: argv may choose among the
+postures your config already permits, and may not point screening at an
+endpoint of someone else's choosing.
+
+A mistyped mode is refused at startup rather than warned about. Every *other*
+classifier failure abstains into "screening stays off", which is right for a
+provider outage and wrong for a typo — `--classifier sceen` is an unambiguous
+request for screening, and answering it with a line that scrolls past would
+leave you believing you had it.
+
+**A project's `.terva/config.json` can never enable it, even in a trusted
+workspace.** Unlike the project provider/model override, this is not a trust
+gate but an absolute one: `approve` lets a model permit tool calls on your
+behalf, so a cloned repository that could switch it on would have a
+remote-code-execution foothold dressed as a preference. `/settings` shows the
+mode read-only for the same reason — the web panel is reachable over a
+network, and that is not a switch to expose to a remote peer.
+
+| key | meaning |
+|---|---|
+| `mode` | `off` (default), `screen`, or `approve` — `--classifier MODE` overrides it for one run |
+| `model` / `provider` | override which model screens; both empty is the intended shape |
+| `host_model` | permit falling back to the full host model when no cheap rung resolves (default off) |
+| `timeout_ms` | bound one screening call (default 8s) |
+
+### It runs cheap by default
+
+Screening happens on gated calls for the whole session, so an expensive
+default would be silent and permanent. With no `model` set, the classifier
+resolves the **weak rung of your `swarm_tiers` ladder** — the same ladder
+`swarm_spawn`'s `tier` uses, which composes your overrides over terva's
+built-in family tables. Most providers answer with nothing configured; on an
+Anthropic host it picks a Haiku rather than the session's Sonnet.
+
+```bash
+terva models tiers    # exactly what will be picked, per provider
+```
+
+A provider with neither a built-in table nor an override — the gateways
+(`opencode-go`, OpenRouter, LiteLLM) — resolves nothing. Screening then
+**stays off and says so** rather than quietly billing host price on every
+gated call. Set `swarm_tiers.<provider>.weak`, or `classifier.model`, or
+accept the cost with `classifier.host_model`.
+
+### Where it sits, and how it fails
+
+```
+pre-tool-use hooks → deny/allow rules → session grants → CLASSIFIER → your prompt
+```
+
+The position is the design. It runs **after** your rules, so an explicit
+`deny` outranks any verdict a model can produce. It runs **after** session
+grants, so a tool you already answered "always" for costs nothing. It runs
+**before** the prompt, because replacing the prompt is the point.
+
+**Every failure is an abstention** — a timeout, a provider outage, an
+unparseable answer — and an abstention just shows you the prompt you would
+have seen anyway. Failing *closed* was the alternative and it is worse: a
+provider blip would refuse real work while handing the agent something
+indistinguishable from a policy decision, which it would then try to route
+around.
+
+### Headless runs
+
+This is the case it exists for. A headless mode (`-p`, `--json`, `--rpc`, a
+swarm sub-agent) has no prompt to show, so a call needing confirmation is
+refused outright today. With `screen`, refusals at least carry a reason the
+agent can act on; with `approve`, the work proceeds. Headless runs print a
+stderr note naming the mode, since they have no status bar to carry the
+badge.
+
 ## Unjailing a directory for good
 
 Some work genuinely lives outside its own folder — a dotfiles repo that

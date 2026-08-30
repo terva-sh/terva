@@ -186,6 +186,20 @@ type Config struct {
 	// layer only, for the same reason as SwarmTiers.
 	Raati RaatiConfig `json:"raati,omitzero"`
 
+	// Classifier configures the screening classifier that answers tool-call
+	// approvals which would otherwise prompt (see core.ClassifierMode and
+	// docs/permissions.md). Off unless the operator turns it on.
+	//
+	// User layer ONLY, and here that is a security property rather than a
+	// convention: `approve` mode lets a model permit tool calls on the
+	// operator's behalf, so a cloned repository being able to switch it on
+	// would be a remote-code-execution foothold dressed as a preference.
+	// ResolveConfig is an allowlist — it copies the user config and then
+	// overrides only named fields — so this stays user-only by construction
+	// as long as nobody adds it there. TestProjectConfigCannotEnableClassifier
+	// holds that.
+	Classifier ClassifierConfig `json:"classifier,omitzero"`
+
 	// SwarmWorktrees opts swarm sub-agents into per-agent git worktrees
 	// instead of sharing the host's working tree. Off by default;
 	// nil/missing means disabled. When on, each spawned agent leases an
@@ -525,6 +539,45 @@ type EscalationConfig struct {
 	Provider string `json:"provider,omitempty"`
 	Model    string `json:"model,omitempty"`
 	Auto     bool   `json:"auto,omitempty"`
+}
+
+// ClassifierConfig is the user-layer screening-classifier block.
+//
+// The classifier is a third axis alongside the approval mode and the sandbox:
+// the mode decides whether a call runs, the sandbox bounds what it may touch,
+// and this decides only WHO ANSWERS the prompt the mode raised — a person, or
+// a model standing in for one. It is never a security boundary; it screens an
+// honestly mistaken agent, not a compromised one.
+type ClassifierConfig struct {
+	// Mode is "off" (default), "screen", or "approve".
+	//
+	// "screen" lets the classifier refuse a call but never permit one — an
+	// approve verdict is discarded and the prompt happens anyway, so it can
+	// only subtract authority. "approve" additionally lets it answer yes on
+	// the operator's behalf, which is why it is displayed with the same
+	// warning treatment yolo gets.
+	Mode string `json:"mode,omitempty"`
+
+	// Provider and Model override which model screens. Both empty is the
+	// intended shape: the classifier then resolves the WEAK rung of the
+	// swarm_tiers ladder for the session's provider, so it runs cheap
+	// without anyone configuring anything. An expensive default would be
+	// silent and permanent — this runs on gated calls for the whole session
+	// — so the cheap rung is the default and the host model must be asked
+	// for. See `terva models tiers` for what resolves.
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+
+	// HostModel permits falling back to the full host model when no weak
+	// rung resolves (the gateways — opencode-go, OpenRouter, LiteLLM — have
+	// no built-in family table). Off by default: without it an unresolvable
+	// rung abstains and says so, which leaves screening off and tells you,
+	// rather than quietly billing host price on every gated call.
+	HostModel bool `json:"host_model,omitempty"`
+
+	// TimeoutMS bounds one screening call. 0 uses the built-in default.
+	// A timeout is an abstention, so the prompt simply reaches the human.
+	TimeoutMS int `json:"timeout_ms,omitempty"`
 }
 
 // RaatiConfig is the user-layer raati block (docs/proposals/

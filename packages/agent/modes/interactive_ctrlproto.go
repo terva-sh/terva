@@ -904,6 +904,9 @@ func (i *Interactive) refreshCarrierApprovalMode() {
 			case "approval":
 				changed = changed || i.carrierApprovalMode != it.Value
 				i.carrierApprovalMode = it.Value
+			case "classifier":
+				changed = changed || i.carrierClassifierMode != it.Value
+				i.carrierClassifierMode = it.Value
 			case "reasoning":
 				if adoptReasoning {
 					changed = changed || i.cfg.Reasoning != it.Value

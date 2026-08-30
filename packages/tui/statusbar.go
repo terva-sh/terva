@@ -53,6 +53,13 @@ type StatusBarParams struct {
 	BusyPrefix string // spinner + funny line when busy
 	CWD        string
 	Locked     bool // sandbox on?
+	// ClassifierMode is the screening classifier's authority: "" / "off"
+	// (none), "screen" (it may refuse a call but never permit one), or
+	// "approve" (it answers on your behalf and the prompt never happens).
+	// Renders beside the approval-mode tag because it modifies it rather
+	// than replacing it: a classifier answers the prompts the MODE raised.
+	ClassifierMode string
+
 	// ApprovalMode is the live approval mode (plan/ask/auto-edit/yolo).
 	// When non-empty it drives the tag instead of NoYolo; "yolo" shows
 	// nothing (the default needs no badge).
@@ -767,6 +774,18 @@ func segTags(p StatusBarParams) []string {
 		atoms = append(atoms, th.FG256(th.Warning, i18n.T("%s mode", p.ApprovalMode)))
 	case p.ApprovalMode != "":
 		atoms = append(atoms, th.FG256(color, i18n.T("%s mode", p.ApprovalMode)))
+	}
+	// The classifier tag sits next to the mode it modifies. Approve gets the
+	// warning colour for the same reason yolo does: it is the posture where a
+	// tool call can run without a person ever seeing it, and the riskiest
+	// posture must never be the one with no badge. The two are distinguished
+	// by the bang as well as the colour, so they still read apart in a
+	// screenshot, a log, or a terminal with no colour at all.
+	switch p.ClassifierMode {
+	case "approve":
+		atoms = append(atoms, th.FG256(th.Warning, i18n.T("⚖! approving")))
+	case "screen":
+		atoms = append(atoms, th.FG256(color, i18n.T("⚖ screened")))
 	}
 	if p.Locked {
 		atoms = append(atoms, th.FG256(color, i18n.T("jailed")))

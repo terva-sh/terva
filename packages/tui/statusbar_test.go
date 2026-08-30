@@ -173,6 +173,54 @@ func TestStatusBarTaskGlanceSegment(t *testing.T) {
 	}
 }
 
+// The classifier badge answers "is a model deciding my approvals right now?",
+// which a user must be able to read at a glance or the opt-in is meaningless.
+func TestStatusBarClassifierTag(t *testing.T) {
+	bar := func(classifier string) []string {
+		return StatusBar(StatusBarParams{
+			Theme: Dark, Provider: "openai", Model: "gpt-5.5", CWD: "/tmp/x",
+			ApprovalMode: "workspace", ClassifierMode: classifier, Cols: 200,
+		})
+	}
+	text := func(classifier string) string { return stripANSI(strings.Join(bar(classifier), "\n")) }
+
+	// Off, and the zero value, must render nothing at all: the default posture
+	// needs no badge, and a badge that is always there stops being read.
+	for _, quiet := range []string{"", "off"} {
+		if got := text(quiet); strings.Contains(got, "screened") || strings.Contains(got, "approving") {
+			t.Errorf("classifier %q rendered a badge: %q", quiet, got)
+		}
+	}
+
+	// It MODIFIES the approval mode rather than replacing it, so both show.
+	screened := text("screen")
+	if !strings.Contains(screened, "screened") {
+		t.Errorf("screen badge missing: %q", screened)
+	}
+	if !strings.Contains(screened, "workspace mode") {
+		t.Errorf("classifier badge replaced the approval mode instead of modifying it: %q", screened)
+	}
+
+	// Approve is the posture where a tool call can run with nobody asked, so
+	// it takes the same warning colour yolo does. This is the assertion that
+	// keeps the riskiest state from being the quiet one.
+	approving := bar("approve")
+	if got := stripANSI(strings.Join(approving, "\n")); !strings.Contains(got, "approving") {
+		t.Fatalf("approve badge missing: %q", got)
+	}
+	warn := Dark.FG256(Dark.Warning, "⚖! approving")
+	if !strings.Contains(strings.Join(approving, "\n"), warn) {
+		t.Error("approve must render in the warning color — a model answering for you cannot be the quiet posture")
+	}
+
+	// They must also read apart with no colour at all: a screenshot, a log, a
+	// monochrome terminal. Same glyph plus different words is not enough on
+	// its own, which is why approve carries the bang.
+	if text("screen") == text("approve") {
+		t.Fatal("screen and approve render identically once colour is stripped")
+	}
+}
+
 // The approval posture is the one segment a user must be able to trust at a
 // glance, so it gets asserted rather than assumed.
 //

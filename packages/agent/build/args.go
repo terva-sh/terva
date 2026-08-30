@@ -346,6 +346,21 @@ type Args struct {
 	// ResolveApprovalMode (permissions.go).
 	Approval string
 
+	// Classifier overrides the screening classifier's mode for this run:
+	// "off", "screen", or "approve". Empty means the user config decides,
+	// which is the normal case and defaults to off.
+	//
+	// The classifier is USER-LAYER ONLY, and that is a security property
+	// rather than a convention: `approve` lets a model permit tool calls, so
+	// a project config able to switch it on would be an RCE foothold dressed
+	// as a preference. A flag does not breach that rule — argv is typed by
+	// the operator, and a cloned repository cannot reach it. This is the only
+	// reason the override is a MODE STRING and never a config: build's
+	// InstallClassifier still loads the user config itself, so no caller can
+	// hand it a project-layered one, and this field can only choose among
+	// modes that config already permits.
+	Classifier string
+
 	// RPCApprovals opts an rpc-mode run into the ask/approve carrier: a tool
 	// call that needs confirmation emits an `ask` frame and BLOCKS for the
 	// driver's matching `approve` command, instead of the headless default of
@@ -777,6 +792,21 @@ func ParseArgs(in []string) (Args, error) {
 				return a, perr
 			}
 			a.Approval = strings.ToLower(v)
+		case "--classifier":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			// Reject a bad mode HERE rather than warning later. Every other
+			// classifier failure abstains into "screening stays off", which is
+			// right for a provider blip and wrong for a typo: someone who typed
+			// --classifier=sceen asked for screening and must not be told at
+			// startup, in a line that scrolls past, that they silently did not
+			// get it.
+			if _, perr := core.ParseClassifierMode(v); perr != nil {
+				return a, perr
+			}
+			a.Classifier = strings.ToLower(strings.TrimSpace(v))
 		// "--thinking" is the documented spelling; "--reasoning" is what
 		// shipped and keeps working. Same rule as /thinking: the word a user
 		// meets is "thinking", and an accepted flag is never withdrawn.
@@ -1003,6 +1033,7 @@ it runs with (per-session model is switchable in-app):
   --cwd PATH                    pin the workspace directory
   --model ID / --provider NAME  default model for new sessions
   --approval MODE               approval posture (default: workspace)
+  --classifier MODE             screen tool calls with a cheap model: off|screen|approve
   --project                     project-scoped mode (data + extensions pinned here)
   --persona NAME|FILE           default persona/identity
 

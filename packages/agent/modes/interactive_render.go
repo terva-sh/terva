@@ -574,6 +574,7 @@ func (i *Interactive) redraw() {
 		CWD:              i.cfg.CWD,
 		Locked:           i.cfg.Sandbox.Locked() || snap.carrierJailed,
 		ApprovalMode:     i.approvalModeLabel(),
+		ClassifierMode:   i.classifierModeLabel(),
 		Usage:            snap.cumUsage,
 		Subscription:     i.cfg.AuthMethod == "oauth" || snap.carrierSubscription,
 		ContextUsed:      snap.lastCtxInput,

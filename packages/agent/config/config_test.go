@@ -51,6 +51,57 @@ func TestResolveConfigProjectModelTrustGated(t *testing.T) {
 	}
 }
 
+// The screening classifier is user-layer ONLY, and unlike provider/model that
+// is not a trust gate — it is an absolute one. `approve` mode lets a model
+// permit tool calls on the operator's behalf, so a cloned repository that
+// could switch it on would have a remote-code-execution foothold dressed as a
+// preference. Trusting a workspace must not be enough.
+//
+// ResolveConfig is an allowlist (copy the user config, then override only
+// named fields), so this holds by construction. The test exists to fail loudly
+// if someone ever adds Classifier to that override list.
+func TestProjectConfigCannotEnableClassifier(t *testing.T) {
+	home := testsupport.TempDir(t)
+	t.Setenv("TERVA_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cwd := testsupport.TempDir(t)
+	writeProjectConfig(t, cwd, `{"classifier":{"mode":"approve","host_model":true}}`)
+
+	for _, trusted := range []bool{false, true} {
+		eff := ResolveConfig(cwd, trusted)
+		if got := eff.Config.Classifier.Mode; got != "" {
+			t.Fatalf("trusted=%v: project config set classifier mode %q; a repo must never be able to enable screening", trusted, got)
+		}
+		if eff.Config.Classifier.HostModel {
+			t.Fatalf("trusted=%v: project config turned on host_model; a repo must not be able to redirect classifier spend", trusted)
+		}
+	}
+}
+
+// The other half: the user's own classifier block DOES survive resolution,
+// so the guarantee above is "projects cannot", not "nobody can".
+func TestUserConfigClassifierSurvivesResolve(t *testing.T) {
+	home := testsupport.TempDir(t)
+	t.Setenv("TERVA_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.json"),
+		[]byte(`{"classifier":{"mode":"screen","timeout_ms":5000}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cwd := testsupport.TempDir(t)
+	writeProjectConfig(t, cwd, `{"classifier":{"mode":"approve"}}`)
+
+	// The project's attempt to escalate screen -> approve must not land.
+	eff := ResolveConfig(cwd, true)
+	if eff.Config.Classifier.Mode != "screen" {
+		t.Fatalf("classifier mode = %q, want the user's own \"screen\"", eff.Config.Classifier.Mode)
+	}
+	if eff.Config.Classifier.TimeoutMS != 5000 {
+		t.Fatalf("timeout_ms = %d, want the user's 5000", eff.Config.Classifier.TimeoutMS)
+	}
+}
+
 // ToggleStringMember backs FavoriteModels: add is idempotent (deduped),
 // remove drops the key, and emptying returns nil.
 func TestToggleStringMember(t *testing.T) {

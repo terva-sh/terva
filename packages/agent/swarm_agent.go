@@ -54,6 +54,9 @@ func runSwarmAgentMode(ctx context.Context, args build.Args, version string) err
 	permissions.WarnRestrictedWorkspace(args.CWD, r.Trusted)
 	permissions.WarnPersistentlyUnjailed(args.PermInputs())
 	r.AdoptReadOnlySet(roSet)
+	// A sub-agent is the most headless host there is — nobody is watching it
+	// at all — so it is exactly where a blanket refusal strands work.
+	build.InstallClassifier(confirmGate, r, args.Classifier, nil)
 	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &r, version)
 	defer stopExt()
 

@@ -667,6 +667,8 @@
   "● pend": "● pend",
   "● run": "● run",
   "★ favorites": "★ favorites",
+  "⚖ screened": "⚖ screened",
+  "⚖! approving": "⚖! approving",
   "⚠ %d archive file(s) could not be read — they can never fire": "⚠ %d archive file(s) could not be read — they can never fire",
   "⛭ %d agent|⛭ %d agents": {"one":"⛭ %d agent","other":"⛭ %d agents"},
   "✓ done": "✓ done",

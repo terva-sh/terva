@@ -59,6 +59,10 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	permissions.WarnRestrictedWorkspace(args.CWD, r.Trusted)
 	permissions.WarnPersistentlyUnjailed(args.PermInputs())
 	r.AdoptReadOnlySet(roSet)
+	// Screening runs before the out-of-band approval carriers below, so a
+	// driver that never wires one still gets real verdicts instead of the
+	// blanket refusal.
+	build.InstallClassifier(confirmGate, r, args.Classifier, nil)
 
 	// rpc is a long-lived server a driver spawns and holds open, so its stored
 	// subscriptions age exactly like the TUI's and the web daemon's — and,

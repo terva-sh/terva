@@ -160,6 +160,7 @@ func PrintHelp(version string) {
 		row{"--no-memory", i18n.T("disable durable memory for this run: no memory tool, no injection, nothing read or written")},
 		row{"--approval plan|ask|auto-edit|workspace|yolo", i18n.T("approval mode: plan = read-only only, ask = confirm everything, auto-edit = confirm non-edit tools, workspace = run built-ins + reads, confirm foreign side-effects (interactive default), yolo = run freely. See docs/permissions.md")},
 		row{"--no-yolo", i18n.T("alias for --approval ask")},
+		row{"--classifier off|screen|approve", i18n.T("screen tool calls with a cheap model before they prompt: screen = it may refuse but never permit, approve = it may also answer yes for you. Off by default; overrides the config key for this run. See docs/permissions.md")},
 		row{"--jail / --no-jail", i18n.T("force the sandbox on / off at startup (default: on for interactive, off for headless)")},
 		row{"--trust", i18n.T("trust the cwd for this run only (load project extensions/skills/context; not persisted)")},
 		row{"--project / --no-project", i18n.T("force project-scoped mode on/off (data in .terva/home, only project extensions; login+trust stay global)")},

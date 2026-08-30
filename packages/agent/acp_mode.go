@@ -419,6 +419,20 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	permissions.WarnRestrictedWorkspace(args.CWD, r.Trusted)
 	permissions.WarnPersistentlyUnjailed(args.PermInputs())
 	r.AdoptReadOnlySet(roSet)
+	// Screening, when the operator turned it on. An editor session HAS a
+	// responder, so this is not the no-prompt case the classifier was built
+	// for — the win here is that a call the screener refuses never costs the
+	// user an editor dialog at all.
+	//
+	// It sits on the classifier's own axis, not the approval mode's, so
+	// session/set_mode keeps working exactly as before: switching modes at
+	// runtime changes WHICH calls prompt, and leaves WHO answers them alone.
+	// Installed once here rather than re-derived per mode change for that
+	// reason.
+	//
+	// Notes go to stderr, matching the policy warnings just above: stdout is
+	// the ACP wire and must carry nothing but protocol.
+	build.InstallClassifier(confirmGate, r, args.Classifier, nil)
 
 	// Wire this session's extensions (tools + read-only classification) BEFORE
 	// MCP, so an extension tool name wins a collision against an MCP tool of

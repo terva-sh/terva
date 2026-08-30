@@ -338,6 +338,14 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 		// core stays free of shell parsing (same layering as the policy's
 		// DecomposeCommand).
 		gate.SetScopeDeriver(permissions.DeriveGrantScopes)
+		// The screening classifier, when the operator turned one on. It reads
+		// the USER config itself — a project's config can never enable it, since
+		// approve mode lets a model permit tool calls on the operator's behalf.
+		// Notes go to the session diagnostics rather than stderr, which nobody
+		// watching a TUI would ever see.
+		build.InstallClassifier(gate, r, args.Classifier, func(f string, a ...any) {
+			s.diag("note: " + fmt.Sprintf(f, a...))
+		})
 		r.AdoptReadOnlySet(pol.ReadOnly)
 		// Retain it: every later rebuild re-merges extension and MCP tools, and
 		// MergeToolsForMode registers a read_only tool's name into whichever set

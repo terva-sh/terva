@@ -144,6 +144,13 @@ type ConfirmGate struct {
 	// (core never parses tool args itself); nil means no scoped options.
 	scopeDeriver func(toolName string, args json.RawMessage) []GrantScope
 
+	// classifier, when non-nil and classifierMode is enabled, screens the
+	// calls the policy decided to prompt on. See classifier.go: it is a
+	// third axis (who answers), not a sixth approval mode, and it is off
+	// unless the operator turned it on. Swapped under mu like the policy.
+	classifier     Classifier
+	classifierMode ClassifierMode
+
 	mu          sync.Mutex
 	allowAll    bool
 	allowedTool map[string]bool
@@ -191,6 +198,37 @@ func (g *ConfirmGate) SetScopeDeriver(fn func(toolName string, args json.RawMess
 	g.mu.Lock()
 	g.scopeDeriver = fn
 	g.mu.Unlock()
+}
+
+// SetClassifier installs (or removes) the screening classifier and the
+// authority it holds. A nil classifier, or ClassifierOff, disables screening
+// entirely and the gate behaves exactly as it did before the feature existed.
+//
+// Both are set together on purpose: a classifier with no mode, or a mode with
+// no classifier, is a half-configured gate whose behaviour nobody can predict
+// from reading one line of wiring.
+func (g *ConfirmGate) SetClassifier(c Classifier, mode ClassifierMode) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	g.classifier, g.classifierMode = c, mode
+	g.mu.Unlock()
+}
+
+// ClassifierMode reports the screening mode actually in force: ClassifierOff
+// whenever no classifier is installed, so a caller (the status bar) can never
+// advertise screening that is not happening. Nil-safe.
+func (g *ConfirmGate) ClassifierMode() ClassifierMode {
+	if g == nil {
+		return ClassifierOff
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.classifier == nil {
+		return ClassifierOff
+	}
+	return g.classifierMode
 }
 
 // Mode returns the gate's current approval mode (ApprovalYolo when the
@@ -312,7 +350,58 @@ func (g *ConfirmGate) Check(ctx context.Context, toolName string, args json.RawM
 		return true, "", nil
 	}
 	inner := g.inner
+	cls, clsMode := g.classifier, g.classifierMode
 	g.mu.Unlock()
+
+	// The classifier answers what would otherwise become a prompt, and its
+	// position in this function is the whole design:
+	//
+	//   - AFTER the policy, so an explicit deny rule outranks any verdict a
+	//     model can produce. Config the operator wrote beats a guess.
+	//   - AFTER the session grants, so a tool they already answered "always"
+	//     for does not spend a model call to be re-approved.
+	//   - BEFORE the no-confirmer refusal below, so a headless run gets
+	//     screened instead of blanket-refused. That is the case this exists
+	//     for: nobody is there to answer, and the alternative is a call that
+	//     waits forever or dies with a message the agent cannot act on.
+	//   - BEFORE the prompt, because replacing the prompt is the point.
+	if cls != nil && clsMode.Enabled() {
+		// Never spend a model call on a turn that has already stopped: the
+		// answer could only arrive too late to be used. The same check guards
+		// the human prompt below, for the same reason.
+		if err := ctx.Err(); err != nil {
+			return false, "tool call refused: the turn was cancelled before this call could be approved", nil
+		}
+		mode := ApprovalYolo
+		if pol != nil {
+			mode = pol.Mode
+		}
+		switch res := cls.Classify(ctx, ClassifyRequest{
+			Tool:    toolName,
+			Args:    args,
+			Preview: preview,
+			Mode:    mode,
+		}); res.Verdict {
+		case ClassifyDeny:
+			// Honoured in both modes: refusing only ever subtracts.
+			reason := strings.TrimSpace(res.Reason)
+			if reason == "" {
+				// A denial the agent cannot learn from just gets a cosmetic
+				// retry of the same call.
+				reason = "tool call refused by the screening classifier, which gave no reason"
+			}
+			return false, reason, nil
+		case ClassifyApprove:
+			// An approval is AUTHORITY, so only approve mode may act on one.
+			// In screen mode it is discarded and the prompt happens anyway —
+			// that downgrade is what makes screen mode safe to leave on.
+			if clsMode == ClassifierApprove {
+				return true, "", nil
+			}
+		}
+		// Abstain, and a discarded approve, fall through to the human below.
+	}
+
 	if inner == nil {
 		return false, "tool call refused: confirmation is required (--no-yolo / approval mode) and there is no interactive prompt in this mode; ask the user what to do instead", nil
 	}

@@ -510,6 +510,9 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	// extension/MCP tools, built-in coding tools off) via Resolve + the merge.
 	gate, roSet := permissions.HeadlessConfirmGate(args.PermInputs())
 	resolved.AdoptReadOnlySet(roSet)
+	// Screening sits in front of the ChatConfirmer wired further down, so a
+	// denied call never spends a human's attention over chat at all.
+	build.InstallClassifier(gate, resolved, args.Classifier, nil)
 	// Extensions (and the MCP servers wired inside the same setup) get
 	// their OWN lifetime context, not the signal-cancelled one: the
 	// driver spawns subprocesses with exec.CommandContext, so a ^C on

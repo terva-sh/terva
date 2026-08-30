@@ -111,8 +111,10 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 	cfg, _ := config.LoadConfig()
 
 	approval := string(core.ApprovalYolo)
+	classifier := string(core.ClassifierOff)
 	if s.gate != nil {
 		approval = string(s.gate.Mode())
+		classifier = string(s.gate.ClassifierMode())
 	}
 	autoSwarm := cfg.AutoSwarmEnabled != nil && *cfg.AutoSwarmEnabled
 
@@ -128,6 +130,20 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 		// command, so a TUI user with the settings pane open had no way to see
 		// whether the directory was trusted, let alone change it — the web panel
 		// has had the toggle in its workspace drawer since trust shipped.
+		// Report-only, and deliberately so. Approval mode is a per-session
+		// posture anyone at this surface may change; the classifier is not,
+		// because `approve` lets a model permit tool calls with nobody asked.
+		// The web panel is reachable over a network, so making that flippable
+		// here would hand a remote peer the one switch the user-layer-only rule
+		// exists to protect. It carries a single option — its current value —
+		// so no client can offer a change, and settingsAction refuses the key
+		// outright as the second lock.
+		{
+			Key: "classifier", Label: i18n.T("Approval classifier"), Type: "enum",
+			Value: classifier, Options: []ctrlproto.SettingOption{{Value: classifier, Label: classifier}},
+			Description: i18n.T("Whether a model screens the tool calls that would otherwise prompt you."),
+			Note:        i18n.T("read-only here — set classifier.mode in your user config.json"),
+		},
 		{
 			Key: "trust", Label: i18n.T("Trust this workspace"), Type: "bool",
 			Value:       boolStr(s.trusted.Load()),
@@ -383,6 +399,12 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 	}
 	key, val := args["key"], args["value"]
 	switch key {
+	case "classifier":
+		// The second lock behind the single-option item in buildSettings. A
+		// classifier that could be switched on from this surface would undo the
+		// user-layer-only rule the moment the web panel is exposed, so the
+		// answer is no regardless of who is asking.
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the approval classifier is set in your user config.json (classifier.mode), not from this surface"))
 	case "approval":
 		mode, err := core.ParseApprovalMode(val)
 		if err != nil {
