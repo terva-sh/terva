@@ -91,7 +91,7 @@ func (t *ChatSendImageTool) Execute(ctx context.Context, raw json.RawMessage, _ 
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return core.ToolResult{}, err
+		return core.ToolResult{}, notFoundError(t.CWD, a.Path, t.Sandbox.DisplayPath(path, a.Path), err)
 	}
 	if info.IsDir() {
 		return core.ToolResult{}, fmt.Errorf("%s is a directory", path)
@@ -167,7 +167,7 @@ func (t *ChatSendFileTool) Execute(ctx context.Context, raw json.RawMessage, _ f
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return core.ToolResult{}, err
+		return core.ToolResult{}, notFoundError(t.CWD, a.Path, t.Sandbox.DisplayPath(path, a.Path), err)
 	}
 	if info.IsDir() {
 		return core.ToolResult{}, fmt.Errorf("%s is a directory", path)

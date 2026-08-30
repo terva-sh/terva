@@ -121,3 +121,36 @@ func restrictSensitiveReads(sandbox *tools.Sandbox, home, cwd string, allowConfi
 func allowHandoffWrites(sandbox *tools.Sandbox, home string) {
 	sandbox.AddWritableRoot(filepath.Join(home, "handoffs"))
 }
+
+// scratchDirName is the $TERVA_HOME directory a jailed agent may use for a
+// file that belongs to the work but not to the user's tree.
+const scratchDirName = "scratch"
+
+// allowScratchWrites grants the second $TERVA_HOME surface a jailed agent may
+// WRITE: scratch/, a sanctioned home for the throwaway file.
+//
+// The write jail is deliberate and it stays. An out-of-root write has to reach
+// for bash, and that is the point rather than an oversight: a bash command
+// carries a signature the classifier and the permission layer can inspect, so
+// the jail edge ROUTES a risky write past other safeguards instead of stopping
+// it. That edge earns its cost for a write into the user's wider filesystem.
+//
+// It does not earn its cost for scratch. The session behind this change shows
+// why: a refused write to /tmp/make-mochi-scenarios.py returned one turn later
+// as `cat > /tmp/make-mochi-scenarios.py <<'PY'`. The jail changed nothing
+// about where the bytes landed. It converted a reviewable write call into an
+// opaque heredoc, which is the shape this project forbids everywhere else.
+// With no sanctioned scratch dir the model has two options, and both are worse
+// than the grant: route around the jail, or litter the user's tree.
+//
+// The grant is the directory alone. Sandbox.ScratchDir makes the refusal name
+// it, so a refused write points somewhere real instead of leaving the model to
+// guess /tmp. Siblings such as config.json stay write-jailed, and a symlink
+// planted inside scratch/ cannot widen it (the sandbox resolves targets before
+// it matches them). The read side needs no grant: reads are a deny list, and
+// scratch/ is not on it.
+func allowScratchWrites(sandbox *tools.Sandbox, home string) {
+	dir := filepath.Join(home, scratchDirName)
+	sandbox.AddWritableRoot(dir)
+	sandbox.ScratchDir = dir
+}

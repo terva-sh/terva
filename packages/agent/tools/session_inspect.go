@@ -935,6 +935,12 @@ func (t *SessionInspectTool) resolveFromPath(raw string) (path, id string, err e
 	}
 	info, serr := os.Stat(p)
 	if serr != nil {
+		// A missing transcript is the ordinary case, and it gets the shared
+		// diagnostic. Anything else keeps its framing, because the operating
+		// system knows something the caller does not.
+		if os.IsNotExist(serr) {
+			return "", "", notFoundError(t.CWD, raw, t.Sandbox.DisplayPath(p, raw), serr)
+		}
 		return "", "", fmt.Errorf("cannot read %q: %w", t.Sandbox.DisplayPath(p, raw), serr)
 	}
 	if info.IsDir() {

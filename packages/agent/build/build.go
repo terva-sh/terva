@@ -804,28 +804,6 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// --model flag > project (trusted) > user config (eff.Config is the
 	// project-over-user read view; cfg stays the user layer for repairs).
 	model := firstNonEmpty(args.Model, eff.Config.Model)
-	// A hidden model that is ALSO the configured default is a contradiction only
-	// the user can settle, so say so rather than guess which half they meant.
-	//
-	// Scoped deliberately to the CONFIG default. An explicit --model is exempt:
-	// naming a model is a clearer statement of intent than a visibility rule
-	// written earlier, and refusing it would leave a hidden model unreachable
-	// from the command line for no gain. A resume is exempt for the same reason
-	// mechanically — it re-enters Resolve with args.Model set from the session —
-	// and that matters more, because failing to reopen a conversation over a
-	// picker preference would be destructive out of all proportion. The built-in
-	// per-provider fallback is exempt too: nobody chose it, so erroring on it
-	// would brick a launch over a config the user never wrote.
-	if args.Model == "" && model != "" && model == eff.Config.Model {
-		if hidden, rule := config.NewModelVisibility(eff.Config.HiddenModels).HiddenBy(provName, model); hidden {
-			return Resolved{}, fmt.Errorf(
-				"model %q is your configured default but is hidden by the rule %q.\n"+
-					"Un-hide it in the model picker (ctrl+k, or type :hidden to reveal hidden models), "+
-					"choose a different default, or edit hidden_models in %s.\n"+
-					"To use it just this once, pass --model %s.",
-				config.ModelKey(provName, model), rule, config.ConfigPath(), model)
-		}
-	}
 	if model == "" {
 		switch {
 		case provName == "ollama":
@@ -1049,6 +1027,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	configReadable, _ := ConfigReadableByAgent(args.CWD)
 	restrictSensitiveReads(sandbox, home, args.CWD, configReadable)
 	allowHandoffWrites(sandbox, home)
+	allowScratchWrites(sandbox, home)
 
 	// Skill discovery: scan project + global locations + built-in
 	// skills shipped with the binary. If any are found, register

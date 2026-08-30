@@ -3,6 +3,7 @@ package build
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"terva.sh/terva/packages/agent/attach"
@@ -34,10 +35,11 @@ func restrictedSandbox(t *testing.T) (sb *tools.Sandbox, home, cwd string) {
 	}
 	sb = tools.NewSandbox(cwd)
 	restrictSensitiveReads(sb, home, cwd, false)
-	// Mirrors build.go's wiring. handoffs/ is deliberately NOT in the
-	// MkdirAll list above: a fresh home has none until the first handoff is
-	// written, and the grant must already hold then.
+	// Mirrors build.go's wiring. handoffs/ and scratch/ are deliberately NOT
+	// in the MkdirAll list above: a fresh home has neither until the first
+	// write, and both grants must already hold then.
 	allowHandoffWrites(sb, home)
+	allowScratchWrites(sb, home)
 	sb.Lock()
 	return sb, home, cwd
 }
@@ -50,6 +52,7 @@ func restrictedSandboxConfigReadable(t *testing.T) (sb *tools.Sandbox, home, cwd
 	sb2 := tools.NewSandbox(cwd)
 	restrictSensitiveReads(sb2, home, cwd, true)
 	allowHandoffWrites(sb2, home)
+	allowScratchWrites(sb2, home)
 	sb2.Lock()
 	return sb2, home, cwd
 }
@@ -207,6 +210,56 @@ func TestHandoffsDirNeedsNoUnjail(t *testing.T) {
 		if err := sb.CheckPath(filepath.Join(home, rel)); err == nil {
 			t.Errorf("CheckPath(%s) was allowed, want writes outside handoffs/ still jailed", rel)
 		}
+	}
+}
+
+// scratch/ is the sanctioned home for a throwaway file. Without it a refused
+// write to /tmp comes back as a `cat > /tmp/... <<'PY'` heredoc, which lands
+// the same bytes with the review surface stripped off. The grant must hold
+// before the directory exists, because a fresh home has no scratch/ until the
+// first scratch file is written.
+func TestScratchDirNeedsNoUnjail(t *testing.T) {
+	sb, home, _ := restrictedSandbox(t)
+	f := filepath.Join(home, scratchDirName, "make-mochi-scenarios.py")
+
+	if err := sb.CheckPath(f); err != nil {
+		t.Errorf("CheckPath(scratch file) = %v, want it writable while jailed", err)
+	}
+	if err := sb.CheckPathRead(f); err != nil {
+		t.Errorf("CheckPathRead(scratch file) = %v, want it readable while jailed", err)
+	}
+	// A nested directory the model makes up on the spot still lands inside.
+	nested := filepath.Join(home, scratchDirName, "runs", "01", "out.json")
+	if err := sb.CheckPath(nested); err != nil {
+		t.Errorf("CheckPath(nested scratch file) = %v, want it writable while jailed", err)
+	}
+	// The grant is scratch/ alone. It must not leak to its siblings.
+	for _, rel := range []string{
+		"config.json",
+		"auth.json",
+		"sessions/x.jsonl",
+	} {
+		if err := sb.CheckPath(filepath.Join(home, rel)); err == nil {
+			t.Errorf("CheckPath(%s) was allowed, want writes outside scratch/ still jailed", rel)
+		}
+	}
+}
+
+// The containment itself is deliberate and must survive the scratch grant: an
+// out-of-root write still has to reach for bash, where the command classifier
+// can see it. The grant buys a sanctioned destination, not an open jail.
+func TestScratchGrantLeavesTheWriteJailStanding(t *testing.T) {
+	sb, home, _ := restrictedSandbox(t)
+	outside := filepath.Join(testsupport.TempDir(t), "make-mochi-scenarios.py")
+
+	err := sb.CheckPath(outside)
+	if err == nil {
+		t.Fatalf("CheckPath(%s) was allowed, want an out-of-root write still jailed", outside)
+	}
+	// The refusal has to point somewhere real. A model that is only told "no"
+	// writes the file through a shell redirect instead.
+	if !strings.Contains(err.Error(), filepath.Join(home, scratchDirName)) {
+		t.Errorf("refusal does not name the scratch dir, so the model has nowhere to go: %v", err)
 	}
 }
 

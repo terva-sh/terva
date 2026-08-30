@@ -105,11 +105,32 @@ type ArchiveEntry struct {
 	Scope string
 
 	path string // absolute file path; provenance, not identity
+
+	// collidedWith records the id this entry ASKED for, when Add had to mint a
+	// suffixed one instead. Transient in the same way path is: it describes one
+	// Add call rather than the stored entry, and serializeArchive never writes
+	// it (the frontmatter is built from named fields only).
+	collidedWith string
 }
 
 // Path is where this entry lives on disk, "" for an entry that has not been
 // written (or an in-memory archive).
 func (e ArchiveEntry) Path() string { return e.path }
+
+// CollidedWith names the id this entry asked for and could not have, because
+// Add minted a suffixed id instead. Empty when the requested id was free.
+//
+// The suffix itself is deliberate and stays: two genuinely different facts
+// whose names slugify alike must both remain addressable, which is what
+// TestArchiveMintsDistinctIDsOnACollision defends. What it must not be is
+// SILENT. In the session behind this change the model archived a correction
+// under the name it had already used, received a -2 it did not notice, and
+// spent 21 turns on archive, recall, archive, forget before it converged. Its
+// own words: "The dedup dance left two entries again."
+//
+// The tool cannot tell a correction from a second fact, so it does not guess.
+// It reports what it did and names the way to undo it.
+func (e ArchiveEntry) CollidedWith() string { return e.collidedWith }
 
 // Ref is how an entry is named everywhere the model can see it: "project:the-id".
 //
@@ -611,6 +632,7 @@ func (a *Archive) writeNewLocked(e ArchiveEntry) (ArchiveEntry, error) {
 		e.ID = base
 		if a.idTakenLocked(base) {
 			e.ID = base + "-" + strconv.Itoa(a.seq)
+			e.collidedWith = base
 		}
 		return e, nil
 	}
@@ -631,6 +653,11 @@ func (a *Archive) writeNewLocked(e ArchiveEntry) (ArchiveEntry, error) {
 			return ArchiveEntry{}, err
 		}
 		e.ID, e.path = id, path
+		if n > 1 {
+			// The base was taken, so this id is not the one the caller asked
+			// for. The caller has to be able to say so.
+			e.collidedWith = base
+		}
 		if _, err := f.WriteString(serializeArchive(e)); err != nil {
 			f.Close()
 			_ = os.Remove(path)

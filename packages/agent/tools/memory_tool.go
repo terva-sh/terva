@@ -100,6 +100,7 @@ const memoryDesc = "Keep a memory that stays after this session. The memory has 
 	"The scope is project or user. The default is project, which holds facts about this repository: its conventions, its dangers, and the location of each part. The user scope holds facts about the person that you work with, in all projects: their preferences, their environment, and their method of work.\n\n" +
 	"The active tier is always in your context. Therefore keep it small and short. Use add to append `text`. Use replace to put `text` in the position of the entry that contains `match`. Use remove to delete the entry that contains `match`.\n\n" +
 	"The archived tier is not in your context until its keys agree with the conversation. Therefore an archived entry can be long and can hold much detail. Use archive to store `text` with `keys`, or to move the active entry that agrees with `match`. Use search to find the archived entries that agree with `text`. Use recall to read the archived entry with the name in `match`. Use promote to move an archived entry into the active tier. Use forget to delete an archived entry.\n\n" +
+	"One active entry holds at most 1024 characters. One archived entry holds at most 8192 bytes. The tool refuses a longer entry, and it saves nothing. Compose within the limit, or archive a pointer to a file.\n\n" +
 	"The choice of keys is difficult, and it decides if you find the memory again. Use the words that a person types when they need the fact. Do not use the identifiers in the fact itself. For example, put a note about the internal parts of the model catalog on the keys \"model\", \"catalog\", and \"add a model\". The person who asks does not know the name of the function yet, and this is the reason for the question. Exact error text and file paths are good keys, because a person copies them into a question.\n\n" +
 	"Use `secondary_keys` to make a wide primary key more narrow. An entry fires when a primary key agrees and at least one secondary key also agrees.\n\n" +
 	"Archive the facts that are worth storage but not worth space in each turn: procedures, investigations, and any text longer than two lines. Keep in the active tier the facts that apply to each conversation. The tool returns the new memory for the scope that you changed, so that you see your change immediately. The memory block at the start of a session does not change until the next session or a compaction."
@@ -264,6 +265,15 @@ func (t *MemoryTool) archiveEntry(arch *memory.Archive, a memoryArgs) (core.Tool
 
 	note := fmt.Sprintf("archived as [%s]. It is out of your context now and comes back when its keys match: %s.",
 		stored.Ref(), strings.Join(stored.Keys, ", "))
+	if taken := stored.CollidedWith(); taken != "" {
+		// The suffix is deliberate — two different facts that slugify alike must
+		// both stay addressable — but staying quiet about it is what cost the
+		// recorded session 21 turns. The tool cannot tell a correction from a
+		// second fact, so it states what it did and names the verb that undoes
+		// it, rather than guessing at intent.
+		note += fmt.Sprintf(" NOTE: the name %q was already taken, so this was stored as %q and both are kept."+
+			" If you meant to replace the older one, forget %q.", taken, stored.ID, taken)
+	}
 	if moved != "" {
 		if store, err := t.storeFor(a.Scope); err == nil {
 			if err := store.Remove(moved); err != nil {

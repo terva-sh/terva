@@ -45,12 +45,12 @@ type CodeExecutionMutatingTool struct {
 // pre-check accounts for. Order is the reporting order.
 var mutatingScriptBindings = []string{"read", "grep", "glob", "write", "edit"}
 
-const codeExecMutatingSchema = `{"type":"object","properties":{"script":{"type":"string","description":"A short JavaScript program. To examine the workspace, call read(path[,offset,limit]), grep(pattern[,path]), and glob(pattern[,path]). To change it, call write(path, content[, mode]) and edit(path, edits). Each edit is an object with oldText and newText, and an optional replaceAll flag. Use print(...) to return a result. Call each of these functions directly by name."},"timeout":{"type":"integer","description":"The maximum run time in seconds. The tool then stops the program. The default is 30 seconds, and the maximum is 120 seconds."}},"required":["script"]}`
+const codeExecMutatingSchema = `{"type":"object","properties":{"script":{"type":"string","description":"A short JavaScript program. To examine the workspace, call read(path[,offset,limit]), grep(pattern[,path]), and glob(pattern[,path]). To change it, call write(path, content[, mode]) and edit(path, edits). Each edit is an object with oldText and newText, and an optional replaceAll flag. Use print(...) to return a result. Call each of these functions directly by name.\n\nThe program runs inside a function body. Therefore return works as an early exit.\n\nread gives at most 2000 lines and 50 KiB. A larger read throws. It does not give a part of the file. Pass offset and limit to read a large file in parts."},"timeout":{"type":"integer","description":"The maximum run time in seconds. The tool then stops the program. The default is 30 seconds, and the maximum is 120 seconds."}},"required":["script"]}`
 
 func (t *CodeExecutionMutatingTool) Name() string { return "code_execution_mutating" }
 
 func (t *CodeExecutionMutatingTool) Description() string {
-	return i18n.D("tool.code_execution_mutating.description", "Run a short JavaScript program that can change files.\n\nThe program examines the workspace with read(path[,offset,limit]), grep(pattern[,path]), and glob(pattern[,path]). It changes the workspace with write(path, content[, mode]) and edit(path, edits). Use print(...) to return a result.\n\nUse this tool for a task that makes many small changes, when each change follows from what the program reads. For a task that only reads, use code_execution instead.\n\nThe program cannot run commands. The tool does not provide bash.\n\nEvery call goes through the usual permission gate. Each change asks for approval in the same way as a direct call.\n\nThe tool examines the program before it runs it, and it reports the calls that the program makes. The tool refuses a program that it cannot account for. Therefore call each function directly by its name. Do not use eval, do not reach the global object, and do not copy a function into a variable.\n\nThe program can make 50 calls to the host and can print 32KB. The default time limit is 30 seconds.")
+	return i18n.D("tool.code_execution_mutating.description", "Run a short JavaScript program that can change files.\n\nThe program examines the workspace with read(path[,offset,limit]), grep(pattern[,path]), and glob(pattern[,path]). It changes the workspace with write(path, content[, mode]) and edit(path, edits). Use print(...) to return a result. The program runs inside a function body. Therefore return works as an early exit.\n\nUse this tool for a task that makes many small changes, when each change follows from what the program reads. For a task that only reads, use code_execution instead.\n\nThe program cannot run commands. The tool does not provide bash.\n\nEvery call goes through the usual permission gate. Each change asks for approval in the same way as a direct call.\n\nThe tool examines the program before it runs it, and it reports the calls that the program makes. The tool refuses a program that it cannot account for. Therefore call each function directly by its name. Do not use eval, do not reach the global object, and do not copy a function into a variable.\n\nThe program can make 50 calls to the host and can print 32KB. The default time limit is 30 seconds.")
 }
 
 func (t *CodeExecutionMutatingTool) Schema() json.RawMessage {
@@ -167,7 +167,7 @@ func (t *CodeExecutionMutatingTool) Preview(args json.RawMessage, maxLen int) st
 	if err := json.Unmarshal(args, &a); err != nil {
 		return ""
 	}
-	refs, aerr := jsengine.AnalyzeBindings("code_execution_mutating.js", a.Script, mutatingScriptBindings)
+	refs, aerr := jsengine.AnalyzeBindings("code_execution_mutating.js", scriptProgram(a.Script), mutatingScriptBindings)
 	if aerr != nil {
 		return ""
 	}
@@ -202,7 +202,7 @@ func (t *CodeExecutionMutatingTool) Execute(ctx context.Context, raw json.RawMes
 	//
 	// This applies even to a script that never calls write: the tool's
 	// reach is what is being accounted for, not any one run's luck.
-	refs, aerr := jsengine.AnalyzeBindings("code_execution_mutating.js", a.Script, mutatingScriptBindings)
+	refs, aerr := jsengine.AnalyzeBindings("code_execution_mutating.js", scriptProgram(a.Script), mutatingScriptBindings)
 	if aerr != nil {
 		return core.ToolResult{
 			Content: []provider.Content{provider.TextBlock{Text: fmt.Sprintf("%v", aerr)}},
@@ -229,7 +229,7 @@ func (t *CodeExecutionMutatingTool) Execute(ctx context.Context, raw json.RawMes
 	runCtx, cancel := context.WithTimeout(ctx, timeoutDur)
 	defer cancel()
 
-	res, err := jsengine.Run(runCtx, "code_execution_mutating.js", a.Script, jsengine.Options{
+	res, err := jsengine.Run(runCtx, "code_execution_mutating.js", scriptProgram(a.Script), jsengine.Options{
 		Bindings:      t.bindings(),
 		TypedBindings: t.typedBindings(),
 	})

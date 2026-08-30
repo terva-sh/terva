@@ -111,11 +111,14 @@ type readArgs struct {
 	Limit  int    `json:"limit,omitempty"`
 }
 
-const readSchema = `{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"required":["path"]}`
+const readSchema = `{"type":"object","properties":{"path":{"type":"string"},` +
+	`"offset":{"type":"integer","description":"The first line to read. The first line of the file is 1. Use offset with limit to read a large file in parts. When the tool cuts a result, it gives the offset to continue from."},` +
+	`"limit":{"type":"integer","description":"The maximum number of lines to read. The tool applies its own caps as well: one result holds at most 2000 lines and 50 KiB."}},` +
+	`"required":["path"]}`
 
 func (t *ReadTool) Name() string { return "read" }
 func (t *ReadTool) Description() string {
-	return i18n.D("tool.read.description", "Read a file from disk. Use this tool also to examine a local image. Give the path to a png, jpg, gif, or webp file. The tool returns the pixels of the image in your context, and a model with vision can see them.")
+	return i18n.D("tool.read.description", "Read a file from disk.\n\nOne result holds at most 2000 lines and 50 KiB. If the range is larger, the tool cuts the result, says so, and gives the offset of the next line. Use offset and limit to read the next part. To find one thing in a large file, use grep.\n\nUse this tool also to examine a local image. Give the path to a png, jpg, gif, or webp file. The tool returns the pixels of the image in your context, and a model with vision can see them.")
 }
 func (t *ReadTool) Schema() json.RawMessage { return json.RawMessage(readSchema) }
 
@@ -141,7 +144,7 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 
 	info, err := os.Stat(path)
 	if err != nil {
-		return core.ToolResult{}, err
+		return core.ToolResult{}, notFoundError(t.CWD, a.Path, shown, err)
 	}
 	if info.IsDir() {
 		return core.ToolResult{}, fmt.Errorf("%s is a directory", shown)
@@ -322,6 +325,39 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 
 	out := sb.String()
 
+	// A script cannot use a cut result, and cannot see that it got one.
+	//
+	// For a model-issued read the marker above is enough: the model reads the
+	// sentence and pages. A script gets the marker as the return value of
+	// read(), in the middle of the bytes it is about to parse. eval() of a cut
+	// program fails hundreds of lines later, JSON.parse of a cut document fails
+	// at the marker, and a script that merely counts something reports a
+	// confident wrong number. All three blame the file rather than the cap.
+	//
+	// The recorded case is F2 in
+	// docs/reviews/2026-08-29-local-model-harness-friction-review.md: 30 turns
+	// spent on a wrong theory ("read truncates each line at around 263
+	// characters") because nothing in the result named the real limit.
+	//
+	// So in script context truncation is an error, not a prefix. The script may
+	// still catch it, and the message carries the line to resume from, so a
+	// program that wants to page can do it without guessing.
+	if isScriptCall(ctx) && (truncBytes || truncLines || truncFile) {
+		return core.ToolResult{
+			Content: []provider.Content{provider.TextBlock{Text: scriptTruncationMessage(
+				shown, start+1, start+len(selected), len(lines), nextOffset,
+				truncBytes, truncLines, truncFile)}},
+			IsError: true,
+			Details: map[string]any{
+				"path":        path,
+				"start_line":  start + 1,
+				"total_lines": len(lines),
+				"next_offset": nextOffset,
+				"truncated":   true,
+			},
+		}, nil
+	}
+
 	// Read-dedup: if this exact (path, window) already returned these same
 	// bytes earlier in the current transcript epoch, the content is still in
 	// the model's context. Return a short stub instead of re-sending the
@@ -336,11 +372,23 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	// agent per chat) is not necessarily the caller — and keying dedup
 	// on another conversation's epoch would stub reads whose content
 	// the CALLING model no longer has.
+	//
+	// A script binding's read (isScriptCall) skips the whole block, both
+	// halves of it, and each half matters:
+	//
+	//   - the LOOKUP, because the stub is prose returned where the program
+	//     expects file bytes. The script parses the sentence, not the file,
+	//     and the premise it asserts — "the copy above is still current" —
+	//     names a copy the model never received.
+	//   - the RECORD, because a script read puts nothing in the transcript.
+	//     Recording it would let a LATER model-issued read of the same
+	//     window be stubbed against content the model has never seen, which
+	//     is the same bug pointed the other way.
 	var epoch transcriptEpocher = t.Epoch
 	if ag := core.AgentFromContext(ctx); ag != nil {
 		epoch = ag
 	}
-	if epoch != nil {
+	if epoch != nil && !isScriptCall(ctx) {
 		key := fmt.Sprintf("%s\x00%d\x00%d", path, a.Offset, a.Limit)
 		if t.dedupHit(epoch.TranscriptEpoch(), key, fnv64(out)) {
 			return core.ToolResult{
@@ -370,6 +418,36 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 			"next_offset":     nextOffset, // 0 when not truncated
 		},
 	}, nil
+}
+
+// scriptTruncationMessage explains a cut result to a program. A script cannot
+// see the marker the model reads, so the message has to carry three things: the
+// limit that applied, the range that did come back, and the line to resume
+// from. Without the third a script can only guess, and the recorded session
+// guessed for 30 turns.
+func scriptTruncationMessage(shown string, firstLine, lastLine, totalLines, nextOffset int, truncBytes, truncLines, truncFile bool) string {
+	var b strings.Builder
+	switch {
+	case truncBytes:
+		fmt.Fprintf(&b, "read %s: the result stops at the %d KiB limit. ", shown, maxReadBytes/1024)
+	case truncLines:
+		fmt.Fprintf(&b, "read %s: the result stops at the %d line limit. ", shown, maxReadLines)
+	default:
+		// The file is bigger than the tool loads at all, so the line numbers
+		// below describe the loaded head only. Do not report them as a total.
+		fmt.Fprintf(&b, "read %s: the file is larger than %d MiB. The tool did not load the end of it. ",
+			shown, maxReadFileBytes/(1024*1024))
+		b.WriteString("The result is a part of the file, not the file. ")
+		b.WriteString("Do not parse it as the whole file. To find one thing in a large file, call grep.")
+		return b.String()
+	}
+	fmt.Fprintf(&b, "It holds lines %d to %d of %d. ", firstLine, lastLine, totalLines)
+	b.WriteString("It is a part of the file, not the range you asked for. Do not parse it as the file. ")
+	if nextOffset > 0 {
+		fmt.Fprintf(&b, "To read the next part, call read(path, %d, limit). ", nextOffset)
+	}
+	b.WriteString("To find one thing in a large file, call grep.")
+	return b.String()
 }
 
 func resolvePath(cwd, p string) string {

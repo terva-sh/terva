@@ -29,9 +29,9 @@ type AskUserTool struct {
 // fields on askArgs are the same shape, kept so a model that emits the
 // original one-question form still works.
 type askQuestion struct {
-	Question string   `json:"question"`
-	Slug     string   `json:"slug,omitempty"`
-	Options  []string `json:"options,omitempty"`
+	Question string            `json:"question"`
+	Slug     string            `json:"slug,omitempty"`
+	Options  jsonArray[string] `json:"options,omitempty"`
 
 	MultiSelect bool `json:"multi_select,omitempty"`
 	// AllowCustom is a POINTER so nil ("the model did not say") stays
@@ -41,13 +41,13 @@ type askQuestion struct {
 }
 
 type askArgs struct {
-	Question string   `json:"question"`
-	Slug     string   `json:"slug,omitempty"`
-	Options  []string `json:"options,omitempty"`
+	Question string            `json:"question"`
+	Slug     string            `json:"slug,omitempty"`
+	Options  jsonArray[string] `json:"options,omitempty"`
 
-	MultiSelect bool          `json:"multi_select,omitempty"`
-	AllowCustom *bool         `json:"allow_custom,omitempty"`
-	Questions   []askQuestion `json:"questions,omitempty"`
+	MultiSelect bool                   `json:"multi_select,omitempty"`
+	AllowCustom *bool                  `json:"allow_custom,omitempty"`
+	Questions   jsonArray[askQuestion] `json:"questions,omitempty"`
 }
 
 // slugDesc is shared by both shapes so the two cannot drift into
@@ -116,7 +116,9 @@ func (t *AskUserTool) Schema() json.RawMessage { return json.RawMessage(askSchem
 func (t *AskUserTool) Execute(ctx context.Context, raw json.RawMessage, progress func(string)) (core.ToolResult, error) {
 	var a askArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return core.ToolResult{}, fmt.Errorf("invalid args: %w", err)
+		// Not fmt.Errorf("invalid args: %w") — that hands the model
+		// encoding/json's Go type names, which appear in no schema it was given.
+		return core.ToolResult{}, schemaArgsError(err)
 	}
 	qs, err := a.questions()
 	if err != nil {

@@ -281,11 +281,15 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		spill.Discard()
 	}
 	fmt.Fprintf(&sb, "  Took %s", humanDuration(elapsed))
-	if hint := matchExitHint(exitCode, a.Command); hint != "" {
+	hint := matchExitHint(exitCode, a.Command)
+	if hint != "" {
 		sb.WriteString("\n" + hint)
 	}
 
 	isErr := exitCode != 0 || ctx.Err() != nil || timedOut
+	if matchExitBenign(hint, trimmed, ctx.Err() != nil, timedOut) {
+		isErr = false
+	}
 	return core.ToolResult{
 		Content: []provider.Content{provider.TextBlock{Text: sb.String()}},
 		IsError: isErr,
@@ -431,6 +435,43 @@ func matchExitHint(exitCode int, command string) string {
 	return fmt.Sprintf("[hint] a pipeline's exit status is its LAST command's, and %s exits 1 when it finds no match — "+
 		"if the work before the pipe succeeded, read the output above rather than the exit code. "+
 		"To report the status you actually mean, end with an explicit check (e.g. `... ; echo \"failures: $(... | grep -c X)\"`).", name)
+}
+
+// matchExitBenign reports whether a non-zero exit is a match-style command
+// answering "found nothing" rather than a tool failure. When it is, bash leaves
+// IsError unset; the [exit 1] footer and the hint still print, so nothing is
+// hidden from a reader who wants the raw status.
+//
+// c369d6be added the hint for exactly this shape and deliberately left the flag
+// set, so the hint would explain the exit code rather than suppress it. Two
+// things changed after that. The hint alone did not carry: a later session on a
+// smaller model read the flag, ignored the prose, and abandoned three
+// successful probes. And IsError stopped being only what the model sees — it
+// now feeds the failed-call set in compaction and the stall detector's
+// productivity signal, so a green probe was registering as a failure inside the
+// very machinery that watches for repeated failure.
+//
+// A result that says "this is normal" in prose and "this failed" in a flag makes
+// the reader resolve the contradiction, and readers differ. The contradiction is
+// ours, so it is dropped here rather than argued in prose. Decision record
+// docs/decisions/0011-match-exit-is-not-a-tool-failure.md carries the argument.
+//
+// Narrow by construction, on four counts:
+//
+//   - hint non-empty already demands exit code exactly 1 and a final pipeline
+//     stage in matchExitCommands. Every member of that set reserves exit 2 for
+//     trouble, so a genuine error never reaches here by the commands' own
+//     design rather than by our guesswork.
+//   - output must carry something readable. A run with nothing to show for
+//     itself stays an error, because "found nothing and said nothing" is not
+//     evidence. Whitespace does not count: output here is the whole command's,
+//     not just the last stage's, so a stray blank line from an earlier
+//     statement must not be mistaken for a result worth reading.
+//   - a cancelled command is never softened.
+//   - a timed-out command is never softened. Both of those exit codes are the
+//     harness killing the process, not the command's own verdict.
+func matchExitBenign(hint, output string, canceled, timedOut bool) bool {
+	return hint != "" && strings.TrimSpace(output) != "" && !canceled && !timedOut
 }
 
 // lastPipelineCommand returns the command word of the final pipeline stage of

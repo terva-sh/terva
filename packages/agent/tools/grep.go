@@ -95,7 +95,7 @@ func (t *GrepTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 
 	root, isDir, err := resolveSearchRoot(t.CWD, a.Path)
 	if err != nil {
-		return core.ToolResult{}, err
+		return core.ToolResult{}, notFoundError(t.CWD, a.Path, t.Sandbox.DisplayPath(root, a.Path), err)
 	}
 	// Read-side check: also allows registered read-only roots.
 	if err := t.Sandbox.CheckPathRead(root); err != nil {

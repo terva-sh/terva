@@ -44,6 +44,13 @@ type Sandbox struct {
 	// secretRoots.
 	writableRoots []string
 
+	// ScratchDir is the writable root a refused write should NAME: the
+	// sanctioned place for a file that does not belong in the user's tree.
+	// Display only — the grant itself is an ordinary writableRoots entry, and
+	// setting this without AddWritableRoot advertises a path that is still
+	// jailed. The host sets both together (build.allowScratchWrites).
+	ScratchDir string
+
 	locked atomic.Bool
 }
 
@@ -292,7 +299,20 @@ func (s *Sandbox) checkUnder(path string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("jailed: cannot WRITE %q — it is outside the sandbox root %q (reading it is allowed; use /unjail to lift the write jail)", path, s.Root)
+	// Name the actor, and name the alternative. /unjail is a USER slash
+	// command the model cannot run, so a refusal that says "use /unjail"
+	// points the model at a door it has no hand for. It routes around the jail
+	// instead: in the session behind this change a refused write to /tmp came
+	// back one turn later as `cat > /tmp/... <<'PY'`, which is the same write
+	// with the review surface stripped off. The containment is deliberate —
+	// an out-of-root write SHOULD have to reach for bash, where the command
+	// classifier can see it — but the scratch case is not what that edge is
+	// for. Naming the scratch dir keeps the ordinary case a reviewable tool
+	// call and leaves the edge for writes that deserve it.
+	if s.ScratchDir != "" {
+		return fmt.Errorf("jailed: cannot WRITE %q — it is outside the sandbox root %q. Reading it is allowed. Put scratch files under %s. Ask the user to run /unjail if you need to write here", path, s.Root, s.ScratchDir)
+	}
+	return fmt.Errorf("jailed: cannot WRITE %q — it is outside the sandbox root %q. Reading it is allowed. Ask the user to run /unjail if you need to write here", path, s.Root)
 }
 
 // CheckCommand applies a lightweight sanity check to a bash command
@@ -340,7 +360,7 @@ func (s *Sandbox) checkCommandScope(cmd string) error {
 	lower := strings.ToLower(cmd)
 	for _, b := range banned {
 		if strings.Contains(lower, strings.ToLower(b)) {
-			return fmt.Errorf("jailed: command contains banned pattern %q (use /unjail to disable)", b)
+			return fmt.Errorf("jailed: command contains banned pattern %q (ask the user to run /unjail if this is intended)", b)
 		}
 	}
 	// The secret deny list applies here too. Enforcing it on `read` alone would
@@ -453,7 +473,7 @@ func checkDestructiveTarget(cmd string) error {
 		_ = force // force changes the prompt, not the blast radius
 		for _, t := range targets {
 			if isFilesystemRoot(t) {
-				return fmt.Errorf("jailed: refusing to delete the filesystem root %q recursively (use /unjail to disable)", t)
+				return fmt.Errorf("jailed: refusing to delete the filesystem root %q recursively (ask the user to run /unjail if this is intended)", t)
 			}
 		}
 	case name == "dd":
@@ -465,7 +485,7 @@ func checkDestructiveTarget(cmd string) error {
 			}
 			v = unquoteArg(v)
 			if isFilesystemRoot(v) || strings.HasPrefix(v, "/dev/") {
-				return fmt.Errorf("jailed: refusing a raw write to %q (use /unjail to disable)", v)
+				return fmt.Errorf("jailed: refusing a raw write to %q (ask the user to run /unjail if this is intended)", v)
 			}
 		}
 	}
@@ -621,7 +641,7 @@ func (s *Sandbox) checkCDTarget(dir string) error {
 	// inside root, letting a `cd /etc` escape slip through. Treat it as an
 	// unconditional escape attempt.
 	if strings.HasPrefix(expanded, "/") && !filepath.IsAbs(expanded) {
-		return fmt.Errorf("jailed: cd outside sandbox root is not allowed (use /unjail to disable)")
+		return fmt.Errorf("jailed: cd outside sandbox root is not allowed (ask the user to run /unjail if this is intended)")
 	}
 	if !filepath.IsAbs(expanded) {
 		// Relative targets (including `..`) resolve against the sandbox
@@ -633,7 +653,7 @@ func (s *Sandbox) checkCDTarget(dir string) error {
 		return fmt.Errorf("sandbox path: %w", err)
 	}
 	if !isUnder(rootAbs, target) {
-		return fmt.Errorf("jailed: cd outside sandbox root is not allowed (use /unjail to disable)")
+		return fmt.Errorf("jailed: cd outside sandbox root is not allowed (ask the user to run /unjail if this is intended)")
 	}
 	return nil
 }

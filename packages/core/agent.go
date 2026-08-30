@@ -3281,6 +3281,11 @@ func abortedToolResult(why string) ToolResult {
 
 func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, tools Registry, sink func(AgentEvent)) ToolResult {
 	ctx = ContextWithAgent(ctx, a)
+	// Name the call being executed, so a tool that calls back into the host can
+	// attribute those inner calls to it (stall_inner.go). The early returns below
+	// (cancelled, refused, unknown tool, unparseable args) dispatch nothing, so
+	// they make no inner calls and carry nothing to attribute.
+	ctx = contextWithOuterCall(ctx, tc.ID)
 	// A cancelled turn dispatches nothing further. Tools receive ctx, but a
 	// tool is not obliged to read it — write, edit, glob and grep never do,
 	// because for a filesystem call there is nothing to interrupt — so the

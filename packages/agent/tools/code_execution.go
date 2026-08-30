@@ -51,11 +51,11 @@ type codeExecArgs struct {
 	Timeout int    `json:"timeout,omitempty"`
 }
 
-const codeExecSchema = `{"type":"object","properties":{"script":{"type":"string","description":"A short JavaScript program. You can call read(path[,offset,limit]), grep(pattern[,path]), and glob(pattern[,path]). Each function returns the text output of the tool as a string. Use print(...) to return a result."},"timeout":{"type":"integer","description":"The maximum run time in seconds. The tool then stops the program. The default is 30 seconds, and the maximum is 120 seconds."}},"required":["script"]}`
+const codeExecSchema = `{"type":"object","properties":{"script":{"type":"string","description":"A short JavaScript program. You can call read(path[,offset,limit]), grep(pattern[,path]), and glob(pattern[,path]). Each function returns the text output of the tool as a string. Use print(...) to return a result. The program runs inside a function body. Therefore return works as an early exit.\n\nread gives at most 2000 lines and 50 KiB. A larger read throws. It does not give a part of the file. Pass offset and limit to read a large file in parts."},"timeout":{"type":"integer","description":"The maximum run time in seconds. The tool then stops the program. The default is 30 seconds, and the maximum is 120 seconds."}},"required":["script"]}`
 
 func (t *CodeExecutionTool) Name() string { return "code_execution" }
 func (t *CodeExecutionTool) Description() string {
-	return i18n.D("tool.code_execution.description", "Run a short JavaScript program. The program can call read(path[,offset,limit]), grep(pattern[,path]), and glob(pattern[,path]) as functions. Use print(...) to return a result.\n\nThe tool returns the printed output only. The results of the calls in the program do not enter your context. Therefore use this tool for a read-only task with many steps, when a large output gives a small answer. Examples are to count the matches, to extract one field, or to join the results from several files.\n\nThe program has no access to the file system, the network, require, or other globals. Each read, grep, and glob call obeys the usual permission gate. The program can make 50 calls to the host and can print 32KB. The default time limit is 30 seconds.")
+	return i18n.D("tool.code_execution.description", "Run a short JavaScript program. The program can call read(path[,offset,limit]), grep(pattern[,path]), and glob(pattern[,path]) as functions. Use print(...) to return a result. The program runs inside a function body. Therefore return works as an early exit.\n\nThe tool returns the printed output only. The results of the calls in the program do not enter your context. Therefore use this tool for a read-only task with many steps, when a large output gives a small answer. Examples are to count the matches, to extract one field, or to join the results from several files.\n\nThe program has no access to the file system, the network, require, or other globals. Each read, grep, and glob call obeys the usual permission gate. The program can make 50 calls to the host and can print 32KB. The default time limit is 30 seconds.\n\nOne read gives at most 2000 lines and 50 KiB. A larger read throws. The error gives the offset to continue from. The tool does not give a part of the file, because a program cannot see a cut result. Pass offset and limit to read a large file in parts. To find one thing in a large file, use grep.")
 }
 func (t *CodeExecutionTool) Schema() json.RawMessage { return json.RawMessage(codeExecSchema) }
 
@@ -92,7 +92,7 @@ func (t *CodeExecutionTool) Preview(args json.RawMessage, maxLen int) string {
 	if err := json.Unmarshal(args, &a); err != nil {
 		return ""
 	}
-	refs, aerr := jsengine.AnalyzeBindings("code_execution.js", a.Script, t.accountedNames())
+	refs, aerr := jsengine.AnalyzeBindings("code_execution.js", scriptProgram(a.Script), t.accountedNames())
 	if aerr != nil {
 		return ""
 	}
@@ -132,10 +132,28 @@ func dispatchHostTool(ctx context.Context, call hostCallFn, tool string, fields 
 	if err != nil {
 		return "", err
 	}
-	res, err := call(ctx, tool, raw)
+	// Mark the dispatch as script-originated. The result returns to the
+	// running program, never to the model's transcript, so a tool that
+	// elides output on the theory that the model still holds a copy must
+	// not do so here — see withScriptCall. Set at this single crossing so
+	// every binding (read-only, mutating, and disclosed) carries it.
+	res, err := call(withScriptCall(ctx), tool, raw)
+	// Attribute this inner call to the model-issued call that caused it. The
+	// model never sees this result — it sees only what the script prints — so
+	// without this the stuck-loop detector cannot see a loop that happens
+	// entirely inside a script. No-op unless the dispatch came from the agent
+	// loop with stall detection on (core.ReportInnerCall).
 	if err != nil {
+		// A dispatch that never ran — a denied gate, an unknown tool — is as
+		// much a stuck inner call as one that ran and failed, and is invisible
+		// in exactly the same way. Report it in the shape the classifier reads.
+		core.ReportInnerCall(ctx, tool, core.ToolResult{
+			Content: []provider.Content{provider.TextBlock{Text: err.Error()}},
+			IsError: true,
+		})
 		return "", err
 	}
+	core.ReportInnerCall(ctx, tool, res)
 	text := textFromContent(res.Content)
 	if res.IsError {
 		return "", fmt.Errorf("%s", strings.TrimSpace(text))
@@ -279,7 +297,7 @@ func (t *CodeExecutionTool) Execute(ctx context.Context, raw json.RawMessage, pr
 	// reach beyond read/grep/glob into the disclosed catalog. The account the
 	// approval prompt shows is only as good as the pre-check behind it, so a
 	// script the walker cannot read does not run.
-	refs, aerr := jsengine.AnalyzeBindings("code_execution.js", a.Script, t.accountedNames())
+	refs, aerr := jsengine.AnalyzeBindings("code_execution.js", scriptProgram(a.Script), t.accountedNames())
 	if aerr != nil {
 		return core.ToolResult{
 			Content: []provider.Content{provider.TextBlock{Text: fmt.Sprintf("%v", aerr)}},
@@ -301,7 +319,7 @@ func (t *CodeExecutionTool) Execute(ctx context.Context, raw json.RawMessage, pr
 	runCtx, cancel := context.WithTimeout(ctx, timeoutDur)
 	defer cancel()
 
-	res, err := jsengine.Run(runCtx, "code_execution.js", a.Script, jsengine.Options{
+	res, err := jsengine.Run(runCtx, "code_execution.js", scriptProgram(a.Script), jsengine.Options{
 		Bindings:      t.bindings(),
 		TypedBindings: t.typedBindings(),
 	})

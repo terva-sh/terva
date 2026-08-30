@@ -164,8 +164,16 @@ func TestBashFooterCarriesTheHint(t *testing.T) {
 	if !strings.Contains(got, "[hint]") {
 		t.Fatalf("hint missing from the result body:\n%s", got)
 	}
-	// Still an error — the exit code is real and the flag must not be softened.
-	if !res.IsError {
-		t.Fatal("the hint must explain the error, not suppress it")
+	// Reversed from c369d6be, which added this hint and deliberately kept the
+	// flag set so the hint would "explain the exit code rather than suppressing
+	// it." Explaining did not carry: a later session on a smaller model read the
+	// flag, ignored the prose, and abandoned three successful probes. IsError has
+	// also since become an input to compaction's failed-call set and the stall
+	// detector, so a green probe was counted as a failure by the machinery that
+	// watches for repeated failure. A result cannot say "this is normal" in prose
+	// and "this failed" in a flag and expect every reader to pick the same one.
+	// See docs/decisions/0011-match-exit-is-not-a-tool-failure.md.
+	if res.IsError {
+		t.Fatal("a match-exit pipeline that produced output must not be flagged as an error")
 	}
 }

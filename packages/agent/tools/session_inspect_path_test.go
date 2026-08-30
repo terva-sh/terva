@@ -142,8 +142,12 @@ func TestSessionInspectPathErrors(t *testing.T) {
 	cwd := testsupport.TempDir(t)
 	tool := &SessionInspectTool{TervaHome: home, CWD: cwd, Sandbox: NewSandbox(cwd)}
 
+	// A missing transcript now reports through the shared not-found
+	// diagnostic (notFoundError), so it names the condition rather than the
+	// old "cannot read" framing. The intent is unchanged and the assertion is
+	// narrower: it must say what went wrong, not fail parsing further down.
 	res := inspectByPath(t, tool, `{"path":`+jsonStr(filepath.Join(cwd, "nope.jsonl"))+`}`)
-	if !res.IsError || !strings.Contains(inspectText(t, res), "cannot read") {
+	if !res.IsError || !strings.Contains(inspectText(t, res), "no such file or directory") {
 		t.Errorf("a missing file should say so, got (err=%v): %q", res.IsError, inspectText(t, res))
 	}
 

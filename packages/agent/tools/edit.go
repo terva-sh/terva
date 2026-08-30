@@ -61,7 +61,7 @@ func (t *EditTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 
 	orig, err := os.ReadFile(path)
 	if err != nil {
-		return core.ToolResult{}, err
+		return core.ToolResult{}, notFoundError(t.CWD, a.Path, t.Sandbox.DisplayPath(path, a.Path), err)
 	}
 
 	// Detect BOM and line endings.
@@ -100,17 +100,31 @@ func (t *EditTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 			return core.ToolResult{}, fmt.Errorf("edit %d: oldText must not be empty", i+1)
 		}
 		if e.OldText == e.NewText {
+			// The raw strings can differ while the normalized ones match: one
+			// side carried \r\n where the other carried \n. To a model looking
+			// at two visibly different strings, the bare message reads as
+			// nonsense, so name the reason it is not.
+			if a.Edits[i].OldText != a.Edits[i].NewText {
+				return core.ToolResult{}, fmt.Errorf("edit %d: oldText equals newText after line-ending normalization; they differ only in carriage returns, so this edit would change nothing", i+1)
+			}
 			return core.ToolResult{}, fmt.Errorf("edit %d: oldText equals newText", i+1)
 		}
 		s, err := resolveSpans(body, e, i+1, a.Path)
 		if err != nil {
-			// The match failed. Whether the file MOVED since the model last saw
-			// it is the one thing the diagnostics above cannot derive from the
-			// bytes alone, and it changes what the model should do: re-copy the
-			// block (stale bytes, correct intent) rather than re-derive the edit
-			// (wrong intent). Appended, never substituted — the did-you-mean
-			// evidence is still the actionable part.
-			return core.ToolResult{}, fmt.Errorf("%w%s", err, t.stalenessNote(path, orig))
+			// The match failed. Two things the did-you-mean evidence cannot
+			// derive get appended, never substituted.
+			//
+			// A stray \r in oldText is invisible to the model and was already
+			// collapsed into \n before the matcher ever saw it, so the failure
+			// names a block that never existed. carriageReturnNote reads the RAW
+			// oldText, where the \r survive.
+			//
+			// Whether the file MOVED since the model last saw it changes what the
+			// model should do: re-copy the block (stale bytes, correct intent)
+			// rather than re-derive the edit (wrong intent).
+			return core.ToolResult{}, fmt.Errorf("%w%s%s", err,
+				carriageReturnNote(body, a.Edits[i].OldText),
+				t.stalenessNote(path, orig))
 		}
 		spans = append(spans, s...)
 	}

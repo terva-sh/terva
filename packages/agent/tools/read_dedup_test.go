@@ -21,7 +21,15 @@ func (f *fakeEpoch) TranscriptEpoch() uint64 { return f.n }
 
 func dedupRead(t *testing.T, tool *ReadTool, args map[string]any) core.ToolResult {
 	t.Helper()
-	res, err := tool.Execute(context.Background(), mustJSON(t, args), nil)
+	return dedupReadCtx(t, context.Background(), tool, args)
+}
+
+// dedupReadCtx is dedupRead with the dispatch context spelled out, so a
+// test can read as a script binding does (withScriptCall) rather than as
+// the model does.
+func dedupReadCtx(t *testing.T, ctx context.Context, tool *ReadTool, args map[string]any) core.ToolResult {
+	t.Helper()
+	res, err := tool.Execute(ctx, mustJSON(t, args), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,6 +172,89 @@ func TestReadDedupDifferentWindowReturnsFull(t *testing.T) {
 	}
 	if got := bodyText(t, res); got != "2\n3\n" {
 		t.Fatalf("windowed read wrong content: %q", got)
+	}
+}
+
+// TestReadDedupSkippedForScriptCalls: a read issued by a script binding is
+// never answered with a stub, however many times the script repeats it.
+// The stub is prose returned where the program expects file bytes, and the
+// context it claims to have saved was never spent: a script's results do
+// not enter the model's transcript at all.
+func TestReadDedupSkippedForScriptCalls(t *testing.T) {
+	dir := testsupport.TempDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "page.html"), []byte("<html>\nalpha\ngamma\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := &ReadTool{CWD: dir, Epoch: &fakeEpoch{}}
+	ctx := withScriptCall(context.Background())
+
+	for i := range 3 {
+		res := dedupReadCtx(t, ctx, tool, map[string]any{"path": "page.html"})
+		if isDedup(res) {
+			t.Fatalf("script read %d was dedup-stubbed; a script gets the stub as its read() return value", i+1)
+		}
+		if !strings.Contains(bodyText(t, res), "gamma") {
+			t.Fatalf("script read %d missing file content", i+1)
+		}
+	}
+}
+
+// TestReadDedupScriptCallAfterModelReadReturnsFull is the recorded failure
+// (docs/reviews/2026-08-29-local-model-harness-friction-review.md, F1): the
+// model reads a file into its context, then a code_execution script reads
+// the same file. Keyed only on (path, offset, limit), the dedup fired and
+// handed the script a sentence beginning "./page.html — unchanged since you
+// read it earlier this session", which the program then parsed as HTML.
+func TestReadDedupScriptCallAfterModelReadReturnsFull(t *testing.T) {
+	dir := testsupport.TempDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "page.html"), []byte("<html>\n<script>\nlet x=1;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := &ReadTool{CWD: dir, Epoch: &fakeEpoch{}}
+
+	// The model reads it conversationally: this is the copy the stub would
+	// later point at, and it is genuinely in the transcript.
+	if isDedup(dedupRead(t, tool, map[string]any{"path": "page.html"})) {
+		t.Fatal("precondition: the model's first read should be full content")
+	}
+
+	res := dedupReadCtx(t, withScriptCall(context.Background()), tool,
+		map[string]any{"path": "page.html"})
+	if isDedup(res) {
+		t.Fatal("the script's read was stubbed against the MODEL's transcript; the script never saw those bytes")
+	}
+	if body := bodyText(t, res); !strings.Contains(body, "<script>") {
+		t.Fatalf("script read must return the file, got %q", body)
+	}
+}
+
+// TestReadDedupScriptCallDoesNotPrimeTheStub is the same bug pointed the
+// other way, and it is why the script exemption skips the RECORD and not
+// only the lookup. A script read puts nothing in the transcript, so it must
+// not be able to make a later model-issued read stub against content the
+// model has never seen.
+func TestReadDedupScriptCallDoesNotPrimeTheStub(t *testing.T) {
+	dir := testsupport.TempDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("only copy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := &ReadTool{CWD: dir, Epoch: &fakeEpoch{}}
+
+	// A script reads it first. Nothing about this reaches the model.
+	_ = dedupReadCtx(t, withScriptCall(context.Background()), tool,
+		map[string]any{"path": "f.txt"})
+
+	res := dedupRead(t, tool, map[string]any{"path": "f.txt"})
+	if isDedup(res) {
+		t.Fatal("the model's FIRST read was stubbed against a script's read; the model has no copy to be pointed at")
+	}
+	if !strings.Contains(bodyText(t, res), "only copy") {
+		t.Fatal("the model's first read missing content")
+	}
+	// The model's own re-read still dedups: the exemption is scoped to the
+	// script dispatch, it does not disable the feature.
+	if !isDedup(dedupRead(t, tool, map[string]any{"path": "f.txt"})) {
+		t.Fatal("the model's re-read should still dedup")
 	}
 }
 

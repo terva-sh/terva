@@ -225,6 +225,12 @@ type stallTracker struct {
 	// whether a nudge trips — that stays a within-turn judgement (see record) — so
 	// a fresh turn still needs a real local pattern before anything fires.
 	carried map[string]int
+
+	// inner attributes the host calls a TOOL made on its own behalf to the
+	// model-issued call that caused them, so a loop that happens entirely
+	// inside a code_execution script is still visible to the churn axis.
+	// See stall_inner.go.
+	inner innerCalls
 }
 
 // stallEscalation is the tracker's internal signal that a loop has persisted past
@@ -334,6 +340,10 @@ func (t *stallTracker) reset() {
 	t.escalate = nil
 	t.escalated = false
 	t.declines = 0
+	// Attributions belong to the turn that made them. One still pending here is
+	// an inner call whose outer step was never observed — a cancelled turn, or a
+	// call refused before dispatch — and it has nothing left to attach to.
+	t.clearInner()
 	t.pardon()
 }
 
@@ -416,9 +426,21 @@ func (t *stallTracker) observe(call, result provider.Message) []stallEvent {
 func (t *stallTracker) record(tc provider.ToolCallBlock, tr provider.ToolResultBlock) (stallEvent, bool) {
 	dispKey := dispatchKey(tc)
 	step := stallStep{dispKey: dispKey, spinKey: dispKey + "\x00" + resultFingerprint(tr)}
+	// Drained unconditionally, even when the outer result classifies on its own:
+	// an attribution left behind would outlive the step it belonged to.
+	ic, hasInner := t.takeInner(tc.ID)
 	if class, detail, ok := unproductiveResult(tr); ok {
 		step.churnKey = tc.Name + "\x00" + class
 		step.detail = detail
+	} else if hasInner {
+		// The outer result looked productive, but the host calls the tool made
+		// on its own behalf did not (stall_inner.go). Key on the OUTER tool,
+		// because that is the call the model chose to make and the only one it
+		// can change, and on the INNER class, so two different scripts failing
+		// the same way churn together even though neither their arguments nor
+		// their printed output match.
+		step.churnKey = tc.Name + "\x00" + ic.class
+		step.detail = innerDetail(ic)
 	}
 	t.steps = append(t.steps, step)
 	if len(t.steps) > stallWindow {
