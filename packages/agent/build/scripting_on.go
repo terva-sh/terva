@@ -68,9 +68,11 @@ func init() {
 // its own preview and its own audit line.
 func wireScriptingHostCall(ag *core.Agent, gate *core.ConfirmGate) {
 	dispatch := scriptHostDispatcher(ag, gate)
+	catalog := scriptCatalog(ag)
 	if tool, ok := ag.LookupTool("code_execution"); ok {
 		if ce, ok := tool.(*tools.CodeExecutionTool); ok {
 			ce.HostCall = dispatch
+			ce.Catalog = catalog
 		}
 	}
 	if tool, ok := ag.LookupTool("code_execution_mutating"); ok {
@@ -78,6 +80,46 @@ func wireScriptingHostCall(ag *core.Agent, gate *core.ConfirmGate) {
 			cm.HostCall = dispatch
 		}
 	}
+}
+
+// scriptCatalog computes the session's disclosure catalog (§12.7) from the
+// agent: the curated meta/inspection builtins, plus every extension or MCP
+// tool the live ReadOnlySet classifies as read-only. Reading a.ReadOnly
+// rather than the static permissions map is the §12.5 trap avoided — the
+// ReadOnlySet is the same dynamic set the permission policy uses, kept
+// current by AdoptReadOnlySet as extensions and MCP servers merge their
+// read_only declarations.
+//
+// Only code_execution takes the catalog; the mutating tool's binding set is
+// already the only true mutating pair, so disclosure gains it nothing.
+func scriptCatalog(ag *core.Agent) *tools.DisclosureCatalog {
+	if ag == nil {
+		return nil
+	}
+	var entries []tools.CatalogEntry
+	for name, tool := range ag.Tools {
+		if tools.IsCuratedMetaBuiltin(name) {
+			entries = append(entries, tools.CatalogEntry{
+				Name:        name,
+				Description: tool.Description(),
+				Schema:      tool.Schema(),
+				Source:      "builtin",
+			})
+			continue
+		}
+		// The authority-matched half: a plugin tool the session's ReadOnlySet
+		// calls read-only. ToolGroup is CoreToolGroup for a builtin, so this
+		// admits only extension and MCP tools.
+		if core.ToolGroup(tool) != core.CoreToolGroup && ag.ReadOnly.Has(name) {
+			entries = append(entries, tools.CatalogEntry{
+				Name:        name,
+				Description: tool.Description(),
+				Schema:      tool.Schema(),
+				Source:      core.ToolGroup(tool),
+			})
+		}
+	}
+	return tools.NewDisclosureCatalog(entries)
 }
 
 // scriptHostDispatcher builds the gated crossing both scripting tools hold.

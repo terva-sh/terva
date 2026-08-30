@@ -130,6 +130,31 @@ func (w *refWalker) declare(name string) {
 	}
 }
 
+// callTarget accounts for the one binding whose authority hides in its
+// first argument: call(name, args) (§12.7). The tool name must be a string
+// literal so the account can name what will be called; anything else — a
+// computed name, a variable, an expression — is opaque for the same reason a
+// bash command string is (§12.4), and defeats the analysis.
+func (w *refWalker) callTarget(args []ast.Expression) {
+	if len(args) == 0 {
+		w.note("call() without a tool name cannot be accounted")
+		return
+	}
+	lit, ok := args[0].(*ast.StringLiteral)
+	if !ok {
+		w.note("call(name, …) with a computed name cannot be accounted; pass the tool name as a string literal")
+		return
+	}
+	name := string(lit.Value)
+	if !w.names[name] {
+		// A name outside the accounted set is like any other unknown
+		// identifier — the runtime will refuse it, and it is not this tool's
+		// reach to account for.
+		return
+	}
+	w.refs.Calls[name]++
+}
+
 func (w *refWalker) reference(id *ast.Identifier, called bool) {
 	name := string(id.Name)
 	if globalReach[name] {
@@ -312,6 +337,9 @@ func (w *refWalker) walkExpression(e ast.Expression) {
 	case *ast.CallExpression:
 		if id := calleeIdentifier(n.Callee); id != nil {
 			w.reference(id, true)
+			if string(id.Name) == "call" {
+				w.callTarget(n.ArgumentList)
+			}
 		} else {
 			w.walkExpression(n.Callee)
 		}

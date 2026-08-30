@@ -135,6 +135,44 @@ language; the pre-check does not remove it, it declines to see through it and
 refuses to proceed on a guess. **An accounted plan is exhaustive; there is no
 such thing as a partially accounted run.**
 
+## The disclosure surface
+
+`code_execution` can discover more of the host than its three fixed bindings,
+and call a curated subset of it. Three verbs, all of which the pre-check
+accounts for like any other binding:
+
+- **`tools()`** lists what is disclosed this session: name, one-line
+  description, and provenance (a builtin, or which extension or MCP server
+  the tool came from). It runs in-engine — no host call, no approval prompt.
+- **`describe(name)`** returns one tool's real JSON Schema, so a script
+  learns the argument shape rather than guessing it. Also in-engine.
+- **`call(name, args)`** invokes a disclosed tool. The name **must be a
+  string literal** — `call("session_inspect", {expand: 1})`, never
+  `call(someVariable, …)`. The literal is what keeps the pre-check load-
+  bearing: the walker reads exactly which tools the script will reach, and
+  the approval prompt shows the plan ("session_inspect x2, read x5") before
+  anything runs. A computed name is refused before the engine starts, for
+  the same reason `bash` is not in the binding set: the authority would hide
+  inside a value the walker cannot read.
+
+What is disclosed is deliberately narrow (proposal §12.7): the fixed
+meta/inspection builtins (`session_inspect`, `session_search`,
+`terva_status`, `task_list`, `skill`) plus any extension or MCP tool the
+session classifies as read-only. Tools that only write terva's own state
+under `$TERVA_HOME` (the task writers, `memory`, `share_file`,
+`deliver_result`) classify as read-only for plan mode but are **not**
+disclosed — a script's reach is bounded by what it is worth letting a script
+do, not by a technicality of the classification. Nothing mutating is ever
+disclosed, so `code_execution` keeps its read-only classification and its
+plan-mode survival unconditionally, and `code_execution_mutating` gains
+nothing from the surface: its fixed bindings already are the mutating pair.
+
+The catalog is a snapshot of the session's registry at wiring time, so it
+reflects what is actually installed rather than a compiled-in promise. Every
+`call()` goes through the same approval gate and audit line as a
+model-issued call; the disclosure changes *discoverability*, never
+authority.
+
 ## The script environment
 
 Scripts run **in-process** on a pure-Go JavaScript engine
@@ -150,10 +188,11 @@ environment is deliberately bare:
 - **Standard JavaScript built-ins** (`JSON`, `Math`, `String`, `RegExp`,
   `Promise`, `Proxy`, `Symbol`, `eval`, …) are available — the engine's own
   globals, unmodified.
-- **No host capability beyond the three functions above.** No filesystem or
-  network objects, no `require`/`import`, no environment access, no
-  subprocess, and no timers (`setTimeout` does not exist). The three host
-  functions are the entire capability surface — but note that "bare" here
+- **No host capability beyond the functions above plus the disclosure
+  surface** ([above](#the-disclosure-surface)). No filesystem or network
+  objects, no `require`/`import`, no environment access, no subprocess, and
+  no timers (`setTimeout` does not exist). The host functions are the entire
+  capability surface — but note that "bare" here
   means *no ambient authority*, not a reduced language: the standard library
   is whole, `eval` included. That is harmless because the sandbox's threat
   model is the session's own model, not hostile third-party code (see the

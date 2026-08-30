@@ -197,3 +197,81 @@ func textFromResult(res core.ToolResult) string {
 	}
 	return b.String()
 }
+
+// namedTool is a minimal core builtin fake: no ToolGroupName and no
+// Extension() accessor, so ToolGroup classifies it CoreToolGroup.
+type namedTool struct{ name string }
+
+func (n namedTool) Name() string            { return n.name }
+func (n namedTool) Description() string     { return "fake " + n.name }
+func (n namedTool) Schema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (n namedTool) Execute(context.Context, json.RawMessage, func(string)) (core.ToolResult, error) {
+	return core.ToolResult{}, nil
+}
+
+// extTool is a plugin fake: its Extension() accessor marks provenance, so
+// ToolGroup returns the source rather than CoreToolGroup — the same
+// classification a real extension or MCP tool carries.
+type extTool struct {
+	namedTool
+	source string
+}
+
+func (e extTool) Extension() string { return e.source }
+
+// The disclosed catalog is a curated subset (§12.7), and the boundary is the
+// part worth pinning: the fixed meta builtins are in, read-only plugins are
+// in with their provenance, and everything else — the $TERVA_HOME writers
+// that classify read-only, mutating plugins, the scripting tools themselves —
+// stays out.
+func TestScriptingCatalogWiringAndExtent(t *testing.T) {
+	ce := &tools.CodeExecutionTool{}
+	cm := &tools.CodeExecutionMutatingTool{}
+	ag := &core.Agent{
+		Tools: core.Registry{
+			"code_execution":          ce,
+			"code_execution_mutating": cm,
+			"session_inspect":         namedTool{name: "session_inspect"},                  // curated builtin
+			"memory":                  namedTool{name: "memory"},                           // read-only but writes $TERVA_HOME — excluded
+			"search_docs":             extTool{namedTool{name: "search_docs"}, "ext:docs"}, // read-only plugin
+			"mutate_docs":             extTool{namedTool{name: "mutate_docs"}, "ext:docs"}, // mutating plugin
+		},
+		ReadOnly: core.NewReadOnlySet("memory", "search_docs"),
+	}
+	WireHostToolDispatcher(ag, nil, nil)
+
+	if ce.Catalog == nil {
+		t.Fatal("catalog not late-bound for code_execution")
+	}
+	for _, want := range []string{"session_inspect", "search_docs"} {
+		if !ce.Catalog.MayCall(want) {
+			t.Errorf("catalog must disclose %q", want)
+		}
+	}
+	for _, ban := range []string{"memory", "mutate_docs", "code_execution", "code_execution_mutating", "write", "bash"} {
+		if ce.Catalog.MayCall(ban) {
+			t.Errorf("catalog must NOT disclose %q", ban)
+		}
+	}
+	if e, err := ce.Catalog.Describe("search_docs"); err != nil || e.Source != "ext:docs" {
+		t.Errorf("a disclosed plugin keeps its provenance, got source=%q err=%v", e.Source, err)
+	}
+}
+
+// A curated builtin that is absent from this session's registry does not
+// appear in the catalog — the listing reflects the live registry, not a
+// compiled-in promise.
+func TestScriptingCatalogReflectsTheLiveRegistry(t *testing.T) {
+	ce := &tools.CodeExecutionTool{}
+	ag := &core.Agent{
+		Tools:    core.Registry{"code_execution": ce},
+		ReadOnly: core.NewReadOnlySet(),
+	}
+	WireHostToolDispatcher(ag, nil, nil)
+	if ce.Catalog == nil {
+		t.Fatal("catalog not late-bound")
+	}
+	if ce.Catalog.MayCall("session_inspect") {
+		t.Error("session_inspect is not in this registry, so it must not be disclosed")
+	}
+}

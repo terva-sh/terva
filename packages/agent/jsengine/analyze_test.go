@@ -141,6 +141,59 @@ func TestAnalyzeEvasionDefeatsTheAnalysis(t *testing.T) {
 	}
 }
 
+func TestAnalyzeCallTargetWithLiteralName(t *testing.T) {
+	// call(name, …) names its tool in a string literal, so the account can
+	// see through it: the target counts as its own call, and `call` itself
+	// counts as a dispatch site.
+	names := []string{"read", "call", "session_inspect"}
+	refs, err := AnalyzeBindings("t.js", `call("session_inspect", {expand: 1}); call("read", {path: "f"})`, names)
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	wantComplete(t, refs)
+	if refs.Calls["session_inspect"] != 1 || refs.Calls["read"] != 1 {
+		t.Fatalf("calls = %v, want each literal target counted once", refs.Calls)
+	}
+	if refs.Calls["call"] != 2 {
+		t.Fatalf("calls = %v, want call counted per dispatch site", refs.Calls)
+	}
+}
+
+func TestAnalyzeCallTargetWithComputedNameDefeatsTheAccount(t *testing.T) {
+	names := []string{"read", "call", "session_inspect"}
+	cases := []struct {
+		name, src string
+	}{
+		{"concatenated", `call("session" + "_inspect", {})`},
+		{"variable", `const n = "session_inspect"; call(n, {})`},
+		{"missing", `call()`},
+		{"non-string", `call(42, {})`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			refs, err := AnalyzeBindings("t.js", tc.src, names)
+			if err != nil {
+				t.Fatalf("analyze: %v", err)
+			}
+			wantIncomplete(t, refs, "call")
+			if refs.Calls["session_inspect"] != 0 {
+				t.Fatalf("a computed name must not be attributed, calls = %v", refs.Calls)
+			}
+		})
+	}
+}
+
+func TestAnalyzeCallTargetOutsideTheAccountedSetIsIgnored(t *testing.T) {
+	// A literal naming a tool the walker was not asked to account for is
+	// like any other unknown identifier: the runtime refuses it, and it is
+	// not this analysis's reach to count.
+	refs := analyze(t, `call("bash", {command: "ls"})`)
+	wantComplete(t, refs)
+	if refs.Calls["bash"] != 0 {
+		t.Fatalf("calls = %v, want bash unaccounted here", refs.Calls)
+	}
+}
+
 func TestAnalyzeShadowingDefeatsTheAnalysis(t *testing.T) {
 	cases := []struct{ name, src string }{
 		{"const", `const read = () => 1; read("x")`},

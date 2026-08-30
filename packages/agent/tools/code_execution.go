@@ -38,6 +38,12 @@ type CodeExecutionTool struct {
 	// gate exist (build.WireHostToolDispatcher); Execute fails closed when
 	// unset.
 	HostCall func(ctx context.Context, tool string, args json.RawMessage) (core.ToolResult, error)
+
+	// Catalog is the session's disclosure catalog (§12.7): the tools a
+	// script may enumerate and call beyond its fixed bindings. Late-bound
+	// beside HostCall, where the agent's ReadOnlySet is in scope. Nil means
+	// the tools()/describe()/call() bindings fail closed.
+	Catalog *DisclosureCatalog
 }
 
 type codeExecArgs struct {
@@ -61,6 +67,19 @@ func (t *CodeExecutionTool) ToolGroupName() string { return "scripting" }
 // scriptReadOnlyBindings is the read-only binding set, in reporting order.
 var scriptReadOnlyBindings = []string{"read", "grep", "glob"}
 
+// accountedNames is the binding set the pre-check and the preview account
+// for: the fixed bindings, the disclosure verbs, and every tool the catalog
+// discloses this session. A catalog name must be in the set, or
+// call("session_inspect", …) walks as an unknown identifier and the account
+// reports clean while the script reaches a host tool — the failure the
+// disclosure exists to rule out.
+func (t *CodeExecutionTool) accountedNames() []string {
+	names := append([]string(nil), scriptReadOnlyBindings...)
+	names = append(names, "tools", "describe", "call")
+	names = append(names, t.Catalog.Names()...)
+	return names
+}
+
 // Preview contributes this tool's confirmation-prompt line via the optional
 // accessor core.ToolPreview reads. Where BuildPreview can only show the raw
 // script wrapped in JSON, the accounted binding plan is what an approver
@@ -73,12 +92,12 @@ func (t *CodeExecutionTool) Preview(args json.RawMessage, maxLen int) string {
 	if err := json.Unmarshal(args, &a); err != nil {
 		return ""
 	}
-	refs, aerr := jsengine.AnalyzeBindings("code_execution.js", a.Script, scriptReadOnlyBindings)
+	refs, aerr := jsengine.AnalyzeBindings("code_execution.js", a.Script, t.accountedNames())
 	if aerr != nil {
 		return ""
 	}
 	if refs.Complete {
-		return "accounted for: " + bindingPlanList(scriptReadOnlyBindings, refs)
+		return "accounted for: " + bindingPlanList(t.accountedNames(), refs)
 	}
 	return fmt.Sprintf("unaccountable (%s)", strings.Join(refs.Reasons, "; "))
 }
@@ -176,7 +195,20 @@ func intArg(s string) (int, error) {
 }
 
 func (t *CodeExecutionTool) bindings() map[string]jsengine.Binding {
-	return readOnlyScriptBindings(t.HostCall)
+	b := readOnlyScriptBindings(t.HostCall)
+	db, _ := disclosureBindings(t.Catalog, t.HostCall)
+	for name, fn := range db {
+		b[name] = fn
+	}
+	return b
+}
+
+// typedBindings returns the catalog's call() binding, the one disclosure
+// binding whose second argument is an object and cannot survive flattening
+// to strings.
+func (t *CodeExecutionTool) typedBindings() map[string]jsengine.TypedBinding {
+	_, tb := disclosureBindings(t.Catalog, t.HostCall)
+	return tb
 }
 
 // readOnlyScriptBindings is the read-only binding set. The mutating tool
@@ -241,6 +273,27 @@ func (t *CodeExecutionTool) Execute(ctx context.Context, raw json.RawMessage, pr
 		// have no permission path, so the tool must not run at all.
 		return core.ToolResult{}, fmt.Errorf("code_execution is not wired to the approval gate in this session")
 	}
+
+	// The pre-check runs BEFORE the engine, and it is a precondition here too
+	// — not because this tool writes files, but because call() now lets it
+	// reach beyond read/grep/glob into the disclosed catalog. The account the
+	// approval prompt shows is only as good as the pre-check behind it, so a
+	// script the walker cannot read does not run.
+	refs, aerr := jsengine.AnalyzeBindings("code_execution.js", a.Script, t.accountedNames())
+	if aerr != nil {
+		return core.ToolResult{
+			Content: []provider.Content{provider.TextBlock{Text: fmt.Sprintf("%v", aerr)}},
+			IsError: true,
+		}, nil
+	}
+	if !refs.Complete {
+		return core.ToolResult{
+			Content: []provider.Content{provider.TextBlock{Text: unaccountableMessage(refs)}},
+			IsError: true,
+			Details: map[string]any{"accounted": false, "reasons": refs.Reasons},
+		}, nil
+	}
+
 	timeoutDur := defaultCodeExecTimeout
 	if a.Timeout > 0 {
 		timeoutDur = min(time.Duration(a.Timeout)*time.Second, maxCodeExecTimeout)
@@ -249,7 +302,8 @@ func (t *CodeExecutionTool) Execute(ctx context.Context, raw json.RawMessage, pr
 	defer cancel()
 
 	res, err := jsengine.Run(runCtx, "code_execution.js", a.Script, jsengine.Options{
-		Bindings: t.bindings(),
+		Bindings:      t.bindings(),
+		TypedBindings: t.typedBindings(),
 	})
 	details := map[string]any{
 		"host_calls": res.HostCalls,
