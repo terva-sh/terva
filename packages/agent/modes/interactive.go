@@ -488,6 +488,11 @@ type Interactive struct {
 	// through runOnMain).
 	rend *tui.Renderer
 
+	// lastProgressBusy is the busy state last announced to the terminal as an
+	// OSC 9;4 progress indicator. Main-loop-only like rend, and read/written
+	// only by emitProgress, which redraw drives.
+	lastProgressBusy bool
+
 	// Terminal teardown state: restoreRaw leaves raw mode (from EnterRaw);
 	// teardownOnce makes teardownTerminal safe to reach from both Run's exit
 	// defer and the self-restart pre-exec hook; shuttingDown stops new
@@ -1225,7 +1230,12 @@ func (i *Interactive) teardownTerminal() {
 		if i.rend != nil {
 			i.rend.TeardownLog()
 		}
-		_, _ = i.cfg.Terminal.Write([]byte(tui.SeqSaveCursor + tui.SeqResetScrollRegion + tui.SeqRestoreCursor + tui.SeqDeleteKittyImages + tui.SeqEnhancedKeyboardOff + tui.SeqBracketedPasteOff + tui.SeqShowCursor))
+		// ProgressIdle unconditionally, not only when a turn was in flight: the
+		// progress indicator is terminal state that outlives the process, so a
+		// terva killed mid-turn would otherwise leave a busy bar on the tab
+		// forever. Clearing one that was never set is a no-op, and the helper
+		// returns "" when the feature is off.
+		_, _ = i.cfg.Terminal.Write([]byte(tui.SeqSaveCursor + tui.SeqResetScrollRegion + tui.SeqRestoreCursor + tui.SeqDeleteKittyImages + tui.SeqEnhancedKeyboardOff + tui.SeqBracketedPasteOff + tui.SeqShowCursor + tui.ProgressIdle()))
 		if i.restoreRaw != nil {
 			_ = i.restoreRaw()
 		}
@@ -1327,6 +1337,12 @@ func (i *Interactive) Run(ctx context.Context) error {
 	// wraps is neither clickable nor cleanly copyable. OSC 8 carries the
 	// target out of band, which makes the wrap irrelevant to the click.
 	tui.SetHyperlinks(tui.DetectHyperlinkSupport())
+
+	// OSC 9;4 progress, on the same once-at-startup terms and for the same
+	// reason. Off unless the terminal is known to implement it (or the user
+	// forced it on), because an unrecognised terminal may read a bare OSC 9
+	// as iTerm2's notification extension — see packages/tui/progress.go.
+	tui.SetProgress(tui.DetectProgressSupport())
 
 	// Enabling mouse reporting steals click-drag selection from the
 	// host terminal (VS Code, Ghostty, iTerm). The user prefers native

@@ -501,6 +501,22 @@ Override with `TERVA_REDRAW_FPS`:
 
 When the variable is set, terva prints a one-line `note:` at startup so the value shows up in a bug report. Profiling builds (`-tags terva_pprof`; see [profiling.md](profiling.md)) default to **uncapped** so a CPU profile shows every redundant draw — set `TERVA_REDRAW_FPS` there to study the capped behaviour.
 
+## Busy signal (`TERVA_PROGRESS`)
+
+While a turn is in flight terva can tell the terminal it is working, using the **OSC 9;4** progress sequence (a ConEmu extension, since adopted by Windows Terminal and WezTerm). Terminals that implement it show an indeterminate progress indicator on the tab or taskbar — so a terva working in a background window says so without being looked at.
+
+Exactly two sequences are emitted per turn: one when it goes busy, one when it goes idle. The indicator is also cleared on exit, so a terva killed mid-turn cannot leave a stuck progress bar on the tab behind it.
+
+| Value | Effect |
+|---|---|
+| unset (default) | Auto-detect: on for ConEmu, Windows Terminal, and WezTerm. Off everywhere else. |
+| `on` | Always emit. |
+| `off` | Never emit. |
+
+The auto-detect allowlist is deliberately short, because an unrecognised terminal is not a safe bet here the way it is for the OSC 8 hyperlinks above. A bare `OSC 9` — without the `;4` — is iTerm2's "post a desktop notification" extension, so a terminal implementing *that* but not the progress sub-parameter would pop a toast reading `4;3;0` on every single turn instead of harmlessly ignoring the sequence. iTerm2 and Ghostty are therefore left out of the sniff; set `TERVA_PROGRESS=on` if yours handles it. Multiplexers (tmux, screen) are excluded too, since they do not forward the sequence to the outer terminal anyway.
+
+Because the sequence is fixed and carries no theme data, it is also the reliable way to find "when was the agent actually working?" in a terminal recording — see [recording.md](recording.md).
+
 ## Queued messages
 
 You can keep typing while the agent is working. Pressing `enter` during a turn queues the message instead of interrupting: it shows up above the status bar as `sliding in: <text>` and is delivered as the next user turn the moment the current one finishes. Queue as many as you want; they run in order. `esc` cancels the active turn and drops the queue so a runaway turn doesn't flood you with stale follow-ups; `ctrl+c` while busy arms the exit hint instead of interrupting, a second `ctrl+c` within two seconds exits terva.

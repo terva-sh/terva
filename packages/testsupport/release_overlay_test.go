@@ -75,6 +75,7 @@ var docsThatShip = []string{
 	"docs/profiling.md",
 	"docs/providers.md",
 	"docs/raati.md",
+	"docs/recording.md",
 	"docs/resource-limits.md",
 	"docs/rpc.md",
 	"docs/scripting.md",

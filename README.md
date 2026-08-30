@@ -154,6 +154,7 @@ The reference guides:
 | [docs/hooks.md](docs/hooks.md) | Pre/post tool-use hooks: veto, rewrite, or observe tool calls with your own scripts |
 | [docs/mcp.md](docs/mcp.md) | Attaching MCP servers as tool providers (stdio, namespaced, permission-gated) |
 | [docs/tui.md](docs/tui.md) | The terminal UI: slash commands, sessions, inline images, message queueing, key bindings |
+| [docs/recording.md](docs/recording.md) | Recording a TUI session with asciinema: keeping the capture small, the OSC 9;4 busy signal, and secrets |
 | [docs/web.md](docs/web.md) | The web control panel (`terva web`): serving it, the panes, and how it drives the same core |
 | [docs/models.md](docs/models.md) | Picking models, fallback/rescue, custom catalogs, per-provider notes (Kimi, DeepSeek, Gemini, ollama, OpenAI-compatible) |
 | [docs/providers.md](docs/providers.md) | Login flows, endpoints, `models.json` reference, capability tags |

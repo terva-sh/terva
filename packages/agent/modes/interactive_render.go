@@ -847,6 +847,40 @@ func (i *Interactive) redraw() {
 	}
 	_ = visibleChat // maintained for legacy scroll state/indicators; DrawLog owns chat viewport.
 	i.rend.DrawLog(chat, bottom, cursorRow, cursorCol)
+	// After the frame, never before: the write goes to the same terminal the
+	// renderer just wrote, on this goroutine, so ordering it here keeps the
+	// escape out of the middle of a painted frame.
+	i.emitProgress(ts.busy)
+}
+
+// emitProgress announces terva's busy state to the terminal as an OSC 9;4
+// progress indicator, writing only when the state actually changed.
+//
+// Edge-triggered, for two reasons. The sequence sets terminal state that
+// persists until it is changed, so re-asserting it on every frame would put
+// up to 30 identical escapes a second on the wire for no effect. And in a
+// terminal recording that repetition would destroy the signal's whole value:
+// one event per transition is what lets tooling answer "when was the agent
+// working?" by grepping a cast file, instead of hunting theme-dependent
+// spinner glyphs (see packages/tui/progress.go).
+//
+// Called from redraw, so it inherits redraw's main-loop-only guarantee and
+// needs no lock of its own for lastProgressBusy. The busy flag comes from the
+// caller's single per-frame engine snapshot, so it cannot disagree with the
+// frame that was just painted.
+func (i *Interactive) emitProgress(busy bool) {
+	if busy == i.lastProgressBusy {
+		return
+	}
+	i.lastProgressBusy = busy
+	seq := tui.ProgressIdle()
+	if busy {
+		seq = tui.ProgressBusy()
+	}
+	if seq == "" {
+		return // progress reporting is off for this terminal
+	}
+	_, _ = i.cfg.Terminal.Write([]byte(seq))
 }
 
 func hasImageEscape(line string) bool {

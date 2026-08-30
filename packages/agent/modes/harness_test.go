@@ -58,6 +58,13 @@ func startInteractive(t *testing.T, mutate func(*InteractiveConfig)) *harness {
 	t.Setenv("TERVA_HYPERLINKS", "off")
 	prevHyperlinks := tui.HyperlinksEnabled()
 	t.Cleanup(func() { tui.SetHyperlinks(prevHyperlinks) })
+	// Same treatment for OSC 9;4 progress, and for the same reason: Run()
+	// stores the sniff process-wide, so an unpinned harness would leak the
+	// host terminal's answer into every later test in this binary. Tests that
+	// want the sequences turn them on themselves.
+	t.Setenv("TERVA_PROGRESS", "off")
+	prevProgress := tui.ProgressEnabled()
+	t.Cleanup(func() { tui.SetProgress(prevProgress) })
 	noImages := false
 	term := tuitest.NewFakeTerm(80, 24)
 	cfg := InteractiveConfig{

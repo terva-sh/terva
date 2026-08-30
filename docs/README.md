@@ -35,6 +35,7 @@ the field have learned about this category, generalized and evidence-graded.
 |---|---|
 | [cli.md](cli.md) | CLI reference — subcommands, flags, run modes |
 | [tui.md](tui.md) | The interactive terminal UI |
+| [recording.md](recording.md) | Recording a TUI session: shrinking the capture, the busy signal, secrets |
 | [web.md](web.md) | `terva web` — the browser control panel |
 | [models.md](models.md) | Models & providers in practice |
 | [personas.md](personas.md) | Personas and crews |
