@@ -126,7 +126,7 @@ func (d *PermissionsDialog) revokeCurrent() permissionsAction {
 
 func grantLabel(g PermGrant) string {
 	if g.AllowAll {
-		return `yes, always — every tool runs unprompted this session`
+		return i18n.T("yes, always — every tool runs unprompted this session")
 	}
 	return g.Tool
 }
@@ -159,7 +159,7 @@ func (d *PermissionsDialog) Render(th tui.Theme, width int) []string {
 		}
 	}
 
-	title := "permissions (esc to close)"
+	title := i18n.T("permissions (esc to close)")
 	if len(d.grants) > 0 {
 		title = i18n.T("permissions (r/del revoke · R clear all · esc close)")
 	}

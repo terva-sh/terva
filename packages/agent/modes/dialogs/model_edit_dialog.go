@@ -87,11 +87,13 @@ func (d *ModelEditDialog) Open(m provider.Model, existing provider.UserModel, ha
 	d.existing = existing
 	d.status = ""
 
+	// TC, not T: "on"/"off" here are capability flags, a different sense from
+	// the extensions dialog's service column, so they get their own context.
 	onOff := func(b bool) string {
 		if b {
-			return "on"
+			return i18n.TC("capability state", "on")
 		}
-		return "off"
+		return i18n.TC("capability state", "off")
 	}
 
 	// Scalar fields come from the shared registry, so a new scalar parameter
@@ -113,13 +115,13 @@ func (d *ModelEditDialog) Open(m provider.Model, existing provider.UserModel, ha
 	}
 	d.fields = append(d.fields,
 		editField{
-			key: "reasoning", label: "reasoning", kind: fieldBool,
+			key: "reasoning", label: i18n.T("reasoning"), kind: fieldBool,
 			set:     hasExisting && existing.Reasoning != nil,
 			on:      existing.Reasoning != nil && *existing.Reasoning,
 			inherit: onOff(m.Has(provider.CapReasoning)),
 		},
 		editField{
-			key: "imageInput", label: "image input", kind: fieldBool,
+			key: "imageInput", label: i18n.T("image input"), kind: fieldBool,
 			set:     hasExisting && capKeySet(existing.Capabilities, "image-input"),
 			on:      hasExisting && existing.Capabilities["image-input"],
 			inherit: onOff(m.Has(provider.CapImageInput)),
@@ -368,15 +370,15 @@ func (d *ModelEditDialog) Render(th tui.Theme, width int) []string {
 func (d *ModelEditDialog) fieldDisplay(f editField) string {
 	if f.kind == fieldBool {
 		if !f.set {
-			return "inherit (" + f.inherit + ")"
+			return i18n.T("inherit (%s)", f.inherit)
 		}
 		if f.on {
-			return "on"
+			return i18n.TC("capability state", "on")
 		}
-		return "off"
+		return i18n.TC("capability state", "off")
 	}
 	if f.value == "" {
-		return "inherit (" + f.inherit + ")"
+		return i18n.T("inherit (%s)", f.inherit)
 	}
 	return f.value
 }

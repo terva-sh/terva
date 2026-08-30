@@ -199,6 +199,21 @@ func TestPolicyReachesTheSystemPrompt(t *testing.T) {
 	}
 }
 
+// The system prompt is overridable through the prompts catalog
+// (i18n.P("classifier.system")), and five of its tokens are parsed rather than
+// read: the JSON field names and the three verdict words. Losing one costs no
+// test and no error message, because Classify then abstains on every call and
+// an abstention is indistinguishable from a screener that simply had no
+// opinion. This guards the shipped English; an operator overlay is on its own.
+func TestSystemPromptKeepsTheTokensClassifyParses(t *testing.T) {
+	for _, tok := range []string{"decision", "reason", "allow", "deny", "ask"} {
+		if !strings.Contains(systemPrompt, tok) {
+			t.Errorf("system prompt no longer names %q, so the model is never told to emit it "+
+				"and every verdict abstains silently", tok)
+		}
+	}
+}
+
 // Malformed args must still render something judgeable rather than asking the
 // model to rule on an empty call.
 func TestRenderCallSurvivesUnparseableArgs(t *testing.T) {

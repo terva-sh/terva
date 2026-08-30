@@ -14,6 +14,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/extdriver"
 	"terva.sh/terva/packages/agent/extensions"
+	"terva.sh/terva/packages/i18n"
 )
 
 // extDoctorStaticRow is what a read-only manifest scan can tell about one
@@ -185,7 +186,9 @@ func printExtDoctorRow(w io.Writer, row extDoctorStaticRow, diag extdriver.Exten
 	// forward on first use (memory.Adopt, and the same shape for git-worktree).
 	// Pinned by TestExtRemoveLeavesExtensionDataBehind so this stays true.
 	if why := extensions.Superseded(row.Name); why != "" {
-		fmt.Fprintf(w, "  note: %s\n", why)
+		// Superseded returns the i18n.M-marked English; this is the render
+		// site, so it is the place that translates.
+		fmt.Fprintf(w, "  note: %s\n", i18n.T(why))
 		fmt.Fprintf(w, "  your data is kept: removing the extension does not touch %s, which terva promotes on first use\n",
 			filepath.Join("ext-data", row.Name))
 		return

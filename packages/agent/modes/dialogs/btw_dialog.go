@@ -283,7 +283,7 @@ func (d *BtwDialog) Render(th tui.Theme, width int) []string {
 	}
 
 	var out []string
-	out = append(out, FrameHeaderColor(th, "btw - side chat (esc closes; nothing is added to the main thread)", width, th.Accent))
+	out = append(out, FrameHeaderColor(th, i18n.T("btw - side chat (esc closes; nothing is added to the main thread)"), width, th.Accent))
 
 	if len(d.turns) == 0 && !d.loading {
 		out = append(out, "  "+th.FG256(th.Muted, i18n.T("ask anything; replies stay private to this side chat.")))

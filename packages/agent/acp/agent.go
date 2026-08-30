@@ -639,11 +639,13 @@ func (s *agentServer) bindSession(id, cwd string, sa SessionAgent, confirmer *ac
 			// waiting. Say so — a dropped transcript tail is exactly the
 			// silence this interlock exists to end.
 			//
-			// A plain literal, not i18n.T, matching every other user-facing
-			// string in this package. This one CANNOT be translated even if it
-			// were marked: terva-i18n-lint parses the tree without terva_acp,
-			// so a T() here never reaches the catalogue and would read as
-			// coverage the string does not have.
+			// A plain literal, matching every other user-facing string in this
+			// package. That is a gap nobody has closed, not a constraint: an
+			// earlier note here claimed a T() could never reach the catalogue
+			// under terva_acp, and that is wrong. terva-i18n-lint walks the tree
+			// with parser.ParseFile, which reads source text and never evaluates
+			// //go:build, so a tag-gated file extracts like any other.
+			// permission.go in this package is wrapped and proves it.
 			sess.emit(map[string]any{
 				"sessionUpdate": UpdateAgentMessageChunk,
 				"content": textContentBlock(fmt.Sprintf(

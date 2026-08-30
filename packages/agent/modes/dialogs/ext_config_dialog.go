@@ -270,9 +270,9 @@ func (d *ExtConfigDialog) fieldDisplay(f ConfigField) string {
 	default:
 		if v == "" {
 			if f.Default != "" {
-				return "(default: " + f.Default + ")"
+				return i18n.T("(default: %s)", f.Default)
 			}
-			return "(unset)"
+			return i18n.T("(unset)")
 		}
 		return v
 	}

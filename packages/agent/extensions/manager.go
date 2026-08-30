@@ -19,7 +19,6 @@ package extensions
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,6 +29,7 @@ import (
 	"terva.sh/terva/packages/agent/extdriver"
 	"terva.sh/terva/packages/agent/extproto"
 	"terva.sh/terva/packages/envcompat"
+	"terva.sh/terva/packages/i18n"
 )
 
 // Re-exported driver types so existing callers (cli.go, rpc, acp,
@@ -380,10 +380,10 @@ func (m *Manager) searchDirs() []string {
 // (TestExtensionsDependencyBoundary), so a lockstep test pins them instead.
 func reservedExtensionName(name string) string {
 	if name == "core" {
-		return "it names the always-visible built-in tool group"
+		return i18n.T("it names the always-visible built-in tool group")
 	}
 	if strings.HasPrefix(name, "mcp:") {
-		return `the "mcp:" prefix names MCP server tool groups`
+		return i18n.T(`the "mcp:" prefix names MCP server tool groups`)
 	}
 	return ""
 }
@@ -415,6 +415,12 @@ func (m *Manager) loadOne(ctx context.Context, dir string, explicit bool) error 
 	manifestPath := filepath.Join(dir, "extension.json")
 	raw, err := os.ReadFile(manifestPath)
 	if err != nil {
+		// English on purpose, both here and below: these are internal
+		// operation wraps in the sense docs/localization.md means, the same
+		// shape as its "open session: %v" example. What the operator acts on
+		// is the wrapped os/json error, which has no translation either way.
+		// The validation errors further down ARE translated: those are
+		// complete sentences telling a person what to fix in their manifest.
 		return fmt.Errorf("read manifest: %w", err)
 	}
 	var mf Manifest
@@ -422,7 +428,7 @@ func (m *Manager) loadOne(ctx context.Context, dir string, explicit bool) error 
 		return fmt.Errorf("parse manifest: %w", err)
 	}
 	if mf.Name == "" {
-		return errors.New("manifest: name is required")
+		return i18n.Errorf("manifest: name is required")
 	}
 	if !isPlainExtensionName(mf.Name) {
 		// The manifest name becomes a map key and is joined into the host's
@@ -430,14 +436,14 @@ func (m *Manager) loadOne(ctx context.Context, dir string, explicit bool) error 
 		// path separators, "."/"..", or an absolute path could make those
 		// host-created paths escape their intended directory, so reject it
 		// with the same plain-element rule adopt-list names must satisfy.
-		return fmt.Errorf("manifest: name %q must be a plain identifier (no path separators, %q, %q, or absolute paths)", mf.Name, ".", "..")
+		return i18n.Errorf("manifest: name %q must be a plain identifier (no path separators, %q, %q, or absolute paths)", mf.Name, ".", "..")
 	}
 	if why := reservedExtensionName(mf.Name); why != "" {
-		return fmt.Errorf("manifest: name %q is reserved: %s", mf.Name, why)
+		return i18n.Errorf("manifest: name %q is reserved: %s", mf.Name, why)
 	}
 	hasTheme := hasExtensionTheme(dir)
 	if mf.Exec == "" && !hasTheme {
-		return errors.New("manifest: exec is required")
+		return i18n.Errorf("manifest: exec is required")
 	}
 	if !mf.IsEnabled() {
 		// Quietly skip disabled extensions; terva ext list will show them.
@@ -446,7 +452,7 @@ func (m *Manager) loadOne(ctx context.Context, dir string, explicit bool) error 
 	if m.extensionLoadDisabled(mf.Name) {
 		// Disabled by user/project config (disable_extensions): never
 		// spawned, so its tools/commands/panels/context never appear.
-		fmt.Fprintf(os.Stderr, "extension %q not loaded (disabled by config)\n", mf.Name)
+		fmt.Fprintln(os.Stderr, i18n.T("extension %q not loaded (disabled by config)", mf.Name))
 		return nil
 	}
 	if why := supersededExtensions[mf.Name]; why != "" {
@@ -455,14 +461,14 @@ func (m *Manager) loadOne(ctx context.Context, dir string, explicit bool) error 
 		// same tool names against a state home the built-in has migrated
 		// away from — skip it with the pointer instead. Checked before the
 		// allowlist: an allowlist naming it doesn't resurrect it.
-		fmt.Fprintf(os.Stderr, "extension %q not loaded (superseded: %s)\n", mf.Name, why)
+		fmt.Fprintln(os.Stderr, i18n.T("extension %q not loaded (superseded: %s)", mf.Name, i18n.T(why)))
 		return nil
 	}
 	if !explicit && !m.extensionAllowlisted(mf.Name) {
 		// Outside this run's --extensions allowlist: never spawned. One
 		// line per skip so a scoped bot's startup log doubles as an
 		// audit of what was kept out.
-		fmt.Fprintf(os.Stderr, "extension %q not loaded (not in the --extensions allowlist)\n", mf.Name)
+		fmt.Fprintln(os.Stderr, i18n.T("extension %q not loaded (not in the --extensions allowlist)", mf.Name))
 		return nil
 	}
 	return m.Driver.Load(ctx, dir, mf)
@@ -522,10 +528,10 @@ func (m *Manager) RestartExtension(ctx context.Context, name string) error {
 	m.ApplyOne(ctx, name, true, 3*time.Second)
 	ext, ok := m.Driver.ExtensionByName(name)
 	if !ok {
-		return fmt.Errorf("extension %q did not respawn (uninstalled, disabled, or failed to load — see its log)", name)
+		return i18n.Errorf("extension %q did not respawn (uninstalled, disabled, or failed to load — see its log)", name)
 	}
 	if !ext.Ready() {
-		return fmt.Errorf("extension %q respawned but never signalled ready (see its log)", name)
+		return i18n.Errorf("extension %q respawned but never signalled ready (see its log)", name)
 	}
 	return nil
 }

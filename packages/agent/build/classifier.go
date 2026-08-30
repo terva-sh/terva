@@ -19,6 +19,7 @@ import (
 	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 )
 
 // InstallClassifier builds the screening classifier from the USER config and
@@ -69,9 +70,9 @@ func InstallClassifier(gate *core.ConfirmGate, r Resolved, override string, warn
 	// approve mode, where nobody is asked at all.
 	switch clsMode {
 	case core.ClassifierApprove:
-		warnf("classifier: APPROVE mode — a model may permit tool calls on your behalf without asking")
+		warnf("%s", i18n.T("classifier: APPROVE mode — a model may permit tool calls on your behalf without asking"))
 	case core.ClassifierScreen:
-		warnf("classifier: screen mode — a model may refuse tool calls; approvals still reach you")
+		warnf("%s", i18n.T("classifier: screen mode — a model may refuse tool calls; approvals still reach you"))
 	}
 }
 
@@ -95,7 +96,7 @@ func ClassifierFor(r Resolved, cfg config.Config, warnf func(format string, args
 
 	clsMode, err := core.ParseClassifierMode(cfg.Classifier.Mode)
 	if err != nil {
-		warnf("classifier: %v; screening stays off", err)
+		warnf("%s", i18n.T("classifier: %v; screening stays off", err))
 		return nil, core.ClassifierOff
 	}
 	if !clsMode.Enabled() {
@@ -104,11 +105,11 @@ func ClassifierFor(r Resolved, cfg config.Config, warnf func(format string, args
 
 	res, model, reasoning, err := classifierTarget(r, cfg)
 	if err != nil {
-		warnf("classifier: %v; screening stays off", err)
+		warnf("%s", i18n.T("classifier: %v; screening stays off", err))
 		return nil, core.ClassifierOff
 	}
 	if !res.HasCredential() {
-		warnf("classifier: no credential for provider %q; screening stays off", res.Provider)
+		warnf("%s", i18n.T("classifier: no credential for provider %q; screening stays off", res.Provider))
 		return nil, core.ClassifierOff
 	}
 
@@ -123,7 +124,7 @@ func ClassifierFor(r Resolved, cfg config.Config, warnf func(format string, args
 	if s == nil {
 		// Defensive: New refuses what it cannot run, and a typed-nil in the
 		// interface would give the gate a classifier it thinks is live.
-		warnf("classifier: could not build a screener for %q/%q; screening stays off", res.Provider, model)
+		warnf("%s", i18n.T("classifier: could not build a screener for %q/%q; screening stays off", res.Provider, model))
 		return nil, core.ClassifierOff
 	}
 	return s, clsMode
@@ -157,10 +158,10 @@ func classifierTarget(r Resolved, cfg config.Config) (res Resolved, model, reaso
 			return res, "", "", fmt.Errorf("resolving %s/%s: %w", prov, wantModel, aerr)
 		}
 		if wantModel != "" && !strings.EqualFold(alt.Model, wantModel) {
-			return res, "", "", fmt.Errorf("asked for model %q but resolved %q; refusing to silently bill the fallback", wantModel, alt.Model)
+			return res, "", "", i18n.Errorf("asked for model %q but resolved %q; refusing to silently bill the fallback", wantModel, alt.Model)
 		}
 		if wantProv != "" && !strings.EqualFold(alt.Provider, wantProv) {
-			return res, "", "", fmt.Errorf("asked for provider %q but resolved %q; refusing to silently use the fallback", wantProv, alt.Provider)
+			return res, "", "", i18n.Errorf("asked for provider %q but resolved %q; refusing to silently use the fallback", wantProv, alt.Provider)
 		}
 		return alt, alt.Model, alt.Reasoning, nil
 	}
@@ -182,7 +183,8 @@ func classifierTarget(r Resolved, cfg config.Config) (res Resolved, model, reaso
 	if cfg.Classifier.HostModel {
 		return r, r.Model, "", nil
 	}
-	return res, "", "", fmt.Errorf("no weak tier resolves for provider %q, so screening would run on the host model %q at host price per gated call; "+
-		"set swarm_tiers.%s.weak (see `terva models tiers`), or classifier.model, or accept the cost with classifier.host_model",
-		r.Provider, r.Model, r.Provider)
+	// One literal, not a '+' concatenation: terva-i18n-lint extracts a T/Errorf
+	// source only from a single string literal, and it skips a concatenation
+	// silently, which would leave this line out of the catalog with no warning.
+	return res, "", "", i18n.Errorf("no weak tier resolves for provider %q, so screening would run on the host model %q at host price per gated call; set swarm_tiers.%s.weak (see `terva models tiers`), or classifier.model, or accept the cost with classifier.host_model", r.Provider, r.Model, r.Provider)
 }

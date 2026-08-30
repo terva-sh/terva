@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 )
 
 // acpConfirmer is the real ACP core.Confirmer (§8). When the permission
@@ -66,7 +67,7 @@ func (c *acpConfirmer) ConfirmWithCall(ctx context.Context, toolName string, _ s
 	if c.sess == nil {
 		// No session bound (should not happen) — refuse rather than run
 		// an unconfirmed call.
-		return core.ConfirmDecision{Allow: false, Reason: "tool call refused: no ACP session for confirmation"}
+		return core.ConfirmDecision{Allow: false, Reason: i18n.T("tool call refused: no ACP session for confirmation")}
 	}
 
 	// Session-scoped memory: a prior allow_always / reject_always wins
@@ -75,7 +76,7 @@ func (c *acpConfirmer) ConfirmWithCall(ctx context.Context, toolName string, _ s
 		if allow {
 			return core.ConfirmDecision{Allow: true}
 		}
-		return core.ConfirmDecision{Allow: false, Reason: "tool call refused (remembered for this session)"}
+		return core.ConfirmDecision{Allow: false, Reason: i18n.T("tool call refused (remembered for this session)")}
 	}
 
 	params := RequestPermissionParams{
@@ -91,24 +92,24 @@ func (c *acpConfirmer) ConfirmWithCall(ctx context.Context, toolName string, _ s
 		// winds down and the prompt resolves stopReason "cancelled" (the
 		// turnCtx.Err() check in handleSessionPrompt drives that).
 		if ctx.Err() != nil {
-			return core.ConfirmDecision{Allow: false, Reason: "tool call cancelled"}
+			return core.ConfirmDecision{Allow: false, Reason: i18n.T("tool call cancelled")}
 		}
-		return core.ConfirmDecision{Allow: false, Reason: "permission request failed: " + err.Error()}
+		return core.ConfirmDecision{Allow: false, Reason: i18n.T("permission request failed: %v", err)}
 	}
 
 	var res RequestPermissionResult
 	if uerr := json.Unmarshal(raw, &res); uerr != nil {
-		return core.ConfirmDecision{Allow: false, Reason: "malformed permission response"}
+		return core.ConfirmDecision{Allow: false, Reason: i18n.T("malformed permission response")}
 	}
 
 	switch res.Outcome.Outcome {
 	case PermOutcomeCancelled:
-		return core.ConfirmDecision{Allow: false, Reason: "tool call cancelled"}
+		return core.ConfirmDecision{Allow: false, Reason: i18n.T("tool call cancelled")}
 	case PermOutcomeSelected:
 		return c.decisionFor(toolName, res.Outcome.OptionID)
 	default:
 		// Unknown / empty outcome: refuse rather than run unconfirmed.
-		return core.ConfirmDecision{Allow: false, Reason: "permission denied"}
+		return core.ConfirmDecision{Allow: false, Reason: i18n.T("permission denied")}
 	}
 }
 
@@ -123,12 +124,12 @@ func (c *acpConfirmer) decisionFor(toolName, optionID string) core.ConfirmDecisi
 		return core.ConfirmDecision{Allow: true}
 	case PermRejectAlways:
 		c.sess.rememberDecision(toolName, false)
-		return core.ConfirmDecision{Allow: false, Reason: "tool call refused (remembered for this session)"}
+		return core.ConfirmDecision{Allow: false, Reason: i18n.T("tool call refused (remembered for this session)")}
 	case PermRejectOnce:
-		return core.ConfirmDecision{Allow: false, Reason: "tool call refused by user"}
+		return core.ConfirmDecision{Allow: false, Reason: i18n.T("tool call refused by user")}
 	default:
 		// An optionId we didn't offer: treat as a refusal.
-		return core.ConfirmDecision{Allow: false, Reason: "tool call refused by user"}
+		return core.ConfirmDecision{Allow: false, Reason: i18n.T("tool call refused by user")}
 	}
 }
 

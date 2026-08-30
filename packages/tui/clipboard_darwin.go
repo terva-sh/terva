@@ -77,6 +77,12 @@ func ReadClipboardImagePNG() ([]byte, bool, error) {
 	if err != nil {
 		// AppleScript phrases "no image on the clipboard" a few ways; all
 		// mean ok=false rather than a real failure.
+		//
+		// 🪤 These three are PARSED, not displayed, so they stay English. They
+		// match what macOS itself prints, and the apostrophe appears twice
+		// because osascript uses either form. Translate them and an empty
+		// clipboard stops reading as empty: it becomes a spurious error on
+		// every paste.
 		if strings.Contains(kind, "NO_IMAGE") || strings.Contains(kind, "Can’t make") || strings.Contains(kind, "Can't make") {
 			return nil, false, nil
 		}

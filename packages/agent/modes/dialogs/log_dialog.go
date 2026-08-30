@@ -1,6 +1,9 @@
 package dialogs
 
-import "terva.sh/terva/packages/tui"
+import (
+	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/tui"
+)
 
 // LogDialog is a read-only scrollable viewer for an extension's or MCP
 // server's log, opened with 'l' from the /extensions and /mcp dialogs so
@@ -38,7 +41,7 @@ func NewLogDialog() *LogDialog { return &LogDialog{} }
 // where an error usually is).
 func (d *LogDialog) Open(title string, lines []string) {
 	if len(lines) == 0 {
-		lines = []string{"(log is empty)"}
+		lines = []string{i18n.T("(log is empty)")}
 	}
 	d.active = true
 	d.title = title

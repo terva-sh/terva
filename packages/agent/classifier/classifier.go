@@ -20,11 +20,11 @@ package classifier
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"time"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/modelreply"
 	"terva.sh/terva/packages/provider"
 )
@@ -86,6 +86,17 @@ func New(opts Options) *Screener {
 	return &Screener{opts: opts}
 }
 
+// systemPrompt is the screener's whole instruction. Classify passes it through
+// i18n.P as the prompts-catalog key classifier.system, so an operator retunes
+// what the screener refuses from $TERVA_HOME/locales/prompts/en.json instead of
+// rebuilding the binary.
+//
+// 🪤 Five tokens below are PARSED, not read: the JSON field names "decision"
+// and "reason", and the verdict words allow, deny and ask that Classify
+// switches on. An override that translates them makes every verdict
+// unparseable, and an unparseable verdict abstains, which looks exactly like a
+// screener that is working. Reword the prose around those tokens and leave the
+// tokens themselves in English.
 const systemPrompt = `You screen tool calls for a coding agent and return one JSON verdict.
 
 You judge the CALL ITSELF. You are not told why the agent wants it, so do not
@@ -125,9 +136,10 @@ func (s *Screener) Classify(ctx context.Context, req core.ClassifyRequest) core.
 	ctx, cancel := context.WithTimeout(ctx, s.opts.Timeout)
 	defer cancel()
 
-	sys := systemPrompt
+	sys := i18n.P("classifier.system", systemPrompt)
 	if p := strings.TrimSpace(s.opts.Policy); p != "" {
-		sys += "\n\nAdditional site policy, which overrides the guidance above:\n" + p
+		sys += "\n\n" + i18n.P("classifier.policy",
+			"Additional site policy, which overrides the guidance above:\n%s", p)
 	}
 
 	var zero float32
@@ -200,14 +212,16 @@ func (s *Screener) abstain(format string, args ...any) core.ClassifyResult {
 // renderCall is the user turn: the call, as plainly as it can be put.
 func renderCall(req core.ClassifyRequest) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "tool: %s\n", req.Tool)
+	// WriteString rather than Fprintf: a translated template is not a constant,
+	// and go vet rejects a non-constant format string.
+	b.WriteString(i18n.P("classifier.call.tool", "tool: %s\n", req.Tool))
 	if req.Mode != "" {
-		fmt.Fprintf(&b, "approval mode: %s\n", req.Mode)
+		b.WriteString(i18n.P("classifier.call.mode", "approval mode: %s\n", req.Mode))
 	}
 	if p := strings.TrimSpace(req.Preview); p != "" {
-		fmt.Fprintf(&b, "preview: %s\n", p)
+		b.WriteString(i18n.P("classifier.call.preview", "preview: %s\n", p))
 	}
-	b.WriteString("arguments:\n")
+	b.WriteString(i18n.P("classifier.call.args", "arguments:\n"))
 	// Re-indent the args so a hostile argument string cannot pass itself off
 	// as a new section of the prompt. Hygiene, not a defence — see the package
 	// comment on what this does not protect against.

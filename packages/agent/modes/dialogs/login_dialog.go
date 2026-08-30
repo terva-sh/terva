@@ -207,7 +207,7 @@ func (d *LoginDialog) Render(th tui.Theme, width int) []string {
 		lines = append(lines, FrameRule(th, width))
 	case loginStepProvider:
 		opts := providersForMethod(d.method)
-		lines = append(lines, FrameHeader(th, "login - "+d.method, width))
+		lines = append(lines, FrameHeader(th, i18n.T("login - %s", d.method), width))
 		for _, l := range d.renderStatusLines(th) {
 			lines = append(lines, l)
 		}
@@ -231,15 +231,15 @@ func (d *LoginDialog) Render(th tui.Theme, width int) []string {
 	case loginStepFlow:
 		lines = append(lines, d.renderFlow(th, width)...)
 	case loginStepDone:
-		title := "login - failed"
+		title := i18n.T("login - failed")
 		body := th.FG256(th.Error, d.message)
 		if d.success {
-			title = "login - success"
-			body = th.FG256(th.Tool, fmt.Sprintf("logged in to %s via %s", ProviderLabel(d.provider), d.method))
+			title = i18n.T("login - success")
+			body = th.FG256(th.Tool, i18n.T("logged in to %s via %s", ProviderLabel(d.provider), d.method))
 		}
 		lines = append(lines, FrameHeader(th, title, width))
 		lines = append(lines, body)
-		lines = append(lines, th.FG256(th.Muted, "press any key to close"))
+		lines = append(lines, th.FG256(th.Muted, i18n.T("press any key to close")))
 		lines = append(lines, FrameRule(th, width))
 	}
 	return lines
@@ -273,12 +273,12 @@ func providerPickerTag(method, status string) string {
 		// while subscription auth is still configured. Unconfigured rows do
 		// not need a redundant "api key" suffix.
 		if status == "oauth" {
-			return "  (subscription configured)"
+			return "  " + i18n.T("(subscription configured)")
 		}
 	case "oauth":
 		// In the subscription picker, only call out an existing API key.
 		if status == "apikey" {
-			return "  (api key configured)"
+			return "  " + i18n.T("(api key configured)")
 		}
 	}
 	return ""
@@ -329,13 +329,13 @@ func (d *LoginDialog) renderStatusLines(th tui.Theme) []string {
 		switch method {
 		case "apikey":
 			mark = th.FG256(th.Tool, "✓")
-			body = th.FG256(th.Muted, label+": api key")
+			body = th.FG256(th.Muted, i18n.T("%s: api key", label))
 		case "oauth":
 			mark = th.FG256(th.Tool, "✓")
-			body = th.FG256(th.Muted, label+": subscription")
+			body = th.FG256(th.Muted, i18n.T("%s: subscription", label))
 		default:
 			mark = th.FG256(th.Muted, "–")
-			body = th.FG256(th.Muted, label+": not logged in")
+			body = th.FG256(th.Muted, i18n.T("%s: not logged in", label))
 		}
 		return "  " + mark + " " + body
 	}
@@ -568,7 +568,7 @@ func (d *LoginDialog) renderFlow(th tui.Theme, width int) []string {
 	var lines []string
 	title := d.flow.Title
 	if title == "" {
-		title = "login - " + ProviderLabel(d.provider)
+		title = i18n.T("login - %s", ProviderLabel(d.provider))
 	}
 	lines = append(lines, FrameHeader(th, title, width))
 

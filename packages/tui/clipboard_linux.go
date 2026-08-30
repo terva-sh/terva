@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"terva.sh/terva/packages/i18n"
 )
 
 // ReadClipboardImagePNG returns the system clipboard's image as PNG bytes.
@@ -28,7 +30,7 @@ func ReadClipboardImagePNG() ([]byte, bool, error) {
 	case os.Getenv("DISPLAY") != "":
 		return runClipboardImageCmd("xclip", "-selection", "clipboard", "-t", "image/png", "-o")
 	default:
-		return nil, false, fmt.Errorf("no clipboard backend detected (need WSL interop, Wayland, or X11)")
+		return nil, false, i18n.Errorf("no clipboard backend detected (need WSL interop, Wayland, or X11)")
 	}
 }
 
@@ -48,14 +50,14 @@ func WriteClipboardText(s string) error {
 	case os.Getenv("DISPLAY") != "":
 		return runClipboardWrite(s, "xclip", "-selection", "clipboard")
 	default:
-		return fmt.Errorf("no clipboard backend detected (need WSL interop, Wayland, or X11)")
+		return i18n.Errorf("no clipboard backend detected (need WSL interop, Wayland, or X11)")
 	}
 }
 
 // runClipboardWrite feeds s to a clipboard tool's stdin.
 func runClipboardWrite(s, name string, args ...string) error {
 	if _, err := exec.LookPath(name); err != nil {
-		return fmt.Errorf("%s not found — install it to copy to the clipboard", name)
+		return i18n.Errorf("%s not found — install it to copy to the clipboard", name)
 	}
 	cmd := exec.Command(name, args...)
 	cmd.Stdin = strings.NewReader(s)
@@ -81,7 +83,7 @@ func isWSL() bool {
 // xclip both exit non-zero when the requested target isn't available).
 func runClipboardImageCmd(name string, args ...string) ([]byte, bool, error) {
 	if _, err := exec.LookPath(name); err != nil {
-		return nil, false, fmt.Errorf("%s not found — install it to paste clipboard images", name)
+		return nil, false, i18n.Errorf("%s not found — install it to paste clipboard images", name)
 	}
 	out, err := exec.Command(name, args...).Output()
 	if err != nil || len(out) == 0 {
@@ -101,7 +103,7 @@ func readClipboardImagePNGWSL() ([]byte, bool, error) {
 		`$img.Save($ms,[System.Drawing.Imaging.ImageFormat]::Png); ` +
 		`[Convert]::ToBase64String($ms.ToArray()) }`
 	if _, err := exec.LookPath("powershell.exe"); err != nil {
-		return nil, false, fmt.Errorf("powershell.exe not on PATH (WSL interop disabled?)")
+		return nil, false, i18n.Errorf("powershell.exe not on PATH (WSL interop disabled?)")
 	}
 	out, err := exec.Command("powershell.exe", "-NoProfile", "-STA", "-Command", script).Output()
 	if err != nil {

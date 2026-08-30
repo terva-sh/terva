@@ -79,7 +79,7 @@ func (d *RescueDialog) Render(th tui.Theme, width int) []string {
 		return nil
 	}
 	var lines []string
-	header := "rescue turn"
+	header := i18n.T("rescue turn")
 	if d.failedAt != "" && d.failedAt != "/" {
 		header = i18n.T("rescue turn — %s failed", d.failedAt)
 	}

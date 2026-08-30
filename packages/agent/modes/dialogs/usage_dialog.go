@@ -75,7 +75,7 @@ func (d *UsageDialog) providerLabel() string {
 	if d.providerID != "" {
 		return d.providerID
 	}
-	return "this provider"
+	return i18n.T("this provider")
 }
 
 func (d *UsageDialog) Render(th tui.Theme, width int) []string {
@@ -172,9 +172,9 @@ func formatReset(resetsAt, now time.Time) string {
 	}
 	d := resetsAt.Sub(now)
 	if d <= 0 {
-		return "resets now"
+		return i18n.T("resets now")
 	}
-	return "resets in " + humanizeDuration(d)
+	return i18n.T("resets in %s", humanizeDuration(d))
 }
 
 func humanizeDuration(d time.Duration) string {

@@ -332,7 +332,7 @@ func (d *ResetsDialog) providerLabel() string {
 	if d.providerID != "" {
 		return d.providerID
 	}
-	return "this provider"
+	return i18n.T("this provider")
 }
 
 func credTitle(r ctrlproto.ResetInfo) string {

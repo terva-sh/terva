@@ -353,7 +353,7 @@ func scopeHeader(scopes []MemoryScopeInfo, scope string) string {
 		}
 		head := fmt.Sprintf("%s — %d/%s", s.Label, s.Count, fmtKiB(s.MaxBytes))
 		if s.MaxBytes > 0 {
-			head = fmt.Sprintf("%s — %d entries, %s of %s", s.Label, s.Count, fmtKiB(s.Bytes), fmtKiB(s.MaxBytes))
+			head = i18n.T("%s — %d entries, %s of %s", s.Label, s.Count, fmtKiB(s.Bytes), fmtKiB(s.MaxBytes))
 		}
 		if s.ArchivedCount > 0 {
 			head += i18n.T(" · %d archived (%s, out of context)", s.ArchivedCount, fmtKiB(s.ArchivedBytes))

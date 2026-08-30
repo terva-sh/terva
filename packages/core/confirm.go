@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"terva.sh/terva/packages/i18n"
 )
 
 // ConfirmDecision is the outcome of a confirmation prompt for a
@@ -370,7 +372,7 @@ func (g *ConfirmGate) Check(ctx context.Context, toolName string, args json.RawM
 		// answer could only arrive too late to be used. The same check guards
 		// the human prompt below, for the same reason.
 		if err := ctx.Err(); err != nil {
-			return false, "tool call refused: the turn was cancelled before this call could be approved", nil
+			return false, i18n.T("tool call refused: the turn was cancelled before this call could be approved"), nil
 		}
 		mode := ApprovalYolo
 		if pol != nil {
@@ -388,7 +390,7 @@ func (g *ConfirmGate) Check(ctx context.Context, toolName string, args json.RawM
 			if reason == "" {
 				// A denial the agent cannot learn from just gets a cosmetic
 				// retry of the same call.
-				reason = "tool call refused by the screening classifier, which gave no reason"
+				reason = i18n.T("tool call refused by the screening classifier, which gave no reason")
 			}
 			return false, reason, nil
 		case ClassifyApprove:
@@ -403,7 +405,7 @@ func (g *ConfirmGate) Check(ctx context.Context, toolName string, args json.RawM
 	}
 
 	if inner == nil {
-		return false, "tool call refused: confirmation is required (--no-yolo / approval mode) and there is no interactive prompt in this mode; ask the user what to do instead", nil
+		return false, i18n.T("tool call refused: confirmation is required (--no-yolo / approval mode) and there is no interactive prompt in this mode; ask the user what to do instead"), nil
 	}
 
 	g.mu.Lock()
@@ -419,7 +421,7 @@ func (g *ConfirmGate) Check(ctx context.Context, toolName string, args json.RawM
 	// a turn that has stopped. Every confirmer would deny on its own ctx select
 	// anyway; doing it here means the prompt never reaches a screen.
 	if err := ctx.Err(); err != nil {
-		return false, "tool call refused: the turn was cancelled before this call could be approved", nil
+		return false, i18n.T("tool call refused: the turn was cancelled before this call could be approved"), nil
 	}
 
 	var decision ConfirmDecision
@@ -468,7 +470,7 @@ func (g *ConfirmGate) Check(ctx context.Context, toolName string, args json.RawM
 
 	reason := strings.TrimSpace(decision.Reason)
 	if !decision.Allow && reason == "" {
-		reason = "tool call refused by user"
+		reason = i18n.T("tool call refused by user")
 	}
 	return decision.Allow, reason, nil
 }

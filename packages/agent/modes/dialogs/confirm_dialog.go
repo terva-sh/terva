@@ -125,9 +125,11 @@ type confirmOption struct {
 
 // confirmOptions lists the five fixed responses in vertical order. Keyed
 // by index so HandleKey can send the right decision.
-// confirmOptions labels are marked with i18n.M (declared at init) and
-// translated at render time. The Reason strings are NOT translated — they
-// are sent to the model as the refusal reason, not shown to the user.
+// Both the labels and the Reason strings are marked with i18n.M (declared at
+// init) and translated at render time in optionsFor. A Reason reaches the
+// model, but the operator reads it too, in the tool-view pane, which is why
+// gate refusal reasons are translated. See the D3 amendment in
+// docs/proposals/i18n-round-2.md.
 var confirmOptions = []struct {
 	label    string
 	decision core.ConfirmDecision
@@ -150,7 +152,7 @@ var confirmOptions = []struct {
 	},
 	{
 		label:    i18n.M("no (refuse and let the model try something else)"),
-		decision: core.ConfirmDecision{Allow: false, Reason: "user declined"},
+		decision: core.ConfirmDecision{Allow: false, Reason: i18n.M("user declined")},
 	},
 }
 
@@ -163,7 +165,13 @@ var confirmOptions = []struct {
 func optionsFor(req *ConfirmRequest) []confirmOption {
 	opts := make([]confirmOption, 0, len(confirmOptions)+1)
 	for _, o := range confirmOptions {
-		opts = append(opts, confirmOption{label: i18n.T(o.label), decision: o.decision})
+		// o.decision is a value copy, so translating its Reason here cannot
+		// disturb the package-level table the loop reads from.
+		dec := o.decision
+		if dec.Reason != "" {
+			dec.Reason = i18n.T(dec.Reason)
+		}
+		opts = append(opts, confirmOption{label: i18n.T(o.label), decision: dec})
 	}
 	if len(req.Scopes) > 0 {
 		displays := make([]string, len(req.Scopes))
@@ -220,7 +228,7 @@ func (d *ConfirmDialog) HandleKey(k tui.Key) bool {
 			d.activeSince = time.Now()
 		}
 		d.mu.Unlock()
-		req.Resp <- core.ConfirmDecision{Allow: false, Reason: "user cancelled"}
+		req.Resp <- core.ConfirmDecision{Allow: false, Reason: i18n.T("user cancelled")}
 		return true
 	case tui.KeyEnter:
 		selected := opts[min(d.cursor, len(opts)-1)].decision

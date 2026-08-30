@@ -221,6 +221,7 @@ see the full set. The families:
 | `study.*`, `skill.directive` | the `/study` task variants and the "use the X skill for:" preamble |
 | `swarm.*` | the auto-swarm addendum, the persona roster, and every line of the sub-agent result summary |
 | `raati.*` | the [deliberation](raati.md) panel's whole script — the clerk's system + prompt, the evidence framing, each round's header/question, the cross-examination, and the summarizer |
+| `classifier.*` | the [approval classifier](permissions.md#the-approval-classifier) that screens a tool call before it prompts. `classifier.system` is its whole instruction, `classifier.policy` frames the site policy appended to it, and `classifier.call.*` are the four labels that render the call being judged. ⚠ `classifier.system` must keep the five tokens `Classify` parses: the JSON field names `decision` and `reason`, and the verdict words `allow`, `deny`, and `ask`. Translate those and every verdict becomes unparseable, an unparseable verdict abstains, and an abstention looks exactly like a screener that is working. |
 | `context.pressure*` | the warning the agent is handed when the context window is filling, assembled from four parts: `context.pressure.guard` (the do-not-reply preamble), `context.pressure.gauge` (how full), one `context.pressure.advice.*` line per pressure band, and a closing policy sentence — `context.pressure` or `context.pressure.autocompact_now` normally, the `no_autocompact` pair when auto-condense is off |
 | `play.*`, `chat.*` | the `--play` cast/actor framing and the `--chat` intro / idle-nudge / attachment preamble |
 | `stage.*` | the Stage side-channel generators — the meta-narrator router and voiced line (`stage.route.*`, `stage.voice.*`), the Suggest drafter (`stage.suggest.*`), the card doctor/editor contracts (`stage.doctor.*`, `stage.editor.*`), the advance-turn cue, and the shared section framing (`stage.frame.*`). The largest family. ⚠ `stage.route.narrator_name` and the words the router/doctor parse from model output (`Narrator`, the JSON field names and `warn`/`info`/`suggestion` severities inside the doctor tasks) must survive translation intact — the narrator name is round-tripped (a translated name is matched too), the JSON skeleton is not. |
@@ -347,11 +348,18 @@ When you add operator-facing text in Go:
   non-constant format trips `go vet`).
 - Leave command names, flags, model/provider ids, URLs, and paths unwrapped —
   they're not prose.
-- **The tool surface stays English, by decision** (the i18n round-2 proposal,
-  in a checkout's `docs/proposals/`): tool *descriptions*, *schemas*, and
-  *result strings* sent to the model are model-API machinery, not voice —
-  don't wrap them. `i18n.P` is for canned prose that shapes what the user
-  ultimately reads (identity, narration cues, summaries, section framing).
+- **Most of the model-facing surface stays English, with two carve-outs.** A
+  tool's *schema* and the *result text a tool produces* are model-API
+  machinery: the operator meets them raw in a tool-view pane, like code, so
+  leave them alone. Round 2 of the i18n work (`docs/proposals/i18n-round-2.md`,
+  D3) drew that line around the whole tool surface, and two pieces have since
+  moved out from behind it. A tool *description* goes through `i18n.D` into
+  `locales/tools/`, so an operator can retune it in place (see *Retuning a tool
+  description* above). A **gate refusal reason** goes through `i18n.T`: the
+  sentences in `packages/core/confirm.go` that say why a call was refused are
+  read by a person as often as by the model. `i18n.P` remains for canned prose
+  that shapes what the user ultimately reads: identity, narration cues,
+  summaries, section framing.
 - **Wire errors translate their prose, never their code.** A ctrlproto error
   the panel or Stage shows a user gets its message translated at the
   construction site — `ctrlproto.Errorf(code, "%s", i18n.T("what went wrong",

@@ -102,7 +102,7 @@ func (d *MCPDialog) HandleKey(k tui.Key) MCPAction {
 			if it.HasLog {
 				return MCPAction{OpenLog: true, Name: it.Name}
 			}
-			d.status = it.Name + " has no log yet"
+			d.status = i18n.T("%s has no log yet", it.Name)
 		}
 	}
 	return MCPAction{}
@@ -113,17 +113,18 @@ func (d *MCPDialog) HandleKey(k tui.Key) MCPAction {
 func mcpStateLabel(it MCPInfo) string {
 	switch {
 	case it.UserDisabled:
-		return "off (user cfg)"
+		return i18n.T("off (user cfg)")
 	case it.ProjectDisabled:
-		return "off (project)"
+		return i18n.T("off (project)")
 	case it.ProjectGated:
-		return "off (untrusted)"
+		return i18n.T("off (untrusted)")
 	case it.StartupError != "" && !it.Connected:
-		return "failed (see log)"
+		return i18n.T("failed (see log)")
 	case it.Effective && !it.Connected:
-		return "off (not running)"
+		return i18n.T("off (not running)")
 	default:
-		return "on"
+		// Same sense, same context key, as the extensions dialog column.
+		return i18n.TC("service state", "on")
 	}
 }
 
@@ -190,7 +191,7 @@ func (d *MCPDialog) Render(th tui.Theme, width int) []string {
 		if it.StartupError != "" {
 			reason := it.StartupError
 			if it.HasLog {
-				reason += "  (l for log)"
+				reason = i18n.T("%s  (l for log)", reason)
 			}
 			lines = append(lines, th.FG256(th.Warning, "  "+truncate(reason, width-4)))
 		}

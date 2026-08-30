@@ -1,6 +1,7 @@
 package dialogs
 
 import (
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -37,7 +38,7 @@ func (d *ConnectDialog) Open(items []ConnectItem) bool {
 	for i, it := range items {
 		rows[i] = pickerItem{label: it.Label, hint: it.Hint, value: it.Action}
 	}
-	return d.p.open("chat bridge", "pick an action (↑/↓, enter, esc to cancel):", rows)
+	return d.p.open(i18n.T("chat bridge"), i18n.T("pick an action (↑/↓, enter, esc to cancel):"), rows)
 }
 
 // Close hides the dialog.

@@ -105,13 +105,13 @@ func (d *ExtensionsDialog) HandleKey(k tui.Key) ExtensionsAction {
 			if it.HasConfig {
 				return ExtensionsAction{OpenConfig: true, Name: it.Name}
 			}
-			d.status = it.Name + " has no configurable settings"
+			d.status = i18n.T("%s has no configurable settings", it.Name)
 		case 'l':
 			// View the extension's log (the crash reason lives there).
 			if it.HasLog {
 				return ExtensionsAction{OpenLog: true, Name: it.Name}
 			}
-			d.status = it.Name + " has no log yet"
+			d.status = i18n.T("%s has no log yet", it.Name)
 		}
 	}
 	return ExtensionsAction{}
@@ -122,19 +122,21 @@ func (d *ExtensionsDialog) HandleKey(k tui.Key) ExtensionsAction {
 func stateLabel(it ExtInfo) string {
 	switch {
 	case !it.GlobalEnabled:
-		return "off (disabled)"
+		return i18n.T("off (disabled)")
 	case it.UserConfigDisabled:
-		return "off (user cfg)"
+		return i18n.T("off (user cfg)")
 	case it.ProjectDisabled:
-		return "off (project)"
+		return i18n.T("off (project)")
 	case it.ProjectGated:
-		return "off (untrusted)"
+		return i18n.T("off (untrusted)")
 	case !it.Running:
 		// Should be loaded but isn't — failed spawn / crash. Worth
 		// flagging distinctly so the agent/user knows to check logs.
-		return "off (not running)"
+		return i18n.T("off (not running)")
 	default:
-		return "on"
+		// TC, not T: a bare "on" is the one key in this column ambiguous
+		// enough to need its sense recorded for a translator.
+		return i18n.TC("service state", "on")
 	}
 }
 
@@ -209,7 +211,7 @@ func (d *ExtensionsDialog) Render(th tui.Theme, width int) []string {
 		// When the extension is off, surface the last log line as the reason,
 		// and point at the full log ('l').
 		if it.LastLog != "" {
-			lines = append(lines, th.FG256(th.Warning, "  "+truncate(it.LastLog+"  (l for log)", width-4)))
+			lines = append(lines, th.FG256(th.Warning, "  "+truncate(i18n.T("%s  (l for log)", it.LastLog), width-4)))
 		}
 	}
 	if d.status != "" {

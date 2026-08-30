@@ -1294,6 +1294,10 @@ func renderSwarmTranscriptBlocks(lines []string, th tui.Theme, width int) []stri
 	}
 
 	// classify maps one raw line to its role and the stripped body.
+	//
+	// 🪤 These prefixes are PARSED, not displayed, so they stay English. They
+	// match text another layer wrote, and a translated prefix would match
+	// nothing: every line would fall through to kindAssistant with no error.
 	classify := func(s string) (blockKind, string) {
 		switch {
 		case strings.HasPrefix(s, "user: "):

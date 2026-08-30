@@ -138,7 +138,7 @@ func (i *Interactive) Confirm(ctx context.Context, toolName string, preview stri
 	case d := <-resp:
 		return d
 	case <-ctx.Done():
-		return core.ConfirmDecision{Allow: false, Reason: "tool call refused: the turn was cancelled before this approval was answered"}
+		return core.ConfirmDecision{Allow: false, Reason: i18n.T("tool call refused: the turn was cancelled before this approval was answered")}
 	}
 }
 
