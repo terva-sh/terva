@@ -16,15 +16,42 @@ func TestOpenCodeGoCatalogHasRealContextWindows(t *testing.T) {
 		// The ones that were missing entirely, and so were guessed at.
 		"glm-5.2":        1000000,
 		"kimi-k2.7-code": 262144,
-		"minimax-m3":     512000,
 		// Present all along; here so a resync cannot quietly shrink them.
 		"deepseek-v4-pro":   1000000,
 		"deepseek-v4-flash": 1000000,
-		// models.dev has no entry for these, so the hand-curated values must
-		// survive a resync. A blind regenerate would drop them — which is the
-		// whole reason the generator fills gaps instead of replacing wholesale.
-		"mimo-v2.5":     1000000,
-		"mimo-v2.5-pro": 1048576,
+		"mimo-v2.5":         1000000,
+		"mimo-v2.5-pro":     1048576,
+
+		// Raised from 512000 when the generator switched to models.dev's
+		// dedicated "opencode-go" key. The old shared "opencode" key was the
+		// outlier: of the ten providers publishing this model, seven put it at
+		// 1M or above, and the gateway's own key is one of them. This is the
+		// only pin the switch moved, and it moves UPWARD — the direction that
+		// compacts later rather than earlier, so it is the one worth naming.
+		"minimax-m3": 1000000,
+
+		// The current Go lineup. Every one of these was served while no source
+		// the generator consulted could describe it, so each was budgeted at
+		// unknownModelContext (32k) — glm-5.3-flash is the model the Go landing
+		// page headlines, and it was being run in a thirtieth of its window.
+		"glm-5.3":                    1000000,
+		"glm-5.3-flash":              1000000,
+		"kimi-k3":                    1048576,
+		"hy4-preview":                1024000,
+		"longcat-2.0":                1000000,
+		"muse-spark-1.2-contributor": 1048576,
+		// Also 262144 under the old key; the vendor's own alibaba key agrees
+		// with the 1M the gateway key reports.
+		"qwen3.6-plus": 1000000,
+
+		// Hand-curated. The gateway serves hy3-preview but models.dev does not
+		// carry it under ANY opencode key, so reconcile keeps whatever the
+		// catalog already said and a blind regenerate would drop it — which is
+		// the whole reason the generator fills gaps instead of replacing
+		// wholesale. The limits come from models.dev's tencent-tokenhub key and
+		// agree exactly with its sibling hy3 below.
+		"hy3":         256000,
+		"hy3-preview": 256000,
 	}
 
 	got := map[string]Model{}

@@ -45,10 +45,18 @@ const (
 
 // target is one terva provider whose catalog block this tool owns.
 //
-// membershipURL decides WHICH models the provider serves — models.dev groups
-// every opencode tier under a single key, so it cannot tell the zen tier from
-// the zen/go tier and only the live endpoint can. metaKey is where the limits
-// and prices come from.
+// membershipURL decides WHICH models the provider serves. metaKey is where the
+// limits and prices come from.
+//
+// The two stay separate because neither source can do the other's job.
+// models.dev once grouped every opencode tier under a single "opencode" key,
+// which could not tell the zen tier from the zen/go tier; it now publishes
+// "opencode-go" as its own key, so the limits are the gateway's rather than the
+// underlying vendor's — that key is where the tier's real caps live, and they
+// are sometimes lower than the model's native ceiling. But its membership still
+// lags the endpoint in both directions (it has carried a model the gateway does
+// not serve, and missed one it does), so /v1/models remains the authority on
+// who is in the list.
 type target struct {
 	provider      string // terva provider id, and the catalog block's marker
 	metaKey       string // models.dev top-level provider key
@@ -59,7 +67,7 @@ type target struct {
 var targets = []target{
 	{
 		provider:      "opencode-go",
-		metaKey:       "opencode",
+		metaKey:       "opencode-go",
 		membershipURL: "https://opencode.ai/zen/go/v1/models",
 		baseURL:       "https://opencode.ai/zen/go/v1",
 	},
