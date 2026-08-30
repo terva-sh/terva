@@ -225,7 +225,7 @@ func formatSkillRow(s *skills.Skill, maxWidth int) string {
 	// Truncate AND pad to the same column. Only truncating leaves a short
 	// description pulling its source tag left, which reads as a ragged column
 	// once the list is long and the descriptions vary in length — the state
-	// the picker is in now that it carries the eleven built-ins.
+	// the picker is in now that it carries the thirteen built-ins.
 	//
 	// Widths are counted in runes throughout: descriptions here routinely
 	// carry em dashes, which are three bytes each, so a byte count both

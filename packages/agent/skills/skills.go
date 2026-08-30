@@ -212,7 +212,7 @@ func VisibleSkills(in []*Skill) []*Skill {
 	}
 	// The user's own skills first, terva's built-ins after: the first
 	// screen of the picker stays the set the user installed, and the
-	// eleven that ship in the binary do not push it off the top.
+	// thirteen that ship in the binary do not push it off the top.
 	// Name-primary within each group so a shadowed entry sorts next to
 	// the winner that took its name rather than drifting off under its
 	// namespace.

@@ -181,24 +181,34 @@ trust the workspace and they appear.
 
 ### Built-in skills
 
-Eleven skills ship inside the binary. Seven teach the model how to
-author terva's own artifacts — `write-terva-card`,
+Thirteen skills ship inside the binary. Seven teach the model how to
+author terva's own artifacts (`write-terva-card`,
 `write-terva-extension`, `write-terva-locale`, `write-terva-lore`,
-`write-terva-persona`, `write-terva-skill`, `write-terva-themes` — and
-four are standing workflows:
+`write-terva-persona`, `write-terva-skill`, `write-terva-themes`), and
+six are standing workflows:
 
+- `grilling` interviews the user before building, one round of open
+  decisions at a time, so the choices are theirs rather than invented.
+  Say **"grill me"** to invoke it, which is the phrasing it has been
+  seen to load on. Other wordings may not reach it, so name the skill
+  outright if it matters. Loading is not guaranteed in any case: a
+  built-in reaches the model through the description manifest, and the
+  model decides whether to call it.
 - `handoff` compacts the current session into a handoff document under
   `$TERVA_HOME/handoffs/` that a fresh session or another agent can pick
-  up ("hand this off" — for when resuming the same session isn't the
+  up ("hand this off", for when resuming the same session isn't the
   plan).
+- `house-style` carries terva's writing standard for prose the project
+  ships and prose the agent speaks ("clean this up", "this reads like a
+  machine wrote it").
 - `init-workspace` surveys a repository and writes or refreshes its
   `AGENTS.md` ("set terva up for this repo").
 - `retrospective` distills a session's reusable lessons into the durable
-  homes future sessions read — AGENTS.md, project skills, memory when
+  homes future sessions read: AGENTS.md, project skills, and memory when
   available ("what did we learn", "remember this for next time").
-- `troubleshoot-terva` is the symptom-first runbook for terva itself —
-  extensions, connectors, MCP, context weight, sessions ("why isn't my
-  extension loading").
+- `troubleshoot-terva` is the symptom-first runbook for terva itself,
+  covering extensions, connectors, MCP, context weight, and sessions
+  ("why isn't my extension loading").
 
 They are fully active: they appear in the system-prompt manifest (tagged
 `[builtin]`) and the model loads them through the `skill` tool like any
