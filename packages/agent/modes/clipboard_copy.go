@@ -17,6 +17,7 @@ package modes
 // terminal cannot interleave with a frame.
 
 import (
+	"context"
 	"errors"
 	"strings"
 
@@ -124,7 +125,10 @@ func (i *Interactive) copyLastReply(arg string) {
 		}
 		text, what = block, i18n.T("the last code block")
 	default:
-		i.setStatusErr(i18n.T("/copy takes no argument (the last reply), or 'code' for its last code block"))
+		// Unreachable through /copy, which sends anything else to the
+		// picker. Kept because this helper is called directly too, and a
+		// silent no-op would be worse than a refusal.
+		i.setStatusErr(i18n.T("copy: unknown argument %q — use 'last' or 'code'", arg))
 		return
 	}
 
@@ -134,6 +138,86 @@ func (i *Interactive) copyLastReply(arg string) {
 		return
 	}
 	i.setStatusOK(copiedNotice(what, viaTerminal))
+}
+
+// runCopyCommand routes /copy.
+//
+// Bare /copy opens the picker, because the common need is a piece out of
+// the body of a reply and the one-shot form could never express that.
+// "last" and "code" keep the old one-shot behaviour for the muscle
+// memory built on them, and anything else opens the picker pre-filtered,
+// the way /jump takes a filter.
+func (i *Interactive) runCopyCommand(arg string) {
+	arg = strings.TrimSpace(arg)
+	switch strings.ToLower(arg) {
+	case "":
+		i.openCopyPicker("")
+	case "last", "reply", "code":
+		i.copyLastReply(arg)
+	default:
+		i.openCopyPicker(arg)
+	}
+}
+
+// openCopyPicker shows the two-stage picker.
+//
+// displayTranscript, not view.Messages, though /jump uses the latter.
+// /jump needs it because it resolves an index to a ROW through
+// BuildWithAnchors; the picker only reads text, and the two slices differ
+// in one way that matters here: while the streaming pacer drains, the
+// render path drops the trailing message from view.Messages so the text
+// is not painted twice. Copying from that slice would leave the newest
+// reply unreachable at exactly the moment a person reaches for it.
+//
+// Turn numbering is unaffected: the only thing view.Messages filters out
+// is a tool-image mirror, which core.IsUserTurn already refuses to count
+// as a turn. displayTranscript also takes the mutex, which reading
+// view.Messages here would not.
+func (i *Interactive) openCopyPicker(filter string) {
+	msgs := i.displayTranscript()
+	if len(msgs) == 0 {
+		i.setStatusErr(i18n.T("nothing to copy yet — this session has no turns"))
+		return
+	}
+	i.copyDialog.Open(msgs, filter)
+}
+
+// keyOpenCopyPicker backs ctrl+y.
+func (i *Interactive) keyOpenCopyPicker(context.Context, tui.Key) keyOutcome {
+	i.openCopyPicker("")
+	return keyHandled
+}
+
+// applyCopySelection puts a picked part on the clipboard. It takes the
+// action's FIELDS rather than the action, because the dialog's action
+// type is unexported and should stay that way.
+func (i *Interactive) applyCopySelection(text string, kind tui.BlockKind, whole bool, turnNo int) {
+	viaTerminal, err := i.copyText(text)
+	if err != nil {
+		i.setStatusErr(i18n.T("copy failed: %s", tui.SanitizeLabel(err.Error())))
+		return
+	}
+	i.setStatusOK(copiedNotice(copyWhatLabel(kind, whole, turnNo), viaTerminal))
+}
+
+// copyWhatLabel names what went to the clipboard, so the notice confirms
+// the pick rather than merely reporting success.
+func copyWhatLabel(kind tui.BlockKind, whole bool, turnNo int) string {
+	if whole {
+		return i18n.T("the whole reply from turn %d", turnNo)
+	}
+	switch kind {
+	case tui.BlockFence:
+		return i18n.T("the code block from turn %d", turnNo)
+	case tui.BlockTable:
+		return i18n.T("the table from turn %d", turnNo)
+	case tui.BlockList:
+		return i18n.T("the list from turn %d", turnNo)
+	case tui.BlockHeading:
+		return i18n.T("the section from turn %d", turnNo)
+	default:
+		return i18n.T("the passage from turn %d", turnNo)
+	}
 }
 
 // lastFencedBlock returns the contents of the last ``` fence in md,

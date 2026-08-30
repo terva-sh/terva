@@ -575,6 +575,30 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			},
 			hideCaretFallback: true,
 		},
+		{ // copy picker: /copy and ctrl+y
+			active: i.copyDialog.Active,
+			ctrlC: func() bool {
+				i.copyDialog.Close()
+				return true
+			},
+			handleKey: func(k tui.Key) bool {
+				act := i.copyDialog.HandleKey(k)
+				if act.Copy {
+					// Fields, not the action type: copyDialogAction is
+					// unexported, and naming it here would export the
+					// dialog's internals into the host.
+					i.applyCopySelection(act.Text, act.Kind, act.Whole, act.TurnNo)
+				}
+				return false
+			},
+			render: func(cols int) []string {
+				_, rows := i.cfg.Terminal.Size()
+				// Re-sized every frame, which is what lets ChromeRows
+				// differ between the turn list and the part list.
+				i.copyDialog.MaxRows = dialogs.BodyBudget(rows, i.copyDialog.ChromeRows())
+				return i.copyDialog.Render(i.cfg.Theme, cols)
+			},
+		},
 		{ // jump-to-turn picker (also backs /fork's turn selection)
 			active: i.jumpDialog.Active,
 			ctrlC: func() bool {

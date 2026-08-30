@@ -18,7 +18,7 @@ Type `/` in the TUI to open the autocomplete popup. Available commands:
 | `/sessions` | Resume a previous session for this directory. |
 | `/session` | Four ops on the current session: `export` to a portable `.tervasession` file, `import` one back in, `fork` from a past user message into a new branch, `tree` to switch between branches. Opens a picker without an argument; direct forms: `/session export [path]`, `/session import <path>`, `/session fork`, `/session tree`. Default export destination is `~/Downloads`. |
 | `/jump` | Scroll the chat to a previous turn (or `/jump <text>` to filter). |
-| `/copy` | Copy the last reply to the clipboard **as the model wrote it** — markdown source, no left gutter, no wrap. `/copy code` copies just the last fenced code block from that reply. See [Copying text out](#copying-text-out). |
+| `/copy` | Open the copy picker: choose a turn, then choose a part of it — a paragraph, a code block, a table — and copy that part **as the model wrote it** (markdown source, no left gutter, no wrap). `/copy last` copies the whole last reply outright, `/copy code` just its last fenced block, and `/copy <text>` opens the picker filtered. Also on `ctrl+y`. See [Copying text out](#copying-text-out). |
 | `/btw` | Side chat with full context that doesn't add to the main thread. |
 | `/nextstep` | Ask what to type next. The answer arrives as a dimmed offer in the composer — `tab` or `→` accepts it, and nothing is sent until you send it. |
 | `/swarm` | Spawn, monitor, and chat with background subagents. Each runs in parallel with your main session and shares its working directory. |
@@ -352,10 +352,30 @@ is the difference between a link and two halves of one.
 
 Two things address that.
 
-**`/copy`** hands back the source instead of the render: the reply exactly as the
-model wrote it, with no gutter and no wrap. `/copy code` narrows that to the last
-fenced code block in the reply — including one the model never finished, since a
-cancelled or truncated reply is when you are most likely to want it.
+**`ctrl+y`** (or `/copy`) opens the copy picker, which hands back source instead
+of render. It has two stages. The first lists turns, the way `/jump` does. `enter`
+descends into one, and the second lists that turn's parts — every paragraph, code
+fence, list, quote and table separately, alongside your own prompt and any
+recorded thinking. `enter` copies the highlighted part.
+
+The second stage is the point of the whole thing: what you usually want is a
+piece out of the *body* of a reply, and copying the whole answer to get one
+paragraph is the same problem as dragging it out of the terminal. A preview pane
+under the list shows the highlighted part in full, so two similar paragraphs are
+told apart before the clipboard changes.
+
+Type to filter either list. The block kind is part of the match, so `fence` finds
+the code in a turn without knowing a word inside it. `esc` backs out one stage
+before it closes, and `ctrl+y` copies the whole reply of the turn under the
+cursor from either stage — the escape hatch for when you did want all of it. Tool
+calls and their results are never offered: they are most of a transcript and none
+of what people copy.
+
+**`/copy last`** keeps the old one-shot behaviour — the whole last reply, no
+picker — and `/copy code` narrows that to the last fenced code block in it,
+including one the model never finished, since a cancelled or truncated reply is
+when you are most likely to want it. The picker keeps a fence's ``` markers so it
+pastes as code; `/copy code` strips them, as it always has.
 
 Locally this runs `pbcopy` / `wl-copy` / `xclip`. Over ssh those would address the
 wrong machine, so terva instead asks **your** terminal to set **its** clipboard
@@ -515,6 +535,7 @@ Slash commands also work while the agent is busy. Read-only ones (`/help`, `/jum
 | `ctrl+s` | Set the current draft aside to answer the agent first (press again to bring it back; it also returns on its own after your next message goes out). See [Setting a draft aside](#setting-a-draft-aside-ctrls). |
 | `ctrl+t` | Cycle tool display: boxes → minimal one-liners → grouped → hidden. Errors stay visible; `ctrl+o` recovers everything. |
 | `ctrl+v` | Paste an image from the system clipboard into the prompt (same as `/paste`). Text paste needs no key — it arrives as a bracketed paste. |
+| `ctrl+y` | Open the copy picker: turn, then part, then clipboard. Inside it, `ctrl+y` copies the whole reply of the highlighted turn. Same as `/copy`. See [Copying text out](#copying-text-out). |
 | `@` | Open the file picker. Browse files and directories in the working directory. |
 
 ### File picker (`@`)

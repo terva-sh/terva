@@ -48,6 +48,7 @@ const (
 	KeyCtrlS
 	KeyCtrlT
 	KeyCtrlV
+	KeyCtrlY
 	KeyPaste
 	KeyMouseWheelUp
 	KeyMouseWheelDown
@@ -107,6 +108,11 @@ func (r *Reader) Read() (Key, error) {
 		return Key{Kind: KeyCtrlT}, nil
 	case b == 0x16:
 		return Key{Kind: KeyCtrlV}, nil
+	case b == 0x19:
+		// DSUSP (delayed suspend) on macOS and the BSDs, but that is an
+		// IEXTEN feature and raw mode (term.MakeRaw) clears IEXTEN, so the
+		// byte reaches us as an ordinary chord rather than suspending.
+		return Key{Kind: KeyCtrlY}, nil
 	case b == '\r':
 		return Key{Kind: KeyEnter}, nil
 	case b == '\n':

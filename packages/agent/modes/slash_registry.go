@@ -86,7 +86,7 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 		return false
 	},
 	"/copy": func(i *Interactive, _ context.Context, parts []string, _ string) bool {
-		i.copyLastReply(strings.Join(parts[1:], " "))
+		i.runCopyCommand(strings.Join(parts[1:], " "))
 		return false
 	},
 	"/compact": func(i *Interactive, ctx context.Context, _ []string, _ string) bool {

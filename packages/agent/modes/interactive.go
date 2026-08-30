@@ -592,6 +592,7 @@ type Interactive struct {
 	sessionDialog     *dialogs.SessionDialog
 	swarmDialog       *dialogs.SwarmDialog
 	jumpDialog        *dialogs.JumpDialog
+	copyDialog        *dialogs.CopyDialog
 	btwDialog         *dialogs.BtwDialog
 	skillsDialog      *dialogs.SkillsDialog
 	reasoningDialog   *dialogs.ReasoningDialog
@@ -1139,6 +1140,7 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 		sessionDialog:     dialogs.NewSessionDialog(),
 		swarmDialog:       dialogs.NewSwarmDialog(),
 		jumpDialog:        dialogs.NewJumpDialog(),
+		copyDialog:        dialogs.NewCopyDialog(),
 		btwDialog:         dialogs.NewBtwDialog(),
 		skillsDialog:      dialogs.NewSkillsDialog(),
 		reasoningDialog:   dialogs.NewReasoningDialog(),

@@ -22,6 +22,20 @@ func lines(n int) []string {
 	return out
 }
 
+// budgetTranscript is n turns, each with reasoning and a long reply, so the
+// copy picker has far more turns and far more parts than fit.
+func budgetTranscript(n int) []provider.Message {
+	var out []provider.Message
+	for i := range n {
+		out = append(out, jdUser(fmt.Sprintf("question %d", i)))
+		out = append(out, provider.Message{Role: provider.RoleAssistant, Content: []provider.Content{
+			provider.ReasoningBlock{Summary: strings.Repeat("a line of thinking\n\n", 20)},
+			provider.TextBlock{Text: strings.Repeat("a paragraph of the reply\n\n", 30)},
+		}})
+	}
+	return out
+}
+
 // sized is one dialog under test: set its budget, render it, and report how tall
 // it came out. Every case is given far more content than fits, so the scroll
 // indicators are showing — the state where chrome is at its maximum and the one
@@ -36,6 +50,27 @@ type sized struct {
 
 func budgetCases() []sized {
 	return []sized{
+		// Both stages of the copy picker, because they declare different
+		// chrome: stage two pays for the preview pane and its rule.
+		{"copy/turns", func(th tui.Theme, termRows, w int) (int, int) {
+			d := NewCopyDialog()
+			d.Open(budgetTranscript(200), "")
+			d.MaxRows = BodyBudget(termRows, d.ChromeRows())
+			for range 3 {
+				d.HandleKey(tui.Key{Kind: tui.KeyDown}) // scroll in, so BOTH markers show
+			}
+			return len(d.Render(th, w)), d.ChromeRows()
+		}},
+		{"copy/parts", func(th tui.Theme, termRows, w int) (int, int) {
+			d := NewCopyDialog()
+			d.Open(budgetTranscript(200), "")
+			d.HandleKey(tui.Key{Kind: tui.KeyEnter}) // descend into a turn
+			d.MaxRows = BodyBudget(termRows, d.ChromeRows())
+			for range 3 {
+				d.HandleKey(tui.Key{Kind: tui.KeyDown})
+			}
+			return len(d.Render(th, w)), d.ChromeRows()
+		}},
 		{"changelog", func(th tui.Theme, termRows, w int) (int, int) {
 			d := NewChangelogDialog()
 			d.Open("v0.130.1", "https://example.invalid/notes", strings.Repeat("a release note\n", 200))

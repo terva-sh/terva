@@ -96,6 +96,7 @@ func (i *Interactive) buildGlobalKeymap() []globalBinding {
 		{kind: tui.KeyCtrlS, name: "stash-draft", run: i.keyStashDraft},
 		{kind: tui.KeyCtrlT, name: "cycle-tool-display", run: i.keyCycleToolDisplay},
 		{kind: tui.KeyCtrlV, name: "paste-clipboard-image", run: i.keyPasteClipboard},
+		{kind: tui.KeyCtrlY, name: "copy-picker", run: i.keyOpenCopyPicker},
 		{kind: tui.KeyShiftTab, name: "cycle-approval-mode", run: i.keyCycleApprovalMode},
 		{kind: tui.KeyPageUp, name: "scroll-page-up", run: func(context.Context, tui.Key) keyOutcome {
 			// The slash popup pages its own catalog; only it gets the
