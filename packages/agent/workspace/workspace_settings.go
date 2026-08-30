@@ -143,13 +143,13 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 			Key: "show_reasoning", Label: i18n.T("Show thinking"), Type: "bool",
 			Value:       boolStr(cfg.ShowReasoning),
 			Description: i18n.T("Show what the model is working on, on its own line, while it works. Nothing is written to the session file."),
-			Note:        i18n.T("openai-codex and google only — shown while the turn runs, then gone"),
+			Note:        i18n.T("asks the providers that must be asked (openai-codex, google) — anthropic sends thinking unbidden and shows it either way"),
 		},
 		{
 			Key: "reasoning_summary", Label: i18n.T("Record thinking"), Type: "enum",
-			Value: cfg.ReasoningSummary, Options: localizeOptions(reasoningSummaryOptions),
+			Value: cfg.ReasoningSummaryMode(), Options: localizeOptions(reasoningSummaryOptions),
 			Description: i18n.T("Persist a readable summary of the model's reasoning, so an unattended run can be reviewed for why it acted."),
-			Note:        i18n.T("openai-codex only — writes reasoning to disk"),
+			Note:        i18n.T("every provider that sends thinking — with it off, anthropic thinking is dropped from the session entirely"),
 		},
 		{
 			Key: "auto_title", Label: i18n.T("Auto-title sessions"), Type: "bool",
@@ -432,7 +432,10 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 		default:
 			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown reasoning_summary %q (auto|concise|detailed)", val))
 		}
-		if err := config.MutateConfig(func(c *config.Config) { c.ReasoningSummary = val }); err != nil {
+		// Written through a pointer so a chosen "off" is recorded as an explicit
+		// choice rather than an absent key, which would read back as the default.
+		chosen := val
+		if err := config.MutateConfig(func(c *config.Config) { c.ReasoningSummary = &chosen }); err != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
 		}
 		s.ws.applyReasoningSummary(val) // live to every session's agent

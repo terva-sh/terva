@@ -20,6 +20,7 @@ import { ImageGallery } from '../../ui/ImageGallery'
 import { usePinnedTail } from '../../ui/pinnedtail'
 import { ConnectionBanner, Placeholder } from '../../ui/Loading'
 import { Markdown } from '../../ui/Markdown'
+import { ReasoningDisclosure } from '../../ui/ReasoningDisclosure'
 import { ReasoningPick, reasoningLabel } from '../../ui/ReasoningPick'
 import { useConversation } from './useConversation'
 import { useAutoGrow } from './autogrow'
@@ -899,7 +900,16 @@ function ChatRow(props: {
             )}
             {editing ? editBox : (
               <>
-                <Markdown class="stage-bubble" text={item.text} onClick={onBubbleClick} />
+                {/* Thinking leads the line it produced, collapsed. The panel has
+                    shown this for a while and the stage showed nothing at all,
+                    because the component and its CSS lived in the panel's own
+                    tree. Both now render ui/ReasoningDisclosure. */}
+                {item.reasoning && <ReasoningDisclosure summary={item.reasoning} />}
+                {/* No bubble without words. A turn that thinks and then calls a
+                    tool has thinking and no text, and an empty bubble in a scene
+                    reads as a character saying nothing. The caret below is the
+                    streaming placeholder, so nothing needs an empty box. */}
+                {item.text && <Markdown class="stage-bubble" text={item.text} onClick={onBubbleClick} />}
                 {item.images && <ImageGallery images={item.images} />}
               </>
             )}

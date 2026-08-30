@@ -29,16 +29,29 @@ type Config struct {
 	// ReasoningSummary persists a human-readable summary of the model's
 	// reasoning into the session record, so an unattended run can be reviewed
 	// for WHY it acted and not only what it did. "auto" | "concise" |
-	// "detailed"; empty (the default) is OFF, which keeps requests and session
-	// records byte-identical to a build without this setting.
+	// "detailed"; the empty string is OFF.
 	//
-	// Off by default because it puts the model's reasoning on disk: a summary
-	// of a turn spent reading mail can quote that mail. Tool results in the
-	// same file already carry comparable content, so this is not a new class
-	// of exposure, but it does make the file more quotable — worth a decision
-	// rather than a default. Only the openai-codex path implements it; other
-	// providers ignore it. See docs/models.md § Persisting reasoning summaries.
-	ReasoningSummary string `json:"reasoning_summary,omitempty"`
+	// 🪤 A POINTER, and that is load-bearing. Off is encoded as "", so with a
+	// plain string a default of "auto" would make off unselectable: the value
+	// the operator picks to turn it off is the value that means "unset". nil is
+	// "never chose" and takes DefaultReasoningSummary; a non-nil "" is a
+	// deliberate off and is honoured. Read it through ReasoningSummaryMode.
+	//
+	// 🪤 It was once documented as "only the openai-codex path implements it;
+	// other providers ignore it". That was never true of persistence. The
+	// REQUEST flag is Codex-only, but this setting also gates what survives to
+	// disk for every provider that sends thinking unbidden — Anthropic, Gemini,
+	// and the chat backends. For Anthropic it decides whether the block is kept
+	// at all, because a thinking block is sealed by a signature over its own
+	// text and so cannot be blanked, only dropped (dropUnrecordableThinking).
+	//
+	// It puts the model's reasoning on disk: a summary of a turn spent reading
+	// mail can quote that mail. Tool results in the same file already carry
+	// comparable content, so this is not a new class of exposure. It defaults
+	// ON because the thinking displays are worth little when the text they read
+	// is discarded at the end of every turn.
+	// See docs/models.md § Persisting reasoning summaries.
+	ReasoningSummary *string `json:"reasoning_summary,omitempty"`
 	// ShowReasoning displays the model's reasoning summary on its own line
 	// while the turn runs, and records NOTHING: the text is blanked before the
 	// message is persisted, so the session file is byte-identical to a run with
@@ -437,6 +450,24 @@ type TierConfig struct {
 type TierRung struct {
 	Model     string `json:"model,omitempty"`
 	Reasoning string `json:"reasoning,omitempty"`
+}
+
+// DefaultReasoningSummary is the mode a config that has never carried the key
+// resolves to. It is ON: the thinking displays (the TUI block, ctrl+r, the web
+// disclosure, the copy picker's think parts) all read persisted text, and with
+// recording off they have nothing to show once the turn ends.
+const DefaultReasoningSummary = "auto"
+
+// ReasoningSummaryMode resolves the setting to the mode that should apply.
+//
+// nil means the operator never chose, and takes the default. A non-nil "" is a
+// deliberate off and is honoured. The distinction cannot be made from the field
+// alone, which is why it is a pointer -- see the field's own note.
+func (c Config) ReasoningSummaryMode() string {
+	if c.ReasoningSummary == nil {
+		return DefaultReasoningSummary
+	}
+	return *c.ReasoningSummary
 }
 
 // UnmarshalJSON accepts the bare-string form and the object form. The bare

@@ -1,10 +1,16 @@
 import { useMemo, useState } from 'preact/hooks'
 
-import { t } from '../../i18n'
-import { renderMarkdown } from '../../markdown'
+import { t } from '../i18n'
+import { renderMarkdown } from '../markdown'
 
 // ReasoningDisclosure shows the thinking RECORDED on one assistant message,
 // collapsed behind a chevron.
+//
+// It lives in ui/ because BOTH apps render it: the chat panel through
+// MessageContent, and the stage through its own ChatRow. It began in
+// features/conversation, and the stage simply had no thinking at all -- the
+// drift the ui-conformance suite exists to catch. Its CSS moved to ui.css with
+// it, on the --ui-* tokens both apps map to their own palettes.
 //
 // It is not the live reasoning line. That one streams from `reasoning_delta`,
 // lives in SessionState.reasoning, and is dropped the moment the turn ends —

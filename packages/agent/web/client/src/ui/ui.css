@@ -280,6 +280,35 @@ button { font: inherit; color: inherit; cursor: pointer; }
   .ui-placeholder__row { opacity: .7; }
 }
 
+/* Recorded thinking, above the reply it produced. Borrows the compaction
+   disclosure's shape because it is the same gesture — a muted pill that opens a
+   quieter body — but carries no rule: this belongs to one message, and a
+   full-width line would read as a boundary between turns.
+
+   Base sheet, not an app sheet: the panel and the stage both render
+   ui/ReasoningDisclosure. It lived in styles.css when only the panel had
+   thinking, which is precisely how the stage went without it.
+
+   The type sizes are declared HERE rather than read from the panel's --fs-*.
+   Those are app-private: the stage does not define them, so reading them from
+   a shared rule resolves to nothing there and the text silently inherits its
+   size. That is the same failure that once left .reasoning-pick with no
+   background in the stage, and ui-conformance refuses it now -- a fallback
+   value does not help, because the rule is about what a shared sheet READS.
+   An app may still override these two if it wants its own scale. */
+:root {
+  --ui-fs-note: 11px;
+  --ui-fs-detail: 12px;
+}
+.reasoning { align-self: stretch; width: 100%; min-width: 0; margin: 0 0 6px; }
+.reasoning-toggle { display: flex; align-items: center; gap: 5px; font: inherit; font-size: var(--ui-fs-note); color: var(--ui-muted); background: none; border: 1px solid var(--ui-line); border-radius: 999px; padding: 2px 10px; cursor: pointer; white-space: nowrap; }
+.reasoning-toggle:hover { color: var(--ui-fg); }
+.reasoning-chev { font-size: 9px; }
+/* overflow-wrap keeps a long unbroken token (a path, a URL) inside the column
+   instead of forcing the whole block to scroll sideways — the web counterpart
+   of the hard wrap the TUI applies to the same text. */
+.reasoning-summary { margin-top: 6px; padding: 10px 12px; border-left: 2px solid var(--ui-line); font-size: var(--ui-fs-detail); color: var(--ui-muted); overflow-x: auto; overflow-wrap: anywhere; }
+
 /* The per-session reasoning picker. Sized and positioned like the model
    picker it sits beside — the two answer the same shape of question ("how does
    THIS session run") and should not look like different kinds of control. */

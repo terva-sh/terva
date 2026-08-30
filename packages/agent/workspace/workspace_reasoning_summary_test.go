@@ -31,8 +31,12 @@ func TestSettingsReasoningSummary(t *testing.T) {
 	if it == nil || it.Type != "enum" {
 		t.Fatalf("no reasoning_summary enum row in the settings view: %+v", s.settingsView().Items)
 	}
-	if it.Value != "" {
-		t.Errorf("default = %q, want \"\" (off) — recording reasoning to disk is opt-in", it.Value)
+	// Recording used to be opt-in. It is now on by default: every thinking
+	// display reads persisted text, so with recording off the TUI block, ctrl+r,
+	// the web disclosure and the copy picker's think parts all have nothing to
+	// show once the turn ends.
+	if it.Value != config.DefaultReasoningSummary {
+		t.Errorf("default = %q, want %q", it.Value, config.DefaultReasoningSummary)
 	}
 	want := map[string]bool{"": true, "auto": true, "concise": true, "detailed": true}
 	if len(it.Options) != len(want) {
@@ -50,8 +54,8 @@ func TestSettingsReasoningSummary(t *testing.T) {
 	if err := s.settingsAction("set", map[string]string{"key": "reasoning_summary", "value": "concise"}); err != nil {
 		t.Fatalf("set reasoning_summary: %v", err)
 	}
-	if cfg, _ := config.LoadConfig(); cfg.ReasoningSummary != "concise" {
-		t.Errorf("config.ReasoningSummary = %q, want concise", cfg.ReasoningSummary)
+	if cfg, _ := config.LoadConfig(); cfg.ReasoningSummary == nil || *cfg.ReasoningSummary != "concise" {
+		t.Errorf("config.ReasoningSummary = %v, want concise", cfg.ReasoningSummary)
 	}
 	if it := findSetting(s.settingsView(), "reasoning_summary"); it == nil || it.Value != "concise" {
 		t.Errorf("the view should reflect concise, got %+v", it)
@@ -60,11 +64,26 @@ func TestSettingsReasoningSummary(t *testing.T) {
 	// Turning it back off must round-trip: the empty value is a real choice
 	// here, not "unset", and an enum that cannot return to off would strand
 	// reasoning on disk.
+	//
+	// This is what the pointer buys, and it matters more now that the default is
+	// on. An absent key resolves to "auto", so a chosen off has to be written as
+	// an explicit empty string; recorded as absence it would read straight back
+	// as the default and silently keep writing reasoning to disk.
 	if err := s.settingsAction("set", map[string]string{"key": "reasoning_summary", "value": ""}); err != nil {
 		t.Fatalf("set reasoning_summary off: %v", err)
 	}
-	if cfg, _ := config.LoadConfig(); cfg.ReasoningSummary != "" {
-		t.Errorf("config.ReasoningSummary = %q, want empty after turning off", cfg.ReasoningSummary)
+	cfg, _ := config.LoadConfig()
+	if cfg.ReasoningSummary == nil {
+		t.Fatal("turning it off left the key absent, which now reads back as the default")
+	}
+	if *cfg.ReasoningSummary != "" {
+		t.Errorf("config.ReasoningSummary = %q, want empty after turning off", *cfg.ReasoningSummary)
+	}
+	if got := cfg.ReasoningSummaryMode(); got != "" {
+		t.Errorf("ReasoningSummaryMode() = %q after choosing off, want it honoured", got)
+	}
+	if it := findSetting(s.settingsView(), "reasoning_summary"); it == nil || it.Value != "" {
+		t.Errorf("the view should reflect off, got %+v", it)
 	}
 }
 
@@ -106,7 +125,10 @@ func TestSettingsReasoningSummaryRejectsUnknown(t *testing.T) {
 	if err := s.settingsAction("set", map[string]string{"key": "reasoning_summary", "value": "verbose"}); err == nil {
 		t.Fatal("an unknown reasoning_summary value was accepted")
 	}
-	if cfg, _ := config.LoadConfig(); cfg.ReasoningSummary != "" {
-		t.Errorf("a refused value was still persisted: %q", cfg.ReasoningSummary)
+	// Nil, not empty: a refused value writes nothing at all, so the key stays
+	// absent. An explicit empty string would be a deliberate off, which is a
+	// different thing and would survive as one.
+	if cfg, _ := config.LoadConfig(); cfg.ReasoningSummary != nil {
+		t.Errorf("a refused value was still persisted: %q", *cfg.ReasoningSummary)
 	}
 }

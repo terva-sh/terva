@@ -33,6 +33,33 @@ describe('MessageContent', () => {
     expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()
   })
 
+  // A turn that thinks and then calls a tool carries thinking, a tool_call and
+  // no text -- the shape Anthropic emits most. The store keeps that item so the
+  // thinking survives, and rendering its empty body put a blank bubble under
+  // every such block.
+  it('shows the thinking but no empty bubble for a text-less assistant message', () => {
+    const { container } = show({
+      kind: 'assistant',
+      id: 'a3',
+      text: '',
+      streaming: false,
+      reasoning: 'weighing two indexes',
+    })
+    expect(container.querySelector('.reasoning')).toBeTruthy()
+    expect(container.querySelector('.msg.assistant')).toBeNull()
+  })
+
+  it('still renders the bubble when a message has only images', () => {
+    const { container } = show({
+      kind: 'assistant',
+      id: 'a4',
+      text: '',
+      streaming: false,
+      images: [{ mime: 'image/png', data: 'cG5n' }],
+    })
+    expect(container.querySelector('.msg.assistant')).toBeTruthy()
+  })
+
   it('renders error, system, and attributed error notices with existing classes', () => {
     const error = show({ kind: 'error', id: 'e1', text: 'failed turn' })
     expect(error.container.querySelector('.msg.err')?.textContent).toBe('failed turn')

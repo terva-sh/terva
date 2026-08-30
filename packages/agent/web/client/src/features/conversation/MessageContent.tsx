@@ -8,7 +8,7 @@ import { Markdown } from '../../ui/Markdown'
 import { memo } from '../../ui/memo'
 import { ClearDivider } from './ClearDivider'
 import { CompactionDivider, type RevealFn } from './CompactionDivider'
-import { ReasoningDisclosure } from './ReasoningDisclosure'
+import { ReasoningDisclosure } from '../../ui/ReasoningDisclosure'
 import type { ToolView } from './types'
 
 export type { ToolView } from './types'
@@ -79,10 +79,19 @@ function AssistantMessage({
           thought and then only called a tool carries no text at all, so this
           can legitimately be the whole row. */}
       {item.reasoning && <ReasoningDisclosure summary={item.reasoning} defaultOpen={thinkingOpen} />}
-      <div class="msg assistant md">
-        <Markdown text={item.text} />
-        {item.images && <ImageGallery images={item.images} />}
-      </div>
+      {/* No bubble for a message with nothing in it. A turn that thinks and then
+          calls a tool carries thinking, a tool_call and NO text -- the shape
+          Anthropic emits most -- and the store keeps that item on purpose so the
+          thinking survives. Rendering its empty body put a blank bubble under
+          every such block, which broke the visual flow of the transcript.
+          Streaming is not a case here: a streaming row returns earlier, from
+          the caller, and never reaches this function. */}
+      {(item.text || item.images) && (
+        <div class="msg assistant md">
+          <Markdown text={item.text} />
+          {item.images && <ImageGallery images={item.images} />}
+        </div>
+      )}
       {item.text && <CopyButton text={item.text} />}
       <MessageTime time={item.time} />
     </div>

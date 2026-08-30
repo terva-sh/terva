@@ -1371,7 +1371,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		CWD:                      args.CWD,
 		Reasoning:                reasoning,
 		ReasoningSet:             reasoningSet,
-		ReasoningSummary:         provider.NormalizeReasoningSummary(eff.Config.ReasoningSummary),
+		ReasoningSummary:         provider.NormalizeReasoningSummary(eff.Config.ReasoningSummaryMode()),
 		ShowReasoning:            eff.Config.ShowReasoning,
 		Temperature:              temperature,
 		ImageOutput:              imageOutput,

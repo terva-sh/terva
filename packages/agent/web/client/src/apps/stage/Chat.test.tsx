@@ -6,6 +6,67 @@ import type { WireEvent } from '../../platform/ctrlproto/types'
 import { Chat, deleteWarning } from './Chat'
 import { useConversation } from './useConversation'
 
+// The panel has shown recorded thinking for a while; the stage showed none,
+// because the component and its CSS lived in the panel's own tree.
+describe('stage recorded thinking', () => {
+  afterEach(cleanup)
+
+  const seed = (content: unknown[]) =>
+    ({
+      type: 'snapshot',
+      snapshot: {
+        epoch: 1,
+        base: 0,
+        total: 1,
+        busy: false,
+        session: { id: 's1', experience: 'chat' },
+        messages: [{ role: 'assistant', content }],
+      },
+    }) as unknown as WireEvent
+
+  const mount = (content: unknown[]) => {
+    vi.useFakeTimers()
+    const client = fakeClient()
+    const out = render(
+      <Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} onOpenStudio={() => {}} />,
+    )
+    act(() => {
+      client.emit('s1', seed(content))
+      vi.advanceTimersByTime(64)
+    })
+    vi.useRealTimers()
+    return out
+  }
+
+  it('shows thinking collapsed above the line it produced', () => {
+    const { container } = mount([
+      { type: 'reasoning', summary: 'weighing the door' },
+      { type: 'text', text: 'the door shuts' },
+    ])
+    expect(container.querySelector('.reasoning-toggle')).toBeTruthy()
+    // Collapsed: the body is behind the chevron until asked for.
+    expect(container.querySelector('.reasoning-summary')).toBeNull()
+    expect(container.querySelector('.stage-bubble')).toBeTruthy()
+  })
+
+  it('opens the thinking body on click', () => {
+    const { container } = mount([
+      { type: 'reasoning', summary: 'weighing the door' },
+      { type: 'text', text: 'the door shuts' },
+    ])
+    fireEvent.click(container.querySelector('.reasoning-toggle') as Element)
+    expect(container.querySelector('.reasoning-summary')?.textContent).toContain('weighing the door')
+  })
+
+  // A turn that thinks and then calls a tool carries no text. An empty bubble
+  // in a scene reads as a character saying nothing.
+  it('shows the thinking but no empty bubble when the turn only called a tool', () => {
+    const { container } = mount([{ type: 'reasoning', summary: 'checking the lock' }])
+    expect(container.querySelector('.reasoning-toggle')).toBeTruthy()
+    expect(container.querySelector('.stage-bubble')).toBeNull()
+  })
+})
+
 describe('deleteWarning', () => {
   // Deleting the last message is a clean rewind. Deleting one with a downstream
   // is a different act — the replies below were written to something that is
