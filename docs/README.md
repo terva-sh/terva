@@ -68,6 +68,7 @@ the field have learned about this category, generalized and evidence-graded.
 | Doc | About |
 |---|---|
 | [deploy.md](deploy.md) | Running terva bots as services |
+| [scheduled-jobs.md](scheduled-jobs.md) | Running terva unattended on a timer — watches, reports, follow-ups |
 | [providers.md](providers.md) | Provider setup & auth |
 | [profiling.md](profiling.md) | Profiling terva |
 | [resource-limits.md](resource-limits.md) | Resource limits |
@@ -84,7 +85,8 @@ not linked, because the links would 404 for most readers:
 |---|---|
 | `docs/architecture/` | The **implementation tier**: subsystem-by-subsystem internals cited to Go files and symbols, refreshed 2026-07-26 as an as-built record (docs 08/09 stay frozen June-2026 reviews; removals are logged in `ARCHIVE.md`, and `07-observations.md` is the standing review agenda). The conceptual counterpart of each doc ships publicly in [`design/`](design/README.md). |
 | `docs/plans/` | Active work plans plus the living roadmap. Implemented plans move to `plans/archive/`. |
-| `docs/proposals/` | Active design proposals; implemented ones move to `proposals/archive/`. |
+| `docs/ideas/` | The **idea ledger**: the cheap tier in front of proposals. Six pools — `captured`, `maybe`, `considering`, `accepted` (promoted, pointing at what owns it), `done` (built directly), `declined` (with the reasoning and what would reopen it). Capture is one command, `just idea`; the index is generated. |
+| `docs/proposals/` | Active design proposals; implemented ones move to `proposals/archive/`. Six statuses — `exploration`, `proposed`, `in-flight`, `partial`, `shipped`, `archived` (only ever in `archive/`). The index is generated from each proposal's frontmatter, with the summary capped at 200 characters. |
 | `docs/decisions/` | Decision records — both the load-bearing calls we took and the directions we declined, each with what would reopen it. |
 | `docs/reviews/` | Point-in-time whole-project review findings. |
 | `docs/vanity/` | The terva.sh vanity-site sources. |

@@ -25,6 +25,7 @@ import (
 var internalSubdirs = map[string]string{
 	"architecture": "the Go-level implementation tier; cites symbols and internal review findings",
 	"decisions":    "decision records; cite internal plans, reviews and infrastructure",
+	"ideas":        "the idea ledger: unbuilt ideas nobody has committed to, and the reasoning behind recorded declines",
 	"plans":        "active work plans and the roadmap",
 	"proposals":    "design proposals, many unimplemented",
 	"reviews":      "point-in-time whole-project review findings",

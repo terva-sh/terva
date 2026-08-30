@@ -55,14 +55,14 @@ import (
 // PerTurnContext, which is why an earlier version of this comment counted six
 // and missed the task card — the only part carrying no framing at all.
 //
-// docs/proposals/tailhost-census.md is the full census: producer, wrapper and
-// guard for each part, and six findings. Two worth knowing before editing
-// anything here. Three of the eight have authorities this table does not offer
-// a row for (state, override, identity), so the taxonomy below does not span
-// what TailHost carries. And precedence policy exists in three separately
-// worded strings pointing in TWO directions — memory recall and lore lose to
-// the conversation, the scene-state card beats stale prose — so consolidating
-// them would silently invert one.
+// docs/proposals/archive/tailhost-census.md is the full census: producer,
+// wrapper and guard for each part, and six findings. Two worth knowing before
+// editing anything here. Three of the eight have authorities this table does
+// not offer a row for (state, override, identity), so the taxonomy below does
+// not span what TailHost carries. And precedence policy exists in three
+// separately worded strings pointing in TWO directions — memory recall and
+// lore lose to the conversation, the scene-state card beats stale prose — so
+// consolidating them would silently invert one.
 const (
 	// TailHost is host-assembled context — an extension's live task card, the
 	// lore tail. Its text is the host's, not the harness's.

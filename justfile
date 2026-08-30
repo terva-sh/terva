@@ -15,6 +15,16 @@ import? 'release.just'
 # optional-import reason: the public tree ships without forge.just.
 import? 'forge.just'
 
+# Maintainer-only idea-ledger targets (idea/ideas/idea-promote/…). Same
+# optional-import reason: the public tree ships without ideas.just, the
+# script it drives, and docs/ideas/ itself.
+import? 'ideas.just'
+
+# Maintainer-only proposals targets (proposals/proposal-check/…). Same
+# optional-import reason: the public tree ships without proposals.just, the
+# generator it drives, and docs/proposals/ itself.
+import? 'proposals.just'
+
 # This is a hard fork (renamed terva). The flow is OUTBOUND only:
 # `just mirror-*` pushes the curated release branches to the public
 # GitHub mirror. Upstream tracking was retired in July 2026 (the
@@ -518,18 +528,28 @@ ci: lint test ci-acp ci-web ci-scripting ci-workflows ci-web-client ci-web-smoke
     # leaks it rather than on the release that would have shipped it.
     @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-scrub; else echo "ci: SKIPPED check-scrub (scripts/release.sh absent on this tree)"; fi
 
-# Pre-release gate for a public cut: the full local CI, then the manual
-# reminders for what can only be verified on GitHub. The public release
-# workflow hard-gates publishing on the public CI overlay (Windows/macOS +
-# web-client) passing for the tagged commit, so the tag must be pushed only
-# after that overlay is green on the release-branch tip.
+# Pre-release gate for a public cut: the full local CI, then the public-channel
+# facts that can be established before anything is pushed.
+#
+# This used to end in four `echo`s asking someone to go and check things by
+# hand. Three of them are commands now, and the fourth — is the public ci green
+# on the commit about to be tagged — belongs to `just release-golive`, which
+# gates on it rather than reminding anyone about it. A reminder nobody can fail
+# is not a gate.
 release-preflight-public: ci
     @echo ""
-    @echo "Local gate passed. Before pushing the release tag, confirm on GitHub:"
-    @echo "  - the public 'ci' workflow (Windows/macOS matrix + web-client vitest)"
-    @echo "    is GREEN on the release-branch tip you are about to tag;"
-    @echo "  - the release workflow refuses to publish otherwise (verify-ci gate)."
-    @echo "Then push pub/vX.Y.Z. See scripts/release-overlay/.github/workflows/."
+    @if [ ! -x scripts/release.sh ]; then         echo "release tooling absent on this tree — local gate only"; exit 0;     fi
+    # Is the changelog current with what is already published? release-cut
+    # refuses to start otherwise, so finding out here saves the round trip.
+    @./scripts/changelog.sh audit || echo "  (fix with: just changelog-record)"
+    # What the exported surface did, for the patch-or-minor call.
+    @./scripts/release.sh api-diff
+    # Open alerts by SCOPE, not by banner count.
+    @./scripts/release.sh dependabot || true
+    @echo ""
+    @echo "Local gate passed. The public ci gate is not a reminder any more:"
+    @echo "  just release-golive        checks and polls, pushes nothing"
+    @echo "  just release-golive --yes  goes live"
 
 # Print the version string the binary would report, built from source.
 version:

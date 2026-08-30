@@ -129,8 +129,9 @@ const (
 	// It sits in the SESSION group, not the control group, because it grants no
 	// authority: a client that can read your transcripts already learns which
 	// provider you use from the first usage event. The verbs that CHANGE a
-	// credential are a separate group, at a higher authority, and do not exist
-	// yet — see docs/proposals/web-provider-login.md.
+	// credential are the separate, higher-authority auth group declared below,
+	// which a daemon advertises only when it will serve a login — see
+	// docs/proposals/archive/web-provider-login.md.
 	MethodAuthProviders Method = "auth.providers" // result ProvidersView (session-independent)
 
 	// --- auth group (optional; advertised only when the daemon will serve a

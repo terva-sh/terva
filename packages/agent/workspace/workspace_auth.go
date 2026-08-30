@@ -23,10 +23,12 @@ import (
 // as a turn that fails, rather than as "anthropic needs a re-login". This is the
 // read half: it explains what the panel can see, and changes nothing.
 //
-// The verbs that CHANGE a credential are a separate, higher-authority group and
-// do not exist yet (docs/proposals/web-provider-login.md). Until they do,
-// CanLogin is false and the pane says so, rather than offering a control that
-// would do nothing.
+// The verbs that CHANGE a credential are the separate, higher-authority auth
+// group (docs/proposals/archive/web-provider-login.md). This workspace serves
+// them only when its composition root called EnableAuth, so CanLogin reports
+// whether a login can actually be performed here rather than whether the group
+// exists at all — a pane that cannot sign you in says so, instead of offering a
+// control that would do nothing.
 
 // AuthProviders reports the workspace's model-provider credential state.
 //

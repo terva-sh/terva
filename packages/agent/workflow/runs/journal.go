@@ -19,7 +19,7 @@ import (
 // NEVER (no error row type exists): a failed agent leaves no record and
 // is simply retried on resume. Both properties are deliberate imports
 // from the Claude Code journal this design was probed against
-// (docs/proposals/workflow-structured-swarm.md — the format itself is
+// (docs/ideas/workflow-structured-swarm.md — the format itself is
 // terva-native; theirs is undocumented internal surface).
 
 const journalName = "journal.jsonl"

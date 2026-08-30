@@ -16,7 +16,7 @@ import (
 // behind a flag. A credential goes in and never comes back out — the client can
 // see THAT anthropic is logged in (auth.providers) and can replace or revoke it,
 // but nothing on this wire will ever hand it back the token. See Security in
-// docs/proposals/web-provider-login.md.
+// docs/proposals/archive/web-provider-login.md.
 
 // AuthController is the optional interface behind [GroupAuth]. A carrier that
 // implements it can serve a login; one that does not never advertises the group,

@@ -13,7 +13,7 @@ The protocol it speaks is the `ctrlproto` control plane —
 [docs/controllers.md](controllers.md) is the reference. The design record
 (`docs/proposals/terva-web.md`), the protocol rationale
 (`docs/proposals/control-plane-protocol.md`), and the platform horizon
-(`docs/proposals/terva-platform.md`) live in the development repository, not
+(`docs/ideas/terva-platform.md`) live in the development repository, not
 the public release tree.
 
 ## Running it

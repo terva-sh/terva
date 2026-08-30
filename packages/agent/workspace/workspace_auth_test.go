@@ -144,10 +144,12 @@ func TestEnvProvidersCarryTheirSetupGuidance(t *testing.T) {
 	}
 }
 
-// Until the auth group exists, the pane must not pretend it can sign you in.
+// A workspace whose composition root never called EnableAuth does not serve the
+// auth group, and the pane must not pretend it can sign you in. The helper above
+// builds exactly that: the group exists, this carrier just does not serve it.
 func TestThePaneDoesNotOfferALoginItCannotPerform(t *testing.T) {
 	seedCreds(t, "")
 	if providers(t).CanLogin {
-		t.Error("CanLogin is true, but no daemon serves a login yet — the pane would show a control that does nothing")
+		t.Error("CanLogin is true, but EnableAuth was never called — the pane would show a control that does nothing")
 	}
 }
