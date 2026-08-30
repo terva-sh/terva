@@ -11,6 +11,26 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.132.7](https://github.com/terva-sh/terva/releases/tag/v0.132.7) — 2026-08-30
+
+### Features
+
+- agent: a tool catalog a script can open on demand
+- examples: a tier-1 tool-call validator hook
+- models: hide models from the pickers, per provider
+- permissions: an opt-in classifier that screens tool calls
+- skills: grilling and house-style, two built-ins
+- tui: copy any block of a reply, not just the whole thing
+- tui: tell the terminal when a turn is busy
+- record model thinking by default, and show it in the stage
+
+### Fixes
+
+- core: one salvage path for a malformed model reply
+- provider: opencode-go limits from its own catalog key
+- tools: repair ten frictions a smaller model runs into
+- tui: generate the /help key list from the keymap
+
 ## [v0.132.5](https://github.com/terva-sh/terva/releases/tag/v0.132.5) — 2026-08-28
 
 ### Features
