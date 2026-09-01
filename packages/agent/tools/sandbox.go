@@ -291,13 +291,8 @@ func (s *Sandbox) checkUnder(path string) error {
 	if isUnder(rootAbs, target) {
 		return nil
 	}
-	// Symlink escapes cannot ride a grant: target is already canonical, so
-	// a link inside a writable root that points elsewhere resolves outside
-	// it and falls through to the refusal.
-	for _, w := range s.writableRoots {
-		if isUnder(w, target) {
-			return nil
-		}
+	if s.underWritableGrant(target) {
+		return nil
 	}
 	// Name the actor, and name the alternative. /unjail is a USER slash
 	// command the model cannot run, so a refusal that says "use /unjail"
@@ -313,6 +308,25 @@ func (s *Sandbox) checkUnder(path string) error {
 		return fmt.Errorf("jailed: cannot WRITE %q — it is outside the sandbox root %q. Reading it is allowed. Put scratch files under %s. Ask the user to run /unjail if you need to write here", path, s.Root, s.ScratchDir)
 	}
 	return fmt.Errorf("jailed: cannot WRITE %q — it is outside the sandbox root %q. Reading it is allowed. Ask the user to run /unjail if you need to write here", path, s.Root)
+}
+
+// underWritableGrant reports whether target falls inside a directory
+// registered with AddWritableRoot. target must ALREADY be canonical, which is
+// what keeps a grant from being widened: a symlink planted inside a writable
+// root that points elsewhere resolves outside it before it gets here, so it
+// fails this test rather than riding the grant out of the jail.
+//
+// Shared by the write check and the `cd` check so the two cannot drift. They
+// did drift: the write side honoured grants from the day they were added and
+// the cd side never learned about them, which left every granted directory
+// writable but not workable.
+func (s *Sandbox) underWritableGrant(target string) bool {
+	for _, w := range s.writableRoots {
+		if isUnder(w, target) {
+			return true
+		}
+	}
+	return false
 }
 
 // CheckCommand applies a lightweight sanity check to a bash command
@@ -652,10 +666,25 @@ func (s *Sandbox) checkCDTarget(dir string) error {
 	if err != nil {
 		return fmt.Errorf("sandbox path: %w", err)
 	}
-	if !isUnder(rootAbs, target) {
-		return fmt.Errorf("jailed: cd outside sandbox root is not allowed (ask the user to run /unjail if this is intended)")
+	if isUnder(rootAbs, target) {
+		return nil
 	}
-	return nil
+	// A directory the agent may WRITE is a directory it must be able to work
+	// IN. Granting the write and refusing the `cd` is not a narrower rule, it
+	// is an incoherent one: the tools that make a checkout useful — a build, a
+	// test run, any script that resolves paths against its own repo root — take
+	// a working directory, not a list of absolute paths. The agent that hits
+	// this does not stop; it rewrites every command with `git -C`, `--prefix`
+	// and `sh -c 'cd …'` until something sticks, which is the same work with
+	// the jail's reasoning stripped out of it.
+	//
+	// This does not widen the jail. It admits exactly the directories a host
+	// already registered with AddWritableRoot, and canonicalization upstream
+	// means a symlink inside one cannot carry the grant anywhere else.
+	if s.underWritableGrant(target) {
+		return nil
+	}
+	return fmt.Errorf("jailed: cd outside sandbox root is not allowed (ask the user to run /unjail if this is intended)")
 }
 
 // expandHome replaces a leading ~, ~/, or $HOME with the user's home

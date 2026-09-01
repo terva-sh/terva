@@ -8,6 +8,7 @@ import (
 
 	"terva.sh/terva/packages/agent/attach"
 	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/agent/worktree"
 	"terva.sh/terva/packages/secrets"
 	"terva.sh/terva/packages/secretstore"
 	"terva.sh/terva/packages/testsupport"
@@ -35,11 +36,12 @@ func restrictedSandbox(t *testing.T) (sb *tools.Sandbox, home, cwd string) {
 	}
 	sb = tools.NewSandbox(cwd)
 	restrictSensitiveReads(sb, home, cwd, false)
-	// Mirrors build.go's wiring. handoffs/ and scratch/ are deliberately NOT
-	// in the MkdirAll list above: a fresh home has neither until the first
-	// write, and both grants must already hold then.
+	// Mirrors build.go's wiring. handoffs/, scratch/ and worktrees/ are
+	// deliberately NOT in the MkdirAll list above: a fresh home has none of
+	// them until the first write, and every grant must already hold then.
 	allowHandoffWrites(sb, home)
 	allowScratchWrites(sb, home)
+	allowWorktreeWrites(sb, home)
 	sb.Lock()
 	return sb, home, cwd
 }
@@ -53,6 +55,7 @@ func restrictedSandboxConfigReadable(t *testing.T) (sb *tools.Sandbox, home, cwd
 	restrictSensitiveReads(sb2, home, cwd, true)
 	allowHandoffWrites(sb2, home)
 	allowScratchWrites(sb2, home)
+	allowWorktreeWrites(sb2, home)
 	sb2.Lock()
 	return sb2, home, cwd
 }
@@ -260,6 +263,61 @@ func TestScratchGrantLeavesTheWriteJailStanding(t *testing.T) {
 	// writes the file through a shell redirect instead.
 	if !strings.Contains(err.Error(), filepath.Join(home, scratchDirName)) {
 		t.Errorf("refusal does not name the scratch dir, so the model has nowhere to go: %v", err)
+	}
+}
+
+// A managed worktree is a checkout terva CREATED for the agent to work in, so
+// the jail has to follow it there. Before the grant, worktree_create reported
+// success, returned a path under $TERVA_HOME, and then every write to that path
+// was refused — the tool and the sandbox disagreeing about what the tool was
+// for.
+func TestWorktreeRootIsWritableAndWorkable(t *testing.T) {
+	home := testsupport.TempDir(t)
+	sb := &tools.Sandbox{Root: testsupport.TempDir(t)}
+	sb.Lock()
+	allowWorktreeWrites(sb, home)
+
+	root, legacy := worktree.HostRoots(home)
+
+	// The grant must land where worktree_create actually writes. Asserting the
+	// concrete location keeps this honest if HostRoots ever moves.
+	if want := filepath.Join(home, "worktrees"); root != want {
+		t.Fatalf("managed worktree root = %q, want %q", root, want)
+	}
+
+	// The real layout: <root>/<repo-key>/worktrees/<name>/<the checkout>.
+	checkout := filepath.Join(root, "terva-d78510cffa", "worktrees", "my-fix")
+	for _, target := range []string{
+		filepath.Join(checkout, "packages", "agent", "tools", "sandbox.go"),
+		filepath.Join(checkout, "README.md"),
+	} {
+		if err := sb.CheckPath(target); err != nil {
+			t.Errorf("write into a managed worktree should be allowed: %v", err)
+		}
+	}
+	// Writable is not enough: a checkout you cannot cd into cannot be built or
+	// tested, which is the entire reason to hand one to an agent.
+	if err := sb.CheckCommand("cd " + checkout + " && go test ./..."); err != nil {
+		t.Errorf("a managed worktree must be workable, not just writable: %v", err)
+	}
+
+	// The grant is that subtree alone. $TERVA_HOME itself and its other
+	// children stay jailed.
+	for _, target := range []string{
+		filepath.Join(home, "config.json"),
+		filepath.Join(home, "sessions", "s.jsonl"),
+		home,
+	} {
+		if err := sb.CheckPath(target); err == nil {
+			t.Errorf("%s must stay write-jailed — the grant is the worktree root, not $TERVA_HOME", target)
+		}
+	}
+
+	// The retired extension's data dir is deliberately not granted: the
+	// migration off it is terva's own Go code, which the sandbox never
+	// constrains, and ext-data/ is read-guarded on purpose.
+	if err := sb.CheckPath(filepath.Join(legacy, "anything")); err == nil {
+		t.Error("LegacyRoot must stay write-jailed")
 	}
 }
 

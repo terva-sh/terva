@@ -1050,6 +1050,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	restrictSensitiveReads(sandbox, home, args.CWD, configReadable)
 	allowHandoffWrites(sandbox, home)
 	allowScratchWrites(sandbox, home)
+	allowWorktreeWrites(sandbox, home)
 
 	// Skill discovery: scan project + global locations + built-in
 	// skills shipped with the binary. If any are found, register
@@ -1351,7 +1352,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// The set-signal is the RAW value (before normalizing): a non-empty raw
 	// level — including "off"/"none", which normalize to "" — is an explicit
 	// choice. Empty raw ⇒ unset ⇒ fall through to the catalog default.
-	rawReasoning := resolveRawReasoning(args.Reasoning, resolvedModel, eff.Config.Reasoning)
+	rawReasoning := ResolveRawReasoning(args.Reasoning, resolvedModel, eff.Config.Reasoning)
 	reasoning := provider.NormalizeReasoning(rawReasoning)
 	reasoningSet := rawReasoning != ""
 	// Temperature fall-through: --temperature flag > per-model (models.json) >
@@ -2117,7 +2118,7 @@ func noCredentialError(prov string, picked bool) error {
 	return fmt.Errorf("no credential for %s; pass --api-key, or sign in with /login", prov)
 }
 
-// resolveRawReasoning picks the raw reasoning level from the layers only the
+// ResolveRawReasoning picks the raw reasoning level from the layers only the
 // builder can tell apart: an explicit choice (--reasoning or a session
 // override), then an operator's per-model models.json value, then the global
 // config. Returns "" when the user chose none of them, which lets
@@ -2133,7 +2134,7 @@ func noCredentialError(prov string, picked bool) error {
 // that normalize to "" — so the rungs the builder owns return their own raw
 // input, and the two below it return "" so provider.EffectiveReasoning applies
 // the catalog default underneath. See provider.Model.DefaultReasoningSet.
-func resolveRawReasoning(explicit string, m provider.Model, global string) string {
+func ResolveRawReasoning(explicit string, m provider.Model, global string) string {
 	switch _, from := provider.ResolveReasoning(explicit, m, global); from {
 	case provider.ReasoningFromSession:
 		return explicit

@@ -269,6 +269,79 @@ func TestSandboxWritableRootGrantsNarrowWrites(t *testing.T) {
 	}
 }
 
+// A writable root has to be WORKABLE, not merely writable. The write check
+// honoured grants from the day they were added and the `cd` check never
+// learned about them, so a granted directory accepted an edit and refused the
+// build that would compile it. The agent that hit this did not stop at the
+// refusal; it reached for `git -C`, `--prefix` and `sh -c 'cd …'` until
+// something worked, which is the same write with the jail's reasoning removed.
+func TestSandboxAllowsCDIntoWritableRoot(t *testing.T) {
+	root := testsupport.TempDir(t)
+	home := testsupport.TempDir(t)
+	granted := filepath.Join(home, "worktrees")
+	nested := filepath.Join(granted, "repo-abc", "worktrees", "feature")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	sb := NewSandbox(root)
+	sb.AddWritableRoot(granted)
+	sb.Lock()
+
+	allowed := []string{
+		"cd " + granted,
+		"cd " + nested + " && go test ./...",
+		"cd \"" + nested + "\" && npm test",
+	}
+	for _, c := range allowed {
+		if err := sb.CheckCommand(c); err != nil {
+			t.Errorf("expected %q to be allowed inside a writable grant: %v", c, err)
+		}
+	}
+
+	// The grant is the granted tree alone. Its parent and siblings are not
+	// part of it, and neither is the rest of the filesystem.
+	blocked := []string{
+		"cd " + home,
+		"cd " + filepath.Join(home, "sessions"),
+		"cd /etc",
+	}
+	for _, c := range blocked {
+		if err := sb.CheckCommand(c); err == nil {
+			t.Errorf("expected %q to stay jailed — the grant is one subtree, not its parent", c)
+		}
+	}
+}
+
+// The cd side must not become a way to launder a grant. A symlink planted
+// inside a writable root resolves before it is matched, so it cannot carry the
+// grant out to whatever it points at — the same rule the write side already
+// held, now provably the same code path.
+func TestSandboxCDCannotRideASymlinkOutOfAGrant(t *testing.T) {
+	root := testsupport.TempDir(t)
+	home := testsupport.TempDir(t)
+	outside := testsupport.TempDir(t)
+	granted := filepath.Join(home, "worktrees")
+	if err := os.MkdirAll(granted, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(granted, "escape")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink unsupported here: %v", err)
+	}
+
+	sb := NewSandbox(root)
+	sb.AddWritableRoot(granted)
+	sb.Lock()
+
+	if err := sb.CheckCommand("cd " + link); err == nil {
+		t.Error("cd through a symlink out of a grant must be refused")
+	}
+	if err := sb.CheckPath(filepath.Join(link, "x.go")); err == nil {
+		t.Error("a write through that same symlink must stay refused")
+	}
+}
+
 func mustJSONRaw(t *testing.T, v any) []byte {
 	t.Helper()
 	return mustJSON(t, v)

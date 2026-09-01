@@ -6,6 +6,7 @@ import (
 	"terva.sh/terva/packages/agent/attach"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/agent/worktree"
 	"terva.sh/terva/packages/secrets"
 )
 
@@ -153,4 +154,35 @@ func allowScratchWrites(sandbox *tools.Sandbox, home string) {
 	dir := filepath.Join(home, scratchDirName)
 	sandbox.AddWritableRoot(dir)
 	sandbox.ScratchDir = dir
+}
+
+// allowWorktreeWrites grants the third $TERVA_HOME surface a jailed agent may
+// WRITE: the managed worktree root, where worktree_create puts the checkouts it
+// hands the agent to work in.
+//
+// terva creates these itself, on request, precisely so the agent can work in
+// them — and then jailed them, because they live under $TERVA_HOME rather than
+// under the session's cwd. That combination has no defensible reading. The tool
+// reported success and returned a path; every write to that path was refused.
+// The grant closes it, in the same shape as handoffs/ and scratch/: terva's own
+// state, created to be agent-written.
+//
+// The ROOT rather than one worktree, because the set is not known at setup —
+// worktree_create adds them mid-session and worktree_claim adopts ones an
+// earlier session left behind. Granting the root covers both without teaching
+// the sandbox to mutate its own grants while tools are running, which is a
+// race the set-once contract on writableRoots exists to avoid.
+//
+// HostRoots rather than a filepath.Join, because its own doc records three call
+// sites that built this path out of the same two literals and the silently
+// empty registry that follows when one of them drifts.
+//
+// LegacyRoot is deliberately NOT granted. It is the retired git-worktree
+// extension's data dir under ext-data/, which the worktree package migrates
+// repos off. That migration is terva's own Go code, which the sandbox does not
+// constrain, so the grant would buy nothing — and it would open a write hole in
+// a tree the read side guards on purpose (AddGuardedRoot, ExtDataDirName).
+func allowWorktreeWrites(sandbox *tools.Sandbox, home string) {
+	root, _ := worktree.HostRoots(home)
+	sandbox.AddWritableRoot(root)
 }
