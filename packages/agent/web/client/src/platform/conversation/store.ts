@@ -460,10 +460,29 @@ export function applyEvent(items: Item[], ev: WireEvent): Item[] {
     }
     case 'text_delta': {
       const last = items[items.length - 1]
+      // Appending to an OPEN row is unconditional. Once the row exists its
+      // whitespace is real content -- the space between two words, the blank
+      // line between two paragraphs -- and filtering it here would silently
+      // corrupt the streamed text.
       if (last && last.kind === 'assistant' && last.streaming) {
         const updated = { ...last, text: last.text + (ev.delta ?? '') }
         return [...items.slice(0, -1), updated]
       }
+      // OPENING one is conditional, and this is the invariant: a missing, empty
+      // or whitespace-only first delta carries no speech, and the item it would
+      // create renders as a bare rounded bubble with nothing inside it. That is
+      // the empty block reported between recorded thinking and a tool call.
+      // StreamPacer.push already drops the empty case upstream, so this is not
+      // the only guard -- it is the one that still holds when a caller bypasses
+      // the pacer, when another path forwards a raw event, or when the pacer's
+      // own filtering changes later.
+      //
+      // The cost is that a purely whitespace FIRST delta is dropped rather than
+      // kept as leading space. assistant_message keeps the streamed text as-is,
+      // so that drop is permanent -- accepted deliberately, because markdown
+      // ignores leading blank space and a real reply opens with a visible
+      // character.
+      if (!(ev.delta ?? '').trim()) return items
       return [...items, { kind: 'assistant', id: nextID(), text: ev.delta ?? '', streaming: true }]
     }
     case 'assistant_message': {

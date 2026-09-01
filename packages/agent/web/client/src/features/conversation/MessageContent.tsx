@@ -138,6 +138,15 @@ export const MessageContent = memo(function MessageContent({
       // Stream as raw text (re-parsing markdown per token is wasteful); render
       // markdown once the message finalizes.
       if (item.streaming) {
+        // The rendering half of the invariant applyEvent holds in its text_delta
+        // case. styles.css gives this element the assistant bubble's padding,
+        // background, border and streaming caret, so a row carrying nothing but
+        // whitespace is chrome wrapped around no speech -- the empty block
+        // reported after thinking and before a tool call. The working indicator
+        // and the live thinking block already cover the gap before the first
+        // real token, so dropping this row leaves the turn visibly in progress
+        // rather than silent.
+        if (!item.text.trim()) return null
         return <div class="msg assistant streaming">{item.text}</div>
       }
       return <AssistantMessage item={item} thinkingOpen={thinkingOpen} />

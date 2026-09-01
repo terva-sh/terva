@@ -33,6 +33,32 @@ describe('MessageContent', () => {
     expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()
   })
 
+  // The streaming branch carries the assistant bubble's padding, background,
+  // border and caret from styles.css, so a row with no speech in it is the
+  // empty block reported after thinking and before a tool call. applyEvent no
+  // longer opens such a row; this is the rendering defense behind that.
+  it.each([
+    ['an empty streaming row', ''],
+    ['a spaces-only streaming row', '   '],
+    ['a newline-only streaming row', '\n\n'],
+  ])('renders no bubble for %s', (_label, text) => {
+    const { container } = show({ kind: 'assistant', id: 'a5', text, streaming: true })
+    expect(container.querySelector('.msg.assistant.streaming')).toBeNull()
+    expect(container.querySelector('.msg.assistant')).toBeNull()
+  })
+
+  it('still renders a streaming row whose text is only just arriving', () => {
+    const { container } = show({ kind: 'assistant', id: 'a6', text: 'H', streaming: true })
+    expect(container.querySelector('.msg.assistant.streaming')?.textContent).toBe('H')
+  })
+
+  // Whitespace AROUND real text is content, not chrome: the guard keys on
+  // whether anything survives trimming, never on what is rendered.
+  it('keeps the surrounding whitespace of a streaming row that has text', () => {
+    const { container } = show({ kind: 'assistant', id: 'a7', text: '  hi  ', streaming: true })
+    expect(container.querySelector('.msg.assistant.streaming')?.textContent).toBe('  hi  ')
+  })
+
   // A turn that thinks and then calls a tool carries thinking, a tool_call and
   // no text -- the shape Anthropic emits most. The store keeps that item so the
   // thinking survives, and rendering its empty body put a blank bubble under

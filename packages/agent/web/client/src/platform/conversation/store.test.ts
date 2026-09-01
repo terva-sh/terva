@@ -154,6 +154,66 @@ describe('applyEvent — text streaming', () => {
     expect(a.streaming).toBe(false)
     expect(a.text).toBe('partial')
   })
+
+  // The empty assistant block: a delta with no speech in it used to open a
+  // streaming item, and that item renders as the assistant bubble's padding,
+  // background and border wrapped around nothing. StreamPacer drops the empty
+  // case upstream, so these pin the reducer's own invariant for a caller that
+  // bypasses it.
+  it.each([
+    ['an empty delta', ''],
+    ['a spaces-only delta', '   '],
+    ['a newline-only delta', '\n\n'],
+  ])('opens no streaming row for %s', (_label, delta) => {
+    expect(applyEvent([], { type: 'text_delta', delta })).toEqual([])
+  })
+
+  it('opens no streaming row for a missing delta', () => {
+    expect(applyEvent([], { type: 'text_delta' })).toEqual([])
+  })
+
+  it('leaves an unrelated tail alone rather than appending an empty row', () => {
+    const start = applyEvent([], { type: 'tool_call', id: 'c1', name: 'bash' })
+    expect(applyEvent(start, { type: 'text_delta', delta: '  ' })).toEqual(start)
+  })
+
+  // The other half of the guard, and the reason it keys on opening rather than
+  // on the delta alone: inside an OPEN row whitespace is the space between two
+  // words and the blank line between two paragraphs. Dropping it there would
+  // corrupt the reply instead of tidying it.
+  it('keeps whitespace deltas once a row is already streaming', () => {
+    let items = applyEvent([], { type: 'text_delta', delta: 'one' })
+    items = applyEvent(items, { type: 'text_delta', delta: ' ' })
+    items = applyEvent(items, { type: 'text_delta', delta: 'two' })
+    items = applyEvent(items, { type: 'text_delta', delta: '\n\n' })
+    items = applyEvent(items, { type: 'text_delta', delta: 'three' })
+    expect(items).toHaveLength(1)
+    expect((items[0] as Extract<Item, { kind: 'assistant' }>).text).toBe('one two\n\nthree')
+  })
+
+  it('still opens a row on the first delta that carries real text', () => {
+    let items = applyEvent([], { type: 'text_delta', delta: '   ' })
+    expect(items).toEqual([])
+    items = applyEvent(items, { type: 'text_delta', delta: 'hello' })
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'assistant', text: 'hello', streaming: true })
+  })
+
+  // A reasoning-only turn that then calls a tool: no assistant speech row may
+  // appear between the two, but the recorded thinking must still survive.
+  it('keeps thinking and the tool call without an assistant row between them', () => {
+    let items = applyEvent([], { type: 'text_delta', delta: '' })
+    items = applyEvent(items, { type: 'tool_call', id: 'c2', name: 'read' })
+    items = applyEvent(items, {
+      type: 'assistant_message',
+      message: { role: 'assistant', content: [{ type: 'reasoning', summary: 'weighing two indexes' }] },
+    })
+    expect(items.filter((i) => i.kind === 'assistant')).toHaveLength(1)
+    const a = items.find((i) => i.kind === 'assistant') as Extract<Item, { kind: 'assistant' }>
+    expect(a.text).toBe('')
+    expect(a.streaming).toBe(false)
+    expect(a.reasoning).toBe('weighing two indexes')
+  })
 })
 
 describe('applyEvent — tool results', () => {
