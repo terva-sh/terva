@@ -33,6 +33,35 @@ func TestCtrlSParksAndRestoresDraft(t *testing.T) {
 	h.waitText("hello there agent")
 }
 
+// Same key, the wire a terminal that speaks the enhanced keyboard
+// protocols actually uses. terva asks for both at startup
+// (tui.SeqEnhancedKeyboardOn), so on iTerm2 ctrl+s never arrives as 0x13
+// at all: it comes as kitty's CSI 115;5u or xterm modifyOtherKeys'
+// CSI 27;5;115~, and the parser dropped both as KeyUnknown — the chord
+// was dead on iTerm2 while still working in Windows Terminal / WSL2,
+// which ignore the protocols.
+func TestCtrlSParksDraftOnEnhancedKeyboardWires(t *testing.T) {
+	for name, seq := range map[string]string{
+		"kitty CSI u":     "\x1b[115;5u",
+		"modifyOtherKeys": "\x1b[27;5;115~",
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := startInteractive(t, nil)
+			h.dismissLoginDialog()
+
+			h.term.Type("hello there agent")
+			h.waitText("hello there agent")
+
+			h.term.Type(seq)
+			h.waitText("set aside:")
+
+			h.term.Type(seq)
+			h.waitGone("set aside:")
+			h.waitText("hello there agent")
+		})
+	}
+}
+
 // The parked draft returns to the editor on its own once the message
 // that displaced it is sent — the whole point of the feature.
 func TestStashAutoReturnsAfterSend(t *testing.T) {

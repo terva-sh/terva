@@ -189,3 +189,140 @@ func TestAProviderWhoseModelsAreAllHiddenKeepsItsRow(t *testing.T) {
 			"models it serves can never be un-hidden from the picker again")
 	}
 }
+
+// A run of hides is the real job: the cursor must stay where it is, on the row
+// that slid up into the vacated slot, so the next model to hide is already
+// under it. The picker reloads to drop the hidden row from the list, and a
+// plain reload cannot re-find the model it was tracking — that model is exactly
+// the one that just left — so the cursor snapped back to the active model or
+// row 0, a dozen or more downstrokes back to the same spot for every single
+// model hidden in a long list.
+func TestHidingAModelKeepsTheCursorInPlace(t *testing.T) {
+	provider.ResetCatalogLayers()
+	t.Cleanup(provider.ResetCatalogLayers)
+	provider.SetUserModels([]provider.Model{
+		{Provider: "acme", ID: "m1"},
+		{Provider: "acme", ID: "m2"},
+		{Provider: "acme", ID: "m3"},
+		{Provider: "acme", ID: "m4"},
+		{Provider: "acme", ID: "m5"},
+		{Provider: "acme", ID: "m6"},
+	})
+
+	d := NewModelDialog()
+	// One provider, nothing favorited: Open lands straight in the model list.
+	d.Open("", []string{"acme"}, nil, nil)
+	if d.stage != stageModel {
+		t.Fatalf("stage = %v, want the model list", d.stage)
+	}
+	before := viewIDs(d)
+	if len(before) != 6 {
+		t.Fatalf("view = %v, want 6 models", before)
+	}
+
+	// Walk down to the fourth row the way a user does, so the starting cursor
+	// is the nav code's, not the test's.
+	const at = 3
+	for range at {
+		d.HandleKey(tui.Key{Kind: tui.KeyDown})
+	}
+	if d.p.cursor != at {
+		t.Fatalf("cursor = %d after %d downs, want %d", d.p.cursor, at, at)
+	}
+
+	act := d.HandleKey(tui.Key{Kind: tui.KeyCtrlK})
+	if !act.Hide || !act.HideOn || act.Model != before[at] {
+		t.Fatalf("ctrl+k = %+v, want a hide of %s", act, before[at])
+	}
+	if got := viewIDs(d); len(got) != 5 {
+		t.Fatalf("view = %v, want the hidden model gone", got)
+	}
+	if d.p.cursor != at {
+		t.Errorf("cursor = %d after hiding, want %d — it jumped", d.p.cursor, at)
+	}
+	if m, ok := d.p.selected(); !ok || m.ID != before[at+1] {
+		t.Errorf("cursor is on %q, want %q — the row that slid up", m.ID, before[at+1])
+	}
+
+	// Again, with no walk back down: this is the whole complaint.
+	act = d.HandleKey(tui.Key{Kind: tui.KeyCtrlK})
+	if act.Model != before[at+1] {
+		t.Fatalf("second ctrl+k hid %q, want %q", act.Model, before[at+1])
+	}
+	if d.p.cursor != at {
+		t.Errorf("cursor = %d after the second hide, want %d", d.p.cursor, at)
+	}
+	if m, ok := d.p.selected(); !ok || m.ID != before[at+2] {
+		t.Errorf("cursor is on %q, want %q", m.ID, before[at+2])
+	}
+}
+
+// Hiding the bottom row has nothing to slide up into it: the cursor clamps onto
+// the new last row rather than falling off the end or snapping to the top.
+func TestHidingTheLastRowClampsToTheNewLast(t *testing.T) {
+	provider.ResetCatalogLayers()
+	t.Cleanup(provider.ResetCatalogLayers)
+	provider.SetUserModels([]provider.Model{
+		{Provider: "acme", ID: "m1"},
+		{Provider: "acme", ID: "m2"},
+		{Provider: "acme", ID: "m3"},
+	})
+
+	d := NewModelDialog()
+	d.Open("", []string{"acme"}, nil, nil)
+	before := viewIDs(d)
+	for range len(before) - 1 {
+		d.HandleKey(tui.Key{Kind: tui.KeyDown})
+	}
+	if d.p.cursor != len(before)-1 {
+		t.Fatalf("cursor = %d, want the last row %d", d.p.cursor, len(before)-1)
+	}
+
+	d.HandleKey(tui.Key{Kind: tui.KeyCtrlK})
+	if want := len(before) - 2; d.p.cursor != want {
+		t.Errorf("cursor = %d after hiding the last row, want %d", d.p.cursor, want)
+	}
+	if m, ok := d.p.selected(); !ok || m.ID != before[len(before)-2] {
+		t.Errorf("cursor is on %q, want %q", m.ID, before[len(before)-2])
+	}
+}
+
+// The other direction, under ":hidden": un-hiding also takes the row out of the
+// list being shown, so the same rule has to hold or restoring a batch of models
+// is just as tedious as hiding one.
+func TestUnhidingUnderTheHiddenTokenKeepsTheCursorInPlace(t *testing.T) {
+	provider.ResetCatalogLayers()
+	t.Cleanup(provider.ResetCatalogLayers)
+	provider.SetUserModels([]provider.Model{
+		{Provider: "acme", ID: "m1"},
+		{Provider: "acme", ID: "m2"},
+		{Provider: "acme", ID: "m3"},
+		{Provider: "acme", ID: "m4"},
+	})
+
+	d := NewModelDialog()
+	d.Open("", []string{"acme"}, nil, []string{
+		"acme/m1", "acme/m2", "acme/m3", "acme/m4",
+	})
+	d.p.query = ":hidden"
+	d.p.refilter()
+	before := viewIDs(d)
+	if len(before) != 4 {
+		t.Fatalf(":hidden view = %v, want all 4", before)
+	}
+
+	const at = 1
+	for range at {
+		d.HandleKey(tui.Key{Kind: tui.KeyDown})
+	}
+	act := d.HandleKey(tui.Key{Kind: tui.KeyCtrlK})
+	if !act.Hide || act.HideOn {
+		t.Fatalf("ctrl+k = %+v, want an un-hide", act)
+	}
+	if d.p.cursor != at {
+		t.Errorf("cursor = %d after un-hiding, want %d", d.p.cursor, at)
+	}
+	if m, ok := d.p.selected(); !ok || m.ID != before[at+1] {
+		t.Errorf("cursor is on %q, want %q", m.ID, before[at+1])
+	}
+}

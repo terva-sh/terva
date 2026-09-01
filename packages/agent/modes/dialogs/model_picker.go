@@ -163,6 +163,40 @@ func (p *modelPicker) reload(models []provider.Model) {
 	p.cursorToKey(sel)
 }
 
+// reloadKeepingPlace reloads like reload, but when the model the cursor was on
+// is no longer in the view it holds the cursor at the same INDEX instead of
+// letting refilter snap it back to the active model or row 0.
+//
+// That is the hide toggle's case: the row under the cursor is exactly the one
+// leaving the list, so cursorToKey inside reload can never find it. Holding the
+// index lands the cursor on the row that just slid up into the vacated slot —
+// the next model down — so hiding a run of models is one keypress each. Snapping
+// to the top instead cost a dozen or more downstrokes per model on a long list.
+func (p *modelPicker) reloadKeepingPlace(models []provider.Model) {
+	idx := p.cursor
+	sel := ""
+	if m, ok := p.selected(); ok {
+		sel = modelKey(m)
+	}
+	p.reload(models)
+	if len(p.view) == 0 {
+		p.cursor = 0
+		return
+	}
+	// The row survived the reload (nothing left the list): reload already put
+	// the cursor back on it, and that beats an index, which a re-sort can move.
+	if m, ok := p.selected(); ok && sel != "" && modelKey(m) == sel {
+		return
+	}
+	if idx >= len(p.view) {
+		idx = len(p.view) - 1
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	p.cursor = idx
+}
+
 // handleNavKey consumes cursor movement and filter editing, and
 // reports whether it handled the key. Enter/Esc are left to the
 // owning dialog, whose semantics differ.
@@ -394,19 +428,20 @@ func (p *modelPicker) toggleFavorite() (provider.Model, bool, bool) {
 	return m, on, true
 }
 
-// toggleHidden flips the selected model's hidden flag in the local set and
-// keeps the cursor where it is. Returns the model, its new state, and whether
-// anything was toggled (false when the list is empty). The caller persists it.
+// toggleHidden flips the selected model's hidden flag in the local set.
+// Returns the model, its new state, and whether anything was toggled (false
+// when the list is empty). The caller persists it, and reloads the list the row
+// has to leave — with reloadKeepingPlace, so the cursor stays at that spot.
 //
 // The local flip is safe even though the stored form is an ordered rule list:
 // config.ToggleHiddenModel guarantees the model ends in the state asked for,
 // rescuing it from a broad pattern if need be, so the optimistic local answer
 // and the persisted one always agree.
 //
-// Unlike toggleFavorite this does NOT re-sort. Under ":hidden" the row would
-// vanish from the list the moment it was restored, taking the cursor somewhere
-// arbitrary; leaving it in place lets the user un-hide several in a row and see
-// each one change.
+// Unlike toggleFavorite this does NOT re-sort: the row is about to leave the
+// list either way (under ":hidden" a restored model vanishes from it), so the
+// cursor is held by position rather than by identity. That is what lets the
+// user hide — or un-hide — several in a row without walking back down the list.
 func (p *modelPicker) toggleHidden() (provider.Model, bool, bool) {
 	m, ok := p.selected()
 	if !ok {

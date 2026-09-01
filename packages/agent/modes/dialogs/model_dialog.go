@@ -325,9 +325,10 @@ func (d *ModelDialog) handleModelKey(k tui.Key) modelDialogAction {
 		d.rebuildProviderList() // reflect the new ★ favorites entry/count when we back out
 		return modelDialogAction{Favorite: true, FavOn: on, Provider: m.Provider, Model: m.ID}
 	case tui.KeyCtrlK:
-		// Toggle hidden for the highlighted model. The picker keeps the cursor
-		// in place rather than re-sorting, so a restored model does not jump
-		// out from under the user mid-list; the host persists the change.
+		// Toggle hidden for the highlighted model. The row leaves the list it
+		// is in, and the cursor holds that spot — landing on the next model
+		// down — so a run of models can be hidden one keypress each; the host
+		// persists the change.
 		//
 		// Ctrl+K, not the obvious Ctrl+H, and this is not a preference: a
 		// terminal sends Ctrl+H as 0x08, which input.go maps to KeyBackspace.
@@ -338,8 +339,10 @@ func (d *ModelDialog) handleModelKey(k tui.Key) modelDialogAction {
 			return modelDialogAction{}
 		}
 		// The row must leave (or join) the list it is currently in, and the
-		// provider counts have to follow it.
-		d.p.reload(d.scopeModelsFor(d.scope))
+		// provider counts have to follow it. KeepingPlace, because the row that
+		// leaves is the one under the cursor: plain reload cannot find it again
+		// and drops the user back at the top of the list.
+		d.p.reloadKeepingPlace(d.scopeModelsFor(d.scope))
 		d.rebuildProviderList()
 		return modelDialogAction{Hide: true, HideOn: on, Provider: m.Provider, Model: m.ID}
 	case tui.KeyCtrlD:

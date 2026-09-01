@@ -71,48 +71,84 @@ func NewReaderWithPeek(read func() (byte, error), peek func(time.Duration) (byte
 	return &Reader{src: read, peek: peek}
 }
 
+// ctrlChordKind maps an ASCII control byte to the dedicated key kind for
+// that ctrl+letter chord. It is the single source of truth for which
+// chords the TUI recognises: the legacy encoding reads it directly, and
+// the enhanced keyboard protocols reach it through keyFromModifiedCode,
+// so a chord added here works on every wire. A second, hand-written copy
+// of this list is how ctrl+s and ctrl+y came to do nothing on terminals
+// that honour the enhanced protocols (iTerm2), while still working on
+// those that don't.
+//
+// Bytes that are also a key in their own right stay out: 0x08/0x7f
+// (backspace), 0x09 (tab), 0x0a (ctrl+j / ctrl+enter), 0x0d (enter) and
+// 0x1b (esc) are decoded by Read as those keys.
+func ctrlChordKind(b byte) (KeyKind, bool) {
+	switch b {
+	case 0x01:
+		return KeyCtrlA, true
+	case 0x03:
+		return KeyCtrlC, true
+	case 0x04:
+		return KeyCtrlD, true
+	case 0x05:
+		return KeyCtrlE, true
+	case 0x06:
+		return KeyCtrlF, true
+	case 0x0b:
+		return KeyCtrlK, true
+	case 0x0c:
+		return KeyCtrlL, true
+	case 0x0f:
+		return KeyCtrlO, true
+	case 0x12:
+		return KeyCtrlR, true
+	case 0x13:
+		// XOFF under software flow control, but raw mode (term.MakeRaw)
+		// clears IXON, so the byte reaches us as an ordinary chord.
+		return KeyCtrlS, true
+	case 0x14:
+		return KeyCtrlT, true
+	case 0x15:
+		return KeyCtrlU, true
+	case 0x16:
+		return KeyCtrlV, true
+	case 0x17:
+		return KeyCtrlW, true
+	case 0x19:
+		// DSUSP (delayed suspend) on macOS and the BSDs, but that is an
+		// IEXTEN feature and raw mode (term.MakeRaw) clears IEXTEN, so the
+		// byte reaches us as an ordinary chord rather than suspending.
+		return KeyCtrlY, true
+	}
+	return KeyUnknown, false
+}
+
+// ctrlByteForCode folds the codepoint an enhanced-protocol report carries
+// for a ctrl+letter chord back onto the control byte the legacy encoding
+// sends for it: kitty reports ctrl+s as CSI 115;5u and modifyOtherKeys as
+// CSI 27;5;115~, both naming 's' rather than 0x13. Returns 0 for anything
+// that is not a letter.
+func ctrlByteForCode(code int) byte {
+	switch {
+	case code >= 'a' && code <= 'z':
+		return byte(code-'a') + 1
+	case code >= 'A' && code <= 'Z':
+		return byte(code-'A') + 1
+	}
+	return 0
+}
+
 // Read returns the next parsed Key.
 func (r *Reader) Read() (Key, error) {
 	b, err := r.src()
 	if err != nil {
 		return Key{}, err
 	}
+	if kind, ok := ctrlChordKind(b); ok {
+		return Key{Kind: kind}, nil
+	}
 	switch {
-	case b == 0x03:
-		return Key{Kind: KeyCtrlC}, nil
-	case b == 0x04:
-		return Key{Kind: KeyCtrlD}, nil
-	case b == 0x0c:
-		return Key{Kind: KeyCtrlL}, nil
-	case b == 0x15:
-		return Key{Kind: KeyCtrlU}, nil
-	case b == 0x0b:
-		return Key{Kind: KeyCtrlK}, nil
-	case b == 0x01:
-		return Key{Kind: KeyCtrlA}, nil
-	case b == 0x05:
-		return Key{Kind: KeyCtrlE}, nil
-	case b == 0x06:
-		return Key{Kind: KeyCtrlF}, nil
-	case b == 0x17:
-		return Key{Kind: KeyCtrlW}, nil
-	case b == 0x0f:
-		return Key{Kind: KeyCtrlO}, nil
-	case b == 0x12:
-		return Key{Kind: KeyCtrlR}, nil
-	case b == 0x13:
-		// XOFF under software flow control, but raw mode (term.MakeRaw)
-		// clears IXON, so the byte reaches us as an ordinary chord.
-		return Key{Kind: KeyCtrlS}, nil
-	case b == 0x14:
-		return Key{Kind: KeyCtrlT}, nil
-	case b == 0x16:
-		return Key{Kind: KeyCtrlV}, nil
-	case b == 0x19:
-		// DSUSP (delayed suspend) on macOS and the BSDs, but that is an
-		// IEXTEN feature and raw mode (term.MakeRaw) clears IEXTEN, so the
-		// byte reaches us as an ordinary chord rather than suspending.
-		return Key{Kind: KeyCtrlY}, nil
 	case b == '\r':
 		return Key{Kind: KeyEnter}, nil
 	case b == '\n':
@@ -401,33 +437,8 @@ func keyFromModifiedCode(code, mod int) (Key, bool) {
 		return Key{Kind: KeyBackspace, Shift: shift, Alt: alt, Ctrl: ctrl}, true
 	}
 	if ctrl {
-		switch code {
-		case 'c', 'C':
-			return Key{Kind: KeyCtrlC, Shift: shift, Alt: alt, Ctrl: true}, true
-		case 'd', 'D':
-			return Key{Kind: KeyCtrlD, Shift: shift, Alt: alt, Ctrl: true}, true
-		case 'l', 'L':
-			return Key{Kind: KeyCtrlL, Shift: shift, Alt: alt, Ctrl: true}, true
-		case 'u', 'U':
-			return Key{Kind: KeyCtrlU, Shift: shift, Alt: alt, Ctrl: true}, true
-		case 'k', 'K':
-			return Key{Kind: KeyCtrlK, Shift: shift, Alt: alt, Ctrl: true}, true
-		case 'a', 'A':
-			return Key{Kind: KeyCtrlA, Shift: shift, Alt: alt, Ctrl: true}, true
-		case 'e', 'E':
-			return Key{Kind: KeyCtrlE, Shift: shift, Alt: alt, Ctrl: true}, true
-		case 'f', 'F':
-			return Key{Kind: KeyCtrlF, Shift: shift, Alt: alt, Ctrl: true}, true
-		case 'w', 'W':
-			return Key{Kind: KeyCtrlW, Shift: shift, Alt: alt, Ctrl: true}, true
-		case 'o', 'O':
-			return Key{Kind: KeyCtrlO, Shift: shift, Alt: alt, Ctrl: true}, true
-		case 'r', 'R':
-			return Key{Kind: KeyCtrlR, Shift: shift, Alt: alt, Ctrl: true}, true
-		case 't', 'T':
-			return Key{Kind: KeyCtrlT, Shift: shift, Alt: alt, Ctrl: true}, true
-		case 'v', 'V':
-			return Key{Kind: KeyCtrlV, Shift: shift, Alt: alt, Ctrl: true}, true
+		if kind, ok := ctrlChordKind(ctrlByteForCode(code)); ok {
+			return Key{Kind: kind, Shift: shift, Alt: alt, Ctrl: true}, true
 		}
 	}
 	return Key{}, false
