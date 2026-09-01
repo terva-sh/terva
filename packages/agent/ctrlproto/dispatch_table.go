@@ -293,6 +293,18 @@ var dispatch = map[Method]handler{
 		return c.ModelParamsReset(ctx, p)
 	}),
 
+	// ----------------------------------------------------------------- tier ladder
+
+	MethodModelTiers: ask(noModelTiers, func(c ModelTiersController, ctx context.Context, f Frame, p ModelTiersParams) (ModelTiersView, error) {
+		return c.ModelTiers(ctx, p)
+	}),
+	MethodModelTiersSet: act(noModelTiers, func(c ModelTiersController, ctx context.Context, f Frame, p ModelTiersSetParams) error {
+		return c.ModelTiersSet(ctx, p)
+	}),
+	MethodModelTiersReset: act(noModelTiers, func(c ModelTiersController, ctx context.Context, f Frame, p ModelTiersResetParams) error {
+		return c.ModelTiersReset(ctx, p)
+	}),
+
 	// ----------------------------------------------------------------------- cards
 
 	MethodCardsList: get(noCards, func(c CardsController, ctx context.Context, f Frame) (CardsListResult, error) {

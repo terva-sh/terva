@@ -164,6 +164,7 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 			hidden = i.cfg.HiddenModels()
 		}
 		i.modelDialog.Open(i.cfg.Model, loggedIn, favs, hidden)
+		i.loadTierSummaries(loggedIn)
 		return false
 	},
 	// Keyed by the CANONICAL name (see init: run: slashHandlers[s.Name]).

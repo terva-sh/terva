@@ -19,9 +19,18 @@ func TestResolveSwarmTier(t *testing.T) {
 		// the case that exists to prove they are separated must say so.
 		forbidSub string
 	}{
+		// anthropic is an EFFORT ladder: medium and strong are the same opus at
+		// two efforts, and the weak rung is a haiku that thinks hard. So the
+		// model a rung answers with is no longer what separates medium from
+		// strong — see TestBuiltinEffortLadderRungsDiffer, which checks the
+		// thing that does.
 		{"weak from a sonnet host", "anthropic", "claude-sonnet-4-5", "weak", "haiku", ""},
-		{"medium from an opus host", "anthropic", "claude-opus-4-5", "medium", "sonnet", ""},
-		{"strong capped at a sonnet host", "anthropic", "claude-sonnet-4-5", "strong", "sonnet", ""},
+		{"medium from an opus host", "anthropic", "claude-opus-4-5", "medium", "opus", ""},
+		// A sonnet matches no rung now, so the cap ranks it by PRICE: haiku is
+		// cheaper than sonnet and opus is dearer, which puts a sonnet host on
+		// the weak rung. Without the price fallback it would rank as nothing,
+		// spawn uncapped, and a sonnet host would quietly reach for an opus.
+		{"strong capped at a sonnet host by price", "anthropic", "claude-sonnet-4-5", "strong", "haiku", "opus"},
 		{"strong capped at a haiku host", "anthropic", "claude-haiku-4-5", "strong", "haiku", ""},
 		{"unknown tier resolves to nothing", "anthropic", "claude-sonnet-4-5", "bogus", "", ""},
 		{"provider without a table is a no-op", "xai", "grok-4.3", "weak", "", ""},
@@ -87,8 +96,10 @@ func TestResolveSwarmTierOverrides(t *testing.T) {
 	if got := ResolveSwarmTier("anthropic", "claude-opus-4-5", "weak", ov).Model; got != "claude-haiku-4-5" {
 		t.Errorf("anthropic weak override = %q, want claude-haiku-4-5", got)
 	}
-	// …while the unset medium falls back to the built-in family guess.
-	if got := ResolveSwarmTier("anthropic", "claude-opus-4-5", "medium", ov).Model; !strings.Contains(got, "sonnet") {
-		t.Errorf("anthropic medium fallback = %q, want a sonnet model", got)
+	// …while the unset medium falls back to the built-in rung, which on an
+	// effort ladder is an opus rather than the sonnet the family ladder used
+	// to answer with.
+	if got := ResolveSwarmTier("anthropic", "claude-opus-4-5", "medium", ov).Model; !strings.Contains(got, "opus") {
+		t.Errorf("anthropic medium fallback = %q, want an opus model", got)
 	}
 }

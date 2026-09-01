@@ -28,6 +28,18 @@ import (
 type tierFamily struct {
 	match  []string
 	unless []string
+	// reasoning is the thinking level this rung runs its model at, empty to
+	// leave the effort to the child.
+	//
+	// The table used to refuse to name one, on the grounds that terva
+	// recognises model FAMILIES and should not guess how hard someone wants a
+	// sub-agent to think. That held while a ladder WAS a family ladder. It
+	// stopped holding once price stopped tracking capability: on a recent
+	// series the better "medium" is usually the largest model thinking little,
+	// not a middling model thinking hard, and a small model is often most
+	// useful thinking HARD. A table that can only name families cannot say
+	// either of those, so it said the wrong thing confidently instead.
+	reasoning string
 }
 
 // swarmTierFamilies maps a provider to the family rule for each tier
@@ -47,23 +59,57 @@ type tierFamily struct {
 // cheap model for `tier: weak`. It does NOT satisfy raati rigor level 1,
 // which wants a real weak/medium/strong spread — two rungs is not a ladder.
 var swarmTierFamilies = map[string]map[string]tierFamily{
-	// haiku / sonnet / opus never contain one another — the property that
-	// made substring matching safe in the first place.
+	// An EFFORT ladder, not a family one. The family shape (haiku / sonnet /
+	// opus) reads well and was wrong in practice: on a recent series the
+	// better "medium" is the largest model thinking a little, not a middling
+	// model thinking hard, and a small model earns its place by thinking HARD
+	// rather than by being asked for less. So medium and strong share a model
+	// and differ by effort, and the weak rung is a haiku that thinks.
+	//
+	// Sharing a model across two rungs is why swarmTierRankOf refuses to rank
+	// a host that matches more than one: ranked, a host on opus-5 would cap
+	// `tier: strong` down to medium and hand back the same model thinking
+	// less.
 	"anthropic": {
-		"weak":   {match: []string{"haiku"}},
-		"medium": {match: []string{"sonnet"}},
-		"strong": {match: []string{"opus"}},
+		"weak":   {match: []string{"haiku"}, reasoning: "high"},
+		"medium": {match: []string{"claude-opus-5", "opus"}, reasoning: "low"},
+		"strong": {match: []string{"claude-opus-5", "opus"}, reasoning: "high"},
+		"cheap":  {match: []string{"haiku"}, reasoning: "minimum"},
 	},
-	// Copilot serves the same three Anthropic families under its own ids.
+	// Copilot serves the same Anthropic families under its own ids. Left as a
+	// FAMILY ladder rather than following anthropic onto an effort one: the
+	// subscription bills by request rather than by token, so "the same model
+	// thinking harder" does not buy the separation there that it buys on the
+	// metered API.
 	"github-copilot": {
 		"weak":   {match: []string{"haiku"}},
 		"medium": {match: []string{"sonnet"}},
 		"strong": {match: []string{"opus"}},
+		"cheap":  {match: []string{"haiku"}, reasoning: "minimum"},
 	},
+	// Every rung excludes "image". The nano-banana models are named after the
+	// text family they sit beside — gemini-2.5-flash-image, gemini-3-pro-image,
+	// gemini-3.1-flash-lite-image — so each one falls inside the very rule that
+	// names its text sibling, and they sort EARLIER than the current
+	// generations. Without this the medium rung resolved to Nano Banana (32k
+	// window against 1M) and the strong rung to Nano Banana Pro, so a
+	// `tier: medium` swarm spawn or a raati seat on google was dispatched to an
+	// image model. The weak rung looked right only because catalog order
+	// happened to reach flash-lite before flash-lite-image, which is luck, not
+	// a rule — so it is excluded here too.
 	"google": {
-		"weak":   {match: []string{"flash-lite"}},
-		"medium": {match: []string{"flash"}, unless: []string{"flash-lite"}},
-		"strong": {match: []string{"pro"}},
+		"weak": {match: []string{"flash-lite"}, unless: []string{"image"}},
+		// Newest-first, falling through to the bare family word. Catalog order
+		// alone put the medium rung on gemini-3-flash-preview, two generations
+		// behind the 3.5/3.6/3.7 flashes shipping beside it, because the
+		// preview row is listed first and first-match wins. Pinning the
+		// generations buys the good pick today; the trailing "flash" means a
+		// catalog that has dropped all three degrades to some flash rather than
+		// to nothing. TestEveryListedTierRungResolves is what catches a pin
+		// list that has gone entirely stale.
+		"medium": {match: []string{"gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "flash"}, unless: []string{"flash-lite", "image"}},
+		"strong": {match: []string{"pro"}, unless: []string{"image"}},
+		"cheap":  {match: []string{"flash-lite"}, unless: []string{"image"}, reasoning: "minimum"},
 	},
 	// "gpt-5" is a substring of every mini/nano/chat/codex/pro variant, so
 	// the strong rung is defined by what it is NOT as much as what it is.
@@ -71,29 +117,38 @@ var swarmTierFamilies = map[string]map[string]tierFamily{
 		"weak":   {match: []string{"nano"}},
 		"medium": {match: []string{"mini"}, unless: []string{"nano"}},
 		"strong": {match: []string{"gpt-5.5", "gpt-5.4", "gpt-5"}, unless: []string{"mini", "nano", "chat", "codex", "pro", "turbo", "research"}},
+		"cheap":  {match: []string{"nano"}, reasoning: "minimum"},
 	},
 	"openai-responses": {
 		"weak":   {match: []string{"nano"}},
 		"medium": {match: []string{"mini"}, unless: []string{"nano"}},
 		"strong": {match: []string{"gpt-5.5", "gpt-5.4", "gpt-5"}, unless: []string{"mini", "nano", "chat", "codex", "pro", "turbo", "research"}},
+		"cheap":  {match: []string{"nano"}, reasoning: "minimum"},
 	},
 	// Codex names its generations sol / terra / luna, which say nothing
 	// about capability and do not recur across generations. Named models,
 	// newest first — see tierFamily on why that is the honest encoding here.
+	// An effort ladder too, for the reason anthropic's is one. Luna thinking
+	// its hardest is the weak rung; sol at two efforts carries medium and
+	// strong. The mini stays as the cost tier, which is the only rung whose
+	// job is actually "spend less".
 	"openai-codex": {
-		"weak":   {match: []string{"mini"}},
-		"medium": {match: []string{"gpt-5.6-terra", "gpt-5.4"}, unless: []string{"mini"}},
-		"strong": {match: []string{"gpt-5.6-sol", "gpt-5.5"}, unless: []string{"mini"}},
+		"weak":   {match: []string{"gpt-5.6-luna"}, unless: []string{"mini"}, reasoning: "maximum"},
+		"medium": {match: []string{"gpt-5.6-sol", "gpt-5.5"}, unless: []string{"mini"}, reasoning: "low"},
+		"strong": {match: []string{"gpt-5.6-sol", "gpt-5.5"}, unless: []string{"mini"}, reasoning: "high"},
+		"cheap":  {match: []string{"mini", "spark"}, reasoning: "minimum"},
 	},
 	// Two rungs each: neither vendor ships a middle model to point at, and
 	// inventing one would be a guess wearing a ladder's clothes.
 	"kimi": {
 		"weak":   {match: []string{"kimi-k2", "kimi-for-coding"}},
 		"strong": {match: []string{"k3"}},
+		"cheap":  {match: []string{"kimi-k2", "kimi-for-coding"}, reasoning: "minimum"},
 	},
 	"deepseek": {
 		"weak":   {match: []string{"flash"}},
 		"strong": {match: []string{"pro"}},
+		"cheap":  {match: []string{"flash"}, reasoning: "minimum"},
 	},
 }
 
@@ -113,6 +168,15 @@ func (f tierFamily) matches(id string) bool {
 		}
 	}
 	return false
+}
+
+// resolvePick is resolve plus the rung's own effort — the whole pick a caller
+// dispatches, rather than the model half of it.
+func (f tierFamily) resolvePick(providerID string) TierPick {
+	if m := f.resolve(providerID); m != "" {
+		return TierPick{Model: m, Reasoning: f.reasoning}
+	}
+	return TierPick{}
 }
 
 // resolve returns the first catalog model of the provider that belongs to
@@ -146,6 +210,24 @@ func (f tierFamily) resolve(providerID string) string {
 var swarmTierRank = map[string]int{"weak": 0, "medium": 1, "strong": 2}
 
 var swarmRankName = []string{"weak", "medium", "strong"}
+
+// TierCheap is the cost tier. It is NOT a fourth rung of the ladder above and
+// deliberately sits outside that ordering: weak/medium/strong say how capable a
+// sub-agent should be, and on a recent model series that is mostly a question
+// of how hard the largest model thinks — which means none of them answers "keep
+// this cheap". A caller that cares about spend rather than strength had nothing
+// to ask for.
+//
+// Two consequences follow from it being a separate axis, and both are the
+// point. A `cheap` spawn is never capped to the host's strength: capping exists
+// so a weak host cannot reach for a STRONGER child, and reaching for a cheaper
+// one is not that. And rigor level 1 still requires the three capability rungs,
+// so adding this cannot quietly change what a raati gate is trusted on.
+const TierCheap = "cheap"
+
+// swarmTierNames is every tier a user can configure or see: the capability
+// ladder, then the cost axis last so the three still read as a ladder.
+var swarmTierNames = []string{"weak", "medium", "strong", TierCheap}
 
 // TierPick is one resolved rung: which model, and how hard it thinks.
 //
@@ -190,14 +272,25 @@ type SwarmTierMap map[string]map[string]TierPick
 // in every such case the caller falls back to the host model, so an
 // unconfigured provider simply ignores the tier.
 func ResolveSwarmTier(providerID, hostModel, tier string, overrides SwarmTierMap) TierPick {
-	want, ok := swarmTierRank[strings.ToLower(strings.TrimSpace(tier))]
-	if !ok {
+	name := strings.ToLower(strings.TrimSpace(tier))
+	want, ok := swarmTierRank[name]
+	if !ok && name != TierCheap {
 		return TierPick{}
 	}
 	// The provider must have SOME tier source — a user override or a built-in
 	// family table — or tier resolution is a deliberate no-op.
 	if len(overrides[providerID]) == 0 && swarmTierFamilies[providerID] == nil {
 		return TierPick{}
+	}
+	if name == TierCheap {
+		// Uncapped, on purpose. The cap stops a weak host reaching for a
+		// stronger child; asking for a cheaper one is not that, and capping
+		// "cheap" to a weak host's rung would hand back the weak rung — which
+		// on a modern ladder can be the LARGEST model thinking a little.
+		if p, ok := overridePick(providerID, TierCheap, overrides); ok {
+			return p
+		}
+		return swarmTierFamilies[providerID][TierCheap].resolvePick(providerID)
 	}
 	// Cap at the host model's tier when we can identify it.
 	if capRank, ok := swarmTierRankOf(providerID, hostModel, overrides); ok && want > capRank {
@@ -206,9 +299,15 @@ func ResolveSwarmTier(providerID, hostModel, tier string, overrides SwarmTierMap
 	return swarmPickForRank(providerID, want, overrides)
 }
 
-// SwarmRankNames returns the tier names in weak→strong order, for callers
-// that render the tier ladder (e.g. `terva models tiers`).
+// SwarmRankNames returns the CAPABILITY tier names in weak→strong order. It is
+// the ordering — host capping and raati rigor level 1 read it — and the cost
+// tier is deliberately absent from it. Surfaces that render the whole table
+// want SwarmTierNames instead.
 func SwarmRankNames() []string { return append([]string(nil), swarmRankName...) }
+
+// SwarmTierNames returns every configurable tier, capability rungs first and
+// the cost axis last.
+func SwarmTierNames() []string { return append([]string(nil), swarmTierNames...) }
 
 // SwarmTierHasBuiltin reports whether a provider has a built-in family table
 // (so an unconfigured tier still resolves without a user override).
@@ -221,17 +320,40 @@ func SwarmTierHasBuiltin(providerID string) bool {
 // "override", "built-in", or "" when nothing resolves. It's the read-only view
 // behind `terva models tiers`; resolution order matches ResolveSwarmTier.
 func SwarmTierLadder(providerID string, overrides SwarmTierMap) (picks [3]TierPick, sources [3]string) {
-	for rank := range swarmRankName {
-		name := swarmRankName[rank]
-		if p, ok := overridePick(providerID, name, overrides); ok {
-			picks[rank], sources[rank] = p, "override"
-			continue
-		}
-		if m := swarmTierFamilies[providerID][name].resolve(providerID); m != "" {
-			picks[rank], sources[rank] = TierPick{Model: m}, "built-in"
-		}
+	for rank, name := range swarmRankName {
+		picks[rank], sources[rank] = swarmTierRow(providerID, name, overrides)
 	}
 	return
+}
+
+// SwarmTierTable is the whole configurable set — the capability ladder AND the
+// cost tier — for a surface that renders or edits it.
+//
+// Deliberately separate from SwarmTierLadder rather than a wider version of it.
+// That function is the CAPABILITY ladder, and raati rigor level 1 reads it as
+// "every rung must resolve" and then seats one panel member per rung. Widening
+// it in place would have made level 1 demand a cost tier nobody configured, and
+// seated the cheap rung on a gate — changing what a gate is trusted on as a
+// side effect of adding a name.
+func SwarmTierTable(providerID string, overrides SwarmTierMap) (names []string, picks []TierPick, sources []string) {
+	names = SwarmTierNames()
+	picks, sources = make([]TierPick, len(names)), make([]string, len(names))
+	for i, name := range names {
+		picks[i], sources[i] = swarmTierRow(providerID, name, overrides)
+	}
+	return
+}
+
+// swarmTierRow resolves one named tier: an override wins, else the built-in
+// family rule. One helper so the ladder and the table cannot drift.
+func swarmTierRow(providerID, name string, overrides SwarmTierMap) (TierPick, string) {
+	if p, ok := overridePick(providerID, name, overrides); ok {
+		return p, "override"
+	}
+	if p := swarmTierFamilies[providerID][name].resolvePick(providerID); !p.IsZero() {
+		return p, "built-in"
+	}
+	return TierPick{}, ""
 }
 
 // overridePick reads one rung from the user's map. A rung that names ONLY an
@@ -266,8 +388,8 @@ func swarmPickForRank(providerID string, rank int, overrides SwarmTierMap) TierP
 	if p, ok := overridePick(providerID, name, overrides); ok {
 		return p
 	}
-	if m := swarmTierFamilies[providerID][name].resolve(providerID); m != "" {
-		return TierPick{Model: m}
+	if p := swarmTierFamilies[providerID][name].resolvePick(providerID); !p.IsZero() {
+		return p
 	}
 	return TierPick{}
 }
@@ -306,10 +428,55 @@ func swarmTierRankOf(providerID, modelID string, overrides SwarmTierMap) (int, b
 			return rankOf, true
 		}
 	}
+	// Same refusal as the override branch above, and now reachable from the
+	// built-in table too: an effort ladder puts one model on two rungs, and
+	// ranking it would cap `tier: strong` down to medium and hand back that
+	// very model thinking less.
+	matched, rankOf := 0, -1
 	for rank, name := range swarmRankName {
 		if swarmTierFamilies[providerID][name].matches(id) {
-			return rank, true
+			matched++
+			if rankOf < 0 {
+				rankOf = rank
+			}
 		}
 	}
-	return 0, false
+	if matched > 1 {
+		return 0, false
+	}
+	if rankOf >= 0 {
+		return rankOf, true
+	}
+
+	// Price fallback. An effort ladder names only a model or two, so most of a
+	// provider's catalog matches no rung — including sonnet, which is a very
+	// common host. The cap exists to keep delegation cheap ("a weak host
+	// cannot spawn a strong child"), and that is a COST question, not the
+	// capability one the ladder answers, so price is the axis it can honestly
+	// use where families no longer do: rank the host at the dearest rung that
+	// still costs no more than the host itself.
+	//
+	// Skipped whenever a price is missing or zero. A subscription provider
+	// prices its whole catalog at 0 (github-copilot), and reading that as
+	// "everything is equally cheap" would rank every host at the top rung and
+	// switch the cap off exactly where nobody would notice.
+	host, err := provider.FindModel(providerID, modelID)
+	if err != nil || host.PriceOutput <= 0 {
+		return 0, false
+	}
+	best, found := 0, false
+	for rank, name := range swarmRankName {
+		pick, _ := swarmTierRow(providerID, name, overrides)
+		if pick.Model == "" {
+			continue
+		}
+		m, err := provider.FindModel(providerID, pick.Model)
+		if err != nil || m.PriceOutput <= 0 {
+			continue
+		}
+		if m.PriceOutput <= host.PriceOutput {
+			best, found = rank, true
+		}
+	}
+	return best, found
 }

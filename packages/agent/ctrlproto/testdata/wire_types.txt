@@ -561,6 +561,7 @@ ModelParamSpec
 	kind	string
 	default	string	omitempty
 	value	string	omitempty
+	options	[]string	omitempty
 	min	float64	omitempty
 	max	float64	omitempty
 	help	string	omitempty
@@ -579,6 +580,27 @@ ModelParamsView
 ModelSwitchParams
 	provider	string	omitempty
 	model	string
+ModelTierRung
+	rung	string
+	model	string	omitempty
+	label	string	omitempty
+	pinned	string	omitempty
+	reasoning	string	omitempty
+	source	string	omitempty
+ModelTiersParams
+	provider	string
+ModelTiersResetParams
+	provider	string
+	rung	string	omitempty
+ModelTiersSetParams
+	provider	string
+	rung	string
+	model	string	omitempty
+	reasoning	string	omitempty
+ModelTiersView
+	provider	string
+	has_override	bool	omitempty
+	rungs	[]ModelTierRung
 ModelsResult
 	models	[]ModelInfo
 	reasoning_ladders	map[string][]ReasoningRungInfo	omitempty

@@ -602,6 +602,17 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 			}
 			return w.SetModelHidden(ctx, prov, model, on)
 		},
+		ModelTiers: func(prov string) (ctrlproto.ModelTiersView, error) {
+			return w.ModelTiers(ctx, ctrlproto.ModelTiersParams{Provider: prov})
+		},
+		SetModelTier: func(prov, rung, model, reasoning string) error {
+			return w.ModelTiersSet(ctx, ctrlproto.ModelTiersSetParams{
+				Provider: prov, Rung: rung, Model: model, Reasoning: reasoning,
+			})
+		},
+		ResetModelTier: func(prov, rung string) error {
+			return w.ModelTiersReset(ctx, ctrlproto.ModelTiersResetParams{Provider: prov, Rung: rung})
+		},
 		PromoteModelDefault: promoteModelDefault,
 		TrustWorkspace: func(parent bool) error {
 			return w.Trust(ctx, parent)

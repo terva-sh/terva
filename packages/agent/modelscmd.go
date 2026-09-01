@@ -304,14 +304,24 @@ func runModelsTiers(all bool) error {
 	sort.Strings(extra)
 	order = append(order, extra...)
 
-	ranks := tools.SwarmRankNames()
+	ranks := tools.SwarmTierNames()
 	fmt.Println("Swarm sub-agent tiers — the model `swarm_spawn` resolves for each `tier`.")
 	fmt.Println("(shown uncapped; at spawn time a tier is capped to the host model's own strength)")
 	fmt.Println()
 
 	for _, p := range order {
-		picks, sources := tools.SwarmTierLadder(p, overrides)
-		mapped := !picks[0].IsZero() || !picks[1].IsZero() || !picks[2].IsZero()
+		_, picks, sources := tools.SwarmTierTable(p, overrides)
+		// Every rung, not the first three. A provider with only `cheap` pinned
+		// has a mapping — `tier: cheap` resolves there — and reporting "tier is
+		// ignored" would be false in the one direction that matters, since the
+		// reader's next move is to configure what is already configured.
+		mapped := false
+		for _, pick := range picks {
+			if !pick.IsZero() {
+				mapped = true
+				break
+			}
+		}
 		header := p
 		if !mapped {
 			header += "   (no tier mapping — `tier` is ignored; sub-agents use the host model)"
@@ -354,7 +364,15 @@ func runModelsTiers(all bool) error {
 // none, plus a few candidate model ids from its catalog to choose from.
 func printTierScaffold(providerID string) {
 	fmt.Printf("  pin them in %s:\n", config.ConfigPath())
-	fmt.Printf("    \"swarm_tiers\": { %q: { \"weak\": \"...\", \"medium\": \"...\", \"strong\": \"...\" } }\n", providerID)
+	// Built from the ladder's own rung names rather than a literal list. The
+	// hardcoded "weak/medium/strong" here went stale the day `cheap` landed,
+	// and it went stale silently: the scaffold still parsed, still pasted, and
+	// just quietly omitted a rung.
+	var rungs []string
+	for _, name := range tools.SwarmTierNames() {
+		rungs = append(rungs, fmt.Sprintf("%q: \"...\"", name))
+	}
+	fmt.Printf("    \"swarm_tiers\": { %q: { %s } }\n", providerID, strings.Join(rungs, ", "))
 	var ids []string
 	for _, m := range provider.ModelsForProvider(providerID) {
 		ids = append(ids, m.ID)

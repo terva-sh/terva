@@ -966,6 +966,70 @@ button.ident-home:hover .persona { text-decoration: underline; }
 .prov-field input { min-width: 0; width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
 .prov-help { font-size: 11px; color: var(--muted); }
 .prov-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+
+/* Sub-agent tier ladder — the ⇅ on a provider group in the model picker.
+   Its own block rather than the generic .prov-* form stack it started in: that
+   stack rendered each rung as a label, a help line and two bare selects, so
+   four rungs read as four unrelated forms stacked vertically. The panel's job
+   is a COMPARISON down the ladder — which rung resolves to what, and which
+   ones you set yourself — and a comparison needs the answers in the same place
+   on every row. */
+.tier-list { display: flex; flex-direction: column; gap: 6px; }
+.tier-row {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--panel);
+  min-width: 0;
+}
+.tier-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tier-name { font-size: var(--fs-ui); font-weight: 600; text-transform: lowercase; }
+/* The badge is pushed right so the source column lines up down the ladder. */
+.tier-src { margin-left: auto; font-size: var(--fs-note); color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+
+/* The three states, carried by SHAPE — filled, hollow, dash — which is the
+   same vocabulary the TUI's provider list spells ●○-.
+   Shape rather than colour because this palette's accent IS orange (birch tar)
+   and --warning is amber: an accent badge and a warning badge were the same
+   badge at a glance, and "you set this" and "nothing resolves" are the two
+   states it matters most to tell apart. Rendered and looked at, which is the
+   only way that showed up. Colour now appears once on the surface — the amber
+   sentence on an empty rung — where it competes with nothing. */
+.tier-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; box-sizing: border-box; }
+.tier-row[data-source='override'] { border-left-color: var(--accent); }
+.tier-row[data-source='override'] .tier-dot { background: var(--accent); }
+.tier-row[data-source='override'] .tier-src { color: var(--accent); border-color: var(--accent); }
+.tier-row[data-source='built-in'] .tier-dot { border: 1.5px solid var(--muted); }
+/* A dash, not a dashed ring: at 9px a dashed border is a smudge that reads as
+   the hollow circle next to it. */
+.tier-row[data-source='empty'] .tier-dot { height: 2px; border-radius: 1px; background: var(--muted); }
+
+.tier-resolved { font-size: var(--fs-detail); color: var(--fg); overflow-wrap: anywhere; }
+/* Amber, not red: an unfilled rung is not broken config — a gateway with no
+   built-in ladder is the ordinary case — but it does mean a `tier:` spawn
+   quietly runs at host-model price, which is worth one coloured line. */
+.tier-row[data-source='empty'] .tier-resolved { color: var(--warning); }
+
+/* Convention #1: the selects shrink. Two of them plus a reset button have to
+   fit a 300px desktop rail, so they wrap rather than widening the pane. */
+.tier-controls { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.tier-controls select { flex: 1 1 130px; min-width: 0; font: inherit; font-size: var(--fs-detail); padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+/* The base button reset is font/colour/cursor only, so a button that sets
+   neither background nor border falls through to the OS grey pill. */
+.tier-reset { flex: none; background: none; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); font-size: var(--fs-detail); padding: 4px 8px; }
+.tier-reset:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.tier-reset:disabled { opacity: 0.5; }
+
+/* The same three states on the model picker's provider group header, so the
+   state of every ladder is visible without opening any of them. */
+.pick-tiers { display: inline-flex; align-items: center; gap: 4px; margin: 0 8px 0 8px; }
+.pick-tier-dot { width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box; background: transparent; }
+.pick-tier-dot[data-source='override'] { background: var(--accent); }
+.pick-tier-dot[data-source='built-in'] { border: 1.5px solid var(--muted); }
+.pick-tier-dot[data-source='empty'] { height: 2px; border-radius: 1px; background: var(--muted); }
+
 /* the secondary action beside a primary one: same shape, less weight. Signing OUT
    and cancelling should not look as inviting as signing in. */
 .btn.ghost { color: var(--muted); }

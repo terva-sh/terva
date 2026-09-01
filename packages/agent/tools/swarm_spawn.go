@@ -157,8 +157,8 @@ const swarmSpawnSchema = `{
     },
     "tier": {
       "type": "string",
-      "enum": ["weak", "medium", "strong"],
-      "description": "An optional model strength for the sub-agent. A weak model is cheap and fast, for example Haiku. A medium model is, for example, Sonnet, and a strong model is, for example, Opus. The tool selects a model of this strength from the host provider, and the sub-agent stays on that provider. The model is never stronger than the host model. Use weak for a routine task to decrease the cost. This field is valid only when you omit model and provider. If the provider has no model of this strength, the tool uses the host model."
+      "enum": ["weak", "medium", "strong", "cheap"],
+      "description": "An optional tier for the sub-agent model. This field is valid only when you omit model and provider. Use weak, medium, or strong for the strength of the model. Use cheap when the cost is more important than the strength, for example for a routine task. The tool selects a model for this tier from the host provider, and the sub-agent stays on that provider. For weak, medium, and strong, the model is never stronger than the host model. For cheap, the tool selects the least expensive model, and the host model does not limit it. If the provider has no model for this tier, the tool uses the host model."
     },
     "model": {
       "type": "string",

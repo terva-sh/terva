@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/preact'
-import type { ModelInfo } from '../../platform/ctrlproto/types'
+import type { ModelInfo, ModelTierRung } from '../../platform/ctrlproto/types'
 import { ModelPicker } from './ModelPicker'
 
 const models: ModelInfo[] = [
@@ -93,6 +93,42 @@ describe('ModelPicker', () => {
     expect(currentRow?.querySelector('.pick-default.on')).toBeNull()
     expect(currentRow?.classList.contains('current')).toBe(true)
     expect(screen.getByTitle('Default for new sessions (everywhere)')).toBeTruthy()
+  })
+
+  // The state of every provider's ladder, without opening any of them. Three
+  // answers worth telling apart: you set it, a built-in rule set it, nothing
+  // did — and the third is the one that silently spends host-model money.
+  it('shows each provider ladder state on its group header', () => {
+    const summaries: Record<string, ModelTierRung[]> = {
+      alpha: [
+        { rung: 'weak', model: 'x', pinned: 'x', source: 'override' },
+        { rung: 'medium', model: 'y', source: 'built-in' },
+        { rung: 'strong' },
+      ],
+    }
+    const { container } = render(
+      <ModelPicker groups={groups} favorites={[]} current="" onSwitch={() => {}} onToggleFavorite={() => {}} onToggleHidden={() => {}} onSetDefault={() => {}} onEdit={() => {}} onTiers={() => {}} tierSummaries={summaries} onClose={() => {}} />,
+    )
+    const dots = [...container.querySelectorAll('.pick-tier-dot')]
+    expect(dots.map((d) => d.getAttribute('data-source'))).toEqual([
+      'override',
+      'built-in',
+      'empty',
+    ])
+    // The tooltip is the legend, naming every rung rather than only the
+    // vocabulary — a thing the TUI has to spend a whole line on.
+    expect(container.querySelector('.pick-tiers')?.getAttribute('title')).toBe(
+      'weak: set · medium: built-in · strong: empty',
+    )
+  })
+
+  // beta has no entry: its ladder could not be read. Drawing empty dots there
+  // would report a broken ladder where the truth is that nothing was fetched.
+  it('draws no dots for a provider whose ladder is unknown', () => {
+    const { container } = render(
+      <ModelPicker groups={groups} favorites={[]} current="" onSwitch={() => {}} onToggleFavorite={() => {}} onToggleHidden={() => {}} onSetDefault={() => {}} onEdit={() => {}} onTiers={() => {}} tierSummaries={{ alpha: [{ rung: 'weak', model: 'x', source: 'built-in' }] }} onClose={() => {}} />,
+    )
+    expect(container.querySelectorAll('.pick-tiers')).toHaveLength(1)
   })
 
   it('closes from Escape and the backdrop but not picker content', () => {

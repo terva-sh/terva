@@ -163,6 +163,15 @@ const (
 	MethodModelParamsSet   Method = "models.params.set"   // params ModelParamsSetParams
 	MethodModelParamsReset Method = "models.params.reset" // params ModelParamsParams
 
+	// The swarm tier ladder for one provider (config.json `swarm_tiers`): which
+	// model a sub-agent gets for tier weak / medium / strong, and how hard it
+	// thinks. Same group and the same reason as models.params — a rung decides
+	// what a spawned sub-agent talks to, and a raati gate is trusted on the
+	// strength of the rung it names.
+	MethodModelTiers      Method = "models.tiers"       // params ModelTiersParams, result ModelTiersView
+	MethodModelTiersSet   Method = "models.tiers.set"   // params ModelTiersSetParams
+	MethodModelTiersReset Method = "models.tiers.reset" // params ModelTiersResetParams
+
 	// Side chat: an ephemeral, tool-less completion against a FROZEN snapshot of
 	// a session, leaving no trace in its transcript. Backs the /btw overlay.
 	MethodSideChatOpen  Method = "sidechat.open"  // result SideChatOpenResult (sess in frame)
@@ -408,6 +417,7 @@ func (m Method) Group() Group {
 		return GroupSession
 	case MethodModelsList, MethodModelSwitch, MethodModelFavorite, MethodModelHide, MethodModelSetDefault, MethodSessionReasoning,
 		MethodModelParams, MethodModelParamsSet, MethodModelParamsReset,
+		MethodModelTiers, MethodModelTiersSet, MethodModelTiersReset,
 		MethodTrust, MethodUntrust, MethodRestart, MethodResetsConsume,
 		MethodCardsList, MethodCardsGet, MethodCardsImport, MethodCardsEdit, MethodCardsDelete, MethodCardsExport, MethodCardsLint, MethodCardsFavorite, MethodCardsDoctor,
 		MethodCardsHistory, MethodCardsRestore, MethodCardsRevision, MethodCardsDuplicate,

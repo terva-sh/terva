@@ -1,9 +1,8 @@
 {
   "_comment": "Findings terva-ste-lint accepts today. A NEW finding fails the gate; an entry here that no longer fires ALSO fails it, so this file can only shrink. Regenerate with: just ste-lint-baseline",
   "_note": "These are not accepted policy. They are the residue of the Phase 1 conversion — mostly sentences that carry two clauses joined by 'and' or 'because'. Burn them down.",
-  "count": 39,
+  "count": 38,
   "entries": [
-    "packages/agent/tools/actor_spawn.go:sentence-length:45b9be42bf21",
     "packages/agent/tools/ask.go:paragraph-length:6ed3e4829c56",
     "packages/agent/tools/ask.go:sentence-length:38acce69f204",
     "packages/agent/tools/ask.go:sentence-length:71b4ba14960b",
@@ -32,7 +31,7 @@
     "packages/agent/tools/session_search.go:sentence-length:cc4b2ff18477",
     "packages/agent/tools/share_file.go:sentence-length:6a53bd686342",
     "packages/agent/tools/status.go:sentence-length:041b580f7812",
-    "packages/agent/tools/swarm_spawn.go:paragraph-length:83cc6f7635b1",
+    "packages/agent/tools/swarm_spawn.go:paragraph-length:bca75d5c8878",
     "packages/agent/tools/swarm_spawn.go:sentence-length:ea6e607f0fb9",
     "packages/agent/tools/worktree.go:paragraph-length:a345f50f7f0d",
     "packages/agent/tools/worktree.go:sentence-length:5ac24d47ff51",

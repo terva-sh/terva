@@ -1,8 +1,20 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { t } from '../../i18n'
-import type { ModelInfo } from '../../platform/ctrlproto/types'
+import type { ModelInfo, ModelTierRung } from '../../platform/ctrlproto/types'
 import { humanCount } from '../../ui/formatting'
 import { renamedTo } from './label'
+import { tierState } from './ModelTiersPanel'
+
+// The hover legend for a provider's dots. A tooltip is the web's version of the
+// line the TUI has to spend on a legend, and it can name every rung's state
+// rather than only the vocabulary.
+function tierTitle(rungs: ModelTierRung[]): string {
+  const word = (r: ModelTierRung) => {
+    const st = tierState(r)
+    return st === 'override' ? t('set') : st === 'built-in' ? t('built-in') : t('empty')
+  }
+  return rungs.map((r) => `${r.rung}: ${word(r)}`).join(' · ')
+}
 
 // ModelPicker is the searchable model switcher: a filter box over favorites +
 // per-provider groups, each row a click-to-switch with its own ★ toggle and a
@@ -23,6 +35,8 @@ export function ModelPicker({
   onToggleHidden,
   onSetDefault,
   onEdit,
+  onTiers,
+  tierSummaries,
   onClose,
 }: {
   groups: [string, ModelInfo[]][]
@@ -36,6 +50,15 @@ export function ModelPicker({
   // settings ABOUT this model, so they hang off its row rather than off a pane
   // that would have to list every model a second time.
   onEdit: (provider: string, id: string) => void
+  // Open a provider's sub-agent tier ladder. Optional: a daemon that cannot
+  // serve models.tiers simply does not offer the affordance.
+  onTiers?: (provider: string) => void
+  // Each provider's ladder, for the dots on its group header — so the state of
+  // every ladder is visible without opening any of them. Absent for a provider
+  // whose ladder could not be read, which draws NO dots rather than empty ones:
+  // "not known" and "nothing resolves" are different answers, and only the
+  // second is a problem worth flagging.
+  tierSummaries?: Record<string, ModelTierRung[]>
   onClose: () => void
 }) {
   const [q, setQ] = useState('')
@@ -169,7 +192,33 @@ export function ModelPicker({
           {favMatched.map((model) => row(model, 'fav:'))}
           {groupsMatched.map(([provider, models]) => (
             <div key={'grp' + provider}>
-              <div class="pick-group">{provider}</div>
+              <div class="pick-group">
+                {provider}
+                {/* Tiers belong to a PROVIDER, so the affordance sits on the
+                    group header rather than on a row — and never on the ★
+                    favorites group, which spans every provider. */}
+                {onTiers && (
+                  <>
+                    {(tierSummaries?.[provider]?.length ?? 0) > 0 && (
+                      <span class="pick-tiers" title={tierTitle(tierSummaries![provider])}>
+                        {tierSummaries![provider].map((r) => (
+                          <span key={r.rung} class="pick-tier-dot" data-source={tierState(r)} />
+                        ))}
+                      </span>
+                    )}
+                    <button
+                      class="pick-default"
+                      title={t('Sub-agent tiers')}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onTiers(provider)
+                      }}
+                    >
+                      ⇅
+                    </button>
+                  </>
+                )}
+              </div>
               {models.map((model) => row(model, 'g:'))}
             </div>
           ))}

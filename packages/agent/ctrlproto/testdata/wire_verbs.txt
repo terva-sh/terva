@@ -57,6 +57,9 @@ models.params.set	params=ModelParamsSetParams	result=-
 models.reasoning	params=ReasoningSetParams	result=-
 models.set_default	params=SetDefaultParams	result=-
 models.switch	params=ModelSwitchParams	result=-
+models.tiers	params=ModelTiersParams	result=ModelTiersView
+models.tiers.reset	params=ModelTiersResetParams	result=-
+models.tiers.set	params=ModelTiersSetParams	result=-
 note.set	params=NoteSetParams	result=-
 personas.create	params=PersonaWriteParams	result=PersonaView
 personas.delete	params=PersonaDeleteParams	result=-

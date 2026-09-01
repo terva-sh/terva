@@ -186,6 +186,15 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				if act.Hide {
 					i.persistModelHidden(act.Provider, act.Model, act.HideOn)
 				}
+				if act.Tiers {
+					i.openModelTiers(act.Provider)
+				}
+				if act.TierSet {
+					i.setModelTier(act.Provider, act.Rung, act.Model, act.Reasoning)
+				}
+				if act.TierReset {
+					i.resetModelTier(act.Provider, act.Rung)
+				}
 				return false
 			},
 			render: func(cols int) []string { return i.modelDialog.Render(i.cfg.Theme, cols) },

@@ -101,6 +101,8 @@ func TestEveryStringConfigFieldIsClassified(t *testing.T) {
 		"reasoning":                         "an effort word",
 		"reasoning_summary":                 "a verbosity word",
 		"status_line.rows[][]":              "status-line cell names",
+		"swarm_tiers.*.cheap.model":         "a model id",
+		"swarm_tiers.*.cheap.reasoning":     "an effort word",
 		"swarm_tiers.*.medium.model":        "a model id",
 		"swarm_tiers.*.medium.reasoning":    "an effort word",
 		"swarm_tiers.*.strong.model":        "a model id",

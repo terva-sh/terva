@@ -61,19 +61,6 @@ func TestReasoningOnlyRungBorrowsTheBuiltinModel(t *testing.T) {
 	}
 }
 
-// Built-in rungs never name an effort. terva recognises model FAMILIES; how
-// hard someone wants their sub-agents to think is not something to guess.
-func TestBuiltinRungsNameNoEffort(t *testing.T) {
-	for _, p := range tableProviders() {
-		picks, _ := SwarmTierLadder(p, nil)
-		for rank, pick := range picks {
-			if pick.Reasoning != "" {
-				t.Errorf("%s/%s ships an effort (%q) — the built-in table must not guess one", p, swarmRankName[rank], pick.Reasoning)
-			}
-		}
-	}
-}
-
 // Level 1 over a thinking ladder seats three seats that differ only in how
 // hard they think — and the label has to say so, because it is the only thing
 // telling the seats apart on the record.

@@ -807,6 +807,39 @@ docs/proposals/web-surfaces.md). Today's panes:
   be opened spontaneously (on a session event) or by running the owning
   extension's command from the **Commands** pane.
 
+## The model picker and sub-agent tiers
+
+The model button opens a searchable picker: favorites first, then a group per
+provider, each row switching the session and carrying its own ★ favorite and ◉
+set-as-default toggles.
+
+Each provider group header carries a **⇅** that opens that provider's sub-agent
+tier ladder — the model `swarm_spawn` gets for `tier: weak`, `medium`, `strong`
+or `cheap`, and the model a RAATI seat is filled with at rigor level 1. Tiers
+belong to a provider, so the affordance sits on the group header rather than on
+a row, and never on the ★ group, which spans every provider.
+
+Beside it, a dot per rung in ladder order, so the state of every ladder is
+visible without opening any of them:
+
+| | |
+|---|---|
+| filled | Pinned by you, in `swarm_tiers`. |
+| hollow | Filled by a built-in rule matched against the provider's catalog. |
+| dash | Nothing resolves — a `tier:` spawn against this rung silently runs on the host model, at host-model price. |
+
+A provider whose ladder could not be read shows **no dots at all** rather than
+dashes: "not known" and "nothing resolves" are different answers, and only the
+second is a problem.
+
+The ladder itself shows what each rung **resolves to today**, not what config
+holds — an empty `swarm_tiers` is the ordinary case and says nothing about
+whether the ladder is right. Each rung's model picker carries the *pin* while
+the line above it carries the resolved model, so an untouched rung does not look
+pinned, and saving one cannot freeze a rung that had been tracking a family
+rule. Pinning only a thinking level is allowed and useful: it keeps the built-in
+model and just changes how hard it thinks.
+
 ## Usage
 
 The top bar shows a live **context meter** — the last turn's real input+cache

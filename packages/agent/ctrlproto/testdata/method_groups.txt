@@ -57,6 +57,9 @@ models.params.set	control
 models.reasoning	control
 models.set_default	control
 models.switch	control
+models.tiers	control
+models.tiers.reset	control
+models.tiers.set	control
 note.set	control
 personas.create	control
 personas.delete	control

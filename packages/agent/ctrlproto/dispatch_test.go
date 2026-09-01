@@ -317,6 +317,20 @@ func (r *recorder) ModelParamsReset(_ context.Context, p ModelParamsParams) erro
 	return nil
 }
 
+// --- ModelTiersController ---
+func (r *recorder) ModelTiers(_ context.Context, p ModelTiersParams) (ModelTiersView, error) {
+	r.note("ModelTiers", "", p)
+	return ModelTiersView{}, nil
+}
+func (r *recorder) ModelTiersSet(_ context.Context, p ModelTiersSetParams) error {
+	r.note("ModelTiersSet", "", p)
+	return nil
+}
+func (r *recorder) ModelTiersReset(_ context.Context, p ModelTiersResetParams) error {
+	r.note("ModelTiersReset", "", p)
+	return nil
+}
+
 // --- PersonasController ---
 func (r *recorder) PersonasList(context.Context) (PersonasListResult, error) {
 	r.note("PersonasList", "", nil)
@@ -518,6 +532,16 @@ func dispatchCases() []dispatchCase {
 		{MethodModelParams, ModelParamsParams{Provider: "anthropic", Model: "opus"}, "ModelParams", ModelParamsParams{Provider: "anthropic", Model: "opus"}},
 		{MethodModelParamsSet, ModelParamsSetParams{Provider: "openai", Model: "gpt"}, "ModelParamsSet", nil},
 		{MethodModelParamsReset, ModelParamsParams{Provider: "gemini", Model: "flash"}, "ModelParamsReset", ModelParamsParams{Provider: "gemini", Model: "flash"}},
+
+		// --- tier ladder. The set case fills BOTH optional fields and the reset
+		// case fills the optional rung: a params struct bound from the sibling
+		// verb (all three lead with Provider) would otherwise match on the one
+		// field they share.
+		{MethodModelTiers, ModelTiersParams{Provider: "deepseek"}, "ModelTiers", ModelTiersParams{Provider: "deepseek"}},
+		{MethodModelTiersSet, ModelTiersSetParams{Provider: "kimi", Rung: "strong", Model: "k3", Reasoning: "maximum"}, "ModelTiersSet",
+			ModelTiersSetParams{Provider: "kimi", Rung: "strong", Model: "k3", Reasoning: "maximum"}},
+		{MethodModelTiersReset, ModelTiersResetParams{Provider: "google", Rung: "medium"}, "ModelTiersReset",
+			ModelTiersResetParams{Provider: "google", Rung: "medium"}},
 
 		// The per-session thinking depth. "max" rather than a middle rung on
 		// purpose: it is the one value that differs between the ladder's top two

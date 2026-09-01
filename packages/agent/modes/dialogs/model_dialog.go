@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
@@ -23,6 +24,7 @@ import (
 const (
 	stageModel = iota
 	stageProvider
+	stageTiers
 )
 
 // providerRow is one entry in the stage-1 provider list.
@@ -59,6 +61,21 @@ type ModelDialog struct {
 	promoting       bool
 	promoteProvider string
 	promoteModel    string
+
+	// stage-3 tier ladder: the sub-agent models a provider hands out for
+	// `tier: weak|medium|strong`. The view is fetched by the host and handed
+	// back through ShowTiers — the dialog does no I/O.
+	tiers      ctrlproto.ModelTiersView
+	tierCursor int
+	// tierSummary is every provider's ladder, keyed by provider, for the
+	// glyph column on the stage-1 list. Also host-fetched, and optional: a
+	// session whose host cannot read ladders shows the list without the
+	// column rather than refusing to open.
+	tierSummary map[string]ctrlproto.ModelTiersView
+	// tierRung is the rung a model pick is being made FOR. Non-empty means the
+	// model stage was entered from the ladder, so Enter pins the rung instead
+	// of switching the session's model.
+	tierRung string
 }
 
 // modelDialogAction is returned by HandleKey for the overlay host to apply.
@@ -74,6 +91,18 @@ type modelDialogAction struct {
 	Provider string
 	Model    string
 	Close    bool
+
+	// Tiers asks the host to fetch Provider's tier ladder and hand it back
+	// through ShowTiers. The dialog cannot fetch it itself: the ladder lives in
+	// config and is resolved against the catalog by the daemon.
+	Tiers bool
+	// TierSet pins Rung on Provider to Model (empty keeps the built-in pick)
+	// at Reasoning (empty leaves the effort to the child).
+	TierSet bool
+	// TierReset drops Rung's pin, or the provider's whole entry when Rung is "".
+	TierReset bool
+	Rung      string
+	Reasoning string
 }
 
 func NewModelDialog() *ModelDialog { return &ModelDialog{} }
@@ -240,6 +269,9 @@ func (d *ModelDialog) HandleKey(k tui.Key) modelDialogAction {
 	if d.stage == stageProvider {
 		return d.handleProviderKey(k)
 	}
+	if d.stage == stageTiers {
+		return d.handleTierKey(k)
+	}
 	return d.handleModelKey(k)
 }
 
@@ -281,6 +313,12 @@ func (d *ModelDialog) handleProviderKey(k tui.Key) modelDialogAction {
 		if d.provCursor >= 0 && d.provCursor < len(rows) {
 			d.enterProvider(rows[d.provCursor])
 		}
+	case tui.KeyCtrlT:
+		// The sub-agent ladder for this provider. Not on the ★ favorites row:
+		// tiers are a property of a provider, and favorites span all of them.
+		if d.provCursor >= 0 && d.provCursor < len(rows) && !rows[d.provCursor].fav {
+			return modelDialogAction{Tiers: true, Provider: rows[d.provCursor].name}
+		}
 	case tui.KeyBackspace:
 		if r := []rune(d.provQuery); len(r) > 0 {
 			d.provQuery = string(r[:len(r)-1])
@@ -305,10 +343,28 @@ func (d *ModelDialog) handleModelKey(k tui.Key) modelDialogAction {
 			d.Close()
 			return modelDialogAction{Close: true}
 		}
+		if d.tierRung != "" {
+			// Backing out of a rung pick returns to the ladder it was started
+			// from; dropping to the provider list would lose the place.
+			d.tierRung = ""
+			d.stage = stageTiers
+			return modelDialogAction{}
+		}
 		d.stage = stageProvider // back to the provider list
 		return modelDialogAction{}
 	case tui.KeyEnter:
 		m, ok := d.p.selected()
+		if rung := d.tierRung; rung != "" {
+			// The list was entered to fill a tier rung, so Enter pins it and
+			// returns to the ladder — it must NOT switch the session's model,
+			// which is what this key means every other time.
+			d.tierRung = ""
+			d.stage = stageTiers
+			if !ok {
+				return modelDialogAction{}
+			}
+			return modelDialogAction{TierSet: true, Provider: d.tiers.Provider, Rung: rung, Model: m.ID}
+		}
 		d.Close()
 		if !ok {
 			return modelDialogAction{Close: true}
@@ -386,16 +442,25 @@ func (d *ModelDialog) Render(th tui.Theme, width int) []string {
 	if d.stage == stageProvider {
 		return d.renderProviders(th, width)
 	}
+	if d.stage == stageTiers {
+		lines := []string{FrameHeader(th, i18n.T("tiers · %s", d.tiers.Provider), width)}
+		lines = append(lines, th.FG256(th.Muted, "  "+d.tierHint()))
+		lines = append(lines, d.tierRows(th, width)...)
+		return append(lines, FrameRule(th, width))
+	}
 	return d.renderModels(th, width)
 }
 
 func (d *ModelDialog) renderProviders(th tui.Theme, width int) []string {
 	lines := []string{FrameHeader(th, i18n.T("model · provider"), width)}
-	hint := i18n.T("pick a provider (↑/↓, enter, esc) - type to filter")
+	hint := i18n.T("pick a provider (↑/↓, enter, esc), ctrl+t sub-agent tiers - type to filter")
 	if d.provQuery != "" {
 		hint = i18n.T("filter: %s", d.provQuery)
 	}
 	lines = append(lines, th.FG256(th.Muted, hint))
+	if legend := d.tierLegend(); legend != "" {
+		lines = append(lines, th.FG256(th.Muted, legend))
+	}
 
 	rows := d.filteredProviders()
 	if len(rows) == 0 {
@@ -411,6 +476,12 @@ func (d *ModelDialog) renderProviders(th tui.Theme, width int) []string {
 	}
 	for i, r := range rows {
 		plain := fmt.Sprintf("  %-22s %4d", r.label, r.count)
+		// Glyphs before the hidden note, padded to a fixed width. A column
+		// that moves with the row above it cannot be read down, which is the
+		// only way this one is useful.
+		if w := d.tierGlyphWidth(); w > 0 {
+			plain += "  " + padRunes(d.tierGlyphs(r), w)
+		}
 		if r.hidden > 0 {
 			plain += i18n.T("  (%d hidden)", r.hidden)
 		}

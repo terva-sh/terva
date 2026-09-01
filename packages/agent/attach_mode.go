@@ -488,6 +488,17 @@ func runAttachMode(ctx context.Context, args build.Args, version string) error {
 			}
 			return svc.SetModelHidden(ctx, prov, model, on)
 		},
+		ModelTiers: func(prov string) (ctrlproto.ModelTiersView, error) {
+			return svc.ModelTiers(ctx, ctrlproto.ModelTiersParams{Provider: prov})
+		},
+		SetModelTier: func(prov, rung, model, reasoning string) error {
+			return svc.ModelTiersSet(ctx, ctrlproto.ModelTiersSetParams{
+				Provider: prov, Rung: rung, Model: model, Reasoning: reasoning,
+			})
+		},
+		ResetModelTier: func(prov, rung string) error {
+			return svc.ModelTiersReset(ctx, ctrlproto.ModelTiersResetParams{Provider: prov, Rung: rung})
+		},
 		// The picker's ctrl+d was dead in attach mode until models.set_default
 		// existed: the promote logic lived in the local carrier's config closure,
 		// which a ctrlproto client never builds. It now lands on the daemon,

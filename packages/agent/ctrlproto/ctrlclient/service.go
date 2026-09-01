@@ -413,6 +413,24 @@ func (s *Service) ModelParamsReset(ctx context.Context, p ctrlproto.ModelParamsP
 	return s.c.Call(ctx, "", ctrlproto.MethodModelParamsReset, p, nil)
 }
 
+// --- swarm tier ladder (config.json swarm_tiers) ---
+
+var _ ctrlproto.ModelTiersController = (*Service)(nil)
+
+func (s *Service) ModelTiers(ctx context.Context, p ctrlproto.ModelTiersParams) (ctrlproto.ModelTiersView, error) {
+	var r ctrlproto.ModelTiersView
+	err := s.c.Call(ctx, "", ctrlproto.MethodModelTiers, p, &r)
+	return r, err
+}
+
+func (s *Service) ModelTiersSet(ctx context.Context, p ctrlproto.ModelTiersSetParams) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodModelTiersSet, p, nil)
+}
+
+func (s *Service) ModelTiersReset(ctx context.Context, p ctrlproto.ModelTiersResetParams) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodModelTiersReset, p, nil)
+}
+
 // --- card library ---
 
 var _ ctrlproto.CardsController = (*Service)(nil)

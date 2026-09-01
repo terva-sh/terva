@@ -449,6 +449,35 @@ type TierConfig struct {
 	Weak   TierRung `json:"weak,omitzero"`
 	Medium TierRung `json:"medium,omitzero"`
 	Strong TierRung `json:"strong,omitzero"`
+	// Cheap is the COST tier, and it sits outside the weak→strong ordering
+	// above rather than below it. Those three say how capable a sub-agent
+	// should be, which on a recent model series is mostly a question of how
+	// hard the largest model thinks — so none of them answers "keep this
+	// cheap". A `cheap` spawn is never capped to the host's strength either:
+	// the cap stops a weak host reaching for a STRONGER child, and reaching
+	// for a cheaper one is not that.
+	Cheap TierRung `json:"cheap,omitzero"`
+}
+
+// Rungs returns the ladder keyed by rung name.
+//
+// The struct above has a field per rung rather than a map, for a stable JSON
+// schema and per-field docs — so something has to turn a rung's NAME back into
+// its field, and this is the one place that does. Readers that spelled the
+// mapping out themselves are how `cheap` overrides were silently dropped:
+// build.SwarmTierMap listed weak/medium/strong inline, so a user who pinned
+// only a cheap rung had it discarded before it ever reached the resolver, with
+// the built-in cheap pick still resolving underneath and making the output look
+// correct. That is not a display bug, and a hardcoded list cannot be trusted
+// not to repeat it — TestTierConfigCoversEveryLadderRung holds this map to the
+// ladder tools actually defines.
+func (t TierConfig) Rungs() map[string]TierRung {
+	return map[string]TierRung{
+		"weak":   t.Weak,
+		"medium": t.Medium,
+		"strong": t.Strong,
+		"cheap":  t.Cheap,
+	}
 }
 
 // TierRung is one rung of a ladder: which model, and how hard it thinks.

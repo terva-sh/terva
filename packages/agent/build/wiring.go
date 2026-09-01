@@ -728,7 +728,7 @@ func SwarmTierMap(tiers map[string]config.TierConfig) tools.SwarmTierMap {
 	out := make(tools.SwarmTierMap, len(tiers))
 	for prov, tc := range tiers {
 		m := map[string]tools.TierPick{}
-		for tier, rung := range map[string]config.TierRung{"weak": tc.Weak, "medium": tc.Medium, "strong": tc.Strong} {
+		for tier, rung := range tc.Rungs() {
 			p := tools.TierPick{
 				Model:     strings.TrimSpace(rung.Model),
 				Reasoning: strings.TrimSpace(rung.Reasoning),

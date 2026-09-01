@@ -215,6 +215,16 @@ type InteractiveConfig struct {
 	// SetModelHidden persists a hide toggle for a "provider/id" key.
 	SetModelHidden func(key string, on bool) error
 
+	// ModelTiers reads one provider's swarm tier ladder — what each rung
+	// RESOLVES to, not merely what config holds. Nil when the carrier cannot
+	// serve it, in which case the /model dialog simply has no tier stage.
+	ModelTiers func(provider string) (ctrlproto.ModelTiersView, error)
+	// SetModelTier pins one rung. An empty model keeps the rung's built-in
+	// pick and changes only the thinking level.
+	SetModelTier func(provider, rung, model, reasoning string) error
+	// ResetModelTier drops one rung's pin.
+	ResetModelTier func(provider, rung string) error
+
 	// TervaHome is the root directory for sessions/, used by /sessions
 	// and the update-check cache.
 	TervaHome string

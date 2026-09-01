@@ -13,7 +13,7 @@ Type `/` in the TUI to open the autocomplete popup. Available commands:
 | `/help` | Show key bindings and commands. |
 | `/login` | Log in via API key or subscription (opens a dialog). |
 | `/logout [provider]` | Clear credentials for any logged-in provider, or all when omitted. `/logout openai-codex` clears ChatGPT/Codex subscription auth while preserving a public OpenAI API key; `/logout kimi` also disables fallback to the official Kimi Code CLI token until you log in to Kimi through terva again. |
-| `/model` | Pick a model from a list (or `/model <id>` to set directly). Press `ctrl+e` on a highlighted model to edit its config — changes save to `$TERVA_HOME/models.json` and override the defaults. |
+| `/model` | Pick a model from a list (or `/model <id>` to set directly). Press `ctrl+e` on a highlighted model to edit its config — changes save to `$TERVA_HOME/models.json` and override the defaults. Press `ctrl+t` on a **provider** to view and edit its sub-agent tier ladder — see [Sub-agent tiers](#sub-agent-tiers-ctrlt). |
 | `/new` | Start a fresh session in the current directory. The current session stays on disk (resume it later with `/sessions`); the transcript, context meter, and cost reset, while the provider/model stay put. |
 | `/sessions` | Resume a previous session for this directory. |
 | `/session` | Four ops on the current session: `export` to a portable `.tervasession` file, `import` one back in, `fork` from a past user message into a new branch, `tree` to switch between branches. Opens a picker without an argument; direct forms: `/session export [path]`, `/session import <path>`, `/session fork`, `/session tree`. Default export destination is `~/Downloads`. |
@@ -126,6 +126,33 @@ daemon's host and degrade to absent cross-host; session file operations
 and degrade with a clear message; `/jail` and extension pickers likewise.
 See docs/proposals/orchestration-frontend.md for the trajectory (the
 sessions board over N subscriptions).
+
+### Sub-agent tiers (`ctrl+t`)
+
+In the `/model` picker's **provider** list, press `ctrl+t` on a provider to see the ladder its sub-agents are spawned from — the model `swarm_spawn` gets for `tier: weak`, `medium`, `strong` or `cheap`, and the model a RAATI seat is filled with at rigor level 1.
+
+The provider list carries a glyph per rung, in ladder order, so the state of every ladder is visible without opening any of them:
+
+| | |
+|---|---|
+| `●` | Pinned by you, in `swarm_tiers`. |
+| `○` | Filled by a built-in rule matched against the provider's catalog. |
+| `-` | Nothing resolves — a `tier:` spawn against this rung silently runs on the host model. |
+
+The column is absent entirely when the ladders could not be read, rather than drawn as empty rungs: "unknown" and "unfilled" are different answers, and only one of them is a problem.
+
+The screen shows what each rung **resolves to today**, not what your config holds, and that distinction is the reason it exists. An empty ladder in config is the ordinary case and tells you nothing about whether the ladder is right: google's medium and strong rungs once resolved to *image-generation* models, on a stock install with nothing configured, and every automated check passed. Each row names its model and where the pick came from — `built-in` (terva matched a family rule against the provider's catalog) or `override` (you pinned it).
+
+A rung that resolves to nothing says so plainly: **falls back to the host model**. That is not "off" — a sub-agent asking for a weak tier there quietly runs on your main model, at your main model's cost.
+
+| key | |
+|---|---|
+| `enter` | Pick a model for the highlighted rung, from the same list `/model` uses. |
+| `ctrl+t` | Cycle the rung's thinking level, over the rungs *that model* actually distinguishes. |
+| `r` | Reset the rung to terva's built-in guess. |
+| `esc` | Back to the provider list. |
+
+Pinning only a thinking level is allowed and useful: it keeps the built-in model for that rung and just changes how hard it thinks. That is the cheapest way to build a ladder on a provider that ships one good model and no cheap sibling — "K3 with thinking off" and "K3 at high" really are different amounts of compute for different money. Changes save to `swarm_tiers` in `$TERVA_HOME/config.json`; `terva models tiers` prints the same resolved view from the command line.
 
 ### Editing a model's config (`ctrl+e`)
 
@@ -265,7 +292,7 @@ Background subagents that run alongside your main session. Each one is a separat
 
 **`/session export` does NOT bundle subagents.** A `.tervasession` is just the main chat transcript; per-agent state (session file, unix-socket inbox) is machine-local and doesn't round-trip through a JSONL file. To share what an agent said, copy it out of the transcript view manually.
 
-**Auto-swarm.** With `/settings` -> auto-swarm on, the main agent gets a built-in `swarm_spawn` tool and a system-prompt nudge to use it. It can then fork sub-agents on its own when a request naturally splits into independent parallel work ("implement A and B", "investigate three files"). Each spawn returns the sub-agent id immediately and the main turn keeps going. The agent can pick a model strength per sub-agent with a `tier` of `weak`/`medium`/`strong` (e.g. Haiku/Sonnet/Opus on Anthropic) — never stronger than the host model, so routine sub-tasks run cheap. Only Anthropic has a built-in mapping; for any other provider (gateways like opencode-go/OpenRouter/LiteLLM) `tier` is ignored until you configure one — run `terva models tiers` to see what resolves and set per-provider tiers (see [models.md](models.md#swarm-sub-agent-tiers-weak--medium--strong)). When every sub-agent the agent spawned in that batch finishes its initial task, terva injects one `[auto-swarm update]` message back into the main chat recapping each agent's status, task, and transcript tail; the main agent then writes a short follow-up summary referencing the agents by id. Off by default; toggle from `/settings`.
+**Auto-swarm.** With `/settings` -> auto-swarm on, the main agent gets a built-in `swarm_spawn` tool and a system-prompt nudge to use it. It can then fork sub-agents on its own when a request naturally splits into independent parallel work ("implement A and B", "investigate three files"). Each spawn returns the sub-agent id immediately and the main turn keeps going. The agent can pick a model strength per sub-agent with a `tier` of `weak`/`medium`/`strong` — never stronger than the host model, so routine sub-tasks run cheap — or `cheap`, which is a cost tier rather than a strength and is not capped. A rung is not always a different model: on Anthropic and Codex the built-in ladders vary the *thinking level* on the same model, because low thinking on the largest model beats the middle model outright. Several providers ship a built-in mapping; for one that does not (gateways like opencode-go/OpenRouter/LiteLLM) `tier` is ignored until you configure one — run `terva models tiers` to see what resolves and set per-provider tiers (see [models.md](models.md#swarm-sub-agent-tiers-weak--medium--strong)). When every sub-agent the agent spawned in that batch finishes its initial task, terva injects one `[auto-swarm update]` message back into the main chat recapping each agent's status, task, and transcript tail; the main agent then writes a short follow-up summary referencing the agents by id. Off by default; toggle from `/settings`.
 
 **Structured deliverables.** A spawn can demand a machine-readable report
 instead of trusting prose: `swarm_spawn`'s optional `deliverable_schema` (a

@@ -149,8 +149,8 @@ func (t *ActorSpawnTool) Schema() json.RawMessage {
     },
     "tier": {
       "type": "string",
-      "enum": ["weak", "medium", "strong"],
-      "description": "An optional model strength for the actor at its first appearance. A weak model is cheap and fast. The tool selects a model of this strength from the host provider, and the model is never stronger than the host model. Omit this field to use the host model. The tool ignores this field after the actor starts."
+      "enum": ["weak", "medium", "strong", "cheap"],
+      "description": "An optional model tier for the actor at its first appearance. Use weak, medium, or strong for the strength of the model, which is never stronger than the host model. Use cheap when the cost is more important than the strength, and the host model does not limit the selection. The tool selects a model for this tier from the host provider. Omit this field to use the host model. The tool ignores this field after the actor starts."
     }
   },
   "required": ["actor", "situation"]

@@ -2391,12 +2391,18 @@ export interface ModelParamSpec {
   // A rendering hint. Everything goes back as a string and the DAEMON parses —
   // bounds live in packages/provider, and a second opinion on the wire is a
   // second thing to disagree.
-  kind: 'text' | 'int' | 'float'
+  kind: 'text' | 'int' | 'float' | 'enum'
   // What this model takes with NO override. Belongs in the placeholder, never in
   // the box: a pre-filled default reads as an override and would be saved as one.
   default?: string
   // The override currently pinned in models.json, or "" for none.
   value?: string
+  // The values an 'enum' param accepts FOR THIS MODEL, in display order; absent
+  // for every other kind. Render a picker over exactly these and never a text
+  // box: the set is narrower on some models than others (the thinking ladder
+  // collapses rungs that reach a given model as one wire value), so a list
+  // hardcoded here would offer levels the model cannot tell apart.
+  options?: string[]
   min?: number
   max?: number
   help?: string
@@ -2408,6 +2414,38 @@ export interface ModelParamsView {
   // Whether models.json holds an entry — i.e. whether a reset would do anything.
   has_override?: boolean
   params: ModelParamSpec[]
+}
+
+// One rung of a provider's sub-agent tier ladder, as it stands today.
+export interface ModelTierRung {
+  // weak | medium | strong
+  rung: string
+  // What the rung resolves to TODAY — the pinned id, or the model the built-in
+  // family rule found. Empty means the rung does not resolve at all and a
+  // sub-agent asking for this tier inherits the host model instead.
+  model?: string
+  label?: string
+  // The model id the OPERATOR pinned, absent when the rung's model came from a
+  // family rule. `model` alone cannot say which: sending the resolved id back
+  // would freeze a rung that had been tracking the rule, and sending nothing
+  // would drop a real pin. Echo this when editing only the level.
+  pinned?: string
+  // The thinking level pinned to this rung, if any.
+  reasoning?: string
+  // 'override' when the operator pinned it, 'built-in' when a family rule found
+  // it, absent when nothing resolved. This is the field that makes the view
+  // worth rendering: a rung can be wrong while config is completely empty, and
+  // only the source tells you which of the two you are looking at.
+  source?: string
+}
+
+// A provider's whole ladder. Always three rungs, in weak→strong order.
+export interface ModelTiersView {
+  provider: string
+  // Whether config holds an entry for this provider — i.e. whether "reset this
+  // provider" would do anything.
+  has_override?: boolean
+  rungs: ModelTierRung[]
 }
 
 // --- the verb vocabulary -----------------------------------------------------
@@ -2478,6 +2516,9 @@ export type Verb =
   | 'models.params'
   | 'models.params.reset'
   | 'models.params.set'
+  | 'models.tiers'
+  | 'models.tiers.reset'
+  | 'models.tiers.set'
   | 'models.reasoning'
   | 'models.set_default'
   | 'models.switch'

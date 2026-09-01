@@ -108,7 +108,7 @@ Place a `models.json` in `$TERVA_HOME` (macOS: `~/Library/Application Support/te
 }
 ```
 
-Supported fields per model: `id` (required), `name`, `reasoning`, `contextWindow`, `desiredContextWindow`, `maxTokens`, `temperature`, `defaultReasoning`, `reasoningEfforts`, `capabilities`, `baseUrl`, `priceInput`, `priceOutput`, `priceCacheRead`, `priceCacheWrite`, `priceOutputImage`. `name` is what to call the model on screen **in place of its id** — see [Renaming a model](#renaming-a-model); `contextWindow` is the model's total token budget (the hard ceiling: it drives the context gauge and clamps `maxTokens`); `desiredContextWindow` is an optional smaller *working* window that moves the auto-compaction thresholds only — compact earlier on a large-window model, e.g. to stay under a long-context pricing surcharge, without pretending the model is smaller; `maxTokens` is the cap on a single response; `temperature` (0–2) is the model's default sampling temperature, used when no `--temperature` flag is given and ignored for adaptive-thinking models (which reject sampling params); `defaultReasoning` is the thinking level for this model — a value you set here outranks the global **Thinking** setting, unlike the one terva ships in its own catalog, which yields to it (full order in [CLI](cli.md#per-session-thinking)); `reasoningEfforts` is the list of `reasoning_effort` values this model actually accepts (`["none", "low", "medium", "xhigh"]`, say) — see [Declaring which efforts a model accepts](#declaring-which-efforts-a-model-accepts); `capabilities` is an object of explicit capability assertions — `image-input`, `image-output`, `reasoning` — that override what terva would otherwise infer (`{"image-input": false}` on a vision-less local model, say). These are editable in-app from the `/model` picker with `Ctrl+E`. Several are especially worth setting for local / OpenAI-compatible models that aren't in the built-in catalog — see [Local models](#local-models-with-ollama).
+Supported fields per model: `id` (required), `name`, `reasoning`, `contextWindow`, `desiredContextWindow`, `maxTokens`, `temperature`, `defaultReasoning`, `reasoningEfforts`, `capabilities`, `baseUrl`, `priceInput`, `priceOutput`, `priceCacheRead`, `priceCacheWrite`, `priceOutputImage`. `name` is what to call the model on screen **in place of its id** — see [Renaming a model](#renaming-a-model); `contextWindow` is the model's total token budget (the hard ceiling: it drives the context gauge and clamps `maxTokens`); `desiredContextWindow` is an optional smaller *working* window that moves the auto-compaction thresholds only — compact earlier on a large-window model, e.g. to stay under a long-context pricing surcharge, without pretending the model is smaller; `maxTokens` is the cap on a single response; `temperature` (0–2) is the model's default sampling temperature, used when no `--temperature` flag is given and ignored for adaptive-thinking models (which reject sampling params); `defaultReasoning` is the thinking level for this model — a value you set here outranks the global **Thinking** setting, unlike the one terva ships in its own catalog, which yields to it (full order in [CLI](cli.md#per-session-thinking)); `reasoningEfforts` is the list of `reasoning_effort` values this model actually accepts (`["none", "low", "medium", "xhigh"]`, say) — see [Declaring which efforts a model accepts](#declaring-which-efforts-a-model-accepts); `capabilities` is an object of explicit capability assertions — `image-input`, `image-output`, `reasoning` — that override what terva would otherwise infer (`{"image-input": false}` on a vision-less local model, say). These are editable in-app from the `/model` picker with `Ctrl+E`; `defaultReasoning` is a picker there rather than a text box, offering the levels **this** model can actually tell apart (several rungs reach some models as one wire value, and it does not offer both), and the row is absent for a model that takes no thinking setting at all. Several are especially worth setting for local / OpenAI-compatible models that aren't in the built-in catalog — see [Local models](#local-models-with-ollama).
 
 Prices are USD per 1M tokens. `priceOutputImage` is the separate output rate for **image** tokens, for models that bill a generated picture differently from the text beside it — Gemini's nano-banana family charges $3/1M for text but $60/1M for images on the same model, in the same response. Leave it unset (0) for every ordinary model: output is then billed at the single `priceOutput` rate exactly as before. When it is set, terva splits the response's output tokens by modality and bills each part at its own rate.
 
@@ -550,21 +550,30 @@ Declaring `none` also fixes a subtler trap. terva's `off` normally *omits* the f
 
 The `/reasoning` ladder reads the same declaration as the request builder, so what the dialog shows you is what the wire sends.
 
-## Swarm sub-agent tiers (weak / medium / strong)
+## Swarm sub-agent tiers (weak / medium / strong / cheap)
 
-When auto-swarm is on, the agent can pick a model *strength* for each background sub-agent it spawns via a `tier` of `weak`, `medium`, or `strong` — so routine sub-tasks run on a cheap model and only the hard ones use a strong one. A tier always resolves **for the host's own provider** (a sub-agent stays on the provider you're using) and is **capped at the host model's tier**: a weak host can't spawn a strong child. Tiers are a per-provider concept — each provider maps `weak`/`medium`/`strong` to its own models.
+When auto-swarm is on, the agent picks a `tier` for each background sub-agent it spawns. A tier always resolves **for the host's own provider** (a sub-agent stays on the provider you're using), and each provider maps the tiers to its own models.
 
-terva ships a built-in mapping for the providers whose model families it can name without guessing:
+There are two axes, and they answer different questions:
 
-| provider | weak | medium | strong |
-|---|---|---|---|
-| Anthropic | haiku | sonnet | opus |
-| GitHub Copilot | haiku | sonnet | opus |
-| Google | flash-lite | flash | pro |
-| OpenAI | nano | mini | the plain flagship |
-| OpenAI (Codex subscription) | mini | *(named models — see below)* | *(named models)* |
-| DeepSeek | flash | — | pro |
-| Kimi | K2 | — | K3 |
+- **`weak` / `medium` / `strong` — how capable.** Ordered, and **capped at the host model's tier**: a weak host can't spawn a strong child, so delegation stays cheaper than doing the work yourself.
+- **`cheap` — how much it costs.** Deliberately *outside* that ordering, and **never capped**. It exists because capability stopped being a matter of which model: on a recent series the better "medium" is usually the largest model thinking a little, and a small model earns its place thinking *hard*. Once the ladder says that, none of its three rungs answers "keep this cheap" — so a caller that cares about spend rather than strength had nothing to ask for. Reach for `cheap` in test runs and bulk passes.
+
+terva ships a built-in mapping per provider:
+
+| provider | weak | medium | strong | cheap |
+|---|---|---|---|---|
+| Anthropic | haiku, thinking high | opus, thinking low | opus, thinking high | haiku, thinking minimum |
+| OpenAI (Codex subscription) | luna, thinking maximum | sol, thinking low | sol, thinking high | mini, thinking minimum |
+| GitHub Copilot | haiku | sonnet | opus | haiku, thinking minimum |
+| Google | flash-lite | flash | pro | flash-lite, thinking minimum |
+| OpenAI | nano | mini | the plain flagship | nano, thinking minimum |
+| DeepSeek | flash | — | pro | flash, thinking minimum |
+| Kimi | K2 | — | K3 | K2, thinking minimum |
+
+**A rung is a model *and* an effort.** Anthropic and Codex are effort ladders: medium and strong are the same model at two thinking levels. That is not a shortcut — it is what those ladders should say, and a table that could only name model families said something else confidently. Where two rungs share a model, their efforts must reach it as genuinely different values on the wire, or the rungs would be one sub-agent with two labels; a guard checks exactly that.
+
+Because most of a provider's catalog then matches no rung at all, the host cap falls back to **price**: a host that isn't itself a rung is ranked at the dearest rung that costs no more than it does. So a Sonnet host still can't spawn an Opus child, even though Sonnet is no longer a rung. (Skipped where prices are all zero, as on a subscription provider — treating "free" as equal would silently switch the cap off.)
 
 Most rows are **family names**, matched as substrings, so they survive version bumps (`claude-opus-4-5` → `4-8`) with no edits. Two rows are not:
 
@@ -578,7 +587,7 @@ A resolved tier never picks a *speculative* catalog entry — a model terva know
 **See what resolves today, and what to set:**
 
 ```bash
-terva models tiers          # per logged-in provider: the weak/medium/strong model each resolves to
+terva models tiers          # per logged-in provider: what each tier resolves to
 terva models tiers --all    # include providers you're not logged into
 ```
 
@@ -592,7 +601,8 @@ Providers with no mapping are flagged, with a ready-to-paste config block and ca
     "opencode-go": {
       "weak":   "minimax-m3",
       "medium": "glm-5.2",
-      "strong": "kimi-k2.7-code"
+      "strong": "kimi-k2.7-code",
+      "cheap":  { "model": "minimax-m3", "reasoning": "minimum" }
     }
   }
 }

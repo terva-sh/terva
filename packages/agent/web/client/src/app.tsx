@@ -27,6 +27,8 @@ import type {
   ChatServiceInfo,
   ModelInfo,
   ModelParamsView,
+  ModelTierRung,
+  ModelTiersView,
   ModelsResult,
   ReasoningRungInfo,
   AuthFlowStep,
@@ -75,6 +77,7 @@ import type { ToolView } from './features/conversation/types'
 import { AskRequest as AskRequestView } from './features/interactions/AskRequest'
 import { PermissionRequest as PermissionRequestView } from './features/interactions/PermissionRequest'
 import { ModelParamsForm } from './features/models/ModelParamsForm'
+import { ModelTiersPanel } from './features/models/ModelTiersPanel'
 import { ModelPicker } from './features/models/ModelPicker'
 import { modelLabel } from './features/models/label'
 import { SessionsBoard } from './features/board/SessionsBoard'
@@ -324,6 +327,10 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   const [reasoningOpen, setReasoningOpen] = useState(false)
   // The per-model overrides (models.json). Held here rather than in the picker so
   // a failed save keeps its error next to the form that produced it.
+  const [modelTiers, setModelTiers] = useState<ModelTiersView | null>(null)
+  const [tierSummaries, setTierSummaries] = useState<Record<string, ModelTierRung[]>>({})
+  const [modelTiersBusy, setModelTiersBusy] = useState(false)
+  const [modelTiersErr, setModelTiersErr] = useState('')
   const [modelParams, setModelParams] = useState<ModelParamsView | null>(null)
   const [modelParamsBusy, setModelParamsBusy] = useState(false)
   const [modelParamsErr, setModelParamsErr] = useState('')
@@ -1553,6 +1560,94 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     }
   }, [modelParams])
 
+  // Every provider's ladder, for the dots on the picker's group headers.
+  //
+  // Fetched when the picker OPENS rather than on connect: it is a handful of
+  // round trips that only matter while the picker is on screen, and a ladder
+  // can change under a long-lived tab. A provider whose ladder cannot be read
+  // is skipped rather than failing the open — the dots are an aid, and a picker
+  // that refused to appear because a summary was unavailable would be a worse
+  // trade than a missing dot.
+  useEffect(() => {
+    if (!pickerOpen) return
+    const c = clientRef.current
+    if (!c) return
+    let live = true
+    void (async () => {
+      const out: Record<string, ModelTierRung[]> = {}
+      for (const [provider] of modelGroups) {
+        try {
+          const v = await c.send<ModelTiersView>('models.tiers', { provider }, '')
+          out[provider] = v.rungs ?? []
+        } catch {
+          // Skipped, not fatal. See above.
+        }
+      }
+      if (live) setTierSummaries(out)
+    })()
+    return () => {
+      live = false
+    }
+  }, [pickerOpen, modelGroups])
+
+  const openModelTiers = useCallback(async (provider: string) => {
+    const c = clientRef.current
+    if (!c) return
+    setModelTiersErr('')
+    try {
+      setModelTiers(await c.send<ModelTiersView>('models.tiers', { provider }, ''))
+    } catch (e) {
+      setToast(authMessage(e))
+    }
+  }, [])
+
+  // A rung write re-reads the ladder and KEEPS the panel open, unlike the model
+  // settings form which closes on save. Two reasons: a ladder is three rungs
+  // usually set together, and the answer to a write is what the rung resolved
+  // to, which can differ from what was asked for — pinning only a level leaves
+  // the model to the family rule, and the row must show which model that is.
+  const writeModelTier = useCallback(
+    async (verb: 'models.tiers.set' | 'models.tiers.reset', params: Record<string, unknown>, provider: string) => {
+      const c = clientRef.current
+      if (!c) return
+      setModelTiersBusy(true)
+      setModelTiersErr('')
+      try {
+        await c.send(verb, params, '')
+        const v = await c.send<ModelTiersView>('models.tiers', { provider }, '')
+        setModelTiers(v)
+        // Closing the ladder returns to the picker, so the dots have to be
+        // current by the time it is on screen again.
+        setTierSummaries((prev) => ({ ...prev, [provider]: v.rungs ?? [] }))
+      } catch (e) {
+        // Kept open with the daemon's own words: it names the rung or the model
+        // that was refused, and closing would take that away.
+        setModelTiersErr(authMessage(e))
+      } finally {
+        setModelTiersBusy(false)
+      }
+    },
+    [],
+  )
+
+  const setModelTier = useCallback(
+    (rung: string, model: string, reasoning: string) => {
+      const v = modelTiers
+      if (!v) return
+      void writeModelTier('models.tiers.set', { provider: v.provider, rung, model, reasoning }, v.provider)
+    },
+    [modelTiers, writeModelTier],
+  )
+
+  const resetModelTier = useCallback(
+    (rung: string) => {
+      const v = modelTiers
+      if (!v) return
+      void writeModelTier('models.tiers.reset', { provider: v.provider, rung }, v.provider)
+    },
+    [modelTiers, writeModelTier],
+  )
+
   // Lazily fetch a context node's content/children on expand (context.node).
   const fetchNode = useCallback(
     (id: string, op?: string): Promise<ContextNode> =>
@@ -2118,7 +2213,22 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       {/* The settings form OWNS the overlay while it is open. Leaving the model
           list behind it invites picking a second model mid-edit, and the typing
           would go to whichever one the form still thought it was editing. */}
-      {pickerOpen && modelParams ? (
+      {pickerOpen && modelTiers ? (
+        <div class="modal-scrim" onClick={() => setModelTiers(null)}>
+          <div class="modal picker" onClick={(e) => e.stopPropagation()}>
+            <ModelTiersPanel
+              view={modelTiers}
+              models={modelGroups.find(([p]) => p === modelTiers.provider)?.[1] ?? []}
+              ladders={ladders}
+              busy={modelTiersBusy}
+              error={modelTiersErr}
+              onSet={setModelTier}
+              onReset={resetModelTier}
+              onClose={() => setModelTiers(null)}
+            />
+          </div>
+        </div>
+      ) : pickerOpen && modelParams ? (
         <div class="modal-scrim" onClick={() => setModelParams(null)}>
           <div class="modal picker" onClick={(e) => e.stopPropagation()}>
             <ModelParamsForm
@@ -2154,6 +2264,8 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           onToggleHidden={hideModel}
           onSetDefault={setDefaultModel}
           onEdit={openModelParams}
+          onTiers={openModelTiers}
+          tierSummaries={tierSummaries}
           onClose={() => setPickerOpen(false)}
         />
       ) : null}

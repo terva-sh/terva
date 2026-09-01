@@ -211,7 +211,7 @@ own detailed screen — `terva <command> --help`.
 | Command | What it does |
 |---|---|
 | `terva ext ...` | Install, list, update, and remove extensions (`--ext PATH` loads one for a single run). See [extensions.md](extensions.md). |
-| `terva models ...` | Scaffold and edit custom model definitions in `$TERVA_HOME/models.json`; `terva models tiers` shows each provider's weak/medium/strong ladder. See [models.md](models.md) and [providers.md](providers.md). |
+| `terva models ...` | Scaffold and edit custom model definitions in `$TERVA_HOME/models.json`; `terva models tiers` shows each provider's weak/medium/strong ladder plus its `cheap` cost tier. See [models.md](models.md) and [providers.md](providers.md). |
 | `terva locale ...` | Manage UI languages and translations (or set `TERVA_LANG=<tag>` to run in one). See [localization.md](localization.md). |
 | `terva persona ...` | Manage personas — the agent identities `--persona` selects. See [personas.md](personas.md). |
 | `terva lore ...` | Manage lore entries, the keyed-context store that fires on keywords in the conversation. Unaffected by `--no-lore`, which only disables injection for a run. See [debugging-prompts.md](debugging-prompts.md). |
@@ -444,8 +444,13 @@ A **session** can override it and keep that override:
 The same control is in the web control panel (a button beside the model, or
 `/reasoning`) and in Stage's scene header.
 
-Three things worth knowing:
+Four things worth knowing:
 
+- **Switching models re-decides it.** The level is resolved per model, so moving
+  a session from one model to another picks up the new model's
+  `defaultReasoning` rather than carrying the old model's level across. That is
+  what makes rung 2 worth setting: give each model the depth it should think at
+  and switching between them stops being a two-step.
 - **An override survives a change to the global.** Setting the global re-levels
   only the sessions that never chose for themselves. This mirrors models, where
   `models.set_default` leaves a switched session on the model it was switched
@@ -454,7 +459,9 @@ Three things worth knowing:
   brings the session back at the depth you set, not at the global default.
 - **`off` is a rung, not an absence.** A session set to `off` is *overridden*
   and stays off; a session with no override is a different state, and only the
-  second one follows the global. `inherit` is how you get back to the second.
+  second one follows the global. `inherit` is how you get back to the second —
+  and it returns you to the CHAIN, not to the global: a `defaultReasoning` you
+  set for the model still outranks the global level when the override goes.
 
 With no global level set either, an un-overridden session falls back to the
 model's own `defaultReasoning` (see [Models](models.md)).

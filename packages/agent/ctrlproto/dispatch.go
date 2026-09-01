@@ -150,6 +150,7 @@ func ask[C, P, R any](unsupported unsupportedMsg, fn func(C, context.Context, Fr
 var (
 	noLogin       = unsupportedMsg(func() string { return i18n.T("login not supported") })
 	noModelParams = unsupportedMsg(func() string { return i18n.T("editing model settings is not supported here") })
+	noModelTiers  = unsupportedMsg(func() string { return i18n.T("editing the sub-agent tier ladder is not supported here") })
 	noContinue    = unsupportedMsg(func() string { return i18n.T("continue is not available here") })
 	// Localized rather than plain(): unlike the web-only surfaces below, the
 	// secrets group is reachable from the TUI's in-process carrier and from
