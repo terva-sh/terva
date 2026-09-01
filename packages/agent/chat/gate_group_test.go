@@ -2,9 +2,11 @@ package chat
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"terva.sh/terva/packages/testsupport"
 )
@@ -235,5 +237,158 @@ func TestAdmissionsPersistence(t *testing.T) {
 	}
 	if _, ok := LoadAdmissions(path).Mode("g1"); ok {
 		t.Error("revocation did not persist")
+	}
+}
+
+// TestGateGroupHoldsAndReplaysOnApprove: what an un-admitted chat said is
+// held, and approval answers the part that fits the mode — the mention
+// that raised the question, not the chatter around it.
+func TestGateGroupHoldsAndReplaysOnApprove(t *testing.T) {
+	conn := newFakeConnector(Capabilities{})
+	g, _ := groupGate(t, conn)
+	ctx := context.Background()
+	var released []Message
+	g.onAdmitted = func(_ context.Context, msgs []Message) { released = append(released, msgs...) }
+
+	plain := groupMsg("9", "just chatting")
+	plain.ID = "m1"
+	mention := groupMsg("9", "@tervabot what's the plan?")
+	mention.ID = "m2"
+	mention.Files = []FileAttachment{{Path: "/staged/gone"}}
+	cmd := groupMsg("9", "/status")
+	cmd.ID = "m3"
+	for _, m := range []Message{plain, mention, cmd} {
+		if act := g.route(ctx, conn, m); act != actHandled {
+			t.Fatalf("route(%q) before approval = %v, want actHandled", m.Text, act)
+		}
+	}
+	if len(released) != 0 {
+		t.Fatalf("released before approval: %+v", released)
+	}
+
+	// Mention mode: only the mention comes back — without the file the
+	// receive path cleaned up when the gate declined.
+	if act := g.route(ctx, conn, groupMsg("7", "/approve")); act != actHandled {
+		t.Fatalf("approve route = %v", act)
+	}
+	if len(released) != 1 || released[0].ID != "m2" || released[0].Files != nil {
+		t.Fatalf("released = %+v, want just the mention, files stripped", released)
+	}
+	sends := conn.sends()
+	if last := sends[len(sends)-1].Text; !strings.Contains(last, "starting with the message that was waiting") {
+		t.Errorf("confirmation = %q, want it to say what it is answering", last)
+	}
+
+	// Held content has one chance: the plain message did not fit and is
+	// gone, not kept for a later `all`.
+	released = nil
+	_ = g.route(ctx, conn, groupMsg("7", "/revoke"))
+	_ = g.route(ctx, conn, groupMsg("7", "/approve all"))
+	if len(released) != 0 {
+		t.Errorf("a second approval replayed %+v, want nothing", released)
+	}
+}
+
+// TestGateGroupApproveAllReplaysEverything: `all` replays what was held
+// in arrival order, mentioned or not.
+func TestGateGroupApproveAllReplaysEverything(t *testing.T) {
+	conn := newFakeConnector(Capabilities{})
+	g, _ := groupGate(t, conn)
+	ctx := context.Background()
+	var released []Message
+	g.onAdmitted = func(_ context.Context, msgs []Message) { released = append(released, msgs...) }
+
+	for i, text := range []string{"first", "@tervabot second", "third"} {
+		m := groupMsg("9", text)
+		m.ID = "m" + string(rune('1'+i))
+		g.route(ctx, conn, m)
+	}
+	// Approved by id from the owner's DM — the other approval path.
+	dm := Message{ID: "d1", ChatID: "700", ChatKind: "dm", UserID: "7", Username: "u7", Text: "/approve g100 all"}
+	if act := g.route(ctx, conn, dm); act != actHandled {
+		t.Fatalf("DM approve route = %v", act)
+	}
+	if len(released) != 3 || released[0].ID != "m1" || released[1].ID != "m2" || released[2].ID != "m3" {
+		t.Fatalf("released = %+v, want all three in order", released)
+	}
+	sends := conn.sends()
+	if last := sends[len(sends)-1].Text; !strings.Contains(last, "starting with the 3 messages that were waiting") {
+		t.Errorf("confirmation = %q", last)
+	}
+}
+
+// TestGateGroupHeldBounds: the buffer is bounded in count and age, and a
+// revoke or an edit/delete of a held message is honoured before replay.
+func TestGateGroupHeldBounds(t *testing.T) {
+	conn := newFakeConnector(Capabilities{})
+	g, _ := groupGate(t, conn)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	g.held.now = func() time.Time { return now }
+	var released []Message
+	g.onAdmitted = func(_ context.Context, msgs []Message) { released = msgs }
+
+	// Two early messages, then the clock passes heldMaxAge, then heldMax+2
+	// more: the early ones expire, and only the newest heldMax survive.
+	for i := 0; i < 2; i++ {
+		m := groupMsg("9", fmt.Sprintf("early %d", i))
+		m.ID = fmt.Sprintf("e%d", i)
+		g.route(ctx, conn, m)
+	}
+	now = now.Add(heldMaxAge + time.Second)
+	for i := 0; i < heldMax+2; i++ {
+		m := groupMsg("9", fmt.Sprintf("late %d", i))
+		m.ID = fmt.Sprintf("l%d", i)
+		g.route(ctx, conn, m)
+	}
+	// An edit rewrites a held message; a delete withdraws one.
+	if !g.heldEdited(MessageEdited{ChatID: "g100", ID: "l6", Text: "late 6, edited"}) {
+		t.Fatal("edit of a held message not applied")
+	}
+	if !g.heldDeleted(MessageDeleted{ChatID: "g100", ID: "l5"}) {
+		t.Fatal("delete of a held message not applied")
+	}
+	g.route(ctx, conn, groupMsg("7", "/approve all"))
+	var got []string
+	for _, m := range released {
+		got = append(got, m.ID+":"+m.Text)
+	}
+	want := []string{"l2:late 2", "l3:late 3", "l4:late 4", "l6:late 6, edited"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("released = %v, want %v", got, want)
+	}
+
+	// Revoke drops what is waiting.
+	released = nil
+	_ = g.route(ctx, conn, groupMsg("7", "/revoke"))
+	g.route(ctx, conn, groupMsg("9", "@tervabot still there?"))
+	_ = g.route(ctx, conn, groupMsg("7", "/revoke"))
+	_ = g.route(ctx, conn, groupMsg("7", "/approve"))
+	if len(released) != 0 {
+		t.Errorf("revoke kept %+v waiting", released)
+	}
+}
+
+// TestGateGroupHeldChatCap: a bot sitting in many un-admitted chats holds
+// for the most recent heldMaxChats of them and forgets the stalest.
+func TestGateGroupHeldChatCap(t *testing.T) {
+	conn := newFakeConnector(Capabilities{})
+	g, _ := groupGate(t, conn)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	g.held.now = func() time.Time { return now }
+	for i := 0; i <= heldMaxChats; i++ {
+		m := groupMsg("9", "@tervabot hi")
+		m.ID = fmt.Sprintf("m%d", i)
+		m.ChatID = fmt.Sprintf("g%d", i)
+		now = now.Add(time.Second)
+		g.route(ctx, conn, m)
+	}
+	g.mu.Lock()
+	n, _, hasFirst := len(g.held.chats), 0, g.held.chats["g0"] != nil
+	_, hasLast := g.held.chats[fmt.Sprintf("g%d", heldMaxChats)]
+	g.mu.Unlock()
+	if n != heldMaxChats || hasFirst || !hasLast {
+		t.Errorf("held chats = %d (first kept %v, last kept %v), want %d with the stalest evicted", n, hasFirst, hasLast, heldMaxChats)
 	}
 }

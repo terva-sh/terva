@@ -98,10 +98,14 @@ type Loop struct {
 	activeMsgID    string          // message that started the running turn
 	textAsk        *pendingTextAsk // outstanding text-fallback ask, one at a time
 	admissionAsked map[string]bool // membership asks fired, per chat (never nag)
-	chatAgents     map[string]*chatAgentState
-	clientSwap     func(*core.Agent)   // applied to every live + future agent on cred refresh
-	pendingNotes   map[string][]string // per-chat stage-D notes, ridden by the next prompt
-	introduced     map[string]bool     // chats whose first prompt carried the [chat context] line
+	// gate is the router Run built. The membership ask approves without
+	// going through it, and the edit/delete handlers must keep its held
+	// buffer current — both reach it here.
+	gate         *gate
+	chatAgents   map[string]*chatAgentState
+	clientSwap   func(*core.Agent)   // applied to every live + future agent on cred refresh
+	pendingNotes map[string][]string // per-chat stage-D notes, ridden by the next prompt
+	introduced   map[string]bool     // chats whose first prompt carried the [chat context] line
 	// recentTexts remembers the last text seen per consumed message
 	// (bounded ring), so edit events that change nothing — Discord
 	// fires MESSAGE_UPDATE when an embed unfurls, with the content
@@ -198,6 +202,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.ownerID = m.UserID
 		l.mu.Unlock()
 	}
+	l.attachGate(g)
 
 	// Arm the proactive idle nudge. Seed the paired chat from pairing so the
 	// bot can open a conversation even before the user has spoken; a real
@@ -269,6 +274,44 @@ func (l *Loop) Run(ctx context.Context) error {
 			l.enqueue(ctx, m)
 		}
 	})
+}
+
+// attachGate wires an approval's released messages into the queue and
+// remembers g for onMembership and the event handlers. Held messages
+// have already passed the gate's mode filter; from here they are
+// ordinary prompts, attributed and per-chat like any other.
+func (l *Loop) attachGate(g *gate) {
+	g.onAdmitted = func(ctx context.Context, msgs []Message) {
+		l.info(fmt.Sprintf("%s: chat %s admitted — answering %d message(s) that were waiting", l.Connector.Name(), msgs[0].ChatID, len(msgs)))
+		for _, m := range msgs {
+			l.enqueue(ctx, m)
+		}
+	}
+	l.mu.Lock()
+	l.gate = g
+	l.mu.Unlock()
+}
+
+func (l *Loop) heldGate() *gate {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.gate
+}
+
+// releaseHeld / forgetHeld are the membership ask's side of the held
+// buffer (gate.release / gate.forget); a Loop without a gate (a test
+// driving onMembership alone) has nothing held.
+func (l *Loop) releaseHeld(ctx context.Context, chatID, mode string) int {
+	if g := l.heldGate(); g != nil {
+		return g.release(ctx, chatID, mode)
+	}
+	return 0
+}
+
+func (l *Loop) forgetHeld(chatID string) {
+	if g := l.heldGate(); g != nil {
+		g.forget(chatID)
+	}
 }
 
 // noteActivity records a real interaction from the paired user: it re-arms the
@@ -894,6 +937,7 @@ func (l *Loop) onMembership(ctx context.Context, mb Membership) {
 		if revoked > 0 {
 			l.info(fmt.Sprintf("%s: removed from %s — revoked %d approval(s)", l.Connector.Name(), describeChat(mb), revoked))
 		}
+		l.forgetHeld(mb.ChatID)
 		return
 	case "added":
 	default:
@@ -955,6 +999,12 @@ func (l *Loop) onMembership(ctx context.Context, mb Membership) {
 		// answer, so that claim stays burned and we never nag.
 		if !errors.Is(err, ErrAskTimeout) {
 			l.releaseAdmissionAsk(mb.ChatID)
+		} else {
+			// An expiry is a "no" the owner gave by not answering, and
+			// the held messages go with it. An UNDELIVERED question is
+			// not: the chat stays promptable, and what it said stays
+			// held (bounded, expiring) for the retry.
+			l.forgetHeld(mb.ChatID)
 		}
 		return // fail closed either way: the chat stays silent; /approve still works
 	}
@@ -970,11 +1020,14 @@ func (l *Loop) onMembership(ctx context.Context, mb Membership) {
 				Text: "couldn't save the approval: " + err.Error()})
 			return
 		}
+		n := l.releaseHeld(ctx, mb.ChatID, mode)
 		_ = l.Connector.Send(ctx, Outgoing{ChatID: ownerDM,
-			Text: fmt.Sprintf("approved — i'll respond in %s %s.", describeChat(mb), how)})
+			Text: fmt.Sprintf("approved — i'll respond in %s %s%s.", describeChat(mb), how, heldClause(n))})
 	default:
-		// Ignored: stays silent, and the dedupe map keeps us from
-		// asking again this run. /approve in the chat still works.
+		// Ignored: stays silent, the dedupe map keeps us from asking
+		// again this run, and what the chat said is dropped — it was
+		// only ever held for a yes. /approve in the chat still works.
+		l.forgetHeld(mb.ChatID)
 	}
 }
 
@@ -1082,6 +1135,11 @@ func (l *Loop) SetClientAndModel(client provider.Client, model string) {
 // an embed unfurls, content untouched) or repeats a text already
 // noted, which would only spam near-identical notes.
 func (l *Loop) onMessageEdited(ev MessageEdited) {
+	// A message still held at the admission gate has not been delivered:
+	// rewrite the held copy and stop — there is no prompt to annotate.
+	if g := l.heldGate(); g != nil && g.heldEdited(ev) {
+		return
+	}
 	l.mu.Lock()
 	for i := range l.queue {
 		if l.queue[i].ChatID == ev.ChatID && l.queue[i].ID == ev.ID && ev.ID != "" {
@@ -1106,6 +1164,13 @@ func (l *Loop) onMessageEdited(ev MessageEdited) {
 // files); anything already consumed is left alone — no retroactive
 // transcript surgery.
 func (l *Loop) onMessageDeleted(ev MessageDeleted) {
+	// Withdrawn while held: it must not become a turn if the owner
+	// approves later. (The queue below is checked too — the same id
+	// cannot be in both, but the check is cheap and the invariant is
+	// worth more than the branch.)
+	if g := l.heldGate(); g != nil {
+		g.heldDeleted(ev)
+	}
 	l.mu.Lock()
 	kept := l.queue[:0]
 	var dropped []Message

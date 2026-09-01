@@ -70,6 +70,13 @@ type gate struct {
 	// onPaired, if set, is told about a successful claim (the bridge
 	// notifies its host).
 	onPaired func(m Message)
+	// held is what chats nobody has admitted yet have said lately (see
+	// held.go). onAdmitted receives the messages an approval releases —
+	// in order, already filtered by the admitted mode — and owns them
+	// from there; the Loop enqueues them. The Bridge admits no groups
+	// and sets neither.
+	held       held
+	onAdmitted func(ctx context.Context, msgs []Message)
 }
 
 // route decides what to do with m, sending pairing/help replies
@@ -197,7 +204,15 @@ func (g *gate) routeGroup(ctx context.Context, conn Connector, m Message, paired
 	g.mu.Unlock()
 	mode, approved := adm.Mode(m.ChatID)
 	if !approved {
-		// Silent-by-default: the security boundary for group reach.
+		// Silent-by-default: the security boundary for group reach. Held,
+		// not lost — an approval answers what the chat asked (held.go).
+		// Commands and empty messages are not worth replaying: a /status
+		// from before the owner said yes is stale the moment they do.
+		if adm != nil && !strings.HasPrefix(text, "/") && (text != "" || len(m.Images) > 0) {
+			g.mu.Lock()
+			g.held.add(m)
+			g.mu.Unlock()
+		}
 		return actHandled
 	}
 
@@ -249,12 +264,75 @@ func (g *gate) approve(ctx context.Context, conn Connector, m Message, chatID, m
 			Text: "couldn't save the approval: " + err.Error()})
 		return
 	}
+	n := g.release(ctx, chatID, mode)
 	how := "when mentioned"
 	if mode == ModeAll {
 		how = "on every message"
 	}
 	_ = conn.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID,
-		Text: fmt.Sprintf("approved — i'll respond in this chat %s. /revoke reverses.", how)})
+		Text: fmt.Sprintf("approved — i'll respond in this chat %s%s. /revoke reverses.", how, heldClause(n))})
+}
+
+// release hands the chat's held messages that fit mode to onAdmitted and
+// reports how many. Mention mode replays only the mentions: approving
+// "when mentioned" must not deliver a burst the owner never consented
+// to. What does not fit is dropped with the rest — held content has one
+// chance, at the moment of approval.
+func (g *gate) release(ctx context.Context, chatID, mode string) int {
+	g.mu.Lock()
+	msgs := g.held.take(chatID)
+	fn := g.onAdmitted
+	g.mu.Unlock()
+	if fn == nil {
+		return 0
+	}
+	fit := msgs[:0]
+	for _, m := range msgs {
+		if mode == ModeAll || g.mentionsBot(m) {
+			fit = append(fit, m)
+		}
+	}
+	if len(fit) > 0 {
+		fn(ctx, fit)
+	}
+	return len(fit)
+}
+
+// forget drops whatever a chat had waiting: the owner declined (or let
+// the question expire), revoked, or the bot was removed.
+func (g *gate) forget(chatID string) {
+	g.mu.Lock()
+	g.held.drop(chatID)
+	g.mu.Unlock()
+}
+
+// heldEdited / heldDeleted keep the buffer current with the chat. Both
+// report whether the event touched a held message, so the caller can
+// stop there: a held message has not been delivered, and there is no
+// prompt to annotate.
+func (g *gate) heldEdited(ev MessageEdited) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.held.edited(ev.ChatID, ev.ID, ev.Text, ev.Entities)
+}
+
+func (g *gate) heldDeleted(ev MessageDeleted) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.held.deleted(ev.ChatID, ev.ID)
+}
+
+// heldClause says, in an approval's confirmation, what the approval is
+// about to answer.
+func heldClause(n int) string {
+	switch n {
+	case 0:
+		return ""
+	case 1:
+		return ", starting with the message that was waiting"
+	default:
+		return fmt.Sprintf(", starting with the %d messages that were waiting", n)
+	}
 }
 
 func (g *gate) revoke(ctx context.Context, conn Connector, m Message, chatID string) {
@@ -264,6 +342,7 @@ func (g *gate) revoke(ctx context.Context, conn Connector, m Message, chatID str
 	if adm == nil {
 		return
 	}
+	g.forget(chatID)
 	if err := adm.Revoke(chatID); err != nil {
 		_ = conn.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID,
 			Text: "couldn't save the revocation: " + err.Error()})

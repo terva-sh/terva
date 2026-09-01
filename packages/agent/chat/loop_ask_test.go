@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/core"
 )
 
 func approvalOptions() []AskOption {
@@ -539,5 +541,109 @@ func TestLoopAdmissionAskTimeoutStaysBurned(t *testing.T) {
 	}
 	if _, ok := adm.Mode("g9"); ok {
 		t.Error("an expired admission must not approve")
+	}
+}
+
+// TestLoopAdmissionAskReplaysHeld: the mention that made the owner say yes
+// becomes the chat's first turn — through the real gate the Loop built,
+// then the ask's approval path, which does not go through the gate.
+func TestLoopAdmissionAskReplaysHeld(t *testing.T) {
+	conn := &askFakeConnector{
+		fakeConnector: newFakeConnector(Capabilities{Asks: true}),
+		asked:         make(chan Ask, 4),
+		answer:        Answer{Key: "approve", UserID: "7", Username: "u7", Attestation: AttestationAttested},
+	}
+	adm := LoadAdmissions("")
+	l := &Loop{
+		Connector:  conn,
+		Admissions: adm,
+		Agent:      core.NewAgent(&scriptedClient{reply: "ok"}, "fake-model", "sys", core.Registry{}),
+		Provider:   "fake",
+		CWD:        "/ws",
+		Pairing:    pairedWith("7"),
+		Info:       func(string) {},
+		Warn:       func(string) {},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = l.Run(ctx) }()
+
+	// Two messages in a chat nobody admitted: one mention, one not.
+	plain := Message{ID: "p1", ChatID: "g9", ChatKind: "group", UserID: "9", Username: "u9", Text: "chatter"}
+	mention := Message{ID: "p2", ChatID: "g9", ChatKind: "group", UserID: "9", Username: "u9", Text: "hey, what's up?",
+		Entities: []Entity{{Kind: "bot_mention", Offset: 0, Length: 3}}}
+	conn.inbound <- plain
+	conn.inbound <- mention
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if g := l.heldGate(); g != nil {
+			g.mu.Lock()
+			c := g.held.chats["g9"]
+			n := 0
+			if c != nil {
+				n = len(c.msgs)
+			}
+			g.mu.Unlock()
+			if n == 2 {
+				break
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(conn.sends()) != 0 {
+		t.Fatalf("an un-admitted chat got replies: %+v", conn.sends())
+	}
+
+	l.mu.Lock()
+	l.pairedChatID = "100"
+	l.mu.Unlock()
+	l.onMembership(ctx, Membership{ChatID: "g9", ChatKind: "group", ChatTitle: "ops", Change: "added", ByUsername: "drew"})
+
+	// The DM confirmation names what it is answering, and the mention
+	// (only — mention mode) runs as a turn in the group.
+	sends := conn.waitSends(t, 2)
+	var confirm, reply *Outgoing
+	for i := range sends {
+		switch sends[i].ChatID {
+		case "100":
+			confirm = &sends[i]
+		case "g9":
+			reply = &sends[i]
+		}
+	}
+	if confirm == nil || !strings.Contains(confirm.Text, "starting with the message that was waiting") {
+		t.Errorf("confirmation = %+v", confirm)
+	}
+	if reply == nil || reply.Text != "ok" {
+		t.Errorf("group reply = %+v, want the turn's answer in g9", reply)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := len(conn.sends()); n != 2 {
+		t.Errorf("sends = %d, want exactly the confirmation and one reply (the plain message must not replay in mention mode)", n)
+	}
+}
+
+// TestLoopAdmissionAskIgnoredDropsHeld: a no — or an expiry — drops what
+// the chat had waiting; a later /approve starts clean.
+func TestLoopAdmissionAskIgnoredDropsHeld(t *testing.T) {
+	conn := &askFakeConnector{
+		fakeConnector: newFakeConnector(Capabilities{Asks: true}),
+		asked:         make(chan Ask, 4),
+		answer:        Answer{Key: "ignore", UserID: "7", Username: "u7", Attestation: AttestationAttested},
+	}
+	adm := LoadAdmissions("")
+	l := newAdmissionLoop(conn, adm, "7", "100")
+	g := &gate{pairing: Pairing{AllowedUserID: "7"}, admissions: adm, botUsername: "tervabot"}
+	var released []Message
+	l.attachGate(g)
+	g.onAdmitted = func(_ context.Context, msgs []Message) { released = append(released, msgs...) }
+	ctx := context.Background()
+	g.route(ctx, conn, Message{ID: "p1", ChatID: "g9", ChatKind: "group", UserID: "9", Text: "@tervabot hello?"})
+
+	l.onMembership(ctx, Membership{ChatID: "g9", ChatKind: "group", Change: "added"})
+	<-conn.asked
+	g.route(ctx, conn, Message{ID: "a1", ChatID: "g9", ChatKind: "group", UserID: "7", Text: "/approve all"})
+	if len(released) != 0 {
+		t.Errorf("ignored ask kept %+v waiting for the later approval", released)
 	}
 }

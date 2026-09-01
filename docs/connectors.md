@@ -690,6 +690,14 @@ owner, approve that chat:
   message; the default responds only when the bot is mentioned.
 - `/revoke` (in-chat or `/revoke <chat-id>` from the DM) silences it
   again. Approvals persist under `$TERVA_HOME/chat/`.
+- **The message that made you approve is not lost.** A chat you have
+  not admitted yet keeps its last few messages waiting (5 per chat, for
+  10 minutes, text and inline images only), and approving answers the
+  ones that fit the mode you chose — only the mentions for the default,
+  everything for `all` — in order, as the chat's first turns. Ignoring
+  the question, letting it expire, `/revoke`, and being removed all
+  drop what was waiting; so does a message its author deletes while it
+  waits, and an edit is honoured before replay.
 - On connectors that report admission (discord), being added to a
   server asks you directly in your DM — approve, approve-all, or
   ignore; ignoring or letting it expire keeps the chat silent.
