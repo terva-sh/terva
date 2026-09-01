@@ -34,7 +34,7 @@ func moveTo(d *ModelEditDialog, key string) {
 // entry — just the id — so every field keeps inheriting its default.
 func TestModelEditSaveNoEdits(t *testing.T) {
 	d := NewModelEditDialog()
-	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x", ContextWindow: 200000, MaxOutput: 64000}, provider.UserModel{}, false)
+	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x", ContextWindow: 200000, MaxOutput: 64000}, provider.UserModel{}, false, "")
 
 	act := d.HandleKey(rn('s'))
 	if !act.Save {
@@ -50,7 +50,7 @@ func TestModelEditSaveNoEdits(t *testing.T) {
 // then save carries the value. Non-digit input is ignored.
 func TestModelEditNumericField(t *testing.T) {
 	d := NewModelEditDialog()
-	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x", ContextWindow: 200000}, provider.UserModel{}, false)
+	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x", ContextWindow: 200000}, provider.UserModel{}, false, "")
 
 	moveTo(d, "contextWindow")
 	d.HandleKey(kind(tui.KeyEnter))
@@ -69,7 +69,7 @@ func TestModelEditNumericField(t *testing.T) {
 // tri-state pointer (nil when inheriting, &false when explicitly off).
 func TestModelEditReasoningTriState(t *testing.T) {
 	d := NewModelEditDialog()
-	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, provider.UserModel{}, false)
+	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, provider.UserModel{}, false, "")
 	moveTo(d, "reasoning")
 	rf := func() editField { return d.fields[fieldIdx(d, "reasoning")] }
 
@@ -99,7 +99,7 @@ func TestModelEditPrefillPreserves(t *testing.T) {
 		Capabilities: map[string]bool{"image-input": false},
 	}
 	d := NewModelEditDialog()
-	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, existing, true)
+	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, existing, true, "")
 
 	if d.fields[fieldIdx(d, "baseUrl")].value != "http://local:1234" {
 		t.Errorf("base url not pre-filled: %q", d.fields[fieldIdx(d, "baseUrl")].value)
@@ -126,7 +126,7 @@ func TestModelEditPreservesUnmanagedFields(t *testing.T) {
 		API:         "anthropic-messages",
 	}
 	d := NewModelEditDialog()
-	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, existing, true)
+	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, existing, true, "")
 
 	moveTo(d, "contextWindow")
 	d.HandleKey(kind(tui.KeyEnter))
@@ -150,7 +150,7 @@ func TestModelEditClearsInheritedField(t *testing.T) {
 	on := true
 	existing := provider.UserModel{ID: "claude-x", Reasoning: &on, BaseURL: "http://x"}
 	d := NewModelEditDialog()
-	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, existing, true)
+	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, existing, true, "")
 
 	moveTo(d, "reasoning")          // pre-filled set+on
 	d.HandleKey(kind(tui.KeyEnter)) // on -> off
@@ -169,7 +169,7 @@ func TestModelEditClearsInheritedField(t *testing.T) {
 // [0,2], filters out letters, canonicalizes on commit, and rejects out-of-range.
 func TestModelEditTemperatureField(t *testing.T) {
 	d := NewModelEditDialog()
-	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, provider.UserModel{}, false)
+	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, provider.UserModel{}, false, "")
 	moveTo(d, "temperature")
 	d.HandleKey(kind(tui.KeyEnter)) // edit
 	for _, r := range "0.7" {
@@ -184,7 +184,7 @@ func TestModelEditTemperatureField(t *testing.T) {
 
 	// Out-of-range (>2) is rejected: stays in edit mode with a status.
 	d2 := NewModelEditDialog()
-	d2.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, provider.UserModel{}, false)
+	d2.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, provider.UserModel{}, false, "")
 	moveTo(d2, "temperature")
 	d2.HandleKey(kind(tui.KeyEnter))
 	d2.HandleKey(rn('3'))
@@ -198,7 +198,7 @@ func TestModelEditTemperatureField(t *testing.T) {
 // blank inherit, so the user isn't misled into setting a value it ignores.
 func TestModelEditTemperatureAdaptiveThinking(t *testing.T) {
 	d := NewModelEditDialog()
-	d.Open(provider.Model{Provider: "anthropic", ID: "opus", AdaptiveThinking: true}, provider.UserModel{}, false)
+	d.Open(provider.Model{Provider: "anthropic", ID: "opus", AdaptiveThinking: true}, provider.UserModel{}, false, "")
 	f := d.fields[fieldIdx(d, "temperature")]
 	if f.inherit != "n/a (adaptive thinking)" {
 		t.Errorf("adaptive-thinking temperature inherit hint = %q; want the n/a sentinel", f.inherit)
@@ -208,7 +208,7 @@ func TestModelEditTemperatureAdaptiveThinking(t *testing.T) {
 // Reset is a confirm-then-act flow, gated on there being an override.
 func TestModelEditResetConfirm(t *testing.T) {
 	d := NewModelEditDialog()
-	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, provider.UserModel{ID: "claude-x", BaseURL: "http://x"}, true)
+	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, provider.UserModel{ID: "claude-x", BaseURL: "http://x"}, true, "")
 
 	d.HandleKey(rn('r'))
 	if !d.confirmingReset {
@@ -227,7 +227,7 @@ func TestModelEditResetConfirm(t *testing.T) {
 
 func TestModelEditResetGatedWithoutOverride(t *testing.T) {
 	d := NewModelEditDialog()
-	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, provider.UserModel{}, false)
+	d.Open(provider.Model{Provider: "anthropic", ID: "claude-x"}, provider.UserModel{}, false, "")
 	act := d.HandleKey(rn('r'))
 	if act.Reset || d.confirmingReset {
 		t.Error("reset must be gated when the model has no override")
@@ -251,4 +251,133 @@ func TestModelDialogCtrlEOpensEditor(t *testing.T) {
 	if d.Active() {
 		t.Error("picker should close when handing off to the editor")
 	}
+}
+
+// The default-thinking row is a picker over the model's own ladder, not a
+// free-text box. It was ScalarText, which made the one field that could stop
+// you re-setting a thinking level every session into something you had to
+// type blind, with an "inherit ()" hint that named nothing.
+func TestEditDefaultThinkingIsAPickerOverTheModelsLadder(t *testing.T) {
+	m, err := provider.FindModel("openai-codex", "gpt-5.6-luna")
+	if err != nil {
+		t.Skipf("catalog has no gpt-5.6-luna: %v", err)
+	}
+	d := NewModelEditDialog()
+	d.Open(m, provider.UserModel{}, false, "")
+
+	f := findField(t, d, "defaultReasoning")
+	if f.kind != fieldEnum {
+		t.Fatalf("kind = %v, want fieldEnum (a level is a closed set)", f.kind)
+	}
+	if len(f.options) == 0 {
+		t.Fatal("no options offered for a model that takes a thinking level")
+	}
+	// Canonical rungs only: gpt-5.6 sends "minimum" and "low" as the same
+	// effort, so offering both would be two names for one choice.
+	for _, o := range f.options {
+		if o == "minimum" {
+			t.Errorf("options %v offer a rung that collapses onto another", f.options)
+		}
+	}
+	if f.options[0] != "off" {
+		t.Errorf("options = %v, want the ladder from off upward", f.options)
+	}
+}
+
+// Cycling walks the ladder and comes back to inherit, so a value can always be
+// taken back off — and what it saves is the models.json key the resolver reads.
+func TestEditDefaultThinkingCyclesAndSaves(t *testing.T) {
+	m, err := provider.FindModel("openai-codex", "gpt-5.6-luna")
+	if err != nil {
+		t.Skipf("catalog has no gpt-5.6-luna: %v", err)
+	}
+	d := NewModelEditDialog()
+	d.Open(m, provider.UserModel{}, false, "")
+	idx := fieldIndex(t, d, "defaultReasoning")
+	d.cursor = idx
+	opts := d.fields[idx].options
+
+	if got := d.fields[idx].value; got != "" {
+		t.Fatalf("starts at %q, want inherit", got)
+	}
+	for i, want := range opts {
+		d.HandleKey(tui.Key{Kind: tui.KeyEnter})
+		if got := d.fields[idx].value; got != want {
+			t.Fatalf("cycle %d = %q, want %q", i+1, got, want)
+		}
+	}
+	d.HandleKey(tui.Key{Kind: tui.KeyEnter})
+	if got := d.fields[idx].value; got != "" {
+		t.Fatalf("past the last rung = %q, want back to inherit", got)
+	}
+
+	// Space is the other cycle key and must agree with enter.
+	d.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: ' '})
+	if got := d.fields[idx].value; got != opts[0] {
+		t.Fatalf("space gave %q, want %q — the two cycle keys disagree", got, opts[0])
+	}
+
+	// Save writes the picked level onto the models.json key.
+	d.fields[idx].value = "maximum"
+	act := d.save()
+	if !act.Save || act.Entry.DefaultReasoning != "maximum" {
+		t.Fatalf("save = %+v, want DefaultReasoning=maximum", act.Entry.DefaultReasoning)
+	}
+}
+
+// The hint has to name the level that would actually decide the turn. With a
+// global set and no per-model value, that is the global — the row used to read
+// "inherit ()" regardless, which is the surface naming nothing at all.
+func TestEditDefaultThinkingHintNamesWhatDecides(t *testing.T) {
+	m, err := provider.FindModel("openai-codex", "gpt-5.6-luna")
+	if err != nil {
+		t.Skipf("catalog has no gpt-5.6-luna: %v", err)
+	}
+	d := NewModelEditDialog()
+	d.Open(m, provider.UserModel{}, false, "high")
+	if got := findField(t, d, "defaultReasoning").inherit; got != "high" {
+		t.Errorf("hint = %q, want the global %q", got, "high")
+	}
+
+	d.Open(m, provider.UserModel{}, false, "")
+	if got := findField(t, d, "defaultReasoning").inherit; got != "off" {
+		t.Errorf("hint with no global = %q, want off", got)
+	}
+}
+
+// A model that takes no thinking control at all gets no row. That is a
+// different answer from a ladder whose rungs are all off, and an empty picker
+// would read as "set to off" rather than "no such setting here".
+func TestEditDefaultThinkingRowAbsentWhenModelTakesNone(t *testing.T) {
+	d := NewModelEditDialog()
+	d.Open(provider.Model{Provider: "acme", ID: "plain"}, provider.UserModel{}, false, "high")
+	for _, f := range d.fields {
+		if f.key == "defaultReasoning" {
+			t.Fatal("a model with no thinking control must not show the row")
+		}
+	}
+}
+
+func fieldIndex(t *testing.T, d *ModelEditDialog, key string) int {
+	t.Helper()
+	for i, f := range d.fields {
+		if f.key == key {
+			return i
+		}
+	}
+	t.Fatalf("no %q field; rows: %v", key, fieldKeys(d))
+	return -1
+}
+
+func findField(t *testing.T, d *ModelEditDialog, key string) editField {
+	t.Helper()
+	return d.fields[fieldIndex(t, d, key)]
+}
+
+func fieldKeys(d *ModelEditDialog) []string {
+	out := make([]string, 0, len(d.fields))
+	for _, f := range d.fields {
+		out = append(out, f.key)
+	}
+	return out
 }

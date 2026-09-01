@@ -57,11 +57,21 @@ func (w *Workspace) ModelParams(_ context.Context, p ctrlproto.ModelParamsParams
 
 	out := ctrlproto.ModelParamsView{Provider: m.Provider, Model: m.ID, HasOverride: has}
 	for _, sp := range provider.ScalarParams() {
+		var options []string
+		if sp.Options != nil {
+			// Nothing to offer means the parameter does not apply to this
+			// model at all — a different answer from "set to off" — so the
+			// row is left out rather than crossing as an empty picker.
+			if options = sp.Options(m); len(options) == 0 {
+				continue
+			}
+		}
 		spec := ctrlproto.ModelParamSpec{
 			Key:     sp.Key,
 			Label:   sp.Label,
 			Kind:    paramKind(sp.Kind),
 			Default: sp.Default(m),
+			Options: options,
 			Min:     float64(sp.Min),
 			Max:     float64(sp.Max),
 		}
@@ -172,6 +182,8 @@ func paramKind(k provider.ScalarKind) string {
 		return "int"
 	case provider.ScalarFloat:
 		return "float"
+	case provider.ScalarEnum:
+		return "enum"
 	default:
 		return "text"
 	}

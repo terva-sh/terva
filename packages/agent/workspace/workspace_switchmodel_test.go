@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
@@ -174,5 +175,126 @@ func TestSwitchModelRefreshesHostRoutedTool(t *testing.T) {
 		if hp != "openai-compatible" || hm != "same-b" {
 			t.Errorf("%s host = %s/%s, want openai-compatible/same-b (refreshed on swap)", name, hp, hm)
 		}
+	}
+}
+
+// thinkingModels installs two models on one endpoint that want DIFFERENT
+// thinking levels — the shape of the ask this exists for: luna at max, sol at
+// medium, without re-setting the level by hand on every switch.
+func thinkingModels(t *testing.T) (luna, sol provider.Model) {
+	t.Helper()
+	provider.SetUserModels([]provider.Model{
+		{Provider: "openai-compatible", ID: "luna", DisplayName: "Luna", ContextWindow: 8192, MaxOutput: 4096,
+			BaseURL: "http://same.local/v1", Source: "user", Reasoning: true, DefaultReasoning: "max"},
+		{Provider: "openai-compatible", ID: "sol", DisplayName: "Sol", ContextWindow: 8192, MaxOutput: 4096,
+			BaseURL: "http://same.local/v1", Source: "user", Reasoning: true, DefaultReasoning: "medium"},
+	})
+	t.Cleanup(func() { provider.SetUserModels(nil) })
+
+	luna, err := provider.FindModel("openai-compatible", "luna")
+	if err != nil {
+		t.Fatalf("FindModel(luna): %v", err)
+	}
+	sol, err = provider.FindModel("openai-compatible", "sol")
+	if err != nil {
+		t.Fatalf("FindModel(sol): %v", err)
+	}
+	// The whole feature rests on the merge marking these as the OPERATOR's
+	// choice; without the flag they would sit below the global instead.
+	if !luna.DefaultReasoningSet || !sol.DefaultReasoningSet {
+		t.Fatalf("user models did not come back as operator choices (luna=%v sol=%v)",
+			luna.DefaultReasoningSet, sol.DefaultReasoningSet)
+	}
+	return luna, sol
+}
+
+func thinkingSession(t *testing.T, w *Workspace, prov, model string) *wsSession {
+	t.Helper()
+	sess, err := core.NewSessionAtPath(filepath.Join(testsupport.TempDir(t), "s.jsonl"), "/ws", prov, model, "0.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	s := newTestSession()
+	s.ws = w
+	s.sess = sess
+	s.agent = &core.Agent{Model: model}
+	s.setModel(prov, model, false)
+	return s
+}
+
+// Switching models re-decides the thinking level, because the level is
+// resolved per MODEL. Nothing re-resolved on the switch path before, so the
+// level baked in at build — the model you STARTED on — rode along onto every
+// model you moved to, and a per-model default was dead config for anyone who
+// switches mid-session. That is the whole reason the setting felt missing.
+func TestSwitchModelRecomputesTheThinkingLevel(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	luna, _ := thinkingModels(t)
+
+	w := &Workspace{}
+	s := thinkingSession(t, w, "openai-compatible", "luna")
+	// Where a fresh build leaves the session it booted on.
+	applyRawReasoning(s.agent, build.ResolveRawReasoning("", luna, ""))
+	if s.agent.Reasoning != "max" {
+		t.Fatalf("built on luna at %q, want max", s.agent.Reasoning)
+	}
+
+	if err := w.switchModel(s, "openai-compatible", "sol", false); err != nil {
+		t.Fatalf("switchModel: %v", err)
+	}
+	if s.agent.Reasoning != "medium" {
+		t.Errorf("after switching to sol the agent thinks at %q, want medium — it kept luna's level", s.agent.Reasoning)
+	}
+
+	// And back, so this is a re-resolve rather than a one-way nudge.
+	if err := w.switchModel(s, "openai-compatible", "luna", false); err != nil {
+		t.Fatalf("switchModel back: %v", err)
+	}
+	if s.agent.Reasoning != "max" {
+		t.Errorf("back on luna the agent thinks at %q, want max", s.agent.Reasoning)
+	}
+}
+
+// The blocking half: a level the USER set for this session is rung 1 and must
+// survive a model switch. A re-resolve that clobbered it would trade one
+// annoyance for a worse one — a deliberate choice evaporating under you.
+func TestSwitchModelKeepsASessionsOwnThinkingLevel(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	thinkingModels(t)
+
+	w := &Workspace{}
+	s := thinkingSession(t, w, "openai-compatible", "luna")
+	s.setReasoning("low")
+	applyRawReasoning(s.agent, "low")
+
+	if err := w.switchModel(s, "openai-compatible", "sol", false); err != nil {
+		t.Fatalf("switchModel: %v", err)
+	}
+	if s.agent.Reasoning != "low" {
+		t.Errorf("session level = %q after the switch, want the user's low", s.agent.Reasoning)
+	}
+}
+
+// A global change reaches un-overridden sessions, but it must not outrank an
+// operator's per-model level: that inversion is what made models.json
+// defaultReasoning dead config the moment anyone touched /settings.
+func TestGlobalThinkingChangeYieldsToThePerModelLevel(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	thinkingModels(t)
+
+	w := &Workspace{}
+	withDefault := thinkingSession(t, w, "openai-compatible", "sol")
+	plain := thinkingSession(t, w, "openai-compatible", "no-such-model")
+
+	w.sessions = map[string]*wsSession{"a": withDefault, "b": plain}
+	w.applyReasoning("high")
+
+	if withDefault.agent.Reasoning != "medium" {
+		t.Errorf("sol thinks at %q after a global change, want its own medium", withDefault.agent.Reasoning)
+	}
+	// A session whose model has no per-model level still follows the global.
+	if plain.agent.Reasoning != "high" {
+		t.Errorf("un-defaulted session = %q, want the global high", plain.agent.Reasoning)
 	}
 }

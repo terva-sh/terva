@@ -34,16 +34,27 @@ func modelsWithReasoning(t *testing.T, global string) map[string]ctrlproto.Model
 	}
 	provider.ResetCatalogLayers()
 	t.Cleanup(provider.ResetCatalogLayers)
-	provider.SetUserModels([]provider.Model{
-		{
-			Provider: "workshop", ID: "operator-set", ContextWindow: 4096, Reasoning: true,
-			DefaultReasoning: "minimum", DefaultReasoningSet: true,
-		},
+	// The catalog-side rows go into a BASE layer — what the baked-in catalog and
+	// /v1/models discovery fill — because the layer is what makes their
+	// DefaultReasoning terva's fallback rather than a choice someone made.
+	provider.SetLiveModels([]provider.Model{
 		{
 			Provider: "workshop", ID: "catalog-default", ContextWindow: 4096, Reasoning: true,
 			DefaultReasoning: "medium",
 		},
 		{Provider: "workshop", ID: "says-nothing", ContextWindow: 4096, Reasoning: true},
+	})
+	// The operator's row goes through the USER layer and does NOT hand-stamp
+	// DefaultReasoningSet: arriving through models.json is precisely what makes
+	// a level the operator's, so the fixture that asserts the distinction must
+	// not be the thing that creates it. Stamping it by hand tested the fixture
+	// and left the loader free to forget — which it did, for any model that
+	// exists only in models.json.
+	provider.SetUserModels([]provider.Model{
+		{
+			Provider: "workshop", ID: "operator-set", ContextWindow: 4096, Reasoning: true,
+			DefaultReasoning: "minimum",
+		},
 	})
 
 	w := &Workspace{ctx: context.Background(), diag: func(string) {}, sessions: map[string]*wsSession{}}

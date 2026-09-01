@@ -358,8 +358,23 @@ func applyUserOverrides(base []Model, overrides []UserOverride) []Model {
 		um := o.Model
 		idx, ok := index[byKey(um.Provider, um.ID)]
 		if !ok {
-			// New model not in any lower layer.
-			base = append(base, um)
+			// New model not in any lower layer. Everything about it is the
+			// operator's, so it still has to go through the registry merge:
+			// that is where the set-SIGNALS are stamped, and a value carried
+			// across by the plain copy without its signal is indistinguishable
+			// from one terva shipped. `defaultReasoning` is the one that bites
+			// — unstamped it reads as a CATALOG fallback and sits BELOW the
+			// global setting, so an operator's level on a local model became
+			// unreachable the moment they touched /settings, which is exactly
+			// the inversion DefaultReasoningSet exists to prevent.
+			//
+			// Merging um onto a copy of itself is a no-op for every value and
+			// leaves only the signals behind.
+			fresh := um
+			for _, p := range scalarParams {
+				p.Merge(&fresh, um)
+			}
+			base = append(base, fresh)
 			index[byKey(um.Provider, um.ID)] = len(base) - 1
 			continue
 		}

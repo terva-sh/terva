@@ -49,15 +49,37 @@ export function ModelParamsForm({
       {params.map((p) => (
         <label key={p.key} class="prov-field">
           <span class="prov-label">{p.label}</span>
-          <input
-            type="text"
-            inputMode={p.kind === 'int' ? 'numeric' : p.kind === 'float' ? 'decimal' : undefined}
-            autocomplete="off"
-            spellcheck={false}
-            placeholder={placeholder(p)}
-            value={values[p.key] ?? ''}
-            onInput={(e) => setValues({ ...values, [p.key]: (e.target as HTMLInputElement).value })}
-          />
+          {p.kind === 'enum' && p.options?.length ? (
+            // A closed set gets a picker, never a text box. The options are the
+            // daemon's, per model: a thinking ladder collapses rungs that reach
+            // a given model as one wire value, so a list hardcoded here would
+            // offer levels the model cannot tell apart.
+            <select
+              value={values[p.key] ?? ''}
+              onChange={(e) => setValues({ ...values, [p.key]: (e.target as HTMLSelectElement).value })}
+            >
+              {/* The empty entry is "inherit", and it NAMES what would apply —
+                  the same job the placeholder does for a text field. An
+                  "inherit" that named nothing is what made this setting read
+                  as broken in the terminal. */}
+              <option value="">{p.default ? t('inherit (%s)', p.default) : t('inherit')}</option>
+              {p.options.map((o) => (
+                <option key={o} value={o}>
+                  {o}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type="text"
+              inputMode={p.kind === 'int' ? 'numeric' : p.kind === 'float' ? 'decimal' : undefined}
+              autocomplete="off"
+              spellcheck={false}
+              placeholder={placeholder(p)}
+              value={values[p.key] ?? ''}
+              onInput={(e) => setValues({ ...values, [p.key]: (e.target as HTMLInputElement).value })}
+            />
+          )}
           {p.help ? <span class="prov-help">{p.help}</span> : null}
         </label>
       ))}

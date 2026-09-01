@@ -28,6 +28,7 @@ const (
 	ScalarText  ScalarKind = iota // free string (base url)
 	ScalarInt                     // non-negative integer (context window, max tokens)
 	ScalarFloat                   // bounded float (temperature)
+	ScalarEnum                    // closed set of values, per model (default thinking)
 )
 
 // ScalarParam declares one scalar model override end to end.
@@ -52,6 +53,26 @@ type ScalarParam struct {
 	// layer merge; a no-op when the user left the parameter unset. src is the
 	// override entry already converted to a Model by the loader.
 	Merge func(dst *Model, src Model)
+
+	// Options lists the values a ScalarEnum offers FOR THIS MODEL, in display
+	// order; nil for every other kind. Per-model because a closed set can be
+	// narrower on one model than another — the thinking ladder collapses rungs
+	// that reach a given model as the same wire value, and offering both halves
+	// asks the user to choose between two spellings of one thing.
+	//
+	// An empty result means the parameter does not apply to m at all, and a
+	// surface should omit the row rather than show an empty picker.
+	Options func(m Model) []string
+
+	// InheritedFrom renders the "inherit (...)" hint for a parameter whose
+	// inherited value comes from a precedence CHAIN rather than off the model,
+	// so it needs the host's global setting — which Default, taking only a
+	// Model, cannot see. When nil, Default is the hint.
+	//
+	// It exists because a hint that names the wrong value is worse than none:
+	// a thinking row reading "inherit (off)" while a global level is quietly
+	// deciding the turn is the exact failure ResolveReasoning documents.
+	InheritedFrom func(m Model, global string) string
 }
 
 var scalarParams = []ScalarParam{
@@ -157,8 +178,20 @@ var scalarParams = []ScalarParam{
 		},
 	},
 	{
-		Key: "defaultReasoning", Label: "default reasoning", Kind: ScalarText,
-		Default:  func(m Model) string { return strOrDefault(m.DefaultReasoning, "off") },
+		// "thinking" facing the user, `defaultReasoning` in models.json and on
+		// the wire: the house rule is jargon inside, plain language out.
+		Key: "defaultReasoning", Label: "default thinking", Kind: ScalarEnum,
+		Default: func(m Model) string { return strOrDefault(m.DefaultReasoning, "off") },
+		Options: ThinkingOptions,
+		InheritedFrom: func(m Model, global string) string {
+			// Cleared, so the hint cannot quote the very value the row is
+			// offering to replace.
+			m.DefaultReasoningSet = false
+			if lv, _ := ResolveReasoning("", m, global); lv != "" {
+				return lv
+			}
+			return "off"
+		},
 		Override: func(um UserModel) string { return um.DefaultReasoning },
 		SetOverride: func(um *UserModel, s string) error {
 			v := strings.ToLower(strings.TrimSpace(s))
@@ -295,4 +328,19 @@ func setNonNegInt(dst *int, s string) error {
 	}
 	*dst = n
 	return nil
+}
+
+// ThinkingOptions is the per-model thinking ladder a user may pick from,
+// lowest rung first, and empty for a model that takes no thinking control at
+// all. Only canonical rungs: ReasoningLadderFor marks a rung that reaches THIS
+// model as the same wire value as another, and offering both would be two
+// names for one choice.
+func ThinkingOptions(m Model) []string {
+	var out []string
+	for _, r := range ReasoningLadderFor(m) {
+		if r.SameAs == "" {
+			out = append(out, r.Level)
+		}
+	}
+	return out
 }

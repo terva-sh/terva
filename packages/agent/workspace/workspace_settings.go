@@ -677,11 +677,38 @@ func (w *Workspace) applyReasoning(level string) {
 	}
 	w.mu.Unlock()
 	for _, s := range sess {
-		if s.agent == nil || s.currentReasoning() != "" {
-			continue
-		}
-		applyRawReasoning(s.agent, level)
+		s.reapplyModelReasoning(level)
 	}
+}
+
+// reapplyModelReasoning puts the session's agent on the level the precedence
+// chain gives for the model it is CURRENTLY on. A session that set its own
+// level is left alone: that is rung 1 and outranks everything decided here.
+//
+// It exists because three paths used to hand the agent the raw GLOBAL level and
+// skip the operator's per-model rung entirely — a live /settings change, a
+// session clearing its override, and a model switch, which re-resolved nothing
+// at all so a per-model level baked in at build survived onto the next model.
+// Each one made a models.json `defaultReasoning` look like dead config the
+// moment the session moved, which is the same class of bug the precedence fix
+// itself was for: a chain composed correctly in one place and walked by hand,
+// differently, everywhere else.
+//
+// global is the RAW global level ("" when unset).
+func (s *wsSession) reapplyModelReasoning(global string) {
+	if s.agent == nil || s.currentReasoning() != "" {
+		return
+	}
+	prov, modelID := s.currentModel()
+	m, err := provider.FindModel(prov, modelID)
+	if err != nil {
+		// An unresolvable model has no rungs to offer, so the global is the
+		// whole chain — and it is what this path did before the per-model rung
+		// existed. Degrading to the old answer beats stranding the session.
+		applyRawReasoning(s.agent, global)
+		return
+	}
+	applyRawReasoning(s.agent, build.ResolveRawReasoning("", m, global))
 }
 
 // applyRawReasoning puts a RAW level onto an agent with the same set-signal the

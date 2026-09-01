@@ -64,7 +64,8 @@ type ModelParamsView struct {
 type ModelParamSpec struct {
 	Key   string `json:"key"`
 	Label string `json:"label"`
-	// Kind is a rendering and validation HINT: text | int | float | tristate.
+	// Kind is a rendering and validation HINT: text | int | float | tristate |
+	// enum.
 	// Everything crosses as a string and the DAEMON parses — the same rule the
 	// auth fields follow, and for the same reason: bounds are checked in
 	// packages/provider already, and a second opinion on the wire is a second
@@ -76,6 +77,13 @@ type ModelParamSpec struct {
 	Default string `json:"default,omitempty"`
 	// Value is the override currently pinned in models.json, or "" for none.
 	Value string `json:"value,omitempty"`
+	// Options are the values an "enum" param accepts FOR THIS MODEL, in
+	// display order; absent for every other kind. A client renders a picker
+	// over exactly these and never a free-text box: the set can be narrower on
+	// one model than another (the thinking ladder collapses rungs that reach a
+	// given model as one wire value), so a fixed client-side list would offer
+	// levels this model cannot tell apart.
+	Options []string `json:"options,omitempty"`
 	// Min/Max bound a float param (temperature). Zero means unbounded.
 	Min float64 `json:"min,omitempty"`
 	Max float64 `json:"max,omitempty"`

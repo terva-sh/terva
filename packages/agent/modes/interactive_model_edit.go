@@ -31,7 +31,7 @@ func (i *Interactive) openModelEdit(prov, modelID string) {
 			return
 		}
 	}
-	i.modelEditDialog.Open(m, existing, has)
+	i.modelEditDialog.Open(m, existing, has, i.cfg.Reasoning)
 	i.invalidate()
 }
 

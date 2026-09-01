@@ -20,7 +20,7 @@ import (
 // resolves the layers it can distinguish, the provider applies the catalog
 // default underneath.
 func effective(explicit string, m provider.Model, global string) string {
-	raw := resolveRawReasoning(explicit, m, global)
+	raw := ResolveRawReasoning(explicit, m, global)
 	return provider.EffectiveReasoning(provider.NormalizeReasoning(raw), raw != "", m)
 }
 

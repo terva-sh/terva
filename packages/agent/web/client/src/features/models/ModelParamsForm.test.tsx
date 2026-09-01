@@ -99,3 +99,58 @@ describe('ModelParamsForm', () => {
     expect(screen.getByText(/must be a whole number/)).toBeTruthy()
   })
 })
+
+// An enum param is a closed set, so it gets a picker rather than a text box you
+// have to type into blind. `defaultReasoning` is the one that made this matter:
+// it shipped as free text, labelled with jargon and hinting "inherit ()", which
+// is why the per-model thinking default read as a missing feature rather than
+// an unusable one.
+describe('ModelParamsForm enum params', () => {
+  const enumView: ModelParamsView = {
+    provider: 'openai-codex',
+    model: 'gpt-5.6-luna',
+    has_override: false,
+    params: [
+      {
+        key: 'defaultReasoning',
+        label: 'default thinking',
+        kind: 'enum',
+        default: 'high',
+        options: ['off', 'low', 'medium', 'high', 'maximum', 'max'],
+      },
+    ],
+  }
+
+  it('renders a picker over the options the daemon sent, not a text box', () => {
+    render(<ModelParamsForm view={enumView} busy={false} error="" onSave={() => {}} onReset={() => {}} onCancel={() => {}} />)
+
+    const select = screen.getByRole('combobox') as HTMLSelectElement
+    // The options are the MODEL's, not a fixed ladder: gpt-5.6 sends "minimum"
+    // and "low" as one effort, so offering both would be two names for one
+    // choice. Whatever the daemon listed is what appears, and nothing else.
+    expect([...select.options].map((o) => o.value)).toEqual(['', 'off', 'low', 'medium', 'high', 'maximum', 'max'])
+    expect(select.value).toBe('')
+  })
+
+  // The empty entry has to NAME what would apply. An "inherit" naming nothing is
+  // exactly what the terminal shipped, and it left the operator unable to tell
+  // whether a global level was quietly deciding the turn.
+  it('names the inherited value on the empty entry', () => {
+    render(<ModelParamsForm view={enumView} busy={false} error="" onSave={() => {}} onReset={() => {}} onCancel={() => {}} />)
+    expect((screen.getByRole('combobox') as HTMLSelectElement).options[0].text).toContain('high')
+  })
+
+  it('sends the picked level back, and an empty pick clears the override', () => {
+    const onSave = vi.fn()
+    render(<ModelParamsForm view={enumView} busy={false} error="" onSave={onSave} onReset={() => {}} onCancel={() => {}} />)
+
+    const select = screen.getByRole('combobox') as HTMLSelectElement
+    fireEvent.change(select, { target: { value: 'maximum' } })
+    fireEvent.click(screen.getByText('Save'))
+    expect(onSave).toHaveBeenCalledWith({ defaultReasoning: 'maximum' })
+
+    fireEvent.change(select, { target: { value: '' } })
+    fireEvent.click(screen.getByText('Save'))
+    expect(onSave).toHaveBeenLastCalledWith({ defaultReasoning: '' })
+  })
+})

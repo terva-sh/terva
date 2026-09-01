@@ -1279,10 +1279,15 @@ func (w *Workspace) Sessions(ctx context.Context) ([]ctrlproto.SessionInfo, erro
 			title = titleFromFirstText(sm.FirstUserText)
 		}
 		info := ctrlproto.SessionInfo{
-			ID:         id,
-			Title:      title,
-			Provider:   sm.Provider,
-			Model:      sm.Model,
+			ID:       id,
+			Title:    title,
+			Provider: sm.Provider,
+			Model:    sm.Model,
+			// From meta, and that is enough for a LIVE session too:
+			// SetSessionReasoning is the only writer, and it flushes the meta row
+			// synchronously before returning, so the file is never behind the
+			// field. A live override here would be a line no test could fail.
+			Reasoning:  sm.Reasoning,
 			Experience: sm.Experience,
 			Background: sm.Background,
 			Card:       sm.Card,
@@ -2029,22 +2034,30 @@ func (w *Workspace) SetSessionReasoning(ctx context.Context, sess, level string)
 	if err != nil {
 		return err
 	}
-	// Clearing means "follow the global again", so the live agent has to be put
-	// where a fresh build would put it: on the global raw value, which may
-	// itself be empty and hand the session back to its model's own default.
-	effective := raw
-	if effective == "" {
-		// A config read that fails leaves effective empty, which hands the
-		// session to its model's default — the same place a fresh build with no
-		// global level lands. Degrading to "no explicit level" is right here;
-		// refusing the clear would strand the session on its override.
-		if cfg, cerr := config.LoadConfig(); cerr == nil {
-			effective = cfg.Reasoning
-		}
-	}
 	s.setReasoning(raw)
-	if s.agent != nil {
-		applyRawReasoning(s.agent, effective)
+	switch {
+	case raw != "":
+		if s.agent != nil {
+			applyRawReasoning(s.agent, raw)
+		}
+	default:
+		// Clearing means "follow the chain again", so the live agent has to be
+		// put where a fresh build would put it — which is NOT simply the global:
+		// an operator's per-model level outranks it, and jumping straight to the
+		// global would make clearing an override the thing that hides a
+		// models.json `defaultReasoning`. setReasoning has already dropped the
+		// session rung, so the re-resolve below sees the same layers a build
+		// would.
+		//
+		// A config read that fails leaves the global empty, which hands the
+		// session to its model's own default — the same place a fresh build with
+		// no global level lands. Degrading to "no explicit level" is right here;
+		// refusing the clear would strand the session on its override.
+		global := ""
+		if cfg, cerr := config.LoadConfig(); cerr == nil {
+			global = cfg.Reasoning
+		}
+		s.reapplyModelReasoning(global)
 	}
 	if err := s.sess.UpdateReasoning(raw); err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("save session thinking level: %v", err))
@@ -2213,6 +2226,18 @@ func (w *Workspace) switchModel(s *wsSession, providerName, modelID string, forc
 	swap.Session = s.sess
 	swap.After = func() {
 		s.setModel(swap.Provider, swap.Model, swap.Client != nil)
+		// The thinking level is resolved per MODEL, so moving the session
+		// re-decides it: gpt-5.6-luna at "max" and gpt-5.6-sol at "medium" are
+		// only expressible if the switch itself picks the new model's rung up.
+		// Nothing re-resolved here before, so a level baked in at build — the
+		// old model's — simply rode along, and a per-model default read as
+		// dead config for anyone who switches models mid-session. A session
+		// that set its own level keeps it; reapplyModelReasoning checks.
+		global := ""
+		if cfg, cerr := config.LoadConfig(); cerr == nil {
+			global = cfg.Reasoning
+		}
+		s.reapplyModelReasoning(global)
 	}
 	build.ApplyModelSwap(swap)
 	// A per-session switch changes ONLY this session; it must not move the

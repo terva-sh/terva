@@ -54,6 +54,7 @@ const (
 	fieldInt                        // non-negative integer (context, max tokens)
 	fieldFloat                      // bounded float (temperature)
 	fieldBool                       // tri-state inherit/on/off (a capability)
+	fieldEnum                       // cycles a fixed option list ("" = inherit)
 )
 
 // editField is one row of the form. For text/int fields, value == ""
@@ -67,6 +68,13 @@ type editField struct {
 	set     bool   // bool: is the capability explicitly overridden?
 	on      bool   // bool: the override value when set
 	inherit string // effective default, shown when the field inherits
+
+	// options are the values a fieldEnum cycles through, in order, after
+	// "" (inherit). Per-model rather than fixed: the thinking ladder
+	// collapses rungs that reach a given model as the same wire value, and
+	// offering both halves of a collapsed pair asks the user to choose
+	// between two spellings of one choice.
+	options []string
 }
 
 func NewModelEditDialog() *ModelEditDialog { return &ModelEditDialog{} }
@@ -74,7 +82,12 @@ func NewModelEditDialog() *ModelEditDialog { return &ModelEditDialog{} }
 // Open builds the form for m. existing is the raw models.json entry for
 // this model (hasExisting=false when none), used to pre-fill which
 // fields are already overridden so re-editing shows prior choices.
-func (d *ModelEditDialog) Open(m provider.Model, existing provider.UserModel, hasExisting bool) {
+//
+// globalReasoning is the raw global thinking level, needed only so the
+// default-thinking row can NAME what it inherits. Without it the row could
+// say "inherit" but not from where, which is the failure ResolveReasoning's
+// comment describes: a surface naming a value that is not deciding anything.
+func (d *ModelEditDialog) Open(m provider.Model, existing provider.UserModel, hasExisting bool, globalReasoning string) {
 	d.active = true
 	d.prov = m.Provider
 	d.modelID = m.ID
@@ -105,12 +118,26 @@ func (d *ModelEditDialog) Open(m provider.Model, existing provider.UserModel, ha
 		if hasExisting {
 			value = p.Override(existing)
 		}
+		var options []string
+		if p.Options != nil {
+			// An enum with nothing to offer does not apply to this model —
+			// "no such setting here", which is not the same as "set to off",
+			// so the row goes rather than showing an empty picker.
+			if options = p.Options(m); len(options) == 0 {
+				continue
+			}
+		}
+		inherit := p.Default(m)
+		if p.InheritedFrom != nil {
+			inherit = p.InheritedFrom(m, globalReasoning)
+		}
 		d.fields = append(d.fields, editField{
 			key:     p.Key,
 			label:   p.Label,
 			kind:    scalarFieldKind(p.Kind),
 			value:   value,
-			inherit: p.Default(m),
+			options: options,
+			inherit: inherit,
 		})
 	}
 	d.fields = append(d.fields,
@@ -132,6 +159,8 @@ func (d *ModelEditDialog) Open(m provider.Model, existing provider.UserModel, ha
 // scalarFieldKind maps a provider scalar kind to the editor's field kind.
 func scalarFieldKind(k provider.ScalarKind) editFieldKind {
 	switch k {
+	case provider.ScalarEnum:
+		return fieldEnum
 	case provider.ScalarInt:
 		return fieldInt
 	case provider.ScalarFloat:
@@ -197,8 +226,8 @@ func (d *ModelEditDialog) HandleKey(k tui.Key) modelEditAction {
 		return modelEditAction{Close: true}
 	case tui.KeyEnter:
 		f := &d.fields[d.cursor]
-		if f.kind == fieldBool {
-			cycleBool(f)
+		if f.kind == fieldBool || f.kind == fieldEnum {
+			cycleField(f)
 		} else {
 			d.editing = true
 			d.buf = f.value
@@ -215,8 +244,8 @@ func (d *ModelEditDialog) HandleKey(k tui.Key) modelEditAction {
 				d.status = i18n.T("no custom settings to reset")
 			}
 		case ' ':
-			if f := &d.fields[d.cursor]; f.kind == fieldBool {
-				cycleBool(f)
+			if f := &d.fields[d.cursor]; f.kind == fieldBool || f.kind == fieldEnum {
+				cycleField(f)
 			}
 		}
 	}
@@ -381,6 +410,39 @@ func (d *ModelEditDialog) fieldDisplay(f editField) string {
 		return i18n.T("inherit (%s)", f.inherit)
 	}
 	return f.value
+}
+
+// cycleField advances whichever of the two cyclable kinds the field is.
+// One entry point so a new cyclable kind cannot be wired to enter but not
+// to space, or the other way round.
+func cycleField(f *editField) {
+	if f.kind == fieldEnum {
+		cycleEnum(f)
+		return
+	}
+	cycleBool(f)
+}
+
+// cycleEnum advances a fieldEnum: inherit -> the options in ladder order
+// -> inherit. A value that is no longer offered (a hand-written
+// models.json level this model collapses away) lands on inherit rather
+// than sticking, so the cycle can always be escaped.
+func cycleEnum(f *editField) {
+	for i, o := range f.options {
+		if o == f.value {
+			if i+1 < len(f.options) {
+				f.value = f.options[i+1]
+			} else {
+				f.value = ""
+			}
+			return
+		}
+	}
+	if f.value == "" && len(f.options) > 0 {
+		f.value = f.options[0]
+		return
+	}
+	f.value = ""
 }
 
 // ---- helpers ----
