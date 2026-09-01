@@ -49,6 +49,7 @@ func TestHelperConnector(t *testing.T) {
 			TypingRefresh: 250 * time.Millisecond,
 			SendsImages:   true,
 			SendsFiles:    true,
+			Features:      []string{"typing_stop"},
 		},
 		NewTransport: func(s connsdk.Session) (connsdk.Transport, error) {
 			return &fakeTransport{mode: mode, dataDir: s.DataDir, echo: make(chan connsdk.Message, 8)}, nil
@@ -131,6 +132,10 @@ func (ft *fakeTransport) SendFile(ctx context.Context, chatID, path, caption str
 	return nil
 }
 func (ft *fakeTransport) Typing(ctx context.Context, chatID string) error { return nil }
+func (ft *fakeTransport) StopTyping(ctx context.Context, chatID string) error {
+	ft.echo <- connsdk.Message{ChatID: chatID, UserID: "u1", Text: "typing-stopped"}
+	return nil
+}
 
 // ---- host-side harness ----
 
@@ -226,7 +231,7 @@ func TestProxyHappyPath(t *testing.T) {
 		t.Errorf("identity = %+v", id)
 	}
 	caps := p.Capabilities()
-	if caps.MaxTextLen != 1234 || caps.TypingRefresh != 250*time.Millisecond || !caps.SendsImages || !caps.SendsFiles {
+	if caps.MaxTextLen != 1234 || caps.TypingRefresh != 250*time.Millisecond || !caps.SendsImages || !caps.SendsFiles || !caps.TypingStop {
 		t.Errorf("capabilities = %+v", caps)
 	}
 
@@ -251,6 +256,15 @@ func TestProxyHappyPath(t *testing.T) {
 	}
 	if err := p.Typing(ctx, "c1"); err != nil {
 		t.Errorf("Typing: %v", err)
+	}
+	// The stop crosses the wire as typing{active:false} and reaches the
+	// transport's StopTyping, not its Typing — the fake echoes a marker
+	// message from the stop path only.
+	if err := p.StopTyping(ctx, "c1"); err != nil {
+		t.Errorf("StopTyping: %v", err)
+	}
+	if m := r.next(t); m.Text != "typing-stopped" || m.ChatID != "c1" {
+		t.Errorf("after StopTyping, inbound = %+v, want the stop-path marker", m)
 	}
 
 	cancel()

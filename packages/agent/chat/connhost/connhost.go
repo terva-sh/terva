@@ -273,6 +273,7 @@ func (s *Session) Start(helloTimeout time.Duration) error {
 		Asks:            version >= 2 && contains(hello.Capabilities.Features, "asks"),
 		Speaker:         speakerGrade(version, hello.Capabilities.Features),
 		ThreadsOut:      version >= 2 && contains(hello.Capabilities.Features, "threads_out"),
+		TypingStop:      version >= 2 && contains(hello.Capabilities.Features, "typing_stop"),
 		EditsOut:        version >= 2 && contains(hello.Capabilities.Features, "edits_out"),
 		ReactionsOut:    version >= 2 && contains(hello.Capabilities.Features, "reactions_out"),
 		DeletesOut:      version >= 2 && contains(hello.Capabilities.Features, "deletes_out"),
@@ -756,6 +757,17 @@ func (s *Session) SendFile(ctx context.Context, chatID, path, caption string) er
 // Typing asserts the typing indicator once. Fire-and-forget.
 func (s *Session) Typing(chatID string) error {
 	return s.writeFrame(connproto.TypingFromHost{Type: "typing", ChatID: chatID})
+}
+
+// StopTyping withdraws the typing indicator (chat.TypingStopper). Gate
+// on Capabilities().TypingStop: a connector that did not declare the
+// feature reads the frame as one more typing start.
+func (s *Session) StopTyping(ctx context.Context, chatID string) error {
+	if !s.Capabilities().TypingStop {
+		return fmt.Errorf("connector %q does not support typing_stop", s.cfg.Name)
+	}
+	off := false
+	return s.writeFrame(connproto.TypingFromHost{Type: "typing", ChatID: chatID, Active: &off})
 }
 
 // Ask runs one full interaction: render the question, wait for the

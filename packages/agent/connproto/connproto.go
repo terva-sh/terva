@@ -373,10 +373,18 @@ type SendFileFromHost struct {
 }
 
 // TypingFromHost asserts the typing indicator once. Fire-and-forget:
-// no ID, no result.
+// no ID, no result. Absent Active means "typing"; Active=false is the
+// stop signal (protocol 2, feature "typing_stop"): sent once, after the
+// reply has landed, and ONLY to a connector that declared the feature.
+// On a refresh-model service (Matrix's 30 s server-side timeout) the
+// indicator would otherwise linger beside the delivered answer — and a
+// connector that never learned the field would read the stop as one
+// more start and lengthen exactly that tail, which is why the
+// declaration gates it.
 type TypingFromHost struct {
 	Type   string `json:"type"` // "typing"
 	ChatID string `json:"chat_id"`
+	Active *bool  `json:"active,omitempty"`
 }
 
 // AskOption is one choice on an ask. Keys ride the wire; the connector

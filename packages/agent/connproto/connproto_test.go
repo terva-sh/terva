@@ -240,6 +240,14 @@ var goldenFrames = []goldenFrame{
 		`{"type":"typing","chat_id":"c1"}`,
 	},
 	{
+		// Feature "typing_stop": the one frame that withdraws the
+		// indicator. Absent active = true, so the case above is
+		// unchanged for every connector that never declared it.
+		"typing stop",
+		TypingFromHost{Type: "typing", ChatID: "c1", Active: boolPtr(false)},
+		`{"type":"typing","chat_id":"c1","active":false}`,
+	},
+	{
 		// Stage G: option keys ride the wire, never widgets — the
 		// connector picks buttons / keyboards / reactions / text.
 		"ask",
@@ -593,3 +601,5 @@ func TestGoldenDecode(t *testing.T) {
 		t.Errorf("result fields: %+v", res)
 	}
 }
+
+func boolPtr(b bool) *bool { return &b }

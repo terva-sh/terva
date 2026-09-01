@@ -32,6 +32,7 @@
 {"name":"send_image","dir":"host_to_conn","frame":"{\"type\":\"send_image\",\"id\":\"43\",\"chat_id\":\"c1\",\"path\":\"/tmp/shot.png\",\"caption\":\"the bug\"}"}
 {"name":"send_file","dir":"host_to_conn","frame":"{\"type\":\"send_file\",\"id\":\"44\",\"chat_id\":\"c1\",\"path\":\"/tmp/report.pdf\"}"}
 {"name":"typing","dir":"host_to_conn","frame":"{\"type\":\"typing\",\"chat_id\":\"c1\"}"}
+{"name":"typing stop","dir":"host_to_conn","frame":"{\"type\":\"typing\",\"chat_id\":\"c1\",\"active\":false}"}
 {"name":"ask","dir":"host_to_conn","frame":"{\"type\":\"ask\",\"id\":\"a1\",\"chat_id\":\"c1\",\"reply_to\":\"m12\",\"text\":\"terva wants to run `rm -rf build/` — approve?\",\"options\":[{\"key\":\"approve\",\"label\":\"Approve\",\"style\":\"affirm\",\"hint\":\"👍\"},{\"key\":\"deny\",\"label\":\"Deny\",\"style\":\"deny\",\"hint\":\"👎\"}],\"restrict_to\":[\"u1\"],\"expires_ms\":120000}"}
 {"name":"ask minimal","dir":"host_to_conn","frame":"{\"type\":\"ask\",\"id\":\"a1\",\"chat_id\":\"c1\",\"text\":\"pick one\",\"options\":[{\"key\":\"a\",\"label\":\"A\"},{\"key\":\"b\",\"label\":\"B\"}]}"}
 {"name":"ask_close","dir":"host_to_conn","frame":"{\"type\":\"ask_close\",\"id\":\"a2\",\"ask_id\":\"a1\",\"outcome\":\"Approve — @drew\"}"}

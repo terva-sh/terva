@@ -500,23 +500,45 @@ func (l *Loop) runTurn(ctx context.Context, m Message) {
 
 // startTyping keeps the service's typing indicator alive until the
 // returned stop function is called. No-op for connectors without one.
+// A connector that declared "typing_stop" also gets one explicit stop
+// from that function — after the pulse goroutine has drained, so the
+// stop always follows the last pulse and a late refresh can never
+// re-light the indicator it just cleared. The stop rides its own short
+// context: the turn's is often already cancelled by then (a /stop, a
+// shutdown), and those are exactly the turns whose indicator would
+// otherwise be left running.
 func (l *Loop) startTyping(ctx context.Context, chatID string) func() {
-	refresh := l.Connector.Capabilities().TypingRefresh
-	if refresh <= 0 {
+	caps := l.Connector.Capabilities()
+	if caps.TypingRefresh <= 0 {
 		return func() {}
 	}
+	var stopper TypingStopper
+	if caps.TypingStop {
+		stopper, _ = l.Connector.(TypingStopper)
+	}
 	tctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		for {
 			_ = l.Connector.Typing(tctx, chatID)
 			select {
 			case <-tctx.Done():
 				return
-			case <-time.After(refresh):
+			case <-time.After(caps.TypingRefresh):
 			}
 		}
 	}()
-	return cancel
+	return func() {
+		cancel()
+		<-done
+		if stopper == nil {
+			return
+		}
+		sctx, sdone := context.WithTimeout(context.Background(), 5*time.Second)
+		defer sdone()
+		_ = stopper.StopTyping(sctx, chatID)
+	}
 }
 
 // UpdateStatusContext swaps the provider identity shown by /status.

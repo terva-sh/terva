@@ -23,6 +23,10 @@ type fakeConnector struct {
 	mu     sync.Mutex
 	sent   []Outgoing
 	typing int
+	stops  int
+	// events records typing pulses and stops in arrival order, so a
+	// test can assert the stop came LAST.
+	events []string
 	images []string
 	files  []string
 }
@@ -73,6 +77,15 @@ func (f *fakeConnector) Typing(context.Context, string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.typing++
+	f.events = append(f.events, "pulse")
+	return nil
+}
+
+func (f *fakeConnector) StopTyping(context.Context, string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stops++
+	f.events = append(f.events, "stop")
 	return nil
 }
 
@@ -320,6 +333,64 @@ func TestLoopTypingPulse(t *testing.T) {
 	conn.mu.Unlock()
 	if n < 2 {
 		t.Errorf("typing pulses = %d, want >= 2", n)
+	}
+}
+
+// A connector that declared typing_stop gets exactly one stop per
+// turn, after the reply, and after its last pulse — never a pulse
+// after the stop, which would re-light the indicator it just cleared.
+func TestLoopTypingStopFollowsTheLastPulse(t *testing.T) {
+	conn := newFakeConnector(Capabilities{TypingRefresh: 5 * time.Millisecond, TypingStop: true})
+	startLoop(t, conn, &scriptedClient{reply: "ok"}, pairedWith("7"))
+
+	conn.inbound <- msgFrom("7", "go")
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		conn.mu.Lock()
+		n := conn.stops
+		conn.mu.Unlock()
+		if n >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(30 * time.Millisecond) // several refresh intervals: a late pulse would land here
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	if conn.stops != 1 {
+		t.Fatalf("typing stops = %d, want exactly 1 (events %v)", conn.stops, conn.events)
+	}
+	if len(conn.sent) != 1 {
+		t.Fatalf("sent = %d, want the one reply", len(conn.sent))
+	}
+	if last := conn.events[len(conn.events)-1]; last != "stop" {
+		t.Errorf("typing events = %v, want the stop last", conn.events)
+	}
+}
+
+// Without the declaration the loop never calls StopTyping, even though
+// the fake implements it: an undeclared connector would read the frame
+// as one more start.
+func TestLoopTypingNoStopWithoutTheFeature(t *testing.T) {
+	conn := newFakeConnector(Capabilities{TypingRefresh: 5 * time.Millisecond})
+	startLoop(t, conn, &scriptedClient{reply: "ok"}, pairedWith("7"))
+
+	conn.inbound <- msgFrom("7", "go")
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		conn.mu.Lock()
+		n := len(conn.sent)
+		conn.mu.Unlock()
+		if n >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(30 * time.Millisecond)
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	if conn.stops != 0 {
+		t.Errorf("typing stops = %d, want 0 without typing_stop declared", conn.stops)
 	}
 }
 

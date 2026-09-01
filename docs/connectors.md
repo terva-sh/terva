@@ -257,6 +257,7 @@ The full feature-string vocabulary (declare only what you implement):
 | `asks` | interactive questions with attributed answers | ask block |
 | `speaker:full` / `speaker:name_only` | alternate outbound identities | speaker block |
 | `threads_out` | opening work-stream threads | threads block |
+| `typing_stop` | withdrawing the typing indicator on demand | the `typing` rule |
 | `attachment_kinds` | labeled beyond-image attachments | attachment rules |
 
 (`message_ids` and `chat_kinds` also appear in the wild as declared
@@ -301,6 +302,7 @@ Session — host to connector:
 {"type":"send_image","id":"43","chat_id":"...","path":"/abs/file.png","caption":"..."}
 {"type":"send_file","id":"44","chat_id":"...","path":"/abs/report.pdf","caption":"..."}
 {"type":"typing","chat_id":"..."}
+{"type":"typing","chat_id":"...","active":false}
 {"type":"shutdown"}
 ```
 
@@ -548,8 +550,17 @@ Rules:
   surfaced via `warn`.
 - Every `send`/`send_image`/`send_file` gets exactly one `result`
   echoing its `id` (empty `error` = success). terva times a send out
-  after 30s. `typing` carries no id and gets no result. `ask` and
-  `ask_close` are commands with results too; only `answer` flows free.
+  after 30s. `typing` carries no id and gets no result; terva
+  re-sends it every `typing_refresh_ms` while a turn runs. Declare
+  `"typing_stop"` and one more `typing` with `"active":false` follows
+  each reply — withdraw the indicator then. That is for services whose
+  indicator runs to a long server-side timeout (Matrix lingers up to
+  30 s beside the delivered answer); one that clears itself within a
+  few seconds needs neither the feature nor the frame. terva never
+  sends the stop to a connector that did not declare it, because a
+  connector that never learned the field reads it as one more start.
+  `ask` and `ask_close` are commands with results too; only `answer`
+  flows free.
 - **Owner-directed frames may carry a chat id you never sent.** Until
   the owner's first inbound DM of a host run, terva addresses the
   frames aimed at the owner — the group-admission ask, tool approvals,

@@ -451,6 +451,16 @@ func (p *Proxy) Typing(ctx context.Context, chatID string) error {
 	return s.Typing(chatID)
 }
 
+// StopTyping withdraws the typing indicator (chat.TypingStopper).
+// Callers gate on Capabilities().TypingStop.
+func (p *Proxy) StopTyping(ctx context.Context, chatID string) error {
+	s, err := p.currentSession()
+	if err != nil {
+		return err
+	}
+	return s.StopTyping(ctx, chatID)
+}
+
 // Ask runs one interactive question through the wire (chat.Asker).
 // Callers gate on Capabilities().Asks, as everywhere. An ask does not
 // survive a child restart — the respawn fails the in-flight Ask via

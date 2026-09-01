@@ -334,6 +334,15 @@ type Threader interface {
 	StartThread(ctx context.Context, chatID, fromMessageID, name string) (threadChatID string, err error)
 }
 
+// TypingStopper is the optional Transport upgrade for withdrawing the
+// typing indicator (protocol 2, feature "typing_stop" — declare it in
+// Capabilities.Features alongside implementing this). The host sends
+// one stop after each reply; a service whose indicator times out on
+// its own within a few seconds needs neither.
+type TypingStopper interface {
+	StopTyping(ctx context.Context, chatID string) error
+}
+
 // Asker is the optional Transport upgrade for interactive asks
 // (protocol 2, feature "asks" — declare it in Capabilities.Features
 // alongside implementing this). Ask renders the question with the best
@@ -773,6 +782,16 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 				continue
 			}
 			t := transport
+			if f.Active != nil && !*f.Active {
+				// Only ever sent to a connector that declared
+				// typing_stop; a transport without the upgrade is
+				// a declaration bug, and treating the stop as a
+				// start would be the worst reading of it.
+				if st, ok := t.(TypingStopper); ok {
+					go func() { _ = st.StopTyping(ctx, f.ChatID) }()
+				}
+				continue
+			}
 			go func() { _ = t.Typing(ctx, f.ChatID) }()
 		case "ask":
 			var f connproto.AskFromHost

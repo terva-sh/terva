@@ -526,6 +526,16 @@ func (c *Conn) Typing(ctx context.Context, chatID string) error {
 	return sess.Typing(chatID)
 }
 
+// StopTyping withdraws the typing indicator (chat.TypingStopper).
+// Callers gate on Capabilities().TypingStop.
+func (c *Conn) StopTyping(ctx context.Context, chatID string) error {
+	sess, err := c.connected()
+	if err != nil {
+		return err
+	}
+	return sess.StopTyping(ctx, chatID)
+}
+
 // Ask runs one interactive question through the tunneled wire
 // (chat.Asker). Callers gate on Capabilities().Asks, as everywhere.
 // An ask does not survive a redial — the session's death fails the

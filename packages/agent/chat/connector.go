@@ -246,6 +246,11 @@ type Capabilities struct {
 	// threads (wire feature "threads_out"). Flat services stay false
 	// and consumers keep everything in the main chat.
 	ThreadsOut bool
+	// TypingStop is true when the connector withdraws its typing
+	// indicator on demand (wire feature "typing_stop"). The loop then
+	// sends one stop after each turn's reply instead of letting a
+	// refresh-model indicator run out its timeout beside the answer.
+	TypingStop bool
 	// Stage D outbound abilities (features "edits_out",
 	// "reactions_out", "deletes_out") and the edit-streaming pace the
 	// connector asked for.
@@ -264,6 +269,15 @@ type Capabilities struct {
 // sends, asks, speakers — targets it like any chat.
 type Threader interface {
 	StartThread(ctx context.Context, chatID, fromMessageID, name string) (threadChatID string, err error)
+}
+
+// TypingStopper is the optional Connector upgrade for withdrawing the
+// typing indicator. Gate on Capabilities().TypingStop before
+// type-asserting. The loop calls StopTyping once per turn, after the
+// reply, so a service whose indicator otherwise runs to a server-side
+// timeout clears it the moment the answer lands.
+type TypingStopper interface {
+	StopTyping(ctx context.Context, chatID string) error
 }
 
 // AskOption is one choice on an Ask. Key is the semantic identity

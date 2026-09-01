@@ -19,6 +19,7 @@ type stubTransport struct {
 	connectErr error
 	receiveErr error // when set, Receive dies with it after the first delivery
 	sent       chan Outgoing
+	typing     chan string // "on:<chat>" / "off:<chat>", when non-nil
 }
 
 func (s *stubTransport) Connect(ctx context.Context) (Identity, error) {
@@ -51,7 +52,19 @@ func (s *stubTransport) SendImage(ctx context.Context, chatID, path, caption str
 func (s *stubTransport) SendFile(ctx context.Context, chatID, path, caption string) error {
 	return nil
 }
-func (s *stubTransport) Typing(ctx context.Context, chatID string) error { return nil }
+func (s *stubTransport) Typing(ctx context.Context, chatID string) error {
+	if s.typing != nil {
+		s.typing <- "on:" + chatID
+	}
+	return nil
+}
+
+func (s *stubTransport) StopTyping(ctx context.Context, chatID string) error {
+	if s.typing != nil {
+		s.typing <- "off:" + chatID
+	}
+	return nil
+}
 
 // harness wires Serve() to in-memory pipes and provides frame-level
 // helpers, playing the host's role.
@@ -134,6 +147,42 @@ func testConfig(tr Transport) Config {
 		Capabilities: Capabilities{MaxTextLen: 100, TypingRefresh: time.Second, SendsImages: true},
 		NewTransport: func(Session) (Transport, error) { return tr, nil },
 	}
+}
+
+// typing{active:false} reaches the transport's StopTyping and never
+// its Typing: a stop read as a start would lengthen the very tail the
+// frame exists to cut.
+func TestTypingStopReachesTheStopper(t *testing.T) {
+	tr := &stubTransport{sent: make(chan Outgoing, 4), typing: make(chan string, 4)}
+	h := newHarness(t, testConfig(tr))
+	h.next("hello")
+	h.send(connproto.HelloAckFromHost{Type: "hello_ack", Protocol: 2, DataDir: testsupport.TempDir(t)})
+	h.send(connproto.ConnectFromHost{Type: "connect"})
+	h.next("connected")
+
+	off := false
+	h.send(connproto.TypingFromHost{Type: "typing", ChatID: "c"})
+	h.send(connproto.TypingFromHost{Type: "typing", ChatID: "c", Active: &off})
+	got := map[string]bool{}
+	for i := 0; i < 2; i++ {
+		select {
+		case ev := <-tr.typing:
+			got[ev] = true
+		case <-time.After(5 * time.Second):
+			t.Fatalf("typing events after 5s: %v, want on:c and off:c", got)
+		}
+	}
+	if !got["on:c"] || !got["off:c"] {
+		t.Errorf("typing events = %v, want exactly on:c and off:c", got)
+	}
+	select {
+	case ev := <-tr.typing:
+		t.Errorf("unexpected extra typing event %q", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	h.send(connproto.ShutdownFromHost{Type: "shutdown"})
+	_ = h.serveErr()
 }
 
 func TestServeHappyPath(t *testing.T) {
