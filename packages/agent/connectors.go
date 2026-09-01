@@ -12,4 +12,4 @@ package agent
 // discover connectors there and degrade gracefully when none are
 // compiled in. A connector's registration file is its ONLY link into
 // the binary, so excluding the tag drops the whole transport package
-// from the build (see docs/plans/chat-connectors.md, phase 3).
+// from the build (see docs/plans/archive/chat-connectors.md, phase 3).

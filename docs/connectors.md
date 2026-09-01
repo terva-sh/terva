@@ -1,8 +1,8 @@
 # terva chat connectors
 
-terva bridges chat services (Telegram and Discord in-tree; Matrix,
-anything, out of tree) through one **Connector** contract and ONE wire
-protocol. A connector ships three interchangeable ways — compiled in,
+terva bridges chat services (Telegram and Discord in-tree; Matrix out
+of tree, as `terva-sh/terva-conn-matrix`; anything else the same way)
+through one **Connector** contract and ONE wire protocol. A connector ships three interchangeable ways — compiled in,
 as a standalone executable terva spawns (newline-delimited JSON over
 stdin/stdout), or bundled inside an extension — and all three speak
 the same connector protocol: even the compiled-in Discord connector
@@ -605,7 +605,7 @@ it.
 
 ## Using the bridge (telegram or any connector)
 
-terva can run as a chat bot so you can DM it from your phone. Telegram and Discord are the built-in connectors (`terva bot setup --connector discord` — DMs and @mentions work with no privileged intents); other services plug in as **external connectors** — standalone executables in any language speaking a small JSON protocol, installed with `terva bot link` (see [docs/connectors.md](connectors.md)). Two ways to run it: **from inside the TUI** (the running session mirrors into the chat) or **as a standalone background daemon** (a headless bot with its own independent agent). The discord built-in speaks the connector protocol even when compiled in (an in-process carrier) — it is the dogfood surface for protocol v2 (`docs/plans/discord-connector.md`).
+terva can run as a chat bot so you can DM it from your phone. Telegram and Discord are the built-in connectors (`terva bot setup --connector discord` — DMs and @mentions work with no privileged intents); other services plug in as **external connectors** — standalone executables in any language speaking a small JSON protocol, installed with `terva bot link` (see [docs/connectors.md](connectors.md)); Matrix ships this way, as `terva-sh/terva-conn-matrix` (Rust on the native matrix-rust-sdk, E2EE included). Two ways to run it: **from inside the TUI** (the running session mirrors into the chat) or **as a standalone background daemon** (a headless bot with its own independent agent). The discord built-in speaks the connector protocol even when compiled in (an in-process carrier) — it is the dogfood surface for protocol v2 (`docs/plans/discord-connector.md`).
 
 ### From inside the TUI
 

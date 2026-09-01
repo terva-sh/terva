@@ -255,7 +255,7 @@ func Run(rawArgs []string, version string) error {
 	}
 	// Dev connectors load loudly, exactly as named, for exactly this
 	// invocation — there is deliberately no discovery-based dev mode
-	// (see docs/plans/chat-connectors.md).
+	// (see docs/plans/archive/chat-connectors.md).
 	for _, p := range args.ConnectorManifests {
 		name, err := external.RegisterManifest(p)
 		if err != nil {

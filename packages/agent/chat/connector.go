@@ -7,7 +7,7 @@
 // auth, normalizing service messages, service-side limits. Everything
 // about agents, turns, queues, pairing policy, and reply chunking
 // lives here, once, instead of being re-written per service (see
-// docs/plans/chat-connectors.md).
+// docs/plans/archive/chat-connectors.md).
 package chat
 
 import (

@@ -286,7 +286,7 @@ type Args struct {
 	// --connector-manifest (repeatable). Each loads ONE external chat
 	// connector as a dev service for this invocation only — nothing
 	// is discovered, nothing persists (the --ext precedent; see
-	// docs/plans/chat-connectors.md, phase 4).
+	// docs/plans/archive/chat-connectors.md, phase 4).
 	ConnectorManifests []string
 
 	// NoSkill disables ALL skill discovery for this run, including

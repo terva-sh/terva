@@ -11,6 +11,16 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.132.8](https://github.com/terva-sh/terva/releases/tag/v0.132.8) — 2026-08-30
+
+### Features
+
+- i18n: translate the classifier, dialogs, clipboard and extension text
+
+### Fixes
+
+- tools: warn when a write doubles the working directory
+
 ## [v0.132.7](https://github.com/terva-sh/terva/releases/tag/v0.132.7) — 2026-08-30
 
 ### Features
