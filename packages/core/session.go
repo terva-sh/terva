@@ -892,7 +892,14 @@ func NewSessionAtPath(path, cwd, providerName, model, version string) (*Session,
 // freshFile bookkeeping, and id format stay identical.
 func newSessionAt(p, cwd, providerName, model, version string) (*Session, error) {
 	id := uuid.NewString()
-	f, err := privfs.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY)
+	// O_APPEND, matching the resume path. Without it this handle writes at its
+	// OWN offset, so anything appended to the file behind its back — a rename
+	// row, which RenameSession deliberately writes through an independent
+	// handle — is overwritten by the next flush of this one. That silently
+	// destroyed every manual rename of a session created in this run: the row
+	// landed, the next meta write sat on top of it, and the title reverted.
+	// A resumed session was immune, which is why it read as "only while active".
+	f, err := privfs.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY|os.O_APPEND)
 	if err != nil {
 		return nil, err
 	}
@@ -1793,6 +1800,13 @@ type SessionSummary struct {
 	// makes a session depend on a persona continuing to exist — see
 	// SessionsUsingPersona.
 	Persona string
+	// Reasoning is the session's own thinking-level override ("off", "high", …),
+	// or "" when it follows the global setting. Read from meta like the fields
+	// above, because a client listing sessions has to render the level a session
+	// is ON without waking it — and a list that omitted it did not fall back to
+	// "unknown", it fell back to the model's default and showed the wrong level
+	// as though it were the right one.
+	Reasoning string
 	// Live/Busy are the session's live state, set only on the attached-TUI path
 	// (from ctrlproto.SessionInfo via SessionSummariesFromInfos): Live = the
 	// session is materialized in memory, Busy = a turn is in flight. A disk scan
@@ -1808,9 +1822,14 @@ type SessionSummary struct {
 // re-titling may replace a generated title, never a manual one.
 const renameSourceGenerated = "generated"
 
-// RenameSession appends a USER rename line to the session file. This is
-// safe even for the currently active session because it opens the
-// file independently and appends (doesn't rewrite).
+// RenameSession appends a USER rename line to the session file.
+//
+// This is safe for the currently active session, but NOT because this function
+// appends — it is safe because the live session's own handle appends too. When
+// the create path lacked O_APPEND, that handle wrote at its own offset and its
+// next flush landed on top of this row, destroying the rename. Both halves of
+// that pairing are load-bearing; see
+// TestANewSessionsHandleAppendsBehindAnExternalWriter.
 func RenameSession(path, title string) error {
 	return appendRename(path, title, "")
 }
@@ -2002,6 +2021,7 @@ func describeSessionFromMeta(path string, r io.Reader) (SessionSummary, SessionM
 				s.Background = row.Meta.Background
 				s.World = row.Meta.World
 				s.Persona = row.Meta.Persona
+				s.Reasoning = row.Meta.Reasoning
 			}
 		case "message":
 			s.MessageCount++
