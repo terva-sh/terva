@@ -303,6 +303,23 @@ var Catalog = []Model{
 		PriceInput: 15, PriceOutput: 75, PriceCacheRead: 1.5, PriceCacheWrite: 18.75,
 	},
 
+	// ---- Anthropic / Claude 5.x ----
+	// Live on the public API since 2026-09-01, so this row is NOT
+	// speculative: swarm tier resolution skips speculative rows, and a
+	// released model must stay reachable there.
+	//
+	// Thinking is adaptive and always on. The model rejects an explicit
+	// thinking budget and non-default sampling params, so AdaptiveThinking
+	// must stay set or buildRequest sends a shape the API 400s on.
+	//
+	// PriceCacheRead is the family exception: 0.025x base input rather than
+	// the 0.1x every other Claude model charges. Do not "correct" it to 1.
+	{
+		Provider: "anthropic", ID: "claude-fable-5-1", DisplayName: "Claude Fable 5.1",
+		ContextWindow: 1000000, MaxOutput: 128000, Reasoning: true, AdaptiveThinking: true,
+		PriceInput: 10, PriceOutput: 50, PriceCacheRead: 0.25, PriceCacheWrite: 12.5,
+	},
+
 	// ---- DeepSeek ----
 	// The current public DeepSeek API exposes the V4 family on
 	// api.deepseek.com/v1: Pro (1.6T/49B, reasoning-heavy) and Flash
@@ -541,7 +558,10 @@ var Catalog = []Model{
 	{
 		Provider: "anthropic", ID: "claude-fable-5", DisplayName: "Claude Fable 5",
 		ContextWindow: 1000000, MaxOutput: 128000, Reasoning: true, AdaptiveThinking: true,
-		PriceInput: 10, PriceOutput: 50, PriceCacheRead: 0.5, PriceCacheWrite: 6.25,
+		// Cache rates are Fable's, not Opus's: 0.1x base input for a read and
+		// 1.25x for a 5-minute write. This row carried the Opus 5 pair
+		// (0.5 / 6.25) and halved every cached-token cost it reported.
+		PriceInput: 10, PriceOutput: 50, PriceCacheRead: 1, PriceCacheWrite: 12.5,
 		Speculative: true,
 	},
 

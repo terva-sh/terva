@@ -235,17 +235,22 @@ type anthRequest struct {
 }
 
 // usesAdaptiveThinking reports whether a model only supports the
-// adaptive thinking mode (Opus 4.7 and later). These models reject
-// explicit thinking budgets and non-default sampling parameters. The
-// catalog flag is authoritative; the id-substring fallback catches
-// the same family when reached through an Anthropic-Messages-
-// compatible proxy whose catalog row predates the flag.
+// adaptive thinking mode (Opus 4.7 and later, and the whole Fable
+// family). These models reject explicit thinking budgets and non-default
+// sampling parameters. The catalog flag is authoritative; the
+// id-substring fallback catches the same family when reached through an
+// Anthropic-Messages-compatible proxy whose catalog row predates the flag.
+//
+// "fable" is deliberately unversioned. Every Claude Fable model shipped
+// so far is adaptive-only, so a bare marker covers 5, 5.1, and whatever
+// comes next without another edit here. Add "mythos" when a Mythos row
+// lands in the catalog and its thinking mode is confirmed.
 func usesAdaptiveThinking(m Model) bool {
 	if m.AdaptiveThinking {
 		return true
 	}
 	id := strings.ToLower(m.ID)
-	for _, marker := range []string{"opus-4-7", "opus-4.7", "opus-4-8", "opus-4.8"} {
+	for _, marker := range []string{"opus-4-7", "opus-4.7", "opus-4-8", "opus-4.8", "fable"} {
 		if strings.Contains(id, marker) {
 			return true
 		}
