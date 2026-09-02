@@ -34,7 +34,14 @@ var (
 	// lower case or a digit — which is the whole reason for the lookahead.
 	sentenceSplitRe = regexp.MustCompile(`(?:[.!?])[\s]+`)
 
-	contractionRe = regexp.MustCompile(`(?i)\b\w+(n't|'re|'ve|'ll|'d|'s|’t|’re|’ve|’ll)\b`)
+	// contractionRe holds the suffixes that are ALWAYS a contraction. "'s" is
+	// deliberately absent: it is a possessive far more often than it is "is",
+	// and apostropheSRe below decides that case on the stem.
+	contractionRe = regexp.MustCompile(`(?i)\b\w+(n't|'re|'ve|'ll|'d|’t|’re|’ve|’ll|’d)\b`)
+
+	// apostropheSRe captures the stem before an "'s" so the check can ask
+	// whether it is "it's" or "the product's".
+	apostropheSRe = regexp.MustCompile(`(?i)\b([a-z]+)['’]s\b`)
 	emDashRe      = regexp.MustCompile(`\s—\s|\s--\s`)
 	semicolonRe   = regexp.MustCompile(`;`)
 	allCapsRe     = regexp.MustCompile(`\b[A-Z]{2,}\b`)
@@ -67,7 +74,12 @@ func sentences(paragraph string) []string {
 // check runs every rule over one piece of tool text.
 func check(t Text) []Finding {
 	var fs []Finding
+	// Every rule reports through here, so the rule set filters in one place
+	// and a rule added later cannot forget to consult it.
 	report := func(rule, msg, quote string) {
+		if !t.Rules.covers(rule) {
+			return
+		}
 		fs = append(fs, Finding{Text: t, Rule: rule, Msg: msg, Quote: quote})
 	}
 
@@ -127,6 +139,8 @@ func checkSentence(raw, prose string, words []string, report func(rule, msg, quo
 
 	if m := contractionRe.FindString(prose); m != "" {
 		report("contraction", fmt.Sprintf("%q — write the full form", m), raw)
+	} else if m := contractionOfIs(prose); m != "" {
+		report("contraction", fmt.Sprintf("%q — write the full form", m), raw)
 	}
 
 	// Typographic emphasis. STE has no such device: a capitalised word is
@@ -158,6 +172,19 @@ func checkSentence(raw, prose string, words []string, report func(rule, msg, quo
 		report("term", fmt.Sprintf("%q — use %s", term, want), raw)
 		break
 	}
+}
+
+// contractionOfIs returns the first "'s" that shortens is or has, and the
+// empty string when every "'s" in the sentence is a possessive. Only a stem in
+// contractionStems counts, so "a persona's icon field" passes and "it's" does
+// not.
+func contractionOfIs(prose string) string {
+	for _, m := range apostropheSRe.FindAllStringSubmatch(prose, -1) {
+		if contractionStems[strings.ToLower(m[1])] {
+			return m[0]
+		}
+	}
+	return ""
 }
 
 // containsWord matches a term on word boundaries so "dir" does not fire inside

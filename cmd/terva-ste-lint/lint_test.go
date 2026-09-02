@@ -3,9 +3,11 @@ package main
 import (
 	"go/token"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -133,6 +135,227 @@ func TestRulesStaySilentOnGoodText(t *testing.T) {
 		for _, f := range check(Text{File: "x.go", Line: 1, What: "Description()", Body: g}) {
 			t.Errorf("false positive %s on clean text %q: %s", f.Rule, g, f.Msg)
 		}
+	}
+}
+
+// The contraction rule used to read every apostrophe-s as a contraction, so
+// it reported "the product's own noun" and wanted the full form of a word that
+// has none. STE bans the contraction, not the possessive.
+//
+// Note for whoever extends these cases: keep ONE apostrophe per sentence.
+// stripCode treats a single-quoted span as verbatim text, so two possessives
+// blank the prose between them and the second one is never seen.
+func TestPossessiveIsNotAContraction(t *testing.T) {
+	possessive := []string{
+		"The group's tools stay hidden.",
+		"A persona's icon field identifies the row.",
+		"The product's own noun stays.",
+		"Read the sub-agent's report.",
+	}
+	for _, s := range possessive {
+		for _, f := range check(Text{File: "x.go", Line: 1, What: "Description()", Body: s}) {
+			if f.Rule == "contraction" {
+				t.Errorf("possessive read as a contraction in %q: %s", s, f.Msg)
+			}
+		}
+	}
+}
+
+// The other half: dropping "'s" from the always-a-contraction list must not
+// blind the rule to "it's". A stem in contractionStems still fires.
+func TestContractionOfIsStillFires(t *testing.T) {
+	cases := []string{
+		"It's the same file.",
+		"That's the trap.",
+		"There's one entry left.",
+		"The tool reports what's missing.",
+	}
+	for _, s := range cases {
+		var found bool
+		for _, f := range check(Text{File: "x.go", Line: 1, What: "Description()", Body: s}) {
+			if f.Rule == "contraction" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("contraction rule missed %q", s)
+		}
+	}
+}
+
+// The suffixes that have no possessive reading must keep firing untouched.
+func TestUnambiguousContractionsStillFire(t *testing.T) {
+	cases := []string{
+		"The group can't change in this reply.",
+		"They're held by the baseline.",
+		"They've run the gate already.",
+		"It'll stop at the first error.",
+		"The agent said it'd stop.",
+	}
+	for _, s := range cases {
+		var found bool
+		for _, f := range check(Text{File: "x.go", Line: 1, What: "Description()", Body: s}) {
+			if f.Rule == "contraction" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("contraction rule missed %q", s)
+		}
+	}
+}
+
+// The structure-only rule set reports the rules that keep an instruction
+// unambiguous and drops the ones that police register. The same text must
+// yield the same structural findings under both sets, so the tier narrows the
+// report and never changes it.
+func TestStructuralTierDropsRegisterRules(t *testing.T) {
+	body := "This one sentence deliberately runs on and on and on past the cap that " +
+		"the policy sets for a single sentence, and it can't stop."
+
+	full := rulesOf(check(Text{File: "x.go", Line: 1, What: "Description()", Body: body}))
+	if !full["sentence-length"] || !full["contraction"] {
+		t.Fatalf("fixture no longer fires both classes under rulesFull: %v", full)
+	}
+
+	narrow := rulesOf(check(Text{File: "x.go", Line: 1, What: "Description()", Body: body, Rules: rulesStructure}))
+	if !narrow["sentence-length"] {
+		t.Errorf("structure tier dropped a structural rule: %v", narrow)
+	}
+	for r := range narrow {
+		if ruleClasses[r] != classStructural {
+			t.Errorf("structure tier reported %q, which is not structural", r)
+		}
+	}
+}
+
+// The vocabulary rule lives outside check(), so it needs its own proof that it
+// consults the rule set.
+func TestStructuralTierDropsVocabulary(t *testing.T) {
+	dict := map[string]bool{"the": true}
+	body := "The quixotic filibuster."
+	if len(checkVocabulary(Text{File: "x.go", Body: body}, dict)) == 0 {
+		t.Fatal("fixture no longer fires the vocabulary rule under rulesFull")
+	}
+	if fs := checkVocabulary(Text{File: "x.go", Body: body, Rules: rulesStructure}, dict); len(fs) != 0 {
+		t.Errorf("structure tier reported %d vocabulary finding(s)", len(fs))
+	}
+}
+
+// A rule absent from ruleClasses is invisible to the structure tier, which
+// makes a forgotten classification a silently missed finding rather than a
+// failure. So read the rule names out of the source and demand each one.
+func TestEveryRuleIsClassified(t *testing.T) {
+	src, err := os.ReadFile("rules.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{vocabularyRule: true} // reported by dictionary.go
+	for _, m := range regexp.MustCompile(`report\("([a-z-]+)"`).FindAllStringSubmatch(string(src), -1) {
+		names[m[1]] = true
+	}
+	if len(names) < 5 {
+		t.Fatalf("only found %d rule names in rules.go — the scan has stopped working", len(names))
+	}
+	for n := range names {
+		if ruleClasses[n] == 0 {
+			t.Errorf("rule %q is reported but not classified in ruleClasses", n)
+		}
+	}
+	for n := range ruleClasses {
+		if !names[n] {
+			t.Errorf("ruleClasses names %q, which no rule reports — typo, or a dead entry", n)
+		}
+	}
+}
+
+func rulesOf(fs []Finding) map[string]bool {
+	out := map[string]bool{}
+	for _, f := range fs {
+		out[f.Rule] = true
+	}
+	return out
+}
+
+// A pinned body sits in the frozen prefix of every request, so it is enrolled.
+// Absence here is the failure this test exists for: the enrollment is a
+// silently-empty corpus if the collector stops finding the file.
+func TestPinnedSkillBodyIsEnrolled(t *testing.T) {
+	texts, err := collect(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen int
+	for _, tx := range texts {
+		if !strings.HasPrefix(tx.What, "pinned skill body (") {
+			continue
+		}
+		seen++
+		if tx.Rules != rulesStructure {
+			t.Errorf("%s:%d is enrolled under the full rule set, not the structure tier", tx.File, tx.Line)
+		}
+		if strings.Contains(tx.Body, "description:") {
+			t.Errorf("%s:%d carries frontmatter, which the description collector already covers", tx.File, tx.Line)
+		}
+	}
+	if seen == 0 {
+		t.Fatalf("no pinned skill body enrolled, but skills.DefaultAlwaysOn names %v", skills.DefaultAlwaysOn)
+	}
+}
+
+// The whole point of the structure tier is that the pinned body lands with no
+// baseline. If this fails, either the body drifted or the tier did.
+func TestPinnedSkillBodyIsClean(t *testing.T) {
+	texts, err := collect(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tx := range texts {
+		if !strings.HasPrefix(tx.What, "pinned skill body (") {
+			continue
+		}
+		for _, f := range check(tx) {
+			t.Errorf("pinned body is not clean: %s", f)
+		}
+	}
+}
+
+// A name in DefaultAlwaysOn with no SKILL.md means the list and the binary have
+// drifted. Skipping it would leave the lint covering nothing and reporting
+// success, so the collector fails instead.
+func TestPinnedSkillBodyMissingIsAnError(t *testing.T) {
+	if _, err := collectPinnedSkillBodies(testsupport.TempDir(t)); err == nil {
+		t.Fatal("a root with no builtin skills should be an error, not an empty corpus")
+	}
+}
+
+// A finding has to point at the line a person can open, so the frontmatter the
+// collector drops has to be added back as an offset.
+func TestBodyAfterFrontmatterKeepsLineNumbers(t *testing.T) {
+	src := "---\nname: x\ndescription: y\n---\n\nFirst prose line.\n"
+	body, offset := bodyAfterFrontmatter(src)
+	if offset != 4 {
+		t.Fatalf("offset = %d, want 4", offset)
+	}
+	if strings.Contains(body, "description:") {
+		t.Fatal("frontmatter survived the split")
+	}
+	texts := markdownProse("x/SKILL.md", body)
+	if len(texts) != 1 {
+		t.Fatalf("got %d prose blocks, want 1", len(texts))
+	}
+	if got := texts[0].Line + offset; got != 6 {
+		t.Errorf("prose starts at line %d, want 6", got)
+	}
+}
+
+// A file with no frontmatter comes back whole, so the collector cannot silently
+// eat a body that opens with prose.
+func TestBodyAfterFrontmatterPassesThroughPlainMarkdown(t *testing.T) {
+	src := "# Title\n\nSome prose.\n"
+	body, offset := bodyAfterFrontmatter(src)
+	if body != src || offset != 0 {
+		t.Errorf("plain markdown was altered: offset=%d", offset)
 	}
 }
 

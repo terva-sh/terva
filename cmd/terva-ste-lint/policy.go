@@ -160,6 +160,82 @@ var allowedCaps = map[string]bool{
 	"AND": false, "OR": false, "NOT": false, // conjunctions in caps ARE emphasis
 }
 
+// A ruleClass says what a rule is for. A structural rule keeps an instruction
+// unambiguous: one idea per sentence, no aside hiding a second clause, no
+// shouted word standing in for sentence structure. A register rule polices
+// voice: the participle, the contraction, the passive, the word list.
+//
+// The split exists because not every piece of model-visible prose wants both
+// halves. See ruleSet below.
+type ruleClass uint8
+
+const (
+	classStructural ruleClass = iota + 1
+	classRegister
+)
+
+// ruleClasses classifies every rule the linter can report. A rule missing from
+// this map is invisible to the structure-only set, so TestEveryRuleIsClassified
+// reads the rule names out of the source and fails when one is absent.
+var ruleClasses = map[string]ruleClass{
+	"sentence-length":  classStructural,
+	"paragraph-length": classStructural,
+	"aside":            classStructural,
+	"caps-emphasis":    classStructural,
+
+	"passive-voice": classRegister,
+	"ing-form":      classRegister,
+	"contraction":   classRegister,
+	"term":          classRegister,
+	vocabularyRule:  classRegister,
+}
+
+// A ruleSet is the policy one piece of text must satisfy.
+//
+// rulesFull is the zero value, so text that predates this tier keeps every
+// rule with no change at the call site. That default is deliberate: a new
+// producer gets the strict policy unless somebody argues it down.
+//
+// rulesStructure holds text to the structural rules alone. It exists for prose
+// a person wrote for a model to read once, in full, where the register rules
+// fight the text instead of improving it. The precedent is
+// promptKeyExemptPrefixes in scope.go, which carves out the creative register
+// with the same reasoning: limited compliance, structure but not vocabulary.
+type ruleSet uint8
+
+const (
+	rulesFull ruleSet = iota
+	rulesStructure
+)
+
+// covers reports whether this rule set reports the named rule.
+func (r ruleSet) covers(rule string) bool {
+	if r != rulesStructure {
+		return true
+	}
+	return ruleClasses[rule] == classStructural
+}
+
+// contractionStems are the words whose trailing "'s" is a contraction of is
+// or has. Every other "'s" in English is a possessive, and STE bans the
+// contraction, not the possessive.
+//
+// The rule used to read the apostrophe alone, so it reported "the product's
+// own noun" as a contraction. On one enrolled file it was wrong four times
+// out of four, which is why the check now needs a stem it recognises.
+//
+// The list is closed on purpose. A stem outside it makes the "'s" a
+// possessive, so a word this list forgets costs a missed finding rather than
+// a false one. That is the safe direction for a gate that fails a build.
+var contractionStems = map[string]bool{
+	"it": true, "that": true, "this": true, "there": true, "here": true,
+	"what": true, "who": true, "where": true, "when": true, "why": true,
+	"how": true, "he": true, "she": true, "let": true,
+	"everyone": true, "everything": true, "everybody": true,
+	"someone": true, "something": true, "somebody": true,
+	"nobody": true, "nothing": true, "anyone": true, "anything": true,
+}
+
 // beVerbs and participle detection drive the passive-voice rule.
 var beVerbs = map[string]bool{
 	"is": true, "are": true, "was": true, "were": true,

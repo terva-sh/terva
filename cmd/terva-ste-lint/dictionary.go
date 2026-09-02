@@ -86,6 +86,9 @@ func loadDictionary(root string) (map[string]bool, bool) {
 // checkVocabulary flags words outside the approved list. It runs only when a
 // dictionary is present.
 func checkVocabulary(t Text, dict map[string]bool) []Finding {
+	if !t.Rules.covers(vocabularyRule) {
+		return nil
+	}
 	var fs []Finding
 	seen := map[string]bool{}
 	for _, para := range strings.Split(t.Body, "\n\n") {

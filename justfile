@@ -579,7 +579,10 @@ release-preflight-public: ci
     @if [ ! -x scripts/release.sh ]; then         echo "release tooling absent on this tree — local gate only"; exit 0;     fi
     # Is the changelog current with what is already published? release-cut
     # refuses to start otherwise, so finding out here saves the round trip.
-    @./scripts/changelog.sh audit || echo "  (fix with: just changelog-record)"
+    # Branch on the code: 2 is the host, 3 is a tree that cannot render, and
+    # only the rest are actually stale. One blanket line here named the wrong
+    # fix for two of the three.
+    @./scripts/changelog.sh audit || case $? in       2) echo "  (release host unreachable: not verified, not blocking)" ;;       3) echo "  (the render failed, reason above: changelog-record cannot fix this)" ;;       *) echo "  (fix with: just changelog-record)" ;;     esac
     # What the exported surface did, for the patch-or-minor call.
     @./scripts/release.sh api-diff
     # Open alerts by SCOPE, not by banner count.

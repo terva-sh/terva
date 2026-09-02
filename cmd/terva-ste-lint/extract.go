@@ -10,11 +10,15 @@ import (
 )
 
 // Text is one piece of model-visible tool text, with enough position to click.
+//
+// Rules is the policy this piece must satisfy. The zero value is rulesFull, so
+// a producer that says nothing gets every rule.
 type Text struct {
-	File string
-	Line int
-	What string // "Description()" or `schema "description"`
-	Body string
+	File  string
+	Line  int
+	What  string // "Description()" or `schema "description"`
+	Body  string
+	Rules ruleSet
 }
 
 // jsonDescRe pulls description values out of a JSON schema that lives inside a

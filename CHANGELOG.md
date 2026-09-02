@@ -11,6 +11,22 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.132.9](https://github.com/terva-sh/terva/releases/tag/v0.132.9) — 2026-08-31
+
+### Features
+
+- chat: approving a group answers the message that raised the ask
+- connproto: a typing stop signal, gated on a declared feature
+- models: a per-model thinking default, and the level a session is on sticks
+- tiers: see and edit every provider's sub-agent ladder, and a cheap tier for cost
+
+### Fixes
+
+- core: a session rename survives the session's next write
+- sandbox: a managed worktree stays inside the jail it was made for
+- tui: ctrl+s reaches the TUI on modern terminals, and the model picker holds its place
+- web: a streaming row with no speech no longer draws an empty bubble
+
 ## [v0.132.8](https://github.com/terva-sh/terva/releases/tag/v0.132.8) — 2026-08-30
 
 ### Features

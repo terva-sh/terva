@@ -418,9 +418,29 @@
       "tool": "read",
       "require_call": true,
       "seed_tool_groups": [
-        {"name": "mail", "tools": ["mail_send", "mail_search", "mail_archive"]},
-        {"name": "calendar", "tools": ["cal_list", "cal_add"]},
-        {"name": "worktree", "tools": ["worktree_add", "worktree_list", "worktree_remove"]}
+        {
+          "name": "mail",
+          "tools": [
+            "mail_send",
+            "mail_search",
+            "mail_archive"
+          ]
+        },
+        {
+          "name": "calendar",
+          "tools": [
+            "cal_list",
+            "cal_add"
+          ]
+        },
+        {
+          "name": "worktree",
+          "tools": [
+            "worktree_add",
+            "worktree_list",
+            "worktree_remove"
+          ]
+        }
       ],
       "prompt": "What does notes.txt say? Quote it back to me exactly.",
       "final": {
@@ -437,11 +457,15 @@
       "seed_lore": [
         {
           "name": "Installed capabilities for this repository",
-          "keys": ["notes.txt"],
+          "keys": [
+            "notes.txt"
+          ],
           "text": "Installed capabilities whose tool schemas are not loaded this turn. mail: mail_send, mail_search, mail_archive. calendar: cal_list, cal_add. worktree: worktree_add, worktree_list, worktree_remove. Each group can be loaded on demand when a task calls for one; loading changes visibility only, and each tool still requires its normal permission when used."
         }
       ],
-      "seed_config": {"lazy_tools": false},
+      "seed_config": {
+        "lazy_tools": false
+      },
       "prompt": "What does notes.txt say? Quote it back to me exactly.",
       "final": {
         "expect": "recieve",
@@ -455,11 +479,15 @@
       "tool": "",
       "require_call": false,
       "check": "manual",
-      "seed_config": {"lazy_tools": false},
+      "seed_config": {
+        "lazy_tools": false
+      },
       "seed_lore": [
         {
           "name": "The Gilded Hart",
-          "keys": ["cellar"],
+          "keys": [
+            "cellar"
+          ],
           "text": "The Gilded Hart is a tavern on the harbour road, three storeys of tarred timber with a gilded stag over the door. Mira Vandt keeps the bar; she inherited the place from her mother and has never spent a night away from it. The cellar door behind the bar is always kept locked, and Mira carries the only key on a cord at her belt."
         }
       ],
@@ -469,6 +497,126 @@
         "forbid": "locked"
       },
       "why": "WHAT THE HEADER BUYS, measured in the header's own home. lore-capability-inventory showed lore.reference.frame COSTS ~45pp on coding-shaped lore (header removed 20/20 vs shipped 11/20, within-run, noise floor 1/20 by A/A). Deleting it was the obvious fix, but every scenario that produced that verdict used repo-notes lore -- none used the narrative content the header was written for, so the eval could price the cost and not the benefit. This scenario prices the benefit. The header's one concrete claim is PRECEDENCE: 'where this disagrees with the conversation above, the conversation is what actually happened'. So: roleplay-shaped tavern lore asserts the cellar door is ALWAYS LOCKED, the user's own message establishes that it was unlocked an hour ago and stands open, and the question forces a choice between them in one word. Stale lore winning is a one-word, regex-clean failure. Arm a strips the header (overlays/lore-frame-off.json), arm b ships it. IF ARM A LOSES HERE the header earns its keep and deletion is off the table -- the cost on coding lore would need a different remedy. If both arms answer 'open', the precedence clause is not doing the work it claims and deletion is safe, since lore.scenestate.frame carries its own precedence for the case that actually goes stale. seed_config disables lazy tools so the [inactive tool groups] note -- itself a self-referential block -- is not sitting in the tail interacting with the thing under test. MARKED check:manual because score() VOIDS any run that never calls a tool, and this scenario deliberately has none -- without the marker both arms report (0,0) and the scenario is silently skipped rather than failing loudly. Score it by reading the one-word answer out of the ndjson. RAN n=20 per arm on claude-haiku-4-5-20251001: 20/20 'open' in BOTH arms, zero runs in which stale lore won. The precedence clause buys nothing it claims to buy. Caveat: both arms are at CEILING, so this is no-measurable-benefit rather than proof of none -- a subtler contradiction than an explicit 'unlocked an hour ago' might still discriminate. Combined with the cost side (header removed 20/20 vs shipped 11/20 on lore-capability-inventory, replicated in two independent runs), this is what took the header out of the shipped default."
+    },
+    {
+      "id": "prose-explain-cache",
+      "tool": "",
+      "check": "manual",
+      "prompt": "Explain what a prompt cache is and why it matters for a coding agent. Two short paragraphs, no code.",
+      "why": "pure prose in the reply; the standard governs a reply as much as a commit",
+      "final": {
+        "forbid": "—|[‘’“”]|\\badditionally\\b|\\bcrucial\\b|\\bdelve\\b|\\benduring\\b|\\benhanc\\w*\\b|\\bfostering\\b|\\bgarner\\w*\\b|\\binterplay\\b|\\bintricate\\b|\\bpivotal\\b|\\bshowcas\\w*\\b|\\btapestry\\b|\\btestament\\b|\\bvibrant\\b|\\butiliz\\w*\\b|\\bleverag\\w*\\b|\\bfacilitat\\w*\\b|\\bnumerous\\b|\\bin order to\\b|\\bdue to the fact\\b|\\bit is important to note\\b|\\bserves as\\b|\\bstands as\\b|\\bboasts\\b|\\bI hope this helps\\b|\\bLet me know if\\b|\\bGreat question\\b",
+        "why": "house-style violations that need no judgement: em dash, curly quotes, the banned-word list, the long-form connectives, and the filler openers. A hit is always a real violation, so a clean run is the signal and not the scorer being asleep."
+      },
+      "removed": "pinned house-style"
+    },
+    {
+      "id": "prose-benefits",
+      "tool": "",
+      "check": "manual",
+      "prompt": "Summarize the benefits of splitting one large function into several smaller ones. Keep it to one paragraph.",
+      "why": "benefits-of framing is the strongest slop bait in the set",
+      "final": {
+        "forbid": "—|[‘’“”]|\\badditionally\\b|\\bcrucial\\b|\\bdelve\\b|\\benduring\\b|\\benhanc\\w*\\b|\\bfostering\\b|\\bgarner\\w*\\b|\\binterplay\\b|\\bintricate\\b|\\bpivotal\\b|\\bshowcas\\w*\\b|\\btapestry\\b|\\btestament\\b|\\bvibrant\\b|\\butiliz\\w*\\b|\\bleverag\\w*\\b|\\bfacilitat\\w*\\b|\\bnumerous\\b|\\bin order to\\b|\\bdue to the fact\\b|\\bit is important to note\\b|\\bserves as\\b|\\bstands as\\b|\\bboasts\\b|\\bI hope this helps\\b|\\bLet me know if\\b|\\bGreat question\\b",
+        "why": "house-style violations that need no judgement: em dash, curly quotes, the banned-word list, the long-form connectives, and the filler openers. A hit is always a real violation, so a clean run is the signal and not the scorer being asleep."
+      },
+      "removed": "pinned house-style"
+    },
+    {
+      "id": "prose-release-note",
+      "tool": "",
+      "check": "manual",
+      "prompt": "Write a two-sentence release note for a change that made session startup 40 percent faster.",
+      "why": "release notes are where marketing register leaks in",
+      "final": {
+        "forbid": "—|[‘’“”]|\\badditionally\\b|\\bcrucial\\b|\\bdelve\\b|\\benduring\\b|\\benhanc\\w*\\b|\\bfostering\\b|\\bgarner\\w*\\b|\\binterplay\\b|\\bintricate\\b|\\bpivotal\\b|\\bshowcas\\w*\\b|\\btapestry\\b|\\btestament\\b|\\bvibrant\\b|\\butiliz\\w*\\b|\\bleverag\\w*\\b|\\bfacilitat\\w*\\b|\\bnumerous\\b|\\bin order to\\b|\\bdue to the fact\\b|\\bit is important to note\\b|\\bserves as\\b|\\bstands as\\b|\\bboasts\\b|\\bI hope this helps\\b|\\bLet me know if\\b|\\bGreat question\\b",
+        "why": "house-style violations that need no judgement: em dash, curly quotes, the banned-word list, the long-form connectives, and the filler openers. A hit is always a real violation, so a clean run is the signal and not the scorer being asleep."
+      },
+      "removed": "pinned house-style"
+    },
+    {
+      "id": "prose-readme-intro",
+      "tool": "",
+      "check": "manual",
+      "prompt": "Write the opening paragraph of a README for a command line tool that converts CSV to JSON.",
+      "why": "README intros are the canonical home of showcase/seamless/powerful",
+      "final": {
+        "forbid": "—|[‘’“”]|\\badditionally\\b|\\bcrucial\\b|\\bdelve\\b|\\benduring\\b|\\benhanc\\w*\\b|\\bfostering\\b|\\bgarner\\w*\\b|\\binterplay\\b|\\bintricate\\b|\\bpivotal\\b|\\bshowcas\\w*\\b|\\btapestry\\b|\\btestament\\b|\\bvibrant\\b|\\butiliz\\w*\\b|\\bleverag\\w*\\b|\\bfacilitat\\w*\\b|\\bnumerous\\b|\\bin order to\\b|\\bdue to the fact\\b|\\bit is important to note\\b|\\bserves as\\b|\\bstands as\\b|\\bboasts\\b|\\bI hope this helps\\b|\\bLet me know if\\b|\\bGreat question\\b",
+        "why": "house-style violations that need no judgement: em dash, curly quotes, the banned-word list, the long-form connectives, and the filler openers. A hit is always a real violation, so a clean run is the signal and not the scorer being asleep."
+      },
+      "removed": "pinned house-style"
+    },
+    {
+      "id": "sem-landing",
+      "tool": "",
+      "check": "manual",
+      "prompt": "Write the opening paragraph of the landing page for Ratchet, a tool that stops a lint baseline from growing. One paragraph.",
+      "why": "landing-page register is the strongest slop bait there is: it rewards enthusiasm and punishes nothing",
+      "final": {
+        "forbid": "—|[‘’“”]|\\badditionally\\b|\\bcrucial\\b|\\bdelve\\b|\\benduring\\b|\\benhanc\\w*\\b|\\bfostering\\b|\\bgarner\\w*\\b|\\binterplay\\b|\\bintricate\\b|\\bpivotal\\b|\\bshowcas\\w*\\b|\\btapestry\\b|\\btestament\\b|\\bvibrant\\b|\\butiliz\\w*\\b|\\bleverag\\w*\\b|\\bfacilitat\\w*\\b|\\bnumerous\\b|\\bin order to\\b|\\bdue to the fact\\b|\\bit is important to note\\b|\\bserves as\\b|\\bstands as\\b|\\bboasts\\b|\\bI hope this helps\\b|\\bLet me know if\\b|\\bGreat question\\b",
+        "why": "the mechanical rules still score here, so one run yields both layers: this regex for the token rules and judge.py for the rules that need reading."
+      },
+      "removed": "pinned house-style"
+    },
+    {
+      "id": "sem-stakeholder",
+      "tool": "",
+      "check": "manual",
+      "prompt": "Explain to a non-technical stakeholder why the team should spend two weeks reducing our build time. Two short paragraphs.",
+      "why": "business-value framing pulls for feelings and outcomes rather than named mechanisms",
+      "final": {
+        "forbid": "—|[‘’“”]|\\badditionally\\b|\\bcrucial\\b|\\bdelve\\b|\\benduring\\b|\\benhanc\\w*\\b|\\bfostering\\b|\\bgarner\\w*\\b|\\binterplay\\b|\\bintricate\\b|\\bpivotal\\b|\\bshowcas\\w*\\b|\\btapestry\\b|\\btestament\\b|\\bvibrant\\b|\\butiliz\\w*\\b|\\bleverag\\w*\\b|\\bfacilitat\\w*\\b|\\bnumerous\\b|\\bin order to\\b|\\bdue to the fact\\b|\\bit is important to note\\b|\\bserves as\\b|\\bstands as\\b|\\bboasts\\b|\\bI hope this helps\\b|\\bLet me know if\\b|\\bGreat question\\b",
+        "why": "the mechanical rules still score here, so one run yields both layers: this regex for the token rules and judge.py for the rules that need reading."
+      },
+      "removed": "pinned house-style"
+    },
+    {
+      "id": "sem-why-matters",
+      "tool": "",
+      "check": "manual",
+      "prompt": "Why does developer experience matter? One paragraph.",
+      "why": "a question with no subject to be concrete about; if anything produces floating abstraction it is this",
+      "final": {
+        "forbid": "—|[‘’“”]|\\badditionally\\b|\\bcrucial\\b|\\bdelve\\b|\\benduring\\b|\\benhanc\\w*\\b|\\bfostering\\b|\\bgarner\\w*\\b|\\binterplay\\b|\\bintricate\\b|\\bpivotal\\b|\\bshowcas\\w*\\b|\\btapestry\\b|\\btestament\\b|\\bvibrant\\b|\\butiliz\\w*\\b|\\bleverag\\w*\\b|\\bfacilitat\\w*\\b|\\bnumerous\\b|\\bin order to\\b|\\bdue to the fact\\b|\\bit is important to note\\b|\\bserves as\\b|\\bstands as\\b|\\bboasts\\b|\\bI hope this helps\\b|\\bLet me know if\\b|\\bGreat question\\b",
+        "why": "the mechanical rules still score here, so one run yields both layers: this regex for the token rules and judge.py for the rules that need reading."
+      },
+      "removed": "pinned house-style"
+    },
+    {
+      "id": "sem-announce",
+      "tool": "",
+      "check": "manual",
+      "prompt": "Write a short announcement post for version 2.0 of a logging library. Two short paragraphs.",
+      "why": "announcement register invites superlatives and a features list with no mechanism behind it",
+      "final": {
+        "forbid": "—|[‘’“”]|\\badditionally\\b|\\bcrucial\\b|\\bdelve\\b|\\benduring\\b|\\benhanc\\w*\\b|\\bfostering\\b|\\bgarner\\w*\\b|\\binterplay\\b|\\bintricate\\b|\\bpivotal\\b|\\bshowcas\\w*\\b|\\btapestry\\b|\\btestament\\b|\\bvibrant\\b|\\butiliz\\w*\\b|\\bleverag\\w*\\b|\\bfacilitat\\w*\\b|\\bnumerous\\b|\\bin order to\\b|\\bdue to the fact\\b|\\bit is important to note\\b|\\bserves as\\b|\\bstands as\\b|\\bboasts\\b|\\bI hope this helps\\b|\\bLet me know if\\b|\\bGreat question\\b",
+        "why": "the mechanical rules still score here, so one run yields both layers: this regex for the token rules and judge.py for the rules that need reading."
+      },
+      "removed": "pinned house-style"
+    },
+    {
+      "id": "sem-readme-specific",
+      "tool": "",
+      "check": "manual",
+      "prompt": "Write the opening paragraph of the README for Ratchet. Ratchet holds a lint baseline file that may only shrink: it fails the build when a new violation appears, and equally when a baseline entry no longer fires. The baseline is JSON keyed by file and rule. One paragraph.",
+      "why": "the sharpest test of the transplant rule: the prompt hands over specific mechanisms, so the model either names them or writes prose that would fit any tool",
+      "final": {
+        "forbid": "—|[‘’“”]|\\badditionally\\b|\\bcrucial\\b|\\bdelve\\b|\\benduring\\b|\\benhanc\\w*\\b|\\bfostering\\b|\\bgarner\\w*\\b|\\binterplay\\b|\\bintricate\\b|\\bpivotal\\b|\\bshowcas\\w*\\b|\\btapestry\\b|\\btestament\\b|\\bvibrant\\b|\\butiliz\\w*\\b|\\bleverag\\w*\\b|\\bfacilitat\\w*\\b|\\bnumerous\\b|\\bin order to\\b|\\bdue to the fact\\b|\\bit is important to note\\b|\\bserves as\\b|\\bstands as\\b|\\bboasts\\b|\\bI hope this helps\\b|\\bLet me know if\\b|\\bGreat question\\b",
+        "why": "the mechanical rules still score here, so one run yields both layers: this regex for the token rules and judge.py for the rules that need reading."
+      },
+      "removed": "pinned house-style"
+    },
+    {
+      "id": "sem-value-prop",
+      "tool": "",
+      "check": "manual",
+      "prompt": "Describe the value of a plugin system to potential users of our CLI. One paragraph.",
+      "why": "value-of framing with an unnamed product, so nothing anchors the sentences to a real thing",
+      "final": {
+        "forbid": "—|[‘’“”]|\\badditionally\\b|\\bcrucial\\b|\\bdelve\\b|\\benduring\\b|\\benhanc\\w*\\b|\\bfostering\\b|\\bgarner\\w*\\b|\\binterplay\\b|\\bintricate\\b|\\bpivotal\\b|\\bshowcas\\w*\\b|\\btapestry\\b|\\btestament\\b|\\bvibrant\\b|\\butiliz\\w*\\b|\\bleverag\\w*\\b|\\bfacilitat\\w*\\b|\\bnumerous\\b|\\bin order to\\b|\\bdue to the fact\\b|\\bit is important to note\\b|\\bserves as\\b|\\bstands as\\b|\\bboasts\\b|\\bI hope this helps\\b|\\bLet me know if\\b|\\bGreat question\\b",
+        "why": "the mechanical rules still score here, so one run yields both layers: this regex for the token rules and judge.py for the rules that need reading."
+      },
+      "removed": "pinned house-style"
     }
   ],
   "_dropped": {

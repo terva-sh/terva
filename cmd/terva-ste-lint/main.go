@@ -215,11 +215,18 @@ func collect(root string) ([]Text, error) {
 			out = append(out, ts...)
 		}
 	}
-	skills, err := collectSkillDescriptions(root)
+	// Not named "skills": that identifier is the imported package this file's
+	// sibling reads DefaultAlwaysOn from, and shadowing it here reads as a bug.
+	descs, err := collectSkillDescriptions(root)
 	if err != nil {
 		return nil, err
 	}
-	out = append(out, skills...)
+	out = append(out, descs...)
+	pinned, err := collectPinnedSkillBodies(root)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, pinned...)
 	agents, err := collectAgentsMD(root)
 	if err != nil {
 		return nil, err

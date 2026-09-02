@@ -240,6 +240,24 @@ def main(outdir):
     print("-" * 84)
     manual, totals = [], {"a": [0, 0], "b": [0, 0]}
     ftotals = {"a": [0, 0], "b": [0, 0]}
+
+    def has_final(sid):
+        return sid in fin and any(v is not None for arm in ("a", "b")
+                                  for v in fin[sid].get(arm, []))
+
+    def print_final_row(sid):
+        frow = {}
+        for arm in ("a", "b"):
+            vals = [v for v in fin[sid].get(arm, []) if v is not None]
+            frow[arm] = (sum(vals), len(vals))
+            ftotals[arm][0] += sum(vals)
+            ftotals[arm][1] += len(vals)
+        fo, fn = frow["a"], frow["b"]
+        fop = fo[0] / fo[1] if fo[1] else 0
+        fnp = fn[0] / fn[1] if fn[1] else 0
+        print(f"{'  ... final answer':26}{'':22}{fo[0]}/{fo[1]:<8}{fn[0]}/{fn[1]:<8} "
+              f"{verdict_for(fop, fnp)}")
+
     for sid in [s["id"] for s in SPEC]:
         arms = res.get(sid)
         if not arms:
@@ -253,27 +271,26 @@ def main(outdir):
         if row["a"][1] == 0 and row["b"][1] == 0:
             manual.append(sid + " (no scorable run: the tool was never called)"
                           if BYID[sid].get("check") != "manual" else sid)
+            # A scenario can be unscorable at the CALL and still carry a
+            # scorable answer. A prose scenario expects no tool at all, so
+            # every call scores None by design and the answer is the whole
+            # measurement. Returning here once discarded a finished 64-run
+            # experiment and reported it as "read by hand".
+            if has_final(sid):
+                print(f"{sid:26}{BYID[sid].get('removed', '')[:20]:22}"
+                      f"{'-':>9} {'-':>9}   (call unscored)")
+                print_final_row(sid)
             continue
         o, n = row["a"], row["b"]
         op = o[0] / o[1] if o[1] else 0
         np_ = n[0] / n[1] if n[1] else 0
-        print(f"{sid:26}{BYID[sid]['removed'][:20]:22}{o[0]}/{o[1]:<8}{n[0]}/{n[1]:<8} "
+        print(f"{sid:26}{BYID[sid].get('removed', '')[:20]:22}{o[0]}/{o[1]:<8}{n[0]}/{n[1]:<8} "
               f"{verdict_for(op, np_)}")
         # The final-answer row sits directly under its scenario's call row so
         # the pair reads as one experiment. They are tallied apart: mixing the
         # two would let a fixed answer mask a broken call, or the reverse.
         if sid in fin:
-            frow = {}
-            for arm in ("a", "b"):
-                vals = [v for v in fin[sid].get(arm, []) if v is not None]
-                frow[arm] = (sum(vals), len(vals))
-                ftotals[arm][0] += sum(vals)
-                ftotals[arm][1] += len(vals)
-            fo, fn = frow["a"], frow["b"]
-            fop = fo[0] / fo[1] if fo[1] else 0
-            fnp = fn[0] / fn[1] if fn[1] else 0
-            print(f"{'  ... final answer':26}{'':22}{fo[0]}/{fo[1]:<8}{fn[0]}/{fn[1]:<8} "
-                  f"{verdict_for(fop, fnp)}")
+            print_final_row(sid)
 
     print("-" * 84)
     for arm in ("a", "b"):
