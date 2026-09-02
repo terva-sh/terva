@@ -78,6 +78,8 @@ This cwd is later used for:
    - If docs are installed, a sentence points the agent at `$TERVA_HOME/docs`.
 3. **Append blocks**
    - Literal `--append-system-prompt` values.
+   - Startup context files.
+   - Always-on skill bodies, if any are pinned.
    - Auto-loaded `AGENTS.md` instructions.
    - Skill manifest.
    - Auto-swarm instruction addendum, if enabled.
@@ -172,6 +174,16 @@ Project-local paths are checked under the effective cwd only; unlike `AGENTS.md`
 First match wins per skill name. User-installed skills shadow built-in skills with the same name.
 
 At startup terva does **not** inject every skill body into the prompt. Instead it appends a compact manifest containing skill names, descriptions, and source pointers. The full body is loaded later only if the model calls the built-in `skill` tool.
+
+### Always-on skills
+
+A skill named in the user-scope `always_on_skills` config key is the exception. Its whole body joins the system prompt at session build, and it is **dropped from the manifest**, because a description line advertising text the model already has only invites a wasted `skill` call. The `skill` tool still resolves the name if the model asks.
+
+The body lands after the startup context files and before every `AGENTS.md`. That order makes each `AGENTS.md`, global then project, the more specific layer, so a repository can refine a pinned standard with a short delta instead of a forked copy of the whole body.
+
+With no `always_on_skills` key set, terva pins `house-style`. An explicit empty list pins nothing. `--no-always-on-skills` suppresses pinning for one run and `--pin-skill NAME` adds one; `--no-skill` and `--no-builtin-skills` suppress it as a side effect. Only built-in and user skills may be pinned, plus a project skill that shadows a listed name.
+
+A pinned body is roughly 1,400 tokens for `house-style`, in the frozen prefix of every request. Editing it discards the provider's prompt cache the same way a manifest change does. See [skills.md](skills.md) for the operator-facing detail.
 
 Parsed skill frontmatter includes fields such as `name`, `description`, `allowed-tools`, and `permissions`. The two are not in the same state, and the difference matters:
 

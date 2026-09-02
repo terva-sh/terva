@@ -156,6 +156,8 @@ func PrintHelp(version string) {
 		row{"--tools csv", i18n.T("only enable the listed (built-in) tools")},
 		row{"--no-skill", i18n.T("skip all skill discovery for this run")},
 		row{"--no-builtin-skills", i18n.T("skip only the built-in skills; user and project skills still load")},
+		row{"--no-always-on-skills", i18n.T("do not pin any always-on skill body into the prompt for this run; the skills stay loadable on demand")},
+		row{"--pin-skill NAME", i18n.T("pin one more skill body into the prompt for this run; repeatable, adds to the always_on_skills config")},
 		row{"--no-lore", i18n.T("skip all lore (keyed-context) discovery + injection for this run")},
 		row{"--no-memory", i18n.T("disable durable memory for this run: no memory tool, no injection, nothing read or written")},
 		row{"--approval plan|ask|auto-edit|workspace|yolo", i18n.T("approval mode: plan = read-only only, ask = confirm everything, auto-edit = confirm non-edit tools, workspace = run built-ins + reads, confirm foreign side-effects (interactive default), yolo = run freely. See docs/permissions.md")},

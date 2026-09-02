@@ -76,6 +76,19 @@ const (
 // reference. Reserved: a SKILL.md may not put it in its own name.
 const nameSep = ":"
 
+// DefaultAlwaysOn names the skills terva pins into the system prompt when the
+// operator has expressed no opinion. It is the fallback for a nil
+// `always_on_skills` config value, and an explicit empty list overrides it.
+//
+// This is the single definition of that default. The config layer holds the
+// operator's value and applies no policy, the build layer chooses between the
+// two, and cmd/terva-ste-lint reads this list to decide which body it enrolls.
+// A second copy of these names would drift.
+//
+// A pinned body costs roughly 1400 tokens in every request of every session,
+// so an addition here is expensive. See docs/proposals/always-on-skills.md.
+var DefaultAlwaysOn = []string{"house-style"}
+
 // Skill is one discovered SKILL.md file.
 type Skill struct {
 	// Name is the skill identifier — what the model uses when it
@@ -104,6 +117,20 @@ type Skill struct {
 	// came from ("project", "global", "project (claude)", etc.).
 	// Shown in the /skills picker.
 	Source string
+
+	// Project marks a skill that came from a cwd-anchored directory:
+	// ./.terva/skills, ./.claude/skills, ./.agents/skills, or a project
+	// extension bundle. A cloned repository controls those, so workspace
+	// trust gates them at discovery, and always-on pinning refuses them
+	// unless they shadow a name the operator listed. See ResolveAlwaysOn.
+	Project bool
+
+	// Pinned marks a skill whose BODY this session put in the system prompt,
+	// rather than only its description in the manifest. Set by
+	// ResolveAlwaysOn, which is the one place that decides it, and read by
+	// user-facing surfaces so a pinned skill does not look like an ordinary
+	// one that the model simply never loads.
+	Pinned bool
 
 	// Builtin marks skills that ship inside the terva binary. They are
 	// fully active for the model (system-prompt manifest + skill
@@ -506,6 +533,10 @@ type tier struct {
 	label     string // human-facing Source
 	namespace string
 	builtin   bool
+	// project marks a cwd-anchored rung. It drives Skill.Project, which
+	// gates always-on pinning. Do not infer this from label: label is a
+	// display string, and a wording change must not move a gate.
+	project bool
 }
 
 // discoveryTiers lists the discovery rungs in priority order.
@@ -526,22 +557,22 @@ type tier struct {
 func discoveryTiers(tervaHome, cwd, userHome string, includeUser, includeBuiltin bool, gate Gate) []tier {
 	trustProject := gate.TrustProject
 	var out []tier
-	add := func(dir, label, namespace string) {
+	add := func(dir, label, namespace string, project bool) {
 		if dir == "" {
 			return
 		}
-		out = append(out, tier{dir: dir, label: label, namespace: namespace})
+		out = append(out, tier{dir: dir, label: label, namespace: namespace, project: project})
 	}
 	if includeUser {
 		if cwd != "" && trustProject {
 			// Both project-dir spellings, new name first (the rename's
 			// dual-read seam; see envcompat.ProjectDirNames).
 			for _, dirName := range envcompat.ProjectDirNames() {
-				add(filepath.Join(cwd, dirName, "skills"), "project", NamespaceTerva)
+				add(filepath.Join(cwd, dirName, "skills"), "project", NamespaceTerva, true)
 			}
 		}
 		if tervaHome != "" {
-			add(filepath.Join(tervaHome, "skills"), "global", NamespaceTerva)
+			add(filepath.Join(tervaHome, "skills"), "global", NamespaceTerva, false)
 		}
 	}
 	if includeBuiltin {
@@ -560,16 +591,16 @@ func discoveryTiers(tervaHome, cwd, userHome string, includeUser, includeBuiltin
 	// can't either.
 	out = append(out, extensionSkillTiers(tervaHome, cwd, gate)...)
 	if cwd != "" && trustProject {
-		add(filepath.Join(cwd, ".claude", "skills"), "project (claude)", NamespaceClaude)
+		add(filepath.Join(cwd, ".claude", "skills"), "project (claude)", NamespaceClaude, true)
 	}
 	if userHome != "" {
-		add(filepath.Join(userHome, ".claude", "skills"), "global (claude)", NamespaceClaude)
+		add(filepath.Join(userHome, ".claude", "skills"), "global (claude)", NamespaceClaude, false)
 	}
 	if cwd != "" && trustProject {
-		add(filepath.Join(cwd, ".agents", "skills"), "project (agents)", NamespaceAgents)
+		add(filepath.Join(cwd, ".agents", "skills"), "project (agents)", NamespaceAgents, true)
 	}
 	if userHome != "" {
-		add(filepath.Join(userHome, ".agents", "skills"), "global (agents)", NamespaceAgents)
+		add(filepath.Join(userHome, ".agents", "skills"), "global (agents)", NamespaceAgents, false)
 	}
 	return out
 }
@@ -603,6 +634,7 @@ func scanTier(t tier) ([]*Skill, []error) {
 		if s.Name == "" {
 			s.Name = sanitizeName(e.Name())
 		}
+		s.Project = t.project
 		out = append(out, s)
 	}
 	return out, errs
@@ -629,8 +661,9 @@ func extensionSkillTiers(tervaHome, cwd string, gate Gate) []tier {
 			continue
 		}
 		out = append(out, tier{
-			dir:   skillsDir,
-			label: "extension",
+			dir:     skillsDir,
+			label:   "extension",
+			project: r.Project,
 			// 🪤 The DIRECTORY name, not extroots' preferred name. Persona
 			// namespaces by the manifest name; changing either here would
 			// rename live refs, so the mismatch is recorded in extroots.Root

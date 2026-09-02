@@ -295,6 +295,105 @@ You can prompt the model directly to use a skill (e.g. "use the
 code-review skill") but you don't have to — the descriptions in the
 manifest are enough for it to choose on its own.
 
+## Always-on skills
+
+The loop above assumes a skill is a procedure the model reaches for. That holds
+for `handoff` and every `write-terva-*` skill. It breaks for a skill that is a
+constraint on output, such as a prose standard: it has to be in context before
+the first token exists, and a skill the model loads two times in five does
+nothing on the three turns it was for.
+
+So terva can pin a skill's whole **body** into the system prompt at session
+build. A pinned skill needs no `skill` call, and it leaves the manifest, because
+a description line advertising text the model already has invites a wasted call.
+
+The choice belongs to the operator, not the skill author, because the operator
+pays the tokens:
+
+```jsonc
+// $TERVA_HOME/config.json
+{
+  "always_on_skills": ["house-style", "my-team-standard"]
+}
+```
+
+**Unset is not the same as empty.** With no `always_on_skills` key, terva pins
+its shipped default, `house-style`. To pin nothing, set the key to an explicit
+empty list:
+
+```jsonc
+{ "always_on_skills": [] }
+```
+
+The key is user-scope only. A project's `.terva/config.json` cannot set it,
+because a cloned repository writes that file and a pinned body enters the prompt
+with no model decision in front of it.
+
+### Where the body lands
+
+After the startup context files, before every `AGENTS.md`. So a project's
+`AGENTS.md` is the more specific layer and refines the pinned standard, which
+lets a repository carry its own carve-out as a few lines instead of forking the
+whole body. See [context-construction.md](context-construction.md).
+
+### Which skills may be pinned
+
+Built-in and user skills. A project skill is refused, with one exception: a
+project skill that **shadows** a built-in or user skill of a name you listed is
+pinned, because you named a name that exists at an allowed tier and the
+shadowing ladder is doing what it is for.
+
+Workspace trust already drops project skills from discovery in an untrusted
+workspace, so this is the second of two gates.
+
+### Per-session overrides
+
+```bash
+terva --no-always-on-skills     # pin nothing this run; skills stay loadable
+terva --pin-skill my-standard   # pin one more this run; repeatable
+```
+
+`--pin-skill` adds to the config list rather than replacing it.
+`--no-always-on-skills` beats both. `--no-skill` and `--no-builtin-skills`
+suppress pinning as a side effect, since a skill that never loads cannot pin.
+
+### Seeing what is pinned
+
+`/skills` marks a pinned row. `terva doctor` reports the count, where the list
+came from, how many characters it adds to every request, and any name that was
+refused or that matched nothing:
+
+```text
+  always-on      1 pinned (shipped default) · 5383 characters in every request
+                 "house-style" pinned from built-in
+```
+
+That last line matters because every other symptom of a mistyped name is
+silence. A pinned skill leaves the manifest, so a typo does not fall back to
+on-demand loading with a warning. The skill simply stops being present.
+
+### The cost
+
+A pinned body sits in the frozen prefix of every request for the life of the
+session. `house-style` is about 5,400 characters, roughly 1,400 tokens. Editing
+a pinned body also discards the provider's prompt cache, which body edits do not
+do today. Pin deliberately.
+
+### Replacing the shipped default
+
+`house-style` is opinionated, and one person's taste is the default for every
+operator. The override paths are the ordinary skill ones:
+
+- Write `$TERVA_HOME/skills/house-style/SKILL.md`. It outranks the built-in
+  everywhere, and it is what gets pinned.
+- Write `./.terva/skills/house-style/SKILL.md` to override it for one repository.
+- Name your own skill in `always_on_skills` instead, and the built-in is not
+  pinned at all.
+- Set `always_on_skills` to `[]` to pin nothing.
+
+Shadowing is all or nothing, so disagreeing with one rule means copying the
+whole file. That is a real gap and it is known.
+
 ## Writing good skills
 
 - **Be procedural.** Number steps. Tell the model what to do in what

@@ -49,6 +49,7 @@ func TestEveryStringConfigFieldIsClassified(t *testing.T) {
 		"endpoints.*.apiKeyEnv":         "the NAME of an env var, not its value — pointing at a secret is the sanctioned alternative to holding one",
 		"mcp.servers.*.auth.bearer_env": "likewise a variable name, not a token",
 
+		"always_on_skills[]":                "skill names; the bodies they pin are files terva already reads",
 		"approval":                          "a policy word (ask/allow/deny)",
 		"auto_compact":                      "a mode word",
 		"auto_title_model":                  "a model id",

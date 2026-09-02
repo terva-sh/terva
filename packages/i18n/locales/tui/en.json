@@ -443,6 +443,7 @@
   "pick a session (↑/↓, enter resume, r rename, g title, a archive, d delete, A archived, esc cancel)": "pick a session (↑/↓, enter resume, r rename, g title, a archive, d delete, A archived, esc cancel)",
   "pick a session (↑/↓, pgup/pgdn, enter resume, r rename, g generate title, esc cancel)": "pick a session (↑/↓, pgup/pgdn, enter resume, r rename, g generate title, esc cancel)",
   "pick an action (↑/↓, enter, esc to cancel):": "pick an action (↑/↓, enter, esc to cancel):",
+  "pinned, body always in the prompt — %s": "pinned, body always in the prompt — %s",
   "pop the last queued message back into the input": "pop the last queued message back into the input",
   "powershell.exe not on PATH (WSL interop disabled?)": "powershell.exe not on PATH (WSL interop disabled?)",
   "press any key to close": "press any key to close",

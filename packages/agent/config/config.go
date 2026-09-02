@@ -273,6 +273,24 @@ type Config struct {
 	// absolute. See ResolveConfig / readStartupContextFiles.
 	ContextFiles []string `json:"context_files,omitempty"`
 
+	// AlwaysOnSkills names the skills whose BODY terva pins into the
+	// system prompt at session build, instead of only their description
+	// joining the manifest. It is user-scope only: a project's
+	// .terva/config.json cannot set it, because a pinned body enters the
+	// prompt with no model decision in front of it, and a cloned repo
+	// controls the project layer.
+	//
+	// The pointer carries the meaning, so do not simplify it to []string.
+	// nil means the operator has no opinion, and the build layer falls back
+	// to skills.DefaultAlwaysOn. An explicit [] means pin nothing, which is
+	// how an operator turns the shipped default off. A plain slice cannot
+	// tell those apart, and the refactor would silently switch the default
+	// back on for everyone who opted out.
+	//
+	// A pinned body costs roughly 1400 tokens in every request of every
+	// session. See docs/proposals/always-on-skills.md.
+	AlwaysOnSkills *[]string `json:"always_on_skills,omitempty"`
+
 	// DisableContextExtensions lists extensions whose context
 	// contributions (register_context + context cards) the host ignores,
 	// even though their tools, commands, and panels keep working.

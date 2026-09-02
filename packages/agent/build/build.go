@@ -1061,9 +1061,11 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// system prompt, no `skill` tool in the registry. Useful for a
 	// clean-room run with zero extra context biasing the model.
 	var (
-		discovered    []*skills.Skill
-		skillTool     *skills.Tool
-		skillAddendum string
+		discovered     []*skills.Skill
+		skillTool      *skills.Tool
+		skillAddendum  string
+		pinnedAddendum string
+		pinSet         skills.PinSet
 	)
 	// Skills are a coding-workflow concept; chat/play modes drop them along
 	// with the built-in tools. --no-tools likewise drops the skill tool (it's
@@ -1077,9 +1079,23 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		discovered, _ = skills.Discover(config.TervaHome(), args.CWD, homeDir, args.WithSkills, !args.NoBuiltinSkills,
 			skills.Gate{TrustProject: trusted, Disabled: eff.Config.DisableExtensions})
 		if len(discovered) > 0 {
+			// The tool keeps the FULL set. A pinned skill leaves the
+			// manifest, but it stays loadable by name, and its shadowed
+			// alternatives stay reachable by qualified name.
 			skillTool = skills.NewTool(discovered)
 			reg[skillTool.Name()] = skillTool
-			skillAddendum = skills.SystemPromptAddendum(discovered)
+
+			// eff.Config, not cfg: settings read through the layered view.
+			// always_on_skills is user-scope only, so ProjectConfig has no
+			// such field and the layered value is the user's own.
+			pinSet = skills.ResolveAlwaysOn(discovered,
+				skills.AlwaysOnNames(eff.Config.AlwaysOnSkills, args.PinSkills, args.NoAlwaysOnSkills))
+			pinnedAddendum = skills.AlwaysOnAddendum(pinSet.Skills)
+
+			// A pinned body is already in the prompt, so its manifest line
+			// would advertise text the model can read and invite a wasted
+			// `skill` call to fetch it again.
+			skillAddendum = skills.SystemPromptAddendum(skills.Excluding(discovered, pinSet.Skills))
 		}
 	}
 	_ = skillTool
@@ -1106,6 +1122,24 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		return Resolved{}, err
 	} else if ctxBlock != "" {
 		append_ = append(append_, PromptSegment{Source: SourceContextFiles, Text: ctxBlock, Origin: ctxOrigin})
+	}
+	// Always-on skill bodies land HERE: after the context files, before every
+	// AGENTS.md. Two reasons, and they agree.
+	//
+	// It reproduces the position that already works. An operator running this
+	// standard out of $TERVA_HOME/AGENTS.md had it at the head of the AGENTS.md
+	// block, which is the next slot down; moving to the config key keeps the
+	// assembled prompt the same shape.
+	//
+	// And it reads right. Every AGENTS.md, global then project, lands after the
+	// pin and refines it, which is what lets a repository keep its own carve-out
+	// as a short delta instead of a forked copy of the whole standard.
+	//
+	// The open question is recency: a constraint on OUTPUT may bind less from
+	// this far up the prompt. That belongs to docs/proposals/tail-ordering.md and
+	// an eval, not to a guess here. See docs/proposals/always-on-skills.md.
+	if pinnedAddendum != "" {
+		append_ = append(append_, PromptSegment{Source: SourcePinnedSkills, Text: pinnedAddendum})
 	}
 	// AGENTS.md is repo coding policy; chat/play sessions aren't working in the
 	// repo, so don't let a stray AGENTS.md steer a conversation or a roleplay.

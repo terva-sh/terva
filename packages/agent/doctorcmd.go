@@ -89,6 +89,7 @@ func runDoctor(w io.Writer, opts doctorOptions) error {
 	reportConfigPerms(w)
 	reportSecretsPosture(w)
 	reportSkillCollisions(w)
+	reportAlwaysOnSkills(w)
 	return nil
 }
 
@@ -130,6 +131,59 @@ func reportSkillCollisions(w io.Writer) {
 			doctorLine(w, "", fmt.Sprintf("%q resolves to %s; %s is shadowed (load it as %s)",
 				winner.Name, winner.Qualified(), loser.Source, loser.Qualified()))
 		}
+	}
+}
+
+// reportAlwaysOnSkills reports which skill BODIES this directory pins into the
+// system prompt.
+//
+// Every other symptom of getting this wrong is silence. A pinned skill leaves
+// the manifest, so a mistyped name does not fall back to on-demand loading with
+// a warning: the skill simply stops being present, and the only evidence is
+// prose that slowly drifts. A refused name is worse, because the operator asked
+// for something terva declined on trust grounds and nothing said so.
+//
+// It resolves against the same trust verdict a session here would, and it
+// reports the config-level answer. The two per-run flags are not visible from
+// another process.
+func reportAlwaysOnSkills(w io.Writer) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		doctorLine(w, "always-on", "unknown — "+err.Error())
+		return
+	}
+	userHome, _ := os.UserHomeDir()
+	trusted := permissions.ResolveTrustState(cwd, false).IsTrusted()
+	eff := config.ResolveConfig(cwd, trusted)
+
+	source := "shipped default"
+	if eff.Config.AlwaysOnSkills != nil {
+		source = "always_on_skills in config.json"
+	}
+	names := skills.AlwaysOnNames(eff.Config.AlwaysOnSkills, nil, false)
+	if len(names) == 0 {
+		doctorLine(w, "always-on", "none pinned ("+source+")")
+		return
+	}
+
+	found, _ := skills.Discover(config.TervaHome(), cwd, userHome, true, true,
+		skills.Gate{TrustProject: trusted, Disabled: eff.Config.DisableExtensions})
+	set := skills.ResolveAlwaysOn(found, names)
+
+	var chars int
+	for _, s := range set.Skills {
+		chars += len(s.Body)
+	}
+	doctorLine(w, "always-on", fmt.Sprintf("%d pinned (%s) · %d characters in every request",
+		len(set.Skills), source, chars))
+	for _, s := range set.Skills {
+		doctorLine(w, "", fmt.Sprintf("%q pinned from %s", s.Name, s.Source))
+	}
+	for _, n := range set.Refused {
+		doctorLine(w, "", fmt.Sprintf("%q refused: it resolves only to a project skill, and a project cannot pin a body", n))
+	}
+	for _, n := range set.Missing {
+		doctorLine(w, "", fmt.Sprintf("%q pins nothing: no skill of that name loads here", n))
 	}
 }
 

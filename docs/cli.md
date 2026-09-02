@@ -83,6 +83,8 @@ all in [Modes](#modes) below.
 | `--no-tools` | All three building blocks above together (plus the `skill` tool) — no tools at all. |
 | `--no-skill` | Disable all skills, including built-ins. No `skill` tool is registered and the system prompt has no skill manifest. |
 | `--no-builtin-skills` | Drop only the skills compiled into the binary; user and project skills still load. |
+| `--no-always-on-skills` | Pin no skill body into the system prompt for this run. Discovery is untouched, so the skills stay loadable on demand and return to the manifest. See [skills.md](skills.md#always-on-skills). |
+| `--pin-skill <name>` | Pin one more skill body into the system prompt for this run (repeatable). Adds to the `always_on_skills` config rather than replacing it; `--no-always-on-skills` overrides it. |
 | `--tools <csv>` | Only enable the listed (built-in) tools. |
 | `--chat` | Conversational meta-mode: all tools off + a talk-naturally, non-coding identity, for fronting a conversation with a persona or card. Mutually exclusive with `--play`. See [personas.md](personas.md#chat-and-play-modes). |
 | `--play` | Roleplay/simulation meta-mode: extensions + MCP only (like `--no-workspace-tools`) + an embodied identity, for acting in a [world extension](extensions.md). Mutually exclusive with `--chat`. |

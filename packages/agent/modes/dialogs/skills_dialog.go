@@ -222,6 +222,12 @@ func formatSkillRow(s *skills.Skill, maxWidth int) string {
 	if s.ShadowedBy != nil {
 		desc = i18n.T("shadowed by %s — %s", shadowSourceLabel(s.ShadowedBy), desc)
 	}
+	// A pinned skill is absent from the model's manifest on purpose, because
+	// its whole body is already in the prompt. Without this the row reads as a
+	// skill the model is ignoring, which is the opposite of what is happening.
+	if s.Pinned {
+		desc = i18n.T("pinned, body always in the prompt — %s", desc)
+	}
 	// Truncate AND pad to the same column. Only truncating leaves a short
 	// description pulling its source tag left, which reads as a ragged column
 	// once the list is long and the descriptions vary in length — the state

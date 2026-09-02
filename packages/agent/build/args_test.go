@@ -168,6 +168,7 @@ func TestParseArgsNoFamilyBooleans(t *testing.T) {
 		{[]string{"--no-mcp"}, func(a Args) bool { return a.NoMCP }},
 		{[]string{"--no-skill", "--no-skills"}, func(a Args) bool { return a.NoSkill }},
 		{[]string{"--no-builtin-skills", "--no-builtin-skill"}, func(a Args) bool { return a.NoBuiltinSkills }},
+		{[]string{"--no-always-on-skills", "--no-always-on-skill"}, func(a Args) bool { return a.NoAlwaysOnSkills }},
 		{[]string{"--no-lore"}, func(a Args) bool { return a.NoLore }},
 		{[]string{"--no-memory"}, func(a Args) bool { return a.NoMemory }},
 		{[]string{"--no-yolo"}, func(a Args) bool { return a.NoYolo }},
@@ -191,6 +192,29 @@ func TestParseArgsNoFamilyBooleans(t *testing.T) {
 		if tc.field(a) {
 			t.Errorf("%v: field true with no flags", tc.flags)
 		}
+	}
+}
+
+// --pin-skill is repeatable and adds to the config list rather than replacing
+// it, so it collects into a slice like --context-file does.
+func TestParseArgsPinSkillIsRepeatable(t *testing.T) {
+	a, err := ParseArgs([]string{"--pin-skill", "one", "--pin-skills", "two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a.PinSkills) != 2 || a.PinSkills[0] != "one" || a.PinSkills[1] != "two" {
+		t.Fatalf("PinSkills = %v, want [one two]", a.PinSkills)
+	}
+	if a.NoAlwaysOnSkills {
+		t.Error("--pin-skill must not imply --no-always-on-skills")
+	}
+}
+
+// --pin-skill takes a value, so a bare flag at the end of the line is an error
+// rather than a silent empty pin.
+func TestParseArgsPinSkillNeedsAValue(t *testing.T) {
+	if _, err := ParseArgs([]string{"--pin-skill"}); err == nil {
+		t.Fatal("--pin-skill with no value should be an error")
 	}
 }
 

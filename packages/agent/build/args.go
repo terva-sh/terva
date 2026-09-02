@@ -308,6 +308,20 @@ type Args struct {
 	// but your own skills should keep working.
 	NoBuiltinSkills bool
 
+	// NoAlwaysOnSkills suppresses always-on skill pinning for this run, so no
+	// skill BODY joins the system prompt and the pinned skills return to their
+	// manifest lines. Skill discovery is otherwise untouched, which is what
+	// separates this from --no-skill.
+	//
+	// This is the per-session escape hatch for a config default the operator
+	// wants for most sessions but not this one.
+	NoAlwaysOnSkills bool
+
+	// PinSkills names extra skills to pin for this run only. Repeatable. It
+	// ADDS to the operator's `always_on_skills` rather than replacing it, and
+	// --no-always-on-skills overrides it.
+	PinSkills []string
+
 	// NoLore disables the lore keyed-context primitive for this run: no
 	// discovery from any tier and no injection (cached prefix or per-turn
 	// tail), including a loaded card's character_book. Sibling of
@@ -758,6 +772,14 @@ func ParseArgs(in []string) (Args, error) {
 			a.NoSkill = true
 		case "--no-builtin-skills", "--no-builtin-skill":
 			a.NoBuiltinSkills = true
+		case "--no-always-on-skills", "--no-always-on-skill":
+			a.NoAlwaysOnSkills = true
+		case "--pin-skill", "--pin-skills":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.PinSkills = append(a.PinSkills, v)
 		case "--no-lore":
 			a.NoLore = true
 		case "--no-memory":

@@ -32,6 +32,7 @@ const (
 	SourceContextFiles        = "context-files"
 	SourceAgentsMD            = "agents-md"
 	SourceSkills              = "skills"
+	SourcePinnedSkills        = "pinned-skills" // always-on skill BODIES, not the manifest
 	SourceLoreConstant        = "lore:constant"
 	SourceCardCharacterBook   = "card:character_book"
 	SourceRestrictedWorkspace = "restricted-workspace"
@@ -144,6 +145,11 @@ var segmentPortability = map[string]Portability{
 	SourceContextFiles: PortabilityDiscoveryOwned,
 	SourceAgentsMD:     PortabilityDiscoveryOwned,
 	SourceSkills:       PortabilityDiscoveryOwned,
+	// A pinned body is the manifest's payload rather than its index, so it
+	// classifies with the manifest. A foreign agent runs its own skill
+	// discovery, and pasting a body terva chose to pin either duplicates what
+	// that agent already found or overrides a choice its operator made.
+	SourcePinnedSkills: PortabilityDiscoveryOwned,
 
 	// No analog — terva-native per-turn injection with no foreign hook.
 	SourceLoreConstant:      PortabilityNoAnalog,

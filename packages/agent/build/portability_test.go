@@ -27,6 +27,7 @@ var allSourceConstants = []string{
 	SourceContextFiles,
 	SourceAgentsMD,
 	SourceSkills,
+	SourcePinnedSkills,
 	SourceLoreConstant,
 	SourceCardCharacterBook,
 	SourceRestrictedWorkspace,
