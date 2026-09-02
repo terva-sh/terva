@@ -1349,10 +1349,18 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     setPermission(null)
   }, [])
 
-  const answer = useCallback((askID: string, answers: { answer: string; note?: string }[]) => {
+  const answer = useCallback(
+    (
+      askID: string,
+      answers: { answer: string; answers?: string[]; note?: string; declined?: boolean }[],
+    ) => {
     // `answers` is the set, one per question in the order asked; `answer`
     // mirrors the first so a daemon built before question sets still
     // resolves a one-question ask instead of reading an empty reply.
+    //
+    // `declined` rides along per answer: the wire has carried it all along
+    // (ctrlproto Answer.Declined → core.UserAnswer), and it is how the
+    // card's skip says "proceed without me" for every question at once.
     clientRef.current?.fire(
       'answer',
       { ask_id: askID, answer: answers[0] ?? { answer: '' }, answers },

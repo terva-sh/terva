@@ -1,11 +1,17 @@
-import { useState } from 'preact/hooks'
+import { useEffect, useState } from 'preact/hooks'
 import { t } from '../../i18n'
 import { askQuestions, type AskRequest as AskRequestData } from '../../platform/ctrlproto/types'
 
 // One mid-turn ask. A set of questions is stacked in a single card with
-// one submit, so the whole set costs the user one interruption — the TUI
-// shows the same set as tabs. Answers go back positionally, one per
-// question, which is what the daemon indexes them by.
+// one submit, so the whole set costs the user one interruption.
+//
+// The set shows ONE question at a time, the way the TUI's dialog does:
+// the others are one-line stubs above and below it, and clicking a stub
+// moves to it. A set of eight questions with five options each rendered
+// expanded is a page of buttons with the send control off the bottom of
+// it, which is a form to fill in rather than a question to answer.
+// Nothing is hidden — every question is on the card, and its answer is on
+// its stub — but only the one being answered is open.
 //
 // A question with no options is free text whether or not allow_custom is
 // set: allow_custom means "as well as the options", and requiring it for
@@ -17,7 +23,7 @@ export function AskRequest({
   request: AskRequestData
   onAnswer: (
     id: string,
-    answers: { answer: string; answers?: string[]; note?: string }[],
+    answers: { answer: string; answers?: string[]; note?: string; declined?: boolean }[],
   ) => void
 }) {
   const questions = askQuestions(request)
@@ -44,6 +50,27 @@ export function AskRequest({
   // written against.
   const [note, setNote] = useState<Record<number, string>>({})
   const [noting, setNoting] = useState<Record<number, boolean>>({})
+  // Which question is open, or the review. This is the card's whole layout
+  // model: exactly one of them is expanded and the rest are stubs, so
+  // "fold an answered question", "show one at a time" and "review before
+  // sending" are one mechanism rather than three interacting ones.
+  //
+  // It never advances by itself when a question is answered. Answering and
+  // then changing your mind is the commonest correction on this card, and
+  // auto-advancing would move the options out from under the cursor at
+  // exactly that moment. The TUI does not auto-advance either; you press
+  // tab. Here you click the next stub, or its chip.
+  const [tab, setTab] = useState<number | 'review'>(0)
+  // Visited is what makes a ✓ honest for multi-select, where ticking
+  // nothing is a real answer ("none of these") and so cannot be told from
+  // an untouched question by its selection alone. Question 0 starts
+  // visited because it is the one on screen.
+  const [visited, setVisited] = useState<Record<number, boolean>>({ 0: true })
+  // Skipping is the one action here that cannot be undone — the agent has
+  // already been told to proceed without you by the time you notice — so
+  // it arms on the first press and fires on the second, as esc does in the
+  // TUI. Any other interaction disarms it.
+  const [skipArmed, setSkipArmed] = useState(false)
 
   const isMulti = (i: number) => !!questions[i].multi_select && !!questions[i].options?.length
 
@@ -74,6 +101,37 @@ export function AskRequest({
   // text IS the answer already.
   const noteFor = (i: number): string => (isFree(i) ? '' : (note[i] ?? '').trim())
 
+  // Settled is "this question has been dealt with", which is not the same
+  // as "has text in it": an empty multi-select that the user has looked at
+  // is settled, and a single-choice question is not settled until
+  // something is chosen.
+  const settled = (i: number) => (isMulti(i) ? !!visited[i] : answerFor(i) !== '')
+  const allSettled = questions.every((_, i) => settled(i))
+
+  // Everything except the open one is a stub. A lone question never folds:
+  // it has no siblings to make room for, and it answers on click.
+  const folded = (i: number) => !single && tab !== i
+
+  const goto = (i: number | 'review') => {
+    setSkipArmed(false)
+    setTab(i)
+    if (typeof i === 'number') setVisited({ ...visited, [i]: true })
+  }
+
+  // Once every question is settled the card has nothing left to ask, so it
+  // shows the whole set with its answers and the send control — the TUI's
+  // review tab. It does not steal the view mid-sentence: a question with
+  // an open text field keeps it, and the review chip is there to reach.
+  useEffect(() => {
+    if (single || !allSettled) return
+    if (typeof tab === 'number' && (showsCustomInput(tab) || noting[tab])) return
+    setTab('review')
+    // Fires on the transition into "all settled", not on every render that
+    // happens to be settled — otherwise reopening a question to revise it
+    // would be undone immediately.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allSettled])
+
   // A lone question that is showing only its option buttons needs no
   // submit — clicking an option sends. Rendering one anyway left a dead,
   // permanently-disabled Send under the options with nothing to submit.
@@ -95,8 +153,9 @@ export function AskRequest({
   // declines every OTHER question in the set along with it.
   const ready = questions.every((_, i) => isMulti(i) || answerFor(i) !== '')
 
-  const send = (answers: { answer: string; answers?: string[]; note?: string }[]) =>
-    onAnswer(request.ask_id, answers)
+  const send = (
+    answers: { answer: string; answers?: string[]; note?: string; declined?: boolean }[],
+  ) => onAnswer(request.ask_id, answers)
 
   const submit = (event: Event) => {
     event.preventDefault()
@@ -115,7 +174,19 @@ export function AskRequest({
     )
   }
 
+  // A skip is every question declined, not a short reply: the daemon
+  // indexes answers positionally, so a set has to come back the length it
+  // went out.
+  const skip = () => {
+    if (!skipArmed) {
+      setSkipArmed(true)
+      return
+    }
+    send(questions.map(() => ({ answer: '', declined: true })))
+  }
+
   const choose = (i: number, option: string) => {
+    goto(i)
     if (isMulti(i)) {
       const marks = ticked[i] ?? []
       setTicked({
@@ -135,96 +206,187 @@ export function AskRequest({
     setPicked({ ...picked, [i]: option })
   }
 
+  // What the stub shows to the right of the question. An empty
+  // multi-select that has been visited is an answer and has to read as
+  // one — left blank it looks like a rendering fault, and it is the row a
+  // user would most want to catch before sending.
+  const summaryFor = (i: number): string => {
+    const a = answerFor(i)
+    if (a) return a
+    if (isMulti(i) && visited[i]) return t('(none of the options)')
+    return ''
+  }
+
   return (
     <form class="card ask" onSubmit={submit}>
-      {questions.map((q, i) => {
-        const free = isFree(i)
-        const multi = isMulti(i)
-        return (
-          <div class="ask-question" key={i}>
-            <div class="card-head">
-              {questions.length > 1 && <span class="ask-num">{i + 1}.</span>} {q.question}
-            </div>
-            {!!q.options?.length && (
-              <div class="card-actions">
-                {q.options.map((option) => {
-                  const on = multi
-                    ? (ticked[i] ?? []).includes(option)
-                    : !single && !typing[i] && picked[i] === option
-                  return (
-                    <button
-                      type="button"
-                      key={option}
-                      // aria-pressed is what tells a screen reader this is a
-                      // toggle rather than a command — without it a ticked
-                      // box and an unticked one are announced identically,
-                      // and the checkmark below is decoration only.
-                      aria-pressed={multi ? on : undefined}
-                      class={'btn' + (on ? ' primary' : '')}
-                      onClick={() => choose(i, option)}
-                    >
-                      {multi ? (on ? '☑ ' : '☐ ') : ''}
-                      {option}
-                    </button>
-                  )
-                })}
-                {q.allow_custom && (
-                  <button
-                    type="button"
-                    aria-pressed={multi ? !!typing[i] : undefined}
-                    class={'btn' + (typing[i] ? ' primary' : '')}
-                    onClick={() => setTyping({ ...typing, [i]: !multi || !typing[i] })}
-                  >
-                    {multi
-                      ? (typing[i] ? '☑ ' : '☐ ') + t('Add my own…')
-                      : t('Type my own answer…')}
-                  </button>
-                )}
-              </div>
-            )}
-            {showsCustomInput(i) && (
-              <div class="ask-custom">
-                <input
-                  value={custom[i] ?? ''}
-                  onInput={(event) =>
-                    setCustom({ ...custom, [i]: (event.target as HTMLInputElement).value })
-                  }
-                  placeholder={t('custom answer…')}
-                />
-              </div>
-            )}
-            {/* The note affordance sits under the options and only where
-                it means something: free text is already the user's own
-                words, so there is nothing for a note to add to it. */}
-            {!free && !!q.options?.length && !noting[i] && (
-              <div class="card-actions">
+      {!single && (
+        // Numbers, plus the model's own short name for a question where it
+        // gave one. A slug clipped to fit tells you less than the position
+        // does, so an unnamed question stays a bare number rather than
+        // borrowing the first words of its text.
+        <div class="ask-strip">
+          {questions.map((q, i) => (
+            <button
+              type="button"
+              key={i}
+              class={'ask-chip' + (tab === i ? ' on' : '')}
+              aria-current={tab === i ? 'true' : undefined}
+              onClick={() => goto(i)}
+            >
+              {i + 1}
+              {q.slug ? ' ' + q.slug : ''}
+              {settled(i) ? ' ✓' : ''}
+            </button>
+          ))}
+          <span class="ask-strip__sep" aria-hidden="true" />
+          <button
+            type="button"
+            class={'ask-chip' + (tab === 'review' ? ' on' : '')}
+            aria-current={tab === 'review' ? 'true' : undefined}
+            onClick={() => goto('review')}
+          >
+            {t('review')}
+          </button>
+        </div>
+      )}
+      <div class="ask-body">
+        {questions.map((q, i) => {
+          const free = isFree(i)
+          const multi = isMulti(i)
+          if (folded(i)) {
+            const summary = summaryFor(i)
+            return (
+              <div class="ask-question" key={i}>
+                {/* A button, not a div with a handler: this is the way to
+                    the question, so it has to be reachable by keyboard and
+                    announced as expandable. */}
                 <button
                   type="button"
-                  class="btn"
-                  onClick={() => setNoting({ ...noting, [i]: true })}
+                  class={'ask-summary' + (summary ? '' : ' ask-summary--todo')}
+                  aria-expanded={false}
+                  onClick={() => goto(i)}
                 >
-                  {t('Add a note…')}
+                  <span class="ask-num">{i + 1}.</span>
+                  <span class="ask-summary__q">{q.question}</span>
+                  {!!summary && <span class="ask-summary__a">{summary}</span>}
+                  {!!noteFor(i) && <span class="ask-summary__note">{t('note')}</span>}
                 </button>
               </div>
-            )}
-            {!free && !!noting[i] && (
-              <div class="ask-custom">
-                <input
-                  value={note[i] ?? ''}
-                  onInput={(event) =>
-                    setNote({ ...note, [i]: (event.target as HTMLInputElement).value })
-                  }
-                  placeholder={t('note on your answer — sent with it, not instead of it')}
-                />
+            )
+          }
+          return (
+            <div class="ask-question" key={i}>
+              <div class="card-head">
+                {questions.length > 1 && <span class="ask-num">{i + 1}.</span>} {q.question}
               </div>
-            )}
-          </div>
-        )
-      })}
+              {!!q.options?.length && (
+                <div class="card-actions">
+                  {q.options.map((option) => {
+                    const on = multi
+                      ? (ticked[i] ?? []).includes(option)
+                      : !single && !typing[i] && picked[i] === option
+                    return (
+                      <button
+                        type="button"
+                        key={option}
+                        // aria-pressed is what tells a screen reader this is a
+                        // toggle rather than a command — without it a ticked
+                        // box and an unticked one are announced identically,
+                        // and the checkmark below is decoration only.
+                        aria-pressed={multi ? on : undefined}
+                        class={'btn' + (on ? ' primary' : '')}
+                        onClick={() => choose(i, option)}
+                      >
+                        {multi ? (on ? '☑ ' : '☐ ') : ''}
+                        {option}
+                      </button>
+                    )
+                  })}
+                  {q.allow_custom && (
+                    <button
+                      type="button"
+                      aria-pressed={multi ? !!typing[i] : undefined}
+                      class={'btn' + (typing[i] ? ' primary' : '')}
+                      onClick={() => {
+                        goto(i)
+                        setTyping({ ...typing, [i]: !multi || !typing[i] })
+                      }}
+                    >
+                      {multi
+                        ? (typing[i] ? '☑ ' : '☐ ') + t('Add my own…')
+                        : t('Type my own answer…')}
+                    </button>
+                  )}
+                </div>
+              )}
+              {showsCustomInput(i) && (
+                <div class="ask-custom">
+                  <input
+                    value={custom[i] ?? ''}
+                    onInput={(event) =>
+                      setCustom({ ...custom, [i]: (event.target as HTMLInputElement).value })
+                    }
+                    placeholder={t('custom answer…')}
+                  />
+                </div>
+              )}
+              {/* The note affordance sits under the options and only where it
+                  means something: free text is already the user's own words, so
+                  there is nothing for a note to add to it, and an unanswered
+                  question has no choice to annotate yet. Gating on an answer
+                  also keeps it off the initial render, where it was costing a
+                  full button row per question for the rarest action on the
+                  card.
+
+                  A LONE question is exempt, and must be: it answers on click,
+                  so waiting for an answer would mean the note button appears
+                  only after the card has already sent itself. There the note
+                  has to come first, which is what suppresses the send. */}
+              {!free && !!q.options?.length && !noting[i] && (single || answerFor(i) !== '') && (
+                <div class="card-actions">
+                  <button
+                    type="button"
+                    class="btn"
+                    onClick={() => {
+                      goto(i)
+                      setNoting({ ...noting, [i]: true })
+                    }}
+                  >
+                    {t('Add a note…')}
+                  </button>
+                </div>
+              )}
+              {!free && !!noting[i] && (
+                <div class="ask-custom">
+                  <input
+                    value={note[i] ?? ''}
+                    onInput={(event) =>
+                      setNote({ ...note, [i]: (event.target as HTMLInputElement).value })
+                    }
+                    placeholder={t('note on your answer — sent with it, not instead of it')}
+                  />
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      {skipArmed && (
+        <div class="ask-warn" role="alert">
+          {single
+            ? t('Press skip again — the agent proceeds without your answer')
+            : t('Press skip again — the agent proceeds without any of your answers')}
+        </div>
+      )}
       {showSubmit && (
-        <div class="card-actions">
+        <div class="card-actions ask-send">
           <button class="btn primary" type="submit" disabled={!ready}>
             {single ? t('Send') : t('Send answers')}
+          </button>
+          {/* Dismissing the card already declines the whole set, silently.
+              Saying so with a button makes the quiet exit an explicit one. */}
+          <button type="button" class={'btn' + (skipArmed ? ' danger' : '')} onClick={skip}>
+            {single ? t('Skip') : t('Skip all')}
           </button>
         </div>
       )}

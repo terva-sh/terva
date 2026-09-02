@@ -122,7 +122,11 @@ describe('AskRequest', () => {
       (screen.getByRole('button', { name: 'Send answers' }) as HTMLButtonElement).disabled,
     ).toBe(true)
 
+    // One question is open at a time, so the rest of the set is reached by
+    // its stub. Nothing is hidden — every question is still on the card.
+    fireEvent.click(screen.getByRole('button', { name: /Migrate when\?/ }))
     fireEvent.click(screen.getByRole('button', { name: 'At deploy' }))
+    fireEvent.click(screen.getByRole('button', { name: /Name it\?/ }))
     fireEvent.input(screen.getByPlaceholderText('custom answer…'), { target: { value: 'billing' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send answers' }))
     expect(onAnswer).toHaveBeenCalledWith('a4', [
@@ -130,6 +134,63 @@ describe('AskRequest', () => {
       { answer: 'At deploy' },
       { answer: 'billing' },
     ])
+  })
+
+  // The fold is the point of the change: three questions with five options
+  // each filled a whole screen and stayed that way after every choice was
+  // made. An answered question becomes one line carrying what was chosen.
+  it('opens one question at a time and folds the others to a stub', () => {
+    render(
+      <AskRequest
+        request={{
+          ask_id: 'a5b',
+          question: 'One?',
+          questions: [
+            { question: 'One?', options: ['a', 'b'] },
+            { question: 'Two?', options: ['x', 'y'] },
+          ],
+        }}
+        onAnswer={vi.fn()}
+      />,
+    )
+    // The first question is open; the second is a stub, not a wall of
+    // options. This is the part a fresh card gets wrong when every
+    // question renders expanded.
+    expect(screen.getByRole('button', { name: 'b' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'x' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'a' }))
+    // The question just answered stays open: revising the last thing you
+    // touched must not cost a click to get back to.
+    expect(screen.queryByRole('button', { name: 'b' })).toBeTruthy()
+    // Moving to the second folds the first — options gone, answer shown.
+    fireEvent.click(screen.getByRole('button', { name: /Two\?/ }))
+    expect(screen.queryByRole('button', { name: 'b' })).toBeNull()
+    const summary = screen.getByRole('button', { name: /One\?/ })
+    expect(summary.textContent).toContain('a')
+    // And it reopens to exactly the options it had.
+    fireEvent.click(summary)
+    expect(screen.getByRole('button', { name: 'b' })).toBeTruthy()
+  })
+
+  // The note button used to cost a full row per question on first paint,
+  // for the rarest action on the card.
+  it('offers no note in a set until that question has an answer', () => {
+    render(
+      <AskRequest
+        request={{
+          ask_id: 'a5c',
+          question: 'One?',
+          questions: [
+            { question: 'One?', options: ['a', 'b'] },
+            { question: 'Two?', options: ['x', 'y'] },
+          ],
+        }}
+        onAnswer={vi.fn()}
+      />,
+    )
+    expect(screen.queryAllByRole('button', { name: 'Add a note…' })).toHaveLength(0)
+    fireEvent.click(screen.getByRole('button', { name: 'a' }))
+    expect(screen.queryAllByRole('button', { name: 'Add a note…' })).toHaveLength(1)
   })
 
   // Revising before submit is the point of showing the set at once.
@@ -149,7 +210,12 @@ describe('AskRequest', () => {
       />,
     )
     fireEvent.click(screen.getByRole('button', { name: 'a' }))
+    fireEvent.click(screen.getByRole('button', { name: /Two\?/ }))
     fireEvent.click(screen.getByRole('button', { name: 'x' }))
+    // With every question answered the card shows its review, so revising
+    // means reopening. That is the cost of folding, and it is one click:
+    // the summary row is a button and the options come back as they were.
+    fireEvent.click(screen.getByRole('button', { name: /One\?/ }))
     fireEvent.click(screen.getByRole('button', { name: 'b' })) // changed my mind
     fireEvent.click(screen.getByRole('button', { name: 'Send answers' }))
     expect(onAnswer).toHaveBeenCalledWith('a5', [{ answer: 'b' }, { answer: 'x' }])
@@ -208,9 +274,18 @@ describe('AskRequest', () => {
       />,
     )
     fireEvent.click(screen.getByRole('button', { name: 'a' }))
+    fireEvent.click(screen.getByRole('button', { name: /Two\?/ }))
     fireEvent.click(screen.getByRole('button', { name: 'y' }))
+    // Answering the last question sends the card to its review, where every
+    // question is folded — so annotating question two costs one click to
+    // reopen it. Notes are the rarest action on the card; the review being
+    // the default at that moment is worth more than saving that click.
+    fireEvent.click(screen.getByRole('button', { name: /Two\?/ }))
+    // Only the question still open offers a note, so there is exactly one
+    // note button and it belongs to question two.
     const noteButtons = screen.getAllByRole('button', { name: 'Add a note…' })
-    fireEvent.click(noteButtons[1])
+    expect(noteButtons).toHaveLength(1)
+    fireEvent.click(noteButtons[0])
     fireEvent.input(screen.getByPlaceholderText(/note on your answer/), {
       target: { value: 'only if the migration lands' },
     })
@@ -219,6 +294,117 @@ describe('AskRequest', () => {
       { answer: 'a' },
       { answer: 'y', note: 'only if the migration lands' },
     ])
+  })
+
+  // The strip is how a set stays navigable once its questions are stubs:
+  // position always, the model's own short name where it gave one, and a
+  // tick once the question is settled.
+  it('names the questions it can in the strip, and ticks the settled ones', () => {
+    render(
+      <AskRequest
+        request={{
+          ask_id: 'a5c',
+          question: 'One?',
+          questions: [
+            { question: 'One?', slug: 'db', options: ['a', 'b'] },
+            { question: 'Two?', options: ['x', 'y'] },
+          ],
+        }}
+        onAnswer={vi.fn()}
+      />,
+    )
+    // Named where the model named it, a bare number where it did not — a
+    // mixed strip still says more than one of numbers alone.
+    expect(screen.getByRole('button', { name: /^1 db$/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^2$/ })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'a' }))
+    expect(screen.getByRole('button', { name: /^1 db ✓$/ })).toBeTruthy()
+    // A chip is a way in, not just a label.
+    fireEvent.click(screen.getByRole('button', { name: /^2$/ }))
+    expect(screen.getByRole('button', { name: 'y' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'b' })).toBeNull()
+  })
+
+  it('shows the whole set for review once every question is answered', () => {
+    render(
+      <AskRequest
+        request={{
+          ask_id: 'a5d',
+          question: 'One?',
+          questions: [
+            { question: 'One?', options: ['a', 'b'] },
+            { question: 'Two?', options: ['x', 'y'] },
+          ],
+        }}
+        onAnswer={vi.fn()}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'a' }))
+    fireEvent.click(screen.getByRole('button', { name: /Two\?/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'y' }))
+    // Nothing is open: the card has nothing left to ask, so it shows what
+    // is about to be sent instead of the last question's options.
+    expect(screen.queryByRole('button', { name: 'b' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'x' })).toBeNull()
+    expect(screen.getByRole('button', { name: /One\?/ }).textContent).toContain('a')
+    expect(screen.getByRole('button', { name: /Two\?/ }).textContent).toContain('y')
+    expect(screen.getByRole('button', { name: 'review' }).getAttribute('aria-current')).toBe('true')
+  })
+
+  // Skipping cannot be undone — the agent has been told to proceed without
+  // you by the time you notice — so it takes two presses, as esc does in
+  // the terminal.
+  it('arms the skip before it declines the whole set', () => {
+    const onAnswer = vi.fn()
+    render(
+      <AskRequest
+        request={{
+          ask_id: 'a5e',
+          question: 'One?',
+          questions: [
+            { question: 'One?', options: ['a', 'b'] },
+            { question: 'Two?', options: ['x', 'y'] },
+          ],
+        }}
+        onAnswer={onAnswer}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Skip all' }))
+    expect(onAnswer).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toBeTruthy()
+    // Any other move disarms it, so a stray click cannot end the ask.
+    fireEvent.click(screen.getByRole('button', { name: 'a' }))
+    expect(screen.queryByRole('alert')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Skip all' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Skip all' }))
+    // A decline is the whole set, one per question: answers come back
+    // positionally, so a short reply would misalign them.
+    expect(onAnswer).toHaveBeenCalledWith('a5e', [
+      { answer: '', declined: true },
+      { answer: '', declined: true },
+    ])
+  })
+
+  it('reads an untouched multi-select in a stub as none of the options', () => {
+    render(
+      <AskRequest
+        request={{
+          ask_id: 'a5f',
+          question: 'Which?',
+          questions: [
+            { question: 'Which?', options: ['p', 'q'], multi_select: true },
+            { question: 'Two?', options: ['x', 'y'] },
+          ],
+        }}
+        onAnswer={vi.fn()}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^2$/ }))
+    // Ticking nothing IS an answer here. Left blank the row reads as a
+    // rendering fault, and it is the one a user would most want to catch.
+    expect(screen.getByRole('button', { name: /Which\?/ }).textContent).toContain(
+      '(none of the options)',
+    )
   })
 
   // Multi-select: the options are not mutually exclusive, so ticking one
