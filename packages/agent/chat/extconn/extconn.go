@@ -33,6 +33,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"terva.sh/terva/packages/agent/chat"
@@ -212,7 +213,8 @@ type Conn struct {
 	tun        *extdriver.ChatTunnel
 	sess       *connhost.Session
 	inbound    chan chat.Message
-	restarts   []time.Time // Receive-goroutine only
+	drops      atomic.Uint64 // messages lost to a full inbound queue (chat.DropCounter)
+	restarts   []time.Time   // Receive-goroutine only
 	membership func(chat.Membership)
 	events     chat.ChatEventHandlers
 }
@@ -335,6 +337,7 @@ func (c *Conn) dial(ctx context.Context) (chat.Identity, error) {
 			select {
 			case inbound <- m:
 			default:
+				c.drops.Add(1)
 				c.warnf("connector extension %q: inbound queue full; dropping a message", c.name)
 			}
 		},

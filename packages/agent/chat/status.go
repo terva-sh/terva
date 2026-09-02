@@ -20,6 +20,9 @@ type StatusSnapshot struct {
 	ContextMax   int
 	Busy         bool
 	Queued       int
+	// Drops is the count of inbound messages the connector's bounded
+	// queue has discarded this process run; 0 renders nothing.
+	Drops uint64
 }
 
 // FormatStatus renders the same compact model/usage/cost/context
@@ -70,6 +73,9 @@ func FormatStatus(s StatusSnapshot) string {
 	lines := []string{line, "state: " + state}
 	if s.Queued > 0 {
 		lines = append(lines, fmt.Sprintf("queued: %d", s.Queued))
+	}
+	if s.Drops > 0 {
+		lines = append(lines, fmt.Sprintf("dropped inbound: %d (queue overflow — details in terva's log)", s.Drops))
 	}
 	if cwd := shortenHome(strings.TrimSpace(s.CWD)); cwd != "" {
 		lines = append(lines, "cwd: "+cwd)

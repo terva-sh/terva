@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"terva.sh/terva/packages/agent/chat"
@@ -61,6 +62,7 @@ type Conn struct {
 	mu         sync.Mutex
 	sess       *connhost.Session
 	inbound    chan chat.Message
+	drops      atomic.Uint64 // messages lost to a full inbound queue (chat.DropCounter)
 	engine     *engine
 	membership func(chat.Membership)
 	events     chat.ChatEventHandlers
@@ -182,6 +184,7 @@ func (c *Conn) Connect(ctx context.Context) (chat.Identity, error) {
 			select {
 			case inbound <- m:
 			default:
+				c.drops.Add(1)
 				c.warnf("connector %q: inbound queue full; dropping a message", c.name)
 			}
 		},

@@ -604,7 +604,9 @@ Rules:
   few hundred normalized messages between your stream and the agent
   loop; past that, overflow is dropped with a warning in terva's own
   output — not in your connector log, which only ever carries your
-  process's stderr. Only `message` frames queue here: `result`,
+  process's stderr — and counted: the owner's in-chat `/status` reports
+  `dropped inbound: N` for the process run, so a lossy afternoon shows
+  up after the fact instead of only in a grep. Only `message` frames queue here: `result`,
   `answer`, `chat_membership`, and the edit/delete/reaction streams are
   dispatched directly and never contend for it. So pace a large
   recovery burst rather than emitting it in one batch — the bound is

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -75,6 +76,7 @@ type Proxy struct {
 	identity chat.Identity
 
 	inbound    chan chat.Message
+	drops      atomic.Uint64 // messages lost to a full inbound queue (chat.DropCounter)
 	childExit  chan error
 	restarts   []time.Time
 	membership func(chat.Membership)
@@ -404,9 +406,14 @@ func (p *Proxy) deliverInbound(m chat.Message) {
 	select {
 	case p.inbound <- m:
 	default:
+		p.drops.Add(1)
 		p.warnf("connector %q: inbound queue full; dropping a message", p.manifest.Name)
 	}
 }
+
+// InboundDrops reports the messages lost to a full inbound queue this
+// process run (chat.DropCounter).
+func (p *Proxy) InboundDrops() uint64 { return p.drops.Load() }
 
 // currentSession returns the live protocol session, or a clear error
 // when no child is running.

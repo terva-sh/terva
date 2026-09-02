@@ -18,6 +18,7 @@ func TestFormatStatusIncludesModelUsageContextAndCWD(t *testing.T) {
 		ContextMax:   400_000,
 		Busy:         true,
 		Queued:       2,
+		Drops:        3,
 	})
 
 	wants := []string{
@@ -29,6 +30,7 @@ func TestFormatStatusIncludesModelUsageContextAndCWD(t *testing.T) {
 		"11.2%/400k",
 		"state: working",
 		"queued: 2",
+		"dropped inbound: 3",
 		"cwd: /tmp/terva",
 	}
 	for _, want := range wants {

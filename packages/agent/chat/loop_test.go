@@ -22,6 +22,7 @@ type fakeConnector struct {
 
 	mu     sync.Mutex
 	sent   []Outgoing
+	drops  uint64
 	typing int
 	stops  int
 	// events records typing pulses and stops in arrival order, so a
@@ -71,6 +72,12 @@ func (f *fakeConnector) SendFile(_ context.Context, chatID, path, caption string
 	defer f.mu.Unlock()
 	f.files = append(f.files, path)
 	return nil
+}
+
+func (f *fakeConnector) InboundDrops() uint64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.drops
 }
 
 func (f *fakeConnector) Typing(context.Context, string) error {
@@ -402,5 +409,18 @@ func TestLoopStatusCommand(t *testing.T) {
 	s := conn.waitSends(t, 1)
 	if !strings.Contains(s[0].Text, "fake-model") || !strings.Contains(s[0].Text, "state: idle") {
 		t.Fatalf("status reply = %q", s[0].Text)
+	}
+	if strings.Contains(s[0].Text, "dropped inbound") {
+		t.Fatalf("zero drops must render nothing, got %q", s[0].Text)
+	}
+
+	// Overflow happened (the fake reports 2): /status says so.
+	conn.mu.Lock()
+	conn.drops = 2
+	conn.mu.Unlock()
+	conn.inbound <- msgFrom("7", "/status")
+	s = conn.waitSends(t, 2)
+	if !strings.Contains(s[1].Text, "dropped inbound: 2") {
+		t.Fatalf("status reply after drops = %q", s[1].Text)
 	}
 }

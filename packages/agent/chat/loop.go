@@ -658,6 +658,10 @@ func (l *Loop) sendStatus(ctx context.Context, m Message) {
 
 	model := agent.Model
 	ctxMax := provider.ContextGauge(providerName, model)
+	var drops uint64
+	if dc, ok := l.Connector.(DropCounter); ok {
+		drops = dc.InboundDrops()
+	}
 	_ = l.Connector.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID, Text: FormatStatus(StatusSnapshot{
 		Provider:     providerName,
 		Model:        model,
@@ -668,6 +672,7 @@ func (l *Loop) sendStatus(ctx context.Context, m Message) {
 		ContextMax:   ctxMax,
 		Busy:         busy,
 		Queued:       queued,
+		Drops:        drops,
 	})})
 }
 

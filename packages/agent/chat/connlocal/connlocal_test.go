@@ -488,3 +488,6 @@ func TestConnLocalEntitiesAndMembership(t *testing.T) {
 		t.Fatal("membership event never arrived")
 	}
 }
+
+// The in-process carrier is a chat.DropCounter like the other two.
+var _ chat.DropCounter = (*Conn)(nil)

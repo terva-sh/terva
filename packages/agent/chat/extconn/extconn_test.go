@@ -633,3 +633,6 @@ func TestRedialStopsRespawningOnceTheProcessIsBackUp(t *testing.T) {
 			"it again kills a healthy extension", restarts)
 	}
 }
+
+// The tunnel carrier is a chat.DropCounter like the other two.
+var _ chat.DropCounter = (*Conn)(nil)

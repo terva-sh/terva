@@ -271,6 +271,17 @@ type Threader interface {
 	StartThread(ctx context.Context, chatID, fromMessageID, name string) (threadChatID string, err error)
 }
 
+// DropCounter is the optional Connector upgrade for reporting inbound
+// overflow. The carriers bound the message queue and drop past the
+// bound with one warn line each — correct, and invisible: a reconnect
+// after a busy outage is exactly when a burst arrives, and a lossy
+// afternoon is unfindable unless someone greps the log. InboundDrops
+// is the running count for this process, and /status renders it, so
+// the loss has an operator surface after the fact.
+type DropCounter interface {
+	InboundDrops() uint64
+}
+
 // TypingStopper is the optional Connector upgrade for withdrawing the
 // typing indicator. Gate on Capabilities().TypingStop before
 // type-asserting. The loop calls StopTyping once per turn, after the

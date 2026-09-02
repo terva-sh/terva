@@ -397,3 +397,7 @@ func TestProxySendWithoutProcess(t *testing.T) {
 		t.Fatalf("Send err = %v, want not running", err)
 	}
 }
+
+// The proxy is a chat.DropCounter: its bounded inbound queue counts what
+// it discards, and /status renders the count.
+var _ chat.DropCounter = (*Proxy)(nil)
