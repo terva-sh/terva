@@ -87,6 +87,15 @@ func newHarness(t *testing.T, cfg Config) *harness {
 	return h
 }
 
+// sendRaw writes one raw line — the malformed bodies send() could never
+// produce.
+func (h *harness) sendRaw(line string) {
+	h.t.Helper()
+	if _, err := h.toSDK.Write([]byte(line + "\n")); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
 func (h *harness) send(v any) {
 	h.t.Helper()
 	b, err := connproto.Encode(v)
@@ -179,6 +188,45 @@ func TestTypingStopReachesTheStopper(t *testing.T) {
 	case ev := <-tr.typing:
 		t.Errorf("unexpected extra typing event %q", ev)
 	case <-time.After(50 * time.Millisecond):
+	}
+
+	h.send(connproto.ShutdownFromHost{Type: "shutdown"})
+	_ = h.serveErr()
+}
+
+// Every id-carrying command answers, even when its body does not decode
+// and even when its type is unknown: the envelope's id is parsed before
+// the switch, so the host learns in milliseconds instead of waiting out
+// its 30 s send timeout — per command. Id-less frames stay log-only: no
+// result is owed, and inventing one would corrupt the correlation space.
+func TestMalformedAndUnknownCommandsAnswer(t *testing.T) {
+	tr := &stubTransport{sent: make(chan Outgoing, 4)}
+	h := newHarness(t, testConfig(tr))
+	h.next("hello")
+	h.send(connproto.HelloAckFromHost{Type: "hello_ack", Protocol: 2, DataDir: testsupport.TempDir(t)})
+	h.send(connproto.ConnectFromHost{Type: "connect"})
+	h.next("connected")
+
+	// A body that fails the typed unmarshal (message_id must be a string).
+	h.sendRaw(`{"type":"edit","id":"e1","chat_id":"c","message_id":42}`)
+	if res := h.next("result"); res["id"] != "e1" || !strings.Contains(fmt.Sprint(res["error"]), "malformed edit") {
+		t.Errorf("malformed edit result = %v", res)
+	}
+
+	// A command type this SDK has never heard of, carrying an id.
+	h.sendRaw(`{"type":"frobnicate","id":"f1","chat_id":"c"}`)
+	if res := h.next("result"); res["id"] != "f1" || !strings.Contains(fmt.Sprint(res["error"]), "unknown command type") {
+		t.Errorf("unknown command result = %v", res)
+	}
+
+	// Id-less: a malformed typing and an unknown announcement owe nothing.
+	// The next frame after a good send must be THAT send's result — any
+	// uninvited result in between would show up here instead.
+	h.sendRaw(`{"type":"typing","chat_id":7}`)
+	h.sendRaw(`{"type":"totally_new_announcement"}`)
+	h.send(connproto.SendFromHost{Type: "send", ID: "s1", ChatID: "c", Text: "hi"})
+	if res := h.next("result"); res["id"] != "s1" || res["error"] != nil {
+		t.Errorf("result after id-less frames = %v, want the send's own", res)
 	}
 
 	h.send(connproto.ShutdownFromHost{Type: "shutdown"})

@@ -712,6 +712,7 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 		case "send":
 			var f connproto.SendFromHost
 			if err := json.Unmarshal(line, &f); err != nil {
+				w.result(frame.ID, "", fmt.Errorf("malformed %s: %v", frame.Type, err))
 				continue
 			}
 			// Sends run off the serve loop so a slow service call
@@ -757,6 +758,7 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 		case "send_image":
 			var f connproto.SendImageFromHost
 			if err := json.Unmarshal(line, &f); err != nil {
+				w.result(frame.ID, "", fmt.Errorf("malformed %s: %v", frame.Type, err))
 				continue
 			}
 			t, ok := transport, connected
@@ -768,6 +770,7 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 		case "send_file":
 			var f connproto.SendFileFromHost
 			if err := json.Unmarshal(line, &f); err != nil {
+				w.result(frame.ID, "", fmt.Errorf("malformed %s: %v", frame.Type, err))
 				continue
 			}
 			t, ok := transport, connected
@@ -796,6 +799,7 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 		case "ask":
 			var f connproto.AskFromHost
 			if err := json.Unmarshal(line, &f); err != nil {
+				w.result(frame.ID, "", fmt.Errorf("malformed %s: %v", frame.Type, err))
 				continue
 			}
 			t, ok := transport, connected
@@ -837,6 +841,7 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 		case "edit":
 			var f connproto.EditFromHost
 			if err := json.Unmarshal(line, &f); err != nil {
+				w.result(frame.ID, "", fmt.Errorf("malformed %s: %v", frame.Type, err))
 				continue
 			}
 			t, ok := transport, connected
@@ -852,6 +857,7 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 		case "react":
 			var f connproto.ReactFromHost
 			if err := json.Unmarshal(line, &f); err != nil {
+				w.result(frame.ID, "", fmt.Errorf("malformed %s: %v", frame.Type, err))
 				continue
 			}
 			t, ok := transport, connected
@@ -867,6 +873,7 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 		case "delete":
 			var f connproto.DeleteFromHost
 			if err := json.Unmarshal(line, &f); err != nil {
+				w.result(frame.ID, "", fmt.Errorf("malformed %s: %v", frame.Type, err))
 				continue
 			}
 			t, ok := transport, connected
@@ -882,6 +889,7 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 		case "thread_start":
 			var f connproto.ThreadStartFromHost
 			if err := json.Unmarshal(line, &f); err != nil {
+				w.result(frame.ID, "", fmt.Errorf("malformed %s: %v", frame.Type, err))
 				continue
 			}
 			t, ok := transport, connected
@@ -905,6 +913,7 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 		case "ask_close":
 			var f connproto.AskCloseFromHost
 			if err := json.Unmarshal(line, &f); err != nil {
+				w.result(frame.ID, "", fmt.Errorf("malformed %s: %v", frame.Type, err))
 				continue
 			}
 			t, ok := transport, connected
@@ -920,6 +929,15 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 		case "shutdown":
 			return nil
 		default:
+			// An id on the envelope means the host expects exactly one
+			// result — answer in milliseconds instead of letting its
+			// 30 s send timeout expire, and a future command type
+			// degrades gracefully against an older connector. Id-less
+			// unknowns stay log-only: no result is owed, and inventing
+			// one would corrupt the correlation space.
+			if frame.ID != "" {
+				w.result(frame.ID, "", fmt.Errorf("unknown command type %q", frame.Type))
+			}
 			fmt.Fprintf(errlog, "unknown frame type %q from host\n", frame.Type)
 		}
 	}
