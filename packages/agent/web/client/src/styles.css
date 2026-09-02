@@ -396,12 +396,7 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .tool-group-body .tool { max-width: 100%; }
 
 /* cards (permission / ask) */
-/* --card-bg is a variable rather than an inline colour because the ask card's
-   scroll hint has to paint the SAME colour to mask itself against. Spelled out
-   twice, the two drift the first time this background is touched, and the
-   symptom is a wrong-coloured band inside the card rather than an obvious
-   break. Custom properties inherit, so .ask-body picks this up for free. */
-.card { --card-bg: color-mix(in srgb, var(--accent) 8%, var(--bg)); margin: 0 12px 8px; padding: 12px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--card-bg); }
+.card { margin: 0 12px 8px; padding: 12px; border: 1px solid var(--accent); border-radius: var(--radius); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
 .card-head { margin-bottom: 8px; }
 .card-head code { font-family: ui-monospace, monospace; }
 .preview { margin: 6px 0; padding: 8px; background: var(--panel); border-radius: 8px; white-space: pre-wrap; overflow-x: auto; font-size: 12px; max-height: 200px; overflow-y: auto; }
@@ -409,54 +404,10 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .ask-custom { display: flex; gap: 8px; margin-top: 8px; }
 .ask-custom input { flex: 1; font: inherit; padding: 7px 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
 /* a question set: each question is its own block inside the one card, with
-   a single submit at the bottom, so answering the set is one action.
-
-   The card is a bounded box — chip strip, a scrolling body, then the send
-   row. It is a SIBLING of the transcript and the composer rather than
-   content inside the transcript, so whatever height it takes is taken from
-   them; left unbounded, a set of eight questions pushed both off screen.
-   This is the web form of the terminal dialog's MaxRows budget. */
-/* The absolute arm exists so the card does not become a wall on a very tall
-   monitor. It must still clear the LARGEST legitimate set, though: eight
-   questions (core.MaxAskQuestions) with one open comes to roughly 646px, so a
-   640px cap left the last stub clipped by ~6px on every display tall enough to
-   reach the cap — and, because any overflow shows the scroll hint at full
-   strength, the hint never went away either. Both symptoms were one arbitrary
-   number being a few pixels under the real maximum. */
-.ask { display: flex; flex-direction: column; max-height: min(58vh, 720px); }
-.ask-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: clip; }
-/* A bounded scroller with no visible scrollbar is a trap on touch, where
-   overlay bars only appear mid-gesture: at eight questions on a phone the card
-   ended after question four with nothing saying more existed. The chip strip
-   does say so, but only if you read it as a count.
-
-   The classic paired gradients: the two `local` layers scroll WITH the content
-   and paint over the shadow when that end is reached, so a hint shows only
-   while there is more in that direction. No JS and no scroll listener. */
-.ask-body {
-  background:
-    linear-gradient(var(--card-bg) 30%, transparent) top / 100% 16px no-repeat local,
-    linear-gradient(transparent, var(--card-bg) 70%) bottom / 100% 16px no-repeat local,
-    radial-gradient(farthest-side at 50% 0, color-mix(in srgb, var(--fg) 20%, transparent), transparent) top / 100% 7px no-repeat scroll,
-    radial-gradient(farthest-side at 50% 100%, color-mix(in srgb, var(--fg) 20%, transparent), transparent) bottom / 100% 7px no-repeat scroll;
-}
-/* Send stays out of the scroller: at eight questions it was below the fold,
-   and the control that ends the interruption should never need hunting. */
-.ask-send { flex: none; margin-top: 12px; }
+   a single submit at the bottom, so answering the set is one action. */
 .ask-question + .ask-question { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.ask-question + .ask-question + .card-actions, .ask-question ~ .card-actions { margin-top: 14px; }
 .ask-num { color: var(--muted); margin-right: 2px; }
-/* The chip strip: position, the model's own short name where it gave one,
-   and a tick once the question is settled. Chips WRAP rather than scroll —
-   the set is capped at eight, so two rows is the worst case. */
-.ask-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
-.ask-chip { font: inherit; font-size: var(--fs-note); color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; cursor: pointer; }
-.ask-chip:hover, .ask-chip:focus-visible { color: var(--fg); }
-.ask-chip.on { color: var(--fg); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
-.ask-strip__sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 2px; }
-/* Arming the skip says what the second press will do, in the colour the
-   rest of the interface uses for destructive things. */
-.ask-warn { flex: none; margin-top: 10px; font-size: var(--fs-detail); color: var(--warning); }
-.ask .btn.danger { border-color: var(--danger); color: var(--danger); }
 /* A folded (already answered) question. One line: number, the question in
    muted text, and the answer carrying the weight, because the answer is the
    thing being reviewed at a glance. Both halves truncate rather than wrap —
@@ -469,9 +420,6 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .ask-summary__note { flex: none; color: var(--muted); font-size: 0.85em; border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; }
 /* A folded row is a line rather than a block, so the rule above it tightens. */
 .ask-question + .ask-question:has(> .ask-summary) { margin-top: 8px; padding-top: 8px; }
-/* A stub with no answer yet is a question still to come, so it reads as
-   pending rather than as one answered with nothing. */
-.ask-summary--todo .ask-summary__q { color: var(--muted); font-style: italic; }
 .ask .btn[disabled] { opacity: 0.5; cursor: not-allowed; }
 
 /* composer */
@@ -493,6 +441,20 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
    on this variant instead — measured, not eyeballed: the button is 18px on a
    34px chip, so top-alignment was 6px out. */
 .composer-chip--file .chip-x { top: 50%; right: 4px; transform: translateY(-50%); }
+/* A suggested next line (suggest.next_step), offered on its own row above the
+   textarea. .composer is a WRAPPING flex row, so flex-basis: 100% is what makes
+   this a band above the input instead of a column beside it — the same trick
+   .composer-chips uses, and the reason this is not simply `display: flex`.
+
+   Dashed and muted on purpose: the terminal offers this as dimmed ghost text,
+   and the point carried over is that it is provisional and not yet the user's.
+   Solid on hover, because by then they are reaching for it. */
+.composer-offer { flex-basis: 100%; display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.composer-offer__label { flex: none; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.composer-offer__line { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; padding: 4px 8px; border: 1px dashed var(--line); border-radius: 8px; background: none; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; }
+.composer-offer__line:hover { color: var(--fg); border-style: solid; background: color-mix(in srgb, var(--muted) 10%, transparent); }
+.composer-offer__x { flex: none; width: 22px; height: 22px; line-height: 20px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted); font-size: 15px; cursor: pointer; }
+.composer-offer__x:hover { color: var(--fg); background: color-mix(in srgb, var(--muted) 16%, transparent); }
 /* slash-command autocomplete, anchored above the composer */
 .slash-menu { position: absolute; left: 12px; right: 12px; bottom: calc(100% - 2px); max-height: 45vh; overflow-y: auto; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 -4px 16px rgba(0,0,0,.18); padding: 4px; z-index: 20; }
 .slash-item { display: flex; align-items: baseline; gap: 10px; width: 100%; text-align: left; padding: 6px 10px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; cursor: pointer; }

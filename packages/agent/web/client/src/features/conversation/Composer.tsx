@@ -76,6 +76,10 @@ export function Composer({
   sessionID,
   onLoadDraft,
   onSaveDraft,
+  suggestion,
+  onAcceptSuggestion,
+  onDismissSuggestion,
+  onEmptyChange,
 }: {
   busy: boolean
   onSend: (text: string, images: ImageAttachment[], attachments: FileAttachment[]) => boolean
@@ -109,6 +113,18 @@ export function Composer({
   files?: WireFileEntry[] | null
   onFilesNeeded?: () => void
   onCancel: () => void
+  // A suggested next line (suggest.next_step), offered as a strip above the
+  // composer. Null or blank means nothing is on offer: an empty line is an
+  // ordinary answer from the daemon rather than a failure, so it must render
+  // nothing at all rather than an empty strip.
+  suggestion?: string | null
+  onAcceptSuggestion?: () => void
+  onDismissSuggestion?: () => void
+  // Reports whether the composer is empty. The host owns the idle trigger but
+  // cannot see this text — it is local state here — and an unbidden offer must
+  // not arrive over a composer the user has already started writing in. Pass a
+  // stable callback: this fires from an effect keyed on the text.
+  onEmptyChange?: (empty: boolean) => void
 }) {
   const [text, setText] = useState('')
   const [images, setImages] = useState<ImageAttachment[]>([])
@@ -119,6 +135,13 @@ export function Composer({
   const [sel, setSel] = useState(0)
   const [dismissed, setDismissed] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
+
+  // Emptiness is reported upward because the host drives the idle trigger and
+  // cannot see this text. Trimmed: a composer holding only whitespace is empty
+  // for the purpose of "the user has not started writing".
+  useEffect(() => {
+    onEmptyChange?.(text.trim() === '')
+  }, [text, onEmptyChange])
   // The session a staged file was staged INTO, readable from inside an upload
   // that is still in flight. A ref, not the prop, because the callback below
   // closed over the session it started in and needs to compare against the
@@ -362,7 +385,38 @@ export function Composer({
       setImages([])
       setAttachments([])
       setDismissed(false)
+      // Drop the offer rather than hide it. A suggestion computed against a
+      // conversation that has since moved is worse than no suggestion, because
+      // it still looks current.
+      onDismissSuggestion?.()
     }
+  }
+
+  // The offered line, or '' when there is nothing to show.
+  const offer = (suggestion ?? '').trim()
+
+  // Accept INSERTS at the cursor instead of replacing the text. A suggestion is
+  // the machine's idea and never displaces the user's own words — the same
+  // precedence the terminal follows, where a suggestion loses to a withdrawn
+  // prompt and to a stashed draft alike. On an empty composer, which is the
+  // common case, inserting is indistinguishable from setting.
+  const acceptSuggestion = () => {
+    if (!offer) return
+    const node = ref.current
+    const at = node ? (node.selectionStart ?? text.length) : text.length
+    setText(text.slice(0, at) + offer + text.slice(at))
+    setSel(0)
+    setDismissed(false)
+    onAcceptSuggestion?.()
+    // Focus and caret after the render that applied the text, so the caret is
+    // not clobbered by the value update.
+    queueMicrotask(() => {
+      const el = ref.current
+      if (!el) return
+      el.focus()
+      const caret = at + offer.length
+      el.setSelectionRange(caret, caret)
+    })
   }
   // Choose a command from the menu: argless commands run immediately; commands
   // that take an argument prime "/name " and keep focus for the argument.
@@ -509,6 +563,26 @@ export function Composer({
           ))}
         </div>
       )}
+      {offer && (
+        <div class="composer-offer">
+          <span class="composer-offer__label">{t('Suggested next step')}</span>
+          <button
+            class="composer-offer__line"
+            title={t('Use this line (Tab)')}
+            onClick={acceptSuggestion}
+          >
+            {offer}
+          </button>
+          <button
+            class="composer-offer__x"
+            title={t('Dismiss (Esc)')}
+            aria-label={t('Dismiss suggestion')}
+            onClick={() => onDismissSuggestion?.()}
+          >
+            ×
+          </button>
+        </div>
+      )}
       <textarea
         ref={ref}
         rows={1}
@@ -568,6 +642,22 @@ export function Composer({
             if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
               event.preventDefault()
               menu[clampedSel].apply()
+              return
+            }
+          }
+          // The offer claims Tab and Escape only once the @-stage and the
+          // slash menu above have declined them, so it never steals a key that
+          // already meant something. Both keys are no-ops when nothing is
+          // offered, which is all but a few seconds of the composer's life.
+          if (offer) {
+            if (event.key === 'Tab') {
+              event.preventDefault()
+              acceptSuggestion()
+              return
+            }
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              onDismissSuggestion?.()
               return
             }
           }

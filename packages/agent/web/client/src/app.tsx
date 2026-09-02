@@ -50,6 +50,7 @@ import type {
   SessionInfo,
   Group,
   SettingsView,
+  NextStepResult,
   SkillInfo,
   Status,
   Surface,
@@ -223,6 +224,22 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   // to a dozen ladders, and ModelInfo.ladder is the key into this table.
   const [ladders, setLadders] = useState<Record<string, ReasoningRungInfo[]>>({})
   const [busy, setBusy] = useState(false)
+  // suggest.next_step — one line the user might send next, offered above the
+  // composer. The line itself is state (it renders); everything that decides
+  // WHETHER to ask is a ref, because the idle timer reads it from inside a
+  // timeout that must see the value at FIRE time, not the one captured when it
+  // was armed thirty seconds earlier.
+  const [suggestion, setSuggestion] = useState('')
+  const suggestionRef = useRef('')
+  const composerEmptyRef = useRef(true)
+  const askOpenRef = useRef(false)
+  // The turn that just ended is no basis for a suggestion if the user cancelled
+  // it or it errored: answering "here's what to do next" to someone who just
+  // pressed Stop is the wrong read of the room. turn_end carries no outcome on
+  // the wire, so the outcome is remembered here.
+  const lastTurnBadRef = useRef(false)
+  const idleTimerRef = useRef<number | null>(null)
+  const nextStepOnRef = useRef(false)
   // The model's live thinking summary for the turn in flight. Not in `items`:
   // it is shown while the turn runs and dropped when it ends.
   const [reasoning, setReasoning] = useState('')
@@ -370,6 +387,8 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
 
   curRef.current = curSess
   busyRef.current = busy
+  suggestionRef.current = suggestion
+  askOpenRef.current = !!ask
   paneOpenRef.current = paneOpen
   activeSurfaceRef.current = activeSurface
   viewModeRef.current = viewMode
@@ -696,6 +715,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     setWin(winRef.current)
     setPermission(null)
     setAsk(null)
+    dropSuggestion()
     setBusy(false)
     setCost(0)
     setQueued([])
@@ -726,6 +746,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     setWin(winRef.current)
     setPermission(null)
     setAsk(null)
+    dropSuggestion()
     setBusy(false)
     setCost(0)
     setQueued([])
@@ -942,6 +963,9 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         // whether or not that pane is the open one, otherwise the picker keeps
         // naming a global the user just replaced.
         if (ev.surface_id === 'settings') void reloadModels()
+        // The idle offer is governed by a row in that same pane, so a toggle
+        // there has to reach the ref the timer reads.
+        if (ev.surface_id === 'settings') refreshNextStepSetting()
         // The board's swarm lane rides the tasks surface (the daemon diffs the
         // swarm every 800ms and pushes this) — keep it live while the board's up.
         if (viewModeRef.current === 'board' && ev.surface_id === 'tasks') {
@@ -1046,11 +1070,17 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       case 'done':
         setBusy(false)
         setReasoning('')
+        // Once per reply, not on a repeating timer: someone who walks away for
+        // an hour costs one completion, not a hundred and twenty.
+        armNextStep()
         return
       case 'error':
         setToast(ev.error ?? 'error')
         setBusy(false)
         setReasoning('')
+        // A failed turn is no basis for "here's what to do next".
+        lastTurnBadRef.current = true
+        dropSuggestion()
         setItems((it) => applyEvent(it, ev))
         return
       default:
@@ -1314,11 +1344,114 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   // clear). Both kinds of attachment ride only the prompt path — the queue verb
   // is text-only server-side — so a send carrying either while busy is refused
   // rather than silently dropping them on the floor.
+  // How long the user must sit quiet, after a reply, before terva offers a next
+  // step unbidden. Matches the terminal's nextStepIdle.
+  const NEXT_STEP_IDLE_MS = 30_000
+
+  const clearIdleTimer = useCallback(() => {
+    if (idleTimerRef.current !== null) {
+      clearTimeout(idleTimerRef.current)
+      idleTimerRef.current = null
+    }
+  }, [])
+
+  // Stable by design. The composer fires this from an effect keyed on its
+  // text, so a fresh identity each render would re-run that effect on every
+  // keystroke.
+  const onComposerEmptyChange = useCallback((empty: boolean) => {
+    composerEmptyRef.current = empty
+  }, [])
+
+  // Drop the offer, rather than hide it. A suggestion computed against a
+  // conversation that has since moved is worse than none, because it still
+  // looks current.
+  const dropSuggestion = useCallback(() => {
+    clearIdleTimer()
+    setSuggestion('')
+  }, [clearIdleTimer])
+
+  const askNextStep = useCallback(
+    (onDemand: boolean) => {
+      const c = clientRef.current
+      const sess = curRef.current
+      if (!c || !sess) return
+      c.send<NextStepResult>('suggest.next_step', { on_demand: onDemand }, sess)
+        .then((r) => {
+          const line = (r?.line ?? '').trim()
+          // The session may have changed under a request in flight; an offer
+          // computed against another conversation must not surface here.
+          if (curRef.current !== sess) return
+          if (!line) {
+            // An empty line is an ordinary answer, not a failure — the daemon
+            // invites the model to stay quiet when nothing is obvious. Worth
+            // saying only to someone who asked and is waiting.
+            if (onDemand) setToast(t('Nothing obvious to suggest.'))
+            return
+          }
+          // An unbidden offer re-checks the room on arrival: the user may have
+          // started typing or sent something while the model thought.
+          if (!onDemand && (busyRef.current || !composerEmptyRef.current)) return
+          setSuggestion(line)
+        })
+        .catch((e) => {
+          // Unbidden failures stay silent. Nobody asked, and a toast for
+          // something the user did not request is noise.
+          if (onDemand) setToast(errText(e))
+        })
+    },
+    [],
+  )
+
+  // Arm the idle window after a reply lands. Every condition is re-read when it
+  // fires, because thirty seconds is long enough for all of them to change.
+  const armNextStep = useCallback(() => {
+    clearIdleTimer()
+    if (!nextStepOnRef.current) return
+    if (lastTurnBadRef.current) return
+    idleTimerRef.current = window.setTimeout(() => {
+      idleTimerRef.current = null
+      if (busyRef.current) return
+      if (!composerEmptyRef.current) return
+      // A pending question or approval is already asking the user to decide
+      // something; two prompts about what to do next would fight.
+      if (askOpenRef.current) return
+      if (suggestionRef.current) return
+      askNextStep(false)
+    }, NEXT_STEP_IDLE_MS)
+  }, [askNextStep, clearIdleTimer])
+
+  // next_step_suggestions reaches a client only inside the settings SURFACE —
+  // there is no standing mirror of it on the wire. So it is read once per
+  // session and refreshed whenever that pane reports a change, rather than
+  // fetched when the timer fires, where a round trip would be far too late.
+  const refreshNextStepSetting = useCallback(() => {
+    const c = clientRef.current
+    const sess = curRef.current
+    if (!c || !sess) return
+    c.send<{ surface: Surface }>('surface.get', { id: 'settings' }, sess)
+      .then((r) => {
+        const item = r?.surface?.settings?.items?.find((i) => i.key === 'next_step')
+        nextStepOnRef.current = item?.value === 'true'
+      })
+      // A daemon that does not serve the row simply never offers unbidden.
+      .catch(() => {
+        nextStepOnRef.current = false
+      })
+  }, [])
+
+  useEffect(() => {
+    refreshNextStepSetting()
+  }, [curSess, refreshNextStepSetting])
+
   const sendPrompt = useCallback((text: string, images?: ImageAttachment[], attachments?: FileAttachment[]): boolean => {
     const c = clientRef.current
     const hasImages = !!images && images.length > 0
     const hasFiles = !!attachments && attachments.length > 0
     if (!c || !curRef.current || (!text.trim() && !hasImages && !hasFiles)) return false
+    // Sending moves the conversation, so any standing offer is now about a
+    // past one. The next reply re-arms from scratch.
+    dropSuggestion()
+    lastTurnBadRef.current = false
     if (busyRef.current) {
       if (hasImages || hasFiles) {
         setToast(t('Finish the current turn before attaching files (the queue is text-only).'))
@@ -1349,18 +1482,10 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     setPermission(null)
   }, [])
 
-  const answer = useCallback(
-    (
-      askID: string,
-      answers: { answer: string; answers?: string[]; note?: string; declined?: boolean }[],
-    ) => {
+  const answer = useCallback((askID: string, answers: { answer: string; note?: string }[]) => {
     // `answers` is the set, one per question in the order asked; `answer`
     // mirrors the first so a daemon built before question sets still
     // resolves a one-question ask instead of reading an empty reply.
-    //
-    // `declined` rides along per answer: the wire has carried it all along
-    // (ctrlproto Answer.Declined → core.UserAnswer), and it is how the
-    // card's skip says "proceed without me" for every question at once.
     clientRef.current?.fire(
       'answer',
       { ask_id: askID, answer: answers[0] ?? { answer: '' }, answers },
@@ -1798,6 +1923,21 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       desc: t('Wipe the conversation (no summary)'),
       run: () => {
         clientRef.current?.send('clear', null, curRef.current).catch((e) => setToast(errText(e)))
+      },
+    },
+    {
+      name: 'nextstep',
+      desc: t('Ask what to type next; the answer is offered above the composer'),
+      run: () => {
+        // A command the user typed is not unbidden, so the suppressions that
+        // exist to stop terva spending money on its own initiative do not
+        // apply: not the setting, not the idle window, not an empty composer.
+        // Only a turn already in flight survives being asked.
+        if (busyRef.current) {
+          setToast(t('Finish the current turn first.'))
+          return
+        }
+        askNextStep(true)
       },
     },
     {
@@ -2409,10 +2549,23 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
                 onSend={onSubmit}
                 onToast={setToast}
                 commands={slashCommands}
+                suggestion={suggestion}
+                onAcceptSuggestion={dropSuggestion}
+                onDismissSuggestion={dropSuggestion}
+                // The composer owns its text, so emptiness has to come back up
+                // for the idle trigger to respect "not while they are writing".
+                onEmptyChange={onComposerEmptyChange}
                 skills={skills}
                 files={fileList}
                 onFilesNeeded={() => void requestFiles()}
-                onCancel={() => clientRef.current?.fire('cancel', null, curRef.current)}
+                onCancel={() => {
+                  // The user pressed Stop. Offering a next step to someone who
+                  // just interrupted is the wrong read of the room, so the
+                  // reply this cancels must not arm one.
+                  lastTurnBadRef.current = true
+                  dropSuggestion()
+                  clientRef.current?.fire('cancel', null, curRef.current)
+                }}
                 onUpload={stageFile}
                 canAttachFiles={canAttachFiles}
                 maxAttachmentBytes={maxAttachmentBytes}

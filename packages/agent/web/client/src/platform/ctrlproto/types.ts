@@ -1570,6 +1570,28 @@ export interface SuggestResult {
   draft: string
 }
 
+// NextStepParams drives suggest.next_step: one line the user might send next,
+// offered while they sit idle. The zero value is the original caller — the idle
+// trigger, asking on terva's own initiative — so omitting the field behaves the
+// way it always did.
+export interface NextStepParams {
+  // on_demand marks a suggestion the user explicitly ASKED for (/nextstep)
+  // rather than one terva volunteered. It selects a different prompt on the
+  // daemon and changes nothing else. It matters: the idle prompt states as a
+  // fact that the user "has not asked you for anything", and on this path that
+  // sentence is false.
+  on_demand?: boolean
+}
+
+// NextStepResult carries the offered line.
+//
+// An empty line is an ordinary answer, not a failure — the daemon invites the
+// model to stay quiet when no next step is obvious. A client with nothing to
+// offer offers nothing, and must not render an empty strip.
+export interface NextStepResult {
+  line: string
+}
+
 // PostLineParams drives post.line (Phase 6 directed authorship): commit an
 // approved character/narrator line INTO the transcript as an attributed
 // assistant message. actor names the speaking character; empty posts a narrator
