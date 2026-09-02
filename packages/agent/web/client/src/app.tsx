@@ -107,7 +107,8 @@ import {
 } from './platform/conversation/store'
 import { PACE_INTERVAL_MS, StreamPacer } from './platform/conversation/pacer'
 import { buildConveneArgs, raatiResultCopyText, raatiUnitCopyText, raatiVerdictWord } from './raati'
-import { applyServerCatalog, setLocale, t, tn } from './i18n'
+import { applyServerCatalog, setLocale, t, tn, tr } from './i18n'
+import { applyScheme, currentScheme, nextScheme, schemeGlyph, schemeName, type Scheme } from './scheme'
 import { ReasoningPick, reasoningLabel } from './ui/ReasoningPick'
 import { CopyButton } from './ui/CopyButton'
 import { ConnectionBanner } from './ui/Loading'
@@ -251,6 +252,10 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   const [toolView, setToolView] = useState<ToolView>(
     () => (localStorage.getItem('terva_toolview') as ToolView) || 'full',
   )
+  // Light/dark/auto. main.tsx has already applied the stored choice to <html>
+  // before this component first rendered, so reading it back is enough here —
+  // the state exists to re-render the button's glyph, not to own the palette.
+  const [scheme, setScheme] = useState<Scheme>(currentScheme)
   // focus (single-session conversation) ⇄ board (a tile per session). Persisted
   // like toolView; the board is a monitor + focus + lifecycle view — clicking a
   // tile focuses that session and returns to focus mode.
@@ -402,6 +407,10 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       localStorage.setItem('terva_toolview', next)
       return next
     })
+  }, [])
+
+  const cycleScheme = useCallback(() => {
+    setScheme((s) => applyScheme(nextScheme(s)))
   }, [])
 
   const modelGroups = useMemo(() => {
@@ -1482,10 +1491,18 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     setPermission(null)
   }, [])
 
-  const answer = useCallback((askID: string, answers: { answer: string; note?: string }[]) => {
+  const answer = useCallback(
+    (
+      askID: string,
+      answers: { answer: string; answers?: string[]; note?: string; declined?: boolean }[],
+    ) => {
     // `answers` is the set, one per question in the order asked; `answer`
     // mirrors the first so a daemon built before question sets still
     // resolves a one-question ask instead of reading an empty reply.
+    //
+    // `declined` rides along per answer: the wire has carried it all along
+    // (ctrlproto Answer.Declined → core.UserAnswer), and it is how the
+    // card's skip says "proceed without me" for every question at once.
     clientRef.current?.fire(
       'answer',
       { ask_id: askID, answer: answers[0] ?? { answer: '' }, answers },
@@ -2274,6 +2291,18 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
             ▦
           </button>
         )}
+        {/* Light/dark/auto. NOT gated on curSess: the palette is a property of
+            the browser, not of a session, so it must be reachable from the
+            session-less landing too — that is where a first-time visitor lands
+            and finds the panel the wrong colour. */}
+        <button
+          class={`icon scheme-${scheme}`}
+          title={t('Theme: %s — click to cycle (auto / light / dark)', tr(schemeName(scheme)))}
+          aria-label={t('Theme: %s — click to cycle (auto / light / dark)', tr(schemeName(scheme)))}
+          onClick={cycleScheme}
+        >
+          {schemeGlyph(scheme)}
+        </button>
         {curSess && (
           <button class="model-btn" title={t('Switch model')} onClick={() => setPickerOpen(true)}>
             {curModel ? (curModel.favorite ? '★ ' : '') + modelLabel(curModel) : t('model')}

@@ -37,40 +37,111 @@ const (
 	authStatusPath = "/auth/status"
 )
 
+// schemeCookie carries the panel's light/dark choice, which the client mirrors
+// there from localStorage (see client/src/scheme.ts).
+//
+// A cookie is the only channel that reaches this page. It is served under
+// default-src 'none' with no script-src at all, and that is deliberate: a login
+// form that depended on the bundled PWA could not be served to a client not yet
+// allowed to fetch the bundle. Reading localStorage would mean adding a script
+// to the one page that accepts the bearer token, which is not a trade worth
+// making to pick a background colour.
+//
+// The cookie holds no secret. It is a display preference, and the page is
+// rendered from it and nothing else.
+const schemeCookie = "terva_scheme"
+
+// loginScheme returns the choice to honour, as an attribute value, or "" for
+// none. Only light and dark come back: `auto` is not a third palette, it is the
+// absence of an override, so it renders as no attribute and lets the page's
+// media query decide — the same shape the panel's stylesheet uses.
+//
+// The value is allowlisted rather than escaped. html/template would escape it
+// safely anyway, but this is attacker-influenceable input with exactly two
+// meaningful values, and matching them exactly cannot rot if the value ever
+// reaches a context that escapes differently.
+func loginScheme(r *http.Request) string {
+	c, err := r.Cookie(schemeCookie)
+	if err != nil {
+		return ""
+	}
+	switch c.Value {
+	case "light", "dark":
+		return c.Value
+	}
+	return ""
+}
+
 // loginTmpl is deliberately one self-contained page with no script: a login form
 // that depended on the bundled PWA could not be served to a client that is not
 // allowed to fetch the bundle yet. The style is inlined under a per-response
 // nonce so the strict style-src survives — see loginCSP.
 var loginTmpl = template.Must(template.New("login").Parse(`<!doctype html>
-<html lang="{{.Lang}}">
+<html lang="{{.Lang}}"{{if .Scheme}} data-scheme="{{.Scheme}}"{{end}}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>terva</title>
 <style nonce="{{.Nonce}}">
-  :root { color-scheme: light dark; }
+  /* This page keeps its own warm palette; it is not the panel's. What it now
+     shares is the SHAPE of the switch, so the two read the same way.
+
+     Each literal is declared exactly once and the arms below re-map rather than
+     restate: two of them want the dark values (chosen dark, and inherited dark),
+     and a copied hex would drift between them.
+
+     The button is inverted text in both schemes — background: ink, color: paper
+     — so it needs no pair of its own beyond the hover. */
+  :root {
+    color-scheme: light dark;
+    --c-paper-light: #fbfbfa;   --c-paper-dark: #1c1b1a;
+    --c-ink-light: #1c1b1a;     --c-ink-dark: #e7e5e4;
+    --c-dim-light: #6b6a67;     --c-dim-dark: #a8a29e;
+    --c-field-light: #fff;      --c-field-dark: #292725;
+    --c-line-light: #d6d3d1;    --c-line-dark: #44403c;
+    --c-hover-light: #3a3836;   --c-hover-dark: #fff;
+
+    --paper: var(--c-paper-light);
+    --ink: var(--c-ink-light);
+    --dim: var(--c-dim-light);
+    --field: var(--c-field-light);
+    --line: var(--c-line-light);
+    --hover: var(--c-hover-light);
+  }
+  /* Chosen dark: the panel mirrored the choice into a cookie (see loginScheme),
+     and it wins over the OS. */
+  :root[data-scheme='dark'] {
+    color-scheme: dark;
+    --paper: var(--c-paper-dark);  --ink: var(--c-ink-dark);
+    --dim: var(--c-dim-dark);      --field: var(--c-field-dark);
+    --line: var(--c-line-dark);    --hover: var(--c-hover-dark);
+  }
+  :root[data-scheme='light'] { color-scheme: light; }
+  /* Inherited dark: the OS says so and no choice overrides it. An exclusion, not
+     a match on a third value, so a request carrying NO cookie still follows the
+     OS instead of pinning light. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-scheme='light']):not([data-scheme='dark']) {
+      --paper: var(--c-paper-dark);  --ink: var(--c-ink-dark);
+      --dim: var(--c-dim-dark);      --field: var(--c-field-dark);
+      --line: var(--c-line-dark);    --hover: var(--c-hover-dark);
+    }
+  }
   body { margin: 0; min-height: 100vh; display: grid; place-items: center;
          font: 15px/1.5 ui-sans-serif, system-ui, sans-serif;
-         background: #fbfbfa; color: #1c1b1a; }
+         background: var(--paper); color: var(--ink); }
   main { width: min(22rem, calc(100vw - 3rem)); }
   h1 { font-size: 1.1rem; font-weight: 600; margin: 0 0 .25rem; }
-  p  { margin: 0 0 1.25rem; color: #6b6a67; font-size: .875rem; }
+  p  { margin: 0 0 1.25rem; color: var(--dim); font-size: .875rem; }
   label { display: block; font-size: .8125rem; font-weight: 500; margin-bottom: .375rem; }
   input, button { width: 100%; box-sizing: border-box; border-radius: .375rem;
                   font: inherit; padding: .5rem .625rem; }
-  input { border: 1px solid #d6d3d1; background: #fff; color: inherit; }
+  input { border: 1px solid var(--line); background: var(--field); color: inherit; }
   input:focus { outline: 2px solid #b45309; outline-offset: -1px; border-color: transparent; }
-  button { margin-top: .75rem; border: 0; background: #1c1b1a; color: #fbfbfa;
+  button { margin-top: .75rem; border: 0; background: var(--ink); color: var(--paper);
            font-weight: 500; cursor: pointer; }
-  button:hover { background: #3a3836; }
+  button:hover { background: var(--hover); }
   .err { color: #b91c1c; font-size: .8125rem; margin: 0 0 .75rem; }
-  @media (prefers-color-scheme: dark) {
-    body { background: #1c1b1a; color: #e7e5e4; }
-    p { color: #a8a29e; }
-    input { background: #292725; border-color: #44403c; }
-    button { background: #e7e5e4; color: #1c1b1a; }
-    button:hover { background: #fff; }
-  }
 </style>
 </head>
 <body>
@@ -130,12 +201,13 @@ func serveLogin(w http.ResponseWriter, r *http.Request, status int, errMsg strin
 	}
 	// The page's fixed prose resolves here, at render time — the template is
 	// parsed at init, where translation would freeze English (the i18n.M rule).
-	_ = loginTmpl.Execute(w, struct{ Nonce, Err, Action, Next, Lang, Intro, TokenLabel, Connect string }{
+	_ = loginTmpl.Execute(w, struct{ Nonce, Err, Action, Next, Lang, Scheme, Intro, TokenLabel, Connect string }{
 		Nonce:      n,
 		Err:        errMsg,
 		Action:     loginPath,
 		Next:       safeNext(next),
 		Lang:       i18n.ActiveLang(),
+		Scheme:     loginScheme(r),
 		Intro:      i18n.T("This control panel needs its bearer token."),
 		TokenLabel: i18n.T("Token"),
 		Connect:    i18n.T("Connect"),

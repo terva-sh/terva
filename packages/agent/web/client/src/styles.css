@@ -37,12 +37,33 @@
 
 :root {
   color-scheme: light dark;
-  --bg: #ffffff;
-  --fg: #16171a;
-  --muted: #6b7280;
-  --line: #e5e7eb;
-  --panel: #f6f7f9;
-  --user: #2f6feb;
+
+  /* The two palettes, each literal declared exactly once. Only these six
+     tokens differ between light and dark; everything below is scheme-
+     independent. They are named apart from the tokens the sheet USES so the
+     switch below is a re-mapping and never a second copy of a colour — the
+     copied-colour drift the theme guards exist to stop. */
+  --c-bg-light: #ffffff;
+  --c-bg-dark: #0a0a09; /* Deep Tar — matches the brand app-icon bg + PWA splash */
+  --c-fg-light: #16171a;
+  --c-fg-dark: #e9e9ec;
+  --c-muted-light: #6b7280;
+  --c-muted-dark: #9aa0a6;
+  --c-line-light: #e5e7eb;
+  --c-line-dark: #26272b;
+  --c-panel-light: #f6f7f9;
+  --c-panel-dark: #141518;
+  --c-user-light: #2f6feb;
+  --c-user-dark: #3b82f6;
+
+  /* Light is the base arm; the two rules after this block switch to dark. */
+  --bg: var(--c-bg-light);
+  --fg: var(--c-fg-light);
+  --muted: var(--c-muted-light);
+  --line: var(--c-line-light);
+  --panel: var(--c-panel-light);
+  --user: var(--c-user-light);
+
   --user-fg: #ffffff;
   --accent: #b5651d; /* birch tar */
   --danger: #d1453b;
@@ -73,14 +94,38 @@
   --ui-ok: var(--ok);
   --ui-radius: var(--radius);
 }
+/* Light/dark is a client-local preference (src/scheme.ts) written to
+   data-scheme on <html>. There are two dark arms and they are mutually
+   exclusive by construction, so their order in the sheet does not matter:
+
+   1. chosen dark — the user picked it, whatever the OS says;
+   2. inherited dark — the OS says dark and the user has not overridden it.
+
+   `auto` is not a third palette, it is the absence of an override, so arm 2
+   also covers a document with NO data-scheme at all: a cached index.html whose
+   script has not run yet still follows the OS instead of pinning light. */
+:root[data-scheme='dark'] {
+  /* Also flips form controls, scrollbars and the canvas, which var() cannot
+     reach — without this a dark panel keeps white select popups on a light OS. */
+  color-scheme: dark;
+  --bg: var(--c-bg-dark);
+  --fg: var(--c-fg-dark);
+  --muted: var(--c-muted-dark);
+  --line: var(--c-line-dark);
+  --panel: var(--c-panel-dark);
+  --user: var(--c-user-dark);
+}
+:root[data-scheme='light'] {
+  color-scheme: light;
+}
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0a0a09; /* Deep Tar — matches the brand app-icon bg + PWA splash */
-    --fg: #e9e9ec;
-    --muted: #9aa0a6;
-    --line: #26272b;
-    --panel: #141518;
-    --user: #3b82f6;
+  :root:not([data-scheme='light']):not([data-scheme='dark']) {
+    --bg: var(--c-bg-dark);
+    --fg: var(--c-fg-dark);
+    --muted: var(--c-muted-dark);
+    --line: var(--c-line-dark);
+    --panel: var(--c-panel-dark);
+    --user: var(--c-user-dark);
   }
 }
 
@@ -313,6 +358,19 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .icon.sm { font-size: 15px; padding: 2px 6px; color: var(--muted); }
 .icon:hover, .icon.sm:hover { color: var(--fg); }
 .icon.on { color: var(--user); }
+/* The theme toggle colours its glyph by WHICH mode, where .icon.on colours its
+   neighbours by WHETHER they are overridden. The glyph shape already carries the
+   mode, so the colour is free to reinforce it rather than repeat what ⊞ and ▦
+   say. Auto keeps the plain --fg, which reads as the neutral state it is.
+
+   Contrast needs no separate thought here: the sun only ever renders while the
+   page is light and the moon only while it is dark, so each colour is always on
+   the background it was chosen against.
+
+   After .icon:hover and at the same specificity, exactly like .icon.on above, so
+   hovering does not wash the colour out. */
+.icon.scheme-light { color: var(--accent); }
+.icon.scheme-dark { color: var(--user); }
 
 /* message log */
 .log-wrap { position: relative; flex: 1; min-height: 0; display: flex; }
@@ -396,7 +454,12 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .tool-group-body .tool { max-width: 100%; }
 
 /* cards (permission / ask) */
-.card { margin: 0 12px 8px; padding: 12px; border: 1px solid var(--accent); border-radius: var(--radius); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
+/* --card-bg is a variable rather than an inline colour because the ask card's
+   scroll hint has to paint the SAME colour to mask itself against. Spelled out
+   twice, the two drift the first time this background is touched, and the
+   symptom is a wrong-coloured band inside the card rather than an obvious
+   break. Custom properties inherit, so .ask-body picks this up for free. */
+.card { --card-bg: color-mix(in srgb, var(--accent) 8%, var(--bg)); margin: 0 12px 8px; padding: 12px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--card-bg); }
 .card-head { margin-bottom: 8px; }
 .card-head code { font-family: ui-monospace, monospace; }
 .preview { margin: 6px 0; padding: 8px; background: var(--panel); border-radius: 8px; white-space: pre-wrap; overflow-x: auto; font-size: 12px; max-height: 200px; overflow-y: auto; }
@@ -404,10 +467,54 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .ask-custom { display: flex; gap: 8px; margin-top: 8px; }
 .ask-custom input { flex: 1; font: inherit; padding: 7px 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
 /* a question set: each question is its own block inside the one card, with
-   a single submit at the bottom, so answering the set is one action. */
+   a single submit at the bottom, so answering the set is one action.
+
+   The card is a bounded box — chip strip, a scrolling body, then the send
+   row. It is a SIBLING of the transcript and the composer rather than
+   content inside the transcript, so whatever height it takes is taken from
+   them; left unbounded, a set of eight questions pushed both off screen.
+   This is the web form of the terminal dialog's MaxRows budget. */
+/* The absolute arm exists so the card does not become a wall on a very tall
+   monitor. It must still clear the LARGEST legitimate set, though: eight
+   questions (core.MaxAskQuestions) with one open comes to roughly 646px, so a
+   640px cap left the last stub clipped by ~6px on every display tall enough to
+   reach the cap — and, because any overflow shows the scroll hint at full
+   strength, the hint never went away either. Both symptoms were one arbitrary
+   number being a few pixels under the real maximum. */
+.ask { display: flex; flex-direction: column; max-height: min(58vh, 720px); }
+.ask-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: clip; }
+/* A bounded scroller with no visible scrollbar is a trap on touch, where
+   overlay bars only appear mid-gesture: at eight questions on a phone the card
+   ended after question four with nothing saying more existed. The chip strip
+   does say so, but only if you read it as a count.
+
+   The classic paired gradients: the two `local` layers scroll WITH the content
+   and paint over the shadow when that end is reached, so a hint shows only
+   while there is more in that direction. No JS and no scroll listener. */
+.ask-body {
+  background:
+    linear-gradient(var(--card-bg) 30%, transparent) top / 100% 16px no-repeat local,
+    linear-gradient(transparent, var(--card-bg) 70%) bottom / 100% 16px no-repeat local,
+    radial-gradient(farthest-side at 50% 0, color-mix(in srgb, var(--fg) 20%, transparent), transparent) top / 100% 7px no-repeat scroll,
+    radial-gradient(farthest-side at 50% 100%, color-mix(in srgb, var(--fg) 20%, transparent), transparent) bottom / 100% 7px no-repeat scroll;
+}
+/* Send stays out of the scroller: at eight questions it was below the fold,
+   and the control that ends the interruption should never need hunting. */
+.ask-send { flex: none; margin-top: 12px; }
 .ask-question + .ask-question { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
-.ask-question + .ask-question + .card-actions, .ask-question ~ .card-actions { margin-top: 14px; }
 .ask-num { color: var(--muted); margin-right: 2px; }
+/* The chip strip: position, the model's own short name where it gave one,
+   and a tick once the question is settled. Chips WRAP rather than scroll —
+   the set is capped at eight, so two rows is the worst case. */
+.ask-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
+.ask-chip { font: inherit; font-size: var(--fs-note); color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; cursor: pointer; }
+.ask-chip:hover, .ask-chip:focus-visible { color: var(--fg); }
+.ask-chip.on { color: var(--fg); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.ask-strip__sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 2px; }
+/* Arming the skip says what the second press will do, in the colour the
+   rest of the interface uses for destructive things. */
+.ask-warn { flex: none; margin-top: 10px; font-size: var(--fs-detail); color: var(--warning); }
+.ask .btn.danger { border-color: var(--danger); color: var(--danger); }
 /* A folded (already answered) question. One line: number, the question in
    muted text, and the answer carrying the weight, because the answer is the
    thing being reviewed at a glance. Both halves truncate rather than wrap —
@@ -420,6 +527,9 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .ask-summary__note { flex: none; color: var(--muted); font-size: 0.85em; border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; }
 /* A folded row is a line rather than a block, so the rule above it tightens. */
 .ask-question + .ask-question:has(> .ask-summary) { margin-top: 8px; padding-top: 8px; }
+/* A stub with no answer yet is a question still to come, so it reads as
+   pending rather than as one answered with nothing. */
+.ask-summary--todo .ask-summary__q { color: var(--muted); font-style: italic; }
 .ask .btn[disabled] { opacity: 0.5; cursor: not-allowed; }
 
 /* composer */

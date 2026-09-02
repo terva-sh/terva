@@ -242,3 +242,154 @@ func TestNoFormWhenThereIsNoTokenToType(t *testing.T) {
 		t.Error("the login endpoint accepted a token on a daemon with no token auth")
 	}
 }
+
+// browserGetCookie is a page navigation carrying a RAW Cookie header, rather
+// than one built by http.Request.AddCookie, so a test can send a value AddCookie
+// would sanitize away before the server ever saw it.
+func browserGetCookie(srv *httptest.Server, path, cookie string) (*http.Response, string) {
+	req, _ := http.NewRequest("GET", srv.URL+path, nil)
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Accept", "text/html,*/*")
+	if cookie != "" {
+		req.Header.Set("Cookie", schemeCookie+"="+cookie)
+	}
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp, string(b)
+}
+
+// htmlTag returns the opening <html …> tag, which is the only place a
+// data-scheme ATTRIBUTE can appear.
+//
+// Scoping matters more than it looks. The stylesheet contains its own
+// [data-scheme='light'] / [data-scheme='dark'] SELECTORS in every response, so
+// `strings.Contains(body, "data-scheme=")` is true whatever the cookie said —
+// an absence assertion against the whole body can never hold, and a presence
+// assertion against it passes without the attribute ever being written. The
+// first draft of these tests did exactly that and failed loudly for it.
+func htmlTag(body string) string {
+	i := strings.Index(body, "<html")
+	if i < 0 {
+		return ""
+	}
+	j := strings.Index(body[i:], ">")
+	if j < 0 {
+		return ""
+	}
+	return body[i : i+j+1]
+}
+
+// The login page cannot read localStorage: it is served under default-src 'none'
+// with no script-src, and that scriptlessness is deliberate (see loginTmpl). So
+// the panel mirrors the choice into a cookie and this page renders from it.
+//
+// Without this the login screen followed the OS while the panel it guards showed
+// the opposite — most visibly in the case the control exists for, a light panel
+// chosen on a dark OS.
+func TestLoginPageHonoursTheSchemeCookie(t *testing.T) {
+	srv := loginServer(t)
+	for _, tc := range []struct{ name, cookie, want string }{
+		{"chosen dark", "dark", `data-scheme="dark"`},
+		{"chosen light", "light", `data-scheme="light"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, body := browserGetCookie(srv, "/", tc.cookie)
+			tag := htmlTag(body)
+			if tag == "" {
+				t.Fatalf("no <html> tag in the response; the fixture is broken: %.120q", body)
+			}
+			if !strings.Contains(tag, tc.want) {
+				t.Errorf("cookie %q did not put %s on the root tag: %q", tc.cookie, tc.want, tag)
+			}
+		})
+	}
+}
+
+// auto is not a third palette, it is the absence of an override, so it must
+// render as NO attribute and leave the page's media query in charge. A request
+// carrying no cookie at all is the same case, and is the one every first-time
+// visitor makes: it must follow the OS rather than pin light.
+func TestAutoAndAbsentLeaveTheLoginPageToTheOS(t *testing.T) {
+	srv := loginServer(t)
+	for _, tc := range []struct{ name, cookie string }{
+		{"auto is not an override", "auto"},
+		{"no cookie at all", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, body := browserGetCookie(srv, "/", tc.cookie)
+			tag := htmlTag(body)
+			if tag == "" {
+				t.Fatalf("no <html> tag in the response; the fixture is broken: %.120q", body)
+			}
+			if strings.Contains(tag, "data-scheme=") {
+				t.Errorf("cookie %q pinned a palette; the OS should decide: %q", tc.cookie, tag)
+			}
+		})
+	}
+	// And the media arm must stay an EXCLUSION. Widening it back to :root would
+	// let a dark OS override a chosen light, which is the same defect the panel's
+	// stylesheet guards against in scheme.test.ts.
+	_, body := browserGetCookie(srv, "/", "")
+	for _, want := range []string{
+		"@media (prefers-color-scheme: dark)",
+		":not([data-scheme='light'])",
+		":not([data-scheme='dark'])",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the inherited-dark arm lost %q; a chosen light would lose to a dark OS", want)
+		}
+	}
+}
+
+// The cookie is attacker-influenceable — anything able to set a cookie on this
+// host chooses the value, and this page is served to the UNAUTHENTICATED. The
+// allowlist in loginScheme is what keeps it out of the markup; html/template's
+// escaping is the second line, not the first.
+func TestAHostileSchemeCookieReachesNoMarkup(t *testing.T) {
+	srv := loginServer(t)
+	// Every byte here is a legal cookie-octet, so it survives Go's own parser and
+	// genuinely arrives at loginScheme. A quote or a semicolon would be dropped in
+	// transit and the test would prove nothing.
+	hostile := "dark><script>alert(1)</script>"
+	resp, body := browserGetCookie(srv, "/", hostile)
+
+	if strings.Contains(body, "<script") {
+		t.Errorf("a cookie put a script tag on the login page: %.200q", body)
+	}
+	if tag := htmlTag(body); strings.Contains(tag, "data-scheme=") {
+		t.Errorf("an unrecognised cookie value was echoed into the root tag: %q", tag)
+	}
+	if strings.Contains(body, "alert(1)") {
+		t.Error("the cookie value reached the page at all")
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status %d, want 401", resp.StatusCode)
+	}
+}
+
+// The guard on the whole reason this went through a cookie instead of reading
+// localStorage. If a later change gives this page a script-src, the trade that
+// was deliberately avoided has been made — and it would be made on the one page
+// that accepts the bearer token.
+func TestTheLoginPageIsStillScriptless(t *testing.T) {
+	srv := loginServer(t)
+	resp, body := browserGetCookie(srv, "/", "dark")
+
+	csp := resp.Header.Get("Content-Security-Policy")
+	if !strings.Contains(csp, "default-src 'none'") {
+		t.Errorf("the login page lost its default-src 'none': %q", csp)
+	}
+	if strings.Contains(csp, "script-src") {
+		t.Errorf("the login page gained a script-src; theming must not cost this: %q", csp)
+	}
+	if strings.Contains(csp, "unsafe-inline") || strings.Contains(csp, "unsafe-eval") {
+		t.Errorf("the login CSP was loosened: %q", csp)
+	}
+	if strings.Contains(body, "<script") {
+		t.Error("the login page grew a script tag")
+	}
+}
