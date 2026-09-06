@@ -155,6 +155,10 @@ func (a *Agent) compactMidTurn(ctx context.Context, keepTail int) (CompactResult
 // where Prompt/Continue own the slot, so re-acquiring would deadlock
 // into ErrBusy. midTurn selects the mid-task summarization addendum.
 func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta string), midTurn bool) (res CompactResult, err error) {
+	if err := a.PersistenceError(); err != nil {
+		return CompactResult{}, err
+	}
+	defer func() { err = a.withPersistenceError(err) }()
 	// Summarize against the prefix the provider still has WARM — the last one
 	// dispatched — not whatever the agent happens to hold now. When a host
 	// swaps the model (or an extension reload rewrites the tools) the agent's
@@ -165,6 +169,7 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 
 	a.mu.Lock()
 	msgs := append([]provider.Message(nil), a.messages...)
+	readOnly := a.ReadOnly.Snapshot()
 	a.mu.Unlock()
 
 	if len(msgs) == 0 {
@@ -176,15 +181,9 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 	if keepTail > len(msgs) {
 		keepTail = len(msgs)
 	}
-	summarizable := msgs[:len(msgs)-keepTail]
-	if len(summarizable) == 0 {
+	if keepTail == len(msgs) {
 		return CompactResult{}, ErrNothingToCompact
 	}
-
-	// Serialize the summarizable transcript to text. The cold path sends this as
-	// its prompt; both paths size tokens_before from it, so the estimate stays
-	// comparable across an A/B of the two.
-	transcript := serializeTranscript(summarizable)
 
 	var (
 		summary        string
@@ -210,7 +209,7 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 	var providerReason string
 	if a.providerCompactionOn() {
 		if sc, ok := provider.ServerCompactorFor(prefix.client); ok {
-			next, pres, perr := compactViaProvider(ctx, sc, prefix, msgs, a.ReadOnly, a.CWD)
+			next, pres, perr := compactViaProvider(ctx, sc, prefix, msgs, readOnly, a.CWD)
 			// The attempt is billed whether or not it lands, so its spend joins
 			// the total either way — a failed compaction that reported nothing
 			// would hide real money in exactly the arm being evaluated.
@@ -231,6 +230,17 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 			providerReason = providerFallbackReason(perr)
 		}
 	}
+
+	// Choose one boundary before summarization. The tail is an unchanged
+	// suffix; every message before it feeds the summary, ledger, and counts.
+	// Use the dispatched model's window, which can differ after a model swap.
+	budget := 0
+	if m, err := provider.FindModel("", prefix.model); err == nil {
+		budget = int(float64(m.EffectiveContextWindow()) * KeepTailMaxFraction)
+	}
+	tail := tailWithinBudget(msgs, keepTail, budget)
+	summarizable := msgs[:len(msgs)-len(tail)]
+	transcript := serializeTranscript(summarizable)
 
 	// One transient-retry allowance for the WHOLE compaction, shared by both
 	// summarizers. See drainSummaryRetrying for why it is shared rather than
@@ -271,7 +281,7 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 		// triggered by a context-overflow 413 is precisely the one most likely to
 		// overflow again. The fallback is not a safety net bolted onto the design;
 		// it is the second half of it.
-		s, u, stop, werr := a.drainSummaryRetrying(ctx, prefix.client, warmCompactRequest(prefix, msgs, keepTail, midTurn), warmSink, &retries)
+		s, u, stop, werr := a.drainSummaryRetrying(ctx, prefix.client, warmCompactRequest(prefix, msgs, len(tail), midTurn), warmSink, &retries)
 		usage = usage.Add(u)
 		switch {
 		case werr == nil && s != "":
@@ -352,7 +362,7 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 	// after the fact; this serves the model that has to work from a checkpoint
 	// which stops mid-sentence, and which would otherwise read the last complete
 	// thought it can see as the end of the account.
-	ledger := executedActionsLedger(summarizable, a.ReadOnly, a.CWD)
+	ledger := executedActionsLedger(summarizable, readOnly, a.CWD)
 	if truncated {
 		// Which notice depends on whether a ledger actually follows. Pointing at
 		// a list of executed calls is the most useful thing the notice can say —
@@ -380,22 +390,6 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 			MetaTokensBefore: strconv.Itoa(tokensBefore),
 		},
 	}
-
-	// The tail: at most keepTail messages, and at most a fraction of the context
-	// window (see KeepTailMaxFraction — a fixed message count alone lets two
-	// whole-file reads survive a compaction and reclaim nothing). Orphaned
-	// tool_result blocks, whose matching tool_use was summarized away, are
-	// removed: Anthropic rejects a transcript where a tool_result references a
-	// tool_use id that doesn't exist.
-	// Budget against the prefix's model — the one being compacted ON — rather
-	// than whatever the agent holds now. After a /model switch the two differ,
-	// and the window that matters is the one the summary was written against.
-	// It also reads no agent field, so it cannot race a concurrent swap.
-	budget := 0
-	if m, err := provider.FindModel("", prefix.model); err == nil {
-		budget = int(float64(m.EffectiveContextWindow()) * KeepTailMaxFraction)
-	}
-	tail := tailWithinBudget(msgs, keepTail, budget)
 
 	next := make([]provider.Message, 0, 1+len(tail))
 	next = append(next, synthetic)
@@ -509,13 +503,16 @@ func coldCompactRequest(prefix promptPrefix, transcript string, midTurn bool) pr
 //     answering with a tool_use anyway is what the fallback is for.
 //   - The transcript is NOT pre-sliced to drop keepTail. Truncating it moves the
 //     cache breakpoint and hands the provider a prefix it never cached; keeping
-//     the tail is free, because it is already in the cache. keepTail is applied
-//     locally afterward, and the model is simply told which messages will
-//     survive verbatim.
+//     the tail is free, because it is already in the cache. keepTail names the
+//     suffix selected before summarization. The instruction tells the model
+//     how many messages will survive verbatim.
 //   - repairToolUseResultPairs is applied because oneTurn applies it, and the
 //     bytes the provider cached are the REPAIRED ones. It is a no-op on a valid
 //     transcript; here it is a cache-identity requirement, not a safety measure.
 func warmCompactRequest(prefix promptPrefix, msgs []provider.Message, keepTail int, midTurn bool) provider.Request {
+	// Pair repair can append result stubs to message content. Give it separate
+	// message headers so the ledger and cold fallback keep the original input.
+	wireMessages := append([]provider.Message(nil), msgs...)
 	return provider.Request{
 		Model:            prefix.model,
 		System:           prefix.system,
@@ -525,7 +522,7 @@ func warmCompactRequest(prefix promptPrefix, msgs []provider.Message, keepTail i
 		Temperature:      prefix.temperature,
 		PromptCacheKey:   prefix.cacheKey,
 		MaxTokens:        compactMaxTokens,
-		Messages:         repairToolUseResultPairs(msgs),
+		Messages:         repairToolUseResultPairs(wireMessages),
 		EphemeralContext: warmCompactInstruction(keepTail, midTurn),
 	}
 }
@@ -738,6 +735,9 @@ func joinFallbackReasons(reasons ...string) string {
 // The stream is drained even after an error rather than returned from early, so
 // the provider's goroutine always runs to completion.
 func (a *Agent) drainSummary(ctx context.Context, client provider.Client, req provider.Request, sink func(delta string)) (summary string, usage provider.Usage, stop provider.StopReason, err error) {
+	if err := a.PersistenceError(); err != nil {
+		return "", provider.Usage{}, provider.StopError, err
+	}
 	stream, serr := client.Stream(ctx, req)
 	if serr != nil {
 		return "", provider.Usage{}, provider.StopError, serr
@@ -1197,10 +1197,9 @@ const KeepTailMaxFraction = 0.10
 // pure message count — today's behavior, unchanged, for anything terva can't
 // measure.
 //
-// The result is passed through repairOrphanedToolResults, which is what makes
-// the step boundary safe: if the budget affords a tool message but not the
-// assistant tool_use that produced it, the orphaned result is dropped rather
-// than sent to a provider that would reject it.
+// If a result has no matching call in the tail, advance the boundary past its
+// whole message. This keeps the tail an unchanged suffix, so its complement
+// includes every removed block, including text beside an orphaned result.
 func tailWithinBudget(msgs []provider.Message, keepTail, budget int) []provider.Message {
 	if keepTail <= 0 || len(msgs) == 0 {
 		return nil
@@ -1209,20 +1208,38 @@ func tailWithinBudget(msgs []provider.Message, keepTail, budget int) []provider.
 		keepTail = len(msgs)
 	}
 	cand := msgs[len(msgs)-keepTail:]
-	if budget <= 0 {
-		return repairOrphanedToolResults(cand)
-	}
-
-	total, start := 0, len(cand)
-	for i := len(cand) - 1; i >= 0; i-- {
-		cost := estimateTokens(cand[i : i+1])
-		if total+cost > budget {
-			break
+	start := 0
+	if budget > 0 {
+		total := 0
+		start = len(cand)
+		for i := len(cand) - 1; i >= 0; i-- {
+			cost := estimateTokens(cand[i : i+1])
+			if total+cost > budget {
+				break
+			}
+			total += cost
+			start = i
 		}
-		total += cost
-		start = i
 	}
-	return repairOrphanedToolResults(cand[start:])
+	// Remember call positions because moving the boundary can also remove
+	// calls whose results appear later in the candidate tail.
+	calls := make(map[string]int)
+	for i := start; i < len(cand); i++ {
+		for _, block := range cand[i].Content {
+			if call, ok := block.(provider.ToolCallBlock); ok {
+				calls[call.ID] = i
+			}
+		}
+		for _, block := range cand[i].Content {
+			if result, ok := block.(provider.ToolResultBlock); ok {
+				if pos, found := calls[result.CallID]; !found || pos < start {
+					start = i + 1
+					break
+				}
+			}
+		}
+	}
+	return cand[start:]
 }
 
 // repairOrphanedToolResults removes tool_result content blocks (and

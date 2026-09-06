@@ -480,8 +480,7 @@ func runPrintMode(ctx context.Context, args build.Args, version string) error {
 
 	start := len(ag.Messages())
 	err = run.Print(ctx, ag, prompt, nil, os.Stdout)
-	WriteNewTranscript(ag, sess, start)
-	return err
+	return errors.Join(err, WriteNewTranscript(ag, sess, start))
 }
 
 func runJSONMode(ctx context.Context, args build.Args, version string) error {
@@ -524,8 +523,7 @@ func runJSONMode(ctx context.Context, args build.Args, version string) error {
 
 	start := len(ag.Messages())
 	err = modes.RunJSON(ctx, ag, prompt, nil, os.Stdout)
-	WriteNewTranscript(ag, sess, start)
-	return err
+	return errors.Join(err, WriteNewTranscript(ag, sess, start))
 }
 
 // userNameResolved reports whether a character card's {{user}} name is already
@@ -774,7 +772,7 @@ func seedCardGreeting(s *core.Session, ag *core.Agent, greeting string) {
 	}
 	ag.SetMessages([]provider.Message{msg})
 	if s != nil {
-		_ = s.AppendMessage(msg)
+		ag.RecordPersistenceError(s.AppendMessage(msg))
 	}
 }
 
@@ -852,23 +850,32 @@ func pickableSessions(all []core.SessionSummary) []core.SessionSummary {
 // agent's transcript to the session. Used by callers that don't hold
 // the persistMu (non-interactive print/json modes which run a single
 // turn under their own goroutine).
-func WriteNewTranscript(ag *core.Agent, sess *core.Session, from int) {
-	writeNewTranscriptLocked(ag, sess, from)
+// It returns and records the first persistence failure; later calls refuse to
+// append through the same agent so an ambiguous write cannot be duplicated.
+func WriteNewTranscript(ag *core.Agent, sess *core.Session, from int) error {
+	return writeNewTranscriptLocked(ag, sess, from)
 }
 
 // writeNewTranscriptLocked is the same as WriteNewTranscript. The
 // suffix marks that interactive callers must hold persistMu when
 // invoking it so concurrent appends from the agent loop don't race
 // with this catch-up flush.
-func writeNewTranscriptLocked(ag *core.Agent, sess *core.Session, from int) {
+func writeNewTranscriptLocked(ag *core.Agent, sess *core.Session, from int) error {
 	if sess == nil || ag == nil {
-		return
+		return nil
+	}
+	if err := ag.PersistenceError(); err != nil {
+		return err
 	}
 	msgs := ag.Messages()
 	for i := from; i < len(msgs); i++ {
-		_ = sess.AppendMessage(msgs[i])
+		if err := sess.AppendMessage(msgs[i]); err != nil {
+			ag.RecordPersistenceError(err)
+			return ag.PersistenceError()
+		}
 	}
-	_ = sess.AppendUsage(ag.LastTurnUsage(), ag.Cost())
+	ag.RecordPersistenceError(sess.AppendUsage(ag.LastTurnUsage(), ag.Cost()))
+	return ag.PersistenceError()
 }
 
 func readAllStdin() (string, error) {

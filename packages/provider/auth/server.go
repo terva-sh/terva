@@ -2,11 +2,12 @@ package auth
 
 import (
 	"context"
-	"errors"
-	"fmt"
+	"crypto/rand"
+	"crypto/subtle"
 	"html/template"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,11 +18,12 @@ import (
 
 // LoginResult is delivered on the channel returned by Server.Result().
 type LoginResult struct {
+	Flow     FlowID
 	Provider string
-	Method   string // "apikey" | "oauth"
+	Method   string // "apikey"; OAuth uses CallbackServer
 	APIKey   string // populated when Method == "apikey"
-	Code     string // populated when Method == "oauth"
-	State    string // OAuth state (caller should verify)
+	Code     string // Deprecated: OAuth results come from CallbackServer.
+	State    string // Deprecated: OAuth results come from CallbackServer.
 	// BaseURL, Model and ContextWindow are populated only for the
 	// openai-compatible provider, whose login form captures a custom
 	// endpoint, default model id, and default context-window size.
@@ -31,26 +33,35 @@ type LoginResult struct {
 	Err           error
 }
 
-// Server is a tiny local HTTP server used by the login flows. It binds
+// Server serves API-key forms created by BeginAPIKey. It binds
 // to 127.0.0.1 on a random free port and serves:
 //
 //	GET  /                      landing page (menu)
-//	GET  /apikey?provider=...   API key form
+//	GET  /apikey?provider=...&flow=...&token=...   API key form
 //	POST /apikey                form submit -> probes -> stores via caller
-//	GET  /callback              OAuth callback (query: code, state)
 //	GET  /success               generic success page
 //	GET  /error                 generic error page
 //
 // The caller receives login events on Result(). The server stays up
 // until Shutdown() is called.
 type Server struct {
-	l        net.Listener
-	srv      *http.Server
-	baseURL  string
-	results  chan LoginResult
-	probeFn  func(ctx context.Context, provider, key string) error
-	mu       sync.Mutex
-	shutdown bool
+	l             net.Listener
+	srv           *http.Server
+	baseURL       string
+	results       chan LoginResult
+	probeFn       func(ctx context.Context, provider, key string) error
+	probeCompatFn func(ctx context.Context, baseURL, key string) error
+	mu            sync.Mutex
+	shutdown      bool
+	flows         map[FlowID]*keyForm
+	done          chan struct{}
+}
+
+type keyForm struct {
+	provider, token string
+	ctx             context.Context
+	cancel          context.CancelFunc
+	submitting      bool
 }
 
 // NewServer starts a new login server on a random free port bound to loopback.
@@ -60,20 +71,32 @@ func NewServer() (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		l:       l,
-		baseURL: "http://" + l.Addr().String(),
-		results: make(chan LoginResult, 4),
-		probeFn: ProbeAPIKey,
+		l:             l,
+		baseURL:       "http://" + l.Addr().String(),
+		results:       make(chan LoginResult, 4),
+		probeFn:       ProbeAPIKey,
+		probeCompatFn: ProbeOpenAICompatible,
+		flows:         make(map[FlowID]*keyForm),
+		done:          make(chan struct{}),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/apikey", s.handleAPIKey)
-	mux.HandleFunc("/callback", s.handleCallback)
 	mux.HandleFunc("/success", s.handleSuccess)
 	mux.HandleFunc("/error", s.handleError)
 	mux.HandleFunc("/logo.png", serveLogo)
 	s.srv = &http.Server{
-		Handler:      mux,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
+			// Preserve Origin on form POSTs without sending the flow URL in Referer.
+			w.Header().Set("Referrer-Policy", "strict-origin")
+			w.Header().Set("X-Frame-Options", "DENY")
+			if r.Host != s.l.Addr().String() || (r.Header.Get("Origin") != "" && r.Header.Get("Origin") != s.baseURL) {
+				http.Error(w, i18n.T("forbidden"), http.StatusForbidden)
+				return
+			}
+			mux.ServeHTTP(w, r)
+		}),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 	}
@@ -92,6 +115,35 @@ func (s *Server) Port() int {
 // Result returns the channel receiving LoginResult events.
 func (s *Server) Result() <-chan LoginResult { return s.results }
 
+// BeginAPIKey creates a provider-bound form for a caller-owned flow handle.
+// The returned URL contains a credential-change token; do not log or share it.
+func (s *Server) BeginAPIKey(flow FlowID, provider string) (string, error) {
+	if flow == "" || !isKnownAPIKeyProvider(provider) {
+		return "", ErrNoFlow
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.shutdown || s.flows[flow] != nil {
+		return "", ErrFlowSuperseded
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	f := &keyForm{provider: provider, token: rand.Text(), ctx: ctx, cancel: cancel}
+	s.flows[flow] = f
+	return s.URL() + "/apikey?" + url.Values{
+		"provider": {provider}, "flow": {string(flow)}, "token": {f.token},
+	}.Encode(), nil
+}
+
+// CancelAPIKey invalidates a form and cancels its in-flight provider probe.
+func (s *Server) CancelAPIKey(flow FlowID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if f := s.flows[flow]; f != nil {
+		f.cancel()
+		delete(s.flows, flow)
+	}
+}
+
 // Shutdown stops the server. It is safe to call multiple times.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
@@ -100,8 +152,17 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	s.shutdown = true
+	for flow, f := range s.flows {
+		f.cancel()
+		delete(s.flows, flow)
+	}
+	close(s.done)
 	s.mu.Unlock()
-	return s.srv.Shutdown(ctx)
+	if err := s.srv.Shutdown(ctx); err != nil {
+		_ = s.srv.Close()
+		return err
+	}
+	return nil
 }
 
 // isKnownAPIKeyProvider reports whether the given provider supports
@@ -147,93 +208,115 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAPIKey(w http.ResponseWriter, r *http.Request) {
+	var values url.Values
 	switch r.Method {
 	case http.MethodGet:
-		provider := r.URL.Query().Get("provider")
-		if !isKnownAPIKeyProvider(provider) {
-			http.Error(w, apiKeyProviderMessage(), http.StatusBadRequest)
+		values = r.URL.Query()
+	case http.MethodPost:
+		if r.Header.Get("Origin") != s.baseURL {
+			http.Error(w, i18n.T("forbidden"), http.StatusForbidden)
 			return
 		}
-		tpl.ExecuteTemplate(w, "apikey", map[string]any{
-			"Provider": provider,
-			"Compat":   provider == "openai-compatible",
-		})
-	case http.MethodPost:
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 		if err := r.ParseForm(); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		provider := strings.TrimSpace(r.FormValue("provider"))
-		key := strings.TrimSpace(r.FormValue("api_key"))
-		baseURL := strings.TrimSpace(r.FormValue("base_url"))
-		model := strings.TrimSpace(r.FormValue("model"))
-		// Default context window for discovered models the server doesn't
-		// describe. Optional; blank / unparseable leaves it 0 ("unknown").
-		contextWindow, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("context_window")))
-		if contextWindow < 0 {
-			contextWindow = 0
-		}
-		compat := provider == "openai-compatible"
-		if provider == "" {
-			s.errorPage(w, i18n.T("missing provider"))
-			return
-		}
-		if compat {
-			// The key is optional for local endpoints, but we need
-			// somewhere to send requests and a model id to send them with.
-			if baseURL == "" || model == "" {
-				s.errorPage(w, i18n.T("base url and model are required for an openai-compatible endpoint"))
-				return
-			}
-		} else if key == "" {
-			s.errorPage(w, i18n.T("missing provider or api key"))
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-		defer cancel()
-		var probeErr error
-		if compat {
-			probeErr = ProbeOpenAICompatible(ctx, baseURL, key)
-		} else {
-			probeErr = s.probeFn(ctx, provider, key)
-		}
-		if probeErr != nil {
-			s.errorPage(w, probeErr.Error())
-			s.results <- LoginResult{Provider: provider, Method: "apikey", Err: probeErr}
-			return
-		}
-		s.successPage(w, provider, "api key")
-		s.results <- LoginResult{Provider: provider, Method: "apikey", APIKey: key, BaseURL: baseURL, Model: model, ContextWindow: contextWindow}
+		values = r.PostForm
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
-}
-
-func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	provider := q.Get("provider")
-	if provider == "" {
-		// Some OAuth providers don't echo back custom params; try state-encoded form.
-		provider = decodeStateProvider(q.Get("state"))
+	flow := FlowID(values.Get("flow"))
+	provider := values.Get("provider")
+	s.mu.Lock()
+	f := s.flows[flow]
+	if s.shutdown || f == nil || f.provider != provider || subtle.ConstantTimeCompare([]byte(f.token), []byte(values.Get("token"))) != 1 {
+		s.mu.Unlock()
+		http.Error(w, i18n.T("this login is no longer in progress; start it again"), http.StatusForbidden)
+		return
 	}
-	if errParam := q.Get("error"); errParam != "" {
-		msg := errParam
-		if d := q.Get("error_description"); d != "" {
-			msg += ": " + d
+	if r.Method == http.MethodGet {
+		token := f.token
+		s.mu.Unlock()
+		tpl.ExecuteTemplate(w, "apikey", map[string]any{
+			"Provider": provider, "Compat": provider == compatProvider,
+			"Flow": flow, "Token": token,
+		})
+		return
+	}
+	if f.submitting {
+		s.mu.Unlock()
+		http.Error(w, i18n.T("login is already in progress"), http.StatusConflict)
+		return
+	}
+	f.submitting = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		f.submitting = false
+		s.mu.Unlock()
+	}()
+	key := strings.TrimSpace(values.Get("api_key"))
+	baseURL := strings.TrimSpace(values.Get("base_url"))
+	model := strings.TrimSpace(values.Get("model"))
+	// Default context window for discovered models the server doesn't
+	// describe. Optional; blank / unparseable leaves it 0 ("unknown").
+	contextWindow, _ := strconv.Atoi(strings.TrimSpace(values.Get("context_window")))
+	if contextWindow < 0 {
+		contextWindow = 0
+	}
+	compat := provider == "openai-compatible"
+	if compat {
+		// The key is optional for local endpoints, but we need
+		// somewhere to send requests and a model id to send them with.
+		if baseURL == "" || model == "" {
+			s.errorPage(w, i18n.T("base url and model are required for an openai-compatible endpoint"))
+			return
 		}
-		s.errorPage(w, msg)
-		s.results <- LoginResult{Provider: provider, Method: "oauth", Err: errors.New(msg)}
+	} else if key == "" {
+		s.errorPage(w, i18n.T("missing provider or api key"))
 		return
 	}
-	code := q.Get("code")
-	state := q.Get("state")
-	if code == "" {
-		s.errorPage(w, i18n.T("missing authorization code"))
-		s.results <- LoginResult{Provider: provider, Method: "oauth", Err: fmt.Errorf("missing code")}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	stop := context.AfterFunc(f.ctx, cancel)
+	defer stop()
+	var probeErr error
+	if compat {
+		probeErr = s.probeCompatFn(ctx, baseURL, key)
+	} else {
+		probeErr = s.probeFn(ctx, provider, key)
+	}
+	res := LoginResult{Flow: flow, Provider: provider, Method: "apikey", APIKey: key, BaseURL: baseURL, Model: model, ContextWindow: contextWindow, Err: probeErr}
+	// Recheck after the probe: cancel or shutdown may have invalidated it.
+	s.mu.Lock()
+	if s.shutdown || s.flows[flow] != f {
+		s.mu.Unlock()
+		http.Error(w, i18n.T("this login is no longer in progress; start it again"), http.StatusForbidden)
 		return
 	}
-	s.successPage(w, provider, "subscription")
-	s.results <- LoginResult{Provider: provider, Method: "oauth", Code: code, State: state}
+	if err := ctx.Err(); err != nil {
+		probeErr = err
+		res.Err = err
+	}
+	select {
+	case s.results <- res:
+		if probeErr == nil {
+			delete(s.flows, flow)
+			f.cancel()
+		}
+	default:
+		s.mu.Unlock()
+		http.Error(w, i18n.T("login results are busy; try again"), http.StatusServiceUnavailable)
+		return
+	}
+	s.mu.Unlock()
+	if probeErr != nil {
+		s.errorPage(w, probeErr.Error())
+		return
+	}
+	s.successPage(w, provider, "api key")
 }
 
 func (s *Server) handleSuccess(w http.ResponseWriter, r *http.Request) {
@@ -259,17 +342,9 @@ func (s *Server) errorPage(w http.ResponseWriter, msg string) {
 	tpl.ExecuteTemplate(w, "error", map[string]any{"Message": msg})
 }
 
-// decodeStateProvider extracts the provider from a state string of the
-// form "<provider>:<nonce>".
-func decodeStateProvider(state string) string {
-	if i := strings.IndexByte(state, ':'); i > 0 {
-		return state[:i]
-	}
-	return ""
-}
-
 // BuildRedirectURI returns the callback URL the OAuth server should
 // redirect to.
+// Deprecated: Server no longer accepts OAuth callbacks. Use CallbackServer.
 func (s *Server) BuildRedirectURI() string {
 	return s.baseURL + "/callback"
 }
@@ -284,15 +359,7 @@ var tpl = template.Must(template.New("index").Parse(`<!doctype html><html lang="
 ` + logoTag + `
 <h1><span class="terva">terva</span> login</h1>
 <hr class="rule">
-<p>paste an api key for anthropic, openai, kimi, deepseek, or google. <span class="terva">terva</span> probes the provider once, then saves the key to <span class="mono">~/Library/Application Support/terva/auth.json</span>.</p>
-<p>
-  <a href="/apikey?provider=anthropic">anthropic api key →</a><br>
-  <a href="/apikey?provider=openai">openai api key →</a><br>
-  <a href="/apikey?provider=kimi">kimi api key →</a><br>
-  <a href="/apikey?provider=deepseek">deepseek api key →</a><br>
-  <a href="/apikey?provider=google">google gemini api key →</a><br>
-  <a href="/apikey?provider=openai-compatible">openai-compatible endpoint (local / custom) →</a>
-</p>
+<p>start /login inside <span class="terva">terva</span> and choose a provider to open its api key form.</p>
 <hr class="rule">
 <p class="muted">for a subscription login (claude pro/max - chatgpt plus/pro - kimi code - github copilot), close this tab and run /login inside <span class="terva">terva</span>.</p>
 </body></html>`))
@@ -309,6 +376,8 @@ func init() {
 <p>point <span class="terva">terva</span> at any openai-compatible endpoint (lm studio, vllm, llama.cpp, ollama's /v1, a gateway, ...). enter the base url and a default model id; <span class="terva">terva</span> also auto-lists every model the endpoint serves from <span class="mono">/v1/models</span> in the <span class="mono">/model</span> picker. the api key is optional - many local servers ignore it.</p>
 <p class="muted">the context window is a default for models the server doesn't describe its size for. leave blank if unsure; override per model in <span class="mono">models.json</span>.</p>
 <form method="POST" action="/apikey">
+  <input type="hidden" name="flow" value="{{.Flow}}" />
+  <input type="hidden" name="token" value="{{.Token}}" />
   <input type="hidden" name="provider" value="{{.Provider}}" />
   <label for="base_url">base url (e.g. http://localhost:1234/v1)</label>
   <input id="base_url" name="base_url" type="text" autocomplete="off" autofocus placeholder="http://localhost:1234/v1" />
@@ -323,6 +392,8 @@ func init() {
 {{else}}
 <p>paste your {{.Provider}} api key. <span class="terva">terva</span> will probe the provider with it once, then save it if the key is accepted.</p>
 <form method="POST" action="/apikey">
+  <input type="hidden" name="flow" value="{{.Flow}}" />
+  <input type="hidden" name="token" value="{{.Token}}" />
   <input type="hidden" name="provider" value="{{.Provider}}" />
   <label for="api_key">api key</label>
   <input id="api_key" name="api_key" type="password" autocomplete="off" autofocus />

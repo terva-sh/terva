@@ -62,8 +62,9 @@ var (
 // (for api-key form) plus provider-specific OAuth callback servers.
 type Manager struct {
 	store       *Store
-	keyServer   *Server         // random-port web form server (api-key flow)
-	oauthServer *CallbackServer // fixed-port callback server (oauth flow, only one at a time)
+	keyServer   *Server           // random-port web form server (api-key flow)
+	keyFlows    map[FlowID]string // active browser flow -> provider; protected by mu
+	oauthServer *CallbackServer   // fixed-port callback server (oauth flow, only one at a time)
 	mu          sync.Mutex
 	events      chan Event
 	openBrowser bool
@@ -151,13 +152,9 @@ func (m *Manager) nextFlow() FlowID {
 // Close shuts down any running servers and cancels pending flows.
 func (m *Manager) Close() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.keyServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = m.keyServer.Shutdown(ctx)
-		cancel()
-		m.keyServer = nil
-	}
+	keyServer := m.keyServer
+	m.keyServer = nil
+	m.keyFlows = nil
 	if m.oauthServer != nil {
 		m.oauthServer.Shutdown()
 		m.oauthServer = nil
@@ -165,6 +162,12 @@ func (m *Manager) Close() {
 	if m.oauthCancel != nil {
 		m.oauthCancel()
 		m.oauthCancel = nil
+	}
+	m.mu.Unlock()
+	if keyServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = keyServer.Shutdown(ctx)
 	}
 }
 
@@ -180,14 +183,49 @@ func (m *Manager) StartAPIKey(provider string) (Flow, error) {
 	if !isKnownAPIKeyProvider(provider) {
 		return Flow{}, errors.New(apiKeyProviderMessage())
 	}
-	if err := m.ensureKeyServer(); err != nil {
+	m.mu.Lock()
+	if err := m.ensureKeyServerLocked(); err != nil {
+		m.mu.Unlock()
 		return Flow{}, err
 	}
-	u := m.keyServer.URL() + "/apikey?provider=" + provider
-	f := Flow{ID: m.nextFlow(), Provider: provider, Method: "apikey", URL: u}
+	f := Flow{ID: m.nextFlow(), Provider: provider, Method: "apikey"}
+	u, err := m.keyServer.BeginAPIKey(f.ID, provider)
+	if err != nil {
+		m.mu.Unlock()
+		return Flow{}, err
+	}
+	f.URL = u
+	m.keyFlows[f.ID] = provider
+	m.mu.Unlock()
 	go m.maybeOpen(u)
 	m.emit(Event{Kind: "started", Flow: f.ID, Provider: provider, Method: "apikey", URL: u})
 	return f, nil
+}
+
+// CancelAPIKey abandons one browser flow. It cannot cancel another login.
+func (m *Manager) CancelAPIKey(flow FlowID) {
+	m.mu.Lock()
+	provider, ok := m.keyFlows[flow]
+	if ok {
+		delete(m.keyFlows, flow)
+		m.keyServer.CancelAPIKey(flow)
+	}
+	m.mu.Unlock()
+	if ok {
+		m.emit(Event{Kind: "canceled", Flow: flow, Provider: provider, Method: "apikey"})
+	}
+}
+
+// A direct credential submission retires browser alternatives for that provider.
+// Hold mu through both the store write and invalidation so a queued browser
+// result cannot overwrite the direct submission afterwards.
+func (m *Manager) cancelKeyFlowsLocked(provider string) {
+	for flow, p := range m.keyFlows {
+		if p == provider {
+			delete(m.keyFlows, flow)
+			m.keyServer.CancelAPIKey(flow)
+		}
+	}
 }
 
 // CompleteAPIKey stores an API key handed to terva directly, rather than
@@ -221,7 +259,13 @@ func (m *Manager) CompleteAPIKey(ctx context.Context, provider, key string) erro
 	if err := m.probeAPIKey(ctx, provider, key); err != nil {
 		return fail(err)
 	}
-	if err := m.store.SetAPIKey(provider, key); err != nil {
+	m.mu.Lock()
+	err := m.store.SetAPIKey(provider, key)
+	if err == nil {
+		m.cancelKeyFlowsLocked(provider)
+	}
+	m.mu.Unlock()
+	if err != nil {
 		return fail(err)
 	}
 	m.emit(Event{Kind: "success", Provider: provider, Method: "apikey"})
@@ -254,16 +298,20 @@ func (m *Manager) CompleteCompatAPIKey(ctx context.Context, baseURL, model, key 
 	if err := m.probeCompat(ctx, baseURL, key); err != nil {
 		return fail(err)
 	}
-	if err := m.store.SetCompatAPIKey(compatProvider, key, baseURL, model, contextWindow); err != nil {
+	m.mu.Lock()
+	err := m.store.SetCompatAPIKey(compatProvider, key, baseURL, model, contextWindow)
+	if err == nil {
+		m.cancelKeyFlowsLocked(compatProvider)
+	}
+	m.mu.Unlock()
+	if err != nil {
 		return fail(err)
 	}
 	m.emit(Event{Kind: "success", Provider: compatProvider, Method: "apikey"})
 	return nil
 }
 
-func (m *Manager) ensureKeyServer() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (m *Manager) ensureKeyServerLocked() error {
 	if m.keyServer != nil {
 		return nil
 	}
@@ -272,6 +320,9 @@ func (m *Manager) ensureKeyServer() error {
 		return err
 	}
 	m.keyServer = s
+	m.keyFlows = make(map[FlowID]string)
+	s.probeFn = m.probeAPIKey
+	s.probeCompatFn = m.probeCompat
 	// Hand the server to the consumer rather than letting it reach back for
 	// m.keyServer: Close() nils that field under the mutex, and the consumer
 	// read it without one — a real data race, and on the losing schedule a nil
@@ -282,23 +333,45 @@ func (m *Manager) ensureKeyServer() error {
 }
 
 func (m *Manager) consumeKeyServerResults(s *Server) {
-	for res := range s.Result() {
-		if res.Err != nil {
-			m.emit(Event{Kind: "error", Provider: res.Provider, Method: res.Method, Message: res.Err.Error()})
-			continue
+	for {
+		select {
+		case <-s.done:
+			return
+		case res := <-s.Result():
+			m.consumeKeyResult(s, res)
 		}
-		var setErr error
-		if res.Provider == "openai-compatible" {
-			setErr = m.store.SetCompatAPIKey(res.Provider, res.APIKey, res.BaseURL, res.Model, res.ContextWindow)
-		} else {
-			setErr = m.store.SetAPIKey(res.Provider, res.APIKey)
-		}
-		if setErr != nil {
-			m.emit(Event{Kind: "error", Provider: res.Provider, Method: "apikey", Message: setErr.Error()})
-			continue
-		}
-		m.emit(Event{Kind: "success", Provider: res.Provider, Method: "apikey"})
 	}
+}
+
+func (m *Manager) consumeKeyResult(s *Server, res LoginResult) {
+	// Admission, persistence and cancellation share mu. A result queued before
+	// cancel/Close must not write a credential after cancellation returns.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	provider, active := m.keyFlows[res.Flow]
+	if s != m.keyServer || !active || res.Method != "apikey" || res.Provider != provider || !isKnownAPIKeyProvider(provider) {
+		return
+	}
+	if res.Err != nil {
+		m.emit(Event{Kind: "error", Flow: res.Flow, Provider: provider, Method: "apikey", Message: res.Err.Error()})
+		return
+	}
+	if (provider != compatProvider && strings.TrimSpace(res.APIKey) == "") ||
+		(provider == compatProvider && (strings.TrimSpace(res.BaseURL) == "" || strings.TrimSpace(res.Model) == "")) {
+		return
+	}
+	delete(m.keyFlows, res.Flow)
+	var err error
+	if provider == compatProvider {
+		err = m.store.SetCompatAPIKey(provider, res.APIKey, res.BaseURL, res.Model, res.ContextWindow)
+	} else {
+		err = m.store.SetAPIKey(provider, res.APIKey)
+	}
+	if err != nil {
+		m.emit(Event{Kind: "error", Flow: res.Flow, Provider: provider, Method: "apikey", Message: err.Error()})
+		return
+	}
+	m.emit(Event{Kind: "success", Flow: res.Flow, Provider: provider, Method: "apikey"})
 }
 
 // ---- OAuth flow ----

@@ -35,6 +35,12 @@ type Session struct {
 	// goroutine-safe, so unsynchronized writers would interleave bytes / corrupt
 	// the JSONL. All Append*/Update*/writeLine paths take this lock.
 	writeMu sync.Mutex
+	// A failed row may have reached disk in part. This handle never retries it.
+	writeErr error
+	closed   bool
+	// needsSeparator isolates an unterminated row left by a failed prior writer.
+	// Opening stays read-only until the first append adds the separator.
+	needsSeparator bool
 
 	// freshFile is true when the file was created by NewSession (this
 	// process owns it) and false when OpenSession reopened an existing
@@ -1381,15 +1387,40 @@ func openSession(path string, stub InterruptStub) (*Session, []provider.Message,
 	if err != nil {
 		return nil, nil, err
 	}
+	needsSeparator, err := sessionNeedsSeparator(path)
+	if err != nil {
+		return nil, nil, err
+	}
 	out, err := privfs.OpenFile(path, os.O_APPEND|os.O_WRONLY)
 	if err != nil {
 		return nil, nil, err
 	}
 	s := &Session{ID: r.meta.ID, Path: path, Meta: r.meta, TitleGenerated: r.titleGenerated, writer: out, buf: bufio.NewWriter(out), LoadWarnings: r.report.warnings(path),
+		needsSeparator:   needsSeparator,
 		persistedLore:    cloneLore(r.lore),
 		ActiveToolGroups: r.activeGroups,
 		LoadStats:        LoadStats{Elapsed: r.elapsed, Messages: len(r.messages), Amends: r.amends, TailTakes: r.tailTakes}}
 	return s, r.messages, nil
+}
+
+func sessionNeedsSeparator(path string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	if st.Size() == 0 {
+		return false, nil
+	}
+	var last [1]byte
+	if _, err := f.ReadAt(last[:], st.Size()-1); err != nil {
+		return false, err
+	}
+	return last[0] != '\n', nil
 }
 
 func replaySession(path string, stub InterruptStub) (*sessionReplay, error) {
@@ -2518,11 +2549,16 @@ func (s *Session) AppendAmend(op string, index int, msg *provider.Message, reaso
 // un-revised transcript. Idempotent: a no-op once the session already declares
 // the version, so a heavily-edited session grows exactly one extra meta row.
 func (s *Session) bumpFormatForAmend() error {
-	if s == nil || s.Meta.FormatVersion >= sessionFormatVersionAmend {
+	if s == nil {
+		return nil
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if s.Meta.FormatVersion >= sessionFormatVersionAmend {
 		return nil
 	}
 	s.Meta.FormatVersion = sessionFormatVersionAmend
-	return s.writeMeta()
+	return s.writeMetaLocked()
 }
 
 // AppendSelect writes a "select" amend (see sessionAmend): make take `variant` of
@@ -3082,7 +3118,11 @@ func (s *Session) Close() error {
 	// flushes a half-written line nor reads messagesAppended mid-update.
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	flushErr := s.buf.Flush()
+	s.closed = true
+	flushErr := s.writeErr
+	if flushErr == nil {
+		flushErr = s.buf.Flush()
+	}
 	closeErr := s.writer.Close()
 	// Close the error sidecar if this session ever opened one (its writes are
 	// unbuffered, so there's nothing to flush — just release the handle).
@@ -3092,7 +3132,7 @@ func (s *Session) Close() error {
 		s.errFile = nil
 	}
 	s.errMu.Unlock()
-	if s.freshFile && s.messagesAppended == 0 {
+	if s.freshFile && s.messagesAppended == 0 && flushErr == nil {
 		// Best-effort cleanup. We deliberately don't propagate the
 		// remove error: if it fails (file already gone, perms changed)
 		// the worst case is one stale empty file in the listing.
@@ -3141,17 +3181,53 @@ func marshalLine(row sessionLine) ([]byte, error) {
 // Append* methods that also mutate messagesAppended under the same lock, so the
 // buffer write and the counter update are one atomic critical section.
 func (s *Session) writeLineLocked(row sessionLine) error {
+	if s.writeErr != nil {
+		return s.writeErr
+	}
+	if s.closed {
+		return os.ErrClosed
+	}
 	b, err := marshalLine(row)
 	if err != nil {
+		s.writeErr = err
 		return err
 	}
+	if s.needsSeparator {
+		if err := s.buf.WriteByte('\n'); err != nil {
+			s.writeErr = err
+			return err
+		}
+	}
 	if _, err := s.buf.Write(b); err != nil {
+		s.writeErr = err
 		return err
 	}
 	if err := s.buf.WriteByte('\n'); err != nil {
+		s.writeErr = err
 		return err
 	}
-	return s.buf.Flush()
+	s.writeErr = s.buf.Flush()
+	if s.writeErr == nil {
+		s.needsSeparator = false
+	}
+	return s.writeErr
+}
+
+// WriteError reports why this handle cannot accept durable writes. A partial
+// write requires recovery through a newly opened session, never an append retry.
+func (s *Session) WriteError() error {
+	if s == nil {
+		return nil
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if s.writeErr != nil {
+		return s.writeErr
+	}
+	if s.closed {
+		return os.ErrClosed
+	}
+	return nil
 }
 
 // ---- content (de)serialization ----

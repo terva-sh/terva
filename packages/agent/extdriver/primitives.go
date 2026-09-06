@@ -41,6 +41,7 @@ type CommandInfo struct {
 // ToolInfo is one extension-registered tool. Used by the agent's
 // build step to materialise core.Tool wrappers.
 type ToolInfo struct {
+	owner       *Extension
 	Extension   string
 	Name        string
 	Description string
@@ -79,7 +80,11 @@ func (d *Driver) Tools() []ToolInfo {
 	var out []ToolInfo
 	for _, ext := range d.ext {
 		for _, t := range ext.tools {
+			if d.toolIndex[t.Name] != ext {
+				continue
+			}
 			out = append(out, ToolInfo{
+				owner:       ext,
 				Extension:   ext.Manifest.Name,
 				Name:        t.Name,
 				Description: t.Description,
@@ -112,7 +117,21 @@ func (d *Driver) InvokeTool(ctx context.Context, name string, args json.RawMessa
 	if !ok {
 		return extproto.ToolResultFromExt{}, fmt.Errorf("no extension registered for tool %q", name)
 	}
+	return invokeTool(ctx, ext, name, args, timeout)
+}
 
+// InvokeTool uses the process that supplied this metadata snapshot. A reload
+// can stop that process, but cannot redirect this call to its replacement.
+func (t ToolInfo) InvokeTool(ctx context.Context, name string, args json.RawMessage, timeout time.Duration) (extproto.ToolResultFromExt, error) {
+	if t.owner == nil || name != t.Name {
+		return extproto.ToolResultFromExt{}, fmt.Errorf("no extension registered for tool %q", name)
+	}
+	return invokeTool(ctx, t.owner, name, args, timeout)
+}
+
+func invokeTool(ctx context.Context, ext *Extension, name string, args json.RawMessage, timeout time.Duration) (extproto.ToolResultFromExt, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	// Cap the outbound args. A frame larger than the extension's read
 	// limit would kill it mid-read (and InvokeTool would only find out
 	// when it timed out, ~60s later). Return a normal tool error the
@@ -134,7 +153,7 @@ func (d *Driver) InvokeTool(ctx context.Context, name string, args json.RawMessa
 	ext.pendingTool[id] = ch
 	ext.mu.Unlock()
 
-	if err := ext.writeFrame(extproto.ToolCallFromHost{
+	if err := ext.writeFrameContext(ctx, extproto.ToolCallFromHost{
 		Type: "tool_call",
 		ID:   id,
 		Name: name,
@@ -149,11 +168,11 @@ func (d *Driver) InvokeTool(ctx context.Context, name string, args json.RawMessa
 	select {
 	case resp := <-ch:
 		return resp, nil
-	case <-time.After(timeout):
+	case <-ext.quit:
 		ext.mu.Lock()
 		delete(ext.pendingTool, id)
 		ext.mu.Unlock()
-		return extproto.ToolResultFromExt{}, fmt.Errorf("timeout waiting for %s/%s", ext.Manifest.Name, name)
+		return extproto.ToolResultFromExt{}, errExtStopped
 	case <-ctx.Done():
 		ext.mu.Lock()
 		delete(ext.pendingTool, id)
@@ -252,6 +271,8 @@ func (d *Driver) CommandOwner(name string) string {
 // extension's CommandResponse so the caller can act on the action
 // (prompt / insert / display).
 func (d *Driver) Invoke(ctx context.Context, name, args string, timeout time.Duration) (extproto.CommandResponseFromExt, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	d.mu.RLock()
 	ext, ok := d.commandIndex[name]
 	d.mu.RUnlock()
@@ -265,7 +286,7 @@ func (d *Driver) Invoke(ctx context.Context, name, args string, timeout time.Dur
 	ext.pending[id] = ch
 	ext.mu.Unlock()
 
-	if err := ext.writeFrame(extproto.CommandInvokedFromHost{
+	if err := ext.writeFrameContext(ctx, extproto.CommandInvokedFromHost{
 		Type: "command_invoked",
 		ID:   id,
 		Name: name,
@@ -280,11 +301,11 @@ func (d *Driver) Invoke(ctx context.Context, name, args string, timeout time.Dur
 	select {
 	case resp := <-ch:
 		return resp, nil
-	case <-time.After(timeout):
+	case <-ext.quit:
 		ext.mu.Lock()
 		delete(ext.pending, id)
 		ext.mu.Unlock()
-		return extproto.CommandResponseFromExt{}, fmt.Errorf("timeout waiting for %s/%s", ext.Manifest.Name, name)
+		return extproto.CommandResponseFromExt{}, errExtStopped
 	case <-ctx.Done():
 		ext.mu.Lock()
 		delete(ext.pending, id)

@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"sync"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
@@ -30,7 +31,10 @@ func (w *Workspace) ContinueTurn(_ context.Context, sess string, epoch uint64) e
 // replace amend once the turn seals. Same epoch/busy guards as the other revision
 // verbs; a bad request when there is nothing to continue or the provider can't.
 func (s *wsSession) continueTurn(epoch uint64) error {
-	if err := s.reviseGuard(epoch); err != nil {
+	s.revisionMu.Lock()
+	release := sync.OnceFunc(s.revisionMu.Unlock)
+	defer release()
+	if err := s.revisionGuard(&epoch); err != nil {
 		return err
 	}
 	msgs := s.agent.Messages()
@@ -41,7 +45,7 @@ func (s *wsSession) continueTurn(epoch uint64) error {
 	if !s.agent.ContinuesAssistantPrefill() {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("this session's provider cannot continue an assistant message"))
 	}
-	turnCtx, err := s.beginTurn()
+	turnCtx, err := s.beginTurnHeld()
 	if err != nil {
 		return err
 	}
@@ -49,6 +53,7 @@ func (s *wsSession) continueTurn(epoch uint64) error {
 	// invalidates the swipe span and creates NO new variant, so clear the tail and
 	// do NOT reseed it (unlike retry, which seeds a fresh take).
 	s.clearTail()
+	release()
 	s.launchTurn(turnCtx, func(ctx context.Context) error {
 		return s.agent.ContinueAssistant(ctx, nil)
 	}, s.persistContinue)
@@ -64,7 +69,7 @@ func (s *wsSession) persistContinue() {
 		// idx is the in-memory index of the continued message; persist against the
 		// on-disk index so a reload replaces the right row (see wsSession.diskIndex).
 		if disk, ok := s.diskIndex(idx); ok {
-			_ = s.sess.AppendAmend(core.AmendReplace, disk, &merged, "continue")
+			s.agent.RecordPersistenceError(s.sess.AppendAmend(core.AmendReplace, disk, &merged, "continue"))
 		}
 	}
 }

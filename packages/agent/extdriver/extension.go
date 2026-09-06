@@ -13,6 +13,7 @@
 package extdriver
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -126,13 +127,6 @@ type Extension struct {
 	// deliberate shutdown apart from an unexpected subprocess crash,
 	// so only real crashes surface a notice to the user.
 	stopping atomic.Bool
-
-	// stdinMu guards the stdin pipe against a write racing its Close in
-	// stopExtensions. The single writeLoop goroutine is now the only
-	// thing that writes to the pipe (see outbox), so this lock no longer
-	// guards against interleaving between writers — only against
-	// writing into a pipe Close just yanked out.
-	stdinMu sync.Mutex
 
 	// outbox is the per-extension ordered outbound queue. Every
 	// host->extension frame (lifecycle events, tool/command
@@ -304,11 +298,15 @@ var (
 )
 
 // writeFrame encodes v and enqueues it on the ordered outbox, blocking
-// for room if necessary (the request/reply, panel, hello_ack and
-// shutdown paths all want their frame delivered, and their callers are
-// already prepared to wait). A nil outbox (extension that never
-// spawned, e.g. theme-only) is treated as a no-op error.
+// for room for at most 30 seconds. Request callers use writeFrameContext
+// to include this wait in their own deadline. A nil outbox returns an error.
 func (e *Extension) writeFrame(v any) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return e.writeFrameContext(ctx, v)
+}
+
+func (e *Extension) writeFrameContext(ctx context.Context, v any) error {
 	frame, err := extproto.Encode(v)
 	if err != nil {
 		return err
@@ -316,16 +314,22 @@ func (e *Extension) writeFrame(v any) error {
 	if e.outbox == nil {
 		return errors.New("extension stdin not available")
 	}
-	return e.enqueueFrame(frame, true)
+	return e.enqueueFrameContext(ctx, frame, true)
 }
 
 // enqueueFrame appends a pre-encoded frame to the ordered outbox. When
 // block is false (lifecycle events via EmitEvent), a full outbox drops
 // the frame (errOutboxFull) so the agent loop never stalls on a wedged
-// extension. When block is true, it waits for room, bounded only by the
-// extension's liveness (quit). Either way it returns errExtStopped once
-// teardown has begun.
+// extension. When block is true, it waits until room or teardown is available.
+// Request callers use enqueueFrameContext to bound this wait by a deadline.
 func (e *Extension) enqueueFrame(frame []byte, block bool) error {
+	return e.enqueueFrameContext(context.Background(), frame, block)
+}
+
+func (e *Extension) enqueueFrameContext(ctx context.Context, frame []byte, block bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Reject promptly once stop has been signalled, so a frame can't
 	// sneak past a closing extension.
 	select {
@@ -339,6 +343,8 @@ func (e *Extension) enqueueFrame(frame []byte, block bool) error {
 			return nil
 		case <-e.quit:
 			return errExtStopped
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 	select {
@@ -358,6 +364,7 @@ func (e *Extension) enqueueFrame(frame []byte, block bool) error {
 // enqueued just before teardown still reaches the extension.
 func (e *Extension) writeLoop() {
 	defer close(e.writerDone)
+	defer e.quitOnce.Do(func() { close(e.quit) })
 	for {
 		select {
 		case frame := <-e.outbox:
@@ -379,12 +386,9 @@ func (e *Extension) writeLoop() {
 	}
 }
 
-// writeOne writes a single frame under stdinMu (which guards against a
-// concurrent stdin.Close in stopExtensions). Returns false if the pipe
-// is gone or the write failed, signalling writeLoop to stop.
+// writeOne runs only in writeLoop. The stdin pipe stays immutable after spawn.
+// Shutdown can close it concurrently to release a blocked write.
 func (e *Extension) writeOne(frame []byte) bool {
-	e.stdinMu.Lock()
-	defer e.stdinMu.Unlock()
 	if e.stdin == nil {
 		return false
 	}

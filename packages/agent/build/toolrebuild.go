@@ -49,12 +49,11 @@ type LiveToolSet struct {
 	// now assemble the struct inside their rebuild closure.
 	Args Args
 
-	// ReadOnly is the LIVE gate's read-only set, not the throwaway one a fresh
-	// Resolve mints. MergeToolsForMode records each read_only tool's name in
-	// whichever set the Resolved carries, and the confirm gate reads the live
-	// one — so without this an extension's read-only tools start prompting
-	// after any rebuild.
+	// ReadOnly is retained for source compatibility.
+	// Deprecated: rebuilds derive classification from the current tools.
 	ReadOnly *core.ReadOnlySet
+	// Gate is shared across generations; script bindings use it for approval.
+	Gate *core.ConfirmGate
 
 	// Tasks is the session's task controller. A fresh resolve carries a fresh
 	// one over an unbound store; adopting it would leave the model writing
@@ -99,7 +98,6 @@ func (s LiveToolSet) Rebuild(ag *core.Agent) bool {
 	if err != nil {
 		return false
 	}
-	r.AdoptReadOnlySet(s.ReadOnly)
 	r.UseTasks(s.Tasks)
 	r.UseMemory(s.Memory)
 	r.UseFiles(s.Files)
@@ -110,5 +108,5 @@ func (s LiveToolSet) Rebuild(ag *core.Agent) bool {
 	if s.MCP != nil {
 		r.MergeExtensionTools(s.MCP)
 	}
-	return ag.SetTools(r.ToolRegistry)
+	return r.PublishTools(ag, s.Gate)
 }

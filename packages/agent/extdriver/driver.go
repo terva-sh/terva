@@ -1573,13 +1573,11 @@ func stopExtensions(exts []*Extension, gracePeriod time.Duration) {
 		case <-ext.writerDone:
 		case <-time.After(writerFlushGrace):
 		}
-		// Close under stdinMu so we don't yank the pipe out from under
-		// the writer's in-flight Write.
-		ext.stdinMu.Lock()
+		// Closing the OS pipe releases a blocked writer. Never wait for that
+		// writer's lock before reaching the process termination deadline.
 		if ext.stdin != nil {
 			_ = ext.stdin.Close()
 		}
-		ext.stdinMu.Unlock()
 	}
 
 	deadline := time.Now().Add(gracePeriod)
@@ -1609,6 +1607,11 @@ func stopExtensions(exts []*Extension, gracePeriod time.Duration) {
 			case <-ext.waitDone:
 			case <-time.After(time.Second):
 				killExtensionGroup(ext.cmd.Process)
+				// A descendant can retain stdout after the group leader dies.
+				// Release the reader so it can reach the single reap owner.
+				if ext.stdout != nil {
+					_ = ext.stdout.Close()
+				}
 				<-ext.waitDone
 			}
 		}

@@ -10,13 +10,9 @@ import (
 	"terva.sh/terva/packages/i18n"
 )
 
-// ReadOnlySet is the registry of side-effect-free tool names the
-// approval modes consult. It is mutex-guarded because membership
-// grows after gate construction: extension and MCP tools that declare
-// read_only join when their managers merge into the registry, which
-// may happen while the policy is live (mid-session reloads). Relying
-// on "merges only happen between turns" would be exactly the
-// call-ordering convention this fork replaces with contracts.
+// ReadOnlySet names side-effect-free tools. Registry assembly adds names;
+// publication and turn dispatch take independent snapshots. A rebuild must
+// start with a fresh set so removed tools cannot retain authority.
 //
 // The zero value is an empty, usable set, and a nil *ReadOnlySet is an empty
 // immutable one. NewReadOnlySet is for seeding names, not for making the value
@@ -68,6 +64,20 @@ func (s *ReadOnlySet) Has(name string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.m[name]
+}
+
+// Snapshot returns an independent set. A nil receiver stays nil.
+func (s *ReadOnlySet) Snapshot() *ReadOnlySet {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := NewReadOnlySet()
+	for name, readOnly := range s.m {
+		out.m[name] = readOnly
+	}
+	return out
 }
 
 // ApprovalMode names how much the agent may do without asking. It is

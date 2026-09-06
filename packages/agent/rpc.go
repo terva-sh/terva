@@ -155,14 +155,14 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 		rebuildArgs.TrustPin = &r.Trusted
 		rebuildArgs.Model = ag.Model
 		build.LiveToolSet{
-			Args:     rebuildArgs,
-			ReadOnly: roSet,
-			Tasks:    r.Tasks,
-			Memory:   memTool,
-			Files:    fileState,
-			Sandbox:  r.Sandbox,
-			Ext:      extMgr,
-			MCP:      mcpAdapter,
+			Args:    rebuildArgs,
+			Gate:    confirmGate,
+			Tasks:   r.Tasks,
+			Memory:  memTool,
+			Files:   fileState,
+			Sandbox: r.Sandbox,
+			Ext:     extMgr,
+			MCP:     mcpAdapter,
 		}.Rebuild(ag)
 	}
 	extMgr.SetOnReload(mergeExtTools)

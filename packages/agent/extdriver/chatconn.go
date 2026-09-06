@@ -11,11 +11,13 @@ package extdriver
 // what carries it. See docs/proposals/connector-extensions.md.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"terva.sh/terva/packages/agent/extproto"
 )
@@ -157,12 +159,19 @@ func (t *ChatTunnel) ReadFrame() ([]byte, error) {
 
 // WriteFrame wraps one inner frame in a chat envelope and sends it.
 func (t *ChatTunnel) WriteFrame(b []byte) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return t.WriteFrameContext(ctx, b)
+}
+
+// WriteFrameContext includes the outbound queue wait in the caller's deadline.
+func (t *ChatTunnel) WriteFrameContext(ctx context.Context, b []byte) error {
 	select {
 	case <-t.closed:
 		return errors.New("chat session closed")
 	default:
 	}
-	return t.ext.writeFrame(extproto.ChatFrame{Type: "chat", ID: t.id, Frame: json.RawMessage(b)})
+	return t.ext.writeFrameContext(ctx, extproto.ChatFrame{Type: "chat", ID: t.id, Frame: json.RawMessage(b)})
 }
 
 // Close ends the session from the host side: detaches the tunnel and

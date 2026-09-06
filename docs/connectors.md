@@ -585,8 +585,14 @@ Rules:
   `name`, `size`, `duration_ms`, `caption` — captions join the message
   text host-side). Unlabeled attachments read as images, the v1
   assumption.
-- On `shutdown` (or stdin closing), exit promptly; terva escalates to
-  SIGTERM/SIGKILL after ~2s.
+- On `shutdown` or stdin closing, exit promptly. The host gives the shutdown
+  frame 200 ms to flush, then closes stdin without waiting for a blocked writer.
+  It waits two seconds for exit, requests termination, then kills the process
+  after one more second. Windows uses the final kill if termination is unsupported.
+- Send deadlines cover writing the request and waiting for its result.
+  Cancellation during a pipe write closes the stream and stops the child,
+  because a partial frame cannot safely precede another request. The existing
+  restart budget applies. The host does not resend the failed message.
 - Crashes are loud, not silent: terva restarts a crashed connector with
   backoff and surfaces every attempt, but gives up after 3 crashes in
   60 seconds and reports the bridge as broken.

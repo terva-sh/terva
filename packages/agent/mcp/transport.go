@@ -19,7 +19,8 @@ type transport interface {
 	// Send delivers one JSON-RPC message to the server. frame is the marshalled
 	// message with NO wire framing; the transport adds whatever its wire needs —
 	// a trailing newline for stdio, an HTTP POST body for http. ctx bounds the
-	// send (ignored by stdio, honoured by http).
+	// stdio send, including the wait for another writer. HTTP dispatches
+	// asynchronously and owns its request context until response or Close.
 	Send(ctx context.Context, frame []byte) error
 
 	// Incoming delivers every inbound JSON-RPC message as one raw frame. It is

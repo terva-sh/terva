@@ -1,6 +1,7 @@
 package external
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -40,6 +41,25 @@ func TestHelperConnector(t *testing.T) {
 	case "no-hello":
 		time.Sleep(5 * time.Second)
 		os.Exit(0)
+	case "blocked-stdin":
+		fmt.Println(`{"type":"hello","name":"fake","protocol_min":1,"protocol_max":1,"capabilities":{}}`)
+		r := bufio.NewReader(os.Stdin)
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				os.Exit(2)
+			}
+			if strings.Contains(line, `"type":"connect"`) {
+				fmt.Println(`{"type":"connected","id":"77","username":"fakebot"}`)
+				break
+			}
+		}
+		if _, err := r.ReadByte(); err != nil {
+			os.Exit(2)
+		}
+		fmt.Println(`{"type":"warn","message":"stdin stopped"}`)
+		time.Sleep(time.Hour)
+		os.Exit(3)
 	}
 	connsdk.Main(connsdk.Config{
 		Name:    "fake",

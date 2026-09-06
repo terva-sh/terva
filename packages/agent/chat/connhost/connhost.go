@@ -50,6 +50,8 @@ type FrameConn interface {
 	ReadFrame() ([]byte, error)
 	// WriteFrame sends one frame. Must be safe for concurrent use —
 	// sends, typing, and the handshake race from different goroutines.
+	// A carrier can also implement WriteFrameContext(context.Context, []byte)
+	// to include its write in the session's request deadline.
 	WriteFrame([]byte) error
 }
 
@@ -211,6 +213,8 @@ func (s *Session) logf(format string, args ...any) {
 // dead; the caller still owns the carrier and must close it (which
 // unblocks the session's reader).
 func (s *Session) Start(helloTimeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), helloTimeout)
+	defer cancel()
 	go s.readLoop()
 
 	fail := func(err error) error {
@@ -231,7 +235,7 @@ func (s *Session) Start(helloTimeout time.Duration) error {
 			return fail(fmt.Errorf("connector %q ended before hello: %v", s.cfg.Name, s.Err()))
 		}
 		first = f
-	case <-time.After(helloTimeout):
+	case <-ctx.Done():
 		return fail(fmt.Errorf("connector %q sent no hello within %s", s.cfg.Name, helloTimeout))
 	}
 
@@ -292,7 +296,7 @@ func (s *Session) Start(helloTimeout time.Duration) error {
 	if version >= 2 {
 		ack.Capabilities = &connproto.Capabilities{Features: hostFeatures}
 	}
-	if err := s.writeFrame(ack); err != nil {
+	if err := s.writeFrameContext(ctx, ack); err != nil {
 		return fail(fmt.Errorf("send hello_ack: %w", err))
 	}
 
@@ -356,6 +360,9 @@ func (s *Session) Capabilities() chat.Capabilities {
 // Connect runs the connect round trip: the connector dials its service
 // and answers connected (identity) or connect_error.
 func (s *Session) Connect(ctx context.Context, timeout time.Duration) (chat.Identity, error) {
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout,
+		fmt.Errorf("connector %q: no connected/connect_error within %s: %w", s.cfg.Name, timeout, context.DeadlineExceeded))
+	defer cancel()
 	ch := make(chan connectOutcome, 1)
 	s.mu.Lock()
 	if s.connectPending != nil {
@@ -372,7 +379,7 @@ func (s *Session) Connect(ctx context.Context, timeout time.Duration) (chat.Iden
 		s.mu.Unlock()
 	}
 
-	if err := s.writeFrame(connproto.ConnectFromHost{Type: "connect"}); err != nil {
+	if err := s.writeFrameContext(ctx, connproto.ConnectFromHost{Type: "connect"}); err != nil {
 		clear()
 		return chat.Identity{}, err
 	}
@@ -382,12 +389,9 @@ func (s *Session) Connect(ctx context.Context, timeout time.Duration) (chat.Iden
 			return chat.Identity{}, out.err
 		}
 		return out.identity, nil
-	case <-time.After(timeout):
-		clear()
-		return chat.Identity{}, fmt.Errorf("connector %q: no connected/connect_error within %s", s.cfg.Name, timeout)
 	case <-ctx.Done():
 		clear()
-		return chat.Identity{}, ctx.Err()
+		return chat.Identity{}, context.Cause(ctx)
 	}
 }
 
@@ -767,7 +771,7 @@ func (s *Session) StopTyping(ctx context.Context, chatID string) error {
 		return fmt.Errorf("connector %q does not support typing_stop", s.cfg.Name)
 	}
 	off := false
-	return s.writeFrame(connproto.TypingFromHost{Type: "typing", ChatID: chatID, Active: &off})
+	return s.writeFrameContext(ctx, connproto.TypingFromHost{Type: "typing", ChatID: chatID, Active: &off})
 }
 
 // Ask runs one full interaction: render the question, wait for the
@@ -966,6 +970,9 @@ func (s *Session) roundTrip(ctx context.Context, id string, frame any) error {
 // roundTripResult is roundTrip for callers that need the result's
 // payload fields (thread_start's chat_id).
 func (s *Session) roundTripResult(ctx context.Context, id string, frame any) (connproto.ResultFromConn, error) {
+	ctx, cancel := context.WithTimeoutCause(ctx, s.cfg.SendTimeout,
+		fmt.Errorf("connector %q: no result within %s: %w", s.cfg.Name, s.cfg.SendTimeout, context.DeadlineExceeded))
+	defer cancel()
 	ch := make(chan connproto.ResultFromConn, 1)
 	s.mu.Lock()
 	s.pending[id] = ch
@@ -975,7 +982,7 @@ func (s *Session) roundTripResult(ctx context.Context, id string, frame any) (co
 		delete(s.pending, id)
 		s.mu.Unlock()
 	}
-	if err := s.writeFrame(frame); err != nil {
+	if err := s.writeFrameContext(ctx, frame); err != nil {
 		cleanup()
 		return connproto.ResultFromConn{}, err
 	}
@@ -985,19 +992,35 @@ func (s *Session) roundTripResult(ctx context.Context, id string, frame any) (co
 			return res, errors.New(res.Error)
 		}
 		return res, nil
-	case <-time.After(s.cfg.SendTimeout):
-		cleanup()
-		return connproto.ResultFromConn{}, fmt.Errorf("connector %q: no result within %s", s.cfg.Name, s.cfg.SendTimeout)
 	case <-ctx.Done():
 		cleanup()
-		return connproto.ResultFromConn{}, ctx.Err()
+		return connproto.ResultFromConn{}, context.Cause(ctx)
 	}
 }
 
 // writeFrame marshals one inner frame onto the carrier.
 func (s *Session) writeFrame(v any) error {
+	return s.writeFrameContext(context.Background(), v)
+}
+
+// Carriers can opt into cancellation without changing the FrameConn interface.
+func (s *Session) writeFrameContext(ctx context.Context, v any) error {
+	ctx, cancel := context.WithTimeout(ctx, s.cfg.SendTimeout)
+	defer cancel()
 	b, err := json.Marshal(v)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return context.Cause(ctx)
+	}
+	if conn, ok := s.cfg.Conn.(interface {
+		WriteFrameContext(context.Context, []byte) error
+	}); ok {
+		err := conn.WriteFrameContext(ctx, b)
+		if ctx.Err() != nil {
+			return context.Cause(ctx)
+		}
 		return err
 	}
 	return s.cfg.Conn.WriteFrame(b)

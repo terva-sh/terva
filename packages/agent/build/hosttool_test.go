@@ -57,6 +57,20 @@ func TestHostToolDispatcher(t *testing.T) {
 	}
 }
 
+func TestHostToolDispatchUsesCurrentGeneration(t *testing.T) {
+	ag := core.NewAgent(nil, "fake", "", nil)
+	gate := core.NewPolicyGate(&core.PermissionPolicy{Mode: core.ApprovalWorkspace, ReadOnly: core.NewReadOnlySet("echo")}, nil)
+	dispatch := buildHostToolDispatcher(ag, gate, fakeHostToolSource{})
+	ag.SetToolsWithReadOnly(core.Registry{"echo": echoTool{}}, core.NewReadOnlySet("echo"))
+	if _, failed := dispatch(context.Background(), "ext", "echo", nil, false); failed {
+		t.Fatal("read-only host call failed")
+	}
+	ag.SetToolsWithReadOnly(core.Registry{"echo": echoTool{}}, core.NewReadOnlySet())
+	if _, failed := dispatch(context.Background(), "ext", "echo", nil, false); !failed {
+		t.Fatal("host call retained old read-only authority")
+	}
+}
+
 // Both gate verdicts reached through the host_tool_call door land in the
 // audit log stamped via=host_tool_call — this door checks the gate outside
 // the BeforeToolExecute ladder, whose deferred audit never sees it.

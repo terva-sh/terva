@@ -70,7 +70,7 @@ var (
 	constructsAgent   = regexp.MustCompile(`\.NewAgent\(`)
 	constructsDirect  = regexp.MustCompile(`core\.NewAgent\(`)
 	definesRoot       = regexp.MustCompile(`func \(r Resolved\) NewAgent\(`)
-	swapsToolSet      = regexp.MustCompile(`\.SetTools\(`)
+	swapsToolSet      = regexp.MustCompile(`\.(?:SetTools|SetToolsWithReadOnly|PublishTools)\(`)
 	usesSharedRebuild = regexp.MustCompile(`LiveToolSet\{`)
 	appliesTrust      = regexp.MustCompile(`\bApplyTrust\(`)
 	definesApplyTrust = regexp.MustCompile(`^func ApplyTrust\(`)
@@ -369,6 +369,7 @@ func TestNoTrustStepHappensOutsideTheSharedEvent(t *testing.T) {
 // the survivor list, and every rebuild-survivor bug so far shipped exactly that
 // way.
 var toolSetSwapHome = map[string]string{
+	"packages/agent/build/build.go":                 "Resolved.PublishTools publishes the complete registry and classification for both rebuild paths",
 	"packages/agent/build/toolrebuild.go":           "build.LiveToolSet.Rebuild, the shared implementation rpc and acp both call",
 	"packages/agent/workspace/workspace_session.go": "the daemon's own rebuildTools — it re-binds front-end channels and folds in workspace-only tools, neither of which exists off the daemon",
 }

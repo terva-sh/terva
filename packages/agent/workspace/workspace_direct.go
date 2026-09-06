@@ -159,18 +159,11 @@ func directionBody(text string) (string, bool) {
 // reload replays: live == replayed). The posted line becomes a fresh,
 // non-swipeable tail. Rejected while a turn is in flight so it never races the
 // turn's own appends.
-func (s *wsSession) postDirected(actor, text string) error {
+func (s *wsSession) postDirectedHeld(actor, text string) error {
 	body := strings.TrimSpace(text)
 	if body == "" {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("post: nothing to post"))
 	}
-	s.mu.Lock()
-	busy := s.turnCancel != nil
-	s.mu.Unlock()
-	if busy {
-		return ctrlproto.ErrBusy
-	}
-
 	meta := map[string]string{core.MetaSource: core.MetaDirected}
 	if a := strings.TrimSpace(actor); a != "" {
 		meta[core.MetaActor] = a
@@ -182,10 +175,9 @@ func (s *wsSession) postDirected(actor, text string) error {
 		Meta:    meta,
 	}
 	if err := s.sess.AppendMessage(m); err != nil {
-		return ctrlproto.Errorf(ctrlproto.CodeInternal, "post: %v", err)
+		return s.persistenceFailure(err)
 	}
 	s.agent.SetMessages(append(s.agent.Messages(), m))
 	s.clearTail() // the post is a fresh tail, not a swipe over the prior span
-	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
 	return nil
 }

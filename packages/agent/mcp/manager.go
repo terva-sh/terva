@@ -21,6 +21,8 @@ func decodeBase64(s string) ([]byte, error) {
 // ToolInfo is one MCP tool ready for the agent's registry, already
 // namespaced.
 type ToolInfo struct {
+	client      *Client
+	wireName    string
 	Server      string
 	Name        string // namespaced: mcp_<server>_<tool>
 	Description string
@@ -302,7 +304,7 @@ func (m *Manager) Tools() []ToolInfo {
 			if r, ok := m.routes[ns]; !ok || r.server != name {
 				continue // shadowed
 			}
-			out = append(out, ToolInfo{Server: name, Name: ns, Description: t.Description, Schema: t.InputSchema, ReadOnly: t.Annotations.ReadOnlyHint})
+			out = append(out, ToolInfo{client: cl, wireName: t.Name, Server: name, Name: ns, Description: t.Description, Schema: t.InputSchema, ReadOnly: t.Annotations.ReadOnlyHint})
 		}
 	}
 	return out
@@ -339,12 +341,24 @@ func (m *Manager) StopAll() {
 
 // Tool adapts one MCP tool to core.Tool for the agent registry.
 type Tool struct {
-	mgr  *Manager
 	info ToolInfo
 }
 
-// NewTool builds the registry adapter for a namespaced tool.
-func (m *Manager) NewTool(info ToolInfo) *Tool { return &Tool{mgr: m, info: info} }
+// NewTool binds the adapter to the client that supplied its metadata. A
+// stopped client fails calls instead of forwarding them to its replacement.
+func (m *Manager) NewTool(info ToolInfo) *Tool {
+	if info.client == nil {
+		// Preserve callers that construct ToolInfo themselves. Resolve once,
+		// including metadata, rather than looking up the name at execution.
+		for _, current := range m.Tools() {
+			if current.Name == info.Name {
+				info = current
+				break
+			}
+		}
+	}
+	return &Tool{info: info}
+}
 
 func (t *Tool) Name() string        { return t.info.Name }
 func (t *Tool) Description() string { return t.info.Description }
@@ -362,7 +376,10 @@ func (t *Tool) Schema() json.RawMessage {
 }
 
 func (t *Tool) Execute(ctx context.Context, args json.RawMessage, progress func(string)) (core.ToolResult, error) {
-	res, err := t.mgr.Call(ctx, t.info.Name, args)
+	if t.info.client == nil {
+		return core.ToolResult{}, fmt.Errorf("unknown mcp tool %s", t.info.Name)
+	}
+	res, err := t.info.client.CallTool(ctx, t.info.wireName, args)
 	if err != nil {
 		return core.ToolResult{}, err
 	}

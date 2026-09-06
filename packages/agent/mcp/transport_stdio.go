@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"terva.sh/terva/packages/agent/internal/pipeio"
 	"terva.sh/terva/packages/agent/procenv"
 	"terva.sh/terva/packages/envcompat"
 	"terva.sh/terva/packages/lineframe"
@@ -18,13 +19,15 @@ import (
 // process + read-loop mechanics out of Client; the correlation logic stayed in
 // Client (see transport.go).
 type stdioTransport struct {
-	cmd   *exec.Cmd
-	stdin io.WriteCloser
-	in    chan []byte
+	cmd    *exec.Cmd
+	stdin  *pipeio.Writer
+	stdout io.ReadCloser
+	in     chan []byte
 
-	writeMu   sync.Mutex
 	closeOnce sync.Once
 	closed    chan struct{}
+	readDone  chan struct{}
+	waitDone  chan struct{}
 }
 
 // newStdioTransport spawns the server subprocess and starts funnelling its
@@ -34,6 +37,7 @@ type stdioTransport struct {
 // the child's diagnostics.
 func newStdioTransport(cfg ServerConfig, cwd string, stderr io.Writer) (*stdioTransport, error) {
 	cmd := exec.Command(cfg.Command, cfg.Args...)
+	cmd.WaitDelay = 2 * time.Second
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -65,22 +69,37 @@ func newStdioTransport(cfg ServerConfig, cwd string, stderr io.Writer) (*stdioTr
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		_ = stdin.Close()
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
 		return nil, fmt.Errorf("spawn %s: %w", cfg.Command, err)
 	}
 	t := &stdioTransport{
-		cmd:    cmd,
-		stdin:  stdin,
-		in:     make(chan []byte, 16),
-		closed: make(chan struct{}),
+		cmd:      cmd,
+		stdout:   stdout,
+		in:       make(chan []byte, 16),
+		closed:   make(chan struct{}),
+		readDone: make(chan struct{}),
+		waitDone: make(chan struct{}),
 	}
+	t.stdin = pipeio.New(stdin, func() { go t.Close() })
 	go t.readLoop(stdout)
+	go func() {
+		<-t.readDone
+		_ = cmd.Wait()
+		close(t.waitDone)
+	}()
 	return t, nil
 }
 
 func (t *stdioTransport) readLoop(stdout io.Reader) {
+	defer func() {
+		close(t.readDone)
+		go t.Close()
+	}()
 	// Closing `in` is how the Client learns the server is gone (stdout EOF).
 	defer close(t.in)
 	// MCP tool results can be large (a whole file in a text block); read through
@@ -109,17 +128,9 @@ func (t *stdioTransport) readLoop(stdout io.Reader) {
 	}
 }
 
-// Send writes one frame plus a newline under the write lock, so concurrent
-// callers can't interleave their bytes on stdin. ctx is unused: a pipe write is
-// not cancellable and returns promptly.
-func (t *stdioTransport) Send(_ context.Context, frame []byte) error {
-	t.writeMu.Lock()
-	defer t.writeMu.Unlock()
-	if _, err := t.stdin.Write(frame); err != nil {
-		return err
-	}
-	_, err := t.stdin.Write([]byte("\n"))
-	return err
+// Send serializes each frame and includes gate wait and pipe I/O in ctx.
+func (t *stdioTransport) Send(ctx context.Context, frame []byte) error {
+	return t.stdin.Write(ctx, append(frame, '\n'))
 }
 
 func (t *stdioTransport) Incoming() <-chan []byte { return t.in }
@@ -130,20 +141,18 @@ func (t *stdioTransport) Incoming() <-chan []byte { return t.in }
 func (t *stdioTransport) Close() {
 	t.closeOnce.Do(func() {
 		close(t.closed)
-		_ = t.stdin.Close()
+		t.stdin.Close()
 		if t.cmd == nil || t.cmd.Process == nil {
 			return
 		}
-		done := make(chan struct{})
-		go func() {
-			_, _ = t.cmd.Process.Wait()
-			close(done)
-		}()
 		select {
-		case <-done:
+		case <-t.waitDone:
 		case <-time.After(2 * time.Second):
 			_ = t.cmd.Process.Kill()
-			<-done
+			// A descendant can retain stdout after the direct child dies.
+			// Release the reader before the single cmd.Wait owner runs.
+			_ = t.stdout.Close()
+			<-t.waitDone
 		}
 	})
 }

@@ -46,7 +46,7 @@ func buildHostToolDispatcher(ag *core.Agent, gate *core.ConfirmGate, mgr hostToo
 		if mgr != nil && mgr.HasTool(toolName) {
 			return errOut(fmt.Sprintf("host_tool_call: %q is an extension tool; host_tool_call may only run the host's own built-in or MCP tools", toolName))
 		}
-		tool, ok := ag.LookupTool(toolName)
+		ctx, tool, ok := ag.ToolForCall(ctx, toolName)
 		if !ok {
 			return errOut(fmt.Sprintf("host_tool_call: no such host tool %q", toolName))
 		}

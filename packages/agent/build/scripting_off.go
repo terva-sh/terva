@@ -15,3 +15,5 @@ func ScriptingSupported() bool { return false }
 // scripting_on.go (called from WireHostToolDispatcher on every
 // agent-construction seam).
 func wireScriptingHostCall(*core.Agent, *core.ConfirmGate) {}
+
+func wireScriptingRegistry(*core.Agent, *core.ConfirmGate, core.Registry, *core.ReadOnlySet) {}

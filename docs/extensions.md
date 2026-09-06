@@ -728,9 +728,15 @@ stays an explicit user-config decision (see [hooks.md](hooks.md),
    `command_response`. Extensions can also push `notify` frames at
    any time. Panel-capable extensions may open an interactive panel,
    receive key events, and push redraws while the panel is focused.
-6. **Shutdown**: when terva exits, it sends `shutdown` and waits up to
-   2s for the extension to send `shutdown_ack`. Holdouts are
-   SIGTERM'd, then SIGKILL'd.
+6. **Shutdown**: terva queues `shutdown` and gives the writer 200 ms to flush.
+   It then closes stdin, even if the extension stopped reading a full pipe.
+   After the caller's exit grace expires, terva requests group termination and
+   waits one more second before a forced kill. The process has one reap owner.
+
+Tool, command, and intercept deadlines include time spent waiting for room in
+the extension's outbound queue. Cancellation stops that wait, and shutdown
+releases callers behind a blocked writer. A frame already in the queue can
+still reach the extension; cancellation does not undo an accepted invocation.
 
 In the long-lived hosts (interactive TUI, `terva web`, `terva rpc`) steps
 1–4 run on a background goroutine while the session comes up, and the

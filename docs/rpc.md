@@ -37,7 +37,19 @@ To **confirm** instead of refuse, opt into an approval carrier that fills the ga
 
 A backend sets **one** carrier, never several; each fails closed, leaving the refuse-by-default in place if it can't start.
 
-Session persistence is **opt-in** in RPC mode. By default the process holds an in-memory transcript for the life of the connection (`get_messages` reads it) and never touches disk — the embedding application owns any persistence. Pass `--session <path>` to make the session durable and **resumable**: the prior transcript at that path is restored on start (or the file is created fresh on first run), and every message, usage row, and post-compaction transcript is written as it happens. A process pointed at the same `--session` path continues the conversation instead of starting blank — which is how a supervised worker (`terva rpc` under the swarm) is revived with its history intact after its process dies. Without `--session`, nothing is persisted, exactly as before.
+Session persistence is opt-in in RPC mode. Without `--session`, the process keeps
+an in-memory transcript, which `get_messages` can read. The embedding application
+owns persistence. With `--session <path>`, startup restores the prior transcript
+or creates the file. Each message, usage row, and compaction checkpoint goes to
+that file as it happens.
+
+A persistence failure stops the active run at a safe boundary and returns an
+error. The agent refuses later turns through the failed handle. `get_messages`
+still exposes the live transcript, which can include unsaved content. Preserve
+that content before closing the process. Fix storage, then restart with the
+saved session. A failed write can have reached disk in part, so terva does not
+retry it automatically. The loader reports damaged rows; a later append keeps
+an unterminated row separate from new history.
 
 ## Auth
 

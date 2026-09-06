@@ -32,11 +32,9 @@ import (
 // by naming these three — a fourth channel added later fails that test without
 // anyone having to remember this comment exists.
 //
-// The split is by WHEN, not by what, and it is forced: the first half binds on
-// the Resolved before its registry is installed, and the second needs the LIVE
-// agent, because the gated dispatcher it installs resolves each call's target
-// through the agent's current registry at call time rather than the one being
-// built. Both halves must run on both paths — session build and every rebuild.
+// Startup binds the Resolved channels, creates the agent, then binds the host
+// dispatcher. Reloads bind Resolved channels and call PublishTools, which binds
+// script dispatchers before publication. The manager's dispatcher survives.
 
 // bindResolvedChannels re-points the channels that bind through the Resolved,
 // before its registry is installed on the agent.

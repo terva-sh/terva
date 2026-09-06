@@ -545,6 +545,19 @@ Bedrock then uses the AWS SDK credential chain for the actual request.
 
 ## The /login flow in detail
 
+The local API-key form belongs to the provider and login attempt selected in
+terva. Open the URL from the current `/login` dialog. A bookmarked form or a
+bare `/apikey?provider=...` URL cannot start a new attempt. The server checks
+the loopback host, browser origin, and a per-attempt token before it probes or
+accepts a key. Canceling a login invalidates its browser form. Submitting a
+key directly also retires browser alternatives for that provider.
+
+The API-key server no longer accepts `/callback` requests. OAuth continues to
+use the separate provider callback servers. Code that embeds the key-form
+server can call `Server.BeginAPIKey` to create a form; `Manager.StartAPIKey`
+does this for normal logins. Remote `CompleteAPIKey` remains available without
+a loopback browser form.
+
 - **API key**: a small local web server starts on `127.0.0.1:<free-port>`, your browser opens a form, you pick a provider from the API-key provider list, paste the key, and terva saves it to `auth.json` if accepted. Providers with a lightweight model-list endpoint are probed before saving; provider backends that need extra project/account env vars are saved directly. The list is not quite every provider id: `openai-responses` and `ollama` are absent by design (see [API-key providers](#api-key-providers)).
 - **Subscription**: use your Claude Pro/Max, ChatGPT Plus/Pro, Kimi Code, or GitHub Copilot subscription. DeepSeek and Google Gemini do **not** have a subscription login path. For those, use the API-key flow.
   - Anthropic and OpenAI pin the browser callback to fixed provider-specific ports (`localhost:53692` for Anthropic, `localhost:1455` for OpenAI) because those are the only ports their auth servers will redirect to.

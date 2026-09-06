@@ -35,7 +35,7 @@ var _ ctrlproto.AuthController = (*Workspace)(nil)
 type authFlow struct {
 	provider string
 	method   string      // apikey | oauth
-	mgr      auth.FlowID // the manager's handle, for flows that hold pkce state
+	mgr      auth.FlowID // the manager's OAuth or local API-key flow handle
 }
 
 type wsAuth struct {
@@ -246,14 +246,15 @@ func (w *Workspace) AuthLoginStart(_ context.Context, p ctrlproto.AuthLoginStart
 // actually completes the login. The browser page is a convenience, never the
 // contract.
 func (w *Workspace) startAPIKeyForm(m *auth.Manager, provider string, local bool) ctrlproto.AuthFlowStep {
-	flow := w.newFlow(&authFlow{provider: provider, method: "apikey"})
-
+	fl := &authFlow{provider: provider, method: "apikey"}
 	var browserURL string
 	if local {
 		if f, err := m.StartAPIKey(provider); err == nil {
 			browserURL = f.URL
+			fl.mgr = f.ID
 		}
 	}
+	flow := w.newFlow(fl)
 
 	if provider == "openai-compatible" {
 		return ctrlproto.AuthFlowStep{
@@ -420,6 +421,11 @@ func (w *Workspace) AuthLoginSubmit(ctx context.Context, p ctrlproto.AuthLoginSu
 			return authErr(err)
 		}
 	}
+	if fl.method == "apikey" {
+		// A named endpoint completes outside Manager.CompleteCompatAPIKey.
+		// Retire its browser alternative as well as the workspace form.
+		m.CancelAPIKey(fl.mgr)
+	}
 	w.dropFlow(p.Flow)
 	return nil
 }
@@ -431,7 +437,13 @@ func (w *Workspace) AuthLoginCancel(_ context.Context, p ctrlproto.AuthFlowRef) 
 	if m == nil {
 		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "%s", i18n.T("this daemon does not serve provider logins"))
 	}
-	m.CancelOAuth()
+	if fl := w.lookupFlow(p.Flow); fl != nil {
+		if fl.method == "apikey" {
+			m.CancelAPIKey(fl.mgr)
+		} else {
+			m.CancelOAuth()
+		}
+	}
 	w.dropFlow(p.Flow)
 	return nil
 }

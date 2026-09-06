@@ -38,6 +38,11 @@ deliberately not a read boundary:
   boundary — a runtime-assembled path or an interpreter walks past it — but
   it is the same speed bump on every route.
 
+`grep` and `glob` check each candidate file against the sensitive-path rules.
+A search from a parent directory skips denied files and retains allowed
+exceptions, such as extension logs. A direct request for a denied path fails.
+These checks also apply when the session starts unjailed.
+
 ## Approval modes
 
 Pick one with `--approval <mode>`, or set a persistent default in
@@ -308,6 +313,15 @@ decides read-only classification — `local-read` and `local-data` are
 auto-allowable, everything else is not — and it **wins over** the legacy
 `read_only` bool, which is consulted only when the authority is empty. An
 unknown value is treated as side-effecting.
+
+An extension reload or MCP reconnect rebuilds read-only classification from
+the current tools. A tool that becomes mutating loses its previous automatic
+approval. Removal also removes its classification.
+
+Each turn keeps its tool registry and classification together. A reload takes
+effect on the next turn; approval rules and mode changes still apply at once.
+Nested script calls use the calling turn's tools. A call whose original
+extension or MCP process has stopped fails instead of reaching its replacement.
 
 That precedence is what reconciles the two statements above. Whether
 `workspace` auto-allows a foreign tool is decided by its *classification*,

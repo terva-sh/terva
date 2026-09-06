@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"errors"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +13,43 @@ import (
 	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/testsupport"
 )
+
+func TestCancelLocalAPIKeyInvalidatesOnlyItsBrowserForm(t *testing.T) {
+	w, _ := authWorkspace(t)
+	first, err := w.AuthLoginStart(context.Background(), ctrlproto.AuthLoginStartParams{
+		Provider: "anthropic", Method: "apikey", Local: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := w.AuthLoginStart(context.Background(), ctrlproto.AuthLoginStartParams{
+		Provider: "openai", Method: "apikey", Local: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.AuthLoginCancel(context.Background(), ctrlproto.AuthFlowRef{Flow: first.Flow}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		url    string
+		status int
+	}{
+		{first.URL, http.StatusForbidden}, {second.URL, http.StatusOK},
+	} {
+		resp, err := http.Get(tc.url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != tc.status {
+			t.Fatalf("browser form status %d, want %d", resp.StatusCode, tc.status)
+		}
+	}
+	if w.lookupFlow(first.Flow) != nil {
+		t.Fatal("canceled workspace form remains active")
+	}
+}
 
 // authWorkspace is a workspace with the auth group live, wired to a scratch
 // credential store so nothing here can touch the developer's real auth.json.

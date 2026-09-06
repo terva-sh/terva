@@ -76,7 +76,14 @@ only, no project surface at all.)
   choosing unless that env is already set).
 
 Common to both:
-- `timeout_ms` — per `tools/call` (default 60s).
+- `timeout_ms` bounds the full `tools/call`, including the send and response
+  wait (default 60s).
+
+Cancellation also covers waiting for another stdio writer. If cancellation
+interrupts a pipe write, terva closes the connection and stops the server. The
+server may have received part of the request, so terva does not retry it.
+Restart the server from `/mcp` before using its tools again. A response timeout
+after a complete write leaves the connection open; it does not undo the tool.
 
 `--no-mcp` skips all servers for one run. `--mcp git,jira` is the
 narrowing form: only the listed servers start (restrict-only — config

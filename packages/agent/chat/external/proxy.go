@@ -15,6 +15,7 @@ import (
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/chat/connhost"
 	"terva.sh/terva/packages/agent/connproto"
+	"terva.sh/terva/packages/agent/internal/pipeio"
 	"terva.sh/terva/packages/agent/procenv"
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/secretstore"
@@ -86,14 +87,15 @@ type Proxy struct {
 // child is one spawned connector process and its pipes.
 type child struct {
 	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stdinMu sync.Mutex // serializes frame writes, the extension pattern
+	stdin   *pipeio.Writer
+	stdout  io.ReadCloser
 	logFile *os.File
 	// waited closes once cmd.Wait returned. Wait is called exactly
 	// once, by the reaping goroutine that runs when the child's
 	// session ends (calling it earlier would close the pipe under the
 	// session's reader).
-	waited chan struct{}
+	waited   chan struct{}
+	stopOnce sync.Once
 }
 
 // NewProxy builds the proxy for a loaded manifest. manifestDir is the
@@ -284,14 +286,21 @@ func (p *Proxy) spawnAndConnect(ctx context.Context) error {
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		_ = stdin.Close()
 		logFile.Close()
 		return err
 	}
 	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
 		logFile.Close()
 		return fmt.Errorf("spawn connector %q: %w", p.manifest.Name, err)
 	}
-	c := &child{cmd: cmd, stdin: stdin, logFile: logFile, waited: make(chan struct{})}
+	c := &child{cmd: cmd, stdout: stdout, logFile: logFile, waited: make(chan struct{})}
+	c.stdin = pipeio.New(stdin, func() {
+		_ = cmd.Process.Kill()
+		_ = stdout.Close()
+	})
 
 	fr := connproto.NewFrameReader(stdout, func(msg string) {
 		p.warnf("connector %q: %s", p.manifest.Name, msg)
@@ -332,7 +341,9 @@ func (p *Proxy) spawnAndConnect(ctx context.Context) error {
 	// child on failure closes stdout, which unblocks the session's
 	// reader. Before the session starts, this abort owns the reap.
 	if err := session.Start(p.helloTimeout); err != nil {
+		c.stdin.Close()
 		_ = cmd.Process.Kill()
+		_ = stdout.Close()
 		go func() { _ = cmd.Wait(); close(c.waited); logFile.Close() }()
 		return fmt.Errorf("%w (see %s)", err, logPath)
 	}
@@ -359,6 +370,9 @@ func (p *Proxy) spawnAndConnect(ctx context.Context) error {
 			p.session = nil
 		}
 		p.mu.Unlock()
+		// A closed protocol stream does not prove the process exited. Finish
+		// cleanup before a restart can replace this child.
+		c.stop()
 		if !wasCurrent {
 			return
 		}
@@ -507,19 +521,13 @@ func (cc *childConn) ReadFrame() ([]byte, error) {
 }
 
 func (cc *childConn) WriteFrame(b []byte) error {
-	return cc.c.writeRaw(append(b, '\n'))
+	ctx, cancel := context.WithTimeout(context.Background(), defaultSendTimeout)
+	defer cancel()
+	return cc.WriteFrameContext(ctx, b)
 }
 
-// writeRaw sends pre-framed bytes to the child, serialized against
-// concurrent writers.
-func (c *child) writeRaw(frame []byte) error {
-	c.stdinMu.Lock()
-	defer c.stdinMu.Unlock()
-	if c.stdin == nil {
-		return fmt.Errorf("connector stdin closed")
-	}
-	_, err := c.stdin.Write(frame)
-	return err
+func (cc *childConn) WriteFrameContext(ctx context.Context, b []byte) error {
+	return cc.c.stdin.Write(ctx, append(b, '\n'))
 }
 
 // shutdownChild gracefully stops the current child: shutdown frame,
@@ -537,28 +545,37 @@ func (p *Proxy) shutdownChild() {
 		return
 	}
 	if s != nil {
-		s.Shutdown()
+		flushed := make(chan struct{})
+		go func() {
+			s.Shutdown()
+			close(flushed)
+		}()
+		select {
+		case <-flushed:
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
-	c.stdinMu.Lock()
-	if c.stdin != nil {
-		_ = c.stdin.Close()
-		c.stdin = nil
-	}
-	c.stdinMu.Unlock()
+	c.stop()
+}
 
-	select {
-	case <-c.waited:
-		return
-	case <-time.After(2 * time.Second):
-	}
-	_ = c.cmd.Process.Signal(syscall.SIGTERM)
-	select {
-	case <-c.waited:
-		return
-	case <-time.After(time.Second):
-	}
-	_ = c.cmd.Process.Kill()
-	<-c.waited
+func (c *child) stop() {
+	c.stopOnce.Do(func() {
+		c.stdin.Close()
+		select {
+		case <-c.waited:
+			return
+		case <-time.After(2 * time.Second):
+		}
+		_ = c.cmd.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-c.waited:
+			return
+		case <-time.After(time.Second):
+		}
+		_ = c.cmd.Process.Kill()
+		_ = c.stdout.Close()
+		<-c.waited
+	})
 }
 
 // SetChatEventHandlers installs the stage-D inbound event consumers

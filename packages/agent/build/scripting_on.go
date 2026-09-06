@@ -67,37 +67,35 @@ func init() {
 // so a script's write prompts exactly as a model-issued write does, with
 // its own preview and its own audit line.
 func wireScriptingHostCall(ag *core.Agent, gate *core.ConfirmGate) {
+	reg, ro := ag.ToolsWithReadOnlySnapshot()
+	wireScriptingRegistry(ag, gate, reg, ro)
+}
+
+func wireScriptingRegistry(ag *core.Agent, gate *core.ConfirmGate, reg core.Registry, ro *core.ReadOnlySet) {
 	dispatch := scriptHostDispatcher(ag, gate)
-	catalog := scriptCatalog(ag)
-	if tool, ok := ag.LookupTool("code_execution"); ok {
+	catalog := scriptCatalog(reg, ro)
+	if tool, ok := reg["code_execution"]; ok {
 		if ce, ok := tool.(*tools.CodeExecutionTool); ok {
 			ce.HostCall = dispatch
 			ce.Catalog = catalog
 		}
 	}
-	if tool, ok := ag.LookupTool("code_execution_mutating"); ok {
+	if tool, ok := reg["code_execution_mutating"]; ok {
 		if cm, ok := tool.(*tools.CodeExecutionMutatingTool); ok {
 			cm.HostCall = dispatch
 		}
 	}
 }
 
-// scriptCatalog computes the session's disclosure catalog (§12.7) from the
-// agent: the curated meta/inspection builtins, plus every extension or MCP
-// tool the live ReadOnlySet classifies as read-only. Reading a.ReadOnly
-// rather than the static permissions map is the §12.5 trap avoided — the
-// ReadOnlySet is the same dynamic set the permission policy uses, kept
-// current by AdoptReadOnlySet as extensions and MCP servers merge their
-// read_only declarations.
+// scriptCatalog computes the disclosure catalog from one registry generation:
+// curated inspection builtins and read-only extension/MCP tools. Publication
+// binds a fresh catalog to each new script-tool instance before it can run.
 //
 // Only code_execution takes the catalog; the mutating tool's binding set is
 // already the only true mutating pair, so disclosure gains it nothing.
-func scriptCatalog(ag *core.Agent) *tools.DisclosureCatalog {
-	if ag == nil {
-		return nil
-	}
+func scriptCatalog(reg core.Registry, ro *core.ReadOnlySet) *tools.DisclosureCatalog {
 	var entries []tools.CatalogEntry
-	for name, tool := range ag.Tools {
+	for name, tool := range reg {
 		if tools.IsCuratedMetaBuiltin(name) {
 			entries = append(entries, tools.CatalogEntry{
 				Name:        name,
@@ -110,7 +108,7 @@ func scriptCatalog(ag *core.Agent) *tools.DisclosureCatalog {
 		// The authority-matched half: a plugin tool the session's ReadOnlySet
 		// calls read-only. ToolGroup is CoreToolGroup for a builtin, so this
 		// admits only extension and MCP tools.
-		if core.ToolGroup(tool) != core.CoreToolGroup && ag.ReadOnly.Has(name) {
+		if core.ToolGroup(tool) != core.CoreToolGroup && ro.Has(name) {
 			entries = append(entries, tools.CatalogEntry{
 				Name:        name,
 				Description: tool.Description(),
@@ -125,7 +123,7 @@ func scriptCatalog(ag *core.Agent) *tools.DisclosureCatalog {
 // scriptHostDispatcher builds the gated crossing both scripting tools hold.
 func scriptHostDispatcher(ag *core.Agent, gate *core.ConfirmGate) func(context.Context, string, json.RawMessage) (core.ToolResult, error) {
 	return func(ctx context.Context, name string, args json.RawMessage) (core.ToolResult, error) {
-		target, ok := ag.LookupTool(name)
+		ctx, target, ok := ag.ToolForCall(ctx, name)
 		if !ok {
 			return core.ToolResult{}, fmt.Errorf("no such host tool %q", name)
 		}

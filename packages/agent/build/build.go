@@ -191,10 +191,8 @@ type Resolved struct {
 	// tool — it only dropped the built-ins.
 	NoTools bool
 
-	// readOnlySet is the gate policy's dynamic read-only registry,
-	// adopted via AdoptReadOnlySet so tool merges can extend it with
-	// read_only-annotated extension/MCP tools. Nil when no gate
-	// exists (pure yolo).
+	// readOnlySet belongs to this registry's assembly. Resolve seeds built-in
+	// names, merges add extension/MCP declarations, and PublishTools copies it.
 	readOnlySet *core.ReadOnlySet
 
 	// loreTriggered holds this run's keyword-triggered lore entries (the
@@ -275,10 +273,21 @@ type Resolved struct {
 	escalator core.Escalator
 }
 
-// AdoptReadOnlySet hands the permission policy's read-only registry
-// to the resolver, so merged extension/MCP tools that declare
-// read_only join the classification the approval modes consult.
-func (r *Resolved) AdoptReadOnlySet(s *core.ReadOnlySet) { r.readOnlySet = s }
+// AdoptReadOnlySet shares the initial policy set during startup assembly.
+// Reloads must use a fresh Resolve and PublishTools instead of adopting a
+// previous generation's set. Nil keeps the resolver's own classification.
+func (r *Resolved) AdoptReadOnlySet(s *core.ReadOnlySet) {
+	if s != nil {
+		r.readOnlySet = s
+	}
+}
+
+// PublishTools binds instance-local dispatchers before publishing the registry
+// and its classification together. The caller must finish assembly first.
+func (r *Resolved) PublishTools(ag *core.Agent, gate *core.ConfirmGate) bool {
+	wireScriptingRegistry(ag, gate, r.ToolRegistry, r.readOnlySet)
+	return ag.SetToolsWithReadOnly(r.ToolRegistry, r.readOnlySet)
+}
 
 // AddExtraTools folds embedder-supplied tools into r's ToolRegistry
 // and re-renders the system prompt so the model sees them. nil/empty
@@ -451,7 +460,11 @@ func MergeToolsForMode(reg core.Registry, mode core.ApprovalMode, roSet *core.Re
 		if _, exists := reg[info.Name]; exists {
 			continue
 		}
-		reg[info.Name] = mgr.NewExtensionTool(info)
+		tool := mgr.NewExtensionTool(info)
+		if tool == nil {
+			continue
+		}
+		reg[info.Name] = tool
 		if readOnly {
 			roSet.Add(info.Name)
 		}
@@ -473,6 +486,8 @@ type ExtensionToolSource interface {
 // ExtensionToolSource here without importing the extensions
 // package. The cli wires a tiny adapter to bridge them.
 type ExtensionToolInfo struct {
+	// tool binds an adapter's metadata snapshot to its original backend.
+	tool        core.Tool
 	Extension   string
 	Name        string
 	Description string
@@ -1437,6 +1452,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		VisionCapable:            visionCapable,
 		ImageRegistry:            imageReg,
 		ToolRegistry:             reg,
+		readOnlySet:              permissions.BuiltinReadOnlySet(),
 		Tasks:                    tasksCtrl,
 		ToolSummary:              summaries,
 		SystemPrompt:             sys,
@@ -1828,12 +1844,9 @@ func (r Resolved) NewAgent() *core.Agent {
 	// Auto-escalate policy (config escalation.auto): swap without asking. Off by
 	// default, so a persistent loop prompts first before egressing the transcript.
 	a.SetEscalateAuto(r.EscalateAuto)
-	// The same read-only registry the permission policy uses, so compaction's
-	// executed-actions ledger and `plan` mode agree on what "side-effect-free"
-	// means rather than each keeping its own list. Nil here (a host that never
-	// adopted one) makes the ledger treat every tool as state-changing, which
-	// over-reports rather than under-reports — the right way to be wrong.
-	a.ReadOnly = r.readOnlySet
+	// Dispatch and compaction use the classification from this assembly.
+	// Copy it so later edits to an assembly cannot change this agent's set.
+	a.ReadOnly = r.readOnlySet.Snapshot()
 	// The directory bash runs in, for the ledger's `cd`-to-nowhere elision. Same
 	// args.CWD BuildToolRegistry hands BashTool, so the two cannot drift into
 	// eliding a `cd` that actually moved the command.

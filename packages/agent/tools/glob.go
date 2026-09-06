@@ -67,7 +67,7 @@ func (t *GlobTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	if err != nil {
 		return core.ToolResult{}, notFoundError(t.CWD, a.Path, t.Sandbox.DisplayPath(root, a.Path), err)
 	}
-	// Read-side check: also allows registered read-only roots.
+	// Refuse a directly requested sensitive path.
 	if err := t.Sandbox.CheckPathRead(root); err != nil {
 		return core.ToolResult{}, err
 	}
@@ -85,6 +85,11 @@ func (t *GlobTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	want := a.Offset + limit + 1
 	var matches []string
 	walkErr := walkFiles(root, !a.IncludeIgnored, func(abs, rel string) error {
+		// Check files individually: denied directories can contain readable
+		// exceptions, such as extension logs.
+		if err := t.Sandbox.CheckPathRead(abs); err != nil {
+			return nil
+		}
 		if !matchGlob(a.Pattern, rel) {
 			return nil
 		}

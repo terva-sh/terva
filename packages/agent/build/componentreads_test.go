@@ -1,6 +1,7 @@
 package build
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,10 +9,56 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/secrets"
 	"terva.sh/terva/packages/secretstore"
 	"terva.sh/terva/packages/testsupport"
 )
+
+func TestComponentSearchGuardAcrossJailStates(t *testing.T) {
+	for _, state := range []string{"locked", "unlocked", "initially-unjailed"} {
+		t.Run(state, func(t *testing.T) {
+			sb, home, cwd := componentHome(t)
+			if state == "unlocked" {
+				sb.Unlock()
+			} else if state == "initially-unjailed" {
+				sb = tools.NewSandbox(cwd)
+				restrictSensitiveReads(sb, home, cwd, true)
+			}
+			register(t, home, "matrix", []string{"/bot_token"})
+			for _, sealed := range []bool{true, false, true} {
+				token := "synthetic-plaintext-token"
+				if sealed {
+					token = secrets.FieldPrefix + "sealed"
+				}
+				path := writeConnector(t, home, "matrix", token)
+				if err := sb.CheckPathRead(path); (err == nil) != sealed {
+					t.Errorf("direct read: sealed=%v, error=%v", sealed, err)
+				}
+				for _, tool := range []core.Tool{
+					&tools.GrepTool{CWD: cwd, Sandbox: sb},
+					&tools.GlobTool{CWD: cwd, Sandbox: sb},
+				} {
+					pattern := "bot_token"
+					if tool.Name() == "glob" {
+						pattern = "**/config.json"
+					}
+					args, err := json.Marshal(map[string]any{"path": home, "pattern": pattern, "glob": "**/config.json"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					res, err := tool.Execute(context.Background(), args, nil)
+					if err != nil {
+						t.Fatalf("%s: %v", tool.Name(), err)
+					}
+					if visible := res.Details.(map[string]any)["matches"].(int) > 0; visible != sealed {
+						t.Errorf("%s parent search: sealed=%v, visible=%v", tool.Name(), sealed, visible)
+					}
+				}
+			}
+		})
+	}
+}
 
 // componentHome is a $TERVA_HOME with a jailed sandbox wired the way build.go
 // wires it, so every assertion below goes through the real check.

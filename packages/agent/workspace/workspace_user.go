@@ -72,7 +72,11 @@ func (w *Workspace) UserBind(_ context.Context, sess string, p ctrlproto.UserBin
 		// rebuilds (above); the already-shown opening keeps its text, as before.
 		if s.sess.HasPendingGreeting() {
 			if rr, err := build.Resolve(s.argsSnapshot(), true); err == nil && len(rr.CardGreetings) > 0 {
-				s.seedDeferredGreeting(s.sess, rr.CardGreetings)
+				s.revisionMu.Lock()
+				if s.revisionGuard(nil) == nil && s.sess.HasPendingGreeting() {
+					s.seedDeferredGreeting(s.sess, rr.CardGreetings)
+				}
+				s.revisionMu.Unlock()
 			}
 		}
 	} else if tailIdentityChanged {

@@ -45,7 +45,6 @@ type wsSession struct {
 	gate        *core.ConfirmGate      // nil in pure-yolo (no confirmation needed)
 	extMgr      *extensions.Manager    // this session's extension subprocesses
 	stopExt     func()                 // tears extMgr down on close
-	roSet       *core.ReadOnlySet      // the live policy's read-only set, so a rebuild's merges land where the gate reads them (nil in pure-yolo)
 	tasks       *tasktool.Controller   // the built-in task board (nil when the session has no base workspace tools)
 	memory      *tools.MemoryTool      // durable memory, bound once at session build (nil when --no-memory)
 	files       *tools.FileState       // what the model has seen of each path; survives tool rebuilds
@@ -75,10 +74,13 @@ type wsSession struct {
 	hub           *wsHub
 	subscription  bool // credential is an OAuth ("sub") token, not a paid api key
 
-	mu       sync.Mutex
-	provider string
-	model    string
-	title    string
+	// revisionMu serializes transcript revisions with turn/compaction admission.
+	// See revise for lock order and publication rules.
+	revisionMu sync.Mutex
+	mu         sync.Mutex
+	provider   string
+	model      string
+	title      string
 	// titleGenerated is title's provenance: true when machine titling wrote
 	// it (settleTitle / generate_title / the post-compaction refresh), false
 	// for a user rename. Automatic re-titling keys on it — a manual name is
@@ -347,12 +349,6 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 			s.diag("note: " + fmt.Sprintf(f, a...))
 		})
 		r.AdoptReadOnlySet(pol.ReadOnly)
-		// Retain it: every later rebuild re-merges extension and MCP tools, and
-		// MergeToolsForMode registers a read_only tool's name into whichever set
-		// the Resolved carries. A fresh Resolve carries a fresh one, so without
-		// this the gate would stop auto-allowing an extension's read-only tools
-		// after any rebuild — and the startup merge IS a rebuild now.
-		s.roSet = pol.ReadOnly
 	}
 	// See workspace_toolchannels.go: these live on the tool INSTANCE, so the
 	// identical call has to run again on every rebuild.
@@ -933,9 +929,18 @@ func (s *wsSession) awaitExtensions(ctx context.Context) {
 // client connection), so a client disconnecting mid-turn does not abort the run
 // other clients are watching. The caller runs the turn with launchTurn.
 func (s *wsSession) beginTurn() (context.Context, error) {
+	s.revisionMu.Lock()
+	defer s.revisionMu.Unlock()
+	return s.beginTurnHeld()
+}
+
+func (s *wsSession) beginTurnHeld() (context.Context, error) {
+	if err := s.persistenceFailure(s.sess.WriteError()); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.turnCancel != nil {
+	if s.turnCancel != nil || s.compacting {
 		return nil, ctrlproto.ErrBusy
 	}
 	// WithCancelCause, so a cancel can say WHY: core withdraws a not-yet-answered
@@ -972,7 +977,13 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 		// longer typing than the subprocesses spent handshaking.
 		s.awaitExtensions(turnCtx)
 		err := gen(turnCtx)
-		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, core.ErrBusy) {
+		if afterTurn != nil {
+			afterTurn()
+		}
+		if perr := s.agent.PersistenceError(); perr != nil && !errors.Is(err, core.ErrPersistence) {
+			err = errors.Join(err, perr)
+		}
+		if err != nil && (errors.Is(err, core.ErrPersistence) || (!errors.Is(err, context.Canceled) && !errors.Is(err, core.ErrBusy))) {
 			s.broadcast(ctrlproto.ConversationEvent(core.WireEvent{Type: "error", Error: err.Error()}))
 			// The banner is transient; persist the failure to the session's
 			// error sidecar (alongside the transcript, not in it) so a red X is
@@ -991,9 +1002,6 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 			s.broadcast(ctrlproto.ConversationEvent(core.WireEvent{Type: "done"}))
 		}
 		next, restart := s.endTurn(turnCtx, err)
-		if afterTurn != nil {
-			afterTurn()
-		}
 		// Snapshot-on-done: the transcript now contains the sealed final step,
 		// so re-broadcast the authoritative snapshot the way compact/clear do.
 		// This converges any subscriber that attached mid-step — its initial
@@ -1063,7 +1071,10 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 //
 // Epoch/busy guarding matches edit/delete/swipe.
 func (s *wsSession) retry(p ctrlproto.TurnRetryParams) error {
-	if err := s.reviseGuard(p.Epoch); err != nil {
+	s.revisionMu.Lock()
+	release := sync.OnceFunc(s.revisionMu.Unlock)
+	defer release()
+	if err := s.revisionGuard(&p.Epoch); err != nil {
 		return err
 	}
 	msgs := s.agent.Messages()
@@ -1084,10 +1095,6 @@ func (s *wsSession) retry(p ctrlproto.TurnRetryParams) error {
 	}
 	// Compose the cue BEFORE the truncation below removes the span it quotes.
 	cue := retryCue(p, msgs[idx:])
-	turnCtx, err := s.beginTurn()
-	if err != nil {
-		return err
-	}
 	// Retract the current response: persist the amend (so a reload reconstructs
 	// the kept take), set it aside, and truncate to the last user turn. clearTail
 	// drops the stale in-memory span; seedTail rebuilds it from disk once the new
@@ -1095,10 +1102,17 @@ func (s *wsSession) retry(p ctrlproto.TurnRetryParams) error {
 	// index (diskIndex) so a reload retracts the right span; the live agent is
 	// truncated by the in-memory index.
 	if disk, ok := s.diskIndex(idx); ok {
-		_ = s.sess.AppendAmend(core.AmendRetract, disk, nil, "retry")
+		if err := s.sess.AppendAmend(core.AmendRetract, disk, nil, "retry"); err != nil {
+			return s.persistenceFailure(err)
+		}
+	}
+	turnCtx, err := s.beginTurnHeld()
+	if err != nil {
+		return err
 	}
 	s.agent.TruncateTo(idx)
 	s.dropVariantsFrom(idx)
+	release()
 	s.launchTurn(turnCtx, func(ctx context.Context) error {
 		// An empty cue is exactly Continue, so an unguided regenerate keeps its
 		// old behaviour to the byte: an independent sample from the same prefix.
@@ -1254,10 +1268,13 @@ func (s *wsSession) endTurn(turnCtx context.Context, err error) (next string, re
 	// exists for interrupts ("stale follow-ups must not fire after an
 	// interrupt"), and a refusal is not an interrupt.
 	failed := (err != nil && !errors.Is(err, core.ErrBusy)) || turnCtx.Err() != nil
+	storageFailed := s.agent.PersistenceError() != nil
 	s.mu.Lock()
 	s.turnCtx, s.turnCancel = nil, nil
 	var dropped []string
-	if failed {
+	if storageFailed {
+		// Keep unsent input available for recovery. This handle cannot run it.
+	} else if failed {
 		dropped = s.agent.DrainQueuedMessages()
 	} else {
 		next, restart = s.agent.ShiftQueuedMessage()
@@ -1319,13 +1336,6 @@ func (s *wsSession) rebuildTools(reason string) {
 	if err != nil {
 		return
 	}
-	// Merge into the LIVE policy's read-only set, not the throwaway one this
-	// Resolve just minted: MergeToolsForMode registers each read_only tool
-	// there, and the confirm gate reads the policy's copy. Without this an
-	// extension's read-only tools would start prompting after any rebuild.
-	if s.roSet != nil {
-		rr.AdoptReadOnlySet(s.roSet)
-	}
 	// extMgr is always non-nil for a buildSession session; the guard keeps
 	// the settings verbs (approval / auto-swarm) safe on bare fixtures, same
 	// stance as the nil-tolerant apply helpers.
@@ -1359,13 +1369,8 @@ func (s *wsSession) rebuildTools(reason string) {
 	// one mode that deliberately keeps ask_user_question, precisely so the agent
 	// can ask when requirements are unclear.
 	s.bindResolvedChannels(&rr)
-	toolsChanged := s.agent.SetTools(rr.ToolRegistry)
-	// The other half of the same rule, and the one this rebuild used to skip:
-	// code_execution's gated dispatcher binds onto the freshly-minted tool, so
-	// without this the tool fails closed ("not wired to the approval gate") for
-	// the rest of the session. After SetTools, because it reaches the instance
-	// through the agent's registry.
-	s.bindAgentChannels(s.agent, s.gate)
+	// Publication includes classification and fully bound script dispatchers.
+	toolsChanged := rr.PublishTools(s.agent, s.gate)
 	// The system prompt carries view state too — the prompt's tool list, the
 	// auto-swarm nudge, an extension's static context — so install the
 	// freshly-resolved render alongside the tools (same fidelity as
@@ -1435,9 +1440,15 @@ func isAutomaticRebuild(reason string) bool {
 // running turn blocks it (ErrBusy); an already-minimal transcript is reported as
 // a benign notice rather than an error.
 func (s *wsSession) compact(ctx context.Context) error {
+	s.revisionMu.Lock()
+	if err := s.persistenceFailure(s.sess.WriteError()); err != nil {
+		s.revisionMu.Unlock()
+		return err
+	}
 	s.mu.Lock()
 	if s.turnCancel != nil || s.compacting {
 		s.mu.Unlock()
+		s.revisionMu.Unlock()
 		return ctrlproto.ErrBusy
 	}
 	// Mark the session busy for the whole compaction. Without this the session
@@ -1449,9 +1460,14 @@ func (s *wsSession) compact(ctx context.Context) error {
 	// because a compaction never reaches endTurn).
 	s.compacting = true
 	s.mu.Unlock()
+	s.revisionMu.Unlock()
 	defer s.endCompacting()
 	// Non-nil sink: Compact streams summary deltas and calls it unconditionally.
 	if _, err := s.agent.Compact(ctx, core.AutoCompactKeepTail, func(string) {}); err != nil {
+		if errors.Is(err, core.ErrPersistence) {
+			s.dropAllVariants()
+			s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
+		}
 		if errors.Is(err, core.ErrNothingToCompact) {
 			s.broadcast(ctrlproto.NoticeEvent("info", "", i18n.T("Nothing to compact — the transcript is already minimal.")))
 			return nil
@@ -1483,12 +1499,9 @@ func (s *wsSession) compact(ctx context.Context) error {
 // the latest checkpoint). A running turn blocks it (ErrBusy). On success every
 // client receives a fresh, empty snapshot. The busy gate means no turn is
 // appending concurrently, so the direct durable write is safe (mirrors compact).
-func (s *wsSession) clear() error {
-	s.mu.Lock()
-	busy := s.turnCancel != nil
-	s.mu.Unlock()
-	if busy {
-		return ctrlproto.ErrBusy
+func (s *wsSession) clearHeld() error {
+	if err := s.sess.AppendCompaction(nil, core.CompactResult{}); err != nil {
+		return s.persistenceFailure(err)
 	}
 	s.agent.SetMessages(nil)
 	// Re-baseline the context gauge, which SetMessages does not touch. Compaction
@@ -1503,29 +1516,27 @@ func (s *wsSession) clear() error {
 	// still cost something on the next request, and that request will say so.
 	s.agent.SeedLastTurnUsage(provider.Usage{})
 	s.dropAllVariants()
-	// A clear reuses the compaction row as a floor marker. No summarizer ran,
-	// so it cost nothing — zero usage, not the previous compaction's.
-	_ = s.sess.AppendCompaction(nil, core.CompactResult{})
-	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
-	s.broadcast(ctrlproto.NoticeEvent("info", "", i18n.T("Cleared the conversation.")))
 	return nil
 }
 
-// reviseGuard is the shared precondition for an in-place transcript revision: no
+// revisionGuard is the shared precondition for an in-place transcript revision: no
 // turn may be running (a concurrent append would race the index), and the
 // client's epoch must match the live transcript's — a mismatch means the
 // transcript shifted under the client (another edit, a turn, a compaction) so its
 // index no longer means what it thought. The busy gate also makes the direct
 // durable AppendAmend safe, exactly as clear/compact rely on it.
-func (s *wsSession) reviseGuard(epoch uint64) error {
+func (s *wsSession) revisionGuard(epoch *uint64) error {
 	s.mu.Lock()
-	busy := s.turnCancel != nil
+	busy := s.turnCancel != nil || s.compacting
 	s.mu.Unlock()
 	if busy {
 		return ctrlproto.ErrBusy
 	}
-	if s.agent.TranscriptEpoch() != epoch {
-		return ctrlproto.Errorf(ctrlproto.CodeConflict, "%s", i18n.T("transcript changed since epoch %d; reload and retry", epoch))
+	if err := s.persistenceFailure(s.sess.WriteError()); err != nil {
+		return err
+	}
+	if epoch != nil && s.agent.TranscriptEpoch() != *epoch {
+		return ctrlproto.Errorf(ctrlproto.CodeConflict, "%s", i18n.T("transcript changed since epoch %d; reload and retry", *epoch))
 	}
 	return nil
 }
@@ -1534,10 +1545,7 @@ func (s *wsSession) reviseGuard(epoch uint64) error {
 // (the Stage surface's edit), persists the change as a replace amend, and
 // broadcasts a fresh snapshot so every client converges. The role and any
 // structural blocks are preserved (see reviseMessageText); only the prose changes.
-func (s *wsSession) editMessage(epoch uint64, index int, text string) error {
-	if err := s.reviseGuard(epoch); err != nil {
-		return err
-	}
+func (s *wsSession) editMessageHeld(index int, text string) error {
 	msgs := s.agent.Messages()
 	if index < 0 || index >= len(msgs) {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("message index %d out of range", index))
@@ -1563,11 +1571,13 @@ func (s *wsSession) editMessage(epoch uint64, index int, text string) error {
 // does not touch the last response.
 func (s *wsSession) editMessageAsVariant(msgs []provider.Message, index int, edited provider.Message) error {
 	prior := msgs[index]
+	if disk, ok := s.diskIndex(index); ok {
+		if err := s.sess.AppendReplaceVariant(disk, edited, "edit"); err != nil {
+			return s.persistenceFailure(err)
+		}
+	}
 	if !s.agent.ReplaceMessage(index, edited) {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("message index %d out of range", index))
-	}
-	if disk, ok := s.diskIndex(index); ok {
-		_ = s.sess.AppendReplaceVariant(disk, edited, "edit") // keep_prior: retain the original as a take
 	}
 	s.mu.Lock()
 	if s.msgVars == nil {
@@ -1588,7 +1598,6 @@ func (s *wsSession) editMessageAsVariant(msgs []provider.Message, index int, edi
 		mv.active = mv.count - 1
 	}
 	s.mu.Unlock()
-	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
 	return nil
 }
 
@@ -1599,20 +1608,23 @@ func (s *wsSession) editMessageAsVariant(msgs []provider.Message, index int, edi
 // swipe arrows and the existing tail counter lights up. Because the span from the
 // last user turn is the final assistant message(s), never the tool_use/tool_result
 // pairs before it, an edit here leaves the actor_spawn machinery and its 🎭
-// attribution untouched. Amend-persist errors are best-effort, matching retry.
+// attribution untouched. A write failure stops the edit and latches the session.
 func (s *wsSession) editTailAsVariant(msgs []provider.Message, start, index int, edited provider.Message) error {
 	newSpan := append([]provider.Message(nil), msgs[start:]...)
 	newSpan[index-start] = edited
 
 	if disk, ok := s.diskIndex(start); ok {
-		_ = s.sess.AppendAmend(core.AmendRetract, disk, nil, "edit") // set the current span aside as a take
+		if err := s.sess.AppendAmend(core.AmendRetract, disk, nil, "edit"); err != nil {
+			return s.persistenceFailure(err)
+		}
 	}
 	for _, m := range newSpan {
-		_ = s.sess.AppendMessage(m) // the edited span becomes the new active take
+		if err := s.sess.AppendMessage(m); err != nil {
+			return s.persistenceFailure(err)
+		}
 	}
 	s.agent.SetMessages(append(append([]provider.Message(nil), msgs[:start]...), newSpan...))
 	s.seedTail() // reconstruct [current, edited] (edited active) from disk
-	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
 	return nil
 }
 
@@ -1650,20 +1662,19 @@ func reviseMessageText(orig provider.Message, text string) provider.Message {
 
 // deleteMessage removes the message at index, persists a delete amend, and
 // broadcasts a fresh snapshot.
-func (s *wsSession) deleteMessage(epoch uint64, index int) error {
-	if err := s.reviseGuard(epoch); err != nil {
-		return err
+func (s *wsSession) deleteMessageHeld(index int) error {
+	if index < 0 || index >= len(s.agent.Messages()) {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("message index %d out of range", index))
 	}
 	disk, ok := s.diskIndex(index)
 	if !ok {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the resume-window summary at index %d cannot be deleted", index))
 	}
-	if !s.agent.DeleteMessage(index) {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("message index %d out of range", index))
+	if err := s.sess.AppendAmend(core.AmendDelete, disk, nil, "delete"); err != nil {
+		return s.persistenceFailure(err)
 	}
-	_ = s.sess.AppendAmend(core.AmendDelete, disk, nil, "delete")
+	s.agent.DeleteMessage(index)
 	s.dropVariantsAfterDelete(index)
-	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
 	return nil
 }
 
@@ -1674,20 +1685,19 @@ func (s *wsSession) deleteMessage(epoch uint64, index int) error {
 // the in-memory/file-replay split this codebase has been bitten by before.
 //
 // Deliberately NOT routed through deleteMessage: that is the client verb, and
-// its reviseGuard refuses while a turn is running. This fires from inside the
+// its revisionGuard refuses while a turn is running. This fires from inside the
 // sink of the turn that is still unwinding, which that guard would reject —
 // correctly, for a client, and wrongly here. There is no epoch to check either;
 // the caller is core, which just performed the removal it is reporting.
 //
-// Errors are best-effort in the same way the amend writes around them are: a
-// failed amend leaves the prompt on disk, which is the pre-feature behaviour and
-// not a reason to fail a turn that is already over.
+// A failed amend latches a persistence error. The turn reports it on return;
+// the live transcript remains available while the host repairs storage.
 func (s *wsSession) persistWithdrawal(index int) {
 	disk, ok := s.diskIndex(index)
 	if !ok {
 		return
 	}
-	_ = s.sess.AppendAmend(core.AmendDelete, disk, nil, "withdrawn")
+	s.agent.RecordPersistenceError(s.sess.AppendAmend(core.AmendDelete, disk, nil, "withdrawn"))
 	s.dropVariantsAfterDelete(index)
 	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
 }
@@ -1719,10 +1729,7 @@ type msgVarLive struct {
 // take, persists the choice as a select amend (reconstructed on reload, no bytes
 // duplicated), and broadcasts a fresh snapshot. Epoch/busy guarding matches
 // edit/delete; a swipe to the current variant is an idempotent no-op.
-func (s *wsSession) swipe(epoch uint64, variant int) error {
-	if err := s.reviseGuard(epoch); err != nil {
-		return err
-	}
+func (s *wsSession) swipeHeld(variant int) error {
 	s.mu.Lock()
 	t := s.tail
 	s.mu.Unlock()
@@ -1742,19 +1749,20 @@ func (s *wsSession) swipe(epoch uint64, variant int) error {
 		return ctrlproto.Errorf(ctrlproto.CodeConflict, "%s", i18n.T("tail changed; reload and retry"))
 	}
 	newMsgs := append(append([]provider.Message(nil), msgs[:t.start]...), t.takes[variant]...)
-	s.agent.SetMessages(newMsgs)
 	if s.sess.HasPendingGreeting() {
 		// A pre-first-turn greeting swipe stays a draft: update the deferred active
 		// in memory, no disk write, so previewing openings does not promote the
 		// session. The flush at the first turn persists this chosen active.
 		s.sess.SetPendingGreetingActive(variant)
 	} else if disk, ok := s.diskIndex(t.start); ok {
-		_ = s.sess.AppendSelect(disk, variant, "swipe")
+		if err := s.sess.AppendSelect(disk, variant, "swipe"); err != nil {
+			return s.persistenceFailure(err)
+		}
 	}
+	s.agent.SetMessages(newMsgs)
 	s.mu.Lock()
 	s.tail.active = variant
 	s.mu.Unlock()
-	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
 	return nil
 }
 
@@ -1762,10 +1770,7 @@ func (s *wsSession) swipe(epoch uint64, variant int) error {
 // for an edited older message. It swaps that one message in place (the downstream
 // is untouched), persists an mselect amend, and lazily hydrates the take list from
 // disk the first time a resumed position is swiped (seedMsgVars kept only counts).
-func (s *wsSession) swipeMessage(epoch uint64, index, variant int) error {
-	if err := s.reviseGuard(epoch); err != nil {
-		return err
-	}
+func (s *wsSession) swipeMessageHeld(index, variant int) error {
 	s.mu.Lock()
 	mv := s.msgVars[index]
 	s.mu.Unlock()
@@ -1792,15 +1797,16 @@ func (s *wsSession) swipeMessage(epoch uint64, index, variant int) error {
 		}
 		takes = hydrated.Takes
 	}
+	if err := s.sess.AppendMsgSelect(disk, variant, "swipe"); err != nil {
+		return s.persistenceFailure(err)
+	}
 	if !s.agent.ReplaceMessage(index, takes[variant]) {
 		return ctrlproto.Errorf(ctrlproto.CodeConflict, "%s", i18n.T("message %d changed; reload and retry", index))
 	}
-	_ = s.sess.AppendMsgSelect(disk, variant, "swipe")
 	s.mu.Lock()
 	mv.takes = takes // cache the now-hydrated list
 	mv.active = variant
 	s.mu.Unlock()
-	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
 	return nil
 }
 
@@ -1809,10 +1815,7 @@ func (s *wsSession) swipeMessage(epoch uint64, index, variant int) error {
 // transcript, so this only seals the position on disk and drops the in-memory
 // marker — no transcript change, no epoch bump; the fresh snapshot removes the
 // swipe control.
-func (s *wsSession) pruneVariants(epoch uint64, index int) error {
-	if err := s.reviseGuard(epoch); err != nil {
-		return err
-	}
+func (s *wsSession) pruneVariantsHeld(index int) error {
 	s.mu.Lock()
 	mv := s.msgVars[index]
 	s.mu.Unlock()
@@ -1823,11 +1826,12 @@ func (s *wsSession) pruneVariants(epoch uint64, index int) error {
 	if !ok {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the resume-window summary at index %d has no variants", index))
 	}
-	_ = s.sess.AppendSeal(disk, mv.active, "prune")
+	if err := s.sess.AppendSeal(disk, mv.active, "prune"); err != nil {
+		return s.persistenceFailure(err)
+	}
 	s.mu.Lock()
 	delete(s.msgVars, index)
 	s.mu.Unlock()
-	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
 	return nil
 }
 
@@ -1835,10 +1839,7 @@ func (s *wsSession) pruneVariants(epoch uint64, index int) error {
 // the rest swipeable; closes the position at one take. It hydrates the take list if
 // needed (a resumed position) to compute the new active take, mirrors the fold's
 // active-adjustment, persists a drop-take amend, and swaps the live message.
-func (s *wsSession) dropVariant(epoch uint64, index, variant int) error {
-	if err := s.reviseGuard(epoch); err != nil {
-		return err
-	}
+func (s *wsSession) dropVariantHeld(index, variant int) error {
 	s.mu.Lock()
 	mv := s.msgVars[index]
 	s.mu.Unlock()
@@ -1868,7 +1869,9 @@ func (s *wsSession) dropVariant(epoch uint64, index, variant int) error {
 	case variant == active && active >= len(newTakes):
 		active = len(newTakes) - 1
 	}
-	_ = s.sess.AppendDropTake(disk, variant, "drop")
+	if err := s.sess.AppendDropTake(disk, variant, "drop"); err != nil {
+		return s.persistenceFailure(err)
+	}
 	if len(newTakes) <= 1 {
 		s.mu.Lock()
 		delete(s.msgVars, index)
@@ -1880,7 +1883,6 @@ func (s *wsSession) dropVariant(epoch uint64, index, variant int) error {
 		s.mu.Unlock()
 		s.agent.ReplaceMessage(index, newTakes[active])
 	}
-	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
 	return nil
 }
 
@@ -2443,7 +2445,9 @@ func (s *wsSession) subscribe(ctx context.Context, reliable bool) <-chan ctrlpro
 }
 
 func (s *wsSession) snapshot() ctrlproto.Snapshot {
-	msgs := s.agent.Messages()
+	s.revisionMu.Lock()
+	defer s.revisionMu.Unlock()
+	msgs, epoch := s.agent.MessagesWithEpoch()
 	wm := make([]core.WireMessage, len(msgs))
 	for i, m := range msgs {
 		// Full form (image Data included) — same contract as the event
@@ -2484,7 +2488,7 @@ func (s *wsSession) snapshot() ctrlproto.Snapshot {
 		// thing (free in-process — the slices are shared); the serialization edge cuts
 		// it down per client contract, and stamps Base. Total and Epoch are true of the
 		// transcript either way, which is what lets a windowed client place what it got.
-		Epoch:        s.agent.TranscriptEpoch(),
+		Epoch:        epoch,
 		Total:        len(wm),
 		Busy:         busy,
 		Permissions:  perms,

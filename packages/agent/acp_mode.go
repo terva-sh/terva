@@ -561,14 +561,14 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	fileState := r.Files()
 	rebuildTools := func() {
 		build.LiveToolSet{
-			Args:     args,
-			ReadOnly: roSet,
-			Tasks:    r.Tasks,
-			Memory:   memTool,
-			Files:    fileState,
-			Sandbox:  r.Sandbox,
-			Ext:      extMgr,
-			MCP:      mcpAdapter,
+			Args:    args,
+			Gate:    confirmGate,
+			Tasks:   r.Tasks,
+			Memory:  memTool,
+			Files:   fileState,
+			Sandbox: r.Sandbox,
+			Ext:     extMgr,
+			MCP:     mcpAdapter,
 		}.Rebuild(ag)
 	}
 

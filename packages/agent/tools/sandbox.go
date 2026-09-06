@@ -94,7 +94,8 @@ func NewSandbox(root string) *Sandbox {
 // Lock enables sandboxing.
 func (s *Sandbox) Lock() { s.locked.Store(true) }
 
-// Unlock disables sandboxing.
+// Unlock disables write confinement and command heuristics. Sensitive reads
+// remain denied.
 func (s *Sandbox) Unlock() { s.locked.Store(false) }
 
 // Locked reports whether the sandbox is enforcing limits.
@@ -110,8 +111,8 @@ func (s *Sandbox) CheckPath(path string) error {
 }
 
 // CheckPathRead is the read-side check, and it is a DENY LIST where
-// CheckPath is a containment check. A jailed agent may read anywhere
-// except the registered secret roots. No-op when unlocked.
+// CheckPath is a containment check. An agent may read anywhere except the
+// registered sensitive paths, whether locked or unlocked. No-op on nil.
 //
 // The asymmetry is deliberate. The bash tool is not path-jailed — by design,
 // documented at CheckCommand as a speed bump rather than a boundary — so
@@ -131,7 +132,7 @@ func (s *Sandbox) CheckPath(path string) error {
 // WRITES are unchanged: CheckPath still confines them to Root, and reading a
 // file has never been the step that damages a tree.
 func (s *Sandbox) CheckPathRead(path string) error {
-	if !s.Locked() {
+	if s == nil {
 		return nil
 	}
 	target, err := canonicalOrParent(path)
@@ -329,9 +330,9 @@ func (s *Sandbox) underWritableGrant(target string) bool {
 	return false
 }
 
-// CheckCommand applies a lightweight sanity check to a bash command
-// when jailed. We cannot fully sandbox a shell, but we can reject the
-// most obvious escapes so the model does not accidentally touch files
+// CheckCommand checks sensitive path arguments in every jail state and applies
+// command heuristics when jailed. We cannot fully sandbox a shell, but we can
+// reject the most obvious escapes so the model does not accidentally touch files
 // outside root via absolute paths.
 //
 // Each command in a compound line is checked independently
@@ -341,7 +342,7 @@ func (s *Sandbox) underWritableGrant(target string) bool {
 // adversary can still escape, and unparsable lines fall back to a single
 // whole-string check.
 func (s *Sandbox) CheckCommand(cmd string) error {
-	if !s.Locked() {
+	if s == nil {
 		return nil
 	}
 	cmd = strings.TrimSpace(cmd)
@@ -363,6 +364,14 @@ func (s *Sandbox) CheckCommand(cmd string) error {
 // checkCommandScope runs the banned-pattern and cd-escape heuristics
 // against one simple command from a (possibly compound) line.
 func (s *Sandbox) checkCommandScope(cmd string) error {
+	// Sensitive paths stay denied after /unjail, just as they do for file
+	// tools. This remains a shell heuristic, not process-level confinement.
+	if err := s.checkSecretArgs(cmd); err != nil {
+		return err
+	}
+	if !s.Locked() {
+		return nil
+	}
 	// Commands that are dangerous by NAME, wherever they appear. These stay
 	// substring matches because the thing being matched is the invocation
 	// itself, not one of its arguments.
@@ -376,16 +385,6 @@ func (s *Sandbox) checkCommandScope(cmd string) error {
 		if strings.Contains(lower, strings.ToLower(b)) {
 			return fmt.Errorf("jailed: command contains banned pattern %q (ask the user to run /unjail if this is intended)", b)
 		}
-	}
-	// The secret deny list applies here too. Enforcing it on `read` alone would
-	// rebuild, for the one case that actually matters, the same split posture
-	// this sandbox just abandoned: the model would be refused auth.json by the
-	// file tool and handed it by `cat`. This is a speed bump of exactly the
-	// same strength as everything else in this function — a runtime-assembled
-	// path or an interpreter still walks past it — but it is at least the same
-	// speed bump on both routes.
-	if err := s.checkSecretArgs(cmd); err != nil {
-		return err
 	}
 	// Commands that are dangerous by TARGET are matched on whole arguments.
 	// "rm -rf /" as a substring matched `rm -rf /tmp/build` — and every other

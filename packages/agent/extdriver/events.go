@@ -203,6 +203,8 @@ func (d *Driver) interceptSubsFor(event string) []*Extension {
 // the reply, a timeout, or context cancellation. Returns a typed
 // result. Never blocks for longer than interceptTimeout.
 func (d *Driver) askIntercept(ctx context.Context, ext *Extension, payload extproto.EventInterceptFromHost) InterceptResult {
+	ctx, cancel := context.WithTimeout(ctx, interceptTimeout)
+	defer cancel()
 	id := newCorrelationID()
 	ch := make(chan extproto.EventInterceptResponseFromExt, 1)
 	ext.mu.Lock()
@@ -211,7 +213,7 @@ func (d *Driver) askIntercept(ctx context.Context, ext *Extension, payload extpr
 
 	payload.Type = "event_intercept"
 	payload.ID = id
-	if err := ext.writeFrame(payload); err != nil {
+	if err := ext.writeFrameContext(ctx, payload); err != nil {
 		ext.mu.Lock()
 		delete(ext.pendingIntercept, id)
 		ext.mu.Unlock()
@@ -227,16 +229,19 @@ func (d *Driver) askIntercept(ctx context.Context, ext *Extension, payload extpr
 			ModifiedArgs: resp.ModifiedArgs,
 			ReplaceText:  resp.ReplaceText,
 		}
-	case <-time.After(interceptTimeout):
+	case <-ext.quit:
 		ext.mu.Lock()
 		delete(ext.pendingIntercept, id)
 		ext.mu.Unlock()
-		fmt.Fprintf(ext.logFile, "[terva] intercept %s timed out; allowing\n", payload.Event)
+		fmt.Fprintf(ext.logFile, "[terva] intercept %s stopped; allowing\n", payload.Event)
 		return InterceptResult{}
 	case <-ctx.Done():
 		ext.mu.Lock()
 		delete(ext.pendingIntercept, id)
 		ext.mu.Unlock()
+		if ctx.Err() == context.DeadlineExceeded {
+			fmt.Fprintf(ext.logFile, "[terva] intercept %s timed out; allowing\n", payload.Event)
+		}
 		return InterceptResult{}
 	}
 }

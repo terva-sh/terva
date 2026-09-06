@@ -135,7 +135,11 @@ func TestServerIndexAndAPIKey(t *testing.T) {
 		t.Fatalf("index status %d", resp.StatusCode)
 	}
 
-	resp, err = http.Get(s.URL() + "/apikey?provider=anthropic")
+	formURL, err := s.BeginAPIKey("test", "anthropic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.Get(formURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,43 +149,15 @@ func TestServerIndexAndAPIKey(t *testing.T) {
 	}
 
 	// POST a fake key and expect a success result on the channel.
-	_, err = http.PostForm(s.URL()+"/apikey", url.Values{
-		"provider": {"anthropic"},
-		"api_key":  {"sk-ant-test"},
-	})
-	if err != nil {
-		t.Fatal(err)
+	if status := submitKeyForm(t, s, formURL, nil); status != http.StatusOK {
+		t.Fatalf("submit status %d", status)
 	}
 	select {
 	case r := <-s.Result():
 		if r.Err != nil {
 			t.Fatalf("unexpected err: %v", r.Err)
 		}
-		if r.Provider != "anthropic" || r.APIKey != "sk-ant-test" || r.Method != "apikey" {
-			t.Fatalf("bad result: %+v", r)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("no result")
-	}
-}
-
-func TestServerCallback(t *testing.T) {
-	s, err := NewServer()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Shutdown(context.Background())
-
-	u := s.URL() + "/callback?code=abc123&state=anthropic:xyz"
-	resp, err := http.Get(u)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-
-	select {
-	case r := <-s.Result():
-		if r.Provider != "anthropic" || r.Code != "abc123" || r.State != "anthropic:xyz" || r.Method != "oauth" {
+		if r.Flow != "test" || r.Provider != "anthropic" || r.APIKey != "synthetic-key" || r.Method != "apikey" {
 			t.Fatalf("bad result: %+v", r)
 		}
 	case <-time.After(2 * time.Second):
@@ -291,26 +267,5 @@ func TestStartManualOAuthAdoptsLoopbackFlow(t *testing.T) {
 	}
 	if manualState != loopState {
 		t.Fatalf("manual state %q != loopback state %q: opening the displayed URL would yield a state mismatch", manualState, loopState)
-	}
-}
-
-func TestServerCallbackError(t *testing.T) {
-	s, err := NewServer()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Shutdown(context.Background())
-
-	_, _ = http.Get(s.URL() + "/callback?error=access_denied&state=openai:xyz")
-	select {
-	case r := <-s.Result():
-		if r.Err == nil || r.Provider != "openai" {
-			t.Fatalf("bad result: %+v", r)
-		}
-		if !strings.Contains(r.Err.Error(), "access_denied") {
-			t.Fatalf("missing reason: %v", r.Err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("no result")
 	}
 }

@@ -1,3 +1,5 @@
+//go:build !terva_no_mcp_http
+
 package mcp
 
 import (

@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 )
 
 type req struct {
@@ -41,12 +42,21 @@ var tools = []map[string]any{
 func main() {
 	paginate := false
 	dieAfterInit := false
+	blockStdin := false
+	noReply := false
+	closeStdout := false
 	for _, a := range os.Args[1:] {
 		switch a {
 		case "--paginate":
 			paginate = true
 		case "--die-after-init":
 			dieAfterInit = true
+		case "--block-stdin":
+			blockStdin = true
+		case "--no-reply":
+			noReply = true
+		case "--close-stdout":
+			closeStdout = true
 		}
 	}
 
@@ -71,6 +81,21 @@ func main() {
 		case "tools/list":
 			if !paginate {
 				reply(r.ID, map[string]any{"tools": tools})
+				if closeStdout {
+					_ = os.Stdout.Close()
+					time.Sleep(time.Hour)
+					return
+				}
+				if blockStdin {
+					// The handshake is complete. A byte from the next request
+					// proves the host started writing before we stop reading.
+					if _, err := os.Stdin.Read(make([]byte, 1)); err != nil {
+						os.Exit(2)
+					}
+					fmt.Fprintln(os.Stderr, "stdin stopped")
+					time.Sleep(time.Hour)
+					return
+				}
 				continue
 			}
 			var p struct {
@@ -83,6 +108,10 @@ func main() {
 				reply(r.ID, map[string]any{"tools": tools[1:]})
 			}
 		case "tools/call":
+			if noReply {
+				fmt.Fprintln(os.Stderr, "request read")
+				continue
+			}
 			var p struct {
 				Name string          `json:"name"`
 				Args json.RawMessage `json:"arguments"`

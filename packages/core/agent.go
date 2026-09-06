@@ -219,9 +219,9 @@ type Agent struct {
 	// the ephemeral tail (e.g. /context) without corrupting that state.
 	ContextProviderPeek func() string
 
-	// ReadOnly names the side-effect-free tools, shared with the permission
-	// policy (which uses it to auto-allow in plan mode). Compaction reads it to
-	// decide which discarded tool calls belong in the executed-actions ledger.
+	// ReadOnly names side-effect-free tools for dispatch and compaction.
+	// Set it during construction. Use SetToolsWithReadOnly for live updates;
+	// readers use ToolsWithReadOnlySnapshot or the calling turn's context.
 	//
 	// Nil means every tool is assumed to mutate, and that is the correct failure
 	// direction: a nil set over-reports the ledger, which costs a few tokens. The
@@ -397,8 +397,9 @@ type Agent struct {
 	// means live-only (no persistence), e.g. --no-session or bot-mode
 	// group chats. Guarded by mu: a /sessions swap can land while a
 	// turn's terva_status call reads them.
-	sessionID   string
-	sessionPath string
+	sessionID      string
+	persistenceErr error // guarded by mu; first durable observer failure
+	sessionPath    string
 	// cacheID keys provider prompt caching (Request.PromptCacheKey). It
 	// prefers the session's meta UUID over the file basename: basenames
 	// are only unique within one directory, and every swarm child's
@@ -703,11 +704,18 @@ func (a *Agent) appendQueuedAsUser(texts []string, synthetic bool, sink func(Age
 
 // Messages returns a copy of the current transcript.
 func (a *Agent) Messages() []provider.Message {
+	msgs, _ := a.MessagesWithEpoch()
+	return msgs
+}
+
+// MessagesWithEpoch snapshots the transcript and its revision identity together.
+// A host must use this pair when it exposes message indices for later edits.
+func (a *Agent) MessagesWithEpoch() ([]provider.Message, uint64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	out := make([]provider.Message, len(a.messages))
 	copy(out, a.messages)
-	return out
+	return out, a.transcriptEpoch
 }
 
 // Revision returns a monotonically increasing transcript version.
@@ -736,6 +744,8 @@ func (a *Agent) TranscriptEpoch() uint64 {
 // any tool) — the cached prompt prefix serializes exactly that surface, so
 // callers use the verdict to notify about a cache-breaking rebuild without
 // false alarms from identical re-installs.
+// This method preserves classification. Use SetToolsWithReadOnly when a
+// registry rebuild can change a tool's read-only declaration.
 func (a *Agent) SetTools(reg Registry) (changed bool) {
 	a.mu.Lock()
 	changed = !registryEqual(a.Tools, reg)
@@ -1762,6 +1772,9 @@ func (a *Agent) PromptExtra(ctx context.Context, text string, images []provider.
 		return ErrBusy
 	}
 	defer release()
+	if err := a.PersistenceError(); err != nil {
+		return err
+	}
 	if sink == nil {
 		sink = func(AgentEvent) {}
 	}
@@ -2129,9 +2142,10 @@ func (a *Agent) wrapSink(sink func(AgentEvent)) func(AgentEvent) {
 // (repinForContinuation) so the continuation runs with the tools live —
 // docs/proposals/activation-continuation.md.
 type turnPin struct {
-	system string
-	tools  Registry
-	turn   turnTools
+	system   string
+	tools    Registry
+	turn     turnTools
+	readOnly *ReadOnlySet
 }
 
 // pinTurn snapshots the cached prompt prefix for a segment. A host may swap
@@ -2147,7 +2161,7 @@ type turnPin struct {
 func (a *Agent) pinTurn() turnPin {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return turnPin{system: a.System, tools: a.Tools, turn: a.turnToolsLocked(a.Tools)}
+	return turnPin{system: a.System, tools: a.Tools, turn: a.turnToolsLocked(a.Tools), readOnly: a.ReadOnly.Snapshot()}
 }
 
 // fireContinuationGate consults the at-close gates in registration order and
@@ -2236,7 +2250,11 @@ func (a *Agent) repinActivatedVisibility(pin turnPin) turnPin {
 	return pin
 }
 
-func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
+func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) {
+	defer func() { err = a.withPersistenceError(err) }()
+	if err := a.PersistenceError(); err != nil {
+		return err
+	}
 	// One pin per segment; the whole Prompt is a single segment until a
 	// boundary refreshes it (repinForContinuation) — see pinTurn.
 	pin := a.pinTurn()
@@ -2272,6 +2290,9 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 	compactArmed := true
 
 	for step := 1; a.MaxSteps <= 0 || step <= a.MaxSteps; step++ {
+		if err := a.PersistenceError(); err != nil {
+			return err
+		}
 		// Messages queued while the agent was busy are delivered
 		// before the next model call. This is the safe boundary:
 		// any previous tool batch has already completed and its
@@ -2354,6 +2375,9 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 		continuePrefill := a.continuePrefill
 		a.mu.Unlock()
 		for attempt := 0; ; attempt++ {
+			if err := a.PersistenceError(); err != nil {
+				return err
+			}
 			stop, assistantMsg, commit, err = a.oneTurn(ctx, pin.system, pin.tools, pin.turn, sink)
 			sink(EvTurnEnd{Stop: stop, Err: err})
 			if err == nil {
@@ -2443,13 +2467,17 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 		if commit != nil {
 			commit()
 		}
+		if perr := a.PersistenceError(); perr != nil {
+			return errors.Join(err, perr)
+		}
 		if err != nil {
 			return err
 		}
 
 		if stop == provider.StopToolUse {
 			// Execute each tool call, append a single tool-results message, continue.
-			toolMsg, hadError := a.executeTools(ctx, assistantMsg, pin.tools, sink)
+			toolCtx := context.WithValue(ctx, toolGenerationKey{}, toolGeneration{agent: a, tools: pin.tools, readOnly: pin.readOnly})
+			toolMsg, hadError := a.executeTools(toolCtx, assistantMsg, pin.tools, sink)
 			a.mu.Lock()
 			a.messages = append(a.messages, toolMsg)
 			a.rev++
@@ -2494,6 +2522,9 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			a.fireMessageAppended(toolMsg)
 			if len(imageMirror.Content) > 0 {
 				a.fireMessageAppended(imageMirror)
+			}
+			if err := a.PersistenceError(); err != nil {
+				return err
 			}
 			// If context was cancelled during tool execution, bail out.
 			if err := ctx.Err(); err != nil {
@@ -2982,6 +3013,9 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 		// the launch directory. Empty (an embedder that never sets CWD)
 		// keeps the old behavior.
 		WorkingDir: a.CWD,
+	}
+	if err := a.PersistenceError(); err != nil {
+		return provider.StopError, provider.Message{}, nil, err
 	}
 	stream, err := client.Stream(ctx, req)
 	if err != nil {

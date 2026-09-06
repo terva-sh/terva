@@ -222,13 +222,9 @@ func (c *Client) dispatchLoop() {
 
 // call sends one request and waits for its response or timeout.
 func (c *Client) call(ctx context.Context, method string, params any, timeout time.Duration) (json.RawMessage, error) {
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return nil, errors.New("mcp server is not running")
-	}
-	c.mu.Unlock()
-
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout,
+		fmt.Errorf("%s timed out after %s: %w", method, timeout, context.DeadlineExceeded))
+	defer cancel()
 	c.idMu.Lock()
 	c.nextID++
 	id := c.nextID
@@ -236,41 +232,39 @@ func (c *Client) call(ctx context.Context, method string, params any, timeout ti
 
 	ch := make(chan rpcResponse, 1)
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil, errors.New("mcp server is not running")
+	}
 	c.pending[id] = ch
 	c.mu.Unlock()
-
-	if err := c.write(ctx, rpcRequest{JSONRPC: "2.0", ID: &id, Method: method, Params: params}); err != nil {
+	defer func() {
 		c.mu.Lock()
 		delete(c.pending, id)
 		c.mu.Unlock()
+	}()
+
+	if err := c.write(ctx, rpcRequest{JSONRPC: "2.0", ID: &id, Method: method, Params: params}); err != nil {
+		if ctx.Err() != nil {
+			return nil, context.Cause(ctx)
+		}
 		return nil, err
 	}
-
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
 	select {
 	case resp := <-ch:
 		if resp.Error != nil {
 			return nil, resp.Error
 		}
 		return resp.Result, nil
-	case <-timer.C:
-		c.mu.Lock()
-		delete(c.pending, id)
-		c.mu.Unlock()
-		return nil, fmt.Errorf("%s timed out after %s", method, timeout)
 	case <-ctx.Done():
-		c.mu.Lock()
-		delete(c.pending, id)
-		c.mu.Unlock()
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	}
 }
 
-func (c *Client) notify(method string, params any) error {
-	// A notification is fire-and-forget and has no id to time out on, so it uses
-	// a background context.
-	return c.write(context.Background(), rpcRequest{JSONRPC: "2.0", Method: method, Params: params})
+func (c *Client) notify(ctx context.Context, method string, params any) error {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	return c.write(ctx, rpcRequest{JSONRPC: "2.0", Method: method, Params: params})
 }
 
 // write marshals a JSON-RPC message and hands it to the transport, which owns
@@ -301,7 +295,7 @@ func (c *Client) initialize(ctx context.Context) error {
 	}
 	_ = json.Unmarshal(res, &init)
 	c.serverInfo = init.ServerInfo.Name
-	return c.notify("notifications/initialized", map[string]any{})
+	return c.notify(ctx, "notifications/initialized", map[string]any{})
 }
 
 func (c *Client) listTools(ctx context.Context) error {

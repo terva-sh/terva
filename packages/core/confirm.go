@@ -339,6 +339,13 @@ func (g *ConfirmGate) Check(ctx context.Context, toolName string, args json.RawM
 	g.mu.Lock()
 	pol := g.policy
 	g.mu.Unlock()
+	if generation, ok := ctx.Value(toolGenerationKey{}).(toolGeneration); ok && generation.readOnly != nil && pol != nil {
+		// Rules and approval mode remain live. Tool metadata comes from the
+		// same generation as the implementation this call will execute.
+		copy := *pol
+		copy.ReadOnly = generation.readOnly
+		pol = &copy
+	}
 	switch verdict, reason := pol.Evaluate(toolName, args); verdict {
 	case VerdictAllow:
 		return true, "", nil

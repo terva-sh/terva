@@ -80,6 +80,10 @@ func (a *ExtToolAdapter) Tools() []ExtensionToolInfo {
 			continue
 		}
 		out = append(out, ExtensionToolInfo{
+			tool: exttool.New(t, exttool.Info{
+				Extension: t.Extension, Name: t.Name, Description: t.Description,
+				Schema: t.Schema, Essential: t.Essential,
+			}),
 			Extension:   t.Extension,
 			Name:        t.Name,
 			Description: t.Description,
@@ -93,13 +97,7 @@ func (a *ExtToolAdapter) Tools() []ExtensionToolInfo {
 }
 
 func (a *ExtToolAdapter) NewExtensionTool(info ExtensionToolInfo) core.Tool {
-	return exttool.New(a.Mgr, exttool.Info{
-		Extension:   info.Extension,
-		Name:        info.Name,
-		Description: info.Description,
-		Schema:      info.Schema,
-		Essential:   info.Essential,
-	})
+	return info.tool
 }
 
 // MCPToolAdapter bridges *mcp.Manager to the same ExtensionToolSource
@@ -156,6 +154,7 @@ func (a *MCPToolAdapter) Tools() []ExtensionToolInfo {
 	out := make([]ExtensionToolInfo, len(infos))
 	for i, t := range infos {
 		out[i] = ExtensionToolInfo{
+			tool:        a.Mgr.NewTool(t),
 			Extension:   "mcp:" + t.Server,
 			Name:        t.Name,
 			Description: t.Description,
@@ -167,12 +166,7 @@ func (a *MCPToolAdapter) Tools() []ExtensionToolInfo {
 }
 
 func (a *MCPToolAdapter) NewExtensionTool(info ExtensionToolInfo) core.Tool {
-	for _, t := range a.Mgr.Tools() {
-		if t.Name == info.Name {
-			return a.Mgr.NewTool(t)
-		}
-	}
-	return nil
+	return info.tool
 }
 
 // SetupMCP starts the user-configured MCP servers — plus a TRUSTED project's
@@ -674,7 +668,7 @@ func BuildBeforeToolExecute(hookEng *hooks.Engine, gate *core.ConfirmGate, extMg
 			// so the preview the approver reads describes what will actually run.
 			var t core.Tool
 			if ag != nil {
-				t, _ = ag.LookupTool(call.Name)
+				ctx, t, _ = ag.ToolForCall(ctx, call.Name)
 			}
 			ok, denyReason, _ := gate.Check(ctx, call.Name, args, core.ToolPreview(t, args, 120), call.ID)
 			if !ok {
@@ -812,18 +806,22 @@ func SlugAgent(agentID, task string) string {
 // Registers rather than assigns, so a host that also wants to observe messages
 // (a chat-bridge mirror, say) adds its own observer instead of silently
 // replacing durable persistence.
+//
+// A write failure latches on the agent. The active run returns it at a safe
+// boundary; later runs refuse to start. The live transcript stays available for
+// recovery. Observers record failures without invoking host callbacks here.
 func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 	ag.AdoptSessionIdentity(sess)
 	var mu sync.Mutex
 	ag.AddMessageObserver(func(m provider.Message) {
 		mu.Lock()
 		defer mu.Unlock()
-		_ = sess.AppendMessage(m)
+		ag.RecordPersistenceError(sess.AppendMessage(m))
 	})
 	ag.AddUsageObserver(func(u, cum provider.Usage) {
 		mu.Lock()
 		defer mu.Unlock()
-		_ = sess.AppendUsage(u, cum)
+		ag.RecordPersistenceError(sess.AppendUsage(u, cum))
 	})
 	// Sub-agent spend, on its own row marker. Same stream (the cumulative
 	// figure has to stay one coherent timeline so a crash recovers the true
@@ -832,12 +830,12 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 	ag.AddDelegatedUsageObserver(func(u, cum provider.Usage) {
 		mu.Lock()
 		defer mu.Unlock()
-		_ = sess.AppendDelegatedUsage(u, cum)
+		ag.RecordPersistenceError(sess.AppendDelegatedUsage(u, cum))
 	})
 	ag.AddTranscriptCompactedObserver(func(messages []provider.Message, res core.CompactResult) {
 		mu.Lock()
 		defer mu.Unlock()
-		_ = sess.AppendCompaction(messages, res)
+		ag.RecordPersistenceError(sess.AppendCompaction(messages, res))
 	})
 	// Lazy-tool activations. activeGroups is in-memory and NewAgent rebuilds it
 	// from config, so without this row a --resume silently drops what the model
@@ -849,7 +847,7 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 	ag.AddToolGroupActivatedObserver(func(group string) {
 		mu.Lock()
 		defer mu.Unlock()
-		_ = sess.AppendToolGroupActivation(group)
+		ag.RecordPersistenceError(sess.AppendToolGroupActivation(group))
 	})
 	// Image-rejection recovery: the agent drops an image the provider 400'd on
 	// and fires this. Persisting an exclude_image directive is what makes the
@@ -864,7 +862,7 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 	ag.AddImageExcludedObserver(func(sha256Hex string) {
 		mu.Lock()
 		defer mu.Unlock()
-		_ = sess.AppendImageExclusion(sha256Hex, "provider rejected the image")
+		ag.RecordPersistenceError(sess.AppendImageExclusion(sha256Hex, "provider rejected the image"))
 	})
 	// Rung 3 of the stuck-loop hatch swapped (or tried to swap) the model. The
 	// swap already wrote a "meta" row via UpdateModel, indistinguishable from a
@@ -874,7 +872,7 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 	ag.AddEscalationObserver(func(rec core.EscalationRecord) {
 		mu.Lock()
 		defer mu.Unlock()
-		_ = sess.AppendEscalation(rec)
+		ag.RecordPersistenceError(sess.AppendEscalation(rec))
 	})
 	// Rung 1 of the stuck-loop hatch: the detector nudged a repeating model. The
 	// nudge only rides the ephemeral tail, so without this row nothing in the log
@@ -883,7 +881,7 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 	ag.AddStallObserver(func(rec core.StallRecord) {
 		mu.Lock()
 		defer mu.Unlock()
-		_ = sess.AppendStall(rec)
+		ag.RecordPersistenceError(sess.AppendStall(rec))
 	})
 	// A transient provider failure was waited out. This is the only durable
 	// trace a SUCCESSFUL retry leaves: the abandoned attempt is dropped from the
@@ -894,7 +892,7 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 	ag.AddRetryObserver(func(rec core.RetryRecord) {
 		mu.Lock()
 		defer mu.Unlock()
-		_ = sess.AppendRetry(rec)
+		ag.RecordPersistenceError(sess.AppendRetry(rec))
 	})
 	// What the harness appended to the request after the cache breakpoint — the
 	// generalization of the stall row above. The tail is composed per request and
@@ -904,7 +902,7 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 	ag.AddTailObserver(func(rec core.TailRecord) {
 		mu.Lock()
 		defer mu.Unlock()
-		_ = sess.AppendTail(rec)
+		ag.RecordPersistenceError(sess.AppendTail(rec))
 	})
 	// The cacheable prefix was rebuilt rather than extended, so the provider
 	// re-read everything after the divergence at full price. Nothing else records
@@ -913,7 +911,7 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 	ag.AddPrefixDivergenceObserver(func(d core.PrefixDivergence) {
 		mu.Lock()
 		defer mu.Unlock()
-		_ = sess.AppendPrefixDivergence(d)
+		ag.RecordPersistenceError(sess.AppendPrefixDivergence(d))
 	})
 	// Which connection/edge each dispatch physically rode. The prefix row
 	// above proves the BYTES were stable through a cache collapse; this row is
@@ -923,7 +921,7 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 	ag.AddTransportObserver(func(ti provider.TransportInfo) {
 		mu.Lock()
 		defer mu.Unlock()
-		_ = sess.AppendTransport(ti)
+		ag.RecordPersistenceError(sess.AppendTransport(ti))
 	})
 	// A provider-side cache collapse opened or closed. The detector shipped
 	// observer-only, raising a sticky note and leaving nothing on disk, which
@@ -946,13 +944,13 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 			cliffPeak = cc
 			if !cliffOpen {
 				cliffOpen = true
-				_ = sess.AppendCacheCliff(cc, true)
+				ag.RecordPersistenceError(sess.AppendCacheCliff(cc, true))
 			}
 			return
 		}
 		if cliffOpen {
 			cliffOpen = false
-			_ = sess.AppendCacheCliff(cliffPeak, false)
+			ag.RecordPersistenceError(sess.AppendCacheCliff(cliffPeak, false))
 		}
 	})
 }

@@ -97,7 +97,7 @@ func (t *GrepTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	if err != nil {
 		return core.ToolResult{}, notFoundError(t.CWD, a.Path, t.Sandbox.DisplayPath(root, a.Path), err)
 	}
-	// Read-side check: also allows registered read-only roots.
+	// Refuse a directly requested sensitive path.
 	if err := t.Sandbox.CheckPathRead(root); err != nil {
 		return core.ToolResult{}, err
 	}
@@ -124,6 +124,9 @@ func (t *GrepTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	filesScanned := 0
 
 	process := func(abs, rel string) error {
+		if err := t.Sandbox.CheckPathRead(abs); err != nil {
+			return nil
+		}
 		if a.Glob != "" && !matchGlob(a.Glob, rel) {
 			return nil
 		}

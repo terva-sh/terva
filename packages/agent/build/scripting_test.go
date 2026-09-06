@@ -27,6 +27,29 @@ func TestScriptingClassification(t *testing.T) {
 	}
 }
 
+func TestScriptingDispatchKeepsCallingToolGeneration(t *testing.T) {
+	for _, mode := range []core.ApprovalMode{core.ApprovalWorkspace, core.ApprovalAutoEdit, core.ApprovalPlan} {
+		t.Run(string(mode), func(t *testing.T) {
+			ag := core.NewAgent(nil, "fake", "", nil)
+			ag.SetToolsWithReadOnly(core.Registry{"echo": echoTool{}}, core.NewReadOnlySet("echo"))
+			ctx, _, _ := ag.ToolForCall(context.Background(), "echo")
+			gate := core.NewPolicyGate(&core.PermissionPolicy{Mode: mode}, nil)
+			dispatch := scriptHostDispatcher(ag, gate)
+			ag.SetToolsWithReadOnly(core.Registry{"echo": echoTool{}}, core.NewReadOnlySet())
+			if _, err := dispatch(ctx, "echo", json.RawMessage(`{}`)); err != nil {
+				t.Fatalf("pinned script read failed: %v", err)
+			}
+			if _, err := dispatch(context.Background(), "echo", json.RawMessage(`{}`)); err == nil {
+				t.Fatal("new script call retained old read-only authority")
+			}
+			ag.SetToolsWithReadOnly(core.Registry{}, nil)
+			if _, err := dispatch(ctx, "echo", json.RawMessage(`{}`)); err != nil {
+				t.Fatalf("script lost its pinned target: %v", err)
+			}
+		})
+	}
+}
+
 // The mutating tool must NEVER classify read-only. This is the one
 // regression that would be invisible in normal use and catastrophic in
 // plan mode: a single stray RegisterReadOnly in scripting_on.go would put

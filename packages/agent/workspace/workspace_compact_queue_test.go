@@ -212,7 +212,12 @@ func TestAgentRefusalRequeuesRatherThanDropping(t *testing.T) {
 	s := compactQueueSession(t, cl)
 
 	compactDone := make(chan error, 1)
-	go func() { compactDone <- s.compact(context.Background()) }()
+	// Hold only core's slot to exercise the fallback when workspace admission
+	// cannot see the competing operation.
+	go func() {
+		_, err := s.agent.Compact(context.Background(), core.AutoCompactKeepTail, nil)
+		compactDone <- err
+	}()
 	select {
 	case <-cl.inFlight:
 	case <-time.After(5 * time.Second):
@@ -253,7 +258,12 @@ func TestRefusedDispatchDoesNotDrainTheWholeQueue(t *testing.T) {
 	s := compactQueueSession(t, cl)
 
 	compactDone := make(chan error, 1)
-	go func() { compactDone <- s.compact(context.Background()) }()
+	// Hold only core's slot to exercise the fallback when workspace admission
+	// cannot see the competing operation.
+	go func() {
+		_, err := s.agent.Compact(context.Background(), core.AutoCompactKeepTail, nil)
+		compactDone <- err
+	}()
 	select {
 	case <-cl.inFlight:
 	case <-time.After(5 * time.Second):
