@@ -222,4 +222,27 @@ describe('ctrlproto Client', () => {
     await expect(a).resolves.toBe('A')
     await expect(b).resolves.toBe('B')
   })
+
+  it('rejects a synchronous socket write failure and permits a later request', async () => {
+    const client = new Client()
+    client.connect()
+    const ws = socket()
+    ws.open()
+    const write = vi.spyOn(ws, 'send').mockImplementationOnce(() => { throw new Error('socket write failed') })
+    await expect(client.send(verb('first'), null)).rejects.toThrow('socket write failed')
+    write.mockRestore()
+    const next = client.send(verb('second'), null)
+    ws.message({ kind: 'resp', id: 2, result: 'accepted' })
+    await expect(next).resolves.toBe('accepted')
+    client.close()
+  })
+
+  it('rejects pending sends on explicit close without waiting for a close event', async () => {
+    const client = new Client()
+    client.connect()
+    socket().open()
+    const pending = client.send('prompt', { text: 'uncertain' }, 's1')
+    client.close()
+    await expect(pending).rejects.toThrow('connection closed')
+  })
 })

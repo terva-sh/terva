@@ -1,3 +1,4 @@
+import { changesRunState, sessionBusy } from '../../platform/conversation/lifecycle'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { Decision, SessionInfo, WireEvent } from '../../platform/ctrlproto/types'
@@ -30,8 +31,10 @@ export function useConversation(client: ClientLike, sessionId: string, generatio
   // The reducer needs the CURRENT state inside an effect that closes over the
   // first one, so mirror it in a ref and drive from there.
   const stateRef = useRef<SessionState>(emptySessionState)
+  const runStateVersion = useRef(0)
   const apply = (ev: WireEvent) => {
-    const next = reduceSession(stateRef.current, ev)
+    const reduced = reduceSession(stateRef.current, ev)
+    const next = reduced === stateRef.current ? reduced : { ...reduced, busy: stateRef.current.busy }
     if (next === stateRef.current) return
     stateRef.current = next
     setState(next)
@@ -49,12 +52,17 @@ export function useConversation(client: ClientLike, sessionId: string, generatio
   }
 
   useEffect(() => {
+    runStateVersion.current++
     stateRef.current = emptySessionState
     setState(emptySessionState)
     const pacer = new StreamPacer((ev) => apply(ev))
     const prevOnEvent = client.onEvent
     client.onEvent = (sess, ev) => {
-      if (sess === sessionId) pacer.push(ev)
+      if (sess === sessionId) {
+        if (changesRunState(ev)) runStateVersion.current++
+        setBusy(sessionBusy(stateRef.current.busy, ev))
+        pacer.push(ev)
+      }
     }
     // Re-fired on every connection generation. `fire` is a silent no-op on a
     // closed socket, which is the other half of the bug: a chat opened DURING the
@@ -65,15 +73,18 @@ export function useConversation(client: ClientLike, sessionId: string, generatio
     // tick, so one 16ms timer for the screen's life keeps the transcript moving.
     const timer = window.setInterval(() => pacer.tick(), PACE_INTERVAL_MS)
     return () => {
+      runStateVersion.current++
       window.clearInterval(timer)
       client.fire('unsubscribe', null, sessionId)
       client.onEvent = prevOnEvent
     }
   }, [client, sessionId, generation])
 
-  const send = (text: string) => {
-    setBusy(true)
-    client.fire('prompt', { text }, sessionId)
+  const send = async (text: string) => {
+    const version = runStateVersion.current
+    const queue = stateRef.current.busy
+    await client.send(queue ? 'queue' : 'prompt', { text }, sessionId)
+    if (!queue && runStateVersion.current === version) setBusy(true)
   }
   // Transcript-revision verbs (Phase 1). They resolve on the daemon and a fresh
   // snapshot re-renders us; a rejected call (stale epoch, busy) surfaces to the
@@ -99,11 +110,13 @@ export function useConversation(client: ClientLike, sessionId: string, generatio
   // retry") returns an error RESP with no snapshot, so nothing would clear it and
   // the composer stays disabled at a stuck "thinking…". Clear it on rejection here,
   // then re-throw so the caller's error surface still fires.
-  const clearBusyOnReject = <T,>(p: Promise<T>) =>
-    p.catch((e: unknown) => {
-      setBusy(false)
+  const clearBusyOnReject = <T,>(p: Promise<T>) => {
+    const version = runStateVersion.current
+    return p.catch((e: unknown) => {
+      if (runStateVersion.current === version) setBusy(false)
       throw e
     })
+  }
   // retry regenerates the last response. Called bare it is the plain regenerate it
   // has always been — an independent sample from the same prefix. With guidance it
   // steers that one generation ("shorter", "have her refuse instead"); the daemon

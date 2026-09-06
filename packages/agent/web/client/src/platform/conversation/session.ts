@@ -6,6 +6,7 @@ import type {
   VariantMark,
   WireEvent,
 } from '../ctrlproto/types'
+import { sessionBusy } from './lifecycle'
 import { type Item, type Window, applyEvent, mergeSnapshot } from './store'
 
 // The non-transcript half of folding a session's event stream.
@@ -125,7 +126,7 @@ export function reduceSession(state: SessionState, ev: WireEvent): SessionState 
         win: { epoch: incoming.epoch, base, total: incoming.total },
         // A snapshot lands at the end of every turn and carries busy
         // authoritatively, so streaming→idle transitions ride it.
-        busy: !!snap.busy,
+        busy: sessionBusy(state.busy, ev),
         info: snap.session ?? null,
         tail: snap.tail,
         msgMarks: marks,
@@ -165,7 +166,7 @@ export function reduceSession(state: SessionState, ev: WireEvent): SessionState 
       return state.ask && ev.resolved?.ask_id === state.ask.ask_id ? { ...state, ask: null } : state
 
     case 'turn_start':
-      return state.busy ? state : { ...state, busy: true }
+      return state.busy ? state : { ...state, busy: sessionBusy(state.busy, ev) }
 
     case 'reasoning_delta':
       return { ...state, reasoning: state.reasoning + (ev.delta ?? '') }
@@ -178,24 +179,15 @@ export function reduceSession(state: SessionState, ev: WireEvent): SessionState 
       return state.reasoning ? { ...state, reasoning: '' } : state
 
     case 'turn_end':
+      return state.reasoning ? { ...state, reasoning: '' } : state
+
     case 'done':
-      // The second clearing path, and the reason a lost frame is no longer fatal.
-      // busy used to clear only on the end-of-turn snapshot, so a snapshot that
-      // never arrived (a dead subscription, a dropped frame) left busy true
-      // forever and every later send was silently swallowed.
-      //
-      // Deliberate tradeoff: "done" means the turn's OUTPUT is complete, not that
-      // the engine released the turn slot, so clearing here opens a sub-millisecond
-      // window where a follow-up could return ErrBusy. That is recoverable and no
-      // human can click inside it; a permanently wedged composer is not.
-      // Reasoning clears with busy: the work it narrated is over, and a thought
-      // left on screen past the turn reads as a step still running.
-      return state.busy || state.reasoning ? { ...state, busy: false, reasoning: '' } : state
+      return state.busy || state.reasoning ? { ...state, busy: sessionBusy(state.busy, ev), reasoning: '' } : state
 
     case 'error':
       // An error ends the turn as surely as a done does. Folding the row while
       // leaving busy set is exactly the wedge described above.
-      return { ...state, busy: false, reasoning: '', items: applyEvent(state.items, ev) }
+      return { ...state, busy: sessionBusy(state.busy, ev), reasoning: '', items: applyEvent(state.items, ev) }
 
     default: {
       const items = applyEvent(state.items, ev)

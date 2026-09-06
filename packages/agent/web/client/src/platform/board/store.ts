@@ -1,8 +1,9 @@
+import { sessionBusy } from '../conversation/lifecycle'
 import type { WireEvent } from '../ctrlproto/types'
 
 // The board's live-busy store (orchestration frontend, phase B). For the tiles
 // the board holds a subscription to, this derives whether a turn is in flight
-// from the SAME events the focus view uses — turn_start / turn_end|done /
+// from the SAME events the focus view uses — turn_start / done /
 // snapshot.busy — so a tile flips the instant a turn starts instead of waiting
 // on the next slow sessions.list poll. Preact-free and pure, per the web
 // layering rules: app.tsx owns the transport and feeds (sess, event) in here.
@@ -15,21 +16,8 @@ export type BoardBusy = Record<string, boolean>
 // applyBoardBusy folds one (sess, event) into the map. It returns the SAME
 // reference when nothing changed, so a caller can skip a re-render cheaply.
 export function applyBoardBusy(state: BoardBusy, sess: string, ev: WireEvent): BoardBusy {
-  let next: boolean
-  switch (ev.type) {
-    case 'turn_start':
-      next = true
-      break
-    case 'turn_end':
-    case 'done':
-      next = false
-      break
-    case 'snapshot':
-      next = !!ev.snapshot?.busy
-      break
-    default:
-      return state
-  }
+  if (!['turn_start', 'done', 'error', 'snapshot'].includes(ev.type)) return state
+  const next = sessionBusy(state[sess] ?? false, ev)
   if (!sess || state[sess] === next) return state
   return { ...state, [sess]: next }
 }

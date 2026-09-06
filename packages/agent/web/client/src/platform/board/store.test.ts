@@ -5,11 +5,11 @@ import type { WireEvent } from '../ctrlproto/types'
 const ev = (type: string): WireEvent => ({ type }) as WireEvent
 
 describe('applyBoardBusy', () => {
-  it('flips busy on turn_start and idle on turn_end/done', () => {
+  it('stays busy through segment completion until done', () => {
     let s = applyBoardBusy({}, 's1', ev('turn_start'))
     expect(s.s1).toBe(true)
     s = applyBoardBusy(s, 's1', ev('turn_end'))
-    expect(s.s1).toBe(false)
+    expect(s.s1).toBe(true)
     s = applyBoardBusy(s, 's1', ev('turn_start'))
     s = applyBoardBusy(s, 's1', ev('done'))
     expect(s.s1).toBe(false)
@@ -22,7 +22,7 @@ describe('applyBoardBusy', () => {
 
   it('keys by session so tiles never cross-contaminate', () => {
     let s = applyBoardBusy({}, 's1', ev('turn_start'))
-    s = applyBoardBusy(s, 's2', ev('turn_end'))
+    s = applyBoardBusy(s, 's2', ev('done'))
     expect(s).toEqual({ s1: true, s2: false })
   })
 

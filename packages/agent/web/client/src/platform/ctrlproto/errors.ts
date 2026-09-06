@@ -114,3 +114,11 @@ export function errText(e: unknown): string {
   if (typeof e === 'string' && e) return e
   return t('something went wrong')
 }
+
+// A lost acknowledgment does not prove that the daemon refused the message.
+export function dispatchError(e: unknown): string {
+  if (isWireCode(e, ClientCodes.connectionClosed)) {
+    return t('The connection dropped before acceptance was confirmed. Your input is kept. Check the transcript after reconnecting before sending again.')
+  }
+  return errText(e)
+}

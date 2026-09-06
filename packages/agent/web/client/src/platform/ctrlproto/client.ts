@@ -216,7 +216,14 @@ export class Client implements ConnectableClient {
       }
       const id = this.nextId++
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject })
-      this.raw({ kind: 'cmd', id, sess, method, params })
+      try {
+        if (!this.raw({ kind: 'cmd', id, sess, method, params })) {
+          throw new WireError(ClientCodes.notConnected, 'not connected')
+        }
+      } catch (err) {
+        this.pending.delete(id)
+        reject(err)
+      }
     })
   }
 
@@ -231,7 +238,9 @@ export class Client implements ConnectableClient {
   private raw(f: Frame) {
     // Guarded by isOpen() at the call sites, but re-check: send() on a non-OPEN
     // socket throws a DOMException (InvalidStateError).
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(f))
+    if (this.ws?.readyState !== WebSocket.OPEN) return false
+    this.ws.send(JSON.stringify(f))
+    return true
   }
 
   private rejectAll(e: Error) {
@@ -241,6 +250,7 @@ export class Client implements ConnectableClient {
 
   close() {
     this.stopped = true
+    this.rejectAll(new WireError(ClientCodes.connectionClosed, 'connection closed'))
     this.ws?.close()
   }
 }

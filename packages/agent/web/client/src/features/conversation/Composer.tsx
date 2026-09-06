@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useComposition } from '../../ui/composition'
+import { dispatchError } from '../../platform/ctrlproto/errors'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { t } from '../../i18n'
 import type { ComposerDraft, SkillInfo, WireFileEntry } from '../../platform/ctrlproto/types'
 import type { ImageAttachment } from '../../platform/conversation/images'
 import { humanBytes } from '../../ui/formatting'
 import { atComplete } from './atcomplete'
 import { fileToAttachment, tooLargeToAttach, type FileAttachment } from './attachments'
+import type { ToastKind } from '../interactions/Toast'
 
 // draftDebounceMs is how long the composer must sit unchanged before its draft
 // is written. The same wait the TUI uses (interactive_draft.go): long enough
@@ -58,7 +61,7 @@ export interface SlashCommand {
   name: string
   arg?: string
   desc: string
-  run: (arg: string) => void
+  run: (arg: string) => void | boolean | Promise<boolean>
 }
 
 export function Composer({
@@ -82,8 +85,12 @@ export function Composer({
   onEmptyChange,
 }: {
   busy: boolean
-  onSend: (text: string, images: ImageAttachment[], attachments: FileAttachment[]) => boolean
-  onToast: (message: string) => void
+  onSend: (text: string, images: ImageAttachment[], attachments: FileAttachment[]) => boolean | Promise<boolean>
+  // Raise a toast. The kind decides how long it lives (Toast.tsx): the default
+  // 'note' fades on its own, which is right for the composer's hints and
+  // refusals, while an 'error' waits to be dismissed. A failed upload is the
+  // one thing here that is a real failure rather than a rule being explained.
+  onToast: (message: string, kind?: ToastKind) => void
   commands: SlashCommand[]
   skills: SkillInfo[]
   // onUpload stages one file with the daemon. Injected rather than imported so
@@ -126,6 +133,9 @@ export function Composer({
   // stable callback: this fires from an effect keyed on the text.
   onEmptyChange?: (empty: boolean) => void
 }) {
+  const [sending, setSending] = useState(false)
+  const pendingSends = useRef(new Set<string | undefined>())
+  const drafts = useRef(new Map<string | undefined, { text: string; images: ImageAttachment[]; attachments: FileAttachment[] }>())
   const [text, setText] = useState('')
   const [images, setImages] = useState<ImageAttachment[]>([])
   const [attachments, setAttachments] = useState<FileAttachment[]>([])
@@ -135,6 +145,9 @@ export function Composer({
   const [sel, setSel] = useState(0)
   const [dismissed, setDismissed] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
+  const isComposing = useComposition(ref)
+  // The composer's outer element, measured into --toast-lift (see below).
+  const hostRef = useRef<HTMLElement>(null)
 
   // Emptiness is reported upward because the host drives the idle trigger and
   // cannot see this text. Trimmed: a composer holding only whitespace is empty
@@ -196,35 +209,27 @@ export function Composer({
     void onSaveDraft(sess, value).catch(() => {})
   }
 
-  // Staged attachments do not survive a session change, because a staged id
-  // means nothing outside the session directory it was written to: the daemon
-  // resolves ids against the session it is prompted on, so sending these in
-  // another session would report every one of them as expired.
-  //
-  // An effect rather than a `key` on the component, which would throw away far
-  // more than it fixed. Images stay: an inline image rides the frame itself.
-  //
-  // TEXT no longer travels either, and that is a deliberate change. It used to
-  // follow the user across a switch, on the reasoning that a half-written
-  // message is worth keeping. It still is — but it is kept in the session it
-  // was written FOR now, rather than dragged into the next one. A draft that
-  // travelled would be saved into the slot of a session it was not written for,
-  // overwriting that session's own unsent message with a stranger's.
+  // Keep unsent input in its originating session while this composer is mounted.
+  // Only text is persisted; staged files and inline images remain in memory.
   useEffect(() => {
     const prev = sessionRef.current
     sessionRef.current = sessionID
-    setAttachments([])
-    setUploading([])
-    if (prev !== undefined && prev !== sessionID) {
+    if (prev !== sessionID) {
+      drafts.current.set(prev, { text: textRef.current, images: imagesRef.current, attachments: attachRef.current })
       saveDraftNow(prev, textRef.current)
-      setText('')
     }
+    const heldDraft = drafts.current.get(sessionID)
+    setText(heldDraft?.text ?? (prev === sessionID ? textRef.current : ''))
+    setImages(heldDraft?.images ?? (prev === sessionID ? imagesRef.current : []))
+    setAttachments(heldDraft?.attachments ?? [])
+    setUploading([])
+    setSending(pendingSends.current.has(sessionID))
     savedText.current = ''
     storedIsSuggestion.current = false
     warnedAttachments.current = false
     warnedFailure.current = false
     setRestoredSess(undefined)
-    if (!sessionID || !onLoadDraft) {
+    if (heldDraft || !sessionID || !onLoadDraft) {
       // Nothing to read, but the composer must still become savable.
       setRestoredSess(sessionID)
       return
@@ -320,6 +325,40 @@ export function Composer({
     return () => vv?.removeEventListener('resize', grow)
   }, [text])
 
+  // Publish the composer's own height as --toast-lift on the document root, so
+  // the toast can sit on top of the composer instead of over it. Everything
+  // above changes this height — the textarea grows with the draft up to 40% of
+  // the viewport, chips wrap onto their own row, a next-step offer adds a band —
+  // and CSS cannot read a sibling's size, so the toast had a hardcoded 80px
+  // standing in for it. That constant was right only for an empty single-line
+  // composer, and wrong (silently, visibly) for every other state.
+  //
+  // Written to documentElement rather than passed upward: the toast is mounted
+  // outside this subtree, and a height threaded through app state would
+  // re-render the whole panel on every keystroke that grows the box.
+  //
+  // The cleanup REMOVES the property rather than zeroing it, which is what lets
+  // the CSS fall back to the safe-area inset on the views that have no composer
+  // at all (landing, board). A stale 0px and an absent variable are the same
+  // number but not the same meaning.
+  useLayoutEffect(() => {
+    const el = hostRef.current
+    if (!el) return
+    const root = document.documentElement
+    const publish = () => root.style.setProperty('--toast-lift', `${Math.round(el.offsetHeight)}px`)
+    publish()
+    // ResizeObserver is the only thing that sees a height change with no event
+    // behind it (a chip row wrapping, a font finishing loading). Guarded because
+    // not every test environment provides it, and a missing observer should cost
+    // the live update, not the mount.
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(publish)
+    ro?.observe(el)
+    return () => {
+      ro?.disconnect()
+      root.style.removeProperty('--toast-lift')
+    }
+  }, [])
+
   // addFiles takes anything dropped or pasted and routes it by what the file is,
   // never silently discarding one.
   //
@@ -370,26 +409,61 @@ export function Composer({
         // error is dropped for the same reason: a failure in a session the user
         // has left is not something they can act on.
         if (sessionRef.current !== startedOn) return
-        if ('error' in result) onToast(result.error)
+        if ('error' in result) onToast(result.error, 'error')
         else setAttachments((current) => [...current, result])
       }),
     )
   }
 
+  const dispatch = (value: string, sentImages: ImageAttachment[], sentFiles: FileAttachment[]) => {
+    const sess = sessionID
+    if (pendingSends.current.has(sess)) return
+    const submittedText = textRef.current
+    pendingSends.current.add(sess)
+    setSending(true)
+    const finish = (accepted: boolean) => {
+      pendingSends.current.delete(sess)
+      const current = sessionRef.current === sess
+      if (current) setSending(false)
+      if (!accepted) return
+      const held = current
+        ? { text: textRef.current, images: imagesRef.current, attachments: attachRef.current }
+        : drafts.current.get(sess)
+      if (!held) return
+      const next = {
+        text: held.text === submittedText ? '' : held.text,
+        images: held.images.filter((im) => !sentImages.includes(im)),
+        attachments: held.attachments.filter((f) => !sentFiles.includes(f)),
+      }
+      drafts.current.set(sess, next)
+      if (current) {
+        textRef.current = next.text
+        setText(next.text)
+        setImages(next.images)
+        setAttachments(next.attachments)
+        setDismissed(false)
+        onDismissSuggestion?.()
+      } else if (sess && onSaveDraft) {
+        // The user left while dispatch was pending. Clear only that session's
+        // accepted draft, and keep any writing added after submission.
+        void onSaveDraft(sess, next.text).catch(() => {})
+      }
+    }
+    const fail = (err: unknown) => {
+      finish(false)
+      onToast(dispatchError(err))
+    }
+    try {
+      const result = onSend(value, sentImages, sentFiles)
+      if (typeof result === 'boolean') finish(result)
+      else void result.then(finish, fail)
+    } catch (err) {
+      fail(err)
+    }
+  }
   const submit = () => {
     if (!text.trim() && images.length === 0 && attachments.length === 0) return
-    // Clear only if the send was accepted (a busy send carrying attachments is
-    // refused, so they aren't lost).
-    if (onSend(text, images, attachments)) {
-      setText('')
-      setImages([])
-      setAttachments([])
-      setDismissed(false)
-      // Drop the offer rather than hide it. A suggestion computed against a
-      // conversation that has since moved is worse than no suggestion, because
-      // it still looks current.
-      onDismissSuggestion?.()
-    }
+    dispatch(text, images, attachments)
   }
 
   // The offered line, or '' when there is nothing to show.
@@ -425,8 +499,7 @@ export function Composer({
       setText('/' + command.name + ' ')
       ref.current?.focus()
     } else {
-      onSend('/' + command.name, [], [])
-      setText('')
+      dispatch('/' + command.name, [], [])
     }
     setDismissed(false)
   }
@@ -494,6 +567,7 @@ export function Composer({
 
   return (
     <footer
+      ref={hostRef}
       class="composer"
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
@@ -607,6 +681,7 @@ export function Composer({
           setDismissed(false)
         }}
         onKeyDown={(event) => {
+          if (isComposing(event)) return
           // Tab on a live @-token is shell-style completion (atComplete —
           // the TUI runs the same fixture-pinned semantics): extend to the
           // unique candidate or the longest common prefix, never commit.
@@ -672,7 +747,7 @@ export function Composer({
           {t('Stop')}
         </button>
       ) : (
-        <button class="btn primary" onClick={submit}>
+        <button class="btn primary" onClick={submit} disabled={sending}>
           {t('Send')}
         </button>
       )}

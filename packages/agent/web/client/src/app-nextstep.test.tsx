@@ -63,7 +63,7 @@ async function boot(client: FakeClient) {
 // A reply landing is what arms the window.
 async function replyEnds(client: FakeClient) {
   await act(async () => {
-    client.emit('s1', { type: 'turn_end' } as never)
+    client.emit('s1', { type: 'done' } as never)
     await Promise.resolve()
   })
 }

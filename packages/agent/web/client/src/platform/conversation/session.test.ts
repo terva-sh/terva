@@ -62,9 +62,9 @@ describe('reduceSession — loaded', () => {
 })
 
 describe('reduceSession — busy', () => {
-  it('raises busy on turn_start and clears it on turn_end', () => {
+  it('keeps the run busy when a model segment ends', () => {
     expect(fold([ev({ type: 'turn_start' })]).busy).toBe(true)
-    expect(fold([ev({ type: 'turn_start' }), ev({ type: 'turn_end' })]).busy).toBe(false)
+    expect(fold([ev({ type: 'turn_start' }), ev({ type: 'turn_end' })]).busy).toBe(true)
   })
 
   // `done` is the second clearing path. Before it existed, busy cleared only on
@@ -219,7 +219,7 @@ describe('live reasoning', () => {
     it(`clears on ${ending}, so no thought outlives the work it narrated`, () => {
       const s = fold([ev({ type: 'turn_start' }), delta('**Still going**'), ev({ type: ending })])
       expect(s.reasoning).toBe('')
-      expect(s.busy).toBe(false)
+      expect(s.busy).toBe(ending === 'turn_end')
     })
   }
 })

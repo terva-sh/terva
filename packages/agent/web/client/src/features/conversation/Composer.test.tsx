@@ -162,7 +162,11 @@ describe('Composer attachments', () => {
 
     fireEvent.drop(footer, { dataTransfer: { files: [new File(['x'], 'notes.txt', { type: 'text/plain' })] } })
 
-    await waitFor(() => expect(onToast).toHaveBeenCalledWith('notes.txt could not be uploaded'))
+    // 'error' is load-bearing, not decoration: an error toast is the only kind
+    // that waits to be dismissed. A failed upload raised as a note would fade
+    // after fifteen seconds, and a file that silently never arrived is exactly
+    // the thing the user has to be told about while they can still act on it.
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith('notes.txt could not be uploaded', 'error'))
     expect(container.querySelectorAll('.composer-chip')).toHaveLength(0)
   })
 
@@ -584,5 +588,74 @@ describe('Composer core interaction', () => {
     fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false })
     expect(onSend).toHaveBeenCalledWith('queue this', [], [])
     expect(textarea.value).toBe('')
+  })
+})
+
+// The composer is the only thing that knows how tall the composer is, and the
+// toast has to sit on top of it. --toast-lift is that one fact, published for
+// the stylesheet; see .toast-dock in styles.css and the header of Toast.tsx.
+describe('the composer publishes its height for the toast to clear', () => {
+  let height = 96
+  let observed: Element[] = []
+  let fireResize: (() => void) | null = null
+  let originalOffsetHeight: PropertyDescriptor | undefined
+
+  beforeEach(() => {
+    height = 96
+    observed = []
+    fireResize = null
+    originalOffsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.classList.contains('composer') ? height : 0
+      },
+    })
+    // A stand-in for the browser's observer, so the test can make the composer
+    // grow the way a wrapping chip row does — with no event behind it.
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(private cb: () => void) {
+          fireResize = () => this.cb()
+        }
+        observe(el: Element) {
+          observed.push(el)
+        }
+        disconnect() {}
+      },
+    )
+  })
+
+  afterEach(() => {
+    document.documentElement.style.removeProperty('--toast-lift')
+    if (originalOffsetHeight) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', originalOffsetHeight)
+    else delete (HTMLElement.prototype as unknown as Record<string, unknown>).offsetHeight
+  })
+
+  const lift = () => document.documentElement.style.getPropertyValue('--toast-lift')
+
+  it('publishes the height on mount and follows it as the composer grows', () => {
+    const { container } = render(<Composer {...props()} />)
+    expect(lift()).toBe('96px')
+    expect(observed).toContain(container.querySelector('.composer'))
+
+    // This is the reported bug in one assertion. The composer grows — a long
+    // draft, a row of attachment chips — and the offset has to grow with it.
+    // Against the old `bottom: 80px` there was nothing to grow, and the toast
+    // was left sitting over the input it was talking about.
+    height = 240
+    fireResize?.()
+    expect(lift()).toBe('240px')
+  })
+
+  it('removes the variable when the composer goes away', () => {
+    // Not zeroed: absent. The landing and board views have no composer, and the
+    // stylesheet's fallback (the safe-area inset) only applies to a variable
+    // that is not set. A stale 0px would put the toast under a phone's home bar.
+    const { unmount } = render(<Composer {...props()} />)
+    expect(lift()).toBe('96px')
+    unmount()
+    expect(lift()).toBe('')
   })
 })

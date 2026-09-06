@@ -1,3 +1,5 @@
+import { useComposition } from '../../ui/composition'
+import { useComposerDraft } from './useComposerDraft'
 import { errText } from '../../platform/ctrlproto/errors'
 import { useCallback, useEffect, useState } from 'preact/hooks'
 import type { ClientLike } from '../../platform/ctrlproto/client'
@@ -111,7 +113,8 @@ export function Chat(props: {
 }) {
   const { client, sessionId, onOpenSession } = props
   const { items, loaded, busy, info, tail, msgMarks, permission, ask, send, edit, deleteAt, swipe, swipeAt, pruneAt, dropAt, retry, continueTurn, advance, cancel, decide, answerAsk, fork, discardDraft } = useConversation(client, sessionId, props.generation)
-  const [draft, setDraft] = useState('')
+  const composer = useComposerDraft(client, sessionId)
+  const { text: draft, setText: setDraft, sending } = composer
   const [reasoningOpen, setReasoningOpen] = useState(false)
   // What each rung of the ladder sends on THIS scene's model. The daemon owns
   // that answer — a rung's name is not its meaning, and the same "medium" is a
@@ -160,6 +163,7 @@ export function Chat(props: {
   // The composer grows with its content (up to the CSS cap); keyed on `draft` so
   // it also fits text dropped in by ✨ Suggest and shrinks back after a send.
   const composerRef = useAutoGrow(draft)
+  const isComposing = useComposition(composerRef)
 
   // Load the ladder whenever the picker opens, for the model this scene is
   // actually on. Same shape as ModelPick's lazy catalog load: a chat that never
@@ -246,10 +250,8 @@ export function Chat(props: {
   const playingAs = (info?.user_name ?? '').trim()
 
   const submit = () => {
-    const t = draft.trim()
-    if (!t || busy) return
-    send(t)
-    setDraft('')
+    setError('')
+    return composer.submit(send)
   }
   const guard = (p: Promise<unknown>) => p.catch((e: unknown) => setError(errText(e)))
   // User-directs: pick who speaks. The narrator is directed to bring the actor
@@ -566,9 +568,9 @@ export function Chat(props: {
           the refusal WAS rendered, just never where anyone was looking. Same
           reasoning as the working signal below — it lives out here so it cannot
           scroll away. */}
-      {error && (
-        <p class="stage-error stage-error--live" role="alert" onClick={() => setError('')} title={t('Dismiss')}>
-          {error}
+      {(error || composer.error) && (
+        <p class="stage-error stage-error--live" role="alert" onClick={() => { setError(''); composer.clearError() }} title={t('Dismiss')}>
+          {error || composer.error}
         </p>
       )}
 
@@ -627,6 +629,7 @@ export function Chat(props: {
           rows={1}
           onInput={(e) => setDraft((e.target as HTMLTextAreaElement).value)}
           onKeyDown={(e) => {
+            if (isComposing(e)) return
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
               submit()
@@ -643,7 +646,7 @@ export function Chat(props: {
             {t('■ Stop')}
           </button>
         ) : (
-          <button onClick={submit} disabled={!draft.trim()}>{t('Send')}</button>
+          <button onClick={submit} disabled={sending || !draft.trim()}>{t('Send')}</button>
         )}
       </footer>
 

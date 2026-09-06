@@ -1,3 +1,5 @@
+import { changesRunState, sessionBusy } from './platform/conversation/lifecycle'
+import { dispatchError } from './platform/ctrlproto/errors'
 import { errText } from './platform/ctrlproto/errors'
 import type { ComponentChildren, VNode } from 'preact'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
@@ -170,6 +172,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   const clientRef = useRef<ConnectableClient | null>(null)
   const curRef = useRef('')
   const busyRef = useRef(false)
+  const runStateVersion = useRef(0)
 
   const [status, setStatus] = useState<Status>('connecting')
   // Bumped whenever the active catalog changes (locale learned from the hello,
@@ -361,6 +364,13 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   const [modelParams, setModelParams] = useState<ModelParamsView | null>(null)
   const [modelParamsBusy, setModelParamsBusy] = useState(false)
   const [modelParamsErr, setModelParamsErr] = useState('')
+  // Set when the params form is CREATING rather than editing, in which case
+  // modelParams describes the clone source rather than the model being made.
+  const [modelAdding, setModelAdding] = useState(false)
+  // The reachable set from models.list, for the add form's provider row. Not
+  // derived from `models`: a provider with no models yet has no row there, and
+  // it is the one an add form is most needed for.
+  const [reachableProviders, setReachableProviders] = useState<string[]>([])
   // Pane host (surfaces): context/usage/extension panels in a right rail.
   const [paneOpen, setPaneOpen] = useState(false)
   const [surfaces, setSurfaces] = useState<SurfaceMeta[]>([])
@@ -443,6 +453,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       const res = await c.send<ModelsResult>('models.list', null, curRef.current)
       setModels(res.models ?? [])
       setLadders(res.reasoning_ladders ?? {})
+      setReachableProviders(res.providers ?? [])
     } catch {
       /* control group optional */
     }
@@ -730,6 +741,8 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     setPermission(null)
     setAsk(null)
     dropSuggestion()
+    runStateVersion.current++
+    busyRef.current = false
     setBusy(false)
     setCost(0)
     setQueued([])
@@ -761,6 +774,8 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     setPermission(null)
     setAsk(null)
     dropSuggestion()
+    runStateVersion.current++
+    busyRef.current = false
     setBusy(false)
     setCost(0)
     setQueued([])
@@ -927,7 +942,6 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         const base = held.epoch === snap.epoch ? Math.min(held.base, snap.base) : snap.base
         winRef.current = { epoch: snap.epoch, base, total: snap.total }
         setWin(winRef.current)
-        setBusy(!!ev.snapshot?.busy)
         setCurInfo(ev.snapshot?.session ?? null)
         setQueued(ev.snapshot?.queued ?? [])
         setSkills(ev.snapshot?.skills ?? [])
@@ -1069,7 +1083,6 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         setAsk((a) => (a && ev.resolved?.ask_id === a.ask_id ? null : a))
         return
       case 'turn_start':
-        setBusy(true)
         return
       case 'reasoning_delta':
         // Ephemeral: held outside items so it never becomes a transcript row.
@@ -1081,8 +1094,9 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         setReasoning('')
         return
       case 'turn_end':
+        setReasoning('')
+        return
       case 'done':
-        setBusy(false)
         setReasoning('')
         // Once per reply, not on a repeating timer: someone who walks away for
         // an hour costs one completion, not a hundred and twenty.
@@ -1090,7 +1104,6 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         return
       case 'error':
         notify.error(ev.error ?? 'error')
-        setBusy(false)
         setReasoning('')
         // A failed turn is no basis for "here's what to do next".
         lastTurnBadRef.current = true
@@ -1132,6 +1145,11 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       // which is the only reason this equality test ever saw them. They arrive on
       // their own address now, so the test has to admit it, or they vanish.
       if (sess === ADDR_WORKSPACE || sess === curRef.current) {
+        if (sess === curRef.current) {
+          if (changesRunState(ev)) runStateVersion.current++
+          busyRef.current = sessionBusy(busyRef.current, ev)
+          setBusy(busyRef.current)
+        }
         pacerRef.current?.push(ev)
         return
       }
@@ -1192,6 +1210,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         const res = await c.send<ModelsResult>('models.list', null, curRef.current)
         setModels(res.models ?? [])
         setLadders(res.reasoning_ladders ?? {})
+        setReachableProviders(res.providers ?? [])
       } catch {
         /* control group optional */
       }
@@ -1457,32 +1476,36 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     refreshNextStepSetting()
   }, [curSess, refreshNextStepSetting])
 
-  const sendPrompt = useCallback((text: string, images?: ImageAttachment[], attachments?: FileAttachment[]): boolean => {
+  const sendPrompt = useCallback(async (text: string, images?: ImageAttachment[], attachments?: FileAttachment[]): Promise<boolean> => {
     const c = clientRef.current
-    const hasImages = !!images && images.length > 0
-    const hasFiles = !!attachments && attachments.length > 0
-    if (!c || !curRef.current || (!text.trim() && !hasImages && !hasFiles)) return false
-    // Sending moves the conversation, so any standing offer is now about a
-    // past one. The next reply re-arms from scratch.
+    const sess = curRef.current
+    const hasImages = !!images?.length
+    const hasFiles = !!attachments?.length
+    if (!c || !sess || (!text.trim() && !hasImages && !hasFiles)) return false
+    const version = runStateVersion.current
+    const queue = busyRef.current
+    if (queue && (hasImages || hasFiles)) {
+      notify.note(t('Finish the current turn before attaching files (the queue is text-only).'))
+      return false
+    }
     dropSuggestion()
     lastTurnBadRef.current = false
-    if (busyRef.current) {
-      if (hasImages || hasFiles) {
-        notify.note(t('Finish the current turn before attaching files (the queue is text-only).'))
-        return false
-      }
-      setQueued((q) => [...q, text])
-      c.fire('queue', { text }, curRef.current)
-      return true
-    }
-    setBusy(true)
     const params: { text: string; images?: unknown[]; attachments?: { id: string }[] } = { text }
     if (hasImages) params.images = images!.map((im) => ({ mime_type: im.mime, data: im.data }))
-    // Only the id: the daemon resolves name, type, and size from what it
-    // actually wrote, so nothing the client believes about the file is trusted.
     if (hasFiles) params.attachments = attachments!.map((f) => ({ id: f.id }))
-    c.fire('prompt', params, curRef.current)
-    return true
+    // Events own run state. A late response must not clear a newer run or a
+    // different session, and the queue event owns its acknowledged contents.
+    try {
+      await c.send(queue ? 'queue' : 'prompt', params, sess)
+      if (!queue && curRef.current === sess && runStateVersion.current === version) {
+        busyRef.current = true
+        setBusy(true)
+      }
+      return true
+    } catch (err) {
+      notify.error(dispatchError(err))
+      return false
+    }
   }, [])
 
   // stageFile uploads to the session the composer is currently on. The concrete
@@ -1595,6 +1618,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           const res = await c.send<ModelsResult>('models.list', null, curRef.current)
           setModels(res.models ?? [])
           setLadders(res.reasoning_ladders ?? {})
+          setReachableProviders(res.providers ?? [])
         } catch {
           /* a models refresh failure does not undo the login */
         }
@@ -1668,11 +1692,59 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     setModelParamsErr('')
     try {
       const v = await c.send<ModelParamsView>('models.params', { provider, model: id }, '')
+      setModelAdding(false)
       setModelParams(v)
     } catch (e) {
       notify.error(authMessage(e))
     }
   }, [])
+
+  // Clone-from: the same descriptor call, opened in create mode. The form seeds
+  // its boxes from each spec's `default` rather than its `value`, which is what
+  // makes the copy carry the source's real numbers instead of its (usually
+  // empty) models.json pins.
+  const openModelAdd = useCallback(async (provider: string, id: string) => {
+    const c = clientRef.current
+    if (!c) return
+    setModelParamsErr('')
+    try {
+      const v = await c.send<ModelParamsView>('models.params', { provider, model: id }, '')
+      setModelAdding(true)
+      setModelParams(v)
+    } catch (e) {
+      notify.error(authMessage(e))
+    }
+  }, [])
+
+  // models.add, not models.params.set. That method refuses an id it cannot
+  // resolve, and this one refuses an id it can: the guards are inverses, and a
+  // create flag on the one verb would have to switch off the check that stops an
+  // edit landing on the wrong provider's copy of a shared id.
+  const addModel = useCallback(
+    async (provider: string, model: string, values: Record<string, string>) => {
+      const c = clientRef.current
+      if (!c) return
+      setModelParamsBusy(true)
+      setModelParamsErr('')
+      try {
+        await c.send('models.add', { provider, model, values }, '')
+        setModelParams(null)
+        setModelAdding(false)
+        // The new model has to reach the picker we are returning to, and its
+        // provider may be one that had no rows until now.
+        await reloadModels()
+        notify.ok(t('added %s', `${provider}/${model}`))
+      } catch (e) {
+        // Kept open with the daemon's own words. It owns the two refusals the
+        // form cannot make itself, a duplicate id and an unreachable provider,
+        // and closing the form would take the reason away with the typing.
+        setModelParamsErr(authMessage(e))
+      } finally {
+        setModelParamsBusy(false)
+      }
+    },
+    [reloadModels],
+  )
 
   const saveModelParams = useCallback(
     async (values: Record<string, string>) => {
@@ -1976,7 +2048,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         const task = m[2].trim()
         // Prime the model to load the skill (it then calls the `skill` tool),
         // mirroring the TUI's /skill directive.
-        sendPrompt(task ? `Use the "${name}" skill for: ${task}` : `Use the "${name}" skill.`)
+        return sendPrompt(task ? `Use the "${name}" skill for: ${task}` : `Use the "${name}" skill.`)
       },
     },
     {
@@ -2053,15 +2125,14 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   // consumed so the composer clears its text + attachments. Slash commands are
   // only recognized when nothing is attached (a send carrying an image or a
   // staged file is always a prompt — a slash command would discard it).
-  const onSubmit = (text: string, images?: ImageAttachment[], attachments?: FileAttachment[]): boolean => {
+  const onSubmit = (text: string, images?: ImageAttachment[], attachments?: FileAttachment[]): boolean | Promise<boolean> => {
     const trimmed = text.trim()
     if (trimmed.startsWith('/') && !(images && images.length) && !(attachments && attachments.length)) {
       const sp = trimmed.indexOf(' ')
       const head = (sp === -1 ? trimmed.slice(1) : trimmed.slice(1, sp)).toLowerCase()
       const cmd = slashCommands.find((c) => c.name === head)
       if (cmd) {
-        cmd.run(sp === -1 ? '' : trimmed.slice(sp + 1))
-        return true
+        return cmd.run(sp === -1 ? '' : trimmed.slice(sp + 1)) ?? true
       }
     }
     return sendPrompt(text, images, attachments)
@@ -2420,6 +2491,9 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
               onSave={saveModelParams}
               onReset={resetModelParams}
               onCancel={() => setModelParams(null)}
+              adding={modelAdding}
+              providers={reachableProviders}
+              onAdd={addModel}
             />
           </div>
         </div>
@@ -2446,6 +2520,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           onToggleHidden={hideModel}
           onSetDefault={setDefaultModel}
           onEdit={openModelParams}
+          onAdd={openModelAdd}
           onTiers={openModelTiers}
           tierSummaries={tierSummaries}
           onClose={() => setPickerOpen(false)}

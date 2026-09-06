@@ -1048,6 +1048,21 @@ Sending while a turn is running queues the message (shown as a dashed bubble).
 Before the agent consumes it you can **edit** it in place (✎) or **remove** it
 (×); the change is pushed to the queue and broadcast to every open tab.
 
+Stop stays available through tool execution, approval waits, and provider
+retry delays. Enter submits a text follow-up to the queue in both the panel
+and Stage. Attachments must wait until the current turn finishes.
+
+The composer clears submitted input after the daemon accepts it. New text
+typed while acceptance is pending stays in the composer. A refused send keeps
+its text and attachment references. If the connection drops before acceptance
+arrives, check the transcript after reconnecting before sending again. The
+browser keeps the draft and does not resend it automatically.
+
+Unsent input stays with its session while you navigate in the same tab.
+The panel persists draft text separately; attachment references and Stage
+drafts stay in memory and do not survive a reload. Composition confirmation
+keys belong to the input method and do not submit or select autocomplete items.
+
 ## Scope
 
 v1 is the daily-driver: chat, session switching + nicknames, model switching
