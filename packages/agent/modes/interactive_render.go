@@ -598,6 +598,8 @@ func (i *Interactive) redraw() {
 		EditsRemoved:     snap.editsRemoved,
 		ScriptSegments:   snap.scriptSegs,
 		Rows:             i.cfg.StatusLineRows,
+		MaxWidth:         i.cfg.StatusLineMaxWidth,
+		ReserveBusyRow:   i.cfg.StatusLineReserveBusyRow,
 		Now:              time.Now(),
 		SessionStart:     snap.costBaseAt,
 		SessionCostBase:  snap.costBase,

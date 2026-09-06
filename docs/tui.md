@@ -162,7 +162,7 @@ In the `/model` picker, press `ctrl+e` on the highlighted model to open its conf
 - **context window** / **max tokens** — correct sizes terva doesn't know for a custom model.
 - **reasoning** / **image input** — capability flags (e.g. mark a local model text-only so images are dropped instead of bricking the request).
 
-`↑`/`↓` move between fields, `enter` edits a value (or cycles a flag through inherit → on → off), `s` saves, `esc` cancels. Saving writes a *minimal* entry to `$TERVA_HOME/models.json` — only the fields you set, so unset fields keep tracking the default — and applies immediately; models carrying an override are tagged `[edited]` in the picker. Press `r` to **reset**: after a `y`/`n` confirmation it removes the model's `models.json` entry, returning it to defaults. (The editor covers the operational fields above; per-model **prices** stay hand-editable in `models.json` and are preserved across edits.)
+`↑`/`↓` move between fields, `enter` edits a value (or cycles a flag through inherit → on → off), `s` saves, `esc` cancels. A value being edited is a real one-line field: `←`/`→` move the cursor, `alt+←`/`alt+→` (or `ctrl+←`/`ctrl+→`) jump a word, `home`/`end` (or `ctrl+a`/`ctrl+e`) go to the ends, `delete` cuts forward, and `ctrl+u`/`ctrl+k`/`ctrl+w` kill to the start, to the end, and back a word. These are the composer's keys, and the two fields are held to the same map by a conformance test. Saving writes a *minimal* entry to `$TERVA_HOME/models.json` — only the fields you set, so unset fields keep tracking the default — and applies immediately; models carrying an override are tagged `[edited]` in the picker. Press `r` to **reset**: after a `y`/`n` confirmation it removes the model's `models.json` entry, returning it to defaults. (The editor covers the operational fields above; per-model **prices** stay hand-editable in `models.json` and are preserved across edits.)
 
 ### Extensions (`/extensions`)
 
@@ -198,7 +198,7 @@ Four ops on the current session. `/session` alone opens a picker; each is also r
 
 ### `/jump`
 
-Opens a turn picker for the current session, one row per user prompt, each showing the turn number, how many tools that turn invoked, and the first line of the prompt. `up`/`down` to pick, `enter` to jump, `esc` to cancel. Any printable rune while the picker is open extends a filter; backspace narrows it back. `/jump <text>` pre-applies the filter; if exactly one turn matches, terva jumps straight there without showing the picker.
+Opens a turn picker for the current session, one row per user prompt, each showing the turn number, how many tools that turn invoked, and the first line of the prompt. `up`/`down` to pick, `enter` to jump, `esc` to cancel. Any printable rune while the picker is open extends a filter; backspace narrows it back. The filter is a one-line field with a cursor, so `←`/`→`, `home`/`end` and the kill chords work inside it, and a cursor move leaves the highlighted turn where it is. `/jump <text>` pre-applies the filter; if exactly one turn matches, terva jumps straight there without showing the picker.
 
 Jumping is non-destructive. The transcript is untouched, the viewport just scrolls so the chosen turn is at the top. A muted line at the top of the chat reads `viewing turn N of M, pgdn to catch up`. Scroll back to the bottom with `pgdn` (or keep scrolling with the arrow keys) and the indicator goes away.
 
@@ -391,12 +391,12 @@ paragraph is the same problem as dragging it out of the terminal. A preview pane
 under the list shows the highlighted part in full, so two similar paragraphs are
 told apart before the clipboard changes.
 
-Type to filter either list. The block kind is part of the match, so `fence` finds
-the code in a turn without knowing a word inside it. `esc` backs out one stage
-before it closes, and `ctrl+y` copies the whole reply of the turn under the
-cursor from either stage — the escape hatch for when you did want all of it. Tool
-calls and their results are never offered: they are most of a transcript and none
-of what people copy.
+Type to filter either list, with the same cursor keys the other pickers take.
+The block kind is part of the match, so `fence` finds the code in a turn without
+knowing a word inside it. `esc` backs out one stage before it closes, and
+`ctrl+y` copies the whole reply of the turn under the cursor from either stage —
+the escape hatch for when you did want all of it. Tool calls and their results
+are never offered: they are most of a transcript and none of what people copy.
 
 **`/copy last`** keeps the old one-shot behaviour — the whole last reply, no
 picker — and `/copy code` narrows that to the last fenced code block in it,
@@ -427,50 +427,65 @@ byte-for-byte identical either way.
 
 ## Status bar
 
-The block above the editor is built from named **segments** laid out in rows. The default is three semantic rows — identity + spend, meters, ambient state — and rows with nothing to show vanish (an idle session with no tags is two rows):
+The block above the editor is built from named **segments** laid out in rows. Each default row has a left group and a right group around a flexible gap: row 1 is place (cwd, git state, the agent's edits) with the two glance segments, model and cost, pinned in the top-right corner; row 2 is the meters left with thinking effort and token counters right; row 3 is ambient state left, glances right. Rows with nothing to show vanish (an idle session with no tags is two rows):
 
 ```text
-  ~/W/g/t/terva · ⎇ main* +499 -109 · Δ +120 -45 · (openai-codex) gpt-5.5 · thinking: high · ↑94k ↓1.8k · $0.529 ~$0.71/hr (sub)
-  ctx 202k/272k ▓▓▓▓░ 74% · 5h ▓░░░ 15% ↻4h33m · wk ▓░░░ 8% ↻3d17h · ⛭ 2 agents
-  ask mode · jailed · telegram connected
+  ~/W/g/t/terva · ⎇ main* +499 -109 · Δ +120 -45      (openai-codex) gpt-5.5 · $0.529 ~$0.71/hr (sub)
+  ctx 202k/272k ▓▓▓▓▓▓░░ 74% · 5h ▓░░░░░ 15% ↻4h33m      thinking: high · ↑94k ↓1.8k
+  ask mode · jailed · ⛭ 2 agents                        telegram connected
 ```
+
+While a turn runs, the busy line (spinner, quip, elapsed time) renders as its own row directly above the bar and disappears when the turn ends. The segments themselves never shift. If that one-row vertical step bothers you, `status_line.reserve_busy_row: true` keeps the row present and blank while idle, trading a line of chat height for zero motion.
+
+On a wide terminal the bar does not run to the far edge: rows lay out inside a content width of `min(columns, status_line.max_width)`. The default cap is 140 columns, the narrowest width that reaches the largest meter tier; set `"max_width": 0` to restore the uncapped ribbon.
 
 | segment | shows | notes |
 |---|---|---|
 | `replay` | the session-player scrubber | leads row 1; absent outside `terva replay` |
-| `cwd` | the working directory, abbreviated (`~/W/g/t/terva`) | |
+| `cwd` | the working directory, abbreviated (`~/W/g/t/terva`) | `cwd:full` skips the abbreviation |
 | `git` | branch, dirty `*`, `+added -removed` vs HEAD | fed by a background prober (10s + refresh at turn end and `/cd`); absent outside a repo |
 | `edits` | `Δ +N -M` — lines the agent's own edit/write tools changed this session | resets on `/new` and session load |
 | `model` | `(provider) model` | |
 | `persona` | the persona's emoji + name, tinted with its accent color | leads the rows in `--chat`/`--play` instead of `model` |
 | `thinking` | reasoning level | |
-| `tokens` | `↑in ↓out R…cache-read W…cache-write` | |
+| `tokens` | `↑in ↓out R…cache-read W…cache-write` | `tokens:io` keeps only ↑in ↓out |
 | `cost` | session cost, `~$/hr` burn rate (after 10 min), `(sub)` on subscription | burn counts only spend since this run started — resumed history doesn't inflate it |
-| `context` | context-window meter with percentage | `(auto)` while auto-compacting |
-| `usage` | one meter per subscription window with `↻` reset countdown | provider-defined windows (e.g. 5h + weekly) |
+| `context` | context-window meter with percentage | `(auto)` while auto-compacting; `context:bar=N` pins the meter width |
+| `usage` | one meter per subscription window with `↻` reset countdown | provider-defined windows (e.g. 5h + weekly); `usage:bar=N` pins the meter width |
 | `swarm` | `⛭ N agents` while background agents run | |
-| `session` | the session file's short name | config-only (not in the defaults) |
+| `session` | the session file's short name | config-only (not in the defaults); `session:short` keeps only the trailing hash |
 | `clock` | 24h wall clock | config-only |
 | `tags` | approval mode, `jailed` | |
 | `tasks` | the built-in task board's current task and done/total count (`▸ Wiring the panel (2/5)`) | absent when the board is empty |
 | `bridge` | connected chat bridge | |
 | `ext` | extension `status_segment` frames | |
+| `spacer` | a flexible gap | pseudo-segment: absorbs the slack between the segments before and after it, so a row can pin a group against the right edge; several spacers split the slack evenly |
 
-Meters change color in stages as they fill (70% / 90%); the stage colors and per-segment colors are theme-controlled — see [themes.md](themes.md), including the color-vision-friendly `daltonized` built-ins.
+Meters change color in stages as they fill (70% / 90%); the stage colors and per-segment colors are theme-controlled — see [themes.md](themes.md), including the color-vision-friendly `daltonized` built-ins. Meter bars also scale with the bar's effective width: 5 context / 4 usage cells below 100 columns, 8/6 from 100, 12/8 from 140. A meter that is in use but rounds to zero filled cells marks its first cell `▒`, so a 2% window and an untouched one read apart. `bar=N` pins a width and bypasses the tiers.
 
 Rearrange, drop, or re-row segments in `$TERVA_HOME/config.json` (unknown IDs are ignored; rows are open-ended):
 
 ```json
 "status_line": {
+  "max_width": 120,
   "rows": [
-    ["cwd", "git", "edits", "model", "cost"],
-    ["context", "usage", "swarm"],
-    ["session", "clock"]
+    ["cwd", "git", "edits", "spacer", "model", "cost"],
+    ["context:bar=10", "usage", "spacer", "tokens:io"],
+    ["session:short", "clock"]
   ]
 }
 ```
 
-A row wider than the terminal wraps at segment boundaries rather than truncating; segments never migrate between rows on resize. In `--chat`/`--play` the workspace segments (`cwd`, `git`, `edits`, `swarm`, `tags`) stay hidden even if a config names them.
+An entry is a segment id plus optional suffix options: `id:flag` or `id:key=value`, comma-separated (`"tokens:io"`, `"context:bar=10"`). Unknown options are skipped with the same silence as unknown ids, so a config survives renames and older binaries. The full option set:
+
+| option | effect |
+|---|---|
+| `tokens:io` | `↑134k ↓229k` only; the cache totals stay in `/usage` |
+| `context:bar=N`, `usage:bar=N` | pin the meter width, bypass the width tiers |
+| `session:short` | the trailing hash only (`sess 83c2dcf8`) |
+| `cwd:full` | no path abbreviation |
+
+A row wider than the effective width collapses its spacers to the ordinary `·` separator and wraps at segment boundaries rather than truncating; segments never migrate between rows on resize. In `--chat`/`--play` the workspace segments (`cwd`, `git`, `edits`, `swarm`, `tags`) stay hidden even if a config names them.
 
 ### Script segments
 
@@ -485,7 +500,7 @@ Define your own segments as shell commands:
 }
 ```
 
-Each script runs through the platform shell (`sh -c` / `cmd /C`) with a JSON session snapshot on **stdin**; its first stdout line renders wherever `rows` names it (with no `rows` config, scripts append to the last default row). SGR colors in the output pass through; tabs, extra lines, and cursor-moving escapes are stripped. Name collisions with built-in segments lose to the built-in.
+Each script runs through the platform shell (`sh -c` / `cmd /C`) with a JSON session snapshot on **stdin**; its first stdout line renders wherever `rows` names it (with no `rows` config, scripts append to the last default row). SGR colors in the output pass through; tabs, extra lines, and cursor-moving escapes are stripped. Name collisions with built-in segments lose to the built-in. A script whose name contains `:` still matches its `rows` entry exactly, ahead of the options-suffix parse, so such a name keeps working.
 
 Scripts re-run on a coalesced trigger — turn end, `/cd`, and once a minute — never a free-running poll, with one child process at a time and a hard per-run timeout (`timeout_ms`, default 2000, clamped 100–10000). A timed-out run keeps the previous output; a failing script goes blank and notes `status script <name> failed` once per failure streak. Empty output hides the segment.
 
@@ -601,6 +616,7 @@ Type `@` followed by a filter string to narrow the list (e.g. `@read` shows only
 |---|---|
 | `ctrl+a`, `ctrl+e` | Jump to start or end of line. |
 | `alt+left`, `alt+right` | Jump one word back or forward. |
+| `ctrl+left`, `ctrl+right` | The same word jump, for terminals that send ctrl rather than alt. |
 | `ctrl+u`, `ctrl+k` | Delete to start or end of line. |
 | `ctrl+w`, `alt+backspace` | Delete the previous word. |
 | `up`, `down` (editor non-empty) | Cycle through prompt history. |

@@ -16,6 +16,7 @@ package tui
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -175,6 +176,30 @@ type StatusBarParams struct {
 	SessionCostBase float64
 
 	Cols int // terminal width; 0 disables wrapping
+
+	// MaxWidth caps the content width: rows lay out inside
+	// min(Cols, MaxWidth) so the bar stays a readable block on a very
+	// wide terminal. 0 means uncapped (lay out to Cols).
+	MaxWidth int
+
+	// ReserveBusyRow keeps the busy line's row present (blank) while
+	// idle, so the bottom band never changes height at turn
+	// boundaries. Off by default: the busy row is transient.
+	ReserveBusyRow bool
+}
+
+// effWidth is the width the layout packs into: Cols capped to
+// MaxWidth. Cols 0 (wrapping disabled) still honours a cap, and both
+// zero keeps the no-wrap behaviour.
+func (p StatusBarParams) effWidth() int {
+	switch {
+	case p.MaxWidth <= 0:
+		return p.Cols
+	case p.Cols <= 0 || p.MaxWidth < p.Cols:
+		return p.MaxWidth
+	default:
+		return p.Cols
+	}
 }
 
 func (p StatusBarParams) now() time.Time {
@@ -208,13 +233,73 @@ const (
 	SegTasks    SegmentID = "tasks"
 	SegWorktree SegmentID = "worktrees"
 	SegMemory   SegmentID = "memory"
+
+	// SegSpacer is a pseudo-segment: zero content, and at layout time
+	// it absorbs the slack between the atoms before it and the atoms
+	// after it, so a row can pin a group against the right edge of the
+	// effective width. Several spacers in one row split the slack
+	// evenly. It has no entry in statusSegments — the layout consumes
+	// it before any segment renders.
+	SegSpacer SegmentID = "spacer"
 )
+
+// segOpts is one segment's parsed per-segment options from the rows
+// config ("tokens:io" → {io: ""}, "context:bar=10" → {bar: "10"}).
+// Flags map to the empty string, key=value pairs to their value. nil
+// means the entry carried no options; every accessor is nil-safe.
+type segOpts map[string]string
+
+// has reports whether the option was given, with or without a value.
+func (o segOpts) has(name string) bool {
+	_, ok := o[name]
+	return ok
+}
+
+// intVal returns the option's positive integer value, or def when the
+// option is absent, empty, or not a number — the silent tolerance the
+// whole rows config keeps.
+func (o segOpts) intVal(name string, def int) int {
+	v, ok := o[name]
+	if !ok || v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
+}
+
+// parseSegOpts parses the suffix after "id:": comma-separated flags
+// or key=value pairs. Malformed tokens drop out silently — the same
+// tolerance resolveStatusRows extends to unknown segment ids, so a
+// config survives renames and older binaries.
+func parseSegOpts(s string) segOpts {
+	var o segOpts
+	for _, tok := range strings.Split(s, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		k, v, _ := strings.Cut(tok, "=")
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		if o == nil {
+			o = segOpts{}
+		}
+		o[k] = strings.TrimSpace(v)
+	}
+	return o
+}
 
 // segmentFunc renders one segment into zero or more pre-styled atoms.
 // Atoms are the wrap unit: the packer never splits inside one. nil
 // means the segment has nothing to show and vanishes with its
-// separators.
-type segmentFunc func(p StatusBarParams) []string
+// separators. The opts argument carries the entry's per-segment
+// options; a segment that takes none ignores it.
+type segmentFunc func(p StatusBarParams, o segOpts) []string
 
 var statusSegments = map[SegmentID]segmentFunc{
 	SegCWD:      segCWD,
@@ -239,30 +324,31 @@ var statusSegments = map[SegmentID]segmentFunc{
 	SegMemory:   segMemory,
 }
 
-// defaultStatusRows is the built-in layout: identity + spend on row 1
-// (tree facts adjacent: git state beside the agent's own edit counts),
-// meters on row 2, ambient state (approval/jail tags, chat bridge,
-// extension segments) on row 3. Three semantic rows rather than two:
-// a subscription provider puts several usage meters on row 2, and
-// mixing the ambient tags in made it read cramped. Rows with no data
-// vanish, so an idle session without tags is still two rows tall —
-// and a row that still overflows wraps at segment boundaries rather
-// than moving segments between rows, so membership never depends on
-// width and nothing jumps around on resize. The immersive preset
-// drops the workspace segments and leads with the persona instead of
-// the raw provider/model pair. clock/session stay config-only.
+// defaultStatusRows is the built-in layout. Three semantic rows, each
+// with a left group and a right group around a spacer: row 1 is place
+// (where am I, what tree state) left with the two glance segments —
+// model and cost — pinned in the top-right corner; row 2 is the
+// tanks, meters left and thinking effort + token counters right;
+// row 3 is ambient state left (swarm is ambient: live background
+// agents), glances right. Rows with no data vanish, and a row that
+// overflows collapses its spacer and wraps at segment boundaries
+// rather than moving segments between rows, so membership never
+// depends on width and nothing jumps around on resize. The immersive
+// preset drops the workspace segments and leads with the persona
+// instead of the raw provider/model pair. clock/session stay
+// config-only.
 func defaultStatusRows(hideWorkspace bool) [][]SegmentID {
 	if hideWorkspace {
 		return [][]SegmentID{
-			{SegReplay, SegPersona, SegThinking, SegTokens, SegCost},
-			{SegContext, SegUsage},
+			{SegReplay, SegPersona, SegSpacer, SegCost},
+			{SegContext, SegUsage, SegSpacer, SegThinking, SegTokens},
 			{SegBridge, SegExt},
 		}
 	}
 	return [][]SegmentID{
-		{SegReplay, SegCWD, SegGit, SegEdits, SegModel, SegThinking, SegTokens, SegCost},
-		{SegContext, SegUsage, SegSwarm},
-		{SegTags, SegTasks, SegWorktree, SegMemory, SegBridge, SegExt},
+		{SegReplay, SegCWD, SegGit, SegEdits, SegSpacer, SegModel, SegCost},
+		{SegContext, SegUsage, SegSpacer, SegThinking, SegTokens},
+		{SegTags, SegTasks, SegSwarm, SegSpacer, SegWorktree, SegMemory, SegBridge, SegExt},
 	}
 }
 
@@ -290,15 +376,19 @@ const statusPad = "  "
 // with the busy spinner prefix glued to the first line when it fits.
 func StatusBar(p StatusBarParams) []string {
 	rows := make([][]string, 0, 2)
-	for _, ids := range resolveStatusRows(p) {
+	for _, segs := range resolveStatusRows(p) {
 		var atoms []string
-		for _, id := range ids {
-			if fn, ok := statusSegments[id]; ok {
-				atoms = append(atoms, fn(p)...)
+		for _, rs := range segs {
+			if rs.id == SegSpacer {
+				atoms = append(atoms, statusSpacerAtom)
 				continue
 			}
-			if txt, ok := p.ScriptSegments[string(id)]; ok {
-				if atom := scriptAtom(p.Theme, id, txt); atom != "" {
+			if fn, ok := statusSegments[rs.id]; ok {
+				atoms = append(atoms, fn(p, rs.opts)...)
+				continue
+			}
+			if txt, ok := p.ScriptSegments[string(rs.id)]; ok {
+				if atom := scriptAtom(p.Theme, rs.id, txt); atom != "" {
 					atoms = append(atoms, atom)
 				}
 			}
@@ -310,6 +400,14 @@ func StatusBar(p StatusBarParams) []string {
 	return layoutStatusRows(p, rows)
 }
 
+// resolvedSeg is one entry of the resolved row layout: a segment id
+// plus its parsed per-segment options ("tokens:io" → id tokens, opts
+// {io}). opts is nil for a bare id.
+type resolvedSeg struct {
+	id   SegmentID
+	opts segOpts
+}
+
 // resolveStatusRows returns the configured row layout, filtered to
 // known segment IDs (built-ins plus defined script names), or the
 // per-mode defaults when no usable config exists. Unknown IDs are
@@ -317,21 +415,37 @@ func StatusBar(p StatusBarParams) []string {
 // additions gracefully. With no Rows config, defined scripts append
 // to the last default row in stable (sorted) order so defining a
 // script is enough to see it.
-func resolveStatusRows(p StatusBarParams) [][]SegmentID {
+//
+// An entry can carry an options suffix: "id:opts", opts a
+// comma-separated list of flags or key=value pairs. A script whose
+// name itself contains ":" wins by exact match before the suffix
+// parse, so no existing script breaks.
+func resolveStatusRows(p StatusBarParams) [][]resolvedSeg {
+	known := func(id SegmentID) bool {
+		if _, builtin := statusSegments[id]; builtin || id == SegSpacer {
+			return true
+		}
+		_, script := p.ScriptSegments[string(id)]
+		return script
+	}
 	if len(p.Rows) > 0 {
-		out := make([][]SegmentID, 0, len(p.Rows))
+		out := make([][]resolvedSeg, 0, len(p.Rows))
 		for _, row := range p.Rows {
-			var ids []SegmentID
+			var segs []resolvedSeg
 			for _, s := range row {
-				id := SegmentID(strings.ToLower(strings.TrimSpace(s)))
-				_, builtin := statusSegments[id]
-				_, script := p.ScriptSegments[string(id)]
-				if builtin || script {
-					ids = append(ids, id)
+				raw := strings.ToLower(strings.TrimSpace(s))
+				if id := SegmentID(raw); known(id) {
+					segs = append(segs, resolvedSeg{id: id})
+					continue
+				}
+				if base, optsStr, ok := strings.Cut(raw, ":"); ok {
+					if id := SegmentID(base); known(id) {
+						segs = append(segs, resolvedSeg{id: id, opts: parseSegOpts(optsStr)})
+					}
 				}
 			}
-			if len(ids) > 0 {
-				out = append(out, ids)
+			if len(segs) > 0 {
+				out = append(out, segs)
 			}
 		}
 		if len(out) > 0 {
@@ -352,7 +466,14 @@ func resolveStatusRows(p StatusBarParams) [][]SegmentID {
 			rows[last] = append(rows[last], SegmentID(name))
 		}
 	}
-	return rows
+	out := make([][]resolvedSeg, len(rows))
+	for r, ids := range rows {
+		out[r] = make([]resolvedSeg, len(ids))
+		for c, id := range ids {
+			out[r][c] = resolvedSeg{id: id}
+		}
+	}
+	return out
 }
 
 // scriptAtom renders one user script's output as a segment atom. Plain
@@ -448,13 +569,29 @@ func skipStatusEscape(s string, i int) int {
 	}
 }
 
+// statusSpacerAtom marks a spacer's position in a row's atom list. A
+// NUL sentinel rather than a styled string: no segment renders one,
+// and sanitizeStatusScriptLine strips control bytes from script
+// output, so it cannot collide with content.
+const statusSpacerAtom = "\x00spacer\x00"
+
 // layoutStatusRows greedily packs each row's atoms into terminal lines:
-// atoms joined by " · " while they fit in Cols, continuation lines when
-// they don't. The busy prefix occupies the head of the first line when
-// it plus the first atom fit; otherwise it gets a line of its own —
-// the same contract the previous bespoke layout kept.
+// atoms joined by " · " while they fit in the effective width (Cols
+// capped to MaxWidth), continuation lines when they don't. The busy
+// prefix renders as its own line above the rows — v2 glued it to the
+// head of row 1, which shifted every segment right at turn start and
+// re-widened with the elapsed timer every second. The transient row
+// costs one line of chat height while busy; row 1's segments never
+// move again.
+//
+// A row with spacers first tries the flex layout: groups of atoms with
+// the slack split evenly across the gaps. When that row does not fit,
+// every spacer collapses to the ordinary separator and the greedy wrap
+// takes over — membership never depends on width, and a narrow
+// terminal renders exactly as it did before spacers existed.
 func layoutStatusRows(p StatusBarParams, rows [][]string) []string {
 	th := p.Theme
+	width := p.effWidth()
 	sep := th.FG256(th.Muted, " · ")
 	busyHead := ""
 	if p.BusyPrefix != "" {
@@ -462,26 +599,40 @@ func layoutStatusRows(p StatusBarParams, rows [][]string) []string {
 	}
 
 	var lines []string
-	first := true
-	for _, atoms := range rows {
+	switch {
+	case busyHead != "":
+		lines = append(lines, busyHead)
+	case p.ReserveBusyRow:
+		// The reserved row holds the busy line's place while idle, so
+		// the chat viewport keeps a constant height across turns.
+		lines = append(lines, "")
+	}
+	for _, rowAtoms := range rows {
+		groups, hasSpacer := splitSpacerGroups(rowAtoms)
+		atoms := rowAtoms
+		if hasSpacer {
+			// Collapsed form: the markers drop out and the greedy
+			// wrap below sees the row exactly as a spacerless config.
+			atoms = atoms[:0:0]
+			for _, g := range groups {
+				atoms = append(atoms, g...)
+			}
+		}
 		if len(atoms) == 0 {
 			continue
 		}
-		head := statusPad
-		if first && busyHead != "" {
-			glued := busyHead + statusPad
-			if p.Cols > 0 && visibleWidth(glued+atoms[0]) > p.Cols {
-				lines = append(lines, busyHead)
-			} else {
-				head = glued
+
+		if hasSpacer && width > 0 {
+			if line, ok := flexLine(statusPad, groups, sep, width); ok {
+				lines = append(lines, line)
+				continue
 			}
 		}
-		first = false
 
-		cur := head + atoms[0]
+		cur := statusPad + atoms[0]
 		for _, a := range atoms[1:] {
 			cand := cur + sep + a
-			if p.Cols > 0 && visibleWidth(cand) > p.Cols {
+			if width > 0 && visibleWidth(cand) > width {
 				lines = append(lines, cur)
 				cur = statusPad + a
 				continue
@@ -490,23 +641,82 @@ func layoutStatusRows(p StatusBarParams, rows [][]string) []string {
 		}
 		lines = append(lines, cur)
 	}
-	if len(lines) == 0 && busyHead != "" {
-		return []string{busyHead}
-	}
 	return lines
+}
+
+// splitSpacerGroups splits a row's atoms at spacer markers into the
+// runs of renderable atoms between them. hasSpacer reports whether any
+// marker was present; a marker at the row's edge (or two adjacent
+// markers) contributes an empty group, which the flex layout renders
+// as a wider gap.
+func splitSpacerGroups(atoms []string) (groups [][]string, hasSpacer bool) {
+	cur := []string{}
+	for _, a := range atoms {
+		if a == statusSpacerAtom {
+			hasSpacer = true
+			groups = append(groups, cur)
+			cur = []string{}
+			continue
+		}
+		cur = append(cur, a)
+	}
+	groups = append(groups, cur)
+	return groups, hasSpacer
+}
+
+// flexLine lays one row out with its spacers as flexible gaps: each
+// group joins internally with the usual separator, and the slack up to
+// width splits evenly across the gaps. Every gap is at least as wide
+// as the separator it replaces, so ok is false exactly when the
+// collapsed form of the row overflows too — the caller then falls back
+// to the greedy wrap and the v2 invariants hold unchanged.
+func flexLine(head string, groups [][]string, sep string, width int) (string, bool) {
+	sepW := visibleWidth(sep)
+	parts := make([]string, 0, len(groups))
+	content := 0
+	for _, g := range groups {
+		s := strings.Join(g, sep)
+		parts = append(parts, s)
+		content += visibleWidth(s)
+	}
+	gaps := len(parts) - 1
+	slack := width - visibleWidth(head) - content - gaps*sepW
+	if gaps < 1 || slack < 0 {
+		return "", false
+	}
+	var b strings.Builder
+	b.WriteString(head)
+	for i, part := range parts {
+		if i > 0 {
+			gap := sepW + slack/gaps
+			if i <= slack%gaps {
+				gap++
+			}
+			b.WriteString(strings.Repeat(" ", gap))
+		}
+		b.WriteString(part)
+	}
+	return strings.TrimRight(b.String(), " "), true
 }
 
 // ---- segments ----
 
-func segCWD(p StatusBarParams) []string {
+// segCWD renders the working directory, abbreviated. The "full"
+// option ("cwd:full") skips the per-component abbreviation; the home
+// shortening stays.
+func segCWD(p StatusBarParams, o segOpts) []string {
 	if p.HideWorkspace || p.CWD == "" {
 		return nil
 	}
+	path := shortenHome(p.CWD)
+	if !o.has("full") {
+		path = abbreviatePath(path)
+	}
 	th := p.Theme
-	return []string{th.FG256(th.StatusColor(SegCWD, th.Muted), abbreviatePath(shortenHome(p.CWD)))}
+	return []string{th.FG256(th.StatusColor(SegCWD, th.Muted), path)}
 }
 
-func segGit(p StatusBarParams) []string {
+func segGit(p StatusBarParams, _ segOpts) []string {
 	if p.HideWorkspace || !p.Git.Present || p.Git.Branch == "" {
 		return nil
 	}
@@ -529,7 +739,7 @@ func segGit(p StatusBarParams) []string {
 // removed by the edit/write tools. Distinct from segGit (tree state):
 // this answers "what did the agent do", git answers "where the tree
 // stands". Workspace machinery, so hidden in immersive modes.
-func segEdits(p StatusBarParams) []string {
+func segEdits(p StatusBarParams, _ segOpts) []string {
 	if p.HideWorkspace || (p.EditsAdded <= 0 && p.EditsRemoved <= 0) {
 		return nil
 	}
@@ -548,7 +758,7 @@ func segEdits(p StatusBarParams) []string {
 // with the persona's accent color when it has one (exact RGB — the
 // same treatment the welcome banner gives it). A theme's status_colors
 // override wins over the accent so users keep the last word.
-func segPersona(p StatusBarParams) []string {
+func segPersona(p StatusBarParams, _ segOpts) []string {
 	if p.PersonaName == "" {
 		return nil
 	}
@@ -569,7 +779,7 @@ func segPersona(p StatusBarParams) []string {
 // segSwarm surfaces live background agents so a running swarm is
 // visible without opening /swarm. Absent at zero; hidden in immersive
 // modes, where dispatched agents are cast members, not machinery.
-func segSwarm(p StatusBarParams) []string {
+func segSwarm(p StatusBarParams, _ segOpts) []string {
 	if p.HideWorkspace || p.SwarmAgents <= 0 {
 		return nil
 	}
@@ -581,7 +791,7 @@ func segSwarm(p StatusBarParams) []string {
 // done/total count, "▸ …" — see tasks.StatusGlance). Absent when there are no
 // tasks. Accent-coloured so the current task reads at a glance, like the
 // terva-tasks extension's segment it replaces.
-func segTasks(p StatusBarParams) []string {
+func segTasks(p StatusBarParams, _ segOpts) []string {
 	if s := strings.TrimSpace(p.TaskGlance); s != "" {
 		return []string{p.Theme.FG256(p.Theme.StatusColor(SegTasks, p.Theme.Accent), s)}
 	}
@@ -591,7 +801,7 @@ func segTasks(p StatusBarParams) []string {
 // segMemory renders the durable-memory count — how many facts terva is
 // carrying into future sessions. Muted: it is context for the session, not a
 // call to act on, and it should not compete with the task glance beside it.
-func segMemory(p StatusBarParams) []string {
+func segMemory(p StatusBarParams, _ segOpts) []string {
 	if s := strings.TrimSpace(p.MemoryGlance); s != "" {
 		return []string{p.Theme.FG256(p.Theme.StatusColor(SegMemory, p.Theme.Muted), s)}
 	}
@@ -602,7 +812,7 @@ func segMemory(p StatusBarParams) []string {
 // session holds — see worktree.StatusGlance). Absent until the /worktree
 // panel has populated the cache, and absent with zero worktrees — the same
 // visibility the retired terva-git-worktree extension's segment had.
-func segWorktree(p StatusBarParams) []string {
+func segWorktree(p StatusBarParams, _ segOpts) []string {
 	if s := strings.TrimSpace(p.WorktreeGlance); s != "" {
 		return []string{p.Theme.FG256(p.Theme.StatusColor(SegWorktree, p.Theme.Muted), s)}
 	}
@@ -612,7 +822,7 @@ func segWorktree(p StatusBarParams) []string {
 // segReplay renders the session-player scrubber (Replay is pre-formatted by
 // the caller). Absent outside `terva replay`. Leads the first row so the
 // playback state reads first, in the accent colour to mark the distinct mode.
-func segReplay(p StatusBarParams) []string {
+func segReplay(p StatusBarParams, _ segOpts) []string {
 	if p.Replay == "" {
 		return nil
 	}
@@ -621,24 +831,33 @@ func segReplay(p StatusBarParams) []string {
 }
 
 // segSession names the live session file, for telling parallel
-// terminals apart. Config-only (not in the default rows).
-func segSession(p StatusBarParams) []string {
+// terminals apart. Config-only (not in the default rows). The "short"
+// option ("session:short") keeps only the part after the last "-" —
+// the random hash that actually identifies the session — saving ~20
+// cells of timestamp the clock already tells.
+func segSession(p StatusBarParams, o segOpts) []string {
 	if p.SessionName == "" {
 		return nil
 	}
+	name := p.SessionName
+	if o.has("short") {
+		if i := strings.LastIndex(name, "-"); i >= 0 && i < len(name)-1 {
+			name = name[i+1:]
+		}
+	}
 	th := p.Theme
-	return []string{th.FG256(th.StatusColor(SegSession, th.Muted), i18n.T("sess %s", p.SessionName))}
+	return []string{th.FG256(th.StatusColor(SegSession, th.Muted), i18n.T("sess %s", name))}
 }
 
 // segClock is a 24h wall clock. Config-only (not in the default rows);
 // the minute-boundary refresh that keeps countdowns fresh keeps this
 // fresh too.
-func segClock(p StatusBarParams) []string {
+func segClock(p StatusBarParams, _ segOpts) []string {
 	th := p.Theme
 	return []string{th.FG256(th.StatusColor(SegClock, th.Muted), p.now().Format("15:04"))}
 }
 
-func segModel(p StatusBarParams) []string {
+func segModel(p StatusBarParams, _ segOpts) []string {
 	if p.Provider == "" && p.Model == "" {
 		return nil
 	}
@@ -646,7 +865,7 @@ func segModel(p StatusBarParams) []string {
 	return []string{th.FG256(th.StatusColor(SegModel, th.Muted), fmt.Sprintf("(%s) %s", p.Provider, p.Model))}
 }
 
-func segThinking(p StatusBarParams) []string {
+func segThinking(p StatusBarParams, _ segOpts) []string {
 	label := thinkingLevelLabel(p.Reasoning)
 	if label == "" {
 		return nil
@@ -655,7 +874,11 @@ func segThinking(p StatusBarParams) []string {
 	return []string{th.FG256(th.StatusColor(SegThinking, th.Muted), i18n.T("thinking: %s", label))}
 }
 
-func segTokens(p StatusBarParams) []string {
+// segTokens renders the cumulative token counters. The "io" option
+// ("tokens:io") keeps only ↑input ↓output — the cache totals stay in
+// /usage. Full stays the default: subscription users watch the cache
+// totals (review decision, 2026-09-04).
+func segTokens(p StatusBarParams, o segOpts) []string {
 	var parts []string
 	if p.Usage.InputTokens > 0 {
 		parts = append(parts, "↑"+formatTokens(p.Usage.InputTokens))
@@ -663,11 +886,13 @@ func segTokens(p StatusBarParams) []string {
 	if p.Usage.OutputTokens > 0 {
 		parts = append(parts, "↓"+formatTokens(p.Usage.OutputTokens))
 	}
-	if p.Usage.CacheReadTokens > 0 {
-		parts = append(parts, "R"+formatTokens(p.Usage.CacheReadTokens))
-	}
-	if p.Usage.CacheWriteTokens > 0 {
-		parts = append(parts, "W"+formatTokens(p.Usage.CacheWriteTokens))
+	if !o.has("io") {
+		if p.Usage.CacheReadTokens > 0 {
+			parts = append(parts, "R"+formatTokens(p.Usage.CacheReadTokens))
+		}
+		if p.Usage.CacheWriteTokens > 0 {
+			parts = append(parts, "W"+formatTokens(p.Usage.CacheWriteTokens))
+		}
 	}
 	if len(parts) == 0 {
 		return nil
@@ -681,7 +906,7 @@ func segTokens(p StatusBarParams) []string {
 // minutes swings wildly.
 const burnMinElapsed = 10 * time.Minute
 
-func segCost(p StatusBarParams) []string {
+func segCost(p StatusBarParams, _ segOpts) []string {
 	if p.Usage.CostUSD <= 0 && !p.Subscription {
 		return nil
 	}
@@ -715,7 +940,9 @@ func burnRate(p StatusBarParams) (float64, bool) {
 	return delta / elapsed.Hours(), true
 }
 
-func segContext(p StatusBarParams) []string {
+// segContext renders the context gauge. "context:bar=N" pins the
+// meter to N cells and bypasses the width tiers.
+func segContext(p StatusBarParams, o segOpts) []string {
 	th := p.Theme
 	used, max := p.ContextUsed, p.ContextMax
 	if used <= 0 && max <= 0 {
@@ -724,18 +951,25 @@ func segContext(p StatusBarParams) []string {
 	if max <= 0 {
 		return []string{th.FG256(th.MeterColor(0), i18n.T("ctx %s", formatTokens(used)))}
 	}
+	cells, _ := meterCells(p.effWidth())
+	cells = min(o.intVal("bar", cells), maxMeterCells)
 	pct := float64(used) / float64(max) * 100
 	text := i18n.T("ctx %s/%s %s %d%%",
-		formatTokens(used), formatTokens(max), meterBar(pct, 5), int(pct+0.5))
+		formatTokens(used), formatTokens(max), meterBar(pct, cells), int(pct+0.5))
 	if p.AutoCompacting {
 		text += " " + i18n.T("(auto)")
 	}
 	return []string{th.FG256(th.MeterColor(pct), text)}
 }
 
-func segUsage(p StatusBarParams) []string {
+// segUsage renders one meter per provider usage window.
+// "usage:bar=N" pins the meters to N cells and bypasses the width
+// tiers.
+func segUsage(p StatusBarParams, o segOpts) []string {
 	th := p.Theme
 	now := p.now()
+	_, cells := meterCells(p.effWidth())
+	cells = min(o.intVal("bar", cells), maxMeterCells)
 	var atoms []string
 	for _, w := range p.UsageWindows {
 		label := shortWindowLabel(w.Label)
@@ -746,7 +980,7 @@ func segUsage(p StatusBarParams) []string {
 			// percentage; mirror the /usage dialog's "?" convention.
 			text = label + " ?"
 		} else {
-			text = fmt.Sprintf("%s %s %d%%", label, meterBar(w.UsedPercent, 4), int(w.UsedPercent+0.5))
+			text = fmt.Sprintf("%s %s %d%%", label, meterBar(w.UsedPercent, cells), int(w.UsedPercent+0.5))
 			color = th.MeterColor(w.UsedPercent)
 		}
 		if !w.ResetsAt.IsZero() {
@@ -759,7 +993,7 @@ func segUsage(p StatusBarParams) []string {
 	return atoms
 }
 
-func segTags(p StatusBarParams) []string {
+func segTags(p StatusBarParams, _ segOpts) []string {
 	if p.HideWorkspace {
 		return nil
 	}
@@ -793,7 +1027,7 @@ func segTags(p StatusBarParams) []string {
 	return atoms
 }
 
-func segBridge(p StatusBarParams) []string {
+func segBridge(p StatusBarParams, _ segOpts) []string {
 	if p.ChatConnected == "" {
 		return nil
 	}
@@ -801,7 +1035,7 @@ func segBridge(p StatusBarParams) []string {
 	return []string{th.FG256(th.StatusColor(SegBridge, th.Muted), i18n.T("%s connected", p.ChatConnected))}
 }
 
-func segExt(p StatusBarParams) []string {
+func segExt(p StatusBarParams, _ segOpts) []string {
 	th := p.Theme
 	color := th.StatusColor(SegExt, th.Muted)
 	var atoms []string
@@ -842,8 +1076,30 @@ func abbreviatePath(p string) string {
 	return strings.Join(parts, "/")
 }
 
+// meterCells picks the meter widths for the effective width, in tiers
+// rather than a formula so the sizes are enumerable in a test. Tier
+// boundaries only ever move a bar's width, never a segment between
+// rows, so the no-migration rule holds. Width 0 (no width
+// information) keeps the pre-v3 sizes.
+func meterCells(width int) (ctx, usage int) {
+	switch {
+	case width >= 140:
+		return 12, 8
+	case width >= 100:
+		return 8, 6
+	default:
+		return 5, 4
+	}
+}
+
+// maxMeterCells bounds a bar=N pin: a misconfigured N in the
+// thousands must not become the whole row.
+const maxMeterCells = 40
+
 // meterBar renders pct as a cells-wide fill meter, rounding to the
-// nearest cell like the /usage dialog's usageBar.
+// nearest cell like the /usage dialog's usageBar. A meter that is in
+// use but rounds to zero filled cells renders ▒ in its first cell, so
+// a 2% window and an untouched one stop being the same glyphs.
 func meterBar(pct float64, cells int) string {
 	if cells <= 0 {
 		return ""
@@ -855,6 +1111,9 @@ func meterBar(pct float64, cells int) string {
 		pct = 100
 	}
 	filled := min(int(pct/100*float64(cells)+0.5), cells)
+	if filled == 0 && pct > 0 {
+		return "▒" + strings.Repeat("░", cells-1)
+	}
 	return strings.Repeat("▓", filled) + strings.Repeat("░", cells-filled)
 }
 

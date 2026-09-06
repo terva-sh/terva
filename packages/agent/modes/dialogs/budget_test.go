@@ -118,7 +118,7 @@ func budgetCases() []sized {
 			for i := range items {
 				items[i] = SettingsItem{Label: fmt.Sprintf("option %d", i), Desc: "what this option does"}
 			}
-			d.Open(items)
+			d.Open(nil, items)
 			d.MaxRows = BodyBudget(termRows, d.ChromeRows())
 			for range 3 {
 				d.HandleKey(tui.Key{Kind: tui.KeyDown})

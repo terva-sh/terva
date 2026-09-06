@@ -38,7 +38,7 @@ func TestStatusColorFallback(t *testing.T) {
 func TestContextMeterUsesThemeRamp(t *testing.T) {
 	th := Dark
 	th.MeterHigh = 201
-	atoms := segContext(StatusBarParams{Theme: th, ContextUsed: 95, ContextMax: 100})
+	atoms := segContext(StatusBarParams{Theme: th, ContextUsed: 95, ContextMax: 100}, nil)
 	if !strings.Contains(atoms[0], sgrFG(201)) {
 		t.Fatalf("95%% context should use the theme's MeterHigh: %q", atoms[0])
 	}

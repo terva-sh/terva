@@ -1134,11 +1134,23 @@ type CommandEntry struct {
 	Description string `json:"description,omitempty"`
 }
 
-// SettingsView is the settings pane: a flat list of adjustable settings. Each
-// item carries its current value + how to render/change it; the client changes
-// one with surface.action {action:"set", args:{key,value}}.
+// SettingsView is the settings pane. Items is one flat list, ordered
+// group-by-group, so a client that predates groups renders the same list it
+// always did and ignores the two group fields. A client that knows groups
+// partitions Items by SettingItem.Group; an item with an empty or undeclared
+// Group belongs in a trailing "other" bucket, not dropped — a forgotten
+// assignment must stay visible. The client changes one item with
+// surface.action {action:"set", args:{key,value}}.
 type SettingsView struct {
-	Items []SettingItem `json:"items"`
+	Groups []SettingGroup `json:"groups,omitempty"`
+	Items  []SettingItem  `json:"items"`
+}
+
+// SettingGroup names one category of the settings pane, in display order.
+type SettingGroup struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Desc  string `json:"description,omitempty"` // one line, for the category picker
 }
 
 // SettingItem is one adjustable setting.
@@ -1149,7 +1161,8 @@ type SettingItem struct {
 	Value       string          `json:"value"` // current: enum value, or "true"/"false"
 	Options     []SettingOption `json:"options,omitempty"`
 	Description string          `json:"description,omitempty"`
-	Note        string          `json:"note,omitempty"` // e.g. "per-session, not saved"
+	Note        string          `json:"note,omitempty"`  // e.g. "per-session, not saved"
+	Group       string          `json:"group,omitempty"` // a SettingGroup.ID
 }
 
 // SettingOption is one choice of an enum SettingItem.

@@ -56,22 +56,24 @@ func runReplayMode(ctx context.Context, args build.Args, version string) error {
 	cwd, _ := os.Getwd()
 
 	iv := modes.NewInteractive(modes.InteractiveConfig{
-		Terminal:            tui.NewProcTerm(),
-		Theme:               theme,
-		ThemeName:           initialCfg.Theme,
-		InlineImagesEnabled: initialCfg.InlineImagesEnabled,
-		StatusLineRows:      initialCfg.StatusLineRows(),
-		StatusScripts:       statusScriptsForTUI(initialCfg),
-		SettingsStore:       configSettingsStore{},
-		Model:               info.Model,
-		Provider:            info.Provider,
-		CWD:                 cwd,
-		TervaHome:           config.TervaHome(),
-		AuthStore:           config.AuthStoreFor(),
-		Version:             version,
-		Ready:               false, // read-only replay: no prompting, the transport replaces the turn loop
-		Carrier:             carrier,
-		CarrierSession:      info.ID,
+		Terminal:                 tui.NewProcTerm(),
+		Theme:                    theme,
+		ThemeName:                initialCfg.Theme,
+		InlineImagesEnabled:      initialCfg.InlineImagesEnabled,
+		StatusLineRows:           initialCfg.StatusLineRows(),
+		StatusLineMaxWidth:       initialCfg.StatusLineMaxWidth(),
+		StatusLineReserveBusyRow: initialCfg.StatusLineReserveBusyRow(),
+		StatusScripts:            statusScriptsForTUI(initialCfg),
+		SettingsStore:            configSettingsStore{},
+		Model:                    info.Model,
+		Provider:                 info.Provider,
+		CWD:                      cwd,
+		TervaHome:                config.TervaHome(),
+		AuthStore:                config.AuthStoreFor(),
+		Version:                  version,
+		Ready:                    false, // read-only replay: no prompting, the transport replaces the turn loop
+		Carrier:                  carrier,
+		CarrierSession:           info.ID,
 		// Session/control closures are intentionally omitted: they are all
 		// nil-guarded, so their slash commands degrade to a no-op in a replay.
 	})

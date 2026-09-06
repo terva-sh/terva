@@ -50,7 +50,7 @@ func findSettingsItem(items []dialogs.SettingsItem, key string) (dialogs.Setting
 func TestDaemonSettingsReflectSurface(t *testing.T) {
 	i := newApprovalTestInteractive(newFakeCarrier())
 
-	items := i.daemonSettingsItems()
+	_, items := i.daemonSettingsItems()
 	approval, ok := findSettingsItem(items, "approval")
 	if !ok {
 		t.Fatal("want an approval row when the settings surface carries one")
@@ -74,7 +74,7 @@ func TestDaemonSettingsAbsentWhenSurfaceUnavailable(t *testing.T) {
 	c.surfErr = errors.New("daemon gone")
 	i := newApprovalTestInteractive(c)
 
-	if items := i.daemonSettingsItems(); len(items) != 0 {
+	if _, items := i.daemonSettingsItems(); len(items) != 0 {
 		t.Errorf("unreadable settings surface → no rows, got %d", len(items))
 	}
 }

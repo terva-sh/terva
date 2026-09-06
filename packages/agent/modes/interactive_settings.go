@@ -32,35 +32,76 @@ func onOff(v bool) string {
 }
 
 func (i *Interactive) openSettingsDialog() {
-	items := i.daemonSettingsItems()
-	// TUI-local widgets the generic surface can't drive: the theme picker needs
-	// on-disk + extension theme discovery the daemon's fixed enum lacks, and the
-	// status-line layout is a terminal-only concern.
-	items = append(items, i.themeSettingsItem())
-	items = append(items, i.statusLineSettingsItems()...)
-	i.settingsDialog.Open(items)
+	groups, items := i.settingsContent()
+	i.settingsDialog.Open(groups, items)
+}
+
+// refreshSettingsDialog re-reads the surface into the open dialog after a
+// change landed. A toggle can add or remove rows — auto_swarm on brings its
+// nudge and external-workers children with it — and before this the new rows
+// appeared only on the next /settings. The dialog keeps its place by (group,
+// key), so the cursor does not jump when the list grows under it.
+func (i *Interactive) refreshSettingsDialog() {
+	if !i.settingsDialog.Active() {
+		return
+	}
+	groups, items := i.settingsContent()
+	i.settingsDialog.Reopen(groups, items)
+}
+
+// settingsContent assembles the pane: the daemon's groups and items, with the
+// TUI-local widgets the generic surface cannot drive. The theme picker needs
+// on-disk + extension theme discovery the daemon's fixed enum lacks, so it
+// replaces the wire row in place and inherits its category — the daemon owns
+// the taxonomy, and a local widget must not invent a home in it. The
+// status-line category is TUI-local outright: a terminal layout has no
+// business on a wire the web reads too.
+func (i *Interactive) settingsContent() ([]dialogs.SettingsGroup, []dialogs.SettingsItem) {
+	groups, items := i.daemonSettingsItems()
+	localTheme := false
+	for idx, it := range items {
+		if it.Key == "theme" {
+			items[idx] = i.themeSettingsItem(it.Group)
+			localTheme = true
+			break
+		}
+	}
+	if !localTheme {
+		// No wire row to inherit from: an unreadable surface, or a daemon that
+		// stopped emitting theme. The picker is local and still works, so it
+		// goes in ungrouped rather than disappearing, and the trailing bucket
+		// makes the missing category visible.
+		items = append(items, i.themeSettingsItem(""))
+	}
+	if status := i.statusLineSettingsItems(); len(status) > 0 {
+		groups = append(groups, statusLineSettingsGroup())
+		items = append(items, status...)
+	}
+	return groups, items
 }
 
 // daemonSettingsItems renders the daemon settings surface — the single source
-// of truth the web renders too — into dialog rows. Every config setting flows
-// through here, so a new item in workspace_settings.go appears in the TUI with
-// no change here. "theme" is dropped: the TUI shows its own richer picker.
-func (i *Interactive) daemonSettingsItems() []dialogs.SettingsItem {
+// of truth the web renders too — into dialog groups and rows. Every config
+// setting flows through here, so a new item in workspace_settings.go appears
+// in the TUI with no change here. It maps the wire faithfully, the "theme" row
+// included; settingsContent is where the local picker takes that row's place.
+func (i *Interactive) daemonSettingsItems() ([]dialogs.SettingsGroup, []dialogs.SettingsItem) {
 	if i.cfg.Carrier == nil {
-		return nil // no workspace bound: the daemon owns settings
+		return nil, nil // no workspace bound: the daemon owns settings
 	}
 	sf, err := i.cfg.Carrier.Surface(context.Background(), i.carrierSession(), "settings")
 	if err != nil || sf.Settings == nil {
-		return nil
+		return nil, nil
+	}
+	groups := make([]dialogs.SettingsGroup, 0, len(sf.Settings.Groups))
+	for _, g := range sf.Settings.Groups {
+		groups = append(groups, dialogs.SettingsGroup{ID: g.ID, Label: g.Label, Desc: g.Desc})
 	}
 	items := make([]dialogs.SettingsItem, 0, len(sf.Settings.Items))
 	for _, it := range sf.Settings.Items {
-		if it.Key == "theme" {
-			continue // rendered locally by themeSettingsItem (theme discovery)
-		}
 		items = append(items, wireToSettingsItem(it))
 	}
-	return items
+	return groups, items
 }
 
 // wireToSettingsItem maps one settings-surface item to a dialog row: an enum
@@ -72,6 +113,7 @@ func wireToSettingsItem(it ctrlproto.SettingItem) dialogs.SettingsItem {
 		Label: it.Label,
 		Desc:  it.Description,
 		Hint:  it.Note,
+		Group: it.Group,
 	}
 	if it.Type == "enum" {
 		si.Options = make([]dialogs.SettingsOption, len(it.Options))
@@ -90,7 +132,7 @@ func wireToSettingsItem(it ctrlproto.SettingItem) dialogs.SettingsItem {
 // themeSettingsItem builds the TUI-local theme picker from the on-disk +
 // extension theme catalog — discovery the daemon's fixed theme enum can't see.
 // It also self-heals a stale/removed theme name back to "auto".
-func (i *Interactive) themeSettingsItem() dialogs.SettingsItem {
+func (i *Interactive) themeSettingsItem(group string) dialogs.SettingsItem {
 	themeName := i.cfg.ThemeName
 	if themeName == "" {
 		themeName = "auto"
@@ -121,6 +163,7 @@ func (i *Interactive) themeSettingsItem() dialogs.SettingsItem {
 		Desc:    i18n.T("choose a theme from $TERVA_HOME/themes or a loaded extension"),
 		Options: options,
 		Choice:  choice,
+		Group:   group,
 	}
 }
 

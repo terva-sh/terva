@@ -822,6 +822,18 @@ type StatusLineConfig struct {
 	// of segment IDs. See the SegmentID constants in packages/tui.
 	Rows [][]string `json:"rows,omitempty"`
 
+	// MaxWidth caps the bar's content width in columns. On a terminal
+	// wider than the cap the rows lay out inside min(cols, MaxWidth)
+	// instead of running to the far edge. nil means the built-in
+	// default (DefaultStatusLineMaxWidth); an explicit 0 (or any value
+	// <= 0) means uncapped, the pre-v3 behaviour.
+	MaxWidth *int `json:"max_width,omitempty"`
+
+	// ReserveBusyRow keeps the busy line's row present (blank) while
+	// idle, trading one row of chat height for zero vertical motion at
+	// turn boundaries. Default off: the busy row is transient.
+	ReserveBusyRow bool `json:"reserve_busy_row,omitempty"`
+
 	// Scripts defines user-supplied status segments: each named script
 	// runs on a coalesced trigger (turn end, /cd, once a minute),
 	// receives a JSON session snapshot on stdin, and its first stdout
@@ -858,6 +870,35 @@ type StatusLineScript struct {
 // differently — the class docs/practices/06-operating-and-evidence.md calls out.
 // A new reader of LazyTools should call this rather than add a fifth spelling.
 func (c Config) LazyToolsOn() bool { return c.LazyTools == nil || *c.LazyTools }
+
+// DefaultStatusLineMaxWidth is the status bar's content-width cap when
+// status_line.max_width is unset. 140 rather than the proposal's 120
+// placeholder, judged against real renders at 330 columns (2026-09-04).
+// 140 is the narrowest default that reaches the 12/8 meter tier; under
+// 120 that tier is unreachable at any terminal size without a manual
+// max_width. It also leaves row 2 ~26 cells of slack where 120 left ~8.
+// See docs/proposals/tui-status-line-v3.md.
+const DefaultStatusLineMaxWidth = 140
+
+// StatusLineMaxWidth resolves status_line.max_width: the default when
+// unset, 0 (uncapped) when the user wrote 0 or a negative value. The
+// default lives here and nowhere else, per the LazyToolsOn rule.
+func (c Config) StatusLineMaxWidth() int {
+	if c.StatusLine == nil || c.StatusLine.MaxWidth == nil {
+		return DefaultStatusLineMaxWidth
+	}
+	if v := *c.StatusLine.MaxWidth; v > 0 {
+		return v
+	}
+	return 0
+}
+
+// StatusLineReserveBusyRow reports whether the status bar keeps a
+// blank busy row while idle (nil-safe on the optional StatusLine
+// block).
+func (c Config) StatusLineReserveBusyRow() bool {
+	return c.StatusLine != nil && c.StatusLine.ReserveBusyRow
+}
 
 // StatusLineRows returns the configured status-bar row layout, or nil
 // when unset (nil-safe on the optional StatusLine block).

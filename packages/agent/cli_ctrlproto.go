@@ -353,17 +353,19 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 	// running TUI (the legacy entry point uses the same pattern).
 	var iv *modes.Interactive
 	iv = modes.NewInteractive(modes.InteractiveConfig{
-		Terminal:            term,
-		Theme:               experienceTheme(theme, r.Experience),
-		ThemeName:           initialCfg.Theme,
-		InlineImagesEnabled: initialCfg.InlineImagesEnabled,
-		StatusLineRows:      initialCfg.StatusLineRows(),
-		StatusScripts:       statusScriptsForTUI(initialCfg),
-		SettingsStore:       configSettingsStore{},
-		Model:               bootModel,
-		Provider:            bootProvider,
-		Reasoning:           r.Reasoning,
-		AuthMethod:          r.AuthMethod,
+		Terminal:                 term,
+		Theme:                    experienceTheme(theme, r.Experience),
+		ThemeName:                initialCfg.Theme,
+		InlineImagesEnabled:      initialCfg.InlineImagesEnabled,
+		StatusLineRows:           initialCfg.StatusLineRows(),
+		StatusLineMaxWidth:       initialCfg.StatusLineMaxWidth(),
+		StatusLineReserveBusyRow: initialCfg.StatusLineReserveBusyRow(),
+		StatusScripts:            statusScriptsForTUI(initialCfg),
+		SettingsStore:            configSettingsStore{},
+		Model:                    bootModel,
+		Provider:                 bootProvider,
+		Reasoning:                r.Reasoning,
+		AuthMethod:               r.AuthMethod,
 		// $TERVA_HOME/models.json path for the Ctrl+E model editor — a local
 		// file the editor reads/writes directly, no wire round-trip.
 		UserModelsPath: UserModelsPath(),

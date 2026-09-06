@@ -261,15 +261,25 @@ func TestInteractiveDialogRegistryRoundTrip(t *testing.T) {
 	h.term.Type("\x03") // Ctrl+C closes via the entry's ctrlC hook
 	h.waitGone("── model")
 
-	// The settings body is taller than the 24-row screen; the scroll
-	// window must keep the header and the first (cursor) item visible
-	// and advertise the clipped remainder. The first item is the daemon
-	// surface's first row (generic render), then the TUI-local widgets.
+	// Settings is two-level: the category picker, then one category's
+	// items. Esc unwinds a level rather than closing, and the registry's
+	// Ctrl+C still closes from anywhere in the stack.
 	h.term.Type("/settings\r")
 	h.waitText("── settings")
+	h.waitText("other settings") // a category row; the items are one level down
+	// The status-line category is nine toggles with descriptions, so it
+	// still outruns a 24-row screen: the window keeps the cursor item
+	// visible and advertises the clipped remainder.
+	h.term.Type("\r")
+	h.waitText("status: ")
+	h.waitText("more below")
+	h.term.Type("\x1b") // Esc goes back to the picker, it does not close
+	h.waitText("other settings")
+	// Down one category and in: the daemon surface's rows, with the
+	// TUI-local theme picker standing in for the wire's theme row.
+	h.term.Type("\x1b[B\r")
 	h.waitText("Approval mode")
 	h.waitText("color theme")
-	h.waitText("more below")
 	h.term.Type("\x03")
 	h.waitGone("── settings")
 }

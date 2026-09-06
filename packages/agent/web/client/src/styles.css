@@ -255,7 +255,14 @@ body {
 .wt-footnote { font-size: var(--fs-note); color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; }
 
 /* settings pane */
-.settings-body { padding: var(--pad-pane); display: flex; flex-direction: column; gap: 14px; }
+/* The gap here separates GROUPS; .set-group carries the 14px that used to sit
+   between rows, so an ungrouped view (one bare section) looks exactly as it
+   did before the pane grew headings. */
+.settings-body { padding: var(--pad-pane); display: flex; flex-direction: column; gap: 22px; }
+.set-group { display: flex; flex-direction: column; gap: 14px; }
+.set-group-head { display: flex; flex-direction: column; gap: 2px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.set-group-label { margin: 0; font-size: var(--fs-ui); font-weight: 600; }
+.set-group-desc { font-size: var(--fs-note); color: var(--muted); }
 .set-row { display: flex; flex-direction: column; gap: 3px; }
 /* overflow-x clip: WebKit counts a select's untruncated option text as
    scrollable overflow even once the box is clamped, which let the whole pane

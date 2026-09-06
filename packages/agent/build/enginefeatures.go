@@ -24,9 +24,14 @@ import (
 // EngineFeature is one toggleable loop behavior. Title and Desc are declared
 // with i18n.M (init time, before i18n.Configure) and translated at render.
 type EngineFeature struct {
-	ID      string
-	Title   string
-	Desc    string
+	ID    string
+	Title string
+	Desc  string
+	// Group is the settings-pane category this feature's toggle lands in — a
+	// SettingGroup id declared in workspace's settingGroups. The settingsView
+	// loop places each feature by it instead of dumping all nine at the end,
+	// and a guard test there fails on an id no group declares.
+	Group   string
 	Default bool
 	// RequiresLazyTools hides the toggle while lazy tools are off — for a
 	// feature that is meaningless without them (the settings pane nests it
@@ -41,6 +46,7 @@ type EngineFeature struct {
 var EngineFeatures = []EngineFeature{
 	{
 		ID:                "activation_continuation",
+		Group:             "context",
 		Title:             i18n.M("Activation continuation"),
 		Desc:              i18n.M("When the agent activates a tool group and finishes its reply, automatically continue it with those tools live instead of waiting for your next message."),
 		Default:           true,
@@ -49,6 +55,7 @@ var EngineFeatures = []EngineFeature{
 	},
 	{
 		ID:    "cache_aware_compaction",
+		Group: "context",
 		Title: i18n.M("Cache-aware compaction"),
 		Desc:  i18n.M("Summarize the conversation using the prompt the provider already has cached, instead of building a separate one. Measured at 99.5% cache-served on Anthropic — the bespoke summarizer re-reads the whole conversation at full price. Turn it off to go back to the dedicated summarizer, which gets a purpose-built prompt rather than writing from inside the agent's own persona."),
 		// ON, to dogfood it. The cost side is measured and settled: 99.5%
@@ -72,6 +79,7 @@ var EngineFeatures = []EngineFeature{
 	},
 	{
 		ID:    "provider_compaction",
+		Group: "context",
 		Title: i18n.M("Let the provider compact the conversation"),
 		Desc:  i18n.M("Some backends compact a conversation themselves and hand back a replacement transcript: your messages verbatim, and one encrypted summary standing in for everything the assistant said. It is not portable — only the provider that made it can read it, so switching providers means rebuilding the conversation from the session file and compacting again. Off by default, because it is measurably more expensive: this endpoint does not use the prompt cache, so it re-reads the whole conversation at full price where the ordinary summarizer reads it from cache. Only OpenAI Codex offers it today; on every other provider this does nothing."),
 		// OFF, on a measurement, and the measurement has now been made TWICE —
@@ -157,6 +165,7 @@ var EngineFeatures = []EngineFeature{
 	},
 	{
 		ID:    "prefix_change_guard",
+		Group: "context",
 		Title: i18n.M("Offer to compact before a cache-invalidating change"),
 		Desc:  i18n.M("When something changes the prompt the provider has cached — switching model, reloading an extension — the next message silently re-reads the whole conversation at full price. Ask first, and offer to condense it while the old prompt is still cached. Needs cache-aware compaction to be on: without it, compacting costs the same full-price read as sending, so there would be nothing to offer."),
 		// Now that cache-aware compaction defaults on, this comes alive with it —
@@ -168,6 +177,7 @@ var EngineFeatures = []EngineFeature{
 	},
 	{
 		ID:    "stuck_loop_detection",
+		Group: "reliability",
 		Title: i18n.M("Detect stuck tool loops"),
 		Desc:  i18n.M("Notice when the model repeats the same tool call, or hits the same error, over and over without progress — and nudge it once to read state or change tack instead of spinning. In-band and local only: it never switches models or sends anything anywhere. The escalation half (offer to hand a stuck step to a stronger model) builds on this and ships separately."),
 		// ON. Detection + a one-turn nudge is safe — no model swap, no egress, just
@@ -181,6 +191,7 @@ var EngineFeatures = []EngineFeature{
 	},
 	{
 		ID:    "stuck_loop_escalation",
+		Group: "reliability",
 		Title: i18n.M("Escalate stuck loops to a stronger model"),
 		Desc:  i18n.M("When a tool loop keeps going after the nudge, offer to hand the stuck step to a stronger model and continue on it — the swap you'd otherwise make by hand. Requires the detector above (it's the trigger) and an escalation target in config (escalation.provider + escalation.model); with no target it does nothing. You're asked before the swap, which sends the conversation to that provider."),
 		// ON, but INERT without a configured target and a host that binds an
@@ -194,6 +205,7 @@ var EngineFeatures = []EngineFeature{
 	},
 	{
 		ID:    "prefix_divergence_recording",
+		Group: "reliability",
 		Title: i18n.M("Record cache-invalidating prompt changes"),
 		Desc:  i18n.M("Providers cache by matching the start of the prompt, so a conversation only stays cheap while each request merely APPENDS to the last. When something rebuilds the prompt instead, everything after the change is re-read at full price and nothing says so — it shows up only as a cost you cannot explain. This records what changed and where, in the session file, whenever it happens."),
 		// ON, and the argument for that is the whole point: a diagnostic that
@@ -217,6 +229,7 @@ var EngineFeatures = []EngineFeature{
 	},
 	{
 		ID:    "shell_result_context",
+		Group: "context",
 		Title: i18n.M("Show ! command results to the agent"),
 		Desc:  i18n.M("When you run a command with !, hand its output to the agent along with your next message, so you can ask about what you just ran instead of pasting it back in. The output rides one request and is never written to the conversation. Off by default because it changes where that output goes: today a ! command's result stays on this machine, and turning this on sends it to your model provider — including whatever `!env` or `!cat` happens to print."),
 		// OFF, and this one is not a taste question. Every other feature here is
@@ -238,6 +251,7 @@ var EngineFeatures = []EngineFeature{
 	},
 	{
 		ID:    "transport_recording",
+		Group: "reliability",
 		Title: i18n.M("Record which connection each request rode"),
 		Desc:  i18n.M("Some cache misses have nothing to do with the prompt: the request simply reached the provider over a fresh connection or a different edge, and landed on a machine that had never seen the conversation. This records the transport picture of each request — connection reuse, edge identifier, the provider's request id — next to its usage row, on providers that report it, so an unexplained expensive stretch can be read against how those requests physically travelled."),
 		// ON, for the prefix recorder's reason: this diagnostic's value is

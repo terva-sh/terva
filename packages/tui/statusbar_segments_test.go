@@ -10,18 +10,18 @@ import (
 
 func TestEditsSegment(t *testing.T) {
 	th := Dark
-	atoms := segEdits(StatusBarParams{Theme: th, EditsAdded: 120, EditsRemoved: 45})
+	atoms := segEdits(StatusBarParams{Theme: th, EditsAdded: 120, EditsRemoved: 45}, nil)
 	if len(atoms) != 1 || stripANSI(atoms[0]) != "Δ +120 -45" {
 		t.Fatalf("edits atom = %q", atoms)
 	}
-	if got := segEdits(StatusBarParams{Theme: th}); len(got) != 0 {
+	if got := segEdits(StatusBarParams{Theme: th}, nil); len(got) != 0 {
 		t.Fatalf("zero edits should be absent, got %q", got)
 	}
-	if got := segEdits(StatusBarParams{Theme: th, EditsAdded: 5, HideWorkspace: true}); len(got) != 0 {
+	if got := segEdits(StatusBarParams{Theme: th, EditsAdded: 5, HideWorkspace: true}, nil); len(got) != 0 {
 		t.Fatalf("edits must hide in immersive mode, got %q", got)
 	}
 	// One-sided counts drop the empty side.
-	atoms = segEdits(StatusBarParams{Theme: th, EditsAdded: 3})
+	atoms = segEdits(StatusBarParams{Theme: th, EditsAdded: 3}, nil)
 	if stripANSI(atoms[0]) != "Δ +3" {
 		t.Fatalf("added-only atom = %q", stripANSI(atoms[0]))
 	}
@@ -30,7 +30,7 @@ func TestEditsSegment(t *testing.T) {
 func TestPersonaSegment(t *testing.T) {
 	th := Dark
 	accent := ColorRGB(0x8f, 0xbc, 0xbb)
-	atoms := segPersona(StatusBarParams{Theme: th, PersonaName: "Mieli", PersonaEmoji: "🌲", PersonaAccentRGB: &accent})
+	atoms := segPersona(StatusBarParams{Theme: th, PersonaName: "Mieli", PersonaEmoji: "🌲", PersonaAccentRGB: &accent}, nil)
 	if len(atoms) != 1 || stripANSI(atoms[0]) != "🌲 Mieli" {
 		t.Fatalf("persona atom = %q", atoms)
 	}
@@ -41,42 +41,42 @@ func TestPersonaSegment(t *testing.T) {
 	// Theme status_colors override beats the accent.
 	themed := th
 	themed.StatusColors = map[string]int{"persona": 111}
-	atoms = segPersona(StatusBarParams{Theme: themed, PersonaName: "Mieli", PersonaAccentRGB: &accent})
+	atoms = segPersona(StatusBarParams{Theme: themed, PersonaName: "Mieli", PersonaAccentRGB: &accent}, nil)
 	if !strings.Contains(atoms[0], sgrFG(111)) {
 		t.Fatalf("theme override should win over the persona accent: %q", atoms[0])
 	}
 
-	if got := segPersona(StatusBarParams{Theme: th}); len(got) != 0 {
+	if got := segPersona(StatusBarParams{Theme: th}, nil); len(got) != 0 {
 		t.Fatalf("no persona should be absent, got %q", got)
 	}
 }
 
 func TestSwarmSegment(t *testing.T) {
 	th := Dark
-	if got := stripANSI(segSwarm(StatusBarParams{Theme: th, SwarmAgents: 2})[0]); got != "⛭ 2 agents" {
+	if got := stripANSI(segSwarm(StatusBarParams{Theme: th, SwarmAgents: 2}, nil)[0]); got != "⛭ 2 agents" {
 		t.Fatalf("swarm atom = %q", got)
 	}
-	if got := stripANSI(segSwarm(StatusBarParams{Theme: th, SwarmAgents: 1})[0]); got != "⛭ 1 agent" {
+	if got := stripANSI(segSwarm(StatusBarParams{Theme: th, SwarmAgents: 1}, nil)[0]); got != "⛭ 1 agent" {
 		t.Fatalf("singular swarm atom = %q", got)
 	}
-	if got := segSwarm(StatusBarParams{Theme: th}); len(got) != 0 {
+	if got := segSwarm(StatusBarParams{Theme: th}, nil); len(got) != 0 {
 		t.Fatalf("empty swarm should be absent, got %q", got)
 	}
-	if got := segSwarm(StatusBarParams{Theme: th, SwarmAgents: 3, HideWorkspace: true}); len(got) != 0 {
+	if got := segSwarm(StatusBarParams{Theme: th, SwarmAgents: 3, HideWorkspace: true}, nil); len(got) != 0 {
 		t.Fatalf("swarm must hide in immersive mode, got %q", got)
 	}
 }
 
 func TestSessionAndClockSegments(t *testing.T) {
 	th := Dark
-	if got := stripANSI(segSession(StatusBarParams{Theme: th, SessionName: "20260702-a1b2"})[0]); got != "sess 20260702-a1b2" {
+	if got := stripANSI(segSession(StatusBarParams{Theme: th, SessionName: "20260702-a1b2"}, nil)[0]); got != "sess 20260702-a1b2" {
 		t.Fatalf("session atom = %q", got)
 	}
-	if got := segSession(StatusBarParams{Theme: th}); len(got) != 0 {
+	if got := segSession(StatusBarParams{Theme: th}, nil); len(got) != 0 {
 		t.Fatalf("no session name should be absent, got %q", got)
 	}
 	now := time.Date(2026, 7, 2, 9, 5, 0, 0, time.UTC)
-	if got := stripANSI(segClock(StatusBarParams{Theme: th, Now: now})[0]); got != "09:05" {
+	if got := stripANSI(segClock(StatusBarParams{Theme: th, Now: now}, nil)[0]); got != "09:05" {
 		t.Fatalf("clock atom = %q", got)
 	}
 }

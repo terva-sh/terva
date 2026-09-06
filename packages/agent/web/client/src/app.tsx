@@ -361,13 +361,6 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   const [modelParams, setModelParams] = useState<ModelParamsView | null>(null)
   const [modelParamsBusy, setModelParamsBusy] = useState(false)
   const [modelParamsErr, setModelParamsErr] = useState('')
-  // Set when the params form is CREATING rather than editing, in which case
-  // modelParams describes the clone source rather than the model being made.
-  const [modelAdding, setModelAdding] = useState(false)
-  // The reachable set from models.list, for the add form's provider row. Not
-  // derived from `models`: a provider with no models yet has no row there, and
-  // it is the one an add form is most needed for.
-  const [reachableProviders, setReachableProviders] = useState<string[]>([])
   // Pane host (surfaces): context/usage/extension panels in a right rail.
   const [paneOpen, setPaneOpen] = useState(false)
   const [surfaces, setSurfaces] = useState<SurfaceMeta[]>([])
@@ -450,7 +443,6 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       const res = await c.send<ModelsResult>('models.list', null, curRef.current)
       setModels(res.models ?? [])
       setLadders(res.reasoning_ladders ?? {})
-      setReachableProviders(res.providers ?? [])
     } catch {
       /* control group optional */
     }
@@ -1200,7 +1192,6 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         const res = await c.send<ModelsResult>('models.list', null, curRef.current)
         setModels(res.models ?? [])
         setLadders(res.reasoning_ladders ?? {})
-        setReachableProviders(res.providers ?? [])
       } catch {
         /* control group optional */
       }
@@ -1604,7 +1595,6 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           const res = await c.send<ModelsResult>('models.list', null, curRef.current)
           setModels(res.models ?? [])
           setLadders(res.reasoning_ladders ?? {})
-          setReachableProviders(res.providers ?? [])
         } catch {
           /* a models refresh failure does not undo the login */
         }
@@ -1678,59 +1668,11 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     setModelParamsErr('')
     try {
       const v = await c.send<ModelParamsView>('models.params', { provider, model: id }, '')
-      setModelAdding(false)
       setModelParams(v)
     } catch (e) {
       notify.error(authMessage(e))
     }
   }, [])
-
-  // Clone-from: the same descriptor call, opened in create mode. The form seeds
-  // its boxes from each spec's `default` rather than its `value`, which is what
-  // makes the copy carry the source's real numbers instead of its (usually
-  // empty) models.json pins.
-  const openModelAdd = useCallback(async (provider: string, id: string) => {
-    const c = clientRef.current
-    if (!c) return
-    setModelParamsErr('')
-    try {
-      const v = await c.send<ModelParamsView>('models.params', { provider, model: id }, '')
-      setModelAdding(true)
-      setModelParams(v)
-    } catch (e) {
-      notify.error(authMessage(e))
-    }
-  }, [])
-
-  // models.add, not models.params.set. That method refuses an id it cannot
-  // resolve, and this one refuses an id it can: the guards are inverses, and a
-  // create flag on the one verb would have to switch off the check that stops an
-  // edit landing on the wrong provider's copy of a shared id.
-  const addModel = useCallback(
-    async (provider: string, model: string, values: Record<string, string>) => {
-      const c = clientRef.current
-      if (!c) return
-      setModelParamsBusy(true)
-      setModelParamsErr('')
-      try {
-        await c.send('models.add', { provider, model, values }, '')
-        setModelParams(null)
-        setModelAdding(false)
-        // The new model has to reach the picker we are returning to, and its
-        // provider may be one that had no rows until now.
-        await reloadModels()
-        notify.ok(t('added %s', `${provider}/${model}`))
-      } catch (e) {
-        // Kept open with the daemon's own words. It owns the two refusals the
-        // form cannot make itself, a duplicate id and an unreachable provider,
-        // and closing the form would take the reason away with the typing.
-        setModelParamsErr(authMessage(e))
-      } finally {
-        setModelParamsBusy(false)
-      }
-    },
-    [reloadModels],
-  )
 
   const saveModelParams = useCallback(
     async (values: Record<string, string>) => {
@@ -2478,9 +2420,6 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
               onSave={saveModelParams}
               onReset={resetModelParams}
               onCancel={() => setModelParams(null)}
-              adding={modelAdding}
-              providers={reachableProviders}
-              onAdd={addModel}
             />
           </div>
         </div>
@@ -2507,7 +2446,6 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           onToggleHidden={hideModel}
           onSetDefault={setDefaultModel}
           onEdit={openModelParams}
-          onAdd={openModelAdd}
           onTiers={openModelTiers}
           tierSummaries={tierSummaries}
           onClose={() => setPickerOpen(false)}

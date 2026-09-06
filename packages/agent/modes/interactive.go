@@ -74,6 +74,16 @@ type InteractiveConfig struct {
 	// defaults. User-config only (never project-supplied).
 	StatusLineRows [][]string
 
+	// StatusLineMaxWidth is the resolved status_line.max_width cap in
+	// columns: the bar lays out inside min(cols, cap). 0 means
+	// uncapped. The default resolves in packages/agent/config
+	// (StatusLineMaxWidth), not here.
+	StatusLineMaxWidth int
+
+	// StatusLineReserveBusyRow mirrors status_line.reserve_busy_row:
+	// keep the busy line's row blank while idle instead of dropping it.
+	StatusLineReserveBusyRow bool
+
 	// StatusScripts are the user's status_line.scripts, keyed by
 	// (lowercased) segment name. Code execution from config: the cli
 	// only populates this from the trusted user layer — same rule as

@@ -106,6 +106,64 @@ func localizeOptions(opts []ctrlproto.SettingOption) []ctrlproto.SettingOption {
 	return out
 }
 
+// settingGroups declares the pane's categories, in display order — the one
+// taxonomy both clients render (docs/proposals/settings-groups.md). Order is
+// consequence: security first, cosmetics late. Labels and descriptions are
+// declared with i18n.M and translated at render by localizeGroups. The TUI
+// appends one local group (the status line) after these; it never rides the
+// wire because a terminal-only layout has no business there.
+var settingGroups = []ctrlproto.SettingGroup{
+	{ID: "security", Label: i18n.M("Security & trust"), Desc: i18n.M("Approval gating, the tool-call classifier, and workspace trust.")},
+	{ID: "model", Label: i18n.M("Model & thinking"), Desc: i18n.M("Reasoning depth, thinking display and record, and sampling temperature.")},
+	{ID: "context", Label: i18n.M("Context & prompt"), Desc: i18n.M("What rides the prompt, and how the transcript condenses as it fills.")},
+	{ID: "agents", Label: i18n.M("Delegation & panels"), Desc: i18n.M("Background sub-agents, external workers, and deliberation panels.")},
+	{ID: "reliability", Label: i18n.M("Reliability & diagnostics"), Desc: i18n.M("Stuck-loop handling, and records of cache losses and transports.")},
+	{ID: "interface", Label: i18n.M("Interface"), Desc: i18n.M("Language, theme, and how the clients present files, images, and suggestions.")},
+}
+
+// localizeGroups is localizeOptions for the group declarations.
+func localizeGroups() []ctrlproto.SettingGroup {
+	out := make([]ctrlproto.SettingGroup, len(settingGroups))
+	for i, g := range settingGroups {
+		out[i] = ctrlproto.SettingGroup{ID: g.ID, Label: i18n.T(g.Label), Desc: i18n.T(g.Desc)}
+	}
+	return out
+}
+
+// orderItemsByGroup stable-sorts items into settingGroups' declared order, so
+// the flat array a groups-blind client renders reads group-by-group. Stable,
+// so construction order survives within a group — that is what keeps a
+// conditional child (auto_swarm_nudge, raati_spare_host) directly under its
+// parent. An undeclared or empty Group sorts last, visibly, not silently
+// dropped; the guard test fails on one before it ships.
+func orderItemsByGroup(items []ctrlproto.SettingItem) []ctrlproto.SettingItem {
+	rank := make(map[string]int, len(settingGroups))
+	for i, g := range settingGroups {
+		rank[g.ID] = i
+	}
+	groupRank := func(it ctrlproto.SettingItem) int {
+		if r, ok := rank[it.Group]; ok {
+			return r
+		}
+		return len(settingGroups)
+	}
+	slices.SortStableFunc(items, func(a, b ctrlproto.SettingItem) int {
+		return groupRank(a) - groupRank(b)
+	})
+	return items
+}
+
+// featureItem projects one engine feature into its settings toggle — the
+// single shape both the beside-lazy_tools placement and the trailing loop use.
+func featureItem(cfg config.Config, f build.EngineFeature) ctrlproto.SettingItem {
+	return ctrlproto.SettingItem{
+		Key: f.ID, Group: f.Group, Label: i18n.T(f.Title), Type: "bool",
+		Value:       boolStr(build.EngineFeatureOn(cfg.EngineFeatures, f)),
+		Description: i18n.T(f.Desc),
+		Note:        i18n.T("applies live to every session"),
+	}
+}
+
 // settingsView builds the settings pane for this session.
 func (s *wsSession) settingsView() ctrlproto.SettingsView {
 	cfg, _ := config.LoadConfig()
@@ -120,7 +178,7 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 
 	items := []ctrlproto.SettingItem{
 		{
-			Key: "approval", Label: i18n.T("Approval mode"), Type: "enum",
+			Key: "approval", Group: "security", Label: i18n.T("Approval mode"), Type: "enum",
 			Value: approval, Options: localizeOptions(approvalOptions),
 			Description: i18n.T("How tool calls are gated for this session."),
 			Note:        i18n.T("per-session — not saved (a security posture, like the TUI)"),
@@ -139,58 +197,91 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 		// so no client can offer a change, and settingsAction refuses the key
 		// outright as the second lock.
 		{
-			Key: "classifier", Label: i18n.T("Approval classifier"), Type: "enum",
+			Key: "classifier", Group: "security", Label: i18n.T("Approval classifier"), Type: "enum",
 			Value: classifier, Options: []ctrlproto.SettingOption{{Value: classifier, Label: classifier}},
 			Description: i18n.T("Whether a model screens the tool calls that would otherwise prompt you."),
 			Note:        i18n.T("read-only here — set classifier.mode in your user config.json"),
 		},
 		{
-			Key: "trust", Label: i18n.T("Trust this workspace"), Type: "bool",
+			Key: "trust", Group: "security", Label: i18n.T("Trust this workspace"), Type: "bool",
 			Value:       boolStr(s.trusted.Load()),
 			Description: i18n.T("Load this directory's project extensions, skills, and context files. Off is the safe default for a cloned repo: its code cannot run and its instructions cannot steer the agent."),
 			Note:        i18n.T("this directory only — recorded outside the project, applies live to every session"),
 		},
 		{
-			Key: "reasoning", Label: i18n.T("Thinking"), Type: "enum",
+			Key: "reasoning", Group: "model", Label: i18n.T("Thinking"), Type: "enum",
 			Value: cfg.Reasoning, Options: localizeOptions(reasoningOptions),
 			Description: i18n.T("Reasoning effort. Applies live and becomes the default for new sessions."),
 		},
 		{
-			Key: "show_reasoning", Label: i18n.T("Show thinking"), Type: "bool",
+			Key: "show_reasoning", Group: "model", Label: i18n.T("Show thinking"), Type: "bool",
 			Value:       boolStr(cfg.ShowReasoning),
 			Description: i18n.T("Show what the model is working on, on its own line, while it works. Nothing is written to the session file."),
 			Note:        i18n.T("asks the providers that must be asked (openai-codex, google) — anthropic sends thinking unbidden and shows it either way"),
 		},
 		{
-			Key: "reasoning_summary", Label: i18n.T("Record thinking"), Type: "enum",
+			Key: "reasoning_summary", Group: "model", Label: i18n.T("Record thinking"), Type: "enum",
 			Value: cfg.ReasoningSummaryMode(), Options: localizeOptions(reasoningSummaryOptions),
 			Description: i18n.T("Persist a readable summary of the model's reasoning, so an unattended run can be reviewed for why it acted."),
 			Note:        i18n.T("every provider that sends thinking — with it off, anthropic thinking is dropped from the session entirely"),
 		},
 		{
-			Key: "auto_title", Label: i18n.T("Auto-title sessions"), Type: "bool",
+			Key: "auto_title", Group: "interface", Label: i18n.T("Auto-title sessions"), Type: "bool",
 			Value:       boolStr(cfg.AutoTitle != nil && *cfg.AutoTitle),
 			Description: i18n.T("Generate a short session title with a small model call instead of the first message line."),
 		},
 		{
-			Key: "language", Label: i18n.T("Language"), Type: "enum",
+			Key: "language", Group: "interface", Label: i18n.T("Language"), Type: "enum",
 			Value: i18n.ActiveLang(), Options: localeOptions(),
 			Description: i18n.T("UI language. Switches live for every open tab and is saved as the default."),
 		},
 		{
-			Key: "auto_swarm", Label: i18n.T("Background sub-agents"), Type: "bool",
+			Key: "auto_swarm", Group: "agents", Label: i18n.T("Background sub-agents"), Type: "bool",
 			Value:       boolStr(autoSwarm),
 			Description: i18n.T("Let the agent spawn background sub-agents (swarm_spawn) for independent parallel sub-tasks."),
 			Note:        i18n.T("applies to new sessions"),
 		},
-		{
-			Key: "lazy_tools", Label: i18n.T("Lazy tool loading"), Type: "bool",
-			Value:       boolStr(cfg.LazyToolsOn()),
-			Description: i18n.T("Advertise only the core coding tools at first and let the agent load extension/MCP tool groups on demand (activate_tools), trimming the tool schemas that fill context every turn."),
+	}
+	// The nudge is meaningful only when the tool is on (Toggle 2 nested under
+	// Toggle 1); it re-appears when auto_swarm flips on (the surface
+	// re-fetches). Placed directly after its parent, so the nesting survives
+	// inside the agents group when orderItemsByGroup runs.
+	if autoSwarm {
+		items = append(items, ctrlproto.SettingItem{
+			Key: "auto_swarm_nudge", Group: "agents", Label: i18n.T("Proactive delegation"), Type: "bool",
+			Value:       boolStr(cfg.AutoSwarmNudge == nil || *cfg.AutoSwarmNudge),
+			Description: i18n.T("Nudge the agent to proactively split work across sub-agents. Off keeps the tool but lets the agent decide when to use it."),
 			Note:        i18n.T("applies to new sessions"),
-		},
+		})
+		// External workers nest under auto_swarm the same way the nudge does — the
+		// backend param lives on swarm_spawn, so it is meaningless until the tool
+		// exists. A separate, stronger toggle: these sub-agents are FOREIGN
+		// processes that authenticate themselves and run outside terva's policy.
+		items = append(items, ctrlproto.SettingItem{
+			Key: "external_workers", Group: "agents", Label: i18n.T("External agent workers"), Type: "bool",
+			Value:       boolStr(cfg.ExternalWorkersEnabled != nil && *cfg.ExternalWorkersEnabled),
+			Description: i18n.T("Let swarm_spawn hand a task to an external coding agent (e.g. Claude Code) instead of a native sub-agent. The worker runs in its own checkout with its own tools and credentials, and reports its result back the same way."),
+			Note:        i18n.T("applies live per spawn"),
+		})
+	}
+	items = append(items, ctrlproto.SettingItem{
+		Key: "lazy_tools", Group: "context", Label: i18n.T("Lazy tool loading"), Type: "bool",
+		Value:       boolStr(cfg.LazyToolsOn()),
+		Description: i18n.T("Advertise only the core coding tools at first and let the agent load extension/MCP tool groups on demand (activate_tools), trimming the tool schemas that fill context every turn."),
+		Note:        i18n.T("applies to new sessions"),
+	})
+	// A lazy-tools-bound feature nests under the lazy_tools toggle the way the
+	// nudge nests under auto_swarm: hidden while meaningless, re-appearing when
+	// the parent flips on (the surface re-fetches). Placed here, directly after
+	// its parent, so the nesting survives inside the context group.
+	for _, f := range build.EngineFeatures {
+		if f.RequiresLazyTools && cfg.LazyToolsOn() {
+			items = append(items, featureItem(cfg, f))
+		}
+	}
+	items = append(items, []ctrlproto.SettingItem{
 		{
-			Key: "next_step", Label: i18n.T("Suggest a next step automatically"), Type: "bool",
+			Key: "next_step", Group: "interface", Label: i18n.T("Suggest a next step automatically"), Type: "bool",
 			Value: boolStr(cfg.NextStepSuggestions),
 			// The cost is stated rather than left to be inferred: this is the
 			// one setting in the pane that spends money on its own initiative,
@@ -204,121 +295,95 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 			Note:        i18n.T("off by default — applies live"),
 		},
 		{
-			Key: "web_stage", Label: i18n.T("Stage surface"), Type: "bool",
+			Key: "web_stage", Group: "interface", Label: i18n.T("Stage surface"), Type: "bool",
 			Value:       boolStr(cfg.WebStage),
 			Description: i18n.T("Serve the Stage immersive chat/play surface at /stage/ (the config twin of --web-stage). Off by default while Stage stabilizes."),
 			Note:        i18n.T("takes effect on the next web launch"),
 		},
 		{
-			Key: "auto_compact", Label: i18n.T("Auto-condense"), Type: "enum",
+			Key: "auto_compact", Group: "context", Label: i18n.T("Auto-condense"), Type: "enum",
 			Value: autoCompactValue(cfg), Options: localizeOptions(autoCompactOptions),
 			Description: i18n.T("When to automatically condense the transcript as the context window fills."),
 			Note:        i18n.T("applies live to every session"),
 		},
 		{
-			Key: "temperature", Label: i18n.T("Temperature"), Type: "enum",
+			Key: "temperature", Group: "model", Label: i18n.T("Temperature"), Type: "enum",
 			Value:       temperatureValue(cfg),
 			Options:     localizeOptions(optionsWithCurrent(temperatureOptions, temperatureValue(cfg))),
 			Description: i18n.T("Sampling temperature (0–2). Higher is more varied; the default defers to the model."),
 			Note:        i18n.T("applies to new sessions"),
 		},
 		{
-			Key: "theme", Label: i18n.T("Theme"), Type: "enum",
+			Key: "theme", Group: "interface", Label: i18n.T("Theme"), Type: "enum",
 			Value:       themeValue(cfg),
 			Options:     localizeOptions(optionsWithCurrent(themeOptions, themeValue(cfg))),
 			Description: i18n.T("Color theme for the terminal UI."),
 			Note:        i18n.T("applies to new sessions"),
 		},
 		{
-			Key: "inline_images", Label: i18n.T("Inline images"), Type: "bool",
+			Key: "inline_images", Group: "interface", Label: i18n.T("Inline images"), Type: "bool",
 			Value:       boolStr(cfg.InlineImagesEnabled == nil || *cfg.InlineImagesEnabled),
 			Description: i18n.T("Render images inline in terminals that support an image protocol."),
 			Note:        i18n.T("applies to new sessions"),
 		},
 		{
-			Key: "recursive_file_suggest", Label: i18n.T("Recursive file search"), Type: "bool",
+			Key: "recursive_file_suggest", Group: "interface", Label: i18n.T("Recursive file search"), Type: "bool",
 			Value:       boolStr(cfg.RecursiveFileSuggest == nil || *cfg.RecursiveFileSuggest),
 			Description: i18n.T("Fuzzy-search the whole tree in the @-mention file picker instead of browsing one directory at a time."),
 			Note:        i18n.T("applies to new sessions"),
 		},
 		{
-			Key: "respect_gitignore", Label: i18n.T("Respect .gitignore"), Type: "bool",
+			Key: "respect_gitignore", Group: "interface", Label: i18n.T("Respect .gitignore"), Type: "bool",
 			Value:       boolStr(cfg.RespectGitignore == nil || *cfg.RespectGitignore),
 			Description: i18n.T("Hide git-ignored files from the @-mention file picker."),
 			Note:        i18n.T("applies to new sessions"),
 		},
 		{
-			Key: "lore", Label: i18n.T("Lore (keyed context)"), Type: "bool",
+			Key: "lore", Group: "context", Label: i18n.T("Lore (keyed context)"), Type: "bool",
 			Value:       boolStr(cfg.Lore == nil || *cfg.Lore),
 			Description: i18n.T("Discover and inject keyword-triggered context entries (lore) into the prompt when their trigger keys appear. Off is the persistent form of --no-lore."),
 			Note:        i18n.T("applies to new sessions"),
 		},
 		{
-			Key: "swarm_worktrees", Label: i18n.T("Swarm worktrees"), Type: "bool",
+			Key: "swarm_worktrees", Group: "agents", Label: i18n.T("Swarm worktrees"), Type: "bool",
 			Value:       boolStr(cfg.SwarmWorktrees != nil && *cfg.SwarmWorktrees),
 			Description: i18n.T("Give each background sub-agent its own git worktree so parallel work never collides in the tree."),
 			Note:        i18n.T("applies to new sessions"),
 		},
 		{
-			Key: "core_pack_offer", Label: i18n.T("Offer the core tool pack"), Type: "bool",
+			Key: "core_pack_offer", Group: "interface", Label: i18n.T("Offer the core tool pack"), Type: "bool",
 			Value:       boolStr(!cfg.DisableCorePackOffer),
 			Description: i18n.T("Offer to install the recommended extension pack on the first run in a new workspace."),
 		},
-	}
-	// The nudge is meaningful only when the tool is on (Toggle 2 nested under
-	// Toggle 1); it re-appears when auto_swarm flips on (the surface re-fetches).
-	if autoSwarm {
-		items = append(items, ctrlproto.SettingItem{
-			Key: "auto_swarm_nudge", Label: i18n.T("Proactive delegation"), Type: "bool",
-			Value:       boolStr(cfg.AutoSwarmNudge == nil || *cfg.AutoSwarmNudge),
-			Description: i18n.T("Nudge the agent to proactively split work across sub-agents. Off keeps the tool but lets the agent decide when to use it."),
-			Note:        i18n.T("applies to new sessions"),
-		})
-		// External workers nest under auto_swarm the same way the nudge does — the
-		// backend param lives on swarm_spawn, so it is meaningless until the tool
-		// exists. A separate, stronger toggle: these sub-agents are FOREIGN
-		// processes that authenticate themselves and run outside terva's policy.
-		items = append(items, ctrlproto.SettingItem{
-			Key: "external_workers", Label: i18n.T("External agent workers"), Type: "bool",
-			Value:       boolStr(cfg.ExternalWorkersEnabled != nil && *cfg.ExternalWorkersEnabled),
-			Description: i18n.T("Let swarm_spawn hand a task to an external coding agent (e.g. Claude Code) instead of a native sub-agent. The worker runs in its own checkout with its own tools and credentials, and reports its result back the same way."),
-			Note:        i18n.T("applies live per spawn"),
-		})
-	}
+	}...)
 	// Deliberation panels, next to the other agent-capability toggles. The
 	// spare-host knob nests under the tool the way the nudge nests under
 	// auto_swarm: meaningless until convening exists, re-appearing when it
 	// flips on (the surface re-fetches).
 	items = append(items, ctrlproto.SettingItem{
-		Key: "raati_convene", Label: i18n.T("Deliberation panels (raati)"), Type: "bool",
+		Key: "raati_convene", Group: "agents", Label: i18n.T("Deliberation panels (raati)"), Type: "bool",
 		Value:       boolStr(cfg.Raati.ConveneTool),
 		Description: i18n.T("Offer the raati_convene tool, letting the agent convene a multi-model panel on a high-stakes or hard-to-reverse decision. One convening spends roughly six sub-agent model turns."),
 		Note:        i18n.T("on applies to new sessions; off refuses the next convening live"),
 	})
 	if cfg.Raati.ConveneTool {
 		items = append(items, ctrlproto.SettingItem{
-			Key: "raati_spare_host", Label: i18n.T("Panels spare this session's provider"), Type: "bool",
+			Key: "raati_spare_host", Group: "agents", Label: i18n.T("Panels spare this session's provider"), Type: "bool",
 			Value:       boolStr(cfg.Raati.SpareHost),
 			Description: i18n.T("Seat auto-resolved panels on a different provider than the session's own, when swarm_tiers or raati.level2 configure one. Panel traffic on the session's account competes for its provider-side prompt cache — a measured convening evicted the session's 200K cached context, which it then re-read at full price."),
 			Note:        i18n.T("applies to the next convening"),
 		})
 	}
 	// Engine features project into the same pane (the seam build.EngineFeatures
-	// declares). A lazy-tools-bound feature nests under the lazy_tools toggle
-	// the same way the nudge nests under auto_swarm: hidden while meaningless,
-	// re-appearing when the parent flips on (the surface re-fetches).
+	// declares), each into the settings group its declaration names. The
+	// lazy-tools-bound ones were already placed beside their parent above.
 	for _, f := range build.EngineFeatures {
-		if f.RequiresLazyTools && !cfg.LazyToolsOn() {
+		if f.RequiresLazyTools {
 			continue
 		}
-		items = append(items, ctrlproto.SettingItem{
-			Key: f.ID, Label: i18n.T(f.Title), Type: "bool",
-			Value:       boolStr(build.EngineFeatureOn(cfg.EngineFeatures, f)),
-			Description: i18n.T(f.Desc),
-			Note:        i18n.T("applies live to every session"),
-		})
+		items = append(items, featureItem(cfg, f))
 	}
-	return ctrlproto.SettingsView{Items: items}
+	return ctrlproto.SettingsView{Groups: localizeGroups(), Items: orderItemsByGroup(items)}
 }
 
 // autoCompactValue is the current auto-compact policy for the enum, defaulting

@@ -50,7 +50,7 @@ func settingsFixture() []SettingsItem {
 func TestSettingsDialogRowsFitWidth(t *testing.T) {
 	for _, width := range []int{120, 100, 80, 60, 40} {
 		d := NewSettingsDialog()
-		d.Open(settingsFixture())
+		d.Open(nil, settingsFixture())
 		got, worst := widestLine(d.Render(tui.Dark, width))
 		if got > width {
 			t.Errorf("width %d: a line painted %d cells: %q", width, got, ansiRE.ReplaceAllString(worst, ""))
@@ -63,7 +63,7 @@ func TestSettingsDialogRowsFitWidth(t *testing.T) {
 func TestSettingsOptionsViewFitsWidth(t *testing.T) {
 	for _, width := range []int{80, 60, 40} {
 		d := NewSettingsDialog()
-		d.Open(settingsFixture())
+		d.Open(nil, settingsFixture())
 		d.cursor = 1
 		d.selecting = true
 		got, worst := widestLine(d.Render(tui.Dark, width))
@@ -78,7 +78,7 @@ func TestSettingsOptionsViewFitsWidth(t *testing.T) {
 // what the row does, so losing it silently would be worse than overflowing.
 func TestSettingsLongHintMovesToOwnLineAndSurvives(t *testing.T) {
 	d := NewSettingsDialog()
-	d.Open(settingsFixture())
+	d.Open(nil, settingsFixture())
 	out := ansiRE.ReplaceAllString(strings.Join(d.Render(tui.Dark, 60), "\n"), "")
 	if !strings.Contains(out, "per-session") {
 		t.Errorf("the long hint was dropped entirely:\n%s", out)
@@ -94,7 +94,7 @@ func TestSettingsLongHintMovesToOwnLineAndSurvives(t *testing.T) {
 // must not regress into an extra line for every row.
 func TestSettingsShortHintStaysInline(t *testing.T) {
 	d := NewSettingsDialog()
-	d.Open(settingsFixture())
+	d.Open(nil, settingsFixture())
 	for _, line := range d.Render(tui.Dark, 100) {
 		plain := ansiRE.ReplaceAllString(line, "")
 		if strings.Contains(plain, "Background sub-agents") {

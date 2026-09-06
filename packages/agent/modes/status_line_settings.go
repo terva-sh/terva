@@ -20,12 +20,12 @@ import (
 // defaults (and future changes to them) keep applying.
 var statusLinePresets = map[string][][]string{
 	"compact": {
-		{"cwd", "git", "model", "context", "usage"},
+		{"cwd", "git", "spacer", "model", "context", "usage"},
 	},
 	"detailed": {
-		{"cwd", "git", "edits", "model", "thinking", "tokens", "cost"},
-		{"context", "usage", "swarm"},
-		{"session", "clock", "tags", "tasks", "bridge", "ext"},
+		{"cwd", "git", "edits", "spacer", "model", "thinking", "tokens", "cost"},
+		{"context", "usage", "spacer", "swarm"},
+		{"session", "clock", "tags", "tasks", "spacer", "bridge", "ext"},
 	},
 }
 
@@ -39,8 +39,8 @@ var statusToggleSegments = []struct {
 }{
 	{"git", 0, "branch, dirty marker, and +/- line counts vs HEAD"},
 	{"edits", 0, "lines the agent's edit/write tools changed this session"},
-	{"thinking", 0, "the model's reasoning level"},
-	{"swarm", 1, "live background agent count"},
+	{"thinking", 1, "the model's reasoning level"},
+	{"swarm", 2, "live background agent count"},
 	{"tasks", 2, "the built-in task board's current task"},
 	{"worktrees", 2, "managed worktree count (fills after /worktree)"},
 	{"session", 2, "the session file's short name"},
@@ -82,10 +82,19 @@ func (i *Interactive) effectiveStatusRows() [][]string {
 	return tui.DefaultStatusRows(i.cfg.Experience != "")
 }
 
+// statusSegBase strips an entry's options suffix ("session:short" →
+// "session"), so a toggle finds the segment however it is configured.
+func statusSegBase(s string) string {
+	base, _, _ := strings.Cut(s, ":")
+	return base
+}
+
 func statusRowsContain(rows [][]string, seg string) bool {
 	for _, row := range rows {
-		if slices.Contains(row, seg) {
-			return true
+		for _, s := range row {
+			if statusSegBase(s) == seg {
+				return true
+			}
 		}
 	}
 	return false
@@ -94,18 +103,24 @@ func statusRowsContain(rows [][]string, seg string) bool {
 // statusRowsWithSegment returns a deep copy of rows with seg present
 // or absent. Adding places the segment at the end of its natural row
 // (growing the layout when the row doesn't exist yet); removing
-// strips it everywhere and drops rows that empty out.
+// strips it everywhere — an options suffix included — and drops rows
+// that empty out. A row left holding only spacers counts as empty:
+// the pseudo-segment renders nothing on its own.
 func statusRowsWithSegment(rows [][]string, seg string, on bool, naturalRow int) [][]string {
 	out := make([][]string, 0, len(rows)+1)
 	for _, row := range rows {
 		kept := make([]string, 0, len(row))
+		content := false
 		for _, s := range row {
-			if !on && s == seg {
+			if !on && statusSegBase(s) == seg {
 				continue
+			}
+			if statusSegBase(s) != string(tui.SegSpacer) {
+				content = true
 			}
 			kept = append(kept, s)
 		}
-		if len(kept) > 0 {
+		if len(kept) > 0 && content {
 			out = append(out, kept)
 		}
 	}
@@ -167,6 +182,20 @@ func (i *Interactive) persistStatusRows(rows [][]string, note string) {
 // statusLineSettingsItems builds the /settings entries: the preset
 // picker plus the curated segment toggles reflecting the effective
 // layout.
+// statusLineGroupID is the settings category these items live in. It is
+// declared by the TUI and never by the daemon: a terminal-only layout has no
+// business on a wire the web reads too.
+const statusLineGroupID = "status_line"
+
+// statusLineSettingsGroup is the category header for those items.
+func statusLineSettingsGroup() dialogs.SettingsGroup {
+	return dialogs.SettingsGroup{
+		ID:    statusLineGroupID,
+		Label: i18n.T("status line"),
+		Desc:  i18n.T("the terminal bar: which segments it shows, and its row layout"),
+	}
+}
+
 func (i *Interactive) statusLineSettingsItems() []dialogs.SettingsItem {
 	preset := statusLinePresetName(i.cfg.StatusLineRows)
 	options := []dialogs.SettingsOption{
@@ -189,6 +218,7 @@ func (i *Interactive) statusLineSettingsItems() []dialogs.SettingsItem {
 		Desc:    "segment layout preset; fine-tune rows in config.json (status_line.rows)",
 		Options: options,
 		Choice:  choice,
+		Group:   statusLineGroupID,
 	}}
 	effective := i.effectiveStatusRows()
 	for _, t := range statusToggleSegments {
@@ -197,6 +227,7 @@ func (i *Interactive) statusLineSettingsItems() []dialogs.SettingsItem {
 			Label: "status: " + t.seg,
 			Desc:  t.desc,
 			Value: statusRowsContain(effective, t.seg),
+			Group: statusLineGroupID,
 		})
 	}
 	return items

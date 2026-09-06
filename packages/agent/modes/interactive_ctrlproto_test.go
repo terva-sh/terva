@@ -1000,7 +1000,8 @@ func TestCarrierApprovalSetting(t *testing.T) {
 	fc := newFakeCarrier()
 	i.cfg.Carrier = fc
 
-	item, ok := findSettingsItem(i.daemonSettingsItems(), "approval")
+	_, settingsItems := i.daemonSettingsItems()
+	item, ok := findSettingsItem(settingsItems, "approval")
 	if !ok {
 		t.Fatal("approval item should exist in carrier mode")
 	}
