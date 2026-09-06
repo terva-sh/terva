@@ -11,6 +11,19 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.133.0](https://github.com/terva-sh/terva/releases/tag/v0.133.0) — 2026-09-05
+
+### Features
+
+- models: add, edit and tell apart custom models from either frontend
+- tui,web: group settings into panes and give the status line a layout
+
+### Fixes
+
+- runtime: close seven gaps a codebase review found
+- tui: edit dialog text anywhere in the line, and move by word
+- web: keep a draft until the server accepts it, and let a toast expire
+
 ## [v0.132.10](https://github.com/terva-sh/terva/releases/tag/v0.132.10) — 2026-09-01
 
 ### Features
