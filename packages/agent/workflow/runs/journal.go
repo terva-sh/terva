@@ -18,9 +18,8 @@ import (
 // editing one stage invalidates only that stage. Failures are journaled
 // NEVER (no error row type exists): a failed agent leaves no record and
 // is simply retried on resume. Both properties are deliberate imports
-// from the Claude Code journal this design was probed against
-// (docs/ideas/workflow-structured-swarm.md — the format itself is
-// terva-native; theirs is undocumented internal surface).
+// from the Claude Code journal this design was probed against (the format
+// itself is terva-native; theirs is undocumented internal surface).
 
 const journalName = "journal.jsonl"
 

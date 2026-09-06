@@ -127,6 +127,11 @@ func PrintHelp(version string) {
 	section(i18n.T("prompt and session flags"),
 		row{"--system-prompt TEXT", i18n.T("replace the default system prompt")},
 		row{"--append-system-prompt TEXT", i18n.T("append to the system prompt (repeatable)")},
+		// Not a run mode, and the row says so: --portable only rewrites the
+		// system prompt. It was undocumented long enough to be mistaken for a
+		// headless mode, which is what -p / --json / rpc are.
+		row{"--portable", i18n.T("drop terva's harness-local self-context from the system prompt, so the agent runs on what its briefing gave it — for driving terva as a worker from another harness. Not a run mode; pairs with -p / --json / rpc")},
+		row{"--portable=strict", i18n.T("also drop terva's own discovery (AGENTS.md, skills, lore), proving the briefing stands alone")},
 		row{"--persona NAME|FILE", i18n.T("load a persona (built-in/on-disk name or .md path) as the identity")},
 		row{"--card PATH", i18n.T("load a character card (.json/.png) as a chat/play identity (implies --chat)")},
 		row{"--greeting N", i18n.T("with --card: pick the opening line (0 = first_mes, 1..N = alternate greetings)")},

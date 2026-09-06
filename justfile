@@ -15,11 +15,6 @@ import? 'release.just'
 # optional-import reason: the public tree ships without forge.just.
 import? 'forge.just'
 
-# Maintainer-only idea-ledger targets (idea/ideas/idea-promote/…). Same
-# optional-import reason: the public tree ships without ideas.just, the
-# script it drives, and docs/ideas/ itself.
-import? 'ideas.just'
-
 # Maintainer-only proposals targets (proposals/proposal-check/…). Same
 # optional-import reason: the public tree ships without proposals.just, the
 # generator it drives, and docs/proposals/ itself.
@@ -527,15 +522,17 @@ ci: lint test ci-acp ci-web ci-scripting ci-workflows ci-web-client ci-web-smoke
     # Build the public tree here and scrub it, so it fails on the commit that
     # leaks it rather than on the release that would have shipped it.
     @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-scrub; else echo "ci: SKIPPED check-scrub (scripts/release.sh absent on this tree)"; fi
-    # docs/ideas/README.md and docs/proposals/README.md are generated and
-    # committed, and the Go tests over them assert membership only: every entry
-    # reaches a row, every row resolves to an entry. A merge that takes the rows
-    # from one side and the count header from the other satisfies both and still
-    # commits a table that lies — that landed on 2026-08-30 and sat on trunk for
-    # five commits. These scripts are the only byte-exact check, and they run in
-    # BOTH remote lanes, so they run in both local recipes too.
-    @if [ -x scripts/idea.sh ]; then ./scripts/idea.sh check; else echo "ci: SKIPPED idea-check (scripts/idea.sh absent on this tree)"; fi
+    # docs/proposals/README.md is generated and committed, and the Go test over
+    # it asserts membership only: every proposal reaches a row, every row
+    # resolves to a proposal. A merge that takes the rows from one side and the
+    # count header from the other satisfies both and still commits a table that
+    # lies — that landed on 2026-08-30 and sat on trunk for five commits. This
+    # script is the only byte-exact check, and it runs in BOTH remote lanes, so
+    # it runs in both local recipes too.
     @if [ -x scripts/proposal.sh ]; then ./scripts/proposal.sh check; else echo "ci: SKIPPED proposal-check (scripts/proposal.sh absent on this tree)"; fi
+    # The ticket store, in both local recipes because it is in both remote
+    # lanes. See the longer note on the same step in `ci-docs`.
+    @if command -v git-ticket >/dev/null 2>&1; then git ticket check --strict; else echo "ci: SKIPPED ticket-store check (git-ticket absent; .tickets/README.md says how to install it)"; fi
 
 # The documentation lane, exactly as .forgejo/workflows/ci.yml runs it for a
 # pull request that touches only docs/ and the root markdown files.
@@ -561,10 +558,18 @@ ci-docs:
     @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-overlay; else echo "ci-docs: SKIPPED check-overlay (scripts/release.sh absent on this tree)"; fi
     @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-links; else echo "ci-docs: SKIPPED check-links (scripts/release.sh absent on this tree)"; fi
     @if [ -x scripts/release.sh ]; then ./scripts/release.sh check-scrub; else echo "ci-docs: SKIPPED check-scrub (scripts/release.sh absent on this tree)"; fi
-    # The byte-exact gate over the two generated indexes; the `go test` above
-    # covers them for membership only, which a stale count header passes.
-    @if [ -x scripts/idea.sh ]; then ./scripts/idea.sh check; else echo "ci-docs: SKIPPED idea-check (scripts/idea.sh absent on this tree)"; fi
+    # The byte-exact gate over the generated proposals index; the `go test`
+    # above covers it for membership only, which a stale count header passes.
     @if [ -x scripts/proposal.sh ]; then ./scripts/proposal.sh check; else echo "ci-docs: SKIPPED proposal-check (scripts/proposal.sh absent on this tree)"; fi
+    # The ticket store. Both remote lanes install a pinned git-ticket and run
+    # this, so both local recipes run it too, by the same rule the proposals
+    # check above follows. A ticket-only change takes the docs lane, so this
+    # recipe is the one a store change reaches first.
+    #
+    # No `go install` here. CI installs because its container starts empty; a
+    # developer machine already has the binary, and installing over it would
+    # silently replace the version they chose to run.
+    @if command -v git-ticket >/dev/null 2>&1; then git ticket check --strict; else echo "ci-docs: SKIPPED ticket-store check (git-ticket absent; .tickets/README.md says how to install it)"; fi
 
 # Pre-release gate for a public cut: the full local CI, then the public-channel
 # facts that can be established before anything is pushed.

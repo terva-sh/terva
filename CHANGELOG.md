@@ -11,6 +11,22 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.132.10](https://github.com/terva-sh/terva/releases/tag/v0.132.10) — 2026-09-01
+
+### Features
+
+- chat: the inbound queue counts what it drops, and /status reports it
+- provider: add Claude Fable 5.1
+- skills: pin a skill body into every prompt
+- web: a light, dark and auto control the login page honours
+- web: offer the next step when a turn goes idle
+- web: the ask card asks one question at a time
+
+### Fixes
+
+- connsdk: a malformed or unknown command answers an error result
+- provider: correct Claude cache pricing and the AU Bedrock rates
+
 ## [v0.132.9](https://github.com/terva-sh/terva/releases/tag/v0.132.9) — 2026-08-31
 
 ### Features

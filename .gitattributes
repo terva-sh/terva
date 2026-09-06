@@ -67,3 +67,4 @@ packages/agent/persona/personas/**/*.md text eol=lf
 packages/agent/web/client/dist/**            linguist-generated=true
 packages/i18n/locales/**/en.json             linguist-generated=true
 packages/agent/web/client/src/locales/**     linguist-generated=true
+.tickets/**/*.md merge=gitticket

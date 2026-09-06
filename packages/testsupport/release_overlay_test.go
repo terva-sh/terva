@@ -35,7 +35,6 @@ import (
 var docsHeldBack = map[string]string{
 	"docs/architecture":          "internal architecture notes: names internal hosts, unshipped plans, and the fork's private reasoning",
 	"docs/decisions":             "decision records — the maintainer's working argument, not user documentation",
-	"docs/ideas":                 "the idea ledger: unbuilt ideas nobody has committed to, and the reasoning behind every recorded \"no\"",
 	"docs/plans":                 "work plans for unshipped features; reads as a roadmap commitment the fork does not make",
 	"docs/proposals":             "design proposals, many never built and several superseded — shipping them documents things that do not exist",
 	"docs/reviews":               "code/architecture review write-ups, including findings about unfixed defects",

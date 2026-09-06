@@ -547,8 +547,8 @@ the envelope from the start:
   gating that makes a token safe to delegate, and multi-workspace addressing:
   one daemon still serves one workspace.
 
-See the platform vision in
-`docs/ideas/terva-platform.md`.
+See the platform vision in ticket `TKT-01M1RRT6N`, in the development
+repository's ticket store.
 
 ## See also
 
