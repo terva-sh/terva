@@ -825,8 +825,8 @@ type StatusLineConfig struct {
 	// MaxWidth caps the bar's content width in columns. On a terminal
 	// wider than the cap the rows lay out inside min(cols, MaxWidth)
 	// instead of running to the far edge. nil means the built-in
-	// default (DefaultStatusLineMaxWidth); an explicit 0 (or any value
-	// <= 0) means uncapped, the pre-v3 behaviour.
+	// default (DefaultStatusLineMaxWidth, uncapped); an explicit 0 (or
+	// any value <= 0) also means uncapped.
 	MaxWidth *int `json:"max_width,omitempty"`
 
 	// ReserveBusyRow keeps the busy line's row present (blank) while
@@ -872,17 +872,26 @@ type StatusLineScript struct {
 func (c Config) LazyToolsOn() bool { return c.LazyTools == nil || *c.LazyTools }
 
 // DefaultStatusLineMaxWidth is the status bar's content-width cap when
-// status_line.max_width is unset. 140 rather than the proposal's 120
-// placeholder, judged against real renders at 330 columns (2026-09-04).
-// 140 is the narrowest default that reaches the 12/8 meter tier; under
-// 120 that tier is unreachable at any terminal size without a manual
-// max_width. It also leaves row 2 ~26 cells of slack where 120 left ~8.
+// status_line.max_width is unset. 0 means uncapped: the rows lay out
+// to the terminal width, so the bar's edges line up with the composer
+// and the chat, which both render at full cols.
+//
+// The v3 proposal shipped a 140 cap on 2026-09-04 and this reverses
+// that default on 2026-09-06. The renders that decided it: at 330
+// columns the capped and uncapped rows carry identical text, and only
+// the flex gap between the spacer groups grows. Width buys exactly one
+// thing, the meterCells tier, and that tier tops out at 140 either
+// way. So the cap traded a 140-cell block orphaned in a wide field for
+// no extra information. The cap itself stays, because a user who
+// prefers the block writes max_width and gets it.
 // See docs/proposals/tui-status-line-v3.md.
-const DefaultStatusLineMaxWidth = 140
+const DefaultStatusLineMaxWidth = 0
 
 // StatusLineMaxWidth resolves status_line.max_width: the default when
 // unset, 0 (uncapped) when the user wrote 0 or a negative value. The
 // default lives here and nowhere else, per the LazyToolsOn rule.
+// Both arms return 0 today, and the split stays because the default is
+// a decision that can move again while an explicit 0 cannot.
 func (c Config) StatusLineMaxWidth() int {
 	if c.StatusLine == nil || c.StatusLine.MaxWidth == nil {
 		return DefaultStatusLineMaxWidth

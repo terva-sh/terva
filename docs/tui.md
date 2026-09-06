@@ -437,7 +437,7 @@ The block above the editor is built from named **segments** laid out in rows. Ea
 
 While a turn runs, the busy line (spinner, quip, elapsed time) renders as its own row directly above the bar and disappears when the turn ends. The segments themselves never shift. If that one-row vertical step bothers you, `status_line.reserve_busy_row: true` keeps the row present and blank while idle, trading a line of chat height for zero motion.
 
-On a wide terminal the bar does not run to the far edge: rows lay out inside a content width of `min(columns, status_line.max_width)`. The default cap is 140 columns, the narrowest width that reaches the largest meter tier; set `"max_width": 0` to restore the uncapped ribbon.
+Rows lay out inside a content width of `min(columns, status_line.max_width)`. The default is uncapped, so the bar's edges line up with the composer and the chat, which both render at the full terminal width. A cap costs no information: the atoms are the same either way, and only the flex gap between spacer groups shrinks. Set `"max_width": 140` when you would rather read the bar as one block than track a group at each edge of a wide terminal.
 
 | segment | shows | notes |
 |---|---|---|
@@ -461,13 +461,13 @@ On a wide terminal the bar does not run to the far edge: rows lay out inside a c
 | `ext` | extension `status_segment` frames | |
 | `spacer` | a flexible gap | pseudo-segment: absorbs the slack between the segments before and after it, so a row can pin a group against the right edge; several spacers split the slack evenly |
 
-Meters change color in stages as they fill (70% / 90%); the stage colors and per-segment colors are theme-controlled — see [themes.md](themes.md), including the color-vision-friendly `daltonized` built-ins. Meter bars also scale with the bar's effective width: 5 context / 4 usage cells below 100 columns, 8/6 from 100, 12/8 from 140. A meter that is in use but rounds to zero filled cells marks its first cell `▒`, so a 2% window and an untouched one read apart. `bar=N` pins a width and bypasses the tiers.
+Meters change color in stages as they fill (70% / 90%); the stage colors and per-segment colors are theme-controlled — see [themes.md](themes.md), including the color-vision-friendly `daltonized` built-ins. Meter bars also scale with the bar's effective width, which is the terminal width until you set a cap: 5 context / 4 usage cells below 100 columns, 8/6 from 100, 12/8 from 140. A cap below 140 therefore also caps the meters. A meter that is in use but rounds to zero filled cells marks its first cell `▒`, so a 2% window and an untouched one read apart. `bar=N` pins a width and bypasses the tiers.
 
 Rearrange, drop, or re-row segments in `$TERVA_HOME/config.json` (unknown IDs are ignored; rows are open-ended):
 
 ```json
 "status_line": {
-  "max_width": 120,
+  "max_width": 140,
   "rows": [
     ["cwd", "git", "edits", "spacer", "model", "cost"],
     ["context:bar=10", "usage", "spacer", "tokens:io"],

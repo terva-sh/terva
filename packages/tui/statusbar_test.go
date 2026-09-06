@@ -950,13 +950,14 @@ func TestContextMeterWidthTiers(t *testing.T) {
 	}
 }
 
-// The shipped default cap (140, pinned in packages/agent/config) is
-// the narrowest width that reaches the 12/8 meter tier — under 120
-// that tier was unreachable at any terminal size. This pins the
-// wide-terminal render that decided it: on a 330-column terminal the
-// default rows flex flush to 140 cells and the context meter renders
-// at 12 cells.
-func TestStatusBarDefaultCapReachesLargeMeterTier(t *testing.T) {
+// The default is uncapped (DefaultStatusLineMaxWidth 0 in
+// packages/agent/config), so the rows flex flush to the terminal and
+// meterCells keys on the real terminal width. This pins the
+// wide-terminal render that decided the reversal: on a 330-column
+// terminal the default rows reach 330 cells, the context meter renders
+// at its 12-cell tier, and the text is the same text the 140 cap
+// produced. Only the flex gap differs.
+func TestStatusBarUncappedByDefaultFlexesToTheTerminal(t *testing.T) {
 	p := StatusBarParams{
 		Theme:     Dark,
 		Provider:  "anthropic",
@@ -980,18 +981,38 @@ func TestStatusBarDefaultCapReachesLargeMeterTier(t *testing.T) {
 		ContextUsed:  87_000,
 		ContextMax:   272_000,
 		Cols:         330,
-		MaxWidth:     140,
+		MaxWidth:     0, // config.DefaultStatusLineMaxWidth; tui must not import it
 	}
 	lines := StatusBar(p)
 	if len(lines) != 2 {
 		t.Fatalf("want 2 flexed rows (row 3 has no data), got %q", lines)
 	}
 	for i, l := range lines {
-		if w := visibleWidth(l); w != 140 {
-			t.Errorf("row %d: want flush at 140 cells, got %d: %q", i, w, stripANSI(l))
+		if w := visibleWidth(l); w != 330 {
+			t.Errorf("row %d: want flush at the terminal width 330, got %d: %q", i, w, stripANSI(l))
 		}
 	}
 	if !strings.Contains(stripANSI(lines[1]), "▓▓▓▓░░░░░░░░") {
 		t.Errorf("ctx meter should hit the 12-cell tier: %q", stripANSI(lines[1]))
 	}
+
+	// The cap costs information nowhere: capping the same params at 140
+	// yields the same atoms, with the slack removed from the flex gap.
+	p.MaxWidth = 140
+	capped := StatusBar(p)
+	if len(capped) != len(lines) {
+		t.Fatalf("capped render has %d rows, uncapped %d", len(capped), len(lines))
+	}
+	for i := range lines {
+		if squeeze(stripANSI(lines[i])) != squeeze(stripANSI(capped[i])) {
+			t.Errorf("row %d differs by more than whitespace:\n uncapped %q\n capped   %q",
+				i, stripANSI(lines[i]), stripANSI(capped[i]))
+		}
+	}
+}
+
+// squeeze collapses every run of spaces to one, so two renders that
+// differ only in flex slack compare equal.
+func squeeze(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }

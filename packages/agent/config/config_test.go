@@ -569,17 +569,17 @@ func TestLazyToolsDefaultsOnAndExplicitFalseWins(t *testing.T) {
 }
 
 // StatusLineMaxWidth resolves the status-bar cap in exactly one place.
-// The 140 default is a decision, not a placeholder (see the constant's
-// comment and docs/proposals/tui-status-line-v3.md); this pin fails on
-// a silent change to it.
+// The uncapped default is a decision (see the constant's comment and
+// docs/proposals/tui-status-line-v3.md); this pin fails on a silent
+// change to it, and on the explicit cap ceasing to work.
 func TestStatusLineMaxWidth(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		raw  string
 		want int
 	}{
-		{"absent block", `{}`, 140},
-		{"absent key", `{"status_line":{}}`, 140},
+		{"absent block", `{}`, 0},
+		{"absent key", `{"status_line":{}}`, 0},
 		{"explicit zero is uncapped", `{"status_line":{"max_width":0}}`, 0},
 		{"negative normalises to uncapped", `{"status_line":{"max_width":-5}}`, 0},
 		{"explicit value passes through", `{"status_line":{"max_width":100}}`, 100},
