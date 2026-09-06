@@ -59,7 +59,7 @@ func TestHiddenTokenShowsOnlyTheHiddenModels(t *testing.T) {
 	d := NewModelDialog()
 	d.Open("", []string{"openrouter"}, nil, []string{"openrouter/deepseek/deepseek-r1"})
 
-	d.p.query = ":hidden"
+	d.p.query.SetValue(":hidden")
 	d.p.refilter()
 
 	got := viewIDs(d)
@@ -76,7 +76,7 @@ func TestHiddenTokenComposesWithATextNeedle(t *testing.T) {
 		"openrouter/meta/llama-3.1",
 	})
 
-	d.p.query = ":hidden llama"
+	d.p.query.SetValue(":hidden llama")
 	d.p.refilter()
 
 	got := viewIDs(d)
@@ -119,7 +119,7 @@ func TestAHiddenModelCanBeRestoredThroughTheToken(t *testing.T) {
 	d := NewModelDialog()
 	d.Open("", []string{"openrouter"}, nil, []string{"openrouter/deepseek/deepseek-r1"})
 
-	d.p.query = ":hidden"
+	d.p.query.SetValue(":hidden")
 	d.p.refilter()
 	if len(d.p.view) != 1 {
 		t.Fatalf("expected the hidden model in view, got %v", viewIDs(d))
@@ -133,7 +133,7 @@ func TestAHiddenModelCanBeRestoredThroughTheToken(t *testing.T) {
 		t.Error("the model should no longer be hidden")
 	}
 	// Clearing the token shows it among the normal rows again.
-	d.p.query = ""
+	d.p.query.Clear()
 	d.p.refilter()
 	if len(viewIDs(d)) != 3 {
 		t.Errorf("after restoring, all 3 models should be visible, got %v", viewIDs(d))
@@ -304,7 +304,7 @@ func TestUnhidingUnderTheHiddenTokenKeepsTheCursorInPlace(t *testing.T) {
 	d.Open("", []string{"acme"}, nil, []string{
 		"acme/m1", "acme/m2", "acme/m3", "acme/m4",
 	})
-	d.p.query = ":hidden"
+	d.p.query.SetValue(":hidden")
 	d.p.refilter()
 	before := viewIDs(d)
 	if len(before) != 4 {

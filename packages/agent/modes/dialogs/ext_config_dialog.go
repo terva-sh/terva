@@ -42,7 +42,7 @@ type ExtConfigDialog struct {
 	working map[string]string
 	cursor  int
 	editing bool
-	buf     string
+	buf     tui.LineBuf
 	status  string
 }
 
@@ -55,7 +55,7 @@ func (d *ExtConfigDialog) Open(name string, fields []ConfigField) {
 	d.fields = fields
 	d.cursor = 0
 	d.editing = false
-	d.buf = ""
+	d.buf.Clear()
 	d.status = ""
 	d.working = map[string]string{}
 	for _, f := range fields {
@@ -77,7 +77,7 @@ func (d *ExtConfigDialog) Active() bool { return d != nil && d.active }
 func (d *ExtConfigDialog) Close() {
 	d.active = false
 	d.editing = false
-	d.buf = ""
+	d.buf.Clear()
 }
 
 // ExtConfigAction is returned by HandleKey for the overlay host to apply.
@@ -144,9 +144,13 @@ func (d *ExtConfigDialog) activateField() {
 		d.working[f.Key] = cycleOption(f.Options, d.working[f.Key])
 	default:
 		d.editing = true
-		d.buf = "" // secrets always start empty; others edit from blank then commit
+		d.buf.Accept = nil
+		if f.isInt() {
+			d.buf.Accept = acceptDigits
+		}
+		d.buf.SetValue("") // secrets always start empty; others edit from blank then commit
 		if !f.isSecret() {
-			d.buf = d.working[f.Key]
+			d.buf.SetValue(d.working[f.Key])
 		}
 		d.status = ""
 	}
@@ -156,27 +160,17 @@ func (d *ExtConfigDialog) handleEditKey(k tui.Key) ExtConfigAction {
 	f := d.fields[d.cursor]
 	switch k.Kind {
 	case tui.KeyEnter:
-		d.working[f.Key] = strings.TrimSpace(d.buf)
+		d.working[f.Key] = strings.TrimSpace(d.buf.Value())
 		d.editing = false
-		d.buf = ""
+		d.buf.Clear()
 		d.status = ""
 	case tui.KeyEsc:
 		d.editing = false
-		d.buf = ""
-	case tui.KeyBackspace:
-		if r := []rune(d.buf); len(r) > 0 {
-			d.buf = string(r[:len(r)-1])
-		}
-	case tui.KeyRune:
-		if k.Alt || k.Ctrl {
-			break
-		}
-		if f.isInt() && (k.Rune < '0' || k.Rune > '9') {
-			break // digits only for integer fields
-		}
-		if k.Rune >= 0x20 && k.Rune < 0x7f {
-			d.buf += string(k.Rune)
-		}
+		d.buf.Clear()
+	default:
+		// Typing, cursor movement and the kills all belong to the buffer. An
+		// int row carries acceptDigits, set when the row was activated.
+		d.buf.HandleKey(k)
 	}
 	return ExtConfigAction{}
 }
@@ -222,9 +216,9 @@ func (d *ExtConfigDialog) Render(th tui.Theme, width int) []string {
 		shown := d.fieldDisplay(f)
 		if d.editing && i == d.cursor {
 			if f.isSecret() {
-				shown = strings.Repeat("•", len([]rune(d.buf))) + "▏"
+				shown = d.buf.RenderMasked('•', tui.LineCaret)
 			} else {
-				shown = d.buf + "▏"
+				shown = d.buf.Render(tui.LineCaret)
 			}
 		}
 		plain := fmt.Sprintf("  %-18s %s", fieldLabel(f), shown)

@@ -190,15 +190,15 @@ func TestCopyDialogRunesFilterTheCurrentStage(t *testing.T) {
 	for _, r := range "wrap" {
 		d.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: r})
 	}
-	if d.turnFilter != "wrap" {
-		t.Fatalf("turnFilter = %q", d.turnFilter)
+	if d.turnFilter.Value() != "wrap" {
+		t.Fatalf("turnFilter = %q", d.turnFilter.Value())
 	}
 	if len(d.visibleTurn) != 1 {
 		t.Fatalf("got %d turns for \"wrap\", want 1", len(d.visibleTurn))
 	}
 	d.HandleKey(key(tui.KeyBackspace))
-	if d.turnFilter != "wra" {
-		t.Errorf("backspace left %q", d.turnFilter)
+	if d.turnFilter.Value() != "wra" {
+		t.Errorf("backspace left %q", d.turnFilter.Value())
 	}
 }
 
@@ -210,8 +210,8 @@ func TestCopyDialogDescendingClearsTheFilter(t *testing.T) {
 		d.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: r})
 	}
 	d.HandleKey(key(tui.KeyEnter))
-	if d.partFilter != "" {
-		t.Errorf("partFilter = %q after descending, want empty", d.partFilter)
+	if d.partFilter.Value() != "" {
+		t.Errorf("partFilter = %q after descending, want empty", d.partFilter.Value())
 	}
 	if len(d.visiblePart) == 0 {
 		t.Error("no parts visible after descending with a turn filter set")

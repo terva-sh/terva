@@ -16,12 +16,22 @@ func TestReaderParsesEnhancedKeyboard(t *testing.T) {
 		kind  KeyKind
 		shift bool
 		alt   bool
+		ctrl  bool
 	}{
-		{"\x1b[13;2u", KeyEnter, true, false},    // kitty: Shift+Enter
-		{"\x1b[13;3u", KeyEnter, false, true},    // kitty: Alt+Enter
-		{"\x1b[27u", KeyEsc, false, false},       // kitty: Esc (1cc654e)
-		{"\x1b[27;2;13~", KeyEnter, true, false}, // modifyOtherKeys: Shift+Enter
-		{"\x1b[1;2A", KeyUp, true, false},        // modified arrow: Shift+Up
+		{"\x1b[13;2u", KeyEnter, true, false, false},    // kitty: Shift+Enter
+		{"\x1b[13;3u", KeyEnter, false, true, false},    // kitty: Alt+Enter
+		{"\x1b[27u", KeyEsc, false, false, false},       // kitty: Esc (1cc654e)
+		{"\x1b[27;2;13~", KeyEnter, true, false, false}, // modifyOtherKeys: Shift+Enter
+		{"\x1b[1;2A", KeyUp, true, false, false},        // modified arrow: Shift+Up
+
+		// Ctrl on an arrow. The modifier bitmask carried it all along; the
+		// decoder dropped it, so ctrl+left reached every text field as a bare
+		// left arrow and moved one character instead of one word.
+		{"\x1b[1;5D", KeyLeft, false, false, true},  // Ctrl+Left
+		{"\x1b[1;5C", KeyRight, false, false, true}, // Ctrl+Right
+		{"\x1b[1;3D", KeyLeft, false, true, false},  // Alt+Left still alt-only
+		{"\x1b[1;7D", KeyLeft, false, true, true},   // Alt+Ctrl+Left: both bits
+		{"\x1b[1;6A", KeyUp, true, false, true},     // Shift+Ctrl+Up
 	}
 	for _, tc := range cases {
 		idx := 0
@@ -34,9 +44,9 @@ func TestReaderParsesEnhancedKeyboard(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Read(%q): %v", tc.seq, err)
 		}
-		if k.Kind != tc.kind || k.Shift != tc.shift || k.Alt != tc.alt {
-			t.Fatalf("Read(%q) = {kind:%v shift:%v alt:%v}, want {kind:%v shift:%v alt:%v}",
-				tc.seq, k.Kind, k.Shift, k.Alt, tc.kind, tc.shift, tc.alt)
+		if k.Kind != tc.kind || k.Shift != tc.shift || k.Alt != tc.alt || k.Ctrl != tc.ctrl {
+			t.Fatalf("Read(%q) = {kind:%v shift:%v alt:%v ctrl:%v}, want {kind:%v shift:%v alt:%v ctrl:%v}",
+				tc.seq, k.Kind, k.Shift, k.Alt, k.Ctrl, tc.kind, tc.shift, tc.alt, tc.ctrl)
 		}
 	}
 }
@@ -121,6 +131,29 @@ func TestReaderChordsAgreeAcrossWires(t *testing.T) {
 	}
 	if seen == 0 {
 		t.Fatal("ctrlChordKind claimed no bytes; the table lookup is not being exercised")
+	}
+}
+
+// Ctrl+N is the model picker's add-a-model chord. TestReaderChordsAgreeAcrossWires
+// already covers it on all four wires, because it enumerates the table rather
+// than listing chords. This names the chord so a failure says which one broke,
+// and pins the two facts that made 0x0e safe to claim.
+//
+// First, no dedicated key wants it: 0x0e is SO in ASCII and next-history in
+// readline, but Read decodes neither, and termios reserves no character for it
+// the way it does for 0x13 and 0x19. Second, the enhanced protocols reach the
+// same case arithmetically -- ctrlByteForCode folds 'n' onto 0x0e -- so the
+// chord did not need a second entry anywhere. That is what ctrl+s and ctrl+y
+// each got wrong once.
+func TestReaderParsesCtrlN(t *testing.T) {
+	for wire, seq := range map[string]string{
+		"legacy byte":     "\x0e",
+		"kitty CSI u":     "\x1b[110;5u",
+		"modifyOtherKeys": "\x1b[27;5;110~",
+	} {
+		if got := readKeySeq(t, seq).Kind; got != KeyCtrlN {
+			t.Errorf("ctrl+n on %s (%q): kind = %v, want KeyCtrlN", wire, seq, got)
+		}
 	}
 }
 

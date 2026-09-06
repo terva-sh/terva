@@ -356,15 +356,19 @@ func (e *Editor) HandleKey(k Key) (submit bool) {
 	case KeyDelete:
 		e.delete()
 	case KeyLeft:
-		if k.Alt {
+		// Ctrl and Alt both jump a word. Alt is the macOS gesture and Ctrl is
+		// what most Linux terminals send, and a user reaches for one or the
+		// other by habit rather than by choice.
+		if k.Alt || k.Ctrl {
 			e.moveWordLeft()
 		} else {
 			e.moveLeft()
 		}
 	case KeyRight:
-		if k.Alt {
-			// Alt+Right stays word navigation. Accepting is the PLAIN gesture,
-			// which is what shell autosuggestion trained everyone to reach for.
+		if k.Alt || k.Ctrl {
+			// A modified Right stays word navigation. Accepting is the PLAIN
+			// gesture, which is what shell autosuggestion trained everyone to
+			// reach for.
 			e.moveWordRight()
 			break
 		}

@@ -16,7 +16,7 @@ type SessionDialog struct {
 	sessions []core.SessionSummary
 	cursor   int
 	renaming bool
-	rename   string
+	rename   tui.LineBuf
 
 	// MaxRows is the maximum number of session rows the dialog
 	// will render in a single frame. Set by the host right before
@@ -186,8 +186,8 @@ func (d *SessionDialog) CursorPos() (row, col int) {
 		return -1, -1
 	}
 	// Row: frameHeader(1) + rename hint(1) = row 2 (0-indexed)
-	// Col: 2 spaces indent + text length
-	return 2, 2 + len([]rune(d.rename))
+	// Col: 2 spaces indent + the cursor inside the title
+	return 2, 2 + d.rename.Cursor()
 }
 
 // Close hides the dialog.
@@ -220,7 +220,7 @@ func (d *SessionDialog) Render(th tui.Theme, width int) []string {
 	}
 	if d.renaming {
 		lines = append(lines, th.FG256(th.Muted, i18n.T("rename session (enter to save, esc to cancel):")))
-		lines = append(lines, "  "+th.FG256(th.FG, d.rename))
+		lines = append(lines, "  "+th.FG256(th.FG, d.rename.Value()))
 		lines = append(lines, FrameRule(th, width))
 		return lines
 	}
@@ -359,7 +359,7 @@ func (d *SessionDialog) HandleKey(k tui.Key) sessionDialogAction {
 	if d.renaming {
 		switch k.Kind {
 		case tui.KeyEnter:
-			title := strings.TrimSpace(d.rename)
+			title := strings.TrimSpace(d.rename.Value())
 			if title != "" && d.cursor < len(d.sessions) {
 				path := d.sessions[d.cursor].Path
 				rename := d.Rename
@@ -371,28 +371,19 @@ func (d *SessionDialog) HandleKey(k tui.Key) sessionDialogAction {
 				}
 			}
 			d.renaming = false
-			d.rename = ""
+			d.rename.Clear()
 			return sessionDialogAction{Renamed: true}
 		case tui.KeyEsc:
 			d.renaming = false
-			d.rename = ""
+			d.rename.Clear()
 			return sessionDialogAction{}
-		case tui.KeyBackspace:
-			if len(d.rename) > 0 {
-				r := []rune(d.rename)
-				d.rename = string(r[:len(r)-1])
-			}
-			return sessionDialogAction{}
-		case tui.KeyPaste:
-			d.rename += k.Paste
-			return sessionDialogAction{}
-		case tui.KeyRune:
-			if k.Rune != 0 {
-				d.rename += string(k.Rune)
-			}
+		default:
+			// Typing, cursor movement, the kills and a paste all go to the
+			// buffer. Anything it declines stays swallowed: list navigation
+			// under a half-typed title would move the row being renamed.
+			d.rename.HandleKey(k)
 			return sessionDialogAction{}
 		}
-		return sessionDialogAction{}
 	}
 
 	page := d.MaxRows
@@ -478,11 +469,7 @@ func (d *SessionDialog) HandleKey(k tui.Key) sessionDialogAction {
 		case 'r':
 			s := d.sessions[d.cursor]
 			d.renaming = true
-			if s.Title != "" {
-				d.rename = s.Title
-			} else {
-				d.rename = ""
-			}
+			d.rename.SetValue(s.Title)
 		case 'g':
 			return sessionDialogAction{GenerateTitle: true, Path: d.sessions[d.cursor].Path}
 		case 'a':

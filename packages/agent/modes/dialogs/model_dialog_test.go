@@ -83,7 +83,7 @@ func TestModelDialogCapabilityFilter(t *testing.T) {
 		return out
 	}
 	set := func(q string) {
-		d.p.query = q
+		d.p.query.SetValue(q)
 		d.p.refilter()
 	}
 

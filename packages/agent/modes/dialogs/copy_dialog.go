@@ -34,13 +34,13 @@ type CopyDialog struct {
 
 	// Stage one.
 	turns       []jumpTarget
-	turnFilter  string
+	turnFilter  tui.LineBuf
 	visibleTurn []jumpTarget
 
 	// Stage two, rebuilt on every descent.
 	turnNo      int
 	parts       []Part
-	partFilter  string
+	partFilter  tui.LineBuf
 	visiblePart []Part
 	ordinals    map[int]int // MsgIdx -> 1-based reply ordinal, when a turn has several
 
@@ -90,8 +90,8 @@ func (d *CopyDialog) Open(msgs []provider.Message, initialFilter string) {
 	// misnumber turns exactly as the jump picker once did.
 	d.turns = buildJumpTargets(msgs)
 	d.stage = copyStageTurns
-	d.turnFilter = initialFilter
-	d.partFilter = ""
+	d.turnFilter.SetValue(initialFilter)
+	d.partFilter.Clear()
 	d.cursor = 0
 	d.applyFilter()
 	d.active = true
@@ -107,7 +107,7 @@ func (d *CopyDialog) Active() bool { return d != nil && d.active }
 func (d *CopyDialog) applyFilter() {
 	if d.stage == copyStageTurns {
 		d.visibleTurn = d.visibleTurn[:0]
-		q := strings.ToLower(d.turnFilter)
+		q := strings.ToLower(d.turnFilter.Value())
 		for _, t := range d.turns {
 			if q == "" || strings.Contains(strings.ToLower(t.Preview), q) {
 				d.visibleTurn = append(d.visibleTurn, t)
@@ -117,7 +117,7 @@ func (d *CopyDialog) applyFilter() {
 		return
 	}
 	d.visiblePart = d.visiblePart[:0]
-	q := strings.ToLower(d.partFilter)
+	q := strings.ToLower(d.partFilter.Value())
 	for _, p := range d.parts {
 		if q == "" || strings.Contains(strings.ToLower(partHaystack(p)), q) {
 			d.visiblePart = append(d.visiblePart, p)
@@ -149,7 +149,7 @@ func (d *CopyDialog) descend() {
 	d.parts = partsForTurn(d.msgs, t.MessageIdx)
 	d.ordinals = replyOrdinals(d.parts)
 	d.stage = copyStageParts
-	d.partFilter = ""
+	d.partFilter.Clear()
 	d.cursor = 0
 	d.vp.Reset()
 	d.applyFilter()
@@ -278,8 +278,9 @@ func (d *CopyDialog) renderTurns(th tui.Theme, width int) []string {
 		return lines
 	}
 	hint := i18n.T("↑/↓ pick - enter open turn - ctrl+y whole reply - esc cancel")
-	if d.turnFilter != "" {
-		hint = i18n.T("filter: %q - %d match - ", d.turnFilter, len(d.visibleTurn)) + hint
+	if d.turnFilter.Value() != "" {
+		// The caret rides in the hint, the only place the filter text shows.
+		hint = i18n.T("filter: %q - %d match - ", d.turnFilter.Render(tui.LineCaret), len(d.visibleTurn)) + hint
 	}
 	lines = append(lines, th.FG256(th.Muted, hint))
 	if len(d.visibleTurn) == 0 {
@@ -305,8 +306,8 @@ func (d *CopyDialog) renderParts(th tui.Theme, width int) []string {
 		return lines
 	}
 	hint := i18n.T("↑/↓ pick - enter copy - ctrl+y whole reply - esc back")
-	if d.partFilter != "" {
-		hint = i18n.T("filter: %q - %d match - ", d.partFilter, len(d.visiblePart)) + hint
+	if d.partFilter.Value() != "" {
+		hint = i18n.T("filter: %q - %d match - ", d.partFilter.Render(tui.LineCaret), len(d.visiblePart)) + hint
 	}
 	lines = append(lines, th.FG256(th.Muted, hint))
 	if len(d.visiblePart) == 0 {
@@ -478,10 +479,6 @@ func (d *CopyDialog) HandleKey(k tui.Key) copyDialogAction {
 		if d.cursor < 0 {
 			d.cursor = 0
 		}
-	case tui.KeyBackspace:
-		d.trimFilter()
-	case tui.KeyRune:
-		d.extendFilter(k.Rune)
 	case tui.KeyCtrlY:
 		return d.copyWhole()
 	case tui.KeyEsc:
@@ -502,6 +499,13 @@ func (d *CopyDialog) HandleKey(k tui.Key) copyDialogAction {
 		p := d.visiblePart[d.cursor]
 		d.Close()
 		return copyDialogAction{Copy: true, Text: p.Text, Kind: p.Kind, TurnNo: d.turnNo}
+	default:
+		// The stage's filter owns the rest: typing, cursor movement, the kills.
+		// It runs after the cases above, so ctrl+y stays copy-whole rather than
+		// becoming a text chord.
+		if _, changed := d.stageFilter().HandleKey(k); changed {
+			d.applyFilter()
+		}
 	}
 	return copyDialogAction{}
 }
@@ -532,29 +536,11 @@ func (d *CopyDialog) visibleLen() int {
 	return len(d.visibleTurn)
 }
 
-func (d *CopyDialog) extendFilter(r rune) {
+// stageFilter is the filter of the stage now on screen. Each stage keeps its
+// own, so backing out of a part list restores the turn filter that found it.
+func (d *CopyDialog) stageFilter() *tui.LineBuf {
 	if d.stage == copyStageParts {
-		d.partFilter += string(r)
-	} else {
-		d.turnFilter += string(r)
+		return &d.partFilter
 	}
-	d.applyFilter()
-}
-
-func (d *CopyDialog) trimFilter() {
-	cur := d.turnFilter
-	if d.stage == copyStageParts {
-		cur = d.partFilter
-	}
-	if cur == "" {
-		return
-	}
-	runes := []rune(cur)
-	cur = string(runes[:len(runes)-1])
-	if d.stage == copyStageParts {
-		d.partFilter = cur
-	} else {
-		d.turnFilter = cur
-	}
-	d.applyFilter()
+	return &d.turnFilter
 }

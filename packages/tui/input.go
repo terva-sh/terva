@@ -49,6 +49,7 @@ const (
 	KeyCtrlT
 	KeyCtrlV
 	KeyCtrlY
+	KeyCtrlN
 	KeyPaste
 	KeyMouseWheelUp
 	KeyMouseWheelDown
@@ -99,6 +100,11 @@ func ctrlChordKind(b byte) (KeyKind, bool) {
 		return KeyCtrlK, true
 	case 0x0c:
 		return KeyCtrlL, true
+	case 0x0e:
+		// SO in ASCII, and readline's next-history, but neither reaches us:
+		// termios reserves no character for it (VSTOP is 0x13, VDSUSP 0x19,
+		// VLNEXT 0x16), so it arrives as an ordinary chord.
+		return KeyCtrlN, true
 	case 0x0f:
 		return KeyCtrlO, true
 	case 0x12:
@@ -317,7 +323,7 @@ func (r *Reader) dispatchCSI(params string, final byte) Key {
 	// (kitty keyboard protocol), or CSI 27;<mod>;<code>~ (xterm
 	// modifyOtherKeys). Decode the modifier bitmask, then route the
 	// protocol-specific encodings before the bare-final arrow switch.
-	shift, alt := parseCSIModifiers(params)
+	shift, alt, ctrl := parseCSIModifiers(params)
 	if final == 'u' {
 		if key, ok := parseCSIU(params); ok {
 			return key
@@ -329,14 +335,18 @@ func (r *Reader) dispatchCSI(params string, final byte) Key {
 		}
 	}
 	switch final {
+	// Ctrl rides on the arrows so a field can bind ctrl+left to word motion,
+	// which is the first thing a terminal user reaches for. It was dropped here
+	// for years, so ctrl+left arrived as a bare left arrow and moved one
+	// character in every text field terva has.
 	case 'A':
-		return Key{Kind: KeyUp, Alt: alt, Shift: shift}
+		return Key{Kind: KeyUp, Alt: alt, Shift: shift, Ctrl: ctrl}
 	case 'B':
-		return Key{Kind: KeyDown, Alt: alt, Shift: shift}
+		return Key{Kind: KeyDown, Alt: alt, Shift: shift, Ctrl: ctrl}
 	case 'C':
-		return Key{Kind: KeyRight, Alt: alt, Shift: shift}
+		return Key{Kind: KeyRight, Alt: alt, Shift: shift, Ctrl: ctrl}
 	case 'D':
-		return Key{Kind: KeyLeft, Alt: alt, Shift: shift}
+		return Key{Kind: KeyLeft, Alt: alt, Shift: shift, Ctrl: ctrl}
 	case 'H':
 		return Key{Kind: KeyHome}
 	case 'F':
@@ -359,23 +369,23 @@ func (r *Reader) dispatchCSI(params string, final byte) Key {
 	return Key{Kind: KeyUnknown}
 }
 
-func parseCSIModifiers(params string) (shift, alt bool) {
+func parseCSIModifiers(params string) (shift, alt, ctrl bool) {
 	if params == "" {
-		return false, false
+		return false, false, false
 	}
 	i := strings.LastIndexByte(params, ';')
 	if i < 0 || i+1 >= len(params) {
-		return false, false
+		return false, false, false
 	}
 	mod, err := strconv.Atoi(params[i+1:])
 	if err != nil {
-		return false, false
+		return false, false, false
 	}
 	// Xterm-style modifier values are 1 plus a bitmask:
 	// 2=Shift, 3=Alt, 4=Shift+Alt, 5=Ctrl, 6=Shift+Ctrl,
 	// 7=Alt+Ctrl, 8=Shift+Alt+Ctrl.
 	bits := mod - 1
-	return bits&1 != 0, bits&2 != 0
+	return bits&1 != 0, bits&2 != 0, bits&4 != 0
 }
 
 // parseCSIU decodes the kitty keyboard protocol's CSI <code>;<mod>u form.

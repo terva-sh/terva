@@ -117,7 +117,7 @@ func TestPickerFiltersByNameAndID(t *testing.T) {
 	}, "", 5)
 
 	for _, needle := range []string{"qwen coder", "unsloth", "Q4_K_XL"} {
-		p.query = needle
+		p.query.SetValue(needle)
 		p.refilter()
 		if len(p.view) != 1 || p.view[0].ID != longOllamaID {
 			t.Errorf("query %q matched %d rows, want just the renamed model", needle, len(p.view))

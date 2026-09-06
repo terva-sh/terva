@@ -108,9 +108,6 @@ func (d *RescueDialog) Render(th tui.Theme, width int) []string {
 }
 
 func (d *RescueDialog) HandleKey(k tui.Key) rescueDialogAction {
-	if d.p.handleNavKey(k) {
-		return rescueDialogAction{}
-	}
 	switch k.Kind {
 	case tui.KeyEsc:
 		d.Close()
@@ -124,5 +121,8 @@ func (d *RescueDialog) HandleKey(k tui.Key) rescueDialogAction {
 		}
 		return rescueDialogAction{Select: true, Provider: m.Provider, Model: m.ID, Prompt: prompt}
 	}
+	// The picker takes what this dialog did not claim, the same order the model
+	// dialog uses: an explicit binding beats the filter's readline chords.
+	d.p.handleNavKey(k)
 	return rescueDialogAction{}
 }

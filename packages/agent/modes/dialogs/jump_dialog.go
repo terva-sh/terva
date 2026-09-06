@@ -54,7 +54,7 @@ type JumpDialog struct {
 	// MaxRows is the body height the host budgets from the terminal
 	// (dialogs.BodyBudget). 0 falls back to jumpFallbackRows.
 	MaxRows int
-	filter  string
+	filter  tui.LineBuf
 }
 
 // jumpDialogAction is returned by HandleKey. Purpose is the one Open was given,
@@ -82,7 +82,7 @@ func NewJumpDialog() *JumpDialog { return &JumpDialog{} }
 func (d *JumpDialog) Open(msgs []provider.Message, initialFilter string, purpose JumpPurpose) {
 	d.all = buildJumpTargets(msgs)
 	d.purpose = purpose
-	d.filter = initialFilter
+	d.filter.SetValue(initialFilter)
 	d.applyFilter()
 	// Start on the last (most recent) target so enter-without-typing
 	// goes to the newest turn, which is almost never what you want
@@ -112,10 +112,10 @@ func (d *JumpDialog) Targets() []jumpTarget {
 // is case-insensitive substring on the preview. An empty filter
 // returns all targets.
 func (d *JumpDialog) applyFilter() {
-	if d.filter == "" {
+	if d.filter.Value() == "" {
 		d.visible = append(d.visible[:0], d.all...)
 	} else {
-		q := strings.ToLower(d.filter)
+		q := strings.ToLower(d.filter.Value())
 		d.visible = d.visible[:0]
 		for _, t := range d.all {
 			if strings.Contains(strings.ToLower(t.Preview), q) {
@@ -153,8 +153,9 @@ func (d *JumpDialog) Render(th tui.Theme, width int) []string {
 
 	// Status line: shows the active filter, visible count, and hints.
 	hint := "↑/↓ pick - enter jump - esc cancel - type to filter"
-	if d.filter != "" {
-		hint = i18n.T("filter: %q - %d match - ", d.filter, len(d.visible)) + hint
+	if d.filter.Value() != "" {
+		// The caret goes in the hint, the only place the filter text shows.
+		hint = i18n.T("filter: %q - %d match - ", d.filter.Render(tui.LineCaret), len(d.visible)) + hint
 	}
 	lines = append(lines, th.FG256(th.Muted, hint))
 
@@ -248,16 +249,6 @@ func (d *JumpDialog) HandleKey(k tui.Key) jumpDialogAction {
 		if d.cursor >= len(d.visible) {
 			d.cursor = len(d.visible) - 1
 		}
-	case tui.KeyBackspace:
-		if len(d.filter) > 0 {
-			runes := []rune(d.filter)
-			d.filter = string(runes[:len(runes)-1])
-			d.applyFilter()
-		}
-	case tui.KeyRune:
-		// Any printable rune extends the filter.
-		d.filter += string(k.Rune)
-		d.applyFilter()
 	case tui.KeyEsc:
 		d.Close()
 		return jumpDialogAction{Close: true}
@@ -268,6 +259,12 @@ func (d *JumpDialog) HandleKey(k tui.Key) jumpDialogAction {
 		t := d.visible[d.cursor]
 		d.Close()
 		return jumpDialogAction{Select: true, Purpose: d.purpose, MessageIdx: t.MessageIdx, TurnNo: t.TurnNo}
+	default:
+		// The filter owns the rest: typing, cursor movement, the kills. Only a
+		// text change re-filters, so moving the cursor holds the selected turn.
+		if _, changed := d.filter.HandleKey(k); changed {
+			d.applyFilter()
+		}
 	}
 	return jumpDialogAction{}
 }
