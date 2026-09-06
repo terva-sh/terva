@@ -730,8 +730,57 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .groupmenu-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .groupmenu-new { color: var(--user); border-top: 1px solid var(--line); margin-top: 2px; }
 
-/* toast */
-.toast { position: fixed; left: 50%; bottom: 80px; transform: translateX(-50%); background: var(--danger); color: #fff; padding: 8px 14px; border-radius: 10px; max-width: 90vw; cursor: pointer; z-index: 30; box-shadow: 0 4px 16px #0004; }
+/* toast — see features/interactions/Toast.tsx for the placement and lifetime
+   rules this sheet implements.
+
+   The dock is the live region and the positioner; it is always in the DOM and
+   is empty most of the time, so it must not swallow clicks (pointer-events)
+   and must not paint (no background, no border).
+
+   --toast-lift is the composer's measured height, published by the composer
+   itself. This replaced `bottom: 80px`, which was a guess at that height: a
+   multi-line draft or a row of attachment chips grew the input up through the
+   toast, and the message covered the text it was about. Where there is no
+   composer (landing, board) the variable is absent and the fallback is the
+   safe-area inset, which is the right floor for those views. */
+.toast-dock {
+  position: fixed;
+  left: 0; right: 0;
+  bottom: calc(var(--toast-lift, var(--safe-bottom)) + 12px);
+  z-index: 30;
+  display: flex;
+  justify-content: center;
+  padding: 0 12px;
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  max-width: min(100%, 560px);
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 4px 16px #0004;
+  /* 220ms must equal TOAST_FADE_MS in Toast.tsx, which is the unmount timer
+     waiting on this transition. Toast.test.tsx reads both and fails if they
+     drift: too short a timer clips the fade, too long leaves a dead element
+     over the composer. */
+  transition: opacity 220ms ease, transform 220ms ease;
+}
+/* The fade-out. The view sets this class, then unmounts once the transition
+   has had its time — the class is the whole animation, and the timer in the
+   component only has to outlast it. */
+.toast.is-leaving { opacity: 0; transform: translateY(4px); }
+/* Colour carries the kind. Every toast used to be --danger, so "saved settings
+   for X" and "signed in" arrived in the same red box as a failure. */
+.toast--error { background: var(--danger); color: #fff; }
+.toast--success { background: var(--ok); color: #fff; }
+.toast--note { background: var(--panel); color: var(--fg); border-color: var(--line); }
+@media (prefers-reduced-motion: reduce) {
+  .toast { transition: none; }
+}
 
 /* header identity (persona + session title) — flexes to fill the bar so the
    title gets whatever room the fixed-width controls leave, then ellipsizes. */
@@ -835,6 +884,10 @@ button.ident-home:hover .persona { text-decoration: underline; }
    read — down to a single glyph. */
 .pick-id { flex: 1 1 auto; min-width: 10ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 13px; }
 .pick-meta { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); }
+/* The models.json marker. flex:none so a narrow row eats the id or the meta
+   before it: this is the tag that says whether the ⚙ form's reset button will
+   restore defaults or delete the row, so it is the last thing to give way. */
+.pick-tag { flex: none; padding: 1px 6px; border: 1px solid var(--line); border-radius: 10px; font-size: 11px; color: var(--muted); }
 .pick-empty { padding: 20px 12px; color: var(--muted); text-align: center; }
 
 /* The workspace drawer's About tab — the daemon's own facts, shown where there
@@ -1101,6 +1154,14 @@ button.ident-home:hover .persona { text-decoration: underline; }
 .prov-label { font-size: 11px; color: var(--muted); }
 .prov-field input { min-width: 0; width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
 .prov-help { font-size: 11px; color: var(--muted); }
+/* A list param (the reasoning efforts a backend accepts): a checkbox per value
+   terva knows, then a box for one it does not. The checkbox rule has to carry
+   an attribute selector to outrank `.prov-field input`, which sets width:100%
+   for the text boxes and would otherwise stretch every tick across the pane. */
+.prov-list { display: flex; flex-direction: column; gap: 6px; }
+.prov-list-opts { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.prov-check { display: flex; align-items: center; gap: 4px; font-size: 12px; }
+.prov-check input[type="checkbox"] { width: auto; min-width: 0; margin: 0; padding: 0; }
 .prov-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
 
 /* Sub-agent tier ladder — the ⇅ on a provider group in the model picker.

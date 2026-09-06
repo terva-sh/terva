@@ -19,6 +19,10 @@ func init() { Catalog = append(Catalog, supplementCatalog...) }
 
 var supplementCatalog = []Model{
 	// ----- openai-responses (public OpenAI Responses API) -----
+	{Provider: "openai-responses", ID: "gpt-6-astra", DisplayName: "GPT-6 Astra (Responses)",
+		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
+		MaxOutput: 128000, Reasoning: true,
+		PriceInput: 10, PriceOutput: 50, PriceCacheRead: 1, PriceCacheWrite: 12.5},
 	{Provider: "openai-responses", ID: "gpt-5", DisplayName: "GPT-5 (Responses)",
 		ContextWindow: 400000, MaxOutput: 128000, Reasoning: true,
 		PriceInput: 1.25, PriceOutput: 10.00, PriceCacheRead: 0.125},

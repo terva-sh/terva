@@ -47,6 +47,7 @@ files.list	params=FilesListParams	result=FilesListResult
 i18n.catalog	params=I18nCatalogParams	result=I18nCatalogResult
 message.delete	params=MessageDeleteParams	result=-
 message.edit	params=MessageEditParams	result=-
+models.add	params=ModelAddParams	result=-
 models.default_for	params=DefaultForParams	result=DefaultForResult
 models.favorite	params=FavoriteParams	result=-
 models.hide	params=HideParams	result=-

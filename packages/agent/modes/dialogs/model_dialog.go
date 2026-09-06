@@ -46,7 +46,7 @@ type ModelDialog struct {
 	// stage-1 provider list state.
 	providers  []providerRow
 	provCursor int
-	provQuery  string
+	provQuery  tui.LineBuf
 
 	provSet    map[string]bool  // logged-in providers, for re-reading Active()
 	allModels  []provider.Model // full logged-in catalogue, scoped per provider
@@ -88,6 +88,11 @@ type modelDialogAction struct {
 	FavOn    bool   // the new favorite state when Favorite
 	Hide     bool   // toggle the hidden flag for Provider/Model
 	HideOn   bool   // the new hidden state when Hide
+	// Add opens the add form seeded from Provider/Model, which is the CLONE
+	// SOURCE rather than the model being created. A blank form would have to
+	// invent a context window, and a model with none has no gauge and never
+	// auto-condenses.
+	Add      bool
 	Provider string
 	Model    string
 	Close    bool
@@ -113,7 +118,7 @@ func NewModelDialog() *ModelDialog { return &ModelDialog{} }
 func (d *ModelDialog) Open(current string, loggedInProviders, favorites, hidden []string) {
 	d.active = true
 	d.promoting = false
-	d.provQuery = ""
+	d.provQuery.Clear()
 	d.provCursor = 0
 	d.current = current
 	d.catalogRev = provider.CatalogRevision()
@@ -145,6 +150,32 @@ func (d *ModelDialog) Open(current string, loggedInProviders, favorites, hidden 
 	}
 	d.single = false
 	d.stage = stageProvider
+}
+
+// OpenAt is Open, scoped straight to prov's model list with id under the
+// cursor.
+//
+// For the reopen after an add: the model the operator just created is where
+// they are already looking, and enter is the whole cost of switching to it.
+//
+// It falls back to wherever Open landed when prov has no row or the list does
+// not hold id. Both mean the model is not selectable, and dropping the user
+// into a scope that does not contain what the status line just named would be
+// worse than the ordinary provider list.
+func (d *ModelDialog) OpenAt(current string, loggedInProviders, favorites, hidden []string, prov, id string) {
+	d.Open(current, loggedInProviders, favorites, hidden)
+	if d.stage == stageModel && d.scope.name == prov {
+		// Single-provider mode already scoped us here.
+		d.p.cursorToKey(prov + "/" + id)
+		return
+	}
+	for _, row := range d.providers {
+		if row.name == prov {
+			d.enterProvider(row)
+			d.p.cursorToKey(prov + "/" + id)
+			return
+		}
+	}
 }
 
 // reloadModels re-reads the live catalog (Active() can grow as background
@@ -242,10 +273,10 @@ func (d *ModelDialog) reloadCatalog() {
 
 // filteredProviders applies the stage-1 type-to-filter to the provider list.
 func (d *ModelDialog) filteredProviders() []providerRow {
-	if d.provQuery == "" {
+	if d.provQuery.Value() == "" {
 		return d.providers
 	}
-	q := strings.ToLower(d.provQuery)
+	q := strings.ToLower(d.provQuery.Value())
 	var out []providerRow
 	for _, r := range d.providers {
 		if strings.Contains(strings.ToLower(r.label), q) {
@@ -319,14 +350,10 @@ func (d *ModelDialog) handleProviderKey(k tui.Key) modelDialogAction {
 		if d.provCursor >= 0 && d.provCursor < len(rows) && !rows[d.provCursor].fav {
 			return modelDialogAction{Tiers: true, Provider: rows[d.provCursor].name}
 		}
-	case tui.KeyBackspace:
-		if r := []rune(d.provQuery); len(r) > 0 {
-			d.provQuery = string(r[:len(r)-1])
-			d.provCursor = 0
-		}
-	case tui.KeyRune:
-		if !k.Alt && !k.Ctrl && k.Rune >= 0x20 && k.Rune < 0x7f {
-			d.provQuery += string(k.Rune)
+	default:
+		// The filter takes the rest. A changed filter re-homes the cursor; a
+		// cursor move inside the filter text leaves the selected row alone.
+		if _, changed := d.provQuery.HandleKey(k); changed {
 			d.provCursor = 0
 		}
 	}
@@ -334,9 +361,6 @@ func (d *ModelDialog) handleProviderKey(k tui.Key) modelDialogAction {
 }
 
 func (d *ModelDialog) handleModelKey(k tui.Key) modelDialogAction {
-	if d.p.handleNavKey(k) {
-		return modelDialogAction{}
-	}
 	switch k.Kind {
 	case tui.KeyEsc:
 		if d.single {
@@ -417,7 +441,20 @@ func (d *ModelDialog) handleModelKey(k tui.Key) modelDialogAction {
 		}
 		d.Close()
 		return modelDialogAction{Edit: true, Provider: m.Provider, Model: m.ID}
+	case tui.KeyCtrlN:
+		// Clone-from, so the selection is required: it supplies the params the
+		// new model starts with.
+		m, ok := d.p.selected()
+		if !ok {
+			return modelDialogAction{}
+		}
+		d.Close()
+		return modelDialogAction{Add: true, Provider: m.Provider, Model: m.ID}
 	}
+	// The picker gets what this dialog did not claim: list movement and the
+	// filter. It runs last because the filter now owns the readline chords, and
+	// in this list ctrl+e means edit the model, not end of line.
+	d.p.handleNavKey(k)
 	return modelDialogAction{}
 }
 
@@ -454,8 +491,9 @@ func (d *ModelDialog) Render(th tui.Theme, width int) []string {
 func (d *ModelDialog) renderProviders(th tui.Theme, width int) []string {
 	lines := []string{FrameHeader(th, i18n.T("model · provider"), width)}
 	hint := i18n.T("pick a provider (↑/↓, enter, esc), ctrl+t sub-agent tiers - type to filter")
-	if d.provQuery != "" {
-		hint = i18n.T("filter: %s", d.provQuery)
+	if d.provQuery.Value() != "" {
+		// With the caret, so the user can see where a typed rune will land.
+		hint = i18n.T("filter: %s", d.provQuery.Render(tui.LineCaret))
 	}
 	lines = append(lines, th.FG256(th.Muted, hint))
 	if legend := d.tierLegend(); legend != "" {
@@ -464,7 +502,7 @@ func (d *ModelDialog) renderProviders(th tui.Theme, width int) []string {
 
 	rows := d.filteredProviders()
 	if len(rows) == 0 {
-		msg := "  " + i18n.T("no providers match %q", d.provQuery)
+		msg := "  " + i18n.T("no providers match %q", d.provQuery.Value())
 		if len(d.providers) == 0 {
 			msg = "  " + i18n.T("no credentials found - run /login to add an api key or subscription")
 		}
@@ -505,7 +543,10 @@ func (d *ModelDialog) renderModels(th tui.Theme, width int) []string {
 	if !d.single {
 		back = i18n.T("esc back")
 	}
-	base := i18n.T("↑/↓, enter, ctrl+f favorite, ctrl+k hide, ctrl+e edit, ctrl+d set-default, %s - type to filter, :img/:thinking/:hidden", back)
+	// The labels are clipped rather than spelled out. hintLine neither truncates
+	// nor wraps this, so a ninth chord on the long spelling just runs off a
+	// narrow terminal.
+	base := i18n.T("↑/↓, enter, ctrl+f fav, ctrl+k hide, ctrl+e edit, ctrl+d default, ctrl+n new, %s - type to filter, :img/:thinking/:hidden", back)
 	lines = append(lines, th.FG256(th.Muted, d.p.hintLine(base)))
 
 	if len(d.p.view) == 0 {

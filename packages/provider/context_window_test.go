@@ -64,6 +64,38 @@ func TestGPT56CatalogEntries(t *testing.T) {
 	}
 }
 
+func TestGPT6AstraCatalogRoutes(t *testing.T) {
+	for _, provider := range []string{"openai-responses", "openai-codex"} {
+		t.Run(provider, func(t *testing.T) {
+			m, err := FindModel(provider, "gpt-6-astra")
+			if err != nil {
+				t.Fatalf("FindModel: %v", err)
+			}
+			if m.ContextWindow != 1050000 || m.DesiredContextWindow != 272000 || m.ContextSurchargeAt != 272000 {
+				t.Errorf("windows = max %d / desired %d / surcharge %d, want 1050000 / 272000 / 272000",
+					m.ContextWindow, m.DesiredContextWindow, m.ContextSurchargeAt)
+			}
+			if m.EffectiveContextWindow() != 272000 || m.MaxOutput != 128000 {
+				t.Errorf("effective window/output = %d/%d, want 272000/128000", m.EffectiveContextWindow(), m.MaxOutput)
+			}
+			if !m.Reasoning || !MaxIsNative(m) {
+				t.Errorf("reasoning = %v, native max = %v, want both true", m.Reasoning, MaxIsNative(m))
+			}
+			if m.PriceInput != 10 || m.PriceOutput != 50 || m.PriceCacheRead != 1 || m.PriceCacheWrite != 12.5 {
+				t.Errorf("pricing = in %g / out %g / cache-read %g / cache-write %g, want 10 / 50 / 1 / 12.5",
+					m.PriceInput, m.PriceOutput, m.PriceCacheRead, m.PriceCacheWrite)
+			}
+			if _, asserted := m.Caps[CapImageOutput]; asserted {
+				t.Error("CapImageOutput must remain unasserted until live verification")
+			}
+		})
+	}
+
+	if _, err := FindModel("openai", "gpt-6-astra"); err == nil {
+		t.Fatal("plain openai catalog exposes Astra on the Chat Completions wire")
+	}
+}
+
 func TestDesiredContextWindowUserOverride(t *testing.T) {
 	withCatalogState(t)
 

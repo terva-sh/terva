@@ -190,3 +190,38 @@ func rowContaining(t *testing.T, d *ReasoningDialog, want string) string {
 	t.Fatalf("no row contains %q:\n%s", want, strings.Join(out, "\n"))
 	return ""
 }
+
+// 🪤 A model whose row says it cannot think gets seven rungs that all report
+// no thinking setting, and picking any of them does nothing. Saying so seven
+// times is not the same as saying what to do about it. A local endpoint lists
+// its models without saying which of them think, so a model that reasons
+// arrives with the capability off and lands the operator exactly here.
+func TestNoLadderNamesTheRouteOut(t *testing.T) {
+	d := NewReasoningDialog()
+	d.Open("", "medium", provider.Model{Provider: "neot", ID: "qwen3.8-27b-abl"})
+
+	out := strings.Join(d.Render(tui.Theme{}, 90), "\n")
+	if !strings.Contains(out, "ctrl+e") {
+		t.Errorf("no route out of a model with no ladder:\n%s", out)
+	}
+	// The host budgets the body height against ChromeRows, so a line Render
+	// emits and ChromeRows forgets is a rung pushed off the bottom.
+	if got := d.ChromeRows(); got != 4 {
+		t.Errorf("ChromeRows = %d, want 4 with the route-out line", got)
+	}
+}
+
+// And never on a model that already thinks: it would send the operator to a
+// setting that is already right.
+func TestALadderedModelKeepsNoRouteOut(t *testing.T) {
+	d := NewReasoningDialog()
+	d.Open("", "medium", gpt56())
+
+	out := strings.Join(d.Render(tui.Theme{}, 90), "\n")
+	if strings.Contains(out, "ctrl+e") {
+		t.Errorf("route out shown on a model that has a ladder:\n%s", out)
+	}
+	if got := d.ChromeRows(); got != 3 {
+		t.Errorf("ChromeRows = %d, want 3", got)
+	}
+}

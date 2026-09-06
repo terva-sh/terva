@@ -343,7 +343,7 @@ func SetUserModels(models []Model) {
 // left unset keep the underlying entry's values: prices, display name,
 // context window, and max output merge field-by-field, and Reasoning
 // only applies when the models.json entry mentioned it (ReasoningSet).
-// Entries with no underlying match append as new models.
+// Entries with no underlying match append as new models, marked Synthetic.
 func applyUserOverrides(base []Model, overrides []UserOverride) []Model {
 	if len(overrides) == 0 {
 		return base
@@ -356,6 +356,19 @@ func applyUserOverrides(base []Model, overrides []UserOverride) []Model {
 
 	for _, o := range overrides {
 		um := o.Model
+		// The legacy top-level `reasoning` field and capabilities.reasoning are
+		// two spellings of one fact, and they converge HERE so everything below
+		// sees one. The capability map already draws the distinction a
+		// tri-state needs, since key presence means the operator said so, while
+		// the top-level field is a plain bool that cannot tell "off" from
+		// "unmentioned" without ReasoningSet riding alongside it.
+		//
+		// Folding rather than reading the flag further down also covers
+		// SetUserModels, which builds overrides in Go and stamps ReasoningSet on
+		// every one of them.
+		if o.ReasoningSet {
+			um.Caps = mergeCaps(um.Caps, map[Capability]bool{CapReasoning: um.Reasoning})
+		}
 		idx, ok := index[byKey(um.Provider, um.ID)]
 		if !ok {
 			// New model not in any lower layer. Everything about it is the
@@ -371,9 +384,13 @@ func applyUserOverrides(base []Model, overrides []UserOverride) []Model {
 			// Merging um onto a copy of itself is a no-op for every value and
 			// leaves only the signals behind.
 			fresh := um
-			for _, p := range scalarParams {
+			for _, p := range modelParams {
 				p.Merge(&fresh, um)
 			}
+			// Nothing underneath it, so the entry is the only thing holding this
+			// model up. A surface that offers to remove the entry is offering to
+			// delete the model here, and to restore defaults in the branch below.
+			fresh.Synthetic = true
 			base = append(base, fresh)
 			index[byKey(um.Provider, um.ID)] = len(base) - 1
 			continue
@@ -394,32 +411,26 @@ func applyUserOverrides(base []Model, overrides []UserOverride) []Model {
 		if um.PriceOutputImage > 0 {
 			existing.PriceOutputImage = um.PriceOutputImage
 		}
-		// Scalar overrides (display name, base url, context window, max
-		// tokens, temperature) merge through the shared registry, so adding a
-		// scalar parameter needs no edit here — just a ScalarParam entry.
-		for _, p := range scalarParams {
+		// Every editor-managed override merges through the shared registry, so
+		// adding one needs no edit here — just a ModelParam entry. That now
+		// includes the capability tri-states and the accepted-efforts list,
+		// which were hand-written here and reachable from one frontend.
+		for _, p := range modelParams {
 			p.Merge(&existing, um)
 		}
-		if o.ReasoningSet {
-			existing.Reasoning = um.Reasoning
-		}
-		// Not a scalarParams entry: the registry's three kinds are text, int
-		// and float, and it also drives the /model editor form. A list needs
-		// its own line here, and needs it BADLY — every field absent from this
-		// merge is silently discarded for any model that already exists in the
-		// catalog or live layer, which is most of them. A declaration that
-		// does nothing is worse than none: the operator reads it back from
-		// their own file and believes it.
-		if len(um.ReasoningEfforts) > 0 {
-			existing.ReasoningEfforts = um.ReasoningEfforts
-		}
-		// Capability keys merge key-wise; the user's explicit
-		// assertions win over catalog/live/extra. Key presence in the
-		// models.json `capabilities` map IS the explicit-set marker,
-		// so no ReasoningSet-style side flag is needed.
+		// Capability keys merge key-wise; the user's explicit assertions win
+		// over catalog/live/extra. This stays after the registry loop and
+		// covers the same ground for the declared keys, deliberately: an
+		// operator may write a capability terva has no ModelParam for, and
+		// dropping it because the registry has not caught up is how a
+		// forward-compatible file silently loses a field.
 		existing.Caps = mergeCaps(existing.Caps, um.Caps)
 		existing.Source = "user"
 		existing.Speculative = false
+		// A lower layer supplied this row, so the entry only tweaks it. Set
+		// rather than left alone: base is rebuilt on every remerge, but saying so
+		// here keeps the invariant local instead of resting on that.
+		existing.Synthetic = false
 		base[idx] = existing
 	}
 	return base

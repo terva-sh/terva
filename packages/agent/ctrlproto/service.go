@@ -1521,4 +1521,28 @@ type ModelInfo struct {
 	// rendering ids, which is exactly what it did before.
 	DisplayName string `json:"display_name,omitempty"`
 	Renamed     bool   `json:"renamed,omitempty"`
+	// Source is the catalog layer this row came from, mirroring
+	// provider.Model.Source: "catalog" (baked in), "live" (discovered through
+	// /v1/models), "cache" (the on-disk copy of a discovery), or "user" (the
+	// operator's models.json reached it).
+	//
+	// "user" is the one a picker acts on. It is how a client knows to mark the
+	// row as overridden and to offer a reset, and it covers BOTH ways an entry
+	// reaches a model: the loader stamps every entry it builds, and the merge
+	// stamps the row an entry lands on.
+	Source string `json:"source,omitempty"`
+	// Custom says this model exists ONLY because the operator wrote it into
+	// models.json. No catalog row, no discovery, nothing underneath it.
+	//
+	// It always arrives with Source=="user", and it is the narrower question:
+	// Source tells a client that removing the entry changes something, Custom
+	// tells it that removing the entry removes the MODEL. Those need different
+	// words ("custom" against "overridden") and different confirmations, and a
+	// client that reads only Source will offer to restore defaults that do not
+	// exist.
+	//
+	// Not sticky, and a client must not persist it. The day terva ships a
+	// catalog row for the id, or discovery finds it, the same entry reports
+	// Custom=false and Source="user", an override on a real row.
+	Custom bool `json:"custom,omitempty"`
 }

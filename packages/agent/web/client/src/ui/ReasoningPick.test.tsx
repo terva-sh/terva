@@ -155,4 +155,22 @@ describe('ReasoningPick', () => {
     )
     expect(screen.getAllByText('this model takes no thinking setting').length).toBe(7)
   })
+
+  // 🪤 Saying so seven times is not the same as saying what to do. A local
+  // endpoint lists its models without saying which of them think, so a model
+  // that reasons arrives with the capability off and lands the operator here
+  // — in front of seven rows that all refuse, with the fix one dialog away.
+  it('names the route out when the model carries no ladder', () => {
+    render(<ReasoningPick override="" inherit="" onPick={() => {}} onClose={() => {}} />)
+    expect(screen.getByText(/Turn thinking on/)).toBeTruthy()
+  })
+
+  // And never on a model that already thinks: it would send the operator to a
+  // setting that is already right.
+  it('shows no route out when the model has a ladder', () => {
+    render(
+      <ReasoningPick override="" inherit="" rungs={geminiRungs} onPick={() => {}} onClose={() => {}} />,
+    )
+    expect(screen.queryByText(/Turn thinking on/)).toBeNull()
+  })
 })

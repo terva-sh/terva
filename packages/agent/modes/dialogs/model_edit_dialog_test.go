@@ -73,15 +73,15 @@ func TestModelEditReasoningTriState(t *testing.T) {
 	moveTo(d, "reasoning")
 	rf := func() editField { return d.fields[fieldIdx(d, "reasoning")] }
 
-	if rf().set {
+	if rf().value != "" {
 		t.Fatal("reasoning should start inheriting")
 	}
 	d.HandleKey(kind(tui.KeyEnter)) // -> on
-	if !rf().set || !rf().on {
+	if rf().value != "on" {
 		t.Errorf("inherit->on failed: %+v", rf())
 	}
 	d.HandleKey(kind(tui.KeyEnter)) // -> off
-	if !rf().set || rf().on {
+	if rf().value != "off" {
 		t.Errorf("on->off failed: %+v", rf())
 	}
 	act := d.HandleKey(rn('s'))
@@ -104,7 +104,7 @@ func TestModelEditPrefillPreserves(t *testing.T) {
 	if d.fields[fieldIdx(d, "baseUrl")].value != "http://local:1234" {
 		t.Errorf("base url not pre-filled: %q", d.fields[fieldIdx(d, "baseUrl")].value)
 	}
-	if ii := d.fields[fieldIdx(d, "imageInput")]; !ii.set || ii.on { // pre-filled explicit-off
+	if ii := d.fields[fieldIdx(d, "imageInput")]; ii.value != "off" { // pre-filled explicit-off
 		t.Errorf("image-input prefill wrong: %+v", ii)
 	}
 	act := d.HandleKey(rn('s'))
@@ -254,7 +254,7 @@ func TestModelDialogCtrlEOpensEditor(t *testing.T) {
 }
 
 // The default-thinking row is a picker over the model's own ladder, not a
-// free-text box. It was ScalarText, which made the one field that could stop
+// free-text box. It was ParamText, which made the one field that could stop
 // you re-setting a thinking level every session into something you had to
 // type blind, with an "inherit ()" hint that named nothing.
 func TestEditDefaultThinkingIsAPickerOverTheModelsLadder(t *testing.T) {

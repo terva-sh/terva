@@ -154,3 +154,130 @@ describe('ModelParamsForm enum params', () => {
     expect(onSave).toHaveBeenLastCalledWith({ defaultReasoning: '' })
   })
 })
+
+// The capability tri-states. These reached the wire late: the TUI hand-wrote
+// them as form rows for months while this form, reading the same registry,
+// showed nothing — so telling terva that a local model can think meant editing
+// models.json by hand, on every machine.
+describe('ModelParamsForm capability tri-states', () => {
+  const capView: ModelParamsView = {
+    provider: 'neot',
+    model: 'qwen3.8-27b-abl',
+    has_override: false,
+    params: [{ key: 'reasoning', label: 'thinking', kind: 'tristate', default: 'off' }],
+  }
+
+  // 🪤 A checkbox has two states and this setting has three. "Off" is the
+  // operator overruling terva and it keeps outranking discovery; the empty
+  // value leaves the catalog deciding. Rendered as a checkbox, every model this
+  // form was opened on would come back pinned.
+  it('offers inherit, on and off, rather than a checkbox', () => {
+    render(<ModelParamsForm view={capView} busy={false} error="" onSave={() => {}} onReset={() => {}} onCancel={() => {}} />)
+
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    const select = screen.getByRole('combobox') as HTMLSelectElement
+    expect([...select.options].map((o) => o.value)).toEqual(['', 'on', 'off'])
+    expect(select.value).toBe('')
+    expect(select.options[0].text).toContain('off') // names what inheriting means here
+  })
+
+  it('sends the picked state back, and an empty pick clears the override', () => {
+    const onSave = vi.fn()
+    render(<ModelParamsForm view={capView} busy={false} error="" onSave={onSave} onReset={() => {}} onCancel={() => {}} />)
+
+    const select = screen.getByRole('combobox') as HTMLSelectElement
+    fireEvent.change(select, { target: { value: 'on' } })
+    fireEvent.click(screen.getByText('Save'))
+    expect(onSave).toHaveBeenCalledWith({ reasoning: 'on' })
+
+    fireEvent.change(select, { target: { value: '' } })
+    fireEvent.click(screen.getByText('Save'))
+    expect(onSave).toHaveBeenLastCalledWith({ reasoning: '' })
+  })
+})
+
+// A list param: which reasoning_effort values a backend accepts. Declaring them
+// removes a guess rather than adding a preference — undeclared, terva clamps
+// its top two rungs to "high", so a server that takes "xhigh" never sees it.
+describe('ModelParamsForm list params', () => {
+  const scale = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+  const listView: ModelParamsView = {
+    provider: 'neot',
+    model: 'qwen3.8-27b-abl',
+    has_override: false,
+    params: [
+      {
+        key: 'reasoningEfforts',
+        label: 'accepted efforts',
+        kind: 'list',
+        default: 'undeclared',
+        options: scale,
+        free_values: true,
+      },
+    ],
+  }
+
+  it('renders one checkbox per value the daemon offers', () => {
+    render(<ModelParamsForm view={listView} busy={false} error="" onSave={() => {}} onReset={() => {}} onCancel={() => {}} />)
+    expect(screen.getAllByRole('checkbox')).toHaveLength(scale.length)
+    for (const v of scale) expect(screen.getByText(v)).toBeTruthy()
+  })
+
+  // Saved in the daemon's order, not the order they were clicked, so two
+  // operators who picked the same set save the same string and the value reads
+  // as a scale rather than a history of clicks.
+  it('composes the set in the daemon order', () => {
+    const onSave = vi.fn()
+    render(<ModelParamsForm view={listView} busy={false} error="" onSave={onSave} onReset={() => {}} onCancel={() => {}} />)
+
+    const boxes = screen.getAllByRole('checkbox')
+    fireEvent.click(boxes[scale.indexOf('xhigh')])
+    fireEvent.click(boxes[scale.indexOf('low')])
+    fireEvent.click(screen.getByText('Save'))
+
+    expect(onSave).toHaveBeenCalledWith({ reasoningEfforts: 'low, xhigh' })
+  })
+
+  it('pre-ticks the values already pinned, and unticking clears them', () => {
+    const onSave = vi.fn()
+    const pinned: ModelParamsView = {
+      ...listView,
+      has_override: true,
+      params: [{ ...listView.params[0], value: 'none, low, medium, xhigh' }],
+    }
+    render(<ModelParamsForm view={pinned} busy={false} error="" onSave={onSave} onReset={() => {}} onCancel={() => {}} />)
+
+    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[]
+    expect(boxes.filter((b) => b.checked)).toHaveLength(4)
+
+    fireEvent.click(boxes[scale.indexOf('none')])
+    fireEvent.click(screen.getByText('Save'))
+    expect(onSave).toHaveBeenCalledWith({ reasoningEfforts: 'low, medium, xhigh' })
+  })
+
+  // 🪤 The escape hatch. clampEffortToDeclared leaves an effort it does not
+  // recognize alone, because an unknown effort is the server's own word. A
+  // closed picker would make that reachable only by hand-editing the file,
+  // which is the failure this whole form exists to end.
+  it('keeps a value that is not on terva scale', () => {
+    const onSave = vi.fn()
+    render(<ModelParamsForm view={listView} busy={false} error="" onSave={onSave} onReset={() => {}} onCancel={() => {}} />)
+
+    fireEvent.click(screen.getAllByRole('checkbox')[scale.indexOf('low')])
+    fireEvent.input(screen.getByPlaceholderText(/another value/), { target: { value: 'ludicrous' } })
+    fireEvent.click(screen.getByText('Save'))
+
+    expect(onSave).toHaveBeenCalledWith({ reasoningEfforts: 'low, ludicrous' })
+  })
+
+  // A closed list gets no free box: offering one would invite a value the
+  // daemon is about to refuse.
+  it('offers the free box only when the daemon says the set is open', () => {
+    const closed: ModelParamsView = {
+      ...listView,
+      params: [{ ...listView.params[0], free_values: false }],
+    }
+    render(<ModelParamsForm view={closed} busy={false} error="" onSave={() => {}} onReset={() => {}} onCancel={() => {}} />)
+    expect(screen.queryByPlaceholderText(/another value/)).toBeNull()
+  })
+})

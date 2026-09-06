@@ -76,6 +76,24 @@ type Model struct {
 	// on-disk cache). Informational.
 	Source string
 
+	// Synthetic marks a model that exists ONLY because the operator wrote it
+	// into models.json. No catalog row, no discovery, nothing underneath it.
+	//
+	// Source alone cannot answer this. Every entry the loader builds carries
+	// Source="user" already, and applyUserOverrides stamps it again on a row it
+	// merges onto, so a catalog model whose context window someone nudged and a
+	// model someone invented both read "user" by the time a picker sees them.
+	// The two need different words ("overridden" against "custom") and, more
+	// sharply, different destructive actions: removing the models.json entry
+	// restores defaults for the first and deletes the second outright.
+	//
+	// It is not sticky. The flag says "nothing underneath it AS MERGED", so a
+	// model that terva later ships a catalog row for, or that /v1/models
+	// discovers, comes back from the next merge as a plain override. That is
+	// the wanted behavior: the catalog caught up, and the entry is now a tweak
+	// on top of a real row rather than the only thing holding it up.
+	Synthetic bool
+
 	// Caps holds explicit capability assertions; an absent key means
 	// unknown and resolves through capDefaults via Has. Treat as
 	// immutable after construction — Model is copied by value
@@ -654,6 +672,15 @@ var Catalog = []Model{
 		MaxOutput: 128000, Reasoning: true,
 		PriceInput: 1, PriceOutput: 6, PriceCacheRead: 0.1, PriceCacheWrite: 1.25,
 		Caps: map[Capability]bool{CapImageOutput: true},
+	},
+	{
+		// OpenAI announced a staged rollout on 2026-09-03. Catalog presence
+		// lets entitled accounts select Astra without claiming universal access.
+		// CapImageOutput stays unset until this route is live-verified.
+		Provider: "openai-codex", ID: "gpt-6-astra", DisplayName: "GPT-6 Astra",
+		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
+		MaxOutput: 128000, Reasoning: true,
+		PriceInput: 10, PriceOutput: 50, PriceCacheRead: 1, PriceCacheWrite: 12.5,
 	},
 }
 

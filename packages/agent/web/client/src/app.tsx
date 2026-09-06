@@ -49,6 +49,7 @@ import type {
   ArchivedSessionInfo,
   SessionInfo,
   Group,
+  SettingItem,
   SettingsView,
   NextStepResult,
   SkillInfo,
@@ -76,6 +77,7 @@ import { Composer, type SlashCommand } from './features/conversation/Composer'
 import { ConversationTimeline } from './features/conversation/ConversationTimeline'
 import type { ToolView } from './features/conversation/types'
 import { AskRequest as AskRequestView } from './features/interactions/AskRequest'
+import { ToastDock, useToast } from './features/interactions/Toast'
 import { PermissionRequest as PermissionRequestView } from './features/interactions/PermissionRequest'
 import { ModelParamsForm } from './features/models/ModelParamsForm'
 import { ModelTiersPanel } from './features/models/ModelTiersPanel'
@@ -248,7 +250,10 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   const [permission, setPermission] = useState<PermissionRequest | null>(null)
   const [ask, setAsk] = useState<AskRequest | null>(null)
   const [drawer, setDrawer] = useState(false)
-  const [toast, setToast] = useState('')
+  // Toasts. Call sites pick notify.error / notify.ok / notify.note by what
+  // KIND of thing happened; how long each kind lives is Toast.tsx's decision,
+  // not theirs. Only an error waits to be dismissed.
+  const { toast, notify } = useToast()
   const [toolView, setToolView] = useState<ToolView>(
     () => (localStorage.getItem('terva_toolview') as ToolView) || 'full',
   )
@@ -356,6 +361,13 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   const [modelParams, setModelParams] = useState<ModelParamsView | null>(null)
   const [modelParamsBusy, setModelParamsBusy] = useState(false)
   const [modelParamsErr, setModelParamsErr] = useState('')
+  // Set when the params form is CREATING rather than editing, in which case
+  // modelParams describes the clone source rather than the model being made.
+  const [modelAdding, setModelAdding] = useState(false)
+  // The reachable set from models.list, for the add form's provider row. Not
+  // derived from `models`: a provider with no models yet has no row there, and
+  // it is the one an add form is most needed for.
+  const [reachableProviders, setReachableProviders] = useState<string[]>([])
   // Pane host (surfaces): context/usage/extension panels in a right rail.
   const [paneOpen, setPaneOpen] = useState(false)
   const [surfaces, setSurfaces] = useState<SurfaceMeta[]>([])
@@ -438,6 +450,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       const res = await c.send<ModelsResult>('models.list', null, curRef.current)
       setModels(res.models ?? [])
       setLadders(res.reasoning_ladders ?? {})
+      setReachableProviders(res.providers ?? [])
     } catch {
       /* control group optional */
     }
@@ -479,7 +492,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         await c.send('models.favorite', { provider, model: id, on }, '')
         await reloadModels()
       } catch (e) {
-        setToast(errText(e))
+        notify.error(errText(e))
       }
     },
     [reloadModels],
@@ -498,7 +511,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         await c.send('models.hide', { provider, model: id, on }, '')
         await reloadModels()
       } catch (e) {
-        setToast(errText(e))
+        notify.error(errText(e))
       }
     },
     [reloadModels],
@@ -516,13 +529,13 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       try {
         await c.send('models.set_default', { provider, model: id, scope }, '')
         await reloadModels()
-        setToast(
+        notify.ok(
           scope === 'project'
             ? t('%s is the default for this project', id)
             : t('%s is the default for new sessions', id),
         )
       } catch (e) {
-        setToast(errText(e))
+        notify.error(errText(e))
       }
     },
     [reloadModels],
@@ -553,7 +566,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       const g = sessionGroups.find((x) => x.id === groupId)
       if (!g) return
       const members = g.members.includes(s.id) ? g.members.filter((m) => m !== s.id) : [...g.members, s.id]
-      await c.send('sessiongroups.set_members', { id: g.id, members }, '').catch((e) => setToast(errText(e)))
+      await c.send('sessiongroups.set_members', { id: g.id, members }, '').catch((e) => notify.error(errText(e)))
       await refreshSessions(c)
     },
     [sessionGroups, refreshSessions],
@@ -569,7 +582,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         const g = await c.send<Group>('sessiongroups.save', { name: name.trim() }, '')
         await c.send('sessiongroups.set_members', { id: g.id, members: [s.id] }, '')
       } catch (e) {
-        setToast(errText(e))
+        notify.error(errText(e))
         return
       }
       await refreshSessions(c)
@@ -677,7 +690,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     try {
       await c.send<unknown>('surface.action', { id: 'tasks', action: 'spawn', args }, curRef.current)
     } catch (e) {
-      setToast((e as { message?: string })?.message || t('could not spawn the agent'))
+      notify.error((e as { message?: string })?.message || t('could not spawn the agent'))
     }
   }, [])
 
@@ -782,7 +795,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         await refreshSessions(cl)
         selectSession(res.session.id)
       } catch (e) {
-        setToast(errText(e))
+        notify.error(errText(e))
       }
     },
     [refreshSessions, selectSession],
@@ -992,7 +1005,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           setAuthBusy(false)
           setAuthErr('')
           if (a.kind === 'success' && a.method !== 'logout') {
-            setToast(t('signed in to %s', a.provider ?? ''))
+            notify.ok(t('signed in to %s', a.provider ?? ''))
           }
         }
         if (a.kind === 'error') {
@@ -1084,7 +1097,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         armNextStep()
         return
       case 'error':
-        setToast(ev.error ?? 'error')
+        notify.error(ev.error ?? 'error')
         setBusy(false)
         setReasoning('')
         // A failed turn is no basis for "here's what to do next".
@@ -1177,7 +1190,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       fileListAt.current = 0
       const ver = hello?.version ?? ''
       if (ver && verRef.current && ver !== verRef.current) {
-        setToast(t('terva restarted: v%s → v%s', verRef.current, ver))
+        notify.note(t('terva restarted: v%s → v%s', verRef.current, ver))
       }
       verRef.current = ver
       setServerVersion(ver)
@@ -1187,6 +1200,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         const res = await c.send<ModelsResult>('models.list', null, curRef.current)
         setModels(res.models ?? [])
         setLadders(res.reasoning_ladders ?? {})
+        setReachableProviders(res.providers ?? [])
       } catch {
         /* control group optional */
       }
@@ -1332,7 +1346,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   const restart = useCallback(() => {
     clientRef.current?.send('control.restart', null, '').catch((e: unknown) => {
       const msg = restartRejection(e)
-      if (msg !== null) setToast(t('restart failed: %s', msg))
+      if (msg !== null) notify.error(t('restart failed: %s', msg))
     })
   }, [])
 
@@ -1344,7 +1358,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     const c = clientRef.current
     if (!c) return
     c.send(trust ? 'control.trust' : 'control.untrust', trust ? { parent: false } : null, '').catch((e) =>
-      setToast(errText(e)),
+      notify.error(errText(e)),
     )
   }, [])
 
@@ -1394,7 +1408,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
             // An empty line is an ordinary answer, not a failure — the daemon
             // invites the model to stay quiet when nothing is obvious. Worth
             // saying only to someone who asked and is waiting.
-            if (onDemand) setToast(t('Nothing obvious to suggest.'))
+            if (onDemand) notify.note(t('Nothing obvious to suggest.'))
             return
           }
           // An unbidden offer re-checks the room on arrival: the user may have
@@ -1405,7 +1419,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         .catch((e) => {
           // Unbidden failures stay silent. Nobody asked, and a toast for
           // something the user did not request is noise.
-          if (onDemand) setToast(errText(e))
+          if (onDemand) notify.error(errText(e))
         })
     },
     [],
@@ -1463,7 +1477,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     lastTurnBadRef.current = false
     if (busyRef.current) {
       if (hasImages || hasFiles) {
-        setToast(t('Finish the current turn before attaching files (the queue is text-only).'))
+        notify.note(t('Finish the current turn before attaching files (the queue is text-only).'))
         return false
       }
       setQueued((q) => [...q, text])
@@ -1590,6 +1604,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           const res = await c.send<ModelsResult>('models.list', null, curRef.current)
           setModels(res.models ?? [])
           setLadders(res.reasoning_ladders ?? {})
+          setReachableProviders(res.providers ?? [])
         } catch {
           /* a models refresh failure does not undo the login */
         }
@@ -1663,11 +1678,59 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     setModelParamsErr('')
     try {
       const v = await c.send<ModelParamsView>('models.params', { provider, model: id }, '')
+      setModelAdding(false)
       setModelParams(v)
     } catch (e) {
-      setToast(authMessage(e))
+      notify.error(authMessage(e))
     }
   }, [])
+
+  // Clone-from: the same descriptor call, opened in create mode. The form seeds
+  // its boxes from each spec's `default` rather than its `value`, which is what
+  // makes the copy carry the source's real numbers instead of its (usually
+  // empty) models.json pins.
+  const openModelAdd = useCallback(async (provider: string, id: string) => {
+    const c = clientRef.current
+    if (!c) return
+    setModelParamsErr('')
+    try {
+      const v = await c.send<ModelParamsView>('models.params', { provider, model: id }, '')
+      setModelAdding(true)
+      setModelParams(v)
+    } catch (e) {
+      notify.error(authMessage(e))
+    }
+  }, [])
+
+  // models.add, not models.params.set. That method refuses an id it cannot
+  // resolve, and this one refuses an id it can: the guards are inverses, and a
+  // create flag on the one verb would have to switch off the check that stops an
+  // edit landing on the wrong provider's copy of a shared id.
+  const addModel = useCallback(
+    async (provider: string, model: string, values: Record<string, string>) => {
+      const c = clientRef.current
+      if (!c) return
+      setModelParamsBusy(true)
+      setModelParamsErr('')
+      try {
+        await c.send('models.add', { provider, model, values }, '')
+        setModelParams(null)
+        setModelAdding(false)
+        // The new model has to reach the picker we are returning to, and its
+        // provider may be one that had no rows until now.
+        await reloadModels()
+        notify.ok(t('added %s', `${provider}/${model}`))
+      } catch (e) {
+        // Kept open with the daemon's own words. It owns the two refusals the
+        // form cannot make itself, a duplicate id and an unreachable provider,
+        // and closing the form would take the reason away with the typing.
+        setModelParamsErr(authMessage(e))
+      } finally {
+        setModelParamsBusy(false)
+      }
+    },
+    [reloadModels],
+  )
 
   const saveModelParams = useCallback(
     async (values: Record<string, string>) => {
@@ -1680,7 +1743,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         await c.send('models.params.set', { provider: v.provider, model: v.model, values }, '')
         setModelParams(null)
         setPickerOpen(false)
-        setToast(t('saved settings for %s', `${v.provider}/${v.model}`))
+        notify.ok(t('saved settings for %s', `${v.provider}/${v.model}`))
       } catch (e) {
         // Kept open, with the daemon's own words: it names the setting that was
         // wrong, and closing the form would take that away along with the typing.
@@ -1702,7 +1765,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       await c.send('models.params.reset', { provider: v.provider, model: v.model }, '')
       setModelParams(null)
       setPickerOpen(false)
-      setToast(t('reset %s to its defaults', `${v.provider}/${v.model}`))
+      notify.ok(t('reset %s to its defaults', `${v.provider}/${v.model}`))
     } catch (e) {
       setModelParamsErr(authMessage(e))
     } finally {
@@ -1747,7 +1810,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     try {
       setModelTiers(await c.send<ModelTiersView>('models.tiers', { provider }, ''))
     } catch (e) {
-      setToast(authMessage(e))
+      notify.error(authMessage(e))
     }
   }, [])
 
@@ -1925,21 +1988,21 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       desc: t('Summarize the conversation to reclaim context'),
       run: () => {
         const label = t('Compacting…')
-        setToast(label)
+        notify.note(label)
         clientRef.current
           ?.send('compact', null, curRef.current)
           // Compact is synchronous server-side, so the resp lands after the
-          // transcript is replaced: clear the sticky progress toast on ack.
-          // Guard on the label so a newer toast set meanwhile isn't clobbered.
-          .then(() => setToast((cur) => (cur === label ? '' : cur)))
-          .catch((e) => setToast(errText(e)))
+          // transcript is replaced: clear the progress toast on ack. clearIf
+          // guards on the label so a newer toast set meanwhile isn't clobbered.
+          .then(() => notify.clearIf(label))
+          .catch((e) => notify.error(errText(e)))
       },
     },
     {
       name: 'clear',
       desc: t('Wipe the conversation (no summary)'),
       run: () => {
-        clientRef.current?.send('clear', null, curRef.current).catch((e) => setToast(errText(e)))
+        clientRef.current?.send('clear', null, curRef.current).catch((e) => notify.error(errText(e)))
       },
     },
     {
@@ -1951,7 +2014,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         // apply: not the setting, not the idle window, not an empty composer.
         // Only a turn already in flight survives being asked.
         if (busyRef.current) {
-          setToast(t('Finish the current turn first.'))
+          notify.note(t('Finish the current turn first.'))
           return
         }
         askNextStep(true)
@@ -1964,7 +2027,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       run: (arg) => {
         const m = /^(\S+)\s*([\s\S]*)$/.exec(arg.trim())
         if (!m) {
-          setToast(t('Usage: /skill <name> [task]'))
+          notify.note(t('Usage: /skill <name> [task]'))
           return
         }
         const name = m[1]
@@ -2106,7 +2169,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       if (title == null) return
       const c = clientRef.current
       if (!c) return
-      await c.send('sessions.rename', { title }, s.id).catch((e) => setToast(errText(e)))
+      await c.send('sessions.rename', { title }, s.id).catch((e) => notify.error(errText(e)))
       await refreshSessions(c)
     },
     [refreshSessions],
@@ -2116,12 +2179,12 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     async (s: SessionInfo) => {
       const c = clientRef.current
       if (!c) return
-      setToast(t('Generating title…'))
+      notify.note(t('Generating title…'))
       try {
         const r = await c.send<{ title: string }>('sessions.generate_title', null, s.id)
-        setToast(t('Titled: %s', r.title))
+        notify.ok(t('Titled: %s', r.title))
       } catch (e) {
-        setToast(errText(e))
+        notify.error(errText(e))
         return
       }
       await refreshSessions(c)
@@ -2139,12 +2202,12 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       try {
         await c.send('sessions.archive', null, s.id)
       } catch (e) {
-        setToast(errText(e))
+        notify.error(errText(e))
         return
       }
       setArchived(null) // the archive changed; re-fetch on next open
       await refreshSessions(c)
-      setToast(t('Archived — find it under Archived in the session drawer'))
+      notify.ok(t('Archived — find it under Archived in the session drawer'))
       // Archiving the session you're in returns you to the landing, exactly as
       // deleting it does: the session this tab held is no longer listed.
       if (s.id === curRef.current) goToLanding()
@@ -2162,7 +2225,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       const r = await c.send<{ sessions: ArchivedSessionInfo[] }>('sessions.archived', null, '')
       setArchived(r.sessions ?? [])
     } catch (e) {
-      setToast(errText(e))
+      notify.error(errText(e))
       setArchived([])
     }
   }, [])
@@ -2181,12 +2244,12 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       try {
         await c.send('sessions.restore', { id }, '')
       } catch (e) {
-        setToast(errText(e))
+        notify.error(errText(e))
         return
       }
       await loadArchived()
       await refreshSessions(c)
-      setToast(t('Restored — it is back in the session list'))
+      notify.ok(t('Restored — it is back in the session list'))
     },
     [loadArchived, refreshSessions],
   )
@@ -2196,7 +2259,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       if (!window.confirm(t('Delete “%s”?', s.title || s.id))) return
       const c = clientRef.current
       if (!c) return
-      await c.send('sessions.delete', null, s.id).catch((e) => setToast(errText(e)))
+      await c.send('sessions.delete', null, s.id).catch((e) => notify.error(errText(e)))
       await refreshSessions(c)
       // Deleting the session you're in returns you to the landing picker rather
       // than auto-adopting another session (consistent with boot: a tab only
@@ -2415,6 +2478,9 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
               onSave={saveModelParams}
               onReset={resetModelParams}
               onCancel={() => setModelParams(null)}
+              adding={modelAdding}
+              providers={reachableProviders}
+              onAdd={addModel}
             />
           </div>
         </div>
@@ -2441,6 +2507,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           onToggleHidden={hideModel}
           onSetDefault={setDefaultModel}
           onEdit={openModelParams}
+          onAdd={openModelAdd}
           onTiers={openModelTiers}
           tierSummaries={tierSummaries}
           onClose={() => setPickerOpen(false)}
@@ -2576,7 +2643,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
               <Composer
                 busy={busy}
                 onSend={onSubmit}
-                onToast={setToast}
+                onToast={(message, kind) => (kind === 'error' ? notify.error(message) : notify.note(message))}
                 commands={slashCommands}
                 suggestion={suggestion}
                 onAcceptSuggestion={dropSuggestion}
@@ -2695,11 +2762,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         )}
       </div>
 
-      {toast && (
-        <div class="toast" onClick={() => setToast('')}>
-          {toast}
-        </div>
-      )}
+      <ToastDock toast={toast} onDismiss={notify.clear} />
     </div>
   )
 }
@@ -5617,8 +5680,56 @@ export function WorktreeCollect({ items }: { items: WorktreeCollectItem[] }) {
   )
 }
 
+// SettingSection is one rendered block of the settings pane: a group's items
+// under its heading. A section with no label renders bare, which is what an
+// ungrouped view produces.
+export interface SettingSection {
+  id: string
+  label?: string
+  description?: string
+  items: SettingItem[]
+}
+
+// settingSections partitions the flat item list into the daemon's declared
+// groups, in wire order.
+//
+// Items arrive as one array ordered group by group, so a client that ignores
+// groups renders the same list it always did. Anything naming no group, or a
+// group this view does not declare, collects into a trailing labelled bucket:
+// a forgotten assignment has to be visible rather than silently dropped.
+//
+// A view carrying no groups at all is a daemon that predates them. That yields
+// a single unlabelled section, which renders exactly the flat pane it renders
+// today rather than one header reading "other" over everything.
+export function settingSections(v: SettingsView): SettingSection[] {
+  const byID = new Map<string, SettingItem[]>()
+  for (const it of v.items) {
+    const id = it.group ?? ''
+    const list = byID.get(id)
+    if (list) list.push(it)
+    else byID.set(id, [it])
+  }
+  const out: SettingSection[] = []
+  const kept = new Set<string>()
+  for (const g of v.groups ?? []) {
+    const items = byID.get(g.id)
+    if (kept.has(g.id) || !items?.length) continue // a group with no items is not a section
+    kept.add(g.id)
+    out.push({ id: g.id, label: g.label, description: g.description, items })
+  }
+  const strays = v.items.filter((it) => !kept.has(it.group ?? ''))
+  if (strays.length) {
+    out.push(out.length ? { id: '', label: t('Other settings'), items: strays } : { id: '', items: strays })
+  }
+  return out
+}
+
 // SettingsBody renders the settings pane: enum settings as selects, bool
 // settings as toggles. Changing one fires surface.action {action:"set"}.
+//
+// One section per group, with the full description kept on every row. The TUI
+// hides an unfocused description because it is paying for it in terminal rows;
+// a scrolling pane is not, and the headers alone buy the scanning benefit.
 export function SettingsBody({
   v,
   onAction,
@@ -5633,30 +5744,40 @@ export function SettingsBody({
   const set = (key: string, value: string) => onAction('settings', 'set', { key, value })
   return (
     <div class="settings-body">
-      {v.items.map((it) => (
-        <div class="set-row" key={it.key}>
-          <div class="set-head">
-            <span class="set-label">{it.label}</span>
-            {it.type === 'enum' ? (
-              <select class="set-input" value={it.value} onChange={(e) => set(it.key, (e.target as HTMLSelectElement).value)}>
-                {(it.options ?? []).map((o) => (
-                  <option value={o.value}>{o.label}</option>
-                ))}
-              </select>
-            ) : (
-              <button
-                class={`set-toggle${it.value === 'true' ? ' on' : ''}`}
-                role="switch"
-                aria-checked={it.value === 'true'}
-                title={it.value === 'true' ? t('on') : t('off')}
-                onClick={() => set(it.key, it.value === 'true' ? 'false' : 'true')}
-              >
-                <span class="set-knob" />
-              </button>
-            )}
-          </div>
-          {it.description && <div class="set-desc">{it.description}</div>}
-          {it.note && <div class="set-note">{it.note}</div>}
+      {settingSections(v).map((sec) => (
+        <div class="set-group" key={sec.id || 'other'}>
+          {sec.label && (
+            <div class="set-group-head">
+              <h3 class="set-group-label">{sec.label}</h3>
+              {sec.description && <div class="set-group-desc">{sec.description}</div>}
+            </div>
+          )}
+          {sec.items.map((it) => (
+            <div class="set-row" key={it.key}>
+              <div class="set-head">
+                <span class="set-label">{it.label}</span>
+                {it.type === 'enum' ? (
+                  <select class="set-input" value={it.value} onChange={(e) => set(it.key, (e.target as HTMLSelectElement).value)}>
+                    {(it.options ?? []).map((o) => (
+                      <option value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <button
+                    class={`set-toggle${it.value === 'true' ? ' on' : ''}`}
+                    role="switch"
+                    aria-checked={it.value === 'true'}
+                    title={it.value === 'true' ? t('on') : t('off')}
+                    onClick={() => set(it.key, it.value === 'true' ? 'false' : 'true')}
+                  >
+                    <span class="set-knob" />
+                  </button>
+                )}
+              </div>
+              {it.description && <div class="set-desc">{it.description}</div>}
+              {it.note && <div class="set-note">{it.note}</div>}
+            </div>
+          ))}
         </div>
       ))}
       {onRestart && <RestartRow onRestart={onRestart} />}

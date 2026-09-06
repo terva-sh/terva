@@ -16,28 +16,37 @@ import (
 //   - the user-layer merge (applyUserOverrides),
 //   - and, with one typed field on Model + UserModel, the loader.
 //
-// Adding a new scalar (top_p, top_k, …) is therefore one ScalarParam entry
-// plus the typed field — not a hand-edit across editor, save, and merge. The
-// tri-state capability/bool fields (reasoning, image-input) are a different
-// shape and are handled separately.
+// Adding a new parameter (top_p, top_k, …) is therefore one ModelParam entry
+// plus the typed field — not a hand-edit across editor, save, and merge.
+//
+// The registry carries three shapes, because a models.json field has three.
+// The capability tri-states used to be the exception: declared nowhere,
+// hand-written as ten lines in the TUI dialog, and absent from the web
+// entirely, which is how an operator ended up editing models.json by hand to
+// tell terva that a local model can think. `reasoningEfforts` was worse — its
+// merge was a hand-written line whose own comment said a list needed one
+// BADLY. A shape the registry cannot express is a shape one frontend gets and
+// the other does not.
 
-// ScalarKind classifies an editor-managed scalar parameter.
-type ScalarKind int
+// ParamKind classifies an editor-managed scalar parameter.
+type ParamKind int
 
 const (
-	ScalarText  ScalarKind = iota // free string (base url)
-	ScalarInt                     // non-negative integer (context window, max tokens)
-	ScalarFloat                   // bounded float (temperature)
-	ScalarEnum                    // closed set of values, per model (default thinking)
+	ParamText     ParamKind = iota // free string (base url)
+	ParamInt                       // non-negative integer (context window, max tokens)
+	ParamFloat                     // bounded float (temperature)
+	ParamEnum                      // closed set of values, per model (default thinking)
+	ParamTriState                  // inherit / on / off (a capability)
+	ParamList                      // a set of values (accepted reasoning efforts)
 )
 
-// ScalarParam declares one scalar model override end to end.
-type ScalarParam struct {
+// ModelParam declares one scalar model override end to end.
+type ModelParam struct {
 	Key   string
 	Label string
-	Kind  ScalarKind
-	Min   float64 // ScalarFloat: inclusive lower bound
-	Max   float64 // ScalarFloat: inclusive upper bound
+	Kind  ParamKind
+	Min   float64 // ParamFloat: inclusive lower bound
+	Max   float64 // ParamFloat: inclusive upper bound
 
 	// Default renders the catalog/live default shown as "inherit (...)" in
 	// the editor. It may report a sentinel (e.g. "n/a") when the parameter
@@ -54,15 +63,26 @@ type ScalarParam struct {
 	// override entry already converted to a Model by the loader.
 	Merge func(dst *Model, src Model)
 
-	// Options lists the values a ScalarEnum offers FOR THIS MODEL, in display
-	// order; nil for every other kind. Per-model because a closed set can be
-	// narrower on one model than another — the thinking ladder collapses rungs
-	// that reach a given model as the same wire value, and offering both halves
-	// asks the user to choose between two spellings of one thing.
+	// Options lists the values a ParamEnum or ParamList offers FOR THIS MODEL,
+	// in display order; nil for every other kind. Per-model because a closed set
+	// can be narrower on one model than another — the thinking ladder collapses
+	// rungs that reach a given model as the same wire value, and offering both
+	// halves asks the user to choose between two spellings of one thing.
 	//
 	// An empty result means the parameter does not apply to m at all, and a
 	// surface should omit the row rather than show an empty picker.
 	Options func(m Model) []string
+
+	// FreeValues says Options are SUGGESTIONS rather than the whole set, so a
+	// surface offers them and still accepts a value the operator types.
+	//
+	// It exists for one measured behaviour: clampEffortToDeclared passes an
+	// effort it does not recognize through untouched, on the reasoning that an
+	// unknown effort is a server's own extension and terva has no standing to
+	// move it. A closed picker over terva's scale would make that unreachable
+	// from either frontend, so the escape hatch in the mapper would exist only
+	// for people who hand-edit the file.
+	FreeValues bool
 
 	// InheritedFrom renders the "inherit (...)" hint for a parameter whose
 	// inherited value comes from a precedence CHAIN rather than off the model,
@@ -75,9 +95,9 @@ type ScalarParam struct {
 	InheritedFrom func(m Model, global string) string
 }
 
-var scalarParams = []ScalarParam{
+var modelParams = []ModelParam{
 	{
-		Key: "name", Label: "display name", Kind: ScalarText,
+		Key: "name", Label: "display name", Kind: ParamText,
 		// The merged model can't report what a cleared override would fall
 		// back to (the underlying layer's name is gone by the time we see
 		// it), so a renamed model shows the id — the floor, and the exact
@@ -103,7 +123,7 @@ var scalarParams = []ScalarParam{
 		},
 	},
 	{
-		Key: "baseUrl", Label: "base url", Kind: ScalarText,
+		Key: "baseUrl", Label: "base url", Kind: ParamText,
 		Default:     func(m Model) string { return strOrDefault(m.BaseURL, "provider default") },
 		Override:    func(um UserModel) string { return um.BaseURL },
 		SetOverride: func(um *UserModel, s string) error { um.BaseURL = s; return nil },
@@ -114,7 +134,7 @@ var scalarParams = []ScalarParam{
 		},
 	},
 	{
-		Key: "contextWindow", Label: "context window", Kind: ScalarInt,
+		Key: "contextWindow", Label: "context window", Kind: ParamInt,
 		Default:     func(m Model) string { return posIntStr(m.ContextWindow) },
 		Override:    func(um UserModel) string { return posIntStr(um.ContextWindow) },
 		SetOverride: func(um *UserModel, s string) error { return setNonNegInt(&um.ContextWindow, s) },
@@ -125,7 +145,7 @@ var scalarParams = []ScalarParam{
 		},
 	},
 	{
-		Key: "desiredContextWindow", Label: "desired context window", Kind: ScalarInt,
+		Key: "desiredContextWindow", Label: "desired context window", Kind: ParamInt,
 		Default:     func(m Model) string { return posIntStr(m.DesiredContextWindow) },
 		Override:    func(um UserModel) string { return posIntStr(um.DesiredContextWindow) },
 		SetOverride: func(um *UserModel, s string) error { return setNonNegInt(&um.DesiredContextWindow, s) },
@@ -136,7 +156,7 @@ var scalarParams = []ScalarParam{
 		},
 	},
 	{
-		Key: "maxTokens", Label: "max tokens", Kind: ScalarInt,
+		Key: "maxTokens", Label: "max tokens", Kind: ParamInt,
 		Default:     func(m Model) string { return posIntStr(m.MaxOutput) },
 		Override:    func(um UserModel) string { return posIntStr(um.MaxTokens) },
 		SetOverride: func(um *UserModel, s string) error { return setNonNegInt(&um.MaxTokens, s) },
@@ -147,7 +167,7 @@ var scalarParams = []ScalarParam{
 		},
 	},
 	{
-		Key: "temperature", Label: "temperature", Kind: ScalarFloat, Min: 0, Max: 2,
+		Key: "temperature", Label: "temperature", Kind: ParamFloat, Min: 0, Max: 2,
 		Default: func(m Model) string {
 			if m.AdaptiveThinking {
 				return "n/a (adaptive thinking)"
@@ -180,7 +200,7 @@ var scalarParams = []ScalarParam{
 	{
 		// "thinking" facing the user, `defaultReasoning` in models.json and on
 		// the wire: the house rule is jargon inside, plain language out.
-		Key: "defaultReasoning", Label: "default thinking", Kind: ScalarEnum,
+		Key: "defaultReasoning", Label: "default thinking", Kind: ParamEnum,
 		Default: func(m Model) string { return strOrDefault(m.DefaultReasoning, "off") },
 		Options: ThinkingOptions,
 		InheritedFrom: func(m Model, global string) string {
@@ -213,11 +233,73 @@ var scalarParams = []ScalarParam{
 			}
 		},
 	},
+	{
+		// Whether the model thinks AT ALL, which is a different question from
+		// how hard: this one decides whether a request carries a reasoning
+		// field, and `defaultReasoning` decides what it says.
+		//
+		// It is the field a local endpoint most often gets wrong. Discovery
+		// reads /v1/models, which says nothing about thinking, so a server that
+		// reasons arrives with this off. Every reasoning surface then goes
+		// quiet at once: ReasoningLadderFor returns nil, so the picker offers
+		// seven rungs that all read "this model takes no thinking setting",
+		// and openaiClient.buildRequest gates the whole reasoning_effort block
+		// on it, so the request carries nothing and the server runs at its own
+		// default on every turn. The picker and the wire agree, and both are
+		// useless to the operator until this flips.
+		Key: "reasoning", Label: "thinking", Kind: ParamTriState,
+		Default:     func(m Model) string { return onOffStr(m.Has(CapReasoning)) },
+		Override:    func(um UserModel) string { return triStateStr(um.Reasoning) },
+		SetOverride: func(um *UserModel, s string) error { return setTriState(&um.Reasoning, s) },
+		Merge:       mergeCapParam(CapReasoning),
+	},
+	{
+		Key: "imageInput", Label: "image input", Kind: ParamTriState,
+		Default:  func(m Model) string { return onOffStr(m.Has(CapImageInput)) },
+		Override: func(um UserModel) string { return capTriStateStr(um.Capabilities, "image-input") },
+		SetOverride: func(um *UserModel, s string) error {
+			return setCapTriState(um, "image-input", s)
+		},
+		Merge: mergeCapParam(CapImageInput),
+	},
+	{
+		// Which reasoning_effort values this backend accepts. Declaring them
+		// removes a guess rather than adding a preference: with no declaration
+		// the blind mapper clamps both top rungs to "high", because an unknown
+		// server might reject "xhigh" and a wrong guess is an HTTP 400 on every
+		// turn. On a server that declares {none, low, medium, xhigh} that
+		// pre-clamp lands "maximum" on medium, the cheaper neighbour of a rung
+		// the model never had, while the xhigh it does accept sits unused.
+		Key: "reasoningEfforts", Label: "accepted efforts", Kind: ParamList,
+		Options: func(m Model) []string {
+			// openAICompatEffort is the only reader, so the row would be a
+			// control that cannot act on any other wire. An empty result omits
+			// it, which is the same contract the enum rows use.
+			if reasoningWireFamily(m.Provider) != reasoningWireOpenAICompat {
+				return nil
+			}
+			return append([]string(nil), reasoningEffortScale...)
+		},
+		FreeValues: true,
+		Default: func(m Model) string {
+			if len(m.ReasoningEfforts) == 0 {
+				return "undeclared"
+			}
+			return strings.Join(m.ReasoningEfforts, ", ")
+		},
+		Override:    func(um UserModel) string { return strings.Join(um.ReasoningEfforts, ", ") },
+		SetOverride: func(um *UserModel, s string) error { um.ReasoningEfforts = parseList(s); return nil },
+		Merge: func(dst *Model, src Model) {
+			if len(src.ReasoningEfforts) > 0 {
+				dst.ReasoningEfforts = src.ReasoningEfforts
+			}
+		},
+	},
 }
 
-// ScalarParams returns the editor-managed scalar model parameters, in editor
+// ModelParams returns the editor-managed scalar model parameters, in editor
 // row order. The slice is shared; callers must not mutate it.
-func ScalarParams() []ScalarParam { return scalarParams }
+func ModelParams() []ModelParam { return modelParams }
 
 // MaxDisplayNameRunes bounds a models.json `name`. Not a layout decision —
 // the render sites do their own width clamping — just a sanity ceiling so a
@@ -291,6 +373,133 @@ func SanitizeDisplayName(s string) string {
 	out := strings.Join(strings.Fields(b.String()), " ")
 	if runes := []rune(out); len(runes) > MaxDisplayNameRunes {
 		out = strings.TrimSpace(string(runes[:MaxDisplayNameRunes]))
+	}
+	return out
+}
+
+// onOffStr renders a capability's inherited value for the "inherit (...)"
+// hint.
+func onOffStr(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
+}
+
+// triStateStr renders a capability override: "" when the entry does not
+// mention the capability, else on or off.
+//
+// The three states are not two. "Absent" means the catalog or the live layer
+// decides and keeps deciding as terva learns more; "off" is the operator
+// saying this model does not do that, and it outranks anything discovery
+// finds later. Collapsing them would turn every model an operator has ever
+// opened in the editor into one they have pinned.
+func triStateStr(p *bool) string {
+	if p == nil {
+		return ""
+	}
+	return onOffStr(*p)
+}
+
+// setTriState parses an editor value onto a tri-state override.
+func setTriState(dst **bool, s string) error {
+	v, err := parseTriState(s)
+	if err != nil {
+		return err
+	}
+	*dst = v
+	return nil
+}
+
+func parseTriState(s string) (*bool, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "inherit":
+		return nil, nil
+	case "on", "true", "yes":
+		v := true
+		return &v, nil
+	case "off", "false", "no":
+		v := false
+		return &v, nil
+	default:
+		return nil, fmt.Errorf("enter on or off (blank = inherit)")
+	}
+}
+
+// capTriStateStr reads a capability override out of a models.json
+// `capabilities` map, where key PRESENCE is the override marker.
+func capTriStateStr(caps map[string]bool, key string) string {
+	v, ok := caps[key]
+	if !ok {
+		return ""
+	}
+	return onOffStr(v)
+}
+
+// setCapTriState writes one capability override, deleting the key when the
+// value clears. An emptied map goes back to nil so a cleared entry does not
+// persist an empty `capabilities` object.
+func setCapTriState(um *UserModel, key, s string) error {
+	v, err := parseTriState(s)
+	if err != nil {
+		return err
+	}
+	if v == nil {
+		delete(um.Capabilities, key)
+		if len(um.Capabilities) == 0 {
+			um.Capabilities = nil
+		}
+		return nil
+	}
+	if um.Capabilities == nil {
+		um.Capabilities = map[string]bool{}
+	}
+	um.Capabilities[key] = *v
+	return nil
+}
+
+// mergeCapParam is the Merge for a capability tri-state: the key is carried
+// only when the operator's entry mentions it.
+//
+// It reads Caps rather than a side flag because the map already draws the
+// distinction a tri-state needs — key presence IS "the operator said so" — and
+// a second signal is a second thing to disagree. applyUserOverrides folds the
+// legacy top-level `reasoning` spelling into the same map before the merge
+// runs, so both spellings arrive here as one fact.
+//
+// CapReasoning also writes the legacy Model.Reasoning bool, because that field
+// is what the request builders gate on and Has() only prefers the map.
+func mergeCapParam(c Capability) func(dst *Model, src Model) {
+	return func(dst *Model, src Model) {
+		v, ok := src.Caps[c]
+		if !ok {
+			return
+		}
+		dst.Caps = mergeCaps(dst.Caps, map[Capability]bool{c: v})
+		if c == CapReasoning {
+			dst.Reasoning = v
+		}
+	}
+}
+
+// parseList splits an editor value into a set, lowercased and de-duplicated,
+// keeping the operator's order. "" clears the override.
+//
+// Commas and spaces both separate, because a list typed into a text box
+// arrives both ways and neither is wrong.
+func parseList(s string) []string {
+	fields := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n'
+	})
+	var out []string
+	seen := map[string]bool{}
+	for _, f := range fields {
+		v := strings.ToLower(strings.TrimSpace(f))
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
 	}
 	return out
 }

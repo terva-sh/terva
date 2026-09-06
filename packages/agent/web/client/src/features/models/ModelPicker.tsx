@@ -35,6 +35,7 @@ export function ModelPicker({
   onToggleHidden,
   onSetDefault,
   onEdit,
+  onAdd,
   onTiers,
   tierSummaries,
   onClose,
@@ -50,6 +51,10 @@ export function ModelPicker({
   // settings ABOUT this model, so they hang off its row rather than off a pane
   // that would have to list every model a second time.
   onEdit: (provider: string, id: string) => void
+  // Opens the create form, cloned from this row. Optional: a daemon that does
+  // not serve models.add simply does not offer the affordance, rather than
+  // offering one whose save can only fail.
+  onAdd?: (provider: string, id: string) => void
   // Open a provider's sub-agent tier ladder. Optional: a daemon that cannot
   // serve models.tiers simply does not offer the affordance.
   onTiers?: (provider: string) => void
@@ -151,7 +156,7 @@ export function ModelPicker({
       </button>
       <button
         class="pick-default"
-        title={t('Model settings (context window, max tokens, …)')}
+        title={t('Model settings (thinking, context window, max tokens, …)')}
         onClick={(event) => {
           event.stopPropagation()
           onEdit(model.provider, model.id)
@@ -159,7 +164,42 @@ export function ModelPicker({
       >
         ⚙
       </button>
+      {/* Clone-from, so the action hangs off a row rather than off the footer:
+          the row IS the source, and the new model starts from settings that
+          already work. A blank form would have to invent a context window, and
+          a model without one never auto-condenses. Same shape as ctrl+n in the
+          terminal picker, which acts on the selected row. */}
+      {onAdd && (
+        <button
+          class="pick-default"
+          title={t('Add a model like this one, for an id terva does not ship yet')}
+          onClick={(event) => {
+            event.stopPropagation()
+            onAdd(model.provider, model.id)
+          }}
+        >
+          ＋
+        </button>
+      )}
       <span class="pick-id">{renamedTo(model) ?? model.id}</span>
+      {/* The two models.json cases read differently because the ⚙ form's reset
+          button does two different things to them. "custom" means the entry IS
+          the model, so removing it takes the row away; "edited" means a tweak
+          over a row that survives the reset.
+
+          Its own span rather than text appended to .pick-meta: that one
+          ellipsizes, and this is the signal that decides whether the operator
+          is about to delete something. It must not be the first thing a narrow
+          row eats. */}
+      {model.custom ? (
+        <span class="pick-tag" title={t('Defined only in your models.json, so deleting its entry removes it')}>
+          {t('custom')}
+        </span>
+      ) : model.source === 'user' ? (
+        <span class="pick-tag" title={t('Your models.json overrides this model, so it can be reset to defaults')}>
+          {t('edited')}
+        </span>
+      ) : null}
       {/* The id follows the name rather than being replaced by it: it is what
           the operator renamed away from, and the only spelling that appears in
           logs, sessions, and --model. It ellipsizes when the row is tight, so

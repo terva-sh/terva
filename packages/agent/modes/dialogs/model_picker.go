@@ -23,8 +23,8 @@ type modelPicker struct {
 	all     []provider.Model // full catalog, sorted (favorites first)
 	view    []provider.Model // filtered view shown to the user
 	cursor  int
-	current string // currently active model id ("" = no you-are-here marker)
-	query   string // live filter text typed by the user
+	current string      // currently active model id ("" = no you-are-here marker)
+	query   tui.LineBuf // live filter text typed by the user, with its own cursor
 	vp      Viewport
 	maxRows int // scroll window height
 
@@ -57,7 +57,7 @@ type modelPicker struct {
 func (p *modelPicker) setCatalog(models []provider.Model, current string, maxRows int) {
 	p.all = sortModelsFavFirst(models, p.favorites)
 	p.current = current
-	p.query = ""
+	p.query.Clear()
 	p.maxRows = maxRows
 	p.provW, p.idW = columnWidths(p.all)
 	p.refilter()
@@ -80,7 +80,7 @@ func (p *modelPicker) refilter() {
 	var capFilters []provider.Capability
 	var textParts []string
 	showHidden := false
-	for _, tok := range strings.Fields(p.query) {
+	for _, tok := range strings.Fields(p.query.Value()) {
 		if strings.HasPrefix(tok, ":") {
 			if hiddenFilterToken(tok[1:]) {
 				showHidden = true
@@ -150,14 +150,14 @@ func (p *modelPicker) cursorToKey(key string) {
 // preserving the live filter and the highlighted model — for a favorite-toggle
 // re-sort or a background-discovery refresh. Plain setCatalog drops both.
 func (p *modelPicker) reload(models []provider.Model) {
-	q := p.query
+	q := p.query.Value()
 	sel := ""
 	if m, ok := p.selected(); ok {
 		sel = modelKey(m)
 	}
 	p.setCatalog(models, p.current, p.maxRows)
 	if q != "" {
-		p.query = q
+		p.query.SetValue(q)
 		p.refilter()
 	}
 	p.cursorToKey(sel)
@@ -224,24 +224,15 @@ func (p *modelPicker) handleNavKey(k tui.Key) bool {
 				p.cursor = len(p.view) - 1
 			}
 		}
-	case tui.KeyBackspace:
-		if len(p.query) > 0 {
-			// Drop one rune from the query.
-			r := []rune(p.query)
-			p.query = string(r[:len(r)-1])
-			p.refilter()
-		}
-	case tui.KeyRune:
-		if k.Alt || k.Ctrl {
-			return false
-		}
-		// Only printable ASCII is useful for narrowing.
-		if k.Rune >= 0x20 && k.Rune < 0x7f {
-			p.query += string(k.Rune)
-			p.refilter()
-		}
 	default:
-		return false
+		// Everything else the filter can use is the filter's: typing, cursor
+		// movement, the kills. Only a text change re-filters, so moving the
+		// cursor does not snap the highlighted row back to the top.
+		consumed, changed := p.query.HandleKey(k)
+		if changed {
+			p.refilter()
+		}
+		return consumed
 	}
 	return true
 }
@@ -257,13 +248,16 @@ func (p *modelPicker) selected() (provider.Model, bool) {
 // hintLine builds the muted hint row: the query-aware match count
 // while filtering, otherwise the dialog's base hint.
 func (p *modelPicker) hintLine(base string) string {
-	if p.query == "" {
+	if p.query.Value() == "" {
 		return base
 	}
+	// The caret rides in the hint, because the hint is the only place the
+	// filter text appears. A cursor the user cannot see is one they cannot aim.
+	shown := p.query.Render(tui.LineCaret)
 	if len(p.view) == 1 {
-		return i18n.T("filter: %s (%d match)", p.query, len(p.view))
+		return i18n.T("filter: %s (%d match)", shown, len(p.view))
 	}
-	return i18n.T("filter: %s (%d matches)", p.query, len(p.view))
+	return i18n.T("filter: %s (%d matches)", shown, len(p.view))
 }
 
 // renderRows returns the model rows in the scroll window (cursor row
@@ -294,9 +288,16 @@ func (p *modelPicker) renderRows(th tui.Theme, width int) []string {
 		switch {
 		case m.Speculative:
 			tag = i18n.T("[speculative] ")
+		case m.Synthetic:
+			// Exists ONLY because the operator wrote it into models.json:
+			// no catalog row, no discovery. Ranked above the [edited] arm
+			// because a synthetic model is user-sourced too, so the order
+			// is what separates them. Worth its own word: [edited] invites
+			// "reset it and see", and here that deletes the row.
+			tag = i18n.T("[custom] ")
 		case m.Source == "user":
-			// Carries a models.json override (applyUserOverrides stamps
-			// Source="user"). Flags which models have custom settings.
+			// A models.json entry tweaking a row some lower layer supplied.
+			// Resetting this one restores the catalog values.
 			tag = i18n.T("[edited] ")
 		case m.Source == "live":
 			tag = i18n.T("[live] ")

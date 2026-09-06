@@ -140,6 +140,16 @@ export function ReasoningPick({
           ×
         </button>
       </div>
+      {!rungs?.length ? (
+        // The dead end this used to be. Seven rows reporting that the model
+        // takes no thinking setting, and nowhere to go — while the fix is one
+        // tri-state in the model's own settings. A local endpoint lists its
+        // models without saying which of them think, so a model that reasons
+        // arrives with the capability off and lands the operator here.
+        <div class="reasoning-pick-note">
+          {t("terva has no thinking setting for this model. Turn thinking on in the model's settings to use these rungs.")}
+        </div>
+      ) : null}
       <ul class="reasoning-pick-list">
         {rows.map((r) => (
           <li key={r.level || 'inherit'}>

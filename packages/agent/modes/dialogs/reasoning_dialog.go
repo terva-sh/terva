@@ -15,6 +15,11 @@ type ReasoningDialog struct {
 	active bool
 	rows   []reasoningRow
 	cursor int
+	// noLadder is set when the model accepts no thinking control at all, so
+	// every rung reads "this model takes no thinking setting" and picking one
+	// does nothing. The rows alone cannot say where to go from there, and the
+	// answer is a setting one dialog away, so Render adds it.
+	noLadder bool
 	// MaxRows is the body height the host budgets from the terminal
 	// (dialogs.BodyBudget). 0 falls back to the standalone constant.
 	MaxRows int
@@ -33,8 +38,16 @@ type reasoningRow struct {
 
 func NewReasoningDialog() *ReasoningDialog { return &ReasoningDialog{} }
 
-// ChromeRows is the non-body rows Render emits: the header and the footer rule.
-func (d *ReasoningDialog) ChromeRows() int { return 3 }
+// ChromeRows is the non-body rows Render emits: the header and the footer rule,
+// plus the route out when this model has no ladder. It has to count that line:
+// the host budgets MaxRows against this number, so a line Render emits and
+// ChromeRows forgets is a row of the ladder pushed off the bottom.
+func (d *ReasoningDialog) ChromeRows() int {
+	if d.noLadder {
+		return 4
+	}
+	return 3
+}
 
 // Open builds the ladder for a session. override is the session's own level
 // ("" when it inherits), global is the workspace default, and model is the
@@ -85,6 +98,7 @@ func (d *ReasoningDialog) Open(override, global string, model provider.Model) {
 	// ReasoningEffect carries Supported=false, which is what makes the detail
 	// say so rather than say "off".
 	ladder := provider.ReasoningLadderFor(model)
+	d.noLadder = len(ladder) == 0
 	for i, lv := range provider.ReasoningLevels {
 		rung := provider.ReasoningRung{Level: lv}
 		if i < len(ladder) {
@@ -209,6 +223,14 @@ func (d *ReasoningDialog) Render(th tui.Theme, width int) []string {
 	}
 	if end < len(d.rows) {
 		out = append(out, WindowMoreBelow(th, len(d.rows), end))
+	}
+	// The dead end this dialog used to be. Seven rungs that all report no
+	// thinking setting, and nothing to do about it — while the fix is one
+	// tri-state in the model's own entry. A local endpoint lists its models
+	// without saying which of them think, so this is where those models land.
+	if d.noLadder {
+		out = append(out, "  "+th.FG256(th.Muted,
+			i18n.T("terva has no thinking setting for this model · ctrl+e in /model turns thinking on")))
 	}
 	out = append(out, FrameRule(th, width))
 	return out

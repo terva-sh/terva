@@ -24,6 +24,44 @@ Use `/login` to store API keys or subscription credentials. `/model` only shows 
 - **Catalog**: models baked into terva, covering Claude, GPT/Codex, Gemini/Gemma, Kimi/Moonshot, DeepSeek, Groq-hosted Llama/Gemma/Compound, OpenRouter-routed models, Bedrock model ids, Vertex model ids, Azure OpenAI deployments, Copilot models, and other provider-specific catalog entries.
 - **Speculative**: IDs that appear in the upstream generator but aren't live on the public API yet. They'll 404 today and start working the moment the provider ships them.
 
+### GPT-6 Astra
+
+OpenAI began a staged GPT-6 Astra rollout on September 3, 2026. The built-in
+catalog lets an entitled account select `gpt-6-astra` through either
+Responses-backed route:
+
+```bash
+# OpenAI API key
+terva --provider openai-responses --model gpt-6-astra
+
+# ChatGPT subscription
+terva --provider openai-codex --model gpt-6-astra
+```
+
+Catalog presence does not grant model access. OpenAI started with Trusted
+Access Program enterprises and said API and ChatGPT plan access would follow.
+An account without Astra access can keep using another catalog model until its
+entitlement arrives.
+
+Astra is intentionally absent from the plain `openai` provider. That provider
+uses Chat Completions. OpenAI lists Chat Completions as an Astra endpoint, but
+[Astra tool calling requires the Responses API](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6-astra).
+Exposing Astra on `openai` would therefore select a model that cannot run
+terva's tools.
+
+The catalog records Astra's 1,050,000-token hard limit and 128,000-token output
+limit. It uses 272,000 tokens as the default working window because OpenAI's
+long-context rates start above that point. Input and cache rates double above
+272,000 input tokens, while output costs 1.5 times the short-context rate. The
+short-context prices are $10 input, $1 cached input, $12.50 cache write, and $50
+output per million tokens. See OpenAI's
+[Astra model page](https://developers.openai.com/api/docs/models/gpt-6-astra)
+and [API pricing](https://developers.openai.com/api/docs/pricing).
+
+Astra accepts `low`, `medium`, `high`, `xhigh`, and `max` reasoning efforts.
+terva sends its `max` rung without clamping for Astra. Native image output
+remains unasserted until the ChatGPT subscription route can be live-tested.
+
 ### Where context windows come from
 
 A provider's `/v1/models` says *which* models exist but not how big their

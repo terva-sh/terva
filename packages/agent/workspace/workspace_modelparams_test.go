@@ -194,3 +194,39 @@ func TestResetRemovesTheEntry(t *testing.T) {
 		t.Error("the models.json entry survived a reset")
 	}
 }
+
+// 🪤 paramKind falls back to "text" for a kind it does not recognize, and that
+// fallback is honest for a kind terva has not invented yet: the daemon still
+// parses and still refuses, so the worst case is a plain box. It is NOT honest
+// for a kind the registry actually declares. A tri-state rendered as a text box
+// asks the operator to type "on", and a list rendered as one asks them to guess
+// the separator.
+//
+// This is the exact shape of the failure that kept the capability rows in the
+// TUI for months while the web, reading the same registry over this wire,
+// showed nothing at all. Self-enrolling on purpose: it reads the registry
+// rather than listing kinds, so a new ParamKind enrolls itself.
+func TestEveryDeclaredParamKindHasItsOwnWireName(t *testing.T) {
+	declared := map[provider.ParamKind]bool{}
+	for _, p := range provider.ModelParams() {
+		declared[p.Kind] = true
+	}
+	if len(declared) < 2 {
+		t.Fatal("the registry declares fewer than two kinds, so this guard would pass vacuously")
+	}
+
+	byName := map[string]provider.ParamKind{}
+	for k := range declared {
+		name := paramKind(k)
+		if name == "text" && k != provider.ParamText {
+			t.Errorf("ParamKind %d falls through to the %q wire name: every client would "+
+				"render this setting as a plain box and the operator would have to "+
+				"guess its spelling", k, name)
+		}
+		if prev, dup := byName[name]; dup {
+			t.Errorf("ParamKind %d and ParamKind %d both cross as %q, so no client can "+
+				"tell them apart", k, prev, name)
+		}
+		byName[name] = k
+	}
+}

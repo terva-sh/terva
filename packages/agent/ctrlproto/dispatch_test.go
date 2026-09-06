@@ -316,6 +316,10 @@ func (r *recorder) ModelParamsReset(_ context.Context, p ModelParamsParams) erro
 	r.note("ModelParamsReset", "", p)
 	return nil
 }
+func (r *recorder) ModelAdd(_ context.Context, p ModelAddParams) error {
+	r.note("ModelAdd", "", p)
+	return nil
+}
 
 // --- ModelTiersController ---
 func (r *recorder) ModelTiers(_ context.Context, p ModelTiersParams) (ModelTiersView, error) {
@@ -532,6 +536,12 @@ func dispatchCases() []dispatchCase {
 		{MethodModelParams, ModelParamsParams{Provider: "anthropic", Model: "opus"}, "ModelParams", ModelParamsParams{Provider: "anthropic", Model: "opus"}},
 		{MethodModelParamsSet, ModelParamsSetParams{Provider: "openai", Model: "gpt"}, "ModelParamsSet", nil},
 		{MethodModelParamsReset, ModelParamsParams{Provider: "gemini", Model: "flash"}, "ModelParamsReset", ModelParamsParams{Provider: "gemini", Model: "flash"}},
+		// models.add carries the SAME three wire fields as models.params.set, so this
+		// case asserts the bound struct rather than passing nil. A table that bound
+		// the sibling's type would deserialize identically from these bytes and still
+		// record a call, and only the type in args tells the two apart.
+		{MethodModelAdd, ModelAddParams{Provider: "workshop", Model: "invented-local", Values: map[string]string{"contextWindow": "262144"}}, "ModelAdd",
+			ModelAddParams{Provider: "workshop", Model: "invented-local", Values: map[string]string{"contextWindow": "262144"}}},
 
 		// --- tier ladder. The set case fills BOTH optional fields and the reset
 		// case fills the optional rung: a params struct bound from the sibling

@@ -379,6 +379,34 @@ export interface ModelInfo {
   // would replace, so preferring them makes the list harder to scan.
   display_name?: string
   renamed?: boolean
+  // source is the catalog layer this row came from: 'catalog' (baked in),
+  // 'live' (discovered through /v1/models), 'cache' (the on-disk copy of a
+  // discovery), or 'user' (the operator's models.json reached it).
+  //
+  // 'user' is the one the picker acts on: mark the row as overridden and offer
+  // a reset. It covers both ways an entry reaches a model, an invented one and
+  // a tweak on a catalog row, so it alone cannot tell those two apart.
+  //
+  // Deliberately a string and not a union of those four. The Go field is a
+  // plain string assigned at a dozen sites across provider and agent, with no
+  // single function returning the set, so there is nothing for a parity test to
+  // anchor on the way param-kind-parity.test.ts anchors on paramKind. A union
+  // here would be an assertion this repo cannot keep true. Compare against
+  // 'user' and let anything else fall through.
+  source?: string
+  // custom says the model exists ONLY because the operator wrote it into
+  // models.json: no catalog row, no discovery, nothing underneath it.
+  //
+  // Always arrives with source 'user', and it is the narrower question. source
+  // says removing the entry changes something; custom says removing the entry
+  // removes the MODEL. Word them differently ('custom' against 'overridden')
+  // and confirm them differently. A picker that reads only source will offer
+  // to restore defaults that do not exist.
+  //
+  // Not sticky, and never persist it. The day terva ships a catalog row for
+  // the id, or discovery finds it, the same entry comes back custom-less with
+  // source 'user', an override on a real row.
+  custom?: boolean
 }
 
 // ReasoningRungInfo is one rung of a model's reasoning ladder: what picking it
@@ -409,6 +437,16 @@ export interface ReasoningRungInfo {
 export interface ModelsResult {
   models: ModelInfo[]
   reasoning_ladders?: Record<string, ReasoningRungInfo[]>
+  // Every provider this machine can REACH, in picker order, which is the set
+  // models.add accepts.
+  //
+  // A superset of the providers named in `models`, and the gap is why it is
+  // here. A provider the user is logged into that has no models yet contributes
+  // no row, so deriving this list from `models` would drop exactly the provider
+  // an add form is most needed for. Do not derive it from auth.providers
+  // either: that view is built from the credential store and omits every
+  // keyless backend.
+  providers?: string[]
 }
 
 export interface PermissionRequest {
@@ -959,9 +997,21 @@ export interface SettingItem {
   options?: SettingOption[]
   description?: string
   note?: string
+  group?: string // a SettingGroup.id
 }
 
+// SettingGroup names one category of the settings pane, in display order.
+export interface SettingGroup {
+  id: string
+  label: string
+  description?: string // one line, for the category picker
+}
+
+// Items is one flat list, ordered group-by-group; a client that knows groups
+// partitions it by SettingItem.group, and an item with an empty or undeclared
+// group belongs in a trailing "other" bucket rather than vanishing.
 export interface SettingsView {
+  groups?: SettingGroup[]
   items: SettingItem[]
 }
 
@@ -2413,7 +2463,14 @@ export interface ModelParamSpec {
   // A rendering hint. Everything goes back as a string and the DAEMON parses —
   // bounds live in packages/provider, and a second opinion on the wire is a
   // second thing to disagree.
-  kind: 'text' | 'int' | 'float' | 'enum'
+  // A 'tristate' is a capability: 'on', 'off', or '' for inherit. Render all
+  // three. 'Off' is the operator overruling what terva believes about the
+  // model and it outranks whatever discovery finds later, while '' leaves the
+  // catalog deciding — so a checkbox, which has two states, would turn every
+  // model somebody opened this form on into one they had pinned.
+  //
+  // A 'list' is a set of values travelling as one comma-separated string.
+  kind: 'text' | 'int' | 'float' | 'enum' | 'tristate' | 'list'
   // What this model takes with NO override. Belongs in the placeholder, never in
   // the box: a pre-filled default reads as an override and would be saved as one.
   default?: string
@@ -2425,6 +2482,11 @@ export interface ModelParamSpec {
   // collapses rungs that reach a given model as one wire value), so a list
   // hardcoded here would offer levels the model cannot tell apart.
   options?: string[]
+  // Whether a value outside `options` is still valid. Only a list uses it:
+  // terva passes a reasoning effort it does not recognize straight through,
+  // because an unknown effort is the server's own word, so a closed picker
+  // would put that behaviour out of reach from here.
+  free_values?: boolean
   min?: number
   max?: number
   help?: string
@@ -2435,6 +2497,16 @@ export interface ModelParamsView {
   model: string
   // Whether models.json holds an entry — i.e. whether a reset would do anything.
   has_override?: boolean
+  // custom is whether the model exists ONLY because of that entry: no catalog
+  // row, no discovery, nothing underneath it. Mirrors ModelInfo.custom.
+  //
+  // It changes what the reset control MEANS, so word the button and its
+  // confirmation off it. With a row underneath, dropping the entry restores the
+  // shipped values. With nothing underneath, the entry IS the model, so the same
+  // button removes it from the picker and there are no defaults to fall back to.
+  // 'Reset to defaults' over that second case offers something that cannot
+  // happen.
+  custom?: boolean
   params: ModelParamSpec[]
 }
 
@@ -2531,6 +2603,7 @@ export type Verb =
   | 'i18n.catalog'
   | 'message.delete'
   | 'message.edit'
+  | 'models.add'
   | 'models.default_for'
   | 'models.favorite'
   | 'models.hide'

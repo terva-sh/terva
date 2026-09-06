@@ -162,6 +162,12 @@ const (
 	MethodModelParams      Method = "models.params"       // params ModelParamsParams, result ModelParamsView
 	MethodModelParamsSet   Method = "models.params.set"   // params ModelParamsSetParams
 	MethodModelParamsReset Method = "models.params.reset" // params ModelParamsParams
+	// Creates a models.json entry for a model no lower layer knows about, so a
+	// user can reach one the catalog has not shipped yet. Separate from
+	// models.params.set because that method refuses an id it cannot resolve, and
+	// that refusal is what stops an edit landing on the wrong provider's copy of
+	// a shared id. This method carries the opposite guard instead.
+	MethodModelAdd Method = "models.add" // params ModelAddParams
 
 	// The swarm tier ladder for one provider (config.json `swarm_tiers`): which
 	// model a sub-agent gets for tier weak / medium / strong, and how hard it
@@ -416,7 +422,7 @@ func (m Method) Group() Group {
 		MethodSharedList, MethodSharedFetch:
 		return GroupSession
 	case MethodModelsList, MethodModelSwitch, MethodModelFavorite, MethodModelHide, MethodModelSetDefault, MethodSessionReasoning,
-		MethodModelParams, MethodModelParamsSet, MethodModelParamsReset,
+		MethodModelParams, MethodModelParamsSet, MethodModelParamsReset, MethodModelAdd,
 		MethodModelTiers, MethodModelTiersSet, MethodModelTiersReset,
 		MethodTrust, MethodUntrust, MethodRestart, MethodResetsConsume,
 		MethodCardsList, MethodCardsGet, MethodCardsImport, MethodCardsEdit, MethodCardsDelete, MethodCardsExport, MethodCardsLint, MethodCardsFavorite, MethodCardsDoctor,
@@ -701,6 +707,18 @@ type ModelsResult struct {
 	// from three other rungs — on Gemini 3. A client that hardcodes the ladder
 	// gets it wrong for most models and cannot tell that it has.
 	ReasoningLadders map[string][]ReasoningRungInfo `json:"reasoning_ladders,omitempty"`
+	// Providers is every provider this machine can REACH, in picker order:
+	// those with a resolvable credential, plus the keyless ones (ollama, the
+	// shared openai-compatible slot once it has a base URL, each named endpoint
+	// with one). It is the set models.add will accept.
+	//
+	// It is a superset of the providers named by Models, and that gap is the
+	// only reason it is on the wire. A provider the user is logged into that has
+	// no models yet contributes no row above, so a client deriving this list from
+	// Models would silently drop exactly the provider an add form is most needed
+	// for. Deriving it from auth.providers is also wrong: that view is built from
+	// the credential store, so it omits every keyless backend.
+	Providers []string `json:"providers,omitempty"`
 }
 
 // ReasoningRungInfo is one rung of a model's reasoning ladder: what picking it

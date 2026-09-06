@@ -535,6 +535,10 @@ MessageEditParams
 	epoch	uint64
 	index	int
 	text	string
+ModelAddParams
+	provider	string
+	model	string
+	values	map[string]string
 ModelInfo
 	id	string
 	provider	string
@@ -555,6 +559,8 @@ ModelInfo
 	auth	string	omitempty
 	display_name	string	omitempty
 	renamed	bool	omitempty
+	source	string	omitempty
+	custom	bool	omitempty
 ModelParamSpec
 	key	string
 	label	string
@@ -562,6 +568,7 @@ ModelParamSpec
 	default	string	omitempty
 	value	string	omitempty
 	options	[]string	omitempty
+	free_values	bool	omitempty
 	min	float64	omitempty
 	max	float64	omitempty
 	help	string	omitempty
@@ -576,6 +583,7 @@ ModelParamsView
 	provider	string
 	model	string
 	has_override	bool	omitempty
+	custom	bool	omitempty
 	params	[]ModelParamSpec
 ModelSwitchParams
 	provider	string	omitempty
@@ -604,6 +612,7 @@ ModelTiersView
 ModelsResult
 	models	[]ModelInfo
 	reasoning_ladders	map[string][]ReasoningRungInfo	omitempty
+	providers	[]string	omitempty
 NextSceneParams
 	commit	bool	omitempty
 	title	string	omitempty
@@ -1037,6 +1046,10 @@ SetDefaultParams
 	provider	string
 	model	string
 	scope	DefaultScope
+SettingGroup
+	id	string
+	label	string
+	description	string	omitempty
 SettingItem
 	key	string
 	label	string
@@ -1045,10 +1058,12 @@ SettingItem
 	options	[]SettingOption	omitempty
 	description	string	omitempty
 	note	string	omitempty
+	group	string	omitempty
 SettingOption
 	value	string
 	label	string
 SettingsView
+	groups	[]SettingGroup	omitempty
 	items	[]SettingItem
 SharedFileContent
 	id	string

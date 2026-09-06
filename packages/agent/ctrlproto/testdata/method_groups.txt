@@ -47,6 +47,7 @@ files.list	session
 i18n.catalog	session
 message.delete	conversation
 message.edit	conversation
+models.add	control
 models.default_for	control
 models.favorite	control
 models.hide	control

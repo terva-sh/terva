@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/i18n"
@@ -38,6 +39,15 @@ var paramHelp = map[string]func() string{
 	"baseUrl": func() string {
 		return i18n.T("Send this model's requests somewhere else. Changing it rebuilds the client.")
 	},
+	"reasoning": func() string {
+		return i18n.T("Whether this model thinks at all. A local endpoint lists its models without saying, so one that reasons usually arrives with this off — and while it is off terva sends no thinking setting and the thinking picker has nothing to offer.")
+	},
+	"imageInput": func() string {
+		return i18n.T("Whether this model accepts images.")
+	},
+	"reasoningEfforts": func() string {
+		return i18n.T("The reasoning_effort values this backend accepts. Declaring them removes a guess: with none declared terva clamps its top two rungs to high, so a server that takes xhigh never sees it. Add a value of your own if the server has one.")
+	},
 }
 
 // ModelParams describes one model's editable settings: what it would take by
@@ -55,8 +65,10 @@ func (w *Workspace) ModelParams(_ context.Context, p ctrlproto.ModelParamsParams
 		return ctrlproto.ModelParamsView{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "read models.json: %v", err)
 	}
 
-	out := ctrlproto.ModelParamsView{Provider: m.Provider, Model: m.ID, HasOverride: has}
-	for _, sp := range provider.ScalarParams() {
+	out := ctrlproto.ModelParamsView{
+		Provider: m.Provider, Model: m.ID, HasOverride: has, Custom: m.Synthetic,
+	}
+	for _, sp := range provider.ModelParams() {
 		var options []string
 		if sp.Options != nil {
 			// Nothing to offer means the parameter does not apply to this
@@ -67,13 +79,14 @@ func (w *Workspace) ModelParams(_ context.Context, p ctrlproto.ModelParamsParams
 			}
 		}
 		spec := ctrlproto.ModelParamSpec{
-			Key:     sp.Key,
-			Label:   sp.Label,
-			Kind:    paramKind(sp.Kind),
-			Default: sp.Default(m),
-			Options: options,
-			Min:     float64(sp.Min),
-			Max:     float64(sp.Max),
+			Key:        sp.Key,
+			Label:      sp.Label,
+			Kind:       paramKind(sp.Kind),
+			Default:    sp.Default(m),
+			Options:    options,
+			FreeValues: sp.FreeValues,
+			Min:        float64(sp.Min),
+			Max:        float64(sp.Max),
 		}
 		if has {
 			spec.Value = sp.Override(existing)
@@ -107,7 +120,7 @@ func (w *Workspace) ModelParamsSet(_ context.Context, p ctrlproto.ModelParamsSet
 	// provider validates. Bounds, integer-ness, what a blank means — all of it is
 	// decided in ONE place, by the same code the TUI dialog commits through, and a
 	// refusal names the setting the operator actually typed into.
-	for _, sp := range provider.ScalarParams() {
+	for _, sp := range provider.ModelParams() {
 		v, sent := p.Values[sp.Key]
 		if !sent {
 			continue
@@ -121,6 +134,62 @@ func (w *Workspace) ModelParamsSet(_ context.Context, p ctrlproto.ModelParamsSet
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "save models.json: %v", err)
 	}
 	w.applyUserModels(m.Provider, m.ID)
+	return nil
+}
+
+// ModelAdd creates a models.json entry for a model no lower layer knows about,
+// so a user can reach one the catalog has not shipped yet.
+//
+// The guards are the inverse of ModelParamsSet's, which is the whole reason this
+// is a second method rather than a flag on that one. That method needs the id to
+// resolve, because editing the other provider's copy of a shared id silently is
+// the bug its FindModel call prevents. This one needs the id NOT to resolve. A
+// create flag would have to switch that check off, and a parameter that disables
+// a safety check leaves the two paths one typo apart.
+func (w *Workspace) ModelAdd(_ context.Context, p ctrlproto.ModelAddParams) error {
+	prov := strings.TrimSpace(p.Provider)
+	id := strings.TrimSpace(p.Model)
+	if id == "" {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("a model id is required"))
+	}
+
+	// Reachable, not registered. An entry under a provider with no credential
+	// writes correctly and then never appears, because both pickers filter on this
+	// same predicate — so the save looks like it failed and nothing in the
+	// interface explains why. Asked of build rather than restated here: this
+	// predicate lived in three places once, and only one of them learned about
+	// named endpoints.
+	//
+	// CodeNoCredential rather than bad_request, because the remedy is a login. A
+	// host with a login flow keys on that code to offer one.
+	if !build.LoggedInProviderSet()[prov] {
+		return ctrlproto.Errorf(ctrlproto.CodeNoCredential, "%s", i18n.T("not signed in to provider %q", prov))
+	}
+
+	// Deliberately not CodeConflict. That code is for state that moved on under a
+	// caller who was right, whose answer is to resync. Here the caller asked for
+	// the wrong verb, and the answer is to edit the model instead.
+	if _, err := provider.FindModel(prov, id); err == nil {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("model %q already exists under %q, edit it instead", id, prov))
+	}
+
+	// Same validation as the edit path, by the same code, so a refusal names the
+	// setting the operator typed into and the bounds are decided in one place.
+	entry := provider.UserModel{ID: id}
+	for _, sp := range provider.ModelParams() {
+		v, sent := p.Values[sp.Key]
+		if !sent {
+			continue
+		}
+		if err := sp.SetOverride(&entry, strings.TrimSpace(v)); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s: %v", sp.Label, err)
+		}
+	}
+
+	if err := provider.UpsertUserModel(config.UserModelsPath(), prov, entry); err != nil {
+		return ctrlproto.Errorf(ctrlproto.CodeInternal, "save models.json: %v", err)
+	}
+	w.applyUserModels(prov, id)
 	return nil
 }
 
@@ -176,14 +245,18 @@ func (w *Workspace) applyUserModels(prov, modelID string) {
 // provider adds and this does not know becomes text, which is the honest fallback:
 // the daemon still parses and still refuses, so the worst case is a plain box
 // rather than a wrong widget.
-func paramKind(k provider.ScalarKind) string {
+func paramKind(k provider.ParamKind) string {
 	switch k {
-	case provider.ScalarInt:
+	case provider.ParamInt:
 		return "int"
-	case provider.ScalarFloat:
+	case provider.ParamFloat:
 		return "float"
-	case provider.ScalarEnum:
+	case provider.ParamEnum:
 		return "enum"
+	case provider.ParamTriState:
+		return "tristate"
+	case provider.ParamList:
+		return "list"
 	default:
 		return "text"
 	}

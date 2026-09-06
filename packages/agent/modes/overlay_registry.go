@@ -180,6 +180,11 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				if act.Edit {
 					i.openModelEdit(act.Provider, act.Model)
 				}
+				if act.Add {
+					// Provider/Model name the CLONE SOURCE here, not the model
+					// about to be created.
+					i.openModelAdd(act.Provider, act.Model)
+				}
 				if act.Favorite {
 					i.persistFavoriteModel(act.Provider, act.Model, act.FavOn)
 				}
@@ -207,6 +212,8 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				switch {
 				case act.Save:
 					i.applyModelEdit(act.Provider, act.ModelID, act.Entry)
+				case act.Add:
+					i.applyModelAdd(act.Provider, act.ModelID, act.Entry)
 				case act.Reset:
 					i.applyModelReset(act.Provider, act.ModelID)
 				}
@@ -431,6 +438,10 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				act := i.settingsDialog.HandleKey(k)
 				if act.Toggle {
 					i.applySettingChange(act)
+					// Re-read the surface: a parent toggle adds or removes
+					// its conditional children, and the pane has to show
+					// them now rather than on the next /settings.
+					i.refreshSettingsDialog()
 				}
 				return false
 			},

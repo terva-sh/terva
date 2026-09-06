@@ -1731,7 +1731,14 @@ func (w *Workspace) Models(ctx context.Context, sess string) (ctrlproto.ModelsRe
 		curProv, curModel = w.provider, w.model
 		w.mu.Unlock()
 	}
-	authed := build.LoggedInProviderSet()
+	// One sweep, used twice: as the membership test below, and as the reachable
+	// set on the result. LoggedInProviderSet would repeat the credential walk the
+	// comment below calls the expensive half.
+	reachable := build.LoggedInProviders()
+	authed := make(map[string]bool, len(reachable))
+	for _, p := range reachable {
+		authed[p] = true
+	}
 	// How each provider authenticates, so the picker can tell a subscription-backed
 	// row from a metered one when both offer the same model id. Cheap beside the
 	// membership sweep above: an unexpired OAuth token short-circuits its refresh.
@@ -1776,6 +1783,8 @@ func (w *Workspace) Models(ctx context.Context, sess string) (ctrlproto.ModelsRe
 			Auth:                 authMethod[m.Provider],
 			DisplayName:          m.DisplayName,
 			Renamed:              m.DisplayNameSet,
+			Source:               m.Source,
+			Custom:               m.Synthetic,
 		}
 		// Reported, never filtered: the client needs the row to offer "show
 		// hidden" and to un-hide it, and dropping it here would also hide the
@@ -1786,7 +1795,7 @@ func (w *Workspace) Models(ctx context.Context, sess string) (ctrlproto.ModelsRe
 		}
 		out = append(out, info)
 	}
-	return ctrlproto.ModelsResult{Models: out, ReasoningLadders: ladders.table()}, nil
+	return ctrlproto.ModelsResult{Models: out, ReasoningLadders: ladders.table(), Providers: reachable}, nil
 }
 
 // ladderTable deduplicates the reasoning ladders across a model list.

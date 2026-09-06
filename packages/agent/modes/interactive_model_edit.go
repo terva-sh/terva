@@ -63,16 +63,46 @@ func (i *Interactive) applyModelReset(prov, modelID string) {
 		i.setStatusErr(i18n.T("models.json path not configured"))
 		return
 	}
+	// Read BEFORE the removal. A synthetic model exists only because of the
+	// entry, so once RemoveUserModel and reapplyUserModels have run there is
+	// nothing left to ask: FindModel fails and the answer defaults to the wrong
+	// half of the message below.
+	synthetic := false
+	if m, ferr := provider.FindModel(prov, modelID); ferr == nil {
+		synthetic = m.Synthetic
+	}
 	removed, err := provider.RemoveUserModel(path, prov, modelID)
 	if err != nil {
 		i.setStatusErr(i18n.T("update models.json: %s", err))
 		return
 	}
 	i.reapplyUserModels()
-	i.refreshActiveModel(prov, modelID)
-	if removed {
+
+	// Deleting the model this session is ON is the one case that must not
+	// re-resolve. The model has just left the catalog, so switchModel's
+	// FindModel fails and it returns "unknown model" without touching the
+	// session. That error then reached the status line and was wiped a moment
+	// later by setStatusOK, which clears statusErr: the user was told the
+	// delete succeeded and never told the swap had failed.
+	//
+	// Skipping it is not papering over the failure. There is nothing to
+	// re-resolve TO, so the swap could only ever fail here. What the user needs
+	// instead is the truth, which the message below carries: the row is gone,
+	// and this session keeps using the model until they pick another. The
+	// session is not broken by that. The agent still holds the client and model
+	// record it was built with, so turns keep working.
+	orphaned := removed && synthetic && i.isActiveModel(prov, modelID)
+	if !orphaned {
+		i.refreshActiveModel(prov, modelID)
+	}
+	switch {
+	case orphaned:
+		i.setStatusOK("deleted " + prov + "/" + modelID + ", but this session keeps using it until you switch with /model")
+	case removed && synthetic:
+		i.setStatusOK("deleted " + prov + "/" + modelID + ", it existed only in models.json")
+	case removed:
 		i.setStatusOK("reset " + prov + "/" + modelID + " to defaults")
-	} else {
+	default:
 		i.setStatusOK("no custom settings for " + prov + "/" + modelID)
 	}
 	i.invalidate()
@@ -94,10 +124,17 @@ func (i *Interactive) reapplyUserModels() {
 // / max-output changes are picked up on the next resolve. No-op when a
 // different model is active.
 func (i *Interactive) refreshActiveModel(prov, modelID string) {
-	i.mu.Lock()
-	active := i.cfg.Provider == prov && i.cfg.Model == modelID
-	i.mu.Unlock()
-	if active {
+	if i.isActiveModel(prov, modelID) {
 		i.applyModelSelection(prov, modelID)
 	}
+}
+
+// isActiveModel reports whether prov/modelID is the model this session is
+// running on. One definition, because applyModelReset asks the same question
+// to decide whether a delete has orphaned the session, and two spellings of
+// "is this the active model" would be two chances to disagree.
+func (i *Interactive) isActiveModel(prov, modelID string) bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.cfg.Provider == prov && i.cfg.Model == modelID
 }

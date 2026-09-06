@@ -413,6 +413,10 @@ func (s *Service) ModelParamsReset(ctx context.Context, p ctrlproto.ModelParamsP
 	return s.c.Call(ctx, "", ctrlproto.MethodModelParamsReset, p, nil)
 }
 
+func (s *Service) ModelAdd(ctx context.Context, p ctrlproto.ModelAddParams) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodModelAdd, p, nil)
+}
+
 // --- swarm tier ladder (config.json swarm_tiers) ---
 
 var _ ctrlproto.ModelTiersController = (*Service)(nil)

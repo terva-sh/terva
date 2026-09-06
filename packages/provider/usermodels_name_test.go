@@ -10,7 +10,7 @@ import (
 )
 
 // THE regression this whole field has to survive. models.json `name` moved
-// into the ScalarParams registry, and the merge that carries it used to be a
+// into the ModelParams registry, and the merge that carries it used to be a
 // hand-written special case guarded by `um.DisplayName != um.ID` — a proxy for
 // "did the operator actually write a name", forced by the loader backfilling
 // DisplayName = ID when they didn't.
@@ -173,9 +173,9 @@ func TestSanitizeDisplayName(t *testing.T) {
 
 // The editor writes through the same sanitizer as the loader, so a pasted
 // escape cannot reach models.json from the /model form either.
-func TestNameScalarParamSanitizesOnSet(t *testing.T) {
-	var p ScalarParam
-	for _, sp := range ScalarParams() {
+func TestNameModelParamSanitizesOnSet(t *testing.T) {
+	var p ModelParam
+	for _, sp := range ModelParams() {
 		if sp.Key == "name" {
 			p = sp
 		}
@@ -202,8 +202,8 @@ func TestNameScalarParamSanitizesOnSet(t *testing.T) {
 // The editor's "inherit (…)" hint must not offer the operator their OWN name
 // as the thing clearing the field would fall back to.
 func TestNameScalarDefaultHint(t *testing.T) {
-	var p ScalarParam
-	for _, sp := range ScalarParams() {
+	var p ModelParam
+	for _, sp := range ModelParams() {
 		if sp.Key == "name" {
 			p = sp
 		}

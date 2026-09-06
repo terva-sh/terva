@@ -292,6 +292,9 @@ var dispatch = map[Method]handler{
 	MethodModelParamsReset: act(noModelParams, func(c ModelParamsController, ctx context.Context, f Frame, p ModelParamsParams) error {
 		return c.ModelParamsReset(ctx, p)
 	}),
+	MethodModelAdd: act(noModelParams, func(c ModelParamsController, ctx context.Context, f Frame, p ModelAddParams) error {
+		return c.ModelAdd(ctx, p)
+	}),
 
 	// ----------------------------------------------------------------- tier ladder
 
