@@ -14,7 +14,7 @@ require (
 	github.com/mattn/go-runewidth v0.0.29
 	github.com/rivo/uniseg v0.4.7
 	github.com/sahilm/fuzzy v0.1.1
-	github.com/terva-sh/git-ticket v0.14.1 // store schema 3; keep in sync with GIT_TICKET_VERSION
+	github.com/terva-sh/git-ticket v0.14.3 // store schema 3; keep in sync with GIT_TICKET_VERSION
 	golang.org/x/image v0.44.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.45.0

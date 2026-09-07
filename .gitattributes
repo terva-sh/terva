@@ -67,4 +67,16 @@ packages/agent/persona/personas/**/*.md text eol=lf
 packages/agent/web/client/dist/**            linguist-generated=true
 packages/i18n/locales/**/en.json             linguist-generated=true
 packages/agent/web/client/src/locales/**     linguist-generated=true
+# The ticket store. `git ticket init` writes both of these for a store it
+# creates; this store predates that, so they are here by hand.
+#
+# eol=lf because the parser requires LF. A ticket file whose first line is
+# "---\r" comes back as parse_error, so a store cloned on Windows under the
+# default autocrlf lists nothing at all rather than reporting a fault. Silent,
+# and Windows only, which means the release gate is where we would find it.
+#
+# Two lines rather than one combined rule, and eol first, matching what init
+# writes: the tool appends any line it does not already find, and a combined
+# rule would match neither and append a duplicate.
+.tickets/**/*.md text eol=lf
 .tickets/**/*.md merge=gitticket
