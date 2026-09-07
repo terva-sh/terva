@@ -11,6 +11,21 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.134.2](https://github.com/terva-sh/terva/releases/tag/v0.134.2) — 2026-09-07
+
+### Features
+
+- core,tui,web: resume a turn that died without a reply
+- tickets: terva ticket follows git-ticket v0.14.1
+- tools: refuse a bash command that reads $? after a formatting pipe
+- work a ticket ledger from inside the session
+
+### Fixes
+
+- tickets: the ticket tools and terva ticket work on Windows
+- tui: the status bar's right edge lines up with the tool box
+- web: allow re-authentication of active subscriptions
+
 ## [v0.133.1](https://github.com/terva-sh/terva/releases/tag/v0.133.1) — 2026-09-06
 
 ### Features
