@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen } from '@testing-library/preact'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/preact'
 
-import { App, countdown, CtxRow, ResetRow, shortWindow, wtStatus } from './app'
+import { App, countdown, CtxRow, ProvidersBody, ResetRow, shortWindow, wtStatus } from './app'
 import { fakeClient } from './platform/ctrlproto/testing'
 import { localInstant } from './ui/formatting'
 import { ADDR_WORKSPACE } from './platform/ctrlproto/types'
@@ -183,6 +183,40 @@ describe('ResetRow urgency', () => {
   it('does not mark a credit that is spent or already gone', () => {
     expect(rowAt(inHours(2), 'redeemed').className).not.toContain('ui-deadline')
     expect(rowAt(inHours(-2)).className).not.toContain('ui-deadline')
+  })
+})
+
+describe('ProvidersBody subscription re-authentication', () => {
+  it('offers re-authentication before the stored OAuth expiry', () => {
+    const onStart = vi.fn()
+    render(
+      <ProvidersBody
+        v={{
+          can_login: true,
+          providers: [
+            {
+              id: 'anthropic',
+              label: 'Anthropic (Claude Pro/Max)',
+              method: 'oauth',
+              expiry: '2026-09-10T12:00:00Z',
+              expired: false,
+              offers: ['oauth'],
+            },
+          ],
+        }}
+        flow={null}
+        busy={false}
+        error=""
+        onStart={onStart}
+        onSubmit={() => {}}
+        onCancel={() => {}}
+        onLogout={() => {}}
+        onRemoveEndpoint={() => {}}
+      />,
+    )
+
+    fireEvent.click(screen.getByText('Sign in again'))
+    expect(onStart).toHaveBeenCalledWith('anthropic', 'oauth')
   })
 })
 

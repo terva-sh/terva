@@ -4237,7 +4237,7 @@ export function ProvidersBody({
           ) : null}
           {canLogin ? (
             <div class="prov-actions">
-              {p.expired && p.offers?.includes('oauth') ? (
+              {p.method === 'oauth' ? (
                 <button class="btn" onClick={() => onStart(p.id, 'oauth')}>
                   {t('Sign in again')}
                 </button>
