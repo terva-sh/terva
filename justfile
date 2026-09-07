@@ -129,6 +129,52 @@ install-dev:
     go install -tags terva_acp,terva_pprof,terva_web,terva_scripting,terva_workflows -ldflags "{{debug_ldflags}}" ./cmd/terva
     @dest="$(go env GOBIN)"; [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; echo "installed terva (dev, non-stripped, terva_acp,terva_pprof,terva_web,terva_scripting,terva_workflows) -> $dest/terva"
 
+# Install the standalone git-ticket CLI at the version THIS TREE PINS in go.mod.
+#
+# terva itself never needs this: it embeds git-ticket as a library, so any
+# `just build` or `just install` already carries the pinned version. This recipe
+# is for the OTHER binary — the `git-ticket` on your PATH that `git ticket ...`
+# and the ticket-store check in `just ci` reach.
+#
+# Opt-in on purpose. The ci recipes report a mismatch and never install over the
+# binary you chose to run.
+git-ticket-install:
+    @want="$(awk '$1 == "github.com/terva-sh/git-ticket" { print $2; exit }' go.mod)"; \
+     echo "installing git-ticket $want (the version go.mod pins)"; \
+     go install "github.com/terva-sh/git-ticket/cmd/git-ticket@$want"
+
+# `git ticket check --strict` over the store, naming a version mismatch before
+# it runs. LANE only labels the output, so `just ci` and `just ci-docs` each
+# report under their own name.
+#
+# Why the version matters as of v0.13.0: this store is schema 2, and a
+# git-ticket older than v0.12.0 refuses it outright with `schema_unsupported`.
+# That reads like a corrupt store and is not, and `--fix` does not help, so the
+# note turns a cryptic refusal into an instruction. `.tickets/CONVENTIONS.md`
+# carries the verbatim error.
+#
+# The mismatch is a note, not a failure: a newer binary than the pin is a
+# perfectly reasonable thing to be running, and only the store's own verdict
+# decides this step.
+#
+# No `go install` here. CI installs because its container starts empty; a
+# developer machine already has the binary, and installing over it would
+# silently replace the version they chose to run. 'just git-ticket-install' is
+# the opt-in.
+ticket-check LANE='local':
+    @want="$(awk '$1 == "github.com/terva-sh/git-ticket" { print $2; exit }' go.mod)"; \
+     if ! command -v git-ticket >/dev/null 2>&1; then \
+       echo "{{LANE}}: SKIPPED ticket-store check (git-ticket absent; 'just git-ticket-install' installs $want)"; \
+     else \
+       have="$(git-ticket --version 2>/dev/null | awk '{print $2}')"; \
+       if [ "$have" != "$want" ]; then \
+         echo "{{LANE}}: note: git-ticket $have is on PATH, but this tree pins $want"; \
+         echo "{{LANE}}:       a binary older than v0.12.0 refuses this schema-2 store"; \
+         echo "{{LANE}}:       run 'just git-ticket-install' to match the pin"; \
+       fi; \
+       git ticket check --strict; \
+     fi
+
 # Run a self-contained dogfood scenario (a dir under testdata/scenarios/):
 # builds the current tree, seeds a throwaway TERVA_HOME from the scenario's
 # PRISTINE fixtures (auto-resets every run — no manual state cleanup), inherits
@@ -532,7 +578,7 @@ ci: lint test ci-acp ci-web ci-scripting ci-workflows ci-web-client ci-web-smoke
     @if [ -x scripts/proposal.sh ]; then ./scripts/proposal.sh check; else echo "ci: SKIPPED proposal-check (scripts/proposal.sh absent on this tree)"; fi
     # The ticket store, in both local recipes because it is in both remote
     # lanes. See the longer note on the same step in `ci-docs`.
-    @if command -v git-ticket >/dev/null 2>&1; then git ticket check --strict; else echo "ci: SKIPPED ticket-store check (git-ticket absent; .tickets/README.md says how to install it)"; fi
+    @just ticket-check ci
 
 # The documentation lane, exactly as .forgejo/workflows/ci.yml runs it for a
 # pull request that touches only docs/ and the root markdown files.
@@ -569,7 +615,7 @@ ci-docs:
     # No `go install` here. CI installs because its container starts empty; a
     # developer machine already has the binary, and installing over it would
     # silently replace the version they chose to run.
-    @if command -v git-ticket >/dev/null 2>&1; then git ticket check --strict; else echo "ci-docs: SKIPPED ticket-store check (git-ticket absent; .tickets/README.md says how to install it)"; fi
+    @just ticket-check ci-docs
 
 # Pre-release gate for a public cut: the full local CI, then the public-channel
 # facts that can be established before anything is pushed.
