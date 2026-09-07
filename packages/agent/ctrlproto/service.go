@@ -103,6 +103,23 @@ type WorkspaceService interface {
 	// growth this verb keeps doing.
 	RetryTurn(ctx context.Context, sess string, p TurnRetryParams) error
 
+	// ResumeTurn runs the agent loop against the transcript as it stands, for a
+	// session whose last turn died without producing a reply. It appends no
+	// message and discards nothing, which is what separates it from Prompt and
+	// from RetryTurn: the work is already recorded and only the next request is
+	// missing.
+	//
+	// Three transcript shapes reach it, and the handler routes on the shape rather
+	// than making the caller name it (see [core.ResumeStateOf]). A trailing prompt
+	// or a trailing tool-results message runs an ordinary turn. A reply the
+	// provider cut short is extended as a prefill, so that one needs a provider
+	// that can continue an assistant message.
+	//
+	// p.Epoch is checked as in EditMessage; [CodeBusy] when a turn is running,
+	// [CodeBadRequest] when the session is not stuck or the provider cannot serve
+	// the shape it is in.
+	ResumeTurn(ctx context.Context, sess string, p TurnResumeParams) error
+
 	// Approve resolves a pending tool-approval round-trip previously surfaced
 	// as an [EventPermissionRequest] event with the matching callID. The first
 	// client to answer wins; late answers for an already-resolved call are
@@ -392,6 +409,16 @@ type SessionInfo struct {
 	// "continue" affordance. A client also needs a trailing assistant message and
 	// an idle session, both of which it reads from the transcript itself.
 	SupportsContinue bool `json:"supports_continue,omitempty"`
+	// Resume names why this session is waiting on the model rather than on the
+	// user, or "" when it is not: "after-user", "after-tools", "after-cut-short"
+	// (the [core.ResumeState] names). A client offers turn.resume when it is set.
+	//
+	// The daemon answers rather than letting each client work it out. The rule is
+	// subtler than it looks (a compaction summary and a cut-short reply are both
+	// invisible to a role check) and there are two front ends, so a client-side
+	// copy would be a second implementation free to drift from [core.ResumeStateOf]
+	// and disagree about when to offer the button.
+	Resume string `json:"resume,omitempty"`
 	// Card is the character-card ref (library id or path) the session was created
 	// from, so the Stage library can group a character's chats under it.
 	Card string `json:"card,omitempty"`

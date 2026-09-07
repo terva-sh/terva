@@ -565,6 +565,9 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 		// no longer about what is on screen. One-shot per binding: a compact or a
 		// clear sends a snapshot too, and the offer survives those.
 		i.retractOfferOnBind()
+		// Reads the transcript setCarrierTranscript stored just above, so it must
+		// stay after it.
+		i.hintResumeOnBind()
 		// ...and the draft this conversation was left with comes back. The
 		// mirror image of the retract, armed by the same one-shot: what the
 		// user typed here and did not send is theirs to find again.
@@ -715,6 +718,40 @@ func (i *Interactive) startTurnCarrier(parent context.Context, prompt string, im
 			} else {
 				i.setStatusErr(err.Error())
 			}
+			i.invalidate()
+		}
+	}()
+}
+
+// runCarrierResume asks the service to run the loop again for a session whose
+// last turn died without producing a reply: the /continue command. It is
+// startTurnCarrier without a prompt, claiming the same local slot for UI state
+// (spinner, input gating, stream arming) and released by the stream's "done" in
+// exactly the same way, because what comes back is an ordinary streamed reply.
+//
+// The busy path is the one deliberate difference. A prompt that loses the race
+// gets queued so the user's words are not lost; resume has no words to keep, and
+// a turn already running is itself proof the session is not stuck. So it says so
+// and stops.
+func (i *Interactive) runCarrierResume(parent context.Context) {
+	c, sess := i.cfg.Carrier, i.carrierSession()
+	if !i.turns.claimCarrier(i.carrierCancel()) {
+		i.setStatusErr(i18n.T("a turn is already running"))
+		i.invalidate()
+		return
+	}
+	i.resetTurnUI()
+	go func() {
+		// Epoch 0 means "do not check staleness": the TUI tracks no transcript
+		// revision, and resume names no index for a stale one to misplace. See
+		// ctrlproto.TurnResumeParams.
+		if err := c.ResumeTurn(parent, sess, ctrlproto.TurnResumeParams{}); err != nil {
+			// Nothing started, so give the local slot straight back. The daemon
+			// refuses here when the session is not stuck or the provider cannot
+			// continue a cut-short reply, and both messages are worth showing as
+			// they are.
+			i.turns.releaseCarrier()
+			i.setStatusErr(err.Error())
 			i.invalidate()
 		}
 	}()
@@ -1439,6 +1476,7 @@ func (i *Interactive) armCarrierBind() {
 	i.carrierChatArmed = true
 	i.carrierGhostArmed = true
 	i.carrierDraftArmed = true
+	i.carrierResumeArmed = true
 }
 
 // retractOfferOnBind drops a standing idle offer when a fresh binding's first
@@ -1464,6 +1502,32 @@ func (i *Interactive) retractOfferOnBind() {
 		return
 	}
 	i.runOnMain(func() { i.ed.SetGhost("") })
+}
+
+// hintResumeOnBind says so, once per binding, when the transcript a fresh
+// binding just loaded is waiting on the model rather than on the user. It is the
+// discoverability half of /continue, and it exists because the moment you need
+// that command is the moment you cannot go looking for it: the session shows
+// your message, nothing is running, and nothing says why.
+//
+// It only ever writes a status line. Nothing is sent and nothing is spent, which
+// was the deliberate choice: a resume costs tokens, so it stays the user's to
+// make. See carrierResumeArmed for why this is per binding and not per snapshot.
+func (i *Interactive) hintResumeOnBind() {
+	i.mu.Lock()
+	armed := i.carrierResumeArmed
+	i.carrierResumeArmed = false
+	msgs := i.carrierMessages
+	i.mu.Unlock()
+	if !armed {
+		return
+	}
+	switch core.ResumeStateOf(msgs) {
+	case core.ResumeAfterCutShort:
+		i.setStatusOK(i18n.T("the last reply stopped partway. type /continue to finish it"))
+	case core.ResumeAfterUser, core.ResumeAfterTools:
+		i.setStatusOK(i18n.T("the last turn ended without a reply. type /continue to ask for it again"))
+	}
 }
 
 // noteSessionMeta captures the per-frame session metadata off a full

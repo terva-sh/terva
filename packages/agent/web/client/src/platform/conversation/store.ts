@@ -66,7 +66,11 @@ export type Item = Placed &
     // different thing from `SessionState.reasoning`: that one is the live line
     // for the turn in flight and is dropped when the turn ends. This one is
     // transcript, so it survives a reload and a scroll away.
-    | { kind: 'assistant'; id: string; text: string; streaming: boolean; images?: ImageAttachment[]; directed?: boolean; routed?: boolean; actor?: string; time?: string; reasoning?: string }
+    // `incomplete` marks a reply the provider cut short: the turn kept what had
+    // streamed and then died. It is not the same as `streaming` — that one says a
+    // reply is still arriving, this one says one stopped arriving and never will.
+    // The panel renders it as cut short and offers to resume it.
+    | { kind: 'assistant'; id: string; text: string; streaming: boolean; images?: ImageAttachment[]; directed?: boolean; routed?: boolean; actor?: string; time?: string; reasoning?: string; incomplete?: boolean }
     // `shared` are files this call published for the user (share_file). They
     // hang off the tool item because that is where the wire puts them, but they
     // are NOT rendered here — sequenceConversationItems lifts them into rows of
@@ -271,7 +275,7 @@ export function itemsFromMessages(msgs: WireMessage[], at: Placement): Item[] {
             ? { kind: 'system', id, text, ...placed }
             : m.role === 'user'
               ? userRow(text, images, id, placed, m.time, m.attachments, m.attachments_missing)
-              : { kind: 'assistant', id, text, streaming: false, images, reasoning, directed: m.directed, routed: m.routed, actor: m.actor, time: m.time, ...placed },
+              : { kind: 'assistant', id, text, streaming: false, images, reasoning, directed: m.directed, routed: m.routed, actor: m.actor, time: m.time, incomplete: m.incomplete, ...placed },
       )
     }
     for (const b of m.content ?? []) {

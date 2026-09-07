@@ -2553,6 +2553,11 @@ func (s *wsSession) info() ctrlproto.SessionInfo {
 	if s.agent != nil {
 		info.Messages = len(s.agent.Messages())
 		info.SupportsContinue = s.agent.ContinuesAssistantPrefill()
+		// Empty unless the session is stranded, so a client's check is one field and
+		// the wire stays quiet for the ordinary case. Reads the last message only.
+		if st := core.ResumeStateOf(s.agent.Messages()); st.Stuck() {
+			info.Resume = st.String()
+		}
 		info.Usage = toCtrlUsage(s.agent.Cost())
 		last := s.agent.LastTurnUsage()
 		info.ContextTokens = last.PromptTokens()

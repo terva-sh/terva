@@ -100,6 +100,13 @@ export interface WireMessage {
   // tool-role message; each names the call it came from. The replay half of the
   // pair whose live half is WireEvent.shared.
   shared?: SharedFile[]
+  // The model never finished this reply: the provider failed partway and the
+  // turn kept what had already streamed. Mark the bubble as cut short and offer
+  // to resume it (turn.resume), rather than rendering a reply that just stops.
+  //
+  // Role cannot carry this. A finished reply and an interrupted one both end the
+  // transcript with an assistant message, which is why the daemon marks it.
+  incomplete?: boolean
 }
 
 // WireAttachment describes one file a user attached: enough to label it, and
@@ -253,6 +260,15 @@ export interface SessionInfo {
   // assistant message as a prefill (turn.continue) — the Stage "continue" gate. A
   // client also needs a trailing assistant message and an idle session.
   supports_continue?: boolean
+  // resume names why the session is waiting on the model rather than on the user,
+  // or absent when it is not: 'after-user', 'after-tools', 'after-cut-short'.
+  // Offer turn.resume when it is set.
+  //
+  // The daemon answers this rather than each client working it out. The rule is
+  // subtler than a role check (a compaction summary and a cut-short reply both
+  // hide from one), and a second implementation here would be free to drift from
+  // the Go one and disagree with the TUI about when to offer the button.
+  resume?: string
   // card is the character-card ref (library id) the session was created from, so
   // the Stage library groups a character's chats under it.
   card?: string
@@ -2669,6 +2685,7 @@ export type Verb =
   | 'surfaces.list'
   | 'turn.advance'
   | 'turn.continue'
+  | 'turn.resume'
   | 'turn.retry'
   | 'turn.swipe'
   | 'unsubscribe'

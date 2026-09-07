@@ -112,6 +112,7 @@ surface.get	params=SurfaceGetParams	result=SurfaceResult
 surfaces.list	params=-	result=SurfacesResult
 turn.advance	params=-	result=-
 turn.continue	params=TurnContinueParams	result=-
+turn.resume	params=TurnResumeParams	result=-
 turn.retry	params=TurnRetryParams	result=-
 turn.swipe	params=TurnSwipeParams	result=-
 usage.get	params=-	result=UsageResult

@@ -94,6 +94,10 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 		return false
 	},
 	"/clear": (*Interactive).slashClear,
+	"/continue": func(i *Interactive, ctx context.Context, _ []string, _ string) bool {
+		i.runResume(ctx)
+		return false
+	},
 
 	"/study": (*Interactive).slashStudy,
 	"/btw": func(i *Interactive, _ context.Context, parts []string, _ string) bool {

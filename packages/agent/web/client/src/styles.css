@@ -1321,6 +1321,16 @@ button.ident-home:hover .persona { text-decoration: underline; }
 .compaction.cleared .compaction-rule::after { border-top: 1px dashed var(--line); background: none; height: 0; }
 .compaction-toggle.static { border-style: dashed; cursor: default; }
 
+/* The offer to resume a turn that died without a reply. It sits above the
+   composer, in the gap where the missing reply would have been, and is muted on
+   purpose: it reports a fact and offers an action, and nothing is wrong with the
+   transcript itself. Loud styling here would read as an error state, which this
+   is not — the conversation is intact, it simply stopped. */
+.resume-bar { align-self: stretch; width: 100%; min-width: 0; display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: var(--fs-note); color: var(--muted); }
+.resume-why { flex: 0 1 auto; min-width: 0; }
+.resume-go { flex: none; font: inherit; font-size: var(--fs-note); color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; cursor: pointer; white-space: nowrap; }
+.resume-go:hover { color: var(--fg); }
+
 /* The recorded-thinking block itself now lives in ui/ui.css: both the panel and
    the stage render it, so its base rules belong to the shared sheet. The
    --live and --static modifiers below it are LiveThinking's, which is panel

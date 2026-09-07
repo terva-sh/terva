@@ -500,6 +500,9 @@ func (f *fakeWS) SwipeMessage(ctx context.Context, sess string, epoch uint64, in
 func (f *fakeWS) RetryTurn(ctx context.Context, sess string, p ctrlproto.TurnRetryParams) error {
 	return nil
 }
+func (f *fakeWS) ResumeTurn(ctx context.Context, sess string, p ctrlproto.TurnResumeParams) error {
+	return nil
+}
 func (f *fakeWS) ForkSession(ctx context.Context, sess string, fromIndex int) (ctrlproto.SessionInfo, error) {
 	return ctrlproto.SessionInfo{ID: "fork-of-" + sess}, nil
 }

@@ -890,6 +890,7 @@ sends as a normal prompt.
 |---|---|
 | `/compact` | Summarize + replace the transcript to reclaim context (the TUI's `/compact`; the daemon otherwise auto-compacts near the window limit). Refused mid-turn; a already-minimal transcript reports a benign note. |
 | `/clear` | Wipe the transcript with **no** summary — start over in the same session. Unlike compact it keeps nothing; the durable session file gets an empty checkpoint (old rows stay for audit). Refused mid-turn. |
+| `/continue` | Ask for the reply a turn died without producing (the TUI's `/continue`, the verb `turn.resume`). Nothing is appended and nothing is discarded. The panel also offers this as a button above the composer whenever the daemon reports the session is waiting on a reply, so the command is for anyone who already knows it. Refused when the session is not stuck. |
 | `/skill <name> [task]` | Prime the model to load a skill — it rewrites to *Use the "name" skill for: task* and sends it, so the model calls the `skill` tool. After `/skill ` the menu autocompletes skill names. |
 | `/model [id]` | Switch to a model by id, or open the model picker. |
 | `/context` | Open the Usage pane. |

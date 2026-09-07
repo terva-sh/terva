@@ -429,6 +429,12 @@ func (c *Carrier) SwipeMessage(ctx context.Context, sess string, epoch uint64, i
 func (c *Carrier) RetryTurn(ctx context.Context, sess string, p ctrlproto.TurnRetryParams) error {
 	return unsupported("turn.retry")
 }
+
+// A replay has no provider client, so there is no loop to resume: the turns it
+// shows already happened somewhere else.
+func (c *Carrier) ResumeTurn(ctx context.Context, sess string, p ctrlproto.TurnResumeParams) error {
+	return unsupported("turn.resume")
+}
 func (c *Carrier) ForkSession(ctx context.Context, sess string, fromIndex int) (ctrlproto.SessionInfo, error) {
 	return ctrlproto.SessionInfo{}, unsupported("sessions.fork")
 }

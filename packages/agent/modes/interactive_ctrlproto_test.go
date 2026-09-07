@@ -57,6 +57,8 @@ type fakeCarrier struct {
 	cancels   chan struct{}
 	compacts  chan struct{}
 	clears    chan struct{}
+	resumes   chan ctrlproto.TurnResumeParams
+	resumeErr error
 	subs      chan string    // session id of each SubscribeReliable call
 	switches  chan [2]string // provider+model of each SwitchModel call
 	surfActs  chan surfAct   // every SurfaceAction call
@@ -154,6 +156,7 @@ func newFakeCarrier() *fakeCarrier {
 		cancels:  make(chan struct{}, 4),
 		compacts: make(chan struct{}, 4),
 		clears:   make(chan struct{}, 4),
+		resumes:  make(chan ctrlproto.TurnResumeParams, 4),
 		subs:     make(chan string, 4),
 		switches: make(chan [2]string, 4),
 		surfActs: make(chan surfAct, 8),
@@ -234,6 +237,11 @@ func (f *fakeCarrier) Compact(ctx context.Context, sess string) error {
 	}
 	f.compacts <- struct{}{}
 	return nil
+}
+
+func (f *fakeCarrier) ResumeTurn(ctx context.Context, sess string, p ctrlproto.TurnResumeParams) error {
+	f.resumes <- p
+	return f.resumeErr
 }
 
 func (f *fakeCarrier) Clear(ctx context.Context, sess string) error {

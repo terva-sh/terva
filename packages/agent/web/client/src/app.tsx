@@ -77,6 +77,7 @@ import type {
 } from './ctrlproto'
 import { Composer, type SlashCommand } from './features/conversation/Composer'
 import { ConversationTimeline } from './features/conversation/ConversationTimeline'
+import { ResumeBar } from './features/conversation/ResumeBar'
 import type { ToolView } from './features/conversation/types'
 import { AskRequest as AskRequestView } from './features/interactions/AskRequest'
 import { ToastDock, useToast } from './features/interactions/Toast'
@@ -1996,6 +1997,18 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   // extension Commands pane (buttons): these are operator chrome (compact,
   // skill, model, …). Built each render so descriptions track the active locale;
   // the set is tiny. See onSubmit for dispatch and Composer for the autocomplete.
+  // resumeTurn asks the daemon to run the loop again on a session whose last turn
+  // died without a reply. Nothing is appended and nothing is discarded.
+  //
+  // The panel passes a real epoch where the TUI passes 0: it tracks the transcript
+  // window, so it can have the staleness check that a client without one cannot
+  // ask for.
+  const resumeTurn = useCallback(() => {
+    clientRef.current
+      ?.send('turn.resume', { epoch: winRef.current.epoch }, curRef.current)
+      .catch((e) => notify.error(errText(e)))
+  }, [])
+
   const slashCommands: SlashCommand[] = [
     {
       name: 'compact',
@@ -2018,6 +2031,13 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       run: () => {
         clientRef.current?.send('clear', null, curRef.current).catch((e) => notify.error(errText(e)))
       },
+    },
+    {
+      // The same verb the ResumeBar button sends, and the same name the TUI uses.
+      // The bar is the discoverable path; this is for anyone who already knows.
+      name: 'continue',
+      desc: t('Ask for the reply again when a turn died without one'),
+      run: resumeTurn,
     },
     {
       name: 'nextstep',
@@ -2652,6 +2672,9 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
 
               {permission && <PermissionRequestView request={permission} onDecide={decide} />}
               {ask && <AskRequestView request={ask} onAnswer={answer} />}
+
+              {/* Above the composer, where the missing reply would have been. */}
+              <ResumeBar state={curInfo?.resume} busy={busy} onResume={resumeTurn} />
 
               <Composer
                 busy={busy}

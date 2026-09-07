@@ -76,6 +76,11 @@ var registry = []Spec{
 	{Name: "/copy", Group: groupSession, Desc: i18n.M("copy the last reply to the clipboard, as written (or /copy code for its last code block)"), Hint: "code (optional)"},
 	{Name: "/compact", Group: groupSession, Desc: i18n.M("summarize and replace the transcript to free up context"), CancelsTurn: true},
 	{Name: "/clear", Group: groupSession, Desc: i18n.M("clear the chat transcript"), CancelsTurn: true},
+	// Deliberately NOT CancelsTurn. The others here mutate the transcript and so
+	// must not race a stream; this one only runs when nothing is streaming, and a
+	// turn in flight is proof the session is not stuck. Cancelling to "resume"
+	// would destroy the reply it was asked to recover.
+	{Name: "/continue", Group: groupSession, Desc: i18n.M("ask for the reply again when a turn died without one (after a provider error)")},
 
 	{Name: "/study", Group: groupContext, Desc: "read every file in the cwd (or a passed file/dir) so the agent has full context", Hint: "file or directory (optional)"},
 	{Name: "/btw", Group: groupContext, Desc: "side-chat that doesn't add to the main thread (saves tokens)"},

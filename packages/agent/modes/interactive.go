@@ -1081,6 +1081,18 @@ type Interactive struct {
 	// whatever the user has typed since. Guarded by mu.
 	carrierDraftArmed bool
 
+	// carrierResumeArmed is the same one-shot for the resume hint: a FRESH
+	// BINDING's first snapshot says so when the transcript it just loaded is
+	// waiting on the model rather than on the user (see core.ResumeStateOf), and
+	// names /continue.
+	//
+	// Armed per binding for the reason the two above are, and for one more. A
+	// snapshot also arrives at the END of every turn, where the transcript is
+	// briefly whatever the turn left behind. Firing on each of those would put the
+	// hint on screen after an ordinary reply, which is both wrong and the fastest
+	// way to teach people to ignore it. Guarded by mu.
+	carrierResumeArmed bool
+
 	// carrierQueued mirrors the session's pending message queue — the wire
 	// twin of the crutch agent's PendingQueuedMessages(). The daemon owns
 	// the queue and broadcasts it on every mutation (queue_updated), plus on

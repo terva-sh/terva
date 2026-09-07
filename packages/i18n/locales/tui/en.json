@@ -620,6 +620,8 @@
   "the last code block": "the last code block",
   "the last reply": "the last reply",
   "the last reply has no code block": "the last reply has no code block",
+  "the last reply stopped partway. type /continue to finish it": "the last reply stopped partway. type /continue to finish it",
+  "the last turn ended without a reply. type /continue to ask for it again": "the last turn ended without a reply. type /continue to ask for it again",
   "the list from turn %d": "the list from turn %d",
   "the model a sub-agent gets for each swarm tier": "the model a sub-agent gets for each swarm tier",
   "the passage from turn %d": "the passage from turn %d",

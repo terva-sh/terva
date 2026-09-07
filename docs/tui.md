@@ -34,6 +34,7 @@ Type `/` in the TUI to open the autocomplete popup. Available commands:
 | `/usage` | Show usage limits — subscription windows (5h/weekly), the provider's rate-limit windows, and any credit balance — with how much is used and when each resets. Read-only; `esc` closes. See [providers.md](providers.md#usage-limits-usage). |
 | `/resets` | List the banked usage-reset credits a subscription has accrued (OpenAI Codex today) and redeem one to clear a spent window. Redeeming is irreversible and confirmed first; `esc` closes. |
 | `/compact` | Summarize the transcript into one message to free up context. |
+| `/continue` | Ask for the reply a turn died without producing. When a provider error kills a turn, your message stays on the transcript and nothing is running, so the session looks like it is simply waiting on you. This runs the loop again against what is already there: nothing is appended, nothing is discarded, and your prompt is not re-sent. It also finishes a reply the provider cut off partway, which needs a provider that can continue an unfinished message (Anthropic today). Refused when the session is not waiting on a reply. On resume, terva says so in the status line when a session is in this state. |
 | `/study` | Run the canned prompt "Read and understand everything in the current directory." so the agent has full project context before you start asking targeted questions. Pass a path — typed, drag-dropped, or selected via `@` — to target a specific file or directory instead: `/study [dir:packages/]`, `/study cmd/terva/main.go`. |
 | `/jail` | Confine tools to the current directory. (On by default in interactive sessions; `--no-jail` starts unjailed.) `/jail always` also forgets a saved unjail rule for this directory. |
 | `/unjail` | Allow tools to touch paths outside again — this session only. `/unjail always` records the directory so it starts unjailed from now on (see [permissions.md](permissions.md#unjailing-a-directory-for-good)). |
@@ -572,6 +573,8 @@ Queuing covers messages you've already submitted; `ctrl+s` covers the one you ha
 `ctrl+s` again brings the draft back early; pressed with a draft on both sides it swaps them. A muted hint appears once you've typed a few characters of a draft while a turn is running — the situation where you're most likely to need it — and stays through the turn's end, which is when the question you have to answer actually lands.
 
 Slash commands also work while the agent is busy. Read-only ones (`/help`, `/jump`, `/copy`, `/btw`, `/sessions`, `/skills`, `/context`, `/lore`, `/memory`, `/tasks`, `/status`, `/usage`, `/resets`, `/settings`, `/permissions`, `/jail`, `/unjail`, `/exit`) take effect immediately. Destructive ones (`/new`, `/clear`, `/compact`, `/login`, `/logout`, `/model`, `/reload-ext`, `/reload-skills`, `/restart`, `/trust`, `/untrust`, `/migrate`, `/cd`) cancel the active turn first and then run.
+
+`/continue` is in neither group. It refuses while a turn is running rather than cancelling one, because a turn in flight is itself proof the session is not stuck, and cancelling to "resume" would destroy the reply it was asked to recover.
 
 
 ## Keys (interactive mode)

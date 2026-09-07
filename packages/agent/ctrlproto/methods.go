@@ -25,6 +25,7 @@ const (
 	MethodTurnSwipe     Method = "turn.swipe"     // params TurnSwipeParams; switch the tail span's active variant
 	MethodTurnRetry     Method = "turn.retry"     // params TurnRetryParams; regenerate the last response, keeping the old
 	MethodTurnContinue  Method = "turn.continue"  // params TurnContinueParams; extend the trailing assistant (optional ContinueController)
+	MethodTurnResume    Method = "turn.resume"    // params TurnResumeParams; run the loop again on a turn that died without a reply
 	MethodApprove       Method = "approve"        // params ApproveParams
 	MethodAnswer        Method = "answer"         // params AnswerParams
 	MethodSubscribe     Method = "subscribe"      // no params; streams events for the frame's sess
@@ -406,7 +407,7 @@ const (
 func (m Method) Group() Group {
 	switch m {
 	case MethodPrompt, MethodQueue, MethodQueueSet, MethodCancel, MethodCompact,
-		MethodClear, MethodMessageEdit, MethodMessageDelete, MethodTurnSwipe, MethodTurnRetry, MethodTurnContinue, MethodApprove, MethodAnswer,
+		MethodClear, MethodMessageEdit, MethodMessageDelete, MethodTurnSwipe, MethodTurnRetry, MethodTurnContinue, MethodTurnResume, MethodApprove, MethodAnswer,
 		MethodPostLine, MethodDirectTurn, MethodTurnAdvance, MethodVariantsPrune, MethodVariantsDrop, MethodSubscribe, MethodUnsubscribe,
 		MethodShellResult:
 		return GroupConversation
@@ -873,6 +874,25 @@ type TurnRetryParams struct {
 	// a model that cannot see what it is being asked to change is guessing. Set
 	// this when the previous attempt went somewhere the user wants no trace of.
 	IgnorePrior bool `json:"ignore_prior,omitempty"`
+}
+
+// TurnResumeParams is the payload of [MethodTurnResume]: run the agent loop
+// against the transcript as it stands, because the last turn died without
+// producing a reply. No message is appended, which is what separates it from a
+// prompt, and nothing is thrown away, which separates it from
+// [TurnRetryParams].
+//
+// Epoch is checked as in [MessageEditParams], with the [HistoryParams]
+// relaxation: 0 means no check, for a client that does not track transcript
+// revisions. The TUI is such a client.
+//
+// Resume can afford that where edit and delete cannot, because it carries no
+// index. A stale epoch there points a write at the wrong message; here there is
+// nothing to point at, since the daemon re-reads the transcript and classifies
+// it itself. The busy gate and the not-stuck refusal still hold either way, and a
+// client that DOES track epochs (the web panel) still gets the full check.
+type TurnResumeParams struct {
+	Epoch uint64 `json:"epoch,omitempty"` // 0 → no check (a client that does not track it)
 }
 
 // HistoryParams is the payload of [MethodConversationHistory]: give me the Limit

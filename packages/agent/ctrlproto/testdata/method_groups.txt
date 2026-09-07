@@ -113,6 +113,7 @@ surface.get	session
 surfaces.list	session
 turn.advance	conversation
 turn.continue	conversation
+turn.resume	conversation
 turn.retry	conversation
 turn.swipe	conversation
 unsubscribe	conversation

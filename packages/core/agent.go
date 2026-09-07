@@ -2358,7 +2358,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 		var (
 			stop         provider.StopReason
 			assistantMsg provider.Message
-			commit       func()
+			commit       func(incomplete bool)
 			err          error
 		)
 		imageRounds := 0
@@ -2464,8 +2464,14 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 		// The turn is final (success or non-retryable error). Persist and
 		// emit the kept assistant message exactly once, before propagating
 		// any error, so a final-but-errored turn still records what landed.
+		//
+		// commit is told whether the turn is ending badly. Only here is that
+		// knowable: oneTurn cannot tell a retryable failure from a final one, and a
+		// retryable one never gets this far (the partial is dropped and retried
+		// above). So a true here means the reply is short and stays short, which is
+		// what MetaIncomplete records.
 		if commit != nil {
-			commit()
+			commit(err != nil)
 		}
 		if perr := a.PersistenceError(); perr != nil {
 			return errors.Join(err, perr)
@@ -2907,7 +2913,12 @@ func (a *Agent) dropLastAssistantMessage() {
 // its visible events; it is nil when no message was kept. The caller
 // must invoke commit only once the turn is final — never before a
 // retry — so an abandoned partial attempt is not persisted durably.
-func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt turnTools, sink func(AgentEvent)) (provider.StopReason, provider.Message, func(), error) {
+//
+// Its incomplete argument says the turn is ending on an error, which stamps
+// [MetaIncomplete] on the message before it is persisted. Only the caller can
+// supply it: oneTurn cannot tell a retryable failure from a final one, and this
+// closure runs for the final one alone.
+func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt turnTools, sink func(AgentEvent)) (provider.StopReason, provider.Message, func(incomplete bool), error) {
 	// system and tools are PINNED by runLoop for the whole user turn (see
 	// the snapshot there) so a mid-turn host swap can't evict the prompt
 	// cache between steps. The remaining request fields are read per step
@@ -3181,11 +3192,26 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 				a.rev++
 				a.continueResult = &continuedMessage{index: mi, message: merged}
 				a.mu.Unlock()
-				commit := func() {
+				commit := func(incomplete bool) {
 					// No fireMessageAppended: the workspace persists an
 					// AmendReplace from the stashed result. Emit the merged message
 					// so a live subscriber redraws the extended bubble; the
 					// post-turn snapshot is authoritative regardless.
+					//
+					// A continuation that died partway is itself incomplete, so the
+					// mark goes on the stash as well as the live transcript. The
+					// stash is what the workspace turns into an AmendReplace, and a
+					// mark missing from it would vanish on the next reload.
+					if incomplete {
+						merged.Meta = withMeta(merged.Meta, MetaIncomplete, "true")
+						a.mu.Lock()
+						if mi < len(a.messages) {
+							a.messages[mi] = merged
+						}
+						a.continueResult = &continuedMessage{index: mi, message: merged}
+						a.rev++
+						a.mu.Unlock()
+					}
 					if !suppress {
 						sink(EvAssistantMessage{Message: merged})
 					}
@@ -3208,7 +3234,22 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 		a.rev++
 		a.mu.Unlock()
 
-		commit := func() {
+		commit := func(incomplete bool) {
+			// Stamp BEFORE the durable append. fireMessageAppended is what writes the
+			// row, so a mark added after it would need an amend to reach disk at all.
+			// emit is a struct copy sharing finalMsg's Meta map and withMeta builds a
+			// fresh one, so both need setting or the live event disagrees with the
+			// transcript it is announcing.
+			if incomplete {
+				finalMsg.Meta = withMeta(finalMsg.Meta, MetaIncomplete, "true")
+				emit.Meta = finalMsg.Meta
+				a.mu.Lock()
+				if mi := len(a.messages) - 1; mi >= 0 && a.messages[mi].Role == provider.RoleAssistant {
+					a.messages[mi].Meta = finalMsg.Meta
+				}
+				a.rev++
+				a.mu.Unlock()
+			}
 			a.fireMessageAppended(finalMsg)
 			if !suppress {
 				sink(EvAssistantMessage{Message: emit})

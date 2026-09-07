@@ -84,6 +84,7 @@ var metaConstClassification = map[string]struct {
 	"MetaAttachments":        {metaRidesATurn, "files the user attached to their own prompt"},
 	"MetaAttachmentsMissing": {metaRidesATurn, "files that were swept before the prompt went out; still their prompt"},
 	"MetaShared":             {metaRidesATurn, "published artefacts hung on a tool result"},
+	"MetaIncomplete":         {metaRidesATurn, "marks an ASSISTANT reply the provider cut short; it never lands on a user message, and it says nothing about who authored one"},
 	"MetaDirected":           {metaIsAValue, "a MetaSource VALUE"},
 	"MetaRouted":             {metaIsAValue, "a MetaSource VALUE"},
 }

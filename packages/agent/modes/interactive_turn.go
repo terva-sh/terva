@@ -94,6 +94,17 @@ func (i *Interactive) runCompact(parent context.Context) {
 	i.runCarrierCompact(parent)
 }
 
+// runResume backs /continue: ask for the reply a dead turn never produced.
+// Nothing is appended to the transcript, so there is no text to guard here —
+// the daemon decides whether the session is stuck and refuses if it is not.
+func (i *Interactive) runResume(parent context.Context) {
+	if !i.ready() {
+		i.setStatusErr(i18n.T("not logged in. type /login first."))
+		return
+	}
+	i.runCarrierResume(parent)
+}
+
 func (i *Interactive) startTurn(parent context.Context, prompt string) {
 	i.startTurnWithImages(parent, prompt, nil)
 }

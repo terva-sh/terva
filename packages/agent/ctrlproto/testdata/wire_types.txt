@@ -1005,6 +1005,7 @@ SessionInfo
 	user_gender	string	omitempty
 	user_pronouns	string	omitempty
 	supports_continue	bool	omitempty
+	resume	string	omitempty
 	card	string	omitempty
 	cast	map[string]string	omitempty
 	cast_models	map[string]CastRoute	omitempty
@@ -1206,6 +1207,8 @@ TrustParams
 	parent	bool	omitempty
 TurnContinueParams
 	epoch	uint64
+TurnResumeParams
+	epoch	uint64	omitempty
 TurnRetryParams
 	epoch	uint64
 	guidance	string	omitempty

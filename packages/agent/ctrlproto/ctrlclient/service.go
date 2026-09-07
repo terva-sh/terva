@@ -71,6 +71,10 @@ func (s *Service) RetryTurn(ctx context.Context, sess string, p ctrlproto.TurnRe
 	return s.c.Call(ctx, sess, ctrlproto.MethodTurnRetry, p, nil)
 }
 
+func (s *Service) ResumeTurn(ctx context.Context, sess string, p ctrlproto.TurnResumeParams) error {
+	return s.c.Call(ctx, sess, ctrlproto.MethodTurnResume, p, nil)
+}
+
 func (s *Service) ForkSession(ctx context.Context, sess string, fromIndex int) (ctrlproto.SessionInfo, error) {
 	var r ctrlproto.SessionResult
 	err := s.c.Call(ctx, sess, ctrlproto.MethodSessionFork, ctrlproto.SessionForkParams{FromIndex: fromIndex}, &r)

@@ -609,6 +609,9 @@ func (f *fakeSvc) SwipeMessage(ctx context.Context, sess string, epoch uint64, i
 func (f *fakeSvc) RetryTurn(ctx context.Context, sess string, p TurnRetryParams) error {
 	return nil
 }
+func (f *fakeSvc) ResumeTurn(ctx context.Context, sess string, p TurnResumeParams) error {
+	return nil
+}
 func (f *fakeSvc) SideChatOpen(ctx context.Context, sess string) (string, error) {
 	return "sc1", nil
 }

@@ -315,6 +315,23 @@ type SharedFile struct {
 	ExpiresAt string `json:"expires_at,omitempty"`
 }
 
+// MetaIncomplete marks an assistant message the model never finished: the turn
+// kept what had already streamed and then died on a provider error. It is
+// stamped by the one place that can know both facts at once, the commit path in
+// runLoop, which holds the partial message and the final error a few lines
+// apart.
+//
+// Role cannot carry this. A finished reply and a reply cut off mid-sentence both
+// leave the transcript ending on an assistant message, so without the mark a
+// resumed session cannot tell a conversation waiting for the user from one that
+// was interrupted. The error sidecar ([SessionError]) records that a failure
+// happened but not which message it belongs to, and pairing them means comparing
+// two clocks.
+//
+// A retryable error never reaches this. runLoop drops the partial and tries
+// again, so the mark always means the turn is over and the reply is short.
+const MetaIncomplete = "incomplete"
+
 // WireMessage is one transcript entry on the wire.
 type WireMessage struct {
 	Role    string      `json:"role"`
@@ -372,6 +389,11 @@ type WireMessage struct {
 	// tool row — or, better, outside it: a tool group renders collapsed, and a
 	// download the user cannot see is a download that did not happen.
 	Shared []SharedFile `json:"shared,omitempty"`
+	// Incomplete is true for an assistant message the model did not finish (see
+	// [MetaIncomplete]): the provider failed partway through and the turn kept what
+	// had already streamed. A client marks the bubble as cut short and can offer to
+	// resume it, rather than rendering a reply that simply stops.
+	Incomplete bool `json:"incomplete,omitempty"`
 }
 
 // WireBlock is one piece of message content. Discriminate on Type:
@@ -630,6 +652,7 @@ func messageToWire(m provider.Message, imageData bool) WireMessage {
 	if raw := m.Meta[MetaShared]; raw != "" {
 		_ = json.Unmarshal([]byte(raw), &w.Shared)
 	}
+	w.Incomplete = m.Meta[MetaIncomplete] == "true"
 	return w
 }
 
@@ -742,6 +765,14 @@ func MessageFromWire(w WireMessage) provider.Message {
 		if raw, err := json.Marshal(w.Shared); err == nil {
 			setMeta(MetaShared, string(raw))
 		}
+	}
+	// Same reason as the shares above, and the same failure if it is forgotten.
+	// A client rebuilds its whole transcript through this pair on every snapshot,
+	// so a mark that only travels outward is a mark the client never sees: the
+	// cut-short reply would read as a finished one, and the resume it needs would
+	// never be offered.
+	if w.Incomplete {
+		setMeta(MetaIncomplete, "true")
 	}
 	return m
 }

@@ -200,6 +200,11 @@ func (r *recorder) RetryTurn(_ context.Context, sess string, p TurnRetryParams) 
 	return nil
 }
 
+func (r *recorder) ResumeTurn(_ context.Context, sess string, p TurnResumeParams) error {
+	r.note("ResumeTurn", sess, p)
+	return nil
+}
+
 func (r *recorder) Approve(_ context.Context, sess, callID string, d core.ConfirmDecision) error {
 	r.note("Approve", sess, approveArgs{CallID: callID, Decision: d})
 	return nil
@@ -415,6 +420,15 @@ func mandatoryDispatchCases() []dispatchCase {
 			TurnRetryParams{Epoch: 13, Guidance: "steer"},
 			"RetryTurn",
 			TurnRetryParams{Epoch: 13, Guidance: "steer"},
+		},
+		// turn.resume binds the whole params struct like turn.retry above, and the
+		// two are one letter apart in the dispatch table. A distinct epoch is what
+		// makes a crossed pair of entries a mismatch rather than a silent pass.
+		{
+			MethodTurnResume,
+			TurnResumeParams{Epoch: 17},
+			"ResumeTurn",
+			TurnResumeParams{Epoch: 17},
 		},
 		{
 			MethodApprove,

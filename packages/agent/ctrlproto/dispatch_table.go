@@ -83,6 +83,12 @@ var dispatch = map[Method]handler{
 	MethodTurnContinue: act(noContinue, func(c ContinueController, ctx context.Context, f Frame, p TurnContinueParams) error {
 		return c.ContinueTurn(ctx, f.Sess, p.Epoch)
 	}),
+	// On base rather than behind a controller like turn.continue above. Only one
+	// of its three transcript shapes needs the prefill capability; the other two
+	// run an ordinary turn on any provider, so the verb as a whole is not gated.
+	MethodTurnResume: act(base, func(svc WorkspaceService, ctx context.Context, f Frame, p TurnResumeParams) error {
+		return svc.ResumeTurn(ctx, f.Sess, p)
+	}),
 	MethodApprove: act(base, func(svc WorkspaceService, ctx context.Context, f Frame, p ApproveParams) error {
 		return svc.Approve(ctx, f.Sess, p.CallID, p.Decision.Core())
 	}),
