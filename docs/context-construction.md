@@ -357,6 +357,16 @@ Rules:
 - Captured output is capped at 50 KiB and 2000 lines.
 - Truncated full output may be written to a temp file and referenced in the result.
 - On Unix, terva starts the command in its own process group so cancellation can terminate child processes.
+- A command that reads `$?` in the statement immediately after a pipeline is
+  refused before it runs, when that pipeline's last stage is a transparent
+  filter: `tail`, `head`, `sed`, `cat`, `tee`, `wc`, `sort`, `uniq`, `tr`,
+  `jq`, or `column`. The shell answers with that filter's status, and a filter
+  succeeds whatever you feed it, so the command reports success while the work
+  before the pipe failed. `PIPESTATUS` or `pipefail` anywhere in the command
+  exempts it, because both make the read correct. A pipeline ending in a real
+  test such as `grep -q` never fires, because there the last stage's status is
+  the subject. `checkPipeStatusRead` in `packages/agent/tools/bash_pipestatus.go`
+  holds the rule.
 
 ## Jail / sandbox file rules
 

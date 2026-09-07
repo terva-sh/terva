@@ -61,7 +61,8 @@ const bashDesc = "Run a shell command with %s. The tool merges stdout and stderr
 	"Use the dedicated tools instead of the equivalent shell commands. Use read, write, and edit for files, and do not use cat, sed -i, or echo. Use grep and glob to search, and do not use the grep, find, or ls commands. The dedicated tools are safer, easier to review, and cheaper.\n\n" +
 	"Commands run in %s. A relative path applies to that directory. It does not apply to the directory of the file that you read or changed last. For a path outside that directory, give an absolute path or use `git -C`. Do not use `cd`.\n\n" +
 	"Do not force-push and do not run `reset --hard`. Do not amend a commit, bypass hooks, or run `git add -A`. Do these git operations only if the user asks for them. Do not print or send out secrets such as .env files, tokens, or credentials.\n\n" +
-	"For a slow command, set the timeout. The default timeout is 120 seconds, and then the tool stops the command. In a script with many steps, do not use `set -e`. One failed step stops the full script and hides the other results. Examine the exit code of each step instead. The tool puts $TERVA_HOME in the environment."
+	"For a slow command, set the timeout. The default timeout is 120 seconds, and then the tool stops the command. In a script with many steps, do not use `set -e`. One failed step stops the full script and hides the other results. Examine the exit code of each step instead. The tool puts $TERVA_HOME in the environment.\n\n" +
+	"The tool refuses a command that reads $? straight after a pipe into tail, head, sed, or wc. The shell gives you the status of the filter there, and not the status of your command. Read `${PIPESTATUS[0]}` instead, or put `set -o pipefail` at the front."
 
 // effectiveCWD is the directory commands actually run in: the configured CWD,
 // or the process working directory when the host left it empty. Both
@@ -110,6 +111,12 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		return core.ToolResult{}, fmt.Errorf("command is required%s", argHint(raw, bashSchema))
 	}
 	if err := t.Sandbox.CheckCommand(a.Command); err != nil {
+		return core.ToolResult{}, err
+	}
+	// Refuse before anything runs. A command that reads $? after a
+	// formatting pipe reports the filter's success and hides the real
+	// failure, so running it produces a confident wrong answer.
+	if err := checkPipeStatusRead(a.Command); err != nil {
 		return core.ToolResult{}, err
 	}
 	cwd := t.effectiveCWD()
@@ -475,49 +482,19 @@ func matchExitBenign(hint, output string, canceled, timedOut bool) bool {
 }
 
 // lastPipelineCommand returns the command word of the final pipeline stage of
-// the final statement in cmd — the process whose status the shell reports.
-// Quote-aware so a `;` or `|` inside an argument doesn't split a statement;
-// returns "" when it cannot tell.
+// the final statement in cmd. That process is the one whose status the shell
+// reports. It returns "" when it cannot tell.
+//
+// It reads the statements from splitShellStatements, the scanner the pipe guard
+// also uses. One scanner means the hint that explains an exit code and the
+// guard that refuses a command cannot read the same pipeline differently.
 func lastPipelineCommand(cmd string) string {
-	var (
-		seg    strings.Builder
-		quote  rune
-		escape bool
-	)
-	reset := func() { seg.Reset() }
-	for _, r := range cmd {
-		switch {
-		case escape:
-			escape = false
-			seg.WriteRune(r)
-		case r == '\\' && quote != '\'':
-			escape = true
-		case quote != 0:
-			if r == quote {
-				quote = 0
-			}
-			seg.WriteRune(r)
-		case r == '\'' || r == '"':
-			quote = r
-			seg.WriteRune(r)
-		case r == '|' || r == ';' || r == '\n' || r == '&':
-			// Every one of these ends the stage whose status would be
-			// reported, so the last segment standing is the one that matters.
-			reset()
-		default:
-			seg.WriteRune(r)
-		}
+	stmts := splitShellStatements(cmd)
+	if len(stmts) == 0 {
+		return ""
 	}
-	fields := strings.Fields(seg.String())
-	for _, f := range fields {
-		// Skip a leading env assignment (FOO=bar cmd ...); the command word is
-		// the first field that isn't one.
-		if strings.Contains(f, "=") && !strings.HasPrefix(f, "=") {
-			continue
-		}
-		return filepath.Base(strings.Trim(f, `"'`))
-	}
-	return ""
+	last := stmts[len(stmts)-1]
+	return commandWord(last.stages[len(last.stages)-1])
 }
 
 // shellPath is the interpreter every command runs under, resolved once.
