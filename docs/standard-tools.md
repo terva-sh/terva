@@ -196,7 +196,10 @@ workspace mutation like `write`/`edit`: the store lives in the user's
 repository and lands in their next commit, so plan mode prunes them and a
 headless non-yolo gate refuses them. All ten call git-ticket's `ticket`
 package directly for structured values — the `terva ticket` CLI subcommand
-embeds the same library's `cli` package, so the two surfaces cannot drift.
+embeds the same library's `cli` package, so the two surfaces cannot drift
+from each other. Both track the version `go.mod` pins, currently v0.14.1.
+A `git-ticket` binary installed separately on the user's `PATH` is a third
+thing and can be any version, so that one *can* drift from both.
 `ticket_list` and `ticket_search` page (default 50 rows, cap 200,
 `next_offset` cursor), per the paging requirement above. Every mutation
 except create requires `if_revision`, the revision `ticket_get` returned;
@@ -205,6 +208,16 @@ record terva's own actor (`agent:terva/<persona>`), and no schema offers
 the identity, because a model does not choose who it is. A repository with
 no store pays no schema cost. They sit in the lazy group `ticket` under
 `lazy_tools`.
+
+Nothing creates a store, and nothing proposes creating one. Where a
+repository has no `.tickets/`, the agent gets no ticket tools and no
+guidance, and terva stays quiet about it. A prompt that offered to start a
+ledger in every storeless git repository would be a nag, and creating one
+is a bid to restructure somebody's repository. When a user asks for a
+store, the agent runs `terva ticket init` through `bash` like any other
+command. That command also takes `--instructions`, which writes the agent
+workflow block into the repository's `AGENTS.md`; that edit is the user's
+call, so an agent passes the flag only when the request asked for it.
 
 Two switches turn all ten off: `--no-ticket` for one run, and a `tickets`
 config key that a user sets in `$TERVA_HOME/config.json` and a project may
