@@ -105,6 +105,17 @@ var readOnly = map[string]bool{
 	// (create/claim/release/remove) mutate git state and stay out of this map
 	// on purpose: they classify like write/edit, not like reads.
 	"worktree_list": true,
+	// The five ticket_* read tools read the .tickets store through
+	// git-ticket's ticket package and write nothing — the read half of
+	// docs/plans/git-ticket.md. Their five write siblings (create/update/
+	// transition/claim/comment) stay out of this map on purpose: a ticket
+	// store lives in the user's repository and lands in their next commit,
+	// so they classify like write/edit, not like reads.
+	"ticket_list":   true,
+	"ticket_search": true,
+	"ticket_get":    true,
+	"ticket_ready":  true,
+	"ticket_check":  true,
 }
 
 // editTools names the file editors auto-edit additionally allows:
@@ -159,6 +170,16 @@ var builtin = map[string]bool{
 	"worktree_claim":    true,
 	"worktree_release":  true,
 	"worktree_remove":   true,
+	"ticket_list":       true,
+	"ticket_search":     true,
+	"ticket_get":        true,
+	"ticket_ready":      true,
+	"ticket_check":      true,
+	"ticket_create":     true,
+	"ticket_update":     true,
+	"ticket_transition": true,
+	"ticket_claim":      true,
+	"ticket_comment":    true,
 	// The play-and-deliberation four, trusted by decision (2026-07-27) after
 	// the classification audit found them prompting as foreign while
 	// swarm_spawn — which spawns TOOL-BEARING children at yolo — was trusted.

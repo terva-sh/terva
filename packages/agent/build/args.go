@@ -338,6 +338,17 @@ type Args struct {
 	// true).
 	NoMemory bool
 
+	// NoTicket drops the ten ticket_* tools for this run, and the ticket
+	// prompt addendum with them: a session that opts out must not be told
+	// to prefer tools it does not have. The `terva ticket` command is
+	// unaffected, which is the point of the flag — the store stays
+	// reachable through git-ticket's own command surface, and the model
+	// pays no schema cost for a tool set the user did not want. Sibling of
+	// --no-skill / --no-lore / --no-memory. The tools are on by default
+	// wherever a .tickets store governs the cwd (config `tickets`, default
+	// true).
+	NoTicket bool
+
 	// NoYolo turns on per-tool confirmation. Before each tool
 	// invocation the TUI prompts the user with the tool name + args
 	// and waits for an explicit yes/no. The user can also pick
@@ -780,6 +791,8 @@ func ParseArgs(in []string) (Args, error) {
 				return a, err
 			}
 			a.PinSkills = append(a.PinSkills, v)
+		case "--no-ticket", "--no-tickets":
+			a.NoTicket = true
 		case "--no-lore":
 			a.NoLore = true
 		case "--no-memory":

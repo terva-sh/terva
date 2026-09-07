@@ -185,6 +185,45 @@ in the lazy group `worktree` under `lazy_tools`, share their engine
 keep state under `$TERVA_HOME/worktrees/` (extension-era state migrates on
 first touch; existing checkouts stay at their old paths).
 
+**Store-conditional built-ins**: the ten `ticket_*` tools (slices 2 and 3
+of `docs/plans/git-ticket.md`) join the registry only when a `.tickets/`
+store governs the session cwd, probed with `ticket.Discover` once per
+registry build. The read five — `ticket_list`, `ticket_search`,
+`ticket_get`, `ticket_ready`, `ticket_check` — are local read-only and
+survive `plan` mode. The write five — `ticket_create`, `ticket_update`,
+`ticket_transition`, `ticket_claim`, `ticket_comment` — classify as
+workspace mutation like `write`/`edit`: the store lives in the user's
+repository and lands in their next commit, so plan mode prunes them and a
+headless non-yolo gate refuses them. All ten call git-ticket's `ticket`
+package directly for structured values — the `terva ticket` CLI subcommand
+embeds the same library's `cli` package, so the two surfaces cannot drift.
+`ticket_list` and `ticket_search` page (default 50 rows, cap 200,
+`next_offset` cursor), per the paging requirement above. Every mutation
+except create requires `if_revision`, the revision `ticket_get` returned;
+a stale value refuses with the current revision in the message. Mutations
+record terva's own actor (`agent:terva/<persona>`), and no schema offers
+the identity, because a model does not choose who it is. A repository with
+no store pays no schema cost. They sit in the lazy group `ticket` under
+`lazy_tools`.
+
+Two switches turn all ten off: `--no-ticket` for one run, and a `tickets`
+config key that a user sets in `$TERVA_HOME/config.json` and a project may
+also set in `.terva/config.json`. The project layer is restrict-only in the
+`disable_mcp` shape, so a cloned repository can refuse the tools for its own
+directory and can never grant back what the user disabled. Neither switch
+touches `terva ticket`, which reaches the store through git-ticket's own
+command surface: the opt-out removes the model's tools, never the ledger.
+
+A session that keeps the tools also carries a prompt segment saying to prefer
+them over that command line. It is labeled `ticket` in a prompt dump, and it
+lands after the `agents-md` segment on purpose. A repository with a `.tickets/`
+store almost certainly documented the store before terva had tools for it, so
+its `AGENTS.md` still says `git ticket create ...`; recency is the only lever
+terva has over a file it does not own. The segment is gated on the built
+registry rather than on the store probe, so `--tools` and plan mode cannot
+leave the prompt naming a tool the model cannot call, and the half that
+teaches `if_revision` rides only where the write five survived.
+
 The task tools ship exactly when the base coding tools do — `--chat`, `--play`,
 `--no-tools`, and `--no-workspace-tools` drop them together — and there is no
 standing config switch beyond that: a per-run `--tools` allowlist that omits

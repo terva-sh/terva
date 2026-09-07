@@ -31,6 +31,10 @@ var (
 	}
 	restrictOnly = map[string]bool{
 		"disable_context_extensions": true, "disable_extensions": true, "disable_mcp": true,
+		// tickets: only an explicit false crosses from the project layer.
+		// Dropping the ticket_* tools narrows the surface and leaves
+		// `terva ticket` reaching the store, so an untrusted clone may say it.
+		"tickets": true,
 	}
 	handledElsewhere = map[string]string{
 		"hooks":            "TrustedProjectHooks + MergeHookConfigs",

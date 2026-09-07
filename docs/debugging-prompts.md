@@ -164,6 +164,7 @@ their absence here is expected, not a bug.
 | `conventions` | system | terva's output invariants, written against the run's **surface** (see above) plus the edit/write discipline when those tools exist. Always last, so nothing erodes them |
 | `lore:constant` / `card:character_book` | system | always-on lore folded into the cached prefix |
 | `skills`, `context-files`, `agents-md` | system | skill manifest, `--context-file`/config context, repo AGENTS.md |
+| `ticket` | system | prefer the `ticket_*` tools over the `git ticket` command line. Emitted only where those tools registered, and placed after `agents-md` so it outranks a repository's older command-line instructions. Absent under `--no-ticket` |
 | `restricted-workspace` | system | note that project content was withheld (untrusted cwd) |
 | `card:greeting` | messages | the seeded `first_mes` (or `--greeting N`) |
 | `lore:triggered [files]` | tail | keyword-triggered lore that fired this turn, labeled by source file |

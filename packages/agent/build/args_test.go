@@ -170,6 +170,7 @@ func TestParseArgsNoFamilyBooleans(t *testing.T) {
 		{[]string{"--no-builtin-skills", "--no-builtin-skill"}, func(a Args) bool { return a.NoBuiltinSkills }},
 		{[]string{"--no-always-on-skills", "--no-always-on-skill"}, func(a Args) bool { return a.NoAlwaysOnSkills }},
 		{[]string{"--no-lore"}, func(a Args) bool { return a.NoLore }},
+		{[]string{"--no-ticket", "--no-tickets"}, func(a Args) bool { return a.NoTicket }},
 		{[]string{"--no-memory"}, func(a Args) bool { return a.NoMemory }},
 		{[]string{"--no-yolo"}, func(a Args) bool { return a.NoYolo }},
 	}

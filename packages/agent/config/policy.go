@@ -32,6 +32,20 @@ func AutoSwarmEnabled() bool {
 	return cfg.AutoSwarmEnabled != nil && *cfg.AutoSwarmEnabled
 }
 
+// TicketsEnabled reports whether the ticket_* tools may register for cwd.
+// It reads the merged view, so an explicit false on either the user layer or
+// the project layer turns them off. The project layer is restrict-only (see
+// ResolveConfig), so a repository can refuse the tools for its own directory
+// and can never grant them back.
+//
+// trustProject is deliberately false here: the ticket key is not trust-gated,
+// for the DisableMCP reason, and the fields ResolveConfig does gate on trust
+// (context files, provider, model) are not read from this view.
+func TicketsEnabled(cwd string) bool {
+	eff := ResolveConfig(cwd, false)
+	return eff.Config.Tickets == nil || *eff.Config.Tickets
+}
+
 // ExternalWorkersEnabled reads the current external-workers flag from config.
 // Used by the swarm_spawn backend gate at spawn time, live per call like
 // AutoSwarmEnabled, so a config edit applies without restarting the session.

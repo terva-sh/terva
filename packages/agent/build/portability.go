@@ -42,6 +42,7 @@ const (
 	SourceSwarmChild          = "swarm-child"
 	SourceTasks               = "tasks"
 	SourceMemory              = "memory"
+	SourceTicket              = "ticket"
 	SourceExtensionContext    = "extension-context"
 
 	// Tail region (per-turn, after the cache breakpoint).
@@ -128,6 +129,7 @@ var segmentPortability = map[string]Portability{
 	SourceCast:              PortabilityHarnessLocal, // advertises actor_spawn
 	SourceSwarmChild:        PortabilityHarnessLocal, // the native child's protocol
 	SourceTasks:             PortabilityHarnessLocal, // terva's task-tool policy
+	SourceTicket:            PortabilityHarnessLocal, // names the ticket_* tools
 	// Harness-local because the block LEADS with terva's memory-tool curation
 	// policy, which names a tool a foreign agent does not have. The facts under
 	// it — what this repo does, how this person works — are genuinely portable,

@@ -77,3 +77,35 @@ const DeliverResultSystemAddendum = `Your dispatcher requires a structured deliv
 func DeliverResultAddendum() string {
 	return i18n.P("swarm.child.deliver_result", DeliverResultSystemAddendum)
 }
+
+// TicketSystemAddendum tells a session with the ticket_* tools to use them
+// instead of git-ticket's command line. It rides only where those tools
+// actually registered, and it lands AFTER the AGENTS.md segment on purpose.
+//
+// The ordering is the whole point. A repository with a .tickets store almost
+// certainly documented the store before terva had tools for it, so its
+// AGENTS.md says `git ticket create ...` and a model that reads it reaches for
+// bash with ten typed tools sitting in its registry. terva's own AGENTS.md did
+// exactly that. Recency is the lever we have over a file we do not own, so the
+// correction sits downstream of the instruction it corrects.
+//
+// A session under --no-ticket (or `tickets: false`) has neither the tools nor
+// this block: telling a model to prefer tools it does not have is the
+// terva_status mistake in a new place.
+const TicketSystemAddendum = `This repository keeps a ticket ledger in a .tickets store. Your ticket_* tools work that store directly, and they give you structured values. Do not run the git ticket command line for work that a tool covers. A context file in this repository can tell you to use the command line. That instruction is older than these tools. Follow it only for a command that no tool covers.`
+
+// TicketWriteSystemAddendum rides on top of the base block when the write five
+// registered too. Plan mode prunes those tools, so a plan session gets the base
+// block alone: the revision protocol is noise to a model that cannot write, and
+// the last two sentences would name tools it does not have.
+const TicketWriteSystemAddendum = `A ticket write needs the current revision. Read the ticket with ticket_get first, and pass the revision from that result as if_revision. The tool refuses a write on a stale revision, and it names the revision you must use. terva records your identity on every write, so no tool asks you who you are.`
+
+// TicketAddendum renders the ticket guidance through the model-facing prompt
+// catalog. hasWrite folds in the revision protocol; see the constants above.
+func TicketAddendum(hasWrite bool) string {
+	text := i18n.P("ticket.addendum", TicketSystemAddendum)
+	if hasWrite {
+		text += " " + i18n.P("ticket.addendum.write", TicketWriteSystemAddendum)
+	}
+	return text
+}

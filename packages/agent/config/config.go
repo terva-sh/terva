@@ -249,6 +249,14 @@ type Config struct {
 	// for a single run. User layer only.
 	Lore *bool `json:"lore,omitempty"`
 
+	// Tickets enables the ten ticket_* tools wherever a .tickets store
+	// governs the session cwd, and the ticket guidance addendum with them.
+	// nil/missing means the default, which is on; false drops both for this
+	// user. The --no-ticket flag does the same for a single run, and a
+	// project may also set false (restrict-only; see ProjectConfig.Tickets).
+	// The `terva ticket` command is unaffected by all three.
+	Tickets *bool `json:"tickets,omitempty"`
+
 	// UserName is what a character card's {{user}} macro resolves to — the name
 	// the user would like the character to address them by in chat/play. It is a
 	// GLOBAL user-identity preference: it resolves from the user's global config
@@ -1010,6 +1018,15 @@ type ProjectConfig struct {
 	// repo can still disable a user-defined server for this directory.
 	DisableMCP []string `json:"disable_mcp,omitempty"`
 
+	// Tickets, on the project layer, may only turn the ticket_* tools OFF
+	// for this directory. Restrict-only in the DisableMCP shape and for the
+	// same reason: false in either layer wins, and a project can never set
+	// true to re-enable tools the user disabled. It carries no trust gate,
+	// because "do not register these tools here" is always safe to honor —
+	// a repository that keeps its ledger by hand can say so, and the agent
+	// still reaches the store through `terva ticket`.
+	Tickets *bool `json:"tickets,omitempty"`
+
 	// Hooks lets a TRUSTED project define pre/post tool-use hook programs
 	// (Workspace Trust Phase 6). These run arbitrary commands, so they are
 	// honored ONLY when the workspace is trusted — an untrusted cloned
@@ -1511,6 +1528,15 @@ func ResolveConfig(cwd string, trustProject bool) EffectiveConfig {
 	// can never make one start that the user disabled.
 	if pc != nil && len(pc.DisableMCP) > 0 {
 		eff.Config.DisableMCP = unionStrings(user.DisableMCP, pc.DisableMCP)
+	}
+	// The ticket tools are restrict-only across the layers, in that same
+	// shape: an explicit false on either layer wins, and a project's true is
+	// inert (it cannot re-enable what the user turned off). Not trust-gated,
+	// for the DisableMCP reason — dropping ten tools only ever narrows the
+	// surface, and `terva ticket` still reaches the store either way.
+	if pc != nil && pc.Tickets != nil && !*pc.Tickets {
+		off := false
+		eff.Config.Tickets = &off
 	}
 	// Project default provider/model: trusted-only, because they change which
 	// model (and credentials/budget) a launch uses — same gate as Hooks/MCP.

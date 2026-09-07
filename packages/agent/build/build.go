@@ -1274,6 +1274,21 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		append_ = append(append_, PromptSegment{Source: SourceTasks, Text: tasksCtrl.Policy()})
 	}
 
+	// Ticket guidance. Gated on the BUILT REGISTRY, not on the store gate that
+	// produced it: --tools and plan mode both prune after registration, and a
+	// prompt that names a tool the model cannot call is the terva_status bug
+	// (build_status_test.go) waiting to happen. ticket_get carries the read
+	// five, ticket_create the write five — plan mode keeps the first group and
+	// drops the second, which is exactly the split TicketAddendum takes.
+	//
+	// This lands after the AGENTS.md segment on purpose. See TicketSystemAddendum.
+	if reg["ticket_get"] != nil {
+		append_ = append(append_, PromptSegment{
+			Source: SourceTicket,
+			Text:   TicketAddendum(reg["ticket_create"] != nil),
+		})
+	}
+
 	// activate_tools lets the model bring a hidden capability group into the
 	// advertised set under lazy tool visibility (retro H2·b). It exists only when
 	// lazy mode is on — otherwise every group is already advertised and there is
@@ -2033,6 +2048,37 @@ func BuildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 		all["worktree_claim"] = &tools.WorktreeClaimTool{WorktreeCore: wc}
 		all["worktree_release"] = &tools.WorktreeReleaseTool{WorktreeCore: wc}
 		all["worktree_remove"] = &tools.WorktreeRemoveTool{WorktreeCore: wc}
+	}
+	// The ticket tools (slices 2 and 3 of docs/plans/git-ticket.md) register
+	// only where a .tickets store governs the session cwd — the same shape as
+	// the worktree gate above, so a repository with no store pays no schema
+	// cost. The five read tools call git-ticket's ticket package for
+	// structured values and survive the plan-mode prune below. The five write
+	// tools classify like write/edit and are pruned with them. Mutations
+	// record terva's own actor identity, in the plan's shape
+	// (agent:terva/<persona>); no schema offers it, because a model does not
+	// choose who it is.
+	// --no-ticket and `tickets: false` drop all ten. The `terva ticket`
+	// command survives both, so the store stays reachable through
+	// git-ticket's own surface — the opt-out removes the tools, never the
+	// ledger.
+	if !args.NoTicket && tools.TicketStoreAvailable(cwd) && config.TicketsEnabled(cwd) {
+		persona := config.PersonaName()
+		tc := &tools.TicketCore{
+			CWD:       cwd,
+			ActorID:   "agent:terva/" + strings.ReplaceAll(strings.ToLower(persona), " ", "-"),
+			ActorName: persona,
+		}
+		all["ticket_list"] = &tools.TicketListTool{TicketCore: tc}
+		all["ticket_search"] = &tools.TicketSearchTool{TicketCore: tc}
+		all["ticket_get"] = &tools.TicketGetTool{TicketCore: tc}
+		all["ticket_ready"] = &tools.TicketReadyTool{TicketCore: tc}
+		all["ticket_check"] = &tools.TicketCheckTool{TicketCore: tc}
+		all["ticket_create"] = &tools.TicketCreateTool{TicketCore: tc}
+		all["ticket_update"] = &tools.TicketUpdateTool{TicketCore: tc}
+		all["ticket_transition"] = &tools.TicketTransitionTool{TicketCore: tc}
+		all["ticket_claim"] = &tools.TicketClaimTool{TicketCore: tc}
+		all["ticket_comment"] = &tools.TicketCommentTool{TicketCore: tc}
 	}
 	// Build-tag-gated optional built-ins (terva_scripting's code_execution,
 	// …) contribute here from their _on file's init(). They pass through

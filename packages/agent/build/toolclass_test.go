@@ -3,6 +3,8 @@ package build
 import (
 	"testing"
 
+	ticket "github.com/terva-sh/git-ticket/ticket"
+
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/testsupport"
@@ -57,7 +59,14 @@ var outsideTrustedOrigin = map[string]string{
 func toolUniverse(t *testing.T) map[string]bool {
 	t.Helper()
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, gitRepoDir(t), nil, "", "", false, nil)
+	// The universe dir is a git repo AND carries a ticket store, so both
+	// families of conditionally registered built-ins (worktree_*, ticket_*)
+	// count as live here rather than reading as stale builtin entries.
+	dir := gitRepoDir(t)
+	if _, err := ticket.Init(dir, ticket.InitOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, dir, nil, "", "", false, nil)
 	if len(reg) < 9 {
 		t.Fatalf("registry yielded only %d tools; the universe is not seeing them", len(reg))
 	}

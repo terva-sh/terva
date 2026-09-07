@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"runtime/debug"
@@ -94,6 +95,13 @@ func main() {
 	info := buildinfo.Info{Version: version, Commit: commit, Date: date}
 	buildinfo.Set(info)
 	if err := agent.Run(os.Args[1:], info.String()); err != nil {
+		// A delegated command (terva ticket) already wrote its own message
+		// and asks only that its exit status survive. Everything else gets
+		// the terva-prefixed line and a flat 1.
+		var ec agent.ExitCodeError
+		if errors.As(err, &ec) {
+			os.Exit(ec.Code)
+		}
 		fmt.Fprintln(os.Stderr, "terva:", err)
 		os.Exit(1)
 	}

@@ -183,6 +183,16 @@ func Run(rawArgs []string, version string) error {
 	if handled, err := runWorkflowCommand(rawArgs, version); handled {
 		return err
 	}
+	// `terva ticket` delegates the whole git-ticket command surface, before
+	// ParseArgs so git-ticket's own flags never meet terva's parser. A
+	// nonzero status rides an ExitCodeError so main can exit with
+	// git-ticket's documented code rather than a flat 1.
+	if handled, code := runTicketCommand(rawArgs); handled {
+		if code == 0 {
+			return nil
+		}
+		return ExitCodeError{Code: code}
+	}
 	// `terva rpc` is shorthand for `terva --rpc` so third-party apps can
 	// spawn the binary with a clean argv. Strip the leading 'rpc'
 	// token and let the rest flow through the normal arg parser.
