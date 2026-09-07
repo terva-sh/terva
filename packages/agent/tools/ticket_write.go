@@ -35,8 +35,9 @@ func (c *TicketCore) actor() ticket.Actor {
 // mutation without a separate ticket_get.
 type ticketWriteOut struct {
 	ticketRow
-	Revision string `json:"revision,omitempty"`
-	Path     string `json:"path,omitempty"`
+	References []ticketReference `json:"references,omitempty"`
+	Revision   string            `json:"revision,omitempty"`
+	Path       string            `json:"path,omitempty"`
 }
 
 func (c *TicketCore) freshOut(ctx context.Context, s *ticket.Store, ref string) (core.ToolResult, error) {
@@ -44,7 +45,12 @@ func (c *TicketCore) freshOut(ctx context.Context, s *ticket.Store, ref string) 
 	if err != nil {
 		return ticketResult(nil, err)
 	}
-	return ticketResult(ticketWriteOut{ticketRow: rowFromTicket(tk), Revision: tk.Revision, Path: tk.Path}, nil)
+	return ticketResult(ticketWriteOut{
+		ticketRow:  rowFromTicket(tk),
+		References: ticketReferences(tk.References),
+		Revision:   tk.Revision,
+		Path:       tk.Path,
+	}, nil)
 }
 
 // applyWrite runs one mutation under the required precondition. On a stale
@@ -74,6 +80,48 @@ func (c *TicketCore) applyWrite(ctx context.Context, ref, ifRevision string, m t
 	return c.freshOut(ctx, s, res.Ticket.ID)
 }
 
+// ticketRefArg is one reference in the write schemas: the namespaced ref,
+// and the file it points at. The path is what git ticket files <path>
+// searches, so a reference without one is half a reference.
+type ticketRefArg struct {
+	Ref  string `json:"ref"`
+	Path string `json:"path"`
+}
+
+func referenceMutations(rs []ticketRefArg) ticket.Mutations {
+	var ms ticket.Mutations
+	for _, r := range rs {
+		m := ticket.AddReference{Ref: r.Ref}
+		if r.Path != "" {
+			p := r.Path
+			m.Path = &p
+		}
+		ms = append(ms, m)
+	}
+	return ms
+}
+
+const ticketReferencesDesc = "The references to record. Each entry gives a ref, and an optional path. A ref carries a namespace, for example plan:forgejo-workflow. The path names the file, and the command git ticket files <path> then finds this ticket."
+
+func ticketReferenceItemsSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"ref":  map[string]any{"type": "string", "description": "The reference with its namespace, for example plan:release-process."},
+			"path": map[string]any{"type": "string", "description": "The file the reference points at, relative to the repository root."},
+		},
+		"required": []string{"ref"},
+	}
+}
+
+// ticketTitleLimitDesc carries the two numbers the store enforces. A title
+// past the warning is a check finding, and CI runs check in strict mode, so
+// a warning here becomes a red gate later. TestTicketTitleLimitsAreCurrent
+// holds these numbers against the library constants.
+const ticketTitleLimitDesc = "A title over 72 characters is a warning from ticket_check, and a title over 120 characters refuses the write."
+
+const ticketBlocksOnDesc = "The edges that hold the ticket beyond its dependencies. The value none is the default. The value children keeps an epic open while one child is open. Set children after the children exist, because a check reports a childless parent as a warning."
+
 const ticketRefDesc = "The ticket id, or a unique short form of it."
 const ticketIfRevisionDesc = "The revision that ticket_get returned for this ticket. A stale value refuses the write, and the refusal names the current revision."
 
@@ -89,33 +137,58 @@ func ticketRefRevisionProps() map[string]any {
 type TicketCreateTool struct{ *TicketCore }
 
 type ticketCreateArgs struct {
-	Title        string   `json:"title"`
-	Type         string   `json:"type"`
-	Priority     string   `json:"priority"`
-	Labels       []string `json:"labels"`
-	Description  string   `json:"description"`
-	Parent       string   `json:"parent"`
-	Dependencies []string `json:"dependencies"`
-	DueOn        string   `json:"due_on"`
+	Title              string   `json:"title"`
+	Type               string   `json:"type"`
+	Priority           string   `json:"priority"`
+	Labels             []string `json:"labels"`
+	Assignees          []string `json:"assignees"`
+	Milestone          string   `json:"milestone"`
+	Description        string   `json:"description"`
+	ImplementationPlan string   `json:"implementation_plan"`
+	AcceptanceCriteria []string `json:"acceptance_criteria"`
+	DefinitionOfDone   []string `json:"definition_of_done"`
+	Parent             string   `json:"parent"`
+	Dependencies       []string `json:"dependencies"`
+	DueOn              string   `json:"due_on"`
+	BlocksOn           string   `json:"blocks_on"`
+	// Status and Reason are the backport path of .tickets/CONVENTIONS.md.
+	// The store accepts done and archived here and nothing else, so a
+	// create can record work that is over. It can never file a ticket into
+	// ready, which is the promotion a person owns.
+	Status string `json:"status"`
+	Reason string `json:"reason"`
+	// References ride a second write, because CreateOptions has no field
+	// for them. The tool call stays one call, and the store sees a create
+	// and then one AddReference batch.
+	References []ticketRefArg `json:"references"`
 }
 
 func (t *TicketCreateTool) Name() string { return "ticket_create" }
 func (t *TicketCreateTool) Description() string {
-	return i18n.D("tool.ticket_create.description", "Create a ticket in the .tickets store of this repository. The tool writes one file in the store, and it never publishes anything. A new ticket lands in draft, and the promotion of a draft is a decision for a person. Give title, and any of type, priority, labels, description, parent, dependencies, and due_on. The tool returns the new id, the path, and the revision.")
+	return i18n.D("tool.ticket_create.description", "Create a ticket in the .tickets store of this repository. The tool writes one file in the store, and it never publishes anything. A new ticket lands in draft, and the promotion of a draft is a decision for a person. Give title. The schema names every other field, and each one is optional. The tool returns the new id, the path, and the revision.")
 }
 func (t *TicketCreateTool) ToolGroupName() string { return "ticket" }
 func (t *TicketCreateTool) Schema() json.RawMessage {
 	return mustSchema(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"title":        map[string]any{"type": "string", "description": "The one-line title of the ticket."},
-			"type":         map[string]any{"type": "string", "description": "The ticket type, for example task, bug, feature, or epic. The default comes from the store."},
-			"priority":     map[string]any{"type": "string", "description": "The priority, for example low, normal, high, or urgent. The default comes from the store."},
-			"labels":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The labels for the ticket."},
-			"description":  map[string]any{"type": "string", "description": "The Markdown body of the Description section."},
-			"parent":       map[string]any{"type": "string", "description": "The id of the parent ticket, for a child of an epic."},
-			"dependencies": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The ids of the tickets that this ticket depends on."},
-			"due_on":       map[string]any{"type": "string", "description": "The deadline as a date, for example 2026-12-31."},
+			"title":               map[string]any{"type": "string", "description": "The one-line title of the ticket. " + ticketTitleLimitDesc},
+			"type":                map[string]any{"type": "string", "enum": ticket.Types, "description": "The ticket type. The default comes from the store."},
+			"priority":            map[string]any{"type": "string", "enum": ticket.Priorities, "description": "The priority. The default comes from the store."},
+			"labels":              map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The labels for the ticket. The store holds the list of labels that it accepts."},
+			"assignees":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The actors to assign. No mutation changes this field later, so give it here or edit the file."},
+			"milestone":           map[string]any{"type": "string", "description": "The milestone for the ticket."},
+			"description":         map[string]any{"type": "string", "description": "The Markdown body of the Description section."},
+			"implementation_plan": map[string]any{"type": "string", "description": "The Markdown body of the Implementation plan section."},
+			"acceptance_criteria": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The Acceptance criteria, one entry for each item. The store writes them as unchecked boxes, in this order."},
+			"definition_of_done":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The Definition of done, one entry for each item. The store writes them as unchecked boxes, in this order."},
+			"parent":              map[string]any{"type": "string", "description": "The id of the parent ticket, for a child of an epic."},
+			"dependencies":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The ids of the tickets that this ticket depends on."},
+			"due_on":              map[string]any{"type": "string", "description": "The deadline as a date, for example 2026-12-31."},
+			"blocks_on":           map[string]any{"type": "string", "enum": ticket.BlocksOnValues, "description": ticketBlocksOnDesc},
+			"references":          map[string]any{"type": "array", "items": ticketReferenceItemsSchema(), "description": ticketReferencesDesc},
+			"status":              map[string]any{"type": "string", "enum": []string{ticket.StatusDone, ticket.StatusArchived}, "description": "The status to file the ticket in. A new ticket lands in draft, and this field accepts done and archived only. Use it to record work that is already over. A person owns the promotion of a draft to ready, and no create can reach that status."},
+			"reason":              map[string]any{"type": "string", "description": "The reason for an archived create. The store refuses it with any other status."},
 		},
 		"required": []string{"title"},
 	})
@@ -134,13 +207,20 @@ func (t *TicketCreateTool) Execute(ctx context.Context, raw json.RawMessage, pro
 		return ticketResult(nil, err)
 	}
 	opts := ticket.CreateOptions{
-		Title:        in.Title,
-		Type:         in.Type,
-		Priority:     in.Priority,
-		Labels:       in.Labels,
-		Dependencies: in.Dependencies,
-		Description:  in.Description,
-		Actor:        t.actor(),
+		Title:              in.Title,
+		Type:               in.Type,
+		Priority:           in.Priority,
+		Labels:             in.Labels,
+		Assignees:          in.Assignees,
+		Dependencies:       in.Dependencies,
+		Description:        in.Description,
+		ImplementationPlan: in.ImplementationPlan,
+		AcceptanceCriteria: in.AcceptanceCriteria,
+		DefinitionOfDone:   in.DefinitionOfDone,
+		BlocksOn:           in.BlocksOn,
+		Status:             in.Status,
+		Reason:             in.Reason,
+		Actor:              t.actor(),
 	}
 	if in.Parent != "" {
 		opts.Parent = &in.Parent
@@ -148,9 +228,22 @@ func (t *TicketCreateTool) Execute(ctx context.Context, raw json.RawMessage, pro
 	if in.DueOn != "" {
 		opts.DueOn = &in.DueOn
 	}
+	if in.Milestone != "" {
+		opts.Milestone = &in.Milestone
+	}
 	res, err := s.Create(ctx, opts)
 	if err != nil {
 		return ticketResult(nil, err)
+	}
+	// The references are a second write, and the create already made the
+	// file. A failure here therefore leaves a ticket with no references,
+	// so the refusal names the id and the repair. The write needs no
+	// precondition, because the id is one second old and nobody else has
+	// seen it.
+	if ms := referenceMutations(in.References); len(ms) > 0 {
+		if _, aerr := s.Apply(ctx, res.Ticket.ID, ms, ticket.ApplyOptions{Actor: t.actor()}); aerr != nil {
+			return ticketResult(nil, fmt.Errorf("the store created %s, and the references did not land: %w. Add them with ticket_update", res.Ticket.ID, aerr))
+		}
 	}
 	return t.freshOut(ctx, s, res.Ticket.ID)
 }
@@ -160,21 +253,24 @@ func (t *TicketCreateTool) Execute(ctx context.Context, raw json.RawMessage, pro
 type TicketUpdateTool struct{ *TicketCore }
 
 type ticketUpdateArgs struct {
-	Ref                string   `json:"ref"`
-	IfRevision         string   `json:"if_revision"`
-	Title              string   `json:"title"`
-	Type               string   `json:"type"`
-	Priority           string   `json:"priority"`
-	DueOn              string   `json:"due_on"`
-	Milestone          string   `json:"milestone"`
-	Parent             string   `json:"parent"`
-	Description        string   `json:"description"`
-	ImplementationPlan string   `json:"implementation_plan"`
-	Summary            string   `json:"summary"`
-	AddLabels          []string `json:"add_labels"`
-	RemoveLabels       []string `json:"remove_labels"`
-	AddDependencies    []string `json:"add_dependencies"`
-	RemoveDependencies []string `json:"remove_dependencies"`
+	Ref                string         `json:"ref"`
+	IfRevision         string         `json:"if_revision"`
+	Title              string         `json:"title"`
+	Type               string         `json:"type"`
+	Priority           string         `json:"priority"`
+	DueOn              string         `json:"due_on"`
+	Milestone          string         `json:"milestone"`
+	Parent             string         `json:"parent"`
+	BlocksOn           string         `json:"blocks_on"`
+	Description        string         `json:"description"`
+	ImplementationPlan string         `json:"implementation_plan"`
+	Summary            string         `json:"summary"`
+	AddLabels          []string       `json:"add_labels"`
+	RemoveLabels       []string       `json:"remove_labels"`
+	AddDependencies    []string       `json:"add_dependencies"`
+	RemoveDependencies []string       `json:"remove_dependencies"`
+	AddReferences      []ticketRefArg `json:"add_references"`
+	RemoveReferences   []string       `json:"remove_references"`
 }
 
 func (a ticketUpdateArgs) mutations() ticket.Mutations {
@@ -200,6 +296,9 @@ func (a ticketUpdateArgs) mutations() ticket.Mutations {
 		par := a.Parent
 		ms = append(ms, ticket.SetParent{Parent: &par})
 	}
+	if a.BlocksOn != "" {
+		ms = append(ms, ticket.SetBlocksOn{BlocksOn: a.BlocksOn})
+	}
 	if a.Description != "" {
 		ms = append(ms, ticket.SetDescription{Text: a.Description})
 	}
@@ -221,6 +320,10 @@ func (a ticketUpdateArgs) mutations() ticket.Mutations {
 	for _, d := range a.RemoveDependencies {
 		ms = append(ms, ticket.RemoveDependency{ID: d})
 	}
+	ms = append(ms, referenceMutations(a.AddReferences)...)
+	for _, r := range a.RemoveReferences {
+		ms = append(ms, ticket.RemoveReference{Ref: r})
+	}
 	return ms
 }
 
@@ -231,12 +334,13 @@ func (t *TicketUpdateTool) Description() string {
 func (t *TicketUpdateTool) ToolGroupName() string { return "ticket" }
 func (t *TicketUpdateTool) Schema() json.RawMessage {
 	props := ticketRefRevisionProps()
-	props["title"] = map[string]any{"type": "string", "description": "The new title."}
-	props["type"] = map[string]any{"type": "string", "description": "The new type."}
-	props["priority"] = map[string]any{"type": "string", "description": "The new priority."}
+	props["title"] = map[string]any{"type": "string", "description": "The new title. " + ticketTitleLimitDesc}
+	props["type"] = map[string]any{"type": "string", "enum": ticket.Types, "description": "The new type."}
+	props["priority"] = map[string]any{"type": "string", "enum": ticket.Priorities, "description": "The new priority."}
 	props["due_on"] = map[string]any{"type": "string", "description": "The new deadline as a date, for example 2026-12-31."}
 	props["milestone"] = map[string]any{"type": "string", "description": "The new milestone."}
 	props["parent"] = map[string]any{"type": "string", "description": "The id of the new parent ticket."}
+	props["blocks_on"] = map[string]any{"type": "string", "enum": ticket.BlocksOnValues, "description": ticketBlocksOnDesc}
 	props["description"] = map[string]any{"type": "string", "description": "The new Markdown body of the Description section. It replaces the section."}
 	props["implementation_plan"] = map[string]any{"type": "string", "description": "The new Markdown body of the Implementation plan section. It replaces the section."}
 	props["summary"] = map[string]any{"type": "string", "description": "The new Markdown body of the Summary section. It replaces the section."}
@@ -244,6 +348,8 @@ func (t *TicketUpdateTool) Schema() json.RawMessage {
 	props["remove_labels"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The labels to remove."}
 	props["add_dependencies"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The ticket ids to add as dependencies."}
 	props["remove_dependencies"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The ticket ids to remove from the dependencies."}
+	props["add_references"] = map[string]any{"type": "array", "items": ticketReferenceItemsSchema(), "description": ticketReferencesDesc + " A ref that the ticket already carries takes the new path."}
+	props["remove_references"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The refs to remove from the references."}
 	return mustSchema(map[string]any{
 		"type":       "object",
 		"properties": props,
@@ -345,6 +451,82 @@ func (t *TicketClaimTool) Execute(ctx context.Context, raw json.RawMessage, prog
 		ExpiresIn: time.Duration(in.ExpiresInMinutes) * time.Minute,
 		Force:     in.Force,
 	})
+}
+
+// --- ticket_fix -------------------------------------------------------------
+
+// TicketFixTool is check's other half. It classifies with the write tools
+// and not beside ticket_check, because it moves and rewrites files in the
+// user's repository. The name rhymes with a read, and the authority does
+// not.
+//
+// It carries no if_revision. The other five write tools each target one
+// ticket, and a precondition names the bytes they read. Fix walks the whole
+// store, so no single revision gates it. dry_run is the preview instead.
+type TicketFixTool struct{ *TicketCore }
+
+type ticketFixArgs struct {
+	DryRun bool `json:"dry_run"`
+}
+
+// ticketRepair is one repair, in terva's JSON casing. The library struct
+// carries no tags, and its content field is unexported anyway.
+type ticketRepair struct {
+	Kind   string   `json:"kind"`
+	Codes  []string `json:"codes,omitempty"`
+	Ticket string   `json:"ticket,omitempty"`
+	From   string   `json:"from,omitempty"`
+	To     string   `json:"to,omitempty"`
+}
+
+func ticketRepairs(rs []ticket.Repair) []ticketRepair {
+	out := make([]ticketRepair, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, ticketRepair{Kind: r.Kind, Codes: r.Codes, Ticket: r.Ticket, From: r.From, To: r.To})
+	}
+	return out
+}
+
+func (t *TicketFixTool) Name() string { return "ticket_fix" }
+func (t *TicketFixTool) Description() string {
+	return i18n.D("tool.ticket_fix.description", "Repair the ticket store, and report what the pass changed. The tool moves and rewrites files in the store, and it never publishes anything. It repairs three problems only. One is a file name that does not match its ticket id. One is an archived ticket in the wrong directory. One is a stale epics.md.\n\nThe report also holds every problem that remains, because each of those needs a decision that only you can make. Set dry_run to true to read the repairs first. The tool then writes nothing.")
+}
+func (t *TicketFixTool) ToolGroupName() string { return "ticket" }
+func (t *TicketFixTool) Schema() json.RawMessage {
+	return mustSchema(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"dry_run": map[string]any{"type": "boolean", "description": "Plan the repairs and write nothing. The findings that the repairs would clear stay in the report."},
+		},
+	})
+}
+
+func (t *TicketFixTool) Execute(ctx context.Context, raw json.RawMessage, progress func(string)) (core.ToolResult, error) {
+	var in ticketFixArgs
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &in)
+	}
+	s, err := t.open()
+	if err != nil {
+		return ticketResult(nil, err)
+	}
+	res, err := s.Fix(ctx, ticket.FixOptions{DryRun: in.DryRun})
+	if err != nil {
+		return ticketResult(nil, err)
+	}
+	out := map[string]any{
+		"dry_run": in.DryRun,
+		"repairs": ticketRepairs(res.Repairs),
+	}
+	// Fix returns the report of the store as it stands when the pass ends.
+	// Under dry_run that store still holds the findings the repairs would
+	// have cleared, which is what makes the preview readable.
+	if rep := res.Report; rep != nil {
+		out["ok"] = len(rep.Errors) == 0
+		out["errors"] = ticketFindings(rep.Errors)
+		out["warnings"] = ticketFindings(rep.Warnings)
+	}
+	return ticketResult(out, nil)
 }
 
 // --- ticket_comment ---------------------------------------------------------

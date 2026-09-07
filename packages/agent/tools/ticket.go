@@ -85,6 +85,31 @@ type ticketRow struct {
 	UpdatedAt    string   `json:"updated_at,omitempty"`
 }
 
+// ticketReference is a reference in terva's own JSON casing. The library
+// struct has no tags, so it marshals as Ref and Path, and the write tools
+// take ref and path in their arguments. One shape in both directions
+// spares the model from reading a reference back in a casing it cannot
+// send.
+type ticketReference struct {
+	Ref  string `json:"ref"`
+	Path string `json:"path,omitempty"`
+}
+
+func ticketReferences(rs []ticket.Reference) []ticketReference {
+	if len(rs) == 0 {
+		return nil
+	}
+	out := make([]ticketReference, 0, len(rs))
+	for _, r := range rs {
+		var p string
+		if r.Path != nil {
+			p = *r.Path
+		}
+		out = append(out, ticketReference{Ref: r.Ref, Path: p})
+	}
+	return out
+}
+
 func rowFromTicket(t *ticket.Ticket) ticketRow {
 	r := ticketRow{
 		ID:           t.ID,
@@ -324,22 +349,28 @@ type ticketGetArgs struct {
 // precondition will want when the write tools arrive in slice 3.
 type ticketFull struct {
 	ticketRow
-	CreatedAt          string             `json:"created_at,omitempty"`
-	Description        string             `json:"description,omitempty"`
-	AcceptanceCriteria string             `json:"acceptance_criteria,omitempty"`
-	DefinitionOfDone   string             `json:"definition_of_done,omitempty"`
-	ImplementationPlan string             `json:"implementation_plan,omitempty"`
-	Notes              string             `json:"notes,omitempty"`
-	Comments           string             `json:"comments,omitempty"`
-	Summary            string             `json:"summary,omitempty"`
-	References         []ticket.Reference `json:"references,omitempty"`
-	Path               string             `json:"path,omitempty"`
-	Revision           string             `json:"revision,omitempty"`
+	CreatedAt          string            `json:"created_at,omitempty"`
+	Description        string            `json:"description,omitempty"`
+	AcceptanceCriteria string            `json:"acceptance_criteria,omitempty"`
+	DefinitionOfDone   string            `json:"definition_of_done,omitempty"`
+	ImplementationPlan string            `json:"implementation_plan,omitempty"`
+	Notes              string            `json:"notes,omitempty"`
+	Comments           string            `json:"comments,omitempty"`
+	Summary            string            `json:"summary,omitempty"`
+	References         []ticketReference `json:"references,omitempty"`
+	// NextStatuses is where ticket_transition may take this ticket from
+	// where it stands. The lifecycle table lived in .tickets/CONVENTIONS.md
+	// and in the refusal a bad move earns, so every transition cost a
+	// document lookup or a failed write. The read that precedes the write
+	// answers it instead.
+	NextStatuses []string `json:"next_statuses,omitempty"`
+	Path         string   `json:"path,omitempty"`
+	Revision     string   `json:"revision,omitempty"`
 }
 
 func (t *TicketGetTool) Name() string { return "ticket_get" }
 func (t *TicketGetTool) Description() string {
-	return i18n.D("tool.ticket_get.description", "Read one ticket in full. This tool only reads, and it changes nothing. Give ref as a ticket id, or as a unique short form of the id. The tool returns JSON with the frontmatter fields, the body sections, the references, and the path. The result includes revision, which names the exact bytes that the tool read.")
+	return i18n.D("tool.ticket_get.description", "Read one ticket in full. This tool only reads, and it changes nothing. Give ref as a ticket id, or as a unique short form of the id. The tool returns JSON with the frontmatter fields, the body sections, the references, and the path. The result includes revision, which names the exact bytes that the tool read. It also gives next_statuses, the statuses that ticket_transition accepts for this ticket now.")
 }
 func (t *TicketGetTool) ToolGroupName() string { return "ticket" }
 func (t *TicketGetTool) Schema() json.RawMessage {
@@ -378,7 +409,8 @@ func (t *TicketGetTool) Execute(ctx context.Context, raw json.RawMessage, progre
 		Notes:              tk.Body.Notes,
 		Comments:           tk.Body.Comments,
 		Summary:            tk.Body.Summary,
-		References:         tk.References,
+		References:         ticketReferences(tk.References),
+		NextStatuses:       ticket.PermittedTransitions(tk.Status),
 		Path:               tk.Path,
 		Revision:           tk.Revision,
 	}

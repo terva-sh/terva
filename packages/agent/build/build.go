@@ -2053,12 +2053,14 @@ func BuildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 	// only where a .tickets store governs the session cwd — the same shape as
 	// the worktree gate above, so a repository with no store pays no schema
 	// cost. The five read tools call git-ticket's ticket package for
-	// structured values and survive the plan-mode prune below. The five write
-	// tools classify like write/edit and are pruned with them. Mutations
+	// structured values and survive the plan-mode prune below. The six write
+	// tools classify like write/edit and are pruned with them. ticket_fix is
+	// one of the six: it repairs the store by moving and rewriting files, so
+	// it sits with the writes and not beside ticket_check. Mutations
 	// record terva's own actor identity, in the plan's shape
 	// (agent:terva/<persona>); no schema offers it, because a model does not
 	// choose who it is.
-	// --no-ticket and `tickets: false` drop all ten. The `terva ticket`
+	// --no-ticket and `tickets: false` drop all eleven. The `terva ticket`
 	// command survives both, so the store stays reachable through
 	// git-ticket's own surface — the opt-out removes the tools, never the
 	// ledger.
@@ -2079,6 +2081,7 @@ func BuildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 		all["ticket_transition"] = &tools.TicketTransitionTool{TicketCore: tc}
 		all["ticket_claim"] = &tools.TicketClaimTool{TicketCore: tc}
 		all["ticket_comment"] = &tools.TicketCommentTool{TicketCore: tc}
+		all["ticket_fix"] = &tools.TicketFixTool{TicketCore: tc}
 	}
 	// Build-tag-gated optional built-ins (terva_scripting's code_execution,
 	// …) contribute here from their _on file's init(). They pass through

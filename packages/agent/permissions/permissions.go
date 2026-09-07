@@ -107,10 +107,15 @@ var readOnly = map[string]bool{
 	"worktree_list": true,
 	// The five ticket_* read tools read the .tickets store through
 	// git-ticket's ticket package and write nothing — the read half of
-	// docs/plans/git-ticket.md. Their five write siblings (create/update/
-	// transition/claim/comment) stay out of this map on purpose: a ticket
+	// docs/plans/git-ticket.md. Their six write siblings (create/update/
+	// transition/claim/comment/fix) stay out of this map on purpose: a ticket
 	// store lives in the user's repository and lands in their next commit,
 	// so they classify like write/edit, not like reads.
+	//
+	// ticket_fix is the trap in that list. It is ticket_check's other half
+	// and it reads like one more validator, but it moves and rewrites files
+	// in the store. A name that rhymes with a read is not a reason to grant
+	// it a read's authority.
 	"ticket_list":   true,
 	"ticket_search": true,
 	"ticket_get":    true,
@@ -180,6 +185,7 @@ var builtin = map[string]bool{
 	"ticket_transition": true,
 	"ticket_claim":      true,
 	"ticket_comment":    true,
+	"ticket_fix":        true,
 	// The play-and-deliberation four, trusted by decision (2026-07-27) after
 	// the classification audit found them prompting as foreign while
 	// swarm_spawn — which spawns TOOL-BEARING children at yolo — was trusted.

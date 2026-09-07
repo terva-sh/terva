@@ -22,7 +22,7 @@ func ticketStoreDir(t *testing.T) string {
 }
 
 var ticketToolNames = []string{"ticket_list", "ticket_search", "ticket_get", "ticket_ready", "ticket_check"}
-var ticketWriteToolNames = []string{"ticket_create", "ticket_update", "ticket_transition", "ticket_claim", "ticket_comment"}
+var ticketWriteToolNames = []string{"ticket_create", "ticket_update", "ticket_transition", "ticket_claim", "ticket_comment", "ticket_fix"}
 
 // The ticket tools register exactly where they can answer: present where a
 // .tickets store governs the cwd, absent in a plain directory. A repository
@@ -47,10 +47,13 @@ func TestTicketToolsRegisterOnlyWithStore(t *testing.T) {
 
 // Plan mode promises read-only. The five read tools must survive the prune
 // — a plan that cannot consult the work ledger would plan blind — and the
-// five write tools must not even be visible, the same split the worktree
+// six write tools must not even be visible, the same split the worktree
 // family asserts. A ticket store lives in the user's repository and lands
 // in their next commit, so a plan-mode ticket_create would be a plan-mode
 // write.
+//
+// ticket_fix is in the pruned half. It repairs the store by moving and
+// rewriting files, whatever its name suggests.
 func TestTicketToolsPlanModeKeepsOnlyReads(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 

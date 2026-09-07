@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -59,6 +60,38 @@ func ticketPageFrom(t *testing.T, res core.ToolResult) ticketPageResult {
 		t.Fatal(err)
 	}
 	return page
+}
+
+// ticket_get answers the lifecycle question before ticket_transition can
+// refuse it. The table used to live in .tickets/CONVENTIONS.md and in the
+// text of a failed write, so a model either read a document or spent a
+// write to learn where a ticket may go.
+func TestTicketGetNamesTheNextStatuses(t *testing.T) {
+	tc := ticketToolStore(t, 1)
+	list := &TicketListTool{TicketCore: tc}
+	res, _ := list.Execute(context.Background(), nil, nil)
+	id := ticketPageFrom(t, res).Tickets[0].ID
+
+	get := &TicketGetTool{TicketCore: tc}
+	res, err := get.Execute(context.Background(), json.RawMessage(`{"ref":"`+id+`"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var full ticketFull
+	if err := json.Unmarshal([]byte(ticketResultText(t, res)), &full); err != nil {
+		t.Fatal(err)
+	}
+	if full.Status != "draft" {
+		t.Fatalf("a fresh ticket is %q, not draft", full.Status)
+	}
+	if !slices.Equal(full.NextStatuses, ticket.PermittedTransitions("draft")) {
+		t.Fatalf("next_statuses = %v, want %v", full.NextStatuses, ticket.PermittedTransitions("draft"))
+	}
+	// The value is the transition table and not a guess: a draft may go to
+	// ready, and it may never go straight to in-progress.
+	if !slices.Contains(full.NextStatuses, "ready") || slices.Contains(full.NextStatuses, "in-progress") {
+		t.Errorf("draft next_statuses = %v", full.NextStatuses)
+	}
 }
 
 // The cursor walk: three pages of a seven-ticket store, with next_offset

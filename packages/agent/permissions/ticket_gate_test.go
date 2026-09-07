@@ -36,7 +36,7 @@ func TestHeadlessGateTicketWritesRefused(t *testing.T) {
 	if ask == nil {
 		t.Fatal("ask mode must build a gate")
 	}
-	for _, name := range []string{"ticket_create", "ticket_update", "ticket_transition", "ticket_claim", "ticket_comment"} {
+	for _, name := range []string{"ticket_create", "ticket_update", "ticket_transition", "ticket_claim", "ticket_comment", "ticket_fix"} {
 		if ok, _, _ := ask.Check(context.Background(), name, nil, name, ""); ok {
 			t.Errorf("%s must refuse under headless ask: no prompt exists to confirm it", name)
 		}

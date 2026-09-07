@@ -185,29 +185,34 @@ in the lazy group `worktree` under `lazy_tools`, share their engine
 keep state under `$TERVA_HOME/worktrees/` (extension-era state migrates on
 first touch; existing checkouts stay at their old paths).
 
-**Store-conditional built-ins**: the ten `ticket_*` tools (slices 2 and 3
+**Store-conditional built-ins**: the eleven `ticket_*` tools (slices 2 and 3
 of `docs/plans/git-ticket.md`) join the registry only when a `.tickets/`
 store governs the session cwd, probed with `ticket.Discover` once per
 registry build. The read five — `ticket_list`, `ticket_search`,
 `ticket_get`, `ticket_ready`, `ticket_check` — are local read-only and
-survive `plan` mode. The write five — `ticket_create`, `ticket_update`,
-`ticket_transition`, `ticket_claim`, `ticket_comment` — classify as
-workspace mutation like `write`/`edit`: the store lives in the user's
-repository and lands in their next commit, so plan mode prunes them and a
-headless non-yolo gate refuses them. All ten call git-ticket's `ticket`
-package directly for structured values — the `terva ticket` CLI subcommand
-embeds the same library's `cli` package, so the two surfaces cannot drift
-from each other. Both track the version `go.mod` pins, currently v0.14.3.
-A `git-ticket` binary installed separately on the user's `PATH` is a third
-thing and can be any version, so that one *can* drift from both.
+survive `plan` mode. The write six — `ticket_create`, `ticket_update`,
+`ticket_transition`, `ticket_claim`, `ticket_comment`, `ticket_fix` —
+classify as workspace mutation like `write`/`edit`: the store lives in the
+user's repository and lands in their next commit, so plan mode prunes them
+and a headless non-yolo gate refuses them. `ticket_fix` is the one to read
+twice: it is `ticket_check`'s other half and its name rhymes with a read,
+but it moves and rewrites files in the store, so it sits with the writes.
+All eleven call git-ticket's `ticket` package directly for structured
+values — the `terva ticket` CLI subcommand embeds the same library's `cli`
+package, so the two surfaces cannot drift from each other. Both track the
+version `go.mod` pins, currently v0.14.3. A `git-ticket` binary installed
+separately on the user's `PATH` is a third thing and can be any version, so
+that one *can* drift from both.
 `ticket_list` and `ticket_search` page (default 50 rows, cap 200,
 `next_offset` cursor), per the paging requirement above. Every mutation
-except create requires `if_revision`, the revision `ticket_get` returned;
-a stale value refuses with the current revision in the message. Mutations
-record terva's own actor (`agent:terva/<persona>`), and no schema offers
-the identity, because a model does not choose who it is. A repository with
-no store pays no schema cost. They sit in the lazy group `ticket` under
-`lazy_tools`.
+except create and fix requires `if_revision`, the revision `ticket_get`
+returned; a stale value refuses with the current revision in the message.
+`ticket_fix` is exempt because it walks the whole store rather than one
+ticket, so no single revision gates it. `dry_run: true` previews the
+repairs instead. Mutations record terva's own actor
+(`agent:terva/<persona>`), and no schema offers the identity, because a
+model does not choose who it is. A repository with no store pays no schema
+cost. They sit in the lazy group `ticket` under `lazy_tools`.
 
 Nothing creates a store, and nothing proposes creating one. Where a
 repository has no `.tickets/`, the agent gets no ticket tools and no
