@@ -438,7 +438,7 @@ The block above the editor is built from named **segments** laid out in rows. Ea
 
 While a turn runs, the busy line (spinner, quip, elapsed time) renders as its own row directly above the bar and disappears when the turn ends. The segments themselves never shift. If that one-row vertical step bothers you, `status_line.reserve_busy_row: true` keeps the row present and blank while idle, trading a line of chat height for zero motion.
 
-Rows lay out inside a content width of `min(columns, status_line.max_width)`. The default is uncapped, so the bar's edges line up with the composer and the chat, which both render at the full terminal width. A cap costs no information: the atoms are the same either way, and only the flex gap between spacer groups shrinks. Set `"max_width": 140` when you would rather read the bar as one block than track a group at each edge of a wide terminal.
+Rows lay out inside a content width of `min(columns, status_line.max_width)`, with a two-cell inset held clear at each edge. That inset is the same margin a tool box uses, so the bar's left and right edges land on the columns where the box corners above them sit. The default is uncapped, so on a wide terminal the bar spans the chat column. A cap costs no information: the atoms are the same either way, and only the flex gap between spacer groups shrinks. Set `"max_width": 140` when you would rather read the bar as one block than track a group at each edge of a wide terminal.
 
 | segment | shows | notes |
 |---|---|---|

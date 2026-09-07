@@ -663,7 +663,8 @@ func TestStatusBarMaxWidthCap(t *testing.T) {
 	}
 }
 
-// A spacer pins the group after it against the effective width.
+// A spacer pins the group after it against the effective width, less
+// the right inset that matches the bar's 2-cell left pad.
 func TestStatusBarSpacerRightAligns(t *testing.T) {
 	p := StatusBarParams{
 		Theme:    Dark,
@@ -677,8 +678,8 @@ func TestStatusBarSpacerRightAligns(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("want one flexed line, got %d: %q", len(lines), lines)
 	}
-	if w := visibleWidth(lines[0]); w != 80 {
-		t.Errorf("right group should sit flush at width 80, got %d: %q", w, stripANSI(lines[0]))
+	if w := visibleWidth(lines[0]); w != 80-statusTailPad {
+		t.Errorf("right group should end %d cells short of 80, got %d: %q", statusTailPad, w, stripANSI(lines[0]))
 	}
 	plain := stripANSI(lines[0])
 	if !strings.HasPrefix(plain, "  /t/x") || !strings.HasSuffix(plain, "(openai) gpt-5.5") {
@@ -689,8 +690,36 @@ func TestStatusBarSpacerRightAligns(t *testing.T) {
 	// stays a 100-cell block under MaxWidth 100.
 	p.Cols, p.MaxWidth = 330, 100
 	lines = StatusBar(p)
-	if w := visibleWidth(lines[0]); len(lines) != 1 || w != 100 {
-		t.Errorf("capped flex: want one 100-cell line, got %d lines, width %d", len(lines), w)
+	if w := visibleWidth(lines[0]); len(lines) != 1 || w != 100-statusTailPad {
+		t.Errorf("capped flex: want one %d-cell line, got %d lines, width %d", 100-statusTailPad, len(lines), w)
+	}
+}
+
+// The bar's two edges sit on the same columns as a tool box's corners:
+// statusPad on the left, statusTailPad on the right. Before this, the
+// left edge lined up and the right edge ran two cells past the box.
+func TestStatusBarSpacerMatchesToolBoxMargins(t *testing.T) {
+	const cols = 100
+	p := StatusBarParams{
+		Theme:    Dark,
+		Provider: "openai",
+		Model:    "gpt-5.5",
+		CWD:      "/tmp/x",
+		Rows:     [][]string{{"cwd", "spacer", "model"}},
+		Cols:     cols,
+	}
+	lines := StatusBar(p)
+	if len(lines) != 1 {
+		t.Fatalf("want one flexed line, got %d: %q", len(lines), lines)
+	}
+	box := stripANSI(toolBoxBottom(Dark, cols))
+	bar := stripANSI(lines[0])
+
+	if got, want := len(bar)-len(strings.TrimLeft(bar, " ")), strings.Index(box, "└"); got != want {
+		t.Errorf("left inset %d, tool box corner at %d", got, want)
+	}
+	if got, want := visibleWidth(bar), visibleWidth(strings.TrimRight(box, " ")); got != want {
+		t.Errorf("bar ends at column %d, tool box corner at %d", got, want)
 	}
 }
 
@@ -747,8 +776,8 @@ func TestStatusBarSpacerSplitsSlackEvenly(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("want one flexed line, got %q", lines)
 	}
-	if w := visibleWidth(lines[0]); w != 80 {
-		t.Errorf("want the line flush at 80, got %d", w)
+	if w := visibleWidth(lines[0]); w != 80-statusTailPad {
+		t.Errorf("want the line to end at %d, got %d", 80-statusTailPad, w)
 	}
 	var gaps []int
 	run := 0
@@ -951,12 +980,12 @@ func TestContextMeterWidthTiers(t *testing.T) {
 }
 
 // The default is uncapped (DefaultStatusLineMaxWidth 0 in
-// packages/agent/config), so the rows flex flush to the terminal and
+// packages/agent/config), so the rows flex out to the terminal and
 // meterCells keys on the real terminal width. This pins the
 // wide-terminal render that decided the reversal: on a 330-column
-// terminal the default rows reach 330 cells, the context meter renders
-// at its 12-cell tier, and the text is the same text the 140 cap
-// produced. Only the flex gap differs.
+// terminal the default rows reach 330 cells less the right inset, the
+// context meter renders at its 12-cell tier, and the text is the same
+// text the 140 cap produced. Only the flex gap differs.
 func TestStatusBarUncappedByDefaultFlexesToTheTerminal(t *testing.T) {
 	p := StatusBarParams{
 		Theme:     Dark,
@@ -988,8 +1017,8 @@ func TestStatusBarUncappedByDefaultFlexesToTheTerminal(t *testing.T) {
 		t.Fatalf("want 2 flexed rows (row 3 has no data), got %q", lines)
 	}
 	for i, l := range lines {
-		if w := visibleWidth(l); w != 330 {
-			t.Errorf("row %d: want flush at the terminal width 330, got %d: %q", i, w, stripANSI(l))
+		if w := visibleWidth(l); w != 330-statusTailPad {
+			t.Errorf("row %d: want the row to end at %d, got %d: %q", i, 330-statusTailPad, w, stripANSI(l))
 		}
 	}
 	if !strings.Contains(stripANSI(lines[1]), "▓▓▓▓░░░░░░░░") {

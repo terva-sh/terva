@@ -371,6 +371,12 @@ func DefaultStatusRows(hideWorkspace bool) [][]string {
 // conversation column.
 const statusPad = "  "
 
+// statusTailPad is the matching right inset the flex layout keeps clear.
+// It equals toolBoxOuterMargin, so a right-aligned spacer group ends on
+// the same column as a tool box's closing corner. Without it the left
+// edge lined up with the box and the right edge ran two cells past it.
+const statusTailPad = toolBoxOuterMargin
+
 // StatusBar builds the status block shown above the editor: the
 // configured (or default) rows of segments, greedily wrapped to Cols,
 // with the busy spinner prefix glued to the first line when it fits.
@@ -623,7 +629,7 @@ func layoutStatusRows(p StatusBarParams, rows [][]string) []string {
 		}
 
 		if hasSpacer && width > 0 {
-			if line, ok := flexLine(statusPad, groups, sep, width); ok {
+			if line, ok := flexLine(statusPad, groups, sep, width, statusTailPad); ok {
 				lines = append(lines, line)
 				continue
 			}
@@ -670,7 +676,12 @@ func splitSpacerGroups(atoms []string) (groups [][]string, hasSpacer bool) {
 // as the separator it replaces, so ok is false exactly when the
 // collapsed form of the row overflows too — the caller then falls back
 // to the greedy wrap and the v2 invariants hold unchanged.
-func flexLine(head string, groups [][]string, sep string, width int) (string, bool) {
+//
+// tail is the number of cells the layout keeps clear at the right edge,
+// mirroring head's inset. It comes out of the slack only, never out of
+// the fit test: a row that fits flush still renders on one line, with a
+// tail narrower than requested, rather than dropping to the greedy wrap.
+func flexLine(head string, groups [][]string, sep string, width, tail int) (string, bool) {
 	sepW := visibleWidth(sep)
 	parts := make([]string, 0, len(groups))
 	content := 0
@@ -683,6 +694,9 @@ func flexLine(head string, groups [][]string, sep string, width int) (string, bo
 	slack := width - visibleWidth(head) - content - gaps*sepW
 	if gaps < 1 || slack < 0 {
 		return "", false
+	}
+	if slack -= tail; slack < 0 {
+		slack = 0
 	}
 	var b strings.Builder
 	b.WriteString(head)
