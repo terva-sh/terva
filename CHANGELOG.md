@@ -11,6 +11,12 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.133.1](https://github.com/terva-sh/terva/releases/tag/v0.133.1) — 2026-09-06
+
+### Features
+
+- tui: uncap the status bar by default
+
 ## [v0.133.0](https://github.com/terva-sh/terva/releases/tag/v0.133.0) — 2026-09-05
 
 ### Features
