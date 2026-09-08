@@ -767,6 +767,19 @@ export interface SurfaceMeta {
   badge?: string
 }
 
+// ToolDisplay is one extension's declaration of how its tool's calls should be
+// drawn (tools.display, from register_tool display). Data, never code: subject
+// is a template over the call's top-level argument keys written as {key}, body
+// names a renderer this client already has, and redact names argument keys to
+// mask. The daemon has already dropped whatever failed validation, so an
+// unknown body here means a newer daemon knows a renderer this client does not,
+// which falls back to text.
+export interface ToolDisplay {
+  subject?: string
+  body?: string
+  redact?: string[]
+}
+
 // CatalogView is the effective web string catalog for one language (i18n.catalog):
 // English-as-key singular translations + plurals keyed by the "one|other"
 // composite. The client overlays it onto its bundled base.
@@ -2683,6 +2696,7 @@ export type Verb =
   | 'surface.action'
   | 'surface.get'
   | 'surfaces.list'
+  | 'tools.display'
   | 'turn.advance'
   | 'turn.continue'
   | 'turn.resume'

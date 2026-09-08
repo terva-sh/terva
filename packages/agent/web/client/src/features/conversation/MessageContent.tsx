@@ -8,6 +8,7 @@ import { Markdown } from '../../ui/Markdown'
 import { memo } from '../../ui/memo'
 import { ClearDivider } from './ClearDivider'
 import { CompactionDivider, type RevealFn } from './CompactionDivider'
+import type { ToolHints } from './toolcard/display'
 import { ToolCard } from './toolcard/ToolCard'
 import { ReasoningDisclosure } from '../../ui/ReasoningDisclosure'
 import type { ToolView } from './types'
@@ -108,6 +109,7 @@ export const MessageContent = memo(function MessageContent({
   onReveal,
   revealing,
   thinkingOpen,
+  toolHints,
 }: {
   item: Item
   toolView: ToolView
@@ -117,6 +119,10 @@ export const MessageContent = memo(function MessageContent({
   // shallow-compares every prop, so this re-renders the two rows that change
   // when a newer turn takes the slot, and nothing else.
   thinkingOpen?: boolean
+  // What each tool's own extension declared about drawing it (tools.display).
+  // Fetched once per session, so the reference is stable and memo keeps
+  // holding. Optional, and empty for every session with no extension tools.
+  toolHints?: ToolHints
 }) {
   switch (item.kind) {
     case 'user':
@@ -199,6 +205,6 @@ export const MessageContent = memo(function MessageContent({
       // The full view delegates to the card. Everything about how a call looks
       // lives there now, so stage 2 adds per-tool renderers without touching
       // this switch. The minimal and hidden views above are unchanged.
-      return <ToolCard item={item} />
+      return <ToolCard item={item} hint={toolHints?.[item.name]} />
   }
 })

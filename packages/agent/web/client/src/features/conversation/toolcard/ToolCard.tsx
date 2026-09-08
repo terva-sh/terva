@@ -2,9 +2,10 @@ import type { ComponentChildren } from 'preact'
 import { useMemo, useState } from 'preact/hooks'
 import { t, tn } from '../../../i18n'
 import type { Item } from '../../../platform/conversation/store'
+import type { ToolDisplay } from '../../../platform/ctrlproto/types'
 import { humanBytes } from '../../../ui/formatting'
 import { ImageGallery } from '../../../ui/ImageGallery'
-import { presentTool } from './renderers'
+import { presentToolWithHint, redactedKeys } from './display'
 
 export type ToolItem = Extract<Item, { kind: 'tool' }>
 
@@ -25,6 +26,10 @@ const SOFT_CAP = 20_000
 // was hiding secrets by accident, and accident is not a security property, but
 // removing it without this would be a real regression: a tool called with a
 // bearer token now puts it in the DOM in full.
+//
+// Stage 3 lets an extension ADD names to this for its own tool (register_tool
+// display.redact), because a denylist of English key names cannot guess what a
+// third-party tool called its credential. It cannot remove one.
 const SECRET_KEY = /token|secret|password|passwd|credential|api[-_]?key|private[-_]?key|bearer|authorization/i
 
 // The mask is a fixed width. A mask that tracked the value's length would leak
@@ -37,8 +42,9 @@ const MASK = '••••••••'
 // Stage 1 of docs/proposals/web-tool-cards.md. It adds no per-tool knowledge:
 // every tool renders through this one component, and the subject line is
 // derived generically (see ui/toolSubject.ts). Stage 2 introduces a renderer
-// table and keeps this as the fallback.
-export function ToolCard({ item }: { item: ToolItem }) {
+// table and keeps this as the fallback. Stage 3 adds `hint`, what the tool's
+// own extension declared about how to draw it.
+export function ToolCard({ item, hint }: { item: ToolItem; hint?: ToolDisplay }) {
   const [argsOpen, setArgsOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
 
@@ -46,10 +52,11 @@ export function ToolCard({ item }: { item: ToolItem }) {
   // diff or splits a command, so this is keyed on the inputs rather than run
   // per token for every visible card.
   const view = useMemo(
-    () => presentTool(item.name, item.args, item.result ?? '', !!item.error),
-    [item.name, item.args, item.result, item.error],
+    () => presentToolWithHint(item.name, item.args, item.result ?? '', !!item.error, hint),
+    [item.name, item.args, item.result, item.error, hint],
   )
   const subject = view.subject
+  const redact = useMemo(() => redactedKeys(hint), [hint])
 
   const body = useMemo(() => {
     // A per-tool renderer hands back one node per rendered line, so the clamp
@@ -105,7 +112,9 @@ export function ToolCard({ item }: { item: ToolItem }) {
         )}
       </div>
 
-      {argsOpen && item.args != null && <pre class="tool-card__args">{jsonNodes(item.args, 0)}</pre>}
+      {argsOpen && item.args != null && (
+        <pre class="tool-card__args">{jsonNodes(item.args, 0, redact)}</pre>
+      )}
 
       {hasBody && <pre class="tool-card__body">{shown}</pre>}
 
@@ -136,7 +145,12 @@ export function ToolCard({ item }: { item: ToolItem }) {
 // string form has already lost which quotes opened a key and which sat inside a
 // value, so a regex pass mis-tints any argument containing a quote, and there
 // is no reliable point at which to mask.
-function jsonNodes(value: unknown, depth: number, masked = false): ComponentChildren {
+function jsonNodes(
+  value: unknown,
+  depth: number,
+  redact: Set<string>,
+  masked = false,
+): ComponentChildren {
   const pad = '  '.repeat(depth + 1)
   const close = '  '.repeat(depth)
 
@@ -152,7 +166,7 @@ function jsonNodes(value: unknown, depth: number, masked = false): ComponentChil
     if (value.length === 0) return <>[]</>
     const out: ComponentChildren[] = ['[\n']
     value.forEach((v, i) => {
-      out.push(pad, jsonNodes(v, depth + 1), i < value.length - 1 ? ',\n' : '\n')
+      out.push(pad, jsonNodes(v, depth + 1, redact), i < value.length - 1 ? ',\n' : '\n')
     })
     out.push(close, ']')
     return <>{out}</>
@@ -167,7 +181,7 @@ function jsonNodes(value: unknown, depth: number, masked = false): ComponentChil
         pad,
         <span class="tool-card__key">{JSON.stringify(k)}</span>,
         ': ',
-        jsonNodes(v, depth + 1, SECRET_KEY.test(k)),
+        jsonNodes(v, depth + 1, redact, SECRET_KEY.test(k) || redact.has(k.toLowerCase())),
         i < entries.length - 1 ? ',\n' : '\n',
       )
     })

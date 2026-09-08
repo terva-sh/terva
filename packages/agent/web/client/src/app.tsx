@@ -77,6 +77,7 @@ import type {
 } from './ctrlproto'
 import { Composer, type SlashCommand } from './features/conversation/Composer'
 import { ConversationTimeline } from './features/conversation/ConversationTimeline'
+import type { ToolHints } from './features/conversation/toolcard/display'
 import { ResumeBar } from './features/conversation/ResumeBar'
 import type { ToolView } from './features/conversation/types'
 import { AskRequest as AskRequestView } from './features/interactions/AskRequest'
@@ -375,6 +376,11 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   // Pane host (surfaces): context/usage/extension panels in a right rail.
   const [paneOpen, setPaneOpen] = useState(false)
   const [surfaces, setSurfaces] = useState<SurfaceMeta[]>([])
+  // What each extension declared about drawing its own tools (tools.display).
+  // Fetched once per session rather than carried on every call: the hint
+  // belongs to the tool, so one fetch covers the whole scrollback, and the
+  // reference stays stable enough for the memoized rows below to keep holding.
+  const [toolHints, setToolHints] = useState<ToolHints>({})
   const [activeSurface, setActiveSurface] = useState('context')
   const [surfaceData, setSurfaceData] = useState<Surface | null>(null)
   // The provider's usage picture, mirrored from the usage.snapshot verb. It
@@ -808,6 +814,20 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     },
     [refreshSessions, selectSession],
   )
+
+  const loadToolHints = useCallback(async (sess: string) => {
+    const c = clientRef.current
+    if (!c || !sess) return
+    try {
+      const res = await c.send<{ tools: ToolHints }>('tools.display', null, sess)
+      setToolHints(res.tools ?? {})
+    } catch {
+      // An older daemon has no such verb, and a session with no extension
+      // tools has nothing to say. Both mean the same thing to the transcript:
+      // every card renders the way it did before this existed.
+      setToolHints({})
+    }
+  }, [])
 
   const listSurfaces = useCallback(async () => {
     const c = clientRef.current
@@ -2166,6 +2186,14 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
     setUsageSnap(null)
   }, [curSess])
 
+  // The hints belong to the session's extensions, so they are re-fetched when
+  // the session changes and cleared first: rendering one session's cards
+  // through another session's hints would be worse than rendering them plain.
+  useEffect(() => {
+    setToolHints({})
+    void loadToolHints(curSess)
+  }, [curSess, loadToolHints])
+
   // Refresh the pane when it opens, the active surface changes, or the session
   // changes; live panes also re-fetch on surface_updated (see handleEvent).
   useEffect(() => {
@@ -2668,6 +2696,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
                 loadingEarlier={loadingEarlier}
                 sess={curSess}
                 canDownload={canDownloadShares}
+                toolHints={toolHints}
               />
 
               {permission && <PermissionRequestView request={permission} onDecide={decide} />}

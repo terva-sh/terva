@@ -99,6 +99,24 @@ var goldenFrames = []goldenFrame{
 		`{"type":"register_tool","name":"search_index","description":"search the index","schema":{"type":"object"},"read_only":true,"authority":"local-read","essential":true}`,
 	},
 	{
+		// display tells a rich client how to draw the card. Data only: a
+		// template over argument keys and a renderer name from a closed set.
+		"register_tool display",
+		RegisterToolFromExt{Type: "register_tool", Name: "weather",
+			Schema:  json.RawMessage(`{"type":"object"}`),
+			Display: &ToolDisplay{Subject: "{city}", Body: "table", Redact: []string{"api_key"}}},
+		`{"type":"register_tool","name":"weather","schema":{"type":"object"},"display":{"subject":"{city}","body":"table","redact":["api_key"]}}`,
+	},
+	{
+		// Every part of display is optional. A hint that only names a subject
+		// is the common case and must not drag empty siblings onto the wire.
+		"register_tool display subject only",
+		RegisterToolFromExt{Type: "register_tool", Name: "lookup",
+			Schema:  json.RawMessage(`{"type":"object"}`),
+			Display: &ToolDisplay{Subject: "{query}"}},
+		`{"type":"register_tool","name":"lookup","schema":{"type":"object"},"display":{"subject":"{query}"}}`,
+	},
+	{
 		"register_context",
 		RegisterContextFromExt{Type: "register_context", Text: "keep one task active"},
 		`{"type":"register_context","text":"keep one task active"}`,
@@ -1002,5 +1020,36 @@ func TestGoldenDecode(t *testing.T) {
 	}
 	if keys.ID != "q5" || len(keys.Keys) != 0 {
 		t.Errorf("secret_keys fields: %+v", keys)
+	}
+
+	// An extension that names a renderer this host has never heard of must
+	// still register: display is a hint, and the client falls back to text.
+	var rt RegisterToolFromExt
+	line = `{"type":"register_tool","name":"weather","schema":{},"display":{"body":"hologram","future":1}}`
+	if err := json.Unmarshal([]byte(line), &rt); err != nil {
+		t.Fatalf("decode register_tool with an unknown body: %v", err)
+	}
+	if rt.Display == nil || rt.Display.Body != "hologram" {
+		t.Errorf("display survived decode as %+v", rt.Display)
+	}
+	if ValidToolDisplayBody(rt.Display.Body) {
+		t.Error("ValidToolDisplayBody admitted \"hologram\"")
+	}
+}
+
+func TestValidToolDisplayBody(t *testing.T) {
+	// Empty is valid and means the client decides, which is what every hint
+	// that only sets a subject sends.
+	for _, ok := range append(ToolDisplayBodies(), "") {
+		if !ValidToolDisplayBody(ok) {
+			t.Errorf("ValidToolDisplayBody(%q) = false, want true", ok)
+		}
+	}
+	// The set is closed. "Table" is not "table": a case-insensitive match here
+	// would mean two spellings of one renderer on the wire.
+	for _, bad := range []string{"Table", "markdown", "html", "text ", "TEXT"} {
+		if ValidToolDisplayBody(bad) {
+			t.Errorf("ValidToolDisplayBody(%q) = true, want false", bad)
+		}
 	}
 }

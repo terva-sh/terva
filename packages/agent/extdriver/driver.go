@@ -931,7 +931,64 @@ const (
 	// would let one extension defeat the context economy lazy mode exists
 	// for. Excess essential tools load deferred instead (and are logged).
 	maxEssentialTools = 3
+	// maxDisplaySubject bounds a display hint's subject template
+	// (register_tool display). The client caps what it draws as well; this
+	// stops an oversized template being stored and served in the first place.
+	maxDisplaySubject = 200
+	// maxDisplayRedact bounds how many argument keys one hint may name for
+	// masking. Generous: a tool with more than sixteen secret arguments has a
+	// different problem.
+	maxDisplayRedact = 16
 )
+
+// normalizeDisplay drops the parts of a display hint the host will not pass
+// on, and returns nil when nothing usable is left.
+//
+// It never refuses the registration. Display is presentation, so a tool whose
+// hint is malformed is still a tool the model can call, and failing the
+// registration would turn a cosmetic mistake into a missing capability. Each
+// drop is written to the extension's own log, because the alternative is an
+// author staring at a card that looks generic with nothing telling them why.
+func normalizeDisplay(d *extproto.ToolDisplay, name string, log io.Writer) *extproto.ToolDisplay {
+	if d == nil {
+		return nil
+	}
+	out := *d
+	if !extproto.ValidToolDisplayBody(out.Body) {
+		fmt.Fprintf(log, "[terva] tool %q: display.body %q is not one of %v; the client will draw text\n",
+			name, out.Body, extproto.ToolDisplayBodies())
+		out.Body = ""
+	}
+	// Dropped whole rather than truncated: a template cut mid-{key} renders as
+	// a literal brace, which reads as a bug in the card rather than in the hint.
+	if len(out.Subject) > maxDisplaySubject {
+		fmt.Fprintf(log, "[terva] tool %q: display.subject is %d bytes, over the %d-byte cap; dropping it\n",
+			name, len(out.Subject), maxDisplaySubject)
+		out.Subject = ""
+	}
+	if len(out.Redact) > 0 {
+		keys := make([]string, 0, min(len(out.Redact), maxDisplayRedact))
+		for _, k := range out.Redact {
+			if k == "" {
+				continue // an empty key names no argument
+			}
+			if len(keys) == maxDisplayRedact {
+				fmt.Fprintf(log, "[terva] tool %q: display.redact names more than %d keys; ignoring the rest\n",
+					name, maxDisplayRedact)
+				break
+			}
+			keys = append(keys, k)
+		}
+		if len(keys) == 0 {
+			keys = nil
+		}
+		out.Redact = keys
+	}
+	if out.Subject == "" && out.Body == "" && len(out.Redact) == 0 {
+		return nil
+	}
+	return &out
+}
 
 // registerTool records a tool registration under the cap, indexing the
 // name on first registration. Drops (and logs) past maxExtTools so a
@@ -960,6 +1017,7 @@ func (d *Driver) registerTool(ext *Extension, rt extproto.RegisterToolFromExt) {
 			rt.Essential = false
 		}
 	}
+	rt.Display = normalizeDisplay(rt.Display, rt.Name, ext.logFile)
 	ext.tools = append(ext.tools, rt)
 	if _, exists := d.toolIndex[rt.Name]; !exists {
 		d.toolIndex[rt.Name] = ext

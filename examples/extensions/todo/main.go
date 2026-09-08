@@ -64,7 +64,16 @@ func main() {
 		},
 		"required": []string{"action"},
 	})
-	e.Tool("todo_manage", "List, add, complete, edit, or remove todos by title.", schema, a.handleTool)
+	// A client guessing a subject from key names already finds `title`, so the
+	// card is not broken without this. What it cannot know is that `action` is
+	// the more important half: "ship the display field" alone does not say
+	// whether the todo was added, completed, or removed, and those read very
+	// differently in a transcript. The template puts the verb first.
+	//
+	// `list` carries no title and fills to just "list", which is correct: the
+	// client trims what a missing key leaves behind.
+	e.Tool("todo_manage", "List, add, complete, edit, or remove todos by title.", schema, a.handleTool,
+		ext.WithDisplay(ext.ToolDisplay{Subject: "{action} {title}"}))
 	e.OnPanelKey(panelID, a.handleKey, nil)
 	if err := e.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

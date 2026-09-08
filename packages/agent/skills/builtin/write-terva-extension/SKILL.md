@@ -139,6 +139,27 @@ modes without prompting) and `authority` (a finer effect class —
 fetch declares `network-read` rather than being mistaken for a local
 read). Both are additive — older hosts ignore them — and you should
 declare them honestly: lying only loosens your own user's policy.
+`essential: true` is a third, about visibility rather than gating: it
+keeps the tool advertised every turn under lazy tool loading.
+
+`display` is not a classification at all — it is how a rich client
+draws the **card** for your tool's calls, and it changes nothing about
+gating, visibility, or what the model sees:
+
+```json
+{"type":"register_tool","name":"weather","schema":{ },
+ "display":{"subject":"{city}","body":"table","redact":["api_key"]}}
+```
+
+`subject` is a template over your top-level argument keys, substituted
+as text; without one a client guesses from key names and often lands on
+"1 argument". `body` names a renderer the client already has (`text`,
+`json`, `diff`, `table`) — a name, never a format string. `redact` names
+argument keys the card masks, adding to the client's own denylist.
+It is **data, never code**: a client that ran rendering code you supplied
+would be running your code in someone's browser. From the Go SDK,
+`ext.WithDisplay(ext.ToolDisplay{Subject: "{city}"})`. See
+`docs/extensions.md` for the caps and the exact degradation rules.
 
 ### Runtime frames
 

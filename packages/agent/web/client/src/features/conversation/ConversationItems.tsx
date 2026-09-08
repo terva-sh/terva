@@ -4,6 +4,7 @@ import { sequenceConversationItems } from './itemSequence'
 import { MessageContent } from './MessageContent'
 import { SharedFileCard } from './SharedFileCard'
 import { TimeGap } from './TimeGap'
+import type { ToolHints } from './toolcard/display'
 import { ToolGroup } from './ToolGroup'
 import type { ToolView } from './types'
 
@@ -15,6 +16,7 @@ export function ConversationItems({
   openThinkingId = '',
   sess = '',
   canDownload = false,
+  toolHints,
 }: {
   items: Item[]
   toolView: ToolView
@@ -30,6 +32,9 @@ export function ConversationItems({
   // renderable from a test; a share then shows as an inert label.
   sess?: string
   canDownload?: boolean
+  // Per-tool rendering hints from tools.display, passed straight through to the
+  // cards. Optional so this stays renderable from a test, like sess above.
+  toolHints?: ToolHints
 }) {
   return (
     <>
@@ -42,7 +47,9 @@ export function ConversationItems({
           <ToolGroup
             key={entry.key}
             tools={entry.tools}
-            renderTool={(tool) => <MessageContent key={tool.id} item={tool} toolView="full" />}
+            renderTool={(tool) => (
+              <MessageContent key={tool.id} item={tool} toolView="full" toolHints={toolHints} />
+            )}
           />
         ) : (
           <MessageContent
@@ -52,6 +59,7 @@ export function ConversationItems({
             onReveal={onReveal}
             revealing={revealingID === entry.item.id}
             thinkingOpen={!!openThinkingId && entry.item.id === openThinkingId}
+            toolHints={toolHints}
           />
         ),
       )}

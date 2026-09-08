@@ -68,6 +68,7 @@ const (
 	MethodSurfacesList       Method = "surfaces.list"         // result SurfacesResult (sess in frame)
 	MethodSurfaceGet         Method = "surface.get"           // params SurfaceGetParams, result SurfaceResult
 	MethodSurfaceAction      Method = "surface.action"        // params SurfaceActionParams (sess in frame)
+	MethodToolsDisplay       Method = "tools.display"         // result ToolsDisplayResult (sess in frame); read-only
 	MethodI18nCatalog        Method = "i18n.catalog"          // params I18nCatalogParams, result I18nCatalogResult (session-independent)
 	MethodFilesList          Method = "files.list"            // params FilesListParams, result FilesListResult (session-independent)
 
@@ -415,7 +416,7 @@ func (m Method) Group() Group {
 		MethodSessionRename, MethodSessionGenerateTitle, MethodSessionDelete, MethodSessionDiscardDraft,
 		MethodSessionState, MethodSessionSetComposer,
 		MethodSessionArchive, MethodSessionsArchived, MethodSessionRestore, MethodUsageGet, MethodUsageSnapshot, MethodResetsList, MethodContextGet,
-		MethodContextNode, MethodSurfacesList, MethodSurfaceGet, MethodSurfaceAction, MethodI18nCatalog,
+		MethodContextNode, MethodSurfacesList, MethodSurfaceGet, MethodSurfaceAction, MethodToolsDisplay, MethodI18nCatalog,
 		MethodFilesList, MethodAuthProviders, MethodConversationReveal, MethodConversationHistory,
 		MethodSideChatOpen, MethodSideChatAsk, MethodSideChatClose, MethodSuggestReply, MethodSuggestNextStep, MethodSessionsDoctor,
 		MethodSessionsNextScene, MethodSessionsRealize, MethodSessionsExport,
@@ -968,6 +969,14 @@ type ContextNodeResult struct {
 // available for the session, for the client's surface switcher.
 type SurfacesResult struct {
 	Surfaces []SurfaceMeta `json:"surfaces"`
+}
+
+// ToolsDisplayResult is the payload of a [MethodToolsDisplay] response: the
+// rendering hints the session's extensions declared, keyed by tool name. Only
+// tools that declared one appear, so an empty map is the common answer and
+// means every card falls back to the client's own rendering.
+type ToolsDisplayResult struct {
+	Tools map[string]ToolDisplay `json:"tools"`
 }
 
 // SurfaceResult is the payload of a [MethodSurfaceGet] response.

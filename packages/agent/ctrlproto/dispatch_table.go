@@ -184,6 +184,10 @@ var dispatch = map[Method]handler{
 	MethodSurfaceAction: act(base, func(svc WorkspaceService, ctx context.Context, f Frame, p SurfaceActionParams) error {
 		return svc.SurfaceAction(ctx, f.Sess, p.ID, p.Action, p.Args)
 	}),
+	MethodToolsDisplay: get(base, func(svc WorkspaceService, ctx context.Context, f Frame) (ToolsDisplayResult, error) {
+		hints, err := svc.ToolDisplays(ctx, f.Sess)
+		return ToolsDisplayResult{Tools: hints}, err
+	}),
 
 	MethodI18nCatalog: ask(base, func(svc WorkspaceService, ctx context.Context, f Frame, p I18nCatalogParams) (I18nCatalogResult, error) {
 		cv, err := svc.Catalog(ctx, p.Lang)

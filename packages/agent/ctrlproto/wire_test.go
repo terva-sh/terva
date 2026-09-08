@@ -699,6 +699,9 @@ func (f *fakeSvc) Reveal(ctx context.Context, sess string, ordinal int) (RevealR
 func (f *fakeSvc) Surfaces(ctx context.Context, sess string) ([]SurfaceMeta, error) {
 	return []SurfaceMeta{{ID: "context", Title: "Context", Kind: "context"}}, nil
 }
+func (f *fakeSvc) ToolDisplays(ctx context.Context, sess string) (map[string]ToolDisplay, error) {
+	return map[string]ToolDisplay{"weather": {Subject: "{city}"}}, nil
+}
 func (f *fakeSvc) Surface(ctx context.Context, sess, id string) (Surface, error) {
 	return Surface{ID: id, Kind: "context", Context: &ContextBreakdown{}}, nil
 }

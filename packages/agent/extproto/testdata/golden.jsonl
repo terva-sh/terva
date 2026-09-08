@@ -7,6 +7,8 @@
 {"name":"register_tool read-only","dir":"ext_to_host","frame":"{\"type\":\"register_tool\",\"name\":\"peek\",\"schema\":{\"type\":\"object\"},\"read_only\":true}"}
 {"name":"register_tool authority","dir":"ext_to_host","frame":"{\"type\":\"register_tool\",\"name\":\"web_fetch\",\"schema\":{\"type\":\"object\"},\"authority\":\"network-read\"}"}
 {"name":"register_tool essential","dir":"ext_to_host","frame":"{\"type\":\"register_tool\",\"name\":\"search_index\",\"description\":\"search the index\",\"schema\":{\"type\":\"object\"},\"read_only\":true,\"authority\":\"local-read\",\"essential\":true}"}
+{"name":"register_tool display","dir":"ext_to_host","frame":"{\"type\":\"register_tool\",\"name\":\"weather\",\"schema\":{\"type\":\"object\"},\"display\":{\"subject\":\"{city}\",\"body\":\"table\",\"redact\":[\"api_key\"]}}"}
+{"name":"register_tool display subject only","dir":"ext_to_host","frame":"{\"type\":\"register_tool\",\"name\":\"lookup\",\"schema\":{\"type\":\"object\"},\"display\":{\"subject\":\"{query}\"}}"}
 {"name":"register_context","dir":"ext_to_host","frame":"{\"type\":\"register_context\",\"text\":\"keep one task active\"}"}
 {"name":"subscribe","dir":"ext_to_host","frame":"{\"type\":\"subscribe\",\"events\":[\"turn_end\"],\"intercept\":[\"tool_call\"]}"}
 {"name":"ready","dir":"ext_to_host","frame":"{\"type\":\"ready\"}"}

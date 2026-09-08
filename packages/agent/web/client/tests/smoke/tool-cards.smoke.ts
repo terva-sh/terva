@@ -213,3 +213,55 @@ test('a long diff clamps like plain text and traps no scroll', async ({ page }) 
   await page.locator('.tool-card__more').click()
   await expect(page.locator('.tc-diff')).toHaveCount(400)
 })
+
+// ---------------------------------------------------------------------------
+// stage 3: the extension-declared display hint
+
+// display.test.ts covers what the hint MEANS: the template, the closed body
+// set, the fallbacks. What it cannot cover is that the hint arrives at all,
+// which spans app.tsx's per-session fetch, four components of prop threading,
+// and the card's dispatch. That whole path is what these two exercise.
+
+const WEATHER_HINT = { subject: '{city}', redact: ['flavour'] }
+
+async function seedWithHint(page: Page, args: unknown, result: string) {
+  const backend = await installMockBackend(page, {
+    respond: (method) => (method === 'tools.display' ? { tools: { weather: WEATHER_HINT } } : undefined),
+  })
+  await page.setViewportSize(PANEL)
+  await page.goto(panelSessionURL)
+  await seed(page, backend, { name: 'weather', args }, result)
+}
+
+test("an extension's subject template reaches the card", async ({ page }) => {
+  await seedWithHint(page, { city: 'Berlin' }, 'Berlin: 18°C, cloudy')
+
+  // Without the hint this header reads "1 argument": `city` is not on stage 1's
+  // priority list of key names, so the generic subject has nothing to say about
+  // an extension's tool. That is the whole reason the field exists.
+  await expect(page.locator('.tool-card__subject')).toHaveText('Berlin')
+  await expect(page.locator('.tool-card__subject')).not.toContainText('argument')
+})
+
+// A masked value is an absence assertion, and an absence passes when the
+// fixture never rendered. So this asserts the mask IS there, a NON-redacted
+// argument IS readable, and only then that the secret is nowhere.
+test('a redacted argument is masked once the arguments are open', async ({ page }) => {
+  const secret = 'sk-live-do-not-render-me'
+  await seedWithHint(page, { city: 'Berlin', flavour: secret }, 'Berlin: 18°C, cloudy')
+
+  const args = page.locator('.tool-card__disclose')
+  await expect(args).toBeVisible()
+  await args.click()
+
+  const shown = page.locator('.tool-card__args')
+  await expect(shown).toBeVisible()
+  // The fixture guard: an argument the hint did NOT name renders in full, so a
+  // pass below means masking, not an empty panel.
+  await expect(shown).toContainText('Berlin')
+  await expect(shown).toContainText('flavour')
+  await expect(page.locator('.tool-card__mask')).toHaveCount(1)
+
+  // Nowhere in the document, not merely nowhere in the card.
+  await expect(page.locator('body')).not.toContainText(secret)
+})

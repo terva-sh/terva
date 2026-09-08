@@ -7,6 +7,7 @@ import type { RevealFn } from './CompactionDivider'
 import { ConversationItems } from './ConversationItems'
 import { LiveThinking } from './LiveThinking'
 import { QueuedMessage } from './QueuedMessage'
+import type { ToolHints } from './toolcard/display'
 import type { ToolView } from './types'
 
 export function ConversationTimeline({
@@ -24,6 +25,7 @@ export function ConversationTimeline({
   loadingEarlier,
   sess,
   canDownload,
+  toolHints,
 }: {
   items: Item[]
   busy: boolean
@@ -45,6 +47,8 @@ export function ConversationTimeline({
   // is scoped to, and whether this carrier serves one.
   sess?: string
   canDownload?: boolean
+  // Per-tool rendering hints (tools.display), forwarded to the cards.
+  toolHints?: ToolHints
 }) {
   // Land at the newest message and follow the stream, unless the reader has
   // scrolled up to read something (ui/pinnedtail).
@@ -91,6 +95,7 @@ export function ConversationTimeline({
           openThinkingId={openThinkingId}
           sess={sess}
           canDownload={canDownload}
+          toolHints={toolHints}
         />
         {busy && items[items.length - 1]?.kind !== 'assistant' && <div class="working">{t('working…')}</div>}
         {busy && <LiveThinking text={reasoning ?? ''} />}

@@ -560,6 +560,9 @@ func (f *fakeWS) Reveal(ctx context.Context, sess string, ordinal int) (ctrlprot
 func (f *fakeWS) Surfaces(ctx context.Context, sess string) ([]ctrlproto.SurfaceMeta, error) {
 	return nil, nil
 }
+func (f *fakeWS) ToolDisplays(ctx context.Context, sess string) (map[string]ctrlproto.ToolDisplay, error) {
+	return nil, nil
+}
 func (f *fakeWS) Surface(ctx context.Context, sess, id string) (ctrlproto.Surface, error) {
 	return ctrlproto.Surface{}, nil
 }

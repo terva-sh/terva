@@ -296,6 +296,12 @@ func (s *Service) Surfaces(ctx context.Context, sess string) ([]ctrlproto.Surfac
 	return r.Surfaces, err
 }
 
+func (s *Service) ToolDisplays(ctx context.Context, sess string) (map[string]ctrlproto.ToolDisplay, error) {
+	var r ctrlproto.ToolsDisplayResult
+	err := s.c.Call(ctx, sess, ctrlproto.MethodToolsDisplay, nil, &r)
+	return r.Tools, err
+}
+
 func (s *Service) Surface(ctx context.Context, sess, id string) (ctrlproto.Surface, error) {
 	var r ctrlproto.SurfaceResult
 	err := s.c.Call(ctx, sess, ctrlproto.MethodSurfaceGet, ctrlproto.SurfaceGetParams{ID: id}, &r)

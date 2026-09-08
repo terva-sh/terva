@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"terva.sh/terva/packages/agent/extproto"
@@ -67,6 +69,105 @@ func TestRegisterEssentialToolCap(t *testing.T) {
 	}
 	if essential != maxEssentialTools {
 		t.Errorf("essential tools capped at %d, got %d", maxEssentialTools, essential)
+	}
+}
+
+// A display hint is presentation, so a malformed one never costs the
+// registration: the tool still registers and the model can still call it. What
+// changes is how much of the hint survives.
+func TestRegisterToolDisplayNormalized(t *testing.T) {
+	long := strings.Repeat("x", maxDisplaySubject+1)
+	many := make([]string, maxDisplayRedact+5)
+	for i := range many {
+		many[i] = fmt.Sprintf("key%d", i)
+	}
+
+	cases := []struct {
+		name string
+		in   *extproto.ToolDisplay
+		want *extproto.ToolDisplay
+	}{
+		{"no hint at all", nil, nil},
+		{
+			"a good hint arrives intact",
+			&extproto.ToolDisplay{Subject: "{city}", Body: "table", Redact: []string{"api_key"}},
+			&extproto.ToolDisplay{Subject: "{city}", Body: "table", Redact: []string{"api_key"}},
+		},
+		{
+			// The client falls back to text on an unknown body anyway. Clearing
+			// it here means the wire carries only names the client knows.
+			"an unknown body is cleared and the subject kept",
+			&extproto.ToolDisplay{Subject: "{q}", Body: "hologram"},
+			&extproto.ToolDisplay{Subject: "{q}"},
+		},
+		{
+			"an oversized subject is dropped, not truncated",
+			&extproto.ToolDisplay{Subject: long, Body: "json"},
+			&extproto.ToolDisplay{Body: "json"},
+		},
+		{
+			"empty redact keys name no argument and go",
+			&extproto.ToolDisplay{Subject: "{q}", Redact: []string{"", "token", ""}},
+			&extproto.ToolDisplay{Subject: "{q}", Redact: []string{"token"}},
+		},
+		{
+			// Nothing usable left, so the tool carries no hint rather than an
+			// empty one a client would have to special-case.
+			"a hint that loses everything becomes no hint",
+			&extproto.ToolDisplay{Subject: long, Body: "hologram", Redact: []string{""}},
+			nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &Driver{toolIndex: map[string]*Extension{}, commandIndex: map[string]*Extension{}}
+			ext := capTestExt(t)
+			d.registerTool(ext, extproto.RegisterToolFromExt{Name: "weather", Display: tc.in})
+			if len(ext.tools) != 1 {
+				t.Fatalf("the tool must register whatever the hint says; got %d tools", len(ext.tools))
+			}
+			got := ext.tools[0].Display
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("display = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+
+	t.Run("the redact cap keeps the first keys", func(t *testing.T) {
+		d := &Driver{toolIndex: map[string]*Extension{}, commandIndex: map[string]*Extension{}}
+		ext := capTestExt(t)
+		d.registerTool(ext, extproto.RegisterToolFromExt{
+			Name:    "weather",
+			Display: &extproto.ToolDisplay{Redact: many},
+		})
+		got := ext.tools[0].Display
+		if got == nil || len(got.Redact) != maxDisplayRedact {
+			t.Fatalf("redact capped at %d, got %+v", maxDisplayRedact, got)
+		}
+		if got.Redact[0] != "key0" {
+			t.Errorf("the cap should keep the first keys, got %q first", got.Redact[0])
+		}
+	})
+}
+
+// Every drop is written to the extension's own log. Without this an author
+// sees a card that looks generic and has nothing to read that says why.
+func TestRegisterToolDisplayLogsWhatItDropped(t *testing.T) {
+	d := &Driver{toolIndex: map[string]*Extension{}, commandIndex: map[string]*Extension{}}
+	ext := capTestExt(t)
+	d.registerTool(ext, extproto.RegisterToolFromExt{
+		Name:    "weather",
+		Display: &extproto.ToolDisplay{Subject: strings.Repeat("x", maxDisplaySubject+1), Body: "hologram"},
+	})
+	log, err := os.ReadFile(ext.logFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"weather", "display.body", "hologram", "display.subject"} {
+		if !strings.Contains(string(log), want) {
+			t.Errorf("the extension log does not mention %q; it says:\n%s", want, log)
+		}
 	}
 }
 

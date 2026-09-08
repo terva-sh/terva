@@ -392,6 +392,15 @@ func (c *Carrier) Surfaces(ctx context.Context, sess string) ([]ctrlproto.Surfac
 	return nil, nil
 }
 
+// ToolDisplays reports no display hints for a replay. A hint is declared by a
+// running extension, and a replay runs none: the recording holds what the
+// tools did, not how the extensions that owned them asked to be drawn. Cards
+// for extension tools therefore render generically here, which is the same
+// thing a client sees when an extension declares nothing.
+func (c *Carrier) ToolDisplays(ctx context.Context, sess string) (map[string]ctrlproto.ToolDisplay, error) {
+	return nil, nil
+}
+
 // --- ctrlproto.WorkspaceService: rejected (read-only session) ---
 
 // Cancel/Approve/Answer are benign no-ops: a replay has no live turn to

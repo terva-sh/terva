@@ -420,6 +420,38 @@ func (w *Workspace) Surfaces(ctx context.Context, sess string) ([]ctrlproto.Surf
 	return s.surfaceList(), nil
 }
 
+// ToolDisplays returns the rendering hints this session's extensions declared
+// at registration, keyed by tool name.
+//
+// Withdrawn tools are included on purpose. The map exists to draw a
+// transcript, and a tool the extension hid after the fact still has calls in
+// the scrollback that need drawing. Filtering here would make old cards change
+// shape the moment an extension withdrew a tool.
+func (w *Workspace) ToolDisplays(ctx context.Context, sess string) (map[string]ctrlproto.ToolDisplay, error) {
+	s, err := w.resolve(sess)
+	if err != nil {
+		return nil, err
+	}
+	if s.extMgr == nil {
+		return nil, nil
+	}
+	var out map[string]ctrlproto.ToolDisplay
+	for _, t := range s.extMgr.Tools() {
+		if t.Display == nil {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]ctrlproto.ToolDisplay)
+		}
+		out[t.Name] = ctrlproto.ToolDisplay{
+			Subject: t.Display.Subject,
+			Body:    t.Display.Body,
+			Redact:  t.Display.Redact,
+		}
+	}
+	return out, nil
+}
+
 func (w *Workspace) Surface(ctx context.Context, sess, id string) (ctrlproto.Surface, error) {
 	s, err := w.resolve(sess)
 	if err != nil {

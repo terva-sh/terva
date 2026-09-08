@@ -310,6 +310,11 @@ func (r *recorder) Surfaces(_ context.Context, sess string) ([]SurfaceMeta, erro
 	return nil, nil
 }
 
+func (r *recorder) ToolDisplays(_ context.Context, sess string) (map[string]ToolDisplay, error) {
+	r.note("ToolDisplays", sess, nil)
+	return nil, nil
+}
+
 func (r *recorder) Surface(_ context.Context, sess, id string) (Surface, error) {
 	r.note("Surface", sess, id)
 	return Surface{}, nil
@@ -483,6 +488,7 @@ func mandatoryDispatchCases() []dispatchCase {
 			historyArgs{Before: 40, Limit: 20, Epoch: 6},
 		},
 		{MethodSurfacesList, nil, "Surfaces", nil},
+		{MethodToolsDisplay, nil, "ToolDisplays", nil},
 		{MethodSurfaceGet, SurfaceGetParams{ID: "surface-1"}, "Surface", "surface-1"},
 		{
 			MethodSurfaceAction,

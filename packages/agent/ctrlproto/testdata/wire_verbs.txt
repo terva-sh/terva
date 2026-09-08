@@ -110,6 +110,7 @@ suggest.reply	params=SuggestParams	result=SuggestResult
 surface.action	params=SurfaceActionParams	result=-
 surface.get	params=SurfaceGetParams	result=SurfaceResult
 surfaces.list	params=-	result=SurfacesResult
+tools.display	params=-	result=ToolsDisplayResult
 turn.advance	params=-	result=-
 turn.continue	params=TurnContinueParams	result=-
 turn.resume	params=TurnResumeParams	result=-

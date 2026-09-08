@@ -1092,6 +1092,57 @@ before) and a host with lazy mode off advertises everything anyway, so it is a
 no-op there. `essential` is visibility only — the tool is still permission-gated
 exactly as before when actually called. From the Go SDK: `ext.Essential()`.
 
+The optional `"display"` object tells a rich client how to draw the **card** for
+your tool's calls. Unlike the three fields above it changes nothing about
+permissions, visibility, or what the model sees: it is presentation, and only
+presentation.
+
+```json
+{"type":"register_tool","name":"weather",
+ "schema":{"type":"object"},
+ "display":{
+   "subject":"{city}",
+   "body":"table",
+   "redact":["api_key"]
+ }}
+```
+
+`subject` is a template over your tool's **top-level argument keys**, written as
+`{key}`. A client that does not have one guesses a subject from a priority list
+of key names (`command`, `path`, `query`, `title`, …) and falls back to counting
+("1 argument") when none of them matches — which is what an extension tool with
+domain-specific arguments usually gets. The template says which argument names
+the call, and in what order. A key your arguments do not carry fills as empty,
+and the result is substituted as **text**, never as markup.
+
+`body` names one of the renderers the client already has: `text`, `json`, `diff`,
+or `table`. It is a name, not a format string. A name the host does not know is
+dropped at registration (and logged to your extension's log); a name the host
+knows but the client does not falls back to `text`. `table` means
+**tab-separated** output, and a result with no tab in it renders as plain lines
+rather than as one lopsided column.
+
+`redact` names argument keys whose values the card masks even when the reader
+expands the arguments. It **adds to** the client's own key-name denylist
+(`token`, `secret`, `password`, `api_key`, `authorization`, …) and cannot shrink
+it, so it is how you protect a credential your tool called something that list
+would never guess. It cannot unprotect one.
+
+**The hint is data, and that is the point.** A client that evaluated rendering
+code an extension supplied would be running third-party code in the user's
+browser against their transcript. A template plus a closed set of renderer names
+gives you the useful part with none of that, which is also why the set is closed
+and why an unknown value degrades instead of failing.
+
+The host bounds what it will carry: a subject over 200 bytes is dropped whole
+(truncating one mid-`{key}` would render a stray brace), and at most 16 redact
+keys are kept. Every drop is written to your extension's log, so a hint that
+came back looking generic tells you why. A malformed hint never costs you the
+registration — the tool still registers and the model can still call it.
+Additive/optional: an old host ignores the field, an old client never asks for
+it, and both keep working. From the Go SDK:
+`ext.WithDisplay(ext.ToolDisplay{Subject: "{city}"})`.
+
 #### `set_withdrawn_tools` (protocol 4)
 
 Hides (and later restores) tools **this extension registered** from the
@@ -1240,8 +1291,8 @@ session directory is refused. Declare `RequireProtocol(3)`; an
 unsupported host returns an empty list / `not_found`.
 
 From the Go SDK, pass `ext.ReadOnly()` as a trailing option to declare
-it — `ext.WithAuthority(...)` and `ext.Essential()` are trailing options too,
-so a load-bearing read-only tool combines them:
+it — `ext.WithAuthority(...)`, `ext.Essential()` and `ext.WithDisplay(...)` are
+trailing options too, so a load-bearing read-only tool combines them:
 
 ```go
 e.Tool("branch_list", "List branches.", schema, handler, ext.ReadOnly())
@@ -1251,6 +1302,11 @@ e.Tool("branch_list", "List branches.", schema, handler, ext.ReadOnly())
 // deferred tool. See "Keep your model-facing footprint small" below.
 e.Tool("index_search", "Search the workspace index.", schema, handler,
     ext.WithAuthority(ext.AuthorityLocalRead), ext.Essential())
+
+// How the card for this tool's calls is drawn. Presentation only: it changes
+// nothing about permissions, visibility, or what the model sees.
+e.Tool("weather", "Current weather for a city.", schema, handler,
+    ext.WithDisplay(ext.ToolDisplay{Subject: "{city}", Body: ext.BodyTable}))
 ```
 
 Tool names live in the same namespace as built-in tools (`read`,

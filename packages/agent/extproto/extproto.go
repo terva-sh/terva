@@ -237,6 +237,65 @@ type RegisterToolFromExt struct {
 	// lazy-loads as before) and a host with lazy mode off advertises
 	// everything regardless, so it is a no-op there — hence no protocol bump.
 	Essential bool `json:"essential,omitempty"`
+	// Display is an optional hint for how a rich client should draw the card
+	// for this tool's calls. See [ToolDisplay]. Additive/optional: an older
+	// host ignores it and an older extension never sends it, so no protocol
+	// bump, the same contract Authority and Essential arrived under.
+	Display *ToolDisplay `json:"display,omitempty"`
+}
+
+// ToolDisplay is an extension's declaration of how its tool's calls should
+// look in a transcript. It is data and only data. A client that evaluated an
+// extension's rendering code would be running third-party code in the user's
+// browser against the transcript, so the wire carries a template and a name
+// from a closed set, and nothing that can execute.
+//
+// Every field is optional and every one degrades to the client's generic
+// rendering. A client that knows none of this ignores the whole struct.
+type ToolDisplay struct {
+	// Subject is a template over the call's TOP-LEVEL argument keys, written
+	// as {key}. "{city}" on a weather tool draws "weather Berlin" instead of
+	// the client's guess at which argument matters. Substituted as text and
+	// never as markup, with the client capping the result's length. A key the
+	// arguments do not carry renders as empty, so a template is never a
+	// reason for a card to fail.
+	Subject string `json:"subject,omitempty"`
+	// Body names one of the renderers the client already has, from
+	// [ToolDisplayBodies]. It is a name, not a format string: the extension
+	// chooses among what the client can draw and cannot describe something
+	// new. An unknown value falls back to text.
+	Body string `json:"body,omitempty"`
+	// Redact names top-level argument keys whose values the card masks even
+	// when the reader expands the arguments. It adds to the client's built-in
+	// key denylist rather than replacing it, so an extension can protect a
+	// field named something the denylist would never guess. It cannot
+	// unprotect one.
+	Redact []string `json:"redact,omitempty"`
+}
+
+// ToolDisplayBodies is the closed set of values [ToolDisplay.Body] accepts.
+// The set is closed on purpose: it is the line between an extension choosing a
+// renderer and an extension supplying one.
+//
+// It holds only renderers a client actually has, so that a declared body is a
+// promise and not an advertisement. Adding a name later is additive; a name
+// here that no client draws would be a silent no-op for whoever declared it.
+func ToolDisplayBodies() []string {
+	return []string{"text", "json", "diff", "table"}
+}
+
+// ValidToolDisplayBody reports whether s names a renderer in
+// [ToolDisplayBodies]. Empty is valid and means the client decides.
+func ValidToolDisplayBody(s string) bool {
+	if s == "" {
+		return true
+	}
+	for _, b := range ToolDisplayBodies() {
+		if s == b {
+			return true
+		}
+	}
+	return false
 }
 
 type ReadyFromExt struct {

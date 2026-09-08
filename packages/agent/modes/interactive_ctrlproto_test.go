@@ -374,6 +374,10 @@ func (f *fakeCarrier) Surfaces(ctx context.Context, sess string) ([]ctrlproto.Su
 	return append([]ctrlproto.SurfaceMeta(nil), f.metas...), nil
 }
 
+func (f *fakeCarrier) ToolDisplays(ctx context.Context, sess string) (map[string]ctrlproto.ToolDisplay, error) {
+	return nil, nil
+}
+
 func (f *fakeCarrier) SurfaceAction(ctx context.Context, sess, id, action string, args map[string]string) error {
 	f.surfActs <- surfAct{id: id, action: action, args: args}
 	return f.surfActErr

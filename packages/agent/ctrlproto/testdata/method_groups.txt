@@ -111,6 +111,7 @@ suggest.reply	session
 surface.action	session
 surface.get	session
 surfaces.list	session
+tools.display	session
 turn.advance	conversation
 turn.continue	conversation
 turn.resume	conversation

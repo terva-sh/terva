@@ -492,6 +492,7 @@ type toolDef struct {
 	authority   string
 	ordered     bool
 	essential   bool
+	display     *ToolDisplay
 }
 
 // ToolOption configures a tool at registration time. Pass options as the
@@ -617,6 +618,57 @@ func WithAuthority(class string) ToolOption { return func(t *toolDef) { t.author
 // off (everything is advertised then anyway). Essential is visibility only —
 // the tool is still permission-gated exactly as before when actually called.
 func Essential() ToolOption { return func(t *toolDef) { t.essential = true } }
+
+// Body renderers a tool can name in ToolDisplay.Body. Like the Authority*
+// constants above these are plain strings, so the set can grow on the host
+// without this SDK moving. A name the host does not know falls back to text.
+const (
+	BodyText  = "text"
+	BodyJSON  = "json"
+	BodyDiff  = "diff"
+	BodyTable = "table"
+)
+
+// ToolDisplay is how your tool's calls should look in a rich client's
+// transcript. Every field is optional, and every one degrades to the client's
+// own generic rendering rather than failing.
+//
+// Named ToolDisplay rather than Display because Display is already a Response
+// constructor in this package, and a slash command's one-shot note and a tool
+// card's rendering are unrelated things.
+//
+// Subject is a template over your tool's TOP-LEVEL argument keys, written as
+// {key}: "{city}" draws "weather Berlin" where the client would otherwise
+// guess, or say "1 argument". Body names one of the Body* renderers. Redact
+// names argument keys whose values the card masks even when the reader expands
+// the arguments, which is how you protect a credential the client's own
+// key-name denylist would never guess.
+//
+// This is DATA, and it is data on purpose. A client that ran rendering code an
+// extension supplied would be running your code in someone's browser against
+// their transcript. A template and a renderer name give you the useful part
+// with none of that.
+type ToolDisplay struct {
+	Subject string
+	Body    string
+	Redact  []string
+}
+
+// WithDisplay declares how a rich client should draw this tool's calls. It is
+// presentation only: it never changes what the model sees, what the tool
+// receives, or how the tool is gated. A host that does not understand it draws
+// the tool the way it always did.
+func WithDisplay(d ToolDisplay) ToolOption { return func(t *toolDef) { t.display = &d } }
+
+// wireDisplay converts the SDK's ToolDisplay to the wire struct. Kept separate
+// so the type an extension author writes stays in this file, next to the doc
+// comment that explains it, rather than being extproto's type wearing an alias.
+func wireDisplay(d *ToolDisplay) *extproto.ToolDisplay {
+	if d == nil {
+		return nil
+	}
+	return &extproto.ToolDisplay{Subject: d.Subject, Body: d.Body, Redact: d.Redact}
+}
 
 // HostInfo is what the host (terva) tells us in HelloAck. Useful for
 // extensions that want to behave differently per provider.
@@ -1703,6 +1755,7 @@ func (e *Extension) Run() error {
 			ReadOnly:    td.readOnly,
 			Authority:   td.authority,
 			Essential:   td.essential,
+			Display:     wireDisplay(td.display),
 		})
 	}
 	if contextContribution != "" {

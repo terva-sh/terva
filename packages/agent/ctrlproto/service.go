@@ -276,6 +276,12 @@ type WorkspaceService interface {
 	// to an extension panel, or closing it. Args carries action-specific fields.
 	SurfaceAction(ctx context.Context, sess, id, action string, args map[string]string) error
 
+	// ToolDisplays returns the rendering hints the session's extensions declared
+	// at registration (register_tool display), keyed by tool name. Only tools that
+	// declared one appear. Read-only and presentation-only: nothing in the agent
+	// loop reads these, and a client that ignores them renders as it did before.
+	ToolDisplays(ctx context.Context, sess string) (map[string]ToolDisplay, error)
+
 	// Catalog returns the effective web string catalog for lang (empty = the
 	// daemon's active language), read fresh so an operator's overlay edit shows
 	// on reconnect. Session-independent — the panel fetches it right after the
@@ -735,6 +741,23 @@ type ResetConsumeParams struct {
 type ResetConsumeResult struct {
 	Reset        ResetInfo `json:"reset"`
 	WindowsReset int       `json:"windows_reset,omitempty"`
+}
+
+// ToolDisplay is one extension's declaration of how its tool's calls should be
+// drawn, carried from the extension wire (extproto.ToolDisplay) to a client
+// unchanged. Mirrored rather than imported: extproto is the extension-facing
+// wire and this is the client-facing one, and they are free to diverge.
+//
+// Data, never code. Subject is a template over the call's top-level argument
+// keys written as {key}, substituted as text. Body names one of the renderers
+// the client already has, and an unknown name falls back to text rather than
+// failing. Redact names argument keys the card masks, adding to the client's
+// own denylist rather than replacing it. The host has already dropped whatever
+// did not survive validation, so every field here is servable as it stands.
+type ToolDisplay struct {
+	Subject string   `json:"subject,omitempty"`
+	Body    string   `json:"body,omitempty"`
+	Redact  []string `json:"redact,omitempty"`
 }
 
 // SurfaceMeta describes one available pane for the client's surface switcher.

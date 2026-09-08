@@ -62,6 +62,11 @@ type ToolInfo struct {
 	// Already capped per extension at registration (registerTool), so this
 	// reflects the honored value, not the raw request.
 	Essential bool
+	// Display carries the extension's rendering hint (register_tool display),
+	// already normalized at registration, or nil when it sent none or none of
+	// it survived. Presentation only: nothing in the agent loop reads it, and
+	// it reaches a client through tools.display.
+	Display *extproto.ToolDisplay
 	// Withdrawn is set when the owning extension hid this tool for the
 	// session (set_withdrawn_tools, protocol 4). The model-facing merge
 	// feed skips withdrawn tools so they leave the registry and the system
@@ -92,6 +97,7 @@ func (d *Driver) Tools() []ToolInfo {
 				ReadOnly:    t.ReadOnly,
 				Authority:   t.Authority,
 				Essential:   t.Essential,
+				Display:     t.Display,
 				Withdrawn:   ext.withdrawnTools[t.Name], // nil-map read is false
 			})
 		}

@@ -1203,6 +1203,12 @@ TaskList
 	tasks	[]TaskInfo
 	backends	[]string	omitempty
 	workers_enabled	bool	omitempty
+ToolDisplay
+	subject	string	omitempty
+	body	string	omitempty
+	redact	[]string	omitempty
+ToolsDisplayResult
+	tools	map[string]ToolDisplay
 TrustParams
 	parent	bool	omitempty
 TurnContinueParams

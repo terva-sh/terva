@@ -75,7 +75,9 @@ function arr(args: unknown, key: string): unknown[] | undefined {
   return Array.isArray(v) ? v : undefined
 }
 
-function lines(text: string): string[] {
+// Exported for display.ts, which builds the same kind of body from an
+// extension's hint and must split lines the same way the built-ins do.
+export function lines(text: string): string[] {
   return text === '' ? [] : text.split('\n')
 }
 
@@ -105,7 +107,7 @@ function diffStat(text: string): { added: number; removed: number } | null {
 
 // diffBody colours a unified diff per line. The whole card is monospace
 // already, so this adds colour and nothing else.
-function diffBody(text: string): ComponentChildren[] {
+export function diffBody(text: string): ComponentChildren[] {
   return lines(text).map((line, i) => {
     let cls = 'tc-diff'
     if (line.startsWith('@@')) cls = 'tc-diff tc-diff--hunk'
@@ -357,6 +359,14 @@ export const RENDERERS: Record<string, ToolRenderer> = {
   swarm_spawn: swarmSpawnRenderer,
   memory: memoryRenderer,
   ask_user_question: askRenderer,
+}
+
+// hasRenderer reports whether a built-in renderer owns this tool name. The
+// card asks before applying an extension's display hint, because a built-in's
+// rendering wins: an extension that registered a tool named `bash` must not be
+// able to change how bash's cards are drawn.
+export function hasRenderer(name: string): boolean {
+  return name in RENDERERS
 }
 
 // presentTool is the single entry point the card calls. An unknown tool, or a
