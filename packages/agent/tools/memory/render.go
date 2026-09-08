@@ -7,10 +7,14 @@ import (
 	"terva.sh/terva/packages/i18n"
 )
 
-// blockMaxBytes bounds the injected block. The per-scope file caps already keep
-// the two sections small (project ~6 KiB, user ~1.5 KiB, minus headers), so this
-// is a belt-and-suspenders clamp against the combined policy + sections.
-const blockMaxBytes = 24000
+// blockMaxBytes bounds the injected block. The per-scope file caps already bound
+// the two sections (project 32 KiB, user 8 KiB, each minus its file header), so
+// this is a belt-and-suspenders clamp against the combined policy + sections.
+//
+// It is not an independent choice. It has to clear MaxProjectBytes +
+// MaxUserBytes + the policy text, or a memory that both scopes accepted renders
+// truncated, and TestBlockClampFitsBothScopes fails. It moves whenever they do.
+const blockMaxBytes = 48000
 
 // Policy is the standing curation heuristic the model reads at the head of the
 // injected block. It is model-facing prompt text, so it goes through the prompts

@@ -1,8 +1,11 @@
 package tools
 
 import (
+	"strconv"
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/agent/tools/memory"
 )
 
 // The recorded churn: the model archived a correction under the name it had
@@ -52,11 +55,23 @@ func TestMemoryArchiveSaysNothingWhenTheNameIsFree(t *testing.T) {
 // The finding's first half: the cap was real, refusing, and undocumented, so a
 // ~750-token composition was discarded whole and the model could not have
 // budgeted for it.
+//
+// The numbers come from the constants, not from literals. Written as literals
+// this test asserted 1024 and 8192 and passed for as long as the description
+// said so, which is exactly as long as the description was right. The first cap
+// raise then failed it, and the failure named the test rather than the drift it
+// exists to catch. Sourced from memory, a description that falls behind the cap
+// it describes is the only way this can fail.
 func TestMemoryDescriptionStatesTheEntryLimits(t *testing.T) {
 	desc := (&MemoryTool{}).Description()
-	for _, want := range []string{"1024", "8192", "refuses"} {
-		if !strings.Contains(desc, want) {
-			t.Errorf("the description does not state the limit (%q missing):\n%s", want, desc)
+	want := []string{
+		strconv.Itoa(memory.MaxEntryLen),
+		strconv.Itoa(memory.MaxArchiveEntryBytes),
+		"refuses",
+	}
+	for _, w := range want {
+		if !strings.Contains(desc, w) {
+			t.Errorf("the description does not state the limit (%q missing):\n%s", w, desc)
 		}
 	}
 }

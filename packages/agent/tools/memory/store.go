@@ -42,31 +42,48 @@ import (
 // budget with headroom once both scopes plus the policy header are combined
 // (see render.go), and keep any single entry terse.
 const (
-	// MaxEntryLen bounds one entry, in runes. Raised from 500, which was
-	// measured amputating real memories: 3 of 13 entries in a live corpus sat
-	// hard against it and ended mid-word, each losing the procedure it existed
-	// to record ("To add a new Anthropic model, add a specu…"). 500 is enough
-	// for a fact and not enough for a fact plus how to act on it.
+	// MaxEntryLen bounds one entry, in runes. Doubled from 1024, which was
+	// itself a raise from 500 after 3 of 13 entries in a live corpus ended
+	// mid-word, each losing the procedure it existed to record ("To add a new
+	// Anthropic model, add a specu…").
 	//
-	// Over-length is REFUSED, never truncated — see Add. core.CleanOneLine
-	// still truncates, and correctly so for its other callers: a task label is
+	// 1024 does not bind the way the byte cap does. It refused a write in 2 of
+	// 173 local sessions, and no stored entry came within 200 characters of it.
+	// It moves anyway, because a refusal is only the visible half: the curator
+	// shortens a fact to fit before it ever submits, and that shaping leaves
+	// nothing behind to measure.
+	//
+	// Over-length is REFUSED, never truncated. See Add. core.CleanOneLine still
+	// truncates, and correctly so for its other callers: a task label is
 	// display text where shortening is lossless in the way that matters. A
 	// memory entry IS the content.
-	MaxEntryLen = 1024
+	MaxEntryLen = 2048
 	// MaxEntries caps the count so a runaway curator can't grow unbounded.
-	// Deliberately decorative: at MaxEntryLen the byte caps bind at ~16
-	// entries, and at typical ~400-byte entries at ~40, so no refusal a user
-	// sees will cite this. It is a backstop, not a working limit.
+	// Deliberately decorative: at MaxEntryLen the byte caps bind at 16 entries,
+	// and at the ~430-byte entries a real corpus carries at ~76, so no refusal
+	// a user sees will cite this. It is a backstop, not a working limit, and
+	// TestBytesBindBeforeTheEntryCount holds that true.
 	MaxEntries = 100
-	// MaxProjectBytes caps the serialized PROJECT file. Raised from 6144,
-	// which refused four writes in a single reviewed session. Calibrated
-	// against what comparable harnesses actually carry — Claude Code's own
-	// project index for this repo is ~19 KB — so the old cap was about a third
-	// of observed practice.
-	MaxProjectBytes = 16384
+	// MaxProjectBytes caps the serialized PROJECT file. Doubled from 16384,
+	// which was itself a raise from 6144. This is the cap that binds. It
+	// refused a write in 8 of 173 local sessions, more than any other memory
+	// cap, and the store that produced those refusals sat at 16265 of 16384
+	// bytes across 37 entries.
+	//
+	// The price is the cached system prefix, where this tier lives. A full
+	// project scope beside a full user scope is roughly 10k tokens of prefix,
+	// up from about 5k. It is cached, so the recurring cost is a cached read,
+	// but the window spend is permanent.
+	//
+	// A third doubling is the wrong answer when this binds again. The idea
+	// layer in docs/proposals/memory-archive-retrieval.md is the one that
+	// scales, because it matches a small persisted index instead of every body.
+	MaxProjectBytes = 32768
 	// MaxUserBytes caps the serialized USER file. Still the smaller scope:
-	// user-level facts are few and short (role, preferences, environment).
-	MaxUserBytes = 4096
+	// user-level facts are few and short (role, preferences, environment). It
+	// moves with the project cap to hold the ratio, and not because it binds.
+	// One session in 173 hit it.
+	MaxUserBytes = 8192
 
 	projectFileName = "memory.md"
 	userFileName    = "user.md"
@@ -131,8 +148,8 @@ func (s *Store) Label() string { return s.label }
 
 // Budget reports the scope's caps and the SERIALIZED size they are measured
 // against — not the sum of entry lengths, which understates it by the header and
-// the bullets. It is the same number Add refuses on, so a pane showing "15.9 of
-// 16 KiB" and a refusal saying "would exceed its 16384-byte budget" cannot
+// the bullets. It is the same number Add refuses on, so a pane showing "31.9 of
+// 32 KiB" and a refusal saying "would exceed its 32768-byte budget" cannot
 // disagree about how close the scope is to full.
 func (s *Store) Budget() (bytes, maxBytes, maxCount int) {
 	s.mu.Lock()

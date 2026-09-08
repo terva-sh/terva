@@ -34,14 +34,18 @@ import (
 // transcript. Four orders of magnitude. What is rationed is being always-on.
 const (
 	// MaxArchiveEntryBytes bounds one archived entry's body. Generous next to
-	// MaxEntryLen (1024 runes, one line) because archived entries may be
-	// multi-line and carry the procedure, not just the topic sentence — that was
+	// MaxEntryLen (2048 runes, one line) because archived entries may be
+	// multi-line and carry the procedure, not just the topic sentence. That was
 	// the whole finding behind the D6 cap raise.
+	//
+	// Doubled from 8192, which refused a write in 1 of 173 local sessions. The
+	// cheapest of the four raises: this tier costs bytes only on the turns it
+	// fires, so the entry cap buys headroom against no prefix cost at all.
 	//
 	// Not unlimited, though: a memory that grows to a page is a document, and
 	// docs/ already exists for those. The number is a shape constraint, not a
 	// budget.
-	MaxArchiveEntryBytes = 8192
+	MaxArchiveEntryBytes = 16384
 
 	// MaxArchiveBytes bounds a scope's whole archive on disk.
 	//
