@@ -150,11 +150,12 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	// Captured once, for the same reason as memTool: a rebuild's fresh tracker
 	// would forget every file the model has read.
 	fileState := r.Files()
+	askerBinding := &rpcAskerBinding{resolved: &r, agent: ag}
 	mergeExtTools := func() {
 		rebuildArgs := args
 		rebuildArgs.TrustPin = &r.Trusted
 		rebuildArgs.Model = ag.Model
-		build.LiveToolSet{
+		askerBinding.rebuild(build.LiveToolSet{
 			Args:    rebuildArgs,
 			Gate:    confirmGate,
 			Tasks:   r.Tasks,
@@ -163,7 +164,7 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 			Sandbox: r.Sandbox,
 			Ext:     extMgr,
 			MCP:     mcpAdapter,
-		}.Rebuild(ag)
+		})
 	}
 	extMgr.SetOnReload(mergeExtTools)
 	// The tool-refresh seam: ticket_init provisions a .tickets store, which
@@ -230,7 +231,9 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 		out:      os.Stdout,
 		version:  version,
 		extReady: extReady,
+		closed:   make(chan struct{}),
 	}
+	server.bindAsker = askerBinding.bind
 	extHooks.server = server
 	// Fill the confirm gate's nil-inner hole with the rpc carrier when the driver
 	// opted in: a tool that needs confirmation now asks over the wire instead of
@@ -320,6 +323,60 @@ func (h *rpcExtHooks) RefreshStatus()                                           
 func (h *rpcExtHooks) RefreshContext()                                                         {} // prompt is fixed for the run
 func (h *rpcExtHooks) RefreshTools()                                                           {} // tool set is fixed for the run
 
+// rpcAskerBinding serializes negotiation with registry publication. A rebuild
+// can finish between hello and the bind, so it retains the negotiated asker
+// and binds both the launch resolve and the agent's current registry while one
+// lock is held.
+type rpcAskerBinding struct {
+	mu       sync.Mutex
+	resolved *build.Resolved
+	agent    *core.Agent
+	asker    core.Asker
+
+	// These hooks are nil in production. Tests use them to hold the critical
+	// startup window open without relying on scheduler timing.
+	beforeBindLock func()
+	beforePublish  func()
+}
+
+func (b *rpcAskerBinding) bind(a core.Asker) {
+	if b.beforeBindLock != nil {
+		b.beforeBindLock()
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.asker = a
+	b.resolved.SetAsker(a)
+	b.agent.Asker = a
+	bindAgentAsker(b.agent, a)
+}
+
+func (b *rpcAskerBinding) rebuild(set build.LiveToolSet) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	set.Asker = b.asker
+	if b.beforePublish != nil {
+		b.beforePublish()
+	}
+	return set.Rebuild(b.agent)
+}
+
+func bindAgentAsker(ag *core.Agent, a core.Asker) {
+	if ag == nil {
+		return
+	}
+	if t, ok := ag.LookupTool("ask_user_question"); ok {
+		if ask, ok := t.(*tools.AskUserTool); ok {
+			ask.Asker = a
+		}
+	}
+	if t, ok := ag.LookupTool("ticket_init"); ok {
+		if ticket, ok := t.(*tools.TicketInitTool); ok {
+			ticket.Asker = a
+		}
+	}
+}
+
 type rpcServer struct {
 	ctx      context.Context
 	args     build.Args
@@ -339,6 +396,25 @@ type rpcServer struct {
 	turnMu       sync.Mutex // serialises one prompt at a time
 	activeCancel context.CancelFunc
 	authed       bool
+
+	// closed is the RPC connection lifetime. EOF closes it before run waits for
+	// in-flight turns, so a question or approval cannot keep shutdown parked.
+	lifecycleMu sync.Mutex
+	closed      chan struct{}
+
+	// bindAsker is installed by runRPCMode once the resolved registry and agent
+	// exist. A client opts into this channel during hello; old clients never bind
+	// it and retain the headless no-channel result.
+	capMu                sync.Mutex
+	questionCapability   bool
+	capabilityNegotiated bool
+	turnStarted          bool
+	bindAsker            func(core.Asker)
+
+	questionMu       sync.Mutex
+	questionSeq      int
+	questions        core.ParkTable[[]core.UserAnswer]
+	pendingQuestions map[string]*rpcPendingQuestion
 
 	// inFlight tracks long-running command goroutines so run() can
 	// wait for them before returning when stdin closes. Without this,
@@ -377,6 +453,10 @@ const rpcMaxFrameBytes = 16 << 20 // 16 MiB
 // compact) has finished, so a quick `echo cmd | terva rpc` invocation
 // still produces full output before the process exits.
 func (s *rpcServer) run(in io.Reader) error {
+	defer func() {
+		s.close()
+		s.inFlight.Wait()
+	}()
 	requireToken := rpcAuthToken() != ""
 	s.authed = !requireToken
 
@@ -414,25 +494,24 @@ func (s *rpcServer) run(in io.Reader) error {
 				continue
 			}
 			var hello struct {
-				Token string `json:"token"`
+				Token        string          `json:"token"`
+				Capabilities map[string]bool `json:"capabilities"`
 			}
-			_ = json.Unmarshal([]byte(line), &hello)
+			if err := json.Unmarshal([]byte(line), &hello); err != nil {
+				s.writeError(head.ID, head.Type, err.Error())
+				continue
+			}
 			if hello.Token != rpcAuthToken() {
 				s.writeError(head.ID, head.Type, "invalid token")
 				return fmt.Errorf("rpc: bad auth token")
 			}
+			s.negotiateCapabilities(hello.Capabilities)
 			s.authed = true
-			s.writeResponse(head.ID, head.Type, map[string]any{
-				"protocol_version": 1,
-				"version":          s.version,
-				"provider":         s.provider,
-				"model":            s.model,
-			})
+			s.writeResponse(head.ID, head.Type, s.helloData())
 			continue
 		}
 		s.dispatch(head.Type, head.ID, []byte(line))
 	}
-	s.inFlight.Wait()
 	return readErr
 }
 
@@ -441,12 +520,15 @@ func (s *rpcServer) run(in io.Reader) error {
 func (s *rpcServer) dispatch(cmd, id string, raw []byte) {
 	switch cmd {
 	case "hello":
-		s.writeResponse(id, cmd, map[string]any{
-			"protocol_version": 1,
-			"version":          s.version,
-			"provider":         s.provider,
-			"model":            s.model,
-		})
+		var req struct {
+			Capabilities map[string]bool `json:"capabilities"`
+		}
+		if err := json.Unmarshal(raw, &req); err != nil {
+			s.writeError(id, cmd, err.Error())
+			return
+		}
+		s.negotiateCapabilities(req.Capabilities)
+		s.writeResponse(id, cmd, s.helloData())
 	case "prompt":
 		var req struct {
 			Message string `json:"message"`
@@ -459,6 +541,7 @@ func (s *rpcServer) dispatch(cmd, id string, raw []byte) {
 			s.writeError(id, cmd, err.Error())
 			return
 		}
+		s.markTurnStarted()
 		s.inFlight.Add(1)
 		go func() {
 			defer s.inFlight.Done()
@@ -469,11 +552,16 @@ func (s *rpcServer) dispatch(cmd, id string, raw []byte) {
 		if c := s.takeCancel(); c != nil {
 			c()
 		}
-		// The turn's approvals unpark on their own now: Confirm takes the turn's
-		// context, which takeCancel just cancelled. This sweep used to be the
-		// only thing that released them, and it released ALL of them — every
-		// parked ask, including any that did not belong to the aborted turn.
+		// Ask captures the active turn cancellation when it parks a question, so
+		// aborting this turn releases its own question. Do not sweep the registry:
+		// a queued turn may have started while the cancellation callback ran.
 		s.writeResponse(id, cmd, nil)
+
+	case "question_answer":
+		s.answerQuestion(cmd, id, raw)
+
+	case "question_dismiss":
+		s.dismissQuestion(id)
 
 	case "approve":
 		// The driver's answer to an `ask` frame. `id` (the command id) is the
@@ -503,6 +591,7 @@ func (s *rpcServer) dispatch(cmd, id string, raw []byte) {
 		s.writeResponse(id, cmd, nil)
 
 	case "compact":
+		s.markTurnStarted()
 		s.inFlight.Add(1)
 		go func() {
 			defer s.inFlight.Done()
@@ -795,6 +884,15 @@ func (s *rpcServer) busy() bool {
 	return s.activeCancel != nil
 }
 
+// currentTurnCancel snapshots the cancellation owned by the turn that is
+// executing a tool. A pending question stores this function so dismissal or
+// connection closure cannot accidentally cancel a later queued prompt.
+func (s *rpcServer) currentTurnCancel() context.CancelFunc {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.activeCancel
+}
+
 var _ core.Confirmer = (*rpcServer)(nil)
 
 // Confirm implements core.Confirmer over the rpc wire. It emits an `ask` frame
@@ -834,6 +932,8 @@ func (s *rpcServer) Confirm(ctx context.Context, toolName, preview string) core.
 		// The session is going away; deny so the tool call unwinds with a
 		// model-readable reason rather than hanging the shutdown.
 		return core.ConfirmDecision{Allow: false, Reason: "approval request cancelled (session ending)"}
+	case <-s.closedSignal():
+		return core.ConfirmDecision{Allow: false, Reason: "approval request cancelled (rpc connection closed)"}
 	}
 }
 

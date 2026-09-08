@@ -92,6 +92,11 @@ type LiveToolSet struct {
 	// winning a name collision against an MCP server's.
 	Ext *extensions.Manager
 	MCP *MCPToolAdapter
+
+	// Asker is the front-end question channel to carry onto a fresh registry.
+	// Hosts that negotiate a channel after a rebuild keep it here rather than
+	// reading the agent concurrently while the registry is being published.
+	Asker core.Asker
 }
 
 // Rebuild re-resolves and swaps the result onto ag, reporting whether the
@@ -118,5 +123,10 @@ func (s LiveToolSet) Rebuild(ag *core.Agent) bool {
 	if s.MCP != nil {
 		r.MergeExtensionTools(s.MCP)
 	}
+	// A front-end channel belongs to the live session, not to a resolved tool
+	// registry. Carry the explicit survivor onto every fresh registry so
+	// extension reloads cannot turn a negotiated RPC question channel into
+	// no_channel or race a concurrent channel bind through ag.Asker.
+	r.SetAsker(s.Asker)
 	return r.PublishTools(ag, s.Gate)
 }

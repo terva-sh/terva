@@ -37,6 +37,19 @@ To **confirm** instead of refuse, opt into an approval carrier that fills the ga
 
 A backend sets **one** carrier, never several; each fails closed, leaving the refuse-by-default in place if it can't start.
 
+Structured questions use a separate, opt-in carrier. The server advertises support
+as `capabilities.structured_questions` in every `hello` response. A client enables
+it by sending the same key as `true` in its `hello` request:
+
+```json
+{"id":"0","type":"hello","capabilities":{"structured_questions":true}}
+```
+
+A client that omits the key keeps the existing headless behavior. The
+`ask_user_question` tool returns its `no_channel` result and never emits a
+question frame. Capability negotiation must happen before the first `prompt` or
+`compact` command.
+
 Session persistence is opt-in in RPC mode. Without `--session`, the process keeps
 an in-memory transcript, which `get_messages` can read. The embedding application
 owns persistence. With `--session <path>`, startup restores the prior transcript
@@ -87,10 +100,61 @@ Response:
 
 ```json
 {"type":"response","id":"0","command":"hello","success":true,
- "data":{"protocol_version":1,"version":"0.0.4","provider":"anthropic","model":"claude-opus-4-5"}}
+ "data":{"protocol_version":1,"version":"0.0.4","provider":"anthropic","model":"claude-opus-4-5",
+ "capabilities":{"structured_questions":true}}}
 ```
 
 Required as the first message when `TERVACORE_RPC_TOKEN` is set; optional otherwise.
+The capability is negotiated only once. A later `hello` cannot change it after a
+turn has started.
+
+### `structured questions`
+
+A negotiated client receives a `question` event when `ask_user_question` blocks a
+tool call. The event carries one complete batch. The request id and each
+position-based question id remain stable until the batch is answered or dismissed.
+The `header` falls back to `Question N` when the native question has no short slug.
+
+```json
+{"type":"question","id":"question-1","questions":[
+  {"id":"question-1-0","header":"runtime mode","question":"Where should it run?",
+   "options":["local","remote"],"allow_custom":false,"multi_select":false},
+  {"id":"question-1-1","header":"target set","question":"Which targets?",
+   "options":["web","mobile"],"allow_custom":true,"multi_select":true}
+]}
+```
+
+The client answers the whole batch with `question_answer`. The command id is
+the batch id. The `answers` object must contain exactly one key for every
+question id and no other keys. A single-select or free-form answer is a string.
+A multi-select answer is an array of strings. An answer object may carry
+`answer` or `answers` plus a `note`.
+
+```json
+{"type":"question_answer","id":"question-1","answers":{
+  "question-1-0":"remote",
+  "question-1-1":["web","mobile"]
+}}
+```
+
+terva rejects malformed, incomplete, stale, duplicate, mismatched, empty, or
+policy-violating answers. It checks choices against `options` when
+`allow_custom` is false. It does not infer `multi_select` or custom-answer
+policy from option text. A valid answer emits `question_resolved`, acknowledges
+the command, and then resumes the same waiting tool call. The resolution frames
+precede the resumed tool result.
+
+Dismissal is separate from an answer and never fabricates `Declined` answers:
+
+```json
+{"type":"question_dismiss","id":"question-1"}
+```
+
+The server emits `question_dismissed`, acknowledges the command, and aborts the
+current turn. The native transcript remains available for a later `prompt`.
+`abort`, stdin EOF, RPC connection closure, and parent-context cancellation also
+unblock pending questions with cancellation errors. Structured questions have no
+human-answer timeout.
 
 ### `prompt`
 
@@ -245,7 +309,7 @@ Response: `{"type":"response","id":"9","command":"ping","success":true,"data":{"
 
 ## Events
 
-Stream notifications during a `prompt` or `compact`. None carry an `id`.
+Stream notifications during a `prompt` or `compact`. Structured-question events carry their batch id; ordinary stream events do not.
 
 | `type` | Fields | Meaning |
 |---|---|---|
@@ -260,6 +324,9 @@ Stream notifications during a `prompt` or `compact`. None carry an `id`.
 | `tool_call` | `id`, `name`, `args` | The model wants to call a tool |
 | `tool_progress` | `id`, `text` | Optional progress line from the tool while it runs |
 | `tool_result` | `id`, `is_error`, `content`, optional `lines_added` / `lines_removed` | Tool finished; the line-change counts (present on edits) feed the status-bar Δ segment |
+| `question` | `id`, `questions` | A negotiated structured-question batch is waiting for one complete answer. This frame has an `id` even though ordinary stream events do not |
+| `question_resolved` | `id`, `answers` | The client answer passed validation. It precedes the resumed tool result |
+| `question_dismissed` | `id` | The client dismissed the batch. The current turn is aborted and no answer is fabricated |
 | `assistant_message` | `message` | Final assistant message after the model turn ends (see Message shape) |
 | `usage` | `usage`, `cumulative` | Per-turn + cumulative tokens / cost, each `{input, output, cache_read, cache_write, cost_usd}` plus the optional fields below |
 | `turn_end` | `stop`, optional `error` | One model call finished. `stop` is `end`, `tool_use`, `length`, `error`, or `aborted` |

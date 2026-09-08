@@ -5,13 +5,48 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/permissions"
+	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/testsupport"
 )
 
 type generationSource struct{ infos []ExtensionToolInfo }
 
 func (s generationSource) Tools() []ExtensionToolInfo                   { return s.infos }
 func (s generationSource) NewExtensionTool(ExtensionToolInfo) core.Tool { return echoTool{} }
+
+type rebuildAsker struct{}
+
+func (rebuildAsker) Ask(context.Context, []core.UserQuestion) ([]core.UserAnswer, error) {
+	return nil, nil
+}
+
+func TestLiveToolSetCarriesAskerAcrossRebuild(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	args := Args{
+		Provider: "openai",
+		Model:    "gpt-5",
+		CWD:      testsupport.TempDir(t),
+		NoExt:    true,
+		NoMCP:    true,
+	}
+	r, err := Resolve(args, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asker := rebuildAsker{}
+	ag := r.NewAgent()
+	LiveToolSet{Args: args, Asker: asker}.Rebuild(ag)
+	tool, ok := ag.LookupTool("ask_user_question")
+	if !ok {
+		t.Fatal("rebuilt registry has no ask_user_question tool")
+	}
+	askTool, ok := tool.(*tools.AskUserTool)
+	if !ok || askTool.Asker == nil {
+		t.Fatalf("rebuilt ask_user_question lost its Asker: %#v", tool)
+	}
+}
 
 func TestToolGenerationReclassifiesSameName(t *testing.T) {
 	for _, mode := range []core.ApprovalMode{core.ApprovalWorkspace, core.ApprovalAutoEdit, core.ApprovalPlan} {
