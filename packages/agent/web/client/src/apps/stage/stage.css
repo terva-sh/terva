@@ -1111,6 +1111,22 @@ button:disabled {
   border: 1px solid var(--stage-line);
   border-radius: 14px 14px 0 0;
   padding: 1rem 1.25rem 1.5rem;
+  /* The cap belongs on the BASE, not on each variant. .stage-sheet-backdrop is
+     align-items:flex-end, so a sheet taller than the screen does not clip at the
+     bottom like a centred modal, it grows off the TOP, taking its header with
+     it. Nothing scrolls it back: the backdrop is fixed and neither it nor the
+     sheet had an overflow that scrolls.
+
+     Measured on the group sheet, the only sheet that was on the bare base, at
+     landscape-phone heights with a 30-card group: 740x360 put the sheet at
+     -35..360 and the name field at -19..17, so over half of it sat above the
+     fold with the close button beside it.
+
+     --chats and --detail already declared exactly this pair and are unchanged by
+     it; they were each patched for their own content while the base stayed
+     unguarded, which is what left the group sheets exposed. */
+  max-height: 88vh;
+  overflow-y: auto;
 }
 .stage-sheet h3 {
   margin: 0 0 1rem;

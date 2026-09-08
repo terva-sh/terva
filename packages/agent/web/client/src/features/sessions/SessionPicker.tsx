@@ -149,24 +149,33 @@ export function SessionPicker(props: {
             {props.showArchived && props.archived && props.archived.length === 0 && (
               <div class="drawer-archive__empty">{t('Nothing archived for this directory.')}</div>
             )}
-            {props.showArchived &&
-              (props.archived ?? []).map((a) => (
-                <div class="session archived" key={a.id}>
-                  <div class="session-main">
-                    <div class="session-title">{a.title || a.preview || t('(untitled)')}</div>
-                    <div class="session-meta">
-                      {a.model ? a.model + ' · ' : ''}
-                      {tn(a.message_count ?? 0, '%d msg', '%d msgs')}
-                      {a.bytes ? ' · ' + humanBytes(a.bytes) : ''}
+            {/* The rows live in their own bounded scroller. .drawer-archive is
+                a footer pinned under .session-list, and .session-list has
+                flex-basis 0, so it cannot yield more height than it holds: past
+                about eight archived rows the block simply grew off the bottom of
+                a drawer that does not scroll, putting Restore out of reach
+                entirely. */}
+            {props.showArchived && (props.archived ?? []).length > 0 && (
+              <div class="drawer-archive__list">
+                {(props.archived ?? []).map((a) => (
+                  <div class="session archived" key={a.id}>
+                    <div class="session-main">
+                      <div class="session-title">{a.title || a.preview || t('(untitled)')}</div>
+                      <div class="session-meta">
+                        {a.model ? a.model + ' · ' : ''}
+                        {tn(a.message_count ?? 0, '%d msg', '%d msgs')}
+                        {a.bytes ? ' · ' + humanBytes(a.bytes) : ''}
+                      </div>
                     </div>
+                    {props.onRestore && (
+                      <button class="drawer-archive__restore" title={t('Restore')} onClick={() => props.onRestore!(a.id)}>
+                        {t('Restore')}
+                      </button>
+                    )}
                   </div>
-                  {props.onRestore && (
-                    <button class="drawer-archive__restore" title={t('Restore')} onClick={() => props.onRestore!(a.id)}>
-                      {t('Restore')}
-                    </button>
-                  )}
-                </div>
-              ))}
+                ))}
+              </div>
+            )}
           </div>
         )}
       </aside>

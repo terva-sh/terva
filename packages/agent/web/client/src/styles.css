@@ -161,7 +161,21 @@ body {
 
 /* pane host: a right rail on desktop */
 .pane-rail { display: flex; flex-direction: column; width: clamp(300px, 32vw, 400px); min-height: 0; border-left: 1px solid var(--line); background: var(--bg); }
-.pane-head { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+/* The head is bounded because the BODY is the only thing that gives.
+
+   .pane-tabs wraps, and the head had no cap, so every extra surface added a
+   row that came straight out of .pane-body: it is the flex:1 item, and
+   min-height:0 lets it shrink all the way to nothing. Measured at 900x620
+   against a 561px rail, the body went 92% of the rail at 1 tab, 47% at 9, 21%
+   at 13, and 0% at 19 -- a pane showing no content at all, with the head
+   spilling 98px past the rail and the last three tabs off screen where nothing
+   could scroll to them.
+
+   40vh keeps the body the majority partner at every height this can reach, and
+   the head scrolls instead of growing, which also brings those spilled tabs
+   back within reach. A workspace wide enough to wrap less never hits the cap:
+   the same 19 tabs at 1400x900 take 370px and leave the body 56%. */
+.pane-head { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); max-height: 40vh; overflow-y: auto; }
 .pane-tabrow { display: flex; align-items: flex-start; gap: 6px; }
 /* Tabs WRAP onto new rows as they grow (was overflow-x scroll — hard to
    navigate once the surface count outgrew one row). Each tab keeps its width
@@ -619,6 +633,20 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .drawer-archive__toggle { display: block; width: 100%; text-align: left; padding: 10px 12px; border: 0; background: none; color: var(--muted); font: inherit; cursor: pointer; }
 .drawer-archive__toggle:hover { background: var(--panel); color: var(--fg); }
 .drawer-archive__empty { padding: 10px 12px; font-size: 12px; color: var(--muted); }
+/* The expanded rows carry their own bound and their own scrollbar.
+
+   .drawer-archive is a footer under .session-list, and .session-list is flex:1
+   with flex-basis 0, so it has no height of its own to surrender: once the
+   archive is taller than the space left over, the block grows straight off the
+   bottom of a .drawer that is height:100% and does not scroll. Measured at
+   900x620 with 18 entries, the last Restore sat 645px below the fold with no
+   scrollable ancestor at all -- the drawer and the scrim report scroll room but
+   are overflow:visible, so a wheel over either moves nothing.
+
+   Capping the rows rather than scrolling the whole drawer keeps the toggle and
+   the session list where they are, so "Hide archived" does not scroll away from
+   under the reader who just opened the archive. */
+.drawer-archive__list { max-height: 40vh; overflow-y: auto; }
 .session.archived { cursor: default; opacity: 0.85; }
 .session.archived:hover { background: none; }
 .drawer-archive__restore { flex: 0 0 auto; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); font: inherit; font-size: 12px; cursor: pointer; }
@@ -1170,6 +1198,24 @@ button.ident-home:hover .persona { text-decoration: underline; }
 .prov-check { display: flex; align-items: center; gap: 4px; font-size: 12px; }
 .prov-check input[type="checkbox"] { width: auto; min-width: 0; margin: 0; padding: 0; }
 .prov-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+
+/* Inside a modal the form IS the body, so the form is what has to scroll.
+   .modal caps at 82vh and hides its overflow, and the model settings view is
+   nine fields each with a line or two of help under it, which is taller than
+   that on a laptop. Without this the tail of the form is clipped away, and the
+   tail is .prov-actions: Save and Cancel, unreachable, with nothing scrolling
+   and no way back except making the window bigger.
+
+   min-height:0 because a column flex item's default min-height is its content
+   size, so the form would refuse to shrink to the cap and overflow it again.
+   The horizontal padding grows from 2px to 10px to leave the scrollbar
+   somewhere to sit that is not on top of the inputs.
+
+   The actions row then sticks to the bottom of that scrollport, so Save is on
+   screen the moment the form opens rather than one scroll below it. It carries
+   its own background because scrolled fields pass underneath. */
+.modal > .prov-flow { overflow-y: auto; min-height: 0; padding: 4px 10px 0; }
+.modal > .prov-flow > .prov-actions { position: sticky; bottom: 0; padding: 10px 0; background: var(--bg); border-top: 1px solid var(--line); }
 
 /* Sub-agent tier ladder — the ⇅ on a provider group in the model picker.
    Its own block rather than the generic .prov-* form stack it started in: that
