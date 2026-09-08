@@ -11,6 +11,21 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.134.4](https://github.com/terva-sh/terva/releases/tag/v0.134.4) — 2026-09-08
+
+### Features
+
+- memory: double the four memory caps
+- swarm: hand a ticket to a sub-agent, and pin its thinking effort
+- tickets: work the ledger from inside the session
+- tui: /ticket opens the ledger without leaving the session
+
+### Fixes
+
+- provider: a Codex schema flag, and the opencode session header
+- tui: attach a clipboard image where the terminal eats the chord
+- web: keep a control reachable when its container runs out of room
+
 ## [v0.134.3](https://github.com/terva-sh/terva/releases/tag/v0.134.3) — 2026-09-07
 
 ### Features

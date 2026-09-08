@@ -141,14 +141,28 @@ install-dev:
 git-ticket-install:
     @want="$(awk '$1 == "github.com/terva-sh/git-ticket" { print $2; exit }' go.mod)"; \
      echo "installing git-ticket $want (the version go.mod pins)"; \
-     go install "github.com/terva-sh/git-ticket/cmd/git-ticket@$want"
+     go install "github.com/terva-sh/git-ticket/cmd/git-ticket@$want" || exit 1; \
+     dest="$(go env GOBIN)"; \
+     [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; \
+     found="$(command -v git-ticket 2>/dev/null)"; \
+     if [ -z "$found" ]; then \
+       echo "installed to $dest/git-ticket, but no git-ticket is on your PATH"; \
+       echo "add $dest to PATH, or 'git ticket ...' will not find it"; \
+     elif [ "$found" != "$dest/git-ticket" ]; then \
+       ran="$("$found" --version 2>/dev/null | awk '{print $2}')"; \
+       if [ "$ran" != "$want" ]; then \
+         echo "installed $want to $dest/git-ticket"; \
+         echo "but PATH resolves $found, which is $ran, and that file wins"; \
+         echo "put $dest before $(dirname "$found") on PATH, or remove $found"; \
+       fi; \
+     fi
 
 # `git ticket check --strict` over the store, naming a version mismatch before
 # it runs. LANE only labels the output, so `just ci` and `just ci-docs` each
 # report under their own name.
 #
-# Why the version matters as of v0.13.0: this store is schema 2, and a
-# git-ticket older than v0.12.0 refuses it outright with `schema_unsupported`.
+# Why the version matters: this store is schema 3, and a git-ticket older than
+# v0.14.0 refuses it outright with `schema_unsupported`.
 # That reads like a corrupt store and is not, and `--fix` does not help, so the
 # note turns a cryptic refusal into an instruction. `.tickets/CONVENTIONS.md`
 # carries the verbatim error.
@@ -168,9 +182,17 @@ ticket-check LANE='local':
      else \
        have="$(git-ticket --version 2>/dev/null | awk '{print $2}')"; \
        if [ "$have" != "$want" ]; then \
+         dest="$(go env GOBIN)"; \
+         [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; \
+         found="$(command -v git-ticket)"; \
          echo "{{LANE}}: note: git-ticket $have is on PATH, but this tree pins $want"; \
-         echo "{{LANE}}:       a binary older than v0.12.0 refuses this schema-2 store"; \
-         echo "{{LANE}}:       run 'just git-ticket-install' to match the pin"; \
+         echo "{{LANE}}:       a binary older than v0.14.0 refuses this schema-3 store"; \
+         if [ -x "$dest/git-ticket" ] && [ "$found" != "$dest/git-ticket" ]; then \
+           echo "{{LANE}}:       $dest/git-ticket is installed, but $found wins on PATH"; \
+           echo "{{LANE}}:       put $dest first, or remove $found"; \
+         else \
+           echo "{{LANE}}:       run 'just git-ticket-install' to match the pin"; \
+         fi; \
        fi; \
        git ticket check --strict; \
      fi

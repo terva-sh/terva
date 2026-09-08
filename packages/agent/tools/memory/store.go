@@ -147,10 +147,16 @@ func NewUserStore() *Store {
 func (s *Store) Label() string { return s.label }
 
 // Budget reports the scope's caps and the SERIALIZED size they are measured
-// against — not the sum of entry lengths, which understates it by the header and
-// the bullets. It is the same number Add refuses on, so a pane showing "31.9 of
-// 32 KiB" and a refusal saying "would exceed its 32768-byte budget" cannot
-// disagree about how close the scope is to full.
+// against, and not the sum of entry lengths, which understates it by the header
+// and the bullets. It is the same number Add refuses on, so a pane showing
+// "31.9K of 32.0K" and a refusal saying "would exceed its 32768-byte budget"
+// cannot disagree about how close the scope is to full.
+//
+// The pane's unit is K, not KiB, despite the name of the function that renders
+// it: fmtKiB in packages/agent/modes/dialogs formats "%.1fK". This comment
+// quoted "16 KiB" and then "32 KiB" across two cap raises, describing an output
+// the code has never produced, because each raise checked the arithmetic and
+// left the format alone.
 func (s *Store) Budget() (bytes, maxBytes, maxCount int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
