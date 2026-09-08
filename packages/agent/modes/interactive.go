@@ -827,6 +827,12 @@ type Interactive struct {
 	// UI-goroutine only (key/slash handlers and submit), so no mutex.
 	clipboardImages []clipboardImageAttachment
 
+	// readClipboardImage reads the system clipboard's image, and nil means
+	// tui.ReadClipboardImagePNG. The seam exists so a test can drive the
+	// paste handlers without a real clipboard: under WSL the real reader
+	// spawns PowerShell, which no test may depend on.
+	readClipboardImage func() ([]byte, bool, error)
+
 	// clipImageSeq numbers the "[clipboard image #N]" markers. A plain
 	// len(clipboardImages)+1 would restart at #1 whenever the pending list
 	// empties — which it does when a draft is stashed — and two attachments

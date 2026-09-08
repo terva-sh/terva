@@ -45,6 +45,28 @@ on run argv
 end run
 `
 
+// clipboardImageKind pulls the kind osascript printed out of its stdout.
+// The script returns one word, but a helper library loaded into the
+// osascript process can print to stdout first, so take the last non-empty
+// line rather than the whole buffer.
+func clipboardImageKind(stdout string) string {
+	var kind string
+	for _, line := range strings.Split(stdout, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			kind = line
+		}
+	}
+	return kind
+}
+
+// clipboardNoImage reports whether osascript's failure means the clipboard
+// simply holds no image.
+func clipboardNoImage(msg string) bool {
+	return strings.Contains(msg, "NO_IMAGE") ||
+		strings.Contains(msg, "Can’t make") ||
+		strings.Contains(msg, "Can't make")
+}
+
 // WriteClipboardText puts s on the system clipboard.
 //
 // pbcopy rather than osascript: it takes the text on stdin, so a path with
@@ -72,8 +94,17 @@ func ReadClipboardImagePNG() ([]byte, bool, error) {
 	_ = tmp.Close()
 	defer os.Remove(path)
 
-	out, err := exec.Command("/usr/bin/osascript", "-e", readClipboardImageScript, path).CombinedOutput()
-	kind := strings.TrimSpace(string(out))
+	// 🪤 Separate pipes, not CombinedOutput. ImageIO and ColorSync write
+	// diagnostics such as "*** Error creating a JP2 color space: falling
+	// back to sRGB" to stderr while osascript still exits 0. Merged, that
+	// noise lands in front of the kind and every paste of such an image
+	// fails with an unexpected kind.
+	cmd := exec.Command("/usr/bin/osascript", "-e", readClipboardImageScript, path)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	kind := clipboardImageKind(stdout.String())
 	if err != nil {
 		// AppleScript phrases "no image on the clipboard" a few ways; all
 		// mean ok=false rather than a real failure.
@@ -83,13 +114,17 @@ func ReadClipboardImagePNG() ([]byte, bool, error) {
 		// because osascript uses either form. Translate them and an empty
 		// clipboard stops reading as empty: it becomes a spurious error on
 		// every paste.
-		if strings.Contains(kind, "NO_IMAGE") || strings.Contains(kind, "Can’t make") || strings.Contains(kind, "Can't make") {
+		msg := strings.TrimSpace(stderr.String())
+		if strings.Contains(kind, "NO_IMAGE") || clipboardNoImage(msg) {
 			return nil, false, nil
 		}
-		if kind == "" {
+		if msg == "" {
+			msg = kind
+		}
+		if msg == "" {
 			return nil, false, fmt.Errorf("osascript failed: %w", err)
 		}
-		return nil, false, fmt.Errorf("osascript failed: %s", kind)
+		return nil, false, fmt.Errorf("osascript failed: %s", msg)
 	}
 	if kind == "NO_IMAGE" {
 		return nil, false, nil

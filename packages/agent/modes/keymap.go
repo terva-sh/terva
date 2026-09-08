@@ -164,6 +164,10 @@ func (i *Interactive) buildGlobalKeymap() []globalBinding {
 			desc:  i18n.M("paste a clipboard image into the prompt (also /paste)"),
 		},
 		{
+			kind: tui.KeyPaste, name: "paste-clipboard-image-empty-fallback",
+			run: i.keyPasteFallback, hideFromHelp: true,
+		},
+		{
 			kind: tui.KeyCtrlY, name: "copy-picker", run: i.keyOpenCopyPicker,
 			label: "ctrl+y",
 			desc:  i18n.M("copy a reply, or one block of it, from this session (also /copy)"),
@@ -364,6 +368,35 @@ func (i *Interactive) keyCtrlD(context.Context, tui.Key) keyOutcome {
 // it arrives as a bracketed-paste event, not this key. See pasteClipboard.
 func (i *Interactive) keyPasteClipboard(context.Context, tui.Key) keyOutcome {
 	i.pasteClipboard()
+	return keyHandled
+}
+
+// keyPasteFallback rescues ctrl+v on a terminal that claims the chord for its
+// own paste action. Windows Terminal is the one that prompted this: it binds
+// ctrl+v to paste and consumes the key before the PTY, so keyPasteClipboard
+// never runs and the user sees nothing at all happen.
+//
+// The terminal still performs a paste. With an image-only clipboard it has no
+// text to send, so it forwards an empty bracketed paste, measured in Windows
+// Terminal as ESC[200~ ESC[201~ with nothing between. That empty paste is the
+// signal that a paste chord was pressed and eaten, and it is the whole basis
+// of this binding.
+//
+// A paste carrying text is somebody's actual text: decline it, and the editor
+// inserts it unchanged. Only the empty case reads the clipboard, so the cost
+// (about a second of PowerShell under WSL) falls on a keystroke that does
+// nothing today. Declining when no image attaches keeps an empty paste on a
+// text-only clipboard a no-op rather than a swallowed key.
+//
+// Nothing here is WSL-specific. Any terminal that eats ctrl+v and forwards an
+// empty paste gets the chord back.
+func (i *Interactive) keyPasteFallback(_ context.Context, k tui.Key) keyOutcome {
+	if k.Paste != "" {
+		return keyPass
+	}
+	if !i.pasteClipboard() {
+		return keyPass
+	}
 	return keyHandled
 }
 

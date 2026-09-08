@@ -65,21 +65,33 @@ func (i *Interactive) nextClipboardMarker() string {
 	return fmt.Sprintf("[clipboard image #%d]", i.clipImageSeq)
 }
 
+// clipboardImageReader returns the clipboard reader to use: the injected
+// seam when a test set one, otherwise the real platform reader.
+func (i *Interactive) clipboardImageReader() func() ([]byte, bool, error) {
+	if i.readClipboardImage != nil {
+		return i.readClipboardImage
+	}
+	return tui.ReadClipboardImagePNG
+}
+
 // pasteClipboard reads an image off the system clipboard, stashes it, and
 // drops a visible "[clipboard image #N]" marker at the cursor. Bound to
-// ctrl+v (clean on macOS / native Linux) and the /paste command (works
-// everywhere, including WSL where the terminal may claim ctrl+v). Text paste
-// is untouched — it flows through the terminal's bracketed paste as a
-// separate event.
-func (i *Interactive) pasteClipboard() {
-	data, ok, err := tui.ReadClipboardImagePNG()
+// ctrl+v (clean on macOS / native Linux), the empty-paste fallback for
+// terminals that claim ctrl+v (see keyPasteFallback), and the /paste
+// command. Text paste is untouched — it flows through the terminal's
+// bracketed paste as a separate event.
+//
+// Reports whether an image attached, which the empty-paste fallback uses to
+// decide if it consumed the key.
+func (i *Interactive) pasteClipboard() bool {
+	data, ok, err := i.clipboardImageReader()()
 	if err != nil {
 		i.setStatusErr(i18n.T("clipboard paste failed: %s", err))
-		return
+		return false
 	}
 	if !ok {
 		i.setStatusErr(i18n.T("clipboard has no image to paste"))
-		return
+		return false
 	}
 	marker := i.nextClipboardMarker()
 	i.clipboardImages = append(i.clipboardImages, clipboardImageAttachment{
@@ -89,4 +101,5 @@ func (i *Interactive) pasteClipboard() {
 	i.ed.Insert(marker + " ")
 	i.setStatusOK("pasted " + marker + " — send to attach it, or delete the marker to discard")
 	i.invalidate()
+	return true
 }
