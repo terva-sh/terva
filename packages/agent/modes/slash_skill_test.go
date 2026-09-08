@@ -3,6 +3,8 @@ package modes
 import (
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/tui"
 )
 
 // skillDirective is what /skill writes into the editor; the model reads it to
@@ -73,6 +75,18 @@ func TestSkillArgCompletion(t *testing.T) {
 	// Once a space follows the name, completion stops (typing the request).
 	if m := s.matches("/skill release "); len(m) != 0 {
 		t.Errorf("completion should stop after the name; got %d entries", len(m))
+	}
+
+	// The popup keeps the source label visible without changing the selected
+	// replacement. This is the distinction that matters when several tiers
+	// provide similarly named skills.
+	s.SetSkills([]SkillCompletion{{Name: "release", Desc: "cut a release", Source: "built-in"}})
+	popup := strings.Join(s.Render("/skill re", tui.Theme{}, 80), "\n")
+	if !strings.Contains(popup, "release") || !strings.Contains(popup, "built-in") {
+		t.Fatalf("skill popup omitted the source label:\n%s", popup)
+	}
+	if sel := s.Selection("/skill re"); sel != "/skill release" {
+		t.Errorf("source label changed selection = %q, want %q", sel, "/skill release")
 	}
 
 	// "/skill" with no space still completes COMMAND names (/skill, /skills),

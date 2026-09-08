@@ -170,7 +170,10 @@ func TestTheScopeHeaderKeepsTheArchiveOutOfTheFillFraction(t *testing.T) {
 	d := memArchiveFixture()
 	out := strings.Join(d.Render(tui.Dark, 120), "\n")
 
-	if !strings.Contains(out, "1 entries, 5.8K of 16.0K") {
+	// "1 entry", not "1 entries": the header pluralizes through i18n.TN. This
+	// literal read "1 entries" until the plural landed, which is how a fixture
+	// with a count of 1 came to certify the bug.
+	if !strings.Contains(out, "1 entry, 5.8K of 16.0K") {
 		t.Errorf("the project fill fraction changed shape:\n%s", out)
 	}
 	if !strings.Contains(out, "3 archived") {

@@ -423,7 +423,7 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 			vis := skills.VisibleSkills(w.SessionSkills(iv.CarrierSessionID()))
 			out := make([]modes.SkillCompletion, 0, len(vis))
 			for _, sk := range vis {
-				out = append(out, modes.SkillCompletion{Name: sk.Ref(), Desc: sk.Description, Hint: sk.ArgumentHint})
+				out = append(out, modes.SkillCompletion{Name: sk.Ref(), Desc: sk.Description, Source: sk.Source, Hint: sk.ArgumentHint})
 			}
 			return out
 		},

@@ -353,7 +353,14 @@ func scopeHeader(scopes []MemoryScopeInfo, scope string) string {
 		}
 		head := fmt.Sprintf("%s — %d/%s", s.Label, s.Count, fmtKiB(s.MaxBytes))
 		if s.MaxBytes > 0 {
-			head = i18n.T("%s — %d entries, %s of %s", s.Label, s.Count, fmtKiB(s.Bytes), fmtKiB(s.MaxBytes))
+			// TN, not T: the count is live data and a scope holding exactly one
+			// fact is ordinary, not an edge case, so "1 entries" was reachable
+			// in normal use. It also lets a translator supply the forms their
+			// language needs instead of the two English has.
+			head = i18n.TN(s.Count,
+				"%s — %d entry, %s of %s",
+				"%s — %d entries, %s of %s",
+				s.Label, s.Count, fmtKiB(s.Bytes), fmtKiB(s.MaxBytes))
 		}
 		if s.ArchivedCount > 0 {
 			head += i18n.T(" · %d archived (%s, out of context)", s.ArchivedCount, fmtKiB(s.ArchivedBytes))

@@ -141,6 +141,49 @@ func TestMemoryDialogFlagsAnUnboundScope(t *testing.T) {
 	}
 }
 
+// The header says "1 entry", not "1 entries". A scope holding exactly one fact
+// is ordinary rather than an edge case: the user scope on a fresh machine sits
+// at one for as long as it takes to learn a second thing about the person.
+//
+// The fill and the cap are asserted in their rendered form, not as numbers,
+// because that is the half nothing was watching. The Budget doc comment over in
+// packages/agent/tools/memory quoted "32 KiB" through two cap raises while
+// fmtKiB emitted "32.0K", and no test disagreed.
+func TestScopeHeaderPluralAndRenderedCap(t *testing.T) {
+	scopes := []MemoryScopeInfo{
+		{Scope: "user", Label: "User memory", Count: 1, Bytes: 246, MaxBytes: 8192, Bound: true},
+		{Scope: "project", Label: "Project memory", Count: 16, Bytes: 7040, MaxBytes: 32768, Bound: true},
+	}
+
+	one := scopeHeader(scopes, "user")
+	if strings.Contains(one, "1 entries") {
+		t.Errorf("header = %q, want the singular at a count of 1", one)
+	}
+	if !strings.Contains(one, "1 entry,") {
+		t.Errorf("header = %q, want \"1 entry\"", one)
+	}
+	if !strings.Contains(one, "246B of 8.0K") {
+		t.Errorf("header = %q, want the fill rendered against the 8192 cap", one)
+	}
+
+	many := scopeHeader(scopes, "project")
+	if !strings.Contains(many, "16 entries,") {
+		t.Errorf("header = %q, want the plural at a count of 16", many)
+	}
+	if !strings.Contains(many, "6.9K of 32.0K") {
+		t.Errorf("header = %q, want the fill rendered against the 32768 cap", many)
+	}
+
+	// Zero takes the plural in English, and an empty scope is the first thing a
+	// new project shows.
+	empty := scopeHeader([]MemoryScopeInfo{
+		{Scope: "project", Label: "Project memory", Count: 0, Bytes: 0, MaxBytes: 32768, Bound: true},
+	}, "project")
+	if !strings.Contains(empty, "0 entries") {
+		t.Errorf("header = %q, want \"0 entries\"", empty)
+	}
+}
+
 // A delete should leave the selection on the neighbouring row, not jump back to
 // the top of a list the user was working down.
 func TestMemoryDialogKeepsCursorAcrossRefresh(t *testing.T) {

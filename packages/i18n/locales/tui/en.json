@@ -54,7 +54,7 @@
   "%s read": "%s read",
   "%s shown again": "%s shown again",
   "%s written": "%s written",
-  "%s — %d entries, %s of %s": "%s — %d entries, %s of %s",
+  "%s — %d entry, %s of %s|%s — %d entries, %s of %s": {"one":"%s — %d entry, %s of %s","other":"%s — %d entries, %s of %s"},
   "%s — pick a login method below or press esc to dismiss.": "%s — pick a login method below or press esc to dismiss.",
   "%s: api key": "%s: api key",
   "%s: not logged in": "%s: not logged in",

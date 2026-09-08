@@ -17,7 +17,8 @@ import (
 type slashCommand struct {
 	Name   string // with leading "/" — also the text inserted/run on select
 	Desc   string
-	Header bool // true = visual divider, not selectable
+	Source string // optional origin label shown after the popup name
+	Header bool   // true = visual divider, not selectable
 	// Display, when set, is the popup label shown instead of Name — e.g. a
 	// bare skill name for a `/skill <name>` argument suggestion, whose Name is
 	// the full "/skill <name>" replacement. Selection still returns Name.
@@ -26,10 +27,14 @@ type slashCommand struct {
 
 // label is the text shown in the popup row for this entry.
 func (c slashCommand) label() string {
+	label := c.Name
 	if c.Display != "" {
-		return c.Display
+		label = c.Display
 	}
-	return c.Name
+	if c.Source != "" {
+		label += "  [" + c.Source + "]"
+	}
+	return label
 }
 
 // slashSuggester renders the popup that appears when the editor starts
@@ -94,8 +99,9 @@ func (s *slashSuggester) SetExtra(cmds []slashCommand) {
 // that lost its bare name to a higher tier — completing to a bare name that
 // resolves to a different skill would be a trap.
 type SkillCompletion struct {
-	Name string
-	Desc string
+	Name   string
+	Desc   string
+	Source string
 	// Hint is the skill's argument-hint frontmatter, if any: a one-liner
 	// saying what the skill wants after its name. Appended to Desc in the
 	// popup so the user sees it before typing the argument, not after.
@@ -282,6 +288,7 @@ func (s *slashSuggester) skillMatches(arg string) []slashCommand {
 			Name:    "/skill " + sk.Name,
 			Display: sk.Name,
 			Desc:    desc,
+			Source:  sk.Source,
 		})
 	}
 	return out
