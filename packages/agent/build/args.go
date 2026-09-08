@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/agent/permissions"
@@ -87,6 +88,16 @@ type Args struct {
 	// and advertises it in the hello. --web-stage. Off by default: Stage is a
 	// distinct product from the control panel, opted into per deployment.
 	WebStage bool
+
+	// WebChatConnector and WebChatSession attach one configured chat connector
+	// to one explicit workspace session before the web listener starts. The
+	// attachment is required when WebChatConnector is set, so a daemon cannot
+	// report healthy while its declared chat agent is offline.
+	WebChatConnector string
+	WebChatSession   string
+	// WebChatTimeout bounds the connector handshake during web startup. Zero
+	// uses the workspace attachment default.
+	WebChatTimeout time.Duration
 
 	// Attach mode (`terva attach [URL]` / --attach, Mode == mode.Attach).
 	// AttachURL is the daemon endpoint — a full ws:// or wss:// URL, or a
@@ -589,6 +600,36 @@ func ParseArgs(in []string) (Args, error) {
 			a.AllowWebSecrets = true
 		case "--web-stage":
 			a.WebStage = true
+		case "--web-chat-connector":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			v = strings.TrimSpace(v)
+			if v == "" {
+				return a, i18n.Errorf("--web-chat-connector requires a non-empty connector name")
+			}
+			a.WebChatConnector = v
+		case "--web-chat-session":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			v = strings.TrimSpace(v)
+			if v == "" {
+				return a, i18n.Errorf("--web-chat-session requires a non-empty session id")
+			}
+			a.WebChatSession = v
+		case "--web-chat-timeout":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			d, err := time.ParseDuration(strings.TrimSpace(v))
+			if err != nil || d <= 0 {
+				return a, i18n.Errorf("--web-chat-timeout must be a positive duration, got %q", v)
+			}
+			a.WebChatTimeout = d
 		case "-c", "--continue":
 			a.Continue = true
 		case "-r", "--resume":
@@ -982,6 +1023,10 @@ func ParseArgs(in []string) (Args, error) {
 		a.Prompt = strings.Join(positional, " ")
 	}
 
+	if (a.WebChatConnector == "") != (a.WebChatSession == "") {
+		return a, i18n.Errorf("--web-chat-connector and --web-chat-session must be provided together")
+	}
+
 	if a.CWD == "" {
 		a.CWD, _ = os.Getwd()
 	} else {
@@ -1037,6 +1082,9 @@ Web-specific flags:
                                 --web-allow-restart is the accepted older spelling
   --web-stage                   mount Stage — the immersive chat/play surface — at /stage/, a second web
                                 app alongside the panel, gated by the same auth (off by default)
+  --web-chat-connector NAME     attach one configured chat connector before serving the web listener
+  --web-chat-session ID         bind the startup connector to this explicit persisted session
+  --web-chat-timeout DURATION   bound the startup connector handshake (default 30s; e.g. 45s)
   --web-allow-login             serve the provider-login group: add / repair / revoke the model-provider
                                 credential from the web UI (off by default; never on an unauthenticated bind)
   --web-allow-secrets           serve the secrets group: report what is encrypted at rest and manage the

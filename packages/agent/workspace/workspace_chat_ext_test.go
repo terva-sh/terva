@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -49,7 +50,74 @@ func registerConnService(t *testing.T, name string, conn chat.Connector) {
 	t.Cleanup(func() { enabled.Store(false) })
 }
 
+// cancelAwareChatConn stays in Connect until the startup attachment cancels
+// its dial context. It models a network handshake that honors cancellation.
+type cancelAwareChatConn struct {
+	*fakeChatConn
+}
+
+func (c *cancelAwareChatConn) Connect(ctx context.Context) (chat.Identity, error) {
+	<-ctx.Done()
+	return chat.Identity{}, ctx.Err()
+}
+
 // --- connect binds, teardown releases -------------------------------------
+
+func TestAttachChatWaitsForLiveBridge(t *testing.T) {
+	w, _, _ := chatTestWorkspace(t, "s1")
+	t.Cleanup(w.chatStopAll)
+	registerConnService(t, "startup-ok", newFakeChatConn(chat.Capabilities{}))
+
+	if err := w.AttachChat(context.Background(), "s1", "startup-ok", time.Second); err != nil {
+		t.Fatalf("AttachChat: %v", err)
+	}
+	if got := w.chatSessionFor("startup-ok"); got != "s1" {
+		t.Fatalf("startup bridge session = %q, want s1", got)
+	}
+	if state := w.chatView().Bridge.State; state != chatStateConnected {
+		t.Fatalf("startup bridge state = %q, want connected", state)
+	}
+}
+
+func TestAttachChatReturnsConnectorFailure(t *testing.T) {
+	w, _, _ := chatTestWorkspace(t, "s1")
+	t.Cleanup(w.chatStopAll)
+	conn := &flakyChatConn{fakeChatConn: newFakeChatConn(chat.Capabilities{})}
+	conn.failures.Store(1)
+	registerConnService(t, "startup-fail", conn)
+
+	err := w.AttachChat(context.Background(), "s1", "startup-fail", time.Second)
+	if err == nil {
+		t.Fatal("AttachChat succeeded after the connector handshake failed")
+	}
+	if !strings.Contains(err.Error(), "startup attachment") || !strings.Contains(err.Error(), "service unreachable") {
+		t.Fatalf("AttachChat error = %v, want startup and connector failure details", err)
+	}
+	if extconn.BoundHost() != nil {
+		t.Fatal("failed startup attachment left the extension host bound")
+	}
+}
+
+func TestAttachChatTimeoutCancelsInFlightDial(t *testing.T) {
+	w, _, _ := chatTestWorkspace(t, "s1")
+	t.Cleanup(w.chatStopAll)
+	registerConnService(t, "startup-timeout", &cancelAwareChatConn{fakeChatConn: newFakeChatConn(chat.Capabilities{})})
+
+	err := w.AttachChat(context.Background(), "s1", "startup-timeout", 20*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("AttachChat error = %v, want a timeout", err)
+	}
+	w.chatWaitDials()
+	w.chat.mu.Lock()
+	bridges := len(w.chat.bridges)
+	w.chat.mu.Unlock()
+	if bridges != 0 {
+		t.Fatalf("timed-out startup attachment left %d bridge entries", bridges)
+	}
+	if extconn.BoundHost() != nil {
+		t.Fatal("timed-out startup attachment left the extension host bound")
+	}
+}
 
 func TestConnectBindsTheExtHostAndSessionCloseReleasesIt(t *testing.T) {
 	w, s, _ := chatTestWorkspace(t, "s1")

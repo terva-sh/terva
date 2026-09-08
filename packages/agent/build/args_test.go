@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/testsupport"
@@ -254,6 +255,37 @@ func TestParseArgsTUIBackendFlags(t *testing.T) {
 	}
 	if _, err := ParseArgs([]string{"--tui-legacy", "--tui-ctrlproto"}); err != nil {
 		t.Fatalf("ParseArgs with both deprecated flags errored: %v", err)
+	}
+}
+
+func TestParseArgsWebChatAttachmentFlags(t *testing.T) {
+	a, err := ParseArgs([]string{
+		"--web-chat-connector", "matrix",
+		"--web-chat-session", "journal-matrix",
+		"--web-chat-timeout", "45s",
+	})
+	if err != nil {
+		t.Fatalf("ParseArgs: %v", err)
+	}
+	if a.WebChatConnector != "matrix" {
+		t.Errorf("WebChatConnector = %q, want matrix", a.WebChatConnector)
+	}
+	if a.WebChatSession != "journal-matrix" {
+		t.Errorf("WebChatSession = %q, want journal-matrix", a.WebChatSession)
+	}
+	if a.WebChatTimeout != 45*time.Second {
+		t.Errorf("WebChatTimeout = %s, want 45s", a.WebChatTimeout)
+	}
+
+	for _, args := range [][]string{
+		{"--web-chat-connector", "matrix"},
+		{"--web-chat-session", "journal-matrix"},
+		{"--web-chat-timeout", "0s"},
+		{"--web-chat-timeout", "not-a-duration"},
+	} {
+		if _, err := ParseArgs(args); err == nil {
+			t.Errorf("ParseArgs(%v) succeeded; expected a startup attachment argument error", args)
+		}
 	}
 }
 

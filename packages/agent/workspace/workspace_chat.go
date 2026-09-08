@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/chat/extconn"
@@ -65,6 +66,12 @@ type boundBridge struct {
 	sess   string // session id the mirror is bound to
 	state  string // connecting | connected | error
 	err    string // last dial failure, surfaced on the pane
+
+	// ready receives the result of the initial connector handshake. Manual
+	// connects ignore it; web startup waits on it before serving the listener.
+	ready chan error
+	// cancel stops a connector handshake that has not produced a bridge yet.
+	cancel context.CancelFunc
 }
 
 const (
@@ -72,6 +79,8 @@ const (
 	chatStateConnecting = "connecting"
 	chatStateConnected  = "connected"
 	chatStateError      = "error"
+
+	defaultChatStartupTimeout = 30 * time.Second
 )
 
 // --- registry -----------------------------------------------------------
@@ -119,9 +128,13 @@ func (w *Workspace) chatSessionFor(service string) string {
 func (w *Workspace) chatStopAll() {
 	w.chat.mu.Lock()
 	live := make([]*chat.Bridge, 0, len(w.chat.bridges))
+	cancels := make([]context.CancelFunc, 0, len(w.chat.bridges))
 	for _, b := range w.chat.bridges {
 		if b.bridge != nil {
 			live = append(live, b.bridge)
+		}
+		if b.cancel != nil {
+			cancels = append(cancels, b.cancel)
 		}
 	}
 	if len(w.chat.bridges) > 0 {
@@ -129,6 +142,9 @@ func (w *Workspace) chatStopAll() {
 	}
 	w.chat.bridges = nil
 	w.chat.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
 	for _, b := range live {
 		b.Stop()
 	}
@@ -143,11 +159,15 @@ func (w *Workspace) chatStopForSession(sessID string) {
 	}
 	w.chat.mu.Lock()
 	var live []*chat.Bridge
+	var cancels []context.CancelFunc
 	removed := false
 	for name, b := range w.chat.bridges {
 		if b.sess == sessID {
 			if b.bridge != nil {
 				live = append(live, b.bridge)
+			}
+			if b.cancel != nil {
+				cancels = append(cancels, b.cancel)
 			}
 			delete(w.chat.bridges, name)
 			removed = true
@@ -157,6 +177,9 @@ func (w *Workspace) chatStopForSession(sessID string) {
 		w.chatUnbindExtHostLocked()
 	}
 	w.chat.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
 	for _, b := range live {
 		b.Stop()
 	}
@@ -166,11 +189,50 @@ func (w *Workspace) chatStopForSession(sessID string) {
 
 // chatConnect dials the named service ("" = the registry default) and binds its
 // bridge to sessID. Returns as soon as the dial is armed: a connector handshake
-// is a network round-trip (up to 30s for a connector extension), and the pane
-// converges over surface_updated events rather than blocking a client's action.
+// is a network round-trip, and the pane converges over surface_updated events
+// rather than blocking a client's action.
 func (w *Workspace) chatConnect(sessID, name string) error {
-	if _, err := w.resolve(sessID); err != nil {
+	_, _, err := w.chatConnectReady(sessID, name)
+	return err
+}
+
+// AttachChat attaches one connector to one explicit session and waits for its
+// first handshake. Web startup uses this synchronous path so it never exposes a
+// healthy listener while the declared chat agent is still disconnected.
+func (w *Workspace) AttachChat(ctx context.Context, sessID, name string, timeout time.Duration) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	service, ready, err := w.chatConnectReady(sessID, name)
+	if err != nil {
 		return err
+	}
+	if timeout <= 0 {
+		timeout = defaultChatStartupTimeout
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-ready:
+		if err != nil {
+			return fmt.Errorf("%s startup attachment: %w", service, err)
+		}
+		return nil
+	case <-ctx.Done():
+		w.chatStopService(service)
+		return fmt.Errorf("%s startup attachment canceled: %w", service, ctx.Err())
+	case <-timer.C:
+		w.chatStopService(service)
+		return fmt.Errorf("%s startup attachment timed out after %s", service, timeout)
+	}
+}
+
+// chatConnectReady contains the shared validation and registry mutation for
+// manual and startup attachment. The returned channel is buffered so the dial
+// goroutine never blocks if a manual caller ignores it.
+func (w *Workspace) chatConnectReady(sessID, name string) (string, <-chan error, error) {
+	if _, err := w.resolve(sessID); err != nil {
+		return "", nil, err
 	}
 	if name == "" {
 		name = chat.DefaultServiceName()
@@ -178,42 +240,55 @@ func (w *Workspace) chatConnect(sessID, name string) error {
 	svc, ok := chat.Lookup(name)
 	if !ok {
 		if name == "" {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("no chat connectors compiled into this binary"))
+			return "", nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("no chat connectors compiled into this binary"))
 		}
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown chat connector %q (available: %s)", name, chatServiceNames()))
+		return "", nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown chat connector %q (available: %s)", name, chatServiceNames()))
 	}
 	if !svc.Configured(w.root) {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("%s: not configured — run `terva bot setup` first", svc.Name))
+		return "", nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("%s: not configured — run `terva bot setup` first", svc.Name))
 	}
 	// A background `terva bot` daemon polling the same service is a second
 	// consumer: both race each update and one always loses, so messages arrive
 	// half-delivered. Stop it first.
 	if pid, alive, _ := chat.IsRunning(w.root, svc.Name); alive && pid > 0 {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest,
+		return "", nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest,
 			"%s", i18n.T("%s: bot daemon already running (pid %d) — stop it with `terva bot stop` first", svc.Name, pid))
 	}
+
+	ready := make(chan error, 1)
+	parent := w.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	dialCtx, cancel := context.WithCancel(parent)
 
 	w.chat.mu.Lock()
 	if w.chat.bridges == nil {
 		w.chat.bridges = map[string]*boundBridge{}
 	}
-	for name, b := range w.chat.bridges {
+	for existingName, b := range w.chat.bridges {
 		// A corpse from a failed dial must not wedge /connect until an explicit
 		// disconnect: nothing is live behind it, so a retry replaces it. Anything
 		// actually live — connected or mid-dial — keeps the one-bridge cap.
 		if b.bridge == nil && b.state == chatStateError {
-			delete(w.chat.bridges, name)
+			delete(w.chat.bridges, existingName)
 			continue
 		}
 		w.chat.mu.Unlock()
+		cancel()
 		if b.state == chatStateConnecting {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest,
-				"%s", i18n.T("%s is still connecting — wait for it, or disconnect first", name))
+			return "", nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest,
+				"%s", i18n.T("%s is still connecting — wait for it, or disconnect first", existingName))
 		}
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest,
-			"%s", i18n.T("%s is already connected — disconnect it first (one bridge per workspace: connector extensions share a single host slot)", name))
+		return "", nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest,
+			"%s", i18n.T("%s is already connected — disconnect it first (one bridge per workspace: connector extensions share a single host slot)", existingName))
 	}
-	w.chat.bridges[svc.Name] = &boundBridge{sess: sessID, state: chatStateConnecting}
+	w.chat.bridges[svc.Name] = &boundBridge{
+		sess:   sessID,
+		state:  chatStateConnecting,
+		ready:  ready,
+		cancel: cancel,
+	}
 	// Bind under the registry lock: every slot mutation happens inside a
 	// w.chat.mu critical section, so an unbind from a dying bridge can never
 	// clobber the bind of the one replacing it.
@@ -222,8 +297,8 @@ func (w *Workspace) chatConnect(sessID, name string) error {
 	w.chatChanged()
 
 	w.chat.dials.Add(1)
-	go w.chatDial(svc, sessID)
-	return nil
+	go w.chatDial(svc, sessID, dialCtx)
+	return svc.Name, ready, nil
 }
 
 // chatWaitDials blocks until every in-flight dial has returned.
@@ -236,7 +311,7 @@ func (w *Workspace) chatWaitDials() { w.chat.dials.Wait() }
 // chatDial performs the blocking half of a connect: build the connector, run the
 // handshake, start receiving, then re-derive the bound session's tools so the
 // model gains chat_send_image / chat_send_file on its next turn.
-func (w *Workspace) chatDial(svc chat.Service, sessID string) {
+func (w *Workspace) chatDial(svc chat.Service, sessID string, dialCtx context.Context) {
 	defer w.chat.dials.Done()
 	host := &chatWsHost{w: w, service: svc.Name}
 	conn, pairing, err := svc.NewConnector(w.root, func(msg string) { host.Notify("warn", msg) })
@@ -247,53 +322,97 @@ func (w *Workspace) chatDial(svc chat.Service, sessID string) {
 		// builds its gate with a nil admissions store, keeping every non-DM chat
 		// silent.
 		b := &chat.Bridge{Connector: conn, Host: host, Pairing: pairing}
-		if err = b.Start(w.ctx); err == nil {
+		if err = b.Start(dialCtx); err == nil {
 			if !w.chatSetLive(svc.Name, b) {
 				// A disconnect raced the dial: the registry entry is gone and
 				// whoever removed it released the host slot. Stop the bridge that
 				// just came up — nothing owns it, and its receive loop would
 				// otherwise hold the connector until workspace close.
 				b.Stop()
+				w.chatSignalReady(svc.Name, fmt.Errorf("connection canceled before the bridge became live"))
 				return
 			}
 			w.chatRebuildBound(sessID, "chat-connect")
 			w.chatChanged()
 			host.Notify("success", chatConnectedLabel(svc, b.State()))
+			w.chatSignalReady(svc.Name, nil)
 			return
 		}
 	}
+	w.chatCancelDial(svc.Name)
 	w.chatSetError(svc.Name, err.Error())
 	w.chatChanged()
 	host.Notify("error", i18n.T("%s connect failed: %v", svc.Name, err))
+	w.chatSignalReady(svc.Name, err)
+}
+
+func (w *Workspace) chatSignalReady(service string, err error) {
+	w.chat.mu.Lock()
+	var ready chan error
+	if b := w.chat.bridges[service]; b != nil {
+		ready = b.ready
+	}
+	w.chat.mu.Unlock()
+	if ready != nil {
+		select {
+		case ready <- err:
+		default:
+		}
+	}
+}
+
+func (w *Workspace) chatCancelDial(service string) {
+	w.chat.mu.Lock()
+	var cancel context.CancelFunc
+	if b := w.chat.bridges[service]; b != nil {
+		cancel = b.cancel
+		b.cancel = nil
+	}
+	w.chat.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // chatDisconnect stops the live bridge and re-derives the bound session's tools,
 // so the model stops seeing chat-send tools it can no longer use.
 func (w *Workspace) chatDisconnect() error {
 	w.chat.mu.Lock()
-	var (
-		live    *chat.Bridge
-		sess    string
-		removed bool
-	)
-	for name, b := range w.chat.bridges {
-		live, sess, removed = b.bridge, b.sess, true
-		delete(w.chat.bridges, name)
+	var service string
+	for name := range w.chat.bridges {
+		service = name
 		break
 	}
-	if removed {
-		w.chatUnbindExtHostLocked()
-	}
 	w.chat.mu.Unlock()
-	if live == nil && sess == "" {
+	if service == "" {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("no chat bridge is connected"))
+	}
+	w.chatStopService(service)
+	return nil
+}
+
+// chatStopService removes a bridge or an in-flight dial by service name. It is
+// the cleanup path for startup timeout and cancellation, where waiting for the
+// connector handshake must not leave a background dial behind.
+func (w *Workspace) chatStopService(service string) {
+	w.chat.mu.Lock()
+	b := w.chat.bridges[service]
+	if b == nil {
+		w.chat.mu.Unlock()
+		return
+	}
+	delete(w.chat.bridges, service)
+	w.chatUnbindExtHostLocked()
+	live, sess, cancel := b.bridge, b.sess, b.cancel
+	w.chat.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 	if live != nil {
 		live.Stop()
 	}
 	w.chatRebuildBound(sess, "chat-disconnect")
 	w.chatChanged()
-	return nil
 }
 
 // chatRebind moves the mirror to another live session. An explicit user act:
@@ -328,7 +447,7 @@ func (w *Workspace) chatSetLive(service string, b *chat.Bridge) bool {
 	w.chat.mu.Lock()
 	defer w.chat.mu.Unlock()
 	if bb := w.chat.bridges[service]; bb != nil {
-		bb.bridge, bb.state, bb.err = b, chatStateConnected, ""
+		bb.bridge, bb.state, bb.err, bb.cancel = b, chatStateConnected, "", nil
 		return true
 	}
 	return false

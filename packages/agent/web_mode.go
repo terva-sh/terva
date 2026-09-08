@@ -150,6 +150,13 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 			sw.From, sw.Err, sw.To, sw.ToModel, sw.From, sw.FromModel)
 		fmt.Fprintln(os.Stderr, "terva web: sign in from the control panel's Providers pane to go back to your configured provider")
 	}
+	if args.WebChatConnector != "" {
+		fmt.Fprintf(os.Stderr, "terva web: attaching chat connector %q to session %q\n", args.WebChatConnector, args.WebChatSession)
+		if err := ws.AttachChat(ctx, args.WebChatSession, args.WebChatConnector, args.WebChatTimeout); err != nil {
+			return fmt.Errorf("terva web: required chat attachment failed: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "terva web: chat connector %q attached to session %q\n", args.WebChatConnector, args.WebChatSession)
+	}
 	fmt.Fprintf(os.Stderr, "terva web: workspace ready (took %s)\n", time.Since(begin).Round(10*time.Millisecond))
 	cfg, _ := config.LoadConfig()
 	fmt.Fprintf(os.Stderr, "terva web: approval mode %q (tool calls that need approval prompt in the browser)\n", permissions.ResolveApprovalMode(args.PermInputs(), cfg))
