@@ -104,6 +104,7 @@ Spawns one sub-agent on the swarm and resolves when its task ends.
 | `provider` | provider override |
 | `persona` | persona identity for the agent |
 | `backend` | worker backend — refused by hosts that run native children only |
+| `reasoning` | thinking effort, on the `--thinking` ladder. Separate from the model, so it rides a `model` override or a bare spawn |
 | `schema` | JSON Schema for a structured deliverable (object at the top level) |
 
 Two failure behaviors, by design:

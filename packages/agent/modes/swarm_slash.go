@@ -7,17 +7,21 @@ import (
 	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/provider"
 )
 
 // runSwarm dispatches /swarm subcommands. Layout:
 //
 //	/swarm                       -> open the dashboard
 //	/swarm list                  -> open the dashboard
-//	/swarm new [--model M] [--provider P] [--persona N] [--backend B] <task...>
+//	/swarm new [--model M] [--provider P] [--persona N] [--backend B] [--reasoning E] <task...>
 //	                             -> spawn an agent (optionally pinned to a model,
-//	                                persona, or a worker backend — claude/terva/…;
-//	                                empty backend = a native swarm agent). A foreign
-//	                                backend is gated on external_workers being on.
+//	                                persona, thinking effort, or a worker backend —
+//	                                claude/terva/…; empty backend = a native swarm
+//	                                agent). A foreign backend is gated on
+//	                                external_workers being on. The effort is
+//	                                independent of the model, so it pairs with any
+//	                                of them.
 //	/swarm kill <id>             -> stop a running agent
 //	/swarm remove <id>           -> tear down a terminated agent
 //	/swarm logs <id>             -> open the scrollable transcript view
@@ -38,7 +42,7 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		stopFn     func(id string) error
 		removeFn   func(id string) error
 		archiveFn  func(id string) error
-		spawnFn    func(task, model, provider, persona, backend string) (string, error)
+		spawnFn    func(f spawnFlags) (string, error)
 		sendFn     func(id, text string) error
 		resumeFn   func(id string) (string, error)
 	)
@@ -48,9 +52,10 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		stopFn = func(id string) error { return i.carrierTaskAction("stop", map[string]string{"id": id}) }
 		removeFn = func(id string) error { return i.carrierTaskAction("remove", map[string]string{"id": id}) }
 		archiveFn = func(id string) error { return i.carrierTaskAction("archive", map[string]string{"id": id}) }
-		spawnFn = func(task, model, provider, persona, backend string) (string, error) {
+		spawnFn = func(f spawnFlags) (string, error) {
 			return "", i.carrierTaskAction("spawn", map[string]string{
-				"task": task, "model": model, "provider": provider, "persona": persona, "backend": backend,
+				"task": f.Task, "model": f.Model, "provider": f.Provider,
+				"persona": f.Persona, "backend": f.Backend, "reasoning": f.Reasoning,
 			})
 		}
 		sendFn = func(id, text string) error {
@@ -95,7 +100,7 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 	spawnAdapter := func(task, model, provider string) error {
 		// The dashboard's inline spawn editor is native-only (like persona, a
 		// backend is a command flag, not a picker); pass an empty backend.
-		_, err := spawnFn(task, model, provider, "", "")
+		_, err := spawnFn(spawnFlags{Task: task, Model: model, Provider: provider})
 		return err
 	}
 	resumeAdapter := func(id string) error {
@@ -140,31 +145,44 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		// --model foo do a thing` and `/swarm new do --model thing`
 		// (where --model is part of the task) unambiguous — only
 		// leading flags are consumed.
-		model, provider, persona, backend, task := parseSpawnFlags(rest)
-		if task == "" {
-			i.swarmStatus("", i18n.T("/swarm new: missing task (after any --model/--provider/--persona/--backend flags)"))
+		flags := parseSpawnFlags(rest)
+		if flags.Task == "" {
+			i.swarmStatus("", i18n.T("/swarm new: missing task (after any --model/--provider/--persona/--backend/--reasoning flags)"))
 			return
 		}
-		id, err := spawnFn(task, model, provider, persona, backend)
+		// Refuse an effort word the ladder does not know here, rather than let
+		// it reach the child's own --reasoning and fail the spawn from inside a
+		// subprocess. The ladder is rendered, never spelled out.
+		if !provider.ValidReasoningLevel(flags.Reasoning) {
+			i.swarmStatus("", i18n.T("/swarm new: --reasoning must be %s", provider.ReasoningLadder()))
+			return
+		}
+		id, err := spawnFn(flags)
 		if err != nil {
 			i.swarmStatus("", i18n.T("spawn: %s", err.Error()))
 			return
 		}
+		// Name everything that was pinned. This used to be a switch over the
+		// combinations, which reported the first flag it matched and hid the
+		// rest: `--persona x --model y` said only the persona.
+		var pinned []string
+		for _, p := range []struct{ label, value string }{
+			{i18n.T("backend %s", flags.Backend), flags.Backend},
+			{i18n.T("persona %s", flags.Persona), flags.Persona},
+			{i18n.T("model %s", flags.Model), flags.Model},
+			{i18n.T("thinking %s", flags.Reasoning), flags.Reasoning},
+		} {
+			if p.value != "" {
+				pinned = append(pinned, p.label)
+			}
+		}
 		switch {
-		case backend != "" && id != "":
-			i.swarmStatus(i18n.T("spawned %s (backend %s)", id, backend), "")
-		case backend != "":
-			i.swarmStatus(i18n.T("spawned (backend %s)", backend), "")
-		case persona != "" && id != "":
-			i.swarmStatus(i18n.T("spawned %s (persona %s)", id, persona), "")
-		case persona != "":
-			i.swarmStatus(i18n.T("spawned (persona %s)", persona), "")
-		case model != "" && id != "":
-			i.swarmStatus(i18n.T("spawned %s (model %s)", id, model), "")
-		case model != "":
-			i.swarmStatus(i18n.T("spawned (model %s)", model), "")
+		case id != "" && len(pinned) > 0:
+			i.swarmStatus(i18n.T("spawned %s (%s)", id, strings.Join(pinned, ", ")), "")
 		case id != "":
 			i.swarmStatus(i18n.T("spawned %s", id), "")
+		case len(pinned) > 0:
+			i.swarmStatus(i18n.T("spawned (%s)", strings.Join(pinned, ", ")), "")
 		default:
 			i.swarmStatus(i18n.T("spawned"), "")
 		}
@@ -289,82 +307,64 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 	}
 }
 
+// spawnFlags is what `/swarm new` accepts before the task body. A struct
+// rather than a row of return values: the parser grew to five flags, and the
+// call sites had stopped being readable.
+type spawnFlags struct {
+	Model     string
+	Provider  string
+	Persona   string
+	Backend   string
+	Reasoning string
+	Task      string
+}
+
 // parseSpawnFlags consumes any leading `--model X` / `--provider Y` /
-// `--persona Z` flags from s and returns them along with the remaining
-// task body. We deliberately only honour LEADING flags so a task like
-// "check --model lookup" doesn't accidentally swallow part of its prose
-// as the model name.
+// `--persona Z` / `--backend B` / `--reasoning E` flags from s and returns
+// them with the remaining task body. We deliberately only honour LEADING
+// flags so a task like "check --model lookup" doesn't accidentally swallow
+// part of its prose as the model name.
 //
-// Recognised forms:
-//
-//	--model X            two-token form
-//	--model=X            single-token form
-//	--provider X         two-token form
-//	--provider=X         single-token form
-//	--persona X          two-token form (built-in/installed name, or .md path)
-//	--persona=X          single-token form
-func parseSpawnFlags(s string) (model, provider, persona, backend, task string) {
+// Each flag takes a two-token form (`--model X`) and a single-token form
+// (`--model=X`). A flag with no value following it is still consumed, so a
+// dangling `--model` doesn't leak into the task; the caller surfaces
+// "missing task" instead.
+func parseSpawnFlags(s string) spawnFlags {
+	var out spawnFlags
+	// One table, so a sixth flag is a row and not another copy of the same
+	// eleven lines. Order does not matter; the names are distinct.
+	into := map[string]*string{
+		"--model":     &out.Model,
+		"--provider":  &out.Provider,
+		"--persona":   &out.Persona,
+		"--backend":   &out.Backend,
+		"--reasoning": &out.Reasoning,
+	}
+
 	fields := strings.Fields(s)
 	i := 0
 	for i < len(fields) {
 		f := fields[i]
-		switch {
-		case f == "--model":
-			// Consume the flag even when no value follows so a
-			// dangling "--model" doesn't leak into the task. The
-			// caller surfaces "missing task" instead.
+		if dst, ok := into[f]; ok {
 			if i+1 < len(fields) {
-				model = fields[i+1]
+				*dst = fields[i+1]
 				i += 2
 			} else {
 				i++
 			}
 			continue
-		case strings.HasPrefix(f, "--model="):
-			model = strings.TrimPrefix(f, "--model=")
-			i++
-			continue
-		case f == "--provider":
-			if i+1 < len(fields) {
-				provider = fields[i+1]
-				i += 2
-			} else {
+		}
+		if name, value, ok := strings.Cut(f, "="); ok {
+			if dst, known := into[name]; known {
+				*dst = value
 				i++
+				continue
 			}
-			continue
-		case strings.HasPrefix(f, "--provider="):
-			provider = strings.TrimPrefix(f, "--provider=")
-			i++
-			continue
-		case f == "--persona":
-			if i+1 < len(fields) {
-				persona = fields[i+1]
-				i += 2
-			} else {
-				i++
-			}
-			continue
-		case strings.HasPrefix(f, "--persona="):
-			persona = strings.TrimPrefix(f, "--persona=")
-			i++
-			continue
-		case f == "--backend":
-			if i+1 < len(fields) {
-				backend = fields[i+1]
-				i += 2
-			} else {
-				i++
-			}
-			continue
-		case strings.HasPrefix(f, "--backend="):
-			backend = strings.TrimPrefix(f, "--backend=")
-			i++
-			continue
 		}
 		break
 	}
-	task = strings.TrimSpace(strings.Join(fields[i:], " "))
-	return
+	out.Task = strings.TrimSpace(strings.Join(fields[i:], " "))
+	return out
 }
 
 // splitIDAndRest splits "<id> <text...>" into (id, text). The text

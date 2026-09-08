@@ -1,6 +1,9 @@
 package provider
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // ReasoningLevels is the ladder as a user types it, lowest to highest. It is
 // the ONE source every surface that prints the ladder reads from.
@@ -24,6 +27,29 @@ var ReasoningLevels = []string{"off", "minimum", "low", "medium", "high", "maxim
 
 // ReasoningLadder renders the ladder for help text and error messages.
 func ReasoningLadder() string { return strings.Join(ReasoningLevels, "|") }
+
+// ValidReasoningLevel reports whether level is a thinking effort a surface may
+// accept from a user or from the model. It takes every advertised rung and
+// every alias NormalizeReasoning understands, so a word one door accepts is
+// never refused at another. The empty string is valid and means the caller
+// chose nothing.
+//
+// It derives the answer from NormalizeReasoning instead of listing the words
+// again. That mapper sends every off-spelling to "" and returns anything it
+// does not recognize unchanged, so an unrecognized word fails the ladder test
+// below. A hand-written copy is how "max" came to be enforced but never
+// advertised, and this function must not become the next one.
+func ValidReasoningLevel(level string) bool {
+	s := strings.ToLower(strings.TrimSpace(level))
+	if s == "" {
+		return true
+	}
+	n := NormalizeReasoning(s)
+	if n == "" {
+		return true // an off-spelling, and NormalizeReasoning maps them all to ""
+	}
+	return slices.Contains(ReasoningLevels, n)
+}
 
 // MaxIsNative reports whether the "max" rung reaches m as a native max effort
 // rather than being clamped down to the "maximum" tier.

@@ -98,6 +98,10 @@ type actorSpawnArgs struct {
 	Actor     string `json:"actor"`
 	Situation string `json:"situation"`
 	Tier      string `json:"tier,omitempty"`
+	// Reasoning pins the actor's thinking effort at its first appearance.
+	// Orthogonal to Tier and to a cast pin: it overrides whatever effort the
+	// tier resolved, and it applies to a per-actor model pin too.
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 // actorFramingNote is prepended to an actor's situation (its user turn) so a full
@@ -135,6 +139,8 @@ func (t *ActorSpawnTool) Description() string {
 
 func (t *ActorSpawnTool) Schema() json.RawMessage {
 	enum, _ := json.Marshal(castNames(t.Cast))
+	// The ladder comes from provider.ReasoningLevels, never from a copy here.
+	levels, _ := json.Marshal(provider.ReasoningLevels)
 	schema := fmt.Sprintf(`{
   "type": "object",
   "properties": {
@@ -151,10 +157,15 @@ func (t *ActorSpawnTool) Schema() json.RawMessage {
       "type": "string",
       "enum": ["weak", "medium", "strong", "cheap"],
       "description": "An optional model tier for the actor at its first appearance. Use weak, medium, or strong for the strength of the model, which is never stronger than the host model. Use cheap when the cost is more important than the strength, and the host model does not limit the selection. The tool selects a model for this tier from the host provider. Omit this field to use the host model. The tool ignores this field after the actor starts."
+    },
+    "reasoning": {
+      "type": "string",
+      "enum": %s,
+      "description": "An optional effort level for the actor at its first appearance. A short line of dialogue rarely needs deep thought. A low effort thus makes an actor answer faster and for less money. Use this field with a tier, or on its own. It overrides the effort that the tier selects. The tool ignores this field after the actor starts."
     }
   },
   "required": ["actor", "situation"]
-}`, string(enum))
+}`, string(enum), string(levels))
 	return json.RawMessage(schema)
 }
 
@@ -180,7 +191,7 @@ func (t *ActorSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	}
 	task := t.composeTask(name, situation)
 
-	wa, turnDone, err := t.acquire(ctx, name, task, member, a.Tier, progress)
+	wa, turnDone, err := t.acquire(ctx, name, task, member, a.Tier, a.Reasoning, progress)
 	if err != nil {
 		return toolErr("actor_spawn: " + err.Error()), nil
 	}
@@ -201,7 +212,7 @@ func (t *ActorSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 // its window is covered by child startup + a model round-trip (seconds vs
 // microseconds), and a child that dies before task_end is caught by the
 // terminated channel in waitTurn.
-func (t *ActorSpawnTool) acquire(ctx context.Context, name, task string, member CastMember, tier string, progress func(string)) (*warmActor, <-chan string, error) {
+func (t *ActorSpawnTool) acquire(ctx context.Context, name, task string, member CastMember, tier, reasoning string, progress func(string)) (*warmActor, <-chan string, error) {
 	if wa := t.Warm.get(name); wa != nil {
 		turnDone := installTurnWatcher(wa.agent)
 		if err := t.Swarm.SendUserTurn(wa.agent.ID, task); err == nil {
@@ -212,7 +223,9 @@ func (t *ActorSpawnTool) acquire(ctx context.Context, name, task string, member 
 	}
 
 	hostProvider, hostModel := t.host()
-	route, errMsg := resolveSpawnRoute(swarmSpawnArgs{Tier: tier}, hostProvider, hostModel, t.Tiers)
+	// One route resolver for both spawn tools, so the effort rules cannot drift:
+	// it validates the effort word and lets an explicit one beat the tier's.
+	route, errMsg := resolveSpawnRoute(swarmSpawnArgs{Tier: tier, Reasoning: reasoning}, hostProvider, hostModel, t.Tiers)
 	if errMsg != "" {
 		return nil, nil, errors.New(errMsg)
 	}
@@ -222,6 +235,13 @@ func (t *ActorSpawnTool) acquire(ctx context.Context, name, task string, member 
 		// author chose this model for this actor, so it may differ from the host.
 		spawnProvider, spawnModel = member.Provider, member.Model
 	}
+	// The effort survives a cast pin that replaced the model, because effort is
+	// orthogonal to the route.
+	//
+	// Carrying route.Reasoning at all is the fix for a silent no-op: this
+	// function resolved the route and then built the request from the model
+	// and the provider alone. On a provider that ships one good model the
+	// effort is the only lever a tier has, so a tier did nothing there.
 	req := swarm.SpawnRequest{
 		Task:       task,
 		Experience: "chat", // a tool-less voice; the director owns the world
@@ -229,6 +249,7 @@ func (t *ActorSpawnTool) acquire(ctx context.Context, name, task string, member 
 		Card:       member.Card,
 		Model:      spawnModel,
 		Provider:   spawnProvider,
+		Reasoning:  route.Reasoning,
 	}
 	// Same session stamp swarm_spawn applies: the actor belongs to the
 	// director's conversation, so its meta.json should say so.

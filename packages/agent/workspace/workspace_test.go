@@ -1536,6 +1536,15 @@ func TestTaskActionSpawnValidation(t *testing.T) {
 	if err := w.taskAction("s1", "spawn", map[string]string{"task": "x", "backend": "nonesuch-backend"}); !errors.As(err, &ce) || ce.Code != ctrlproto.CodeBadRequest {
 		t.Fatalf("spawn with an unknown backend = %v, want CodeBadRequest", err)
 	}
+	// An effort word the ladder does not know is refused the same way, before
+	// it can reach the child's own --reasoning inside a subprocess.
+	err := w.taskAction("s1", "spawn", map[string]string{"task": "x", "reasoning": "banana"})
+	if !errors.As(err, &ce) || ce.Code != ctrlproto.CodeBadRequest {
+		t.Fatalf("spawn with an unknown effort = %v, want CodeBadRequest", err)
+	}
+	if !strings.Contains(err.Error(), provider.ReasoningLadder()) {
+		t.Errorf("the refusal should print the ladder, got %q", err)
+	}
 	if n := len(w.swarm.SnapshotAll()); n != 0 {
 		t.Fatalf("a refused backend must not spawn; swarm has %d agent(s)", n)
 	}

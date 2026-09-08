@@ -864,18 +864,30 @@ func TestCarrierSwarmDashboard(t *testing.T) {
 	if act := recv(t, fc.surfActs, "stop"); act.id != "tasks" || act.action != "stop" || act.args["id"] != "a1" {
 		t.Fatalf("stop action = %+v", act)
 	}
-	i.runSwarm(ctx, []string{"new", "--model", "m2", "--persona", "tester", "run the suite"})
+	i.runSwarm(ctx, []string{"new", "--model", "m2", "--persona", "tester", "--reasoning", "low", "run the suite"})
 	if act := recv(t, fc.surfActs, "spawn"); act.action != "spawn" || act.args["task"] != "run the suite" ||
-		act.args["model"] != "m2" || act.args["persona"] != "tester" {
+		act.args["model"] != "m2" || act.args["persona"] != "tester" || act.args["reasoning"] != "low" {
 		t.Fatalf("spawn action = %+v", act)
 	}
 	i.mu.Lock()
 	spawned := i.statusOK
 	i.mu.Unlock()
 	// Surface actions return no payload, so the status can't name the new
-	// agent's id — but it must still confirm what was requested.
-	if !strings.Contains(spawned, "persona tester") {
-		t.Fatalf("spawn status = %q", spawned)
+	// agent's id — but it must still confirm what was requested. Every pin is
+	// named, not just the first one that matched.
+	for _, want := range []string{"persona tester", "model m2", "thinking low"} {
+		if !strings.Contains(spawned, want) {
+			t.Fatalf("spawn status = %q, want it to name %q", spawned, want)
+		}
+	}
+
+	// An effort word the ladder does not know is refused before the spawn.
+	i.runSwarm(ctx, []string{"new", "--reasoning", "banana", "do a thing"})
+	i.mu.Lock()
+	refusal := i.statusErr
+	i.mu.Unlock()
+	if !strings.Contains(refusal, provider.ReasoningLadder()) {
+		t.Fatalf("bad --reasoning status = %q, want the ladder", refusal)
 	}
 	i.runSwarm(ctx, []string{"resume", "a2"})
 	if act := recv(t, fc.surfActs, "resume"); act.action != "resume" || act.args["id"] != "a2" {

@@ -15,12 +15,14 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
 	"terva.sh/terva/packages/agent/jsengine"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/agent/workflow/runs"
+	"terva.sh/terva/packages/provider"
 )
 
 // agentLifetimeCap is a runaway-loop backstop, far above any real run.
@@ -408,6 +410,17 @@ func buildSpawnRequest(prompt string, opts map[string]any) (swarm.SpawnRequest, 
 			req.Persona, _ = v.(string)
 		case "backend":
 			req.Backend, _ = v.(string)
+		case "reasoning":
+			// The thinking effort, independent of the model: it rides a pinned
+			// model, a backend, or a bare spawn. Validated here so a typo fails
+			// the script instead of the child's own --reasoning, three layers
+			// down inside a subprocess.
+			s, _ := v.(string)
+			s = strings.ToLower(strings.TrimSpace(s))
+			if !provider.ValidReasoningLevel(s) {
+				return req, label, fmt.Errorf("agent reasoning %q is not an effort: use %s", s, provider.ReasoningLadder())
+			}
+			req.Reasoning = s
 		case "schema":
 			raw, err := json.Marshal(v)
 			if err != nil {
@@ -415,9 +428,9 @@ func buildSpawnRequest(prompt string, opts map[string]any) (swarm.SpawnRequest, 
 			}
 			req.Schema = raw
 		case "agentType", "effort", "isolation":
-			return req, label, fmt.Errorf("agent option %q is Claude Code's, not terva's — convert it: agentType→persona, effort→model choice, isolation is the host's --swarm-worktrees setting rather than a per-agent opt", k)
+			return req, label, fmt.Errorf("agent option %q is Claude Code's, not terva's — convert it: agentType→persona, effort→reasoning (%s), isolation is the host's --swarm-worktrees setting rather than a per-agent opt", k, provider.ReasoningLadder())
 		default:
-			return req, label, fmt.Errorf("unknown agent option %q (known: label, phase, model, provider, persona, backend, schema)", k)
+			return req, label, fmt.Errorf("unknown agent option %q (known: label, phase, model, provider, persona, backend, reasoning, schema)", k)
 		}
 	}
 	return req, label, nil

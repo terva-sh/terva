@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/swarm"
+	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -213,6 +214,37 @@ return await agent('t', { agentType: 'reviewer' })`
 	_, err := Run(context.Background(), &fakeEngine{}, []byte(script), runOpts(t))
 	if err == nil || !strings.Contains(err.Error(), "agentType→persona") {
 		t.Fatalf("err = %v, want the conversion-mapping error", err)
+	}
+	// Claude Code's `effort` now has a real terva counterpart, so the refusal
+	// must name it. It used to send the author to a model choice, which was the
+	// only lever a spawn had.
+	if !strings.Contains(err.Error(), "effort→reasoning") {
+		t.Errorf("err = %v, want effort mapped onto reasoning", err)
+	}
+}
+
+// The thinking effort reaches the child, and it rides a pinned model rather
+// than replacing one. A word off the ladder fails the script instead of the
+// child's own --reasoning inside a subprocess.
+func TestRunAgentReasoningOption(t *testing.T) {
+	eng := &fakeEngine{}
+	script := `export const meta = { name: 'x', description: 'd' }
+return await agent('t', { model: 'gpt-5', provider: 'openai', reasoning: 'MINIMUM' })`
+	if _, err := Run(context.Background(), eng, []byte(script), runOpts(t)); err != nil {
+		t.Fatal(err)
+	}
+	if len(eng.requests) != 1 {
+		t.Fatalf("spawns = %d, want 1", len(eng.requests))
+	}
+	if got := eng.requests[0]; got.Reasoning != "minimum" || got.Model != "gpt-5" {
+		t.Errorf("request = %+v, want gpt-5 thinking at minimum", got)
+	}
+
+	bad := `export const meta = { name: 'x', description: 'd' }
+return await agent('t', { reasoning: 'banana' })`
+	_, err := Run(context.Background(), &fakeEngine{}, []byte(bad), runOpts(t))
+	if err == nil || !strings.Contains(err.Error(), provider.ReasoningLadder()) {
+		t.Fatalf("err = %v, want the ladder", err)
 	}
 }
 

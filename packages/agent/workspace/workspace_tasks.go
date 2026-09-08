@@ -10,6 +10,7 @@ import (
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/agent/worker"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/provider"
 )
 
 // The tasks pane surfaces the workspace-global swarm of background agents. The
@@ -205,9 +206,17 @@ func (w *Workspace) taskAction(sessionID, action string, args map[string]string)
 				return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%v", gerr)
 			}
 		}
+		// The thinking effort is independent of the model, so it rides any
+		// spawn: a pinned model, a native agent, or a foreign worker. An
+		// unknown word is refused here rather than handed to the child's own
+		// --reasoning, where it would fail from inside a subprocess.
+		reasoning := strings.ToLower(strings.TrimSpace(args["reasoning"]))
+		if !provider.ValidReasoningLevel(reasoning) {
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("spawn: reasoning must be %s", provider.ReasoningLadder()))
+		}
 		_, err = w.swarm.SpawnReq(w.ctx, swarm.SpawnRequest{
 			Task: args["task"], Model: args["model"], Provider: args["provider"], Persona: args["persona"],
-			Backend: backend, SessionID: sessionID,
+			Reasoning: reasoning, Backend: backend, SessionID: sessionID,
 		})
 	default:
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown tasks action %q", action))

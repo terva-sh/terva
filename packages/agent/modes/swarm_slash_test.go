@@ -76,35 +76,40 @@ func TestRunSwarmSubcommandsDoNotPanic(t *testing.T) {
 
 func TestParseSpawnFlags(t *testing.T) {
 	cases := []struct {
-		in                                            string
-		wantModel, wantProv, wantPersona, wantBackend string
-		wantTask                                      string
+		in   string
+		want spawnFlags
 	}{
-		{"do x", "", "", "", "", "do x"},
-		{"--model claude do x", "claude", "", "", "", "do x"},
-		{"--model=claude do x", "claude", "", "", "", "do x"},
-		{"--provider openai --model gpt-5 do x", "gpt-5", "openai", "", "", "do x"},
-		{"--provider=openai --model=gpt-5 do x", "gpt-5", "openai", "", "", "do x"},
-		{"--persona vartija review x", "", "", "vartija", "", "review x"},
-		{"--persona=vartija review x", "", "", "vartija", "", "review x"},
-		{"--persona ./d.md --model=gpt-5 t", "gpt-5", "", "./d.md", "", "t"},
+		{"do x", spawnFlags{Task: "do x"}},
+		{"--model claude do x", spawnFlags{Model: "claude", Task: "do x"}},
+		{"--model=claude do x", spawnFlags{Model: "claude", Task: "do x"}},
+		{"--provider openai --model gpt-5 do x", spawnFlags{Model: "gpt-5", Provider: "openai", Task: "do x"}},
+		{"--provider=openai --model=gpt-5 do x", spawnFlags{Model: "gpt-5", Provider: "openai", Task: "do x"}},
+		{"--persona vartija review x", spawnFlags{Persona: "vartija", Task: "review x"}},
+		{"--persona=vartija review x", spawnFlags{Persona: "vartija", Task: "review x"}},
+		{"--persona ./d.md --model=gpt-5 t", spawnFlags{Model: "gpt-5", Persona: "./d.md", Task: "t"}},
 		// --backend, both forms, and combined with other flags.
-		{"--backend claude do x", "", "", "", "claude", "do x"},
-		{"--backend=terva:portable do x", "", "", "", "terva:portable", "do x"},
-		{"--backend claude --model=gpt-5 t", "gpt-5", "", "", "claude", "t"},
+		{"--backend claude do x", spawnFlags{Backend: "claude", Task: "do x"}},
+		{"--backend=terva:portable do x", spawnFlags{Backend: "terva:portable", Task: "do x"}},
+		{"--backend claude --model=gpt-5 t", spawnFlags{Model: "gpt-5", Backend: "claude", Task: "t"}},
+		// --reasoning, both forms. The effort is independent of the route, so
+		// it pairs with a pinned model and stands on its own.
+		{"--reasoning high do x", spawnFlags{Reasoning: "high", Task: "do x"}},
+		{"--reasoning=off do x", spawnFlags{Reasoning: "off", Task: "do x"}},
+		{"--model=gpt-5 --provider=openai --reasoning minimum t", spawnFlags{Model: "gpt-5", Provider: "openai", Reasoning: "minimum", Task: "t"}},
 		// Only LEADING flags are consumed.
-		{"do --model x", "", "", "", "", "do --model x"},
-		{"do --persona x", "", "", "", "", "do --persona x"},
-		{"do --backend x", "", "", "", "", "do --backend x"},
+		{"do --model x", spawnFlags{Task: "do --model x"}},
+		{"do --persona x", spawnFlags{Task: "do --persona x"}},
+		{"do --backend x", spawnFlags{Task: "do --backend x"}},
+		{"do --reasoning x", spawnFlags{Task: "do --reasoning x"}},
+		// An unknown --flag=value is not ours, so it starts the task.
+		{"--wat=1 do x", spawnFlags{Task: "--wat=1 do x"}},
 		// Missing value: --model with no follow-up token leaves model empty
 		// and the next field starts the task.
-		{"--model", "", "", "", "", ""},
+		{"--model", spawnFlags{}},
 	}
 	for _, c := range cases {
-		m, p, persona, backend, task := parseSpawnFlags(c.in)
-		if m != c.wantModel || p != c.wantProv || persona != c.wantPersona || backend != c.wantBackend || task != c.wantTask {
-			t.Errorf("parseSpawnFlags(%q) = (%q,%q,%q,%q,%q); want (%q,%q,%q,%q,%q)",
-				c.in, m, p, persona, backend, task, c.wantModel, c.wantProv, c.wantPersona, c.wantBackend, c.wantTask)
+		if got := parseSpawnFlags(c.in); got != c.want {
+			t.Errorf("parseSpawnFlags(%q) = %+v; want %+v", c.in, got, c.want)
 		}
 	}
 }

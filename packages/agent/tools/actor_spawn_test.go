@@ -194,10 +194,12 @@ type fakeEngine struct {
 	sends   int
 	stops   int
 	sendErr error
+	lastReq swarm.SpawnRequest
 }
 
 func (f *fakeEngine) SpawnReq(ctx context.Context, req swarm.SpawnRequest) (*swarm.Agent, error) {
 	f.spawns++
+	f.lastReq = req
 	return &swarm.Agent{ID: "agent-" + string(rune('0'+f.spawns))}, nil
 }
 func (f *fakeEngine) SendUserTurn(id, text string) error { f.sends++; return f.sendErr }
@@ -211,7 +213,7 @@ func TestActorSpawn_ReusesWarmActor(t *testing.T) {
 	tool := &ActorSpawnTool{Swarm: fake, Warm: NewWarmActors(5), Cast: map[string]CastMember{"aava": {Persona: "aava"}}}
 	member := tool.Cast["aava"]
 
-	wa1, _, err := tool.acquire(context.Background(), "aava", "situation 1", member, "", nil)
+	wa1, _, err := tool.acquire(context.Background(), "aava", "situation 1", member, "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +221,7 @@ func TestActorSpawn_ReusesWarmActor(t *testing.T) {
 		t.Fatalf("first dispatch should spawn once: spawns=%d sends=%d", fake.spawns, fake.sends)
 	}
 
-	wa2, _, err := tool.acquire(context.Background(), "aava", "situation 2", member, "", nil)
+	wa2, _, err := tool.acquire(context.Background(), "aava", "situation 2", member, "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,10 +242,10 @@ func TestActorSpawn_RespawnsStaleActor(t *testing.T) {
 	tool := &ActorSpawnTool{Swarm: fake, Warm: NewWarmActors(5), Cast: map[string]CastMember{"aava": {Persona: "aava"}}}
 	member := tool.Cast["aava"]
 
-	tool.acquire(context.Background(), "aava", "s1", member, "", nil) // spawn #1
-	fake.sendErr = errors.New("socket closed")                        // the child is now gone
+	tool.acquire(context.Background(), "aava", "s1", member, "", "", nil) // spawn #1
+	fake.sendErr = errors.New("socket closed")                            // the child is now gone
 
-	if _, _, err := tool.acquire(context.Background(), "aava", "s2", member, "", nil); err != nil {
+	if _, _, err := tool.acquire(context.Background(), "aava", "s2", member, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if fake.sends != 1 {
@@ -295,6 +297,83 @@ func TestActorSpawn_Validation(t *testing.T) {
 	// Empty situation is rejected before any spawn.
 	if res, _ := tool.Execute(context.Background(), json.RawMessage(`{"actor":"innkeeper","situation":"  "}`), nil); !res.IsError {
 		t.Error("empty situation should error")
+	}
+}
+
+// A tier can move the MODEL, the thinking EFFORT, or both. acquire resolved
+// the route and then built the SpawnRequest from the model and the provider
+// alone, so the effort half never reached the child and a tier whose only
+// lever is effort was a silent no-op.
+func TestActorSpawn_TierEffortReachesTheChild(t *testing.T) {
+	fake := &fakeEngine{}
+	tool := &ActorSpawnTool{
+		Swarm:        fake,
+		Warm:         NewWarmActors(5),
+		Cast:         map[string]CastMember{"aava": {Persona: "aava"}},
+		HostProvider: "anthropic",
+		HostModel:    "claude-opus-4-5",
+		Tiers:        SwarmTierMap{"anthropic": {"weak": {Model: "claude-haiku-4-5", Reasoning: "low"}}},
+	}
+	member := tool.Cast["aava"]
+
+	if _, _, err := tool.acquire(context.Background(), "aava", "s", member, "weak", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if fake.lastReq.Reasoning != "low" {
+		t.Errorf("Reasoning = %q, want the tier's own effort", fake.lastReq.Reasoning)
+	}
+	if fake.lastReq.Model != "claude-haiku-4-5" {
+		t.Errorf("Model = %q, want the tier's model", fake.lastReq.Model)
+	}
+}
+
+// An explicit reasoning argument beats the tier's effort, and it survives a
+// cast pin that replaced the model — effort is orthogonal to the route.
+func TestActorSpawn_ExplicitReasoningWins(t *testing.T) {
+	newTool := func(fake *fakeEngine, member CastMember) *ActorSpawnTool {
+		return &ActorSpawnTool{
+			Swarm:        fake,
+			Warm:         NewWarmActors(5),
+			Cast:         map[string]CastMember{"aava": member},
+			HostProvider: "anthropic",
+			HostModel:    "claude-opus-4-5",
+			Tiers:        SwarmTierMap{"anthropic": {"weak": {Model: "claude-haiku-4-5", Reasoning: "low"}}},
+		}
+	}
+
+	fake := &fakeEngine{}
+	tool := newTool(fake, CastMember{Persona: "aava"})
+	if _, _, err := tool.acquire(context.Background(), "aava", "s", tool.Cast["aava"], "weak", "HIGH", nil); err != nil {
+		t.Fatal(err)
+	}
+	if fake.lastReq.Reasoning != "high" {
+		t.Errorf("Reasoning = %q, want the explicit argument lowercased", fake.lastReq.Reasoning)
+	}
+
+	pinned := &fakeEngine{}
+	pinnedTool := newTool(pinned, CastMember{Persona: "aava", Provider: "openai", Model: "gpt-5.6-codex"})
+	if _, _, err := pinnedTool.acquire(context.Background(), "aava", "s", pinnedTool.Cast["aava"], "", "minimum", nil); err != nil {
+		t.Fatal(err)
+	}
+	if pinned.lastReq.Model != "gpt-5.6-codex" || pinned.lastReq.Reasoning != "minimum" {
+		t.Errorf("a cast pin should keep its model and still take the effort: %+v", pinned.lastReq)
+	}
+}
+
+// An effort word the ladder does not know is refused at the door, with the
+// ladder rendered from provider.ReasoningLevels rather than a copy.
+func TestActorSpawn_RejectsUnknownReasoning(t *testing.T) {
+	fake := &fakeEngine{}
+	tool := &ActorSpawnTool{Swarm: fake, Warm: NewWarmActors(5), Cast: map[string]CastMember{"aava": {Persona: "aava"}}}
+	res, _ := tool.Execute(context.Background(), json.RawMessage(`{"actor":"aava","situation":"hi","reasoning":"banana"}`), nil)
+	if !res.IsError {
+		t.Fatal("an unknown effort word should be refused")
+	}
+	if fake.spawns != 0 {
+		t.Errorf("the refusal must land before any spawn: spawns=%d", fake.spawns)
+	}
+	if txt := resultText(res); !strings.Contains(txt, provider.ReasoningLadder()) {
+		t.Errorf("the refusal should print the ladder, got %q", txt)
 	}
 }
 

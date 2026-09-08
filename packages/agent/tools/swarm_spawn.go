@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 
+	ticket "github.com/terva-sh/git-ticket/ticket"
+
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
@@ -108,6 +110,12 @@ type SwarmSpawnTool struct {
 	// that message; returning nil allows it. Nil means this host offers no
 	// external backends at all, and any `backend` request is refused.
 	AllowBackend func(name string) error
+
+	// Tickets is the ticket store behind the `ticket` argument, and nil when the
+	// session has none. The host wires it from the built registry, which is the
+	// only place the core exists. Nil makes a ticket spawn refuse rather than
+	// silently spawn an unassigned sub-agent.
+	Tickets *TicketCore
 }
 
 // SetHost updates the host provider/model this tool inherits for tier
@@ -128,13 +136,20 @@ func (t *SwarmSpawnTool) host() (provider, model string) {
 }
 
 type swarmSpawnArgs struct {
-	Task           string `json:"task"`
-	Persona        string `json:"persona,omitempty"`
-	Model          string `json:"model,omitempty"`
-	Provider       string `json:"provider,omitempty"`
-	Tier           string `json:"tier,omitempty"`
+	Task     string `json:"task"`
+	Persona  string `json:"persona,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Tier     string `json:"tier,omitempty"`
+	// Reasoning pins the sub-agent's thinking effort. Unlike Tier it is
+	// orthogonal to the route: it is valid with a pinned model, with a tier,
+	// or on its own, and it overrides the effort a tier resolved.
+	Reasoning      string `json:"reasoning,omitempty"`
 	AllowUntrusted bool   `json:"allow_untrusted,omitempty"`
 	Backend        string `json:"backend,omitempty"`
+	// Ticket assigns a ticket to the sub-agent: the supervisor claims it on the
+	// child's behalf and renders it into the spawn context.
+	Ticket string `json:"ticket,omitempty"`
 	// DeliverableSchema is the structured-deliverable contract: a JSON
 	// schema the sub-agent's report must match (see SpawnRequest.Schema).
 	DeliverableSchema json.RawMessage `json:"deliverable_schema,omitempty"`
@@ -168,6 +183,10 @@ const swarmSpawnSchema = `{
       "type": "string",
       "description": "An optional provider id. Usually omit model and provider, and the sub-agent then uses the host session. If you give this field, you must also give model."
     },
+    "reasoning": {
+      "type": "string",
+      "description": "An optional effort level for the sub-agent. A low effort suits a task of search or collection. A high effort suits a task of design or diagnosis. This field is valid with any model, provider, or tier, because the effort is separate from the model. It overrides the effort that a tier selects. Omit this field, and the sub-agent then selects its own effort."
+    },
     "allow_untrusted": {
       "type": "boolean",
       "description": "Set this to true only after the user refuses to trust this workspace but still wants sub-agents. The tool then starts each sub-agent with less capability: no project extensions, no skills, and no context files. Usually omit this field. If the workspace is not trusted, ask the user to run 'terva trust' first."
@@ -175,6 +194,10 @@ const swarmSpawnSchema = `{
     "backend": {
       "type": "string",
       "description": "Optional. Give this task to an external coding agent instead of a terva sub-agent, for example \"claude\" for Claude Code. The external agent works in its own checkout and uses its own tools and credentials. It reports its result in the same way as a terva sub-agent. This field is available only when the user permits external workers. Omit it for a usual terva sub-agent, which is almost always correct."
+    },
+    "ticket": {
+      "type": "string",
+      "description": "An optional ticket id to assign to the sub-agent. The tool claims the ticket for the sub-agent. The tool adds the ticket to the task text, so the sub-agent reads the plan and the criteria. The tool does not start the sub-agent when it cannot claim the ticket, and it names the reason. A sub-agent never closes a ticket. You read the report and you decide."
     }
   },
   "required": ["task"]
@@ -182,23 +205,28 @@ const swarmSpawnSchema = `{
 
 func (t *SwarmSpawnTool) Name() string { return "swarm_spawn" }
 func (t *SwarmSpawnTool) Description() string {
-	return i18n.D("tool.swarm_spawn.description", "Start a sub-agent in the background to do an independent task at the same time as your own work. The tool returns the id of the sub-agent immediately, and the sub-agent continues while this conversation continues. Do not wait for the sub-agent before you start your next task.\n\nThe sub-agent uses this working directory and has the same tools. But it starts with no context from this conversation. Therefore give it a complete description of its task.\n\nUse this tool to divide work that is fully independent. For example, write the tests while you write the feature, or examine three files at the same time. Do not use this tool for a task of one small step, for steps that must occur in sequence, or when the user asks you to do the work yourself.\n\nWhen all of your sub-agents stop, you get one [auto-swarm update] message. This message gives the result of each sub-agent for you to summarize.")
+	return i18n.D("tool.swarm_spawn.description", "Start a sub-agent in the background to do an independent task at the same time as your own work. The tool returns the id of the sub-agent immediately, and the sub-agent continues while this conversation continues. Do not wait for the sub-agent before you start your next task.\n\nThe sub-agent uses this working directory and has the same tools. But it starts with no context from this conversation. Therefore give it a complete description of its task.\n\nUse this tool to divide work that is fully independent. For example, write the tests while you write the feature, or examine three files at the same time. Do not use this tool for a task of one small step, for steps that must occur in sequence, or when the user asks you to do the work yourself.\n\nWhen all of your sub-agents stop, you get one [auto-swarm update] message. This message gives the result of each sub-agent for you to summarize.\n\nGive `ticket` to assign a ticket to the sub-agent. The tool claims the ticket for the sub-agent and adds it to the task text. The tool does not start the sub-agent when it cannot claim the ticket, and it names the reason. A sub-agent never closes a ticket. You read the report and you decide.")
 }
 
-// Schema injects the dispatchable persona names as the `persona` enum when the
-// host supplies them, so the model can only pick a real specialist and gets
-// validation for free; with none it stays a free string.
+// Schema fills the two enums the const template leaves open. The `reasoning`
+// enum always comes from provider.ReasoningLevels, because a hand-written copy
+// of the ladder is how "max" came to be enforced but never advertised. The
+// `persona` enum appears only when the host supplies dispatchable names, so the
+// model can pick a real specialist and gets validation for free; with none it
+// stays a free string.
 func (t *SwarmSpawnTool) Schema() json.RawMessage {
-	if len(t.Personas) == 0 {
-		return json.RawMessage(swarmSpawnSchema)
-	}
 	var m map[string]any
 	if err := json.Unmarshal([]byte(swarmSpawnSchema), &m); err != nil {
 		return json.RawMessage(swarmSpawnSchema)
 	}
 	if props, ok := m["properties"].(map[string]any); ok {
-		if p, ok := props["persona"].(map[string]any); ok {
-			p["enum"] = t.Personas
+		if p, ok := props["reasoning"].(map[string]any); ok {
+			p["enum"] = provider.ReasoningLevels
+		}
+		if len(t.Personas) > 0 {
+			if p, ok := props["persona"].(map[string]any); ok {
+				p["enum"] = t.Personas
+			}
 		}
 	}
 	if out, err := json.Marshal(m); err == nil {
@@ -300,6 +328,37 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		}
 	}
 
+	// A ticket assignment resolves BEFORE anything spawns, so a sub-agent never
+	// starts on work it cannot hold. The refusal names the reason, because the
+	// model has to decide what to do instead, and "not ready" alone would send it
+	// guessing.
+	schema := a.DeliverableSchema
+	var assigned *ticket.Ticket
+	if ref := strings.TrimSpace(a.Ticket); ref != "" {
+		if t.Tickets == nil {
+			return toolErr("swarm_spawn: this session has no ticket store, so `ticket` cannot be assigned. Omit it to spawn an unassigned sub-agent."), nil
+		}
+		tk, refusal, err := t.Tickets.spawnTicket(ctx, ref)
+		if err != nil {
+			return toolErr("swarm_spawn: " + err.Error()), nil
+		}
+		if refusal != "" {
+			return toolErr("swarm_spawn: " + refusal), nil
+		}
+		assigned = tk
+		// The ticket IS the briefing. A sub-agent starts with no conversation
+		// context, and the ticket already holds what a briefing would repeat.
+		//
+		// The id LEADS the task text so the swarm recap names the ticket the child
+		// was working. The recap prints a truncated task line, and a brief appended
+		// at the end falls outside that window, so a dispatcher reading the recap
+		// would not learn which ticket the report belongs to.
+		task = "Ticket " + tk.ID + ". " + task + "\n\n" + ticketBrief(tk)
+		// The criteria become the report contract, so the dispatcher's review is a
+		// structured check rather than a reading of prose.
+		schema = spawnSchema(schema, tk)
+	}
+
 	req := swarm.SpawnRequest{
 		Task:      task,
 		Model:     route.Model,
@@ -307,7 +366,7 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		Reasoning: route.Reasoning,
 		Persona:   persona,
 		Backend:   backend,
-		Schema:    a.DeliverableSchema,
+		Schema:    schema,
 	}
 	// Stamp the spawn with the host conversation's session id so the child's
 	// meta.json records which conversation it belongs to and the /swarm
@@ -322,6 +381,16 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	if err != nil {
 		return core.ToolResult{}, fmt.Errorf("swarm_spawn: %w", err)
 	}
+	// The claim names the sub-agent, and that id exists only once the spawn has
+	// minted it, so this cannot happen before the spawn. A claim that fails here
+	// would leave a sub-agent running on work it does not hold, which is the one
+	// state the pre-flight check exists to prevent. It stops instead.
+	if assigned != nil {
+		if err := t.Tickets.claimForAgent(ctx, assigned.ID, agent.ID, agent.Dir); err != nil {
+			_ = t.Swarm.Stop(agent.ID)
+			return toolErr(fmt.Sprintf("swarm_spawn: spawned %s but could not claim %s for it: %v. The sub-agent was stopped, and nothing holds the ticket.", agent.ID, assigned.ID, err)), nil
+		}
+	}
 	if t.OnSpawned != nil {
 		t.OnSpawned(agent, task)
 	}
@@ -330,6 +399,11 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "spawned sub-agent %s\n", agent.ID)
 	fmt.Fprintf(&sb, "task: %s\n", truncateTask(task, 200))
+	if assigned != nil {
+		// The spawn-time claim is a write this tool made outside the swarm, so it
+		// is named here rather than left for the dispatcher to discover.
+		fmt.Fprintf(&sb, "ticket: %s claimed for this sub-agent, expiring in %s\n", assigned.ID, spawnClaimExpiry)
+	}
 	if persona != "" {
 		fmt.Fprintf(&sb, "persona: %s\n", persona)
 	}
@@ -355,6 +429,11 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 			fmt.Fprintf(&sb, "provider: %s\n", route.Provider)
 		}
 	}
+	// The tier label already carries its own effort, so name the effort on its
+	// own line only when the tier did not print it.
+	if route.Reasoning != "" && route.Tier.Reasoning != route.Reasoning {
+		fmt.Fprintf(&sb, "thinking: %s\n", route.Reasoning)
+	}
 	if untrusted {
 		sb.WriteString("note: UNTRUSTED workspace — the sub-agent runs without project extensions, skills, or context files.\n")
 	}
@@ -374,12 +453,13 @@ func (t *SwarmSpawnTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	return core.ToolResult{
 		Content: []provider.Content{provider.TextBlock{Text: sb.String()}},
 		Details: map[string]any{
-			"agent_id": agent.ID,
-			"task":     task,
-			"persona":  persona,
-			"model":    route.Model,
-			"tier":     tier,
-			"provider": route.Provider,
+			"agent_id":  agent.ID,
+			"task":      task,
+			"persona":   persona,
+			"model":     route.Model,
+			"tier":      tier,
+			"provider":  route.Provider,
+			"reasoning": route.Reasoning,
 		},
 	}, nil
 }
@@ -426,6 +506,16 @@ func resolveSpawnRoute(a swarmSpawnArgs, hostProvider, hostModel string, tiers S
 		if model == "" {
 			model = strings.TrimSpace(hostModel)
 		}
+	}
+	// Effort is orthogonal to the route, so it lands outside the branch above:
+	// a caller that pinned a model still gets to say how hard it thinks, and on
+	// a provider that ships one good model that is the only lever there is. An
+	// explicit value beats whatever effort the tier resolved.
+	if r := strings.ToLower(strings.TrimSpace(a.Reasoning)); r != "" {
+		if !provider.ValidReasoningLevel(r) {
+			return spawnRoute{}, "reasoning must be " + provider.ReasoningLadder()
+		}
+		route.Reasoning = r
 	}
 	route.Model = model
 	route.Provider = providerID
