@@ -224,6 +224,10 @@ type codexTool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters"`
+	// Send false explicitly. Responses may normalize an omitted strict flag
+	// into strict mode, which makes optional tool parameters required.
+	// https://developers.openai.com/api/docs/guides/function-calling#strict-mode
+	Strict bool `json:"strict"`
 }
 
 // codexImageTool is the Responses built-in image_generation tool. Unlike

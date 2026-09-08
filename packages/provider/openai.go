@@ -40,6 +40,20 @@ type openaiClient struct {
 	headers map[string]string
 	http    *http.Client
 
+	// userAgent overrides Go's default `Go-http-client/<ver>` on every
+	// request. Empty leaves the default, which is what every provider here
+	// sent before opencode's gateway asked clients to name themselves.
+	userAgent string
+
+	// sessionHeader names a request header carrying a stable
+	// per-conversation id, and sessionID derives its value from the
+	// request's PromptCacheKey. Both are empty for every provider that
+	// wants no such header; opencode.go is the only user (see
+	// newOpenCodeClient). A static entry in `headers` cannot serve here
+	// because the value changes with the conversation, not the client.
+	sessionHeader string
+	sessionID     func(cacheKey string) string
+
 	// usage holds the rate-limit snapshot parsed from response headers in
 	// Stream and read by UsageSnapshot from the TUI goroutine. Ephemeral
 	// (WindowRateLimit) — deliberately NOT seeded across a client rebuild, so
@@ -628,6 +642,14 @@ func (c *openaiClient) Stream(ctx context.Context, req Request) (<-chan Event, e
 		httpReq.Header.Set("content-type", "application/json")
 		httpReq.Header.Set("accept", "text/event-stream")
 		httpReq.Header.Set("authorization", "Bearer "+key)
+		if c.userAgent != "" {
+			httpReq.Header.Set("user-agent", c.userAgent)
+		}
+		if c.sessionHeader != "" && c.sessionID != nil {
+			if sid := c.sessionID(req.PromptCacheKey); sid != "" {
+				httpReq.Header.Set(c.sessionHeader, sid)
+			}
+		}
 		for k, v := range c.headers {
 			httpReq.Header.Set(k, v)
 		}

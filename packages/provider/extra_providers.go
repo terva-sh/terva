@@ -122,26 +122,10 @@ func NewOpenRouter(apiKey, baseURL string) Client {
 	return newPollingUsageClient(inner, usagePollTTL, fetchOpenRouterUsage(&http.Client{Timeout: 0}, apiKey, base))
 }
 
-// NewOpenCode is the opencode.ai Zen endpoint. Mixed APIs upstream; this
-// constructor wires the openai-completions flavor only. Models that need
-// the anthropic-messages flavor under the same provider should be built
-// with NewAnthropicCompat against the same base URL.
-func NewOpenCode(apiKey, baseURL string) Client {
-	return newOpenAICompat("opencode", apiKey, baseURL, "https://opencode.ai/zen/v1")
-}
-
-// NewOpenCodeGo is the opencode-go variant.
-//
-// Usage windows (/usage): the OpenCode Go plan has no usage/balance
-// endpoint yet, and the Zen gateway does not return subscription-window
-// headers, so this client implements no UsageReporter and /usage shows
-// "doesn't report usage limits" for it. When OpenCode ships the endpoint
-// (anomalyco/opencode#16017 — rolling/weekly/monthly windows), light it
-// up by wrapping this client in a UsageReporter that fetches it; the
-// dialog and status hint then work with no further changes.
-func NewOpenCodeGo(apiKey, baseURL string) Client {
-	return newOpenAICompat("opencode-go", apiKey, baseURL, "https://opencode.ai/zen/go/v1")
-}
+// NewOpenCode and NewOpenCodeGo live in opencode.go. They are the one pair
+// here that is not a bare newOpenAICompat call: the Zen gateway rejects a
+// request with no `x-opencode-session` header, so both wire a per-
+// conversation session id and terva's own user agent.
 
 // ----------------------------------------------------------------------
 // Anthropic Messages–compatible providers. These speak Anthropic's wire
