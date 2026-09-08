@@ -48,6 +48,7 @@ type wsSession struct {
 	tasks       *tasktool.Controller   // the built-in task board (nil when the session has no base workspace tools)
 	memory      *tools.MemoryTool      // durable memory, bound once at session build (nil when --no-memory)
 	files       *tools.FileState       // what the model has seen of each path; survives tool rebuilds
+	ticketCard  *tools.TicketCard      // the per-turn ticket card; survives tool rebuilds (nil with no store)
 	loreEntries []lore.Entry           // discovered lore, for the lore inspector pane (nil when lore off)
 	note        *build.NoteRecord      // live author's-note record (nil for a coding session); note.set writes it, the per-turn tail reads it
 	user        *build.NoteRecord      // live user-persona description record (nil for a coding session); user.bind writes it, the per-turn tail reads it
@@ -400,6 +401,14 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	ag := r.NewAgent()
 	s.agent = ag
 	s.gate = gate
+	// The tool-refresh seam: a tool that changes what registration itself can
+	// offer (ticket_init provisioning a .tickets store) asks for the same
+	// re-resolve an extension reload gets, so the ten ticket_* tools land on the
+	// next turn rather than the next session. Bound to the AGENT and not to a
+	// tool instance, because rebuildTools mints fresh tools and a channel on the
+	// instance would be nil from the first rebuild on. See
+	// workspace_toolchannels.go for the three times that bug shipped.
+	ag.SetToolRefresher(func(reason string) { s.rebuildTools(reason) })
 	// No skillTool field: the skill catalog is read back off the agent's live
 	// registry (liveSkillTool) precisely because every rebuild mints a fresh
 	// one. See carrier_skills.go.
@@ -411,6 +420,15 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	// Same retention rule as the task board and memory: a rebuild must not
 	// forget which files the model has read.
 	s.files = r.Files()
+	// Same retention rule again, and one extra step. The card needs the session
+	// id a claim records, and only the task board knows it, so the card reads it
+	// from the same place ticket_claim writes it. Nil store means nil core here,
+	// and the card then stays nil and renders nothing.
+	var ticketSession func() string
+	if s.tasks != nil {
+		ticketSession = s.tasks.Store().SessionID
+	}
+	s.ticketCard = tools.TicketCardFor(r.ToolRegistry, ticketSession)
 	s.args = args
 	s.cwd = r.CWD
 	// Retain the live author's-note record (immersive sessions only) and seed it
@@ -682,6 +700,10 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 			// nil-safe by absence would refuse every backend, so it is always
 			// wired here — the gate is inside the closure, not in whether it exists.
 			AllowBackend: allowWorkerBackend,
+			// The ticket store behind the `ticket` argument, read off the registry
+			// that was just built, because that is the only place the core exists.
+			// A session with no store gets nil here and a ticket spawn refuses.
+			Tickets: tools.TicketCoreFor(r.ToolRegistry),
 			// Track each spawn so the coordinator gets the [auto-swarm update]
 			// recap when the batch finishes (the carrier twin of the legacy
 			// OnSpawned wiring; without it a coordinator never learns they're done).
@@ -1294,7 +1316,7 @@ func (s *wsSession) endTurn(turnCtx context.Context, err error) (next string, re
 // Both fields are written once during buildSession, before the session is
 // published, so this reads them without s.mu like the other build-time state.
 func (s *wsSession) ephemeralTail() build.EphemeralTail {
-	return build.EphemeralTail{Ext: build.ExtEphemeral(s.extMgr), Tasks: s.tasks}
+	return build.EphemeralTail{Ext: build.ExtEphemeral(s.extMgr), Tasks: s.tasks, Tickets: s.ticketCard}
 }
 
 // argsSnapshot copies the session's resolved args under s.mu.
@@ -1357,6 +1379,10 @@ func (s *wsSession) rebuildTools(reason string) {
 	rr.UseTasks(s.tasks)
 	rr.UseMemory(s.memory)
 	rr.UseFiles(s.files)
+	// And the ticket card, for the sharpest version of the same reason: the
+	// ephemeral tail was wired once at session build, so a fresh core's fresh
+	// card would be invalidated by every write and rendered by nobody.
+	rr.UseTicketCard(s.ticketCard)
 	// Re-bind the channels that live on a TOOL INSTANCE rather than on a
 	// long-lived object (the confirmer, by contrast, lives on the gate and
 	// survives a rebuild untouched). Resolve just minted fresh tools with nil

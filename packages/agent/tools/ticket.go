@@ -41,6 +41,15 @@ type TicketCore struct {
 	// gives: agent:terva/<persona>. ActorName is the display name.
 	ActorID   string
 	ActorName string
+	// SubagentID is this process's swarm id, and empty outside a swarm child.
+	// A sub-agent works a ticket and never closes one, so the write tools read
+	// this to refuse a closure rather than being dropped from the registry.
+	SubagentID string
+	// Card is the session's ticket context card. Every write here invalidates
+	// it, so the next turn renders the store this write left behind rather than
+	// the one it found. nil for a host that renders no card, which Invalidate
+	// tolerates.
+	Card *TicketCard
 }
 
 func (c *TicketCore) open() (*ticket.Store, error) {

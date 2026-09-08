@@ -12,12 +12,15 @@ import (
 // truncated to these bounds at ingress so neither persisted state nor tool/panel
 // output can be flooded by oversized model input.
 const (
-	MaxTitleLen        = 200
-	MaxActiveFormLen   = 200
-	MaxNoteLen         = 300
-	MaxEvidenceLen     = 500
-	MaxSessionTitle    = 80
-	MaxLabelLen        = 80
+	MaxTitleLen      = 200
+	MaxActiveFormLen = 200
+	MaxNoteLen       = 300
+	MaxEvidenceLen   = 500
+	MaxSessionTitle  = 80
+	MaxLabelLen      = 80
+	// MaxTicketRefLen bounds the ticket id a seeded task carries back to its
+	// acceptance criterion. Ids are short (TKT- plus a ULID), so this is slack.
+	MaxTicketRefLen    = 64
 	MaxBatch           = 100
 	MaxTasksPerSession = 500
 	// MaxGenerations bounds how many archived task lists a session file retains.

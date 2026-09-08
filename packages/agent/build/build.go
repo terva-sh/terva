@@ -1272,6 +1272,9 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 			reg[t.Name()] = t
 		}
 		append_ = append(append_, PromptSegment{Source: SourceTasks, Text: tasksCtrl.Policy()})
+		// ticket_claim seeds this board, and BuildToolRegistry had no board to give
+		// it, so the binding happens here where one exists.
+		bindTaskBoard(reg, tasksCtrl)
 	}
 
 	// Ticket guidance. Gated on the BUILT REGISTRY, not on the store gate that
@@ -1734,6 +1737,79 @@ func (r *Resolved) UseTasks(ctrl *tasktool.Controller) {
 			r.ToolRegistry[t.Name()] = t
 		}
 	}
+	bindTaskBoard(r.ToolRegistry, ctrl)
+}
+
+// UseTicketCard keeps a session's ticket card across a tool rebuild.
+//
+// Same rule as UseTasks and UseFiles, and the same failure when it is skipped.
+// A rebuild mints a fresh TicketCore carrying a fresh card, but the ephemeral
+// tail was wired once at session build and still holds the original pointer.
+// The write tools would then invalidate a card nobody renders, and the model's
+// card would freeze at whatever the store held when the session started. That
+// is worse than no card, because it is confidently out of date.
+func (r *Resolved) UseTicketCard(c *tools.TicketCard) {
+	if r == nil || c == nil {
+		return
+	}
+	if tc := tools.TicketCoreFor(r.ToolRegistry); tc != nil {
+		tc.Card = c
+	}
+}
+
+// bindTaskBoard points every tool that writes the session task board at the
+// board this conversation owns. ticket_claim is the only one today.
+//
+// It runs everywhere the task tools themselves are bound, and for the same
+// reason. A board that the task tools rebound but ticket_claim did not is worse
+// than no seeding: the model would see a claim report tasks that its own
+// task_list never shows.
+func bindTaskBoard(reg core.Registry, ctrl *tasktool.Controller) {
+	if reg == nil || ctrl == nil {
+		return
+	}
+	for name, t := range reg {
+		if b, ok := t.(tools.TaskBinder); ok {
+			reg[name] = b.WithTasks(ctrl.Store())
+		}
+	}
+	// The same bridge in the other direction: a task that closes with evidence
+	// ticks the ticket criterion it was seeded from. Bound here, beside the
+	// forward binding, so the two halves cannot end up at different call sites
+	// and drift. A registry with no ticket tools clears the checker rather than
+	// leaving a previous session's store attached.
+	ctrl.Store().SetCriterionChecker(tools.CriterionCheckerFor(reg))
+}
+
+// ticketActor resolves the identity that ticket writes record.
+//
+// A swarm child records its subagent id rather than its persona. The supervisor
+// claims a ticket on the child's behalf as agent:terva/<subagent-id>, and
+// without this the child's own notes would name the persona instead. The ticket
+// would then disagree with itself about who did the work.
+//
+// Nothing new has to reach the child for this. runner.go already puts
+// TERVA_SWARM_AGENT_ID in every child environment, and it appends a fresh value
+// after procenv.Inherited(), so a nested spawn still names itself and not its
+// parent. The id is safe in the actor namespace because taskSlug emits only
+// lower-case letters, digits, and dashes.
+//
+// The display name stays the persona. The id answers which actor holds a claim,
+// and the name answers who this is, and for a subagent those are two different
+// questions with two different answers.
+func ticketActor() (id, name string) {
+	persona := config.PersonaName()
+	if agentID := swarmAgentID(); agentID != "" {
+		return "agent:terva/" + agentID, persona
+	}
+	return "agent:terva/" + strings.ReplaceAll(strings.ToLower(persona), " ", "-"), persona
+}
+
+// swarmAgentID is this process's subagent id, and empty when this process is
+// not a swarm child. The runner puts it in every child environment, so it is
+// the one reliable answer to "am I a sub-agent" that does not need a flag.
+func swarmAgentID() string {
+	return strings.TrimSpace(os.Getenv("TERVA_SWARM_AGENT_ID"))
 }
 
 // UseFiles keeps a session's file-state tracker across a tool rebuild.
@@ -1833,6 +1909,12 @@ func (r *Resolved) SetEscalator(e core.Escalator) {
 // Nil-safe; no-op when the tool isn't present.
 func bindAsker(reg core.Registry, a core.Asker) {
 	if t, ok := reg["ask_user_question"].(*tools.AskUserTool); ok {
+		t.Asker = a
+	}
+	// ticket_init asks one question of its own: who a new store should record as
+	// its first actor. It is the same channel and it has the same hazard, so it
+	// binds here rather than at a second site that a rebuild path could miss.
+	if t, ok := reg["ticket_init"].(*tools.TicketInitTool); ok {
 		t.Asker = a
 	}
 }
@@ -1942,6 +2024,10 @@ func (r Resolved) freshTasksRegistry() (core.Registry, *tasktool.Controller) {
 			reg[t.Name()] = t
 		}
 	}
+	// Without this, a claim made in an admitted group would seed the owner DM's
+	// durable board, because the clone above is shallow and ticket_claim would
+	// still be the shared instance.
+	bindTaskBoard(reg, ctrl)
 	return reg, ctrl
 }
 
@@ -2065,11 +2151,20 @@ func BuildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 	// git-ticket's own surface — the opt-out removes the tools, never the
 	// ledger.
 	if !args.NoTicket && tools.TicketStoreAvailable(cwd) && config.TicketsEnabled(cwd) {
-		persona := config.PersonaName()
+		actorID, actorName := ticketActor()
 		tc := &tools.TicketCore{
 			CWD:       cwd,
-			ActorID:   "agent:terva/" + strings.ReplaceAll(strings.ToLower(persona), " ", "-"),
-			ActorName: persona,
+			ActorID:   actorID,
+			ActorName: actorName,
+			// Non-empty inside a swarm child, which is what lets the write tools
+			// refuse a closure a sub-agent may not make.
+			SubagentID: swarmAgentID(),
+			// The card hangs off the core so every write here can invalidate it.
+			// Its Session func arrives from the host, because a session id is not
+			// known at build time and changes on resume, fork, and new. Until a
+			// host sets it the card renders nothing, which is the right answer for
+			// a run that has no session to speak of.
+			Card: &tools.TicketCard{CWD: cwd},
 		}
 		all["ticket_list"] = &tools.TicketListTool{TicketCore: tc}
 		all["ticket_search"] = &tools.TicketSearchTool{TicketCore: tc}
@@ -2082,6 +2177,33 @@ func BuildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 		all["ticket_claim"] = &tools.TicketClaimTool{TicketCore: tc}
 		all["ticket_comment"] = &tools.TicketCommentTool{TicketCore: tc}
 		all["ticket_fix"] = &tools.TicketFixTool{TicketCore: tc}
+	}
+	// ticket_init is the INVERSE of that gate: it registers only where there is
+	// no store, so no session ever carries both halves and a repository with a
+	// ledger pays nothing for the tool that creates one. It rides the same two
+	// opt-outs, because a user who turned the ticket tools off did not ask to be
+	// offered a ledger.
+	//
+	// It classifies with the six write tools and is pruned in plan mode with
+	// them. Creating a store writes .tickets/, .gitattributes and AGENTS.md into
+	// the user's repository, and all three land in their next commit.
+	//
+	// The group is "ticket", the same as the eleven. Under lazy tool visibility
+	// that is the whole discovery path: the capability note names the group, and
+	// an activation the model already made carries across the rebuild this tool
+	// asks for, so the ten real tools arrive advertised.
+	//
+	// This one keeps the PERSONA actor even inside a swarm child, unlike the
+	// eleven above. It seeds a new store's first actor, which is a durable
+	// identity for the repository, and a subagent id is minted per spawn and
+	// gone by the next one. A store signed by a dead subagent would name an
+	// actor that can never write again.
+	if !args.NoTicket && !tools.TicketStoreAvailable(cwd) && config.TicketsEnabled(cwd) {
+		persona := config.PersonaName()
+		all["ticket_init"] = &tools.TicketInitTool{
+			CWD:          cwd,
+			AgentActorID: "agent:terva/" + strings.ReplaceAll(strings.ToLower(persona), " ", "-"),
+		}
 	}
 	// Build-tag-gated optional built-ins (terva_scripting's code_execution,
 	// …) contribute here from their _on file's init(). They pass through

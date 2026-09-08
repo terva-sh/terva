@@ -166,6 +166,11 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 		}.Rebuild(ag)
 	}
 	extMgr.SetOnReload(mergeExtTools)
+	// The tool-refresh seam: ticket_init provisions a .tickets store, which
+	// changes what registration itself can offer, so it asks for the same
+	// re-resolve an extension reload gets. On the agent rather than the tool,
+	// because a rebuild mints fresh tools.
+	ag.SetToolRefresher(func(string) { mergeExtTools() })
 
 	// Session persistence & resume. rpc mode is stateless by default — its
 	// long-standing contract ("RPC persists no session") — so a run with no

@@ -40,44 +40,68 @@ type ticketWriteOut struct {
 	Path       string            `json:"path,omitempty"`
 }
 
-func (c *TicketCore) freshOut(ctx context.Context, s *ticket.Store, ref string) (core.ToolResult, error) {
+// freshRow is freshOut's body, split out for the caller that wraps the row in a
+// larger payload. ticket_transition adds what it did to the worklog.
+func (c *TicketCore) freshRow(ctx context.Context, s *ticket.Store, ref string) (ticketWriteOut, error) {
 	tk, err := s.Get(ctx, ref)
 	if err != nil {
-		return ticketResult(nil, err)
+		return ticketWriteOut{}, err
 	}
-	return ticketResult(ticketWriteOut{
+	return ticketWriteOut{
 		ticketRow:  rowFromTicket(tk),
 		References: ticketReferences(tk.References),
 		Revision:   tk.Revision,
 		Path:       tk.Path,
-	}, nil)
+	}, nil
+}
+
+func (c *TicketCore) freshOut(ctx context.Context, s *ticket.Store, ref string) (core.ToolResult, error) {
+	row, err := c.freshRow(ctx, s, ref)
+	if err != nil {
+		return ticketResult(nil, err)
+	}
+	return ticketResult(row, nil)
 }
 
 // applyWrite runs one mutation under the required precondition. On a stale
 // revision it re-reads and names the current one, because the library's
 // error carries the values in Details and the model needs them in prose.
 func (c *TicketCore) applyWrite(ctx context.Context, ref, ifRevision string, m ticket.Mutation) (core.ToolResult, error) {
+	s, id, err := c.applyMutation(ctx, ref, ifRevision, m)
+	if err != nil {
+		return ticketResult(nil, err)
+	}
+	return c.freshOut(ctx, s, id)
+}
+
+// applyMutation is applyWrite's body, split out for the one caller that needs
+// more than the standard row back. ticket_claim reads the ticket itself, so it
+// can seed the task board from the acceptance criteria it just claimed.
+func (c *TicketCore) applyMutation(ctx context.Context, ref, ifRevision string, m ticket.Mutation) (*ticket.Store, string, error) {
 	if strings.TrimSpace(ref) == "" {
-		return ticketResult(nil, fmt.Errorf("give ref: a ticket id, or a unique short form of it"))
+		return nil, "", fmt.Errorf("give ref: a ticket id, or a unique short form of it")
 	}
 	if strings.TrimSpace(ifRevision) == "" {
-		return ticketResult(nil, fmt.Errorf("give if_revision: the revision that ticket_get returned for this ticket"))
+		return nil, "", fmt.Errorf("give if_revision: the revision that ticket_get returned for this ticket")
 	}
 	s, err := c.open()
 	if err != nil {
-		return ticketResult(nil, err)
+		return nil, "", err
 	}
 	res, err := s.Apply(ctx, ref, m, ticket.ApplyOptions{IfRevision: ifRevision, Actor: c.actor()})
 	if err != nil {
 		var te *ticket.Error
 		if errors.As(err, &te) && te.Code == ticket.CodeStaleRevision {
 			if cur, gerr := s.Get(ctx, ref); gerr == nil {
-				return ticketResult(nil, fmt.Errorf("%s. The current revision is %s. Read the ticket again with ticket_get, and retry with that value.", err.Error(), cur.Revision))
+				return nil, "", fmt.Errorf("%s. The current revision is %s. Read the ticket again with ticket_get, and retry with that value.", err.Error(), cur.Revision)
 			}
 		}
-		return ticketResult(nil, err)
+		return nil, "", err
 	}
-	return c.freshOut(ctx, s, res.Ticket.ID)
+	// This covers ticket_update, ticket_transition, and ticket_claim, which all
+	// reach the store through here.
+	c.Card.Invalidate()
+	return s, res.Ticket.ID, nil
 }
 
 // ticketRefArg is one reference in the write schemas: the namespaced ref,
@@ -235,6 +259,7 @@ func (t *TicketCreateTool) Execute(ctx context.Context, raw json.RawMessage, pro
 	if err != nil {
 		return ticketResult(nil, err)
 	}
+	t.Card.Invalidate()
 	// The references are a second write, and the create already made the
 	// file. A failure here therefore leaves a ticket with no references,
 	// so the refusal names the id and the repair. The write needs no
@@ -371,7 +396,26 @@ func (t *TicketUpdateTool) Execute(ctx context.Context, raw json.RawMessage, pro
 
 // --- ticket_transition ------------------------------------------------------
 
-type TicketTransitionTool struct{ *TicketCore }
+type TicketTransitionTool struct {
+	*TicketCore
+	// Tasks is the session task board a closing transition records as a note,
+	// and nil when the session carries no task tools. The build layer binds it
+	// through WithTasks, never at construction.
+	Tasks TaskBoard
+}
+
+// ticketTransitionOut is the standard write row plus what the transition did to
+// the worklog. The report carries the reason when no note was written, because
+// an absent note has several causes and only one of them is a problem.
+type ticketTransitionOut struct {
+	ticketWriteOut
+	Worklog *worklogReport `json:"worklog,omitempty"`
+}
+
+type worklogReport struct {
+	Noted   bool   `json:"noted,omitempty"`
+	Skipped string `json:"skipped,omitempty"`
+}
 
 type ticketTransitionArgs struct {
 	Ref        string `json:"ref"`
@@ -382,7 +426,7 @@ type ticketTransitionArgs struct {
 
 func (t *TicketTransitionTool) Name() string { return "ticket_transition" }
 func (t *TicketTransitionTool) Description() string {
-	return i18n.D("tool.ticket_transition.description", "Move one ticket to another status. The tool writes the ticket file, and it never publishes anything. Give ref, status, and if_revision. A reason is necessary for blocked, and for a reopen from done. The store refuses a transition that the lifecycle does not permit, and the refusal names the permitted ones. Leave the promotion of a draft to a person, unless the user tells you otherwise.")
+	return i18n.D("tool.ticket_transition.description", "Move one ticket to another status. The tool writes the ticket file, and it never publishes anything. Give ref, status, and if_revision. A reason is necessary for blocked, and for a reopen from done. The store refuses a transition that the lifecycle does not permit, and the refusal names the permitted ones. Leave the promotion of a draft to a person, unless the user tells you otherwise.\n\nA move to done, archived, or blocked also writes a worklog note. The note holds the tasks that carry this ticket, with their evidence. The tool writes no note when the task list holds no work for this ticket. It gives the reason in the result.")
 }
 func (t *TicketTransitionTool) ToolGroupName() string { return "ticket" }
 func (t *TicketTransitionTool) Schema() json.RawMessage {
@@ -404,12 +448,60 @@ func (t *TicketTransitionTool) Execute(ctx context.Context, raw json.RawMessage,
 	if strings.TrimSpace(in.Status) == "" {
 		return ticketResult(nil, fmt.Errorf("give status: the status to move the ticket to"))
 	}
-	return t.applyWrite(ctx, in.Ref, in.IfRevision, ticket.SetStatus{Status: in.Status, Reason: in.Reason})
+	// Closure is the dispatcher's call, never the sub-agent's. Refused before the
+	// write, so a refused close changes nothing.
+	if refusal := t.refuseSubagentClosure(in.Ref, in.Status); refusal != "" {
+		return ticketResult(nil, fmt.Errorf("%s", refusal))
+	}
+	s, id, err := t.applyMutation(ctx, in.Ref, in.IfRevision, ticket.SetStatus{Status: in.Status, Reason: in.Reason})
+	if err != nil {
+		return ticketResult(nil, err)
+	}
+	rep := t.recordWorklog(ctx, s, id, in.Status)
+	row, err := t.freshRow(ctx, s, id)
+	if err != nil {
+		return ticketResult(nil, err)
+	}
+	return ticketResult(ticketTransitionOut{ticketWriteOut: row, Worklog: rep}, nil)
+}
+
+// recordWorklog appends this ticket's share of the session task board as a note
+// when the ticket closes.
+//
+// It runs after the status write, and a failure never fails the transition. The
+// ticket did move, and returning the move as an error would invite the model to
+// move it again, which the lifecycle would then refuse.
+func (t *TicketTransitionTool) recordWorklog(ctx context.Context, s *ticket.Store, id, status string) *worklogReport {
+	if !closesTicket(status) {
+		return nil
+	}
+	body, skipped := worklogFor(t.Tasks, id)
+	if skipped != "" {
+		return &worklogReport{Skipped: skipped}
+	}
+	if body == "" {
+		return nil
+	}
+	cur, err := s.Get(ctx, id)
+	if err != nil {
+		return &worklogReport{Skipped: "could not read the ticket back for the worklog note: " + err.Error()}
+	}
+	if _, err := s.Apply(ctx, id, ticket.AppendNote{Text: body},
+		ticket.ApplyOptions{IfRevision: cur.Revision, Actor: t.actor()}); err != nil {
+		return &worklogReport{Skipped: "could not append the worklog note: " + err.Error()}
+	}
+	return &worklogReport{Noted: true}
 }
 
 // --- ticket_claim -----------------------------------------------------------
 
-type TicketClaimTool struct{ *TicketCore }
+type TicketClaimTool struct {
+	*TicketCore
+	// Tasks is the session task board a claim seeds, and nil when the session
+	// carries no task tools. The build layer binds it through WithTasks, never
+	// at construction, so each conversation gets the board that belongs to it.
+	Tasks TaskBoard
+}
 
 type ticketClaimArgs struct {
 	Ref              string `json:"ref"`
@@ -418,11 +510,23 @@ type ticketClaimArgs struct {
 	Branch           string `json:"branch"`
 	ExpiresInMinutes int    `json:"expires_in_minutes"`
 	Force            bool   `json:"force"`
+	// SeedTasks is a pointer because it defaults to true. An absent JSON bool
+	// reads as false, so a plain bool would turn seeding off for every caller
+	// that does not mention it.
+	SeedTasks *bool `json:"seed_tasks"`
+}
+
+// ticketClaimOut is the standard write row plus what the claim did to the task
+// board. SeededTasks is absent when the caller opted out, and when the session
+// has no board at all.
+type ticketClaimOut struct {
+	ticketWriteOut
+	SeededTasks *seedReport `json:"seeded_tasks,omitempty"`
 }
 
 func (t *TicketClaimTool) Name() string { return "ticket_claim" }
 func (t *TicketClaimTool) Description() string {
-	return i18n.D("tool.ticket_claim.description", "Claim one ticket before you work it, or release your claim. The tool writes the ticket file, and it never publishes anything. Give ref and if_revision, and set release to true to release your claim. A claim of a ticket that you already hold renews it. A claim is metadata and not a status. Move the status with ticket_transition.\n\nSet force to true only when the user tells you to take work from another actor. The store then records the displaced claim.")
+	return i18n.D("tool.ticket_claim.description", "Claim one ticket before you work it, or release your claim. The tool writes the ticket file, and it never publishes anything. Give ref and if_revision, and set release to true to release your claim. A claim of a ticket that you already hold renews it. A claim is metadata and not a status. Move the status with ticket_transition.\n\nA claim also seeds the task list. The tool makes one task for each acceptance criterion that is not checked yet. Each task remembers the criterion it came from. Set seed_tasks to false to claim the ticket and leave the task list alone. The tool seeds nothing when the list still holds open tasks. It reports the reason, because a mix of two tickets' tasks is hard to undo.\n\nSet force to true only when the user tells you to take work from another actor. The store then records the displaced claim.")
 }
 func (t *TicketClaimTool) ToolGroupName() string { return "ticket" }
 func (t *TicketClaimTool) Schema() json.RawMessage {
@@ -431,6 +535,7 @@ func (t *TicketClaimTool) Schema() json.RawMessage {
 	props["branch"] = map[string]any{"type": "string", "description": "The git branch that the work rides on, recorded in the claim."}
 	props["expires_in_minutes"] = map[string]any{"type": "integer", "description": "The life of the claim in minutes. Zero means the store default, and a renewal with zero keeps the expiry that the claim carries."}
 	props["force"] = map[string]any{"type": "boolean", "description": "Take a live claim from another actor. The store records the displaced claim in Notes."}
+	props["seed_tasks"] = map[string]any{"type": "boolean", "description": "Seed the task list from the acceptance criteria that are not checked yet. The default is true. Set it to false to claim the ticket and leave the task list alone."}
 	return mustSchema(map[string]any{
 		"type":       "object",
 		"properties": props,
@@ -446,11 +551,31 @@ func (t *TicketClaimTool) Execute(ctx context.Context, raw json.RawMessage, prog
 	if in.Release {
 		return t.applyWrite(ctx, in.Ref, in.IfRevision, ticket.ReleaseClaim{})
 	}
-	return t.applyWrite(ctx, in.Ref, in.IfRevision, ticket.ClaimTicket{
+	s, id, err := t.applyMutation(ctx, in.Ref, in.IfRevision, ticket.ClaimTicket{
 		Branch:    in.Branch,
 		ExpiresIn: time.Duration(in.ExpiresInMinutes) * time.Minute,
 		Force:     in.Force,
+		Session:   t.sessionID(),
 	})
+	if err != nil {
+		return ticketResult(nil, err)
+	}
+	tk, err := s.Get(ctx, id)
+	if err != nil {
+		return ticketResult(nil, err)
+	}
+	out := ticketClaimOut{ticketWriteOut: ticketWriteOut{
+		ticketRow:  rowFromTicket(tk),
+		References: ticketReferences(tk.References),
+		Revision:   tk.Revision,
+		Path:       tk.Path,
+	}}
+	// The claim already landed. A seeding failure past this point must not read
+	// as a failed claim, so it travels in the payload and never as an error.
+	if in.SeedTasks == nil || *in.SeedTasks {
+		out.SeededTasks = seedFromCriteria(t.Tasks, tk)
+	}
+	return ticketResult(out, nil)
 }
 
 // --- ticket_fix -------------------------------------------------------------
@@ -513,6 +638,10 @@ func (t *TicketFixTool) Execute(ctx context.Context, raw json.RawMessage, progre
 	res, err := s.Fix(ctx, ticket.FixOptions{DryRun: in.DryRun})
 	if err != nil {
 		return ticketResult(nil, err)
+	}
+	// A dry run writes nothing, so it leaves the card alone.
+	if !in.DryRun {
+		t.Card.Invalidate()
 	}
 	out := map[string]any{
 		"dry_run": in.DryRun,

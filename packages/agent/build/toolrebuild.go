@@ -77,6 +77,15 @@ type LiveToolSet struct {
 	// and adjust something nothing reads.
 	Sandbox *tools.Sandbox
 
+	// TicketCard is the session's per-turn ticket card. Same rule as Tasks,
+	// Memory, and Files, with one extra edge: the ephemeral tail is wired once at
+	// session build, so a fresh resolve's fresh card would be invalidated by
+	// every ticket write and rendered by nobody. The card would then freeze at
+	// whatever the store held when the session started, which is worse than no
+	// card because it is confidently out of date. nil for a host with no store,
+	// and UseTicketCard tolerates that.
+	TicketCard *tools.TicketCard
+
 	// Ext and MCP are the two tool sources a fresh Resolve knows nothing about.
 	// Order is load-bearing and matches the build order: MergeExtensionTools is
 	// first-write-wins, so merging extensions first keeps an extension tool
@@ -102,6 +111,7 @@ func (s LiveToolSet) Rebuild(ag *core.Agent) bool {
 	r.UseMemory(s.Memory)
 	r.UseFiles(s.Files)
 	r.UseSandbox(s.Sandbox)
+	r.UseTicketCard(s.TicketCard)
 	if s.Ext != nil {
 		r.MergeExtensionTools(&ExtToolAdapter{Mgr: s.Ext})
 	}

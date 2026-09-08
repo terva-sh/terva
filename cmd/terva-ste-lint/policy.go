@@ -157,7 +157,11 @@ var allowedCaps = map[string]bool{
 	// initialism the repository uses as a proper noun, not a writer shouting:
 	"ACP": true, "PR": true, "CI": true, "UI": true, "WSL": true,
 	"JSONL": true, "CGO": true, "SSH": true,
-	"AND": false, "OR": false, "NOT": false, // conjunctions in caps ARE emphasis
+	// A file name, and one a tool has to be able to say. ticket_init writes
+	// git-ticket's workflow block into AGENTS.md, and a description that
+	// cannot name the file it edits is worse than a shouted word.
+	"AGENTS": true,
+	"AND":    false, "OR": false, "NOT": false, // conjunctions in caps ARE emphasis
 }
 
 // A ruleClass says what a rule is for. A structural rule keeps an instruction

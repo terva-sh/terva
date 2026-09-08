@@ -513,7 +513,16 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	// The order lives in build.EphemeralTail now, which is also what the trust
 	// flip's Lore re-derivation below reproduces — the two used to be written
 	// out separately, and the re-derivation wrote neither.
-	ephemeral := build.EphemeralTail{Ext: build.ExtEphemeral(extMgr), Tasks: r.Tasks}
+	// The ticket card rides the same tail, bound to the session id a claim
+	// records. Captured once here and handed to the rebuild below, because the
+	// tail is wired once and a rebuild's fresh card would be invalidated by every
+	// ticket write and rendered by nobody.
+	var ticketSession func() string
+	if r.Tasks != nil {
+		ticketSession = r.Tasks.Store().SessionID
+	}
+	ticketCard := tools.TicketCardFor(r.ToolRegistry, ticketSession)
+	ephemeral := build.EphemeralTail{Ext: build.ExtEphemeral(extMgr), Tasks: r.Tasks, Tickets: ticketCard}
 	build.WireEphemeralTail(ag, ephemeral)
 	ag.AddContinuationGate(build.OpenWorkGate(extMgr, r.Tasks))
 	// observe is the extension-side event sink: it fans every event out to the
@@ -561,16 +570,23 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	fileState := r.Files()
 	rebuildTools := func() {
 		build.LiveToolSet{
-			Args:    args,
-			Gate:    confirmGate,
-			Tasks:   r.Tasks,
-			Memory:  memTool,
-			Files:   fileState,
-			Sandbox: r.Sandbox,
-			Ext:     extMgr,
-			MCP:     mcpAdapter,
+			Args:       args,
+			Gate:       confirmGate,
+			Tasks:      r.Tasks,
+			Memory:     memTool,
+			Files:      fileState,
+			Sandbox:    r.Sandbox,
+			TicketCard: ticketCard,
+			Ext:        extMgr,
+			MCP:        mcpAdapter,
 		}.Rebuild(ag)
 	}
+	// The tool-refresh seam: a tool that changes what this workspace CAN offer
+	// (ticket_init provisioning a .tickets store) asks for the same re-resolve an
+	// extension reload gets, so the tools it unlocked land on the next turn
+	// rather than the next session. The callback lives on the agent, which
+	// outlives every rebuild.
+	ag.SetToolRefresher(func(string) { rebuildTools() })
 
 	// recordSwap is this session's half of a model switch — the acp equivalent
 	// of ModelSwap.After, which is where the daemon does the same thing.

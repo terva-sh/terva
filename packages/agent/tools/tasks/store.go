@@ -53,6 +53,15 @@ type Task struct {
 	Note       string `json:"note,omitempty"`
 	CreatedAt  string `json:"created_at"` // RFC3339
 	UpdatedAt  string `json:"updated_at"`
+
+	// Ticket and Criterion link a task back to the acceptance criterion it was
+	// seeded from, when ticket_claim seeded this board. The task list is where
+	// that mapping lives: nothing in the ticket store records which task covers
+	// which criterion, so losing the board loses the link. Both are empty on a
+	// task the model made itself, and both are omitempty, so a board written
+	// before the bridge existed round-trips unchanged.
+	Ticket    string `json:"ticket,omitempty"`
+	Criterion int    `json:"criterion,omitempty"` // 1-based index into the ticket's acceptance criteria
 }
 
 // CreateSpec is the model-supplied shape for one new task. It has no ID field
@@ -62,6 +71,12 @@ type CreateSpec struct {
 	ActiveForm string
 	Status     Status // "" => pending
 	Note       string
+
+	// Ticket and Criterion are set by ticket_claim when it seeds a board, and
+	// are not reachable from the task_create schema. A model names its own work;
+	// it does not get to claim a task covers an acceptance criterion it does not.
+	Ticket    string
+	Criterion int
 }
 
 // UpdatePatch patches an existing task by ID. A nil pointer means "leave
@@ -111,6 +126,11 @@ type Store struct {
 
 	generations []Generation
 	nextGen     int
+
+	// checker ticks a ticket acceptance criterion when a task that carries one
+	// closes. It is nil unless the build layer bound a ticket store to this
+	// session. See criterion.go for why the interface is on this side.
+	checker CriterionChecker
 }
 
 // NewStore constructs an in-memory store. fs may be nil at construction (it
@@ -372,6 +392,8 @@ func (s *Store) Create(specs []CreateSpec) ([]Task, error) {
 	type prepared struct {
 		title, activeForm, note string
 		status                  Status
+		ticket                  string
+		criterion               int
 	}
 	prep := make([]prepared, len(specs))
 	for i, sp := range specs {
@@ -390,7 +412,17 @@ func (s *Store) Create(specs []CreateSpec) ([]Task, error) {
 		if st == "" {
 			st = StatusPending
 		}
-		prep[i] = prepared{title: title, activeForm: af, note: CleanOneLine(sp.Note, MaxNoteLen), status: st}
+		// A criterion index is meaningless without the ticket it indexes into, so
+		// the pair travels together or not at all.
+		ref := CleanOneLine(sp.Ticket, MaxTicketRefLen)
+		crit := sp.Criterion
+		if ref == "" || crit < 0 {
+			ref, crit = "", 0
+		}
+		prep[i] = prepared{
+			title: title, activeForm: af, note: CleanOneLine(sp.Note, MaxNoteLen), status: st,
+			ticket: ref, criterion: crit,
+		}
 	}
 	now := s.nowStr()
 	ids := make([]string, 0, len(prep))
@@ -404,6 +436,8 @@ func (s *Store) Create(specs []CreateSpec) ([]Task, error) {
 			Note:       p.note,
 			CreatedAt:  now,
 			UpdatedAt:  now,
+			Ticket:     p.ticket,
+			Criterion:  p.criterion,
 		}
 		s.nextID++
 		s.tasks = append(s.tasks, t)

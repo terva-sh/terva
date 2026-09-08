@@ -152,7 +152,10 @@ const descUpdate = "Change a task by `id`. Usually you change the status. An `id
 	"When you stop work on a task and you know the next task, give `activate_next` with the " +
 	"id of that task. The tool then closes or parks this task and activates the next task " +
 	"in one step. This field is valid only with the status 'done', 'cancelled', or " +
-	"'blocked'."
+	"'blocked'.\n\n" +
+	"A task can carry a ticket acceptance criterion. A claim on a ticket seeds such tasks. " +
+	"When you close one with `evidence`, the tool also checks that criterion on the ticket. " +
+	"The ticket file changes, so read the ticket again before your next ticket write."
 
 var statusEnum = []string{"pending", "active", "blocked", "done", "cancelled"}
 

@@ -6,6 +6,7 @@ import (
 
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/lore"
+	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
@@ -510,6 +511,13 @@ type EphemeralTail struct {
 	// the board is a first-party feature and must not be switched off by an
 	// unrelated subsystem being absent.
 	Tasks *tasktool.Controller
+
+	// Tickets is the session's ticket card, which names the ticket this session
+	// claims. Same rule as Tasks: a first-party feature, so it is a field here
+	// rather than a condition around the call. It is nil for a host that renders
+	// no card, and it renders nothing for a workspace with no store or a session
+	// with no claim, so the common case costs no tokens.
+	Tickets *tools.TicketCard
 }
 
 // compose stacks this tail's cards onto base, the run's own per-turn tail.
@@ -529,6 +537,11 @@ func (t EphemeralTail) compose(base func() string) func() string {
 	out := composeEphemeral(t.Ext, base)
 	if t.Tasks != nil {
 		out = composeEphemeral(t.Tasks.Ephemeral, out)
+	}
+	// Composed last, so the model reads it first: the ticket is why this session
+	// is working, and the task board is what it is doing about it now.
+	if t.Tickets != nil {
+		out = composeEphemeral(t.Tickets.Ephemeral, out)
 	}
 	return out
 }

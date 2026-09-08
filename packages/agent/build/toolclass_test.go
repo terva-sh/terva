@@ -74,6 +74,13 @@ func toolUniverse(t *testing.T) map[string]bool {
 	for name := range reg {
 		u[name] = true
 	}
+	// ticket_init registers on the INVERSE gate, so the store-bearing directory
+	// above can never see it. A second registry in a git repo with no store is
+	// what puts it in the universe, and without this the trusted-origin test
+	// would read its builtin entry as stale and demand its deletion.
+	for name := range BuildToolRegistry(Args{}, core.ApprovalWorkspace, gitRepoDir(t), nil, "", "", false, nil) {
+		u[name] = true
+	}
 	for name := range registeredElsewhere {
 		u[name] = true
 	}

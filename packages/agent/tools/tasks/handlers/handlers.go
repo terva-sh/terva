@@ -310,6 +310,26 @@ func Update(s *tasks.Store, raw json.RawMessage) (string, bool) {
 			fmt.Fprintf(&b, "Deactivated %s (was active): %s\n", nextDeactivated.ID, nextDeactivated.Title)
 		}
 	}
+	// A task seeded from a ticket criterion ticks that criterion when it closes
+	// with evidence. Evidence is the gate and not the close alone, because an
+	// unevidenced close is the very case the nudge below asks the model to repair,
+	// and a ticked box on a shared ticket is much harder to walk back than a task
+	// status.
+	//
+	// A failure here never fails the update. The task did close, and reporting a
+	// close as an error invites the model to close it a second time. The line
+	// names the manual remedy instead.
+	if updated.Status == tasks.StatusDone && strings.TrimSpace(updated.Evidence) != "" &&
+		strings.TrimSpace(updated.Ticket) != "" && updated.Criterion > 0 {
+		if ck := s.CriterionChecker(); ck != nil {
+			if err := ck.CheckCriterion(updated.Ticket, updated.Criterion); err != nil {
+				fmt.Fprintf(&b, "note: %s closed, but acceptance criterion %d on %s stayed unchecked: %v. Check it by hand with `git ticket ac %s --check %d`.\n",
+					updated.ID, updated.Criterion, updated.Ticket, err, updated.Ticket, updated.Criterion)
+			} else {
+				fmt.Fprintf(&b, "Checked acceptance criterion %d on %s.\n", updated.Criterion, updated.Ticket)
+			}
+		}
+	}
 	// Soft evidence nudge: name the task and the status so the recommendation is
 	// actionable, not generic. Stays a note (never isError) — evidence is
 	// encouraged, not mechanically required.

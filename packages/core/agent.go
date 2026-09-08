@@ -201,7 +201,14 @@ type Agent struct {
 	cacheCliffObs          []func(CacheCliff)
 	transportObs           []func(provider.TransportInfo)
 	toolGroupObs           []func(group string)
-	continuationGates      []ContinuationGate
+	// toolRefresh is the host's re-resolve callback, set by SetToolRefresher and
+	// fired by RequestToolRefresh. It lives on the AGENT and not on a tool
+	// instance, because a rebuild mints fresh tools: a field on the tool would be
+	// nil for the rest of the session after the first rebuild, which is the bug
+	// workspace_toolchannels.go was written about. One host owns the rebuild, so
+	// this is a single callback and not an observer list. Guarded by obsMu.
+	toolRefresh       func(reason string)
+	continuationGates []ContinuationGate
 
 	// ContextProvider, if set, is called once per turn to obtain
 	// host-assembled ephemeral context (already wrapped/bounded) to

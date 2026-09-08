@@ -267,6 +267,23 @@ type Config struct {
 	// fallback is the literal "User".
 	UserName string `json:"user_name,omitempty"`
 
+	// TicketActor is the actor id ticket_init records in a NEW .tickets store's
+	// config.yml, so the choice is made once per machine and reused in the next
+	// repository. The literal TicketActorNone means the user chose to leave the
+	// store's actor list empty; empty/missing means nobody has been asked yet,
+	// and ticket_init asks.
+	//
+	// A user-identity preference like UserName, and global for the same reason:
+	// it resolves from and writes to the user's global config even under
+	// project-scoping (GlobalUserPrefs, SetGlobalTicketActor). It carries no
+	// capability, and the project layer never sets it, because a cloned
+	// repository must not choose who its writes are attributed to.
+	//
+	// The value matters more than it looks. git-ticket falls back to the first
+	// actor in config.yml when a command names none, so whoever is seeded here
+	// signs every later flag-less write in that store.
+	TicketActor string `json:"ticket_actor,omitempty"`
+
 	// LastChangelogShown is the version whose release-notes
 	// dialog the user has already seen. When the running binary's
 	// version differs, the next interactive run shows the
@@ -1267,7 +1284,8 @@ func saveConfigAt(home string, c Config) error {
 // Add a field ONLY when it is a user-identity preference with no capability or
 // trust weight.
 type GlobalUserPrefs struct {
-	UserName string // what a character card's {{user}} macro resolves to
+	UserName    string // what a character card's {{user}} macro resolves to
+	TicketActor string // the actor id ticket_init seeds a new .tickets store with
 }
 
 // GlobalUserPreferences reads the allowlisted preferences from the user's global
@@ -1279,7 +1297,8 @@ func GlobalUserPreferences() GlobalUserPrefs {
 		return GlobalUserPrefs{}
 	}
 	return GlobalUserPrefs{
-		UserName: strings.TrimSpace(c.UserName),
+		UserName:    strings.TrimSpace(c.UserName),
+		TicketActor: strings.TrimSpace(c.TicketActor),
 	}
 }
 
@@ -1290,6 +1309,22 @@ func GlobalUserPreferences() GlobalUserPrefs {
 func SetGlobalUserName(name string) error {
 	return MutateConfigAt(globalHome(), func(c *Config) {
 		c.UserName = strings.TrimSpace(name)
+	})
+}
+
+// TicketActorNone is what TicketActor holds when the user chose to leave a new
+// store's actor list empty. It is a real answer and not a missing one, so
+// ticket_init stops asking after it is stored.
+const TicketActorNone = "none"
+
+// SetGlobalTicketActor persists the answer to "who should this store record
+// your writes as?" to the GLOBAL config, so the next repository on this machine
+// reuses it instead of asking again. Mirrors SetGlobalUserName, including the
+// project-scope survival: the choice belongs to the person, not to the repo
+// they happen to be in.
+func SetGlobalTicketActor(actor string) error {
+	return MutateConfigAt(globalHome(), func(c *Config) {
+		c.TicketActor = strings.TrimSpace(actor)
 	})
 }
 

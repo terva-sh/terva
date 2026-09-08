@@ -186,6 +186,11 @@ var builtin = map[string]bool{
 	"ticket_claim":      true,
 	"ticket_comment":    true,
 	"ticket_fix":        true,
+	// ticket_init creates the store the other eleven work. It is first-party
+	// and it is a write: it puts .tickets/, .gitattributes and AGENTS.md in
+	// the user's repository, so it stays out of readOnly with its six write
+	// siblings and is pruned in plan mode with them.
+	"ticket_init": true,
 	// The play-and-deliberation four, trusted by decision (2026-07-27) after
 	// the classification audit found them prompting as foreign while
 	// swarm_spawn — which spawns TOOL-BEARING children at yolo — was trusted.

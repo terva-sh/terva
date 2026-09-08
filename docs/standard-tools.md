@@ -203,6 +203,172 @@ package, so the two surfaces cannot drift from each other. Both track the
 version `go.mod` pins, currently v0.14.3. A `git-ticket` binary installed
 separately on the user's `PATH` is a third thing and can be any version, so
 that one *can* drift from both.
+
+`ticket_claim` is the one that also writes outside the store. A claim seeds
+the session task list with one task per acceptance criterion that is not
+checked yet, and each seeded task records the ticket id and the 1-based
+criterion index it came from. `seed_tasks: false` claims without touching
+the list. The claim also records the terva session id, which git-ticket
+stores at schema 3 and above, so a ticket indexes back into transcript
+history.
+
+The task list is where that mapping lives, and nothing in the ticket store
+holds it. The index counts every criterion, checked ones included, because
+that is what `ticket.SetChecklistItem` addresses; numbering off the
+unchecked subset would check the wrong box and say nothing. A claim seeds
+nothing when the list still holds open tasks, and reports why, because a
+mix of two tickets' tasks is hard to undo.
+
+Because a claim writes the board, `ticket_claim` binds to it through
+`tools.TaskBinder` wherever the task tools bind: at registration, in
+`UseTasks` across a rebuild, and in `freshTasksRegistry`. That last one is
+not optional. The per-conversation registry is a shallow copy, so a
+`ticket_claim` that was not rebound would seed the owner DM's durable board
+from an admitted group chat.
+
+The bridge runs the other way too. Closing a task with `evidence` checks the
+acceptance criterion that task was seeded from. Evidence is the gate rather
+than the close alone, because an unevidenced close is what the evidence nudge
+already asks the model to repair, and a ticked box on a shared ticket is much
+harder to walk back than a task status. A check that fails to reach the ticket
+store never fails the task update. The result says why, and it names
+`git ticket ac <id> --check <n>` as the manual repair.
+
+That direction inverts the dependency, so `tasks.CriterionChecker` is declared
+on the tasks side and implemented on the ticket side.
+`packages/agent/tools/tasks` imports `privfs` and `core` and nothing else, and
+a direct import of the ticket tools would close a cycle. `bindTaskBoard` binds
+both halves in one place, so the forward and reverse bindings cannot end up at
+different call sites and drift apart.
+
+`ticket_transition` writes a worklog note when a ticket reaches `done`,
+`archived`, or `blocked`. Blocked counts because a park is when the record of
+what was tried is worth most. The note holds only the tasks that carry this
+ticket, filtered inside each archived generation as well as across them, so
+closing one ticket never copies another one's work into a permanent record.
+Tasks the session never archived land as a final section, because unarchived
+work still happened. A close with nothing to record writes no note and reports
+the reason, since an absent note has several causes and silence does not tell
+them apart.
+
+One interaction is worth knowing. Closing a seeded task rewrites the ticket
+file, so a revision read before that close is stale by the time a transition
+runs. The refusal names the current revision, so this recovers on its own, but
+reading the ticket again first is cheaper.
+
+The session also gets a per-turn ticket card, beside the task card and on the
+same footing: `EphemeralTail.Tickets`, a first-party field rather than something
+an unrelated subsystem can switch off. It is composed last, so the model reads
+it first. The ticket is why this session is working, and the task board is what
+it is doing about it now.
+
+The card names the ticket this session claims, its title, and the queue behind
+it: how many tickets an actor could pick up, and how many drafts wait on a
+person. Id and title only, because the model calls `ticket_get` when it needs
+the criteria, and a card that carried them would repeat a long body on every
+turn.
+
+It renders nothing in two cases, and both are the point. A workspace with no
+store pays no context cost, which is why the whole ticket surface gates on the
+store. A session that claims nothing pays none either, because a card that only
+counts other people's work is a standing tax on every turn of every session that
+is not working a ticket. That second rule also pays for the cache below: the scan
+only ever runs for a session holding a claim.
+
+The match is on the claim's session id, not its actor. Two sessions of one
+persona share an actor, so an actor match would show each of them the other's
+work and call it their own. An expired claim does not count, because a claim
+lapses rather than being released when its holder dies.
+
+The counts are cached. A write through any `ticket_*` tool calls `Invalidate`,
+so the next render is exact, and `ticket_fix` skips that under `dry_run` because
+a dry run writes nothing. A 30-second throttle bounds the rescan otherwise. That
+interval is the catch-up path for a write terva did not make: the `git ticket`
+CLI, another agent in another worktree, or a merge that moved files underneath.
+Those stay stale until it lapses, which is the cost of not scanning every turn.
+
+One wiring rule carries real risk. `WireEphemeralTail` runs once at session
+build, but `rebuildTools` mints a fresh `TicketCore` carrying a fresh card. Left
+alone, the write tools would invalidate a card nobody renders and the model's
+card would freeze at whatever the store held when the session started, which is
+worse than no card because it is confidently out of date. `Resolved.UseTicketCard`
+preserves it across the rebuild, the same treatment `UseTasks` and `UseFiles`
+get, for the same reason.
+
+There are two rebuild paths, and both carry it. The workspace daemon keeps its
+own `rebuildTools`, and rpc and acp share `build.LiveToolSet.Rebuild`, which now
+has a `TicketCard` field. `TestTheSharedRebuildCarriesEverySurvivorTheWorkspaceDoes`
+holds the two in step and will fail on a survivor added to only one of them. It
+caught this one. Three hosts wire the card, and they go through
+`tools.TicketCardFor` rather than each repeating the lookup, because a host doing
+this its own way is how every survivor bug here shipped. The headless print and
+json path is the deliberate omission: a single-shot run holds no claim, so the
+card would render nothing anyway.
+
+The card carries no prompt guidance. The task card has some because the model
+has to maintain the board. This one only reports, and `claimed:` and `queue:`
+read without instructions. A ticket title is authored text that reaches the model
+verbatim, so it goes through the same targeted escaper the task card uses, and a
+title cannot close the frame or forge a system block.
+
+`swarm_spawn` takes an optional `ticket`. The supervisor claims it for the
+sub-agent before anything spawns, renders the ticket into the task text, and
+refuses the spawn when it cannot claim it. The refusal names the reason, so a
+draft says who may promote it and a blocked ticket names what comes first. No
+sub-agent starts on work it cannot hold.
+
+The claim names the child, not the host: `agent:terva/<subagent-id>`, with the
+agent's worktree and a two-hour expiry. The expiry is the point. A claim on
+behalf of a process has no holder who can release it, so a crashed sub-agent
+would keep a ticket forever, and a lapse is better than litter. The supervisor
+does not renew it, because the claim is a coordination hint and not a lock.
+
+The child signs its own writes with that same id. `build.ticketActor` reads
+`TERVA_SWARM_AGENT_ID`, which the runner already puts in every child
+environment, so no flag and no new variable had to reach the child. Without it
+the child would sign as its persona while the claim named the subagent, and the
+ticket would disagree with itself about who did the work. `ticket_init` is the
+deliberate exception and keeps the persona: it seeds a new store's first actor,
+which is a durable identity, and a subagent id is gone by the next spawn.
+
+The brief is the ticket itself, because a sub-agent starts with no conversation
+context and the ticket already holds what a briefing would repeat. Criteria
+arrive as numbered text rather than checkboxes, since a checkbox invites a child
+to tick something it may not. Closure belongs to the dispatcher.
+
+The criteria also become the report contract. When the caller writes no
+`deliverable_schema`, `swarm_spawn` derives one: an object with a `criteria`
+array, one entry per criterion, each carrying the criterion text, whether the
+work met it, and the evidence. The description numbers the criteria in the order
+they went out. That makes the dispatcher's review a structured check against each
+criterion rather than a reading of prose, and a criterion the child skipped comes
+back missing rather than merely unmentioned.
+
+An explicit `deliverable_schema` wins, because a caller who wrote one was
+specific about the report it wants. A ticket with no criteria derives nothing,
+and the sub-agent reports in prose as an unassigned one does. `spawnSchema` holds
+that choice. The top level is an object because a provider tool schema must be
+one, so the array hangs off a single property.
+
+The task text leads with `Ticket <id>. `, and that is what puts the ticket in the
+swarm recap. The recap prints a truncated task line, so a brief appended at the
+end falls outside that window and a dispatcher reading the recap would not learn
+which ticket the report belongs to. Leading with the id costs no new field on
+`Agent` and nothing in the persisted `meta.json`.
+
+A sub-agent never closes a ticket. `ticket_transition` refuses `done` and
+`archived` whenever `TicketCore.SubagentID` is set, which is exactly inside a
+swarm child. Every other move stays open, because a sub-agent may park a ticket
+it cannot finish and `blocked` is how it says so. The guard runs before
+`applyMutation`, so a refused close writes nothing.
+
+The tool stays in the registry and refuses rather than being removed. An absent
+tool teaches nothing: a child cannot tell a capability this host lacks from one
+it is being denied, so it retries or invents a way around. The refusal names the
+reason and the next action, which is `ticket_comment` and a report against each
+criterion. Whether the work is finished is a judgement about that report, and no
+actor approves its own output.
+
 `ticket_list` and `ticket_search` page (default 50 rows, cap 200,
 `next_offset` cursor), per the paging requirement above. Every mutation
 except create and fix requires `if_revision`, the revision `ticket_get`
@@ -214,17 +380,38 @@ repairs instead. Mutations record terva's own actor
 model does not choose who it is. A repository with no store pays no schema
 cost. They sit in the lazy group `ticket` under `lazy_tools`.
 
-Nothing creates a store, and nothing proposes creating one. Where a
-repository has no `.tickets/`, the agent gets no ticket tools and no
-guidance, and terva stays quiet about it. A prompt that offered to start a
-ledger in every storeless git repository would be a nag, and creating one
-is a bid to restructure somebody's repository. When a user asks for a
-store, the agent runs `terva ticket init` through `bash` like any other
-command. That command also takes `--instructions`, which writes the agent
-workflow block into the repository's `AGENTS.md`; that edit is the user's
-call, so an agent passes the flag only when the request asked for it.
+`ticket_init` registers on the *inverse* of that gate, so no session ever
+carries it and the eleven together: where there is no store it is the only
+ticket tool present, and where there is one it is absent. It runs
+git-ticket's embedded `init --instructions`, creating `.tickets/` and writing
+the agent workflow block to `AGENTS.md`, so it classifies as workspace
+mutation and plan mode prunes it. It rides the same two opt-outs, because a
+user who turned the ticket tools off did not ask to be offered a ledger.
 
-Two switches turn all ten off: `--no-ticket` for one run, and a `tickets`
+Two things make it more than a wrapper around the CLI. It calls
+`Agent.RequestToolRefresh`, the seam a tool uses when it has changed what
+registration itself can offer, and the host re-resolves the registry so the
+eleven land on the model's next step rather than the next session. The
+workspace daemon, rpc, and ACP install that callback; a one-shot print or cli
+run does not, and the tool's result says so instead of promising tools that
+will not arrive. It also refuses to pick the store's first actor on its own.
+git-ticket signs any later actor-less write with that entry, so seeding the
+agent there would sign the user's own commands with the agent's name. It asks
+instead, suggests a `human:` id built from `git config user.name`, and
+remembers the answer in the user-layer config key `ticket_actor` so the next
+repository on the machine asks nothing.
+
+Nothing proposes creating a store. Where a repository has no `.tickets/`,
+the agent carries `ticket_init` and no guidance beyond that tool's own
+description, and terva stays quiet about it. A prompt that offered to start a
+ledger in every storeless git repository would be a nag, and creating one is a
+bid to restructure somebody's repository. What changed in 2026-09 is only who
+types the command when the user does ask. The agent used to run `terva ticket
+init` through `bash`, which meant a session that had already been told to
+track work in tickets found no ticket system and invented one. Now it has a
+tool, and the store it creates is usable in the same session.
+
+Two switches turn all twelve off: `--no-ticket` for one run, and a `tickets`
 config key that a user sets in `$TERVA_HOME/config.json` and a project may
 also set in `.terva/config.json`. The project layer is restrict-only in the
 `disable_mcp` shape, so a cloned repository can refuse the tools for its own

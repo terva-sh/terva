@@ -36,7 +36,10 @@ func TestHeadlessGateTicketWritesRefused(t *testing.T) {
 	if ask == nil {
 		t.Fatal("ask mode must build a gate")
 	}
-	for _, name := range []string{"ticket_create", "ticket_update", "ticket_transition", "ticket_claim", "ticket_comment", "ticket_fix"} {
+	// ticket_init is in this list, not beside ticket_list. It creates the store
+	// itself, which puts .tickets/, .gitattributes and AGENTS.md in the user's
+	// repository.
+	for _, name := range []string{"ticket_create", "ticket_update", "ticket_transition", "ticket_claim", "ticket_comment", "ticket_fix", "ticket_init"} {
 		if ok, _, _ := ask.Check(context.Background(), name, nil, name, ""); ok {
 			t.Errorf("%s must refuse under headless ask: no prompt exists to confirm it", name)
 		}
