@@ -42,6 +42,7 @@ var localReaders = map[string]string{
 	// adversary, and a human cannot type a gigabyte without a newline.
 	"packages/agent/cli.go":                    "interactive session picker on stdin",
 	"packages/agent/migratecmd.go":             "interactive y/n prompt on stdin",
+	"packages/agent/ticketinitactor.go":        "interactive `ticket init` actor prompt on stdin",
 	"packages/agent/modes/discord/service.go":  "interactive `bot setup` token prompt on stdin",
 	"packages/agent/modes/telegram/service.go": "interactive `bot setup` token prompt on stdin",
 	"cmd/terva-discord-connector/main.go":      "interactive `setup` token prompt on stdin",

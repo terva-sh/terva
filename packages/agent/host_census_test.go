@@ -1,11 +1,13 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"terva.sh/terva/packages/testsupport"
@@ -112,9 +114,30 @@ type hostFile struct {
 
 func (h hostFile) underAgent() string { return strings.TrimPrefix(h.path, "packages/agent/") }
 
-// census walks the tree and reports what every non-test Go file does.
+// census reports what every non-test Go file in the tree does.
+//
+// The walk runs once per test binary and every caller shares the result. It
+// reads 794 files and regex-matches each line of them, and nineteen call sites
+// in this package want the same answer, so doing it per call cost about 50s of
+// the package's 68s. Nothing here mutates the result: hostFile holds a path and
+// a set of bools, and the slice is only ever read and filtered.
+var (
+	censusOnce  sync.Once
+	censusFiles []hostFile
+	censusErr   error
+)
+
 func census(t *testing.T) []hostFile {
 	t.Helper()
+	censusOnce.Do(func() { censusFiles, censusErr = censusWalk() })
+	if censusErr != nil {
+		t.Fatal(censusErr)
+	}
+	return censusFiles
+}
+
+// censusWalk walks the tree and reports what every non-test Go file does.
+func censusWalk() ([]hostFile, error) {
 	var files []hostFile
 	err := filepath.WalkDir(repoRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -179,13 +202,13 @@ func census(t *testing.T) []hostFile {
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("walk: %v", err)
+		return nil, fmt.Errorf("walk: %v", err)
 	}
 	if len(files) < censusFloor {
-		t.Fatalf("the census walked only %d non-test .go files (floor %d) — the walk is broken, and every "+
+		return nil, fmt.Errorf("the census walked only %d non-test .go files (floor %d) — the walk is broken, and every "+
 			"check in this file would have passed for the wrong reason", len(files), censusFloor)
 	}
-	return files
+	return files, nil
 }
 
 // agentHosts are the files that build an agent, minus the composition root

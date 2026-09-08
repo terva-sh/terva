@@ -21,7 +21,7 @@ func hasModelOption(opts []acp.ModelOption, prov, id string) bool {
 // Regression: the ACP model menu must INCLUDE speculative models (an entire
 // provider's catalog can be speculative — openai-codex today — so excluding
 // them hides the provider from the editor). Gating is on authentication only.
-func TestModelOptionsForIncludesSpeculative(t *testing.T) {
+func TestACPModelOptionsForIncludesSpeculative(t *testing.T) {
 	models := []provider.Model{
 		{Provider: "openai-codex", ID: "gpt-5.4", DisplayName: "GPT-5.4", Speculative: true},
 		{Provider: "deepseek", ID: "deepseek-chat", DisplayName: "DeepSeek"},
@@ -43,7 +43,7 @@ func TestModelOptionsForIncludesSpeculative(t *testing.T) {
 }
 
 // A model with no DisplayName falls back to its id as the label.
-func TestModelOptionsForLabelFallback(t *testing.T) {
+func TestACPModelOptionsForLabelFallback(t *testing.T) {
 	got := modelOptionsFor(
 		[]provider.Model{{Provider: "deepseek", ID: "deepseek-chat"}},
 		map[string]bool{"deepseek": true},

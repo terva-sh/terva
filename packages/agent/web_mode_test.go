@@ -12,7 +12,7 @@ import (
 // daemon grew a login flow (the Providers pane) long after this check was
 // written to assume it had none, and a machine with no terminal was left being
 // told to log in at a TUI it does not have.
-func TestWebCredentialBootFailsOnlyWhenNothingCanSignIn(t *testing.T) {
+func TestWebModeCredentialBootFailsOnlyWhenNothingCanSignIn(t *testing.T) {
 	credErr := errors.New("no credentials found for any provider")
 
 	if err := webCredentialBoot(credErr, true); err != nil {
@@ -42,7 +42,7 @@ func TestWebCredentialBootFailsOnlyWhenNothingCanSignIn(t *testing.T) {
 // (loopback, or a scoped CIDR) is fine; blanket --web-insecure with no auth is
 // not, and a stranger reaching an open port must not inherit the operator's
 // authority over credentials.
-func TestPrivilegedGroupsAreRefusedOnAnOpenListener(t *testing.T) {
+func TestWebModePrivilegedGroupsAreRefusedOnAnOpenListener(t *testing.T) {
 	for _, what := range []string{"provider login", "secret management"} {
 		if servePrivilegedGroup(true, true, what) {
 			t.Errorf("%s must be refused on an unauthenticated open listener", what)

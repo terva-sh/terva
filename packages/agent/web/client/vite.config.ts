@@ -1,4 +1,7 @@
-import { defineConfig } from 'vite'
+// defineConfig comes from vitest/config rather than vite, because this file
+// carries the `test` block below. It is vite's own defineConfig with the
+// vitest keys typed, so the build reads it exactly as before.
+import { defineConfig } from 'vitest/config'
 import preact from '@preact/preset-vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
@@ -140,6 +143,12 @@ export default defineConfig({
       },
     }),
   ],
+  test: {
+    // Runs before every test file. It repairs the Web Storage globals that
+    // Node 25 claims before happy-dom can install its own, and does nothing
+    // on a Node that leaves them alone. The file says why in full.
+    setupFiles: ['./vitest.setup.ts'],
+  },
   build: {
     outDir: 'dist',
     emptyOutDir: true,

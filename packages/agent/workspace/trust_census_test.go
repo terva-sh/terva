@@ -72,7 +72,7 @@ var trustCensus = map[string]trustReads{
 	"../cli.go:r.Trusted":            {6, "one-shot processes: launch is the lifetime"},
 	"../swarm_agent.go:r.Trusted":    {2, "one-shot child process: launch is the lifetime"},
 	// --- live readers in another package ---
-	"../acp_mode.go:r.Trusted": {5, "live since 2026-07-28: ACP carries /trust and /untrust on the wire, and acpApplyTrust re-derives both halves on a flip — the hook engine's SPECS (BuildLiveTrustHookEngine + HookSpecsFor, the workspace's own mechanism) and the model's tool set (build.LiveToolSet). These are the launch SEEDS of state that is now re-resolved. Behaviourally covered by TestAnACPTrustFlipStartsAndStopsProjectHooks and TestAnACPTrustFlipPutsAProjectSkillInReachOfTheModel"},
+	"../acp_mode.go:r.Trusted": {5, "live since 2026-07-28: ACP carries /trust and /untrust on the wire, and acpApplyTrust re-derives both halves on a flip — the hook engine's SPECS (BuildLiveTrustHookEngine + HookSpecsFor, the workspace's own mechanism) and the model's tool set (build.LiveToolSet). These are the launch SEEDS of state that is now re-resolved. Behaviourally covered by TestACPTrustFlipStartsAndStopsProjectHooks and TestACPTrustFlipPutsAProjectSkillInReachOfTheModel"},
 }
 
 func TestEveryTrustReadIsClassified(t *testing.T) {

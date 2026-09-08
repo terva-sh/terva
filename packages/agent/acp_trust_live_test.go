@@ -136,7 +136,7 @@ func acpHookVerdict(t *testing.T, ag *core.Agent) (denied bool, reason string) {
 
 // Project hooks are a trust-gated EXECUTION path, so the direction that matters
 // is both ways: trusting must start them, and untrusting must stop them.
-func TestAnACPTrustFlipStartsAndStopsProjectHooks(t *testing.T) {
+func TestACPTrustFlipStartsAndStopsProjectHooks(t *testing.T) {
 	if _, err := os.Stat("/bin/sh"); err != nil {
 		t.Skip("needs a POSIX shell to run a hook program")
 	}
@@ -178,7 +178,7 @@ func TestAnACPTrustFlipStartsAndStopsProjectHooks(t *testing.T) {
 // tool set does not touch it, and a newly trusted project's lore went on being
 // invisible for the life of the session. Constant lore is a different matter:
 // it is prompt-baked and still lands on a new session.
-func TestAnACPTrustFlipLetsAProjectsKeyedLoreFire(t *testing.T) {
+func TestACPTrustFlipLetsAProjectsKeyedLoreFire(t *testing.T) {
 	cwd := testsupport.TempDir(t)
 	dir := filepath.Join(cwd, ".terva", "lore")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -220,7 +220,7 @@ func TestAnACPTrustFlipLetsAProjectsKeyedLoreFire(t *testing.T) {
 // extension subprocesses. Project skills are the cheapest proof — Resolve gates
 // the project skill dirs on the verdict it re-reads, and the `skill` tool is how
 // the model loads one.
-func TestAnACPTrustFlipPutsAProjectSkillInReachOfTheModel(t *testing.T) {
+func TestACPTrustFlipPutsAProjectSkillInReachOfTheModel(t *testing.T) {
 	cwd := testsupport.TempDir(t)
 	acpProjectSkill(t, cwd, "project-only-skill")
 	ag, trust, untrust, _ := acpTestSession(t, cwd, nil)
@@ -261,7 +261,7 @@ func acpSkillNames(t *testing.T, ag *core.Agent) map[string]bool {
 // ACP has /jail and /unjail, which mutate the sandbox through the pointer the
 // acp session holds — so if the rebuilt tools took the new one, those two verbs
 // would go on adjusting an object no tool consults.
-func TestAnACPToolRebuildKeepsTheSandboxTheJailVerbsMutate(t *testing.T) {
+func TestACPToolRebuildKeepsTheSandboxTheJailVerbsMutate(t *testing.T) {
 	cwd := testsupport.TempDir(t)
 	ag, trust, _, r := acpTestSession(t, cwd, nil)
 	if r.Sandbox == nil {
@@ -299,7 +299,7 @@ func TestAnACPToolRebuildKeepsTheSandboxTheJailVerbsMutate(t *testing.T) {
 // The editor owns the MCP server set under ACP, and a fresh Resolve carries none
 // of it. Re-merging the adapter is what keeps those tools in front of the model
 // across a trust flip or a /reload-ext.
-func TestAnACPToolRebuildKeepsTheEditorsMCPTools(t *testing.T) {
+func TestACPToolRebuildKeepsTheEditorsMCPTools(t *testing.T) {
 	stub := buildACPMCPStub(t)
 	cwd := testsupport.TempDir(t)
 	servers, err := json.Marshal([]map[string]any{{"name": "stub", "command": stub}})

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"flag"
 	"os"
 	"path/filepath"
 	"testing"
@@ -33,11 +34,22 @@ func TestRebuildRevokesRemovedToolClassification(t *testing.T) {
 
 // The test binary acts as either protocol peer, so reload coverage also runs
 // on Windows without a shell or an extra language runtime.
+//
+// It identifies itself from its OWN argv, the way TestHelperConnector and
+// TestBlockedExtensionHelper already do. It used to key off a
+// TERVA_G3_BACKEND_HELPER variable that the parent set process-wide, which
+// worked only because Go runs this file's tests in source order: this helper
+// had already returned before the parent set the marker. That ordering is the
+// whole guarantee, and t.Parallel below removes it. A helper that reads global
+// state could then wake mid-suite, read someone else's trailing arguments and
+// block on stdin. flag.Args() is empty in an ordinary run and no other test
+// can set it.
 func TestToolGenerationBackendHelper(t *testing.T) {
-	if os.Getenv("TERVA_G3_BACKEND_HELPER") != "1" {
+	args := flag.Args()
+	if len(args) != 2 {
 		return
 	}
-	protocol, path := os.Args[len(os.Args)-2], os.Args[len(os.Args)-1]
+	protocol, path := args[0], args[1]
 	state, err := os.ReadFile(path)
 	if err != nil {
 		os.Exit(2)
@@ -87,13 +99,25 @@ func TestToolGenerationBackendHelper(t *testing.T) {
 }
 
 func TestRebuildToolsClassificationAcrossBackendReload(t *testing.T) {
+	// Set once here rather than inside each subtest, which is what lets the six
+	// run at once. Both variables are process-wide, so a per-subtest t.Setenv
+	// makes t.Parallel panic and the subtests were serialised at about 4.7s
+	// each. Go permits a non-parallel parent to call t.Setenv and still have
+	// parallel subtests, and the parent's value stays live until the last of
+	// them finishes, because the parent's cleanup runs after they join.
+	//
+	// Sharing them is sound because a subtest needs AN empty TERVA_HOME, not its
+	// own. Only build.Resolve inside newAskSession reads these, and everything a
+	// subtest writes goes to its own dir below, which extensions.New and
+	// mcp.StartAll are handed explicitly.
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("ANTHROPIC_API_KEY", "synthetic-test-key")
+
 	for _, backend := range []string{"ext", "mcp"} {
 		for _, mode := range []core.ApprovalMode{core.ApprovalWorkspace, core.ApprovalAutoEdit, core.ApprovalPlan} {
 			t.Run(backend+"/"+string(mode), func(t *testing.T) {
+				t.Parallel()
 				home := testsupport.TempDir(t)
-				t.Setenv("TERVA_HOME", home)
-				t.Setenv("ANTHROPIC_API_KEY", "synthetic-test-key")
-				t.Setenv("TERVA_G3_BACKEND_HELPER", "1")
 				exe, err := os.Executable()
 				if err != nil {
 					t.Fatal(err)
@@ -105,7 +129,12 @@ func TestRebuildToolsClassificationAcrossBackendReload(t *testing.T) {
 				pol := permissions.NewPolicy(mode, nil)
 				s.gate = core.NewPolicyGate(pol, nil)
 				s.agent.ReadOnly = pol.ReadOnly
-				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+				// Two minutes rather than one. Six of these now run together, each
+				// re-execing a race-instrumented binary five times, and a CI job can
+				// be down to roughly one core under runner load. This is a failure
+				// deadline and not a wait, so headroom costs nothing on the happy
+				// path.
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 				defer cancel()
 				name := "generation_probe"
 				var refresh func(string)

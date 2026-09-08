@@ -189,7 +189,7 @@ dogfood NAME='':
 # a plain `go build -tags terva_web` (and CI) needs no JS toolchain. Requires
 # Node.js; run after changing anything under packages/agent/web/client/src.
 web-build:
-    npm --prefix packages/agent/web/client ci
+    ./scripts/web-deps.sh install
     # Catalog extraction + mirroring + the Vite build live in scripts/web-dist.sh
     # so this recipe and every determinism gate (web-check, ci-web-client, the
     # remote web-client job) regenerate the SAME tree. Commit the result; those
@@ -200,16 +200,17 @@ web-build:
 # Run the web client's unit tests (vitest over the pure store/transform logic).
 # Always reinstalls, so it is the honest one to reach for when node_modules may
 # be stale. `just ci` runs the same suite (ci-web-client) whenever npm is on the
-# machine, reusing an existing node_modules; this forces the clean install.
+# machine, reusing a node_modules that scripts/web-deps.sh calls fresh; this
+# forces the clean install regardless.
 web-test:
-    npm --prefix packages/agent/web/client ci
+    ./scripts/web-deps.sh install
     npm --prefix packages/agent/web/client test
 
 # Fast web inner-loop gate: unit tests, typecheck, and i18n check (no build).
 # Run this after touching packages/agent/web/client/src; `just web-check` is the
 # complete pre-push gate.
 web-check-fast:
-    npm --prefix packages/agent/web/client ci
+    ./scripts/web-deps.sh install
     npm --prefix packages/agent/web/client test
     npm --prefix packages/agent/web/client run typecheck
     npm --prefix packages/agent/web/client run i18n-check
@@ -219,7 +220,7 @@ web-check-fast:
 # `web-build` does, then assert git sees no change. A test-only source commit
 # should pass this without a reviewer reading minified output.
 web-verify-dist:
-    npm --prefix packages/agent/web/client ci
+    ./scripts/web-deps.sh install
     ./scripts/web-dist.sh check
 
 # Tiered diff review (retro H6): split the changed files for a diff <spec> into
@@ -243,7 +244,7 @@ diff-review spec="HEAD":
 # and the embed test — run it before pushing web-client changes.
 web-check:
     @echo "== web-check: install =="
-    npm --prefix packages/agent/web/client ci
+    ./scripts/web-deps.sh install
     @echo "== web-check: unit tests =="
     npm --prefix packages/agent/web/client test
     @echo "== web-check: typecheck =="
@@ -271,7 +272,7 @@ web-check:
 # the browser install may need `--with-deps` (system libraries). See
 # packages/agent/web/client/tests/smoke/README.md.
 web-smoke:
-    npm --prefix packages/agent/web/client ci
+    ./scripts/web-deps.sh install
     npm --prefix packages/agent/web/client exec -- playwright install chromium webkit
     npm --prefix packages/agent/web/client run test:smoke
 
@@ -412,19 +413,29 @@ models-check:
 # ACP run mode (behind -tags terva_acp): build/vet/test it. The default
 # build only compiles the no-tag stub, so `test` can't cover the real
 # package — this guards it from silent breakage.
+# The -run filter on packages/agent mirrors the workflow step, and is a speed
+# filter rather than a coverage cut: the vet line above still type-checks every
+# _test.go under the tag, and `go test` compiles the whole binary whatever -run
+# selects. TestTaggedAgentTestsCarryTheirRunPrefix pins the prefix in both
+# places, because a -run that matches nothing exits 0.
 ci-acp:
     go build -tags terva_acp ./...
     go vet -tags terva_acp ./packages/agent/...
-    go test -tags terva_acp -race ./packages/agent/acp/... ./packages/agent/
+    go test -tags terva_acp -race ./packages/agent/acp/...
+    go test -tags terva_acp -race -run '^TestACP' ./packages/agent/
 
 # Web control panel (behind -tags terva_web): build/vet/test it. The default
 # build only compiles the no-tag stub, so `test` can't cover the WS carrier —
 # this guards it, same discipline as ci-acp. Uses the committed client dist
 # (no Node.js needed); rebuild that with `just web-build`.
+# Same -run filter as ci-acp, for the same reason. TestWebMode rather than
+# TestWeb: webtokencmd_test.go is untagged and its TestWebToken* tests would
+# otherwise ride along.
 ci-web:
     go build -tags terva_web ./...
     go vet -tags terva_web ./packages/agent/web/
-    go test -tags terva_web -race ./packages/agent/web/ ./packages/agent/
+    go test -tags terva_web -race ./packages/agent/web/
+    go test -tags terva_web -race -run '^TestWebMode' ./packages/agent/
 
 # The jsengine scripting consumer (behind -tags terva_scripting): build/
 # vet/test the code_execution tool and its registration seam. The engine
@@ -476,12 +487,15 @@ ci-workflows:
 #
 # So: run it where Node exists, and SAY SO where it does not, rather than being
 # quietly green. A gate that passes because it skipped the check is not a gate.
+#
+# Reuses an existing node_modules rather than reinstalling every run, which is
+# what keeps this affordable inside `just ci`. scripts/web-deps.sh owns the
+# question of whether that tree is still usable, and it watches the machine as
+# well as the lock file: a Node upgrade invalidates the install too, and this
+# recipe used to miss that for as long as the tree sat there.
 ci-web-client:
     @if command -v npm >/dev/null 2>&1; then \
-        if [ ! -d packages/agent/web/client/node_modules ] || \
-           [ packages/agent/web/client/package-lock.json -nt packages/agent/web/client/node_modules ]; then \
-            npm --prefix packages/agent/web/client ci; \
-        fi; \
+        ./scripts/web-deps.sh ensure; \
         npm --prefix packages/agent/web/client test; \
         npm --prefix packages/agent/web/client run typecheck; \
         ./scripts/web-dist.sh check; \
@@ -529,7 +543,7 @@ ci-web-smoke:
         echo "  panel or Stage UI, run 'just web-smoke' somewhere with Node."; \
     elif [ ! -d packages/agent/web/client/node_modules ]; then \
         echo "ci-web-smoke: SKIPPED — packages/agent/web/client/node_modules is absent."; \
-        echo "  Run 'npm --prefix packages/agent/web/client ci' first."; \
+        echo "  Run './scripts/web-deps.sh install' first."; \
     elif ! (cd packages/agent/web/client && node -e "try{require('fs').accessSync(require('@playwright/test').chromium.executablePath())}catch(e){process.exit(1)}") >/dev/null 2>&1; then \
         echo "ci-web-smoke: SKIPPED — no Playwright browser on this machine."; \
         echo "  'just web-smoke' installs the browsers and runs the full suite;"; \
@@ -584,8 +598,9 @@ ci: lint test ci-acp ci-web ci-scripting ci-workflows ci-web-client ci-web-smoke
 # pull request that touches only docs/ and the root markdown files.
 #
 # NOT a substitute for `just ci`. Run this when the change IS the markdown and
-# you want the answer in seconds: the full gate is ~9m35s remotely and four
-# steps are 96% of it, and none of those four can read a markdown file.
+# you want the answer in seconds: the full gate is 4 to 5 minutes remotely and
+# four steps are about 90% of it, and none of those four can read a markdown
+# file.
 #
 # What a docs change CAN break is what runs here. The STE gate reads AGENTS.md.
 # docs.go embeds docs/*.md, and a spread of tests read the tree — docsThatShip,
