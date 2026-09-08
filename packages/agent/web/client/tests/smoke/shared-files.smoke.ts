@@ -17,7 +17,7 @@ async function seedShared(
   page: Page,
   backend: Awaited<ReturnType<typeof installMockBackend>>,
   file: Record<string, unknown>,
-  opts: { extraTools?: number } = {},
+  opts: { extraTools?: number; filler?: number } = {},
 ) {
   await backend.subscribed
   const calls = [{ type: 'tool_call', id: 'c_share', name: 'share_file', args: {} }]
@@ -29,6 +29,21 @@ async function seedShared(
     call_id: c.id,
     content: [{ type: 'text', text: 'ok' }],
   }))
+  // Rows ahead of the card, to put the transcript's flex column under real
+  // height pressure. A short transcript has slack for every row and hides the
+  // whole class of shrink bugs.
+  const filler = []
+  for (let i = 0; i < (opts.filler ?? 0); i++) {
+    filler.push({ role: 'user', content: [{ type: 'text', text: `earlier question ${i + 1}` }] })
+    filler.push({ role: 'assistant', content: [{ type: 'text', text: `earlier answer ${i + 1}` }] })
+  }
+  const messages = [
+    ...filler,
+    { role: 'user', content: [{ type: 'text', text: 'Pull last week together for me.' }] },
+    { role: 'assistant', content: calls },
+    { role: 'tool', content: results, shared: [{ ...file, call_id: 'c_share' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'Here is the weekly rollup.' }] },
+  ]
   backend.pushEvent(
     {
       type: 'snapshot',
@@ -36,13 +51,8 @@ async function seedShared(
         session: { id: SMOKE_SESSION, title: 'report', experience: 'code' },
         epoch: 1,
         base: 0,
-        total: 4,
-        messages: [
-          { role: 'user', content: [{ type: 'text', text: 'Pull last week together for me.' }] },
-          { role: 'assistant', content: calls },
-          { role: 'tool', content: results, shared: [{ ...file, call_id: 'c_share' }] },
-          { role: 'assistant', content: [{ type: 'text', text: 'Here is the weekly rollup.' }] },
-        ],
+        total: messages.length,
+        messages,
         busy: false,
       },
     },
@@ -97,6 +107,56 @@ test('the card is visible without expanding the tool group that made it', async 
   const card = (await page.locator('.shared-file').boundingBox())!
   const head = (await page.locator('.tool-group-head').boundingBox())!
   expect(card.y).toBeGreaterThan(head.y)
+})
+
+// A transcript longer than its own column is the ordinary case, not an edge
+// one, and it is where this card used to disappear completely.
+//
+// `.log` is a flex COLUMN, so every transcript row is a flex item. A flex item
+// normally cannot be shrunk below its content, because min-height:auto resolves
+// to a content-based minimum, but that only holds while the item's overflow is
+// visible. `.shared-file` sets overflow:hidden, to clip its image to the card's
+// rounded corners, and that zeroes the minimum. So it is the one row in the
+// transcript that can be squeezed to nothing, and being overflow:hidden it then
+// clips away its own filename, size and download link. The route still serves
+// the bytes, which is what makes the failure so quiet: nothing errors, the user
+// simply cannot see or click the file.
+//
+// Measured against the card's OWN content height. A collapsed card still has a
+// box, still reports itself visible, and still sits inside the viewport, so
+// none of those catch it. The rendered height against scrollHeight does.
+test('a shared card is not squeezed to nothing by a long transcript', async ({ page }) => {
+  const backend = await installMockBackend(page, { features: ['shared-files'] })
+  await serveSharedRoute(page)
+  // Small enough that the rows genuinely compete for the column's height.
+  await page.setViewportSize({ width: 460, height: 620 })
+  await page.goto(panelSessionURL)
+  await seedShared(
+    page,
+    backend,
+    { id: 'shr_img', name: 'latency.png', kind: 'image', mime: 'image/png', size: 4096 },
+    { filler: 12 },
+  )
+
+  // Guard the fixture before trusting the assertion: the pressure has to be
+  // real, or this passes by rendering a transcript that never had to shrink
+  // anything and proves nothing at all.
+  const overflowing = await page.locator('.log').evaluate((el) => el.scrollHeight > el.clientHeight + 1)
+  expect(overflowing, 'the transcript must actually overflow, or this test asserts nothing').toBe(true)
+
+  const card = page.locator('.shared-file')
+  await expect(card).toHaveCount(1)
+  const size = await card.evaluate((el) => ({
+    rendered: Math.round(el.getBoundingClientRect().height),
+    content: el.scrollHeight,
+  }))
+  expect(size.rendered).toBeGreaterThanOrEqual(size.content)
+
+  // ...and the row the user clicks is inside the card's clip, not past its edge.
+  const cardBox = (await card.boundingBox())!
+  const rowBox = (await page.locator('a.shared-file__row').boundingBox())!
+  expect(rowBox.y + rowBox.height).toBeLessThanOrEqual(cardBox.y + cardBox.height + 1)
+  await expect(page.locator('.shared-file__name')).toContainText('latency.png')
 })
 
 test('a shared image renders inline and stays inside the transcript', async ({ page }) => {
