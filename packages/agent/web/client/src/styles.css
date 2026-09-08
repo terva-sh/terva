@@ -453,13 +453,62 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .sys-note { align-self: center; max-width: 90%; display: flex; align-items: baseline; gap: 8px; font-size: 12px; line-height: 1.45; color: var(--muted); font-style: italic; text-align: left; padding: 2px 10px; opacity: .85; }
 .sys-tag { flex: none; font-style: normal; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; }
 
-/* tool calls */
-.tool { align-self: flex-start; max-width: 88%; font-size: 13px; border-left: 3px solid var(--accent); padding: 2px 0 2px 10px; }
-.tool-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
-.tool-name { font-family: ui-monospace, SFMono-Regular, monospace; font-weight: 600; }
-.tool-args { font-family: ui-monospace, monospace; color: var(--muted); overflow-wrap: anywhere; }
-.tool-result { margin: 4px 0 0; padding: 6px 8px; background: var(--panel); border-radius: 8px; white-space: pre-wrap; overflow-x: auto; font-size: 12px; max-height: 240px; overflow-y: auto; }
-.tool-result.err { color: var(--danger); }
+/* tool calls: the card. See docs/proposals/web-tool-cards.md, stage 1.
+
+   flex:none is load-bearing, for the same reason .shared-file carries it.
+   `.log` is a flex column, so a card is a flex item, and a flex item keeps its
+   content-based minimum height only while its overflow is visible. This card
+   sets overflow:hidden to clip the header strip to the rounded corners, which
+   zeroes that minimum and would let a full transcript squeeze it to nothing. */
+.tool-card { flex: none; align-self: flex-start; width: 100%; max-width: 88%; font-size: 13px; background: var(--bg); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; overflow: hidden; }
+.tool-card--err { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); border-left-color: var(--danger); }
+.tool-card__head { display: flex; align-items: center; gap: 8px; padding: 5px 9px; background: color-mix(in srgb, var(--accent) 6%, var(--panel)); border-bottom: 1px solid var(--line); }
+.tool-card--err .tool-card__head { background: color-mix(in srgb, var(--danger) 10%, var(--panel)); }
+.tool-card__name { flex: none; font-family: ui-monospace, SFMono-Regular, monospace; font-weight: 600; font-size: 12px; }
+/* The subject is two spans so the eliding stays CSS's job rather than a
+   character budget guessed in JavaScript: the head takes the ellipsis at
+   whatever the real width turns out to be, and the tail (a path's basename)
+   is pinned beside it at flex:none. See ui/toolSubject.ts. */
+.tool-card__subject { flex: 1 1 auto; min-width: 0; display: flex; font-family: ui-monospace, monospace; font-size: 12px; color: var(--fg); }
+.tool-card__subject-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-card__subject-tail { flex: none; white-space: pre; }
+.tool-card__disclose { flex: none; font: inherit; font-size: 10px; color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; cursor: pointer; }
+.tool-card__disclose:hover { color: var(--fg); border-color: var(--muted); }
+.tool-card__chip { flex: none; margin-left: auto; font-size: 10px; font-weight: 600; letter-spacing: .03em; border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; color: var(--muted); white-space: nowrap; }
+.tool-card__chip--ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+.tool-card__chip--err { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
+.tool-card__args { margin: 0; padding: 7px 9px; font-family: ui-monospace, monospace; font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere; background: color-mix(in srgb, var(--panel) 60%, var(--bg)); border-bottom: 1px solid var(--line); }
+.tool-card__key { color: var(--accent); }
+.tool-card__str { color: var(--ok); }
+.tool-card__lit { color: var(--muted); }
+.tool-card__mask { color: var(--danger); letter-spacing: .15em; }
+/* overflow stays visible. The height is bounded by the 12-line clamp in
+   ToolCard, so the wheel scrolls the transcript instead of a well inside it,
+   which is the whole reason the clamp replaced a max-height. */
+.tool-card__body { margin: 0; padding: 7px 9px; font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; overflow: visible; }
+/* stage 2: the per-tool bodies (features/conversation/toolcard/renderers.tsx).
+   Each rule below colours or aligns one KIND of line; none of them changes the
+   text, which stays exactly what the tool returned. */
+.tool-card__meta { flex: none; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.tool-card__chip--plain { color: var(--muted); font-family: ui-monospace, monospace; letter-spacing: 0; }
+/* The connector sits in a fixed gutter so the pipeline's shape reads down the
+   left edge before any of the words do. */
+.tc-cmd-row { display: block; }
+.tc-cmd-op { display: inline-block; width: 2ch; text-align: right; color: var(--muted); opacity: .75; }
+.tc-diff--add { color: var(--ok); }
+.tc-diff--del { color: var(--danger); }
+.tc-diff--hunk { color: var(--accent); }
+.tc-diff--file { color: var(--muted); }
+.tc-match-file { color: var(--accent); }
+.tc-match-no { color: var(--muted); opacity: .6; }
+.tc-match-plain { color: var(--muted); }
+.tc-list-row { color: var(--fg); }
+.tc-ask-q { color: var(--fg); font-weight: 600; }
+.tc-fail { color: var(--danger); }
+.tool-card__foot { display: flex; align-items: center; gap: 10px; padding: 4px 9px 6px; }
+.tool-card__more { font: inherit; font-size: 11px; color: var(--muted); background: none; border: none; padding: 0; cursor: pointer; text-decoration: underline dotted; }
+.tool-card__more:hover { color: var(--fg); }
+.tool-card__rest { margin-left: auto; font-size: 11px; color: var(--muted); }
 /* minimal tool line: greyed + non-interactive-looking (TUI's minimal mode) */
 .tool-min { align-self: flex-start; font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted); opacity: .7; padding-left: 10px; border-left: 2px solid var(--line); user-select: none; }
 
@@ -472,7 +521,7 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
 .tg-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted); }
 .tg-failed { flex: none; color: var(--danger); font-size: 12px; }
 .tool-group-body { display: flex; flex-direction: column; gap: 10px; margin: 8px 0 2px; padding-left: 10px; border-left: 1px dashed var(--line); }
-.tool-group-body .tool { max-width: 100%; }
+.tool-group-body .tool-card { max-width: 100%; }
 
 /* cards (permission / ask) */
 /* --card-bg is a variable rather than an inline colour because the ask card's
@@ -1757,7 +1806,13 @@ button.ident-home:hover .persona { text-decoration: underline; }
 
    Everything here is real, unlike .msg-file above: the id resolves and the
    route serves, so the whole card is a link. */
-.shared-file { max-width: min(520px, 100%); margin: 6px 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
+/* flex:none is load-bearing. `.log` is a flex column, so every transcript row is
+   a flex item, and a flex item may not shrink below its content ONLY while its
+   overflow is visible. The overflow:hidden here (it clips the image to the
+   rounded corners) zeroes that automatic minimum, which made this the one row
+   that a full transcript could squeeze to nothing. Being clipped, it then took
+   its own filename and download link with it. */
+.shared-file { flex: none; max-width: min(520px, 100%); margin: 6px 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
 /* The media well is inside an <a>, so currentColor here is the LINK colour —
    tinting the letterbox blue, and (when the media fails to load) rendering the
    alt text as underlined blue link text where a chart should be. Both are fixed

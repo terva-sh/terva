@@ -2,12 +2,13 @@ import { t, tn } from '../../i18n'
 import type { Item } from '../../platform/conversation/store'
 import type { WireAttachment } from '../../platform/ctrlproto/types'
 import { CopyButton } from '../../ui/CopyButton'
-import { clockTime, compact, humanBytes, localInstant, truncate } from '../../ui/formatting'
+import { clockTime, humanBytes, localInstant } from '../../ui/formatting'
 import { ImageGallery } from '../../ui/ImageGallery'
 import { Markdown } from '../../ui/Markdown'
 import { memo } from '../../ui/memo'
 import { ClearDivider } from './ClearDivider'
 import { CompactionDivider, type RevealFn } from './CompactionDivider'
+import { ToolCard } from './toolcard/ToolCard'
 import { ReasoningDisclosure } from '../../ui/ReasoningDisclosure'
 import type { ToolView } from './types'
 
@@ -195,15 +196,9 @@ export const MessageContent = memo(function MessageContent({
           </div>
         )
       }
-      return (
-        <div class="tool">
-          <div class="tool-head">
-            <span class="tool-name">{item.name}</span>
-            {item.args != null && <span class="tool-args">{compact(item.args)}</span>}
-          </div>
-          {item.result && <pre class={`tool-result${item.error ? ' err' : ''}`}>{truncate(item.result, 2000)}</pre>}
-          {item.images && <ImageGallery images={item.images} />}
-        </div>
-      )
+      // The full view delegates to the card. Everything about how a call looks
+      // lives there now, so stage 2 adds per-tool renderers without touching
+      // this switch. The minimal and hidden views above are unchanged.
+      return <ToolCard item={item} />
   }
 })

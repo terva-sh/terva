@@ -22,7 +22,7 @@ describe('ConversationItems', () => {
     expect(container.querySelector('.tool-group-body')).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: /2 tool calls/ }))
-    expect(container.querySelectorAll('.tool-group-body .tool')).toHaveLength(2)
+    expect(container.querySelectorAll('.tool-group-body .tool-card')).toHaveLength(2)
     expect(screen.getByText('bash')).toBeTruthy()
     expect(screen.getByText('read')).toBeTruthy()
   })

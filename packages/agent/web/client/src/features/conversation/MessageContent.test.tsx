@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/preact'
+import { cleanup, fireEvent, render, screen } from '@testing-library/preact'
 import type { Item } from '../../platform/conversation/store'
 import { MessageContent, type ToolView } from './MessageContent'
 
@@ -111,21 +111,71 @@ describe('MessageContent', () => {
     expect(minimal.container.querySelector('.tool-min')?.getAttribute('aria-hidden')).toBe('true')
   })
 
-  it('renders full tool arguments, truncated results, errors, and images', () => {
-    const result = 'x'.repeat(2001)
+  it('renders a failed call as a card with its subject and outcome', () => {
     const { container } = show({
       kind: 'tool',
       id: 't1',
       name: 'read',
       args: { path: 'file.txt' },
-      result,
+      result: 'no such file',
       error: true,
       images: [{ mime: 'image/jpeg', data: 'anBn' }],
     })
-    expect(container.querySelector('.tool-name')?.textContent).toBe('read')
-    expect(container.querySelector('.tool-args')?.textContent).toBe('{"path":"file.txt"}')
-    expect(container.querySelector('.tool-result.err')?.textContent).toBe('x'.repeat(2000) + '…')
+    expect(container.querySelector('.tool-card__name')?.textContent).toBe('read')
+    expect(container.querySelector('.tool-card__subject')?.textContent).toBe('file.txt')
+    // The failure tints the card, rather than recolouring every character that
+    // came back. Red monospace on a dark panel is what that used to mean.
+    expect(container.querySelector('.tool-card--err')).toBeTruthy()
+    expect(container.querySelector('.tool-card__chip--err')?.textContent).toBe('failed')
     expect(screen.getByAltText('attached image')).toBeTruthy()
+  })
+
+  it('no longer truncates a result at 2000 characters', () => {
+    // The old cut was arbitrary and silent. A long single-line result now
+    // renders whole; length is bounded by the clamp and the soft cap instead.
+    const result = 'x'.repeat(2001)
+    const { container } = show({ kind: 'tool', id: 't1', name: 'read', args: {}, result })
+    expect(container.querySelector('.tool-card__body')?.textContent).toBe(result)
+    expect(container.querySelector('.tool-card__body')?.textContent).not.toContain('…')
+  })
+
+  it('clamps a long result to 12 lines and names the true total', () => {
+    const result = Array.from({ length: 400 }, (_, i) => `line ${i + 1}`).join('\n')
+    const { container } = show({ kind: 'tool', id: 't1', name: 'bash', args: {}, result })
+
+    const body = container.querySelector('.tool-card__body')!
+    expect(body.textContent!.split('\n')).toHaveLength(12)
+    // The control has to name 400, not merely exist: a control that says the
+    // wrong number is the same bug as no control at all.
+    const more = container.querySelector('.tool-card__more')!
+    expect(more.textContent).toContain('400')
+
+    fireEvent.click(more)
+    expect(container.querySelector('.tool-card__body')!.textContent!.split('\n')).toHaveLength(400)
+  })
+
+  it('keeps arguments behind a disclosure and masks a secret when opened', () => {
+    const secret = 'sk-live-DO-NOT-RENDER-ME'
+    const { container } = show({
+      kind: 'tool',
+      id: 't1',
+      name: 'fetch',
+      args: { url: 'https://example.test/a', api_token: secret },
+      result: 'ok',
+    })
+    // Closed by default, so the arguments are not in the DOM at all.
+    expect(container.querySelector('.tool-card__args')).toBeNull()
+    expect(container.textContent).not.toContain(secret)
+
+    fireEvent.click(container.querySelector('.tool-card__disclose')!)
+
+    // Guard the fixture before asserting the absence: an args block that never
+    // rendered would satisfy the not.toContain below while proving nothing.
+    const args = container.querySelector('.tool-card__args')
+    expect(args).toBeTruthy()
+    expect(args!.textContent).toContain('https://example.test/a')
+    expect(container.querySelector('.tool-card__mask')).toBeTruthy()
+    expect(container.textContent).not.toContain(secret)
   })
 })
 

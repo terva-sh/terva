@@ -1,4 +1,5 @@
 import { useComposition } from '../../ui/composition'
+import { clamp, toolSubject } from '../../ui/toolSubject'
 import { useComposerDraft } from './useComposerDraft'
 import { errText } from '../../platform/ctrlproto/errors'
 import { useCallback, useEffect, useState } from 'preact/hooks'
@@ -1024,9 +1025,20 @@ function ChatRow(props: {
       // Stage keeps tool rows to a single quiet line — but a tool that RETURNED
       // an image (generate_image, a scene backdrop) has produced something the
       // scene is about, so the picture shows even though the call stays folded.
+      //
+      // The line adopts one thing from the panel's card, the subject, so a row
+      // reads `· edit styles.css` rather than `· edit`. It imports that
+      // derivation rather than copying the heuristic, or the two drift the
+      // first time stage 2 changes the panel's. Clamped harder than the panel
+      // clamps it: this row has no card to sit in and no second line to fall
+      // onto.
+      const subject = toolSubject(item.args)
       return (
         <div class="stage-row stage-row--tool">
-          <span>· {item.name}</span>
+          <span>
+            · {item.name}
+            {subject ? ' ' + clamp(subject.text, 80) : ''}
+          </span>
           {item.images && <ImageGallery images={item.images} />}
         </div>
       )
