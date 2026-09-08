@@ -58,6 +58,86 @@ func TestActorRosterSnippetIsFlushLeft(t *testing.T) {
 	}
 }
 
+// The refusal reaches /ticket's status line, which renders one string as
+// one row. A newline there puts the rest on its own alignment and the
+// message scatters across the screen. That shipped once, so it is a
+// regression guard rather than a style rule.
+func TestTicketUIRefusalIsOneLine(t *testing.T) {
+	s := storeForTest(t, "")
+
+	err := ticketStoreCanWrite(gtcli.UIParams{Store: s})
+	if err == nil {
+		t.Fatal("precondition: the store should have been refused")
+	}
+	if strings.Contains(err.Error(), "\n") {
+		t.Errorf("the refusal carries a newline, so a status line will scatter it:\n%q", err.Error())
+	}
+}
+
+// Same rule for the line helper itself, so a caller can trust it.
+func TestActorRepairLineIsOneLine(t *testing.T) {
+	line := ActorRepairLine("/somewhere/.tickets/config.yml")
+
+	if strings.Contains(line, "\n") {
+		t.Errorf("ActorRepairLine is not one line:\n%q", line)
+	}
+	if !strings.Contains(line, "/somewhere/.tickets/config.yml") {
+		t.Errorf("the line does not name the file to edit: %q", line)
+	}
+}
+
+// The one-line advice is shorter than the block, and shorter advice is
+// where a wrong claim hides. It says one `- id:` line is enough, so this
+// makes exactly that edit and then writes a real ticket.
+func TestActorRepairLineAdviceActuallyRepairsAStore(t *testing.T) {
+	s := storeForTest(t, "")
+	configPath := filepath.Join(s.Path(), "config.yml")
+
+	if err := ticketStoreCanWrite(gtcli.UIParams{Store: s}); err == nil {
+		t.Fatal("precondition: a bare init should have produced a store with no actor")
+	}
+
+	// The advice names `- id: human:you` under `actors:`, and nothing else.
+	// ActorRosterMinimal is those bytes.
+	line := ActorRepairLine(configPath)
+	if !strings.Contains(line, "- id: human:you") || !strings.Contains(line, "actors:") {
+		t.Fatalf("the advice changed, so this test repairs the wrong thing: %q", line)
+	}
+
+	before, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", configPath, err)
+	}
+	after := strings.Replace(string(before), "actors: []\n", ActorRosterMinimal, 1)
+	if after == string(before) {
+		t.Fatal("the repair changed nothing, so the rest of this test would prove nothing")
+	}
+	if err := os.WriteFile(configPath, []byte(after), 0o644); err != nil {
+		t.Fatalf("write %s: %v", configPath, err)
+	}
+
+	repaired, err := ticket.Open(s.Path())
+	if err != nil {
+		t.Fatalf("the repaired config.yml does not parse: %v", err)
+	}
+	if err := ticketStoreCanWrite(gtcli.UIParams{Store: repaired}); err != nil {
+		t.Fatalf("one id line did not satisfy git-ticket's own rule: %v", err)
+	}
+
+	var out, errB bytes.Buffer
+	code := gtcli.Run(
+		[]string{"--store", repaired.Path(), "create", "--title", "after the short repair"},
+		gtcli.Env{Dir: filepath.Dir(repaired.Path()), Getenv: os.Getenv, Stdout: &out, Stderr: &errB},
+	)
+	if code != 0 {
+		t.Fatalf("one id line is not a working repair: create exit %d, stderr %q\nconfig.yml:\n%s",
+			code, errB.String(), after)
+	}
+	if got := createdByID(t, repaired.Path()); got != "human:you" {
+		t.Errorf("the short repair recorded %q, want human:you", got)
+	}
+}
+
 // The test that decides the change. Take a store that refuses every
 // write, apply the repair exactly as the message gives it, and then
 // perform a real write. A wrong field name, a wrong indent, or advice

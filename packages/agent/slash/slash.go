@@ -130,6 +130,13 @@ var registry = []Spec{
 	{Name: "/extensions", Group: groupAgents, Aliases: []string{"/ext"}, Desc: "list installed extensions; enable/disable globally or per-project"},
 	{Name: "/reload-ext", Group: groupAgents, Desc: "hot-reload all extensions (re-read manifests and respawn)", CancelsTurn: true},
 	{Name: "/mcp", Group: groupAgents, Desc: "list MCP servers; enable/disable globally or per-project"},
+	// Offered only where a .tickets store governs the session directory.
+	// The TUI drops it from the popup and /help everywhere else, because a
+	// command that opens a ledger the repository does not have is noise.
+	// The --no-ticket opt-out does NOT hide it: that flag withdraws the
+	// ticket_* tools from the model and leaves the ledger reachable to the
+	// person, exactly as `terva ticket` stays reachable.
+	{Name: "/ticket", Group: groupAgents, Aliases: []string{"/tickets"}, Desc: i18n.M("open the ticket ledger for this repository"), CancelsTurn: true},
 	{Name: "/connect", Group: groupAgents, Aliases: []string{"/telegram", "/tg"},
 		Desc: "connect, disconnect, or show status of a chat bridge (compiled-in or connector extension)", Hint: "connect [name] | disconnect | status"},
 

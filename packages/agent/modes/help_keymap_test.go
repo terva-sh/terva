@@ -80,7 +80,7 @@ func TestNoDuplicateHelpLabels(t *testing.T) {
 // rather than only in the table.
 func TestHelpRendersRegisteredChords(t *testing.T) {
 	km := (&Interactive{}).buildGlobalKeymap()
-	out := strings.Join(renderHelpBlock(tui.Theme{}, 100, km), "\n")
+	out := strings.Join(renderHelpBlock(tui.Theme{}, 100, km, true), "\n")
 
 	for _, want := range []string{
 		"ctrl+y",    // the copy picker — the chord that prompted this

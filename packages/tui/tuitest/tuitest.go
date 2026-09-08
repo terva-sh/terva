@@ -26,12 +26,13 @@ import (
 // goroutine reading input, one writing output, and the test goroutine
 // scripting keys and asserting the screen.
 type FakeTerm struct {
-	mu        sync.Mutex
-	cols      int
-	rows      int
-	resizeCBs []func()
-	raw       strings.Builder
-	screen    *Screen
+	mu           sync.Mutex
+	cols         int
+	rows         int
+	resizeCBs    map[int]func()
+	resizeNextID int
+	raw          strings.Builder
+	screen       *Screen
 
 	in     chan byte
 	inOnce sync.Once
@@ -67,10 +68,35 @@ func (f *FakeTerm) Size() (int, int) {
 	return f.cols, f.rows
 }
 
+// OnResize registers a callback fired by Resize, standing in for
+// SIGWINCH.
 func (f *FakeTerm) OnResize(fn func()) {
+	f.OnResizeDetach(fn)
+}
+
+// OnResizeDetach mirrors ProcTerm.OnResizeDetach so a test can exercise
+// the detach path against the double. Detaching twice is safe.
+func (f *FakeTerm) OnResizeDetach(fn func()) func() {
+	if fn == nil {
+		return func() {}
+	}
 	f.mu.Lock()
-	f.resizeCBs = append(f.resizeCBs, fn)
+	if f.resizeCBs == nil {
+		f.resizeCBs = make(map[int]func())
+	}
+	id := f.resizeNextID
+	f.resizeNextID++
+	f.resizeCBs[id] = fn
 	f.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			f.mu.Lock()
+			delete(f.resizeCBs, id)
+			f.mu.Unlock()
+		})
+	}
 }
 
 func (f *FakeTerm) EnterRaw() (func() error, error) {
@@ -128,8 +154,10 @@ func (f *FakeTerm) CloseInput() {
 func (f *FakeTerm) Resize(cols, rows int) {
 	f.mu.Lock()
 	f.cols, f.rows = cols, rows
-	cbs := make([]func(), len(f.resizeCBs))
-	copy(cbs, f.resizeCBs)
+	cbs := make([]func(), 0, len(f.resizeCBs))
+	for _, cb := range f.resizeCBs {
+		cbs = append(cbs, cb)
+	}
 	f.mu.Unlock()
 	f.screen.Resize(cols, rows)
 	for _, cb := range cbs {

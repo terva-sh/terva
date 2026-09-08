@@ -105,6 +105,9 @@ func ticketStoreCanWrite(p gtcli.UIParams) error {
 	// Path is the store directory. Root is the enclosing Git repository,
 	// and it is empty for a store outside one, which would name a
 	// config.yml that is nowhere.
-	return fmt.Errorf("this store records no actor, so every write would be refused.\n%s",
-		ActorRepairHint(filepath.Join(p.Store.Path(), "config.yml")))
+	// One line, not the block form. This error reaches /ticket's status
+	// line as well as `terva ticket ui` stderr, and a status line renders
+	// one row: newlines there scatter the text across the screen.
+	return fmt.Errorf("this store records no actor, so every write would be refused - %s",
+		ActorRepairLine(filepath.Join(p.Store.Path(), "config.yml")))
 }

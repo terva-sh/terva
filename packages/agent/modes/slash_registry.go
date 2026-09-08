@@ -239,6 +239,12 @@ var slashHandlers = map[string]func(i *Interactive, ctx context.Context, parts [
 		i.openMCPDialog()
 		return false
 	},
+	// Dispatches everywhere, and is offered only where a store exists.
+	// Keeping it dispatchable in a repository without one is deliberate:
+	// an unknown command head is sent to the model as a prompt, and
+	// "/ticket" is not a question anybody meant to ask. The handler
+	// refuses and names the fix instead.
+	"/ticket": (*Interactive).slashTicket,
 	"/connect": func(i *Interactive, _ context.Context, parts []string, _ string) bool {
 		if len(parts) >= 2 {
 			i.doConnector(strings.Join(parts[1:], " "))
@@ -317,13 +323,20 @@ func lookupSlash(head string) (*slashSpec, bool) {
 // a package var so the registry's handler bodies may reference
 // catalog consumers (e.g. /help renders it) without an
 // initialization cycle.
-func builtinSlashCatalog() []slashCommand {
+func builtinSlashCatalog(ticketStore bool) []slashCommand {
 	out := make([]slashCommand, 0, len(slashRegistry))
 	prevGroup := ""
 	for _, s := range slashRegistry {
 		if s.hidden {
 			continue
 		}
+		if !slashOffered(s.name, ticketStore) {
+			continue
+		}
+		// The header is emitted after the checks above, and prevGroup
+		// only advances for a command that survives them. A group whose
+		// every entry is filtered out therefore draws no divider over an
+		// empty section.
 		if s.group != "" && s.group != prevGroup {
 			out = append(out, slashCommand{Header: true, Name: i18n.T(s.group)})
 		}
@@ -331,6 +344,23 @@ func builtinSlashCatalog() []slashCommand {
 		out = append(out, slashCommand{Name: s.name, Desc: i18n.T(s.desc)})
 	}
 	return out
+}
+
+// slashOffered reports whether a command is worth showing in this
+// workspace. It governs the popup and /help only; every command still
+// dispatches, because an unknown head is sent to the model as a prompt
+// and a mistyped command is not a question anybody meant to ask.
+//
+// /ticket is the only conditional command today. It opens a repository's
+// ticket ledger, so offering it where there is no ledger is noise. The
+// --no-ticket opt-out is deliberately not consulted here: that flag
+// withdraws the ticket_* tools from the model and leaves the ledger
+// reachable to the person, the same way `terva ticket` survives it.
+func slashOffered(name string, ticketStore bool) bool {
+	if name == "/ticket" {
+		return ticketStore
+	}
+	return true
 }
 
 // slashCancelsTurn reports whether dispatching head must cancel the
@@ -378,8 +408,11 @@ func (i *Interactive) slashRestart(_ context.Context, _ []string, _ string) bool
 }
 
 func (i *Interactive) slashHelp(context.Context, []string, string) bool {
+	// Probed before the lock. It stats the filesystem, and mu is held
+	// across redraws: no frame should wait on a directory walk.
+	ticketStore := i.ticketStoreAvailable()
 	i.mu.Lock()
-	i.helpBlock = renderHelpBlock(i.cfg.Theme, i.lastCols(), i.keymap)
+	i.helpBlock = renderHelpBlock(i.cfg.Theme, i.lastCols(), i.keymap, ticketStore)
 	i.statusErr = ""
 	i.statusOK = ""
 	// Pin the viewport to the newest content so the help block,

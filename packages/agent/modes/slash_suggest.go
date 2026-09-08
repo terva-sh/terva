@@ -44,6 +44,12 @@ type slashSuggester struct {
 	// to hide state-dependent commands from the autocomplete popup.
 	jailed bool
 
+	// ticketStore tracks whether a .tickets store governs the session
+	// directory, which decides whether /ticket is offered. Pushed in
+	// like jailed rather than probed here, so the popup never stats the
+	// filesystem while it renders.
+	ticketStore bool
+
 	// extra are commands contributed by extensions, refreshed each
 	// frame from the extension manager. Empty when no extensions
 	// have registered any. Sorted by name in SetExtra so map
@@ -108,6 +114,10 @@ func (s *slashSuggester) SetSkills(sk []SkillCompletion) {
 // so state-dependent commands can appear/disappear immediately.
 func (s *slashSuggester) SetJailed(jailed bool) { s.jailed = jailed }
 
+// SetTicketStore records whether a ticket ledger governs this session's
+// directory. /ticket is offered only where one does.
+func (s *slashSuggester) SetTicketStore(ok bool) { s.ticketStore = ok }
+
 // SetMaxRows caps the visible match window (0 = unlimited).
 func (s *slashSuggester) SetMaxRows(n int) { s.maxRows = n }
 
@@ -149,7 +159,7 @@ func (s *slashSuggester) baseCatalog() []slashCommand {
 	if s.jailed {
 		hide = "/jail"
 	}
-	catalog := builtinSlashCatalog()
+	catalog := builtinSlashCatalog(s.ticketStore)
 	out := make([]slashCommand, 0, len(catalog)-1)
 	for _, c := range catalog {
 		if c.Name == hide {

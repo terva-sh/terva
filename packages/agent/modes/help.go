@@ -51,7 +51,10 @@ func helpKeyRows(keymap []globalBinding) [][2]string {
 // section it lives in. The width is computed from the longest label
 // across BOTH lists, with a minimum of 14 cells so changes to either
 // list don't compress the column visually.
-func renderHelpBlock(th tui.Theme, width int, keymap []globalBinding) []string {
+// ticketStore selects whether /ticket is listed. It is the same gate the
+// autocomplete popup applies, so the two views of the command surface
+// agree: a repository with no ledger shows the command in neither.
+func renderHelpBlock(th tui.Theme, width int, keymap []globalBinding, ticketStore bool) []string {
 	if width < 20 {
 		width = 20
 	}
@@ -65,7 +68,7 @@ func renderHelpBlock(th tui.Theme, width int, keymap []globalBinding) []string {
 	// or undershoot (never padding that row because len >= labelWidth
 	// already, leaving its description mis-aligned).
 	labelWidth := 14
-	for _, c := range builtinSlashCatalog() {
+	for _, c := range builtinSlashCatalog(ticketStore) {
 		if c.Header {
 			continue // section labels don't participate in column sizing
 		}
@@ -94,7 +97,7 @@ func renderHelpBlock(th tui.Theme, width int, keymap []globalBinding) []string {
 	// section labels with a blank row above, mirroring the divider rows
 	// the autocomplete popup draws for the same groups.
 	out = append(out, tui.Bold(i18n.T("slash commands:")))
-	for _, c := range builtinSlashCatalog() {
+	for _, c := range builtinSlashCatalog(ticketStore) {
 		if c.Header {
 			out = append(out, "", "  "+th.FG256(th.Muted, c.Name+":"))
 			continue

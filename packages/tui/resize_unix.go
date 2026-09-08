@@ -11,14 +11,17 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// installResizeHandler subscribes to SIGWINCH and fans each signal out
+// to the registered callbacks. OnResizeDetach runs this behind a
+// sync.Once, so one channel and one goroutine serve the process however
+// many callbacks register. It used to run per registration, which left
+// a goroutine and a signal subscription behind on every call.
 func (p *ProcTerm) installResizeHandler() {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGWINCH)
 	go func() {
 		for range ch {
-			for _, cb := range p.resizeCBs {
-				cb()
-			}
+			p.fireResize()
 		}
 	}()
 }

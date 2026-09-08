@@ -529,6 +529,14 @@ type Interactive struct {
 	restoreRaw   func() error
 	teardownOnce sync.Once
 	shuttingDown atomic.Bool
+	// handoff, when set, lends stdin to a guest full-screen application
+	// (the /ticket command hands the terminal to git-ticket's own UI).
+	// The input goroutine reads it on every byte, so it is atomic rather
+	// than mu-guarded: mu is held across redraws, and the reader must
+	// never wait on a repaint to find out where a keystroke goes.
+	// interactive_handoff.go explains why one reader forwards bytes
+	// instead of the guest reading the terminal itself.
+	handoff atomic.Pointer[handoffRoute]
 	// restartFailQuit is closed by resumeAfterFailedRestart only when a failed
 	// self-restart leaves the terminal unrecoverable (raw mode won't re-enter);
 	// the main loop selects on it to exit cleanly. Buffered/closed once.
@@ -1549,7 +1557,11 @@ func (i *Interactive) Run(ctx context.Context) error {
 	// instead of triggering a redraw per character.
 	keys := make(chan tui.Key, 256)
 	go func() {
-		reader := tui.NewReaderWithPeek(term.ReadByte, term.PeekByteTimeout)
+		// Routed rather than term.ReadByte directly: this goroutine is the
+		// session's only reader of stdin, and a handoff borrows its bytes
+		// instead of starting a second reader to race it. With no handoff
+		// installed these are the terminal's own methods.
+		reader := tui.NewReaderWithPeek(i.readByteRouted, i.peekByteRouted)
 		for {
 			k, err := reader.Read()
 			if err != nil {

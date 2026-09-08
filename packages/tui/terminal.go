@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"golang.org/x/term"
@@ -15,6 +16,11 @@ type Terminal interface {
 	// Size returns (cols, rows).
 	Size() (int, int)
 	// OnResize registers a callback invoked on SIGWINCH (best effort).
+	//
+	// This signature is load-bearing beyond terva. git-ticket's
+	// tui.Terminal declares the identical method, which is why
+	// *ProcTerm satisfies it with no adapter. Do not add a detach
+	// return here; ProcTerm.OnResizeDetach carries that separately.
 	OnResize(func())
 	// EnterRaw puts the tty into raw mode. Returns a restore func.
 	EnterRaw() (restore func() error, err error)
@@ -31,9 +37,23 @@ type Terminal interface {
 
 // ProcTerm is a Terminal bound to the current process's tty.
 type ProcTerm struct {
-	out       *os.File
-	in        *os.File
-	resizeCBs []func()
+	out *os.File
+	in  *os.File
+
+	// resizeMu guards resizeCBs and resizeNextID. The signal goroutine
+	// reads them while the main loop registers and detaches, so both
+	// need the lock. tuitest.FakeTerm has always taken one here and
+	// ProcTerm did not, which is why no test caught the race: the
+	// double was correct and the real implementation was not.
+	resizeMu     sync.Mutex
+	resizeCBs    map[int]func()
+	resizeNextID int
+
+	// resizeOnce holds the SIGWINCH plumbing to one channel and one
+	// goroutine however many callbacks register. installResizeHandler
+	// used to run per registration, so N callbacks left N goroutines
+	// each walking all N callbacks: N squared invocations per resize.
+	resizeOnce sync.Once
 }
 
 // NewProcTerm returns a Terminal bound to stdin/stdout.
@@ -51,9 +71,64 @@ func (p *ProcTerm) Size() (int, int) {
 	return w, h
 }
 
+// OnResize registers a callback invoked on SIGWINCH (best effort). The
+// callback stays for the life of the process. Use OnResizeDetach when
+// the caller has to take it back.
 func (p *ProcTerm) OnResize(fn func()) {
-	p.resizeCBs = append(p.resizeCBs, fn)
-	p.installResizeHandler()
+	p.OnResizeDetach(fn)
+}
+
+// OnResizeDetach registers a resize callback and returns a function
+// that removes it. Detaching twice is safe, and a detached callback
+// never fires again.
+//
+// It is a separate method rather than a new return on OnResize because
+// that signature has to keep matching git-ticket's tui.Terminal. A
+// caller holding the interface reaches this the way terva handles
+// every other optional upgrade, with a type assertion:
+//
+//	if d, ok := term.(interface{ OnResizeDetach(func()) func() }); ok {
+//		defer d.OnResizeDetach(repaint)()
+//	}
+func (p *ProcTerm) OnResizeDetach(fn func()) func() {
+	if fn == nil {
+		return func() {}
+	}
+	p.resizeMu.Lock()
+	if p.resizeCBs == nil {
+		p.resizeCBs = make(map[int]func())
+	}
+	id := p.resizeNextID
+	p.resizeNextID++
+	p.resizeCBs[id] = fn
+	p.resizeMu.Unlock()
+
+	p.resizeOnce.Do(p.installResizeHandler)
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			p.resizeMu.Lock()
+			delete(p.resizeCBs, id)
+			p.resizeMu.Unlock()
+		})
+	}
+}
+
+// fireResize invokes every registered callback once. It snapshots under
+// the lock and calls outside it, so a callback that registers or
+// detaches another does not deadlock. tuitest.FakeTerm.Resize has the
+// same shape.
+func (p *ProcTerm) fireResize() {
+	p.resizeMu.Lock()
+	cbs := make([]func(), 0, len(p.resizeCBs))
+	for _, cb := range p.resizeCBs {
+		cbs = append(cbs, cb)
+	}
+	p.resizeMu.Unlock()
+	for _, cb := range cbs {
+		cb()
+	}
 }
 
 func (p *ProcTerm) EnterRaw() (func() error, error) {

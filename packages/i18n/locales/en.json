@@ -539,6 +539,7 @@
   "only load the listed installed extensions (by name); --ext paths bypass, config disables still subtract": "only load the listed installed extensions (by name); --ext paths bypass, config disables still subtract",
   "only start the listed MCP servers (by name)": "only start the listed MCP servers (by name)",
   "open the session picker at startup, or resume session ID directly (also: terva attach -r)": "open the session picker at startup, or resume session ID directly (also: terva attach -r)",
+  "open the ticket ledger for this repository": "open the ticket ledger for this repository",
   "override provider api base url": "override provider api base url",
   "params must be JSON: %v": "params must be JSON: %v",
   "per-session — not saved (a security posture, like the TUI)": "per-session — not saved (a security posture, like the TUI)",

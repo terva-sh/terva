@@ -500,6 +500,13 @@ func (i *Interactive) redraw() {
 			avail = 4
 		}
 		i.suggest.SetMaxRows(avail)
+		// Probed here rather than beside SetJailed above, because this
+		// stats the filesystem and the branch above runs on every frame.
+		// Here it runs only while a slash popup is actually on screen, so
+		// the cost is bounded to the moments a person is choosing a
+		// command, and a store that ticket_init creates mid-session shows
+		// up the next time the popup opens.
+		i.suggest.SetTicketStore(i.ticketStoreAvailable())
 		suggest = i.suggest.Render(currentInput, i.cfg.Theme, cols)
 	} else if len(dialog) == 0 && i.fileSuggest.Active(currentInput) {
 		suggest = i.fileSuggest.Render(currentInput, i.cfg.Theme, cols)

@@ -54,7 +54,7 @@ func TestSlashRegistryNamesUnique(t *testing.T) {
 // The popup/help catalog derives from the registry: visible commands
 // in order, hidden ones absent.
 func TestSlashCatalogDerivesFromRegistry(t *testing.T) {
-	cat := builtinSlashCatalog()
+	cat := builtinSlashCatalog(true)
 	if len(cat) == 0 || cat[0].Name != "/help" {
 		t.Fatalf("catalog head = %v, want /help first", cat[:1])
 	}
@@ -103,7 +103,7 @@ func TestSlashCatalogGroupOrder(t *testing.T) {
 		"session", "context & skills", "model & account",
 		"permissions & trust", "agents & integrations", "system",
 	}
-	cat := builtinSlashCatalog()
+	cat := builtinSlashCatalog(true)
 	if len(cat) == 0 || cat[0].Header || cat[0].Name != "/help" {
 		t.Fatalf("catalog must open with the ungrouped /help, got %+v", cat[0])
 	}
