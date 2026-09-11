@@ -90,9 +90,11 @@ decides read-only classification — `local-read` and `local-data` are
 auto-allowable, so a `network-read` tool is gated like a side-effecting tool (it prompts in
 `workspace`/`auto-edit`, is refused in `plan`) even if it also set the
 legacy `read_only` bool. **Mark network tools `network-read`, not
-`read_only`.** Still to come (bucket-2 Phase A): the shared egress guard
-and an optional per-host allowlist that lets `workspace` auto-allow chosen
-network hosts. See `docs/plans/standard-tools-bucket2.md`.
+`read_only`.** The shared egress guard now ships, and three host-side
+fetches route through it (see [permissions.md](permissions.md)). Still to
+come: a user-layer config key naming hosts the guard may dial even when
+they resolve to a private address. It widens the guard alone, and it does
+not change which calls prompt. See `docs/plans/standard-tools-bucket2.md`.
 
 ## Current standard bundle
 

@@ -290,6 +290,89 @@ func TestHTTPTransportConfinesRedirects(t *testing.T) {
 	}
 }
 
+// TestHTTPTransportStripsBearerOnCrossHostRedirect: the configured bearer must
+// not ride a redirect to another host. TestHTTPTransportConfinesRedirects
+// covers the address policy on this same path. This covers the credential,
+// which nothing covered before.
+//
+// It exercises the transport's OWN client rather than a guard built inside the
+// test, so it fails if anyone swaps guard.Client for a bare &http.Client{} and
+// quietly drops the redirect policy along with it.
+//
+// Why it calls CheckRedirect instead of driving a real redirect: the strip only
+// fires for a target that is BOTH a different hostname and publicly routable.
+// The transport allowlists exactly one host, so a cross-host redirect to a
+// loopback httptest server is refused by CheckURL before the strip is reached,
+// and a genuinely public target cannot be dialed in CI. CheckRedirect is what
+// the transport applies to that request, and the request object is what would
+// go on the wire, so asserting on it is the honest reach of this test.
+//
+// Every URL here is an IP literal or the allowlisted host, so CheckURL never
+// calls LookupIP and the test needs no DNS.
+func TestHTTPTransportStripsBearerOnCrossHostRedirect(t *testing.T) {
+	t.Setenv("TEST_MCP_BEARER", "s3cr3t")
+	cfg := ServerConfig{
+		Transport: "http",
+		URL:       "https://mcp.example.test/mcp",
+		Headers:   map[string]string{"X-Workspace": "ws-1"},
+	}
+	cfg.Auth.BearerEnv = "TEST_MCP_BEARER"
+
+	tr, err := newHTTPTransport(cfg, "", nil)
+	if err != nil {
+		t.Fatalf("newHTTPTransport: %v", err)
+	}
+	ht, ok := tr.(*httpTransport)
+	if !ok {
+		t.Fatalf("want *httpTransport, got %T", tr)
+	}
+	// Check the premise first. If the bearer never reached the headers, every
+	// assertion below would pass against an empty string.
+	if got := ht.headers["Authorization"]; got != "Bearer s3cr3t" {
+		t.Fatalf("the bearer should be configured, got %q", got)
+	}
+	cr := ht.client.CheckRedirect
+	if cr == nil {
+		t.Fatal("the transport's client carries no redirect policy, so the egress guard is not wired into it")
+	}
+
+	mk := func(u string) *http.Request {
+		req, rerr := http.NewRequest("POST", u, nil)
+		if rerr != nil {
+			t.Fatalf("build req %s: %v", u, rerr)
+		}
+		for k, v := range ht.headers {
+			req.Header.Set(k, v)
+		}
+		return req
+	}
+
+	// A public target passes the address gate, so the strip actually runs. A
+	// private target would be refused before it and prove nothing.
+	cross := mk("https://1.1.1.1/steal")
+	if err := cr(cross, []*http.Request{mk(cfg.URL)}); err != nil {
+		t.Fatalf("a public cross-host redirect must pass the gate so the strip runs: %v", err)
+	}
+	if got := cross.Header.Get("Authorization"); got != "" {
+		t.Errorf("the configured bearer rode a cross-host redirect: %q", got)
+	}
+	// The asymmetry docs/mcp.md has to warn about: only Authorization goes.
+	// A custom header still carries to the new host, which is deliberate.
+	if got := cross.Header.Get("X-Workspace"); got != "ws-1" {
+		t.Errorf("a custom header should survive the hop, got %q", got)
+	}
+
+	// Positive control. Without it, a closure that deleted the header on every
+	// hop would pass the assertion above while breaking every real redirect.
+	same := mk("https://mcp.example.test/other")
+	if err := cr(same, []*http.Request{mk(cfg.URL)}); err != nil {
+		t.Fatalf("a same-host redirect should pass: %v", err)
+	}
+	if got := same.Header.Get("Authorization"); got != "Bearer s3cr3t" {
+		t.Errorf("a same-host redirect must keep the bearer, got %q", got)
+	}
+}
+
 // TestHTTPTransportSessionDeleteOnStop: Stop best-effort DELETEs the session.
 func TestHTTPTransportSessionDeleteOnStop(t *testing.T) {
 	f := &fakeHTTPMCP{}

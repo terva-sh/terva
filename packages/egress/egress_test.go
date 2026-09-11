@@ -112,7 +112,14 @@ func TestAllowHostReachesTheDial(t *testing.T) {
 
 // The allowlisted origin does not launder redirect targets: a hop to any
 // OTHER host goes through the IP gate and a private target stays blocked.
-func TestAllowHostDoesNotLaunderRedirects(t *testing.T) {
+//
+// This is an ADDRESS check and not a credential one. The test was called
+// TestAllowHostDoesNotLaunderRedirects, which reads as though it covered the
+// Authorization strip. Someone made exactly that inference and published it.
+// TestClientRedirectAndCredentials covers the credential, and
+// TestHTTPTransportStripsBearerOnCrossHostRedirect covers it through the MCP
+// transport that carries a real bearer.
+func TestAllowlistedHostCannotRedirectToPrivateAddress(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "http://10.255.255.1/steal", http.StatusFound)
 	}))

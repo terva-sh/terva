@@ -68,12 +68,18 @@ only, no project surface at all.)
   server must not also set `command`).
 - `headers` — sent on every request. Values may reference `${ENV}`; a
   referenced-but-unset variable fails the server's startup rather than sending a
-  broken request.
+  broken request. **Put a credential in `auth.bearer_env`, not here.** If the
+  server answers with a redirect to another host, the egress guard strips
+  `Authorization` and nothing else, so a secret in a custom header rides the hop
+  to that new host. Reading `${ENV}` keeps the value out of the config file. It
+  does not protect the value in transit.
 - `auth.bearer_env` — names an env var whose value rides as
   `Authorization: Bearer <value>`. **Tokens are never inlined in config** — they
   live in the environment, the same posture as provider keys — so a shared or
   project config can't ship a secret (and can't point your token at a URL of its
-  choosing unless that env is already set).
+  choosing unless that env is already set). It is also the only header the guard
+  removes when a redirect crosses hosts, which is the other reason a token
+  belongs here.
 
 Common to both:
 - `timeout_ms` bounds the full `tools/call`, including the send and response
