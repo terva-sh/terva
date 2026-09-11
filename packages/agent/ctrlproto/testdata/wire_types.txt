@@ -31,12 +31,14 @@ AskQuestion
 	question	string
 	slug	string	omitempty
 	options	[]string	omitempty
+	recommended_options	[]string	omitempty
 	multi_select	bool	omitempty
 	allow_custom	bool	omitempty
 AskRequest
 	ask_id	string
 	question	string
 	options	[]string	omitempty
+	recommended_options	[]string	omitempty
 	multi_select	bool	omitempty
 	allow_custom	bool	omitempty
 	questions	[]AskQuestion	omitempty
@@ -992,6 +994,7 @@ SessionGroupsResult
 	groups	[]GroupView
 SessionInfo
 	id	string
+	origin	string	omitempty
 	title	string	omitempty
 	provider	string	omitempty
 	model	string	omitempty
@@ -1180,6 +1183,7 @@ TaskBoardView
 	tasks	[]TaskBoardItem
 TaskInfo
 	id	string
+	origin	string	omitempty
 	task	string
 	status	string
 	activity	string	omitempty
@@ -1188,6 +1192,7 @@ TaskInfo
 	last_event	string	omitempty
 	model	string	omitempty
 	provider	string	omitempty
+	reasoning	string	omitempty
 	persona	string	omitempty
 	backend	string	omitempty
 	dir	string	omitempty

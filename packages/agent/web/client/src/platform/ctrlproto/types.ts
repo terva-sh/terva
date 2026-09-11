@@ -227,6 +227,13 @@ export interface ComposerDraft {
 
 export interface SessionInfo {
   id: string
+  // origin names the fleet member this session came from ('neot'), absent when
+  // the daemon serves only itself. That is every daemon today. A hub fronting
+  // several members mints a federated id, origin joined to the id the member
+  // knows the session by ('neot/abc123'), because two members can each own a
+  // session called abc123. Read origin to label a tile with its daemon rather
+  // than taking the id apart here: splitting is the hub's job.
+  origin?: string
   title?: string
   provider?: string
   model?: string
@@ -497,6 +504,9 @@ export interface AskQuestion {
   // yet.
   slug?: string
   options?: string[]
+  // Exact option text the model recommends. Clients must not infer a
+  // recommendation from the option's position.
+  recommended_options?: string[]
   // The options are not mutually exclusive: pick any number. The model
   // declares this — nothing infers it from the option text — so a client
   // must not decide for itself that a list looks additive.
@@ -511,6 +521,7 @@ export interface AskRequest {
   ask_id: string
   question: string
   options?: string[]
+  recommended_options?: string[]
   multi_select?: boolean
   allow_custom?: boolean
   questions?: AskQuestion[]
@@ -523,6 +534,7 @@ export function askQuestions(r: AskRequest): AskQuestion[] {
     {
       question: r.question,
       options: r.options,
+      recommended_options: r.recommended_options,
       multi_select: r.multi_select,
       allow_custom: r.allow_custom,
     },
@@ -840,6 +852,9 @@ export interface Widget {
 
 export interface TaskInfo {
   id: string
+  // origin names the fleet member this agent runs on, absent when the daemon
+  // serves only itself. The same seam as SessionInfo.origin.
+  origin?: string
   task: string
   status: string
   activity?: string
@@ -852,6 +867,7 @@ export interface TaskInfo {
   last_event?: string
   model?: string
   provider?: string
+  reasoning?: string
   persona?: string
   started?: string
   finished?: string

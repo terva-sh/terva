@@ -380,7 +380,17 @@ type Image struct {
 // SessionInfo describes one session for a picker/switcher. It maps from core's
 // session summary + metadata.
 type SessionInfo struct {
-	ID       string `json:"id"`
+	ID string `json:"id"`
+	// Origin names the fleet member this session came from ("neot"), or "" when
+	// the daemon serves only itself. That is every daemon today, so a client
+	// renders exactly as it did before this field existed.
+	//
+	// A hub fronting several members mints a federated id: Origin joined to the
+	// id the member knows the session by ("neot/abc123", see JoinFederatedID).
+	// Two members can each own a session called abc123 and the browser sees one
+	// flat space, so a bare id collides. Origin rides alongside the composite so
+	// a client can label a tile with its daemon without parsing the id apart.
+	Origin   string `json:"origin,omitempty"`
 	Title    string `json:"title,omitempty"` // the display nickname
 	Provider string `json:"provider,omitempty"`
 	Model    string `json:"model,omitempty"`
@@ -1235,7 +1245,13 @@ type TaskList struct {
 
 // TaskInfo is one background agent, mapped from swarm.AgentSnapshot.
 type TaskInfo struct {
-	ID       string `json:"id"`
+	ID string `json:"id"`
+	// Origin names the fleet member this agent runs on, or "" when the daemon
+	// serves only itself. The same seam as SessionInfo.Origin: a hub mints a
+	// federated id and a client reads Origin to label the lane it belongs to.
+	// omitempty, so a lone daemon and an old daemon both send nothing rather
+	// than an empty string a client would have to special-case.
+	Origin   string `json:"origin,omitempty"`
 	Task     string `json:"task"`
 	Status   string `json:"status"` // pending|running|done|failed|killed|detached
 	Activity string `json:"activity,omitempty"`
@@ -1250,6 +1266,7 @@ type TaskInfo struct {
 	LastEvent string `json:"last_event,omitempty"`
 	Model     string `json:"model,omitempty"`
 	Provider  string `json:"provider,omitempty"`
+	Reasoning string `json:"reasoning,omitempty"`
 	Persona   string `json:"persona,omitempty"`
 	// Backend names the worker backend driving this agent ("claude", "terva",
 	// …), or "" for a native terva child (see swarm.AgentSnapshot.Backend). On
