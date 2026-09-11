@@ -29,9 +29,10 @@ type AskUserTool struct {
 // fields on askArgs are the same shape, kept so a model that emits the
 // original one-question form still works.
 type askQuestion struct {
-	Question string            `json:"question"`
-	Slug     string            `json:"slug,omitempty"`
-	Options  jsonArray[string] `json:"options,omitempty"`
+	Question           string            `json:"question"`
+	Slug               string            `json:"slug,omitempty"`
+	Options            jsonArray[string] `json:"options,omitempty"`
+	RecommendedOptions jsonArray[string] `json:"recommended_options,omitempty"`
 
 	MultiSelect bool `json:"multi_select,omitempty"`
 	// AllowCustom is a POINTER so nil ("the model did not say") stays
@@ -41,9 +42,10 @@ type askQuestion struct {
 }
 
 type askArgs struct {
-	Question string            `json:"question"`
-	Slug     string            `json:"slug,omitempty"`
-	Options  jsonArray[string] `json:"options,omitempty"`
+	Question           string            `json:"question"`
+	Slug               string            `json:"slug,omitempty"`
+	Options            jsonArray[string] `json:"options,omitempty"`
+	RecommendedOptions jsonArray[string] `json:"recommended_options,omitempty"`
 
 	MultiSelect bool                   `json:"multi_select,omitempty"`
 	AllowCustom *bool                  `json:"allow_custom,omitempty"`
@@ -81,6 +83,11 @@ const multiSelectDesc = `Set this to true when the options are not mutually excl
 // genuinely open questions.
 const optionsDesc = `The answers for the user to select. Do not write a list of choices in the text of the question, such as '(a) … (b) …' or 'Options:'. Put each choice here instead, as one entry, and keep the question itself to the decision only. An option can be a full sentence with its reason, and the interface breaks the line. A confirmation is also a question: give 'Confirm as canon?' the options 'confirm' and 'revise', which changes four keystrokes to one. Omit this field only for an open question that has no candidate answers, such as 'what should this be called?'.`
 
+// recommendedOptionsDesc is shared by both shapes. Recommendations identify exact
+// option text, never an inferred position, so a front end can mark the choice
+// without treating the first option as preferred.
+const recommendedOptionsDesc = `Optional exact option text that the model recommends. Each entry must match one item in 'options'. Include more than one when several choices are good, and omit this field when the model recommends none. Front ends mark these choices but leave the decision to the user.`
+
 // allowCustomDesc is shared by both shapes, and is phrased around CLOSING the
 // question because closing it is now the only thing saying this changes.
 //
@@ -96,12 +103,14 @@ const askSchema = `{"type":"object","properties":{` +
 	`"question":{"type":"string","description":"The question for the user. Be specific. Use this field for one question. To ask more than one question, use 'questions'."},` +
 	`"slug":{"type":"string","description":"` + slugDesc + `"},` +
 	`"options":{"type":"array","items":{"type":"string"},"description":"` + optionsDesc + `"},` +
+	`"recommended_options":{"type":"array","items":{"type":"string"},"description":"` + recommendedOptionsDesc + `"},` +
 	`"multi_select":{"type":"boolean","description":"` + multiSelectDesc + `"},` +
 	`"allow_custom":{"type":"boolean","description":"` + allowCustomDesc + `"},` +
 	`"questions":{"type":"array","maxItems":8,"description":"Ask several related questions in one interruption. Do not stop the turn one time for each question. The user sees all the questions together and answers them before they send the result. Use this field when more than one item is not clear.","items":{"type":"object","properties":{` +
 	`"question":{"type":"string","description":"The question for the user. Be specific."},` +
 	`"slug":{"type":"string","description":"` + slugDesc + ` A name is very useful here, because the user moves through a set with the tab key, and a name tells what each tab contains."},` +
 	`"options":{"type":"array","items":{"type":"string"},"description":"` + optionsDesc + `"},` +
+	`"recommended_options":{"type":"array","items":{"type":"string"},"description":"` + recommendedOptionsDesc + `"},` +
 	`"multi_select":{"type":"boolean","description":"` + multiSelectDesc + `"},` +
 	`"allow_custom":{"type":"boolean","description":"` + allowCustomDesc + `"}` +
 	`},"required":["question"]}}` +
@@ -154,7 +163,8 @@ func (a askArgs) questions() ([]core.UserQuestion, error) {
 	if strings.TrimSpace(a.Question) != "" {
 		qs = append(qs, core.UserQuestion{
 			Question: a.Question, Slug: core.SanitizeSlug(a.Slug),
-			Options: a.Options, MultiSelect: a.MultiSelect, AllowCustom: allowsCustom(a.AllowCustom),
+			Options: a.Options, RecommendedOptions: a.RecommendedOptions,
+			MultiSelect: a.MultiSelect, AllowCustom: allowsCustom(a.AllowCustom),
 		})
 	}
 	for _, q := range a.Questions {
@@ -163,7 +173,8 @@ func (a askArgs) questions() ([]core.UserQuestion, error) {
 		}
 		qs = append(qs, core.UserQuestion{
 			Question: q.Question, Slug: core.SanitizeSlug(q.Slug),
-			Options: q.Options, MultiSelect: q.MultiSelect, AllowCustom: allowsCustom(q.AllowCustom),
+			Options: q.Options, RecommendedOptions: q.RecommendedOptions,
+			MultiSelect: q.MultiSelect, AllowCustom: allowsCustom(q.AllowCustom),
 		})
 	}
 	if len(qs) == 0 {
@@ -171,6 +182,17 @@ func (a askArgs) questions() ([]core.UserQuestion, error) {
 	}
 	if len(qs) > core.MaxAskQuestions {
 		return nil, fmt.Errorf("too many questions in one call (%d, max %d) — ask the most blocking ones now and the rest after you have those answers", len(qs), core.MaxAskQuestions)
+	}
+	for i := range qs {
+		recommended, err := normalizeRecommended(qs[i].Options, qs[i].RecommendedOptions)
+		if err != nil {
+			where := "question"
+			if len(qs) > 1 {
+				where = fmt.Sprintf("question %d", i+1)
+			}
+			return nil, fmt.Errorf("%s: %w", where, err)
+		}
+		qs[i].RecommendedOptions = recommended
 	}
 	for i, q := range qs {
 		if len(q.Options) > 0 || !enumeratesItsOwnOptions(q.Question) {
@@ -187,6 +209,42 @@ func (a askArgs) questions() ([]core.UserQuestion, error) {
 		return nil, fmt.Errorf("%s lists its choices in the question text but options is empty — put each choice in options instead (one entry each, a full sentence is fine) and leave the question to what is being decided", where)
 	}
 	return qs, nil
+}
+
+// normalizeRecommended keeps only explicit recommendations that refer to an
+// offered option, preserving the model's order and removing duplicates. A
+// missing option is an argument error rather than a silent guess.
+func normalizeRecommended(options, recommended []string) ([]string, error) {
+	if len(recommended) == 0 {
+		return nil, nil
+	}
+	if len(options) == 0 {
+		return nil, fmt.Errorf("recommended requires options")
+	}
+	out := make([]string, 0, len(recommended))
+	for _, candidate := range recommended {
+		found := false
+		for _, option := range options {
+			if candidate == option {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("recommended option %q is not in options", candidate)
+		}
+		duplicate := false
+		for _, existing := range out {
+			if existing == candidate {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			out = append(out, candidate)
+		}
+	}
+	return out, nil
 }
 
 // allowsCustom resolves the tri-state allow_custom into the flag the front

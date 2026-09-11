@@ -21,6 +21,18 @@ describe('MessageContent', () => {
     expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()
   })
 
+  it('renders user markdown inside the existing bubble', () => {
+    const { container } = show({
+      kind: 'user',
+      id: 'u-markdown',
+      text: '**bold**\n\n```shell\n$ cat ~/.local/state/terva/config.json\n```',
+    })
+    const bubble = container.querySelector('.user-wrap .msg.user')
+    expect(bubble?.querySelector('.md strong')?.textContent).toBe('bold')
+    expect(bubble?.querySelector('.md pre code')?.textContent).toContain('$ cat ~/.local/state/terva/config.json')
+    expect(container.querySelector('.user-wrap > .copy-btn')).toBeTruthy()
+  })
+
   it('keeps streaming assistant content raw and renders finalized markdown', () => {
     const streaming = show({ kind: 'assistant', id: 'a1', text: '**working**', streaming: true })
     expect(streaming.container.querySelector('.assistant.streaming')?.textContent).toBe('**working**')

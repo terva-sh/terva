@@ -1316,20 +1316,25 @@ func (i *Interactive) fetchCarrierTasks() {
 func taskInfoSnapshot(t ctrlproto.TaskInfo) swarm.AgentSnapshot {
 	started, _ := time.Parse(time.RFC3339, t.Started)
 	finished, _ := time.Parse(time.RFC3339, t.Finished)
+	lastEvent, _ := time.Parse(time.RFC3339, t.LastEvent)
 	return swarm.AgentSnapshot{
-		ID:       t.ID,
-		Task:     t.Task,
-		Dir:      t.Dir,
-		Status:   swarm.Status(t.Status),
-		Activity: t.Activity,
-		Started:  started,
-		Finished: finished,
-		Err:      t.Err,
-		Tail:     t.Tail,
-		Lines:    t.Lines,
-		Model:    t.Model,
-		Provider: t.Provider,
-		Persona:  t.Persona,
+		ID:        t.ID,
+		Task:      t.Task,
+		Dir:       t.Dir,
+		Status:    swarm.Status(t.Status),
+		Activity:  t.Activity,
+		Turns:     t.Turns,
+		ToolCalls: t.ToolCalls,
+		LastEvent: lastEvent,
+		Started:   started,
+		Finished:  finished,
+		Err:       t.Err,
+		Tail:      t.Tail,
+		Lines:     t.Lines,
+		Model:     t.Model,
+		Provider:  t.Provider,
+		Reasoning: t.Reasoning,
+		Persona:   t.Persona,
 		// Reconstruct the worker-shaped fields too, or an ATTACHED /swarm dialog
 		// lies by omission relative to a local one: the dialog already renders
 		// cost, and backend is what tells a Claude worker apart from a native

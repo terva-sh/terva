@@ -325,7 +325,12 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 	// Native image output: offer the built-in image_generation tool alongside
 	// the function tools (the backend accepts the mixed array). The host has
 	// already gated this on config + the model's CapImageOutput + plan mode.
-	if req.ImageOutput != nil {
+	//
+	// ForbidTools drops it. tool_choice governs the function tools below, and
+	// whether it also holds back a built-in tool is undocumented. A caller sets
+	// ForbidTools because a call would be unsafe, so the one tool whose ban is
+	// unverified does not go on the wire at all.
+	if req.ImageOutput != nil && !req.ForbidTools {
 		body.Tools = append(body.Tools, codexImageTool{
 			Type:    "image_generation",
 			Size:    req.ImageOutput.Size,
@@ -333,7 +338,15 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 		})
 	}
 	if len(body.Tools) > 0 {
+		// The tools stay on the wire under ForbidTools and the choice bans the
+		// call. That is the whole point of the field: tools render at the front
+		// of the cached prefix, so a side request that omits them diverges from
+		// the conversation's cache immediately and pays full price for the
+		// transcript. See Request.ForbidTools.
 		body.ToolChoice = "auto"
+		if req.ForbidTools {
+			body.ToolChoice = "none"
+		}
 	}
 
 	msgIdx := 0

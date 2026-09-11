@@ -614,6 +614,23 @@ type Request struct {
 	Tools       []Tool
 	MaxTokens   int
 	Temperature *float32
+
+	// ForbidTools says the model must not call a tool on this request, even
+	// though Tools is populated.
+	//
+	// It exists so a side computation can advertise the conversation's own tools
+	// array and READ the prefix the main loop cached, rather than omit tools and
+	// diverge from that prefix almost immediately. Every provider renders tools
+	// near the front of the cached prefix, so a side request that drops them is a
+	// guaranteed full-price miss, and the miss grows with the transcript.
+	//
+	// The contract for a client is strict: a client that cannot ENFORCE this MUST
+	// drop Tools rather than send them. A caller sets this when a tool call would
+	// be unsafe and not merely unwanted, so a client with no enforcement gives up
+	// the cache saving and keeps the safety. Discouraging a call in the prompt is
+	// not enforcement. WireTools applies that rule in one line.
+	ForbidTools bool
+
 	// Reasoning is "", "minimum", "low", "medium", "high", "maximum", or
 	// "max". Empty disables reasoning. Budget-based providers map these to
 	// roughly 1k/2k/8k/16k/32k thinking tokens; effort-based providers map
@@ -681,6 +698,20 @@ type Request struct {
 	// rest ignore the field. The host gates this (opt-in config + the model's
 	// CapImageOutput + not plan mode) before setting it.
 	ImageOutput *ImageOutputConfig
+}
+
+// WireTools returns the tools a client may put on the wire.
+//
+// It is nil under ForbidTools, which is the fallback that field's contract
+// requires: a client with no way to stop a tool call drops the array instead of
+// advertising tools it cannot hold the model back from. A client that DOES
+// enforce the ban, by sending an explicit tool_choice of "none", ignores this
+// and sends Tools, which is where the cache saving comes from.
+func (r Request) WireTools() []Tool {
+	if r.ForbidTools {
+		return nil
+	}
+	return r.Tools
 }
 
 // ImageOutputConfig configures native image output (see Request.ImageOutput).

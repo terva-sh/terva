@@ -802,7 +802,7 @@ func (s *Session) Ask(ctx context.Context, a chat.Ask) (chat.Answer, error) {
 
 	opts := make([]connproto.AskOption, 0, len(a.Options))
 	for _, o := range a.Options {
-		opts = append(opts, connproto.AskOption{Key: o.Key, Label: o.Label, Style: o.Style, Hint: o.Hint})
+		opts = append(opts, connproto.AskOption{Key: o.Key, Label: o.Label, Style: o.Style, Hint: o.Hint, Recommended: o.Recommended})
 	}
 	// The render round trip: the connector acknowledges the QUESTION
 	// went up (its result) before we settle in to wait for a human.

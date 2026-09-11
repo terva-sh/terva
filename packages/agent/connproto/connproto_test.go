@@ -267,6 +267,12 @@ var goldenFrames = []goldenFrame{
 		`{"type":"ask","id":"a1","chat_id":"c1","text":"pick one","options":[{"key":"a","label":"A"},{"key":"b","label":"B"}]}`,
 	},
 	{
+		"ask recommended option",
+		AskFromHost{Type: "ask", ID: "a1", ChatID: "c1", Text: "pick one",
+			Options: []AskOption{{Key: "a", Label: "A"}, {Key: "b", Label: "B", Recommended: true}}},
+		`{"type":"ask","id":"a1","chat_id":"c1","text":"pick one","options":[{"key":"a","label":"A"},{"key":"b","label":"B","recommended":true}]}`,
+	},
+	{
 		"ask_close",
 		AskCloseFromHost{Type: "ask_close", ID: "a2", AskID: "a1", Outcome: "Approve — @drew"},
 		`{"type":"ask_close","id":"a2","ask_id":"a1","outcome":"Approve — @drew"}`,

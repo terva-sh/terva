@@ -984,12 +984,13 @@ type AgentSnapshot struct {
 	// candidates are arbitrated.
 	PreGuardAssistant string
 
-	// Model and Provider expose the per-agent overrides set at
+	// Model, Provider, and Reasoning expose the per-agent overrides set at
 	// Spawn time (empty when the agent inherits the child's default
 	// resolution). The dashboard surfaces these so the user can
-	// confirm which model an agent is running against.
-	Model    string
-	Provider string
+	// confirm which execution settings an agent is running against.
+	Model     string
+	Provider  string
+	Reasoning string
 
 	// CostUSD is the worker's cumulative spend so far, from its task_end
 	// events. Zero for a native terva child or a terva-backend worker until
@@ -1129,6 +1130,7 @@ func (a *Agent) Snapshot() AgentSnapshot {
 		PreGuardAssistant: a.preGuardAssistant,
 		Model:             a.Model,
 		Provider:          a.Provider,
+		Reasoning:         a.Reasoning,
 		CostUSD:           a.costUSD,
 		Usage:             a.usage,
 		Persona:           a.Persona,

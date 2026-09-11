@@ -18,12 +18,13 @@ func TestSwarmRowShowsProgress(t *testing.T) {
 		ID: "alpha-1", Task: "review a single file", Status: swarm.StatusRunning,
 		Activity: "idle", Started: now.Add(-31 * time.Minute),
 		Turns: 14, ToolCalls: 62, LastEvent: now.Add(-4 * time.Second),
+		Provider: "anthropic", Model: "claude-sonnet-4-5", Reasoning: "medium",
 	}}
 	d := NewSwarmDialog()
 	d.Open(staticSnapshots(rows...), nil, nil, nil, nil, nil, "")
-	out := strings.Join(d.Render(tui.Theme{}, 120), "\n")
+	out := strings.Join(d.Render(tui.Theme{}, 140), "\n")
 
-	for _, want := range []string{"TURNS", "TOOLS", "14", "62", "idle · 4s"} {
+	for _, want := range []string{"PROVIDER", "MODEL", "REASONING", "anthropic", "claude-sonnet-4-5", "medium", "TURNS", "TOOLS", "14", "62", "idle · 4s"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("render missing %q:\n%s", want, out)
 		}
@@ -57,9 +58,28 @@ func TestQuietTimeOnlyForLiveAgents(t *testing.T) {
 	}
 }
 
-// On a narrow terminal the counters yield rather than clipping the activity
-// string away. Activity is the older, denser signal — "tool: run_tests" says
-// more in a glance than any number — so buying columns with it is a downgrade.
+// At an intermediate width, execution metadata answers which worker is
+// running, so the counters yield before the provider, model, or effort level.
+func TestIntermediateDashboardPrefersExecutionMetadata(t *testing.T) {
+	row := swarm.AgentSnapshot{
+		ID: "alpha-1", Status: swarm.StatusRunning, Activity: "tool: run_tests",
+		Started: time.Now(), Turns: 14, ToolCalls: 62,
+		Provider: "anthropic", Model: "claude-sonnet-4-5", Reasoning: "low",
+	}
+	d := NewSwarmDialog()
+	d.Open(staticSnapshots(row), nil, nil, nil, nil, nil, "")
+	out := strings.Join(d.Render(tui.Theme{}, 120), "\n")
+
+	for _, want := range []string{"PROVIDER", "MODEL", "REASONING", "anthropic", "claude-sonnet-4-5", "low"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("intermediate render missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "TURNS") || strings.Contains(out, "TOOLS") {
+		t.Fatalf("intermediate render kept counters instead of execution metadata:\n%s", out)
+	}
+}
+
 func TestNarrowDashboardKeepsActivityAndDropsCounters(t *testing.T) {
 	rows := []swarm.AgentSnapshot{{
 		ID: "alpha-1", Status: swarm.StatusRunning, Activity: "tool: run_tests",
@@ -83,11 +103,21 @@ func TestHeaderMatchesRowsAtEveryWidth(t *testing.T) {
 	row := swarm.AgentSnapshot{
 		ID: "alpha-1", Status: swarm.StatusRunning, Activity: "idle",
 		Started: time.Now(), Turns: 7, ToolCalls: 9,
+		Provider: "provider-x", Model: "model-x", Reasoning: "low",
 	}
 	for w := 40; w <= 200; w += 3 {
 		header := swarmListHeader(w - 2)
 		headerHasCols := strings.Contains(header, "TURNS")
+		headerHasMetadata := strings.Contains(header, "PROVIDER")
 		body := formatSwarmRow(row, w-2)
+		if headerHasMetadata != swarmMetadataFits(w-2) {
+			t.Fatalf("width %d: header metadata=%v but layout metadata=%v\nheader: %q",
+				w, headerHasMetadata, swarmMetadataFits(w-2), header)
+		}
+		if strings.Contains(body, "provider-x") != headerHasMetadata {
+			t.Fatalf("width %d: header metadata=%v but row metadata=%v\nheader: %q\nrow:    %q",
+				w, headerHasMetadata, strings.Contains(body, "provider-x"), header, body)
+		}
 		// The counters are right-aligned in width-5 cells, so look for the
 		// padded forms the row would actually contain.
 		bodyHasCols := strings.Contains(body, "    7      9  ")

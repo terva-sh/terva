@@ -192,3 +192,50 @@ func TestQuestionDialogOptionTallerThanTheBandShowsItsHead(t *testing.T) {
 		t.Fatalf("window opened mid-answer; first option row is %q", first)
 	}
 }
+
+func TestQuestionDialogMarksExactRecommendedOptions(t *testing.T) {
+	q := core.UserQuestion{
+		Question:           "Pick one",
+		Options:            []string{"first", "middle", "last"},
+		RecommendedOptions: []string{"middle", "last"},
+	}
+	rows, _ := optionRowsOf(q, 60, questionDraft{})
+	joined := strings.Join(rows, "\n")
+	if got := strings.Count(joined, "(recommended)"); got != 2 {
+		t.Fatalf("recommendation marker count = %d, want 2:\n%s", got, joined)
+	}
+	if strings.Contains(joined, "(recommended) 1.") {
+		t.Fatalf("first option was marked by position:\n%s", joined)
+	}
+	for _, want := range []string{"2. (recommended) middle", "3. (recommended) last"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("rows do not mark %q:\n%s", want, joined)
+		}
+	}
+}
+
+func TestQuestionDialogRecommendationDoesNotPreselectAndWraps(t *testing.T) {
+	long := "choice with enough words to wrap in the dialog"
+	q := core.UserQuestion{
+		Question:           "Pick one",
+		Options:            []string{"first", long},
+		RecommendedOptions: []string{long},
+	}
+	rows, _ := optionRowsOf(q, 32, questionDraft{})
+	for _, row := range rows {
+		if w := runewidth.StringWidth(widgets.StripANSIBytes(row)); w > 32 {
+			t.Errorf("recommended row exceeds width: %d > 32: %q", w, widgets.StripANSIBytes(row))
+		}
+	}
+	plain := strings.Join(strings.Fields(strings.Join(rows, " ")), " ")
+	if !strings.Contains(plain, long) {
+		t.Fatalf("wrapped recommendation lost option text:\n%s", strings.Join(rows, "\n"))
+	}
+
+	d := NewQuestionDialog()
+	resp := ask1(d, q)
+	d.HandleKey(tui.Key{Kind: tui.KeyEnter})
+	if answer := one(t, resp); answer.Answer != "first" {
+		t.Fatalf("recommendation moved the cursor: answer = %+v, want first option", answer)
+	}
+}

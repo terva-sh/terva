@@ -740,11 +740,21 @@ function AskPrompt(props: { request: AskRequest; onAnswer: (id: string, text: st
       <div class="stage-interact__head">{request.question}</div>
       {(request.options ?? []).length > 0 && (
         <div class="stage-interact__actions">
-          {(request.options ?? []).map((option) => (
-            <button key={option} onClick={() => onAnswer(request.ask_id, option)}>
-              {option}
-            </button>
-          ))}
+          {(request.options ?? []).map((option) => {
+            const recommended = request.recommended_options?.includes(option) ?? false
+            return (
+              <button
+                key={option}
+                class={recommended ? 'recommended' : undefined}
+                aria-label={recommended ? t('Recommended: %s', option) : undefined}
+                title={recommended ? t('Recommended: %s', option) : undefined}
+                onClick={() => onAnswer(request.ask_id, option)}
+              >
+                {recommended && <span aria-hidden="true">★ </span>}
+                {option}
+              </button>
+            )
+          })}
         </div>
       )}
       {request.allow_custom && (

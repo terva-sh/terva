@@ -522,7 +522,13 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 		out.Tools = append(out.Tools, tool)
 	}
 	if len(out.Tools) > 0 {
+		// Under ForbidTools the array still rides and the choice bans the call,
+		// so a side request reads the conversation's cached prefix instead of
+		// diverging from it at the tools block. See Request.ForbidTools.
 		out.ToolChoice = "auto"
+		if req.ForbidTools {
+			out.ToolChoice = "none"
+		}
 	}
 
 	return out, nil

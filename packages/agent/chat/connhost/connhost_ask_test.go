@@ -116,7 +116,7 @@ func TestSessionAsk(t *testing.T) {
 			ChatID: "c1", ReplyTo: "m12", Text: "approve?",
 			Options: []chat.AskOption{
 				{Key: "approve", Label: "Approve", Style: "affirm"},
-				{Key: "deny", Label: "Deny", Style: "deny"},
+				{Key: "deny", Label: "Deny", Style: "deny", Recommended: true},
 			},
 			RestrictTo: []string{"u1"},
 			Timeout:    5 * time.Second,
@@ -131,6 +131,9 @@ func TestSessionAsk(t *testing.T) {
 	}
 	if ask.ChatID != "c1" || ask.ReplyTo != "m12" || len(ask.Options) != 2 || ask.Options[0].Key != "approve" {
 		t.Errorf("ask frame = %+v", ask)
+	}
+	if !ask.Options[1].Recommended || ask.Options[0].Recommended {
+		t.Errorf("recommendation flags = %+v, want only Deny recommended", ask.Options)
 	}
 	if len(ask.RestrictTo) != 1 || ask.RestrictTo[0] != "u1" || ask.ExpiresMS != 5000 {
 		t.Errorf("ask restrict/expiry = %+v", ask)

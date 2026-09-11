@@ -181,12 +181,15 @@ func TestSessionInfoLiveBusyWire(t *testing.T) {
 // a client reads its absence as backend-unknown. R2 of the orchestration
 // reconciliation (docs/reviews/2026-07-15-eaw-review-from-orchestration-frontend.md).
 func TestTaskInfoBackendWire(t *testing.T) {
-	withBackend, err := json.Marshal(TaskInfo{ID: "wk1", Task: "x", Status: "running", Backend: "claude"})
+	withBackend, err := json.Marshal(TaskInfo{ID: "wk1", Task: "x", Status: "running", Backend: "claude", Reasoning: "medium"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Contains(withBackend, []byte(`"backend":"claude"`)) {
 		t.Errorf("TaskInfo.Backend not carried on the wire: %s", withBackend)
+	}
+	if !bytes.Contains(withBackend, []byte(`"reasoning":"medium"`)) {
+		t.Errorf("TaskInfo.Reasoning not carried on the wire: %s", withBackend)
 	}
 	native, err := json.Marshal(TaskInfo{ID: "a", Task: "x", Status: "running"})
 	if err != nil {

@@ -6,6 +6,7 @@ package workspace
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -143,8 +144,15 @@ func TestNextStepAsksAgainstTheSessionsOwnPrefix(t *testing.T) {
 		t.Fatalf("ephemeral tail = %q, want the PEEKED one — a suggestion must not "+
 			"record lore activations on the session's behalf", req.EphemeralContext)
 	}
+	// This agent has dispatched nothing, so there is no warm prefix to align to
+	// and the request falls back to advertising no tools. The ban does NOT rest
+	// on that fallback: ForbidTools is what stops a call, on every provider,
+	// whether or not an array rides along. See TestNextStepAlignsWithTheMainLine.
 	if len(req.Tools) != 0 {
-		t.Fatalf("the suggestion carried %d tools; it must not be able to act", len(req.Tools))
+		t.Fatalf("unaligned, the suggestion carried %d tools; with no warm prefix there is nothing to align to and nothing to gain", len(req.Tools))
+	}
+	if !req.ForbidTools {
+		t.Fatal("ForbidTools unset; a suggestion must not be able to act, and an empty tools array is no longer what enforces that")
 	}
 	if req.MaxTokens != nextStepMaxTokens {
 		t.Fatalf("MaxTokens = %d, want %d", req.MaxTokens, nextStepMaxTokens)
@@ -357,5 +365,73 @@ func TestNextStepBodiesShareTheRequest(t *testing.T) {
 	}
 	if idle[0] == asked[0] {
 		t.Fatal("the two asks open identically, so the on-demand variant is not saying anything different")
+	}
+}
+
+// nextStepFakeTool exists to be ADVERTISED. The alignment this surface depends
+// on is a property of the tools array on the wire, and an empty registry cannot
+// show it.
+type nextStepFakeTool struct{}
+
+func (nextStepFakeTool) Name() string            { return "read" }
+func (nextStepFakeTool) Description() string     { return "read a file" }
+func (nextStepFakeTool) Schema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (nextStepFakeTool) Execute(ctx context.Context, _ json.RawMessage, _ func(string)) (core.ToolResult, error) {
+	return core.ToolResult{}, nil
+}
+
+// The suggestion goes out on the SAME system prompt and the SAME tools array as
+// the conversation's last real turn, so it reads that turn's cached prefix
+// instead of paying a fresh full-price read of the whole transcript.
+//
+// This is the whole point of the surface and it was broken from the start. The
+// request omitted its tools on the reasoning that a suggestion must not act.
+// Tools render at the front of the cached prefix, so that omission diverged
+// immediately and made every suggestion a cold read: a fifth to a third of two
+// measured sessions (TKT-01M213C1T). The ban now travels as ForbidTools.
+//
+// Asserted against what the MAIN turn actually sent rather than against the
+// test's own setup. A suggestion that matched the fixture but not the wire
+// would align with nothing, which is the exact bug this replaces.
+func TestNextStepAlignsWithTheMainLine(t *testing.T) {
+	w, s, cl := nextStepSession(t, "s1", "run the tests")
+	s.agent.SetTools(core.Registry{"read": nextStepFakeTool{}})
+	// The bare harness session carries no model, where a built one is seeded from
+	// the session record. It matters here and nowhere else in this file: the
+	// suggestion is sent on s.model, and a prefix is warm only for the model that
+	// wrote it, so an unset one correctly refuses to align with anything.
+	s.setModel("fake", "fake-model", false)
+
+	// One real turn, so a provider now holds this prefix warm and the agent has
+	// retained what produced it.
+	if err := s.agent.Prompt(context.Background(), "what broke it?", nil, nil); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	main := cl.lastReq(t)
+	if len(main.Tools) == 0 {
+		t.Fatal("the main turn advertised no tools, so this test cannot tell alignment from the old fallback")
+	}
+
+	if _, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{}); err != nil {
+		t.Fatalf("suggest: %v", err)
+	}
+	suggestion := cl.lastReq(t)
+
+	if suggestion.System != main.System {
+		t.Errorf("system prompt differs from the main line, so the prefix misses:\n suggestion: %q\n main:       %q", suggestion.System, main.System)
+	}
+	want, err := json.Marshal(main.Tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.Marshal(suggestion.Tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("tools differ from the main line, so the request diverges from the cached prefix:\n suggestion: %s\n main:       %s", got, want)
+	}
+	if !suggestion.ForbidTools {
+		t.Error("ForbidTools unset while tools ride the wire; the suggestion could act, which is the one thing it must never do")
 	}
 }

@@ -33,6 +33,42 @@ func pairChat(t *testing.T, conn *fakeConnector, l *Loop) int {
 // test: an implementation that fired all eight asks at once would deadlock on
 // Loop's one-ask-at-a-time slot, and one that returned answers out of order
 // would be indexed wrongly by every caller.
+func TestChatAskerCarriesRecommendationsInTextFallback(t *testing.T) {
+	conn := newFakeConnector(Capabilities{})
+	l := startLoop(t, conn, &scriptedClient{reply: "ok"}, pairedWith("7"))
+	base := pairChat(t, conn, l)
+
+	done := make(chan []core.UserAnswer, 1)
+	go func() {
+		ans, _ := askerFor(l).Ask(context.Background(), []core.UserQuestion{{
+			Question:           "Which database?",
+			Options:            []string{"Postgres", "SQLite", "DuckDB"},
+			RecommendedOptions: []string{"SQLite", "DuckDB"},
+		}})
+		done <- ans
+	}()
+
+	sends := conn.waitSends(t, base+1)
+	text := sends[base].Text
+	for _, want := range []string{"2 — SQLite (recommended)", "3 — DuckDB (recommended)"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("fallback ask missing %q: %q", want, text)
+		}
+	}
+	if strings.Contains(text, "1 — Postgres (recommended)") {
+		t.Fatalf("fallback marked the first option by position: %q", text)
+	}
+	conn.inbound <- msgFrom("7", "1")
+	select {
+	case ans := <-done:
+		if len(ans) != 1 || ans[0].Answer != "Postgres" {
+			t.Fatalf("answer = %+v, want the unmarked first option", ans)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Ask never resolved")
+	}
+}
+
 func TestChatAskerPosesSetInOrder(t *testing.T) {
 	conn := newFakeConnector(Capabilities{})
 	l := startLoop(t, conn, &scriptedClient{reply: "ok"}, pairedWith("7"))

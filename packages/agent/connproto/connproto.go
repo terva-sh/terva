@@ -396,10 +396,11 @@ type TypingFromHost struct {
 // encode sensitive content in Hint or Key; the message Text carries the
 // substance.
 type AskOption struct {
-	Key   string `json:"key"`
-	Label string `json:"label"`
-	Style string `json:"style,omitempty"`
-	Hint  string `json:"hint,omitempty"`
+	Key         string `json:"key"`
+	Label       string `json:"label"`
+	Style       string `json:"style,omitempty"`
+	Hint        string `json:"hint,omitempty"`
+	Recommended bool   `json:"recommended,omitempty"`
 }
 
 // AskFromHost renders one constrained question in a chat (stage G,

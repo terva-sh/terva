@@ -35,6 +35,7 @@
 {"name":"typing stop","dir":"host_to_conn","frame":"{\"type\":\"typing\",\"chat_id\":\"c1\",\"active\":false}"}
 {"name":"ask","dir":"host_to_conn","frame":"{\"type\":\"ask\",\"id\":\"a1\",\"chat_id\":\"c1\",\"reply_to\":\"m12\",\"text\":\"terva wants to run `rm -rf build/` — approve?\",\"options\":[{\"key\":\"approve\",\"label\":\"Approve\",\"style\":\"affirm\",\"hint\":\"👍\"},{\"key\":\"deny\",\"label\":\"Deny\",\"style\":\"deny\",\"hint\":\"👎\"}],\"restrict_to\":[\"u1\"],\"expires_ms\":120000}"}
 {"name":"ask minimal","dir":"host_to_conn","frame":"{\"type\":\"ask\",\"id\":\"a1\",\"chat_id\":\"c1\",\"text\":\"pick one\",\"options\":[{\"key\":\"a\",\"label\":\"A\"},{\"key\":\"b\",\"label\":\"B\"}]}"}
+{"name":"ask recommended option","dir":"host_to_conn","frame":"{\"type\":\"ask\",\"id\":\"a1\",\"chat_id\":\"c1\",\"text\":\"pick one\",\"options\":[{\"key\":\"a\",\"label\":\"A\"},{\"key\":\"b\",\"label\":\"B\",\"recommended\":true}]}"}
 {"name":"ask_close","dir":"host_to_conn","frame":"{\"type\":\"ask_close\",\"id\":\"a2\",\"ask_id\":\"a1\",\"outcome\":\"Approve — @drew\"}"}
 {"name":"ask_close bare withdrawal","dir":"host_to_conn","frame":"{\"type\":\"ask_close\",\"id\":\"a2\",\"ask_id\":\"a1\"}"}
 {"name":"thread_start","dir":"host_to_conn","frame":"{\"type\":\"thread_start\",\"id\":\"t1\",\"chat_id\":\"c1\",\"from_message_id\":\"m-12\",\"name\":\"refactor: extract session core\"}"}

@@ -177,6 +177,7 @@
   "Record cache-invalidating prompt changes": "Record cache-invalidating prompt changes",
   "Record thinking": "Record thinking",
   "Record which connection each request rode": "Record which connection each request rode",
+  "recommended": "recommended",
   "Recursive file search": "Recursive file search",
   "Reliability & diagnostics": "Reliability & diagnostics",
   "Render images inline in terminals that support an image protocol.": "Render images inline in terminals that support an image protocol.",

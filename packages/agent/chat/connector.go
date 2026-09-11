@@ -294,12 +294,14 @@ type TypingStopper interface {
 // AskOption is one choice on an Ask. Key is the semantic identity
 // (what comes back on the Answer); Label is the human text; Style
 // ("affirm", "deny", "") and Hint (an emoji, for reaction-rendered
-// options) are rendering hints only.
+// options) are rendering hints only. Recommended is an explicit model
+// recommendation; connectors may mark it in their own UI.
 type AskOption struct {
-	Key   string
-	Label string
-	Style string
-	Hint  string
+	Key         string
+	Label       string
+	Style       string
+	Hint        string
+	Recommended bool
 }
 
 // Ask is one constrained question posed in a chat: the recipient picks

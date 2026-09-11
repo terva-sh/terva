@@ -286,6 +286,44 @@ func (a *Agent) compactionPrefix() (p promptPrefix, warm bool) {
 	}, false
 }
 
+// DispatchedPrefix reports the system prompt and the advertised tool specs of
+// the last request oneTurn put on the wire. A side computation that sends these
+// verbatim READS the conversation's warm cache instead of paying a fresh
+// full-price read of the whole transcript.
+//
+// client and model are what the caller is about to send to, and ok is false
+// unless both match what was dispatched. A prefix is warm only for the endpoint
+// and model that wrote it, so handing it back for any other pair would return
+// bytes that align with nothing. ok is false before the first dispatch too,
+// where there is no warm prefix to aim at and the caller should keep whatever
+// it did before.
+//
+// The tools are the ADVERTISED specs, which under lazy tool visibility are a
+// per-turn subset rather than the whole registry (SpecsVisible, in oneTurn).
+// That subset is what the provider hashed, so it is the only array that aligns.
+// Neither ToolsSnapshot nor ToolSpecsInGroup reproduces it, which is what makes
+// this reader necessary rather than a convenience.
+//
+// Deliberately NOT gated on prefixCacheTTL, unlike pendingPrefixChange. That
+// guard asks whether a warm cache is still worth protecting; this asks which
+// bytes to send. Past the TTL an aligned request pays the same cold read a
+// misaligned one would, and it leaves a prefix the next real turn can hit, so
+// aligning is never the worse choice.
+//
+// A caller that advertises these tools MUST NOT allow the model to call one.
+// See provider.Request.ForbidTools.
+func (a *Agent) DispatchedPrefix(client provider.Client, model string) (system string, tools []provider.Tool, ok bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	sent := a.lastSent
+	if sent == nil || sent.model != model || !sameClient(sent.client, client) {
+		return "", nil, false
+	}
+	// Copy on the way out: the retained record outlives this call and is the
+	// only surviving description of what the provider cached.
+	return sent.system, append([]provider.Tool(nil), sent.tools...), true
+}
+
 // SetCacheAwareCompaction toggles the cache-aware summarizer (the engine
 // feature cache_aware_compaction; the shipped default — ON — lives in
 // build/enginefeatures.go, core's zero value stays off). Off, a compaction

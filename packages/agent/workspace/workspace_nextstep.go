@@ -8,12 +8,21 @@ package workspace
 // on open snapshots, and no id for a client to forget to close.
 //
 // It borrows the side chat's SHAPE on purpose: the session's own system prompt,
-// its own transcript, its own per-turn ephemeral tail, and then one appended
-// question. That prefix is the session's own, so the request reads the prompt
-// cache rather than paying to re-read the conversation — which is the property
-// this feature was asked for. Building it on the suggest surface instead would
-// have lost that, because suggest replaces the system prompt and assembles a
-// fresh message list.
+// its own tools, its own transcript, its own per-turn ephemeral tail, and then
+// one appended question. That prefix is the session's own, so the request reads
+// the prompt cache rather than paying to re-read the conversation — which is the
+// property this feature was asked for. Building it on the suggest surface
+// instead would have lost that, because suggest replaces the system prompt and
+// assembles a fresh message list.
+//
+// "Its own tools" is load-bearing and was learned the hard way. This surface
+// shipped omitting the tools array, on the reasoning that a suggestion must not
+// be able to act. Tools render at the front of the cached prefix, so that one
+// omission diverged from the conversation's cache almost immediately and made
+// every suggestion a full-price read of the entire transcript. The property
+// above was stated here and was not true: it accounted for a fifth to a third
+// of two measured sessions. The ban now travels as provider.Request.ForbidTools,
+// which bans the CALL instead of hiding the tools. See TKT-01M213C1T.
 //
 // It records NOTHING. The question never enters the transcript, the answer
 // never enters the transcript, and neither reaches the session file. The one
@@ -106,7 +115,7 @@ var _ ctrlproto.NextStepController = (*Workspace)(nil)
 //
 // p.OnDemand switches the ask to the variant for a suggestion the user asked
 // for. It changes the question's framing and nothing else — same cap, same
-// reasoning-off, same no-tools, same nothing-recorded.
+// reasoning-off, same tool ban, same nothing-recorded.
 func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlproto.NextStepParams) (ctrlproto.NextStepResult, error) {
 	s, err := w.resolve(sess)
 	if err != nil {
@@ -128,6 +137,16 @@ func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlprot
 		return ctrlproto.NextStepResult{}, nil
 	}
 	_, model := s.currentModel()
+	// The system prompt and tools of the conversation's last real dispatch,
+	// which is the prefix a provider still holds warm. Sending those bytes is
+	// what makes this call READ that cache rather than pay a full-price read of
+	// the whole transcript. Not ok before the first turn of a session, or after
+	// a model or endpoint swap, and then this keeps what it always sent: the
+	// agent's current system prompt and no tools at all.
+	system, tools, aligned := ag.DispatchedPrefix(ag.Client, model)
+	if !aligned {
+		system, tools = ag.System, nil
+	}
 	body := i18n.P("nextstep.ask", nextStepBody)
 	if p.OnDemand {
 		body = i18n.P("nextstep.ask_on_demand", nextStepBodyOnDemand)
@@ -136,7 +155,7 @@ func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlprot
 
 	out, usage, err := streamText(ctx, ag.Client, provider.Request{
 		Model:     model,
-		System:    ag.System,
+		System:    system,
 		Messages:  msgs,
 		MaxTokens: nextStepMaxTokens,
 		// ContextPreview, not ContextProvider: the side-effect-free twin. A real
@@ -156,9 +175,25 @@ func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlprot
 		// that arrives after a long think has missed the moment it was for.
 		Reasoning:    "",
 		ReasoningSet: true,
-		// No tools. A suggestion is a sentence the user may choose to send; it
+		// The tools the last real dispatch advertised, and a ban on calling any
+		// of them. A suggestion is a sentence the user may choose to send; it
 		// must not be able to act, and least of all while they are away from the
 		// keyboard.
+		//
+		// Omitting the array used to be how that ban was enforced, and it cost
+		// the feature its stated reason for existing. Tools render at the FRONT
+		// of every provider's cached prefix, so a request without them diverges
+		// from the conversation's cache within a few hundred bytes and re-reads
+		// the entire transcript at full price. Measured at a fifth to a third of
+		// two whole sessions (TKT-01M213C1T).
+		//
+		// ForbidTools moves the ban from "do not advertise" to "may not call",
+		// which each client either enforces with an explicit tool_choice or
+		// honours by dropping the array and giving up the saving. Set
+		// unconditionally, including when tools is empty: the ban is a property
+		// of this request, not a consequence of what happens to be in the slice.
+		Tools:       tools,
+		ForbidTools: true,
 	})
 	// Booked before the error check: a completion that failed still spent what
 	// it sent, and dropping it would make idle suggestions free as far as the

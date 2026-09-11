@@ -285,6 +285,7 @@ export function AskRequest({
                     const on = multi
                       ? (ticked[i] ?? []).includes(option)
                       : !single && !typing[i] && picked[i] === option
+                    const recommended = q.recommended_options?.includes(option) ?? false
                     return (
                       <button
                         type="button"
@@ -294,10 +295,13 @@ export function AskRequest({
                         // box and an unticked one are announced identically,
                         // and the checkmark below is decoration only.
                         aria-pressed={multi ? on : undefined}
-                        class={'btn' + (on ? ' primary' : '')}
+                        aria-label={recommended ? t('Recommended: %s', option) : undefined}
+                        title={recommended ? t('Recommended: %s', option) : undefined}
+                        class={'btn' + (on ? ' primary' : '') + (recommended ? ' recommended' : '')}
                         onClick={() => choose(i, option)}
                       >
                         {multi ? (on ? '☑ ' : '☐ ') : ''}
+                        {recommended && <span aria-hidden="true">★ </span>}
                         {option}
                       </button>
                     )

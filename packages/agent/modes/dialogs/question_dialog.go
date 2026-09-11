@@ -1251,6 +1251,21 @@ func optionRowsOf(q core.UserQuestion, width int, dr questionDraft) (rows []stri
 	}
 	for i, row := range all {
 		num := strconv.Itoa(i + 1)
+		marker := ""
+		markerWidth := 0
+		rowLimit := limit
+		if i < len(q.Options) && q.OptionRecommended(q.Options[i]) {
+			marker = "(" + i18n.T("recommended") + ") "
+			markerWidth = runewidth.StringWidth(marker)
+			// The marker is part of the first rendered row, so reserve its
+			// columns before wrapping the option. Without this, a recommended
+			// option can run past the dialog edge or leave the marker on a row
+			// by itself when the first word no longer fits beside it.
+			rowLimit -= markerWidth
+			if rowLimit < 1 {
+				rowLimit = 1
+			}
+		}
 		mark := ""
 		if multi {
 			// The custom row's box tracks whether it HAS text, because that is
@@ -1265,13 +1280,19 @@ func optionRowsOf(q core.UserQuestion, width int, dr questionDraft) (rows []stri
 				mark = "[x] "
 			}
 		}
-		for n, wl := range wrapPlain(row, limit) {
+		wrapped := wrapPlain(row, rowLimit)
+		for n, wl := range wrapped {
 			// Continuations align under the text, not under the number:
 			// a fold that lines up with the digits reads as another
 			// option whose number went missing.
-			pad := optionIndent + strings.Repeat(" ", lead+box)
+			continuationLead := lead + box
+			if n > 0 {
+				continuationLead += markerWidth
+			}
+			pad := optionIndent + strings.Repeat(" ", continuationLead)
 			if n == 0 {
 				pad = optionIndent + num + "." + strings.Repeat(" ", lead-len(num)-1) + mark
+				wl = marker + wl
 			}
 			rows = append(rows, pad+wl)
 			owner = append(owner, i)

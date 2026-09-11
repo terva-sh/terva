@@ -46,6 +46,7 @@ type agentMeta struct {
 	Started    time.Time `json:"started"`
 	Model      string    `json:"model,omitempty"`
 	Provider   string    `json:"provider,omitempty"`
+	Reasoning  string    `json:"reasoning,omitempty"`
 	Persona    string    `json:"persona,omitempty"`
 	Experience string    `json:"experience,omitempty"`
 	Substrate  string    `json:"substrate,omitempty"`
@@ -97,6 +98,7 @@ func writeAgentMeta(stateDir string, a *Agent) error {
 		Started:      a.Started,
 		Model:        a.Model,
 		Provider:     a.Provider,
+		Reasoning:    a.Reasoning,
 		Persona:      a.Persona,
 		Experience:   a.Experience,
 		Substrate:    a.Substrate,
@@ -236,6 +238,7 @@ func (f *Swarm) buildDetachedAgent(m agentMeta) *Agent {
 		Started:      m.Started,
 		Model:        m.Model,
 		Provider:     m.Provider,
+		Reasoning:    m.Reasoning,
 		Persona:      m.Persona,
 		Experience:   m.Experience,
 		Substrate:    m.Substrate,
@@ -408,7 +411,8 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 	m := agentMeta{
 		ID: existing.ID, Task: existing.Task,
 		Dir: existing.Dir, Started: existing.Started,
-		Model: existing.Model, Provider: existing.Provider, Persona: existing.Persona,
+		Model: existing.Model, Provider: existing.Provider, Reasoning: existing.Reasoning,
+		Persona:    existing.Persona,
 		Experience: existing.Experience, Substrate: existing.Substrate, Card: existing.Card,
 		Backend:  existing.Backend,
 		Approval: existing.Approval, Leased: existing.Leased,
@@ -431,6 +435,7 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 		Started:      m.Started,
 		Model:        m.Model,
 		Provider:     m.Provider,
+		Reasoning:    m.Reasoning,
 		Persona:      m.Persona,
 		Experience:   m.Experience,
 		Substrate:    m.Substrate,

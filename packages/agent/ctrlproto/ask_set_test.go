@@ -2,6 +2,7 @@ package ctrlproto
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"terva.sh/terva/packages/core"
@@ -14,7 +15,7 @@ import (
 
 func TestAskRequestMirrorsTheFirstQuestion(t *testing.T) {
 	r := NewAskRequest("ask_1", []core.UserQuestion{
-		{Question: "Which DB?", Options: []string{"Postgres", "SQLite"}, AllowCustom: true},
+		{Question: "Which DB?", Options: []string{"Postgres", "SQLite"}, RecommendedOptions: []string{"SQLite"}, AllowCustom: true},
 		{Question: "Migrate when?", Options: []string{"Now", "Later"}},
 	})
 	if len(r.Questions) != 2 {
@@ -22,6 +23,9 @@ func TestAskRequestMirrorsTheFirstQuestion(t *testing.T) {
 	}
 	if r.Question != "Which DB?" || len(r.Options) != 2 || !r.AllowCustom {
 		t.Fatalf("singular mirror = %q/%v/%v, want questions[0]", r.Question, r.Options, r.AllowCustom)
+	}
+	if len(r.RecommendedOptions) != 1 || r.RecommendedOptions[0] != "SQLite" || r.Questions[0].RecommendedOptions[0] != "SQLite" {
+		t.Fatalf("recommendation mirror = %v / %+v, want SQLite in both forms", r.RecommendedOptions, r.Questions[0].RecommendedOptions)
 	}
 }
 
@@ -51,6 +55,26 @@ func TestAskRequestSetPrefersTheQuestionList(t *testing.T) {
 	}
 	if set := r.Set(); len(set) != 2 || set[0].Question != "one" {
 		t.Fatalf("Set() = %+v, want the list", set)
+	}
+}
+
+func TestAskRequestSetRoundTripsRecommendations(t *testing.T) {
+	r := AskRequest{
+		AskID:              "a1",
+		Question:           "Which DB?",
+		Options:            []string{"Postgres", "SQLite"},
+		RecommendedOptions: []string{"SQLite"},
+		Questions: []AskQuestion{
+			{Question: "Which DB?", Options: []string{"Postgres", "SQLite"}, RecommendedOptions: []string{"SQLite"}},
+			{Question: "Which cache?", Options: []string{"Redis", "Memory"}, RecommendedOptions: []string{"Redis", "Memory"}},
+		},
+	}
+	set := r.Set()
+	if len(set) != 2 || len(set[0].RecommendedOptions) != 1 || set[0].RecommendedOptions[0] != "SQLite" {
+		t.Fatalf("Set() first recommendation = %+v", set)
+	}
+	if !reflect.DeepEqual(set[1].RecommendedOptions, []string{"Redis", "Memory"}) {
+		t.Fatalf("Set() second recommendations = %v", set[1].RecommendedOptions)
 	}
 }
 

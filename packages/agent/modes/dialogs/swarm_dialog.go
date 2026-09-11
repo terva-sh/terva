@@ -1418,35 +1418,62 @@ func (d *SwarmDialog) renderPromptEditor(th tui.Theme, width int, out []string) 
 }
 
 // swarmRowFixedWidth is what STATUS + ID + AGE and their gutters cost, and
-// swarmProgressWidth what TURNS + TOOLS add. Named so the header and the row
-// formatter make the same width decision from the same numbers — they are two
-// printf strings that must agree, and a literal in each is how they stop.
+// swarmProgressWidth what TURNS + TOOLS add. Metadata uses fixed cells so the
+// header and rows stay aligned while long provider and model names truncate.
 const (
-	swarmRowFixedWidth  = 9 + 2 + 26 + 2 + 8 + 2
-	swarmProgressWidth  = 5 + 2 + 5 + 2
-	swarmMinActivityCol = 16
+	swarmRowFixedWidth          = 9 + 2 + 26 + 2 + 8 + 2
+	swarmProgressWidth          = 5 + 2 + 5 + 2
+	swarmMetadataProviderWidth  = 12
+	swarmMetadataModelWidth     = 24
+	swarmMetadataReasoningWidth = 10
+	swarmMetadataWidth          = swarmMetadataProviderWidth + 2 + swarmMetadataModelWidth + 2 + swarmMetadataReasoningWidth + 2
+	swarmMinActivityCol         = 16
 )
 
+// swarmLayout chooses the optional columns in descending order of value. A
+// wide terminal carries execution metadata and progress counters. At the next
+// width, metadata wins because it answers which worker is running. Narrow
+// terminals keep the original status, id, age, and activity view.
+func swarmLayout(maxWidth int) (metadata, progress bool) {
+	if maxWidth >= swarmRowFixedWidth+swarmMetadataWidth+swarmProgressWidth+swarmMinActivityCol {
+		return true, true
+	}
+	if maxWidth >= swarmRowFixedWidth+swarmMetadataWidth+swarmMinActivityCol {
+		return true, false
+	}
+	if maxWidth >= swarmRowFixedWidth+swarmProgressWidth+swarmMinActivityCol {
+		return false, true
+	}
+	return false, false
+}
+
 // swarmProgressFits reports whether the dashboard is wide enough to carry the
-// progress columns AND leave the activity column readable.
-//
-// On a narrow terminal the counters yield. Activity is the older and denser
-// signal — "tool: run_tests" says more in one glance than any number — and
-// buying two columns by clipping it away would be a downgrade, not a feature.
+// progress columns AND leave the activity column readable. Metadata takes
+// precedence when both optional layouts would fit.
 func swarmProgressFits(maxWidth int) bool {
-	return maxWidth-swarmRowFixedWidth-swarmProgressWidth >= swarmMinActivityCol
+	_, progress := swarmLayout(maxWidth)
+	return progress
+}
+
+func swarmMetadataFits(maxWidth int) bool {
+	metadata, _ := swarmLayout(maxWidth)
+	return metadata
 }
 
 // swarmListHeader is the column header, matched to whatever formatSwarmRow
 // will emit at this width.
 func swarmListHeader(maxWidth int) string {
-	if swarmProgressFits(maxWidth) {
-		return fmt.Sprintf("  %-9s  %-26s  %-8s  %5s  %5s  %s",
-			i18n.T("STATUS"), i18n.T("ID"), i18n.T("AGE"),
-			i18n.T("TURNS"), i18n.T("TOOLS"), i18n.T("ACTIVITY"))
+	metadata, progress := swarmLayout(maxWidth)
+	header := fmt.Sprintf("  %-9s  %-26s  %-8s  ",
+		i18n.T("STATUS"), i18n.T("ID"), i18n.T("AGE"))
+	if metadata {
+		header += fmt.Sprintf("%-12s  %-24s  %-10s  ",
+			i18n.T("PROVIDER"), i18n.T("MODEL"), i18n.T("REASONING"))
 	}
-	return fmt.Sprintf("  %-9s  %-26s  %-8s  %s",
-		i18n.T("STATUS"), i18n.T("ID"), i18n.T("AGE"), i18n.T("ACTIVITY"))
+	if progress {
+		header += fmt.Sprintf("%5s  %5s  ", i18n.T("TURNS"), i18n.T("TOOLS"))
+	}
+	return header + i18n.T("ACTIVITY")
 }
 
 // quietFor is how long since this agent last emitted anything — the heartbeat
@@ -1470,20 +1497,25 @@ func quietFor(r swarm.AgentSnapshot) string {
 //
 // Layout (fixed-width columns, then free-form activity):
 //
-//	STATUS    ID                          AGE       TURNS  TOOLS  ACTIVITY
-//	● run     fix-login-12345             3m           14     62  editing main.go · 4s
-//	✓ done    write-tests-67890           1h            9     31  done
+//	STATUS    ID                          AGE       PROVIDER      MODEL                     REASONING   TURNS  TOOLS  ACTIVITY
+//	● run     fix-login-12345             3m        anthropic     claude-sonnet-4-5         medium         14     62  editing main.go · 4s
+//	✓ done    write-tests-67890           1h        default       default                   default         9     31  done
 //
-// TURNS and TOOLS only ever climb, and the "· 4s" is time since the agent's
-// last event. Between them they answer the question a single activity word
-// cannot: two agents both showing "idle" at 31m are not in the same state if
-// one has moved 62 tool calls and spoke 4 seconds ago and the other has moved
-// none since it started.
+// Metadata and progress columns yield together on a narrow terminal. At an
+// intermediate width metadata stays visible and the counters yield. TURNS and
+// TOOLS only ever climb, and the "· 4s" is time since the agent's last event.
 func formatSwarmRow(r swarm.AgentSnapshot, maxWidth int) string {
 	status := statusLabel(r.Status)
 	age := formatAge(r.Started)
+	metadata, progress := swarmLayout(maxWidth)
 	left := fmt.Sprintf("%-9s  %-26s  %-8s  ", status, truncateLineSafe(r.ID, 26), age)
-	if swarmProgressFits(maxWidth) {
+	if metadata {
+		left += fmt.Sprintf("%-12s  %-24s  %-10s  ",
+			swarmMetadataCell(r.Provider, swarmMetadataProviderWidth),
+			swarmMetadataCell(r.Model, swarmMetadataModelWidth),
+			swarmMetadataCell(r.Reasoning, swarmMetadataReasoningWidth))
+	}
+	if progress {
 		left += fmt.Sprintf("%5d  %5d  ", r.Turns, r.ToolCalls)
 	}
 	room := maxWidth - len([]rune(left))
@@ -1513,6 +1545,17 @@ func formatSwarmRow(r swarm.AgentSnapshot, maxWidth int) string {
 		}
 	}
 	return row
+}
+
+// swarmMetadataCell gives inherited settings an explicit value instead of an
+// empty cell. That keeps an unset reasoning override distinct from a missing
+// column or an accidentally dropped field.
+func swarmMetadataCell(value string, width int) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = "default"
+	}
+	return fmt.Sprintf("%-*s", width, truncateLineSafe(value, width))
 }
 
 // statusLabel returns a short, padded status badge. Kept stable across

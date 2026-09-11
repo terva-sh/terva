@@ -112,7 +112,7 @@ func (a *ChatAsker) Ask(ctx context.Context, qs []core.UserQuestion) ([]core.Use
 			// Key is the 1-based position so it agrees with the number the
 			// text fallback prints; matchAskOption accepts the number, the
 			// key or the label, so every reply shape lands on the same key.
-			opts[j] = AskOption{Key: strconv.Itoa(j + 1), Label: o}
+			opts[j] = AskOption{Key: strconv.Itoa(j + 1), Label: o, Recommended: q.OptionRecommended(o)}
 		}
 
 		ans, err := l.Ask(ctx, Ask{

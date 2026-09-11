@@ -58,9 +58,13 @@ One `ask_user_question` call per round, never one call per question. The
 `questions` array renders together and the user answers the whole round in one
 pass, so a round of six costs one interruption instead of six.
 
-- **Give every question `options`, and put your recommended answer first.** A
-  user who agrees is then done in one keystroke. A question with no
-  recommendation makes the user do work you could have done.
+- **Give every question `options`, and mark recommendations with
+  `recommended_options`.** Each entry must exactly match an option. A user who
+  agrees can see the recommendation without relying on its position. A
+  question with no recommendation makes the user do work you could have done.
+- **Do not infer a recommendation from option order.** Omit
+  `recommended_options` when no option is preferred. Include several exact
+  option texts when several choices are good.
 - **Set `slug`** to one to three words naming the *decision*, not the answer.
   It is the tab label the user navigates by.
 - **Set `multi_select: true`** when the options are not mutually exclusive.

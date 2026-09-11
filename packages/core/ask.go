@@ -20,6 +20,11 @@ type UserQuestion struct {
 	// only way to tell two questions apart. [SanitizeSlug] bounds it.
 	Slug    string
 	Options []string
+	// Recommended names the options the model recommends. The list uses the
+	// exact option text rather than a position, so front ends never have to
+	// guess that the first option is preferred. Multiple recommendations are
+	// valid, including on a single-select question.
+	RecommendedOptions []string
 	// MultiSelect lets the user choose ANY NUMBER of Options rather than
 	// exactly one — "which of these should I enable?" against "which of
 	// these should I use?".
@@ -56,6 +61,18 @@ func SanitizeSlug(s string) string {
 		return ""
 	}
 	return s
+}
+
+// OptionRecommended reports whether option is one of the model's explicit
+// recommendations. An option is recommended only when its exact text appears
+// in RecommendedOptions; position never carries this meaning.
+func (q UserQuestion) OptionRecommended(option string) bool {
+	for _, recommended := range q.RecommendedOptions {
+		if recommended == option {
+			return true
+		}
+	}
+	return false
 }
 
 // UserAnswer is the user's reply to one question. Answer holds the chosen

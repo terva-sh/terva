@@ -67,6 +67,34 @@ describe('stage recorded thinking', () => {
   })
 })
 
+describe('stage ask recommendations', () => {
+  afterEach(cleanup)
+
+  it('marks exact recommendations without preselecting or changing the answer', () => {
+    const client = fakeClient()
+    render(<Chat client={client} sessionId="s1" onBack={() => {}} onOpenSession={() => {}} onOpenStudio={() => {}} />)
+    act(() => {
+      client.emit('s1', {
+        type: 'ask_request',
+        ask: {
+          ask_id: 'a1',
+          question: 'Which?',
+          options: ['first', 'middle', 'last'],
+          recommended_options: ['middle', 'last'],
+        },
+      } as unknown as WireEvent)
+    })
+
+    const recommended = screen.getAllByRole('button', { name: /^Recommended: / })
+    expect(recommended).toHaveLength(2)
+    expect(recommended.map((button) => button.textContent)).toEqual(['★ middle', '★ last'])
+    expect(screen.getByRole('button', { name: 'first' }).classList.contains('recommended')).toBe(false)
+
+    fireEvent.click(screen.getByRole('button', { name: 'first' }))
+    expect(client.fire).toHaveBeenCalledWith('answer', { ask_id: 'a1', answer: { answer: 'first' } }, 's1')
+  })
+})
+
 describe('deleteWarning', () => {
   // Deleting the last message is a clean rewind. Deleting one with a downstream
   // is a different act — the replies below were written to something that is

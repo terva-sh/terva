@@ -234,6 +234,7 @@
   "Re-exec into the currently-installed binary. Interrupts sessions; clients reconnect and restore from disk.": "Re-exec into the currently-installed binary. Interrupts sessions; clients reconnect and restore from disk.",
   "Reasoning for this session": "Reasoning for this session",
   "Recipient": "Recipient",
+  "Recommended: %s": "Recommended: %s",
   "Redeem": "Redeem",
   "Redeemed — %d usage windows cleared.": "Redeemed — %d usage windows cleared.",
   "Redeemed — 1 usage window cleared.": "Redeemed — 1 usage window cleared.",

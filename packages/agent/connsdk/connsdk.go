@@ -272,10 +272,11 @@ type MessageIDSender interface {
 // rendering hints. The transport picks the widget — buttons, an inline
 // keyboard, pre-seeded reactions, numbered text — never the host.
 type AskOption struct {
-	Key   string
-	Label string
-	Style string
-	Hint  string
+	Key         string
+	Label       string
+	Style       string
+	Hint        string
+	Recommended bool
 }
 
 // Ask is one constrained question the host wants rendered in a chat.
@@ -812,7 +813,7 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 					}
 					opts := make([]AskOption, 0, len(f.Options))
 					for _, o := range f.Options {
-						opts = append(opts, AskOption{Key: o.Key, Label: o.Label, Style: o.Style, Hint: o.Hint})
+						opts = append(opts, AskOption{Key: o.Key, Label: o.Label, Style: o.Style, Hint: o.Hint, Recommended: o.Recommended})
 					}
 					a := Ask{
 						ID: f.ID, ChatID: f.ChatID, ReplyTo: f.ReplyTo, Text: f.Text,

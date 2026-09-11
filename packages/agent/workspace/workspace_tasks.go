@@ -127,6 +127,7 @@ func (w *Workspace) taskList(sessionID string) *ctrlproto.TaskList {
 			LastEvent:        ctrlTimeString(s.LastEvent),
 			Model:            s.Model,
 			Provider:         s.Provider,
+			Reasoning:        s.Reasoning,
 			Persona:          s.Persona,
 			Backend:          s.Backend,
 			Dir:              s.Dir,

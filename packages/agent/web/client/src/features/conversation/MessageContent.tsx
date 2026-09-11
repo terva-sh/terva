@@ -134,7 +134,7 @@ export const MessageContent = memo(function MessageContent({
             {!!(item.attachments?.length || item.attachmentsMissing) && (
               <AttachedFiles files={item.attachments ?? []} missing={item.attachmentsMissing} />
             )}
-            {item.text}
+            {item.text && <Markdown class="md" text={item.text} />}
             {item.images && <ImageGallery images={item.images} />}
           </div>
           {item.text && <CopyButton text={item.text} />}

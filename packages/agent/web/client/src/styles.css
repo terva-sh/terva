@@ -585,6 +585,8 @@ a.icon { text-decoration: none; display: inline-flex; align-items: center; }
    rest of the interface uses for destructive things. */
 .ask-warn { flex: none; margin-top: 10px; font-size: var(--fs-detail); color: var(--warning); }
 .ask .btn.danger { border-color: var(--danger); color: var(--danger); }
+.ask .btn.recommended { border-color: var(--accent); }
+.ask .btn.recommended span { color: var(--accent); }
 /* A folded (already answered) question. One line: number, the question in
    muted text, and the answer carrying the weight, because the answer is the
    thing being reviewed at a glance. Both halves truncate rather than wrap —

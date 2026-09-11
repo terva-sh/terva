@@ -770,7 +770,11 @@ func (l *Loop) textFallbackAsk(ctx context.Context, a Ask) (Answer, error) {
 	b.WriteString(a.Text)
 	b.WriteString("\n")
 	for i, o := range a.Options {
-		fmt.Fprintf(&b, "\n%d — %s", i+1, o.Label)
+		label := o.Label
+		if o.Recommended {
+			label += " (" + i18n.T("recommended") + ")"
+		}
+		fmt.Fprintf(&b, "\n%d — %s", i+1, label)
 	}
 	b.WriteString("\n\n")
 	b.WriteString(askReplyInstruction(a))

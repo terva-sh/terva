@@ -441,11 +441,18 @@ func (c *bedrockClient) buildRequest(req Request) (*bedrockRequest, error) {
 		}
 		out.Messages = append(out.Messages, bm)
 	}
-	if len(req.Tools) > 0 {
+	// WireTools, not req.Tools: this client sends no toolChoice, so it cannot
+	// hold the model back from a call and must drop the array under ForbidTools
+	// rather than advertise tools it cannot police. Byte-identical to before
+	// wherever ForbidTools is unset, which is every real turn. A forbidden
+	// request over a transcript that holds tool blocks falls into the stub
+	// branch below, which is what a no-tools request already did.
+	wireTools := req.WireTools()
+	if len(wireTools) > 0 {
 		tc := struct {
 			Tools []bedrockToolSpec `json:"tools"`
 		}{}
-		for _, t := range req.Tools {
+		for _, t := range wireTools {
 			var ts bedrockToolSpec
 			ts.ToolSpec.Name = t.Name
 			ts.ToolSpec.Description = t.Description

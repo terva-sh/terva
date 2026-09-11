@@ -2880,6 +2880,12 @@ button:disabled {
 .stage-interact button:hover:not(:disabled) {
   border-color: var(--stage-accent);
 }
+.stage-interact button.recommended {
+  border-color: var(--stage-accent);
+}
+.stage-interact button.recommended span {
+  color: var(--stage-accent);
+}
 .stage-interact button:disabled {
   opacity: 0.45;
   cursor: default;

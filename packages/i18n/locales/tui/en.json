@@ -476,6 +476,7 @@
   "prompt: agent is %s; press R to resume first": "prompt: agent is %s; press R to resume first",
   "question": "question",
   "question %d of %d": "question %d of %d",
+  "recommended": "recommended",
   "questions — ready to send": "questions — ready to send",
   "r delete": "r delete",
   "r refresh · esc close": "r refresh · esc close",

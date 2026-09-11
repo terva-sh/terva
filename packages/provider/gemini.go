@@ -223,9 +223,15 @@ func (c *geminiClient) buildRequest(req Request) (*gemRequest, string, error) {
 	// Convert tool defs. Gemini image-generation models reject function
 	// declarations with "Function calling is not enabled for this model";
 	// for those models, send a direct multimodal prompt instead.
-	if functionsEnabled && len(req.Tools) > 0 {
-		decls := make([]gemFunctionDecl, 0, len(req.Tools))
-		for _, t := range req.Tools {
+	//
+	// WireTools, not req.Tools: this client sends no tool-choice mode, so it
+	// cannot hold the model back from a call and must drop the array under
+	// ForbidTools rather than advertise tools it cannot police. Byte-identical
+	// to before wherever ForbidTools is unset, which is every real turn.
+	wireTools := req.WireTools()
+	if functionsEnabled && len(wireTools) > 0 {
+		decls := make([]gemFunctionDecl, 0, len(wireTools))
+		for _, t := range wireTools {
 			schema := sanitizeGeminiToolSchema(t.Schema)
 			decls = append(decls, gemFunctionDecl{
 				Name:        t.Name,

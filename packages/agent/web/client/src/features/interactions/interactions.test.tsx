@@ -513,4 +513,28 @@ describe('AskRequest', () => {
     fireEvent.click(screen.getByRole('button', { name: 'b' }))
     expect(onAnswer).toHaveBeenCalledWith('m6', [{ answer: 'b' }])
   })
+
+  it('marks exact middle and multiple recommendations without preselecting them', () => {
+    const onAnswer = vi.fn()
+    render(
+      <AskRequest
+        request={{
+          ask_id: 'm7',
+          question: 'Which?',
+          options: ['first', 'middle', 'last'],
+          recommended_options: ['middle', 'last'],
+        }}
+        onAnswer={onAnswer}
+      />,
+    )
+    const recommended = screen.getAllByRole('button', { name: /^Recommended: / })
+    expect(recommended).toHaveLength(2)
+    expect(recommended.map((button) => button.textContent)).toEqual(['★ middle', '★ last'])
+    expect(screen.getByRole('button', { name: 'first' }).classList.contains('recommended')).toBe(false)
+
+    // A recommendation is presentation-only. The first option remains a normal
+    // choice, and clicking it sends its unchanged label.
+    fireEvent.click(screen.getByRole('button', { name: 'first' }))
+    expect(onAnswer).toHaveBeenCalledWith('m7', [{ answer: 'first' }])
+  })
 })
