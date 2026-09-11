@@ -16,11 +16,14 @@ func TestOpenCodeGoCatalogHasRealContextWindows(t *testing.T) {
 		// The ones that were missing entirely, and so were guessed at.
 		"glm-5.2":        1000000,
 		"kimi-k2.7-code": 262144,
-		// Present all along; here so a resync cannot quietly shrink them.
-		"deepseek-v4-pro":   1000000,
-		"deepseek-v4-flash": 1000000,
-		"mimo-v2.5":         1000000,
-		"mimo-v2.5-pro":     1048576,
+		// DeepSeek's endpoint serves V4.1 Flash under both IDs. Keep these
+		// windows pinned so a resync cannot quietly shrink them.
+		"deepseek-flash":      1000000,
+		"deepseek-v4-pro":     1000000,
+		"deepseek-v4-flash":   1000000,
+		"deepseek-v4.1-flash": 1000000,
+		"mimo-v2.5":           1000000,
+		"mimo-v2.5-pro":       1048576,
 
 		// Raised from 512000 when the generator switched to models.dev's
 		// dedicated "opencode-go" key. The old shared "opencode" key was the
@@ -43,6 +46,10 @@ func TestOpenCodeGoCatalogHasRealContextWindows(t *testing.T) {
 		// Also 262144 under the old key; the vendor's own alibaba key agrees
 		// with the 1M the gateway key reports.
 		"qwen3.6-plus": 1000000,
+
+		// Newly served models with metadata from models.dev.
+		"muse-spark-1.3-contributor": 1048576,
+		"omen-alpha":                 500000,
 
 		// Hand-curated. The gateway serves hy3-preview but models.dev does not
 		// carry it under ANY opencode key, so reconcile keeps whatever the

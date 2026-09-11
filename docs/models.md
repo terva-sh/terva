@@ -466,8 +466,8 @@ against. Re-derive them from the picker rather than trusting the numbers here.
 
 #### When there is no pattern to write
 
-Not every provider's clutter has a shape a glob can catch. OpenCode Go serves 33
-models while its landing page promotes 24. The extra nine are seven superseded
+Not every provider's clutter has a shape a glob can catch. OpenCode Go serves 37
+models while its landing page promotes 28. The extra nine are seven superseded
 releases (`glm-5`, where `glm-5.1` through `5.3` are current; `kimi-k2.5`, where
 `k2.6` and `k3` are), plus a preview and an experimental vision build. Nothing
 about an id says "older", so this one is a plain enumeration:

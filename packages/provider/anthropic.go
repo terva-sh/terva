@@ -21,8 +21,14 @@ const anthropicAPIVersion = "2023-06-01"
 // These values mimic the official Claude Code CLI so Anthropic's edge
 // accepts the request; diverging from them causes 429 rate_limit_error
 // or 403 on the very first request.
+//
+// claudeCodeVersion is the compiled baseline, and the floor: when a local
+// Claude Code install is newer, effectiveClaudeCodeVersion claims that
+// version instead (see anthropic_claude_version.go). Keep the baseline a
+// real released @anthropic-ai/claude-code version, and bump it when
+// Anthropic raises a model's version floor past it.
 const (
-	claudeCodeVersion  = "2.1.75"
+	claudeCodeVersion  = "2.1.267"
 	claudeCodeIdentity = "You are Claude Code, Anthropic's official CLI for Claude."
 )
 
@@ -369,7 +375,11 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 		}
 	}
 
-	for _, t := range req.Tools {
+	// WireTools, not req.Tools: this client sends no tool_choice, so it cannot
+	// hold the model back from a call and must drop the array under ForbidTools
+	// rather than advertise tools it cannot police. Byte-identical to before
+	// wherever ForbidTools is unset, which is every real turn.
+	for _, t := range req.WireTools() {
 		name := t.Name
 		if c.oauth {
 			name = toClaudeCodeToolName(name)
@@ -722,7 +732,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event
 			httpReq.Header.Set("authorization", "Bearer "+cred)
 			httpReq.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14")
 			httpReq.Header.Set("anthropic-dangerous-direct-browser-access", "true")
-			httpReq.Header.Set("user-agent", "claude-cli/"+claudeCodeVersion)
+			httpReq.Header.Set("user-agent", "claude-cli/"+effectiveClaudeCodeVersion())
 			httpReq.Header.Set("x-app", "cli")
 			// Remove x-api-key entirely by NOT setting it.
 		} else {
