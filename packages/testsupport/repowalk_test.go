@@ -58,7 +58,7 @@ func TestSkipScanDirPrunesEverythingButFirstPartySource(t *testing.T) {
 	root := TempDir(t)
 	write(t, filepath.Join(root, "main.go"), "package main")
 	write(t, filepath.Join(root, "packages", "agent", "cli.go"), "package agent")
-	for _, dir := range []string{".git", ".claude", "bin", "dist", "node_modules", "vendor"} {
+	for _, dir := range []string{".git", ".claude", ".tmp", "bin", "dist", "node_modules", "vendor"} {
 		write(t, filepath.Join(root, dir, "buried.go"), "package buried")
 	}
 
@@ -66,7 +66,7 @@ func TestSkipScanDirPrunesEverythingButFirstPartySource(t *testing.T) {
 	if !has(seen, "main.go") || !has(seen, "packages/agent/cli.go") {
 		t.Errorf("first-party sources were pruned: %v", seen)
 	}
-	for _, dir := range []string{".git", ".claude", "bin", "dist", "node_modules", "vendor"} {
+	for _, dir := range []string{".git", ".claude", ".tmp", "bin", "dist", "node_modules", "vendor"} {
 		if has(seen, dir+"/buried.go") {
 			t.Errorf("%s was walked into; a scan has no business there", dir)
 		}

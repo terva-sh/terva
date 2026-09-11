@@ -11,6 +11,20 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.134.5](https://github.com/terva-sh/terva/releases/tag/v0.134.5) — 2026-09-08
+
+### Features
+
+- ext: an extension declares how its tool's cards are drawn
+- rpc: opt-in structured question round trips
+- web: attach a chat connector when the web server starts
+- web: tool calls render as cards in the transcript
+
+### Fixes
+
+- tui: correct the memory header count and name each skill's source
+- web: a shared file card no longer collapses in a long transcript
+
 ## [v0.134.4](https://github.com/terva-sh/terva/releases/tag/v0.134.4) — 2026-09-08
 
 ### Features

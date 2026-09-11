@@ -675,10 +675,23 @@ release-preflight-public: ci
     @./scripts/release.sh api-diff
     # Open alerts by SCOPE, not by banner count.
     @./scripts/release.sh dependabot || true
+    # Open tickets whose work already merged. A cut is the last place to catch
+    # a ticket whose pull request landed while its status never moved. Report
+    # only: it exits 0 whatever it finds, because a merged pull request is not
+    # proof that a ticket is finished.
+    @./scripts/release.sh ticket-sweep || true
     @echo ""
     @echo "Local gate passed. The public ci gate is not a reminder any more:"
     @echo "  just release-golive        checks and polls, pushes nothing"
     @echo "  just release-golive --yes  goes live"
+
+# Open tickets whose ships-in pull request has already merged.
+#
+# scripts/pr.sh writes that ref when a pull request opens, so the join is the
+# pull request itself rather than a ticket id mentioned in a commit message.
+# It reports and moves nothing; read each row and close only what shipped.
+release-ticket-sweep:
+    @./scripts/release.sh ticket-sweep
 
 # Print the version string the binary would report, built from source.
 version:

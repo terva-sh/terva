@@ -10,9 +10,17 @@ import (
 // control, agent scratch space, build output, and third-party trees. None of
 // them hold first-party source, and several hold enough files to dominate a
 // walk's runtime on their own.
+//
+// .tmp earns its place the hard way. AGENTS.md tells an agent to isolate a
+// claim with a standalone probe under .tmp/, so the repository's own advice
+// produces Go files there. Being gitignored, they leave `git status` clean and
+// give no warning at all, while a repo-wide walk counts them as first-party
+// source. One such probe imported packages/egress and made the consumer-list
+// gate report a scratch program as a consumer of the SSRF guard.
 var skipByName = map[string]bool{
 	".git":         true,
 	".claude":      true,
+	".tmp":         true,
 	"bin":          true,
 	"dist":         true,
 	"node_modules": true,
