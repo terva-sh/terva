@@ -260,6 +260,39 @@ func TestConfigReadableByAgentFailsClosed(t *testing.T) {
 		}
 	})
 
+	// Same rule, same reason, different field. terva reads only the host of a
+	// registry, so the password would never be sent anywhere. It is still a
+	// password sitting in config.json, and the lift is about the file.
+	t.Run("a pack registry with userinfo keeps it denied", func(t *testing.T) {
+		encryptingHome(t)
+		cwd := testsupport.TempDir(t)
+		if err := config.MutateConfig(func(c *config.Config) {
+			c.PackRegistries = []string{"https://alice:hunter2@packs.internal.corp"}
+		}); err != nil {
+			t.Fatal(err)
+		}
+		ok, why := ConfigReadableByAgent(cwd)
+		if ok {
+			t.Fatal("a registry URL with userinfo holds a password — must keep config.json denied")
+		}
+		if !strings.Contains(why, "pack_registries") {
+			t.Errorf("reason does not name the field: %s", why)
+		}
+	})
+
+	t.Run("an ordinary pack registry is fine", func(t *testing.T) {
+		encryptingHome(t)
+		cwd := testsupport.TempDir(t)
+		if err := config.MutateConfig(func(c *config.Config) {
+			c.PackRegistries = []string{"https://packs.internal.corp"}
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if ok, why := ConfigReadableByAgent(cwd); !ok {
+			t.Fatalf("a registry URL with no userinfo carries no credential: %s", why)
+		}
+	})
+
 	t.Run("an env reference is not a secret", func(t *testing.T) {
 		encryptingHome(t)
 		cwd := testsupport.TempDir(t)

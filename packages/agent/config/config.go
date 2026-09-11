@@ -431,6 +431,27 @@ type Config struct {
 	// docs/plans/extension-packs.md.
 	DisableCorePackOffer bool `json:"disable_core_pack_offer,omitempty"`
 
+	// PackRegistries names extension-pack registries that the pack fetcher
+	// may reach even when they resolve to a private address. Naming a
+	// registry here IS the trust decision. `terva ext pack install <url>`
+	// still supplies the path beneath it, the same shape as an MCP server
+	// whose config names a host and whose transport then requests paths
+	// under it. Only the host of each entry is used, because the host is
+	// the part of a URL that decides what the guard may dial.
+	//
+	// User layer only, and here that is a security property rather than a
+	// convention: an entry exempts its host from the egress guard's address
+	// policy, so a cloned repository able to set it would hand a project the
+	// private network. ProjectConfig carries no counterpart key and
+	// ResolveConfig names no override, so this stays user-only by
+	// construction as long as nobody adds it to either.
+	// TestPackRegistriesIsUserLayerOnly holds that.
+	//
+	// Empty, the default, leaves the pack fetcher exactly as it was: every
+	// loopback, private, link-local and metadata target refused. See
+	// docs/extensions.md.
+	PackRegistries []string `json:"pack_registries,omitempty"`
+
 	// Approval is the default approval mode (plan / ask / auto-edit /
 	// yolo) when no --approval / --no-yolo flag is given. Empty means
 	// yolo, the historical default. See docs/permissions.md.

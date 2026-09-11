@@ -14,6 +14,12 @@ import (
 // fetchPackWith stays client-injectable for the happy-path tests; this
 // pins that the production client is the guarded one.
 func TestFetchPackURLRefusesPrivateAddresses(t *testing.T) {
+	// An empty home, because fetchPackURL reads pack_registries from the
+	// user config. Without this the test would pass or fail according to
+	// whether the developer running it happens to have a loopback registry
+	// configured.
+	seedHome(t, nil)
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"schema":"terva-extension-pack/v1"}`)
 	}))

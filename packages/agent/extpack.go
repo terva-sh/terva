@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/egress"
 )
 
@@ -174,11 +176,54 @@ func resolvePack(arg string) (Pack, string, error) {
 }
 
 // fetchPackURL GETs a pack manifest over HTTPS with a short timeout and a
-// hard size cap, through the egress guard with no allowlist: a pack URL is
-// an arbitrary string handed to the CLI, so loopback, private ranges, and
-// the metadata endpoint are refused — same posture as the card importer.
-func fetchPackURL(url string) ([]byte, error) {
-	return fetchPackWith(egress.New().Client(15*time.Second, 0), url)
+// hard size cap, through the egress guard. A pack URL is an arbitrary string
+// handed to the CLI, so by default loopback, private ranges, and the metadata
+// endpoint are all refused, the same posture as the card importer.
+//
+// The one exception is a host the user named in `pack_registries`. That entry
+// is the trust decision: config sits inside the trust boundary where a CLI
+// argument does not, which is the rule 062f395c set and the same shape the MCP
+// transport uses for its own configured host. The CLI still supplies the path
+// beneath that host, and a path grants no reach the config did not.
+func fetchPackURL(rawURL string) ([]byte, error) {
+	// A config that will not load yields no registries, so a read failure
+	// falls back to the closed default rather than opening anything up.
+	cfg, _ := config.LoadConfig()
+	return fetchPackWith(packFetchGuard(cfg.PackRegistries).Client(15*time.Second, 0), rawURL)
+}
+
+// packFetchGuard builds the pack fetcher's own egress guard, allowlisting the
+// host of every configured registry. There is deliberately no global
+// allowlist: this guard is built here, for this fetch, from the configuration
+// that names these destinations. No other guard in the process is widened.
+func packFetchGuard(registries []string) *egress.Guard {
+	opts := make([]egress.Option, 0, len(registries))
+	for _, r := range registries {
+		if h := registryHost(r); h != "" {
+			opts = append(opts, egress.AllowHost(h))
+		}
+	}
+	return egress.New(opts...)
+}
+
+// registryHost returns the host of a configured registry entry, accepting a
+// URL or a bare host so a user who writes either gets what they meant. An
+// entry that yields no host contributes nothing, which matches AllowCIDR's
+// posture that a bad config line must not break the guard. It cannot widen the
+// guard either, since an empty host is never allowlisted.
+func registryHost(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	if !strings.Contains(s, "://") {
+		s = "https://" + s
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 // fetchPackWith is the client-injectable core of fetchPackURL so tests

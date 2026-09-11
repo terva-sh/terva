@@ -156,6 +156,14 @@ func ConfigReadableByAgent(cwd string) (bool, string) {
 			}
 		}
 	}
+	// pack_registries holds URLs, so the same rule applies. terva reads only
+	// the host of an entry and never sends the userinfo, but a password in one
+	// is still a password sitting in the file.
+	for _, r := range cfg.PackRegistries {
+		if hasURLUserinfo(r) {
+			return false, "a pack_registries entry carries credentials in its userinfo (scheme://user:pass@host)"
+		}
+	}
 	return true, ""
 }
 

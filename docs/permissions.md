@@ -333,20 +333,59 @@ bare legacy bool and has not yet declared an authority; once it declares
 [standard-tools.md](standard-tools.md) — those calls will ask like any other
 foreign network tool. **Mark network tools `network-read`, not `read_only`.**
 
-### Outbound network safety (egress guard) — staged, not yet wired
+### Outbound network safety (egress guard)
 
-`packages/egress` implements terva's shared SSRF / private-network guard,
-but **no terva-driven network feature consumes it yet**: the MCP transport
-is stdio-only today and there is no built-in web-fetch tool. It is staged
-for the MCP HTTP transport (`docs/plans/mcp-http-transport.md`) and
-host-side web policy. Once wired, it blocks loopback, private, link-local
-(including the `169.254.169.254` cloud-metadata endpoint), unique-local,
-and multicast destinations by default — enforced at dial time so DNS
-rebinding can't slip past — and re-checks redirect hops while stripping
-credentials across a host change, with specific hosts or CIDRs
-allowlistable for an intentional local service. Until then, outbound
-safety belongs to whatever makes the connection: out-of-process
-extensions (e.g. the web extension) keep their own SSRF guards.
+`packages/egress` is terva's shared SSRF and private-network guard. It blocks
+loopback, private, link-local (including the `169.254.169.254` cloud-metadata
+endpoint), unique-local, and multicast destinations by default. It enforces
+that at dial time, so DNS rebinding cannot slip past a pre-check that passed.
+It re-checks every redirect hop, and it strips the `Authorization` header when
+a redirect crosses to a different host.
+
+It strips that one header and no other. A credential in a custom header rides
+the hop to the new host. That is deliberate, because the guard cannot tell
+which of a caller's own headers carries a secret. Put a credential where the
+guard knows to remove it. For an MCP server that means `auth.bearer_env` and
+not a `headers` entry, which [mcp.md](mcp.md) states at the point of
+configuration.
+
+Three host-side fetches route through it:
+
+<!-- egress-consumers:start -->
+- `packages/agent/mcp/mcp_http.go` for the HTTP MCP transport.
+- `packages/agent/extpack.go` for extension packs.
+- `packages/agent/workspace/workspace_cards.go` for character cards.
+<!-- egress-consumers:end -->
+
+That list is a gate and not prose. `TestEgressDocumentedConsumersMatchCode` in
+`packages/testsupport` fails when it disagrees with the imports in the tree,
+and `TestEgressGuardHasImporters` fails if the last consumer goes away. Both
+exist because this section has been wrong in both directions. It once promised
+protection from a package that nothing imported. It later called that same
+package staged while three files used it.
+
+A caller can allowlist a host for an intentional local service, and it takes
+that host from the configuration that names the destination. The HTTP MCP
+transport allowlists its own configured server host, so a self-hosted MCP
+server works wherever it lives. The pack fetcher allowlists the hosts named in
+`pack_registries`, so `terva ext pack install` reaches a registry you named and
+nothing else.
+
+There is no global allowlist, and its absence is deliberate. One list cannot
+say which fetch it applies to, so a single entry would exempt a host for every
+guard in the process, and it would keep granting that long after the reason
+expired. A config-named destination stops granting anything the moment you
+delete it. `TestEgressAllowlistingStaysPerCallSite` fails when a new caller
+appears, so widening the pattern stays a deliberate act.
+
+Read `AllowHost` as a full exemption and not as a softening. An allowlisted
+name dials with no IP check at all, because the user named that host on
+purpose.
+
+Outbound safety for a component that makes its own connections belongs to that
+component. An out-of-process extension such as the web extension keeps its own
+SSRF guard, because this in-process guard cannot see the dials of another
+process.
 
 ## Permission rules
 

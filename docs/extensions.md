@@ -182,6 +182,29 @@ config:
 { "disable_core_pack_offer": true }
 ```
 
+### A registry on a private address
+
+`terva ext pack install https://…` fetches through terva's egress guard, so a
+registry on loopback, an RFC1918 address, or the cloud-metadata endpoint is
+refused. A pack URL is an argument typed at a command line, and terva does not
+take an argument as permission to dial your private network.
+
+Name the registry in user config instead, and that host becomes reachable:
+
+```json
+{ "pack_registries": ["https://packs.internal.corp"] }
+```
+
+Naming the registry is the permission. The URL you type still chooses which
+pack, and only the host of each entry is read, so one entry covers every pack
+served from it. The list is empty by default, and an empty list leaves the
+fetcher exactly as strict as it was.
+
+The key is user-layer only. A cloned repository cannot add to it, because a
+project that could name a host would be a project that could reach your
+network. `/status` shows the list whenever it is not empty, since a standing
+exemption from the guard should not sit unread in a file.
+
 ## Layout & discovery
 
 terva scans two directories on startup, in this order:

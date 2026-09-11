@@ -44,6 +44,7 @@ func TestEveryStringConfigFieldIsClassified(t *testing.T) {
 		"mcp.servers.*.env.*":     "denies unless it is a ${VAR} reference; MCP env is deliberately not sealed (the sanctioned form is indirection), so a literal keeps the file denied",
 		"mcp.servers.*.headers.*": "denies unless it is a ${VAR} reference; same rule — an Authorization header written literally is a bearer token",
 		"mcp.servers.*.url":       "denies when it carries userinfo (https://user:pass@host) — a URL is a credential carrier, and this is exact rather than a heuristic",
+		"pack_registries[]":       "denies when an entry carries userinfo — the same rule as mcp.servers.*.url. terva reads only the host of a registry, so the password is never sent, but it is still in the file",
 
 		// public — genuinely not credentials, with the reason each is safe.
 		"endpoints.*.apiKeyEnv":         "the NAME of an env var, not its value — pointing at a secret is the sanctioned alternative to holding one",

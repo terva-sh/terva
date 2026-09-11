@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/buildinfo"
 	"terva.sh/terva/packages/core"
@@ -36,6 +37,12 @@ type statusFacts struct {
 	SessionID string
 	SessPath  string
 
+	// PackRegistries are the hosts the pack fetcher may reach even when they
+	// resolve to a private address. This is authority, so it is shown rather
+	// than left to sit unread in a config file. Empty is the default, and an
+	// empty list renders no row at all.
+	PackRegistries []string
+
 	ContextTokens int // last turn's real context size (0 = no turn yet)
 	Window        int // model context window in tokens (0 = unknown)
 	Cumulative    core.WireUsage
@@ -58,6 +65,11 @@ func (i *Interactive) slashStatus() {
 	}
 	if f.Version == "" {
 		f.Version = buildinfo.Get().String()
+	}
+	// Read fresh rather than from i.cfg: this is authority the operator can
+	// edit between runs, and /status is where they come to check it.
+	if c, err := config.LoadConfig(); err == nil {
+		f.PackRegistries = c.PackRegistries
 	}
 	if i.cfg.CurrentSessionPath != nil {
 		f.SessPath = i.cfg.CurrentSessionPath()
@@ -143,6 +155,12 @@ func statusRows(th tui.Theme, f statusFacts) []string {
 			cwd += " " + i18n.T("(trusted)")
 		}
 		rows = append(rows, row(i18n.T("cwd"), cwd))
+	}
+	// Only when it is set. An empty allowlist is the default and says nothing
+	// worth a line, but a non-empty one is a standing exemption from the
+	// egress guard and should never be invisible.
+	if len(f.PackRegistries) > 0 {
+		rows = append(rows, row(i18n.T("packs"), strings.Join(f.PackRegistries, ", ")))
 	}
 	switch {
 	case f.SessionID != "":
