@@ -21,6 +21,9 @@ type WriteTool struct {
 	Sandbox *Sandbox
 	// Files records what the model has seen of each path (see ReadTool.Files).
 	Files *FileState
+	// Tickets nudges a write that lands in the ticket store directly. Nil, and a
+	// warner that nobody enabled, are both silent.
+	Tickets *TicketEditWarner
 }
 
 type writeArgs struct {
@@ -138,6 +141,13 @@ func (t *WriteTool) Execute(ctx context.Context, raw json.RawMessage, progress f
 		content = append([]provider.Content{provider.TextBlock{
 			Text: fmt.Sprintf("warning: the path %s repeats the working directory, so the file went below it. %s already exists and is probably the file you meant. A relative path resolves against the working directory, not the repository root.", a.Path, want),
 		}}, content...)
+	}
+	// Prepended last so it reads first, ahead of the .gitignore and path-doubling
+	// notes above: those say where the file went, and this says the store should
+	// not have been written this way at all.
+	if note := t.Tickets.Notice(path); note != "" {
+		details["ticket_store_edit"] = true
+		content = append([]provider.Content{provider.TextBlock{Text: note}}, content...)
 	}
 	return core.ToolResult{
 		Content: content,

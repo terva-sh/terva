@@ -1291,6 +1291,12 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 			Text:   TicketAddendum(reg["ticket_create"] != nil),
 		})
 	}
+	// The direct-edit warning takes the same gate for the same reason: it names
+	// ticket_update and ticket_transition, so it must speak only where the model
+	// can call them.
+	if reg["ticket_create"] != nil {
+		bindTicketEditWarning(reg)
+	}
 
 	// activate_tools lets the model bring a hidden capability group into the
 	// advertised set under lazy tool visibility (retro H2·b). It exists only when
@@ -1757,6 +1763,23 @@ func (r *Resolved) UseTicketCard(c *tools.TicketCard) {
 	}
 }
 
+// bindTicketEditWarning turns on the nudge that fires when write or edit lands
+// in the ticket store. It walks the BUILT registry the way bindTaskBoard does,
+// rather than enabling at construction, because only the built registry knows
+// whether the ticket write tools survived --tools and plan mode.
+//
+// It does NOT reassign the registry entry, which is where this differs from
+// bindTaskBoard and why it needs no copy. The warner is shared state behind a
+// pointer, so enabling it through any holder enables the one warning the
+// session gets, and a shallow registry copy carries the same pointer.
+func bindTicketEditWarning(reg core.Registry) {
+	for _, t := range reg {
+		if b, ok := t.(tools.TicketEditWarnBinder); ok {
+			b.EnableTicketEditWarning()
+		}
+	}
+}
+
 // bindTaskBoard points every tool that writes the session task board at the
 // board this conversation owns. ticket_claim is the only one today.
 //
@@ -2084,10 +2107,14 @@ func BuildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 	// silently forget every file the model had read, and the staleness note
 	// would start claiming files were never read at all.
 	files := tools.NewFileState()
+	// One warner shared by write and edit, so the session's single nudge is single
+	// across BOTH tools rather than once each. Silent until the build enables it,
+	// which happens only where the ticket write tools survived pruning.
+	ticketWarner := &tools.TicketEditWarner{}
 	all := map[string]core.Tool{
 		"read":         &tools.ReadTool{CWD: cwd, Sandbox: sandbox, SupportsVision: visionCapable, Files: files},
-		"write":        &tools.WriteTool{CWD: cwd, Sandbox: sandbox, Files: files},
-		"edit":         &tools.EditTool{CWD: cwd, Sandbox: sandbox, Files: files},
+		"write":        &tools.WriteTool{CWD: cwd, Sandbox: sandbox, Files: files, Tickets: ticketWarner},
+		"edit":         &tools.EditTool{CWD: cwd, Sandbox: sandbox, Files: files, Tickets: ticketWarner},
 		"bash":         &tools.BashTool{CWD: cwd, Sandbox: sandbox, Env: map[string]string{"TERVA_HOME": config.TervaHome()}},
 		"grep":         &tools.GrepTool{CWD: cwd, Sandbox: sandbox},
 		"glob":         &tools.GlobTool{CWD: cwd, Sandbox: sandbox},

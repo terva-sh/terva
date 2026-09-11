@@ -98,7 +98,9 @@ const TicketSystemAddendum = `This repository keeps a ticket ledger in a .ticket
 // registered too. Plan mode prunes those tools, so a plan session gets the base
 // block alone: the revision protocol is noise to a model that cannot write, and
 // the last two sentences would name tools it does not have.
-const TicketWriteSystemAddendum = `A ticket write needs the current revision. Read the ticket with ticket_get first, and pass the revision from that result as if_revision. The tool refuses a write on a stale revision, and it names the revision you must use. terva records your identity on every write, so no tool asks you who you are.`
+const TicketWriteSystemAddendum = `A ticket write needs the current revision. Every ticket write returns the new revision in its result. Pass that value as if_revision on your next write to the same ticket.
+
+Call ticket_get before your first write, and again after another operation changes the ticket. A task that you close with evidence can check a criterion on the ticket. The tool refuses a write on a stale revision, and it names the revision you must use. terva records your identity on every write, so no tool asks you who you are.`
 
 // TicketAddendum renders the ticket guidance through the model-facing prompt
 // catalog. hasWrite folds in the revision protocol; see the constants above.

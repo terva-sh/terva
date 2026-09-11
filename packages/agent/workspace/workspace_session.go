@@ -558,6 +558,10 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 		s.broadcast(ctrlproto.ConversationEvent(core.EventToWireFull(ev)))
 	})
 	ag.AddEventObserver(wsObserve)
+	// The ticket direct-edit warning arms again at every turn boundary. Not
+	// conditional on anything: a host that drops it degrades to one warning per
+	// session, which is quiet enough that nobody would notice it had.
+	ag.AddEventObserver(build.TicketEditWarnResetObserver(ag.ToolsSnapshot))
 	// A withdrawn prompt has to leave the FILE too, or it comes back on the next
 	// reload. Registered after the broadcast above so clients see the withdrawal
 	// event before the snapshot that reflects it, and before the extension

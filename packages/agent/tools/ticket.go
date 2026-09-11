@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	ticket "github.com/terva-sh/git-ticket/ticket"
 
@@ -50,6 +51,12 @@ type TicketCore struct {
 	// the one it found. nil for a host that renders no card, which Invalidate
 	// tolerates.
 	Card *TicketCard
+
+	// labels caches the store's label vocabulary, which the write schemas
+	// carry. Reading it scans every ticket, and Schema runs again on every
+	// tool rebuild, so it is read once per session.
+	labelsOnce sync.Once
+	labels     ticketLabels
 }
 
 func (c *TicketCore) open() (*ticket.Store, error) {

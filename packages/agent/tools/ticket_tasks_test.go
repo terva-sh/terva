@@ -105,6 +105,11 @@ func TestClaimSeedsTasksFromAcceptanceCriteria(t *testing.T) {
 	if out.SeededTasks.Created != 3 {
 		t.Fatalf("seeded %d tasks, want 3 (skipped: %q)", out.SeededTasks.Created, out.SeededTasks.Skipped)
 	}
+	// The success shape stays as it was: a seed that worked carries no reason,
+	// so a caller can read Skipped as "something stopped this" and nothing else.
+	if out.SeededTasks.Skipped != "" {
+		t.Errorf("a successful seed carried a skip reason: %q", out.SeededTasks.Skipped)
+	}
 	list := board.List()
 	if len(list) != 3 {
 		t.Fatalf("board holds %d tasks, want 3", len(list))
@@ -161,23 +166,97 @@ func TestClaimSkipsCheckedCriteriaButKeepsTheirIndices(t *testing.T) {
 	}
 }
 
-// seed_tasks:false claims the ticket and leaves the board alone. The claim
-// itself must still land.
-func TestClaimSeedTasksFalseLeavesTheBoardAlone(t *testing.T) {
+// seed_tasks:false claims the ticket and leaves the board alone, and it now
+// says what that cost. This test asserted the silence until 2026-09-09. The
+// session that changed it passed the argument four times and then checked the
+// criteria of all four tickets with `edit`, because nothing told it that the
+// argument had removed its only tool route to a criterion.
+func TestClaimSeedTasksFalseSaysWhatItGaveUp(t *testing.T) {
 	tc := ticketCore(t)
 	board := seedBoard(t, "sess-abc")
 	id, rev := readyTicket(t, tc, []string{"Parse the input", "Render the output"})
 
 	out := runClaim(t, tc, board, map[string]any{"ref": id, "if_revision": rev, "seed_tasks": false})
 
-	if out.SeededTasks != nil {
-		t.Errorf("opt-out still reported seeding: %+v", out.SeededTasks)
+	if out.SeededTasks == nil {
+		t.Fatal("the opt-out reported nothing, so a caller cannot tell it gave up the criteria route")
+	}
+	if out.SeededTasks.Created != 0 || len(out.SeededTasks.TaskIDs) != 0 {
+		t.Errorf("the opt-out seeded after all: %+v", out.SeededTasks)
+	}
+	if !strings.Contains(out.SeededTasks.Skipped, "seed_tasks") {
+		t.Errorf("the reason should name the argument that caused it, got %q", out.SeededTasks.Skipped)
+	}
+	if !strings.Contains(out.SeededTasks.Skipped, "close") {
+		t.Errorf("the reason should name what checks a criterion, got %q", out.SeededTasks.Skipped)
 	}
 	if n := len(board.List()); n != 0 {
 		t.Errorf("opt-out seeded %d tasks", n)
 	}
 	if out.ClaimedBy != tc.ActorID {
 		t.Errorf("the claim itself did not land: claimed_by = %q", out.ClaimedBy)
+	}
+}
+
+// A boardless session stays silent even on an opt-out. There is no task tool
+// to reach for, so a reason that names one would be advice the model cannot
+// take. This is the one case where silence is still right.
+func TestClaimOptOutWithoutABoardStaysSilent(t *testing.T) {
+	tc := ticketCore(t)
+	id, rev := readyTicket(t, tc, []string{"Parse the input"})
+
+	out := runClaim(t, tc, nil, map[string]any{"ref": id, "if_revision": rev, "seed_tasks": false})
+
+	if out.SeededTasks != nil {
+		t.Errorf("a boardless opt-out reported seeding: %+v", out.SeededTasks)
+	}
+	if out.ClaimedBy != tc.ActorID {
+		t.Fatalf("the claim did not land: claimed_by = %q", out.ClaimedBy)
+	}
+}
+
+// The third no-seed reason: the ticket carries criteria and every one is
+// already checked. Seeding a checked criterion as a pending task would invite
+// the model to redo work that is finished.
+func TestClaimWithEveryCriterionCheckedSaysSo(t *testing.T) {
+	tc := ticketCore(t)
+	board := seedBoard(t, "sess-abc")
+	id, _ := readyTicket(t, tc, []string{"Parse the input", "Render the output"})
+	checkEveryCriterion(t, tc, id, 2)
+
+	out := runClaim(t, tc, board, map[string]any{"ref": id, "if_revision": currentRevision(t, tc, id)})
+
+	if out.SeededTasks == nil {
+		t.Fatal("a finished ticket reported no seeding at all")
+	}
+	if !strings.Contains(out.SeededTasks.Skipped, "already checked") {
+		t.Errorf("want an every-criterion-checked reason, got %q", out.SeededTasks.Skipped)
+	}
+	if n := len(board.List()); n != 0 {
+		t.Errorf("seeded %d tasks for a ticket with nothing left", n)
+	}
+}
+
+// checkEveryCriterion ticks the first n acceptance criteria through the store,
+// which is the same positional index a seeded task carries.
+func checkEveryCriterion(t *testing.T, tc *TicketCore, id string, n int) {
+	t.Helper()
+	s, err := ticket.Discover(tc.CWD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= n; i++ {
+		cur, err := s.Get(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Apply(context.Background(), id, ticket.SetChecklistItem{
+			Section: ticket.AcceptanceCriteria,
+			Index:   i,
+			Checked: true,
+		}, ticket.ApplyOptions{IfRevision: cur.Revision, Actor: ticket.Actor{ID: tc.ActorID, Name: tc.ActorName}}); err != nil {
+			t.Fatalf("check criterion %d: %v", i, err)
+		}
 	}
 }
 

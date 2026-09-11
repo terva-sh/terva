@@ -73,6 +73,78 @@ func TestTicketWriteLoop(t *testing.T) {
 	}
 }
 
+// Four writes in a row, each under the revision the previous write returned,
+// and no ticket_get anywhere. This is the behavior that prompts.go's
+// TicketWriteSystemAddendum and ticketIfRevisionDesc now promise, so it is
+// tested rather than asserted as text.
+//
+// The session that prompted the change is the evidence for why: over 126
+// ticket calls the model issued 56 ticket_get, and 48 of them re-read a
+// revision the preceding write had already handed back. Nothing refused. The
+// old wording named ticket_get as the only source, so the model paid a turn
+// per write for a value it held.
+func TestTicketWriteChainsRevisionWithoutGet(t *testing.T) {
+	tc := ticketToolStore(t, 0)
+	tc.ActorID = "agent:terva/testbot"
+	tc.ActorName = "Testbot"
+
+	step := func(name string, tool core.Tool, args map[string]any) ticketWriteOut {
+		t.Helper()
+		raw, err := json.Marshal(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := tool.Execute(context.Background(), raw, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.IsError {
+			t.Fatalf("%s refused the chained revision: %s", name, ticketResultText(t, res))
+		}
+		// A fresh struct per parse: an absent omitempty key would otherwise
+		// leave the previous step's value in place and fake a pass.
+		var out ticketWriteOut
+		if err := json.Unmarshal([]byte(ticketResultText(t, res)), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.Revision == "" {
+			t.Fatalf("%s returned no revision, so the next write has nothing to chain", name)
+		}
+		return out
+	}
+
+	made := step("ticket_create", &TicketCreateTool{TicketCore: tc}, map[string]any{
+		"title": "Chain the revision across writes",
+	})
+	id := made.ID
+
+	ready := step("ticket_transition", &TicketTransitionTool{TicketCore: tc}, map[string]any{
+		"ref": id, "if_revision": made.Revision, "status": "ready",
+	})
+	claimed := step("ticket_claim", &TicketClaimTool{TicketCore: tc}, map[string]any{
+		"ref": id, "if_revision": ready.Revision, "branch": "feat/chain", "seed_tasks": false,
+	})
+	working := step("ticket_transition", &TicketTransitionTool{TicketCore: tc}, map[string]any{
+		"ref": id, "if_revision": claimed.Revision, "status": "in-progress",
+	})
+	done := step("ticket_update", &TicketUpdateTool{TicketCore: tc}, map[string]any{
+		"ref": id, "if_revision": working.Revision, "priority": "high",
+	})
+
+	if done.Priority != "high" || done.Status != "in-progress" {
+		t.Fatalf("chain landed on priority=%q status=%q", done.Priority, done.Status)
+	}
+	if claimed.ClaimedBy != "agent:terva/testbot" {
+		t.Errorf("claimed_by = %q, want the injected actor", claimed.ClaimedBy)
+	}
+	revs := []string{made.Revision, ready.Revision, claimed.Revision, working.Revision, done.Revision}
+	for i := 1; i < len(revs); i++ {
+		if revs[i] == revs[i-1] {
+			t.Fatalf("write %d returned the previous revision %q, so the chain proves nothing", i, revs[i])
+		}
+	}
+}
+
 // blocks_on and references, the two fields .tickets/CONVENTIONS.md asks for
 // and the tools could not write before. The epic gets its children first,
 // because a childless parent with blocks_on children is a check warning.

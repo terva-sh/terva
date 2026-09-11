@@ -401,6 +401,12 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 	ag.BeforeToolExecute = build.BuildBeforeToolExecute(hookEng, gate, extMgr, ag)
 	build.WireHostToolDispatcher(ag, extMgr, gate)
 
+	// The ticket direct-edit warning arms again at every turn boundary. This sits
+	// OUTSIDE the extension gate below on purpose: it has nothing to do with
+	// extensions, and a session running without them would otherwise fall back to
+	// one warning per session with nothing to show that it had.
+	ag.AddEventObserver(build.TicketEditWarnResetObserver(ag.ToolsSnapshot))
+
 	// The extension-shaped half, and only it, is conditional.
 	if extMgr != nil {
 		wsObserve := build.WorkspaceChangeObserver(differ, extMgr)

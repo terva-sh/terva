@@ -22,6 +22,9 @@ type EditTool struct {
 	// Files records what the model has seen of each path (see ReadTool.Files).
 	// Read on a failed match to say whether the file moved underneath the edit.
 	Files *FileState
+	// Tickets nudges an edit that writes the ticket store directly. Nil, and a
+	// warner that nobody enabled, are both silent.
+	Tickets *TicketEditWarner
 }
 
 type editOp struct {
@@ -175,9 +178,18 @@ func (t *EditTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	// programmatic consumers (json mode, rpc clients) that might
 	// want it.
 	added, removed := countDiffLines(diff)
+	content := []provider.Content{provider.TextBlock{Text: diff}}
+	details := map[string]any{"path": path, "edits": len(a.Edits), "diff": diff}
+	// Prepended so it reads before the diff, on the pathDoublingSuggestion
+	// precedent in write.go: that the edit reached past the ticket tools matters
+	// more than what the edit did. The write has already landed either way.
+	if note := t.Tickets.Notice(path); note != "" {
+		details["ticket_store_edit"] = true
+		content = append([]provider.Content{provider.TextBlock{Text: note}}, content...)
+	}
 	return core.ToolResult{
-		Content:      []provider.Content{provider.TextBlock{Text: diff}},
-		Details:      map[string]any{"path": path, "edits": len(a.Edits), "diff": diff},
+		Content:      content,
+		Details:      details,
 		LinesAdded:   added,
 		LinesRemoved: removed,
 	}, nil

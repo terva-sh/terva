@@ -478,6 +478,43 @@ func WorkspaceChangeObserver(differ *tools.WorkspaceDiffer, extMgr *extensions.M
 	}
 }
 
+// TicketEditWarnResetObserver returns an OnEvent observer that arms the ticket
+// direct-edit warning again at the start of every model step, giving one
+// warning per turn instead of one per session. Compose it into a host's
+// OnEvent. A nil registry function disables it.
+//
+// EVERY EvTurnStart, not step 1. This is the one place it differs from
+// WorkspaceChangeObserver directly above, which wants step 1 because a run has
+// exactly one baseline. Step 1 is the start of a RUN, so gating on it here
+// would reset once per user prompt, and a model that works for thirty steps
+// would see the warning once. The warning exists to interrupt a habit inside
+// long autonomous stretches, which is exactly where step 1 never comes round
+// again.
+//
+// It walks the registry on each turn rather than holding the warner, because a
+// tool rebuild mints a fresh one. A captured handle would still reset, silently
+// and on an instance no tool reads. The walk is a few map entries against a
+// model round trip.
+//
+// The registry read must be race-free: pass Agent.ToolsSnapshot, which takes
+// the lock SetTools writes under. Ranging Agent.Tools directly races a
+// mid-session /reload-ext.
+func TicketEditWarnResetObserver(registry func() core.Registry) func(core.AgentEvent) {
+	if registry == nil {
+		return func(core.AgentEvent) {}
+	}
+	return func(ev core.AgentEvent) {
+		if _, ok := ev.(core.EvTurnStart); !ok {
+			return
+		}
+		for _, t := range registry() {
+			if b, ok := t.(tools.TicketEditWarnResetBinder); ok {
+				b.ResetTicketEditWarning()
+			}
+		}
+	}
+}
+
 // NonInteractiveExtHooks is the HostHooks impl used by print / json
 // modes. They have no TUI, so notify / display go to stderr and
 // submit / insert are no-ops (the extension can't steer a

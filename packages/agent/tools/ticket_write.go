@@ -82,7 +82,7 @@ func (c *TicketCore) applyMutation(ctx context.Context, ref, ifRevision string, 
 		return nil, "", fmt.Errorf("give ref: a ticket id, or a unique short form of it")
 	}
 	if strings.TrimSpace(ifRevision) == "" {
-		return nil, "", fmt.Errorf("give if_revision: the revision that ticket_get returned for this ticket")
+		return nil, "", fmt.Errorf("give if_revision: the revision from your last write to this ticket, or from ticket_get")
 	}
 	s, err := c.open()
 	if err != nil {
@@ -93,7 +93,7 @@ func (c *TicketCore) applyMutation(ctx context.Context, ref, ifRevision string, 
 		var te *ticket.Error
 		if errors.As(err, &te) && te.Code == ticket.CodeStaleRevision {
 			if cur, gerr := s.Get(ctx, ref); gerr == nil {
-				return nil, "", fmt.Errorf("%s. The current revision is %s. Read the ticket again with ticket_get, and retry with that value.", err.Error(), cur.Revision)
+				return nil, "", fmt.Errorf("%s. The current revision is %s. Retry with that value. Read the ticket with ticket_get when you need to see the change.", err.Error(), cur.Revision)
 			}
 		}
 		return nil, "", err
@@ -147,7 +147,7 @@ const ticketTitleLimitDesc = "A title over 72 characters is a warning from ticke
 const ticketBlocksOnDesc = "The edges that hold the ticket beyond its dependencies. The value none is the default. The value children keeps an epic open while one child is open. Set children after the children exist, because a check reports a childless parent as a warning."
 
 const ticketRefDesc = "The ticket id, or a unique short form of it."
-const ticketIfRevisionDesc = "The revision that ticket_get returned for this ticket. A stale value refuses the write, and the refusal names the current revision."
+const ticketIfRevisionDesc = "The current revision of this ticket. Every ticket write returns the new revision. A second write to the same ticket takes that value, and it needs no ticket_get. A stale value refuses the write, and the refusal names the current revision."
 
 func ticketRefRevisionProps() map[string]any {
 	return map[string]any{
@@ -199,7 +199,7 @@ func (t *TicketCreateTool) Schema() json.RawMessage {
 			"title":               map[string]any{"type": "string", "description": "The one-line title of the ticket. " + ticketTitleLimitDesc},
 			"type":                map[string]any{"type": "string", "enum": ticket.Types, "description": "The ticket type. The default comes from the store."},
 			"priority":            map[string]any{"type": "string", "enum": ticket.Priorities, "description": "The priority. The default comes from the store."},
-			"labels":              map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The labels for the ticket. The store holds the list of labels that it accepts."},
+			"labels":              t.ticketLabelsProp("The labels for the ticket."),
 			"assignees":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The actors to assign. No mutation changes this field later, so give it here or edit the file."},
 			"milestone":           map[string]any{"type": "string", "description": "The milestone for the ticket."},
 			"description":         map[string]any{"type": "string", "description": "The Markdown body of the Description section."},
@@ -354,7 +354,7 @@ func (a ticketUpdateArgs) mutations() ticket.Mutations {
 
 func (t *TicketUpdateTool) Name() string { return "ticket_update" }
 func (t *TicketUpdateTool) Description() string {
-	return i18n.D("tool.ticket_update.description", "Change the fields of one ticket. The tool writes the ticket file, and it never publishes anything. Give ref, if_revision, and at least one change. The changes apply as one write: all of them land, or none do. Read the ticket first with ticket_get, and pass its revision as if_revision.\n\nThis tool does not change the status. Use ticket_transition for that.")
+	return i18n.D("tool.ticket_update.description", "Change the fields of one ticket. The tool writes the ticket file, and it never publishes anything. Give ref, if_revision, and at least one change. The changes apply as one write: all of them land, or none do. Pass the revision from your last write to this ticket, or read the ticket with ticket_get.\n\nThis tool does not change the status. Use ticket_transition for that.")
 }
 func (t *TicketUpdateTool) ToolGroupName() string { return "ticket" }
 func (t *TicketUpdateTool) Schema() json.RawMessage {
@@ -369,7 +369,7 @@ func (t *TicketUpdateTool) Schema() json.RawMessage {
 	props["description"] = map[string]any{"type": "string", "description": "The new Markdown body of the Description section. It replaces the section."}
 	props["implementation_plan"] = map[string]any{"type": "string", "description": "The new Markdown body of the Implementation plan section. It replaces the section."}
 	props["summary"] = map[string]any{"type": "string", "description": "The new Markdown body of the Summary section. It replaces the section."}
-	props["add_labels"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The labels to add."}
+	props["add_labels"] = t.ticketLabelsProp("The labels to add.")
 	props["remove_labels"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The labels to remove."}
 	props["add_dependencies"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The ticket ids to add as dependencies."}
 	props["remove_dependencies"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The ticket ids to remove from the dependencies."}
@@ -517,8 +517,9 @@ type ticketClaimArgs struct {
 }
 
 // ticketClaimOut is the standard write row plus what the claim did to the task
-// board. SeededTasks is absent when the caller opted out, and when the session
-// has no board at all.
+// board. SeededTasks is absent only when the session has no board at all. An
+// opt-out reports what it gave up, because silence read as success and sent a
+// session to `edit` for every criterion it wanted to check.
 type ticketClaimOut struct {
 	ticketWriteOut
 	SeededTasks *seedReport `json:"seeded_tasks,omitempty"`
@@ -526,7 +527,7 @@ type ticketClaimOut struct {
 
 func (t *TicketClaimTool) Name() string { return "ticket_claim" }
 func (t *TicketClaimTool) Description() string {
-	return i18n.D("tool.ticket_claim.description", "Claim one ticket before you work it, or release your claim. The tool writes the ticket file, and it never publishes anything. Give ref and if_revision, and set release to true to release your claim. A claim of a ticket that you already hold renews it. A claim is metadata and not a status. Move the status with ticket_transition.\n\nA claim also seeds the task list. The tool makes one task for each acceptance criterion that is not checked yet. Each task remembers the criterion it came from. Set seed_tasks to false to claim the ticket and leave the task list alone. The tool seeds nothing when the list still holds open tasks. It reports the reason, because a mix of two tickets' tasks is hard to undo.\n\nSet force to true only when the user tells you to take work from another actor. The store then records the displaced claim.")
+	return i18n.D("tool.ticket_claim.description", "Claim one ticket before you work it, or release your claim. The tool writes the ticket file, and it never publishes anything. Give ref and if_revision, and set release to true to release your claim. A claim of a ticket that you already hold renews it. A claim is metadata and not a status. Move the status with ticket_transition.\n\nA claim also seeds the task list. The tool makes one task for each acceptance criterion that is not checked yet. A task that you close then checks its criterion. Set seed_tasks to false to leave the task list alone. The tool reports a reason whenever it seeds nothing, and the opt-out is one of those reasons.\n\nThe tool seeds nothing when the list still holds open tasks. A mix of two tickets' tasks is hard to undo. The reason names the tasks that are in the way.\n\nA claim archives the tasks that you closed before it seeds. The task list then shows the work of this ticket alone. The result gives the count.\n\nSet force to true only when the user tells you to take work from another actor. The store then records the displaced claim.")
 }
 func (t *TicketClaimTool) ToolGroupName() string { return "ticket" }
 func (t *TicketClaimTool) Schema() json.RawMessage {
@@ -572,7 +573,9 @@ func (t *TicketClaimTool) Execute(ctx context.Context, raw json.RawMessage, prog
 	}}
 	// The claim already landed. A seeding failure past this point must not read
 	// as a failed claim, so it travels in the payload and never as an error.
-	if in.SeedTasks == nil || *in.SeedTasks {
+	if in.SeedTasks != nil && !*in.SeedTasks {
+		out.SeededTasks = seedOptOut(t.Tasks)
+	} else {
 		out.SeededTasks = seedFromCriteria(t.Tasks, tk)
 	}
 	return ticketResult(out, nil)

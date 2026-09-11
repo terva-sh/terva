@@ -532,6 +532,12 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	// rather than clobbering the translator (the §OnEvent composition point).
 	// nil when there is nothing to observe, so bindSession keeps the
 	// translation-only OnEvent.
+	//
+	// The ticket direct-edit warning is the exception to that nil: it arms again
+	// at every turn boundary and owes nothing to extensions or hooks, so it is
+	// built here and composed into whichever branch runs. A session with neither
+	// would otherwise fall back to one warning per session, silently.
+	ticketWarnReset := build.TicketEditWarnResetObserver(ag.ToolsSnapshot)
 	var observe func(core.AgentEvent)
 	if extMgr != nil || hookEng != nil {
 		// Per-session workspace differ rooted at this session's cwd (ACP
@@ -545,10 +551,13 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 		}
 		wsObserve := build.WorkspaceChangeObserver(differ, extMgr)
 		observe = func(ev core.AgentEvent) {
+			ticketWarnReset(ev)
 			wsObserve(ev)
 			build.FanoutAgentEvent(extMgr, ev)
 			build.ObserveAgentEventForHooks(hookEng, ev)
 		}
+	} else {
+		observe = ticketWarnReset
 	}
 
 	// The tool set the model sees, rebuilt from a fresh Resolve — the survivor

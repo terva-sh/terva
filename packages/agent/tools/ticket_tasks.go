@@ -27,6 +27,10 @@ type TaskBoard interface {
 	// Only the archived generations: the live list arrives through List, and the
 	// two are rendered as separate sections.
 	Generations() []tasks.Generation
+	// Archive rolls tasks off the live list into a generation. A claim always
+	// passes keepOpen true, so this can never move work that somebody left
+	// open. It reports ok false when it found nothing to archive.
+	Archive(keepOpen bool, label string) (tasks.Generation, int, bool, error)
 }
 
 // TaskBinder is implemented by a ticket tool that writes the session task
@@ -69,6 +73,10 @@ type seedReport struct {
 	Created int      `json:"created,omitempty"`
 	TaskIDs []string `json:"task_ids,omitempty"`
 	Skipped string   `json:"skipped,omitempty"`
+	// Archived counts the finished tasks the claim rolled off the board before
+	// it seeded. The claim does that on the caller's behalf, and a silent
+	// archive is the objectionable one, so the result says what it did.
+	Archived int `json:"archived,omitempty"`
 }
 
 // seedFromCriteria makes one task per unchecked acceptance criterion.
@@ -115,15 +123,55 @@ func seedFromCriteria(board TaskBoard, tk *ticket.Ticket) *seedReport {
 	if len(specs) == 0 {
 		return &seedReport{Skipped: "every acceptance criterion is already checked"}
 	}
+	// This claim will seed. Anything still on the board is finished business
+	// from an earlier ticket, because the guard above refused every open task.
+	// Roll it off, or this ticket's tasks land beside it and every later turn
+	// renders both lists.
+	//
+	// The position is load-bearing twice over. It sits after the open-task
+	// refusal, so a claim never archives the caller's board and then refuses.
+	// It sits after the empty-specs return for the same reason, so a claim never
+	// archives and then declines to seed.
+	//
+	// keepOpen true does the same work as false at this line, because no open
+	// task survived the guard. True is the safer way to write it: it cannot move
+	// open work, whatever that guard becomes later.
+	gen, _, rolled, err := board.Archive(true, "before "+tk.ID)
+	if err != nil {
+		return &seedReport{Skipped: "could not archive the finished tasks: " + err.Error()}
+	}
+	archived := 0
+	if rolled {
+		archived = len(gen.Tasks)
+	}
 	made, err := board.Create(specs)
 	if err != nil {
 		return &seedReport{Skipped: "could not seed the task list: " + err.Error()}
 	}
-	rep := &seedReport{Created: len(made)}
+	rep := &seedReport{Created: len(made), Archived: archived}
 	for _, t := range made {
 		rep.TaskIDs = append(rep.TaskIDs, t.ID)
 	}
 	return rep
+}
+
+// seedOptOut is the report for a claim the caller told not to seed. It names
+// what the argument gave up, because that cost is otherwise invisible: no task
+// carries a criterion of this ticket, so no close will ever check one.
+//
+// Silence here is what sent a session to `edit`. Over 126 ticket calls it
+// passed seed_tasks false four times, and it hand-edited the criteria of every
+// one of those tickets. Three of those edits checked every box in the file at
+// once, with no revision precondition and no actor.
+//
+// A boardless session still says nothing, exactly as seedFromCriteria does.
+// There is no task tool to reach for, so a reason that names one would be
+// advice the model cannot take.
+func seedOptOut(board TaskBoard) *seedReport {
+	if board == nil {
+		return nil
+	}
+	return &seedReport{Skipped: "you passed seed_tasks false, so this claim made no task. A task that you close checks the criterion it came from. Claim again without the argument to seed the board."}
 }
 
 // openTitles names the tasks that are neither done nor cancelled, capped so a
