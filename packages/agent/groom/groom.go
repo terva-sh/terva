@@ -31,9 +31,19 @@ import (
 // waits on it: a groom run is not in anybody's turn.
 const DefaultTimeout = 90 * time.Second
 
-// maxTokens caps the reply. The report is a list of ids with one sentence
-// each, so this is sized for a pool in the low hundreds.
-const maxTokens = 4096
+// maxTokens caps the reply.
+//
+// 🪤 This was 4096, under a comment claiming it was "sized for a pool in the low
+// hundreds". A live run over 79 drafts on 2026-09-12 was cut off mid-object, and
+// the pass then blamed its own parser. The figure was an estimate written as a
+// fact, and nobody had run it.
+//
+// A report entry is a 26-character id plus a sentence, near 45 tokens, and a
+// pool answered in full yields two lists that together approach the size of the
+// pool. At 79 drafts that passes 4096 once the JSON structure is counted. Output
+// tokens bill as produced, so a generous cap costs nothing on a short report,
+// while a tight one costs the entire call.
+const maxTokens = 16384
 
 // ExcerptBytes caps the description text taken from each draft.
 //
@@ -112,6 +122,16 @@ type Report struct {
 	// SentBytes is the size of the projection actually sent, which is the
 	// measurement ExcerptBytes estimates.
 	SentBytes int
+	// Usage is what the provider reported, and it makes the ExcerptBytes bound
+	// checkable against a real tokenizer rather than against a bytes-per-token
+	// estimate.
+	//
+	// 🪤 Read Usage.PromptTokens() for the size of the call. Usage.InputTokens is
+	// the uncached remainder on its own: a live run on 2026-09-12 reported 2
+	// there beside 17580 in CacheReadTokens, so a reader who takes InputTokens
+	// for the prompt is out by four orders of magnitude. It stays the zero Usage
+	// when the provider reports nothing.
+	Usage provider.Usage
 	// Unknown counts ids the model named that were not in the pool. A model
 	// that invents ids is a model whose reasons are worth less, so this is
 	// reported rather than swallowed.
@@ -170,6 +190,14 @@ not_ready: you looked and set it aside. Say what is missing, specifically. "Too
 vague" is not a reason. "Names no acceptance criteria and its description does
 not say what would change" is.
 
+The excerpt for each draft is its first 600 bytes. Most excerpts stop in the
+middle of a sentence. This cut is how the text came to you. It is not a fact
+about the ticket. Never give the cut as a reason.
+
+Each draft also carries the number of its acceptance criteria, and a flag for an
+implementation plan. You do not see the criteria themselves. Read the number
+instead. A draft with 5 criteria has 5 criteria.
+
 Use only ids from the pool you were given. Do not invent one. Do not repeat an
 id in both lists. You may leave a draft out of both lists entirely when you
 have nothing useful to say about it.
@@ -221,15 +249,32 @@ func (p *Pass) Run(ctx context.Context, drafts []Draft) (Report, error) {
 	}
 
 	var sb strings.Builder
+	var cutOff bool
 	for e := range stream {
 		switch t := e.(type) {
 		case provider.EventTextDelta:
 			sb.WriteString(t.Delta)
+		case provider.EventUsage:
+			// Assign, don't accumulate: a provider emits exactly one EventUsage
+			// per request, and it folds its own cumulative message_start and
+			// message_delta refreshes internally. core/compact.go and
+			// workspace_sidechat.go carry the same rule for the same reason.
+			rep.Usage = t.Usage
 		case provider.EventDone:
 			if t.Err != nil {
 				return rep, p.fail("stream: %v", t.Err)
 			}
+			cutOff = t.Stop == provider.StopLength
 		}
+	}
+
+	// 🪤 A reply cut off at the output cap is not a parser problem, and it must
+	// not report itself as one. The first live run answered "no JSON object in
+	// reply" about a reply whose opening 200 characters were sound JSON, which
+	// reads as a broken parser and sends the reader to the parser. Name the cap,
+	// because the remedy is a larger budget and not a better parser.
+	if cutOff {
+		return rep, p.fail("the model hit the %d-token output cap with %d drafts in the pool, so the report was cut off before it closed; raise maxTokens or send fewer drafts", maxTokens, rep.Scanned)
 	}
 
 	obj, ok := modelreply.LastJSONObject(sb.String())

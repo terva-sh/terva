@@ -14,6 +14,8 @@ type fakeClient struct {
 	reply     string
 	streamErr error
 	doneErr   error
+	stop      provider.StopReason
+	usage     []provider.Usage
 	got       provider.Request
 	calls     int
 }
@@ -32,7 +34,10 @@ func (c *fakeClient) Stream(_ context.Context, req provider.Request) (<-chan pro
 		if c.reply != "" {
 			ch <- provider.EventTextDelta{Delta: c.reply}
 		}
-		ch <- provider.EventDone{Err: c.doneErr}
+		for _, u := range c.usage {
+			ch <- provider.EventUsage{Usage: u}
+		}
+		ch <- provider.EventDone{Err: c.doneErr, Stop: c.stop}
 	}()
 	return ch, nil
 }
@@ -287,5 +292,78 @@ func TestNewRefusesWhatItCannotRun(t *testing.T) {
 	}
 	if New(Options{Client: &fakeClient{}}) != nil {
 		t.Error("no model must refuse")
+	}
+}
+
+// --- what only a live run found -------------------------------------------
+//
+// Both tests below describe a defect that shipped. Every test above swaps a
+// scripted reply in, so none of them could see either one.
+
+// 🪤 A reply cut off at the output cap must name the cap. The first live run
+// answered "no JSON object in reply" about a reply whose opening was sound
+// JSON, which reads as a broken parser and hides the real cause. The remedy is
+// a bigger budget, so the message has to point there.
+func TestRunNamesTheOutputCapWhenTheReplyIsCutOff(t *testing.T) {
+	cut := `{"candidates":[{"id":"TKT-1","reason":"this sentence never finis`
+
+	c := &fakeClient{reply: cut, stop: provider.StopLength}
+	_, err := New(Options{Client: c, Model: "m"}).Run(context.Background(), pool("TKT-1", "TKT-2"))
+	if err == nil {
+		t.Fatal("a reply cut off at the cap must fail rather than return an empty report")
+	}
+	if !strings.Contains(err.Error(), "output cap") {
+		t.Errorf("the error must name the output cap, got %q", err)
+	}
+	if !strings.Contains(err.Error(), "maxTokens") {
+		t.Errorf("the error must name the remedy, got %q", err)
+	}
+
+	// The control. The same unclosed reply without a length stop must not be
+	// blamed on the cap, or this test would pass for every unparseable reply and
+	// prove nothing about the stop reason.
+	plain := &fakeClient{reply: cut, stop: provider.StopEnd}
+	_, err = New(Options{Client: plain, Model: "m"}).Run(context.Background(), pool("TKT-1"))
+	if err == nil {
+		t.Fatal("an unclosed object is still a failure")
+	}
+	if strings.Contains(err.Error(), "output cap") {
+		t.Errorf("with no length stop the cap must not be blamed, got %q", err)
+	}
+}
+
+// The usage a run records is what makes the ExcerptBytes bound checkable against
+// a real tokenizer, which is the last definition-of-done item on TKT-01M29G8ZSF.
+//
+// 🪤 Usage.InputTokens is the uncached remainder alone. The numbers below are a
+// live run's: it reported 2 there beside 17580 read from cache, so a reader who
+// takes InputTokens for the prompt size is out by four orders of magnitude. The
+// assertion is on Usage.PromptTokens(), which is the figure the bound is
+// measured against.
+func TestRunRecordsEveryPromptTokenIncludingCache(t *testing.T) {
+	c := &fakeClient{
+		reply: `{"candidates":[{"id":"TKT-1","reason":"ready"}],"not_ready":[]}`,
+		stop:  provider.StopEnd,
+		usage: []provider.Usage{
+			{InputTokens: 2, CacheReadTokens: 17580, OutputTokens: 5167, CostUSD: 0.0276},
+		},
+	}
+
+	rep := run(t, c, pool("TKT-1"))
+
+	if rep.Usage.InputTokens != 2 {
+		t.Errorf("Usage.InputTokens = %d, want 2", rep.Usage.InputTokens)
+	}
+	if rep.Usage.CacheReadTokens != 17580 {
+		t.Errorf("Usage.CacheReadTokens = %d, want 17580: the cache half must survive", rep.Usage.CacheReadTokens)
+	}
+	if rep.Usage.OutputTokens != 5167 {
+		t.Errorf("Usage.OutputTokens = %d, want 5167", rep.Usage.OutputTokens)
+	}
+	if got, want := rep.Usage.PromptTokens(), 17582; got != want {
+		t.Errorf("Usage.PromptTokens() = %d, want %d, the figure the bound is measured against", got, want)
+	}
+	if rep.Usage.CostUSD != 0.0276 {
+		t.Errorf("Usage.CostUSD = %v, want 0.0276", rep.Usage.CostUSD)
 	}
 }

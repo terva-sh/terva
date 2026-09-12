@@ -170,11 +170,25 @@ func newGroomPass(dir string, stderr io.Writer) (groomPass, error) {
 		return nil, fmt.Errorf("no credential for provider %q, so the pass cannot run", r.Provider)
 	}
 
+	// 🪤 The tier pick carries a reasoning effort, and groom takes the model
+	// from it but not the effort. Either reason alone settles this.
+	//
+	// A pass that reads titles and 600-byte excerpts and answers with a list of
+	// ids has nothing to reason about, so thinking tokens on the weak rung are
+	// money spent for no better report. And the pass asks for temperature 0 so
+	// that two runs over one pool stay comparable, which Anthropic refuses beside
+	// enabled thinking. That pair is an http 400, and it is why this command
+	// first shipped unable to complete a single call.
+	//
+	// The effort stays empty, and groom.Run sends ReasoningSet alongside it, so
+	// this is an explicit off rather than an absent choice. That distinction
+	// matters: a model with its own DefaultReasoning would otherwise turn every
+	// groom run into a thinking turn.
 	model, reasoning := r.Model, ""
 	cfg, cerr := config.LoadConfig()
 	if cerr == nil {
 		if pick := tools.ResolveSwarmTier(r.Provider, r.Model, "weak", build.SwarmTierMap(cfg.SwarmTiers)); pick.Model != "" {
-			model, reasoning = pick.Model, pick.Reasoning
+			model = pick.Model
 		}
 	}
 	if model == r.Model {
@@ -236,6 +250,17 @@ func renderGroomReport(w io.Writer, rep groom.Report) {
 	}
 	if rep.Unknown > 0 {
 		fmt.Fprintf(w, "\n%d entry(ies) named an id that is not in the pool, or repeated one, and were\ndropped. Treat the reasons above with more caution than usual.\n", rep.Unknown)
+	}
+
+	// The bound that groom.ExcerptBytes aims at, measured against the provider's
+	// own count rather than against a bytes-per-token estimate. Printed on every
+	// run, so the figure can never drift from the real one without a reader
+	// seeing it. Zero when the provider reported no usage, and then it is better
+	// to print nothing than to print a confident 0.
+	if n := rep.Usage.PromptTokens(); n > 0 {
+		fmt.Fprintf(w, "\nSent %d bytes of projection inside a %d-token prompt (%d new, %d from cache,\n%d written to cache). Reply %d token(s), $%.4f.\n",
+			rep.SentBytes, n, rep.Usage.InputTokens, rep.Usage.CacheReadTokens,
+			rep.Usage.CacheWriteTokens, rep.Usage.OutputTokens, rep.Usage.CostUSD)
 	}
 
 	fmt.Fprintf(w, "\nThis is advisory. A weak model read %d draft(s) and two runs may differ.\nSaying nothing about a draft is not a judgement on it, and nothing here\nchanged a ticket.\n", rep.Scanned)

@@ -375,6 +375,21 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 		}
 	}
 
+	// 🪤 Anthropic refuses a temperature beside enabled thinking: "`temperature`
+	// may only be set to 1 when thinking is enabled" (http 400). The !adaptive
+	// guard above catches one shape of this, where the model rejects sampling
+	// params outright. A non-adaptive model with an explicit budget reaches here
+	// with both fields set and fails the same way. That is how `terva ticket
+	// groom` shipped unable to complete a single call.
+	//
+	// Thinking wins over temperature. The caller set an effort, so it asked for
+	// reasoning on purpose, while a temperature is usually a default it never
+	// chose. A caller that needs a fixed temperature asks for reasoning off,
+	// which leaves Thinking nil and the temperature intact.
+	if out.Thinking != nil {
+		out.Temperature = nil
+	}
+
 	// WireTools, not req.Tools: this client sends no tool_choice, so it cannot
 	// hold the model back from a call and must drop the array under ForbidTools
 	// rather than advertise tools it cannot police. Byte-identical to before

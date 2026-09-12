@@ -258,7 +258,15 @@ func TestAnthropicAdaptiveThinking(t *testing.T) {
 		t.Fatalf("want effort=max, got %+v", wire.OutputConfig)
 	}
 
-	// Opus 4.5 -> budget-based thinking, no output_config, temperature kept.
+	// Opus 4.5 -> budget-based thinking, no output_config, and no temperature.
+	//
+	// 🪤 This block asserted the opposite until 2026-09-12: "budget model should
+	// keep temperature". Anthropic refuses that pair. A live `terva ticket groom`
+	// run on claude-haiku-4-5 at thinking high with temperature 0 came back http
+	// 400, "`temperature` may only be set to 1 when thinking is enabled"
+	// (request_id req_011CexgHHgCdXE2qj56JgNnR). The belief recorded here was
+	// never put to the API, and it is why that command shipped unable to complete
+	// a single call.
 	wire, err = c.buildRequest(Request{
 		Model:        "claude-opus-4-5",
 		Reasoning:    "high",
@@ -275,8 +283,8 @@ func TestAnthropicAdaptiveThinking(t *testing.T) {
 	if wire.OutputConfig != nil {
 		t.Fatalf("budget models must not send output_config, got %+v", wire.OutputConfig)
 	}
-	if wire.Temperature == nil || *wire.Temperature != temp {
-		t.Fatalf("budget model should keep temperature, got %v", wire.Temperature)
+	if wire.Temperature != nil {
+		t.Fatalf("budget thinking must drop temperature, got %v: Anthropic answers that pair with http 400", *wire.Temperature)
 	}
 }
 
