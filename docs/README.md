@@ -37,6 +37,7 @@ the field have learned about this category, generalized and evidence-graded.
 | [tui.md](tui.md) | The interactive terminal UI |
 | [recording.md](recording.md) | Recording a TUI session: shrinking the capture, the busy signal, secrets |
 | [web.md](web.md) | `terva web` — the browser control panel |
+| [fleet.md](fleet.md) | One browser reading many machines: hub, members, tunnel |
 | [models.md](models.md) | Models & providers in practice |
 | [personas.md](personas.md) | Personas and crews |
 | [raati.md](raati.md) | RAATI — the three-seat deliberation panel |

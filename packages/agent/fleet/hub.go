@@ -43,6 +43,15 @@ type HubOptions struct {
 	// takes ctrlclient.DefaultBackoff.
 	Backoff time.Duration
 
+	// PongWait is how long a member socket may go without any traffic before
+	// the hub reaps it. Zero takes the package default, which is sized against
+	// the ping interval at three missed pings.
+	//
+	// Worth lowering only behind a middlebox more aggressive than the default
+	// assumes. Lower it below pingInterval and the hub reaps healthy members on
+	// schedule, which is exactly what the reap tests do on purpose.
+	PongWait time.Duration
+
 	// OnMemberUp fires after a member completes the handshake, with the
 	// member's server hello. OnMemberDown fires when an established member
 	// connection drops.
@@ -178,9 +187,17 @@ func (h *Hub) Handler(ctx context.Context) http.Handler {
 			_ = c.Close()
 			return
 		}
+		// Keep the socket alive while nobody is watching this member, and reap
+		// it if the member stops answering. Both halves live in wsconn.go.
+		//
+		// Armed before the handoff, because offer publishes the connection and
+		// the member client can be reading from it on the next instruction.
+		conn := &wsConn{c: c, pongWait: h.opts.PongWait}
+		conn.armReadDeadline()
+		go conn.keepalive(ctx)
 		// Hand off and return. gorilla has hijacked the socket, so the
 		// connection outlives this handler; the member client owns it now.
-		m.offer(&wsConn{c: c})
+		m.offer(conn)
 	})
 	return mux
 }

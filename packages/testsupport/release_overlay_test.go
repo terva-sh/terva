@@ -61,6 +61,7 @@ var docsThatShip = []string{
 	// TestEveryDocsSubdirIsClassified guards that half.
 	"docs/design",
 	"docs/extensions.md",
+	"docs/fleet.md",
 	"docs/fork.md",
 	"docs/hooks.md",
 	"docs/image-generation.md",

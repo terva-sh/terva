@@ -213,6 +213,13 @@ func Run(rawArgs []string, version string) error {
 	if len(rawArgs) > 0 && rawArgs[0] == "web" {
 		rawArgs = append([]string{"--web"}, rawArgs[1:]...)
 	}
+	// `terva member` is shorthand for `terva --member` (the fleet check-in
+	// daemon), routed like `terva web`. Unlike web and acp this one needs no
+	// build tag: packages/agent/fleet carries none, so a lean binary can check
+	// in to a hub. There is no not-built-in stub for it.
+	if len(rawArgs) > 0 && rawArgs[0] == "member" {
+		rawArgs = append([]string{"--member"}, rawArgs[1:]...)
+	}
 	// `terva attach [URL]` is shorthand for `terva --attach [URL]` (the
 	// remote-TUI mode), routed like `terva web`. The optional URL rides as
 	// the flag's positional value.
@@ -320,6 +327,8 @@ func Run(rawArgs []string, version string) error {
 		return runACPMode(ctx, args, version)
 	case mode.Web:
 		return runWebMode(ctx, args, version)
+	case mode.Member:
+		return runMemberMode(ctx, args, version)
 	case mode.Replay:
 		return runReplayMode(ctx, args, version)
 	case mode.Attach:

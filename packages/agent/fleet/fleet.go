@@ -30,6 +30,30 @@ import "time"
 // stalling every other writer on that connection.
 const writeTimeout = 15 * time.Second
 
+// A fleet connection is silent whenever nobody is watching a member, which is
+// most of the time, and a middlebox reads silence as death. The hub is
+// reachable from another machine only through a tunnel while member identity is
+// a shared bearer, so every member connection has at least one hop that can
+// time out without telling either end.
+//
+// These match web/conn.go rather than differing for no reason. That file chose
+// them against a real incident: a 50 second haproxy timeout cutting idle
+// panels on the dot, with no bug anywhere in terva that a test could see.
+const (
+	// pingInterval is how often the hub pings an otherwise idle member.
+	// Comfortably under any proxy idle timeout worth calling a default.
+	pingInterval = 20 * time.Second
+	// pongWait is how long a member may go without ANY traffic, a pong or a
+	// frame or anything else, before the hub calls it dead. Three missed pings.
+	//
+	// This is also the fleet's worst-case stall. ctrlclient.Call has no timeout
+	// of its own and waits on the caller's context, but teardownConn hands every
+	// pending call an ErrDisconnected the moment a connection is torn down. So
+	// the read deadline is what bounds a hung call, and this constant is the
+	// bound.
+	pongWait = 65 * time.Second
+)
+
 // DefaultBackoff is the pause between a member's dial attempts. It matches
 // ctrlclient.DefaultBackoff, because the two loops are the same loop seen from
 // opposite ends and a mismatch would only be confusing.

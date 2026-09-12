@@ -47,6 +47,24 @@ type Args struct {
 	WebInsecure         bool     // allow binding a non-loopback address with no auth mode (dangerous)
 	WebInsecureCIDRs    []string // IPs/CIDRs granted no-auth access (besides loopback) — the scoped, safer form of --web-insecure (e.g. a tailnet range)
 
+	// FleetAddr turns `terva web` into a fleet hub by opening a SECOND listener
+	// for members to check in on (--fleet-addr). It is separate from --web-addr
+	// on purpose: browsers and members carry different credentials and want
+	// different exposure, and one listener cannot hold both postures. Empty
+	// means no member endpoint, which is exactly today's `terva web`.
+	FleetAddr string
+
+	// Fleet check-in mode (--member / `terva member`, no build tag). The member
+	// dials the hub and then SERVES ctrlproto back over the socket it opened.
+	MemberHub    string // the hub's member endpoint, ws:// or wss://
+	MemberOrigin string // this member's name in the fleet; it prefixes every federated session id the hub mints for it
+
+	// FleetTokenFile reads the shared fleet bearer from a file. There is
+	// deliberately no --fleet-token that takes a value: one token names the
+	// whole fleet rather than one daemon, and argv is world readable through ps
+	// and /proc/cmdline. Both ends of a fleet take this same flag.
+	FleetTokenFile string
+
 	// AllowRestart enables Tier-1 self-restart (the control.restart verb +
 	// the terva_restart tool) in the modes that support it — terva web and
 	// the interactive TUI. --allow-restart; --web-allow-restart is the
@@ -514,6 +532,32 @@ func ParseArgs(in []string) (Args, error) {
 			a.Mode = mode.ACP
 		case "--web":
 			a.Mode = mode.Web
+		case "--fleet-addr":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.FleetAddr = v
+		case "--member":
+			a.Mode = mode.Member
+		case "--hub":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.MemberHub = v
+		case "--origin":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.MemberOrigin = v
+		case "--fleet-token-file":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.FleetTokenFile = v
 		case "--attach":
 			a.Mode = mode.Attach
 			// Optional URL: consume the next token when it isn't a flag.
@@ -1094,6 +1138,22 @@ Web-specific flags:
   --web-insecure-cidr CIDR      grant NO-auth access to these source IP/CIDR(s) only (comma-separated; loopback always
                                 allowed) — the scoped, safer form of --web-insecure for a trusted overlay (e.g. a tailnet
                                 range like 100.64.0.0/10); permits a non-loopback bind and self-restart
+
+Fleet flags (one browser reading many daemons; members dial the hub, never the reverse):
+  --fleet-addr ADDR             on terva web: open a SECOND listener, separate from --web-addr, for members to
+                                check in on. Loopback or unix:/path ONLY while the fleet bearer is a shared
+                                token, so a member on another machine reaches it through a tunnel (ssh -N -L
+                                from the member; see docs/fleet.md).
+                                Without this flag terva web is unchanged
+  --hub URL                     on terva member: the hub's member endpoint, ws:// or wss:// (e.g.
+                                ws://127.0.0.1:8081). The member dials the hub and then serves its workspace
+                                back over that socket
+  --origin NAME                 on terva member: this machine's name in the fleet. It prefixes every session id
+                                the hub shows, so --origin neot lists this machine's sessions as neot/<id>.
+                                "local" is reserved for the hub's own workspace
+  --fleet-token-file PATH       both ends: read the shared fleet bearer from PATH (systemd LoadCredential=). There is
+                                deliberately no --fleet-token flag: one token names the WHOLE fleet rather than
+                                one daemon, and argv is readable by any local user via ps and /proc/cmdline
 
 Security: the server binds loopback by default and REFUSES a non-loopback bind
 unless you set an auth mode or --web-insecure. The forward-auth header is honored

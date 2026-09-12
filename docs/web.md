@@ -68,6 +68,11 @@ configured tightly enough will still cut the socket, and it is worth knowing wha
 to look for: a panel that reconnects on a **fixed interval**, forever, is not a
 terva bug — it is the proxy's idle timeout, and the interval is its value.
 
+The same wall stands in front of a fleet, where the tunnel carrying a member is
+one more hop that can time out quietly. `terva web --fleet-addr` opens a second
+listener for members to check in on, with its own ping and its own reap. See
+[fleet.md](fleet.md).
+
 - **haproxy** applies `timeout client` / `timeout server` to an upgraded
   WebSocket unless you say otherwise. Give tunnels their own, longer timeout:
 

@@ -107,6 +107,7 @@ func PrintHelp(version string) {
 		row{"terva raati \"q\"", i18n.T("convene a three-unit deliberation panel; prints verdict + dissent")},
 		row{"terva ticket ...", i18n.T("work the repository's .tickets/ ledger (embedded git-ticket; `terva ticket ui` browses it full-screen, and `/ticket` opens the same view in the tui; `terva ticket help` lists commands)")},
 		row{"terva web", i18n.T("browser control panel (self-hosted web ui)")},
+		row{"terva member", i18n.T("join a fleet: dial a hub and serve this machine's workspace to it, so one browser reads many daemons (--hub / --origin / --fleet-token-file; needs no web build tag)")},
 		row{"terva attach [URL]", i18n.T("run the TUI as a client of a running terva web daemon (default ws://127.0.0.1:8730/ws; --token / --token-file / TERVA_WEB_TOKEN for auth). Survives daemon restarts; quit and re-attach without disturbing the agent")},
 		row{"terva trust / untrust", i18n.T("manage which directories load project extensions/skills/context")},
 		row{"terva doctor", i18n.T("report effective privilege & deployment posture (uid, no-new-privs, sudo)")},

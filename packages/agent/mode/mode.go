@@ -74,6 +74,17 @@ const (
 	// confined it to the cwd. The first was a bug; the second was right, and is
 	// now said out loud rather than inherited.
 	Bot Mode = "bot"
+	// Member is the fleet check-in daemon (`terva member` / --member): a
+	// workspace that dials a hub and then SERVES ctrlproto back over the
+	// socket it opened, so a hub behind NAT-free reachability can read it
+	// without ever dialling this machine. See packages/agent/fleet and
+	// docs/decisions/0014-fleet-members-dial-in.md.
+	//
+	// It is deliberately not `terva web` with an extra flag. A member serves
+	// its workspace to a hub and needs no browser, and folding it into web
+	// would force the terva_web build tag onto every member. The whole of
+	// packages/agent/fleet carries no tag so that a lean binary can check in.
+	Member Mode = "member"
 )
 
 // all is the roster every per-mode table is checked against. It is a package
@@ -90,6 +101,7 @@ var all = []Mode{
 	Attach,
 	Replay,
 	Bot,
+	Member,
 }
 
 // All returns every run mode terva has, in declaration order.

@@ -71,7 +71,12 @@ func NewMember(opts MemberOptions) (*Member, error) {
 	if opts.Backoff <= 0 {
 		opts.Backoff = DefaultBackoff
 	}
-	return &Member{opts: opts, dial: ctrlclient.DialWebSocket(target, opts.Token)}, nil
+	// Reaping, not the plain dial. The hub reaping its own end frees the source
+	// but cannot reach a member whose tunnel died underneath it, and Run only
+	// re-dials on an error. Without a deadline here the member would sit forever
+	// believing it is checked in, and the hub's reap would shrink the fleet
+	// instead of healing it. See wsconn.go for the full argument.
+	return &Member{opts: opts, dial: ctrlclient.DialWebSocketReaping(target, opts.Token, pongWait)}, nil
 }
 
 // Run checks in and serves until ctx ends, redialling with backoff.

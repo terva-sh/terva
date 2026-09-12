@@ -418,6 +418,7 @@
   "interactive tui": "interactive tui",
   "interactive, pre-filled prompt": "interactive, pre-filled prompt",
   "it names the always-visible built-in tool group": "it names the always-visible built-in tool group",
+  "join a fleet: dial a hub and serve this machine's workspace to it, so one browser reads many daemons (--hub / --origin / --fleet-token-file; needs no web build tag)": "join a fleet: dial a hub and serve this machine's workspace to it, so one browser reads many daemons (--hub / --origin / --fleet-token-file; needs no web build tag)",
   "json-rpc loop on stdin/stdout (see docs/rpc.md)": "json-rpc loop on stdin/stdout (see docs/rpc.md)",
   "light": "light",
   "light (daltonized)": "light (daltonized)",

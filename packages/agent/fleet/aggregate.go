@@ -80,12 +80,42 @@ func (a *Aggregate) Sources() []Source {
 	}
 	if a.hub != nil {
 		for _, origin := range a.hub.Members() {
-			if c, ok := a.hub.Client(origin); ok {
-				out = append(out, Source{Origin: origin, Svc: c.Service()})
+			c, ok := a.hub.Client(origin)
+			// A member the hub is still expecting back is not a source. Hub
+			// members stay listed once they have checked in, because their
+			// client is parked in dial waiting for them, so without this a
+			// machine that lost power keeps appearing live for as long as the
+			// hub runs. Asking it anything returns ErrNotConnected, which the
+			// fan-in would then report through OnSourceError on every single
+			// page load: noise that says nothing a reader did not know.
+			if !ok || !c.Connected() {
+				continue
 			}
+			out = append(out, Source{Origin: origin, Svc: c.Service()})
 		}
 	}
 	return out
+}
+
+// sourceFor resolves one origin WITHOUT asking whether it is connected now.
+//
+// Route wants this and the fan-in does not, which is why they stopped sharing
+// one list. A member that is briefly parked is still a known origin, and
+// answering "unknown origin" for it would send a reader hunting a typo when the
+// truth is a reconnect in progress. The call that follows fails with
+// ErrNotConnected instead, which says the true thing.
+func (a *Aggregate) sourceFor(origin string) (Source, bool) {
+	if a.local != nil && origin == a.localOrigin {
+		return Source{Origin: a.localOrigin, Svc: a.local}, true
+	}
+	if a.hub == nil {
+		return Source{}, false
+	}
+	c, ok := a.hub.Client(origin)
+	if !ok {
+		return Source{}, false
+	}
+	return Source{Origin: origin, Svc: c.Service()}, true
 }
 
 // Sessions is the fan-in: every member's list, concatenated, each entry
@@ -128,10 +158,8 @@ func (a *Aggregate) Route(federated string) (Source, string, error) {
 		}
 		return Source{Origin: a.localOrigin, Svc: a.local}, id, nil
 	}
-	for _, src := range a.Sources() {
-		if src.Origin == origin {
-			return src, id, nil
-		}
+	if src, ok := a.sourceFor(origin); ok {
+		return src, id, nil
 	}
 	return Source{}, "", fmt.Errorf("%w: %q", ErrUnknownOrigin, origin)
 }

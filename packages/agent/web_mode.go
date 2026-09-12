@@ -275,7 +275,16 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 		stopRecord = stop
 	}
 
-	return web.Serve(ctx, ws, web.Options{
+	// A hub is this same server with an aggregating service behind it, not a
+	// second server. With no --fleet-addr, svc stays the local workspace and no
+	// member listener opens, so `terva web` is the daemon it has always been.
+	svc, stopHub, err := fleetServiceFor(ctx, args, ws, version)
+	if err != nil {
+		return err
+	}
+	defer stopHub()
+
+	return web.Serve(ctx, svc, web.Options{
 		Addr:           args.WebAddr,
 		OnListen:       onListen,
 		AuthHeader:     args.WebAuthHeader,

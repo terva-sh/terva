@@ -62,6 +62,11 @@ var modeSurface = map[mode.Mode]Surface{
 	// supervising agent and shown in the swarm pane. Both want markdown; the
 	// envelope is not the audience.
 	mode.SwarmAgent: SurfaceRendered,
+	// A member's sessions are read through a hub's browser, so the audience is
+	// the same one mode.Web serves. The socket direction is inverted and the
+	// reader is not; a member dials out, and a person still reads markdown at
+	// the other end.
+	mode.Member: SurfaceRendered,
 
 	// A chat message.
 	mode.Bot: SurfaceChat,

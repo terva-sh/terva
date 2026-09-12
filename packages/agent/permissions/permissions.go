@@ -302,6 +302,23 @@ var modePosture = map[mode.Mode]struct {
 	mode.SwarmAgent: {core.ApprovalYolo, false},
 	mode.Attach:     {core.ApprovalYolo, false},
 	mode.Replay:     {core.ApprovalYolo, false},
+
+	// A member has nobody to prompt either, and it still does NOT get yolo.
+	//
+	// The modes above are unattended automation that the operator started on
+	// the machine it runs on, for one run they are watching. A member is a
+	// long-lived daemon on another box, and the whole point of it is that
+	// somebody elsewhere reads and eventually drives it. Granting an unjailed
+	// yolo here would make check-in itself an escalation: dial a hub, and the
+	// sessions on this machine quietly gain the right to run any tool anywhere
+	// on the filesystem.
+	//
+	// So it fails closed, the same way postureOf fails closed for a mode with
+	// no row at all. Today that costs nothing, because the hub refuses to route
+	// commands to a member and no turn starts through this daemon. When
+	// fleet-control lands, routing an approval prompt back to whoever is
+	// driving is part of that design, and this row is where the answer changes.
+	mode.Member: {core.ApprovalWorkspace, true},
 }
 
 // postureOf answers for a mode with no posture row, and it fails CLOSED: ask
