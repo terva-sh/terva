@@ -55,6 +55,15 @@ type TicketCard struct {
 	Session func() string
 	// Now is the clock, overridable in a test. nil means time.Now.
 	Now func() time.Time
+	// Open returns the store to render. It is the core's own resolver, so the
+	// card follows a ticket_store switch instead of always describing the
+	// workspace store. nil falls back to discovery from CWD, which is what a
+	// host that wires no core wants.
+	Open func() (*ticket.Store, error)
+	// StoreName is the name of the active store, or empty for the workspace
+	// one. The card names a store only when the session moved off the
+	// workspace store, so a session that never switches reads as it always did.
+	StoreName func() string
 
 	mu    sync.Mutex
 	card  string
@@ -134,9 +143,13 @@ func (c *TicketCard) render() string {
 	if sess == "" {
 		return ""
 	}
-	// No store means no card, and no cost. Discover fails for a workspace that
+	// No store means no card, and no cost. Discovery fails for a workspace that
 	// has none, which is the overwhelming majority of them.
-	s, err := ticket.Discover(c.CWD)
+	open := c.Open
+	if open == nil {
+		open = func() (*ticket.Store, error) { return ticket.Discover(c.CWD) }
+	}
+	s, err := open()
 	if err != nil {
 		return ""
 	}
@@ -147,12 +160,27 @@ func (c *TicketCard) render() string {
 	if err != nil {
 		return ""
 	}
+
+	// A store the session selected is worth naming on its own. Without this the
+	// card would vanish the moment a switch landed on a store holding no claim,
+	// and the model would lose sight of where its next write goes.
+	store := ""
+	if c.StoreName != nil {
+		store = strings.TrimSpace(c.StoreName())
+	}
+
 	held := claimedBySession(all, sess, c.now())
 	if held == nil {
-		return ""
+		if store == "" {
+			return ""
+		}
+		return "store: " + store
 	}
 
 	var b strings.Builder
+	if store != "" {
+		fmt.Fprintf(&b, "store: %s\n", store)
+	}
 	fmt.Fprintf(&b, "claimed: %s %s", held.ID, strings.TrimSpace(held.Title))
 	// The queue counts follow the claim, never lead it. They are context for the
 	// ticket in hand, not a work queue the model should go shopping in.

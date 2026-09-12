@@ -43,6 +43,14 @@ type statusFacts struct {
 	// empty list renders no row at all.
 	PackRegistries []string
 
+	// TicketStores are the ticket stores user configuration names outside the
+	// workspace. Naming one is an authority decision, so it is shown rather
+	// than left to sit unread in a config file. Empty is the default and
+	// renders no row. TicketStoresRefused holds the entries that failed
+	// validation, because a typo must not disable a store in silence.
+	TicketStores        []config.TicketStore
+	TicketStoresRefused []config.TicketStoreRefusal
+
 	ContextTokens int // last turn's real context size (0 = no turn yet)
 	Window        int // model context window in tokens (0 = unknown)
 	Cumulative    core.WireUsage
@@ -70,6 +78,7 @@ func (i *Interactive) slashStatus() {
 	// edit between runs, and /status is where they come to check it.
 	if c, err := config.LoadConfig(); err == nil {
 		f.PackRegistries = c.PackRegistries
+		f.TicketStores, f.TicketStoresRefused = config.ResolveTicketStores(c.TicketStores, config.TervaHome())
 	}
 	if i.cfg.CurrentSessionPath != nil {
 		f.SessPath = i.cfg.CurrentSessionPath()
@@ -161,6 +170,25 @@ func statusRows(th tui.Theme, f statusFacts) []string {
 	// egress guard and should never be invisible.
 	if len(f.PackRegistries) > 0 {
 		rows = append(rows, row(i18n.T("packs"), strings.Join(f.PackRegistries, ", ")))
+	}
+	// Same rule as the packs row. No configured store is the default and says
+	// nothing worth a line. A configured one names a directory outside the jail
+	// that the ticket tools may write, and that should never be invisible.
+	if len(f.TicketStores) > 0 {
+		named := make([]string, 0, len(f.TicketStores))
+		for _, s := range f.TicketStores {
+			named = append(named, s.Name+" "+s.Path)
+		}
+		rows = append(rows, row(i18n.T("ticket stores"), strings.Join(named, ", ")))
+	}
+	// A refused entry is the one a user most needs to see: they configured a
+	// store and it is not there.
+	if len(f.TicketStoresRefused) > 0 {
+		bad := make([]string, 0, len(f.TicketStoresRefused))
+		for _, r := range f.TicketStoresRefused {
+			bad = append(bad, r.Name+": "+r.Reason)
+		}
+		rows = append(rows, row(i18n.T("stores refused"), strings.Join(bad, "; ")))
 	}
 	switch {
 	case f.SessionID != "":

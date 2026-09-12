@@ -19,6 +19,7 @@ import (
 
 	ticket "github.com/terva-sh/git-ticket/ticket"
 
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
@@ -51,16 +52,42 @@ type TicketCore struct {
 	// the one it found. nil for a host that renders no card, which Invalidate
 	// tolerates.
 	Card *TicketCard
+	// Stores is the user-layer store registry, config.ResolveTicketStores
+	// over the ticket_stores key. ticket_store selects from it, and the
+	// qualified-ref lookup in ticket_ref.go resolves against it. It is empty
+	// for a session that configured no store, which is the case the lookup
+	// most needs to answer: the reader holds a ref that names a store they do
+	// not have, and they can now say so.
+	Stores []config.TicketStore
 
-	// labels caches the store's label vocabulary, which the write schemas
-	// carry. Reading it scans every ticket, and Schema runs again on every
-	// tool rebuild, so it is read once per session.
-	labelsOnce sync.Once
-	labels     ticketLabels
+	// storeMu guards the active selection, the label cache, and the memoized
+	// workspace store path. ticket_store changes the first two in the middle
+	// of a session, and two tool calls in one turn can run at the same time.
+	storeMu sync.Mutex
+	active  TicketStoreSelection
+	// wsPath memoizes the workspace store path for the qualified-ref lookup.
+	// Discovery walks the directory tree, and one ticket can carry several
+	// workspace-qualified refs.
+	wsPath     string
+	wsPathErr  error
+	wsPathDone bool
+	// labelsByStore caches each store's label vocabulary, which the write
+	// schemas carry. Reading it scans every ticket, and Schema runs again on
+	// every tool rebuild, so it is read once per store. The cache is keyed by
+	// store rather than filled once, because a switch changes the vocabulary
+	// that the write schemas must offer. A single cache would keep the old
+	// store's labels after a switch.
+	labelsByStore map[string]ticketLabels
 }
 
+// open returns the store the tools currently work against: the one
+// ticket_store selected, or the workspace store when nothing is selected.
 func (c *TicketCore) open() (*ticket.Store, error) {
-	return ticket.Discover(c.CWD)
+	sel := c.ActiveStore()
+	if sel.IsWorkspace() {
+		return ticket.Discover(c.CWD)
+	}
+	return openStoreAt(sel.Path)
 }
 
 // ticketResult marshals a payload as the tool's JSON, and returns a store
@@ -109,9 +136,24 @@ type ticketRow struct {
 type ticketReference struct {
 	Ref  string `json:"ref"`
 	Path string `json:"path,omitempty"`
+	// Store is the <store> half of a qualified ticket:<store>/<id>
+	// reference. It is empty for every other reference, so a bare ref costs
+	// nothing. ticket_ref.go resolves it.
+	Store string `json:"store,omitempty"`
+	// StorePath is the directory that store lives in, set when the registry
+	// resolved it.
+	StorePath string `json:"store_path,omitempty"`
+	// StoreNote says why the lookup failed, and it names the store. It is set
+	// when StorePath is not.
+	StoreNote string `json:"store_note,omitempty"`
 }
 
-func ticketReferences(rs []ticket.Reference) []ticketReference {
+// ticketReferences converts the library's references into terva's casing, and
+// it resolves the store of every qualified one. It hangs on TicketCore because
+// that lookup needs the store registry. A free function could only report a
+// qualified ref as opaque text, which is the failure TKT-01M26CWP exists to
+// remove.
+func (c *TicketCore) ticketReferences(rs []ticket.Reference) []ticketReference {
 	if len(rs) == 0 {
 		return nil
 	}
@@ -123,7 +165,7 @@ func ticketReferences(rs []ticket.Reference) []ticketReference {
 		}
 		out = append(out, ticketReference{Ref: r.Ref, Path: p})
 	}
-	return out
+	return c.annotateTicketRefs(out)
 }
 
 func rowFromTicket(t *ticket.Ticket) ticketRow {
@@ -425,7 +467,7 @@ func (t *TicketGetTool) Execute(ctx context.Context, raw json.RawMessage, progre
 		Notes:              tk.Body.Notes,
 		Comments:           tk.Body.Comments,
 		Summary:            tk.Body.Summary,
-		References:         ticketReferences(tk.References),
+		References:         t.ticketReferences(tk.References),
 		NextStatuses:       ticket.PermittedTransitions(tk.Status),
 		Path:               tk.Path,
 		Revision:           tk.Revision,

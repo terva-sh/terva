@@ -58,7 +58,13 @@ var outsideTrustedOrigin = map[string]string{
 
 func toolUniverse(t *testing.T) map[string]bool {
 	t.Helper()
-	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	home := testsupport.TempDir(t)
+	t.Setenv("TERVA_HOME", home)
+	// ticket_store rides a further gate than its siblings: it registers only
+	// where user config names a store that opens. Configure one before the
+	// build below, or its builtin entry reads as stale and this test demands
+	// the deletion of a live tool.
+	seedConfiguredTicketStore(t, home)
 	// The universe dir is a git repo AND carries a ticket store, so both
 	// families of conditionally registered built-ins (worktree_*, ticket_*)
 	// count as live here rather than reading as stale builtin entries.

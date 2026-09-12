@@ -2193,6 +2193,9 @@ func BuildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 			// a run that has no session to speak of.
 			Card: &tools.TicketCard{CWD: cwd},
 		}
+		// The card resolves its store through the core, so it follows a
+		// ticket_store switch instead of always rendering the workspace store.
+		tc.BindCard()
 		all["ticket_list"] = &tools.TicketListTool{TicketCore: tc}
 		all["ticket_search"] = &tools.TicketSearchTool{TicketCore: tc}
 		all["ticket_get"] = &tools.TicketGetTool{TicketCore: tc}
@@ -2204,6 +2207,32 @@ func BuildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 		all["ticket_claim"] = &tools.TicketClaimTool{TicketCore: tc}
 		all["ticket_comment"] = &tools.TicketCommentTool{TicketCore: tc}
 		all["ticket_fix"] = &tools.TicketFixTool{TicketCore: tc}
+
+		// ticket_store registers only where user configuration names at least one
+		// usable store, so a user who configured none pays nothing for it. A
+		// config that will not load yields no stores, which keeps the feature off
+		// rather than opening anything up, the same fallback fetchPackURL uses.
+		//
+		// It sits inside the workspace-store gate with its siblings. A session
+		// with configured stores but NO workspace store registers ticket_init
+		// instead, by the inverse gate below, and the two halves must never both
+		// appear. Reaching a user store from such a session is a separate change.
+		if ucfg, err := config.LoadConfig(); err == nil {
+			stores, refusedStores := config.ResolveTicketStores(ucfg.TicketStores, config.TervaHome())
+			// The core takes the registry whether or not ticket_store
+			// registers, because the qualified-ref lookup needs it in both
+			// cases. A session with no configured store is the one that most
+			// needs an answer: it holds a ticket:<store>/<id> ref naming a
+			// store it does not have, and an empty registry is what lets it
+			// say so rather than report the ref as absent.
+			tc.Stores = stores
+			if len(stores) > 0 {
+				all["ticket_store"] = &tools.TicketStoreTool{
+					TicketCore: tc,
+					Refused:    refusedStores,
+				}
+			}
+		}
 	}
 	// ticket_init is the INVERSE of that gate: it registers only where there is
 	// no store, so no session ever carries both halves and a repository with a

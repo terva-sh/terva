@@ -113,6 +113,7 @@ func TestEveryStringConfigFieldIsClassified(t *testing.T) {
 		"swarm_tiers.*.weak.reasoning":      "an effort word",
 		"theme":                             "a theme name",
 		"ticket_actor":                      "a git-ticket actor id such as human:alex — an identity a store records beside every write, and public by construction: it is meant to be read by anyone who reads the ledger",
+		"ticket_stores.*":                   "paths into the user's own tree, the same as context_files[]; naming where ticket writes may land is an authority decision, not a secret",
 		"user_name":                         "the user's display name — personal, but not a credential",
 
 		// User-authored command lines. A token pasted inline into one is a real

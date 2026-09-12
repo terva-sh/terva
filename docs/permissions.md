@@ -25,6 +25,11 @@ deliberately not a read boundary:
   surface that exists to be agent-written (the built-in `handoff` skill parks
   session-to-session documents there; requiring `/unjail` for a built-in
   skill would make the jail an obstacle to route around).
+- **Ticket stores** are written through the git-ticket library rather than
+  through `write` or `edit`, so the jail's write boundary never sees them. The
+  store a workspace discovers sits inside the working directory anyway. A
+  user-level store named in user configuration sits outside it by design: see
+  [Ticket stores outside the workspace](#ticket-stores-outside-the-workspace).
 - **Reads** (`read`, `grep`, `glob`, `share_file`) are not confined. The
   `bash` tool has never been path-jailed — it cannot be, short of not
   shipping a shell — so a refused read was always one `cat` away. Enforcing
@@ -332,6 +337,42 @@ bare legacy bool and has not yet declared an authority; once it declares
 `network-read` — which it should, and which is tracked in
 [standard-tools.md](standard-tools.md) — those calls will ask like any other
 foreign network tool. **Mark network tools `network-read`, not `read_only`.**
+
+### Ticket stores outside the workspace
+
+The `ticket_*` tools write through the git-ticket library, not through `write`
+or `edit`, so the jail's write boundary never applies to them. What keeps the
+default store local is `ticket.DiscoverWith`, which walks up from the working
+directory and stops at the git root, because a store above that root belongs to
+a different repository. Outside a git repository that break never fires and the
+walk reaches the filesystem root, so a store at `~/.tickets` is already
+reachable from any non-git directory under your home.
+
+`ticket_stores` in user configuration names further stores, each one a name and
+a path. A store named there can sit anywhere, including outside the working
+directory. The key does not exist on the project layer, so a cloned repository
+cannot name a path. `pack_registries` follows the same rule: configuration is
+inside the trust boundary and an arbitrary path is not.
+
+A write to a store outside the workspace stays `workspace-mutation`, the class
+such a write already carried. The act does not change and only its destination
+differs, so the mode table above applies with no special case. The write runs
+in `workspace` and `auto-edit`, and `plan` refuses it. It does not prompt,
+because the user records consent when they name the path.
+
+`local-data` would have been the wrong class. It is auto-allowable in every
+mode precisely because its destination is host-controlled, at
+`$TERVA_HOME/ext-data/<name>`, and no tool argument can move it. A path from
+user configuration is not host-managed, so giving it `local-data` would widen a
+class that never asks until it covers a destination the host did not choose.
+
+The feature ships off. With no `ticket_stores` key the tools discover the
+workspace store as before. When the key is present, `ticket_store` switches the
+active store for the session, the other ticket tools work against the most
+recent selection, and the ticket context card names the active store.
+`ticket_store` selects among destinations that configuration already named, so
+it behaves like `activate_tools`: it changes what the tools reach, and it
+grants no authority of its own.
 
 ### Outbound network safety (egress guard)
 

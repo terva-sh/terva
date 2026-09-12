@@ -249,13 +249,33 @@ type Config struct {
 	// for a single run. User layer only.
 	Lore *bool `json:"lore,omitempty"`
 
-	// Tickets enables the ten ticket_* tools wherever a .tickets store
+	// Tickets enables the ticket_* tools wherever a .tickets store
 	// governs the session cwd, and the ticket guidance addendum with them.
 	// nil/missing means the default, which is on; false drops both for this
 	// user. The --no-ticket flag does the same for a single run, and a
 	// project may also set false (restrict-only; see ProjectConfig.Tickets).
 	// The `terva ticket` command is unaffected by all three.
 	Tickets *bool `json:"tickets,omitempty"`
+
+	// TicketStores names ticket stores that live outside the workspace, each
+	// entry a short name and a filesystem path. The workspace store needs no
+	// entry: it is discovered from the session cwd and always available under
+	// the name "workspace". ticket_store switches the active store for a
+	// session, and the other ticket tools follow the most recent selection.
+	//
+	// User layer only, and here that is a security property rather than a
+	// convention. An entry names a directory outside the jail that the ticket
+	// tools may write, so a cloned repository able to set it would choose
+	// where an agent writes. ProjectConfig carries no counterpart key and
+	// ResolveConfig names no override, so this stays user-only by
+	// construction as long as nobody adds it to either.
+	// TestTicketStoresIsUserLayerOnly holds that.
+	//
+	// Empty, the default, leaves the ticket tools exactly as they were: they
+	// discover the workspace store and reach nothing else. A write to a store
+	// named here stays workspace-mutation, because the act is unchanged and
+	// only its destination differs. See docs/permissions.md.
+	TicketStores map[string]string `json:"ticket_stores,omitempty"`
 
 	// UserName is what a character card's {{user}} macro resolves to — the name
 	// the user would like the character to address them by in chat/play. It is a

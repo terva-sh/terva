@@ -121,6 +121,12 @@ var readOnly = map[string]bool{
 	"ticket_get":    true,
 	"ticket_ready":  true,
 	"ticket_check":  true,
+	// ticket_store selects which configured store the tools above and their
+	// write siblings reach. It classifies like activate_tools: it changes what
+	// the tools reach and grants no authority of its own. User configuration
+	// already named every store it can select, and each write to the selected
+	// store still faces its own gate. See docs/permissions.md.
+	"ticket_store": true,
 }
 
 // editTools names the file editors auto-edit additionally allows:
@@ -186,6 +192,7 @@ var builtin = map[string]bool{
 	"ticket_claim":      true,
 	"ticket_comment":    true,
 	"ticket_fix":        true,
+	"ticket_store":      true,
 	// ticket_init creates the store the other eleven work. It is first-party
 	// and it is a write: it puts .tickets/, .gitattributes and AGENTS.md in
 	// the user's repository, so it stays out of readOnly with its six write

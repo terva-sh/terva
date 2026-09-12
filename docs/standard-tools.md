@@ -187,7 +187,7 @@ in the lazy group `worktree` under `lazy_tools`, share their engine
 keep state under `$TERVA_HOME/worktrees/` (extension-era state migrates on
 first touch; existing checkouts stay at their old paths).
 
-**Store-conditional built-ins**: the eleven `ticket_*` tools (slices 2 and 3
+**Store-conditional built-ins**: the `ticket_*` tools (slices 2 and 3
 of `docs/plans/git-ticket.md`) join the registry only when a `.tickets/`
 store governs the session cwd, probed with `ticket.Discover` once per
 registry build. The read five — `ticket_list`, `ticket_search`,
@@ -199,7 +199,15 @@ user's repository and lands in their next commit, so plan mode prunes them
 and a headless non-yolo gate refuses them. `ticket_fix` is the one to read
 twice: it is `ticket_check`'s other half and its name rhymes with a read,
 but it moves and rewrites files in the store, so it sits with the writes.
-All eleven call git-ticket's `ticket` package directly for structured
+`ticket_store` is a twelfth, and it rides a further gate: it registers only
+where the user config key `ticket_stores` names at least one store that
+opens. It selects which store the other tools work against, so it
+classifies like `activate_tools` rather than like a read or a write. It
+changes what the tools reach and grants no authority of its own, every
+destination it can select is one user configuration already named, and each
+write to the selected store still faces its own gate. See
+[permissions.md](permissions.md#ticket-stores-outside-the-workspace).
+They all call git-ticket's `ticket` package directly for structured
 values — the `terva ticket` CLI subcommand embeds the same library's `cli`
 package, so the two surfaces cannot drift from each other. Both track the
 version `go.mod` pins, currently v0.14.3. A `git-ticket` binary installed

@@ -49,7 +49,7 @@ func (c *TicketCore) freshRow(ctx context.Context, s *ticket.Store, ref string) 
 	}
 	return ticketWriteOut{
 		ticketRow:  rowFromTicket(tk),
-		References: ticketReferences(tk.References),
+		References: c.ticketReferences(tk.References),
 		Revision:   tk.Revision,
 		Path:       tk.Path,
 	}, nil
@@ -567,7 +567,7 @@ func (t *TicketClaimTool) Execute(ctx context.Context, raw json.RawMessage, prog
 	}
 	out := ticketClaimOut{ticketWriteOut: ticketWriteOut{
 		ticketRow:  rowFromTicket(tk),
-		References: ticketReferences(tk.References),
+		References: t.ticketReferences(tk.References),
 		Revision:   tk.Revision,
 		Path:       tk.Path,
 	}}

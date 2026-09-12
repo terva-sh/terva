@@ -27,9 +27,29 @@ type ticketLabels struct {
 // labelVocabulary reads the store's labels once and keeps the answer. A full
 // scan of this repository's store costs about 56ms, and Schema runs again on
 // every tool rebuild, so the cache earns its place.
+// labelVocabulary caches per store, not once per session. ticket_store can
+// switch stores mid-session, and each store declares its own labels, so a
+// single cache would offer the previous store's vocabulary in the write
+// schemas. The read runs outside the lock, because it opens the store.
 func (c *TicketCore) labelVocabulary() ticketLabels {
-	c.labelsOnce.Do(func() { c.labels = c.readLabelVocabulary() })
-	return c.labels
+	key := c.ActiveStore().Path
+
+	c.storeMu.Lock()
+	cached, ok := c.labelsByStore[key]
+	c.storeMu.Unlock()
+	if ok {
+		return cached
+	}
+
+	v := c.readLabelVocabulary()
+
+	c.storeMu.Lock()
+	if c.labelsByStore == nil {
+		c.labelsByStore = map[string]ticketLabels{}
+	}
+	c.labelsByStore[key] = v
+	c.storeMu.Unlock()
+	return v
 }
 
 // readLabelVocabulary asks the config first, because a declared list is a
