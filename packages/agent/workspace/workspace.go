@@ -370,6 +370,15 @@ func NewWorkspace(args build.Args, version string) (*Workspace, error) {
 	swarmCfg.NewRunner = w.newRunner
 	w.swarm = swarm.New(swarmCfg)
 	_, _ = w.swarm.Reload()
+	// Retire the records Reload just re-registered that nobody has wanted for a
+	// week. Straight after Reload, because that is the one moment the live tree
+	// is fully populated and no child is running yet.
+	//
+	// Errors are dropped rather than surfaced: a state directory this cannot
+	// read is the same directory Reload already skipped, and a launch must not
+	// fail over housekeeping. The sweep archives and never removes, so the worst
+	// outcome is a record compressed a week early.
+	_, _ = w.swarm.SweepRetention(config.SwarmRetentionAge())
 	go w.pollTasks()
 
 	// Start the configured MCP servers once for the whole daemon; their tools are

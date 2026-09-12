@@ -44,6 +44,17 @@ type SwarmDialog struct {
 	// nil reads better than an eighth every caller has to pass. Nil means the
 	// key is simply not offered, which is right for a host with no swarm.
 	archive func(id string) error
+	// sweep runs the retention sweep on demand. Installed by SetSweep, for
+	// SetArchive's reason. Nil means the key is not offered.
+	//
+	// It takes no id: the sweep decides its own scope from the configured
+	// retention, and a per-row variant would just be 'a' with extra steps.
+	//
+	// It reports no count, because it cannot. The only live backend is the
+	// carrier, whose surface actions carry no result payload (the same reason
+	// a spawn's new id does not ride back). The list refetching with fewer
+	// rows is the report.
+	sweep func() error
 	// spawn accepts an optional model + provider override (empty
 	// strings mean "let the child resolve its own default"). The cli
 	// adapter forwards these to swarm.Swarm.SpawnReq.
@@ -192,9 +203,16 @@ func (d *SwarmDialog) Open(
 	d.refresh()
 }
 
+// SetSweep installs the on-demand retention sweep (swarm.SweepRetention:
+// archive every finished agent past the retention age). Optional, and a dialog
+// without one does not offer the key at all, rather than offering it and
+// failing.
+func (d *SwarmDialog) SetSweep(fn func() error) { d.sweep = fn }
+
 // SetArchive installs the one-way archive callback (swarm.Archive: compress the
-// record, move it out of the live tree, forget it). Optional — a dialog without
-// one does not offer the key at all, rather than offering it and failing.
+// record, move it out of the live tree, forget it). Optional, and a dialog
+// without one does not offer the key at all, rather than offering it and
+// failing.
 func (d *SwarmDialog) SetArchive(fn func(id string) error) { d.archive = fn }
 
 // CursorPos returns the row/col for the terminal cursor while an
@@ -276,6 +294,7 @@ func (d *SwarmDialog) transcriptEditorCursorRow(width, popupRows, editorRowOffse
 	row := 1 // frame header
 	row++    // padDialogFrame blank row after header (next row is task metadata)
 	row += 3 // task / dir / status (mirrors renderTranscript's fixed header rows)
+	row += len(transcriptHomeLines(a))
 	if a.Model != "" {
 		row++
 	}
@@ -600,6 +619,16 @@ func (d *SwarmDialog) HandleKey(k tui.Key) (closed bool, msg, errMsg string) {
 				// delete; the transcript being on disk and readable without
 				// terva is the whole difference from 'r'.
 				return false, i18n.T("archived %s — compressed under swarm/archive/", a.ID), ""
+			}
+		case 's':
+			if d.sweep != nil {
+				if err := d.sweep(); err != nil {
+					return false, "", i18n.T("sweep: %s", err)
+				}
+				// Name the destination, as 'a' does. The rows that leave the
+				// list are not deleted, and that is the whole difference from
+				// 'r'.
+				return false, i18n.T("swept finished agents past the retention — compressed under swarm/archive/"), ""
 			}
 		}
 	}
@@ -1025,7 +1054,7 @@ func (d *SwarmDialog) Render(th tui.Theme, width int) []string {
 		return d.renderTranscript(th, width)
 	}
 
-	out := []string{FrameHeader(th, i18n.T("swarm (n new, p prompt, R resume, ↑/↓ move, enter view, k kill, a archive, r remove, esc close)"), width)}
+	out := []string{FrameHeader(th, i18n.T("swarm (n new, p prompt, R resume, ↑/↓ move, enter view, k kill, a archive, s sweep, r remove, esc close)"), width)}
 	if d.prompting {
 		return d.renderPromptEditor(th, width, out)
 	}
@@ -1126,8 +1155,11 @@ func (d *SwarmDialog) renderTranscript(th tui.Theme, width int) []string {
 		FrameHeader(th, i18n.T("swarm: %s  (type to send, esc back)", a.ID), width),
 		"  " + th.FG256(th.Muted, i18n.T("task: %s", a.Task)),
 		"  " + th.FG256(th.Muted, i18n.T("dir: %s", a.Dir)),
-		"  " + th.FG256(th.Muted, statusLine),
 	}
+	for _, line := range transcriptHomeLines(a) {
+		header = append(header, "  "+th.FG256(th.Muted, line))
+	}
+	header = append(header, "  "+th.FG256(th.Muted, statusLine))
 	if a.Model != "" {
 		modelLine := i18n.T("model: %s", a.Model)
 		if a.Provider != "" {
@@ -1247,6 +1279,32 @@ func (d *SwarmDialog) appendTranscriptEditor(out []string, th tui.Theme, width i
 	}
 	out = append(out, "")
 	out = append(out, "  "+th.FG256(th.Muted, i18n.T("enter send, @ file/dir picker, esc back")))
+	return out
+}
+
+// transcriptHomeLines names where an agent's files are, beyond the dir line.
+//
+// dir alone misleads in two ways. For a leased agent it is the worktree, and
+// the project the agent belongs to is somewhere else. For a reloaded agent it
+// is the reader's own cwd: buildDetachedAgent overwrote it so a resume would
+// not continue editing a stale checkout, and Swarm.Reload walks one root for
+// every project, so that agent may have come from another one entirely.
+//
+// The lines come back unstyled so renderTranscript can colour them and
+// transcriptEditorCursorRow can count them. Those two mirrored each other by
+// hand before this helper existed, and a header row that only one of them knows
+// about is how a caret drifts off its editor.
+func transcriptHomeLines(a *swarm.AgentSnapshot) []string {
+	if a == nil {
+		return nil
+	}
+	var out []string
+	if origin := strings.TrimSpace(a.Origin); origin != "" && origin != strings.TrimSpace(a.Dir) {
+		out = append(out, i18n.T("project: %s", origin))
+	}
+	if a.Leased && a.Status == swarm.StatusDetached {
+		out = append(out, i18n.T("this agent lost its own worktree, so dir is the host tree now"))
+	}
 	return out
 }
 
@@ -1417,12 +1475,21 @@ func (d *SwarmDialog) renderPromptEditor(th tui.Theme, width int, out []string) 
 	return out
 }
 
-// swarmRowFixedWidth is what STATUS + ID + AGE and their gutters cost, and
-// swarmProgressWidth what TURNS + TOOLS add. Metadata uses fixed cells so the
-// header and rows stay aligned while long provider and model names truncate.
+// swarmRowFixedWidth is what STATUS + ID + AGE and their gutters cost,
+// swarmProgressWidth what TURNS + TOOLS add, and swarmHomeWidth what HOME
+// adds. Metadata uses fixed cells so the header and rows stay aligned while
+// long provider and model names truncate.
+//
+// The ID cell is 18 rather than the 26 it carried until HOME arrived. An agent
+// id is a task slug plus an entropy suffix, so 26 columns bought a reader eight
+// more characters of a number that distinguishes two agents and describes
+// neither. HOME spends the same width on the tree the worker edits.
 const (
-	swarmRowFixedWidth          = 9 + 2 + 26 + 2 + 8 + 2
+	swarmIDWidth                = 18
+	swarmRowFixedWidth          = 9 + 2 + swarmIDWidth + 2 + 8 + 2
 	swarmProgressWidth          = 5 + 2 + 5 + 2
+	swarmHomeCellWidth          = 18
+	swarmHomeWidth              = swarmHomeCellWidth + 2
 	swarmMetadataProviderWidth  = 12
 	swarmMetadataModelWidth     = 24
 	swarmMetadataReasoningWidth = 10
@@ -1431,44 +1498,55 @@ const (
 )
 
 // swarmLayout chooses the optional columns in descending order of value. A
-// wide terminal carries execution metadata and progress counters. At the next
-// width, metadata wins because it answers which worker is running. Narrow
+// wide terminal carries execution metadata, the home tree, and the progress
+// counters. The counters yield first because they only ever climb and the
+// activity cell already carries the quiet timer. HOME yields next. Metadata
+// outlives both because it answers which worker is running at all. Narrow
 // terminals keep the original status, id, age, and activity view.
-func swarmLayout(maxWidth int) (metadata, progress bool) {
-	if maxWidth >= swarmRowFixedWidth+swarmMetadataWidth+swarmProgressWidth+swarmMinActivityCol {
-		return true, true
+func swarmLayout(maxWidth int) (metadata, home, progress bool) {
+	switch {
+	case maxWidth >= swarmRowFixedWidth+swarmMetadataWidth+swarmHomeWidth+swarmProgressWidth+swarmMinActivityCol:
+		return true, true, true
+	case maxWidth >= swarmRowFixedWidth+swarmMetadataWidth+swarmHomeWidth+swarmMinActivityCol:
+		return true, true, false
+	case maxWidth >= swarmRowFixedWidth+swarmMetadataWidth+swarmMinActivityCol:
+		return true, false, false
+	case maxWidth >= swarmRowFixedWidth+swarmProgressWidth+swarmMinActivityCol:
+		return false, false, true
 	}
-	if maxWidth >= swarmRowFixedWidth+swarmMetadataWidth+swarmMinActivityCol {
-		return true, false
-	}
-	if maxWidth >= swarmRowFixedWidth+swarmProgressWidth+swarmMinActivityCol {
-		return false, true
-	}
-	return false, false
+	return false, false, false
 }
 
 // swarmProgressFits reports whether the dashboard is wide enough to carry the
 // progress columns AND leave the activity column readable. Metadata takes
 // precedence when both optional layouts would fit.
 func swarmProgressFits(maxWidth int) bool {
-	_, progress := swarmLayout(maxWidth)
+	_, _, progress := swarmLayout(maxWidth)
 	return progress
 }
 
 func swarmMetadataFits(maxWidth int) bool {
-	metadata, _ := swarmLayout(maxWidth)
+	metadata, _, _ := swarmLayout(maxWidth)
 	return metadata
+}
+
+func swarmHomeFits(maxWidth int) bool {
+	_, home, _ := swarmLayout(maxWidth)
+	return home
 }
 
 // swarmListHeader is the column header, matched to whatever formatSwarmRow
 // will emit at this width.
 func swarmListHeader(maxWidth int) string {
-	metadata, progress := swarmLayout(maxWidth)
-	header := fmt.Sprintf("  %-9s  %-26s  %-8s  ",
-		i18n.T("STATUS"), i18n.T("ID"), i18n.T("AGE"))
+	metadata, home, progress := swarmLayout(maxWidth)
+	header := fmt.Sprintf("  %-9s  %-*s  %-8s  ",
+		i18n.T("STATUS"), swarmIDWidth, i18n.T("ID"), i18n.T("AGE"))
 	if metadata {
 		header += fmt.Sprintf("%-12s  %-24s  %-10s  ",
 			i18n.T("PROVIDER"), i18n.T("MODEL"), i18n.T("REASONING"))
+	}
+	if home {
+		header += fmt.Sprintf("%-*s  ", swarmHomeCellWidth, i18n.T("HOME"))
 	}
 	if progress {
 		header += fmt.Sprintf("%5s  %5s  ", i18n.T("TURNS"), i18n.T("TOOLS"))
@@ -1497,23 +1575,26 @@ func quietFor(r swarm.AgentSnapshot) string {
 //
 // Layout (fixed-width columns, then free-form activity):
 //
-//	STATUS    ID                          AGE       PROVIDER      MODEL                     REASONING   TURNS  TOOLS  ACTIVITY
-//	● run     fix-login-12345             3m        anthropic     claude-sonnet-4-5         medium         14     62  editing main.go · 4s
-//	✓ done    write-tests-67890           1h        default       default                   default         9     31  done
+//	STATUS    ID                  AGE       PROVIDER      MODEL                     REASONING   HOME                 TURNS  TOOLS  ACTIVITY
+//	● run     fix-login-12345     3m        anthropic     claude-sonnet-4-5         medium      *~/w/g/terva-fixes      14     62  editing main.go · 4s
+//	✓ done    write-tests-67890   1h        default       default                   default      ~/src/terva             9     31  done
 //
-// Metadata and progress columns yield together on a narrow terminal. At an
-// intermediate width metadata stays visible and the counters yield. TURNS and
-// TOOLS only ever climb, and the "· 4s" is time since the agent's last event.
+// The optional columns yield one group at a time as the terminal narrows: the
+// counters first, then HOME, then metadata. TURNS and TOOLS only ever climb,
+// and the "· 4s" is time since the agent's last event.
 func formatSwarmRow(r swarm.AgentSnapshot, maxWidth int) string {
 	status := statusLabel(r.Status)
 	age := formatAge(r.Started)
-	metadata, progress := swarmLayout(maxWidth)
-	left := fmt.Sprintf("%-9s  %-26s  %-8s  ", status, truncateLineSafe(r.ID, 26), age)
+	metadata, home, progress := swarmLayout(maxWidth)
+	left := fmt.Sprintf("%-9s  %-*s  %-8s  ", status, swarmIDWidth, truncateLineSafe(r.ID, swarmIDWidth), age)
 	if metadata {
 		left += fmt.Sprintf("%-12s  %-24s  %-10s  ",
 			swarmMetadataCell(r.Provider, swarmMetadataProviderWidth),
 			swarmMetadataCell(r.Model, swarmMetadataModelWidth),
 			swarmMetadataCell(r.Reasoning, swarmMetadataReasoningWidth))
+	}
+	if home {
+		left += fmt.Sprintf("%-*s  ", swarmHomeCellWidth, swarmHomeCell(r, swarmHomeCellWidth))
 	}
 	if progress {
 		left += fmt.Sprintf("%5d  %5d  ", r.Turns, r.ToolCalls)
@@ -1545,6 +1626,32 @@ func formatSwarmRow(r swarm.AgentSnapshot, maxWidth int) string {
 		}
 	}
 	return row
+}
+
+// swarmHomeCell names the tree a worker is homed in.
+//
+// It reads Origin, the project the agent belongs to, and falls back to Dir only
+// for a record written before Origin existed. It never prefers Dir, because
+// buildDetachedAgent overwrites Dir with the reader's own cwd for every
+// reloaded agent, whichever project that agent came from. A column built on Dir
+// would report a whole dashboard of other projects' agents as living here.
+//
+// A leading "*" marks a leased agent. Two workers of one project differ only in
+// whether one holds its own checkout, so that is the fact the marker has to
+// carry. The leased directory's own name would carry nothing: build.SlugAgent
+// derives it from the agent id the ID column already prints.
+func swarmHomeCell(r swarm.AgentSnapshot, width int) string {
+	home := strings.TrimSpace(r.Origin)
+	if home == "" {
+		home = strings.TrimSpace(r.Dir)
+	}
+	if home == "" {
+		return "-"
+	}
+	if r.Leased {
+		return "*" + shortenPath(home, width-1)
+	}
+	return shortenPath(home, width)
 }
 
 // swarmMetadataCell gives inherited settings an explicit value instead of an

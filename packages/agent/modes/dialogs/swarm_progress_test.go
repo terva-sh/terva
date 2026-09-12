@@ -22,7 +22,9 @@ func TestSwarmRowShowsProgress(t *testing.T) {
 	}}
 	d := NewSwarmDialog()
 	d.Open(staticSnapshots(rows...), nil, nil, nil, nil, nil, "")
-	out := strings.Join(d.Render(tui.Theme{}, 140), "\n")
+	// 160 rather than the 140 this test used before HOME existed. The row
+	// carries five column groups now, and every one of them fits from 143 up.
+	out := strings.Join(d.Render(tui.Theme{}, 160), "\n")
 
 	for _, want := range []string{"PROVIDER", "MODEL", "REASONING", "anthropic", "claude-sonnet-4-5", "medium", "TURNS", "TOOLS", "14", "62", "idle · 4s"} {
 		if !strings.Contains(out, want) {

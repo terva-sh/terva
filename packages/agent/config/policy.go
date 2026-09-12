@@ -2,6 +2,7 @@ package config
 
 import (
 	"strings"
+	"time"
 
 	"terva.sh/terva/packages/core"
 )
@@ -55,6 +56,32 @@ func ExternalWorkersEnabled() bool {
 		return false
 	}
 	return cfg.ExternalWorkersEnabled != nil && *cfg.ExternalWorkersEnabled
+}
+
+// DefaultSwarmRetentionDays is how long a finished swarm agent's record stays
+// in the live tree when swarm_retention_days is not set.
+//
+// A week, because the record's value decays fast but not instantly: a person
+// who wants to read what a sub-agent did wants it the same day or the next
+// one, and the archive keeps the record afterwards rather than destroying it.
+const DefaultSwarmRetentionDays = 7
+
+// SwarmRetentionAge is how old a finished agent must be before the retention
+// sweep archives it. Zero means the sweep is off, which is what a configured
+// zero or negative value asks for.
+//
+// Read live per call, like AutoSwarmEnabled, so a config edit applies without
+// restarting the session. A config that fails to load returns the default
+// rather than zero: an unreadable file is not a request to disable anything.
+func SwarmRetentionAge() time.Duration {
+	days := DefaultSwarmRetentionDays
+	if cfg, err := LoadConfig(); err == nil && cfg.SwarmRetentionDays != nil {
+		days = *cfg.SwarmRetentionDays
+	}
+	if days <= 0 {
+		return 0
+	}
+	return time.Duration(days) * 24 * time.Hour
 }
 
 // AutoSwarmNudgeEnabled reports whether the proactive-delegation nudge (the

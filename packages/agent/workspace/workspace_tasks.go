@@ -187,6 +187,17 @@ func (w *Workspace) taskAction(sessionID, action string, args map[string]string)
 		err = w.swarm.Remove(id)
 	case "archive":
 		err = w.swarm.Archive(id)
+	case "sweep":
+		// The on-demand half of the retention sweep the daemon already runs at
+		// startup. Same scope and the same 8-hour floor: terminal agents only,
+		// archived and never removed.
+		//
+		// The count does not ride back, for the reason spawn's id does not:
+		// actions carry no result payload. The pane refetching with fewer rows
+		// is the report.
+		if _, errs := w.swarm.SweepRetention(config.SwarmRetentionAge()); len(errs) > 0 {
+			err = errs[0]
+		}
 	case "resume":
 		_, err = w.swarm.Resume(w.ctx, id)
 	case "send":

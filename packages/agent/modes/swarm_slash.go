@@ -42,6 +42,7 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		stopFn     func(id string) error
 		removeFn   func(id string) error
 		archiveFn  func(id string) error
+		sweepFn    func() error
 		spawnFn    func(f spawnFlags) (string, error)
 		sendFn     func(id, text string) error
 		resumeFn   func(id string) (string, error)
@@ -52,6 +53,7 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 		stopFn = func(id string) error { return i.carrierTaskAction("stop", map[string]string{"id": id}) }
 		removeFn = func(id string) error { return i.carrierTaskAction("remove", map[string]string{"id": id}) }
 		archiveFn = func(id string) error { return i.carrierTaskAction("archive", map[string]string{"id": id}) }
+		sweepFn = func() error { return i.carrierTaskAction("sweep", nil) }
 		spawnFn = func(f spawnFlags) (string, error) {
 			return "", i.carrierTaskAction("spawn", map[string]string{
 				"task": f.Task, "model": f.Model, "provider": f.Provider,
@@ -124,6 +126,7 @@ func (i *Interactive) runSwarm(ctx context.Context, args []string) {
 	switch sub {
 	case "", "list", "ls", "ps":
 		i.swarmDialog.SetArchive(archiveFn)
+		i.swarmDialog.SetSweep(sweepFn)
 		i.swarmDialog.Open(
 			snapshotFn,
 			stopFn,

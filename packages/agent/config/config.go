@@ -228,6 +228,21 @@ type Config struct {
 	// --swarm-worktrees flag overrides this for a single run.
 	SwarmWorktrees *bool `json:"swarm_worktrees,omitempty"`
 
+	// SwarmRetentionDays is how long a finished swarm agent's record stays in
+	// the live tree before the retention sweep archives it. nil/missing means
+	// DefaultSwarmRetentionDays. Zero or negative turns the sweep off.
+	//
+	// The sweep only ever archives, and only an agent in a terminal state. It
+	// never removes a record and never touches a running or pending agent,
+	// whatever its quiet time. swarm.RetentionFloor is a hard lower bound that
+	// this key cannot lower, so a small value cannot reach an agent that
+	// finished minutes ago.
+	//
+	// Days rather than a duration string because the value a person wants here
+	// is "about a week" or "about a month", and a unit they cannot mistype is
+	// worth more than a precision nobody uses.
+	SwarmRetentionDays *int `json:"swarm_retention_days,omitempty"`
+
 	// RecursiveFileSuggest controls the @-mention file picker. nil/missing
 	// or true fuzzy-searches the whole project tree below the working
 	// directory — the default, matching the web composer's @-stage; false

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"terva.sh/terva/packages/testsupport"
 )
@@ -383,6 +384,69 @@ func TestResolveConfigFallsBackToUserWhenNoProject(t *testing.T) {
 func jsonString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+// TestConfigSwarmRetentionDaysRoundTrip verifies the swarm_retention_days key
+// survives a SaveConfig/LoadConfig round trip, parses from JSON, and resolves
+// to the durations the retention sweep is documented to use.
+//
+// TERVA_HOME is pinned because this asserts a DEFAULT. Without it the absent
+// case reads whatever the developer running the test has configured, which
+// passes in CI and fails for anyone who set the key.
+func TestConfigSwarmRetentionDaysRoundTrip(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+
+	// Absent in JSON => nil pointer, and the documented default age.
+	if err := SaveConfig(Config{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SwarmRetentionDays != nil {
+		t.Fatalf("SwarmRetentionDays = %v; want nil when absent", *got.SwarmRetentionDays)
+	}
+	if want := DefaultSwarmRetentionDays * 24 * time.Hour; SwarmRetentionAge() != want {
+		t.Fatalf("SwarmRetentionAge() with no key = %v, want %v", SwarmRetentionAge(), want)
+	}
+
+	// An explicit value survives the round trip and drives the age.
+	thirty := 30
+	if err := SaveConfig(Config{SwarmRetentionDays: &thirty}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SwarmRetentionDays == nil || *got.SwarmRetentionDays != 30 {
+		t.Fatalf("SwarmRetentionDays = %v; want 30", got.SwarmRetentionDays)
+	}
+	if want := 30 * 24 * time.Hour; SwarmRetentionAge() != want {
+		t.Fatalf("SwarmRetentionAge() at 30 days = %v, want %v", SwarmRetentionAge(), want)
+	}
+
+	// Zero and negative both mean "do not sweep", which the caller reads as a
+	// zero duration and skips on. They must never fall back to the default,
+	// because that would sweep for somebody who asked for no sweeping.
+	for _, off := range []int{0, -1} {
+		if err := SaveConfig(Config{SwarmRetentionDays: &off}); err != nil {
+			t.Fatal(err)
+		}
+		if age := SwarmRetentionAge(); age != 0 {
+			t.Fatalf("SwarmRetentionAge() at %d days = %v, want 0 (off)", off, age)
+		}
+	}
+
+	// And it parses from a raw JSON config using the snake_case key.
+	var c Config
+	if err := json.Unmarshal([]byte(`{"swarm_retention_days":14}`), &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.SwarmRetentionDays == nil || *c.SwarmRetentionDays != 14 {
+		t.Fatalf("parsed SwarmRetentionDays = %v; want 14", c.SwarmRetentionDays)
+	}
 }
 
 // TestConfigSwarmWorktreesRoundTrip verifies the swarm_worktrees key

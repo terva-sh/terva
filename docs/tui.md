@@ -280,8 +280,20 @@ Background subagents that run alongside your main session. Each one is a separat
 | `p` | One-off prompt editor for the selected row (without entering the transcript). |
 | `R` | Resume a stopped agent in place. |
 | `k` | Kill the selected running agent. Its session and state stay so you can resume it later. |
+| `a` | Archive the selected agent: compress its record under `$TERVA_HOME/swarm/archive/` and drop it from the list. One-way, and terva cannot read it back. |
 | `r` | Remove the selected agent entirely (session + meta gone). |
+| `s` | Sweep now: archive every finished agent past the retention age (see below). |
 | `esc` | Close the dashboard. |
+
+**Retention** — finished agents do not pile up forever. On startup, and whenever you press `s`, terva archives every sub-agent that reached a terminal state (`done`, `failed`, `killed`, or `detached`) longer than `swarm_retention_days` ago. The default is 7 days; set the key to `0` to switch the sweep off.
+
+Three things bound it, and they are the whole safety story:
+
+- **It archives, and never removes.** The record is gzipped under `$TERVA_HOME/swarm/archive/` and recoverable with `gunzip` alone. No automatic path in terva deletes a transcript.
+- **It never touches a live agent.** A `running` or `pending` sub-agent is left alone however long it has been quiet. An idle agent is usually one waiting on its inbox for a follow-up turn, and elapsed silence cannot tell that apart from one waiting on a slow tool.
+- **An 8-hour floor outranks the setting.** Whatever `swarm_retention_days` says, nothing that went quiet in the last 8 hours is swept. A small value cannot reach an agent that finished this morning.
+
+Why it exists: `Reload` reads the tail of every agent's event log at every launch, so a directory that only grows makes every start slower.
 
 **Inside an agent's transcript** — a chat overlay with an always-on inline composer at the bottom. The conversation flows above it; type and `enter` to send a follow-up. The view auto-follows streaming output and shows an inline spinner with the agent's current activity (`thinking`, `tool: edit_file`, etc.) while it's busy. `esc` returns to the dashboard.
 

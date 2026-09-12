@@ -952,7 +952,15 @@ type AgentSnapshot struct {
 	// there" from "the child's files are in your tree" — and the auto-swarm
 	// recap has to tell a coordinator which, or its report of a written file is
 	// a path the coordinator will look for in the wrong checkout.
-	Leased   bool
+	Leased bool
+	// Origin is the RepoRoot of the swarm that spawned this agent, which is the
+	// project it belongs to. Dir cannot answer that question for a reloaded
+	// agent: buildDetachedAgent overwrites Dir with the live RepoRoot so a
+	// resume does not continue editing a stale checkout, and Reload walks one
+	// root for every project. Every detached row therefore reports the reader's
+	// own cwd as its directory, whichever project it came from. Empty for a
+	// record written before Agent.Origin existed.
+	Origin   string
 	Status   Status
 	Activity string
 
@@ -1121,7 +1129,7 @@ func (a *Agent) Snapshot() AgentSnapshot {
 		errStr = a.lastErr.Error()
 	}
 	return AgentSnapshot{
-		ID: a.ID, Task: a.Task, Dir: a.Dir, Leased: a.Leased,
+		ID: a.ID, Task: a.Task, Dir: a.Dir, Leased: a.Leased, Origin: a.Origin,
 		Status: a.status, Activity: a.activity,
 		Turns: a.turns, ToolCalls: a.toolCalls, LastEvent: a.lastEvent,
 		Started: a.Started, Finished: a.finished,
