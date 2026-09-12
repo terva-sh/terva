@@ -42,6 +42,56 @@ deliberately not a read boundary:
   lift these. Like the rest of the sandbox this is a speed bump rather than a
   boundary — a runtime-assembled path or an interpreter walks past it — but
   it is the same speed bump on every route.
+- **Transcripts have one reader.** `sessions/` and `swarm/` stay denied above,
+  and `session_inspect` is carved back out for the `.jsonl` files inside them.
+  `read`, `grep`, `glob`, `share_file` and `bash` are all still refused, and
+  the refusal they give now names `session_inspect` instead of ending at a
+  dead end.
+
+That asymmetry is deliberate, and it is worth stating why, because "let a tool
+open the transcripts" reads like a hole. Denying them bought no confinement:
+`cp` moved a transcript out of `$TERVA_HOME` the whole time, and the
+shell-argument check matches literal paths, so `$TERVA_HOME/sessions` walked
+straight past it. What the denial produced was a detour. Every analysis of a
+session copied the file out first and then read the copy with no redaction at
+all.
+
+Opening the sanctioned reader while the raw ones stay shut therefore reduces
+what leaks. `session_inspect` redacts credential shapes and bounds its output;
+`cat` of a copy does neither. The carve-out is narrow on both axes — only
+`.jsonl`, and only under those two roots — so `auth.json`, the secrets key, the
+web token, `logs/` and `config.json` are refused on that route exactly as they
+are on every other. It holds while jailed, because the jail confines writes and
+routes risky reads past other safeguards, and a redacted, bounded read of
+terva's own state is neither.
+
+Project scoping went with it, for the same reason. `session_inspect` resolves a
+session id in any project under `$TERVA_HOME`, trying the current project
+first, and it no longer refuses a swarm sub-agent spawned elsewhere. Diagnosing
+a cost problem in one project from another is exactly when you need this, and
+it was the case with no workaround short of copying the file out.
+`session_search` still enumerates this project only. Sweeping every project for
+text is a different question, and it stays where it was.
+
+**Listing is a third surface, and it is the one that answers "what exists".**
+Resolving an id you already hold does not help a reader holding only a
+question, so `session_list` enumerates the store: `scope: "project"` by
+default, and `scope: "all"` for every project in `$TERVA_HOME`. An unknown
+scope is refused rather than narrowed, because a caller who asked for more and
+silently got less would read the short list as "there is nothing else".
+
+It exposes less than the two readers above. A row carries the session id, the
+time of the last change, the size, and the working directory, and nothing from
+inside the conversation. The tool opens no transcript beyond the bounded
+opening meta row of each listed row, which is where the working directory comes
+from. Titles and content stay behind `session_inspect`, which redacts.
+
+This is not new authority. `ls` over `$TERVA_HOME/sessions` was never actually
+prevented, and the deny list never stopped a shell from counting the files. It
+is a new default-visible surface, which is the part worth saying plainly: a
+jailed agent can now see that other projects exist on this machine, and name
+their working directories, without being told. If that is wrong for your
+install, the tool is an ordinary built-in and a permission rule can deny it.
 
 `grep` and `glob` check each candidate file against the sensitive-path rules.
 A search from a parent directory skips denied files and retains allowed

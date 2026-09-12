@@ -64,7 +64,13 @@ var readOnly = map[string]bool{
 	// survive plan-mode pruning: recalling what a previous session decided is
 	// exactly the work plan mode exists to do.
 	"session_search": true,
-	"skill":          true,
+	// Enumeration of terva's own session store. It opens no transcript beyond
+	// one bounded meta row per listed session and writes nothing, so it is the
+	// same class as the two above. Plan mode needs it most of all: finding
+	// which earlier session decided a thing is the work plan mode exists to do,
+	// and a plan-mode agent that cannot list sessions cannot start.
+	"session_list": true,
+	"skill":        true,
 	// The task tools mutate only terva's own task board under $TERVA_HOME — never
 	// the workspace — so they auto-admit and stay available in plan mode like a
 	// read-only tool (the built-in equivalent of the former extension's
@@ -163,6 +169,7 @@ var builtin = map[string]bool{
 	"terva_status":      true,
 	"session_inspect":   true,
 	"session_search":    true,
+	"session_list":      true,
 	"skill":             true,
 	"task_list":         true,
 	"task_create":       true,

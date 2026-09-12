@@ -2223,6 +2223,139 @@ func ListSessions(root, cwd string) []string {
 	return out
 }
 
+// FindSessionAcrossProjects locates a transcript by id in ANY project bucket
+// under root, and returns "" when no bucket holds it.
+//
+// Sessions are bucketed by CWDHash, so an id alone does not say which
+// directory it belongs to, and a reader that knows only the id has nowhere to
+// look. That is the gap this closes: diagnosing a cost or cache problem in
+// project B while working in project A, which is when a transcript id reaches
+// you from a report rather than from your own store.
+//
+// A miss is not an error. The caller knows whether an id it could not place is
+// a typo or a session from another machine, and this cannot tell those apart.
+//
+// The scan is one ReadDir per project bucket and it stops at the first hit.
+// Ids embed a timestamp and a random suffix, so two buckets holding one id is
+// not a case that arises; if it ever did, ReadDir's sorted order makes the
+// choice deterministic rather than dependent on filesystem order.
+func FindSessionAcrossProjects(root, id string) string {
+	if root == "" || id == "" {
+		return ""
+	}
+	// The caller validates too. Repeated here because this is exported, and a
+	// traversal in an id would otherwise walk straight out of the store.
+	if strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
+		return ""
+	}
+	name := id + ".jsonl"
+	if !isSessionTranscriptName(name) {
+		return ""
+	}
+	buckets, err := os.ReadDir(filepath.Join(root, "sessions"))
+	if err != nil {
+		return ""
+	}
+	for _, b := range buckets {
+		if !b.IsDir() {
+			continue
+		}
+		p := filepath.Join(root, "sessions", b.Name(), name)
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
+// SessionRef is one transcript located WITHOUT opening it: everything the
+// filesystem already knows, and nothing that costs a read.
+//
+// It is deliberately not a SessionSummary. A summary carries the title, the
+// model, the message count and the cost, and every one of those is stamped by
+// a row written later, so producing one means scanning the whole file. That is
+// the right trade for a question asked once before a delete, and the wrong one
+// for listing a corpus.
+type SessionRef struct {
+	// ID is the transcript filename without .jsonl, which is what
+	// session_inspect resolves.
+	ID   string
+	Path string
+	// Bucket is the CWDHash directory the session sits in. It identifies the
+	// project without naming it; ReadSessionCreation recovers the actual cwd
+	// from the opening meta row when a caller wants the path.
+	Bucket string
+	// Modified and Size come from the directory entry. Modified sorts the list
+	// for the same reason ListSessions sorts on it: a long-running session the
+	// user returned to recently matters more than one created later and left.
+	Modified time.Time
+	Size     int64
+}
+
+// ListSessionsAcrossProjects returns every live transcript under root, in every
+// project bucket, newest first by modification time. It opens nothing.
+//
+// This is the enumerating twin of FindSessionAcrossProjects, which resolves an
+// id a caller already holds. Resolution alone left a reader that had only a
+// question with no way to learn what exists, which is the gap that blocked a
+// corpus sweep.
+//
+// Deliberately NOT SessionsMatching. That function answers the same shape of
+// question and pays describeSession per file, so it reads every byte of every
+// transcript in $TERVA_HOME. Acceptable for a once-before-delete check on a
+// dependency, ruinous for a listing that a model may call to orient itself. A
+// caller that wants a summary of one row can describe that row alone.
+//
+// Archived sessions (.jsonl.gz) are not listed, matching SessionsMatching:
+// reaching into the archive is a separate decision with its own standing rule.
+// An empty file is skipped, because a session that never wrote a message is a
+// crash artifact rather than a record.
+func ListSessionsAcrossProjects(root string) []SessionRef {
+	if root == "" {
+		return nil
+	}
+	buckets, err := os.ReadDir(filepath.Join(root, "sessions"))
+	if err != nil {
+		return nil
+	}
+	var out []SessionRef
+	for _, b := range buckets {
+		if !b.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, "sessions", b.Name())
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !isSessionTranscriptName(e.Name()) {
+				continue
+			}
+			info, err := e.Info()
+			if err != nil || info.Size() == 0 {
+				continue
+			}
+			out = append(out, SessionRef{
+				ID:       SessionIDFromPath(e.Name()),
+				Path:     filepath.Join(dir, e.Name()),
+				Bucket:   b.Name(),
+				Modified: info.ModTime(),
+				Size:     info.Size(),
+			})
+		}
+	}
+	// Same ordering contract as ListSessions: modification time descending,
+	// with the path breaking a tie so the order is stable across calls.
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].Modified.Equal(out[j].Modified) {
+			return out[i].Modified.After(out[j].Modified)
+		}
+		return out[i].Path > out[j].Path
+	})
+	return out
+}
+
 // AppendMessage writes a message to the session.
 func (s *Session) AppendMessage(m provider.Message) error {
 	if s == nil {

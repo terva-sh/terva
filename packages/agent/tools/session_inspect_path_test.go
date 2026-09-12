@@ -55,42 +55,160 @@ func TestSessionInspectReadsATranscriptByPath(t *testing.T) {
 	}
 }
 
-// The security argument in one test: `path` reaches exactly what `read` reaches.
-// $TERVA_HOME/sessions is a registered secret root, so another project's
-// transcripts stay closed — and close with the deny list's own explanation
-// rather than a puzzling "no such session".
-func TestSessionInspectPathCannotReachAnotherProjectsSessions(t *testing.T) {
+// transcriptSandbox builds the sandbox the host builds: $TERVA_HOME/sessions
+// and swarm/ denied to every read route, and registered as transcript roots so
+// the sanctioned reader keeps one way in. state selects the jail posture,
+// because the carve-out has to hold in all three.
+func transcriptSandbox(t *testing.T, home, cwd, state string) *Sandbox {
+	t.Helper()
+	sb := NewSandbox(cwd)
+	sb.AddSecretRoot(
+		filepath.Join(home, "auth.json"),
+		filepath.Join(home, "logs"),
+		filepath.Join(home, "sessions"),
+		filepath.Join(home, "swarm"),
+	)
+	sb.AddTranscriptRoot(filepath.Join(home, "sessions"), filepath.Join(home, "swarm"))
+	if state != "initially-unjailed" {
+		sb.Lock()
+	}
+	if state == "unlocked" {
+		sb.Unlock()
+	}
+	return sb
+}
+
+// The reason this ticket exists: a session belonging to ANOTHER project was
+// reachable with `cp` the whole time and unreachable through the one reader
+// that redacts. Diagnosing a cost or cache problem in project B from project A
+// is exactly when you need it, and it is the case with no workaround short of
+// copying the file out and reading it raw.
+//
+// It holds in every jail state. Requiring /unjail to read a transcript would
+// only teach the model to reach for `cp` again.
+func TestSessionInspectPathReachesAnotherProjectsSessions(t *testing.T) {
+	for _, state := range []string{"locked", "unlocked", "initially-unjailed"} {
+		t.Run(state, func(t *testing.T) {
+			home := testsupport.TempDir(t)
+			cwd := testsupport.TempDir(t)
+			otherProject := testsupport.TempDir(t)
+
+			// A real session belonging to a DIFFERENT project, in its own
+			// bucket under $TERVA_HOME/sessions.
+			otherDir := core.SessionsDir(home, otherProject)
+			if err := os.MkdirAll(otherDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			other := filepath.Join(otherDir, "20260101-000000-deadbeef.jsonl")
+			writeSessionFixture(t, other, otherProject, "their prompt", "their findings")
+
+			tool := &SessionInspectTool{TervaHome: home, CWD: cwd, Sandbox: transcriptSandbox(t, home, cwd, state)}
+			res := inspectByPath(t, tool, `{"path":`+jsonStr(other)+`}`)
+			if res.IsError {
+				t.Fatalf("another project's transcript must inspect, got: %q", inspectText(t, res))
+			}
+			if got := inspectText(t, res); !strings.Contains(got, "their findings") {
+				t.Errorf("listing did not show the transcript's events: %q", got)
+			}
+		})
+	}
+}
+
+// The carve-out is narrow on two axes, and this pins both. Only a .jsonl, and
+// only under a registered transcript root — so the credentials sitting one
+// directory up stay refused on the very route that now reads transcripts.
+//
+// Without the extension test, any JSONL under the root would pass. Without the
+// root test, session_inspect would become a general-purpose reader for any
+// file named .jsonl anywhere on the deny list.
+func TestSessionInspectPathStillRefusesCredentials(t *testing.T) {
 	home := testsupport.TempDir(t)
 	cwd := testsupport.TempDir(t)
-	otherProject := testsupport.TempDir(t)
 
-	// A real session belonging to a DIFFERENT project, in its own bucket under
-	// $TERVA_HOME/sessions.
-	otherDir := core.SessionsDir(home, otherProject)
-	if err := os.MkdirAll(otherDir, 0o700); err != nil {
+	sessions := core.SessionsDir(home, cwd)
+	if err := os.MkdirAll(sessions, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	victim := filepath.Join(otherDir, "20260101-000000-deadbeef.jsonl")
-	writeSessionFixture(t, victim, otherProject, "their prompt", "their secrets")
-
-	sandbox := NewSandbox(cwd)
-	sandbox.Lock()
-	sandbox.AddSecretRoot(filepath.Join(home, "sessions"), filepath.Join(home, "swarm"))
-	tool := &SessionInspectTool{TervaHome: home, CWD: cwd, Sandbox: sandbox}
-
-	res := inspectByPath(t, tool, `{"path":`+jsonStr(victim)+`}`)
-	if !res.IsError {
-		t.Fatalf("another project's transcript must be refused, got: %q", inspectText(t, res))
+	if err := os.MkdirAll(filepath.Join(home, "logs"), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	got := inspectText(t, res)
-	if strings.Contains(got, "their secrets") {
-		t.Fatalf("the refusal leaked the transcript it refused: %q", got)
+	// A credential that happens to carry the transcript extension. The deny
+	// list covers auth.json by exact path, and this is the shape that would
+	// slip past a check keyed on the extension alone.
+	for _, rel := range []string{"auth.json", "logs/bot.jsonl"} {
+		if err := os.WriteFile(filepath.Join(home, rel), []byte(`{"token":"synthetic"}`+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	// The deny list's own wording, which already explains that bash cannot reach
-	// it either and /unjail does not lift it — far more actionable than a
-	// generic refusal, and it means one message stays true if the policy moves.
-	if !strings.Contains(got, "credentials or transcripts") {
-		t.Errorf("refusal should carry the read policy's explanation, got: %q", got)
+
+	tool := &SessionInspectTool{TervaHome: home, CWD: cwd, Sandbox: transcriptSandbox(t, home, cwd, "locked")}
+	for _, rel := range []string{"auth.json", "logs/bot.jsonl"} {
+		res := inspectByPath(t, tool, `{"path":`+jsonStr(filepath.Join(home, rel))+`}`)
+		if !res.IsError {
+			t.Errorf("%s must stay refused on the transcript route, got: %q", rel, inspectText(t, res))
+			continue
+		}
+		if got := inspectText(t, res); strings.Contains(got, "synthetic") {
+			t.Errorf("the refusal for %s leaked the file: %q", rel, got)
+		}
+	}
+}
+
+// The asymmetry is the whole design, so it gets a test rather than a comment:
+// session_inspect reads a transcript, and every raw route still refuses it.
+//
+// This is what makes the change a REDUCTION in what leaks. The refusal the raw
+// routes give now names the reader that works, because a dead end is what sent
+// the model to `cp` and an unredacted read of the copy.
+//
+// All three jail states, because the ticket reported the inconsistency in two
+// of them: unjailed, the raw reader worked and the sanctioned one refused;
+// jailed, every route refused.
+func TestTranscriptCarveOutOpensOnlyTheSanctionedReader(t *testing.T) {
+	for _, state := range []string{"locked", "unlocked", "initially-unjailed"} {
+		t.Run(state, func(t *testing.T) {
+			home := testsupport.TempDir(t)
+			cwd := testsupport.TempDir(t)
+			sessions := core.SessionsDir(home, cwd)
+			if err := os.MkdirAll(sessions, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			transcript := filepath.Join(sessions, "20260101-000000-deadbeef.jsonl")
+			writeSessionFixture(t, transcript, cwd, "my prompt", "my findings")
+
+			sb := transcriptSandbox(t, home, cwd, state)
+			args := mustJSON(t, map[string]any{"path": transcript, "pattern": "findings"})
+
+			if _, err := (&ReadTool{CWD: cwd, Sandbox: sb}).Execute(context.Background(), args, nil); err == nil {
+				t.Error("read must still refuse a transcript")
+			}
+			if _, err := (&GrepTool{CWD: cwd, Sandbox: sb}).Execute(context.Background(), args, nil); err == nil {
+				t.Error("grep must still refuse a transcript")
+			}
+			pub := &stubPublisher{}
+			if _, err := (&ShareFileTool{CWD: cwd, Sandbox: sb, Publisher: pub}).Execute(context.Background(), args, nil); err == nil {
+				t.Error("share_file must still refuse a transcript")
+			}
+			if len(pub.calls) != 0 {
+				t.Fatal("share_file published a transcript")
+			}
+			err := sb.CheckCommand("cat '" + filepath.ToSlash(transcript) + "'")
+			if err == nil {
+				t.Fatal("bash must still refuse a transcript named literally")
+			}
+			// The refusal routes to the reader that works. A dead end is what
+			// produced the `cp` this change exists to remove.
+			if !strings.Contains(err.Error(), "session_inspect") {
+				t.Errorf("the refusal should name the sanctioned reader, got: %v", err)
+			}
+
+			// And the sanctioned reader reads it, in the same state.
+			tool := &SessionInspectTool{TervaHome: home, CWD: cwd, Sandbox: sb}
+			res := inspectByPath(t, tool, `{"path":`+jsonStr(transcript)+`}`)
+			if res.IsError {
+				t.Fatalf("session_inspect must read a transcript, got: %q", inspectText(t, res))
+			}
+		})
 	}
 }
 

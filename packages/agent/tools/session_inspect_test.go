@@ -242,8 +242,11 @@ func inspectText(t *testing.T, r core.ToolResult) string {
 
 // TestSessionInspectResolvesSwarmChild pins the S1 fix: a swarm sub-agent id
 // (what swarm_spawn and the [auto-swarm update] recap print) resolves to the
-// child's transcript under the swarm root — but only for children spawned
-// from THIS project's cwd; anything else stays jailed out.
+// child's transcript under the swarm root.
+//
+// Project ownership no longer gates it. A sub-agent transcript is the same
+// class of data as the session that spawned it, and refusing one while serving
+// the other hid the children of the very session under analysis.
 func TestSessionInspectResolvesSwarmChild(t *testing.T) {
 	home := testsupport.TempDir(t)
 	cwd := testsupport.TempDir(t)
@@ -267,12 +270,17 @@ func TestSessionInspectResolvesSwarmChild(t *testing.T) {
 		t.Errorf("listing should show the child's events, got: %q", got)
 	}
 
-	// A child of ANOTHER project is refused (fails closed on cwd mismatch).
+	// A child of ANOTHER project resolves too. Diagnosing a run that happened
+	// elsewhere is the case this serves, and `cp` reached the same bytes the
+	// whole time it was refused.
 	other := testsupport.TempDir(t)
-	writeSwarmChildFixture(t, home, "other-999000", other, other, "task", "secret findings")
+	writeSwarmChildFixture(t, home, "other-999000", other, other, "task", "their findings")
 	res = run(`{"session_id":"other-999000"}`)
-	if !res.IsError || !strings.Contains(inspectText(t, res), "not spawned from this project") {
-		t.Errorf("cross-project child must be refused, got (err=%v): %q", res.IsError, inspectText(t, res))
+	if res.IsError {
+		t.Fatalf("another project's child must resolve, got: %q", inspectText(t, res))
+	}
+	if got := inspectText(t, res); !strings.Contains(got, "their findings") {
+		t.Errorf("listing should show the cross-project child's events, got: %q", got)
 	}
 
 	// An id matching neither store names both id kinds in the error.
@@ -310,19 +318,20 @@ func TestSessionInspectResolvesLeasedSwarmChild(t *testing.T) {
 		t.Errorf("listing should show the leased child's events, got: %q", got)
 	}
 
-	// The lease must not become a back door either: a child leased by ANOTHER
-	// project stays refused, even though its worktree is equally foreign to both.
+	// A child leased by ANOTHER project resolves as well. The lease was never
+	// the boundary; it only decided which bucket the cwd hashed into, which is
+	// why reading the cwd rejected this project's own children.
 	otherLease := filepath.Join(testsupport.TempDir(t), "worktrees", "foreign-1")
 	if err := os.MkdirAll(otherLease, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeSwarmChildFixture(t, home, "foreign-1", testsupport.TempDir(t), otherLease, "task", "secret findings")
+	writeSwarmChildFixture(t, home, "foreign-1", testsupport.TempDir(t), otherLease, "task", "foreign findings")
 	res, err = tool.Execute(context.Background(), json.RawMessage(`{"session_id":"foreign-1"}`), func(string) {})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.IsError || !strings.Contains(inspectText(t, res), "not spawned from this project") {
-		t.Errorf("another project's leased child must stay refused, got (err=%v): %q", res.IsError, inspectText(t, res))
+	if res.IsError {
+		t.Fatalf("another project's leased child must resolve, got: %q", inspectText(t, res))
 	}
 }
 
@@ -344,21 +353,28 @@ func TestSessionInspectAcceptsLegacySpawnRecord(t *testing.T) {
 	}
 }
 
-// No spawn record at all means no claim of ownership — fail closed rather than
-// falling back to the transcript's own cwd, which an attacker-ish caller could
-// have written.
-func TestSessionInspectFailsClosedWithoutSpawnRecord(t *testing.T) {
+// A child with no spawn record used to fail closed, because the record was the
+// only claim of ownership and ownership decided access. Nothing decides access
+// by ownership now, so the orphan reads like any other transcript.
+//
+// This is the case a swarm crash leaves behind, and it was the least useful one
+// to refuse: an agent that died before its record landed is exactly the agent
+// whose transcript you want.
+func TestSessionInspectReadsChildWithoutSpawnRecord(t *testing.T) {
 	home := testsupport.TempDir(t)
 	cwd := testsupport.TempDir(t)
-	writeSessionFixture(t, swarm.AgentSessionPath(swarm.DefaultRoot(home), "orphan-1"), cwd, "task", "findings")
+	writeSessionFixture(t, swarm.AgentSessionPath(swarm.DefaultRoot(home), "orphan-1"), cwd, "task", "orphan findings")
 
 	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
 	res, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"orphan-1"}`), func(string) {})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.IsError || !strings.Contains(inspectText(t, res), "not spawned from this project") {
-		t.Errorf("a child with no spawn record must be refused, got (err=%v): %q", res.IsError, inspectText(t, res))
+	if res.IsError {
+		t.Fatalf("a child with no spawn record must still resolve, got: %q", inspectText(t, res))
+	}
+	if got := inspectText(t, res); !strings.Contains(got, "orphan findings") {
+		t.Errorf("listing should show the orphan's events, got: %q", got)
 	}
 }
 
@@ -518,33 +534,67 @@ func TestSessScanCallOrderCompactsHealthy(t *testing.T) {
 	}
 }
 
-// TestSessionInspectAuthorizesSwarmChildBeforeScan pins Gap 3: a cross-project
-// swarm child is rejected on its meta alone, BEFORE any transcript scan runs.
-func TestSessionInspectAuthorizesSwarmChildBeforeScan(t *testing.T) {
-	scanned := false
-	old := streamReplay
-	streamReplay = func(ctx context.Context, path string, maxBytes int64, fn func(int, core.ReplayRow)) (core.SessionMeta, bool, error) {
-		scanned = true
-		return old(ctx, path, maxBytes, fn)
-	}
-	defer func() { streamReplay = old }()
-
+// A session belonging to another project resolves by ID, not only by path.
+//
+// This is the second of the three limits the ticket names, and it is
+// independent of the deny list: even with the transcript carve-out open, an id
+// resolved into this project's bucket alone, so a session recorded under a
+// different cwd had no route at all. The astra session that motivated this work
+// lived in exactly that position.
+//
+// This project keeps priority. The fallback runs only after a miss here, so an
+// id that resolves locally resolves the way it always did.
+func TestSessionInspectResolvesAnotherProjectsSessionByID(t *testing.T) {
 	home := testsupport.TempDir(t)
 	cwd := testsupport.TempDir(t)
-	// A child whose meta records a FOREIGN cwd, with a marker in the body.
-	foreign := testsupport.TempDir(t)
-	writeSwarmChildFixture(t, home, "foreign-123", foreign, foreign, "SHOULD_NOT_BE_SCANNED")
+	other := testsupport.TempDir(t)
 
-	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
-	res, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"foreign-123"}`), func(string) {})
+	otherDir := core.SessionsDir(home, other)
+	if err := os.MkdirAll(otherDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeSessionFixture(t, filepath.Join(otherDir, "20260101-000000-deadbeef.jsonl"), other, "their prompt", "their findings")
+
+	tool := &SessionInspectTool{TervaHome: home, CWD: cwd, Sandbox: NewSandbox(cwd)}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"20260101-000000-deadbeef"}`), func(string) {})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.IsError || !strings.Contains(inspectText(t, res), "not spawned from this project") {
-		t.Fatalf("cross-project child must be rejected, got (err=%v): %q", res.IsError, inspectText(t, res))
+	if res.IsError {
+		t.Fatalf("another project's session must resolve by id, got: %q", inspectText(t, res))
 	}
-	if scanned {
-		t.Error("transcript was scanned before the cross-project authorization gate ran")
+	if got := inspectText(t, res); !strings.Contains(got, "their findings") {
+		t.Errorf("listing should show the other project's events, got: %q", got)
+	}
+}
+
+// The local bucket wins. A fallback that shadowed this project's own session
+// with a same-named one from elsewhere would silently analyse the wrong file,
+// and nothing in the output would reveal the substitution.
+func TestSessionInspectPrefersThisProjectsSession(t *testing.T) {
+	home := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
+	other := testsupport.TempDir(t)
+	const id = "20260101-000000-deadbeef"
+
+	for _, p := range []struct{ dir, marker string }{
+		{core.SessionsDir(home, cwd), "mine"},
+		{core.SessionsDir(home, other), "theirs"},
+	} {
+		if err := os.MkdirAll(p.dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		writeSessionFixture(t, filepath.Join(p.dir, id+".jsonl"), cwd, "prompt", p.marker)
+	}
+
+	tool := &SessionInspectTool{TervaHome: home, CWD: cwd, Sandbox: NewSandbox(cwd)}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"`+id+`"}`), func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := inspectText(t, res)
+	if !strings.Contains(got, "mine") || strings.Contains(got, "theirs") {
+		t.Errorf("this project's session must win a same-id collision, got: %q", got)
 	}
 }
 

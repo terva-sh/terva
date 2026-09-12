@@ -132,6 +132,7 @@ func errNoCatalog() error {
 var curatedMetaBuiltins = []string{
 	"session_inspect",
 	"session_search",
+	"session_list",
 	"terva_status",
 	"task_list",
 	"skill",

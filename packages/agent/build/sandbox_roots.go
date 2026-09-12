@@ -33,6 +33,9 @@ import (
 //     absolute — auth.json holds credentials whether or not they are sealed,
 //     and the trust files govern the agent's own permissions.
 //   - sessions/ and swarm/ — every transcript, this session's and every other's.
+//     These two are also registered as TRANSCRIPT roots, which gives their
+//     .jsonl files one reader back: session_inspect, which redacts and bounds
+//     what it returns. Every other tool still takes the refusal.
 //   - logs/ — aggregates stderr from MCP servers, the bot, connectors and hooks,
 //     and is a secret-leak sink. The extension logs the agent legitimately
 //     debugs with are carved back out by name.
@@ -84,6 +87,18 @@ func restrictSensitiveReads(sandbox *tools.Sandbox, home, cwd string, allowConfi
 		// reads it, so denying the whole tree costs the agent nothing.
 		filepath.Join(home, "mcp-bridge"),
 	)
+	// The transcripts stay on the deny list above, and they gain ONE reader.
+	// session_inspect redacts credential shapes and bounds its output, so a
+	// transcript reaching the model through it leaks strictly less than the
+	// `cp` out of $TERVA_HOME that the denial produced instead — which every
+	// analysis in TKT-01M1ZTSN5 had to perform, and then read unredacted.
+	// Narrow by construction: .jsonl under these two roots only, and every
+	// other tool still takes the refusal. See tools.Sandbox.CheckTranscriptRead.
+	sandbox.AddTranscriptRoot(
+		filepath.Join(home, "sessions"),
+		filepath.Join(home, "swarm"),
+	)
+
 	// Every key a COMPONENT mints for itself, wherever it put it. A standalone
 	// connector holds its own age identity beside its config
 	// (connectors/<name>/secrets.key) so that terva never has to hand out its

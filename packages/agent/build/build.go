@@ -2132,7 +2132,12 @@ func BuildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 		// Cross-session recall. No sandbox field because there is no path to
 		// bound: it only ever opens this cwd's sessions directory, so its reach
 		// is fixed by construction rather than by policy.
-		"session_search":    &tools.SessionSearchTool{TervaHome: config.TervaHome(), CWD: cwd},
+		"session_search": &tools.SessionSearchTool{TervaHome: config.TervaHome(), CWD: cwd},
+		// Discovery. Also no sandbox field, and for a stronger reason than
+		// session_search's: it takes no path and no id at all. It enumerates
+		// terva's own session store and reads one bounded meta row per listed
+		// row, so there is nothing for a read policy to bound.
+		"session_list":      &tools.SessionListTool{TervaHome: config.TervaHome(), CWD: cwd},
 		"ask_user_question": &tools.AskUserTool{},
 	}
 	// Durable memory. The stores are bound here (not lazily) so the tool and the

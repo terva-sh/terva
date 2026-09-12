@@ -90,14 +90,18 @@ func TestNoOverlayKeepsTheShippedEnglish(t *testing.T) {
 	}
 }
 
-// TestEveryToolDescriptionIsKeyed is the enrolment guard, and it is written
-// EMPTY on purpose: it scans the registry rather than listing tools, so a tool
-// added tomorrow is covered without anyone remembering this file exists.
+// TestEveryToolDescriptionIsKeyed is the enrolment guard.
 //
 // The check is behavioural, not textual — it asks whether an overlay can
 // actually reach each description, which is the property that matters. A tool
 // that returns a bare literal passes every other test in this package and is
 // silently unoverridable.
+//
+// The list below is MANUAL, and it has to be. The registry is assembled in
+// packages/agent/build, which imports this package, so scanning it from here
+// would be an import cycle. A comment here once claimed this test scanned the
+// registry and therefore covered any tool added later; it never did, and a new
+// tool left out of this slice is simply not checked. Add yours when you add it.
 func TestEveryToolDescriptionIsKeyed(t *testing.T) {
 	// Key each tool's description to a sentinel: if the description is routed
 	// through i18n.D, the overlay wins and we see the sentinel.
@@ -108,6 +112,7 @@ func TestEveryToolDescriptionIsKeyed(t *testing.T) {
 	tools := []namedTool{
 		&ReadTool{}, &WriteTool{}, &EditTool{}, &BashTool{}, &GrepTool{}, &GlobTool{},
 		&AskUserTool{}, &MemoryTool{}, &SessionInspectTool{}, &SessionSearchTool{},
+		&SessionListTool{},
 		&SwarmSpawnTool{}, &RaatiConveneTool{}, &StatusTool{}, &RestartTool{},
 		&ArmRestartTool{}, &ActivateToolsTool{}, &GenerateImageTool{}, &ShareFileTool{},
 		&DeliverResultTool{}, &ActorSpawnTool{}, &ChatSendImageTool{}, &ChatSendFileTool{},

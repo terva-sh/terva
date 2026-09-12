@@ -22,6 +22,13 @@ const (
 	// resetting the transcript. The player animates it (effective mode) or
 	// ignores it (raw mode) — it never rewrites earlier rows.
 	ReplayRowCompaction ReplayRowKind = "compaction"
+	// ReplayRowPrefix is a cacheable-prefix divergence: the request was rebuilt
+	// rather than extended, so the provider re-read everything past the rung at
+	// full price.
+	ReplayRowPrefix ReplayRowKind = "prefix"
+	// ReplayRowCliff opens or closes a run of dispatches whose cache reads
+	// collapsed while the prompt kept growing.
+	ReplayRowCliff ReplayRowKind = "cliff"
 )
 
 // ReplayRow is one transcript row preserved in file order. It is the forward
@@ -56,6 +63,15 @@ type ReplayRow struct {
 	// transcript with these messages (what OpenSession does); the player uses
 	// it to animate the compaction and resync the effective transcript.
 	Checkpoint []provider.Message
+
+	// Prefix is set when Kind == ReplayRowPrefix. Appended is always false:
+	// the observer that writes these rows never fires for an ordinary append,
+	// so a row on disk is a rebuild by construction.
+	Prefix PrefixDivergence
+	// Cliff is set when Kind == ReplayRowCliff. Ongoing distinguishes the row
+	// that OPENS a collapse run from the one that closes it with the totals
+	// the run reached.
+	Cliff CacheCliff
 }
 
 // ReadReplayRows walks a session JSONL and returns every message, usage, and
@@ -230,6 +246,42 @@ func StreamReplayRows(ctx context.Context, path string, maxBytes int64, fn func(
 			row++
 		case "compaction":
 			row++
+		// The two rows that diagnose a cache collapse. They were write-only
+		// until this reader learned them: terva spent the tokens to record its
+		// own cache behaviour and then had no route back to the measurement,
+		// which is what made the corpus sweep in TKT-01M29HFZEX impossible
+		// through any sanctioned reader.
+		//
+		// Neither increments row. Row numbers stay aligned with
+		// ReadReplayRows' slice indexes, and that reader emits message, usage
+		// and compaction rows only. An informational row therefore reports the
+		// coordinate of the next replay row, which is where it sits in the
+		// conversation. Incrementing here would shift every later row's
+		// coordinate away from the twin reader instead.
+		case recordPrefix:
+			var prow struct {
+				Prefix prefixDivergenceRecord `json:"prefix"`
+			}
+			if err := json.Unmarshal(line, &prow); err == nil {
+				fn(row, ReplayRow{Kind: ReplayRowPrefix, Prefix: PrefixDivergence{
+					Rung:         prow.Prefix.Rung,
+					Label:        prow.Prefix.Label,
+					MsgCount:     prow.Prefix.Messages,
+					PrevMsgCount: prow.Prefix.PrevMessages,
+					CachedTokens: prow.Prefix.CachedTokens,
+				}})
+			}
+		case recordCliff:
+			var crow struct {
+				Cliff cacheCliffRecord `json:"cliff"`
+			}
+			if err := json.Unmarshal(line, &crow); err == nil {
+				fn(row, ReplayRow{Kind: ReplayRowCliff, Cliff: CacheCliff{
+					Dispatches:   crow.Cliff.Dispatches,
+					RereadTokens: crow.Cliff.RereadTokens,
+					Ongoing:      crow.Cliff.Ongoing,
+				}})
+			}
 		}
 		return nil
 	})

@@ -122,7 +122,8 @@ func (t *SessionInspectTool) Name() string { return "session_inspect" }
 // is one: the extractor resolves a named const, not an inline concatenation.
 const sessionInspectDesc = "Examine the transcript of this session in a structured form, with a limit on the output. Use this tool to see what occurred, and do not read the full transcript again. Each argument is optional, and a value of 0 means that you did not set it. Therefore you can safely send all the arguments as zeros, which gives the default list.\n\n" +
 	"Stats mode occurs when you set stats to true. Use this mode first when you want to know what occurred in this session, or what the session cost. The mode gives one summary of the full session: the cost, the cache hit rate, the dead turns, the counts of tool calls and failures, and the provider errors. To calculate these numbers from the events is expensive.\n\n" +
-	"List mode and expand mode are mutually exclusive, and they use the same filters. The filter failures_only selects the tool results that failed. The filter tool_name selects one tool. The filter event_kinds selects some of \"tool_call\", \"tool_result\", \"message\", \"usage\", and \"error\".\n\n" +
+	"List mode and expand mode are mutually exclusive, and they use the same filters. The filter failures_only selects the tool results that failed. The filter tool_name selects one tool. The filter event_kinds selects some of \"tool_call\", \"tool_result\", \"message\", \"usage\", \"error\", \"prefix\", and \"cliff\".\n\n" +
+	"The kinds \"prefix\" and \"cliff\" report the cache behaviour of the session. A prefix row names the rung where the cacheable prefix broke. The harness rebuilt the request there, and it did not extend the request. A cliff row opens or closes a run of dispatches whose cache reads collapsed. Use these two kinds when a session costs more than you expect.\n\n" +
 	"List mode is the default, and it occurs when expand is 0. The mode shows a window of the events that agree with the filters: the tool calls, the tool results with their pass or fail status, the text of messages, and the usage of each turn. The most recent events are the default. A usage event gives the cost of a turn, and the quantity of its input that came from the prefix cache. Use event_kinds with \"usage\" alone to find where this session spent money, because no other part of the transcript gives this. Expand a usage event to see its full token counts.\n\n" +
 	"To move through the list, use limit and cursor. The default limit is 40, and the maximum is 200. The cursor is a position in the events that agree with the filters, and the oldest event is position 1. A cursor of 0 gives the most recent window. The tool returns next_cursor when more events remain, and you must then use the same filters. Each event in the list has an index that starts at #1.\n\n" +
 	// The prohibition leads this section, and the section leads with the
@@ -140,7 +141,7 @@ const sessionInspectDesc = "Examine the transcript of this session in a structur
 	// the mode. See scripts/eval/ to re-measure after editing this.
 	"To read the full text of one event, use expand mode. Set expand, and do not set limit or cursor. If you set expand together with a limit or a cursor that is not 0, the tool refuses the call. The tool does not silently make the call more narrow.\n\n" +
 	"Expand mode occurs when expand is not 0. The mode reads the full text of one event, for example all the findings of a sub-agent. Give an #n from a list that used the same filters. A negative value counts from the end, and -1 is the most recent match. For example, event_kinds \"message\" with expand -1 gives the most recent message in full, and you do not need a list first. If the text is long, use text_offset to read more of it.\n\n" +
-	"The default for session_id is the current session. You can give another id from this project, which is a file name without .jsonl, as terva_status shows. You can also give the id of a swarm sub-agent, as swarm_spawn and the [auto-swarm update] message show. To examine a transcript file instead, give path. Use this for a transcript from another machine, or for a transcript that the user gives to you. The path can be any .jsonl file that you can open with the read tool.\n\n" +
+	"The default for session_id is the current session. You can give the id of any session in $TERVA_HOME, which is a file name without .jsonl, as terva_status shows. The tool looks in this project first, and then in the other projects. You can also give the id of a swarm sub-agent, as swarm_spawn and the [auto-swarm update] message show. To examine a transcript file instead, give path. The path can be any .jsonl file, and a transcript under $TERVA_HOME is one of them.\n\n" +
 	"Do not give path together with session_id, because they are mutually exclusive. The tool removes secrets and limits the size of the output."
 
 func (t *SessionInspectTool) Description() string {
@@ -151,14 +152,14 @@ func (t *SessionInspectTool) Schema() json.RawMessage {
 	b, _ := json.Marshal(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"session_id":    map[string]any{"type": "string", "description": "The session to examine. Give a file name without .jsonl, or the id of a swarm sub-agent from this project. Omit this field for the current session."},
-			"path":          map[string]any{"type": "string", "description": "The path to a session .jsonl file that you can read with the read tool, for example a transcript from another machine. Do not give this field with session_id, because they are mutually exclusive. You cannot read the sessions of another project in $TERVA_HOME."},
+			"session_id":    map[string]any{"type": "string", "description": "The session to examine. Give a file name without .jsonl, or the id of a swarm sub-agent. The tool finds a session in any project in $TERVA_HOME. Omit this field for the current session."},
+			"path":          map[string]any{"type": "string", "description": "The path to a session .jsonl file, for example a transcript from another machine. Do not give this field with session_id, because they are mutually exclusive. The tool also reads a transcript under $TERVA_HOME, and it refuses the credentials that sit beside it."},
 			"failures_only": map[string]any{"type": "boolean", "description": "Show the tool results that failed only."},
 			"tool_name":     map[string]any{"type": "string", "description": "Show the events for this tool only."},
 			"event_kinds": map[string]any{
 				"type":        "array",
-				"items":       map[string]any{"type": "string", "enum": []string{"tool_call", "tool_result", "message", "usage", "error"}},
-				"description": "Show these event kinds only. The kind \"usage\" gives the cost and the cache accounting of a turn. Use it alone to see where a session spent money. The kind \"error\" is a provider failure such as an authentication error, an overload, or a rate limit. The tool puts each error against the turn that it stopped.",
+				"items":       map[string]any{"type": "string", "enum": []string{"tool_call", "tool_result", "message", "usage", "error", "prefix", "cliff"}},
+				"description": "Show these event kinds only. The kind \"usage\" gives the cost and the cache accounting of a turn. Use it alone to see where a session spent money. The kind \"error\" is a provider failure such as an authentication error, an overload, or a rate limit. The tool puts each error against the turn that it stopped. The kinds \"prefix\" and \"cliff\" report a cache collapse, and the tool description explains them.",
 			},
 			"limit":       map[string]any{"type": "integer", "description": "The maximum number of events. The default is 40, and the maximum is 200."},
 			"cursor":      map[string]any{"type": "integer", "description": "For list mode only. A position in the events that agree with the filters, where the oldest event is position 1. A value of 0, or no value, gives the most recent window. Do not give this field with an expand value that is not 0, because the tool refuses such a call."},
@@ -229,28 +230,24 @@ func (t *SessionInspectTool) Execute(ctx context.Context, raw json.RawMessage, _
 		return toolErr("session_inspect: " + err.Error()), nil
 	}
 
-	// Authorize a swarm child's project ownership BEFORE scanning its payload. A
-	// swarm child's transcript lives under the shared swarm root, not the project
-	// sessions dir, so the sessions-dir jail can't confine it — and a known
-	// cross-project child id must not be able to impose transcript-parsing work
-	// before rejection.
+	// There was a project-ownership gate here, and it is gone on purpose.
 	//
-	// Ownership comes from the SPAWN RECORD, not from the child's cwd. Those are
-	// the same directory only when the child shares the host's tree; under
-	// --swarm-worktrees every child is leased its own worktree, whose path hashes
-	// to a different project bucket than its parent's. Reading the cwd therefore
-	// rejected every leased child of the very project asking — the flag that
-	// makes sub-agents safe silently disabled the tool that watches them, and it
-	// survived because an unleased child's Dir IS its parent's RepoRoot, which is
-	// the only case the tests covered.
+	// It refused a sub-agent spawned from another project. That was consistent
+	// while sessions were project-scoped too, and it stopped being consistent
+	// the moment this tool started resolving any session in $TERVA_HOME. A
+	// sub-agent transcript is the same class of data as the session transcript
+	// that spawned it, held in the same store, under the same carve-out — so
+	// refusing one while serving the other protects nothing and hides the
+	// children of the very session under analysis.
 	//
-	// Fails closed: an unknown agent yields an empty origin, which matches no
-	// project.
-	if swarmChild {
-		if !swarmChildFromProject(t.TervaHome, t.CWD, swarm.AgentOrigin(swarm.DefaultRoot(t.TervaHome), sessID)) {
-			return toolErr(fmt.Sprintf("session_inspect: swarm sub-agent %q was not spawned from this project", sessID)), nil
-		}
-	}
+	// The gate also carried a parsing-DoS argument: reject on the spawn record
+	// before scanning the payload. That argument went with it, because there is
+	// no rejection left to front-run. The scan was always bounded anyway, by
+	// siScanCeiling.
+	//
+	// swarmChildFromProject survives for session_search, which ENUMERATES rather
+	// than resolving a named id. Sweeping every project's sub-agents is a
+	// different contract, and widening this did not widen that.
 
 	// The error sidecar is a separate file and tiny by nature (one short line
 	// per provider failure). Read it whole up front so its rows can interleave
@@ -580,9 +577,12 @@ func emptyChildTranscriptMsg(tervaHome, id string) string {
 }
 
 // swarmChildFromProject reports whether a sub-agent spawned at origin belongs to
-// the project rooted at cwd. Shared by session_inspect's authorization gate and
-// session_search's enumeration filter so the two cannot drift — a second copy of
-// this predicate is precisely the twin this repo keeps finding.
+// the project rooted at cwd. It scopes session_search's ENUMERATION: a search
+// that swept every project's sub-agents would answer a question nobody asked.
+//
+// session_inspect no longer consults it. Resolving a sub-agent the caller named
+// by id is not enumeration, and that tool now reaches any transcript in
+// $TERVA_HOME by design — see the note where its gate used to be.
 //
 // Ownership comes from the SPAWN RECORD, not the child's cwd: under
 // --swarm-worktrees a child is leased its own worktree, which hashes to a
@@ -752,7 +752,43 @@ func (s *sessScan) addRow(row int, r core.ReplayRow) {
 			s.drainErrors(r.At)
 		}
 		s.addUsage(row, r.Usage, r.Cumulative, r.At)
+	case core.ReplayRowPrefix:
+		txt := prefixEventText(r.Prefix)
+		s.add(sessEvent{Row: row, Kind: "prefix", Bytes: len(txt), Text: txt})
+	case core.ReplayRowCliff:
+		txt := cliffEventText(r.Cliff)
+		s.add(sessEvent{Row: row, Kind: "cliff", Bytes: len(txt), Text: txt})
 	}
+}
+
+// prefixEventText renders one prefix divergence as a line.
+//
+// The rung is the field worth surfacing, not the whole digest set. These rows
+// are one per rebuilt dispatch and a long session carries dozens, so a reader
+// scanning them wants to see WHERE the prefix broke and how far back that is,
+// then move on. The two message counts give the break its scale: a divergence
+// at message 12 of 340 rewrites ancient history, and one at 339 of 340 is tail
+// churn that costs almost nothing.
+func prefixEventText(d core.PrefixDivergence) string {
+	label := d.Label
+	if label == "" {
+		label = "unnamed"
+	}
+	return fmt.Sprintf("prefix rebuilt at rung %d (%s), %d messages against %d before, %d cached tokens re-read",
+		d.Rung, label, d.MsgCount, d.PrevMsgCount, d.CachedTokens)
+}
+
+// cliffEventText renders one cache-cliff row as a line. The detector writes two
+// rows per run: the opening row marks it, and the closing row carries the
+// totals the run reached. An opening row with no close means the run was still
+// open when the session ended, which is itself the fact worth reading.
+func cliffEventText(c core.CacheCliff) string {
+	state := "closed"
+	if c.Ongoing {
+		state = "opened"
+	}
+	return fmt.Sprintf("cache collapse run %s after %d dispatches, %d tokens re-read",
+		state, c.Dispatches, c.RereadTokens)
 }
 
 // drainErrors emits every pending sidecar error at or before cutoff. A zero
@@ -921,16 +957,17 @@ func clipSnippetSource(s string) string {
 // handed a session file from another machine and had to analyze it with an
 // out-of-tree script).
 //
-// The converse holds too, and is what keeps the project scoping intact:
-// $TERVA_HOME/sessions and swarm/ are registered secret roots, so a path
-// pointing into ANOTHER project's transcripts is refused here exactly as it is
-// for read — with the deny list's own message, which already says that bash
-// cannot reach it either and /unjail does not lift it. Cross-project inspection
-// therefore remains closed, and closes with an explanation rather than a
-// puzzling "no such session".
+// A transcript under $TERVA_HOME is reachable too, and that is the carve-out
+// this tool exists to justify. CheckTranscriptRead admits a .jsonl under the
+// registered transcript roots and defers to CheckPathRead for everything else,
+// so auth.json and the logs beside it stay refused on this route as on every
+// other. The denial it replaces bought no confinement: `cp` moved a transcript
+// out of $TERVA_HOME the whole time, and the copy was then read with no
+// redaction at all. See tools.Sandbox.CheckTranscriptRead for the full
+// argument, and build.restrictSensitiveReads for where the roots are set.
 func (t *SessionInspectTool) resolveFromPath(raw string) (path, id string, err error) {
 	p := resolvePath(t.CWD, raw)
-	if err := t.Sandbox.CheckPathRead(p); err != nil {
+	if err := t.Sandbox.CheckTranscriptRead(p); err != nil {
 		return "", "", err
 	}
 	info, serr := os.Stat(p)
@@ -972,8 +1009,17 @@ func (t *SessionInspectTool) resolvePath(ctx context.Context, sessionID string) 
 			if _, e := os.Stat(sp); e == nil {
 				return sp, sessionID, true, nil
 			}
+			// Last, and only on a miss in this project: the other project
+			// buckets. Sessions are keyed by CWDHash, so an id that reaches
+			// you from a cost report or an earlier session names a file you
+			// cannot otherwise locate — which is exactly when you want it.
+			// This project stays FIRST, so an id present in both resolves the
+			// way it always did.
+			if op := core.FindSessionAcrossProjects(t.TervaHome, sessionID); op != "" {
+				return op, sessionID, false, nil
+			}
 		}
-		return "", "", false, fmt.Errorf("no such session or swarm sub-agent %q in this project — session ids are transcript filenames without .jsonl (terva_status prints the current one); sub-agent ids are what swarm_spawn and the [auto-swarm update] recap print", sessionID)
+		return "", "", false, fmt.Errorf("no such session or swarm sub-agent %q in $TERVA_HOME — session ids are transcript filenames without .jsonl (terva_status prints the current one); sub-agent ids are what swarm_spawn and the [auto-swarm update] recap print", sessionID)
 	}
 	ag := core.AgentFromContext(ctx)
 	if ag == nil {
@@ -1109,6 +1155,12 @@ func renderSessionEvents(sessID string, window []sessEvent, total, start, end, l
 			// No transcript row and no tool: a sidecar error is placed by
 			// timestamp, so "row -" says it has no row rather than showing -1.
 			line = fmt.Sprintf("[#%d row -] %-12s %s\n", wireIndex(start+i), e.Kind, eventSnippet(e.Text))
+		case e.Kind == "prefix", e.Kind == "cliff":
+			// Cache diagnostics carry numbers, not text from a conversation, so
+			// they take the usage row's shape rather than the text columns. A
+			// tool name, a status and a byte count are all empty for these, and
+			// printing them reads as a defect in the tool.
+			line = fmt.Sprintf("[#%d row %d] %-12s %s\n", wireIndex(start+i), e.Row, e.Kind, eventSnippet(e.Text))
 		default:
 			line = fmt.Sprintf("[#%d row %d] %-12s %-16s %-4s %6dB  %s\n", wireIndex(start+i), e.Row, e.Kind, e.Tool, eventStatus(e), e.Bytes, eventSnippet(e.Text))
 		}

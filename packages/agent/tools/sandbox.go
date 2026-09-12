@@ -24,6 +24,12 @@ type Sandbox struct {
 	// set-once-at-setup contract as readOnlyRoots.
 	secretRoots []string
 
+	// transcriptRoots are the subtrees whose .jsonl files the SANCTIONED
+	// transcript reader may open even though secretRoots denies them to
+	// everything else. Registered by the host beside the matching secret
+	// root, never instead of it. See CheckTranscriptRead for the argument.
+	transcriptRoots []string
+
 	// secretNames deny by base NAME within a subtree, for keys whose
 	// directories cannot be enumerated ahead of time. See AddSecretNameUnder.
 	secretNames []roGlob
@@ -150,9 +156,15 @@ func (s *Sandbox) CheckPathRead(path string) error {
 		}
 	}
 	for _, secret := range s.secretRoots {
-		if isUnder(secret, target) {
-			return fmt.Errorf("jailed: path %q holds credentials or transcripts and is never readable by tools (bash cannot read it either; /unjail does not lift this)", path)
+		if !isUnder(secret, target) {
+			continue
 		}
+		// A transcript has a reader, so the refusal names it instead of
+		// reporting a dead end. Everything else keeps the absolute message.
+		if s.isTranscript(target) {
+			return fmt.Errorf("jailed: path %q is a session transcript, and this tool does not read those — pass it to session_inspect instead, which is the sanctioned reader (it redacts credentials and bounds its output)", path)
+		}
+		return fmt.Errorf("jailed: path %q holds credentials and is never readable by tools (/unjail does not lift this)", path)
 	}
 	// Denied by NAME within a subtree: a component's private key is created at
 	// a path nobody can enumerate ahead of time (connectors/<any-name>/), and
@@ -160,7 +172,7 @@ func (s *Sandbox) CheckPathRead(path string) error {
 	// silently miss every connector configured after startup.
 	for _, g := range s.secretNames {
 		if base == g.pattern && isUnder(g.dir, target) {
-			return fmt.Errorf("jailed: path %q is a private key and is never readable by tools (bash cannot read it either; /unjail does not lift this)", path)
+			return fmt.Errorf("jailed: path %q is a private key and is never readable by tools (/unjail does not lift this)", path)
 		}
 	}
 	// Decided at read time, and LAST: a guard can only ever add a denial, never
@@ -180,6 +192,87 @@ func (s *Sandbox) CheckPathRead(path string) error {
 		}
 	}
 	return nil
+}
+
+// isTranscript reports whether an already-canonical path is a session
+// transcript: a .jsonl file under a registered transcript root. Both halves
+// are load-bearing. The extension alone would admit any JSONL anywhere, and
+// the root alone would admit the sidecars and state files that sit beside a
+// transcript without being one.
+//
+// The path is canonical, so a symlink planted inside a transcript root cannot
+// widen this. It resolves to its target before the test runs, and a target
+// outside the root fails the containment check exactly as a direct path to it
+// would.
+func (s *Sandbox) isTranscript(target string) bool {
+	if !strings.EqualFold(filepath.Ext(target), ".jsonl") {
+		return false
+	}
+	for _, root := range s.transcriptRoots {
+		if isUnder(root, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// CheckTranscriptRead is CheckPathRead with one carve-out: a session
+// transcript is admitted, where the deny list refuses it to every other tool.
+//
+// This is a deliberate asymmetry between two read routes, so it owes an
+// argument. The deny list bought no confinement over transcripts, because a
+// transcript was never actually unreachable. `cp` moves one out of
+// $TERVA_HOME, and the shell-argument heuristic that backs the bash side
+// matches literal paths, so `$TERVA_HOME/sessions` walks straight through it.
+// What the list bought was a detour: every analysis of a session in
+// TKT-01M1ZTSN5 began by copying the file out, and then read the copy with no
+// redaction at all.
+//
+// Opening the sanctioned reader while the raw ones stay shut therefore REDUCES
+// what leaks rather than widening it. session_inspect redacts credential
+// shapes (core.RedactSecrets) and bounds its output; `cat` of a copy does
+// neither. The carve-out is narrow on both axes: only .jsonl, and only under a
+// root the host registered for the purpose. auth.json, the secrets key, the
+// web token, logs/ and config.json are refused here exactly as they are
+// everywhere else, because this defers to CheckPathRead for every path it does
+// not recognise as a transcript.
+//
+// It holds while jailed. The jail confines WRITES to the user's tree and
+// routes a risky read past other safeguards; a redacted, bounded read of
+// terva's own state is neither of those things, and requiring /unjail to read
+// a transcript would teach the model to reach for `cp` again.
+func (s *Sandbox) CheckTranscriptRead(path string) error {
+	if s == nil {
+		return nil
+	}
+	target, err := canonicalOrParent(path)
+	if err != nil {
+		return fmt.Errorf("sandbox path: %w", err)
+	}
+	if s.isTranscript(target) {
+		return nil
+	}
+	return s.CheckPathRead(path)
+}
+
+// AddTranscriptRoot registers a subtree whose .jsonl files CheckTranscriptRead
+// admits. It grants nothing on its own: every other read route still consults
+// the deny list, so a root registered here without a matching AddSecretRoot
+// simply describes a tree that was already readable.
+//
+// Paths are canonicalized once, and an unresolvable one is skipped, on the
+// same set-once-at-setup contract as AddSecretRoot.
+func (s *Sandbox) AddTranscriptRoot(paths ...string) {
+	for _, p := range paths {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		c, err := canonicalOrParent(p)
+		if err != nil {
+			continue
+		}
+		s.transcriptRoots = append(s.transcriptRoots, c)
+	}
 }
 
 // AddSecretNameUnder denies every file with this exact base name anywhere
