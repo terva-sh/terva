@@ -11,6 +11,20 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.135.0](https://github.com/terva-sh/terva/releases/tag/v0.135.0) — 2026-09-10
+
+### Features
+
+- ext: name pack registries in user configuration
+- fleet: one session list across a fleet of daemons
+- provider: claim the Claude Code version Anthropic expects
+- tickets: guardrails on the ticket tools
+- tui: recommended options, worker metadata, and a scrollable model form
+
+### Fixes
+
+- mcp: strip Authorization on the path that carries a token
+
 ## [v0.134.5](https://github.com/terva-sh/terva/releases/tag/v0.134.5) — 2026-09-08
 
 ### Features
