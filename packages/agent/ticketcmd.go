@@ -50,6 +50,19 @@ func runTicketCommand(rawArgs []string) (bool, int) {
 // against one directory and explicit streams. It returns git-ticket's
 // documented exit status.
 func runTicketIn(dir string, argv []string, stdout, stderr io.Writer) int {
+	// `groom` is terva's verb and not git-ticket's, so it is answered here
+	// rather than forwarded. The embedded CLI would refuse a word it does not
+	// know.
+	//
+	// Only argv[0] is read. The comment above seedInitActor warns that reading
+	// argv for a verb goes wrong quietly, because a title can be the word
+	// `init` and a flag value can be anything. That warning is about SCANNING
+	// argv for a verb in any position. argv[0] is the verb slot by grammar, so
+	// no title or flag value ever lands there, and the warning does not reach
+	// this line.
+	if len(argv) > 0 && argv[0] == groomVerb {
+		return runTicketGroom(dir, argv[1:], stdout, stderr)
+	}
 	return runTicketInWithAsk(dir, argv, stdout, stderr, stdinTicketActorAsker())
 }
 

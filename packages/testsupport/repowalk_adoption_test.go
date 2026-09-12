@@ -21,6 +21,7 @@ var walksOutsideTheRepo = map[string]string{
 	filepath.Join("examples", "embed_test.go"):                   "walks the embedded FS roots, not a directory on disk",
 	filepath.Join("packages", "testsupport", "repowalk.go"):      "defines the predicate",
 	filepath.Join("packages", "testsupport", "repowalk_test.go"): "tests the predicate against synthetic trees",
+	filepath.Join("packages", "agent", "ticketgroom_test.go"):    "fingerprints a throwaway .tickets store under TempDir to prove groom writes nothing",
 }
 
 // TestEveryRepoWalkConsultsSkipScanDir enforces the adoption that SkipScanDir's

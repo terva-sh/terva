@@ -873,7 +873,7 @@
   "waiting": "waiting",
   "what a card's {{user}} resolves to (defaults to the saved name, else \"User\")": "what a card's {{user}} resolves to (defaults to the saved name, else \"User\")",
   "with --card: pick the opening line (0 = first_mes, 1..N = alternate greetings)": "with --card: pick the opening line (0 = first_mes, 1..N = alternate greetings)",
-  "work the repository's .tickets/ ledger (embedded git-ticket; `terva ticket ui` browses it full-screen, and `/ticket` opens the same view in the tui; `terva ticket help` lists commands)": "work the repository's .tickets/ ledger (embedded git-ticket; `terva ticket ui` browses it full-screen, and `/ticket` opens the same view in the tui; `terva ticket help` lists commands)",
+  "work the repository's .tickets/ ledger (embedded git-ticket; `terva ticket ui` browses it full-screen, and `/ticket` opens the same view in the tui; `terva ticket groom` reports which drafts are worth a look and changes nothing; `terva ticket help` lists commands)": "work the repository's .tickets/ ledger (embedded git-ticket; `terva ticket ui` browses it full-screen, and `/ticket` opens the same view in the tui; `terva ticket groom` reports which drafts are worth a look and changes nothing; `terva ticket help` lists commands)",
   "workflow %s: run %s — %d agents (%d replayed), $%.4f, %s": "workflow %s: run %s — %d agents (%d replayed), $%.4f, %s",
   "workflow runs: %v": "workflow runs: %v",
   "workspace — auto in-workspace, ask foreign": "workspace — auto in-workspace, ask foreign",
