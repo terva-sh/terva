@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -51,6 +52,12 @@ type statusFacts struct {
 	TicketStores        []config.TicketStore
 	TicketStoresRefused []config.TicketStoreRefusal
 
+	// ClientIdentities names each provider that terva is NOT identifying itself
+	// to, as "provider=identity". Presenting another vendor's first-party client
+	// is impersonation, so while it is on it is shown rather than left to sit
+	// unread in a config file. Empty is the default and renders no row.
+	ClientIdentities []string
+
 	ContextTokens int // last turn's real context size (0 = no turn yet)
 	Window        int // model context window in tokens (0 = unknown)
 	Cumulative    core.WireUsage
@@ -79,6 +86,7 @@ func (i *Interactive) slashStatus() {
 	if c, err := config.LoadConfig(); err == nil {
 		f.PackRegistries = c.PackRegistries
 		f.TicketStores, f.TicketStoresRefused = config.ResolveTicketStores(c.TicketStores, config.TervaHome())
+		f.ClientIdentities = nonDefaultClientIdentities(c.Providers)
 	}
 	if i.cfg.CurrentSessionPath != nil {
 		f.SessPath = i.cfg.CurrentSessionPath()
@@ -121,6 +129,26 @@ func (i *Interactive) slashStatus() {
 	i.scrollOffset = 0
 	i.mu.Unlock()
 	i.invalidate()
+}
+
+// nonDefaultClientIdentities lists the providers terva is not naming itself to,
+// as "provider=identity", sorted.
+//
+// Sorted because Go randomises map iteration, and a row whose contents reorder
+// between two /status calls reads as a setting that changed. Only non-empty
+// values are listed: the empty string is the default, and a row saying that
+// terva calls itself terva would train the operator to skip the line that
+// matters.
+func nonDefaultClientIdentities(providers map[string]config.ProviderSettings) []string {
+	var out []string
+	for name, p := range providers {
+		if p.ClientIdentity == "" {
+			continue
+		}
+		out = append(out, name+"="+p.ClientIdentity)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // statusRow paints one label and value line of the /status block.
@@ -203,6 +231,12 @@ func statusRows(th tui.Theme, f statusFacts) []string {
 			bad = append(bad, r.Name+": "+r.Reason)
 		}
 		rows = append(rows, row(i18n.T("refused"), strings.Join(bad, "; ")))
+	}
+	// Same rule again, and the strongest case for it. terva naming itself is the
+	// default, and an operator who switched that off has told a third party that
+	// a different client is calling. That must never be invisible.
+	if len(f.ClientIdentities) > 0 {
+		rows = append(rows, row(i18n.T("identity"), strings.Join(f.ClientIdentities, ", ")))
 	}
 	switch {
 	case f.SessionID != "":

@@ -84,6 +84,15 @@ type Config struct {
 	AutoTitle      *bool  `json:"auto_title,omitempty"`
 	AutoTitleModel string `json:"auto_title_model,omitempty"`
 
+	// Providers holds per-provider operator settings, keyed by terva provider
+	// id ("openai-codex"). It TUNES a provider terva already knows, where
+	// Endpoints below REGISTERS one that it does not.
+	//
+	// User layer only, and deliberately absent from ProjectConfig: the one
+	// setting here changes how terva identifies itself to a third party, and a
+	// cloned repository must not make that choice for the operator.
+	Providers map[string]ProviderSettings `json:"providers,omitempty"`
+
 	// Endpoints are user-defined OpenAI-compatible backends, each registered
 	// as its own provider (the map key is the provider id) with its own
 	// /v1/models discovery and row in the /model picker — the way to use
@@ -511,6 +520,32 @@ type Config struct {
 	// `terva secret init`; user layer only. See config/secrets.go and
 	// docs/proposals/secrets-at-rest.md.
 	Secrets *SecretsConfig `json:"secrets,omitempty"`
+}
+
+// ProviderSettings are the operator's settings for one provider (the provider
+// id is the map key in Config.Providers). One field today, and the type exists
+// so the next per-provider knob needs no further top-level config key.
+type ProviderSettings struct {
+	// ClientIdentity selects the name terva presents on this provider's wire.
+	// Empty is the default and means terva identifies itself. "native" means
+	// terva presents that provider's own first-party CLI identity instead.
+	//
+	// Only openai-codex implements this today. There "native" sends
+	// `originator: codex_cli_rs` with a user-agent carrying a probed Codex CLI
+	// version, in place of terva's own two values.
+	//
+	// Know two things before switching it on. It is impersonation: a third
+	// party is told that a different client is calling. And it has NO measured
+	// benefit. terva's own header decomposition scored originator and
+	// user-agent at 1/4 each against a 0/4 baseline, while the session-id
+	// header terva already sends carried the whole effect. The setting exists
+	// because an operator asked to be able to try it against a cache cliff
+	// that costs real money, and not because it is known to work.
+	//
+	// A keyword and not a literal header value, so this cannot become a
+	// free-form header injection point. An unrecognized word keeps the
+	// default.
+	ClientIdentity string `json:"client_identity,omitempty"`
 }
 
 // EndpointConfig defines one user-supplied OpenAI-compatible backend. The

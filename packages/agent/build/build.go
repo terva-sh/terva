@@ -49,6 +49,10 @@ type Resolved struct {
 	// the news; a host that CAN ask hands the choice back instead.
 	ProviderSwitch *ProviderSwitch
 	AccountID      string // ChatGPT account id (for openai oauth), "" otherwise
+	// ClientIdentity is the operator's per-provider client-identity keyword
+	// (config.ProviderSettings.ClientIdentity). Empty is the default, and it
+	// means terva names itself. Read off the USER layer only.
+	ClientIdentity string
 	BaseURL        string
 	CWD            string
 	Reasoning      string
@@ -1464,6 +1468,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		CredentialErr:            credFailure,
 		ProviderSwitch:           switched,
 		AccountID:                accountID,
+		ClientIdentity:           eff.Config.Providers[provName].ClientIdentity,
 		BaseURL:                  args.BaseURL,
 		CWD:                      args.CWD,
 		Reasoning:                reasoning,
@@ -1658,11 +1663,12 @@ func (r Resolved) NewClient() provider.Client {
 // clientConfig is how Resolved presents itself to a registry entry.
 func (r Resolved) clientConfig() clientConfig {
 	return clientConfig{
-		Provider:   r.Provider,
-		Credential: r.Credential,
-		BaseURL:    r.BaseURL,
-		AuthMethod: r.AuthMethod,
-		AccountID:  r.AccountID,
+		Provider:       r.Provider,
+		Credential:     r.Credential,
+		BaseURL:        r.BaseURL,
+		AuthMethod:     r.AuthMethod,
+		AccountID:      r.AccountID,
+		ClientIdentity: r.ClientIdentity,
 	}
 }
 

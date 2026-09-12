@@ -90,6 +90,7 @@ func TestEveryStringConfigFieldIsClassified(t *testing.T) {
 		"permissions[].tool":                "a tool name",
 		"persona_name":                      "a persona name",
 		"provider":                          "a provider id",
+		"providers.*.client_identity":       "a client-identity keyword (\"\" or \"native\"), never a header value or a token; it selects which NAME terva sends, and the names themselves are public strings",
 		"raati.auto_panel_providers[]":      "provider ids",
 		"raati.level2[].model":              "a model id",
 		"raati.level2[].provider":           "a provider id",

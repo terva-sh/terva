@@ -84,7 +84,8 @@ var providerSpecs = []providerSpec{
 		// No apiKeyEnv: the ChatGPT/Codex subscription route
 		// intentionally ignores OPENAI_API_KEY so both can coexist.
 		newClient: func(c clientConfig) provider.Client {
-			return provider.NewOpenAICodexSource(c.credentialSource(), c.AccountID, c.BaseURL)
+			return provider.NewOpenAICodexSource(c.credentialSource(), c.AccountID, c.BaseURL,
+				provider.WithCodexClientIdentity(c.ClientIdentity))
 		},
 	},
 	{
@@ -667,6 +668,9 @@ type clientConfig struct {
 	BaseURL    string
 	AuthMethod string
 	AccountID  string
+	// ClientIdentity is the operator's client-identity keyword for this
+	// provider. Empty is the default and names terva.
+	ClientIdentity string
 }
 
 func (c clientConfig) credentialSource() provider.CredentialSource {

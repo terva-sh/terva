@@ -99,6 +99,60 @@ The mechanism is a generic `provider.UsageReporter` capability — any provider
 lights up `/usage` automatically once its client implements it, with no harness
 changes. See `docs/plans/archive/usage-windows.md`.
 
+### Client identity (`providers.<id>.client_identity`)
+
+By default terva names itself on every request. On the Codex subscription wire
+that means `originator: terva` and a `terva (<os> <arch>)` user-agent.
+
+You can make terva present OpenAI's own Codex CLI instead. This is off by
+default, and it is a user-layer setting only.
+
+The easiest route is `/settings`, under **Provider**, as **Codex client
+identity**. The row is there whatever provider the session runs on, so you can
+set what your next Codex session sends without starting one first. It governs
+`openai-codex` alone, and the row's note says so when you are on another
+provider. Changing it writes your user config and applies to new sessions, not
+to the one you are in.
+
+The same setting by hand:
+
+```json
+{
+  "providers": {
+    "openai-codex": { "client_identity": "native" }
+  }
+}
+```
+
+With `native`, all three Codex request paths (the responses stream, the
+server-side `/compact` call, and the `/wham` account endpoints) send
+`originator: codex_cli_rs` and a `codex_cli_rs/<version>` user-agent. The
+version comes from `codex --version` on this machine, probed once per process
+and floored at a compiled baseline, so a missing or older install still claims a
+plausible version. terva runs that probe only when the setting is on.
+
+Read this before you switch it on.
+
+**It is impersonation.** A third party is told a different client is calling.
+`/status` grows an `identity` row naming every provider you have switched, and
+that row is there so the choice cannot sit unread in a config file.
+
+**It has no measured benefit.** terva's own header decomposition against
+`chatgpt.com/backend-api/codex/responses` scored `originator` and `user-agent` at
+1/4 each against a 0/4 baseline. The header that carried the whole effect was
+`session-id`, at 25/30 against 3/18, and terva has sent that since v0.131.5 with
+no impersonation at all. The setting exists because the cache cliff costs real
+money and an operator asked to be able to try the remaining variable, not
+because it is known to work. `docs/reviews/2026-08-04-gpt56-post-compaction-cache-collapse.md`
+holds the measurements.
+
+A project's `.terva/config.json` cannot set this. The field is absent from the
+project config schema, so a cloned repository cannot decide how terva identifies
+itself.
+
+`client_identity` takes `""` (the default) or `"native"`. Any other value keeps
+the default. Only `openai-codex` implements it today.
+
 ## API-key providers
 
 These providers can use environment variables. Simple API-key providers can

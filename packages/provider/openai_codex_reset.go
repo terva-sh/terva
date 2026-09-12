@@ -224,8 +224,9 @@ func (c *codexClient) whamJSON(ctx context.Context, method, path string, body an
 	req.Header.Set("authorization", "Bearer "+token)
 	req.Header.Set("chatgpt-account-id", c.accountID)
 	req.Header.Set("accept", "application/json")
-	req.Header.Set("originator", "terva")
-	req.Header.Set("user-agent", codexUserAgent())
+	originator, userAgent := c.identityHeaders()
+	req.Header.Set("originator", originator)
+	req.Header.Set("user-agent", userAgent)
 	if body != nil {
 		req.Header.Set("content-type", "application/json")
 	}

@@ -117,8 +117,9 @@ func (c *codexClient) CompactServerSide(ctx context.Context, req Request) ([]Mes
 	httpReq.Header.Set("authorization", "Bearer "+token)
 	httpReq.Header.Set("chatgpt-account-id", c.accountID)
 	httpReq.Header.Set("openai-beta", "responses=experimental")
-	httpReq.Header.Set("originator", "terva")
-	httpReq.Header.Set("user-agent", codexUserAgent())
+	originator, userAgent := c.identityHeaders()
+	httpReq.Header.Set("originator", originator)
+	httpReq.Header.Set("user-agent", userAgent)
 	// Same derivation as the streaming path, so a conversation presents one
 	// session identity across both endpoints rather than two.
 	if sid := codexSessionID(full.PromptCacheKey); sid != "" {

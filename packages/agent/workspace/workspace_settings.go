@@ -78,6 +78,14 @@ var temperatureOptions = []ctrlproto.SettingOption{
 	{Value: "1", Label: i18n.M("1.0 — most varied")},
 }
 
+// The labels name what goes on the wire, because that is the whole of what
+// this setting changes. Neither option is presented as the better one: the
+// default is terva, and the measurement behind it is in openai_codex.go.
+var codexIdentityOptions = []ctrlproto.SettingOption{
+	{Value: provider.CodexIdentityTerva, Label: i18n.M("terva — send terva's own name (default)")},
+	{Value: provider.CodexIdentityNative, Label: i18n.M("codex_cli_rs — send OpenAI's Codex CLI name")},
+}
+
 // optionsWithCurrent prepends value as a bare option when it is non-empty and
 // absent from opts, so an enum setting whose current value is a custom theme or
 // an off-preset temperature (set by hand in config.json) still round-trips —
@@ -115,6 +123,7 @@ func localizeOptions(opts []ctrlproto.SettingOption) []ctrlproto.SettingOption {
 var settingGroups = []ctrlproto.SettingGroup{
 	{ID: "security", Label: i18n.M("Security & trust"), Desc: i18n.M("Approval gating, the tool-call classifier, and workspace trust.")},
 	{ID: "model", Label: i18n.M("Model & thinking"), Desc: i18n.M("Reasoning depth, thinking display and record, and sampling temperature.")},
+	{ID: "provider", Label: i18n.M("Provider"), Desc: i18n.M("Settings that belong to the provider serving this session, not to the model.")},
 	{ID: "context", Label: i18n.M("Context & prompt"), Desc: i18n.M("What rides the prompt, and how the transcript condenses as it fills.")},
 	{ID: "agents", Label: i18n.M("Delegation & panels"), Desc: i18n.M("Background sub-agents, external workers, and deliberation panels.")},
 	{ID: "reliability", Label: i18n.M("Reliability & diagnostics"), Desc: i18n.M("Stuck-loop handling, and records of cache losses and transports.")},
@@ -374,6 +383,33 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 			Note:        i18n.T("applies to the next convening"),
 		})
 	}
+	// Provider-scoped settings. The group is flat and each item names its
+	// provider, because there is one such setting today; a provider with several
+	// would earn a descent, and inventing that navigation for one row costs a
+	// level of depth for nothing.
+	//
+	// The row renders on every session, not only a codex one. It governs one
+	// provider, so an off-provider session could argue for hiding it, but hiding
+	// it makes the setting findable only by already running the provider it
+	// configures. The note carries the scope instead, which is the honest half
+	// of what hiding was buying, and the write works from anywhere: a user on
+	// anthropic can set the identity their next codex session starts with.
+	identityNote := i18n.T("saved in your user config, never read from a project config — applies to new sessions")
+	if prov, _ := s.currentModel(); prov != "openai-codex" {
+		identityNote = i18n.T("openai-codex only — this session runs on another provider, so this changes what your next codex session sends, not this one")
+	}
+	items = append(items, ctrlproto.SettingItem{
+		Key: "codex_client_identity", Group: "provider", Label: i18n.T("Codex client identity"), Type: "enum",
+		Value:   cfg.Providers["openai-codex"].ClientIdentity,
+		Options: localizeOptions(codexIdentityOptions),
+		// No claim that either setting helps, because the measurement says
+		// it does not: originator and user-agent each scored 1/4 against a
+		// 0/4 baseline, and the session-id header carried the whole effect.
+		// A user who turns this on should know they are buying nothing
+		// measured.
+		Description: i18n.T("The client name terva presents to OpenAI's Codex endpoint. The default names terva honestly. The alternative presents OpenAI's own Codex CLI, which no measurement here shows to improve prompt caching or anything else."),
+		Note:        identityNote,
+	})
 	// Engine features project into the same pane (the seam build.EngineFeatures
 	// declares), each into the settings group its declaration names. The
 	// lazy-tools-bound ones were already placed beside their parent above.
@@ -689,6 +725,31 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
 		}
 		s.ws.BroadcastAll(ctrlproto.LocaleChangedEvent(i18n.ActiveLang()))
+	case "codex_client_identity":
+		// Validated against the provider's own vocabulary rather than a literal
+		// list here, so the wire cannot become a header-injection point: an
+		// unknown word is refused outright, not forwarded as a header value.
+		if !provider.ValidCodexIdentity(val) {
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown client identity %q (terva|native)", val))
+		}
+		// MutateConfig is MutateConfigAt(TervaHome()), so this lands in the user
+		// layer by construction. That is the requirement and not a convenience:
+		// ProviderSettings is deliberately absent from ProjectConfig, so a cloned
+		// repository cannot change how terva names itself to a provider. A write
+		// path that reached the project layer would undo that.
+		if err := config.MutateConfig(func(c *config.Config) {
+			if c.Providers == nil {
+				c.Providers = map[string]config.ProviderSettings{}
+			}
+			p := c.Providers["openai-codex"]
+			p.ClientIdentity = val
+			c.Providers["openai-codex"] = p
+		}); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
+		// No live apply, and the Note says so. The identity is baked into the
+		// codex client when the provider registry builds it (WithCodexClientIdentity),
+		// so a running session keeps the name it started with.
 	default:
 		f, ok := build.EngineFeatureByID(key)
 		if !ok {

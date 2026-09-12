@@ -90,6 +90,10 @@ type codexClient struct {
 	baseURL   string
 	http      *http.Client
 
+	// identity is the client identity every request presents. Empty is the
+	// default and names terva. See identityHeaders.
+	identity string
+
 	// usage holds the subscription-window snapshot parsed from response
 	// headers (see recordUsageHeaders); Stream writes it while the TUI reads
 	// it. Seeded across a client rebuild (see SeedUsage) so the meters survive
@@ -115,25 +119,85 @@ func NewOpenAICodex(token, accountID, baseURL string) Client {
 // NewOpenAICodexSource is NewOpenAICodex with a CredentialSource instead of a
 // fixed token, so the OAuth access token can rotate (refresh) without
 // rebuilding the client — the client resolves it once per Stream.
-func NewOpenAICodexSource(cred CredentialSource, accountID, baseURL string) Client {
+func NewOpenAICodexSource(cred CredentialSource, accountID, baseURL string, opts ...CodexOption) Client {
 	if baseURL == "" {
 		baseURL = codexDefaultBaseURL
 	}
-	return &codexClient{
+	c := &codexClient{
 		cred:      cred,
 		accountID: accountID,
 		baseURL:   strings.TrimRight(baseURL, "/"),
 		http:      &http.Client{Timeout: 0},
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
+
+// CodexOption configures a codex client at construction. Variadic so the
+// several existing call sites, the live probes among them, keep compiling.
+type CodexOption func(*codexClient)
+
+// The client identities the codex wire understands.
+//
+// CodexIdentityNative presents OpenAI's own Codex CLI rather than terva. It is
+// OFF by default and an operator turns it on per provider in the user layer.
+// Read the header block in Stream for what the measurements say about whether
+// it buys anything: the short version is that they say it does not.
+const (
+	CodexIdentityTerva  = ""
+	CodexIdentityNative = "native"
+)
+
+// ValidCodexIdentity reports whether s is an identity keyword this client
+// implements. The configuration layer calls it so an operator's typo reports as
+// a refusal rather than silently keeping the default, which is the failure a
+// keyword setting exists to avoid.
+func ValidCodexIdentity(s string) bool {
+	return s == CodexIdentityTerva || s == CodexIdentityNative
+}
+
+// WithCodexClientIdentity sets the client identity every request presents. An
+// unrecognized value keeps the default, because a request that names terva is
+// always the safe outcome of a configuration mistake.
+func WithCodexClientIdentity(id string) CodexOption {
+	return func(c *codexClient) {
+		if ValidCodexIdentity(id) {
+			c.identity = id
+		}
+	}
 }
 
 func (c *codexClient) Name() string { return "openai-codex" }
+
+// identityHeaders returns the originator and user-agent this client presents.
+// One helper for all three request paths (the responses stream, /compact, and
+// the /wham account endpoints), because a conversation that presented two
+// identities across its own endpoints would be worse than either one.
+func (c *codexClient) identityHeaders() (originator, userAgent string) {
+	if c.identity == CodexIdentityNative {
+		return "codex_cli_rs", codexNativeUserAgent()
+	}
+	return "terva", codexUserAgent()
+}
 
 // codexUserAgent is the UA sent on every chatgpt.com/backend-api call (the
 // responses stream and the /wham account endpoints), so both paths present
 // terva identically.
 func codexUserAgent() string {
 	return fmt.Sprintf("terva (%s %s)", runtime.GOOS, runtime.GOARCH)
+}
+
+// codexNativeUserAgent is the UA of the Codex CLI identity.
+//
+// Bare "codex_cli_rs/<version>" with no platform suffix, because that is the
+// exact shape the header decomposition sent and the backend served (4/4 on the
+// full Codex CLI arm, codex_identity_ab_test.go). The real Codex CLI's own
+// user-agent carries more than this, and terva has not read that string, so
+// guessing at a richer shape would claim a precision this has not earned.
+func codexNativeUserAgent() string {
+	return fmt.Sprintf("codex_cli_rs/%s", effectiveCodexCLIVersion())
 }
 
 // Capabilities declares that tool-result images must be mirrored into
@@ -635,14 +699,22 @@ func (c *codexClient) Stream(ctx context.Context, req Request) (<-chan Event, er
 		httpReq.Header.Set("authorization", "Bearer "+token)
 		httpReq.Header.Set("chatgpt-account-id", c.accountID)
 		httpReq.Header.Set("openai-beta", "responses=experimental")
-		httpReq.Header.Set("originator", "terva")
-		httpReq.Header.Set("user-agent", codexUserAgent())
-		// Deliberately NOT accompanied by an originator/user-agent change.
-		// The upstream project terva forked from moved to the full
-		// codex_cli_rs identity for this (commit b58450d9); the
-		// decomposition measured originator and user-agent contributing
-		// nothing (1/4 each against a 0/4 baseline), so terva keeps naming
-		// itself honestly and sends only the field it was omitting.
+		// The default names terva, and that default is the measured position.
+		// The upstream project terva forked from moved to the full codex_cli_rs
+		// identity to win this cache back (commit b58450d9); the decomposition
+		// measured originator and user-agent contributing nothing, 1/4 each
+		// against a 0/4 baseline, while session-id below carried the whole
+		// effect. So terva sends the field it was omitting and keeps naming
+		// itself.
+		//
+		// An operator can still switch to the Codex CLI identity per provider
+		// in the user layer. That is a decision about acceptable risk against a
+		// cliff that costs real money, and it is not a new measurement: nothing
+		// here claims those two headers help. See WithCodexClientIdentity and
+		// ticket TKT-01M29FMAXGQYQD79VYSGWYAH4N.
+		originator, userAgent := c.identityHeaders()
+		httpReq.Header.Set("originator", originator)
+		httpReq.Header.Set("user-agent", userAgent)
 		if sid := codexSessionID(req.PromptCacheKey); sid != "" {
 			httpReq.Header.Set("session-id", sid)
 		}
