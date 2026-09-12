@@ -123,11 +123,25 @@ func (i *Interactive) slashStatus() {
 	i.invalidate()
 }
 
+// statusRow paints one label and value line of the /status block.
+//
+// %-10s pads a short label and does nothing to a label that already fills the
+// column, so a long one runs straight into its value with no separator at all.
+// The English labels all fit today, but every one of them goes through i18n.T
+// and a translation is free to be longer. Keep one space in that case and let
+// the column go ragged for that row, because a ragged column still reads and
+// "storespersonal" does not.
+func statusRow(th tui.Theme, label, value string) string {
+	pad := fmt.Sprintf("%-10s", label)
+	if pad == label {
+		pad = label + " "
+	}
+	return th.FG256(th.Muted, "    "+pad) + th.FG256(th.FG, value)
+}
+
 // statusRows paints the /status block from gathered facts.
 func statusRows(th tui.Theme, f statusFacts) []string {
-	row := func(label, value string) string {
-		return th.FG256(th.Muted, fmt.Sprintf("    %-10s", label)) + th.FG256(th.FG, value)
-	}
+	row := func(label, value string) string { return statusRow(th, label, value) }
 	rows := []string{th.FG256(th.Accent, "  "+i18n.T("terva status"))}
 
 	ver := f.Version
@@ -179,7 +193,7 @@ func statusRows(th tui.Theme, f statusFacts) []string {
 		for _, s := range f.TicketStores {
 			named = append(named, s.Name+" "+s.Path)
 		}
-		rows = append(rows, row(i18n.T("ticket stores"), strings.Join(named, ", ")))
+		rows = append(rows, row(i18n.T("stores"), strings.Join(named, ", ")))
 	}
 	// A refused entry is the one a user most needs to see: they configured a
 	// store and it is not there.
@@ -188,7 +202,7 @@ func statusRows(th tui.Theme, f statusFacts) []string {
 		for _, r := range f.TicketStoresRefused {
 			bad = append(bad, r.Name+": "+r.Reason)
 		}
-		rows = append(rows, row(i18n.T("stores refused"), strings.Join(bad, "; ")))
+		rows = append(rows, row(i18n.T("refused"), strings.Join(bad, "; ")))
 	}
 	switch {
 	case f.SessionID != "":
