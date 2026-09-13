@@ -439,16 +439,19 @@ func (d *ModelDialog) handleModelKey(k tui.Key) modelDialogAction {
 		if !ok {
 			return modelDialogAction{}
 		}
-		d.Close()
+		// The list stays open UNDERNEATH the editor, which outranks it in the
+		// overlay registry and so takes the keys while it is up. Closing here
+		// is what made saving an edit exit the picker entirely: the editor is
+		// one level above this list, so leaving it has to land back on it —
+		// with the filter, the scope and the cursor where they were.
 		return modelDialogAction{Edit: true, Provider: m.Provider, Model: m.ID}
 	case tui.KeyCtrlN:
 		// Clone-from, so the selection is required: it supplies the params the
-		// new model starts with.
+		// new model starts with. Stays open beneath the form, as ctrl+e does.
 		m, ok := d.p.selected()
 		if !ok {
 			return modelDialogAction{}
 		}
-		d.Close()
 		return modelDialogAction{Add: true, Provider: m.Provider, Model: m.ID}
 	}
 	// The picker gets what this dialog did not claim: list movement and the

@@ -103,7 +103,12 @@ func (i *Interactive) applyModelAdd(prov, modelID string, entry provider.UserMod
 	i.invalidate()
 }
 
-// reopenModelPickerAt reopens the picker scoped to the new model.
+// reopenModelPickerAt re-scopes the picker onto the new model.
+//
+// The picker is still open beneath the form, so this is not what brings it
+// back — closing the form does that, with its filter and place intact. It runs
+// because a new model can land under a provider the list was not scoped to,
+// and the one the status line just named is the one to be looking at.
 //
 // The add does not switch to it. That matches the verb the edit path already
 // uses: a save re-resolves the sessions sitting on a model, it never moves the

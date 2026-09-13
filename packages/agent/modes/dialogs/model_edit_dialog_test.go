@@ -237,8 +237,12 @@ func TestModelEditResetGatedWithoutOverride(t *testing.T) {
 	}
 }
 
-// Ctrl+E in the picker emits an Edit action for the selected model and
-// closes the picker so the editor overlay takes over.
+// Ctrl+E in the picker emits an Edit action for the selected model and stays
+// open beneath the editor, which outranks it in the overlay registry.
+//
+// It used to close, which is why saving an edit left the model interface
+// altogether: there was nothing under the editor to fall back to, so `s` put
+// the user back at the prompt instead of back at the list they picked from.
 func TestModelDialogCtrlEOpensEditor(t *testing.T) {
 	d := NewModelDialog()
 	d.active = true
@@ -248,8 +252,8 @@ func TestModelDialogCtrlEOpensEditor(t *testing.T) {
 	if !act.Edit || act.Provider != "anthropic" || act.Model != "claude-x" {
 		t.Errorf("ctrl+e should emit Edit for the selected model, got %+v", act)
 	}
-	if d.Active() {
-		t.Error("picker should close when handing off to the editor")
+	if !d.Active() {
+		t.Error("picker should stay open beneath the editor, so closing it returns here")
 	}
 }
 

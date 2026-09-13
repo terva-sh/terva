@@ -166,6 +166,26 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 			render: func(cols int) []string { return i.dialog.Render(i.cfg.Theme, cols) },
 			cursor: i.dialog.CursorPos,
 		},
+		{ // model config editor / add form (ctrl+e, ctrl+n) — above the picker
+			// so it captures keys while open (it opens on top of it, and the
+			// picker stays open beneath so closing this one lands back there
+			// rather than at the prompt).
+			active: i.modelEditDialog.Active,
+			ctrlC:  func() bool { i.modelEditDialog.Close(); return true },
+			handleKey: func(k tui.Key) bool {
+				act := i.modelEditDialog.HandleKey(k)
+				switch {
+				case act.Save:
+					i.applyModelEdit(act.Provider, act.ModelID, act.Entry)
+				case act.Add:
+					i.applyModelAdd(act.Provider, act.ModelID, act.Entry)
+				case act.Reset:
+					i.applyModelReset(act.Provider, act.ModelID)
+				}
+				return false
+			},
+			render: func(cols int) []string { return i.modelEditDialog.Render(i.cfg.Theme, cols) },
+		},
 		{ // model picker
 			active: i.modelDialog.Active,
 			ctrlC:  func() bool { i.modelDialog.Close(); return true },
@@ -203,23 +223,6 @@ func (i *Interactive) buildOverlays() []overlayEntry {
 				return false
 			},
 			render: func(cols int) []string { return i.modelDialog.Render(i.cfg.Theme, cols) },
-		},
-		{ // model config editor (opened with ctrl+e from the picker)
-			active: i.modelEditDialog.Active,
-			ctrlC:  func() bool { i.modelEditDialog.Close(); return true },
-			handleKey: func(k tui.Key) bool {
-				act := i.modelEditDialog.HandleKey(k)
-				switch {
-				case act.Save:
-					i.applyModelEdit(act.Provider, act.ModelID, act.Entry)
-				case act.Add:
-					i.applyModelAdd(act.Provider, act.ModelID, act.Entry)
-				case act.Reset:
-					i.applyModelReset(act.Provider, act.ModelID)
-				}
-				return false
-			},
-			render: func(cols int) []string { return i.modelEditDialog.Render(i.cfg.Theme, cols) },
 		},
 		{ // log viewer (/extensions or /mcp → l) — top of the cluster so it
 			// captures keys while open over either manager.

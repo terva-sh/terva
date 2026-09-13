@@ -207,7 +207,8 @@ func TestOpenAtFallsBackWhenTheModelIsNotThere(t *testing.T) {
 }
 
 // Ctrl+N emits Add for the SELECTED model, which is the clone source rather
-// than the model being created, and closes the picker for the form.
+// than the model being created, and stays open beneath the form — a cancelled
+// add returns to the list, and a committed one reopens it on the new model.
 func TestModelDialogCtrlNOpensTheAddForm(t *testing.T) {
 	d := NewModelDialog()
 	d.active = true
@@ -220,7 +221,7 @@ func TestModelDialogCtrlNOpensTheAddForm(t *testing.T) {
 	if act.Edit {
 		t.Error("ctrl+n emitted Edit as well, which would open the wrong form")
 	}
-	if d.Active() {
-		t.Error("the picker should close when handing off to the add form")
+	if !d.Active() {
+		t.Error("the picker should stay open beneath the add form, so cancelling returns to it")
 	}
 }
