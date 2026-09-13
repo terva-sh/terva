@@ -284,7 +284,7 @@ func ctlEndpoint(flag string) (endpoint string, needsToken bool, err error) {
 }
 
 func printCtlHelp() {
-	fmt.Fprint(os.Stderr, i18n.H("help.ctl", `terva ctl — send one control-plane verb to a running terva
+	fmt.Fprint(helpOut, i18n.H("help.ctl", `terva ctl — send one control-plane verb to a running terva
 
   terva ctl <verb> [PARAMS_JSON]     call a verb; PARAMS_JSON may be "-" to read stdin
   terva ctl --list                   every verb this build serves

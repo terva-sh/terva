@@ -194,7 +194,7 @@ func serviceNames() string {
 
 // printBotHelp prints usage for `terva bot`.
 func printBotHelp() {
-	fmt.Fprint(os.Stderr, i18n.H("help.bot", `terva bot — chat-service bridge (connectors: %s)
+	fmt.Fprint(helpOut, i18n.H("help.bot", `terva bot — chat-service bridge (connectors: %s)
 
 usage:
   terva bot setup                       provision credentials for the connector

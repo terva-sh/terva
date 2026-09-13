@@ -126,7 +126,7 @@ func runModelsCommand(rawArgs []string) (handled bool, err error) {
 }
 
 func printModelsHelp() {
-	fmt.Fprintln(os.Stderr, i18n.H("help.models", `terva models — manage your custom model catalog ($TERVA_HOME/models.json)
+	fmt.Fprintln(helpOut, i18n.H("help.models", `terva models — manage your custom model catalog ($TERVA_HOME/models.json)
 
 usage:
   terva models init            scaffold a models.json you can edit

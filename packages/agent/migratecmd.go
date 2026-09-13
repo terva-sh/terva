@@ -51,7 +51,7 @@ type migrateOptions struct {
 }
 
 func printMigrateHelp() {
-	fmt.Fprintln(os.Stderr, i18n.H("help.migrate", `terva migrate — adopt the terva locations for data that zot left behind
+	fmt.Fprintln(helpOut, i18n.H("help.migrate", `terva migrate — adopt the terva locations for data that zot left behind
 
 usage:
   terva migrate                   interactive: copy the zot data dir, then ask

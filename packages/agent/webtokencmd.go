@@ -49,7 +49,7 @@ func runSecretWebToken(rest []string, w io.Writer) error {
 }
 
 func printWebTokenHelp() {
-	fmt.Fprintln(os.Stderr, i18n.H("help.secret-web-token", `terva secret web-token — issue the bearer token that gates 'terva web'
+	fmt.Fprintln(helpOut, i18n.H("help.secret-web-token", `terva secret web-token — issue the bearer token that gates 'terva web'
 
 usage:
   terva secret web-token init     mint a token (refuses if one already exists)

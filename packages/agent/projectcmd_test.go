@@ -10,7 +10,6 @@ import (
 )
 
 // chdirTemp changes into dir for the test and restores the old cwd afterward.
-// (Hand-rolled rather than t.Chdir, which needs go1.24; the module is go1.22.)
 func chdirTemp(t *testing.T, dir string) {
 	t.Helper()
 	old, err := os.Getwd()

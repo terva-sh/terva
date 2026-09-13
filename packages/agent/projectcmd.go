@@ -85,7 +85,7 @@ func hasHelpArg(args []string) bool {
 }
 
 func printProjectHelp() {
-	fmt.Fprint(os.Stderr, i18n.H("help.project", `terva project — per-project settings (edits ./.terva/config.json)
+	fmt.Fprint(helpOut, i18n.H("help.project", `terva project — per-project settings (edits ./.terva/config.json)
 
   terva project init [--persona NAME]   scaffold a self-contained (project-scoped) agent here
   terva project status                  show what this project will run (scope, trust, extensions, model)

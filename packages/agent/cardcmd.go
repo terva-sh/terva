@@ -2,7 +2,6 @@ package agent
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"terva.sh/terva/packages/agent/build"
@@ -32,7 +31,7 @@ func runCardCommand(rawArgs []string) (handled bool, err error) {
 }
 
 func printCardHelp() {
-	fmt.Fprintln(os.Stderr, i18n.H("help.card", `terva card — inspect SillyTavern character cards
+	fmt.Fprintln(helpOut, i18n.H("help.card", `terva card — inspect SillyTavern character cards
 
 usage:
   terva card info <path>...   summarize a card (.json or .png)

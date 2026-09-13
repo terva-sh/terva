@@ -49,7 +49,7 @@ func runLocaleCommand(rawArgs []string) (bool, error) {
 }
 
 func printLocaleHelp() {
-	fmt.Fprintln(os.Stderr, i18n.H("help.locale", `terva locale — inspect, edit, and contribute UI translations
+	fmt.Fprintln(helpOut, i18n.H("help.locale", `terva locale — inspect, edit, and contribute UI translations
 
 usage:
   terva locale list                 show languages and translation coverage

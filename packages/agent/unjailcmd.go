@@ -137,7 +137,7 @@ func printUnjailList() error {
 }
 
 func printUnjailHelp() {
-	fmt.Fprintln(os.Stderr, i18n.H("help.unjail", `terva unjail — let a directory run without the filesystem sandbox
+	fmt.Fprintln(helpOut, i18n.H("help.unjail", `terva unjail — let a directory run without the filesystem sandbox
 
 By default an interactive terva is JAILED: its built-in tools may only
 read and write inside the working directory. That confinement is what

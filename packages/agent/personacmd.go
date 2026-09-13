@@ -97,7 +97,7 @@ func runPersonaCommand(rawArgs []string) (handled bool, err error) {
 }
 
 func printPersonaHelp() {
-	fmt.Fprintln(os.Stderr, i18n.H("help.persona", `terva persona — inspect and manage personas
+	fmt.Fprintln(helpOut, i18n.H("help.persona", `terva persona — inspect and manage personas
 
 usage:
   terva persona list                list available personas (on-disk ∪ built-in)

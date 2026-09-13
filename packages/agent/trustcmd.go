@@ -134,7 +134,7 @@ func printTrustList() error {
 }
 
 func printTrustHelp() {
-	fmt.Fprintln(os.Stderr, i18n.H("help.trust", `terva trust — control which directories may load project-supplied code/instructions
+	fmt.Fprintln(helpOut, i18n.H("help.trust", `terva trust — control which directories may load project-supplied code/instructions
 
 By default terva treats project folders as UNTRUSTED: a cloned repo's
 .terva/extensions/* are not spawned and its .terva/skills/* and

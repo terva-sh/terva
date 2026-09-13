@@ -53,7 +53,7 @@ type doctorOptions struct {
 }
 
 func printDoctorHelp() {
-	fmt.Fprintln(os.Stderr, i18n.H("help.doctor", `terva doctor — report this process's effective privilege and deployment posture
+	fmt.Fprintln(helpOut, i18n.H("help.doctor", `terva doctor — report this process's effective privilege and deployment posture
 
 usage:
   terva doctor            print a read-only diagnosis and exit

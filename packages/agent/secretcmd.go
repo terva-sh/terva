@@ -73,7 +73,7 @@ func runSecretCommand(rawArgs []string) (handled bool, err error) {
 }
 
 func printSecretHelp() {
-	fmt.Fprintln(os.Stderr, i18n.H("help.secret", `terva secret — manage terva's secrets: encryption at rest, and the web token
+	fmt.Fprintln(helpOut, i18n.H("help.secret", `terva secret — manage terva's secrets: encryption at rest, and the web token
 
 usage:
   terva secret init     generate the encryption key and encrypt existing secrets

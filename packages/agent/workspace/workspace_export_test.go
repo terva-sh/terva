@@ -15,24 +15,24 @@ func txt(role provider.Role, s string, meta map[string]string) provider.Message 
 
 func storyFixture() ([]provider.Message, storyMeta) {
 	return []provider.Message{
-			// A card greeting: no actor, no directed/routed — it must fall all the
-			// way through the ladder and read as the bound character.
-			txt(provider.RoleAssistant, "*She looks up from the counter.*", map[string]string{"source": "card:greeting"}),
-			txt(provider.RoleUser, "I sit down.", nil),
-			txt(provider.RoleAssistant, "\"You're early.\"", nil),
-			// A directed post the author wrote AS a walk-on, then that walk-on's
-			// generated reply: two messages, one voice.
-			txt(provider.RoleAssistant, "\"Bell's rung twice.\"", map[string]string{core.MetaSource: core.MetaDirected, core.MetaActor: "Elira"}),
-			txt(provider.RoleAssistant, "*Elira sets down the crate.*", map[string]string{core.MetaSource: core.MetaRouted, core.MetaActor: "Elira"}),
-			// Routed with no actor — the narrator.
-			txt(provider.RoleAssistant, "*Rain starts against the shutters.*", map[string]string{core.MetaSource: core.MetaRouted}),
-		}, storyMeta{
-			Title:     "Kobeni's First Day",
-			SessionID: "20260719-020341-fb6e45a6",
-			Started:   time.Date(2026, 7, 19, 2, 3, 41, 0, time.UTC),
-			Player:    "Kira",
-			Character: "Kobeni",
-		}
+		// A card greeting: no actor, no directed/routed — it must fall all the
+		// way through the ladder and read as the bound character.
+		txt(provider.RoleAssistant, "*She looks up from the counter.*", map[string]string{"source": "card:greeting"}),
+		txt(provider.RoleUser, "I sit down.", nil),
+		txt(provider.RoleAssistant, "\"You're early.\"", nil),
+		// A directed post the author wrote AS a walk-on, then that walk-on's
+		// generated reply: two messages, one voice.
+		txt(provider.RoleAssistant, "\"Bell's rung twice.\"", map[string]string{core.MetaSource: core.MetaDirected, core.MetaActor: "Elira"}),
+		txt(provider.RoleAssistant, "*Elira sets down the crate.*", map[string]string{core.MetaSource: core.MetaRouted, core.MetaActor: "Elira"}),
+		// Routed with no actor — the narrator.
+		txt(provider.RoleAssistant, "*Rain starts against the shutters.*", map[string]string{core.MetaSource: core.MetaRouted}),
+	}, storyMeta{
+		Title:     "Kobeni's First Day",
+		SessionID: "20260719-020341-fb6e45a6",
+		Started:   time.Date(2026, 7, 19, 2, 3, 41, 0, time.UTC),
+		Player:    "Kira",
+		Character: "Kobeni",
+	}
 }
 
 func TestRenderStoryMarkdown(t *testing.T) {

@@ -11,6 +11,22 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.135.1](https://github.com/terva-sh/terva/releases/tag/v0.135.1) — 2026-09-11
+
+### Features
+
+- codex: opt-in codex_cli_rs client identity, with a settings row
+- fleet: a hub that reads its members, and a member that dials in
+- swarm: retire finished sub-agents, and show where each one is homed
+- tickets: reach a ticket store outside the workspace
+- tickets: terva ticket groom, a surfacing pass over the draft pool
+- tools: read and enumerate session transcripts
+
+### Fixes
+
+- provider: never send a temperature beside enabled thinking
+- status: keep a long /status label off its own value
+
 ## [v0.135.0](https://github.com/terva-sh/terva/releases/tag/v0.135.0) — 2026-09-10
 
 ### Features

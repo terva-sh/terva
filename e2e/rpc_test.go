@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"terva.sh/terva/packages/testsupport"
 	"testing"
 	"time"
@@ -20,6 +21,10 @@ type rpcSession struct {
 	stdin io.WriteCloser
 	lines <-chan string
 	cmd   *exec.Cmd
+	// cancel and stderr exist for the timeout path: cancel asks the child for
+	// a goroutine dump, stderr is where it lands. See quitAndDump.
+	cancel context.CancelFunc
+	stderr *syncBuffer
 }
 
 func startRPC(t *testing.T, baseURL, workspace string) *rpcSession {
@@ -52,7 +57,12 @@ func startRPC(t *testing.T, baseURL, workspace string) *rpcSession {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd.Stderr = io.Discard
+	// Kept, not discarded. This is where a SIGQUIT goroutine dump arrives, and
+	// io.Discard threw away the one piece of evidence a wedged rpc server can
+	// still produce.
+	stderr := &syncBuffer{}
+	cmd.Stderr = stderr
+	quitOnCancel(cmd)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start rpc mode: %v", err)
 	}
@@ -67,7 +77,7 @@ func startRPC(t *testing.T, baseURL, workspace string) *rpcSession {
 		}
 	}()
 
-	s := &rpcSession{t: t, stdin: stdin, lines: lines, cmd: cmd}
+	s := &rpcSession{t: t, stdin: stdin, lines: lines, cmd: cmd, cancel: cancel, stderr: stderr}
 	t.Cleanup(func() {
 		_ = stdin.Close() // EOF ends the rpc loop
 		_ = cmd.Wait()
@@ -102,9 +112,32 @@ func (s *rpcSession) next() map[string]any {
 		}
 		return frame
 	case <-time.After(30 * time.Second):
-		s.t.Fatalf("timed out waiting for an rpc frame")
+		s.t.Fatalf("timed out waiting for an rpc frame%s", s.quitAndDump())
 		return nil
 	}
+}
+
+// quitAndDump asks the wedged child for its goroutine stacks and returns them
+// for the failure message.
+//
+// It waits for the dump rather than calling cmd.Wait: Wait already belongs to
+// the t.Cleanup registered in startRPC, and calling it from two places races
+// that one. Polling the buffer for the dump needs no such ownership, and the
+// deadline means a child that will not dump costs five seconds instead of the
+// whole run.
+func (s *rpcSession) quitAndDump() string {
+	s.cancel() // Cancel is quitOnCancel's SIGQUIT
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if out := s.stderr.String(); strings.Contains(out, "goroutine ") {
+			return "\n\nterva goroutine dump follows — the blocked call is in here:\n" + out
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if out := s.stderr.String(); out != "" {
+		return "\n\nno goroutine dump arrived; terva stderr was:\n" + out
+	}
+	return "\n\nno goroutine dump and no stderr — the child died without answering SIGQUIT"
 }
 
 // collectUntil reads frames until pred returns true, returning every

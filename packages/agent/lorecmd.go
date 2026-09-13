@@ -45,7 +45,7 @@ func runLoreCommand(rawArgs []string) (handled bool, err error) {
 }
 
 func printLoreHelp() {
-	fmt.Fprintln(os.Stderr, i18n.H("help.lore", `terva lore — inspect keyed-context (lore) entries
+	fmt.Fprintln(helpOut, i18n.H("help.lore", `terva lore — inspect keyed-context (lore) entries
 
 usage:
   terva lore list                 list active lore entries across all tiers

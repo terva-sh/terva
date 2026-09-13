@@ -6,7 +6,7 @@ terva read and update the same todo list.
 
 ## Requirements
 
-Go 1.22+.
+Go 1.27+, matching the root module this extension builds against.
 
 ## Install
 

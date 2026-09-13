@@ -62,7 +62,7 @@ func runUpdateCommand(rawArgs []string, version string) (handled bool, err error
 }
 
 func printUpdateHelp() {
-	fmt.Fprintln(os.Stderr, i18n.H("help.update", `terva update — replace the current terva binary with the latest release
+	fmt.Fprintln(helpOut, i18n.H("help.update", `terva update — replace the current terva binary with the latest release
 
 usage:
   terva update           download and install the newest release

@@ -53,14 +53,15 @@ jobs:
       - name: set up go
         uses: actions/setup-go@v5
         with:
-          # The internal channel's builder image (golang:1.25-alpine) —
+          # The internal channel's builder image (golang:1.27-alpine) —
           # which is what this always meant to track. It said "stable"
           # instead, and the two agreed only until stable moved past it:
           # go1.27 landed, its gofmt disagreed with a tree formatted under
           # 1.25, and `gofmt -l .` failed the public gate on a tree the
           # internal gate had already passed. Nothing in the tree changed;
-          # the toolchain moved under it, mid-release.
-          go-version: "1.25.x"
+          # the toolchain moved under it, mid-release. That is why this is
+          # a pin and not a channel; the number moves only with the image.
+          go-version: "1.27.x"
           cache: true
 
       - name: go vet

@@ -62,7 +62,7 @@ func runExtCommand(rawArgs []string, version string) (handled bool, err error) {
 }
 
 func printExtHelp() {
-	fmt.Fprintln(os.Stderr, i18n.H("help.ext", `terva ext — manage extensions
+	fmt.Fprintln(helpOut, i18n.H("help.ext", `terva ext — manage extensions
 
 usage:
   terva ext list                    list installed extensions and their state

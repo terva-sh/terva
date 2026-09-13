@@ -355,7 +355,7 @@ func printRaatiResult(w io.Writer, res *raati.Result) {
 }
 
 func printRaatiHelp() {
-	fmt.Fprint(os.Stderr, i18n.H("help.raati", `terva raati — convene a three-unit deliberation panel on a question
+	fmt.Fprint(helpOut, i18n.H("help.raati", `terva raati — convene a three-unit deliberation panel on a question
 
   terva raati "should we ship it?" [flags]
   git diff | terva raati --evidence CHANGELOG.md "ready to release?"
