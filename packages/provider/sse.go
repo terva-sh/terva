@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"time"
 
 	"terva.sh/terva/packages/lineframe"
 )
@@ -38,17 +39,22 @@ type sseEvent struct {
 // data: line would punch a silent hole in the assistant's message. An
 // over-limit line aborts the stream with a permanent error instead.
 //
-// The stream OWNS the response body: Close both closes it and drains the event
-// channel, and callers defer that instead of resp.Body.Close(). Closing the
-// body alone is not enough. The reader goroutine parks in one of two places,
-// and each needs a different key:
+// The stream OWNS the response body: the reader goroutine closes it when its
+// reads end, and callers defer Close instead of resp.Body.Close(). Close has
+// to unpark the reader, which sits in one of two places, and each needs a
+// different key:
 //
-//   - parked in Read, waiting for bytes that never come -> closing the body
-//     makes the pending Read fail.
+//   - parked in Read, waiting for bytes that never come -> cancelling the
+//     request (a cancelBody's Cancel) makes the pending Read fail. The body is
+//     NOT closed from here: net/http does not support Close racing a Read, and
+//     when the reader's Read reached EOF a beat after the terminal frame, the
+//     HTTP/1 transport's end-of-body handshake left it parked until the
+//     server dropped the idle connection — ~90 s per turn behind a keep-alive
+//     proxy. A body without Cancel falls back to Close, the best available.
 //   - parked on the buffered send, because the client returned (on ctx.Done,
 //     or right after the terminal frame) and nobody drains -> only a receiver
 //     can free it. A goroutine blocked on a channel send does not care that
-//     its io.ReadCloser is now closed.
+//     its request is now cancelled.
 //
 // The second case is the one that leaked: every cancelled generation long
 // enough to fill the 16-slot buffer stranded a goroutine and its connection
@@ -78,18 +84,42 @@ func (s *sseStream) Err() error { return s.err }
 //
 // All three steps are load-bearing, and each covers a different park:
 //
-//	body.Close()  frees a reader parked in Read
+//	cancel        frees a reader parked in Read (see the type comment)
 //	drain         frees a reader parked on the buffered send
 //	<-s.done      makes "released" a guarantee rather than a hope
 //
 // Without the wait, Close returning would say nothing about the goroutine —
 // which is exactly how a leak like this hides from its own test.
 func (s *sseStream) Close() {
-	_ = s.body.Close()
-	for range s.ch { //nolint:revive // drain: unpark a blocked send
+	// Drain in the background so a reader parked on a send is freed while the
+	// grace period runs; the goroutine ends when run closes the channel.
+	go func() {
+		for range s.ch { //nolint:revive // drain: unpark a blocked send
+		}
+	}()
+	// Almost every stream ends by itself a beat after its terminal frame: the
+	// chunk terminator rides in the same flush, the reader sees EOF, and the
+	// connection goes back to the pool. Give it that beat before intervening —
+	// cancelling here would abort a request that is finishing on its own and
+	// churn the pooled connection on every turn.
+	select {
+	case <-s.done:
+		return
+	case <-time.After(sseCloseGrace):
+	}
+	if c, ok := s.body.(interface{ Cancel() }); ok {
+		c.Cancel()
+	} else {
+		_ = s.body.Close()
 	}
 	<-s.done
 }
+
+// sseCloseGrace is how long Close lets the reader finish on its own before it
+// cancels the request. Generous against a normal server (the terminator
+// arrives within a round trip of the terminal frame) and short against a proxy
+// that idles the connection instead of ending the body.
+const sseCloseGrace = 250 * time.Millisecond
 
 // newSSEStream starts reading body as a text/event-stream, taking ownership of
 // it. provider names the client, for error attribution.
@@ -102,6 +132,7 @@ func newSSEStream(body io.ReadCloser, provider string) *sseStream {
 func (s *sseStream) run(r io.Reader, provider string) {
 	defer close(s.done) // declared first, so it runs after close(s.ch)
 	defer close(s.ch)
+	defer s.body.Close() // the reader owns the body; no Read is in flight here
 	br := bufio.NewReaderSize(r, 64*1024)
 
 	var ev sseEvent

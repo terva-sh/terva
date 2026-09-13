@@ -127,9 +127,17 @@ The same setting by hand:
 With `native`, all three Codex request paths (the responses stream, the
 server-side `/compact` call, and the `/wham` account endpoints) send
 `originator: codex_cli_rs` and a `codex_cli_rs/<version>` user-agent. The
-version comes from `codex --version` on this machine, probed once per process
-and floored at a compiled baseline, so a missing or older install still claims a
-plausible version. terva runs that probe only when the setting is on.
+version comes from `codex --version` on this machine, with a compiled baseline
+as its floor. terva runs that probe in a goroutine only when the setting is on.
+The first call returns the baseline immediately while the worker reads the cache.
+Later calls use the cached version, including during a refresh.
+
+Claude Code version detection for Anthropic OAuth uses the same background cache.
+Each CLI has a cache file under `$TERVA_HOME/cli-versions/` and a ten-minute TTL.
+Processes share an OS lock and check the TTL again after they acquire it, so
+concurrent launches do not repeat the scan. Failed checks retain the last
+successful version and count toward the TTL. Without a usable cache directory,
+terva keeps the baseline and retries cache access after ten minutes.
 
 Read this before you switch it on.
 
@@ -247,6 +255,7 @@ OpenAI key from the environment) and `ollama` (a local server — no key at all)
 | Azure OpenAI Responses | `AZURE_OPENAI_API_KEY` | `azure-openai-responses` |
 | Ollama (local) | — (no key; `--base-url` for a remote host) | `ollama` |
 | OpenAI Compatible (local/custom) | — (use `/login` or `--base-url`) | `openai-compatible` |
+| Anthropic Compatible (local/custom) | — (use `/login` or `--base-url`) | `anthropic-compatible` |
 
 Example:
 
@@ -434,6 +443,11 @@ can also write them by hand:
 }
 ```
 
+Each entry's `api` field picks the protocol it speaks — `"openai"` (the default,
+and what every entry written before this field existed means) or `"anthropic"`.
+See [Anthropic-compatible endpoints](#anthropic-compatible-endpoints) for the
+latter's extra settings.
+
 Keys are **never** stored in `config.json`. Give a key at login and it goes into
 `auth.json` under the endpoint's name; or point `apiKeyEnv` at an environment
 variable. Most local servers want no key at all.
@@ -480,6 +494,94 @@ migration. To convert an existing multi-`baseUrl` `models.json`, run `terva mode
 endpoints` — it prints a ready-to-paste `endpoints` block (or `--apply` writes it
 to `config.json`) and flags the now-redundant `models.json` entries for you to
 trim.
+
+## Anthropic-compatible endpoints
+
+The `anthropic-compatible` provider is the twin of `openai-compatible` for the
+other wire terva speaks: point it at any server that implements Anthropic's
+**Messages API** — LiteLLM in `anthropic` mode, a Bedrock/Vertex shim, a
+corporate gateway in front of Claude, or a local router.
+
+Everything above applies unchanged: run `/login`, choose **Anthropic Compatible
+(local/custom)**, and give it a base URL and a default model id. **Name it** and
+it becomes its own provider kept alongside your others; leave the name empty and
+it goes into the single shared `anthropic-compatible` slot, replacing whatever
+was there. Models are discovered from `GET {base-url}/v1/models` on every launch,
+and the key is optional.
+
+> **Base URL:** give the server's root, **not** its `/v1`. terva appends
+> `/v1/messages` itself, so `http://localhost:4000/v1` becomes
+> `http://localhost:4000/v1/v1/messages` — a 404 from an otherwise correct
+> gateway. (The OpenAI form is the opposite: it wants the `/v1`.)
+
+### Wire settings
+
+Four settings exist because a real class of Messages-compatible server fails
+*every* turn without them, with an error that names none of them. All are
+optional and all have working defaults — fill one in only when your server needs
+it.
+
+| Setting | Default | When you need it |
+|---|---|---|
+| `anthropic-version` | `2023-06-01` | The gateway is pinned to a different API version. |
+| `anthropic-beta` | *(none)* | A feature has to be opted into, e.g. `context-1m-2025-08-07`. Comma-separated. |
+| Auth style | `x-api-key` | Set `bearer` when the server wants `Authorization: Bearer` instead — common on gateways that present an OpenAI-style front door. |
+| Prompt caching | `on` | Turn it **off** for a server that validates the request body strictly and rejects Anthropic's `cache_control` field. |
+
+For a named endpoint these live in `config.json` beside the rest of its
+definition:
+
+```json
+{
+  "endpoints": {
+    "claude-gw": {
+      "baseUrl": "http://gw.box:4000",
+      "api": "anthropic",
+      "contextWindow": 200000,
+      "anthropicVersion": "2023-06-01",
+      "anthropicBeta": "context-1m-2025-08-07",
+      "authStyle": "bearer",
+      "disableCaching": false,
+      "apiKeyEnv": "CLAUDE_GW_KEY"
+    }
+  }
+}
+```
+
+For the shared slot they are captured at `/login` and stored in `auth.json`
+alongside the base URL and model.
+
+### From the CLI
+
+```bash
+terva --provider anthropic-compatible \
+  --model claude-sonnet-4.5 \
+  --base-url http://localhost:4000 \
+  --api-key optional-token   # omit for keyless local servers
+```
+
+`--insecure` is permitted here, as for `openai-compatible` and `ollama`, for a
+self-signed endpoint with an explicit `--base-url`.
+
+### Sizing
+
+Unlike Chat Completions, the Messages API **requires** `max_tokens` on every
+request. A discovered model therefore gets a default response cap rather than
+letting the server choose, and models the baked catalog has never heard of get
+your configured default context window. Pin exact values per model in
+`models.json` under the endpoint's own provider id:
+
+```json
+{
+  "providers": {
+    "claude-gw": {
+      "models": [
+        { "id": "claude-sonnet-4.5", "contextWindow": 200000, "maxTokens": 64000 }
+      ]
+    }
+  }
+}
+```
 
 ## Context window and max response tokens
 

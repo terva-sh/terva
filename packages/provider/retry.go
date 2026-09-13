@@ -64,8 +64,14 @@ func doStreamWithRetry(ctx context.Context, client *http.Client, newReq func() (
 		if err != nil {
 			return nil, err
 		}
-		resp, err := client.Do(req)
+		// Each attempt gets its own cancellable context so the returned body can
+		// abort a parked Read through the transport (see cancelBody) instead of
+		// racing a concurrent Body.Close against it. Derive it from the request's
+		// own context, which may carry more than ctx does (a client trace).
+		reqCtx, cancel := context.WithCancel(req.Context())
+		resp, err := client.Do(req.WithContext(reqCtx))
 		if err != nil {
+			cancel()
 			lastErr = err
 			if !isTransientConnectError(err) || ctx.Err() != nil {
 				return nil, err
@@ -78,6 +84,7 @@ func doStreamWithRetry(ctx context.Context, client *http.Client, newReq func() (
 			// at 4 KiB because edge proxies sometimes send pages.
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 			resp.Body.Close()
+			cancel()
 			lastErr = &transientHTTPError{Status: resp.StatusCode, Body: strings.TrimSpace(string(body))}
 			if attempt == streamRetryAttempts {
 				// Wrap as a real *http.Response shape the caller
@@ -87,12 +94,36 @@ func doStreamWithRetry(ctx context.Context, client *http.Client, newReq func() (
 			}
 			continue
 		}
+		resp.Body = &cancelBody{ReadCloser: resp.Body, cancel: cancel}
 		return resp, nil
 	}
 	if lastErr == nil {
 		lastErr = errors.New("retry loop exhausted")
 	}
 	return nil, lastErr
+}
+
+// cancelBody is the response body doStreamWithRetry hands back. Cancel aborts
+// the request through its context, which is the one way net/http supports
+// unparking a Read from another goroutine. Calling Body.Close concurrently with
+// a Read is not: the HTTP/1 transport's end-of-body handshake can then strand
+// the reader until the server drops the idle connection (observed as a ~90 s
+// stall after every completed stream behind a keep-alive proxy). Close is for
+// the goroutine that owns the reads; it releases the context as well so nothing
+// leaks on the ordinary path.
+type cancelBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+// Cancel aborts the in-flight request. Safe to call from any goroutine, and
+// idempotent.
+func (b *cancelBody) Cancel() { b.cancel() }
+
+func (b *cancelBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err
 }
 
 // transientHTTPError is the placeholder error returned while we're

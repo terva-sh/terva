@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -19,23 +18,13 @@ import (
 // machine plausibly presents), and its refresh mechanism is `claude update`,
 // the very command Anthropic's error message tells people to run.
 //
-// The probe runs `claude --version` at most once per process, lazily on the
-// first OAuth-path request, so API-key users and other providers never pay
-// the exec. Anything unexpected — no binary on PATH, a hung or failing
-// probe, unparseable output, an older install — collapses to the compiled
-// baseline. Floor, never ceiling. See ticket TKT-01M24CWCV43.
-var effectiveClaudeCodeVersion = sync.OnceValue(func() string {
-	out, err := runClaudeVersionProbe()
-	if err != nil {
-		return claudeCodeVersion
-	}
-	return pickClaudeCodeVersion(out)
-})
+// The first caller starts a background refresh and receives the baseline.
+// Later callers receive the cached version, with the baseline as a floor.
+// The shared disk cache limits probes across processes to once per ten minutes.
+var effectiveClaudeCodeVersion = newInstalledVersion("claude", claudeCodeVersion, runClaudeVersionProbe, pickClaudeCodeVersion, parseClaudeVersion).get
 
-// claudeVersionProbeTimeout bounds the probe so a hung `claude` process
-// cannot stall the first request. The binary is a Node program: a warm start
-// answers in well under a second, and the fallback on timeout is the
-// baseline, so a tight bound costs little.
+// claudeVersionProbeTimeout bounds the background subprocess and the time
+// it holds the shared cache lock.
 const claudeVersionProbeTimeout = 3 * time.Second
 
 // runClaudeVersionProbe executes the locally installed Claude Code CLI and

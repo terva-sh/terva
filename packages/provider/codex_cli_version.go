@@ -5,7 +5,6 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -27,24 +26,16 @@ const codexCLIVersion = "0.153.4"
 // "codex_cli_rs/0.0.0" and the backend served it. So the version is here to
 // make a claimed identity coherent, and for nothing else.
 //
-// Floor, never ceiling. Anything unexpected collapses to the baseline: no
-// binary on PATH, a hung or failing probe, unparseable output, or an install
-// older than the baseline.
+// The compiled baseline remains the floor. Failed or unparseable probes
+// retain the last successful version, or the baseline if none is cached.
 //
-// The probe runs at most once per process, and only when an operator has
-// switched the native identity on, so the default path never pays the exec.
+// The probe runs in the background only when native identity is on.
+// A shared ten-minute cache limits probes across processes.
 // See ticket TKT-01M29FMAXGQYQD79VYSGWYAH4N.
-var effectiveCodexCLIVersion = sync.OnceValue(func() string {
-	out, err := runCodexVersionProbe()
-	if err != nil {
-		return codexCLIVersion
-	}
-	return pickCodexCLIVersion(out)
-})
+var effectiveCodexCLIVersion = newInstalledVersion("codex", codexCLIVersion, runCodexVersionProbe, pickCodexCLIVersion, parseCodexVersion).get
 
-// codexVersionProbeTimeout bounds the probe so a hung `codex` process cannot
-// stall the first request. The fallback on timeout is the baseline, so a tight
-// bound costs little.
+// codexVersionProbeTimeout bounds the background subprocess and the time
+// it holds the shared cache lock.
 const codexVersionProbeTimeout = 3 * time.Second
 
 // runCodexVersionProbe executes the locally installed Codex CLI and returns
