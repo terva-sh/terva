@@ -36,6 +36,13 @@ func cacheCliffNoteKey(sessionID string) string {
 // misses themselves are provider-side routing and outlive it. Offering
 // "/compact" alone sends someone to spend a summarization round-trip on a run
 // it cannot stop.
+//
+// A voided ending takes the note down too, and that is deliberate. The
+// detector has lost its baseline, so it cannot assert the collapse continues,
+// and a note that outlives what terva can measure is the failure this file's
+// retract contract exists to prevent. The note is keyed and re-raised within a
+// few dispatches if the collapse is in fact still live, so the worst case is a
+// short gap rather than a wrong claim.
 func cacheCliffNote(cc core.CacheCliff) string {
 	if !cc.Ongoing {
 		return ""

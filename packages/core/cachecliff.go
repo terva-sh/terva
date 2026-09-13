@@ -28,16 +28,43 @@ import "terva.sh/terva/packages/provider"
 //     model change — anything the ladder reports as a non-append) resets the
 //     run: that re-read is explained, and prefixwatch already records it.
 type CacheCliff struct {
-	// Dispatches is how many consecutive dispatches collapsed so far.
+	// Dispatches is how many consecutive dispatches collapsed so far. On a
+	// voided ending this is a lower bound: the run was cut short as a
+	// measurement, not as a collapse.
 	Dispatches int
 	// RereadTokens is the input the provider re-read across the run that the
 	// previous dispatch's prompt already covered — the waste, not the bill.
 	RereadTokens int
-	// Ongoing is true while the run continues; the retract event (the run
-	// ended: a dispatch hit again, or the prefix legitimately rebuilt) carries
-	// false and zeroes.
+	// Ongoing is true while the run continues. The end-of-run event carries
+	// false, zero counts, and an End naming which ending it was.
 	Ongoing bool
+	// End is CliffEndNone while the run is ongoing, and names the ending on
+	// the event that closes it.
+	End CliffEnd
 }
+
+// CliffEnd names why a run stopped. A run the provider ended by serving the
+// prefix again and a run terva stopped being able to measure are different
+// facts, and reporting both as "closed" hid a real one: an activate_tools
+// voids the baseline, so a 46-dispatch floor was recorded as three short runs
+// that each read as a recovery. See section 15 of
+// docs/reviews/2026-08-04-gpt56-post-compaction-cache-collapse.md.
+type CliffEnd string
+
+const (
+	// CliffEndNone rides every ongoing event. It also rides a closing row
+	// written before the two endings were told apart, so on a closed run it
+	// means the reason is unrecorded and never that the cache recovered.
+	CliffEndNone CliffEnd = ""
+	// CliffEndRecovered is the run genuinely over: the next dispatch did not
+	// meet the collapse test, so the totals are final.
+	CliffEndRecovered CliffEnd = "recovered"
+	// CliffEndVoided is the detector standing down rather than the collapse
+	// ending. terva rebuilt the prefix, so the baseline the run was measured
+	// against is gone. The collapse may continue, and the next run counts from
+	// zero, which makes a voided run's length a floor and not a total.
+	CliffEndVoided CliffEnd = "voided"
+)
 
 const (
 	// cliffArmRead: a cache read at least this large must have been observed
@@ -106,6 +133,11 @@ func (a *Agent) observeDispatchCache(u provider.Usage) {
 	a.mu.Lock()
 	cs := &a.cliffState
 	announce, retract := false, false
+	// end is the one place in the system that knows WHY a run stopped. Both
+	// paths below used to fire an identical zero event, which threw the answer
+	// away at the only point it existed and left every reader to guess it back
+	// from a nearby prefix row.
+	end := CliffEndNone
 	switch {
 	case cs.epochSeen != a.cliffEpoch:
 		// The prefix legitimately rebuilt since the last row (compaction,
@@ -113,6 +145,7 @@ func (a *Agent) observeDispatchCache(u provider.Usage) {
 		// and the old baseline is void.
 		cs.epochSeen = a.cliffEpoch
 		retract = cs.announced
+		end = CliffEndVoided
 		cs.streak, cs.reread, cs.announced = 0, 0, false
 	case cs.armed && cs.prevPrompt >= cliffMinPrompt && cached < cs.prevPrompt/2:
 		// Append-only dispatch, yet the provider served less than half the
@@ -137,7 +170,12 @@ func (a *Agent) observeDispatchCache(u provider.Usage) {
 			cs.announced = true
 		}
 	default:
+		// The dispatch did not meet the collapse test. Usually it hit cache
+		// again, which is the run ending. A prompt that shrank below
+		// cliffMinPrompt lands here too, so this asserts what the detector can
+		// see and not a claim about the provider's cache.
 		retract = cs.announced
+		end = CliffEndRecovered
 		cs.streak, cs.reread, cs.announced = 0, 0, false
 	}
 	if u.CacheReadTokens >= cliffArmRead {
@@ -150,6 +188,6 @@ func (a *Agent) observeDispatchCache(u provider.Usage) {
 	if announce {
 		a.fireCacheCliff(CacheCliff{Dispatches: dispatches, RereadTokens: reread, Ongoing: true})
 	} else if retract {
-		a.fireCacheCliff(CacheCliff{})
+		a.fireCacheCliff(CacheCliff{End: end})
 	}
 }

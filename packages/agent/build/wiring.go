@@ -971,7 +971,12 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 	// cadence is right for what it serves: the note tracks a changing fact and
 	// wants every update. The file wants the two transitions. Holding the last
 	// ongoing event is what lets the closing row carry the totals the run
-	// reached, since the end-of-run event is the zero CacheCliff by contract.
+	// reached, since the end-of-run event carries zero counts.
+	//
+	// End is the exception, and it comes off the terminal event rather than the
+	// peak: only that event knows whether the provider served the prefix again
+	// or terva voided its own baseline. Copying it onto the peak is what stops
+	// a voided run reading as a recovery on disk.
 	var cliffPeak core.CacheCliff
 	cliffOpen := false
 	ag.AddCacheCliffObserver(func(cc core.CacheCliff) {
@@ -987,7 +992,9 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 		}
 		if cliffOpen {
 			cliffOpen = false
-			ag.RecordPersistenceError(sess.AppendCacheCliff(cliffPeak, false))
+			closing := cliffPeak
+			closing.End = cc.End
+			ag.RecordPersistenceError(sess.AppendCacheCliff(closing, false))
 		}
 	})
 }

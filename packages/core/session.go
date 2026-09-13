@@ -620,6 +620,11 @@ type cacheCliffRecord struct {
 	// these are the run's final totals.
 	Dispatches   int `json:"dispatches"`
 	RereadTokens int `json:"reread_tokens"`
+	// End names why the run stopped, and rides the closing row only. A row
+	// written before the two endings were told apart carries no end at all,
+	// and a reader must treat that absence as unrecorded rather than as a
+	// recovery. See CliffEnd.
+	End string `json:"end,omitempty"`
 }
 
 // toolGroupRecord rides a "tool_group" row: a capability group the model
@@ -3057,8 +3062,9 @@ func (s *Session) AppendPrefixDivergence(d PrefixDivergence) error {
 //
 // Takes ongoing explicitly rather than reading cc.Ongoing: the closing row
 // reports the totals the run REACHED, and the detector's end-of-run event
-// carries the zero CacheCliff by contract. The caller holds the last ongoing
-// event and passes it back here with ongoing=false.
+// carries zero counts. The caller holds the last ongoing event and passes it
+// back here with ongoing=false, having copied End off the terminal event so
+// the row says which ending it was.
 func (s *Session) AppendCacheCliff(cc CacheCliff, ongoing bool) error {
 	if s == nil {
 		return nil
@@ -3067,6 +3073,7 @@ func (s *Session) AppendCacheCliff(cc CacheCliff, ongoing bool) error {
 		Ongoing:      ongoing,
 		Dispatches:   cc.Dispatches,
 		RereadTokens: cc.RereadTokens,
+		End:          string(cc.End),
 	}})
 }
 

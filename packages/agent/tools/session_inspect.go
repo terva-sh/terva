@@ -123,7 +123,8 @@ func (t *SessionInspectTool) Name() string { return "session_inspect" }
 const sessionInspectDesc = "Examine the transcript of this session in a structured form, with a limit on the output. Use this tool to see what occurred, and do not read the full transcript again. Each argument is optional, and a value of 0 means that you did not set it. Therefore you can safely send all the arguments as zeros, which gives the default list.\n\n" +
 	"Stats mode occurs when you set stats to true. Use this mode first when you want to know what occurred in this session, or what the session cost. The mode gives one summary of the full session: the cost, the cache hit rate, the dead turns, the counts of tool calls and failures, and the provider errors. To calculate these numbers from the events is expensive.\n\n" +
 	"List mode and expand mode are mutually exclusive, and they use the same filters. The filter failures_only selects the tool results that failed. The filter tool_name selects one tool. The filter event_kinds selects some of \"tool_call\", \"tool_result\", \"message\", \"usage\", \"error\", \"prefix\", and \"cliff\".\n\n" +
-	"The kinds \"prefix\" and \"cliff\" report the cache behaviour of the session. A prefix row names the rung where the cacheable prefix broke. The harness rebuilt the request there, and it did not extend the request. A cliff row opens or closes a run of dispatches whose cache reads collapsed. Use these two kinds when a session costs more than you expect.\n\n" +
+	"The kinds \"prefix\" and \"cliff\" report the cache behaviour of the session. Use these two kinds when a session costs more than you expect. A prefix row names the rung where the cacheable prefix broke. The harness rebuilt the request there, and it did not extend the request.\n\n" +
+	"A cliff row opens a run of dispatches whose cache reads collapsed. A second row ends that run. The second row tells you if the cache recovered, or if terva rebuilt the prefix. A rebuild stops the measurement, and the collapse can continue. A run that a rebuild stopped gives a lower bound, and not a finished length.\n\n" +
 	"List mode is the default, and it occurs when expand is 0. The mode shows a window of the events that agree with the filters: the tool calls, the tool results with their pass or fail status, the text of messages, and the usage of each turn. The most recent events are the default. A usage event gives the cost of a turn, and the quantity of its input that came from the prefix cache. Use event_kinds with \"usage\" alone to find where this session spent money, because no other part of the transcript gives this. Expand a usage event to see its full token counts.\n\n" +
 	"To move through the list, use limit and cursor. The default limit is 40, and the maximum is 200. The cursor is a position in the events that agree with the filters, and the oldest event is position 1. A cursor of 0 gives the most recent window. The tool returns next_cursor when more events remain, and you must then use the same filters. Each event in the list has an index that starts at #1.\n\n" +
 	// The prohibition leads this section, and the section leads with the
@@ -779,16 +780,32 @@ func prefixEventText(d core.PrefixDivergence) string {
 }
 
 // cliffEventText renders one cache-cliff row as a line. The detector writes two
-// rows per run: the opening row marks it, and the closing row carries the
-// totals the run reached. An opening row with no close means the run was still
-// open when the session ended, which is itself the fact worth reading.
+// rows per run: the opening row marks it, and a second row ends it carrying the
+// totals the run reached. An opening row with no second row means the run was
+// still open when the session ended, which is itself the fact worth reading.
+//
+// The two endings read differently on purpose. A recovery is the run genuinely
+// over. A void is terva rebuilding its own prefix, which ends the MEASUREMENT
+// and not necessarily the collapse, so the length is a floor. Rendering both as
+// "closed" is what let one 46-dispatch floor read back as three short
+// recoveries. A row written before the endings were told apart carries neither,
+// and says so rather than picking one.
 func cliffEventText(c core.CacheCliff) string {
-	state := "closed"
 	if c.Ongoing {
-		state = "opened"
+		return fmt.Sprintf("cache collapse run opened after %d dispatches, %d tokens re-read",
+			c.Dispatches, c.RereadTokens)
 	}
-	return fmt.Sprintf("cache collapse run %s after %d dispatches, %d tokens re-read",
-		state, c.Dispatches, c.RereadTokens)
+	switch c.End {
+	case core.CliffEndVoided:
+		return fmt.Sprintf("cache collapse run voided at %d dispatches or more, %d tokens re-read (terva rebuilt the prefix, so the measurement stopped and not necessarily the collapse)",
+			c.Dispatches, c.RereadTokens)
+	case core.CliffEndRecovered:
+		return fmt.Sprintf("cache collapse run recovered after %d dispatches, %d tokens re-read",
+			c.Dispatches, c.RereadTokens)
+	default:
+		return fmt.Sprintf("cache collapse run closed after %d dispatches, %d tokens re-read (ending not recorded)",
+			c.Dispatches, c.RereadTokens)
+	}
 }
 
 // drainErrors emits every pending sidecar error at or before cutoff. A zero

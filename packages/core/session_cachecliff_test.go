@@ -92,6 +92,67 @@ func TestAppendCacheCliffOnNilSession(t *testing.T) {
 	}
 }
 
+// The ending has to survive the round trip. If it does not, a reader is back to
+// guessing it from a nearby prefix row, which is the 15-row-window guesswork
+// that made a laundered run look like a recovery in the first place.
+func TestCliffEndRoundTripsThroughTheRow(t *testing.T) {
+	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
+	s, err := NewSessionAtPath(path, "/ws", "openai-codex", "gpt-6-astra", "0.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	// A message first: the session materialises its file on the first one, and
+	// a cliff row alone leaves nothing on disk to read back.
+	must(s.AppendMessage(provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "go"}}}))
+	must(s.AppendCacheCliff(CacheCliff{Dispatches: 2, RereadTokens: 240_000, Ongoing: true}, true))
+	must(s.AppendCacheCliff(CacheCliff{Dispatches: 18, RereadTokens: 699_965, End: CliffEndVoided}, false))
+	must(s.Close())
+
+	rows := readCliffRows(t, path)
+	if len(rows) != 2 {
+		t.Fatalf("want 2 cliff rows, got %d", len(rows))
+	}
+	if rows[0].End != "" {
+		t.Errorf("the opening row must carry no ending, got %q", rows[0].End)
+	}
+	if rows[1].End != string(CliffEndVoided) {
+		t.Errorf("closing row End = %q, want %q", rows[1].End, CliffEndVoided)
+	}
+}
+
+// Every close row written before this change has no "end" key at all. It must
+// read back as unrecorded and never as a recovery, because the corpus this
+// defect was found in is entirely made of those rows: decoding them as
+// recoveries would convert every laundered run into a clean one on re-analysis.
+func TestLegacyCloseRowDecodesAsUnrecordedEnding(t *testing.T) {
+	path := filepath.Join(testsupport.TempDir(t), "legacy.jsonl")
+	legacy := `{"type":"cliff","cliff":{"ongoing":true,"dispatches":3,"reread_tokens":61929}}` + "\n" +
+		`{"type":"cliff","cliff":{"ongoing":false,"dispatches":18,"reread_tokens":699965}}` + "\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rows := readCliffRows(t, path)
+	if len(rows) != 2 {
+		t.Fatalf("want 2 cliff rows, got %d", len(rows))
+	}
+	for i, row := range rows {
+		if row.End != "" {
+			t.Errorf("row %d invented an ending %q for a row that carries none", i, row.End)
+		}
+	}
+	// The counts must still be there: the absent key is the ending alone.
+	if rows[1].Dispatches != 18 || rows[1].RereadTokens != 699_965 {
+		t.Errorf("legacy close lost its totals: %+v", rows[1])
+	}
+}
+
 func readCliffRows(t *testing.T, path string) []cacheCliffRecord {
 	t.Helper()
 	b, err := os.ReadFile(path)

@@ -231,9 +231,15 @@ func (a *Agent) AddPrefixDivergenceObserver(fn func(PrefixDivergence)) {
 // dispatches collapse to a fraction of the cache they should have hit — the
 // provider-side outage the prefix ladder proves is not terva's bytes. Fires
 // with Ongoing=true on every collapse past the threshold (the run's numbers
-// grow), and exactly once with the zero CacheCliff when the run ends, so a
-// host can put up a note while it is true and take it down when it is not.
-// nil is a no-op.
+// grow), and exactly once when the run stops, so a host can put up a note
+// while it is true and take it down when it is not.
+//
+// The end-of-run event carries Ongoing=false, zero counts, and an End naming
+// why it stopped. CliffEndRecovered is the run over. CliffEndVoided is terva
+// rebuilding its own prefix, which destroys the baseline rather than the
+// collapse, so the run's length is a floor and the outage may still be live.
+// A host that treats the two alike reports a laundered run as a recovery,
+// which is the defect this End exists to close. nil is a no-op.
 func (a *Agent) AddCacheCliffObserver(fn func(CacheCliff)) {
 	if fn == nil {
 		return

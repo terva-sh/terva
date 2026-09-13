@@ -280,6 +280,7 @@ func StreamReplayRows(ctx context.Context, path string, maxBytes int64, fn func(
 					Dispatches:   crow.Cliff.Dispatches,
 					RereadTokens: crow.Cliff.RereadTokens,
 					Ongoing:      crow.Cliff.Ongoing,
+					End:          CliffEnd(crow.Cliff.End),
 				}})
 			}
 		}
