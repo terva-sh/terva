@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/provider"
 )
 
 // LoginResult is delivered on the channel returned by Server.Result().
@@ -24,13 +25,11 @@ type LoginResult struct {
 	APIKey   string // populated when Method == "apikey"
 	Code     string // Deprecated: OAuth results come from CallbackServer.
 	State    string // Deprecated: OAuth results come from CallbackServer.
-	// BaseURL, Model and ContextWindow are populated only for the
-	// openai-compatible provider, whose login form captures a custom
-	// endpoint, default model id, and default context-window size.
-	BaseURL       string
-	Model         string
-	ContextWindow int
-	Err           error
+	// Endpoint is populated only for the compatible providers, whose login form
+	// captures a custom endpoint, default model id, and default context-window
+	// size — plus, for anthropic-compatible, the wire settings its server needs.
+	Endpoint CompatEndpoint
+	Err      error
 }
 
 // Server serves API-key forms created by BeginAPIKey. It binds
@@ -45,16 +44,21 @@ type LoginResult struct {
 // The caller receives login events on Result(). The server stays up
 // until Shutdown() is called.
 type Server struct {
-	l             net.Listener
-	srv           *http.Server
-	baseURL       string
-	results       chan LoginResult
-	probeFn       func(ctx context.Context, provider, key string) error
-	probeCompatFn func(ctx context.Context, baseURL, key string) error
-	mu            sync.Mutex
-	shutdown      bool
-	flows         map[FlowID]*keyForm
-	done          chan struct{}
+	l       net.Listener
+	srv     *http.Server
+	baseURL string
+	results chan LoginResult
+	probeFn func(ctx context.Context, provider, key string) error
+	// One seam per wire. The Anthropic probe needs the endpoint's options
+	// (which header carries the key, which version to claim) — folding it into
+	// probeCompatFn's signature would make every OpenAI caller pass a struct it
+	// has no values for.
+	probeCompatFn          func(ctx context.Context, baseURL, key string) error
+	probeAnthropicCompatFn func(ctx context.Context, baseURL, key string, o provider.AnthropicCompatOptions) error
+	mu                     sync.Mutex
+	shutdown               bool
+	flows                  map[FlowID]*keyForm
+	done                   chan struct{}
 }
 
 type keyForm struct {
@@ -71,13 +75,14 @@ func NewServer() (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		l:             l,
-		baseURL:       "http://" + l.Addr().String(),
-		results:       make(chan LoginResult, 4),
-		probeFn:       ProbeAPIKey,
-		probeCompatFn: ProbeOpenAICompatible,
-		flows:         make(map[FlowID]*keyForm),
-		done:          make(chan struct{}),
+		l:                      l,
+		baseURL:                "http://" + l.Addr().String(),
+		results:                make(chan LoginResult, 4),
+		probeFn:                ProbeAPIKey,
+		probeCompatFn:          ProbeOpenAICompatible,
+		probeAnthropicCompatFn: ProbeAnthropicCompatible,
+		flows:                  make(map[FlowID]*keyForm),
+		done:                   make(chan struct{}),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
@@ -191,7 +196,9 @@ func APIKeyProviders() []string {
 		"minimax", "minimax-cn", "fireworks", "vercel-ai-gateway",
 		"opencode", "opencode-go", "amazon-bedrock", "google-vertex", "azure-openai-responses",
 		"github-copilot", "cloudflare-workers-ai", "cloudflare-ai-gateway",
-		"openai-compatible",
+		// The operator's own backends, last: everything above is a vendor terva
+		// ships an address for, and these two are the ones you have to describe.
+		"openai-compatible", anthropicCompatProvider,
 	}
 }
 
@@ -240,8 +247,13 @@ func (s *Server) handleAPIKey(w http.ResponseWriter, r *http.Request) {
 		token := f.token
 		s.mu.Unlock()
 		tpl.ExecuteTemplate(w, "apikey", map[string]any{
-			"Provider": provider, "Compat": provider == compatProvider,
-			"Flow": flow, "Token": token,
+			"Provider": provider,
+			"Compat":   isCompatProvider(provider),
+			// The Anthropic slot takes the same five fields plus the four wire
+			// knobs, so the template branches once more rather than twice over.
+			"Anthropic":      provider == anthropicCompatProvider,
+			"DefaultVersion": AnthropicDefaultAPIVersion,
+			"Flow":           flow, "Token": token,
 		})
 		return
 	}
@@ -258,20 +270,34 @@ func (s *Server) handleAPIKey(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 	}()
 	key := strings.TrimSpace(values.Get("api_key"))
-	baseURL := strings.TrimSpace(values.Get("base_url"))
-	model := strings.TrimSpace(values.Get("model"))
 	// Default context window for discovered models the server doesn't
 	// describe. Optional; blank / unparseable leaves it 0 ("unknown").
 	contextWindow, _ := strconv.Atoi(strings.TrimSpace(values.Get("context_window")))
 	if contextWindow < 0 {
 		contextWindow = 0
 	}
-	compat := provider == "openai-compatible"
+	ep := CompatEndpoint{
+		BaseURL:       strings.TrimSpace(values.Get("base_url")),
+		Model:         strings.TrimSpace(values.Get("model")),
+		ContextWindow: contextWindow,
+		APIVersion:    strings.TrimSpace(values.Get("anthropic_version")),
+		Beta:          strings.TrimSpace(values.Get("anthropic_beta")),
+		AuthStyle:     strings.TrimSpace(values.Get("auth_style")),
+		// The form asks the positive question ("prompt caching") because that is
+		// how an operator thinks about it; the field records the negative,
+		// because the default has to be the zero value.
+		DisableCaching: IsOffValue(values.Get("prompt_caching")),
+	}
+	compat := isCompatProvider(provider)
 	if compat {
 		// The key is optional for local endpoints, but we need
 		// somewhere to send requests and a model id to send them with.
-		if baseURL == "" || model == "" {
-			s.errorPage(w, i18n.T("base url and model are required for an openai-compatible endpoint"))
+		if !ep.Configured() || ep.Model == "" {
+			s.errorPage(w, i18n.T("base url and model are required for a compatible endpoint"))
+			return
+		}
+		if err := ValidateCompatEndpoint(provider, ep); err != nil {
+			s.errorPage(w, err.Error())
 			return
 		}
 	} else if key == "" {
@@ -283,12 +309,15 @@ func (s *Server) handleAPIKey(w http.ResponseWriter, r *http.Request) {
 	stop := context.AfterFunc(f.ctx, cancel)
 	defer stop()
 	var probeErr error
-	if compat {
-		probeErr = s.probeCompatFn(ctx, baseURL, key)
-	} else {
+	switch {
+	case provider == anthropicCompatProvider:
+		probeErr = s.probeAnthropicCompatFn(ctx, ep.BaseURL, key, ep.AnthropicOptions())
+	case compat:
+		probeErr = s.probeCompatFn(ctx, ep.BaseURL, key)
+	default:
 		probeErr = s.probeFn(ctx, provider, key)
 	}
-	res := LoginResult{Flow: flow, Provider: provider, Method: "apikey", APIKey: key, BaseURL: baseURL, Model: model, ContextWindow: contextWindow, Err: probeErr}
+	res := LoginResult{Flow: flow, Provider: provider, Method: "apikey", APIKey: key, Endpoint: ep, Err: probeErr}
 	// Recheck after the probe: cancel or shutdown may have invalidated it.
 	s.mu.Lock()
 	if s.shutdown || s.flows[flow] != f {
@@ -373,20 +402,42 @@ func init() {
 <h1><span class="terva">terva</span> login - {{.Provider}} api key</h1>
 <hr class="rule">
 {{if .Compat}}
+{{if .Anthropic}}
+<p>point <span class="terva">terva</span> at any endpoint speaking the anthropic messages api (litellm in anthropic mode, a bedrock/vertex shim, a corporate gateway in front of claude, a local router, ...). enter the base url and a default model id; <span class="terva">terva</span> also auto-lists every model the endpoint serves from <span class="mono">/v1/models</span> in the <span class="mono">/model</span> picker. the api key is optional - many local servers ignore it.</p>
+{{else}}
 <p>point <span class="terva">terva</span> at any openai-compatible endpoint (lm studio, vllm, llama.cpp, ollama's /v1, a gateway, ...). enter the base url and a default model id; <span class="terva">terva</span> also auto-lists every model the endpoint serves from <span class="mono">/v1/models</span> in the <span class="mono">/model</span> picker. the api key is optional - many local servers ignore it.</p>
+{{end}}
 <p class="muted">the context window is a default for models the server doesn't describe its size for. leave blank if unsure; override per model in <span class="mono">models.json</span>.</p>
 <form method="POST" action="/apikey">
   <input type="hidden" name="flow" value="{{.Flow}}" />
   <input type="hidden" name="token" value="{{.Token}}" />
   <input type="hidden" name="provider" value="{{.Provider}}" />
-  <label for="base_url">base url (e.g. http://localhost:1234/v1)</label>
-  <input id="base_url" name="base_url" type="text" autocomplete="off" autofocus placeholder="http://localhost:1234/v1" />
-  <label for="model">default model id (e.g. qwen2.5-coder)</label>
+  <label for="base_url">base url (e.g. {{if .Anthropic}}http://localhost:4000{{else}}http://localhost:1234/v1{{end}})</label>
+  <input id="base_url" name="base_url" type="text" autocomplete="off" autofocus placeholder="{{if .Anthropic}}http://localhost:4000{{else}}http://localhost:1234/v1{{end}}" />
+  <label for="model">default model id (e.g. {{if .Anthropic}}claude-sonnet-4.5{{else}}qwen2.5-coder{{end}})</label>
   <input id="model" name="model" type="text" autocomplete="off" />
   <label for="context_window">default context window in tokens (optional, e.g. 32768)</label>
   <input id="context_window" name="context_window" type="number" min="0" autocomplete="off" placeholder="32768" />
   <label for="api_key">api key (optional)</label>
   <input id="api_key" name="api_key" type="password" autocomplete="off" />
+{{if .Anthropic}}
+  <hr class="rule">
+  <p class="muted">wire settings. every one of these has a working default - fill one in only when your server needs it.</p>
+  <label for="anthropic_version">anthropic-version header (default {{.DefaultVersion}})</label>
+  <input id="anthropic_version" name="anthropic_version" type="text" autocomplete="off" placeholder="{{.DefaultVersion}}" />
+  <label for="anthropic_beta">anthropic-beta header (optional, comma-separated)</label>
+  <input id="anthropic_beta" name="anthropic_beta" type="text" autocomplete="off" placeholder="context-1m-2025-08-07" />
+  <label for="auth_style">auth style - which header carries the key</label>
+  <select id="auth_style" name="auth_style">
+    <option value="x-api-key">x-api-key (anthropic's own convention)</option>
+    <option value="bearer">bearer (authorization: Bearer - common on gateways)</option>
+  </select>
+  <label for="prompt_caching">prompt caching</label>
+  <select id="prompt_caching" name="prompt_caching">
+    <option value="on">on (send cache_control breakpoints)</option>
+    <option value="off">off (for a server that rejects unknown fields)</option>
+  </select>
+{{end}}
   <button type="submit">log in</button>
 </form>
 {{else}}

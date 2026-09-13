@@ -93,13 +93,15 @@ type Config struct {
 	// cloned repository must not make that choice for the operator.
 	Providers map[string]ProviderSettings `json:"providers,omitempty"`
 
-	// Endpoints are user-defined OpenAI-compatible backends, each registered
-	// as its own provider (the map key is the provider id) with its own
-	// /v1/models discovery and row in the /model picker — the way to use
-	// several local/remote OpenAI-compatible servers at once instead of the
-	// single shared `openai-compatible` slot. User layer only: a project's
-	// .terva/config.json must never redirect the agent to an arbitrary
-	// endpoint. Keys are NEVER stored here — use APIKeyEnv or auth.json.
+	// Endpoints are user-defined backends, each registered as its own provider
+	// (the map key is the provider id) with its own /v1/models discovery and
+	// row in the /model picker — the way to use several local/remote servers at
+	// once instead of the single shared `openai-compatible` /
+	// `anthropic-compatible` slots. Each entry's `api` field picks the wire it
+	// speaks; absent means OpenAI Chat Completions. User layer only: a
+	// project's .terva/config.json must never redirect the agent to an
+	// arbitrary endpoint. Keys are NEVER stored here — use APIKeyEnv or
+	// auth.json.
 	Endpoints map[string]EndpointConfig `json:"endpoints,omitempty"`
 	Theme     string                    `json:"theme"`
 
@@ -538,8 +540,7 @@ type Config struct {
 }
 
 // ProviderSettings are the operator's settings for one provider (the provider
-// id is the map key in Config.Providers). One field today, and the type exists
-// so the next per-provider knob needs no further top-level config key.
+// id is the map key in Config.Providers).
 type ProviderSettings struct {
 	// ClientIdentity selects the name terva presents on this provider's wire.
 	// Empty is the default and means terva identifies itself. "native" means
@@ -561,16 +562,75 @@ type ProviderSettings struct {
 	// free-form header injection point. An unrecognized word keeps the
 	// default.
 	ClientIdentity string `json:"client_identity,omitempty"`
+
+	// ActivationContinuation scopes the engine feature of the same name to this
+	// provider. Empty is the default and inherits the global
+	// `engine_features.activation_continuation`. "on" and "off" override it for
+	// sessions running on this provider.
+	//
+	// What it buys, stated exactly: activating a tool group invalidates the
+	// prompt prefix from the tools rung down, so the next dispatch re-prefills
+	// at full price. Continuation makes that dispatch happen immediately,
+	// because the gate fires at the model's natural stop. Turning it off defers
+	// the re-prefill to the user's next message, and a user who redirects
+	// instead of continuing never pays it on that prefix.
+	//
+	// That is a bounded saving of at most one dispatch per activation. It is
+	// NOT a remedy for the sustained cache collapse, and it must not be sold as
+	// one. The corpus sweep on TKT-01M29HFZEX (n=56) found activate_tools is a
+	// marker and not the cause: 31 of 49 cliff opens have no activation to
+	// account for them.
+	//
+	// A keyword and not a bool, so an unset provider is distinguishable from one
+	// set to false. An unrecognized word inherits the global.
+	ActivationContinuation string `json:"activation_continuation,omitempty"`
 }
 
-// EndpointConfig defines one user-supplied OpenAI-compatible backend. The
-// provider id is the map key in Config.Endpoints. The API key is NEVER stored
-// here: leave it unset for keyless local servers, set APIKeyEnv to read it from
-// the environment, or store it in auth.json under the endpoint name.
+// EndpointConfig defines one user-supplied backend. The provider id is the map
+// key in Config.Endpoints. The API key is NEVER stored here: leave it unset for
+// keyless local servers, set APIKeyEnv to read it from the environment, or
+// store it in auth.json under the endpoint name.
 type EndpointConfig struct {
 	BaseURL       string `json:"baseUrl"`                 // required, e.g. http://box:8000/v1
 	APIKeyEnv     string `json:"apiKeyEnv,omitempty"`     // env var holding the key (optional)
 	ContextWindow int    `json:"contextWindow,omitempty"` // default ctx for models lacking a hint
+
+	// API names the wire this endpoint speaks: "openai" (Chat Completions) or
+	// "anthropic" (Messages). Empty means "openai".
+	//
+	// The default is load-bearing, not laziness. Every endpoint written before
+	// this field existed speaks Chat Completions, and they are the operator's
+	// own config file — so the absent value has to keep meaning exactly what it
+	// meant when they wrote it. A required field here would have broken every
+	// existing endpoint on upgrade.
+	API string `json:"api,omitempty"`
+
+	// The Anthropic wire settings, all ignored unless API is "anthropic".
+	//
+	// Each is here because a real class of Messages-compatible server fails
+	// every turn without it, with an error that names none of them: a gateway
+	// pinned to a different anthropic-version, one that needs a beta opted into,
+	// one that wants the key as a Bearer token rather than x-api-key, and one
+	// that validates the request body strictly and rejects cache_control.
+	AnthropicVersion string `json:"anthropicVersion,omitempty"`
+	AnthropicBeta    string `json:"anthropicBeta,omitempty"`
+	AuthStyle        string `json:"authStyle,omitempty"` // "" | "x-api-key" | "bearer"
+	DisableCaching   bool   `json:"disableCaching,omitempty"`
+}
+
+// EndpointAPIAnthropic is the EndpointConfig.API value selecting the Anthropic
+// Messages wire. Anything else — including the empty string every pre-existing
+// endpoint carries — is the OpenAI Chat Completions wire.
+const EndpointAPIAnthropic = "anthropic"
+
+// IsAnthropic reports whether this endpoint speaks the Anthropic Messages API.
+//
+// The ONE place the discriminator is read. Registration, discovery, the login
+// probe, and resolve all ask this rather than comparing the string themselves —
+// four sites that would each have had to decide for themselves what an empty
+// value, or "Anthropic", or "anthropic-messages" means.
+func (e EndpointConfig) IsAnthropic() bool {
+	return strings.EqualFold(strings.TrimSpace(e.API), EndpointAPIAnthropic)
 }
 
 // TierConfig pins the weak/medium/strong swarm sub-agent models for one

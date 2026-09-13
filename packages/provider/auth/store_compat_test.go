@@ -9,7 +9,7 @@ import (
 
 func TestStoreCompatWithKey(t *testing.T) {
 	store := NewStore(filepath.Join(testsupport.TempDir(t), "auth.json"))
-	if err := store.SetCompatAPIKey("openai-compatible", "sk-local", "http://localhost:1234/v1", "qwen2.5-coder", 131072); err != nil {
+	if err := store.SetCompatEndpoint("openai-compatible", "sk-local", CompatEndpoint{BaseURL: "http://localhost:1234/v1", Model: "qwen2.5-coder", ContextWindow: 131072}); err != nil {
 		t.Fatal(err)
 	}
 	creds, err := store.Load()
@@ -17,12 +17,13 @@ func TestStoreCompatWithKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !creds.Has("openai-compatible") {
-		t.Fatal("Has=false after SetCompatAPIKey")
+		t.Fatal("Has=false after SetCompatEndpoint")
 	}
 	if got := creds.Method("openai-compatible"); got != "apikey" {
 		t.Fatalf("method=%q", got)
 	}
-	bu, model, ctxWin := store.Extras("openai-compatible")
+	ep := store.CompatEndpointFor("openai-compatible")
+	bu, model, ctxWin := ep.BaseURL, ep.Model, ep.ContextWindow
 	if bu != "http://localhost:1234/v1" || model != "qwen2.5-coder" || ctxWin != 131072 {
 		t.Fatalf("extras=(%q,%q,%d)", bu, model, ctxWin)
 	}
@@ -32,7 +33,7 @@ func TestStoreCompatWithKey(t *testing.T) {
 // back as a configured api-key login — many local servers need no token.
 func TestStoreCompatKeyless(t *testing.T) {
 	store := NewStore(filepath.Join(testsupport.TempDir(t), "auth.json"))
-	if err := store.SetCompatAPIKey("openai-compatible", "", "http://localhost:8080/v1", "llama3", 0); err != nil {
+	if err := store.SetCompatEndpoint("openai-compatible", "", CompatEndpoint{BaseURL: "http://localhost:8080/v1", Model: "llama3", ContextWindow: 0}); err != nil {
 		t.Fatal(err)
 	}
 	creds, err := store.Load()
@@ -45,7 +46,8 @@ func TestStoreCompatKeyless(t *testing.T) {
 	if got := creds.Method("openai-compatible"); got != "apikey" {
 		t.Fatalf("method=%q", got)
 	}
-	bu, model, _ := store.Extras("openai-compatible")
+	ep := store.CompatEndpointFor("openai-compatible")
+	bu, model := ep.BaseURL, ep.Model
 	if bu != "http://localhost:8080/v1" || model != "llama3" {
 		t.Fatalf("extras=(%q,%q)", bu, model)
 	}
@@ -55,17 +57,17 @@ func TestStoreCompatKeyless(t *testing.T) {
 // carry a default context window for discovered models.
 func TestStoreCompatContextDefault(t *testing.T) {
 	store := NewStore(filepath.Join(testsupport.TempDir(t), "auth.json"))
-	if err := store.SetCompatAPIKey("openai-compatible", "", "http://localhost:8080/v1", "llama3", 8192); err != nil {
+	if err := store.SetCompatEndpoint("openai-compatible", "", CompatEndpoint{BaseURL: "http://localhost:8080/v1", Model: "llama3", ContextWindow: 8192}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ctxWin := store.Extras("openai-compatible"); ctxWin != 8192 {
+	if ctxWin := store.CompatEndpointFor("openai-compatible").ContextWindow; ctxWin != 8192 {
 		t.Fatalf("context window=%d", ctxWin)
 	}
 }
 
 func TestStoreCompatClear(t *testing.T) {
 	store := NewStore(filepath.Join(testsupport.TempDir(t), "auth.json"))
-	if err := store.SetCompatAPIKey("openai-compatible", "", "http://localhost:8080/v1", "llama3", 0); err != nil {
+	if err := store.SetCompatEndpoint("openai-compatible", "", CompatEndpoint{BaseURL: "http://localhost:8080/v1", Model: "llama3", ContextWindow: 0}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Clear("openai-compatible"); err != nil {
@@ -78,7 +80,7 @@ func TestStoreCompatClear(t *testing.T) {
 	if creds.Has("openai-compatible") {
 		t.Fatal("Has=true after Clear")
 	}
-	if bu, model, ctxWin := store.Extras("openai-compatible"); bu != "" || model != "" || ctxWin != 0 {
-		t.Fatalf("extras after clear=(%q,%q,%d)", bu, model, ctxWin)
+	if ep := store.CompatEndpointFor("openai-compatible"); ep.BaseURL != "" || ep.Model != "" || ep.ContextWindow != 0 {
+		t.Fatalf("endpoint after clear=(%q,%q,%d)", ep.BaseURL, ep.Model, ep.ContextWindow)
 	}
 }

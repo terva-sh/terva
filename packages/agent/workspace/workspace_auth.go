@@ -155,15 +155,17 @@ func configEndpoints() map[string]config.EndpointConfig {
 // keys a credential under, and what config.json records. So it may not collide
 // with a provider terva ships: an endpoint called "anthropic" would shadow the
 // real one in every one of those places, and the operator would be debugging a
-// machine they own against a name they did not choose. Nor may it be
-// "openai-compatible", which is the single shared slot this exists to escape.
+// machine they own against a name they did not choose. Nor may it be either
+// shared slot's own name, which is what named endpoints exist to escape.
 func ValidEndpointName(id string) error {
 	id = strings.TrimSpace(id)
-	switch {
-	case id == "":
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("name this endpoint, or leave the name empty to use the shared openai-compatible slot"))
-	case id == compatSharedSlot:
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("%q is the shared slot's own name; choose another", compatSharedSlot))
+	if id == "" {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("name this endpoint, or leave the name empty to use the shared slot"))
+	}
+	for _, slot := range compatSharedSlots {
+		if id == slot {
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("%q is the shared slot's own name; choose another", slot))
+		}
 	}
 	// A provider id travels through config keys, a credential file, and a model
 	// picker. Keep it to something that cannot be mistaken for punctuation in any
@@ -184,9 +186,13 @@ func ValidEndpointName(id string) error {
 	return nil
 }
 
-// compatSharedSlot is the single openai-compatible entry in auth.json — the one
-// a second login overwrites, and the reason named endpoints exist.
-const compatSharedSlot = "openai-compatible"
+// The shared compatible slots: the single entry each holds in auth.json — the
+// one a second login overwrites, and the reason named endpoints exist.
+var compatSharedSlots = []string{provider.OpenAICompatProvider, provider.AnthropicCompatProvider}
+
+// isCompatProvider reports whether a login id captures an endpoint definition
+// rather than just a credential.
+func isCompatProvider(id string) bool { return provider.IsCompatProvider(id) }
 
 // offersFor reports how a provider can be logged into.
 //

@@ -75,6 +75,8 @@ func ProviderLabel(id string) string {
 		return "Ollama"
 	case "openai-compatible":
 		return "OpenAI Compatible (local/custom)"
+	case AnthropicCompatProvider:
+		return "Anthropic Compatible (local/custom)"
 	}
 	return titleProviderID(id)
 }

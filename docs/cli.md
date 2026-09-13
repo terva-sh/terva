@@ -54,12 +54,12 @@ all in [Modes](#modes) below.
 
 | Flag | Description |
 |---|---|
-| `--provider <id>` | Pick the provider. Around thirty are built in — `anthropic`, `openai`, `openai-codex`, `google`, `kimi`, `deepseek`, `groq`, `mistral`, `xai`, `github-copilot`, `openrouter`, `amazon-bedrock`, `ollama`, `openai-compatible`, and more. [providers.md](providers.md) has the full list with login methods; `terva --list-models` prints what your credentials can actually reach. |
+| `--provider <id>` | Pick the provider. Around thirty are built in — `anthropic`, `openai`, `openai-codex`, `google`, `kimi`, `deepseek`, `groq`, `mistral`, `xai`, `github-copilot`, `openrouter`, `amazon-bedrock`, `ollama`, `openai-compatible`, `anthropic-compatible`, and more. [providers.md](providers.md) has the full list with login methods; `terva --list-models` prints what your credentials can actually reach. |
 | `--model <id>` | Pick the model (see `--list-models`; `--list-models=available` shows only what your credentials can use right now, `--list-models=live+` hides unconfigured catalog noise — see [models.md](models.md)). |
 | `--list-models[=<filter>]` | Print the known models and exit. `<filter>` is a comma list of sources (`user`, `live`, `catalog`, `speculative`), a tier threshold like `live+` (that tier and above), or `available` (only providers whose credentials resolve right now). Terms AND together. |
 | `--api-key <key>` | Override the API key. |
 | `--base-url <url>` | Override the provider base URL (tests, self-hosted). |
-| `--insecure` | Skip TLS verification for the inference `--base-url`. Gated to `openai-compatible`/`ollama` with an explicit `--base-url` — auth, discovery, and every other provider keep normal verification. For a self-signed local endpoint, nothing else. |
+| `--insecure` | Skip TLS verification for the inference `--base-url`. Gated to `openai-compatible`/`anthropic-compatible`/`ollama` with an explicit `--base-url` — auth, discovery, and every other provider keep normal verification. For a self-signed local endpoint, nothing else. |
 | `--temperature <n>` | Sampling temperature, `0`–`2`. Omit for the provider default. |
 | `--system-prompt <text>` | Replace the default system prompt for this run (also overrides `$TERVA_HOME/SYSTEM.md`). |
 | `--append-system-prompt <text>` | Append text to the system prompt (repeatable). |

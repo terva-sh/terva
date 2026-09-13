@@ -40,6 +40,41 @@ func newOpenAICompat(name, apiKey, baseURL, fallbackBaseURL string) Client {
 	}
 }
 
+// NewOpenAICompatibleAs is a Chat Completions client for a backend the OPERATOR
+// supplied, identifying as `name`.
+//
+// 🪤 ollama, the shared openai-compatible slot, and every named OpenAI endpoint
+// used to be built with NewOpenAI, which hardcodes the name "openai". Three
+// separate backends therefore claimed to BE OpenAI, and the claim was not
+// cosmetic:
+//
+//   - buildRequest forwards prompt_cache_key when `c.name == "openai"`, guarded
+//     by a comment saying the parameter is for the real backend only because
+//     "an unknown parameter risks a 400" elsewhere. The guard could never fire:
+//     the LM Studio box it was protecting was called "openai" too.
+//   - core.Agent looks up the model with FindModel(client.Name(), …) to decide
+//     whether it may send an image, and an endpoint's discovered models are
+//     stamped with the endpoint id, so the lookup missed.
+//   - replaceForeignCompactions keys on the same name, so a compaction from a
+//     different provider read as native.
+//   - Every error, and the rescue picker behind it, named a vendor the request
+//     never reached — the same failure the Anthropic client's own c.Name()
+//     comment was written about.
+//
+// Rate-limit parsing is unaffected: rateLimitSpecFor defaults every unlisted
+// provider to the standard spec, and a server that sends no x-ratelimit-*
+// headers reports nothing under either name.
+func NewOpenAICompatibleAs(name, apiKey, baseURL string) Client {
+	return newOpenAICompat(name, apiKey, baseURL, openaiDefaultBaseURL)
+}
+
+// NewOpenAICompatible is the shared `openai-compatible` slot: the endpoint a
+// login with no name writes. Named endpoints go through NewOpenAICompatibleAs
+// with their own id, exactly as the Anthropic pair does.
+func NewOpenAICompatible(apiKey, baseURL string) Client {
+	return NewOpenAICompatibleAs(OpenAICompatProvider, apiKey, baseURL)
+}
+
 // NewMoonshot is the global Moonshot AI endpoint (Kimi-K2 family by id).
 // Provider id is `moonshotai`.
 func NewMoonshot(apiKey, baseURL string) Client {

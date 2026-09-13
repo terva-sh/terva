@@ -5,11 +5,12 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/provider"
 )
 
 // LoggedInProviders returns every provider a model picker may offer: those with
 // a resolvable credential, plus the ones that need no credential at all —
-// ollama, the shared openai-compatible slot once it has a base URL, and each
+// ollama, the shared compatible slots once they have a base URL, and each
 // named endpoint from config.
 //
 // "Logged in" cannot be spelled ResolveCredential alone, and that is the point.
@@ -42,11 +43,14 @@ func LoggedInProviders() []string {
 	}
 	// Ollama needs no auth at all.
 	add("ollama")
-	// The shared openai-compatible slot is reachable as soon as it has a base
-	// URL. Its key is optional, so the ResolveCredential sweep above will not
-	// have surfaced it.
-	if baseURL, _, _ := config.AuthStoreFor().Extras("openai-compatible"); strings.TrimSpace(baseURL) != "" {
-		add("openai-compatible")
+	// Each shared compatible slot is reachable as soon as it has a base URL.
+	// Their keys are optional, so the ResolveCredential sweep above will not
+	// have surfaced them.
+	store := config.AuthStoreFor()
+	for _, id := range []string{provider.OpenAICompatProvider, provider.AnthropicCompatProvider} {
+		if store.CompatEndpointFor(id).Configured() {
+			add(id)
+		}
 	}
 	// Each named endpoint, for exactly the same reason. Sorted, because a picker
 	// that reshuffles its providers between reads is a bug, and a map is not an
@@ -84,7 +88,7 @@ func LoggedInProviderSet() map[string]bool {
 // id alone can never tell you.
 //
 // Keyless backends carry NO entry, deliberately. ollama, the shared
-// openai-compatible slot and named endpoints are reachable without a credential
+// compatible slots and named endpoints are reachable without a credential
 // (see [LoggedInProviders]), so there is no method to report and guessing one
 // would put a confident, wrong badge on a row. An absent entry means "unknown",
 // and the caller should render nothing rather than invent a label.

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/provider"
 )
 
 // Event is delivered on Manager.Events().
@@ -97,23 +98,40 @@ type Manager struct {
 	// Probe seams, mirroring Server.probeFn. A key handed straight to the
 	// Manager (the headless path) is validated exactly as the browser form
 	// validates one, and tests swap these out to stay off the network.
-	probeAPIKey func(ctx context.Context, provider, key string) error
-	probeCompat func(ctx context.Context, baseURL, key string) error
+	probeAPIKey          func(ctx context.Context, provider, key string) error
+	probeCompat          func(ctx context.Context, baseURL, key string) error
+	probeAnthropicCompat func(ctx context.Context, baseURL, key string, o provider.AnthropicCompatOptions) error
 }
 
-// compatProvider is the openai-compatible endpoint: the one api-key provider
-// whose login carries more than a key (a base URL, a model id, and an
-// optional default context window).
-const compatProvider = "openai-compatible"
+// The compatible providers: the two api-key logins that carry more than a key
+// (a base URL, a model id, an optional default context window, and — for the
+// Anthropic one — the wire settings its server needs).
+//
+// They are the operator's OWN backends rather than a vendor terva ships, which
+// is why they are the only logins with an endpoint to describe.
+const (
+	compatProvider          = provider.OpenAICompatProvider
+	anthropicCompatProvider = provider.AnthropicCompatProvider
+)
+
+// isCompatProvider reports whether p's login captures an endpoint definition
+// rather than just a credential.
+//
+// A predicate, not `p == compatProvider`, because that equality was written at
+// six sites while there was only one such provider — and every one of them was
+// a place the second provider would otherwise be silently treated as an
+// ordinary api-key login: key required, endpoint discarded.
+func isCompatProvider(p string) bool { return provider.IsCompatProvider(p) }
 
 // NewManager returns a Manager bound to store.
 func NewManager(store *Store) *Manager {
 	return &Manager{
-		store:       store,
-		events:      make(chan Event, 16),
-		openBrowser: true,
-		probeAPIKey: ProbeAPIKey,
-		probeCompat: ProbeOpenAICompatible,
+		store:                store,
+		events:               make(chan Event, 16),
+		openBrowser:          true,
+		probeAPIKey:          ProbeAPIKey,
+		probeCompat:          ProbeOpenAICompatible,
+		probeAnthropicCompat: ProbeAnthropicCompatible,
 	}
 }
 
@@ -249,8 +267,8 @@ func (m *Manager) CompleteAPIKey(ctx context.Context, provider, key string) erro
 	if !isKnownAPIKeyProvider(provider) {
 		return fail(errors.New(apiKeyProviderMessage()))
 	}
-	if provider == compatProvider {
-		return fail(errors.New(i18n.T("an openai-compatible endpoint needs a base url and model too")))
+	if isCompatProvider(provider) {
+		return fail(errors.New(i18n.T("a %q endpoint needs a base url and model too", provider)))
 	}
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -272,43 +290,68 @@ func (m *Manager) CompleteAPIKey(ctx context.Context, provider, key string) erro
 	return nil
 }
 
-// CompleteCompatAPIKey stores an openai-compatible endpoint handed to terva
+// CompleteCompatAPIKey stores a compatible-provider endpoint handed to terva
 // directly. It is the headless twin of the browser form's compat fields, and
 // it takes everything that form takes.
 //
-// baseURL and model are required — without them there is nowhere to send a
+// providerID selects the wire: openai-compatible or anthropic-compatible. It is
+// a parameter rather than a constant because the endpoint's SHAPE is identical
+// between the two and only the probe and the stored knobs differ — splitting
+// this into two near-identical methods is how the two slots would drift.
+//
+// BaseURL and Model are required — without them there is nowhere to send a
 // request and nothing to send it with. The key is optional on purpose: local
-// servers (lm studio, llama.cpp, ollama's /v1, vllm) routinely ignore it.
-// contextWindow is a default for models the endpoint does not describe; 0
-// means "unknown", which is also what a blank entry becomes.
-func (m *Manager) CompleteCompatAPIKey(ctx context.Context, baseURL, model, key string, contextWindow int) error {
+// servers (lm studio, llama.cpp, ollama's /v1, vllm, a gateway on a trusted
+// network) routinely ignore it. ContextWindow is a default for models the
+// endpoint does not describe; 0 means "unknown", which is also what a blank
+// entry becomes.
+func (m *Manager) CompleteCompatAPIKey(ctx context.Context, providerID string, ep CompatEndpoint, key string) error {
 	fail := func(err error) error {
-		m.emit(Event{Kind: "error", Provider: compatProvider, Method: "apikey", Message: err.Error()})
+		m.emit(Event{Kind: "error", Provider: providerID, Method: "apikey", Message: err.Error()})
 		return err
 	}
-	baseURL = strings.TrimSpace(baseURL)
-	model = strings.TrimSpace(model)
+	if !isCompatProvider(providerID) {
+		return fail(i18n.Errorf("%q does not take an endpoint", providerID))
+	}
+	ep.BaseURL = strings.TrimSpace(ep.BaseURL)
+	ep.Model = strings.TrimSpace(ep.Model)
 	key = strings.TrimSpace(key)
-	if baseURL == "" || model == "" {
-		return fail(errors.New(i18n.T("base url and model are required for an openai-compatible endpoint")))
+	if !ep.Configured() || ep.Model == "" {
+		return fail(errors.New(i18n.T("base url and model are required for a compatible endpoint")))
 	}
-	if contextWindow < 0 {
-		contextWindow = 0
+	if ep.ContextWindow < 0 {
+		ep.ContextWindow = 0
 	}
-	if err := m.probeCompat(ctx, baseURL, key); err != nil {
+	if err := ValidateCompatEndpoint(providerID, ep); err != nil {
+		return fail(err)
+	}
+	if err := m.probeEndpoint(ctx, providerID, ep, key); err != nil {
 		return fail(err)
 	}
 	m.mu.Lock()
-	err := m.store.SetCompatAPIKey(compatProvider, key, baseURL, model, contextWindow)
+	err := m.store.SetCompatEndpoint(providerID, key, ep)
 	if err == nil {
-		m.cancelKeyFlowsLocked(compatProvider)
+		m.cancelKeyFlowsLocked(providerID)
 	}
 	m.mu.Unlock()
 	if err != nil {
 		return fail(err)
 	}
-	m.emit(Event{Kind: "success", Provider: compatProvider, Method: "apikey"})
+	m.emit(Event{Kind: "success", Provider: providerID, Method: "apikey"})
 	return nil
+}
+
+// probeEndpoint reaches the endpoint the way the first turn will.
+//
+// The Anthropic probe is given the endpoint's own options, not defaults: an
+// endpoint configured for Bearer auth that is probed with x-api-key either
+// fails a login that would have worked, or — against a server that ignores
+// unknown keys — passes one that will not.
+func (m *Manager) probeEndpoint(ctx context.Context, providerID string, ep CompatEndpoint, key string) error {
+	if providerID == anthropicCompatProvider {
+		return m.probeAnthropicCompat(ctx, ep.BaseURL, key, ep.AnthropicOptions())
+	}
+	return m.probeCompat(ctx, ep.BaseURL, key)
 }
 
 func (m *Manager) ensureKeyServerLocked() error {
@@ -323,6 +366,7 @@ func (m *Manager) ensureKeyServerLocked() error {
 	m.keyFlows = make(map[FlowID]string)
 	s.probeFn = m.probeAPIKey
 	s.probeCompatFn = m.probeCompat
+	s.probeAnthropicCompatFn = m.probeAnthropicCompat
 	// Hand the server to the consumer rather than letting it reach back for
 	// m.keyServer: Close() nils that field under the mutex, and the consumer
 	// read it without one — a real data race, and on the losing schedule a nil
@@ -356,14 +400,15 @@ func (m *Manager) consumeKeyResult(s *Server, res LoginResult) {
 		m.emit(Event{Kind: "error", Flow: res.Flow, Provider: provider, Method: "apikey", Message: res.Err.Error()})
 		return
 	}
-	if (provider != compatProvider && strings.TrimSpace(res.APIKey) == "") ||
-		(provider == compatProvider && (strings.TrimSpace(res.BaseURL) == "" || strings.TrimSpace(res.Model) == "")) {
+	compat := isCompatProvider(provider)
+	if (!compat && strings.TrimSpace(res.APIKey) == "") ||
+		(compat && (!res.Endpoint.Configured() || strings.TrimSpace(res.Endpoint.Model) == "")) {
 		return
 	}
 	delete(m.keyFlows, res.Flow)
 	var err error
-	if provider == compatProvider {
-		err = m.store.SetCompatAPIKey(provider, res.APIKey, res.BaseURL, res.Model, res.ContextWindow)
+	if compat {
+		err = m.store.SetCompatEndpoint(provider, res.APIKey, res.Endpoint)
 	} else {
 		err = m.store.SetAPIKey(provider, res.APIKey)
 	}

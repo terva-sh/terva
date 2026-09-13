@@ -53,9 +53,15 @@ type Resolved struct {
 	// (config.ProviderSettings.ClientIdentity). Empty is the default, and it
 	// means terva names itself. Read off the USER layer only.
 	ClientIdentity string
-	BaseURL        string
-	CWD            string
-	Reasoning      string
+	// ActivationContinuation is the operator's per-provider override of the
+	// engine feature of the same name
+	// (config.ProviderSettings.ActivationContinuation). Empty is the default,
+	// and it inherits the global. Read off the USER layer only, like every
+	// other providers.<id> field.
+	ActivationContinuation string
+	BaseURL                string
+	CWD                    string
+	Reasoning              string
 	// ReasoningSet reports the global reasoning level was explicitly chosen
 	// (--reasoning flag or config), so it wins over a model's DefaultReasoning.
 	// Derived from the RAW value before normalizing: non-empty raw (incl.
@@ -75,8 +81,12 @@ type Resolved struct {
 	// only on a model that advertises CapImageOutput.
 	ImageOutput *provider.ImageOutputConfig
 	// Insecure skips TLS verification for the inference client only
-	// (gated to openai-compatible/ollama + explicit --base-url in Resolve).
+	// (gated to the compatible slots/ollama + explicit --base-url in Resolve).
 	Insecure bool
+	// CompatWire carries the Anthropic-Messages settings for a backend the
+	// OPERATOR defined: the shared anthropic-compatible slot, or one of their
+	// named endpoints. Zero for every other provider.
+	CompatWire provider.AnthropicCompatOptions
 
 	// VisionCapable is the resolved model's image-input verdict
 	// (model.Has(CapImageInput)). The live registry rebuild on a /model
@@ -674,8 +684,8 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// wrapped transport) with an EXPLICIT --base-url, so it can never
 	// silently weaken a built-in provider's verification. args.BaseURL is
 	// still the raw flag here (model-default base URLs are applied later).
-	if args.Insecure && (strings.TrimSpace(args.BaseURL) == "" || (provName != "openai-compatible" && provName != "ollama")) {
-		return Resolved{}, fmt.Errorf("--insecure is only allowed for the openai-compatible or ollama provider with an explicit --base-url")
+	if args.Insecure && (strings.TrimSpace(args.BaseURL) == "" || !(isCompatProvider(provName) || provName == "ollama")) {
+		return Resolved{}, fmt.Errorf("--insecure is only allowed for the openai-compatible, anthropic-compatible or ollama provider with an explicit --base-url")
 	}
 	if !IsKnownProvider(provName) {
 		// Unknown provider (maybe removed or renamed). Fall back to
@@ -713,41 +723,49 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		// openai-compatible endpoint, applied to a model id that isn't in
 		// the active catalogue (not yet discovered). 0 = unknown.
 		compatCtx int
-		// compatBaseURL is the openai-compatible endpoint captured at
-		// /login. It is the FALLBACK base URL — applied only after an
-		// explicit --base-url flag and any per-model models.json baseUrl,
-		// so a model can point at a different endpoint than the login one.
+		// compatBaseURL is the compatible endpoint captured at /login. It is
+		// the FALLBACK base URL — applied only after an explicit --base-url
+		// flag and any per-model models.json baseUrl, so a model can point at
+		// a different endpoint than the login one.
 		compatBaseURL string
+		// compatWire is the Anthropic-Messages settings for an operator-defined
+		// backend (which header carries the key, which version to claim, which
+		// betas, whether to send cache_control). Zero for every other provider,
+		// including the OpenAI-compatible slot.
+		compatWire provider.AnthropicCompatOptions
 	)
 	if provName == "ollama" {
 		cred = firstNonEmpty(args.APIKey, "ollama")
 		method = "apikey"
 	} else if ep, ok := eff.Config.Endpoints[provName]; ok {
-		// A user-defined named OpenAI-compatible endpoint: like
-		// openai-compatible, but its base URL + default context come from the
-		// config entry, and its Key (if any) resolves from APIKeyEnv/auth.json.
-		// Keyless local servers fall back to the harmless sentinel bearer.
+		// A user-defined named endpoint: like the shared compatible slots, but
+		// its base URL + default context come from the config entry, and its
+		// Key (if any) resolves from APIKeyEnv/auth.json. Keyless local servers
+		// fall back to the harmless sentinel.
 		compatCtx = ep.ContextWindow
 		compatBaseURL = ep.BaseURL
-		cred, method = endpointCredential(provName, args.APIKey)
-	} else if provName == "openai-compatible" {
-		// A user-configured OpenAI-compatible endpoint (local model
-		// server, gateway, ...). The base URL and model id were captured
-		// in the login form and live in auth.json; the API Key is
-		// optional, so fall back to a harmless sentinel bearer token when
-		// the server doesn't need one. Seed --base-url / --model from the
-		// stored values when the caller didn't pass them explicitly.
-		storedBaseURL, storedModel, storedCtx := config.AuthStoreFor().Extras(provName)
-		compatCtx = storedCtx
+		compatWire = EndpointAnthropicOptions(ep)
+		cred, method = endpointCredential(provName, args.APIKey, ep.IsAnthropic())
+	} else if isCompatProvider(provName) {
+		// A user-configured compatible endpoint (local model server, gateway,
+		// ...) in one of the two shared slots. The base URL and model id were
+		// captured in the login form and live in auth.json; the API Key is
+		// optional, so fall back to a harmless sentinel when the server doesn't
+		// need one. Seed --base-url / --model from the stored values when the
+		// caller didn't pass them explicitly.
+		stored := config.AuthStoreFor().CompatEndpointFor(provName)
+		compatCtx = stored.ContextWindow
 		// Remember the login endpoint as a fallback, but DON'T assign it to
 		// args.BaseURL yet: a per-model `baseUrl` in models.json must be able
 		// to override it (applied after the model is resolved, below).
-		compatBaseURL = storedBaseURL
+		compatBaseURL = stored.BaseURL
+		// Inert for the OpenAI slot, which never stores any of them.
+		compatWire = stored.AnthropicOptions()
 		if args.Model == "" && eff.Config.Model == "" {
-			args.Model = storedModel
+			args.Model = stored.Model
 		}
 		storedKey, _, _, _ := ResolveCredentialFull(provName, args.APIKey)
-		cred = firstNonEmpty(storedKey, "openai-compatible")
+		cred = firstNonEmpty(storedKey, provName)
 		method = "apikey"
 	} else {
 		cred, method, accountID, credErr = ResolveCredentialFull(provName, args.APIKey)
@@ -778,7 +796,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		// ProviderIDs defines fallback priority. ollama is skipped:
 		// it has no credential and would always "match".
 		for _, other := range ProviderIDs() {
-			if other == provName || other == "ollama" || other == "openai-compatible" {
+			if other == provName || other == "ollama" || isCompatProvider(other) {
 				continue
 			}
 			// A named endpoint is reachable WITHOUT a credential — that is the
@@ -800,9 +818,14 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 					switched = &ProviderSwitch{From: provName, FromModel: eff.Config.Model, Err: pinnedErr}
 				}
 				provName = other
-				cred, method = endpointCredential(other, args.APIKey)
+				cred, method = endpointCredential(other, args.APIKey, ep.IsAnthropic())
 				accountID, credErr = "", nil
 				compatCtx, compatBaseURL = ep.ContextWindow, ep.BaseURL
+				// Without this the fallback would reach an Anthropic endpoint
+				// with default headers — the one path that builds a client for a
+				// provider the user did not name, and so the one where a wrong
+				// auth style is hardest to attribute.
+				compatWire = EndpointAnthropicOptions(ep)
 				break
 			}
 			if c, m, a, err := ResolveCredentialFull(other, args.APIKey); err == nil {
@@ -816,10 +839,10 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		}
 	}
 
-	// ollama and openai-compatible are open-catalogue: the model id is
+	// ollama and the two compatible slots are open-catalogue: the model id is
 	// whatever the local/custom server understands and has no baked-in
 	// catalog entry or default.
-	openCatalogue := provName == "ollama" || provName == "openai-compatible" || IsEndpointProvider(provName, cfg)
+	openCatalogue := provName == "ollama" || isCompatProvider(provName) || IsEndpointProvider(provName, cfg)
 	// --model flag > project (trusted) > user config (eff.Config is the
 	// project-over-user read view; cfg stays the user layer for repairs).
 	model := firstNonEmpty(args.Model, eff.Config.Model)
@@ -849,8 +872,8 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		switch {
 		case provName == "ollama":
 			return Resolved{}, fmt.Errorf("ollama requires --model (e.g. --model llama3)")
-		case provName == "openai-compatible":
-			return Resolved{}, fmt.Errorf("openai-compatible requires a model; set it during /login or pass --model")
+		case isCompatProvider(provName):
+			return Resolved{}, fmt.Errorf("%s requires a model; set it during /login or pass --model", provName)
 		case IsEndpointProvider(provName, cfg):
 			// A named endpoint has no baked-in default: DefaultModelForProvider
 			// returns "" for it, and an empty model id is not a harmless
@@ -911,7 +934,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		// entry. Either way it beats the generic guess, and using it is what
 		// keeps auto-compaction and the context gauge honest.
 		ctxWin := 32768
-		if compatCtx > 0 && (provName == "openai-compatible" || IsEndpointProvider(provName, cfg)) {
+		if compatCtx > 0 && (isCompatProvider(provName) || IsEndpointProvider(provName, cfg)) {
 			ctxWin = compatCtx
 		}
 		resolvedModel = provider.Model{
@@ -998,12 +1021,12 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	if args.BaseURL == "" && provName == "ollama" {
 		args.BaseURL = "http://localhost:11434"
 	}
-	if provName == "openai-compatible" && args.BaseURL == "" {
-		return Resolved{}, fmt.Errorf("openai-compatible requires a base url; set it during /login or pass --base-url")
+	if isCompatProvider(provName) && args.BaseURL == "" {
+		return Resolved{}, fmt.Errorf("%s requires a base url; set it during /login or pass --base-url", provName)
 	}
 
 	// Credentials are optional only where the ENDPOINT is one terva reaches
-	// without them: ollama, an openai-compatible login, a named endpoint, or a
+	// without them: ollama, a compatible-slot login, a named endpoint, or a
 	// models.json entry whose baseUrl pins a server the user runs.
 	//
 	// "The model has a base URL" was far too wide a test for that. Nearly every
@@ -1469,6 +1492,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		ProviderSwitch:           switched,
 		AccountID:                accountID,
 		ClientIdentity:           eff.Config.Providers[provName].ClientIdentity,
+		ActivationContinuation:   eff.Config.Providers[provName].ActivationContinuation,
 		BaseURL:                  args.BaseURL,
 		CWD:                      args.CWD,
 		Reasoning:                reasoning,
@@ -1478,6 +1502,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		Temperature:              temperature,
 		ImageOutput:              imageOutput,
 		Insecure:                 args.Insecure,
+		CompatWire:               compatWire,
 		VisionCapable:            visionCapable,
 		ImageRegistry:            imageReg,
 		ToolRegistry:             reg,
@@ -1653,8 +1678,9 @@ func (r Resolved) NewClient() provider.Client {
 	c := r.dispatchClient()
 	if r.Insecure {
 		// Scope the cert-skipping client to the inference client alone.
-		// Resolve already gated this to openai-compatible/ollama, whose
-		// client is a plain openaiClient that WithHTTPClient can reach.
+		// Resolve already gated this to the compatible slots/ollama, whose
+		// clients are the plain openaiClient and anthropicClient that
+		// WithHTTPClient can reach.
 		c = provider.WithHTTPClient(c, provider.NewHTTPClient(true))
 	}
 	return c
@@ -1669,6 +1695,7 @@ func (r Resolved) clientConfig() clientConfig {
 		AuthMethod:     r.AuthMethod,
 		AccountID:      r.AccountID,
 		ClientIdentity: r.ClientIdentity,
+		CompatWire:     r.CompatWire,
 	}
 }
 
@@ -2021,6 +2048,17 @@ func (r Resolved) NewAgent() *core.Agent {
 	// The workspace settings surface flips live agents through the same Apply.
 	for _, f := range EngineFeatures {
 		f.Apply(a, EngineFeatureOn(r.EngineFeatures, f))
+	}
+	// One feature is scoped per provider on top of that global: the operator can
+	// turn activation continuation off for the wire where the re-prefill after an
+	// activation is expensive. It lands through the SAME core setter the feature
+	// loop just used, so core stays provider-ignorant and runLoop still has one
+	// flag to snapshot per Prompt. A provider with no override is not touched
+	// here at all, which is what keeps an unconfigured session identical to
+	// before. See activationcontinuation.go for what the override does and does
+	// not buy.
+	if on, ok := ActivationContinuationOverride(r.ActivationContinuation); ok {
+		a.SetActivationContinuation(on)
 	}
 	// Lore's per-turn provider scans this run's triggered lore entries
 	// against recent messages each turn (nil when lore is off / has no

@@ -53,27 +53,67 @@ func LoadUserModels() {
 	provider.SetUserOverrides(overrides)
 }
 
-// LoadCompatModel registers the configured openai-compatible endpoint's
-// model into the active catalog so it shows up in the /model picker
-// (open-catalogue models have no baked-in entry). No-op when the
-// provider isn't configured.
+// compatSlots are the two shared compatible provider ids, in picker order.
+// Everything that used to name "openai-compatible" once now ranges over this.
+var compatSlots = []string{provider.OpenAICompatProvider, provider.AnthropicCompatProvider}
+
+// LoadCompatModel registers each configured compatible slot's default model
+// into the active catalog so it shows up in the /model picker (open-catalogue
+// models have no baked-in entry). No-op for a slot that isn't configured.
 func LoadCompatModel() {
-	baseURL, model, ctxWin := config.AuthStoreFor().Extras("openai-compatible")
-	if baseURL == "" || model == "" {
-		return
+	store := config.AuthStoreFor()
+	for _, id := range compatSlots {
+		ep := store.CompatEndpointFor(id)
+		if !ep.Configured() || ep.Model == "" {
+			continue
+		}
+		ctxWin := ep.ContextWindow
+		if ctxWin <= 0 {
+			ctxWin = unknownModelContext
+		}
+		provider.RegisterExtraModel(provider.Model{
+			Provider:      id,
+			ID:            ep.Model,
+			DisplayName:   ep.Model,
+			ContextWindow: ctxWin,
+			// Non-zero on purpose for the Anthropic slot: the Messages API
+			// requires max_tokens, so a 0 here is a 400 on every turn rather
+			// than a server-chosen default. See anthropicCompatMaxOutput.
+			MaxOutput: 8192,
+			BaseURL:   ep.BaseURL,
+			Source:    id,
+		})
 	}
-	if ctxWin <= 0 {
-		ctxWin = 32768
+}
+
+// discoverCompatModels lists an endpoint's models over whichever wire it speaks.
+//
+// The one place the two discoverers are chosen between. Every caller below —
+// startup warm-up, the background refresh, the full catalog sweep, the
+// post-login adoption — reaches an endpoint the operator defined, and each of
+// them would otherwise have had to remember that half of them are Anthropic.
+func discoverCompatModels(ctx context.Context, id, baseURL, key string, defCtx int, anthropic bool, wire provider.AnthropicCompatOptions) ([]provider.Model, error) {
+	var (
+		live []provider.Model
+		err  error
+	)
+	if anthropic {
+		live, err = provider.DiscoverAnthropicCompatible(ctx, baseURL, key, defCtx, wire)
+	} else {
+		live, err = provider.DiscoverOpenAICompatible(ctx, baseURL, key, defCtx)
 	}
-	provider.RegisterExtraModel(provider.Model{
-		Provider:      "openai-compatible",
-		ID:            model,
-		DisplayName:   model,
-		ContextWindow: ctxWin,
-		MaxOutput:     8192,
-		BaseURL:       baseURL,
-		Source:        "openai-compatible",
-	})
+	if err != nil {
+		return nil, err
+	}
+	// Both discoverers stamp their own shared-slot id — they do not know which
+	// endpoint asked. Re-stamp, or a named endpoint's models land under the
+	// shared slot and its own picker row stays empty.
+	for i := range live {
+		live[i].Provider = id
+		live[i].BaseURL = baseURL
+		live[i].Source = "live"
+	}
+	return live, nil
 }
 
 // EnsureEndpointModels gives each configured endpoint a model list BEFORE the
@@ -125,18 +165,14 @@ func EnsureEndpointModels() {
 				defCtx = unknownModelContext
 			}
 			cred, _, _ := build.ResolveCredential(p.id, "")
-			live, err := provider.DiscoverOpenAICompatible(ctx, p.ep.BaseURL, cred, defCtx)
+			live, err := discoverCompatModels(ctx, p.id, p.ep.BaseURL, cred, defCtx,
+				p.ep.IsAnthropic(), build.EndpointAnthropicOptions(p.ep))
 			if err != nil {
 				return
 			}
 			mu.Lock()
 			defer mu.Unlock()
 			for _, m := range live {
-				// Discovery stamps everything "openai-compatible"; it does not
-				// know which endpoint asked.
-				m.Provider = p.id
-				m.BaseURL = p.ep.BaseURL
-				m.Source = "live"
 				provider.RegisterExtraModel(m)
 			}
 		}(p)
@@ -161,47 +197,54 @@ const endpointWarmupTimeout = 3 * time.Second
 const unknownModelContext = 32768
 
 // compatDefaultContext returns the user's configured default context window for
-// THE openai-compatible endpoint, falling back to unknownModelContext.
+// ONE shared compatible slot, falling back to unknownModelContext.
 //
 // It applies to that provider only. It used to be handed to the opencode and
 // opencode-go discoveries as well, which meant a context window the user had
 // configured for their own local server — an LM Studio box, say — silently
 // became the assumed window for a completely unrelated hosted gateway's models.
-func compatDefaultContext() int {
-	if _, _, ctxWin := config.AuthStoreFor().Extras("openai-compatible"); ctxWin > 0 {
-		return ctxWin
+// The same reasoning now separates the two slots from each other: they are two
+// different servers, and neither one's window describes the other's models.
+func compatDefaultContext(id string) int {
+	if ep := config.AuthStoreFor().CompatEndpointFor(id); ep.ContextWindow > 0 {
+		return ep.ContextWindow
 	}
 	return unknownModelContext
 }
 
-// RefreshCompatModelsAsync discovers the openai-compatible endpoint's
-// models in the background and registers them into the active catalog.
+// RefreshCompatModelsAsync discovers each configured compatible slot's models
+// in the background and registers them into the active catalog.
 // Unlike RefreshModelsAsync it is NOT gated on the 6h model cache: a
 // local server's loaded model set changes often and the /v1/models query
 // is cheap, so we re-list on every launch (and after a fresh login).
-// No-op when the endpoint isn't configured.
+// No-op for a slot that isn't configured.
 func RefreshCompatModelsAsync() {
-	baseURL, _, _ := config.AuthStoreFor().Extras("openai-compatible")
-	if baseURL == "" {
-		return
+	store := config.AuthStoreFor()
+	for _, id := range compatSlots {
+		ep := store.CompatEndpointFor(id)
+		if !ep.Configured() {
+			continue
+		}
+		anthropic := id == provider.AnthropicCompatProvider
+		go func(id string, ep auth.CompatEndpoint) {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			// No re-apply dance needed here: discovery writes the "extra"
+			// catalog layer, and the user's models.json lives in the
+			// higher-precedence "user" layer, so hand-set overrides (e.g.
+			// maxTokens on the default model) win over discovered values
+			// by construction.
+			key, _, _ := build.ResolveCredential(id, "")
+			live, err := discoverCompatModels(ctx, id, ep.BaseURL, key,
+				compatDefaultContext(id), anthropic, ep.AnthropicOptions())
+			if err != nil {
+				return
+			}
+			for _, m := range live {
+				provider.RegisterExtraModel(m)
+			}
+		}(id, ep)
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		// No re-apply dance needed here: discovery writes the "extra"
-		// catalog layer, and the user's models.json lives in the
-		// higher-precedence "user" layer, so hand-set overrides (e.g.
-		// maxTokens on the default model) win over discovered values
-		// by construction.
-		key, _, _ := build.ResolveCredential("openai-compatible", "")
-		live, err := provider.DiscoverOpenAICompatible(ctx, baseURL, key, compatDefaultContext())
-		if err != nil {
-			return
-		}
-		for _, m := range live {
-			provider.RegisterExtraModel(m)
-		}
-	}()
 }
 
 // ValidateAndRepairConfig checks the persisted config.json's
@@ -299,8 +342,8 @@ func ValidateAndRepairConfig() {
 		changed = true
 	}
 
-	// ollama, openai-compatible and the operator's own named endpoints are
-	// open-catalogue: any model id the local/custom server understands is valid,
+	// ollama, the shared compatible slots and the operator's own named endpoints
+	// are open-catalogue: any model id the local/custom server understands is valid,
 	// so never rewrite it here.
 	//
 	// Endpoints were missing from this list, and the omission was not cosmetic.
@@ -309,7 +352,7 @@ func ValidateAndRepairConfig() {
 	// was "not in the active catalog", got repaired to the endpoint's default
 	// (which is "", since an endpoint has none), and terva then asked the server
 	// to run the empty model.
-	openCatalogue := cfg.Provider == "ollama" || cfg.Provider == "openai-compatible" ||
+	openCatalogue := cfg.Provider == "ollama" || provider.IsCompatProvider(cfg.Provider) ||
 		build.IsEndpointProvider(cfg.Provider, cfg)
 	if cfg.Provider != "" && cfg.Model != "" && !openCatalogue {
 		if _, err := provider.FindModel(cfg.Provider, cfg.Model); err != nil {
@@ -519,9 +562,10 @@ func refreshModels(cachePath string, force bool) {
 		}
 		all = append(all, live...)
 	}
-	// User-defined OpenAI-compatible endpoints (config.json "endpoints"): each
-	// is its own provider; discover its /v1/models list. The key is optional
-	// (most local servers need none) and resolves via APIKeyEnv/auth.json.
+	// User-defined endpoints (config.json "endpoints"): each is its own
+	// provider; discover its model list over whichever wire it speaks. The key
+	// is optional (most local servers need none) and resolves via
+	// APIKeyEnv/auth.json.
 	if uc, err := config.LoadConfig(); err == nil {
 		for id, ep := range uc.Endpoints {
 			if strings.TrimSpace(ep.BaseURL) == "" {
@@ -529,20 +573,16 @@ func refreshModels(cachePath string, force bool) {
 			}
 			cred, _, _ := build.ResolveCredential(id, "")
 			// This endpoint's own configured window, or the unknown floor —
-			// never the openai-compatible provider's, which belongs to a
-			// different server entirely.
+			// never a shared slot's, which belongs to a different server
+			// entirely.
 			defCtx := unknownModelContext
 			if ep.ContextWindow > 0 {
 				defCtx = ep.ContextWindow
 			}
-			live, derr := provider.DiscoverOpenAICompatible(ctx, ep.BaseURL, cred, defCtx)
+			live, derr := discoverCompatModels(ctx, id, ep.BaseURL, cred, defCtx,
+				ep.IsAnthropic(), build.EndpointAnthropicOptions(ep))
 			if derr != nil {
 				continue
-			}
-			for i := range live {
-				live[i].Provider = id
-				live[i].Source = "live"
-				live[i].BaseURL = ep.BaseURL
 			}
 			all = append(all, live...)
 		}

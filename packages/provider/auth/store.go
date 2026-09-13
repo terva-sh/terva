@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,19 +35,57 @@ type Credentials struct {
 // use either APIKey or OAuth; OpenAI may store both so the public API
 // route and ChatGPT/Codex subscription route can coexist.
 //
-// BaseURL, Model and ContextWindow are only populated for the
-// openai-compatible provider, whose endpoint has no catalog entry to
-// fall back on. They're captured in the login form and persisted here:
-// BaseURL is where requests go, Model is the default selection, and
-// ContextWindow is the default size applied to discovered models the
+// BaseURL, Model and ContextWindow are only populated for the two COMPATIBLE
+// providers — openai-compatible and anthropic-compatible — whose endpoint has
+// no catalog entry to fall back on. They're captured in the login form and
+// persisted here: BaseURL is where requests go, Model is the default selection,
+// and ContextWindow is the default size applied to discovered models the
 // server doesn't describe (0 means "unknown / use the built-in default").
+//
+// APIVersion, Beta, AuthStyle and DisableCaching are narrower still: only
+// anthropic-compatible populates them, because only the Messages wire has those
+// knobs. All four are additive and omitempty, so an auth.json written before
+// they existed loads unchanged and means "the defaults".
 type ProviderCreds struct {
 	APIKey        string      `json:"api_key,omitempty"`
 	OAuth         *OAuthToken `json:"oauth,omitempty"`
 	BaseURL       string      `json:"base_url,omitempty"`
 	Model         string      `json:"model,omitempty"`
 	ContextWindow int         `json:"context_window,omitempty"`
+
+	APIVersion     string `json:"api_version,omitempty"`
+	Beta           string `json:"beta,omitempty"`
+	AuthStyle      string `json:"auth_style,omitempty"`
+	DisableCaching bool   `json:"disable_caching,omitempty"`
 }
+
+// CompatEndpoint is everything a compatible-provider login captures BESIDES the
+// key: where to send requests, what to send by default, and how to shape the
+// request for this particular server.
+//
+// It exists because the two setters it replaced took the fields positionally,
+// and the Anthropic slot needs four more. `SetCompatAPIKey(p, key, url, model,
+// ctx, version, beta, style, nocache)` is a call nobody can read and every
+// caller can get subtly wrong — and `Extras` returning a bare
+// `(string, string, int)` had the same problem from the other side.
+//
+// The Anthropic-only fields are simply zero for an OpenAI endpoint. One type
+// for both keeps the resolve path from growing a second shape to carry.
+type CompatEndpoint struct {
+	BaseURL       string
+	Model         string
+	ContextWindow int
+
+	// Anthropic-compatible only; see ProviderCreds.
+	APIVersion     string
+	Beta           string
+	AuthStyle      string
+	DisableCaching bool
+}
+
+// Configured reports whether this endpoint has somewhere to send a request.
+// A slot with no base URL is not a backend, whatever else it carries.
+func (e CompatEndpoint) Configured() bool { return strings.TrimSpace(e.BaseURL) != "" }
 
 // OAuthToken is an OAuth 2 token set with refresh support.
 type OAuthToken struct {
@@ -205,7 +244,7 @@ func (c *Credentials) OAuthFor(provider string) *OAuthToken {
 }
 
 // Has reports whether at least one credential is present for provider.
-// A configured openai-compatible endpoint (base URL set, key optional)
+// A configured compatible endpoint (base URL set, key optional)
 // counts as present even without an API key.
 func (c *Credentials) Has(provider string) bool {
 	p := c.get(provider)
@@ -224,7 +263,7 @@ func (c *Credentials) Method(provider string) string {
 	if p.OAuth != nil {
 		return "oauth"
 	}
-	// A keyless openai-compatible endpoint is still an api-key style login.
+	// A keyless compatible endpoint is still an api-key style login.
 	if p.BaseURL != "" {
 		return "apikey"
 	}
@@ -404,12 +443,17 @@ func (s *Store) SetAPIKey(provider, key string) error {
 	})
 }
 
-// SetCompatAPIKey stores credentials for an OpenAI-compatible endpoint:
-// the (optional) API key plus the user-supplied base URL and model id.
-// Unlike SetAPIKey it also persists BaseURL/Model and tolerates an empty
-// key, since many local servers (LM Studio, llama.cpp, vLLM) accept any
-// or no bearer token.
-func (s *Store) SetCompatAPIKey(provider, key, baseURL, model string, contextWindow int) error {
+// SetCompatEndpoint stores credentials for a compatible-provider endpoint: the
+// (optional) API key plus the operator's endpoint definition.
+//
+// Unlike SetAPIKey it also persists the definition and tolerates an empty key,
+// since many local servers (LM Studio, llama.cpp, vLLM, a gateway on a trusted
+// network) accept any or no token.
+//
+// The whole endpoint is written, not merged: these fields describe ONE server,
+// and carrying a previous endpoint's beta header or auth style across to a new
+// base URL would be a setting the operator never chose and cannot see.
+func (s *Store) SetCompatEndpoint(provider, key string, ep CompatEndpoint) error {
 	return s.Mutate(func(c *Credentials) {
 		cur := ProviderCreds{}
 		if existing := c.get(provider); existing != nil {
@@ -417,26 +461,38 @@ func (s *Store) SetCompatAPIKey(provider, key, baseURL, model string, contextWin
 		}
 		cur.APIKey = key
 		cur.OAuth = nil
-		cur.BaseURL = baseURL
-		cur.Model = model
-		cur.ContextWindow = contextWindow
+		cur.BaseURL = ep.BaseURL
+		cur.Model = ep.Model
+		cur.ContextWindow = ep.ContextWindow
+		cur.APIVersion = ep.APIVersion
+		cur.Beta = ep.Beta
+		cur.AuthStyle = ep.AuthStyle
+		cur.DisableCaching = ep.DisableCaching
 		c.setAdditional(provider, cur)
 	})
 }
 
-// Extras returns the persisted base URL, default model and default
-// context window for provider. Only the openai-compatible provider
-// populates these (captured in its login form); every other provider
-// returns zero values.
-func (s *Store) Extras(provider string) (baseURL, model string, contextWindow int) {
+// CompatEndpointFor returns the persisted endpoint definition for provider.
+// Only the compatible providers populate one (captured in their login form);
+// every other provider returns the zero value, whose Configured() is false.
+func (s *Store) CompatEndpointFor(provider string) CompatEndpoint {
 	c, err := s.Load()
 	if err != nil {
-		return "", "", 0
+		return CompatEndpoint{}
 	}
-	if p := c.get(provider); p != nil {
-		return p.BaseURL, p.Model, p.ContextWindow
+	p := c.get(provider)
+	if p == nil {
+		return CompatEndpoint{}
 	}
-	return "", "", 0
+	return CompatEndpoint{
+		BaseURL:        p.BaseURL,
+		Model:          p.Model,
+		ContextWindow:  p.ContextWindow,
+		APIVersion:     p.APIVersion,
+		Beta:           p.Beta,
+		AuthStyle:      p.AuthStyle,
+		DisableCaching: p.DisableCaching,
+	}
 }
 
 // SetOAuth replaces the OAuth token for provider and saves to disk.

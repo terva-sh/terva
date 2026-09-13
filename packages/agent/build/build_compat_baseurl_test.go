@@ -5,6 +5,7 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -17,7 +18,7 @@ func TestResolveModelBaseURLBeatsLoginBaseURL(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 
 	// Login-captured openai-compatible endpoint (the default/fallback).
-	if err := config.AuthStoreFor().SetCompatAPIKey("openai-compatible", "", "https://login.example/v1", "login-default", 32768); err != nil {
+	if err := config.AuthStoreFor().SetCompatEndpoint("openai-compatible", "", auth.CompatEndpoint{BaseURL: "https://login.example/v1", Model: "login-default", ContextWindow: 32768}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -50,7 +51,7 @@ func TestResolveModelBaseURLBeatsLoginBaseURL(t *testing.T) {
 // fired and the configured compat context window was silently dropped.
 func TestResolveRegistersOpenCatalogueModel(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	if err := config.AuthStoreFor().SetCompatAPIKey("openai-compatible", "", "https://login.example/v1", "login-default", 192000); err != nil {
+	if err := config.AuthStoreFor().SetCompatEndpoint("openai-compatible", "", auth.CompatEndpoint{BaseURL: "https://login.example/v1", Model: "login-default", ContextWindow: 192000}); err != nil {
 		t.Fatal(err)
 	}
 	provider.ResetCatalogLayers()
@@ -73,7 +74,7 @@ func TestResolveRegistersOpenCatalogueModel(t *testing.T) {
 // to the login endpoint.
 func TestResolveUnregisteredModelFallsBackToLoginBaseURL(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	if err := config.AuthStoreFor().SetCompatAPIKey("openai-compatible", "", "https://login.example/v1", "login-default", 32768); err != nil {
+	if err := config.AuthStoreFor().SetCompatEndpoint("openai-compatible", "", auth.CompatEndpoint{BaseURL: "https://login.example/v1", Model: "login-default", ContextWindow: 32768}); err != nil {
 		t.Fatal(err)
 	}
 	provider.ResetCatalogLayers()
@@ -91,7 +92,7 @@ func TestResolveUnregisteredModelFallsBackToLoginBaseURL(t *testing.T) {
 // An explicit --base-url flag still wins over both.
 func TestResolveBaseURLFlagBeatsEverything(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	if err := config.AuthStoreFor().SetCompatAPIKey("openai-compatible", "", "https://login.example/v1", "login-default", 32768); err != nil {
+	if err := config.AuthStoreFor().SetCompatEndpoint("openai-compatible", "", auth.CompatEndpoint{BaseURL: "https://login.example/v1", Model: "login-default", ContextWindow: 32768}); err != nil {
 		t.Fatal(err)
 	}
 	provider.ResetCatalogLayers()

@@ -11,9 +11,9 @@ terva's built-in provider catalog includes:
 - **Subscription-capable**: Anthropic Claude Pro/Max (`anthropic`), OpenAI Codex / ChatGPT Plus/Pro (`openai-codex`), Kimi Code (`kimi`), GitHub Copilot (`github-copilot`).
 - **Direct API providers**: Anthropic, OpenAI Chat Completions, OpenAI Responses, DeepSeek, Google Gemini, Kimi/Moonshot, Moonshot CN, Groq, Cerebras, xAI, Together AI, Hugging Face Router, OpenRouter, Mistral, Z.AI, Xiaomi/MiMo token-plan regions, MiniMax global/CN, Fireworks, Vercel AI Gateway, OpenCode/OpenCode Go.
 - **Cloud/platform providers**: Amazon Bedrock, Google Vertex AI, Azure OpenAI, Cloudflare Workers AI, Cloudflare AI Gateway.
-- **Local/compatible**: Ollama, plus the first-class `openai-compatible` provider for any OpenAI-compatible server (LM Studio, vLLM, llama.cpp, gateways) configured via `/login` with auto-discovery of the endpoint's models.
+- **Local/compatible**: Ollama, plus the first-class `openai-compatible` and `anthropic-compatible` providers for any server speaking OpenAI Chat Completions (LM Studio, vLLM, llama.cpp, gateways) or the Anthropic Messages API (LiteLLM in anthropic mode, a gateway in front of Claude, a local router) — configured via `/login` with auto-discovery of the endpoint's models.
 
-Use `/login` to store API keys or subscription credentials. `/model` only shows models from providers that are currently available from env vars, `auth.json`, Kimi CLI fallback, local Ollama, or a configured `openai-compatible` endpoint.
+Use `/login` to store API keys or subscription credentials. `/model` only shows models from providers that are currently available from env vars, `auth.json`, Kimi CLI fallback, local Ollama, or a configured `openai-compatible` / `anthropic-compatible` endpoint.
 
 ## Models
 
@@ -514,6 +514,25 @@ Run `/login`, pick **OpenAI Compatible (local/custom)**, and enter the base URL,
   "endpoints": {
     "box-a": { "baseUrl": "http://box-a:8000/v1", "contextWindow": 32768 },
     "gw":    { "baseUrl": "https://gw.internal/v1", "apiKeyEnv": "GW_KEY" }
+  }
+}
+```
+
+**Anthropic-compatible servers too.** Add `"api": "anthropic"` to an endpoint
+and it speaks the Anthropic Messages API instead — for LiteLLM in `anthropic`
+mode, a Bedrock/Vertex shim, or a gateway in front of Claude. The same shape,
+the same discovery, the same picker rows; the field is absent on every endpoint
+written before it existed, and absent means OpenAI Chat Completions. There is a
+shared `anthropic-compatible` slot at `/login` as well. Note the base URL is the
+server's **root**, not its `/v1` — terva appends `/v1/messages` itself. Its four
+extra wire settings (`anthropicVersion`, `anthropicBeta`, `authStyle`,
+`disableCaching`) are documented in
+[providers.md](providers.md#anthropic-compatible-endpoints):
+
+```json
+{
+  "endpoints": {
+    "claude-gw": { "baseUrl": "http://gw.box:4000", "api": "anthropic", "authStyle": "bearer" }
   }
 }
 ```

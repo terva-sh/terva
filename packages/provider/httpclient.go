@@ -30,22 +30,32 @@ func NewHTTPClient(insecureTLS bool) *http.Client {
 }
 
 // WithHTTPClient scopes an HTTP client to a concrete provider client.
-// Only the OpenAI-compatible client (used by the openai-compatible and
-// ollama providers) is handled, because --insecure is gated to exactly
-// those providers in build.go — those are plain http.Client-based clients
-// with no wrapped transport. Any other client type is returned unchanged
-// so it keeps normal certificate verification (fail-safe: a naive swap of
-// a wrapped-transport provider would otherwise silently bypass nothing or
-// miss the inner transport).
+//
+// Only the two plain http.Client-based clients are handled — the
+// OpenAI-compatible one (openai-compatible, ollama, named OpenAI endpoints) and
+// the Anthropic-Messages one (anthropic-compatible and named Anthropic
+// endpoints) — because --insecure is gated in build.go to exactly the providers
+// those serve. Any other client type is returned unchanged so it keeps normal
+// certificate verification (fail-safe: a naive swap of a wrapped-transport
+// provider would otherwise silently bypass nothing or miss the inner transport).
+//
+// 🪤 This handled only the OpenAI client while --insecure was gated to
+// openai-compatible/ollama, and the two facts had to stay in step. They are
+// now: extending the gate without extending this would accept the flag, report
+// nothing, and leave the self-signed endpoint failing its TLS handshake — a
+// setting that looks applied and does nothing.
 func WithHTTPClient(c Client, httpClient *http.Client) Client {
 	if httpClient == nil {
 		return c
 	}
-	// Reach the concrete openai-compatible client through any wrapper layers
-	// (e.g. pollingUsageClient around openrouter/deepseek) and point its
+	// Reach the concrete client through any wrapper layers (e.g.
+	// pollingUsageClient around openrouter/deepseek/kimi) and point its
 	// transport at the scoped --insecure client. The wrapper itself keeps a
 	// normal TLS-verifying client for its own usage fetch (the safe default).
 	if v := innerOpenAI(c); v != nil {
+		v.http = httpClient
+	}
+	if v := innerAnthropic(c); v != nil {
 		v.http = httpClient
 	}
 	return c
@@ -56,6 +66,21 @@ func WithHTTPClient(c Client, httpClient *http.Client) Client {
 func innerOpenAI(c Client) *openaiClient {
 	for cur := c; cur != nil; {
 		if v, ok := cur.(*openaiClient); ok {
+			return v
+		}
+		u, ok := cur.(unwrapper)
+		if !ok {
+			break
+		}
+		cur = u.Unwrap()
+	}
+	return nil
+}
+
+// innerAnthropic is innerOpenAI for the Anthropic-Messages client.
+func innerAnthropic(c Client) *anthropicClient {
+	for cur := c; cur != nil; {
+		if v, ok := cur.(*anthropicClient); ok {
 			return v
 		}
 		u, ok := cur.(unwrapper)

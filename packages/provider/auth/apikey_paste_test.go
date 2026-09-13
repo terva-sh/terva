@@ -113,32 +113,36 @@ func TestCompleteAPIKeyRejectsUnknownProvider(t *testing.T) {
 	}
 }
 
-// openai-compatible carries a base URL and a model id as well as a key, so
+// Each compatible slot carries a base URL and a model id as well as a key, so
 // a bare paste cannot complete it. It must fail loudly rather than store a
 // key against an endpoint terva has no address for.
-func TestCompleteAPIKeyRefusesOpenAICompatible(t *testing.T) {
-	m := newPasteManager(t)
+func TestCompleteAPIKeyRefusesTheCompatibleSlots(t *testing.T) {
+	for _, p := range []string{compatProvider, anthropicCompatProvider} {
+		t.Run(p, func(t *testing.T) {
+			m := newPasteManager(t)
 
-	evs := drainEvents(t, m, func() {
-		err := m.CompleteAPIKey(context.Background(), "openai-compatible", "sk-x")
-		if err == nil {
-			t.Fatal("CompleteAPIKey(openai-compatible) = nil, want error")
-		}
-		if !strings.Contains(err.Error(), "base url") {
-			t.Errorf("error = %q, want it to name the missing base url", err)
-		}
-	})
-	if len(evs) != 1 || evs[0].Kind != "error" {
-		t.Fatalf("events = %+v, want one error event", evs)
+			evs := drainEvents(t, m, func() {
+				err := m.CompleteAPIKey(context.Background(), p, "sk-x")
+				if err == nil {
+					t.Fatalf("CompleteAPIKey(%s) = nil, want error", p)
+				}
+				if !strings.Contains(err.Error(), "base url") {
+					t.Errorf("error = %q, want it to name the missing base url", err)
+				}
+			})
+			if len(evs) != 1 || evs[0].Kind != "error" {
+				t.Fatalf("events = %+v, want one error event", evs)
+			}
+		})
 	}
 }
 
 // Every api-key provider the login dialog can reach must be completable
-// from the TUI, since that is the only headless path. openai-compatible is
-// the one documented exception, and it has its own entry point.
+// from the TUI, since that is the only headless path. The two compatible
+// slots are the documented exceptions, and they share their own entry point.
 func TestCompleteAPIKeyCoversEveryAPIKeyProvider(t *testing.T) {
 	for _, p := range APIKeyProviders() {
-		if p == "openai-compatible" {
+		if isCompatProvider(p) {
 			continue
 		}
 		m := newPasteManager(t)
@@ -181,8 +185,8 @@ func TestCompleteCompatAPIKeyStoresEveryField(t *testing.T) {
 	m := newPasteManager(t)
 
 	evs := drainEvents(t, m, func() {
-		err := m.CompleteCompatAPIKey(context.Background(),
-			"http://localhost:1234/v1", "qwen2.5-coder", "sk-local", 32768)
+		err := m.CompleteCompatAPIKey(context.Background(), compatProvider,
+			CompatEndpoint{BaseURL: "http://localhost:1234/v1", Model: "qwen2.5-coder", ContextWindow: 32768}, "sk-local")
 		if err != nil {
 			t.Fatalf("CompleteCompatAPIKey: %v", err)
 		}
@@ -191,7 +195,8 @@ func TestCompleteCompatAPIKeyStoresEveryField(t *testing.T) {
 	if len(evs) != 1 || evs[0].Kind != "success" {
 		t.Fatalf("events = %+v, want one success event", evs)
 	}
-	baseURL, model, window := m.store.Extras("openai-compatible")
+	ep := m.store.CompatEndpointFor("openai-compatible")
+	baseURL, model, window := ep.BaseURL, ep.Model, ep.ContextWindow
 	if baseURL != "http://localhost:1234/v1" {
 		t.Errorf("base url = %q", baseURL)
 	}
@@ -210,12 +215,13 @@ func TestCompleteCompatAPIKeyStoresEveryField(t *testing.T) {
 // the browser form treats it as optional. The TUI form must agree.
 func TestCompleteCompatAPIKeyAllowsAnEmptyKey(t *testing.T) {
 	m := newPasteManager(t)
-	err := m.CompleteCompatAPIKey(context.Background(),
-		"http://localhost:11434/v1", "llama3", "", 0)
+	err := m.CompleteCompatAPIKey(context.Background(), compatProvider,
+		CompatEndpoint{BaseURL: "http://localhost:11434/v1", Model: "llama3", ContextWindow: 0}, "")
 	if err != nil {
 		t.Fatalf("CompleteCompatAPIKey with no key = %v, want success", err)
 	}
-	baseURL, model, _ := m.store.Extras("openai-compatible")
+	ep := m.store.CompatEndpointFor("openai-compatible")
+	baseURL, model := ep.BaseURL, ep.Model
 	if baseURL == "" || model == "" {
 		t.Errorf("endpoint not stored: base=%q model=%q", baseURL, model)
 	}
@@ -232,7 +238,8 @@ func TestCompleteCompatAPIKeyRequiresBaseURLAndModel(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newPasteManager(t)
 			evs := drainEvents(t, m, func() {
-				if err := m.CompleteCompatAPIKey(context.Background(), tc.baseURL, tc.model, "k", 0); err == nil {
+				if err := m.CompleteCompatAPIKey(context.Background(), compatProvider,
+					CompatEndpoint{BaseURL: tc.baseURL, Model: tc.model}, "k"); err == nil {
 					t.Fatal("want an error")
 				}
 			})
@@ -248,12 +255,12 @@ func TestCompleteCompatAPIKeyProbesBeforeStoring(t *testing.T) {
 	m.probeCompat = func(context.Context, string, string) error {
 		return errors.New("connection refused")
 	}
-	err := m.CompleteCompatAPIKey(context.Background(),
-		"http://localhost:9/v1", "nope", "", 0)
+	err := m.CompleteCompatAPIKey(context.Background(), compatProvider,
+		CompatEndpoint{BaseURL: "http://localhost:9/v1", Model: "nope", ContextWindow: 0}, "")
 	if err == nil {
 		t.Fatal("CompleteCompatAPIKey with a failing probe = nil, want error")
 	}
-	if baseURL, _, _ := m.store.Extras("openai-compatible"); baseURL != "" {
+	if ep := m.store.CompatEndpointFor("openai-compatible"); ep.BaseURL != "" {
 		t.Error("an unreachable endpoint was stored anyway")
 	}
 }

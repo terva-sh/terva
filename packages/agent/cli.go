@@ -283,7 +283,7 @@ func Run(rawArgs []string, version string) error {
 	// Model catalog: load any cached discovery data before we inspect
 	// the model list (list-models, print/json, interactive). User
 	// models.json is applied LAST so its per-model overrides win over
-	// both cached/live discovery and the openai-compatible default model
+	// both cached/live discovery and a compatible slot's default model
 	// (which RegisterExtraModel writes with a generic 8192 max-output).
 	LoadCachedModels()
 	LoadCompatModel()
@@ -309,8 +309,8 @@ func Run(rawArgs []string, version string) error {
 	// Kick an async refresh of the live model catalog. The first run of
 	// terva hits the network; subsequent runs within CacheTTL do nothing.
 	RefreshModelsAsync()
-	// Always re-list a configured openai-compatible endpoint (not cache
-	// gated): a local server's loaded models change frequently.
+	// Always re-list a configured compatible endpoint (not cache gated):
+	// a local server's loaded models change frequently.
 	RefreshCompatModelsAsync()
 
 	if args.DumpPrompt != "" {
@@ -770,6 +770,10 @@ func applyResumedModel(ag *core.Agent, base build.Args, sess *core.Session, buil
 		Model:      r.Model,
 		AuthMethod: r.AuthMethod,
 		BaseURL:    r.BaseURL,
+		// A resume onto a stored model can land on a different provider than the
+		// one this process built, so the override is resolved for where the agent
+		// is actually going.
+		ActivationContinuation: r.ActivationContinuationEffective(),
 		// Normally a no-op: the swap is onto the model the file already names.
 		// It writes only when Resolve landed somewhere else than the stored
 		// pair — an alias that now points at a different id — and then the file
@@ -992,24 +996,46 @@ func modelListFilter(filter string, selectable func(providerName string) bool) (
 
 // providerSelectable reports whether --provider <name> would resolve a
 // usable credential right now — the probe behind --list-models=available.
-// Keyless providers count: ollama needs no key (Resolve substitutes a
-// placeholder), and openai-compatible models only appear in the list
-// when an endpoint is configured. Results are memoized per provider in
-// cache (the auth store hits disk).
+//
+// 🪤 "Reachable" is not ResolveCredential, and that is the whole point. Most of
+// the servers an operator points terva at want no key at all, so asking only the
+// credential store reports the one backend they are certain to be able to reach
+// as a provider they are signed out of. build.LoggedInProviders is the predicate
+// that already knows this — its doc comment records the same omission costing
+// the web pane its endpoint models — and this was the fourth caller that had
+// reimplemented it by hand.
+//
+// It went wrong in exactly the documented way: ollama and the shared compatible
+// slots were special-cased here, and NAMED endpoints were not. A keyless local
+// endpoint therefore appeared under a bare --list-models and vanished under
+// --list-models=available, which is the flag whose entire job is to say what you
+// can actually run.
+//
+// The set is built once per invocation (it loads config and hits the auth store)
+// and memoized in cache alongside the per-provider answers.
+//
+// It is a UNION with the keyless slots rather than a replacement, so this can
+// only ever widen what was selectable before. LoggedInProviderSet reports a
+// shared compatible slot only once it has a base URL in auth.json — correct for
+// a picker, wrong here, because the documented per-model `baseUrl` route in
+// models.json puts runnable models under that provider id with no login at all.
+// Narrowing would have hidden them.
 func providerSelectable(name string, cache map[string]bool) bool {
 	if v, ok := cache[name]; ok {
 		return v
 	}
-	var ok bool
-	switch name {
-	case "ollama", "openai-compatible":
-		ok = true
-	default:
-		_, _, err := build.ResolveCredential(name, "")
-		ok = err == nil
+	if name == "ollama" || provider.IsCompatProvider(name) {
+		cache[name] = true
+		return true
 	}
-	cache[name] = ok
-	return ok
+	for id := range build.LoggedInProviderSet() {
+		cache[id] = true
+	}
+	if v, ok := cache[name]; ok {
+		return v
+	}
+	cache[name] = false
+	return false
 }
 
 func printModels(filter string) error {

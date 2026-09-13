@@ -12,6 +12,7 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -140,7 +141,7 @@ func TestSaveEndpointRegistersItImmediately(t *testing.T) {
 	t.Cleanup(func() { build.UnregisterEndpoint("fresh-box") })
 
 	w := endpointWorkspace(t)
-	if err := w.saveEndpoint(context.Background(), "fresh-box", srv.URL+"/v1", "", 0); err != nil {
+	if err := w.saveEndpoint(context.Background(), "fresh-box", provider.OpenAICompatProvider, auth.CompatEndpoint{BaseURL: srv.URL + "/v1", ContextWindow: 0}, ""); err != nil {
 		t.Fatalf("saveEndpoint: %v", err)
 	}
 
@@ -168,10 +169,10 @@ func TestSaveEndpointTwiceIsAnEdit(t *testing.T) {
 	t.Cleanup(func() { build.UnregisterEndpoint("edited-box") })
 
 	w := endpointWorkspace(t)
-	if err := w.saveEndpoint(context.Background(), "edited-box", srv.URL+"/v1", "", 0); err != nil {
+	if err := w.saveEndpoint(context.Background(), "edited-box", provider.OpenAICompatProvider, auth.CompatEndpoint{BaseURL: srv.URL + "/v1", ContextWindow: 0}, ""); err != nil {
 		t.Fatalf("first save: %v", err)
 	}
-	if err := w.saveEndpoint(context.Background(), "edited-box", srv.URL+"/v1", "", 65536); err != nil {
+	if err := w.saveEndpoint(context.Background(), "edited-box", provider.OpenAICompatProvider, auth.CompatEndpoint{BaseURL: srv.URL + "/v1", ContextWindow: 65536}, ""); err != nil {
 		t.Fatalf("re-saving the same endpoint should be an edit, not a collision: %v", err)
 	}
 

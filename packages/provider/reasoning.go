@@ -691,6 +691,11 @@ var reasoningWireWiring = map[string]reasoningWire{
 	// body has no slot for, and a budget the dialog never mentioned. 109
 	// catalog rows carry this provider with Reasoning:true.
 	"vercel-ai-gateway": reasoningWireAnthropic,
+	// The operator's own Anthropic-Messages backend. It reaches the same
+	// anthropicClient, so it takes thinking budgets and not an effort enum —
+	// and unlike the rows above, nobody here can look up what it "really is":
+	// the id is terva's, the server is the operator's.
+	AnthropicCompatProvider: reasoningWireAnthropic,
 
 	"openai-codex":     reasoningWireCodex,
 	"openai-responses": reasoningWireCodex,

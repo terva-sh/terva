@@ -17,6 +17,11 @@ import (
 const anthropicDefaultBaseURL = "https://api.anthropic.com"
 const anthropicAPIVersion = "2023-06-01"
 
+// AnthropicDefaultAPIVersion is anthropicAPIVersion for callers outside this
+// package: the login form for an Anthropic-compatible endpoint shows it as the
+// value the operator is overriding when they type one.
+const AnthropicDefaultAPIVersion = anthropicAPIVersion
+
 // Stealth identity used when talking to Anthropic via subscription OAuth.
 // These values mimic the official Claude Code CLI so Anthropic's edge
 // accepts the request; diverging from them causes 429 rate_limit_error
@@ -72,7 +77,34 @@ type anthropicClient struct {
 	// is fixed at construction; the credential VALUE it presents rotates
 	// through cred (an OAuth refresh) without rebuilding the client.
 	oauth bool
-	http  *http.Client
+
+	// bearerAuth carries the credential as `authorization: Bearer` instead of
+	// `x-api-key`, and changes NOTHING else.
+	//
+	// Deliberately not spelled `oauth`. That flag means "this is the Claude
+	// subscription", and it drags in the whole Claude Code costume: the
+	// identity system block, the renamed tools, the stealth beta headers and
+	// user-agent. An Anthropic-compatible gateway that merely prefers a Bearer
+	// header wants none of that — sending it would advertise terva as the
+	// official CLI to a third party that never asked, and rename the operator's
+	// tools underneath them. Two questions, two fields.
+	bearerAuth bool
+
+	// apiVersion overrides the `anthropic-version` header. Empty means
+	// anthropicAPIVersion, which is what every first-party route wants; a
+	// third-party endpoint may be pinned to a different one.
+	apiVersion string
+
+	// noCache omits every cache_control breakpoint from the request.
+	//
+	// terva marks four prefixes as ephemeral on every turn (identity, system,
+	// last tool, last user block), which is free money against Anthropic and a
+	// hard 400 against a compatible server that validates unknown fields
+	// strictly. Such a server fails EVERY turn, so the escape hatch has to
+	// exist at the endpoint level rather than per request.
+	noCache bool
+
+	http *http.Client
 
 	// name overrides the default "anthropic" identity. Anthropic-Messages-
 	// compatible third-party endpoints (kimi-coding, fireworks, minimax,
@@ -134,6 +166,26 @@ func (c *anthropicClient) Name() string {
 // MirrorsToolImages stays false — Anthropic carries images inside tool results.
 func (c *anthropicClient) Capabilities() ClientCapabilities {
 	return ClientCapabilities{ContinuesAssistantPrefill: true, ReasoningWire: reasoningWireAnthropic}
+}
+
+// version is the `anthropic-version` header this endpoint expects.
+func (c *anthropicClient) version() string {
+	if v := strings.TrimSpace(c.apiVersion); v != "" {
+		return v
+	}
+	return anthropicAPIVersion
+}
+
+// cacheCtrl returns the ephemeral breakpoint to attach, or nil when this
+// endpoint cannot take one. Every cache_control in buildRequest goes through
+// here, so switching caching off is one decision rather than four that can be
+// half-applied — a request carrying three of its four breakpoints is still a
+// 400 against a strict server, and would look like the setting did nothing.
+func (c *anthropicClient) cacheCtrl() *anthCacheCtrl {
+	if c.noCache {
+		return nil
+	}
+	return &anthCacheCtrl{Type: "ephemeral"}
 }
 
 // ---- wire types ----
@@ -333,20 +385,20 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 		out.System = []anthSystemBlock{{
 			Type:         "text",
 			Text:         claudeCodeIdentity,
-			CacheControl: &anthCacheCtrl{Type: "ephemeral"},
+			CacheControl: c.cacheCtrl(),
 		}}
 		if req.System != "" {
 			out.System = append(out.System, anthSystemBlock{
 				Type:         "text",
 				Text:         req.System,
-				CacheControl: &anthCacheCtrl{Type: "ephemeral"},
+				CacheControl: c.cacheCtrl(),
 			})
 		}
 	} else if req.System != "" {
 		out.System = []anthSystemBlock{{
 			Type:         "text",
 			Text:         req.System,
-			CacheControl: &anthCacheCtrl{Type: "ephemeral"},
+			CacheControl: c.cacheCtrl(),
 		}}
 	}
 
@@ -407,7 +459,7 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 	}
 	// Cache the last tool definition (applies cache breakpoint to the whole tools array).
 	if n := len(out.Tools); n > 0 {
-		out.Tools[n-1].CacheControl = &anthCacheCtrl{Type: "ephemeral"}
+		out.Tools[n-1].CacheControl = c.cacheCtrl()
 	}
 
 	// Convert messages. Anthropic's wire format has only "user" and
@@ -459,7 +511,9 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 	// Tag the LAST user message with cache_control. Spends the 4th
 	// breakpoint. For prefixes under ~1024 tokens (Anthropic's
 	// minimum cacheable block size for Opus), no cache is written.
-	tagLastUserCache(out.Messages)
+	if !c.noCache {
+		tagLastUserCache(out.Messages)
+	}
 
 	// Ephemeral context goes in a trailing user message AFTER the cache
 	// breakpoint and carries NO cache_control: the cached prefix (system
@@ -738,7 +792,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event
 			return nil, err
 		}
 		httpReq.Header.Set("content-type", "application/json")
-		httpReq.Header.Set("anthropic-version", anthropicAPIVersion)
+		httpReq.Header.Set("anthropic-version", c.version())
 		if c.oauth {
 			// Claude-Code-shaped request: identical headers and values as the
 			// official CLI. Any drift triggers Anthropic's anti-abuse check and
@@ -752,7 +806,15 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event
 			// Remove x-api-key entirely by NOT setting it.
 		} else {
 			httpReq.Header.Set("accept", "text/event-stream")
-			httpReq.Header.Set("x-api-key", cred)
+			// Anthropic's own API takes the key in x-api-key. A compatible
+			// gateway in front of it often speaks the OpenAI convention on the
+			// way IN while speaking Messages on the way out, and rejects the
+			// request with a 401 that names neither header.
+			if c.bearerAuth {
+				httpReq.Header.Set("authorization", "Bearer "+cred)
+			} else {
+				httpReq.Header.Set("x-api-key", cred)
+			}
 		}
 		// Extra headers (set by anthropic-messages-compatible third parties
 		// — kimi-coding's X-Msh-*, copilot's Editor-Plugin-Version, etc.).

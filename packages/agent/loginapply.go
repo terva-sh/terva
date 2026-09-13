@@ -53,31 +53,33 @@ func ApplyLogout(providerID string) error {
 // right degradation: the model is still registered and still selectable, it just
 // is not made the default.
 func ApplyLoginSuccess(store *auth.Store, providerID string, promoteDefault func(providerName, model, scope string) error) {
-	// openai-compatible is the only api-key login that also carries a target
+	// The compatible slots are the only api-key logins that also carry a target
 	// model — captured in the login form, because a custom endpoint has no
 	// catalog entry to fall back on. Register it into the live catalog so it
 	// appears in the model picker immediately, then make it the default: the
 	// user just pointed terva at this endpoint, and having to then go and select
 	// the model by hand would be a strange thing to ask of them.
-	if providerID == "openai-compatible" && store != nil {
-		baseURL, model, ctxWin := store.Extras("openai-compatible")
-		if model != "" {
-			if baseURL != "" {
+	if provider.IsCompatProvider(providerID) && store != nil {
+		ep := store.CompatEndpointFor(providerID)
+		if ep.Model != "" {
+			if ep.Configured() {
+				ctxWin := ep.ContextWindow
 				if ctxWin <= 0 {
-					ctxWin = 32768
+					ctxWin = unknownModelContext
 				}
 				provider.RegisterExtraModel(provider.Model{
-					Provider:      "openai-compatible",
-					ID:            model,
-					DisplayName:   model,
+					Provider:      providerID,
+					ID:            ep.Model,
+					DisplayName:   ep.Model,
 					ContextWindow: ctxWin,
-					MaxOutput:     8192,
-					BaseURL:       baseURL,
-					Source:        "openai-compatible",
+					// Required by the Messages wire; see LoadCompatModel.
+					MaxOutput: 8192,
+					BaseURL:   ep.BaseURL,
+					Source:    providerID,
 				})
 			}
 			if promoteDefault != nil {
-				_ = promoteDefault("openai-compatible", model, "global")
+				_ = promoteDefault(providerID, ep.Model, "global")
 			}
 			// And discover the rest of the endpoint's models in the background,
 			// so they all appear without a restart.
@@ -129,17 +131,12 @@ func adoptEndpointModels(id string, ep config.EndpointConfig, promoteDefault fun
 	// The key is optional and usually absent; ResolveCredential finds it under
 	// the endpoint's own id when the server does want one.
 	key, _, _ := build.ResolveCredential(id, "")
-	live, err := provider.DiscoverOpenAICompatible(ctx, ep.BaseURL, key, defCtx)
+	live, err := discoverCompatModels(ctx, id, ep.BaseURL, key, defCtx,
+		ep.IsAnthropic(), build.EndpointAnthropicOptions(ep))
 	if err != nil || len(live) == 0 {
 		return
 	}
 	for _, m := range live {
-		// DiscoverOpenAICompatible stamps every model "openai-compatible" — it
-		// does not know which endpoint asked. Re-stamp, or these land under the
-		// shared slot and the endpoint's picker stays empty.
-		m.Provider = id
-		m.BaseURL = ep.BaseURL
-		m.Source = "live"
 		provider.RegisterExtraModel(m)
 	}
 	if promoteDefault == nil {

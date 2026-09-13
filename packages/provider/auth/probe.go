@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/provider"
 )
 
 // ProbeAPIKey verifies that key is valid for provider by making a
@@ -236,6 +237,42 @@ func ProbeOpenAICompatible(ctx context.Context, baseURL, key string) error {
 	if key != "" {
 		req.Header.Set("authorization", "Bearer "+key)
 	}
+	return probeReachable(ctx, req, u)
+}
+
+// ProbeAnthropicCompatible verifies a user-supplied Anthropic-Messages-
+// compatible endpoint by listing its models.
+//
+// The twin of ProbeOpenAICompatible, and it tolerates the same things for the
+// same reasons: the key is optional, and a server that answers at all — 404
+// included, since /v1/models is not universal — counts as reachable. Only
+// 401/403 means the key was rejected, and a transport error means the URL is
+// wrong or the server is down.
+//
+// It authenticates through applyAnthropicCompatAuth, the same helper the real
+// request uses, so a probe cannot vouch for a header combination the first turn
+// will not send.
+func ProbeAnthropicCompatible(ctx context.Context, baseURL, key string, o provider.AnthropicCompatOptions) error {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		return i18n.Errorf("empty base url")
+	}
+	u := baseURL + "/v1/models"
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return err
+	}
+	provider.ApplyAnthropicCompatAuth(req, key, o)
+	return probeReachable(ctx, req, u)
+}
+
+// probeReachable sends req and decides whether the endpoint is usable.
+//
+// Shared by both compatible probes so they cannot disagree about what counts as
+// success — which matters more than it looks: "answered with a 404" being a
+// PASS is the non-obvious half of this contract, and a second copy would be
+// written by someone who reasonably assumed otherwise.
+func probeReachable(_ context.Context, req *http.Request, u string) error {
 	c := &http.Client{Timeout: 15 * time.Second}
 	resp, err := c.Do(req)
 	if err != nil {

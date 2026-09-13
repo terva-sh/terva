@@ -357,7 +357,7 @@ func TestCompatKeyFormKeepsEndpointFieldsAndOptionalKey(t *testing.T) {
 		t.Fatalf("status=%d probes=%d", status, probes.Load())
 	}
 	res := <-s.Result()
-	if res.Flow != "compat" || res.Provider != compatProvider || res.BaseURL != "http://example.invalid/v1" || res.Model != "synthetic-model" || res.ContextWindow != 32768 || res.APIKey != "" {
+	if res.Flow != "compat" || res.Provider != compatProvider || res.Endpoint.BaseURL != "http://example.invalid/v1" || res.Endpoint.Model != "synthetic-model" || res.Endpoint.ContextWindow != 32768 || res.APIKey != "" {
 		t.Fatal("compat form lost endpoint fields")
 	}
 }

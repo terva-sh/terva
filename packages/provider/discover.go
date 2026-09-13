@@ -11,57 +11,30 @@ import (
 )
 
 // DiscoverAnthropic lists model ids visible to key on api.anthropic.com.
-// The API returns a paginated list; we page through until has_more is false.
+// The API returns a paginated list; listAnthropicModels pages it to exhaustion.
+//
+// The paging and parsing are shared with DiscoverAnthropicCompatible (see
+// anthropic_compatible.go), which reads the same response shape off an
+// operator's own endpoint with its own auth header and version.
 func DiscoverAnthropic(ctx context.Context, apiKey, baseURL string) ([]Model, error) {
 	if baseURL == "" {
 		baseURL = anthropicDefaultBaseURL
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
-	var out []Model
-	after := ""
-	for {
-		url := strings.TrimRight(baseURL, "/") + "/v1/models?limit=1000"
-		if after != "" {
-			url += "&after_id=" + after
-		}
-		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-		if err != nil {
-			return nil, err
-		}
+	rows, err := listAnthropicModels(ctx, baseURL, func(req *http.Request) {
 		req.Header.Set("x-api-key", apiKey)
 		req.Header.Set("anthropic-version", anthropicAPIVersion)
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		body, _ := readBodyCapped(resp.Body, maxDiscoveryBodyBytes)
-		resp.Body.Close()
-		if resp.StatusCode != 200 {
-			return nil, fmt.Errorf("anthropic discover http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-		}
-		var page struct {
-			Data []struct {
-				ID          string `json:"id"`
-				DisplayName string `json:"display_name"`
-			} `json:"data"`
-			HasMore bool   `json:"has_more"`
-			LastID  string `json:"last_id"`
-		}
-		if err := json.Unmarshal(body, &page); err != nil {
-			return nil, fmt.Errorf("anthropic discover parse: %w", err)
-		}
-		for _, d := range page.Data {
-			out = append(out, Model{
-				Provider:    "anthropic",
-				ID:          d.ID,
-				DisplayName: d.DisplayName,
-				Source:      "live",
-			})
-		}
-		if !page.HasMore || page.LastID == "" {
-			break
-		}
-		after = page.LastID
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Model, 0, len(rows))
+	for _, d := range rows {
+		out = append(out, Model{
+			Provider:    "anthropic",
+			ID:          d.ID,
+			DisplayName: d.DisplayName,
+			Source:      "live",
+		})
 	}
 	return out, nil
 }

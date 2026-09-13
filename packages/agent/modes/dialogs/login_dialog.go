@@ -520,13 +520,26 @@ func (d *LoginDialog) editor(th tui.Theme, i int) *tui.Editor {
 	}
 	if d.eds[i] == nil {
 		ed := tui.NewEditor(th.AccentBar(th.Accent))
-		// A secret field is masked here and nowhere else, because this is the
-		// only place a login editor is built. The web client renders the same
-		// AuthField descriptor as <input type="password">; the TUI echoed the
-		// key in the clear, on the surface most likely to be on a shared screen
-		// or in a recording.
-		if i < len(d.flow.Fields) && d.flow.Fields[i].Type == ctrlproto.AuthFieldSecret {
-			ed.Mask = '•'
+		if i < len(d.flow.Fields) {
+			f := d.flow.Fields[i]
+			// A secret field is masked here and nowhere else, because this is the
+			// only place a login editor is built. The web client renders the same
+			// AuthField descriptor as <input type="password">; the TUI echoed the
+			// key in the clear, on the surface most likely to be on a shared screen
+			// or in a recording.
+			if f.Type == ctrlproto.AuthFieldSecret {
+				ed.Mask = '•'
+			}
+			// 🪤 Default was honoured by the web client (AuthStepForm seeds its
+			// value map from it) and silently dropped here. That was invisible
+			// while no field declared one, and stopped being invisible the moment
+			// the anthropic-compatible form did: the panel offered "x-api-key"
+			// and "on" already filled in, and the TUI offered two empty boxes
+			// whose meaning is only in the help text. Same descriptor, two
+			// different forms — the exact drift AuthField exists to end.
+			if f.Default != "" {
+				ed.SetValue(f.Default)
+			}
 		}
 		d.eds[i] = ed
 	}

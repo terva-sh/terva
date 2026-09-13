@@ -1,10 +1,14 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 func filterNames(t *testing.T, filter string, selectable func(string) bool, models []provider.Model) []string {
@@ -82,4 +86,66 @@ func TestParseArgsListModelsFilter(t *testing.T) {
 	if err != nil || !a.ListModels || a.ListModelsFilter != "available,live+" {
 		t.Fatalf("--list-models=...: %+v err=%v", a, err)
 	}
+}
+
+// --list-models=available must include a KEYLESS backend.
+//
+// 🪤 "Reachable" is not "has a credential". Most servers an operator points
+// terva at want no key, so a predicate built on ResolveCredential reports the
+// one backend they are certain to be able to reach as one they are signed out
+// of — and `available`, the flag whose entire job is to say what you can run,
+// was the surface that got it wrong.
+//
+// ollama and the shared compatible slots were special-cased by hand here while
+// NAMED endpoints were not, so a keyless local endpoint appeared under a bare
+// --list-models and vanished under --list-models=available. This pins the fix:
+// the answer comes from build.LoggedInProviderSet, which already knew.
+func TestProviderSelectableIncludesKeylessBackends(t *testing.T) {
+	home := testsupport.TempDir(t)
+	t.Setenv("TERVA_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"endpoints":{
+		"keyless-box": {"baseUrl":"http://box.invalid:8000/v1"},
+		"claude-gw":   {"baseUrl":"http://gw.invalid:4000","api":"anthropic"}
+	}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	build.RegisterEndpointsFromConfig()
+	for _, id := range []string{"keyless-box", "claude-gw"} {
+		if err := build.RegisterOrReplaceEndpoint(id, mustEndpoint(t, id)); err != nil {
+			t.Fatalf("register %s: %v", id, err)
+		}
+		t.Cleanup(func() { build.UnregisterEndpoint(id) })
+	}
+
+	cache := map[string]bool{}
+	for _, id := range []string{"ollama", provider.OpenAICompatProvider, provider.AnthropicCompatProvider} {
+		if !providerSelectable(id, cache) {
+			t.Errorf("providerSelectable(%q) = false; it needs no credential", id)
+		}
+	}
+	for _, id := range []string{"keyless-box", "claude-gw"} {
+		if !providerSelectable(id, cache) {
+			t.Errorf("providerSelectable(%q) = false; a keyless named endpoint is the one backend the operator can certainly reach", id)
+		}
+	}
+	// A real vendor with no credential is still unavailable — the filter has to
+	// keep meaning something.
+	if providerSelectable("mistral", cache) {
+		t.Error("providerSelectable(mistral) = true with no credential stored")
+	}
+}
+
+// mustEndpoint reads one endpoint back out of the config just written, so the
+// test registers exactly what terva would at startup.
+func mustEndpoint(t *testing.T, id string) config.EndpointConfig {
+	t.Helper()
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ep, ok := cfg.Endpoints[id]
+	if !ok {
+		t.Fatalf("endpoint %q missing from the config just written", id)
+	}
+	return ep
 }

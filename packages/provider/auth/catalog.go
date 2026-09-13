@@ -144,8 +144,9 @@ type ProviderState struct {
 	// re-login. Today this surfaces only as a failed turn.
 	Expired bool
 
-	// BaseURL, Model and ContextWindow describe an openai-compatible endpoint.
-	// They are configuration, not credentials.
+	// BaseURL, Model and ContextWindow describe a compatible endpoint (the
+	// shared openai-compatible or anthropic-compatible slot). They are
+	// configuration, not credentials.
 	BaseURL       string
 	Model         string
 	ContextWindow int

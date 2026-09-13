@@ -12,6 +12,7 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/provider/auth"
 )
 
 // providerSpec is one row of the provider registry (roadmap B4): the
@@ -139,7 +140,12 @@ var providerSpecs = []providerSpec{
 		id:             "ollama",
 		noDefaultModel: true,
 		envHint:        "OLLAMA",
-		newClient:      func(c clientConfig) provider.Client { return provider.NewOpenAI(c.Credential, c.BaseURL) },
+		// Named, not NewOpenAI: ollama is not OpenAI, and saying so is what
+		// keeps prompt_cache_key off a local server and keeps its errors
+		// naming the daemon the operator is actually running.
+		newClient: func(c clientConfig) provider.Client {
+			return provider.NewOpenAICompatibleAs("ollama", c.Credential, c.BaseURL)
+		},
 	},
 	{
 		id:           "moonshotai",
@@ -341,11 +347,29 @@ var providerSpecs = []providerSpec{
 		newClient: func(c clientConfig) provider.Client { return provider.NewCloudflareAIGateway(c.Credential, c.BaseURL) },
 	},
 	{
-		id:             "openai-compatible",
+		id:             provider.OpenAICompatProvider,
 		noDefaultModel: true,
 		// envHint left empty: falls back to ANTHROPIC, matching the
 		// historical envVarName behavior for this id.
-		newClient: func(c clientConfig) provider.Client { return provider.NewOpenAI(c.Credential, c.BaseURL) },
+		newClient: func(c clientConfig) provider.Client {
+			return provider.NewOpenAICompatible(c.Credential, c.BaseURL)
+		},
+	},
+	{
+		// The operator's own Anthropic-Messages backend: the twin of
+		// openai-compatible for the other wire terva already drives. Like it,
+		// there is no default model (only the operator knows what their server
+		// serves) and no apiKeyEnv (the key is optional and lives in auth.json
+		// under this id, or in the endpoint's own APIKeyEnv when named).
+		//
+		// CompatWire is the one thing no other registry row needs: every other
+		// Anthropic-wire provider is a vendor whose header quirks terva knows,
+		// and this one is a server terva has never seen.
+		id:             provider.AnthropicCompatProvider,
+		noDefaultModel: true,
+		newClient: func(c clientConfig) provider.Client {
+			return provider.NewAnthropicCompatible(c.Credential, c.BaseURL, c.CompatWire)
+		},
 	},
 }
 
@@ -501,13 +525,37 @@ func registerEndpointLocked(id string, ep config.EndpointConfig) error {
 		apiKeyEnv = []string{ep.APIKeyEnv}
 	}
 	baseURL := ep.BaseURL
+	// Captured, not read from config inside the closure: this spec outlives the
+	// call, and an endpoint edited mid-session is re-registered rather than
+	// mutated (RegisterOrReplaceEndpoint). Resolve supplies the live values on
+	// top of these anyway — see the doc comment there.
+	anthropic := ep.IsAnthropic()
+	wire := EndpointAnthropicOptions(ep)
+	newClient := func(c clientConfig) provider.Client {
+		if !anthropic {
+			// The endpoint's id, for the same reason the Anthropic leg below
+			// uses it: this is the operator's own server, not OpenAI.
+			return provider.NewOpenAICompatibleAs(id, c.Credential, firstNonEmpty(c.BaseURL, baseURL))
+		}
+		// Resolve reads the endpoint fresh from config and supplies these; the
+		// capture is the same belt-and-braces fallback the base URL above gets,
+		// and it is what a caller building a client from a bare Resolved (the
+		// wire-agreement guard, an embedder) ends up with.
+		opts := c.CompatWire
+		if opts.IsZero() {
+			opts = wire
+		}
+		// The endpoint's id, not "anthropic-compatible": Name() is what cost
+		// lookup, the rescue picker and every error message route on, and an
+		// operator with three Anthropic endpoints needs to be told WHICH one
+		// refused them.
+		return provider.NewAnthropicCompatOpts(id, c.Credential, firstNonEmpty(c.BaseURL, baseURL), opts)
+	}
 	s := &providerSpec{
 		id:             id,
 		noDefaultModel: true,
 		apiKeyEnv:      apiKeyEnv,
-		newClient: func(c clientConfig) provider.Client {
-			return provider.NewOpenAI(c.Credential, firstNonEmpty(c.BaseURL, baseURL))
-		},
+		newClient:      newClient,
 	}
 	providerByID[id] = s
 	knownProviders = append(knownProviders, id)
@@ -544,14 +592,48 @@ func unregisterEndpointLocked(id string) {
 	}
 }
 
+// isCompatProvider reports whether id is one of the two shared compatible slots
+// (openai-compatible, anthropic-compatible) — the providers whose backend the
+// operator supplies rather than terva shipping an address for it.
+//
+// Package-local spelling of provider.IsCompatProvider, so the ~eight sites in
+// Resolve that ask read as a question about the provider rather than as a
+// package call. The answer lives in `provider` because the ids do.
+func isCompatProvider(id string) bool { return provider.IsCompatProvider(id) }
+
+// EndpointAnthropicOptions renders an endpoint's Anthropic wire settings.
+//
+// Returns the zero value for an OpenAI endpoint, so a caller may ask
+// unconditionally rather than pairing every call with an IsAnthropic check —
+// the pairing is what lets one site forget.
+func EndpointAnthropicOptions(ep config.EndpointConfig) provider.AnthropicCompatOptions {
+	if !ep.IsAnthropic() {
+		return provider.AnthropicCompatOptions{}
+	}
+	return provider.AnthropicCompatOptions{
+		APIVersion:     strings.TrimSpace(ep.AnthropicVersion),
+		Beta:           strings.TrimSpace(ep.AnthropicBeta),
+		BearerAuth:     strings.EqualFold(strings.TrimSpace(ep.AuthStyle), auth.AuthStyleBearer),
+		DisableCaching: ep.DisableCaching,
+	}
+}
+
 // endpointCredential resolves a named endpoint's auth: the key stored under its
-// own id when the server wants one, and the harmless sentinel bearer when it
-// does not — which is the common case, since most local servers ignore the
-// header entirely. Never an error: an endpoint is defined by its address, not by
-// a credential, so "keyless" is a configuration and not a failure.
-func endpointCredential(id, argsKey string) (cred, method string) {
+// own id when the server wants one, and a harmless sentinel when it does not —
+// which is the common case, since most local servers ignore the header entirely.
+// Never an error: an endpoint is defined by its address, not by a credential, so
+// "keyless" is a configuration and not a failure.
+//
+// The sentinel is only ever a non-empty placeholder so HasCredential passes; its
+// VALUE reaches the wire as an x-api-key or bearer nobody checks. It names the
+// slot it stands in for purely so a packet capture is self-explaining.
+func endpointCredential(id, argsKey string, anthropic bool) (cred, method string) {
 	storedKey, _, _, _ := ResolveCredentialFull(id, argsKey)
-	return firstNonEmpty(storedKey, "openai-compatible"), "apikey"
+	sentinel := "openai-compatible"
+	if anthropic {
+		sentinel = provider.AnthropicCompatProvider
+	}
+	return firstNonEmpty(storedKey, sentinel), "apikey"
 }
 
 // EndpointDefaultModel picks a default model id for a named endpoint from the
@@ -671,6 +753,11 @@ type clientConfig struct {
 	// ClientIdentity is the operator's client-identity keyword for this
 	// provider. Empty is the default and names terva.
 	ClientIdentity string
+	// CompatWire carries the Anthropic-Messages settings for a backend the
+	// OPERATOR defined — the shared anthropic-compatible slot, or one of their
+	// named endpoints. The zero value is what api.anthropic.com wants, so every
+	// other provider leaves it alone.
+	CompatWire provider.AnthropicCompatOptions
 }
 
 func (c clientConfig) credentialSource() provider.CredentialSource {

@@ -11,6 +11,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/provider/auth"
 )
 
@@ -256,29 +257,8 @@ func (w *Workspace) startAPIKeyForm(m *auth.Manager, provider string, local bool
 	}
 	flow := w.newFlow(fl)
 
-	if provider == "openai-compatible" {
-		return ctrlproto.AuthFlowStep{
-			Flow:  flow,
-			Kind:  "form",
-			Title: i18n.T("Connect an OpenAI-compatible endpoint"),
-			Lines: []string{
-				i18n.T("Point terva at any OpenAI-compatible server: LM Studio, vLLM, llama.cpp, Ollama's /v1, or a gateway."),
-				i18n.T("Name it to keep several servers at once — each named endpoint is its own provider and lists its own models. Leave the name empty and this replaces the single shared endpoint."),
-			},
-			URL: browserURL,
-			Fields: []ctrlproto.AuthField{
-				{Name: "name", Label: i18n.T("Name"), Type: "text", Placeholder: "workshop-3090",
-					Help: i18n.T("Optional. Naming it keeps your other endpoints; leaving it empty overwrites the shared one.")},
-				{Name: "base_url", Label: i18n.T("Base URL"), Type: "text", Required: true, Placeholder: "http://localhost:1234/v1"},
-				// Required for the shared slot, pointless for a named endpoint: that one
-				// discovers its own models, so there is nothing to type. RequiredUnless
-				// lets the form say which of the two you are filling in.
-				{Name: "model", Label: i18n.T("Default model"), Type: "text", Required: true, RequiredUnless: "name", Placeholder: "qwen2.5-coder",
-					Help: i18n.T("Not needed for a named endpoint — it discovers the models the server serves.")},
-				{Name: "api_key", Label: i18n.T("API key"), Type: ctrlproto.AuthFieldSecret, Help: i18n.T("Optional — many local servers ignore it.")},
-				{Name: "context_window", Label: i18n.T("Default context window"), Type: "integer", Placeholder: "32768"},
-			},
-		}
+	if isCompatProvider(provider) {
+		return compatLoginForm(provider, flow, browserURL)
 	}
 	return ctrlproto.AuthFlowStep{
 		Flow:  flow,
@@ -288,6 +268,77 @@ func (w *Workspace) startAPIKeyForm(m *auth.Manager, provider string, local bool
 		Fields: []ctrlproto.AuthField{
 			{Name: "api_key", Label: i18n.T("API key"), Type: ctrlproto.AuthFieldSecret, Required: true},
 		},
+	}
+}
+
+// compatLoginForm describes the fields an operator-run endpoint needs.
+//
+// The two compatible slots share this form because they share the question: not
+// "what is your key" but "where is your server, and what should I send it". The
+// Anthropic one adds four wire settings on the end — the parity fields are
+// identical, and writing them out twice is how the browser form and this one
+// drifted the last time there was only one of these.
+//
+// Every Anthropic field is OPTIONAL with a working default. The form is longer
+// than the OpenAI one and nothing in it has to be filled in, which is the right
+// trade: the alternative is an operator whose gateway wants Bearer auth having
+// to find that out from a 401 and then hand-edit a credential file.
+func compatLoginForm(providerID, flow, browserURL string) ctrlproto.AuthFlowStep {
+	anthropic := providerID == provider.AnthropicCompatProvider
+
+	title := i18n.T("Connect an OpenAI-compatible endpoint")
+	intro := i18n.T("Point terva at any OpenAI-compatible server: LM Studio, vLLM, llama.cpp, Ollama's /v1, or a gateway.")
+	urlPlaceholder := "http://localhost:1234/v1"
+	modelPlaceholder := "qwen2.5-coder"
+	if anthropic {
+		title = i18n.T("Connect an Anthropic-compatible endpoint")
+		intro = i18n.T("Point terva at any server speaking the Anthropic Messages API: LiteLLM in anthropic mode, a Bedrock/Vertex shim, a gateway in front of Claude, or a local router.")
+		// No /v1 suffix: the Anthropic client appends /v1/messages itself, and a
+		// base URL that already ends in /v1 is the commonest way to get a 404
+		// from an otherwise correctly configured gateway.
+		urlPlaceholder = "http://localhost:4000"
+		modelPlaceholder = "claude-sonnet-4.5"
+	}
+
+	fields := []ctrlproto.AuthField{
+		{Name: "name", Label: i18n.T("Name"), Type: "text", Placeholder: "workshop-3090",
+			Help: i18n.T("Optional. Naming it keeps your other endpoints; leaving it empty overwrites the shared one.")},
+		{Name: "base_url", Label: i18n.T("Base URL"), Type: "text", Required: true, Placeholder: urlPlaceholder},
+		// Required for the shared slot, pointless for a named endpoint: that one
+		// discovers its own models, so there is nothing to type. RequiredUnless
+		// lets the form say which of the two you are filling in.
+		{Name: "model", Label: i18n.T("Default model"), Type: "text", Required: true, RequiredUnless: "name", Placeholder: modelPlaceholder,
+			Help: i18n.T("Not needed for a named endpoint — it discovers the models the server serves.")},
+		{Name: "api_key", Label: i18n.T("API key"), Type: ctrlproto.AuthFieldSecret, Help: i18n.T("Optional — many local servers ignore it.")},
+		{Name: "context_window", Label: i18n.T("Default context window"), Type: "integer", Placeholder: "32768"},
+	}
+	if anthropic {
+		fields = append(fields, []ctrlproto.AuthField{
+			{Name: "anthropic_version", Label: i18n.T("anthropic-version header"), Type: "text",
+				Default: auth.AnthropicDefaultAPIVersion, Placeholder: auth.AnthropicDefaultAPIVersion,
+				Help: i18n.T("Optional. Only change it if your server is pinned to a different version.")},
+			{Name: "anthropic_beta", Label: i18n.T("anthropic-beta header"), Type: "text",
+				Placeholder: "context-1m-2025-08-07",
+				Help:        i18n.T("Optional, comma-separated.")},
+			{Name: "auth_style", Label: i18n.T("Auth style"), Type: "text",
+				Default: auth.AuthStyleAPIKey,
+				Help:    i18n.T("Which header carries the key: %s. Gateways in front of Claude often want bearer.", strings.Join(auth.AuthStyles(), " or "))},
+			{Name: "prompt_caching", Label: i18n.T("Prompt caching"), Type: "text",
+				Default: auth.OnOffLabel(true),
+				Help:    i18n.T("on or off. Turn it off for a server that rejects the cache_control field.")},
+		}...)
+	}
+
+	return ctrlproto.AuthFlowStep{
+		Flow:  flow,
+		Kind:  "form",
+		Title: title,
+		Lines: []string{
+			intro,
+			i18n.T("Name it to keep several servers at once — each named endpoint is its own provider and lists its own models. Leave the name empty and this replaces the single shared endpoint."),
+		},
+		URL:    browserURL,
+		Fields: fields,
 	}
 }
 
@@ -382,7 +433,7 @@ func (w *Workspace) AuthLoginSubmit(ctx context.Context, p ctrlproto.AuthLoginSu
 			}
 			return authErr(err)
 		}
-	case fl.provider == "openai-compatible":
+	case isCompatProvider(fl.provider):
 		// The one field that is not a string. It is parsed HERE, at the single
 		// authority, rather than trusted from the wire.
 		win := 0
@@ -394,6 +445,25 @@ func (w *Workspace) AuthLoginSubmit(ctx context.Context, p ctrlproto.AuthLoginSu
 			}
 			win = n
 		}
+		ep := auth.CompatEndpoint{
+			BaseURL:       val("base_url"),
+			Model:         val("model"),
+			ContextWindow: win,
+			APIVersion:    val("anthropic_version"),
+			Beta:          val("anthropic_beta"),
+			AuthStyle:     val("auth_style"),
+			// The form asks the positive question because that is how an
+			// operator thinks about it; the field records the negative, so the
+			// default is the zero value.
+			DisableCaching: auth.IsOffValue(val("prompt_caching")),
+		}
+		// Checked before anything is written or probed, and for BOTH branches
+		// below: a named endpoint and the shared slot take the same settings and
+		// must refuse the same values. auth owns the rules — the browser form
+		// calls the identical function.
+		if err := auth.ValidateCompatEndpoint(fl.provider, ep); err != nil {
+			return w.failFlow(p.Flow, fl.provider, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", err.Error()))
+		}
 		if name := val("name"); name != "" {
 			// A named endpoint is a provider DEFINITION, not a credential, so it does
 			// not go where a login goes. It is written to config.json (the operator's
@@ -401,19 +471,19 @@ func (w *Workspace) AuthLoginSubmit(ctx context.Context, p ctrlproto.AuthLoginSu
 			// able to point the agent at someone else's server), and its key, if the
 			// server even wants one, lands in auth.json under this same id, which is
 			// exactly where ResolveCredential already looks for it.
-			if err := w.saveEndpoint(ctx, name, val("base_url"), val("api_key"), win); err != nil {
+			if err := w.saveEndpoint(ctx, name, fl.provider, ep, val("api_key")); err != nil {
 				return w.failFlow(p.Flow, fl.provider, err)
 			}
 			break
 		}
-		if val("model") == "" {
+		if ep.Model == "" {
 			// The shared slot has no discovery to fall back on, so it genuinely needs
 			// a model. The form says so too (RequiredUnless), but the form is an
 			// affordance and this is the authority.
 			return w.failFlow(p.Flow, fl.provider, ctrlproto.Errorf(ctrlproto.CodeBadRequest,
 				"%s", i18n.T("a default model is required, or name this endpoint and terva will discover its models")))
 		}
-		if err := m.CompleteCompatAPIKey(ctx, val("base_url"), val("model"), val("api_key"), win); err != nil {
+		if err := m.CompleteCompatAPIKey(ctx, fl.provider, ep, val("api_key")); err != nil {
 			return authErr(err)
 		}
 	default:
@@ -509,14 +579,19 @@ func (w *Workspace) AuthLogout(_ context.Context, p ctrlproto.AuthLogoutParams) 
 	return nil
 }
 
-// saveEndpoint records a named openai-compatible server: its definition in
-// config.json, its key (if the server wants one) in auth.json under the same id.
+// saveEndpoint records a named server: its definition in config.json, its key
+// (if the server wants one) in auth.json under the same id.
 //
-// The endpoint is PROBED first. Writing an unreachable backend would leave the
-// operator with a provider that appears in /model and fails on the first turn,
-// and the failure would surface as a broken conversation rather than as a typo in
-// a base URL — which is the whole reason the shared slot probes too.
-func (w *Workspace) saveEndpoint(ctx context.Context, name, baseURL, apiKey string, win int) error {
+// providerID is the compatible slot the login came through, and it is what
+// decides the wire this endpoint speaks — the operator chose it by picking a row
+// in /login, so there is no separate question to ask them.
+//
+// The endpoint is PROBED first, over that same wire. Writing an unreachable
+// backend would leave the operator with a provider that appears in /model and
+// fails on the first turn, and the failure would surface as a broken
+// conversation rather than as a typo in a base URL — which is the whole reason
+// the shared slot probes too.
+func (w *Workspace) saveEndpoint(ctx context.Context, name, providerID string, ce auth.CompatEndpoint, apiKey string) error {
 	// Canonicalise BEFORE validating, and both checks below start meaning what
 	// they say. ValidEndpointName compares against the shipped provider ids
 	// case-sensitively, so "Anthropic" used to sail past it and collide in the
@@ -525,10 +600,24 @@ func (w *Workspace) saveEndpoint(ctx context.Context, name, baseURL, apiKey stri
 	if err := ValidEndpointName(name); err != nil {
 		return err
 	}
-	if err := auth.ProbeOpenAICompatible(ctx, baseURL, apiKey); err != nil {
-		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", err.Error())
+	anthropic := providerID == provider.AnthropicCompatProvider
+	var probeErr error
+	if anthropic {
+		probeErr = auth.ProbeAnthropicCompatible(ctx, ce.BaseURL, apiKey, ce.AnthropicOptions())
+	} else {
+		probeErr = auth.ProbeOpenAICompatible(ctx, ce.BaseURL, apiKey)
 	}
-	ep := config.EndpointConfig{BaseURL: baseURL, ContextWindow: win}
+	if probeErr != nil {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", probeErr.Error())
+	}
+	ep := config.EndpointConfig{BaseURL: ce.BaseURL, ContextWindow: ce.ContextWindow}
+	if anthropic {
+		ep.API = config.EndpointAPIAnthropic
+		ep.AnthropicVersion = ce.APIVersion
+		ep.AnthropicBeta = ce.Beta
+		ep.AuthStyle = ce.AuthStyle
+		ep.DisableCaching = ce.DisableCaching
+	}
 
 	// Register BEFORE writing config, for two reasons.
 	//
