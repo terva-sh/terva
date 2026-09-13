@@ -86,6 +86,14 @@ var codexIdentityOptions = []ctrlproto.SettingOption{
 	{Value: provider.CodexIdentityNative, Label: i18n.M("codex_cli_rs — send OpenAI's Codex CLI name")},
 }
 
+// The provider-scoped activation-continuation override. Empty leads, because
+// inheriting the global is what an operator who never touched this has.
+var activationContinuationOptions = []ctrlproto.SettingOption{
+	{Value: build.ActivationContinuationInherit, Label: i18n.M("inherit the global setting (default)")},
+	{Value: build.ActivationContinuationOn, Label: i18n.M("on: continue the turn after an activation")},
+	{Value: build.ActivationContinuationOff, Label: i18n.M("off: wait for your next message")},
+}
+
 // optionsWithCurrent prepends value as a bare option when it is non-empty and
 // absent from opts, so an enum setting whose current value is a custom theme or
 // an off-preset temperature (set by hand in config.json) still round-trips —
@@ -409,6 +417,33 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 		// measured.
 		Description: i18n.T("The client name terva presents to OpenAI's Codex endpoint. The default names terva honestly. The alternative presents OpenAI's own Codex CLI, which no measurement here shows to improve prompt caching or anything else."),
 		Note:        identityNote,
+	})
+	// Activation continuation, scoped to the provider this session runs on. The
+	// engine feature of the same name is global, and this overrides it for one
+	// wire (build/activationcontinuation.go).
+	//
+	// It targets the CURRENT provider rather than a fixed id, because unlike the
+	// codex identity above this setting is not provider-specific in WHAT it does,
+	// only in who it applies to. So the note names the wire being configured
+	// instead of the row hard-coding one.
+	actProv, _ := s.currentModel()
+	actNote := i18n.T("saved in your user config — applies live to sessions on %s", actProv)
+	switch {
+	case actProv == "":
+		actNote = i18n.T("this session has no resolved provider, so there is nothing for this row to scope to")
+	case !cfg.LazyToolsOn():
+		actNote = i18n.T("%s only — inert while lazy tools are off, because nothing activates a tool group then", actProv)
+	}
+	items = append(items, ctrlproto.SettingItem{
+		Key: "provider_activation_continuation", Group: "provider",
+		Label: i18n.T("Activation continuation for this provider"), Type: "enum",
+		Value:   cfg.Providers[actProv].ActivationContinuation,
+		Options: localizeOptions(activationContinuationOptions),
+		// The description has to carry the disappointment, because the reason an
+		// operator reaches for this row is usually a cache cliff and this does not
+		// fix one. Naming the actual saving is the honest half.
+		Description: i18n.T("Whether the agent continues its own turn after it activates a tool group, on this provider only. Activating invalidates the cached prompt from the tools rung down, so the next request re-reads it at full price. Off defers that request to your next message, and a user who changes direction never pays it on that prompt at all. The saving is at most one request per activation. It does NOT fix a sustained cache collapse: a 56-session sweep found that activating tools marks those sessions rather than causing them."),
+		Note:        actNote,
 	})
 	// Engine features project into the same pane (the seam build.EngineFeatures
 	// declares), each into the settings group its declaration names. The
@@ -750,6 +785,35 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 		// No live apply, and the Note says so. The identity is baked into the
 		// codex client when the provider registry builds it (WithCodexClientIdentity),
 		// so a running session keeps the name it started with.
+	case "provider_activation_continuation":
+		if !build.ValidActivationContinuation(val) {
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown activation continuation %q (empty inherits the global, otherwise on or off)", val))
+		}
+		// The row is scoped to the provider this session runs on, so the write is
+		// too. A session with no resolved provider has nothing to write against,
+		// and guessing one would configure a wire the user never named.
+		prov, _ := s.currentModel()
+		if prov == "" {
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("this session has no resolved provider to scope the setting to"))
+		}
+		// Same user-layer rule as the identity above, and for the same reason:
+		// ProviderSettings is deliberately absent from ProjectConfig, so a cloned
+		// repository cannot decide how a session on that provider runs.
+		if err := config.MutateConfig(func(c *config.Config) {
+			if c.Providers == nil {
+				c.Providers = map[string]config.ProviderSettings{}
+			}
+			p := c.Providers[prov]
+			p.ActivationContinuation = val
+			c.Providers[prov] = p
+		}); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
+		// This one DOES apply live, unlike the identity above: it is one setter on
+		// the agent rather than a value baked into a client at build time. A
+		// session mid-Prompt picks it up on its next Prompt, because the loop
+		// snapshots the flag once per Prompt.
+		s.ws.applyActivationContinuation()
 	default:
 		f, ok := build.EngineFeatureByID(key)
 		if !ok {
@@ -769,6 +833,13 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
 		}
 		s.ws.applyEngineFeature(f, on)
+		if f.ID == build.ActivationContinuationFeatureID {
+			// applyEngineFeature just pushed the global onto EVERY live agent,
+			// which is right for the other features and wrong for this one: it
+			// would erase a per-provider override until the next rebuild. Re-resolve
+			// per session so the override survives a global toggle.
+			s.ws.applyActivationContinuation()
+		}
 	}
 	// Settings surface reflects per-session (approval) + shared config; nudge
 	// every client to re-fetch so config changes converge across sessions.
@@ -884,6 +955,34 @@ func (w *Workspace) applyShowReasoning(on bool) {
 		if s.agent != nil {
 			s.agent.SetShowReasoning(on)
 		}
+	}
+}
+
+// applyActivationContinuation re-resolves activation continuation for every live
+// session against its OWN provider and pushes the result onto its agent.
+//
+// Every write that can change the answer lands here: the global engine-feature
+// toggle and a per-provider override. Resolving per session rather than per
+// write is what keeps the two from fighting. applyEngineFeature pushes ONE value
+// onto every agent, which is correct for the other features and would erase an
+// override for this one.
+//
+// It reads the config fresh, so clearing an override back to inherit restores
+// the global rather than leaving the last value standing.
+func (w *Workspace) applyActivationContinuation() {
+	cfg, _ := config.LoadConfig()
+	w.mu.Lock()
+	sess := make([]*wsSession, 0, len(w.sessions))
+	for _, s := range w.sessions {
+		sess = append(sess, s)
+	}
+	w.mu.Unlock()
+	for _, s := range sess {
+		if s.agent == nil {
+			continue
+		}
+		prov, _ := s.currentModel()
+		s.agent.SetActivationContinuation(build.ActivationContinuationFor(cfg.EngineFeatures, cfg.Providers[prov].ActivationContinuation))
 	}
 }
 

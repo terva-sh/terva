@@ -651,6 +651,11 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 				AuthMethod: next.AuthMethod,
 				BaseURL:    next.BaseURL,
 				Swap:       func(c provider.Client, m string) { loop.SetClientAndModel(c, m) },
+				// Re-resolved for the target provider, so a bot that switches
+				// provider gets that provider's activation-continuation answer
+				// rather than keeping the one it started on. loop.Agent is the
+				// right reader here for the same reason the rest of the event is.
+				ActivationContinuation: next.ActivationContinuationEffective(),
 				// The owner's DM is the one durable session here; group agents
 				// are ephemeral. Without this a bot that switched model wrote
 				// every later turn under the old route and resumed onto it.

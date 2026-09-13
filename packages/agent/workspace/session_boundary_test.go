@@ -50,19 +50,20 @@ var sessionMayReachWorkspace = map[string]string{
 	// --- cross-session operations a session verb legitimately triggers ---
 	// Each of these applies a change made in ONE session to every open session.
 	// They live on the workspace because that is the only side that can see them all.
-	"refreshAllPolicies":    "a permission change made in one session applies to every open session",
-	"rebuildAllSessions":    "an extension/MCP reload rebuilds every session's agent, not just the caller's",
-	"applyReasoning":        "a reasoning-effort change goes live to every session's agent, not only the settings pane's",
-	"applyReasoningSummary": "same, for the reasoning-summary setting",
-	"applyShowReasoning":    "same, for the live reasoning-display setting",
-	"applyEngineFeature":    "same, for an engine feature toggle out of the settings pane",
-	"applyAutoSwarm":        "auto-swarm config is resolved once for the workspace and applied to the spawning session",
-	"injectExtraTools":      "the spawn gate reads workspace trust, which is workspace-scoped and moves live",
-	"overrideClient":        "model override resolves against the workspace's provider/credential set",
-	"titleGen":              "title generation uses the workspace default model, not the session's switched one",
-	"switchModel":           "a model switch is routed through the workspace so favorites/defaults stay one code path",
-	"Trust":                 "trust verdicts are workspace-scoped by definition; a session verb only forwards",
-	"Untrust":               "the symmetric inverse of Trust, same reason",
+	"refreshAllPolicies":          "a permission change made in one session applies to every open session",
+	"rebuildAllSessions":          "an extension/MCP reload rebuilds every session's agent, not just the caller's",
+	"applyReasoning":              "a reasoning-effort change goes live to every session's agent, not only the settings pane's",
+	"applyReasoningSummary":       "same, for the reasoning-summary setting",
+	"applyShowReasoning":          "same, for the live reasoning-display setting",
+	"applyEngineFeature":          "same, for an engine feature toggle out of the settings pane",
+	"applyActivationContinuation": "activation continuation resolves per provider, so a write re-resolves every session against its OWN provider rather than pushing one value at all of them",
+	"applyAutoSwarm":              "auto-swarm config is resolved once for the workspace and applied to the spawning session",
+	"injectExtraTools":            "the spawn gate reads workspace trust, which is workspace-scoped and moves live",
+	"overrideClient":              "model override resolves against the workspace's provider/credential set",
+	"titleGen":                    "title generation uses the workspace default model, not the session's switched one",
+	"switchModel":                 "a model switch is routed through the workspace so favorites/defaults stay one code path",
+	"Trust":                       "trust verdicts are workspace-scoped by definition; a session verb only forwards",
+	"Untrust":                     "the symmetric inverse of Trust, same reason",
 
 	// --- workspace-scoped panes a session's surface renderer displays ---
 	// The surfaces renderer is reached through a session (it renders that session's

@@ -302,6 +302,10 @@ func (f *acpFactory) SwitchModel(currentProvider, currentModel, targetModelID st
 			// A nil Client is how the shared event spells "same endpoint, new
 			// id" — and it still re-points the host-routed dispatch tools,
 			// which an id swap changes just as much as a rebuild does.
+			//
+			// ActivationContinuation stays nil on purpose: this branch is guarded
+			// on the provider being unchanged, so the per-provider override cannot
+			// have moved and re-resolving it would be busywork.
 			sw.Apply = func(ag *core.Agent) {
 				build.ApplyModelSwap(build.ModelSwap{Agent: ag, Provider: sw.Provider, Model: sw.Model})
 			}
@@ -334,14 +338,18 @@ func (f *acpFactory) SwitchModel(currentProvider, currentModel, targetModelID st
 		AuthMethod: r.AuthMethod,
 		BaseURL:    r.BaseURL,
 	}
+	// The target provider's activation-continuation answer, resolved here rather
+	// than inside the closure so it captures one value instead of the whole route.
+	actCont := r.ActivationContinuationEffective()
 	sw.Apply = func(ag *core.Agent) {
 		build.ApplyModelSwap(build.ModelSwap{
-			Agent:      ag,
-			Client:     sw.Client,
-			Provider:   sw.Provider,
-			Model:      sw.Model,
-			AuthMethod: sw.AuthMethod,
-			BaseURL:    sw.BaseURL,
+			Agent:                  ag,
+			Client:                 sw.Client,
+			Provider:               sw.Provider,
+			Model:                  sw.Model,
+			AuthMethod:             sw.AuthMethod,
+			BaseURL:                sw.BaseURL,
+			ActivationContinuation: actCont,
 		})
 	}
 	return sw, nil

@@ -2226,6 +2226,10 @@ func (w *Workspace) switchModel(s *wsSession, providerName, modelID string, forc
 		swap.Client = r.NewClient()
 		swap.Provider, swap.Model = r.Provider, r.Model
 		swap.AuthMethod, swap.BaseURL = r.AuthMethod, r.BaseURL
+		// Only this branch can change the provider, so only this branch re-resolves
+		// the per-provider activation-continuation override. The shortcut above is
+		// guarded on curProv == target.Provider, where the answer cannot have moved.
+		swap.ActivationContinuation = r.ActivationContinuationEffective()
 	}
 	// The usage carry-over, the client install, the terva_status re-bind and
 	// the host-routed dispatch refresh are one event, shared with the acp, bot

@@ -69,6 +69,22 @@ type ModelSwap struct {
 	// closure. Setting this there too would write the row twice.
 	Session *core.Session
 
+	// ActivationContinuation is the effective activation-continuation setting for
+	// the TARGET provider: its providers.<id>.activation_continuation override if
+	// it has one, otherwise the global engine feature. Resolve it with
+	// build.ActivationContinuationFor, which applies that precedence.
+	//
+	// Nil means the caller has no opinion, and the agent keeps whatever it is on.
+	// Every host that can reach a config should set it, because the whole point
+	// of a per-provider setting is that a swap re-resolves it: leaving it nil on
+	// a cross-provider swap keeps the OLD provider's answer, which is the bug the
+	// setting exists to avoid.
+	//
+	// It must be the effective value and not the raw keyword, because a swap ONTO
+	// a provider with no override has to restore the global rather than leave the
+	// previous provider's override standing.
+	ActivationContinuation *bool
+
 	// After is this host's own tail: telling clients, refreshing a menu —
 	// whatever genuinely only it has. Recording the model is NOT that; use
 	// Session above.
@@ -120,7 +136,17 @@ func ApplyModelSwap(s ModelSwap) {
 		s.Agent.SetModel(s.Model)
 	}
 
-	// 4. Re-point every host-routed dispatch tool, on BOTH paths — an id swap
+	// 4. Re-resolve the per-provider activation-continuation override, now that
+	//    the agent is on the new route. It goes through the same core setter the
+	//    build funnel uses, so a swap and a fresh session cannot disagree. The
+	//    agent's own runLoop snapshots this once per Prompt, so a swap arriving
+	//    mid-Prompt (the stuck-loop escalation path) takes effect on the NEXT
+	//    Prompt rather than changing the semantics under a running turn.
+	if s.ActivationContinuation != nil {
+		s.Agent.SetActivationContinuation(*s.ActivationContinuation)
+	}
+
+	// 5. Re-point every host-routed dispatch tool, on BOTH paths — an id swap
 	//    changes what a sub-agent should inherit just as much as a rebuild
 	//    does. Generic over tools.HostRouted so this covers swarm_spawn,
 	//    actor_spawn, raati_convene and anything added later without a fifth
@@ -131,7 +157,7 @@ func ApplyModelSwap(s ModelSwap) {
 		}
 	}
 
-	// 5. Record the new route, AFTER the agent is actually on it. A session
+	// 6. Record the new route, AFTER the agent is actually on it. A session
 	//    file that named a model the agent had not moved to would resume onto
 	//    the wrong one, and the swap above can still be a partial move if a
 	//    host's Swap fans out and fails halfway.
@@ -139,7 +165,7 @@ func ApplyModelSwap(s ModelSwap) {
 		_ = s.Session.UpdateModel(s.Provider, s.Model)
 	}
 
-	// 6. Whatever only this host has.
+	// 7. Whatever only this host has.
 	if s.After != nil {
 		s.After()
 	}
