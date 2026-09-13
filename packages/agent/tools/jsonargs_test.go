@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 )
@@ -14,7 +13,7 @@ import (
 func TestAskCoercesJSONStringQuestions(t *testing.T) {
 	var a askArgs
 	raw := `{"questions": "[{\"question\":\"pick one\",\"options\":[\"a\",\"b\"]}]"}`
-	if err := json.Unmarshal([]byte(raw), &a); err != nil {
+	if err := decodeArgs(json.RawMessage(raw), askSchema, &a); err != nil {
 		t.Fatalf("a JSON-encoded questions array must be accepted: %v", err)
 	}
 	qs, err := a.questions()
@@ -41,7 +40,7 @@ func TestAskCoercesJSONStringOptions(t *testing.T) {
 	}
 	for _, c := range cases {
 		var a askArgs
-		if err := json.Unmarshal([]byte(c.raw), &a); err != nil {
+		if err := decodeArgs(json.RawMessage(c.raw), askSchema, &a); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
 		qs, err := a.questions()
@@ -59,7 +58,7 @@ func TestAskCoercesJSONStringOptions(t *testing.T) {
 func TestAskPlainArraysStillDecode(t *testing.T) {
 	var a askArgs
 	raw := `{"questions":[{"question":"q1","options":["a","b"]},{"question":"q2"}]}`
-	if err := json.Unmarshal([]byte(raw), &a); err != nil {
+	if err := decodeArgs(json.RawMessage(raw), askSchema, &a); err != nil {
 		t.Fatalf("a plain array must still decode: %v", err)
 	}
 	qs, err := a.questions()
@@ -78,7 +77,7 @@ func TestAskPlainArraysStillDecode(t *testing.T) {
 // offered no options.
 func TestAskEmptyStringIsAnEmptyList(t *testing.T) {
 	var a askArgs
-	if err := json.Unmarshal([]byte(`{"question":"q","options":""}`), &a); err != nil {
+	if err := decodeArgs(json.RawMessage(`{"question":"q","options":""}`), askSchema, &a); err != nil {
 		t.Fatalf("an empty string must decode as an empty list: %v", err)
 	}
 	if len(a.Options) != 0 {
@@ -133,31 +132,141 @@ func TestAskSyntaxErrorPassesThrough(t *testing.T) {
 	}
 }
 
-func TestJSONArrayCoercionUnit(t *testing.T) {
-	t.Run("string holding an array", func(t *testing.T) {
-		var a jsonArray[string]
-		if err := json.Unmarshal([]byte(`"[\"x\",\"y\"]"`), &a); err != nil {
-			t.Fatal(err)
-		}
-		if strings.Join(a, ",") != "x,y" {
-			t.Errorf("got %v", a)
-		}
-	})
-	t.Run("a string that is not an array keeps the original complaint", func(t *testing.T) {
-		var a jsonArray[string]
-		err := json.Unmarshal([]byte(`"plain text"`), &a)
-		if err == nil {
-			t.Fatal("expected an error for a string that holds no array")
-		}
-		var te *json.UnmarshalTypeError
-		if !errors.As(err, &te) {
-			t.Fatalf("want an *UnmarshalTypeError so the caller can phrase it, got %T: %v", err, err)
-		}
-	})
-	t.Run("a number is refused outright", func(t *testing.T) {
-		var a jsonArray[string]
-		if err := json.Unmarshal([]byte(`5`), &a); err == nil {
-			t.Fatal("a number must not decode as an array")
-		}
-	})
+// The walk, on bytes. It may only touch a value the schema calls an array, and
+// an unrepairable document has to come back byte-identical — decodeArgs reads
+// that identity as "no repair was possible" and reports the original error.
+func TestCoerceStringArraysUnit(t *testing.T) {
+	cases := []struct {
+		name, raw string
+		same      bool // comes back byte-identical
+		want      func(*testing.T, askArgs)
+	}{
+		{
+			name: "a string holding an array is unwrapped",
+			raw:  `{"question":"q","options":"[\"x\",\"y\"]"}`,
+			want: func(t *testing.T, a askArgs) {
+				if got := strings.Join(a.Options, ","); got != "x,y" {
+					t.Errorf("options = %q, want x,y", got)
+				}
+			},
+		},
+		{
+			name: "a string holding no array is left alone",
+			raw:  `{"question":"q","options":"plain text"}`,
+			same: true,
+		},
+		{
+			name: "a number where an array belongs is left alone",
+			raw:  `{"questions":5}`,
+			same: true,
+		},
+		{
+			name: "an empty string becomes an empty list",
+			raw:  `{"question":"q","options":""}`,
+			want: func(t *testing.T, a askArgs) {
+				if len(a.Options) != 0 {
+					t.Errorf("options = %v, want empty", a.Options)
+				}
+			},
+		},
+		{
+			name: "a doubly wrapped document is unwrapped at both levels",
+			raw:  `{"questions":"[{\"question\":\"q\",\"options\":\"[\\\"a\\\"]\"}]"}`,
+			want: func(t *testing.T, a askArgs) {
+				if len(a.Questions) != 1 {
+					t.Fatalf("got %d questions, want 1", len(a.Questions))
+				}
+				if got := strings.Join(a.Questions[0].Options, ","); got != "a" {
+					t.Errorf("nested options = %q, want a", got)
+				}
+			},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := coerceStringArrays(json.RawMessage(c.raw), askSchema)
+			if c.same {
+				if string(got) != c.raw {
+					t.Fatalf("document was rewritten:\n got: %s\nwant: %s", got, c.raw)
+				}
+				return
+			}
+			if string(got) == c.raw {
+				t.Fatalf("nothing was repaired in %s", c.raw)
+			}
+			var a askArgs
+			if err := json.Unmarshal(got, &a); err != nil {
+				t.Fatalf("the repaired document does not decode: %v", err)
+			}
+			c.want(t, a)
+		})
+	}
+}
+
+// 🪤 The guarantee the schema-driven walk makes and the old type-driven one got
+// only by accident: a STRING field whose text looks like an array is text. The
+// old repair was safe here because no string field happened to use the coercing
+// type — a property of the struct, not a decision anyone made.
+func TestAskLeavesAStringFieldThatLooksLikeAnArray(t *testing.T) {
+	var a askArgs
+	raw := `{"question":"[\"a\",\"b\"]"}`
+	if err := decodeArgs(json.RawMessage(raw), askSchema, &a); err != nil {
+		t.Fatalf("decodeArgs: %v", err)
+	}
+	if a.Question != `["a","b"]` {
+		t.Errorf("question = %q, want the literal text it was sent as", a.Question)
+	}
+}
+
+// A failure inside the questions array names its path, in the one spelling both
+// toolchains produce. Go 1.27 reports questions.0.question and Go 1.25 reports
+// questions.question; schemaFieldPath drops the index so the message does not
+// change under the compiler.
+//
+// This is also the test that fails if a custom UnmarshalJSON is ever
+// reintroduced anywhere under askArgs: the field path is exactly what such a
+// method destroys.
+func TestAskNestedFieldErrorNamesItsPath(t *testing.T) {
+	tool := &AskUserTool{}
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"questions":[{"question":5}]}`), nil)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	want := `the "questions.question" field must be a string, not a number`
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("got: %s\nwant substring: %s", err, want)
+	}
+}
+
+// The error describes the bytes the MODEL sent, never the repair we attempted.
+// options holds a JSON array of numbers, so the repair unwraps it and the retry
+// then fails on element 0 — and reporting that would tell the model about a
+// document it never wrote.
+func TestAskReportsTheBytesTheModelSent(t *testing.T) {
+	tool := &AskUserTool{}
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"question":"q","options":"[1,2]"}`), nil)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	want := `the "options" field must be an array, not a string`
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("got: %s\nwant substring: %s", err, want)
+	}
+	if strings.Contains(err.Error(), "options.0") {
+		t.Errorf("the error describes our repaired document, not the model's: %s", err)
+	}
+}
+
+// The second caller of decodeArgs gets the same vocabulary. Nothing else in
+// ticket_init reads the arguments, so a regression here would be silent.
+func TestTicketInitArgsSpeakSchemaNotGo(t *testing.T) {
+	tool := &TicketInitTool{}
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"instructions": 5}`), nil)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	want := `the "instructions" field must be a boolean, not a number`
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("got: %s\nwant substring: %s", err, want)
+	}
 }

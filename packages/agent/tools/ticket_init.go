@@ -74,8 +74,8 @@ func (t *TicketInitTool) ToolGroupName() string { return "ticket" }
 func (t *TicketInitTool) Execute(ctx context.Context, raw json.RawMessage, _ func(string)) (core.ToolResult, error) {
 	var a ticketInitArgs
 	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &a); err != nil {
-			return core.ToolResult{}, schemaArgsError(err)
+		if err := decodeArgs(raw, ticketInitSchema, &a); err != nil {
+			return core.ToolResult{}, err
 		}
 	}
 	// The gate this tool exists to close. Registration already checked it, but
