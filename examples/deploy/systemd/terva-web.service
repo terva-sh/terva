@@ -21,6 +21,13 @@ After=terva-web.socket
 # --allow-restart enables the Tier-1 self-restart the ExecReload below drives.
 # The daemon adopts the socket from LISTEN_FDS, so no --web-addr is needed.
 ExecStart=/usr/local/bin/terva web --allow-restart
+# To make this daemon a fleet hub, add the member endpoint here:
+#ExecStart=/usr/local/bin/terva web --allow-restart --fleet-addr 127.0.0.1:8081 --fleet-token-file %d/fleet-token
+#LoadCredential=fleet-token:%h/.config/terva/fleet-token
+# The fleet endpoint is a flag, never a second ListenStream: terva adopts
+# exactly one activation socket, and that one is the browser endpoint. A
+# self-restart re-adopts the socket and rebinds the fleet port; members
+# redial on their own. Pair it with terva-member@.service.
 
 # `systemctl --user reload terva-web` re-execs the daemon into the
 # freshly-installed binary IN PLACE: same PID, and the socket is re-adopted

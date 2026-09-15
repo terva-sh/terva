@@ -276,7 +276,7 @@ func TestAReadReachesTheMemberWithTheBareID(t *testing.T) {
 		t.Fatal("the member never checked in")
 	}
 
-	agg, err := NewAggregate(hub, newFakeSvc(), LocalOrigin)
+	agg, err := NewAggregate(hub, Source{Origin: LocalOrigin, Svc: newFakeSvc()})
 	if err != nil {
 		t.Fatalf("NewAggregate: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestRestartDoesNotReachAMember(t *testing.T) {
 	}
 
 	local := &restartSpy{fakeSvc: newFakeSvc(ctrlproto.SessionInfo{ID: "l1"})}
-	agg, err := NewAggregate(hub, local, LocalOrigin)
+	agg, err := NewAggregate(hub, Source{Origin: LocalOrigin, Svc: local})
 	if err != nil {
 		t.Fatalf("NewAggregate: %v", err)
 	}

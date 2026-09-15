@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
@@ -73,8 +74,17 @@ func (s *HubService) command(federated string) (ctrlproto.WorkspaceService, stri
 	return src.Svc, id, nil
 }
 
-// hub is the workspace for a method that carries no session id.
-func (s *HubService) hub() ctrlproto.WorkspaceService { return s.agg.local }
+// hub is the workspace for a method that carries no session id: the default
+// local source, the directory the daemon started in. On a hub with no local
+// workspace it is a nil interface, and a session-less call fails loudly there
+// rather than picking a member to answer for the hub.
+func (s *HubService) hub() ctrlproto.WorkspaceService {
+	def, ok := s.agg.Default()
+	if !ok {
+		return nil
+	}
+	return def.Svc
+}
 
 // --- reads that route to their member ---
 
@@ -397,16 +407,31 @@ func (s *HubService) SetSessionReasoning(ctx context.Context, sess, level string
 
 // --- hub-scoped: no session id, so no member to route to ---
 
-// CreateSession creates on the hub's own workspace.
+// CreateSession creates on the default local source.
 //
 // This is the hub-scoped answer that will feel wrong first. A person looking at
 // a fleet board and asking for a new session probably means "on that machine",
-// and this gives them one on the hub instead. Naming a target member needs a
-// parameter that CreateOpts does not have, and a wire change belongs with
-// fleet-control rather than here. The honest reading today is that the hub's
-// own workspace is where the hub creates sessions.
+// and this gives them one on the default instead. Naming a target needs a
+// parameter that CreateOpts does not have; that wire change is step 3 of
+// docs/proposals/workspaces-as-sources.md. Until then the default is where
+// sessions are created.
+//
+// The result is stamped the way Sessions lists it, origin and federated id,
+// so a client that creates and then addresses what it was handed lands on the
+// same session the board shows. Handing back the bare id was a special case of
+// the default source, and the default is not special at this layer.
 func (s *HubService) CreateSession(ctx context.Context, opts ctrlproto.CreateOpts) (ctrlproto.SessionInfo, error) {
-	return s.hub().CreateSession(ctx, opts)
+	def, ok := s.agg.Default()
+	if !ok {
+		return ctrlproto.SessionInfo{}, fmt.Errorf("%w: this hub has no local workspace to create a session in", ErrUnknownOrigin)
+	}
+	info, err := def.Svc.CreateSession(ctx, opts)
+	if err != nil {
+		return info, err
+	}
+	info.Origin = def.Origin
+	info.ID = ctrlproto.JoinFederatedID(def.Origin, info.ID)
+	return info, nil
 }
 
 func (s *HubService) Catalog(ctx context.Context, lang string) (ctrlproto.CatalogView, error) {

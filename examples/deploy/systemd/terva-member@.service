@@ -1,0 +1,55 @@
+# terva fleet member — per-origin USER unit template.
+#
+# A member serves one workspace to a fleet hub. It dials the hub; the hub
+# never dials it. See docs/fleet.md for the model and the flags.
+#
+# The instance name (%i) is the origin: the name this workspace goes by in
+# the hub's panel, and the prefix of every session id the hub shows for it.
+# terva-member@terva serves ~/fleet/terva as "terva/<id>".
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user ~/.config/terva ~/fleet/terva
+#   cp terva-member@.service ~/.config/systemd/user/
+#   umask 077; openssl rand -hex 32 > ~/.config/terva/fleet-token   # once, shared with the hub
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now terva-member@terva
+#   loginctl enable-linger $USER         # keep it running after logout
+#
+# The hub side is terva-web.service with --fleet-addr on its ExecStart (see
+# the note in that file). Both ends read the SAME token file.
+#
+# `terva member` needs no web build tag, so a lean binary can run this unit.
+
+[Unit]
+Description=terva fleet member (%i)
+After=network-online.target
+Wants=network-online.target
+# Read from [Unit], NOT [Service]. A dead token or a hub that is never
+# coming back should not hot-loop the unit forever.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+# systemd reads the token file and hands it over out of band, so the secret
+# is in neither argv nor the environment.
+LoadCredential=fleet-token:%h/.config/terva/fleet-token
+# Adjust the path to wherever terva is installed (`command -v terva`).
+# --hub is the hub's member endpoint. The hub binds it to loopback or a unix
+# socket only; on another machine, reach it through the tunnel in docs/fleet.md.
+ExecStart=%h/.local/bin/terva member --hub ws://127.0.0.1:8081 --origin %i --fleet-token-file %d/fleet-token
+# The member's working directory IS the workspace it serves: what its tools
+# see, where its sessions bucket. Must exist before first start. A member and
+# a hub on one host may share a TERVA_HOME as long as their working
+# directories differ: sessions bucket per directory, and the boot-time sweep
+# of empty transcripts only ever looks in the daemon's own bucket.
+WorkingDirectory=%h/fleet/%i
+#Environment=TERVA_HOME=%h/.config/terva
+
+# The member redials on its own when the hub restarts or the tunnel drops,
+# and exits only when something is permanently wrong: a bad token, a refused
+# origin, a workspace that will not build.
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -12,11 +12,14 @@ machine anybody has to be able to reach.
 The reasoning is recorded in decision 0014, "fleet members dial in", in the
 development tree.
 
-**Status, 2026-09-12: this has not yet been run across two separate machines.**
-Every test is in-process, so the hub and member have talked inside one Go test
-binary and never over a real network or a tunnel. Treat the setup below as
-untried rather than proven. Nothing here is on by default: `terva web` without
-`--fleet-addr` opens no extra socket and behaves exactly as it always has.
+**Status, 2026-09-13: run as two processes on one machine, not yet across two
+machines or a tunnel.** A hub and a member built from trunk met over a loopback
+socket: the member checked in, `sessions.list` on the hub returned the member's
+session under its origin, and the hub resumed after the member was killed and
+restarted. The proof is recorded on `TKT-01M23ZB6P`. The two-machine run through
+the tunnel below is `TKT-01M2EP9DQ`, so treat that part as untried. Nothing here
+is on by default: `terva web` without `--fleet-addr` opens no extra socket and
+behaves exactly as it always has.
 
 ## The flags
 
@@ -157,6 +160,59 @@ advice applies as for the browser socket. A client that reconnects on a **fixed
 interval**, forever, is that middlebox's idle timeout and not a terva bug, and
 the interval is its value. See
 [behind a reverse proxy](web.md#behind-a-reverse-proxy-the-websocket-is-a-long-quiet-connection).
+
+## Hub and member under systemd on one host
+
+The smallest fleet that runs unattended is a hub and one member on the same
+machine, both as user units. It proves nothing about tunnels, but it puts the
+carrier under real uptime: the hub restarts for a new build, the member redials,
+and the panel keeps showing both.
+
+The example units are in `examples/deploy/systemd/`. `terva-web.socket` and
+`terva-web.service` are the hub; `terva-member@.service` is the member, with
+the instance name as its origin.
+
+```bash
+mkdir -p ~/.config/systemd/user ~/.config/terva ~/fleet/terva
+cp examples/deploy/systemd/terva-web.socket \
+   examples/deploy/systemd/terva-web.service \
+   examples/deploy/systemd/terva-member@.service ~/.config/systemd/user/
+umask 077; openssl rand -hex 32 > ~/.config/terva/fleet-token
+systemctl --user daemon-reload
+systemctl --user enable --now terva-web.socket terva-member@terva
+loginctl enable-linger $USER
+```
+
+Two facts decide the shape of the units.
+
+**The fleet endpoint is a flag on the hub, never a second socket.** The daemon
+adopts exactly one systemd activation socket, and that one is the browser
+endpoint. Passing two `ListenStream=` lines is refused at startup. So the web
+unit's `ExecStart` carries `--fleet-addr` and `--fleet-token-file`, as the
+commented line in `terva-web.service` shows, and the token reaches it through
+`LoadCredential=`. A `systemctl --user reload terva-web` re-execs the hub in
+place: the browser socket is re-adopted, the fleet port is bound again, and
+the member redials within its keepalive window.
+
+**Hub and member can share a `TERVA_HOME` if their working directories
+differ.** Sessions bucket per working directory, and the sweep of empty
+transcripts that every daemon runs at boot looks only in its own bucket and
+removes only transcripts with no message in them. A member serving a
+different directory is never touched by the hub's sweep, and a session with
+one message in it is never touched by any sweep. Sharing a home also means
+the member inherits the provider credential the hub uses, so there is nothing
+to seed on the member side.
+
+Then upgrade both ends from the tree with one install and two reloads:
+
+```bash
+just install-dev                          # atomic rename over ~/.local/bin/terva
+systemctl --user reload terva-web         # hub re-execs into the new build
+systemctl --user restart terva-member@terva
+```
+
+Reload is a real restart with a short gap, and it interrupts an in-flight
+turn, so do it between turns.
 
 ## Where the pieces live
 

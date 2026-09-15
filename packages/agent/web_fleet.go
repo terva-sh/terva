@@ -68,7 +68,7 @@ func fleetServiceFor(ctx context.Context, args build.Args, ws ctrlproto.Workspac
 		return nil, nil, err
 	}
 
-	agg, err := fleet.NewAggregate(hub, ws, fleet.LocalOrigin)
+	agg, err := fleet.NewAggregate(hub, fleet.Source{Origin: fleet.LocalOrigin, Svc: ws})
 	if err != nil {
 		hub.Close()
 		ln.Close()

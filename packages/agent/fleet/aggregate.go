@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 )
@@ -43,41 +44,129 @@ type Source struct {
 // interface in packages/agent/ctrlproto/service.go rather than trusting a
 // number written here.
 type Aggregate struct {
-	hub         *Hub
-	local       ctrlproto.WorkspaceService
-	localOrigin string
+	hub *Hub
+
+	// locals are the in-process workspaces, the default first. The default is
+	// the directory the daemon started in: the source every session-less
+	// method goes to, and the one a bare id addresses. Further locals are
+	// other directories opened in this process (docs/proposals/
+	// workspaces-as-sources.md). None of them is a member: nothing crosses a
+	// socket to reach one, which is why RouteCommand routes to any of them.
+	mu     sync.RWMutex
+	locals []Source
 
 	// OnSourceError observes a member that failed to answer a fan-in, so a
 	// caller can log or badge it. Optional.
 	OnSourceError func(origin string, err error)
 }
 
+// ErrOriginTaken means a source already answers to that origin.
+var ErrOriginTaken = errors.New("fleet: a source already answers to that origin")
+
 // NewAggregate builds the hub-side view over hub's members plus an optional
-// local workspace. A nil hub is a fleet of one, and a nil local workspace is a
-// hub that carries only members, which is what a dedicated hub host looks like.
-func NewAggregate(hub *Hub, local ctrlproto.WorkspaceService, localOrigin string) (*Aggregate, error) {
-	if localOrigin == "" {
-		localOrigin = LocalOrigin
+// default local workspace. A nil hub is a fleet of one. A zero def, one with
+// no Svc, is a hub that carries only members, which is what a dedicated hub
+// host looks like. An empty def.Origin means [LocalOrigin].
+func NewAggregate(hub *Hub, def Source) (*Aggregate, error) {
+	a := &Aggregate{hub: hub}
+	if def.Svc == nil {
+		return a, nil
 	}
-	if local != nil && !ctrlproto.ValidOrigin(localOrigin) {
-		return nil, fmt.Errorf("fleet: %q is not a usable origin for the local workspace", localOrigin)
+	if def.Origin == "" {
+		def.Origin = LocalOrigin
 	}
-	return &Aggregate{hub: hub, local: local, localOrigin: localOrigin}, nil
+	if !ctrlproto.ValidOrigin(def.Origin) {
+		return nil, fmt.Errorf("fleet: %q is not a usable origin for the local workspace", def.Origin)
+	}
+	a.locals = []Source{def}
+	return a, nil
 }
 
-// Sources lists every member, the hub's own workspace first.
+// AddLocal registers another in-process workspace under its origin. The
+// origin must be usable and unclaimed by any local or any member, so a
+// directory can never shadow a machine. The default is never added this way:
+// it is fixed at construction, so there is always exactly one.
+func (a *Aggregate) AddLocal(src Source) error {
+	if src.Svc == nil {
+		return errors.New("fleet: AddLocal needs a workspace")
+	}
+	if !ctrlproto.ValidOrigin(src.Origin) {
+		return fmt.Errorf("fleet: %q is not a usable origin for a local workspace", src.Origin)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, l := range a.locals {
+		if l.Origin == src.Origin {
+			return fmt.Errorf("%w: %q is a local workspace", ErrOriginTaken, src.Origin)
+		}
+	}
+	if a.hub != nil {
+		if _, ok := a.hub.Client(src.Origin); ok {
+			return fmt.Errorf("%w: %q is a member", ErrOriginTaken, src.Origin)
+		}
+	}
+	a.locals = append(a.locals, src)
+	return nil
+}
+
+// RemoveLocal forgets a local workspace. It reports whether one was removed.
+// The default cannot be removed: it is the source a bare id addresses, and a
+// hub that lost it would refuse every client that predates federation.
+func (a *Aggregate) RemoveLocal(origin string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for i := 1; i < len(a.locals); i++ {
+		if a.locals[i].Origin == origin {
+			a.locals = append(a.locals[:i], a.locals[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// Default is the in-process workspace that session-less methods go to and
+// that a bare id addresses. ok is false on a hub with no local workspace.
+func (a *Aggregate) Default() (src Source, ok bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if len(a.locals) == 0 {
+		return Source{}, false
+	}
+	return a.locals[0], true
+}
+
+// Locals lists the in-process workspaces, the default first.
+func (a *Aggregate) Locals() []Source {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return append([]Source(nil), a.locals...)
+}
+
+// isLocal reports whether origin names an in-process workspace, which is the
+// property RouteCommand cares about: a command to one of these cannot land on
+// another daemon, because there is no other daemon on the path.
+func (a *Aggregate) isLocal(origin string) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, l := range a.locals {
+		if l.Origin == origin {
+			return true
+		}
+	}
+	return false
+}
+
+// Sources lists every source, the in-process workspaces first with the
+// default at the head, then the members.
 //
-// The local workspace is an entry in this list and nothing more. That is what
+// A local workspace is an entry in this list and nothing more. That is what
 // "an ordinary member" means here: ordinary at THIS layer, where the merge
 // iterates and never asks which kind of member it is holding. It is not a claim
 // that the hub talks to itself over a socket. Decision 0014's "a local member
 // checks in too" is about a separate local daemon, and reading it the other way
 // would force two processes onto a single machine for no gain.
 func (a *Aggregate) Sources() []Source {
-	var out []Source
-	if a.local != nil {
-		out = append(out, Source{Origin: a.localOrigin, Svc: a.local})
-	}
+	out := a.Locals()
 	if a.hub != nil {
 		for _, origin := range a.hub.Members() {
 			c, ok := a.hub.Client(origin)
@@ -105,9 +194,14 @@ func (a *Aggregate) Sources() []Source {
 // truth is a reconnect in progress. The call that follows fails with
 // ErrNotConnected instead, which says the true thing.
 func (a *Aggregate) sourceFor(origin string) (Source, bool) {
-	if a.local != nil && origin == a.localOrigin {
-		return Source{Origin: a.localOrigin, Svc: a.local}, true
+	a.mu.RLock()
+	for _, l := range a.locals {
+		if l.Origin == origin {
+			a.mu.RUnlock()
+			return l, true
+		}
 	}
+	a.mu.RUnlock()
 	if a.hub == nil {
 		return Source{}, false
 	}
@@ -153,10 +247,11 @@ func (a *Aggregate) Sessions(ctx context.Context) ([]ctrlproto.SessionInfo, erro
 func (a *Aggregate) Route(federated string) (Source, string, error) {
 	origin, id := ctrlproto.SplitFederatedID(federated)
 	if origin == "" {
-		if a.local == nil {
+		def, ok := a.Default()
+		if !ok {
 			return Source{}, "", fmt.Errorf("%w: %q carries no origin and this hub has no local workspace", ErrUnknownOrigin, federated)
 		}
-		return Source{Origin: a.localOrigin, Svc: a.local}, id, nil
+		return def, id, nil
 	}
 	if src, ok := a.sourceFor(origin); ok {
 		return src, id, nil
@@ -177,7 +272,7 @@ func (a *Aggregate) RouteCommand(federated string) (Source, string, error) {
 	if err != nil {
 		return Source{}, "", err
 	}
-	if src.Origin != a.localOrigin {
+	if !a.isLocal(src.Origin) {
 		return Source{}, "", fmt.Errorf("%w: session %q lives on member %q", ErrRemoteNotRouted, federated, src.Origin)
 	}
 	return src, id, nil
@@ -200,10 +295,11 @@ func (a *Aggregate) RouteCommand(federated string) (Source, string, error) {
 // set had changed, because the browser would refetch a list that did not move.
 func (a *Aggregate) Subscribe(ctx context.Context, sess string) (<-chan ctrlproto.Event, error) {
 	if sess == ctrlproto.AddrWorkspace {
-		if a.local == nil {
+		def, ok := a.Default()
+		if !ok {
 			return nil, fmt.Errorf("%w: this hub has no local workspace to subscribe to", ErrUnknownOrigin)
 		}
-		return a.local.Subscribe(ctx, sess)
+		return def.Svc.Subscribe(ctx, sess)
 	}
 	src, id, err := a.Route(sess)
 	if err != nil {

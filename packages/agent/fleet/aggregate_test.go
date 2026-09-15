@@ -29,7 +29,7 @@ func startAggregate(t *testing.T, ctx context.Context) (agg *Aggregate, local, r
 	}
 
 	local = newFakeSvc(ctrlproto.SessionInfo{ID: "l1", Model: "local-model"})
-	agg, err := NewAggregate(hub, local, LocalOrigin)
+	agg, err := NewAggregate(hub, Source{Origin: LocalOrigin, Svc: local})
 	if err != nil {
 		t.Fatalf("NewAggregate: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestAFailingMemberDoesNotBlankTheBoard(t *testing.T) {
 
 	// Replace the local source with one that errors, by pointing the aggregate
 	// at a workspace whose Sessions fails.
-	agg.local = &failingSvc{}
+	agg.locals[0].Svc = &failingSvc{}
 
 	got, err := agg.Sessions(ctx)
 	if err != nil {

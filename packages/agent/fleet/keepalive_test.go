@@ -237,7 +237,7 @@ func TestAMemberThatStaysAwayLeavesTheAggregateSources(t *testing.T) {
 	memberCtx, stopMember := context.WithCancel(ctx)
 	startMember(t, memberCtx, url, "neot", newFakeSvc(ctrlproto.SessionInfo{ID: "s1"}))
 
-	agg, err := NewAggregate(hub, newFakeSvc(ctrlproto.SessionInfo{ID: "local1"}), LocalOrigin)
+	agg, err := NewAggregate(hub, Source{Origin: LocalOrigin, Svc: newFakeSvc(ctrlproto.SessionInfo{ID: "local1"})})
 	if err != nil {
 		t.Fatalf("NewAggregate: %v", err)
 	}
