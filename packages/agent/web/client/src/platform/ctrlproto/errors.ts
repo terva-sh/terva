@@ -30,6 +30,7 @@ export const WireCodes = {
   badRequest: 'bad_request',
   unsupported: 'unsupported',
   unauthorized: 'unauthorized',
+  forbidden: 'forbidden',
   conflict: 'conflict',
   noCredential: 'no_credential',
   internal: 'internal',
@@ -82,6 +83,9 @@ const clientText: Record<string, () => string> = {
 // just the code again. Only a fallback: see errText.
 const bareCodeText: Record<string, () => string> = {
   [WireCodes.unauthorized]: () => t('you are not signed in'),
+  // Distinct from unauthorized on purpose: the daemon knows who you are and
+  // said no, so signing in again is not the fix.
+  [WireCodes.forbidden]: () => t('you are not allowed to do that here'),
   [WireCodes.internal]: () => t('terva hit an unexpected error'),
   [WireCodes.busy]: () => t('a turn is already running'),
   [WireCodes.noSession]: () => t('that session is gone'),
