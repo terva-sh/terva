@@ -530,6 +530,20 @@ default**; `--web-stage` mounts it at `/stage/`, alongside the control panel at
   like lazy tool loading). Once on, the daemon advertises the `stage` hello feature,
   which a panel reads to offer an "open in Stage" link. Access is gated by the same
   auth as the panel — Stage inherits it, there is no separate gate.
+- **Under `terva serve`, the answer has two halves and they belong to different
+  people.** The supervisor's own `--web-stage` (or `web_stage` in *its* config)
+  decides whether `/stage/` exists **on the host** — the app is embedded build
+  output, identical for everyone and holding no tenant data, so the supervisor
+  serves it directly rather than proxying it to a child. Each tenant's own
+  `web_stage`, in their own home, decides whether *they* are offered it. The
+  supervisor cannot make that second decision for them: under
+  `--containment systemd` it does not even start the child (systemd does, from a
+  unit the operator installed), and under any containment the tenant's config
+  lives inside the home the isolation exists to keep it out of.
+  So a tenant who turns `web_stage` on where the operator has not gets the `stage`
+  feature **stripped from the hello** the supervisor forwards, rather than an
+  "open in Stage" link that lands on a route the host does not serve. See
+  `tenant.Carrier` and `NarrowHello`.
 - **Status.** Stage is **opt-in while it matures** — progressive disclosure: the
   panel is the power surface, Stage is turned on per deployment once it's good. The
   design of record — session model, the interaction grammar, the content library,

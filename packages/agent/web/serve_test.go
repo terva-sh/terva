@@ -508,6 +508,9 @@ func (f *fakeWS) SwipeMessage(ctx context.Context, sess string, epoch uint64, in
 func (f *fakeWS) RetryTurn(ctx context.Context, sess string, p ctrlproto.TurnRetryParams) error {
 	return nil
 }
+func (f *fakeWS) ResumeTurn(ctx context.Context, sess string, p ctrlproto.TurnResumeParams) error {
+	return nil
+}
 func (f *fakeWS) ForkSession(ctx context.Context, sess string, fromIndex int) (ctrlproto.SessionInfo, error) {
 	return ctrlproto.SessionInfo{ID: "fork-of-" + sess}, nil
 }
@@ -565,6 +568,9 @@ func (f *fakeWS) Reveal(ctx context.Context, sess string, ordinal int) (ctrlprot
 func (f *fakeWS) Surfaces(ctx context.Context, sess string) ([]ctrlproto.SurfaceMeta, error) {
 	return nil, nil
 }
+func (f *fakeWS) ToolDisplays(ctx context.Context, sess string) (map[string]ctrlproto.ToolDisplay, error) {
+	return nil, nil
+}
 func (f *fakeWS) Surface(ctx context.Context, sess, id string) (ctrlproto.Surface, error) {
 	return ctrlproto.Surface{}, nil
 }
@@ -590,6 +596,9 @@ func (f *fakeWS) SetSessionReasoning(ctx context.Context, sess, level string) er
 	return nil
 }
 func (f *fakeWS) SetFavoriteModel(ctx context.Context, provider, model string, on bool) error {
+	return nil
+}
+func (f *fakeWS) SetModelHidden(ctx context.Context, provider, model string, on bool) error {
 	return nil
 }
 func (f *fakeWS) SetDefaultModel(ctx context.Context, provider, model string, scope ctrlproto.DefaultScope) error {

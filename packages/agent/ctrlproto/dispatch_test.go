@@ -196,13 +196,31 @@ func (r *recorder) DiscardDraft(_ context.Context, sess string) error {
 	r.note("DiscardDraft", sess, nil)
 	return nil
 }
+
+// --- SessionStateController ---
+func (r *recorder) SessionState(_ context.Context, sess string) (SessionStateResult, error) {
+	r.note("SessionState", sess, nil)
+	return SessionStateResult{}, nil
+}
+func (r *recorder) SetComposerDraft(_ context.Context, sess string, p ComposerDraft) error {
+	r.note("SetComposerDraft", sess, p)
+	return nil
+}
 func (r *recorder) NoteSet(_ context.Context, sess string, p NoteSetParams) error {
 	r.note("NoteSet", sess, p)
+	return nil
+}
+func (r *recorder) ShellResult(_ context.Context, sess string, p ShellResultParams) error {
+	r.note("ShellResult", sess, p)
 	return nil
 }
 func (r *recorder) SuggestReply(_ context.Context, sess string, p SuggestParams) (SuggestResult, error) {
 	r.note("SuggestReply", sess, p)
 	return SuggestResult{}, nil
+}
+func (r *recorder) SuggestNextStep(_ context.Context, sess string, p NextStepParams) (NextStepResult, error) {
+	r.note("SuggestNextStep", sess, p)
+	return NextStepResult{}, nil
 }
 func (r *recorder) UserBind(_ context.Context, sess string, p UserBindParams) error {
 	r.note("UserBind", sess, p)
@@ -253,6 +271,16 @@ func (r *recorder) WorkflowRun(_ context.Context, p WorkflowGetParams) (Workflow
 	return WorkflowRunView{}, nil
 }
 
+// --- SharedFilesController ---
+func (r *recorder) SharedFiles(_ context.Context, sess string) ([]SharedFileEntry, error) {
+	r.note("SharedFiles", sess, nil)
+	return nil, nil
+}
+func (r *recorder) SharedFileFetch(_ context.Context, sess string, p SharedFileRef) (SharedFileContent, error) {
+	r.note("SharedFileFetch", sess, p)
+	return SharedFileContent{}, nil
+}
+
 // --- DoctorController ---
 func (r *recorder) CardsDoctor(_ context.Context, p DoctorParams) (DoctorResult, error) {
 	r.note("CardsDoctor", "", p)
@@ -288,6 +316,24 @@ func (r *recorder) ModelParamsReset(_ context.Context, p ModelParamsParams) erro
 	r.note("ModelParamsReset", "", p)
 	return nil
 }
+func (r *recorder) ModelAdd(_ context.Context, p ModelAddParams) error {
+	r.note("ModelAdd", "", p)
+	return nil
+}
+
+// --- ModelTiersController ---
+func (r *recorder) ModelTiers(_ context.Context, p ModelTiersParams) (ModelTiersView, error) {
+	r.note("ModelTiers", "", p)
+	return ModelTiersView{}, nil
+}
+func (r *recorder) ModelTiersSet(_ context.Context, p ModelTiersSetParams) error {
+	r.note("ModelTiersSet", "", p)
+	return nil
+}
+func (r *recorder) ModelTiersReset(_ context.Context, p ModelTiersResetParams) error {
+	r.note("ModelTiersReset", "", p)
+	return nil
+}
 
 // --- PersonasController ---
 func (r *recorder) PersonasList(context.Context) (PersonasListResult, error) {
@@ -302,7 +348,7 @@ func (r *recorder) PersonasCreate(_ context.Context, p PersonaWriteParams) (Pers
 	r.note("PersonasCreate", "", p)
 	return PersonaView{}, nil
 }
-func (r *recorder) PersonasEdit(_ context.Context, p PersonaWriteParams) (PersonaView, error) {
+func (r *recorder) PersonasEdit(_ context.Context, p PersonaEditParams) (PersonaView, error) {
 	r.note("PersonasEdit", "", p)
 	return PersonaView{}, nil
 }
@@ -490,6 +536,22 @@ func dispatchCases() []dispatchCase {
 		{MethodModelParams, ModelParamsParams{Provider: "anthropic", Model: "opus"}, "ModelParams", ModelParamsParams{Provider: "anthropic", Model: "opus"}},
 		{MethodModelParamsSet, ModelParamsSetParams{Provider: "openai", Model: "gpt"}, "ModelParamsSet", nil},
 		{MethodModelParamsReset, ModelParamsParams{Provider: "gemini", Model: "flash"}, "ModelParamsReset", ModelParamsParams{Provider: "gemini", Model: "flash"}},
+		// models.add carries the SAME three wire fields as models.params.set, so this
+		// case asserts the bound struct rather than passing nil. A table that bound
+		// the sibling's type would deserialize identically from these bytes and still
+		// record a call, and only the type in args tells the two apart.
+		{MethodModelAdd, ModelAddParams{Provider: "workshop", Model: "invented-local", Values: map[string]string{"contextWindow": "262144"}}, "ModelAdd",
+			ModelAddParams{Provider: "workshop", Model: "invented-local", Values: map[string]string{"contextWindow": "262144"}}},
+
+		// --- tier ladder. The set case fills BOTH optional fields and the reset
+		// case fills the optional rung: a params struct bound from the sibling
+		// verb (all three lead with Provider) would otherwise match on the one
+		// field they share.
+		{MethodModelTiers, ModelTiersParams{Provider: "deepseek"}, "ModelTiers", ModelTiersParams{Provider: "deepseek"}},
+		{MethodModelTiersSet, ModelTiersSetParams{Provider: "kimi", Rung: "strong", Model: "k3", Reasoning: "maximum"}, "ModelTiersSet",
+			ModelTiersSetParams{Provider: "kimi", Rung: "strong", Model: "k3", Reasoning: "maximum"}},
+		{MethodModelTiersReset, ModelTiersResetParams{Provider: "google", Rung: "medium"}, "ModelTiersReset",
+			ModelTiersResetParams{Provider: "google", Rung: "medium"}},
 
 		// The per-session thinking depth. "max" rather than a middle rung on
 		// purpose: it is the one value that differs between the ladder's top two
@@ -537,7 +599,7 @@ func dispatchCases() []dispatchCase {
 		{MethodPersonasList, nil, "PersonasList", nil},
 		{MethodPersonasGet, PersonaGetParams{Name: "kertoja"}, "PersonasGet", PersonaGetParams{Name: "kertoja"}},
 		{MethodPersonasCreate, PersonaWriteParams{Name: "made"}, "PersonasCreate", PersonaWriteParams{Name: "made"}},
-		{MethodPersonasEdit, PersonaWriteParams{Name: "changed"}, "PersonasEdit", PersonaWriteParams{Name: "changed"}},
+		{MethodPersonasEdit, PersonaEditParams{Ref: "changed"}, "PersonasEdit", PersonaEditParams{Ref: "changed"}},
 		// The incident itself: delete must NOT arrive as an empty-bodied edit.
 		{MethodPersonasDelete, PersonaDeleteParams{Name: "removed"}, "PersonasDelete", PersonaDeleteParams{Name: "removed"}},
 
@@ -563,13 +625,13 @@ func dispatchCases() []dispatchCase {
 		{MethodWorldLoreDelete, WorldLoreDeleteParams{Name: "lore-out"}, "WorldLoreDelete", WorldLoreDeleteParams{Name: "lore-out"}},
 		{MethodWorldSet, WorldSetParams{Coordination: "shared"}, "WorldSet", WorldSetParams{Coordination: "shared"}},
 		{MethodWorldsList, nil, "WorldsList", nil},
-		{MethodWorldSave, WorldSaveParams{Name: "w-saved"}, "WorldSave", WorldSaveParams{Name: "w-saved"}},
-		{MethodWorldUpdate, WorldUpdateParams{ID: "w-upd", Name: "renamed"}, "WorldUpdate", WorldUpdateParams{ID: "w-upd", Name: "renamed"}},
-		{MethodWorldSetCharacterModel, WorldSetCharacterModelParams{ID: "w-cm", Character: "Elira", Model: "gpt-5"}, "WorldSetCharacterModel", WorldSetCharacterModelParams{ID: "w-cm", Character: "Elira", Model: "gpt-5"}},
-		{MethodWorldSetModel, WorldSetModelParams{ID: "w-dm", Provider: "openai", Model: "gpt-5"}, "WorldSetModel", WorldSetModelParams{ID: "w-dm", Provider: "openai", Model: "gpt-5"}},
+		{MethodWorldsSave, WorldSaveParams{Name: "w-saved"}, "WorldSave", WorldSaveParams{Name: "w-saved"}},
+		{MethodWorldsUpdate, WorldUpdateParams{ID: "w-upd", Name: "renamed"}, "WorldUpdate", WorldUpdateParams{ID: "w-upd", Name: "renamed"}},
+		{MethodWorldsSetCharacterModel, WorldSetCharacterModelParams{ID: "w-cm", Character: "Elira", Model: "gpt-5"}, "WorldSetCharacterModel", WorldSetCharacterModelParams{ID: "w-cm", Character: "Elira", Model: "gpt-5"}},
+		{MethodWorldsSetModel, WorldSetModelParams{ID: "w-dm", Provider: "openai", Model: "gpt-5"}, "WorldSetModel", WorldSetModelParams{ID: "w-dm", Provider: "openai", Model: "gpt-5"}},
 		{MethodWorldsExport, WorldExportParams{ID: "w-exp"}, "WorldsExport", WorldExportParams{ID: "w-exp"}},
 		{MethodWorldsImport, WorldImportParams{Path: "/w-imp"}, "WorldsImport", nil},
-		{MethodWorldDelete, WorldDeleteParams{ID: "w-del"}, "WorldDelete", WorldDeleteParams{ID: "w-del"}},
+		{MethodWorldsDelete, WorldDeleteParams{ID: "w-del"}, "WorldDelete", WorldDeleteParams{ID: "w-del"}},
 		{MethodWorldsLorePut, WorldsLorePutParams{ID: "w-lp", Replace: "saved-lore-in"}, "WorldsLorePut", WorldsLorePutParams{ID: "w-lp", Replace: "saved-lore-in"}},
 		{MethodWorldsLoreDelete, WorldsLoreDeleteParams{ID: "w-ld", Name: "saved-lore-out"}, "WorldsLoreDelete", WorldsLoreDeleteParams{ID: "w-ld", Name: "saved-lore-out"}},
 		{MethodWorldsSet, WorldsSetParams{ID: "w-set", Coordination: "focus:Elira"}, "WorldsSet", WorldsSetParams{ID: "w-set", Coordination: "focus:Elira"}},
@@ -612,8 +674,24 @@ func dispatchCases() []dispatchCase {
 		{MethodWorkflowsList, nil, "WorkflowRuns", nil},
 		{MethodWorkflowsGet, WorkflowGetParams{ID: "wf_abc123"}, "WorkflowRun", WorkflowGetParams{ID: "wf_abc123"}},
 
+		// --- shared files: the same two-verbs-one-controller shape, and both are
+		// session-scoped — a share belongs to the conversation that produced it,
+		// so a frame's sess reaching the wrong one would hand a user another
+		// session's deliverables. The sessionScoped check below covers that. ---
+		{MethodSharedList, nil, "SharedFiles", nil},
+		{MethodSharedFetch, SharedFileRef{ID: "shr_abc123"}, "SharedFileFetch", SharedFileRef{ID: "shr_abc123"}},
+
 		// --- draft (optional, takes no params — it must still reach the right arm) ---
 		{MethodSessionDiscardDraft, nil, "DiscardDraft", nil},
+
+		// --- session state: a whole-document read, a tenant-scoped write ---
+		{MethodSessionState, nil, "SessionState", nil},
+		{
+			MethodSessionSetComposer,
+			ComposerDraft{Text: "the half-typed line", Source: ComposerSourceSuggestion},
+			"SetComposerDraft",
+			ComposerDraft{Text: "the half-typed line", Source: ComposerSourceSuggestion},
+		},
 
 		// --- export (optional; session-scoped, so the frame's sess must reach it) ---
 		{MethodSessionsExport, SessionExportParams{Format: "markdown"}, "SessionsExport", SessionExportParams{Format: "markdown"}},
@@ -621,8 +699,13 @@ func dispatchCases() []dispatchCase {
 		// --- remaining optional controllers ---
 		{MethodCastSpeak, CastSpeakParams{Actor: "speaker"}, "CastSpeak", CastSpeakParams{Actor: "speaker"}},
 		{MethodNoteSet, NoteSetParams{Text: "a note"}, "NoteSet", NoteSetParams{Text: "a note"}},
+		{MethodShellResult, ShellResultParams{Command: "git status", Output: "3 files changed"}, "ShellResult", ShellResultParams{Command: "git status", Output: "3 files changed"}},
 		{MethodUserBind, UserBindParams{Name: "bound"}, "UserBind", UserBindParams{Name: "bound"}},
 		{MethodSuggestReply, SuggestParams{}, "SuggestReply", nil},
+		// on_demand decides what the daemon tells the model about who asked, so a
+		// dropped param would silently downgrade every explicit /nextstep into an
+		// idle one — bound args asserted, not just the arm reached.
+		{MethodSuggestNextStep, NextStepParams{OnDemand: true}, "SuggestNextStep", NextStepParams{OnDemand: true}},
 		{MethodCardsDoctor, DoctorParams{ID: "checked"}, "CardsDoctor", DoctorParams{ID: "checked"}},
 		{MethodSessionsDoctor, SessionDoctorParams{}, "SessionsDoctor", nil},
 		{MethodWorldsDoctor, WorldDoctorParams{ID: "w-doc", Steer: "give her a rival"}, "WorldsDoctor", WorldDoctorParams{ID: "w-doc", Steer: "give her a rival"}},
@@ -713,7 +796,8 @@ func TestDispatchForwardsTheFrameSession(t *testing.T) {
 		"PostLine": true, "DirectTurn": true, "AdvanceTurn": true, "NoteSet": true,
 		"UserBind": true, "WorldLorePut": true, "WorldLoreDelete": true, "WorldSet": true,
 		"WorldSave": true, "PruneVariants": true, "DropVariant": true, "SuggestReply": true,
-		"SessionsDoctor": true, "SessionsNextScene": true, "ReplayState": true,
+		"SuggestNextStep": true,
+		"SessionsDoctor":  true, "SessionsNextScene": true, "ReplayState": true,
 		"SessionsExport": true,
 
 		// The mandatory surface's session-scoped verbs. Everything that mutates or
@@ -731,6 +815,7 @@ func TestDispatchForwardsTheFrameSession(t *testing.T) {
 		"Context": true, "Node": true, "History": true, "Reveal": true,
 		"Surfaces": true, "Surface": true, "SurfaceAction": true,
 		"Models": true, "SwitchModel": true, "ReplayControl": true,
+		"SharedFiles": true, "SharedFileFetch": true,
 	}
 	for _, tc := range dispatchCases() {
 		if !sessionScoped[tc.want] {
@@ -776,6 +861,16 @@ var notCovered = map[Method]string{
 	// method and cannot hold both rows. TestTurnSwipeRoutesByIndexPresence drives
 	// both branches (dispatch_mandatory_test.go).
 	MethodTurnSwipe: "routes to two methods by payload — see TestTurnSwipeRoutesByIndexPresence",
+
+	// The tenants group is not on this carrier AT ALL, and that is the security
+	// property rather than an omission — a WorkspaceService that served it would
+	// put the admin surface inside the thing being administered. The supervisor
+	// answers these on its own connection (tenant.ServeAdmin), and
+	// TestTenantsVerbsAreNotOnAWorkspaceCarrier asserts the absence from this
+	// side. See ctrlproto/tenants.go and docs/proposals/daemon-access-auth.md D8.
+	MethodTenantsList:    "served by tenant.ServeAdmin, never by a WorkspaceService",
+	MethodTenantsSuspend: "served by tenant.ServeAdmin, never by a WorkspaceService",
+	MethodTenantsResume:  "served by tenant.ServeAdmin, never by a WorkspaceService",
 }
 
 // methodValues parses methods.go for `MethodX Method = "verb"`, returning

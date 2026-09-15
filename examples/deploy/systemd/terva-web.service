@@ -40,3 +40,10 @@ WorkingDirectory=%h/workspace
 # do. Restart it if it ever crashes.
 Restart=on-failure
 RestartSec=5
+
+# If a client's connection hangs then RESETS instead of being refused, the socket
+# is up but this service is failing to start — the socket unit listens whether or
+# not the daemon does, so connections land in a backlog nobody serves. `systemctl
+# status` will only say "Failed with result 'exit-code'"; terva's own explanation
+# (a bad address, a missing credential, two ListenStream= lines in the .socket) is
+# in `journalctl --user -u terva-web`, several screens up past the restart loop.

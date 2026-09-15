@@ -10,11 +10,11 @@ import (
 	"testing"
 )
 
-// methodValuesByName maps each `MethodX Method = "x.y"` constant NAME to its
+// methodConstsByName maps each `MethodX Method = "x.y"` constant NAME to its
 // wire VALUE. The capability tables are keyed by value while the census
 // enumerates names, and bridging them by hand is exactly the drift this file
 // exists to catch.
-func methodValuesByName(t *testing.T) map[string]Method {
+func methodConstsByName(t *testing.T) map[string]Method {
 	t.Helper()
 	f, err := parser.ParseFile(token.NewFileSet(), "methods.go", nil, 0)
 	if err != nil {
@@ -73,7 +73,7 @@ func TestEveryMethodIsClassified(t *testing.T) {
 
 	// The tables are keyed by VALUE (Method), the constants are NAMES. Bridge
 	// them through the same source parse the group census uses.
-	byName := methodValuesByName(t)
+	byName := methodConstsByName(t)
 
 	var unclassified, doubled []string
 	for name := range consts {

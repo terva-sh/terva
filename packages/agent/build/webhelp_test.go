@@ -70,3 +70,63 @@ func TestWebHelpDocumentsEveryWebFlag(t *testing.T) {
 		}
 	}
 }
+
+// captureServeHelp is captureWebHelp for the supervisor screen.
+func captureServeHelp(t *testing.T) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	done := make(chan string, 1)
+	go func() {
+		var b strings.Builder
+		_, _ = io.Copy(&b, r)
+		done <- b.String()
+	}()
+	PrintServeHelp()
+	_ = w.Close()
+	os.Stderr = old
+	return <-done
+}
+
+// TestServeHelpDocumentsEverySupervisorFlag is the web census, one screen over.
+//
+// It exists because the --web-* census would NOT have caught --tenant-root: the
+// gap it guards is "a flag the parser accepts that no help screen mentions",
+// and that gap does not care what the flag is called. It has already had to
+// grow once, when --containment arrived under a third prefix — so the pattern
+// below matches every prefix the supervisor screen owns, and adding a fourth
+// means adding it here too.
+func TestServeHelpDocumentsEverySupervisorFlag(t *testing.T) {
+	help := captureServeHelp(t)
+
+	src, err := os.ReadFile("args.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	caseLine := regexp.MustCompile(`(?m)^\s*case .*`)
+	tenantFlag := regexp.MustCompile(`"(--(?:tenant|containment)[a-z-]*)"`)
+	seen := map[string]bool{}
+	found := 0
+	for _, line := range caseLine.FindAllString(string(src), -1) {
+		for _, m := range tenantFlag.FindAllStringSubmatch(line, -1) {
+			flag := m[1]
+			if seen[flag] {
+				continue
+			}
+			seen[flag] = true
+			found++
+			if !strings.Contains(help, flag) {
+				t.Errorf("terva serve --help does not document %s (accepted by the arg parser) — add it to PrintServeHelp", flag)
+			}
+		}
+	}
+	// A census that scanned nothing would pass in silence, which is how a
+	// renamed flag prefix turns this guard off without anyone noticing.
+	if found == 0 {
+		t.Fatal("the scan found no supervisor flags in args.go — this census is no longer looking at anything")
+	}
+}

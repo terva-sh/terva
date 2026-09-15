@@ -16,6 +16,7 @@ import (
 	"terva.sh/terva/packages/agent/hooks"
 	"terva.sh/terva/packages/agent/mcp"
 	"terva.sh/terva/packages/envcompat"
+	"terva.sh/terva/packages/filelock"
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider/auth"
 )
@@ -28,21 +29,52 @@ type Config struct {
 	// ReasoningSummary persists a human-readable summary of the model's
 	// reasoning into the session record, so an unattended run can be reviewed
 	// for WHY it acted and not only what it did. "auto" | "concise" |
-	// "detailed"; empty (the default) is OFF, which keeps requests and session
-	// records byte-identical to a build without this setting.
+	// "detailed"; the empty string is OFF.
 	//
-	// Off by default because it puts the model's reasoning on disk: a summary
-	// of a turn spent reading mail can quote that mail. Tool results in the
-	// same file already carry comparable content, so this is not a new class
-	// of exposure, but it does make the file more quotable — worth a decision
-	// rather than a default. Only the openai-codex path implements it; other
-	// providers ignore it. See docs/models.md § Persisting reasoning summaries.
-	ReasoningSummary string   `json:"reasoning_summary,omitempty"`
-	Temperature      *float32 `json:"temperature,omitempty"`
+	// 🪤 A POINTER, and that is load-bearing. Off is encoded as "", so with a
+	// plain string a default of "auto" would make off unselectable: the value
+	// the operator picks to turn it off is the value that means "unset". nil is
+	// "never chose" and takes DefaultReasoningSummary; a non-nil "" is a
+	// deliberate off and is honoured. Read it through ReasoningSummaryMode.
+	//
+	// 🪤 It was once documented as "only the openai-codex path implements it;
+	// other providers ignore it". That was never true of persistence. The
+	// REQUEST flag is Codex-only, but this setting also gates what survives to
+	// disk for every provider that sends thinking unbidden — Anthropic, Gemini,
+	// and the chat backends. For Anthropic it decides whether the block is kept
+	// at all, because a thinking block is sealed by a signature over its own
+	// text and so cannot be blanked, only dropped (dropUnrecordableThinking).
+	//
+	// It puts the model's reasoning on disk: a summary of a turn spent reading
+	// mail can quote that mail. Tool results in the same file already carry
+	// comparable content, so this is not a new class of exposure. It defaults
+	// ON because the thinking displays are worth little when the text they read
+	// is discarded at the end of every turn.
+	// See docs/models.md § Persisting reasoning summaries.
+	ReasoningSummary *string `json:"reasoning_summary,omitempty"`
+	// ShowReasoning displays the model's reasoning summary on its own line
+	// while the turn runs, and records NOTHING: the text is blanked before the
+	// message is persisted, so the session file is byte-identical to a run with
+	// this off. That is the whole reason it is separate from ReasoningSummary
+	// above — seeing the work and keeping the work are different decisions with
+	// different costs, and only one of them is permanent.
+	//
+	// Off by default, because switching it on asks the provider for a summary
+	// on every request where it was not asked before. Only the openai-codex and
+	// google paths produce one today; other providers ignore it.
+	ShowReasoning bool     `json:"show_reasoning,omitempty"`
+	Temperature   *float32 `json:"temperature,omitempty"`
 	// FavoriteModels are "provider/id" keys pinned to the top of the /model
 	// picker (and surfaced as a cross-provider ★ Favorites view). Order is
 	// not significant; membership is.
 	FavoriteModels []string `json:"favorite_models,omitempty"`
+	// HiddenModels are ordered visibility rules that keep models out of the
+	// pickers — "provider/id" keys, "*" wildcards, and a "!" prefix to un-hide.
+	// Unlike FavoriteModels, ORDER IS SIGNIFICANT: last match wins, so a broad
+	// "openrouter/*" can be followed by the handful of rescues that survive it.
+	// See modelvis.go for the grammar and for why hiding never touches the
+	// catalogue itself.
+	HiddenModels []string `json:"hidden_models,omitempty"`
 
 	// AutoTitle, when true, has the web workspace generate a short session
 	// title from the first exchange via a small one-shot model call, instead
@@ -52,13 +84,24 @@ type Config struct {
 	AutoTitle      *bool  `json:"auto_title,omitempty"`
 	AutoTitleModel string `json:"auto_title_model,omitempty"`
 
-	// Endpoints are user-defined OpenAI-compatible backends, each registered
-	// as its own provider (the map key is the provider id) with its own
-	// /v1/models discovery and row in the /model picker — the way to use
-	// several local/remote OpenAI-compatible servers at once instead of the
-	// single shared `openai-compatible` slot. User layer only: a project's
-	// .terva/config.json must never redirect the agent to an arbitrary
-	// endpoint. Keys are NEVER stored here — use APIKeyEnv or auth.json.
+	// Providers holds per-provider operator settings, keyed by terva provider
+	// id ("openai-codex"). It TUNES a provider terva already knows, where
+	// Endpoints below REGISTERS one that it does not.
+	//
+	// User layer only, and deliberately absent from ProjectConfig: the one
+	// setting here changes how terva identifies itself to a third party, and a
+	// cloned repository must not make that choice for the operator.
+	Providers map[string]ProviderSettings `json:"providers,omitempty"`
+
+	// Endpoints are user-defined backends, each registered as its own provider
+	// (the map key is the provider id) with its own /v1/models discovery and
+	// row in the /model picker — the way to use several local/remote servers at
+	// once instead of the single shared `openai-compatible` /
+	// `anthropic-compatible` slots. Each entry's `api` field picks the wire it
+	// speaks; absent means OpenAI Chat Completions. User layer only: a
+	// project's .terva/config.json must never redirect the agent to an
+	// arbitrary endpoint. Keys are NEVER stored here — use APIKeyEnv or
+	// auth.json.
 	Endpoints map[string]EndpointConfig `json:"endpoints,omitempty"`
 	Theme     string                    `json:"theme"`
 
@@ -170,15 +213,46 @@ type Config struct {
 	// layer only, for the same reason as SwarmTiers.
 	Raati RaatiConfig `json:"raati,omitzero"`
 
+	// Classifier configures the screening classifier that answers tool-call
+	// approvals which would otherwise prompt (see core.ClassifierMode and
+	// docs/permissions.md). Off unless the operator turns it on.
+	//
+	// User layer ONLY, and here that is a security property rather than a
+	// convention: `approve` mode lets a model permit tool calls on the
+	// operator's behalf, so a cloned repository being able to switch it on
+	// would be a remote-code-execution foothold dressed as a preference.
+	// ResolveConfig is an allowlist — it copies the user config and then
+	// overrides only named fields — so this stays user-only by construction
+	// as long as nobody adds it there. TestProjectConfigCannotEnableClassifier
+	// holds that.
+	Classifier ClassifierConfig `json:"classifier,omitzero"`
+
 	// SwarmWorktrees opts swarm sub-agents into per-agent git worktrees
 	// instead of sharing the host's working tree. Off by default;
 	// nil/missing means disabled. When on, each spawned agent leases an
 	// isolated worktree from the built-in worktree engine
-	// (packages/agent/worktree; released — not removed — on completion so
-	// the branch survives for review/merge). Needs the host cwd to be a
+	// (packages/agent/worktree). On completion the worktree is reclaimed
+	// when it holds nothing, and kept — claim released, not removed — when
+	// it holds uncommitted changes or commits that exist nowhere else, so
+	// anything unique survives for review/merge. Needs the host cwd to be a
 	// git repository; outside one, spawning a sub-agent fails loudly. The
 	// --swarm-worktrees flag overrides this for a single run.
 	SwarmWorktrees *bool `json:"swarm_worktrees,omitempty"`
+
+	// SwarmRetentionDays is how long a finished swarm agent's record stays in
+	// the live tree before the retention sweep archives it. nil/missing means
+	// DefaultSwarmRetentionDays. Zero or negative turns the sweep off.
+	//
+	// The sweep only ever archives, and only an agent in a terminal state. It
+	// never removes a record and never touches a running or pending agent,
+	// whatever its quiet time. swarm.RetentionFloor is a hard lower bound that
+	// this key cannot lower, so a small value cannot reach an agent that
+	// finished minutes ago.
+	//
+	// Days rather than a duration string because the value a person wants here
+	// is "about a week" or "about a month", and a unit they cannot mistype is
+	// worth more than a precision nobody uses.
+	SwarmRetentionDays *int `json:"swarm_retention_days,omitempty"`
 
 	// RecursiveFileSuggest controls the @-mention file picker. nil/missing
 	// or true fuzzy-searches the whole project tree below the working
@@ -210,6 +284,34 @@ type Config struct {
 	// for a single run. User layer only.
 	Lore *bool `json:"lore,omitempty"`
 
+	// Tickets enables the ticket_* tools wherever a .tickets store
+	// governs the session cwd, and the ticket guidance addendum with them.
+	// nil/missing means the default, which is on; false drops both for this
+	// user. The --no-ticket flag does the same for a single run, and a
+	// project may also set false (restrict-only; see ProjectConfig.Tickets).
+	// The `terva ticket` command is unaffected by all three.
+	Tickets *bool `json:"tickets,omitempty"`
+
+	// TicketStores names ticket stores that live outside the workspace, each
+	// entry a short name and a filesystem path. The workspace store needs no
+	// entry: it is discovered from the session cwd and always available under
+	// the name "workspace". ticket_store switches the active store for a
+	// session, and the other ticket tools follow the most recent selection.
+	//
+	// User layer only, and here that is a security property rather than a
+	// convention. An entry names a directory outside the jail that the ticket
+	// tools may write, so a cloned repository able to set it would choose
+	// where an agent writes. ProjectConfig carries no counterpart key and
+	// ResolveConfig names no override, so this stays user-only by
+	// construction as long as nobody adds it to either.
+	// TestTicketStoresIsUserLayerOnly holds that.
+	//
+	// Empty, the default, leaves the ticket tools exactly as they were: they
+	// discover the workspace store and reach nothing else. A write to a store
+	// named here stays workspace-mutation, because the act is unchanged and
+	// only its destination differs. See docs/permissions.md.
+	TicketStores map[string]string `json:"ticket_stores,omitempty"`
+
 	// UserName is what a character card's {{user}} macro resolves to — the name
 	// the user would like the character to address them by in chat/play. It is a
 	// GLOBAL user-identity preference: it resolves from the user's global config
@@ -219,6 +321,23 @@ type Config struct {
 	// trusted project may override it via ProjectConfig.UserName; the ultimate
 	// fallback is the literal "User".
 	UserName string `json:"user_name,omitempty"`
+
+	// TicketActor is the actor id ticket_init records in a NEW .tickets store's
+	// config.yml, so the choice is made once per machine and reused in the next
+	// repository. The literal TicketActorNone means the user chose to leave the
+	// store's actor list empty; empty/missing means nobody has been asked yet,
+	// and ticket_init asks.
+	//
+	// A user-identity preference like UserName, and global for the same reason:
+	// it resolves from and writes to the user's global config even under
+	// project-scoping (GlobalUserPrefs, SetGlobalTicketActor). It carries no
+	// capability, and the project layer never sets it, because a cloned
+	// repository must not choose who its writes are attributed to.
+	//
+	// The value matters more than it looks. git-ticket falls back to the first
+	// actor in config.yml when a command names none, so whoever is seeded here
+	// signs every later flag-less write in that store.
+	TicketActor string `json:"ticket_actor,omitempty"`
 
 	// LastChangelogShown is the version whose release-notes
 	// dialog the user has already seen. When the running binary's
@@ -233,6 +352,24 @@ type Config struct {
 	// relative (resolved against the config file's directory) or
 	// absolute. See ResolveConfig / readStartupContextFiles.
 	ContextFiles []string `json:"context_files,omitempty"`
+
+	// AlwaysOnSkills names the skills whose BODY terva pins into the
+	// system prompt at session build, instead of only their description
+	// joining the manifest. It is user-scope only: a project's
+	// .terva/config.json cannot set it, because a pinned body enters the
+	// prompt with no model decision in front of it, and a cloned repo
+	// controls the project layer.
+	//
+	// The pointer carries the meaning, so do not simplify it to []string.
+	// nil means the operator has no opinion, and the build layer falls back
+	// to skills.DefaultAlwaysOn. An explicit [] means pin nothing, which is
+	// how an operator turns the shipped default off. A plain slice cannot
+	// tell those apart, and the refactor would silently switch the default
+	// back on for everyone who opted out.
+	//
+	// A pinned body costs roughly 1400 tokens in every request of every
+	// session. See docs/proposals/always-on-skills.md.
+	AlwaysOnSkills *[]string `json:"always_on_skills,omitempty"`
 
 	// DisableContextExtensions lists extensions whose context
 	// contributions (register_context + context cards) the host ignores,
@@ -301,6 +438,23 @@ type Config struct {
 	// effect on the next launch (the /stage/ route is mounted at startup).
 	WebStage bool `json:"web_stage,omitempty"`
 
+	// NextStepSuggestions offers a suggested next line in the composer after the
+	// agent replies and the user has been quiet for a moment
+	// (docs/proposals/idle-suggestions.md). Off by default, and the default is
+	// the point rather than caution: it spends one extra completion per reply
+	// the user is idle after, so a user who never asked for it never pays for
+	// it.
+	//
+	// It governs the AUTOMATIC offer only. /nextstep asks for one whether this
+	// is on or off, which follows from what the default is for: the reason to
+	// keep this off is that terva should not spend money unbidden, and a typed
+	// command is not unbidden.
+	//
+	// Client-side — the trigger, the composer and the offer are all in the
+	// frontend — so it is a plain config bool rather than an engine feature,
+	// which would imply it reshapes the agent loop.
+	NextStepSuggestions bool `json:"next_step_suggestions,omitempty"`
+
 	// LazyToolActive lists capability groups to advertise from the start when
 	// LazyTools is on (beyond the always-on core group), by extension name or
 	// "mcp:<server>". Everything else stays hidden until the model activates it.
@@ -331,6 +485,27 @@ type Config struct {
 	// asks at most once and never on a non-TTY). User layer only. See
 	// docs/plans/extension-packs.md.
 	DisableCorePackOffer bool `json:"disable_core_pack_offer,omitempty"`
+
+	// PackRegistries names extension-pack registries that the pack fetcher
+	// may reach even when they resolve to a private address. Naming a
+	// registry here IS the trust decision. `terva ext pack install <url>`
+	// still supplies the path beneath it, the same shape as an MCP server
+	// whose config names a host and whose transport then requests paths
+	// under it. Only the host of each entry is used, because the host is
+	// the part of a URL that decides what the guard may dial.
+	//
+	// User layer only, and here that is a security property rather than a
+	// convention: an entry exempts its host from the egress guard's address
+	// policy, so a cloned repository able to set it would hand a project the
+	// private network. ProjectConfig carries no counterpart key and
+	// ResolveConfig names no override, so this stays user-only by
+	// construction as long as nobody adds it to either.
+	// TestPackRegistriesIsUserLayerOnly holds that.
+	//
+	// Empty, the default, leaves the pack fetcher exactly as it was: every
+	// loopback, private, link-local and metadata target refused. See
+	// docs/extensions.md.
+	PackRegistries []string `json:"pack_registries,omitempty"`
 
 	// Approval is the default approval mode (plan / ask / auto-edit /
 	// yolo) when no --approval / --no-yolo flag is given. Empty means
@@ -373,14 +548,98 @@ type Config struct {
 	Secrets *SecretsConfig `json:"secrets,omitempty"`
 }
 
-// EndpointConfig defines one user-supplied OpenAI-compatible backend. The
-// provider id is the map key in Config.Endpoints. The API key is NEVER stored
-// here: leave it unset for keyless local servers, set APIKeyEnv to read it from
-// the environment, or store it in auth.json under the endpoint name.
+// ProviderSettings are the operator's settings for one provider (the provider
+// id is the map key in Config.Providers).
+type ProviderSettings struct {
+	// ClientIdentity selects the name terva presents on this provider's wire.
+	// Empty is the default and means terva identifies itself. "native" means
+	// terva presents that provider's own first-party CLI identity instead.
+	//
+	// Only openai-codex implements this today. There "native" sends
+	// `originator: codex_cli_rs` with a user-agent carrying a probed Codex CLI
+	// version, in place of terva's own two values.
+	//
+	// Know two things before switching it on. It is impersonation: a third
+	// party is told that a different client is calling. And it has NO measured
+	// benefit. terva's own header decomposition scored originator and
+	// user-agent at 1/4 each against a 0/4 baseline, while the session-id
+	// header terva already sends carried the whole effect. The setting exists
+	// because an operator asked to be able to try it against a cache cliff
+	// that costs real money, and not because it is known to work.
+	//
+	// A keyword and not a literal header value, so this cannot become a
+	// free-form header injection point. An unrecognized word keeps the
+	// default.
+	ClientIdentity string `json:"client_identity,omitempty"`
+
+	// ActivationContinuation scopes the engine feature of the same name to this
+	// provider. Empty is the default and inherits the global
+	// `engine_features.activation_continuation`. "on" and "off" override it for
+	// sessions running on this provider.
+	//
+	// What it buys, stated exactly: activating a tool group invalidates the
+	// prompt prefix from the tools rung down, so the next dispatch re-prefills
+	// at full price. Continuation makes that dispatch happen immediately,
+	// because the gate fires at the model's natural stop. Turning it off defers
+	// the re-prefill to the user's next message, and a user who redirects
+	// instead of continuing never pays it on that prefix.
+	//
+	// That is a bounded saving of at most one dispatch per activation. It is
+	// NOT a remedy for the sustained cache collapse, and it must not be sold as
+	// one. The corpus sweep on TKT-01M29HFZEX (n=56) found activate_tools is a
+	// marker and not the cause: 31 of 49 cliff opens have no activation to
+	// account for them.
+	//
+	// A keyword and not a bool, so an unset provider is distinguishable from one
+	// set to false. An unrecognized word inherits the global.
+	ActivationContinuation string `json:"activation_continuation,omitempty"`
+}
+
+// EndpointConfig defines one user-supplied backend. The provider id is the map
+// key in Config.Endpoints. The API key is NEVER stored here: leave it unset for
+// keyless local servers, set APIKeyEnv to read it from the environment, or
+// store it in auth.json under the endpoint name.
 type EndpointConfig struct {
 	BaseURL       string `json:"baseUrl"`                 // required, e.g. http://box:8000/v1
 	APIKeyEnv     string `json:"apiKeyEnv,omitempty"`     // env var holding the key (optional)
 	ContextWindow int    `json:"contextWindow,omitempty"` // default ctx for models lacking a hint
+
+	// API names the wire this endpoint speaks: "openai" (Chat Completions) or
+	// "anthropic" (Messages). Empty means "openai".
+	//
+	// The default is load-bearing, not laziness. Every endpoint written before
+	// this field existed speaks Chat Completions, and they are the operator's
+	// own config file — so the absent value has to keep meaning exactly what it
+	// meant when they wrote it. A required field here would have broken every
+	// existing endpoint on upgrade.
+	API string `json:"api,omitempty"`
+
+	// The Anthropic wire settings, all ignored unless API is "anthropic".
+	//
+	// Each is here because a real class of Messages-compatible server fails
+	// every turn without it, with an error that names none of them: a gateway
+	// pinned to a different anthropic-version, one that needs a beta opted into,
+	// one that wants the key as a Bearer token rather than x-api-key, and one
+	// that validates the request body strictly and rejects cache_control.
+	AnthropicVersion string `json:"anthropicVersion,omitempty"`
+	AnthropicBeta    string `json:"anthropicBeta,omitempty"`
+	AuthStyle        string `json:"authStyle,omitempty"` // "" | "x-api-key" | "bearer"
+	DisableCaching   bool   `json:"disableCaching,omitempty"`
+}
+
+// EndpointAPIAnthropic is the EndpointConfig.API value selecting the Anthropic
+// Messages wire. Anything else — including the empty string every pre-existing
+// endpoint carries — is the OpenAI Chat Completions wire.
+const EndpointAPIAnthropic = "anthropic"
+
+// IsAnthropic reports whether this endpoint speaks the Anthropic Messages API.
+//
+// The ONE place the discriminator is read. Registration, discovery, the login
+// probe, and resolve all ask this rather than comparing the string themselves —
+// four sites that would each have had to decide for themselves what an empty
+// value, or "Anthropic", or "anthropic-messages" means.
+func (e EndpointConfig) IsAnthropic() bool {
+	return strings.EqualFold(strings.TrimSpace(e.API), EndpointAPIAnthropic)
 }
 
 // TierConfig pins the weak/medium/strong swarm sub-agent models for one
@@ -393,6 +652,35 @@ type TierConfig struct {
 	Weak   TierRung `json:"weak,omitzero"`
 	Medium TierRung `json:"medium,omitzero"`
 	Strong TierRung `json:"strong,omitzero"`
+	// Cheap is the COST tier, and it sits outside the weak→strong ordering
+	// above rather than below it. Those three say how capable a sub-agent
+	// should be, which on a recent model series is mostly a question of how
+	// hard the largest model thinks — so none of them answers "keep this
+	// cheap". A `cheap` spawn is never capped to the host's strength either:
+	// the cap stops a weak host reaching for a STRONGER child, and reaching
+	// for a cheaper one is not that.
+	Cheap TierRung `json:"cheap,omitzero"`
+}
+
+// Rungs returns the ladder keyed by rung name.
+//
+// The struct above has a field per rung rather than a map, for a stable JSON
+// schema and per-field docs — so something has to turn a rung's NAME back into
+// its field, and this is the one place that does. Readers that spelled the
+// mapping out themselves are how `cheap` overrides were silently dropped:
+// build.SwarmTierMap listed weak/medium/strong inline, so a user who pinned
+// only a cheap rung had it discarded before it ever reached the resolver, with
+// the built-in cheap pick still resolving underneath and making the output look
+// correct. That is not a display bug, and a hardcoded list cannot be trusted
+// not to repeat it — TestTierConfigCoversEveryLadderRung holds this map to the
+// ladder tools actually defines.
+func (t TierConfig) Rungs() map[string]TierRung {
+	return map[string]TierRung{
+		"weak":   t.Weak,
+		"medium": t.Medium,
+		"strong": t.Strong,
+		"cheap":  t.Cheap,
+	}
 }
 
 // TierRung is one rung of a ladder: which model, and how hard it thinks.
@@ -415,6 +703,24 @@ type TierConfig struct {
 type TierRung struct {
 	Model     string `json:"model,omitempty"`
 	Reasoning string `json:"reasoning,omitempty"`
+}
+
+// DefaultReasoningSummary is the mode a config that has never carried the key
+// resolves to. It is ON: the thinking displays (the TUI block, ctrl+r, the web
+// disclosure, the copy picker's think parts) all read persisted text, and with
+// recording off they have nothing to show once the turn ends.
+const DefaultReasoningSummary = "auto"
+
+// ReasoningSummaryMode resolves the setting to the mode that should apply.
+//
+// nil means the operator never chose, and takes the default. A non-nil "" is a
+// deliberate off and is honoured. The distinction cannot be made from the field
+// alone, which is why it is a pointer -- see the field's own note.
+func (c Config) ReasoningSummaryMode() string {
+	if c.ReasoningSummary == nil {
+		return DefaultReasoningSummary
+	}
+	return *c.ReasoningSummary
 }
 
 // UnmarshalJSON accepts the bare-string form and the object form. The bare
@@ -472,6 +778,45 @@ type EscalationConfig struct {
 	Provider string `json:"provider,omitempty"`
 	Model    string `json:"model,omitempty"`
 	Auto     bool   `json:"auto,omitempty"`
+}
+
+// ClassifierConfig is the user-layer screening-classifier block.
+//
+// The classifier is a third axis alongside the approval mode and the sandbox:
+// the mode decides whether a call runs, the sandbox bounds what it may touch,
+// and this decides only WHO ANSWERS the prompt the mode raised — a person, or
+// a model standing in for one. It is never a security boundary; it screens an
+// honestly mistaken agent, not a compromised one.
+type ClassifierConfig struct {
+	// Mode is "off" (default), "screen", or "approve".
+	//
+	// "screen" lets the classifier refuse a call but never permit one — an
+	// approve verdict is discarded and the prompt happens anyway, so it can
+	// only subtract authority. "approve" additionally lets it answer yes on
+	// the operator's behalf, which is why it is displayed with the same
+	// warning treatment yolo gets.
+	Mode string `json:"mode,omitempty"`
+
+	// Provider and Model override which model screens. Both empty is the
+	// intended shape: the classifier then resolves the WEAK rung of the
+	// swarm_tiers ladder for the session's provider, so it runs cheap
+	// without anyone configuring anything. An expensive default would be
+	// silent and permanent — this runs on gated calls for the whole session
+	// — so the cheap rung is the default and the host model must be asked
+	// for. See `terva models tiers` for what resolves.
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+
+	// HostModel permits falling back to the full host model when no weak
+	// rung resolves (the gateways — opencode-go, OpenRouter, LiteLLM — have
+	// no built-in family table). Off by default: without it an unresolvable
+	// rung abstains and says so, which leaves screening off and tells you,
+	// rather than quietly billing host price on every gated call.
+	HostModel bool `json:"host_model,omitempty"`
+
+	// TimeoutMS bounds one screening call. 0 uses the built-in default.
+	// A timeout is an abstention, so the prompt simply reaches the human.
+	TimeoutMS int `json:"timeout_ms,omitempty"`
 }
 
 // RaatiConfig is the user-layer raati block (docs/proposals/
@@ -662,6 +1007,18 @@ type StatusLineConfig struct {
 	// of segment IDs. See the SegmentID constants in packages/tui.
 	Rows [][]string `json:"rows,omitempty"`
 
+	// MaxWidth caps the bar's content width in columns. On a terminal
+	// wider than the cap the rows lay out inside min(cols, MaxWidth)
+	// instead of running to the far edge. nil means the built-in
+	// default (DefaultStatusLineMaxWidth, uncapped); an explicit 0 (or
+	// any value <= 0) also means uncapped.
+	MaxWidth *int `json:"max_width,omitempty"`
+
+	// ReserveBusyRow keeps the busy line's row present (blank) while
+	// idle, trading one row of chat height for zero vertical motion at
+	// turn boundaries. Default off: the busy row is transient.
+	ReserveBusyRow bool `json:"reserve_busy_row,omitempty"`
+
 	// Scripts defines user-supplied status segments: each named script
 	// runs on a coalesced trigger (turn end, /cd, once a minute),
 	// receives a JSON session snapshot on stdin, and its first stdout
@@ -698,6 +1055,44 @@ type StatusLineScript struct {
 // differently — the class docs/practices/06-operating-and-evidence.md calls out.
 // A new reader of LazyTools should call this rather than add a fifth spelling.
 func (c Config) LazyToolsOn() bool { return c.LazyTools == nil || *c.LazyTools }
+
+// DefaultStatusLineMaxWidth is the status bar's content-width cap when
+// status_line.max_width is unset. 0 means uncapped: the rows lay out
+// to the terminal width, so the bar's edges line up with the composer
+// and the chat, which both render at full cols.
+//
+// The v3 proposal shipped a 140 cap on 2026-09-04 and this reverses
+// that default on 2026-09-06. The renders that decided it: at 330
+// columns the capped and uncapped rows carry identical text, and only
+// the flex gap between the spacer groups grows. Width buys exactly one
+// thing, the meterCells tier, and that tier tops out at 140 either
+// way. So the cap traded a 140-cell block orphaned in a wide field for
+// no extra information. The cap itself stays, because a user who
+// prefers the block writes max_width and gets it.
+// See docs/proposals/tui-status-line-v3.md.
+const DefaultStatusLineMaxWidth = 0
+
+// StatusLineMaxWidth resolves status_line.max_width: the default when
+// unset, 0 (uncapped) when the user wrote 0 or a negative value. The
+// default lives here and nowhere else, per the LazyToolsOn rule.
+// Both arms return 0 today, and the split stays because the default is
+// a decision that can move again while an explicit 0 cannot.
+func (c Config) StatusLineMaxWidth() int {
+	if c.StatusLine == nil || c.StatusLine.MaxWidth == nil {
+		return DefaultStatusLineMaxWidth
+	}
+	if v := *c.StatusLine.MaxWidth; v > 0 {
+		return v
+	}
+	return 0
+}
+
+// StatusLineReserveBusyRow reports whether the status bar keeps a
+// blank busy row while idle (nil-safe on the optional StatusLine
+// block).
+func (c Config) StatusLineReserveBusyRow() bool {
+	return c.StatusLine != nil && c.StatusLine.ReserveBusyRow
+}
 
 // StatusLineRows returns the configured status-bar row layout, or nil
 // when unset (nil-safe on the optional StatusLine block).
@@ -799,6 +1194,15 @@ type ProjectConfig struct {
 	// "don't spawn this server" is always safe to honor, so an untrusted
 	// repo can still disable a user-defined server for this directory.
 	DisableMCP []string `json:"disable_mcp,omitempty"`
+
+	// Tickets, on the project layer, may only turn the ticket_* tools OFF
+	// for this directory. Restrict-only in the DisableMCP shape and for the
+	// same reason: false in either layer wins, and a project can never set
+	// true to re-enable tools the user disabled. It carries no trust gate,
+	// because "do not register these tools here" is always safe to honor —
+	// a repository that keeps its ledger by hand can say so, and the agent
+	// still reaches the store through `terva ticket`.
+	Tickets *bool `json:"tickets,omitempty"`
 
 	// Hooks lets a TRUSTED project define pre/post tool-use hook programs
 	// (Workspace Trust Phase 6). These run arbitrary commands, so they are
@@ -960,26 +1364,63 @@ func loadConfigAt(home string) (Config, error) {
 	return c, nil
 }
 
-// SaveConfig writes the config file for the active home, creating parent dirs.
+// SaveConfig writes the whole config file for the active home, creating parent
+// dirs. It REPLACES the document — it is not a setter.
+//
+// Anything that reads the config, changes a field and writes it back must use
+// MutateConfig instead. The load-then-save pair is a lost update with extra
+// steps: the window between the two is exactly where another writer's change
+// goes missing, and the atomic rename that keeps a reader from ever seeing a
+// torn file is precisely what stops anyone noticing. Ten production setters did
+// it the wrong way, including two in this package; the pairing is now enforced
+// by TestNoProductionCodeReadsAndWritesTheConfigWithoutMutateConfig.
 func SaveConfig(c Config) error { return saveConfigAt(TervaHome(), c) }
 
-// configMu serializes read-modify-write config mutations. SaveConfig is a plain
-// file overwrite, so concurrent setters (the web has N sessions) would lose
-// updates without this. Use MutateConfig for any load-mutate-save cycle.
+// configMu serializes read-modify-write config mutations inside this process.
+// It orders nothing between processes, which is what configLockPath is for.
 var configMu sync.Mutex
 
-// MutateConfig applies fn to the current config and saves it, atomically with
-// respect to other MutateConfig callers. The single safe path for toggling a
-// config field at runtime.
-func MutateConfig(fn func(*Config)) error {
+// configLockPath is the cross-process lock guarding one home's config.json. It
+// sits beside the file rather than inside it — a lock is not configuration, and
+// a crash must not leave the document it guards holding a stale claim.
+func configLockPath(home string) string { return filepath.Join(home, "config.json.lock") }
+
+// MutateConfig applies fn to the active home's config and saves it, atomically
+// against every other writer. The single safe path for changing a config field
+// at runtime.
+func MutateConfig(fn func(*Config)) error { return MutateConfigAt(TervaHome(), fn) }
+
+// MutateConfigAt is MutateConfig against a NAMED home, for the handful of
+// settings that deliberately write the user's global config even when this run
+// is project-scoped (see GlobalUserPrefs).
+//
+// Locked both ways it can be contended, the same shape and the same order as
+// provider/auth's Store.Mutate on the same home: configMu orders writers inside
+// this process — the web daemon has N sessions and the TUI has panes — and the
+// file lock orders them across processes, which a mutex cannot. Several terva
+// instances share one $TERVA_HOME, and config.json is the shared whole-file
+// document carrying provider, model, permissions, favorites and plaintext
+// extension secrets.
+//
+// The load happens INSIDE both locks. Anything read before acquiring them
+// describes the file as it was before the writer we just queued behind.
+func MutateConfigAt(home string, fn func(*Config)) error {
 	configMu.Lock()
 	defer configMu.Unlock()
-	c, err := LoadConfig()
+	// A home that cannot host a lockfile (read-only mount, exotic filesystem)
+	// must not become a home where changing a setting fails. Degrade to the
+	// in-process mutex, which is what this had before the lock existed.
+	lk, err := filelock.Acquire(configLockPath(home))
+	if err != nil {
+		lk = nil
+	}
+	defer lk.Release()
+	c, err := loadConfigAt(home)
 	if err != nil {
 		return err
 	}
 	fn(&c)
-	return SaveConfig(c)
+	return saveConfigAt(home, c)
 }
 
 // saveConfigAt writes home/config.json atomically with private (0600)
@@ -1003,7 +1444,8 @@ func saveConfigAt(home string, c Config) error {
 // Add a field ONLY when it is a user-identity preference with no capability or
 // trust weight.
 type GlobalUserPrefs struct {
-	UserName string // what a character card's {{user}} macro resolves to
+	UserName    string // what a character card's {{user}} macro resolves to
+	TicketActor string // the actor id ticket_init seeds a new .tickets store with
 }
 
 // GlobalUserPreferences reads the allowlisted preferences from the user's global
@@ -1015,7 +1457,8 @@ func GlobalUserPreferences() GlobalUserPrefs {
 		return GlobalUserPrefs{}
 	}
 	return GlobalUserPrefs{
-		UserName: strings.TrimSpace(c.UserName),
+		UserName:    strings.TrimSpace(c.UserName),
+		TicketActor: strings.TrimSpace(c.TicketActor),
 	}
 }
 
@@ -1024,12 +1467,25 @@ func GlobalUserPreferences() GlobalUserPrefs {
 // where the interactive "what should the character call you?" answer is saved,
 // so it is set once and reused across projects rather than written into a repo.
 func SetGlobalUserName(name string) error {
-	c, err := loadConfigAt(globalHome())
-	if err != nil {
-		return err
-	}
-	c.UserName = strings.TrimSpace(name)
-	return saveConfigAt(globalHome(), c)
+	return MutateConfigAt(globalHome(), func(c *Config) {
+		c.UserName = strings.TrimSpace(name)
+	})
+}
+
+// TicketActorNone is what TicketActor holds when the user chose to leave a new
+// store's actor list empty. It is a real answer and not a missing one, so
+// ticket_init stops asking after it is stored.
+const TicketActorNone = "none"
+
+// SetGlobalTicketActor persists the answer to "who should this store record
+// your writes as?" to the GLOBAL config, so the next repository on this machine
+// reuses it instead of asking again. Mirrors SetGlobalUserName, including the
+// project-scope survival: the choice belongs to the person, not to the repo
+// they happen to be in.
+func SetGlobalTicketActor(actor string) error {
+	return MutateConfigAt(globalHome(), func(c *Config) {
+		c.TicketActor = strings.TrimSpace(actor)
+	})
 }
 
 // ToggleStringMember returns list with key present (on) or absent (off), with
@@ -1268,6 +1724,15 @@ func ResolveConfig(cwd string, trustProject bool) EffectiveConfig {
 	if pc != nil && len(pc.DisableMCP) > 0 {
 		eff.Config.DisableMCP = unionStrings(user.DisableMCP, pc.DisableMCP)
 	}
+	// The ticket tools are restrict-only across the layers, in that same
+	// shape: an explicit false on either layer wins, and a project's true is
+	// inert (it cannot re-enable what the user turned off). Not trust-gated,
+	// for the DisableMCP reason — dropping ten tools only ever narrows the
+	// surface, and `terva ticket` still reaches the store either way.
+	if pc != nil && pc.Tickets != nil && !*pc.Tickets {
+		off := false
+		eff.Config.Tickets = &off
+	}
 	// Project default provider/model: trusted-only, because they change which
 	// model (and credentials/budget) a launch uses — same gate as Hooks/MCP.
 	// Layered onto the read view only; eff.User (the writable layer) is
@@ -1292,12 +1757,6 @@ func ResolveConfig(cwd string, trustProject bool) EffectiveConfig {
 	return eff
 }
 
-// TrustedProjectHooks returns the nearest project config's hooks ONLY when
-// the workspace is trusted; otherwise nil. Project hooks run arbitrary
-// commands, so an untrusted (default) cloned repo must never reach the hook
-// engine — this is the trust gate the historical "user-config only" ban was a
-// proxy for (Workspace Trust Phase 6). A malformed project config degrades to
-// nil with a stderr note rather than aborting launch, matching ResolveConfig.
 // ProjectHooksOnDisk reports the project's hook config REGARDLESS of trust —
 // "are there project hooks at all", not "do they apply".
 //
@@ -1315,6 +1774,12 @@ func ProjectHooksOnDisk(cwd string) *hooks.Config {
 	return pc.Hooks
 }
 
+// TrustedProjectHooks returns the nearest project config's hooks ONLY when
+// the workspace is trusted; otherwise nil. Project hooks run arbitrary
+// commands, so an untrusted (default) cloned repo must never reach the hook
+// engine — this is the trust gate the historical "user-config only" ban was a
+// proxy for (Workspace Trust Phase 6). A malformed project config degrades to
+// nil with a stderr note rather than aborting launch, matching ResolveConfig.
 func TrustedProjectHooks(cwd string, trustProject bool) *hooks.Config {
 	if !trustProject {
 		return nil
@@ -1462,7 +1927,7 @@ func SetKimiCLIFallbackDisabled(disabled bool) error {
 	if err := privfs.MkdirAll(filepath.Dir(path)); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte("disabled\n"), privfs.FileMode)
+	return privfs.WriteFile(path, []byte("disabled\n"))
 }
 
 func LoadKimiCodeCLIToken() *auth.OAuthToken {

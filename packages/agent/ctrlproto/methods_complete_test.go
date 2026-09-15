@@ -134,12 +134,16 @@ func TestEveryMethodIsDispatched(t *testing.T) {
 		if _, ok := special[m]; ok {
 			continue
 		}
+		if _, ok := servedElsewhere[m]; ok {
+			continue
+		}
 		missing = append(missing, fmt.Sprintf("%s (%q)", name, m))
 	}
 	sort.Strings(missing)
 	if len(missing) > 0 {
 		t.Fatalf("methods with no entry in the dispatch table (dispatch_table.go) — add "+
-			"one, or a `special` entry here saying why serveState answers it:\n  %s",
+			"one, a `special` entry here saying why serveState answers it, or a "+
+			"`servedElsewhere` entry saying which OTHER server owns it:\n  %s",
 			strings.Join(missing, "\n  "))
 	}
 	// The reverse direction: an entry for a verb that no longer exists would sit
@@ -157,6 +161,46 @@ func TestEveryMethodIsDispatched(t *testing.T) {
 	sort.Strings(stale)
 	if len(stale) > 0 {
 		t.Fatalf("dispatch table has entries for verbs that are not Method constants: %v", stale)
+	}
+}
+
+// servedElsewhere names the verbs whose ABSENCE from the dispatch table is the
+// feature.
+//
+// 🚨 Different in kind from `special`, which lists verbs serveState answers on
+// this same carrier. These are served by a DIFFERENT server entirely, and a
+// handler here would defeat the point: the `tenants` group manages other
+// people's environments, and the supervisor that owns it also proxies every
+// tenant's connection to a workspace daemon. Serving these on a WorkspaceService
+// would put the admin surface inside the thing being administered, one bug away
+// from a tenant. So the answer a workspace daemon gives is "unknown method", and
+// it is true — there is no handler to reach.
+var servedElsewhere = map[Method]string{
+	MethodTenantsList:    "tenant.ServeAdmin, on the supervisor's own connection",
+	MethodTenantsSuspend: "tenant.ServeAdmin, on the supervisor's own connection",
+	MethodTenantsResume:  "tenant.ServeAdmin, on the supervisor's own connection",
+}
+
+// 🚨 The boundary, asserted from the workspace side: a verb in servedElsewhere
+// must have NO dispatch entry, and its group must be one ServerHello never
+// offers. Both halves matter — an entry would make it reachable, and putting the
+// group in the base hello would advertise a surface to every client of every
+// daemon terva ships.
+func TestTenantsVerbsAreNotOnAWorkspaceCarrier(t *testing.T) {
+	for m, owner := range servedElsewhere {
+		if _, ok := dispatch[m]; ok {
+			t.Errorf("%q has a dispatch entry, so a WorkspaceService carrier serves it — it belongs to %s", m, owner)
+		}
+	}
+	for _, g := range ServerHello("terva", "0").Groups {
+		if g == GroupTenants {
+			t.Fatal("the base ServerHello advertises the tenants group; it is the supervisor's alone")
+		}
+	}
+	// And the group is genuinely the one those verbs report, so the check above
+	// is not passing because Group() forgot them.
+	if got := MethodTenantsSuspend.Group(); got != GroupTenants {
+		t.Fatalf("tenants.suspend reports group %q, want %q", got, GroupTenants)
 	}
 }
 

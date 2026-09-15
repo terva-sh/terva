@@ -116,6 +116,41 @@ type Args struct {
 	// WebChatTimeout bounds the connector handshake during web startup. Zero
 	// uses the workspace attachment default.
 	WebChatTimeout time.Duration
+	// Supervisor mode (`terva serve` / --serve, Mode == mode.Serve). The
+	// listener, auth and OIDC options are the --web-* ones above: the
+	// supervisor is the same HTTP surface, differing in what it does once a
+	// caller is authenticated.
+	//
+	// TenantRoot is where per-tenant homes live (one directory per environment,
+	// each becoming that child's TERVA_HOME). TenantRunDir holds the per-tenant
+	// sockets, and wants a runtime path rather than a data one — /run/user/$UID
+	// on a systemd host. It is separate from TenantRoot because a socket is
+	// runtime state, and because a unix socket path is capped at ~104 bytes, so
+	// the sockets need somewhere short.
+	TenantRoot   string
+	TenantRunDir string
+
+	// TenantIdleTimeout stops a tenant's child after it has had no connection
+	// for this long; the next request starts it again. Zero uses the default;
+	// "off" (parsed to a negative) keeps children up forever.
+	//
+	// This reaps a PROCESS and never a home — see packages/agent/tenant/reap.go
+	// for why the two are deliberately different code paths.
+	TenantIdleTimeout time.Duration
+
+	// Containment names how each tenant's child is confined: "none" (children
+	// share the supervisor's uid — honest, and single-tenant only) or "systemd"
+	// (one instance of a unit template per tenant, systemd allocating the uid).
+	// Empty means "none".
+	//
+	// It is a flag rather than a default because the safe answer and the
+	// convenient one differ, and the unsafe one must be chosen out loud.
+	Containment string
+
+	// ContainmentTemplate is the systemd unit template prefix backing
+	// --containment systemd (default "terva-tenant" —
+	// terva-tenant@<id>.service / .socket).
+	ContainmentTemplate string
 
 	// Attach mode (`terva attach [URL]` / --attach, Mode == mode.Attach).
 	// AttachURL is the daemon endpoint — a full ws:// or wss:// URL, or a
@@ -558,6 +593,8 @@ func ParseArgs(in []string) (Args, error) {
 				return a, err
 			}
 			a.FleetTokenFile = v
+		case "--serve":
+			a.Mode = mode.Serve
 		case "--attach":
 			a.Mode = mode.Attach
 			// Optional URL: consume the next token when it isn't a flag.
@@ -578,6 +615,44 @@ func ParseArgs(in []string) (Args, error) {
 			}
 			a.Mode = mode.Replay
 			a.ReplayPath = v
+		case "--tenant-idle-timeout":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			if strings.EqualFold(strings.TrimSpace(v), "off") {
+				a.TenantIdleTimeout = -1
+				break
+			}
+			d, derr := time.ParseDuration(v)
+			if derr != nil || d <= 0 {
+				return a, i18n.Errorf("--tenant-idle-timeout %q: want a positive duration like 30m, or \"off\"", v)
+			}
+			a.TenantIdleTimeout = d
+		case "--containment":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.Containment = v
+		case "--containment-template":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.ContainmentTemplate = v
+		case "--tenant-root":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.TenantRoot = v
+		case "--tenant-run-dir":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.TenantRunDir = v
 		case "--web-addr":
 			v, err := want(&i, arg)
 			if err != nil {
@@ -1094,6 +1169,112 @@ func ParseArgs(in []string) (Args, error) {
 		a.CWD = abs
 	}
 	return a, nil
+}
+
+// PrintServeHelp renders the `terva serve --help` screen.
+//
+// Always built, for PrintWebHelp's reason: help must work in a binary without
+// -tags terva_web, because it documents what the mode offers to someone
+// deciding whether to build it in.
+func PrintServeHelp() {
+	fmt.Fprint(os.Stderr, i18n.H("help.serve", `terva serve — multi-tenant supervisor (one terva per person, on one host)
+
+  terva serve --web-auth-header X-Forwarded-User
+                                     behind a proxy that has already authenticated the caller
+  terva serve                        with web_oidc configured in config.json (single sign-on)
+
+Each authenticated person gets their OWN terva: a separate process with its own
+TERVA_HOME, its own sessions, its own MCP servers, and its own extensions. The
+supervisor itself runs no agent — it authenticates, decides whose environment a
+caller reaches, starts that environment, and proxies to it.
+
+Supervisor-specific flags:
+  --containment MODE            how each tenant's child is confined:
+                                  none     (default) children share the supervisor's uid, separated
+                                           only by TERVA_HOME. Honest, and SINGLE-TENANT: the second
+                                           person is refused rather than silently put beside the first
+                                  systemd  one instance of a unit template per tenant, systemd
+                                           allocating a transient uid and state directory. This is
+                                           what lets a second person in
+  --containment-template NAME   the systemd unit template backing --containment systemd
+                                (default terva-tenant — terva-tenant@<id>.service / .socket)
+  --tenant-idle-timeout DUR     stop an environment that has had no connection for this long; the next
+                                request starts it again over the same data (default 30m, "off" to keep
+                                them up). This reaps a PROCESS and never a home
+  --tenant-root DIR             where per-tenant homes live, one directory per person
+                                (default: $TERVA_HOME/tenants). Ignored under --containment systemd,
+                                where the unit's StateDirectory= decides
+  --tenant-run-dir DIR          where the per-tenant sockets live (default: $XDG_RUNTIME_DIR/terva-tenants,
+                                or $TERVA_HOME/run). Keep it SHORT — a unix socket path is capped at
+                                ~104 bytes by the kernel and a tenant id spends 34 of them
+  --web-stage                   mount Stage at /stage/ for this host. Off by default: Stage is not core,
+                                and a supervisor nobody asked does not grow a second app. This decides
+                                whether the surface EXISTS here; each tenant decides whether they use it,
+                                with web_stage in their own config. Without this flag a tenant who turns
+                                web_stage on is not offered a link — the claim is stripped from what the
+                                supervisor tells their browser, rather than pointing at a route that 404s
+
+The listener, auth, and TLS-fronting flags are "terva web"'s — see "terva web --help".
+--web-addr, --web-auth-header, --web-trusted-proxy, --web-insecure-cidr and the
+token flags all mean the same thing here.
+
+Identity: "terva serve" REQUIRES a way to tell people apart, and refuses to start
+without one. A bearer token authenticates the operator, not a person — everyone
+holding it would resolve to the same environment and read each other's work. So
+configure web_oidc in config.json, or front this with a proxy and pass
+--web-auth-header. A token may still be set alongside either.
+
+Enrolment: a successful sign-in carrying one of this daemon's roles gets an
+environment, created on first arrival and keyed on the identity provider's stable
+SUBJECT — never the email or username, which every identity provider lets people
+change, and which a rename would otherwise strand or hand to whoever inherits the
+address. A sign-in with no matching role is authenticated but unprovisioned, and
+the refusal names the roles that would work.
+
+Cleanup, of which there are two kinds and they are not the same risk:
+
+  An idle environment is STOPPED — cheap, reversible, on by default. Nothing of
+  the tenant's is touched; the next request starts a fresh daemon over the same
+  home and they carry on.
+
+  An environment is never DELETED. There is no flag for it and no code path.
+  Deleting a home destroys somebody's work, and D7 requires that to be two-phase
+  (suspend, grace, delete) with a human in it — an environment that cannot be
+  destroyed cannot be destroyed by a bug.
+
+An authenticated sign-in that carries no role is RECORDED against the enrolment
+and acts on nothing. An identity-provider outage, a mistyped group mapping and a
+genuinely revoked role are indistinguishable from here, so what accumulates is a
+fact with a date on it, for an operator to weigh — never an automatic
+suspension.
+
+The operator panel is at /supervisor, and needs the OWNER role. It lists every
+environment, whether it is running, and — the part nothing else can tell you —
+the people who authenticated and were turned away, which is the only trace a
+newcomer whose groups nobody mapped leaves anywhere. Suspend and resume live
+there too; both are reversible, and neither deletes anything. The same picture
+is on the wire at /supervisor/ws (ctrlproto's "tenants" group), which no tenant's
+connection can carry and no ordinary terva daemon serves at all.
+
+Containment: a per-tenant TERVA_HOME is a routing decision, NOT a boundary — a
+tenant's agent can run shell commands, so under --containment none it could read
+a sibling's home. That mode therefore serves exactly ONE tenant and refuses the
+second by name, rather than pretending to isolate them.
+
+--containment systemd is the boundary: systemd allocates a transient uid and a
+persistent state directory per tenant, and the supervisor holds no privilege to
+do it — it asks, over a polkit grant scoped to one unit template. Install the
+template and the rule from examples/deploy/systemd/ first.
+
+The supervisor VERIFIES that template rather than trusting it. systemd names a
+DynamicUser after the template, not the instance, so a unit with DynamicUser=yes
+and no User=...-%i runs every tenant as one uid. terva serve asks systemd what
+user each instance resolved to and refuses the tenant if the answer does not name
+that instance.
+
+Requires a build with -tags terva_web (the release binaries include it).
+See docs/proposals/daemon-access-auth.md for the design.
+`))
 }
 
 // PrintWebHelp renders the `terva web --help` screen: the web control panel's

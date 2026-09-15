@@ -402,6 +402,14 @@ const (
 
 	MethodReplayControl Method = "replay.control" // params ReplayControlParams, result ReplayStateResult (sess in frame)
 	MethodReplayState   Method = "replay.state"   // result ReplayStateResult (sess in frame)
+
+	// --- tenants group (served ONLY by the `terva serve` supervisor; see
+	// [GroupTenants] and tenants.go — deliberately absent from the dispatch
+	// table, so no WorkspaceService carrier can serve them) ---
+
+	MethodTenantsList    Method = "tenants.list"    // result TenantsListResult
+	MethodTenantsSuspend Method = "tenants.suspend" // params TenantRef; stops the environment and refuses to start it
+	MethodTenantsResume  Method = "tenants.resume"  // params TenantRef; lets it start again
 )
 
 // Group returns the method group m belongs to, or "" if unknown.
@@ -448,6 +456,8 @@ func (m Method) Group() Group {
 	case MethodSecretsStatus, MethodSecretsList, MethodSecretsGrant, MethodSecretsRevoke,
 		MethodSecretsForget:
 		return GroupSecrets
+	case MethodTenantsList, MethodTenantsSuspend, MethodTenantsResume:
+		return GroupTenants
 	}
 	return ""
 }

@@ -3,6 +3,7 @@ package testsupport
 
 import (
 	"os"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -36,9 +37,41 @@ import (
 // surfaces.
 func TempDir(t testing.TB) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "terva-test-")
+	return retryCleanupDir(t, "", "terva-test-")
+}
+
+// SocketDir is TempDir for a directory a unix socket will be bound inside.
+//
+// The kernel caps a unix socket PATH at 104 bytes on darwin and 108 on linux —
+// sockaddr_un is a fixed-size struct, so an over-long path is not an error the
+// caller sees but a silent truncation, and in practice a bind failure in
+// whatever process was handed the path. TempDir cannot be used for this on
+// macOS: the default TMPDIR there is a 49-character
+// /var/folders/../T path, and t.TempDir() appends the test's own name plus a
+// counter, which leaves almost nothing for a filename.
+//
+// So this asks for /tmp by name. It is the one place a short path matters more
+// than a tidy per-test one, and the alternative — every socket-binding test
+// hand-rolling os.MkdirTemp and tripping the gate in tempdir_gate_test.go — is
+// how the Windows cleanup problem came back the first time.
+func SocketDir(t testing.TB) string {
+	t.Helper()
+	base := ""
+	if runtime.GOOS != "windows" {
+		if fi, err := os.Stat("/tmp"); err == nil && fi.IsDir() {
+			base = "/tmp"
+		}
+	}
+	return retryCleanupDir(t, base, "tv")
+}
+
+// retryCleanupDir makes a temp dir whose removal rides out a held handle. See
+// TempDir for why the retry exists.
+func retryCleanupDir(t testing.TB, base, prefix string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp(base, prefix)
 	if err != nil {
-		t.Fatalf("testsupport.TempDir: %v", err)
+		t.Fatalf("testsupport: temp dir: %v", err)
 	}
 	t.Cleanup(func() {
 		for range 20 {

@@ -100,7 +100,7 @@ Adding a carrier is a binding, not new protocol work.
 
 ## Method groups
 
-The surface is split into six **capability-negotiated groups** with different
+The surface is split into seven **capability-negotiated groups** with different
 rates of change and audiences. A client declares which groups it speaks in its
 hello; a minimal client (the mobile PWA) negotiates only the first two.
 
@@ -112,6 +112,17 @@ hello; a minimal client (the mobile PWA) negotiates only the first two.
 | **auth** | MODEL-PROVIDER credential mutation: establish, repair, and revoke the credential terva uses to reach Anthropic / OpenAI / Kimi, plus forgetting a named endpoint | **categorically higher, and separate from control** — see below. **Optional**: off the base server hello; `terva web` advertises it only under `--web-allow-login`, and never on an unauthenticated listener |
 | **secrets** | terva's **at-rest** encryption posture (what is sealed, what is still plaintext, which components hold a key) and the secret store's grant model | **categorically higher, and separate from auth** — see below. **Optional**: off the base server hello; `terva web` advertises it only under `--web-allow-secrets`, and never on an unauthenticated listener |
 | **replay** | a recorded session's transport (`replay.control` / `replay.state`) and its `replay_state` broadcast | frontend-driving, but **optional**: it is off the base server hello — only a carrier backing a `ReplayController` advertises it, so a client that negotiates it is guaranteed the group is served |
+| **tenants** | the ENVIRONMENTS on a multi-tenant host (`terva serve`): who is enrolled, who is running, who is suspended, and who was refused one | **the operator's, and served by no workspace carrier at all** — see below |
+
+`tenants` is the one group **nothing on this page serves**, and the absence is
+the design. A `terva serve` supervisor proxies every tenant's connection to that
+tenant's own workspace daemon; if it also served `tenants.*` on that connection
+and merely *checked* for an admin role, tenant→admin escalation would be one bug
+away, in the busiest code on the box. So the proxy carries an allowlist of
+forwardable groups that this one is not on, there is **no dispatch entry** for
+these verbs, and the supervisor answers them on its own connection with its own
+loop. A tenant naming `tenants.list` gets `unknown method` from a daemon that
+genuinely has none. Refusal is a check; non-existence is a boundary.
 
 `auth` is its own group rather than a corner of `control` because **the group is
 the unit of authority gating**. An extension granted `control` can switch models
@@ -396,6 +407,27 @@ which advertises the group in its hello; otherwise `unsupported`)
 |---|---|---|
 | `replay.control` | `{action, position?, multiplier?, unit?}` → `{state}` | drive a recorded session's transport: `play` / `pause` / `step` / `seek` / `turn` / `speed`. Only the field the action needs is read |
 | `replay.state` | → `{state}` | the current transport state: `{playing, position, total, speed, mode}` (`mode` = `effective` \| `raw`) |
+
+**tenants** (served **only** by the `terva serve` supervisor, on its own
+connection — never by a `WorkspaceService` carrier, and never across the
+tenant proxy; see the group note above)
+
+| Method | Params → Result | Effect |
+|---|---|---|
+| `tenants.list` | → `{tenants, containment, refusals?, roles?}` | every enrolled environment with its durable record (id, subject, display, enrolled/last-seen, `suspended`, `unentitled_since`) and whether it is **running right now**. `running: false` is the normal state, not a fault — an idle environment is stopped and restarts on its owner's next request with its data untouched. `home` is set **only** while running, because the containment decides where a home actually goes and printing the path the supervisor merely *asked* for would be a path an operator could `ls` and find empty. `containment` says what this host actually separates: `isolates: false` means it carries exactly **one** tenant and a second is refused, which a list of five enrolments needs beside it. `refusals` are the authenticated callers turned away since startup — the case an enrolment record cannot cover, because a person whose claims were never mapped has no record to hang an observation on, and creating one would be enrolling them by the back door. In-memory and diagnostic: it does not survive a restart, on purpose |
+| `tenants.suspend` | `{id}` | stop the environment and refuse to start it again. **Destroys nothing** — the home, its sessions and the enrolment all stay — and it takes effect immediately: a running child is stopped, because a suspension that waits for the next idle reap is not a suspension. Separate verbs rather than one `{id, suspended}` toggle, so a payload that lost its boolean cannot silently mean *resume* |
+| `tenants.resume` | `{id}` | let it start again on the owner's next request |
+
+There is deliberately **no `tenants.delete`**, and no quota. Deprovisioning is
+two-phase — suspend, grace, delete, with a human inside it and the uid reclaimed
+only after the home is verifiably gone — and a wire verb that removed an
+environment would be the fastest way to lose someone's work to a mis-click.
+Trivial to add later, impossible to un-ship. **Per-tenant usage is absent too**,
+and for a structural reason rather than an unfinished one: a tenant's usage
+lives inside that tenant's home, and under the containment that makes the
+supervisor safe it cannot read that home. Asking a *running* child would make a
+person's spend drop to zero when their laptop closed, which reads as "spent
+nothing" and is worse than absent.
 
 Implementations may return `unsupported` for control methods they don't yet
 serve — jail, prompt/system overrides, and templates are shaped in the interface

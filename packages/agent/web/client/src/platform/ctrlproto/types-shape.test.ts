@@ -81,6 +81,18 @@ const notMirrored: Record<string, string> = {
   SharedFileRef: 'a bare share id, sent inline as shared.fetch params (like AttachmentRef)',
   SideChatTurn: 'side chat is a TUI-only surface today; no web caller names it',
   UserPersonaRef: 'a single-field ref, sent inline inside userpersonas params',
+
+  // The tenants group is the `terva serve` SUPERVISOR's surface, and this
+  // client talks to a workspace daemon — which serves those verbs nowhere and
+  // never will (ctrlproto/tenants.go, proposal D8). The operator surface is a
+  // server-rendered page at /supervisor, deliberately not part of this bundle:
+  // it has to be readable on a host where the asset pipeline is the thing that
+  // broke. Mirroring these here would put shapes in the client for a daemon it
+  // cannot reach.
+  TenantRef: "the supervisor's surface, not a workspace's — this client never names tenants.*",
+  TenantInfo: "the supervisor's surface, not a workspace's — rendered server-side at /supervisor",
+  TenantsContainment: "the supervisor's surface, not a workspace's — rendered server-side at /supervisor",
+  TenantRefusal: "the supervisor's surface, not a workspace's — rendered server-side at /supervisor",
 }
 
 // ---- Go side: struct name -> sorted wire field names (json tags) ----

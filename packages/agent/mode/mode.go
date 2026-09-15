@@ -62,6 +62,20 @@ const (
 	// it needs no credential and rejects prompts. See
 	// docs/proposals/session-player.md.
 	Replay Mode = "replay"
+	// Serve is the multi-tenant SUPERVISOR (`terva serve` / --serve): the only
+	// listener on a shared host. It terminates authentication, maps each
+	// principal to its own environment, spawns that environment's `terva web`
+	// child with its own TERVA_HOME, and proxies the authenticated connection
+	// to it.
+	//
+	// 🔑 It is the one mode that runs NO agent of its own. There is no session,
+	// no workspace, no model and no prompt here — every per-mode table below
+	// that describes agent behaviour is answered for it defensively and never
+	// consulted. See docs/proposals/daemon-access-auth.md (D4).
+	//
+	// The server is an opt-in build (-tags terva_web), like Web; the no-tag
+	// binary routes here and exits with "serve mode not built in".
+	Serve Mode = "serve"
 	// Bot is the chat-connector daemon (`terva bot run`): a full agent
 	// whose user is a Discord/Slack conversation. It is NOT set by a flag —
 	// `bot run` is routed before the mode switch and parses its own tail, so
@@ -100,6 +114,7 @@ var all = []Mode{
 	Web,
 	Attach,
 	Replay,
+	Serve,
 	Bot,
 	Member,
 }

@@ -14,7 +14,11 @@
 // See docs/proposals/daemon-access-auth.md (D1, D2).
 package authz
 
-import "terva.sh/terva/packages/agent/ctrlproto"
+import (
+	"slices"
+
+	"terva.sh/terva/packages/agent/ctrlproto"
+)
 
 // Role is an authority level a principal holds. Roles are coarse on purpose:
 // they map onto method groups, which is the granularity the protocol already
@@ -75,6 +79,30 @@ func KnownRole(r Role) bool {
 	return ok
 }
 
+// RoleNames lists every role this build understands, most authority first.
+//
+// It reads the same table KnownRole does rather than repeating the constants,
+// so a role that exists is a role this list names. The caller is an error
+// message — a supervisor refusing someone whose identity-provider groups map to
+// no role has to say what WOULD work, or the refusal is a support conversation.
+func RoleNames() []string {
+	ordered := []Role{RoleOwner, RoleOperator, RoleMember, RoleViewer}
+	out := make([]string, 0, len(groupsForRole))
+	for _, r := range ordered {
+		if KnownRole(r) {
+			out = append(out, string(r))
+		}
+	}
+	// Anything in the table the ordering above forgot, so a new role cannot be
+	// silently absent from the one place people are told what to configure.
+	for r := range groupsForRole {
+		if !slices.Contains(out, string(r)) {
+			out = append(out, string(r))
+		}
+	}
+	return out
+}
+
 // Principal is who is on the other end of a connection.
 //
 // Every authn mode produces one, including the modes that predate roles — that
@@ -120,6 +148,17 @@ var groupsForRole = map[Role][]ctrlproto.Group{
 		ctrlproto.GroupReplay,
 		ctrlproto.GroupAuth,
 		ctrlproto.GroupSecrets,
+		// 🚨 The owner alone, and not RoleOperator, whose whole definition is
+		// "may run and reconfigure THE HOST but may not touch credentials".
+		// Managing tenants is neither: it reaches into other people's
+		// environments, and suspending one takes someone's workspace away.
+		//
+		// Safe to sit in this table even on a single-tenant `terva web`,
+		// because Restrict INTERSECTS with what the carrier offered and no
+		// workspace carrier offers this group. That is the property Restrict's
+		// comment argues for, load-bearing here: without it, adding a row to
+		// this table would have added a surface to every daemon.
+		ctrlproto.GroupTenants,
 	},
 	RoleOperator: {
 		ctrlproto.GroupConversation,

@@ -111,6 +111,9 @@ suggest.reply	session
 surface.action	session
 surface.get	session
 surfaces.list	session
+tenants.list	tenants
+tenants.resume	tenants
+tenants.suspend	tenants
 tools.display	session
 turn.advance	conversation
 turn.continue	conversation

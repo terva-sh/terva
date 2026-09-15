@@ -1,0 +1,29 @@
+# One tenant's control socket — SYSTEM unit template.
+#
+# The supervisor starts THIS (not the service): terva-tenant@%i.service is
+# socket-activated from it, so the supervisor never has to ask whether a
+# tenant's daemon is already running.
+
+[Unit]
+Description=terva tenant %i control socket
+
+[Socket]
+# Short on purpose. A unix socket path is capped at ~104 bytes by the kernel and
+# a tenant id spends 18 of them, so /run is the right place and a deeper tree is
+# not. The supervisor asks systemd for this path rather than assuming it, so
+# changing it here needs no matching change anywhere else.
+ListenStream=/run/terva-%i.sock
+
+# 🔑 The door is the supervisor's; the room is the tenant's.
+#
+# systemd creates an activated socket root:root 0600 by default, and the daemon
+# never touches its mode — under activation it did not create it. So without
+# this line the unprivileged supervisor cannot dial its own tenants. Set it to
+# the user terva-serve.service runs as.
+#
+# The tenant's own daemon does not need to open this file: it inherits the fd.
+SocketUser=terva-sup
+SocketMode=0600
+
+# One socket per unit, which is what terva serves. Two ListenStream= lines and
+# the daemon refuses to start rather than guess which one to serve.

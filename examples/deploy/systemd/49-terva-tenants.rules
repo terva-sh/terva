@@ -1,0 +1,31 @@
+// Let the terva supervisor start and stop TENANT units, and nothing else.
+//
+// Install as /etc/polkit-1/rules.d/49-terva-tenants.rules (root:root 0644).
+//
+// This grant is the whole privilege model. `terva serve` parses JWTs off the
+// network and proxies websockets for other people, so it must never hold the
+// power to become another user. It holds this instead: permission to manage
+// instances of one template, given once by an operator, revocable by deleting
+// this file.
+//
+// 🚨 Keep the prefix check. Dropping it — or widening it to
+// "org.freedesktop.systemd1.manage-units" for this user without inspecting the
+// unit — would let a bug anywhere in the OIDC or proxy path start, stop, or
+// restart ANY unit on the host, including sshd. The scope is what makes the
+// grant safe to give.
+
+polkit.addRule(function (action, subject) {
+    if (action.id !== "org.freedesktop.systemd1.manage-units") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    // The user terva-serve.service runs as. Change both this and SocketUser= in
+    // terva-tenant@.socket together — they name the same account.
+    if (subject.user !== "terva-sup") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var unit = action.lookup("unit");
+    if (unit && unit.indexOf("terva-tenant@") === 0) {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

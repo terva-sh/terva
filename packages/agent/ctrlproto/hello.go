@@ -53,6 +53,23 @@ const (
 	// Optional and off the base ServerHello. `terva web` advertises it only under
 	// --web-allow-secrets, and refuses to on an unauthenticated listener.
 	GroupSecrets Group = "secrets"
+	// GroupTenants manages the ENVIRONMENTS on a multi-tenant host: who is
+	// enrolled, who is running, who is suspended. It is `terva serve`'s own
+	// surface — the operator's view of other people's daemons.
+	//
+	// 🚨 It is the one group NO WorkspaceService carrier serves, and that is a
+	// boundary rather than an omission. A tenant's browser reaches its daemon
+	// through the supervisor's proxy, and the proxy carries an allowlist of
+	// forwardable groups that this one is not on (packages/agent/tenant/gate.go).
+	// If the supervisor served `tenants` on the same connection it proxies and
+	// merely CHECKED for an admin role, tenant→admin escalation would be one bug
+	// away, in the busiest code on the box. So there is no dispatch entry for
+	// these verbs at all: the supervisor answers them on its own connection with
+	// its own loop, and a tenant naming one gets "unknown method" from a daemon
+	// that genuinely has none. Refusal is a check; non-existence is a boundary.
+	//
+	// See docs/proposals/daemon-access-auth.md (D8).
+	GroupTenants Group = "tenants"
 )
 
 // Feature strings name additive capabilities negotiated on top of the groups.

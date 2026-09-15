@@ -163,6 +163,7 @@ var knownGroups = map[Group]bool{
 	GroupReplay:       true,
 	GroupAuth:         true,
 	GroupSecrets:      true,
+	GroupTenants:      true,
 }
 
 // TestEveryVerbResolvesToAKnownGroup is the airtight form of the presence

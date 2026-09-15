@@ -1,0 +1,73 @@
+# One tenant's terva — SYSTEM unit template, started by `terva serve`.
+#
+# The supervisor (terva-serve.service) does NOT run this itself. It asks systemd
+# to, over polkit, which is the whole point: `terva serve` terminates OIDC and
+# proxies websockets, so it must never hold the privilege to become another
+# user. systemd holds it; the supervisor holds a grant, scoped to this template.
+#
+# Install (as root):
+#   cp terva-tenant@.service terva-tenant@.socket /etc/systemd/system/
+#   cp 49-terva-tenants.rules /etc/polkit-1/rules.d/
+#   systemctl daemon-reload
+#
+# The supervisor starts terva-tenant@<id>.socket per tenant; the service is
+# socket-activated from it. Nothing here is enabled — instances come and go with
+# the people who sign in.
+
+[Unit]
+Description=terva tenant %i
+Requires=terva-tenant@%i.socket
+After=terva-tenant@%i.socket
+
+[Service]
+# 🚨 BOTH lines, and the second is not optional.
+#
+# `DynamicUser=yes` alone names the transient user after %p — the TEMPLATE
+# prefix — NOT the instance, so EVERY tenant of this template would run as ONE
+# uid, sharing a home and each other's data. Measured on systemd 255:
+# terva-tenant@9001 and terva-tenant@9002 both ran as uid 62162. Naming the user
+# per instance is what makes the uid per instance.
+#
+# `terva serve` verifies this BEFORE starting anything: it asks systemd what user
+# the instance would resolve to and refuses the tenant if the answer does not name
+# the instance. Editing the line below to something instance-less does not weaken
+# the boundary quietly — it stops tenants starting, loudly.
+#
+# Keep the prefix SHORT. A Linux login name accepts 31 characters (32 is refused;
+# bisected on systemd 255), a tenant id is 18, and systemd's failure when it does
+# not fit is "Failed to spawn 'start' task: Invalid argument" — which names
+# neither the user nor the limit. terva serve checks the length too, and says so.
+DynamicUser=yes
+User=terva-%i
+
+# The persistent half of the ephemeral-uid pairing: systemd reconciles this
+# directory's ownership to the transient uid on every start, so state survives
+# while the uid does not. It lands under /var/lib/private (root, 0700) with a
+# symlink at /var/lib/terva-%i, and a tenant's mount namespace contains only
+# its OWN directory — a peer's state is ENOENT, not merely unreadable.
+StateDirectory=terva-%i
+Environment=TERVA_HOME=/var/lib/terva-%i
+WorkingDirectory=/var/lib/terva-%i
+
+# The daemon adopts the socket from LISTEN_FDS, so no --web-addr is needed.
+# No auth flags: the socket file's permissions ARE the boundary, and the only
+# process that can dial it is the supervisor (see SocketUser= in the .socket).
+ExecStart=/usr/local/bin/terva web
+
+# A provider credential for the tenant to spend. Sharing the operator's is the
+# supported model (see D4) — which is exactly why the supervisor withholds the
+# ctrlproto auth group from tenants: with one credential between them, a tenant
+# who could rewrite it could rewrite everyone's.
+#EnvironmentFile=/etc/terva/provider-credential
+
+# Hardening, sized honestly: the agent RUNS COMMANDS, so the real posture comes
+# from terva's own flags. These keep a tenant off the system dirs without
+# breaking its tools.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+# Tenants come and go with the people who sign in; the supervisor decides when
+# one should be running, so systemd must not second-guess it.
+Restart=no

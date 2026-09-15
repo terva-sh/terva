@@ -326,6 +326,16 @@ var modePosture = map[mode.Mode]struct {
 	// fleet-control lands, routing an approval prompt back to whoever is
 	// driving is part of that design, and this row is where the answer changes.
 	mode.Member: {core.ApprovalWorkspace, true},
+	// The supervisor runs no agent and opens no session, so nothing ever
+	// inherits this row — every tenant's posture is decided in that tenant's
+	// own child process, which resolves as mode.Web.
+	//
+	// It is nonetheless the MOST RESTRICTIVE pair rather than a convenient one,
+	// on the same reasoning as the surface row: a value that is never read is a
+	// value nobody is checking, so the day something does read it, it must not
+	// hand a process that terminates authentication for other people the
+	// posture we give unattended automation.
+	mode.Serve: {core.ApprovalWorkspace, true},
 }
 
 // postureOf answers for a mode with no posture row, and it fails CLOSED: ask

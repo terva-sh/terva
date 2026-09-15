@@ -22,27 +22,6 @@ import (
 	"terva.sh/terva/packages/relaunch"
 )
 
-// runWebMode runs the browser control-panel server: one in-process Workspace
-// (the ctrlproto.WorkspaceService) bound to a WebSocket carrier via web.Serve.
-// It is the sibling of runACPMode — same Resolve→NewAgent seam, but the wire is
-// ctrlproto over a WebSocket and the frontend is an embedded PWA.
-//
-// SIGINT/SIGTERM cancel the context so the server drains and ws.Close() tears
-// down every session's agent and extension subprocesses — the graceful stop a
-// systemd-managed daemon needs.
-// webCredentialBoot decides what starting with no credential means for this
-// daemon, and returns the error to die on — or nil to carry on without one.
-//
-// The question is not "is there a credential" but "can anything reachable from
-// here supply one". With provider login enabled the browser is a login flow: the
-// Providers pane stores a credential and clears this very error, so sessions
-// work from that moment without a restart. Refusing to boot would put the only
-// remedy behind the daemon that refused to start — exactly the bind a machine
-// with no terminal is in, told to log in at a TUI it does not have.
-//
-// Without login there is no route to a credential at all, so the failure stands.
-// It names the flag rather than only the problem, because "start it differently"
-// is the actionable half and the operator is already at a shell.
 // servePrivilegedGroup decides whether a categorically-higher method group may
 // be served on this listener, and says so when it refuses.
 //
@@ -66,6 +45,27 @@ func webCredentialBoot(credErr error, allowLogin bool) error {
 	return fmt.Errorf("%w\nterva web: nothing here can sign in — start with --web-allow-login (which needs --web-token or --web-auth-header) to log in from the control panel", credErr)
 }
 
+// runWebMode runs the browser control-panel server: one in-process Workspace
+// (the ctrlproto.WorkspaceService) bound to a WebSocket carrier via web.Serve.
+// It is the sibling of runACPMode — same Resolve→NewAgent seam, but the wire is
+// ctrlproto over a WebSocket and the frontend is an embedded PWA.
+//
+// SIGINT/SIGTERM cancel the context so the server drains and ws.Close() tears
+// down every session's agent and extension subprocesses — the graceful stop a
+// systemd-managed daemon needs.
+// webCredentialBoot decides what starting with no credential means for this
+// daemon, and returns the error to die on — or nil to carry on without one.
+//
+// The question is not "is there a credential" but "can anything reachable from
+// here supply one". With provider login enabled the browser is a login flow: the
+// Providers pane stores a credential and clears this very error, so sessions
+// work from that moment without a restart. Refusing to boot would put the only
+// remedy behind the daemon that refused to start — exactly the bind a machine
+// with no terminal is in, told to log in at a TUI it does not have.
+//
+// Without login there is no route to a credential at all, so the failure stands.
+// It names the flag rather than only the problem, because "start it differently"
+// is the actionable half and the operator is already at a shell.
 func runWebMode(ctx context.Context, args build.Args, version string) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -139,6 +139,23 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 	if err := ws.CredentialErr(); err != nil {
 		fmt.Fprintf(os.Stderr, "terva web: %v\n", err)
 		fmt.Fprintln(os.Stderr, "terva web: starting anyway — sign in from the control panel's Providers pane; sessions can start once a credential lands")
+	}
+	// A provider switch is not an error and reports none, which is exactly why
+	// it has to be said out loud here. The daemon cannot stop and ask the way
+	// the TUI does, so it does the next honest thing: name the account its turns
+	// will actually bill, rather than letting the operator infer from config.json
+	// that they are on the provider they pinned.
+	if sw := ws.ProviderSwitch(); sw != nil {
+		fmt.Fprintf(os.Stderr, "terva web: %s is unusable (%v) — running on %s/%s instead; config still says %s/%s\n",
+			sw.From, sw.Err, sw.To, sw.ToModel, sw.From, sw.FromModel)
+		fmt.Fprintln(os.Stderr, "terva web: sign in from the control panel's Providers pane to go back to your configured provider")
+	}
+	if args.WebChatConnector != "" {
+		fmt.Fprintf(os.Stderr, "terva web: attaching chat connector %q to session %q\n", args.WebChatConnector, args.WebChatSession)
+		if err := ws.AttachChat(ctx, args.WebChatSession, args.WebChatConnector, args.WebChatTimeout); err != nil {
+			return fmt.Errorf("terva web: required chat attachment failed: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "terva web: chat connector %q attached to session %q\n", args.WebChatConnector, args.WebChatSession)
 	}
 	fmt.Fprintf(os.Stderr, "terva web: workspace ready (took %s)\n", time.Since(begin).Round(10*time.Millisecond))
 	cfg, _ := config.LoadConfig()
@@ -258,6 +275,15 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 		stopRecord = stop
 	}
 
+	// A hub is this same server with an aggregating service behind it, not a
+	// second server. With no --fleet-addr, svc stays the local workspace and no
+	// member listener opens, so `terva web` is the daemon it has always been.
+	svc, stopHub, err := fleetServiceFor(ctx, args, ws, version)
+	if err != nil {
+		return err
+	}
+	defer stopHub()
+
 	// Single sign-on, when config.json carries a web_oidc block. Discovery
 	// happens HERE, at startup, rather than lazily on the first login: an
 	// unreachable or misconfigured provider should stop the daemon with a clear
@@ -267,7 +293,7 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 		return err
 	}
 
-	return web.Serve(ctx, ws, web.Options{
+	return web.Serve(ctx, svc, web.Options{
 		Addr:           args.WebAddr,
 		OIDCProvider:   oidcProvider,
 		OIDCState:      oidcState,

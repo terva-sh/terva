@@ -52,6 +52,19 @@ var notForwarded = map[string]string{
 	"UserPersonasController":  "Saved user personas are a Stage identity library; web-only. Revisit for a TUI Stage.",
 	"ContinueController":      "turn.continue is a Stage revision verb; web-only. Revisit for a TUI Stage.",
 	"ReplayController":        "Session replay/transport is a web player feature; no Go client drives it. Revisit for a TUI Stage.",
+
+	// 🚨 Different in kind from every entry above, which are "no Go client
+	// drives this YET". This one must NEVER be forwarded here. Service is a
+	// ctrlproto.WorkspaceService view, and a supervisor is not a workspace —
+	// asserting `var _ ctrlproto.TenantsController = (*Service)(nil)` would put
+	// tenants.* on the client view of every workspace daemon terva ships, and
+	// so imply a daemon that serves them. None does, by design (D8).
+	//
+	// The operator client that DOES drive these (step 10's `terva attach`
+	// against a supervisor) needs its own view over Call, negotiating the
+	// tenants group against tenant.ServeAdmin. Adding it here is the shortcut
+	// that would erase the boundary.
+	"TenantsController": "the supervisor's surface, not a workspace's — see ctrlproto/tenants.go. An operator client needs its own view; forwarding it on the WorkspaceService view would imply a workspace daemon serves it, and none does.",
 }
 
 // controllerInterfaces returns every `type XController interface { … }` declared

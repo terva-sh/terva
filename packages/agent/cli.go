@@ -220,6 +220,13 @@ func Run(rawArgs []string, version string) error {
 	if len(rawArgs) > 0 && rawArgs[0] == "member" {
 		rawArgs = append([]string{"--member"}, rawArgs[1:]...)
 	}
+	// `terva serve` is shorthand for `terva --serve` (the multi-tenant
+	// supervisor), routed like `terva web`. The supervisor is an opt-in build
+	// (-tags terva_web) — it IS the web surface, plus tenancy — so the no-tag
+	// binary routes here and exits with "serve mode not built in".
+	if len(rawArgs) > 0 && rawArgs[0] == "serve" {
+		rawArgs = append([]string{"--serve"}, rawArgs[1:]...)
+	}
 	// `terva attach [URL]` is shorthand for `terva --attach [URL]` (the
 	// remote-TUI mode), routed like `terva web`. The optional URL rides as
 	// the flag's positional value.
@@ -251,6 +258,8 @@ func Run(rawArgs []string, version string) error {
 		switch args.Mode {
 		case mode.Web:
 			build.PrintWebHelp()
+		case mode.Serve:
+			build.PrintServeHelp()
 		default:
 			PrintHelp(version)
 		}
@@ -329,6 +338,8 @@ func Run(rawArgs []string, version string) error {
 		return runWebMode(ctx, args, version)
 	case mode.Member:
 		return runMemberMode(ctx, args, version)
+	case mode.Serve:
+		return runServeMode(ctx, args, version)
 	case mode.Replay:
 		return runReplayMode(ctx, args, version)
 	case mode.Attach:

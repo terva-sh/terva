@@ -1208,6 +1208,35 @@ TaskList
 	tasks	[]TaskInfo
 	backends	[]string	omitempty
 	workers_enabled	bool	omitempty
+TenantInfo
+	id	string
+	subject	string
+	display	string	omitempty
+	enrolled_at	time.Time
+	last_seen_at	time.Time	omitempty
+	suspended	bool	omitempty
+	unentitled_since	*time.Time	omitempty
+	running	bool	omitempty
+	last_start_error	string	omitempty
+	last_start_error_at	*time.Time	omitempty
+	home	string	omitempty
+TenantRef
+	id	string
+TenantRefusal
+	subject	string
+	display	string	omitempty
+	source	string	omitempty
+	reason	string
+	count	int
+	last_at	time.Time
+TenantsContainment
+	describe	string
+	isolates	bool
+TenantsListResult
+	tenants	[]TenantInfo	omitempty
+	containment	TenantsContainment
+	refusals	[]TenantRefusal	omitempty
+	roles	[]string	omitempty
 ToolDisplay
 	subject	string	omitempty
 	body	string	omitempty

@@ -28,6 +28,12 @@ const (
 	oldDirName = "zot"
 )
 
+// HomeEnv is the variable Home() reads first and SetHome writes. Exported so a
+// caller that must name it in a CHILD's environment — the tenant supervisor
+// pointing each child at its own home — spells it the same way this package
+// does, rather than re-typing the string next to the one place it is built.
+const HomeEnv = newPrefix + "HOME"
+
 // warnDeprecated gates the one-time per-variable warning for
 // old-prefix spellings. Dormant through phase 1 (the binary still
 // shipped as zot); ON since the phase-2 rename cut, which started
@@ -108,7 +114,7 @@ func Home() string {
 // spawns) by setting the TERVA_HOME env var — the same var Home() reads first.
 // Used by project-scoped mode to redirect all terva data into a project-local
 // dir. It does not touch the old ZOT_HOME spelling.
-func SetHome(dir string) error { return os.Setenv(newPrefix+"HOME", dir) }
+func SetHome(dir string) error { return os.Setenv(HomeEnv, dir) }
 
 // DefaultHome is the OS-default terva data dir ("" when the platform
 // gives us nothing to go on). Exported for the migration engine so it
@@ -132,7 +138,7 @@ const zotFallbackDisabledName = ".zot-fallback-disabled"
 // and every reader agree without consulting Home(), which itself
 // depends on the marker.
 func zotFallbackMarkerPath() string {
-	base := os.Getenv(newPrefix + "HOME")
+	base := os.Getenv(HomeEnv)
 	if base == "" {
 		base = osDefaultDir(newDirName)
 	}

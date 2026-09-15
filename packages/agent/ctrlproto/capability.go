@@ -40,6 +40,9 @@ const capAll = CapRead | CapWrite | CapSpend
 // verb reachable by a read-only caller, so an entry is a claim that the handler
 // touches no state AND reaches no provider.
 var readOnlyMethods = map[Method]bool{
+	// Classified at the 2026-09 rebase: the tier table, a session's state card
+	// and the tool display list are all views.
+	MethodModelTiers: true, MethodSessionState: true, MethodToolsDisplay: true,
 	MethodSubscribe: true, MethodUnsubscribe: true,
 	MethodSessionsList: true, MethodSessionsArchived: true,
 	MethodUsageGet: true, MethodUsageSnapshot: true, MethodResetsList: true,
@@ -48,6 +51,7 @@ var readOnlyMethods = map[Method]bool{
 	MethodFilesList:     true,
 	MethodWorkflowsList: true, MethodWorkflowsGet: true,
 	MethodConversationReveal: true, MethodConversationHistory: true,
+	MethodSharedList: true, MethodSharedFetch: true,
 	MethodAuthProviders: true,
 	MethodSecretsStatus: true, MethodSecretsList: true,
 	MethodModelsList: true, MethodModelParams: true, MethodModelDefaultFor: true,
@@ -61,6 +65,7 @@ var readOnlyMethods = map[Method]bool{
 	MethodSessionsExport: true,
 	MethodI18nCatalog:    true,
 	MethodReplayState:    true,
+	MethodTenantsList:    true,
 }
 
 // spendingMethods reach a model or an image backend. Membership is a claim that
@@ -68,18 +73,26 @@ var readOnlyMethods = map[Method]bool{
 //
 // 🪤 Several of these are NOT obvious from the name and were found by reading
 // the handlers, not by reading the verb list: `sessions.generate_title`,
-// `suggest.reply`, `sidechat.ask`, the three doctors, and `backgrounds.generate`
-// (which reaches imagegen, not a chat model). `approve` and `answer` are here
-// because they RESUME a paused turn — answering a tool prompt is what lets the
-// model keep going.
+// `suggest.reply`, `suggest.next_step`, `sidechat.ask`, the three doctors, and
+// `backgrounds.generate` (which reaches imagegen, not a chat model). `approve`
+// and `answer` are here because they RESUME a paused turn — answering a tool
+// prompt is what lets the model keep going.
+//
+// 🚨 `suggest.next_step` is the sharpest of them, because it is the one verb
+// here NOBODY ASKS FOR: it fires on its own while the user is idle. A role that
+// could call it would hold a way to spend the daemon's credential without a
+// human ever pressing anything.
 var spendingMethods = map[Method]bool{
-	MethodPrompt: true, MethodQueue: true, MethodCompact: true,
+	// turn.resume runs the loop again on a turn that died without a reply, so
+	// it reaches the provider exactly as turn.retry does.
+	MethodTurnResume: true,
+	MethodPrompt:     true, MethodQueue: true, MethodCompact: true,
 	MethodTurnSwipe: true, MethodTurnRetry: true, MethodTurnContinue: true,
 	MethodApprove: true, MethodAnswer: true,
 	MethodPostLine: true, MethodDirectTurn: true, MethodTurnAdvance: true,
 	MethodCastSpeak:            true,
 	MethodSessionGenerateTitle: true,
-	MethodSideChatAsk:          true, MethodSuggestReply: true,
+	MethodSideChatAsk:          true, MethodSuggestReply: true, MethodSuggestNextStep: true,
 	MethodSessionsDoctor: true, MethodSessionsNextScene: true, MethodSessionsRealize: true,
 	MethodCardsDoctor: true, MethodWorldsDoctor: true,
 	MethodBackgroundGenerate: true,
@@ -111,8 +124,17 @@ func (m Method) Capabilities() Capability {
 // apart from "nobody has looked at it yet" — those are the same value and very
 // different facts.
 var writeOnlyMethods = map[Method]bool{
+	// Classified at the 2026-09 rebase: the model catalog and tier edits, and a
+	// composer draft, mutate config or session state and reach no provider.
+	MethodModelAdd: true, MethodModelHide: true, MethodModelTiersSet: true,
+	MethodModelTiersReset: true, MethodSessionSetComposer: true,
 	MethodCancel: true, MethodClear: true, MethodQueueSet: true,
 	MethodMessageEdit: true, MethodMessageDelete: true,
+	// Write rather than spend: it ARMS the next request with a command's output
+	// and reaches no provider itself. The prompt that carries it is the verb
+	// that costs money, and a caller who cannot call `prompt` can arm a tail
+	// nobody will ever send.
+	MethodShellResult:   true,
 	MethodVariantsPrune: true, MethodVariantsDrop: true,
 	MethodSessionCreate: true, MethodSessionResume: true, MethodSessionFork: true,
 	MethodSessionRename: true, MethodSessionDelete: true, MethodSessionArchive: true,
@@ -131,8 +153,8 @@ var writeOnlyMethods = map[Method]bool{
 	MethodUserPersonaSave: true, MethodUserPersonaDelete: true, MethodUserPersonaSetDefault: true,
 	MethodCastAdd: true, MethodCastRemove: true,
 	MethodWorldLorePut: true, MethodWorldLoreDelete: true, MethodWorldSet: true,
-	MethodWorldSave: true, MethodWorldDelete: true, MethodWorldUpdate: true,
-	MethodWorldSetCharacterModel: true, MethodWorldSetModel: true, MethodWorldsImport: true,
+	MethodWorldsSave: true, MethodWorldsDelete: true, MethodWorldsUpdate: true,
+	MethodWorldsSetCharacterModel: true, MethodWorldsSetModel: true, MethodWorldsImport: true,
 	MethodWorldsLorePut: true, MethodWorldsLoreDelete: true, MethodWorldsSet: true,
 	MethodWorldsAddCharacter: true, MethodWorldsRemoveCharacter: true,
 	MethodWorldsEditCharacter: true, MethodWorldsCreateCharacter: true,
@@ -144,6 +166,9 @@ var writeOnlyMethods = map[Method]bool{
 	MethodSecretsGrant: true, MethodSecretsRevoke: true, MethodSecretsForget: true,
 	MethodSideChatOpen: true, MethodSideChatClose: true,
 	MethodReplayControl: true,
+	// Write, not spend: suspending an environment stops a daemon and sets a
+	// flag. It costs nothing and — deliberately — destroys nothing.
+	MethodTenantsSuspend: true, MethodTenantsResume: true,
 }
 
 // Permits reports whether a caller holding mask may invoke m: every capability

@@ -145,6 +145,22 @@ func ParseTrustedProxies(cidrs []string) ([]*net.IPNet, error) {
 // or a TCP host:port. Binding happens before announcing: once Listen returns
 // the kernel is accepting connections, so the ready line is truthful.
 func Serve(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options) error {
+	return serveMux(ctx, opts, func(o Options) http.Handler { return newMux(ctx, svc, o) }, "terva web")
+}
+
+// serveMux is the listener half every server in this package shares: bind (or
+// adopt), re-check the fail-closed posture against the address actually bound,
+// announce, and drain on ctx.
+//
+// It is factored out rather than copied because the supervisor (ServeTenants)
+// must answer to the SAME bind check as `terva web`. A second listener
+// implementation is how one of them ends up without the check that refuses a
+// non-loopback bind with no auth — and the supervisor is the one that would be
+// facing a network.
+//
+// build takes the resolved Options because unixListener is only known after the
+// bind, and the mux reads it.
+func serveMux(ctx context.Context, opts Options, build func(Options) http.Handler, who string) error {
 	if opts.Addr == "" {
 		opts.Addr = DefaultAddr
 	}
@@ -168,7 +184,7 @@ func Serve(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options) er
 	}
 
 	srv := &http.Server{
-		Handler:           newMux(ctx, svc, opts),
+		Handler:           build(opts),
 		ReadHeaderTimeout: 10 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return ctx },
 	}
@@ -183,9 +199,9 @@ func Serve(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options) er
 		opts.OnListen(ln.Addr().Network(), ln.Addr().String())
 	}
 
-	fmt.Fprintf(os.Stderr, "terva web: ready — serving on %s\n", display)
+	fmt.Fprintf(os.Stderr, "%s: ready — serving on %s\n", who, display)
 	if opts.unixListener {
-		fmt.Fprintln(os.Stderr, "terva web: auth = the socket file's permissions (plus the bearer token, if one is set)")
+		fmt.Fprintf(os.Stderr, "%s: auth = the socket file's permissions (plus the bearer token, if one is set)\n", who)
 	} else {
 		describeAuth(opts)
 	}
@@ -499,41 +515,16 @@ func serveWS(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options, 
 	// and reap it if the peer stops answering. Both halves live in conn.go.
 	conn.armReadDeadline()
 	go conn.keepalive(connCtx)
-	hello := ctrlproto.ServerHello("terva web", opts.Version)
-	hello.Locale = opts.Locale
-	hello.CWD = opts.CWD
-	hello.Jailed = opts.Jailed
-	hello.MaxUploadBytes = maxUploadBytes
-	// This carrier mounts POST /upload, so a client may stage files and name
-	// them on a prompt. Advertised here rather than in the base hello because it
-	// is the CARRIER that can take bytes — a native client on a unix socket has
-	// no such route, and should not offer a drop target that goes nowhere.
-	hello.Features = append(hello.Features, ctrlproto.FeatureAttachments)
-	hello.MaxAttachmentBytes = attach.MaxBytes
-	// ...and GET /shared/, so the panel can turn a share record into something
-	// the user can actually click. Same carrier-not-protocol reasoning.
-	hello.Features = append(hello.Features, ctrlproto.FeatureSharedFiles)
-	if opts.AllowRestart {
-		hello.Features = append(hello.Features, ctrlproto.FeatureRestart)
-	}
-	if opts.AllowLogin {
-		hello.Groups = append(hello.Groups, ctrlproto.GroupAuth)
-	}
-	if opts.AllowSecrets {
-		hello.Groups = append(hello.Groups, ctrlproto.GroupSecrets)
-	}
-	if opts.AllowStage {
-		hello.Features = append(hello.Features, ctrlproto.FeatureStage)
-	}
+	hello := buildHello(opts, maxUploadBytes, attach.MaxBytes)
 	// Authorization: narrow the carrier's offer to what THIS caller may hold.
 	//
-	// Every group above was decided by the operator's flags — what this daemon is
-	// willing to serve at all. authz.Restrict intersects that with the principal's
-	// roles, so the two questions stay separate: the flags say what the daemon
-	// offers, the principal says who is asking. Today every auth mode resolves to
-	// the owner principal, so this changes nothing on the wire; it is on the live
-	// path for every connection precisely so it cannot rot while the identity
-	// providers that produce narrower roles are built (proposal D1/D2).
+	// Every group in buildHello was decided by the operator's flags — what this
+	// daemon is willing to serve at all. authz.Restrict intersects that with the
+	// principal's roles, so the two questions stay separate: the flags say what
+	// the daemon offers, the principal says who is asking. Today every auth mode
+	// resolves to the owner principal, so this changes nothing on the wire; it is
+	// on the live path for every connection precisely so it cannot rot while the
+	// identity providers that produce narrower roles are built (proposal D1/D2).
 	//
 	// A connection with no principal gets NO groups. That state means this handler
 	// was reached without authMiddleware, and the honest response to "nothing
@@ -550,6 +541,44 @@ func serveWS(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options, 
 	if _, err := ctrlproto.ServeConn(connCtx, conn, svc, hello, ctrlproto.WithAuthority(authz.Authority(principal))); err != nil {
 		logConnEnd(who, err)
 	}
+}
+
+// buildHello maps this daemon's Options onto the ctrlproto hello — the
+// features, groups and limits the whole browser client keys off.
+//
+// A function rather than eighteen lines inside serveWS, because inside serveWS
+// it needed a live WebSocket to observe and so was never tested at all: the only
+// assertion made on the server hello anywhere was that its protocol is 1. A
+// wrong mapping here does not fail; it silently removes a control from every
+// client, which reads as "the feature does not exist".
+func buildHello(opts Options, maxUploadBytes, maxAttachmentBytes int64) ctrlproto.Hello {
+	hello := ctrlproto.ServerHello("terva web", opts.Version)
+	hello.Locale = opts.Locale
+	hello.CWD = opts.CWD
+	hello.Jailed = opts.Jailed
+	hello.MaxUploadBytes = maxUploadBytes
+	// This carrier mounts POST /upload, so a client may stage files and name
+	// them on a prompt. Advertised here rather than in the base hello because it
+	// is the CARRIER that can take bytes — a native client on a unix socket has
+	// no such route, and should not offer a drop target that goes nowhere.
+	hello.Features = append(hello.Features, ctrlproto.FeatureAttachments)
+	hello.MaxAttachmentBytes = maxAttachmentBytes
+	// ...and GET /shared/, so the panel can turn a share record into something
+	// the user can actually click. Same carrier-not-protocol reasoning.
+	hello.Features = append(hello.Features, ctrlproto.FeatureSharedFiles)
+	if opts.AllowRestart {
+		hello.Features = append(hello.Features, ctrlproto.FeatureRestart)
+	}
+	if opts.AllowLogin {
+		hello.Groups = append(hello.Groups, ctrlproto.GroupAuth)
+	}
+	if opts.AllowSecrets {
+		hello.Groups = append(hello.Groups, ctrlproto.GroupSecrets)
+	}
+	if opts.AllowStage {
+		hello.Features = append(hello.Features, ctrlproto.FeatureStage)
+	}
+	return hello
 }
 
 // logConnEnd explains why a connection ended, for the ends that are NOT a client

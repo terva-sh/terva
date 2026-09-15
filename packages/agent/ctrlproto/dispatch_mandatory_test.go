@@ -119,6 +119,12 @@ type favoriteArgs struct {
 	On       bool
 }
 
+type hideArgs struct {
+	Provider string
+	Model    string
+	On       bool
+}
+
 type setDefaultArgs struct {
 	Provider string
 	Model    string
@@ -191,6 +197,11 @@ func (r *recorder) SwipeMessage(_ context.Context, sess string, epoch uint64, in
 
 func (r *recorder) RetryTurn(_ context.Context, sess string, p TurnRetryParams) error {
 	r.note("RetryTurn", sess, p)
+	return nil
+}
+
+func (r *recorder) ResumeTurn(_ context.Context, sess string, p TurnResumeParams) error {
+	r.note("ResumeTurn", sess, p)
 	return nil
 }
 
@@ -299,6 +310,11 @@ func (r *recorder) Surfaces(_ context.Context, sess string) ([]SurfaceMeta, erro
 	return nil, nil
 }
 
+func (r *recorder) ToolDisplays(_ context.Context, sess string) (map[string]ToolDisplay, error) {
+	r.note("ToolDisplays", sess, nil)
+	return nil, nil
+}
+
 func (r *recorder) Surface(_ context.Context, sess, id string) (Surface, error) {
 	r.note("Surface", sess, id)
 	return Surface{}, nil
@@ -341,6 +357,11 @@ func (r *recorder) SetSessionReasoning(_ context.Context, sess, level string) er
 
 func (r *recorder) SetFavoriteModel(_ context.Context, provider, model string, on bool) error {
 	r.note("SetFavoriteModel", "", favoriteArgs{Provider: provider, Model: model, On: on})
+	return nil
+}
+
+func (r *recorder) SetModelHidden(_ context.Context, provider, model string, on bool) error {
+	r.note("SetModelHidden", "", hideArgs{Provider: provider, Model: model, On: on})
 	return nil
 }
 
@@ -405,6 +426,15 @@ func mandatoryDispatchCases() []dispatchCase {
 			"RetryTurn",
 			TurnRetryParams{Epoch: 13, Guidance: "steer"},
 		},
+		// turn.resume binds the whole params struct like turn.retry above, and the
+		// two are one letter apart in the dispatch table. A distinct epoch is what
+		// makes a crossed pair of entries a mismatch rather than a silent pass.
+		{
+			MethodTurnResume,
+			TurnResumeParams{Epoch: 17},
+			"ResumeTurn",
+			TurnResumeParams{Epoch: 17},
+		},
 		{
 			MethodApprove,
 			ApproveParams{CallID: "call-1", Decision: Decision{Allow: true, Reason: "ok"}},
@@ -458,6 +488,7 @@ func mandatoryDispatchCases() []dispatchCase {
 			historyArgs{Before: 40, Limit: 20, Epoch: 6},
 		},
 		{MethodSurfacesList, nil, "Surfaces", nil},
+		{MethodToolsDisplay, nil, "ToolDisplays", nil},
 		{MethodSurfaceGet, SurfaceGetParams{ID: "surface-1"}, "Surface", "surface-1"},
 		{
 			MethodSurfaceAction,
@@ -487,6 +518,12 @@ func mandatoryDispatchCases() []dispatchCase {
 			FavoriteParams{Provider: "openai", Model: "gpt", On: true},
 			"SetFavoriteModel",
 			favoriteArgs{Provider: "openai", Model: "gpt", On: true},
+		},
+		{
+			MethodModelHide,
+			HideParams{Provider: "openrouter", Model: "anthropic/claude-sonnet-4.5", On: true},
+			"SetModelHidden",
+			hideArgs{Provider: "openrouter", Model: "anthropic/claude-sonnet-4.5", On: true},
 		},
 		{
 			MethodModelSetDefault,

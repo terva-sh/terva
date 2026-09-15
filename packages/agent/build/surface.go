@@ -77,6 +77,17 @@ var modeSurface = map[mode.Mode]Surface{
 	// Somebody else's program.
 	mode.JSON: SurfaceProgram, // also the SDK, which resolves as mode.JSON
 	mode.RPC:  SurfaceProgram,
+
+	// The supervisor composes no prompt at all — it runs no agent, and the
+	// agents it spawns are separate processes that answer this question for
+	// themselves as mode.Web. So there is no text whose destination this could
+	// describe, and the row exists because the table is exhaustive.
+	//
+	// SurfaceProgram is the right value for a row that will never be read: it
+	// is the one that PROMISES THE MODEL NOTHING. If a supervisor ever does
+	// grow a voice, inheriting "your words render as markdown somewhere" would
+	// be a claim nobody checked.
+	mode.Serve: SurfaceProgram,
 }
 
 // SurfaceOf classifies a run mode's output surface.

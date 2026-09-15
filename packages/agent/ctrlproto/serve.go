@@ -26,16 +26,6 @@ type FrameConn interface {
 	Close() error
 }
 
-// ServeConn runs the server side of ctrlproto over conn, backed by svc. It
-// performs the hello handshake (the client sends its hello first; this replies
-// with serverHello and returns the negotiated [Contract]), then reads command
-// frames and dispatches them to svc, pumping each subscribed session's event
-// stream back as event frames. It blocks until the read loop ends — ctx
-// cancellation, the peer closing, or a transport error — and returns that
-// error (nil-ish transport EOFs included; callers typically ignore the error
-// on a clean disconnect).
-//
-// ServeConn does not close conn; the carrier owns its lifecycle.
 // ServeOption adjusts one connection's serve behavior. Options rather than
 // parameters because every one of them is a property of the CALLER's trust in
 // this peer, not of the protocol — a carrier that knows nothing about
@@ -57,6 +47,16 @@ func WithAuthority(mask Capability) ServeOption {
 	return func(s *serveState) { s.authority = mask }
 }
 
+// ServeConn runs the server side of ctrlproto over conn, backed by svc. It
+// performs the hello handshake (the client sends its hello first; this replies
+// with serverHello and returns the negotiated [Contract]), then reads command
+// frames and dispatches them to svc, pumping each subscribed session's event
+// stream back as event frames. It blocks until the read loop ends — ctx
+// cancellation, the peer closing, or a transport error — and returns that
+// error (nil-ish transport EOFs included; callers typically ignore the error
+// on a clean disconnect).
+//
+// ServeConn does not close conn; the carrier owns its lifecycle.
 func ServeConn(ctx context.Context, conn FrameConn, svc WorkspaceService, serverHello Hello, opts ...ServeOption) (Contract, error) {
 	first, err := conn.ReadFrame(ctx)
 	if err != nil {
@@ -178,6 +178,12 @@ func (s *serveState) respond(id uint64, result any, err error) {
 	if err != nil {
 		s.fail(id, err)
 		return
+	}
+	// The image-data contract applies to everything crossing this boundary,
+	// not just to what the event pumps push. This is the only OKFrame writer,
+	// so it is where a pulled result gets the same treatment.
+	if !s.contract.HasFeature(FeatureImageData) {
+		result = stripResultImageData(result)
 	}
 	fr, merr := OKFrame(id, result)
 	if merr != nil {
