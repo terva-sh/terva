@@ -672,27 +672,21 @@ func (c *openaiClient) Stream(ctx context.Context, req Request) (<-chan Event, e
 		return nil, NewHTTPError(c.Name(), resp.StatusCode, resp.Header.Get("Retry-After"), snippet)
 	}
 
-	// Capture x-ratelimit-* off every successful response (free, passive —
+	// Capture the usage headers off every successful response (free, passive —
 	// the UsageReporter half of the merged /usage view).
-	c.recordRateLimitHeaders(resp.Header)
+	c.recordUsageHeaders(resp.Header)
 
 	out := make(chan Event, 16)
 	go c.runStream(ctx, resp, req, out)
 	return out, nil
 }
 
-// recordRateLimitHeaders parses x-ratelimit-* from a successful response into
-// the cached usage snapshot, when this provider has a (non-disabled) spec.
-func (c *openaiClient) recordRateLimitHeaders(h http.Header) {
-	spec, ok := rateLimitSpecFor(c.name)
-	if !ok {
-		return
-	}
-	snap, ok := parseRateLimitHeaders(h, spec)
-	if ok {
-		snap.Provider = c.name
-	}
-	c.usage.record(snap, ok)
+// recordUsageHeaders parses the usage headers a successful response carried
+// into the cached snapshot: this provider's x-ratelimit-* spec (when not
+// disabled), plus whichever vendor-native subscription set a gateway forwarded
+// (see parseUsageHeaders). Nothing is recorded when none are present.
+func (c *openaiClient) recordUsageHeaders(h http.Header) {
+	c.usage.record(parseUsageHeaders(h, c.name))
 }
 
 // UsageSnapshot returns the rate-limit windows parsed from the most recent
@@ -848,6 +842,13 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 					CompletionTokens    int `json:"completion_tokens"`
 					PromptTokensDetails struct {
 						CachedTokens int `json:"cached_tokens"`
+						// Neither is OpenAI's: a gateway translating an
+						// Anthropic response onto this wire (CLIProxyAPI)
+						// reports cache_creation_input_tokens under both
+						// names, with the same value. Absent everywhere
+						// else, so they decode to zero and change nothing.
+						CacheWriteTokens     int `json:"cache_write_tokens"`
+						CachedCreationTokens int `json:"cached_creation_tokens"`
 					} `json:"prompt_tokens_details"`
 					// A pointer: most OpenAI-compatible gateways omit this
 					// block entirely, and an absent block must stay "not
@@ -878,12 +879,22 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 				return
 			}
 			if chunk.Usage != nil {
-				usage.InputTokens = chunk.Usage.PromptTokens - chunk.Usage.PromptTokensDetails.CachedTokens
+				d := chunk.Usage.PromptTokensDetails
+				// prompt_tokens is the WHOLE prompt, and a translated
+				// Anthropic response counts the written tokens inside it
+				// too (captured 2026-09-14: 12716 prompt = 12713 written +
+				// 3 uncached), so both subsets come off the remainder.
+				written := d.CacheWriteTokens
+				if written == 0 {
+					written = d.CachedCreationTokens
+				}
+				usage.InputTokens = chunk.Usage.PromptTokens - d.CachedTokens - written
 				if usage.InputTokens < 0 {
 					usage.InputTokens = chunk.Usage.PromptTokens
 				}
 				usage.OutputTokens = chunk.Usage.CompletionTokens
-				usage.CacheReadTokens = chunk.Usage.PromptTokensDetails.CachedTokens
+				usage.CacheReadTokens = d.CachedTokens
+				usage.CacheWriteTokens = written
 				// Reasoning stays INSIDE OutputTokens — it is billed at the
 				// output rate, and subtracting it here would change the bill.
 				if d := chunk.Usage.CompletionTokensDetails; d != nil {

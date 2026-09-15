@@ -80,6 +80,38 @@ func TestOpenAIChatKeepsTheWholePromptWhenCachedExceedsIt(t *testing.T) {
 	}
 }
 
+// TestOpenAIChatReadsAGatewaysCacheWriteTokens: a gateway translating an
+// Anthropic response onto the Chat Completions wire reports the cache write
+// under prompt_tokens_details (CLIProxyAPI sends it as both cache_write_tokens
+// and cached_creation_tokens), and counts it INSIDE prompt_tokens. The fixture
+// is the live 2026-09-14 capture: without the subtraction the 12713 written
+// tokens are billed at full input price AND at the write price.
+func TestOpenAIChatReadsAGatewaysCacheWriteTokens(t *testing.T) {
+	got := openaiChatUsage(t, `{"choices":[{"delta":{"content":"hi"}}],`+
+		`"usage":{"prompt_tokens":12716,"completion_tokens":5,"total_tokens":12721,`+
+		`"prompt_tokens_details":{"cached_tokens":0,"cached_creation_tokens":12713,"cache_write_tokens":12713}}}`)
+
+	if got.CacheWriteTokens != 12713 {
+		t.Fatalf("CacheWriteTokens = %d, want 12713", got.CacheWriteTokens)
+	}
+	if got.InputTokens != 3 {
+		t.Errorf("InputTokens = %d, want 3 (12716 prompt − 12713 written)", got.InputTokens)
+	}
+	if sum := got.InputTokens + got.CacheReadTokens + got.CacheWriteTokens; sum != 12716 {
+		t.Errorf("input+cache_read+cache_write = %d, want the 12716 the gateway reported", sum)
+	}
+}
+
+// TestOpenAIChatFallsBackToCachedCreationTokens: a gateway that sends only the
+// Anthropic-flavoured spelling is read the same way.
+func TestOpenAIChatFallsBackToCachedCreationTokens(t *testing.T) {
+	got := openaiChatUsage(t, `{"choices":[{"delta":{"content":"hi"}}],`+
+		`"usage":{"prompt_tokens":1000,"completion_tokens":5,"prompt_tokens_details":{"cached_creation_tokens":900}}}`)
+	if got.CacheWriteTokens != 900 || got.InputTokens != 100 {
+		t.Errorf("CacheWriteTokens = %d InputTokens = %d, want 900 / 100", got.CacheWriteTokens, got.InputTokens)
+	}
+}
+
 // TestGeminiReportsTheUncachedRemainder: the same contract, third copy.
 // promptTokenCount is the whole prompt; cachedContentTokenCount is a subset.
 func TestGeminiReportsTheUncachedRemainder(t *testing.T) {

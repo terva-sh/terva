@@ -87,6 +87,20 @@ to, or hangs it off a cheap endpoint beside it. Today:
 - **Every OpenAI-shaped provider** (openai, groq, xai, ollama, the compatibles)
   reports whatever `x-ratelimit-*` windows its responses carry, on the same free
   ride.
+- **Anthropic** returns its subscription windows (5h, weekly, overage) as
+  `anthropic-ratelimit-unified-*` headers on every request, read the same way.
+- **A gateway in front of subscription credentials** (CLIProxyAPI, LiteLLM, a
+  corporate router) that forwards the upstream vendor's headers untouched lights
+  up too, on either wire. Both `openai-compatible` and `anthropic-compatible`
+  read all three header families — `x-codex-*`, `anthropic-ratelimit-unified-*`
+  and `x-ratelimit-*` — whichever the answering vendor sent, so a Codex-backed
+  model served over Chat Completions still shows its weekly window. The meters
+  describe whichever account served that turn; a gateway rotating several
+  credentials shows them in turn, with no indication which. Cache accounting
+  follows the same rule: a translated Claude response that reports its cache
+  write as `prompt_tokens_details.cache_write_tokens` (or
+  `cached_creation_tokens`) is priced at the model's cache-write rate, and the
+  written tokens come off the uncached input count.
 - **OpenRouter** and **DeepSeek** ship no window headers but do have a balance
   endpoint, so terva polls it lazily (cached, off the hot path) and renders the
   answer as pay-as-you-go credits: OpenRouter's key limit/remaining plus lifetime

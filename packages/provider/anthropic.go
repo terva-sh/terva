@@ -855,16 +855,14 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event
 	return out, nil
 }
 
-// recordUsageHeaders parses anthropic-ratelimit-unified-* into the cached
-// snapshot. Nothing is recorded when the headers are absent, so an API-key
-// account (no subscription, no windows) keeps reporting nothing rather than
-// reporting zeros it would be wrong to draw.
+// recordUsageHeaders parses the usage headers a successful response carried
+// into the cached snapshot: anthropic-ratelimit-unified-* from Anthropic
+// itself, or whatever vendor-native set a gateway in front of another
+// subscription forwarded (see parseUsageHeaders). Nothing is recorded when the
+// headers are absent, so an API-key account (no subscription, no windows)
+// keeps reporting nothing rather than reporting zeros it would be wrong to draw.
 func (c *anthropicClient) recordUsageHeaders(h http.Header) {
-	snap, ok := parseAnthropicUsageHeaders(h)
-	if ok {
-		snap.Provider = c.Name()
-	}
-	c.usage.record(snap, ok)
+	c.usage.record(parseUsageHeaders(h, c.Name()))
 }
 
 // UsageSnapshot returns the windows parsed from the most recent response (the

@@ -108,7 +108,7 @@ func TestOpenAIClientRecordsRateLimit(t *testing.T) {
 	h.Set("x-ratelimit-limit-requests", "100")
 	h.Set("x-ratelimit-remaining-requests", "40")
 	h.Set("x-ratelimit-reset-requests", "30s")
-	c.recordRateLimitHeaders(h)
+	c.recordUsageHeaders(h)
 
 	snap, ok := c.UsageSnapshot()
 	if !ok || snap.Provider != "groq" || len(snap.Windows) != 1 || snap.Windows[0].UsedPercent != 60 {
