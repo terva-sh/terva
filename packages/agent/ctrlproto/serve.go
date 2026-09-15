@@ -36,7 +36,28 @@ type FrameConn interface {
 // on a clean disconnect).
 //
 // ServeConn does not close conn; the carrier owns its lifecycle.
-func ServeConn(ctx context.Context, conn FrameConn, svc WorkspaceService, serverHello Hello) (Contract, error) {
+// ServeOption adjusts one connection's serve behavior. Options rather than
+// parameters because every one of them is a property of the CALLER's trust in
+// this peer, not of the protocol — a carrier that knows nothing about
+// authority should not have to say so.
+type ServeOption func(*serveState)
+
+// WithAuthority limits this connection to verbs whose [Capability] set fits
+// mask. It composes with, and does not replace, method-group negotiation:
+// groups say which surface the client asked for, the mask says what it may
+// cause. Both must pass.
+//
+// A carrier that does not pass this serves the full capability set, which is
+// what every carrier did before authority existed. That default is permissive,
+// so the production carrier passes it explicitly and
+// TestWebCarrierPassesAuthority pins that it keeps doing so — the default is
+// for in-process and test carriers that have already established trust by
+// other means, never a thing to rely on over a network.
+func WithAuthority(mask Capability) ServeOption {
+	return func(s *serveState) { s.authority = mask }
+}
+
+func ServeConn(ctx context.Context, conn FrameConn, svc WorkspaceService, serverHello Hello, opts ...ServeOption) (Contract, error) {
 	first, err := conn.ReadFrame(ctx)
 	if err != nil {
 		return Contract{}, err
@@ -60,7 +81,10 @@ func ServeConn(ctx context.Context, conn FrameConn, svc WorkspaceService, server
 		return contract, err
 	}
 
-	s := &serveState{svc: svc, contract: contract, write: write, subs: map[string]context.CancelFunc{}}
+	s := &serveState{svc: svc, contract: contract, write: write, subs: map[string]context.CancelFunc{}, authority: capAll}
+	for _, opt := range opts {
+		opt(s)
+	}
 	defer s.closeSubs()
 
 	// A client that did not negotiate FeatureWorkspaceEvents cannot subscribe to
@@ -90,6 +114,15 @@ type serveState struct {
 	svc      WorkspaceService
 	contract Contract
 	write    func(Frame) error
+	// authority is the capability ceiling for this connection. ServeConn seeds
+	// it to capAll and WithAuthority narrows it.
+	//
+	// 🔑 The ZERO VALUE DENIES EVERYTHING, and that is deliberate. Anything
+	// building a serveState by hand and forgetting this field gets a connection
+	// that refuses every verb — loudly and immediately — rather than one that
+	// quietly serves the whole surface. Fail-closed is worth the small cost of
+	// having to say capAll in tests.
+	authority Capability
 
 	mu   sync.Mutex
 	subs map[string]context.CancelFunc // session id → pump canceller
@@ -104,6 +137,18 @@ type serveState struct {
 func (s *serveState) handle(ctx context.Context, f Frame) {
 	if g := f.Method.Group(); g != "" && !s.contract.Has(g) {
 		s.write(ErrFrame(f.ID, CodeUnsupported, "method group not negotiated: "+string(g)))
+		return
+	}
+	// Authority is the SECOND gate, and it is a different question from the
+	// first. The group says which surface this client asked for; the capability
+	// mask says what it is allowed to cause. They cross — GroupSession carries
+	// both `sessions.list` and `sidechat.ask`, one of which spends money — so a
+	// connection can legitimately hold a group and still be refused a verb
+	// inside it. CodeForbidden, not CodeUnsupported: the verb exists and is
+	// negotiated, and telling a caller "unsupported" would send them hunting
+	// for a protocol problem that is not there.
+	if !f.Method.Permits(s.authority) {
+		s.write(ErrFrame(f.ID, CodeForbidden, "not permitted for this caller: "+string(f.Method)))
 		return
 	}
 
@@ -133,12 +178,6 @@ func (s *serveState) respond(id uint64, result any, err error) {
 	if err != nil {
 		s.fail(id, err)
 		return
-	}
-	// The image-data contract applies to everything crossing this boundary,
-	// not just to what the event pumps push. This is the only OKFrame writer,
-	// so it is where a pulled result gets the same treatment.
-	if !s.contract.HasFeature(FeatureImageData) {
-		result = stripResultImageData(result)
 	}
 	fr, merr := OKFrame(id, result)
 	if merr != nil {

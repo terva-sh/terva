@@ -25,6 +25,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"terva.sh/terva/packages/agent/attach"
+	"terva.sh/terva/packages/agent/authz"
 	"terva.sh/terva/packages/agent/ctrlproto"
 )
 
@@ -466,21 +467,6 @@ func serveWS(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options, 
 	// and reap it if the peer stops answering. Both halves live in conn.go.
 	conn.armReadDeadline()
 	go conn.keepalive(connCtx)
-	hello := buildHello(opts, maxUploadBytes, attach.MaxBytes)
-	if _, err := ctrlproto.ServeConn(connCtx, conn, svc, hello); err != nil {
-		logConnEnd(who, err)
-	}
-}
-
-// buildHello maps this daemon's Options onto the ctrlproto hello — the
-// features, groups and limits the whole browser client keys off.
-//
-// A function rather than eighteen lines inside serveWS, because inside serveWS
-// it needed a live WebSocket to observe and so was never tested at all: the only
-// assertion made on the server hello anywhere was that its protocol is 1. A
-// wrong mapping here does not fail; it silently removes a control from every
-// client, which reads as "the feature does not exist".
-func buildHello(opts Options, maxUploadBytes, maxAttachmentBytes int64) ctrlproto.Hello {
 	hello := ctrlproto.ServerHello("terva web", opts.Version)
 	hello.Locale = opts.Locale
 	hello.CWD = opts.CWD
@@ -491,7 +477,7 @@ func buildHello(opts Options, maxUploadBytes, maxAttachmentBytes int64) ctrlprot
 	// is the CARRIER that can take bytes — a native client on a unix socket has
 	// no such route, and should not offer a drop target that goes nowhere.
 	hello.Features = append(hello.Features, ctrlproto.FeatureAttachments)
-	hello.MaxAttachmentBytes = maxAttachmentBytes
+	hello.MaxAttachmentBytes = attach.MaxBytes
 	// ...and GET /shared/, so the panel can turn a share record into something
 	// the user can actually click. Same carrier-not-protocol reasoning.
 	hello.Features = append(hello.Features, ctrlproto.FeatureSharedFiles)
@@ -507,7 +493,31 @@ func buildHello(opts Options, maxUploadBytes, maxAttachmentBytes int64) ctrlprot
 	if opts.AllowStage {
 		hello.Features = append(hello.Features, ctrlproto.FeatureStage)
 	}
-	return hello
+	// Authorization: narrow the carrier's offer to what THIS caller may hold.
+	//
+	// Every group above was decided by the operator's flags — what this daemon is
+	// willing to serve at all. authz.Restrict intersects that with the principal's
+	// roles, so the two questions stay separate: the flags say what the daemon
+	// offers, the principal says who is asking. Today every auth mode resolves to
+	// the owner principal, so this changes nothing on the wire; it is on the live
+	// path for every connection precisely so it cannot rot while the identity
+	// providers that produce narrower roles are built (proposal D1/D2).
+	//
+	// A connection with no principal gets NO groups. That state means this handler
+	// was reached without authMiddleware, and the honest response to "nothing
+	// authenticated you" is an empty contract, not the owner's.
+	principal, ok := PrincipalFrom(r)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "terva web: %s reached /ws with no authenticated principal — serving no method groups\n", who)
+	}
+	hello.Groups = authz.Restrict(hello.Groups, principal)
+	// The second half of the same decision. Groups gate which surfaces this
+	// caller may negotiate; the capability mask gates what it may CAUSE on
+	// them, which groups cannot express — GroupSession carries `sessions.list`
+	// and `sidechat.ask` alike, and only one of those spends money.
+	if _, err := ctrlproto.ServeConn(connCtx, conn, svc, hello, ctrlproto.WithAuthority(authz.Authority(principal))); err != nil {
+		logConnEnd(who, err)
+	}
 }
 
 // logConnEnd explains why a connection ended, for the ends that are NOT a client

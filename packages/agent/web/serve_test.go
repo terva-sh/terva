@@ -18,6 +18,14 @@ import (
 	"terva.sh/terva/packages/core"
 )
 
+// authorizedOK is authorized()'s boolean half. These tests predate the
+// principal and assert only whether a request clears the gate — which is still
+// exactly the question they mean to ask, so they keep asking it.
+func authorizedOK(opts Options, r *http.Request) bool {
+	_, ok := authorized(opts, r)
+	return ok
+}
+
 // TestWSCarrierRoundTrip drives the full carrier over a real WebSocket against a
 // fake service (no credentials): handshake, subscribe (snapshot), prompt, and
 // the streamed events.
@@ -274,18 +282,18 @@ func TestForwardAuthHeaderTrust(t *testing.T) {
 		r.RemoteAddr = remote
 		return r
 	}
-	if !authorized(opts, withHeader("127.0.0.1:5555")) {
+	if !authorizedOK(opts, withHeader("127.0.0.1:5555")) {
 		t.Error("header from loopback (same-host proxy) should be honored")
 	}
-	if !authorized(opts, withHeader("10.0.0.9:5555")) {
+	if !authorizedOK(opts, withHeader("10.0.0.9:5555")) {
 		t.Error("header from a trusted-proxy CIDR should be honored")
 	}
-	if authorized(opts, withHeader("192.168.1.5:5555")) {
+	if authorizedOK(opts, withHeader("192.168.1.5:5555")) {
 		t.Error("header from an untrusted peer must be rejected (forgery path)")
 	}
 	noHeader := httptest.NewRequest("GET", "/ws", nil)
 	noHeader.RemoteAddr = "127.0.0.1:5555"
-	if authorized(opts, noHeader) {
+	if authorizedOK(opts, noHeader) {
 		t.Error("missing header should be rejected even from loopback")
 	}
 }
@@ -362,13 +370,13 @@ func TestInsecureCIDR(t *testing.T) {
 	}
 
 	// authorized: no-auth, but only loopback + the named CIDR.
-	if !authorized(scoped, req("100.71.8.29:5555", "100.91.97.14:8730")) {
+	if !authorizedOK(scoped, req("100.71.8.29:5555", "100.91.97.14:8730")) {
 		t.Error("in-CIDR source should be authorized (no-auth scoped)")
 	}
-	if !authorized(scoped, req("127.0.0.1:5555", "127.0.0.1:8730")) {
+	if !authorizedOK(scoped, req("127.0.0.1:5555", "127.0.0.1:8730")) {
 		t.Error("loopback source should be authorized on a scoped listener")
 	}
-	if authorized(scoped, req("192.168.1.5:5555", "192.168.1.5:8730")) {
+	if authorizedOK(scoped, req("192.168.1.5:5555", "192.168.1.5:8730")) {
 		t.Error("out-of-CIDR source must be rejected even though bound public")
 	}
 
@@ -386,7 +394,7 @@ func TestInsecureCIDR(t *testing.T) {
 
 	// Blanket --web-insecure: any source authorized, Host unrestricted.
 	blanket := Options{AllowInsecure: true}
-	if !authorized(blanket, req("203.0.113.7:5555", "example.com:8730")) {
+	if !authorizedOK(blanket, req("203.0.113.7:5555", "example.com:8730")) {
 		t.Error("blanket insecure authorizes any source")
 	}
 	if !hostAllowed(blanket, req("203.0.113.7:5555", "example.com:8730")) {
@@ -500,9 +508,6 @@ func (f *fakeWS) SwipeMessage(ctx context.Context, sess string, epoch uint64, in
 func (f *fakeWS) RetryTurn(ctx context.Context, sess string, p ctrlproto.TurnRetryParams) error {
 	return nil
 }
-func (f *fakeWS) ResumeTurn(ctx context.Context, sess string, p ctrlproto.TurnResumeParams) error {
-	return nil
-}
 func (f *fakeWS) ForkSession(ctx context.Context, sess string, fromIndex int) (ctrlproto.SessionInfo, error) {
 	return ctrlproto.SessionInfo{ID: "fork-of-" + sess}, nil
 }
@@ -560,9 +565,6 @@ func (f *fakeWS) Reveal(ctx context.Context, sess string, ordinal int) (ctrlprot
 func (f *fakeWS) Surfaces(ctx context.Context, sess string) ([]ctrlproto.SurfaceMeta, error) {
 	return nil, nil
 }
-func (f *fakeWS) ToolDisplays(ctx context.Context, sess string) (map[string]ctrlproto.ToolDisplay, error) {
-	return nil, nil
-}
 func (f *fakeWS) Surface(ctx context.Context, sess, id string) (ctrlproto.Surface, error) {
 	return ctrlproto.Surface{}, nil
 }
@@ -588,9 +590,6 @@ func (f *fakeWS) SetSessionReasoning(ctx context.Context, sess, level string) er
 	return nil
 }
 func (f *fakeWS) SetFavoriteModel(ctx context.Context, provider, model string, on bool) error {
-	return nil
-}
-func (f *fakeWS) SetModelHidden(ctx context.Context, provider, model string, on bool) error {
 	return nil
 }
 func (f *fakeWS) SetDefaultModel(ctx context.Context, provider, model string, scope ctrlproto.DefaultScope) error {

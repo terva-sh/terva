@@ -3,6 +3,7 @@
 package web
 
 import (
+	"context"
 	"crypto/subtle"
 	"fmt"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"terva.sh/terva/packages/agent/authz"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/i18n"
 )
@@ -27,7 +29,8 @@ func authMiddleware(opts Options, next http.Handler) http.Handler {
 			http.Error(w, i18n.T("forbidden: no auth is configured, so only a loopback Host is accepted (DNS-rebinding defense) — see the terva web log"), http.StatusForbidden)
 			return
 		}
-		if !authorized(opts, r) {
+		principal, ok := authorized(opts, r)
+		if !ok {
 			// Surface failed auth: on an exposed endpoint this is the signal an
 			// operator most wants (probes, a wrong/expired token). Health checks
 			// are unauthenticated, so they never reach here to spam the log.
@@ -53,7 +56,10 @@ func authMiddleware(opts Options, next http.Handler) http.Handler {
 		if opts.Token != "" && constantTimeEqual(requestToken(r), opts.Token) {
 			setTokenCookie(w, r, opts.Token)
 		}
-		next.ServeHTTP(w, r)
+		// Carry the principal to the handlers. Attached here, at the only place
+		// that authenticated it, so no handler can be reached with an identity
+		// nothing verified.
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey, principal)))
 	})
 }
 
@@ -146,7 +152,14 @@ func explainHostRejection(r *http.Request) {
 // authorized applies, in order: no-auth (only reachable on a loopback bind,
 // enforced at startup); a matching bearer token; or the trusted forward-auth
 // header — but ONLY when the request came from the fronting proxy.
-func authorized(opts Options, r *http.Request) bool {
+//
+// It returns the [authz.Principal] the request authenticated AS, not merely
+// whether it may pass. Every mode here resolves to the owner principal, so this
+// is the same gate it always was; what changes is that the decision now has a
+// SUBJECT attached, which is what the authorization seam in serveWS consumes.
+// Roles narrower than owner arrive with an identity provider (proposal D2/D7);
+// nothing in this file can produce one yet, deliberately.
+func authorized(opts Options, r *http.Request) (authz.Principal, bool) {
 	if opts.Token == "" && opts.AuthHeader == "" {
 		// No-auth mode. A unix-socket listener's boundary is the socket
 		// file's permissions — source-IP scoping is meaningless there. A
@@ -154,15 +167,18 @@ func authorized(opts Options, r *http.Request) bool {
 		// + the named source networks only; a blanket --web-insecure admits
 		// any source; otherwise startup guaranteed a loopback bind.
 		if opts.unixListener {
-			return true
+			return authz.Owner(authz.SourceNone, "local"), true
 		}
 		if len(opts.InsecureCIDRs) > 0 {
-			return remoteFromTrustedProxy(r.RemoteAddr, opts.InsecureCIDRs)
+			if !remoteFromTrustedProxy(r.RemoteAddr, opts.InsecureCIDRs) {
+				return authz.Principal{}, false
+			}
+			return authz.Owner(authz.SourceNone, "local"), true
 		}
-		return true
+		return authz.Owner(authz.SourceNone, "local"), true
 	}
 	if opts.Token != "" && constantTimeEqual(requestToken(r), opts.Token) {
-		return true
+		return authz.Owner(authz.SourceToken, "token"), true
 	}
 	// A forward-auth header is a PROXY assertion — trustworthy only if the request
 	// actually traversed the proxy. The header is trivially forgeable by anyone
@@ -170,10 +186,32 @@ func authorized(opts Options, r *http.Request) bool {
 	// (same-host proxy) or a configured --web-trusted-proxy CIDR. Without this,
 	// binding a non-loopback address under header auth would let any client on the
 	// network send the header and gain full owner access.
-	if opts.AuthHeader != "" && r.Header.Get(opts.AuthHeader) != "" && remoteFromTrustedProxy(r.RemoteAddr, opts.TrustedProxies) {
-		return true
+	//
+	// The header VALUE becomes the principal's subject. It used to reach exactly
+	// one place in the tree — clientDesc, a log line — so a proxy went to the
+	// trouble of asserting an identity that terva then threw away.
+	if opts.AuthHeader != "" && remoteFromTrustedProxy(r.RemoteAddr, opts.TrustedProxies) {
+		if u := r.Header.Get(opts.AuthHeader); u != "" {
+			return authz.Owner(authz.SourceForwardAuth, u), true
+		}
 	}
-	return false
+	return authz.Principal{}, false
+}
+
+// principalKey types the request-context slot carrying the authenticated
+// principal from the middleware to the handlers.
+type principalKeyType struct{}
+
+var principalKey principalKeyType
+
+// PrincipalFrom returns the principal authMiddleware attached to r.
+//
+// The false return is not a formality: a handler mounted WITHOUT the middleware
+// would find nothing here, and the safe reading of "no principal" is no
+// authority at all — never an implicit owner. Callers must fail closed.
+func PrincipalFrom(r *http.Request) (authz.Principal, bool) {
+	p, ok := r.Context().Value(principalKey).(authz.Principal)
+	return p, ok
 }
 
 // remoteFromTrustedProxy reports whether remoteAddr (host:port) is a peer we
