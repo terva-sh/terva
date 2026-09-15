@@ -101,8 +101,10 @@ model wired up — are in
 ## Auth
 
 terva's identity is single-user, so the auth here is a **gate** ("keep
-strangers out"), not an identity system. It fails closed: binding a non-loopback
-address with no auth mode is refused unless you pass `--web-insecure`.
+strangers out") more than an identity system. [Single sign-on](#single-sign-on)
+is the exception, and it resolves a real principal with roles. Either way the
+gate fails closed: binding a non-loopback address with no auth mode is refused
+unless you pass `--web-insecure`.
 
 - **Front it (recommended).** Bind loopback and put a reverse proxy that does
   real auth in front — the author runs [Authentik](https://goauthentik.io/)
@@ -215,6 +217,109 @@ address with no auth mode is refused unless you pass `--web-insecure`.
   inside the range** — anyone who can source-spoof into it, or any device on the
   overlay, has full owner access — so use it only where you trust the network;
   layer a token or forward-auth on top for anything shared.
+
+### Single sign-on
+
+The three modes above are gates. They decide whether a request gets in, and
+whatever gets in is the owner. Single sign-on is the one mode that produces an
+**identity**. A sign-in resolves a principal, carrying a subject, a display name,
+and a set of roles, so two people reaching the same daemon can hold different
+authority.
+
+It stays off until `config.json` carries a `web_oidc` block, so a daemon without
+one keeps exactly the auth modes it had. Put that block in the **user** layer
+under `$TERVA_HOME`, never in a project's `.terva/config.json`. A repository that
+could name an issuer would be a repository that decides who terva trusts to log
+in.
+
+```json
+{
+  "web_oidc": {
+    "issuer": "https://id.example.com/application/o/terva/",
+    "client_id": "kAgbCNRmQ1…",
+    "client_secret": "enc:age:v2:…",
+    "redirect_url": "https://terva.example.com/auth/oidc/callback",
+    "role_map": {
+      "terva-admins": "owner",
+      "terva-users": "member"
+    }
+  }
+}
+```
+
+| Field | Default | Notes |
+|---|---|---|
+| `issuer` | required | terva fetches `.well-known/openid-configuration` under it at startup |
+| `client_id` | required | identifies terva to the provider |
+| `client_secret` | optional | omit it for a public client, which authenticates with PKCE alone. Seal it when you do set one (below) |
+| `redirect_url` | required | absolute, and its path must be `/auth/oidc/callback` |
+| `scopes` | `profile`, `email`, `groups` | `openid` is always sent, whatever you list |
+| `groups_claim` | `groups` | Authentik and Keycloak both use that name |
+| `role_map` | empty | maps one provider group to one terva role |
+| `allow_insecure_issuer` | `false` | permits a plaintext `http://` issuer. Development only, because discovery over plaintext is unauthenticated, so whoever can rewrite it points the key fetch at their own keys and signs any identity they like |
+
+The four roles, in descending authority:
+
+| Role | May |
+|---|---|
+| `owner` | everything the carrier offers |
+| `operator` | run and reconfigure the host, but not touch credentials or the at-rest posture |
+| `member` | converse and manage their own sessions. No models, lore, extensions, prompt overrides, or jail, and no credentials |
+| `viewer` | read, and nothing else. A viewer cannot call a model, so a viewer cannot spend your subscription |
+
+Name a role that is not one of those four and terva logs `role map names "x",
+which is not a terva role — ignoring` at startup and drops it.
+
+**Seal the client secret rather than pasting it**, when the provider gives you
+one. `terva secret encrypt` takes the config path the value will live at, because
+a sealed value is bound to that path and refuses to open anywhere else:
+
+```bash
+printf %s "$CLIENT_SECRET" | terva secret encrypt web_oidc.client_secret
+```
+
+Paste the `enc:age:v2:…` output into `client_secret`. A plaintext secret still
+works, and `terva secret status` will keep reporting it as plaintext until you
+seal it.
+
+Four things are worth knowing before the first login.
+
+**`redirect_url` is explicit and is never derived from the request's `Host`.**
+A derived value would let a forged `Host` header steer the authorize request,
+and while a correctly configured provider rejects an unregistered `redirect_uri`,
+that makes your identity provider's allowlist terva's only defense against its
+own input handling. Register the same absolute URL with the provider. Omit the
+field and startup fails with a message naming the path.
+
+**An unmapped user gets nothing.** Authenticating proves who somebody is. It
+says nothing about whether you meant to give them access, so a user whose groups
+map to no role signs in successfully and is then refused, and the daemon logs
+the groups it actually received. Start with an empty `role_map` and terva warns
+at startup that every sign-in will succeed and then be refused.
+
+**Map every group you grant, including nested ones.** A provider's groups claim
+usually carries **direct** memberships only, even where that provider's own
+access rules honor group nesting. Authentik is the case to watch. Binding a
+parent group to an application admits a member of a child group, but the default
+`profile` mapping emits the child alone. So a user in `terva-admins`, nested
+under `terva-users`, arrives carrying `terva-admins` and nothing else. Map both
+names. terva unions every role a user's groups match, so naming both costs
+nothing and naming one silently grants less than you intended, or nothing at all.
+
+**Sessions do not survive a restart.** They are held server-side, with only an
+opaque random id in the cookie, so there is nothing to forge and no signing key
+to keep in a model-writable `$TERVA_HOME`. The cost is that restarting the daemon
+logs everybody out. For one daemon that is a cheap re-login rather than a design
+problem.
+
+Single sign-on and a bearer token coexist, and the login page offers both when
+both are configured. Keep the bearer. It is the way back in when the provider is
+unreachable, and it is what a non-browser client uses. Configuring single sign-on
+counts as configuring auth, so it satisfies the same startup check the other
+modes do and relaxes the `Host` check the no-auth mode depends on.
+
+The routes are `/auth/oidc/start` to begin a sign-in, `/auth/oidc/callback` for
+the provider to return to, and `/auth/oidc/logout` to drop the session.
 
 ### The first model-provider credential
 
