@@ -11,6 +11,20 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.136.0](https://github.com/terva-sh/terva/releases/tag/v0.136.0) — 2026-09-13
+
+### Features
+
+- provider: choose activation continuation per provider
+- provider: talk to Anthropic-compatible endpoints
+
+### Fixes
+
+- core: a cache cliff says whether the cache recovered
+- provider: end the wait that followed every completed reply
+- tools: a bad tool argument names its field again
+- tui: leaving the model editor returns to the model list
+
 ## [v0.135.1](https://github.com/terva-sh/terva/releases/tag/v0.135.1) — 2026-09-11
 
 ### Features

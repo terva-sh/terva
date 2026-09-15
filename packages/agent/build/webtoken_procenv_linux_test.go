@@ -91,15 +91,25 @@ func TestTW005_ProcEnvironContract(t *testing.T) {
 // runTokenChild re-execs this test binary running only this test, in the given
 // role, with extraEnv added to a base environment scrubbed of any ambient
 // TERVA_WEB_TOKEN / TW005_* so the child's launch env is exactly what we set.
+//
+// TERVA_HOME is replaced rather than merely dropped. The child resolves through
+// the full chain, and its last link — defaultWebToken — reads the token file
+// under CredentialHome(). Inheriting the real home would let a maintainer's own
+// minted token stand in for the canary, so a regression in the env route would
+// surface as a confusing value mismatch on their machine and not at all on CI.
+// The scratch dir holds no token file, which is what makes the canary the only
+// token the child can possibly resolve.
 func runTokenChild(t *testing.T, role string, extraEnv []string) []byte {
 	t.Helper()
 	var base []string
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, WebTokenEnv+"=") || strings.HasPrefix(kv, "TW005_") {
+		if strings.HasPrefix(kv, WebTokenEnv+"=") || strings.HasPrefix(kv, "TW005_") ||
+			strings.HasPrefix(kv, "TERVA_HOME=") {
 			continue
 		}
 		base = append(base, kv)
 	}
+	base = append(base, "TERVA_HOME="+testsupport.TempDir(t))
 	cmd := exec.Command(os.Args[0], "-test.run=^TestTW005_ProcEnvironContract$", "-test.v")
 	cmd.Env = append(base, append([]string{"TW005_ROLE=" + role}, extraEnv...)...)
 	out, err := cmd.CombinedOutput()

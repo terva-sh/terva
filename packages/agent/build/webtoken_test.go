@@ -22,6 +22,7 @@ func tokenFile(t *testing.T, body string) string {
 }
 
 func TestWebTokenFromFile(t *testing.T) {
+	isolateWebTokenSources(t)
 	// A file written by `echo secret > token` ends in a newline; a token that
 	// carries it authenticates against nothing.
 	got, err := ResolveWebToken(Args{WebTokenFile: tokenFile(t, "s3cret\n")})
@@ -38,6 +39,7 @@ func TestWebTokenFromFile(t *testing.T) {
 // token file is trying to avoid — and on a loopback bind it would start happily,
 // so the only clue would be an absent log line.
 func TestWebTokenFileNeverFallsOpen(t *testing.T) {
+	isolateWebTokenSources(t)
 	for name, path := range map[string]string{
 		"missing": filepath.Join(testsupport.TempDir(t), "nope"),
 		"empty":   tokenFile(t, ""),
@@ -57,7 +59,7 @@ func TestWebTokenFileNeverFallsOpen(t *testing.T) {
 // the agent's shell tool os.Environ(), so a token left there is one `env` call
 // away from the model.
 func TestWebTokenFromEnvIsScrubbed(t *testing.T) {
-	resetWebTokenOnce(t)
+	isolateWebTokenSources(t)
 	t.Setenv(WebTokenEnv, "from-env")
 
 	got, err := ResolveWebToken(Args{})
@@ -90,7 +92,7 @@ func TestWebTokenFromEnvIsScrubbed(t *testing.T) {
 // runWebMode resolves the token before it builds the Workspace, so no tool can
 // spawn ahead of the scrub.
 func TestScrubbedTokenIsInvisibleToTheAgentsShell(t *testing.T) {
-	resetWebTokenOnce(t)
+	isolateWebTokenSources(t)
 	t.Setenv(WebTokenEnv, "s3cret")
 
 	spawn := func() string {
@@ -117,7 +119,7 @@ func TestScrubbedTokenIsInvisibleToTheAgentsShell(t *testing.T) {
 // Precedence, and the flag's warning. The flag still wins (breaking it would be
 // worse than the leak), but it is the last resort, not the first.
 func TestWebTokenPrecedence(t *testing.T) {
-	resetWebTokenOnce(t)
+	isolateWebTokenSources(t)
 	t.Setenv(WebTokenEnv, "env-token")
 	file := tokenFile(t, "file-token")
 
@@ -139,7 +141,7 @@ func TestWebTokenPrecedence(t *testing.T) {
 }
 
 func TestAttachTokenFallsBackToEnv(t *testing.T) {
-	resetWebTokenOnce(t)
+	isolateWebTokenSources(t)
 	t.Setenv(WebTokenEnv, "shared")
 
 	got, err := ResolveAttachToken(Args{Token: "explicit"})
@@ -165,7 +167,7 @@ func TestAttachTokenFallsBackToEnv(t *testing.T) {
 // environment, and the trailing newline `echo secret > token` leaves is trimmed,
 // just as for the daemon.
 func TestAttachTokenFromFile(t *testing.T) {
-	resetWebTokenOnce(t)
+	isolateWebTokenSources(t)
 	t.Setenv(WebTokenEnv, "env-token")
 
 	got, err := ResolveAttachToken(Args{WebTokenFile: tokenFile(t, "file-token\n")})
@@ -191,7 +193,7 @@ func TestAttachTokenFromFile(t *testing.T) {
 // handshake with a confusing rejection; the operator wanted the credential they
 // pointed at, so say the file is the problem.
 func TestAttachTokenFileNeverFallsThroughSilently(t *testing.T) {
-	resetWebTokenOnce(t)
+	isolateWebTokenSources(t)
 	for name, path := range map[string]string{
 		"missing": filepath.Join(testsupport.TempDir(t), "nope"),
 		"empty":   tokenFile(t, ""),
@@ -214,7 +216,7 @@ func TestAttachTokenFileNeverFallsThroughSilently(t *testing.T) {
 // non-loopback bind outright. Both would be a flat contradiction of the token
 // the operator did supply.
 func TestResolvedTokenSatisfiesTheNoAuthGuards(t *testing.T) {
-	resetWebTokenOnce(t)
+	isolateWebTokenSources(t)
 	t.Setenv(WebTokenEnv, "env-token")
 
 	args := Args{AllowRestart: true, WebInsecure: true}
@@ -234,11 +236,25 @@ func TestResolvedTokenSatisfiesTheNoAuthGuards(t *testing.T) {
 	}
 }
 
-// resetWebTokenOnce lets each test exercise the read-once path. The sync.OnceValue
-// caches across a process, which is right in production and useless in a test
-// file that has to prove the caching itself.
-func resetWebTokenOnce(t *testing.T) {
+// isolateWebTokenSources puts a test in sole control of every source
+// ResolveWebToken consults, and must be the first line of any test in this file.
+//
+// Two things, deliberately in one call. Resetting the sync.OnceValue lets each
+// test exercise the read-once path, which caches across a process — right in
+// production, useless in a file that has to prove the caching itself.
+//
+// Pointing TERVA_HOME at a scratch dir closes the source that has no flag and no
+// environment variable: defaultWebToken reads config.WebTokenPath(), under the
+// real CredentialHome(), so on any machine where someone has run
+// `terva secret web-token` these tests resolved the OPERATOR'S token. They
+// passed on CI, which has none, and failed only for a maintainer who uses the
+// product — printing the live token into the test log on the way out.
+//
+// They are one helper because they were two things to remember, and the second
+// was the one forgotten.
+func isolateWebTokenSources(t *testing.T) {
 	t.Helper()
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	old := webTokenFromEnv
 	webTokenFromEnv = sync.OnceValue(func() string {
 		v := strings.TrimSpace(os.Getenv(WebTokenEnv))
@@ -259,7 +275,7 @@ func resetWebTokenOnce(t *testing.T) {
 func TestTW005_TokenSourceEnvContract(t *testing.T) {
 	// --web-token: the value lives only in Args (and, in a real launch, argv).
 	// It must never be written to the environment.
-	resetWebTokenOnce(t)
+	isolateWebTokenSources(t)
 	if _, err := ResolveWebToken(Args{WebToken: "flag-token"}); err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +284,7 @@ func TestTW005_TokenSourceEnvContract(t *testing.T) {
 	}
 
 	// --web-token-file: read from disk, never enters the environment.
-	resetWebTokenOnce(t)
+	isolateWebTokenSources(t)
 	if _, err := ResolveWebToken(Args{WebTokenFile: tokenFile(t, "file-token")}); err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +294,7 @@ func TestTW005_TokenSourceEnvContract(t *testing.T) {
 
 	// TERVA_WEB_TOKEN: present before, scrubbed from os.Environ() after. (Whether
 	// it lingers in /proc is the separate, Linux-only guarantee.)
-	resetWebTokenOnce(t)
+	isolateWebTokenSources(t)
 	t.Setenv(WebTokenEnv, "env-token")
 	if _, err := ResolveWebToken(Args{}); err != nil {
 		t.Fatal(err)
@@ -296,7 +312,7 @@ func TestTW005_TokenSourceEnvContract(t *testing.T) {
 // errors never contain a token value.
 func TestTW005_RequireFileRejectsLeakySources(t *testing.T) {
 	// --web-token (argv) is refused.
-	resetWebTokenOnce(t)
+	isolateWebTokenSources(t)
 	got, err := ResolveWebToken(Args{WebToken: "flag-token", WebTokenRequireFile: true})
 	if err == nil {
 		t.Error("require-file: --web-token was accepted; it must be a hard error")
@@ -306,7 +322,7 @@ func TestTW005_RequireFileRejectsLeakySources(t *testing.T) {
 	}
 
 	// TERVA_WEB_TOKEN (environment) is refused.
-	resetWebTokenOnce(t)
+	isolateWebTokenSources(t)
 	t.Setenv(WebTokenEnv, "env-token")
 	got, err = ResolveWebToken(Args{WebTokenRequireFile: true})
 	if err == nil {
@@ -317,7 +333,7 @@ func TestTW005_RequireFileRejectsLeakySources(t *testing.T) {
 	}
 
 	// --web-token-file is still accepted.
-	resetWebTokenOnce(t)
+	isolateWebTokenSources(t)
 	got, err = ResolveWebToken(Args{WebTokenFile: tokenFile(t, "file-token"), WebTokenRequireFile: true})
 	if err != nil {
 		t.Fatalf("require-file: --web-token-file must still be accepted, got %v", err)
@@ -327,17 +343,17 @@ func TestTW005_RequireFileRejectsLeakySources(t *testing.T) {
 	}
 
 	// No token at all is not an error.
-	resetWebTokenOnce(t)
+	isolateWebTokenSources(t)
 	if got, err = ResolveWebToken(Args{WebTokenRequireFile: true}); err != nil || got != "" {
 		t.Errorf("require-file with no token = (%q, %v), want (\"\", nil)", got, err)
 	}
 
 	// The errors are secret-safe.
-	resetWebTokenOnce(t)
+	isolateWebTokenSources(t)
 	if _, err = ResolveWebToken(Args{WebToken: "super-secret-flag", WebTokenRequireFile: true}); err != nil && strings.Contains(err.Error(), "super-secret-flag") {
 		t.Error("require-file error leaked the --web-token value")
 	}
-	resetWebTokenOnce(t)
+	isolateWebTokenSources(t)
 	t.Setenv(WebTokenEnv, "super-secret-env")
 	if _, err = ResolveWebToken(Args{WebTokenRequireFile: true}); err != nil && strings.Contains(err.Error(), "super-secret-env") {
 		t.Error("require-file error leaked the TERVA_WEB_TOKEN value")
