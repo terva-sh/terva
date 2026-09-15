@@ -42,7 +42,7 @@ func authMiddleware(opts Options, next http.Handler) http.Handler {
 			// address bar. Everything else — curl, the PWA's asset fetches, a
 			// native ctrlproto client — still gets the plain 401 it can act on.
 			if wantsLoginPage(opts, r) {
-				serveLogin(w, r, http.StatusUnauthorized, "")
+				serveLogin(w, r, opts, http.StatusUnauthorized, "")
 				return
 			}
 			w.Header().Set("WWW-Authenticate", "Bearer")
@@ -61,6 +61,19 @@ func authMiddleware(opts Options, next http.Handler) http.Handler {
 		// nothing verified.
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey, principal)))
 	})
+}
+
+// authConfigured reports whether ANY per-request auth mode is active.
+//
+// 🚨 One predicate, three callers, on purpose. `authorized`, `hostAllowed` and
+// `checkBindSafety` each used to spell this out as `Token != "" || AuthHeader
+// != ""`, and adding a third mode to two of the three would have left the
+// remaining one treating an OIDC-only daemon as UNAUTHENTICATED — which in
+// `authorized` means granting the owner principal to every caller. A shared
+// predicate is what makes that class of omission impossible rather than
+// unlikely.
+func authConfigured(opts Options) bool {
+	return opts.Token != "" || opts.AuthHeader != "" || opts.OIDCProvider != nil
 }
 
 // hostAllowed defends the no-auth loopback listener against DNS rebinding: a
@@ -85,7 +98,7 @@ func hostAllowed(opts Options, r *http.Request) bool {
 	if opts.unixListener {
 		return true
 	}
-	if opts.Token != "" || opts.AuthHeader != "" {
+	if authConfigured(opts) {
 		return true
 	}
 	if len(opts.InsecureCIDRs) > 0 {
@@ -160,7 +173,7 @@ func explainHostRejection(r *http.Request) {
 // Roles narrower than owner arrive with an identity provider (proposal D2/D7);
 // nothing in this file can produce one yet, deliberately.
 func authorized(opts Options, r *http.Request) (authz.Principal, bool) {
-	if opts.Token == "" && opts.AuthHeader == "" {
+	if !authConfigured(opts) {
 		// No-auth mode. A unix-socket listener's boundary is the socket
 		// file's permissions — source-IP scoping is meaningless there. A
 		// scoped insecure TCP listener (--web-insecure-cidr) admits loopback
@@ -176,6 +189,13 @@ func authorized(opts Options, r *http.Request) (authz.Principal, bool) {
 			return authz.Owner(authz.SourceNone, "local"), true
 		}
 		return authz.Owner(authz.SourceNone, "local"), true
+	}
+	// An established single sign-on session comes first: it is the only mode
+	// that carries a real identity and real roles, so a browser holding one
+	// should be that person rather than falling through to the owner-shaped
+	// bearer principal it may also possess.
+	if p, ok := principalFromOIDCSession(opts, r); ok {
+		return p, true
 	}
 	if opts.Token != "" && constantTimeEqual(requestToken(r), opts.Token) {
 		return authz.Owner(authz.SourceToken, "token"), true

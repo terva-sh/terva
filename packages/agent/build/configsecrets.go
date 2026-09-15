@@ -63,6 +63,16 @@ func ScanConfigSecrets(cwd string) []ConfigSecret {
 			})
 		}
 	}
+	// The single sign-on client secret. It is a credential the config schema
+	// declares outright, like an image backend's api_key — a confidential OAuth
+	// client's password, and whoever holds it can impersonate this daemon to the
+	// identity provider.
+	if cfg.WebOIDC != nil && cfg.WebOIDC.ClientSecret != "" {
+		out = append(out, ConfigSecret{
+			Path:      config.WebOIDCClientSecretPath,
+			Encrypted: secrets.IsEncryptedField(cfg.WebOIDC.ClientSecret),
+		})
+	}
 	if cfg.Image != nil {
 		for _, id := range sortedImageBackends(cfg.Image.Backends) {
 			bc := cfg.Image.Backends[id]
@@ -154,14 +164,6 @@ func ConfigReadableByAgent(cwd string) (bool, string) {
 			if hasURLUserinfo(sc.URL) {
 				return false, "mcp.servers." + name + ".url carries credentials in its userinfo (scheme://user:pass@host)"
 			}
-		}
-	}
-	// pack_registries holds URLs, so the same rule applies. terva reads only
-	// the host of an entry and never sends the userinfo, but a password in one
-	// is still a password sitting in the file.
-	for _, r := range cfg.PackRegistries {
-		if hasURLUserinfo(r) {
-			return false, "a pack_registries entry carries credentials in its userinfo (scheme://user:pass@host)"
 		}
 	}
 	return true, ""
@@ -286,6 +288,21 @@ func EncryptConfigSecrets(cwd string) ([]string, error) {
 					return
 				}
 				block[key] = b
+				changed = append(changed, path)
+			}
+		}
+		// BEFORE the Image guard below, deliberately. That guard is an early
+		// `return`, so anything placed after it silently never runs on a config
+		// with no image backends — which is most of them.
+		if c.WebOIDC != nil && c.WebOIDC.ClientSecret != "" {
+			path := config.WebOIDCClientSecretPath
+			sealed, did, err := seal(path, c.WebOIDC.ClientSecret)
+			if err != nil {
+				sealErr = err
+				return
+			}
+			if did {
+				c.WebOIDC.ClientSecret = sealed
 				changed = append(changed, path)
 			}
 		}
@@ -440,6 +457,21 @@ func ResealConfigSecrets(cwd string, open age.Identity, sealTo ...age.Recipient)
 					return
 				}
 				block[key] = b
+				changed = append(changed, path)
+			}
+		}
+		// BEFORE the Image guard, for the reason given in the sealing pass: the
+		// guard returns early, so a later block would never run without an
+		// image backend configured.
+		if c.WebOIDC != nil && c.WebOIDC.ClientSecret != "" {
+			path := config.WebOIDCClientSecretPath
+			next, did, err := reseal(path, c.WebOIDC.ClientSecret)
+			if err != nil {
+				failed = fmt.Errorf("%s: %w", path, err)
+				return
+			}
+			if did {
+				c.WebOIDC.ClientSecret = next
 				changed = append(changed, path)
 			}
 		}

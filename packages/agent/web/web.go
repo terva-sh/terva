@@ -27,6 +27,7 @@ import (
 	"terva.sh/terva/packages/agent/attach"
 	"terva.sh/terva/packages/agent/authz"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/oidc"
 )
 
 // BuiltIn reports whether the web server is compiled in (true in this build).
@@ -79,6 +80,24 @@ type Options struct {
 	// a write from this package because web owns a transport, not state under
 	// $TERVA_HOME.
 	OnListen func(network, addr string)
+
+	// OIDCProvider, when non-nil, turns on single sign-on: /auth/oidc/start and
+	// /auth/oidc/callback are mounted, the login page offers the provider, and a
+	// session cookie authenticates as a principal with the roles the operator's
+	// group→role map grants.
+	//
+	// 🚨 Its presence also means AUTH IS CONFIGURED — see authConfigured. An
+	// OIDC-only daemon that was still read as unauthenticated would hand the
+	// owner principal to every caller.
+	OIDCProvider *oidc.Provider
+
+	// OIDCState holds sessions and in-flight logins. Server-side, so the cookie
+	// is an opaque id with nothing to forge. Required whenever OIDCProvider is set.
+	OIDCState *OIDCState
+
+	// OIDCHTTPClient, when non-nil, is used for the token exchange — the seam a
+	// deployment behind a private CA needs, and the one tests use.
+	OIDCHTTPClient *http.Client
 
 	// unixListener marks the effective listener as a unix domain socket —
 	// set by Serve (from the unix: address form or an adopted systemd
@@ -309,6 +328,19 @@ func newMux(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options) *
 	// turned away the request carrying the token would be a closed loop. The
 	// handler does its own constant-time check and throttles guesses.
 	mux.HandleFunc(loginPath, handleLogin(opts))
+	// Single sign-on, OUTSIDE authMiddleware for the same reason the login form
+	// is: these are how an unauthenticated browser BECOMES authenticated, and a
+	// gate in front of them would be a closed loop. Each handler answers 404
+	// when no provider is configured, so an unconfigured daemon exposes nothing.
+	//
+	// They are mounted unconditionally rather than behind `if opts.OIDCProvider
+	// != nil` so the route set does not vary with configuration — a 404 from a
+	// known path is a better answer than a route that silently does not exist,
+	// and it keeps the mux identical across deployments for anything reasoning
+	// about it.
+	mux.HandleFunc(oidcStartPath, handleOIDCStart(opts))
+	mux.HandleFunc(oidcCallbackPath, handleOIDCCallback(opts))
+	mux.HandleFunc(oidcLogoutPath, handleOIDCLogout(opts))
 	// The credential probe. It exists because the WebSocket API is silent about
 	// WHY a handshake failed: a 401 and an unreachable daemon both surface to the
 	// page as a bare close event with no status, so the panel cannot tell "your
@@ -578,7 +610,7 @@ func checkBindSafety(opts Options) error {
 	if isLoopbackAddr(opts.Addr) || opts.AllowInsecure || len(opts.InsecureCIDRs) > 0 {
 		return nil
 	}
-	if opts.Token != "" {
+	if opts.Token != "" || opts.OIDCProvider != nil {
 		return nil
 	}
 	if opts.AuthHeader != "" && len(opts.TrustedProxies) > 0 {

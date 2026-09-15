@@ -60,7 +60,20 @@ const (
 	SourceNone        Source = "none"         // no auth configured; a loopback bind
 	SourceToken       Source = "token"        // bearer token matched
 	SourceForwardAuth Source = "forward-auth" // a trusted proxy asserted it
+	SourceOIDC        Source = "oidc"         // an identity provider vouched for it
 )
+
+// KnownRole reports whether r has an authority table entry.
+//
+// 🔑 It exists so a configured role name can be REJECTED at the boundary rather
+// than silently granting nothing. Grant already ignores an unknown role, so a
+// typo in an operator's group→role map is harmless — and invisible, which is
+// worse: it looks exactly like a working grant until someone checks what it
+// actually allows.
+func KnownRole(r Role) bool {
+	_, ok := groupsForRole[r]
+	return ok
+}
 
 // Principal is who is on the other end of a connection.
 //

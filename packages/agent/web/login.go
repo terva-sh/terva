@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -64,12 +65,20 @@ var loginTmpl = template.Must(template.New("login").Parse(`<!doctype html>
            font-weight: 500; cursor: pointer; }
   button:hover { background: #3a3836; }
   .err { color: #b91c1c; font-size: .8125rem; margin: 0 0 .75rem; }
+  .sso { display: block; box-sizing: border-box; width: 100%; border-radius: .375rem;
+         padding: .5rem .625rem; background: #1c1b1a; color: #fbfbfa; font-weight: 500;
+         text-align: center; text-decoration: none; }
+  .sso:hover { background: #3a3836; }
+  .or { display: flex; align-items: center; gap: .625rem; margin: 1rem 0 .75rem;
+        color: #a8a29e; font-size: .75rem; }
+  .or::before, .or::after { content: ""; flex: 1; height: 1px; background: #e7e5e4; }
   @media (prefers-color-scheme: dark) {
     body { background: #1c1b1a; color: #e7e5e4; }
     p { color: #a8a29e; }
     input { background: #292725; border-color: #44403c; }
-    button { background: #e7e5e4; color: #1c1b1a; }
-    button:hover { background: #fff; }
+    button, .sso { background: #e7e5e4; color: #1c1b1a; }
+    button:hover, .sso:hover { background: #fff; }
+    .or::before, .or::after { background: #44403c; }
   }
 </style>
 </head>
@@ -78,13 +87,17 @@ var loginTmpl = template.Must(template.New("login").Parse(`<!doctype html>
   <h1>terva</h1>
   <p>{{.Intro}}</p>
   {{if .Err}}<p class="err">{{.Err}}</p>{{end}}
+  {{if .SSO}}<a class="sso" href="{{.SSOHref}}">{{.SSOLabel}}</a>{{end}}
+  {{if and .SSO .TokenForm}}<div class="or"><span>{{.OrLabel}}</span></div>{{end}}
+  {{if .TokenForm}}
   <form method="post" action="{{.Action}}">
     <label for="token">{{.TokenLabel}}</label>
     <input id="token" name="token" type="password" autocomplete="current-password"
-           autofocus required spellcheck="false">
+           {{if not .SSO}}autofocus {{end}}required spellcheck="false">
     <input type="hidden" name="next" value="{{.Next}}">
     <button type="submit">{{.Connect}}</button>
   </form>
+  {{end}}
 </main>
 </body>
 </html>
@@ -98,9 +111,24 @@ func loginCSP(nonce string) string {
 		"frame-ancestors 'none'; base-uri 'none'; object-src 'none'"
 }
 
+// loginOffersSomething reports whether the login page has any way in to show.
+//
+// 🔑 Not `opts.Token != ""` any more. A daemon with single sign-on and no token
+// has plenty to offer, and three separate places used to answer this question
+// with the token test alone — so an OIDC-only daemon rendered a 404 at /auth and
+// a bare "unauthorized" on a 401, which is the state a browser is bounced INTO.
+func loginOffersSomething(opts Options) bool {
+	return opts.Token != "" || opts.OIDCProvider != nil
+}
+
 // serveLogin renders the form. status is 401 on a gate failure and 200 when the
 // operator asked for the page.
-func serveLogin(w http.ResponseWriter, r *http.Request, status int, errMsg string) {
+//
+// opts decides which ways in are shown: a token field only when a token is
+// configured, a single sign-on button only when a provider is. A page offering a
+// token box on a daemon with no token would be asking for a secret that cannot
+// exist.
+func serveLogin(w http.ResponseWriter, r *http.Request, opts Options, status int, errMsg string) {
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -128,17 +156,43 @@ func serveLogin(w http.ResponseWriter, r *http.Request, status int, errMsg strin
 	if r.URL.Path == loginPath {
 		next = r.URL.Query().Get("next")
 	}
+	safe := safeNext(next)
+	sso := opts.OIDCProvider != nil
+	tokenForm := opts.Token != ""
+
+	// The intro names what is actually on offer. Telling someone the panel
+	// "needs its bearer token" on a daemon that only does single sign-on sends
+	// them hunting for a secret nobody has.
+	intro := i18n.T("This control panel needs its bearer token.")
+	switch {
+	case sso && tokenForm:
+		intro = i18n.T("Sign in to this control panel.")
+	case sso:
+		intro = i18n.T("This control panel signs you in through your identity provider.")
+	}
+
 	// The page's fixed prose resolves here, at render time — the template is
 	// parsed at init, where translation would freeze English (the i18n.M rule).
-	_ = loginTmpl.Execute(w, struct{ Nonce, Err, Action, Next, Lang, Intro, TokenLabel, Connect string }{
+	_ = loginTmpl.Execute(w, struct {
+		Nonce, Err, Action, Next, Lang, Intro, TokenLabel, Connect string
+		SSO, TokenForm                                             bool
+		SSOHref, SSOLabel, OrLabel                                 string
+	}{
 		Nonce:      n,
 		Err:        errMsg,
 		Action:     loginPath,
-		Next:       safeNext(next),
+		Next:       safe,
 		Lang:       i18n.ActiveLang(),
-		Intro:      i18n.T("This control panel needs its bearer token."),
+		Intro:      intro,
 		TokenLabel: i18n.T("Token"),
 		Connect:    i18n.T("Connect"),
+		SSO:        sso,
+		TokenForm:  tokenForm,
+		// safeNext has already constrained this to a local path, so the deep
+		// link a visitor was denied survives the trip through the provider.
+		SSOHref:  oidcStartPath + "?next=" + url.QueryEscape(safe),
+		SSOLabel: i18n.T("Continue with single sign-on"),
+		OrLabel:  i18n.T("or"),
 	})
 }
 
@@ -160,9 +214,13 @@ func safeNext(p string) string {
 // cookies, so nothing downstream needs the token in a URL ever again.
 func handleLogin(opts Options) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// No token configured means no token to type; the form should never
-		// have been offered, and accepting a POST here would be theatre.
-		if opts.Token == "" {
+		isGET := r.Method == http.MethodGet || r.Method == http.MethodHead
+		// A POST needs a token to compare against; accepting one where none is
+		// configured would be theatre. A GET is a different question — the PAGE
+		// may still have single sign-on to offer, and 404ing it would leave an
+		// OIDC-only daemon with no login page at all, which is precisely where a
+		// 401 sends the browser.
+		if opts.Token == "" && !(isGET && loginOffersSomething(opts)) {
 			http.Error(w, i18n.T("no token auth is configured"), http.StatusNotFound)
 			return
 		}
@@ -177,27 +235,27 @@ func handleLogin(opts Options) http.HandlerFunc {
 				http.Redirect(w, r, safeNext(r.URL.Query().Get("next")), http.StatusSeeOther)
 				return
 			}
-			serveLogin(w, r, http.StatusOK, "")
+			serveLogin(w, r, opts, http.StatusOK, "")
 			return
 		}
 		if r.Method != http.MethodPost {
-			serveLogin(w, r, http.StatusMethodNotAllowed, "")
+			serveLogin(w, r, opts, http.StatusMethodNotAllowed, "")
 			return
 		}
 		who := clientIP(opts, r)
 		if !loginAttemptAllowed(who) {
 			fmt.Fprintf(os.Stderr, "terva web: throttling token guesses from %s\n", who)
-			serveLogin(w, r, http.StatusTooManyRequests, i18n.T("Too many attempts. Wait a minute and try again."))
+			serveLogin(w, r, opts, http.StatusTooManyRequests, i18n.T("Too many attempts. Wait a minute and try again."))
 			return
 		}
 		if err := r.ParseForm(); err != nil {
-			serveLogin(w, r, http.StatusBadRequest, i18n.T("Malformed submission."))
+			serveLogin(w, r, opts, http.StatusBadRequest, i18n.T("Malformed submission."))
 			return
 		}
 		if !constantTimeEqual(strings.TrimSpace(r.PostFormValue("token")), opts.Token) {
 			loginFailed(who)
 			fmt.Fprintf(os.Stderr, "terva web: rejected bad token from %s\n", who)
-			serveLogin(w, r, http.StatusUnauthorized, i18n.T("That token was not accepted."))
+			serveLogin(w, r, opts, http.StatusUnauthorized, i18n.T("That token was not accepted."))
 			return
 		}
 		loginSucceeded(who)
@@ -262,8 +320,8 @@ func loginSucceeded(ip string) { loginFailures.Delete(ip) }
 // opposed to curl, the PWA's own asset fetches, or a native ctrlproto client —
 // which all want the plain 401 and its WWW-Authenticate header, not HTML.
 func wantsLoginPage(opts Options, r *http.Request) bool {
-	if opts.Token == "" {
-		return false // nothing to type
+	if !loginOffersSomething(opts) {
+		return false // nothing to type and nowhere to sign in
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false
