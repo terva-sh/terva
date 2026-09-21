@@ -259,17 +259,120 @@ func DiscoverOpenAICompatible(ctx context.Context, baseURL, key string, defaultC
 				break
 			}
 		}
+		caps := openAICompatCaps(d.ID)
 		out = append(out, Model{
-			Provider:      "openai-compatible",
-			ID:            d.ID,
-			DisplayName:   d.ID,
-			ContextWindow: ctxWin,
-			BaseURL:       baseURL,
-			Source:        "live",
-			Caps:          visionCapsFromID(d.ID),
+			Provider:         "openai-compatible",
+			ID:               d.ID,
+			DisplayName:      d.ID,
+			ContextWindow:    ctxWin,
+			Reasoning:        caps.Reasoning,
+			ReasoningEfforts: caps.ReasoningEfforts,
+			BaseURL:          baseURL,
+			Source:           "live",
+			Caps: mergeCaps(visionCapsFromID(d.ID), map[Capability]bool{
+				CapReasoning: caps.Reasoning,
+			}),
 		})
 	}
 	return out, nil
+}
+
+// openAICompatCapabilities are the reasoning facts an OpenAI /v1/models
+// listing does not carry. It reports ids and nothing else, so a discovered row
+// said "this model does not think" about every model alike.
+type openAICompatCapabilities struct {
+	Reasoning        bool
+	ReasoningEfforts []string
+}
+
+// openAICompatCaps borrows those facts from the catalog rows with the same id.
+//
+// The search is deliberately cross-provider, unlike the Anthropic-compatible
+// twin which asks "anthropic" by name. An OpenAI-compatible gateway fronts
+// whatever its operator pointed it at, so one endpoint serves gpt-5.6-sol,
+// claude-opus-5 and glm-5.3-flash beside each other, and their capability data
+// lives under three different providers.
+//
+// buildRequest used to make this same inference itself, at request time. Doing
+// it here instead puts the answer somewhere an operator can see it in /model
+// and correct it in models.json, and it stops the rest of that borrowed row
+// (prices, context window) riding along with the one field that was wanted.
+//
+// 🪤 It reads EVERY matching row rather than the first, and that is the whole
+// point. FindModel("", id) returns whichever row the merged catalog happens to
+// order first, so a capability would be decided by catalog position. Two ids
+// in the shipped catalog disagree across providers today: gemini-2.5-pro is
+// reasoning under google-vertex and not under github-copilot, and
+// grok-code-fast-1 is the same pair the other way round. Taking the first
+// match sends reasoning_effort to a model one of its own rows calls incapable.
+//
+// Disagreement therefore yields nothing rather than a guess. The two errors
+// are not symmetric: a miss costs the operator the effort knob and is fixed by
+// one models.json line, while a false hit can make the endpoint reject every
+// turn. Unanimity among the rows is the only evidence worth acting on.
+//
+// The effort vocabulary needs its own vote, and it falls back rather than
+// voiding the result. Rows that agree a model thinks can still disagree on
+// which rungs it names, and one row's private extension ("xhigh", or a word
+// only that server knows) must not be advertised on the strength of catalog
+// position. Dropping just the list leaves Reasoning standing on the agreement
+// it earned, and clampEffortToDeclared reads an empty list as "no declared
+// enum", which sends terva's own conservative low/medium/high instead. So the
+// operator keeps a working knob and loses only the exotic rungs nobody agreed
+// on. Order does not count as disagreement, because the clamp reads the list
+// into a set.
+//
+// A row carrying a BaseURL is an operator endpoint's own, which is what
+// discovery writes. Skipping those keeps this from reading its own output from
+// a previous run and re-stamping a stale answer forever.
+//
+// Only reasoning travels. Vision stays with visionCapsFromID, which biases
+// text-only on purpose, and the output cap stays unset because a gateway's
+// limit is its own.
+func openAICompatCaps(id string) openAICompatCapabilities {
+	var out openAICompatCapabilities
+	found := false
+	for _, m := range Active() {
+		if m.ID != id || m.BaseURL != "" || m.Synthetic {
+			continue
+		}
+		if !found {
+			out = openAICompatCapabilities{
+				Reasoning:        m.Reasoning,
+				ReasoningEfforts: m.ReasoningEfforts,
+			}
+			found = true
+			continue
+		}
+		if m.Reasoning != out.Reasoning {
+			return openAICompatCapabilities{}
+		}
+		if !sameEffortSet(m.ReasoningEfforts, out.ReasoningEfforts) {
+			out.ReasoningEfforts = nil
+		}
+	}
+	return out
+}
+
+// sameEffortSet reports whether two declared effort lists name the same rungs.
+// Order carries no meaning here: clampEffortToDeclared reads its argument into
+// a map, so {low, high} and {high, low} clamp identically and calling them a
+// disagreement would throw away a vocabulary both rows agreed on.
+func sameEffortSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, s := range a {
+		seen[s]++
+	}
+	for _, s := range b {
+		seen[s]--
+		if seen[s] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // visionCapsFromID makes an explicit image-input assertion for a model

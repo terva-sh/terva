@@ -291,10 +291,36 @@ func stripReasoningMarkers(s string) string {
 // ---- request building ----
 
 func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
-	// Look up the model by id across all providers (not just openai)
-	// because the OpenAI client is also used for ollama and other
-	// OpenAI-compatible backends.
-	m, err := FindModel("", req.Model)
+	// This client's own provider first, then any provider that lists the id.
+	//
+	// 🪤 The bare cross-provider lookup used to come first, and it quietly
+	// handed one provider's catalog row to another provider's request. A
+	// gateway serving "gpt-5.6-sol" borrowed openai-codex's row, which is how
+	// that endpoint got reasoning_effort at all, and with it prices and a
+	// context window the operator never configured. Discovery now stamps the
+	// capability flags on the endpoint's own rows (see openAICompatCaps), so
+	// the scoped answer is the better one wherever it exists.
+	//
+	// The fallback stays, and it still lends the thinking claim along with the
+	// sizing. That looks like the same borrowing this trap warns about, and a
+	// review read it that way. It is load-bearing instead, because the row a
+	// gateway needs IS another vendor's: OpenRouter serving
+	// anthropic/claude-opus-4.8 has no row of its own, and the adaptive-thinking
+	// answer can only come from the Anthropic row. Ollama and a hand-typed
+	// --model arrive the same way. Stripping the claim here turns
+	// TestOpenAICompatAnthropicReasoningEffort and the openai-compatible arm of
+	// TestReasoningEffectMatchesWhatTheBuilderSends red, which is those two
+	// tests saying the borrow is the feature.
+	//
+	// What makes it safe is that the scoped lookup now runs FIRST. An endpoint
+	// with a row of its own is never overridden, so an operator corrects a bad
+	// inference with one models.json line.
+	m, err := FindModel(c.Name(), req.Model)
+	if err != nil {
+		if m2, err2 := FindModel("", req.Model); err2 == nil {
+			m, err = m2, nil
+		}
+	}
 	if err != nil {
 		// Unknown model: use sensible defaults so local/custom
 		// models still work without a catalog entry.

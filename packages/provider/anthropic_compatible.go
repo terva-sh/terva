@@ -60,10 +60,96 @@ func IsCompatProvider(id string) bool {
 // EVERY turn. The OpenAI-compatible path never had to care: Chat Completions
 // omits the field and the server picks its own default.
 //
-// 8192 matches what the openai-compatible slot's default model already gets
-// (see the agent's LoadCompatModel). It is a floor to make the endpoint work,
-// not a claim about the model — pin the real value per model in models.json.
-const anthropicCompatMaxOutput = 8192
+// It is a floor to make the endpoint work, not a claim about the model. A model
+// whose id matches a first-party Claude row takes that row's real cap instead
+// (see anthropicCompatCaps), so this applies only to an id terva has never
+// heard of: a gateway's private alias, or a model newer than this build.
+//
+// 16384 rather than the original 8192. The floor is also a ceiling, because
+// buildRequest clamps the turn's budget to MaxOutput, so 8192 silently
+// truncated every long answer from a modern Claude backend.
+//
+// 🪤 The two failure modes are not alike, and the number is a bet between
+// them. Too low truncates, quietly, on every long answer. Too high sends a
+// max_tokens the server refuses, which fails the turn outright. Neither is
+// safe, so "be conservative" gives no answer here: 8192 was not the cautious
+// choice, it was the one whose damage nobody saw.
+//
+// This sat at 32768 first. A terva-review on PR #1300 pointed out that the
+// value lands on every id with no first-party Claude row, which is exactly a
+// gateway's private alias or a model newer than this build, and a backend
+// capping under it turns from working to rejecting. 16384 halves that exposed
+// band while staying at twice the old truncation point, and it stays well
+// under the 64000 and 128000 the current families allow.
+//
+// It remains a guess about a model terva has never heard of. Pin the real
+// value per model in models.json, which wins over this.
+const anthropicCompatMaxOutput = 16384
+
+// anthropicCompatCapabilities are the per-model facts an Anthropic /v1/models
+// listing does not carry: whether the model thinks, which thinking mode it
+// takes, and how much output it will emit.
+type anthropicCompatCapabilities struct {
+	Reasoning        bool
+	AdaptiveThinking bool
+	MaxOutput        int
+}
+
+// anthropicCompatCaps decides those facts for one discovered id, preferring
+// the row terva already curates for the first-party Claude model of the same
+// name.
+//
+// 🪤 The bug this closes is silent, which is why it survived. An Anthropic
+// /v1/models page carries an id and a display name, nothing else, so every
+// discovered row had Reasoning false. buildRequest gates the entire thinking
+// block on that field, so a request went out with no `thinking` and no
+// `output_config` however the operator set /reasoning. Nothing failed: the
+// model still thought at whatever depth the backend defaults to, and the
+// effort knob in the interface simply did nothing. Measured against one
+// gateway in September 2026, an unset effort spent about 1700 thinking tokens
+// on a prompt where "high" spent about 3400.
+//
+// Only capability flags travel. Prices stay at zero, because a gateway in
+// front of a subscription charges nothing per token and inheriting Anthropic's
+// list rates would invent a bill the operator never gets. The context window
+// stays with the operator's endpoint config, which is the one number they did
+// tell us.
+func anthropicCompatCaps(id string) anthropicCompatCapabilities {
+	out := anthropicCompatCapabilities{MaxOutput: anthropicCompatMaxOutput}
+	if m, err := FindModel("anthropic", id); err == nil {
+		out.Reasoning = m.Reasoning
+		out.AdaptiveThinking = m.AdaptiveThinking
+		if m.MaxOutput > 0 {
+			out.MaxOutput = m.MaxOutput
+		}
+		return out
+	}
+	out.Reasoning = claudeThinkingFromID(id)
+	out.AdaptiveThinking = out.Reasoning && adaptiveThinkingFromID(id)
+	return out
+}
+
+// claudeThinkingFromID reports whether an id names a Claude family that
+// supports extended thinking, for a gateway id with no catalog row.
+//
+// The list names families rather than reading a version number, and it stays
+// short on purpose. The two errors are not symmetric: a miss costs the operator
+// the effort knob and nothing else, while a false hit sends a thinking block to
+// a model that has none and the API rejects every turn.
+func claudeThinkingFromID(id string) bool {
+	l := strings.ToLower(id)
+	for _, marker := range []string{
+		"claude-3-7",
+		"claude-sonnet-4", "claude-opus-4", "claude-haiku-4",
+		"claude-sonnet-5", "claude-opus-5", "claude-haiku-5",
+		"fable",
+	} {
+		if strings.Contains(l, marker) {
+			return true
+		}
+	}
+	return false
+}
 
 // AnthropicCompatOptions are the per-endpoint wire settings for an
 // Anthropic-Messages-compatible backend. The zero value is what
@@ -162,16 +248,21 @@ func DiscoverAnthropicCompatible(ctx context.Context, baseURL, key string, defau
 		if display == "" {
 			display = d.ID
 		}
+		caps := anthropicCompatCaps(d.ID)
 		out = append(out, Model{
 			Provider:      AnthropicCompatProvider,
 			ID:            d.ID,
 			DisplayName:   display,
 			ContextWindow: defaultCtx,
 			// See anthropicCompatMaxOutput: zero here is a 400 on every turn.
-			MaxOutput: anthropicCompatMaxOutput,
-			BaseURL:   baseURL,
-			Source:    "live",
-			Caps:      visionCapsFromID(d.ID),
+			MaxOutput:        caps.MaxOutput,
+			Reasoning:        caps.Reasoning,
+			AdaptiveThinking: caps.AdaptiveThinking,
+			BaseURL:          baseURL,
+			Source:           "live",
+			Caps: mergeCaps(visionCapsFromID(d.ID), map[Capability]bool{
+				CapReasoning: caps.Reasoning,
+			}),
 		})
 	}
 	return out, nil
