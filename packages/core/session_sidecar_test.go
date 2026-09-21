@@ -13,9 +13,10 @@ import (
 // error log.
 //
 // These guards range over sessionSidecars deliberately. The drift they exist to
-// stop is a new sidecar added to the table while one of the six lifecycle sites
-// keeps its old hand-written list — delete, the empty-transcript prune, archive,
-// restore, and the live and archived listing filters. Ranging means a row added
+// stop is a new sidecar added to the table while one of the lifecycle sites
+// keeps its old hand-written list — delete, BOTH empty-transcript prunes
+// (Session.Close and PruneEmptySessions), archive, restore, and the live and
+// archived listing filters. Ranging means a row added
 // to the table is immediately carried through all of them, and a site that
 // forgot fails here instead of leaking a file in production.
 //
@@ -123,7 +124,7 @@ func TestNoSidecarIsListedAsASession(t *testing.T) {
 // The empty-transcript prune drops the sidecars with it. Decided in
 // docs/proposals/session-state-sidecar.md: a never-sent session is still empty,
 // so the sidecar is expendable — but it must be REMOVED, not left orphaned.
-func TestEverySidecarGoesWithAPrunedEmptyTranscript(t *testing.T) {
+func TestEverySidecarGoesWithTheEmptyTranscriptCloseDiscards(t *testing.T) {
 	root := testsupport.TempDir(t)
 	s, err := NewSession(root, root, "anthropic", "claude-sonnet-4-5", "test")
 	if err != nil {
@@ -137,6 +138,48 @@ func TestEverySidecarGoesWithAPrunedEmptyTranscript(t *testing.T) {
 	}
 	if _, err := os.Stat(s.Path); !os.IsNotExist(err) {
 		t.Fatal("precondition: the empty transcript was not pruned, so this proves nothing about its sidecars")
+	}
+	for p := range want {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("sidecar %s outlived the transcript it belongs to", filepath.Base(p))
+		}
+	}
+}
+
+// The same guarantee at the OTHER prune site, which had no guard at all.
+//
+// These are two functions, not one: Close discards a transcript this process
+// created and never wrote a message to, while PruneEmptySessions sweeps one an
+// EARLIER process abandoned. The guard above covers only the first, and was
+// named as though it covered the prune in general — so PruneEmptySessions
+// removed transcripts and orphaned every sidecar beside them, under a test
+// whose name said that could not happen.
+//
+// Written to fail without the fix: drop the SessionSidecarPaths loop from
+// PruneEmptySessions and this test finds the sidecars still on disk.
+func TestEverySidecarGoesWithAStubPruneEmptySessionsRemoves(t *testing.T) {
+	root := testsupport.TempDir(t)
+	s, err := NewSession(root, root, "anthropic", "claude-sonnet-4-5", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := s.Path
+	want := writeLiveSidecars(t, path)
+
+	// Close must leave the stub behind, so that the prune is what removes it —
+	// otherwise this re-tests the guard above.
+	s.freshFile = false
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("precondition: the stub went before the prune ran: %v", err)
+	}
+
+	PruneEmptySessions(root, root)
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("precondition: the stub survived the prune, so this proves nothing about its sidecars")
 	}
 	for p := range want {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {

@@ -156,7 +156,7 @@ func TestRetryRowPersistsAndIsSkippedByTheLoader(t *testing.T) {
 
 	// Resume must not see it. An informational row that reached the transcript
 	// would be replayed to the model as content.
-	_, msgs, err := OpenSession(path)
+	msgs, err := ReadSessionMessages(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

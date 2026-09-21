@@ -41,6 +41,12 @@ func (w *Workspace) ArchiveSession(_ context.Context, sess string) (ctrlproto.Ar
 		if errors.Is(err, core.ErrNoSuchSession) {
 			return ctrlproto.ArchivedSessionInfo{}, ctrlproto.ErrNoSession
 		}
+		// Another terva has it open. That is the caller's problem to fix rather
+		// than ours to report as a fault, so it is a bad request carrying the
+		// holder rather than an internal error.
+		if errors.Is(err, core.ErrSessionLocked) {
+			return ctrlproto.ArchivedSessionInfo{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("archive: %v", err))
+		}
 		return ctrlproto.ArchivedSessionInfo{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("archive: %v", err))
 	}
 	// A session left the listing; every board and picker re-lists.

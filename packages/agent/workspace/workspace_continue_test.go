@@ -72,7 +72,7 @@ func TestContinueTurnMergesAndPersists(t *testing.T) {
 		t.Errorf("after continue = %v, want [u0 %q]", got, want)
 	}
 	// The extension persisted as a replace amend — a reload reconstructs it.
-	if _, reloaded, err := core.OpenSession(s.sess.Path); err != nil {
+	if reloaded, err := core.ReadSessionMessages(s.sess.Path); err != nil {
 		t.Fatalf("reopen: %v", err)
 	} else if got := reviseTexts(reloaded); !reflect.DeepEqual(got, []string{"u0", want}) {
 		t.Errorf("reloaded = %v, want [u0 %q]", got, want)

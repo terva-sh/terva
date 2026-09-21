@@ -165,7 +165,7 @@ func TestReadReplayRowsKeepsCompactedHistory(t *testing.T) {
 	}
 
 	// Contrast: the loader collapses to the checkpoint + the trailing message.
-	_, loaded, err := OpenSession(path)
+	loaded, err := ReadSessionMessages(path)
 	if err != nil {
 		t.Fatal(err)
 	}

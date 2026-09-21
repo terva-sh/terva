@@ -53,11 +53,12 @@ func TestConcurrentRevisionUsesEpochOnce(t *testing.T) {
 			if success != 1 || len(s.agent.Messages()) != 31 {
 				t.Fatalf("same-epoch deletes accepted %d times; transcript has %d messages", success, len(s.agent.Messages()))
 			}
-			reopened, replay, err := core.OpenSession(sess.Path)
+			// Read-only: the session is still open above, and taking a second
+			// write handle on it is what the session lock refuses.
+			replay, err := core.ReadSessionMessages(sess.Path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer reopened.Close()
 			if !reflect.DeepEqual(reviseTexts(replay), reviseTexts(s.agent.Messages())) {
 				t.Fatal("live transcript differs from replay after concurrent deletes")
 			}

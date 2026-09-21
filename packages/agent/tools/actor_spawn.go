@@ -352,7 +352,12 @@ func waitTurn(ctx context.Context, turnDone <-chan string, terminated <-chan str
 // meta lines) if the session can't be read yet (a write/flush race).
 func actorReply(sessionPath string, transcript []string) string {
 	if sessionPath != "" {
-		if _, msgs, err := core.OpenSession(sessionPath); err == nil {
+		// Read-only, and it must stay that way. This reads the transcript of a
+		// swarm child, and the parent can reach it while that child is still
+		// writing. OpenSession was wrong twice here: it returned a live
+		// O_APPEND|O_WRONLY handle that nothing closed, and a write handle on a
+		// running child's session is exactly what the session lock refuses.
+		if msgs, err := core.ReadSessionMessages(sessionPath); err == nil {
 			if line := lastAssistantText(msgs); line != "" {
 				return line
 			}

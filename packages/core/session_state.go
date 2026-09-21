@@ -134,6 +134,12 @@ func LoadSessionState(path string) SessionState {
 // Writing an empty state removes the file: an empty sidecar and no sidecar mean
 // the same thing, and leaving one behind litters the sessions directory with
 // files that say nothing.
+//
+// 🔑 Outside the session lock, deliberately. The composer draft is
+// last-writer-wins by decision, and it is shared between the TUI and every open
+// browser tab on purpose. A lock refusal here would fail a session over a
+// draft, which is exactly the trade this file's own header refuses: losing a
+// draft is a disappointment, and failing the session over one is a catastrophe.
 func SaveSessionState(path string, state SessionState) error {
 	if path == "" {
 		return errors.New("session state: empty path")

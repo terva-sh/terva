@@ -252,16 +252,18 @@ func TestACPSetConfigOptionPersistsModel(t *testing.T) {
 		"value":     "cross-model",
 	})
 
-	// Reopen the durable session directly: its meta must reflect the switch.
-	sess, _, err := core.OpenSession(sid)
+	// Read the durable session back: its meta must reflect the switch.
+	// Read-only, because the ACP server still has this session open and a
+	// second write handle on it is what the session lock refuses.
+	_, meta, err := core.ReadSessionMeta(sid)
 	if err != nil {
-		t.Fatalf("OpenSession(%q): %v", sid, err)
+		t.Fatalf("ReadSessionMeta(%q): %v", sid, err)
 	}
-	if sess.Meta.Model != "cross-model" {
-		t.Errorf("persisted model = %q; want cross-model (UpdateModel must run)", sess.Meta.Model)
+	if meta.Model != "cross-model" {
+		t.Errorf("persisted model = %q; want cross-model (UpdateModel must run)", meta.Model)
 	}
-	if sess.Meta.Provider != "other" {
-		t.Errorf("persisted provider = %q; want other", sess.Meta.Provider)
+	if meta.Provider != "other" {
+		t.Errorf("persisted provider = %q; want other", meta.Provider)
 	}
 }
 

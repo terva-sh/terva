@@ -95,7 +95,7 @@ func TestSwipeTailVariants(t *testing.T) {
 		t.Errorf("tail after swipe = %+v, want active 0", snap.Tail)
 	}
 	// Persisted: a reload from disk reconstructs the swiped transcript.
-	if _, reloaded, err := core.OpenSession(path); err != nil {
+	if reloaded, err := core.ReadSessionMessages(path); err != nil {
 		t.Fatalf("reopen: %v", err)
 	} else if got := reviseTexts(reloaded); !reflect.DeepEqual(got, []string{"u0", "a0"}) {
 		t.Errorf("reloaded after swipe = %v, want [u0 a0]", got)
@@ -204,7 +204,7 @@ func TestRetryRegeneratesKeepingTake(t *testing.T) {
 	if got := reviseTexts(s.agent.Messages()); !reflect.DeepEqual(got, []string{"u0", "a0"}) {
 		t.Errorf("after swipe-back = %v, want [u0 a0]", got)
 	}
-	if _, reloaded, err := core.OpenSession(s.sess.Path); err != nil {
+	if reloaded, err := core.ReadSessionMessages(s.sess.Path); err != nil {
 		t.Fatalf("reopen: %v", err)
 	} else if got := reviseTexts(reloaded); !reflect.DeepEqual(got, []string{"u0", "a0"}) {
 		t.Errorf("reloaded = %v, want [u0 a0]", got)

@@ -119,7 +119,7 @@ func TestRPCSessionPersistsAndResumes(t *testing.T) {
 
 	// Both turns are now in the durable transcript — the second stacked on the
 	// first, proving continuity across the revival.
-	_, all, err := core.OpenSession(sessPath)
+	all, err := core.ReadSessionMessages(sessPath)
 	if err != nil {
 		t.Fatalf("final reopen: %v", err)
 	}

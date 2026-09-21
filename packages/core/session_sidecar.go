@@ -63,6 +63,21 @@ var sessionSidecars = []sessionSidecar{
 	// it later should find the half-written message they left in it. Compressing
 	// a small JSON buys nothing in bytes; it buys one uniform archive path.
 	{suffix: stateSidecarSuffix, archivedSuffix: stateSidecarArchivedSuffix},
+	// 🔑 The session lock's two files (<stem>.lock and <stem>.lock.json) are
+	// deliberately NOT rows here, for a reason on each side.
+	//
+	// Semantically they are runtime state about who has the session open right
+	// now. Archiving one would store a claim naming a pid from another machine
+	// and another year, and exporting one would carry a lock into a transcript
+	// somebody else imports.
+	//
+	// Mechanically a row here is worse than useless: the guard test for this
+	// table writes over every declared sidecar WHILE the session is open, and
+	// that write would land on a byte-range-locked file and fail on Windows.
+	//
+	// Callers that remove a transcript drop them through
+	// sessionlock.RemoveArtifacts instead. Neither name ends in .jsonl, so
+	// isSessionTranscriptName already hides both from every bucket scanner.
 }
 
 // SessionSidecarPaths returns the paths of every sidecar belonging to the

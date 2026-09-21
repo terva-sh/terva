@@ -40,7 +40,7 @@ func TestAmendReplaceDeleteTruncate(t *testing.T) {
 	path := s.Path
 	_ = s.Close()
 
-	_, msgs, err := OpenSession(path)
+	msgs, err := ReadSessionMessages(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestAmendAcrossCompaction(t *testing.T) {
 	path := s.Path
 	_ = s.Close()
 
-	_, msgs, err := OpenSession(path)
+	msgs, err := ReadSessionMessages(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestBranchSessionWithAmends(t *testing.T) {
 	if err != nil {
 		t.Fatalf("branch: %v", err)
 	}
-	_, msgs, err := OpenSession(branchPath)
+	msgs, err := ReadSessionMessages(branchPath)
 	if err != nil {
 		t.Fatalf("open branch: %v", err)
 	}

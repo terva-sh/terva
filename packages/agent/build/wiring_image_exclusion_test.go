@@ -110,7 +110,7 @@ func TestWiredPersistenceRecordsImageExclusion(t *testing.T) {
 
 	// Reload: the loader must apply the directive, so the rejected image never
 	// comes back into the transcript the next turn would send.
-	_, msgs, err := core.OpenSession(path)
+	msgs, err := core.ReadSessionMessages(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

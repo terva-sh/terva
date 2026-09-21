@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/privfs"
+	"terva.sh/terva/packages/sessionlock"
 )
 
 // ArchiveDirName is the subdirectory, inside a cwd's session directory, that
@@ -88,6 +89,12 @@ var ErrSessionExists = errors.New("a session with that id is already active")
 // the source is removed, so an interruption can leave two copies but never zero.
 // A leftover archived copy is harmless — nothing lists the archive dir except
 // ListArchivedSessions, and a re-archive replaces it atomically.
+//
+// 🚨 It refuses a session another PROCESS holds open. This function removes the
+// live transcript, and a daemon appending to it would go on writing to an
+// unlinked file: the turns would look persisted and the session would be gone.
+// The in-process caller closes its own handle first (see the workspace's
+// archive path), so this never refuses the daemon that asked for it.
 func ArchiveSession(root, cwd, id string) (ArchivedSession, error) {
 	src := filepath.Join(SessionsDir(root, cwd), id+".jsonl")
 	info, err := os.Stat(src)
@@ -96,6 +103,12 @@ func ArchiveSession(root, cwd, id string) (ArchivedSession, error) {
 			return ArchivedSession{}, ErrNoSuchSession
 		}
 		return ArchivedSession{}, err
+	}
+	if SessionIsLocked(src) {
+		claim, ok := SessionLockClaim(src)
+		return ArchivedSession{}, &sessionlock.BusyError{
+			Path: src, Cause: sessionlock.CauseLiveHandle, Claim: claim, HasClaim: ok,
+		}
 	}
 
 	dir := ArchiveDir(root, cwd)
@@ -123,6 +136,10 @@ func ArchiveSession(root, cwd, id string) (ArchivedSession, error) {
 			_ = os.Remove(p.Live)
 		}
 	}
+	// The lock artifacts do not travel: a claim describes who had the session
+	// open, which is meaningless once it is archived. Safe to unlink the guard
+	// here, because the transcript it guarded is already gone.
+	sessionlock.RemoveArtifacts(src)
 
 	out, err := describeArchived(dst, id)
 	if err != nil {
@@ -154,6 +171,10 @@ func RestoreSession(root, cwd, id string) (string, error) {
 	if err := privfs.MkdirAll(filepath.Dir(dst)); err != nil {
 		return "", fmt.Errorf("restore: create dir: %w", err)
 	}
+	// Defence in depth against a half-completed archive: ArchiveSession drops
+	// these, so anything here describes a holder of a transcript that no longer
+	// exists, and leaving it would refuse the session we are about to restore.
+	sessionlock.RemoveArtifacts(dst)
 	if err := gunzipFile(src, dst); err != nil {
 		return "", fmt.Errorf("restore: decompress: %w", err)
 	}

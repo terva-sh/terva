@@ -12,6 +12,20 @@
 // flock/LockFileEx the right primitive over a lockfile with a heartbeat: no
 // staleness timeout to tune, and no window where a crashed holder has to be
 // waited out before anything can proceed.
+//
+// The session lock (packages/sessionlock) pairs one of these with a record and
+// does not contradict the paragraph above. The flock is still what excludes,
+// and a crashed holder is still recovered the instant the kernel drops it. The
+// record beside it carries only what an flock structurally cannot: a reason a
+// second process can print, the holder's name, and a claim a person makes
+// deliberately and which outlives the process that made it. An expiry appears
+// there for that last case alone, because a claim with no process behind it has
+// no other way to end.
+//
+// TryAcquire exists for the same feature. Acquire waits, which is right for a
+// credential refresh that will be over in milliseconds and wrong for opening a
+// session another terva holds for hours: that call has to report the conflict
+// rather than hang with no output.
 package filelock
 
 import (

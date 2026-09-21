@@ -61,7 +61,7 @@ func TestATurnWithUnwritableArgumentsStillReachesDisk(t *testing.T) {
 	}
 
 	// Round-trip: what comes back must be usable, and must still be flagged.
-	_, msgs, err := OpenSession(sess.Path)
+	msgs, err := ReadSessionMessages(sess.Path)
 	if err != nil {
 		t.Fatal(err)
 	}

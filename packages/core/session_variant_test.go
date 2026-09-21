@@ -97,7 +97,7 @@ func TestSelectSwipesVariants(t *testing.T) {
 		t.Fatalf("tail state: start=%d active=%d takes=%d, want 1/0/2", tailStart, active, len(takes))
 	}
 	// The reload path (OpenSession) must reconstruct the same swiped transcript.
-	_, reloaded, err := OpenSession(path)
+	reloaded, err := ReadSessionMessages(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestSeedGreetingVariants(t *testing.T) {
 	if walkMsgTexts(takes[0])[0] != "g0" || walkMsgTexts(takes[1])[0] != "g1" || walkMsgTexts(takes[2])[0] != "g2" {
 		t.Errorf("takes = [%v %v %v], want [[g0][g1][g2]]", walkMsgTexts(takes[0]), walkMsgTexts(takes[1]), walkMsgTexts(takes[2]))
 	}
-	if _, reloaded, err := OpenSession(path); err != nil {
+	if reloaded, err := ReadSessionMessages(path); err != nil {
 		t.Fatalf("reopen: %v", err)
 	} else if got := walkMsgTexts(reloaded); !reflect.DeepEqual(got, []string{"g1"}) {
 		t.Errorf("reload = %v, want [g1]", got)

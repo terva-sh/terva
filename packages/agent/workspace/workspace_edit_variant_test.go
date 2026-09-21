@@ -211,6 +211,12 @@ func TestEditOlderMessageCreatesVariantMarker(t *testing.T) {
 
 	// Persisted (keep_prior) and re-seeded on resume: a fresh workspace over the same
 	// home resolves the session and draws the marker from disk.
+	//
+	// The first workspace is closed first, which is what a daemon restart
+	// actually does. Two live workspaces over one session is the thing the
+	// session lock refuses, so leaving it open would test a shape that cannot
+	// happen in production.
+	_ = w.Close()
 	w2, err := NewWorkspace(build.Args{Provider: "openai", Model: "gpt-5", CWD: cwd}, "test")
 	if err != nil {
 		t.Fatal(err)
@@ -278,6 +284,11 @@ func TestSwipeMessageVariant(t *testing.T) {
 
 	// Resume in a fresh workspace: the take list is NOT in memory (seedMsgVars kept
 	// only the count), so this swipe must hydrate it from disk.
+	//
+	// The first workspace is closed first, which is what a daemon restart
+	// actually does. Two live workspaces over one session is the thing the
+	// session lock refuses.
+	_ = w.Close()
 	w2, err := NewWorkspace(build.Args{Provider: "openai", Model: "gpt-5", CWD: cwd}, "test")
 	if err != nil {
 		t.Fatal(err)

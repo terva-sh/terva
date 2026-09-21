@@ -35,15 +35,16 @@ func TestCreateSessionPersistsImmersiveSpec(t *testing.T) {
 		t.Errorf("SessionInfo.Experience = %q, want %q", info.Experience, "play")
 	}
 
-	// Reopen from disk — the honest simulation of a daemon restart.
-	s, _, err := core.OpenSession(info.Path)
+	// Read back from disk. Read-only on purpose: the session is still live in
+	// the workspace above, and a second WRITE handle on it is what the session
+	// lock exists to refuse.
+	_, meta, err := core.ReadSessionMeta(info.Path)
 	if err != nil {
 		t.Fatalf("reopen %s: %v", info.Path, err)
 	}
-	defer s.Close()
-	if s.Meta.Experience != "play" || s.Meta.Persona != "kertoja" {
+	if meta.Experience != "play" || meta.Persona != "kertoja" {
 		t.Errorf("persisted meta = {experience:%q persona:%q}, want {play kertoja}",
-			s.Meta.Experience, s.Meta.Persona)
+			meta.Experience, meta.Persona)
 	}
 
 	// An unknown experience is a clean bad-request, not a silent default.

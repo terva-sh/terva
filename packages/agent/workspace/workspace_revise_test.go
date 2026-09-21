@@ -82,7 +82,7 @@ func TestEditDeleteMessageReviseTranscript(t *testing.T) {
 		t.Errorf("live transcript = %v, want %v", got, want)
 	}
 	// Persisted: a reload from disk reproduces the revised transcript.
-	_, reloaded, err := core.OpenSession(info.Path)
+	reloaded, err := core.ReadSessionMessages(info.Path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

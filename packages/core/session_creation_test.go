@@ -387,6 +387,12 @@ func metaReaderCalls(t *testing.T, path string) map[string]SessionMeta {
 	}
 	out["ReadReplayRows"] = m
 
+	_, m, err = ReadSessionMeta(path)
+	if err != nil {
+		t.Fatalf("ReadSessionMeta: %v", err)
+	}
+	out["ReadSessionMeta"] = m
+
 	m, _, err = StreamReplayMessages(t.Context(), path, 0, func(int, provider.Message) {})
 	if err != nil {
 		t.Fatalf("StreamReplayMessages: %v", err)

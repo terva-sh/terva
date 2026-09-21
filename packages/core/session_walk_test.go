@@ -55,7 +55,7 @@ func TestWalkSessionFoldMatchesOpenSession(t *testing.T) {
 	_ = s.Close()
 
 	// OpenSession is the reference reconstruction.
-	_, want, err := OpenSession(path)
+	want, err := ReadSessionMessages(path)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

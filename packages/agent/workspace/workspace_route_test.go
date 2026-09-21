@@ -106,7 +106,7 @@ func TestRoutedTurnVoicesRosterPick(t *testing.T) {
 		t.Errorf("wire form = %+v, want Routed+Actor", w)
 	}
 	// The session file replays the same attribution (live == replayed).
-	if _, replayed, err := core.OpenSession(s.sess.Path); err != nil {
+	if replayed, err := core.ReadSessionMessages(s.sess.Path); err != nil {
 		t.Fatalf("replay: %v", err)
 	} else if got := replayed[len(replayed)-1].Meta[core.MetaActor]; got != "Elira" {
 		t.Errorf("replayed actor = %q, want Elira", got)

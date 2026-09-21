@@ -162,6 +162,9 @@ func Run(rawArgs []string, version string) error {
 	if handled, err := runDoctorCommand(rawArgs); handled {
 		return err
 	}
+	if handled, err := runSessionCommand(rawArgs); handled {
+		return err
+	}
 	if handled, err := runSkillsCommand(rawArgs); handled {
 		return err
 	}
@@ -832,7 +835,15 @@ func pickSession(cwd string) (string, error) {
 	// any modern terminal width.
 	const rowWidth = 100
 	for i, s := range summaries {
-		fmt.Fprintf(os.Stderr, "  %2d) %s\n", i+1, dialogs.FormatSessionRowPlain(s, rowWidth))
+		// A held session is shown rather than hidden, and marked rather than
+		// silently pickable. Hiding it would make a session the user knows they
+		// have vanish from the list; letting them pick it unmarked walks them
+		// into a refusal one keystroke later.
+		mark := ""
+		if st, ok := core.DescribeSessionLock(s.Path); ok && (st.Held || !st.Stale) {
+			mark = "  [open in " + st.Claim.Holder + "]"
+		}
+		fmt.Fprintf(os.Stderr, "  %2d) %s%s\n", i+1, dialogs.FormatSessionRowPlain(s, rowWidth), mark)
 	}
 	fmt.Fprint(os.Stderr, "pick #: ")
 	rd := bufio.NewReader(os.Stdin)
@@ -853,6 +864,14 @@ func pickSession(cwd string) (string, error) {
 // the bot daemon's convention).
 func headlessSessionErr(args build.Args, serr error) error {
 	if args.ResumeID != "" || args.Session != "" {
+		return serr
+	}
+	// 🚨 A locked session is always fatal, whatever the run asked for. The
+	// warn-and-continue path below leaves sess nil, so the run does a whole
+	// turn with no persistence — and a lock refusal means another terva IS
+	// writing that transcript, so "carry on without saving" is the worst
+	// available answer. --continue reaches here, which is the common case.
+	if errors.Is(serr, core.ErrSessionLocked) {
 		return serr
 	}
 	fmt.Fprintln(os.Stderr, "session:", serr)

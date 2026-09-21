@@ -52,7 +52,7 @@ func TestDeferredGreetingIsTimestamped(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_, replayed, err := core.OpenSession(live.sess.Path)
+	replayed, err := core.ReadSessionMessages(live.sess.Path)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -61,7 +61,7 @@ func TestMessageScopedVariants(t *testing.T) {
 	_ = s.Close()
 
 	// Effective shows the latest edit; the downstream (u1, a1) is untouched.
-	_, msgs, err := OpenSession(path)
+	msgs, err := ReadSessionMessages(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestMessageScopedSelectSwipesBack(t *testing.T) {
 	path := s.Path
 	_ = s.Close()
 
-	_, msgs, err := OpenSession(path)
+	msgs, err := ReadSessionMessages(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestSealPrunesToLatest(t *testing.T) {
 	path := s.Path
 	_ = s.Close()
 
-	_, msgs, err := OpenSession(path)
+	msgs, err := ReadSessionMessages(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestDropTakeRemovesOne(t *testing.T) {
 	path := s.Path
 	_ = s.Close()
 
-	_, msgs, err := OpenSession(path)
+	msgs, err := ReadSessionMessages(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

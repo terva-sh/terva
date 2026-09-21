@@ -1451,13 +1451,14 @@ func (w *Workspace) GenerateSessionTitle(ctx context.Context, sess string) (stri
 		msgs = live.agent.Messages()
 		prov, model = live.currentModel()
 	} else {
-		file, m, err := core.OpenSession(w.sessionPath(sess))
+		// Read-only, so no write handle: OpenSession would take an
+		// O_APPEND|O_WRONLY handle on a transcript another process may hold.
+		m, meta, err := core.ReadSessionMeta(w.sessionPath(sess))
 		if err != nil {
 			return "", ctrlproto.ErrNoSession
 		}
-		file.Close() // read-only use; a reopened session is never pruned by Close
 		msgs = m
-		prov, model = file.Meta.Provider, file.Meta.Model
+		prov, model = meta.Provider, meta.Model
 	}
 	seed := core.BuildTitleSeed(msgs, core.TitleSeedBudget)
 	if seed == "" {
@@ -1506,6 +1507,11 @@ func (w *Workspace) DeleteSession(ctx context.Context, sess string) error {
 	for _, sc := range core.SessionSidecarPaths(w.sessionPath(sess)) {
 		_ = os.Remove(sc)
 	}
+	// And the lock's claim record, which is NOT a sidecar (it is runtime state
+	// about who had the session open, never the session's own data) and so is
+	// not in the list above. Leaving one behind would refuse a future session
+	// that happened to land on the same id.
+	core.RemoveSessionLockArtifacts(w.sessionPath(sess))
 	// A missing file is only "not found" when we never knew the session; if it
 	// was live, close() legitimately pruned an empty transcript.
 	if os.IsNotExist(err) && !existed {

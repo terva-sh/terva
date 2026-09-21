@@ -59,7 +59,11 @@ func (r *sessionHistoryReader) ReadSession(_ /*extName*/, sessionID string) ([]e
 		return nil, false
 	}
 	path := filepath.Join(core.SessionsDir(r.tervaHome, r.cwd), sessionID+".jsonl")
-	_, msgs, err := core.OpenSession(path)
+	// Read-only. This used to call OpenSession, which returns a live
+	// O_APPEND|O_WRONLY handle, and the handle was discarded rather than
+	// closed: an extension that read a session leaked one file descriptor and
+	// one buffer per call, and took a write handle on a session it only reads.
+	msgs, err := core.ReadSessionMessages(path)
 	if err != nil {
 		return nil, false
 	}

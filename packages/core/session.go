@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/sessionlock"
 )
 
 // Session is a JSONL-backed conversation transcript tied to a cwd.
@@ -35,6 +36,13 @@ type Session struct {
 	// goroutine-safe, so unsynchronized writers would interleave bytes / corrupt
 	// the JSONL. All Append*/Update*/writeLine paths take this lock.
 	writeMu sync.Mutex
+	// lock is writeMu's cross-process counterpart. writeMu keeps the goroutines
+	// inside ONE terva from interleaving bytes; it says nothing about a second
+	// terva, which has its own. lock is the flock and claim record beside the
+	// transcript that excludes that second process and records why this one has
+	// the session open. Nil when the session was opened read-only or by a
+	// caller that never took one; every method on it is nil-safe.
+	lock *sessionlock.Handle
 	// A failed row may have reached disk in part. This handle never retries it.
 	writeErr error
 	closed   bool
@@ -914,16 +922,30 @@ func newSessionAt(p, cwd, providerName, model, version string) (*Session, error)
 	if err != nil {
 		return nil, err
 	}
+	// After the create, because the lock lives ON the transcript and there is
+	// nothing to take one on until the file exists. O_EXCL is what makes the
+	// gap safe: it already guarantees no second creator, so nobody can be
+	// holding a file this call just brought into being. The lock is taken here
+	// anyway rather than at the first append, so a session explains itself from
+	// birth instead of from its first message.
+	lock, err := acquireSessionLock(p)
+	if err != nil {
+		f.Close()
+		_ = os.Remove(p)
+		return nil, err
+	}
 	s := &Session{
 		ID:        id,
 		Path:      p,
 		Meta:      SessionMeta{ID: id, CWD: cwd, Provider: providerName, Model: model, Started: time.Now().UTC(), Version: version, FormatVersion: sessionFormatVersion},
 		writer:    f,
 		buf:       bufio.NewWriter(f),
+		lock:      lock,
 		freshFile: true,
 	}
 	if err := s.writeMeta(); err != nil {
 		f.Close()
+		lock.Release()
 		return nil, err
 	}
 	return s, nil
@@ -1359,6 +1381,27 @@ func ReadSessionMessages(path string) ([]provider.Message, error) {
 	return r.messages, nil
 }
 
+// ReadSessionMeta replays a session file read-only and returns its transcript
+// alongside the FOLDED meta, which is the one the loader would give.
+//
+// It exists for a caller that needs a field from the meta as well as the
+// messages — the provider and model behind a title generation, say — and would
+// otherwise reach for OpenSession to get at Session.Meta. That call takes an
+// O_APPEND|O_WRONLY handle, and a caller that wanted neither the handle nor a
+// Close is how three read-only sites came to hold a write handle on a session
+// another process may be writing right now.
+//
+// Folded, not first: a session whose lineage or title was stamped after
+// creation carries several meta rows, and the last one wins. See
+// describeSessionMeta for the bug that taught us to say which.
+func ReadSessionMeta(path string) ([]provider.Message, SessionMeta, error) {
+	r, err := replaySession(path, defaultInterruptStub)
+	if err != nil {
+		return nil, SessionMeta{}, err
+	}
+	return r.messages, r.meta, nil
+}
+
 // ReadSessionPreCompaction returns the transcript as it stood immediately
 // before the LAST compaction in the file, and whether there was one.
 //
@@ -1396,11 +1439,20 @@ func openSession(path string, stub InterruptStub) (*Session, []provider.Message,
 	if err != nil {
 		return nil, nil, err
 	}
-	out, err := privfs.OpenFile(path, os.O_APPEND|os.O_WRONLY)
+	// After the replay, not before. The fold above is read-only and can take
+	// seconds on a large transcript, and holding the lock across it would make
+	// every resume contend on work that may then fail on a corrupt file. It is
+	// taken before the write handle below, which is the thing being excluded.
+	lock, err := acquireSessionLock(path)
 	if err != nil {
 		return nil, nil, err
 	}
-	s := &Session{ID: r.meta.ID, Path: path, Meta: r.meta, TitleGenerated: r.titleGenerated, writer: out, buf: bufio.NewWriter(out), LoadWarnings: r.report.warnings(path),
+	out, err := privfs.OpenFile(path, os.O_APPEND|os.O_WRONLY)
+	if err != nil {
+		lock.Release()
+		return nil, nil, err
+	}
+	s := &Session{ID: r.meta.ID, Path: path, Meta: r.meta, TitleGenerated: r.titleGenerated, writer: out, buf: bufio.NewWriter(out), lock: lock, LoadWarnings: r.report.warnings(path),
 		needsSeparator:   needsSeparator,
 		persistedLore:    cloneLore(r.lore),
 		ActiveToolGroups: r.activeGroups,
@@ -1866,6 +1918,14 @@ const renameSourceGenerated = "generated"
 // next flush landed on top of this row, destroying the rename. Both halves of
 // that pairing are load-bearing; see
 // TestANewSessionsHandleAppendsBehindAnExternalWriter.
+//
+// 🔑 It deliberately takes NO session lock, and must not. The lock is an flock,
+// which is held per open file description, so a live session's own process
+// would be refused by its own lock — the rename would deadlock against the
+// session it renames. A rename row is one small write to an O_APPEND handle,
+// which is atomic against other appenders, and the pairing above is what makes
+// that safe. The lock exists to stop two processes building DIVERGENT
+// transcripts in memory; a single appended row builds nothing.
 func RenameSession(path, title string) error {
 	return appendRename(path, title, "")
 }
@@ -2131,20 +2191,68 @@ func firstTextFromMessage(msg provider.Message) string {
 // Cleans up the backlog of empty stubs created by old terva versions
 // that wrote a meta line at NewSession time and never followed up.
 // Errors are swallowed; the caller treats this as best-effort.
+//
+// 🚨 It skips a session another process holds open. This runs at every CLI
+// start, and a session is meta-only for the whole window between NewSession and
+// its first message — so without the check, starting a second terva while a
+// first one sat at its prompt deleted that first session's transcript out from
+// under its open handle. The write handle survives the unlink on unix, so the
+// turn appears to persist and the file is simply gone.
+//
+// A transcript it removes takes its sidecars with it, and lock artifacts whose
+// transcript no longer exists are swept. The latter is where a downgrade's
+// litter is collected: an older binary does not know these files and leaves
+// them behind when it deletes a session.
+//
+// A pre-existing orphan SIDECAR is left alone, which is the one asymmetry here.
+// A lock record describes a holder that no longer exists and a transcript that
+// no longer exists, so it means nothing to anybody. An error log and a composer
+// draft are records, and this function cannot tell one orphaned by a bug from
+// one somebody still wants.
 func PruneEmptySessions(root, cwd string) {
 	dir := SessionsDir(root, cwd)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
+	// Claim records whose transcript is gone are collected here and swept after
+	// the loop, so the sweep never races the same directory it is reading.
+	orphans := map[string]bool{}
 	for _, e := range entries {
-		if e.IsDir() || !isSessionTranscriptName(e.Name()) {
+		if e.IsDir() {
 			continue
 		}
-		p := filepath.Join(dir, e.Name())
-		if sessionHasNoMessages(p) {
-			_ = os.Remove(p)
+		name := e.Name()
+		if strings.HasSuffix(name, ".lock.json") {
+			orphans[strings.TrimSuffix(name, ".lock.json")] = true
+			continue
 		}
+		if !isSessionTranscriptName(name) {
+			continue
+		}
+		p := filepath.Join(dir, name)
+		if sessionHasNoMessages(p) && !SessionIsLocked(p) {
+			_ = os.Remove(p)
+			// The sidecars go with it, exactly as Session.Close does when it
+			// discards a session it never wrote a message to. Every sidecar is
+			// addressed by deriving its path from the transcript's, so one left
+			// here is unreachable rather than merely untidy: nothing ever looks
+			// for a sidecar whose transcript is gone.
+			for _, sc := range SessionSidecarPaths(p) {
+				_ = os.Remove(sc)
+			}
+			sessionlock.RemoveArtifacts(p)
+		}
+	}
+	for stem := range orphans {
+		transcript := filepath.Join(dir, stem+".jsonl")
+		if _, err := os.Stat(transcript); !os.IsNotExist(err) {
+			continue // it belongs to a session that is still here
+		}
+		if SessionIsLocked(transcript) {
+			continue
+		}
+		sessionlock.RemoveArtifacts(transcript)
 	}
 }
 
@@ -3216,6 +3324,13 @@ func ErrorLogPathFor(transcriptPath string) string {
 // Stamped with the session's current provider/model. Best-effort and
 // non-fatal: a failure to record an error must not compound the original one,
 // so the write error is returned for callers that care but is safe to ignore.
+//
+// 🔑 Outside the session lock, deliberately. It writes the sidecar and never
+// the transcript, so the divergent-replay hazard the lock guards does not
+// apply. Locking it would also mean a failure could not be recorded while
+// another process held the session, which inverts the priority in the
+// paragraph above: the point is that recording an error never fails louder
+// than the error it records.
 func (s *Session) LogError(errText string) error {
 	if s == nil || s.Path == "" || strings.TrimSpace(errText) == "" {
 		return nil
@@ -3272,6 +3387,11 @@ func (s *Session) Close() error {
 		s.errFile = nil
 	}
 	s.errMu.Unlock()
+	// Before any removal below. Windows refuses to delete a file with an open
+	// handle or a byte-range lock on it, so the guard has to be dropped first
+	// or the cleanup fails on exactly the platform that is hardest to debug.
+	// Release leaves an explicit claim alone; see sessionlock.Handle.Release.
+	s.lock.Release()
 	if s.freshFile && s.messagesAppended == 0 && flushErr == nil {
 		// Best-effort cleanup. We deliberately don't propagate the
 		// remove error: if it fails (file already gone, perms changed)
@@ -3283,11 +3403,36 @@ func (s *Session) Close() error {
 		for _, sc := range SessionSidecarPaths(s.Path) {
 			_ = os.Remove(sc)
 		}
+		// The lock artifacts are NOT sessionSidecars rows — see the note on
+		// that table — so they are dropped explicitly. This is the one moment
+		// the guard file is safe to unlink: the transcript it guards is gone.
+		sessionlock.RemoveArtifacts(s.Path)
 	}
 	if flushErr != nil {
 		return flushErr
 	}
 	return closeErr
+}
+
+// Retain stops Close from pruning this transcript when it holds no messages.
+//
+// Close deletes a freshly created, still-empty session so that opening terva
+// and quitting at the prompt leaves no litter. That rule is wrong for a
+// HANDOVER: a caller that is about to reopen the same transcript in a new
+// binding, as ACP's session/load does, must not have the file deleted between
+// the close and the reopen.
+//
+// Before the session lock this failed quietly in the other direction. The old
+// handle was closed AFTER the new one had opened the file, so the unlink
+// removed a transcript that the new handle went on writing to — the session
+// worked and its file was gone from the directory.
+func (s *Session) Retain() {
+	if s == nil {
+		return
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	s.freshFile = false
 }
 
 func (s *Session) writeLine(row sessionLine) error {
@@ -3349,6 +3494,11 @@ func (s *Session) writeLineLocked(row sessionLine) error {
 	s.writeErr = s.buf.Flush()
 	if s.writeErr == nil {
 		s.needsSeparator = false
+		// The heartbeat rides the writes rather than a ticker, so "held" means
+		// actively written to. Touch no-ops until an interval has passed, and a
+		// failure to restamp never fails the row: the flock is still held, and
+		// it is the witness that decides.
+		s.lock.Touch()
 	}
 	return s.writeErr
 }

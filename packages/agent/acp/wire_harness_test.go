@@ -2008,7 +2008,7 @@ func TestACPSessionPersistsAndLists(t *testing.T) {
 
 	// The transcript must actually be on disk: reopen it directly and check
 	// the user + assistant messages landed.
-	_, msgs, err := core.OpenSession(sid)
+	msgs, err := core.ReadSessionMessages(sid)
 	if err != nil {
 		t.Fatalf("OpenSession(%q): %v", sid, err)
 	}

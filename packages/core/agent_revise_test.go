@@ -52,7 +52,7 @@ func TestAgentReviseOpsMatchReload(t *testing.T) {
 	path := s.Path
 	_ = s.Close()
 
-	_, reloaded, err := OpenSession(path)
+	reloaded, err := ReadSessionMessages(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

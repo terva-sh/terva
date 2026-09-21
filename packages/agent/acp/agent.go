@@ -690,6 +690,39 @@ func (s *agentServer) bindSession(id, cwd string, sa SessionAgent, confirmer *ac
 	return sess
 }
 
+// releasePriorDurable closes the durable session held by an existing binding
+// for id, so the transcript can be reopened.
+//
+// It exists because a session holds a cross-process write lock while it holds
+// its file handle. session/load of an already-live session is a supported flow,
+// and without this the reopen is refused by this very process's own lock.
+//
+// Only the durable handle goes. The binding stays in the map, still answering
+// session/cancel, and bindSession does the rest of the teardown once the
+// replacement exists. Closing a session twice is safe, so the later close in
+// bindSession stays exactly as it was.
+func (s *agentServer) releasePriorDurable(id string) {
+	s.mu.Lock()
+	prev := s.sessions[id]
+	s.mu.Unlock()
+	if prev == nil {
+		return
+	}
+	// Retire first so no new turn can start on it, then stop the one already
+	// running and let it flush. Same order, and the same reason, as the rebind
+	// interlock in bindSession.
+	prev.markSuperseded()
+	prev.cancelAndAwaitTurn(rebindGrace)
+	if prev.durable != nil {
+		// Retain first. This transcript is being handed to a new binding, not
+		// abandoned, and Close prunes a still-empty session — which would
+		// delete the file in the gap before the reopen. A session/load right
+		// after session/new hits exactly that.
+		prev.durable.Retain()
+		_ = prev.durable.Close()
+	}
+}
+
 // handleSessionLoad reopens a durable terva session (the ACP sessionId is its
 // file path), rehydrates model context via SetMessages, and — per the §13
 // conformance MUST — replays the full prior transcript as session/update
@@ -712,6 +745,20 @@ func (s *agentServer) handleSessionLoad(ctx context.Context, params json.RawMess
 	cwd := p.CWD
 
 	confirmer := newConfirmer()
+
+	// 🚨 Retire an existing binding for this id BEFORE reopening its
+	// transcript. A session holds a cross-process write lock for as long as it
+	// holds its handle, so loading a session this process already has open
+	// would be refused by our own lock — and "the editor reconnecting to a
+	// session it already holds" is a tolerated flow, per this function's
+	// contract above. bindSession still tears down the rest of the old binding
+	// (its MCP subprocesses and cleanup) once the new one is built; this
+	// releases only the durable handle, which is the part the reopen needs.
+	//
+	// The ordering inside retireDurable is the one the rebind interlock
+	// already established: retire first so no turn can start, then cancel the
+	// one running and wait for it to flush, and only then close.
+	s.releasePriorDurable(p.SessionID)
 
 	sa, msgs, err := s.factory.LoadSessionAgent(ctx, p.SessionID, cwd, p.MCPServers, confirmer)
 	if err != nil {

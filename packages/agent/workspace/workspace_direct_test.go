@@ -49,7 +49,7 @@ func TestPostDirectedReplayMatchesLive(t *testing.T) {
 		t.Fatalf("live transcript has %d messages, want 3", len(liveMsgs))
 	}
 
-	_, replayed, err := core.OpenSession(live.sess.Path)
+	replayed, err := core.ReadSessionMessages(live.sess.Path)
 	if err != nil {
 		t.Fatal(err)
 	}

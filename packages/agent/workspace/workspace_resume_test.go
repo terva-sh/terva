@@ -131,7 +131,7 @@ func TestResumeTurnExtendsACutShortReply(t *testing.T) {
 	if got := reviseTexts(s.agent.Messages()); !reflect.DeepEqual(got, []string{"u0", want}) {
 		t.Errorf("after resume = %v; want [u0 %q] — the reply grows in place", got, want)
 	}
-	if _, reloaded, err := core.OpenSession(s.sess.Path); err != nil {
+	if reloaded, err := core.ReadSessionMessages(s.sess.Path); err != nil {
 		t.Fatalf("reopen: %v", err)
 	} else if got := reviseTexts(reloaded); !reflect.DeepEqual(got, []string{"u0", want}) {
 		t.Errorf("reloaded = %v; want [u0 %q] — the merge did not persist", got, want)
