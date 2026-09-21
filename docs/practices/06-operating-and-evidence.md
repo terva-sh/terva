@@ -1,4 +1,4 @@
-# 06 — Operating and evidence
+# 06: Operating and evidence
 
 A harness is a system whose central component is nondeterministic, expensive to
 invoke, and changes underneath you when a vendor ships a new model. This page is
@@ -15,9 +15,10 @@ and how you test something you cannot fully reproduce.
 newline-delimited JSON files. Codex uses a compressed-JSONL-plus-index hybrid.
 Everyone is right for their own scale, so here is the actual trade:
 
-**What files buy.** You can `tail -f` a live agent — a debugging tool nobody has
-to build. A process killed mid-write loses at most the last line. No dependency,
-no schema migration, no lock contention. Diffable, greppable, mailable.
+**What files buy.** You can `tail -f` a live agent, which is a debugging tool
+nobody has to build. A process killed mid-write loses at most the last line. No
+dependency, no schema migration, no lock contention. Diffable, greppable,
+mailable.
 
 **What a database buys.** Queryability across many sessions, full-text search,
 write-ahead logging, concurrent writers.
@@ -33,7 +34,7 @@ The hybrid is real if size bites: compress the record, keep an index beside it.
 
 **Scarred.** Ours was a switch over record kinds with no default arm. An
 unrecognized record was silently skipped, and the transcript folded *wrong*
-rather than failing — a newer version's file read by an older binary produced a
+rather than failing, so a newer version's file read by an older binary produced a
 conversation missing pieces, with no error anywhere.
 
 Refusing is fine. Warning is fine. Silently continuing with partial data is not,
@@ -56,7 +57,7 @@ the error file can hold things the transcript must never contain.
 
 **Scarred.** Session metadata written several times over a session's life is a
 *sequence*. A reader that takes only the first row, or only the last, silently
-drops everything superseded — ours lost fourteen fields that way. Decide
+drops everything superseded, and ours lost fourteen fields that way. Decide
 explicitly whether each field is first-wins, last-wins, or accumulated, and write
 the reader to that decision.
 
@@ -74,20 +75,20 @@ being rewritten.
 ### Record cache reads and writes separately
 
 **Measured.** Input tokens, output tokens, **cache read tokens**, **cache write
-tokens** — four numbers, not two. Without the split you cannot tell an expensive
+tokens**: four numbers, not two. Without the split you cannot tell an expensive
 session from a badly-cached one, and those have completely different fixes.
 
 Stamp each row with the model that produced it and the time. Model, because a
 session can swap models mid-run and per-model rates differ by an order of
 magnitude. Time, because the questions you will eventually ask are about
-*when* — and we shipped rows without timestamps and had to add them under
+*when*, and we shipped rows without timestamps and had to add them under
 pressure.
 
 ### Give the record a field for every question a reader will ask
 
 **Scarred.** Delegated spend, unmarked, looks exactly like a parent cache miss.
 Three separate readers ended up needing that one flag. Attribution and
-timestamps are cheap to write and impossible to reconstruct — write them
+timestamps are cheap to write and impossible to reconstruct, so write them
 speculatively.
 
 ### Price data is a liability without a staleness signal
@@ -104,13 +105,13 @@ as generated; if rows expire, say when.
 Three instruments have repaid their cost many times over. All are cheap.
 
 **A dump-the-prompt mode.** Print exactly what would be sent, or just its sizes,
-without calling the provider. This is how you learn your request floor
-([context economy](02-context-economy.md#measure-the-floor-then-a-miss-tells-you-which-problem-you-have)),
-and it needs no credentials and costs no money — which means anyone can run it,
+without calling the provider. This is how you learn your request floor ([context
+economy](02-context-economy.md#measure-the-floor-then-a-miss-tells-you-which-problem-you-have)),
+and it needs no credentials and costs no money, which means anyone can run it,
 including in CI.
 
 **A prefix digest ladder.** Fingerprint the stable front of the request in
-layers — identity, system prompt, tool set — rather than as one hash, so a
+layers of identity, system prompt and tool set, rather than as one hash, so a
 change names *which rung* moved. One hash tells you something changed; a ladder
 tells you what.
 
@@ -135,8 +136,8 @@ input to your system, not part of it.
 ### Golden frames for every protocol
 
 **Converged.** For a wire protocol, record canonical frames and compare. This
-catches the two failure modes that matter — an unintended change to a frame
-you emit, and a frame you stopped emitting — and it makes compatibility a
+catches the two failure modes that matter, an unintended change to a frame
+you emit and a frame you stopped emitting, and it makes compatibility a
 property you can point at rather than assert.
 
 ### Render the terminal in a terminal emulator
@@ -151,8 +152,8 @@ catch:
   and clipped.
 
 Scope the predicate to the region you mean, and assert the *rule* rather than
-the specific line. And look at a rendered pane with your eyes before shipping —
-a headless emulator makes that a command, not a ceremony.
+the specific line. And look at a rendered pane with your eyes before shipping,
+because a headless emulator makes that a command rather than a ceremony.
 
 ### Prove the test fails without the fix
 
@@ -177,8 +178,8 @@ pass at a glance. Make insufficient fixtures a failure.
 had "proved" a flake before `-count=500` found a genuine race in seconds. Run
 the race detector in CI, not just locally.
 
-Read the duration on the failing line — a failure that took milliseconds when
-the test normally takes seconds is a different bug than one that timed out.
+Read the duration on the failing line, because a failure that took milliseconds
+when the test normally takes seconds is a different bug than one that timed out.
 
 ### Test through the single production caller
 
@@ -195,7 +196,7 @@ a thing and not adding it to the list.
 
 The pattern that works: the test **derives the full set from the source**, and
 requires every member to be either handled or explicitly excused with a written
-reason — and a *stale* excuse fails too. Write it empty and let its first run be
+reason, and a *stale* excuse fails too. Write it empty and let its first run be
 the audit. Ours have repeatedly found real defects on that first run.
 
 Prefer, where you can, a shape that removes the need: a table the production

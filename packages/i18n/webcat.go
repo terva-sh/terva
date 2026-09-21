@@ -8,7 +8,7 @@ package i18n
 // resolves it client-side. So there is no T-style wrapper here and no entry in
 // the runtime `catalog` struct — only on-demand loading (LoadMergedIn) and the
 // authoring/lint surface (ReferenceDocIn / EmbeddedLocaleNamesIn on the "web"
-// subdir). See docs/proposals/web-i18n-authoring.md.
+// subdir). See docs/proposals/archive/web-i18n-authoring.md.
 
 // WebCatalogName is the subdir/name of the web control-panel string catalog.
 const WebCatalogName = "web"

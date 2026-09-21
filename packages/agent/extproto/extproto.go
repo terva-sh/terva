@@ -80,7 +80,7 @@ const MaxToolCallBytes = 1 << 20 // 1 MiB
 //	    chat / chat_close / chat_down envelope frames then TUNNEL the
 //	    connector protocol (packages/agent/connproto) through this wire
 //	    verbatim — the extension/connector unification
-//	    (docs/proposals/connector-extensions.md). This protocol never
+//	    (docs/proposals/archive/connector-extensions.md). This protocol never
 //	    mirrors connproto's vocabulary: the inner frames (hello, connect,
 //	    message, send, result, …) ride opaquely inside `chat` envelopes,
 //	    including connproto's own hello/hello_ack version negotiation, so
@@ -723,7 +723,7 @@ type StatusSegmentFromExt struct {
 // --- Connector role (protocol 5, additive, experimental) ---------------
 //
 // These frames let ONE extension process also be a chat connector — the
-// extension/connector unification (docs/proposals/connector-extensions.md).
+// extension/connector unification (docs/proposals/archive/connector-extensions.md).
 // The extension declares the role with register_connector during the
 // register phase; the host REFUSES the role unless the extension's
 // manifest also declares "connector": true, so an installed tool
@@ -801,7 +801,7 @@ type ChatDownFromExt struct {
 // TervaVersion are the SAME value under both naming eras: existing
 // extensions parse zot_version, so it is kept indefinitely —
 // extension wire compatibility is an explicit invariant of the
-// rename (docs/plans/rename-terva.md); the golden tests in
+// rename (docs/plans/archive/rename-terva.md); the golden tests in
 // extproto_test.go enforce it.
 type HelloAckFromHost struct {
 	Type            string `json:"type"`
@@ -917,7 +917,7 @@ type PanelKeyFromHost struct {
 // and no SDK handler beside OnPanelKey — panels re-render on the
 // extension's own panel_render cadence. The type and its documentation
 // have coexisted without an implementation since the original package
-// split, and docs/extensions.md says so to extension authors outright.
+// split, and docs/extension-protocol.md says so to extension authors outright.
 //
 // It stays because the wire spec is published (the golden corpus pins its
 // bytes, so an SDK decoding it defensively gets them right) and removing a

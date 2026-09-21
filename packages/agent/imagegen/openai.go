@@ -16,7 +16,7 @@ import (
 // hosted OpenAI/Azure AND the recommended low-friction self-host path —
 // LocalAI is a drop-in that serves Stable Diffusion / SDXL / Flux on this exact
 // API — plus any other OpenAI-compatible endpoint. See
-// docs/proposals/image-generation.md.
+// docs/proposals/archive/image-generation.md.
 type OpenAIImages struct {
 	Name         string       // registry id (e.g. "openai-images")
 	BaseURL      string       // API base incl. version, e.g. https://api.openai.com/v1

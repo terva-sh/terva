@@ -14,7 +14,7 @@ import (
 // dependency-light over the wire driver. If a future change genuinely
 // needs one of these here, update this test deliberately rather than
 // letting the dependency creep back unnoticed. See
-// docs/plans/extdriver-extraction.md.
+// docs/plans/archive/extdriver-extraction.md.
 func TestExtensionsDependencyBoundary(t *testing.T) {
 	out, err := exec.Command("go", "list", "-deps", "terva.sh/terva/packages/agent/extensions").Output()
 	if err != nil {

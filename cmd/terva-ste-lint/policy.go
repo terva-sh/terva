@@ -184,7 +184,8 @@ const (
 var ruleClasses = map[string]ruleClass{
 	"sentence-length":  classStructural,
 	"paragraph-length": classStructural,
-	"aside":            classStructural,
+	"aside-em-dash":    classStructural,
+	"aside-semicolon":  classStructural,
 	"caps-emphasis":    classStructural,
 
 	"passive-voice": classRegister,
@@ -205,19 +206,37 @@ var ruleClasses = map[string]ruleClass{
 // fight the text instead of improving it. The precedent is
 // promptKeyExemptPrefixes in scope.go, which carves out the creative register
 // with the same reasoning: limited compliance, structure but not vocabulary.
+// rulesDocsEmDash holds text to the em-dash aside and nothing else. It exists
+// for the public documentation tier, where decision 0015 found exactly one
+// rule with a verdict that holds across Diátaxis modes. docsscope.go carries
+// the reasoning and the two rules it deliberately leaves out.
+//
+// It is not a narrower rulesStructure: sentence-length and paragraph-length
+// are structural too, and both are wrong for explanation prose. The tier is
+// defined by the one rule it keeps rather than by a class.
 type ruleSet uint8
 
 const (
 	rulesFull ruleSet = iota
 	rulesStructure
+	rulesDocsEmDash
 )
+
+// asideEmDashRule is the half of the aside rule the documentation tier keeps.
+// rules.go must report this exact string; TestEveryRuleIsClassified reads the
+// literals out of that file and fails on a name here that nothing reports.
+const asideEmDashRule = "aside-em-dash"
 
 // covers reports whether this rule set reports the named rule.
 func (r ruleSet) covers(rule string) bool {
-	if r != rulesStructure {
+	switch r {
+	case rulesStructure:
+		return ruleClasses[rule] == classStructural
+	case rulesDocsEmDash:
+		return rule == asideEmDashRule
+	default:
 		return true
 	}
-	return ruleClasses[rule] == classStructural
 }
 
 // contractionStems are the words whose trailing "'s" is a contraction of is

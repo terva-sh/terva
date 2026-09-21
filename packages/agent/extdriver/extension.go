@@ -9,7 +9,7 @@
 // layers discovery, Workspace Trust, theme options, and the core.Tool
 // registry wrapper on top. A conformance tool can embed the same Driver
 // and drive the identical wire, so the two can never read the protocol
-// differently. See docs/plans/extdriver-extraction.md.
+// differently. See docs/plans/archive/extdriver-extraction.md.
 package extdriver
 
 import (
@@ -52,7 +52,7 @@ type Manifest struct {
 	// separate step: a chat consumer must select the extension by name
 	// (e.g. `terva bot run --connector <name>`). Only globally-installed
 	// extensions are offered as chat services (never project-local ones);
-	// see docs/proposals/connector-extensions.md.
+	// see docs/proposals/archive/connector-extensions.md.
 	Connector bool `json:"connector,omitempty"`
 	// DataSecrets declares whether this extension's DATA DIRECTORY
 	// ($TERVA_HOME/ext-data/<name>/) may hold secret material. It decides

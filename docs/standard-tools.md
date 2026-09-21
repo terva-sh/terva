@@ -211,7 +211,7 @@ write to the selected store still faces its own gate. See
 They all call git-ticket's `ticket` package directly for structured
 values, and the `terva ticket` CLI subcommand embeds the same library's `cli`
 package, so the two surfaces cannot drift from each other. Both track the
-version `go.mod` pins, currently v0.18.1. A `git-ticket` binary installed
+version `go.mod` pins, currently v0.19.1. A `git-ticket` binary installed
 separately on the user's `PATH` is a third thing and can be any version, so
 that one *can* drift from both.
 

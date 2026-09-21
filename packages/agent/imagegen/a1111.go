@@ -14,7 +14,7 @@ import (
 // A1111 is the AUTOMATIC1111 / Forge backend: POST <base>/sdapi/v1/txt2img, the
 // de-facto Stable Diffusion WebUI API (its own JSON schema; base64 images out).
 // Covers AUTOMATIC1111, Forge, and forks that keep the sdapi surface. Negative
-// prompts are native (no pipe). See docs/proposals/image-generation.md.
+// prompts are native (no pipe). See docs/proposals/archive/image-generation.md.
 type A1111 struct {
 	Name        string
 	BaseURL     string // e.g. http://localhost:7860

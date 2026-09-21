@@ -13,9 +13,9 @@ Two rules before anything else:
   `bot stop`/`status`/`logs`); stacking it under systemd gives you two
   process managers fighting over one child.
 - **`bot setup` is a one-time interactive step** (it prompts for the
-  service token on your tty) — run it as the service's user, with the
+  service token on your tty), so run it as the service's user, with the
   service's `TERVA_HOME`, before enabling the unit. Credentials land in
-  `$TERVA_HOME` (mode 0600), never in the unit file — Discord writes
+  `$TERVA_HOME` (mode 0600), never in the unit file. Discord writes
   `discord.json`, Telegram writes `bot.json`, and an external connector
   owns its own state through its `setup` verb.
   `bot reset --connector <name>` is the inverse: it removes that config
@@ -24,7 +24,7 @@ Two rules before anything else:
 ## User-level unit (recommended)
 
 [`terva-bot@.service`](../examples/deploy/systemd/terva-bot@.service)
-is a template unit — the instance name is the connector, so one file
+is a template unit whose instance name is the connector, so one file
 serves `terva-bot@discord`, `terva-bot@telegram`, or an extension
 connector's name:
 
@@ -45,7 +45,7 @@ settings around it:
   tools see, and where sessions bucket. One directory per bot keeps
   their worlds separate. It must exist before first start.
 - **`--continue`** makes restarts resume the paired DM's conversation
-  instead of forgetting it — the DM transcript persists message by
+  instead of forgetting it, because the DM transcript persists message by
   message, so even a hard kill costs at most the in-flight turn.
 - **Scoping flags are the security posture.** A bot admitted to group
   chats gives strangers reach to start turns, so give it the
@@ -62,7 +62,7 @@ settings around it:
   instead of defaulting to yolo. See
   [connectors.md](connectors.md) for the full posture discussion.
 
-Different bots want different postures — that's just different
+Different bots want different postures, which is just different
 `ExecStart` lines. Copy the template to a concrete name
 (`terva-bot-planning.service`) when one connector needs settings the
 shared template shouldn't carry.
@@ -74,8 +74,8 @@ runs the bot as a dedicated `terva` user with
 `TERVA_HOME=/var/lib/terva`, for shared hosts where the bot should
 exist independent of any login session. Same `ExecStart` axes.
 
-One honest note on unit hardening: the agent **runs commands** — that
-is its job — so the meaningful sandbox is terva's own posture
+One honest note on unit hardening: the agent **runs commands**, which
+is its job, so the meaningful sandbox is terva's own posture
 (`--jail`, `--no-workspace-tools`, the allowlists), not systemd
 directives tightened until the tools break. The example keeps the
 process off the system directories (`ProtectSystem=full`,
@@ -85,13 +85,13 @@ process off the system directories (`ProtectSystem=full`,
 
 The connector already rides out transient network trouble internally
 (gateway reconnects, its own crash/respawn budget for connector
-extensions) and exits only when something is *permanently* broken — a
+extensions) and exits only when something is *permanently* broken: a
 bad token, a revoked bot, an exhausted budget. So:
 
 - `Restart=on-failure` with `RestartSec=10` restarts the real
   failures;
-- `StartLimitIntervalSec=300` / `StartLimitBurst=5` — in the **`[Unit]`**
-  section, which is the only place systemd reads them — stops a dead
+- `StartLimitIntervalSec=300` / `StartLimitBurst=5`, in the **`[Unit]`**
+  section which is the only place systemd reads them, stops a dead
   credential from hot-looping: after five failures in five minutes the
   unit stays down until you `systemctl reset-failed` it.
 
@@ -110,14 +110,14 @@ when you're not under systemd.
 
 Each release publishes a multi-arch image (linux amd64 + arm64):
 **`ghcr.io/terva-sh/terva`**, tagged per version and `latest`. It's
-alpine with a real userland (bash, git, curl — a coding agent needs a
-shell), runs as the unprivileged `terva` user, and keeps all state on
+alpine with a real userland (bash, git, curl, because a coding agent needs
+a shell), runs as the unprivileged `terva` user, and keeps all state on
 two volumes:
 
-- **`/data`** — `TERVA_HOME`: config, credentials (bot tokens, 0600),
+- **`/data`**: `TERVA_HOME`: config, credentials (bot tokens, 0600),
   sessions, extensions, logs. Mount it to persist across container
   replacements.
-- **`/work`** — the agent's workspace (its working directory).
+- **`/work`**: the agent's workspace (its working directory).
 
 One-time interactive setup into the volume, then run detached with
 docker as the supervisor (same reasoning as systemd: the container
@@ -140,10 +140,10 @@ docker logs -f terva-bot
 
 Provider credentials: a headless container can't run the browser
 `/login` flow, so either pass an API key env var (as above) or run one
-interactive session against the volume and log in there — the token
+interactive session against the volume and log in there, after which the token
 lands in `/data/auth.json` and every later container reuses it.
 
-The same image serves every run mode, not just bots — the entrypoint
+The same image serves every run mode, not just bots, and the entrypoint
 is plain `terva`:
 
 ```bash
@@ -158,8 +158,8 @@ docker run -it --rm -v terva-data:/data -v "$PWD":/work \
 
 ### Extensions and MCP in the container
 
-Both live on the `/data` volume — installed extensions under
-`/data/extensions/`, MCP servers in `/data/config.json` — so they
+Both live on the `/data` volume, with installed extensions under
+`/data/extensions/` and MCP servers in `/data/config.json`, so they
 persist across container replacements like everything else. But both
 are **subprocesses terva executes**, and that's where containers
 change the rules:
@@ -180,12 +180,11 @@ change the rules:
   For iterating on an extension, the usual `--ext /mnt/my-ext` flag
   works on a mounted directory the same way.
 
-- **The base image is deliberately lean**: bash, git, curl — no
-  python, node, or uv. Extensions shipped as **static linux binaries**
-  (CGO-free Go, matching the image arch) run as-is; **script
-  extensions** (Python/TypeScript) and the common **`npx`/`uvx`
-  MCP servers** need their interpreter in the image. The intended
-  pattern is a derived image, not a fatter base — see
+- **The base image is deliberately lean**: bash, git and curl, with no python,
+  node, or uv. Extensions shipped as **static linux binaries** (CGO-free Go,
+  matching the image arch) run as-is; **script extensions** (Python/TypeScript)
+  and the common **`npx`/`uvx` MCP servers** need their interpreter in the
+  image. The intended pattern is a derived image rather than a fatter base. See
   [`examples/deploy/docker/Dockerfile.tools`](../examples/deploy/docker/Dockerfile.tools):
 
   ```dockerfile
@@ -198,10 +197,10 @@ change the rules:
   One `docker build -t my-terva .` and every `npx`/`uvx` MCP server
   and script extension works; your MCP config on the volume needs no
   changes. (Alpine is musl-based: a rare glibc-linked prebuilt binary
-  won't run — prefer static builds or add the interpreter.)
+  won't run, so prefer static builds or add the interpreter.)
 
-- **Scope what you ship.** The container boundary composes with —
-  never replaces — terva's own posture: `--extensions`/`--mcp`
+- **Scope what you ship.** The container boundary composes with terva's own
+  posture rather than replacing it: `--extensions`/`--mcp`
   allowlists and `--no-workspace-tools` still say what the *agent*
   may reach, which matters exactly as much inside the container as
   out.
@@ -210,4 +209,4 @@ change the rules:
 
 There is no launchd example yet; `terva bot start` (the built-in
 daemonizer, per-connector pid files, `bot stop`/`status`/`logs`) is
-the practical answer on a Mac today — or the container above.
+the practical answer on a Mac today, or the container above.

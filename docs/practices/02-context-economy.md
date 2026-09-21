@@ -1,11 +1,11 @@
-# 02 — Context economy
+# 02: Context economy
 
 This is the page that pays for itself. Everything here follows from one
 property of the loop: **the entire transcript is re-sent on every step.**
 
 A forty-step turn does not send forty messages. It sends the conversation forty
 times, each time slightly longer. The context window is therefore two things at
-once — a hard capacity limit, and a recurring bill — and most harness cost
+once, a hard capacity limit and a recurring bill, and most harness cost
 questions are really questions about the second.
 
 ---
@@ -15,7 +15,7 @@ questions are really questions about the second.
 ### Design for the cache before you design for token count
 
 **Measured.** Providers serve repeated request prefixes from cache at a small
-fraction of the input price — commonly around a tenth. Because a harness
+fraction of the input price, commonly around a tenth. Because a harness
 re-sends a growing conversation, essentially every request *should* be a
 near-total cache hit: step 40 is step 39 plus a bit.
 
@@ -37,17 +37,18 @@ turn is a large net loss.
 **Measured.** Two families, with very different levers:
 
 **Explicit breakpoints.** The client marks positions as cache boundaries, from a
-small fixed budget. Spend them deliberately — a reasonable allocation is the
+small fixed budget. Spend them deliberately. A reasonable allocation is the
 stable identity block, the system prompt, the last tool definition, and the last
 user message. This is precise, and it is why hit rates on these providers sit in
 the 90s.
 
 **Automatic longest-prefix.** No breakpoint mechanism; the provider matches the
 longest prefix it recognizes. The only client-side lever is a **cache key**,
-which affects *routing* rather than content — which shard the request lands in.
+which affects *routing* rather than content, meaning which shard the request
+lands in.
 
 That routing lever matters more than it sounds. Without a stable key, concurrent
-conversations on one account — a coordinator and the subagents it spawned —
+conversations on one account, a coordinator and the subagents it spawned,
 hash into overlapping shards and evict each other. Send a stable per-conversation
 identifier.
 
@@ -72,16 +73,17 @@ The general statement is the one to internalize:
 
 A peer harness rebuilds its system prompt every turn so that a mid-session
 memory write takes effect immediately, and busts its prefix cache doing it. The
-alternative pattern — **freeze the snapshot at session start, let writes apply
-next session** — costs one session of staleness and saves the cache.
+alternative pattern, **freeze the snapshot at session start and let writes apply
+next session**, costs one session of staleness and saves the cache.
 
 ### Injected messages are a first-order cost knob on reasoning models
 
 **Measured.** At least one major reasoning backend discards prior-turn reasoning
-items when assembling a prompt. The effect: *every* user message — typed,
-queued, or injected by the harness — reclassifies all reasoning items behind it
-at once, so the canonicalized prompt diverges from the cache at the first
-reasoning item and the next call re-reads essentially the whole conversation.
+items when assembling a prompt. The effect is that *every* user message, whether
+typed, queued or injected by the harness, reclassifies all reasoning items
+behind it at once, so the canonicalized prompt diverges from the cache at the
+first reasoning item and the next call re-reads essentially the whole
+conversation.
 
 This is inherent to how encrypted reasoning is replayed, not something a client
 can serialize around. Practical consequence: on these providers, each
@@ -92,8 +94,8 @@ expensive thing in the system.
 ### Measure the floor, then a miss tells you which problem you have
 
 **Measured, scarred.** The most useful number to have on hand is the size of the
-request *floor* — the system prompt plus tool schemas, with no conversation.
-Get it from a dump-the-prompt mode; it costs nothing to measure.
+request *floor*, which is the system prompt plus tool schemas with no
+conversation. Get it from a dump-the-prompt mode; it costs nothing to measure.
 
 With that number, a cache miss becomes diagnostic:
 
@@ -109,7 +111,7 @@ Without the floor you know only that something is expensive.
 
 **Scarred.** A cache regression is not one expensive request with one cause. It
 is a single invalidation followed by a multi-request window in which the
-provider re-establishes its prefix — and that *window* is the cost. Chasing each
+provider re-establishes its prefix, and that *window* is the cost. Chasing each
 expensive request separately produces a different wrong theory each time.
 
 ### Anything affecting the prefix is session state
@@ -117,7 +119,7 @@ expensive request separately produces a different wrong theory each time.
 **Scarred, twice.** Session resume restored our conversation faithfully and
 dropped the record of which tool groups had been activated. The tool schemas
 came back different, the prefix diverged from the original run's, and hit rate
-went to zero. Twice — the first fix addressed the symptom.
+went to zero. Twice, because the first fix addressed the symptom.
 
 Persist and restore *everything that shapes the request*, not just the messages:
 active tool set, model, system prompt inputs, reasoning level.
@@ -128,13 +130,13 @@ before," which is exactly the case that arises.
 
 ### Instrument the prefix
 
-**Measured.** Fingerprint the stable front of the request — model identity,
-system prompt, tool set — as a *ladder* of digests rather than one hash, so
+**Measured.** Fingerprint the stable front of the request, meaning model identity,
+system prompt and tool set, as a *ladder* of digests rather than one hash, so
 that when it changes the instrument names *which rung* changed. This turns a
 four-figure mystery into a one-line diagnosis.
 
 Two caveats from ours: it is an instrument, not a fix, and it is blind across a
-process restart — which is precisely where our worst regression lived.
+process restart, which is precisely where our worst regression lived.
 
 ---
 
@@ -145,7 +147,7 @@ process restart — which is precisely where our worst regression lived.
 **Converged.** Watch context use and compact past a threshold (we use 85% of the
 window). The three places that need a check:
 
-- **Before a turn**, when the transcript is already over — this covers resumed
+- **Before a turn**, when the transcript is already over. This covers resumed
   sessions.
 - **After a turn**, while idle, so the next prompt does not pay the
   summarization latency.
@@ -160,14 +162,14 @@ window). The three places that need a check:
 written or a command already run, the resuming agent *repeats the side effect*.
 
 The mid-turn summarization prompt must demand an explicit ledger of actions
-already taken — files written, commands run, messages sent. And set a standing
+already taken: files written, commands run, and messages sent. And set a standing
 tripwire: one confirmed sighting of a summary omitting an executed side effect
 is grounds to turn the feature off, not to tune the prompt.
 
 ### Warn the model before you compact it
 
-**Converged.** Well below the compaction threshold, tell the model — through the
-uncached tail — how much room is left. It can then wrap up, economize, or
+**Converged.** Well below the compaction threshold, tell the model, through the
+uncached tail, how much room is left. It can then wrap up, economize, or
 delegate remaining large reads to a subagent, rather than being summarized
 mid-thought. This is cheaper and better than any improvement to the summary.
 
@@ -176,7 +178,7 @@ mid-thought. This is cheaper and better than any improvement to the summary.
 **Measured.** It is a real model call over the whole transcript, and the
 transcript it produces shares no bytes with the one it replaced. Correct at the
 window limit; a bad trade before it. Keep the threshold high rather than eager,
-and do not treat compaction as a routine cost-control measure — it is a capacity
+and do not treat compaction as a routine cost-control measure. It is a capacity
 measure that costs money.
 
 ### Keep the full transcript on disk
@@ -196,7 +198,7 @@ file is the record.
 once. It is charged thirty-seven more times. Tool output is the largest
 controllable component of transcript growth in agentic work.
 
-Cap output, and cap it on two axes — bytes *and* lines — because either alone
+Cap output, and cap it on two axes, bytes *and* lines, because either alone
 has a pathological case.
 
 ### Offload rather than truncate
@@ -226,7 +228,7 @@ is duplicating content the model already has.
 
 **Converged.** The dominant pattern across the field, in three instances:
 
-- **Skills.** Put a compact manifest — names, one-line descriptions — in the
+- **Skills.** Put a compact manifest of names and one-line descriptions in the
   prompt; load the body on demand when the model asks for it. A hundred
   available procedures cost roughly a hundred short lines.
 - **Keyed context.** Entries with trigger keys whose bodies enter the request
@@ -237,8 +239,8 @@ is duplicating content the model already has.
 
 ### Do not merge keyed context with conversation memory
 
-**Scarred.** They look similar — both inject text that was not in the
-conversation — and they answer opposite questions. Keyed context is *authored,
+**Scarred.** They look similar, because both inject text that was not in the
+conversation, and they answer opposite questions. Keyed context is *authored,
 static, retrieved by match*. Conversation memory is *accumulated, mutable,
 retrieved by recency or salience*. Sharing an implementation makes both worse.
 
@@ -248,7 +250,7 @@ retrieved by recency or salience*. Sharing an implementation makes both worse.
 exactly the shape of a parent cache miss. A day went into diagnosing a cache
 problem that did not exist.
 
-Three separate readers eventually needed the distinction — which is the
+Three separate readers eventually needed the distinction, which is the
 generalizable part. **An accounting record needs a field for every question its
 readers will ask, and the readers arrive after the record does.** Attribution
 and timestamps are cheap to write and impossible to reconstruct.

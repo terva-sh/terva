@@ -1,5 +1,5 @@
 // Package extconn adapts a connector-role EXTENSION (extension protocol
-// 5, register_connector — docs/proposals/connector-extensions.md) to the
+// 5, register_connector — docs/proposals/archive/connector-extensions.md) to the
 // chat.Connector contract, so one subprocess can serve tools to the agent
 // AND stream chat messages that start agent turns.
 //

@@ -11,9 +11,9 @@ import (
 
 // personaRosterTripwire is the number of dispatchable personas past which an
 // always-injected roster starts to cost selection accuracy (the researched
-// band is ~20–30; see docs/proposals/Persona-swarm-dispatch.md). Crossing it is
-// the signal to add an on-demand Persona-search tool (phase 2b) rather than
-// inject the whole roster; we log it so it surfaces.
+// band is ~20–30; see docs/proposals/archive/persona-swarm-dispatch.md).
+// Crossing it is the signal to add an on-demand Persona-search tool
+// (phase 2b) rather than inject the whole roster; we log it so it surfaces.
 const personaRosterTripwire = 30
 
 // dispatchablePersonas returns the personas eligible for swarm dispatch: those

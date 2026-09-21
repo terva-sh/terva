@@ -95,7 +95,8 @@ func TestRulesFireOnKnownBadText(t *testing.T) {
 		{"contraction", "The activated group can't change in this reply."},
 		{"passive-voice", "The image pixels are returned to the model."},
 		{"ing-form", "Write a file, creating parent directories."},
-		{"aside", "Commands run in the directory; a relative path resolves against it."},
+		{"aside-semicolon", "Commands run in the directory; a relative path resolves against it."},
+		{"aside-em-dash", "The tool reads the file — and it reports what it found."},
 		{"term", "Paths are returned relative to cwd in lexical order."},
 		{"sentence-length", "This one sentence deliberately runs on and on and on past the " +
 			"cap that the policy sets for a single sentence, so that the length rule has " +
@@ -141,10 +142,6 @@ func TestRulesStaySilentOnGoodText(t *testing.T) {
 // The contraction rule used to read every apostrophe-s as a contraction, so
 // it reported "the product's own noun" and wanted the full form of a word that
 // has none. STE bans the contraction, not the possessive.
-//
-// Note for whoever extends these cases: keep ONE apostrophe per sentence.
-// stripCode treats a single-quoted span as verbatim text, so two possessives
-// blank the prose between them and the second one is never seen.
 func TestPossessiveIsNotAContraction(t *testing.T) {
 	possessive := []string{
 		"The group's tools stay hidden.",
@@ -157,6 +154,59 @@ func TestPossessiveIsNotAContraction(t *testing.T) {
 			if f.Rule == "contraction" {
 				t.Errorf("possessive read as a contraction in %q: %s", s, f.Msg)
 			}
+		}
+	}
+}
+
+// A sentence with two possessives used to lose everything between them.
+// stripCode read '[^']*' as a quoted span, so the apostrophe of "terva's" and
+// the apostrophe of "store's" bracketed the prose and blanked it. Every rule
+// then ran on the remains.
+//
+// This is the sentence from TKT-01M2NZAP8, and it hid two em dashes. The gate
+// called docs/controllers.md clean while four of them were still on the page,
+// which is how a silent strip costs more than a missing rule: it reports
+// success.
+//
+// The count is asserted rather than the presence, because one em dash reported
+// is what the old behaviour would also have given for the pair.
+func TestPossessivePairKeepsTheProseBetween(t *testing.T) {
+	const s = "terva's at-rest posture — what is encrypted — and the store's grant model."
+	if got := stripCode(s); got != s {
+		t.Errorf("stripCode blanked prose between two possessives:\n in: %s\nout: %s", s, got)
+	}
+
+	body := "The posture holds. " + s
+	var asides int
+	for _, f := range check(Text{File: "x.go", Line: 1, What: "Description()", Body: body}) {
+		if f.Rule == "aside-em-dash" {
+			asides++
+		}
+	}
+	if asides != 1 {
+		t.Errorf("em-dash aside reported %d times, want 1 — the strip is hiding it", asides)
+	}
+}
+
+// The other half, and the reason the span rule was repaired rather than
+// dropped. A value the reader types is not our prose: "'what should this be
+// called?'" is a sample question, and its passive voice belongs to whoever
+// types it. Deleting the alternative reported both of these against ask.go.
+//
+// Adjacent spans are here on purpose. A pattern that consumes the character
+// after the closing quote eats the space before the next one, and the second
+// span then goes unseen.
+func TestQuotedSpanStaysVerbatim(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"give 'confirm' and 'revise'", "give           and         "},
+		{"'a' 'b'", "       "},
+		{"such as 'what should this be called?'", "such as                              "},
+		{"'don't do this' is one span", "                is one span"},
+		{"an unclosed 'quote and the agent's name", "an unclosed 'quote and the agent's name"},
+	}
+	for _, c := range cases {
+		if got := blankSingleQuoted(c.in); got != c.want {
+			t.Errorf("blankSingleQuoted(%q)\n got %q\nwant %q", c.in, got, c.want)
 		}
 	}
 }

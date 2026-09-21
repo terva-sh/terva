@@ -579,7 +579,7 @@ type ContextBreakdown struct {
 	// message bodies. It is a superset of Messages, kept additive: a client that
 	// negotiated the context-tree feature renders this; older ones ignore it and
 	// use the flat Messages list. Message bodies and deeper content are fetched
-	// lazily via context.node (later stages). See docs/proposals/context-inspector.md.
+	// lazily via context.node (later stages). See docs/proposals/archive/context-inspector.md.
 	Tree *ContextNode `json:"tree,omitempty"`
 	// Rev is the transcript epoch the tree was built at (the agent's
 	// transcriptEpoch). A client can compare it before a context.node call to

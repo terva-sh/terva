@@ -2,20 +2,22 @@
 
 A **persona** is *who is helping*: a named identity with a short behavioral
 **charter** that focuses the agent on a specialty. Personas complement the other
-two layers — **skills** are *how to do a task* ([skills.md](skills.md)), and
+two layers: **skills** are *how to do a task* ([skills.md](skills.md)), and
 **tools / extensions** are *what can be done* ([extensions.md](extensions.md)).
 A persona only shapes the agent's identity; it never grants tools or changes
 permissions. To reword the *default* identity or terva's other canned prompts
-key-by-key (rather than swap in a whole persona), use the prompt overlay — see
+key-by-key (rather than swap in a whole persona), use the prompt overlay; see
 [localization](localization.md#customizing-tervas-prompts).
 
 terva ships a default persona (**Mieli**), a crew of specialist reviewers
-(`review-crew`), the three-seat deliberation panel `raati-crew` — YATA-1
-(truth), KUSANAGI-2 (decisiveness), MAGATAMA-3 (benevolence), the default panel
-for `raati_convene` (see [raati.md](raati.md)) — and **Kertoja**, an immersive
-game-master for `--play` (see [Cast and actor dispatch](#cast-and-actor-dispatch));
-you can author your own or get them from extensions. An immersive persona or a [character card](#character-cards)
-can also *be* the whole identity for a chat or roleplay.
+(`review-crew`), the three-seat deliberation panel `raati-crew`, and
+**Kertoja**, an immersive game-master for `--play` (see
+[Cast and actor dispatch](#cast-and-actor-dispatch)). The panel seats YATA-1
+(truth), KUSANAGI-2 (decisiveness) and MAGATAMA-3 (benevolence), and is the
+default panel for `raati_convene` (see [raati.md](raati.md)). You can author
+your own or get them from extensions. An immersive persona or a
+[character card](#character-cards) can also *be* the whole identity for a chat
+or roleplay.
 
 ## The format
 
@@ -41,25 +43,25 @@ remediation. Never call a vulnerability confirmed unless reachable context
 supports it.
 ```
 
-- **`name`** (required) — the persona's name; a persona with no name is invalid.
-- **body / charter** — the behavioral specialization. By default it is layered
+- **`name`** (required): the persona's name; a persona with no name is invalid.
+- **body / charter**: the behavioral specialization. By default it is layered
   *additively* on top of terva's harness identity (it focuses the agent; it
   never replaces the identity). Keep it lean: write the specialty, not generic
   operating rules the model already knows. (For a persona that should *own* the
   identity rather than flavor it, see [Immersive personas](#immersive-personas).)
 
-  **"Additive" is about the identity, not about other charters** — see
+  **"Additive" is about the identity, not about other charters**; see
   [What a charter replaces](#what-a-charter-replaces) before you write one.
-- **`good_for`** — the dispatch/selection signal. A persona with a non-empty
+- **`good_for`**: the dispatch/selection signal. A persona with a non-empty
   `good_for` is a *dispatchable specialist* (it appears in the swarm roster, see
   [Swarm dispatch](#swarm-dispatch)); the default Mieli has none.
-- **`immersive`** (optional, default `false`) — when `true`, the charter
+- **`immersive`** (optional, default `false`): when `true`, the charter
   *replaces* the default identity instead of layering on it. See
   [Immersive personas](#immersive-personas).
-- **`extends`** (optional) — names a persona whose charter this one builds on;
+- **`extends`** (optional): names a persona whose charter this one builds on;
   today only `mieli`, the default. Its charter comes first, yours after. See
   [Extending the default charter](#extending-the-default-charter).
-- **`agent_introduction`** (optional) — replaces terva's generated identity
+- **`agent_introduction`** (optional): replaces terva's generated identity
   intro (the branded "You are *Name*, an expert coding assistant operating
   inside terva…" opening) with your own verbatim text, while **keeping** the
   harness conventions bracketing the end. The middle ground between additive
@@ -68,7 +70,7 @@ supports it.
 - The other fields are display/selection metadata. Validate a file with
   `terva persona validate <file>`.
 
-A persona gets **no macro substitution** — that is a [character card](#character-cards)
+A persona gets **no macro substitution**: that is a [character card](#character-cards)
 feature. So a leftover `{{char}}`/`{{user}}`/`<START>` from a converted card
 reaches the model as literal text where a name should be, and validate rejects
 it. Writing about the macros is fine: put them in `code` spans or a fenced
@@ -81,15 +83,15 @@ Exactly **one** charter is ever in the prompt: the selected persona's. Charters
 do not stack, and there is no base charter underneath yours.
 
 Mieli is the **default persona**, not a base layer. So `--persona vartija` does
-not add Vartija's charter to Mieli's — it runs Vartija *instead of* Mieli, and
+not add Vartija's charter to Mieli's. It runs Vartija *instead of* Mieli, and
 every word of `mieli.md` is simply absent. That is deliberate: a security
 reviewer dispatched for one bounded question should not open with a
 collaboration preamble.
 
 It is worth stating because the absence is the one thing you cannot see. If a
-behaviour you expect is described in the default persona's charter — the
+behaviour you expect is described in the default persona's charter (the
 orientation contract, say, where Mieli announces what it is about to inspect
-before a long tool-driven task — a custom persona does **not** inherit it. Write
+before a long tool-driven task), a custom persona does **not** inherit it. Write
 the parts you want into your own charter.
 
 ```bash
@@ -99,8 +101,8 @@ terva persona validate ./mine.md             # says so before you ever run it
 
 The prompt dump labels the charter segment with the persona file it came from
 (`embedded:mieli.md`, an on-disk path, or `ext:<bundle>:<file>`), so "where did
-this instruction come from" — and its harder twin, "why is this instruction
-missing" — have an answer that does not require reading the source.
+this instruction come from", and its harder twin "why is this instruction
+missing", have an answer that does not require reading the source.
 
 ## Extending the default charter
 
@@ -123,7 +125,7 @@ The assembled charter is the base charter followed by yours, so your
 specialization qualifies the general contract rather than being qualified by it.
 Both halves keep their own provenance in `--dump-prompt`.
 
-- **Only `extends: mieli` works today** — the default persona, nothing else. A
+- **Only `extends: mieli` works today**: the default persona, nothing else. A
   general persona-to-persona graph is not shipped, so an unsupported value is an
   error at startup rather than a silent no-op.
 - **Opt-in, never automatic.** A dispatched specialist must not inherit a
@@ -133,7 +135,7 @@ Both halves keep their own provenance in `--dump-prompt`.
   whole prompt, so there is nothing for a base to be additive to; the
   combination fails validation instead of quietly picking a meaning.
 - **The 3500-char budget measures the assembly.** `persona validate` reports the
-  split — what you inherited, what you wrote — because the cached prefix carries
+  split (what you inherited, what you wrote) because the cached prefix carries
   both and only one of them is yours to shorten. The ceiling accounts for the
   inherited half: extending Mieli spends 666 of it before you write a word, so
   what is left over is still more than a self-contained charter ever had.
@@ -141,7 +143,7 @@ Both halves keep their own provenance in `--dump-prompt`.
   field ignores the unknown key and loads the file exactly as before.
 
 Reach for it when you find yourself pasting a built-in charter into your own
-file. That copy is a fork with no link home — it stops tracking the original the
+file. That copy is a fork with no link home: it stops tracking the original the
 moment either changes, and nothing reports the drift.
 
 ## Immersive personas
@@ -149,8 +151,8 @@ moment either changes, and nothing reports the drift.
 By default a charter is **additive**: terva wraps it in the harness identity
 ("You are *Name*, an expert coding assistant operating inside terva…") followed
 by the harness conventions. That's right for a specialist that focuses a coding
-session, but it's a ceiling for a persona that needs to *be* someone — a
-roleplay character, a chat companion, a domain expert with its own voice — which
+session, but it's a ceiling for a persona that needs to *be* someone (a
+roleplay character, a chat companion, a domain expert with its own voice), which
 ends up told it is both that character and a coding assistant.
 
 Set `immersive: true` and the charter becomes the **whole** identity: it
@@ -168,18 +170,18 @@ You are Lieutenant Commander Data, operations officer. This is who you are, not
 a role you are playing. ...
 ```
 
-- An immersive persona keeps all its ergonomics — name, emoji, accent color,
-  `good_for` dispatch, single-file packaging — unlike a raw `--system-prompt`,
+- An immersive persona keeps all its ergonomics (name, emoji, accent color,
+  `good_for` dispatch, single-file packaging), unlike a raw `--system-prompt`,
   which drops them.
 - **Precedence:** an explicit `--system-prompt` flag or `$TERVA_HOME/SYSTEM.md`
   still wins. The order is: `--system-prompt` > `SYSTEM.md` > immersive persona >
   additive persona > built-in default.
 - **Write a complete charter.** An immersive charter owns everything, so the
-  harness conventions are *not* added — neither the output guidance (which terva
+  harness conventions are *not* added: neither the output guidance (which terva
   otherwise writes against the run's surface: a rendered pane, a chat message, a
   plain stream, or a program) nor the edit/write discipline. Include any
   operating guidance you actually want. A one-line "your output renders as
-  Markdown" is usually enough — but if the persona will run somewhere that does
+  Markdown" is usually enough. But if the persona will run somewhere that does
   *not* render markdown, say that instead, because nothing else will.
 - The 3500-char static-block budget that `persona validate` warns about does not
   apply to an immersive charter (it's the whole prompt, not a bounded block).
@@ -188,7 +190,7 @@ a role you are playing. ...
 
 ### Just the intro: `agent_introduction`
 
-If you only want to replace the *branded intro* — not the whole prompt — set
+If you only want to replace the *branded intro*, not the whole prompt, set
 `agent_introduction` instead of `immersive: true`. terva swaps its "operating
 inside terva…" opening for your text but **keeps** the harness conventions, so
 the persona still gets terva's output discipline without being told it is a
@@ -199,24 +201,24 @@ coding assistant. Reach for `immersive` when the charter should own everything;
 
 Two meta-flags reconfigure the whole harness away from coding, so a persona can
 front a conversation or a roleplay instead of a coding session. They bundle the
-identity, tool, and chrome changes that those experiences need into one flag —
+identity, tool, and chrome changes that those experiences need into one flag;
 pair either with a `--persona`.
 
 | flag | tools (in block terms) | identity | for |
 |---|---|---|---|
-| `--chat` | **none** — all tools off, like `--no-tools` | conversational — "this is a conversation; talk naturally, as yourself" | talking with a companion/character |
-| `--play` | **extensions + MCP only** — like `--no-workspace-tools` | embodied — "perceive and act through the tools … your senses and your hands" | acting in a simulated world (a [world extension](extensions.md)) |
+| `--chat` | **none**: all tools off, like `--no-tools` | conversational: "this is a conversation; talk naturally, as yourself" | talking with a companion/character |
+| `--play` | **extensions + MCP only**: like `--no-workspace-tools` | embodied: "perceive and act through the tools … your senses and your hands" | acting in a simulated world (a [world extension](extensions.md)) |
 
-The tool half of each is just the building-block flags — `--no-workspace-tools`,
-`--no-ext`, `--no-mcp` (and `--no-tools` = all three) — which you can use on
+The tool half of each is just the building-block flags `--no-workspace-tools`,
+`--no-ext` and `--no-mcp` (and `--no-tools` = all three), which you can use on
 their own when you want the tool change *without* the identity change (e.g. a
 bot with its integrations but no host shell). The meta-flags add the identity and
 chrome on top. Both modes also:
 
 - drop the "expert coding assistant" intro and the edit-tool conventions;
 - skip the `skill` tool and `AGENTS.md` auto-injection (you're not in the repo);
-- suppress coding chrome in the TUI — the cwd path, the sandbox `jailed` badge,
-  and the approval-mode tag — while keeping extension status segments; and
+- suppress coding chrome in the TUI (the cwd path, the sandbox `jailed` badge,
+  and the approval-mode tag) while keeping extension status segments; and
 - use calm, code-free spinner and greeting flavor.
 
 They compose with personas: an **immersive** persona still owns the identity
@@ -232,12 +234,12 @@ terva --play --ext ./world --persona wayfarer      # act in a simulated world
 ## Character cards
 
 A **character card** is an immersive identity in a portable, widely-shared
-format — SillyTavern's **Character Card V2** (CCv2), as a `.json` file or a
+format: SillyTavern's **Character Card V2** (CCv2), as a `.json` file or a
 `.png` with the card embedded in a `chara` text chunk (the community sharing
 convention; the two forms parse identically). CCv2 is the shape terva reads,
 but the parser is tolerant either side of it: a flat **V1** card is upgraded to
 the V2 shape on load, and any `chara_card_v*` card (**V3** included) parses on
-its V2-compatible core — fields terva has no use for are carried but never
+its V2-compatible core, and fields terva has no use for are carried but never
 interpreted. Load one with `--card`:
 
 ```bash
@@ -247,14 +249,14 @@ terva card info ./aava.png              # inspect a card offline, no model call
 ```
 
 `--card` **implies `--chat`** when no mode is set, and is not valid in regular
-coding mode — a card is a chat/play identity, not a coding one. It maps onto the
+coding mode: a card is a chat/play identity, not a coding one. It maps onto the
 same assembly personas use: the card's `description`/`personality`/`scenario`/
 example dialogue become the charter, its `system_prompt` owns the intro (with
 `{{original}}` → a brand-free framing), its `first_mes` seeds the opening
 message, and its `post_history_instructions` ride the per-turn tail. A
 `character_book` imports onto the lore engine (see [Lore](#lore)).
 
-- **`{{user}}` — what the character calls you.** On the first interactive card
+- **`{{user}}`: what the character calls you.** On the first interactive card
   session terva asks, and remembers the answer in your **global** config, so it
   persists across projects (even under project-scoping). Override per-run with
   `--as NAME`; a trusted project may set its own `user_name`. Precedence:
@@ -268,7 +270,7 @@ message, and its `post_history_instructions` ride the per-turn tail. A
   is never sent to the model. This is why you [author](#authoring) personas you
   control rather than loading a downloaded card's prose as a native persona.
 
-See exactly what a card assembles with `--dump-prompt` —
+See exactly what a card assembles with `--dump-prompt`;
 [debugging-prompts.md](debugging-prompts.md) walks through the card, greeting,
 and lore sections.
 
@@ -276,13 +278,13 @@ and lore sections.
 
 **Lore** is terva's keyed-context primitive: authored, file-backed snippets
 injected into the model's context only when they are **keyword-relevant**,
-within a token budget — the general form of a character card's `character_book`
-(a CCv2 book imports straight onto it). An entry is a Markdown file with YAML
-frontmatter: `keys` (trigger words) plus a body, or `constant: true` to keep it
-always on.
+within a token budget. It is the general form of a character card's
+`character_book` (a CCv2 book imports straight onto it). An entry is a
+Markdown file with YAML frontmatter: `keys` (trigger words) plus a body, or
+`constant: true` to keep it always on.
 
-Entries are discovered from three tiers — `$TERVA_HOME/lore/`, a trusted
-project's `.terva/lore/`, and each enabled extension's `lore/` bundle — with
+Entries are discovered from three tiers (`$TERVA_HOME/lore/`, a trusted
+project's `.terva/lore/`, and each enabled extension's `lore/` bundle), with
 collection settings (`scan_depth`, `token_budget`, `recursive_scanning`) in a
 `lore.json` at a directory root. Inspect with `terva lore list`, author with the
 `write-terva-lore` skill, and disable for a run with `--no-lore`. The full model
@@ -293,10 +295,10 @@ collection settings (`scan_depth`, `token_budget`, `recursive_scanning`) in a
 
 The active persona for a run resolves in this order (first match wins):
 
-1. `--persona <name|file>` — explicit at launch (a path with `/` or `.md` loads
+1. `--persona <name|file>`: explicit at launch (a path with `/` or `.md` loads
    that file; otherwise a name resolved against the library).
-2. `$TERVA_HOME/persona.md` — a hand-authored root persona (the default).
-3. `default_persona` in `config.json` — a name pointer into the library.
+2. `$TERVA_HOME/persona.md`: a hand-authored root persona (the default).
+3. `default_persona` in `config.json`: a name pointer into the library.
 4. the built-in **Mieli**.
 
 The **library** (what bare/qualified names resolve against, and what
@@ -308,12 +310,12 @@ The **library** (what bare/qualified names resolve against, and what
 | **extension** | `<ext>/personas/**` of each enabled extension (see below) |
 | **built-in** | the embedded crew shipped with terva |
 
-A higher tier **shadows** a lower one of the same qualified name — so you can
+A higher tier **shadows** a lower one of the same qualified name, so you can
 override an extension or built-in persona (see [Namespacing](#namespacing)).
 
 ## Namespacing
 
-A persona's **namespace** is its grouping — a team subdirectory, or the
+A persona's **namespace** is its grouping: a team subdirectory, or the
 extension name. The qualified name is `namespace:name`:
 
 | path | namespace | qualified |
@@ -324,9 +326,9 @@ extension name. The qualified name is `namespace:name`:
 
 `--persona` (and `swarm_spawn`'s `persona`) accept either form:
 
-- `--persona review-crew:vartija` — exact.
-- `--persona vartija` — bare; resolves across namespaces by precedence (so two
-  namespaces can both define `deep-researcher` without colliding —
+- `--persona review-crew:vartija`: exact.
+- `--persona vartija`: bare; resolves across namespaces by precedence (so two
+  namespaces can both define `deep-researcher` without colliding:
   `web:deep-researcher` vs `other:deep-researcher`).
 
 **Override** by mirroring the namespace as a subdirectory:
@@ -342,7 +344,7 @@ persona overrides.
 
 An installed extension can contribute personas the same way it contributes
 [skills](extensions.md#bundle-contributions): a **`personas/` directory beside
-`extension.json`**. Discovery is a static disk scan — the extension does not
+`extension.json`**. Discovery is a static disk scan, so the extension does not
 need to be running.
 
 ```
@@ -356,7 +358,7 @@ $TERVA_HOME/extensions/web/
 - They rank **after** the user's own personas, so a bundle persona can never
   shadow a hand-authored one (and the user can override it by mirroring the
   namespace).
-- A **disabled** extension contributes nothing — both the manifest `enabled:
+- A **disabled** extension contributes nothing: both the manifest `enabled:
   false` flag and the user's `disable_extensions` config list are honored, so a
   persona never outlives the tools that back it.
 
@@ -367,7 +369,7 @@ installed and a `deep-researcher` persona that declares
 `swarm_spawn(persona="web:deep-researcher", …)` and the sub-agent boots with the
 web tools *and* the deep-researcher charter.
 
-> Authoring a persona for an extension is identical to authoring any persona —
+> Authoring a persona for an extension is identical to authoring any persona;
 > see the `write-terva-persona` skill. Just place the `.md` under your bundle's
 > `personas/` directory. Validate it with `terva persona validate <file>`.
 
@@ -385,8 +387,8 @@ terva persona init [--force]      # copy the built-in crew into $TERVA_HOME/pers
 When auto-swarm is enabled, the coordinator's prompt carries a compact **roster**
 of dispatchable personas (those with `good_for`), shown by qualified name and
 annotated `(via <ext>)` for extension personas. The coordinator dispatches a
-specialist with the `swarm_spawn` tool's `persona` parameter (a **name only** —
-the model may not name a file path); a human can also use
+specialist with the `swarm_spawn` tool's `persona` parameter (a **name only**,
+because the model may not name a file path); a human can also use
 `/swarm new --persona <name|path> <task>`. The sub-agent boots as that persona,
 and its results come back labeled by persona so the coordinator synthesizes
 across lenses.
@@ -396,14 +398,14 @@ across lenses.
 `--play` has its own dispatch skin, the roleplay mirror of
 [swarm dispatch](#swarm-dispatch): a **director** (the main agent) voices a
 **cast** of actors with the `actor_spawn` tool. Where `swarm_spawn` is
-fire-and-forget coding sub-agents, `actor_spawn` is **synchronous** — it hands
+fire-and-forget coding sub-agents, `actor_spawn` is **synchronous**: it hands
 an actor the current situation, waits for its line, and returns that line so the
 director can weave it into the scene ("director & performers"). An actor is a
 tool-less `--chat` voice; the director stays the single source of truth about
 the world.
 
 The cast is **closed and named**, declared at launch and disjoint from the
-coding roster — so a fantasy roleplay can never dispatch the code-review crew:
+coding roster, so a fantasy roleplay can never dispatch the code-review crew:
 
 ```bash
 terva --play --persona kertoja \
@@ -414,30 +416,30 @@ terva --play --persona kertoja \
 - `--cast NAME=REF` is repeatable and **implies `--play`** (it is rejected with
   `--chat`, which has no director). `REF` is a persona name or a character-card
   path; refs are validated at launch. The model dispatches an actor by **name
-  only** — never a path, so model input can't point the harness at a file.
+  only**, never a path, so model input can't point the harness at a file.
 - A trusted project can declare a cast in `.terva/cast.json`; `--cast` overlays
   it. An untrusted workspace contributes none (Workspace Trust).
 - Actors are **warm**: once voiced, an actor is kept alive so it remembers the
   scene across turns and only its first line pays spawn latency. Memory is a
-  continuity bonus — keep each situation self-contained so a cache miss still
+  continuity bonus: keep each situation self-contained so a cache miss still
   reads well. A bounded LRU cache evicts the least-recently-voiced actor and is
   torn down at the end of the scene.
 
 **Kertoja** (KEHR-toh-yah, 🎭) is the built-in immersive game-master persona
-tuned to direct these scenes — it narrates economically and honors what a cast
+tuned to direct these scenes: it narrates economically and honors what a cast
 member establishes rather than rewriting it. Any immersive persona or card can
 be the director; Kertoja just ships ready for the job.
 
 ## Authoring
 
-Use the built-in **`write-terva-persona`** skill — it covers the format, the
+Use the built-in **`write-terva-persona`** skill: it covers the format, the
 "charter not boilerplate" rule, the trust model (only author personas you
 control; never load a downloaded card's prose as identity), and the
 validate/`--persona` loop. The default Mieli persona is the canonical example to
 copy (`terva persona init` writes the crew out for editing).
 
 For the immersive primitives there are two companion skills:
-**`write-terva-lore`** (authoring keyed-context entries — keys, constant vs
+**`write-terva-lore`** (authoring keyed-context entries: keys, constant vs
 triggered, budget, the `character_book` mapping) and **`write-terva-card`**
 (assembling a CCv2 character card, and the card-is-data trust boundary). Both
 validate with `terva lore validate` / `terva card info`.

@@ -159,7 +159,7 @@ func TestNoUpstreamURLsInGoSources(t *testing.T) {
 }
 
 // TestNoStrayOldNameInGoSources is the rename's enforcement point
-// (docs/plans/rename-terva.md, phase 2): every .go file must be free
+// (docs/plans/archive/rename-terva.md, phase 2): every .go file must be free
 // of old-name spellings except where they are deliberate —
 //
 //   - the Go module path, which tracks upstream until phase 3;

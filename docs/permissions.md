@@ -9,19 +9,19 @@ Two orthogonal controls decide what the agent may do:
 
 They compose: a call must pass the approval layer first, then run
 within whatever the sandbox permits. Keeping the axes separate is
-deliberate — a single conflated "trust level" is the known failure
+deliberate: a single conflated "trust level" is the known failure
 mode in this design space. The interactive default pairs them: the
 `workspace` approval mode trusts your built-in tools *because* the
 sandbox (jailed by default) bounds their **writes** to the working
 directory.
 
-### What the jail does and does not confine
+## What the jail does and does not confine
 
 The jail is a **write** boundary plus a set of command heuristics. It is
 deliberately not a read boundary:
 
 - **Writes** (`write`, `edit`, image output, chat attachments) are confined
-  to the working directory — plus `$TERVA_HOME/handoffs/`, the one terva-owned
+  to the working directory, plus `$TERVA_HOME/handoffs/`, the one terva-owned
   surface that exists to be agent-written (the built-in `handoff` skill parks
   session-to-session documents there; requiring `/unjail` for a built-in
   skill would make the jail an obstacle to route around).
@@ -31,8 +31,8 @@ deliberately not a read boundary:
   user-level store named in user configuration sits outside it by design: see
   [Ticket stores outside the workspace](#ticket-stores-outside-the-workspace).
 - **Reads** (`read`, `grep`, `glob`, `share_file`) are not confined. The
-  `bash` tool has never been path-jailed — it cannot be, short of not
-  shipping a shell — so a refused read was always one `cat` away. Enforcing
+  `bash` tool has never been path-jailed and cannot be, short of not
+  shipping a shell, so a refused read was always one `cat` away. Enforcing
   containment on one tool and not the other confined nothing and cost turns:
   the model would hit the refusal, then route around it through `bash` on the
   next turn.
@@ -40,7 +40,7 @@ deliberately not a read boundary:
   `auth.json`, `config.json`, `trusted.json`, `unjailed.json`, `sessions/`,
   `swarm/`, `logs/` (except `ext-*.log`), and `shared/`. `/unjail` does not
   lift these. Like the rest of the sandbox this is a speed bump rather than a
-  boundary — a runtime-assembled path or an interpreter walks past it — but
+  boundary (a runtime-assembled path or an interpreter walks past it), but
   it is the same speed bump on every route.
 - **Transcripts have one reader.** `sessions/` and `swarm/` stay denied above,
   and `session_inspect` is carved back out for the `.jsonl` files inside them.
@@ -58,8 +58,8 @@ all.
 
 Opening the sanctioned reader while the raw ones stay shut therefore reduces
 what leaks. `session_inspect` redacts credential shapes and bounds its output;
-`cat` of a copy does neither. The carve-out is narrow on both axes — only
-`.jsonl`, and only under those two roots — so `auth.json`, the secrets key, the
+`cat` of a copy does neither. The carve-out is narrow on both axes: only
+`.jsonl`, and only under those two roots, so `auth.json`, the secrets key, the
 web token, `logs/` and `config.json` are refused on that route exactly as they
 are on every other. It holds while jailed, because the jail confines writes and
 routes risky reads past other safeguards, and a redacted, bounded read of
@@ -106,13 +106,13 @@ beats the built-in default; `--no-yolo` is a compatibility alias for
 `--approval ask`.
 
 In the TUI, `/settings` switches the mode live for the **current
-session** (plan immediately withholds the mutating tools) — it does
+session** (plan immediately withholds the mutating tools). It does
 **not** write your config. The approval mode is a security posture, not a
 preference, so it is never saved as a side effect: the persistent default
 comes only from the `approval` config key or the `--approval` flag, so
 the picker can never silently pin a mode (and a future default change is
 never masked by an accidentally-saved value). `/jail` and `/unjail`
-follow the same rule — session-only unless you explicitly say
+follow the same rule: session-only unless you explicitly say
 `always` ([Unjailing a directory for good](#unjailing-a-directory-for-good)).
 The current mode shows
 in the status bar; `/permissions` shows the active mode and rules, and
@@ -120,11 +120,11 @@ lets you revoke this session's grants (see below).
 
 | mode | behavior |
 |---|---|
-| `yolo` | every tool call runs without asking. `ask` rules don't prompt here — yolo never prompts — but `deny` rules still block |
-| `workspace` | **the interactive default.** Every built-in tool (`read`/`write`/`edit`/`bash`, bounded by the sandbox) runs freely, and so does any *extension/MCP* tool classified read-only; foreign tools that can have side effects (a writing extension tool, a mutating MCP tool) ask. The trust axis is origin: your own tools vs foreign code — but a foreign tool that declares the `network-read` authority asks even though it reads nothing locally (see below) |
-| `auto-edit` | read-only tools (`read`, `terva_status`, `skill`) and the file editors (`write`, `edit`) run freely; everything else — `bash`, extension tools, chat sends — asks |
+| `yolo` | every tool call runs without asking. `ask` rules don't prompt here, because yolo never prompts, but `deny` rules still block |
+| `workspace` | **the interactive default.** Every built-in tool (`read`/`write`/`edit`/`bash`, bounded by the sandbox) runs freely, and so does any *extension/MCP* tool classified read-only; foreign tools that can have side effects (a writing extension tool, a mutating MCP tool) ask. The trust axis is origin: your own tools vs foreign code. A foreign tool that declares the `network-read` authority still asks, even though it reads nothing locally (see below) |
+| `auto-edit` | read-only tools (`read`, `terva_status`, `skill`) and the file editors (`write`, `edit`) run freely; everything else asks: `bash`, extension tools, chat sends |
 | `ask` | every tool call asks, read-only included (exactly what `--no-yolo` always did) |
-| `plan` | only read-only tools run, and mutating tools don't even enter the registry — the model is steered to present a plan. Mutating calls that arrive anyway are refused with a model-readable reason, not prompted |
+| `plan` | only read-only tools run, and mutating tools don't even enter the registry, so the model is steered to present a plan. Mutating calls that arrive anyway are refused with a model-readable reason, not prompted |
 
 **Defaults differ by run mode.** An interactive session defaults to
 `workspace` (a human is present to answer the foreign-tool prompts) and
@@ -142,14 +142,14 @@ calls that would otherwise prompt you, and answers some of them.
 
 It is a **third axis**, not a sixth approval mode. The mode decides
 *whether* a call runs, the sandbox bounds *what* it may touch, and the
-classifier decides only **who answers** the question the mode raised — you,
+classifier decides only **who answers** the question the mode raised: you,
 or a model standing in for you. So it composes: `workspace` mode with
 screening on is still `workspace` mode, and the status bar shows both.
 
 > **This is not a security boundary.** It judges a call on its face, and a
 > model's judgement is neither sound nor reproducible. It catches an agent
-> that is *honestly mistaken* — the wrong directory, an overeager `rm`, a
-> migration that looked reversible — which is the common failure. Against a
+> that is *honestly mistaken*: the wrong directory, an overeager `rm`, a
+> migration that looked reversible. That is the common failure. Against a
 > **prompt-injected** agent it is close to worthless: whoever controls the
 > agent controls the call being judged. Keep your `deny` rules, the confirm
 > gate and the jail *underneath* it, never behind it.
@@ -160,12 +160,12 @@ screening on is still `workspace` mode, and the status bar shows both.
 |---|---|---|
 | `off` | nothing; every prompt reaches you (**the default**) | — |
 | `screen` | **refuse** a call, but never permit one. An approve verdict is discarded and you are asked anyway | `⚖ screened` |
-| `approve` | also **answer yes on your behalf** — the prompt never happens | `⚖! approving` |
+| `approve` | also **answer yes on your behalf**, so the prompt never happens | `⚖! approving` |
 
 `screen` can only ever *subtract* authority, so it is safe to leave on: the
 worst a wrong verdict costs is a call you reissue. `approve` grants
 authority you never saw, which is why it renders in the same warning colour
-`yolo` gets — the riskiest posture must never be the one with no badge.
+`yolo` gets: the riskiest posture must never be the one with no badge.
 
 ### Turning it on
 
@@ -190,7 +190,7 @@ For every run, in your own `$TERVA_HOME/config.json`:
 ```
 
 The flag wins over the config key, in both directions. It overrides the
-**mode only** — `provider`, `model`, `host_model` and `timeout_ms` keep coming
+**mode only**: `provider`, `model`, `host_model` and `timeout_ms` keep coming
 from your config, so `--classifier screen` on a machine with no classifier
 block at all still resolves the cheap rung described below. There is
 deliberately no flag for the screening model: argv may choose among the
@@ -199,7 +199,7 @@ endpoint of someone else's choosing.
 
 A mistyped mode is refused at startup rather than warned about. Every *other*
 classifier failure abstains into "screening stays off", which is right for a
-provider outage and wrong for a typo — `--classifier sceen` is an unambiguous
+provider outage and wrong for a typo. `--classifier sceen` is an unambiguous
 request for screening, and answering it with a line that scrolls past would
 leave you believing you had it.
 
@@ -208,12 +208,12 @@ workspace.** Unlike the project provider/model override, this is not a trust
 gate but an absolute one: `approve` lets a model permit tool calls on your
 behalf, so a cloned repository that could switch it on would have a
 remote-code-execution foothold dressed as a preference. `/settings` shows the
-mode read-only for the same reason — the web panel is reachable over a
+mode read-only for the same reason: the web panel is reachable over a
 network, and that is not a switch to expose to a remote peer.
 
 | key | meaning |
 |---|---|
-| `mode` | `off` (default), `screen`, or `approve` — `--classifier MODE` overrides it for one run |
+| `mode` | `off` (default), `screen`, or `approve`; `--classifier MODE` overrides it for one run |
 | `model` / `provider` | override which model screens; both empty is the intended shape |
 | `host_model` | permit falling back to the full host model when no cheap rung resolves (default off) |
 | `timeout_ms` | bound one screening call (default 8s) |
@@ -222,7 +222,7 @@ network, and that is not a switch to expose to a remote peer.
 
 Screening happens on gated calls for the whole session, so an expensive
 default would be silent and permanent. With no `model` set, the classifier
-resolves the **weak rung of your `swarm_tiers` ladder** — the same ladder
+resolves the **weak rung of your `swarm_tiers` ladder**, the same ladder
 `swarm_spawn`'s `tier` uses, which composes your overrides over terva's
 built-in family tables. Most providers answer with nothing configured; on an
 Anthropic host it picks a Haiku rather than the session's Sonnet.
@@ -231,8 +231,8 @@ Anthropic host it picks a Haiku rather than the session's Sonnet.
 terva models tiers    # exactly what will be picked, per provider
 ```
 
-A provider with neither a built-in table nor an override — the gateways
-(`opencode-go`, OpenRouter, LiteLLM) — resolves nothing. Screening then
+A provider with neither a built-in table nor an override (the gateways:
+`opencode-go`, OpenRouter and LiteLLM) resolves nothing. Screening then
 **stays off and says so** rather than quietly billing host price on every
 gated call. Set `swarm_tiers.<provider>.weak`, or `classifier.model`, or
 accept the cost with `classifier.host_model`.
@@ -248,8 +248,8 @@ The position is the design. It runs **after** your rules, so an explicit
 grants, so a tool you already answered "always" for costs nothing. It runs
 **before** the prompt, because replacing the prompt is the point.
 
-**Every failure is an abstention** — a timeout, a provider outage, an
-unparseable answer — and an abstention just shows you the prompt you would
+**Every failure is an abstention**: a timeout, a provider outage, an
+unparseable answer. An abstention just shows you the prompt you would
 have seen anyway. Failing *closed* was the alternative and it is worse: a
 provider blip would refuse real work while handing the agent something
 indistinguishable from a policy decision, which it would then try to route
@@ -266,7 +266,7 @@ badge.
 
 ## Unjailing a directory for good
 
-Some work genuinely lives outside its own folder — a dotfiles repo that
+Some work genuinely lives outside its own folder: a dotfiles repo that
 writes into your home, a build that emits above the tree. Passing
 `--no-jail` every time is a poor way to say so, and `/unjail` forgets on
 restart, so the decision can be recorded per directory:
@@ -282,7 +282,7 @@ In the TUI, `/unjail` is still session-only; `/unjail always` records it,
 and `/jail always` forgets it again.
 
 The list lives in `$TERVA_HOME/unjailed.json` (mode 0600), **outside any
-project** — for the same reason the trust list does: a repo must not be
+project**, for the same reason the trust list does: a repo must not be
 able to unjail itself by shipping a file. `--jail` and `--no-jail` still
 settle a single run, so a saved rule never overrides what you just typed.
 
@@ -296,13 +296,13 @@ to write outside of is not thereby one whose code you want executing.
 startup rather than leaving you to infer it: a saved unjail rule
 *together with* an auto-approving mode (`workspace`, `yolo`) means the
 built-in tools may **write** anywhere without asking. The jail is what
-made `workspace` safe to leave alone — built-ins are auto-approved
+made `workspace` safe to leave alone: built-ins are auto-approved
 precisely *because* their writes were confined. Take the jail away and
 that premise goes with it. (Reads are already unconfined either way; the
 secret deny list above holds regardless.)
 
-Tools that are not classified read-only — including every extension
-tool — are treated as mutating. In headless modes (`-p`, `--json`,
+Tools that are not classified read-only, including every extension
+tool, are treated as mutating. In headless modes (`-p`, `--json`,
 `--rpc`, swarm agents) there is no prompt: anything that would ask is
 **refused** with a model-readable reason instead. That keeps the
 refuse-by-default posture while still letting `plan` mode and explicit
@@ -310,12 +310,12 @@ allow rules drive useful headless automation.
 
 **Bot mode is the exception**: `terva bot run` still defaults to
 `yolo`, but a prompting mode (`--approval ask`, `workspace`, …) WORKS
-there — a tool call that needs confirmation is posed as a question in
+there: a tool call that needs confirmation is posed as a question in
 the paired chat (buttons where the connector supports interactive
 asks, a numbered plain-text question everywhere else) and the turn
 blocks on the answer. Only the paired owner may answer; an unanswered
 question denies after two minutes (fail closed); and "always (this
-tool)" — a durable session grant — requires a platform-attested answer
+tool)", a durable session grant, requires a platform-attested answer
 (a button click, not parsed text; a text "always" allows once and says
 so). See docs/connectors.md for the wire side.
 
@@ -324,22 +324,22 @@ so). See docs/connectors.md for the wire side.
 A tool's *authority* is a finer classification than the read-only/mutating
 split, because "side-effect-free" is not one thing. A web fetch reads
 nothing on the local machine yet can leak data, hit a remote server, or
-reach a private network — so folding it into the local-read auto-allow
+reach a private network, so folding it into the local-read auto-allow
 would be wrong. The classes (`core.Authority`):
 
 | Authority | Meaning | Example |
 |---|---|---|
-| `local-read` | reads files/state (not the secret deny list); no process/network/external effect | `read`, `grep`, `glob`, `terva_status`, `session_inspect`, `skill`, `worktree_list`, `code_execution` (read-only exactly as long as every function it exposes is — see [scripting.md](scripting.md#permissions)) |
-| `local-data` | reads **and writes** the tool's own host-managed data store — for an extension, its `$TERVA_HOME/ext-data/<name>` — and nothing else: never your workspace, a process, the network, or an external service. Auto-allowable like `local-read`, because the write never leaves private, host-controlled storage | `task_create`/`task_update`/`task_list`/`task_archive`; a memory/notes extension tool |
-| `workspace-mutation` | writes files / edits workspace state | `write`, `edit`, `code_execution_mutating` (the same three read functions plus `write`/`edit`; classified by its widest binding, never read-only — see [scripting.md](scripting.md#permissions)) |
+| `local-read` | reads files/state (not the secret deny list); no process/network/external effect | `read`, `grep`, `glob`, `terva_status`, `session_inspect`, `skill`, `worktree_list`, `code_execution` (read-only exactly as long as every function it exposes is; see [scripting.md](scripting.md#permissions)) |
+| `local-data` | reads **and writes** the tool's own host-managed data store (for an extension, its `$TERVA_HOME/ext-data/<name>`) and nothing else: never your workspace, a process, the network, or an external service. Auto-allowable like `local-read`, because the write never leaves private, host-controlled storage | `task_create`/`task_update`/`task_list`/`task_archive`; a memory/notes extension tool |
+| `workspace-mutation` | writes files / edits workspace state | `write`, `edit`, `code_execution_mutating` (the same three read functions plus `write`/`edit`; classified by its widest binding, never read-only; see [scripting.md](scripting.md#permissions)) |
 | `process-execution` | runs commands / subprocesses | `bash` |
 | `network-read` | fetches URLs / search results (can leak, log, reach private nets) | a web-fetch extension tool |
 | `external-mutation` | writes to third-party APIs, sends messages, changes remote resources | a chat-send / PR-open tool |
 | `user-interaction` | blocks to ask the user; no other effect | `ask_user_question` |
 
 One built-in sits outside the taxonomy: `activate_tools` changes only
-which tool schemas are advertised this session — visibility, never
-authority — so it auto-admits like a read, and every tool it reveals
+which tool schemas are advertised this session, which is visibility and
+never authority, so it auto-admits like a read, and every tool it reveals
 still faces its own gate when actually called.
 
 How each mode treats a class:
@@ -356,7 +356,7 @@ How each mode treats a class:
 
 Two things to note. First, `workspace` trusts *first-party built-ins* by
 origin (so built-in `bash`/`write`/`edit` run), but a **foreign**
-`network-read` or `external-mutation` tool asks — declaring `network-read`
+`network-read` or `external-mutation` tool asks. Declaring `network-read`
 (rather than the legacy `read_only` bool) is what keeps a web tool from
 being mistaken for a local read. Second, `user-interaction` is permitted
 in every mode including `plan`: gating a clarifying question behind an
@@ -364,8 +364,8 @@ approval prompt is nonsensical.
 
 Extensions and MCP tools declare their class via the `authority` field on
 `register_tool` (`ext.WithAuthority` in the Go SDK). A declared authority
-decides read-only classification — `local-read` and `local-data` are
-auto-allowable, everything else is not — and it **wins over** the legacy
+decides read-only classification (`local-read` and `local-data` are
+auto-allowable, everything else is not), and it **wins over** the legacy
 `read_only` bool, which is consulted only when the authority is empty. An
 unknown value is treated as side-effecting.
 
@@ -384,8 +384,8 @@ not by its subject matter, so a tool declaring `network-read` asks even if
 it also set `read_only: true`. The web extension's `web_search`/`web_fetch`
 run freely in `workspace` today only because that extension still ships the
 bare legacy bool and has not yet declared an authority; once it declares
-`network-read` — which it should, and which is tracked in
-[standard-tools.md](standard-tools.md) — those calls will ask like any other
+`network-read`, which it should and which is tracked in
+[standard-tools.md](standard-tools.md), those calls will ask like any other
 foreign network tool. **Mark network tools `network-read`, not `read_only`.**
 
 ### Ticket stores outside the workspace
@@ -423,6 +423,20 @@ recent selection, and the ticket context card names the active store.
 `ticket_store` selects among destinations that configuration already named, so
 it behaves like `activate_tools`: it changes what the tools reach, and it
 grants no authority of its own.
+
+Moving a ticket from one of these stores to another is not a tool. No
+`ticket_*` tool reads two stores at once, and none carries a ticket between
+them: `ticket_store` changes which single store the tools work against, and the
+qualified-ref lookup stops at naming a store it does not open. The move is a
+command-line operation, `terva ticket export` and `terva ticket import`, and
+[cli.md](cli.md#moving-a-ticket-between-stores) documents it with the three
+landing modes and what each one keeps.
+
+That boundary is worth stating because the gate for a move is not obvious. An
+export reads one store and writes files outside it, and an import writes a store
+the session may never have selected. Leaving the move on the command line keeps
+both acts under the permissions the shell already carries, rather than inventing
+a class for a tool that does not exist.
 
 ### Outbound network safety (egress guard)
 
@@ -496,15 +510,15 @@ Rules let you pre-answer the prompt for specific calls. They live in
 }
 ```
 
-- `tool` — exact tool name, or a prefix glob ending in `*`.
-- `args` — optional RE2 regexp, matched against **each top-level
+- `tool`: exact tool name, or a prefix glob ending in `*`.
+- `args`: optional RE2 regexp, matched against **each top-level
   string argument value** (so `^git status` matches the bash `command`
   without JSON escaping) and the raw args JSON as a fallback.
-- `decision` — `allow`, `deny`, or `ask`. `ask` forces a prompt even
-  in modes that would auto-allow (and therefore refuses in headless) —
-  **except in `yolo`, which never prompts: there an `ask` rule degrades
-  to allow.** Use `deny` to block something even in yolo.
-- `reason` — appended to the refusal the model sees on `deny`.
+- `decision`: `allow`, `deny`, or `ask`. `ask` forces a prompt even
+  in modes that would auto-allow (and therefore refuses in headless).
+  **The exception is `yolo`, which never prompts: there an `ask` rule
+  degrades to allow.** Use `deny` to block something even in yolo.
+- `reason`: appended to the refusal the model sees on `deny`.
 
 A `bash` command that runs **several commands** (`git diff && rm -rf /`,
 pipelines, `;`, command substitution) is parsed and judged **one command
@@ -514,12 +528,12 @@ and the line auto-runs only if every command would on its own. So an
 line, and an anchored `deny` (`^rm `) still matches a command that isn't
 first. An unparsable line falls back to matching the whole string.
 
-Rules come from three layers — your **user** config, a project's
+Rules come from three layers: your **user** config, a project's
 `.terva/config.json`, and installed **extension** bundles (the
 `permissions` key in `extension.json`). They are concatenated in that
 order and evaluated first-match-wins, so:
 
-1. **plan-mode refusal** — in plan mode no rule can authorize a
+1. **plan-mode refusal**: in plan mode no rule can authorize a
    mutating tool; the posture beats the rules.
 2. **user rules**, then **project rules**, then **extension rules**,
    each in file order.
@@ -531,12 +545,12 @@ order and evaluated first-match-wins, so:
 **You are sovereign on your own machine.** Your user rules are
 evaluated first, so an explicit user `allow` overrides any restriction
 a project or extension suggested for the same call. The two
-lower-trust layers apply only where you are silent — and there a
+lower-trust layers apply only where you are silent, and there a
 repo-specific project rule beats a global extension default.
 
 **The project and extension layers may only restrict.** `deny` and
 `ask` are honored; an `allow` from either is dropped with a warning at
-load time. A cloned repo — or an installed extension — must never be
+load time. A cloned repo, or an installed extension, must never be
 able to grant itself tool access you didn't; only your user config can
 `allow`. (Same trust posture as project `context_files` containment.)
 
@@ -545,7 +559,7 @@ An untrusted project's extensions never load, so the rules they suggest do
 not apply either; trust the directory (`terva trust`, or `--trust` for one
 run) and they join the extension layer. Suggestions from extensions
 installed globally under `$TERVA_HOME` always apply. The project's own
-`.terva/config.json` rules stay honored either way, trusted or not — they
+`.terva/config.json` rules stay honored either way, trusted or not: they
 can only tighten, and "refuse more" is always safe to accept from a repo.
 
 Broken rules (bad regexp, unknown decision) are dropped with a stderr
@@ -556,24 +570,24 @@ note; they never fail startup.
 When a call needs asking, the TUI shows the tool name and a one-line
 args preview with five choices:
 
-1. yes — run this call;
+1. yes: run this call;
 2. yes, always this tool (rest of the session);
-3. yes, always this tool — **save**: also appends a permanent
+3. yes, always this tool, **save**: also appends a permanent
    `{"tool": "...", "decision": "allow"}` rule to your user config;
-4. yes, always — skip all prompts this session;
-5. no — refuse, the model is told and can try something else.
+4. yes, always: skip all prompts this session;
+5. no: refuse, the model is told and can try something else.
 
 For a `bash` call the daemon also derives the command's shape and, when
 it can anchor it honestly, offers a sixth choice:
 
-6. yes, always **this command** — save: appends a permanent rule scoped
+6. yes, always **this command**, save: appends a permanent rule scoped
    to the command instead of all of bash, e.g. `{"tool": "bash", "args":
    "^git status(?:\\s|$)", "decision": "allow"}`. A compound line saves
    one rule per command (`git status && ls` saves both anchors), and
    every command on the line must be allowed for a future line to skip
    the prompt. Unlike option 3, nothing session-wide rides along: bash
-   calls the rules don't match keep asking. The option is withheld —
-   never guessed — when the line resists honest anchoring (command
+   calls the rules don't match keep asking. The option is withheld,
+   never guessed, when the line resists honest anchoring (command
    substitution, an env-var prefix, an expanded command word).
 
 Session grants reset when the session ends; only the **save** options
@@ -584,18 +598,18 @@ derived a scope.
 ## Revoking a session grant
 
 The "always this tool" and "yes, always" answers above last for the
-rest of the session — handy until you grant one by accident. Open
+rest of the session, which is handy until you grant one by accident. Open
 `/permissions` to take it back without restarting: the **this session**
 list shows each grant (and the blanket "yes, always" as its own entry);
 `↑`/`↓` select, `r` or `del` revokes the selected one, and `R` clears
 them all. The next call of a revoked tool prompts again (or follows the
 mode default). Revoking the blanket "yes, always" grant leaves any
-per-tool grants in place. Only session grants are revocable here — the
+per-tool grants in place. Only session grants are revocable here: the
 permission *rules* are read-only in the TUI and edited in config.
 
 ## Audit log
 
-Every tool call is appended to `$TERVA_HOME/logs/audit.log` — the tool,
+Every tool call is appended to `$TERVA_HOME/logs/audit.log`: the tool,
 the approval mode in force, the gate's allow/deny decision (and the deny
 reason), and a capped copy of the arguments. The session transcript
 already records *what* ran, but not *why it was allowed*; the audit log
@@ -613,16 +627,16 @@ jq 'select(.tool=="bash") | {time, mode, decision, cmd: .args.command}' \
 
 Fields: `time` (UTC), `pid`, `via`, `tool`, `mode`, `decision`
 (`allow`/`deny`), `reason` (on deny), `args` (truncated past ~2 KB).
-**Every** call is recorded — reads included — so there are no blind
+**Every** call is recorded, reads included, so there are no blind
 spots; filter at read time. All three doors into the gate record, and
 `via` says which one: `tool_call` (a model-issued call through the
 ladder), `host_tool_call` (an extension running a host tool), or
-`code_execution` (a script binding's call — up to one line per binding
+`code_execution` (a script binding's call, at up to one line per binding
 call, and stamped the same for both scripting tools, so a script's
 `write` records exactly as its `read` does). Lines written before `via` existed were all model
 tool calls; the other two doors recorded nothing then. The file is created `0600` and, like the rest of `logs/`, sits on the
-read **deny list** — never readable by `read` or by `bash`, and `/unjail`
-does not lift it — because tool arguments (bash commands, file writes)
+read **deny list**: it is never readable by `read` or by `bash`, and
+`/unjail` does not lift it, because tool arguments (bash commands, file writes)
 can carry secrets. It's append-only and lazily created, so a run
 that calls no tools never writes one; rotate or delete it yourself if it
 grows.

@@ -11,7 +11,7 @@ import (
 // it can back a small, optionally-importable conformance tool. If it
 // ever imports core / provider / tui, a conformance binary would balloon
 // to terva's full size and the boundary that keeps the wire portable is
-// gone. See docs/plans/extdriver-extraction.md.
+// gone. See docs/plans/archive/extdriver-extraction.md.
 func TestDriverDependencyBoundary(t *testing.T) {
 	out, err := exec.Command("go", "list", "-deps", "terva.sh/terva/packages/agent/extdriver").Output()
 	if err != nil {

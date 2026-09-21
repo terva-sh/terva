@@ -1,5 +1,5 @@
-// Command terva is an agent harness — a coding agent out of the box,
-// extensible in any language to operate any tools — shipped as a single
+// Command terva is an agent harness: a coding agent out of the box,
+// extensible in any language to operate any tools, shipped as a single
 // static Go binary.
 package main
 

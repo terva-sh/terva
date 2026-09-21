@@ -17,7 +17,7 @@ import (
 // shell installer (install.sh) is the wrong place for this — `curl | sh`
 // has no TTY and silently fetching executables there would be a surprise
 // — so the consent prompt lives at the first interactive run instead.
-// See docs/plans/extension-packs.md.
+// See docs/plans/archive/extension-packs.md.
 
 // maybeOfferCorePack prompts to install the built-in core pack and, on
 // acceptance, installs it into the global extensions dir so the

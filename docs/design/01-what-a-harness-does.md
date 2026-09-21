@@ -1,4 +1,4 @@
-# 01 — What a harness does
+# 01: What a harness does
 
 ## The gap a harness fills
 
@@ -7,7 +7,7 @@ calls, no hands. On its own it cannot read your file, run your test suite, or
 remember what it did five minutes ago.
 
 Modern models can, however, *ask* for those things. Given a list of available
-tools — each a name, a description, and a JSON schema for its arguments — a
+tools (each a name, a description, and a JSON schema for its arguments), a
 model can emit a structured request: `read({"path": "src/main.go"})`. It cannot
 execute that request. Something has to receive it, decide whether it is allowed,
 run it, and hand the result back in a form the model will understand on the next
@@ -45,7 +45,7 @@ Filling those gaps is the whole job, and it decomposes into eight
 responsibilities. Each is a chapter of this tier or a section of one.
 
 **1. Run the loop.** Assemble a request, stream the response, execute the
-tool calls, append the results, repeat — and know when to stop. Sounds
+tool calls, append the results, repeat, and know when to stop. Sounds
 trivial; is not. A turn can span dozens of model calls and hundreds of tool
 executions. It must be cancellable mid-flight, resumable after a crash, and
 capable of accepting new input from the user while it is still running.
@@ -60,7 +60,7 @@ can pay ten times what one that respects it pays for identical work.
 
 **3. Gate every side effect.** The model is not trusted, cannot be made
 trustworthy by prompting, and will occasionally propose something
-catastrophic — sometimes because it was confused, sometimes because text it
+catastrophic, sometimes because it was confused and sometimes because text it
 read told it to. The harness is the only thing standing between a generated
 string and your filesystem.
 → [04](04-permission-model.md)
@@ -68,7 +68,7 @@ string and your filesystem.
 **4. Project the loop to humans and machines.** A terminal UI, a browser
 panel, an editor plugin, a chat bot, an automated pipeline. Each needs to
 see the same run, and several may need to see the *same* run at the same
-time. The tempting design — one loop implementation per front end — is the
+time. The tempting design, one loop implementation per front end, is the
 one that guarantees they drift apart.
 → [05](05-one-core-many-front-ends.md)
 
@@ -100,65 +100,65 @@ recovery, and each has a wrong one that looks like success.
 These words appear throughout and mean specific things here. Several are
 used loosely elsewhere in the industry.
 
-**Turn** — one user prompt and the agent's complete response to it. A turn
+**Turn**: one user prompt and the agent's complete response to it. A turn
 may involve one model call or two hundred.
 
-**Step** — one iteration of the loop inside a turn: one model call plus the
+**Step**: one iteration of the loop inside a turn: one model call plus the
 execution of whatever tools it requested. Turns are what users perceive;
 steps are what costs money.
 
-**Transcript** — the ordered list of messages sent to the model: user
+**Transcript**: the ordered list of messages sent to the model: user
 prompts, assistant replies, tool results. It is the agent's entire memory,
 and it is re-sent in full on every step.
 
-**Context window** — the provider's hard limit on how large a single request
+**Context window**: the provider's hard limit on how large a single request
 may be, counted in tokens. Exceeding it is an error, not a truncation.
 
-**Tool** — a capability the model can invoke, described to it as a name, a
+**Tool**: a capability the model can invoke, described to it as a name, a
 prose description, and a JSON schema. The description is prompt engineering
 and matters more than most people expect.
 
-**Tool call / tool result** — the model's structured request, and the
+**Tool call / tool result**: the model's structured request, and the
 harness's reply. Both live in the transcript, which is why noisy tools are
 expensive: their output is re-sent on every subsequent step of the turn.
 
-**System prompt** — instructions that precede the transcript and frame the
+**System prompt**: instructions that precede the transcript and frame the
 whole conversation. Stable across a turn by design (see
 [03](03-context-and-cost.md)).
 
-**Event** — a typed record of something the loop did: text arrived, a tool
+**Event**: a typed record of something the loop did: text arrived, a tool
 started, a tool finished, an approval is pending, usage was reported. Events
 are the single output channel; screens, transcript files, and remote clients
 are all just consumers of the same stream.
 
-**Session** — the durable record of a conversation: an append-only file of
+**Session**: the durable record of a conversation: an append-only file of
 events and messages, bucketed by working directory, resumable and
 replayable.
 
-**Compaction** — replacing a long transcript with a model-written summary
+**Compaction**: replacing a long transcript with a model-written summary
 plus a tail of recent messages, to reclaim context.
 
-**Experience** — which product terva is being at the moment: coding (the
+**Experience**: which product terva is being at the moment: coding (the
 default), chat, or play. It gates which tools, prompts, and skills are
 present.
 
-**Carrier** — a transport that connects a front end to the engine: in the
+**Carrier**: a transport that connects a front end to the engine: in the
 same process, over a socket, or reading a recorded file. See
 [05](05-one-core-many-front-ends.md).
 
-**Extension / connector / MCP server / hook / skill** — the five ways
+**Extension / connector / MCP server / hook / skill**: the five ways
 capability arrives from outside the binary. See [06](06-extension-model.md).
 
 ## What terva is, specifically
 
-A single statically-linked binary — no runtime, no database, no container —
-that implements all eight jobs, ships wired for software work, and is open
-to any capability you can attach a tool to. It speaks to every major model
-provider behind one interface, and projects one agent loop through a terminal
-UI, a browser panel, an editor protocol, chat platforms, an embedding SDK, and
-several headless modes.
+A single statically-linked binary with no runtime, no database and no container,
+that implements all eight jobs, ships wired for software work, and is open to
+any capability you can attach a tool to. It speaks to every major model provider
+behind one interface, and projects one agent loop through a terminal UI, a
+browser panel, an editor protocol, chat platforms, an embedding SDK, and several
+headless modes.
 
-*(Counts — of providers, tools, packages, protocol methods — live in the
+*(Counts of providers, tools, packages and protocol methods live in the
 implementation tier, where they carry a commit and a date. This tier avoids
 them on purpose: a number in a conceptual document is a number nobody
 re-measures.)*

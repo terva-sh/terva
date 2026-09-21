@@ -2,7 +2,7 @@
 // file-backed entries that are injected into the model's context when they
 // are keyword-relevant, within a token budget. It is the general form of a
 // SillyTavern-style "World Info" / character-card lorebook — a CCv2
-// character_book imports onto it. See docs/proposals/character-cards.md.
+// character_book imports onto it. See docs/proposals/archive/character-cards.md.
 //
 // The engine (Select) is pure and dependency-free: it takes entries, a
 // scan window of recent messages, a budget, and a token counter, and

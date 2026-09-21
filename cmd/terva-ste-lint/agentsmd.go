@@ -45,6 +45,13 @@ var (
 // own block even without a blank line before it, so a long bullet list is not
 // misread as one over-long paragraph.
 func markdownProse(file, src string) []Text {
+	return markdownProseAs(file, src, "project instructions")
+}
+
+// markdownProseAs is markdownProse with the corpus label a finding prints.
+// The label is what tells a reader which enrolment put a line in front of
+// them, and the documentation tier is not project instructions.
+func markdownProseAs(file, src, kind string) []Text {
 	var (
 		out     []Text
 		block   []string
@@ -59,7 +66,7 @@ func markdownProse(file, src string) []Text {
 		out = append(out, Text{
 			File: file,
 			Line: start,
-			What: "project instructions (" + section + ")",
+			What: kind + " (" + section + ")",
 			Body: strings.Join(block, " "),
 		})
 		block = nil

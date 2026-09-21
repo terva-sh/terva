@@ -31,7 +31,7 @@ import (
 //
 // The scan enrolls by SHAPE, not by a list of connector names: a binary added
 // tomorrow is covered the day it is written. That distinction is the whole
-// lesson of packages/agent/build/host_census_test.go — "a list of names is not a
+// lesson of packages/agent/host_census_test.go — "a list of names is not a
 // census — it cannot fail when a host is ADDED".
 const repoRoot = "../../.."
 

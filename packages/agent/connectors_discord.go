@@ -7,7 +7,7 @@ package agent
 // passes it together with terva_no_telegram). Unlike telegram's
 // built-in, the discord service speaks the connector protocol even
 // when compiled in (chat/connlocal) — the connproto-v2 dogfood
-// (docs/plans/discord-connector.md).
+// (docs/plans/archive/discord-connector.md).
 import (
 	_ "terva.sh/terva/packages/agent/modes/discord"
 )

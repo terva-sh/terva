@@ -136,7 +136,7 @@ func (t *Transport) onMembership(mb inboundMembership) {
 // normalize maps one gateway message onto the wire, applying the
 // posture rules:
 //   - echo hygiene: never deliver bot/webhook messages (including our
-//     own — the cardinal rule from docs/connectors.md);
+//     own — the cardinal rule from docs/connector-protocol.md);
 //   - guild messages without content (the MESSAGE_CONTENT privilege
 //     gate strips everything but @mentions of us) are dropped, which
 //     is precisely the mention-gated group default;

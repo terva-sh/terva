@@ -11,7 +11,7 @@ import (
 // from the append-only transcript. The superseded "message" rows are never
 // rewritten (a "compaction" row is a checkpoint the loader honors, not a
 // deletion), so this is a pure, deterministic read. See
-// docs/proposals/context-inspector.md.
+// docs/proposals/archive/context-inspector.md.
 type CompactionSpan struct {
 	Ordinal     int                // 0-based position among the file's "compaction" rows
 	PrevOrdinal int                // the checkpoint before it, or -1 if there is nothing further to reveal

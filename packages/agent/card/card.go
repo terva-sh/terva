@@ -3,7 +3,7 @@
 // It is the import layer for terva's --chat/--play card support: a Card is
 // data, never code (its `extensions` object is retained verbatim but never
 // interpreted as capabilities), and `creator_notes` is never sent to the
-// model. See docs/proposals/character-cards.md.
+// model. See docs/proposals/archive/character-cards.md.
 package card
 
 import (

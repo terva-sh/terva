@@ -18,7 +18,7 @@ import (
 // its text nodes; everything else (checkpoint, size, steps, seed, sampler)
 // lives in the workflow the operator authored. Generation is three HTTP steps:
 // POST /prompt to queue, poll /history/<id> for completion, GET /view to fetch
-// each output image. See docs/proposals/image-generation.md.
+// each output image. See docs/proposals/archive/image-generation.md.
 type ComfyUI struct {
 	Name     string
 	BaseURL  string // e.g. http://localhost:8188

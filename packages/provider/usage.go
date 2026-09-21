@@ -9,7 +9,7 @@ import (
 // WindowKind classifies a usage window so consumers can treat the kinds
 // differently: the /usage dialog shows every kind, but the compact status-bar
 // hint shows only WindowPlan/WindowCredit — ephemeral rate-limit windows would
-// churn the always-visible bar. See docs/plans/usage-merged-view.md.
+// churn the always-visible bar. See docs/plans/archive/usage-merged-view.md.
 type WindowKind int
 
 const (

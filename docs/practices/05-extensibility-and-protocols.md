@@ -1,4 +1,4 @@
-# 05 — Extensibility and protocols
+# 05: Extensibility and protocols
 
 Two decisions determine whether a harness stays small: what runs inside your
 process, and what your plugin contract actually promises.
@@ -14,7 +14,7 @@ serious projects.
 
 **In-process** (OpenCode's plugins; maki's Lua against a Neovim-compatible API)
 buys ergonomics that are hard to match. Plugin authors get direct access, no
-serialization, no protocol to learn, and — in maki's case — the ability to
+serialization, no protocol to learn, and, in maki's case, the ability to
 copy-paste from an existing ecosystem. This is a real advantage and it shows up
 in plugin count.
 
@@ -35,7 +35,7 @@ documented trade they accepted.
 Secondary factors that mostly point the same way: language independence (an
 author should not have to learn yours), a versioned wire (compatibility becomes
 a testable property of frames rather than a hope about types), and a real
-interface to defend — which is what keeps a plugin API from becoming "whatever
+interface to defend, which is what keeps a plugin API from becoming "whatever
 the internals happen to expose this month."
 
 ### Keep the hot path compiled in regardless
@@ -55,8 +55,8 @@ constantly should not pay serialization and process-hop cost per call.
 ### Declarative bundles beat linked code
 
 **Converged.** Claude Code plugins and Gemini extensions independently arrived
-at the same shape: a plugin is a **file tree** — a manifest plus commands,
-skills, hook configuration, tool-server declarations, themes — installed from a
+at the same shape. A plugin is a **file tree** holding a manifest plus commands,
+skills, hook configuration, tool-server declarations and themes, installed from a
 git URL, updated by pull, with no registry infrastructure. Data, not linked
 code.
 
@@ -68,20 +68,20 @@ kinds of thing, and let most of them contribute no code.
 ### Untrusted layers restrict only
 
 **Converged.** A bundle or project layer may **suggest tighter** permissions. It
-may never grant authority. Gemini enforces exactly this — extension-contributed
-policy rules cannot auto-approve — and it is the single most important rule in a
-plugin permission story.
+may never grant authority. Gemini enforces exactly this, in that
+extension-contributed policy rules cannot auto-approve, and it is the single
+most important rule in a plugin permission story.
 
 ### Version the wire, and answer the unknown-frame question explicitly
 
 **Scarred.** A versioned protocol needs a stated answer for a frame it does not
 recognize. Ours silently ignored unknown frames, which is a defensible choice
-that must be *chosen* — the failure mode is a newer plugin whose feature simply
-does not happen, with no error anywhere.
+that must be *chosen*, because the failure mode is a newer plugin whose feature
+simply does not happen, with no error anywhere.
 
-Whatever you pick — ignore, warn, refuse — write it in the protocol document and
-test it. And set sunsets on compatibility paths when you add them, because a
-compat path with no expiry is permanent.
+Whatever you pick, whether ignore, warn or refuse, write it in the protocol
+document and test it. And set sunsets on compatibility paths when you add them,
+because a compat path with no expiry is permanent.
 
 ### Beware version numbers that stop meaning anything
 
@@ -100,16 +100,16 @@ eventually resolved by *tunneling one inside the other*. That is a workable
 outcome and a bad sign.
 
 The judgment to apply before adding a second: is this genuinely a different
-*shape* of thing — a conversation transport is not a tool provider — or is it the
-same shape with a different audience? The second case is a role within the
-existing protocol.
+*shape* of thing, given that a conversation transport is not a tool provider, or
+is it the same shape with a different audience? The second case is a role within
+the existing protocol.
 
 ### Adopt the ecosystem standard as an adapter, not a parallel system
 
 **Converged.** MCP is the field's shared tool protocol; every serious harness now
 speaks it. The right integration is an **adapter into your existing extension
-machinery** — same registration path, same permission gate, same audit trail —
-rather than a second pipeline beside it.
+machinery**, on the same registration path, the same permission gate and the
+same audit trail, rather than a second pipeline beside it.
 
 A second pipeline means two places to gate, and [permissions](04-permission-and-sandbox.md)
 covers what happens next.
@@ -125,7 +125,7 @@ deprecated across the ecosystem; skip it.
 
 **Converged.** Codex (submission/event enums), OpenCode (server plus attach),
 Goose (a daemon), Gemini CLI (core and cli packages), OpenHands (app and agent
-servers), terva (a control plane) — everyone arrived here independently.
+servers) and terva (a control plane): everyone arrived here independently.
 
 The shape: one canonical protocol of verbs and events, N front ends as clients.
 Not one loop per front end.
@@ -133,7 +133,7 @@ Not one loop per front end.
 Two things to get right early, because retrofitting them is painful:
 
 **Model interactions as protocol messages.** Approvals, permission escalations,
-plan updates, session rollback — not UI callbacks. Otherwise your approval flow
+plan updates and session rollback, not UI callbacks. Otherwise your approval flow
 works only in the front end that existed when you wrote it.
 
 **The state belongs to the server.** Pending message queues, approval state,
@@ -145,7 +145,7 @@ work with it and two clients disagree about what is pending.
 **Scarred.** Our worst protocol bug: a feature fully implemented on the server,
 fully requested by the client, and never listed in the connection handshake. It
 was dark in production for weeks. Every code path involved looked correct in
-review, because the defect was an absent list entry — and an absent list entry
+review, because the defect was an absent list entry, and an absent list entry
 has no reader.
 
 > **When a capability is announced in one place and implemented in another, test
@@ -154,9 +154,10 @@ has no reader.
 
 ### Mirror types by generation, not by hand
 
-**Scarred.** If a second language needs your protocol types — a browser client,
-say — a hand-maintained mirror will drift. Ours did, and the shape test we
-eventually added found six view types already missing fields on its first run.
+**Scarred.** If a second language needs your protocol types, a browser client
+for example, a hand-maintained mirror will drift. Ours did, and the shape test
+we eventually added found six view types already missing fields on its first
+run.
 
 Generate them, or failing that, write a test that compares the field sets in
 **both directions** and fails on either kind of drift.
@@ -172,7 +173,7 @@ summary spends the *child's* window, not the parent's. The parent pays for the
 summary, not the search. This is often a better answer than a new tool.
 
 Generalize the contract to *spawn with a task, return a summary* and the backend
-stops needing to be your own harness — a foreign agent can fill the same slot.
+stops needing to be your own harness, and a foreign agent can fill the same slot.
 
 ### Get two things right or it will hurt
 
@@ -202,7 +203,7 @@ suppressed. Only what the script returns enters the context.
 
 The effect is collapsing a fifty-step pipeline into one turn. maki built it to
 *spend less*; Hermes built it to *remember everything*. Same primitive, opposite
-motivation — which is a good sign that the primitive is real.
+motivation, which is a good sign that the primitive is real.
 
 The caution is that this is an execution sandbox and inherits every question in
 [permissions](04-permission-and-sandbox.md). Both implementations hard-reject OS

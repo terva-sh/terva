@@ -148,7 +148,7 @@ type Config struct {
 
 	// Image configures image GENERATION (the generate_image tool) via a
 	// registry of backends kept separate from the model catalog. Opt-in:
-	// absent means off (no tool). See docs/proposals/image-generation.md.
+	// absent means off (no tool). See docs/proposals/archive/image-generation.md.
 	Image *ImageConfig `json:"image,omitempty"`
 
 	// NativeOutput configures NATIVE (in-protocol) image output — the model
@@ -483,7 +483,7 @@ type Config struct {
 	// extensions are present. For fleet/automation provisioning that sets
 	// extensions up out of band; the prompt is also self-limiting (it
 	// asks at most once and never on a non-TTY). User layer only. See
-	// docs/plans/extension-packs.md.
+	// docs/plans/archive/extension-packs.md.
 	DisableCorePackOffer bool `json:"disable_core_pack_offer,omitempty"`
 
 	// PackRegistries names extension-pack registries that the pack fetcher
@@ -1133,7 +1133,7 @@ type PermissionRuleConfig struct {
 // is permitted to set. It is intentionally NOT the full Config: the type is
 // the guard, so a cloned repo can only influence what this struct exposes —
 // it cannot redirect base_url, swap providers, change the user's theme, etc.
-// Widen this deliberately (see docs/plans/startup-context-files.md).
+// Widen this deliberately (see docs/plans/archive/startup-context-files.md).
 type ProjectConfig struct {
 	// ProjectScoped, when true, marks this directory a self-contained agent:
 	// terva redirects all DATA (sessions, ext-data, logs, config, extensions,
@@ -1246,7 +1246,7 @@ type ProjectConfig struct {
 
 // TervaHome returns the user data dir: $TERVA_HOME / $TERVA_HOME or the
 // OS default, with rename-aware fallback (envcompat.Home is the one
-// resolver — docs/plans/rename-terva.md, phase 1).
+// resolver — docs/plans/archive/rename-terva.md, phase 1).
 //
 // All terva state (config.json, auth.json, sessions/, logs/) lives under
 // this directory.

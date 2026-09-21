@@ -197,7 +197,7 @@ func runUpdate(version string) error {
 	}
 
 	// Accept either binary name: the rename bridge
-	// (docs/plans/rename-terva.md, phase 1) — an installed terva must be
+	// (docs/plans/archive/rename-terva.md, phase 1) — an installed terva must be
 	// able to self-update into an archive whose member is `terva`, so
 	// this updater ships BEFORE any archive containing the new name.
 	newBin, tried := findExtractedBinary(extractDir, runtime.GOOS)
@@ -238,7 +238,7 @@ func runUpdate(version string) error {
 // findExtractedBinary locates the new binary inside an extracted release
 // archive, returning it and the names it looked for.
 //
-// Both names are accepted for the rename bridge (docs/plans/rename-terva.md,
+// Both names are accepted for the rename bridge (docs/plans/archive/rename-terva.md,
 // phase 1): an installed terva must be able to self-update into an archive
 // whose member carries the other name, so this updater ships BEFORE any archive
 // containing the new one. Returning the candidate list is what lets the caller's

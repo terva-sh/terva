@@ -36,7 +36,7 @@ import (
 // *Workspace is the in-process ctrlproto carrier the interactive TUI drives —
 // the only TUI backend. Asserted here (not in workspace.go) so the lower-level
 // workspace need not import modes; cli.go is the composition root that bridges
-// the two. See docs/proposals/tui-on-ctrlproto.md.
+// the two. See docs/proposals/archive/tui-on-ctrlproto.md.
 var _ modes.Carrier = (*workspace.Workspace)(nil)
 
 // workspaceRootFn resolves the agent's live workspace root for a

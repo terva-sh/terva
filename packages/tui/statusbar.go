@@ -8,7 +8,7 @@ package tui
 //	  ~/W/g/t/terva · ⎇ sothr-main* +499 -109 · (openai-codex) gpt-5.5 · thinking: high · ↑94k ↓1.8k · $0.529 ~$0.71/hr (sub)
 //	  ctx 202k/272k ▓▓▓▓░ 74% · 5h ▓░░░ 15% ↻4h33m · wk ▓░░░ 8% ↻3d17h
 //
-// Design notes live in docs/proposals/tui-status-line.md. Segments that
+// Design notes live in docs/proposals/archive/tui-status-line.md. Segments that
 // have no data return nil and drop silently, separators included; row
 // membership never depends on width, so segments don't migrate between
 // rows on resize.

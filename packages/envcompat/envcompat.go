@@ -1,6 +1,6 @@
 // Package envcompat resolves the product's environment variables and
 // user data directory across the zot → terva rename
-// (docs/plans/rename-terva.md). It is the ONE place the compat
+// (docs/plans/archive/rename-terva.md). It is the ONE place the compat
 // policy lives: new spelling first, old spelling honored as a
 // fallback, with a one-time deprecation warning per variable once
 // the rename ships (dormant until then).

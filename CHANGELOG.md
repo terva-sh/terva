@@ -11,6 +11,20 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.137.0](https://github.com/terva-sh/terva/releases/tag/v0.137.0) — 2026-09-15
+
+### Features
+
+- authz: a caller is a principal, and a role says what it may spend
+- fleet: the local workspace becomes an ordinary source
+- serve: terva serve — one terva per person, on one host
+- web: sign in with an identity provider, and be someone in particular
+
+### Fixes
+
+- provider: read every vendor's usage headers on both compatible wires
+- web: the client can name the forbidden wire code
+
 ## [v0.136.0](https://github.com/terva-sh/terva/releases/tag/v0.136.0) — 2026-09-13
 
 ### Features

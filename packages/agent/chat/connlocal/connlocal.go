@@ -13,7 +13,7 @@
 // extension (ext.Extension.Connector) unchanged; this package is the
 // third carrier next to child-process stdio (chat/external) and the
 // extension tunnel (chat/extconn). See
-// docs/plans/discord-connector.md.
+// docs/plans/archive/discord-connector.md.
 //
 // Lifecycle is deliberately simpler than the other carriers: there is
 // no process to crash and no tunnel to drop, so an engine death here

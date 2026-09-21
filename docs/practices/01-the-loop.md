@@ -1,4 +1,4 @@
-# 01 — The loop
+# 01: The loop
 
 The agent loop is forty lines and six months of edge cases. This page is about
 the edge cases.
@@ -13,7 +13,7 @@ the edge cases.
 a *step* is one model call plus its tool executions. Users perceive turns. Money
 is spent per step. Almost every budget, policy and metric you will want later
 belongs to one or the other and applying it to the wrong one produces subtly
-useless numbers — "average tokens per turn" over a corpus where one turn was two
+useless numbers. "Average tokens per turn" over a corpus where one turn was two
 hundred steps tells you nothing.
 
 Name both in the code. A harness that only has "iterations" will conflate them.
@@ -39,7 +39,7 @@ Queue it, and drain the queue at the top of the next step, where the message
 enters the transcript as an ordinary user message.
 
 Two details that are not optional. **The queue belongs to the engine, not the
-UI** — otherwise a disconnecting client takes queued work with it, and two
+UI**, because otherwise a disconnecting client takes queued work with it, and two
 clients disagree about what is pending. And **every boundary that can run while
 a message is queued must drain it.** We lost a message submitted during
 pre-turn compaction; the correct handling already existed a few lines away at a
@@ -47,9 +47,9 @@ sibling site, with the rationale in a comment.
 
 ### Deny by returning a result
 
-**Converged.** When a tool call is refused — by policy, by a hook, by a sandbox
-— the correct output is a *tool result message* saying so, appended to the
-transcript like any other. Not an exception, not a terminated turn.
+**Converged.** When a tool call is refused, whether by policy, by a hook or by a
+sandbox, the correct output is a *tool result message* saying so, appended to
+the transcript like any other. Not an exception, not a terminated turn.
 
 The model then sees the refusal, understands the reason, and proposes something
 else. This is the single highest-leverage detail in error handling for agents:
@@ -89,9 +89,9 @@ Budget for this. It is not an exotic failure.
 **Scarred.** Two different loops need two different keys, and each key misses
 the other's loop:
 
-- **Spin** — same tool, same canonical arguments, **same result**. This is
+- **Spin**: same tool, same canonical arguments, **same result**. This is
   redundant work: a call returning what the model already held.
-- **Error churn** — same tool, same normalized error, **regardless of
+- **Error churn**: same tool, same normalized error, **regardless of
   arguments**. This is the death loop, where the model varies its input each
   time and gets an identical failure.
 
@@ -103,7 +103,7 @@ Two refinements we paid for:
 **Include the result in the spin key.** "The same call" cannot be read off the
 arguments alone. A bounded batch loop repeats a byte-identical query on purpose,
 once per batch, because each preceding mutation removes that batch from the
-matching set — ten identical calls, ten different results, correct throughout.
+matching set: ten identical calls, ten different results, correct throughout.
 Keying on arguments alone nudged that loop with a claim that was false, and the
 model spent a turn rebutting it.
 
@@ -111,11 +111,11 @@ model spent a turn rebutting it.
 `reason` or `thought` parameter. Cosmetic prose churn in those fields will
 otherwise hide a structural repeat.
 
-The trade this makes, stated plainly: a call whose output varies on its own — a
-clock, a growing log — no longer trips the spin axis. Those are the least
-harmful repeats available, since each returns information the model did not
-have. Catching *that* is a different axis (aimless polling), not a wider reading
-of this one.
+The trade this makes, stated plainly: a call whose output varies on its own,
+such as a clock or a growing log, no longer trips the spin axis. Those are the
+least harmful repeats available, since each returns information the model did
+not have. Catching *that* is a different axis (aimless polling), not a wider
+reading of this one.
 
 ### Carry the run length across turn boundaries
 
@@ -127,14 +127,14 @@ the ladder resumes at the rung it reached.
 
 **Scarred.** The response to a detected loop should be a ladder:
 
-1. **Nudge** — a one-turn note naming the repetition, riding alongside the
+1. **Nudge**: a one-turn note naming the repetition, riding alongside the
    request rather than entering the transcript.
 2. **A different answer from the environment.** The reliable break. A model
    priming itself on its own output cannot be talked out of it; in the origin
    session the same model in the same context recovered instantly when a
    different tool returned a real error.
-3. **A stronger model**, offered explicitly. Ask consent — escalation may send a
-   local transcript to a remote provider — and make every failure path
+3. **A stronger model**, offered explicitly. Ask consent, because escalation
+   may send a local transcript to a remote provider, and make every failure path
    non-fatal: no target, a declined offer, or a failed swap should leave the
    current model in place and the turn running.
 
@@ -156,8 +156,8 @@ parameter of the first one.
 
 ### Offer a model swap instead of losing the turn
 
-**Converged.** For errors a retry cannot fix — a retired model, a hard rate
-limit, a context rejection on a small window — the recovery that preserves the
+**Converged.** For errors a retry cannot fix, such as a retired model, a hard rate
+limit or a context rejection on a small window, the recovery that preserves the
 most work is switching models and continuing. The transcript is portable; the
 provider is not the session.
 
@@ -176,9 +176,9 @@ threshold is computed from a token estimate and estimates are wrong.
 
 **Converged.** Every serious harness in the field converged on a single
 canonical event/command vocabulary with N front ends over it. Emit typed events
-for everything the loop does — text deltas, tool start and finish, usage,
-pending approvals, turn boundaries — and make the screen, the transcript file,
-and any remote client all *consumers* of that one stream.
+for everything the loop does, covering text deltas, tool start and finish,
+usage, pending approvals and turn boundaries, then make the screen, the
+transcript file and any remote client all *consumers* of that one stream.
 
 The alternative, where the UI renders from one path and the log is written from
 another, guarantees that the log and the screen eventually disagree about what
@@ -187,7 +187,7 @@ happened. That divergence is discovered during an incident.
 ### Model interactions as protocol messages, not UI callbacks
 
 **Converged.** Approval requests, permission escalations, plan updates, session
-rollback — the temptation is to implement these as calls into whatever front end
+rollback: the temptation is to implement these as calls into whatever front end
 is attached. Typed protocol messages instead means every front end, including
 ones that do not exist yet, can drive them.
 

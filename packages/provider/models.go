@@ -100,7 +100,7 @@ type Model struct {
 	// everywhere, so the map is shared between copies; the only writer
 	// is the layer merge, which builds fresh maps (mergeCaps). All
 	// reads go through Has, never the map directly. See
-	// docs/plans/model-capabilities.md.
+	// docs/plans/archive/model-capabilities.md.
 	Caps map[Capability]bool
 
 	// Temperature is this model's default sampling temperature (0–2), set
@@ -355,7 +355,7 @@ var Catalog = []Model{
 	// to a vision model to send them). Flip to true when DeepSeek ships a
 	// vision endpoint. An earlier row optimistically marked V4 vision-
 	// capable and conflated those two things (see
-	// docs/plans/model-capabilities.md).
+	// docs/plans/archive/model-capabilities.md).
 	{
 		Provider: "deepseek", ID: "deepseek-v4-pro", DisplayName: "DeepSeek V4 Pro",
 		ContextWindow: 1000000, MaxOutput: 384000, Reasoning: true,

@@ -18,7 +18,7 @@ plausibility alone.
 
 | Tag | Means |
 |---|---|
-| **Measured** | We have numbers from a real system — token counts, cost deltas, hit rates |
+| **Measured** | We have numbers from a real system: token counts, cost deltas, hit rates |
 | **Scarred** | We shipped the bug. The cost is stated |
 | **Converged** | Several independent harnesses arrived at the same answer without coordinating. Strong signal, weaker than a measurement |
 | **Reported** | Someone else's number or claim. Attributed, and flagged when the source has an interest in it |

@@ -436,7 +436,7 @@ type rpcServer struct {
 // rpcAuthToken returns the embedder-supplied RPC auth token. Both
 // spellings are honored: third-party embedders spawn this binary with
 // ZOTCORE_RPC_TOKEN in the child env, and breaking them is a wire- // rename:keep
-// compat violation, not a rename (docs/plans/rename-terva.md).
+// compat violation, not a rename (docs/plans/archive/rename-terva.md).
 func rpcAuthToken() string {
 	if v := os.Getenv("TERVACORE_RPC_TOKEN"); v != "" {
 		return v

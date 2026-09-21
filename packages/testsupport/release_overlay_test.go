@@ -48,6 +48,7 @@ var docsHeldBack = map[string]string{
 var docsThatShip = []string{
 	"docs/README.md",
 	"docs/cli.md",
+	"docs/connector-protocol.md",
 	"docs/connectors.md",
 	"docs/context-construction.md",
 	"docs/controllers.md",
@@ -60,6 +61,7 @@ var docsThatShip = []string{
 	// reach $TERVA_HOME/docs for the agent to read. docs_test.go's
 	// TestEveryDocsSubdirIsClassified guards that half.
 	"docs/design",
+	"docs/extension-protocol.md",
 	"docs/extensions.md",
 	"docs/fleet.md",
 	"docs/fork.md",
@@ -74,6 +76,7 @@ var docsThatShip = []string{
 	"docs/positioning.md",
 	"docs/practices",
 	"docs/profiling.md",
+	"docs/prompt-labels.md",
 	"docs/providers.md",
 	"docs/raati.md",
 	"docs/recording.md",
@@ -81,10 +84,14 @@ var docsThatShip = []string{
 	"docs/rpc.md",
 	"docs/scheduled-jobs.md",
 	"docs/scripting.md",
+	"docs/secrets.md",
+	"docs/serve.md",
 	"docs/skills.md",
+	"docs/slash-commands.md",
 	"docs/standard-tools.md",
 	"docs/themes.md",
 	"docs/tui.md",
+	"docs/web-interface.md",
 	"docs/web.md",
 	"docs/workflows.md",
 }

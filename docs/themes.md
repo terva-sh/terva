@@ -190,22 +190,22 @@ You may also put overrides directly at the top level or directly under
 
 Most color fields are xterm-256 indexes (`0`–`255`).
 
-- `fg` — default foreground text.
-- `muted` — secondary text, dividers, gutters, inactive hints.
-- `accent` — prompt bar, bullets, links, headings, active markers.
-- `background` — optional full-row TUI background. If missing, terva uses the terminal's existing background. Experimental: terminal background colors can vary by emulator and scrollback behavior; for the most reliable result, change your terminal background color in your terminal settings instead.
-- `user` — user role label color; mostly compatibility.
-- `user_bubble_bg` — background behind user message rows.
-- `user_bubble_fg` — foreground inside user message rows.
-- `assistant` — assistant/terva accent and spinner text.
-- `tool` — tool names, success marks, diff additions.
-- `tool_out` — plain tool-output text.
-- `error` — errors, refused calls, diff deletions.
-- `warning` — warnings and high context-usage state.
-- `spinner` — reserved spinner color slot.
-- `selection_bg` — highlighted row background.
-- `selection_fg` — highlighted row foreground.
-- `ghost` — an offered next line in the composer that the user has not
+- `fg`: default foreground text.
+- `muted`: secondary text, dividers, gutters, inactive hints.
+- `accent`: prompt bar, bullets, links, headings, active markers.
+- `background`: optional full-row TUI background. If missing, terva uses the terminal's existing background. Experimental: terminal background colors can vary by emulator and scrollback behavior; for the most reliable result, change your terminal background color in your terminal settings instead.
+- `user`: user role label color; mostly compatibility.
+- `user_bubble_bg`: background behind user message rows.
+- `user_bubble_fg`: foreground inside user message rows.
+- `assistant`: assistant/terva accent and spinner text.
+- `tool`: tool names, success marks, diff additions.
+- `tool_out`: plain tool-output text.
+- `error`: errors, refused calls, diff deletions.
+- `warning`: warnings and high context-usage state.
+- `spinner`: reserved spinner color slot.
+- `selection_bg`: highlighted row background.
+- `selection_fg`: highlighted row foreground.
+- `ghost`: an offered next line in the composer that the user has not
   accepted. It sits where their own text goes, so it has to read as an
   offer rather than as typing: pick a shade that recedes from `fg`, which
   means darker on a dark theme and lighter on a light one. Recede, but not
@@ -213,18 +213,18 @@ Most color fields are xterm-256 indexes (`0`–`255`).
   reads as nothing at all, and an offer nobody notices is an offer nobody
   presses Tab for. Aim for the half of the range nearer `fg` than the
   background. Missing falls back to `muted`.
-- `meter_low`, `meter_mid`, `meter_high` — the status bar's staged
+- `meter_low`, `meter_mid`, `meter_high`: the status bar's staged
   meter ramp (context window, subscription usage): the whole meter
   takes `meter_low` below 70% consumed, `meter_mid` from 70, and
-  `meter_high` from 90. Stages rather than gradients on purpose — the
+  `meter_high` from 90. Stages rather than gradients on purpose: the
   hue jump at a threshold is the signal. Missing values fall back to
   `muted`/`warning`/`error`.
-- `status_colors` — per-segment recoloring for the status bar, an
+- `status_colors`: per-segment recoloring for the status bar, an
   object keyed by segment ID (`cwd`, `git`, `edits`, `model`,
   `persona`, `thinking`, `tokens`, `cost`, `context`, `usage`,
   `swarm`, `session`, `clock`, `tags`, `bridge`, `ext`, `replay`,
   `tasks`). Segments not named keep the muted default. Themes only
-  restyle the bar — which segments render, and in what order, is
+  restyle the bar; which segments render, and in what order, is
   `status_line` in `config.json`, never the theme.
 
 ```json
@@ -254,11 +254,11 @@ Most color fields are xterm-256 indexes (`0`–`255`).
 Spinner settings can appear at top level, under `colors`, or under
 `colors.dark` / `colors.light`.
 
-- `spinner_frames` — list of frame strings. Single-cell glyphs keep
+- `spinner_frames`: list of frame strings. Single-cell glyphs keep
   status-bar alignment clean.
-- `spinner_messages` — list of messages; terva picks one per turn.
-  Templated — see Flavor fields.
-- `spinner_interval_ms` — frame interval in milliseconds. Missing or
+- `spinner_messages`: list of messages; terva picks one per turn.
+  Templated; see Flavor fields.
+- `spinner_interval_ms`: frame interval in milliseconds. Missing or
   invalid falls back to 80ms.
 
 ## Flavor fields
@@ -271,13 +271,13 @@ the same list. Overriding these three lists rethemes terva's whole voice
 without a rebuild. Like the spinner fields, they can appear at top level, under
 `colors`, or under `colors.dark` / `colors.light`.
 
-- `greetings` — taglines for the startup headline: the text after the `i'm …`
+- `greetings`: taglines for the startup headline: the text after the `i'm …`
   prefix (`i'm terva.` on the help/usage screen, `i'm <persona>.` in the
   interactive welcome banner). terva picks one at random per launch. With none
   configured it falls back to a plain line.
-- `flavor_verbs` — the `{verb}` pool. Keep them imperative (`harness`, not
+- `flavor_verbs`: the `{verb}` pool. Keep them imperative (`harness`, not
   `harnessing`) so they read in a greeting.
-- `flavor_nouns` — the `{noun}` pool. Keep them bare so `the {noun}` stays
+- `flavor_nouns`: the `{noun}` pool. Keep them bare so `the {noun}` stays
   grammatical.
 
 ```json

@@ -1,8 +1,8 @@
-# In-engine scripting — the `code_execution` tools
+# In-engine scripting: the `code_execution` tools
 
 terva can hand the model a JavaScript sandbox with the host's own tools
 exposed as functions. The model writes a short program, calls those functions
-as many times as it needs, and `print(...)`s only the answer — so a multi-step
+as many times as it needs, and `print(...)`s only the answer, so a multi-step
 task costs **one tool result** instead of N, and the intermediate output never
 enters the model's context.
 
@@ -25,7 +25,7 @@ to configure at runtime.
 
 The tool exists for exactly one pattern: *a small answer derived from large
 output*. Counting matches, extracting one field from many files, joining
-results across a sweep — anything where the model would otherwise burn context
+results across a sweep: anything where the model would otherwise burn context
 on intermediate tool results it only needed in passing.
 
 Ask for something that spans many files and the model can do this:
@@ -41,12 +41,12 @@ for (const line of hits.split("\n")) {
 print(JSON.stringify(counts, null, 2));
 ```
 
-One tool call, one small result — where the direct route is a `grep` whose
+One tool call, one small result, where the direct route is a `grep` whose
 full output lands in context just to be counted.
 
 ## Two tools, not one
 
-`code_execution_mutating` could have been a flag on `code_execution` — a
+`code_execution_mutating` could have been a flag on `code_execution`: a
 `mutating: true` argument, one tool, one schema. It is a separate tool
 instead, for three reasons that all point the same way:
 
@@ -97,7 +97,7 @@ that can actually be checked.
 
 Before the engine starts, the tool walks the script's AST and works out
 which bindings it calls. When it can account for all of them it reports the
-plan — `read x5, write x2` — on the tool's progress line and in
+plan (`read x5, write x2`) on the tool's progress line and in
 `details.binding_plan`.
 
 When it **cannot**, the script does not run at all. Not "runs with a
@@ -124,12 +124,12 @@ so the constraint costs little in practice.
 The account is scoped to the tool's own binding set. A name that the tool
 does not provide is no different from a global like `Math`: `code_execution`
 does not carry `write`, so `const w = write` there names an unknown
-identifier and the account stays clean — the call then fails at runtime,
+identifier and the account stays clean; the call then fails at runtime,
 before it can touch anything. The same pattern under
 `code_execution_mutating`, which does carry `write`, is what the table above
 refuses. Each tool accounts for the reach it actually has.
 
-Note what this is *not*. It is not a defence against a hostile script — see
+Note what this is *not*. It is not a defence against a hostile script; see
 [the threat model](#notes-for-the-curious). `eval` still exists in the
 language; the pre-check does not remove it, it declines to see through it and
 refuses to proceed on a guess. **An accounted plan is exhaustive; there is no
@@ -143,11 +143,11 @@ accounts for like any other binding:
 
 - **`tools()`** lists what is disclosed this session: name, one-line
   description, and provenance (a builtin, or which extension or MCP server
-  the tool came from). It runs in-engine — no host call, no approval prompt.
+  the tool came from). It runs in-engine: no host call, no approval prompt.
 - **`describe(name)`** returns one tool's real JSON Schema, so a script
   learns the argument shape rather than guessing it. Also in-engine.
 - **`call(name, args)`** invokes a disclosed tool. The name **must be a
-  string literal** — `call("session_inspect", {expand: 1})`, never
+  string literal**: `call("session_inspect", {expand: 1})`, never
   `call(someVariable, …)`. The literal is what keeps the pre-check load-
   bearing: the walker reads exactly which tools the script will reach, and
   the approval prompt shows the plan ("session_inspect x2, read x5") before
@@ -161,7 +161,7 @@ meta/inspection builtins (`session_inspect`, `session_search`,
 session classifies as read-only. Tools that only write terva's own state
 under `$TERVA_HOME` (the task writers, `memory`, `share_file`,
 `deliver_result`) classify as read-only for plan mode but are **not**
-disclosed — a script's reach is bounded by what it is worth letting a script
+disclosed: a script's reach is bounded by what it is worth letting a script
 do, not by a technicality of the classification. Nothing mutating is ever
 disclosed, so `code_execution` keeps its read-only classification and its
 plan-mode survival unconditionally, and `code_execution_mutating` gains
@@ -180,19 +180,19 @@ Scripts run **in-process** on a pure-Go JavaScript engine
 environment is deliberately bare:
 
 - **Host functions**: `read(path[,offset,limit])`, `grep(pattern[,path])`,
-  `glob(pattern[,path])` — each returns the corresponding tool's text output
+  `glob(pattern[,path])`; each returns the corresponding tool's text output
   as a string, and throws on tool failure (catchable with `try`/`catch`).
 - **Output**: `print(...)` (and `console.log`) append to the result buffer.
   Only printed output returns to the model; a script that prints nothing gets
   told so.
 - **Standard JavaScript built-ins** (`JSON`, `Math`, `String`, `RegExp`,
-  `Promise`, `Proxy`, `Symbol`, `eval`, …) are available — the engine's own
+  `Promise`, `Proxy`, `Symbol`, `eval`, …) are available: the engine's own
   globals, unmodified.
 - **No host capability beyond the functions above plus the disclosure
   surface** ([above](#the-disclosure-surface)). No filesystem or network
   objects, no `require`/`import`, no environment access, no subprocess, and
   no timers (`setTimeout` does not exist). The host functions are the entire
-  capability surface — but note that "bare" here
+  capability surface. But note that "bare" here
   means *no ambient authority*, not a reduced language: the standard library
   is whole, `eval` included. That is harmless because the sandbox's threat
   model is the session's own model, not hostile third-party code (see the
@@ -202,7 +202,7 @@ environment is deliberately bare:
 
 Scripts run to completion synchronously; the engine has no event loop, so
 there is no host operation a promise can be waiting on. Ordinary JavaScript
-semantics otherwise apply — a `.then(…)` callback or the tail of an `await`
+semantics otherwise apply: a `.then(…)` callback or the tail of an `await`
 runs after the synchronous body finishes, exactly as it would in a browser or
 in Node, so output printed from a continuation appears *after* everything the
 body printed.
@@ -212,9 +212,9 @@ ever handles ends the script with `unhandled promise rejection: <reason>`,
 carrying whatever the script printed before it. This matches Node, and it is
 deliberate: the whole point of the tool is to return a small answer derived
 from output the model never sees, so a rejection that vanished silently would
-leave a truncated answer with nothing left to check it against. Handle it —
-`.catch(…)`, or `await` inside `try`/`catch` — and it is ordinary control
-flow again.
+leave a truncated answer with nothing left to check it against. Handle it
+with `.catch(…)`, or with `await` inside `try`/`catch`, and it is ordinary
+control flow again.
 
 A promise that simply never settles is not an error; the script just ends,
 as a Node program would.
@@ -230,14 +230,14 @@ as a Node program would.
 | Run time | 30 s (the model may raise it per call, capped at 120 s) |
 
 A script that exceeds its time budget is interrupted by a watchdog, not
-killed by the OS — the tool result says it timed out and includes any partial
+killed by the OS: the tool result says it timed out and includes any partial
 output, so the model can narrow the work or raise the timeout.
 
 The per-call return cap is a **backstop against importing unbounded data**,
 not a working constraint: `read` already caps its own result at 50 KiB, so
 nothing the three bindings return comes near 1 MiB today. It exists because
 the engine cannot meter VM heap (see the last note below), which leaves the
-quantity a run may pull *in* as the only bound available — at most host calls
+quantity a run may pull *in* as the only bound available, at most host calls
 × this cap, 50 MiB. It **refuses** an oversized return rather than shortening
 it, with a catchable error: a truncated result is indistinguishable in-script
 from a genuinely short one, and would quietly corrupt whatever the script
@@ -248,12 +248,12 @@ the time limit does.
 
 `code_execution` is classified **read-only** (`local-read` in
 [permissions.md](permissions.md#authority-classes)), so it is auto-allowed in
-`workspace` mode and survives `plan` mode — the same standing as `read`,
+`workspace` mode and survives `plan` mode, the same standing as `read`,
 `grep`, and `glob` themselves.
 
 `code_execution_mutating` is **not** read-only, and everything follows from
 that one fact. It prompts in `workspace` mode like any other mutating tool,
-and it never enters a `plan` mode registry at all — the model does not even
+and it never enters a `plan` mode registry at all: the model does not even
 see it there, because plan mode promises read-only and a tool that writes
 files cannot keep that promise. In the code this is a single omission: the
 tool is registered as a builtin and simply not registered read-only. A guard
@@ -265,8 +265,8 @@ Both classifications are honest because of two properties:
 - **The class follows the binding set.** A tool is read-only exactly as long
   as everything it can reach is. That is why adding `write`/`edit` produced
   a second tool with its own class rather than a wider mode of the first.
-- **Reach, not authority.** Every binding call a script makes — a `read` or
-  a `write`, under either tool — passes through the **same approval gate** as
+- **Reach, not authority.** Every binding call a script makes, a `read` or
+  a `write` under either tool, passes through the **same approval gate** as
   a model-issued tool call: jail containment, path rules, everything. A
   script's `write` prompts exactly as a model-issued `write` does, with its
   own preview and its own audit line. The sandbox adds a way to *compose*
@@ -280,7 +280,7 @@ refuses anything it cannot describe.
 
 ## Visibility
 
-Each tool sits in its own lazily-activated group — `code_execution` in
+Each tool sits in its own lazily-activated group: `code_execution` in
 **`scripting`**, `code_execution_mutating` in **`scripting_mutating`**. With
 `lazy_tools` on (see
 [standard-tools.md](standard-tools.md#lazy-tool-visibility-lazy_tools)) a
@@ -290,7 +290,7 @@ the coding tool set is.
 
 The two groups are separate on purpose. Sharing one would mean that a session
 reaching for read-only scripting is handed a tool that writes files in the
-same act — the quiet widening the two-tool split exists to prevent.
+same act: the quiet widening the two-tool split exists to prevent.
 
 ## Build flag
 
@@ -307,7 +307,7 @@ without it.
 The JS engine adds ~6 MB to the binary (measured 6.15 MB stripped, for
 `terva_scripting` and `terva_workflows` together), which is the whole reason
 for the tag: `-tags terva_scripting` links it, leaving it off builds it out
-completely. A build without the tag has no trace of the tool — it simply
+completely. A build without the tag has no trace of the tool: it simply
 never registers.
 
 ## Notes for the curious
@@ -315,14 +315,14 @@ never registers.
 - The engine is in-process and pure Go (no cgo, no subprocess). It replaced
   an out-of-process code-execution extension, which is retired. To be exact
   about why, since the short version has been told the other way round: that
-  extension never ran a script — its Starlark runner was always a stub — so
+  extension never ran a script (its Starlark runner was always a stub), so
   the process boundary was never measured. It was abandoned for the costs
   that were plain without running it (JSON serialization at every hop, tool
   results flattened to text so structured detail was lost, no schema
   introspection so argument shapes had to be hardcoded) and for the language
   choice; see `docs/plans/jsengine-code-execution-and-workflows.md`.
-- The sandbox's threat model is *the session's own model* — the same
-  principal the approval gate already governs — not hostile third-party
+- The sandbox's threat model is *the session's own model*, the same
+  principal the approval gate already governs, not hostile third-party
   code. The engine caps calls, output, stack, and time; it does not meter VM
   heap. Scripts from untrusted strangers would want a process boundary; that
   is not what this tool is for.

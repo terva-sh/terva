@@ -39,8 +39,8 @@ func fingerprint(f Finding) string {
 	return f.Text.File + ":" + f.Rule + ":" + hex.EncodeToString(sum[:])[:12]
 }
 
-func loadBaseline(root string) (map[string]bool, bool) {
-	b, err := os.ReadFile(root + "/" + baselinePath)
+func loadBaseline(root, path string) (map[string]bool, bool) {
+	b, err := os.ReadFile(root + "/" + path)
 	if err != nil {
 		return nil, false
 	}
@@ -55,7 +55,14 @@ func loadBaseline(root string) (map[string]bool, bool) {
 	return set, true
 }
 
-func writeBaseline(root string, findings []Finding) error {
+// writeBaseline records today's findings and returns how many entries landed.
+//
+// That return is not the number of findings it was given. Two findings with
+// the same file, rule and normalized quote share a fingerprint and collapse to
+// one entry, which table cells do routinely: a column of "Yes" cells is the
+// same text many times over. Reporting the input count would name a number the
+// file does not contain.
+func writeBaseline(root, path, recipe, note string, findings []Finding) (int, error) {
 	seen := map[string]bool{}
 	var entries []string
 	for _, f := range findings {
@@ -70,20 +77,19 @@ func writeBaseline(root string, findings []Finding) error {
 	bf := baselineFile{
 		Comment: "Findings terva-ste-lint accepts today. A NEW finding fails the gate; " +
 			"an entry here that no longer fires ALSO fails it, so this file can only shrink. " +
-			"Regenerate with: just ste-lint-baseline",
-		Note: "These are not accepted policy. They are the residue of the Phase 1 conversion " +
-			"— mostly sentences that carry two clauses joined by 'and' or 'because'. Burn them down.",
+			"Regenerate with: just " + recipe,
+		Note:    note,
 		Count:   len(entries),
 		Entries: entries,
 	}
 	out, err := json.MarshalIndent(bf, "", "  ")
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if err := os.MkdirAll(root+"/.ste", 0o755); err != nil {
-		return err
+		return 0, err
 	}
-	return os.WriteFile(root+"/"+baselinePath, append(out, '\n'), 0o644)
+	return len(entries), os.WriteFile(root+"/"+path, append(out, '\n'), 0o644)
 }
 
 // ruleOf recovers the rule from a fingerprint, which fingerprint builds as
@@ -131,7 +137,7 @@ func applyBaseline(findings []Finding, base map[string]bool, judged func(rule st
 	return fresh, stale, unjudged
 }
 
-func reportStale(stale []string) {
+func reportStale(stale []string, recipe string) {
 	if len(stale) == 0 {
 		return
 	}
@@ -144,7 +150,7 @@ func reportStale(stale []string) {
 	for _, s := range stale {
 		fmt.Fprintf(os.Stderr, "  %s\n", s)
 	}
-	fmt.Fprintln(os.Stderr, "  run: just ste-lint-baseline")
+	fmt.Fprintln(os.Stderr, "  run: just "+recipe)
 }
 
 // reportUnjudged names the entries this run could not decide about. It never

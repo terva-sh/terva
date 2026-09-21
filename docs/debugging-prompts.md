@@ -1,7 +1,7 @@
 # Debugging a prompt
 
-When a run behaves oddly — a persona/card isn't taking, lore won't fire, an
-extension's context is missing, the model ignores an instruction — the first
+A run behaves oddly: a persona/card isn't taking, lore won't fire, an
+extension's context is missing, the model ignores an instruction. The first
 question is almost always **"what did we actually send?"** This guide walks
 through answering that.
 
@@ -11,9 +11,9 @@ Every terva request is assembled from four regions:
 
 | region | what's in it | cached? |
 |---|---|---|
-| **system** | identity/intro (or a card's `system_prompt`), persona/card charter, harness conventions, `constant` lore, skills manifest, context files, AGENTS.md, and — **coding mode only** — a terva-docs hint + a date/cwd footer | **yes** — the cached prefix, set once per session |
+| **system** | identity/intro (or a card's `system_prompt`), persona/card charter, harness conventions, `constant` lore, skills manifest, context files, AGENTS.md, and (**coding mode only**) a terva-docs hint + a date/cwd footer | **yes**: the cached prefix, set once per session |
 | **messages** | the conversation transcript (a card's seeded greeting is `messages[0]`) | yes (grows) |
-| **tail** | keyword-**triggered** lore, a card's `post_history_instructions`, extension context cards | **no** — a per-turn block after the cache breakpoint |
+| **tail** | keyword-**triggered** lore, a card's `post_history_instructions`, extension context cards | **no**: a per-turn block after the cache breakpoint |
 | **tools** | the tool schemas sent alongside | yes |
 
 The load-bearing rule: **static → cached prefix; dynamic → uncached tail.**
@@ -24,7 +24,7 @@ that's a bug.
 ## First move: `--dump-prompt`
 
 `--dump-prompt` assembles the prompt for the pending turn, prints it, and
-**exits before any model call** — no API key, no tokens:
+**exits before any model call**, so no API key and no tokens:
 
 ```
 terva --card examples/cards/aava-v2.json --dump-prompt -p "tell me about the fog-bell"
@@ -32,15 +32,15 @@ terva --card examples/cards/aava-v2.json --dump-prompt -p "tell me about the fog
 
 Five formats:
 
-- **`--dump-prompt`** (text, default) — annotated, each segment tagged with its
+- **`--dump-prompt`** (text, default): annotated, each segment tagged with its
   `[source · portability]`. The *"where did this come from"* view.
-- **`--dump-prompt=json`** — the structured manifest, for assertions/tooling.
-- **`--dump-prompt=raw`** — segment text concatenated, unlabeled: the logical
-  prompt. Not the wire payload — for that use `wire`.
-- **`--dump-prompt=sizes`** — per-section and per-tool byte + token weight. The
+- **`--dump-prompt=json`**: the structured manifest, for assertions/tooling.
+- **`--dump-prompt=raw`**: segment text concatenated and unlabeled, the
+  logical prompt. Not the wire payload; for that use `wire`.
+- **`--dump-prompt=sizes`**: per-section and per-tool byte + token weight. The
   *"what's eating my context"* view: no prompt text, just the attribution, so a
   bloated tool schema or an oversized context file is one command away.
-- **`--dump-prompt=wire`** — the serialized provider request as JSONL. The
+- **`--dump-prompt=wire`**: the serialized provider request as JSONL. The
   *"what actually goes on the wire"* view, and the one to reach for when a
   prompt cache is missing.
 
@@ -75,7 +75,7 @@ API-key request does neither. Two dumps taken under different auth modes are not
 comparable.
 
 `kimi` is **Kimi Code**, which speaks the Anthropic Messages API rather than an
-OpenAI-compatible one, so its dump is Anthropic-shaped — but *without* the
+OpenAI-compatible one, so its dump is Anthropic-shaped, but *without* the
 subscription framing above, because Kimi authenticates by API key even when the
 credential is a subscription token. `moonshotai` is the OpenAI-wire Kimi; they
 are different providers and their dumps do not compare.
@@ -84,7 +84,7 @@ Two things it does not show, both because neither can change the answer it
 exists to give. The **ephemeral tail** is appended *after* the cache breakpoint,
 so it is not prefix bytes (and composing it needs a live agent). The
 **`prompt_cache_key`** is a routing hint rather than a cache partition, so it is
-not prefix bytes either — though it is filled in from `--session` when there is
+not prefix bytes either, though it is filled in from `--session` when there is
 one.
 
 ⚠️ **Comparing two dumps: drop the pending turn.** The `-p` argument becomes the
@@ -97,7 +97,7 @@ replaces with the real output; and consecutive same-role messages are **merged**
 into one item by the codex/chat builders, so a fixture of two user turns in a
 row does not produce two items.
 
-`--session` is replayed **read-only** — no append handle is taken, and a session
+`--session` is replayed **read-only**. No append handle is taken, and a session
 that is live, or that you cannot write, dumps fine.
 
 The manifest is the **source of truth**: the flat system-prompt string is
@@ -112,13 +112,13 @@ different things:
 
 | run | what the model is told |
 |---|---|
-| the TUI, `terva web`, an ACP editor, a swarm child | *rendered as markdown for a person* — use it freely |
-| `terva bot run` | *posted as a chat message* — skip headings and tables, keep it short |
+| the TUI, `terva web`, an ACP editor, a swarm child | *rendered as markdown for a person*, so use it freely |
+| `terva bot run` | *posted as a chat message*, so skip headings and tables and keep it short |
 | `terva -p` | *written to a plain-text stream with nothing to render it* |
 | `--rpc`, `--json`, the SDK | *handed to a program*, which decides how or whether to display it |
 
 If the model is emitting markdown tables into a Discord message, or headings
-into a pipe, **dump the prompt in that mode** — the conventions segment names
+into a pipe, **dump the prompt in that mode**. The conventions segment names
 the surface it thinks it has. The edit/write guidance follows the same rule: it
 ships only when those tools are actually in the registry, so a `--no-tools` dump
 does not name them.
@@ -152,81 +152,23 @@ The chat/play system section is deliberately leaner than coding mode: the
 shouldn't be told today's date or pointed at a `read` tool it doesn't have), so
 their absence here is expected, not a bug.
 
-## What the source labels mean
+## What the labels mean
 
-| source | region | meaning |
-|---|---|---|
-| `identity-intro` | system | who the agent is — the name, and nothing else. Brand-free, so it can travel |
-| `vessel` | system | what carries it: terva, the harness, the pine-tar image, the pronunciations. Emitted beside the identity, and withheld when a card or persona brings its own |
-| `card:system_prompt` / `card:framing` | system | a card owns the intro: its `system_prompt` (with `{{original}}` → a short brand-free framing), or that framing alone when the card has no `system_prompt` |
-| `persona:introduction` | system | a native persona's `agent_introduction` field replacing the branded intro (conventions still kept) |
-| `charter` | system | the persona/card descriptive body (description/personality/scenario/examples) |
-| `conventions` | system | terva's output invariants, written against the run's **surface** (see above) plus the edit/write discipline when those tools exist. Always last, so nothing erodes them |
-| `lore:constant` / `card:character_book` | system | always-on lore folded into the cached prefix |
-| `skills`, `context-files`, `agents-md` | system | skill manifest, `--context-file`/config context, repo AGENTS.md |
-| `ticket` | system | prefer the `ticket_*` tools over the `git ticket` command line. Emitted only where those tools registered, and placed after `agents-md` so it outranks a repository's older command-line instructions. Absent under `--no-ticket` |
-| `restricted-workspace` | system | note that project content was withheld (untrusted cwd) |
-| `card:greeting` | messages | the seeded `first_mes` (or `--greeting N`) |
-| `lore:triggered [files]` | tail | keyword-triggered lore that fired this turn, labeled by source file |
-| `card:post_history` | tail | a card's `post_history_instructions` |
-| `extension-context` | system/tail | an extension's static/`register_context` block |
-
-## What the portability class means
-
-In `system` and `tail` — the regions terva *assembles* from labeled sources —
-every segment also carries a **portability class**, printed beside the source:
-
-```
----- [identity-intro · portable] ----
----- [vessel · harness-local] ----
----- [agents-md · discovery-owned] ----
-```
-
-It answers one question: **would this segment reach an agent that is not terva?**
-
-| class | meaning |
-|---|---|
-| `portable` | travels verbatim. Authored by you or by a persona, and about identity or intent — not about terva's machinery |
-| `harness-local` | never crosses. It describes terva's tools, terva's surfaces, or terva's policy; abroad it is false at best, and at worst it invites an agent to call a tool it does not have |
-| `discovery-owned` | content a foreign agent finds for itself (AGENTS.md, skills, context files). A renderer passes the *path*, not the payload — pasting it would duplicate or contradict that agent's own discovery |
-| `no-analog` | no foreign delivery mechanism exists. terva injects lore, card books, and extension context into a per-turn tail region that other agents simply do not expose |
-
-The class is **derived from the source at render time**, by the same function the
-composer consults — never stored on a segment, so the dump cannot disagree with
-what would actually be sent. An unrecognised source classifies `harness-local`:
-it fails *closed*, because an over-strip degrades a briefing visibly while a leak
-degrades nothing and surfaces only as a foreign agent inventing tool calls.
-
-`--dump-prompt=sizes` names the class in its `system — by source` breakdown too,
-so you can read weight and destination in one pass: a heavy `harness-local`
-segment is context no worker will ever carry, and a heavy `discovery-owned` one
-is a file to point at rather than paste.
-
-The classes exist for the external-agent-workers seam, where terva composes a
-briefing for a foreign coding agent; they are documented in
-`docs/proposals/external-agent-workers.md`. They are worth reading here whether
-or not a worker ever runs: they are the clearest statement of which parts of
-terva's prompt are *about terva*.
-
-Messages and tools carry no class. The conversation is not a segment terva
-composed from a labeled source — a briefing carries the task on purpose — and
-classifying it would print an answer to a question nobody asked.
-
-The wording of the generated segments themselves — `identity-intro`,
-`conventions`, the docs/status hints, the footer — is overridable per key
-without a persona or `--system-prompt`, via the prompt overlay
-(`$TERVA_HOME/locales/prompts/en.json`, works in English). See
-[localization](localization.md#customizing-tervas-prompts).
+The source labels and the portability classes each have a fixed vocabulary,
+and both are defined in
+[prompt-labels.md](prompt-labels.md). Read that page when a dump shows a label
+you do not recognise, or when you need to know whether a segment would reach a
+foreign agent.
 
 ## In-session
 
-- **`/lore`** — lists the run's active lore (name · trigger · source): what's
-  *loaded and eligible*. It does **not** report what fired on the last turn — the
-  TUI reads lore over ctrlproto and the wire view carries no per-turn firing
-  record — so for *did it actually fire*, the `tail` sources in
+- **`/lore`** lists the run's active lore (name · trigger · source): what's
+  *loaded and eligible*. It does **not** report what fired on the last turn,
+  because the TUI reads lore over ctrlproto and the wire view carries no
+  per-turn firing record. For *did it actually fire*, the `tail` sources in
   `--dump-prompt=json` remain the check.
-- **`/context`** — token breakdown of the assembled context and what extensions
-  inject.
+- **`/context`** gives a token breakdown of the assembled context and what
+  extensions inject.
 
 ## Troubleshooting
 
@@ -239,7 +181,7 @@ without a persona or `--system-prompt`, via the prompt overlay
 | Constant lore isn't in the prefix | `system` sources include `lore:constant`? | the entry isn't `constant: true`, `--no-lore`, or untrusted project dir. |
 | Wrong tools present/absent | `tools` section | mode: `--chat` (none), `--play`/`--no-workspace-tools` (ext/MCP only), `--no-tools` (none). |
 | Prompt cache keeps missing | anything dynamic in `system`? | dynamic content belongs in `tail`. If a per-turn value landed in the prefix, that's the bug. |
-| PHI/lore "not taking effect" | is it in `tail`? | the tail is sent after history (for Anthropic, a trailing user turn) — confirm it's present and not empty. |
+| PHI/lore "not taking effect" | is it in `tail`? | the tail is sent after history (for Anthropic, a trailing user turn), so confirm it's present and not empty. |
 
 ## Offline assertions
 

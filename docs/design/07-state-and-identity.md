@@ -1,15 +1,15 @@
-# 07 — State and identity
+# 07: State and identity
 
-Two kinds of state matter to a harness. **What happened** — the durable record
-of a conversation, which must outlive the process. And **who the agent is** —
-the identity, framing and background knowledge that shape how it behaves before
-the user says anything.
+Two kinds of state matter to a harness. **What happened** is the durable
+record of a conversation, which must outlive the process. **Who the agent is**
+covers the identity, framing and background knowledge that shape how it behaves
+before the user says anything.
 
 ## Sessions: an append-only file
 
 A session is a file of newline-delimited JSON records, one per line, appended
 as the run proceeds. Not a database. The reasons are worth stating because the
-field is split on this — several peer harnesses use SQLite.
+field is split on this, and several peer harnesses use SQLite.
 
 - **You can read it while it runs.** `tail -f` on a live agent is a debugging
   tool nobody has to build.
@@ -29,7 +29,7 @@ is not interleaved with its diagnostics.
 Sessions are bucketed by working directory, which means "resume what I was
 doing in this project" needs no session ID and no picker.
 
-### The rule that makes it robust
+### The rule that makes it survive a version skew
 
 A file format is only as good as its treatment of records it does not
 understand. The failure we shipped: a switch over record kinds with no default
@@ -59,7 +59,7 @@ identically to the live run, because it is the same UI consuming the same
 events.
 
 **Branch.** Fork a session at a point and continue differently. It is a copy of
-a prefix — cheap, because the format is a list.
+a prefix, and it is cheap because the format is a list.
 
 **Export.** A portable form of a session, importable elsewhere.
 
@@ -67,7 +67,7 @@ The lesson from building the export path is one to steal: a **last-wins
 timeline** read as if it were a single record loses everything that was
 superseded. Metadata that is written repeatedly over a session's life is a
 sequence, and a reader that takes only the first or only the last row silently
-drops the rest — in our case fourteen fields.
+drops the rest, which in our case was fourteen fields.
 
 ## Everything on disk in one place
 
@@ -77,7 +77,7 @@ data directories, personas, cards, worlds, lore, themes, locales, logs.
 
 Two properties of that arrangement earn their keep. **Backup and inspection are
 one path**, not a hunt through platform-specific application-support
-conventions. And **project-scoped mode is a redirection** — point the data
+conventions. And **project-scoped mode is a redirection**: point the data
 entries at a directory inside the project while keeping credentials and trust
 global, and you get per-project isolation with no separate code path.
 
@@ -90,44 +90,44 @@ is more useful than implying otherwise.
 A harness that only has a system prompt has one personality. terva separates
 several things that are usually conflated, and the separation is the point.
 
-**Experience** — which product terva is being right now: coding (the default),
+**Experience**: which product terva is being right now: coding (the default),
 chat, or play. It is not cosmetic; it gates which tools are registered, which
-skills are discovered, and how the prompt is framed. Ambient coding context —
-the project instruction files a coding session loads automatically — is
+skills are discovered, and how the prompt is framed. Ambient coding context,
+meaning the project instruction files a coding session loads automatically, is
 deliberately *not* loaded in the immersive experiences, because a fiction
-session that silently ingests your repository's contribution guidelines is
-doing something nobody asked for.
+session that silently ingests your repository's contribution guidelines is doing
+something nobody asked for.
 
-**Persona** — who the agent is. A library of documents, composable and tiered,
+**Persona**: who the agent is. A library of documents, composable and tiered,
 that supply identity and voice. Some are machine-bound: named roles the system
 dispatches to by a fixed identifier, which is why user overrides of those names
 need validation rather than silent shadowing.
 
-**Card** — a portable character document, in an interchange format the wider
+**Card**: a portable character document, in an interchange format the wider
 ecosystem uses. Cards are content, not configuration: importable, versioned
 with history, and checkable by a linter.
 
-**Lore** — keyed context. Entries that carry a set of trigger keys and a body,
+**Lore**: keyed context. Entries that carry a set of trigger keys and a body,
 where the body enters the request only when a key appears in what is being
 discussed. This is the general primitive for "a large body of background
 knowledge that must not all be in context at once," and it is a genuinely
 different mechanism from summarization: nothing is lost, it is simply not
 present until it is relevant.
 
-**World** — saved play state: which cast is present, where the scene stands,
+**World**: saved play state: which cast is present, where the scene stands,
 what has happened.
 
-**Deliberation** — a panel of several seats reasoning over a question and
+**Deliberation**: a panel of several seats reasoning over a question and
 returning a considered answer, seated on top of the subagent machinery. Also
 the clearest demonstration that the subagent primitive is general rather than
 a coding feature.
 
 One rule holds these apart: **keyed context and conversation memory are
-unrelated mechanisms and must not be merged.** They look similar — both inject
-text that was not in the conversation — and they answer opposite questions.
-Keyed context is *authored, static, and retrieved by match*. Conversation
-memory is *accumulated, mutable, and retrieved by recency or salience*. Sharing
-an implementation between them makes both worse.
+unrelated mechanisms and must not be merged.** They look similar, because both
+inject text that was not in the conversation, and they answer opposite
+questions. Keyed context is *authored, static, and retrieved by match*.
+Conversation memory is *accumulated, mutable, and retrieved by recency or
+salience*. Sharing an implementation between them makes both worse.
 
 ## What identity costs
 
@@ -138,7 +138,7 @@ consequences shape the designs:
 **Anything mutable belongs in the ephemeral tail, not the system prompt.**
 A persona that can be edited mid-session and is spliced into the system prompt
 invalidates the cache for the entire conversation on every edit. This is a real
-mistake with a real price — one peer harness rebuilds its system prompt per
+mistake with a real price. One peer harness rebuilds its system prompt per
 turn to support a mid-session memory write, and busts its prefix cache doing
 it. The alternative pattern is a **frozen snapshot**: read the mutable state
 once at session start, use it for the whole session, and let writes take effect

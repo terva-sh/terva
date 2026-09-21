@@ -307,7 +307,7 @@ type AskOption struct {
 // Ask is one constrained question posed in a chat: the recipient picks
 // an option, and the first valid answer wins (the asker closes the
 // question immediately — churn-prone surfaces like reactions never
-// deliver a second answer). See docs/proposals/connector-protocol-v2.md.
+// deliver a second answer). See docs/proposals/archive/connector-protocol-v2.md.
 type Ask struct {
 	ChatID  string
 	ReplyTo string // message the question replies to; "" = none

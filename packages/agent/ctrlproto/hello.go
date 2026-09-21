@@ -93,7 +93,7 @@ const (
 	// FeatureContextTree advertises that context.get carries the hierarchical
 	// ContextBreakdown.Tree (section/turn/message outline). A client that sees it
 	// renders the collapsible tree; one that doesn't falls back to the flat
-	// Messages list. See docs/proposals/context-inspector.md.
+	// Messages list. See docs/proposals/archive/context-inspector.md.
 	FeatureContextTree = "context-tree"
 	// FeatureImageData advertises OUTBOUND image payloads: when negotiated,
 	// image blocks in snapshots and message/tool-result events keep their

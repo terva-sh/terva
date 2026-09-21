@@ -36,7 +36,7 @@ convenience, but never depends on it.
 enter. The key is checked against the provider before it is stored, so a
 mistyped key is rejected there and then rather than failing later on the
 first request. The local page is offered as well, and still works if you
-are at a browser on that machine — but it binds to loopback on a random
+are at a browser on that machine, but it binds to loopback on a random
 port, so it is unreachable from anywhere else. The paste box is the
 headless path.
 
@@ -48,7 +48,7 @@ enter submits. The endpoint is probed before it is stored.
 
 **Subscription (OAuth).** The provider's callback URL is pinned to
 `localhost` by the provider's own client registration, so terva cannot move
-it to a reachable address — the browser on your laptop will fail to load it.
+it to a reachable address, so the browser on your laptop will fail to load it.
 That is expected and harmless: the authorization code is in the failed URL.
 Copy the whole URL out of the browser's address bar and paste it back into
 the `/login` dialog. It also accepts a bare code or `code#state`.
@@ -72,8 +72,8 @@ available.
 
 ### Usage limits (`/usage`)
 
-`/usage` shows where you stand against a subscription's usage windows — the
-5-hour and weekly budgets, with how much is consumed and when each resets — plus
+`/usage` shows where you stand against a subscription's usage windows, the
+5-hour and weekly budgets with how much is consumed and when each resets, plus
 any pay-as-you-go credits. The status bar also shows a compact `weekly 88%` hint
 for the busiest window once it crosses 80%, colored yellow (≥80) then red (≥90);
 below that it stays out of the way.
@@ -82,7 +82,7 @@ This works wherever the provider puts usage data on the wire terva already talks
 to, or hangs it off a cheap endpoint beside it. Today:
 
 - **OpenAI Codex** returns its subscription window state as response headers on
-  every request — so `/usage` is accurate, costs no extra calls, and refreshes
+  every request, so `/usage` is accurate, costs no extra calls, and refreshes
   each turn.
 - **Every OpenAI-shaped provider** (openai, groq, xai, ollama, the compatibles)
   reports whatever `x-ratelimit-*` windows its responses carry, on the same free
@@ -92,8 +92,8 @@ to, or hangs it off a cheap endpoint beside it. Today:
 - **A gateway in front of subscription credentials** (CLIProxyAPI, LiteLLM, a
   corporate router) that forwards the upstream vendor's headers untouched lights
   up too, on either wire. Both `openai-compatible` and `anthropic-compatible`
-  read all three header families — `x-codex-*`, `anthropic-ratelimit-unified-*`
-  and `x-ratelimit-*` — whichever the answering vendor sent, so a Codex-backed
+  read all three header families (`x-codex-*`, `anthropic-ratelimit-unified-*`
+  and `x-ratelimit-*`), whichever the answering vendor sent, so a Codex-backed
   model served over Chat Completions still shows its weekly window. The meters
   describe whichever account served that turn; a gateway rotating several
   credentials shows them in turn, with no indication which. Cache accounting
@@ -109,7 +109,7 @@ to, or hangs it off a cheap endpoint beside it. Today:
 Providers that don't expose usage data show `<provider> doesn't report usage
 limits` in `/usage`, and no status-bar hint. This includes OpenCode Go for now:
 it has no usage/balance endpoint yet ([anomalyco/opencode#16017](https://github.com/anomalyco/opencode/issues/16017)).
-The mechanism is a generic `provider.UsageReporter` capability — any provider
+The mechanism is a generic `provider.UsageReporter` capability: any provider
 lights up `/usage` automatically once its client implements it, with no harness
 changes. See `docs/plans/archive/usage-windows.md`.
 
@@ -233,7 +233,7 @@ also be configured through `/login`. Providers that require extra cloud setup
 show instructions and should be configured with environment variables. Two rows
 below are *not* offered in the `/login` picker and are reached another way:
 `openai-responses` (opt in with `--provider openai-responses`; it reuses your
-OpenAI key from the environment) and `ollama` (a local server — no key at all).
+OpenAI key from the environment) and `ollama` (a local server, with no key at all).
 
 | Provider | Environment variable | Stored key |
 | --- | --- | --- |
@@ -277,6 +277,14 @@ Example:
 export OPENROUTER_API_KEY=...
 terva --provider openrouter
 ```
+
+> **Google is API key only.** Google issues no OAuth tokens for consumer Gemini
+> Advanced or Google One AI Premium subscriptions, so there is no "log in with
+> your Google subscription" flow. Programmatic access needs either an AI Studio
+> API key (the `google` provider) or a Vertex AI service-account credential
+> (`google-vertex`, below). Google is therefore absent from the
+> `/login subscription` list entirely: pick it under `/login` -> api key, which
+> probes `/v1beta/models` once and stores the key under `google`.
 
 ## Cloud providers
 
@@ -366,7 +374,7 @@ in `$TERVA_HOME/models.json`.
 The `ollama` provider is the batteries-included local path: it speaks the same
 OpenAI chat-completions wire, but defaults its base URL to
 `http://localhost:11434` and needs no credential at all. There is no default
-model — name the one you pulled:
+model, so name the one you pulled:
 
 ```bash
 ollama pull qwen3.5:4b
@@ -376,7 +384,7 @@ terva --provider ollama --model qwen3.5:4b
 A remote or authenticated instance takes the usual flags
 (`--base-url https://my-server.example/v1 --api-key <token>`), and `--insecure`
 is permitted here for a self-signed endpoint. Pin models and context windows in
-`models.json` under the `ollama` provider — see
+`models.json` under the `ollama` provider; see
 [models.md](models.md#local-models-with-ollama).
 
 ## OpenAI-compatible endpoints (local and custom servers)
@@ -388,28 +396,28 @@ has no fixed base URL and is configured through `/login`.
 
 ### Logging in
 
-Run `/login` and choose **OpenAI Compatible (local/custom)** — in the terminal or
+Run `/login` and choose **OpenAI Compatible (local/custom)**, in the terminal or
 in the web panel's **Providers** pane, which serve the same form. terva collects:
 
-- **name** — *optional, and the one that matters if you run more than one server.*
+- **name**: *optional, and the one that matters if you run more than one server.*
   Name it and the endpoint becomes **its own provider**, kept alongside your
   others; leave it empty and it goes into the single shared `openai-compatible`
   slot, **replacing whatever was there**. See [Several at once](#several-endpoints-at-once).
-- **base url** — where requests go, e.g. `http://localhost:1234/v1`. terva lists
+- **base url**: where requests go, e.g. `http://localhost:1234/v1`. terva lists
   the endpoint's models once to confirm it's reachable.
-- **default model id** — the model selected after login, e.g. `qwen2.5-coder`.
+- **default model id**: the model selected after login, e.g. `qwen2.5-coder`.
   Required for the shared slot; **not needed for a named endpoint**, which
   discovers the models the server serves.
-- **default context window** — applied to discovered models the server doesn't
+- **default context window**: applied to discovered models the server doesn't
   describe a size for (optional; leave blank if unsure).
 
 Tab and shift-tab move between fields; enter submits. The same fields are
 served as a browser form on the terva host, if you prefer to fill them in
-there — but that page is loopback-only, so on a remote host the TUI form is
+there, but that page is loopback-only, so on a remote host the TUI form is
 the one that works.
 
 These are stored in `$TERVA_HOME/auth.json` under `openai-compatible`. The API key
-is optional — most local servers ignore it.
+is optional, and most local servers ignore it.
 
 You can also configure it entirely from the CLI:
 
@@ -436,8 +444,8 @@ model in `models.json` (see below).
 ### Several endpoints at once
 
 **Name the endpoint when you log in.** A named endpoint is registered as its own
-provider under that name — with its own `/v1/models` discovery and its own rows in
-`/model` — and it does not touch any other. This is how you run a small model on
+provider under that name, with its own `/v1/models` discovery and its own rows in
+`/model`, and it does not touch any other. This is how you run a small model on
 one machine for titles and a large one on another for the work:
 
 ```
@@ -457,7 +465,7 @@ can also write them by hand:
 }
 ```
 
-Each entry's `api` field picks the protocol it speaks — `"openai"` (the default,
+Each entry's `api` field picks the protocol it speaks: `"openai"` (the default,
 and what every entry written before this field existed means) or `"anthropic"`.
 See [Anthropic-compatible endpoints](#anthropic-compatible-endpoints) for the
 latter's extra settings.
@@ -466,8 +474,13 @@ Keys are **never** stored in `config.json`. Give a key at login and it goes into
 `auth.json` under the endpoint's name; or point `apiKeyEnv` at an environment
 variable. Most local servers want no key at all.
 
+Endpoints are a **user-config concept**: a project's `.terva/config.json` cannot
+define one, because it could otherwise point the agent at a server of the
+project's choosing. Adding or editing an endpoint re-runs discovery on the next
+launch.
+
 The web panel's **Providers** pane lists your named endpoints and can forget one
-(its definition *and* its key — a sign-out would only clear the key and leave the
+(its definition *and* its key; a sign-out would only clear the key and leave the
 server configured).
 
 **Leaving the name empty** puts the endpoint in the single shared
@@ -478,7 +491,7 @@ single server and is what `--base-url` and the CLI flags below drive.
 #### The older route: per-model baseUrl in models.json
 
 Predates named endpoints and still works. Each model entry pins its own `baseUrl`,
-so many endpoints coexist in `/model` — but you must hand-list every model, because
+so many endpoints coexist in `/model`, but you must hand-list every model, because
 there is no discovery:
 
 ```json
@@ -494,26 +507,44 @@ there is no discovery:
 }
 ```
 
-Don't hand-write that from scratch — run `terva models init` to drop a starter
+Don't hand-write that from scratch. Run `terva models init` to drop a starter
 `models.json` (with two example endpoints) at `$TERVA_HOME/models.json`, edit the
 ids/URLs, then run `terva --list-models` to confirm the entries load (they show
 `source: user`). `terva models init` refuses to overwrite an existing file unless
 you pass `--force`. A per-launch `--base-url` override also works for a one-off
 without touching the stored login.
 
-**Prefer named endpoints when a server should list its own models** — name it at
+**Prefer named endpoints when a server should list its own models**: name it at
 `/login` and there is nothing to hand-list. The `models.json` pattern above shows
 only the entries you write out yourself. The two coexist, so there is no forced
-migration. To convert an existing multi-`baseUrl` `models.json`, run `terva models
-endpoints` — it prints a ready-to-paste `endpoints` block (or `--apply` writes it
-to `config.json`) and flags the now-redundant `models.json` entries for you to
-trim.
+migration, and nothing breaks if you keep both. The difference is that a named
+endpoint **discovers** its models where `models.json` only shows what you
+hand-listed.
+
+To convert an existing multi-`baseUrl` `models.json`, lift and trim:
+
+1. `terva models endpoints` scans it for distinct `openai-compatible` base URLs
+   and prints a ready-to-paste `endpoints` block, one named endpoint per URL,
+   naming each from its host, plus the `models.json` entries that become
+   redundant once discovery covers them. It changes nothing.
+2. `terva models endpoints --apply` writes those endpoints into `config.json`.
+   Additive: it never clobbers an endpoint you already defined, and never
+   touches `models.json`.
+3. Relaunch so each endpoint discovers its models, then **trim** `models.json`
+   by hand. Delete the entries discovery now covers, but keep any you rely on
+   for exact `contextWindow` / `maxTokens` / capability overrides, which
+   discovery cannot infer. Anything you keep still wins over the catalog and the
+   endpoint's `/v1/models`.
+
+If you set a key via `apiKeyEnv` for a migrated endpoint, point it at the
+variable holding that endpoint's token. `models.json` had no key field, so a
+previously keyless local server needs nothing.
 
 ## Anthropic-compatible endpoints
 
 The `anthropic-compatible` provider is the twin of `openai-compatible` for the
 other wire terva speaks: point it at any server that implements Anthropic's
-**Messages API** — LiteLLM in `anthropic` mode, a Bedrock/Vertex shim, a
+**Messages API**, whether LiteLLM in `anthropic` mode, a Bedrock/Vertex shim, a
 corporate gateway in front of Claude, or a local router.
 
 Everything above applies unchanged: run `/login`, choose **Anthropic Compatible
@@ -525,21 +556,21 @@ and the key is optional.
 
 > **Base URL:** give the server's root, **not** its `/v1`. terva appends
 > `/v1/messages` itself, so `http://localhost:4000/v1` becomes
-> `http://localhost:4000/v1/v1/messages` — a 404 from an otherwise correct
+> `http://localhost:4000/v1/v1/messages`, a 404 from an otherwise correct
 > gateway. (The OpenAI form is the opposite: it wants the `/v1`.)
 
 ### Wire settings
 
 Four settings exist because a real class of Messages-compatible server fails
 *every* turn without them, with an error that names none of them. All are
-optional and all have working defaults — fill one in only when your server needs
-it.
+optional and all have working defaults, so fill one in only when your server
+needs it.
 
 | Setting | Default | When you need it |
 |---|---|---|
 | `anthropic-version` | `2023-06-01` | The gateway is pinned to a different API version. |
 | `anthropic-beta` | *(none)* | A feature has to be opted into, e.g. `context-1m-2025-08-07`. Comma-separated. |
-| Auth style | `x-api-key` | Set `bearer` when the server wants `Authorization: Bearer` instead — common on gateways that present an OpenAI-style front door. |
+| Auth style | `x-api-key` | Set `bearer` when the server wants `Authorization: Bearer` instead, which is common on gateways that present an OpenAI-style front door. |
 | Prompt caching | `on` | Turn it **off** for a server that validates the request body strictly and rejects Anthropic's `cache_control` field. |
 
 For a named endpoint these live in `config.json` beside the rest of its
@@ -599,49 +630,14 @@ your configured default context window. Pin exact values per model in
 
 ## Context window and max response tokens
 
-Two fields control sizing for a model, and both matter most for local/custom
-models where terva has no built-in catalog entry:
+What `contextWindow` and `maxTokens` control, and how to pin them per model, are
+in [models.md](models.md#where-context-windows-come-from). They are properties of
+the model rather than of the endpoint, which is the only reason they are not
+here.
 
-- **`contextWindow`** — the model's total token budget. Drives the status-bar
-  context gauge and the automatic-compaction trigger. If it's `0`/unknown,
-  auto-compaction is disabled and the gauge drops the percentage, falling back
-  to a plain token count (safe, but you lose the usage-versus-limit readout).
-- **`maxTokens`** — the maximum tokens terva requests for a single response (sent
-  as `max_tokens` / `max_completion_tokens`). Leave it out to let the server use
-  its own default.
-
-For the `openai-compatible` provider the login form sets only the *default*
-context window. To set precise per-model values — including `maxTokens`, which
-the form does not capture — add the model to `$TERVA_HOME/models.json`:
-
-```json
-{
-  "providers": {
-    "openai-compatible": {
-      "models": [
-        {
-          "id": "qwen2.5-coder-32b",
-          "name": "Qwen2.5 Coder 32B (local)",
-          "contextWindow": 131072,
-          "maxTokens": 8192,
-          "baseUrl": "http://localhost:1234/v1"
-        },
-        {
-          "id": "llama-3.1-8b",
-          "contextWindow": 8192,
-          "maxTokens": 2048,
-          "baseUrl": "http://localhost:1234/v1"
-        }
-      ]
-    }
-  }
-}
-```
-
-Entries in `models.json` take precedence over both the baked-in catalog and the
-values discovered from `/v1/models`, so they're the source of truth when a
-server under-reports (or misreports) its limits. `baseUrl` is optional here —
-when omitted, the model uses the base URL stored at login.
+One thing is this page's: for the `openai-compatible` provider the login form
+sets a *default* context window only, applied to discovered models the server
+does not describe a size for. It cannot set `maxTokens` at all.
 
 ## Auth file
 
@@ -668,26 +664,19 @@ Other API-key providers are stored under `additional_api_key_creds`. Prefer
 
 ## Custom providers and models
 
-Use `$TERVA_HOME/models.json` for private models, deployment aliases, local
-servers, or OpenAI-compatible gateways that are not in the built-in catalog.
-User entries override built-in entries with the same provider and model ID.
+`$TERVA_HOME/models.json` adds private models, deployment aliases, local servers,
+or gateways that are not in the built-in catalog, and its entries override
+built-in ones with the same provider and model id.
 
-Supported fields per model: `id` (required), `name`, `reasoning`,
-`contextWindow`, `desiredContextWindow`, `maxTokens`, `temperature`, `baseUrl`,
-`priceInput`, `priceOutput`, `priceCacheRead`, `priceCacheWrite`,
-`capabilities`. `desiredContextWindow` is an optional smaller working window
-that only moves the auto-compaction thresholds (compact earlier without
-pretending the model is smaller); `temperature` (0–2) is the model's default
-sampling temperature when no `--temperature` flag is given. See
-[Context window and max response tokens](#context-window-and-max-response-tokens)
-for what `contextWindow` and `maxTokens` control and a full
-`openai-compatible` example.
+**The field reference lives in [models.md](models.md#custom-models)**, because
+every field describes a model rather than a way of reaching one. One tag is the
+exception, and it is below.
 
 ### Capability tags
 
 `capabilities` marks what a model can do, when terva can't know on its
-own. Keys it understands today: `image-input` (vision — defaults to
-**true** when unset), `image-output` (image generation — defaults to
+own. Keys it understands today: `image-input` (vision, defaulting to
+**true** when unset), `image-output` (image generation, defaulting to
 false; consumed today by the `/model` picker's capability filter), and
 `reasoning` (an alias for the top-level `reasoning` field). Unknown keys
 load with a warning so a file written for a newer terva still works here.
@@ -695,14 +684,14 @@ load with a warning so a file written for a newer terva still works here.
 The **true** default applies to the built-in catalog (its models are
 known vision-capable). Models found by **discovery** are different: a
 standard `/v1/models` list carries no modality data, so terva infers
-`image-input` from the model id — known vision families (Claude 3+,
+`image-input` from the model id. Known vision families (Claude 3+,
 GPT‑4o/5, Gemini, and local names like `llava`/`*-vl`/`pixtral`) keep
 vision; anything unrecognized is treated as **text-only**. That's
 deliberately conservative: handing an image to a text-only model is a
 hard `400` ("does not support image inputs", common on gateways like
 opencode‑go), while a vision model given text-only input just proceeds.
 If discovery guesses wrong for a model you know takes images, assert it
-explicitly (below) — your `models.json` entry wins.
+explicitly (below); your `models.json` entry wins.
 
 The one most people need: a local model served **without a vision
 projector**. Mark it text-only and terva drops image attachments at the
@@ -731,7 +720,7 @@ Capability tags follow the same precedence as everything else in
 `models.json`: your entry beats the built-in catalog, which beats
 live discovery (OpenRouter's modality data is folded in
 automatically). In the `/model` picker, `◈` marks vision models and a
-`:` token filters by capability — `:img` (also `:image`, `:images`,
+`:` token filters by capability: `:img` (also `:image`, `:images`,
 `:vision`), `:reasoning` (also `:reason`, `:thinking`), and `:imggen`
 (also `:imagegen`, `:image-gen`, `:image-out`, `:imageout`);
 `terva --list-models` shows a `vision` column.

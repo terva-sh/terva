@@ -34,7 +34,7 @@ func capturePrintHelp(t *testing.T) string {
 // up somewhere in the help screen.
 func TestHelpListsEverySubcommandMode(t *testing.T) {
 	help := capturePrintHelp(t)
-	for _, sub := range []string{"rpc", "acp", "web", "attach", "replay"} {
+	for _, sub := range []string{"rpc", "acp", "web", "serve", "member", "attach", "replay", "doctor", "session"} {
 		if !strings.Contains(help, "terva "+sub) {
 			t.Errorf("terva --help does not list the %q subcommand mode", sub)
 		}

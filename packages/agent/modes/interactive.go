@@ -125,7 +125,7 @@ type InteractiveConfig struct {
 	Ready bool
 
 	// Carrier routes the TUI's control operations through the in-process
-	// ctrlproto WorkspaceService (docs/proposals/tui-on-ctrlproto.md).
+	// ctrlproto WorkspaceService (docs/proposals/archive/tui-on-ctrlproto.md).
 	// CarrierSession is the resolved session id the TUI operates on. Every
 	// shipping entry point sets it (cli_ctrlproto.go, replay_mode.go). The
 	// nil-Carrier branches that drove Agent directly are GONE: without a Carrier

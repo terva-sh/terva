@@ -12,7 +12,8 @@
 // extension does not affect the others or the host.
 //
 // See docs/extensions.md for the user-facing reference,
-// packages/agent/extproto for the wire format, and
+// docs/extension-protocol.md and packages/agent/extproto for the wire format,
+// and
 // packages/agent/extdriver for the wire driver this layer embeds.
 package extensions
 
@@ -595,7 +596,7 @@ func hasExtensionTheme(dir string) bool {
 // (agent.extensionThemeOptions): it iterates Extensions() — the neutral
 // per-extension dir + name the driver already exposes — and builds
 // tui.ThemeOption there, so neither this package nor the wire driver
-// depends on tui. See docs/plans/extdriver-extraction.md phase 3.
+// depends on tui. See docs/plans/archive/extdriver-extraction.md phase 3.
 
 // SetOnReload registers a callback fired after a successful Reload.
 // Hosts use it to rebuild the agent's tool registry with freshly-

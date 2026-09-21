@@ -1,5 +1,5 @@
 // Package discord implements terva's built-in Discord connector — the
-// connproto-v2 dogfood surface (docs/plans/discord-connector.md).
+// connproto-v2 dogfood surface (docs/plans/archive/discord-connector.md).
 //
 // Unlike telegram's built-in (a native chat.Connector), this package is
 // a plain connsdk.Transport: the compiled-in service runs it through

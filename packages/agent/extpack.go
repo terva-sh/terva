@@ -24,7 +24,7 @@ import (
 // launcher (typically a run.sh that compiles or downloads a release
 // binary) owns its bring-up. `pack install` just fans out over the same
 // install path a manual `ext install` uses. See
-// docs/plans/extension-packs.md.
+// docs/plans/archive/extension-packs.md.
 
 // packSchemaV1 is the manifest's format discriminator. A mismatched
 // schema is rejected rather than guessed at.

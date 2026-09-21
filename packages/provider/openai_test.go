@@ -12,7 +12,7 @@ import (
 // MirrorsToolImages — their wire formats can't carry images in a tool
 // result. It's a WIRE-FORMAT fact; whether a given MODEL can see
 // images is the separate per-model capability the loop checks
-// (docs/plans/model-capabilities.md). Providers that carry tool
+// (docs/plans/archive/model-capabilities.md). Providers that carry tool
 // images natively (Anthropic) must NOT declare it.
 //
 // Gemini was listed as native here and is not: its functionResponse

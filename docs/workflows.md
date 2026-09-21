@@ -1,10 +1,10 @@
-# Workflows — scripted multi-agent orchestration
+# Workflows: scripted multi-agent orchestration
 
 A workflow is a JavaScript program that orchestrates sub-agents
 **deterministically**: the script decides what runs next (loops, conditionals,
 fan-out), the swarm runs the agents, and a journal remembers every agent's
 result so an interrupted or edited run **resumes** instead of re-spending.
-Intermediate results live in script variables, not in any model's context —
+Intermediate results live in script variables, not in any model's context,
 which is what lets a workflow take on scale a single conversation can't hold.
 
 ```
@@ -15,7 +15,7 @@ Where the other orchestration surfaces are model-driven (`swarm_spawn` lets
 the *model* choose to delegate) or fixed-protocol ([RAATI](raati.md) always
 runs its two-round deliberation), a workflow is **your** control flow: fan out
 twenty readers, verify every finding adversarially, loop until two rounds come
-back empty — whatever the script says, exactly and repeatably.
+back empty. Whatever the script says, exactly and repeatably.
 
 It is a compile-time capability: binaries built with `-tags terva_workflows`
 have it (release builds do). A lean build still recognizes `terva workflow`
@@ -53,7 +53,7 @@ terva workflow run review.js
 
 Narration streams to stderr (phases, agent lifecycle, cache hits); the
 script's return value prints to stdout as JSON. Every run gets an id
-(`wf_…`) — interrupt it, or edit the script, and
+(`wf_…`); interrupt it, or edit the script, and
 
 ```
 terva workflow run review.js --resume wf_9216bc671f6a
@@ -64,11 +64,11 @@ runs only what's new.
 
 ## The script contract
 
-The grammar is deliberately the same as a Claude Code dynamic workflow — a
+The grammar is deliberately the same as a Claude Code dynamic workflow, so a
 script written for one is a small conversion away from the other (the known
 differences are tabled [below](#claude-code-compatibility)).
 
-### `meta` — required header
+### `meta`: required header
 
 ```js
 export const meta = {
@@ -82,7 +82,7 @@ export const meta = {
 }
 ```
 
-`meta` must be a **pure literal** — no variables, calls, spreads, or template
+`meta` must be a **pure literal**: no variables, calls, spreads, or template
 interpolation. It is extracted by parsing, not by running the script, so it
 must be readable without executing anything.
 
@@ -103,22 +103,22 @@ Spawns one sub-agent on the swarm and resolves when its task ends.
 | `model` | model override for this agent |
 | `provider` | provider override |
 | `persona` | persona identity for the agent |
-| `backend` | worker backend — refused by hosts that run native children only |
+| `backend` | worker backend, refused by hosts that run native children only |
 | `reasoning` | thinking effort, on the `--thinking` ladder. Separate from the model, so it rides a `model` override or a bare spawn |
 | `schema` | JSON Schema for a structured deliverable (object at the top level) |
 
 Two failure behaviors, by design:
 
 - **The agent failing is data, not an exception.** A spawn error, an agent
-  dying mid-task, or an unmet deliverable contract resolves to **`null`** —
+  dying mid-task, or an unmet deliverable contract resolves to **`null`**, so
   the fan-out survives one bad agent. Filter with `.filter(Boolean)`.
 - **You misusing the API throws.** An unknown opt, a refused backend, an
-  exhausted budget, or the agent-cap backstop **rejects** the promise —
+  exhausted budget, or the agent-cap backstop **rejects** the promise:
   catchable, but loud by default.
 
 With `schema`, the resolved value is the sub-agent's **schema-validated
 deliverable as an object** (the [structured-deliverable
-contract](standard-tools.md#host-injected-skins-conditional) — the agent
+contract](standard-tools.md#host-injected-skins-conditional), where the agent
 reports through a `deliver_result` tool and validation failures are retried
 on the agent's side, not yours). Without `schema`, it is the agent's findings
 as a string.
@@ -139,7 +139,7 @@ const out = await pipeline(files,
 ```
 
 `pipeline` runs each item through all stages **with no barrier between
-stages** — item A can be in stage 2 while item B is still in stage 1, so
+stages**: item A can be in stage 2 while item B is still in stage 1, so
 wall-clock is the slowest single chain, not the sum of the slowest per stage.
 Each stage receives `(previousResult, originalItem, index)`. A stage that
 throws drops that item to `null` and skips its remaining stages.
@@ -156,17 +156,17 @@ affects execution or the journal.
 ### `args`
 
 The value passed via `--args`, verbatim (`undefined` when absent). This is
-how a saved script becomes parameterized — and how anything nondeterministic
+how a saved script becomes parameterized, and how anything nondeterministic
 (timestamps, run labels) gets in from outside.
 
 ### `budget`
 
 `budget.total` (the `--budget-usd` ceiling, or `null`), `budget.spent()`, and
-`budget.remaining()` (`Infinity` with no ceiling) — **in US dollars**, the
+`budget.remaining()` (`Infinity` with no ceiling), **in US dollars**, the
 number terva already tracks per agent. The ceiling is hard: once spend
 reaches it, further `agent()` calls throw. Cost lands when an agent
 *finishes*, so a concurrent burst can overshoot by the in-flight agents'
-cost — set the ceiling with that margin in mind.
+cost; set the ceiling with that margin in mind.
 
 ```js
 const found = []
@@ -181,7 +181,7 @@ while (budget.total && budget.remaining() > 0.50) {
 
 `Date.now()`, `new Date()`, and `Math.random()` **throw** (and are rejected
 by a pre-run check before any agent spawns). Resume works by re-running the
-script and matching each `agent()` call against the journal — that only holds
+script and matching each `agent()` call against the journal, which only holds
 if replay re-derives *identical* calls. Pass timestamps in via `args`; for
 prompt diversity, vary by index, not by randomness. There is also no
 filesystem, network, or subprocess access: the script orchestrates agents;
@@ -191,7 +191,7 @@ the *agents* touch the world.
 
 Every run writes `$TERVA_HOME/swarm/workflows/<run-id>/journal.jsonl`. Each
 completed agent is recorded under a key derived from its **exact
-`(prompt, opts)` pair** — all opts participate, `label` and `phase`
+`(prompt, opts)` pair**, where all opts participate, `label` and `phase`
 included. The semantics that follow:
 
 - **Resume replays, then continues.** `--resume <id>` re-executes the script;
@@ -199,11 +199,11 @@ included. The semantics that follow:
   spawning. Unchanged script ⇒ zero spawns; edit one prompt ⇒ exactly that
   call re-runs.
 - **Failures are never journaled.** An agent that resolved `null` is retried
-  on resume — resume is also the *heal* mechanism after a transient failure.
+  on resume, so resume is also the *heal* mechanism after a transient failure.
 - **Identical calls share one slot.** Two `agent()` calls with byte-identical
   prompt and opts are the same key; if you want N independent attempts at the
   same prompt, vary the `label` by index.
-- **A row carries its label.** `{type, key, agent_id, label, result}` — so a
+- **A row carries its label.** `{type, key, agent_id, label, result}`, so a
   finished run can be read back to the slice that produced each report without
   the narration that printed both. Narration is a stderr stream, and an
   interrupted run leaves it wherever that stream happened to land.
@@ -211,7 +211,7 @@ included. The semantics that follow:
 **Label your agents.** The id is the handle for everything durable: the
 `swarm/agents/<id>/` state directory, the journal's `agent_id`, and the argument
 `session_inspect` takes to read a sub-agent's transcript. Unlabelled, it is
-slugged from the prompt — and a fan-out shares its prompt preamble by
+slugged from the prompt, and a fan-out shares its prompt preamble by
 construction, so six agents mint six ids differing only in a numeric suffix.
 Labelled, they read `core-engine-…`, `providers-cli-…`, and a sub-agent's full
 transcript is one paged, redacted `session_inspect` call away.
@@ -225,7 +225,7 @@ transcript is one paged, redacted `session_inspect` call away.
 | run time | none | `--timeout` |
 | agents per run | 1000 (runaway-loop backstop) | — |
 
-The concurrency cap lives in the workflow runner, not the swarm — excess
+The concurrency cap lives in the workflow runner, not the swarm: excess
 `agent()` calls queue and run as slots free. Sub-agents are task-scoped:
 each is stopped as soon as its task ends, not left attached like an
 interactive `/swarm` agent.
@@ -248,25 +248,25 @@ terva workflow show <run-id> [--script]
   the run's record and its journaled results; --script prints the source
 ```
 
-**Finding a run again.** Each run writes `run.json` beside its journal — the
+**Finding a run again.** Each run writes `run.json` beside its journal: the
 script source, the launch coordinates, times, agent counts and cost. That is
 what makes `list` and `show` possible without the launching terminal, which
 matters most for a run that was **interrupted**: a failed run prints its
 `--resume` hint on the way out, an interrupted one dies before it can, and its
 completed agents sit on disk unreachable in practice.
 
-A run with no `ended` reads as `incomplete` rather than `running` — telling
+A run with no `ended` reads as `incomplete` rather than `running`, because telling
 those apart needs liveness, and claiming "running" about a dead run is worse
 than saying nothing. Either way the next action is the same: look at the counts
 and decide whether to resume.
 
 Starting a script that has an incomplete prior run in the same cwd says so
-before spawning, matched on the script **source** rather than its path — resume
+before spawning, matched on the script **source** rather than its path; resume
 keys on content, so an edited file at the same path would replay nothing.
 
 stdout carries exactly one thing: the script's return value as JSON (so runs
 compose with `jq` and pipelines). Narration, the run summary (agents run /
-replayed, cost, elapsed), and — on failure — the `--resume` hint all go to
+replayed, cost, elapsed), and, on failure, the `--resume` hint all go to
 stderr.
 
 The CLI host drives **native sub-agents only**; an `agent()` call naming a
@@ -277,7 +277,7 @@ identity.
 
 `terva web`'s board has a **Workflows** lane beside the sessions and the swarm:
 every run on the host, newest first, with its status, completed-of-total agents,
-cost, and — for a run worth resuming — what resuming would replay. Clicking one
+cost, and, for a run worth resuming, what resuming would replay. Clicking one
 opens it: the record, **the script as it ran**, and every report it journaled,
 each collapsed behind its size so a 98 KB deliverable does not land in the page
 uninvited.
@@ -305,12 +305,12 @@ nothing but the standard library. A lean `terva web` therefore serves runs made
 by a full binary on the same machine.
 
 Wire surface: `workflows.list` and `workflows.get`, both read-only and in the
-**session** group rather than control — observing a run needs no authority to
+**session** group rather than control, because observing a run needs no authority to
 change anything.
 
 ## Claude Code compatibility
 
-Same grammar and shape, deliberately — but script-level compatibility, not
+Same grammar and shape, deliberately, but script-level compatibility, not
 artifact-level (run journals are internal formats on both sides; neither
 reads the other's). Known differences:
 
@@ -330,7 +330,7 @@ conversion mapping in the error rather than silently spawning defaults.
 
 ## Examples
 
-Working examples live in [`examples/workflows/`](../examples/workflows/) —
+Working examples live in [`examples/workflows/`](../examples/workflows/),
 and every terva install carries them at `$TERVA_HOME/examples/workflows/`, so
 they are readable on a host with no source checkout (by you, and by a
 sandboxed agent whose jail includes `$TERVA_HOME`). CI executes each example

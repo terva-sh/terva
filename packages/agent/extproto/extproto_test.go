@@ -26,7 +26,7 @@ type goldenFrame struct {
 // goldenFrames pins the exact bytes of the extension wire format.
 //
 // Extension wire compatibility is an explicit invariant of the
-// zot → terva rename (docs/plans/rename-terva.md): third-party
+// zot → terva rename (docs/plans/archive/rename-terva.md): third-party
 // extensions are deployed independently and parse these field names —
 // including zot_version, which stays even after the rename
 // (terva_version is additive). A failure here means the wire changed;
@@ -604,7 +604,7 @@ var goldenFrames = []goldenFrame{
 		// panel_render cadence instead. It is pinned because the corpus
 		// publishes the wire SPEC, so an SDK that chooses to decode it
 		// defensively gets the exact bytes rather than a guess; that is
-		// not a promise it will arrive. See docs/extensions.md.
+		// not a promise it will arrive. See docs/extension-protocol.md.
 		//
 		// Wiring a producer is a behaviour change, not a gap-fill: it
 		// would reverse a decision the docs state outright.

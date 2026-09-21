@@ -6,21 +6,23 @@ This document describes how terva currently constructs the model context and the
 
 Each model call is built by `packages/core.Agent.oneTurn` from four main pieces:
 
-1. **System prompt** — `Agent.System`, assembled during `agent.Resolve`.
-2. **Transcript messages** — a copy of the in-memory conversation history (`Agent.Messages()`).
-3. **Tool specs** — JSON schemas from the currently registered tools (`a.Tools.Specs()`).
-4. **Reasoning setting** — the normalized reasoning/thinking level, if any.
+1. **System prompt**: `Agent.System`, assembled during `agent.Resolve`.
+2. **Transcript messages**: a copy of the in-memory conversation history
+   (`Agent.Messages()`).
+3. **Tool specs**: JSON schemas from the currently registered tools
+   (`a.Tools.Specs()`).
+4. **Reasoning setting**: the normalized reasoning/thinking level, if any.
 
 Two request fields ride alongside those pieces without ever entering the transcript:
 
-- **EphemeralContext** — host-assembled text injected for this request only (an
+- **EphemeralContext**: host-assembled text injected for this request only (an
   extension's live task card, the context-pressure note). Providers append it as a
   trailing message *after* the cache breakpoint, so the cached prefix (system +
   tools + history) still hits and only this block is re-processed each turn.
-- **PromptCacheKey** — a stable per-conversation identifier (the session's meta
+- **PromptCacheKey**: a stable per-conversation identifier (the session's meta
   UUID) forwarded to providers that use it for prefix-cache routing (OpenAI's
-  `prompt_cache_key`). Without it, concurrent conversations on one account — a
-  coordinator plus its swarm children — hash into overlapping cache shards and
+  `prompt_cache_key`). Without it, concurrent conversations on one account, a
+  coordinator plus its swarm children, hash into overlapping cache shards and
   evict each other's prefixes.
 
 Conceptually:
@@ -187,7 +189,10 @@ A pinned body is roughly 1,400 tokens for `house-style`, in the frozen prefix of
 
 Parsed skill frontmatter includes fields such as `name`, `description`, `allowed-tools`, and `permissions`. The two are not in the same state, and the difference matters:
 
-- `allowed-tools` **is wired**: it drives lazy-visibility activation, so loading a skill reveals the tools it names. It is a *visibility hint, not a grant* — a revealed tool keeps its normal permission gate. See [skills.md](skills.md).
+- `allowed-tools` **is wired**: it drives lazy-visibility activation, so
+  loading a skill reveals the tools it names. It is a *visibility hint, not a
+  grant*, and a revealed tool keeps its normal permission gate. See
+  [skills.md](skills.md).
 - `permissions` is still **parsed but not enforced**, present for forward compatibility only. Do not rely on it to restrict anything.
 
 ## Auto-swarm context
@@ -218,29 +223,52 @@ When transcript context grows too large, terva can compact it. Compaction replac
 
 Automatic compaction fires when the last request's context use crosses 85% of the model's window, at up to three places:
 
-- **pre-turn** — before sending a prompt whose transcript is already past the threshold (covers resumes);
-- **post-turn** — while idle after a turn ends, so the next prompt doesn't pay the summarization latency;
-- **mid-turn** — at the safe boundary between a turn's tool-loop steps, so a long agentic turn (one prompt driving many tool calls) can't grow past the window with no boundary check ever running. Mid-turn compaction uses an extended summarization prompt that demands an explicit ledger of already-executed actions (files written, commands run, messages sent), so the resuming agent never repeats a side effect.
+- **pre-turn**: before sending a prompt whose transcript is already past the
+  threshold (covers resumes);
+- **post-turn**: while idle after a turn ends, so the next prompt doesn't pay
+  the summarization latency;
+- **mid-turn**: at the safe boundary between a turn's tool-loop steps, so a
+  long agentic turn (one prompt driving many tool calls) can't grow past the
+  window with no boundary check ever running. Mid-turn compaction uses an
+  extended summarization prompt that demands an explicit ledger of
+  already-executed actions (files written, commands run, messages sent), so the
+  resuming agent never repeats a side effect.
 
 A context-limit rejection from the provider (HTTP 413, or a 400 naming the context window) additionally triggers one compact-and-retry.
 
-The `auto_compact` config knob selects how much of this runs — read live, so an edit applies to the running session:
+The `auto_compact` config knob selects how much of this runs, and it is read
+live, so an edit applies to the running session:
 
 ```json
 { "auto_compact": "steps" }
 ```
 
-- `steps` (default) — all of the above;
-- `turns` — turn boundaries and error recovery only (the pre-mid-turn behavior);
-- `off` — no automatic compaction at all; context-limit errors surface and you compact by hand.
+- `steps` (default): all of the above;
+- `turns`: turn boundaries and error recovery only (the pre-mid-turn behavior);
+- `off`: no automatic compaction at all; context-limit errors surface and you
+  compact by hand.
 
 Manual `/compact` works in every mode. From 70% of the window the model itself is warned each step (an ephemeral note riding the request tail) so it can wrap up, economize, or delegate remaining large reads to sub-agents before the 85% valve fires.
 
 ## Provider prompt caching
 
-terva keeps the serialized transcript byte-stable across a turn's steps — the system prompt and tool set are pinned for the whole turn, tool results append, and nothing rewrites earlier messages — so provider-side prefix caches stay hot through long agentic tool loops.
+terva keeps the serialized transcript byte-stable across a turn's steps, because
+the system prompt and tool set are pinned for the whole turn, tool results
+append, and nothing rewrites earlier messages, so provider-side prefix caches
+stay hot through long agentic tool loops.
 
-One provider behavior is worth knowing when watching costs on OpenAI reasoning models (`openai-codex`, `openai-responses`): the Responses backend **discards prior-turn reasoning items at prompt assembly**. Every user message — typed, queued, or harness-injected (the open-work finalize guard, the auto-swarm recap) — reclassifies all reasoning items behind it at once, so the canonicalized prompt diverges from the cache at the *first* reasoning item and the next call re-reads essentially the whole conversation uncached. This is inherent to encrypted-reasoning replay (terva re-sends the items; the server drops the stale ones), not something the client can serialize around. Practical upshot: on these providers each user-message boundary in a large session costs roughly one full-context read, so injected-message frequency is a real cost knob. Anthropic models don't share this mechanic.
+One provider behavior is worth knowing when watching costs on OpenAI reasoning
+models (`openai-codex`, `openai-responses`): the Responses backend **discards
+prior-turn reasoning items at prompt assembly**. Every user message, whether
+typed, queued, or harness-injected (the open-work finalize guard, the auto-swarm
+recap), reclassifies all reasoning items behind it at once, so the canonicalized
+prompt diverges from the cache at the *first* reasoning item and the next call
+re-reads essentially the whole conversation uncached. This is inherent to
+encrypted-reasoning replay (terva re-sends the items; the server drops the stale
+ones), not something the client can serialize around. Practical upshot: on these
+providers each user-message boundary in a large session costs roughly one
+full-context read, so injected-message frequency is a real cost knob. Anthropic
+models don't share this mechanic.
 
 ## User prompt file references
 
@@ -327,7 +355,7 @@ All built-in file tools resolve paths the same way:
 - `oldText` must be non-empty.
 - `oldText` and `newText` must differ.
 - Each `oldText` must appear exactly once in the original file, unless
-  the edit sets `replaceAll: true` — then every occurrence is replaced.
+  the edit sets `replaceAll: true`, and then every occurrence is replaced.
 - When `oldText` has no exact match, a **whitespace-tolerant** pass
   retries it: lines compare after right-trimming, shifted by one
   uniform leading-whitespace delta, with blank lines matching under
@@ -376,19 +404,19 @@ headless modes** (`--jail`/`--no-jail` override; see
 `/unjail` unlocks it at runtime.
 
 When locked, the jail is a **write** boundary plus a set of command
-heuristics. It is deliberately **not** a read boundary — see
+heuristics. It is deliberately **not** a read boundary. See
 [permissions.md](permissions.md#what-the-jail-does-and-does-not-confine) for the
 full statement and the reasoning:
 
-- **Writes** — `write`, `edit` and the other mutating tools call
+- **Writes**: `write`, `edit` and the other mutating tools call
   `Sandbox.CheckPath`, which confines them to the working directory. Paths are
   resolved and canonicalized with symlinks considered, and a nonexistent target
   is checked by resolving its nearest existing parent, so a symlink escape is
   still caught.
-- **Reads** — `read`, `grep`, `glob` and friends call `Sandbox.CheckPathRead`,
+- **Reads**: `read`, `grep`, `glob` and friends call `Sandbox.CheckPathRead`,
   which is a **deny list, not a containment check**: a jailed agent may read
   anywhere except the registered secret roots. This is deliberate. `bash` has
-  never been path-jailed — it cannot be, short of not shipping a shell — so
+  never been path-jailed, and it cannot be short of not shipping a shell, so
   anything a read refused was always one `cat` away, and enforcing containment
   on one tool and not the other confined nothing while costing turns.
 - **Secrets are denied outright**, to reads *and* to `bash`, jailed or not:
@@ -397,7 +425,7 @@ full statement and the reasoning:
   these.
 - `bash` calls `Sandbox.CheckCommand`, which blocks obvious escape/destructive patterns such as `sudo`, `su`, `rm -rf /`, `cd /`, `cd ~`, `cd ..`, recursive `chmod`/`chown`, `mkfs`, and dangerous `dd` forms.
 
-The jail is a guardrail, not a hard security boundary — including the secret
+The jail is a guardrail, not a hard security boundary, including the secret
 denials, which a runtime-assembled path or an interpreter walks past. It is the
 same speed bump on every route, not a wall.
 
@@ -423,7 +451,16 @@ At startup, terva auto-loads only these file-based instruction sources:
 - discovered `SKILL.md` manifests, with skill bodies loaded on demand through the `skill` tool;
 - terva's own embedded docs installed under `$TERVA_HOME/docs`, referenced by path but not injected wholesale.
 
-For arbitrary files there is an explicit startup mechanism: the repeatable `--context-file PATH` flag (resolved against the working directory) and `context_files` lists in user/project `.terva/config.json`. Entries load fail-fast (a missing or unreadable file is an error, not a silent skip), config entries are injected before flag entries, and the untrusted project layer is contained to the project root so a cloned repo's config cannot point at files outside it. In the immersive modes (`--chat`/`--play`) the config layers are ambient coding context and are gated out exactly like AGENTS.md — only an explicit per-run `--context-file` injects there. See `docs/plans/startup-context-files.md` for the design.
+For arbitrary files there is an explicit startup mechanism: the repeatable
+`--context-file PATH` flag (resolved against the working directory) and
+`context_files` lists in user/project `.terva/config.json`. Entries load
+fail-fast (a missing or unreadable file is an error, not a silent skip), config
+entries are injected before flag entries, and the untrusted project layer is
+contained to the project root so a cloned repo's config cannot point at files
+outside it. In the immersive modes (`--chat`/`--play`) the config layers are
+ambient coding context and are gated out exactly like AGENTS.md, so only an
+explicit per-run `--context-file` injects there. See
+`docs/plans/startup-context-files.md` for the design.
 
 Beyond those, arbitrary project files become model context only when:
 

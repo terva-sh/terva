@@ -1,7 +1,7 @@
 // chat-loopback — the smallest honest dual-role plugin: one process that
 // is BOTH an extension (the agent calls into it) and a chat connector
 // (it triggers the agent), demonstrating the connector role added in
-// extension protocol 5 (docs/proposals/connector-extensions.md).
+// extension protocol 5 (docs/proposals/archive/connector-extensions.md).
 //
 // The transport implements connsdk.Transport — the SAME interface a
 // standalone `terva bot` connector implements. That is the tunnel

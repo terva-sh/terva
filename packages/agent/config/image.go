@@ -1,11 +1,12 @@
 package config
 
 // The image-generation config schema. The backends these describe are built
-// in packages/agent/image.go, which needs imagegen; the schema itself does not.
+// in packages/agent/build/image.go, which needs imagegen; the schema itself
+// does not.
 
 // ImageConfig configures image generation (the generate_image tool) via a
 // registry of backends kept separate from the model catalog. Opt-in: with no
-// `image` block the tool is absent. See docs/proposals/image-generation.md.
+// `image` block the tool is absent. See docs/proposals/archive/image-generation.md.
 type ImageConfig struct {
 	// Enabled is the master switch. A present block with nil or true is on;
 	// false disables even when backends are configured.

@@ -21,7 +21,7 @@ const (
 // rateLimitSpec describes how to read one provider's x-ratelimit-* response
 // headers. Header names default to the OpenAI standard; providers that deviate
 // (Cerebras) override them, and `disabled` turns parsing off for a provider
-// that sends junk. See docs/plans/usage-merged-view.md §4.
+// that sends junk. See docs/plans/archive/usage-merged-view.md §4.
 type rateLimitSpec struct {
 	requestsLimit, requestsRemaining, requestsReset string
 	tokensLimit, tokensRemaining, tokensReset       string

@@ -36,7 +36,7 @@ func configured(tervaHome string) bool {
 // newServiceConnector builds the compiled-in flavor: the shared
 // Transport behind the in-process connproto carrier, so this run
 // speaks the full wire (the dogfood contract from
-// docs/plans/discord-connector.md).
+// docs/plans/archive/discord-connector.md).
 func newServiceConnector(tervaHome string, warn func(string)) (chat.Connector, chat.Pairing, error) {
 	cfg, err := LoadConfig(tervaHome)
 	if err != nil {

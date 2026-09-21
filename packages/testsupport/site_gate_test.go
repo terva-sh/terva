@@ -39,6 +39,7 @@ import (
 const sitePage = "docs/vanity/site/index.html"
 
 func TestSitePageFacts(t *testing.T) {
+	requireSourceTree(t)
 	root := filepath.Join("..", "..")
 	src := readSitePage(t, root)
 
@@ -107,6 +108,7 @@ func TestSitePageFacts(t *testing.T) {
 }
 
 func TestSitePageLinksResolve(t *testing.T) {
+	requireSourceTree(t)
 	root := filepath.Join("..", "..")
 	src := readSitePage(t, root)
 
@@ -142,6 +144,7 @@ func TestSitePageLinksResolve(t *testing.T) {
 }
 
 func TestSitePageAssets(t *testing.T) {
+	requireSourceTree(t)
 	root := filepath.Join("..", "..")
 	site := filepath.Join(root, "docs/vanity/site")
 
@@ -192,6 +195,7 @@ func TestSitePageAssets(t *testing.T) {
 // is that it reaches this page, script and style included: the demo clip
 // strings are prose a visitor reads. Sized like the docs gate, at zero.
 func TestSitePageHasNoEmDash(t *testing.T) {
+	requireSourceTree(t)
 	root := filepath.Join("..", "..")
 	files := []string{"index.html", "404.html", "terva/index.html"}
 	// A cast is prose a visitor reads, frame by frame, so it is held to the

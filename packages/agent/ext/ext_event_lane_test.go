@@ -10,7 +10,7 @@ import (
 
 // OnCompactStart's godoc told authors to call read_session from the handler:
 // "the handler has time to read the full session (read_session) and harvest
-// detail before it's summarized away". docs/extensions.md said the same.
+// detail before it's summarized away". docs/extension-protocol.md said the same.
 //
 // It deadlocked. Event handlers ran INLINE on the Run read loop, which is the
 // only goroutine that can deliver the reply to a request the handler makes. A

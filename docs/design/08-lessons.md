@@ -1,9 +1,9 @@
-# 08 — Lessons
+# 08: Lessons
 
 Everything here was learned by getting it wrong first. Each entry names the
 mistake, what it cost, and the rule we now hold ourselves to. They are grouped
 by the kind of thinking that produced the error, because that is what
-transfers — the specific bugs will not recur, the reasoning that caused them
+transfers: the specific bugs will not recur, and the reasoning that caused them
 will.
 
 Generalized, prescriptive versions of several of these live in
@@ -20,7 +20,7 @@ and the behavior is simply absent.
 ### A feature can ship dark
 
 A control-plane feature was fully implemented on the server, fully requested by
-the client, reviewed, merged, and released — and never ran once. The server
+the client, reviewed, merged, and released, and it never ran once. The server
 never *advertised* it in the connection handshake, so negotiation silently
 failed and every client fell back to the old behavior for weeks.
 
@@ -36,7 +36,7 @@ a list. There is no natural reader for an absent list entry.
 
 Two tests written to pin a live-trust behavior started with a bare fixture. A
 bare fixture builds no permission policy (no rules) and no hook engine (no
-hooks), so both tests hit a `skip` — and a skip in aggregate output is
+hooks), so both tests hit a `skip`, and a skip in aggregate output is
 indistinguishable from a pass at a glance.
 
 > **Rule.** A test that can decline to run must fail instead. If the fixture is
@@ -45,7 +45,7 @@ indistinguishable from a pass at a glance.
 ### A proxy assertion can pass for the wrong reason
 
 A test pinned a gap by asserting that an engine *pointer* was unchanged across
-a trust flip. The fix made the code re-derive its configuration in place — and
+a trust flip. The fix made the code re-derive its configuration in place, and
 the assertion still passed, because the object was mutated rather than
 reallocated. A pointer-identity check cannot distinguish "never re-derived"
 from "re-derived without reallocating."
@@ -55,11 +55,11 @@ from "re-derived without reallocating."
 
 ### A truncated pipeline reports a subset with the confidence of a total
 
-Four separate times in one workstream, a measurement ending in `head` produced
-a number that was quoted as complete. A "25 members" figure was really 31 — the
-pipeline had a `head -25`. A census claiming nothing outside a package used two
-identifiers missed a production caller for the same reason. Each wrong number
-supported a plan built on it.
+Four separate times in one workstream, a measurement ending in `head` produced a
+number that was quoted as complete. A "25 members" figure was really 31, because
+the pipeline had a `head -25`. A census claiming nothing outside a package used
+two identifiers missed a production caller for the same reason. Each wrong
+number supported a plan built on it.
 
 > **Rule.** A count and a sample are different artifacts. If a command can
 > truncate, report the count separately from the listing.
@@ -89,7 +89,7 @@ and could leave on their own terms; the one called most separable was
 load-bearing. The framing had grouped files by what they were *about*, and that
 was read as a claim about how they were *connected*.
 
-The same error recurred four times in one workstream — including a cluster
+The same error recurred four times in one workstream, including a cluster
 described as three files that turned out to be two files plus an unrelated
 third that referenced neither.
 
@@ -101,7 +101,7 @@ third that referenced neither.
 
 Ranking files by how many other files depend on them produced an ordering that
 was exactly backwards for deciding what could be extracted. The most-depended-on
-cluster was the *most* liftable — it imported almost nothing — while a
+cluster was the *most* liftable, because it imported almost nothing, while a
 low-fan-in cluster could not move at all, because it depended on the two types
 at the center of the package.
 
@@ -112,7 +112,7 @@ at the center of the package.
 ### Half of an apparent coupling can be one misplaced helper
 
 A file appeared to be a hub with eight dependents. Six of them needed only four
-small helper functions sitting at the bottom of it — about forty-six lines.
+small helper functions sitting at the bottom of it, about forty-six lines.
 Moving those to their own home dropped its fan-in from eight to two, at
 essentially no risk, and changed which follow-on work was worth doing.
 
@@ -124,7 +124,7 @@ essentially no risk, and changed which follow-on work was worth doing.
 
 To find out whether a shipping binary could reach a suspicious branch, a
 recording probe was added and the test suite run. It reported hundreds of
-distinct call sites and zero production origins — which proves nothing, because
+distinct call sites and zero production origins, which proves nothing, because
 under test every origin is a test by construction. The question was answered by
 enumerating the places that construct the relevant value: five, all of which
 set the field.
@@ -142,7 +142,7 @@ A permission posture resolved through a chain of boolean conditions that
 reached its permissive answer by *falling off the end* rather than by deciding.
 An unrecognized run mode therefore got the most permissive posture available.
 
-Nothing in the shipping binary could reach that branch — which is exactly why
+Nothing in the shipping binary could reach that branch, which is exactly why
 it was cheap to fix and would have been expensive to discover later. The
 argument for which direction to fail is not symmetric: an unknown mode wrongly
 asked to confirm costs one prompt somebody can answer; an unknown mode wrongly
@@ -161,7 +161,7 @@ error rather than an omission.
 ### A redaction filter that guesses fails open
 
 Inspecting a configuration by printing it with a filter that suppresses
-"secret-looking" field names leaked a token twice — once from a field the
+"secret-looking" field names leaked a token twice: once from a field the
 filter did not anticipate, once from a plugin's own configuration whose naming
 the filter had never seen.
 
@@ -175,7 +175,7 @@ the filter had never seen.
 ### Deleting dead code can delete the only assertion about live code
 
 A dead code path was removed. It carried the only test anywhere for a spawn
-gate that was very much alive — the gate had never moved, but its sole coverage
+gate that was very much alive. The gate had never moved, but its sole coverage
 rode the removed path out of the tree.
 
 > **Rule.** Before deleting, check what the deleted code was the only witness
@@ -185,7 +185,7 @@ rode the removed path out of the tree.
 ### A dead twin swallows patches
 
 Two near-identical implementations existed, one of them unreachable. A feature
-was implemented — correctly — in the unreachable one, and never ran. It was
+was implemented correctly in the unreachable one, and never ran. It was
 discovered only when the dead twin was finally deleted and the feature had to
 be ported to make the deletion behavior-preserving.
 
@@ -196,7 +196,7 @@ be ported to make the deletion behavior-preserving.
 ### Sometimes the right outcome of a refactor is retiring a guard
 
 Two tests existed to catch bug classes that a later refactor made structurally
-impossible — a dispatch table cannot have the ambiguity a switch could, and a
+impossible: a dispatch table cannot have the ambiguity a switch could, and a
 package boundary enforces what an allow-list was approximating.
 
 > **Rule.** A guard whose bug class the new shape forecloses should be replaced
@@ -215,8 +215,8 @@ adding a thing and not adding it to the list.
 
 The remedy that has repeatedly earned its keep is the **self-enrolling
 allow-list**: the test discovers the full set from the source, and requires
-every member to be either handled or explicitly excused with a written reason
-— and a *stale* excuse fails too. Write it empty and let its first run be the
+every member to be either handled or explicitly excused with a written reason,
+and a *stale* excuse fails too. Write it empty and let its first run be the
 audit.
 
 > **Rule.** A completeness guard must derive its subject list from the code, not
@@ -226,7 +226,7 @@ audit.
 
 A per-mode property was encoded as a chain of boolean conditions, with a
 hand-maintained mirror in a test file asserting the chain's behavior. The mirror
-was the only way to pin a chain — and a mirror is a second source of truth by
+was the only way to pin a chain, and a mirror is a second source of truth by
 construction.
 
 Moving the property into a table that the production code *reads* eliminated
@@ -234,14 +234,14 @@ the drift class entirely, and changed what the guards could ask: exhaustiveness
 became a real question, and the agreement test became a genuinely different one.
 
 > **Rule.** Prefer a table the code consults to a chain the tests mirror. Then
-> guard the roster the tables are checked against — because that roster is now
+> guard the roster the tables are checked against, because that roster is now
 > the single point of silent failure, where a missing entry would be checked by
 > nothing while every table kept passing.
 
 ### One production caller means: test through the caller
 
 A capability was merged from two directions and correctly stood down from a
-third, and the interaction left the session with no memory tool at all — two
+third, and the interaction left the session with no memory tool at all: two
 correct halves that cancelled. Five tests covered the code and all five missed
 it, because every one of them called the helper directly.
 
@@ -258,7 +258,7 @@ The entries above are software engineering. These are particular to harnesses.
 ### Prose cannot break a self-priming loop
 
 A model that narrates the correct diagnosis and then repeats the identical
-failing call — forty-five times — is not confused. It is priming itself on its
+failing call forty-five times over, is not confused. It is priming itself on its
 own repeated output, and every additional sentence of guidance is more of the
 same input.
 
@@ -288,7 +288,7 @@ bytes genuinely changed.
 Session resume restored the conversation faithfully and dropped the record of
 which tool groups had been activated. The tool schemas therefore came back
 different, the request prefix diverged from the original run's, and cache hit
-rate went to zero — twice, because the first fix addressed the symptom.
+rate went to zero, twice, because the first fix addressed the symptom.
 
 The correction has a shape worth remembering: the state is written as a
 **replacement** at bind time, never a union with whatever was there, because a
@@ -314,7 +314,7 @@ worth generalizing.
 ### The boundaries are where messages are lost
 
 A message submitted during compaction was thrown away. The site that lost it
-was the *pre-turn* compaction path — and the sibling path a few lines away
+was the *pre-turn* compaction path, and the sibling path a few lines away
 already had the correct handling, with the rationale written in a comment.
 
 > **Rule.** When a mechanism runs at several points in a lifecycle, enumerate
@@ -324,7 +324,7 @@ already had the correct handling, with the rationale written in a comment.
 ### If a surface prints an identifier, it must accept that identifier back
 
 A retrieval surface displayed keys in one form and accepted them in another.
-The failure mode was silence — a lookup that returned nothing, indistinguishable
+The failure mode was silence: a lookup that returned nothing, indistinguishable
 from a lookup with no matches.
 
 > **Rule.** Round-trip every identifier a user or a model can see. And when a
@@ -335,7 +335,7 @@ from a lookup with no matches.
 
 ## G. Structural tensions we have not resolved
 
-Not lessons — open problems, recorded honestly because a design document that
+Not lessons but open problems, recorded honestly because a design document that
 only lists solved problems is marketing.
 
 - **Mass re-concentrates faster than extraction relieves it.** Every
@@ -351,10 +351,10 @@ only lists solved problems is marketing.
   little. OS-level sandboxing is the largest known gap in the design.
 - **Hand-maintained data at scale.** A model catalog of hundreds of rows, priced
   by hand, is the sole input to cost accounting and has no staleness signal.
-- **Invariants enforced by convention.** Several load-bearing rules — lock
-  ordering, a required assignment without which a host is ungated, a
-  cross-process display invariant — are held by comments and single tests
-  rather than by types.
+- **Invariants enforced by convention.** Several load-bearing rules are held
+  by comments and single tests rather than by types: lock ordering, a required
+  assignment without which a host is ungated, and a cross-process display
+  invariant.
 
 The standing agenda that tracks these, with per-subsystem evidence, lives in the
 development repository under `docs/architecture/`.

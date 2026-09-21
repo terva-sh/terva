@@ -2,7 +2,7 @@ package agent
 
 // The interactive entry point: the TUI driving an in-process Workspace
 // through the ctrlproto WorkspaceService instead of a directly-owned
-// core.Agent (docs/proposals/tui-on-ctrlproto.md; the legacy direct driver
+// core.Agent (docs/proposals/archive/tui-on-ctrlproto.md; the legacy direct driver
 // has been removed — --tui-legacy is accepted as a deprecated no-op). This is
 // the protocol's completeness test — the same TUI should later drive a remote
 // daemon over a serialized carrier, which is why the hot path consumes the

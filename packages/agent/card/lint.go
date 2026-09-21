@@ -12,8 +12,9 @@ import (
 
 // Finding is one deterministic card-lint result — a fact or problem found by
 // static analysis, with no model involved. Lint is the substrate the Stage card
-// doctor reads FIRST to orient toward the most critical fixes (see
-// docs/proposals/stage-card-doctor.md); the web character sheet renders these
+// doctor reads FIRST to orient toward the most critical fixes (the shipped
+// verbs are cards.lint and cards.doctor in docs/controllers.md; the proposal
+// that named this was never written); the web character sheet renders these
 // same findings. Severity is "warn" (a real problem) or "info" (a fact worth
 // surfacing). Field names the offending card field; Detail carries the offending
 // snippet when one exists.

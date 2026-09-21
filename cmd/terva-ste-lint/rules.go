@@ -50,15 +50,91 @@ var (
 	// codeSpanRe strips the spans a reader is meant to type verbatim. A flag,
 	// an enum value, or a path is not prose and must not be held to prose rules
 	// — `set -e`, `git add -A` and "0755" would otherwise each raise something.
-	codeSpanRe = regexp.MustCompile("`[^`]*`|\"[^\"]*\"|'[^']*'|\\$[A-Z_]+|\\b[a-z_]+\\([^)]*\\)|\\b[a-z]+(?:_[a-z]+)+\\b|<[a-z_]+>|\\b[0-9]+(?:o[0-7]+|x[0-9a-fA-F]+)?\\b|\\.[a-z]{2,6}\\b|\\*\\*?/?\\S*")
+	//
+	// The single-quoted span is not an alternative here. It needs a test on the
+	// characters either side of the quote, which is blankSingleQuoted below.
+	codeSpanRe = regexp.MustCompile("`[^`]*`|\"[^\"]*\"|\\$[A-Z_]+|\\b[a-z_]+\\([^)]*\\)|\\b[a-z]+(?:_[a-z]+)+\\b|<[a-z_]+>|\\b[0-9]+(?:o[0-7]+|x[0-9a-fA-F]+)?\\b|\\.[a-z]{2,6}\\b|\\*\\*?/?\\S*")
 )
 
 // stripCode blanks the verbatim spans while preserving length-independent word
 // boundaries, so positions in the remaining prose stay meaningful.
 func stripCode(s string) string {
+	s = blankSingleQuoted(s)
 	return codeSpanRe.ReplaceAllStringFunc(s, func(m string) string {
 		return strings.Repeat(" ", len(m))
 	})
+}
+
+// blankSingleQuoted blanks 'a quoted span' and leaves an English possessive
+// alone, which the same character also spells.
+//
+// What separates them is the neighbours rather than the quote: a possessive
+// carries a letter on both sides of its apostrophe, and an opening quote never
+// does. So both ends are tested, and "the agent's tools" and "the agents'
+// tools" stay prose while "give 'confirm' and 'revise'" does not.
+//
+// This replaced a bare '[^']*' alternative in codeSpanRe that read the gap
+// between two possessives as one quoted span. The failure was silent and it
+// cost the documentation gate real findings: "terva's posture — what is
+// encrypted ... the store's grant model" blanked both em dashes before
+// emDashRe saw them, and docs/controllers.md passed with four of them still in
+// it. TKT-01M2NZAP8 carries the measurement.
+//
+// A scan rather than another alternative, for two reasons. RE2 has no
+// lookbehind, so a pattern must consume the character before the quote and put
+// it back afterwards. Worse, consuming the character after the closing quote
+// hides the next span, which 'a' 'b' trips on at once.
+func blankSingleQuoted(s string) string {
+	var b []byte
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\'' || (i > 0 && quoteNeighbour(s[i-1])) {
+			continue
+		}
+		end := closingQuote(s, i)
+		if end < 0 {
+			continue
+		}
+		if b == nil {
+			b = []byte(s)
+		}
+		for j := i; j <= end; j++ {
+			b[j] = ' '
+		}
+		i = end
+	}
+	if b == nil {
+		return s
+	}
+	return string(b)
+}
+
+// closingQuote returns the index of the quote that closes the span opened at
+// open, or -1 when the span never closes.
+//
+// A candidate with a letter after it is a possessive inside the quoted text,
+// so the search steps over it rather than stopping: 'don't do this' closes at
+// the end and not in the middle. An unclosed quote returns -1 and blanks
+// nothing, because half a span is more likely a stray apostrophe than a span.
+func closingQuote(s string, open int) int {
+	for j := open + 1; j < len(s); j++ {
+		if s[j] == '\n' {
+			return -1
+		}
+		if s[j] != '\'' {
+			continue
+		}
+		if j+1 == len(s) || !quoteNeighbour(s[j+1]) {
+			return j
+		}
+	}
+	return -1
+}
+
+// quoteNeighbour reports whether a byte beside an apostrophe binds it into a
+// word. isWordByte is not reused: it counts "-" for the sake of the term
+// check, and a hyphen beside a quote is punctuation rather than a possessive.
+func quoteNeighbour(b byte) bool {
+	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
 func sentences(paragraph string) []string {
@@ -158,11 +234,15 @@ func checkSentence(raw, prose string, words []string, report func(rule, msg, quo
 
 	// Both aside checks run on the stripped sentence: a ` -- ` or `;` inside
 	// a verbatim span (`git checkout -- <file>`) is typed text, not prose.
+	//
+	// They report under separate names because the docs/ tier takes the
+	// em-dash half alone. Splitting them is what lets one rule set carry one
+	// half; see rulesDocsEmDash in policy.go.
 	if emDashRe.MatchString(stripCode(raw)) {
-		report("aside", "an em-dash aside hides a second sentence — promote it", raw)
+		report("aside-em-dash", "an em-dash aside hides a second sentence — promote it", raw)
 	}
 	if semicolonRe.MatchString(stripCode(raw)) {
-		report("aside", "a semicolon joins two sentences — write them as two", raw)
+		report("aside-semicolon", "a semicolon joins two sentences — write them as two", raw)
 	}
 
 	for term, want := range bannedTerms {

@@ -858,7 +858,7 @@ func parseCodexBool(s string) bool {
 // Anything else — including a small int that would be a relative offset
 // rather than an epoch — yields the zero time (reset shown as unknown)
 // rather than a wrong absolute time. (Encoding to be reconfirmed against
-// a live response; see docs/plans/usage-windows.md §7.)
+// a live response; see docs/plans/archive/usage-windows.md §7.)
 func parseCodexResetAt(s string) time.Time {
 	s = strings.TrimSpace(s)
 	if s == "" {

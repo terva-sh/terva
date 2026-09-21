@@ -665,7 +665,7 @@ func ctxHistMessageNode(id string, m provider.Message) ctrlproto.ContextNode {
 // ctxBuildTree assembles the ContextBreakdown.Tree outline: the sections the
 // scalar fields summarize, with the transcript grouped into turns down to
 // message stubs. Sizes + labels only — message bodies are fetched lazily via
-// context.node (later stages). See docs/proposals/context-inspector.md.
+// context.node (later stages). See docs/proposals/archive/context-inspector.md.
 func ctxBuildTree(b ctrlproto.ContextBreakdown, msgNodes []ctrlproto.ContextNode, msgs []provider.Message) *ctrlproto.ContextNode {
 	sys := ctrlproto.ContextNode{ID: "sys", Kind: "section", Label: "system prompt", Bytes: b.SystemBytes, Expandable: b.SystemBytes > 0}
 	if b.ExtGuidanceBytes > 0 {

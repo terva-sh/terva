@@ -167,7 +167,7 @@ type cachedWebhook struct {
 // deliver content without MESSAGE_CONTENT; other guild messages arrive
 // with empty content and the transport skips them — which is exactly
 // the mention-gated group posture the connector wants by default (see
-// docs/plans/discord-connector.md).
+// docs/plans/archive/discord-connector.md).
 var wantedIntents = []gateway.Intents{
 	gateway.IntentGuilds,
 	gateway.IntentGuildMessages,

@@ -15,6 +15,10 @@
 //	terva-ste-lint -rule term     # one rule only
 //	terva-ste-lint -list          # show the enrolled text, check nothing
 //
+// Two corpora are enrolled, each with its own baseline. The tool text is held
+// to the full policy. The public documentation tier under docs/ is held to the
+// em-dash aside alone, per decision 0015; docsscope.go carries that reasoning.
+//
 // Scope is per directory and lives in scope.go, so a tool added to an enrolled
 // package is covered without anyone remembering to enrol it.
 //
@@ -34,12 +38,32 @@ import (
 	"strings"
 )
 
+// A pass is one enrolled corpus with the baseline that holds it. The two
+// differ in what they read and in which rules apply, and nothing else, so the
+// run below is the same code twice rather than two code paths.
+type pass struct {
+	label        string
+	unit         string
+	texts        []Text
+	baselinePath string
+	recipe       string
+	note         string
+	judged       func(rule string) bool
+}
+
+const toolBaselineNote = "These are not accepted policy. They are the residue of the Phase 1 conversion " +
+	"— mostly sentences that carry two clauses joined by 'and' or 'because'. Burn them down."
+
+const docsBaselineNote = "Empty, and that is the finished state. AGENTS.md adopts unslop rule 13 for docs/, " +
+	"decision 0015 gave this count a ratchet, and the documentation sweep drove it from 828 to zero. " +
+	"An entry appearing here again means a page regressed: convert it rather than re-seeding the file."
+
 func main() {
 	var (
 		root      = flag.String("root", ".", "repository root")
 		checkErr  = flag.Bool("check", false, "exit 1 on a finding the baseline does not already hold")
 		only      = flag.String("rule", "", "report one rule only")
-		list      = flag.Bool("list", false, "print the enrolled tool text and exit")
+		list      = flag.Bool("list", false, "print the enrolled text and exit")
 		quiet     = flag.Bool("q", false, "summary only")
 		noBase    = flag.Bool("no-baseline", false, "ignore the baseline: report every finding")
 		writeBase = flag.Bool("write-baseline", false, "record today's findings as the accepted baseline")
@@ -51,27 +75,70 @@ func main() {
 		fmt.Fprintln(os.Stderr, "terva-ste-lint:", err)
 		os.Exit(2)
 	}
+	docsTexts, err := collectDocs(*root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "terva-ste-lint:", err)
+		os.Exit(2)
+	}
 	if *list {
-		for _, t := range texts {
+		for _, t := range append(append([]Text{}, texts...), docsTexts...) {
 			fmt.Printf("%s:%d %s\n%s\n\n", t.File, t.Line, t.What, t.Body)
 		}
-		fmt.Fprintf(os.Stderr, "%d pieces of tool text in %d enrolled directories\n", len(texts), len(enrolledDirs))
+		fmt.Fprintf(os.Stderr, "%d pieces of tool text in %d enrolled directories, %d prose blocks in docs/\n",
+			len(texts), len(enrolledDirs), len(docsTexts))
 		return
 	}
 
 	dict, haveDict := loadDictionary(*root)
 
+	passes := []pass{
+		{
+			label: "tool text", unit: "pieces of tool text", texts: texts,
+			baselinePath: baselinePath, recipe: "ste-lint-baseline", note: toolBaselineNote,
+			judged: judgedRules(*only, haveDict),
+		},
+		{
+			label: "documentation", unit: "text blocks", texts: docsTexts,
+			baselinePath: docsBaselinePath, recipe: "ste-lint-baseline", note: docsBaselineNote,
+			// The docs tier runs one rule, so every other rule is unjudged
+			// here for the same reason vocabulary is unjudged without a
+			// dictionary: nothing looked at the text.
+			judged: func(rule string) bool {
+				return (*only == "" || rule == *only) && rule == asideEmDashRule
+			},
+		},
+	}
+
+	failed := false
+	for _, p := range passes {
+		if runPass(p, *root, dict, haveDict, *only, *quiet, *noBase, *writeBase) {
+			failed = true
+		}
+	}
+	if !haveDict {
+		fmt.Fprintf(os.Stderr, "  (vocabulary rule skipped: no %s — see cmd/terva-ste-lint/dictionary.go)\n", dictionaryPath)
+	}
+	if *checkErr && failed {
+		os.Exit(1)
+	}
+}
+
+// runPass checks one corpus and reports it. It returns whether this corpus
+// would fail a -check run, which is a new finding or a baseline entry that
+// stopped firing. The caller decides what to do with that, so -check stays one
+// decision made once rather than an exit scattered through the passes.
+func runPass(p pass, root string, dict map[string]bool, haveDict bool, only string, quiet, noBase, writeBase bool) bool {
 	var all []Finding
-	for _, t := range texts {
+	for _, t := range p.texts {
 		all = append(all, check(t)...)
 		if haveDict {
 			all = append(all, checkVocabulary(t, dict)...)
 		}
 	}
-	if *only != "" {
+	if only != "" {
 		var kept []Finding
 		for _, f := range all {
-			if f.Rule == *only {
+			if f.Rule == only {
 				kept = append(kept, f)
 			}
 		}
@@ -85,48 +152,51 @@ func main() {
 		return all[i].Text.Line < all[j].Text.Line
 	})
 
-	if *writeBase {
+	if writeBase {
 		// A narrowed run sees one rule's findings, and writeBaseline records
 		// exactly what it is given: -write-baseline -rule X would drop every
 		// other rule's accepted entry on the floor. That satisfies "the file
 		// can only shrink" in the one way the invariant did not mean.
-		if *only != "" {
+		if only != "" {
 			fmt.Fprintf(os.Stderr, "terva-ste-lint: -write-baseline cannot be narrowed with -rule %s — "+
-				"it would drop every other rule's entries from %s\n", *only, baselinePath)
+				"it would drop every other rule's entries from %s\n", only, p.baselinePath)
 			os.Exit(2)
 		}
-		if err := writeBaseline(*root, all); err != nil {
+		n, err := writeBaseline(root, p.baselinePath, p.recipe, p.note, all)
+		if err != nil {
 			fmt.Fprintln(os.Stderr, "terva-ste-lint:", err)
 			os.Exit(2)
 		}
-		fmt.Fprintf(os.Stderr, "terva-ste-lint: wrote %s with %d finding(s)\n", baselinePath, len(all))
-		return
+		fmt.Fprintf(os.Stderr, "terva-ste-lint: wrote %s with %d entr(ies) from %d finding(s)\n",
+			p.baselinePath, n, len(all))
+		return false
 	}
 
 	total := len(all)
 	var stale, unjudged []string
-	if !*noBase {
-		if base, ok := loadBaseline(*root); ok {
-			all, stale, unjudged = applyBaseline(all, base, judgedRules(*only, haveDict))
+	if !noBase {
+		if base, ok := loadBaseline(root, p.baselinePath); ok {
+			all, stale, unjudged = applyBaseline(all, base, p.judged)
 		}
 	}
 
 	byRule := map[string]int{}
 	for _, f := range all {
 		byRule[f.Rule]++
-		if !*quiet {
+		if !quiet {
 			fmt.Println(f)
 		}
 	}
 
-	if !*quiet && len(all) > 0 {
+	if !quiet && len(all) > 0 {
 		fmt.Println()
 	}
 	if total != len(all) {
-		fmt.Fprintf(os.Stderr, "terva-ste-lint: %d new finding(s) over %d pieces of tool text (%d held by the baseline)\n",
-			len(all), len(texts), total-len(all))
+		fmt.Fprintf(os.Stderr, "terva-ste-lint: %d new %s finding(s) over %d %s (%d held by the baseline)\n",
+			len(all), p.label, len(p.texts), p.unit, total-len(all))
 	} else {
-		fmt.Fprintf(os.Stderr, "terva-ste-lint: %d finding(s) over %d pieces of tool text\n", len(all), len(texts))
+		fmt.Fprintf(os.Stderr, "terva-ste-lint: %d %s finding(s) over %d %s\n",
+			len(all), p.label, len(p.texts), p.unit)
 	}
 	if len(byRule) > 0 {
 		rules := make([]string, 0, len(byRule))
@@ -138,14 +208,9 @@ func main() {
 			fmt.Fprintf(os.Stderr, "  %-18s %d\n", r, byRule[r])
 		}
 	}
-	if !haveDict {
-		fmt.Fprintf(os.Stderr, "  (vocabulary rule skipped: no %s — see cmd/terva-ste-lint/dictionary.go)\n", dictionaryPath)
-	}
 	reportUnjudged(unjudged)
-	reportStale(stale)
-	if *checkErr && (len(all) > 0 || len(stale) > 0) {
-		os.Exit(1)
-	}
+	reportStale(stale, p.recipe)
+	return len(all) > 0 || len(stale) > 0
 }
 
 // judgedRules reports, for this invocation, whether a baseline entry for a

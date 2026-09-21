@@ -28,7 +28,7 @@ import "encoding/json"
 // ProtocolMax is the highest. The host negotiates the highest version
 // both sides support (hello carries the connector's [min,max]; the
 // hello_ack answers with the pick). Version 2 — stage A of
-// docs/proposals/connector-protocol-v2.md — adds message identity:
+// docs/proposals/archive/connector-protocol-v2.md — adds message identity:
 // message.id/ts/chat_kind/chat_title, result.message_id, true
 // in-reply-to semantics for reply_to, and the two-sided feature-string
 // capability exchange. Every v2 field is additive (omitempty), so v1
@@ -305,7 +305,7 @@ const (
 // HelloAckFromHost answers hello with the negotiated protocol version
 // and the connector's scratch directory for inbound attachments.
 // ZotVersion and TervaVersion carry the SAME value under both naming
-// eras (the rename bridge, docs/plans/rename-terva.md); zot_version
+// eras (the rename bridge, docs/plans/archive/rename-terva.md); zot_version
 // stays until the connector-SDK deprecation window closes.
 type HelloAckFromHost struct {
 	Type         string `json:"type"` // "hello_ack"

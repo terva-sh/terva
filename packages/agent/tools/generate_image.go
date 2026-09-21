@@ -18,7 +18,7 @@ import (
 // backend, returns it inline for display, and — when `path` is given — writes it
 // into the workspace through the sandbox so it composes with the rest of the
 // tooling (e.g. placeholder assets during project work). It is the read tool's
-// image branch in reverse. See docs/proposals/image-generation.md.
+// image branch in reverse. See docs/proposals/archive/image-generation.md.
 //
 // It is registered only when an image backend is configured (build.go), and is
 // a mutating tool (not in the read-only set), so it is approval-gated and absent

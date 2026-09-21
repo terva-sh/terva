@@ -1,7 +1,7 @@
-# 04 — Permission and sandboxing
+# 04: Permission and sandboxing
 
 The threat is less exotic than the discourse suggests. The dangerous case is not
-a malicious model; it is a *confused* one — an agent that misreads a path and
+a malicious model. It is a *confused* one: an agent that misreads a path and
 deletes the wrong directory, or that reads a file containing text addressed to
 it and follows the instructions it finds there.
 
@@ -42,13 +42,13 @@ Two corollaries:
 
 **Converged.** A workable ordering, each layer able to stop the call:
 
-1. **User hooks** — external programs the user configured. Theirs; first.
-2. **Policy and approval** — the typed rules and the mode. The core decision.
-3. **Plugin intercepts** — extensions that asked to see calls.
+1. **User hooks**: external programs the user configured. Theirs; first.
+2. **Policy and approval**: the typed rules and the mode. The core decision.
+3. **Plugin intercepts**: extensions that asked to see calls.
 
 The rule that makes layer 3 safe: **a plugin may tighten a decision, never
 loosen it.** Gemini CLI enforces the same constraint on extension-contributed
-policy rules, and for the same reason — a plugin that can grant itself
+policy rules, and for the same reason: a plugin that can grant itself
 permission is a plugin that has permission. The cheapest way to guarantee it is
 structural: return on denial *before* the interceptors run, so there is no code
 path in which an interceptor is even asked about a call the policy refused.
@@ -62,8 +62,8 @@ given every plugin the user's authority.
 And be precise about what "tighten only" covers. If your interceptors can also
 **rewrite arguments**, then the arguments a human approved and the arguments
 that execute may differ, even though the allow/deny decision was never
-loosened. That is defensible — a plugin running as local code needs no such
-route to do damage — but document it, because "the gate is the last word" is
+loosened. That is defensible, because a plugin running as local code needs no such
+route to do damage, but document it, because "the gate is the last word" is
 what readers will otherwise assume.
 
 ### Keep mutable decisions separate from observation
@@ -100,7 +100,7 @@ project. Users then pick the permissive option and you have shipped nothing.
 | **workspace** | First-party tools and all reads free; foreign side-effecting tools prompt |
 | **yolo** | Everything runs |
 
-Two details worth copying. **Plan mode refuses rather than prompts** — that is
+Two details worth copying. **Plan mode refuses rather than prompts**, and that is
 what steers the model to present a plan instead of attempting a change and
 waiting on a dialog. And the distinction between the middle rungs is **origin**,
 not just read-versus-write: your own built-in tools may be trusted to run when a
@@ -109,7 +109,7 @@ third-party server's mutating tool is not, even though both write.
 ### Classify authority; a read-only boolean is wrong
 
 **Scarred, converged.** The case that proves it is web fetch. It reads nothing
-locally — so a boolean calls it read-only — yet it can exfiltrate data, trigger
+locally, so a boolean calls it read-only, yet it can exfiltrate data, trigger
 remote logging, and reach hosts inside your network. Auto-allowing it as "a
 read" is exactly backwards.
 
@@ -118,17 +118,17 @@ A workable taxonomy, closed set:
 | Class | Auto-allowable |
 |---|---|
 | local read | yes |
-| local data — reads and writes *only its own* host-managed directory | yes |
+| local data, reads and writes *only its own* host-managed directory | yes |
 | workspace mutation | no |
 | process execution | no |
 | network read | **no** |
 | external mutation | no |
-| user interaction — blocks to ask a question, no other effect | always permitted |
+| user interaction, blocks to ask a question and has no other effect | always permitted |
 
 Three properties matter more than the exact list. The classification is
-**advisory data, not a capability grant** — a tool cannot widen its reach by
+**advisory data, not a capability grant**: a tool cannot widen its reach by
 declaring a gentler class, because the host controls what it can reach.
-**Unknown values fail closed** — an unrecognized class is side-effecting.
+**Unknown values fail closed**: an unrecognized class is side-effecting.
 And the *user-interaction* class exists because gating a question behind an
 approval prompt, or refusing it in plan mode, is nonsensical, and without a
 class for it you will special-case it somewhere worse.
@@ -141,7 +141,7 @@ class for it you will special-case it somewhere worse.
 
 **Reported, converged.** Prompting forty times for the same command trains the
 user to approve without reading. Anthropic reports that adding sandboxing cut
-permission prompts by 84% — a vendor-reported figure, but the direction is
+permission prompts by 84%, which is a vendor-reported figure, but the direction is
 uncontroversial and the framing is right: **reducing prompts is a security
 outcome, not a convenience one.**
 
@@ -160,7 +160,7 @@ an unconditional grant wearing a specific-looking label.
 decides. Judging the whole string as one opaque prompt was a real gap we shipped
 and closed.
 
-Do the decomposition in the *policy*, not only in the sandbox — otherwise a
+Do the decomposition in the *policy*, not only in the sandbox, because otherwise a
 rules-free session judges the compound as one unit while the sandbox splits it,
 and the two disagree. The most accurate approach in the field parses the shell
 with a real grammar rather than pattern-matching; that is worth the dependency
@@ -189,8 +189,8 @@ decision.
 Two properties this needs, both learned by not having them:
 
 **Trust must be live.** Granting it mid-session has to actually re-derive what
-it gates — project hooks start running, project context becomes discoverable,
-project-suggested rules reach the running gate — and revoking must tear the same
+it gates, so project hooks start running, project context becomes discoverable
+and project-suggested rules reach the running gate. Revoking must tear the same
 things down. A trust flag that only takes effect at next launch is a trust flag
 that lied.
 
@@ -211,7 +211,7 @@ an unknown mode wrongly handed full autonomy runs every tool unconfirmed,
 anywhere on the filesystem, and is silent about it.
 
 Also check what the child actually inherits, rather than what its command line
-says. Ours passed no plugin flags — and the child then ran full default
+says. Ours passed no plugin flags, and the child then ran full default
 discovery anyway, with a permissive posture and no gate object. The argv was
 honest; the child was not.
 
@@ -223,7 +223,7 @@ honest; the child was not.
 
 **Scarred.** Path canonicalization with symlinks followed, rejection of paths
 outside the root (including for files that do not exist yet, checked via the
-nearest existing parent), and command-pattern refusal for obvious escapes — this
+nearest existing parent), and command-pattern refusal for obvious escapes: this
 is a **guardrail, not a security boundary.** It raises the cost of an accident
 by a great deal and the cost of a determined escape by very little.
 
@@ -241,20 +241,20 @@ this for us, the model issued eight parallel reads outside the root, had all
 eight refused, and fetched the same bytes through a shell pipeline on the very
 next turn.
 
-So the refusal bought no confinement, cost a full turn, and — the part that
-matters — **taught the model to probe for the gap.** A guardrail that is
+So the refusal bought no confinement, cost a full turn, and, the part that
+matters, **taught the model to probe for the gap.** A guardrail that is
 trivially circumventable does not degrade to "no guardrail"; it degrades to
 "training data for circumvention," and the behavior it teaches persists after
 the model leaves the case that taught it.
 
-Our resolution was to make the axes honest about what they actually do:
-**writes are contained; reads get a deny list** of the things genuinely worth
-denying and that shell access reaching them anyway does not excuse —
-credentials, session transcripts, the log sink they leak into. Enumerated by the
-host, not inferred.
+Our resolution was to make the axes honest about what they actually do: **writes
+are contained; reads get a deny list** of the things genuinely worth denying and
+that shell access reaching them anyway does not excuse: credentials, session
+transcripts, and the log sink they leak into. Enumerated by the host, not
+inferred.
 
 > **Rule.** For each control, ask what the cheapest route around it costs the
-> model. If the answer is "one turn," you have a tax, not a boundary — either
+> model. If the answer is "one turn," you have a tax, not a boundary. Either
 > close the route or drop the control and say what is actually protected.
 
 The related claim to avoid: a plugin system whose *tool calls* are permission-
@@ -265,12 +265,12 @@ full privileges. Installing a plugin is consent to run a local program. State it
 
 **Reported.** The field's state, for anyone deciding whether to build it:
 
-- **macOS** — `sandbox-exec` with a generated profile. A subprocess, not an API,
+- **macOS**: `sandbox-exec` with a generated profile. A subprocess, not an API,
   but it ships with the OS.
-- **Linux** — bubblewrap plus seccomp is the current mainstream path; Landlock
+- **Linux**: bubblewrap plus seccomp is the current mainstream path; Landlock
   is plain syscalls and needs no C bindings, which makes it viable as a
   no-dependency fallback.
-- **Windows** — restricted tokens.
+- **Windows**: restricted tokens.
 
 Network policy is the piece people forget: Claude Code enforces a domain
 allowlist from a **separate proxy process outside the sandbox**, because a
@@ -279,8 +279,8 @@ policy enforced inside the thing you are containing is not a policy.
 ### Harden the subprocesses you spawn
 
 **Converged.** When spawning plugins, connectors or tool servers, filter the
-environment. Goose maintains a blocklist of roughly thirty-one variables —
-`LD_PRELOAD`, `PYTHONPATH`, `NODE_OPTIONS`, `PATH` and friends — because
+environment. Goose maintains a blocklist of roughly thirty-one variables such as
+`LD_PRELOAD`, `PYTHONPATH`, `NODE_OPTIONS` and `PATH`, because
 inheriting them hands the child an injection surface you did not intend to open.
 
 Cheap, and it closes a real class.
@@ -292,5 +292,5 @@ Cheap, and it closes a real class.
 **Converged.** Log every gate decision with: the tool, the arguments (or a
 scoped digest of them), the decision, the reason, the rule or grant that
 produced it, and which host asked. Put the record *inside* the gate rather than
-at the call sites — we had three doors into ours and only one of them logged,
+at the call sites. We had three doors into ours and only one of them logged,
 which is exactly the arrangement that makes an audit log worse than none.

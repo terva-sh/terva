@@ -2,7 +2,7 @@
 // swappable backends — hosted (OpenAI/Azure/…) or self-hosted (LocalAI,
 // AUTOMATIC1111, ComfyUI) — kept separate from the model catalog. It is the
 // substrate for the generate_image tool; the design and phased plan live in
-// docs/proposals/image-generation.md.
+// docs/proposals/archive/image-generation.md.
 //
 // There is no single self-host standard for image generation (unlike
 // OpenAI-compatible chat), so a Backend is one implementation per wire protocol

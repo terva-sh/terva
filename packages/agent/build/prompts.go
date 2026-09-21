@@ -10,7 +10,7 @@ import "terva.sh/terva/packages/i18n"
 // when-NOT-to-use, the [auto-swarm update] recap) live in the tool description +
 // the recap message; valid Persona names live in the tool's schema enum. So this
 // stays short — just the "reach for it proactively" push a bare tool wouldn't
-// give. See docs/proposals/web-i18n-authoring.md (sibling auto-swarm discussion).
+// give. See docs/proposals/archive/web-i18n-authoring.md (sibling auto-swarm discussion).
 const AutoSwarmSystemAddendum = `When a request naturally splits into independent sub-tasks that can run concurrently, reach for swarm_spawn proactively rather than doing everything sequentially yourself — spawn one sub-agent per independent task and keep the coordinating work moving in parallel. Sub-agents are also your context shield: when a step would pull large content into your own context (reading a long file, sweeping many files, digesting a big log), delegate it to a sub-agent whose task says what to extract, and work from the concise summary it reports back.`
 
 // SwarmWorktreeSystemAddendum is the environment fact a coordinator cannot see

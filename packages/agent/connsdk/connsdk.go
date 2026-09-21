@@ -7,7 +7,7 @@
 // that `terva bot` invokes, so a minimal Go connector is ~50 lines.
 //
 // The protocol is small enough that any language works without an
-// SDK; see docs/connectors.md for the frame reference.
+// SDK; see docs/connector-protocol.md for the frame reference.
 package connsdk
 
 import (
@@ -73,7 +73,7 @@ type Attachment struct {
 
 // Message is one normalized inbound chat message.
 //
-// Protocol-2 identity (stage A, docs/proposals/connector-protocol-v2.md):
+// Protocol-2 identity (stage A, docs/proposals/archive/connector-protocol-v2.md):
 // ID is the message's own service id (stable within its chat — mint one
 // if the service has none), TS is when it happened (unix milliseconds),
 // and ReplyTo is the id of the message this one replies TO. ChatKind
@@ -468,7 +468,7 @@ func usage(name string) {
 // extension SDK (packages/agent/ext) runs the SAME engine over an
 // in-process pipe pair when an extension also plays the connector role
 // (the connproto frames then ride the extension wire inside `chat`
-// envelope frames — docs/proposals/connector-extensions.md). Only the
+// envelope frames — docs/proposals/archive/connector-extensions.md). Only the
 // carrier differs; there is exactly one implementation of the
 // connector protocol's author side.
 //

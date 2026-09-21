@@ -1,6 +1,6 @@
 # Profiling terva
 
-How to measure where the harness spends CPU and memory — chiefly the
+How to measure where the harness spends CPU and memory, chiefly the
 interactive TUI, whose render loop is the usual suspect when terva pegs a
 core while streaming. For what that loop actually does, see
 [tui.md](tui.md); this doc is the tooling around it.
@@ -20,7 +20,7 @@ The `net/http/pprof` endpoint is **off in every shipped build**. It
 compiles in only under the `terva_pprof` build tag, and even then stays
 dormant until you set the `TERVA_PPROF` environment variable. This is
 deliberate: a heap or goroutine dump can expose in-memory secrets
-(`auth.json`-class credentials) to anyone who can reach the port — the
+(`auth.json`-class credentials) to anyone who can reach the port, the
 same exposure `procenv.Harden()` guards against by disabling core dumps.
 
 `just install-dev` is the one build that opts in. Compared to
@@ -42,14 +42,14 @@ silently.
 
 The `terva_pprof` tag also defaults the streaming **redraw cap** to
 uncapped (normal builds cap at 30fps), so a CPU profile reflects every
-frame the loop would paint rather than a throttled subset — any redundant
+frame the loop would paint rather than a throttled subset, so any redundant
 draw is then an optimization target. Set `TERVA_REDRAW_FPS` to impose a
 cap in a profiling build, or to raise/disable it in a normal one (see
 [tui.md](tui.md#redraw-rate)).
 
 > Bind to **localhost only**. `TERVA_PPROF` takes a `host:port`; anything
-> non-local exposes profiling data — and the secrets a heap dump may
-> contain — to the network.
+> non-local exposes profiling data, and the secrets a heap dump may
+> contain, to the network.
 
 ## Capturing a profile
 
@@ -78,7 +78,7 @@ and use `top30` / `list <Func>` in the terminal instead.
 ## The free GC probe
 
 Before reaching for pprof, `GODEBUG=gctrace=1` costs nothing and directly
-answers "is this garbage collection?" — useful when CPU sawtooths
+answers "is this garbage collection?", which is useful when CPU sawtooths
 (spike, drop, spike) under load, the classic signature of a hot path
 allocating faster than it needs to:
 
@@ -89,14 +89,14 @@ TERVA_PPROF=localhost:6060 GODEBUG=gctrace=1 terva 2>/tmp/terva-gctrace.log
 Each GC cycle prints one line to the log (redirected so it doesn't
 corrupt the TUI). Many cycles per second during streaming, with the
 cumulative GC CPU percentage climbing into double digits, means the
-redraw path is allocating too much — go find it in the `allocs` profile.
+redraw path is allocating too much, so go find it in the `allocs` profile.
 
 ## Zero-instrument sampling (macOS)
 
 For a 60-second triage without the pprof endpoint, macOS `sample` stack-
 samples a running process. It needs symbols, so point it at a
-**non-stripped** binary (`just install-dev`, or `just build` is stripped
-— don't use a release install):
+**non-stripped** binary (`just install-dev`, or `just build` is stripped,
+so don't use a release install):
 
 ```bash
 sample "$(pgrep -n terva)" 10 -file /tmp/terva.sample.txt
@@ -106,15 +106,15 @@ sample "$(pgrep -n terva)" 10 -file /tmp/terva.sample.txt
 
 Common hot spots in a TUI CPU profile and what they implicate:
 
-- `github.com/alecthomas/chroma/...` (`Tokenise`, `Coalesce`) —
+- `github.com/alecthomas/chroma/...` (`Tokenise`, `Coalesce`):
   syntax-highlighting work. Static blocks are cached
   (`packages/tui/highlight.go`); a *growing* streaming block misses the
   cache every frame.
-- `terva.sh/terva/packages/tui` view/layout functions — full-transcript
+- `terva.sh/terva/packages/tui` view/layout functions: full-transcript
   re-render. The streaming pacer (`paintPaceInterval`, ~16ms) and the
   120ms animation ticker (`packages/agent/modes/interactive.go`) both
   drive redraws while a turn is busy; redraws are throttled to ~16ms.
-- `runtime.mallocgc` + `runtime.gcBgMarkWorker` near the top — allocation
+- `runtime.mallocgc` + `runtime.gcBgMarkWorker` near the top: allocation
   churn feeding GC; corroborate with the `allocs` profile and the
   `gctrace` log above.
 
@@ -138,19 +138,19 @@ go tool pprof -top /tmp/deep.cpu
 
 What they cover:
 
-- `BenchmarkDeepSessionTurn` (`packages/core`) — one turn's critical path
+- `BenchmarkDeepSessionTurn` (`packages/core`): one turn's critical path
   (assembling the provider request from the full history, the loop, appending
   the reply) on an already-deep (~1000-message) session, driven by a fake
   agent standing in for the model. This is the path that churned on long
   sessions; watch ns/op and allocs/op as a function of depth.
-- `BenchmarkDescribeSessions` (`packages/core`) — the session-listing scan (the
+- `BenchmarkDescribeSessions` (`packages/core`): the session-listing scan (the
   `/sessions` picker and the startup scan) over many sessions on disk.
-- `BenchmarkSynthesizeDeepSession` (`packages/agent/replay`) — the replay
+- `BenchmarkSynthesizeDeepSession` (`packages/agent/replay`): the replay
   tooling reconstructing a deep session into its ordered frame stream.
 
 `go test -race ./...` (hence `just ci`) compiles the benchmarks but does not run
 them: they can't bitrot silently, and they never slow the gate. There is no
-committed baseline file — benchmark numbers are only comparable on the same
+committed baseline file, because benchmark numbers are only comparable on the same
 host, so capture `-count 6` numbers on your machine and compare like-for-like.
 
 Candidate additions as those surfaces grow: ctrlproto snapshot/event

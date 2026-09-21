@@ -2,11 +2,11 @@
 
 terva can generate images with the built-in **`generate_image`** tool, backed by
 a registry of image services you configure. It is **opt-in** and **off by
-default** — with no `image` config block the tool does not exist.
+default**: with no `image` config block the tool does not exist.
 
 This complements image *input* (vision): terva already reads image files and
 renders images in the web client and TUI. `generate_image` is the other
-direction — the model producing an image.
+direction, the model producing an image.
 
 ## Quick start
 
@@ -74,12 +74,12 @@ OpenAI-compatible chat), so backends are chosen by **protocol**:
 
 The `openai-images` adapter covers the easiest self-host path:
 [LocalAI](https://localai.io/features/image-generation/) is a drop-in that serves
-SD/SDXL/Flux on the same API — point a backend's `base_url` at it. Its
+SD/SDXL/Flux on the same API; point a backend's `base_url` at it. Its
 negative-prompt convention (`prompt|negative`) is enabled with
 `"negative_pipe": true`.
 
 The **`a1111`** protocol talks to a Stable Diffusion WebUI
-(AUTOMATIC1111/Forge) directly — the huge existing self-host install base:
+(AUTOMATIC1111/Forge) directly, the huge existing self-host install base:
 
 ```json
 {
@@ -106,7 +106,7 @@ choose), and `api_key` is sent as HTTP Basic auth for a WebUI started with
 `--api-auth user:pass`.
 
 The **`comfyui`** protocol runs a ComfyUI node graph. Because ComfyUI has no
-fixed txt2img call, you supply a **workflow template** — export your graph with
+fixed txt2img call, you supply a **workflow template**: export your graph with
 ComfyUI's *Save (API Format)* button and put `{{prompt}}` (and optionally
 `{{negative}}`) in the text node(s); everything else (checkpoint, size, steps,
 seed, sampler) lives in the workflow you authored:
@@ -130,7 +130,7 @@ Give either `workflow` (inline JSON) or `workflow_file` (a path). terva
 substitutes the placeholders (escaping the prompt so quotes/newlines can't break
 the JSON), queues the workflow (`/prompt`), polls `/history` for completion, and
 fetches the outputs (`/view`). Size/steps/etc. from the tool call are ignored for
-comfyui — they belong in the workflow.
+comfyui, because they belong in the workflow.
 
 For backends terva doesn't speak natively, you can also add an image-generation
 MCP server.
@@ -147,7 +147,7 @@ MCP server.
 | `negative_prompt` | what to avoid (only backends that support it) |
 
 Files are written through the workspace sandbox, so a jailed session can only
-write inside its working directory — the same rule as `write`.
+write inside its working directory, the same rule as `write`.
 
 ## Notes
 
@@ -158,14 +158,14 @@ write inside its working directory — the same rule as `write`.
 
 These are future niceties, not shipping yet:
 
-- **Native model output** — a chat model emitting images itself. This **shipped
+- **Native model output**: a chat model emitting images itself. This **shipped
   separately** as inline [native image output](native-image-output.md) (the
   OpenAI Responses `image_generation` tool over the Codex subscription),
   configured under `native_output` rather than as a `generate_image` backend:
   the model draws inline in its own reply instead of terva calling an endpoint.
   Gemini image models could still slot in behind this tool later.
-- **Variations carousel** — generate several, view them, pick one to keep and
+- **Variations carousel**: generate several, view them, pick one to keep and
   regenerate the rest, in the web client. For now use `n` and ask the agent to
   regenerate.
-- **Edits / img2img** — transform an existing image (OpenAI edits, a1111
+- **Edits / img2img**: transform an existing image (OpenAI edits, a1111
   img2img, ComfyUI image input) via an optional input-image argument.

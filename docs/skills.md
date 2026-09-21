@@ -2,10 +2,10 @@
 
 A skill is a reusable instruction set written as a single
 `SKILL.md` file with a YAML frontmatter header. terva discovers skills
-at startup — and again on demand, see [Reloading](#reloading) — and
+at startup (and again on demand, see [Reloading](#reloading)), and
 surfaces them to the model in two ways:
 
-1. The system prompt gains a short manifest — a header, then one line
+1. The system prompt gains a short manifest: a header, then one line
    per skill with its source in brackets:
 
    ```
@@ -53,7 +53,7 @@ files travel between ecosystems that disagree about which is canonical,
 and a key terva silently ignored would be a behaviour you thought you
 had configured.
 
-A `name` may not contain `:` — that character separates a namespace
+A `name` may not contain `:`, because that character separates a namespace
 from a name (see [Namespaces](#namespaces)). One that does is loaded
 with the colon rewritten to `-`, and the reason is reported.
 
@@ -98,7 +98,7 @@ first `SKILL.md` it finds for each unique name:
 Built-ins sit in the **middle** of that ladder, not at the bottom. Above
 them are the native dirs, where shadowing a built-in is something you
 did on purpose. Below them are the extension bundles and the
-foreign-tool compat dirs — directories terva reads but does not own. A
+foreign-tool compat dirs, which are directories terva reads but does not own. A
 `~/.claude/skills/handoff` written against a different runtime should
 not silently replace the `handoff` terva ships and documents, which is
 exactly what used to happen.
@@ -108,7 +108,7 @@ To override a built-in, write your version natively
 entirely with `--no-builtin-skills`.
 
 An installed, **enabled** extension may ship a `skills/` directory beside
-its `extension.json` — a data-only bundle contribution. Those rank after
+its `extension.json`, a data-only bundle contribution. Those rank after
 your own dirs and the built-ins, so a bundle can never shadow either; a
 disabled extension contributes nothing, skills included.
 
@@ -122,7 +122,7 @@ terva will pick them up.
 
 `--no-skill` skips discovery entirely for a run: no manifest in the
 system prompt, no `skill` tool, not even the built-ins. The narrower
-`--no-builtin-skills` drops only the compiled-in skills — user and
+`--no-builtin-skills` drops only the compiled-in skills; user and
 project skills keep working.
 
 ### Namespaces
@@ -139,7 +139,7 @@ ext:web:web-research        a skill bundled by the "web" extension
 
 Both `/skill <name>` and the model's `skill` tool accept either form,
 case-insensitively. An unqualified name resolves the way it always
-has — down the ladder, first match wins — which after the ordering
+has, down the ladder with first match winning, which after the ordering
 above means: your native skill, else the built-in, else the
 highest-ranked foreign one. Qualifying is how you reach past that.
 
@@ -150,7 +150,7 @@ whether or not you have written a `handoff` of your own.
 Only the winner of a bare name goes into the model's system-prompt
 manifest. Two entries called `handoff` whose descriptions differ in
 nuance would make the model's choice a coin flip, so the shadowed one
-stays out of the prompt and stays reachable — by you in `/skills` and
+stays out of the prompt and stays reachable: by you in `/skills` and
 `/skill claude:handoff`, and by the model when you name it. The `skill`
 tool notes the alternatives when it loads a contested name, which
 teaches the syntax at the one moment it matters instead of spending
@@ -158,7 +158,7 @@ prompt tokens on every turn that it doesn't.
 
 ### When two skills share a name
 
-Collisions are silent by nature — the loser simply never appears — so
+Collisions are silent by nature, since the loser simply never appears, so
 terva reports them in two places:
 
 - **`/skills`** lists a shadowed skill under its qualified name, tagged
@@ -171,7 +171,7 @@ terva reports them in two places:
 
 Every **project** row above (the cwd-anchored ones: `./.terva/skills/`,
 `./.claude/skills/`, `./.agents/skills/`, and project-extension bundles)
-is dropped when the workspace is untrusted — the default for a workspace
+is dropped when the workspace is untrusted, which is the default for a workspace
 you haven't trusted yet. A repo you clone therefore cannot inject
 `SKILL.md` instructions into the model's prompt by merely being opened.
 Global, user, and built-in skills load regardless.
@@ -216,19 +216,19 @@ other. They are also listed in `/skills` and offered by `/skill`
 completion, tagged `built-in` and sorted **after** your own skills, so
 the first screen of the picker stays the set you installed. A skill of
 your own in a **native** dir shadows the built-in of the same name; a
-`.claude`/`.agents` skill or an extension bundle does not — see the
+`.claude`/`.agents` skill or an extension bundle does not; see the
 ladder above.
 
 ## Inspecting installed skills
 
 In terva, run `/skills`. A picker lists every discovered skill with its
-description and source — yours and your extensions' first, then the
+description and source, yours and your extensions' first, then the
 built-ins. Press enter on a row to view the full body inline. Press esc
 to go back.
 
 Built-ins are listed because `/skill <name>` has always resolved them:
 a picker that hid what you could type understated what was there. It
-also has to show them to stay coherent — a row tagged `shadowed by
+also has to show them to stay coherent: a row tagged `shadowed by
 builtin` names a tier, and that tier needs to be somewhere you can look
 at.
 
@@ -236,8 +236,8 @@ A skill that lost its name to a higher tier appears under its qualified
 name (`claude:handoff`) with a `shadowed by …` tag, so the picker
 doubles as the answer to "where did my skill go?".
 
-`terva skills` reports the same thing non-interactively — name, tier,
-file, and any shadowing — so it works in a pipe or a script. `terva
+`terva skills` reports the same thing non-interactively (name, tier,
+file, and any shadowing), so it works in a pipe or a script. `terva
 doctor` carries the summary line: the count of skills the current
 directory actually loads and whether workspace trust is holding project
 skills back.
@@ -260,10 +260,10 @@ that only when the manifest actually differs:
 | you changed | rebuilt? | why |
 |---|---|---|
 | added, deleted, or renamed a skill | yes | the list the model reads is different |
-| edited `description` | yes | it is manifest text — it is how the model decides the skill applies |
+| edited `description` | yes | it is manifest text, and it is how the model decides the skill applies |
 | edited the **body** | no | the body is never in the prompt; it arrives as a tool result |
 
-So the usual authoring beat — tweak the instructions, ask again — costs
+So the usual authoring beat, tweak the instructions and ask again, costs
 nothing, and still serves the model the rewritten text the next time it
 loads the skill.
 
@@ -274,7 +274,7 @@ picked up that way is loadable when you *name* it, while the model has
 not been told it exists.
 
 Because project skills are trust-gated, `/reload-skills` re-reads the
-trust verdict too — so `terva trust` followed by `/reload-skills` brings
+trust verdict too, so `terva trust` followed by `/reload-skills` brings
 a new project skill live without a relaunch.
 
 Over ACP the command does only the first half: the catalog is swapped,
@@ -292,7 +292,7 @@ confirmation says so.
 4. The model follows the body's instructions.
 
 You can prompt the model directly to use a skill (e.g. "use the
-code-review skill") but you don't have to — the descriptions in the
+code-review skill") but you don't have to: the descriptions in the
 manifest are enough for it to choose on its own.
 
 ## Always-on skills
@@ -411,8 +411,8 @@ whole file. That is a real gap and it is known.
 
 See `examples/skills/` for two starter skills:
 
-- `code-review/` — self-review pass on a recent diff
-- `test-fix/` — diagnose + minimally fix a failing test
+- `code-review/`: self-review pass on a recent diff
+- `test-fix/`: diagnose + minimally fix a failing test
 
 ## Comparison to other discovery layouts
 

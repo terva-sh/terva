@@ -2,7 +2,7 @@
 // terva's built-in discord connector. The compiled-in flavor already
 // speaks the connector protocol (chat/connlocal, in-process); this
 // binary is the SAME transport behind child-process stdio instead —
-// the packaging-portability proof from docs/plans/discord-connector.md,
+// the packaging-portability proof from docs/plans/archive/discord-connector.md,
 // and the twin of cmd/terva-telegram-connector.
 //
 // It registers as "discord-ext" so it never collides with the

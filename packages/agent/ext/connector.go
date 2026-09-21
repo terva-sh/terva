@@ -21,7 +21,7 @@ package ext
 // bot itself sent (services usually surface your own outbound back to
 // you), or the agent will converse with itself.
 //
-// See docs/proposals/connector-extensions.md.
+// See docs/proposals/archive/connector-extensions.md.
 
 import (
 	"encoding/json"

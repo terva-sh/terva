@@ -1,12 +1,12 @@
 # MCP servers
 
 terva can attach [Model Context Protocol](https://modelcontextprotocol.io)
-servers as tool providers. A server is reached one of two ways — a **stdio**
+servers as tool providers. A server is reached one of two ways: a **stdio**
 subprocess terva spawns (newline-delimited JSON-RPC), or a remote **http**
-endpoint terva POSTs to (Streamable HTTP) — and either way its tools join the
-registry under namespaced names, and everything downstream — the
+endpoint terva POSTs to (Streamable HTTP). Either way its tools join the
+registry under namespaced names, and everything downstream (the
 [permission ladder](permissions.md), [hooks](hooks.md), plan mode's read-only
-promise — applies to them like any other tool.
+promise) applies to them like any other tool.
 
 Scope, deliberately: **tools only.** Resources, prompts, sampling, and
 server-initiated messages can arrive later behind the same seam. On SSE: the
@@ -22,11 +22,11 @@ build drops it and an `http` server then fails cleanly with "not compiled in"
 layer. The user config (`$TERVA_HOME/config.json`) is trusted, so its
 servers always start. A project's `.terva/config.json` may declare
 `mcp.servers` too, but they are spawned **only in a trusted workspace**
-(`terva trust`, or `--trust` for one run) — an untrusted cloned repo's
+(`terva trust`, or `--trust` for one run): an untrusted cloned repo's
 servers never start, so a clone alone still can't execute arbitrary
 commands at session start. When the workspace is trusted the two sets
 merge and the **user wins on a name collision**: a project may only *add*
-servers, never shadow one you defined. (Hooks stay stricter — user config
+servers, never shadow one you defined. (Hooks stay stricter: user config
 only, no project surface at all.)
 
 ## Configuration
@@ -57,25 +57,25 @@ only, no project surface at all.)
 ```
 
 **stdio** (the default):
-- `command` / `args` — the server process; bare names resolve via `PATH`.
-- `env` — extra variables for the child. The base environment is the
+- `command` / `args`: the server process; bare names resolve via `PATH`.
+- `env`: extra variables for the child. The base environment is the
   sanitized one every terva subprocess gets (loader/interpreter
-  injection vars stripped — see [extensions.md](extensions.md)), and
+  injection vars stripped; see [extensions.md](extensions.md)), and
   config `env` cannot re-introduce those keys or override `PATH`.
 
 **http** (remote, Streamable HTTP):
-- `transport: "http"` and `url` — the remote endpoint (both required; an http
+- `transport: "http"` and `url`: the remote endpoint (both required; an http
   server must not also set `command`).
-- `headers` — sent on every request. Values may reference `${ENV}`; a
+- `headers`: sent on every request. Values may reference `${ENV}`; a
   referenced-but-unset variable fails the server's startup rather than sending a
   broken request. **Put a credential in `auth.bearer_env`, not here.** If the
   server answers with a redirect to another host, the egress guard strips
   `Authorization` and nothing else, so a secret in a custom header rides the hop
   to that new host. Reading `${ENV}` keeps the value out of the config file. It
   does not protect the value in transit.
-- `auth.bearer_env` — names an env var whose value rides as
-  `Authorization: Bearer <value>`. **Tokens are never inlined in config** — they
-  live in the environment, the same posture as provider keys — so a shared or
+- `auth.bearer_env`: names an env var whose value rides as
+  `Authorization: Bearer <value>`. **Tokens are never inlined in config**: they
+  live in the environment, the same posture as provider keys, so a shared or
   project config can't ship a secret (and can't point your token at a URL of its
   choosing unless that env is already set). It is also the only header the guard
   removes when a redirect crosses hosts, which is the other reason a token
@@ -92,17 +92,17 @@ Restart the server from `/mcp` before using its tools again. A response timeout
 after a complete write leaves the connection open; it does not undo the tool.
 
 `--no-mcp` skips all servers for one run. `--mcp git,jira` is the
-narrowing form: only the listed servers start (restrict-only — config
+narrowing form: only the listed servers start (restrict-only: config
 disables still subtract, and the `/mcp` dialog cannot live-enable an
 excluded server for the run). Scope headless agents to what they need:
 a chat bot exposed to a group room shouldn't carry every server your
 TUI sessions use.
 
-## OAuth servers — `terva-mcp-bridge`
+## OAuth servers: `terva-mcp-bridge`
 
 The in-core `http` transport handles **static auth** (a bearer token or fixed
 headers). Hosted SaaS MCP servers (Linear, Notion, GitHub remote, …) instead
-require **OAuth 2.1** — a browser sign-in, a localhost redirect capture, and token
+require **OAuth 2.1**: a browser sign-in, a localhost redirect capture, and token
 refresh. That service-shaped weight (a listening socket, a browser launch, a token
 vault) is deliberately kept **out of core** and lives in a companion binary,
 `terva-mcp-bridge`, which appears to terva as an ordinary **stdio** server:
@@ -122,10 +122,10 @@ vault) is deliberately kept **out of core** and lives in a companion binary,
 
 terva spawns it over stdio and routes `tools/list` / `tools/call` to it like any
 other server; the bridge speaks Streamable HTTP + OAuth to the remote. Because the
-bridge owns the HTTP upstream, this works **even in a `terva_no_mcp_http` build** —
+bridge owns the HTTP upstream, this works **even in a `terva_no_mcp_http` build**, because
 core needs no HTTP transport to reach a remote server through the bridge.
 
-**One-time setup** — authorize in a browser, which stores a refresh token:
+**One-time setup**, authorizing in a browser, which stores a refresh token:
 
 ```
 terva-mcp-bridge login https://mcp.linear.app/mcp
@@ -133,9 +133,9 @@ terva-mcp-bridge login https://mcp.linear.app/mcp
 
 Discovery (RFC 9728 / RFC 8414), dynamic client registration (RFC 7591), and the
 authorization-code + PKCE flow are automatic. After that, the terva-spawned relay
-refreshes tokens transparently — no further prompts. Install it with
+refreshes tokens transparently, with no further prompts. Install it with
 `go install ./cmd/terva-mcp-bridge` (an opt-in auxiliary binary, like the chat
-connectors; it is **not** a chat connector — its wire to terva is plain MCP stdio).
+connectors; it is **not** a chat connector, since its wire to terva is plain MCP stdio).
 
 - Tokens persist under `$TERVA_HOME/mcp-bridge/<host>/tokens.json` at `0600`; the
   bridge owns them. `--client-id ID` uses a pre-provisioned client (skips dynamic
@@ -153,7 +153,7 @@ connectors; it is **not** a chat connector — its wire to terva is plain MCP st
   servers, alphabetical server order registers first and later
   duplicates are shadowed with a note.
 - A server that fails to start (or dies) is a stderr note and its
-  tools are absent — never a fatal error. Its stderr streams to
+  tools are absent, never a fatal error. Its stderr streams to
   `$TERVA_HOME/logs/mcp-<name>.log`.
 - Text and image result content map to the transcript natively;
   other content kinds degrade to their JSON so nothing is silently
@@ -168,23 +168,23 @@ scope (`global` for a user-config server, `project` for a trusted
 project's), whether it's connected, its tool count, and any startup
 error. Two toggles, mirroring `/extensions`:
 
-- `g` — enable/disable **globally** (user config). Disabling adds the
+- `g`: enable/disable **globally** (user config). Disabling adds the
   server name to `disable_mcp` in `$TERVA_HOME/config.json`; enabling
   removes it. There is no per-server manifest, so "enabled" simply means
   the name is absent from `disable_mcp`. Only meaningful for a
-  user-defined server (a project-defined one has nothing to toggle here —
+  user-defined server (a project-defined one has nothing to toggle here;
   use `p`).
-- `p` — enable/disable **for this project** (`.terva/config.json`
+- `p`: enable/disable **for this project** (`.terva/config.json`
   `disable_mcp`). Restrict-only: it can stop a server from running in
   this directory, but can never start one the user disabled. Honored even
-  in an untrusted workspace — refusing to spawn is always safe.
-- `l` — open a scrollable view of that server's log
+  in an untrusted workspace, because refusing to spawn is always safe.
+- `l`: open a scrollable view of that server's log
   (`$TERVA_HOME/logs/mcp-<name>.log`) without leaving the TUI. A server
   that failed to start also shows a one-line reason inline.
 
 Toggles apply **live**: enabling spawns the server and its `mcp_*` tools
 appear on the next turn; disabling stops the subprocess and removes its
-tools — no restart. `disable_mcp` is also honored headlessly and under
+tools, with no restart. `disable_mcp` is also honored headlessly and under
 ACP (gating only; no dialog there).
 
 ```json

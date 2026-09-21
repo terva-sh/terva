@@ -8,7 +8,7 @@ package extdriver
 // connector protocol (packages/agent/connproto) is spoken by
 // chat/connhost on the host side and connsdk inside the extension, so
 // exactly one implementation of that wire exists per side no matter
-// what carries it. See docs/proposals/connector-extensions.md.
+// what carries it. See docs/proposals/archive/connector-extensions.md.
 
 import (
 	"context"

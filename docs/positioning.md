@@ -1,42 +1,42 @@
 # Positioning
 
-The canonical statement of what terva is. Downstream copy — the README
-intro, the GitHub "About", `cmd/terva` doc comment, AGENTS.md, and the
-terva.sh site — should derive from this, not reinvent it. When the framing
+The canonical statement of what terva is. Downstream copy should derive from
+this rather than reinvent it: the README intro, the GitHub "About", the
+`cmd/terva` doc comment, AGENTS.md, and the terva.sh site. When the framing
 changes, change it here first.
 
 ## Core statement
 
-> **terva is a harness for tool-using agents** — a permissioned loop where a
+> **terva is a harness for tool-using agents**: a permissioned loop where a
 > model drives tools, projected through many front ends (terminal, browser,
 > editor over ACP, chat, an embeddable RPC/SDK) and extensible in any
-> language. It ships wired for coding — read, write, and run across your
-> project — but the core is general: hand it extensions or MCP servers and it
+> language. It ships wired for coding, with read, write and run across your
+> project, but the core is general: hand it extensions or MCP servers and it
 > operates whatever they expose, from services to physical hardware, all under
 > one permission and policy model. The breadth is safe because the core is
 > *consolidated*: one agent loop, one event wire, one policy, one provider
-> registry — typed and test-backed — so every surface is a thin projection of a
+> registry, typed and test-backed, so every surface is a thin projection of a
 > single hardened core, not a reimplementation that drifts.
 
 The fork lineage is history, not identity: lead with what terva *is*. Where
 the origin genuinely matters (compat questions, "how does this relate to
-zot?"), point at [fork.md](fork.md) rather than restating it — see
+zot?"), point at [fork.md](fork.md) rather than restating it. See
 *Relationship to zot* below.
 
 ## Hero line (site / GitHub About)
 
-> An agent harness — a coding agent out of the box, open to anything you can
+> An agent harness: a coding agent out of the box, open to anything you can
 > wire a tool to.
 
 ## Pillars
 
 1. **One core, many front ends.** Terminal and browser (both first-class),
-   editor (ACP), chat, an embeddable RPC/SDK — and soon agent-to-agent meshes
-   (A2A) — are *projections of one agent loop and one event stream* over the
+   editor (ACP), chat, an embeddable RPC/SDK, and soon agent-to-agent meshes
+   (A2A), are *projections of one agent loop and one event stream* over the
    `ctrlproto` control plane, not separate reimplementations.
 2. **A general tool-operator, pluggable in any language.** Coding tools are
-   built in; everything else you wire up — services, hardware, your own
-   systems — attaches over small versioned protocols (extensions, connectors,
+   built in, and everything else you wire up, whether services, hardware or your
+   own systems, attaches over small versioned protocols (extensions, connectors,
    MCP, hooks) and runs under the same permission model.
 3. **Consolidated, so it's safe to extend.** Hardening collapsed the
    duplicated, separately-reimplemented loops/serializers/policy switches
@@ -50,29 +50,29 @@ Lineage, not positioning. Keep it out of the lead; it belongs in a footer, an
 FAQ answer, or [fork.md](fork.md). The one-line form, when asked:
 
 > terva began as a hard fork of zot in May 2026 and has long since gone its
-> own way — its own control plane, front ends, protocols, and roadmap. zot
+> own way, with its own control plane, front ends, protocols, and roadmap. zot
 > continues upstream as its own project; terva is not a replacement for it.
 > Existing zot installs keep working; upstream tracking was retired in July
 > 2026.
 
 Do not claim we track upstream, pull upstream changes on a cadence, or
-promise that zot extensions/connectors stay in lockstep — none of that is
+promise that zot extensions/connectors stay in lockstep. None of that is
 true anymore. [fork.md](fork.md) states exactly where the compatibility
 promises begin and end.
 
 ## Audience
 
 Developers who want a fast, terminal-first agent they can drive from anywhere
-(terminal, editor, chat), extend in any language, embed as a library, and —
-above all — trust enough to build on.
+(terminal, editor, chat), extend in any language, embed as a library, and,
+above all, trust enough to build on.
 
 ## Flavor (use sparingly)
 
-*terva* is Finnish for **pine tar** — the traditional preservative and
+*terva* is Finnish for **pine tar**, the traditional preservative and
 cure-all, and the sealant that made wooden boats seaworthy. It maps onto the
 thesis almost too neatly: preserve and harden what works, then carry a broad
 toolkit on top. The default agent persona leans on the same image: it is
-**Mieli** (*MYEH-lee*), Finnish for "mind" — a mind in a preserved vessel,
+**Mieli** (*MYEH-lee*), Finnish for "mind": a mind in a preserved vessel,
 with terva the craft that carries it and keeps it whole. A light touch is
 plenty; keep it out of the core statement, and never let the metaphor crowd
 out the engineering.
@@ -80,7 +80,7 @@ out the engineering.
 ## Voice guardrails (what NOT to say)
 
 - **Not "lightweight"** as the identity. It is a *single static binary* with
-  a *lean, consolidated core* (footprint virtues worth stating) — but
+  a *lean, consolidated core* (footprint virtues worth stating), but
   batteries-rich in capability. Don't let "lightweight" headline it.
 - **Not boxed into "coding."** Coding is the default toolset, not the
   ceiling. The harness operates whatever tools you give it.

@@ -1,0 +1,6 @@
+{
+  "_comment": "Findings terva-ste-lint accepts today. A NEW finding fails the gate; an entry here that no longer fires ALSO fails it, so this file can only shrink. Regenerate with: just ste-lint-baseline",
+  "_note": "Empty, and that is the finished state. AGENTS.md adopts unslop rule 13 for docs/, decision 0015 gave this count a ratchet, and the documentation sweep drove it from 828 to zero. An entry appearing here again means a page regressed: convert it rather than re-seeding the file.",
+  "count": 0,
+  "entries": null
+}

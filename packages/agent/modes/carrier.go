@@ -12,7 +12,7 @@ import (
 // reliable (no-drop) Subscribe.
 //
 // It is the seam of the TUI-on-ctrlproto migration
-// (docs/proposals/tui-on-ctrlproto.md). The concrete implementation is
+// (docs/proposals/archive/tui-on-ctrlproto.md). The concrete implementation is
 // *agent.Workspace, which already satisfies this interface — modes cannot import
 // package agent (that package imports modes), so the TUI holds this interface and
 // the composition root (cli.go) injects the concrete *Workspace.

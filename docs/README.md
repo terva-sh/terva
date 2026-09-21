@@ -1,19 +1,20 @@
 # terva documentation
 
-terva is a harness for tool-using agents — a single Go binary running a
+terva is a harness for tool-using agents: a single Go binary running a
 permissioned agent loop, projected through many front ends and extensible in
-any language. It ships wired for coding — read, write, and run across your
-project — but the core is general: hand it extensions or MCP servers and it
+any language. It ships wired for coding, with read, write and run across your
+project, but the core is general: hand it extensions or MCP servers and it
 operates whatever they expose, all under one permission and policy model.
 This page maps everything under `docs/`.
 
-**Want to run it?** Start with the [CLI reference](cli.md) — it opens with
+**Want to run it?** Start with the [CLI reference](cli.md), which opens with
 [the ways to run terva](cli.md#ways-to-run-terva) (the terminal UI, the web
-daemon, and a terminal attached to that daemon) and when to use each — then dig
+daemon, and a terminal attached to that daemon) and when to use each. Then dig
 into your front end: the [TUI guide](tui.md) or the [web panel](web.md).
 
-**Want to understand it?** Start with [terva by design](design/README.md) — how
-the harness works and why, in ordinary programming vocabulary. It assumes no Go.
+**Want to understand it?** Start with [terva by design](design/README.md), which
+covers how the harness works and why, in ordinary programming vocabulary. It
+assumes no Go.
 
 **Building your own harness?** [practices/](practices/README.md) is what we and
 the field have learned about this category, generalized and evidence-graded.
@@ -22,10 +23,10 @@ the field have learned about this category, generalized and evidence-graded.
 
 | Doc | About |
 |---|---|
-| [design/](design/README.md) | **How terva works, and why** — the agent loop, context economics, the permission chokepoint, the control plane, the extension seams, and the lessons behind each. Language-agnostic |
-| [practices/](practices/README.md) | **Best practices for agentic harnesses** — generalized guidance for anyone building one, with the evidence behind each claim graded |
-| [positioning.md](positioning.md) | Where terva sits in the landscape |
-| [fork.md](fork.md) | Lineage — how terva relates to zot, and where the compat promises end |
+| [design/](design/README.md) | **How terva works, and why**: the agent loop, context economics, the permission chokepoint, the control plane, the extension seams, and the lessons behind each. Language-agnostic |
+| [practices/](practices/README.md) | **Best practices for agentic harnesses**: generalized guidance for anyone building one, with the evidence behind each claim graded |
+| [positioning.md](positioning.md) | What terva is, and how to describe it |
+| [fork.md](fork.md) | Lineage: how terva relates to zot, and where the compat promises end |
 
 ## User & operator guides
 
@@ -33,33 +34,39 @@ the field have learned about this category, generalized and evidence-graded.
 
 | Doc | About |
 |---|---|
-| [cli.md](cli.md) | CLI reference — subcommands, flags, run modes |
+| [cli.md](cli.md) | CLI reference: subcommands, flags, run modes |
 | [tui.md](tui.md) | The interactive terminal UI |
+| [slash-commands.md](slash-commands.md) | Every TUI slash command, and what each one does |
 | [recording.md](recording.md) | Recording a TUI session: shrinking the capture, the busy signal, secrets |
-| [web.md](web.md) | `terva web` — the browser control panel |
+| [web.md](web.md) | `terva web`: serving the browser control panel |
+| [web-interface.md](web-interface.md) | What the web panel shows, surface by surface |
+| [serve.md](serve.md) | `terva serve`: one terva per person on one host, behind single sign-on |
 | [fleet.md](fleet.md) | One browser reading many machines: hub, members, tunnel |
 | [models.md](models.md) | Models & providers in practice |
 | [personas.md](personas.md) | Personas and crews |
-| [raati.md](raati.md) | RAATI — the three-seat deliberation panel |
-| [workflows.md](workflows.md) | Scripted multi-agent orchestration — `terva workflow run` |
+| [raati.md](raati.md) | RAATI: the three-seat deliberation panel |
+| [workflows.md](workflows.md) | Scripted multi-agent orchestration: `terva workflow run` |
 | [permissions.md](permissions.md) | Approval modes, typed rules, the sandbox |
 | [context-construction.md](context-construction.md) | What goes into the model's context each turn |
 | [image-generation.md](image-generation.md) | `generate_image` and its backends |
 | [native-image-output.md](native-image-output.md) | The model drawing images inline (`native_output`, Codex) |
-| [scripting.md](scripting.md) | `code_execution` and `code_execution_mutating` — the in-engine JavaScript sandbox |
+| [scripting.md](scripting.md) | `code_execution` and `code_execution_mutating`: the in-engine JavaScript sandbox |
 | [themes.md](themes.md) | TUI themes |
 | [skills.md](skills.md) | `SKILL.md` instruction files |
 | [debugging-prompts.md](debugging-prompts.md) | Inspecting / debugging a prompt |
+| [prompt-labels.md](prompt-labels.md) | The source labels and portability classes `--dump-prompt` prints |
 
 ### Extending & integrating
 
 | Doc | About |
 |---|---|
 | [extensions.md](extensions.md) | Out-of-process extensions + SDK |
+| [extension-protocol.md](extension-protocol.md) | The extension frame reference: every frame, both directions |
 | [connectors.md](connectors.md) | Chat connectors (Telegram, Discord, external) |
+| [connector-protocol.md](connector-protocol.md) | The connector frame reference: every frame, both directions |
 | [mcp.md](mcp.md) | MCP servers |
 | [hooks.md](hooks.md) | Tool-call hooks |
-| [standard-tools.md](standard-tools.md) | The standard tool set — strategy & playbook |
+| [standard-tools.md](standard-tools.md) | The standard tool set: strategy & playbook |
 | [controllers.md](controllers.md) | `ctrlproto` control-plane reference |
 | [rpc.md](rpc.md) | JSON-RPC server mode |
 | [localization.md](localization.md) | Localizing / customizing strings |
@@ -69,26 +76,27 @@ the field have learned about this category, generalized and evidence-graded.
 | Doc | About |
 |---|---|
 | [deploy.md](deploy.md) | Running terva bots as services |
-| [scheduled-jobs.md](scheduled-jobs.md) | Running terva unattended on a timer — watches, reports, follow-ups |
+| [scheduled-jobs.md](scheduled-jobs.md) | Running terva unattended on a timer: watches, reports, follow-ups |
 | [providers.md](providers.md) | Provider setup & auth |
+| [secrets.md](secrets.md) | `terva secret`: encryption at rest, the age key, the web bearer token |
 | [profiling.md](profiling.md) | Profiling terva |
 | [resource-limits.md](resource-limits.md) | Resource limits |
 
 ## Engineering records (development repository only)
 
-The pages above are the shipped documentation. The engineering record — the
-Go-level implementation notes, design proposals, work plans, decision records,
-reviews — lives in the development repository and is **not part of the public
-release tree**, since it references internal infrastructure. It is named here,
-not linked, because the links would 404 for most readers:
+The pages above are the shipped documentation. The engineering record holds the
+Go-level implementation notes, design proposals, work plans, decision records
+and reviews. It lives in the development repository and is **not part of the
+public release tree**, since it references internal infrastructure. It is named
+here, not linked, because the links would 404 for most readers:
 
 | path | what's in it |
 |---|---|
 | `docs/architecture/` | The **implementation tier**: subsystem-by-subsystem internals cited to Go files and symbols, refreshed 2026-07-26 as an as-built record (docs 08/09 stay frozen June-2026 reviews; removals are logged in `ARCHIVE.md`, and `07-observations.md` is the standing review agenda). The conceptual counterpart of each doc ships publicly in [`design/`](design/README.md). |
 | `docs/plans/` | Active work plans plus the living roadmap. Implemented plans move to `plans/archive/`. |
-| `.tickets/` | The **ticket store**, managed with `git ticket`. The cheap tier in front of proposals and the tracker for committed work, in one queue. Seven statuses — `draft`, `ready`, `in-progress`, `blocked`, `review`, `done`, `archived`. Filing is one command, `git ticket create`, and a new ticket lands in `draft` until a person promotes it. Run `git ticket instructions` for the agent workflow, and read `.tickets/CONVENTIONS.md` for this repository's own rules: what priority means on a draft, the four reference namespaces, and the traps. It replaced `docs/ideas/` on 2026-09-05 and holds that ledger whole. |
-| `docs/proposals/` | Active design proposals; implemented ones move to `proposals/archive/`. Six statuses — `exploration`, `proposed`, `in-flight`, `partial`, `shipped`, `archived` (only ever in `archive/`). The index is generated from each proposal's frontmatter, with the summary capped at 200 characters. |
-| `docs/decisions/` | Decision records — both the load-bearing calls we took and the directions we declined, each with what would reopen it. |
+| `.tickets/` | The **ticket store**, managed with `git ticket`. The cheap tier in front of proposals and the tracker for committed work, in one queue. Seven statuses: `draft`, `ready`, `in-progress`, `blocked`, `review`, `done`, `archived`. Filing is one command, `git ticket create`, and a new ticket lands in `draft` until a person promotes it. Run `git ticket instructions` for the agent workflow, and read `.tickets/CONVENTIONS.md` for this repository's own rules: what priority means on a draft, the four reference namespaces, and the traps. It replaced `docs/ideas/` on 2026-09-05 and holds that ledger whole. |
+| `docs/proposals/` | Active design proposals; implemented ones move to `proposals/archive/`. Six statuses: `exploration`, `proposed`, `in-flight`, `partial`, `shipped`, `archived` (only ever in `archive/`). The index is generated from each proposal's frontmatter, with the summary capped at 200 characters. |
+| `docs/decisions/` | Decision records: both the load-bearing calls we took and the directions we declined, each with what would reopen it. |
 | `docs/reviews/` | Point-in-time whole-project review findings. |
 | `docs/vanity/` | The terva.sh vanity-site sources. |
 | `docs/working-agreements.md` | Conventions for planning and validating larger changes. |
