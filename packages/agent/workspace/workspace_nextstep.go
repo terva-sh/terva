@@ -215,7 +215,7 @@ func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlprot
 	// Booked before the error check: a completion that failed still spent what
 	// it sent, and dropping it would make idle suggestions free as far as the
 	// session's cost is concerned.
-	s.recordSideChannelUsage(usage)
+	s.recordSideChannelUsage(sideChannelNextStep, usage)
 	if err != nil {
 		return ctrlproto.NextStepResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "suggest a next step: %v", err)
 	}

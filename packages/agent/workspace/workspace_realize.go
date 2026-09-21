@@ -83,7 +83,7 @@ func proposeRealize(ctx context.Context, s *wsSession, p ctrlproto.RealizeParams
 		}},
 	}
 	out, usage, err := streamText(ctx, cl, req)
-	s.recordSideChannelUsage(usage)
+	s.recordSideChannelUsage(sideChannelRealize, usage)
 	if err != nil {
 		return ctrlproto.RealizeResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "realize: %v", err)
 	}

@@ -35,6 +35,9 @@ type Args struct {
 	// ReplayPath is the recorded session transcript to play back (--replay /
 	// `terva replay <file>`, Mode == mode.Replay).
 	ReplayPath string
+	// ReplaySpeed is the playback multiplier for a replay (--speed): 0.5 plays
+	// at half speed, 2 at double. Zero means the player's default of 1.
+	ReplaySpeed float64
 
 	// Web control-panel mode (--web / `terva web`, build tag terva_web).
 	WebAddr             string   // listen address (default 127.0.0.1:8730)
@@ -615,6 +618,16 @@ func ParseArgs(in []string) (Args, error) {
 			}
 			a.Mode = mode.Replay
 			a.ReplayPath = v
+		case "--speed":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			f, ferr := strconv.ParseFloat(v, 64)
+			if ferr != nil || f <= 0 {
+				return a, i18n.Errorf("--speed %q: want a positive multiplier like 0.5 or 2", v)
+			}
+			a.ReplaySpeed = f
 		case "--tenant-idle-timeout":
 			v, err := want(&i, arg)
 			if err != nil {
@@ -903,7 +916,7 @@ func ParseArgs(in []string) (Args, error) {
 		case "--tui-legacy", "--tui-ctrlproto":
 			// deprecated: the legacy direct *core.Agent TUI driver was
 			// removed; the ctrlproto carrier is now the only backend
-			// (docs/proposals/tui-on-ctrlproto.md). Both flags are accepted
+			// (docs/proposals/archive/tui-on-ctrlproto.md). Both flags are accepted
 			// silently for backwards compatibility and do nothing.
 		case "--extensions":
 			v, err := want(&i, arg)
@@ -1273,7 +1286,7 @@ user each instance resolved to and refuses the tenant if the answer does not nam
 that instance.
 
 Requires a build with -tags terva_web (the release binaries include it).
-See docs/proposals/daemon-access-auth.md for the design.
+See docs/serve.md, and docs/proposals/daemon-access-auth.md for the design.
 `))
 }
 

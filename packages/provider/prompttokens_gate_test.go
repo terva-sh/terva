@@ -28,10 +28,6 @@ var exemptFromPromptTokens = map[string]struct {
 }{
 	// The definition itself.
 	filepath.Join("packages", "provider", "provider.go"): {"PromptTokens IS this sum", 1},
-
-	// Not a prompt: a "did this turn reach the model at all" check that adds
-	// output tokens in, so it is neither the gauge nor a ratio denominator.
-	filepath.Join("packages", "agent", "tools", "session_inspect.go"): {"Input+CacheRead+Output is a did-anything-happen check, not a prompt", 1},
 }
 
 // Nobody spells the prompt sum by hand.

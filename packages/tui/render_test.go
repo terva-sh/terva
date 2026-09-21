@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -146,5 +147,41 @@ func TestTeardownLogBeforeDrawIsNoOp(t *testing.T) {
 	r.TeardownLog()
 	if buf.Len() != 0 {
 		t.Fatalf("teardown before first DrawLog emitted %d bytes; want 0: %q", buf.Len(), buf.String())
+	}
+}
+
+// A dialog closing shrinks the bottom band. The diff must repaint the
+// vacated rows in place: a full clear here is a blank frame wherever
+// synchronized output is not honored, which is every recording. Pinned after
+// the terminal demo's cast showed a flash at each answered prompt
+// (TKT-01M2YPDEKB); the caller that used to force the clear is gone, and
+// this holds the renderer to what that caller now relies on.
+func TestDialogCloseRepaintsWithoutClearing(t *testing.T) {
+	var buf bytes.Buffer
+	r := NewRenderer(&buf)
+	r.Resize(100, 30)
+	rows := func(prefix string, n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("%s %d", prefix, i)
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name         string
+		chat1, chat2 int
+		band1, band2 int
+	}{
+		{"short chat", 5, 5, 14, 3},
+		{"chat taller than the screen", 40, 40, 14, 3},
+		{"chat grows as the dialog closes", 40, 46, 14, 3},
+	} {
+		r.Clear()
+		r.DrawLog(rows("chat", tc.chat1), rows("dialog", tc.band1), 0, 0)
+		buf.Reset()
+		r.DrawLog(rows("chat", tc.chat2), rows("band", tc.band2), 0, 0)
+		if out := buf.String(); strings.Contains(out, "\x1b[2J") || strings.Contains(out, "\x1b[3J") {
+			t.Errorf("%s: closing the dialog emitted a full clear", tc.name)
+		}
 	}
 }

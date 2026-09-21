@@ -314,6 +314,12 @@ func (t *SessionInspectTool) Execute(ctx context.Context, raw json.RawMessage, _
 	}, nil
 }
 
+// sourceTally is one side-channel source's share of a session's spend.
+type sourceTally struct {
+	calls int
+	usage provider.Usage
+}
+
 // sessionStats renders a whole-session rollup: what the session did, what
 // failed, and what it cost. It is the cheap direction — a fixed-size summary
 // over an arbitrarily long transcript — and it exists because the alternative
@@ -344,6 +350,14 @@ func sessionStats(ctx context.Context, path, sessID string, sideErrs []core.Sess
 		// above so the cache-hit rate describes THIS session's requests.
 		delegated      provider.Usage
 		delegatedTurns int
+		// The host's one-off completions on this session's credentials (an
+		// idle next-step suggestion, a side chat), kept out of the rollup for
+		// the same reason and tallied per source, because "what do the idle
+		// suggestions cost this session" is the question the mark exists to
+		// answer (TKT-01M213C1).
+		sideChannel      provider.Usage
+		sideChannelCalls int
+		bySource         = map[string]*sourceTally{}
 	)
 	_, truncated, err := streamReplay(ctx, path, siScanCeiling, func(_ int, r core.ReplayRow) {
 		switch r.Kind {
@@ -355,6 +369,22 @@ func sessionStats(ctx context.Context, path, sessID string, sideErrs []core.Sess
 			if r.Delegated {
 				delegatedTurns++
 				delegated = delegated.Add(r.Usage)
+				return
+			}
+			// A side-channel call is this session's own request, on its own
+			// credentials, but it is not a TURN: nobody typed a prompt for it
+			// and no message follows it. Counted under its source, so the
+			// per-call cost of each surface is readable from the file.
+			if r.Source != "" {
+				sideChannelCalls++
+				sideChannel = sideChannel.Add(r.Usage)
+				st := bySource[r.Source]
+				if st == nil {
+					st = &sourceTally{}
+					bySource[r.Source] = st
+				}
+				st.calls++
+				st.usage = st.usage.Add(r.Usage)
 				return
 			}
 			turns++
@@ -431,10 +461,10 @@ func sessionStats(ctx context.Context, path, sessID string, sideErrs []core.Sess
 	// and github-copilot, which bills per premium request rather than per token.
 	// The wording follows: saying "subscription" here would now name the two
 	// cases that are no longer it.
-	if usage.CostUSD == 0 && usage.InputTokens+usage.CacheReadTokens+usage.OutputTokens > 0 {
+	if usage.CostUSD+sideChannel.CostUSD == 0 && usage.PromptTokens()+usage.OutputTokens+sideChannel.PromptTokens()+sideChannel.OutputTokens > 0 {
 		fmt.Fprintf(&b, "\ncost: not priced — no published rate for this model, over %d turn(s)\n", turns)
 	} else {
-		fmt.Fprintf(&b, "\ncost: $%.4f over %d billed turn(s)\n", usage.CostUSD+delegated.CostUSD, turns)
+		fmt.Fprintf(&b, "\ncost: $%.4f over %d billed turn(s)\n", usage.CostUSD+delegated.CostUSD+sideChannel.CostUSD, turns)
 	}
 	// Cache writes are named here because they are in the denominator below —
 	// a rollup that omitted them printed three numbers that did not add up to
@@ -461,6 +491,32 @@ func sessionStats(ctx context.Context, path, sessID string, sideErrs []core.Sess
 		fmt.Fprintf(&b, "  of which delegated to sub-agents: $%.4f over %d record(s), %d in / %d out (excluded from the hit rate above)\n",
 			delegated.CostUSD, delegatedTurns,
 			delegated.PromptTokens(), delegated.OutputTokens)
+	}
+	if sideChannelCalls > 0 {
+		// Inside the cost above, like delegated spend, and out of the hit
+		// rate because that rate describes the session's TURNS, and these are
+		// not turns. Folded in, they would move it in whichever direction they
+		// happen to run: an aligned suggestion reads the warm prefix and would
+		// flatter it, an unaligned one re-reads the transcript at full price
+		// and would sink it, and either way the number would stop describing
+		// what the user's own prompts cost. So each source gets its own line
+		// with its own hit rate, which is the measurement an idle suggestion's
+		// cost turns on (TKT-01M213C1), read apart rather than averaged away.
+		fmt.Fprintf(&b, "  of which side-channel calls: $%.4f over %d call(s), %d in / %d out (excluded from the hit rate above)\n",
+			sideChannel.CostUSD, sideChannelCalls, sideChannel.PromptTokens(), sideChannel.OutputTokens)
+		names := make([]string, 0, len(bySource))
+		for name := range bySource {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			st := bySource[name]
+			fmt.Fprintf(&b, "    %s: $%.4f over %d call(s), %d in / %d out", name, st.usage.CostUSD, st.calls, st.usage.PromptTokens(), st.usage.OutputTokens)
+			if rate, ok := st.usage.CacheHitRate(); ok {
+				fmt.Fprintf(&b, ", cache hit rate %.1f%% of prompt", rate*100)
+			}
+			b.WriteString("\n")
+		}
 	}
 	if deadTurns > 0 {
 		fmt.Fprintf(&b, "  %d turn(s) recorded zero tokens and zero cost — they died before reaching the model\n", deadTurns)

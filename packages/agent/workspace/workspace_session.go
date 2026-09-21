@@ -301,7 +301,7 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	var gate *core.ConfirmGate
 	if pol != nil {
 		gate = core.NewPolicyGate(pol, &webConfirmer{s: s})
-		// The confirm dialog's "always this tool — save to config" answer
+		// The confirm dialog's "always this tool, and save it" answer
 		// (ConfirmDecision.PersistTool) is honoured here. This is the ONLY
 		// production gate that installs the persist callback, and it serves
 		// both surfaces that reach a durable grant: the web app and the

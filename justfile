@@ -175,6 +175,17 @@ git-ticket-install:
 # developer machine already has the binary, and installing over it would
 # silently replace the version they chose to run. 'just git-ticket-install' is
 # the opt-in.
+#
+# The remedy names `git ticket self-update`, which replaces the binary that
+# WINS PATH with the latest release. That is the one that runs, so it is the
+# one worth fixing, and on a developer machine it is where the binary already
+# lives: self-update writes to ~/.local/bin, not to GOPATH/bin.
+#
+# A copy at $dest is only worth naming when it is the pin AND merely shadowed,
+# so its version is read before it is recommended. An earlier version tested
+# `-x` alone and told a machine holding v0.17.1 on PATH to promote a v0.18.0
+# in a GOPATH that was not on PATH — staler than the binary it displaced, and
+# still short of the pin.
 ticket-check LANE='local':
     @want="$(awk '$1 == "github.com/terva-sh/git-ticket" { print $2; exit }' go.mod)"; \
      if ! command -v git-ticket >/dev/null 2>&1; then \
@@ -187,11 +198,16 @@ ticket-check LANE='local':
          found="$(command -v git-ticket)"; \
          echo "{{LANE}}: note: git-ticket $have is on PATH, but this tree pins $want"; \
          echo "{{LANE}}:       a binary older than v0.14.0 refuses this schema-3 store"; \
-         if [ -x "$dest/git-ticket" ] && [ "$found" != "$dest/git-ticket" ]; then \
-           echo "{{LANE}}:       $dest/git-ticket is installed, but $found wins on PATH"; \
-           echo "{{LANE}}:       put $dest first, or remove $found"; \
+         shadowed=""; \
+         if [ "$found" != "$dest/git-ticket" ] && [ -x "$dest/git-ticket" ]; then \
+           shadowed="$("$dest/git-ticket" --version 2>/dev/null | awk '{print $2}')"; \
+         fi; \
+         if [ "$shadowed" = "$want" ]; then \
+           echo "{{LANE}}:       $dest/git-ticket is $want, but $found wins on PATH"; \
+           echo "{{LANE}}:       put $dest before $(dirname "$found") on PATH, or remove $found"; \
          else \
-           echo "{{LANE}}:       run 'just git-ticket-install' to match the pin"; \
+           echo "{{LANE}}:       run 'git ticket self-update' to bring $found to the latest"; \
+           echo "{{LANE}}:       or 'just git-ticket-install' to put exactly $want in $dest"; \
          fi; \
        fi; \
        git ticket check --strict; \
@@ -392,8 +408,10 @@ ste-lint *FLAGS:
 ste-lint-text:
     go run ./cmd/terva-ste-lint -list
 
-# Re-record the accepted findings. Run after improving text the baseline holds,
-# and commit the shrunk .ste/baseline.json with the change that earned it.
+# Re-record the accepted findings for BOTH corpora: .ste/baseline.json for the
+# tool text and .ste/docs-baseline.json for the public documentation tier. Run
+# after improving text a baseline holds, and commit the shrunk file with the
+# change that earned it. Neither may grow.
 ste-lint-baseline:
     go run ./cmd/terva-ste-lint -write-baseline
 
@@ -721,3 +739,35 @@ mirror-push: mirror-init
     @git push mirror 'refs/heads/release:refs/heads/release' 2>/dev/null \
         || echo "no local release branch yet — run the release-cut flow first"
     @git push mirror 'refs/heads/release-*:refs/heads/release-*' 2>/dev/null || true
+
+# The terminal demo (assets/captures/README.md, decision 0020). The cast is a
+# replay of a committed transcript through the real TUI, so it needs no
+# provider and can be remade at any commit. asciinema records; agg renders
+# the GIF README embeds. `terva replay` does not exit when the scene ends, so
+# the run is bounded: the scene is about ten seconds at 1x plus the recorded
+# pauses, and 25 seconds leaves the final line on screen before the cut.
+demo-record:
+    @command -v asciinema >/dev/null || { echo "demo-record: asciinema is not installed (https://docs.asciinema.org/)"; exit 1; }
+    go build -tags terva_web,terva_acp -o .tmp/terva-demo ./cmd/terva
+    # The replay runs under a throwaway HOME so the status bar reads
+    # ~/auth-service on branch main, whoever records it, and no personal
+    # config or theme leaks into the cast.
+    rm -rf .tmp/demo-home && mkdir -p .tmp/demo-home/auth-service
+    git -C .tmp/demo-home/auth-service init -q -b main
+    printf 'package auth\n' > .tmp/demo-home/auth-service/auth.go
+    git -C .tmp/demo-home/auth-service -c user.name=demo -c user.email=demo@terva.sh add auth.go
+    git -C .tmp/demo-home/auth-service -c user.name=demo -c user.email=demo@terva.sh commit -q -m 'auth service'
+    HOME="$PWD/.tmp/demo-home" TERVA_HOME="$PWD/.tmp/demo-home/.terva" \
+    TERVA_REDRAW_FPS=4 TERVA_PROGRESS=on TERVA_INLINE_IMAGES=off \
+      asciinema rec --overwrite --cols 100 --rows 30 -i 2 \
+        -t "terva: a timing-safe token compare, with a person in the loop (half speed)" \
+        -c "cd $PWD/.tmp/demo-home/auth-service && timeout --foreground 90s $PWD/.tmp/terva-demo replay $PWD/assets/captures/terminal-demo.jsonl --speed 0.5; true" \
+        assets/captures/terminal-demo.cast
+    @printf 'commit: %s\ncols: 100\nrows: 30\nidle_limit: 2\nspeed: 0.5\nrecorded: %s\n' "$(git rev-parse --short HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > assets/captures/terminal-demo.cast.stamp
+    @echo "recorded assets/captures/terminal-demo.cast; now: just demo-gif, then copy the cast to docs/vanity/site/assets/"
+
+# Render the cast as the GIF README embeds. agg: https://github.com/asciinema/agg
+demo-gif:
+    @command -v agg >/dev/null || { echo "demo-gif: agg is not installed (https://github.com/asciinema/agg)"; exit 1; }
+    agg --cols 100 --rows 30 --idle-time-limit 2 --speed 1 assets/captures/terminal-demo.cast assets/captures/terminal-demo.gif
+    @ls -l assets/captures/terminal-demo.gif

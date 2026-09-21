@@ -19,7 +19,7 @@ import (
 )
 
 // This file is the TUI's ctrlproto carrier path — the only shipping
-// backend (docs/proposals/tui-on-ctrlproto.md; --tui-legacy is a
+// backend (docs/proposals/archive/tui-on-ctrlproto.md; --tui-legacy is a
 // deprecated no-op). Where the removed legacy path drove a *core.Agent
 // directly and consumed typed core.AgentEvent through a synchronous
 // sink, this path drives the in-process ctrlproto WorkspaceService and consumes
@@ -521,7 +521,7 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 			i.enqueueCarrierPermission(*ev.Permission)
 		}
 	case ctrlproto.EventPermissionResolved:
-		if ev.Resolved != nil {
+		if ev.Resolved != nil && !i.walkCarrierPermission(*ev.Resolved) {
 			i.dismissCarrierPermission(ev.Resolved.CallID)
 		}
 	case ctrlproto.EventAskRequest:
@@ -529,7 +529,7 @@ func (i *Interactive) handleCarrierEvent(ev ctrlproto.Event) {
 			i.enqueueCarrierAsk(*ev.Ask)
 		}
 	case ctrlproto.EventAskResolved:
-		if ev.Resolved != nil {
+		if ev.Resolved != nil && !i.walkCarrierAsk(*ev.Resolved) {
 			i.dismissCarrierAsk(ev.Resolved.AskID)
 		}
 	case ctrlproto.EventReplayState:

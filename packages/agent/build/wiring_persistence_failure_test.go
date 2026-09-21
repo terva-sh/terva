@@ -30,7 +30,7 @@ func (c *persistenceFailureClient) Stream(context.Context, provider.Request) (<-
 }
 
 func TestPersistenceFailureReachesHeadlessCaller(t *testing.T) {
-	for _, where := range []string{"user", "reply", "compaction", "delegated usage"} {
+	for _, where := range []string{"user", "reply", "compaction", "delegated usage", "side-channel usage"} {
 		t.Run(where, func(t *testing.T) {
 			dir := testsupport.TempDir(t)
 			sess, err := core.NewSession(dir, dir, "test", "test", "test")
@@ -45,7 +45,7 @@ func TestPersistenceFailureReachesHeadlessCaller(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := cl.calls
-			if where == "user" || where == "delegated usage" {
+			if where == "user" || where == "delegated usage" || where == "side-channel usage" {
 				if err := sess.Close(); err != nil {
 					t.Fatal(err)
 				}
@@ -58,13 +58,16 @@ func TestPersistenceFailureReachesHeadlessCaller(t *testing.T) {
 			case "delegated usage":
 				ag.RecordDelegatedUsage(provider.Usage{InputTokens: 5})
 				err = ag.Continue(context.Background(), nil)
+			case "side-channel usage":
+				ag.RecordSideChannelUsage("next_step", provider.Usage{InputTokens: 5})
+				err = ag.Continue(context.Background(), nil)
 			default:
 				err = ag.Prompt(context.Background(), "unsaved turn", nil, nil)
 			}
 			if !errors.Is(err, core.ErrPersistence) {
 				t.Errorf("operation returned %v; want persistence failure", err)
 			}
-			if (where == "user" || where == "delegated usage") && cl.calls != before {
+			if (where == "user" || where == "delegated usage" || where == "side-channel usage") && cl.calls != before {
 				t.Error("provider ran after persistence had already failed")
 			}
 			calls, count := cl.calls, len(ag.Messages())

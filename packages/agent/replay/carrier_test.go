@@ -361,3 +361,70 @@ func TestReplayedContextGaugeCountsCacheWrites(t *testing.T) {
 			"the model read out of the cache write", got, want, u.CacheWriteTokens)
 	}
 }
+
+// A replay has one stream. The TUI subscribes to the session and to the
+// workspace address, so a carrier that served the session stream on both
+// would deliver every frame twice, and a permission prompt would open two
+// dialogs of which only one could be dismissed.
+func TestCarrierRefusesWorkspaceAddress(t *testing.T) {
+	c, err := Open(writeFixture(t), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := c.Subscribe(t.Context(), ctrlproto.AddrWorkspace); err == nil {
+		t.Fatal("Subscribe(#workspace) returned a stream, want an error")
+	}
+	if _, err := c.SubscribeReliable(t.Context(), ctrlproto.AddrWorkspace); err == nil {
+		t.Fatal("SubscribeReliable(#workspace) returned a stream, want an error")
+	}
+}
+
+// A side-channel row (an idle suggestion, a side chat) and a sub-agent's row
+// are spend on the session, not prompts of it, and the live gauge never moved
+// for either. A replay that seeded from the LAST usage row took whichever
+// happened to be last, so a session that ended on a side chat's bespoke
+// prompt replayed with that prompt's size as its context, the twin of the
+// resume defect SessionUsageDetail guards against.
+func TestReplayedContextGaugeSkipsSideChannelAndDelegatedRows(t *testing.T) {
+	path := filepath.Join(testsupport.TempDir(t), "side.jsonl")
+	sess, err := core.NewSessionAtPath(path, "/cwd", "prov", "model", "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.AppendMessage(provider.Message{
+		Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hello"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	own := provider.Usage{InputTokens: 4000, CacheReadTokens: 36000, OutputTokens: 5, CostUSD: 0.04}
+	cum := own
+	if err := sess.AppendUsage(own, cum); err != nil {
+		t.Fatal(err)
+	}
+	side := provider.Usage{InputTokens: 700, OutputTokens: 30, CostUSD: 0.01}
+	cum = cum.Add(side)
+	if err := sess.AppendSideChannelUsage("side_chat", side, cum); err != nil {
+		t.Fatal(err)
+	}
+	child := provider.Usage{InputTokens: 250000, OutputTokens: 900, CostUSD: 1.30}
+	cum = cum.Add(child)
+	if err := sess.AppendDelegatedUsage(child, cum); err != nil {
+		t.Fatal(err)
+	}
+	sess.Close()
+
+	c, err := Open(path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	if got, want := c.ctxTokens, own.PromptTokens(); got != want {
+		t.Errorf("seeded context gauge = %d, want %d, the session's own last turn; a side-channel or delegated row took it", got, want)
+	}
+	// The money still comes from the last row, whoever spent it.
+	if got := c.cumUsage.CostUSD; got < 1.349 || got > 1.351 {
+		t.Errorf("seeded cumulative cost = %.4f, want 1.35", got)
+	}
+}

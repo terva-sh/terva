@@ -90,6 +90,31 @@ func (a *Agent) AddDelegatedUsageObserver(fn func(u, cumulative provider.Usage))
 	a.obsMu.Unlock()
 }
 
+// AddSideChannelUsageObserver registers fn to fire when a host's one-off
+// completion is booked against this session (RecordSideChannelUsage), carrying
+// the source that spent it, the request's own usage, and this session's
+// cumulative total. Hosts persist it as a usage row MARKED with the source.
+//
+// Separate from AddUsageObserver for the reason the delegated one is: only the
+// plain observer answers "what did this session's last request cost". A
+// side-channel call was already kept out of the last-turn snapshot in memory,
+// but it reached the persistence observer unmarked, so on disk an idle
+// suggestion's request and a turn of the session were the same row.
+//
+// Registering one takes the side-channel calls OFF the plain observer for
+// every registrant, not only this one: RecordSideChannelUsage falls back to
+// the plain path only while nobody has registered here. A host that wants
+// these calls for telemetry and persists on the plain observer must persist
+// them here too, or they stop reaching disk. nil is a no-op.
+func (a *Agent) AddSideChannelUsageObserver(fn func(source string, u, cumulative provider.Usage)) {
+	if fn == nil {
+		return
+	}
+	a.obsMu.Lock()
+	a.sideChannelUsageObs = append(a.sideChannelUsageObs, fn)
+	a.obsMu.Unlock()
+}
+
 // AddTranscriptCompactedObserver registers fn to fire after Compact replaces
 // the in-memory transcript with the synthetic summary plus kept tail. Message
 // observers do not fire for that wholesale replacement, so hosts append an
@@ -436,6 +461,20 @@ func (a *Agent) fireDelegatedUsage(u, cumulative provider.Usage) {
 	for _, fn := range obs {
 		fn(u, cumulative)
 	}
+}
+
+// fireSideChannelUsage reports whether any observer received the call, so the
+// booking path can fall back to the plain usage observers on a host that never
+// registered one.
+func (a *Agent) fireSideChannelUsage(source string, u, cumulative provider.Usage) bool {
+	a.obsMu.RLock()
+	obs := make([]func(source string, u, cumulative provider.Usage), len(a.sideChannelUsageObs))
+	copy(obs, a.sideChannelUsageObs)
+	a.obsMu.RUnlock()
+	for _, fn := range obs {
+		fn(source, u, cumulative)
+	}
+	return len(obs) > 0
 }
 
 func (a *Agent) fireToolGroupActivated(group string) {

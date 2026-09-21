@@ -6,6 +6,12 @@
 <p align="center">
   <a href="https://terva.sh">terva.sh</a>
 </p>
+<p align="center">
+  <img src="assets/captures/terminal-demo.gif" alt="A recorded terva session, played at half speed: the agent asks before each edit and command, one is refused, one is widened to the session, and a question is answered with a note" width="800" />
+</p>
+<p align="center">
+  <sub>A session transcript replayed through the real terminal at half speed. The same recording plays at <a href="https://terva.sh/#demo">terva.sh</a>; <code>just demo-record</code> remakes it.</sub>
+</p>
 
 ## What is it?
 
@@ -21,7 +27,8 @@ the control plane — same sessions, same permissions, same event stream:
   commands, inline images, and message queueing. See [docs/tui.md](docs/tui.md).
 - a **web UI** (`terva web`) — a browser control panel, not a viewer: drive
   sessions, approve tool calls, edit settings, watch the transcript stream.
-  See [docs/web.md](docs/web.md).
+  See [docs/web.md](docs/web.md) to serve it and
+  [docs/web-interface.md](docs/web-interface.md) for what it shows.
 
 Pick either, or both against the same session — the TUI can also drive a
 running `terva web` daemon as a client (`terva attach`), so the terminal
@@ -63,7 +70,7 @@ curl -fsSL https://terva.sh/install.sh | bash
 Detects your OS and architecture, downloads the latest release from GitHub, verifies the SHA-256 against the release's `checksums.txt`, extracts the binary, and drops it in `/usr/local/bin`, `~/.local/bin`, or `~/bin`, whichever is writable first. Pass a version or prefix to pin:
 
 ```bash
-curl -fsSL https://terva.sh/install.sh | bash -s -- v0.0.1 ~/bin
+curl -fsSL https://terva.sh/install.sh | bash -s -- v0.137.0 ~/bin
 ```
 
 ### One-liner (Windows, PowerShell)
@@ -149,30 +156,42 @@ The reference guides:
 | Doc | What's in it |
 |---|---|
 | [docs/cli.md](docs/cli.md) | Flags, tools (`read`/`write`/`edit`/`bash`/`grep`/`glob`/`terva_status`/`task_*`/`session_inspect`), run modes, the data directory |
+| [docs/secrets.md](docs/secrets.md) | Secrets at rest (`terva secret`): the age key a new install generates, backing it up, rotation, and the `terva web` bearer token |
 | [docs/standard-tools.md](docs/standard-tools.md) | The tool-surface strategy: core vs standard extension vs MCP preset, and the roadmap for new tools |
 | [docs/permissions.md](docs/permissions.md) | Approval modes (`plan`/`ask`/`auto-edit`/`workspace`/`yolo`, with `workspace` the interactive default), permission rules, and the jail-by-default sandbox |
 | [docs/hooks.md](docs/hooks.md) | Pre/post tool-use hooks: veto, rewrite, or observe tool calls with your own scripts |
 | [docs/mcp.md](docs/mcp.md) | Attaching MCP servers as tool providers (stdio, namespaced, permission-gated) |
-| [docs/tui.md](docs/tui.md) | The terminal UI: slash commands, sessions, inline images, message queueing, key bindings |
+| [docs/scripting.md](docs/scripting.md) | The in-engine JavaScript sandbox: `code_execution` and `code_execution_mutating`, with the host's tools as functions |
+| [docs/tui.md](docs/tui.md) | The terminal UI: attaching to a daemon, the status bar, copying text out, sessions, inline images, key bindings |
+| [docs/slash-commands.md](docs/slash-commands.md) | Every TUI slash command, and what each one does |
 | [docs/recording.md](docs/recording.md) | Recording a TUI session with asciinema: keeping the capture small, the OSC 9;4 busy signal, and secrets |
-| [docs/web.md](docs/web.md) | The web control panel (`terva web`): serving it, the panes, and how it drives the same core |
+| [docs/web.md](docs/web.md) | Running the web control panel (`terva web`): the listener, reverse proxy, auth, deployment, self-restart, building the client |
+| [docs/web-interface.md](docs/web-interface.md) | What the web panel shows: the panes, model picker, usage, slash commands, attachments, shared files |
+| [docs/serve.md](docs/serve.md) | `terva serve`: one terva per signed-in person on one host, with containment, enrolment, and the operator panel |
+| [docs/fleet.md](docs/fleet.md) | One browser reading many machines: the hub, members that dial in, and the tunnel between them |
 | [docs/models.md](docs/models.md) | Picking models, fallback/rescue, custom catalogs, per-provider notes (Kimi, DeepSeek, Gemini, ollama, OpenAI-compatible) |
 | [docs/providers.md](docs/providers.md) | Login flows, endpoints, `models.json` reference, capability tags |
 | [docs/connectors.md](docs/connectors.md) | Chat connectors: the telegram and discord bridges, external connectors in any language, group admission, approvals over chat |
+| [docs/connector-protocol.md](docs/connector-protocol.md) | The connector frame reference: every frame in both directions, protocol 1 and 2, and the feature-string vocabulary |
 | [docs/deploy.md](docs/deploy.md) | Running bots as services: systemd units and the container image, for persistent, resuming, capability-scoped connector agents |
-| [docs/extensions.md](docs/extensions.md) | Extensions: installing, managing, and the full wire protocol |
+| [docs/scheduled-jobs.md](docs/scheduled-jobs.md) | Running terva unattended on a timer: watches, reports, and follow-ups |
+| [docs/extensions.md](docs/extensions.md) | Extensions: writing one, the manifest, discovery, configuration, the SDKs, installing and managing |
+| [docs/extension-protocol.md](docs/extension-protocol.md) | The extension frame reference: every frame in both directions, the protocol version each arrived in, the golden corpus |
 | [docs/controllers.md](docs/controllers.md) | The control-plane protocol (`ctrlproto`): frames, method groups, events, carriers, and the management-plane horizon |
 | [docs/skills.md](docs/skills.md) | `SKILL.md` reusable instructions: anatomy, discovery, authoring |
 | [docs/personas.md](docs/personas.md) | Personas and immersive chat/play: charters, immersive identities, character cards, the cast + `actor_spawn`, and the mode flags |
 | [docs/raati.md](docs/raati.md) | RAATI: the deliberation primitive — several models argue a decision to a recorded verdict |
+| [docs/workflows.md](docs/workflows.md) | Scripted multi-agent orchestration with `terva workflow run`: a JavaScript program that spawns and sequences sub-agents |
 | [docs/context-construction.md](docs/context-construction.md) | What actually goes into the model's context each turn, and in what order |
 | [docs/debugging-prompts.md](docs/debugging-prompts.md) | Inspecting the assembled prompt (`--dump-prompt`), the lore engine, and card/lore/greeting troubleshooting |
+| [docs/prompt-labels.md](docs/prompt-labels.md) | Reference for the source labels and portability classes that `--dump-prompt` prints |
 | [docs/themes.md](docs/themes.md) | User and extension themes |
 | [docs/localization.md](docs/localization.md) | Translating the UI into another language, and overriding terva's wording or model-facing prompts in place (even in English) |
 | [docs/rpc.md](docs/rpc.md) | Embedding terva: the RPC wire schema and the JSON event stream (Go SDK: `packages/agent/sdk`, examples under `examples/`) |
 | [docs/resource-limits.md](docs/resource-limits.md) | Bounding what a session can spend: turns, tokens, cost, and wall-clock |
 | [docs/profiling.md](docs/profiling.md) | Performance-profiling the harness: the `terva_pprof` dev build, pprof/`GODEBUG` capture, and reading a TUI CPU profile |
 | [docs/fork.md](docs/fork.md) | Lineage: how terva relates to zot, and the compatibility promises | <!-- rename:keep -->
+| [docs/positioning.md](docs/positioning.md) | The canonical statement of what terva is, which downstream copy derives from |
 | [CHANGELOG.md](CHANGELOG.md) | What changed in every released version, newest first |
 
 ## Development

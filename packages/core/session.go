@@ -337,19 +337,33 @@ type WorldLoreEntry struct {
 // prefers the discriminator and falls back to field presence for v1
 // files.
 type sessionLine struct {
-	Type       string          `json:"type"`
-	Meta       *SessionMeta    `json:"meta,omitempty"`
-	Message    *wireMessage    `json:"message,omitempty"`
-	Messages   []wireMessage   `json:"messages,omitempty"`
-	Usage      *provider.Usage `json:"usage,omitempty"`
-	Cumulative *provider.Usage `json:"cumulative,omitempty"`
+	Type string `json:"type"`
+	// Permission and Ask are the two human exchanges a replay shows; see
+	// session_interaction.go.
+	Permission *PermissionRecord `json:"permission,omitempty"`
+	Ask        *AskRecord        `json:"ask,omitempty"`
+	Meta       *SessionMeta      `json:"meta,omitempty"`
+	Message    *wireMessage      `json:"message,omitempty"`
+	Messages   []wireMessage     `json:"messages,omitempty"`
+	Usage      *provider.Usage   `json:"usage,omitempty"`
+	Cumulative *provider.Usage   `json:"cumulative,omitempty"`
 	// Delegated marks a usage row as a SUB-AGENT's spend booked against this
 	// session, not a request this session sent. Without it the two are
 	// byte-identical on disk, and a child's cold prompt — large input, no cache
 	// read — reads exactly like a parent cache collapse to anything analysing
 	// the file. RecentUsage() and the last-turn snapshot already excluded
 	// delegated spend in memory for that reason; the row did not.
-	Delegated  bool                    `json:"delegated,omitempty"`
+	Delegated bool `json:"delegated,omitempty"`
+	// Source marks a usage row as one of the HOST's one-off completions on this
+	// session's credentials (an idle next-step suggestion, a side chat, the
+	// Stage router), named by the surface that spent it. Empty on a row the
+	// session's own turn wrote. The same defect Delegated closes, from the
+	// other side: unmarked, such a row is a turn of the session to every
+	// reader, and the only way to find one was the shape it left behind, a
+	// usage row with no message after it. A string rather than a second bool
+	// because the question a reader asks is not "was this a side call" but
+	// "what did the idle suggestion cost this session", which needs the name.
+	Source     string                  `json:"source,omitempty"`
 	Directive  *sessionDirective       `json:"directive,omitempty"`
 	Amend      *sessionAmend           `json:"amend,omitempty"`
 	Lore       *sessionLore            `json:"lore,omitempty"`
@@ -1212,6 +1226,7 @@ func SessionUsageDetail(path string) (cumulative, lastTurn, resumeContext provid
 				Usage      provider.Usage `json:"usage"`
 				Cumulative provider.Usage `json:"cumulative"`
 				Delegated  bool           `json:"delegated"`
+				Source     string         `json:"source"`
 			}
 			if err := json.Unmarshal(line, &row); err != nil {
 				return nil
@@ -1223,7 +1238,12 @@ func SessionUsageDetail(path string) (cumulative, lastTurn, resumeContext provid
 			// as its context gauge — and a child is routinely larger than its
 			// parent, so the first threshold check would auto-compact a
 			// transcript that never grew.
-			if row.Delegated {
+			//
+			// A host's side-channel call takes the same path. In memory it was
+			// never the snapshot (RecordSideChannelUsage books total-only), but
+			// on disk it was an ordinary row, so a session whose last row was
+			// a side chat's bespoke prompt resumed with THAT as its gauge.
+			if row.Delegated || row.Source != "" {
 				sinceLastTurn = sinceLastTurn.Add(row.Usage)
 				return nil
 			}
@@ -3213,7 +3233,7 @@ func (s *Session) AppendToolGroupActivation(group string) error {
 
 // AppendUsage writes a usage row to the session.
 func (s *Session) AppendUsage(u, cum provider.Usage) error {
-	return s.appendUsage(u, cum, false)
+	return s.appendUsage(u, cum, false, "")
 }
 
 // AppendDelegatedUsage writes a usage row for spend a SUB-AGENT incurred on this
@@ -3226,18 +3246,27 @@ func (s *Session) AppendUsage(u, cum provider.Usage) error {
 // (transcript-sized input, nothing cached) is otherwise indistinguishable from
 // this session's cache collapsing.
 func (s *Session) AppendDelegatedUsage(u, cum provider.Usage) error {
-	return s.appendUsage(u, cum, true)
+	return s.appendUsage(u, cum, true, "")
 }
 
-// appendUsage is the single writer behind both, so the timestamp cannot be
-// forgotten by whichever one the next caller reaches for — the same reason every
-// meta writer funnels through writeMeta. See sessionLine.At.
-func (s *Session) appendUsage(u, cum provider.Usage, delegated bool) error {
+// AppendSideChannelUsage records a one-off completion the host ran on this
+// session's credentials, marked with the source that spent it. Same row type
+// as AppendUsage and AppendDelegatedUsage, for the same reason: the cumulative
+// figure stays one coherent timeline, and only the attribution differs. See
+// sessionLine.Source for why the attribution has to be on the row.
+func (s *Session) AppendSideChannelUsage(source string, u, cum provider.Usage) error {
+	return s.appendUsage(u, cum, false, source)
+}
+
+// appendUsage is the single writer behind all three, so the timestamp cannot
+// be forgotten by whichever one the next caller reaches for — the same reason
+// every meta writer funnels through writeMeta. See sessionLine.At.
+func (s *Session) appendUsage(u, cum provider.Usage, delegated bool, source string) error {
 	if s == nil {
 		return nil
 	}
 	now := time.Now().UTC()
-	return s.writeLine(sessionLine{Type: "usage", Usage: &u, Cumulative: &cum, Delegated: delegated, At: &now})
+	return s.writeLine(sessionLine{Type: "usage", Usage: &u, Cumulative: &cum, Delegated: delegated, Source: source, At: &now})
 }
 
 // SessionError is one row of the error sidecar (see LogError). Exported

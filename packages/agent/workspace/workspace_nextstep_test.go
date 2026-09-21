@@ -289,14 +289,27 @@ func TestNextStepBooksItsSpend(t *testing.T) {
 	cl.usage = provider.Usage{InputTokens: 900, OutputTokens: 7}
 	cl.mu.Unlock()
 
+	// Booked on the MARKED observer, under its own source. The plain one is
+	// what a host persists turns on, and a suggestion that reached it would
+	// land on disk as a turn of the session, which is how the cost of this
+	// call went unmeasured for as long as it did (TKT-01M213C1).
 	var booked provider.Usage
-	s.agent.AddUsageObserver(func(u, _ provider.Usage) { booked = u })
+	var source string
+	var plain int
+	s.agent.AddUsageObserver(func(u, _ provider.Usage) { plain++ })
+	s.agent.AddSideChannelUsageObserver(func(src string, u, _ provider.Usage) { source, booked = src, u })
 
 	if _, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{}); err != nil {
 		t.Fatalf("suggest: %v", err)
 	}
 	if booked.OutputTokens != 7 || booked.InputTokens != 900 {
 		t.Fatalf("booked usage = %+v, want the completion's own", booked)
+	}
+	if source != "next_step" {
+		t.Fatalf("booked under source %q, want next_step", source)
+	}
+	if plain != 0 {
+		t.Fatalf("the plain usage observer fired %d time(s); a suggestion must not persist as a turn", plain)
 	}
 }
 

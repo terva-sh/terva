@@ -139,7 +139,7 @@ func (w *Workspace) SideChatAsk(ctx context.Context, sess, id string, prior []ct
 		// No tools: a side chat is conversational, not agentic.
 	}
 	out, usage, err := streamText(ctx, snap.client, req)
-	s.recordSideChannelUsage(usage)
+	s.recordSideChannelUsage(sideChannelSideChat, usage)
 	return out, err
 }
 
@@ -155,16 +155,35 @@ func (w *Workspace) SideChatClose(ctx context.Context, sess, id string) error {
 	return nil
 }
 
+// The side-channel sources, as they land on the usage row on disk. Each names
+// the surface that spent the tokens, in the vocabulary a reader of the session
+// file sees, so the list is a format the way a row type is: rename one and
+// every session already written stops answering for it. Add a constant here
+// when a new one-off completion appears rather than passing a literal, so the
+// set stays greppable from the one place that owns it.
+const (
+	sideChannelNextStep      = "next_step"      // the idle composer's suggestion, and /nextstep
+	sideChannelSideChat      = "side_chat"      // a side chat turn
+	sideChannelSuggest       = "suggest"        // the Stage reply drafter
+	sideChannelRoute         = "route"          // the meta-narrator's speaker pick
+	sideChannelVoice         = "voice"          // the line the picked speaker voices; it lands in the transcript, but it is billed outside Run, so the ledger sees it here
+	sideChannelCardDoctor    = "card_doctor"    // the card doctor's read
+	sideChannelSessionDoctor = "session_doctor" // the session doctor's read
+	sideChannelNextScene     = "next_scene"     // the next-scene proposal
+	sideChannelRealize       = "realize"        // realizing a proposed scene
+	sideChannelTitle         = "title"          // the generated session title
+)
+
 // recordSideChannelUsage books a one-off completion's spend against this
-// session's agent. Nil-safe on every hop: a cold session has no agent, and a
-// stream that failed before its usage event yields a zero Usage the agent
-// discards, so callers can hand back whatever streamText returned without
-// guarding first.
-func (s *wsSession) recordSideChannelUsage(u provider.Usage) {
+// session's agent, under the source that spent it. Nil-safe on every hop: a
+// cold session has no agent, and a stream that failed before its usage event
+// yields a zero Usage the agent discards, so callers can hand back whatever
+// streamText returned without guarding first.
+func (s *wsSession) recordSideChannelUsage(source string, u provider.Usage) {
 	if s == nil || s.agent == nil {
 		return
 	}
-	s.agent.RecordSideChannelUsage(u)
+	s.agent.RecordSideChannelUsage(source, u)
 }
 
 func sideChatMessage(role provider.Role, text string) provider.Message {

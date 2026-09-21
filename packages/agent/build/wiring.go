@@ -869,6 +869,15 @@ func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
 		defer mu.Unlock()
 		ag.RecordPersistenceError(sess.AppendDelegatedUsage(u, cum))
 	})
+	// The host's own one-off completions, marked with the surface that spent
+	// them. Same stream again, and the mark is the whole point: unmarked, an
+	// idle next-step suggestion's request is a turn of this session to every
+	// offline reader, and what the suggestions cost cannot be asked.
+	ag.AddSideChannelUsageObserver(func(source string, u, cum provider.Usage) {
+		mu.Lock()
+		defer mu.Unlock()
+		ag.RecordPersistenceError(sess.AppendSideChannelUsage(source, u, cum))
+	})
 	ag.AddTranscriptCompactedObserver(func(messages []provider.Message, res core.CompactResult) {
 		mu.Lock()
 		defer mu.Unlock()

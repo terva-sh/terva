@@ -349,6 +349,14 @@ func (r AskRequest) Set() []core.UserQuestion {
 type Resolved struct {
 	CallID string `json:"call_id,omitempty"`
 	AskID  string `json:"ask_id,omitempty"`
+	// Option, when set, is the 1-based position in the dialog's list of the
+	// answer that resolved the request, and Note the note typed with it. A
+	// live daemon leaves them zero: the client that answered already knows,
+	// and the others only need the request gone. A replay sets them so a
+	// client can play the answer as keystrokes instead of dismissing the
+	// dialog, which is how a recording shows a person choosing.
+	Option int    `json:"option,omitempty"`
+	Note   string `json:"note,omitempty"`
 }
 
 // ConversationEvent wraps a core wire event as a ctrlproto Event.

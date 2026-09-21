@@ -879,6 +879,8 @@ ResetsListResult
 Resolved
 	call_id	string	omitempty
 	ask_id	string	omitempty
+	option	int	omitempty
+	note	string	omitempty
 RestoreSessionParams
 	id	string
 RevealParams

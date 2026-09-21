@@ -224,6 +224,14 @@ func (d *QuestionDialog) advance() {
 	}
 }
 
+// IsShowing reports whether req is the request on screen, as opposed to one
+// queued behind it. A replay walks the cursor only on the one a viewer can see.
+func (d *QuestionDialog) IsShowing(req *QuestionRequest) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.pending) > 0 && d.pending[0] == req
+}
+
 // Remove drops a specific pending request without answering it — the carrier
 // path's dismissal when the daemon reports the ask already resolved. Mirrors
 // confirmDialog.Remove; a no-op when the request isn't pending.

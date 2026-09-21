@@ -27,6 +27,13 @@ type CostTracker struct {
 	// behalf, rather than by its own turns. A subset of Total, never added
 	// alongside it.
 	Delegated provider.Usage
+	// SideChannel is the part of Total spent by the host's one-off completions
+	// on this session's credentials (an idle next-step suggestion, a side
+	// chat, the Stage router) rather than by its own turns. A subset of Total,
+	// like Delegated, and kept apart for the same reason: a headline that
+	// merges them cannot say what the session's own turns cost, and a
+	// side-channel call is spend the user did not type a prompt for.
+	SideChannel provider.Usage
 
 	// recent is the tail of per-response usage records, oldest first, capped
 	// at recentCap. Totals answer "what has this session spent"; this answers
@@ -117,6 +124,25 @@ func (c *CostTracker) DelegatedTotal() provider.Usage {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.Delegated
+}
+
+// AddSideChannel folds u into the running total AND into the side-channel
+// tally, and touches nothing else. Total-only as far as the context gauge is
+// concerned, for the reason AddTotalOnly gives: a side-channel request's
+// prompt is not this session's context, and letting one overwrite LastTurn
+// would leave every threshold check reading a size the transcript never had.
+func (c *CostTracker) AddSideChannel(u provider.Usage) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Total = c.Total.Add(u)
+	c.SideChannel = c.SideChannel.Add(u)
+}
+
+// SideChannelTotal returns the side-channel tally under the tracker lock.
+func (c *CostTracker) SideChannelTotal() provider.Usage {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.SideChannel
 }
 
 // CumulativeTotal returns the cumulative usage under the tracker lock.

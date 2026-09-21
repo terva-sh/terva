@@ -208,7 +208,7 @@ func doctorRun(ctx context.Context, cl provider.Client, model, system, user stri
 		}},
 	}
 	out, usage, err := streamText(ctx, cl, req)
-	s.recordSideChannelUsage(usage)
+	s.recordSideChannelUsage(sideChannelCardDoctor, usage)
 	if err != nil {
 		return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "card doctor: %v", err)
 	}

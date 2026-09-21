@@ -28,6 +28,9 @@ type Options struct {
 	// the only correct trigger, since frames emitted before any subscriber joins
 	// fan out to nobody. Used by `terva replay`, off for a paused scrubber.
 	Autoplay bool
+	// Speed is the initial playback multiplier (0.5 = half speed). Zero is
+	// the player's default of 1. The transport can change it later.
+	Speed float64
 }
 
 // Synthesize turns recorded transcript rows into the ordered AgentEvent stream
@@ -51,15 +54,30 @@ func Synthesize(rows []core.ReplayRow, opts Options) []Frame {
 	if opts.Mode == "" {
 		opts.Mode = ModeEffective
 	}
+	if opts.Pace.WaitCap <= 0 {
+		opts.Pace.WaitCap = DefaultPace().WaitCap
+	}
 	s := &synth{opts: opts}
 	for _, row := range rows {
 		switch row.Kind {
 		case core.ReplayRowMessage:
 			s.message(row.Message)
 		case core.ReplayRowUsage:
+			// The live loop emits EvUsage for its own requests only. A
+			// sub-agent's row and a host side-channel row are booked
+			// total-only and never reach the event stream, so a replay that
+			// emitted them moved the gauge on a turn the session never had.
+			// The next real turn's cumulative already carries their cost.
+			if row.Delegated || row.Source != "" {
+				continue
+			}
 			s.emit(core.EvUsage{Usage: row.Usage, Cumulative: row.Cumulative}, 0)
 		case core.ReplayRowCompaction:
 			s.compaction(row.Checkpoint)
+		case core.ReplayRowPermission:
+			s.permission(row.Permission)
+		case core.ReplayRowAsk:
+			s.ask(row.Ask)
 		}
 	}
 	s.closePrompt()
@@ -71,10 +89,14 @@ type synth struct {
 	frames     []Frame
 	step       int
 	promptOpen bool
+	// hold is added to the next frame's delay: the time a client needs to
+	// play the resolution just emitted as keystrokes (see walk.go).
+	hold time.Duration
 }
 
 func (s *synth) emit(ev core.AgentEvent, d time.Duration) {
-	s.frames = append(s.frames, Frame{Event: ev, Delay: d})
+	s.frames = append(s.frames, Frame{Event: ev, Delay: d + s.hold})
+	s.hold = 0
 }
 
 func (s *synth) message(m provider.Message) {
@@ -179,4 +201,36 @@ func (s *synth) textDeltas(text string) {
 		end := min(i+n, len(runes))
 		s.emit(core.EvTextDelta{Delta: string(runes[i:end])}, s.opts.Pace.TextInterval)
 	}
+}
+
+// permission plays a tool-approval exchange: the prompt lands at once (the
+// tool call that needs it is already on screen), and the decision follows
+// after the wait the person actually took, clamped so a demo shows the pause
+// without reproducing a lunch break.
+func (s *synth) permission(rec core.PermissionRecord) {
+	s.emit(EvPermissionRequest{CallID: rec.CallID, Tool: rec.Tool, Preview: rec.Preview}, 0)
+	resolved := EvPermissionResolved{CallID: rec.CallID, Allow: rec.Allow, Reason: rec.Reason, Scope: rec.Scope}
+	s.emit(resolved, s.wait(rec.Waited))
+	s.hold = WalkDuration(permissionOption(resolved), 5, "")
+}
+
+// ask plays a question exchange the same way.
+func (s *synth) ask(rec core.AskRecord) {
+	s.emit(EvAskRequest{AskID: rec.AskID, Questions: rec.UserQuestions()}, 0)
+	qs, as := rec.UserQuestions(), rec.UserAnswers()
+	s.emit(EvAskResolved{AskID: rec.AskID, Answers: as}, s.wait(rec.Waited))
+	if opt, note := askOption(qs, as); opt > 0 {
+		s.hold = WalkDuration(opt, len(qs[0].Options), note)
+	}
+}
+
+// wait clamps a recorded human interval to [Think, WaitCap].
+func (s *synth) wait(d time.Duration) time.Duration {
+	if d < s.opts.Pace.Think {
+		return s.opts.Pace.Think
+	}
+	if d > s.opts.Pace.WaitCap {
+		return s.opts.Pace.WaitCap
+	}
+	return d
 }

@@ -171,7 +171,7 @@ func (s *wsSession) pickSpeaker(ctx context.Context, text string) speakerPick {
 	})
 	// Booked before the error check: a router pick that failed still spent the
 	// tokens it sent, and falling back to the bound character does not refund them.
-	s.recordSideChannelUsage(usage)
+	s.recordSideChannelUsage(sideChannelRoute, usage)
 	if err != nil {
 		return speakerPick{bound: true}
 	}
@@ -232,7 +232,7 @@ func (s *wsSession) voiceLine(ctx context.Context, pick speakerPick, text string
 			Time:    time.Now(),
 		}},
 	})
-	s.recordSideChannelUsage(usage)
+	s.recordSideChannelUsage(sideChannelVoice, usage)
 	if err != nil {
 		return err
 	}

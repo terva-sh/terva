@@ -45,12 +45,16 @@ type Carrier struct {
 	totalMessages int
 	turnStarts    []int // frame indices of conversation-turn boundaries
 
-	mu          sync.Mutex
-	subs        map[chan ctrlproto.Event]bool // value: reliable
-	autoStarted bool
-	cumUsage    core.WireUsage
-	ctxTokens   int
-	lastState   time.Time // last onFrame replay_state broadcast; throttle gate
+	mu   sync.Mutex
+	subs map[chan ctrlproto.Event]bool // value: reliable
+	// askQuestions holds each open question set by id between its request and
+	// its resolution, so the resolution can name which option the recorded
+	// answer was. Guarded by mu.
+	askQuestions map[string][]core.UserQuestion
+	autoStarted  bool
+	cumUsage     core.WireUsage
+	ctxTokens    int
+	lastState    time.Time // last onFrame replay_state broadcast; throttle gate
 }
 
 var (
@@ -86,7 +90,19 @@ func Open(path string, opts Options) (*Carrier, error) {
 	// live as EvUsage frames emit).
 	for _, r := range rows {
 		if r.Kind == core.ReplayRowUsage {
+			// The cumulative figure is one coherent timeline whoever spent
+			// the row, so the money comes from every row.
 			c.cumUsage = toWireUsage(r.Cumulative)
+			// The context gauge does not. A sub-agent's row and a host
+			// side-channel row (an idle suggestion, a side chat) are spend
+			// on this session, not prompts of it, and the live gauge never
+			// moved for either: RecordDelegatedUsage and
+			// RecordSideChannelUsage book total-only. A replay that seeded
+			// from one showed a context size the session never had, which is
+			// the defect SessionUsageDetail closes for a resume.
+			if r.Delegated || r.Source != "" {
+				continue
+			}
 			// PromptTokens, not Input+CacheRead: cache WRITES are prompt the
 			// model read too. Omitting them showed ~0 context for a first turn
 			// on a long prefix — 100k written, 0 read — where the live gauge
@@ -98,6 +114,9 @@ func Open(path string, opts Options) (*Carrier, error) {
 	c.totalMessages = len(foldFrames(frames, len(frames)))
 	c.turnStarts = turnBoundaries(frames)
 	c.player = NewPlayer(frames, c.onFrame)
+	if opts.Speed > 0 {
+		c.player.SetSpeed(opts.Speed)
+	}
 	return c, nil
 }
 
@@ -249,7 +268,32 @@ func (c *Carrier) onFrame(idx int, f Frame) {
 		c.cumUsage = toWireUsage(u.Cumulative)
 		c.ctxTokens = u.Usage.PromptTokens() // the seed above, per frame
 	}
-	c.broadcastLocked(ctrlproto.ConversationEvent(core.EventToWire(f.Event)))
+	// A permission prompt or a question is not a conversation event on the
+	// wire: a live workspace broadcasts them as their own event types, and
+	// every client already renders those. So the four replay-only events map
+	// onto the same wire events rather than riding ConversationEvent, where a
+	// client would see an unknown type and show nothing.
+	switch e := f.Event.(type) {
+	case EvPermissionRequest:
+		c.broadcastLocked(ctrlproto.PermissionEvent(ctrlproto.PermissionRequest{CallID: e.CallID, Tool: e.Tool, Preview: e.Preview}))
+	case EvPermissionResolved:
+		ev := ctrlproto.PermissionResolvedEvent(e.CallID)
+		ev.Resolved.Option = permissionOption(e)
+		c.broadcastLocked(ev)
+	case EvAskRequest:
+		if c.askQuestions == nil {
+			c.askQuestions = map[string][]core.UserQuestion{}
+		}
+		c.askQuestions[e.AskID] = e.Questions
+		c.broadcastLocked(ctrlproto.AskEvent(ctrlproto.NewAskRequest(e.AskID, e.Questions)))
+	case EvAskResolved:
+		ev := ctrlproto.AskResolvedEvent(e.AskID)
+		ev.Resolved.Option, ev.Resolved.Note = askOption(c.askQuestions[e.AskID], e.Answers)
+		delete(c.askQuestions, e.AskID)
+		c.broadcastLocked(ev)
+	default:
+		c.broadcastLocked(ctrlproto.ConversationEvent(core.EventToWire(f.Event)))
+	}
 	if f.Reset != nil {
 		// Compaction resync: after compact_end the transcript is the checkpoint
 		// summary. Mirror the live daemon's post-compact snapshot so every
@@ -336,14 +380,27 @@ func (c *Carrier) sessionInfoLocked() ctrlproto.SessionInfo {
 // --- ctrlproto.WorkspaceService: read-only surface ---
 
 // Subscribe streams the replay: a snapshot up to the playhead, then paced events.
+//
+// The workspace address is refused. A replay has one stream, the session's,
+// and a client that subscribes to both addresses (the TUI does) would
+// otherwise receive every frame twice: a permission prompt would open two
+// dialogs under one call id, and its resolution would close only the second.
 func (c *Carrier) Subscribe(ctx context.Context, sess string) (<-chan ctrlproto.Event, error) {
+	if sess == ctrlproto.AddrWorkspace {
+		return nil, errNoWorkspaceStream
+	}
 	return c.subscribe(ctx, false), nil
 }
 
 // SubscribeReliable is Subscribe with no-drop delivery (the in-process TUI).
 func (c *Carrier) SubscribeReliable(ctx context.Context, sess string) (<-chan ctrlproto.Event, error) {
+	if sess == ctrlproto.AddrWorkspace {
+		return nil, errNoWorkspaceStream
+	}
 	return c.subscribe(ctx, true), nil
 }
+
+var errNoWorkspaceStream = ctrlproto.Errorf(ctrlproto.CodeUnsupported, "replay session: no workspace stream")
 
 // Sessions reports the single replay session.
 func (c *Carrier) Sessions(ctx context.Context) ([]ctrlproto.SessionInfo, error) {
@@ -577,4 +634,36 @@ func toWireUsage(u provider.Usage) core.WireUsage {
 		CacheWrite: u.CacheWriteTokens,
 		CostUSD:    u.CostUSD,
 	}
+}
+
+// permissionOption maps a recorded decision onto the confirm dialog's fixed
+// list: yes, always this tool, always this tool and save, always, no.
+func permissionOption(e EvPermissionResolved) int {
+	switch {
+	case !e.Allow:
+		return 5
+	case e.Scope == core.PermissionScopeTool:
+		return 2
+	case e.Scope == core.PermissionScopeToolSaved:
+		return 3
+	case e.Scope == core.PermissionScopeAll:
+		return 4
+	}
+	return 1
+}
+
+// askOption finds the recorded answer to the first question in its option
+// list. Zero when it was a typed answer, a decline, or a multi-question set,
+// which the walk does not play; the client then dismisses the dialog as
+// before.
+func askOption(qs []core.UserQuestion, as []core.UserAnswer) (int, string) {
+	if len(qs) != 1 || len(as) != 1 || as[0].Declined || as[0].Answer == "" {
+		return 0, ""
+	}
+	for i, o := range qs[0].Options {
+		if o == as[0].Answer {
+			return i + 1, as[0].Note
+		}
+	}
+	return 0, ""
 }

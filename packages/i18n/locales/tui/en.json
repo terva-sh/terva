@@ -726,7 +726,7 @@
   "yes (run this call)": "yes (run this call)",
   "yes, always (skip all prompts for the rest of the session)": "yes, always (skip all prompts for the rest of the session)",
   "yes, always this tool (skip prompts for this tool for the rest of the session)": "yes, always this tool (skip prompts for this tool for the rest of the session)",
-  "yes, always this tool — save (adds a permanent allow rule to your config)": "yes, always this tool — save (adds a permanent allow rule to your config)",
+  "yes, always this tool, and save it (adds a permanent allow rule to your config)": "yes, always this tool, and save it (adds a permanent allow rule to your config)",
   "yes, always — every tool runs unprompted this session": "yes, always — every tool runs unprompted this session",
   "yes, always “%s” — save (adds a permanent allow rule scoped to this command)": "yes, always “%s” — save (adds a permanent allow rule scoped to this command)",
   "you": "you",

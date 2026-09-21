@@ -39,13 +39,17 @@ type sessionWalkHooks struct {
 	// at is when the row was written, ZERO for rows predating the stamp — every
 	// consumer must treat a zero time as "unknown" rather than as a real instant,
 	// because the sessions worth analyzing are mostly older than the field.
-	onUsage func(u, cum provider.Usage, effLen int, delegated bool, at time.Time, line []byte)
+	onUsage func(u, cum provider.Usage, effLen int, delegated bool, source string, at time.Time, line []byte)
 	// onDirective fires for each append-only directive row (e.g. exclude_image).
 	onDirective func(d sessionDirective, line []byte)
 	// onToolGroup fires for each tool_group row — a capability group activated
 	// during the session, which a resume must re-mark to keep the tools array
 	// (and so the provider's cached prefix) identical.
 	onToolGroup func(group string, line []byte)
+	// onPermission and onAsk fire for the two human-exchange rows, which change
+	// nothing in the effective transcript and exist for a replay to show.
+	onPermission func(rec PermissionRecord, line []byte)
+	onAsk        func(rec AskRecord, line []byte)
 	// onAmend fires for each amend row AFTER it is applied to the effective
 	// transcript, with the op and the (as-written) index.
 	onAmend func(op string, index int, line []byte)
@@ -173,6 +177,24 @@ func walkSession(r io.Reader, rep *loadReport, h sessionWalkHooks) ([]provider.M
 			return nil
 		}
 		switch head.Type {
+		case "permission":
+			if h.onPermission != nil {
+				var row struct {
+					Permission *PermissionRecord `json:"permission"`
+				}
+				if err := json.Unmarshal(line, &row); err == nil && row.Permission != nil {
+					h.onPermission(*row.Permission, line)
+				}
+			}
+		case "ask":
+			if h.onAsk != nil {
+				var row struct {
+					Ask *AskRecord `json:"ask"`
+				}
+				if err := json.Unmarshal(line, &row); err == nil && row.Ask != nil {
+					h.onAsk(*row.Ask, line)
+				}
+			}
 		case "message":
 			msg, err := hydrateMessage(line, rep)
 			if err != nil {
@@ -212,6 +234,7 @@ func walkSession(r io.Reader, rep *loadReport, h sessionWalkHooks) ([]provider.M
 					Usage      provider.Usage `json:"usage"`
 					Cumulative provider.Usage `json:"cumulative"`
 					Delegated  bool           `json:"delegated"`
+					Source     string         `json:"source"`
 					At         *time.Time     `json:"at"`
 				}
 				if err := json.Unmarshal(line, &row); err != nil {
@@ -222,7 +245,7 @@ func walkSession(r io.Reader, rep *loadReport, h sessionWalkHooks) ([]provider.M
 				if row.At != nil {
 					at = *row.At
 				}
-				h.onUsage(row.Usage, row.Cumulative, len(effective), row.Delegated, at, line)
+				h.onUsage(row.Usage, row.Cumulative, len(effective), row.Delegated, row.Source, at, line)
 			}
 		case recordDirective:
 			if h.onDirective != nil {

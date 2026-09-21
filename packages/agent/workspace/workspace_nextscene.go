@@ -89,7 +89,7 @@ func proposeNextScene(ctx context.Context, s *wsSession, p ctrlproto.NextScenePa
 		}},
 	}
 	out, usage, err := streamText(ctx, cl, req)
-	s.recordSideChannelUsage(usage)
+	s.recordSideChannelUsage(sideChannelNextScene, usage)
 	if err != nil {
 		return ctrlproto.NextSceneResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "next scene: %v", err)
 	}

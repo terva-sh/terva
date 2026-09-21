@@ -88,7 +88,7 @@ func initSecretsForFreshHome() {
 		return
 	}
 	fmt.Fprintf(os.Stderr,
-		"note: new install — credentials will be encrypted at rest with %s\n"+
+		"note: new install: credentials will be encrypted at rest with %s\n"+
 			"      Back it up: everything it encrypts is unrecoverable without it (`terva secret status`).\n",
 		keyPath)
 }

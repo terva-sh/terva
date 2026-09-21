@@ -2356,7 +2356,7 @@ func generateTitle(ctx context.Context, cl provider.Client, model, seed string, 
 		}},
 	}
 	out, usage, err := streamText(ctx, cl, req)
-	s.recordSideChannelUsage(usage)
+	s.recordSideChannelUsage(sideChannelTitle, usage)
 	if err != nil {
 		return ""
 	}

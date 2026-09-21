@@ -29,6 +29,12 @@ const (
 	// ReplayRowCliff opens or closes a run of dispatches whose cache reads
 	// collapsed while the prompt kept growing.
 	ReplayRowCliff ReplayRowKind = "cliff"
+	// ReplayRowPermission is a tool call held at the permission prompt and the
+	// decision a person took, with how long they took. ReplayRowAsk is the
+	// agent asking a question set and the answers. Neither changes the
+	// transcript; both exist so a replay can show the person in the loop.
+	ReplayRowPermission ReplayRowKind = "permission"
+	ReplayRowAsk        ReplayRowKind = "ask"
 )
 
 // ReplayRow is one transcript row preserved in file order. It is the forward
@@ -51,6 +57,11 @@ type ReplayRow struct {
 	// rollup that mixes them reports the child's cold prompt as the parent
 	// missing its cache.
 	Delegated bool
+	// Source names the host surface that spent a usage row's tokens on this
+	// session's credentials ("next_step", "side_chat", ...), empty for a turn
+	// of the session. A rollup that counts these as turns reports an idle
+	// suggestion as a billed turn, and cannot say what the suggestions cost.
+	Source string
 	// At is when a usage row was written, ZERO for rows from before the stamp
 	// existed. Unlike Message.Time it is NOT backfilled from a neighbour: a
 	// message's time only has to order the scene, while this one is read to
@@ -72,6 +83,11 @@ type ReplayRow struct {
 	// that OPENS a collapse run from the one that closes it with the totals
 	// the run reached.
 	Cliff CacheCliff
+
+	// Permission is set when Kind == ReplayRowPermission; Ask when Kind ==
+	// ReplayRowAsk.
+	Permission PermissionRecord
+	Ask        AskRecord
 }
 
 // ReadReplayRows walks a session JSONL and returns every message, usage, and
@@ -94,11 +110,17 @@ func ReadReplayRows(path string) ([]ReplayRow, SessionMeta, error) {
 	rep := &loadReport{}
 	if _, err := walkSession(f, rep, sessionWalkHooks{
 		onMeta: func(m SessionMeta, _ []byte) { meta = m },
+		onPermission: func(rec PermissionRecord, _ []byte) {
+			rows = append(rows, ReplayRow{Kind: ReplayRowPermission, Permission: rec})
+		},
+		onAsk: func(rec AskRecord, _ []byte) {
+			rows = append(rows, ReplayRow{Kind: ReplayRowAsk, Ask: rec})
+		},
 		onMessage: func(m provider.Message, _ int, _ []byte) {
 			rows = append(rows, ReplayRow{Kind: ReplayRowMessage, Message: m})
 		},
-		onUsage: func(u, cum provider.Usage, _ int, delegated bool, at time.Time, _ []byte) {
-			rows = append(rows, ReplayRow{Kind: ReplayRowUsage, Usage: u, Cumulative: cum, Delegated: delegated, At: at})
+		onUsage: func(u, cum provider.Usage, _ int, delegated bool, source string, at time.Time, _ []byte) {
+			rows = append(rows, ReplayRow{Kind: ReplayRowUsage, Usage: u, Cumulative: cum, Delegated: delegated, Source: source, At: at})
 		},
 		onCompaction: func(out, _ []provider.Message, _ int, _ []byte) {
 			// walkSession aliases `out` as its live effective transcript after the
@@ -187,6 +209,22 @@ func StreamReplayRows(ctx context.Context, path string, maxBytes int64, fn func(
 			return nil
 		}
 		switch head.Type {
+		case "permission":
+			var prow struct {
+				Permission *PermissionRecord `json:"permission"`
+			}
+			if err := json.Unmarshal(line, &prow); err == nil && prow.Permission != nil {
+				fn(row, ReplayRow{Kind: ReplayRowPermission, Permission: *prow.Permission})
+			}
+			row++
+		case "ask":
+			var arow struct {
+				Ask *AskRecord `json:"ask"`
+			}
+			if err := json.Unmarshal(line, &arow); err == nil && arow.Ask != nil {
+				fn(row, ReplayRow{Kind: ReplayRowAsk, Ask: *arow.Ask})
+			}
+			row++
 		case "meta":
 			var mrow struct {
 				Meta SessionMeta `json:"meta"`
@@ -228,8 +266,13 @@ func StreamReplayRows(ctx context.Context, path string, maxBytes int64, fn func(
 				// actionable number here", was computed over the child's
 				// prompts — inverting the exact diagnosis the field was added
 				// to make possible.
-				Delegated bool       `json:"delegated"`
-				At        *time.Time `json:"at"`
+				Delegated bool `json:"delegated"`
+				// Source, for the same reason and through the same lesson:
+				// session_inspect reads through this decoder, so a field the
+				// other one learns and this one does not is a field no
+				// production reader ever sees.
+				Source string     `json:"source"`
+				At     *time.Time `json:"at"`
 			}
 			if err := json.Unmarshal(line, &urow); err == nil {
 				out := ReplayRow{
@@ -237,6 +280,7 @@ func StreamReplayRows(ctx context.Context, path string, maxBytes int64, fn func(
 					Usage:      urow.Usage,
 					Cumulative: urow.Cumulative,
 					Delegated:  urow.Delegated,
+					Source:     urow.Source,
 				}
 				if urow.At != nil {
 					out.At = *urow.At

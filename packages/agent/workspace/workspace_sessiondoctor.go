@@ -132,7 +132,7 @@ func sessionsDoctor(ctx context.Context, s *wsSession, p ctrlproto.SessionDoctor
 		}},
 	}
 	out, usage, err := streamText(ctx, cl, req)
-	s.recordSideChannelUsage(usage)
+	s.recordSideChannelUsage(sideChannelSessionDoctor, usage)
 	if err != nil {
 		return ctrlproto.SessionDoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "session doctor: %v", err)
 	}

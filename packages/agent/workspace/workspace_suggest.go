@@ -122,7 +122,7 @@ func (w *Workspace) SuggestReply(ctx context.Context, sess string, p ctrlproto.S
 		// No tools: drafting is conversational, not agentic.
 	}
 	text, usage, err := streamText(ctx, cl, req)
-	s.recordSideChannelUsage(usage)
+	s.recordSideChannelUsage(sideChannelSuggest, usage)
 	if err != nil {
 		return ctrlproto.SuggestResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "suggest a reply: %v", err)
 	}

@@ -23,7 +23,7 @@ import (
 // meta header rewritten so the importing user gets fresh ownership.
 //
 // Reads accept both this and the renamed ".tervasession" spelling —
-// dual-read is forever-cheap for user data (docs/plans/rename-terva.md).
+// dual-read is forever-cheap for user data (docs/plans/archive/rename-terva.md).
 // Import never gated on the extension anyway (it validates the meta
 // header), so the read seam only affects export's "already has the
 // extension" checks below.
@@ -508,7 +508,7 @@ func BranchSession(parentPath, root, cwd, version string, upToMessageIdx int) (s
 				nonCompactedRows = append(nonCompactedRows, append([]byte(nil), line...))
 			}
 		},
-		onUsage: func(_, _ provider.Usage, effLen int, _ bool, _ time.Time, line []byte) {
+		onUsage: func(_, _ provider.Usage, effLen int, _ bool, _ string, _ time.Time, line []byte) {
 			if !sawCompaction && effLen < upToMessageIdx {
 				nonCompactedRows = append(nonCompactedRows, append([]byte(nil), line...))
 			}

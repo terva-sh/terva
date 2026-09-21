@@ -1149,6 +1149,55 @@ func TestSessionInspectHitRateCountsCacheWrites(t *testing.T) {
 	}
 }
 
+// TestSessionInspectStatsBreaksOutSideChannelSpend: a usage row marked with a
+// source is the host's one-off completion on this session's credentials, an
+// idle next-step suggestion here. It is inside the cost, outside the billed
+// turns and the hit rate, and reported per source with its own hit rate, which
+// is the number an idle suggestion's cost turns on (TKT-01M213C1). Before the
+// mark, the two suggestion rows below were two more billed turns.
+func TestSessionInspectStatsBreaksOutSideChannelSpend(t *testing.T) {
+	home := testsupport.TempDir(t)
+	cwd := testsupport.TempDir(t)
+	path := filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"type":"meta","meta":{"id":"x","cwd":"` + cwd + `","format_version":2}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}
+{"type":"usage","usage":{"input_tokens":1000,"output_tokens":50,"cache_read_tokens":9000,"cost_usd":0.5},"cumulative":{"input_tokens":1000,"output_tokens":50,"cache_read_tokens":9000,"cost_usd":0.5}}
+{"type":"usage","usage":{"input_tokens":100,"output_tokens":20,"cache_read_tokens":9900,"cost_usd":0.02},"cumulative":{"input_tokens":1100,"output_tokens":70,"cache_read_tokens":18900,"cost_usd":0.52},"source":"next_step"}
+{"type":"usage","usage":{"input_tokens":100,"output_tokens":20,"cache_read_tokens":9900,"cost_usd":0.02},"cumulative":{"input_tokens":1200,"output_tokens":90,"cache_read_tokens":28800,"cost_usd":0.54},"source":"next_step"}
+{"type":"usage","usage":{"input_tokens":400,"output_tokens":40,"cost_usd":0.04},"cumulative":{"input_tokens":1600,"output_tokens":130,"cache_read_tokens":28800,"cost_usd":0.58},"source":"side_chat"}
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess1","stats":true}`), func(string) {})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("stats errored: %s", inspectText(t, res))
+	}
+	got := inspectText(t, res)
+	for _, want := range []string{
+		// The headline holds all the money, over the session's OWN turn only.
+		"cost: $0.5800 over 1 billed turn(s)",
+		// The hit rate is the session's own request, not flattered by three
+		// calls built to read its cache.
+		"cache hit rate 90.0% of prompt",
+		"of which side-channel calls: $0.0800 over 3 call(s), 20400 in / 80 out (excluded from the hit rate above)",
+		"next_step: $0.0400 over 2 call(s), 20000 in / 40 out, cache hit rate 99.0% of prompt",
+		"side_chat: $0.0400 over 1 call(s), 400 in / 40 out, cache hit rate 0.0% of prompt",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stats missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // A model with no published rate prices at zero, so a real session reports
 // cost_usd 0 on every turn. Rendering that as "$0.0000 over N billed turn(s)"
 // says the session was free; one reviewed session moved 112 million tokens and

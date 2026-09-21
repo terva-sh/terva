@@ -513,24 +513,21 @@ func (i *Interactive) redraw() {
 	}
 
 	// Detect overlay close (any dialog or slash/file suggestion popup
-	// just transitioned from open to closed). Force a full redraw so
-	// the rows the overlay occupied are guaranteed to be repainted
-	// from the chat below, instead of the diff path leaving stale
-	// dialog content behind. Equivalent to the user pressing ctrl+l.
+	// just transitioned from open to closed): the bottom band shrinks.
+	// The renderer's diff repaints the vacated rows from the chat below
+	// and clears the rows the frame no longer reaches, so on an ordinary
+	// terminal nothing more is needed. It used to run a full Clear here on
+	// every terminal, which is a blank frame between the clear and the
+	// repaint anywhere synchronized output is not honored: asciinema
+	// recordings and GIFs of them showed a flash at every answered prompt
+	// (TKT-01M2YPDEKB).
+	//
+	// VS Code's terminal is the exception. Closing a dialog there leaves
+	// the stale overlay rows in the retained scrollback, which the quiet
+	// in-place diff cannot drop, so it gets the same full Clear() that
+	// Ctrl+L runs, and Clear() is keepScrollback-aware there.
 	overlayOpen := len(dialog) > 0 || len(suggest) > 0
-	if i.rend != nil && i.prevOverlayOpen && !overlayOpen {
-		// An overlay (dialog or slash/file popup) just closed, so the
-		// bottom band shrinks. On terminals where we can drop
-		// scrollback, a full Clear is the simplest way to guarantee
-		// the vacated rows are repainted from the chat below.
-		//
-		// On VS Code's terminal closing a dialog leaves the stale
-		// overlay rows in the retained scrollback (we can't drop them
-		// with the quiet in-place diff). Run the same full Clear() that
-		// Ctrl+L uses so the scrollback is purged and the conversation
-		// is repainted clean, matching what the user expects after
-		// dismissing a picker. Clear() is keepScrollback-aware and
-		// emits \x1b[3J there.
+	if i.rend != nil && i.prevOverlayOpen && !overlayOpen && i.rend.KeepsScrollback() {
 		i.rend.Clear()
 	}
 	i.prevOverlayOpen = overlayOpen

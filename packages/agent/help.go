@@ -91,7 +91,7 @@ func PrintHelp(version string) {
 		row{"terva --json \"prompt\"", i18n.T("newline-delimited json events, exit")},
 		row{"terva rpc", i18n.T("json-rpc loop on stdin/stdout (see docs/rpc.md)")},
 		row{"terva acp", i18n.T("agent-client-protocol loop for editor integrations (opt-in build; see docs/cli.md)")},
-		row{"terva replay FILE", i18n.T("replay a saved session file as a local player (see docs/cli.md)")},
+		row{"terva replay FILE [--speed X]", i18n.T("replay a saved session file as a local player, X times the recorded pace (see docs/cli.md)")},
 	)
 	// Subcommands are listed one line each; each has its own detailed screen —
 	// run `terva <command> --help`. This keeps the top-level help scannable as
@@ -107,6 +107,7 @@ func PrintHelp(version string) {
 		row{"terva raati \"q\"", i18n.T("convene a three-unit deliberation panel; prints verdict + dissent")},
 		row{"terva ticket ...", i18n.T("work the repository's .tickets/ ledger (embedded git-ticket; `terva ticket ui` browses it full-screen, and `/ticket` opens the same view in the tui; `terva ticket groom` reports which drafts are worth a look and changes nothing; `terva ticket help` lists commands)")},
 		row{"terva web", i18n.T("browser control panel (self-hosted web ui)")},
+		row{"terva serve", i18n.T("multi-tenant supervisor: one terva per person on one host, behind single sign-on or a forward-auth proxy (--containment systemd for per-tenant uids)")},
 		row{"terva member", i18n.T("join a fleet: dial a hub and serve this machine's workspace to it, so one browser reads many daemons (--hub / --origin / --fleet-token-file; needs no web build tag)")},
 		row{"terva attach [URL]", i18n.T("run the TUI as a client of a running terva web daemon (default ws://127.0.0.1:8730/ws; --token / --token-file / TERVA_WEB_TOKEN for auth). Survives daemon restarts; quit and re-attach without disturbing the agent")},
 		row{"terva trust / untrust", i18n.T("manage which directories load project extensions/skills/context")},

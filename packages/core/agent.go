@@ -190,6 +190,7 @@ type Agent struct {
 	messageObs             []func(provider.Message)
 	usageObs               []func(u, cumulative provider.Usage)
 	delegatedUsageObs      []func(u, cumulative provider.Usage)
+	sideChannelUsageObs    []func(source string, u, cumulative provider.Usage)
 	transcriptCompactedObs []func(messages []provider.Message, res CompactResult)
 	imageExcludedObs       []func(sha256Hex string)
 	queueDrainedObs        []func(drained []string)
@@ -1681,18 +1682,40 @@ func (a *Agent) RecentUsage() []provider.Usage {
 // wrote them a session row — a session's recorded cost was the cost of its
 // TURNS, silently understating what it actually spent.
 //
-// Total-only, deliberately: this is the same treatment compaction's
-// summarization request gets (cost.AddTotalOnly). The per-turn snapshot is the
-// CONTEXT gauge, and a side-channel request's prompt is not this session's
-// context — letting one overwrite the snapshot would leave every threshold check
-// reading a size the transcript never had. Firing the usage observers is what
-// persists the row, so the session file gains one line per side-channel call.
-func (a *Agent) RecordSideChannelUsage(u provider.Usage) {
+// Kept out of the per-turn snapshot, deliberately: this is the same treatment
+// compaction's summarization request gets (cost.AddTotalOnly). The per-turn
+// snapshot is the CONTEXT gauge, and a side-channel request's prompt is not
+// this session's context — letting one overwrite the snapshot would leave
+// every threshold check reading a size the transcript never had.
+//
+// source names the surface that spent it ("next_step", "side_chat", ...) and
+// travels to the row on disk. It is what lets a reader tell an idle
+// suggestion's request from a turn of the session: the two were byte-identical
+// on disk, so the only way to find a side-channel call in a session file was
+// the forensic shape it left, a usage row with no message after it. That is
+// how TKT-01M213C1 was found, and it is not a way to measure what such a call
+// costs. Firing the side-channel observers is what persists the row, so the
+// session file gains one line per call, marked.
+//
+// Falls back to the plain usage observers when no side-channel observer is
+// registered, so a host that never wired the marked row still books the spend
+// as it always did: an unmarked row is a lesser defect than money missing
+// from the ledger.
+func (a *Agent) RecordSideChannelUsage(source string, u provider.Usage) {
 	if u == (provider.Usage{}) {
 		return
 	}
-	a.cost.AddTotalOnly(u)
-	a.fireUsage(u, a.cost.CumulativeTotal())
+	a.cost.AddSideChannel(u)
+	cum := a.cost.CumulativeTotal()
+	if !a.fireSideChannelUsage(source, u, cum) {
+		a.fireUsage(u, cum)
+	}
+}
+
+// SideChannelCost returns the part of the cumulative total that the host's
+// one-off completions spent on this session's credentials. Always <= Cost().
+func (a *Agent) SideChannelCost() provider.Usage {
+	return a.cost.SideChannelTotal()
 }
 
 // RecordDelegatedUsage books what a sub-agent spent on this session's behalf.

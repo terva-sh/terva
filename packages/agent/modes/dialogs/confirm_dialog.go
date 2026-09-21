@@ -100,6 +100,14 @@ func (d *ConfirmDialog) Remove(req *ConfirmRequest) {
 	}
 }
 
+// IsShowing reports whether req is the request on screen, as opposed to one
+// queued behind it. A replay walks the cursor only on the one a viewer can see.
+func (d *ConfirmDialog) IsShowing(req *ConfirmRequest) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.pending) > 0 && d.pending[0] == req
+}
+
 // AllowAllPending approves every pending request and drains the
 // queue. Used by /yolo so any confirmation dialog already on screen
 // resolves immediately as "yes".
@@ -143,7 +151,7 @@ var confirmOptions = []struct {
 		decision: core.ConfirmDecision{Allow: true, RememberTool: true},
 	},
 	{
-		label:    i18n.M("yes, always this tool — save (adds a permanent allow rule to your config)"),
+		label:    i18n.M("yes, always this tool, and save it (adds a permanent allow rule to your config)"),
 		decision: core.ConfirmDecision{Allow: true, PersistTool: true},
 	},
 	{

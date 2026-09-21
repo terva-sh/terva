@@ -3,7 +3,9 @@ package workspace
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync/atomic"
+	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
@@ -83,14 +85,38 @@ func (c *webConfirmer) ConfirmWithRequest(ctx context.Context, cr core.ConfirmRe
 		s.broadcast(ctrlproto.PermissionResolvedEvent(callID))
 	}()
 
+	asked := time.Now()
 	s.broadcast(ctrlproto.PermissionEvent(req))
 
 	select {
 	case d := <-ch:
+		// Recorded only when a person decided: a cancelled prompt is not an
+		// exchange, and a replay that showed one resolving would lie.
+		s.recordPermission(req, d, asked)
 		return d
 	case <-ctx.Done():
 		// Cancelled (client cancel / shutdown): fail closed.
 		return core.ConfirmDecision{Allow: false, Reason: "cancelled"}
+	}
+}
+
+// recordPermission writes the exchange to the transcript so a replay can show
+// the prompt, the pause, and the decision (core.PermissionRecord). A write
+// failure is logged and never fails the decision: the tool call is what the
+// person is waiting on, and the row is for a later reader.
+func (s *wsSession) recordPermission(req ctrlproto.PermissionRequest, d core.ConfirmDecision, asked time.Time) {
+	err := s.sess.AppendPermission(core.PermissionRecord{
+		CallID:  req.CallID,
+		Tool:    req.Tool,
+		Preview: req.Preview,
+		Asked:   asked.UTC(),
+		Waited:  time.Since(asked),
+		Allow:   d.Allow,
+		Reason:  d.Reason,
+		Scope:   core.PermissionScopeOf(d),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "session %s: could not record the permission exchange: %v\n", s.id, err)
 	}
 }
 
@@ -175,6 +201,7 @@ func (a *webAsker) Ask(ctx context.Context, qs []core.UserQuestion) ([]core.User
 		s.broadcast(ctrlproto.AskResolvedEvent(askID))
 	}()
 
+	asked := time.Now()
 	s.broadcast(ctrlproto.AskEvent(req))
 
 	select {
@@ -182,7 +209,9 @@ func (a *webAsker) Ask(ctx context.Context, qs []core.UserQuestion) ([]core.User
 		// A client is free to send a short set (an older one answers only
 		// the first question); the Asker contract to core is one answer
 		// per question, so square it here rather than at every caller.
-		return core.PadAnswers(ans, len(qs)), nil
+		padded := core.PadAnswers(ans, len(qs))
+		s.recordAsk(askID, qs, padded, asked)
+		return padded, nil
 	case <-ctx.Done():
 		return core.PadAnswers(nil, len(qs)), ctx.Err()
 	}
@@ -197,4 +226,18 @@ func (s *wsSession) approve(callID string, d core.ConfirmDecision) {
 // answer delivers an answer set to a parked webAsker. First answer wins.
 func (s *wsSession) answer(askID string, answers []core.UserAnswer) {
 	s.askPark.Deliver(askID, answers)
+}
+
+// recordAsk is recordPermission's twin for a question set.
+func (s *wsSession) recordAsk(askID string, qs []core.UserQuestion, ans []core.UserAnswer, asked time.Time) {
+	err := s.sess.AppendAsk(core.AskRecord{
+		AskID:     askID,
+		Questions: core.RecordQuestions(qs),
+		Answers:   core.RecordAnswers(ans),
+		Asked:     asked.UTC(),
+		Waited:    time.Since(asked),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "session %s: could not record the ask exchange: %v\n", s.id, err)
+	}
 }

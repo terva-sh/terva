@@ -45,6 +45,11 @@ type Pace struct {
 	Tool time.Duration
 	// Compact is the gap the compaction animation holds.
 	Compact time.Duration
+	// WaitCap bounds how long a replay holds a permission prompt or a question
+	// open. The transcript records how long the person took; a demo wants the
+	// pause visible, not a ten-minute lunch, so the recorded wait is clamped to
+	// [Think, WaitCap]. The speed multiplier scales the result like any delay.
+	WaitCap time.Duration
 }
 
 // DefaultPace mirrors the TUI's live streaming cadence (6 runes / 16 ms).
@@ -55,5 +60,6 @@ func DefaultPace() Pace {
 		Think:        350 * time.Millisecond,
 		Tool:         200 * time.Millisecond,
 		Compact:      500 * time.Millisecond,
+		WaitCap:      3 * time.Second,
 	}
 }

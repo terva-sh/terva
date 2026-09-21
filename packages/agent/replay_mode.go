@@ -37,7 +37,7 @@ func runReplayMode(ctx context.Context, args build.Args, version string) error {
 		}
 	}
 
-	carrier, err := replay.Open(path, replay.Options{Autoplay: true})
+	carrier, err := replay.Open(path, replay.Options{Autoplay: true, Speed: args.ReplaySpeed})
 	if err != nil {
 		return fmt.Errorf("open replay %s: %w", path, err)
 	}
