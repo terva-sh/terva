@@ -1,15 +1,19 @@
-# `terva web` — the browser control panel
+# `terva web`: the browser control panel
 
 `terva web` serves a browser UI for a self-hosted terva: chat with full
 tool-call fidelity, switch and nickname sessions, switch models, and watch
-usage — from any device that can reach the page. It is the TUI's reach, over
+usage, from any device that can reach the page. It is the TUI's reach, over
 the wire, plus a control panel.
+
+This page is how you run it: the listener, the reverse proxy, auth, deployment,
+self-restart, and building the client. For what the panel shows once it is open,
+surface by surface, see [web-interface.md](web-interface.md).
 
 It is an **opt-in build** (build tag `terva_web`), excluded from the `min`
 binary exactly like the `terva acp` mode and the chat connectors. The full
 install one-liner and `just install` include it.
 
-The protocol it speaks is the `ctrlproto` control plane —
+The protocol it speaks is the `ctrlproto` control plane.
 [docs/controllers.md](controllers.md) is the reference. The design record
 (`docs/proposals/terva-web.md`), the protocol rationale
 (`docs/proposals/control-plane-protocol.md`), and the platform horizon
@@ -23,7 +27,7 @@ just install            # full build (includes terva_web)
 terva web               # serves http://127.0.0.1:8730 (loopback, no auth)
 ```
 
-Open the address in a browser. On mobile, use *Add to Home Screen* — it is an
+Open the address in a browser. On mobile, use *Add to Home Screen*. It is an
 installable PWA.
 
 Flags:
@@ -31,25 +35,25 @@ Flags:
 | Flag | Default | Meaning |
 |---|---|---|
 | `--web-addr` | `127.0.0.1:8730` | listen address |
-| `--web-token` | — | require `Authorization: Bearer <token>` (or `?token=` on the socket). Readable by any local user via `ps` — prefer the two below for anything long-lived |
+| `--web-token` | — | require `Authorization: Bearer <token>` (or `?token=` on the socket). Readable by any local user via `ps`. Prefer the two below for anything long-lived |
 | `--web-token-file` | — | read the bearer token from a file; never enters the environment (systemd `LoadCredential=`) |
-| `TERVA_WEB_TOKEN` (env) | — | the bearer token (systemd `EnvironmentFile=`), scrubbed from `os.Environ()` once read but **still readable via `/proc/<pid>/environ`** — see [Auth](#auth); prefer `--web-token-file` |
+| `TERVA_WEB_TOKEN` (env) | — | the bearer token (systemd `EnvironmentFile=`), scrubbed from `os.Environ()` once read but **still readable via `/proc/<pid>/environ`**. See [Auth](#auth); prefer `--web-token-file` |
 | `--web-token-require-file` | off | hardening opt-in: accept the token only from `--web-token-file`; refuse `--web-token` and `TERVA_WEB_TOKEN` as a startup error |
-| `--web-auth-header` | — | trust this forward-auth header as the authenticated user (only from loopback / a trusted proxy — see [Auth](#auth)) |
+| `--web-auth-header` | — | trust this forward-auth header as the authenticated user (only from loopback or a trusted proxy; see [Auth](#auth)) |
 | `--web-trusted-proxy` | — | IP/CIDR(s) allowed to assert `--web-auth-header` (comma-separated; loopback is always allowed) |
-| `--web-insecure` | off | permit a non-loopback bind with **no** auth mode (dangerous — open to any source) |
-| `--web-insecure-cidr` | — | grant **no**-auth access to these source IP/CIDR(s) only (comma-separated; loopback always allowed) — the scoped, safer form of `--web-insecure` for a trusted overlay network (see [Auth](#auth)) |
+| `--web-insecure` | off | permit a non-loopback bind with **no** auth mode (dangerous: open to any source) |
+| `--web-insecure-cidr` | — | grant **no**-auth access to these source IP/CIDR(s) only (comma-separated; loopback always allowed). The scoped, safer form of `--web-insecure` for a trusted overlay network (see [Auth](#auth)) |
 | `--allow-restart` | off | enable Tier-1 self-restart (see [Self-restart](#self-restart)); `--web-allow-restart` is the accepted older spelling |
-| `--web-stage` | off | mount **Stage**, the immersive chat/play surface, at `/stage/` — a second web app alongside the panel, gated by the same auth, opted into per deployment (see [Stage](#stage-the-immersive-chatplay-surface)) |
-| `--web-allow-login` | off | serve the provider-login group so the web UI can add / repair / revoke the **model-provider** credential (Anthropic/OpenAI/Kimi/…). Off by default and, like `--allow-restart`, must never ride an unauthenticated listener — writing a credential is more authority than driving a conversation. **Also decides what a credential-less start means**: with login on, the daemon boots with no credential at all and you sign in from the panel; with it off there is no route to one, so that start is refused (see [Auth](#auth)) |
-
-| `--web-allow-secrets` | off | serve the **secrets** group: terva's at-rest encryption posture (what is sealed, what is still plaintext, which components hold a key) and the secret store's grants. Its own flag rather than a corner of `--web-allow-login`, because the two grant different authority — login writes the credential terva uses to reach a model provider, while this reports on the key that opens *everything*. **No verb returns a secret value**, and neither rotation mode is on the wire at all; both stay on the CLI, where a bug in a client cannot brick the install. Refused on an unauthenticated listener for the same reason login is: the report names every scope, component and grant on the host, which is a map worth withholding from a stranger who can reach an open port. The control panel shows it as a **Secrets** tab in the workspace drawer, beside Providers; the tab is absent entirely when the daemon did not negotiate the group |
+| `--web-stage` | off | mount **Stage**, the immersive chat/play surface, at `/stage/`. A second web app alongside the panel, gated by the same auth, opted into per deployment (see [Stage](#stage-the-immersive-chatplay-surface)) |
+| `--web-allow-login` | off | serve the provider-login group so the web UI can add / repair / revoke the **model-provider** credential (Anthropic/OpenAI/Kimi/…). Off by default and, like `--allow-restart`, must never ride an unauthenticated listener. Writing a credential is more authority than driving a conversation. **Also decides what a credential-less start means**: with login on, the daemon boots with no credential at all and you sign in from the panel; with it off there is no route to one, so that start is refused (see [Auth](#auth)) |
+| `--web-allow-secrets` | off | serve the **secrets** group: terva's at-rest encryption posture (what is sealed, what is still plaintext, which components hold a key) and the secret store's grants. Its own flag rather than a corner of `--web-allow-login`, because the two grant different authority. Login writes the credential terva uses to reach a model provider, while this reports on the key that opens *everything*. **No verb returns a secret value**, and neither rotation mode is on the wire at all; both stay on the CLI, where a bug in a client cannot brick the install. Refused on an unauthenticated listener for the same reason login is: the report names every scope, component and grant on the host, which is a map worth withholding from a stranger who can reach an open port. The control panel shows it as a **Secrets** tab in the workspace drawer, beside Providers; the tab is absent entirely when the daemon did not negotiate the group |
+| `--web-methods` | — | serve **only** these ctrlproto verbs (comma-separated), refusing every other one before dispatch. May be given **once**: a second occurrence is an error rather than a union or an override, because unioning would widen a flag whose job is to narrow, and overriding would discard a list without saying so. The one flag here that **narrows** rather than widens, which is why it is not spelled `--web-allow-*`. Use it when the group and capability axes cannot express the limit you want: `prompt` and `suggest.next_step` share a capability set, so no mask separates them, and they share a group, so no negotiation does either. Unknown names are rejected at startup, because a typo would otherwise produce a daemon refusing the verb you meant to allow. For a **headless daemon driven by one known program**. A person driving it interactively would hit refusals with no way to widen short of a restart |
 
 Standard flags apply too: `--cwd` pins the workspace, `--model` / `--provider`
 pick the default, `--yolo` runs without approval prompts, `--jail` / `--no-jail`
 set the sandbox default.
 
-> **Bind address.** `--web-addr 0.0.0.0:8730` binds all IPv4 interfaces — the
+> **Bind address.** `--web-addr 0.0.0.0:8730` binds all IPv4 interfaces. That is the
 > reliable form for reaching the panel over an IPv4 overlay (tailscale, most
 > LANs). A bare `--web-addr :8730` binds the IPv6 wildcard (`[::]`), which is
 > dual-stack on a typical host but will NOT accept IPv4 on a host configured
@@ -66,7 +70,7 @@ terva pings every 20 seconds so the traffic keeps the proxy's idle timer from
 firing, which is enough for the defaults you are likely to meet. But a proxy
 configured tightly enough will still cut the socket, and it is worth knowing what
 to look for: a panel that reconnects on a **fixed interval**, forever, is not a
-terva bug — it is the proxy's idle timeout, and the interval is its value.
+terva bug. It is the proxy's idle timeout, and the interval is its value.
 
 The same wall stands in front of a fleet, where the tunnel carrying a member is
 one more hop that can time out quietly. `terva web --fleet-addr` opens a second
@@ -93,10 +97,10 @@ listener for members to check in on, with its own ping and its own reap. See
   proxy_read_timeout 1h;
   ```
 
-Complete, validated HAProxy configs — a loopback-TCP backend and a
-filesystem-socket backend, with the tunnel timeout, host routing, and the auth
-model wired up — are in
-[`examples/deploy/haproxy/`](../examples/deploy/haproxy/).
+Complete, validated HAProxy configs are in
+[`examples/deploy/haproxy/`](../examples/deploy/haproxy/): a loopback-TCP
+backend and a filesystem-socket backend, with the tunnel timeout, host routing,
+and the auth model wired up.
 
 ## Auth
 
@@ -107,7 +111,7 @@ gate fails closed: binding a non-loopback address with no auth mode is refused
 unless you pass `--web-insecure`.
 
 - **Front it (recommended).** Bind loopback and put a reverse proxy that does
-  real auth in front — the author runs [Authentik](https://goauthentik.io/)
+  real auth in front. The author runs [Authentik](https://goauthentik.io/)
   forward-auth. Point terva at the header the proxy sets:
 
   ```bash
@@ -116,7 +120,7 @@ unless you pass `--web-insecure`.
 
   The forward-auth header is a **proxy assertion**, so terva honors it **only
   from a peer it can identify**: a loopback connection (the proxy runs on the
-  same host — the shape above) or an IP inside a `--web-trusted-proxy` CIDR.
+  same host, the shape above) or an IP inside a `--web-trusted-proxy` CIDR.
   Otherwise the header is forgeable by anyone who can reach the port directly.
   For that reason a **non-loopback bind under header auth requires
   `--web-trusted-proxy`** (naming the proxy's address) and is refused without it:
@@ -138,7 +142,7 @@ unless you pass `--web-insecure`.
 
   That file is the LAST source in the resolution order below, so it never
   overrides an explicit one, and `terva attach` on the same `$TERVA_HOME`
-  finds it too. `terva secret web-token rotate` replaces it — a running daemon
+  finds it too. `terva secret web-token rotate` replaces it. A running daemon
   keeps accepting the old token until it restarts. Supplying your own token
   works exactly as before:
 
@@ -157,11 +161,11 @@ unless you pass `--web-insecure`.
   ```
 
   `TERVA_WEB_TOKEN` is scrubbed from `os.Environ()` once read, so the agent's own
-  shell tool — which inherits that environment — cannot read the token back out
+  shell tool, which inherits that environment, cannot read the token back out
   with `env`. It does **not** vanish from `/proc/<pid>/environ`, though: the kernel
   wrote the value to the process's initial stack at `execve`, and the scrub cannot
   reach that region, so any same-UID process (the agent's shell included) can still
-  recover it there — and a self-restart re-exposes it each generation. On startup
+  recover it there. A self-restart re-exposes it each generation. On startup
   terva warns when the token is still readable that way. `--web-token-file` keeps it
   out of the environment *and* out of `/proc`, which is also what systemd's
   `LoadCredential=` wants; note that on a single-user host the token file is itself
@@ -178,16 +182,16 @@ unless you pass `--web-insecure`.
   chain under its own spellings (`--token`, `--token-file`). The minted file is
   last, so it turns auth on when nothing else is configured and gets out of the
   way when something is. Both the secrets key and this token file are on the
-  agent's read deny-list — reading the token is reading a live grant to drive
+  agent's read deny-list. Reading the token is reading a live grant to drive
   the agent.
 
   **In the browser, just open the panel.** An unauthenticated page load gets a
   login form; type the token and the daemon exchanges it for an HttpOnly,
-  SameSite=Strict cookie. The cookie carries the app *and* the WebSocket handshake
-  — browsers send cookies on a same-origin socket, which is the one thing they
-  will not let you set a header on — so from then on the token appears in no URL
-  at all. Guesses at the form are compared in constant time and throttled per
-  source IP.
+  SameSite=Strict cookie. The cookie carries the app *and* the WebSocket
+  handshake, so from then on the token appears in no URL at all. Browsers send
+  cookies on a same-origin socket, which is the one thing they will not let you
+  set a header on. Guesses at the form are compared in constant time and
+  throttled per source IP.
 
   `?token=<secret>` still works and is still how you hand someone a one-click
   link, but it is no longer the only way in, and it is the worse one: a token in a
@@ -200,8 +204,8 @@ unless you pass `--web-insecure`.
   path.
 
 - **Trusted network, no per-request auth.** To expose the panel over a private
-  overlay (Tailscale/WireGuard/VPN) and let the *network* be the boundary — no
-  token, no proxy — scope no-auth access to the overlay's source range with
+  overlay (Tailscale/WireGuard/VPN) and let the *network* be the boundary (no
+  token, no proxy), scope no-auth access to the overlay's source range with
   `--web-insecure-cidr` instead of the blanket `--web-insecure`:
 
   ```bash
@@ -214,8 +218,8 @@ unless you pass `--web-insecure`.
   real overlay IP/name works, and [self-restart](#self-restart) is permitted
   (the range bounds who can trigger it). This is strictly narrower than
   `--web-insecure`, which admits *any* source. There is still **no per-user auth
-  inside the range** — anyone who can source-spoof into it, or any device on the
-  overlay, has full owner access — so use it only where you trust the network;
+  inside the range**: anyone who can source-spoof into it, or any device on the
+  overlay, has full owner access. Use it only where you trust the network, and
   layer a token or forward-auth on top for anything shared.
 
 ### Single sign-on
@@ -338,13 +342,13 @@ TERVA_WEB_TOKEN="$(openssl rand -hex 24)" \
 ```
 
 The daemon starts, says it has none, and serves the panel; sign in from the
-Providers pane and sessions work from that moment — no restart. Without
+Providers pane and sessions work from that moment, with no restart. Without
 `--web-allow-login` nothing reachable can supply a credential, so a
 credential-less start is still refused, and the error names the flag.
 
-A credential seeded any other way — `/login` at a terminal, an API key in the
-environment, a provisioned `auth.json` — works as before and makes all of this
-moot.
+A credential seeded any other way works as before and makes all of this moot:
+`/login` at a terminal, an API key in the environment, a provisioned
+`auth.json`.
 
 **DNS-rebinding defense.** In no-auth mode terva also requires the request's
 `Host` to be a loopback name, so a malicious web page can't rebind its own
@@ -372,7 +376,7 @@ Restart=always
 ```
 
 Fronting it with a plain proxy instead (no forward-auth), give it a bearer
-token — and keep the token out of `ExecStart`, which `ps` shows to every local
+token, and keep the token out of `ExecStart`, which `ps` shows to every local
 user:
 
 ```ini
@@ -388,7 +392,7 @@ ExecStart=/usr/local/bin/terva web --web-addr 127.0.0.1:8730
 
 **Where the token lives decides whether it is doing anything.** If the proxy
 *injects* `Authorization: Bearer …` on the way through, it stamps that header for
-everyone it proxies — including an attacker — so the token buys nothing against
+everyone it proxies, an attacker included, so the token buys nothing against
 whoever can reach the proxy, and only closes the direct-to-loopback path. For the
 token to be real auth, the **client** has to carry it: open the panel, type the
 token into the login form, and the cookie takes it from there. If instead the
@@ -404,26 +408,26 @@ task needs to.
 
 `--web-addr unix:/path/to/terva.sock` serves the same HTTP + WebSocket stack
 on a filesystem socket instead of TCP. The socket is created `0600` and the
-file's permissions **are** the auth boundary — no token dance for a same-user
-client (a `--web-token`, if set, is still enforced on top; the IP-based
-options are meaningless here). Browsers can't dial filesystem sockets, so
+file's permissions **are** the auth boundary, so there is no token dance for a
+same-user client (a `--web-token`, if set, is still enforced on top; the
+IP-based options are meaningless here). Browsers can't dial filesystem sockets, so
 this form is for `terva attach unix:/path/to/terva.sock` and programmatic
 ctrlproto clients; a stale socket left by a crash is cleared on the next
 start, and a live daemon's socket is refused rather than stolen.
 
-Clients need not be told the path. Whatever the daemon binds — TCP, a
-filesystem socket, or a systemd-passed fd — it publishes as
+Clients need not be told the path. Whatever the daemon binds, whether TCP, a
+filesystem socket, or a systemd-passed fd, it publishes as
 `$TERVA_HOME/listen.json` (`0600`, no secret in it: an `auth` flag says a
 token is required, never what it is), refreshes a heartbeat while it runs,
 and removes it on exit. `terva attach` with no URL and `terva ext config`
 with no `--endpoint` read that record, so both reach the daemon serving
-*this* home without a flag. A record that stops being heartbeated — a crash
-— reads as absent rather than as a daemon that will not answer.
+*this* home without a flag. A record that stops being heartbeated, after a
+crash, reads as absent rather than as a daemon that will not answer.
 
 ### systemd socket activation
 
 When `LISTEN_FDS` names the process (a `.socket` unit started the service),
-the passed socket — unix or TCP, whichever the unit declares — is served and
+the passed socket (unix or TCP, whichever the unit declares) is served and
 `--web-addr` is ignored. The daemon starts on the first connection rather
 than at boot, and Tier-1 self-restart re-adopts the inherited socket across
 the exec (the pid is unchanged, so `LISTEN_PID` stays valid):
@@ -449,27 +453,27 @@ WorkingDirectory=%h/workspace
 ```
 
 `systemctl --user enable --now terva-web.socket`, then
-`terva attach unix:/run/user/1000/terva.sock` — the first attach spawns the
+`terva attach unix:/run/user/1000/terva.sock`. The first attach spawns the
 daemon.
 
 ### A persistent terminal
 
 The socket-activated daemon plus a supervised `terva attach` gives you a
 terminal that is always your terva session: close the laptop, SSH back
-tomorrow, reattach, and the conversation is exactly where you left it — still
+tomorrow, reattach, and the conversation is exactly where you left it, still
 live, because the daemon never stopped. `examples/deploy/systemd/` ships the
 three user units:
 
-- **`terva-web.socket`** — the activation point (`%t/terva.sock`, `0600`).
-- **`terva-web.service`** — the daemon; holds every session, credential, and
+- **`terva-web.socket`**: the activation point (`%t/terva.sock`, `0600`).
+- **`terva-web.service`**: the daemon; it holds every session, credential, and
   tool. Reloading it is what preserves your work across a new build.
-- **`terva-attach.service`** — `terva attach` held in a detached
+- **`terva-attach.service`**: `terva attach` held in a detached
   [`dtach`](https://github.com/crigler/dtach) pty, so a live TUI keeps running
   with nobody watching.
 
 The example uses `dtach` rather than a full multiplexer on purpose: it holds
 *one* program in a detachable pty with no windows, no config, and no emulation
-layer of its own — terva's colors, mouse, and escapes reach your terminal
+layer of its own, so terva's colors, mouse, and escapes reach your terminal
 unmediated. terva already owns its transcript and scrollback, which is the one
 thing a multiplexer's screen buffer would otherwise add. (`abduco` and GNU
 `screen` work the same way; tmux does too if you already live in it.)
@@ -477,7 +481,7 @@ thing a multiplexer's screen buffer would otherwise add. (`abduco` and GNU
 Two layers persist independently. The **daemon** holds the conversation, so
 even a killed client resyncs to the live session on reconnect (and sessions
 are on disk regardless). **`dtach` keeps the client process alive** with its
-own state — the input you were typing, where you'd scrolled — so on reattach
+own state (the input you were typing, where you'd scrolled), so on reattach
 terva repaints exactly that, not a fresh session. Because dtach keeps no screen
 buffer, terva repaints itself on reattach; `dtach -r ctrl_l` triggers that, and
 terva's same-size-SIGWINCH repaint covers the buffer-less muxes that can't
@@ -496,8 +500,8 @@ dtach -a $XDG_RUNTIME_DIR/terva.dtach -r ctrl_l              # detach: Ctrl-\
 ```
 
 That last line reattaches from a shell already on the box. To dial straight in
-from your workstation in one hop — no intermediate shell — let SSH run it (the
-remote shell expands `$(id -u)`):
+from your workstation in one hop, with no intermediate shell, let SSH run it
+(the remote shell expands `$(id -u)`):
 
 ```
 ssh -t you@host 'exec dtach -a /run/user/$(id -u)/terva.dtach -r ctrl_l'
@@ -515,7 +519,7 @@ Host terva
 
 Mind what that terminal is: it *is* the daemon, running with its tools,
 filesystem, and (if configured) sudo, so SSH access to it is administrative
-access — not a sandboxed "terminal key," and no substitute for `sshd`
+access. It is not a sandboxed "terminal key," and no substitute for `sshd`
 restricting who may log in at all.
 
 Deploying a new build is then two reloads, and nobody loses their place:
@@ -527,7 +531,7 @@ systemctl --user reload terva-attach    # the client terva re-execs on the same 
 
 `reload terva-web` keeps the socket up throughout (systemd holds it, the daemon
 re-adopts it), so the client's reconnect is immediate. `reload terva-attach`
-SIGHUPs the terva process — the client-side self-restart — so it comes back on
+SIGHUPs the terva process (the client-side self-restart), so it comes back on
 the new build on the same pty, without disturbing your dtach session. Note that
 `/restart` *inside* the attached TUI restarts the daemon over the wire, not the
 client; the client is reloaded from the outside, by signal.
@@ -536,15 +540,15 @@ client; the client is reloaded from the outside, by signal.
 
 With `--allow-restart` (also accepted as `--web-allow-restart`, its original
 web-only spelling), `terva web` can restart itself into the
-currently-installed binary — no external supervisor — to pick up a new build.
-It is a Tier-1 restart: it re-execs the same executable (via `exec(2)`) with the
-original arguments and environment, so the PID is preserved and the process
-image is replaced in place. Because install is atomic (`go install` /
+currently-installed binary, with no external supervisor, to pick up a new
+build. It is a Tier-1 restart: it re-execs the same executable (via
+`exec(2)`) with the original arguments and environment, so the PID is
+preserved and the process image is replaced in place. Because install is atomic (`go install` /
 `just install-dev` rename over the same path), the next restart runs the new
 code.
 
-It is **off by default** and refused outright on a *blanket* insecure listener —
-if you pass `--web-insecure` (open to any source) with no `--web-token` /
+It is **off by default** and refused outright on a *blanket* insecure listener.
+If you pass `--web-insecure` (open to any source) with no `--web-token` or
 `--web-auth-header`, restart stays disabled (a stranger must never be able to
 re-exec the daemon). A `--web-insecure-cidr` listener bounds who can reach it to
 a trusted source range, so restart **is** permitted there. It is unix-only
@@ -552,13 +556,13 @@ a trusted source range, so restart **is** permitted there. It is unix-only
 
 Three ways to trigger it, all funneling through the same path:
 
-- **From the browser** — a **Restart terva** control appears in the **Settings**
+- **From the browser**: a **Restart terva** control appears in the **Settings**
   pane (arm, then confirm). It calls the `control.restart` ctrlproto method.
-- **From the OS** — a **SIGHUP** re-execs the daemon, so a systemd unit with
+- **From the OS**: a **SIGHUP** re-execs the daemon, so a systemd unit with
   `ExecReload=/bin/kill -HUP $MAINPID` turns `systemctl reload terva-web` into an
   in-place upgrade to the installed build. Unlike the browser and tool paths,
-  SIGHUP carries no bearer token — the kernel only lets the unit's owner or root
-  signal the process, so the signal *is* the authorization — but it still honors
+  SIGHUP carries no bearer token: the kernel only lets the unit's owner or root
+  signal the process, so the signal *is* the authorization. It still honors
   `--allow-restart`: started without it, the daemon **logs the reload and keeps
   serving** rather than restarting (and, deliberately, rather than letting the
   unhandled signal terminate it, which is SIGHUP's default).
@@ -566,12 +570,13 @@ Three ways to trigger it, all funneling through the same path:
   > **`reload` here is a real restart, not a config re-read.** It runs the same
   > internal Tier-1 mechanics as every other trigger: `exec(2)` replaces the
   > running process in place, so despite the **preserved PID there is a brief
-  > outage** — open connections drop and the endpoint is unavailable in the gap
+  > outage**: open connections drop and the endpoint is unavailable in the gap
   > between the old image handing off and the new one finishing startup
   > (credential resolve, MCP spawn, tool listing) and re-binding. An in-flight
   > turn is interrupted. It is for picking up a new **build**, exactly like
-  > `restart` — reload while idle; do not wire it into a per-file hot-reload loop.
-- **From the agent** — a `terva_restart` tool. It is registered only when the
+  > `restart`. Reload while idle; do not wire it into a per-file hot-reload
+  > loop.
+- **From the agent**: a `terva_restart` tool. It is registered only when the
   flag is set and **prompts for your approval** in the browser before running in
   every gating approval mode (it is left unclassified in the permission model, so
   the default `workspace`/`ask`/`auto-edit` modes all confirm it). This is the
@@ -583,28 +588,28 @@ Three ways to trigger it, all funneling through the same path:
   > re-exec the daemon without confirmation. That was a deliberate v1 choice
   > (yolo means "run freely"); combine the two only when that's acceptable.
 
-On restart the daemon broadcasts a "terva vX is restarting — reconnecting
-shortly" notice (naming the outgoing build), then replaces the image after a
+On restart the daemon broadcasts a `terva vX is restarting — reconnecting
+shortly` notice (naming the outgoing build), then replaces the image after a
 brief flush delay. The version is visible on both sides of the hop: stderr
 logs the running build with the restart request and the new image logs
 `self-restart complete — was vX, now vY` on boot (the prior version rides the
 exec env), while in the browser the Settings pane shows the build serving the
 panel and a toast announces the version change once the client reconnects to a
 different build. Sessions persist to disk per-message, and the PWA
-auto-reconnects and restores from the on-disk snapshot, so no history is lost —
-but an **in-flight turn is interrupted** (Tier 1 does not preserve active tool
+auto-reconnects and restores from the on-disk snapshot, so no history is lost.
+But an **in-flight turn is interrupted** (Tier 1 does not preserve active tool
 calls). Prefer restarting while idle.
 
 ## Attaching the TUI
 
 `terva attach [URL]` connects the interactive TUI to a running `terva web`
-daemon as a second client — same sessions, same live stream as the browser
+daemon as a second client: same sessions, same live stream as the browser
 panel, with the PWA's reconnect/resync discipline. See docs/tui.md
 §"Attaching to a running daemon".
 
 ## Stage: the immersive chat/play surface
 
-**Stage** is terva's SillyTavern-inspired chat/play front end — a second web app
+**Stage** is terva's SillyTavern-inspired chat/play front end, a second web app
 served by the same daemon, for driving a character card or persona through an
 immersive conversation or roleplay rather than a coding session. It is **off by
 default**; `--web-stage` mounts it at `/stage/`, alongside the control panel at
@@ -613,7 +618,7 @@ default**; `--web-stage` mounts it at `/stage/`, alongside the control panel at
 - **A distinct app, one daemon.** Stage is its own composition root and its own
   installable, offline-capable PWA (`start_url`/`scope` `/stage/`; it reuses the
   terva app icons until it earns its own), not a third view mode of the panel. It
-  shares the panel's transport, auth gate, and embed — one `/ws`, one login.
+  shares the panel's transport, auth gate, and embed: one `/ws`, one login.
   Exactly like the panel, Stage's **bundle, service worker, manifests, and icons
   are served ungated under `/stage/`** so the `/stage/`-scoped worker can precache
   them (a precache entry the client cannot fetch is a worker that cannot install),
@@ -621,23 +626,24 @@ default**; `--web-stage` mounts it at `/stage/`, alongside the control panel at
   navigation answers with the login form. See `packages/agent/web/assets.go`
   (`stagePwaShellPaths`) and `stage_sw_gate_test.go`.
 - **What it is made of.** Immersive sessions are ordinary sessions carrying an
-  *experience* — `chat` (pure conversation, no tools) or `play` (embodied in a
-  world via extension/MCP tools) — created next to coding sessions in the same
-  workspace. The character library (the [Characters](#panes) pane), the
-  transcript-revision grammar (swipe / regenerate / edit any message), scene
-  backgrounds, and greeting seeding are all engine/wire primitives — Stage is one
-  consumer of them, the panel's focus view is another.
+  *experience*, either `chat` (pure conversation, no tools) or `play` (embodied
+  in a world via extension/MCP tools), created next to coding sessions in the
+  same workspace. The character library (the
+  [Characters](web-interface.md#panes) pane), the transcript-revision grammar
+  (swipe / regenerate / edit any message), scene backgrounds, and greeting
+  seeding are all engine/wire primitives. Stage is one consumer of them, the
+  panel's focus view is another.
 - **Enabling it.** Pass `--web-stage`, or set `"web_stage": true` in config (the
-  flag OR the knob turns it on) — the flag suits a one-off, the knob a deployment
-  that always wants Stage. There is also a **Settings toggle** ("Stage surface")
-  that writes the config knob; because the `/stage/` route is mounted when the web
-  server starts, the toggle takes effect on the next launch (a persist-only setting,
-  like lazy tool loading). Once on, the daemon advertises the `stage` hello feature,
+  flag OR the knob turns it on). The flag suits a one-off, the knob a
+  deployment that always wants Stage. There is also a **Settings toggle**
+  ("Stage surface") that writes the config knob; because the `/stage/` route is
+  mounted when the web server starts, the toggle takes effect on the next launch
+  (a persist-only setting, like lazy tool loading). Once on, the daemon advertises the `stage` hello feature,
   which a panel reads to offer an "open in Stage" link. Access is gated by the same
-  auth as the panel — Stage inherits it, there is no separate gate.
+  auth as the panel: Stage inherits it, and there is no separate gate.
 - **Under `terva serve`, the answer has two halves and they belong to different
   people.** The supervisor's own `--web-stage` (or `web_stage` in *its* config)
-  decides whether `/stage/` exists **on the host** — the app is embedded build
+  decides whether `/stage/` exists **on the host**. The app is embedded build
   output, identical for everyone and holding no tenant data, so the supervisor
   serves it directly rather than proxying it to a child. Each tenant's own
   `web_stage`, in their own home, decides whether *they* are offered it. The
@@ -649,16 +655,17 @@ default**; `--web-stage` mounts it at `/stage/`, alongside the control panel at
   feature **stripped from the hello** the supervisor forwards, rather than an
   "open in Stage" link that lands on a route the host does not serve. See
   `tenant.Carrier` and `NarrowHello`.
-- **Status.** Stage is **opt-in while it matures** — progressive disclosure: the
-  panel is the power surface, Stage is turned on per deployment once it's good. The
-  design of record — session model, the interaction grammar, the content library,
-  and the two-app split — is `docs/proposals/stage-surface.md`.
+- **Status.** Stage is **opt-in while it matures**. That is progressive
+  disclosure: the panel is the power surface, and Stage is turned on per
+  deployment once it's good. The design of record is
+  `docs/proposals/stage-surface.md`: the session model, the interaction grammar,
+  the content library, and the two-app split.
 
 ## Building the client
 
 The web client is a Preact + Vite **multi-page app (MPA)** under
 `packages/agent/web/client/`, building **two** apps from one workspace: the
-control **panel** (`index.html`) and — behind `--web-stage` — the immersive
+control **panel** (`index.html`) and, behind `--web-stage`, the immersive
 **[Stage](#stage-the-immersive-chatplay-surface)** app (`stage.html`). Rollup
 chunk-splits the code they share, so the two apps share bytes in `dist/` rather
 than duplicating them, and one npm project keeps a single typecheck, i18n catalog,
@@ -673,38 +680,38 @@ just web-build     # npm ci + vite build -> client/dist (commit the result)
 
 The client source is organized by dependency direction, low to high:
 
-- `src/platform/` — Preact-free protocol, conversation-state, and image-policy
+- `src/platform/`: Preact-free protocol, conversation-state, and image-policy
   modules; **fully shared** by both apps (the consistency layer);
-- `src/ui/` — small shared presentation primitives plus browser and formatting
+- `src/ui/`: small shared presentation primitives plus browser and formatting
   helpers;
-- `src/features/` — reusable Preact features and feature-local behavior
+- `src/features/`: reusable Preact features and feature-local behavior
   (conversation attachments, interactions, sessions, model UI), shared
   selectively;
-- `src/app.tsx` — the control-**panel** composition root (owns the transport and
+- `src/app.tsx`: the control-**panel** composition root (owns the transport and
   every verb); and
-- `src/apps/stage/` — the **Stage** composition root: its own routes, shell,
-  theme, and PWA manifest.
+- `src/apps/stage/`: the **Stage** composition root, with its own routes,
+  shell, theme, and PWA manifest.
 
 The layering is enforced by `boundaries.test.ts`: an app may import
 `platform`/`ui`/`features`; those lower layers never import an app; and **the
-Stage app and the panel never import each other** — anything both need is promoted
-down into a shared layer, never reached across. Keep transport calls in the
+Stage app and the panel never import each other**: anything both need is
+promoted down into a shared layer, never reached across. Keep transport calls in the
 composition/controller layer and pass typed data and callbacks into visual
 components. Run `just web-test`, the client `typecheck` and `i18n-check` scripts,
 and `just web-build` after source changes.
 
 ## Languages
 
-The panel follows terva's operator language (the `TERVA_LANG` env var — the
-legacy `ZOT_LANG` spelling still works <!-- rename:keep --> — else config
-`language`; the OS `LANG` is *not* consulted. See
+The panel follows terva's operator language (the `TERVA_LANG` env var; the
+legacy `ZOT_LANG` spelling still works <!-- rename:keep -->; else config
+`language`. The OS `LANG` is *not* consulted. See
 [docs/localization.md](localization.md)), and you can change it from **Settings →
 Language**: it switches the daemon's active language live, saves it as the
 default, and broadcasts to every open tab (each re-fetches its catalog + panes
-and re-renders — server-rendered titles/labels included). It's a single active
+and re-renders, server-rendered titles/labels included). It's a single active
 language for the daemon, not a per-browser preference; already-generated
-conversation text and a running session's baked system prompt stay as they were —
-new sessions and freshly rendered UI pick up the change.
+conversation text and a running session's baked system prompt stay as they were.
+New sessions and freshly rendered UI pick up the change.
 
 Two halves cooperate:
 
@@ -714,15 +721,16 @@ Two halves cooperate:
   agent. The client renders all of this verbatim.
 - **Client-owned chrome** (buttons, placeholders, tooltips, empty states) is
   translated in the browser through a small English-as-key `t()` / `tn()` layer
-  (`client/src/i18n.ts`, mirroring the Go `i18n` package — English source strings
-  are the keys, plurals via `Intl.PluralRules`; English is the implicit fallback).
+  (`client/src/i18n.ts`, mirroring the Go `i18n` package; English source strings
+  are the keys, plurals via `Intl.PluralRules`, and English is the implicit
+  fallback).
   The daemon advertises its locale in the ctrlproto hello (`Hello.locale`); the
   PWA shows its bundled catalog immediately, then fetches the daemon's **effective**
   catalog (`i18n.catalog`) and overlays it, so operator edits win.
 
 ### Translating the web panel
 
-The web strings are a first-class catalog in the `terva locale` workflow — the
+The web strings are a first-class catalog in the `terva locale` workflow, the
 same one used for the TUI and CLI (see [docs/localization.md](localization.md)).
 They live in their own `web/` file, English-as-key like the main UI catalog:
 
@@ -737,464 +745,10 @@ terva locale export <lang>    # writes web/<lang>.export.json to PR back
 `terva locale list` / `diff` report web coverage (`[web done/total]`); `validate`
 checks a `web/<lang>.json` against the web reference. Because the client fetches
 the effective (embedded ⊕ `$TERVA_HOME/locales/web` overlay) catalog on every
-connect, a browser reload is the whole check loop — no daemon restart.
+connect, a browser reload is the whole check loop, with no daemon restart.
 
 Shipped translations live in `packages/i18n/locales/web/<lang>.json`; the client
 bundle is a build-time mirror (regenerated by `just web-build`) for offline /
 first-paint. The client's English reference (`web/en.json`) is extracted from the
 `t()`/`tn()` calls by `scripts/i18n-extract.mjs`, the client-side twin of
 `cmd/terva-i18n-lint`. Finnish ships as the reference translation.
-
-## Session titles
-
-A new session is named from the first line of your opening message as soon as
-the first turn finishes, and the name is pushed to every open tab live (no page
-refresh). To have terva write a short, specific title with a one-shot model call
-instead, set it in `config.json` (off by default so no extra tokens are spent):
-
-```json
-{
-  "auto_title": true,
-  "auto_title_model": "anthropic/claude-haiku-4-5-20251001"
-}
-```
-
-`auto_title_model` is optional — leave it out to title with the session's own
-model. Either way you can always rename a session by hand; a manual name is
-never overwritten by the automatic pass.
-
-You can also generate a title **on demand**: the ✨ button next to rename in
-the session drawer (or `g` in the TUI's `/sessions` picker) runs one bounded
-model call over the conversation — the latest compaction summary when one
-exists, plus the most recent exchanges — and works regardless of the
-`auto_title` setting, including as backfill for old untitled sessions. An
-explicit generate does replace whatever name is there: you asked for it.
-Long sessions get better titles this way than from their opening line.
-
-With `auto_title` on, titles also **refresh automatically after each
-compaction** — the moment a session has provably outgrown the name its
-opening earned. Only machine-generated titles refresh; a session you named
-by hand keeps its name (title provenance is tracked in the transcript, so
-this holds across restarts too).
-
-## Panes
-
-Auxiliary views live in a **pane host** — a collapsible right rail on desktop, a
-full sheet on mobile — with a switcher across the top. Toggle it with the ⊞
-button in the top bar; a tab lists each available pane (see
-docs/proposals/web-surfaces.md). Today's panes:
-
-- **Usage** (below) — one pane: the live usage picture (gauge, cost,
-  subscription windows) *and* the context-size breakdown that explains where the
-  usage goes. It refreshes in place as turns complete, no tab-switching needed.
-- **Tasks** — the background-agent (swarm) dashboard: one row per agent with a
-  status badge, live activity, an expandable transcript tail, and stop / resume /
-  remove actions. It's workspace-global (shows every agent, including ones
-  detached from a prior run) and appears when auto-swarm is on or any agents
-  exist. Live-updated by a poller (the swarm has no push). The agent can spawn
-  tasks via `swarm_spawn` when auto-swarm is enabled in `/settings`.
-- **Raati** — the deliberation board (`/raati`,
-  docs/raati.md): convene a three-unit panel on a
-  question and watch it deliberate live — blind round, cross-examination,
-  then the verdict landing as kanji before settling into your language, with
-  the tally and the minority report. Workspace-global; the convene form picks
-  a convening profile (built-ins: `triage`, `counsel`, `code-review`,
-  `ethics`), the decision class and the rigor level (0 *kaiku*: the workspace binding;
-  1 *kuoro*: the provider's tier ladder; 2 *käräjät*: cross-provider seats
-  from the user config's `raati.level2`); each block shows its seat's
-  binding. The record persists under `$TERVA_HOME/raati/`. Pushed live (the
-  coordinator has a real event feed — no poller). With `raati.convene_tool`
-  enabled, the **agent** can convene a panel too (`raati_convene`, always
-  behind the approval gate) — its deliberation renders on this same board.
-- **Worktrees** — managed git worktrees (the built-in `worktree_*` engine): the
-  same one-fetch view the TUI's `/worktree` panel renders. Each worktree shows
-  its claim state (`claimed(self)` means claimed by *this* session), branch,
-  base, and dirtiness; the **Merge-back** toggle switches to the collect
-  overview — what each branch carries over its base (commits ahead,
-  dirty/unpushed flags; merging back stays a manual act). Read-only, and the
-  tab appears only when the session's cwd sits inside a git repo. No push
-  event exists for worktree changes, so the pane fetches when opened and the ↻
-  button re-fetches on demand.
-- **Settings** — every setting the daemon exposes, rendered from one
-  server-side surface (`workspace_settings.go`) that the TUI's `/settings`
-  renders too, so the two never drift. Each row states when it bites: **approval
-  mode** (per-session, live, not saved — a security posture); **thinking**
-  effort, **auto-condense** (steps / turns / off) and **language** (all live, and
-  saved as the default — language switches every open tab, see Languages below);
-  **auto-title**, **temperature**, **theme**, **inline images**, **lazy tool
-  loading** (advertise core tools first, let the agent pull tool groups in with
-  `activate_tools`), **recursive file search**, **respect .gitignore**, **lore**
-  (keyed context), **swarm worktrees**, and the first-run **core tool pack**
-  offer; plus **auto-swarm** as two nested toggles: *background sub-agents* (the
-  `swarm_spawn` tool) and, under it, the *proactive-delegation nudge* (default on
-  — off keeps the tool but drops the system-prompt push). The ones marked
-  *applies to new sessions* (the swarm toggles, lazy tools, lore, …) are baked at
-  session construction. Config writes are concurrency-safe.
-- **Commands** — every slash command an extension registered, as clickable
-  buttons grouped by extension. The web has no command line, so a command is a
-  button, not a `/name` you type (the TUI keeps the slash prompt). Running one
-  applies its response the same way the TUI does: it can open a panel, submit a
-  prompt to the model, or post a one-shot note back into the conversation
-  (`display`/`error`; `insert` degrades to a note since there's no shared
-  composer to fill). The pane appears whenever any loaded extension has
-  commands. User-driven slash commands such as `/skill` are a separate composer
-  autocomplete surface; this pane contains only the extension-provided set.
-- **Extensions** — a management pane listing the session's installed + loaded
-  extensions with a health rollup: a status badge (running / stopped / disabled /
-  gated), version, scope, language, tool + command counts, and — for one that
-  failed — the tail of its log as the reason. It mirrors the TUI's extensions
-  dialog and appears when any extension is loaded. Each has an **enable/disable
-  toggle**: it persists to the project config and applies **live** — the
-  subprocess starts/stops and the agent's model-facing tool set is rebuilt on the
-  spot (so a toggled-on extension's tools reach the model and a toggled-off one's
-  stop lingering), no session restart. Gated (untrusted-project) extensions show
-  no toggle; an extension disabled in its own manifest stays off until re-enabled
-  there.
-- **Lore** — the authored keyword-triggered context ([lore](localization.md))
-  inspector + editor: each entry shows its name, trigger keywords (or an *always*
-  badge for constant entries), source, and content. You can **create, edit, and
-  delete user lore** from here — the form (name + comma-separated keywords, or
-  "always active" + content + **scope**) writes a `<slug>.md` file to user
-  (`$TERVA_HOME/lore`) or, in a **trusted** workspace, project (`.terva/lore`)
-  scope (validated through the real parser; project scope is offered only when
-  trusted, since project lore is trust-gated on load). Edits appear in the pane
-  immediately. **Keyword-
-  triggered** entries also take effect **live** — the running session re-wires its
-  per-turn lore, so the next turn sees the edit. **Constant ("always active")**
-  entries are baked into the system prompt at build, so those apply to **new
-  sessions** (kept that way on purpose, so an edit doesn't reset the prompt
-  cache). Only web-managed user entries are editable — entries from extension
-  bundles, character cards, or other tiers are read-only.
-- **Characters** — the content library the immersive [Stage](#stage-the-immersive-chatplay-surface)
-  surface plays from, surfaced in the panel so both manage **one** store. Two
-  rosters: **character cards** (import a SillyTavern CCv2 card by drag or file, see
-  its greeting/lorebook/PHI inventory, edit a card's own fields, delete) and
-  **personas** (the embedded crew plus your own; create/edit is gated to a
-  **trusted** workspace, because a persona charter shapes identity in the cached
-  prefix — a card, by contrast, is untrusted data whose edit never changes what it
-  can *do*). Backed by the `cards.*` / `personas.*` control verbs; avatars serve
-  over the auth-gated `/media/` route (never SW-precached, like the panel). It is
-  workspace-global and always offered — the embedded persona crew is never empty —
-  and an import or edit refreshes it live.
-- **Chat** — the chat-bridge manager (the TUI's `/connect`). Lists every
-  registered chat service — the compiled-in telegram and discord connectors plus
-  any connector extensions (tagged `extension`, and `dev` where applicable) —
-  each either **not configured** (with a pointer to `terva bot setup`) or a
-  **connect** / **connect & pair** button. Once connected it shows the connector,
-  the bot's `@username`, the paired user (or *awaiting `/start` from your phone*),
-  and which session is being mirrored, with **disconnect** and **mirror this
-  session** actions — the bridge is bound to one session and does *not* follow
-  whichever session a tab happens to be showing, so rebinding is explicit.
-  Workspace-global, like the bridge itself. A running `terva bot` daemon already
-  polling the service blocks connecting (both consumers would race each update
-  and one always loses); the pane says so and names the pid. The pane is offered
-  whenever any chat service is registered, so it can explain "not configured"
-  rather than silently going missing. See [connectors.md](connectors.md).
-- **MCP** — the Model Context Protocol server manager. `terva web` now starts the
-  configured MCP servers (user `config.json` + a trusted project's) once for the
-  daemon and merges their tools into every session, so MCP tools are usable in
-  the browser. The pane lists each server with a status badge (running / stopped
-  / disabled / gated / failed), scope, tool count, and any startup error, and an
-  enable/disable toggle. Because the servers are shared across sessions, toggling
-  one restarts/stops it and rebuilds **every** open session's tool set live.
-- **Permissions** — the approval inspector, headed by the **Workspace trust**
-  state with a **Trust workspace** / **Untrust** control. Trust is workspace-
-  global (keyed on the cwd) and gates whether project-scoped content loads at all
-  — project extensions, project lore, project permission rules — so granting it
-  here is what unlocks the *project* scope in the other panes. Trusting brings
-  that content **live** across every open session (project extensions reload,
-  tool sets rebuild, project lore becomes visible/editable); project skills and
-  context baked into the system prompt take effect on the next session. Untrust
-  tears it back down. Backed by the ctrlproto control verbs `control.trust` /
-  `control.untrust`; the state rides on `SessionInfo.trusted`. Below trust: the
-  session's approval mode (its
-  setter lives in Settings), the compiled **rules** (tool → allow / deny / ask,
-  with source), and the session's live **"always-allow" grants** — the decisions
-  you accrued by answering "always allow" in approval prompts. Each grant has a
-  **Revoke** button (and *Revoke all* clears a blanket allow-all). You can also
-  **add and remove rules**: an add form (tool name or `mcp_*` glob + allow/deny/
-  ask + optional args regex + **scope**) writes to your **user** `config.json` or
-  the **project** `.terva/config.json`, and user/project rules get a **×** to
-  delete. Edits persist and apply **live** — the rule takes effect on the next
-  tool call across every open session (a deny rule blocks immediately). Project
-  rules are restrict-only: they can't grant **allow** (the self-approval ban), so
-  the form drops that option for project scope. Extension/builtin rules aren't
-  config and stay read-only.
-- **Extension panels** — an extension that opens a panel appears as a live pane
-  and disappears when it closes; a **Status** pane aggregates extension status
-  segments. A panel can be plain text lines *or* a rich **widget tree**: an
-  extension sends a semantic vocabulary (heading, text, meter, keyvalue, table,
-  list, group, note, action, divider) via the SDK's `OpenPanelWidgets` /
-  `RenderPanelWidgets`, and the panel renders it natively — meters as bars,
-  actions as buttons that call back to the extension — no per-extension client
-  code. The extension also sends text `Lines` as the TUI fallback. A panel can
-  be opened spontaneously (on a session event) or by running the owning
-  extension's command from the **Commands** pane.
-
-## The model picker and sub-agent tiers
-
-The model button opens a searchable picker: favorites first, then a group per
-provider, each row switching the session and carrying its own ★ favorite and ◉
-set-as-default toggles.
-
-Each provider group header carries a **⇅** that opens that provider's sub-agent
-tier ladder — the model `swarm_spawn` gets for `tier: weak`, `medium`, `strong`
-or `cheap`, and the model a RAATI seat is filled with at rigor level 1. Tiers
-belong to a provider, so the affordance sits on the group header rather than on
-a row, and never on the ★ group, which spans every provider.
-
-Beside it, a dot per rung in ladder order, so the state of every ladder is
-visible without opening any of them:
-
-| | |
-|---|---|
-| filled | Pinned by you, in `swarm_tiers`. |
-| hollow | Filled by a built-in rule matched against the provider's catalog. |
-| dash | Nothing resolves — a `tier:` spawn against this rung silently runs on the host model, at host-model price. |
-
-A provider whose ladder could not be read shows **no dots at all** rather than
-dashes: "not known" and "nothing resolves" are different answers, and only the
-second is a problem.
-
-The ladder itself shows what each rung **resolves to today**, not what config
-holds — an empty `swarm_tiers` is the ordinary case and says nothing about
-whether the ladder is right. Each rung's model picker carries the *pin* while
-the line above it carries the resolved model, so an untouched rung does not look
-pinned, and saving one cannot freeze a rung that had been tracking a family
-rule. Pinning only a thinking level is allowed and useful: it keeps the built-in
-model and just changes how hard it thinks.
-
-## Usage
-
-The top bar shows a live **context meter** — the last turn's real input+cache
-tokens against the model's window, as a small bar + percent that turns amber
-past 70% and red past 85% (the TUI status bar's `ctx` gauge). Click it (or the
-cost number, or the **Context breakdown** button in the ⓘ popover) to open the
-single **Usage** pane. Everything below lives on that one pane — the size
-breakdown is really just a clarification of where the context usage goes, so the
-once-separate usage and context views are merged. The pane refreshes in place as
-turns complete:
-
-- **Provider / model** — the active provider and model backing the session.
-- **Context gauge** — real last-turn tokens vs the window (falls back to a byte
-  estimate before the first turn).
-- **Cumulative usage** — session input/output/cache tokens and cost, with a
-  `(sub)` marker for OAuth/subscription credentials.
-- **Subscription windows** — for providers that report them (e.g. Codex's 5h +
-  weekly), each as a meter with a reset countdown (the status bar's usage
-  meters; populated once the provider returns usage, i.e. after a turn).
-- **Next-request size breakdown** — system prompt (with the extension-guidance
-  share broken out), tool definitions, ephemeral extension context, and the
-  transcript per message (largest flagged). terva has no tokenizer, so these
-  are bytes with ~bytes/4 token estimates — enough to finger a bloat source.
-
-It mirrors the TUI's `/context` plus the status-bar usage meters.
-
-## Tool calls
-
-The tool-display button in the top bar cycles four levels (the choice is
-remembered): **box** (full name/args/result), **grouped** (a run of tool calls
-between replies collapses to a single "N tool calls" line — with a summary of
-which tools and any failures — that expands to the full boxes on click),
-**minimal** (one greyed line per call), and **hidden**. Grouped is the answer to
-a dozen tools burying a reply; the TUI has the same four levels on its `ctrl+t`
-cycle, and both sides summarize a run identically (one shared format, pinned by
-golden fixtures).
-
-## Slash commands
-
-Type `/` in the composer for an autocomplete menu of **user-driven** commands —
-operator chrome, distinct from the extension **Commands** pane (which is
-buttons). Arrow keys navigate, Tab/Enter selects (a command with no argument runs
-immediately; one that takes an argument primes `/name ` and keeps focus), Esc
-dismisses. A message that merely starts with `/` but isn't a known command still
-sends as a normal prompt.
-
-| Command | Does |
-|---|---|
-| `/compact` | Summarize + replace the transcript to reclaim context (the TUI's `/compact`; the daemon otherwise auto-compacts near the window limit). Refused mid-turn; a already-minimal transcript reports a benign note. |
-| `/clear` | Wipe the transcript with **no** summary — start over in the same session. Unlike compact it keeps nothing; the durable session file gets an empty checkpoint (old rows stay for audit). Refused mid-turn. |
-| `/continue` | Ask for the reply a turn died without producing (the TUI's `/continue`, the verb `turn.resume`). Nothing is appended and nothing is discarded. The panel also offers this as a button above the composer whenever the daemon reports the session is waiting on a reply, so the command is for anyone who already knows it. Refused when the session is not stuck. |
-| `/skill <name> [task]` | Prime the model to load a skill — it rewrites to *Use the "name" skill for: task* and sends it, so the model calls the `skill` tool. After `/skill ` the menu autocompletes skill names. |
-| `/model [id]` | Switch to a model by id, or open the model picker. |
-| `/context` | Open the Usage pane. |
-| `/raati` | Open the deliberation board. |
-| `/new` | Start a new session. |
-| `/help` | List the commands. |
-
-Only the daily-driver subset is exposed; TUI-only chrome (`/jail`, `/paste`, …)
-and things with dedicated web UI (settings, sessions) are not. `/compact` and
-`/clear` are each backed by a ctrlproto conversation method (`compact` / `clear`);
-the rest are existing methods or client-side transforms.
-
-## @-file mentions
-
-Type `@` (at the start of the message or after a space) for workspace-file
-completion — the daemon lists its own tree over ctrlproto (`files.list`,
-gitignore-filtered, advertised as the `files-list` hello feature; on an older
-daemon the stage simply doesn't appear). Matching is substring-then-
-subsequence over the whole relative path; selecting a file inserts the path,
-selecting a directory keeps the token live and narrows into it. The listing
-is fetched lazily on the first `@` and re-fetched on a 30-second TTL, so
-keystrokes never ride the wire.
-
-**Tab** shell-completes the token in place — segment-wise prefix completion
-to the unique candidate (a directory gains `/` and stays live) or the
-longest common prefix, bash dot-name rules included. Tab never commits;
-Enter applies the highlighted row. The TUI's `@`-picker Tab runs the same
-semantics — both implementations are pinned to one shared golden-fixture
-file, so they cannot drift.
-
-## File attachments
-
-Drag any file onto the composer (or paste one) and it rides the next message.
-Two destinations, chosen by what the file is:
-
-- **An image** goes inline, base64 in the prompt frame, because that is the only
-  form a vision model can see. Capped at 10 MB — the frame is 32 MiB and base64
-  inflates by ~4/3, so this leaves room for the JSON envelope and your text.
-- **Everything else** — an email-filters export, a CSV, a log, a PDF, and an
-  image too large to inline — is uploaded to the daemon (`POST /upload`, auth-
-  gated and same-origin checked) and staged under
-  `$TERVA_HOME/attachments/<session>/`. The message then carries only the
-  upload's **id**; the daemon resolves the path, name, type, and size itself, so
-  nothing a client claims about a file is taken on trust.
-
-The turn tells the model what was attached and where, and it reads them with its
-ordinary tools. That instruction is a block of its own on the message, not part
-of what you typed: the panel shows the files as inert labels above your words
-and never renders the staging path, which is the model's copy and wraps to nine
-lines on a phone. The labels are deliberately not clickable — an uploaded
-attachment is not retrievable from them, because the bytes are swept on a TTL
-and an affordance that failed most of the time would be worse than none. `$TERVA_HOME/attachments` is a sandbox **read-only** root, so a
-jailed agent can read a staged file and copy what it wants into the workspace,
-but never write back into the staging area.
-
-Staged files are **not permanent, and messages do not pretend otherwise.** A
-sweeper (daemon start, then hourly) removes anything past a 24-hour TTL and, if
-the whole area exceeds 2 GiB, evicts oldest-first — never touching a file staged
-in the last hour, so a message being composed cannot lose its own attachments. A
-message keeps the record of what was attached; if you re-open it much later, the
-paths it names may be gone. Ask the agent to copy anything worth keeping into
-the workspace during the turn.
-
-A file can also lapse between the drop and the send — a composer left open
-overnight is enough. The send still goes: the model is told how many
-attachments it is not getting, and the message says "*N attachments had
-expired*" beside whatever survived, so an answer that ignores a file is never
-left unexplained.
-
-The composer only offers this where the daemon advertises the `attachments`
-hello feature, which the web carrier sets because it is the carrier that mounts
-the upload route. A client connected some other way (`terva attach` over a unix
-socket) has nowhere to POST bytes and says so rather than dropping the file
-silently.
-
-Per-file limit: 100 MB, advertised as `Hello.MaxAttachmentBytes`. Over it, the
-upload is rejected whole rather than truncated — half an export is silent
-corruption. See [resource-limits.md](resource-limits.md).
-
-## Shared files (the agent hands you one)
-
-The other direction. When the agent has produced something you should *have* —
-an export, a chart, a log slice, a PDF it fetched — it calls **`share_file`**,
-and the file appears in the transcript as a card: an image you can see, an audio
-or video clip you can play, or a chip you can click to download. Before this it
-could only tell you a path, which is no use from a browser on another machine.
-
-Mechanically it copies the file into `$TERVA_HOME/shared/<session>/` and the turn
-records an id. The panel builds `GET /shared/<session>/<id>` from it, which is
-**auth-gated exactly like `/media/`** — the `terva_token` cookie authenticates a
-plain `<img src>` or `<a download>`, so no token ever rides a file URL. Pasting
-that URL into another browser gets a 401: a shared file is yours, not a link you
-can forward.
-
-It **copies**, deliberately. A hardlink would be free, but then an agent editing
-the file afterwards would retroactively change what it already handed you, and a
-download that quietly serves different bytes than the transcript described is
-worse than no download.
-
-Three things about how the bytes come back, because the route serves content the
-*model* chose from the same origin your session cookie lives on:
-
-- **Everything downloads by default** (`Content-Disposition: attachment`). Only
-  the panel asks for inline rendering, and only a closed allowlist of media types
-  gets it: PNG/JPEG/GIF/WebP/AVIF, MP3/OGG/WAV/FLAC, MP4/WebM.
-- **SVG is not on that list, despite being an image.** An inline SVG executes
-  script in this origin, and so does an HTML file; both come back as downloads no
-  matter what is asked for. An agent cannot turn a hostile file into script
-  execution by choosing an extension.
-- The content type is **derived from what landed on disk**, never from a name the
-  agent picked, and the response carries `X-Content-Type-Options: nosniff` plus
-  its own `Content-Security-Policy: sandbox`.
-
-Shared files outlive uploads but are **not permanent either**: a 7-day TTL, and
-oldest-first eviction above 2 GiB. Seven days rather than the inbound 24 hours
-because the two ends are not symmetric — an uploaded file has done its job once
-the agent has read it, while a shared one is the deliverable and the obvious way
-to want it is to reopen the session next week. Past that, the card still says
-what was shared and says it is no longer available; ask for it again.
-
-The card knows that without asking. Each record carries an `expires_at` — the
-file's own modification time plus the store's TTL, which is the same arithmetic
-the sweeper performs — so a card goes inert on the deadline for **every** kind
-of file. It used to infer the answer from an `<img>` failing to load, which
-works only where there is an image: a document, a clip, and a track all kept
-offering a download long after the bytes were gone, and the user found out by
-clicking. The image's load failure is still watched, because `expires_at` is an
-upper bound and eviction above the size cap can take a file sooner.
-
-A daemon too old to send the field sends nothing, and a client reads that as
-*unknown* rather than as expired — the opposite reading would silently withdraw
-every download on a mixed-version deployment.
-
-The card renders where the daemon advertises the `shared-files` hello feature —
-the web carrier, because the web carrier is what mounts the route. The record
-itself reaches every client either way; the feature is only whether there is a
-**link** behind it.
-
-A link is not the only way to get at the bytes. The TUI has no HTTP route to
-fetch from, which is why it showed a bare tool call and nothing else for as long
-as this feature existed there. It now renders its own card under the tool box —
-name, kind, size, expiry, and an inline preview for an image it can pull — and
-`/shared` lists the session's whole set with copy-path, open, and save-here. Both
-resolve handles over two read-only ctrlproto verbs, `shared.list` and
-`shared.fetch` (see [controllers.md](controllers.md)), which any carrier can
-serve because they need no route at all. See [tui.md](tui.md#slash-commands).
-
-`$TERVA_HOME/shared` is deliberately **not** a sandbox root, unlike the inbound
-`attachments/`. The agent publishes through the tool, never by writing there, so
-a grant would buy it nothing and would let a jailed session read every other
-session's deliverables.
-
-## Queued messages
-
-Sending while a turn is running queues the message (shown as a dashed bubble).
-Before the agent consumes it you can **edit** it in place (✎) or **remove** it
-(×); the change is pushed to the queue and broadcast to every open tab.
-
-Stop stays available through tool execution, approval waits, and provider
-retry delays. Enter submits a text follow-up to the queue in both the panel
-and Stage. Attachments must wait until the current turn finishes.
-
-The composer clears submitted input after the daemon accepts it. New text
-typed while acceptance is pending stays in the composer. A refused send keeps
-its text and attachment references. If the connection drops before acceptance
-arrives, check the transcript after reconnecting before sending again. The
-browser keeps the draft and does not resend it automatically.
-
-Unsent input stays with its session while you navigate in the same tab.
-The panel persists draft text separately; attachment references and Stage
-drafts stay in memory and do not survive a reload. Composition confirmation
-keys belong to the input method and do not submit or select autocomplete items.
-
-## Scope
-
-v1 is the daily-driver: chat, session switching + nicknames, model switching
-(searchable picker with per-model favorites), a context breakdown, usage, and
-the PWA. Extensions load per session (like ACP), so lore, hooks, tool
-approvals, and extension tools all work. Management surfaces have since landed
-on top of that — lore editing and extension enable/disable both ship (see the
-Lore and Extensions panes above), as do MCP, permissions, and the chat bridge.
-Still deferred (further `ctrlproto` control group): prompt overrides and
-templates.

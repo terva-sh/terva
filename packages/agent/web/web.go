@@ -69,6 +69,23 @@ type Options struct {
 	// product from the control panel, opted into per deployment.
 	AllowStage bool
 
+	// Methods, when non-empty, restricts every connection to exactly these
+	// verbs (--web-methods). Empty serves whatever the groups and the mask
+	// already allow, which is what this daemon did before the option existed.
+	//
+	// Deliberately NOT named Allow*: those advertise a group in the hello and
+	// are covered by the census in hello_test.go. This advertises nothing. It
+	// cannot, because negotiation is per group and this is per verb — a
+	// restricted caller still negotiates the whole group and then finds
+	// individual verbs refused, exactly as it would for an unwired optional
+	// controller.
+	//
+	// It is the third gate, and the only one that can express "this caller may
+	// prompt and may not call suggest.next_step": those two share a capability
+	// set, so no mask separates them, and they share a group, so no negotiation
+	// does either. See [ctrlproto.WithMethods].
+	Methods []ctrlproto.Method
+
 	// OnListen is called once, after the control listener binds and before any
 	// connection is served, with the listener's network ("unix" or "tcp") and
 	// its address. It reports what was ACTUALLY bound, which is the only honest
@@ -538,7 +555,16 @@ func serveWS(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options, 
 	// caller may negotiate; the capability mask gates what it may CAUSE on
 	// them, which groups cannot express — GroupSession carries `sessions.list`
 	// and `sidechat.ask` alike, and only one of those spends money.
-	if _, err := ctrlproto.ServeConn(connCtx, conn, svc, hello, ctrlproto.WithAuthority(authz.Authority(principal))); err != nil {
+	// The third gate, when the operator asked for one. Groups say which
+	// surfaces, the mask says what may be caused, and this says which verbs
+	// this daemon was provisioned to serve at all. Unlike the two above it is
+	// not derived from the principal: it is a property of the deployment, so
+	// it applies to every caller equally.
+	serveOpts := []ctrlproto.ServeOption{ctrlproto.WithAuthority(authz.Authority(principal))}
+	if len(opts.Methods) > 0 {
+		serveOpts = append(serveOpts, ctrlproto.WithMethods(opts.Methods...))
+	}
+	if _, err := ctrlproto.ServeConn(connCtx, conn, svc, hello, serveOpts...); err != nil {
 		logConnEnd(who, err)
 	}
 }

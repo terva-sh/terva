@@ -218,6 +218,14 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 	// Stage is enabled by the --web-stage flag OR the web_stage config knob, so a
 	// deployment can turn it on without a launch flag (config read once at start).
 	allowStage := args.WebStage || cfg.WebStage
+	// --web-methods narrows rather than widens, so it needs no
+	// servePrivilegedGroup guard: it cannot grant anything, and refusing to
+	// honour it on an unauthenticated listener would be backwards. The names
+	// were validated when the flag was parsed.
+	webMethods := make([]ctrlproto.Method, 0, len(args.WebMethods))
+	for _, m := range args.WebMethods {
+		webMethods = append(webMethods, ctrlproto.Method(m))
+	}
 
 	// allowLogin was settled at the top, because the credential-less boot check
 	// depends on it — this is where the machinery it gates gets wired.
@@ -311,5 +319,6 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 		AllowLogin:     allowLogin,
 		AllowSecrets:   allowSecrets,
 		AllowStage:     allowStage,
+		Methods:        webMethods,
 	})
 }

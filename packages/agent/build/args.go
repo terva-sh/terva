@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/core"
@@ -104,6 +105,30 @@ type Args struct {
 	// all), but the report names every scope, component and grant, and that is a
 	// map worth withholding from a stranger who can reach an open port.
 	AllowWebSecrets bool
+
+	// WebMethods restricts `terva web` to exactly these ctrlproto verbs.
+	// --web-methods, a comma-separated list. Empty by default, which serves
+	// every verb the negotiated groups and the capability mask already allow.
+	//
+	// 🚨 A NARROWING flag, unlike its --web-allow-* neighbours, which is why it
+	// is not named like them. Those hand out a group that is off by default;
+	// this takes away verbs that are on.
+	//
+	// It exists because the group and capability axes provably cannot express a
+	// caller that needs one spending verb and no others: `prompt` is
+	// CapWrite|CapSpend and so are `suggest.next_step`, `sidechat.ask` and
+	// `sessions.doctor`, so a mask admitting the first admits all of them, and
+	// all four live in groups such a caller must negotiate. See
+	// ctrlproto.WithMethods.
+	//
+	// For a headless daemon driven by one known program. Do not put it on a
+	// listener a person drives interactively: a user who reaches for a verb the
+	// list forgot gets a refusal with no way to widen it short of a restart.
+	//
+	// The flag may be given once. A second occurrence is an error rather than a
+	// union or an override, because a narrowing flag that widens on repeat is
+	// the wrong failure direction and an override discards a list silently.
+	WebMethods []string
 
 	// WebStage mounts the Stage app (the immersive chat/play surface) at /stage/
 	// and advertises it in the hello. --web-stage. Off by default: Stage is a
@@ -730,6 +755,42 @@ func ParseArgs(in []string) (Args, error) {
 			a.AllowWebLogin = true
 		case "--web-allow-secrets":
 			a.AllowWebSecrets = true
+		case "--web-methods":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			// 🚨 A second occurrence is an error, not a merge and not an
+			// override. Its neighbours here accumulate (--web-insecure-cidr
+			// unions its CIDRs), but every one of those WIDENS, where this
+			// NARROWS: unioning two occurrences would leave more verbs served
+			// than the last one names, which is the wrong direction to resolve
+			// silently. Overriding is no better -- it discards a list the
+			// operator wrote without saying so. Refusing says which.
+			if a.WebMethods != nil {
+				return a, i18n.Errorf("--web-methods may be given once; combine the methods into one comma-separated list")
+			}
+			// Built here and assigned once, so the non-empty check below tests
+			// THIS occurrence rather than whatever a previous one left behind.
+			methods := []string{}
+			for _, p := range strings.Split(v, ",") {
+				p = strings.TrimSpace(p)
+				if p == "" {
+					continue
+				}
+				// Reject an unknown verb here rather than at serve time. A typo
+				// that survived to the daemon would produce a listener that
+				// refuses the verb its operator meant to allow, and the refusal
+				// would look identical to a deliberate restriction.
+				if ctrlproto.Method(p).Group() == "" {
+					return a, i18n.Errorf("--web-methods names an unknown method: %s", p)
+				}
+				methods = append(methods, p)
+			}
+			if len(methods) == 0 {
+				return a, i18n.Errorf("--web-methods requires at least one method")
+			}
+			a.WebMethods = methods
 		case "--web-stage":
 			a.WebStage = true
 		case "--web-chat-connector":
@@ -1328,6 +1389,14 @@ Web-specific flags:
   --web-allow-secrets           serve the secrets group: report what is encrypted at rest and manage the
                                 store's grants (off by default; never on an unauthenticated bind). Returns
                                 no secret value, and key rotation stays on the CLI
+  --web-methods LIST            serve ONLY these ctrlproto verbs (comma-separated), refusing every other one
+                                before dispatch. May be given once: repeating it is an error rather than a
+                                merge, because unioning would widen a flag whose job is to narrow.
+                                Narrows rather than widens, unlike the --web-allow-* flags
+                                above. For a headless daemon driven by one known program — a person driving
+                                it interactively would hit refusals with no way to widen short of a restart.
+                                Use it when the group and capability axes cannot express the limit you want:
+                                prompt and suggest.next_step share a capability set, so no mask separates them
   --web-insecure                allow binding a non-loopback address with NO auth (dangerous)
   --web-insecure-cidr CIDR      grant NO-auth access to these source IP/CIDR(s) only (comma-separated; loopback always
                                 allowed) — the scoped, safer form of --web-insecure for a trusted overlay (e.g. a tailnet

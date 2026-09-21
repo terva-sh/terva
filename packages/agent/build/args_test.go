@@ -485,3 +485,63 @@ func TestWebLoginAndWebSecretsAreIndependentFlags(t *testing.T) {
 		t.Error("--web-allow-secrets must not grant the auth group")
 	}
 }
+
+// --web-methods narrows the served verb set. Its names are validated at parse
+// time on purpose: a typo that reached the daemon would produce a listener
+// refusing the verb its operator meant to allow, and that refusal looks
+// identical to a deliberate restriction.
+func TestParseWebMethods(t *testing.T) {
+	a, err := ParseArgs([]string{"--web-methods", "prompt, sessions.create ,sessions.list"})
+	if err != nil {
+		t.Fatalf("--web-methods rejected a valid list: %v", err)
+	}
+	want := []string{"prompt", "sessions.create", "sessions.list"}
+	if len(a.WebMethods) != len(want) {
+		t.Fatalf("parsed %v, want %v", a.WebMethods, want)
+	}
+	for i, m := range want {
+		if a.WebMethods[i] != m {
+			t.Errorf("method %d is %q, want %q", i, a.WebMethods[i], m)
+		}
+	}
+	// Absent by default, which is what keeps the flag additive.
+	base, err := ParseArgs([]string{"--web"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(base.WebMethods) != 0 {
+		t.Errorf("a daemon with no --web-methods restricted itself to %v", base.WebMethods)
+	}
+}
+
+func TestParseWebMethodsRejectsUnknownAndEmpty(t *testing.T) {
+	if _, err := ParseArgs([]string{"--web-methods", "prompt,sessions.craete"}); err == nil {
+		t.Error("a misspelled method was accepted; the daemon would refuse a verb the operator meant to allow")
+	}
+	if _, err := ParseArgs([]string{"--web-methods", " , "}); err == nil {
+		t.Error("a list with no methods was accepted")
+	}
+}
+
+// A second occurrence is refused rather than merged or overridden. Merging would
+// leave more verbs served than the last occurrence names, which is the wrong
+// direction to resolve silently for a flag whose whole job is to narrow;
+// overriding would discard a list the operator wrote without saying so.
+//
+// The empty case is the sharper half: it is only wrong if the non-empty check
+// reads accumulated state, so it fails on a parser that validates the union and
+// passes on one that validates the occurrence.
+func TestParseWebMethodsRefusesRepeatedOccurrences(t *testing.T) {
+	a, err := ParseArgs([]string{"--web-methods", "prompt", "--web-methods", "sessions.list"})
+	if err == nil {
+		t.Fatalf("a repeated --web-methods was accepted, yielding %v; a narrowing flag must not widen on repeat", a.WebMethods)
+	}
+	if _, err := ParseArgs([]string{"--web-methods", "prompt", "--web-methods", " , "}); err == nil {
+		t.Error("a later empty occurrence was accepted because an earlier one had already satisfied the non-empty check")
+	}
+	// One occurrence listing several methods is the supported form.
+	ok, err := ParseArgs([]string{"--web-methods", "prompt,sessions.list"})
+	if err != nil || len(ok.WebMethods) != 2 {
+		t.Fatalf("one occurrence with several methods was rejected: %v %v", ok.WebMethods, err)
+	}
+}

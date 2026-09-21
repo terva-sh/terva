@@ -47,6 +47,44 @@ func WithAuthority(mask Capability) ServeOption {
 	return func(s *serveState) { s.authority = mask }
 }
 
+// WithMethods limits this connection to the verbs named in allowed. It composes
+// with the other two gates and replaces neither: the group says which surface
+// the client asked for, the mask says what it may cause, and this says which
+// verbs the caller was PROVISIONED for.
+//
+// 🚨 The third axis exists because the first two provably cannot express a
+// caller that needs one spending verb and no others. Capabilities are a class,
+// not an identity: `prompt` is CapWrite|CapSpend, and so are `suggest.next_step`,
+// `sidechat.ask` and `sessions.doctor`. A mask that admits the first admits all
+// of them, so an embedded consumer that needs exactly `prompt` has no mask it
+// can hold that excludes the rest — the minimum is capAll. Groups cannot help
+// either, because all four live in the groups such a consumer must negotiate.
+//
+// That is not a gap in the other two. It is what they are for: a group is a
+// surface and a capability is a class of effect, and neither is meant to name
+// individuals. This names individuals, which is why it is a separate option a
+// caller opts into rather than a default anyone inherits.
+//
+// A nil or empty set allows every verb, the same permissive default
+// [WithAuthority] takes, so no existing carrier changes behavior. Pass it only
+// where the exact verb set is known and fixed — a headless daemon driven by one
+// program, not an interactive client whose user may reach for anything.
+//
+// The set is copied, so a later write to the caller's map cannot widen a live
+// connection.
+func WithMethods(allowed ...Method) ServeOption {
+	return func(s *serveState) {
+		if len(allowed) == 0 {
+			s.methods = nil
+			return
+		}
+		s.methods = make(map[Method]bool, len(allowed))
+		for _, m := range allowed {
+			s.methods[m] = true
+		}
+	}
+}
+
 // ServeConn runs the server side of ctrlproto over conn, backed by svc. It
 // performs the hello handshake (the client sends its hello first; this replies
 // with serverHello and returns the negotiated [Contract]), then reads command
@@ -123,6 +161,10 @@ type serveState struct {
 	// quietly serves the whole surface. Fail-closed is worth the small cost of
 	// having to say capAll in tests.
 	authority Capability
+	// methods, when non-nil, is the exact verb set this connection was
+	// provisioned for. Nil means every verb, which is what every carrier got
+	// before this existed.
+	methods map[Method]bool
 
 	mu   sync.Mutex
 	subs map[string]context.CancelFunc // session id → pump canceller
@@ -149,6 +191,16 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 	// for a protocol problem that is not there.
 	if !f.Method.Permits(s.authority) {
 		s.write(ErrFrame(f.ID, CodeForbidden, "not permitted for this caller: "+string(f.Method)))
+		return
+	}
+	// The THIRD gate, and the narrowest: not a surface and not a class of
+	// effect, but the specific verbs this caller was provisioned for. Only a
+	// carrier that passed WithMethods has one; everyone else falls through.
+	// CodeForbidden for the same reason as authority — the verb exists and is
+	// negotiated, so "unsupported" would send a caller hunting for a protocol
+	// problem that is not there.
+	if s.methods != nil && !s.methods[f.Method] {
+		s.write(ErrFrame(f.ID, CodeForbidden, "not provisioned for this caller: "+string(f.Method)))
 		return
 	}
 

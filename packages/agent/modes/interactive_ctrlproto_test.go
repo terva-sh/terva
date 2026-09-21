@@ -452,12 +452,27 @@ func (c *fakeCarrier) lastNextStepParams() ctrlproto.NextStepParams {
 	return c.nextStepParams
 }
 
+// recvTimeout bounds how long a test waits for a channel that a goroutine is
+// expected to feed. It matches the deadline in waitCond (attach_pump_test.go),
+// on purpose: the two helpers wait for the same kind of event, and several
+// tests use both for consecutive steps of one sequence. When they disagreed,
+// the tighter one decided the outcome, and which assertion failed first said
+// more about the helper than about the code.
+//
+// 🪤 This is a CI budget, not a product latency. The tests it serves drive
+// their own delays down to milliseconds, so a passing run never approaches
+// this and a slower value costs nothing. What it has to survive is a loaded
+// runner under -race, where a goroutine wakeup is scheduling, not work. At two
+// seconds TestPumpRetriesReconnectingCarrier failed that way on run 3798 while
+// the same bytes passed locally ten times over.
+const recvTimeout = 5 * time.Second
+
 func recv[T any](t *testing.T, ch <-chan T, what string) T {
 	t.Helper()
 	select {
 	case v := <-ch:
 		return v
-	case <-time.After(2 * time.Second):
+	case <-time.After(recvTimeout):
 		t.Fatalf("timeout waiting for %s", what)
 		panic("unreachable")
 	}
