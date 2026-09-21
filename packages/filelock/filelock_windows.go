@@ -12,14 +12,49 @@ import (
 // OS releases the lock if the holding process dies.
 type Lock struct{ f *os.File }
 
+// The guard is one byte at 2^62, and the offset is the whole point.
+//
+// flock is advisory and whole-file: it answers "does anyone hold this" and
+// never stands between the holder and its own writes. LockFileEx is neither.
+// It locks a BYTE RANGE, and the range is MANDATORY — the kernel enforces it
+// against every other handle on the file, including handles the locking
+// process itself owns.
+//
+// So a guard on [0,1) of a session transcript denies the transcript's own
+// writer, which holds a separate handle, the moment it writes the first record
+// at offset 0. That is not a lock doing its job; it is a lock the design never
+// meant to take, because sessionlock.lockTranscript reasons in flock's terms
+// and takes its guard on the transcript itself rather than a file beside it.
+// Every session write on Windows failed this way.
+//
+// 2^62 is past any real transcript, so no data write ever reaches the locked
+// byte and the mandatory range costs nothing. Exclusion is unaffected: every
+// process locks the identical range on the identical file. Locking beyond EOF
+// is legal and does not extend the file.
+//
+// Lock and unlock must name the same range, so all three call sites take it
+// from here rather than spelling out an offset each.
+const (
+	lockOffsetLow  = 0
+	lockOffsetHigh = 0x40000000 // 2^62 once combined with the low word
+	lockBytes      = 1
+)
+
+// lockRegion is a fresh Overlapped naming the guard byte. LockFileEx reads the
+// offset from the Overlapped and the length from its own arguments, and it
+// writes to the struct, so each call gets its own.
+func lockRegion() *windows.Overlapped {
+	return &windows.Overlapped{Offset: lockOffsetLow, OffsetHigh: lockOffsetHigh}
+}
+
 // Acquire blocks until the lock at path is held.
 func Acquire(path string) (*Lock, error) {
 	f, err := openLockFile(path)
 	if err != nil {
 		return nil, err
 	}
-	ol := new(windows.Overlapped)
-	if err := windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, ol); err != nil {
+	ol := lockRegion()
+	if err := windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK, 0, lockBytes, 0, ol); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -51,9 +86,9 @@ func TryAcquire(path string) (*Lock, bool, error) {
 // It takes ownership of f: the returned Lock closes it on Release, and f is
 // closed before any non-nil error or a busy result is returned.
 func TryLockFile(f *os.File) (*Lock, bool, error) {
-	ol := new(windows.Overlapped)
+	ol := lockRegion()
 	err := windows.LockFileEx(windows.Handle(f.Fd()),
-		windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, ol)
+		windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, lockBytes, 0, ol)
 	if err != nil {
 		_ = f.Close()
 		if err == windows.ERROR_LOCK_VIOLATION || err == windows.ERROR_IO_PENDING {
@@ -70,8 +105,8 @@ func (l *Lock) Release() {
 	if l == nil || l.f == nil {
 		return
 	}
-	ol := new(windows.Overlapped)
-	_ = windows.UnlockFileEx(windows.Handle(l.f.Fd()), 0, 1, 0, ol)
+	ol := lockRegion()
+	_ = windows.UnlockFileEx(windows.Handle(l.f.Fd()), 0, lockBytes, 0, ol)
 	_ = l.f.Close()
 }
 

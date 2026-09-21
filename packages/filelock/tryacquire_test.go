@@ -152,3 +152,55 @@ func TestFilelockHelperProcess(t *testing.T) {
 	// the process without a sleep to tune.
 	_, _ = os.Stdin.Read(make([]byte, 1))
 }
+
+// TestLockDoesNotBlockTheHoldersOwnWrites pins the property that v0.138.0
+// shipped without and broke every session write on Windows.
+//
+// The guard sessionlock takes sits on the transcript ITSELF, not on a file
+// beside it, so the holder goes on writing the very file it locked through a
+// separate handle. flock permits that by being advisory, and nothing here
+// noticed that LockFileEx does not: it locks a byte RANGE and the kernel
+// enforces it against every other handle, the holder's own included. A guard
+// on [0,1) therefore denied the first record of every new session, and the
+// failure reached a release because Windows is only tested after the cut.
+//
+// The assertion is deliberately platform-blind. On unix it passes because the
+// lock is advisory; on Windows it passes only while the guard byte stays off
+// the range real data occupies. That is exactly the regression to catch.
+func TestLockDoesNotBlockTheHoldersOwnWrites(t *testing.T) {
+	path := filepath.Join(testsupport.TempDir(t), "transcript.jsonl")
+	if err := os.WriteFile(path, []byte("{\"seed\":true}\n"), 0o600); err != nil {
+		t.Fatalf("seed the transcript: %v", err)
+	}
+
+	// Lock it the way sessionlock does: a read-only handle on the file itself.
+	guard, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open for the guard: %v", err)
+	}
+	l, held, err := filelock.TryLockFile(guard)
+	if err != nil || !held {
+		t.Fatalf("TryLockFile on the transcript: held=%v err=%v", held, err)
+	}
+	defer l.Release()
+
+	// A separate handle, as the session writer holds. Both the append and a
+	// rewrite from offset 0 must succeed while the guard is held.
+	w, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("open for writing while locked: %v", err)
+	}
+	defer w.Close()
+	if _, err := w.Write([]byte("{\"appended\":true}\n")); err != nil {
+		t.Fatalf("append while holding the guard: %v", err)
+	}
+
+	at, err := os.OpenFile(path, os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("open for an offset-0 write: %v", err)
+	}
+	defer at.Close()
+	if _, err := at.WriteAt([]byte("{"), 0); err != nil {
+		t.Fatalf("write at offset 0 while holding the guard: %v", err)
+	}
+}
