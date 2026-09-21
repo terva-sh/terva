@@ -29,7 +29,7 @@ func TestDispatchedPrefixReturnsWhatWentOnTheWire(t *testing.T) {
 		t.Fatal("the turn advertised no tools, so this test cannot tell an aligned prefix from an empty one")
 	}
 
-	system, tools, ok := a.DispatchedPrefix(client, "spy-model")
+	system, tools, cacheKey, ok := a.DispatchedPrefix(client, "spy-model")
 	if !ok {
 		t.Fatal("not ok after a dispatch that landed; there is a warm prefix and the caller needs it")
 	}
@@ -47,6 +47,15 @@ func TestDispatchedPrefixReturnsWhatWentOnTheWire(t *testing.T) {
 	if string(got) != string(want) {
 		t.Errorf("tools differ from the wire, so a request built on them misses the cache:\n got:  %s\n wire: %s", got, want)
 	}
+	// The routing key is part of "what went on the wire". Aligned bytes sent on
+	// another route read nothing, so a reader that returned the prefix without
+	// the key would hand its caller the expensive half of the job.
+	if cacheKey != sent[0].PromptCacheKey {
+		t.Errorf("cacheKey = %q; the wire got %q", cacheKey, sent[0].PromptCacheKey)
+	}
+	if cacheKey == "" {
+		t.Error("cacheKey is empty after a real dispatch; every turn carries the session's, so this cannot be right")
+	}
 }
 
 // Before any turn there is no warm prefix to aim at, so the caller must be told
@@ -56,7 +65,7 @@ func TestDispatchedPrefixIsNotOkBeforeTheFirstDispatch(t *testing.T) {
 	client := &prefixSpyClient{name: "spy"}
 	a := NewAgent(client, "spy-model", "the system prompt", Registry{"noop": noopTool{}})
 
-	if _, _, ok := a.DispatchedPrefix(client, "spy-model"); ok {
+	if _, _, _, ok := a.DispatchedPrefix(client, "spy-model"); ok {
 		t.Fatal("ok before any dispatch; nothing is cached, so there is no prefix to align to")
 	}
 }
@@ -74,16 +83,16 @@ func TestDispatchedPrefixRefusesAnotherModelOrClient(t *testing.T) {
 	}
 	a.SetClientAndModel(incoming, "incoming-model")
 
-	if _, _, ok := a.DispatchedPrefix(incoming, "incoming-model"); ok {
+	if _, _, _, ok := a.DispatchedPrefix(incoming, "incoming-model"); ok {
 		t.Error("ok for the incoming pair; that model has never seen this conversation")
 	}
-	if _, _, ok := a.DispatchedPrefix(outgoing, "different-model"); ok {
+	if _, _, _, ok := a.DispatchedPrefix(outgoing, "different-model"); ok {
 		t.Error("ok for a different model on the same client; the cache is keyed on the model too")
 	}
-	if _, _, ok := a.DispatchedPrefix(incoming, "outgoing-model"); ok {
+	if _, _, _, ok := a.DispatchedPrefix(incoming, "outgoing-model"); ok {
 		t.Error("ok for the same model on a different endpoint; the other endpoint holds no cache for it")
 	}
-	if _, _, ok := a.DispatchedPrefix(outgoing, "outgoing-model"); !ok {
+	if _, _, _, ok := a.DispatchedPrefix(outgoing, "outgoing-model"); !ok {
 		t.Error("not ok for the pair that actually dispatched; that prefix is still the warm one")
 	}
 }
@@ -99,14 +108,14 @@ func TestDispatchedPrefixCopiesTheToolsSlice(t *testing.T) {
 		t.Fatalf("Prompt returned %v", err)
 	}
 
-	first, tools, ok := a.DispatchedPrefix(client, "spy-model")
+	first, tools, _, ok := a.DispatchedPrefix(client, "spy-model")
 	if !ok || len(tools) == 0 {
 		t.Fatalf("no prefix to test against (ok=%v, %d tools)", ok, len(tools))
 	}
 	_ = first
 	tools[0].Name = "clobbered"
 
-	_, again, _ := a.DispatchedPrefix(client, "spy-model")
+	_, again, _, _ := a.DispatchedPrefix(client, "spy-model")
 	if again[0].Name == "clobbered" {
 		t.Fatal("a caller's write reached the retained prefix; the record must outlive the call unchanged")
 	}

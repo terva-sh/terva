@@ -434,4 +434,38 @@ func TestNextStepAlignsWithTheMainLine(t *testing.T) {
 	if !suggestion.ForbidTools {
 		t.Error("ForbidTools unset while tools ride the wire; the suggestion could act, which is the one thing it must never do")
 	}
+	// Aligning the bytes without the routing key is half a fix, and it is the
+	// half that shipped first: the request carried the main line's prefix and no
+	// prompt_cache_key at all, where every real turn carries the session's.
+	if main.PromptCacheKey == "" {
+		t.Fatal("the main turn sent no cache key, so this test cannot tell an aligned key from an empty one")
+	}
+	if suggestion.PromptCacheKey != main.PromptCacheKey {
+		t.Errorf("cache key differs from the main line, so the aligned bytes can route to another cache:\n suggestion: %q\n main:       %q",
+			suggestion.PromptCacheKey, main.PromptCacheKey)
+	}
+}
+
+// The other direction, and the one that protects the conversation rather than
+// the suggestion. With no warm prefix there is nothing to align to, so the call
+// falls back to its own system prompt and no tools — a prompt that diverges from
+// the main line. Sending the session's routing key with THAT would aim a
+// divergent prompt at the conversation's cache, which is the perturbation the
+// alignment work exists to avoid.
+func TestNextStepSendsNoCacheKeyWhenUnaligned(t *testing.T) {
+	w, s, cl := nextStepSession(t, "s1", "run the tests")
+	s.agent.SetTools(core.Registry{"read": nextStepFakeTool{}})
+	s.setModel("fake", "fake-model", false)
+
+	// No Prompt call, so the agent has dispatched nothing and holds no prefix.
+	if _, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{}); err != nil {
+		t.Fatalf("suggest: %v", err)
+	}
+	req := cl.lastReq(t)
+	if len(req.Tools) != 0 {
+		t.Fatalf("unaligned, the suggestion carried %d tools; the fallback must be unchanged", len(req.Tools))
+	}
+	if req.PromptCacheKey != "" {
+		t.Errorf("unaligned, the suggestion carried cache key %q; a divergent prompt must not ride the conversation's route", req.PromptCacheKey)
+	}
 }

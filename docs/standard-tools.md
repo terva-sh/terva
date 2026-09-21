@@ -1,4 +1,4 @@
-# terva standard tools — strategy and playbook
+# terva standard tools: strategy and playbook
 
 Canonical guidance for terva's model-visible tool surface: what belongs
 in the always-on core, what ships as an opt-in **standard extension**,
@@ -25,7 +25,7 @@ belong behind opt-in layers that only consenting sessions pay for.
 
 ## Trust boundary (read this before "just shipping an extension")
 
-Extension **tool calls** are mediated by terva — permission-gated,
+Extension **tool calls** are mediated by terva: permission-gated,
 hook-interceptable, classified read-only or not. The extension
 **subprocess itself** currently runs as trusted local code with the
 user's normal filesystem and network privileges. Installing or loading an
@@ -39,17 +39,17 @@ additionally gated by Workspace Trust; see
 
 When adding a capability, decide its layer first:
 
-1. **Core built-in** — universal, high-frequency, low-dependency tools
+1. **Core built-in**: universal, high-frequency, low-dependency tools
    that benefit from tight permission/sandbox integration. Lives in
    `packages/agent/tools/`, registered in `BuildToolRegistry`
    (`packages/agent/build/build.go`).
-2. **Standard extension** — a terva-maintained or explicitly blessed,
+2. **Standard extension**: a terva-maintained or explicitly blessed,
    documented, easy-to-install **opt-in** extension. Still runs as
    trusted local code (see above).
-3. **Recommended MCP preset** — third-party services or tools whose
+3. **Recommended MCP preset**: third-party services or tools whose
    implementation already exists outside terva; we ship docs and starter
    config, not code.
-4. **Skill** — a reusable procedure/instruction set that needs no new
+4. **Skill**: a reusable procedure/instruction set that needs no new
    execution primitive.
 
 Default answer: **extension first**, unless the tool clearly reduces risky
@@ -62,39 +62,39 @@ A single `read_only` boolean does not describe every tool. Classify each
 tool's authority explicitly, and do **not** collapse "read-only" and
 "safe" into one idea:
 
-- **local read-only** — reads files/state under the jail; no process,
+- **local read-only**: reads files/state under the jail; no process,
   network, or external side effects. (`read`, `grep`, `glob`,
   `terva_status`.)
-- **local data** — reads *and writes* only the tool's own host-managed
+- **local data**: reads *and writes* only the tool's own host-managed
   data dir (for an extension, its `$TERVA_HOME/ext-data/<name>`); no
   user-workspace, process, network, or external effect. Auto-allowable
   like local read-only because the write never leaves private,
-  host-controlled storage — for a memory/notes/state tool.
-- **workspace mutation** — writes files, edits tasks, creates worktrees.
+  host-controlled storage, for a memory/notes/state tool.
+- **workspace mutation**: writes files, edits tasks, creates worktrees.
   (`write`, `edit`.)
-- **process execution** — starts commands or long-running subprocesses.
+- **process execution**: starts commands or long-running subprocesses.
   (`bash`; a future `monitor`.)
-- **network read** — fetches URLs/search results; can still leak metadata,
+- **network read**: fetches URLs/search results; can still leak metadata,
   trigger server logs, or reach private networks. *Not* equivalent to
   local read-only.
-- **external mutation** — writes to third-party APIs, sends messages,
+- **external mutation**: writes to third-party APIs, sends messages,
   opens PRs, changes cloud resources.
-- **user interaction** — blocks to ask the user (`ask_user_question`);
+- **user interaction**: blocks to ask the user (`ask_user_question`);
   no other side effect, so it is permitted in every mode and never
   prompts.
 
-The taxonomy now exists as `core.Authority` (`packages/core/policy.go`),
-and an extension/MCP tool can declare its class via the `authority` field
-on `register_tool` (`ext.WithAuthority` in the Go SDK). Declared authority
-decides read-only classification — `local-read` and `local-data` are
-auto-allowable, so a `network-read` tool is gated like a side-effecting tool (it prompts in
-`workspace`/`auto-edit`, is refused in `plan`) even if it also set the
-legacy `read_only` bool. **Mark network tools `network-read`, not
-`read_only`.** The shared egress guard now ships, and three host-side
-fetches route through it (see [permissions.md](permissions.md)). Still to
-come: a user-layer config key naming hosts the guard may dial even when
-they resolve to a private address. It widens the guard alone, and it does
-not change which calls prompt. See `docs/plans/standard-tools-bucket2.md`.
+The taxonomy now exists as `core.Authority` (`packages/core/policy.go`), and an
+extension/MCP tool can declare its class via the `authority` field on
+`register_tool` (`ext.WithAuthority` in the Go SDK). Declared authority decides
+read-only classification, and `local-read` and `local-data` are auto-allowable,
+so a `network-read` tool is gated like a side-effecting tool (it prompts in
+`workspace`/`auto-edit`, is refused in `plan`) even if it also set the legacy
+`read_only` bool. **Mark network tools `network-read`, not `read_only`.** The
+shared egress guard now ships, and three host-side fetches route through it (see
+[permissions.md](permissions.md)). Still to come: a user-layer config key naming
+hosts the guard may dial even when they resolve to a private address. It widens
+the guard alone, and it does not change which calls prompt. See
+`docs/plans/standard-tools-bucket2.md`.
 
 ## Current standard bundle
 
@@ -103,17 +103,17 @@ not change which calls prompt. See `docs/plans/standard-tools-bucket2.md`.
 | Tool | Authority | Notes |
 |---|---|---|
 | `read` | local read-only | files + inline images for vision models |
-| `write` | workspace mutation | overwrites; description steers toward `edit` for partial changes; optional `mode` (octal ≤ `0777`) sets permission bits — e.g. an executable script — in one reviewable step |
+| `write` | workspace mutation | overwrites; description steers toward `edit` for partial changes; optional `mode` (octal ≤ `0777`) sets permission bits, e.g. an executable script, in one reviewable step |
 | `edit` | workspace mutation | exact-match replacements, whitespace-tolerant fallback |
 | `bash` | process execution | merged stdout/stderr, timeout; description carries git/secrets/file-tool-preference guardrails |
 | `grep` | local read-only | RE2 content search; `.gitignore`-aware, binary-skipping, paged |
 | `glob` | local read-only | path glob (`**` recurses); `.gitignore`-aware, paged |
-| `ask_user_question` | user interaction | structured clarifying question(s); permitted in every mode; interactive-only (headless returns a proceed-anyway result). `questions[]` asks up to 8 at once as ONE interruption — the TUI shows them as tabs with a submit pane, the web client stacks them in one card — and returns every answer together; the singular `question` form still works. Set `recommended_options` to exact option text when the model recommends one or more choices; clients mark those choices and never infer a recommendation from position. |
+| `ask_user_question` | user interaction | structured clarifying question(s); permitted in every mode; interactive-only (headless returns a proceed-anyway result). `questions[]` asks up to 8 at once as ONE interruption, the TUI shows them as tabs with a submit pane, the web client stacks them in one card, and returns every answer together; the singular `question` form still works. Set `recommended_options` to exact option text when the model recommends one or more choices; clients mark those choices and never infer a recommendation from position. |
 | `terva_status` | local read-only | session self-introspection |
-| `session_inspect` | local read-only | bounded, filterable view over a session transcript: this session, any other session in `$TERVA_HOME` (by its id, this project first), or a swarm sub-agent's; `expand` reads one event's full text in pages, and `stats` returns a whole-session rollup (cost, cache hit rate, dead turns, tool-call and failure histograms, provider errors) in one pass instead of paging for it. Event kinds cover `tool_call`, `tool_result`, `message`, `usage` (a turn's cost and cache accounting), `error` (a provider failure from the `.errors.jsonl` sidecar, placed against the turn it killed), and the pair `prefix`/`cliff` (the rung where a cacheable prefix was rebuilt, and a run of dispatches whose cache reads collapsed) — these four are how a session's cost, its outages and its cache behaviour become answerable at all; nothing else records them. The transcripts stay on the read deny list for every other tool, and this one is carved back out for them: see [permissions](permissions.md). Event indices and `cursor` are **1-based**, and `0` means "not set" on both — so a caller that fills every optional key with its zero value gets the default listing of the most recent window rather than an error or the wrong end of the transcript (see "Optionality" below). Secrets redacted, input scan and output both capped. A sub-agent's transcript streams as it works, so a running one is inspectable mid-task; before its first message lands the result names that state rather than blaming the filters. |
-| `session_list` | local read-only | enumerates recorded sessions, newest first — the discovery half of the session surface, and the answer to "what exists" that neither of the readers above gives. `scope` is `"project"` by default and `"all"` for every project in `$TERVA_HOME`; an unknown scope is refused rather than narrowed, because a caller who asked for more and silently got less would read the short list as "there is nothing else". A row carries the session id, the time of the last change, the size, and the working directory, and nothing from inside the conversation — `Details.session_ids` carries the ids so a sweep consumes them without parsing prose. Cheap by construction: it stats rather than reads, and opens only the bounded opening meta row of each listed row (which is where the working directory comes from). A title would need the folded meta and therefore a full scan, since a rename lands in a later row, so titles and content stay behind `session_inspect`. Paged with `limit`/`offset`, default 20, max 100. Sessions only: swarm sub-agent ids come from `swarm_spawn`. See [permissions](permissions.md) for what it exposes by default. |
+| `session_inspect` | local read-only | bounded, filterable view over a session transcript: this session, any other session in `$TERVA_HOME` (by its id, this project first), or a swarm sub-agent's; `expand` reads one event's full text in pages, and `stats` returns a whole-session rollup (cost, cache hit rate, dead turns, tool-call and failure histograms, provider errors) in one pass instead of paging for it. Event kinds cover `tool_call`, `tool_result`, `message`, `usage` (a turn's cost and cache accounting), `error` (a provider failure from the `.errors.jsonl` sidecar, placed against the turn it killed), and the pair `prefix`/`cliff` (the rung where a cacheable prefix was rebuilt, and a run of dispatches whose cache reads collapsed), these four are how a session's cost, its outages and its cache behaviour become answerable at all; nothing else records them. The transcripts stay on the read deny list for every other tool, and this one is carved back out for them: see [permissions](permissions.md). Event indices and `cursor` are **1-based**, and `0` means "not set" on both, so a caller that fills every optional key with its zero value gets the default listing of the most recent window rather than an error or the wrong end of the transcript (see "Optionality" below). Secrets redacted, input scan and output both capped. A sub-agent's transcript streams as it works, so a running one is inspectable mid-task; before its first message lands the result names that state rather than blaming the filters. |
+| `session_list` | local read-only | enumerates recorded sessions, newest first, the discovery half of the session surface, and the answer to "what exists" that neither of the readers above gives. `scope` is `"project"` by default and `"all"` for every project in `$TERVA_HOME`; an unknown scope is refused rather than narrowed, because a caller who asked for more and silently got less would read the short list as "there is nothing else". A row carries the session id, the time of the last change, the size, and the working directory, and nothing from inside the conversation, `Details.session_ids` carries the ids so a sweep consumes them without parsing prose. Cheap by construction: it stats rather than reads, and opens only the bounded opening meta row of each listed row (which is where the working directory comes from). A title would need the folded meta and therefore a full scan, since a rename lands in a later row, so titles and content stay behind `session_inspect`. Paged with `limit`/`offset`, default 20, max 100. Sessions only: swarm sub-agent ids come from `swarm_spawn`. See [permissions](permissions.md) for what it exposes by default. |
 | `task_create` / `task_update` / `task_list` / `task_archive` | local data | the built-in task board (folded in from the former `terva-tasks` extension): one active task at a time, evidence to close, archive generations, `task_list format:"markdown"` exports a checkbox worklog. The board persists per session under `$TERVA_HOME/tasks` (private modes) and its live state rides each turn as a context card. |
-| `activate_tools` | visibility only | present when `lazy_tools` is on, which is the default (see below); brings a hidden capability group into the advertised set. The advertised set is pinned while the model replies, so an activated group can never join the current reply's remaining calls — instead, activation continuation (on by default) automatically re-prompts the model with the tools live the moment it finishes that reply; with continuation off, the group lands on the NEXT turn. Its result echoes the group's schemas (capped at a 4 KB budget; past that, names only) so the model can compose that next call without waiting to see them. Grants no authority — revealed tools keep their normal permission gates. |
+| `activate_tools` | visibility only | present when `lazy_tools` is on, which is the default (see below); brings a hidden capability group into the advertised set. The advertised set is pinned while the model replies, so an activated group can never join the current reply's remaining calls, instead, activation continuation (on by default) automatically re-prompts the model with the tools live the moment it finishes that reply; with continuation off, the group lands on the NEXT turn. Its result echoes the group's schemas (capped at a 4 KB budget; past that, names only) so the model can compose that next call without waiting to see them. Grants no authority, revealed tools keep their normal permission gates. |
 
 `grep`/`glob` are jailed exactly like the file tools (cwd containment,
 symlink skip) and survive `plan` mode because they are classified
@@ -121,7 +121,7 @@ read-only.
 
 **Optionality: a zero value must be inert, not a second meaning.** A tool
 argument whose behaviour depends on whether a key is *present* is unusable
-by a model that fills every key in the schema — a common habit, and one
+by a model that fills every key in the schema, which is a common habit and one
 JSON Schema gives it no way to know is wrong. `session_inspect` had two
 such fields and both failed in one session: `expand` chose expand mode by
 presence, so `expand: 0` could not reach the listing at all (four
@@ -141,23 +141,23 @@ worked example: indices moved to 1-based so `0` is free to mean unset.
 stuck-loop guard has two axes. The *churn* axis counts repeated failure; the
 *spin* axis counts repeated **redundant work**, keyed on the tool name, its
 canonical arguments, and a digest of what came back. That last part is
-deliberate — keying on arguments alone nudged a correct loop whose identical
-query returned something new each time, such as polling a job or re-reading a
-file being written.
+deliberate, because keying on arguments alone nudged a correct loop whose
+identical query returned something new each time, such as polling a job or
+re-reading a file being written.
 
 The cost of that correctness is exact and worth knowing before you design a
 result: **if no two of your results are byte-identical, your tool can never trip
 the spin axis.** A timestamp, an elapsed time, a request id, or a freshly minted
 handle is enough. Among built-ins that describes `bash` running a volatile
-command. It also describes the shape this document otherwise recommends for
-bulk work — a search that returns a selection handle mints a new one per call,
+command. It also describes the shape this document otherwise recommends for bulk
+work, where a search that returns a selection handle mints a new one per call,
 so two identical searches against an unchanged mailbox are two different
 results.
 
 The consequence is not that such a tool is unguarded. The churn axis still
 catches it failing, the per-turn call budget still bounds it, and a human or an
 `activate_next`-style structure still sees the loop. What is lost is the
-specific case of a *successful* call repeated productively-looking forever —
+specific case of a *successful* call repeated productively-looking forever:
 a filter that stopped narrowing, re-querying position zero against a set that
 never shrinks.
 
@@ -165,20 +165,20 @@ Terva does not try to guess which parts of an arbitrary result are incidental.
 Normalizing volatile substrings out before hashing was considered and rejected:
 it is guesswork about someone else's output format, and over-normalizing puts
 back the false nudge the digest was added to remove. Declaring volatile fields
-in the schema was considered too — it puts the judgement where the knowledge is,
+in the schema was considered too. It puts the judgement where the knowledge is,
 but costs every tool author a new concept to learn and fails silently when left
 unset.
 
 So the trade is stated rather than solved. If your tool's result is stable when
 the underlying state is unchanged, it gets spin detection. If it stamps, it does
-not, and you should not rely on the loop guard to catch a runaway caller —
-bound the work yourself, with a cursor that provably advances or a filter that
+not, and you should not rely on the loop guard to catch a runaway caller.
+Bound the work yourself, with a cursor that provably advances or a filter that
 provably self-excludes. `TestStallSpinIgnoresTimestampedResults` pins the
 behaviour so it stays a known limitation rather than becoming a surprise.
 
 **Git-conditional built-ins**: the five `worktree_*` tools (folded in from the
 retired `terva-git-worktree` extension) join the registry only when the session
-cwd is — or has an immediate child that is — a git repository, decided once per
+cwd is, or has an immediate child that is, a git repository, decided once per
 registry build: managed worktrees with an available/claimed reuse model,
 `worktree_list` (read-only; the pre-decision call) plus
 `create`/`claim`/`release`/`remove` (git-state mutating, classified like
@@ -191,10 +191,10 @@ first touch; existing checkouts stay at their old paths).
 **Store-conditional built-ins**: the `ticket_*` tools (slices 2 and 3
 of `docs/plans/git-ticket.md`) join the registry only when a `.tickets/`
 store governs the session cwd, probed with `ticket.Discover` once per
-registry build. The read five — `ticket_list`, `ticket_search`,
-`ticket_get`, `ticket_ready`, `ticket_check` — are local read-only and
-survive `plan` mode. The write six — `ticket_create`, `ticket_update`,
-`ticket_transition`, `ticket_claim`, `ticket_comment`, `ticket_fix` —
+registry build. The read five, `ticket_list`, `ticket_search`,
+`ticket_get`, `ticket_ready` and `ticket_check`, are local read-only and
+survive `plan` mode. The write six, `ticket_create`, `ticket_update`,
+`ticket_transition`, `ticket_claim`, `ticket_comment` and `ticket_fix`,
 classify as workspace mutation like `write`/`edit`: the store lives in the
 user's repository and lands in their next commit, so plan mode prunes them
 and a headless non-yolo gate refuses them. `ticket_fix` is the one to read
@@ -209,11 +209,32 @@ destination it can select is one user configuration already named, and each
 write to the selected store still faces its own gate. See
 [permissions.md](permissions.md#ticket-stores-outside-the-workspace).
 They all call git-ticket's `ticket` package directly for structured
-values — the `terva ticket` CLI subcommand embeds the same library's `cli`
+values, and the `terva ticket` CLI subcommand embeds the same library's `cli`
 package, so the two surfaces cannot drift from each other. Both track the
-version `go.mod` pins, currently v0.14.3. A `git-ticket` binary installed
+version `go.mod` pins, currently v0.18.1. A `git-ticket` binary installed
 separately on the user's `PATH` is a third thing and can be any version, so
 that one *can* drift from both.
+
+`ticket_get` does not return the whole `Notes` section. It returns the newest
+note in full and one italic line standing in for the rest, which names how many
+were withheld, the range they span, and the argument that gets them back. The
+`notes` argument is that argument: `all` for the section byte for byte, `list`
+for an index of one line per note, and `3` or `2-5` for those notes only. An
+empty `notes` elides, because most reads want the current state.
+
+Measured over this store on 2026-09-15, through the code that ships: 57,351
+words of notes across 97 tickets became 21,551, which is 62% shed and roughly
+48k tokens on a full sweep. The worst single ticket, `TKT-01M1Z52D` with twelve
+notes, went from 5,578 words in one call to 67. Upstream made the same change to
+`git ticket show` in v0.18.0 for the same reason, and the split both sides use is
+`ticket.Entries`, so terva carries no second notes parser.
+
+A ticket with exactly one note returns exactly what it returned before, and a
+test holds that. Most tickets have one note, and making the common read cost a
+second call would trade a real saving on the worst tickets for a tax on
+everything else. `Comments` is written by the same code upstream and reads back
+with the same `Entries`, so it has the same latent shape, but it is not measured
+and not elided today.
 
 `ticket_claim` is the one that also writes outside the store. A claim seeds
 the session task list with one task per acceptance criterion that is not
@@ -440,8 +461,8 @@ registry rather than on the store probe, so `--tools` and plan mode cannot
 leave the prompt naming a tool the model cannot call, and the half that
 teaches `if_revision` rides only where the write five survived.
 
-The task tools ship exactly when the base coding tools do — `--chat`, `--play`,
-`--no-tools`, and `--no-workspace-tools` drop them together — and there is no
+The task tools ship exactly when the base coding tools do, so `--chat`, `--play`,
+`--no-tools` and `--no-workspace-tools` drop them together, and there is no
 standing config switch beyond that: a per-run `--tools` allowlist that omits
 them is the way to run coding tools without the board. Boards written by the
 old `terva-tasks` extension migrate forward automatically on their next write
@@ -457,19 +478,19 @@ with `activate_tools`.
 
 **On by default since 2026-08-01.** Set `"lazy_tools": false` in `config.json`
 (or turn it off in the settings pane) to advertise everything up front. It
-shipped opt-in while flipping it was unsafe — hiding could engage in sessions
-where `activate_tools` was never registered, leaving no reveal path — and that
-is fixed, so the default is now the one the feature was built for.
+shipped opt-in while flipping it was unsafe, because hiding could engage in
+sessions where `activate_tools` was never registered, leaving no reveal path,
+and that is fixed, so the default is now the one the feature was built for.
 
 **A session with nothing beyond the core group is unaffected**: there is
 nothing to hide, so lazy mode is a no-op. The change is only visible to setups
-that actually have extension or MCP tools — which is exactly who pays for them
+that actually have extension or MCP tools, which is exactly who pays for them
 in context every turn.
 Visibility only: hidden tools remain callable and permission-gated, so no
 authority changes hands. Activation never lands mid-reply (the advertised set
 is pinned per segment); by default the model is automatically continued with
-the tools live the moment it finishes the reply that activated them —
-activation continuation (the `activation-continuation` design record) — and
+the tools live the moment it finishes the reply that activated them, which is
+activation continuation (the `activation-continuation` design record), and
 with the feature off they arrive on the next turn. The toggle lives in the
 settings pane (web and TUI `/settings`) once `lazy_tools` is on, or as
 `"engine_features": {"activation_continuation": false}` in `config.json` for
@@ -481,25 +502,25 @@ headless runs. Extension names may not squat the reserved group namespace
 Two model-visible tools are **not** always-on: the host injects them only when a
 session opts in, and both are thin **skins over one dispatch engine**
 (`packages/agent/swarm/`) rather than new primitives. They are not the only
-conditional tools, though — the rest are tabled further down.
+conditional tools, though, and the rest are tabled further down.
 
 | Tool | Injected when | Authority | Skin |
 |---|---|---|---|
-| `swarm_spawn` | auto-swarm on (coding sessions only) | process execution | fire-and-forget parallel coding sub-agents; a `tier` picks a cheaper model, never stronger than the host. An optional `deliverable_schema` (JSON Schema, object at the top level) demands a structured report back — see below. See [tui.md](tui.md) (auto-swarm). |
-| `actor_spawn` | `--play` with a declared cast | process execution | synchronous "director voices an actor" — hands the actor a situation, waits, returns its line. Cast is closed and named; the model dispatches by name, never a path. See [personas.md](personas.md#cast-and-actor-dispatch). |
+| `swarm_spawn` | auto-swarm on (coding sessions only) | process execution | fire-and-forget parallel coding sub-agents; a `tier` picks a cheaper model, never stronger than the host. An optional `deliverable_schema` (JSON Schema, object at the top level) demands a structured report back, see below. See [tui.md](tui.md) (auto-swarm). |
+| `actor_spawn` | `--play` with a declared cast | process execution | synchronous "director voices an actor", hands the actor a situation, waits, returns its line. Cast is closed and named; the model dispatches by name, never a path. See [personas.md](personas.md#cast-and-actor-dispatch). |
 
 Because they wrap the same engine they share its lifecycle, session
 persistence, and tier resolution, and differ only in the *skin* (fire-and-forget
 vs. synchronous director-pull) and the gate that injects them (the auto-swarm
 setting vs. `--play` + a cast). New dispatch front-ends should follow this
-pattern — another skin over the one engine — rather than adding a parallel
+pattern, another skin over the one engine, rather than adding a parallel
 engine. Both are gated out of the wrong context: `actor_spawn` never appears in a
 coding session, and `swarm_spawn` never appears in an immersive one.
 
 **Structured deliverables** (`deliverable_schema` → `deliver_result`): when a
 `swarm_spawn` call carries a `deliverable_schema`, the child session gains one
 extra tool, `deliver_result`, whose argument schema is exactly the spawn's
-schema — the sub-agent reports by calling it once, and validation failures are
+schema, so the sub-agent reports by calling it once, and validation failures are
 retryable errors, not silent acceptances. `deliver_result` exists only inside
 a sub-agent session spawned with a schema (it is never part of the host
 session's surface) and is classified local read-only: it records the agent's
@@ -507,57 +528,57 @@ own report in its own state directory and touches nothing else. Workers that
 cannot carry tools (external harnesses) get the same contract as briefing
 text and report via a fenced ` ```json ` block instead; the supervisor
 re-validates either route when the task ends and surfaces the parsed
-deliverable — or its absence, with the reason — on the task record and in the
+deliverable, or its absence with the reason, on the task record and in the
 auto-swarm recap. See [tui.md](tui.md) (auto-swarm) for the operator's view.
 
-`generate_image` is likewise conditional — injected only when an `image` config
+`generate_image` is likewise conditional, injected only when an `image` config
 block resolves a backend (opt-in, off by default). It turns a prompt into an
-image via a registry of backends (hosted or self-hosted, adapter-per-protocol —
-separate from the model catalog), returns it inline, and optionally writes it
+image via a registry of backends (hosted or self-hosted, adapter-per-protocol,
+and separate from the model catalog), returns it inline, and optionally writes it
 into the workspace through the sandbox. Workspace-mutating and it spends money on
 hosted backends, so it is approval-gated and absent in plan mode. See
 [image-generation.md](image-generation.md).
 
 The remaining conditional tools are injected by
 `packages/agent/workspace/workspace_session.go`, each from a declarative
-input — connecting a bridge or flipping a config key re-derives the registry
+input, so connecting a bridge or flipping a config key re-derives the registry
 rather than patching a live one:
 
 | Tool | Injected when | Authority | Notes |
 |---|---|---|---|
 | `generate_image` | an `image` config block resolves a backend | workspace mutation | see above |
-| `raati_convene` | `raati.convene_tool` is set, in base workspace sessions only | *(unclassified — always prompts)* | the agent convenes its own deliberation panel. A convening spends real sub-agent turns, so every call hits the approval gate; the run mirrors onto the live raati pane. Skin-gated out of `--chat`/`--play`. See [raati.md](raati.md). |
+| `raati_convene` | `raati.convene_tool` is set, in base workspace sessions only | *(unclassified, always prompts)* | the agent convenes its own deliberation panel. A convening spends real sub-agent turns, so every call hits the approval gate; the run mirrors onto the live raati pane. Skin-gated out of `--chat`/`--play`. See [raati.md](raati.md). |
 | `chat_send_image` / `chat_send_file` | a chat bridge is connected **and bound to this session**, and the connector advertises the capability | external mutation | sends into the paired chat. Bound per session, so a second session never sees another's chat tools. See [connectors.md](connectors.md). |
-| `terva_restart` | self-restart is enabled (`--allow-restart`) on a platform with `exec(2)`, in the TUI as well as web | *(unclassified — always prompts)* | re-execs the running binary in place, preserving the session. See below. |
-| `terva_arm_restart` | self-restart is enabled (`--allow-restart`), web session | *(unclassified — always prompts)* | declares that an imminent **supervisor** restart is planned for this session, just before the agent runs the supervisor command itself (e.g. `systemctl --user restart` to apply a changed unit — which `terva_restart`'s self-exec cannot do). Writes a short-lived on-disk marker so the SIGTERM that replaces the process is treated as planned: the interrupted command reconciles as expected (not a failure) and the exact session resumes. terva stays supervisor-agnostic — this only records intent. Shares `terva_restart`'s unclassified treatment for the same reason. |
+| `terva_restart` | self-restart is enabled (`--allow-restart`) on a platform with `exec(2)`, in the TUI as well as web | *(unclassified, always prompts)* | re-execs the running binary in place, preserving the session. See below. |
+| `terva_arm_restart` | self-restart is enabled (`--allow-restart`), web session | *(unclassified, always prompts)* | declares that an imminent **supervisor** restart is planned for this session, just before the agent runs the supervisor command itself (e.g. `systemctl --user restart` to apply a changed unit, which `terva_restart`'s self-exec cannot do). Writes a short-lived on-disk marker so the SIGTERM that replaces the process is treated as planned: the interrupted command reconciles as expected (not a failure) and the exact session resumes. terva stays supervisor-agnostic, this only records intent. Shares `terva_restart`'s unclassified treatment for the same reason. |
 
-**`terva_restart` (and its sibling `terva_arm_restart`) is the acknowledged exception to "no tool without an explicit
-authority class."** It is deliberately left out of the permission tables — not
-overlooked. There is no honest class for "replace the process image": it is not
-workspace mutation, not process execution in the `bash` sense, and any class we
-gave it would make *some* mode auto-allow it. Being unclassified means it falls
-through to the side-effecting default in every mode, so it **always** prompts —
-yolo included. The prompt is the feature. Two gates stand in front of it: the
-capability is off unless an operator passes `--allow-restart`, and web mode
-additionally refuses to enable it at all on an unauthenticated non-loopback
-listener. If a
-future tool wants the same treatment, it must earn it the same way — by having
-no class that is truthful, not by skipping the classification step.
+**`terva_restart` (and its sibling `terva_arm_restart`) is the acknowledged
+exception to "no tool without an explicit authority class."** It is deliberately
+left out of the permission tables, not overlooked. There is no honest class for
+"replace the process image": it is not workspace mutation, not process execution
+in the `bash` sense, and any class we gave it would make *some* mode auto-allow
+it. Being unclassified means it falls through to the side-effecting default in
+every mode, so it **always** prompts, yolo included. The prompt is the feature.
+Two gates stand in front of it: the capability is off unless an operator passes
+`--allow-restart`, and web mode additionally refuses to enable it at all on an
+unauthenticated non-loopback listener. If a future tool wants the same
+treatment, it must earn it the same way, by having no class that is truthful,
+not by skipping the classification step.
 
 ### Build-gated built-ins (compile-time conditional)
 
 Two built-ins have their condition decided at *compile* time, not at session
-setup — a third kind of conditionality next to "always on" and
+setup, which is a third kind of conditionality next to "always on" and
 "host-injected":
 
 | Tool | Present when | Authority | Notes |
 |---|---|---|---|
-| `code_execution` | the binary was built with `-tags terva_scripting` (release builds are; `terva-min` and a plain `go build` are not) | local read-only | runs a short JavaScript program with `read`/`grep`/`glob` exposed as functions; only `print`ed output returns, so N-step read-only lookups cost one tool result. Read-only **because** every binding is — the classification follows the binding set, and each host call a script makes still passes the normal permission gate. Sits in the lazy group `scripting` under `lazy_tools`. See [scripting.md](scripting.md). |
-| `code_execution_mutating` | the same tag — both tools ship or neither does | mutating (workspace writes) | the same engine and the same gated crossing, with `write`/`edit` added to the binding set. A **separate tool rather than a flag** on `code_execution`, so authority stays a property of the tool: the read-only sibling keeps its class unconditionally, and this one is simply never registered read-only, which is what keeps it out of a `plan`-mode registry entirely. **No `bash`** — a command string is authority the pre-check cannot read, and with it the tool would be `bash` with extra steps. Before running, it walks the script's AST and reports the calls it will make (`read x5, write x2`); a script it cannot account for — `eval`, global-object reach, `with`, aliasing or shadowing a binding — **does not run at all**, refused before the first binding call rather than warned about. Its own lazy group `scripting_mutating`, so activating read-only scripting never also hands over the tool that writes. See [scripting.md](scripting.md). |
+| `code_execution` | the binary was built with `-tags terva_scripting` (release builds are; `terva-min` and a plain `go build` are not) | local read-only | runs a short JavaScript program with `read`/`grep`/`glob` exposed as functions; only `print`ed output returns, so N-step read-only lookups cost one tool result. Read-only **because** every binding is, the classification follows the binding set, and each host call a script makes still passes the normal permission gate. Sits in the lazy group `scripting` under `lazy_tools`. See [scripting.md](scripting.md). |
+| `code_execution_mutating` | the same tag, both tools ship or neither does | mutating (workspace writes) | the same engine and the same gated crossing, with `write`/`edit` added to the binding set. A **separate tool rather than a flag** on `code_execution`, so authority stays a property of the tool: the read-only sibling keeps its class unconditionally, and this one is simply never registered read-only, which is what keeps it out of a `plan`-mode registry entirely. **No `bash`**, a command string is authority the pre-check cannot read, and with it the tool would be `bash` with extra steps. Before running, it walks the script's AST and reports the calls it will make (`read x5, write x2`); a script it cannot account for, `eval`, global-object reach, `with`, aliasing or shadowing a binding, **does not run at all**, refused before the first binding call rather than warned about. Its own lazy group `scripting_mutating`, so activating read-only scripting never also hands over the tool that writes. See [scripting.md](scripting.md). |
 
 A build without the tag has no trace of either tool: nothing registers, no
 config key exists to turn them on. The tag exists because the embedded JS
-engine costs ~6 MB of binary — capability follows the build, and the gate
+engine costs ~6 MB of binary, so capability follows the build, and the gate
 semantics stay in the permission tables like every other tool.
 
 ### Standard extensions (opt-in, terva-blessed)
@@ -567,30 +588,30 @@ local code; each must meet the acceptance bar below before being treated
 as fully blessed (some promotion work is still tracked in the bucket-2
 plan).
 
-Two of them ship in the built-in **core pack** (`packages/agent/packs/core.json`,
-installed by `terva ext pack install`): `index` and `web`. That pack is the
-blessed set — a starting point an operator opts into, not something terva loads
-on its own. It offers nothing superseded, which
-`TestTheCorePackOffersNothingSuperseded` keeps true.
+Two of them ship in the built-in **core pack**
+(`packages/agent/packs/core.json`, installed by `terva ext pack install`):
+`index` and `web`. That pack is the blessed set, a starting point an operator
+opts into rather than something terva loads on its own. It offers nothing
+superseded, which `TestTheCorePackOffersNothingSuperseded` keeps true.
 
-- **Index** — `index` (`github.com/terva-sh/terva-ext-index`): a workspace code
-  index and search. It exists to replace repeated `bash grep`/`rg` sweeps — and
-  the whole-file reads they lead to — with a structured, indexed lookup: exactly
+- **Index**: `index` (`github.com/terva-sh/terva-ext-index`): a workspace code
+  index and search. It exists to replace repeated `bash grep`/`rg` sweeps, and
+  the whole-file reads they lead to, with a structured, indexed lookup: exactly
   the "replaces a risky/verbose `bash` pattern" case the candidate checklist
   below asks about.
-- **Worktrees** — **folded into core built-ins** (the `worktree_*` five: see
+- **Worktrees**: **folded into core built-ins** (the `worktree_*` five: see
   the git-conditional note under the core table above). The standalone
-  `terva-git-worktree` extension is superseded — an installed copy is skipped
-  at load with a pointer — and its state migrates on first touch (existing
+  `terva-git-worktree` extension is superseded, an installed copy is skipped
+  at load with a pointer, and its state migrates on first touch (existing
   checkouts stay valid at their extension-era paths). `--swarm-worktrees`
   now leases directly from the built-in engine.
-- **Memory** — **folded into core built-ins** (the `memory` tool, its injected
+- **Memory**: **folded into core built-ins** (the `memory` tool, its injected
   block, `/memory` and the status glance; see `docs/proposals/memory-in-core.md`).
-  The standalone `terva-ext-memory` extension is superseded — an installed copy
+  The standalone `terva-ext-memory` extension is superseded, and an installed copy
   is skipped at load with a pointer, and `ext doctor` recommends removing it.
   Removal is safe: it deletes the extension directory only, so
   `ext-data/memory/` survives and the built-in copies it forward on first use.
-  It remains the reference case for the **local-data** authority — a store
+  It remains the reference case for the **local-data** authority: a store
   confined to `$TERVA_HOME`, never the user's workspace, which is what makes
   that class auto-allowable in the first place.
 
@@ -607,8 +628,8 @@ on its own. It offers nothing superseded, which
 
   Archiving is a cache split, not a file move: an archived entry costs nothing
   until a turn's own words reach it, which is why the archive can be two orders
-  of magnitude larger. The price of not being always-on is a **retrieval spec** —
-  `keys`, optionally `secondary_keys` — supplied by whoever archives the entry.
+  of magnitude larger. The price of not being always-on is a **retrieval spec**:
+  `keys`, optionally `secondary_keys`, supplied by whoever archives the entry.
   Key on what someone would *type* when they need the fact, not on the
   identifiers inside it: the entry holds the cause and the question describes the
   symptom, and an entry keyed on its own vocabulary is measurably the way this
@@ -617,16 +638,16 @@ on its own. It offers nothing superseded, which
   Archive files are ordinary markdown and hand-editable; a file that will not
   parse is reported by the tool rather than skipped, because an entry that cannot
   fire has no other symptom.
-- **Web** (adopted; niceties pending — bucket-2 Phase C) — `web_search`/`web_fetch`/
-  `web_images` are implemented by the hardened `zot-web` extension
-  (`github.com/terva-sh/zot-web`), which loads under terva via the preserved
-  zot wire protocol and **ships in the core pack as `web`**. The
-  remaining niceties (network-read authority declaration, host egress policy, a
-  `terva_version` handshake adapter) are tracked in
-  `docs/plans/standard-tools-bucket2.md`. Until it
-  declares `network-read`, its bare legacy `read_only` bool is what lets
-  `workspace` mode auto-allow a web fetch — the gap that declaration closes.
-- **Tasks** — **promoted to core built-ins** (see the table above); the
+- **Web** (adopted; niceties pending, bucket-2 Phase C):
+  `web_search`/`web_fetch`/ `web_images` are implemented by the hardened
+  `zot-web` extension (`github.com/terva-sh/zot-web`), which loads under terva
+  via the preserved zot wire protocol and **ships in the core pack as `web`**.
+  The remaining niceties (network-read authority declaration, host egress
+  policy, a `terva_version` handshake adapter) are tracked in
+  `docs/plans/standard-tools-bucket2.md`. Until it declares `network-read`, its
+  bare legacy `read_only` bool is what lets `workspace` mode auto-allow a web
+  fetch, which is the gap that declaration closes.
+- **Tasks**: **promoted to core built-ins** (see the table above); the
   standalone `terva-tasks` extension is retired, and legacy boards migrate
   forward on their next write. (The historical reference implementation
   remains at `examples/extensions/todo/`.)
@@ -644,10 +665,10 @@ once MCP gains an HTTP/OAuth transport (bucket-2 Phase D).
   one deliberate exception is `terva_restart`, and it proves the rule: it is
   unclassified *because* no class is truthful for "replace the process image",
   and being unclassified is what makes it always prompt (see above). Absent a
-  class, a tool must fall through to the side-effecting default — never to an
+  class, a tool must fall through to the side-effecting default, never to an
   auto-allow.
 - Untrusted layers (project config, extension bundles) may only **restrict**
-  — never grant new authority.
+  and never grant new authority.
 - Respect Workspace Trust: untrusted project-local extensions, skills,
   hooks, MCP, and context files must not execute or inject authority.
 - Prefer structured tools over telling the model to shell out for common
@@ -658,25 +679,25 @@ once MCP gains an HTTP/OAuth transport (bucket-2 Phase D).
   swarm observe the same event/policy semantics.
 - Headless/RPC behavior must be explicit: a tool that needs interactive
   approval or a user answer must emit a host-answerable event or fail with
-  a model-readable refusal — never silently hang or assume a human.
+  a model-readable refusal, and never silently hang or assume a human.
 
 ## Candidate-tool checklist
 
 For each proposed tool, answer:
 
-- **Frequency/replacement** — needed in most sessions? Does it replace a
+- **Frequency/replacement**: needed in most sessions? Does it replace a
   risky/verbose `bash` pattern? Already table-stakes elsewhere? Could a
   skill do it without a new primitive?
-- **Authority** — which class (above)? Which approval modes auto-allow,
+- **Authority**: which class (above)? Which approval modes auto-allow,
   ask, hide, or refuse it? Should it be unavailable in `plan`? Does the
   jail need to mediate paths/commands/network destinations?
-- **Token cost** — how long must the description be to steer safe use?
+- **Token cost**: how long must the description be to steer safe use?
   Will the prompt cache amortize it? Can it live behind an extension so
   only opted-in sessions pay? Are results compact, capped, resumable?
-- **UX/lifecycle** — progress events? cancellation? a TUI panel/dialog?
+- **UX/lifecycle**: progress events? cancellation? a TUI panel/dialog?
   sane behavior in `-p`/`--json`/RPC? interaction with swarm/worktrees?
   attribution when multiple subagents are active?
-- **Implementation fit** — cross-platform? external binaries? long-running
+- **Implementation fit**: cross-platform? external binaries? long-running
   children? credentials? Is MCP the better boundary? Does it fail soft
   when dependencies are missing?
 
@@ -699,7 +720,7 @@ For each proposed tool, answer:
 - RPC/JSON event compatibility; sane TUI rendering for long results.
 - Docs in `docs/cli.md` (+ this file's table) and any relevant context docs.
 
-`grep`/`glob` are the worked example of this bar — see
+`grep`/`glob` are the worked example of this bar. See
 `packages/agent/tools/{grep,glob,walk}.go` and
 `packages/agent/tools/grep_glob_test.go`.
 

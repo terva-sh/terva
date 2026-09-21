@@ -310,18 +310,30 @@ func (a *Agent) compactionPrefix() (p promptPrefix, warm bool) {
 // misaligned one would, and it leaves a prefix the next real turn can hit, so
 // aligning is never the worse choice.
 //
+// cacheKey is the routing key those bytes were dispatched under, and it comes
+// back with them rather than separately because the two decisions are one. The
+// key selects WHICH cache the prefix is matched against, so aligned bytes on
+// another route read nothing: right bytes, wrong route, full price. A caller
+// that sends the system and tools without it has done the expensive half of the
+// work and skipped the free half.
+//
+// It travels only when ok is true, and that is the safe direction. A caller
+// whose prompt does NOT align must keep sending no key, because routing a
+// divergent prompt onto the conversation's key is the perturbation this whole
+// mechanism exists to avoid.
+//
 // A caller that advertises these tools MUST NOT allow the model to call one.
 // See provider.Request.ForbidTools.
-func (a *Agent) DispatchedPrefix(client provider.Client, model string) (system string, tools []provider.Tool, ok bool) {
+func (a *Agent) DispatchedPrefix(client provider.Client, model string) (system string, tools []provider.Tool, cacheKey string, ok bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	sent := a.lastSent
 	if sent == nil || sent.model != model || !sameClient(sent.client, client) {
-		return "", nil, false
+		return "", nil, "", false
 	}
 	// Copy on the way out: the retained record outlives this call and is the
 	// only surviving description of what the provider cached.
-	return sent.system, append([]provider.Tool(nil), sent.tools...), true
+	return sent.system, append([]provider.Tool(nil), sent.tools...), sent.cacheKey, true
 }
 
 // SetCacheAwareCompaction toggles the cache-aware summarizer (the engine

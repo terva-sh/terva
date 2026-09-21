@@ -400,6 +400,10 @@ type TicketGetTool struct{ *TicketCore }
 
 type ticketGetArgs struct {
 	Ref string `json:"ref"`
+	// Notes selects how much of the Notes section comes back. Empty elides
+	// all but the newest; see ticket_notes.go for the vocabulary and why the
+	// default is the short form.
+	Notes string `json:"notes"`
 }
 
 // ticketFull is ticket_get's shape: the row plus the body sections and the
@@ -407,15 +411,17 @@ type ticketGetArgs struct {
 // precondition will want when the write tools arrive in slice 3.
 type ticketFull struct {
 	ticketRow
-	CreatedAt          string            `json:"created_at,omitempty"`
-	Description        string            `json:"description,omitempty"`
-	AcceptanceCriteria string            `json:"acceptance_criteria,omitempty"`
-	DefinitionOfDone   string            `json:"definition_of_done,omitempty"`
-	ImplementationPlan string            `json:"implementation_plan,omitempty"`
-	Notes              string            `json:"notes,omitempty"`
-	Comments           string            `json:"comments,omitempty"`
-	Summary            string            `json:"summary,omitempty"`
-	References         []ticketReference `json:"references,omitempty"`
+	CreatedAt          string `json:"created_at,omitempty"`
+	Description        string `json:"description,omitempty"`
+	AcceptanceCriteria string `json:"acceptance_criteria,omitempty"`
+	DefinitionOfDone   string `json:"definition_of_done,omitempty"`
+	ImplementationPlan string `json:"implementation_plan,omitempty"`
+	// Notes is the section as the notes argument asked for it, and not the
+	// raw section. It elides by default: see ticket_notes.go.
+	Notes      string            `json:"notes,omitempty"`
+	Comments   string            `json:"comments,omitempty"`
+	Summary    string            `json:"summary,omitempty"`
+	References []ticketReference `json:"references,omitempty"`
 	// NextStatuses is where ticket_transition may take this ticket from
 	// where it stands. The lifecycle table lived in .tickets/CONVENTIONS.md
 	// and in the refusal a bad move earns, so every transition cost a
@@ -428,14 +434,15 @@ type ticketFull struct {
 
 func (t *TicketGetTool) Name() string { return "ticket_get" }
 func (t *TicketGetTool) Description() string {
-	return i18n.D("tool.ticket_get.description", "Read one ticket in full. This tool only reads, and it changes nothing. Give ref as a ticket id, or as a unique short form of the id. The tool returns JSON with the frontmatter fields, the body sections, the references, and the path. The result includes revision, which names the exact bytes that the tool read. It also gives next_statuses, the statuses that ticket_transition accepts for this ticket now.")
+	return i18n.D("tool.ticket_get.description", "Read one ticket in full. This tool only reads, and it changes nothing. Give ref as a ticket id, or as a unique short form of the id. The tool returns JSON with the frontmatter fields, the body sections, the references, and the path. The result includes revision, which names the exact bytes that the tool read. It also gives next_statuses, the statuses that ticket_transition accepts for this ticket now.\n\nThe notes field holds the newest note only, and a line that counts the older notes. Read the older notes with the notes argument.")
 }
 func (t *TicketGetTool) ToolGroupName() string { return "ticket" }
 func (t *TicketGetTool) Schema() json.RawMessage {
 	return mustSchema(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"ref": map[string]any{"type": "string", "description": "The ticket id, or a unique short form of it."},
+			"ref":   map[string]any{"type": "string", "description": "The ticket id, or a unique short form of it."},
+			"notes": map[string]any{"type": "string", "description": i18n.D("tool.ticket_get.notes", "Which notes to read. Leave this field empty for the newest note, and a line that counts the older ones. Give all for the full section. Give list for an index of the notes. Give a number such as 3, or a range such as 2-5, for those notes only.")},
 		},
 		"required": []string{"ref"},
 	})
@@ -457,6 +464,10 @@ func (t *TicketGetTool) Execute(ctx context.Context, raw json.RawMessage, progre
 	if err != nil {
 		return ticketResult(nil, err)
 	}
+	notes, err := renderNotes(tk.Body.Notes, in.Notes)
+	if err != nil {
+		return ticketResult(nil, err)
+	}
 	out := ticketFull{
 		ticketRow:          rowFromTicket(tk),
 		CreatedAt:          tk.CreatedAt.String(),
@@ -464,7 +475,7 @@ func (t *TicketGetTool) Execute(ctx context.Context, raw json.RawMessage, progre
 		AcceptanceCriteria: tk.Body.AcceptanceCriteria,
 		DefinitionOfDone:   tk.Body.DefinitionOfDone,
 		ImplementationPlan: tk.Body.ImplementationPlan,
-		Notes:              tk.Body.Notes,
+		Notes:              notes,
 		Comments:           tk.Body.Comments,
 		Summary:            tk.Body.Summary,
 		References:         t.ticketReferences(tk.References),

@@ -129,6 +129,13 @@ func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlprot
 	}
 	// Read once, and answer against THAT. Messages returns a copy, so a turn
 	// landing while the completion is in flight cannot shift the ground under it.
+	//
+	// The WHOLE transcript goes, and since #1080 that is the cheap choice rather
+	// than the careless one it looks like. These are the bytes the provider
+	// still holds warm from the last real turn, so they bill at the cached read
+	// rate. Truncating would diverge from that prefix at the cut, and every
+	// message still sent would then bill at the full rate. The saving this call
+	// exists to make comes from sending MORE, not less.
 	msgs := ag.Messages()
 	if len(msgs) == 0 {
 		// Nothing has been said, so there is no next step to name. Returning
@@ -137,15 +144,22 @@ func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlprot
 		return ctrlproto.NextStepResult{}, nil
 	}
 	_, model := s.currentModel()
-	// The system prompt and tools of the conversation's last real dispatch,
-	// which is the prefix a provider still holds warm. Sending those bytes is
-	// what makes this call READ that cache rather than pay a full-price read of
-	// the whole transcript. Not ok before the first turn of a session, or after
-	// a model or endpoint swap, and then this keeps what it always sent: the
-	// agent's current system prompt and no tools at all.
-	system, tools, aligned := ag.DispatchedPrefix(ag.Client, model)
+	// The system prompt, tools and routing key of the conversation's last real
+	// dispatch, which is the prefix a provider still holds warm. Sending those
+	// bytes is what makes this call READ that cache rather than pay a
+	// full-price read of the whole transcript. Not ok before the first turn of a
+	// session, or after a model or endpoint swap, and then this keeps what it
+	// always sent: the agent's current system prompt, no tools at all, and no
+	// key.
+	//
+	// The key rides with the bytes because aligning one without the other is
+	// half a fix. It shipped that way and the miss was invisible: the request
+	// carried the right prefix and no prompt_cache_key, where every real turn
+	// carries the session's, so the two could route apart on the providers that
+	// read the field at all (TKT-01M2NQ7Q3).
+	system, tools, cacheKey, aligned := ag.DispatchedPrefix(ag.Client, model)
 	if !aligned {
-		system, tools = ag.System, nil
+		system, tools, cacheKey = ag.System, nil, ""
 	}
 	body := i18n.P("nextstep.ask", nextStepBody)
 	if p.OnDemand {
@@ -158,6 +172,9 @@ func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlprot
 		System:    system,
 		Messages:  msgs,
 		MaxTokens: nextStepMaxTokens,
+		// Empty unless the prefix aligned, which is what keeps a divergent
+		// prompt off the conversation's cache route.
+		PromptCacheKey: cacheKey,
 		// ContextPreview, not ContextProvider: the side-effect-free twin. A real
 		// turn's provider records which lore entries fired, and a suggestion the
 		// user never sees must not write that state on the session's behalf.
