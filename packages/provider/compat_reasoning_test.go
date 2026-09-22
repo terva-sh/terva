@@ -373,3 +373,51 @@ func TestOpenAIBuildRequestPrefersItsOwnProviderRow(t *testing.T) {
 // of TestReasoningEffectMatchesWhatTheBuilderSends red, because a gateway that
 // fronts another vendor has no row of its own and the claim can only come from
 // that vendor's row. The reasoning sits beside the fallback in openai.go.
+
+// A gateway serving GPT-6 ids inherits OpenAI's declared effort sets from the
+// catalog, and with them the two things the blind mapper gets wrong: off must
+// send "none" on Sol and Luna (their Chat Completions function calling only
+// works there), and the top rungs must reach xhigh and max rather than stop
+// at "high". Astra declares no "none", so off keeps omitting the field.
+//
+// Each id has two catalog rows (openai-codex and openai-responses), and
+// discovery drops the list if they disagree, so this also fails if a later
+// edit changes one row's set and not the other's.
+func TestDiscoverOpenAICompatibleInheritsGPT6Efforts(t *testing.T) {
+	withCatalogState(t)
+
+	url := modelsServer(t, `{"data":[
+		{"id":"gpt-6-sol"},
+		{"id":"gpt-6-luna"},
+		{"id":"gpt-6-astra"}
+	]}`)
+	got, err := DiscoverOpenAICompatible(context.Background(), url, "k", 200000)
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	m := byID(got)
+
+	for _, tc := range []struct {
+		id   string
+		want map[string]string // terva level -> reasoning_effort on the wire
+	}{
+		{"gpt-6-sol", map[string]string{"off": "none", "minimum": "low", "low": "low", "medium": "medium", "high": "high", "maximum": "xhigh", "max": "max"}},
+		{"gpt-6-luna", map[string]string{"off": "none", "minimum": "low", "low": "low", "medium": "medium", "high": "high", "maximum": "xhigh", "max": "max"}},
+		{"gpt-6-astra", map[string]string{"off": "", "minimum": "low", "low": "low", "medium": "medium", "high": "high", "maximum": "xhigh", "max": "max"}},
+	} {
+		row := m[tc.id]
+		if len(row.ReasoningEfforts) == 0 {
+			t.Errorf("%s: no efforts inherited; the catalog rows disagree or declare none", tc.id)
+			continue
+		}
+		for lv, want := range tc.want {
+			if got := openAICompatEffort(row, lv); got != want {
+				t.Errorf("%s at %q sends reasoning_effort %q, want %q", tc.id, lv, got, want)
+			}
+			// The ladder and the wire must describe the same request.
+			if eff := ReasoningEffectFor(row, lv); eff.Effort != want {
+				t.Errorf("%s at %q: ReasoningEffectFor says %q, wire sends %q", tc.id, lv, eff.Effort, want)
+			}
+		}
+	}
+}

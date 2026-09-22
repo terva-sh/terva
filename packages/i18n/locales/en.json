@@ -710,7 +710,7 @@
   "session has no agent": "session has no agent",
   "session has no conversation to title": "session has no conversation to title",
   "session unavailable": "session unavailable",
-  "set thinking level; max is a tier above maximum, native on gpt-5.6 and adaptive claude": "set thinking level; max is a tier above maximum, native on gpt-5.6 and adaptive claude",
+  "set thinking level; max is a tier above maximum, native on gpt-5.6, gpt-6, and adaptive claude": "set thinking level; max is a tier above maximum, native on gpt-5.6, gpt-6, and adaptive claude",
   "shared file: %v": "shared file: %v",
   "shared files are not available here": "shared files are not available here",
   "shared files: %v": "shared files: %v",

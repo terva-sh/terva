@@ -711,10 +711,50 @@ var Catalog = []Model{
 		// CapImageOutput stays unset until this route is live-verified.
 		Provider: "openai-codex", ID: "gpt-6-astra", DisplayName: "GPT-6 Astra",
 		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
-		MaxOutput: 128000, Reasoning: true,
+		MaxOutput: 128000, Reasoning: true, ReasoningEfforts: gpt6AstraEfforts,
 		PriceInput: 10, PriceOutput: 50, PriceCacheRead: 1, PriceCacheWrite: 12.5,
 	},
+	{
+		// OpenAI launched Sol and Luna on 2026-09-22 for Plus, Pro, Business,
+		// Enterprise, and Edu. Same windows and surcharge point as Astra.
+		// CapImageOutput stays unset until this route is live-verified.
+		Provider: "openai-codex", ID: "gpt-6-sol", DisplayName: "GPT-6 Sol",
+		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
+		MaxOutput: 128000, Reasoning: true, ReasoningEfforts: gpt6Efforts,
+		PriceInput: 2, PriceOutput: 10, PriceCacheRead: 0.2, PriceCacheWrite: 2.5,
+	},
+	{
+		Provider: "openai-codex", ID: "gpt-6-luna", DisplayName: "GPT-6 Luna",
+		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
+		MaxOutput: 128000, Reasoning: true, ReasoningEfforts: gpt6Efforts,
+		PriceInput: 0.1, PriceOutput: 0.5, PriceCacheRead: 0.01, PriceCacheWrite: 0.125,
+	},
 }
+
+// The GPT-6 rows declare OpenAI's published reasoning_effort sets. Only the
+// chat-completions mapper reads ReasoningEfforts; the Responses routes these
+// rows belong to use OpenAICodexReasoningEffort and ignore it. The lists are
+// here for openai-compatible gateways serving the same ids. Discovery copies
+// them from these rows (openAICompatCaps), which does two things for such a
+// gateway:
+//
+//   - Off sends reasoning_effort "none" rather than omitting the field. On
+//     OpenAI's Chat Completions an omitted effort means "medium", and Sol and
+//     Luna refuse function calls at any effort but "none", so omitting it
+//     broke tool calling on a gateway that passes Chat Completions through.
+//     Any thinking level above off still cannot call tools there; only a
+//     gateway that converts to the Responses API can, at any effort.
+//   - "maximum" and "max" reach xhigh and max, where the undeclared mapper
+//     clamps both to "high" for fear of an unknown server.
+//
+// Astra's page lists no "none", so off still omits the field for it.
+// Every row with a given id must declare the same set, or discovery drops
+// the list rather than pick one (see sameEffortSet). The codex and Responses
+// rows therefore share these variables.
+var (
+	gpt6Efforts      = []string{"none", "low", "medium", "high", "xhigh", "max"}
+	gpt6AstraEfforts = []string{"low", "medium", "high", "xhigh", "max"}
+)
 
 // DefaultModel is used when the user does not specify one.
 var DefaultModel = Catalog[0] // claude-sonnet-4-5

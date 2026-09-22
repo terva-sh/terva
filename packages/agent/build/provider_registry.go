@@ -84,9 +84,12 @@ var providerSpecs = []providerSpec{
 		newClient:    func(c clientConfig) provider.Client { return provider.NewOpenAI(c.Credential, c.BaseURL) },
 	},
 	{
-		id:           "openai-codex",
-		aliases:      []string{"codex"},
-		defaultModel: "gpt-5.5",
+		id:      "openai-codex",
+		aliases: []string{"codex"},
+		// GPT-6 Sol on both Responses routes since 2026-09-22. Luna is the
+		// cheaper sibling and Astra the staged-rollout flagship, so Sol is
+		// the one an entitled subscription or API key can reach by default.
+		defaultModel: "gpt-6-sol",
 		envHint:      "OPENAI",
 		// No apiKeyEnv: the ChatGPT/Codex subscription route
 		// intentionally ignores OPENAI_API_KEY so both can coexist.
@@ -97,7 +100,7 @@ var providerSpecs = []providerSpec{
 	},
 	{
 		id:           "openai-responses",
-		defaultModel: "gpt-5",
+		defaultModel: "gpt-6-sol",
 		envHint:      "OPENAI",
 		apiKeyEnv:    []string{"OPENAI_API_KEY"},
 		newClient:    func(c clientConfig) provider.Client { return provider.NewOpenAIResponses(c.Credential, c.BaseURL) },

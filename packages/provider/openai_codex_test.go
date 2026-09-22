@@ -129,11 +129,11 @@ func TestCodexResponseFailedTransience(t *testing.T) {
 	}
 }
 
-// GPT-5.6 and GPT-6 Astra support a native "max" reasoning effort above
+// GPT-5.6 and the GPT-6 family support a native "max" reasoning effort above
 // "xhigh". The Responses request builder must send it verbatim.
 func TestOpenAIResponsesModelsUseNativeMaxReasoningEffort(t *testing.T) {
 	c := NewOpenAICodex("token", "acct", "").(*codexClient)
-	for _, model := range []string{"gpt-5.6-sol", "gpt-6-astra"} {
+	for _, model := range []string{"gpt-5.6-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"} {
 		t.Run(model, func(t *testing.T) {
 			wire, err := c.buildRequest(Request{Model: model, Reasoning: "max", ReasoningSet: true})
 			if err != nil {

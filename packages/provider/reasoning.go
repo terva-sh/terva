@@ -65,14 +65,18 @@ func MaxIsNative(m Model) bool {
 // "max" as an effort above "xhigh".
 func openAIResponsesNativeMax(model string) bool {
 	id := strings.ToLower(model)
-	return strings.HasPrefix(id, "gpt-5.6-") || id == "gpt-6-astra"
+	switch id {
+	case "gpt-6-astra", "gpt-6-sol", "gpt-6-luna":
+		return true
+	}
+	return strings.HasPrefix(id, "gpt-5.6-")
 }
 
 // NormalizeReasoning canonicalizes terva's user-facing thinking levels.
 // Empty string means reasoning/thinking is disabled. "maximum" is the
 // long-standing top tier (mapped to xhigh effort); "max" is a separate
 // opt-in tier above it, sent natively only to models that support it
-// (GPT-5.6, GPT-6 Astra, adaptive Claude) and clamped to "maximum" elsewhere.
+// (GPT-5.6, GPT-6, adaptive Claude) and clamped to "maximum" elsewhere.
 func NormalizeReasoning(level string) string {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "", "off", "none", "no", "false", "disabled":
@@ -430,8 +434,8 @@ func clampEffortToDeclared(declared []string, want string) string {
 
 // OpenAICodexReasoningEffort maps terva levels onto the ChatGPT/Codex
 // Responses backend enum. That backend rejects "minimal" and uses
-// "xhigh" for models without native "max" support. GPT-5.6 and GPT-6 Astra
-// accept "max" above "xhigh". Other models clamp "max" to "xhigh".
+// "xhigh" for models without native "max" support. GPT-5.6 and GPT-6 Astra,
+// Sol, and Luna accept "max" above "xhigh". Other models clamp "max" to "xhigh".
 func OpenAICodexReasoningEffort(level, model string) string {
 	switch NormalizeReasoning(level) {
 	case "minimum", "low":

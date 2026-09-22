@@ -101,6 +101,13 @@ func TestProviderRegistryDefaultModel(t *testing.T) {
 	if got := DefaultModelForProvider("anthropic"); got != "claude-opus-5-5" {
 		t.Errorf("anthropic default = %q, want claude-opus-5-5", got)
 	}
+	// Both Responses routes default to GPT-6 Sol. Plain openai stays on
+	// gpt-5 above, because GPT-6 is absent from its Chat Completions catalog.
+	for _, id := range []string{"openai-codex", "openai-responses"} {
+		if got := DefaultModelForProvider(id); got != "gpt-6-sol" {
+			t.Errorf("%s default = %q, want gpt-6-sol", id, got)
+		}
+	}
 	if got := DefaultModelForProvider("totally-unknown"); got != provider.DefaultModel.ID {
 		t.Errorf("unknown default = %q, want global %q", got, provider.DefaultModel.ID)
 	}

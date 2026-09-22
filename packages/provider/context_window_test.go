@@ -64,35 +64,50 @@ func TestGPT56CatalogEntries(t *testing.T) {
 	}
 }
 
-func TestGPT6AstraCatalogRoutes(t *testing.T) {
-	for _, provider := range []string{"openai-responses", "openai-codex"} {
-		t.Run(provider, func(t *testing.T) {
-			m, err := FindModel(provider, "gpt-6-astra")
-			if err != nil {
-				t.Fatalf("FindModel: %v", err)
-			}
-			if m.ContextWindow != 1050000 || m.DesiredContextWindow != 272000 || m.ContextSurchargeAt != 272000 {
-				t.Errorf("windows = max %d / desired %d / surcharge %d, want 1050000 / 272000 / 272000",
-					m.ContextWindow, m.DesiredContextWindow, m.ContextSurchargeAt)
-			}
-			if m.EffectiveContextWindow() != 272000 || m.MaxOutput != 128000 {
-				t.Errorf("effective window/output = %d/%d, want 272000/128000", m.EffectiveContextWindow(), m.MaxOutput)
-			}
-			if !m.Reasoning || !MaxIsNative(m) {
-				t.Errorf("reasoning = %v, native max = %v, want both true", m.Reasoning, MaxIsNative(m))
-			}
-			if m.PriceInput != 10 || m.PriceOutput != 50 || m.PriceCacheRead != 1 || m.PriceCacheWrite != 12.5 {
-				t.Errorf("pricing = in %g / out %g / cache-read %g / cache-write %g, want 10 / 50 / 1 / 12.5",
-					m.PriceInput, m.PriceOutput, m.PriceCacheRead, m.PriceCacheWrite)
-			}
-			if _, asserted := m.Caps[CapImageOutput]; asserted {
-				t.Error("CapImageOutput must remain unasserted until live verification")
-			}
-		})
-	}
-
-	if _, err := FindModel("openai", "gpt-6-astra"); err == nil {
-		t.Fatal("plain openai catalog exposes Astra on the Chat Completions wire")
+// The GPT-6 family shares Astra's shape: a 1.05M hard limit, a 272K working
+// window where long-context rates start, and 128K output. Only the prices
+// differ. Each is on both Responses-backed routes and off plain openai,
+// whose Chat Completions wire allows tool calls only at effort "none".
+func TestGPT6CatalogRoutes(t *testing.T) {
+	for _, tc := range []struct {
+		id                      string
+		in, out, cacheR, cacheW float64
+	}{
+		{"gpt-6-astra", 10, 50, 1, 12.5},
+		{"gpt-6-sol", 2, 10, 0.2, 2.5},
+		{"gpt-6-luna", 0.1, 0.5, 0.01, 0.125},
+	} {
+		for _, provider := range []string{"openai-responses", "openai-codex"} {
+			t.Run(provider+"/"+tc.id, func(t *testing.T) {
+				m, err := FindModel(provider, tc.id)
+				if err != nil {
+					t.Fatalf("FindModel: %v", err)
+				}
+				if m.Speculative {
+					t.Error("row is speculative; swarm tiers and provider defaults skip speculative rows")
+				}
+				if m.ContextWindow != 1050000 || m.DesiredContextWindow != 272000 || m.ContextSurchargeAt != 272000 {
+					t.Errorf("windows = max %d / desired %d / surcharge %d, want 1050000 / 272000 / 272000",
+						m.ContextWindow, m.DesiredContextWindow, m.ContextSurchargeAt)
+				}
+				if m.EffectiveContextWindow() != 272000 || m.MaxOutput != 128000 {
+					t.Errorf("effective window/output = %d/%d, want 272000/128000", m.EffectiveContextWindow(), m.MaxOutput)
+				}
+				if !m.Reasoning || !MaxIsNative(m) {
+					t.Errorf("reasoning = %v, native max = %v, want both true", m.Reasoning, MaxIsNative(m))
+				}
+				if m.PriceInput != tc.in || m.PriceOutput != tc.out || m.PriceCacheRead != tc.cacheR || m.PriceCacheWrite != tc.cacheW {
+					t.Errorf("pricing = in %g / out %g / cache-read %g / cache-write %g, want %g / %g / %g / %g",
+						m.PriceInput, m.PriceOutput, m.PriceCacheRead, m.PriceCacheWrite, tc.in, tc.out, tc.cacheR, tc.cacheW)
+				}
+				if _, asserted := m.Caps[CapImageOutput]; asserted {
+					t.Error("CapImageOutput must remain unasserted until live verification")
+				}
+			})
+		}
+		if _, err := FindModel("openai", tc.id); err == nil {
+			t.Errorf("plain openai catalog exposes %s on the Chat Completions wire", tc.id)
+		}
 	}
 }
 

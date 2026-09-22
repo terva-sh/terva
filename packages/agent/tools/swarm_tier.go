@@ -145,15 +145,25 @@ var swarmTierFamilies = map[string]map[string]tierFamily{
 	// Codex names its generations sol / terra / luna, which say nothing
 	// about capability and do not recur across generations. Named models,
 	// newest first — see tierFamily on why that is the honest encoding here.
-	// An effort ladder too, for the reason anthropic's is one. Luna thinking
-	// its hardest is the weak rung; sol at two efforts carries medium and
-	// strong. The mini stays as the cost tier, which is the only rung whose
-	// job is actually "spend less".
+	// An effort ladder too, for the reason anthropic's is one.
+	//
+	// The GPT-6 ladder is an operator decision (2026-09-22,
+	// TKT-01M35F3Y0VWD1W8D6S90HB2P9B): Luna at low for cheap and at medium for
+	// weak, Sol at low for medium and at high for strong. GPT-6 is half
+	// GPT-5.6's API price, and OpenAI reports half the factuality errors on
+	// Sol. Luna at $0.50 output undercuts the mini ($4.50) that used to be the
+	// cost tier, so the mini now sits behind Luna on cheap. GPT-5.6 stays
+	// behind GPT-6 on the other rungs so the ladder still resolves if the
+	// catalog drops the GPT-6 rows. It is NOT an entitlement fallback:
+	// resolve walks the catalog, the live layer only upserts over the builtin
+	// rows, and so an account OpenAI has not yet given GPT-6 still resolves
+	// to it and fails at the request. swarm_tier_codex_pin_test.go states the
+	// answer.
 	"openai-codex": {
-		"weak":   {match: []string{"gpt-5.6-luna"}, unless: []string{"mini"}, reasoning: "maximum"},
-		"medium": {match: []string{"gpt-5.6-sol", "gpt-5.5"}, unless: []string{"mini"}, reasoning: "low"},
-		"strong": {match: []string{"gpt-5.6-sol", "gpt-5.5"}, unless: []string{"mini"}, reasoning: "high"},
-		"cheap":  {match: []string{"mini", "spark"}, reasoning: "minimum"},
+		"weak":   {match: []string{"gpt-6-luna", "gpt-5.6-luna"}, unless: []string{"mini"}, reasoning: "medium"},
+		"medium": {match: []string{"gpt-6-sol", "gpt-5.6-sol", "gpt-5.5"}, unless: []string{"mini"}, reasoning: "low"},
+		"strong": {match: []string{"gpt-6-sol", "gpt-5.6-sol", "gpt-5.5"}, unless: []string{"mini"}, reasoning: "high"},
+		"cheap":  {match: []string{"gpt-6-luna", "mini", "spark"}, reasoning: "low"},
 	},
 	// Two rungs each: neither vendor ships a middle model to point at, and
 	// inventing one would be a guess wearing a ladder's clothes.

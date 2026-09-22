@@ -356,6 +356,83 @@ Astra accepts `low`, `medium`, `high`, `xhigh`, and `max` reasoning efforts.
 terva sends its `max` rung without clamping for Astra. Native image output
 remains unasserted until the ChatGPT subscription route can be live-tested.
 
+### GPT-6 Sol and GPT-6 Luna
+
+OpenAI released GPT-6 Sol and GPT-6 Luna on September 22, 2026, in the API
+and for ChatGPT Plus, Pro, Business, Enterprise, and Edu subscriptions. Sol is
+the general and coding model. OpenAI positions Luna for high-volume tasks with
+a clear goal, such as summarizing, extraction, and quick answers. Both are in
+the catalog on the same two Responses-backed routes as Astra:
+
+```bash
+# OpenAI API key
+terva --provider openai-responses --model gpt-6-luna
+
+# ChatGPT subscription
+terva --provider openai-codex --model gpt-6-luna
+```
+
+Sol is the default model for both `openai-codex` and `openai-responses`, so
+either provider starts on `gpt-6-sol` when you give no `--model`. Before
+September 22, `openai-codex` defaulted to `gpt-5.5` and `openai-responses` to
+`gpt-5`. On an API key, Sol costs more input than `gpt-5` did ($2 against
+$1.25 per million tokens), at the same $10 output. To keep the old default,
+pass the old model for your provider:
+
+```bash
+terva --provider openai-codex --model gpt-5.5
+terva --provider openai-responses --model gpt-5
+```
+
+Neither model is on the plain `openai` provider, for the reason Astra is not.
+On Chat Completions, OpenAI allows function calling only at reasoning effort
+`none`, so every other thinking level would run without terva's tools.
+
+Both models share Astra's limits: a 1,050,000-token hard limit, a
+128,000-token output limit, and a 272,000-token default working window where
+long-context pricing starts. Above 272,000 input tokens, input and cache rates
+double for the whole request, and output costs 1.5 times the short-context
+rate. Short-context prices per million tokens:
+
+| Model | Input | Cached input | Cache write | Output |
+|---|---:|---:|---:|---:|
+| `gpt-6-sol` | $2 | $0.20 | $2.50 | $10 |
+| `gpt-6-luna` | $0.10 | $0.01 | $0.125 | $0.50 |
+
+See OpenAI's [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol)
+and [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) model
+pages.
+
+Both accept efforts from `none` through `max`, and terva sends its `max` rung
+natively. Native image output is unasserted, as on Astra.
+
+The catalog also declares those efforts for an `openai-compatible` gateway that
+serves the same ids. Discovery copies the list from the built-in rows (see
+[Declaring which efforts a model accepts](#declaring-which-efforts-a-model-accepts)),
+so on such a gateway `off` sends `reasoning_effort: "none"` rather than leaving
+the field out, and `maximum` and `max` reach `xhigh` and `max` rather than
+stopping at `high`. The `none` matters for a gateway that passes Chat
+Completions straight through to OpenAI: an omitted effort means `medium` there,
+and Sol and Luna accept tool calls on Chat Completions only at `none`. Any
+thinking level above `off` still cannot call tools through such a gateway. A
+gateway that converts requests to the Responses API has no such limit. Astra's
+list has no `none`, so `off` still omits the field for Astra. A `models.json`
+entry for the id that sets `reasoningEfforts` replaces the inherited list.
+
+On the Codex subscription, the
+[swarm tier ladder](#swarm-sub-agent-tiers-weak--medium--strong--cheap) now
+resolves to GPT-6 first: `cheap` is Luna at low thinking, `weak` is Luna at
+medium, `medium` is Sol at low, and `strong` is Sol at high. Luna replaced
+the mini as the `cheap` rung because its $0.50 output rate undercuts the
+mini's $4.50.
+
+A tier resolves against terva's catalog, not against what your account can
+use. The GPT-6 rows are always in the catalog, so the ladder always picks
+GPT-6, even on an account that OpenAI has not yet given GPT-6. A sub-agent on
+such an account fails when the request reaches OpenAI. GPT-5.6 is listed
+behind GPT-6 only so that the ladder still resolves if a later catalog drops
+the GPT-6 rows. To keep a rung on GPT-5.6, pin it by id in `swarm_tiers`.
+
 ### Kimi Code
 
 terva has built-in Kimi support through Kimi Code, which speaks the **Anthropic Messages API** rather than OpenAI chat-completions, so terva drives it with the same client it uses for Claude.
@@ -444,7 +521,7 @@ Getting a key in place, and the order terva looks for one, are in
 
 > **Free-tier rate limits.** AI Studio's free tier has tight per-minute and per-day caps that vary by model: the Pro models are the strictest (a few requests per minute, ~50 per day), Flash and Flash-Lite are far more generous. If a Pro turn 429s with `"You exceeded your current quota"` while Flash on the same key still works, you've hit the Pro free-tier RPD. Either switch to Flash for agent loops, or [enable billing](https://aistudio.google.com/app/apikey) on your AI Studio project to flip the same key from free to pay-as-you-go pricing.
 
-Thinking levels (`--thinking off|minimum|low|medium|high|maximum|max`, also configurable in `/settings` as **Thinking**) map differently per generation. Budget-based providers use roughly 1k/2k/8k/16k/32k thinking tokens for minimum/low/medium/high/maximum, with provider/model caps applied. Gemini 3.x uses the `thinkingLevel` enum (`MINIMAL`/`LOW`/`MEDIUM`/`HIGH`), with the Pro models pinned to `LOW` minimum and `HIGH` for any "medium" or higher request. The rolling `-latest` aliases are treated as 3.x, since they always point at a current model. Effort-based OpenAI-compatible chat providers map minimum to `low`, low/medium directly, and high/maximum to `high`; the Codex/Responses backend maps maximum to `xhigh` where supported. `max` is a seventh tier *above* `maximum`, opt-in on purpose: it is sent natively only where the model has an effort above `xhigh` (GPT-5.6, adaptive-thinking Claude) and is clamped back to the `maximum` effort everywhere else. `off` sends no reasoning config, unless the model declares a `none` effort (see [Declaring which efforts a model accepts](#declaring-which-efforts-a-model-accepts)). 2.0-family Gemini models have no thinking config at all.
+Thinking levels (`--thinking off|minimum|low|medium|high|maximum|max`, also configurable in `/settings` as **Thinking**) map differently per generation. Budget-based providers use roughly 1k/2k/8k/16k/32k thinking tokens for minimum/low/medium/high/maximum, with provider/model caps applied. Gemini 3.x uses the `thinkingLevel` enum (`MINIMAL`/`LOW`/`MEDIUM`/`HIGH`), with the Pro models pinned to `LOW` minimum and `HIGH` for any "medium" or higher request. The rolling `-latest` aliases are treated as 3.x, since they always point at a current model. Effort-based OpenAI-compatible chat providers map minimum to `low`, low/medium directly, and high/maximum to `high`; the Codex/Responses backend maps maximum to `xhigh` where supported. `max` is a seventh tier *above* `maximum`, opt-in on purpose: it is sent natively only where the model has an effort above `xhigh` (GPT-5.6, GPT-6, adaptive-thinking Claude) and is clamped back to the `maximum` effort everywhere else. `off` sends no reasoning config, unless the model declares a `none` effort (see [Declaring which efforts a model accepts](#declaring-which-efforts-a-model-accepts)). 2.0-family Gemini models have no thinking config at all.
 
 You can add additional Gemini model IDs to `models.json` under the `google` provider.
 
@@ -567,6 +644,8 @@ Declaring `none` also fixes a subtler trap. terva's `off` normally *omits* the f
 
 The `/reasoning` ladder reads the same declaration as the request builder, so what the dialog shows you is what the wire sends.
 
+The built-in GPT-6 rows declare OpenAI's published sets, so an `openai-compatible` gateway that serves `gpt-6-sol`, `gpt-6-luna`, or `gpt-6-astra` inherits them at discovery with no `models.json` entry. See [GPT-6 Sol and GPT-6 Luna](#gpt-6-sol-and-gpt-6-luna).
+
 ## Swarm sub-agent tiers (weak / medium / strong / cheap)
 
 When auto-swarm is on, the agent picks a `tier` for each background sub-agent it spawns. A tier always resolves **for the host's own provider** (a sub-agent stays on the provider you're using), and each provider maps the tiers to its own models.
@@ -581,7 +660,7 @@ terva ships a built-in mapping per provider:
 | provider | weak | medium | strong | cheap |
 |---|---|---|---|---|
 | Anthropic | haiku, thinking high | opus, thinking low | opus, thinking high | haiku, thinking minimum |
-| OpenAI (Codex subscription) | luna, thinking maximum | sol, thinking low | sol, thinking high | mini, thinking minimum |
+| OpenAI (Codex subscription) | luna, thinking medium | sol, thinking low | sol, thinking high | luna, thinking low |
 | GitHub Copilot | haiku | sonnet | opus | haiku, thinking minimum |
 | Google | flash-lite | flash | pro | flash-lite, thinking minimum |
 | OpenAI | nano | mini | the plain flagship | nano, thinking minimum |
