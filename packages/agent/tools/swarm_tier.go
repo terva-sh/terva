@@ -70,10 +70,27 @@ var swarmTierFamilies = map[string]map[string]tierFamily{
 	// a host that matches more than one: ranked, a host on opus-5 would cap
 	// `tier: strong` down to medium and hand back the same model thinking
 	// less.
+	//
+	// The opus rungs are PINNED newest-first, for the reason the google rows
+	// below record. An unpinned "claude-opus-5" matches any Opus 5.x by
+	// substring, so the rungs re-point themselves the moment a newer
+	// non-speculative Opus row lands — which is not hypothetical: they sat on
+	// claude-opus-4-1 until Opus 5.5 shipped, then moved, with nobody deciding
+	// it and no test failing. The move was an improvement (4.1 is $15/$75
+	// against 5.5's $4/$20, and was only reached because the lone
+	// claude-opus-5 row is speculative and gets skipped), but what a
+	// `tier: strong` spawn dispatches to should be a choice rather than a
+	// side effect of catalog order.
+	//
+	// The trailing bare "opus" is the degrade path: a catalog that has dropped
+	// every pinned generation still resolves to some Opus rather than to
+	// nothing. TestEveryListedTierRungResolves is what catches a pin list that
+	// has gone entirely stale, and TestAnthropicTierRungsResolveToTheirPin
+	// states the expected pick so the next silent move is loud.
 	"anthropic": {
 		"weak":   {match: []string{"haiku"}, reasoning: "high"},
-		"medium": {match: []string{"claude-opus-5", "opus"}, reasoning: "low"},
-		"strong": {match: []string{"claude-opus-5", "opus"}, reasoning: "high"},
+		"medium": {match: []string{"claude-opus-5-5", "claude-opus-5", "opus"}, reasoning: "low"},
+		"strong": {match: []string{"claude-opus-5-5", "claude-opus-5", "opus"}, reasoning: "high"},
 		"cheap":  {match: []string{"haiku"}, reasoning: "minimum"},
 	},
 	// Copilot serves the same Anthropic families under its own ids. Left as a

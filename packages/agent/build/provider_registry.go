@@ -57,8 +57,14 @@ type providerSpec struct {
 // provider, so anthropic-first / cloud-gateways-last is deliberate.
 var providerSpecs = []providerSpec{
 	{
-		id:      "anthropic",
-		envHint: "ANTHROPIC",
+		id: "anthropic",
+		// Set explicitly rather than left to fall through to
+		// provider.DefaultModel, which is Catalog[0] and therefore the
+		// default for every provider that names none. Anthropic's best
+		// default is not automatically anyone else's, and moving the
+		// catalog's first row to change one provider would change them all.
+		defaultModel: "claude-opus-5-5",
+		envHint:      "ANTHROPIC",
 		// ANTHROPIC_OAUTH_TOKEN is handled specially in
 		// ResolveCredentialFull (it yields method "oauth"); the
 		// apikey env is listed here.

@@ -217,6 +217,15 @@ var anthropicCacheRateExceptions = map[string]cacheRateRule{
 		why: "published 0.025x cache read, the Fable/Mythos 5.1 exception",
 	},
 
+	// Opus 5.5 publishes $0.20 against its $4 base, which is 0.05x — half the
+	// standard multiplier, and not the 0.025x Fable/Mythos figure either. So
+	// this is a second, separate exception rather than a family that grew.
+	// The write half is ordinary, and stating it here keeps it asserted.
+	"anthropic/claude-opus-5-5": {
+		read: 0.05, write: 1.25,
+		why: "published $0.20 cache read against a $4 base, half the standard multiplier",
+	},
+
 	// Claude 3 Haiku predates the multiplier scheme. Anthropic published $0.03
 	// per MTok for a read and $0.30 for a write against a $0.25 base, which is
 	// 0.12x and 1.2x. Those are rounded to whole cents, not derived, so they

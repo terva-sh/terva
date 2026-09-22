@@ -337,6 +337,38 @@ var Catalog = []Model{
 		ContextWindow: 1000000, MaxOutput: 128000, Reasoning: true, AdaptiveThinking: true,
 		PriceInput: 10, PriceOutput: 50, PriceCacheRead: 0.25, PriceCacheWrite: 12.5,
 	},
+	// Opus 5.5 succeeds Opus 5 in the same tier and undercuts it: $4/$20
+	// against Opus 5's $5/$25. Everything else about the shape is the same —
+	// 1M context, 128K output, the same tokenizer.
+	//
+	// Not Speculative, for the reason above, and it is the anthropic
+	// provider's defaultModel (provider_registry.go), so the row has to
+	// resolve offline.
+	//
+	// AdaptiveThinking is not optional here. Opus 5.5 went further than the
+	// rest of the family: thinking cannot be turned off at all, and BOTH
+	// thinking:{type:"disabled"} and an explicit budget are a 400 at every
+	// effort level. Effort is the only depth control left.
+	//
+	// PriceCacheRead is the second Claude row to break the 0.1x rule, and it
+	// breaks it differently from Fable 5.1's 0.025x: Anthropic publishes
+	// $0.20 against the $4 base, which is 0.05x. The pricing guard carries
+	// the exception, so a "correction" to 0.4 fails the suite rather than
+	// silently doubling every cached-token cost.
+	//
+	// Both cache rates are Anthropic's PUBLISHED figures, confirmed against
+	// the rate card after this row first landed carrying a derived write.
+	// The 5-minute write is $5, which is also 1.25x base — the derivation
+	// and the published number agree, and it is recorded here so nobody
+	// re-derives it and wonders which one to trust. The 1-hour write is $8
+	// (2x base) and is deliberately unmodelled: PriceCacheWrite holds the
+	// 5-minute rate, the only one terva can incur, because buildRequest
+	// never sends ttl:"1h".
+	{
+		Provider: "anthropic", ID: "claude-opus-5-5", DisplayName: "Claude Opus 5.5",
+		ContextWindow: 1000000, MaxOutput: 128000, Reasoning: true, AdaptiveThinking: true,
+		PriceInput: 4, PriceOutput: 20, PriceCacheRead: 0.2, PriceCacheWrite: 5,
+	},
 
 	// ---- DeepSeek ----
 	// The current public DeepSeek API exposes the V4 family on

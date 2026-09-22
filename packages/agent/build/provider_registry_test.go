@@ -95,8 +95,11 @@ func TestProviderRegistryDefaultModel(t *testing.T) {
 	if got := DefaultModelForProvider("openai-compatible"); got != "" {
 		t.Errorf("openai-compatible default = %q, want empty", got)
 	}
-	if got := DefaultModelForProvider("anthropic"); got != provider.DefaultModel.ID {
-		t.Errorf("anthropic default = %q, want global %q", got, provider.DefaultModel.ID)
+	// anthropic names its own default, so it must NOT track the global one.
+	// Asserting the id rather than "not the global" is what would catch the
+	// default being dropped back to a fall-through.
+	if got := DefaultModelForProvider("anthropic"); got != "claude-opus-5-5" {
+		t.Errorf("anthropic default = %q, want claude-opus-5-5", got)
 	}
 	if got := DefaultModelForProvider("totally-unknown"); got != provider.DefaultModel.ID {
 		t.Errorf("unknown default = %q, want global %q", got, provider.DefaultModel.ID)

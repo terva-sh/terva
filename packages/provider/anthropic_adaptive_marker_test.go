@@ -24,6 +24,12 @@ func TestAdaptiveThinkingSubstringFallback(t *testing.T) {
 		"CLAUDE-FABLE-5-1",
 		"claude-opus-4-7",
 		"claude-opus-4.8",
+		// Covered by the "opus-5" marker rather than one of its own. The
+		// entry is here because nothing else states that the marker reaches
+		// a two-digit minor, and a future narrowing to "claude-opus-5" alone
+		// would still pass every other case in this list.
+		"claude-opus-5-5",
+		"us.anthropic.claude-opus-5-5",
 	}
 	for _, id := range adaptive {
 		if !usesAdaptiveThinking(Model{ID: id}) {
@@ -111,5 +117,61 @@ func TestFable51CatalogRow(t *testing.T) {
 	if got.ContextWindow != 1000000 || got.MaxOutput != 128000 {
 		t.Errorf("claude-fable-5-1 limits = %d ctx / %d out, want 1000000 / 128000",
 			got.ContextWindow, got.MaxOutput)
+	}
+}
+
+// Opus 5.5 is the anthropic provider's default model, which raises the cost of
+// every mistake in its row from "one model is wrong" to "the out-of-the-box
+// session is wrong". The checks below are the ones nothing else would catch.
+func TestOpus55CatalogRow(t *testing.T) {
+	var got Model
+	found := false
+	for _, m := range Catalog {
+		if m.Provider == "anthropic" && m.ID == "claude-opus-5-5" {
+			got, found = m, true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("no anthropic/claude-opus-5-5 row in the catalog")
+	}
+
+	// Speculative rows are skipped by swarm tier resolution AND would leave
+	// the provider default pointing at a row the picker hides.
+	if got.Speculative {
+		t.Error("claude-opus-5-5 is marked Speculative, but it is live on the " +
+			"public API and is the anthropic default model")
+	}
+
+	// Stricter than the rest of the family: Opus 5.5 rejects an explicit
+	// budget AND thinking:{type:"disabled"}, at every effort level. Without
+	// this flag buildRequest sends a budget and a temperature, and the first
+	// request 400s.
+	if !got.AdaptiveThinking {
+		t.Error("claude-opus-5-5 must set AdaptiveThinking: thinking cannot be " +
+			"disabled or budgeted on this model")
+	}
+
+	// $0.20 is 0.05x the $4 base — half the standard multiplier, and not the
+	// 0.025x Fable/Mythos figure. anthropicCacheRateExceptions carries the
+	// matching entry; both have to move together or the guard fails.
+	if got.PriceCacheRead != 0.2 {
+		t.Errorf("claude-opus-5-5 PriceCacheRead = %v, want 0.2 (0.05x base "+
+			"input, the Opus 5.5 exception)", got.PriceCacheRead)
+	}
+	if got.PriceInput != 4 || got.PriceOutput != 20 || got.PriceCacheWrite != 5 {
+		t.Errorf("claude-opus-5-5 pricing = in %v / out %v / cache-write %v, "+
+			"want 4 / 20 / 5", got.PriceInput, got.PriceOutput, got.PriceCacheWrite)
+	}
+	if got.ContextWindow != 1000000 || got.MaxOutput != 128000 {
+		t.Errorf("claude-opus-5-5 limits = %d ctx / %d out, want 1000000 / 128000",
+			got.ContextWindow, got.MaxOutput)
+	}
+
+	// The speculative claude-opus-5 row is a separate model that three tests
+	// resolve by exact id. Adding 5.5 must not have replaced it.
+	if _, err := FindModel("anthropic", "claude-opus-5"); err != nil {
+		t.Errorf("claude-opus-5 no longer resolves (%v); 5.5 lands beside it, "+
+			"not instead of it", err)
 	}
 }
