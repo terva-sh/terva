@@ -11,6 +11,20 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.138.1](https://github.com/terva-sh/terva/releases/tag/v0.138.1) — 2026-09-21
+
+### Features
+
+- core: one writer per session, with a lock that says why and when it lapses
+- core: record approvals and questions, and attribute what a side call spends
+- ctrlproto: gate serve verbs per caller, and close two sharp edges
+- tools: spend less of a turn on notes and suggestions
+
+### Fixes
+
+- filelock: let a session be written on Windows again
+- provider: decide reasoning support by agreement on compatible endpoints
+
 ## [v0.137.0](https://github.com/terva-sh/terva/releases/tag/v0.137.0) — 2026-09-15
 
 ### Features
