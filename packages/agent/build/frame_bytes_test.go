@@ -89,6 +89,7 @@ func TestTheWireRequestIsUnchangedByteForByte(t *testing.T) {
 	}
 	got = strings.ReplaceAll(got, args.CWD, "<CWD>")
 	got = strings.ReplaceAll(got, home, "<TERVA_HOME>")
+	got = normalizeGoldenPaths(got)
 	got = regexp.MustCompile(`Current date: \d{4}-\d{2}-\d{2}`).ReplaceAllString(got, "Current date: <DATE>")
 
 	golden := filepath.Join("testdata", "frame_request.golden")

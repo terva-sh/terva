@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,8 +12,9 @@ import (
 	"terva.sh/terva/packages/testsupport"
 )
 
-// clearCloudEnv unsets every variable cloud_config.go reads and points HOME at
-// an empty directory, so each test states exactly what the machine holds.
+// clearCloudEnv unsets every variable cloud_config.go reads and points the home
+// directory at an empty one, so each test states exactly what the machine
+// holds. os.UserHomeDir reads USERPROFILE on Windows, so both are set.
 func clearCloudEnv(t *testing.T) string {
 	t.Helper()
 	for _, k := range []string{
@@ -26,6 +28,7 @@ func clearCloudEnv(t *testing.T) string {
 	}
 	home := testsupport.TempDir(t)
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	return home
 }
 
@@ -138,7 +141,8 @@ func TestVertexConfigResolvesAuthAndSaysWhatIsMissing(t *testing.T) {
 	}
 
 	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", filepath.Join(home, "missing.json"))
-	if cfg := vertexConfig(); !strings.HasPrefix(cfg.Hint, `vertex: read credentials "`+filepath.Join(home, "missing.json")+`": `) {
+	// The hint quotes the path with %q, which doubles a Windows backslash.
+	if cfg := vertexConfig(); !strings.HasPrefix(cfg.Hint, fmt.Sprintf("vertex: read credentials %q: ", filepath.Join(home, "missing.json"))) {
 		t.Errorf("unreadable file: %v", cfg)
 	}
 
