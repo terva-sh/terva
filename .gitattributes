@@ -57,6 +57,13 @@ packages/i18n/locales/**/*.json text eol=lf
 # instead of a release.
 packages/agent/persona/personas/**/*.md text eol=lf
 
+# The builtin skills are go:embed'ed the same way, and an always-on skill's
+# whole text goes into the system prompt. They were unpinned until the
+# v0.139.1 release gate: a Windows checkout gave them CRLF, and the byte-for-byte
+# prompt goldens failed there with output that looked identical to the golden.
+# builtin_pin_test.go holds this line to the directory skills/builtin.go embeds.
+packages/agent/skills/builtin/**/*.md text eol=lf
+
 # Generated artifacts committed so a plain `go build -tags terva_web` needs no
 # JS/Node toolchain (see `just web-build`). Mark them linguist-generated so the
 # forges (Forgejo/GitHub, via go-enry/linguist) collapse them in PR diffs and
