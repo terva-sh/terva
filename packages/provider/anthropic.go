@@ -136,14 +136,15 @@ func NewAnthropic(apiKey, baseURL string, opts ...ClientOption) Client {
 	}
 }
 
-// NewAnthropicOAuth creates an Anthropic client using a subscription OAuth access token.
-func NewAnthropicOAuth(accessToken, baseURL string, opts ...ClientOption) Client {
-	return NewAnthropicOAuthSource(StaticCredential(accessToken), baseURL, opts...)
-}
-
-// NewAnthropicOAuthSource is NewAnthropicOAuth with a CredentialSource instead
-// of a fixed token, so the subscription access token can rotate (refresh)
-// without rebuilding the client — resolved once per Stream.
+// NewAnthropicOAuthSource creates an Anthropic client for a subscription
+// OAuth access token read from a CredentialSource, so the token can rotate
+// (refresh) without rebuilding the client. The source is read once per
+// Stream. StaticCredential adapts a fixed token.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewAnthropicOAuthSource(cred CredentialSource, baseURL string, opts ...ClientOption) Client {
 	if baseURL == "" {
 		baseURL = anthropicDefaultBaseURL
@@ -423,7 +424,7 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 			// and how much to think; depth is steered by output_config.effort.
 			// Explicit budgets are rejected with a 400, so none is sent.
 			out.Thinking = &anthThinking{Type: "adaptive"}
-			if effort := AnthropicAdaptiveEffort(eff); effort != "" {
+			if effort := anthropicAdaptiveEffort(eff); effort != "" {
 				out.OutputConfig = &anthOutputConfig{Effort: effort}
 			}
 		} else {
@@ -500,7 +501,7 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 	// assistant turn (a card's seeded greeting) valid by prepending a
 	// request-scoped user turn. All operate on the generic message list and never
 	// mutate history.
-	req.Messages = EnsureLeadingUserTurn(MergeAdjacentSameRole(RepairOrphanedToolResults(req.Messages)))
+	req.Messages = ensureLeadingUserTurn(mergeAdjacentSameRole(RepairOrphanedToolResults(req.Messages)))
 	for _, msg := range req.Messages {
 		renameTools := c.oauth
 		switch msg.Role {
@@ -1014,7 +1015,7 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 					finalErr = stream.Err()
 				default:
 					stop = StopError
-					finalErr = NewStreamDeathError(c.Name(), "message_stop")
+					finalErr = newStreamDeathError(c.Name(), "message_stop")
 				}
 				sendDone()
 				return

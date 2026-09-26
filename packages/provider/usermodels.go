@@ -39,11 +39,15 @@ import (
 // "image-output", "reasoning"); absent keys fall back to per-
 // capability defaults. This is how a non-vision local model is marked
 // text-only so terva drops images instead of bricking the session.
+//
+// Unstable: terva's on-disk file format carries no promise before 1.0.
 type UserModelsFile struct {
 	Providers map[string]UserProvider `json:"providers"`
 }
 
 // UserProvider groups models under a provider key.
+//
+// Unstable: terva's on-disk file format carries no promise before 1.0.
 type UserProvider struct {
 	Models []UserModel `json:"models"`
 }
@@ -60,6 +64,8 @@ type UserProvider struct {
 // tri-state lesson needs no extra side flags. Input is the legacy
 // spelling for the image-input capability ("image" present ⇒ vision);
 // an explicit Capabilities key wins over it.
+//
+// Unstable: terva's on-disk file format carries no promise before 1.0.
 type UserModel struct {
 	ID                   string          `json:"id"`
 	Name                 string          `json:"name"`
@@ -84,6 +90,8 @@ type UserModel struct {
 // UserOverride is one models.json entry held in the user layer: the
 // converted Model plus which tri-state fields the user explicitly set
 // (a flattened Model can't distinguish false from absent).
+//
+// Unstable: terva's on-disk file format carries no promise before 1.0.
 type UserOverride struct {
 	Model        Model
 	ReasoningSet bool
@@ -113,6 +121,8 @@ type UserOverride struct {
 // TestLegacyModelAliasesAreDead in packages/agent/build is what keeps this
 // honest; the check has to live there because provider cannot import the
 // registry without a cycle.
+//
+// Unstable: terva's on-disk file format carries no promise before 1.0.
 var LegacyUserModelProviderAliases = map[string]string{
 	"anthropic-messages": "anthropic",
 	"moonshot-ai":        "kimi",
@@ -123,6 +133,8 @@ var LegacyUserModelProviderAliases = map[string]string{
 
 // NormalizeUserModelProviderKey resolves a models.json provider key through the
 // legacy-alias table, returning the key unchanged when it is not a legacy name.
+//
+// Unstable: terva's on-disk file format carries no promise before 1.0.
 func NormalizeUserModelProviderKey(key string) string {
 	if to, ok := LegacyUserModelProviderAliases[key]; ok {
 		return to
@@ -138,6 +150,8 @@ func NormalizeUserModelProviderKey(key string) string {
 // surfacing the warnings; the file is never rejected wholesale unless
 // the top-level JSON itself fails to parse. Reading the file is the host's
 // (terva's is packages/agent/modelfiles).
+//
+// Unstable: terva's on-disk file format carries no promise before 1.0.
 func ParseUserModelsWithWarnings(data []byte) ([]UserOverride, []string) {
 	var warnings []string
 	var file UserModelsFile
@@ -186,9 +200,9 @@ func ParseUserModelsWithWarnings(data []byte) ([]UserOverride, []string) {
 			// goes through the same door the editor writes through. Say so
 			// when the file loses characters, or the operator sees a name
 			// they didn't type and has nothing to go on.
-			name := SanitizeDisplayName(um.Name)
+			name := sanitizeDisplayName(um.Name)
 			if name != um.Name {
-				warnings = append(warnings, fmt.Sprintf("models.json: %s/%s name was adjusted to %q (control characters and line breaks are not renderable, and names are capped at %d characters)", normalized, um.ID, name, MaxDisplayNameRunes))
+				warnings = append(warnings, fmt.Sprintf("models.json: %s/%s name was adjusted to %q (control characters and line breaks are not renderable, and names are capped at %d characters)", normalized, um.ID, name, maxDisplayNameRunes))
 			}
 			m := Model{
 				Provider:             normalized,
@@ -272,14 +286,14 @@ func userCaps(um UserModel) (caps map[Capability]bool, reasoning *bool, warnings
 		return nil, nil, nil
 	}
 	known := map[Capability]bool{}
-	for _, c := range KnownCapabilities() {
+	for _, c := range knownCapabilities() {
 		known[c] = true
 	}
 	caps = map[Capability]bool{}
 	for k, v := range um.Capabilities {
 		c := Capability(k)
 		if !known[c] {
-			warnings = append(warnings, fmt.Sprintf("unknown capability %q (kept; this terva understands: %v)", k, KnownCapabilities()))
+			warnings = append(warnings, fmt.Sprintf("unknown capability %q (kept; this terva understands: %v)", k, knownCapabilities()))
 		}
 		caps[c] = v
 	}

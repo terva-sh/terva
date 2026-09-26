@@ -75,13 +75,13 @@ func NewOpenAI(apiKey, baseURL string) Client {
 	}
 }
 
-// NewKimi creates a Kimi/Moonshot client. Kimi's chat API is OpenAI-compatible.
-func NewKimi(apiKey, baseURL string) Client {
-	return NewKimiWithHeaders(apiKey, baseURL, nil)
-}
-
 // NewDeepSeek creates a DeepSeek client. DeepSeek's chat API is
 // OpenAI-compatible at https://api.deepseek.com/v1.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewDeepSeek(apiKey, baseURL string) Client {
 	if baseURL == "" {
 		baseURL = "https://api.deepseek.com/v1"
@@ -98,9 +98,9 @@ func NewDeepSeek(apiKey, baseURL string) Client {
 	return newPollingUsageClient(inner, usagePollTTL, fetchDeepSeekBalance(&http.Client{Timeout: 0}, apiKey, base))
 }
 
-// NewKimiWithHeaders creates a Kimi/Moonshot client with extra headers.
+// newKimiWithHeaders creates a Kimi/Moonshot client with extra headers.
 // Subscription tokens from Kimi Code need the official CLI's X-Msh-* headers.
-func NewKimiWithHeaders(apiKey, baseURL string, headers map[string]string) Client {
+func newKimiWithHeaders(apiKey, baseURL string, headers map[string]string) Client {
 	if baseURL == "" {
 		baseURL = "https://api.kimi.com/coding/v1"
 	}
@@ -413,7 +413,7 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 	// OpenAI-compatible clone (Moonshot/Kimi, local templates with strict
 	// alternation) via newOpenAICompat — merging any adjacency an edit/delete
 	// left behind and the leading-user guard are no-cost safety nets there.
-	req.Messages = EnsureLeadingUserTurn(MergeAdjacentSameRole(req.Messages))
+	req.Messages = ensureLeadingUserTurn(mergeAdjacentSameRole(req.Messages))
 	for _, msg := range req.Messages {
 		switch msg.Role {
 		case RoleUser:
@@ -831,7 +831,7 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 					finalErr = stream.Err()
 				default:
 					stop = StopError
-					finalErr = NewStreamDeathError(c.Name(), "[DONE]")
+					finalErr = newStreamDeathError(c.Name(), "[DONE]")
 				}
 				sendDone()
 				return

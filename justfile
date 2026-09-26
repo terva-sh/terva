@@ -399,6 +399,61 @@ lint:
     # baseline entry that no longer fires, so the accepted set can only shrink.
     # See `just ste-lint` for the full report.
     go run ./cmd/terva-ste-lint -check -q
+    # The engine's exported API, one committed snapshot per package under
+    # .api/. Fails when the code no longer matches, so an API change always
+    # shows up in review as a diff under .api/. `just api-snapshot` rewrites it.
+    go run ./cmd/terva-apidiff -snapshot-dir .api -check
+
+# Rewrite the API snapshots under .api/ from the code. Commit the result: the
+# diff is how a reviewer sees an API change. .api/packages.txt says which
+# packages are snapshotted, and which of them are stable.
+api-snapshot:
+    go run ./cmd/terva-apidiff -snapshot-dir .api -write
+
+# Fail when a snapshot under .api/ no longer matches the code (part of `lint`).
+api-check:
+    go run ./cmd/terva-apidiff -snapshot-dir .api -check
+
+# How far each snapshotted package moved since REF, counted per class. REF
+# defaults to the last published release. Advisory: it never fails on what it
+# finds.
+api-since REF="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ref="{{REF}}"
+    if [ -z "$ref" ]; then
+      ref=$(git tag -l 'pub/v*' --sort=-v:refname | head -1)
+      [ -n "$ref" ] || { echo "no pub/v* tag here — pass a ref: just api-since <ref>" >&2; exit 2; }
+    fi
+    go run ./cmd/terva-apidiff -snapshot-dir .api -since "$ref"
+
+# Which stable breaks since REF have no note in docs/migrating.md, and which
+# names there cover no break. It fails on either (TKT-01M3CVDW31). REF defaults
+# to the last published release. Both CI lanes run it, so `ci` and `ci-docs`
+# do too. A clone with no pub/v* tag skips it, as boundary-guard skips without
+# trunk.
+migration-notes REF="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ref="{{REF}}"
+    if [ -z "$ref" ]; then
+      ref=$(git tag -l 'pub/v*' --sort=-v:refname | head -1)
+      [ -n "$ref" ] || { echo "migration-notes: SKIPPED (no pub/v* tag here; git fetch --tags origin, or pass a ref: just migration-notes <ref>)"; exit 0; }
+    fi
+    go run ./cmd/terva-apidiff -snapshot-dir .api -since "$ref" -notes docs/migrating.md -require
+
+# Move the notes under "Unreleased" in docs/migrating.md to a "## VERSION"
+# section headed by the count of breaks since the last release, and open a
+# fresh Unreleased section above it. It refuses while a note is missing. Run it
+# on a branch before `just release-cut VERSION`, and land the page first: the
+# cut refuses notes still under Unreleased. A release with no notes gets no
+# section.
+migration-notes-seal VERSION:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ref=$(git tag -l 'pub/v*' --sort=-v:refname | head -1)
+    [ -n "$ref" ] || { echo "no pub/v* tag here: fetch the tags, git fetch --tags origin" >&2; exit 2; }
+    go run ./cmd/terva-apidiff -seal "{{VERSION}}" -notes docs/migrating.md -snapshot-dir .api -since "$ref"
 
 # Report every STE finding in the enrolled tool text, baseline included.
 ste-lint *FLAGS:
@@ -602,12 +657,33 @@ ci-web-smoke:
         npm --prefix packages/agent/web/client run test:smoke -- --project=chromium; \
     fi
 
+# Fail when a change grows an engine boundary baseline: an io import in
+# packages/core/testdata/import_boundary_baseline.txt, or an I/O reference in
+# io_boundary_baseline.txt, since the merge base with BASE (trunk by default).
+# A commit trailer `Boundary-Grows: <reason>` allows the growth on purpose.
+# cmd/terva-boundary-guard says what counts, and why (TKT-01M368AWKN).
+boundary-guard BASE="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    base="{{BASE}}"
+    if [ -z "$base" ]; then
+      base=$(git rev-parse --verify -q origin/sothr-main || true)
+      [ -n "$base" ] || { echo "boundary-guard: SKIPPED (no origin/sothr-main here; pass a ref: just boundary-guard <ref>)"; exit 0; }
+    fi
+    go run ./cmd/terva-boundary-guard -base "$base"
+
 # fmt-check + vet + race tests + connector tag-matrix build + acp + web tag
 # build/test + the web client's vitest suite and dist determinism check
 # (Node-gated) + the Playwright smokes (Node-, browser- and CI-gated) +
 # terva_pprof tag build + public packaging drift check, as a pre-push gate.
 ci: lint test ci-acp ci-web ci-scripting ci-workflows ci-web-client ci-web-smoke
     go build -tags terva_no_telegram,terva_no_discord ./...
+    # The engine's boundary baselines only shrink. The remote lane's Engine
+    # boundary guard job runs this against the pull request's base.
+    @just boundary-guard
+    # Every stable break since the last release has a migration note. Both
+    # remote lanes run it, so both local recipes do.
+    @just migration-notes
     # terva_pprof guard: the profiling endpoint (cmd/terva/pprof.go) only
     # compiles under this tag, so the default build can't catch a break in
     # it — same reason ci-acp exists. install-dev is the only shipping use.
@@ -662,6 +738,9 @@ ci-docs:
     # The byte-exact gate over the generated proposals index; the `go test`
     # above covers it for membership only, which a stale count header passes.
     @if [ -x scripts/proposal.sh ]; then ./scripts/proposal.sh check; else echo "ci-docs: SKIPPED proposal-check (scripts/proposal.sh absent on this tree)"; fi
+    # A change to docs/migrating.md alone takes the docs lane, and it can drop
+    # a note, so this recipe checks the notes as `ci` does.
+    @just migration-notes
     # The ticket store. Both remote lanes install a pinned git-ticket and run
     # this, so both local recipes run it too, by the same rule the proposals
     # check above follows. A ticket-only change takes the docs lane, so this

@@ -27,7 +27,7 @@
 //
 // Scope: WIRE peers only. Local trusted files (session transcripts, JSONL
 // exports) deliberately read with no size cap and must NOT use this — see the
-// ReadBytes comments in packages/core/session_portable.go.
+// ReadBytes comments in packages/session/session_portable.go.
 //
 // The full inventory of terva's payload boundaries — wire, file, and network —
 // is docs/resource-limits.md.
@@ -36,6 +36,9 @@
 // it, and decision 0021 keeps every package the wire imports under the wire's
 // directory so the wire can become a module root. The harness imports it from
 // here too; that points down the layers, which is allowed.
+//
+// No promise: .api/packages.txt lists this package as unstable, so it may
+// change in any release without a note.
 package lineframe
 
 import (

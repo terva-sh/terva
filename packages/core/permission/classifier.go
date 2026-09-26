@@ -72,8 +72,15 @@ func (m ClassifierMode) Enabled() bool {
 }
 
 // ClassifyVerdict is a classifier's answer.
+//
+// Unstable: the classifier's implementation carries no promise before 1.0.
+// ClassifierMode, the switch that turns it on and off, is stable.
 type ClassifyVerdict string
 
+// The ClassifyVerdict values.
+//
+// Unstable: the classifier's implementation carries no promise before 1.0.
+// ClassifierMode, the switch that turns it on and off, is stable.
 const (
 	// ClassifyAbstain means "no opinion": the classifier could not decide,
 	// could not reach its model, or timed out. The gate then does exactly
@@ -103,6 +110,9 @@ const (
 // one channel an attacker fully controls — and it would invite the
 // classifier to be talked round. It rules on the call, the mode that raised
 // the question, and nothing the agent wrote.
+//
+// Unstable: the classifier's implementation carries no promise before 1.0.
+// ClassifierMode, the switch that turns it on and off, is stable.
 type ClassifyRequest struct {
 	// Tool is the tool name being gated.
 	Tool string
@@ -118,6 +128,9 @@ type ClassifyRequest struct {
 }
 
 // ClassifyResult is the classifier's answer plus the sentence behind it.
+//
+// Unstable: the classifier's implementation carries no promise before 1.0.
+// ClassifierMode, the switch that turns it on and off, is stable.
 type ClassifyResult struct {
 	Verdict ClassifyVerdict
 	// Reason is shown to the model when the verdict denies, and it is the
@@ -136,6 +149,9 @@ type ClassifyResult struct {
 // calls from more than one goroutine — and must honour ctx, because the gate
 // hands over the calling turn's context and a cancelled turn must not keep
 // spending model calls.
+//
+// Unstable: the classifier's implementation carries no promise before 1.0.
+// ClassifierMode, the switch that turns it on and off, is stable.
 type Classifier interface {
 	Classify(ctx context.Context, req ClassifyRequest) ClassifyResult
 }

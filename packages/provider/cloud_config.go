@@ -29,6 +29,8 @@ func redacted(s string) string {
 // BedrockConfig is what an Amazon Bedrock client needs. A BearerToken is used
 // when set; otherwise AccessKeyID and SecretAccessKey (with an optional
 // SessionToken) sign each request with SigV4.
+//
+// Unstable: a vendor's configuration carries no promise before 1.0.
 type BedrockConfig struct {
 	// Region is the AWS region. Empty means us-east-1.
 	Region string
@@ -49,6 +51,8 @@ func (c BedrockConfig) String() string {
 func (c BedrockConfig) GoString() string { return "provider." + c.String() }
 
 // AzureOpenAIConfig is what an Azure OpenAI client needs besides its key.
+//
+// Unstable: a vendor's configuration carries no promise before 1.0.
 type AzureOpenAIConfig struct {
 	// BaseURL is the resource's endpoint, used when the constructor's baseURL
 	// argument is empty.
@@ -63,6 +67,8 @@ type AzureOpenAIConfig struct {
 // VertexConfig is what a Google Vertex AI client needs. An APIKey is used
 // when set; otherwise CredentialsJSON, a service-account key or an
 // authorized_user file as gcloud writes it, mints OAuth tokens.
+//
+// Unstable: a vendor's configuration carries no promise before 1.0.
 type VertexConfig struct {
 	Project string
 	// Location is the Vertex region. Empty means us-central1.
@@ -92,6 +98,8 @@ func (c VertexConfig) GoString() string { return "provider." + c.String() }
 // It has a hint per ID rather than one Hint, because which ID is missing
 // depends on the URL: a custom base URL may carry only one placeholder, and
 // the message must name the one it needs.
+//
+// Unstable: a vendor's configuration carries no promise before 1.0.
 type CloudflareConfig struct {
 	AccountID string
 	GatewayID string

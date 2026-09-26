@@ -971,13 +971,23 @@ func (e *Extension) RenderPanel(panelID, title string, lines []string, footer st
 // OpenPanelWidgets / RenderPanelWidgets: a rich frontend (the web control panel)
 // renders it natively, while a text frontend (the TUI) falls back to the Lines
 // you supply alongside. The vocabulary is re-exported from extproto.
+//
+// Unstable: the widget tree is the extension wire's own type and carries no
+// promise before 1.0. OpenPanel and RenderPanel, with text lines, are the
+// stable panel. Each type below repeats the marker, because a group's doc does
+// not reach the types of a group.
 type (
-	Widget     = extproto.Widget
-	WidgetKV   = extproto.WidgetKV
+	// Unstable: part of the widget tree.
+	Widget = extproto.Widget
+	// Unstable: part of the widget tree.
+	WidgetKV = extproto.WidgetKV
+	// Unstable: part of the widget tree.
 	WidgetItem = extproto.WidgetItem
 )
 
 // Widget tone values (WidgetItem/Widget.Tone).
+//
+// Unstable: part of the widget tree, like Widget.
 const (
 	ToneDefault = "default"
 	ToneMuted   = "muted"
@@ -989,6 +999,8 @@ const (
 // OpenPanelWidgets opens a panel with a generic widget tree for rich frontends,
 // plus lines as the text fallback for the TUI (pass what you'd give OpenPanel).
 // Like OpenPanel, it can be called spontaneously and receives panel_key events.
+//
+// Unstable: part of the widget tree, like Widget.
 func (e *Extension) OpenPanelWidgets(id, title string, widgets []Widget, lines []string, footer string) {
 	_ = e.send(extproto.OpenPanelFromExt{
 		Type:  "open_panel",
@@ -998,6 +1010,8 @@ func (e *Extension) OpenPanelWidgets(id, title string, widgets []Widget, lines [
 
 // RenderPanelWidgets re-renders an open panel with a widget tree (+ text
 // fallback lines). The widget twin of RenderPanel.
+//
+// Unstable: part of the widget tree, like Widget.
 func (e *Extension) RenderPanelWidgets(panelID, title string, widgets []Widget, lines []string, footer string) {
 	_ = e.send(extproto.PanelRenderFromExt{Type: "panel_render", PanelID: panelID, Title: title, Lines: lines, Footer: footer, Widgets: widgets})
 }

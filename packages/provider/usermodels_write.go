@@ -17,6 +17,8 @@ import (
 // contents are not an error: they give a file with a ready-to-use (non-nil)
 // Providers map. Malformed contents ARE an error, so a caller that's about to
 // rewrite the file never silently clobbers content it couldn't understand.
+//
+// Unstable: terva's on-disk file format carries no promise before 1.0.
 func ParseUserModelsFile(data []byte) (UserModelsFile, error) {
 	empty := UserModelsFile{Providers: map[string]UserProvider{}}
 	if len(data) == 0 {
@@ -35,6 +37,8 @@ func ParseUserModelsFile(data []byte) (UserModelsFile, error) {
 // MarshalUserModelsFile encodes f pretty-printed with a trailing newline.
 // Provider blocks that hold no models are pruned first, so removing a
 // provider's last override never leaves an empty husk behind.
+//
+// Unstable: terva's on-disk file format carries no promise before 1.0.
 func MarshalUserModelsFile(f UserModelsFile) ([]byte, error) {
 	if f.Providers == nil {
 		f.Providers = map[string]UserProvider{}

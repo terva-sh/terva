@@ -46,6 +46,8 @@ const compactionSummaryHeader = "## Context Summary (compacted)"
 // the hosts' instant-title fallback, which reaches a compaction summary by a
 // different route than BuildTitleSeed and used to name sessions after the
 // document's scaffolding instead of its subject.
+//
+// Unstable: a text helper carries no promise before 1.0.
 func StripCompactionHeader(s string) string {
 	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), compactionSummaryHeader))
 }
@@ -152,6 +154,8 @@ func isCompactionMessage(m provider.Message) bool {
 // titleSeedRecentFloor percent of the budget and the anchor is truncated
 // (middle-out) to make room. Returns "" when the transcript has no
 // user/assistant text at all.
+//
+// Unstable: a text helper carries no promise before 1.0.
 func BuildTitleSeed(msgs []provider.Message, budget int) string {
 	if budget <= 0 {
 		return ""

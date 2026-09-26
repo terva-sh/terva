@@ -64,6 +64,8 @@ func repairToolArguments(raw string) string {
 // recorded a tool_result with no call in front of it, which is unreadable after
 // the fact: the tool name, the arguments, and the fact a call happened at all
 // were simply gone.
+//
+// Unstable: a helper carries no promise before 1.0.
 func FinalizeToolArguments(raw string) (args json.RawMessage, unparsed string) {
 	repaired := repairToolArguments(raw)
 	if repaired == "" {

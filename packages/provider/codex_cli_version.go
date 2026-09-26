@@ -38,6 +38,8 @@ func (c *codexClient) claimedCodexCLIVersion() string {
 // WithCodexCLIVersion tells the codex client which Codex CLI version is
 // installed on this machine, for the native identity's user-agent. It must not
 // block: return "" until the version is known.
+//
+// Unstable: a client identity knob carries no promise before 1.0.
 func WithCodexCLIVersion(installed func() string) CodexOption {
 	return func(c *codexClient) { c.cliVersion = installed }
 }

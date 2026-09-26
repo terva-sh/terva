@@ -17,6 +17,9 @@ import "sync"
 //   - CancelAll answers every parked waiter at once (turn abort, shutdown).
 //
 // The zero value is ready to use. Safe for concurrent use.
+//
+// Unstable: a concurrency helper for approval and question carriers carries
+// no promise before 1.0.
 type ParkTable[T any] struct {
 	mu   sync.Mutex
 	pend map[string]chan T

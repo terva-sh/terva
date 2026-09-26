@@ -11,6 +11,13 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.138.2](https://github.com/terva-sh/terva/releases/tag/v0.138.2) — 2026-09-22
+
+### Features
+
+- provider: add Claude Opus 5.5 and make it the anthropic default
+- provider: add GPT-6 Sol and Luna, and move OpenAI defaults and codex tiers onto them
+
 ## [v0.138.1](https://github.com/terva-sh/terva/releases/tag/v0.138.1) — 2026-09-21
 
 ### Features
@@ -1373,9 +1380,12 @@ changes are itemised nowhere else.
 
 ## [v0.104.0](https://github.com/terva-sh/terva/releases/tag/v0.104.0) — 2026-06-11
 
-### Features
+### Breaking changes
 
 - terva — the renamed continuation of zot
+
+### Features
+
 - a layered model catalog with live discovery and capability tags
 - agent and TUI growth across the fork era
 - external chat connectors — bridge terva to any chat service

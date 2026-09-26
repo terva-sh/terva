@@ -1,0 +1,14 @@
+# packages/core/transcripttest (stable): its exported API, one symbol per line.
+# Written by `just api-snapshot`. `just api-check` fails when it no longer matches the code.
+Recorder	type	struct
+Recorder.AppendCompaction	method	func(_ []provider.Message, res core.CompactResult) error
+Recorder.AppendImageExclusion	method	func(sha256Hex string) error
+Recorder.AppendMessage	method	func(m provider.Message) error
+Recorder.AppendToolGroupActivation	method	func(group string) error
+Recorder.AppendUsage	method	func(u core.UsageRecord) error
+Recorder.Compactions	method	func() []core.CompactResult
+Recorder.ToolGroups	method	func() []string
+Recorder.Usage	method	func(kind core.UsageKind) []core.UsageRecord
+Run	func	func(t *testing.T, open func(t *testing.T) Store)
+Store	type	struct
+Store.Reload	field	func() (core.Transcript, error)

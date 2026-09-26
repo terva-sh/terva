@@ -1,0 +1,62 @@
+# packages/agent/sdk (stable): its exported API, one symbol per line.
+# Written by `just api-snapshot`. `just api-check` fails when it no longer matches the code.
+CompactResult	type	struct
+CompactResult.Messages	field	[]Message
+CompactResult.Summary	field	string
+Config	type	struct
+Config.APIKey	field	string
+Config.AppendSystemPrompt	field	[]string
+Config.BaseURL	field	string
+Config.CWD	field	string
+Config.Classifier	field	string
+Config.Confirmer	field	permission.Confirmer
+Config.ContextFiles	field	[]string
+Config.ExtraTools	field	[]core.Tool
+Config.Lock	field	bool
+Config.MaxSteps	field	int
+Config.Model	field	string
+Config.NoTools	field	bool
+Config.Provider	field	string
+Config.Reasoning	field	string
+Config.SystemPrompt	field	string
+Config.Temperature	field	*float32
+Config.Tools	field	[]string
+Config.Yolo	field	bool
+ContentBlock	type	core.WireBlock
+DefaultMaxSteps	const	untyped int
+ErrBusy	var	error
+ErrClosed	var	error
+Event	type	core.WireEvent
+Image	type	struct
+Image.Data	field	[]byte
+Image.MimeType	field	string
+Message	type	core.WireMessage
+ModelInfo	type	struct
+ModelInfo.ContextWindow	field	int
+ModelInfo.ID	field	string
+ModelInfo.MaxOutput	field	int
+ModelInfo.Provider	field	string
+ModelInfo.Reasoning	field	bool
+New	func	func(cfg Config) (*Runtime, error)
+Runtime	type	struct
+Runtime.CWD	method	func() string
+Runtime.Cancel	method	func()
+Runtime.ClassifierMode	method	func() permission.ClassifierMode
+Runtime.Close	method	func() error
+Runtime.Compact	method	func(ctx context.Context, customInstructions string) (CompactResult, error)
+Runtime.Cost	method	func() Usage
+Runtime.ListModels	method	func() []ModelInfo
+Runtime.Messages	method	func() []Message
+Runtime.Model	method	func() string
+Runtime.Prompt	method	func(ctx context.Context, text string, images []Image) (<-chan Event, error)
+Runtime.Provider	method	func() string
+Runtime.SetMessages	method	func(msgs []Message)
+Runtime.SetModel	method	func(model string) error
+Runtime.State	method	func() State
+State	type	struct
+State.Busy	field	bool
+State.CWD	field	string
+State.MessageCount	field	int
+State.Model	field	string
+State.Provider	field	string
+Usage	type	core.WireUsage

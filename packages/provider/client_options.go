@@ -31,6 +31,8 @@ func applyClientOptions(opts []ClientOption) clientHooks {
 // body, called before the request is sent. terva's harness appends each one to
 // the file named by TERVA_DEBUG_ANTHROPIC, to diff one turn's request against
 // the next when a cache prefix stops matching.
+//
+// Unstable: a request dump is a debugging aid and carries no promise.
 func WithRequestDump(dump func(body []byte)) ClientOption {
 	return func(h *clientHooks) { h.dump = dump }
 }
@@ -39,15 +41,18 @@ func WithRequestDump(dump func(body []byte)) ClientOption {
 // installed on this machine, for the user-agent its OAuth requests present. It
 // is called on every such request, so it must not block: return "" until the
 // version is known. The wire claims the newer of it and the compiled baseline.
+//
+// Unstable: a client identity knob carries no promise before 1.0.
 func WithClaudeCodeVersion(installed func() string) ClientOption {
 	return func(h *clientHooks) { h.claudeVersion = installed }
 }
 
 // ImageSaver stores an image a model generated and returns the path it was
-// saved at. dir is the request's WorkingDir. The Gemini wire calls it for each
-// image in a response and tells the model the path in a text block beside the
-// image; the image bytes reach the transcript either way.
-type ImageSaver func(dir, mimeType string, data []byte) (path string, err error)
+// saved at. Where it saves is the host's to decide; the wire does not know a
+// directory. The Gemini wire calls it for each image in a response and tells
+// the model the path in a text block beside the image; the image bytes reach
+// the transcript either way.
+type ImageSaver func(mimeType string, data []byte) (path string, err error)
 
 // WithImageSaver gives the Gemini wire somewhere to save generated images.
 // Without it the wire saves nothing and adds no path.

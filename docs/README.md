@@ -70,6 +70,7 @@ the field have learned about this category, generalized and evidence-graded.
 | [controllers.md](controllers.md) | `ctrlproto` control-plane reference |
 | [rpc.md](rpc.md) | JSON-RPC server mode |
 | [embedding.md](embedding.md) | The three ways to embed terva (RPC, the SDK, the engine) and when to pick each |
+| [migrating.md](migrating.md) | What to change in your code when a release breaks a stable Go API |
 | [localization.md](localization.md) | Localizing / customizing strings |
 
 ### Operating

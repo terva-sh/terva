@@ -20,6 +20,9 @@
 // would drop the engine's strings from the reference catalogs. The lint
 // refuses an In call it cannot read through. The decision and the options
 // that lost are in docs/plans/engine-extraction.md, under phase 1.
+//
+// No promise: .api/packages.txt lists this package as unstable, so it may
+// change in any release without a note.
 package i18n
 
 import (

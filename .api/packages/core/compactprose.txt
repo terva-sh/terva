@@ -1,0 +1,16 @@
+# packages/core/compactprose (stable): its exported API, one symbol per line.
+# Written by `just api-snapshot`. `just api-check` fails when it no longer matches the code.
+Instruction	const	untyped string
+LedgerFailed	func	func(string) string
+LedgerHeader	const	untyped string
+LedgerOmitted	func	func(n int) string
+LedgerUnknown	const	untyped string
+MidTurnAddendum	const	untyped string
+PressureNote	func	func(percent, used, window int, compacts bool) string
+ProviderNotice	const	untyped string
+System	const	untyped string
+Tokens	func	func(n int) string
+TruncatedNotice	const	untyped string
+TruncatedNoticeBare	const	untyped string
+WarmKeepTail	func	func(n int) string
+WarmPreamble	const	untyped string

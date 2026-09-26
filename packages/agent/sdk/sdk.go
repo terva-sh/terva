@@ -1,7 +1,10 @@
 // Package sdk is the public Go SDK for embedding the terva agent
-// runtime in third-party programs. It is the only stable, importable
-// surface the project exposes; the other packages under packages/ are
-// implementation detail and subject to change without notice.
+// runtime in third-party programs. It is one of the packages that
+// .api/packages.txt lists as stable, beside the engine (packages/core),
+// the wire (packages/provider), ext and connsdk. A package under
+// packages/ that the file does not list is implementation detail and may
+// change without notice. Inside a stable package, a symbol whose doc
+// opens a paragraph with "Unstable:" promises nothing either.
 //
 // Lifecycle:
 //
@@ -43,6 +46,10 @@
 //
 // For a non-Go consumer, run `terva rpc` and speak the same JSON
 // schema over stdin/stdout. See docs/rpc.md.
+//
+// For a Go host that wants its own conventions rather than terva's, build on
+// the engine (packages/core) directly; examples/harness is a working agent
+// made that way. docs/embedding.md compares the three ways to embed terva.
 package sdk
 
 import (
@@ -53,8 +60,10 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/mode"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -138,7 +147,7 @@ type Config struct {
 	// Supply one when the embedding has a human in it (a chat UI, a
 	// dashboard, a terminal of your own): the callback receives the tool
 	// name and a preview of the call and returns the decision.
-	Confirmer core.Confirmer
+	Confirmer permission.Confirmer
 
 	// Classifier screens the tool calls the user's rules say to ask about:
 	// one cheap model call decides, BEFORE Confirmer is consulted, whether
@@ -191,7 +200,7 @@ type Runtime struct {
 	provider   string
 	model      string
 	cwd        string
-	classifier core.ClassifierMode
+	classifier permission.ClassifierMode
 
 	// activeCancel is set while a Prompt is streaming.
 	activeCancel context.CancelFunc
@@ -265,14 +274,14 @@ func New(cfg Config) (*Runtime, error) {
 	// and the agent would run every tool unchecked, and a library has no
 	// stderr to warn on. Refusing to start is the only signal an embedder
 	// cannot miss. Yolo still works, because it asks for no rules.
-	var gate *core.ConfirmGate
+	var gate *permission.ConfirmGate
 	if !cfg.Yolo {
 		pol, _, perr := permissions.LoadPolicy(args.PermInputs())
 		if perr != nil {
 			return nil, fmt.Errorf("sdk: %w (repair the file, or set Config.Yolo only if this embedding should run every tool call unchecked)", perr)
 		}
 		if pol != nil {
-			gate = core.NewPolicyGate(pol, cfg.Confirmer)
+			gate = permission.NewPolicyGate(pol, cfg.Confirmer)
 			r.AdoptReadOnlySet(pol.ReadOnly)
 			// Screening, inheriting the user's setting when Config.Classifier
 			// is empty — the same rule Provider and Model follow, and the
@@ -322,7 +331,7 @@ func (r *Runtime) Model() string { r.mu.Lock(); defer r.mu.Unlock(); return r.mo
 func (r *Runtime) CWD() string { r.mu.Lock(); defer r.mu.Unlock(); return r.cwd }
 
 // ClassifierMode reports what authority a screening classifier holds over this
-// runtime's tool calls: core.ClassifierOff, ClassifierScreen, or
+// runtime's tool calls: permission.ClassifierOff, ClassifierScreen, or
 // ClassifierApprove.
 //
 // Worth reading at startup. Config.Classifier INHERITS from the user's
@@ -330,7 +339,7 @@ func (r *Runtime) CWD() string { r.mu.Lock(); defer r.mu.Unlock(); return r.cwd 
 // here — including `approve`, where a model answers yes on the user's behalf
 // and your Confirmer is never called. The SDK deliberately prints nothing
 // anywhere, so this accessor is the only thing that will tell you.
-func (r *Runtime) ClassifierMode() core.ClassifierMode {
+func (r *Runtime) ClassifierMode() permission.ClassifierMode {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.classifier
@@ -391,12 +400,14 @@ func (r *Runtime) Cost() Usage {
 }
 
 // Prompt sends a user message and runs the agent loop under the
-// standard turn policy (the same one `terva --json` and the rpc server
-// use): the transcript is auto-compacted before the turn when it is
-// near the context window, and a request rejected with HTTP 413 is
-// condensed and retried once. Returns a channel that emits one Event
-// per agent action, closed when the turn finishes (cleanly or with
-// error); compaction surfaces as compact_start/compact_end events.
+// standard turn policy (the same one the TUI, the daemon and the rpc
+// server use): the transcript is compacted before the turn, between the
+// turn's tool steps, and after the turn whenever the agent's compaction
+// policy says the context is too full, and a request rejected with HTTP
+// 413 is condensed and retried once. Returns a channel that emits one
+// Event per agent action, closed when the turn and any compaction after it
+// finish (cleanly or with error); compaction surfaces as
+// compact_start/compact_end events.
 // Only one Prompt may be active at a time per Runtime; concurrent
 // calls return ErrBusy.
 func (r *Runtime) Prompt(ctx context.Context, text string, images []Image) (<-chan Event, error) {
@@ -435,11 +446,16 @@ func (r *Runtime) Prompt(ctx context.Context, text string, images []Image) (<-ch
 		// auto-compaction near the context window and a compact-and-retry
 		// on HTTP 413 — instead of a lower-level raw loop. Compaction
 		// surfaces as compact_start/compact_end events on the channel.
-		err := r.agent.PromptWithPolicy(subCtx, text, imgBlocks, func(ev core.AgentEvent) {
-			out <- core.EventToWire(ev)
-		})
+		emit := func(ev core.AgentEvent) { out <- core.EventToWire(ev) }
+		err := r.agent.PromptWithPolicy(subCtx, text, imgBlocks, emit)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			out <- Event{Type: "error", Error: err.Error()}
+		}
+		// After a clean turn, the same after-turn check every other front end
+		// makes, so an embedded session compacts where a TUI session does. A
+		// failure rides compact_end; the turn itself succeeded.
+		if err == nil && subCtx.Err() == nil {
+			_, _, _ = r.agent.CompactIfDue(subCtx, core.CompactAfterTurn, emit)
 		}
 	}()
 	return out, nil
@@ -476,7 +492,7 @@ func (r *Runtime) Compact(ctx context.Context, customInstructions string) (Compa
 		r.mu.Unlock()
 	}()
 
-	res, err := r.agent.Compact(subCtx, core.AutoCompactKeepTail, nil)
+	res, err := r.agent.Compact(subCtx, r.agent.Compaction(core.CompactRequested).KeepTail, nil)
 	if err != nil {
 		if errors.Is(err, core.ErrNothingToCompact) {
 			// Nothing to summarize — benign. Return an empty-summary result
@@ -496,7 +512,7 @@ func (r *Runtime) SetModel(model string) error {
 	if r.agent == nil {
 		return fmt.Errorf("sdk: no agent")
 	}
-	next, err := provider.FindModel(r.provider, model)
+	next, err := modelreg.FindModel(r.provider, model)
 	if err != nil {
 		return err
 	}
@@ -506,7 +522,7 @@ func (r *Runtime) SetModel(model string) error {
 	// firing requests at the old one. The SDK has no in-place rebuild
 	// (cross-endpoint switches are a fresh Runtime), so reject it
 	// rather than silently mis-route.
-	if cur, curErr := provider.FindModel(r.provider, r.model); curErr == nil && cur.BaseURL != next.BaseURL {
+	if cur, curErr := modelreg.FindModel(r.provider, r.model); curErr == nil && cur.BaseURL != next.BaseURL {
 		return fmt.Errorf("sdk: model %q routes to a different endpoint; create a new Runtime to switch", model)
 	}
 	r.agent.SetModel(model)
@@ -548,7 +564,7 @@ func (r *Runtime) Close() error {
 // ListModels returns every model known to the runtime for the
 // current provider (catalog + live discovery if cached).
 func (r *Runtime) ListModels() []ModelInfo {
-	models := provider.ModelsForProvider(r.Provider())
+	models := modelreg.ModelsForProvider(r.Provider())
 	out := make([]ModelInfo, 0, len(models))
 	for _, m := range models {
 		out = append(out, ModelInfo{

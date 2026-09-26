@@ -61,6 +61,7 @@ var exemptFromOwnerOnly = map[string]exemption{
 	// Build and developer tooling: repo files, never a runtime path.
 	filepath.Join("cmd", "terva-i18n-lint", "main.go"):                  {"rewrites locale files in the repo", 1},
 	filepath.Join("cmd", "terva-ste-lint", "baseline.go"):               {"writes the .ste baseline in the repo", 1},
+	filepath.Join("cmd", "terva-apidiff", "snapshot.go"):                {"writes the .api snapshots in the repo", 1},
 	filepath.Join("examples", "extensions", "chat-loopback", "main.go"): {"example extension writing its own inbox", 1},
 }
 

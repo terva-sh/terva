@@ -105,8 +105,13 @@ func newOpenCodeClient(name, apiKey, baseURL, fallbackBaseURL string) Client {
 // NewOpenCode is the opencode.ai Zen endpoint. Mixed APIs upstream; this
 // constructor wires the openai-completions flavor only. Models that need
 // the anthropic-messages flavor under the same provider should be built
-// with NewAnthropicCompat against the same base URL, which would need the
+// as an Anthropic-compatible client against the same base URL, which would need the
 // session header wired there too. No current model requires that.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewOpenCode(apiKey, baseURL string) Client {
 	return newOpenCodeClient("opencode", apiKey, baseURL, "https://opencode.ai/zen/v1")
 }
@@ -120,6 +125,11 @@ func NewOpenCode(apiKey, baseURL string) Client {
 // (anomalyco/opencode#16017 — rolling/weekly/monthly windows), light it
 // up by wrapping this client in a UsageReporter that fetches it; the
 // dialog and status hint then work with no further changes.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewOpenCodeGo(apiKey, baseURL string) Client {
 	return newOpenCodeClient("opencode-go", apiKey, baseURL, "https://opencode.ai/zen/go/v1")
 }

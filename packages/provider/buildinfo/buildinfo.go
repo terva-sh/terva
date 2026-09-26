@@ -20,6 +20,9 @@
 // opencode's user agent, and decision 0021 keeps every package the wire
 // imports under the wire's directory. It is a set-once leaf with no I/O, so
 // the bottom layer is a place every other layer can reach it from.
+//
+// No promise: .api/packages.txt lists this package as unstable, so it may
+// change in any release without a note.
 package buildinfo
 
 import (

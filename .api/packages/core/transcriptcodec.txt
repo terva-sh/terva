@@ -1,0 +1,38 @@
+# packages/core/transcriptcodec (unstable): its exported API, one symbol per line.
+# Written by `just api-snapshot`. `just api-check` fails when it no longer matches the code.
+ApplyImageExclusions	func	func(msgs []provider.Message, excluded map[string]bool) []provider.Message
+DecodeBlock	func	func(b WireBlock) (provider.Content, bool)
+DefaultInterruptStub	var	InterruptStub
+EncodeBlocks	func	func(blocks []provider.Content) []WireBlock
+EncodeMessage	func	func(m provider.Message) WireMessage
+ImageRejectedNote	const	untyped string
+ImageSHA256	func	func(data []byte) string
+InterruptStub	type	struct
+InterruptStub.IsError	field	bool
+InterruptStub.Text	field	string
+RepairToolUseResultPairs	func	func(msgs []provider.Message) []provider.Message
+RepairToolUseResultPairsWith	func	func(msgs []provider.Message, stub InterruptStub) []provider.Message
+WireBlock	type	struct
+WireBlock.Arguments	field	json.RawMessage
+WireBlock.CallID	field	string
+WireBlock.Content	field	[]WireBlock
+WireBlock.Data	field	[]byte
+WireBlock.Encrypted	field	string
+WireBlock.ID	field	string
+WireBlock.ImageID	field	string
+WireBlock.IsError	field	bool
+WireBlock.MimeType	field	string
+WireBlock.Name	field	string
+WireBlock.Provider	field	string
+WireBlock.RawArguments	field	string
+WireBlock.ReasoningID	field	string
+WireBlock.Shape	field	string
+WireBlock.Signature	field	string
+WireBlock.Summary	field	string
+WireBlock.Text	field	string
+WireBlock.Type	field	string
+WireMessage	type	struct
+WireMessage.Content	field	[]WireBlock
+WireMessage.Meta	field	map[string]string
+WireMessage.Role	field	provider.Role
+WireMessage.Time	field	time.Time

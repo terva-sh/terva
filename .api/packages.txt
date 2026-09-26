@@ -1,10 +1,12 @@
-# The engine's and the wire's packages, each marked stable or unstable.
+# The engine's, the wire's and the SDKs' packages, each marked stable or unstable.
 # One "<class> <package>" pair per line. `just api-snapshot` writes a snapshot
 # of each one beside this file; `just api-check` fails when a snapshot no
 # longer matches the code. README.md says what the two classes mean.
 #
-# First drawn 2026-09-24 (TKT-01M39VEJD8). TKT-01M39T6H82 decides the promise
-# and may move the line.
+# First drawn 2026-09-24 (TKT-01M39VEJD8). Decision 0026
+# (docs/decisions/0026-what-stable-means-before-1-0.md) says what each class
+# promises and why the line sits here. Inside a stable package, a symbol whose
+# doc opens a paragraph with `Unstable:` carries no promise either.
 
 # The engine: the loop, its seams, and the components a host attaches.
 stable    packages/core
@@ -22,6 +24,13 @@ stable    packages/core/compactprose
 
 # The wire: provider clients, requests and events, the model catalog.
 stable    packages/provider
+
+# The SDKs hosts already build on: embedding terva, writing an extension in Go,
+# and writing a chat connector in Go. Each wire's own types (extproto,
+# connproto) are not listed; ext marks the one piece that re-exports them.
+stable    packages/agent/sdk
+stable    packages/agent/ext
+stable    packages/agent/connsdk
 
 # Importable, and used across the boundary, but not a shape to build on yet.
 unstable  packages/core/i18n

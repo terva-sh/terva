@@ -51,6 +51,9 @@ type connectorConfig struct {
 // declaring the role costs nothing until it is actually used. The
 // connsdk.Session it receives carries the host-assigned DataDir for
 // inbound attachment files, exactly as for a standalone connector.
+//
+// Unstable: the connector role is experimental (extension protocol 5) and
+// carries no promise before 1.0.
 func (e *Extension) Connector(caps connsdk.Capabilities, newTransport func(connsdk.Session) (connsdk.Transport, error)) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

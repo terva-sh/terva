@@ -1,0 +1,10 @@
+# packages/provider/buildinfo (unstable): its exported API, one symbol per line.
+# Written by `just api-snapshot`. `just api-check` fails when it no longer matches the code.
+Get	func	func() Info
+Info	type	struct
+Info.Commit	field	string
+Info.Date	field	string
+Info.String	method	func() string
+Info.Version	field	string
+Set	func	func(i Info)
+Started	func	func() time.Time

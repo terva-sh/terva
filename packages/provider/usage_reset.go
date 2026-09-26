@@ -9,6 +9,9 @@ import (
 // ErrResetsUnsupported is returned by ClientConsumeReset when the target client
 // exposes no reset capability — a routing bug, surfaced loudly because the call
 // is meant to spend a credit.
+//
+// Unstable: plan usage resets are one vendor's feature and carry no promise
+// before 1.0.
 var ErrResetsUnsupported = errors.New("provider does not support usage resets")
 
 // A usage RESET is a consumable credit that clears a provider's usage windows
@@ -20,8 +23,15 @@ var ErrResetsUnsupported = errors.New("provider does not support usage resets")
 // windows. See docs/proposals/usage-resets.md.
 
 // ResetStatus is the lifecycle of a single reset credit.
+//
+// Unstable: plan usage resets are one vendor's feature and carry no promise
+// before 1.0.
 type ResetStatus string
 
+// The ResetStatus values.
+//
+// Unstable: plan usage resets are one vendor's feature and carry no promise
+// before 1.0.
 const (
 	// ResetAvailable is a credit that can be redeemed now.
 	ResetAvailable ResetStatus = "available"
@@ -37,6 +47,9 @@ const (
 // UsageReset is one consumable reset credit. Fields mirror what a provider
 // exposes; a provider fills what it has and leaves the rest zero. Times are
 // UTC; a zero time means the provider did not report that timestamp.
+//
+// Unstable: plan usage resets are one vendor's feature and carry no promise
+// before 1.0.
 type UsageReset struct {
 	// ID is the provider's opaque credit identifier, passed back to redeem.
 	ID string
@@ -61,6 +74,9 @@ type UsageReset struct {
 func (r UsageReset) Available() bool { return r.Status == ResetAvailable }
 
 // UsageResetResult is the outcome of redeeming one credit.
+//
+// Unstable: plan usage resets are one vendor's feature and carry no promise
+// before 1.0.
 type UsageResetResult struct {
 	// Reset is the credit in its post-redemption state (Status ResetRedeemed,
 	// RedeemedAt set).
@@ -80,6 +96,9 @@ type UsageResetResult struct {
 // Implementations make redemption idempotent per credit so a retried or
 // timed-out call cannot double-spend (see the codex client's deterministic
 // request id).
+//
+// Unstable: plan usage resets are one vendor's feature and carry no promise
+// before 1.0.
 type UsageResetProvider interface {
 	// ListResets returns the account's reset credits — available and spent —
 	// newest grant first. A nil slice with nil error means "none".
@@ -92,6 +111,9 @@ type UsageResetProvider interface {
 
 // ClientSupportsResets reports whether c (through any wrapper layer) exposes
 // consumable usage resets — the gate for showing a /resets affordance at all.
+//
+// Unstable: plan usage resets are one vendor's feature and carry no promise
+// before 1.0.
 func ClientSupportsResets(c Client) bool {
 	_, ok := clientAs[UsageResetProvider](c)
 	return ok
@@ -100,6 +122,9 @@ func ClientSupportsResets(c Client) bool {
 // ClientListResets lists c's reset credits, looking through wrapper layers for
 // a UsageResetProvider. Returns (nil, nil) when the client offers no resets, so
 // a caller can treat "no support" and "supported but empty" the same way.
+//
+// Unstable: plan usage resets are one vendor's feature and carry no promise
+// before 1.0.
 func ClientListResets(ctx context.Context, c Client) ([]UsageReset, error) {
 	if r, ok := clientAs[UsageResetProvider](c); ok {
 		return r.ListResets(ctx)
@@ -111,6 +136,9 @@ func ClientListResets(ctx context.Context, c Client) ([]UsageReset, error) {
 // Returns ErrResetsUnsupported when the client offers no resets, so a
 // mis-routed consume fails loudly rather than silently no-opping (this call
 // spends a credit — a silent success would be a lie).
+//
+// Unstable: plan usage resets are one vendor's feature and carry no promise
+// before 1.0.
 func ClientConsumeReset(ctx context.Context, c Client, id string) (UsageResetResult, error) {
 	if r, ok := clientAs[UsageResetProvider](c); ok {
 		return r.ConsumeReset(ctx, id)

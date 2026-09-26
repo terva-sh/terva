@@ -116,6 +116,11 @@ type codexClient struct {
 // NewOpenAICodex creates a client that talks to ChatGPT's Codex endpoint
 // using a subscription OAuth access token and the user's ChatGPT
 // account id. baseURL may be empty to use the default.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewOpenAICodex(token, accountID, baseURL string) Client {
 	return NewOpenAICodexSource(StaticCredential(token), accountID, baseURL)
 }
@@ -123,6 +128,11 @@ func NewOpenAICodex(token, accountID, baseURL string) Client {
 // NewOpenAICodexSource is NewOpenAICodex with a CredentialSource instead of a
 // fixed token, so the OAuth access token can rotate (refresh) without
 // rebuilding the client — the client resolves it once per Stream.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewOpenAICodexSource(cred CredentialSource, accountID, baseURL string, opts ...CodexOption) Client {
 	if baseURL == "" {
 		baseURL = codexDefaultBaseURL
@@ -141,6 +151,8 @@ func NewOpenAICodexSource(cred CredentialSource, accountID, baseURL string, opts
 
 // CodexOption configures a codex client at construction. Variadic so the
 // several existing call sites, the live probes among them, keep compiling.
+//
+// Unstable: a vendor's configuration carries no promise before 1.0.
 type CodexOption func(*codexClient)
 
 // The client identities the codex wire understands.
@@ -149,6 +161,8 @@ type CodexOption func(*codexClient)
 // OFF by default and an operator turns it on per provider in the user layer.
 // Read the header block in Stream for what the measurements say about whether
 // it buys anything: the short version is that they say it does not.
+//
+// Unstable: a client identity knob carries no promise before 1.0.
 const (
 	CodexIdentityTerva  = ""
 	CodexIdentityNative = "native"
@@ -158,6 +172,8 @@ const (
 // implements. The configuration layer calls it so an operator's typo reports as
 // a refusal rather than silently keeping the default, which is the failure a
 // keyword setting exists to avoid.
+//
+// Unstable: a client identity knob carries no promise before 1.0.
 func ValidCodexIdentity(s string) bool {
 	return s == CodexIdentityTerva || s == CodexIdentityNative
 }
@@ -165,6 +181,8 @@ func ValidCodexIdentity(s string) bool {
 // WithCodexClientIdentity sets the client identity every request presents. An
 // unrecognized value keeps the default, because a request that names terva is
 // always the safe outcome of a configuration mistake.
+//
+// Unstable: a client identity knob carries no promise before 1.0.
 func WithCodexClientIdentity(id string) CodexOption {
 	return func(c *codexClient) {
 		if ValidCodexIdentity(id) {
@@ -370,7 +388,7 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 	}
 	if m.Reasoning {
 		eff := EffectiveReasoning(req.Reasoning, req.ReasoningSet, m)
-		if effort := OpenAICodexReasoningEffort(eff, req.Model); effort != "" {
+		if effort := openAICodexReasoningEffort(eff, req.Model); effort != "" {
 			// Summary rides the same block, so it is requested only where
 			// there is reasoning to summarize: a model without reasoning, or
 			// one whose effort resolves to off, sends no reasoning config at
@@ -422,7 +440,7 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 	// Same guards as the chat-completions builder: merge any same-role adjacency
 	// an edit/delete left behind, and keep a card's seeded leading-assistant
 	// greeting valid for backends that require user-first.
-	req.Messages = EnsureLeadingUserTurn(MergeAdjacentSameRole(req.Messages))
+	req.Messages = ensureLeadingUserTurn(mergeAdjacentSameRole(req.Messages))
 
 	// Native image editing: the most-recent EditHistory assistant images are
 	// replayed as image_generation_call input items (with their bytes) so the
@@ -1017,7 +1035,7 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 					finalErr = stream.Err()
 				default:
 					stop = StopError
-					finalErr = NewStreamDeathError("openai-codex", "response.completed")
+					finalErr = newStreamDeathError("openai-codex", "response.completed")
 				}
 				sendDone()
 				return
@@ -1206,7 +1224,7 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 				}
 				_ = json.Unmarshal([]byte(ev.Data), &p)
 				// Usage's three prompt fields are DISJOINT — PromptTokens sums
-				// them and ComputeCost prices each at its own rate — so every
+				// them and computeCost prices each at its own rate — so every
 				// detail the wire breaks out has to come off the total.
 				//
 				// cached_tokens is a documented subset of input_tokens. Whether

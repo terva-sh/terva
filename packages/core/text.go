@@ -13,6 +13,8 @@ import "strings"
 // second one was about to copy it. A duplicate of a sanitizer is the worst kind:
 // a fix to the live copy silently leaves the dead twin accepting what it was
 // meant to reject.
+//
+// Unstable: a text helper carries no promise before 1.0.
 func CleanOneLine(s string, max int) string {
 	s = strings.Map(func(r rune) rune {
 		switch r {

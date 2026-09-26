@@ -182,6 +182,8 @@ const (
 // Getting this wrong in the other direction is the expensive one: an untagged
 // Codex block that stops being replayed makes the backend reject the next tool
 // call in a resumed session, while a misfiled summary costs only some prose.
+//
+// Unstable: a helper carries no promise before 1.0.
 func NormalizeLegacyReasoningShape(b ReasoningBlock) ReasoningBlock {
 	if b.Shape != "" {
 		return b
@@ -243,6 +245,8 @@ func (CompactionBlock) isContent() {}
 // A blob with no recorded provider is treated as foreign to everyone: it
 // predates provenance, and guessing that it belongs to whoever is asking is the
 // answer that loses data.
+//
+// Unstable: a helper carries no promise before 1.0.
 func ForeignCompactions(msgs []Message, providerName string) []int {
 	var out []int
 	for i, m := range msgs {
@@ -266,6 +270,8 @@ func ForeignCompactions(msgs []Message, providerName string) []int {
 // compaction repair, and provider request builders all need this so
 // the upstream API never sees a tool_call_id with no corresponding
 // assistant tool_call earlier in the same request.
+//
+// Unstable: a helper carries no promise before 1.0.
 func RepairOrphanedToolResults(msgs []Message) []Message {
 	useIDs := map[string]bool{}
 	for _, m := range msgs {

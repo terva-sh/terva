@@ -6,34 +6,34 @@ ApprovalMode	type	string
 ApprovalPlan	const	ApprovalMode
 ApprovalWorkspace	const	ApprovalMode
 ApprovalYolo	const	ApprovalMode
-AuthExternalMutate	const	Authority
-AuthLocalData	const	Authority
-AuthLocalRead	const	Authority
-AuthNetworkRead	const	Authority
-AuthProcessExec	const	Authority
-AuthUserInteraction	const	Authority
-AuthWorkspaceMutate	const	Authority
-Authority	type	string
+AuthExternalMutate	const unstable	Authority
+AuthLocalData	const unstable	Authority
+AuthLocalRead	const unstable	Authority
+AuthNetworkRead	const unstable	Authority
+AuthProcessExec	const unstable	Authority
+AuthUserInteraction	const unstable	Authority
+AuthWorkspaceMutate	const unstable	Authority
+Authority	type unstable	string
 BuildPreview	func	func(args json.RawMessage, maxLen int) string
-Classifier	type	interface
-Classifier.Classify	method	func(ctx context.Context, req ClassifyRequest) ClassifyResult
+Classifier	type unstable	interface
+Classifier.Classify	method unstable	func(ctx context.Context, req ClassifyRequest) ClassifyResult
 ClassifierApprove	const	ClassifierMode
 ClassifierMode	type	string
 ClassifierMode.Enabled	method	func() bool
 ClassifierOff	const	ClassifierMode
 ClassifierScreen	const	ClassifierMode
-ClassifyAbstain	const	ClassifyVerdict
-ClassifyApprove	const	ClassifyVerdict
-ClassifyDeny	const	ClassifyVerdict
-ClassifyRequest	type	struct
-ClassifyRequest.Args	field	json.RawMessage
-ClassifyRequest.Mode	field	ApprovalMode
-ClassifyRequest.Preview	field	string
-ClassifyRequest.Tool	field	string
-ClassifyResult	type	struct
-ClassifyResult.Reason	field	string
-ClassifyResult.Verdict	field	ClassifyVerdict
-ClassifyVerdict	type	string
+ClassifyAbstain	const unstable	ClassifyVerdict
+ClassifyApprove	const unstable	ClassifyVerdict
+ClassifyDeny	const unstable	ClassifyVerdict
+ClassifyRequest	type unstable	struct
+ClassifyRequest.Args	field unstable	json.RawMessage
+ClassifyRequest.Mode	field unstable	ApprovalMode
+ClassifyRequest.Preview	field unstable	string
+ClassifyRequest.Tool	field unstable	string
+ClassifyResult	type unstable	struct
+ClassifyResult.Reason	field unstable	string
+ClassifyResult.Verdict	field unstable	ClassifyVerdict
+ClassifyVerdict	type unstable	string
 ConfirmDecision	type	struct
 ConfirmDecision.Allow	field	bool
 ConfirmDecision.PersistScopes	field	[]string
@@ -42,20 +42,20 @@ ConfirmDecision.Reason	field	string
 ConfirmDecision.RememberAll	field	bool
 ConfirmDecision.RememberTool	field	bool
 ConfirmGate	type	struct
-ConfirmGate.AllowAll	method	func()
+ConfirmGate.AllowAll	method unstable	func()
 ConfirmGate.Check	method	func(ctx context.Context, toolName string, args json.RawMessage, preview, callID string) (bool, string, json.RawMessage)
 ConfirmGate.ClassifierMode	method	func() ClassifierMode
 ConfirmGate.ClearAllowAll	method	func()
 ConfirmGate.Grants	method	func() (allowAll bool, tools []string)
 ConfirmGate.Mode	method	func() ApprovalMode
-ConfirmGate.Reset	method	func()
+ConfirmGate.Reset	method unstable	func()
 ConfirmGate.Revoke	method	func(toolName string)
-ConfirmGate.Rules	method	func() []PermissionRule
-ConfirmGate.SetClassifier	method	func(c Classifier, mode ClassifierMode)
+ConfirmGate.Rules	method unstable	func() []PermissionRule
+ConfirmGate.SetClassifier	method unstable	func(c Classifier, mode ClassifierMode)
 ConfirmGate.SetConfirmer	method	func(c Confirmer)
 ConfirmGate.SetMode	method	func(m ApprovalMode)
 ConfirmGate.SetPersist	method	func(fn func(toolName, argsPattern string))
-ConfirmGate.SetRules	method	func(rules []PermissionRule)
+ConfirmGate.SetRules	method unstable	func(rules []PermissionRule)
 ConfirmGate.SetScopeDeriver	method	func(fn func(toolName string, args json.RawMessage) []GrantScope)
 ConfirmRequest	type	struct
 ConfirmRequest.CallID	field	string
@@ -71,33 +71,33 @@ ConfirmerWithRequest.ConfirmWithRequest	method	func(ctx context.Context, req Con
 GrantScope	type	struct
 GrantScope.Display	field	string
 GrantScope.Pattern	field	string
-IsReadOnlyAuthority	func	func(a string) bool
+IsReadOnlyAuthority	func unstable	func(a string) bool
 NewConfirmGate	func	func(inner Confirmer) *ConfirmGate
-NewPolicyGate	func	func(policy *PermissionPolicy, inner Confirmer) *ConfirmGate
+NewPolicyGate	func unstable	func(policy *PermissionPolicy, inner Confirmer) *ConfirmGate
 ParseApprovalMode	func	func(s string) (ApprovalMode, error)
 ParseClassifierMode	func	func(s string) (ClassifierMode, error)
-PermissionPolicy	type	struct
-PermissionPolicy.Builtin	field	map[string]bool
-PermissionPolicy.DecomposeCommand	field	func(toolName string, args json.RawMessage) []json.RawMessage
-PermissionPolicy.EditTools	field	map[string]bool
-PermissionPolicy.Evaluate	method	func(toolName string, args json.RawMessage) (PolicyVerdict, string)
-PermissionPolicy.Interactive	field	map[string]bool
-PermissionPolicy.Mode	field	ApprovalMode
-PermissionPolicy.PlanKeeps	field	map[string]bool
-PermissionPolicy.ReadOnly	field	*core.ReadOnlySet
-PermissionPolicy.Rules	field	[]PermissionRule
-PermissionRule	type	struct
-PermissionRule.Args	field	*regexp.Regexp
-PermissionRule.Decision	field	RuleDecision
-PermissionRule.Reason	field	string
-PermissionRule.Source	field	string
-PermissionRule.Tool	field	string
-PolicyVerdict	type	int
-RuleAllow	const	RuleDecision
-RuleAsk	const	RuleDecision
-RuleDecision	type	string
-RuleDeny	const	RuleDecision
+PermissionPolicy	type unstable	struct
+PermissionPolicy.Builtin	field unstable	map[string]bool
+PermissionPolicy.DecomposeCommand	field unstable	func(toolName string, args json.RawMessage) []json.RawMessage
+PermissionPolicy.EditTools	field unstable	map[string]bool
+PermissionPolicy.Evaluate	method unstable	func(toolName string, args json.RawMessage) (PolicyVerdict, string)
+PermissionPolicy.Interactive	field unstable	map[string]bool
+PermissionPolicy.Mode	field unstable	ApprovalMode
+PermissionPolicy.PlanKeeps	field unstable	map[string]bool
+PermissionPolicy.ReadOnly	field unstable	*core.ReadOnlySet
+PermissionPolicy.Rules	field unstable	[]PermissionRule
+PermissionRule	type unstable	struct
+PermissionRule.Args	field unstable	*regexp.Regexp
+PermissionRule.Decision	field unstable	RuleDecision
+PermissionRule.Reason	field unstable	string
+PermissionRule.Source	field unstable	string
+PermissionRule.Tool	field unstable	string
+PolicyVerdict	type unstable	int
+RuleAllow	const unstable	RuleDecision
+RuleAsk	const unstable	RuleDecision
+RuleDecision	type unstable	string
+RuleDeny	const unstable	RuleDecision
 ToolPreview	func	func(t core.Tool, args json.RawMessage, maxLen int) string
-VerdictAllow	const	PolicyVerdict
-VerdictAsk	const	PolicyVerdict
-VerdictDeny	const	PolicyVerdict
+VerdictAllow	const unstable	PolicyVerdict
+VerdictAsk	const unstable	PolicyVerdict
+VerdictDeny	const unstable	PolicyVerdict

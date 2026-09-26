@@ -1,8 +1,10 @@
 # The engine's API record
 
-This directory records the exported API of terva's engine (`packages/core`)
-and wire (`packages/provider`), one file per package. It measures the API. It
-makes no promise about it.
+This directory records the exported API of terva's engine (`packages/core`),
+its wire (`packages/provider`) and the SDKs hosts build on (`packages/agent/sdk`,
+`ext` and `connsdk`), one file per package. It measures the API, and the two
+classes below say what each part promises. Nothing here blocks a break before
+1.0. The diff under `.api/` shows it at review.
 
 - `packages.txt` lists each package and marks it `stable` or `unstable`.
 - `packages/…/<name>.txt` is a package's snapshot: every exported symbol, its
@@ -11,8 +13,10 @@ makes no promise about it.
 ## The two classes
 
 - **stable**: we intend a host to build on it. Before 1.0 it can still
-  break. When it does, the break is counted, and the snapshot diff shows it
-  in review.
+  break, but only in a minor release, and `docs/migrating.md` carries a
+  migration note for each break. The break is counted, and the snapshot diff
+  shows it in review. Raising the `go` line of `go.mod` counts as a stable
+  break.
 - **unstable**: a host can import it, and it may change in any release
   without a note.
 
@@ -67,6 +71,17 @@ stable.
   counts in its own class: a symbol marked `Unstable:` counts as unstable,
   even in a stable package. It also reports how many symbols the stable
   packages mark now and at the ref.
+- `just migration-notes [REF]` compares the same breaks with the notes under
+  "Unreleased" in `docs/migrating.md`, and in any section sealed for a release
+  that has not published. It lists each stable break no note
+  covers, and each name in a note that covers no break of its class. That
+  page's "Writing a note" section gives the format. It fails on either
+  finding. Both CI lanes run it on every pull request, and so do `just ci`
+  and `just ci-docs`.
+- `just migration-notes-seal VERSION` moves the Unreleased notes under a
+  `## VERSION` heading before that release is cut, with the per-class count on
+  top. It refuses while a stable break has no note, and the cut refuses notes
+  left unsealed. `docs/plans/release-process.md` gives the whole flow.
 
 The census reads one package directory at a time, so a subpackage never shares
 a namespace with its parent.

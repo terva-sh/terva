@@ -33,7 +33,7 @@ func ClassifyRecoverable(err error) (bool, string) {
 
 	// Don't trigger on payload-too-large or context-length overflow;
 	// those paths have their own compact-and-retry handling.
-	if IsPayloadTooLargeError(err) || IsContextLengthError(err) {
+	if isPayloadTooLargeError(err) || isContextLengthError(err) {
 		return false, ""
 	}
 
@@ -103,11 +103,11 @@ func ClassifyRecoverable(err error) (bool, string) {
 	return false, ""
 }
 
-// IsPayloadTooLargeError matches HTTP 413 responses surfaced by the
+// isPayloadTooLargeError matches HTTP 413 responses surfaced by the
 // provider clients — typed status first, with a prose fallback for
 // untyped errors and for providers that phrase oversize rejections
 // without the status code.
-func IsPayloadTooLargeError(err error) bool {
+func isPayloadTooLargeError(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -119,13 +119,13 @@ func IsPayloadTooLargeError(err error) bool {
 	return strings.Contains(msg, "http 413") || strings.Contains(msg, " 413") || strings.HasPrefix(msg, "413 ") || strings.Contains(msg, "payload too large") || strings.Contains(msg, "request entity too large")
 }
 
-// IsContextLengthError matches provider rejections of a transcript that
+// isContextLengthError matches provider rejections of a transcript that
 // outgrew the model's context window. Providers phrase this as an HTTP
 // 400 (no dedicated status like 413), so the message text is the
 // discriminator for typed and untyped errors alike. The needle list is
 // deliberately conservative — a false positive would trigger a
 // compact-and-retry on an unrelated validation error.
-func IsContextLengthError(err error) bool {
+func isContextLengthError(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -144,6 +144,8 @@ func IsContextLengthError(err error) bool {
 // provider error, falling back to parsing the conventional
 // "provider: http NNN: …" prefix for untyped errors. Returns "" when
 // nothing recognisable is found.
+//
+// Unstable: a text helper carries no promise before 1.0.
 func ExtractFailedProvider(err error) string {
 	if err == nil {
 		return ""
@@ -201,14 +203,14 @@ const AutoCompactKeepTail = 4
 // without lying about the model's true ceiling. window is 0 when the
 // model is unknown; used is 0 before any request lands usage.
 func (a *Agent) ContextUsage() (used, window int) {
-	// a.Model under the lock: SetModel and SetClientAndModel write it there, and
+	// a.model under the lock: SetModel and SetClientAndModel write it there, and
 	// this is called from the turn loop while a host may be swapping models on
 	// another goroutine. The unlocked read this replaces was a real data race —
 	// latent only because nothing had exercised the two concurrently. No caller
 	// holds a.mu (runLoop, oneTurn after its snapshot, compactHeld, the policy
 	// checks), so taking it here cannot re-enter.
 	a.mu.Lock()
-	model := a.Model
+	model := a.model
 	a.mu.Unlock()
 
 	if m, err := a.Catalog().FindModel("", model); err == nil {
@@ -315,7 +317,7 @@ func (a *Agent) PromptWithPolicyExtra(ctx context.Context, prompt string, images
 	// re-send the turn without the attachment manifest, and the model would be
 	// asked about files it had just been told about and now could not see.
 	err := a.promptExtra(ctx, prompt, images, extras, sink)
-	if err != nil && ctx.Err() == nil && (IsPayloadTooLargeError(err) || IsContextLengthError(err)) {
+	if err != nil && ctx.Err() == nil && (isPayloadTooLargeError(err) || isContextLengthError(err)) {
 		d := a.Compaction(CompactOversize)
 		if !d.Compact {
 			return err
@@ -364,7 +366,9 @@ func (a *Agent) PromptWithPolicyExtra(ctx context.Context, prompt string, images
 // through EvCompactEnd, and the turn proceeds — expensively, which is exactly
 // the outcome they were trying to avoid, but not destructively.
 func (a *Agent) offerCompactOnPrefixChange(ctx context.Context, compact func(reason string, d CompactionDecision) error) {
-	asker := a.Asker
+	a.mu.Lock()
+	asker := a.asker
+	a.mu.Unlock()
 	if asker == nil {
 		return
 	}
@@ -377,17 +381,17 @@ func (a *Agent) offerCompactOnPrefixChange(ctx context.Context, compact func(rea
 		return
 	}
 
-	compactNow := i18n.T("Compact first")
+	compactNow := i18n.In(a.translator).T("Compact first")
 	ans, err := AskOne(ctx, asker, UserQuestion{
-		Question: i18n.T(
+		Question: i18n.In(a.translator).T(
 			"Since your last message %s, so the provider's cached prompt no longer matches: the next request re-reads %s tokens at full price instead of serving them from cache. Compact the conversation first? The summary is written against the prompt that is still cached, so it costs a fraction of the re-read.",
 			reason, compactprose.Tokens(tokens)),
-		Options: []string{compactNow, i18n.T("Send as-is")},
+		Options: []string{compactNow, i18n.In(a.translator).T("Send as-is")},
 	})
 	if err != nil || ans.Declined || ans.Answer != compactNow {
 		return
 	}
-	_ = compact(i18n.T("prompt cache invalidated: %s", reason), d)
+	_ = compact(i18n.In(a.translator).T("prompt cache invalidated: %s", reason), d)
 }
 
 // shortErrorText trims a long http-payload error to something

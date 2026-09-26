@@ -38,6 +38,8 @@ import (
 //
 // This builds the body only. It opens no connection, needs no credential, and
 // is safe to run against a session file that is in use.
+//
+// Unstable: a request dump is a debugging aid and carries no promise.
 func DumpRequestJSONL(providerName, authMethod string, req Request) ([]byte, error) {
 	body, inputField, err := wireBody(providerName, authMethod, req)
 	if err != nil {

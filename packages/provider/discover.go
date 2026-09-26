@@ -16,6 +16,8 @@ import (
 // The paging and parsing are shared with DiscoverAnthropicCompatible (see
 // anthropic_compatible.go), which reads the same response shape off an
 // operator's own endpoint with its own auth header and version.
+//
+// Unstable: per-vendor model discovery carries no promise before 1.0.
 func DiscoverAnthropic(ctx context.Context, apiKey, baseURL string) ([]Model, error) {
 	if baseURL == "" {
 		baseURL = anthropicDefaultBaseURL
@@ -40,6 +42,8 @@ func DiscoverAnthropic(ctx context.Context, apiKey, baseURL string) ([]Model, er
 }
 
 // DiscoverOpenAI lists model ids visible to key on api.openai.com.
+//
+// Unstable: per-vendor model discovery carries no promise before 1.0.
 func DiscoverOpenAI(ctx context.Context, apiKey, baseURL string) ([]Model, error) {
 	if baseURL == "" {
 		baseURL = openaiDefaultBaseURL
@@ -88,6 +92,8 @@ func DiscoverOpenAI(ctx context.Context, apiKey, baseURL string) ([]Model, error
 // DiscoverGoogle lists Gemini model ids visible to key on
 // generativelanguage.googleapis.com. The API paginates with
 // nextPageToken; we follow it until exhausted.
+//
+// Unstable: per-vendor model discovery carries no promise before 1.0.
 func DiscoverGoogle(ctx context.Context, apiKey, baseURL string) ([]Model, error) {
 	if baseURL == "" {
 		baseURL = geminiDefaultBaseURL
@@ -213,6 +219,8 @@ func looksLikeChatModel(id string) bool {
 //
 // known is the catalog the discovered rows borrow reasoning from (see
 // openAICompatCaps): the host's, passed in, since the wire holds none.
+//
+// Unstable: per-vendor model discovery carries no promise before 1.0.
 func DiscoverOpenAICompatible(ctx context.Context, baseURL, key string, defaultCtx int, known []Model) ([]Model, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
@@ -453,6 +461,8 @@ const openrouterDefaultBaseURL = "https://openrouter.ai/api/v1"
 // endpoint (no auth). Per-token USD prices are converted to USD per 1M
 // tokens to match the rest of the catalog. baseURL defaults to the
 // public endpoint.
+//
+// Unstable: per-vendor model discovery carries no promise before 1.0.
 func DiscoverOpenRouter(ctx context.Context, baseURL string) ([]Model, error) {
 	if baseURL == "" {
 		baseURL = openrouterDefaultBaseURL

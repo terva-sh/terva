@@ -4,7 +4,7 @@ package provider
 //
 // Most are OpenAI Chat Completions–compatible, so they reuse `openaiClient`
 // with a different name + base URL. A handful speak the Anthropic Messages
-// API and reuse `anthropicClient` via NewAnthropicCompat below.
+// API and reuse `anthropicClient` via newAnthropicCompat below.
 //
 // Providers with a non-trivial protocol (Bedrock Converse, Vertex SSE, Azure
 // Responses, Mistral Conversations) are stubbed so the host wiring compiles.
@@ -77,47 +77,92 @@ func NewOpenAICompatible(apiKey, baseURL string) Client {
 
 // NewMoonshot is the global Moonshot AI endpoint (Kimi-K2 family by id).
 // Provider id is `moonshotai`.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewMoonshot(apiKey, baseURL string) Client {
 	return newOpenAICompat("moonshotai", apiKey, baseURL, "https://api.moonshot.ai/v1")
 }
 
 // NewMoonshotCN is the China-region Moonshot endpoint. Same model ids as
 // the global flavor, different base URL.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewMoonshotCN(apiKey, baseURL string) Client {
 	return newOpenAICompat("moonshotai-cn", apiKey, baseURL, "https://api.moonshot.cn/v1")
 }
 
 // NewCerebras: ultra-fast inference (Llama/Qwen/GPT-OSS/GLM).
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewCerebras(apiKey, baseURL string) Client {
 	return newOpenAICompat("cerebras", apiKey, baseURL, "https://api.cerebras.ai/v1")
 }
 
 // NewGroq: LPU inference (Llama/Kimi/Qwen/GPT-OSS).
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewGroq(apiKey, baseURL string) Client {
 	return newOpenAICompat("groq", apiKey, baseURL, "https://api.groq.com/openai/v1")
 }
 
 // NewXAI: xAI Grok.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewXAI(apiKey, baseURL string) Client {
 	return newOpenAICompat("xai", apiKey, baseURL, "https://api.x.ai/v1")
 }
 
 // NewTogether: Together.ai aggregator.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewTogether(apiKey, baseURL string) Client {
 	return newOpenAICompat("together", apiKey, baseURL, "https://api.together.ai/v1")
 }
 
 // NewHuggingFace: HF inference router.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewHuggingFace(apiKey, baseURL string) Client {
 	return newOpenAICompat("huggingface", apiKey, baseURL, "https://router.huggingface.co/v1")
 }
 
 // NewZAI: Z.AI GLM family.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewZAI(apiKey, baseURL string) Client {
 	return newOpenAICompat("zai", apiKey, baseURL, "https://api.z.ai/api/coding/paas/v4")
 }
 
 // NewXiaomi: Xiaomi MiMo family (default endpoint).
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewXiaomi(apiKey, baseURL string) Client {
 	return newOpenAICompat("xiaomi", apiKey, baseURL, "https://api.xiaomimimo.com/v1")
 }
@@ -125,6 +170,11 @@ func NewXiaomi(apiKey, baseURL string) Client {
 // NewXiaomiTokenPlan creates a regional Xiaomi token-plan client.
 // region must be "ams", "cn", or "sgp", matching the three
 // `xiaomi-token-plan-*` provider ids.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewXiaomiTokenPlan(region, apiKey, baseURL string) Client {
 	var fallback string
 	var name string
@@ -151,6 +201,11 @@ func NewXiaomiTokenPlan(region, apiKey, baseURL string) Client {
 // GET /api/v1/key (works with the normal inference key) for the key's
 // credit limit/remaining + lifetime spend. The dialog renders it as
 // `Credits`; no subscription windows.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewOpenRouter(apiKey, baseURL string) Client {
 	base := firstNonEmptyString(baseURL, openrouterDefaultBaseURL)
 	inner := newOpenAICompat("openrouter", apiKey, base, openrouterDefaultBaseURL)
@@ -168,11 +223,11 @@ func NewOpenRouter(apiKey, baseURL string) Client {
 // anthropicClient with a custom name.
 // ----------------------------------------------------------------------
 
-// NewAnthropicCompat returns an anthropicClient pinned to a non-default
+// newAnthropicCompat returns an anthropicClient pinned to a non-default
 // base URL and identifying as `name` for cost / logging purposes. Auth is
 // API key (x-api-key header). For OAuth-fronted compatibles (rare) use
-// NewAnthropicOAuth and rename via NameClient.
-func NewAnthropicCompat(name, apiKey, baseURL string, opts ...ClientOption) Client {
+// NewAnthropicOAuthSource and rename via NameClient.
+func newAnthropicCompat(name, apiKey, baseURL string, opts ...ClientOption) Client {
 	if baseURL == "" {
 		baseURL = anthropicDefaultBaseURL
 	}
@@ -188,6 +243,11 @@ func NewAnthropicCompat(name, apiKey, baseURL string, opts ...ClientOption) Clie
 // NewKimiCodingWithHeaders is the Kimi Code client: Kimi behind the
 // Anthropic Messages API at https://api.kimi.com/coding (replaces the
 // older OpenAI-completions-on-/coding/v1 wiring).
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewKimiCodingWithHeaders(apiKey, baseURL string, headers map[string]string, opts ...ClientOption) Client {
 	return NewKimiCodingSourceWithHeaders(StaticCredential(apiKey), baseURL, headers, opts...)
 }
@@ -196,6 +256,11 @@ func NewKimiCodingWithHeaders(apiKey, baseURL string, headers map[string]string,
 // CredentialSource, so the subscription OAuth token can rotate without
 // rebuilding the client. Kimi authenticates via x-api-key (not Bearer), so the
 // client stays in non-oauth mode; only the credential value rotates.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewKimiCodingSourceWithHeaders(cred CredentialSource, baseURL string, headers map[string]string, opts ...ClientOption) Client {
 	if baseURL == "" {
 		baseURL = "https://api.kimi.com/coding"
@@ -222,26 +287,46 @@ func NewKimiCodingSourceWithHeaders(cred CredentialSource, baseURL string, heade
 
 // NewMinimaxAnthropic is the anthropic-messages flavor on
 // api.minimax.io/anthropic, catalogued under provider=minimax.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewMinimaxAnthropic(apiKey, baseURL string, opts ...ClientOption) Client {
-	return NewAnthropicCompat("minimax", apiKey, firstNonEmptyString(baseURL, "https://api.minimax.io/anthropic"), opts...)
+	return newAnthropicCompat("minimax", apiKey, firstNonEmptyString(baseURL, "https://api.minimax.io/anthropic"), opts...)
 }
 
 // NewMinimaxCNAnthropic is the CN-region MiniMax (anthropic-messages).
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewMinimaxCNAnthropic(apiKey, baseURL string, opts ...ClientOption) Client {
-	return NewAnthropicCompat("minimax-cn", apiKey, firstNonEmptyString(baseURL, "https://api.minimaxi.com/anthropic"), opts...)
+	return newAnthropicCompat("minimax-cn", apiKey, firstNonEmptyString(baseURL, "https://api.minimaxi.com/anthropic"), opts...)
 }
 
 // NewFireworksAnthropic is the main Fireworks route. The
 // anthropic-messages-compatible endpoint at api.fireworks.ai/inference
 // expects Anthropic-style request bodies; use this rather than the
 // OpenAI flavor.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewFireworksAnthropic(apiKey, baseURL string, opts ...ClientOption) Client {
-	return NewAnthropicCompat("fireworks", apiKey, firstNonEmptyString(baseURL, "https://api.fireworks.ai/inference"), opts...)
+	return newAnthropicCompat("fireworks", apiKey, firstNonEmptyString(baseURL, "https://api.fireworks.ai/inference"), opts...)
 }
 
 // NewVercelGatewayAnthropic — Vercel AI Gateway anthropic-messages route.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewVercelGatewayAnthropic(apiKey, baseURL string, opts ...ClientOption) Client {
-	return NewAnthropicCompat("vercel-ai-gateway", apiKey, firstNonEmptyString(baseURL, "https://ai-gateway.vercel.sh"), opts...)
+	return newAnthropicCompat("vercel-ai-gateway", apiKey, firstNonEmptyString(baseURL, "https://ai-gateway.vercel.sh"), opts...)
 }
 
 // ----------------------------------------------------------------------
@@ -272,17 +357,27 @@ func (c *unimplementedClient) Stream(ctx context.Context, req Request) (<-chan E
 }
 
 // NewBedrock returns an AWS Bedrock client. See amazon_bedrock.go for the
-// hand-rolled Converse-Stream wire-format parser and NewBedrockClient for how
-// cfg authenticates.
+// hand-rolled Converse-Stream wire-format parser. BedrockConfig says how cfg
+// authenticates.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewBedrock(cfg BedrockConfig, baseURL string) Client {
-	return NewBedrockClient(cfg, baseURL)
+	return newBedrockClient(cfg, baseURL)
 }
 
 // NewGoogleVertex returns a Vertex AI client. See google_vertex.go for
 // the full auth + URL-rewrite implementation, and VertexConfig for what it
 // needs.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewGoogleVertex(v VertexConfig, opts ...ClientOption) Client {
-	return NewVertex(v, opts...)
+	return newVertex(v, opts...)
 }
 
 // NewAzureOpenAIResponses delegates to the real Azure OpenAI client.
@@ -291,8 +386,13 @@ func NewGoogleVertex(v VertexConfig, opts ...ClientOption) Client {
 // agent loop) to avoid duplicating the full openai-responses wire
 // client. Models register under provider id `azure-openai-responses`
 // so user catalogs keep working unchanged.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewAzureOpenAIResponses(apiKey, baseURL string, cfg AzureOpenAIConfig) Client {
-	return NewAzureOpenAI(apiKey, baseURL, cfg)
+	return newAzureOpenAI(apiKey, baseURL, cfg)
 }
 
 // NewMistral returns a Mistral client using their OpenAI-compatible Chat
@@ -300,6 +400,11 @@ func NewAzureOpenAIResponses(apiKey, baseURL string, cfg AzureOpenAIConfig) Clie
 // bespoke "Conversations" API, but the OpenAI-compat endpoint supports
 // the same models with tool calling and streaming, so we use that for
 // simplicity (no extra wire format to maintain).
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewMistral(apiKey, baseURL string) Client {
 	return newOpenAICompat("mistral", apiKey, baseURL, "https://api.mistral.ai/v1")
 }
@@ -335,6 +440,11 @@ func resolveCloudflareURL(template string, cfg CloudflareConfig) (string, error)
 // the Workers AI base URL with the account ID substituted. Returns an
 // erroring client (deferred error on first Stream call) when an ID the URL
 // needs is missing, so the constructor signature stays the same.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewCloudflareWorkersAI(apiKey, baseURL string, cfg CloudflareConfig) Client {
 	if baseURL == "" {
 		baseURL = "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
@@ -350,6 +460,11 @@ func NewCloudflareWorkersAI(apiKey, baseURL string, cfg CloudflareConfig) Client
 // route). Sends `cf-aig-authorization` instead of `Authorization` so
 // the gateway authenticates the caller (downstream-provider auth is
 // configured per-gateway in the Cloudflare dashboard).
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewCloudflareAIGateway(apiKey, baseURL string, cfg CloudflareConfig) Client {
 	if baseURL == "" {
 		baseURL = "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat"
@@ -379,11 +494,16 @@ func NewCloudflareAIGateway(apiKey, baseURL string, cfg CloudflareConfig) Client
 //
 // baseURL is ignored: the canonical host is read from `proxy-ep=...` in
 // the short-lived token's value.
+//
+// Unstable: a per-vendor constructor carries no promise before 1.0. The
+// protocol clients (NewAnthropic, NewAnthropicCompatible, NewOpenAI,
+// NewOpenAICompatible, NewOpenAIResponses, NewGemini) are the stable way to
+// reach a model.
 func NewGithubCopilot(apiKey, _ string) Client {
 	if apiKey == "" {
 		return &unimplementedClient{name: "github-copilot", hint: "set COPILOT_GITHUB_TOKEN", wire: reasoningWireOpenAICompat}
 	}
-	return NewGithubCopilotClient(apiKey)
+	return newGithubCopilotClient(apiKey)
 }
 
 // ----------------------------------------------------------------------

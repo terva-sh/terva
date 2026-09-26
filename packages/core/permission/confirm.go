@@ -30,7 +30,7 @@ type ConfirmDecision struct {
 	RememberAll bool
 	// PersistTool, when true, additionally asks the host to save an
 	// allow rule for this tool name beyond the session (the gate
-	// itself cannot write config; it reports through the OnPersist
+	// itself cannot write config; it reports through the SetPersist
 	// callback). Implies RememberTool for the current session.
 	PersistTool bool
 	// PersistScopes narrows a PersistTool grant to the given args
@@ -171,6 +171,10 @@ func NewConfirmGate(inner Confirmer) *ConfirmGate {
 // NewPolicyGate returns a gate that evaluates policy first, then
 // falls back to session memory and the inner Confirmer for calls the
 // policy says to ask about.
+//
+// Unstable: the policy engine carries no promise before 1.0. The approval
+// callback (Confirmer, ConfirmDecision, ConfirmRequest, GrantScope) and the
+// ConfirmGate that calls it are stable.
 func NewPolicyGate(policy *PermissionPolicy, inner Confirmer) *ConfirmGate {
 	return &ConfirmGate{
 		policy:      policy,
@@ -181,7 +185,9 @@ func NewPolicyGate(policy *PermissionPolicy, inner Confirmer) *ConfirmGate {
 
 // SetPersist installs the host callback for durable allow grants. The
 // callback runs once per saved rule: argsPattern is the RE2 the grant is
-// narrowed to ("^git status(?:\s|$)"), or "" for a blanket tool grant.
+// narrowed to ("^git status(?:\s|$)"), or "" for a blanket tool grant. It is
+// how a durable grant (ConfirmDecision.PersistTool) reaches the host. Loading
+// the saved rules back into a policy is the policy engine's part.
 func (g *ConfirmGate) SetPersist(fn func(toolName, argsPattern string)) {
 	if g == nil {
 		return
@@ -210,6 +216,9 @@ func (g *ConfirmGate) SetScopeDeriver(fn func(toolName string, args json.RawMess
 // Both are set together on purpose: a classifier with no mode, or a mode with
 // no classifier, is a half-configured gate whose behaviour nobody can predict
 // from reading one line of wiring.
+//
+// Unstable: the classifier's implementation carries no promise before 1.0.
+// ClassifierMode, the switch that turns it on and off, is stable.
 func (g *ConfirmGate) SetClassifier(c Classifier, mode ClassifierMode) {
 	if g == nil {
 		return
@@ -270,6 +279,10 @@ func (g *ConfirmGate) SetMode(m ApprovalMode) {
 // the next Check sees the new rules. The current Mode is preserved (a live mode
 // change is not clobbered). Nil-safe; a no-op when the gate has no policy (the
 // pure-yolo fast path), where rule edits are new-session-only.
+//
+// Unstable: the policy engine carries no promise before 1.0. The approval
+// callback (Confirmer, ConfirmDecision, ConfirmRequest, GrantScope) and the
+// ConfirmGate that calls it are stable.
 func (g *ConfirmGate) SetRules(rules []PermissionRule) {
 	if g == nil {
 		return
@@ -285,6 +298,10 @@ func (g *ConfirmGate) SetRules(rules []PermissionRule) {
 
 // Rules returns a snapshot of the policy's ordered rules (for an
 // inspector UI). Nil when the gate has no policy. Nil-safe.
+//
+// Unstable: the policy engine carries no promise before 1.0. The approval
+// callback (Confirmer, ConfirmDecision, ConfirmRequest, GrantScope) and the
+// ConfirmGate that calls it are stable.
 func (g *ConfirmGate) Rules() []PermissionRule {
 	if g == nil {
 		return nil
@@ -485,6 +502,9 @@ func (g *ConfirmGate) Check(ctx context.Context, toolName string, args json.RawM
 
 // Reset clears the session memory: the session-wide allow and every
 // per-tool grant. Nil-safe.
+//
+// Unstable: nothing outside tests calls it, and it carries no promise before
+// 1.0.
 func (g *ConfirmGate) Reset() {
 	if g == nil {
 		return
@@ -498,6 +518,9 @@ func (g *ConfirmGate) Reset() {
 // AllowAll flips the gate into "always allow" for the rest of the
 // session, as an "always allow" answer from the Confirmer does, without
 // a prompt. Nil-safe.
+//
+// Unstable: nothing outside tests calls it, and it carries no promise before
+// 1.0.
 func (g *ConfirmGate) AllowAll() {
 	if g == nil {
 		return

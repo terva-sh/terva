@@ -29,8 +29,13 @@ import (
 // the other does not.
 
 // ParamKind classifies an editor-managed scalar parameter.
+//
+// Unstable: terva's own convention carries no promise before 1.0.
 type ParamKind int
 
+// The ParamKind values.
+//
+// Unstable: terva's own convention carries no promise before 1.0.
 const (
 	ParamText     ParamKind = iota // free string (base url)
 	ParamInt                       // non-negative integer (context window, max tokens)
@@ -41,6 +46,8 @@ const (
 )
 
 // ModelParam declares one scalar model override end to end.
+//
+// Unstable: terva's own convention carries no promise before 1.0.
 type ModelParam struct {
 	Key   string
 	Label string
@@ -299,6 +306,8 @@ var modelParams = []ModelParam{
 
 // ModelParams returns the editor-managed scalar model parameters, in editor
 // row order. The slice is shared; callers must not mutate it.
+//
+// Unstable: terva's own convention carries no promise before 1.0.
 func ModelParams() []ModelParam { return modelParams }
 
 // maxDisplayNameRunes bounds a models.json `name`. Not a layout decision —

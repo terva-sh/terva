@@ -12,8 +12,13 @@ import "terva.sh/terva/packages/provider"
 // a transcript ending on RoleUser is a waiting prompt, a compaction summary, or a
 // clear divider depending on metadata. Every surface that offers to resume needs
 // the same answer, so it is computed once here instead of in each of them.
+//
+// Unstable: a transcript helper carries no promise before 1.0.
 type ResumeState int
 
+// The ResumeState values.
+//
+// Unstable: a transcript helper carries no promise before 1.0.
 const (
 	// ResumeNotStuck is an ordinary idle session. The last thing in it is a
 	// finished reply, a compaction summary, or a clear divider, and the next move
@@ -68,6 +73,8 @@ func (s ResumeState) String() string {
 // left deliberately unclassified. It comes from the process dying between the
 // reply and the tool run rather than from a provider error, and resuming it
 // means presenting an unmatched tool_use to the next request.
+//
+// Unstable: a transcript helper carries no promise before 1.0.
 func ResumeStateOf(msgs []provider.Message) ResumeState {
 	if len(msgs) == 0 {
 		return ResumeNotStuck

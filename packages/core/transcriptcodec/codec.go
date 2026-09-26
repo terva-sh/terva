@@ -5,6 +5,9 @@
 // through the same codec, so both agree on what a message is), and so does
 // every store: packages/session writes the codec to JSONL, and
 // core.MemoryTranscriptStore rebuilds a transcript with the same repair.
+//
+// No promise: .api/packages.txt lists this package as unstable, so it may
+// change in any release without a note.
 package transcriptcodec
 
 import (

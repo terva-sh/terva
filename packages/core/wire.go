@@ -153,7 +153,7 @@ const (
 // speaking character (absent/empty means a narrator beat). A display surface
 // renders it with the 🎭 attribution the cast machinery uses, not as an ordinary
 // model turn; the provider request builders merge it into any adjacent assistant
-// message (MergeAdjacentSameRole), so a directed line beside a real turn is one
+// message (the provider merges same-role neighbours), so a directed line beside a real turn is one
 // turn on the wire.
 const MetaDirected = "stage:directed"
 
@@ -197,6 +197,8 @@ const MetaClear = "clear"
 // all four as turns you could jump to or fork at; playerTurns excluded the
 // host nudge and nothing else. A fifth machine-authored RoleUser message would
 // have had to be remembered in both.
+//
+// Unstable: a transcript helper carries no promise before 1.0.
 func IsUserTurn(msg provider.Message) bool {
 	if msg.Role != provider.RoleUser {
 		return false
@@ -481,6 +483,9 @@ type WireUsage struct {
 // blocks carry size only — right for --json output, swarm event logs, and
 // the legacy RPC, where inlined payloads are bloat. The control plane
 // broadcasts EventToWireFull instead.
+//
+// Unstable: a wire codec carries no promise before 1.0. The Wire types
+// themselves are the documented event and message schema, and they are stable.
 func EventToWire(ev AgentEvent) WireEvent { return eventToWire(ev, false) }
 
 // EventToWireFull is EventToWire with image payloads included (Data
@@ -489,6 +494,9 @@ func EventToWire(ev AgentEvent) WireEvent { return eventToWire(ev, false) }
 // free — the Data slices are shared, not copied — and serialized carriers
 // strip Data at the connection boundary unless the client negotiated the
 // "image-data" feature.
+//
+// Unstable: a wire codec carries no promise before 1.0. The Wire types
+// themselves are the documented event and message schema, and they are stable.
 func EventToWireFull(ev AgentEvent) WireEvent { return eventToWire(ev, true) }
 
 func eventToWire(ev AgentEvent, imageData bool) WireEvent {
@@ -610,10 +618,16 @@ func (e WireEvent) Map() map[string]any {
 
 // MessageToWire converts one transcript message to its wire form (image
 // blocks size-only; see EventToWire).
+//
+// Unstable: a wire codec carries no promise before 1.0. The Wire types
+// themselves are the documented event and message schema, and they are stable.
 func MessageToWire(m provider.Message) WireMessage { return messageToWire(m, false) }
 
 // MessageToWireFull is MessageToWire with image payloads included — the
 // form control-plane snapshots carry (see EventToWireFull).
+//
+// Unstable: a wire codec carries no promise before 1.0. The Wire types
+// themselves are the documented event and message schema, and they are stable.
 func MessageToWireFull(m provider.Message) WireMessage { return messageToWire(m, true) }
 
 func messageToWire(m provider.Message, imageData bool) WireMessage {
@@ -658,11 +672,10 @@ func messageToWire(m provider.Message, imageData bool) WireMessage {
 
 // ContentToWire converts transcript content blocks to wire form (image
 // blocks size-only; see EventToWire).
+//
+// Unstable: a wire codec carries no promise before 1.0. The Wire types
+// themselves are the documented event and message schema, and they are stable.
 func ContentToWire(blocks []provider.Content) []WireBlock { return contentToWire(blocks, false) }
-
-// ContentToWireFull is ContentToWire with image payloads included (see
-// EventToWireFull).
-func ContentToWireFull(blocks []provider.Content) []WireBlock { return contentToWire(blocks, true) }
 
 func contentToWire(blocks []provider.Content, imageData bool) []WireBlock {
 	out := make([]WireBlock, 0, len(blocks))
@@ -717,6 +730,9 @@ func contentToWire(blocks []provider.Content, imageData bool) []WireBlock {
 // full form (in-process, or a serialized carrier that negotiated
 // "image-data"), or none from the lean form — renderers then fall back to
 // their metadata line.
+//
+// Unstable: a wire codec carries no promise before 1.0. The Wire types
+// themselves are the documented event and message schema, and they are stable.
 func MessageFromWire(w WireMessage) provider.Message {
 	m := provider.Message{Role: provider.Role(w.Role), Content: ContentFromWire(w.Content)}
 	if w.Time != "" {
@@ -780,6 +796,9 @@ func MessageFromWire(w WireMessage) provider.Message {
 // ContentFromWire rebuilds transcript content blocks from wire form. Unknown
 // block types (written by a newer terva) are skipped, mirroring the session
 // loader's forward-compatibility rule.
+//
+// Unstable: a wire codec carries no promise before 1.0. The Wire types
+// themselves are the documented event and message schema, and they are stable.
 func ContentFromWire(blocks []WireBlock) []provider.Content {
 	out := make([]provider.Content, 0, len(blocks))
 	for _, b := range blocks {
@@ -813,6 +832,9 @@ func ContentFromWire(blocks []WireBlock) []provider.Content {
 // a twin is how a field gets added to one wire path and not the other: the
 // control plane's status payloads went through the copy while the event stream
 // went through this one. One converter, both callers.
+//
+// Unstable: a wire codec carries no promise before 1.0. The Wire types
+// themselves are the documented event and message schema, and they are stable.
 func UsageToWire(u provider.Usage) WireUsage {
 	return WireUsage{
 		Input:          u.InputTokens,
@@ -848,6 +870,9 @@ func usageToWire(u provider.Usage) WireUsage { return UsageToWire(u) }
 //
 // A to/from pair wants one reflection guard over both halves, not two
 // hand-written field lists that can drift apart while both compile.
+//
+// Unstable: a wire codec carries no promise before 1.0. The Wire types
+// themselves are the documented event and message schema, and they are stable.
 func UsageFromWire(w WireUsage) provider.Usage {
 	return provider.Usage{
 		InputTokens:          w.Input,

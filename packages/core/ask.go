@@ -52,6 +52,8 @@ type UserQuestion struct {
 // hold: one line, single-spaced, at most three words and 24 columns.
 // Anything longer is dropped rather than clipped — half a name in a tab
 // strip is worse than a number, which at least says where you are.
+//
+// Unstable: a text helper carries no promise before 1.0.
 func SanitizeSlug(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
 	if s == "" {

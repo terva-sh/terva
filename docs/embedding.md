@@ -47,9 +47,19 @@ or ship a single binary.
 
 ## In-process, with your own conventions: the engine
 
-`core.NewAgent(client, model, assembler, tools, gate)` is the agent loop with
-nothing chosen for you. You pass the provider client, the frame each request is
-built from, the tool registry and the permission gate. The wire takes
+`core.New(client, model, opts...)` is the agent loop with nothing chosen for
+you. Each choice is an option: `WithAssembler` for the frame each request is
+built from, `WithTools` for the tool registry, and `WithGate` for the
+permission gate, the one option `New` requires. `New` returns an error for a
+configuration it cannot build, such as a missing gate. `WithComponent` attaches
+a component such as `stall`, `lazytools` or `contextpressure` through each hook
+it implements. `Agent.Run` starts a turn from an input: `core.PromptInput` for
+a user message, `core.ContinueInput` to resume without one. `New` is the only
+constructor. The agent's settings are private: a host changes one through a
+setter such as `SetModel`, and reads one back through a getter such as
+`Model()` or `Client()`, and both take the agent's lock. Subscription usage
+and resets belong to the client, so pass `Agent.Client()` to
+`provider.ClientUsage` and its siblings. The wire takes
 credentials as values and reads nothing itself. The agent writes its
 transcript to a `core.TranscriptStore` you attach, and resumes from a
 `core.Transcript` you load. `core.MemoryTranscriptStore` keeps it in memory,
@@ -61,11 +71,36 @@ from importing anything else of terva's.
 
 **What it costs.** Every choice terva's harness makes is now yours to make:
 where credentials come from, what the prompt holds, which tools exist and what
-may run. The API is not stable yet: until the engine's stable packages are
-drawn, a minor release may change anything you use. The wire holds no model
-catalog. Build one (`provider.NewRegistry`) and pass it to the agent with
-`Agent.SetCatalog` and to its client with `provider.WithCatalog`. An agent or
+may run. The wire holds no model catalog. Build one (`provider.NewRegistry`)
+and pass it to the agent with
+`core.WithCatalog` and to its client with `provider.WithCatalog`. An agent or
 client given none knows the built-in models and nothing else.
+
+**What we promise.** Before 1.0 the promise is narrow, and it is measured
+rather than enforced. `.api/packages.txt` lists each package as stable or
+unstable. A stable symbol breaks only in a minor release, and
+[migrating.md](migrating.md) says how to migrate. A symbol whose doc opens a
+paragraph with `Unstable:` promises nothing, even inside a stable package. The per-vendor constructors
+are an example: the protocol clients, such as `provider.NewAnthropic` and
+`provider.NewOpenAICompatible`, are the stable way to reach a model. A package
+the file does not list promises nothing either. Raising the Go version in
+`go.mod` counts as a break. `.api/README.md` says how the record is kept.
+
+The engine writes text of its own: notes and refusals to the model, and
+messages its turns report. It renders that text in English, or through the
+translator `i18n.Use` installs for the whole process (package
+`packages/core/i18n`). To run two agents in different languages, give each
+its own translator with `core.WithTranslator`. The `stall`, `lazytools` and
+`shellresult` components then speak the agent's language too. Two kinds of
+text do not follow it:
+
+- Compaction prompts and the `contextpressure` note are policy, not
+  translation. They come from the agent's `CompactionPolicy`, which can also
+  word the note as a `contextpressure.Noter`. Without one, they come from the
+  neutral English in `compactprose`. For another language there, give each
+  agent a policy in that language.
+- Text from core's helper functions that your host calls itself, such as
+  `core.ClassifyRecoverable`, still uses the process-wide translator.
 
 A client sends its requests through `http.DefaultTransport`. To route them
 through your own proxy, transport or test server, give the client your HTTP

@@ -11,6 +11,8 @@ import (
 // http.DefaultTransport is left untouched, so auth, model discovery, and
 // every other provider keep normal certificate validation. The insecure
 // transport is a clone of the default, so timeouts/proxies are preserved.
+//
+// Unstable: a helper carries no promise before 1.0.
 func NewHTTPClient(insecureTLS bool) *http.Client {
 	if !insecureTLS {
 		return &http.Client{Timeout: 0}

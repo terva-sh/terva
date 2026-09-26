@@ -1,0 +1,154 @@
+# packages/agent/connsdk (stable): its exported API, one symbol per line.
+# Written by `just api-snapshot`. `just api-check` fails when it no longer matches the code.
+Answer	type	struct
+Answer.AskID	field	string
+Answer.Attestation	field	string
+Answer.Key	field	string
+Answer.UserID	field	string
+Answer.Username	field	string
+Ask	type	struct
+Ask.ChatID	field	string
+Ask.Expires	field	time.Duration
+Ask.ID	field	string
+Ask.Options	field	[]AskOption
+Ask.ReplyTo	field	string
+Ask.RestrictTo	field	[]string
+Ask.Text	field	string
+AskOption	type	struct
+AskOption.Hint	field	string
+AskOption.Key	field	string
+AskOption.Label	field	string
+AskOption.Recommended	field	bool
+AskOption.Style	field	string
+Asker	type	interface
+Asker.Ask	method	func(ctx context.Context, a Ask, deliver func(Answer)) (messageID string, err error)
+Asker.CloseAsk	method	func(ctx context.Context, askID, outcome string) error
+Attachment	type	struct
+Attachment.Caption	field	string
+Attachment.Duration	field	time.Duration
+Attachment.Kind	field	string
+Attachment.MimeType	field	string
+Attachment.Name	field	string
+Attachment.Path	field	string
+Attachment.Size	field	int64
+AttestationAttested	const	untyped string
+AttestationBestEffort	const	untyped string
+Capabilities	type	struct
+Capabilities.Features	field	[]string
+Capabilities.MaxTextLen	field	int
+Capabilities.MinEditInterval	field	time.Duration
+Capabilities.SendsFiles	field	bool
+Capabilities.SendsImages	field	bool
+Capabilities.TypingRefresh	field	time.Duration
+ChatEventSink	type	struct
+ChatEventSink.Deleted	field	func(MessageDeleted)
+ChatEventSink.Edited	field	func(MessageEdited)
+ChatEventSink.Reaction	field	func(Reaction)
+ChatEventSource	type	interface
+ChatEventSource.ReceiveChatEvents	method	func(ctx context.Context, sink ChatEventSink) error
+Config	type	struct
+Config.Capabilities	field	Capabilities
+Config.Configured	field	func() bool
+Config.Name	field	string
+Config.NewTransport	field	func(s Session) (Transport, error)
+Config.Reset	field	func() error
+Config.Secrets	field	*SealedState
+Config.Setup	field	func() error
+Config.Status	field	func() (string, error)
+Config.Version	field	string
+Entity	type	struct
+Entity.Kind	field	string
+Entity.Length	field	int
+Entity.Offset	field	int
+Entity.UserID	field	string
+Identity	type	struct
+Identity.ID	field	string
+Identity.Username	field	string
+Main	func	func(cfg Config)
+Membership	type	struct
+Membership.ByUserID	field	string
+Membership.ByUsername	field	string
+Membership.Change	field	string
+Membership.ChatID	field	string
+Membership.ChatKind	field	string
+Membership.ChatTitle	field	string
+Membership.ScopeID	field	string
+MembershipSource	type	interface
+MembershipSource.ReceiveMembership	method	func(ctx context.Context, deliver func(Membership)) error
+Message	type	struct
+Message.Attachments	field	[]Attachment
+Message.ChatID	field	string
+Message.ChatKind	field	string
+Message.ChatTitle	field	string
+Message.Entities	field	[]Entity
+Message.ID	field	string
+Message.ReplyTo	field	string
+Message.ScopeID	field	string
+Message.TS	field	int64
+Message.Text	field	string
+Message.UserID	field	string
+Message.Username	field	string
+MessageDeleted	type	struct
+MessageDeleted.ChatID	field	string
+MessageDeleted.ID	field	string
+MessageDeleter	type	interface
+MessageDeleter.DeleteMessage	method	func(ctx context.Context, chatID, messageID string) error
+MessageEdited	type	struct
+MessageEdited.ChatID	field	string
+MessageEdited.Entities	field	[]Entity
+MessageEdited.ID	field	string
+MessageEdited.TS	field	int64
+MessageEdited.Text	field	string
+MessageEditor	type	interface
+MessageEditor.EditMessage	method	func(ctx context.Context, chatID, messageID, text string) error
+MessageIDSender	type	interface
+MessageIDSender.SendWithID	method	func(ctx context.Context, out Outgoing) (messageID string, err error)
+MessageReactor	type	interface
+MessageReactor.React	method	func(ctx context.Context, chatID, messageID, key string, remove bool) error
+Outgoing	type	struct
+Outgoing.ChatID	field	string
+Outgoing.ReplyTo	field	string
+Outgoing.Speaker	field	*Speaker
+Outgoing.Text	field	string
+Reaction	type	struct
+Reaction.ChatID	field	string
+Reaction.Key	field	string
+Reaction.MessageID	field	string
+Reaction.Removed	field	bool
+Reaction.UserID	field	string
+Reaction.Username	field	string
+SealedState	type	struct
+SealedState.Clean	method	func() error
+SealedState.Dir	method	func() string
+SealedState.KeyPath	method	func() string
+SealedState.Load	method	func() ([]byte, error)
+SealedState.Name	field	string
+SealedState.Path	method	func() string
+SealedState.Paths	field	[]string
+SealedState.Recipient	method	func() (string, error)
+SealedState.RelPath	method	func() string
+SealedState.Save	method	func(doc []byte) error
+Serve	func	func(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error
+Session	type	struct
+Session.DataDir	field	string
+Session.HostFeatures	field	[]string
+Session.Protocol	field	int
+Session.ZotVersion	field	string
+Speaker	type	struct
+Speaker.AvatarPath	field	string
+Speaker.Key	field	string
+Speaker.Name	field	string
+SpeakerSender	type	interface
+SpeakerSender.SendAsSpeaker	method	func(ctx context.Context, out Outgoing) (messageID string, err error)
+StateDir	func	func(name string) string
+Threader	type	interface
+Threader.StartThread	method	func(ctx context.Context, chatID, fromMessageID, name string) (threadChatID string, err error)
+Transport	type	interface
+Transport.Connect	method	func(ctx context.Context) (Identity, error)
+Transport.Receive	method	func(ctx context.Context, deliver func(Message)) error
+Transport.Send	method	func(ctx context.Context, out Outgoing) error
+Transport.SendFile	method	func(ctx context.Context, chatID, path, caption string) error
+Transport.SendImage	method	func(ctx context.Context, chatID, path, caption string) error
+Transport.Typing	method	func(ctx context.Context, chatID string) error
+TypingStopper	type	interface
+TypingStopper.StopTyping	method	func(ctx context.Context, chatID string) error

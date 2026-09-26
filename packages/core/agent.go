@@ -47,32 +47,37 @@ var ErrUserInterrupted = errors.New("turn interrupted by the user")
 
 // Agent is a stateful conversation bound to a provider client, a model,
 // and a set of tools.
+//
+// Its settings are private. A host passes them to New as options, changes
+// them at runtime through the setters, and reads them through the getters.
+// The setters and getters take the agent's lock. An exported field could be
+// read or written without it, which races a turn on another goroutine.
 type Agent struct {
-	Client    provider.Client
-	Model     string
-	Tools     Registry
-	MaxSteps  int
-	Reasoning string
-	// ReasoningSet reports the global reasoning level was explicitly chosen by
+	client    provider.Client
+	model     string
+	tools     Registry
+	maxSteps  int
+	reasoning string
+	// reasoningSet reports the global reasoning level was explicitly chosen by
 	// the user (flag/config/settings, including "off"), so it wins over a
 	// model's DefaultReasoning. False means unset — fall back to the per-model
-	// default. Read at turn start under a.mu alongside Reasoning.
-	ReasoningSet bool
+	// default. Read at turn start under a.mu alongside reasoning.
+	reasoningSet bool
 
-	// ReasoningSummary asks the provider for a human-readable summary of its
+	// reasoningSummary asks the provider for a human-readable summary of its
 	// reasoning, persisted into the transcript alongside the opaque payload so
 	// an unattended run can be reviewed for intent. "" (the default) is off and
 	// leaves requests unchanged. Read at turn start under a.mu alongside
-	// Reasoning; only the codex client acts on it.
-	ReasoningSummary string
+	// reasoning; only the codex client acts on it.
+	reasoningSummary string
 
-	// ShowReasoning asks for the same summary in order to DISPLAY it while the
+	// showReasoning asks for the same summary in order to DISPLAY it while the
 	// turn runs (EvReasoningDelta), without writing it to the session record.
 	//
-	// It is separate from ReasoningSummary because the two costs are different
+	// It is separate from reasoningSummary because the two costs are different
 	// and only one of them is permanent. Watching a model work is ephemeral —
 	// the text is on screen and then it is gone. Persisting it makes the
-	// session file quotable, which is why ReasoningSummary is opt-in, and
+	// session file quotable, which is why reasoningSummary is opt-in, and
 	// forcing that trade on anyone who merely wants to see the work would be
 	// the wrong bargain.
 	//
@@ -80,80 +85,81 @@ type Agent struct {
 	// the request flag on by itself (see reasoningSummaryRequest). What keeps it
 	// off disk is stripUnrecordedSummaries, which blanks the text after the turn
 	// and leaves the block itself alone. Read at turn start under a.mu alongside
-	// Reasoning.
+	// reasoning.
 	//
 	// 🪤 "Unless asked" is not universal, and reading it as universal is what
 	// once leaked. Anthropic thinking, Gemini thought summaries and chat
 	// `reasoning_content` all arrive unbidden, so the strip must key on the
 	// RECORD setting alone and never on this one.
-	ShowReasoning bool
+	showReasoning bool
 
-	// Temperature sets the sampling temperature on each request. Nil
+	// temperature sets the sampling temperature on each request. Nil
 	// leaves it unset so each provider applies its own default (terva's
 	// per-provider serialization guards still apply when it is set).
-	Temperature *float32
+	temperature *float32
 
-	// MaxTokens caps the model's output tokens per turn. Zero leaves
+	// maxTokens caps the model's output tokens per turn. Zero leaves
 	// the field unset on the provider request, letting each provider
 	// apply its own default (which can be conservative, e.g. Bedrock
 	// defaults to 4096, truncating long writes/edits). Hosts populate
 	// this from the resolved model's MaxOutput so large single-turn
 	// responses aren't silently cut off with stopReason=length.
-	MaxTokens int
+	maxTokens int
 
-	// ImageOutput, when non-nil, requests native (in-protocol) image output:
+	// imageOutput, when non-nil, requests native (in-protocol) image output:
 	// the model may draw images inline in its own turn via the provider's
 	// built-in image tool (OpenAI Responses image_generation). Set from the
 	// opt-in native_output config. oneTurn only forwards it when the live model
 	// advertises provider.CapImageOutput, so it tracks a model swap without a
 	// rebuild. nil (the default) leaves native image output off.
-	ImageOutput *provider.ImageOutputConfig
+	imageOutput *provider.ImageOutputConfig
 
-	// gate is asked before each tool runs. NewAgent sets it and nothing
+	// gate is asked before each tool runs. New sets it and nothing
 	// replaces it: it was an assignable field (BeforeToolExecute), and a host
 	// that forgot to assign it got an agent that ran every call unchecked with
 	// no signal (decisions 0004, 0005, 0021 rule 3). Nil only on an Agent built
-	// without NewAgent, and then every tool call is refused.
+	// without New, and then every tool call is refused.
 	//
-	// The turn and message hooks below stay fields on purpose. They are
-	// extension intercepts, not permission checks, and leaving one unset runs
-	// the documented default rather than an unchecked tool.
-	// docs/architecture/02-core-agent.md gives the full reasoning.
+	// The turn and message hooks below are set from a TurnFilter or
+	// MessageFilter component at construction. They are extension intercepts,
+	// not permission checks, and leaving one unset runs the documented default
+	// rather than an unchecked tool. docs/architecture/02-core-agent.md gives
+	// the full reasoning.
 	gate Gate
 
-	// BeforeTurn, if set, is called before each turn's model call.
+	// beforeTurn, if set, is called before each turn's model call.
 	// Returning (allowed=false, reason) aborts the turn; reason is
 	// surfaced as an assistant-like status line. Used for rate-
 	// limiting, business-hour gates, and deny-by-default setups.
-	BeforeTurn func(step int) (allowed bool, reason string)
+	beforeTurn func(step int) (allowed bool, reason string)
 
-	// BeforeAssistantMessage, if set, is called after the model's
+	// beforeAssistantMessage, if set, is called after the model's
 	// final assistant message is assembled but before it's appended
 	// to the transcript. Returning (allowed=false) suppresses both
 	// the transcript append and the UI event. A non-empty
 	// replacement rewrites the visible text for the user while
 	// leaving the model's original text in the transcript (so the
 	// model can still see what it said in subsequent turns).
-	BeforeAssistantMessage func(text string) (allowed bool, reason, replacement string)
+	beforeAssistantMessage func(text string) (allowed bool, reason, replacement string)
 
-	// BeforeUserMessage, if set, is consulted just before a genuine
+	// beforeUserMessage, if set, is consulted just before a genuine
 	// user message — the initial prompt or one drained from the queue —
 	// is appended to the transcript and sent to the model. Returning
 	// (allowed=false, reason) rejects the prompt: it is neither recorded
 	// nor sent, and the host surfaces reason via EvUserMessageRejected.
 	// A non-empty replacement rewrites the prompt the model actually
 	// sees (the rewrite IS what lands in the transcript — unlike
-	// BeforeAssistantMessage, where the original is kept). The synthetic
-	// at-close gate nudge is never gated. Mirrors BeforeAssistantMessage
+	// beforeAssistantMessage, where the original is kept). The synthetic
+	// at-close gate nudge is never gated. Mirrors beforeAssistantMessage
 	// and backs the extension user_message intercept.
-	BeforeUserMessage func(text string) (allowed bool, reason, replacement string)
+	beforeUserMessage func(text string) (allowed bool, reason, replacement string)
 
-	// MaxRetries controls agent-level retries for transient provider
+	// maxRetries controls agent-level retries for transient provider
 	// failures that arrive after the HTTP stream opens (for example
 	// Anthropic overloaded_error). Zero disables this retry layer.
-	// RetryBaseDelay is doubled for each attempt; zero uses 2s.
-	MaxRetries     int
-	RetryBaseDelay time.Duration
+	// retryBaseDelay is doubled for each attempt; zero uses 2s.
+	maxRetries     int
+	retryBaseDelay time.Duration
 
 	// Hook observers. Registered through AddEventObserver / AddMessageObserver /
 	// addUsageObserver / addTranscriptCompactedObserver /
@@ -189,7 +195,7 @@ type Agent struct {
 
 	// assembler produces the Frame for every request: the Stable segments that
 	// form the system prompt and the Volatile ones that ride the ephemeral tail.
-	// Set once by NewAgent and never reassigned, so it is read without a.mu. A
+	// Set once by New and never reassigned, so it is read without a.mu. A
 	// host that changes its frame live does so inside its assembler. Nil is an
 	// empty frame.
 	assembler ContextAssembler
@@ -209,7 +215,7 @@ type Agent struct {
 	// common case, not the edge one.
 	readOnly *ReadOnlySet
 
-	// Asker, if set, is the front end's question channel — the same seam the
+	// asker, if set, is the front end's question channel — the same seam the
 	// ask_user_question tool uses, wired onto the agent so the LOOP can ask too.
 	// The engine's one caller is the prefix-change guard, which offers a
 	// compaction before a cache-invalidating change lands
@@ -221,12 +227,12 @@ type Agent struct {
 	// question no one will answer — and rather than silently compacting on their
 	// behalf, which is not what a guard is for. Assigned at build, before the
 	// agent runs a turn.
-	Asker Asker
+	asker Asker
 
-	// CompactionPolicy decides automatic compaction: whether at each point,
+	// compactionPolicy decides automatic compaction: whether at each point,
 	// with what keep-tail, and with which strategies (compaction_policy.go).
 	// Nil is DefaultCompactionPolicy{}. Set it during construction.
-	CompactionPolicy CompactionPolicy
+	compactionPolicy CompactionPolicy
 
 	// running is the single-flight guard. It is set on entry to
 	// Prompt/Continue/Compact and cleared on exit; a second concurrent
@@ -240,8 +246,8 @@ type Agent struct {
 
 	mu sync.Mutex
 
-	// visibility chooses the tools a request advertises (SetToolVisibility).
-	// nil advertises the whole registry. Guarded by mu.
+	// visibility chooses the tools a request advertises. A ToolVisibility
+	// component sets it, and nil advertises the whole registry. Guarded by mu.
 	visibility ToolVisibility
 	// tailFP is the fingerprint (block IDs, never their text) of the ephemeral
 	// tail last recorded, so a tail row is written when the composition CHANGES
@@ -269,7 +275,7 @@ type Agent struct {
 	// context holds content it never saw. Per-agent bumps stay in the
 	// low 32 bits; the base occupies the high 32.
 	transcriptEpoch uint64
-	cost            CostTracker
+	cost            costTracker
 
 	// continuePrefill is set for the duration of one ContinueAssistant turn
 	// (guarded by mu, cleared on return). It makes oneTurn (a) suppress the
@@ -304,6 +310,11 @@ type Agent struct {
 	// The cue text belongs to the CALLER (the workspace composes Stage's), so this
 	// stays a dumb request-scoped string rather than a menu of flags.
 	stageCue string
+
+	// translator is the one WithTranslator gave, or nil for the process-wide
+	// one. It is set once, by New, and never written again, so it needs no
+	// lock.
+	translator i18n.Translator
 
 	// sessionID / sessionPath identify the transcript file this
 	// conversation persists to: sessionID is the file basename without
@@ -350,30 +361,30 @@ type Agent struct {
 // (see the transcriptEpoch field comment for why collisions matter).
 var agentEpochSeq atomic.Uint64
 
-// NewAgent returns an Agent with sensible defaults.
+// Translator returns the translator the agent renders its text through, or
+// nil when it uses the process-wide one. A component renders its own text
+// through i18n.In(a.Translator()).T(...), so it speaks the agent's language.
 //
-// gate decides every tool call the agent makes, and it is required. Pass
-// AllowAll to run every call unchecked; that is a choice a host has to write
-// down. A nil gate panics, because an agent that cannot answer "may this
-// tool run" is a programming error and not a configuration.
-func NewAgent(client provider.Client, model string, assembler ContextAssembler, tools Registry, gate Gate) *Agent {
-	if isNilGate(gate) {
-		panic("core.NewAgent: gate is nil; pass a Gate, or core.AllowAll to allow every tool call")
-	}
+// Unstable: it returns an i18n.Translator, and packages/core/i18n carries no
+// promise before 1.0.
+func (a *Agent) Translator() i18n.Translator { return a.translator }
+
+// newAgent builds the agent New configures. The gate is already checked.
+func newAgent(client provider.Client, model string, assembler ContextAssembler, tools Registry, gate Gate) *Agent {
 	a := &Agent{
-		Client:    client,
-		Model:     model,
+		client:    client,
+		model:     model,
 		assembler: assembler,
-		Tools:     tools,
+		tools:     tools,
 		gate:      gate,
-		MaxSteps:  0, // 0 = unlimited
+		maxSteps:  0, // 0 = unlimited
 		// Six retries with the doubling base below is 2+4+8+16+32+60 = ~2min of
-		// patience, ending on the MaxRetryDelay tail. Three (14s) was too short
-		// for the provider overloads it mostly meets — see MaxRetryDelay.
-		MaxRetries:      6,
-		RetryBaseDelay:  2 * time.Second,
+		// patience, ending on the maxRetryDelay tail. Three (14s) was too short
+		// for the provider overloads it mostly meets — see maxRetryDelay.
+		maxRetries:      6,
+		retryBaseDelay:  2 * time.Second,
 		transcriptEpoch: agentEpochSeq.Add(1) << 32,
-		// Keyed from birth: NewAgent runs before the session is known (see
+		// Keyed from birth: New runs before the session is known (see
 		// build.BindSession), so an agent can dispatch while still live-only,
 		// and an unkeyed request forfeits the reliable prefix matching
 		// GPT-5.6+ only offers when prompt_cache_key is set.
@@ -382,7 +393,7 @@ func NewAgent(client provider.Client, model string, assembler ContextAssembler, 
 	return a
 }
 
-// Gate returns the gate NewAgent was given. There is no setter: a gate that
+// Gate returns the gate New was given. There is no setter: a gate that
 // could be replaced after construction could be replaced with nothing.
 func (a *Agent) Gate() Gate { return a.gate }
 
@@ -550,8 +561,8 @@ func (a *Agent) appendQueuedAsUser(texts []string, synthetic bool, sink func(Age
 		// by typing while a turn is mid-flight. A rejected one is skipped
 		// (not appended, no EvUserMessage); the synthetic gate nudge is
 		// never gated.
-		if !synthetic && a.BeforeUserMessage != nil && text != "" {
-			allowed, reason, replacement := a.BeforeUserMessage(text)
+		if !synthetic && a.beforeUserMessage != nil && text != "" {
+			allowed, reason, replacement := a.beforeUserMessage(text)
 			if !allowed {
 				if reason == "" {
 					reason = "message blocked by extension guard"
@@ -634,8 +645,8 @@ func (a *Agent) TranscriptEpoch() uint64 {
 // registry rebuild can change a tool's read-only declaration.
 func (a *Agent) SetTools(reg Registry) (changed bool) {
 	a.mu.Lock()
-	changed = !registryEqual(a.Tools, reg)
-	a.Tools = reg
+	changed = !registryEqual(a.tools, reg)
+	a.tools = reg
 	a.mu.Unlock()
 	return changed
 }
@@ -668,7 +679,7 @@ func registryEqual(a, b Registry) bool {
 func (a *Agent) ToolsSnapshot() Registry {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.Tools
+	return a.tools
 }
 
 // Assembler returns the ContextAssembler the agent was built with, so a host
@@ -711,7 +722,7 @@ func (a *Agent) assemble(mode AssembleMode) Frame {
 func (a *Agent) LookupTool(name string) (Tool, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	t, ok := a.Tools[name]
+	t, ok := a.tools[name]
 	return t, ok
 }
 
@@ -790,7 +801,7 @@ func (a *Agent) TruncateTo(idx int) bool {
 func (a *Agent) SetModel(model string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.Model = model
+	a.model = model
 	a.refreshMaxTokensLocked()
 }
 
@@ -804,8 +815,8 @@ func (a *Agent) SetModel(model string) {
 // field, so a swap to a model missing from the catalog leaves the previous
 // working budget untouched rather than zeroing it. Caller holds a.mu.
 func (a *Agent) refreshMaxTokensLocked() {
-	if m, err := a.Catalog().FindModel("", a.Model); err == nil && m.MaxOutput > 0 {
-		a.MaxTokens = m.MaxOutput
+	if m, err := a.Catalog().FindModel("", a.model); err == nil && m.MaxOutput > 0 {
+		a.maxTokens = m.MaxOutput
 	}
 }
 
@@ -816,11 +827,11 @@ func (a *Agent) refreshMaxTokensLocked() {
 func (a *Agent) SetReasoning(level string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.Reasoning = level
+	a.reasoning = level
 	// A runtime set is an explicit user choice (the settings "reasoning"
 	// control), so it wins over any per-model DefaultReasoning from here on —
 	// including when level is "" (the user chose off).
-	a.ReasoningSet = true
+	a.reasoningSet = true
 }
 
 // ClearReasoning drops an explicit level so the per-model DefaultReasoning
@@ -839,8 +850,8 @@ func (a *Agent) SetReasoning(level string) {
 func (a *Agent) ClearReasoning() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.Reasoning = ""
-	a.ReasoningSet = false
+	a.reasoning = ""
+	a.reasoningSet = false
 }
 
 // SetReasoningSummary switches reasoning-summary persistence live ("" = off).
@@ -849,14 +860,24 @@ func (a *Agent) ClearReasoning() {
 func (a *Agent) SetReasoningSummary(mode string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.ReasoningSummary = mode
+	a.reasoningSummary = mode
 }
 
 // SetShowReasoning switches live reasoning display on or off for the next turn.
 func (a *Agent) SetShowReasoning(on bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.ShowReasoning = on
+	a.showReasoning = on
+}
+
+// SetAsker sets the channel the engine asks the user through, for a host that
+// learns it only after construction, such as rpc once its client says it can
+// answer questions. A host that knows it at construction passes WithAsker.
+// Nil means nobody to ask.
+func (a *Agent) SetAsker(ask Asker) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.asker = ask
 }
 
 // reasoningSummaryRequest is the value that rides the provider request: the
@@ -999,76 +1020,56 @@ func dropUnrecordableThinking(m provider.Message) provider.Message {
 func (a *Agent) SetClientAndModel(client provider.Client, model string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.Client = client
-	a.Model = model
+	a.client = client
+	a.model = model
 	a.refreshMaxTokensLocked()
 }
 
-// Usage returns the current provider client's subscription usage
-// snapshot (5h/weekly windows, credits), with ok=false when the
-// provider reports none. It probes the live a.Client through any
-// wrapper layers, so a SetClientAndModel swap to a different provider
-// transparently surfaces the new provider's reporter (or none).
-func (a *Agent) Usage() (provider.UsageSnapshot, bool) {
+// Client returns the provider client the next turn sends with. It reads under
+// the lock SetClientAndModel writes with, so a side request on another
+// goroutine never races a swap. A host that shows subscription usage or
+// redeems a reset passes it to provider.ClientUsage and its siblings, which
+// see through wrapper layers.
+func (a *Agent) Client() provider.Client {
 	a.mu.Lock()
-	c := a.Client
-	a.mu.Unlock()
-	return provider.ClientUsage(c)
+	defer a.mu.Unlock()
+	return a.client
 }
 
-// RefreshUsage pulls a fresh usage snapshot, fetching from the provider's
-// usage/balance endpoint when it has one (OpenRouter, DeepSeek) and otherwise
-// returning the passively-observed snapshot (codex). It BLOCKS on the fetch,
-// so callers must run it off the UI goroutine.
-func (a *Agent) RefreshUsage(ctx context.Context) (provider.UsageSnapshot, bool) {
+// Model returns the model id the next turn requests, under the lock SetModel
+// and SetClientAndModel write with.
+func (a *Agent) Model() string {
 	a.mu.Lock()
-	c := a.Client
-	a.mu.Unlock()
-	return provider.ClientRefreshUsage(ctx, c)
+	defer a.mu.Unlock()
+	return a.model
 }
 
-// UsageRefreshable reports whether the current provider fetches its usage from
-// an endpoint — i.e. /usage should refresh in the background and show a
-// loading state rather than rendering instantly from headers.
-func (a *Agent) UsageRefreshable() bool {
+// Reasoning returns the reasoning level and whether one was chosen. With set
+// false the model's own default applies, whatever level says. With set true
+// an empty level means the user chose off.
+func (a *Agent) Reasoning() (level string, set bool) {
 	a.mu.Lock()
-	c := a.Client
-	a.mu.Unlock()
-	return provider.ClientNeedsUsageFetch(c)
+	defer a.mu.Unlock()
+	return a.reasoning, a.reasoningSet
 }
 
-// SupportsResets reports whether the current provider exposes consumable usage
-// resets (codex banked resets) — the gate for offering a /resets affordance.
-// It probes the live a.Client through wrapper layers, so a SetClientAndModel
-// swap surfaces the new provider's capability.
-func (a *Agent) SupportsResets() bool {
+// ReasoningSummary returns the reasoning-summary mode, "" for off.
+func (a *Agent) ReasoningSummary() string {
 	a.mu.Lock()
-	c := a.Client
-	a.mu.Unlock()
-	return provider.ClientSupportsResets(c)
+	defer a.mu.Unlock()
+	return a.reasoningSummary
 }
 
-// ListResets returns the provider's usage-reset credits (available and spent),
-// or nil when the provider offers none. It BLOCKS on the provider's endpoint,
-// so callers must run it off the UI goroutine.
-func (a *Agent) ListResets(ctx context.Context) ([]provider.UsageReset, error) {
+// Asker returns the channel the engine asks the user through, or nil when
+// there is nobody to ask. A component that asks on the engine's behalf, such
+// as the stuck-loop detector, reads it here.
+func (a *Agent) Asker() Asker {
 	a.mu.Lock()
-	c := a.Client
-	a.mu.Unlock()
-	return provider.ClientListResets(ctx, c)
+	defer a.mu.Unlock()
+	return a.asker
 }
 
-// ConsumeReset redeems one reset credit by id. It is IRREVERSIBLE and spends a
-// scarce, provider-granted credit, so callers MUST gate it behind explicit user
-// confirmation. It BLOCKS on the provider's endpoint.
-func (a *Agent) ConsumeReset(ctx context.Context, id string) (provider.UsageResetResult, error) {
-	a.mu.Lock()
-	c := a.Client
-	a.mu.Unlock()
-	return provider.ClientConsumeReset(ctx, c, id)
-}
-
-// Cost returns the cumulative usage. The CostTracker carries its own
+// Cost returns the cumulative usage. The cost tracker carries its own
 // lock so this is safe to call concurrently with a running turn, which
 // folds usage in from the stream goroutine.
 func (a *Agent) Cost() provider.Usage {
@@ -1098,7 +1099,8 @@ func (a *Agent) SeedLastTurnUsage(u provider.Usage) {
 
 // RecentUsage returns the tail of per-response usage records, oldest first —
 // the cache strip's data. Empty until this agent has run a request, including
-// on a resumed session; see CostTracker.recent for why it is not rehydrated.
+// on a resumed session: the tracker keeps no durable record of the tail to
+// rehydrate it from.
 func (a *Agent) RecentUsage() []provider.Usage {
 	return a.cost.RecentUsage()
 }
@@ -1152,7 +1154,7 @@ func (a *Agent) SideChannelCost() provider.Usage {
 // was computed and then discarded at the process boundary.
 //
 // Booked as delegated rather than as the session's own, so the two stay
-// distinguishable — see CostTracker.AddDelegated. Callers must pass a
+// distinguishable. Callers must pass a
 // CUMULATIVE-TO-DELTA value: a child reports its running total, so a caller
 // watching one must book the increment, not the total, or a chatty child is
 // counted once per event it emits.
@@ -1237,8 +1239,8 @@ func (a *Agent) promptExtra(ctx context.Context, text string, images []provider.
 	// Consult the user-message guard before anything is recorded: a
 	// rejection must leave no trace in the transcript and start no turn.
 	// Skipped for an empty prompt (image-only submit — nothing to judge).
-	if a.BeforeUserMessage != nil && text != "" {
-		allowed, reason, replacement := a.BeforeUserMessage(text)
+	if a.beforeUserMessage != nil && text != "" {
+		allowed, reason, replacement := a.beforeUserMessage(text)
 		if !allowed {
 			if reason == "" {
 				reason = "message blocked by extension guard"
@@ -1440,7 +1442,7 @@ func (a *Agent) ContinueAssistant(ctx context.Context, sink func(AgentEvent)) er
 	a.mu.Lock()
 	n := len(a.messages)
 	trailingIsAssistant := n > 0 && a.messages[n-1].Role == provider.RoleAssistant
-	client := a.Client
+	client := a.client
 	a.mu.Unlock()
 	if !trailingIsAssistant {
 		return ErrNoAssistantToContinue
@@ -1482,7 +1484,7 @@ func (a *Agent) ConsumeContinueResult() (index int, merged provider.Message, ok 
 // extend a trailing assistant message (the turn.continue gate).
 func (a *Agent) ContinuesAssistantPrefill() bool {
 	a.mu.Lock()
-	c := a.Client
+	c := a.client
 	a.mu.Unlock()
 	return provider.ClientContinuesAssistantPrefill(c)
 }
@@ -1587,7 +1589,7 @@ func (a *Agent) pinTurn() turnPin {
 	system := a.assemble(AssemblePeek).SystemText()
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return turnPin{system: system, tools: a.Tools, visible: a.advertiseLocked(a.Tools, true), readOnly: a.readOnly.Snapshot()}
+	return turnPin{system: system, tools: a.tools, visible: a.advertiseLocked(a.tools, true), readOnly: a.readOnly.Snapshot()}
 }
 
 // fireContinuationGate consults the at-close gates in registration order and
@@ -1679,7 +1681,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 	// futile summarization on every subsequent step.
 	compactArmed := true
 
-	for step := 1; a.MaxSteps <= 0 || step <= a.MaxSteps; step++ {
+	for step := 1; a.maxSteps <= 0 || step <= a.maxSteps; step++ {
 		if err := a.PersistenceError(); err != nil {
 			return err
 		}
@@ -1735,10 +1737,10 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 		}
 
 		sink(EvTurnStart{Step: step})
-		if a.BeforeTurn != nil {
-			if allowed, reason := a.BeforeTurn(step); !allowed {
+		if a.beforeTurn != nil {
+			if allowed, reason := a.beforeTurn(step); !allowed {
 				if reason == "" {
-					reason = i18n.T("turn blocked by extension guard")
+					reason = i18n.In(a.translator).T("turn blocked by extension guard")
 				}
 				sink(EvTurnEnd{Stop: provider.StopError, Err: fmt.Errorf("%s", reason)})
 				sink(EvDone{})
@@ -1840,7 +1842,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 				Phase:    RetryPhaseTurn,
 				Provider: providerOf(err),
 				Attempt:  attempt + 1, // 1-based: the attempt that just failed
-				Max:      a.MaxRetries,
+				Max:      a.maxRetries,
 				Delay:    delay,
 				Err:      retryErrMsg(err),
 			}
@@ -1900,14 +1902,14 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 			var imageMirror provider.Message
 			// Use the unwrapping helper: openai-responses is wrapped in
 			// a renamedClient (openai-responses), so a
-			// direct type assertion on a.Client would miss the capability.
+			// direct type assertion on a.client would miss the capability.
 			// The mirror additionally requires the model to accept image
 			// input at all — mirroring screenshots to a vision-less model
 			// wastes tokens at best and 400s at worst. Unknown models keep
 			// the capability's default (true), preserving old behavior.
-			mirrorImages := provider.ClientMirrorsToolImages(a.Client)
+			mirrorImages := provider.ClientMirrorsToolImages(a.client)
 			if mirrorImages {
-				if m, err := a.Catalog().FindModel("", a.Model); err == nil && !m.Has(provider.CapImageInput) {
+				if m, err := a.Catalog().FindModel("", a.model); err == nil && !m.Has(provider.CapImageInput) {
 					mirrorImages = false
 				}
 			}
@@ -1987,9 +1989,9 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 		sink(EvDone{})
 		return nil
 	}
-	if a.MaxSteps > 0 {
+	if a.maxSteps > 0 {
 		sink(EvDone{})
-		return i18n.Errorf("max steps (%d) exceeded", a.MaxSteps)
+		return i18n.In(a.translator).Errorf("max steps (%d) exceeded", a.maxSteps)
 	}
 	return nil
 }
@@ -2004,7 +2006,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 // matched. Untyped errors from custom SDK clients no longer retry;
 // returning *provider.ProviderError is the documented opt-in.
 func (a *Agent) canRetryError(err error, attempt int) bool {
-	if err == nil || a.MaxRetries <= 0 || attempt >= a.MaxRetries {
+	if err == nil || a.maxRetries <= 0 || attempt >= a.maxRetries {
 		return false
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -2036,7 +2038,7 @@ func isNonRetryableProviderLimit(msg string) bool {
 	return false
 }
 
-// MaxRetryDelay caps a single backoff wait, and with the default base and
+// maxRetryDelay caps a single backoff wait, and with the default base and
 // ceiling it is the LAST wait the agent takes before giving up: 2s, 4s, 8s,
 // 16s, 32s, 60s.
 //
@@ -2050,27 +2052,27 @@ func isNonRetryableProviderLimit(msg string) bool {
 //
 // The tail is the expensive part on purpose: the early waits stay short so an
 // ordinary transport blip still recovers in seconds.
-const MaxRetryDelay = 60 * time.Second
+const maxRetryDelay = 60 * time.Second
 
 // retryDelay returns the wait before retry attempt n. A server-stated
 // Retry-After wins over the default exponential backoff. Both are capped at
-// MaxRetryDelay, so a hostile or misconfigured header can't stall the turn for
+// maxRetryDelay, so a hostile or misconfigured header can't stall the turn for
 // longer than terva would wait on its own judgement.
 func (a *Agent) retryDelay(attempt int, err error) time.Duration {
 	var pe *provider.ProviderError
 	if errors.As(err, &pe) && pe.RetryAfter > 0 {
-		return min(pe.RetryAfter, MaxRetryDelay)
+		return min(pe.RetryAfter, maxRetryDelay)
 	}
-	base := a.RetryBaseDelay
+	base := a.retryBaseDelay
 	if base <= 0 {
 		base = 2 * time.Second
 	}
 	// Shift-guard: attempt is bounded by MaxRetries, but a host is free to set
 	// that to anything, and 1<<64 is not a long wait — it is zero.
 	if attempt >= 32 {
-		return MaxRetryDelay
+		return maxRetryDelay
 	}
-	return min(base*time.Duration(1<<attempt), MaxRetryDelay)
+	return min(base*time.Duration(1<<attempt), maxRetryDelay)
 }
 
 // providerOf and retryErrMsg pull the two things a retry notice needs out of
@@ -2287,15 +2289,15 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, visi
 	// would race those writes. Take a consistent picture of those plus a
 	// copy of the transcript while we hold the lock.
 	a.mu.Lock()
-	model := a.Model
-	reasoning := a.Reasoning
-	reasoningSet := a.ReasoningSet
-	reasoningSummary := a.ReasoningSummary
-	showReasoning := a.ShowReasoning
-	maxTokens := a.MaxTokens
-	temperature := a.Temperature
-	imageOutput := a.ImageOutput
-	client := a.Client
+	model := a.model
+	reasoning := a.reasoning
+	reasoningSet := a.reasoningSet
+	reasoningSummary := a.reasoningSummary
+	showReasoning := a.showReasoning
+	maxTokens := a.maxTokens
+	temperature := a.temperature
+	imageOutput := a.imageOutput
+	client := a.client
 	cacheKey := a.cacheID
 	continuePrefill := a.continuePrefill
 	stageCue := a.stageCue
@@ -2344,7 +2346,7 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, visi
 	// WHICH of them the model was shown without re-deriving the assembly, and so
 	// this and any other renderer of the tail cannot drift apart.
 	tail := a.composeTail(host, stageCue, continuePrefill)
-	ephemeral := TailText(tail)
+	ephemeral := tailText(tail)
 
 	req := provider.Request{
 		Model:  model,
@@ -2497,10 +2499,10 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, visi
 		// rewrite the visible text. The transcript keeps the
 		// model's original output so the model still sees what it
 		// said on subsequent turns.
-		if a.BeforeAssistantMessage != nil {
+		if a.beforeAssistantMessage != nil {
 			orig := extractText(finalMsg)
 			if orig != "" {
-				allowed, _, replacement := a.BeforeAssistantMessage(orig)
+				allowed, _, replacement := a.beforeAssistantMessage(orig)
 				if !allowed {
 					suppress = true
 				} else if replacement != "" && replacement != orig {
@@ -2701,7 +2703,7 @@ func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, tools
 		return abortedToolResult("the turn was cancelled before this tool call started")
 	}
 	// Dispatch against the registry PINNED for this turn (passed down from
-	// runLoop), not a live read of a.Tools: the turn runs on its own
+	// runLoop), not a live read of a.tools: the turn runs on its own
 	// goroutine while the host may swap the registry from another (model
 	// swap, /reload-ext, an extension's set_withdrawn_tools). Using the
 	// pinned set both avoids that data race and keeps dispatch consistent
@@ -2741,7 +2743,7 @@ func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, tools
 	// pinned for this turn, so it can describe the call without reaching
 	// back into the agent.
 	//
-	// 🚨 An Agent built without NewAgent has no gate, and fails closed here.
+	// 🚨 An Agent built without New has no gate, and fails closed here.
 	// Running its calls unchecked is exactly what the constructor argument
 	// exists to prevent.
 	if isNilGate(a.gate) {
@@ -2874,6 +2876,8 @@ const toolImageMirrorMeta = "tool_image_mirror"
 // Checks the structural meta marker first; falls back to the prefix
 // string so mirrors persisted before the marker existed are still
 // recognized on resume.
+//
+// Unstable: a transcript helper carries no promise before 1.0.
 func IsToolImageMirror(msg provider.Message) bool {
 	if msg.Meta[toolImageMirrorMeta] == "true" {
 		return true

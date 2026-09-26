@@ -189,8 +189,8 @@ func (o AnthropicCompatOptions) headers() map[string]string {
 // NewAnthropicCompatOpts builds an Anthropic-Messages client for a third-party
 // or operator-run endpoint, identifying as `name`.
 //
-// It is NewAnthropicCompat plus the operator's wire settings. The existing
-// constructor stays as it is: minimax, fireworks and vercel-ai-gateway are
+// It is the Anthropic-compatible client plus the operator's wire settings.
+// The built-in endpoints keep a constructor without them: minimax, fireworks and vercel-ai-gateway are
 // endpoints terva itself knows the shape of, and they have no operator to ask.
 func NewAnthropicCompatOpts(name, apiKey, baseURL string, o AnthropicCompatOptions, opts ...ClientOption) Client {
 	if baseURL == "" {
@@ -232,6 +232,8 @@ func NewAnthropicCompatible(apiKey, baseURL string, o AnthropicCompatOptions, op
 //
 // known is the catalog the discovered rows borrow capability flags from (see
 // anthropicCompatCaps): the host's, passed in, since the wire holds none.
+//
+// Unstable: per-vendor model discovery carries no promise before 1.0.
 func DiscoverAnthropicCompatible(ctx context.Context, baseURL, key string, defaultCtx int, o AnthropicCompatOptions, known []Model) ([]Model, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
@@ -278,6 +280,8 @@ func DiscoverAnthropicCompatible(ctx context.Context, baseURL, key string, defau
 // this key" means — a probe that authenticated differently from the request it
 // is vouching for would pass and then leave the first turn to fail with a 401
 // the operator has just been told cannot happen.
+//
+// Unstable: a helper carries no promise before 1.0.
 func ApplyAnthropicCompatAuth(req *http.Request, key string, o AnthropicCompatOptions) {
 	version := strings.TrimSpace(o.APIVersion)
 	if version == "" {

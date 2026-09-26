@@ -3,6 +3,8 @@ package provider
 import "strings"
 
 // ProviderLabel returns the user-facing label for a provider id.
+//
+// Unstable: terva's own convention carries no promise before 1.0.
 func ProviderLabel(id string) string {
 	switch id {
 	case "anthropic":

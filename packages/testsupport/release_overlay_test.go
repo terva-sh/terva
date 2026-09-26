@@ -70,6 +70,7 @@ var docsThatShip = []string{
 	"docs/image-generation.md",
 	"docs/localization.md",
 	"docs/mcp.md",
+	"docs/migrating.md",
 	"docs/models.md",
 	"docs/native-image-output.md",
 	"docs/permissions.md",
@@ -352,6 +353,11 @@ var rootThatShips = []string{
 	// thing in there that must never ship — the ASD-copyright approved-word
 	// list — is excluded by path, not by keeping the directory private.
 	".ste",
+	// .api holds the committed snapshots of the engine's exported API, and
+	// SHIPS for the same reason .ste does: `just lint` runs the snapshot check,
+	// so a public tree without them fails its own CI. They also show a host
+	// which packages are stable before it depends on one.
+	".api",
 	// .mise.toml pins the Node that builds the committed web assets, and SHIPS
 	// for the same reason .ste does: dist/ and scripts/web-dist.sh are both
 	// public, and the script's failure message tells the reader to consult this

@@ -17,10 +17,14 @@ import "context"
 //
 // The ctx bounds a refresh that has to hit the network; a source that never
 // refreshes (a static key) ignores it.
+//
+// Unstable: a subscription credential source carries no promise before 1.0.
 type CredentialSource func(ctx context.Context) (string, error)
 
 // StaticCredential is a CredentialSource for a fixed, non-rotating credential
 // (every API-key client). It never errors and ignores the context.
+//
+// Unstable: a subscription credential source carries no promise before 1.0.
 func StaticCredential(cred string) CredentialSource {
 	return func(context.Context) (string, error) { return cred, nil }
 }

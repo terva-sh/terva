@@ -119,15 +119,26 @@ changelog:
   # An unscoped-only anchor (^chore:) likewise never matches chore(web):, so
   # every SCOPED housekeeping commit was published in the notes it is meant to
   # be filtered out of. Both bugs are invisible until someone writes the scope
-  # that trips them, so match the scope generally — and the optional "!" while
-  # we are here, or a breaking-change marker would fall through the same hole.
+  # that trips them, so match the scope generally.
+  #
+  # A "!" marks a breaking change, and a breaking change is never housekeeping,
+  # so these match only the unmarked form. A `chore(deps)!:` that raises the Go
+  # version reaches "breaking changes" below instead of vanishing. A scope ends
+  # at its first ")", so a later "!:" in the subject cannot defeat the rule.
   filters:
     exclude:
-      - "^docs(\\(.*\\))?!?:"
-      - "^chore(\\(.*\\))?!?:"
-      - "^ci(\\(.*\\))?!?:"
-      - "^test(\\(.*\\))?!?:"
+      - "^docs(\\([^)]*\\))?:"
+      - "^chore(\\([^)]*\\))?:"
+      - "^ci(\\([^)]*\\))?:"
+      - "^test(\\([^)]*\\))?:"
+  # Groups claim commits in the order they are listed, and the first match
+  # wins, so "breaking changes" comes first and takes every "!:" subject,
+  # whatever its type. `order` only sorts the groups on the page.
+  # scripts/changelog.sh applies the same rules to CHANGELOG.md.
   groups:
+    - title: breaking changes
+      regexp: "^[a-z]+(\\([^)]*\\))?!:.*$"
+      order: -1
     - title: features
       regexp: "^.*feat(\\(.*\\))?!?:.*$"
       order: 0
@@ -175,6 +186,11 @@ release:
   prerelease: auto
   # Auto-generated release notes include the changelog groups above plus
   # an install snippet so the release page itself is a landing page.
+  #
+  # A release whose migration notes were sealed under its own heading in
+  # docs/migrating.md (`just migration-notes-seal`) links that section, and
+  # one without such a heading links nothing. readFile reads the tagged tree.
+  # GitHub anchors a heading such as "## v0.139.0" as #v01390.
   header: |
     ## terva {{ .Tag }}
 
@@ -194,3 +210,12 @@ release:
     Two builds ship: `terva_*` is the full binary (every feature compiled
     in, including the `terva acp` editor mode); `terva-min_*` is the lean
     build with the chat connectors left out. Both install the `terva` command.
+    {{- if contains (readFile "docs/migrating.md") (printf "\n## %s\n" .Tag) }}
+
+    Upgrading code that imports terva's Go packages? The
+    [migration notes for {{ .Tag }}](https://github.com/terva-sh/terva/blob/{{ .Tag }}/docs/migrating.md#{{ replace .Tag "." "" }})
+    say what to change. The stable packages are the ones
+    [`.api/packages.txt`](https://github.com/terva-sh/terva/blob/{{ .Tag }}/.api/packages.txt)
+    lists stable, and [embedding.md](https://github.com/terva-sh/terva/blob/{{ .Tag }}/docs/embedding.md)
+    says what that promises before 1.0.
+    {{- end }}

@@ -65,8 +65,17 @@ func ParseApprovalMode(s string) (ApprovalMode, error) {
 // leak data, trigger remote logging, or reach a private network, so it
 // must NOT be folded into the local-read auto-allow. See
 // docs/standard-tools.md.
+//
+// Unstable: the policy engine carries no promise before 1.0. The approval
+// callback (Confirmer, ConfirmDecision, ConfirmRequest, GrantScope) and the
+// ConfirmGate that calls it are stable.
 type Authority string
 
+// The Authority values.
+//
+// Unstable: the policy engine carries no promise before 1.0. The approval
+// callback (Confirmer, ConfirmDecision, ConfirmRequest, GrantScope) and the
+// ConfirmGate that calls it are stable.
 const (
 	// AuthLocalRead reads files/state under the jail with no process,
 	// network, or external side effect. Auto-allowable as "read-only"
@@ -110,13 +119,26 @@ const (
 // returns false so the caller falls back to the legacy read_only bool
 // (empty) or treats the tool as side-effecting (unknown) — the safe
 // default.
+//
+// Unstable: the policy engine carries no promise before 1.0. The approval
+// callback (Confirmer, ConfirmDecision, ConfirmRequest, GrantScope) and the
+// ConfirmGate that calls it are stable.
 func IsReadOnlyAuthority(a string) bool {
 	return Authority(a) == AuthLocalRead || Authority(a) == AuthLocalData
 }
 
 // RuleDecision is what a matched permission rule does with a call.
+//
+// Unstable: the policy engine carries no promise before 1.0. The approval
+// callback (Confirmer, ConfirmDecision, ConfirmRequest, GrantScope) and the
+// ConfirmGate that calls it are stable.
 type RuleDecision string
 
+// The RuleDecision values.
+//
+// Unstable: the policy engine carries no promise before 1.0. The approval
+// callback (Confirmer, ConfirmDecision, ConfirmRequest, GrantScope) and the
+// ConfirmGate that calls it are stable.
 const (
 	RuleAllow RuleDecision = "allow"
 	RuleDeny  RuleDecision = "deny"
@@ -133,6 +155,10 @@ const (
 // project-rules-cannot-allow restriction) happens at the config
 // boundary in packages/agent, so by the time a rule reaches the
 // policy it is trusted and total.
+//
+// Unstable: the policy engine carries no promise before 1.0. The approval
+// callback (Confirmer, ConfirmDecision, ConfirmRequest, GrantScope) and the
+// ConfirmGate that calls it are stable.
 type PermissionRule struct {
 	// Tool matches the tool name: exact, or prefix glob when it ends
 	// in '*' ("mcp_*").
@@ -194,8 +220,17 @@ func argsMatchTexts(args json.RawMessage) []string {
 // PolicyVerdict is the outcome of evaluating a call against the
 // policy, before any session memory or interactive prompt is
 // consulted.
+//
+// Unstable: the policy engine carries no promise before 1.0. The approval
+// callback (Confirmer, ConfirmDecision, ConfirmRequest, GrantScope) and the
+// ConfirmGate that calls it are stable.
 type PolicyVerdict int
 
+// The PolicyVerdict values.
+//
+// Unstable: the policy engine carries no promise before 1.0. The approval
+// callback (Confirmer, ConfirmDecision, ConfirmRequest, GrantScope) and the
+// ConfirmGate that calls it are stable.
 const (
 	// VerdictAsk defers to the session cache and the Confirmer.
 	VerdictAsk PolicyVerdict = iota
@@ -210,6 +245,10 @@ const (
 // classification the modes need. The classification is explicit data
 // supplied at construction — never derived by probing tool types —
 // and unknown tools (extensions, MCP) default to mutating.
+//
+// Unstable: the policy engine carries no promise before 1.0. The approval
+// callback (Confirmer, ConfirmDecision, ConfirmRequest, GrantScope) and the
+// ConfirmGate that calls it are stable.
 type PermissionPolicy struct {
 	Mode ApprovalMode
 	// Rules are evaluated in order; the first match decides. The

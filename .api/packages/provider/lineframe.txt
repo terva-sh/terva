@@ -1,0 +1,8 @@
+# packages/provider/lineframe (unstable): its exported API, one symbol per line.
+# Written by `just api-snapshot`. `just api-check` fails when it no longer matches the code.
+DefaultMaxBytes	const	untyped int
+NewReader	func	func(r io.Reader, max int, warn func(string)) *Reader
+ReadFrame	func	func(r *bufio.Reader, max int) (line []byte, tooLong bool, err error)
+Reader	type	struct
+Reader.Read	method	func() ([]byte, error)
+TrimCR	func	func(line []byte) []byte

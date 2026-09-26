@@ -26,6 +26,8 @@ import (
 var ReasoningLevels = []string{"off", "minimum", "low", "medium", "high", "maximum", "max"}
 
 // ReasoningLadder renders the ladder for help text and error messages.
+//
+// Unstable: the reasoning ladder's internals carry no promise before 1.0.
 func ReasoningLadder() string { return strings.Join(ReasoningLevels, "|") }
 
 // ValidReasoningLevel reports whether level is a thinking effort a surface may
@@ -57,6 +59,8 @@ func ValidReasoningLevel(level string) bool {
 // It lives beside the mappers that do the clamping. openAIResponsesNativeMax
 // recognizes the OpenAI models with this effort. The adaptive Anthropic
 // mappings, native and over the compat wire, pass "max" through.
+//
+// Unstable: the reasoning ladder's internals carry no promise before 1.0.
 func MaxIsNative(m Model) bool {
 	return m.AdaptiveThinking || openAIResponsesNativeMax(m.ID)
 }
@@ -131,6 +135,8 @@ func NormalizeReasoningSummary(mode string) string {
 // because only the builder can distinguish them (see build.Resolve). What
 // remains here is the last rung: a model's CATALOG default, which applies when
 // the user chose nothing at all.
+//
+// Unstable: the reasoning ladder's internals carry no promise before 1.0.
 func EffectiveReasoning(reqReasoning string, reasoningSet bool, m Model) string {
 	if reasoningSet {
 		return NormalizeReasoning(reqReasoning)
@@ -150,8 +156,13 @@ func EffectiveReasoning(reqReasoning string, reasoningSet bool, m Model) string 
 // the two ideas are perpendicular: a level says how hard to think, a source
 // says who chose it. Reusing the word is how you end up with the drift this
 // symbol exists to end. See ResolveReasoning.
+//
+// Unstable: the reasoning ladder's internals carry no promise before 1.0.
 type ReasoningSource int
 
+// The ReasoningSource values.
+//
+// Unstable: the reasoning ladder's internals carry no promise before 1.0.
 const (
 	// ReasoningFromSession is the --reasoning flag or a session override.
 	ReasoningFromSession ReasoningSource = iota
@@ -196,6 +207,8 @@ const (
 // Precedence is decided on the RAW strings, before normalizing: a non-empty raw
 // level — including "off"/"none", which normalize to "" — is an explicit
 // choice, and must beat the rungs below it. The returned level IS normalized.
+//
+// Unstable: the reasoning ladder's internals carry no promise before 1.0.
 func ResolveReasoning(session string, m Model, global string) (level string, from ReasoningSource) {
 	if session != "" {
 		return NormalizeReasoning(session), ReasoningFromSession
@@ -214,6 +227,8 @@ func ResolveReasoning(session string, m Model, global string) (level string, fro
 
 // ReasoningBudget returns terva's approximate token budget for thinking-capable
 // providers that accept explicit budgets.
+//
+// Unstable: the reasoning ladder's internals carry no promise before 1.0.
 func ReasoningBudget(level string) int {
 	switch NormalizeReasoning(level) {
 	case "minimum":
@@ -474,6 +489,8 @@ func openAICodexReasoningEffort(level, model string) string {
 // Comparable on purpose — a caller can spot two rungs that land on the same
 // wire value and say so, rather than offering the user a choice that is not
 // one.
+//
+// Unstable: the reasoning ladder's internals carry no promise before 1.0.
 type ReasoningEffect struct {
 	// Budget is the thinking-token budget actually sent, or 0 when this
 	// backend takes no budget.
@@ -505,6 +522,8 @@ func (e ReasoningEffect) Off() bool {
 // way it is sent. The only thing added here is the routing from a provider to
 // the wire it speaks, and reasoningWireFamily is census-guarded so a new
 // provider cannot slip through unclassified.
+//
+// Unstable: the reasoning ladder's internals carry no promise before 1.0.
 func ReasoningEffectFor(m Model, level string) ReasoningEffect {
 	if !m.Reasoning {
 		return ReasoningEffect{Supported: false}
@@ -542,6 +561,8 @@ func ReasoningEffectFor(m Model, level string) ReasoningEffect {
 // ReasoningRung is one row of the ladder as it applies to ONE model: the rung
 // a user picks, what it becomes on the wire, and — when several rungs land on
 // the same wire value — which of them is the one worth naming.
+//
+// Unstable: the reasoning ladder's internals carry no promise before 1.0.
 type ReasoningRung struct {
 	// Level is the rung as a user types it ("off", "minimum", …).
 	Level string
@@ -567,6 +588,8 @@ type ReasoningRung struct {
 // "same as minimum" reads backwards. So the canonical rung is the one whose
 // NAME matches the wire value, and only where no name matches does ladder
 // order decide.
+//
+// Unstable: the reasoning ladder's internals carry no promise before 1.0.
 func ReasoningLadderFor(m Model) []ReasoningRung {
 	effects := make([]ReasoningEffect, len(ReasoningLevels))
 	canonical := map[ReasoningEffect]string{}
@@ -608,6 +631,8 @@ func ReasoningLadderFor(m Model) []ReasoningRung {
 // LadderWireValue turns a displayed rung into the value the mappers take. The
 // ladder prints "off" where the wire means "no reasoning", which is the empty
 // string everywhere else in this package.
+//
+// Unstable: the reasoning ladder's internals carry no promise before 1.0.
 func LadderWireValue(rung string) string {
 	if rung == "off" {
 		return ""
@@ -655,11 +680,15 @@ func (w reasoningWire) String() string {
 // ClientReasoningWire names the reasoning wire the CLIENT actually speaks, as
 // declared by the concrete client's Capabilities(). Looks through wrappers.
 // Returns "unknown" for a client that has not declared one.
+//
+// Unstable: the reasoning ladder's internals carry no promise before 1.0.
 func ClientReasoningWire(c Client) string { return clientCaps(c).ReasoningWire.String() }
 
 // ProviderReasoningWire names the wire the provider TABLE believes the given
 // provider id speaks. The pair (ClientReasoningWire, ProviderReasoningWire)
 // must agree for every registered provider; see the build-side guard.
+//
+// Unstable: the reasoning ladder's internals carry no promise before 1.0.
 func ProviderReasoningWire(provider string) string { return reasoningWireFamily(provider).String() }
 
 // reasoningWireWiring maps a provider id to the wire its client speaks. It is

@@ -1,0 +1,218 @@
+# packages/agent/ext (stable): its exported API, one symbol per line.
+# Written by `just api-snapshot`. `just api-check` fails when it no longer matches the code.
+AssistantMessageDecision	type	struct
+AssistantMessageDecision.Block	field	bool
+AssistantMessageDecision.Reason	field	string
+AssistantMessageDecision.ReplaceText	field	string
+AssistantMessageHandler	type	func(text string) AssistantMessageDecision
+AuthorityExternalMutate	const	untyped string
+AuthorityLocalData	const	untyped string
+AuthorityLocalRead	const	untyped string
+AuthorityNetworkRead	const	untyped string
+AuthorityProcessExec	const	untyped string
+AuthorityWorkspaceMutate	const	untyped string
+BodyDiff	const	untyped string
+BodyJSON	const	untyped string
+BodyTable	const	untyped string
+BodyText	const	untyped string
+Card	type	struct
+Card.Blocking	field	bool
+Card.ID	field	string
+Card.Label	field	string
+Card.Priority	field	int
+Card.Text	field	string
+CommandHandler	type	func(args string) Response
+CompactStart	type	struct
+CompactStart.Reason	field	string
+Compaction	type	struct
+Config	type	map[string]json.RawMessage
+Config.Bool	method	func(key string) bool
+Config.Has	method	func(key string) bool
+Config.Int	method	func(key string) int
+Config.Raw	method	func(key string) (json.RawMessage, bool)
+Config.String	method	func(key string) string
+DataFS	type	struct
+DataFS.Exists	method	func(name string) bool
+DataFS.Path	method	func(name string) (string, error)
+DataFS.ReadFile	method	func(name string) ([]byte, error)
+DataFS.WriteFile	method	func(name string, data []byte, perm os.FileMode) error
+Display	func	func(text string) Response
+Errorf	func	func(format string, args ...any) Response
+Essential	func	func() ToolOption
+Event	type	struct
+Event.CWD	field	string
+Event.Config	field	Config
+Event.Error	field	string
+Event.Files	field	[]FileChange
+Event.Name	field	string
+Event.ProjectID	field	string
+Event.SessionID	field	string
+Event.SessionPath	field	string
+Event.SessionTitle	field	string
+Event.Step	field	int
+Event.Stop	field	string
+Event.Text	field	string
+Event.ToolArgs	field	json.RawMessage
+Event.ToolID	field	string
+Event.ToolName	field	string
+EventHandler	type	func(ev Event)
+Extension	type	struct
+Extension.ClearContextCard	method	func(id string)
+Extension.ClosePanel	method	func(panelID string)
+Extension.Command	method	func(name, description string, fn CommandHandler)
+Extension.Config	method	func() Config
+Extension.Connector	method unstable	func(caps connsdk.Capabilities, newTransport func(connsdk.Session) (connsdk.Transport, error))
+Extension.ContributeContext	method	func(text string)
+Extension.DeleteSecret	method	func(key string) error
+Extension.Host	method	func() HostInfo
+Extension.HostToolCall	method	func(name string, args json.RawMessage, opts ...HostCallOption) (ToolResult, error)
+Extension.InterceptAssistantMessage	method	func(fn AssistantMessageHandler)
+Extension.InterceptToolCall	method	func(fn InterceptHandler)
+Extension.InterceptToolCallX	method	func(fn ToolCallHandler)
+Extension.InterceptTurnStart	method	func(fn TurnStartHandler)
+Extension.InterceptUserMessage	method	func(fn UserMessageHandler)
+Extension.ListSessions	method	func() ([]SessionInfo, error)
+Extension.Logf	method	func(format string, args ...any)
+Extension.Notify	method	func(level, message string)
+Extension.On	method	func(name string, fn EventHandler)
+Extension.OnCompactStart	method	func(fn func(CompactStart))
+Extension.OnCompaction	method	func(fn func(Compaction))
+Extension.OnConfig	method	func(fn func(Config))
+Extension.OnPanelKey	method	func(panelID string, onKey func(key, text string), onClose func())
+Extension.OnRunEnd	method	func(fn func(RunEnd))
+Extension.OnSession	method	func(fn func(Session))
+Extension.OnSessionEnd	method	func(fn func(Session))
+Extension.OnUserMessage	method	func(fn func(UserMessage))
+Extension.OnWorkspaceChanged	method	func(fn func(WorkspaceChange))
+Extension.OpenPanel	method	func(id, title string, lines []string, footer string)
+Extension.OpenPanelWidgets	method unstable	func(id, title string, widgets []Widget, lines []string, footer string)
+Extension.PushContextCard	method	func(c Card)
+Extension.ReadSession	method	func(sessionID string) ([]SessionMessage, error)
+Extension.RefreshContext	method	func(text string)
+Extension.RenderPanel	method	func(panelID, title string, lines []string, footer string)
+Extension.RenderPanelWidgets	method unstable	func(panelID, title string, widgets []Widget, lines []string, footer string)
+Extension.RequireProtocol	method	func(version int)
+Extension.RestoreAllTools	method	func()
+Extension.RestoreTools	method	func(names ...string)
+Extension.Run	method	func() error
+Extension.Secret	method	func(key string) (string, bool, error)
+Extension.SecretKeys	method	func() ([]string, error)
+Extension.SetContextCard	method	func(id, label, text string)
+Extension.SetSecret	method	func(key, value string) error
+Extension.SetStatus	method	func(id, text string)
+Extension.SubmitSlash	method	func(text string)
+Extension.Tool	method	func(name, description string, schema json.RawMessage, fn ToolHandler, opts ...ToolOption)
+Extension.WithdrawAllTools	method	func()
+Extension.WithdrawTools	method	func(names ...string)
+FileChange	type	struct
+FileChange.Change	field	string
+FileChange.Path	field	string
+HostCallOption	type	func(*hostCallConfig)
+HostInfo	type	struct
+HostInfo.CWD	field	string
+HostInfo.Config	field	Config
+HostInfo.DataDir	field	string
+HostInfo.DataFS	method	func() DataFS
+HostInfo.Emits	method	func(event string) bool
+HostInfo.ExtensionDir	field	string
+HostInfo.Model	field	string
+HostInfo.ProjectDataDir	method	func() (string, error)
+HostInfo.ProjectID	field	string
+HostInfo.ProtocolVersion	field	int
+HostInfo.Provider	field	string
+HostInfo.SessionID	field	string
+HostInfo.SessionPath	field	string
+HostInfo.SessionTitle	field	string
+HostInfo.SupportedEvents	field	[]string
+HostInfo.ZotVersion	field	string
+Image	func	func(mimeType, base64Data string) ToolContent
+ImageBytes	func	func(mimeType string, data []byte) ToolContent
+Insert	func	func(text string) Response
+InterceptHandler	type	func(toolName string, args json.RawMessage) (allow bool, reason string)
+New	func	func(name, version string) *Extension
+Noop	func	func() Response
+OpenPanel	func	func(id, title string, lines []string, footer string) Response
+Panel	type	struct
+Panel.Footer	field	string
+Panel.ID	field	string
+Panel.Lines	field	[]string
+Panel.Title	field	string
+Prompt	func	func(text string) Response
+ReadOnly	func	func() ToolOption
+Response	type	struct
+Response.Action	field	string
+Response.Display	field	string
+Response.Error	field	string
+Response.Insert	field	string
+Response.OpenPanel	field	*Panel
+Response.Prompt	field	string
+RunEnd	type	struct
+Sequential	func	func() ToolOption
+Session	type	struct
+Session.CWD	field	string
+Session.ID	field	string
+Session.Path	field	string
+Session.ProjectID	field	string
+Session.ProtocolVersion	method	func() int
+Session.RefreshContext	method	func(text string)
+Session.RestoreAllTools	method	func()
+Session.RestoreTools	method	func(names ...string)
+Session.Title	field	string
+Session.WithdrawAllTools	method	func()
+Session.WithdrawTools	method	func(names ...string)
+SessionInfo	type	struct
+SessionInfo.ID	field	string
+SessionInfo.Messages	field	int
+SessionInfo.ModTime	field	int64
+SessionInfo.Preview	field	string
+SessionInfo.Title	field	string
+SessionMessage	type	struct
+SessionMessage.Role	field	string
+SessionMessage.Text	field	string
+Silent	func	func(on bool) HostCallOption
+Text	func	func(s string) ToolContent
+TextErrorResult	func	func(s string) ToolResult
+TextResult	func	func(s string) ToolResult
+ToneDanger	const unstable	untyped string
+ToneDefault	const unstable	untyped string
+ToneMuted	const unstable	untyped string
+ToneOK	const unstable	untyped string
+ToneWarn	const unstable	untyped string
+ToolCallDecision	type	struct
+ToolCallDecision.Block	field	bool
+ToolCallDecision.ModifiedArgs	field	json.RawMessage
+ToolCallDecision.Reason	field	string
+ToolCallHandler	type	func(toolName string, args json.RawMessage) ToolCallDecision
+ToolContent	type	struct
+ToolContent.Data	field	string
+ToolContent.MimeType	field	string
+ToolContent.Text	field	string
+ToolContent.Type	field	string
+ToolDisplay	type	struct
+ToolDisplay.Body	field	string
+ToolDisplay.Redact	field	[]string
+ToolDisplay.Subject	field	string
+ToolHandler	type	func(args json.RawMessage) ToolResult
+ToolOption	type	func(*toolDef)
+ToolResult	type	struct
+ToolResult.Content	field	[]ToolContent
+ToolResult.IsError	field	bool
+TurnStartDecision	type	struct
+TurnStartDecision.Block	field	bool
+TurnStartDecision.Reason	field	string
+TurnStartHandler	type	func(step int) TurnStartDecision
+UserMessage	type	struct
+UserMessage.Text	field	string
+UserMessageDecision	type	struct
+UserMessageDecision.Block	field	bool
+UserMessageDecision.Reason	field	string
+UserMessageDecision.ReplaceText	field	string
+UserMessageHandler	type	func(text string) UserMessageDecision
+Widget	type unstable	extproto.Widget
+WidgetItem	type unstable	extproto.WidgetItem
+WidgetKV	type unstable	extproto.WidgetKV
+WithAuthority	func	func(class string) ToolOption
+WithCallTimeout	func	func(d time.Duration) HostCallOption
+WithDisplay	func	func(d ToolDisplay) ToolOption
+WorkspaceChange	type	struct
+WorkspaceChange.Files	field	[]FileChange
