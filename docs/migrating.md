@@ -79,12 +79,17 @@ No notes yet.
 
 No notes yet.
 
+## v0.139.2
+
+v0.139.2 breaks no stable symbol of its own. v0.139.0 and v0.139.1 were
+published only on the project's own forge, so on GitHub v0.139.2 is the first
+release that carries the v0.139.0 changes. If you upgrade from v0.138.2,
+follow the v0.139.0 notes below.
+
 ## v0.139.1
 
-v0.139.1 breaks no stable symbol of its own. v0.139.0 was published only on
-the project's own forge, so on GitHub v0.139.1 is the first release that
-carries the v0.139.0 changes. If you upgrade from v0.138.2, follow the
-v0.139.0 notes below.
+v0.139.1 breaks no stable symbol of its own. Like v0.139.0, it was published
+only on the project's own forge.
 
 ## v0.139.0
 
