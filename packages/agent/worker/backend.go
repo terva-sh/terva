@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"terva.sh/terva/packages/agent/config"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // Backend is how to drive one coding agent that is not terva — the moral
@@ -106,7 +106,7 @@ type Backend struct {
 	// EncodeApprove encodes a decision as the reply frame for the child's stdin,
 	// correlated to the Ask's id. Required when RecognizeAsk is set, and
 	// NEWLINE-TERMINATED for the reason Steer is — these two share the pipe.
-	EncodeApprove func(askID string, d core.ConfirmDecision) ([]byte, error)
+	EncodeApprove func(askID string, d permission.ConfirmDecision) ([]byte, error)
 
 	// ApprovalSocket says this backend gates tool use through terva's MCP
 	// approval bridge rather than the rpc-native ask carrier. When true, the
@@ -187,7 +187,7 @@ type Event struct {
 }
 
 // Ask is one tool-approval request a worker surfaced — the wire-level analog of
-// a core.Confirmer prompt. The runner routes it to the orchestrator's human and
+// a permission.Confirmer prompt. The runner routes it to the orchestrator's human and
 // replies with the backend's EncodeApprove, correlated by ID.
 type Ask struct {
 	ID      string // the backend's correlation id, echoed back in the reply

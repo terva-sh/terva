@@ -22,7 +22,7 @@ import "terva.sh/terva/packages/agent/mode"
 // JSON, and there the far side is an embedder we have never met — nobody
 // promised to render anything, so we promise the model nothing.
 //
-// See docs/proposals/external-agent-workers.md (stage 1a) and Portability,
+// See docs/proposals/archive/external-agent-workers.md (stage 1a) and Portability,
 // which is the same shape of answer to the neighbouring question: portability
 // says whether a segment may LEAVE terva, surface says where its output LANDS.
 type Surface string

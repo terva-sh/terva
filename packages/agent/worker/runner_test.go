@@ -229,3 +229,87 @@ func buildFakeClaude(t *testing.T) string {
 	}
 	return out
 }
+
+// TestCancelWritesTheBackendsInterruptFrame drives the real runner through a
+// cancel on its inbox and reads what reached the child's stdin. A backend with
+// an Interrupt encoder gets its frame on the pipe and keeps running. A backend
+// without one gets no frame, and the transcript says the cancel cannot be
+// honored.
+func TestCancelWritesTheBackendsInterruptFrame(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix sockets (the inbox) are not supported on windows")
+	}
+	if testing.Short() {
+		t.Skip("skips the process-spawning runner test in -short mode")
+	}
+	resolved := loadedRepo(t)
+
+	for _, tc := range []struct {
+		name      string
+		interrupt bool
+	}{
+		{"with an interrupt", true},
+		{"without an interrupt", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stdin := filepath.Join(testsupport.TempDir(t), "stdin.jsonl")
+			backend := tervaBackend()
+			backend.Name = "stdin-recorder"
+			if !tc.interrupt {
+				backend.Interrupt = nil
+			}
+			backend.Command = func(d Dispatch) (*exec.Cmd, error) {
+				// cat copies every frame the runner writes, and lives until
+				// stdin closes, which is the lifetime of a real worker.
+				return exec.Command("sh", "-c", `cat > "$0"`, stdin), nil
+			}
+			f := swarm.New(swarm.Config{
+				Root:     testsupport.TempDir(t),
+				RepoRoot: testsupport.TempDir(t),
+				NewRunner: func(a *swarm.Agent) swarm.Runner {
+					return NewRunner(a, backend, resolved, nil)
+				},
+			})
+			defer f.StopAll()
+
+			a, err := f.Spawn(context.Background(), "a long task")
+			if err != nil {
+				t.Fatalf("spawn: %v", err)
+			}
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				err = f.SendMsg(a.ID, swarm.InboxMsg{Kind: "cancel"})
+				if err == nil || !errors.Is(err, swarm.ErrNotReady) || time.Now().After(deadline) {
+					break
+				}
+				time.Sleep(30 * time.Millisecond)
+			}
+			if err != nil {
+				t.Fatalf("send cancel: %v", err)
+			}
+			if !tc.interrupt {
+				waitForTranscript(t, a, "cannot cancel a turn mid-flight")
+			}
+			// A follow-up after the cancel proves the worker is still taking
+			// turns, and fences the read below: once it is on the pipe, the
+			// cancel's frame, which went first, is too.
+			if err := retrySend(t, f, a.ID, "the next turn", 2*time.Second); err != nil {
+				t.Fatalf("send follow-up: %v", err)
+			}
+			var got string
+			for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(25 * time.Millisecond) {
+				b, _ := os.ReadFile(stdin)
+				if got = string(b); strings.Contains(got, "the next turn") {
+					break
+				}
+			}
+			if !strings.Contains(got, "the next turn") {
+				t.Fatalf("the follow-up never reached the child; stdin:\n%s", got)
+			}
+			hasAbort := strings.Contains(got, `{"type":"abort"}`)
+			if hasAbort != tc.interrupt {
+				t.Errorf("abort frame on stdin = %v, want %v; stdin:\n%s", hasAbort, tc.interrupt, got)
+			}
+		})
+	}
+}

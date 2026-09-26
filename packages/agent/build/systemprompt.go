@@ -319,7 +319,7 @@ func hasTool(tools []ToolSummary, name string) bool {
 // a foreign coding agent has no use for the vessel and should not be told it
 // lives in one. Pair it with vesselFraming for terva's own agents.
 //
-// See PortabilityOf and docs/proposals/external-agent-workers.md.
+// See PortabilityOf and docs/proposals/archive/external-agent-workers.md.
 func identityIntro(name, Experience string) string {
 	n := strings.TrimSpace(name)
 	if n == "" {

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"bufio"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -304,5 +305,60 @@ func TestSteerFrameIsAUserTurn(t *testing.T) {
 		if !strings.Contains(string(frame), want) {
 			t.Errorf("steer frame missing %q: %s", want, frame)
 		}
+	}
+}
+
+// The interrupt is a control request on stdin, not a user turn. A frame that
+// reads as a user message would reach the model as text and stop nothing.
+func TestInterruptFrameIsAControlRequest(t *testing.T) {
+	a, err := interruptClaude()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := interruptClaude()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frame struct {
+		Type      string `json:"type"`
+		RequestID string `json:"request_id"`
+		Request   struct {
+			Subtype string `json:"subtype"`
+		} `json:"request"`
+	}
+	if err := json.Unmarshal(a, &frame); err != nil {
+		t.Fatalf("interrupt frame is not JSON: %v: %s", err, a)
+	}
+	if frame.Type != "control_request" || frame.Request.Subtype != "interrupt" || frame.RequestID == "" {
+		t.Errorf("want a control_request with subtype interrupt and an id, got %s", a)
+	}
+	if string(a) == string(b) {
+		t.Error("two interrupts share a request id")
+	}
+}
+
+// Recorded from 2.1.280 on 2026-09-24: the acknowledgement, then the result of
+// the interrupted turn. The result claims success, and the turn must not.
+func TestInterruptedResultBecomesAnErrorTaskEnd(t *testing.T) {
+	ack := `{"type":"control_response","response":{"subtype":"success","request_id":"terva-interrupt-1","response":{"still_queued":[]}}}`
+	if evs := translateClaude([]byte(ack)); len(evs) != 0 {
+		t.Errorf("the acknowledgement should translate to nothing, got %v", evs)
+	}
+
+	result := `{"type":"result","subtype":"success","is_error":false,"result":"","stop_reason":"end_turn","terminal_reason":"aborted_streaming","num_turns":4,"total_cost_usd":0.01}`
+	evs := translateClaude([]byte(result))
+	if len(evs) != 1 || evs[0].Type != "task_end" {
+		t.Fatalf("want one task_end, got %v", evs)
+	}
+	if msg, _ := evs[0].Data["error"].(string); !strings.Contains(msg, "interrupted") {
+		t.Errorf("an interrupted turn must say so, got error %v", evs[0].Data["error"])
+	}
+	if r, _ := evs[0].Data["terminal_reason"].(string); r != "aborted_streaming" {
+		t.Errorf("terminal_reason should pass through, got %v", evs[0].Data["terminal_reason"])
+	}
+
+	done := `{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","terminal_reason":"completed","num_turns":1}`
+	if evs := translateClaude([]byte(done)); len(evs) != 1 || evs[0].Data["error"] != nil {
+		t.Errorf("a completed turn must carry no error, got %v", evs)
 	}
 }

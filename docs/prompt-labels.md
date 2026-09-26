@@ -61,7 +61,7 @@ is a file to point at rather than paste.
 
 The classes exist for the external-agent-workers seam, where terva composes a
 briefing for a foreign coding agent; they are documented in
-`docs/proposals/external-agent-workers.md`. They are worth reading here whether
+`docs/proposals/archive/external-agent-workers.md`. They are worth reading here whether
 or not a worker ever runs: they are the clearest statement of which parts of
 terva's prompt are *about terva*.
 

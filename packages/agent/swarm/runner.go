@@ -586,8 +586,8 @@ func applyEventToSink(ev Event, sink Sink) {
 		// ev.Data — free from the child's init, no extra probe. We only mark
 		// idle today; the version reaches nowhere but the durable event log.
 		// Capture it onto the Agent/snapshot if a dashboard tile ever wants
-		// "backend vX.Y.Z" — see external-agent-workers.md, "Named, not built —
-		// the snapshot's other worker fields".
+		// "backend vX.Y.Z" — see docs/proposals/archive/external-agent-workers.md,
+		// "Named, not built — the snapshot's other worker fields".
 		sink.Activity("idle")
 	case "agent_stopped":
 		// terminal status is decided by Swarm.run from the runner's

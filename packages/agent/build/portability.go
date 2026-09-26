@@ -66,7 +66,7 @@ const (
 // a property of the segment, checked by the composer, not a convention a
 // reviewer has to remember.
 //
-// See docs/proposals/external-agent-workers.md ("What crosses the boundary").
+// See docs/proposals/archive/external-agent-workers.md ("What crosses the boundary").
 type Portability string
 
 const (

@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/procenv"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // BackendTerva is the name a SpawnRequest carries to get a terva-driving-terva
@@ -299,7 +299,7 @@ func recognizeTervaAsk(ev Event) (Ask, bool) {
 // encodeTervaApprove encodes a decision as the rpc `approve` command the worker
 // is blocked waiting for, correlated to the ask id. The field names match the
 // server's dispatch("approve") reader.
-func encodeTervaApprove(askID string, d core.ConfirmDecision) ([]byte, error) {
+func encodeTervaApprove(askID string, d permission.ConfirmDecision) ([]byte, error) {
 	line, err := json.Marshal(map[string]any{
 		"type":          "approve",
 		"id":            askID,
