@@ -256,11 +256,15 @@ func (s *rpcServer) questionResolving(id string) bool {
 }
 
 func cancelOwnedQuestion(pending *rpcPendingQuestion) {
-	if pending.cancel != nil {
-		pending.cancel()
-	}
+	// 🔑 The turn first. The question's wait context is a child of the turn's,
+	// so this ends both at once. The other order released the waiting tool
+	// into a live turn: the agent went on to its next model call, and the
+	// turn's cancellation then aborted that call mid-request.
 	if pending.turnCancel != nil {
 		pending.turnCancel()
+	}
+	if pending.cancel != nil {
+		pending.cancel()
 	}
 }
 

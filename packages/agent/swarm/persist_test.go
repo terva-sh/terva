@@ -553,10 +553,11 @@ func TestSpawnReqPersistsModel(t *testing.T) {
 }
 
 // TestSpawnRecordsLeaseAndApproval pins the two inputs to a worker's posture
-// policy: Spawn sets Leased iff AcquireWorktree granted a dedicated dir, records
-// an explicit Approval override, and both survive a Reload — so a resumed worker
-// keeps the posture it ran with (a leased worker stays autonomous; an override
-// persists).
+// policy: Spawn sets Leased iff AcquireWorktree granted a dedicated dir and
+// records an explicit Approval override. Both reach meta.json. A Reload keeps
+// the override, but it moves the agent back to RepoRoot, so it must clear
+// Leased with the lease. A leased flag on an agent in the shared checkout
+// would let a revived worker run yolo there.
 func TestSpawnRecordsLeaseAndApproval(t *testing.T) {
 	root := testsupport.TempDir(t)
 	leaseDir := testsupport.TempDir(t)
@@ -597,14 +598,20 @@ func TestSpawnRecordsLeaseAndApproval(t *testing.T) {
 		t.Errorf("meta lost posture inputs: leased=%v approval=%q", m.Leased, m.Approval)
 	}
 
-	// ...and carried across a Reload, so Resume keeps the posture.
+	// ...and across a Reload the override survives, while the lease does not.
 	g := New(Config{Root: root, RepoRoot: root})
 	if loaded, errs := g.Reload(); loaded != 1 || len(errs) > 0 {
 		t.Fatalf("reload loaded=%d errs=%v", loaded, errs)
 	}
 	re := g.Get(a.ID)
-	if re == nil || !re.Leased || re.Approval != "workspace" {
-		t.Errorf("reloaded agent lost posture inputs: %+v", re)
+	if re == nil {
+		t.Fatal("reloaded agent missing")
+	}
+	if re.Approval != "workspace" {
+		t.Errorf("reloaded Approval = %q, want the override to persist", re.Approval)
+	}
+	if re.Dir != root || re.Leased {
+		t.Errorf("reloaded agent in %q with leased=%v; want RepoRoot %q and not leased", re.Dir, re.Leased, root)
 	}
 }
 

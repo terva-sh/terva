@@ -142,11 +142,10 @@ func cardsDoctor(ctx context.Context, w *Workspace, s *wsSession, c card.Card, p
 	var cl provider.Client
 	var model string
 	if s != nil {
-		ag := s.agent
-		if ag == nil || ag.Client == nil {
+		cl = clientOf(s.agent)
+		if cl == nil {
 			return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("not logged in"))
 		}
-		cl = ag.Client
 		_, model = s.currentModel()
 		if strings.TrimSpace(p.Model) != "" {
 			cl, model, err = w.overrideClient(s.argsSnapshot(), p.Provider, p.Model)

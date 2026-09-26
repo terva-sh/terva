@@ -45,14 +45,14 @@ func (w *Workspace) SuggestReply(ctx context.Context, sess string, p ctrlproto.S
 		return ctrlproto.SuggestResult{}, err
 	}
 	ag := s.agent
-	if ag == nil || ag.Client == nil {
+	cl := clientOf(ag)
+	if cl == nil {
 		// No credential resolved for this session yet (a credential-less boot
 		// before /login). Nothing to draft against.
 		return ctrlproto.SuggestResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("not logged in"))
 	}
 	// Default to the session's live client + model; a per-generation override
 	// (Phase 7) resolves a fresh client for the chosen model instead.
-	cl := ag.Client
 	_, model := s.currentModel()
 	if strings.TrimSpace(p.Model) != "" {
 		oc, om, err := w.overrideClient(s.argsSnapshot(), p.Provider, p.Model)

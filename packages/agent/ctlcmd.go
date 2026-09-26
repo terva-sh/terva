@@ -132,6 +132,9 @@ func parseCtlArgs(args []string) (*ctlOptions, error) {
 				return nil, i18n.Errorf("--timeout %q is not a duration (try 30s, 2m)", v)
 			}
 			o.timeout = d
+		// A bare "-" is the params blob read from stdin, not a flag.
+		case a == "-":
+			positional = append(positional, a)
 		case strings.HasPrefix(a, "-"):
 			return nil, i18n.Errorf("unknown flag %q", a)
 		default:

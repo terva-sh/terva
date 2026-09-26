@@ -55,7 +55,8 @@ func (w *Workspace) SessionsNextScene(ctx context.Context, sess string, p ctrlpr
 // the roster, and the recorded lore.
 func proposeNextScene(ctx context.Context, s *wsSession, p ctrlproto.NextSceneParams) (ctrlproto.NextSceneResult, error) {
 	ag := s.agent
-	if ag == nil || ag.Client == nil {
+	cl := clientOf(ag)
+	if cl == nil {
 		return ctrlproto.NextSceneResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("not logged in"))
 	}
 	msgs := ag.Messages()
@@ -66,7 +67,6 @@ func proposeNextScene(ctx context.Context, s *wsSession, p ctrlproto.NextScenePa
 	if err != nil || strings.TrimSpace(persona.Charter) == "" {
 		return ctrlproto.NextSceneResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("the %s persona is unavailable", dramaturgPersona))
 	}
-	cl := ag.Client
 	_, model := s.currentModel()
 	if strings.TrimSpace(p.Model) != "" {
 		oc, om, err := s.ws.overrideClient(s.argsSnapshot(), p.Provider, p.Model)

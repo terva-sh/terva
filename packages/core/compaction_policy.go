@@ -151,6 +151,9 @@ func (p DefaultCompactionPolicy) mode() AutoCompactMode {
 
 // CompactionPolicy returns the policy the agent decides compaction with: the
 // one WithCompactionPolicy passed, or DefaultCompactionPolicy when none was.
+// It takes a.mu, so core calls it only where the lock is not held:
+// decideCompaction after it unlocks, compactHeld before it locks, and an
+// assembler segment, which the engine never assembles under the lock.
 func (a *Agent) CompactionPolicy() CompactionPolicy {
 	a.mu.Lock()
 	p := a.compactionPolicy

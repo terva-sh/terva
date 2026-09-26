@@ -58,8 +58,9 @@ type agentMeta struct {
 	Backend string `json:"backend,omitempty"`
 	// Approval is an explicit per-worker posture override; Leased records
 	// whether this agent got its own worktree. Both feed the worker backend's
-	// default-posture resolution, so a revived worker keeps the same posture it
-	// ran with (a leased worker stays autonomous; an explicit override persists).
+	// default-posture resolution. An explicit override persists across a
+	// restart. Leased does not: Reload moves the agent back to RepoRoot and
+	// clears the flag with the lease (buildDetachedAgent).
 	Approval string `json:"approval,omitempty"`
 	Leased   bool   `json:"leased,omitempty"`
 	// Origin is the spawning swarm's RepoRoot — the project this agent belongs
@@ -231,6 +232,12 @@ func (f *Swarm) buildDetachedAgent(m agentMeta) *Agent {
 	if f.cfg.RepoRoot != "" {
 		dir = f.cfg.RepoRoot
 	}
+	// 🚨 Leased means Dir is the agent's own worktree, and a worker backend
+	// reads it as permission to run yolo. The coercion above has just moved
+	// the agent into the operator's live checkout, so the flag must go with
+	// the lease, or the revived worker runs yolo in the shared tree. Without
+	// the flag it inherits the dispatcher's posture, like any unleased worker.
+	leased := m.Leased && filepath.Clean(dir) == filepath.Clean(m.Dir)
 	a := &Agent{
 		ID:           m.ID,
 		Task:         m.Task,
@@ -245,7 +252,7 @@ func (f *Swarm) buildDetachedAgent(m agentMeta) *Agent {
 		Card:         m.Card,
 		Backend:      m.Backend,
 		Approval:     m.Approval,
-		Leased:       m.Leased,
+		Leased:       leased,
 		Origin:       m.Origin,
 		Schema:       m.Schema,
 		InboxPath:    m.InboxPath,

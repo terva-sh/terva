@@ -124,3 +124,79 @@ func spawnAndCapturePosture(t *testing.T, dispatcher, override string, leased bo
 		return ""
 	}
 }
+
+// TestRevivedLeasedWorkerLosesAutonomyWithItsLease covers a worker revived
+// after a daemon restart. Reload moves a detached agent back to RepoRoot, so a
+// worker that ran autonomously in its own lease is revived in the operator's
+// live checkout. There it must inherit the dispatcher's posture like any
+// unleased worker. Before the fix it kept its leased flag and ran yolo in the
+// shared tree.
+func TestRevivedLeasedWorkerLosesAutonomyWithItsLease(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the inbox is a unix socket")
+	}
+	tervaHome(t, "")
+
+	repo := testsupport.TempDir(t)
+	r, err := build.Resolve(build.Args{CWD: repo, Approval: "ask"}, false)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	type dispatched struct{ posture, dir string }
+	captured := make(chan dispatched, 2)
+	backend := tervaBackend()
+	backend.Name = "recorder"
+	backend.Command = func(d Dispatch) (*exec.Cmd, error) {
+		captured <- dispatched{d.Briefing.Policy.Posture, d.Dir}
+		return exec.Command("true"), nil
+	}
+	newRunner := func(a *swarm.Agent) swarm.Runner { return NewRunner(a, backend, r, nil) }
+	wait := func(what string) dispatched {
+		t.Helper()
+		select {
+		case d := <-captured:
+			return d
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s: backend Command was never invoked", what)
+			return dispatched{}
+		}
+	}
+
+	root := testsupport.TempDir(t)
+	lease := testsupport.TempDir(t)
+	first := swarm.New(swarm.Config{
+		Root: root, RepoRoot: repo, NewRunner: newRunner,
+		AcquireWorktree: func(ctx context.Context, req swarm.WorktreeReq) (swarm.WorktreeLease, error) {
+			return swarm.WorktreeLease{Dir: lease, Release: func() {}}, nil
+		},
+	})
+	a, err := first.SpawnReq(context.Background(), swarm.SpawnRequest{Task: "do the thing"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	// Positive control: the first run really is the autonomous leased case, so
+	// a pass below cannot come from a worker that was never leased.
+	if d := wait("first run"); d.posture != "yolo" || d.dir != lease {
+		t.Fatalf("first run dispatched (%q, %q), want (yolo, %q)", d.posture, d.dir, lease)
+	}
+	a.Wait()
+	first.StopAll()
+
+	// A daemon restart: a fresh Swarm over the same state root.
+	second := swarm.New(swarm.Config{Root: root, RepoRoot: repo, NewRunner: newRunner})
+	defer second.StopAll()
+	if loaded, errs := second.Reload(); loaded != 1 || len(errs) > 0 {
+		t.Fatalf("reload loaded=%d errs=%v", loaded, errs)
+	}
+	if _, err := second.Resume(context.Background(), a.ID); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	d := wait("revival")
+	if d.dir != repo {
+		t.Fatalf("revival dispatched in %q, want RepoRoot %q", d.dir, repo)
+	}
+	if d.posture != "ask" {
+		t.Errorf("revival in the shared checkout dispatched posture %q, want the dispatcher's %q", d.posture, "ask")
+	}
+}

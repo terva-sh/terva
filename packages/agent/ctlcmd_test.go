@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // fakeCaller stands in for the connected client: it records what was sent and
@@ -173,6 +176,36 @@ func TestParseCtlArgs(t *testing.T) {
 	t.Run("an unknown flag is refused rather than read as a verb", func(t *testing.T) {
 		if _, err := parseCtlArgs([]string{"--shpae", "worlds.list"}); err == nil {
 			t.Error("a typo'd flag must not fall through to the positional list")
+		}
+	})
+	// The help names "-" as the way to read params from stdin, and the flag
+	// catch-all used to refuse it as an unknown flag.
+	t.Run("a bare - is the params blob, and stdin supplies it", func(t *testing.T) {
+		o, err := parseCtlArgs([]string{"talkoot.create", "-", "--timeout", "5s"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if o.verb != "talkoot.create" || o.params != "-" {
+			t.Fatalf("got %+v", o)
+		}
+		in := filepath.Join(testsupport.TempDir(t), "params.json")
+		if err := os.WriteFile(in, []byte(`{"id":"crew"}`+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f, err := os.Open(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		saved := os.Stdin
+		os.Stdin = f
+		defer func() { os.Stdin = saved }()
+		got, err := ctlParams(o.params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m, ok := got.(map[string]any); !ok || m["id"] != "crew" {
+			t.Errorf("params from stdin = %#v", got)
 		}
 	})
 	t.Run("--timeout takes a duration", func(t *testing.T) {

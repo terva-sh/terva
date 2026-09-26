@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
@@ -67,7 +68,8 @@ func (w *Workspace) SideChatOpen(ctx context.Context, sess string) (string, erro
 		return "", err
 	}
 	ag := s.agent
-	if ag == nil || ag.Client() == nil {
+	cl := clientOf(ag)
+	if cl == nil {
 		// No credential resolved for this session yet (a credential-less boot
 		// before /login). Nothing to complete against.
 		return "", ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("not logged in"))
@@ -81,7 +83,7 @@ func (w *Workspace) SideChatOpen(ctx context.Context, sess string) (string, erro
 	snap := &sideChatSnapshot{
 		system:    frame.SystemText(),
 		msgs:      ag.Messages(), // Messages returns a copy; the freeze is real
-		client:    ag.Client(),
+		client:    cl,
 		model:     model,
 		ephemeral: frame.VolatileText(),
 	}
@@ -232,4 +234,15 @@ func streamText(ctx context.Context, cl provider.Client, req provider.Request) (
 		return "", usage, ctx.Err()
 	}
 	return sb.String(), usage, nil
+}
+
+// clientOf is the client ag's next turn sends with, or nil when there is no
+// agent or no credential resolved yet. A side request reads it once and uses
+// that value throughout, so a model swap that lands while it runs cannot send
+// half of the request to one provider and half to another.
+func clientOf(ag *core.Agent) provider.Client {
+	if ag == nil {
+		return nil
+	}
+	return ag.Client()
 }

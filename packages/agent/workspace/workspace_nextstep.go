@@ -122,7 +122,8 @@ func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlprot
 		return ctrlproto.NextStepResult{}, err
 	}
 	ag := s.agent
-	if ag == nil || ag.Client() == nil {
+	cl := clientOf(ag)
+	if cl == nil {
 		// No credential resolved for this session yet (a credential-less boot
 		// before /login). Nothing to complete against.
 		return ctrlproto.NextStepResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("not logged in"))
@@ -161,7 +162,7 @@ func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlprot
 	// turn's assembly records which lore entries fired, and a suggestion the user
 	// never sees must not write that state on the session's behalf.
 	frame := ag.FramePreview()
-	system, tools, cacheKey, aligned := ag.DispatchedPrefix(ag.Client(), model)
+	system, tools, cacheKey, aligned := ag.DispatchedPrefix(cl, model)
 	if !aligned {
 		system, tools, cacheKey = frame.SystemText(), nil, ""
 	}
@@ -171,7 +172,7 @@ func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlprot
 	}
 	msgs = append(msgs, nextStepMessage(NextStepTag+" "+body))
 
-	out, usage, err := streamText(ctx, ag.Client(), provider.Request{
+	out, usage, err := streamText(ctx, cl, provider.Request{
 		Model:     model,
 		System:    system,
 		Messages:  msgs,

@@ -53,7 +53,8 @@ func (w *Workspace) SessionsRealize(ctx context.Context, sess string, p ctrlprot
 // whole conversation.
 func proposeRealize(ctx context.Context, s *wsSession, p ctrlproto.RealizeParams) (ctrlproto.RealizeResult, error) {
 	ag := s.agent
-	if ag == nil || ag.Client == nil {
+	cl := clientOf(ag)
+	if cl == nil {
 		return ctrlproto.RealizeResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("not logged in"))
 	}
 	msgs := ag.Messages()
@@ -61,7 +62,6 @@ func proposeRealize(ctx context.Context, s *wsSession, p ctrlproto.RealizeParams
 	if err != nil || strings.TrimSpace(pers.Charter) == "" {
 		return ctrlproto.RealizeResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("the %s persona is unavailable", realizePersona))
 	}
-	cl := ag.Client
 	_, model := s.currentModel()
 	if strings.TrimSpace(p.Model) != "" {
 		oc, om, err := s.ws.overrideClient(s.argsSnapshot(), p.Provider, p.Model)
