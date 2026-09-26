@@ -99,6 +99,50 @@ def short(sha, n=12):
     return (sha or "?")[:n]
 
 
+def who(res):
+    """Which review this is, in the words its status context uses.
+
+    A single review names its profile and model. A named reviewer is also
+    published under its own name, terva-review/reviewer:NAME, and a panel
+    under terva-review/panel:NAME with no model of its own, so each says so
+    rather than printing `model ?`.
+    """
+    profile = (res.get("profile") or {}).get("id", "?")
+    panel = res.get("panel")
+    if isinstance(panel, dict):
+        return "panel %s" % panel.get("name", "?")
+    ex = res.get("execution") or {}
+    reviewer = res.get("reviewer")
+    name = "reviewer %s, " % reviewer if reviewer else ""
+    return "%sprofile %s, model %s" % (name, profile, ex.get("model", "?"))
+
+
+def panel_lines(panel):
+    """A panel's members, how its findings were combined, and who was skipped."""
+    members = []
+    for m in panel.get("members") or []:
+        ex = m.get("execution") or {}
+        state = (m.get("completion") or {}).get("state", "?")
+        members.append("%s (%s, %s)" % (m.get("member", "?"), ex.get("model", "?"), state))
+    lines = ["members " + ("; ".join(members) or "none")]
+    syn = panel.get("synthesis")
+    if isinstance(syn, dict):
+        how = "synthesized by %s" % syn.get("member", "?")
+        if syn.get("state") != "completed":
+            how = "merged by location: synthesis by %s failed (%s)" % (
+                syn.get("member", "?"), syn.get("reason", "?"))
+        set_aside = len(syn.get("setAside") or [])
+        if set_aside:
+            how += ", %d finding(s) set aside" % set_aside
+        lines.append(how)
+    else:
+        lines.append("merged by location")
+    skipped = [s.get("member", "?") for s in panel.get("skipped") or []]
+    if skipped:
+        lines.append("not triggered: " + ", ".join(skipped))
+    return lines
+
+
 def render(rows):
     for when, res in rows:
         rev = res.get("revision") or {}
@@ -107,11 +151,13 @@ def render(rows):
         print("  %s  head %s  base %s"
               % (when[:19] or "?", short(rev.get("headSha")),
                  short(rev.get("baseSha"))))
-        print("    profile %s, model %s, %s, %d finding(s)"
-              % ((res.get("profile") or {}).get("id", "?"),
-                 ex.get("model", "?"),
-                 (res.get("completion") or {}).get("state", "?"),
+        print("    %s, %s, %d finding(s)"
+              % (who(res), (res.get("completion") or {}).get("state", "?"),
                  len(findings)))
+        panel = res.get("panel")
+        if isinstance(panel, dict):
+            for line in panel_lines(panel):
+                print("    " + line)
 
         # Which project config reached the prompt. Absent means the review ran
         # on the action's shipped templates, which is worth seeing: it is the

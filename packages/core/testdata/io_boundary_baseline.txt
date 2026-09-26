@@ -5,38 +5,12 @@
 # This file can only shrink. A change that removes an I/O reference lowers
 # or deletes its line in the same commit, and the test fails until it does.
 # Do not add a line: take the new I/O through an interface the host
-# implements (decision 0021, rule 1).
+# implements (decision 0021, rule 1). CI's Engine boundary guard
+# (cmd/terva-boundary-guard) fails a change that adds a line or raises a
+# count, unless a commit on the branch carries `Boundary-Grows: <reason>`.
 #
 # Seeded from origin/sothr-main at 8ae116db on 2026-09-23.
-packages/core/session.go	os.File	2
-packages/core/session.go	os.O_APPEND	4
-packages/core/session.go	os.O_CREATE	2
-packages/core/session.go	os.O_EXCL	1
-packages/core/session.go	os.O_WRONLY	4
-packages/core/session.go	os.Open	10
-packages/core/session.go	os.ReadDir	7
-packages/core/session.go	os.Remove	5
-packages/core/session.go	os.Stat	2
-packages/core/session_archive.go	os.File	1
-packages/core/session_archive.go	os.O_CREATE	2
-packages/core/session_archive.go	os.O_TRUNC	2
-packages/core/session_archive.go	os.O_WRONLY	2
-packages/core/session_archive.go	os.Open	4
-packages/core/session_archive.go	os.ReadDir	1
-packages/core/session_archive.go	os.Remove	12
-packages/core/session_archive.go	os.Rename	2
-packages/core/session_archive.go	os.Stat	6
-packages/core/session_lock.go	os.Executable	1
-packages/core/session_portable.go	os.MkdirAll	1
-packages/core/session_portable.go	os.O_CREATE	3
-packages/core/session_portable.go	os.O_EXCL	2
-packages/core/session_portable.go	os.O_TRUNC	1
-packages/core/session_portable.go	os.O_WRONLY	3
-packages/core/session_portable.go	os.Open	3
-packages/core/session_portable.go	os.OpenFile	1
-packages/core/session_portable.go	os.ReadDir	2
-packages/core/session_portable.go	os.Stat	2
-packages/core/session_replay.go	os.Open	2
-packages/core/session_reveal.go	os.Open	1
-packages/core/session_state.go	os.ReadFile	1
-packages/core/session_state.go	os.Remove	1
+#
+# Empty since TKT-01M35WK0T moved the JSONL session store to packages/session
+# (2026-09-23): the engine and the wire perform no file, environment or
+# process I/O. Keep it that way.

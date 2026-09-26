@@ -18,6 +18,11 @@
 # listed here, and on a line whose dependency is gone. When a change removes
 # an import, delete its line in the same commit.
 #
+# A pure or wire line may be added. An io line may not: CI's Engine boundary
+# guard (cmd/terva-boundary-guard, `just boundary-guard`) compares this file
+# with the merge base and fails a change that adds one. A commit trailer
+# `Boundary-Grows: <reason>` on the branch allows it on purpose.
+#
 # An io entry reached through the wire leaves the engine's list only when the
 # wire's own entry leaves, and after every other path to it is gone.
 
@@ -26,10 +31,8 @@ packages/core packages/provider   wire  The engine imports the wire by design (d
 packages/core packages/provider/buildinfo pure Reached through the wire (provider/opencode.go). Build identity set once at startup. Moved under the wire by TKT-01M35WJYZ.
 packages/core packages/provider/lineframe pure Reached through the wire (provider/sse.go). A bounded line reader over an io.Reader. Moved under the wire by TKT-01M35WJYZ.
 packages/core packages/core/compactprose pure The neutral compaction text the engine falls back to (TKT-01M35WJZS). Reads nothing; imports only fmt.
+packages/core packages/core/transcriptcodec pure The transcript codec, tool-call repair and image exclusion, carved out of the engine so the session store can share them (TKT-01M35WK0T). No I/O; TestIOBoundary scans it.
 packages/core packages/core/i18n  pure  The engine's translator seam (TKT-01M35WJYZ). Reads nothing, and returns English until a host installs a translator.
-packages/core packages/sessionlock io   Imported by session.go, session_archive.go, session_lock.go. TKT-01M35WK0T moves the session store out.
-packages/core packages/privfs     io    Imported by session*.go (TKT-01M35WK0T).
-packages/core packages/filelock   io    Reached through sessionlock (TKT-01M35WK0T).
 
 # The wire.
 packages/provider packages/provider/buildinfo pure opencode.go reads the build version for a request header.

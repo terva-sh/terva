@@ -122,6 +122,12 @@ resolve in order: `--api-key` flag → provider env var (`ANTHROPIC_API_KEY`,
 refresh, and the auth-file format are covered in
 [docs/providers.md](docs/providers.md).
 
+Using a subscription login through a third-party tool is a legal gray area
+with some providers, and you take full responsibility for how you connect
+terva to a provider's service. The terva project itself uses API keys. Read
+[Provider terms are yours to follow](docs/providers.md#provider-terms-are-yours-to-follow)
+before you log in with a subscription.
+
 ## Usage
 
 ```bash

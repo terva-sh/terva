@@ -13,6 +13,9 @@ Use `/login` in interactive mode.
 
 Use `/logout` to remove stored credentials.
 
+Before you use a subscription login, read
+[Provider terms are yours to follow](#provider-terms-are-yours-to-follow).
+
 Some providers need more than a single pasted key. For those providers,
 `/login` shows setup instructions instead of opening a localhost browser form.
 This avoids broken browser flows in SSH, containers, and `kubectl exec`
@@ -56,9 +59,41 @@ the `/login` dialog. It also accepts a bare code or `code#state`.
 Anthropic additionally offers a variant that redirects to its own console
 instead of a local port, so no local server is involved at all.
 
+## Provider terms are yours to follow
+
+terva connects to a model provider in whichever way you set it up: an API key,
+a cloud provider's credentials, a subscription login, or another vendor's
+agent CLI, such as Claude Code, that terva runs as a worker. Each provider sets
+its own terms for how its service may be used, and those terms change. terva
+cannot tell you whether a connection is permitted, and it does not enforce any
+provider's terms for you.
+
+Some of these connections are a legal gray area, and subscription logins are
+the clearest case. A consumer subscription, such as Claude Pro or Max or
+ChatGPT Plus or Pro, is usually priced for the provider's own apps. A provider
+may restrict it, meter it differently, or suspend the account when it is used
+through a third-party tool. Anthropic's terms, as read in September 2026, say
+that third-party developers may not offer Claude.ai login in their own
+applications, and terva's Anthropic subscription login is a login of that
+kind. Running another vendor's agent CLI under your own subscription is not
+clearly covered by that vendor's terms either.
+
+**You take full responsibility for how you attach terva to a provider
+service.** That covers whether your agreement with the provider permits it,
+what it costs, and what happens if the provider restricts or suspends your
+account. Read the provider's current terms before you use a subscription login.
+For Anthropic, start with
+[Claude Code's legal and compliance page](https://code.claude.com/docs/en/legal-and-compliance).
+
+**The terva project uses API keys.** An API key, or a supported cloud
+provider's credentials, is the path providers document for tools like terva.
+Its billing is metered and visible, and it is what the maintainers run. If you
+want the least ambiguity, use one.
+
 ## Subscription providers
 
-These providers support subscription login:
+These providers support subscription login. Each one is covered by
+[Provider terms are yours to follow](#provider-terms-are-yours-to-follow).
 
 | Provider | Notes |
 | --- | --- |
