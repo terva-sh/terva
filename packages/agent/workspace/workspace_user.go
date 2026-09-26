@@ -49,7 +49,7 @@ func (w *Workspace) UserBind(_ context.Context, sess string, p ctrlproto.UserBin
 	s.user.Set(desc)
 	// A changed name is the {{user}} macro in the cached prefix, so it needs a
 	// deliberate rebuild: thread the new name into args, rebuild the prompt prefix
-	// (rebuildTools re-Resolves + SetSystem, emitting the honest prompt-rebuilt
+	// (rebuildTools re-Resolves + Assembler.SetStable, emitting the honest prompt-rebuilt
 	// cache-bust notice), then re-wire the tail (reloadLore) so the triggered lore
 	// and the user-persona frame pick up the new {{user}} name too. Gender/pronouns
 	// ride the uncached tail (Args → the user-persona frame), so a change there is a

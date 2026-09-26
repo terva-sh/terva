@@ -21,9 +21,9 @@ import (
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/persona"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // dramaturgPersona is the built-in session-doctor persona, resolved by its
@@ -59,11 +59,11 @@ func (w *Workspace) SessionsDoctor(ctx context.Context, sess string, p ctrlproto
 // spend-and-book path runs under test with a scripted client (the split the
 // card doctor's Workspace-level client resolution can't have).
 func sessionsDoctor(ctx context.Context, s *wsSession, p ctrlproto.SessionDoctorParams) (ctrlproto.SessionDoctorResult, error) {
-	if s.sess == nil || s.sess.Meta.Experience == "" {
+	if s.sess == nil || s.sess.Stage.Experience == "" {
 		return ctrlproto.SessionDoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the session doctor reads a chat or play session"))
 	}
 	ag := s.agent
-	if ag == nil || ag.Client == nil {
+	if ag == nil || ag.Client() == nil {
 		return ctrlproto.SessionDoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("not logged in"))
 	}
 	pers, err := persona.Resolve(dramaturgPersona)
@@ -71,7 +71,7 @@ func sessionsDoctor(ctx context.Context, s *wsSession, p ctrlproto.SessionDoctor
 		return ctrlproto.SessionDoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("the %s persona is unavailable", dramaturgPersona))
 	}
 	// Default to the session's live client + model; an override resolves fresh.
-	cl := ag.Client
+	cl := ag.Client()
 	_, model := s.currentModel()
 	if strings.TrimSpace(p.Model) != "" {
 		oc, om, err := s.ws.overrideClient(s.argsSnapshot(), p.Provider, p.Model)
@@ -169,7 +169,7 @@ const focusWindow = 6
 // renderFocusEvidence is the mark-as-lore evidence (SD2): the marked message
 // quoted as such, its neighborhood for grounding, and the recorded lore for
 // the delta guard. No census — the author already pointed.
-func renderFocusEvidence(playerLabel, boundName string, roster []string, lore []core.WorldLoreEntry, msgs []provider.Message, focus int) string {
+func renderFocusEvidence(playerLabel, boundName string, roster []string, lore []session.WorldLoreEntry, msgs []provider.Message, focus int) string {
 	lo := focus - focusWindow
 	if lo < 0 {
 		lo = 0
@@ -235,7 +235,7 @@ Rules:
 // totalMsgs is the session's FULL message count, which a focused run's
 // windowed transcript no longer carries — the pin's drift is measured against
 // the scene played, not against the slice the doctor was handed.
-func renderDramaturgEvidence(playerLabel, boundName string, roster []string, lore []core.WorldLoreEntry, transcript []provider.Message, totalMsgs int, census dramaturgCensusReport) string {
+func renderDramaturgEvidence(playerLabel, boundName string, roster []string, lore []session.WorldLoreEntry, transcript []provider.Message, totalMsgs int, census dramaturgCensusReport) string {
 	var b strings.Builder
 	b.WriteString("THE PLAYED SCENE (most recent last) — your only warrant\n")
 	charLabel := boundName
@@ -261,9 +261,9 @@ func renderDramaturgEvidence(playerLabel, boundName string, roster []string, lor
 	// "do not re-record" is the wrong rule for it (a scene_state proposal is an
 	// UPDATE), and the doctor needs to see the current card to propose one.
 	sceneState := ""
-	rest := make([]core.WorldLoreEntry, 0, len(lore))
+	rest := make([]session.WorldLoreEntry, 0, len(lore))
 	for _, e := range lore {
-		if core.IsSceneState(e.Name) {
+		if session.IsSceneState(e.Name) {
 			sceneState = e.Content
 			continue
 		}
@@ -340,7 +340,7 @@ const (
 
 // censusKnownNames collects every name the census must not flag: the player
 // and bound character, the roster, and every lore name and audience member.
-func censusKnownNames(boundName, playerLabel string, roster []string, lore []core.WorldLoreEntry) map[string]bool {
+func censusKnownNames(boundName, playerLabel string, roster []string, lore []session.WorldLoreEntry) map[string]bool {
 	known := map[string]bool{}
 	addName := func(n string) {
 		for _, w := range strings.Fields(strings.ToLower(strings.TrimSpace(n))) {
@@ -446,7 +446,7 @@ func dramaturgCensus(msgs []provider.Message, known map[string]bool) dramaturgCe
 // enforces); a promotion of the bound character or an existing roster member
 // is dropped. Validation is server-side so every client sees the same
 // contract.
-func parseSessionDoctorResult(raw string, lore []core.WorldLoreEntry, roster []string, boundName string) (ctrlproto.SessionDoctorResult, error) {
+func parseSessionDoctorResult(raw string, lore []session.WorldLoreEntry, roster []string, boundName string) (ctrlproto.SessionDoctorResult, error) {
 	body := extractJSONObject(raw)
 	if body == "" {
 		return ctrlproto.SessionDoctorResult{}, i18n.Errorf("the session doctor returned no usable proposals")
@@ -463,7 +463,7 @@ func parseSessionDoctorResult(raw string, lore []core.WorldLoreEntry, roster []s
 	// lore_retire validates against THIS, never against loreNames — which grows
 	// as lore_entry proposals are accepted into the round, and would otherwise
 	// let the doctor retire an entry it had just proposed in the same breath.
-	recorded := map[string]core.WorldLoreEntry{} // lowered name → the entry as recorded
+	recorded := map[string]session.WorldLoreEntry{} // lowered name → the entry as recorded
 	for _, e := range lore {
 		loreNames[strings.ToLower(e.Name)] = true
 		recorded[strings.ToLower(strings.TrimSpace(e.Name))] = e
@@ -484,7 +484,7 @@ func parseSessionDoctorResult(raw string, lore []core.WorldLoreEntry, roster []s
 		// A lore/thread proposal addressed to the reserved pin name IS a
 		// scene-state proposal, whatever the doctor called it — retag rather
 		// than let the collision rule drop an update the author should see.
-		if (p.Kind == ctrlproto.SessionProposalLore || p.Kind == ctrlproto.SessionProposalThread) && core.IsSceneState(p.Name) {
+		if (p.Kind == ctrlproto.SessionProposalLore || p.Kind == ctrlproto.SessionProposalThread) && session.IsSceneState(p.Name) {
 			p.Kind = ctrlproto.SessionProposalState
 		}
 		switch p.Kind {
@@ -514,7 +514,7 @@ func parseSessionDoctorResult(raw string, lore []core.WorldLoreEntry, roster []s
 				continue
 			}
 			seenState = true
-			p.Name = core.SceneStateName
+			p.Name = session.SceneStateName
 			p.Keys, p.Audience = nil, nil
 			p.Character, p.Description, p.Personality, p.FirstMes = "", "", "", ""
 		case ctrlproto.SessionProposalRetire:
@@ -526,7 +526,7 @@ func parseSessionDoctorResult(raw string, lore []core.WorldLoreEntry, roster []s
 			// leftover payload would render as if it did.
 			key := strings.ToLower(strings.TrimSpace(p.Name))
 			e, exists := recorded[key]
-			if !exists || retiring[key] || core.IsSceneState(e.Name) || core.IsStorySoFar(e.Name) {
+			if !exists || retiring[key] || session.IsSceneState(e.Name) || session.IsStorySoFar(e.Name) {
 				continue
 			}
 			retiring[key] = true

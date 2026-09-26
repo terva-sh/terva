@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/testsupport"
@@ -92,7 +93,7 @@ func TestSwarmWatcherFinalisesOnTerminalCrash(t *testing.T) {
 	defer f.StopAll()
 
 	s := &wsSession{
-		agent: core.NewAgent(nil, "fake-model", "", core.Registry{}),
+		agent: coretest.NewAgent(nil, "fake-model", "", core.Registry{}),
 		hub:   &wsHub{},
 	}
 	s.turnCancel = func(error) {}
@@ -153,7 +154,7 @@ func TestCarrierRecapFlowsToSessionQueue(t *testing.T) {
 	defer f.StopAll()
 
 	s := &wsSession{
-		agent: core.NewAgent(nil, "fake-model", "", core.Registry{}),
+		agent: coretest.NewAgent(nil, "fake-model", "", core.Registry{}),
 		hub:   &wsHub{},
 	}
 	// A live turnCancel makes s.queue take the QueueMessage branch (queue
@@ -262,7 +263,7 @@ func TestFindingsBudgetsAreMaxMinFair(t *testing.T) {
 // back, presented as the review it had asked for.
 func TestRecapNamesATurnErrorFailure(t *testing.T) {
 	s := &wsSession{
-		agent: core.NewAgent(nil, "fake-model", "", core.Registry{}),
+		agent: coretest.NewAgent(nil, "fake-model", "", core.Registry{}),
 		hub:   &wsHub{},
 	}
 	s.turnCancel = func(error) {}

@@ -28,6 +28,7 @@ import (
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/chat/extconn"
 	"terva.sh/terva/packages/agent/extensions"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -180,7 +181,7 @@ func plantedDefaultWorkspace(t *testing.T) (*Workspace, *wsSession) {
 	s.ws = w
 	s.sess = sf
 	s.cwd = root
-	s.agent = core.NewAgent(&fakeChatClient{}, "fake-model", "", core.Registry{})
+	s.agent = coretest.NewAgent(&fakeChatClient{}, "fake-model", "", core.Registry{})
 	w.sessions["s1"] = s
 
 	if got, rerr := w.resolve(""); rerr != nil || got != s {

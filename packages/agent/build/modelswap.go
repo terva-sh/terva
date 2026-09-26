@@ -3,7 +3,9 @@ package build
 import (
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/lazytools"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // ModelSwap is the model-swap event: everything that has to move when a live
@@ -67,7 +69,7 @@ type ModelSwap struct {
 	// a closure built by acp_mode.go, one layer above the package that owns the
 	// durable session, so it records in acp/config.go right after invoking the
 	// closure. Setting this there too would write the row twice.
-	Session *core.Session
+	Session *session.Session
 
 	// ActivationContinuation is the effective activation-continuation setting for
 	// the TARGET provider: its providers.<id>.activation_continuation override if
@@ -112,7 +114,7 @@ func ApplyModelSwap(s ModelSwap) {
 		// 1. Carry the passively-observed usage across the rebuild. The seeder
 		//    rejects a foreign provider's snapshot itself, so this is safe on a
 		//    cross-provider swap and merely does nothing.
-		if snap, ok := s.Agent.Usage(); ok {
+		if snap, ok := provider.ClientUsage(s.Agent.Client()); ok {
 			provider.SeedClientUsage(s.Client, snap)
 		}
 		// 2. Install the new client and model.
@@ -137,13 +139,13 @@ func ApplyModelSwap(s ModelSwap) {
 	}
 
 	// 4. Re-resolve the per-provider activation-continuation override, now that
-	//    the agent is on the new route. It goes through the same core setter the
+	//    the agent is on the new route. It goes through the same setter the
 	//    build funnel uses, so a swap and a fresh session cannot disagree. The
 	//    agent's own runLoop snapshots this once per Prompt, so a swap arriving
 	//    mid-Prompt (the stuck-loop escalation path) takes effect on the NEXT
 	//    Prompt rather than changing the semantics under a running turn.
 	if s.ActivationContinuation != nil {
-		s.Agent.SetActivationContinuation(*s.ActivationContinuation)
+		lazytools.Of(s.Agent).SetContinuation(*s.ActivationContinuation)
 	}
 
 	// 5. Re-point every host-routed dispatch tool, on BOTH paths — an id swap

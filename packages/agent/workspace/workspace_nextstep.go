@@ -122,7 +122,7 @@ func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlprot
 		return ctrlproto.NextStepResult{}, err
 	}
 	ag := s.agent
-	if ag == nil || ag.Client == nil {
+	if ag == nil || ag.Client() == nil {
 		// No credential resolved for this session yet (a credential-less boot
 		// before /login). Nothing to complete against.
 		return ctrlproto.NextStepResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("not logged in"))
@@ -157,9 +157,13 @@ func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlprot
 	// carried the right prefix and no prompt_cache_key, where every real turn
 	// carries the session's, so the two could route apart on the providers that
 	// read the field at all (TKT-01M2NQ7Q3).
-	system, tools, cacheKey, aligned := ag.DispatchedPrefix(ag.Client, model)
+	// FramePreview assembles with AssemblePeek, the side-effect-free twin. A real
+	// turn's assembly records which lore entries fired, and a suggestion the user
+	// never sees must not write that state on the session's behalf.
+	frame := ag.FramePreview()
+	system, tools, cacheKey, aligned := ag.DispatchedPrefix(ag.Client(), model)
 	if !aligned {
-		system, tools, cacheKey = ag.System, nil, ""
+		system, tools, cacheKey = frame.SystemText(), nil, ""
 	}
 	body := i18n.P("nextstep.ask", nextStepBody)
 	if p.OnDemand {
@@ -167,18 +171,15 @@ func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlprot
 	}
 	msgs = append(msgs, nextStepMessage(NextStepTag+" "+body))
 
-	out, usage, err := streamText(ctx, ag.Client, provider.Request{
+	out, usage, err := streamText(ctx, ag.Client(), provider.Request{
 		Model:     model,
 		System:    system,
 		Messages:  msgs,
 		MaxTokens: nextStepMaxTokens,
 		// Empty unless the prefix aligned, which is what keeps a divergent
 		// prompt off the conversation's cache route.
-		PromptCacheKey: cacheKey,
-		// ContextPreview, not ContextProvider: the side-effect-free twin. A real
-		// turn's provider records which lore entries fired, and a suggestion the
-		// user never sees must not write that state on the session's behalf.
-		EphemeralContext: ag.ContextPreview(),
+		PromptCacheKey:   cacheKey,
+		EphemeralContext: frame.VolatileText(),
 		// Reasoning OFF, explicitly — ReasoningSet is what makes it beat the
 		// model's own default rather than merely failing to ask for thinking.
 		//

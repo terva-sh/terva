@@ -17,10 +17,10 @@ func TestCacheSavingsIsTheCounterfactualNotTheDiscount(t *testing.T) {
 	// A steady-state turn: almost everything read from cache.
 	u := Usage{InputTokens: 2_000, CacheReadTokens: 180_000, OutputTokens: 500}
 	// Uncached: 182k * $3/M = $0.546. Billed: 2k*$3/M + 180k*$0.30/M = $0.060.
-	got := CacheSavings(sonnetish, u)
+	got := cacheSavings(sonnetish, u)
 	want := 0.546 - 0.060
 	if math.Abs(got-want) > 1e-9 {
-		t.Errorf("CacheSavings = %.6f; want %.6f", got, want)
+		t.Errorf("cacheSavings = %.6f; want %.6f", got, want)
 	}
 }
 
@@ -30,13 +30,13 @@ func TestCacheSavingsIsTheCounterfactualNotTheDiscount(t *testing.T) {
 // a metric floored at zero would call it break-even.
 func TestAWriteThatIsNeverReadCostsMoreThanNoCache(t *testing.T) {
 	u := Usage{InputTokens: 1_000, CacheWriteTokens: 100_000}
-	got := CacheSavings(sonnetish, u)
+	got := cacheSavings(sonnetish, u)
 	if got >= 0 {
-		t.Fatalf("CacheSavings = %.6f; want negative — a cold write is a premium, not a saving", got)
+		t.Fatalf("cacheSavings = %.6f; want negative — a cold write is a premium, not a saving", got)
 	}
 	// 101k uncached = $0.303; billed 1k*$3/M + 100k*$3.75/M = $0.378.
 	if want := 0.303 - 0.378; math.Abs(got-want) > 1e-9 {
-		t.Errorf("CacheSavings = %.6f; want %.6f", got, want)
+		t.Errorf("cacheSavings = %.6f; want %.6f", got, want)
 	}
 }
 
@@ -45,8 +45,8 @@ func TestAWriteThatIsNeverReadCostsMoreThanNoCache(t *testing.T) {
 func TestAModelWithNoCachePricingSavesNothingRatherThanEverything(t *testing.T) {
 	local := Model{ID: "ollama-ish", PriceInput: 0, PriceOutput: 0}
 	u := Usage{InputTokens: 1_000, CacheReadTokens: 50_000}
-	if got := CacheSavings(local, u); got != 0 {
-		t.Errorf("CacheSavings on an unpriced model = %v; want 0", got)
+	if got := cacheSavings(local, u); got != 0 {
+		t.Errorf("cacheSavings on an unpriced model = %v; want 0", got)
 	}
 }
 
@@ -62,7 +62,7 @@ func TestSavingsAddAcrossModels(t *testing.T) {
 	ApplyCost(dear, &b)
 
 	total := a.Add(b)
-	want := CacheSavings(cheap, a) + CacheSavings(dear, b)
+	want := cacheSavings(cheap, a) + cacheSavings(dear, b)
 	if math.Abs(total.CacheSavedUSD-want) > 1e-9 {
 		t.Errorf("summed savings = %.6f; want %.6f", total.CacheSavedUSD, want)
 	}

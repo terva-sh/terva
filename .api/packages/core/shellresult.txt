@@ -1,0 +1,12 @@
+# packages/core/shellresult (stable): its exported API, one symbol per line.
+# Written by `just api-snapshot`. `just api-check` fails when it no longer matches the code.
+ID	const	untyped string
+Slot	type	struct
+Slot.Bind	method	func(a *core.Agent)
+Slot.Enabled	method	func() bool
+Slot.ObserveEvent	method	func(ev core.AgentEvent)
+Slot.Segment	method	func() core.Segment
+Slot.Set	method	func(cmd, output string)
+Slot.SetEnabled	method	func(on bool)
+Slot.TailDelivered	method	func(ids []string)
+Tag	const	untyped string

@@ -61,7 +61,7 @@ func (c *prefixSpyClient) calls() []provider.Request {
 func TestCompactionTargetsTheOutgoingModel(t *testing.T) {
 	outgoing := &prefixSpyClient{name: "outgoing"}
 	incoming := &prefixSpyClient{name: "incoming"}
-	a := NewAgent(outgoing, "outgoing-model", "system", Registry{})
+	a := newTestAgent(outgoing, "outgoing-model", "system", Registry{})
 
 	// One real turn: now the outgoing model has this conversation cached, and
 	// the agent has retained the prefix that produced that cache.
@@ -93,7 +93,7 @@ func TestCompactionTargetsTheOutgoingModel(t *testing.T) {
 // the only available answer and the right one.
 func TestCompactionBeforeFirstDispatchUsesLiveAgentFields(t *testing.T) {
 	live := &prefixSpyClient{name: "live"}
-	a := NewAgent(live, "live-model", "system", Registry{})
+	a := newTestAgent(live, "live-model", "system", Registry{})
 	a.SetMessages([]provider.Message{{
 		Role:    provider.RoleUser,
 		Content: []provider.Content{provider.TextBlock{Text: "resumed from disk"}},
@@ -135,8 +135,8 @@ func (c *refusedClient) Stream(ctx context.Context, req provider.Request) (<-cha
 // read and a summary from the wrong model.
 func TestFailedDispatchDoesNotBecomeTheCompactionTarget(t *testing.T) {
 	good := &prefixSpyClient{name: "good"}
-	a := NewAgent(good, "good-model", "system", Registry{})
-	a.RetryBaseDelay = time.Millisecond
+	a := newTestAgent(good, "good-model", "system", Registry{})
+	a.retryBaseDelay = time.Millisecond
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 		t.Fatalf("Prompt returned %v", err)
 	}
@@ -161,7 +161,7 @@ func TestFailedDispatchDoesNotBecomeTheCompactionTarget(t *testing.T) {
 	}
 }
 
-// compactHeld used to read a.Model / a.Client / a.Temperature unlocked while
+// compactHeld used to read a.model / a.client / a.temperature unlocked while
 // SetModel and SetClientAndModel write them under a.mu. Compact's single-flight
 // guard excludes other TURNS, not a host's model swap — and under the prefix-
 // change guard, a swap concurrent with a compaction stops being exotic and
@@ -169,7 +169,7 @@ func TestFailedDispatchDoesNotBecomeTheCompactionTarget(t *testing.T) {
 // lock closes it. Run with -race; this is a no-op otherwise.
 func TestCompactIsRaceFreeAgainstAConcurrentModelSwap(t *testing.T) {
 	client := &prefixSpyClient{name: "spy"}
-	a := NewAgent(client, "model-0", "system", Registry{})
+	a := newTestAgent(client, "model-0", "system", Registry{})
 	a.SetMessages([]provider.Message{{
 		Role:    provider.RoleUser,
 		Content: []provider.Content{provider.TextBlock{Text: "a transcript worth condensing"}},

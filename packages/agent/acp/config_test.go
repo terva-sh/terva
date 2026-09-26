@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/core"
+	jsonl "terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -167,8 +168,8 @@ func TestACPSetConfigOptionSwitchesModelSameProvider(t *testing.T) {
 	if ag == nil {
 		t.Fatal("no new-session agent captured")
 	}
-	if ag.Model != "alt-model" {
-		t.Errorf("agent.Model = %q; want alt-model (effective model must change)", ag.Model)
+	if ag.Model() != "alt-model" {
+		t.Errorf("agent.Model = %q; want alt-model (effective model must change)", ag.Model())
 	}
 
 	// A same-provider switch reuses the client.
@@ -210,11 +211,11 @@ func TestACPSetConfigOptionSwitchesModelCrossProvider(t *testing.T) {
 	}
 
 	ag := factory.lastNewAgent()
-	if ag.Model != "cross-model" {
-		t.Errorf("agent.Model = %q; want cross-model", ag.Model)
+	if ag.Model() != "cross-model" {
+		t.Errorf("agent.Model = %q; want cross-model", ag.Model())
 	}
 	// SetClientAndModel must have swapped the client too.
-	if ag.Client != newClient {
+	if ag.Client() != newClient {
 		t.Error("cross-provider switch did not swap the agent's Client (SetClientAndModel)")
 	}
 	factory.switchMu.Lock()
@@ -255,7 +256,7 @@ func TestACPSetConfigOptionPersistsModel(t *testing.T) {
 	// Read the durable session back: its meta must reflect the switch.
 	// Read-only, because the ACP server still has this session open and a
 	// second write handle on it is what the session lock refuses.
-	_, meta, err := core.ReadSessionMeta(sid)
+	_, meta, err := jsonl.ReadSessionMeta(sid)
 	if err != nil {
 		t.Fatalf("ReadSessionMeta(%q): %v", sid, err)
 	}

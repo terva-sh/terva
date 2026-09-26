@@ -126,7 +126,8 @@ func (s LiveToolSet) Rebuild(ag *core.Agent) bool {
 	// A front-end channel belongs to the live session, not to a resolved tool
 	// registry. Carry the explicit survivor onto every fresh registry so
 	// extension reloads cannot turn a negotiated RPC question channel into
-	// no_channel or race a concurrent channel bind through ag.Asker.
+	// no_channel, or undo the channel rpc binds at hello, which it sets on
+	// the resolved build and then on the live agent with Agent.SetAsker.
 	r.SetAsker(s.Asker)
 	return r.PublishTools(ag, s.Gate)
 }

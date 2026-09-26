@@ -55,8 +55,8 @@ func ValidReasoningLevel(level string) bool {
 // rather than being clamped down to the "maximum" tier.
 //
 // It lives beside the mappers that do the clamping. openAIResponsesNativeMax
-// recognizes the OpenAI models with this effort. AnthropicAdaptiveEffort and
-// OpenAICompatAnthropicEffort pass "max" through for adaptive models.
+// recognizes the OpenAI models with this effort. The adaptive Anthropic
+// mappings, native and over the compat wire, pass "max" through.
 func MaxIsNative(m Model) bool {
 	return m.AdaptiveThinking || openAIResponsesNativeMax(m.ID)
 }
@@ -231,12 +231,12 @@ func ReasoningBudget(level string) int {
 	}
 }
 
-// AnthropicAdaptiveEffort maps terva's user-facing thinking levels onto the
+// anthropicAdaptiveEffort maps terva's user-facing thinking levels onto the
 // effort enum used by Anthropic's adaptive-thinking models (Opus 4.7+).
 // These models reject explicit thinking budgets; thinking depth is
 // controlled by output_config.effort instead. Returns "" when reasoning
 // is disabled.
-func AnthropicAdaptiveEffort(level string) string {
+func anthropicAdaptiveEffort(level string) string {
 	switch NormalizeReasoning(level) {
 	case "minimum", "low":
 		return "low"
@@ -254,9 +254,9 @@ func AnthropicAdaptiveEffort(level string) string {
 	}
 }
 
-// OpenAIReasoningEffort maps terva's six-level setting onto the effort enum
+// openAIReasoningEffort maps terva's six-level setting onto the effort enum
 // accepted by OpenAI-compatible chat-completions endpoints.
-func OpenAIReasoningEffort(level string) string {
+func openAIReasoningEffort(level string) string {
 	switch NormalizeReasoning(level) {
 	case "minimum", "low":
 		// Many OpenAI-compatible endpoints only accept low/medium/high.
@@ -272,15 +272,15 @@ func OpenAIReasoningEffort(level string) string {
 	}
 }
 
-// OpenAICompatAnthropicEffort maps terva's user-facing thinking levels
+// openAICompatAnthropicEffort maps terva's user-facing thinking levels
 // onto reasoning_effort values when an adaptive-thinking Anthropic
 // model (Opus 4.7+) is served over the OpenAI-compatible chat-
 // completions wire (openrouter, opencode, ...). Differs from
-// OpenAIReasoningEffort only at the top: terva's "maximum" maps to
+// openAIReasoningEffort only at the top: terva's "maximum" maps to
 // "xhigh" instead of being clamped to "high", so the model's full
 // adaptive-thinking ceiling is preserved when reachable through a
 // gateway that accepts the effort knob.
-func OpenAICompatAnthropicEffort(level string) string {
+func openAICompatAnthropicEffort(level string) string {
 	switch NormalizeReasoning(level) {
 	case "minimum", "low":
 		return "low"
@@ -331,16 +331,16 @@ func openAICompatEffort(m Model, level string) string {
 		// the OpenAI-compatible chat-completions wire. They accept the
 		// same reasoning_effort knob, including the top "xhigh" tier;
 		// don't clamp terva's "maximum" to "high" for those models.
-		return OpenAICompatAnthropicEffort(lv)
+		return openAICompatAnthropicEffort(lv)
 	}
-	return OpenAIReasoningEffort(lv)
+	return openAIReasoningEffort(lv)
 }
 
 // idealCompatEffort is terva's rung said plainly on the chat-wire scale, with
 // none of the defensive clamping the blind mappers need.
 //
 // It is only ever used for a model that declares its efforts. That is what
-// makes honesty safe here: OpenAIReasoningEffort turns "minimum" into "low"
+// makes honesty safe here: openAIReasoningEffort turns "minimum" into "low"
 // and both top rungs into "high" because it is guessing at a server it cannot
 // interrogate, and a wrong guess is an HTTP 400 on every turn. A declared set
 // removes the guess, so the rung can mean what it says and be bent afterwards
@@ -432,11 +432,11 @@ func clampEffortToDeclared(declared []string, want string) string {
 	return ""
 }
 
-// OpenAICodexReasoningEffort maps terva levels onto the ChatGPT/Codex
+// openAICodexReasoningEffort maps terva levels onto the ChatGPT/Codex
 // Responses backend enum. That backend rejects "minimal" and uses
 // "xhigh" for models without native "max" support. GPT-5.6 and GPT-6 Astra,
 // Sol, and Luna accept "max" above "xhigh". Other models clamp "max" to "xhigh".
-func OpenAICodexReasoningEffort(level, model string) string {
+func openAICodexReasoningEffort(level, model string) string {
 	switch NormalizeReasoning(level) {
 	case "minimum", "low":
 		return "low"
@@ -500,7 +500,7 @@ func (e ReasoningEffect) Off() bool {
 // ReasoningEffectFor resolves what level does to m.
 //
 // Every arm DELEGATES to the function the request builder itself calls —
-// geminiThinkingConfig, OpenAICodexReasoningEffort, anthropicThinkingBudget,
+// geminiThinkingConfig, openAICodexReasoningEffort, anthropicThinkingBudget,
 // and the effort mappers — so this cannot describe a rung differently from the
 // way it is sent. The only thing added here is the routing from a provider to
 // the wire it speaks, and reasoningWireFamily is census-guarded so a new
@@ -516,12 +516,12 @@ func ReasoningEffectFor(m Model, level string) ReasoningEffect {
 
 	case reasoningWireAnthropic:
 		if usesAdaptiveThinking(m) {
-			return ReasoningEffect{Effort: AnthropicAdaptiveEffort(lv), Supported: true}
+			return ReasoningEffect{Effort: anthropicAdaptiveEffort(lv), Supported: true}
 		}
 		return ReasoningEffect{Budget: anthropicThinkingBudget(m, lv), Supported: true}
 
 	case reasoningWireCodex:
-		return ReasoningEffect{Effort: OpenAICodexReasoningEffort(lv, m.ID), Supported: true}
+		return ReasoningEffect{Effort: openAICodexReasoningEffort(lv, m.ID), Supported: true}
 
 	case reasoningWireGemini:
 		cfg := geminiThinkingConfig(m.ID, lv)
@@ -655,7 +655,7 @@ func (w reasoningWire) String() string {
 // ClientReasoningWire names the reasoning wire the CLIENT actually speaks, as
 // declared by the concrete client's Capabilities(). Looks through wrappers.
 // Returns "unknown" for a client that has not declared one.
-func ClientReasoningWire(c Client) string { return ClientCaps(c).ReasoningWire.String() }
+func ClientReasoningWire(c Client) string { return clientCaps(c).ReasoningWire.String() }
 
 // ProviderReasoningWire names the wire the provider TABLE believes the given
 // provider id speaks. The pair (ClientReasoningWire, ProviderReasoningWire)
@@ -687,7 +687,7 @@ var reasoningWireWiring = map[string]reasoningWire{
 	// different providers.
 	"kimi": reasoningWireAnthropic,
 	// 🪤 vercel-ai-gateway is the SAME trap as kimi, and it went unfixed
-	// through the kimi fix: NewVercelGatewayAnthropic is NewAnthropicCompat,
+	// through the kimi fix: NewVercelGatewayAnthropic is newAnthropicCompat,
 	// so the client is an anthropicClient. Absent from this table it fell
 	// through to the OpenAI-compatible default, and /reasoning reported
 	// "effort: medium" for a request carrying

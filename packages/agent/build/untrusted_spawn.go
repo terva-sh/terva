@@ -24,7 +24,7 @@ import (
 const UntrustedSpawnGateTool = "swarm_spawn_untrusted"
 
 // untrustedSpawnSeq mints unique call ids for this door, which sits outside
-// the BeforeToolExecute ladder and so has no model tool-call id to borrow.
+// the tool-call ladder and so has no model tool-call id to borrow.
 // Process-wide for the same reason hostGateSeq is: uniqueness is the contract,
 // and concurrent sub-agents share the process.
 var untrustedSpawnSeq atomic.Uint64

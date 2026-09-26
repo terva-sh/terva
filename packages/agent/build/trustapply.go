@@ -132,9 +132,8 @@ func RewireLoreContext(ag *core.Agent, args Args, tail EphemeralTail) *Resolved 
 		return nil
 	}
 	// Rebuilt from the parts, not layered onto what is already installed — see
-	// EphemeralTail.compose. The setters, because unlike the build path this
-	// runs against an agent that may be mid-turn.
-	ag.SetContextProvider(tail.compose(r.PerTurnContext(ag)))
-	ag.SetContextProviderPeek(tail.compose(r.PerTurnContextPeek(ag)))
+	// EphemeralTail.compose. One SetTail, under the assembler's lock, because
+	// unlike the build path this runs against an agent that may be mid-turn.
+	mustAssemblerOf(ag, "RewireLoreContext").SetTail(tail.compose(r.PerTurnContext(ag)), tail.compose(r.PerTurnContextPeek(ag)))
 	return &r
 }

@@ -6,6 +6,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -124,7 +125,7 @@ func TestSessionInfoReportsLiveAndBusy(t *testing.T) {
 	s := &wsSession{
 		id:    build.SessionIDFromPath(sess.Path),
 		sess:  sess,
-		agent: core.NewAgent(nil, "anthropic", "m1", core.Registry{}),
+		agent: coretest.NewAgent(nil, "anthropic", "m1", core.Registry{}),
 		hub:   newWSHub(),
 	}
 

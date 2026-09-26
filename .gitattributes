@@ -34,6 +34,10 @@ packages/agent/connproto/testdata/*.jsonl text eol=lf
 # fails on the commit that adds an unpinned corpus instead.
 packages/agent/extproto/testdata/*.jsonl text eol=lf
 
+# The wire request golden pins the system prompt and tail terva sends byte for
+# byte (frame_bytes_test.go). A CRLF checkout would mark it stale on Windows.
+packages/agent/build/testdata/*.golden text eol=lf
+
 # i18n reference catalogs are byte-compared against the linter's LF
 # output (`terva-i18n-lint -check`, the CI gate); a CRLF checkout (the
 # Windows CI default) marks every catalog stale. Pin them to LF.

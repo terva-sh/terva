@@ -8,8 +8,10 @@
 // is therefore indistinguishable from the pre-i18n code, so the existing
 // golden and strings.Contains tests do not churn as strings are wrapped.
 //
-// This is a leaf package — it imports only golang.org/x/text. tui, agent,
-// core, provider, and tools all call T, so it must import none of theirs.
+// This is a leaf package — it imports only golang.org/x/text and
+// packages/core/i18n, the engine's I/O-free translation seam, which it
+// installs itself into (engine.go). tui, agent, and tools call T here, and
+// core calls it through that seam, so it must import none of theirs.
 // The active language is injected once at startup via Configure (never
 // pulled from config), which keeps the import graph acyclic.
 //

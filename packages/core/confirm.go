@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/core/i18n"
 )
 
 // ConfirmDecision is the outcome of a confirmation prompt for a
@@ -312,7 +312,7 @@ func (g *ConfirmGate) Grants() (allowAll bool, tools []string) {
 	return g.allowAll, tools
 }
 
-// Check is the BeforeToolExecute-style entry point. Returns
+// Check is the permission rung of a Gate (see build.BuildToolGate). Returns
 // allowed, reason, modifiedArgs. modifiedArgs is always nil: the
 // gate never rewrites args; it only allows or denies.
 //

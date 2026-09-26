@@ -5,10 +5,13 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/core/transcripttest"
+
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // The scene-break evidence: the scene, who carries over, the lore that crosses
@@ -20,10 +23,10 @@ func TestRenderNextSceneEvidence(t *testing.T) {
 		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "I bank the fire."}}},
 		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "Kobeni bolts the door."}}},
 	}
-	lore := []core.WorldLoreEntry{
+	lore := []session.WorldLoreEntry{
 		{Name: "The bell", Content: "Rings at dusk."},
-		{Name: core.SceneStateName, Constant: true, Content: "Day 14, midnight. The shop."},
-		{Name: core.StorySoFarName, Constant: true, Content: "They met on the north road."},
+		{Name: session.SceneStateName, Constant: true, Content: "Day 14, midnight. The shop."},
+		{Name: session.StorySoFarName, Constant: true, Content: "They met on the north road."},
 	}
 	out := renderNextSceneEvidence("Kira", "Kobeni", []string{"Elira"}, lore, transcript)
 	for _, want := range []string{
@@ -43,7 +46,7 @@ func TestRenderNextSceneEvidence(t *testing.T) {
 	}
 	// The pin and the recap must not ALSO appear in the carried-lore list: one
 	// would be summarized, the other double-counted.
-	if strings.Contains(out, "- "+core.SceneStateName) || strings.Contains(out, "- "+core.StorySoFarName) {
+	if strings.Contains(out, "- "+session.SceneStateName) || strings.Contains(out, "- "+session.StorySoFarName) {
 		t.Errorf("the pin/recap must have their own blocks, not the lore list:\n%s", out)
 	}
 	empty := renderNextSceneEvidence("Me", "", nil, nil, nil)
@@ -87,8 +90,8 @@ func TestSessionsNextSceneProposesAndBooks(t *testing.T) {
 	reply := `{"title":"The North Road","summary":"They owe Marrow three silver.","opening":"*Dawn finds the shop cold.*"}`
 	cl := &scriptedClient{replies: []string{reply}}
 	s := worldTestSession(t, cl, map[string]string{"Elira": "elira-ref"})
-	var booked []provider.Usage
-	s.agent.AddUsageObserver(func(u, _ provider.Usage) { booked = append(booked, u) })
+	rec := &transcripttest.Recorder{}
+	s.agent.AttachTranscriptStore(rec)
 
 	// An unplayed scene has nothing to recap — refused before the model runs.
 	if _, err := proposeNextScene(context.Background(), s, ctrlproto.NextSceneParams{}); err == nil {
@@ -109,7 +112,7 @@ func TestSessionsNextSceneProposesAndBooks(t *testing.T) {
 	if res.Title != "The North Road" || res.Session != nil {
 		t.Fatalf("a propose drafts and creates nothing: %+v", res)
 	}
-	if len(booked) != 1 || booked[0] != scriptedCallUsage {
+	if booked := sideChannelUsage(rec); len(booked) != 1 || booked[0] != scriptedCallUsage {
 		t.Fatalf("the draft booked %v, want exactly one %+v — the scene break is never free", booked, scriptedCallUsage)
 	}
 	reqs := cl.requests()
@@ -144,10 +147,10 @@ func TestSessionsNextSceneCommitCarriesWorld(t *testing.T) {
 		t.Fatal(err)
 	}
 	parent := w.live(info.ID)
-	if err := parent.sess.SetWorldLore([]core.WorldLoreEntry{
+	if err := parent.sess.SetWorldLore([]session.WorldLoreEntry{
 		{Name: "The bell", Keys: []string{"bell"}, Content: "Rings at dusk."},
-		{Name: core.SceneStateName, Constant: true, Content: "Day 14, midnight."},
-		{Name: core.StorySoFarName, Constant: true, Content: "Scene zero: they met."},
+		{Name: session.SceneStateName, Constant: true, Content: "Day 14, midnight."},
+		{Name: session.StorySoFarName, Constant: true, Content: "Scene zero: they met."},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -192,16 +195,17 @@ func TestSessionsNextSceneCommitCarriesWorld(t *testing.T) {
 	}
 	next := w.live(res.Session.ID)
 	meta := next.sess.Meta
+	stage := next.sess.Stage
 
 	// The World state carried.
-	if meta.Card != imported.ID || meta.Experience != "chat" || meta.Coordination != "off" {
-		t.Errorf("card/experience/coordination did not carry: %+v", meta)
+	if stage.Card != imported.ID || stage.Experience != "chat" || meta.Coordination != "off" {
+		t.Errorf("card/experience/coordination did not carry: %+v", stage)
 	}
-	if meta.Cast["Elira"] != "elira-ref" {
-		t.Errorf("roster did not carry: %+v", meta.Cast)
+	if stage.Cast["Elira"] != "elira-ref" {
+		t.Errorf("roster did not carry: %+v", stage.Cast)
 	}
-	if meta.UserName != "Kira" || meta.UserPronouns != "she/her" || meta.UserDescription != "A weary courier." {
-		t.Errorf("the player's persona did not carry: %+v", meta)
+	if stage.UserName != "Kira" || stage.UserPronouns != "she/her" || stage.UserDescription != "A weary courier." {
+		t.Errorf("the player's persona did not carry: %+v", stage)
 	}
 	if meta.Note != "Keep it cold." {
 		t.Errorf("author's note did not carry: %q", meta.Note)
@@ -215,9 +219,9 @@ func TestSessionsNextSceneCommitCarriesWorld(t *testing.T) {
 	recaps := 0
 	for _, e := range meta.WorldLore {
 		switch {
-		case core.IsSceneState(e.Name):
+		case session.IsSceneState(e.Name):
 			pin = e.Content
-		case core.IsStorySoFar(e.Name):
+		case session.IsStorySoFar(e.Name):
 			recap = e.Content
 			recaps++
 			if !e.Constant {
@@ -271,12 +275,12 @@ func TestSessionsNextScenePromotesAWorldForAnUngroupedStory(t *testing.T) {
 		t.Fatal(err)
 	}
 	parent := w.live(info.ID)
-	if err := parent.sess.SetWorldLore([]core.WorldLoreEntry{
+	if err := parent.sess.SetWorldLore([]session.WorldLoreEntry{
 		{Name: "The bell", Keys: []string{"bell"}, Content: "Rings at dusk."},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if parent.sess.Meta.World != "" {
+	if parent.sess.Stage.World != "" {
 		t.Fatal("fixture is not the ungrouped case this test is about")
 	}
 
@@ -292,17 +296,17 @@ func TestSessionsNextScenePromotesAWorldForAnUngroupedStory(t *testing.T) {
 	}
 
 	next := w.live(res.Session.ID)
-	if next.sess.Meta.World == "" {
+	if next.sess.Stage.World == "" {
 		t.Fatal("the new scene joined no World — the promotion did not reach it")
 	}
 	// The half that would otherwise be left behind: the scene being ENDED must
 	// join too, or the story is grouped from its second chapter onward.
-	if parent.sess.Meta.World != next.sess.Meta.World {
+	if parent.sess.Stage.World != next.sess.Stage.World {
 		t.Errorf("the ending scene was left out of the World: parent %q, next %q",
-			parent.sess.Meta.World, next.sess.Meta.World)
+			parent.sess.Stage.World, next.sess.Stage.World)
 	}
 	// Named, saved, and carrying what the story had accumulated.
-	doc, err := build.NewWorldStore().Get(next.sess.Meta.World)
+	doc, err := build.NewWorldStore().Get(next.sess.Stage.World)
 	if err != nil {
 		t.Fatalf("the World was stamped but not saved: %v", err)
 	}
@@ -314,7 +318,7 @@ func TestSessionsNextScenePromotesAWorldForAnUngroupedStory(t *testing.T) {
 	}
 	// And the result says where it landed, rather than leaving the client to
 	// assume its own request succeeded.
-	if res.WorldID != next.sess.Meta.World || res.WorldName != "The Marrow Debt" {
+	if res.WorldID != next.sess.Stage.World || res.WorldName != "The Marrow Debt" {
 		t.Errorf("result did not echo the grouping: %+v", res)
 	}
 }
@@ -340,8 +344,8 @@ func TestSessionsNextSceneRecordsLineageEvenUngrouped(t *testing.T) {
 		t.Fatalf("commit: %v", err)
 	}
 	next := w.live(res.Session.ID)
-	if next.sess.Meta.World != "" {
-		t.Errorf("a declined offer still created a World: %q", next.sess.Meta.World)
+	if next.sess.Stage.World != "" {
+		t.Errorf("a declined offer still created a World: %q", next.sess.Stage.World)
 	}
 	if next.sess.Meta.Parent != info.ID {
 		t.Errorf("lineage not recorded: parent = %q, want %q", next.sess.Meta.Parent, info.ID)
@@ -379,8 +383,8 @@ func TestSessionsNextSceneJoinsAnExistingWorld(t *testing.T) {
 		t.Fatalf("commit: %v", err)
 	}
 	next := w.live(res.Session.ID)
-	if next.sess.Meta.World != saved.ID {
-		t.Errorf("the scene did not join the story's World: got %q, want %q", next.sess.Meta.World, saved.ID)
+	if next.sess.Stage.World != saved.ID {
+		t.Errorf("the scene did not join the story's World: got %q, want %q", next.sess.Stage.World, saved.ID)
 	}
 	if res.WorldName != "The Marrow Debt" {
 		t.Errorf("result should report the World it JOINED, not the ignored name: %q", res.WorldName)

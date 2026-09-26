@@ -9,18 +9,18 @@ import (
 // requests must share a byte-identical PREFIX and differ only by appending.
 // terva's prefix-divergence guard checks that on provider.Request.Messages — but
 // the codex builder rewrites the array BELOW that, through
-// RepairOrphanedToolResults, MergeAdjacentSameRole and EnsureLeadingUserTurn,
+// RepairOrphanedToolResults, mergeAdjacentSameRole and ensureLeadingUserTurn,
 // each a fold over the whole slice. A fold that rewrites an EARLIER element as
 // the transcript grows would invalidate the cached prefix on every turn, and the
 // guard — measuring the input to that fold — would report a clean append.
 //
 // These tests encode a growing transcript one message at a time and assert the
 // encoded wire items really are append-only. This is the blind spot named in
-// prefixwatch.go, measured rather than argued.
+// core/exp/prefixwatch/ladder.go, measured rather than argued.
 
 // growingTranscript is a realistic append-only session: user turn, assistant
 // reply with a tool call, the tool result, another assistant turn, and so on —
-// including the same-role adjacency that MergeAdjacentSameRole exists to fix.
+// including the same-role adjacency that mergeAdjacentSameRole exists to fix.
 func growingTranscript() []Message {
 	return []Message{
 		{Role: RoleUser, Content: []Content{TextBlock{Text: "start the task"}}},
@@ -82,7 +82,7 @@ func TestCodexEncodedPrefixIsAppendOnly(t *testing.T) {
 			continue
 		}
 		// The LAST item of the previous encoding may legitimately change: a
-		// same-role append merges into it (MergeAdjacentSameRole). Everything
+		// same-role append merges into it (mergeAdjacentSameRole). Everything
 		// before it is prefix the provider has already cached, and must not move.
 		stable := len(prev) - 1
 		if len(cur) < stable {

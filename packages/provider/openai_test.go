@@ -41,14 +41,14 @@ func TestClientCapabilitiesDeclared(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Probe through wrapper layers the way ClientCaps does — some
+			// Probe through wrapper layers the way clientCaps does — some
 			// providers (deepseek, openrouter) sit behind a pollingUsageClient.
 			_, impl := clientAs[capabilityProvider](tc.client)
 			if impl != tc.wantImpl {
 				t.Fatalf("implements capabilityProvider = %v, want %v", impl, tc.wantImpl)
 			}
-			if got := ClientCaps(tc.client).MirrorsToolImages; got != tc.wantMirror {
-				t.Errorf("ClientCaps().MirrorsToolImages = %v, want %v", got, tc.wantMirror)
+			if got := clientCaps(tc.client).MirrorsToolImages; got != tc.wantMirror {
+				t.Errorf("clientCaps().MirrorsToolImages = %v, want %v", got, tc.wantMirror)
 			}
 		})
 	}
@@ -83,7 +83,7 @@ func TestClientMirrorsToolImagesThroughWrappers(t *testing.T) {
 
 		// Gemini needs the mirror (text-only functionResponse), and Vertex
 		// ships that same client behind renamedClient. Built inline rather
-		// than through NewVertex, which needs GOOGLE_CLOUD_PROJECT in the
+		// than through newVertex, which needs GOOGLE_CLOUD_PROJECT in the
 		// environment and degrades to an unimplementedClient without it.
 		{"raw-gemini", NewGemini("k", ""), true},
 		{"google-vertex", &renamedClient{inner: NewGemini("k", ""), name: "google-vertex"}, true},
@@ -109,7 +109,7 @@ func TestClientContinuesAssistantPrefill(t *testing.T) {
 		want bool
 	}{
 		{"anthropic", NewAnthropic("k", ""), true},
-		{"anthropic-oauth", NewAnthropicOAuth("t", ""), true},
+		{"anthropic-oauth", NewAnthropicOAuthSource(StaticCredential("t"), ""), true},
 		{"openai", NewOpenAI("k", ""), false},
 		{"openai-codex", NewOpenAICodex("k", "", ""), false},
 		{"deepseek", NewDeepSeek("k", ""), false},

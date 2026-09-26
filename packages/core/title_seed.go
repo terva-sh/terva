@@ -12,7 +12,7 @@ import (
 	"strings"
 	"unicode"
 
-	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/core/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -33,7 +33,7 @@ const titleSeedMsgClamp = 450
 // current focus has drifted furthest from the anchor.
 const titleSeedRecentFloor = 35
 
-// clipMarker is the elision marker ClipMiddle inserts. It counts against
+// clipMarker is the elision marker clipMiddle inserts. It counts against
 // the caller's budget so packing math stays honest.
 const clipMarker = " [… truncated …] "
 
@@ -50,14 +50,14 @@ func StripCompactionHeader(s string) string {
 	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), compactionSummaryHeader))
 }
 
-// ClipMiddle truncates s to at most budget characters (runes) by cutting
+// clipMiddle truncates s to at most budget characters (runes) by cutting
 // from the middle, keeping the head and tail around an elision marker:
 // openings carry intent, endings carry the concrete ask (messages) or the
 // current state (compaction summaries). Cuts snap to rune boundaries by
 // construction and prefer whitespace so no word fragments waste the seed.
 // The marker counts against the budget. A budget too small for the marker
 // degrades to a plain head cut.
-func ClipMiddle(s string, budget int) string {
+func clipMiddle(s string, budget int) string {
 	if budget <= 0 {
 		return ""
 	}
@@ -203,7 +203,7 @@ func BuildTitleSeed(msgs []provider.Message, budget int) string {
 		if text == "" {
 			continue
 		}
-		recents = append(recents, excerpt{role: string(m.Role), text: ClipMiddle(text, titleSeedMsgClamp)})
+		recents = append(recents, excerpt{role: string(m.Role), text: clipMiddle(text, titleSeedMsgClamp)})
 	}
 
 	// Budget split: the anchor takes what the recency floor leaves; unused
@@ -212,7 +212,7 @@ func BuildTitleSeed(msgs []provider.Message, budget int) string {
 	if len(recents) > 0 {
 		anchorMax = budget - budget*titleSeedRecentFloor/100
 	}
-	anchorText = ClipMiddle(anchorText, anchorMax)
+	anchorText = clipMiddle(anchorText, anchorMax)
 	remaining := budget - len([]rune(anchorText))
 
 	// Pack newest-first at whole-excerpt granularity; when not even the
@@ -224,7 +224,7 @@ func BuildTitleSeed(msgs []provider.Message, budget int) string {
 		cost := len([]rune(line.role)) + 2 + len([]rune(line.text)) + 1
 		if cost > remaining {
 			if len(picked) == 0 && remaining > 80 {
-				line.text = ClipMiddle(line.text, remaining-len([]rune(line.role))-3)
+				line.text = clipMiddle(line.text, remaining-len([]rune(line.role))-3)
 				picked = append(picked, line)
 				remaining = 0
 			}

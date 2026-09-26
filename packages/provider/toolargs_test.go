@@ -20,7 +20,7 @@ func TestTheLiveFailureIsRepairedIntoTheCallTheModelMeant(t *testing.T) {
 	if json.Valid([]byte(goEditCall)) {
 		t.Fatal("fixture is already valid JSON — it no longer reproduces the bug it was captured from")
 	}
-	repaired := RepairToolArguments(goEditCall)
+	repaired := repairToolArguments(goEditCall)
 	if !json.Valid([]byte(repaired)) {
 		t.Fatalf("still unparseable after repair: %q", repaired)
 	}
@@ -63,15 +63,15 @@ func TestValidArgumentsAreNeverTouched(t *testing.T) {
 		// A backslash immediately before a quote must not flip string tracking.
 		`{"text":"ends with a backslash \\"}`,
 	} {
-		if got := RepairToolArguments(in); got != in {
-			t.Errorf("RepairToolArguments(%q) = %q, want it unchanged", in, got)
+		if got := repairToolArguments(in); got != in {
+			t.Errorf("repairToolArguments(%q) = %q, want it unchanged", in, got)
 		}
 	}
 }
 
 func TestEveryControlByteInsideAStringIsEscaped(t *testing.T) {
 	raw := "{\"t\":\"tab\there\nnewline\rcr\bbs\ffeed\x01one\"}"
-	repaired := RepairToolArguments(raw)
+	repaired := repairToolArguments(raw)
 	if !json.Valid([]byte(repaired)) {
 		t.Fatalf("not valid after repair: %q", repaired)
 	}
@@ -102,8 +102,8 @@ func TestIrreparableInputIsReturnedUnchanged(t *testing.T) {
 		`{"a":1} trailing`,         // garbage after the value
 		"{\"unterminated\":\"a\tb", // control byte AND unterminated
 	} {
-		if got := RepairToolArguments(in); got != in {
-			t.Errorf("RepairToolArguments(%q) = %q, want the original back", in, got)
+		if got := repairToolArguments(in); got != in {
+			t.Errorf("repairToolArguments(%q) = %q, want the original back", in, got)
 		}
 	}
 }
@@ -111,8 +111,8 @@ func TestIrreparableInputIsReturnedUnchanged(t *testing.T) {
 // An empty buffer is the "model called a no-argument tool" case, which every
 // caller turns into {} itself. The repair must not invent a value.
 func TestEmptyStaysEmpty(t *testing.T) {
-	if got := RepairToolArguments(""); got != "" {
-		t.Errorf("RepairToolArguments(\"\") = %q", got)
+	if got := repairToolArguments(""); got != "" {
+		t.Errorf("repairToolArguments(\"\") = %q", got)
 	}
 }
 
@@ -130,7 +130,7 @@ func TestRepairedArgumentsLetTheAssistantTurnPersist(t *testing.T) {
 	if marshals(goEditCall) {
 		t.Fatal("the raw fixture marshalled — it no longer demonstrates the transcript loss")
 	}
-	if !marshals(RepairToolArguments(goEditCall)) {
+	if !marshals(repairToolArguments(goEditCall)) {
 		t.Error("the repaired call still cannot be written to a session row")
 	}
 }
@@ -141,7 +141,7 @@ func TestRepairedArgumentsLetTheAssistantTurnPersist(t *testing.T) {
 // existing here — and one that hand-rolls the conversion fails this test with
 // its own file and line.
 //
-// The required seam is FinalizeToolArguments rather than RepairToolArguments
+// The required seam is FinalizeToolArguments rather than repairToolArguments
 // because repairing is only half the contract. The other half is that
 // ToolCallBlock.Arguments is ALWAYS valid JSON, which the whole codebase now
 // relies on when marshalling a message — a provider that repaired but then

@@ -384,7 +384,7 @@ func runCompactCommand(ctx context.Context, sess *session, _ string) string {
 			"content":       textContentBlock(delta),
 		})
 	}
-	if _, err := sess.agent.Compact(ctx, core.AutoCompactKeepTail, sink); err != nil {
+	if _, err := sess.agent.Compact(ctx, sess.agent.Compaction(core.CompactRequested).KeepTail, sink); err != nil {
 		msg := "Compaction failed: " + err.Error()
 		if errors.Is(err, core.ErrNothingToCompact) {
 			// Benign: the transcript is already entirely keep-tail.

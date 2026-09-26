@@ -2,7 +2,7 @@
 
 `terva rpc` runs the agent runtime as a subprocess that speaks newline-delimited JSON on stdin and stdout. Use it from any language that can spawn a process and read/write its pipes: Go, TypeScript, Python, Rust, shell, anything.
 
-For a Go program embedding the runtime in-process, use the `packages/agent/sdk` SDK instead. The wire format below IS the SDK's type set: the **event stream** on every surface (`terva --json`, this RPC stream, the SDK's `Event`, swarm event logs) is generated from one serializer (`core.WireEvent`), so consumers can share parsing code. The RPC layer adds a few frames of its own on top of that stream (the `response` command acks, `hello`, the `get_*` result payloads, and `compact_done`), which are RPC-specific, not `core.WireEvent`.
+For a Go program embedding the runtime in-process, use the `packages/agent/sdk` SDK instead, or the engine itself when terva's conventions are not the ones you want; [embedding.md](embedding.md) compares the three. The wire format below IS the SDK's type set: the **event stream** on every surface (`terva --json`, this RPC stream, the SDK's `Event`, swarm event logs) is generated from one serializer (`core.WireEvent`), so consumers can share parsing code. The RPC layer adds a few frames of its own on top of that stream (the `response` command acks, `hello`, the `get_*` result payloads, and `compact_done`), which are RPC-specific, not `core.WireEvent`.
 
 ## Quick start
 

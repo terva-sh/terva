@@ -8,10 +8,10 @@ package build
 // for sessions on that provider, and an unset provider inherits the global
 // exactly as before.
 //
-// The override lands through the SAME core setter as the global
-// (Agent.SetActivationContinuation). That is the design constraint and not an
-// implementation detail. Core stays provider-ignorant, and there is still one
-// flag for runLoop to snapshot once per Prompt, so the immediate-refresh and
+// The override lands through the SAME setter as the global
+// (lazytools.Visibility.SetContinuation). That is the design constraint and not
+// an implementation detail. Core stays provider-ignorant, and there is still one
+// flag to snapshot once per Prompt (BeginPrompt), so the immediate-refresh and
 // natural-stop-gate semantics still cannot mix inside one Prompt. A second
 // flag threaded through the gate would break that.
 //

@@ -206,7 +206,7 @@ func interruptibleContext() (context.Context, context.CancelFunc) {
 
 func TestACancelledPromptIsWithdrawnFromTheTranscript(t *testing.T) {
 	client := &silentUntilCancelledClient{started: make(chan struct{}, 1)}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 	rec := &eventRecorder{}
 	ctx, cancel := interruptibleContext()
 	defer cancel()
@@ -254,7 +254,7 @@ func TestACancelledPromptIsWithdrawnFromTheTranscript(t *testing.T) {
 // and still on disk.
 func TestATurnCancelledWithoutAUserBehindItKeepsThePrompt(t *testing.T) {
 	client := &silentUntilCancelledClient{started: make(chan struct{}, 1)}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 	rec := &eventRecorder{}
 	// A plain cancel: no cause, so nothing claims a person did this.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -294,7 +294,7 @@ func TestATurnCancelledWithoutAUserBehindItKeepsThePrompt(t *testing.T) {
 // --- every way a turn records something must defeat it -----------------------
 
 func TestACompletedTurnKeepsThePrompt(t *testing.T) {
-	a := NewAgent(&answeringClient{}, "fake-model", "system", Registry{})
+	a := newTestAgent(&answeringClient{}, "fake-model", "system", Registry{})
 	rec := &eventRecorder{}
 
 	if err := a.Prompt(context.Background(), "keep me", nil, rec.sink); err != nil {
@@ -315,7 +315,7 @@ func TestACompletedTurnKeepsThePrompt(t *testing.T) {
 func TestAPartialAnswerKeepsThePrompt(t *testing.T) {
 	ctx, cancel := interruptibleContext()
 	defer cancel()
-	a := NewAgent(&partialThenCancelledClient{cancel: cancel}, "fake-model", "system", Registry{})
+	a := newTestAgent(&partialThenCancelledClient{cancel: cancel}, "fake-model", "system", Registry{})
 	rec := &eventRecorder{}
 
 	_ = a.Prompt(ctx, "summarize this", nil, rec.sink)
@@ -342,7 +342,7 @@ func TestALandedToolResultKeepsThePrompt(t *testing.T) {
 	ctx, cancel := interruptibleContext()
 	defer cancel()
 	tool := &cancellingTool{cancel: cancel}
-	a := NewAgent(&toolCallingClient{}, "fake-model", "system", Registry{"canceller": tool})
+	a := newTestAgent(&toolCallingClient{}, "fake-model", "system", Registry{"canceller": tool})
 	rec := &eventRecorder{}
 
 	_ = a.Prompt(ctx, "run the thing", nil, rec.sink)
@@ -369,7 +369,7 @@ func TestALandedToolResultKeepsThePrompt(t *testing.T) {
 // check passes every other test in this file.
 
 func TestATurnThatEndsWithoutAnsweringKeepsThePrompt(t *testing.T) {
-	a := NewAgent(&emptyAnswerClient{}, "fake-model", "system", Registry{})
+	a := newTestAgent(&emptyAnswerClient{}, "fake-model", "system", Registry{})
 	rec := &eventRecorder{}
 
 	if err := a.Prompt(context.Background(), "say nothing", nil, rec.sink); err != nil {
@@ -391,8 +391,8 @@ func TestATurnThatEndsWithoutAnsweringKeepsThePrompt(t *testing.T) {
 // wants their prompt back to retry, and it is also a turn with nothing recorded
 // after it.
 func TestAFailedTurnKeepsThePrompt(t *testing.T) {
-	a := NewAgent(&failingClient{}, "fake-model", "system", Registry{})
-	a.MaxRetries = 0
+	a := newTestAgent(&failingClient{}, "fake-model", "system", Registry{})
+	a.maxRetries = 0
 	rec := &eventRecorder{}
 
 	if err := a.Prompt(context.Background(), "expensive question", nil, rec.sink); err == nil {
@@ -415,7 +415,7 @@ func TestAFailedTurnKeepsThePrompt(t *testing.T) {
 // the outside.
 func TestWithdrawLastUserMessageRequiresAnUntouchedTranscript(t *testing.T) {
 	newAgentWithPrompt := func() (*Agent, uint64) {
-		a := NewAgent(&answeringClient{}, "fake-model", "system", Registry{})
+		a := newTestAgent(&answeringClient{}, "fake-model", "system", Registry{})
 		a.mu.Lock()
 		a.messages = append(a.messages, provider.Message{
 			Role:    provider.RoleUser,
@@ -473,7 +473,7 @@ func TestWithdrawLastUserMessageRequiresAnUntouchedTranscript(t *testing.T) {
 	})
 
 	t.Run("empty transcript", func(t *testing.T) {
-		a := NewAgent(&answeringClient{}, "fake-model", "system", Registry{})
+		a := newTestAgent(&answeringClient{}, "fake-model", "system", Registry{})
 		a.mu.Lock()
 		rev := a.rev
 		a.mu.Unlock()
@@ -489,8 +489,8 @@ func TestWithdrawLastUserMessageRequiresAnUntouchedTranscript(t *testing.T) {
 // the pre-guard text back to the composer would quietly undo the rewrite.
 func TestWithdrawalReturnsTheRecordedTextNotTheTyped(t *testing.T) {
 	client := &silentUntilCancelledClient{started: make(chan struct{}, 1)}
-	a := NewAgent(client, "fake-model", "system", Registry{})
-	a.BeforeUserMessage = func(string) (bool, string, string) { return true, "", "redacted by the guard" }
+	a := newTestAgent(client, "fake-model", "system", Registry{})
+	a.beforeUserMessage = func(string) (bool, string, string) { return true, "", "redacted by the guard" }
 	rec := &eventRecorder{}
 	ctx, cancel := interruptibleContext()
 	defer cancel()
@@ -521,7 +521,7 @@ func TestWithdrawalReturnsTheRecordedTextNotTheTyped(t *testing.T) {
 // it in a composer.
 func TestWithdrawalDoesNotReturnTheHostPreamble(t *testing.T) {
 	client := &silentUntilCancelledClient{started: make(chan struct{}, 1)}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 	rec := &eventRecorder{}
 	ctx, cancel := interruptibleContext()
 	defer cancel()
@@ -529,7 +529,7 @@ func TestWithdrawalDoesNotReturnTheHostPreamble(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_ = a.PromptExtra(ctx, "htop", nil, UserMessageExtras{
+		_ = a.promptExtra(ctx, "htop", nil, UserMessageExtras{
 			Preamble: "[attachments expired] the files you sent are gone",
 		}, rec.sink)
 	}()

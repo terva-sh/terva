@@ -19,12 +19,14 @@ import (
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/extproto"
 	"terva.sh/terva/packages/agent/mcp"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // runACPMode runs the in-process Agent Client Protocol mode (the editor↔agent
@@ -96,7 +98,7 @@ func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers
 	if err != nil {
 		return acp.SessionAgent{}, err
 	}
-	sess, err := core.NewSession(config.TervaHome(), r.CWD, r.Provider, r.Model, f.version)
+	sess, err := session.NewSession(config.TervaHome(), r.CWD, r.Provider, r.Model, f.version)
 	if err != nil {
 		cleanup()
 		return acp.SessionAgent{}, err
@@ -128,7 +130,7 @@ func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers
 // sessionId), builds an agent for it, wires persistence, and returns the
 // repaired transcript so the acp package can rehydrate + replay it (§10/§13).
 func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (acp.SessionAgent, []provider.Message, error) {
-	sess, msgs, err := core.OpenSession(sessionPath)
+	sess, msgs, err := session.OpenSession(sessionPath)
 	if err != nil {
 		// Propagate os.IsNotExist verbatim so the acp package maps a missing
 		// session file to resource_not_found rather than internal_error.
@@ -205,7 +207,7 @@ func (f *acpFactory) ListSessions(cwd string) []acp.SessionInfo {
 		return nil
 	}
 	root := config.TervaHome()
-	summaries := core.DescribeSessions(root, cwd)
+	summaries := session.DescribeSessions(root, cwd)
 	out := make([]acp.SessionInfo, 0, len(summaries))
 	for _, s := range summaries {
 		// Skip empty meta-only stubs (no messages) — they aren't resumable
@@ -239,7 +241,7 @@ func acpLoggedInProviders() map[string]bool { return build.LoggedInProviderSet()
 // provider's catalog can be speculative (e.g. openai-codex today), so excluding
 // them would hide that provider from the editor even when the user is logged in.
 func (f *acpFactory) ModelOptions() []acp.ModelOption {
-	return modelOptionsFor(provider.Active(), acpLoggedInProviders())
+	return modelOptionsFor(modelreg.Active(), acpLoggedInProviders())
 }
 
 // modelOptionsFor builds the model-menu options from a catalog and the set of
@@ -283,7 +285,7 @@ func modelOptionsFor(models []provider.Model, authed map[string]bool) []acp.Mode
 //     if we cannot build a client for it — building one is the in-process win
 //     over rpc (which has no rebuild path and rejects outright).
 func (f *acpFactory) SwitchModel(currentProvider, currentModel, targetModelID string) (acp.ModelSwitch, error) {
-	target, err := provider.FindModel("", targetModelID)
+	target, err := modelreg.FindModel("", targetModelID)
 	if err != nil {
 		return acp.ModelSwitch{}, err
 	}
@@ -297,7 +299,7 @@ func (f *acpFactory) SwitchModel(currentProvider, currentModel, targetModelID st
 	// different backends — mutating the id alone would keep firing at the old
 	// endpoint (rpc.go's rejection rationale).
 	if target.Provider == currentProvider {
-		if cur, curErr := provider.FindModel(currentProvider, currentModel); curErr == nil && cur.BaseURL == target.BaseURL {
+		if cur, curErr := modelreg.FindModel(currentProvider, currentModel); curErr == nil && cur.BaseURL == target.BaseURL {
 			sw := acp.ModelSwitch{Provider: target.Provider, Model: target.ID, Reuse: true}
 			// A nil Client is how the shared event spells "same endpoint, new
 			// id" — and it still re-points the host-routed dispatch tools,
@@ -467,7 +469,6 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 		stopMCP()
 	}
 
-	ag := r.NewAgent()
 	// ACP is NOT a fixed-trust host: /trust and /untrust flip Workspace Trust
 	// over the wire, mid-session. The live-trust engine is what makes that
 	// reachable — it keeps a standing engine for an untrusted project whose
@@ -477,42 +478,25 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	// the editor opened a new session.
 	hookEng := build.BuildLiveTrustHookEngine(args, r.Trusted)
 	// Canonical tool-call ladder (pre-hooks, confirm gate, extension
-	// intercept). Passing extMgr in activates BOTH the extension tool-call
+	// intercept), built before the agent because core.New requires it.
+	// Passing extMgr in activates BOTH the extension tool-call
 	// intercept AND — through the confirm gate built above — the manifest
 	// permission rules. The ladder is nil-safe across all three args.
 	// The gate hands each call's id to ConfirmWithCall directly — the §13
 	// correlation seam — so no wrapper records a "current call" ahead of the
 	// ladder, and nothing collides when a host_tool_call approval parks
 	// concurrently with a model call's.
-	ag.BeforeToolExecute = build.BuildBeforeToolExecute(hookEng, confirmGate, extMgr, ag)
+	ag := r.NewAgent(build.BuildToolGate(hookEng, confirmGate, extMgr), build.ExtensionFilters(ctx, extMgr)...)
 	build.WireHostToolDispatcher(ag, extMgr, confirmGate)
 	// Apply the subset of the non-interactive extension hooks that make sense
-	// under ACP: BeforeTurn / BeforeAssistantMessage (extension turn +
-	// assistant-message intercepts), ContextProvider (live context cards), and
-	// the open-work continuation gate (re-prompt once on open work). We deliberately do NOT set
-	// ag.OnEvent here — the acp package owns that field for its session/update
-	// translator — and instead hand the event observer back so bindSession can
-	// COMPOSE it after the translator (see the returned observe func).
-	if extMgr != nil {
-		ag.BeforeTurn = func(step int) (bool, string) {
-			res := extMgr.InterceptTurnStart(ctx, step)
-			return !res.Block, res.Reason
-		}
-		ag.BeforeAssistantMessage = func(text string) (bool, string, string) {
-			res := extMgr.InterceptAssistantMessage(ctx, text)
-			if res.Block {
-				return false, res.Reason, ""
-			}
-			return true, "", res.ReplaceText
-		}
-		ag.BeforeUserMessage = func(text string) (bool, string, string) {
-			res := extMgr.InterceptUserMessage(ctx, text)
-			if res.Block {
-				return false, res.Reason, ""
-			}
-			return true, "", res.ReplaceText
-		}
-	}
+	// under ACP. The turn and message intercepts are already on the agent, as
+	// build.ExtensionFilters above. Here: the frame's tail (live context cards)
+	// and the open-work continuation gate (re-prompt once on open work). We
+	// deliberately do NOT set ag.OnEvent here — the acp package owns that field
+	// for its session/update translator — and instead hand the event observer
+	// back so bindSession can COMPOSE it after the translator (see the returned
+	// observe func).
+	//
 	// The live cards the model reads each turn. Outside the manager check: the
 	// task board is not an extension, so its card and its open-work gate follow
 	// r.Tasks. They were nested inside it, which made a built-in board's

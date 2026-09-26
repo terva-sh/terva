@@ -49,13 +49,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"sort"
 	"strings"
 	"time"
 )
 
 type bedrockClient struct {
+	catalogRef
 	// Auth mode is determined at construction time. Exactly one of
 	// bearerToken or sigv4 is populated.
 	bearerToken string
@@ -73,23 +73,13 @@ type bedrockSigV4Creds struct {
 	sessionToken    string // optional; STS / SSO / IRSA temp creds
 }
 
-// NewBedrockClient returns a Bedrock client.
-//
-// Auth resolution (first match wins):
-//
-//  1. apiKey == real bearer-ish string (not "<aws>") -> bearer route.
-//  2. AWS_BEARER_TOKEN_BEDROCK env var -> bearer route.
-//  3. AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (+ optional
-//     AWS_SESSION_TOKEN) -> SigV4 route.
-//  4. AWS_PROFILE -> read ~/.aws/credentials, take that profile's keys.
-//
-// region defaults to us-east-1 unless AWS_REGION / AWS_DEFAULT_REGION is
-// set or the baseURL embeds a region.
-func NewBedrockClient(apiKey, baseURL string) Client {
-	region := os.Getenv("AWS_REGION")
-	if region == "" {
-		region = os.Getenv("AWS_DEFAULT_REGION")
-	}
+// newBedrockClient returns a Bedrock client for cfg. A BearerToken takes the
+// bearer route; otherwise AccessKeyID and SecretAccessKey (with an optional
+// SessionToken) sign each request with SigV4. With neither, the client
+// reports cfg.Hint on its first request. An empty Region means us-east-1, and
+// an empty baseURL means that region's runtime endpoint.
+func newBedrockClient(cfg BedrockConfig, baseURL string) Client {
+	region := cfg.Region
 	if region == "" {
 		region = "us-east-1"
 	}
@@ -101,90 +91,19 @@ func NewBedrockClient(apiKey, baseURL string) Client {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		http:    &http.Client{Timeout: 0},
 	}
-
-	// Bearer route.
-	token := apiKey
-	if token == "" || token == "<aws>" {
-		token = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
-	}
-	if token != "" && token != "<aws>" {
-		c.bearerToken = token
+	if cfg.BearerToken != "" {
+		c.bearerToken = cfg.BearerToken
 		return c
 	}
-
-	// SigV4 route: env vars first.
-	ak := os.Getenv("AWS_ACCESS_KEY_ID")
-	sk := os.Getenv("AWS_SECRET_ACCESS_KEY")
-	st := os.Getenv("AWS_SESSION_TOKEN")
-	if ak != "" && sk != "" {
-		c.sigv4 = &bedrockSigV4Creds{accessKeyID: ak, secretAccessKey: sk, sessionToken: st}
+	if cfg.AccessKeyID != "" && cfg.SecretAccessKey != "" {
+		c.sigv4 = &bedrockSigV4Creds{accessKeyID: cfg.AccessKeyID, secretAccessKey: cfg.SecretAccessKey, sessionToken: cfg.SessionToken}
 		return c
 	}
-
-	// SigV4 route: ~/.aws/credentials via AWS_PROFILE.
-	if profile := os.Getenv("AWS_PROFILE"); profile != "" {
-		if creds, err := readAWSCredentialsFile(profile); err == nil {
-			c.sigv4 = creds
-			return c
-		}
+	hint := cfg.Hint
+	if hint == "" {
+		hint = "no Bedrock credentials (set BedrockConfig.BearerToken, or AccessKeyID and SecretAccessKey)"
 	}
-
-	return &unimplementedClient{
-		name: "amazon-bedrock",
-		hint: "no Bedrock credentials found (set AWS_BEARER_TOKEN_BEDROCK, AWS_ACCESS_KEY_ID+AWS_SECRET_ACCESS_KEY, or AWS_PROFILE)",
-		wire: reasoningWireNone,
-	}
-}
-
-// readAWSCredentialsFile parses ~/.aws/credentials and returns the
-// access-key/secret-key (and optional session-token) for the named
-// profile. The file is an INI-like format with `[profile]` headers.
-func readAWSCredentialsFile(profile string) (*bedrockSigV4Creds, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-	b, err := os.ReadFile(home + "/.aws/credentials")
-	if err != nil {
-		return nil, err
-	}
-	var current string
-	creds := map[string]map[string]string{}
-	for _, line := range strings.Split(string(b), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			current = strings.TrimSpace(line[1 : len(line)-1])
-			creds[current] = map[string]string{}
-			continue
-		}
-		if current == "" {
-			continue
-		}
-		eq := strings.IndexByte(line, '=')
-		if eq < 0 {
-			continue
-		}
-		k := strings.TrimSpace(line[:eq])
-		v := strings.TrimSpace(line[eq+1:])
-		creds[current][k] = v
-	}
-	p, ok := creds[profile]
-	if !ok {
-		return nil, fmt.Errorf("aws profile %q not found in ~/.aws/credentials", profile)
-	}
-	ak := p["aws_access_key_id"]
-	sk := p["aws_secret_access_key"]
-	if ak == "" || sk == "" {
-		return nil, fmt.Errorf("aws profile %q missing aws_access_key_id or aws_secret_access_key", profile)
-	}
-	return &bedrockSigV4Creds{
-		accessKeyID:     ak,
-		secretAccessKey: sk,
-		sessionToken:    p["aws_session_token"],
-	}, nil
+	return &unimplementedClient{name: "amazon-bedrock", hint: hint, wire: reasoningWireNone}
 }
 
 func (c *bedrockClient) Name() string { return "amazon-bedrock" }
@@ -306,8 +225,8 @@ func bedrockStripGeoPrefix(modelID string) string {
 // capability defaults — image-input true. That is the documented safe case:
 // silently dropping images for every unknown Bedrock model would be the worse
 // regression.
-func bedrockCatalogModel(modelID string) Model {
-	m, _ := FindModel("amazon-bedrock", bedrockStripGeoPrefix(modelID))
+func bedrockCatalogModel(cat ModelCatalog, modelID string) Model {
+	m, _ := cat.FindModel("amazon-bedrock", bedrockStripGeoPrefix(modelID))
 	return m
 }
 
@@ -316,9 +235,9 @@ func bedrockCatalogModel(modelID string) Model {
 // We use PriceCacheWrite > 0 as a proxy: every Bedrock-hosted Claude
 // model with a write price in the catalog supports cachePoint markers.
 // Nova models use automatic caching and don't need explicit markers.
-func bedrockModelSupportsCaching(modelID string) bool {
+func bedrockModelSupportsCaching(cat ModelCatalog, modelID string) bool {
 	modelID = bedrockStripGeoPrefix(modelID)
-	if m, err := FindModel("amazon-bedrock", modelID); err == nil {
+	if m, err := cat.FindModel("amazon-bedrock", modelID); err == nil {
 		return m.PriceCacheWrite > 0
 	}
 	// Unknown model: enable for Anthropic Claude families — cachePoint is
@@ -350,8 +269,8 @@ func (c *bedrockClient) buildRequest(req Request) (*bedrockRequest, error) {
 	// Resolve the model ID as it will appear on the wire so the caching
 	// check operates on the same ID used for FindModel.
 	resolvedModel := resolveBedrockInferenceProfileID(req.Model, c.region)
-	caching := bedrockModelSupportsCaching(resolvedModel)
-	req.Messages = enforceImageInput(bedrockCatalogModel(resolvedModel), req.Messages)
+	caching := bedrockModelSupportsCaching(c.models(), resolvedModel)
+	req.Messages = enforceImageInput(bedrockCatalogModel(c.models(), resolvedModel), req.Messages)
 
 	if req.System != "" {
 		sysBlock := map[string]interface{}{"text": req.System}
@@ -371,7 +290,7 @@ func (c *bedrockClient) buildRequest(req Request) (*bedrockRequest, error) {
 	// Bedrock Converse requires strict user/assistant alternation: merge any
 	// same-role adjacency an edit/delete left behind (after tool-result
 	// normalization) and prepend a user turn for a card's leading greeting.
-	for _, m := range EnsureLeadingUserTurn(MergeAdjacentSameRole(normalizeBedrockToolResults(req.Messages))) {
+	for _, m := range ensureLeadingUserTurn(mergeAdjacentSameRole(normalizeBedrockToolResults(req.Messages))) {
 		role := string(m.Role)
 		if role == "tool" {
 			role = "user"
@@ -665,7 +584,7 @@ func (c *bedrockClient) runStream(ctx context.Context, resp *http.Response, req 
 				if !sawStop {
 					out <- EventDone{
 						Stop:    StopError,
-						Err:     NewStreamDeathError("bedrock", "messageStop"),
+						Err:     newStreamDeathError("bedrock", "messageStop"),
 						Message: finalMsg,
 					}
 					return
@@ -792,7 +711,7 @@ func (c *bedrockClient) runStream(ctx context.Context, resp *http.Response, req 
 				usage.OutputTokens = d.Usage.OutputTokens
 				usage.CacheReadTokens = d.Usage.CacheReadInputTokens
 				usage.CacheWriteTokens = d.Usage.CacheWriteInputTokens
-				if m, err := FindModel("amazon-bedrock", req.Model); err == nil {
+				if m, err := c.models().FindModel("amazon-bedrock", req.Model); err == nil {
 					ApplyCost(m, &usage)
 				}
 				out <- EventUsage{Usage: usage}

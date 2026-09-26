@@ -3,10 +3,12 @@ package workspace
 import (
 	"context"
 	"strings"
+	"terva.sh/terva/packages/core/lazytools"
 	"testing"
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -21,8 +23,7 @@ func activationFixture(t *testing.T) (*Workspace, *wsSession, *wsSession) {
 
 	newSession := func(id, prov string) *wsSession {
 		s := &wsSession{id: id, ws: w, hub: newWSHub(), provider: prov, model: "m"}
-		s.agent = core.NewAgent(&gatedTurnClient{}, "m", "sys", core.Registry{})
-		s.agent.EnableLazyTools()
+		s.agent = coretest.NewAgent(&gatedTurnClient{}, "m", "sys", core.Registry{}, build.LazyTools(nil)...)
 		w.sessions[id] = s
 		return s
 	}
@@ -95,10 +96,10 @@ func TestProviderActivationContinuationWriteIsScoped(t *testing.T) {
 	if got := cfg.Providers["anthropic"].ActivationContinuation; got != "" {
 		t.Errorf("the write must not touch another provider, got %q", got)
 	}
-	if codex.agent.ActivationContinuationEnabled() {
+	if lazytools.Of(codex.agent).ContinuationEnabled() {
 		t.Error("the session on openai-codex must go off live")
 	}
-	if !other.agent.ActivationContinuationEnabled() {
+	if !lazytools.Of(other.agent).ContinuationEnabled() {
 		t.Error("the session on anthropic must be untouched — this is the whole point of scoping")
 	}
 
@@ -109,7 +110,7 @@ func TestProviderActivationContinuationWriteIsScoped(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
-	if !codex.agent.ActivationContinuationEnabled() {
+	if !lazytools.Of(codex.agent).ContinuationEnabled() {
 		t.Error("clearing the override must restore the global, not keep the override's value")
 	}
 }
@@ -134,10 +135,10 @@ func TestGlobalToggleDoesNotClobberAProviderOverride(t *testing.T) {
 		t.Fatalf("set global off: %v", err)
 	}
 
-	if !codex.agent.ActivationContinuationEnabled() {
+	if !lazytools.Of(codex.agent).ContinuationEnabled() {
 		t.Error("a provider that pinned itself on must survive the global going off")
 	}
-	if other.agent.ActivationContinuationEnabled() {
+	if lazytools.Of(other.agent).ContinuationEnabled() {
 		t.Error("a provider with no override must follow the global off — the control for the assertion above")
 	}
 }

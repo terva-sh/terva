@@ -16,7 +16,7 @@ func TestProviderErrorFormats(t *testing.T) {
 		want string
 	}{
 		{"http", NewHTTPError("openai", 500, "", " boom \n"), "openai: http 500: boom"},
-		{"stream death", NewStreamDeathError("anthropic", "message_stop"),
+		{"stream death", newStreamDeathError("anthropic", "message_stop"),
 			"anthropic: stream ended before message_stop: unexpected EOF"},
 		{"api event", NewAPIError("anthropic", "overloaded_error: Overloaded", true),
 			"anthropic: overloaded_error: Overloaded"},
@@ -37,7 +37,7 @@ func TestProviderErrorTransience(t *testing.T) {
 		NewHTTPError("x", 503, "", ""),
 		NewHTTPError("x", 504, "", ""),
 		NewHTTPError("x", 529, "", ""),
-		NewStreamDeathError("x", "[DONE]"),
+		newStreamDeathError("x", "[DONE]"),
 	}
 	for _, e := range transient {
 		if !e.Transient {
@@ -61,7 +61,7 @@ func TestProviderErrorTransience(t *testing.T) {
 }
 
 func TestProviderErrorWrapping(t *testing.T) {
-	death := NewStreamDeathError("openai", "[DONE]")
+	death := newStreamDeathError("openai", "[DONE]")
 	if !errors.Is(death, io.ErrUnexpectedEOF) {
 		t.Errorf("stream death should wrap io.ErrUnexpectedEOF")
 	}
@@ -91,18 +91,18 @@ func TestParseRetryAfter(t *testing.T) {
 		{"0", 0},
 	}
 	for _, c := range cases {
-		if got := ParseRetryAfter(c.in); got != c.want {
-			t.Errorf("ParseRetryAfter(%q) = %v, want %v", c.in, got, c.want)
+		if got := parseRetryAfter(c.in); got != c.want {
+			t.Errorf("parseRetryAfter(%q) = %v, want %v", c.in, got, c.want)
 		}
 	}
 	// HTTP-date form: a date in the future yields a positive wait, a
 	// date in the past yields 0.
 	future := time.Now().Add(90 * time.Second).UTC().Format(http.TimeFormat)
-	if got := ParseRetryAfter(future); got <= 0 || got > 91*time.Second {
+	if got := parseRetryAfter(future); got <= 0 || got > 91*time.Second {
 		t.Errorf("future HTTP-date = %v, want ~90s", got)
 	}
 	past := time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat)
-	if got := ParseRetryAfter(past); got != 0 {
+	if got := parseRetryAfter(past); got != 0 {
 		t.Errorf("past HTTP-date = %v, want 0", got)
 	}
 }

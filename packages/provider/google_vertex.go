@@ -43,10 +43,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -80,39 +80,34 @@ func (c *vertexConfig) cacheKey() string {
 	return "user:" + c.userClientID
 }
 
-func loadVertexConfig() (*vertexConfig, error) {
+// loadVertexConfig turns the host's values into the client's config, parsing
+// CredentialsJSON when there is no API key. A missing project or missing
+// credentials is reported with v.Hint, or a generic message when it is empty.
+func loadVertexConfig(v VertexConfig) (*vertexConfig, error) {
+	missing := func(generic string) error {
+		if v.Hint != "" {
+			return errors.New(v.Hint)
+		}
+		return errors.New(generic)
+	}
 	cfg := &vertexConfig{
-		project:  os.Getenv("GOOGLE_CLOUD_PROJECT"),
-		location: os.Getenv("GOOGLE_CLOUD_LOCATION"),
-		apiKey:   os.Getenv("GOOGLE_CLOUD_API_KEY"),
+		project:  v.Project,
+		location: v.Location,
+		apiKey:   v.APIKey,
 	}
 	if cfg.location == "" {
 		cfg.location = "us-central1"
 	}
 	if cfg.project == "" {
-		return nil, fmt.Errorf("vertex: GOOGLE_CLOUD_PROJECT not set")
+		return nil, missing("vertex: VertexConfig.Project not set")
 	}
 	if cfg.apiKey != "" {
 		return cfg, nil
 	}
-	// Try service-account JSON.
-	credPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
-	if credPath == "" {
-		// ADC default path. Mirrors `gcloud auth application-default login`.
-		if home, err := os.UserHomeDir(); err == nil {
-			candidate := home + "/.config/gcloud/application_default_credentials.json"
-			if _, err := os.Stat(candidate); err == nil {
-				credPath = candidate
-			}
-		}
+	if len(v.CredentialsJSON) == 0 {
+		return nil, missing("vertex: no auth — set VertexConfig.APIKey or CredentialsJSON")
 	}
-	if credPath == "" {
-		return nil, fmt.Errorf("vertex: no auth — set GOOGLE_CLOUD_API_KEY or GOOGLE_APPLICATION_CREDENTIALS")
-	}
-	b, err := os.ReadFile(credPath)
-	if err != nil {
-		return nil, fmt.Errorf("vertex: read credentials %q: %w", credPath, err)
-	}
+	b := v.CredentialsJSON
 	var raw struct {
 		Type         string `json:"type"`
 		ClientEmail  string `json:"client_email"`
@@ -172,7 +167,9 @@ func loadVertexConfig() (*vertexConfig, error) {
 	return cfg, nil
 }
 
-// vertexTokenCache caches one access token per service-account email.
+// vertexTokenCache caches one access token per service-account email. Each
+// client owns one, through its transport, for the reasons copilotTokenCache
+// gives.
 type vertexTokenCache struct {
 	mu     sync.Mutex
 	tokens map[string]struct {
@@ -182,12 +179,14 @@ type vertexTokenCache struct {
 	http *http.Client
 }
 
-var vertexCache = &vertexTokenCache{
-	tokens: map[string]struct {
-		value     string
-		expiresAt time.Time
-	}{},
-	http: &http.Client{Timeout: 30 * time.Second},
+func newVertexTokenCache(httpc *http.Client) *vertexTokenCache {
+	return &vertexTokenCache{
+		tokens: map[string]struct {
+			value     string
+			expiresAt time.Time
+		}{},
+		http: httpc,
+	}
 }
 
 func b64url(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
@@ -290,6 +289,16 @@ func (c *vertexTokenCache) get(ctx context.Context, cfg *vertexConfig) (string, 
 type vertexTransport struct {
 	inner http.RoundTripper
 	cfg   *vertexConfig
+	cache *vertexTokenCache
+}
+
+// over rebuilds the transport on base, as copilotRefreshTransport.over does.
+func (t *vertexTransport) over(base *http.Client) http.RoundTripper {
+	return &vertexTransport{
+		inner: roundTripperOf(base),
+		cfg:   t.cfg,
+		cache: newVertexTokenCache(exchangeClient(base)),
+	}
 }
 
 func (t *vertexTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -317,7 +326,7 @@ func (t *vertexTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.cfg.apiKey != "" {
 		clone.Header.Set("x-goog-api-key", t.cfg.apiKey)
 	} else {
-		tok, err := vertexCache.get(req.Context(), t.cfg)
+		tok, err := t.cache.get(req.Context(), t.cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -326,12 +335,12 @@ func (t *vertexTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.inner.RoundTrip(clone)
 }
 
-// NewVertex returns a Vertex AI client. The apiKey argument is ignored
-// in favor of env-based config (GOOGLE_CLOUD_API_KEY or
-// GOOGLE_APPLICATION_CREDENTIALS), since Vertex's auth model doesn't fit
-// the "just paste a key" interface other providers use.
-func NewVertex(_ string, _ string) Client {
-	cfg, err := loadVertexConfig()
+// newVertex returns a Vertex AI client for v: an API key, or a service-account
+// or authorized-user credentials file's contents, since Vertex's auth model
+// doesn't fit the "just paste a key" interface other providers use. When v
+// cannot authenticate, the client reports why on its first request.
+func newVertex(v VertexConfig, opts ...ClientOption) Client {
+	cfg, err := loadVertexConfig(v)
 	if err != nil {
 		return &unimplementedClient{name: "google-vertex", hint: err.Error(), wire: reasoningWireGemini}
 	}
@@ -339,9 +348,14 @@ func NewVertex(_ string, _ string) Client {
 		apiKey:  "vertex-placeholder", // overwritten by transport
 		baseURL: "https://" + cfg.location + "-aiplatform.googleapis.com",
 		http: &http.Client{
-			Transport: &vertexTransport{inner: http.DefaultTransport, cfg: cfg},
-			Timeout:   0,
+			Transport: &vertexTransport{
+				inner: http.DefaultTransport,
+				cfg:   cfg,
+				cache: newVertexTokenCache(exchangeClient(&http.Client{})),
+			},
+			Timeout: 0,
 		},
+		host: applyClientOptions(opts),
 	}
 	// Wrap so Name() reports "google-vertex" instead of "google".
 	return &renamedClient{inner: inner, name: "google-vertex"}

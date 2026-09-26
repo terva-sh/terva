@@ -1,9 +1,6 @@
 package provider
 
-import (
-	"fmt"
-	"sync"
-)
+import ()
 
 // Model describes a single LLM we know about.
 type Model struct {
@@ -56,7 +53,7 @@ type Model struct {
 	// pictures.
 	//
 	// 0 means "this model has one output rate", which is every other model
-	// in the catalog, and ComputeCost then prices output exactly as it
+	// in the catalog, and ApplyCost then prices output exactly as it
 	// always did. So a model that never sets this is untouched by it.
 	PriceOutputImage float64
 
@@ -229,9 +226,9 @@ var capDefaults = map[Capability]bool{
 	CapImageOutput: false,
 }
 
-// KnownCapabilities lists every capability terva understands, for
+// knownCapabilities lists every capability terva understands, for
 // models.json validation warnings.
-func KnownCapabilities() []Capability {
+func knownCapabilities() []Capability {
 	return []Capability{CapImageInput, CapImageOutput, CapReasoning}
 }
 
@@ -266,12 +263,12 @@ func mergeCaps(base, over map[Capability]bool) map[Capability]bool {
 	return out
 }
 
-// Catalog is the hardcoded, read-only list of supported models.
+// catalog is the hardcoded, read-only list of supported models.
 // Prices are USD per 1M tokens. The list is curated to what terva's
 // clients (Anthropic Messages + OpenAI Chat Completions) can actually
 // talk to; models that are only reachable through the OpenAI Responses
 // API (o1-pro, o3-pro, gpt-5-pro) are omitted.
-var Catalog = []Model{
+var catalog = []Model{
 	// ---- Anthropic / Claude 4.x ----
 	{
 		Provider: "anthropic", ID: "claude-sonnet-4-5", DisplayName: "Claude Sonnet 4.5 (latest)",
@@ -733,7 +730,7 @@ var Catalog = []Model{
 
 // The GPT-6 rows declare OpenAI's published reasoning_effort sets. Only the
 // chat-completions mapper reads ReasoningEfforts; the Responses routes these
-// rows belong to use OpenAICodexReasoningEffort and ignore it. The lists are
+// rows belong to use openAICodexReasoningEffort and ignore it. The lists are
 // here for openai-compatible gateways serving the same ids. Discovery copies
 // them from these rows (openAICompatCaps), which does two things for such a
 // gateway:
@@ -757,60 +754,27 @@ var (
 )
 
 // DefaultModel is used when the user does not specify one.
-var DefaultModel = Catalog[0] // claude-sonnet-4-5
+var DefaultModel Model = catalog[0] // claude-sonnet-4-5
 
 // ----- active (merged) catalog -----
 //
-// Callers should use Active() / FindModel / ModelsForProvider for
-// lookups. The catalog they see is merged from four declarative
-// layers, lowest to highest precedence:
+// A Registry (registry.go) merges four declarative layers, lowest to
+// highest precedence, and its host reads it through Active, FindModel
+// and ModelsForProvider:
 //
-//	builtin — the baked-in Catalog (extended from init()s)
+//	builtin — the baked-in catalog (extended from init()s)
 //	live    — /v1/models discovery or its disk cache (SetLiveModels)
 //	extra   — individually registered models, e.g. the
 //	          openai-compatible endpoint's listing (RegisterExtraModel)
 //	user    — $TERVA_HOME/models.json overrides (SetUserOverrides)
 //
 // Precedence is data, not call ordering: each setter replaces only
-// its own layer and the merge recomputes here. A standard live
+// its own layer and the merge recomputes. A standard live
 // refresh landing after compat discovery can no longer wipe the
 // compat models, and models.json overrides survive every refresh
 // without being re-applied. (The old single-overlay design enforced
 // precedence by Load*/Set* call order across two packages and lost
 // RegisterExtraModel entries whenever SetLiveModels ran second.)
-
-var (
-	activeMu   sync.RWMutex
-	layerLive  []Model
-	layerExtra []Model
-	layerUser  []UserOverride
-	// merged is the cached layer merge, recomputed on every layer
-	// write (writes are rare; reads are hot). nil means no layer has
-	// ever been set and Active() serves the baked-in Catalog.
-	merged []Model
-	// catalogRev bumps on every remerge so live UIs (the /model picker)
-	// can detect when background /v1/models discovery has grown the
-	// catalog and re-read it, instead of holding a stale snapshot.
-	catalogRev uint64
-)
-
-// remergeLocked recomputes the merged catalog. Callers hold activeMu.
-func remergeLocked() {
-	out := MergeCatalog(layerLive)
-	out = upsertModels(out, layerExtra)
-	out = applyUserOverrides(out, layerUser)
-	merged = out
-	catalogRev++
-}
-
-// CatalogRevision returns a counter that increments whenever the active
-// catalog is recomputed (a layer write — e.g. live discovery completing).
-// A long-lived view can poll it to know when to re-read Active().
-func CatalogRevision() uint64 {
-	activeMu.RLock()
-	defer activeMu.RUnlock()
-	return catalogRev
-}
 
 // upsertModels overlays layer onto base: same provider/id replaces in
 // place (wholesale), new entries append in layer order.
@@ -833,134 +797,17 @@ func upsertModels(base, layer []Model) []Model {
 	return base
 }
 
-// SetLiveModels replaces the "live" layer. Typically called after a
-// successful /v1/models discovery or on load from the on-disk cache.
-func SetLiveModels(live []Model) {
-	activeMu.Lock()
-	defer activeMu.Unlock()
-	layerLive = append([]Model(nil), live...)
-	remergeLocked()
-}
+// The package holds no Registry: the host owns one and passes it in
+// (docs/plans/model-catalog.md).
 
-// RegisterExtraModel upserts a single model into the "extra" layer,
-// replacing any layer entry with the same provider/id. Used for models
-// that are neither in the baked-in catalog nor discovered via the
-// standard refresh — currently the openai-compatible endpoint's
-// models. Entries persist across SetLiveModels calls.
-func RegisterExtraModel(m Model) {
-	activeMu.Lock()
-	defer activeMu.Unlock()
-	replaced := false
-	for i, e := range layerExtra {
-		if e.Provider == m.Provider && e.ID == m.ID {
-			layerExtra[i] = m
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		layerExtra = append(layerExtra, m)
-	}
-	remergeLocked()
-}
-
-// ResetCatalogLayers clears every overlay layer (live, extra, user),
-// returning Active() to the baked-in Catalog. Intended for tests that
-// need a pristine catalog regardless of what earlier tests installed.
-func ResetCatalogLayers() {
-	activeMu.Lock()
-	defer activeMu.Unlock()
-	layerLive, layerExtra, layerUser, merged = nil, nil, nil, nil
-}
-
-// Active returns the current merged catalog.
-//
-// When no layer has ever been set it returns the fully-assembled
-// static Catalog. Reading Catalog at call time (rather than capturing
-// it into a package-level var initializer) is load-bearing: the
-// extended catalog in catalog_builtin.go / extra_models.go is appended
-// from init() functions, which run AFTER package-level var
-// initializers. Snapshotting Catalog at var-init time would freeze the
-// picker to the curated seed list and drop every extra provider
-// (openrouter, groq, xai, ...). The same applies to remergeLocked —
-// it only ever runs from a setter call, well after init.
-func Active() []Model {
-	activeMu.RLock()
-	defer activeMu.RUnlock()
-	src := merged
-	if src == nil {
-		src = Catalog
-	}
-	out := make([]Model, len(src))
-	copy(out, src)
-	return out
-}
-
-// FindModel returns a Model by id, optionally constrained by provider.
-// If provider is empty, the first matching id is returned. Looks up
-// against the merged active catalog.
-func FindModel(provider, id string) (Model, error) {
-	for _, m := range Active() {
-		if m.ID == id && (provider == "" || m.Provider == provider) {
-			return m, nil
-		}
-	}
-	return Model{}, fmt.Errorf("unknown model %q (provider=%q)", id, provider)
-}
-
-// ContextGauge is the denominator EVERY user-facing context reading must use:
-// the model's EFFECTIVE window, resolved from the active catalog. 0 when the
-// model is unknown, which callers render as "no gauge" rather than as a
-// division by zero.
-//
-// There were two context-window semantics in the tree and they disagreed.
-// Agent.ContextUsage, the auto-compaction keep-tail budget and ShouldAutoCompact
-// all divide by EffectiveContextWindow; nine gauge sites read the raw
-// ContextWindow instead — the TUI status bar, the script-mode payload, the
-// chat-bridge /status line, the web session card, the usage surface and the
-// context inspector. tools/status.go stated the contract out loud ("this
-// percentage matches the status-bar gauge and the auto-compaction threshold")
-// and it did not match.
-//
-// On a model with a DesiredContextWindow the gap is not cosmetic. gpt-5.6-luna
-// ships ContextWindow 1,050,000 against DesiredContextWindow 272,000, so
-// auto-compaction fires at 217,600 tokens while every gauge read 21% full: the
-// user watched their conversation compact at a fifth of a bar, with no surface
-// anywhere showing the number that triggered it. Any operator who sets
-// desiredContextWindow in models.json to dodge a context surcharge reproduces it
-// on any model.
-//
-// The hard ceiling keeps using Model.ContextWindow — the maxTok clamp and every
-// surface that reports the model's SPEC (`--list-models`, models.list, the rpc
-// and sdk model rows). Two meanings, two names, and the name says which.
-func ContextGauge(provider, id string) int {
-	m, err := FindModel(provider, id)
-	if err != nil {
-		return 0
-	}
-	return m.EffectiveContextWindow()
-}
-
-// ModelsForProvider returns all models for the given provider, from the
-// merged active catalog.
-func ModelsForProvider(provider string) []Model {
-	var out []Model
-	for _, m := range Active() {
-		if m.Provider == provider {
-			out = append(out, m)
-		}
-	}
-	return out
-}
-
-// ComputeCost returns the USD cost for the given usage on model m.
+// computeCost returns the USD cost for the given usage on model m.
 //
 // Output is billed at one rate unless the model sets PriceOutputImage, in
 // which case the image tokens inside OutputTokens are split out and billed
 // at their own rate. See Model.PriceOutputImage and Usage.ImageOutputTokens:
 // the image models bill the two 10-20x apart, and both directions of getting
 // it wrong are real money.
-func ComputeCost(m Model, u Usage) float64 {
+func computeCost(m Model, u Usage) float64 {
 	const per = 1_000_000.0
 	return float64(u.InputTokens)*m.PriceInput/per +
 		outputCost(m, u) +
@@ -992,7 +839,7 @@ func outputCost(m Model, u Usage) float64 {
 	return float64(text)*m.PriceOutput/per + float64(image)*m.PriceOutputImage/per
 }
 
-// CacheSavings returns what the prompt cache was worth on this response:
+// cacheSavings returns what the prompt cache was worth on this response:
 // the prompt billed at full input price, minus the prompt as actually
 // billed. Negative when cache writes outweigh the reads they enabled.
 //
@@ -1000,7 +847,7 @@ func outputCost(m Model, u Usage) float64 {
 // zero) returns 0 rather than the full prompt price. Free reads would
 // otherwise report the whole prompt as "saved" on every local ollama turn,
 // where the honest answer is that nothing was billed and nothing was saved.
-func CacheSavings(m Model, u Usage) float64 {
+func cacheSavings(m Model, u Usage) float64 {
 	if m.PriceCacheRead == 0 && m.PriceCacheWrite == 0 {
 		return 0
 	}
@@ -1024,6 +871,6 @@ func CacheSavings(m Model, u Usage) float64 {
 // — and finds a new one by what it assigns, not by a list someone has to
 // remember to extend.
 func ApplyCost(m Model, u *Usage) {
-	u.CostUSD = ComputeCost(m, *u)
-	u.CacheSavedUSD = CacheSavings(m, *u)
+	u.CostUSD = computeCost(m, *u)
+	u.CacheSavedUSD = cacheSavings(m, *u)
 }

@@ -156,7 +156,7 @@ func TestTheModelsTaskCardSurvivesARebuild(t *testing.T) {
 	_, s := taskSession(t)
 
 	createTask(t, s, "keep me")
-	before := s.agent.ContextProvider
+	before := func() string { return s.agent.FramePreview().VolatileText() }
 	if before == nil {
 		t.Fatal("precondition: no per-turn context provider wired")
 	}
@@ -166,7 +166,7 @@ func TestTheModelsTaskCardSurvivesARebuild(t *testing.T) {
 
 	s.rebuildTools("approval-mode")
 
-	card := s.agent.ContextProvider
+	card := func() string { return s.agent.FramePreview().VolatileText() }
 	if card == nil {
 		t.Fatal("the rebuild dropped the per-turn context provider")
 	}

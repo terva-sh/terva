@@ -75,7 +75,7 @@ type speakerPick struct {
 // exactly here — with one character it has nothing to decide, so every path
 // stays today's.
 func (s *wsSession) worldRoutes() bool {
-	if s.sess == nil || s.sess.Meta.Experience != "chat" {
+	if s.sess == nil || s.sess.Stage.Experience != "chat" {
 		return false
 	}
 	if s.sess.Meta.Coordination == CoordinationOff {
@@ -91,7 +91,7 @@ func (s *wsSession) worldRoutes() bool {
 // scene, and keeps the router prompt from listing the bound character twice.
 func (s *wsSession) routableRoster() map[string]string {
 	roster := s.castRefs()
-	boundRef := strings.TrimSpace(s.sess.Meta.Card)
+	boundRef := strings.TrimSpace(s.sess.Stage.Card)
 	boundName, _ := s.boundCharacter()
 	for name, ref := range roster {
 		if (boundRef != "" && ref == boundRef) || strings.EqualFold(name, boundName) {
@@ -146,7 +146,7 @@ func (s *wsSession) pickSpeaker(ctx context.Context, text string) speakerPick {
 		return speakerPick{bound: true} // a stale focus target — degrade
 	}
 	ag := s.agent
-	if ag == nil || ag.Client == nil {
+	if ag == nil || ag.Client() == nil {
 		return speakerPick{bound: true}
 	}
 	boundName, _ := s.boundCharacter()
@@ -163,7 +163,7 @@ func (s *wsSession) pickSpeaker(ctx context.Context, text string) speakerPick {
 	}
 	prompt += "\n\n" + i18n.P("stage.route.pick", "Who speaks next? Reply with exactly one name.")
 	_, model := s.currentModel()
-	out, usage, err := streamText(ctx, ag.Client, provider.Request{
+	out, usage, err := streamText(ctx, ag.Client(), provider.Request{
 		Model:     model,
 		System:    system,
 		MaxTokens: routeMaxTokens,
@@ -211,7 +211,7 @@ func (s *wsSession) voiceLine(ctx context.Context, pick speakerPick, text string
 	// The character's model pin (Phase 7) routes their generation; a pin that
 	// fails to resolve degrades to the session route rather than failing the
 	// line.
-	cl := s.agent.Client
+	cl := s.agent.Client()
 	_, model := s.currentModel()
 	if route, ok := s.castModels()[pick.name]; ok && strings.TrimSpace(route.Model) != "" {
 		if oc, om, err := s.ws.overrideClient(s.argsSnapshot(), route.Provider, route.Model); err == nil {
@@ -265,7 +265,7 @@ func (s *wsSession) voiceLine(ctx context.Context, pick speakerPick, text string
 // boundCharacter resolves the session's own character — the card it was
 // created from (name + card), or the persona name for a card-less chat.
 func (s *wsSession) boundCharacter() (string, *card.Card) {
-	if ref := s.sess.Meta.Card; ref != "" {
+	if ref := s.sess.Stage.Card; ref != "" {
 		if sc, err := s.ws.cardStore().Get(ref); err == nil {
 			if name := strings.TrimSpace(sc.Card.Name); name != "" {
 				return name, &sc.Card
@@ -282,7 +282,7 @@ func (s *wsSession) boundCharacter() (string, *card.Card) {
 // playerLabel is the transcript label for the human's lines — the bound user
 // persona's name, or "Me".
 func (s *wsSession) playerLabel() string {
-	if n := strings.TrimSpace(s.sess.Meta.UserName); n != "" {
+	if n := strings.TrimSpace(s.sess.Stage.UserName); n != "" {
 		return n
 	}
 	return framePlayerFallbackLabel()
@@ -467,7 +467,7 @@ func (s *wsSession) userPersona() userPersona {
 	if s == nil || s.sess == nil {
 		return userPersona{}
 	}
-	m := s.sess.Meta
+	m := s.sess.Stage
 	return userPersona{Name: m.UserName, Description: m.UserDescription, Gender: m.UserGender, Pronouns: m.UserPronouns}
 }
 

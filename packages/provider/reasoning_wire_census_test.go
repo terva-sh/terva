@@ -55,18 +55,18 @@ func TestEveryReasoningProviderIsClassified(t *testing.T) {
 		"cloudflare-workers-ai": true, "azure-openai-responses": true,
 	}
 
-	// 🪤 Catalog, NOT builtinCatalog. This scanned builtinCatalog, which is the
+	// 🪤 catalog, NOT builtinCatalog. This scanned builtinCatalog, which is the
 	// third-party EXTENDED list and says so at the top of its own file: the
 	// curated rows — anthropic, openai, openai-codex, kimi, deepseek, google —
 	// "are not duplicated here". So the census structurally could not see the
 	// providers most worth auditing, and kimi's misclassification survived it
-	// for exactly that reason. Catalog is the union (models.go plus
+	// for exactly that reason. catalog is the union (models.go plus
 	// builtinCatalog, appended in catalog_builtin.go's init).
 	//
 	// A census that cannot see its subject is worse than no census: it reports
 	// a clean audit of a list it was never shown.
 	seen := map[string]bool{}
-	for _, m := range Catalog {
+	for _, m := range catalog {
 		if !m.Reasoning || seen[m.Provider] {
 			continue
 		}

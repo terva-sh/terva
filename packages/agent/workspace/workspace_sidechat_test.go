@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -70,7 +71,7 @@ func sidechatTestSession(t *testing.T, id string) (*Workspace, *wsSession, *echo
 	t.Helper()
 	w, s, _ := chatTestWorkspace(t, id)
 	cl := &echoClient{}
-	ag := core.NewAgent(cl, "fake-model", "the frozen system prompt", core.Registry{})
+	ag := coretest.NewAgent(cl, "fake-model", "the frozen system prompt", core.Registry{})
 	ag.SetMessages([]provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "the original question"}}},
 		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "the original answer"}}},
@@ -212,13 +213,13 @@ func TestSideChatOpenCap(t *testing.T) {
 // A side chat was the one surface that did not know who it was talking to.
 //
 // The per-turn tail — the bound user persona (their stated gender and pronouns),
-// the author's note, the World lore in play — is NOT part of ag.System; the agent
+// the author's note, the World lore in play — is NOT part of the system prompt; the agent
 // assembles it per request. Freezing the system prompt alone therefore dropped
 // all of it, so /btw could say "he" about a persona whose pronouns every other
 // prompt in the session had right.
 func TestSideChatCarriesTheFrozenPerTurnTail(t *testing.T) {
 	w, s, cl := sidechatTestSession(t, "s1")
-	s.agent.SetContextProviderPeek(func() string {
+	coretest.FrameOf(s.agent).SetPeek(func() string {
 		return "About Kira (the user you are interacting with):\nA wary courier.\n\nRefer to Kira with she/her pronouns."
 	})
 
@@ -245,7 +246,7 @@ func TestSideChatCarriesTheFrozenPerTurnTail(t *testing.T) {
 func TestSideChatTailIsFrozenAtOpen(t *testing.T) {
 	w, s, cl := sidechatTestSession(t, "s1")
 	tail := "Refer to Kira with she/her pronouns."
-	s.agent.SetContextProviderPeek(func() string { return tail })
+	coretest.FrameOf(s.agent).SetPeek(func() string { return tail })
 
 	id, err := w.SideChatOpen(context.Background(), "s1")
 	if err != nil {
@@ -263,17 +264,17 @@ func TestSideChatTailIsFrozenAtOpen(t *testing.T) {
 }
 
 // Opening an overlay must not write per-turn state on the session's behalf: a
-// real turn's ContextProvider records which lore entries fired, and a side chat
-// firing them would corrupt the session's own accounting. ContextPreview is the
-// side-effect-free twin, and this pins that we use it.
+// real turn's assembly records which lore entries fired, and a side chat firing
+// them would corrupt the session's own accounting. FramePreview assembles with
+// AssemblePeek, the side-effect-free twin, and this pins that we use it.
 func TestSideChatOpenUsesTheSideEffectFreeProvider(t *testing.T) {
 	w, s, _ := sidechatTestSession(t, "s1")
 	liveCalls := 0
-	s.agent.SetContextProvider(func() string {
+	coretest.FrameOf(s.agent).SetHost(func() string {
 		liveCalls++
 		return "live (records what fired)"
 	})
-	s.agent.SetContextProviderPeek(func() string { return "peeked" })
+	coretest.FrameOf(s.agent).SetPeek(func() string { return "peeked" })
 
 	if _, err := w.SideChatOpen(context.Background(), "s1"); err != nil {
 		t.Fatalf("open: %v", err)

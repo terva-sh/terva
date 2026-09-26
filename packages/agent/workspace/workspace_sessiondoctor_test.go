@@ -5,10 +5,13 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/core/transcripttest"
+
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // The session doctor's persona must resolve by its stem and read like a
@@ -43,7 +46,7 @@ func TestDramaturgCensus(t *testing.T) {
 		mk("The bell rang twice. It rang 41 times in the story she told about the flood."),
 		mk("Marrow. That was the whole answer."), // sentence-start — not counted
 	}
-	known := censusKnownNames("Kobeni", "Kira", []string{"Elira"}, []core.WorldLoreEntry{{Name: "The debt", Audience: []string{"Mirei"}}})
+	known := censusKnownNames("Kobeni", "Kira", []string{"Elira"}, []session.WorldLoreEntry{{Name: "The debt", Audience: []string{"Mirei"}}})
 	rep := dramaturgCensus(msgs, known)
 
 	if len(rep.Recurring) != 1 || rep.Recurring[0] != "Marrow" {
@@ -75,10 +78,10 @@ func TestRenderDramaturgEvidence(t *testing.T) {
 		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "\"Fabric's in.\""}},
 			Meta: map[string]string{core.MetaSource: core.MetaDirected, core.MetaActor: "Elira"}},
 	}
-	lore := []core.WorldLoreEntry{
+	lore := []session.WorldLoreEntry{
 		{Name: "The bell", Content: "Rings at dusk."},
 		{Name: "The debt", Content: "Three favors owed.", Audience: []string{"Mirei"}},
-		{Name: core.SceneStateName, Constant: true, Content: "Day 14, first light."},
+		{Name: session.SceneStateName, Constant: true, Content: "Day 14, first light."},
 	}
 	// The pin was written at message 0 and three have played: the header must
 	// report the drift rather than the bare "(current)" it used to claim.
@@ -106,7 +109,7 @@ func TestRenderDramaturgEvidence(t *testing.T) {
 	}
 	// The pin leaves the lore list: "do not re-record" is the wrong rule for a
 	// card whose proposals are updates.
-	if strings.Contains(out, "- "+core.SceneStateName) {
+	if strings.Contains(out, "- "+session.SceneStateName) {
 		t.Errorf("the pin must not appear in the do-not-re-record lore list:\n%s", out)
 	}
 	empty := renderDramaturgEvidence("Me", "", nil, nil, nil, 0, dramaturgCensusReport{})
@@ -140,7 +143,7 @@ func TestParseSessionDoctorResult(t *testing.T) {
 	}` + "\n```"
 	// The recorded pin proves scene_state is an UPDATE: addressing it is not a
 	// collision, unlike p2's re-record of "the bell".
-	lore := []core.WorldLoreEntry{{Name: "the bell", Content: "x"}, {Name: core.SceneStateName, Constant: true, Content: "Day 15."}}
+	lore := []session.WorldLoreEntry{{Name: "the bell", Content: "x"}, {Name: session.SceneStateName, Constant: true, Content: "Day 15."}}
 	res, err := parseSessionDoctorResult(raw, lore, []string{"Elira"}, "Kobeni")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -176,7 +179,7 @@ func TestParseSessionDoctorResult(t *testing.T) {
 	// is always-on and shared by definition. p9, a second card in the same
 	// round, is dropped: one card, one proposal.
 	state := res.Proposals[4]
-	if state.Kind != ctrlproto.SessionProposalState || state.Name != core.SceneStateName || state.Content != "Day 16, dawn. The docks." {
+	if state.Kind != ctrlproto.SessionProposalState || state.Name != session.SceneStateName || state.Content != "Day 16, dawn. The docks." {
 		t.Fatalf("scene-state proposal mangled: %+v", state)
 	}
 	if len(state.Keys) != 0 || len(state.Audience) != 0 {
@@ -204,10 +207,10 @@ func TestParseSessionDoctorResult_Retire(t *testing.T) {
 	  {"id":"r6","kind":"lore_entry","rationale":"what actually happened","name":"The First-Light Requisition","content":"Veyra signed for 19c 7s.","keys":["requisition"]},
 	  {"id":"r7","kind":"lore_retire","rationale":"retiring what this round just proposed","name":"The First-Light Requisition"}
 	]}`
-	lore := []core.WorldLoreEntry{
+	lore := []session.WorldLoreEntry{
 		{Name: "Prepare for the First-Light Search", Keys: []string{"rope", "first light"}, Content: "At first light, the watch is expected to organize a search."},
-		{Name: core.SceneStateName, Constant: true, Content: "Day 15."},
-		{Name: core.StorySoFarName, Constant: true, Content: "Previously…"},
+		{Name: session.SceneStateName, Constant: true, Content: "Day 15."},
+		{Name: session.StorySoFarName, Constant: true, Content: "Previously…"},
 	}
 	res, err := parseSessionDoctorResult(raw, lore, nil, "Kobeni")
 	if err != nil {
@@ -244,8 +247,8 @@ func TestSessionsDoctorRunsAndBooks(t *testing.T) {
 	reply := `{"note":"ok","proposals":[{"id":"p1","kind":"lore_entry","rationale":"the scene","name":"The bell","content":"Rings at dusk."}]}`
 	cl := &scriptedClient{replies: []string{reply}}
 	s := worldTestSession(t, cl, map[string]string{"Elira": "elira-ref"})
-	var booked []provider.Usage
-	s.agent.AddUsageObserver(func(u, _ provider.Usage) { booked = append(booked, u) })
+	rec := &transcripttest.Recorder{}
+	s.agent.AttachTranscriptStore(rec)
 
 	res, err := sessionsDoctor(context.Background(), s, ctrlproto.SessionDoctorParams{})
 	if err != nil {
@@ -254,7 +257,7 @@ func TestSessionsDoctorRunsAndBooks(t *testing.T) {
 	if len(res.Proposals) != 1 || res.Proposals[0].Name != "The bell" {
 		t.Fatalf("proposals = %+v", res.Proposals)
 	}
-	if len(booked) != 1 || booked[0] != scriptedCallUsage {
+	if booked := sideChannelUsage(rec); len(booked) != 1 || booked[0] != scriptedCallUsage {
 		t.Fatalf("doctor call booked %v, want exactly one %+v — the session doctor is spending unrecorded", booked, scriptedCallUsage)
 	}
 	// The one request carried the dramaturg's contract and the roster.

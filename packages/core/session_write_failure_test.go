@@ -22,7 +22,7 @@ func TestPersistenceFailureStopsBeforeToolExecution(t *testing.T) {
 		return calledATool(10), nil
 	}}
 	tool := &recordingTool{}
-	ag := NewAgent(client, "test", "", Registry{"echo": tool})
+	ag := newTestAgent(client, "test", "", Registry{"echo": tool})
 	ag.MaxSteps = 1
 	ag.AddMessageObserver(func(m provider.Message) {
 		if m.Role == provider.RoleAssistant {

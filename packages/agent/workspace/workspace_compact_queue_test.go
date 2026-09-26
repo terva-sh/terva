@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -64,7 +65,7 @@ func compactQueueSession(t *testing.T, cl provider.Client) *wsSession {
 		ws:    &Workspace{ctx: context.Background(), diag: func(string) {}},
 		hub:   newWSHub(),
 		sess:  sess,
-		agent: core.NewAgent(cl, "claude-sonnet-4-5", "", core.Registry{}),
+		agent: coretest.NewAgent(cl, "claude-sonnet-4-5", "", core.Registry{}),
 		title: "titled",
 	}
 	s.agent.AddEventObserver(func(ev core.AgentEvent) {
@@ -99,7 +100,7 @@ func TestMessageSentDuringCompactionSurvives(t *testing.T) {
 	s := compactQueueSession(t, cl)
 
 	compactDone := make(chan error, 1)
-	go func() { compactDone <- s.compact(context.Background()) }()
+	go func() { compactDone <- s.compact(context.Background(), core.CompactRequested) }()
 
 	select {
 	case <-cl.inFlight:
@@ -157,7 +158,7 @@ func TestQueueDuringCompactionStartsNoTurn(t *testing.T) {
 	s := compactQueueSession(t, cl)
 
 	compactDone := make(chan error, 1)
-	go func() { compactDone <- s.compact(context.Background()) }()
+	go func() { compactDone <- s.compact(context.Background(), core.CompactRequested) }()
 	select {
 	case <-cl.inFlight:
 	case <-time.After(5 * time.Second):

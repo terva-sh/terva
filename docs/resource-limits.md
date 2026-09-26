@@ -24,7 +24,7 @@ other end:
   response*. It is rejected rather than
   half-processed. Skipping there would be silent corruption.
 
-Both stances read through [`packages/lineframe`](../packages/lineframe):
+Both stances read through [`packages/provider/lineframe`](../packages/provider/lineframe):
 `ReadFrame` is the bounded primitive, `Reader` layers skip-and-continue on top,
 and a reject-policy caller uses `ReadFrame` directly. The choice is per-boundary
 and is about what a dropped frame *means* there, not about how much you trust
@@ -97,11 +97,11 @@ the other providers send small deltas.
 
 The classification matters as much as the bound. An over-limit line is
 *deterministic*, because the server re-sends the identical event on every
-attempt, so `NewStreamLimitError` sets `Transient: false`. Marking it transient
+attempt, so `newStreamLimitError` sets `Transient: false`. Marking it transient
 (which is what the old discarded-`Err()` path did, by falling through to
-`NewStreamDeathError`) spends the whole retry budget, and the input tokens for
+`newStreamDeathError`) spends the whole retry budget, and the input tokens for
 each attempt, to fail in the same place and then blame the network. A genuine
-mid-stream transport failure keeps `Transient: true` via `NewStreamReadError`
+mid-stream transport failure keeps `Transient: true` via `newStreamReadError`
 and now carries its cause instead of being laundered into a generic truncation.
 
 ## Local files (trusted, large caps)
@@ -112,7 +112,7 @@ be data loss, not a defended attack surface.
 
 | Boundary | Limit | Where | On exceed |
 | --- | --- | --- | --- |
-| Session JSONL row (import/export) | 20 MiB | `core/session_portable.go` Scanner buffer | scan error (import/export fails loudly) |
+| Session JSONL row (import/export) | 20 MiB | `session/session_portable.go` Scanner buffer | scan error (import/export fails loudly) |
 | Error-sidecar entry | 4 KiB | `core.maxSidecarErrorLen` | truncated with a byte-count marker (after secret redaction) |
 
 ## Model-facing file reads (tools)
@@ -188,12 +188,12 @@ runaway server can't OOM the process.
 ## Test coverage
 
 Directly exercised: the `lineframe` bounds
-(`packages/lineframe/lineframe_test.go` covers oversized-frame recovery,
+(`packages/provider/lineframe/lineframe_test.go` covers oversized-frame recovery,
 exact-limit boundary and custom limit), the SSE reject policy and its retry
 classification (`provider/provider_test.go` covers over-limit line is permanent,
 transport failure is transient and wrapped), the ACP/rpc read loops through
 their package tests, the `read`/`grep` truncation paths (`tools/*_test.go`), and
-the error-sidecar bound (`core/session_error_test.go`).
+the error-sidecar bound (`session/session_error_test.go`).
 
 Also directly exercised: the attachment caps
 (`packages/agent/attach/attach_test.go` covers the per-file limit rejecting

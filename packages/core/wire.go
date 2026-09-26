@@ -18,9 +18,9 @@ import (
 // mapping it is a structural fact.
 //
 // Adding an AgentEvent? Extend EventToWire here and every surface
-// picks it up. (Not to be confused with session.go's unexported
-// wireMessage/wireBlock, which are the on-DISK transcript schema —
-// that one carries raw image bytes; this one deliberately doesn't.)
+// picks it up. (Not to be confused with transcriptcodec.WireMessage and
+// WireBlock, which are the on-DISK transcript schema — that one carries raw
+// image bytes; this one deliberately doesn't.)
 
 // WireEvent is one serialized AgentEvent. Type identifies the kind;
 // the remaining fields populate by kind.
@@ -153,7 +153,7 @@ const (
 // speaking character (absent/empty means a narrator beat). A display surface
 // renders it with the 🎭 attribution the cast machinery uses, not as an ordinary
 // model turn; the provider request builders merge it into any adjacent assistant
-// message (MergeAdjacentSameRole), so a directed line beside a real turn is one
+// message (the provider merges same-role neighbours), so a directed line beside a real turn is one
 // turn on the wire.
 const MetaDirected = "stage:directed"
 
@@ -659,10 +659,6 @@ func messageToWire(m provider.Message, imageData bool) WireMessage {
 // ContentToWire converts transcript content blocks to wire form (image
 // blocks size-only; see EventToWire).
 func ContentToWire(blocks []provider.Content) []WireBlock { return contentToWire(blocks, false) }
-
-// ContentToWireFull is ContentToWire with image payloads included (see
-// EventToWireFull).
-func ContentToWireFull(blocks []provider.Content) []WireBlock { return contentToWire(blocks, true) }
 
 func contentToWire(blocks []provider.Content, imageData bool) []WireBlock {
 	out := make([]WireBlock, 0, len(blocks))

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -23,7 +24,7 @@ func TestConcurrentRevisionUsesEpochOnce(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = sess.Close() })
-			s := &wsSession{sess: sess, agent: core.NewAgent(nil, "test", "", nil), hub: newWSHub()}
+			s := &wsSession{sess: sess, agent: coretest.NewAgent(nil, "test", "", nil), hub: newWSHub()}
 			var msgs []provider.Message
 			for i := range 32 {
 				m := swipeMsg(provider.RoleUser, fmt.Sprint(i))
@@ -72,7 +73,7 @@ func TestCompactionExcludesRevisionsAndTurnAdmission(t *testing.T) {
 			cl := &blockingCompactClient{inFlight: make(chan struct{}), release: make(chan struct{})}
 			s := compactQueueSession(t, cl)
 			done := make(chan error, 1)
-			go func() { done <- s.compact(context.Background()) }()
+			go func() { done <- s.compact(context.Background(), core.CompactRequested) }()
 			select {
 			case <-cl.inFlight:
 			case <-time.After(5 * time.Second):

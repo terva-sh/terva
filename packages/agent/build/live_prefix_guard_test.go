@@ -7,9 +7,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"terva.sh/terva/packages/core/transcripttest"
+
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -69,20 +72,18 @@ func TestLivePrefixGuard(t *testing.T) {
 		asked = append(asked, qs...)
 		return []core.UserAnswer{{Answer: qs[0].Options[0]}}, nil // "Compact first"
 	}))
-	ag := r.NewAgent()
+	ag := r.NewAgent(core.AllowAll)
 
 	sessPath := filepath.Join(testsupport.TempDir(t), "probe.jsonl")
-	sess, err := core.NewSessionAtPath(sessPath, r.CWD, r.Provider, r.Model, "probe")
+	sess, err := session.NewSessionAtPath(sessPath, r.CWD, r.Provider, r.Model, "probe")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer sess.Close()
 	build.WireHeadlessSessionPersist(ag, sess)
 
-	var compaction core.CompactResult
-	ag.AddTranscriptCompactedObserver(func(_ []provider.Message, res core.CompactResult) {
-		compaction = res
-	})
+	rec := &transcripttest.Recorder{}
+	ag.AttachTranscriptStore(rec)
 
 	turn := func(label, prompt string) provider.Usage {
 		if err := ag.PromptWithPolicy(ctx, prompt, nil, func(core.AgentEvent) {}); err != nil {
@@ -119,6 +120,11 @@ func TestLivePrefixGuard(t *testing.T) {
 
 	// The compaction summarized against the model that still had the transcript
 	// cached — and actually hit that cache.
+	compactions := rec.Compactions()
+	if len(compactions) != 1 {
+		t.Fatalf("%d compactions were written; want 1", len(compactions))
+	}
+	compaction := compactions[0]
 	if compaction.Strategy != core.CompactWarm {
 		t.Errorf("compaction strategy = %q (%s); want %q",
 			compaction.Strategy, compaction.FallbackReason, core.CompactWarm)

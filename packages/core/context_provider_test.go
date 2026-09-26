@@ -40,9 +40,9 @@ func (c *ephemeralCaptureClient) Stream(ctx context.Context, req provider.Reques
 // persisted transcript.
 func TestContextProviderInjectsEphemeralNotTranscript(t *testing.T) {
 	client := &ephemeralCaptureClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 	const marker = "<extension-context source=\"terva-tasks\">active: patch parser</extension-context>"
-	a.ContextProvider = func() string { return marker }
+	testFrameOf(a).setHost(func() string { return marker })
 
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 		t.Fatalf("Prompt: %v", err)
@@ -91,7 +91,7 @@ func (c *stopEndCountingClient) Stream(ctx context.Context, req provider.Request
 // Cap) even when the gate always says "continue".
 func TestAtCloseGateFiresOnceThenStops(t *testing.T) {
 	c := &stopEndCountingClient{}
-	a := NewAgent(c, "fake-model", "system", Registry{})
+	a := newTestAgent(c, "fake-model", "system", Registry{})
 	a.AddContinuationGate(ContinuationGate{Cause: "open-work", Fire: func(provider.StopReason) (string, bool) {
 		return "REVIEW-OPEN-WORK", true // always asks to continue
 	}})
@@ -120,7 +120,7 @@ func TestAtCloseGateFiresOnceThenStops(t *testing.T) {
 // When every gate declines, the run ends with no extra turn.
 func TestAtCloseGateDeclineEndsRun(t *testing.T) {
 	c := &stopEndCountingClient{}
-	a := NewAgent(c, "fake-model", "system", Registry{})
+	a := newTestAgent(c, "fake-model", "system", Registry{})
 	a.AddContinuationGate(ContinuationGate{Cause: "open-work", Fire: func(provider.StopReason) (string, bool) { return "", false }})
 	if err := a.Prompt(context.Background(), "hi", nil, nil); err != nil {
 		t.Fatalf("Prompt: %v", err)
@@ -135,7 +135,7 @@ func TestAtCloseGateDeclineEndsRun(t *testing.T) {
 // stop goes to the gate behind it.
 func TestContinuationGatesFirstWinsThenRotates(t *testing.T) {
 	c := &stopEndCountingClient{}
-	a := NewAgent(c, "fake-model", "system", Registry{})
+	a := newTestAgent(c, "fake-model", "system", Registry{})
 	a.AddContinuationGate(ContinuationGate{Cause: "first", Fire: func(provider.StopReason) (string, bool) {
 		return "NUDGE-FIRST", true
 	}})
@@ -168,7 +168,7 @@ func TestContinuationGatesFirstWinsThenRotates(t *testing.T) {
 // boundary, while a gate behind it carries the boundary meanwhile.
 func TestContinuationGateDeclineSpendsNothing(t *testing.T) {
 	c := &stopEndCountingClient{}
-	a := NewAgent(c, "fake-model", "system", Registry{})
+	a := newTestAgent(c, "fake-model", "system", Registry{})
 	consulted := 0
 	a.AddContinuationGate(ContinuationGate{Cause: "picky", Fire: func(provider.StopReason) (string, bool) {
 		consulted++
@@ -192,7 +192,7 @@ func TestContinuationGateDeclineSpendsNothing(t *testing.T) {
 // Prompts.
 func TestContinuationGateCapAndPromptReset(t *testing.T) {
 	c := &stopEndCountingClient{}
-	a := NewAgent(c, "fake-model", "system", Registry{})
+	a := newTestAgent(c, "fake-model", "system", Registry{})
 	a.AddContinuationGate(ContinuationGate{Cause: "twice", Cap: 2, Fire: func(provider.StopReason) (string, bool) {
 		return "AGAIN", true
 	}})
@@ -220,7 +220,7 @@ func TestContinuationGateCapAndPromptReset(t *testing.T) {
 // and bot-mode group chats were paying it.
 func TestPromptCacheKeyFollowsSessionIdentity(t *testing.T) {
 	client := &ephemeralCaptureClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 
 	// Two dispatches while live-only: the key has to hold still between them,
 	// or every turn routes somewhere new and the key is worse than useless.
@@ -260,8 +260,8 @@ func TestPromptCacheKeyFollowsSessionIdentity(t *testing.T) {
 // live-only agents off one system prompt.
 func TestLiveOnlyCacheKeysAreDistinctPerAgent(t *testing.T) {
 	client := &ephemeralCaptureClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
-	b := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
+	b := newTestAgent(client, "fake-model", "system", Registry{})
 
 	// Identical openings: a content-derived key would collide right here.
 	for _, ag := range []*Agent{a, b} {
@@ -285,7 +285,7 @@ func TestLiveOnlyCacheKeysAreDistinctPerAgent(t *testing.T) {
 // every later dispatch of this conversation goes out unkeyed.
 func TestUnbindingKeepsACacheKey(t *testing.T) {
 	client := &ephemeralCaptureClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 	a.AdoptSessionIdentity(&Session{ID: "uuid-real", Path: "/sessions/x/20260708-abc123.jsonl"})
 	a.AdoptSessionIdentity(nil)
 
@@ -306,8 +306,8 @@ func TestUnbindingKeepsACacheKey(t *testing.T) {
 // other (observed as alternating ~10%/~99% hit rates in review swarms).
 func TestPromptCacheKeyPrefersMetaUUID(t *testing.T) {
 	client := &ephemeralCaptureClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
-	b := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
+	b := newTestAgent(client, "fake-model", "system", Registry{})
 
 	// Two swarm children: same basename, distinct meta UUIDs.
 	a.AdoptSessionIdentity(&Session{ID: "uuid-child-a", Path: "/swarm/agents/a/session.json"})
@@ -332,7 +332,7 @@ func TestPromptCacheKeyPrefersMetaUUID(t *testing.T) {
 // With no ContextProvider, EphemeralContext stays empty.
 func TestNoContextProviderMeansEmptyEphemeral(t *testing.T) {
 	client := &ephemeralCaptureClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}
@@ -343,19 +343,23 @@ func TestNoContextProviderMeansEmptyEphemeral(t *testing.T) {
 	}
 }
 
-// TestSetContextProviderLive covers the live setter used to re-wire lore after an
-// edit: SetContextProvider swaps the per-turn provider, and the next read sees it.
-func TestSetContextProviderLive(t *testing.T) {
-	a := NewAgent(nil, "m", "", Registry{})
-	if a.ContextProvider != nil {
-		t.Fatal("fresh agent should have no context provider")
+// A host re-wiring lore after an edit changes its assembler, not the engine, and
+// the engine's very next request carries the change. There is no swap on the
+// engine to forget.
+func TestAFrameChangeReachesTheNextRequest(t *testing.T) {
+	client := &ephemeralCaptureClient{}
+	a := newTestAgent(client, "fake-model", "system", Registry{})
+	testFrameOf(a).setHost(func() string { return "LORE_MARKER" })
+	if err := a.Prompt(context.Background(), "one", nil, nil); err != nil {
+		t.Fatalf("Prompt: %v", err)
 	}
-	a.SetContextProvider(func() string { return "LORE_MARKER" })
-	if a.ContextProvider == nil || a.ContextProvider() != "LORE_MARKER" {
-		t.Fatal("provider not set")
+	testFrameOf(a).setHost(func() string { return "UPDATED" })
+	if err := a.Prompt(context.Background(), "two", nil, nil); err != nil {
+		t.Fatalf("Prompt: %v", err)
 	}
-	a.SetContextProvider(func() string { return "UPDATED" })
-	if a.ContextProvider() != "UPDATED" {
-		t.Errorf("provider not swapped: got %q", a.ContextProvider())
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if len(client.ephemeral) != 2 || client.ephemeral[0] != "LORE_MARKER" || client.ephemeral[1] != "UPDATED" {
+		t.Errorf("ephemeral = %q, want LORE_MARKER then UPDATED", client.ephemeral)
 	}
 }

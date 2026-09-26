@@ -28,7 +28,7 @@ import (
 // EVERY tool call is recorded, reads included: an audit log with blind spots
 // isn't one. Filter at read time (`jq 'select(.tool=="bash")'`). That covers
 // all three doors into the gate, distinguished by `via`: the model tool-call
-// ladder (BuildBeforeToolExecute), extension host_tool_call dispatch, and
+// ladder (BuildToolGate), extension host_tool_call dispatch, and
 // code_execution's script bindings — the latter two check the gate outside
 // the ladder, so they record their own lines.
 //

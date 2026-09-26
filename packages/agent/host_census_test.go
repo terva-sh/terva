@@ -69,8 +69,10 @@ const repoRoot = "../.."
 const censusFloor = 400
 
 var (
-	constructsAgent   = regexp.MustCompile(`\.NewAgent\(`)
-	constructsDirect  = regexp.MustCompile(`core\.NewAgent\(`)
+	// core.New is the engine's one constructor, and Resolved.NewAgent is
+	// terva's root over it. Both build an agent.
+	constructsAgent   = regexp.MustCompile(`\.NewAgent\(|\bcore\.New\(`)
+	constructsDirect  = regexp.MustCompile(`\bcore\.New\(`)
 	definesRoot       = regexp.MustCompile(`func \(r Resolved\) NewAgent\(`)
 	swapsToolSet      = regexp.MustCompile(`\.(?:SetTools|SetToolsWithReadOnly|PublishTools)\(`)
 	usesSharedRebuild = regexp.MustCompile(`LiveToolSet\{`)
@@ -86,7 +88,7 @@ var (
 	// --session / --continue / --resume / --resume <id>. A host that opens a
 	// session itself gets none of that unless it reimplements all of it, which
 	// is what bot mode did — and it reimplemented two of the six.
-	opensSession  = regexp.MustCompile(`core\.OpenSession\(`)
+	opensSession  = regexp.MustCompile(`\b(?:session|jsonl)\.OpenSession\(`) // jsonl: acp's alias, beside its own session type
 	definesOpener = regexp.MustCompile(`^func openOrCreateSession\(`)
 )
 
@@ -105,7 +107,7 @@ type hostFile struct {
 	rebuilds bool
 	live     bool // applies a trust flip through the shared event
 	pins     bool // pins the verdict for the process's lifetime
-	// opens means the file calls core.OpenSession itself rather than going
+	// opens means the file calls session.OpenSession itself rather than going
 	// through the shared opener. opener marks the file that DEFINES the shared
 	// opener, which necessarily calls it and is not a fork.
 	opens  bool
@@ -246,6 +248,16 @@ func agentHosts(t *testing.T) []hostFile {
 // applies the flip. ACP's broken /trust verb existed because nobody was ever
 // asked; the posture was whatever the wiring happened to do.
 var fixedTrustHosts = map[string]string{
+	"packages/core/transcripttest/agent.go": "the transcript store behavior suite. It builds scripted agents to drive a store under test, and only " +
+		"_test.go files import it, which transcripttest_test.go enforces, so no binary links it and no user ever runs " +
+		"one of these agents.",
+	"examples/harness/harness.go": "not a terva host. It is the example of a host with its own conventions, built " +
+		"from the engine and wire alone, and it has none of the surfaces Workspace Trust gates: no hooks, no " +
+		"extensions, no skills, no lore. Its imports_test.go keeps it from importing the packages that would " +
+		"bring them.",
+	"packages/agent/internal/coretest/coretest.go": "the test helper every test outside packages/core " +
+		"builds its agent through. Only _test.go files import it, which coretest_test.go enforces, so no " +
+		"binary links it and no user ever runs one of these agents.",
 	"packages/agent/cli.go": "the interactive and print hosts. /trust persists the verdict and says so — " +
 		"modes.Interactive.TrustAppliesLive is false here, so the TUI prints the restart note instead of " +
 		"claiming an apply it did not make. Nothing re-derives this host's tool set after launch (the " +
@@ -425,17 +437,26 @@ func TestNoHostSwapsAToolSetOutsideTheTwoRebuilds(t *testing.T) {
 	}
 }
 
-// directAgentConstruction: an agent built with core.NewAgent instead of
+// directAgentConstruction: an agent built with core.New directly instead of
 // Resolved.NewAgent takes none of the resolved defaults — and, more to the
 // point, none of the ones added later. Resolved.NewAgent is where the read-only
 // set, the auto-compact policy, lazy tool visibility, the escalation channel and
 // the output cap are bound; each arrived after some host had already been
 // written, and each reached every host that goes through it for free.
 var directAgentConstruction = map[string]string{
+	"packages/core/transcripttest/agent.go": "the transcript store behavior suite. It builds scripted agents to drive a store under test, and only " +
+		"_test.go files import it, which transcripttest_test.go enforces, so no binary links it and no user ever runs " +
+		"one of these agents.",
+	"examples/harness/harness.go": "the example of building an agent WITHOUT terva's harness, which is its whole " +
+		"point (decision 0021, rule 8). Going through Resolved.NewAgent would make it a second SDK and prove " +
+		"nothing; its imports_test.go forbids the import that would allow it.",
+	"packages/agent/internal/coretest/coretest.go": "the test helper every test outside packages/core " +
+		"builds its agent through. Only _test.go files import it, which coretest_test.go enforces, so no " +
+		"binary links it and no user ever runs one of these agents.",
 	"packages/agent/workspace/workspace_raati.go": "tool-less summarizer and clerk turns that deliberately " +
-		"take no resolved defaults: no tool registry to bind a status tool into, no session to adopt, no gate " +
-		"to install. What they DO inherit by omission is core's zero values — MaxTokens is the live example, " +
-		"where zero lets each provider apply its own cap (Bedrock's is 4096). Fine for a 400-word brief; " +
+		"take no resolved defaults: no tool registry to bind a status tool into, no session to adopt, and " +
+		"core.AllowAll for a gate, because with no registry no call can reach one. What they DO inherit by " +
+		"omission is core's zero values — MaxTokens is the live example, where zero lets each provider apply its own cap (Bedrock's is 4096). Fine for a 400-word brief; " +
 		"re-read this line before asking these agents for anything longer.",
 }
 
@@ -444,12 +465,51 @@ func TestEveryAgentIsBuiltThroughTheCompositionRoot(t *testing.T) {
 		reason, excused := directAgentConstruction[h.path]
 		switch {
 		case h.direct && !excused:
-			t.Errorf("%s builds an agent with core.NewAgent directly, bypassing Resolved.NewAgent — it will "+
-				"not receive anything that is wired there today or added there tomorrow. Use r.NewAgent(), or "+
+			t.Errorf("%s builds an agent with core.New directly, bypassing Resolved.NewAgent — it will "+
+				"not receive anything that is wired there today or added there tomorrow. Use r.NewAgent(gate), or "+
 				"record here what this agent is that it needs none of it.", h.path)
 		case !h.direct && excused:
 			t.Errorf("%s is excused from the composition root (%q) but no longer bypasses it — delete the "+
 				"stale exemption", h.path, reason)
+		}
+	}
+}
+
+// allowAllHosts records every production file that hands an agent core.AllowAll,
+// and why running every tool call unchecked is right there. AllowAll exists so
+// that choice is written down by name; this list is where the name is read.
+var allowAllHosts = map[string]string{
+	"packages/agent/sdk/sdk.go": "the embedder's Yolo, and the no-policy path where no rule and no mode " +
+		"asks for a check. Both ran with no gate before the gate was a constructor argument; the SDK " +
+		"returns an error instead when the policy cannot be built.",
+	"packages/agent/workspace/workspace_raati.go": "tool-less summarizer and clerk turns. The registry is " +
+		"nil, so the model is offered no tool and no call can reach a gate.",
+	"packages/agent/internal/coretest/coretest.go": "the test helper. Only _test.go files import it, which " +
+		"coretest_test.go enforces.",
+}
+
+// Every AllowAll in production code is a recorded choice. A host that passes
+// it without an entry here has turned off every permission check without
+// anyone reading why.
+func TestEveryAllowAllIsARecordedChoice(t *testing.T) {
+	for _, h := range census(t) {
+		if strings.HasPrefix(h.path, "packages/core/") {
+			continue // the package that defines AllowAll, and names it in its own messages
+		}
+		uses := false
+		for _, line := range h.code {
+			if strings.Contains(line, "core.AllowAll") {
+				uses = true
+				break
+			}
+		}
+		reason, recorded := allowAllHosts[h.path]
+		switch {
+		case uses && !recorded:
+			t.Errorf("%s passes core.AllowAll, which runs every tool call unchecked. Build the gate with "+
+				"build.BuildToolGate, or add an entry to allowAllHosts saying why nothing here needs one.", h.path)
+		case !uses && recorded:
+			t.Errorf("allowAllHosts names %s (%q), which no longer uses core.AllowAll — delete the entry", h.path, reason)
 		}
 	}
 }
@@ -497,6 +557,15 @@ func TestTheLiveTrustHostListMatchesTheCensus(t *testing.T) {
 // The list is written by ANSWERING, not by naming: a host either starts a
 // refresher or records why its credentials cannot go stale under it.
 var noRefresherHosts = map[string]string{
+	"packages/core/transcripttest/agent.go": "the transcript store behavior suite. It builds scripted agents to drive a store under test, and only " +
+		"_test.go files import it, which transcripttest_test.go enforces, so no binary links it and no user ever runs " +
+		"one of these agents.",
+	"examples/harness/harness.go": "the example passes a key as a value, or none, and runs one prompt. It holds no " +
+		"refreshable credential and never reads auth.json, and a host built this way owns its credentials' " +
+		"lifetime, which is the lesson the example teaches.",
+	"packages/agent/internal/coretest/coretest.go": "the test helper every test outside packages/core " +
+		"builds its agent through. Only _test.go files import it, which coretest_test.go enforces, so no " +
+		"binary links it and no user ever runs one of these agents.",
 	"packages/agent/cli.go": "the print and json hosts, which resolve, run one prompt, and exit. " +
 		"Interactive does not build its agent here — it routes to runInteractiveCtrlproto, which builds " +
 		"the workspace, and the workspace starts the refresher for every session it holds. A one-shot " +
@@ -570,7 +639,7 @@ func TestEveryAgentHostHasARecordedCredentialRefreshPosture(t *testing.T) {
 // unless it reimplements all of it.
 //
 // Bot mode is why this census exists. openOrCreateSessionForBot called
-// core.OpenSession + SetMessages and stopped, under a doc comment claiming it
+// session.OpenSession + SetMessages and stopped, under a doc comment claiming it
 // "reuses the same logic as interactive mode". So a bot resumed with --continue
 // answered on the config default while the session file named another model, and
 // the usage observer restarted the cumulative column at ~0 — a bot restarted

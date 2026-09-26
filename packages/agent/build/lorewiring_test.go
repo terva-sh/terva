@@ -4,9 +4,11 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/agent/lore"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // The /context size probe uses PerTurnContextPeek, which must render the same
@@ -57,23 +59,24 @@ func TestPerTurnContextPeek_DoesNotRecord(t *testing.T) {
 // post_history_instructions stays last.
 func TestWireEphemeralTail_PeekInSyncAndPHILast(t *testing.T) {
 	tail := func() string { return "triggered lore\n\nStay terse. (PHI)" }
-	ag := &core.Agent{}
-	ag.ContextProvider = tail
-	ag.ContextProviderPeek = tail
+	asm := NewAssembler(nil)
+	asm.SetTail(tail, tail)
+	ag := coretest.NewAgentWithAssembler(nil, "m", asm, nil)
 	WireEphemeralTail(ag, EphemeralTail{Ext: func() string { return "ext: world state" }})
 
 	want := "ext: world state\n\ntriggered lore\n\nStay terse. (PHI)"
-	if got := ag.ContextProvider(); got != want {
+	if got := asm.Assemble(core.AssembleRequest).VolatileText(); got != want {
 		t.Errorf("live tail = %q, want ext context first / PHI last", got)
 	}
-	if got := ag.ContextProviderPeek(); got != want {
+	if got := asm.Assemble(core.AssemblePeek).VolatileText(); got != want {
 		t.Errorf("peek tail = %q, must match the live composition", got)
 	}
 
 	// A run with no tail of its own still gets the ext context on both.
-	bare := &core.Agent{}
+	bareAsm := NewAssembler(nil)
+	bare := coretest.NewAgentWithAssembler(nil, "m", bareAsm, nil)
 	WireEphemeralTail(bare, EphemeralTail{Ext: func() string { return "ext only" }})
-	if bare.ContextProvider() != "ext only" || bare.ContextProviderPeek() != "ext only" {
+	if bareAsm.Assemble(core.AssembleRequest).VolatileText() != "ext only" || bareAsm.Assemble(core.AssemblePeek).VolatileText() != "ext only" {
 		t.Error("ext context should stand alone when the run has no tail")
 	}
 }
@@ -155,7 +158,7 @@ func TestPerTurnContext_WorldLore(t *testing.T) {
 		loreFired:     &LoreFiredRecord{},
 		worldLore:     &WorldLoreRecord{},
 	}
-	r.worldLore.Set(WorldLoreEntries([]core.WorldLoreEntry{
+	r.worldLore.Set(WorldLoreEntries([]session.WorldLoreEntry{
 		{Name: "The Accord", Constant: true, Content: "Magic is outlawed in the city."},
 		{Name: "Elira's debt", Keys: []string{"debt"}, Content: "Elira owes the guild a life."},
 	}))
@@ -204,7 +207,7 @@ func TestPerTurnContext_WorldLore(t *testing.T) {
 	}
 
 	// A live edit lands on the next call — no rebuild, no cache bust.
-	r.worldLore.Set(WorldLoreEntries([]core.WorldLoreEntry{
+	r.worldLore.Set(WorldLoreEntries([]session.WorldLoreEntry{
 		{Name: "The Accord", Constant: true, Content: "The Accord has fallen."},
 	}))
 	if got := fn(); !strings.Contains(got, "Accord has fallen") || strings.Contains(got, "Magic is outlawed") {
@@ -221,7 +224,7 @@ func TestPerTurnContext_WorldLore(t *testing.T) {
 	if got := fn2(); got != "" {
 		t.Errorf("empty world lore should render nothing, got %q", got)
 	}
-	empty.worldLore.Set(WorldLoreEntries([]core.WorldLoreEntry{{Name: "Seed", Constant: true, Content: "It begins."}}))
+	empty.worldLore.Set(WorldLoreEntries([]session.WorldLoreEntry{{Name: "Seed", Constant: true, Content: "It begins."}}))
 	if got := fn2(); !strings.Contains(got, "It begins.") {
 		t.Errorf("world lore added after wiring should inject: %q", got)
 	}
@@ -241,9 +244,9 @@ func TestPerTurnContext_SceneStatePinned(t *testing.T) {
 		worldLore:  &WorldLoreRecord{},
 		note:       &NoteRecord{},
 	}
-	r.worldLore.Set(WorldLoreEntries([]core.WorldLoreEntry{
+	r.worldLore.Set(WorldLoreEntries([]session.WorldLoreEntry{
 		{Name: "The Accord", Constant: true, Content: strings.Repeat("Magic is outlawed. ", 200)},
-		{Name: core.SceneStateName, Constant: true, Content: "Day 14, first light. The Hearthstone Inn. 3 silver owed."},
+		{Name: session.SceneStateName, Constant: true, Content: "Day 14, first light. The Hearthstone Inn. 3 silver owed."},
 		{Name: "Overflow", Constant: true, Content: strings.Repeat("side note ", 200)},
 	}))
 	r.note.Set("It is raining.")
@@ -265,7 +268,7 @@ func TestPerTurnContext_SceneStatePinned(t *testing.T) {
 		if f.Dropped {
 			dropped = true
 		}
-		if f.Name == core.SceneStateName {
+		if f.Name == session.SceneStateName {
 			t.Errorf("the pin must not ride the Select/budget at all, trace = %+v", f)
 		}
 	}
@@ -275,8 +278,8 @@ func TestPerTurnContext_SceneStatePinned(t *testing.T) {
 
 	// A live update (world_note / world.lore.put) lands next turn, like all
 	// world lore.
-	r.worldLore.Set(WorldLoreEntries([]core.WorldLoreEntry{
-		{Name: core.SceneStateName, Constant: true, Content: "Day 15, dusk. The north road."},
+	r.worldLore.Set(WorldLoreEntries([]session.WorldLoreEntry{
+		{Name: session.SceneStateName, Constant: true, Content: "Day 15, dusk. The north road."},
 	}))
 	if got := r.PerTurnContext(&core.Agent{})(); !strings.Contains(got, "Day 15, dusk") || strings.Contains(got, "Day 14") {
 		t.Errorf("live scene-state update not reflected: %q", got)
@@ -285,7 +288,7 @@ func TestPerTurnContext_SceneStatePinned(t *testing.T) {
 	// A world record holding ONLY the pin still renders it (no other lore to
 	// carry the Select path).
 	solo := &Resolved{worldLore: &WorldLoreRecord{}, loreFired: &LoreFiredRecord{}}
-	solo.worldLore.Set(WorldLoreEntries([]core.WorldLoreEntry{
+	solo.worldLore.Set(WorldLoreEntries([]session.WorldLoreEntry{
 		{Name: "scene state", Constant: true, Content: "Midnight, the docks."}, // case-insensitive match
 	}))
 	if got := solo.PerTurnContext(&core.Agent{})(); !strings.Contains(got, "CURRENT SCENE STATE") || !strings.Contains(got, "Midnight, the docks.") || strings.Contains(got, "<lore>") {
@@ -310,7 +313,7 @@ func TestPerTurnContext_SceneStatePinned(t *testing.T) {
 // lore.scenestate.frame's own precedence clause. See loreReferenceFrame.
 func TestPerTurnContext_LoreHeaderShipsEmpty(t *testing.T) {
 	r := &Resolved{loreFired: &LoreFiredRecord{}, worldLore: &WorldLoreRecord{}}
-	r.worldLore.Set(WorldLoreEntries([]core.WorldLoreEntry{
+	r.worldLore.Set(WorldLoreEntries([]session.WorldLoreEntry{
 		{Name: "First-Light Search", Keys: []string{"rope"}, Content: "The watch is expected at first light."},
 	}))
 	ag := &core.Agent{}

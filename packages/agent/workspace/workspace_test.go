@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"terva.sh/terva/packages/core/lazytools"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/agent/lore"
 	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/agent/modes"
@@ -26,6 +28,7 @@ import (
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/relaunch"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -197,13 +200,13 @@ func TestWebConfirmerApproveWins(t *testing.T) {
 // ctrlproto's strip tests).
 func TestSnapshotCarriesImageData(t *testing.T) {
 	tmp := testsupport.TempDir(t)
-	sess, err := core.NewSession(tmp, tmp, "p", "m", "test")
+	sess, err := session.NewSession(tmp, tmp, "p", "m", "test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := newTestSession()
 	s.sess = sess
-	s.agent = core.NewAgent(nil, "m", "", core.Registry{})
+	s.agent = coretest.NewAgent(nil, "m", "", core.Registry{})
 	s.agent.SetMessages([]provider.Message{{
 		Role: provider.RoleUser,
 		Content: []provider.Content{
@@ -321,14 +324,14 @@ func TestWorkspaceSessionGroup(t *testing.T) {
 	// A message is appended so Close does not prune the file as empty+fresh.
 	msg := provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hello"}}}
 
-	s1, err := core.NewSession(tmp, tmp, "anthropic", "m1", "test")
+	s1, err := session.NewSession(tmp, tmp, "anthropic", "m1", "test")
 	if err != nil {
 		t.Fatalf("NewSession 1: %v", err)
 	}
 	_ = s1.AppendMessage(msg)
-	_ = core.RenameSession(s1.Path, "first")
+	_ = session.RenameSession(s1.Path, "first")
 	_ = s1.Close()
-	s2, err := core.NewSession(tmp, tmp, "anthropic", "m2", "test")
+	s2, err := session.NewSession(tmp, tmp, "anthropic", "m2", "test")
 	if err != nil {
 		t.Fatalf("NewSession 2: %v", err)
 	}
@@ -385,7 +388,7 @@ func TestDeleteEmptyLiveSession(t *testing.T) {
 	w := &Workspace{root: tmp, cwd: tmp, version: "test", sessions: map[string]*wsSession{}}
 	ctx := context.Background()
 
-	s, err := core.NewSession(tmp, tmp, "p", "m", "test") // empty + fresh
+	s, err := session.NewSession(tmp, tmp, "p", "m", "test") // empty + fresh
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -411,7 +414,7 @@ func TestDeleteEmptyLiveSession(t *testing.T) {
 // and because sidecars are filtered from session listings an orphan would be
 // invisible and never cleaned up.
 //
-// Ranges over core.SessionSidecarPaths rather than naming the error log: delete
+// Ranges over session.SessionSidecarPaths rather than naming the error log: delete
 // is one of the six lifecycle sites that must consult the sidecar table, and a
 // guard that names one sidecar tests one sidecar. A row added to the table is
 // covered here automatically, which is the whole point of the table.
@@ -420,7 +423,7 @@ func TestDeleteSessionRemovesEverySidecar(t *testing.T) {
 	w := &Workspace{root: tmp, cwd: tmp, version: "test", sessions: map[string]*wsSession{}}
 	ctx := context.Background()
 
-	s, err := core.NewSession(tmp, tmp, "p", "m", "test")
+	s, err := session.NewSession(tmp, tmp, "p", "m", "test")
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -431,7 +434,7 @@ func TestDeleteSessionRemovesEverySidecar(t *testing.T) {
 	}
 	// Every sidecar, not just the one LogError happened to create: the others
 	// have no producer here, so seed them directly.
-	sidecars := core.SessionSidecarPaths(s.Path)
+	sidecars := session.SessionSidecarPaths(s.Path)
 	if len(sidecars) == 0 {
 		t.Fatal("no sidecars declared, so this guard proves nothing")
 	}
@@ -528,7 +531,7 @@ func TestCleanTitle(t *testing.T) {
 func TestSettleTitleFallbackBroadcasts(t *testing.T) {
 	tmp := testsupport.TempDir(t)
 	w := &Workspace{root: tmp, cwd: tmp, version: "test", sessions: map[string]*wsSession{}}
-	sess, err := core.NewSession(tmp, tmp, "p", "m", "test")
+	sess, err := session.NewSession(tmp, tmp, "p", "m", "test")
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -545,7 +548,7 @@ func TestSettleTitleFallbackBroadcasts(t *testing.T) {
 	if ev.Info.Title != "help me refactor the parser" {
 		t.Errorf("broadcast title = %q", ev.Info.Title)
 	}
-	if got := core.DescribeSessions(tmp, tmp); len(got) == 0 || got[0].Title != "help me refactor the parser" {
+	if got := session.DescribeSessions(tmp, tmp); len(got) == 0 || got[0].Title != "help me refactor the parser" {
 		t.Errorf("title not persisted to file: %+v", got)
 	}
 }
@@ -566,7 +569,7 @@ func TestSettleTitleSkipsWhenTitled(t *testing.T) {
 // TestSetQueueBroadcasts covers the queue.set path behind editing/cancelling
 // queued messages: it replaces the agent queue and broadcasts the new list.
 func TestSetQueueBroadcasts(t *testing.T) {
-	s := &wsSession{id: "x", hub: newWSHub(), agent: core.NewAgent(nil, "fake", "", core.Registry{})}
+	s := &wsSession{id: "x", hub: newWSHub(), agent: coretest.NewAgent(nil, "fake", "", core.Registry{})}
 	sub := s.hub.add(nil, false)
 
 	s.setQueue([]string{"a", "b"})
@@ -629,7 +632,7 @@ func newTurnTestSession(t *testing.T, cl provider.Client) *wsSession {
 	// A real session file backs the harness: production sessions always have
 	// one, and the turn path's snapshot-on-done re-broadcast reads its
 	// path/meta through info().
-	sess, err := core.NewSession(tmp, tmp, "p", "fake-model", "test")
+	sess, err := session.NewSession(tmp, tmp, "p", "fake-model", "test")
 	if err != nil {
 		t.Fatalf("session: %v", err)
 	}
@@ -639,7 +642,7 @@ func newTurnTestSession(t *testing.T, cl provider.Client) *wsSession {
 		ws:    &Workspace{ctx: context.Background(), diag: func(string) {}},
 		hub:   newWSHub(),
 		sess:  sess,
-		agent: core.NewAgent(cl, "fake-model", "", core.Registry{}),
+		agent: coretest.NewAgent(cl, "fake-model", "", core.Registry{}),
 		title: "titled",
 	}
 	s.agent.AddEventObserver(func(ev core.AgentEvent) {
@@ -700,7 +703,7 @@ func TestWorkspaceSetApprovalPlanWithholdsTools(t *testing.T) {
 	extMgr, stopExt := setupWebExtensions(w.ctx, args, &r, "test", s)
 	s.extMgr = extMgr
 	defer stopExt()
-	s.agent = core.NewAgent(&gatedTurnClient{}, r.Model, r.SystemPrompt, r.ToolRegistry)
+	s.agent = coretest.NewAgent(&gatedTurnClient{}, r.Model, r.SystemPrompt, r.ToolRegistry)
 
 	if _, ok := s.agent.LookupTool("write"); !ok {
 		t.Fatal("baseline registry should include the write tool")
@@ -948,8 +951,7 @@ func wireMessageText(m *core.WireMessage) string {
 // TestContextBreakdown covers the /context size accounting: system + transcript
 // bytes are summed into the total and the largest message is discoverable.
 func TestContextBreakdown(t *testing.T) {
-	ag := core.NewAgent(nil, "fake", "", core.Registry{})
-	ag.System = "you are a helpful assistant"
+	ag := coretest.NewAgent(nil, "fake", "you are a helpful assistant", core.Registry{})
 	ag.SetMessages([]provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hi"}}},
 		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: strings.Repeat("x", 800)}}},
@@ -957,8 +959,8 @@ func TestContextBreakdown(t *testing.T) {
 	s := &wsSession{id: "x", hub: newWSHub(), agent: ag}
 
 	b := s.contextBreakdown()
-	if b.SystemBytes != len(ag.System) {
-		t.Errorf("system bytes = %d, want %d", b.SystemBytes, len(ag.System))
+	if b.SystemBytes != len(ag.FramePreview().SystemText()) {
+		t.Errorf("system bytes = %d, want %d", b.SystemBytes, len(ag.FramePreview().SystemText()))
 	}
 	if len(b.Messages) != 2 {
 		t.Fatalf("messages = %d, want 2", len(b.Messages))
@@ -983,8 +985,14 @@ func TestContextBreakdownLazyAdvertised(t *testing.T) {
 		"read":      ctxFakeTool{name: "read"},                   // core → advertised
 		"mail_send": ctxFakeTool{name: "mail_send", ext: "mail"}, // hidden group
 	}
-	ag := core.NewAgent(nil, "fake", "", reg)
-	ag.EnableLazyTools() // only core active; "mail" stays inactive
+	// terva's Assembler, because the note rides its frame.
+	asm := build.NewAssembler(nil)
+	// Only core is active, so "mail" stays inactive.
+	opts := append([]core.Option{core.WithAssembler(asm), core.WithTools(reg), core.WithGate(core.AllowAll)}, build.LazyTools(asm)...)
+	ag, err := core.New(nil, "fake", opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := &wsSession{id: "x", hub: newWSHub(), agent: ag}
 
 	b := s.contextBreakdown()
@@ -1003,15 +1011,15 @@ func TestContextBreakdownLazyAdvertised(t *testing.T) {
 		t.Errorf("total %d != sum of advertised parts", b.TotalBytes)
 	}
 	// The hidden group's names DO cost a few bytes on the ephemeral tail: the
-	// capability note is captured and folded into the ephemeral (ext) total.
+	// capability note is a Volatile segment, so the ephemeral (ext) total holds it.
 	if b.LazyNoteBytes <= 0 {
 		t.Errorf("a hidden group should contribute a capability note; LazyNoteBytes = %d", b.LazyNoteBytes)
 	}
 	if b.ExtBytes < b.LazyNoteBytes {
 		t.Errorf("ext bytes %d should include the lazy note %d", b.ExtBytes, b.LazyNoteBytes)
 	}
-	if !strings.Contains(ag.CapabilityNote(), "mail_send") {
-		t.Errorf("capability note should name the hidden tool, got %q", ag.CapabilityNote())
+	if !strings.Contains(lazytools.Of(ag).Note(), "mail_send") {
+		t.Errorf("capability note should name the hidden tool, got %q", lazytools.Of(ag).Note())
 	}
 }
 
@@ -1020,8 +1028,7 @@ func TestContextBreakdownLazyAdvertised(t *testing.T) {
 // compaction summary + preserved tail collected under "preserved context"
 // rather than masquerading as turn #1. Message ids carry the global index.
 func TestContextTree(t *testing.T) {
-	ag := core.NewAgent(nil, "fake", "", core.Registry{})
-	ag.System = "sys"
+	ag := coretest.NewAgent(nil, "fake", "sys", core.Registry{})
 	ag.SetMessages([]provider.Message{
 		{Role: provider.RoleUser, Meta: map[string]string{"compaction": "true"},
 			Content: []provider.Content{provider.TextBlock{Text: "## Context Summary (compacted)"}}},
@@ -1068,7 +1075,7 @@ func TestContextTree(t *testing.T) {
 // blocks (with bodies), the tools section to per-tool specs, and a stale/unknown
 // id fails with not_found. Reveal ops are not served yet.
 func TestContextNode(t *testing.T) {
-	ag := core.NewAgent(nil, "fake", "SYSTEM PROMPT", core.Registry{})
+	ag := coretest.NewAgent(nil, "fake", "SYSTEM PROMPT", core.Registry{})
 	ag.SetMessages([]provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hello there"}}},
 		{Role: provider.RoleAssistant, Content: []provider.Content{
@@ -1113,7 +1120,7 @@ func TestContextNode(t *testing.T) {
 // node, and revealing that walks one epoch further back.
 func TestRevealCompactionNode(t *testing.T) {
 	dir := testsupport.TempDir(t)
-	sess, err := core.NewSession(dir, dir, "fake", "model", "v")
+	sess, err := session.NewSession(dir, dir, "fake", "model", "v")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1135,7 +1142,7 @@ func TestRevealCompactionNode(t *testing.T) {
 	_ = sess.AppendCompaction([]provider.Message{sm("summary2"), um("m4"), um("m5")}, core.CompactResult{})
 
 	// The live agent after compaction holds the latest summary + its kept tail.
-	ag := core.NewAgent(nil, "fake", "", core.Registry{})
+	ag := coretest.NewAgent(nil, "fake", "", core.Registry{})
 	ag.SetMessages([]provider.Message{
 		sm("summary2"),
 		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "m4"}}},
@@ -1201,7 +1208,7 @@ func TestExtContextItems(t *testing.T) {
 // combined context+usage pane (the old separate "usage" pane folded in), and it
 // returns its typed payload with the usage picture attached.
 func TestSurfaceListAndGet(t *testing.T) {
-	s := &wsSession{id: "x", hub: newWSHub(), agent: core.NewAgent(nil, "fake", "", core.Registry{}), extPanels: map[string]*webPanel{}}
+	s := &wsSession{id: "x", hub: newWSHub(), agent: coretest.NewAgent(nil, "fake", "", core.Registry{}), extPanels: map[string]*webPanel{}}
 	metas := s.surfaceList()
 	if !hasSurface(metas, "context") {
 		t.Fatalf("want context surface, got %+v", metas)
@@ -1237,7 +1244,7 @@ func TestSurfaceTitlesLocalized(t *testing.T) {
 	defer i18n.Configure("en", "")
 
 	s := newTestSession()
-	s.agent = core.NewAgent(nil, "fake", "", core.Registry{})
+	s.agent = coretest.NewAgent(nil, "fake", "", core.Registry{})
 
 	ctx, err := s.surface("context")
 	if err != nil {
@@ -1271,7 +1278,7 @@ func TestSurfaceTitlesLocalized(t *testing.T) {
 // extproto vocabulary mapped to the control-plane one, and falls back to
 // kind=panel lines when it has none.
 func TestExtWidgetSurface(t *testing.T) {
-	s := &wsSession{id: "x", hub: newWSHub(), agent: core.NewAgent(nil, "fake", "", core.Registry{}), extPanels: map[string]*webPanel{}}
+	s := &wsSession{id: "x", hub: newWSHub(), agent: coretest.NewAgent(nil, "fake", "", core.Registry{}), extPanels: map[string]*webPanel{}}
 
 	s.paneOpen("todo", extproto.PanelSpec{
 		ID:    "main",
@@ -1310,7 +1317,7 @@ func TestExtWidgetSurface(t *testing.T) {
 // notices (the web has no command line to fill, so insert degrades to a note),
 // a command-level error becomes an error notice, and noop broadcasts nothing.
 func TestCommandResponseActions(t *testing.T) {
-	s := &wsSession{id: "x", hub: newWSHub(), agent: core.NewAgent(nil, "fake", "", core.Registry{}), extPanels: map[string]*webPanel{}}
+	s := &wsSession{id: "x", hub: newWSHub(), agent: coretest.NewAgent(nil, "fake", "", core.Registry{}), extPanels: map[string]*webPanel{}}
 	sub := s.hub.add(nil, false)
 
 	// open_panel opens a pane through the existing panel machinery.
@@ -1461,11 +1468,11 @@ func TestCancelAndDrainTurnsBounded(t *testing.T) {
 // refused with ErrBusy. The actual summarize+replace path needs a live model, so
 // it's exercised by core's own compaction tests.
 func TestWorkspaceCompact(t *testing.T) {
-	s := &wsSession{id: "x", hub: newWSHub(), agent: core.NewAgent(nil, "fake", "", core.Registry{})}
+	s := &wsSession{id: "x", hub: newWSHub(), agent: coretest.NewAgent(nil, "fake", "", core.Registry{})}
 	sub := s.hub.add(nil, false)
 
 	// Empty transcript → benign "nothing to compact" notice, no error.
-	if err := s.compact(context.Background()); err != nil {
+	if err := s.compact(context.Background(), core.CompactRequested); err != nil {
 		t.Fatalf("compact(empty): %v", err)
 	}
 	if ev := recvEvent(t, sub); ev.Type != ctrlproto.EventNotice || ev.Notice == nil {
@@ -1476,7 +1483,7 @@ func TestWorkspaceCompact(t *testing.T) {
 	s.mu.Lock()
 	s.turnCancel = func(error) {}
 	s.mu.Unlock()
-	if err := s.compact(context.Background()); !errors.Is(err, ctrlproto.ErrBusy) {
+	if err := s.compact(context.Background(), core.CompactRequested); !errors.Is(err, ctrlproto.ErrBusy) {
 		t.Fatalf("compact while busy should be ErrBusy, got %v", err)
 	}
 }
@@ -1679,7 +1686,7 @@ func TestWorkspaceAutoSwarmToggleAppliesLive(t *testing.T) {
 	}
 	w := &Workspace{ctx: context.Background(), diag: func(string) {}, sessions: map[string]*wsSession{}}
 	s := &wsSession{id: "swarm", ws: w, hub: newWSHub(), args: args}
-	s.agent = core.NewAgent(&gatedTurnClient{}, r.Model, r.SystemPrompt, r.ToolRegistry)
+	s.agent = coretest.NewAgentWithAssembler(&gatedTurnClient{}, r.Model, build.NewAssembler(r.SystemSegments), r.ToolRegistry)
 	w.sessions[s.id] = s
 
 	if _, ok := s.agent.LookupTool("swarm_spawn"); ok {
@@ -1697,7 +1704,7 @@ func TestWorkspaceAutoSwarmToggleAppliesLive(t *testing.T) {
 		ev.Notice.Kind != ctrlproto.NoticePromptRebuilt || ev.Notice.Data["reason"] != "auto-swarm" {
 		t.Errorf("want a prompt_rebuilt notice with reason auto-swarm, got %+v", ev.Notice)
 	}
-	if !strings.Contains(s.agent.System, "swarm_spawn") {
+	if !strings.Contains(s.agent.FramePreview().SystemText(), "swarm_spawn") {
 		t.Error("enabling auto-swarm must add the nudge to the live system prompt")
 	}
 	if err := s.settingsAction("set", map[string]string{"key": "auto_swarm", "value": "false"}); err != nil {
@@ -1706,7 +1713,7 @@ func TestWorkspaceAutoSwarmToggleAppliesLive(t *testing.T) {
 	if _, ok := s.agent.LookupTool("swarm_spawn"); ok {
 		t.Error("disabling auto-swarm must remove swarm_spawn from the live tool set")
 	}
-	if strings.Contains(s.agent.System, "swarm_spawn") {
+	if strings.Contains(s.agent.FramePreview().SystemText(), "swarm_spawn") {
 		t.Error("disabling auto-swarm must drop the nudge from the live system prompt")
 	}
 }
@@ -1946,12 +1953,12 @@ func TestLoreScopeTrust(t *testing.T) {
 func TestWorkspaceClear(t *testing.T) {
 	dir := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", dir)
-	sess, err := core.NewSession(dir, dir, "fake", "model", "v")
+	sess, err := session.NewSession(dir, dir, "fake", "model", "v")
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
 	defer sess.Close() // release the file handle so TempDir cleanup works on Windows
-	ag := core.NewAgent(nil, "fake", "", core.Registry{})
+	ag := coretest.NewAgent(nil, "fake", "", core.Registry{})
 	ag.SetMessages([]provider.Message{{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hello"}}}})
 	s := &wsSession{id: "x", hub: newWSHub(), agent: ag, sess: sess}
 	sub := s.hub.add(nil, false)
@@ -1984,14 +1991,14 @@ func TestWorkspaceClear(t *testing.T) {
 func TestWorkspaceTrust(t *testing.T) {
 	dir := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", dir)
-	sess, err := core.NewSession(dir, dir, "fake", "model", "v")
+	sess, err := session.NewSession(dir, dir, "fake", "model", "v")
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
 	defer sess.Close() // release the file handle so TempDir cleanup works on Windows
 	// A real agent so setTrusted's rebuildTools is safe even if Resolve succeeds;
 	// nil extMgr takes the rebuildTools branch.
-	s := &wsSession{id: "x", hub: newWSHub(), sess: sess, agent: core.NewAgent(nil, "fake", "", core.Registry{})}
+	s := &wsSession{id: "x", hub: newWSHub(), sess: sess, agent: coretest.NewAgent(nil, "fake", "", core.Registry{})}
 	w := &Workspace{cwd: dir, args: build.Args{CWD: dir}, sessions: map[string]*wsSession{"x": s}}
 	sub := s.hub.add(nil, false)
 
@@ -2027,7 +2034,7 @@ func TestWorkspaceTrust(t *testing.T) {
 // TUI's status bar tags cost "(sub)" off this when attached.
 func TestSessionInfoSubscription(t *testing.T) {
 	dir := testsupport.TempDir(t)
-	sess, err := core.NewSession(dir, dir, "fake", "model", "v")
+	sess, err := session.NewSession(dir, dir, "fake", "model", "v")
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -2409,7 +2416,7 @@ func TestSettingsSweep(t *testing.T) {
 // TestExtPanelSurface covers the extension-panel bridge: an opened panel joins
 // the registry, broadcasts, is fetchable, and leaves on close.
 func TestExtPanelSurface(t *testing.T) {
-	s := &wsSession{id: "x", hub: newWSHub(), agent: core.NewAgent(nil, "fake", "", core.Registry{}), extPanels: map[string]*webPanel{}}
+	s := &wsSession{id: "x", hub: newWSHub(), agent: coretest.NewAgent(nil, "fake", "", core.Registry{}), extPanels: map[string]*webPanel{}}
 	sub := s.hub.add(nil, false)
 
 	s.paneOpen("memory", extproto.PanelSpec{ID: "main", Title: "Memory", Lines: []string{"a", "b"}})
@@ -2448,7 +2455,7 @@ func TestTasksSurface(t *testing.T) {
 	if err := w.taskAction("s1", "stop", map[string]string{"id": "nope"}); err == nil {
 		t.Error("stopping a missing agent should error")
 	}
-	s := &wsSession{id: "x", ws: w, hub: newWSHub(), agent: core.NewAgent(nil, "fake", "", core.Registry{}), extPanels: map[string]*webPanel{}}
+	s := &wsSession{id: "x", ws: w, hub: newWSHub(), agent: coretest.NewAgent(nil, "fake", "", core.Registry{}), extPanels: map[string]*webPanel{}}
 	sf, err := s.surface("tasks")
 	if err != nil || sf.Kind != "tasks" || sf.Tasks == nil {
 		t.Fatalf("tasks surface: %+v err=%v", sf, err)
@@ -2468,7 +2475,7 @@ func TestSettingsSurface(t *testing.T) {
 	}
 	gate := core.NewPolicyGate(pol, nil)
 	w := &Workspace{sessions: map[string]*wsSession{}}
-	s := &wsSession{id: "x", ws: w, hub: newWSHub(), gate: gate, agent: core.NewAgent(nil, "fake", "", core.Registry{}), extPanels: map[string]*webPanel{}}
+	s := &wsSession{id: "x", ws: w, hub: newWSHub(), gate: gate, agent: coretest.NewAgent(nil, "fake", "", core.Registry{}), extPanels: map[string]*webPanel{}}
 
 	v := s.settingsView()
 	if settingValue(v, "approval") != string(core.ApprovalWorkspace) {

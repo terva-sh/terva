@@ -23,7 +23,7 @@ var geminiImageModels = []string{
 
 func TestEveryLiveGeminiImageModelIsInTheCatalogue(t *testing.T) {
 	for _, id := range geminiImageModels {
-		m, err := FindModel("google", id)
+		m, err := testReg.FindModel("google", id)
 		if err != nil {
 			t.Errorf("%s is live on the API but absent from the catalogue: "+
 				"the resolver will substitute a text model and answer an image request with prose (%v)", id, err)
@@ -39,7 +39,7 @@ func TestEveryLiveGeminiImageModelIsInTheCatalogue(t *testing.T) {
 // their bill. A row without an image rate prices its pictures as prose.
 func TestEveryGeminiImageModelPricesItsImages(t *testing.T) {
 	for _, id := range geminiImageModels {
-		m, err := FindModel("google", id)
+		m, err := testReg.FindModel("google", id)
 		if err != nil {
 			continue // reported by the test above
 		}
@@ -80,7 +80,7 @@ func TestGeminiImageRatesReproduceThePublishedPerImagePrice(t *testing.T) {
 		{"gemini-3-pro-image", 1120, 0.134, 0.0005},
 	}
 	for _, tc := range cases {
-		m, err := FindModel("google", tc.id)
+		m, err := testReg.FindModel("google", tc.id)
 		if err != nil {
 			continue // reported above
 		}
@@ -98,13 +98,13 @@ func TestGeminiImageRatesReproduceThePublishedPerImagePrice(t *testing.T) {
 // — invisible except on the bill.
 func TestDiscoveryDoesNotStripTheImageRate(t *testing.T) {
 	const id = "gemini-3.1-flash-image"
-	before, err := FindModel("google", id)
+	before, err := testReg.FindModel("google", id)
 	if err != nil {
 		t.Skipf("%s not in catalogue: %v", id, err)
 	}
 	// A discovery result of the shape DiscoverGoogle produces: an id and a
 	// display name, no pricing.
-	merged := MergeCatalog([]Model{{
+	merged := mergeCatalog([]Model{{
 		Provider: "google", ID: id, DisplayName: "Nano Banana 2", Source: "live",
 	}})
 	var got Model

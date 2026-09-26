@@ -96,7 +96,7 @@ func TestReplacingForeignCompactionsLeavesTheSessionIntact(t *testing.T) {
 // (captureClient is defined in agent_retry_test.go.)
 func TestAForeignCompactionIsReplacedOnTheRequestItself(t *testing.T) {
 	client := &captureClient{} // Name() == "capture"
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 	a.SetMessages(compactedTranscript("openai-codex"))
 
 	if err := a.Prompt(context.Background(), "and then?", nil, nil); err != nil {

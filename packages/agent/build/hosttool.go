@@ -53,7 +53,7 @@ func buildHostToolDispatcher(ag *core.Agent, gate *core.ConfirmGate, mgr hostToo
 		// Same permission gate as a model-issued call: an extension never
 		// bypasses approval. (silent is the extension's UI hint, not a
 		// permission override.) This door checks the gate outside the
-		// BeforeToolExecute ladder, so it writes its own audit line — and it
+		// tool-call ladder, so it writes its own audit line — and it
 		// mints its own call id: host_tool_call dispatches on its own
 		// goroutine, so this approval can park CONCURRENTLY with a model
 		// call's, and a borrowed "current call" id would collide in the

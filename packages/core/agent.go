@@ -3,13 +3,9 @@ package core
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,7 +13,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/core/i18n"
+	"terva.sh/terva/packages/core/transcriptcodec"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -50,33 +47,37 @@ var ErrUserInterrupted = errors.New("turn interrupted by the user")
 
 // Agent is a stateful conversation bound to a provider client, a model,
 // and a set of tools.
+//
+// Its settings are private. A host passes them to New as options, changes
+// them at runtime through the setters, and reads them through the getters.
+// The setters and getters take the agent's lock. An exported field could be
+// read or written without it, which races a turn on another goroutine.
 type Agent struct {
-	Client    provider.Client
-	Model     string
-	System    string
-	Tools     Registry
-	MaxSteps  int
-	Reasoning string
-	// ReasoningSet reports the global reasoning level was explicitly chosen by
+	client    provider.Client
+	model     string
+	tools     Registry
+	maxSteps  int
+	reasoning string
+	// reasoningSet reports the global reasoning level was explicitly chosen by
 	// the user (flag/config/settings, including "off"), so it wins over a
 	// model's DefaultReasoning. False means unset — fall back to the per-model
-	// default. Read at turn start under a.mu alongside Reasoning.
-	ReasoningSet bool
+	// default. Read at turn start under a.mu alongside reasoning.
+	reasoningSet bool
 
-	// ReasoningSummary asks the provider for a human-readable summary of its
+	// reasoningSummary asks the provider for a human-readable summary of its
 	// reasoning, persisted into the transcript alongside the opaque payload so
 	// an unattended run can be reviewed for intent. "" (the default) is off and
 	// leaves requests unchanged. Read at turn start under a.mu alongside
-	// Reasoning; only the codex client acts on it.
-	ReasoningSummary string
+	// reasoning; only the codex client acts on it.
+	reasoningSummary string
 
-	// ShowReasoning asks for the same summary in order to DISPLAY it while the
+	// showReasoning asks for the same summary in order to DISPLAY it while the
 	// turn runs (EvReasoningDelta), without writing it to the session record.
 	//
-	// It is separate from ReasoningSummary because the two costs are different
+	// It is separate from reasoningSummary because the two costs are different
 	// and only one of them is permanent. Watching a model work is ephemeral —
 	// the text is on screen and then it is gone. Persisting it makes the
-	// session file quotable, which is why ReasoningSummary is opt-in, and
+	// session file quotable, which is why reasoningSummary is opt-in, and
 	// forcing that trade on anyone who merely wants to see the work would be
 	// the wrong bargain.
 	//
@@ -84,106 +85,85 @@ type Agent struct {
 	// the request flag on by itself (see reasoningSummaryRequest). What keeps it
 	// off disk is stripUnrecordedSummaries, which blanks the text after the turn
 	// and leaves the block itself alone. Read at turn start under a.mu alongside
-	// Reasoning.
+	// reasoning.
 	//
 	// 🪤 "Unless asked" is not universal, and reading it as universal is what
 	// once leaked. Anthropic thinking, Gemini thought summaries and chat
 	// `reasoning_content` all arrive unbidden, so the strip must key on the
 	// RECORD setting alone and never on this one.
-	ShowReasoning bool
+	showReasoning bool
 
-	// VisibleTool, when non-nil, reports whether a registered tool is
-	// ADVERTISED to the model on a turn. It filters only the tool specs sent
-	// in the request (SpecsVisible, in oneTurn); it never touches dispatch or
-	// the permission gate, both of which resolve the full Tools registry — so a
-	// tool hidden here stays callable and stays gated. Advertisement is not
-	// authority (retro H2·b's visibility ≠ authority invariant). nil advertises
-	// the whole registry: today's behavior. Like Tools/System, it is pinned per
-	// turn (see runLoop), so a mid-turn change lands only on the next turn.
-	//
-	// The predicate must be pure in the name so the advertised set — hence the
-	// cached prompt prefix — is stable when nothing changed; a change to the
-	// visible set is a model-facing-surface change and (once a host mutates it)
-	// must be treated like a Tools swap for cache-write accounting.
-	VisibleTool func(name string) bool
-
-	// Temperature sets the sampling temperature on each request. Nil
+	// temperature sets the sampling temperature on each request. Nil
 	// leaves it unset so each provider applies its own default (terva's
 	// per-provider serialization guards still apply when it is set).
-	Temperature *float32
+	temperature *float32
 
-	// MaxTokens caps the model's output tokens per turn. Zero leaves
+	// maxTokens caps the model's output tokens per turn. Zero leaves
 	// the field unset on the provider request, letting each provider
 	// apply its own default (which can be conservative, e.g. Bedrock
 	// defaults to 4096, truncating long writes/edits). Hosts populate
 	// this from the resolved model's MaxOutput so large single-turn
 	// responses aren't silently cut off with stopReason=length.
-	MaxTokens int
+	maxTokens int
 
-	// ImageOutput, when non-nil, requests native (in-protocol) image output:
+	// imageOutput, when non-nil, requests native (in-protocol) image output:
 	// the model may draw images inline in its own turn via the provider's
 	// built-in image tool (OpenAI Responses image_generation). Set from the
 	// opt-in native_output config. oneTurn only forwards it when the live model
 	// advertises provider.CapImageOutput, so it tracks a model swap without a
 	// rebuild. nil (the default) leaves native image output off.
-	ImageOutput *provider.ImageOutputConfig
+	imageOutput *provider.ImageOutputConfig
 
-	// BeforeToolExecute, if set, is called immediately before each
-	// tool runs. Returning (allowed=false, reason) short-circuits
-	// the call with an error result containing reason. Optionally,
-	// returning a non-nil modifiedArgs replaces the JSON args the
-	// tool will see, which lets guards redact / augment / patch the
-	// model's request without rewriting the transcript. Empty or
-	// malformed modifiedArgs is ignored.
+	// gate is asked before each tool runs. New sets it and nothing
+	// replaces it: it was an assignable field (BeforeToolExecute), and a host
+	// that forgot to assign it got an agent that ran every call unchecked with
+	// no signal (decisions 0004, 0005, 0021 rule 3). Nil only on an Agent built
+	// without New, and then every tool call is refused.
 	//
-	// ctx is the turn's, and every rung of the ladder behind this hook can
-	// block on a human or a network: a pre-tool-use hook is a subprocess, the
-	// confirm gate can wait minutes for an approval, an extension intercept is
-	// an RPC. All three must stop when the turn does, which they can only do if
-	// the turn's context reaches them — so it is a parameter rather than
-	// something the host closes over at wiring time. A host that captured its
-	// own long-lived context here was the reason a cancelled turn's approval
-	// could still land.
-	BeforeToolExecute func(ctx context.Context, call provider.ToolCallBlock) (allowed bool, reason string, modifiedArgs json.RawMessage)
+	// The turn and message hooks below are set from a TurnFilter or
+	// MessageFilter component at construction. They are extension intercepts,
+	// not permission checks, and leaving one unset runs the documented default
+	// rather than an unchecked tool. docs/architecture/02-core-agent.md gives
+	// the full reasoning.
+	gate Gate
 
-	// BeforeTurn, if set, is called before each turn's model call.
+	// beforeTurn, if set, is called before each turn's model call.
 	// Returning (allowed=false, reason) aborts the turn; reason is
 	// surfaced as an assistant-like status line. Used for rate-
 	// limiting, business-hour gates, and deny-by-default setups.
-	BeforeTurn func(step int) (allowed bool, reason string)
+	beforeTurn func(step int) (allowed bool, reason string)
 
-	// BeforeAssistantMessage, if set, is called after the model's
+	// beforeAssistantMessage, if set, is called after the model's
 	// final assistant message is assembled but before it's appended
 	// to the transcript. Returning (allowed=false) suppresses both
 	// the transcript append and the UI event. A non-empty
 	// replacement rewrites the visible text for the user while
 	// leaving the model's original text in the transcript (so the
 	// model can still see what it said in subsequent turns).
-	BeforeAssistantMessage func(text string) (allowed bool, reason, replacement string)
+	beforeAssistantMessage func(text string) (allowed bool, reason, replacement string)
 
-	// BeforeUserMessage, if set, is consulted just before a genuine
+	// beforeUserMessage, if set, is consulted just before a genuine
 	// user message — the initial prompt or one drained from the queue —
 	// is appended to the transcript and sent to the model. Returning
 	// (allowed=false, reason) rejects the prompt: it is neither recorded
 	// nor sent, and the host surfaces reason via EvUserMessageRejected.
 	// A non-empty replacement rewrites the prompt the model actually
 	// sees (the rewrite IS what lands in the transcript — unlike
-	// BeforeAssistantMessage, where the original is kept). The synthetic
-	// at-close gate nudge is never gated. Mirrors BeforeAssistantMessage
+	// beforeAssistantMessage, where the original is kept). The synthetic
+	// at-close gate nudge is never gated. Mirrors beforeAssistantMessage
 	// and backs the extension user_message intercept.
-	BeforeUserMessage func(text string) (allowed bool, reason, replacement string)
+	beforeUserMessage func(text string) (allowed bool, reason, replacement string)
 
-	// MaxRetries controls agent-level retries for transient provider
+	// maxRetries controls agent-level retries for transient provider
 	// failures that arrive after the HTTP stream opens (for example
 	// Anthropic overloaded_error). Zero disables this retry layer.
-	// RetryBaseDelay is doubled for each attempt; zero uses 2s.
-	MaxRetries     int
-	RetryBaseDelay time.Duration
+	// retryBaseDelay is doubled for each attempt; zero uses 2s.
+	maxRetries     int
+	retryBaseDelay time.Duration
 
 	// Hook observers. Registered through AddEventObserver / AddMessageObserver /
-	// AddUsageObserver / AddTranscriptCompactedObserver /
-	// AddImageExcludedObserver / AddEscalationObserver / AddStallObserver /
-	// AddContinuationGate, never assigned — see observers.go for why the
+	// addUsageObserver / addTranscriptCompactedObserver /
+	// addImageExcludedObserver / AddContinuationGate, never assigned — see observers.go for why the
 	// assignable fields these replaced were a hazard.
 	obsMu                  sync.RWMutex
 	eventObs               []func(AgentEvent)
@@ -194,14 +174,15 @@ type Agent struct {
 	transcriptCompactedObs []func(messages []provider.Message, res CompactResult)
 	imageExcludedObs       []func(sha256Hex string)
 	queueDrainedObs        []func(drained []string)
-	escalationObs          []func(EscalationRecord)
-	stallObs               []func(StallRecord)
 	retryObs               []func(RetryRecord)
 	tailObs                []func(TailRecord)
-	prefixDivObs           []func(PrefixDivergence)
-	cacheCliffObs          []func(CacheCliff)
-	transportObs           []func(provider.TransportInfo)
-	toolGroupObs           []func(group string)
+	dispatchObs            []DispatchObserver
+	// diagWriters hand a component's diagnostic row to each attached store
+	// that keeps diagnostics (AppendDiagnostic). Guarded by obsMu.
+	diagWriters []func(func(TranscriptDiagnostics) error)
+	// recordWriters hand a component's required record to each attached
+	// store (AppendRecord). Guarded by obsMu.
+	recordWriters []func(func(TranscriptStore) error)
 	// toolRefresh is the host's re-resolve callback, set by SetToolRefresher and
 	// fired by RequestToolRefresh. It lives on the AGENT and not on a tool
 	// instance, because a rebuild mints fresh tools: a field on the tool would be
@@ -210,26 +191,21 @@ type Agent struct {
 	// this is a single callback and not an observer list. Guarded by obsMu.
 	toolRefresh       func(reason string)
 	continuationGates []ContinuationGate
+	stepGates         []StepGate
 
-	// ContextProvider, if set, is called once per turn to obtain
-	// host-assembled ephemeral context (already wrapped/bounded) to
-	// inject into the model's context for that request only. The result
-	// rides provider.Request.EphemeralContext — a trailing block after
-	// the cache breakpoint, never written to the transcript. Hosts wire
-	// this to the extension manager's live context cards. Called outside
-	// the agent lock; keep it quick.
-	ContextProvider func() string
+	// assembler produces the Frame for every request: the Stable segments that
+	// form the system prompt and the Volatile ones that ride the ephemeral tail.
+	// Set once by New and never reassigned, so it is read without a.mu. A
+	// host that changes its frame live does so inside its assembler. Nil is an
+	// empty frame.
+	assembler ContextAssembler
 
-	// ContextProviderPeek, if set, is a side-effect-free twin of
-	// ContextProvider: it renders the same ephemeral block but performs
-	// none of ContextProvider's per-turn side effects (e.g. recording which
-	// lore fired). The core never calls it — it exists so the UI can SIZE
-	// the ephemeral tail (e.g. /context) without corrupting that state.
-	ContextProviderPeek func() string
-
-	// ReadOnly names side-effect-free tools for dispatch and compaction.
-	// Set it during construction. Use SetToolsWithReadOnly for live updates;
-	// readers use ToolsWithReadOnlySnapshot or the calling turn's context.
+	// readOnly names side-effect-free tools for dispatch and compaction. It is
+	// published only with the registry it classifies, by SetToolsWithReadOnly,
+	// under a.mu; readers use ToolsWithReadOnlySnapshot or the calling turn's
+	// context. It is not an exported field because the pair must not drift: a
+	// classification set on its own would describe a registry it was never
+	// published with (TKT-01M35WK1J).
 	//
 	// Nil means every tool is assumed to mutate, and that is the correct failure
 	// direction: a nil set over-reports the ledger, which costs a few tokens. The
@@ -237,43 +213,26 @@ type Agent struct {
 	// side effect from the record and invite the resuming agent to run it twice.
 	// Extensions and MCP servers register arbitrary tools, so "unknown" is the
 	// common case, not the edge one.
-	ReadOnly *ReadOnlySet
+	readOnly *ReadOnlySet
 
-	// CWD is the directory the bash tool runs commands in. Two readers:
-	// compaction, to recognize a `cd` that went nowhere (see ledgerArgs), and
-	// the provider request below, which passes it as Request.WorkingDir so a
-	// provider that saves a generated file writes it into the workspace rather
-	// than wherever the binary was launched. Neither dispatches or resolves a
-	// tool path against it. It must be the SAME value BashTool.CWD gets — a
-	// stale or unset one under-elides, which costs ledger characters, while a
-	// wrong one would elide a `cd` that did move the command and misreport
-	// where the work happened.
-	CWD string
-
-	// Asker, if set, is the front end's question channel — the same seam the
+	// asker, if set, is the front end's question channel — the same seam the
 	// ask_user_question tool uses, wired onto the agent so the LOOP can ask too.
-	// Today its one caller is the prefix-change guard, which offers a compaction
-	// before a cache-invalidating change lands (offerCompactOnPrefixChange).
+	// The engine's one caller is the prefix-change guard, which offers a
+	// compaction before a cache-invalidating change lands
+	// (offerCompactOnPrefixChange). The stuck-loop detector (core/stall) reads
+	// it too, to ask before an escalation.
 	//
 	// Nil is the normal state for a host with nobody to ask: one-shot runs, the
 	// chat bridge, swarm children. Those skip the offer rather than blocking on a
 	// question no one will answer — and rather than silently compacting on their
 	// behalf, which is not what a guard is for. Assigned at build, before the
 	// agent runs a turn.
-	Asker Asker
+	asker Asker
 
-	// Escalator, if set, hands the live session to a stronger model when a tool
-	// loop persists past the detector's nudge (rung 3 of the stuck-loop hatch —
-	// stall.go, escalate.go). The seam mirrors Asker: an interface here, a
-	// per-session implementation in the host, nil in modes with no swap target.
-	// Nil, or a host with no configured target, makes escalation inert.
-	Escalator Escalator
-
-	// AutoCompactPolicy, if set, supplies the live auto-compaction mode
-	// (the config `auto_compact` knob, read per check so a settings edit
-	// applies without an agent rebuild). Nil — and any unknown value —
-	// resolves to AutoCompactSteps; see autoCompactMode.
-	AutoCompactPolicy func() AutoCompactMode
+	// compactionPolicy decides automatic compaction: whether at each point,
+	// with what keep-tail, and with which strategies (compaction_policy.go).
+	// Nil is DefaultCompactionPolicy{}. Set it during construction.
+	compactionPolicy CompactionPolicy
 
 	// running is the single-flight guard. It is set on entry to
 	// Prompt/Continue/Compact and cleared on exit; a second concurrent
@@ -282,63 +241,18 @@ type Agent struct {
 	// the check-and-set needs no separate lock and never blocks.
 	running atomic.Bool
 
+	// catalog is the model catalog (SetCatalog); nil reads the default.
+	catalog atomic.Pointer[catalogBox]
+
 	mu sync.Mutex
 
-	// Lazy tool visibility (retro H2·b), guarded by mu. When lazyTools is on,
-	// only the core group plus activeGroups are ADVERTISED; the rest are hidden
-	// (still callable + gated) and surfaced as a capability note so the model can
-	// activate_tools them. Resolved into a turnTools snapshot at the per-turn pin
-	// (runLoop), so a mid-turn ActivateGroup lands on the next turn — one
-	// deliberate cache write, never mid-turn churn. Off = advertise all (default).
-	lazyTools    bool
-	activeGroups map[string]bool
-	// baseGroups is the configured always-active set EnableLazyTools was given,
-	// kept so RestoreActiveGroups can rebuild "config plus this session's"
-	// without unioning in whatever the outgoing session had activated.
-	baseGroups []string
-	// capNoteFP/capNoteShown decay the inactive-group note: the fingerprint of
-	// the set last dispatched, and how many dispatches have carried the full
-	// inventory for it. Past capabilityNoteVerboseTurns the tail carries the
-	// one-line form instead, and a changed set restarts the run. Guarded by mu;
-	// advanced only by commitCapabilityNote, after a request actually lands.
-	capNoteFP    string
-	capNoteShown int
+	// visibility chooses the tools a request advertises. A ToolVisibility
+	// component sets it, and nil advertises the whole registry. Guarded by mu.
+	visibility ToolVisibility
 	// tailFP is the fingerprint (block IDs, never their text) of the ephemeral
 	// tail last recorded, so a tail row is written when the composition CHANGES
 	// and not once per request. Guarded by mu; see recordTail.
 	tailFP string
-	// pendingShell/deliveredShell carry a "!" shell escape's result into the
-	// user's next request, at most once, and shellResultOn gates the whole
-	// feature (engine feature shell_result_context, shipped OFF). Guarded by mu;
-	// see shell_result.go for why the delivered copy is kept rather than dropped
-	// on the spot.
-	shellResultOn  bool
-	pendingShell   string
-	deliveredShell string
-	// lastLadder is the digest ladder of the last dispatched prefix, so the next
-	// dispatch can locate where it diverged. Guarded by mu; see prefixwatch.go.
-	// prefixDivRecording gates the comparison (engine feature
-	// prefix_divergence_recording; the shipped default — ON — lives in
-	// build/enginefeatures.go, core's zero value stays off).
-	lastLadder         *prefixLadder
-	prefixDivRecording bool
-	// cliffEpoch counts the ladder's non-append divergences (and dispatches
-	// with no predecessor to compare against). The cache-cliff detector uses
-	// it to tell "the provider dropped us" from "we rebuilt the prefix" —
-	// see cachecliff.go. Guarded by mu, as is cliffState.
-	cliffEpoch int
-	cliffState cacheCliffState
-	// transportRecording gates relaying provider transport forensics
-	// (EventTransport → observers → the session's "net" rows). Engine feature
-	// transport_recording; like prefixDivRecording, the shipped default (ON)
-	// lives in build/enginefeatures.go and core's zero value stays off.
-	// Guarded by mu.
-	transportRecording bool
-	// activationContinuationOff disables the built-in activation gate
-	// (docs/proposals/activation-continuation.md): a segment that activated a
-	// group is auto-continued with the tools live. The zero value keeps it ON
-	// — the agreed default — wherever lazy tools are enabled. Guarded by mu.
-	activationContinuationOff bool
 
 	messages []provider.Message
 	// rev increments whenever the transcript slice is replaced or a
@@ -361,7 +275,7 @@ type Agent struct {
 	// context holds content it never saw. Per-agent bumps stay in the
 	// low 32 bits; the base occupies the high 32.
 	transcriptEpoch uint64
-	cost            CostTracker
+	cost            costTracker
 
 	// continuePrefill is set for the duration of one ContinueAssistant turn
 	// (guarded by mu, cleared on return). It makes oneTurn (a) suppress the
@@ -397,6 +311,11 @@ type Agent struct {
 	// stays a dumb request-scoped string rather than a menu of flags.
 	stageCue string
 
+	// translator is the one WithTranslator gave, or nil for the process-wide
+	// one. It is set once, by New, and never written again, so it needs no
+	// lock.
+	translator i18n.Translator
+
 	// sessionID / sessionPath identify the transcript file this
 	// conversation persists to: sessionID is the file basename without
 	// .jsonl (the id --resume accepts), sessionPath the absolute path.
@@ -430,46 +349,6 @@ type Agent struct {
 	// compacting on the outgoing model possible. See promptPrefix.
 	lastSent *promptPrefix
 
-	// cacheAwareCompaction summarizes against the warm prefix instead of a
-	// bespoke one (engine feature cache_aware_compaction; zero value off here,
-	// shipped default on in build/enginefeatures.go). Guarded by mu and read at
-	// compaction time, so a settings toggle applies without rebuilding the
-	// agent. See SetCacheAwareCompaction.
-	cacheAwareCompaction bool
-
-	// providerCompaction hands compaction to the backend instead of summarizing
-	// client-side (engine feature provider_compaction; off by default in BOTH
-	// places, unlike the two above — the strategy is measured but the cache
-	// payoff it exists for is not). Guarded by mu; see SetProviderCompaction.
-	providerCompaction bool
-
-	// prefixGuard offers a compaction before a cache-invalidating change lands
-	// (engine feature prefix_change_guard). Guarded by mu; see
-	// SetPrefixChangeGuard and offerCompactOnPrefixChange.
-	prefixGuard bool
-
-	// stallDetect arms the stuck-loop detector (engine feature
-	// stuck_loop_detection). Guarded by mu; see SetStallDetection.
-	stallDetect bool
-
-	// stuckLoopEscalate arms rung 3 (engine feature stuck_loop_escalation); it
-	// depends on stallDetect (the detector is the trigger) and is inert without a
-	// bound Escalator + a configured target. escalateAuto swaps without asking
-	// (config escalation.auto). Both guarded by mu; see escalate.go.
-	stuckLoopEscalate bool
-	escalateAuto      bool
-
-	// stall is the detector's per-turn state. Touched only on the turn goroutine
-	// (runLoop resets and observes; oneTurn reads the nudge), so it carries no
-	// lock — unlike stallDetect, which a host may toggle from another goroutine.
-	stall stallTracker
-
-	// pressure is the context-warning cadence (which band has been announced,
-	// how long since). Same discipline and same reason as stall: touched only
-	// on the turn goroutine — composeTail peeks it, oneTurn commits once the
-	// tail is settled — so it carries no lock.
-	pressure pressureTracker
-
 	// queued holds user messages submitted while the agent is busy.
 	// The loop appends them as normal user messages at safe
 	// boundaries: before the next model call after a tool batch, or
@@ -482,27 +361,41 @@ type Agent struct {
 // (see the transcriptEpoch field comment for why collisions matter).
 var agentEpochSeq atomic.Uint64
 
-// NewAgent returns an Agent with sensible defaults.
-func NewAgent(client provider.Client, model, system string, tools Registry) *Agent {
-	return &Agent{
-		Client:   client,
-		Model:    model,
-		System:   system,
-		Tools:    tools,
-		MaxSteps: 0, // 0 = unlimited
+// Translator returns the translator the agent renders its text through, or
+// nil when it uses the process-wide one. A component renders its own text
+// through i18n.In(a.Translator()).T(...), so it speaks the agent's language.
+//
+// Unstable: it returns an i18n.Translator, and packages/core/i18n carries no
+// promise before 1.0.
+func (a *Agent) Translator() i18n.Translator { return a.translator }
+
+// newAgent builds the agent New configures. The gate is already checked.
+func newAgent(client provider.Client, model string, assembler ContextAssembler, tools Registry, gate Gate) *Agent {
+	a := &Agent{
+		client:    client,
+		model:     model,
+		assembler: assembler,
+		tools:     tools,
+		gate:      gate,
+		maxSteps:  0, // 0 = unlimited
 		// Six retries with the doubling base below is 2+4+8+16+32+60 = ~2min of
-		// patience, ending on the MaxRetryDelay tail. Three (14s) was too short
-		// for the provider overloads it mostly meets — see MaxRetryDelay.
-		MaxRetries:      6,
-		RetryBaseDelay:  2 * time.Second,
+		// patience, ending on the maxRetryDelay tail. Three (14s) was too short
+		// for the provider overloads it mostly meets — see maxRetryDelay.
+		maxRetries:      6,
+		retryBaseDelay:  2 * time.Second,
 		transcriptEpoch: agentEpochSeq.Add(1) << 32,
-		// Keyed from birth: NewAgent runs before the session is known (see
+		// Keyed from birth: New runs before the session is known (see
 		// build.BindSession), so an agent can dispatch while still live-only,
 		// and an unkeyed request forfeits the reliable prefix matching
 		// GPT-5.6+ only offers when prompt_cache_key is set.
 		cacheID: newLiveCacheID(),
 	}
+	return a
 }
+
+// Gate returns the gate New was given. There is no setter: a gate that
+// could be replaced after construction could be replaced with nothing.
+func (a *Agent) Gate() Gate { return a.gate }
 
 // newLiveCacheID mints the cache-routing key for a conversation with no
 // session to borrow one from.
@@ -519,29 +412,39 @@ func NewAgent(client provider.Client, model, system string, tools Registry) *Age
 // also keeps user text out of a string sent to the provider.
 func newLiveCacheID() string { return "live-" + uuid.NewString() }
 
-// AdoptSessionIdentity records which transcript file this agent's
-// conversation persists to; terva_status surfaces it to the model.
-// Call it when binding or swapping the agent's session. Nil clears
-// the identity fields — the conversation is live-only from here.
+// TranscriptIdentity names the transcript an agent's conversation persists to.
+// The zero value is a live-only conversation.
+type TranscriptIdentity struct {
+	// ID is the short name a host resumes by (terva's is the file's basename).
+	ID string
+	// Path locates the transcript for tools that report or open it.
+	Path string
+	// CacheKey routes prompt caching. Empty falls back to ID. It should be
+	// globally unique where ID is not: every swarm child persists to a file
+	// named session.json, so terva passes the session's meta UUID.
+	CacheKey string
+}
+
+// AdoptSessionIdentity records which transcript this agent's conversation
+// persists to; terva_status surfaces it to the model. Call it when binding or
+// swapping the agent's store. The zero TranscriptIdentity clears the identity:
+// the conversation is live-only from here.
 //
-// Nil does NOT clear the cache route, it re-mints it. Sending no
+// Clearing does NOT clear the cache route, it re-mints it. Sending no
 // prompt_cache_key gives up the reliable matching GPT-5.6+ gates behind it,
 // and a fresh key is right rather than merely harmless: unbinding means this
 // is a different conversation from here on, so it should route as one.
-func (a *Agent) AdoptSessionIdentity(s *Session) {
+func (a *Agent) AdoptSessionIdentity(id TranscriptIdentity) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if s == nil {
+	if id == (TranscriptIdentity{}) {
 		a.sessionID, a.sessionPath = "", ""
 		a.cacheID = newLiveCacheID()
 		return
 	}
-	a.sessionPath = s.Path
-	a.sessionID = strings.TrimSuffix(filepath.Base(s.Path), ".jsonl")
-	// Prefer the meta UUID for cache routing — globally unique where the
-	// basename is not (all swarm children persist to a session.json).
-	if a.cacheID = s.ID; a.cacheID == "" {
-		a.cacheID = a.sessionID
+	a.sessionPath, a.sessionID = id.Path, id.ID
+	if a.cacheID = id.CacheKey; a.cacheID == "" {
+		a.cacheID = id.ID
 	}
 }
 
@@ -620,20 +523,6 @@ func (a *Agent) QueuedMessageCount() int {
 	return len(a.queued)
 }
 
-// PopQueuedMessage removes and returns the most recently queued
-// message. Hosts use this for the slide-back keybinding.
-func (a *Agent) PopQueuedMessage() (string, bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	n := len(a.queued)
-	if n == 0 {
-		return "", false
-	}
-	text := a.queued[n-1]
-	a.queued = a.queued[:n-1]
-	return text, true
-}
-
 // DrainQueuedMessages discards and returns every queued message.
 // Hosts use this on explicit cancel/clear so stale follow-ups do
 // not run after the user aborted the turn.
@@ -672,8 +561,8 @@ func (a *Agent) appendQueuedAsUser(texts []string, synthetic bool, sink func(Age
 		// by typing while a turn is mid-flight. A rejected one is skipped
 		// (not appended, no EvUserMessage); the synthetic gate nudge is
 		// never gated.
-		if !synthetic && a.BeforeUserMessage != nil && text != "" {
-			allowed, reason, replacement := a.BeforeUserMessage(text)
+		if !synthetic && a.beforeUserMessage != nil && text != "" {
+			allowed, reason, replacement := a.beforeUserMessage(text)
 			if !allowed {
 				if reason == "" {
 					reason = "message blocked by extension guard"
@@ -756,8 +645,8 @@ func (a *Agent) TranscriptEpoch() uint64 {
 // registry rebuild can change a tool's read-only declaration.
 func (a *Agent) SetTools(reg Registry) (changed bool) {
 	a.mu.Lock()
-	changed = !registryEqual(a.Tools, reg)
-	a.Tools = reg
+	changed = !registryEqual(a.tools, reg)
+	a.tools = reg
 	a.mu.Unlock()
 	return changed
 }
@@ -782,471 +671,6 @@ func registryEqual(a, b Registry) bool {
 	return true
 }
 
-// EnableLazyTools turns on lazy tool visibility (retro H2·b): only the core
-// group plus the given always-active groups are advertised; every other group
-// starts hidden (still callable, still gated) and is offered as a capability
-// note the model can act on with ActivateGroup. Idempotent setup; call once.
-func (a *Agent) EnableLazyTools(active ...string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.lazyTools = true
-	a.activeGroups = make(map[string]bool, len(active))
-	a.baseGroups = make([]string, 0, len(active))
-	for _, g := range active {
-		if g != "" && g != CoreToolGroup {
-			a.activeGroups[g] = true
-			a.baseGroups = append(a.baseGroups, g)
-		}
-	}
-}
-
-// SetActivationContinuation toggles activation continuation — the built-in
-// at-close gate that resumes a Prompt when the ended segment activated a tool
-// group, re-pinning so the continuation runs with the tools live
-// (docs/proposals/activation-continuation.md). On by default wherever lazy
-// tools are enabled; the engine-feature surface (stage 3) drives this setter.
-func (a *Agent) SetActivationContinuation(on bool) {
-	a.mu.Lock()
-	a.activationContinuationOff = !on
-	a.mu.Unlock()
-}
-
-// ActivationContinuationEnabled reports whether the activation gate is live
-// for this agent: lazy tools on and the feature not switched off.
-// activate_tools reads it to tell the model whether it will be continued
-// automatically after finishing its reply.
-func (a *Agent) ActivationContinuationEnabled() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.lazyTools && !a.activationContinuationOff
-}
-
-// newlyActiveSincePin returns the sorted names of tools whose capability
-// groups are active now but were not at the pin — what an activation
-// continuation announces as newly live, and the dirty test for re-pinning at
-// a segment boundary. Empty when nothing new is active. Activation is
-// monotonic, so a non-empty result can never turn empty within one boundary.
-func (a *Agent) newlyActiveSincePin(pinned map[string]bool) []string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.newlyActiveInLocked(a.Tools, pinned)
-}
-
-// newlyActiveInLocked is the shared body: tools in reg whose capability group is
-// active now but was not in pinned. The caller chooses reg — the natural-stop
-// activation gate scans live a.Tools (it will repin the whole turn against live
-// state anyway), while the immediate post-tool refresh passes pin.tools so it
-// reveals ONLY what the pinned registry held, never an unrelated concurrent
-// SetTools change. Caller holds a.mu.
-func (a *Agent) newlyActiveInLocked(reg Registry, pinned map[string]bool) []string {
-	if !a.lazyTools {
-		return nil
-	}
-	var names []string
-	for name, t := range reg {
-		g := ToolGroup(t)
-		// An essential tool was already advertised at the pin, so activating
-		// its group makes nothing "newly" live — skip it so a continuation
-		// never announces a tool the model could already call.
-		if g == CoreToolGroup || pinned[g] || !a.activeGroups[g] || ToolEssential(t) {
-			continue
-		}
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-// ActivateGroup marks a capability group advertised from the next turn. Returns
-// false if it was already active (or is the always-on core group). Visibility
-// only — it never grants authority, and it takes effect at the next turn's pin
-// (one deliberate cache write), never mid-turn.
-//
-// Fires the tool-group observer on a real activation so hosts can PERSIST it.
-// That is not bookkeeping: the tools array sits ahead of the system prompt and
-// every message in the provider's cached prefix, so a resume that forgets an
-// activated group re-sends a different tools array and invalidates the whole
-// transcript — then invalidates it a second time when the model notices the
-// tool is gone and re-activates. One measured session paid ~$3.13 that way.
-func (a *Agent) ActivateGroup(group string) bool {
-	if group == "" || group == CoreToolGroup {
-		return false
-	}
-	a.mu.Lock()
-	if a.activeGroups == nil {
-		a.activeGroups = map[string]bool{}
-	}
-	if a.activeGroups[group] {
-		a.mu.Unlock()
-		return false
-	}
-	a.activeGroups[group] = true
-	a.mu.Unlock()
-	// Outside the lock: an observer persists to the session, and a host that
-	// called back into the agent under a.mu would deadlock.
-	a.fireToolGroupActivated(group)
-	return true
-}
-
-// RestoreActiveGroups makes the active set exactly the configured always-active
-// groups plus the ones the given session activated. Called at session binding.
-//
-// It REPLACES rather than unions, because binding also happens on a session
-// SWITCH (resume, fork, /new, /cd). Unioning would let a group activated in the
-// outgoing session leak into the incoming one, which advertises tools that
-// session has no tool_group row for — so its next resume would drop them and
-// pay the very invalidation this exists to prevent. Replacing keeps "the active
-// set" meaning "what THIS session activated", the only reading that survives a
-// switch.
-//
-// A group whose extension is no longer installed is harmless: visibility
-// resolves against the live registry, which has no tools in it.
-//
-// Deliberately does NOT fire the observer — these activations are already on
-// disk, and re-firing would append a duplicate row per group on every resume,
-// growing the file without bound.
-func (a *Agent) RestoreActiveGroups(groups []string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if !a.lazyTools {
-		return
-	}
-	a.activeGroups = make(map[string]bool, len(a.baseGroups)+len(groups))
-	for _, g := range a.baseGroups {
-		a.activeGroups[g] = true
-	}
-	for _, g := range groups {
-		if g != "" && g != CoreToolGroup {
-			a.activeGroups[g] = true
-		}
-	}
-}
-
-// ActiveGroups returns the currently activated capability groups, sorted.
-// Exported so a host can report them and so the resume path is testable.
-func (a *Agent) ActiveGroups() []string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	out := make([]string, 0, len(a.activeGroups))
-	for g := range a.activeGroups {
-		out = append(out, g)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// ToolsInGroup returns the names of registered tools in a capability group,
-// sorted. Empty means no such group is installed (an activate_tools guard).
-func (a *Agent) ToolsInGroup(group string) []string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	var names []string
-	for name, t := range a.Tools {
-		if ToolGroup(t) == group {
-			names = append(names, name)
-		}
-	}
-	sort.Strings(names)
-	return names
-}
-
-// ToolSpecsInGroup returns the provider specs (name, description, schema) of the
-// registered tools in a capability group, name-sorted for a stable render. It
-// is the schema-bearing twin of ToolsInGroup: activate_tools echoes these into
-// its result so the model can compose its next-turn call immediately, since the
-// activated group's schemas only reach the advertised Tools array on the next
-// turn (the per-turn pin). Reuses SpecsVisible so the sort matches the
-// advertised order. Empty means no such group.
-func (a *Agent) ToolSpecsInGroup(group string) []provider.Tool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.Tools.SpecsVisible(func(name string) bool {
-		t, ok := a.Tools[name]
-		return ok && ToolGroup(t) == group
-	})
-}
-
-// ActivateGroupsForTools activates the capability groups of the named tools —
-// skill-driven activation (retro H2·b step 5): a skill declaring the tools it
-// needs (its allowed-tools) can SURFACE their groups on load. Visibility only,
-// so it never grants authority: dispatch and the permission gate keep resolving
-// the full registry, so a revealed tool is still gated when actually called.
-// A no-op unless lazy mode is on; names absent from this registry (e.g. an
-// untrusted workspace never loaded that extension) and core-group names are
-// skipped. Returns the groups newly activated (for a load notice), sorted.
-func (a *Agent) ActivateGroupsForTools(names []string) []string {
-	a.mu.Lock()
-	if !a.lazyTools {
-		a.mu.Unlock()
-		return nil
-	}
-	if a.activeGroups == nil {
-		a.activeGroups = map[string]bool{}
-	}
-	var activated []string
-	for _, n := range names {
-		t, ok := a.Tools[n]
-		if !ok {
-			continue
-		}
-		g := ToolGroup(t)
-		if g == CoreToolGroup || a.activeGroups[g] {
-			continue
-		}
-		a.activeGroups[g] = true
-		activated = append(activated, g)
-	}
-	sort.Strings(activated)
-	a.mu.Unlock()
-	// Persisted like an activate_tools activation, and for the same reason: a
-	// skill-surfaced group changes the tools array, so a resume that forgot it
-	// would pay the same double invalidation. Fired outside the lock.
-	for _, g := range activated {
-		a.fireToolGroupActivated(g)
-	}
-	return activated
-}
-
-// AdvertisedTools reports the current tool-advertisement decision as a predicate
-// over tool names: whether a registered tool would be sent to the model this
-// turn (core + active groups under lazy mode, or the VisibleTool override).
-// filtered is false in the default all-advertised case — then visible admits
-// every tool. It is the read-only twin of the per-turn pin (turnToolsLocked) for
-// inspection surfaces like /context, which use it to separate the live
-// advertised weight from installed-but-inactive schemas. The returned predicate
-// is a pure function of the name and safe to call after the lock is released.
-func (a *Agent) AdvertisedTools() (visible func(name string) bool, filtered bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	tt := a.turnToolsLocked(a.Tools)
-	if tt.visible == nil {
-		return func(string) bool { return true }, false
-	}
-	return tt.visible, true
-}
-
-// CapabilityNote returns the inactive-tool-groups note that rides this turn's
-// ephemeral tail under lazy visibility — the names (not schemas) of the hidden
-// groups the model can activate_tools. Empty when lazy mode is off or nothing is
-// hidden. It is the exact text oneTurn appends to EphemeralContext, so /context
-// can account for the few bytes deferred discovery actually costs (the schemas
-// are gone from the window, but their names are not free).
-func (a *Agent) CapabilityNote() string {
-	a.mu.Lock()
-	tt := a.turnToolsLocked(a.Tools)
-	a.mu.Unlock()
-	// Peeked, not the raw full note: past the verbose run the tail carries the
-	// one-line form, and /context accounting for the long one would overstate
-	// what deferred discovery costs on a settled session. Peek does not advance
-	// the decay, so inspecting the context never changes what the next turn sends.
-	return a.peekCapabilityNote(tt)
-}
-
-// turnTools is the per-turn tool-advertisement decision, pinned as a unit so the
-// advertised specs and the capability note the model reads can never drift.
-type turnTools struct {
-	visible         func(name string) bool // nil = advertise every registered tool
-	capabilityNote  string                 // inactive-group summary for the ephemeral tail (lazy mode)
-	capabilityBrief string                 // the standing one-line form of the same
-	capabilityFP    string                 // fingerprint of the inactive set; a change re-shows the full note
-	groups          map[string]bool        // active-group snapshot at the pin (lazy mode; nil otherwise); never mutated
-}
-
-// turnToolsLocked resolves this turn's advertisement; a.mu must be held. An
-// embedder's VisibleTool wins (the raw visibility seam); otherwise lazy mode
-// advertises core + the active groups and notes the inactive ones; otherwise
-// nil (advertise all — today's default).
-func (a *Agent) turnToolsLocked(reg Registry) turnTools {
-	if a.VisibleTool != nil {
-		return turnTools{visible: a.VisibleTool}
-	}
-	if !a.lazyTools {
-		return turnTools{}
-	}
-	active := make(map[string]bool, len(a.activeGroups))
-	for g := range a.activeGroups {
-		active[g] = true
-	}
-	groups, _ := inactiveGroups(reg, active)
-	return turnTools{
-		visible:         lazyVisible(reg, active),
-		capabilityNote:  inactiveGroupNote(reg, active),
-		capabilityBrief: inactiveGroupBrief(reg, active),
-		capabilityFP:    strings.Join(groups, "\x00"),
-		groups:          active,
-	}
-}
-
-// capabilityNoteVerboseTurns is how many dispatches carry the full inactive-group
-// inventory before it degrades to the one-line form. Three is enough for the
-// model to have seen and weighed the offer; past that the same list re-arriving
-// several hundred times is not information, and a model that answers it once
-// then sees its own answer in the transcript answers it forever.
-const capabilityNoteVerboseTurns = 3
-
-// peekCapabilityNote picks the form this dispatch should carry, WITHOUT
-// advancing the decay — oneTurn is re-entered per retry attempt, and a retried
-// request must carry the same tail as the attempt it replaces. commitCapability
-// advances it once a request actually reaches the provider, mirroring how the
-// stall nudge is peeked and only cleared after recordDispatch.
-func (a *Agent) peekCapabilityNote(tt turnTools) string {
-	if tt.capabilityNote == "" {
-		return ""
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if tt.capabilityFP != a.capNoteFP || a.capNoteShown < capabilityNoteVerboseTurns {
-		return tt.capabilityNote
-	}
-	return tt.capabilityBrief
-}
-
-// commitCapabilityNote records that a dispatch carried the note. A changed
-// inactive set restarts the verbose run, so a newly installed extension is
-// announced in full rather than inheriting the previous set's silence.
-func (a *Agent) commitCapabilityNote(tt turnTools) {
-	if tt.capabilityNote == "" {
-		return
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if tt.capabilityFP != a.capNoteFP {
-		a.capNoteFP, a.capNoteShown = tt.capabilityFP, 1
-		return
-	}
-	if a.capNoteShown < capabilityNoteVerboseTurns {
-		a.capNoteShown++
-	}
-}
-
-// lazyVisible advertises a tool iff its group is core or currently active, or
-// the tool is declared essential (load-bearing) by its extension — an essential
-// tool stays advertised even from an inactive group, so guidance that names it
-// isn't pointing at a deferred tool. A name absent from reg is advertised
-// (never hidden by a stale predicate).
-func lazyVisible(reg Registry, active map[string]bool) func(name string) bool {
-	return func(name string) bool {
-		t, ok := reg[name]
-		if !ok {
-			return true
-		}
-		g := ToolGroup(t)
-		return g == CoreToolGroup || active[g] || ToolEssential(t)
-	}
-}
-
-// inactiveGroupNote summarizes the groups hidden this turn — the model reads it
-// from the ephemeral tail and can bring one in with activate_tools. Empty when
-// nothing is hidden. It lists tool names (not schemas) so discovery costs a few
-// bytes, not the whole schema (retro H2·b: the cache-cheap capability line).
-func inactiveGroupNote(reg Registry, active map[string]bool) string {
-	groups, byGroup := inactiveGroups(reg, active)
-	if len(groups) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	// Model-facing prompt injection (rides the ephemeral tail like the
-	// context-pressure note), so it is translatable via the prompts catalog.
-	//
-	// The prohibition comes FIRST, before the inventory it governs, and that
-	// order is measured — do not reorder it without re-running the A/B
-	// (scripts/eval, `session-inspect-cost` final-answer row). Both
-	// predecessors failed differently. The original imperative opener ("Call
-	// activate_tools with a group name to load them") read as a question
-	// re-asked every turn: one reviewed session answered it 109 times in 217
-	// assistant messages — the note is ephemeral and costs no cache, but the
-	// model's ANSWER lands in the transcript, is re-sent every turn, and
-	// survives compaction. The inventory phrasing that fixed that buried
-	// "needs no reply" mid-block, and on first exposure Haiku answered the
-	// note INSTEAD of the user in 20 of 20 runs — right tool call, right
-	// result, answer displaced on the way out. Prohibition-first recovered
-	// 20 of 20 answers on the same A/B (2026-08).
-	b.WriteString(i18n.P("tools.lazy.inactive_groups",
-		"[inactive tool groups] Do not reply to this note. Do not mention it in your answer. Complete the request of the user as if the note were not here. The note lists installed capabilities whose tool schemas are not loaded this turn. If a task needs one, `activate_tools <group>` loads it. The load changes visibility only, and each tool still requires its normal permission when used:"))
-	for _, g := range groups {
-		names := byGroup[g]
-		sort.Strings(names)
-		fmt.Fprintf(&b, "\n  - %s: %s", g, strings.Join(names, ", "))
-	}
-	return b.String()
-}
-
-// inactiveGroupBrief is the note's standing form: group names only, one line,
-// no per-tool inventory. The full note is information the first few times it
-// appears and noise for the several hundred turns after, during which the
-// inactive set has not changed and the model has already decided. This keeps
-// activate_tools' description honest (it points at "the [inactive tool groups]
-// note") without re-asking.
-func inactiveGroupBrief(reg Registry, active map[string]bool) string {
-	groups, _ := inactiveGroups(reg, active)
-	if len(groups) == 0 {
-		return ""
-	}
-	return i18n.P("tools.lazy.inactive_groups_brief",
-		"[inactive tool groups] Do not reply to this note. If a task needs a group, `activate_tools <group>` loads it. Inactive: %s",
-		strings.Join(groups, ", "))
-}
-
-// inactiveGroups collects the hidden groups and their tool names, both sorted.
-// The fingerprint the decay keys on is derived from this, so a group appearing
-// or disappearing re-shows the full note while a stable set stays quiet.
-func inactiveGroups(reg Registry, active map[string]bool) ([]string, map[string][]string) {
-	byGroup := map[string][]string{}
-	for name, t := range reg {
-		g := ToolGroup(t)
-		// Essential tools are already advertised (lazyVisible), so they are
-		// not "inactive" — listing them here would tell the model to
-		// activate_tools for a tool it can already see. A group all of whose
-		// tools are essential drops out of the note entirely.
-		if g == CoreToolGroup || active[g] || ToolEssential(t) {
-			continue
-		}
-		byGroup[g] = append(byGroup[g], name)
-	}
-	if len(byGroup) == 0 {
-		return nil, nil
-	}
-	groups := make([]string, 0, len(byGroup))
-	for g := range byGroup {
-		groups = append(groups, g)
-	}
-	sort.Strings(groups)
-	return groups, byGroup
-}
-
-// SetSystem swaps the system prompt under the agent's lock — the live twin of
-// SetTools for view rebuilds (an approval-mode or auto-swarm toggle, a
-// reloaded extension's context). The run loop pins both at turn start, so a
-// mid-turn swap affects the next turn only (same contract as SetTools).
-// Reports whether the prompt actually changed, for the same cache-breaking
-// notification purpose as SetTools.
-func (a *Agent) SetSystem(system string) (changed bool) {
-	a.mu.Lock()
-	changed = a.System != system
-	a.System = system
-	a.mu.Unlock()
-	return changed
-}
-
-// SetContextProvider swaps the per-turn context provider live (the turn loop
-// reads it under a.mu). Used to re-wire lore after an edit so the next turn sees
-// the change without a new session.
-func (a *Agent) SetContextProvider(fn func() string) {
-	a.mu.Lock()
-	a.ContextProvider = fn
-	a.mu.Unlock()
-}
-
-// SetContextProviderPeek swaps the side-effect-free context preview (the twin of
-// ContextProvider used by the /context size view) live, so a host reloading lore
-// keeps the preview in sync with the provider — otherwise /context would size
-// stale lore after an edit.
-func (a *Agent) SetContextProviderPeek(fn func() string) {
-	a.mu.Lock()
-	a.ContextProviderPeek = fn
-	a.mu.Unlock()
-}
-
 // ToolsSnapshot returns the live tool registry under the lock SetTools writes
 // with, so a reader on another goroutine (e.g. the web /context view, which can
 // run while an extension/MCP toggle calls SetTools) never races the swap.
@@ -1255,25 +679,40 @@ func (a *Agent) SetContextProviderPeek(fn func() string) {
 func (a *Agent) ToolsSnapshot() Registry {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.Tools
+	return a.tools
 }
 
-// ContextPreview renders the per-turn ephemeral context for a size/inspection
-// view WITHOUT side effects. It snapshots the provider function under the lock
-// SetContextProvider writes with (avoiding a race with a live lore/trust reload),
-// then calls it OUTSIDE the lock since the closure may touch the agent. Prefers
-// the side-effect-free Peek twin; empty when neither is set.
-func (a *Agent) ContextPreview() string {
-	a.mu.Lock()
-	fn := a.ContextProviderPeek
-	if fn == nil {
-		fn = a.ContextProvider
+// Assembler returns the ContextAssembler the agent was built with, so a host
+// that keeps state in its own assembler can find it again from the agent.
+func (a *Agent) Assembler() ContextAssembler { return a.assembler }
+
+// FramePreview is the frame the next request would carry, assembled with
+// AssemblePeek: the same segments, none of the per-request side effects. A size
+// or inspection view such as /context reads it. It calls the assembler outside
+// the agent's lock, since an assembler may read the agent.
+func (a *Agent) FramePreview() Frame { return a.assemble(AssemblePeek) }
+
+// deliverTail tells an assembler that implements TailDeliveryObserver which
+// blocks a request carried.
+func (a *Agent) deliverTail(tail []TailBlock) {
+	d, ok := a.assembler.(TailDeliveryObserver)
+	if !ok {
+		return
 	}
-	a.mu.Unlock()
-	if fn == nil {
-		return ""
+	ids := make([]string, len(tail))
+	for i, b := range tail {
+		ids[i] = b.ID
 	}
-	return fn()
+	d.TailDelivered(ids)
+}
+
+// assemble asks the host's assembler for a frame. A nil assembler is an empty
+// frame.
+func (a *Agent) assemble(mode AssembleMode) Frame {
+	if a.assembler == nil {
+		return Frame{}
+	}
+	return a.assembler.Assemble(mode)
 }
 
 // LookupTool returns the tool registered under name in the live
@@ -1283,7 +722,7 @@ func (a *Agent) ContextPreview() string {
 func (a *Agent) LookupTool(name string) (Tool, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	t, ok := a.Tools[name]
+	t, ok := a.tools[name]
 	return t, ok
 }
 
@@ -1306,7 +745,7 @@ func (a *Agent) SetMessages(msgs []provider.Message) {
 // load time — after any batch of edits — and running it here would drop messages
 // and shift indices out from under a following edit, breaking the invariant that
 // a reloaded transcript equals the live one. Persisting the edit (an amend row
-// via Session.AppendAmend) is the caller's responsibility.
+// via session.Session.AppendAmend) is the caller's responsibility.
 func (a *Agent) ReplaceMessage(idx int, msg provider.Message) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1362,7 +801,7 @@ func (a *Agent) TruncateTo(idx int) bool {
 func (a *Agent) SetModel(model string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.Model = model
+	a.model = model
 	a.refreshMaxTokensLocked()
 }
 
@@ -1376,8 +815,8 @@ func (a *Agent) SetModel(model string) {
 // field, so a swap to a model missing from the catalog leaves the previous
 // working budget untouched rather than zeroing it. Caller holds a.mu.
 func (a *Agent) refreshMaxTokensLocked() {
-	if m, err := provider.FindModel("", a.Model); err == nil && m.MaxOutput > 0 {
-		a.MaxTokens = m.MaxOutput
+	if m, err := a.Catalog().FindModel("", a.model); err == nil && m.MaxOutput > 0 {
+		a.maxTokens = m.MaxOutput
 	}
 }
 
@@ -1388,11 +827,11 @@ func (a *Agent) refreshMaxTokensLocked() {
 func (a *Agent) SetReasoning(level string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.Reasoning = level
+	a.reasoning = level
 	// A runtime set is an explicit user choice (the settings "reasoning"
 	// control), so it wins over any per-model DefaultReasoning from here on —
 	// including when level is "" (the user chose off).
-	a.ReasoningSet = true
+	a.reasoningSet = true
 }
 
 // ClearReasoning drops an explicit level so the per-model DefaultReasoning
@@ -1411,8 +850,8 @@ func (a *Agent) SetReasoning(level string) {
 func (a *Agent) ClearReasoning() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.Reasoning = ""
-	a.ReasoningSet = false
+	a.reasoning = ""
+	a.reasoningSet = false
 }
 
 // SetReasoningSummary switches reasoning-summary persistence live ("" = off).
@@ -1421,14 +860,24 @@ func (a *Agent) ClearReasoning() {
 func (a *Agent) SetReasoningSummary(mode string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.ReasoningSummary = mode
+	a.reasoningSummary = mode
 }
 
 // SetShowReasoning switches live reasoning display on or off for the next turn.
 func (a *Agent) SetShowReasoning(on bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.ShowReasoning = on
+	a.showReasoning = on
+}
+
+// SetAsker sets the channel the engine asks the user through, for a host that
+// learns it only after construction, such as rpc once its client says it can
+// answer questions. A host that knows it at construction passes WithAsker.
+// Nil means nobody to ask.
+func (a *Agent) SetAsker(ask Asker) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.asker = ask
 }
 
 // reasoningSummaryRequest is the value that rides the provider request: the
@@ -1571,76 +1020,56 @@ func dropUnrecordableThinking(m provider.Message) provider.Message {
 func (a *Agent) SetClientAndModel(client provider.Client, model string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.Client = client
-	a.Model = model
+	a.client = client
+	a.model = model
 	a.refreshMaxTokensLocked()
 }
 
-// Usage returns the current provider client's subscription usage
-// snapshot (5h/weekly windows, credits), with ok=false when the
-// provider reports none. It probes the live a.Client through any
-// wrapper layers, so a SetClientAndModel swap to a different provider
-// transparently surfaces the new provider's reporter (or none).
-func (a *Agent) Usage() (provider.UsageSnapshot, bool) {
+// Client returns the provider client the next turn sends with. It reads under
+// the lock SetClientAndModel writes with, so a side request on another
+// goroutine never races a swap. A host that shows subscription usage or
+// redeems a reset passes it to provider.ClientUsage and its siblings, which
+// see through wrapper layers.
+func (a *Agent) Client() provider.Client {
 	a.mu.Lock()
-	c := a.Client
-	a.mu.Unlock()
-	return provider.ClientUsage(c)
+	defer a.mu.Unlock()
+	return a.client
 }
 
-// RefreshUsage pulls a fresh usage snapshot, fetching from the provider's
-// usage/balance endpoint when it has one (OpenRouter, DeepSeek) and otherwise
-// returning the passively-observed snapshot (codex). It BLOCKS on the fetch,
-// so callers must run it off the UI goroutine.
-func (a *Agent) RefreshUsage(ctx context.Context) (provider.UsageSnapshot, bool) {
+// Model returns the model id the next turn requests, under the lock SetModel
+// and SetClientAndModel write with.
+func (a *Agent) Model() string {
 	a.mu.Lock()
-	c := a.Client
-	a.mu.Unlock()
-	return provider.ClientRefreshUsage(ctx, c)
+	defer a.mu.Unlock()
+	return a.model
 }
 
-// UsageRefreshable reports whether the current provider fetches its usage from
-// an endpoint — i.e. /usage should refresh in the background and show a
-// loading state rather than rendering instantly from headers.
-func (a *Agent) UsageRefreshable() bool {
+// Reasoning returns the reasoning level and whether one was chosen. With set
+// false the model's own default applies, whatever level says. With set true
+// an empty level means the user chose off.
+func (a *Agent) Reasoning() (level string, set bool) {
 	a.mu.Lock()
-	c := a.Client
-	a.mu.Unlock()
-	return provider.ClientNeedsUsageFetch(c)
+	defer a.mu.Unlock()
+	return a.reasoning, a.reasoningSet
 }
 
-// SupportsResets reports whether the current provider exposes consumable usage
-// resets (codex banked resets) — the gate for offering a /resets affordance.
-// It probes the live a.Client through wrapper layers, so a SetClientAndModel
-// swap surfaces the new provider's capability.
-func (a *Agent) SupportsResets() bool {
+// ReasoningSummary returns the reasoning-summary mode, "" for off.
+func (a *Agent) ReasoningSummary() string {
 	a.mu.Lock()
-	c := a.Client
-	a.mu.Unlock()
-	return provider.ClientSupportsResets(c)
+	defer a.mu.Unlock()
+	return a.reasoningSummary
 }
 
-// ListResets returns the provider's usage-reset credits (available and spent),
-// or nil when the provider offers none. It BLOCKS on the provider's endpoint,
-// so callers must run it off the UI goroutine.
-func (a *Agent) ListResets(ctx context.Context) ([]provider.UsageReset, error) {
+// Asker returns the channel the engine asks the user through, or nil when
+// there is nobody to ask. A component that asks on the engine's behalf, such
+// as the stuck-loop detector, reads it here.
+func (a *Agent) Asker() Asker {
 	a.mu.Lock()
-	c := a.Client
-	a.mu.Unlock()
-	return provider.ClientListResets(ctx, c)
+	defer a.mu.Unlock()
+	return a.asker
 }
 
-// ConsumeReset redeems one reset credit by id. It is IRREVERSIBLE and spends a
-// scarce, provider-granted credit, so callers MUST gate it behind explicit user
-// confirmation. It BLOCKS on the provider's endpoint.
-func (a *Agent) ConsumeReset(ctx context.Context, id string) (provider.UsageResetResult, error) {
-	a.mu.Lock()
-	c := a.Client
-	a.mu.Unlock()
-	return provider.ClientConsumeReset(ctx, c, id)
-}
-
-// Cost returns the cumulative usage. The CostTracker carries its own
+// Cost returns the cumulative usage. The cost tracker carries its own
 // lock so this is safe to call concurrently with a running turn, which
 // folds usage in from the stream goroutine.
 func (a *Agent) Cost() provider.Usage {
@@ -1670,7 +1099,8 @@ func (a *Agent) SeedLastTurnUsage(u provider.Usage) {
 
 // RecentUsage returns the tail of per-response usage records, oldest first —
 // the cache strip's data. Empty until this agent has run a request, including
-// on a resumed session; see CostTracker.recent for why it is not rehydrated.
+// on a resumed session: the tracker keeps no durable record of the tail to
+// rehydrate it from.
 func (a *Agent) RecentUsage() []provider.Usage {
 	return a.cost.RecentUsage()
 }
@@ -1697,19 +1127,16 @@ func (a *Agent) RecentUsage() []provider.Usage {
 // costs. Firing the side-channel observers is what persists the row, so the
 // session file gains one line per call, marked.
 //
-// Falls back to the plain usage observers when no side-channel observer is
-// registered, so a host that never wired the marked row still books the spend
-// as it always did: an unmarked row is a lesser defect than money missing
-// from the ledger.
+// There is no fallback to the plain usage observers. It existed for a host that
+// registered a plain usage observer and no marked one; both are now registered
+// together, by AttachTranscriptStore, so that host can no longer exist.
 func (a *Agent) RecordSideChannelUsage(source string, u provider.Usage) {
 	if u == (provider.Usage{}) {
 		return
 	}
 	a.cost.AddSideChannel(u)
 	cum := a.cost.CumulativeTotal()
-	if !a.fireSideChannelUsage(source, u, cum) {
-		a.fireUsage(u, cum)
-	}
+	a.fireSideChannelUsage(source, u, cum)
 }
 
 // SideChannelCost returns the part of the cumulative total that the host's
@@ -1727,7 +1154,7 @@ func (a *Agent) SideChannelCost() provider.Usage {
 // was computed and then discarded at the process boundary.
 //
 // Booked as delegated rather than as the session's own, so the two stay
-// distinguishable — see CostTracker.AddDelegated. Callers must pass a
+// distinguishable. Callers must pass a
 // CUMULATIVE-TO-DELTA value: a child reports its running total, so a caller
 // watching one must book the increment, not the total, or a chatty child is
 // counted once per event it emits.
@@ -1790,13 +1217,13 @@ func withMeta(m map[string]string, key, value string) map[string]string {
 
 // Prompt starts a turn with the user's text and any inline images.
 func (a *Agent) Prompt(ctx context.Context, text string, images []provider.ImageBlock, sink func(AgentEvent)) error {
-	return a.PromptExtra(ctx, text, images, UserMessageExtras{}, sink)
+	return a.promptExtra(ctx, text, images, UserMessageExtras{}, sink)
 }
 
-// PromptExtra is Prompt with a host-assembled preamble and message metadata.
+// promptExtra is Prompt with a host-assembled preamble and message metadata.
 // See [UserMessageExtras]. Prompt is this with a zero value, so there is one
 // implementation and no twin to drift.
-func (a *Agent) PromptExtra(ctx context.Context, text string, images []provider.ImageBlock, extras UserMessageExtras, sink func(AgentEvent)) error {
+func (a *Agent) promptExtra(ctx context.Context, text string, images []provider.ImageBlock, extras UserMessageExtras, sink func(AgentEvent)) error {
 	release, ok := a.acquire()
 	if !ok {
 		return ErrBusy
@@ -1812,8 +1239,8 @@ func (a *Agent) PromptExtra(ctx context.Context, text string, images []provider.
 	// Consult the user-message guard before anything is recorded: a
 	// rejection must leave no trace in the transcript and start no turn.
 	// Skipped for an empty prompt (image-only submit — nothing to judge).
-	if a.BeforeUserMessage != nil && text != "" {
-		allowed, reason, replacement := a.BeforeUserMessage(text)
+	if a.beforeUserMessage != nil && text != "" {
+		allowed, reason, replacement := a.beforeUserMessage(text)
 		if !allowed {
 			if reason == "" {
 				reason = "message blocked by extension guard"
@@ -1849,12 +1276,6 @@ func (a *Agent) PromptExtra(ctx context.Context, text string, images []provider.
 		user.Meta = withMeta(user.Meta, MetaPreamble, "true")
 	}
 
-	// Anything a PREVIOUS prompt delivered is now genuinely spent: this one is
-	// the next request, so no withdrawal from here on can be talking about it.
-	// Without this the delivered slot outlives its turn and a withdrawal three
-	// prompts later would re-arm a shell result the model read long ago.
-	a.forgetDeliveredShell()
-
 	a.mu.Lock()
 	a.messages = append(a.messages, user)
 	a.rev++
@@ -1888,10 +1309,9 @@ func (a *Agent) PromptExtra(ctx context.Context, text string, images []provider.
 	if errors.Is(context.Cause(ctx), ErrUserInterrupted) {
 		if idx, ok := a.withdrawLastUserMessage(revAfterUser); ok {
 			// The prompt goes back to the composer, so anything it consumed on
-			// the way out has to go back too. A shell result is the only such
-			// thing today: taking back a mistyped question would otherwise cost
-			// the user the `!git status` they ran to ask it about.
-			a.restoreShellResult()
+			// the way out has to go back too. The engine consumed nothing a host
+			// owns; a host segment spent on this turn's requests (see
+			// TailDeliveryObserver) is restored by its owner on this event.
 			sink(EvUserMessageWithdrawn{Text: text, Images: images, Index: idx})
 		}
 	}
@@ -1942,32 +1362,6 @@ func (a *Agent) Continue(ctx context.Context, sink func(AgentEvent)) error {
 		sink = func(AgentEvent) {}
 	}
 	sink = a.wrapSink(sink)
-	return a.runLoop(ctx, sink)
-}
-
-// Advance runs one turn against the existing transcript with a request-scoped
-// stage cue on the ephemeral tail, so the model writes the NEXT beat rather than
-// extending what is already there. It is Stage's "▶ Advance": the scene moves on
-// without the user typing a line, and nothing but the model's own reply is
-// appended (unlike cast.speak / direct.turn, which persist a visible [Direction]
-// user message).
-//
-// The cue is load-bearing, not decoration. A scene may end in a run of authored
-// directed lines, which are assistant messages; the request would then end in an
-// assistant message, which Anthropic reads as a prefill to extend. See stageCue.
-// Single-flight like Prompt: ErrBusy if a run is already in progress.
-func (a *Agent) Advance(ctx context.Context, sink func(AgentEvent)) error {
-	release, ok := a.acquire()
-	if !ok {
-		return ErrBusy
-	}
-	defer release()
-	if sink == nil {
-		sink = func(AgentEvent) {}
-	}
-	sink = a.wrapSink(sink)
-	defer a.setStageCue(i18n.P("stage.advance.cue",
-		"[Advance] Continue the scene from where it stands. Write the next beat as the character(s) whose turn it plainly is — do not narrate for the user, do not restate what just happened, and do not begin mid-sentence."))()
 	return a.runLoop(ctx, sink)
 }
 
@@ -2048,7 +1442,7 @@ func (a *Agent) ContinueAssistant(ctx context.Context, sink func(AgentEvent)) er
 	a.mu.Lock()
 	n := len(a.messages)
 	trailingIsAssistant := n > 0 && a.messages[n-1].Role == provider.RoleAssistant
-	client := a.Client
+	client := a.client
 	a.mu.Unlock()
 	if !trailingIsAssistant {
 		return ErrNoAssistantToContinue
@@ -2090,7 +1484,7 @@ func (a *Agent) ConsumeContinueResult() (index int, merged provider.Message, ok 
 // extend a trailing assistant message (the turn.continue gate).
 func (a *Agent) ContinuesAssistantPrefill() bool {
 	a.mu.Lock()
-	c := a.Client
+	c := a.client
 	a.mu.Unlock()
 	return provider.ClientContinuesAssistantPrefill(c)
 }
@@ -2130,7 +1524,7 @@ func messageHasToolCall(m provider.Message) bool {
 	return false
 }
 
-// EmitLifecycle delivers a host-lifecycle event to the OnEvent observer
+// emitLifecycle delivers a host-lifecycle event to the OnEvent observer
 // (the extension fanout / hook engine) directly, independent of an active
 // Prompt. Host-driven compaction runs OUTSIDE the Prompt loop — callers
 // invoke Compact on their own — so its EvCompactStart/EvCompactEnd would
@@ -2139,7 +1533,7 @@ func messageHasToolCall(m provider.Message) bool {
 // extensions see compact_start / transcript_compacted. Nil-safe. (The
 // mid-turn auto-compact inside runLoop doesn't need it: its sink is already
 // the wrapped one.)
-func (a *Agent) EmitLifecycle(ev AgentEvent) {
+func (a *Agent) emitLifecycle(ev AgentEvent) {
 	for _, fn := range a.eventObservers() {
 		fn(ev)
 	}
@@ -2167,14 +1561,14 @@ func (a *Agent) wrapSink(sink func(AgentEvent)) func(AgentEvent) {
 // and the per-turn tool visibility — snapshotted once and threaded through
 // every step it covers. One pin spans one SEGMENT of the loop: the steps
 // between StopEnd boundaries (queued input, an at-close gate). A boundary
-// deliberately reuses the pin unchanged unless the ended segment activated a
-// tool group under activation continuation, in which case it refreshes
-// (repinForContinuation) so the continuation runs with the tools live —
-// docs/proposals/activation-continuation.md.
+// deliberately reuses the pin unchanged unless the ended segment grew the
+// advertisement and the visibility asked for a re-pin within the Prompt, in
+// which case it refreshes (repinForContinuation) so the continuation runs
+// with the tools live — docs/proposals/activation-continuation.md.
 type turnPin struct {
 	system   string
 	tools    Registry
-	turn     turnTools
+	visible  func(name string) bool // nil advertises every registered tool
 	readOnly *ReadOnlySet
 }
 
@@ -2189,9 +1583,13 @@ type turnPin struct {
 // it up. (The cache-free ephemeral tail and the growing transcript still
 // update per step — only the cached prefix is frozen.)
 func (a *Agent) pinTurn() turnPin {
+	// The Stable segments are read with a peek: the pin wants the prefix, and
+	// the per-request side effects belong to the request (oneTurn), which asks
+	// again. Outside a.mu, because the assembler may read the agent.
+	system := a.assemble(AssemblePeek).SystemText()
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return turnPin{system: a.System, tools: a.Tools, turn: a.turnToolsLocked(a.Tools), readOnly: a.ReadOnly.Snapshot()}
+	return turnPin{system: system, tools: a.tools, visible: a.advertiseLocked(a.tools, true), readOnly: a.readOnly.Snapshot()}
 }
 
 // fireContinuationGate consults the at-close gates in registration order and
@@ -2215,68 +1613,33 @@ func fireContinuationGate(gates []ContinuationGate, fires []int, stop provider.S
 	return "", "", false
 }
 
-// activationContinuationCap bounds the built-in activation gate's fires per
-// Prompt. Activation is monotonic (a group cannot be newly activated twice),
-// so continuation chains are structurally bounded by the group count and this
-// cap should never bind — defense in depth, deliberately a constant rather
-// than configuration (the proposal's Decisions).
-const activationContinuationCap = 3
-
-// activationGate builds the built-in activation continuation gate for one
-// runLoop. It is appended AFTER every host gate — registration order is
-// priority, and correctness gates (open work, the swarm hold) outrank the
-// convenience continuation. It fires when the ended segment newly activated a
-// tool group, so a model that deliberately finished its reply after
-// activate_tools is re-prompted with those tools actually live. pin is the
-// loop's live pin variable: the gate diffs against whatever pin is current at
-// that boundary, and the boundary then refreshes it (repinForContinuation).
-func (a *Agent) activationGate(pin *turnPin) ContinuationGate {
-	return ContinuationGate{
-		Cause: "activation",
-		Cap:   activationContinuationCap,
-		Fire: func(provider.StopReason) (string, bool) {
-			newly := a.newlyActiveSincePin(pin.turn.groups)
-			if len(newly) == 0 {
-				return "", false
-			}
-			return "[activation continuation] Now live: " + strings.Join(newly, ", ") + ". Continue where you left off.", true
-		},
-	}
-}
-
 // repinForContinuation refreshes the pin at a segment boundary when the ended
-// segment activated a tool group and activation continuation is on; otherwise
-// it returns the pin unchanged — the deliberate reuse the stage-0 contract
-// pinned. A refresh is one tools-array cache write, the same write the next
-// Prompt would have paid. It shares newlyActiveSincePin with the activation
-// gate so a fired gate's "now live" promise and the re-pin can never disagree.
-func (a *Agent) repinForContinuation(pin turnPin, enabled bool) turnPin {
-	if !enabled {
-		return pin
-	}
-	if len(a.newlyActiveSincePin(pin.turn.groups)) == 0 {
+// segment grew the advertisement and repin is on; otherwise it returns the pin
+// unchanged — the deliberate reuse the stage-0 contract pinned. A refresh is
+// one tools-array cache write, the same write the next Prompt would have paid.
+// Growth is asked against the live registry, because the boundary pins it.
+func (a *Agent) repinForContinuation(pin turnPin, vis ToolVisibility, repin bool) turnPin {
+	if !repin || !vis.Grew(a.ToolsSnapshot()) {
 		return pin
 	}
 	return a.pinTurn()
 }
 
-// repinActivatedVisibility is the immediate post-tool availability boundary: when
-// the tool batch just executed activated a group whose tools are in the PINNED
+// repinActivatedVisibility is the immediate post-tool availability boundary:
+// when the tool batch just executed grew the advertisement within the PINNED
 // registry, refresh only the visibility half of the pin so the very next model
-// step advertises them — instead of making the model finish its reply and wait
-// for the natural-stop activation gate. It preserves pin.system and pin.tools
-// (never importing an unrelated concurrent SetSystem/SetTools) and recomputes
-// pin.turn against pin.tools alone. A no-op unless a pinned group became newly
-// visible, so no activation means no cache write; activation is monotonic, so
-// each group dirties the pin at most once. The caller gates this on the
-// activation-continuation flag snapshotted at runLoop entry.
-func (a *Agent) repinActivatedVisibility(pin turnPin) turnPin {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if len(a.newlyActiveInLocked(pin.tools, pin.turn.groups)) == 0 {
+// step advertises the new tools, instead of making the model finish its reply
+// and wait for a continuation. It preserves pin.system and pin.tools (never
+// importing an unrelated concurrent frame change or SetTools). A no-op unless
+// the advertisement grew, so an ordinary tool call never writes the cache. The
+// caller gates this on the repin answer snapshotted at runLoop entry.
+func (a *Agent) repinActivatedVisibility(pin turnPin, vis ToolVisibility) turnPin {
+	if !vis.Grew(pin.tools) {
 		return pin
 	}
-	pin.turn = a.turnToolsLocked(pin.tools)
+	a.mu.Lock()
+	pin.visible = vis.Advertise(pin.tools, true)
+	a.mu.Unlock()
 	return pin
 }
 
@@ -2285,30 +1648,29 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 	if err := a.PersistenceError(); err != nil {
 		return err
 	}
+	// The visibility says once per Prompt whether a grown advertisement
+	// re-pins within it, so a live toggle takes effect on the NEXT Prompt and
+	// never mixes the immediate-refresh and the next-Prompt semantics within one.
+	vis := a.ToolVisibility()
+	repin := vis != nil && vis.BeginPrompt()
+
 	// One pin per segment; the whole Prompt is a single segment until a
 	// boundary refreshes it (repinForContinuation) — see pinTurn.
 	pin := a.pinTurn()
 
-	// Stuck-loop counting is scoped to this turn's tool-use steps: a repeat across
-	// turns is usually the user asking again, not the model stuck. reset keeps the
-	// one thing that reading does not explain — a signature that was still
-	// recurring when the last turn ended — so a loop spanning the boundary resumes
-	// its ladder rather than being handed a fresh budget.
-	a.stall.reset()
+	// The step gates, snapshotted per prompt like the observers, are told the
+	// prompt's loop is starting. A stuck-loop detector resets here
+	// (packages/core/stall).
+	stepGates := a.stepGateSnapshot()
+	beginStep(stepGates)
 
 	// The at-close continuation gates, snapshotted per Prompt like the
 	// observers, with per-gate fire counts enforcing each gate's Cap
 	// (default 1) — so a gate that always says "continue" can't loop the
-	// model forever. The built-in activation gate runs last: host
-	// correctness gates outrank the convenience continuation.
-	// Snapshot the activation-continuation setting once for the whole Prompt: a
-	// live toggle should take effect on the NEXT Prompt, never mix the
-	// immediate-refresh and natural-stop-gate semantics within one Prompt.
-	activationContinuation := a.ActivationContinuationEnabled()
+	// model forever. Fallback gates run after the others: host correctness
+	// gates outrank a convenience continuation such as lazy tools' activation
+	// gate.
 	gates := a.continuationGateSnapshot()
-	if activationContinuation {
-		gates = append(gates, a.activationGate(&pin))
-	}
 	gateFires := make([]int, len(gates))
 
 	// Mid-turn auto-compact hysteresis: after a compaction fires, the
@@ -2319,7 +1681,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 	// futile summarization on every subsequent step.
 	compactArmed := true
 
-	for step := 1; a.MaxSteps <= 0 || step <= a.MaxSteps; step++ {
+	for step := 1; a.maxSteps <= 0 || step <= a.maxSteps; step++ {
 		if err := a.PersistenceError(); err != nil {
 			return err
 		}
@@ -2346,16 +1708,17 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 		// condense here the moment it crosses the threshold. Step 1 is
 		// exempt: its fraction reading predates this turn (the pre-turn
 		// policy owns that boundary), and right after a pre-turn compact
-		// the reading is an estimate that must not double-fire. Gated on
-		// the `steps` mode — `turns` restores the boundary-only policy
-		// and `off` disables auto-compaction entirely.
-		if step > 1 && a.autoCompactMode() == AutoCompactSteps {
-			if a.ContextFraction() < AutoCompactThreshold {
+		// the reading is an estimate that must not double-fire. Whether to
+		// compact is the policy's (terva's `turns` mode says no here, and
+		// `off` says no everywhere); the step-1 exemption and the arming
+		// are mechanics, and stay here.
+		if step > 1 {
+			if d := a.decideCompaction(CompactMidTurn); !d.Compact {
 				compactArmed = true
-			} else if compactArmed && a.CanCompact(AutoCompactKeepTail) {
+			} else if compactArmed && a.canCompact(d.KeepTail) {
 				compactArmed = false
 				sink(EvCompactStart{Reason: "context near limit (mid-turn)"})
-				cres, cerr := a.compactMidTurn(ctx, AutoCompactKeepTail)
+				cres, cerr := a.compactMidTurn(ctx, d.KeepTail, d.Strategies)
 				if errors.Is(cerr, ErrNothingToCompact) {
 					cerr = nil
 				}
@@ -2374,10 +1737,10 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 		}
 
 		sink(EvTurnStart{Step: step})
-		if a.BeforeTurn != nil {
-			if allowed, reason := a.BeforeTurn(step); !allowed {
+		if a.beforeTurn != nil {
+			if allowed, reason := a.beforeTurn(step); !allowed {
 				if reason == "" {
-					reason = i18n.T("turn blocked by extension guard")
+					reason = i18n.In(a.translator).T("turn blocked by extension guard")
 				}
 				sink(EvTurnEnd{Stop: provider.StopError, Err: fmt.Errorf("%s", reason)})
 				sink(EvDone{})
@@ -2408,7 +1771,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 			if err := a.PersistenceError(); err != nil {
 				return err
 			}
-			stop, assistantMsg, commit, err = a.oneTurn(ctx, pin.system, pin.tools, pin.turn, sink)
+			stop, assistantMsg, commit, err = a.oneTurn(ctx, pin.system, pin.tools, pin.visible, sink)
 			sink(EvTurnEnd{Stop: stop, Err: err})
 			if err == nil {
 				break
@@ -2479,7 +1842,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 				Phase:    RetryPhaseTurn,
 				Provider: providerOf(err),
 				Attempt:  attempt + 1, // 1-based: the attempt that just failed
-				Max:      a.MaxRetries,
+				Max:      a.maxRetries,
 				Delay:    delay,
 				Err:      retryErrMsg(err),
 			}
@@ -2513,6 +1876,9 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 		if stop == provider.StopToolUse {
 			// Execute each tool call, append a single tool-results message, continue.
 			toolCtx := context.WithValue(ctx, toolGenerationKey{}, toolGeneration{agent: a, tools: pin.tools, readOnly: pin.readOnly})
+			// The tools see the prompt's step gates, the same set Begin and After
+			// use, so a tool's inner-call reports reach exactly those gates.
+			toolCtx = context.WithValue(toolCtx, stepGatesKey{}, stepGates)
 			toolMsg, hadError := a.executeTools(toolCtx, assistantMsg, pin.tools, sink)
 			a.mu.Lock()
 			a.messages = append(a.messages, toolMsg)
@@ -2536,14 +1902,14 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 			var imageMirror provider.Message
 			// Use the unwrapping helper: openai-responses is wrapped in
 			// a renamedClient (openai-responses), so a
-			// direct type assertion on a.Client would miss the capability.
+			// direct type assertion on a.client would miss the capability.
 			// The mirror additionally requires the model to accept image
 			// input at all — mirroring screenshots to a vision-less model
 			// wastes tokens at best and 400s at worst. Unknown models keep
 			// the capability's default (true), preserving old behavior.
-			mirrorImages := provider.ClientMirrorsToolImages(a.Client)
+			mirrorImages := provider.ClientMirrorsToolImages(a.client)
 			if mirrorImages {
-				if m, err := provider.FindModel("", a.Model); err == nil && !m.Has(provider.CapImageInput) {
+				if m, err := a.Catalog().FindModel("", a.model); err == nil && !m.Has(provider.CapImageInput) {
 					mirrorImages = false
 				}
 			}
@@ -2567,43 +1933,22 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 				sink(EvDone{})
 				return err
 			}
-			// Feed the just-completed step to the stuck-loop detector; a trip
-			// stages a one-turn nudge that the next oneTurn rides on the
-			// ephemeral tail (never the transcript). If the loop has persisted
-			// past the nudge, rung 3 may offer to escalate to a stronger model —
-			// and where it cannot (no Escalator, no configured target, nobody to
-			// consent, which between them are the default state) rung 2 speaks
-			// once more instead of leaving the loop unremarked. A user-chosen
-			// "stop" ends the turn cleanly; an escalation continues the loop on
-			// the new model with a handoff marker staged.
-			if a.stallDetectionOn() {
-				for _, ev := range a.stall.observe(assistantMsg, toolMsg) {
-					rec := StallRecord{Axis: ev.axis, Tool: ev.tool, Detail: ev.detail, Rung: 1}
-					a.fireStall(rec)                // durable: the session row
-					sink(EvStall{StallRecord: rec}) // live: UI + extension observers
-				}
-				if a.maybeEscalate(ctx, sink) {
-					sink(EvDone{})
-					return nil
-				}
-				// And when even refusing to run the call did not break it, the
-				// turn ends. Checked after escalation so a swap still wins: the
-				// incoming model is pardoned there and gets its own strikes.
-				if a.stallGiveUp(sink) {
-					sink(EvDone{})
-					return nil
-				}
+			// The step gates see the batch that just ran, and one may end the
+			// turn: the stuck-loop detector's escalation "stop" and its give-up
+			// rung both do (packages/core/stall).
+			if afterStep(ctx, stepGates, StepState{Assistant: assistantMsg, Results: toolMsg}, sink) {
+				sink(EvDone{})
+				return nil
 			}
 			_ = hadError
-			// Immediate tool activation: if this tool batch activated a group,
-			// advertise its tools on the very NEXT model step rather than waiting
-			// for the model to stop and the natural-stop activation gate to fire.
-			// Visibility-only against the pinned registry (repinActivatedVisibility)
-			// — a no-op unless a pinned group became newly visible, so it never
-			// churns the cache on an ordinary tool call. The gate stays as the
-			// fallback for a group activated OFF the tool path (host-side/async).
-			if activationContinuation {
-				pin = a.repinActivatedVisibility(pin)
+			// Immediate re-advertisement: if this tool batch grew the
+			// advertisement (a lazy-tools activation, say), advertise the new
+			// tools on the very NEXT model step rather than waiting for the model
+			// to stop and a continuation gate to fire. Visibility-only against the
+			// pinned registry (repinActivatedVisibility), and a no-op unless the
+			// set grew, so it never churns the cache on an ordinary tool call.
+			if repin {
+				pin = a.repinActivatedVisibility(pin, vis)
 			}
 			continue
 		}
@@ -2613,10 +1958,10 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 		// is appended and answered instead of waiting until a later
 		// top-level prompt. This is a segment boundary: real input
 		// outranks any gate (no synthetic nudge is injected), and the pin
-		// refreshes only when the ended segment activated a tool group —
+		// refreshes only when the ended segment grew the advertisement —
 		// otherwise it is deliberately reused.
 		if ctx.Err() == nil && a.QueuedMessageCount() > 0 {
-			pin = a.repinForContinuation(pin, activationContinuation)
+			pin = a.repinForContinuation(pin, vis, repin)
 			continue
 		}
 
@@ -2627,15 +1972,15 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 		// respond. Registration order is priority order — the first gate
 		// that fires wins the boundary, the rest wait for the next
 		// natural stop — and each gate is capped per Prompt (Cap,
-		// default 1). Also a segment boundary: the pin refreshes only
-		// when the ended segment activated a tool group, so an activation
-		// gate's continuation (and any other gate's, incidentally) runs
-		// with the new tools live.
+		// default 1), with Fallback gates last. Also a segment boundary:
+		// the pin refreshes only when the ended segment grew the
+		// advertisement, so an activation gate's continuation (and any
+		// other gate's, incidentally) runs with the new tools live.
 		if ctx.Err() == nil && stop == provider.StopEnd {
 			if nudge, cause, ok := fireContinuationGate(gates, gateFires, stop); ok {
 				sink(EvContinuation{Cause: cause})
 				a.appendQueuedAsUser([]string{nudge}, true, sink)
-				pin = a.repinForContinuation(pin, activationContinuation)
+				pin = a.repinForContinuation(pin, vis, repin)
 				continue
 			}
 		}
@@ -2644,9 +1989,9 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 		sink(EvDone{})
 		return nil
 	}
-	if a.MaxSteps > 0 {
+	if a.maxSteps > 0 {
 		sink(EvDone{})
-		return i18n.Errorf("max steps (%d) exceeded", a.MaxSteps)
+		return i18n.In(a.translator).Errorf("max steps (%d) exceeded", a.maxSteps)
 	}
 	return nil
 }
@@ -2661,7 +2006,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 // matched. Untyped errors from custom SDK clients no longer retry;
 // returning *provider.ProviderError is the documented opt-in.
 func (a *Agent) canRetryError(err error, attempt int) bool {
-	if err == nil || a.MaxRetries <= 0 || attempt >= a.MaxRetries {
+	if err == nil || a.maxRetries <= 0 || attempt >= a.maxRetries {
 		return false
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -2693,7 +2038,7 @@ func isNonRetryableProviderLimit(msg string) bool {
 	return false
 }
 
-// MaxRetryDelay caps a single backoff wait, and with the default base and
+// maxRetryDelay caps a single backoff wait, and with the default base and
 // ceiling it is the LAST wait the agent takes before giving up: 2s, 4s, 8s,
 // 16s, 32s, 60s.
 //
@@ -2707,27 +2052,27 @@ func isNonRetryableProviderLimit(msg string) bool {
 //
 // The tail is the expensive part on purpose: the early waits stay short so an
 // ordinary transport blip still recovers in seconds.
-const MaxRetryDelay = 60 * time.Second
+const maxRetryDelay = 60 * time.Second
 
 // retryDelay returns the wait before retry attempt n. A server-stated
 // Retry-After wins over the default exponential backoff. Both are capped at
-// MaxRetryDelay, so a hostile or misconfigured header can't stall the turn for
+// maxRetryDelay, so a hostile or misconfigured header can't stall the turn for
 // longer than terva would wait on its own judgement.
 func (a *Agent) retryDelay(attempt int, err error) time.Duration {
 	var pe *provider.ProviderError
 	if errors.As(err, &pe) && pe.RetryAfter > 0 {
-		return min(pe.RetryAfter, MaxRetryDelay)
+		return min(pe.RetryAfter, maxRetryDelay)
 	}
-	base := a.RetryBaseDelay
+	base := a.retryBaseDelay
 	if base <= 0 {
 		base = 2 * time.Second
 	}
 	// Shift-guard: attempt is bounded by MaxRetries, but a host is free to set
 	// that to anything, and 1<<64 is not a long wait — it is zero.
 	if attempt >= 32 {
-		return MaxRetryDelay
+		return maxRetryDelay
 	}
-	return min(base*time.Duration(1<<attempt), MaxRetryDelay)
+	return min(base*time.Duration(1<<attempt), maxRetryDelay)
 }
 
 // providerOf and retryErrMsg pull the two things a retry notice needs out of
@@ -2756,11 +2101,6 @@ func retryErrMsg(err error) string {
 	}
 	return err.Error()
 }
-
-// imageRejectedNote replaces an image the provider refused to accept. It tells
-// the model (and, on resume, the reader) why the picture is gone, in place of
-// the bytes that broke the turn.
-const imageRejectedNote = "[image omitted: the model's provider rejected it as an invalid or unreadable image]"
 
 // foreignCompactionNote stands in for a compaction blob the live provider
 // cannot replay.
@@ -2867,14 +2207,6 @@ func isImageRejectionError(err error) bool {
 // Real transcripts carry far fewer live images than this.
 const maxImageRecoveryRounds = 16
 
-// imageSHA256 is the content address of an image's raw bytes — the key an
-// exclude_image directive matches on, so one directive drops every copy of the
-// image (tool result + codex mirror) regardless of position.
-func imageSHA256(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
-}
-
 // neutralizeLastTranscriptImage replaces the single most-recent ImageBlock in
 // the transcript — scanning from the end, including an image nested in a tool
 // result — with a short text note, returning its content sha256 and whether one
@@ -2891,16 +2223,16 @@ func (a *Agent) neutralizeLastTranscriptImage() (sha string, ok bool) {
 		for ci := len(content) - 1; ci >= 0; ci-- {
 			switch v := content[ci].(type) {
 			case provider.ImageBlock:
-				h := imageSHA256(v.Data)
-				content[ci] = provider.TextBlock{Text: imageRejectedNote}
+				h := transcriptcodec.ImageSHA256(v.Data)
+				content[ci] = provider.TextBlock{Text: transcriptcodec.ImageRejectedNote}
 				a.rev++
 				a.transcriptEpoch++
 				return h, true
 			case provider.ToolResultBlock:
 				for ii := len(v.Content) - 1; ii >= 0; ii-- {
 					if ib, isImg := v.Content[ii].(provider.ImageBlock); isImg {
-						h := imageSHA256(ib.Data)
-						v.Content[ii] = provider.TextBlock{Text: imageRejectedNote}
+						h := transcriptcodec.ImageSHA256(ib.Data)
+						v.Content[ii] = provider.TextBlock{Text: transcriptcodec.ImageRejectedNote}
 						content[ci] = v
 						a.rev++
 						a.transcriptEpoch++
@@ -2948,7 +2280,7 @@ func (a *Agent) dropLastAssistantMessage() {
 // [MetaIncomplete] on the message before it is persisted. Only the caller can
 // supply it: oneTurn cannot tell a retryable failure from a final one, and this
 // closure runs for the final one alone.
-func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt turnTools, sink func(AgentEvent)) (provider.StopReason, provider.Message, func(incomplete bool), error) {
+func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, visible func(name string) bool, sink func(AgentEvent)) (provider.StopReason, provider.Message, func(incomplete bool), error) {
 	// system and tools are PINNED by runLoop for the whole user turn (see
 	// the snapshot there) so a mid-turn host swap can't evict the prompt
 	// cache between steps. The remaining request fields are read per step
@@ -2957,16 +2289,15 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 	// would race those writes. Take a consistent picture of those plus a
 	// copy of the transcript while we hold the lock.
 	a.mu.Lock()
-	model := a.Model
-	reasoning := a.Reasoning
-	reasoningSet := a.ReasoningSet
-	reasoningSummary := a.ReasoningSummary
-	showReasoning := a.ShowReasoning
-	maxTokens := a.MaxTokens
-	temperature := a.Temperature
-	imageOutput := a.ImageOutput
-	client := a.Client
-	contextProvider := a.ContextProvider
+	model := a.model
+	reasoning := a.reasoning
+	reasoningSet := a.reasoningSet
+	reasoningSummary := a.reasoningSummary
+	showReasoning := a.showReasoning
+	maxTokens := a.maxTokens
+	temperature := a.temperature
+	imageOutput := a.imageOutput
+	client := a.client
 	cacheKey := a.cacheID
 	continuePrefill := a.continuePrefill
 	stageCue := a.stageCue
@@ -2980,7 +2311,7 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 	// provider — the capability is provider-specific (only the Responses/codex
 	// path implements it), and an id can exist under more than one provider.
 	if imageOutput != nil {
-		if m, err := provider.FindModel(client.Name(), model); err != nil || !m.Has(provider.CapImageOutput) {
+		if m, err := a.Catalog().FindModel(client.Name(), model); err != nil || !m.Has(provider.CapImageOutput) {
 			imageOutput = nil
 		}
 	}
@@ -3000,23 +2331,22 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 	// reads continuous and is missing half its history.
 	msgs = replaceForeignCompactions(msgs, client.Name())
 
-	// Pull host ephemeral context (e.g. an extension's live task card)
-	// outside the lock; it rides the request only, never the transcript.
-	// Called even on a continue turn, whose tail is discarded, because the
-	// provider closure is the host's and may have side effects of its own.
-	var hostContext string
-	if contextProvider != nil {
-		hostContext = contextProvider()
-	}
+	// Ask the host for this request's frame outside the lock; its Volatile
+	// segments ride the request only, never the transcript. The Stable ones are
+	// ignored here: the prefix is the one pinned for the segment (system), so a
+	// host changing it mid-turn cannot evict the cache under a running tool
+	// loop. Asked even on a continue turn, whose tail is discarded, because the
+	// assembler is the host's and may have side effects of its own.
+	host := a.assemble(AssembleRequest).Volatile()
 
-	// The ephemeral tail: host context, the inactive-tool inventory, the
-	// context-pressure note, the stuck-loop nudge, a Stage cue — everything
+	// The ephemeral tail: host context (its Volatile segments carry the
+	// component notes, such as the stuck-loop nudge), a Stage cue — everything
 	// appended after the prompt-cache breakpoint. Composed as identified blocks
 	// (see tail.go) rather than concatenated here, so recordTail below can say
 	// WHICH of them the model was shown without re-deriving the assembly, and so
 	// this and any other renderer of the tail cannot drift apart.
-	tail := a.composeTail(tt, hostContext, stageCue, continuePrefill)
-	ephemeral := TailText(tail)
+	tail := a.composeTail(host, stageCue, continuePrefill)
+	ephemeral := tailText(tail)
 
 	req := provider.Request{
 		Model:  model,
@@ -3029,12 +2359,12 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 		// next in-process request is rejected by providers like Anthropic
 		// with "tool_use ids were found without tool_result blocks". The
 		// repair is pure and a no-op on already-valid transcripts.
-		Messages: repairToolUseResultPairs(msgs),
+		Messages: transcriptcodec.RepairToolUseResultPairs(msgs),
 		// SpecsVisible advertises only the tools the pinned visibility predicate
 		// admits (nil = all, today's behavior). Dispatch and the permission gate
 		// still resolve the full `tools` registry (runOneTool below), so hiding a
 		// tool here never affects callability or authority (retro H2·b).
-		Tools:            tools.SpecsVisible(tt.visible),
+		Tools:            tools.SpecsVisible(visible),
 		Reasoning:        reasoning,
 		ReasoningSet:     reasoningSet,
 		ReasoningSummary: reasoningSummaryRequest(reasoningSummary, showReasoning),
@@ -3047,13 +2377,6 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 		// children) stop evicting each other's cached prefixes. Empty
 		// (live-only agents) sends nothing — today's behavior.
 		PromptCacheKey: cacheKey,
-		// Where a provider that writes a generated file should put it.
-		// Gemini returns images as inline base64 and saves them to disk; the
-		// save joined against the PROCESS cwd, which terva never changes, so
-		// `terva --cwd ~/project` run from elsewhere dropped its images in
-		// the launch directory. Empty (an embedder that never sets CWD)
-		// keeps the old behavior.
-		WorkingDir: a.CWD,
 	}
 	if err := a.PersistenceError(); err != nil {
 		return provider.StopError, provider.Message{}, nil, err
@@ -3069,42 +2392,21 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 	// moment, and this then becomes the only record of what is actually cached.
 	a.recordDispatch(client, req)
 
-	// Locate any prefix divergence from the previous dispatch. Placed beside
+	// Tell the dispatch observers what went on the wire. Placed beside
 	// recordDispatch because both answer "what did we just put on the wire",
-	// and both must see the request as sent rather than as intended.
-	a.watchPrefix(req, req.Messages)
-
-	// The request landed, so any stuck-loop nudge it carried has been delivered:
-	// drop it so it rides exactly one dispatch, not every subsequent step.
-	// Unconditional, unlike the capability note below, and the asymmetry is
-	// deliberate: a nudge lives for one TURN (runLoop resets the tracker at every
-	// turn boundary), so the suppressed-tail case cannot arise — a continue turn
-	// starts with an empty pending and arms nothing, and clearing an empty one is
-	// a no-op. Gating it here would imply a hazard that does not exist.
-	a.stall.clearNudge()
-
-	// The inactive-group inventory has now been shown once more, and decays to
-	// its one-line form after a few dispatches. Gated on the tail actually having
-	// carried it, because this counter DOES span turns: a continue turn
-	// suppresses the whole tail, and marking the note delivered there would spend
-	// the verbose run on requests the model never saw it in — decaying the
-	// inventory to one line before it had ever been read in full.
-	if tailHas(tail, TailCapabilityFull, TailCapabilityBrief) {
-		a.commitCapabilityNote(tt)
+	// and both must see the request as sent rather than as intended. The same
+	// snapshot hears this request's stream below.
+	dispatchObs := a.dispatchObservers()
+	for _, o := range dispatchObs {
+		if o.Sent != nil {
+			o.Sent(req)
+		}
 	}
 
-	// Advance the context-warning cadence. Driven off what the tail ACTUALLY
-	// carried rather than by re-deciding, so the bookkeeping cannot disagree
-	// with what the model was shown — and so a continue turn, which suppresses
-	// the whole tail, counts as "not delivered" instead of silently spending
-	// the interval.
-	a.commitContextPressure(tailHas(tail, TailPressure))
-
-	// The shell result has now been shown once, which is all it gets. Gated on
-	// what the tail CARRIED for the capability note's reason: a continue turn
-	// suppresses the whole tail, and spending the result there would burn it on
-	// a request the model never saw it in.
-	a.commitShellResult(tailHas(tail, TailShellResult))
+	// Tell the host's assembler what this request carried, for a Volatile
+	// segment that is shown once. From the tail as composed, so a continue turn,
+	// which suppresses it, reports nothing.
+	a.deliverTail(tail)
 
 	// Record what the model was shown, if it differs from last time. The tail is
 	// otherwise unauditable — composed per request and discarded — which left a
@@ -3134,19 +2436,21 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 			sink(EvToolUseArgs{ID: e.ID, Delta: e.Delta})
 		case provider.EventToolEnd:
 			sink(EvToolUseEnd{ID: e.ID})
-		case provider.EventTransport:
-			if a.TransportRecordingEnabled() {
-				a.fireTransport(e.Info)
-			}
 		case provider.EventUsage:
 			cum := a.cost.Add(e.Usage)
 			sink(EvUsage{Usage: e.Usage, Cumulative: cum})
 			a.fireUsage(e.Usage, cum)
-			a.observeDispatchCache(e.Usage)
 		case provider.EventDone:
 			stop = e.Stop
 			finalErr = e.Err
 			finalMsg = e.Message
+		}
+		// After the engine has acted on the event, so a row it writes for the
+		// event lands first: a cache-cliff row follows the usage row it reads.
+		for _, o := range dispatchObs {
+			if o.Event != nil {
+				o.Event(ev)
+			}
 		}
 	}
 
@@ -3195,10 +2499,10 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, tt t
 		// rewrite the visible text. The transcript keeps the
 		// model's original output so the model still sees what it
 		// said on subsequent turns.
-		if a.BeforeAssistantMessage != nil {
+		if a.beforeAssistantMessage != nil {
 			orig := extractText(finalMsg)
 			if orig != "" {
-				allowed, _, replacement := a.BeforeAssistantMessage(orig)
+				allowed, _, replacement := a.beforeAssistantMessage(orig)
 				if !allowed {
 					suppress = true
 				} else if replacement != "" && replacement != orig {
@@ -3387,8 +2691,8 @@ func abortedToolResult(why string) ToolResult {
 func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, tools Registry, sink func(AgentEvent)) ToolResult {
 	ctx = ContextWithAgent(ctx, a)
 	// Name the call being executed, so a tool that calls back into the host can
-	// attribute those inner calls to it (stall_inner.go). The early returns below
-	// (cancelled, refused, unknown tool, unparseable args) dispatch nothing, so
+	// attribute those inner calls to it (ReportInnerCall). The early returns below
+	// (cancelled, unknown tool, unparseable args, refused) dispatch nothing, so
 	// they make no inner calls and carry nothing to attribute.
 	ctx = contextWithOuterCall(ctx, tc.ID)
 	// A cancelled turn dispatches nothing further. Tools receive ctx, but a
@@ -3398,29 +2702,8 @@ func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, tools
 	if ctx.Err() != nil {
 		return abortedToolResult("the turn was cancelled before this tool call started")
 	}
-	// The stuck-loop detector's last rung before the turn ends: a call it has
-	// already proved redundant is answered without being run. Placed ahead of the
-	// registry lookup because the claim being made is "this call is not
-	// dispatched", which is true whether or not the tool still exists.
-	//
-	// Every earlier rung is a note the model may agree with and ignore; this one
-	// changes the RESULT, which is the only channel a determined loop is still
-	// reading. The tracker is turn-goroutine state and this is the turn goroutine
-	// (executeTools runs the calls in order), so it needs no lock — the same
-	// reason observe() does not.
-	if a.stallDetectionOn() {
-		if reason, refused := a.stall.refuse(tc); refused {
-			rec := StallRecord{Axis: stallAxisSpin, Tool: tc.Name, Rung: 3}
-			a.fireStall(rec)
-			sink(EvStall{StallRecord: rec})
-			return ToolResult{
-				Content: []provider.Content{provider.TextBlock{Text: reason}},
-				IsError: true,
-			}
-		}
-	}
 	// Dispatch against the registry PINNED for this turn (passed down from
-	// runLoop), not a live read of a.Tools: the turn runs on its own
+	// runLoop), not a live read of a.tools: the turn runs on its own
 	// goroutine while the host may swap the registry from another (model
 	// swap, /reload-ext, an extension's set_withdrawn_tools). Using the
 	// pinned set both avoids that data race and keeps dispatch consistent
@@ -3452,14 +2735,25 @@ func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, tools
 
 	args := tc.Arguments
 
-	// Intercept hook: an extension or other guard can refuse the
-	// call before any side effect happens, OR rewrite the args
-	// seen by the tool. The model sees the reason as the tool
-	// error, learns from it, and (typically) proposes a different
-	// action; rewrites are invisible to the model (they apply only
-	// to the execution).
-	if a.BeforeToolExecute != nil {
-		allowed, reason, modified := a.BeforeToolExecute(ctx, tc)
+	// The gate: it can refuse the call before any side effect happens,
+	// OR rewrite the args seen by the tool. The model sees the reason as
+	// the tool error, learns from it, and (typically) proposes a different
+	// action; rewrites are invisible to the model (they apply only to the
+	// execution). It receives the tool resolved above, from the registry
+	// pinned for this turn, so it can describe the call without reaching
+	// back into the agent.
+	//
+	// 🚨 An Agent built without New has no gate, and fails closed here.
+	// Running its calls unchecked is exactly what the constructor argument
+	// exists to prevent.
+	if isNilGate(a.gate) {
+		return ToolResult{
+			Content: []provider.Content{provider.TextBlock{Text: noGateReason}},
+			IsError: true,
+		}
+	}
+	{
+		allowed, reason, modified := a.gate.CheckTool(ctx, tc, tool)
 		if !allowed {
 			if reason == "" {
 				reason = "tool call refused by extension guard"

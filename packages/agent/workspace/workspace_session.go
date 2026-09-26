@@ -18,14 +18,17 @@ import (
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/imagegen"
 	"terva.sh/terva/packages/agent/lore"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/raati"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/exp/prefixwatch"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/relaunch"
+	"terva.sh/terva/packages/session"
 )
 
 // webReloadGrace is the extension-reload grace the web path uses when a live
@@ -38,22 +41,26 @@ const webReloadGrace = 2 * time.Second
 // stream out to every connected client. Pending tool-approval and question
 // round-trips park here until a client answers (see workspace_confirm.go).
 type wsSession struct {
-	id          string
-	ws          *Workspace
-	agent       *core.Agent
-	sess        *core.Session
-	gate        *core.ConfirmGate      // nil in pure-yolo (no confirmation needed)
-	extMgr      *extensions.Manager    // this session's extension subprocesses
-	stopExt     func()                 // tears extMgr down on close
-	tasks       *tasktool.Controller   // the built-in task board (nil when the session has no base workspace tools)
-	memory      *tools.MemoryTool      // durable memory, bound once at session build (nil when --no-memory)
-	files       *tools.FileState       // what the model has seen of each path; survives tool rebuilds
-	ticketCard  *tools.TicketCard      // the per-turn ticket card; survives tool rebuilds (nil with no store)
-	loreEntries []lore.Entry           // discovered lore, for the lore inspector pane (nil when lore off)
-	note        *build.NoteRecord      // live author's-note record (nil for a coding session); note.set writes it, the per-turn tail reads it
-	user        *build.NoteRecord      // live user-persona description record (nil for a coding session); user.bind writes it, the per-turn tail reads it
-	worldLore   *build.WorldLoreRecord // live World-lore record (nil for a coding session); world.lore.* writes it, the per-turn tail scans it
-	loreFired   *build.LoreFiredRecord // the last turn's lore activation trace (which entries fired, why, what the budget dropped); refreshed on reloadLore
+	id    string
+	ws    *Workspace
+	agent *core.Agent
+	sess  *session.Session
+	gate  *core.ConfirmGate // nil in pure-yolo (no confirmation needed)
+	// policyNotice holds the permission-policy warnings not yet shown to a
+	// client, such as a project config that could not be parsed and so lost
+	// its deny rules. Guarded by mu. See setPolicyWarnings.
+	policyNotice []string
+	extMgr       *extensions.Manager    // this session's extension subprocesses
+	stopExt      func()                 // tears extMgr down on close
+	tasks        *tasktool.Controller   // the built-in task board (nil when the session has no base workspace tools)
+	memory       *tools.MemoryTool      // durable memory, bound once at session build (nil when --no-memory)
+	files        *tools.FileState       // what the model has seen of each path; survives tool rebuilds
+	ticketCard   *tools.TicketCard      // the per-turn ticket card; survives tool rebuilds (nil with no store)
+	loreEntries  []lore.Entry           // discovered lore, for the lore inspector pane (nil when lore off)
+	note         *build.NoteRecord      // live author's-note record (nil for a coding session); note.set writes it, the per-turn tail reads it
+	user         *build.NoteRecord      // live user-persona description record (nil for a coding session); user.bind writes it, the per-turn tail reads it
+	worldLore    *build.WorldLoreRecord // live World-lore record (nil for a coding session); world.lore.* writes it, the per-turn tail scans it
+	loreFired    *build.LoreFiredRecord // the last turn's lore activation trace (which entries fired, why, what the budget dropped); refreshed on reloadLore
 	// extReady is closed once this session's extensions have finished starting
 	// AND their tools have been merged into the agent. launchTurn waits on it,
 	// so the first turn can never go out against a half-registered extension
@@ -169,7 +176,7 @@ type wsSession struct {
 // and event fan-out. msgs is the resumed transcript (nil for a fresh session);
 // reviseBase/reviseHead re-anchor its indices to the on-disk transcript when a
 // resume trimmed it (both zero for fresh/untrimmed — see wsSession.reviseBase).
-func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.Message, win build.ResumeWindow) (*wsSession, error) {
+func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provider.Message, win build.ResumeWindow) (*wsSession, error) {
 	args := w.args
 	if sess.Meta.Provider != "" {
 		args.Provider = sess.Meta.Provider
@@ -198,30 +205,30 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	if sess.Meta.Reasoning != "" {
 		args.Reasoning = sess.Meta.Reasoning
 	}
-	if sess.Meta.Experience != "" {
-		args.Experience = sess.Meta.Experience
+	if sess.Stage.Experience != "" {
+		args.Experience = sess.Stage.Experience
 	}
-	if sess.Meta.Card != "" {
-		args.Card = sess.Meta.Card
+	if sess.Stage.Card != "" {
+		args.Card = sess.Stage.Card
 	}
-	if len(sess.Meta.Cast) > 0 {
-		args.Cast = sess.Meta.Cast
+	if len(sess.Stage.Cast) > 0 {
+		args.Cast = sess.Stage.Cast
 	}
-	if sess.Meta.Greeting != 0 {
-		args.Greeting = sess.Meta.Greeting
+	if sess.Stage.Greeting != 0 {
+		args.Greeting = sess.Stage.Greeting
 	}
 	// A bound user-persona NAME is the card {{user}} macro, so it threads into the
 	// build like any other creation-spec field (Args.As feeds resolveCardUserName)
 	// and bakes into the cached prefix — re-applied on every materialize, including
 	// a restart. The DESCRIPTION rides the per-turn tail instead (seeded below).
-	if sess.Meta.UserName != "" {
-		args.As = sess.Meta.UserName
+	if sess.Stage.UserName != "" {
+		args.As = sess.Stage.UserName
 	}
 	// Gender/pronouns ride the uncached per-turn tail (the user-persona frame), not
 	// the {{user}} macro, so they thread through unconditionally — re-applied on
 	// every materialize, including a restart.
-	args.UserGender = sess.Meta.UserGender
-	args.UserPronouns = sess.Meta.UserPronouns
+	args.UserGender = sess.Stage.UserGender
+	args.UserPronouns = sess.Stage.UserPronouns
 
 	s := &wsSession{
 		id:       id,
@@ -248,6 +255,7 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	for _, wn := range warns {
 		s.diag(fmt.Sprintf("note: %s", wn))
 	}
+	s.setPolicyWarnings(warns)
 
 	r, err := build.Resolve(args, true)
 	if err != nil && replayedPersona != "" {
@@ -383,7 +391,7 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 		}
 		if len(cast) > 0 {
 			// Overlay the persisted per-actor model pins (Phase 7) onto the built cast.
-			applyCastModels(cast, sess.Meta.CastModels)
+			applyCastModels(cast, sess.Stage.CastModels)
 			s.actorCast = cast
 			s.warmActors = tools.NewWarmActors(tools.DefaultWarmActorCap)
 		}
@@ -398,7 +406,13 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	// discarding the throwaway per-session sandbox Resolve just built.
 	r.UseSandbox(w.sandbox)
 
-	ag := r.NewAgent()
+	// Canonical tool-call ladder (hooks → gate → ext intercept), built before
+	// the agent because core.New requires it. The gate hands the call id
+	// straight to the confirmer (ConfirmWithCall), so no "current call" session
+	// state exists to collide when a host_tool_call approval parks concurrently
+	// with a model call's.
+	hookEng := w.hookEng
+	ag := r.NewAgent(build.BuildToolGate(hookEng, gate, extMgr), build.ExtensionFilters(w.ctx, extMgr)...)
 	s.agent = ag
 	s.gate = gate
 	// The tool-refresh seam: a tool that changes what registration itself can
@@ -443,7 +457,7 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	// meta so user.bind updates the tail value and it survives a restart. (The
 	// NAME half already threaded into args.As above, baked into the prefix.)
 	if ur := r.User(); ur != nil {
-		ur.Set(s.sess.Meta.UserDescription)
+		ur.Set(s.sess.Stage.UserDescription)
 		s.user = ur
 	}
 	// Retain the live World-lore record the same way — seeded from meta so
@@ -490,34 +504,11 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 		s.model = r.Model
 	}
 
-	// Canonical tool-call ladder (hooks → gate → ext intercept). The gate
-	// hands the call id straight to the confirmer (ConfirmWithCall), so no
-	// "current call" session state exists to collide when a host_tool_call
-	// approval parks concurrently with a model call's.
-	hookEng := w.hookEng
-	ag.BeforeToolExecute = build.BuildBeforeToolExecute(hookEng, gate, extMgr, ag)
 	s.bindAgentChannels(ag, gate)
-	if extMgr != nil {
-		ag.BeforeTurn = func(step int) (bool, string) {
-			res := extMgr.InterceptTurnStart(w.ctx, step)
-			return !res.Block, res.Reason
-		}
-		ag.BeforeAssistantMessage = func(text string) (bool, string, string) {
-			res := extMgr.InterceptAssistantMessage(w.ctx, text)
-			if res.Block {
-				return false, res.Reason, ""
-			}
-			return true, "", res.ReplaceText
-		}
-		ag.BeforeUserMessage = func(text string) (bool, string, string) {
-			res := extMgr.InterceptUserMessage(w.ctx, text)
-			if res.Block {
-				return false, res.Reason, ""
-			}
-			return true, "", res.ReplaceText
-		}
-	}
-	// The live cards the model reads each turn. Outside the check above: the
+	// The extension turn and message intercepts are on the agent already, as
+	// build.ExtensionFilters at NewAgent above.
+	//
+	// The live cards the model reads each turn. Not conditional on extMgr: the
 	// task board is not an extension — its card follows r.Tasks, not the
 	// manager — and it was nested there, which made a built-in board's
 	// visibility depend on whether this session had extensions.
@@ -593,9 +584,11 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	// hits cache again; the detector fires the retract, so the note cannot
 	// outlive the state it describes.
 	sessID := s.id
-	ag.AddCacheCliffObserver(func(cc core.CacheCliff) {
-		w.note(cacheCliffNoteKey(sessID), cacheCliffNote(cc), "warn")
-	})
+	if asm := build.AssemblerOf(ag); asm != nil {
+		asm.PrefixWatch().AddObserver(prefixwatch.Observer{Cliff: func(cc core.CacheCliff) {
+			w.note(cacheCliffNoteKey(sessID), cacheCliffNote(cc), "warn")
+		}})
+	}
 
 	// Mirror each assistant message's visible text out to a bound chat bridge.
 	// Registered after persistence, and additive: an observer cannot unwire the
@@ -617,11 +610,11 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 
 	if len(msgs) > 0 {
 		ag.SetMessages(msgs)
-		if cum, _, resume, e := core.SessionUsageDetail(sess.Path); e == nil {
+		if cum, _, resume, e := session.SessionUsageDetail(sess.Path); e == nil {
 			ag.SeedCost(cum)
 			ag.SeedLastTurnUsage(resume)
 		}
-	} else if sess.Meta.Experience != "" && len(r.CardGreetings) > 0 {
+	} else if sess.Stage.Experience != "" && len(r.CardGreetings) > 0 {
 		// A brand-new immersive session: seed the card's openings — first_mes plus
 		// every alternate_greeting — as message-0 swipe variants, the selected one
 		// active, so the character greets the user AND the user can swipe between
@@ -638,7 +631,7 @@ func (w *Workspace) buildSession(id string, sess *core.Session, msgs []provider.
 	// before this daemon started — are switchable. Gated to immersive: it re-reads
 	// the file, and swipe is a Stage interaction, so a coding-session build pays
 	// nothing. seedTail is a no-op when there are fewer than two takes.
-	if sess.Meta.Experience != "" {
+	if sess.Stage.Experience != "" {
 		s.seedTail()
 		s.seedMsgVars()
 	}
@@ -996,6 +989,7 @@ func (s *wsSession) beginTurnHeld() (context.Context, error) {
 // explain turns that died.
 func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context) error, afterTurn func()) {
 	go func() {
+		s.flushPolicyWarnings()
 		// Extensions load in the background so the session materializes at
 		// once; this is where that debt comes due. The turn slot is already
 		// claimed, so a client shows a running turn rather than a stalled
@@ -1058,7 +1052,7 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 		// queued restart skips it — that turn's pre-turn policy covers it —
 		// and a raced client prompt makes compact() return ErrBusy, which is
 		// benign for an opportunistic pass.
-		if err == nil && !restart && s.agent.ShouldAutoCompact(core.AutoCompactThreshold) && s.agent.CanCompact(core.AutoCompactKeepTail) {
+		if err == nil && !restart && s.agent.Compaction(core.CompactAfterTurn).Compact {
 			s.broadcast(ctrlproto.NoticeEvent("info", "", i18n.T("Context is nearly full — compacting the conversation.")))
 			// Announce, then say how it ended. The discarded error made this the
 			// worst of the compaction sites to watch: clients were told a
@@ -1067,7 +1061,7 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 			// that is also this host's PRIMARY auto-compaction. s.compact already
 			// broadcasts its own success and no-op notices; only the failure was
 			// mute.
-			if cerr := s.compact(s.ws.ctx); cerr != nil && !errors.Is(cerr, context.Canceled) {
+			if cerr := s.compact(s.ws.ctx, core.CompactAfterTurn); cerr != nil && !errors.Is(cerr, context.Canceled) {
 				s.broadcast(ctrlproto.NoticeEvent("error", "", i18n.T("Could not compact the conversation: %s", cerr.Error())))
 			}
 		}
@@ -1128,7 +1122,7 @@ func (s *wsSession) retry(p ctrlproto.TurnRetryParams) error {
 	// index (diskIndex) so a reload retracts the right span; the live agent is
 	// truncated by the in-memory index.
 	if disk, ok := s.diskIndex(idx); ok {
-		if err := s.sess.AppendAmend(core.AmendRetract, disk, nil, "retry"); err != nil {
+		if err := s.sess.AppendAmend(session.AmendRetract, disk, nil, "retry"); err != nil {
 			return s.persistenceFailure(err)
 		}
 	}
@@ -1405,8 +1399,13 @@ func (s *wsSession) rebuildTools(reason string) {
 	// auto-swarm nudge, an extension's static context — so install the
 	// freshly-resolved render alongside the tools (same fidelity as
 	// buildSession: both run the identical Resolve+merge pipeline). Pinned
-	// per-turn like the tools, so it lands on the next turn.
-	systemChanged := s.agent.SetSystem(rr.SystemPrompt)
+	// per-turn like the tools, so it lands on the next turn. The assembler is
+	// terva's, from Resolved.NewAgent; an agent built another way has no
+	// system prompt of terva's to re-render.
+	systemChanged := false
+	if asm := build.AssemblerOf(s.agent); asm != nil {
+		systemChanged = asm.SetStable(rr.SystemSegments)
+	}
 	if toolsChanged || systemChanged {
 		s.notifyPromptRebuilt(toolsChanged, systemChanged, reason)
 	}
@@ -1465,11 +1464,13 @@ func isAutomaticRebuild(reason string) bool {
 	}
 }
 
-// compact runs user-driven compaction: summarize + replace the transcript, then
-// push a fresh snapshot so every client re-renders the compacted history. A
-// running turn blocks it (ErrBusy); an already-minimal transcript is reported as
-// a benign notice rather than an error.
-func (s *wsSession) compact(ctx context.Context) error {
+// compact runs a compaction: summarize + replace the transcript, then push a
+// fresh snapshot so every client re-renders the compacted history. A running
+// turn blocks it (ErrBusy); an already-minimal transcript is reported as a
+// benign notice rather than an error. point is why it runs — a client's
+// /compact (CompactRequested) or the post-turn check (CompactAfterTurn) — and
+// picks the policy decision the keep-tail comes from.
+func (s *wsSession) compact(ctx context.Context, point core.CompactPoint) error {
 	s.revisionMu.Lock()
 	if err := s.persistenceFailure(s.sess.WriteError()); err != nil {
 		s.revisionMu.Unlock()
@@ -1493,7 +1494,7 @@ func (s *wsSession) compact(ctx context.Context) error {
 	s.revisionMu.Unlock()
 	defer s.endCompacting()
 	// Non-nil sink: Compact streams summary deltas and calls it unconditionally.
-	if _, err := s.agent.Compact(ctx, core.AutoCompactKeepTail, func(string) {}); err != nil {
+	if _, err := s.agent.CompactWith(ctx, s.agent.Compaction(point), func(string) {}); err != nil {
 		if errors.Is(err, core.ErrPersistence) {
 			s.dropAllVariants()
 			s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
@@ -1644,7 +1645,7 @@ func (s *wsSession) editTailAsVariant(msgs []provider.Message, start, index int,
 	newSpan[index-start] = edited
 
 	if disk, ok := s.diskIndex(start); ok {
-		if err := s.sess.AppendAmend(core.AmendRetract, disk, nil, "edit"); err != nil {
+		if err := s.sess.AppendAmend(session.AmendRetract, disk, nil, "edit"); err != nil {
 			return s.persistenceFailure(err)
 		}
 	}
@@ -1700,7 +1701,7 @@ func (s *wsSession) deleteMessageHeld(index int) error {
 	if !ok {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the resume-window summary at index %d cannot be deleted", index))
 	}
-	if err := s.sess.AppendAmend(core.AmendDelete, disk, nil, "delete"); err != nil {
+	if err := s.sess.AppendAmend(session.AmendDelete, disk, nil, "delete"); err != nil {
 		return s.persistenceFailure(err)
 	}
 	s.agent.DeleteMessage(index)
@@ -1727,7 +1728,7 @@ func (s *wsSession) persistWithdrawal(index int) {
 	if !ok {
 		return
 	}
-	s.agent.RecordPersistenceError(s.sess.AppendAmend(core.AmendDelete, disk, nil, "withdrawn"))
+	s.agent.RecordPersistenceError(s.sess.AppendAmend(session.AmendDelete, disk, nil, "withdrawn"))
 	s.dropVariantsAfterDelete(index)
 	s.broadcast(ctrlproto.SnapshotEvent(s.snapshot()))
 }
@@ -1747,7 +1748,7 @@ type tailVariants struct {
 // msgVarLive is one position's message-scoped variant state in memory. takes is
 // populated for a position edited in this daemon; for a position seeded from the
 // file on resume it is nil (only count/active are known) until a swipe hydrates it
-// via core.SessionMsgVariant. count is authoritative (== len(takes) once hydrated).
+// via session.SessionMsgVariant. count is authoritative (== len(takes) once hydrated).
 type msgVarLive struct {
 	takes  []provider.Message
 	count  int
@@ -1821,7 +1822,7 @@ func (s *wsSession) swipeMessageHeld(index, variant int) error {
 	// take list lives on disk at the on-disk index, so hydrate + persist use it.
 	takes := mv.takes
 	if takes == nil {
-		hydrated, ok, err := core.SessionMsgVariant(s.sess.Path, disk)
+		hydrated, ok, err := session.SessionMsgVariant(s.sess.Path, disk)
 		if err != nil || !ok || len(hydrated.Takes) != mv.count {
 			return ctrlproto.Errorf(ctrlproto.CodeConflict, "%s", i18n.T("could not load variants at %d; reload and retry", index))
 		}
@@ -1885,7 +1886,7 @@ func (s *wsSession) dropVariantHeld(index, variant int) error {
 	}
 	takes := mv.takes
 	if takes == nil {
-		hydrated, ok, err := core.SessionMsgVariant(s.sess.Path, disk)
+		hydrated, ok, err := session.SessionMsgVariant(s.sess.Path, disk)
 		if err != nil || !ok || len(hydrated.Takes) != mv.count {
 			return ctrlproto.Errorf(ctrlproto.CodeConflict, "%s", i18n.T("could not load variants at %d; reload and retry", index))
 		}
@@ -1922,7 +1923,7 @@ func (s *wsSession) dropVariantHeld(index, variant int) error {
 // while the session stays a meta-only draft until the first real turn. Shared by
 // buildSession and the pre-first-turn user-persona rename (UserBind), which
 // re-derives the greeting text with the new {{user}} before calling this.
-func (s *wsSession) seedDeferredGreeting(sess *core.Session, greetings []string) {
+func (s *wsSession) seedDeferredGreeting(sess *session.Session, greetings []string) {
 	greetingMsgs := make([]provider.Message, 0, len(greetings))
 	// Stamped like every other message, and like the CLI's own greeting seed
 	// (seedCardGreeting). Without it a deferred greeting persisted with a zero
@@ -1941,7 +1942,7 @@ func (s *wsSession) seedDeferredGreeting(sess *core.Session, greetings []string)
 			Meta:    map[string]string{"source": "card:greeting"},
 		})
 	}
-	activeMsg, _ := sess.DeferGreetingVariants(greetingMsgs, sess.Meta.Greeting)
+	activeMsg, _ := sess.DeferGreetingVariants(greetingMsgs, sess.Stage.Greeting)
 	s.agent.SetMessages([]provider.Message{activeMsg})
 	// Set the tail-span swipe state directly — one single-message take per opening,
 	// the selected one active — mirroring exactly what seedTail would read off disk
@@ -1951,7 +1952,7 @@ func (s *wsSession) seedDeferredGreeting(sess *core.Session, greetings []string)
 		for i := range greetingMsgs {
 			takes[i] = []provider.Message{greetingMsgs[i]}
 		}
-		active := sess.Meta.Greeting
+		active := sess.Stage.Greeting
 		if active < 0 || active >= len(takes) {
 			active = 0
 		}
@@ -1968,7 +1969,7 @@ func (s *wsSession) seedDeferredGreeting(sess *core.Session, greetings []string)
 // active one lines up with the live transcript's tail by length, so a repair that
 // shifted indices yields no-swipe rather than a wrong swipe.
 func (s *wsSession) seedTail() {
-	start, takes, active, err := core.SessionTail(s.sess.Path)
+	start, takes, active, err := session.SessionTail(s.sess.Path)
 	if err != nil || start < 0 || len(takes) < 2 || active < 0 || active >= len(takes) {
 		return
 	}
@@ -1990,11 +1991,11 @@ func (s *wsSession) seedTail() {
 
 // seedMsgVars captures the session file's message-scoped variant positions into
 // memory at materialize — counts and active only, the full take lists staying lazy
-// (a swipe hydrates one from disk via core.SessionMsgVariant) — so a session that
+// (a swipe hydrates one from disk via session.SessionMsgVariant) — so a session that
 // reloads with keep_prior edits already written draws its per-position swipe
 // markers. The tail span is left to seedTail. A no-op when there are none.
 func (s *wsSession) seedMsgVars() {
-	vars, err := core.SessionVariants(s.sess.Path)
+	vars, err := session.SessionVariants(s.sess.Path)
 	if err != nil {
 		return
 	}
@@ -2035,7 +2036,7 @@ func (s *wsSession) clearTail() {
 // VariantMark at an index that now named a different message. A swipe at that
 // index was accepted and overwrote it. After a clear, the daemon advertised a
 // mark on an EMPTY transcript. The file-replay half had the rebase all along
-// (core.ShiftVariantKeysOnDelete, called from walkSession), which is why a
+// (session.ShiftVariantKeysOnDelete, called from walkSession), which is why a
 // reload disagreed with the live session rather than reproducing it.
 
 // dropVariantsAfterDelete realigns the variant marks after the message at index
@@ -2043,7 +2044,7 @@ func (s *wsSession) clearTail() {
 func (s *wsSession) dropVariantsAfterDelete(index int) {
 	s.mu.Lock()
 	s.tail = tailVariants{}
-	s.msgVars = core.ShiftVariantKeysOnDelete(s.msgVars, index)
+	s.msgVars = session.ShiftVariantKeysOnDelete(s.msgVars, index)
 	s.mu.Unlock()
 }
 
@@ -2052,7 +2053,7 @@ func (s *wsSession) dropVariantsAfterDelete(index int) {
 func (s *wsSession) dropVariantsFrom(index int) {
 	s.mu.Lock()
 	s.tail = tailVariants{}
-	s.msgVars = core.DropVariantKeysFrom(s.msgVars, index)
+	s.msgVars = session.DropVariantKeysFrom(s.msgVars, index)
 	s.mu.Unlock()
 }
 
@@ -2113,9 +2114,9 @@ func (s *wsSession) settleTitle(ctx context.Context) {
 	// (which spends unasked tokens and reads as "User greets the elf innkeeper…").
 	// The design's "default title = character name"; resolve it from the bound
 	// card and fall back to the first line only when there is no card name to use.
-	if s.sess != nil && s.sess.Meta.Experience != "" {
+	if s.sess != nil && s.sess.Stage.Experience != "" {
 		title := fallback
-		if name := s.ws.cardName(s.sess.Meta.Card); name != "" {
+		if name := s.ws.cardName(s.sess.Stage.Card); name != "" {
 			title = name
 		}
 		// Provisional, not final. The character name is instant and free, which is
@@ -2162,7 +2163,7 @@ func (s *wsSession) applyTitle(title string) {
 		return
 	}
 	if s.sess != nil {
-		_ = core.RenameSessionGenerated(s.sess.Path, title)
+		_ = session.RenameSessionGenerated(s.sess.Path, title)
 	}
 	s.setTitle(title, true)
 	s.broadcast(ctrlproto.SessionUpdatedEvent(s.info()))
@@ -2193,7 +2194,7 @@ const immersiveTitleUpgradeTurns = 3
 // that is still machine-owned. A manual rename is never touched, including one
 // that lands while the model is thinking.
 func (s *wsSession) upgradeImmersiveTitle(ctx context.Context) {
-	if s.sess == nil || s.sess.Meta.Experience == "" {
+	if s.sess == nil || s.sess.Stage.Experience == "" {
 		return
 	}
 	prev, due := s.titleUpgradeDue()
@@ -2237,7 +2238,7 @@ func (s *wsSession) titleUpgradeDue() (string, bool) {
 	}
 	// Only the provisional character name is upgradeable. Any other machine title
 	// is a summary this pass already produced.
-	if prev != s.ws.cardName(s.sess.Meta.Card) {
+	if prev != s.ws.cardName(s.sess.Stage.Card) {
 		return prev, false
 	}
 	return prev, playerTurns(s.agent.Messages()) >= immersiveTitleUpgradeTurns
@@ -2557,20 +2558,20 @@ func (s *wsSession) info() ctrlproto.SessionInfo {
 		Model:           model,
 		Persona:         persona,
 		Reasoning:       reasoning,
-		Experience:      s.sess.Meta.Experience,
-		Background:      s.sess.Meta.Background,
+		Experience:      s.sess.Stage.Experience,
+		Background:      s.sess.Stage.Background,
 		Note:            s.sess.Meta.Note,
-		UserName:        s.sess.Meta.UserName,
-		UserDescription: s.sess.Meta.UserDescription,
-		UserGender:      s.sess.Meta.UserGender,
-		UserPronouns:    s.sess.Meta.UserPronouns,
-		Card:            s.sess.Meta.Card,
-		Cast:            s.sess.Meta.Cast,
-		CastModels:      castRoutesToView(s.sess.Meta.CastModels),
+		UserName:        s.sess.Stage.UserName,
+		UserDescription: s.sess.Stage.UserDescription,
+		UserGender:      s.sess.Stage.UserGender,
+		UserPronouns:    s.sess.Stage.UserPronouns,
+		Card:            s.sess.Stage.Card,
+		Cast:            s.sess.Stage.Cast,
+		CastModels:      castRoutesToView(s.sess.Stage.CastModels),
 		WorldLore:       worldLoreToView(s.sess.Meta.WorldLore),
 		ScenePinStale:   scenePinStaleFor(s.sess.Meta.WorldLore, s.messageCount()),
 		Coordination:    s.sess.Meta.Coordination,
-		World:           s.sess.Meta.World,
+		World:           s.sess.Stage.World,
 		Path:            s.sess.Path,
 		Created:         ctrlTimeString(s.sess.Meta.Started),
 		Trusted:         s.trusted.Load(),
@@ -2593,7 +2594,7 @@ func (s *wsSession) info() ctrlproto.SessionInfo {
 		info.ContextTokens = last.PromptTokens()
 		// The EFFECTIVE window rides the wire, so app.tsx's ctxTok/ctxWin and the
 		// session card gauge read against the number auto-compaction fires on.
-		info.ContextWindow = provider.ContextGauge(prov, model)
+		info.ContextWindow = modelreg.ContextGauge(prov, model)
 	}
 	return info
 }
@@ -2844,6 +2845,13 @@ func (h *wsHub) broadcast(ev ctrlproto.Event) {
 	for _, s := range list {
 		s.send(ev)
 	}
+}
+
+// attached reports whether any subscriber would receive a broadcast now.
+func (h *wsHub) attached() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.subs) > 0
 }
 
 func (h *wsHub) closeAll() {

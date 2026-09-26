@@ -1,0 +1,441 @@
+# packages/provider (stable): its exported API, one symbol per line.
+# Written by `just api-snapshot`. `just api-check` fails when it no longer matches the code.
+AnthropicCompatOptions	type	struct
+AnthropicCompatOptions.APIVersion	field	string
+AnthropicCompatOptions.BearerAuth	field	bool
+AnthropicCompatOptions.Beta	field	string
+AnthropicCompatOptions.DisableCaching	field	bool
+AnthropicCompatOptions.IsZero	method	func() bool
+AnthropicCompatProvider	const	untyped string
+AnthropicDefaultAPIVersion	const
+ApplyAnthropicCompatAuth	func	func(req *http.Request, key string, o AnthropicCompatOptions)
+ApplyCost	func	func(m Model, u *Usage)
+AzureOpenAIConfig	type	struct
+AzureOpenAIConfig.APIVersion	field	string
+AzureOpenAIConfig.BaseURL	field	string
+AzureOpenAIConfig.Hint	field	string
+BedrockConfig	type	struct
+BedrockConfig.AccessKeyID	field	string
+BedrockConfig.BearerToken	field	string
+BedrockConfig.GoString	method	func() string
+BedrockConfig.Hint	field	string
+BedrockConfig.Region	field	string
+BedrockConfig.SecretAccessKey	field	string
+BedrockConfig.SessionToken	field	string
+BedrockConfig.String	method	func() string
+Builtin	func	func() ModelCatalog
+CapImageInput	const	Capability
+CapImageOutput	const	Capability
+CapReasoning	const	Capability
+Capability	type	string
+Client	type	interface
+Client.Name	method	func() string
+Client.Stream	method	func(ctx context.Context, req Request) (<-chan Event, error)
+ClientCapabilities	type	struct
+ClientCapabilities.ContinuesAssistantPrefill	field	bool
+ClientCapabilities.MirrorsToolImages	field	bool
+ClientCapabilities.ReasoningWire	field	reasoningWire
+ClientConsumeReset	func	func(ctx context.Context, c Client, id string) (UsageResetResult, error)
+ClientContinuesAssistantPrefill	func	func(c Client) bool
+ClientListResets	func	func(ctx context.Context, c Client) ([]UsageReset, error)
+ClientMirrorsToolImages	func	func(c Client) bool
+ClientNeedsUsageFetch	func	func(c Client) bool
+ClientOption	type	func(*clientHooks)
+ClientReasoningWire	func	func(c Client) string
+ClientRefreshUsage	func	func(ctx context.Context, c Client) (UsageSnapshot, bool)
+ClientSupportsResets	func	func(c Client) bool
+ClientUsage	func	func(c Client) (UsageSnapshot, bool)
+CloudflareConfig	type	struct
+CloudflareConfig.AccountID	field	string
+CloudflareConfig.AccountIDHint	field	string
+CloudflareConfig.GatewayID	field	string
+CloudflareConfig.GatewayIDHint	field	string
+CodexIdentityNative	const	untyped string
+CodexIdentityTerva	const	untyped string
+CodexOption	type	func(*codexClient)
+CompactionBlock	type	struct
+CompactionBlock.Encrypted	field	string
+CompactionBlock.ID	field	string
+CompactionBlock.Provider	field	string
+Content	type	interface
+CredentialSource	type	func(ctx context.Context) (string, error)
+Credits	type	struct
+Credits.Balance	field	float64
+Credits.HasCredits	field	bool
+Credits.Unlimited	field	bool
+Credits.Used	field	float64
+DefaultModel	var	Model
+DiscoverAnthropic	func	func(ctx context.Context, apiKey, baseURL string) ([]Model, error)
+DiscoverAnthropicCompatible	func	func(ctx context.Context, baseURL, key string, defaultCtx int, o AnthropicCompatOptions, known []Model) ([]Model, error)
+DiscoverGoogle	func	func(ctx context.Context, apiKey, baseURL string) ([]Model, error)
+DiscoverOpenAI	func	func(ctx context.Context, apiKey, baseURL string) ([]Model, error)
+DiscoverOpenAICompatible	func	func(ctx context.Context, baseURL, key string, defaultCtx int, known []Model) ([]Model, error)
+DiscoverOpenRouter	func	func(ctx context.Context, baseURL string) ([]Model, error)
+DumpRequestJSONL	func	func(providerName, authMethod string, req Request) ([]byte, error)
+EffectiveReasoning	func	func(reqReasoning string, reasoningSet bool, m Model) string
+ErrResetsUnsupported	var	error
+ErrStreamLimit	var	error
+Event	type	interface
+EventDone	type	struct
+EventDone.Err	field	error
+EventDone.Message	field	Message
+EventDone.Stop	field	StopReason
+EventReasoningDelta	type	struct
+EventReasoningDelta.Delta	field	string
+EventStart	type	struct
+EventStart.Model	field	string
+EventStart.Provider	field	string
+EventTextDelta	type	struct
+EventTextDelta.Delta	field	string
+EventToolArgs	type	struct
+EventToolArgs.Delta	field	string
+EventToolArgs.ID	field	string
+EventToolEnd	type	struct
+EventToolEnd.ID	field	string
+EventToolStart	type	struct
+EventToolStart.ID	field	string
+EventToolStart.Name	field	string
+EventTransport	type	struct
+EventTransport.Info	field	TransportInfo
+EventUsage	type	struct
+EventUsage.Usage	field	Usage
+FinalizeToolArguments	func	func(raw string) (args json.RawMessage, unparsed string)
+ForeignCompactions	func	func(msgs []Message, providerName string) []int
+ImageBlock	type	struct
+ImageBlock.Data	field	[]byte
+ImageBlock.ID	field	string
+ImageBlock.MimeType	field	string
+ImageOutputConfig	type	struct
+ImageOutputConfig.EditHistory	field	int
+ImageOutputConfig.Quality	field	string
+ImageOutputConfig.Size	field	string
+ImageSaver	type	func(mimeType string, data []byte) (path string, err error)
+IsCompatProvider	func	func(id string) bool
+IsTransportError	func	func(err error) bool
+LadderWireValue	func	func(rung string) string
+LegacyUserModelProviderAliases	var	map[string]string
+MarshalModelCache	func	func(c ModelCache) ([]byte, error)
+MarshalUserModelsFile	func	func(f UserModelsFile) ([]byte, error)
+MaxIsNative	func	func(m Model) bool
+Message	type	struct
+Message.Content	field	[]Content
+Message.Meta	field	map[string]string
+Message.Role	field	Role
+Message.Time	field	time.Time
+Model	type	struct
+Model.AdaptiveThinking	field	bool
+Model.BaseURL	field	string
+Model.Caps	field	map[Capability]bool
+Model.ContextSurchargeAt	field	int
+Model.ContextWindow	field	int
+Model.DefaultReasoning	field	string
+Model.DefaultReasoningSet	field	bool
+Model.DesiredContextWindow	field	int
+Model.DisplayName	field	string
+Model.DisplayNameSet	field	bool
+Model.EffectiveContextWindow	method	func() int
+Model.Has	method	func(c Capability) bool
+Model.ID	field	string
+Model.Label	method	func() string
+Model.MaxOutput	field	int
+Model.PriceCacheRead	field	float64
+Model.PriceCacheWrite	field	float64
+Model.PriceInput	field	float64
+Model.PriceOutput	field	float64
+Model.PriceOutputImage	field	float64
+Model.Provider	field	string
+Model.Reasoning	field	bool
+Model.ReasoningEfforts	field	[]string
+Model.Source	field	string
+Model.Speculative	field	bool
+Model.Synthetic	field	bool
+Model.Temperature	field	*float32
+ModelCache	type	struct
+ModelCache.Endpoints	field	string
+ModelCache.FetchedAt	field	time.Time
+ModelCache.IsCurrent	method	func() bool
+ModelCache.IsFresh	method	func() bool
+ModelCache.Models	field	[]Model
+ModelCache.Version	field	int
+ModelCacheVersion	const	untyped int
+ModelCatalog	type	interface
+ModelCatalog.FindModel	method	func(provider, id string) (Model, error)
+ModelParam	type	struct
+ModelParam.Default	field	func(m Model) string
+ModelParam.FreeValues	field	bool
+ModelParam.InheritedFrom	field	func(m Model, global string) string
+ModelParam.Key	field	string
+ModelParam.Kind	field	ParamKind
+ModelParam.Label	field	string
+ModelParam.Max	field	float64
+ModelParam.Merge	field	func(dst *Model, src Model)
+ModelParam.Min	field	float64
+ModelParam.Options	field	func(m Model) []string
+ModelParam.Override	field	func(um UserModel) string
+ModelParam.SetOverride	field	func(um *UserModel, s string) error
+ModelParams	func	func() []ModelParam
+NewAPIError	func	func(provider, msg string, transient bool) *ProviderError
+NewAnthropic	func	func(apiKey, baseURL string, opts ...ClientOption) Client
+NewAnthropicCompatOpts	func	func(name, apiKey, baseURL string, o AnthropicCompatOptions, opts ...ClientOption) Client
+NewAnthropicCompatible	func	func(apiKey, baseURL string, o AnthropicCompatOptions, opts ...ClientOption) Client
+NewAnthropicOAuthSource	func	func(cred CredentialSource, baseURL string, opts ...ClientOption) Client
+NewAzureOpenAIResponses	func	func(apiKey, baseURL string, cfg AzureOpenAIConfig) Client
+NewBedrock	func	func(cfg BedrockConfig, baseURL string) Client
+NewCerebras	func	func(apiKey, baseURL string) Client
+NewCloudflareAIGateway	func	func(apiKey, baseURL string, cfg CloudflareConfig) Client
+NewCloudflareWorkersAI	func	func(apiKey, baseURL string, cfg CloudflareConfig) Client
+NewDeepSeek	func	func(apiKey, baseURL string) Client
+NewFireworksAnthropic	func	func(apiKey, baseURL string, opts ...ClientOption) Client
+NewGemini	func	func(apiKey, baseURL string, opts ...ClientOption) Client
+NewGithubCopilot	func	func(apiKey, _ string) Client
+NewGoogleVertex	func	func(v VertexConfig, opts ...ClientOption) Client
+NewGroq	func	func(apiKey, baseURL string) Client
+NewHTTPClient	func	func(insecureTLS bool) *http.Client
+NewHTTPError	func	func(provider string, status int, retryAfter, body string) *ProviderError
+NewHuggingFace	func	func(apiKey, baseURL string) Client
+NewKimiCodingSourceWithHeaders	func	func(cred CredentialSource, baseURL string, headers map[string]string, opts ...ClientOption) Client
+NewKimiCodingWithHeaders	func	func(apiKey, baseURL string, headers map[string]string, opts ...ClientOption) Client
+NewMinimaxAnthropic	func	func(apiKey, baseURL string, opts ...ClientOption) Client
+NewMinimaxCNAnthropic	func	func(apiKey, baseURL string, opts ...ClientOption) Client
+NewMistral	func	func(apiKey, baseURL string) Client
+NewMoonshot	func	func(apiKey, baseURL string) Client
+NewMoonshotCN	func	func(apiKey, baseURL string) Client
+NewOpenAI	func	func(apiKey, baseURL string) Client
+NewOpenAICodex	func	func(token, accountID, baseURL string) Client
+NewOpenAICodexSource	func	func(cred CredentialSource, accountID, baseURL string, opts ...CodexOption) Client
+NewOpenAICompatible	func	func(apiKey, baseURL string) Client
+NewOpenAICompatibleAs	func	func(name, apiKey, baseURL string) Client
+NewOpenAIResponses	func	func(apiKey, baseURL string) Client
+NewOpenCode	func	func(apiKey, baseURL string) Client
+NewOpenCodeGo	func	func(apiKey, baseURL string) Client
+NewOpenRouter	func	func(apiKey, baseURL string) Client
+NewRegistry	func	func() *Registry
+NewTogether	func	func(apiKey, baseURL string) Client
+NewVercelGatewayAnthropic	func	func(apiKey, baseURL string, opts ...ClientOption) Client
+NewXAI	func	func(apiKey, baseURL string) Client
+NewXiaomi	func	func(apiKey, baseURL string) Client
+NewXiaomiTokenPlan	func	func(region, apiKey, baseURL string) Client
+NewZAI	func	func(apiKey, baseURL string) Client
+NormalizeLegacyReasoningShape	func	func(b ReasoningBlock) ReasoningBlock
+NormalizeReasoning	func	func(level string) string
+NormalizeReasoningSummary	func	func(mode string) string
+NormalizeUserModelProviderKey	func	func(key string) string
+OpenAICompatProvider	const	untyped string
+ParamEnum	const	ParamKind
+ParamFloat	const	ParamKind
+ParamInt	const	ParamKind
+ParamKind	type	int
+ParamList	const	ParamKind
+ParamText	const	ParamKind
+ParamTriState	const	ParamKind
+ParseModelCache	func	func(b []byte) (ModelCache, error)
+ParseUserModelsFile	func	func(data []byte) (UserModelsFile, error)
+ParseUserModelsWithWarnings	func	func(data []byte) ([]UserOverride, []string)
+ProviderError	type	struct
+ProviderError.Error	method	func() string
+ProviderError.Msg	field	string
+ProviderError.Provider	field	string
+ProviderError.RetryAfter	field	time.Duration
+ProviderError.Status	field	int
+ProviderError.Transient	field	bool
+ProviderError.Unwrap	method	func() error
+ProviderLabel	func	func(id string) string
+ProviderReasoningWire	func	func(provider string) string
+ReasoningBlock	type	struct
+ReasoningBlock.Encrypted	field	string
+ReasoningBlock.ID	field	string
+ReasoningBlock.Shape	field	string
+ReasoningBlock.Summary	field	string
+ReasoningBudget	func	func(level string) int
+ReasoningEffect	type	struct
+ReasoningEffect.Budget	field	int
+ReasoningEffect.Effort	field	string
+ReasoningEffect.Off	method	func() bool
+ReasoningEffect.Supported	field	bool
+ReasoningEffectFor	func	func(m Model, level string) ReasoningEffect
+ReasoningFromGlobal	const	ReasoningSource
+ReasoningFromModelCatalog	const	ReasoningSource
+ReasoningFromModelOperator	const	ReasoningSource
+ReasoningFromNothing	const	ReasoningSource
+ReasoningFromSession	const	ReasoningSource
+ReasoningLadder	func	func() string
+ReasoningLadderFor	func	func(m Model) []ReasoningRung
+ReasoningLevels	var	[]string
+ReasoningRung	type	struct
+ReasoningRung.Effect	field	ReasoningEffect
+ReasoningRung.Level	field	string
+ReasoningRung.SameAs	field	string
+ReasoningShapeAnthropicRedacted	const	untyped string
+ReasoningShapeAnthropicThinking	const	untyped string
+ReasoningShapeAnthropicThinkingOpaque	const	untyped string
+ReasoningShapeGeminiThoughtSummary	const	untyped string
+ReasoningShapeOpenAIChat	const	untyped string
+ReasoningShapeOpenAIResponses	const	untyped string
+ReasoningSource	type	int
+Registry	type	struct
+Registry.Active	method	func() []Model
+Registry.ContextGauge	method	func(provider, id string) int
+Registry.FindModel	method	func(provider, id string) (Model, error)
+Registry.ModelsForProvider	method	func(provider string) []Model
+Registry.RegisterExtraModel	method	func(m Model)
+Registry.Reset	method	func()
+Registry.Revision	method	func() uint64
+Registry.SetLiveModels	method	func(live []Model)
+Registry.SetUserModels	method	func(models []Model)
+Registry.SetUserOverrides	method	func(overrides []UserOverride)
+RepairOrphanedToolResults	func	func(msgs []Message) []Message
+Request	type	struct
+Request.EphemeralContext	field	string
+Request.ForbidTools	field	bool
+Request.ImageOutput	field	*ImageOutputConfig
+Request.MaxTokens	field	int
+Request.Messages	field	[]Message
+Request.Model	field	string
+Request.PromptCacheKey	field	string
+Request.Reasoning	field	string
+Request.ReasoningSet	field	bool
+Request.ReasoningSummary	field	string
+Request.System	field	string
+Request.Temperature	field	*float32
+Request.Tools	field	[]Tool
+Request.WireTools	method	func() []Tool
+ResetAvailable	const	ResetStatus
+ResetExpired	const	ResetStatus
+ResetPending	const	ResetStatus
+ResetRedeemed	const	ResetStatus
+ResetStatus	type	string
+ResolveReasoning	func	func(session string, m Model, global string) (level string, from ReasoningSource)
+Role	type	string
+RoleAssistant	const	Role
+RoleTool	const	Role
+RoleUser	const	Role
+SeedClientUsage	func	func(c Client, snap UsageSnapshot)
+ServerCompactor	type	interface
+ServerCompactor.CompactServerSide	method	func(ctx context.Context, req Request) ([]Message, Usage, error)
+ServerCompactorFor	func	func(c Client) (ServerCompactor, bool)
+StaticCredential	func	func(cred string) CredentialSource
+StopAborted	const	StopReason
+StopEnd	const	StopReason
+StopError	const	StopReason
+StopLength	const	StopReason
+StopReason	type	string
+StopToolUse	const	StopReason
+TextBlock	type	struct
+TextBlock.Text	field	string
+Tool	type	struct
+Tool.Description	field	string
+Tool.Name	field	string
+Tool.Schema	field	json.RawMessage
+ToolCallBlock	type	struct
+ToolCallBlock.Arguments	field	json.RawMessage
+ToolCallBlock.ID	field	string
+ToolCallBlock.Name	field	string
+ToolCallBlock.RawArguments	field	string
+ToolCallBlock.Signature	field	string
+ToolResultBlock	type	struct
+ToolResultBlock.CallID	field	string
+ToolResultBlock.Content	field	[]Content
+ToolResultBlock.IsError	field	bool
+TransportInfo	type	struct
+TransportInfo.ConnReused	field	bool
+TransportInfo.ProcessingMS	field	int64
+TransportInfo.Proto	field	string
+TransportInfo.Ray	field	string
+TransportInfo.RemoteAddr	field	string
+TransportInfo.RequestID	field	string
+Usage	type	struct
+Usage.Add	method	func(v Usage) Usage
+Usage.CacheHitRate	method	func() (rate float64, ok bool)
+Usage.CacheReadTokens	field	int
+Usage.CacheSavedUSD	field	float64
+Usage.CacheWriteTokens	field	int
+Usage.CostUSD	field	float64
+Usage.ImageOutputTokens	field	int
+Usage.InputTokens	field	int
+Usage.OutputTokens	field	int
+Usage.PromptTokens	method	func() int
+Usage.ReasoningTokens	field	int
+Usage.ReasoningTokensKnown	field	bool
+UsageRefresher	type	interface
+UsageRefresher.RefreshUsage	method	func(ctx context.Context) (UsageSnapshot, bool)
+UsageReporter	type	interface
+UsageReporter.UsageSnapshot	method	func() (UsageSnapshot, bool)
+UsageReset	type	struct
+UsageReset.Available	method	func() bool
+UsageReset.Description	field	string
+UsageReset.ExpiresAt	field	time.Time
+UsageReset.GrantedAt	field	time.Time
+UsageReset.ID	field	string
+UsageReset.Kind	field	string
+UsageReset.RedeemedAt	field	time.Time
+UsageReset.Status	field	ResetStatus
+UsageReset.Title	field	string
+UsageResetProvider	type	interface
+UsageResetProvider.ConsumeReset	method	func(ctx context.Context, id string) (UsageResetResult, error)
+UsageResetProvider.ListResets	method	func(ctx context.Context) ([]UsageReset, error)
+UsageResetResult	type	struct
+UsageResetResult.Reset	field	UsageReset
+UsageResetResult.WindowsReset	field	int
+UsageSeeder	type	interface
+UsageSeeder.SeedUsage	method	func(UsageSnapshot)
+UsageSnapshot	type	struct
+UsageSnapshot.CapturedAt	field	time.Time
+UsageSnapshot.Credits	field	*Credits
+UsageSnapshot.Provider	field	string
+UsageSnapshot.Windows	field	[]UsageWindow
+UsageWindow	type	struct
+UsageWindow.Kind	field	WindowKind
+UsageWindow.Label	field	string
+UsageWindow.ResetsAt	field	time.Time
+UsageWindow.UsedPercent	field	float64
+UsageWindow.WindowMinutes	field	int
+UserModel	type	struct
+UserModel.API	field	string
+UserModel.BaseURL	field	string
+UserModel.Capabilities	field	map[string]bool
+UserModel.ContextWindow	field	int
+UserModel.DefaultReasoning	field	string
+UserModel.DesiredContextWindow	field	int
+UserModel.ID	field	string
+UserModel.Input	field	[]string
+UserModel.MaxTokens	field	int
+UserModel.Name	field	string
+UserModel.PriceCacheRead	field	float64
+UserModel.PriceCacheWrite	field	float64
+UserModel.PriceInput	field	float64
+UserModel.PriceOutput	field	float64
+UserModel.PriceOutputImage	field	float64
+UserModel.Reasoning	field	*bool
+UserModel.ReasoningEfforts	field	[]string
+UserModel.Temperature	field	*float32
+UserModelsFile	type	struct
+UserModelsFile.Find	method	func(providerKey, id string) (UserModel, bool)
+UserModelsFile.Providers	field	map[string]UserProvider
+UserModelsFile.Remove	method	func(providerKey, id string) bool
+UserModelsFile.Upsert	method	func(providerKey string, um UserModel) error
+UserOverride	type	struct
+UserOverride.Model	field	Model
+UserOverride.ReasoningSet	field	bool
+UserProvider	type	struct
+UserProvider.Models	field	[]UserModel
+ValidCodexIdentity	func	func(s string) bool
+ValidReasoningLevel	func	func(level string) bool
+VertexConfig	type	struct
+VertexConfig.APIKey	field	string
+VertexConfig.CredentialsJSON	field	[]byte
+VertexConfig.GoString	method	func() string
+VertexConfig.Hint	field	string
+VertexConfig.Location	field	string
+VertexConfig.Project	field	string
+VertexConfig.String	method	func() string
+WindowCredit	const	WindowKind
+WindowKind	type	int
+WindowPlan	const	WindowKind
+WindowRateLimit	const	WindowKind
+WithCatalog	func	func(c Client, cat ModelCatalog) Client
+WithClaudeCodeVersion	func	func(installed func() string) ClientOption
+WithCodexCLIVersion	func	func(installed func() string) CodexOption
+WithCodexClientIdentity	func	func(id string) CodexOption
+WithHTTPClient	func	func(c Client, httpClient *http.Client) Client
+WithImageSaver	func	func(save ImageSaver) ClientOption
+WithRequestDump	func	func(dump func(body []byte)) ClientOption

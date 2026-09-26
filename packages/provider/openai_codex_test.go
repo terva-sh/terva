@@ -345,7 +345,7 @@ func TestCodexSplitsCacheWriteTokensOutOfInput(t *testing.T) {
 			t.Errorf("PromptTokens() = %d, want 10000 — the three fields must stay disjoint", got)
 		}
 		// The whole point of carrying the field: it is priced at a premium.
-		m, err := FindModel("openai-codex", "gpt-5.6-sol")
+		m, err := testReg.FindModel("openai-codex", "gpt-5.6-sol")
 		if err != nil {
 			t.Fatalf("gpt-5.6-sol missing from the price sheet: %v", err)
 		}
@@ -355,7 +355,7 @@ func TestCodexSplitsCacheWriteTokensOutOfInput(t *testing.T) {
 		u.OutputTokens = 0
 		flat := u
 		flat.InputTokens, flat.CacheWriteTokens = u.InputTokens+u.CacheWriteTokens, 0
-		if ComputeCost(m, u) <= ComputeCost(m, flat) {
+		if computeCost(m, u) <= computeCost(m, flat) {
 			t.Error("pricing a written prefix as plain input should cost LESS — that is the understatement")
 		}
 	})

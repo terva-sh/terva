@@ -7,7 +7,7 @@ import (
 
 // IsCurrent gates re-discovery on BOTH freshness and the discovery-set version,
 // so a cache written by an older binary (or before versioning) forces a refresh
-// even within CacheTTL — that's how a newly-added provider (opencode-go) gets
+// even within cacheTTL — that's how a newly-added provider (opencode-go) gets
 // picked up instead of waiting out the 6h TTL.
 func TestModelCacheIsCurrent(t *testing.T) {
 	now := time.Now()

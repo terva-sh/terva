@@ -47,8 +47,8 @@ func (c *overloadClient) Stream(ctx context.Context, req provider.Request) (<-ch
 // what one immediate failure looks like, so a working retry was reported as a
 // missing one.
 func TestTransientRetryIsAnnouncedOnTheSink(t *testing.T) {
-	a := NewAgent(&overloadClient{failFor: 2}, "m", "sys", Registry{})
-	a.RetryBaseDelay = time.Millisecond // keep the test honest AND fast
+	a := newTestAgent(&overloadClient{failFor: 2}, "m", "sys", Registry{})
+	a.retryBaseDelay = time.Millisecond // keep the test honest AND fast
 
 	var retries []EvRetry
 	err := a.Prompt(context.Background(), "go", nil, func(ev AgentEvent) {
@@ -66,8 +66,8 @@ func TestTransientRetryIsAnnouncedOnTheSink(t *testing.T) {
 		if r.Attempt != i+1 {
 			t.Errorf("event %d: Attempt = %d, want %d (1-based, the attempt that failed)", i, r.Attempt, i+1)
 		}
-		if r.Max != a.MaxRetries {
-			t.Errorf("event %d: Max = %d, want %d", i, r.Max, a.MaxRetries)
+		if r.Max != a.maxRetries {
+			t.Errorf("event %d: Max = %d, want %d", i, r.Max, a.maxRetries)
 		}
 		if r.Provider != "openai-codex" {
 			t.Errorf("event %d: Provider = %q, want openai-codex", i, r.Provider)
@@ -90,7 +90,7 @@ func TestTransientRetryIsAnnouncedOnTheSink(t *testing.T) {
 // succeeds first time must say nothing at all — otherwise the note becomes
 // noise and stops meaning anything.
 func TestNoRetryEventWhenNothingFails(t *testing.T) {
-	a := NewAgent(&overloadClient{failFor: 0}, "m", "sys", Registry{})
+	a := newTestAgent(&overloadClient{failFor: 0}, "m", "sys", Registry{})
 	seen := 0
 	if err := a.Prompt(context.Background(), "go", nil, func(ev AgentEvent) {
 		if _, ok := ev.(EvRetry); ok {
@@ -111,8 +111,8 @@ func TestNoRetryEventWhenNothingFails(t *testing.T) {
 // what made a working backoff look absent when the failure was investigated
 // after the fact.
 func TestExhaustedRetriesSayHowHardItTried(t *testing.T) {
-	a := NewAgent(&overloadClient{failFor: 99}, "m", "sys", Registry{})
-	a.RetryBaseDelay = time.Millisecond
+	a := newTestAgent(&overloadClient{failFor: 99}, "m", "sys", Registry{})
+	a.retryBaseDelay = time.Millisecond
 
 	err := a.Prompt(context.Background(), "go", nil, func(AgentEvent) {})
 	if err == nil {
@@ -147,7 +147,7 @@ func TestExhaustedRetriesSayHowHardItTried(t *testing.T) {
 // A single failure that is never retried must NOT claim attempts it didn't
 // make — the count has to be trustworthy or it is worse than absent.
 func TestSingleAttemptErrorSaysNothingAboutRetries(t *testing.T) {
-	a := NewAgent(&permanentClient{}, "m", "sys", Registry{})
+	a := newTestAgent(&permanentClient{}, "m", "sys", Registry{})
 	err := a.Prompt(context.Background(), "go", nil, func(AgentEvent) {})
 	if err == nil {
 		t.Fatal("want the permanent error")

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -22,7 +23,7 @@ func TestRevisionWriteFailurePreservesLiveState(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = sess.Close() })
-			s := &wsSession{sess: sess, agent: core.NewAgent(nil, "test", "", nil), hub: newWSHub(), ws: &Workspace{ctx: context.Background()}}
+			s := &wsSession{sess: sess, agent: coretest.NewAgent(nil, "test", "", nil), hub: newWSHub(), ws: &Workspace{ctx: context.Background()}}
 			msgs := []provider.Message{swipeMsg(provider.RoleUser, "u0"), swipeMsg(provider.RoleAssistant, "a0"), swipeMsg(provider.RoleUser, "u1"), swipeMsg(provider.RoleAssistant, "a1")}
 			for _, m := range msgs {
 				if err := sess.AppendMessage(m); err != nil {

@@ -50,7 +50,7 @@ func rejected() []provider.Event {
 func retryingAgent(t *testing.T, client provider.Client) *Agent {
 	t.Helper()
 	a := cacheAwareAgent(t, client)
-	a.RetryBaseDelay = time.Millisecond
+	a.retryBaseDelay = time.Millisecond
 	return a
 }
 
@@ -167,7 +167,7 @@ func TestTheRetryBudgetIsSharedAcrossBothSummarizers(t *testing.T) {
 		t.Errorf("Compact error = %v; want the provider's own overload text", err)
 	}
 	// 1 turn + 4 warm (first + MaxRetries) + 1 cold (first, budget spent).
-	want := 1 + (1 + a.MaxRetries) + 1
+	want := 1 + (1 + a.maxRetries) + 1
 	if got := len(client.calls()); got != want {
 		t.Fatalf("client saw %d requests; want %d — the cold fallback must inherit the SPENT budget, not a fresh one", got, want)
 	}
@@ -208,7 +208,7 @@ func TestCompactionBackoffIsCancellable(t *testing.T) {
 		return overloaded(), nil
 	}}
 	a := cacheAwareAgent(t, client)
-	a.RetryBaseDelay = time.Hour // only a cancel can get us out of this
+	a.retryBaseDelay = time.Hour // only a cancel can get us out of this
 
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 		t.Fatal(err)
@@ -250,7 +250,7 @@ func TestExhaustedOverloadIsNotBucketedAsAWarmFailure(t *testing.T) {
 		switch {
 		case n == 0:
 			return saidText("hi", 50), nil
-		case n <= 1+a.MaxRetries: // warm: first attempt + every retry, all overloaded
+		case n <= 1+a.maxRetries: // warm: first attempt + every retry, all overloaded
 			return overloaded(), nil
 		default: // cold gets through
 			return saidText("## Goal\nship it", 100), nil

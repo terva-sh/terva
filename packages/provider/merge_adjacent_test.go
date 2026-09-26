@@ -28,7 +28,7 @@ func roleSeq(msgs []Message) []Role {
 func TestMergeAdjacentSameRole(t *testing.T) {
 	// Deleting the assistant reply between two user turns leaves user-user.
 	in := []Message{mrole(RoleUser, "u0"), mrole(RoleUser, "u1"), mrole(RoleAssistant, "a0")}
-	got := MergeAdjacentSameRole(in)
+	got := mergeAdjacentSameRole(in)
 	if want := []Role{RoleUser, RoleAssistant}; !reflect.DeepEqual(roleSeq(got), want) {
 		t.Fatalf("roles = %v, want %v", roleSeq(got), want)
 	}
@@ -37,14 +37,14 @@ func TestMergeAdjacentSameRole(t *testing.T) {
 	}
 
 	// A run of three same-role turns collapses to one.
-	run := MergeAdjacentSameRole([]Message{mrole(RoleAssistant, "a0"), mrole(RoleAssistant, "a1"), mrole(RoleAssistant, "a2")})
+	run := mergeAdjacentSameRole([]Message{mrole(RoleAssistant, "a0"), mrole(RoleAssistant, "a1"), mrole(RoleAssistant, "a2")})
 	if len(run) != 1 || len(run[0].Content) != 3 {
 		t.Errorf("run-of-three = %d turns / %d blocks, want 1/3", len(run), len(run[0].Content))
 	}
 
 	// An alternating transcript is unchanged.
 	alt := []Message{mrole(RoleUser, "u"), mrole(RoleAssistant, "a"), mrole(RoleUser, "u2")}
-	if got := MergeAdjacentSameRole(alt); !reflect.DeepEqual(roleSeq(got), roleSeq(alt)) {
+	if got := mergeAdjacentSameRole(alt); !reflect.DeepEqual(roleSeq(got), roleSeq(alt)) {
 		t.Errorf("alternating transcript changed: %v", roleSeq(got))
 	}
 }
@@ -54,7 +54,7 @@ func TestMergeAdjacentSameRole(t *testing.T) {
 // stored transcript and its cache prefix are never disturbed.
 func TestMergeAdjacentSameRoleDoesNotMutateInput(t *testing.T) {
 	in := []Message{mrole(RoleUser, "u0"), mrole(RoleUser, "u1")}
-	_ = MergeAdjacentSameRole(in)
+	_ = mergeAdjacentSameRole(in)
 	if len(in) != 2 {
 		t.Errorf("input slice length changed to %d", len(in))
 	}

@@ -8,9 +8,11 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -59,7 +61,7 @@ func swapFixture() (*core.Agent, *routedTool, *tools.StatusTool) {
 	routed := &routedTool{prov: "old-prov", model: "old-model"}
 	status := &tools.StatusTool{Provider: "old-prov", AuthMethod: "apikey", BaseURL: "https://old.example"}
 	reg := core.Registry{"routed_probe": routed, "terva_status": status}
-	ag := core.NewAgent(&oldClient{snap: provider.UsageSnapshot{Provider: "old-prov"}}, "old-model", "", reg)
+	ag := coretest.NewAgent(&oldClient{snap: provider.UsageSnapshot{Provider: "old-prov"}}, "old-model", "", reg)
 	return ag, routed, status
 }
 
@@ -71,7 +73,7 @@ func swapFixture() (*core.Agent, *routedTool, *tools.StatusTool) {
 func TestTheUsageSnapshotIsCarriedBeforeTheNewClientIsInstalled(t *testing.T) {
 	ag, _, _ := swapFixture()
 	nc := &swapClient{}
-	nc.installed = func() bool { return ag.Client == provider.Client(nc) }
+	nc.installed = func() bool { return ag.Client() == provider.Client(nc) }
 
 	ApplyModelSwap(ModelSwap{Agent: ag, Client: nc, Provider: "new-prov", Model: "new-model"})
 
@@ -85,8 +87,8 @@ func TestTheUsageSnapshotIsCarriedBeforeTheNewClientIsInstalled(t *testing.T) {
 		t.Error("the seed happened after the new client was already installed, so it carried the new " +
 			"client's empty snapshot rather than the old one's observation")
 	}
-	if ag.Client != provider.Client(nc) || ag.Model != "new-model" {
-		t.Errorf("agent did not end on the new client/model: %v / %q", ag.Client, ag.Model)
+	if ag.Client() != provider.Client(nc) || ag.Model() != "new-model" {
+		t.Errorf("agent did not end on the new client/model: %v / %q", ag.Client(), ag.Model())
 	}
 }
 
@@ -115,10 +117,10 @@ func TestAnIDSwapLeavesTheStatusIdentityAlone(t *testing.T) {
 	if status.AuthMethod != "apikey" || status.BaseURL != "https://old.example" {
 		t.Errorf("an id swap erased the status identity: %q/%q", status.AuthMethod, status.BaseURL)
 	}
-	if ag.Model != "new-model" {
-		t.Errorf("agent model = %q, want the new id", ag.Model)
+	if ag.Model() != "new-model" {
+		t.Errorf("agent model = %q, want the new id", ag.Model())
 	}
-	if _, isOld := ag.Client.(*oldClient); !isOld {
+	if _, isOld := ag.Client().(*oldClient); !isOld {
 		t.Error("an id swap replaced the client; it is supposed to keep serving")
 	}
 }
@@ -157,7 +159,7 @@ func TestSwapOverrideReplacesTheAssignmentAndNothingElse(t *testing.T) {
 	if got != "new-model" {
 		t.Errorf("the host's Swap was not used (got %q)", got)
 	}
-	if ag.Model == "new-model" {
+	if ag.Model() == "new-model" {
 		t.Error("ApplyModelSwap assigned the model itself despite the host supplying Swap")
 	}
 	if status.Provider != "new-prov" || routed.prov != "new-prov" {
@@ -187,7 +189,7 @@ func TestANilAgentIsANoOp(t *testing.T) {
 func TestTheSwapRecordsTheNewRouteOnTheSession(t *testing.T) {
 	ag, _, _ := swapFixture()
 	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
-	sess, err := core.NewSessionAtPath(path, "/ws", "old-prov", "old-model", "0.0.0")
+	sess, err := session.NewSessionAtPath(path, "/ws", "old-prov", "old-model", "0.0.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +217,7 @@ func TestTheSwapRecordsTheNewRouteOnTheSession(t *testing.T) {
 func TestTheRouteIsRecordedAfterTheAgentHasMoved(t *testing.T) {
 	ag, routed, _ := swapFixture()
 	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
-	sess, err := core.NewSessionAtPath(path, "/ws", "old-prov", "old-model", "0.0.0")
+	sess, err := session.NewSessionAtPath(path, "/ws", "old-prov", "old-model", "0.0.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +260,7 @@ func TestASwapWithNoSessionIsFine(t *testing.T) {
 func TestReRecordingTheSameRouteWritesNothing(t *testing.T) {
 	ag, _, _ := swapFixture()
 	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
-	sess, err := core.NewSessionAtPath(path, "/ws", "same-prov", "same-model", "0.0.0")
+	sess, err := session.NewSessionAtPath(path, "/ws", "same-prov", "same-model", "0.0.0")
 	if err != nil {
 		t.Fatal(err)
 	}

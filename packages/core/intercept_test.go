@@ -25,25 +25,25 @@ func (r *recordingTool) Execute(_ context.Context, args json.RawMessage, _ func(
 	}, nil
 }
 
-// TestBeforeToolExecuteModifiesArgs verifies that a non-nil
-// modifiedArgs returned from BeforeToolExecute is what the tool
+// TestGateModifiesArgs verifies that a non-nil
+// modifiedArgs returned from the gate is what the tool
 // actually sees.
-func TestBeforeToolExecuteModifiesArgs(t *testing.T) {
+func TestGateModifiesArgs(t *testing.T) {
 	rec := &recordingTool{}
 	reg := Registry{"echo": rec}
-	a := NewAgent(nil, "test", "", reg)
+	a := newTestAgent(nil, "test", "", reg)
 
 	newArgs := json.RawMessage(`{"command":"echo GUARDED: ls"}`)
-	a.BeforeToolExecute = func(_ context.Context, call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	a.gate = GateFunc(func(_ context.Context, call provider.ToolCallBlock, _ Tool) (bool, string, json.RawMessage) {
 		return true, "", newArgs
-	}
+	})
 
 	ctx := context.Background()
 	res := a.runOneTool(ctx, provider.ToolCallBlock{
 		ID:        "T1",
 		Name:      "echo",
 		Arguments: json.RawMessage(`{"command":"ls"}`),
-	}, a.Tools, func(AgentEvent) {})
+	}, a.tools, func(AgentEvent) {})
 	if res.IsError {
 		t.Fatalf("unexpected error result: %v", res.Content)
 	}
@@ -52,17 +52,17 @@ func TestBeforeToolExecuteModifiesArgs(t *testing.T) {
 	}
 }
 
-// TestBeforeToolExecuteInvalidJSONIgnored verifies that returning
+// TestGateInvalidJSONIgnored verifies that returning
 // malformed JSON as modifiedArgs leaves the original args intact
 // (safety: a buggy interceptor can't corrupt the call).
-func TestBeforeToolExecuteInvalidJSONIgnored(t *testing.T) {
+func TestGateInvalidJSONIgnored(t *testing.T) {
 	rec := &recordingTool{}
 	reg := Registry{"echo": rec}
-	a := NewAgent(nil, "test", "", reg)
+	a := newTestAgent(nil, "test", "", reg)
 
-	a.BeforeToolExecute = func(_ context.Context, call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	a.gate = GateFunc(func(_ context.Context, call provider.ToolCallBlock, _ Tool) (bool, string, json.RawMessage) {
 		return true, "", json.RawMessage(`{not json`)
-	}
+	})
 
 	ctx := context.Background()
 	orig := json.RawMessage(`{"command":"ls"}`)
@@ -70,29 +70,29 @@ func TestBeforeToolExecuteInvalidJSONIgnored(t *testing.T) {
 		ID:        "T1",
 		Name:      "echo",
 		Arguments: orig,
-	}, a.Tools, func(AgentEvent) {})
+	}, a.tools, func(AgentEvent) {})
 	if string(rec.lastArgs) != string(orig) {
 		t.Errorf("tool saw %s, want original %s", string(rec.lastArgs), string(orig))
 	}
 }
 
-// TestBeforeToolExecuteBlockSurfacesReason verifies a refusal from
+// TestGateBlockSurfacesReason verifies a refusal from
 // the interceptor returns an error ToolResult with the reason text.
-func TestBeforeToolExecuteBlockSurfacesReason(t *testing.T) {
+func TestGateBlockSurfacesReason(t *testing.T) {
 	rec := &recordingTool{}
 	reg := Registry{"echo": rec}
-	a := NewAgent(nil, "test", "", reg)
+	a := newTestAgent(nil, "test", "", reg)
 
-	a.BeforeToolExecute = func(_ context.Context, call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	a.gate = GateFunc(func(_ context.Context, call provider.ToolCallBlock, _ Tool) (bool, string, json.RawMessage) {
 		return false, "nope", nil
-	}
+	})
 
 	ctx := context.Background()
 	res := a.runOneTool(ctx, provider.ToolCallBlock{
 		ID:        "T1",
 		Name:      "echo",
 		Arguments: json.RawMessage(`{"command":"ls"}`),
-	}, a.Tools, func(AgentEvent) {})
+	}, a.tools, func(AgentEvent) {})
 	if !res.IsError {
 		t.Fatal("want error result, got success")
 	}

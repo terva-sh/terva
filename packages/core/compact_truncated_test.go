@@ -127,7 +127,7 @@ func TestTheTruncationNoticePromisesNoLedgerItDoesNotHave(t *testing.T) {
 		return truncatedText("## Goal\nship it, and then", 100), nil
 	}}
 	a := cacheAwareAgent(t, client)
-	a.ReadOnly = NewReadOnlySet("read")
+	a.SetToolsWithReadOnly(a.tools, NewReadOnlySet("read"))
 	if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
 		t.Fatal(err)
 	}

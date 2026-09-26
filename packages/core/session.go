@@ -700,129 +700,6 @@ type sessionLineHead struct {
 	Type string `json:"type"`
 }
 
-// wireMessage is the typed on-disk form of provider.Message. The
-// outer shape (role/content/time/meta) is identical to v1; only the
-// blocks gain a "type" field, so v1 readers (field presence, unknown
-// fields ignored) read v2 files and vice versa.
-type wireMessage struct {
-	Role    provider.Role     `json:"role"`
-	Content []wireBlock       `json:"content"`
-	Time    time.Time         `json:"time"`
-	Meta    map[string]string `json:"meta,omitempty"`
-}
-
-// wireBlock is one typed content block. One flat struct (rather than
-// per-kind types) keeps encoding/decoding a single switch; omitempty
-// keeps each kind's row as small as v1's.
-type wireBlock struct {
-	Type string `json:"type"`
-	// text
-	Text string `json:"text,omitempty"`
-	// image
-	MimeType string `json:"mime_type,omitempty"`
-	Data     []byte `json:"data,omitempty"`
-	ImageID  string `json:"image_id,omitempty"` // ig_… generation id (assistant-emitted images), for edit replay
-	// tool_call
-	ID        string          `json:"id,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Arguments json.RawMessage `json:"arguments,omitempty"`
-	// RawArguments preserves argument text that never parsed. Without it the
-	// row records a call with "{}" and the evidence of what the model actually
-	// sent is gone — which is precisely what made the original defect hard to
-	// read back out of a session.
-	RawArguments string `json:"raw_arguments,omitempty"`
-	// Signature is the provider's opaque token for the call (Gemini 3's
-	// thoughtSignature). A resumed session replays its transcript, so losing
-	// this on disk means every resumed Gemini 3 session 400s on its first turn.
-	Signature string `json:"signature,omitempty"`
-	// tool_result (Content nests text/image blocks)
-	CallID  string      `json:"call_id,omitempty"`
-	Content []wireBlock `json:"content,omitempty"`
-	IsError bool        `json:"is_error,omitempty"`
-	// compaction_summary — Provider names who issued the encrypted blob, and
-	// only that provider can replay it. Its own field rather than borrowing
-	// Name (the tool_call name): a reader of a session file should not have to
-	// know which block type is being decoded to know what a field means.
-	Provider string `json:"provider,omitempty"`
-	// reasoning — Shape names the provider block this came off. A resumed
-	// session replays its transcript, and an Anthropic thinking block is only
-	// replayable to Anthropic, so losing this on disk turns a resumable turn
-	// into one that is silently dropped from the request.
-	ReasoningID string `json:"reasoning_id,omitempty"`
-	Summary     string `json:"summary,omitempty"`
-	Encrypted   string `json:"encrypted_content,omitempty"`
-	Shape       string `json:"shape,omitempty"`
-}
-
-// Block type discriminator values (wireBlock.Type).
-const (
-	blockText       = "text"
-	blockImage      = "image"
-	blockToolCall   = "tool_call"
-	blockToolResult = "tool_result"
-	blockReasoning  = "reasoning"
-	// blockCompaction matches the provider's own wire name so a session file
-	// and a request body read the same way side by side.
-	blockCompaction = "compaction_summary"
-)
-
-// encodeWireMessage converts a provider.Message to its typed on-disk
-// form. Unknown in-memory block kinds are impossible today (Content
-// is a closed set); if one appears it is dropped here at write time,
-// which is loud in tests rather than silent at read time.
-func encodeWireMessage(m provider.Message) wireMessage {
-	w := wireMessage{Role: m.Role, Time: m.Time, Meta: m.Meta}
-	w.Content = encodeWireBlocks(m.Content)
-	return w
-}
-
-func encodeWireBlocks(blocks []provider.Content) []wireBlock {
-	out := make([]wireBlock, 0, len(blocks))
-	for _, c := range blocks {
-		switch b := c.(type) {
-		case provider.TextBlock:
-			out = append(out, wireBlock{Type: blockText, Text: b.Text})
-		case provider.ImageBlock:
-			out = append(out, wireBlock{Type: blockImage, MimeType: b.MimeType, Data: b.Data, ImageID: b.ID})
-		case provider.ToolCallBlock:
-			// Belt and braces on the invariant provider.FinalizeToolArguments
-			// establishes. An invalid RawMessage does not corrupt one field: it
-			// makes json.Marshal of the WHOLE message fail, returning zero
-			// bytes, so AppendMessage errors and the assistant turn never
-			// reaches disk while its tool_result does — leaving an orphan
-			// result no reader can attribute. ToolCallBlock is also built
-			// outside the provider package (the SDK, tests, replay), so the
-			// row's writability is guaranteed here rather than assumed of every
-			// producer. The original text moves to RawArguments instead of
-			// being dropped, because it is the only record of what was sent.
-			args, rawArgs := b.Arguments, b.RawArguments
-			if len(args) == 0 || !json.Valid(args) {
-				if rawArgs == "" {
-					rawArgs = string(args)
-				}
-				args = json.RawMessage("{}")
-			}
-			out = append(out, wireBlock{Type: blockToolCall, ID: b.ID, Name: b.Name, Arguments: args, RawArguments: rawArgs, Signature: b.Signature})
-		case provider.ToolResultBlock:
-			out = append(out, wireBlock{
-				Type:    blockToolResult,
-				CallID:  b.CallID,
-				Content: encodeWireBlocks(b.Content),
-				IsError: b.IsError,
-			})
-		case provider.ReasoningBlock:
-			out = append(out, wireBlock{Type: blockReasoning, ReasoningID: b.ID, Summary: b.Summary, Encrypted: b.Encrypted, Shape: b.Shape})
-		case provider.CompactionBlock:
-			// Losing this block loses the compaction itself: the blob is the
-			// backend's only encoding of the turns it replaced, and terva
-			// cannot rebuild one. A resume that dropped it would silently
-			// resume a conversation with a hole where its history was.
-			out = append(out, wireBlock{Type: blockCompaction, ID: b.ID, Encrypted: b.Encrypted, Provider: b.Provider})
-		}
-	}
-	return out
-}
-
 // CWDHash is the stable short hash of a working directory used to key
 // per-cwd storage. It is exported so other per-project storage (e.g. an
 // extension's data dir) can reuse the exact value SessionsDir buckets
@@ -1162,42 +1039,7 @@ func SessionUsageDetail(path string) (cumulative, lastTurn, resumeContext provid
 	}
 	defer f.Close()
 
-	// Some historical sessions logged the per-turn `usage` field as a copy
-	// of `cumulative` instead of the true delta. To recover an accurate
-	// last-turn snapshot (used by the status-bar context gauge on resume),
-	// we always derive lastTurn from the delta between the final two
-	// cumulative rows. For prompt-size purposes, cache_read/cache_write
-	// reflect the most recent prompt directly, so we take those from the
-	// final cumulative row as-is rather than as a delta.
-	//
-	// Compaction rows carry their own spend (AppendCompaction), and it is
-	// folded into the running total in memory — so a turn's cumulative row
-	// already contains every compaction that preceded it. Two corrections
-	// follow, and both matter:
-	//
-	//   - A compaction BETWEEN the final two turns inflates the naive delta,
-	//     because cum_N = cum_{N-1} + compaction + u_N. Left uncorrected the
-	//     resumed context gauge reads roughly double (a compaction's input is
-	//     transcript-sized), and the first threshold check fires a spurious
-	//     auto-compact on an already-condensed transcript. Subtract it.
-	//   - A compaction AFTER the last turn is in no cumulative row at all —
-	//     the in-memory total has it, but nothing wrote it. Compact and then
-	//     quit for the day, which is an ordinary thing to do, and the spend
-	//     vanished. Add it.
-	//
-	// Old sessions have no usage on their compaction rows; both corrections
-	// are then zero and this degrades exactly to the previous behaviour.
-	var prevCum provider.Usage
-	var haveCum bool
-	var sinceLastTurn provider.Usage // compaction spend after the newest usage row
-	var betweenLastTwo provider.Usage
-	// A compaction after the newest usage row SUPERSEDES lastTurn as the resume
-	// baseline — see resumeContext below. Tracked as a flag beside the estimate
-	// because /clear writes AppendCompaction(nil), whose estimate is legitimately
-	// 0: "the transcript is empty now" and "no compaction happened" are opposite
-	// facts that a bare int cannot tell apart.
-	var trailingCompaction bool
-	var trailingCompactionTokens int
+	var fold usageFold
 	if ierr := forEachJSONLLine(f, func(line []byte) error {
 		var head sessionLineHead
 		if err := json.Unmarshal(line, &head); err != nil {
@@ -1211,8 +1053,7 @@ func SessionUsageDetail(path string) (cumulative, lastTurn, resumeContext provid
 			// jumps at the moment you resume. Cheap — a compaction row holds the
 			// post-compaction transcript, which is a handful of messages.
 			if msgs, herr := hydrateCompaction(line, nil); herr == nil {
-				trailingCompaction = true
-				trailingCompactionTokens = estimateTokens(msgs)
+				fold.compactedTo(msgs)
 			}
 			var row struct {
 				Usage *provider.Usage `json:"usage"`
@@ -1220,7 +1061,7 @@ func SessionUsageDetail(path string) (cumulative, lastTurn, resumeContext provid
 			if err := json.Unmarshal(line, &row); err != nil || row.Usage == nil {
 				return nil
 			}
-			sinceLastTurn = sinceLastTurn.Add(*row.Usage)
+			fold.compactionSpend(*row.Usage)
 		case "usage":
 			var row struct {
 				Usage      provider.Usage `json:"usage"`
@@ -1231,96 +1072,14 @@ func SessionUsageDetail(path string) (cumulative, lastTurn, resumeContext provid
 			if err := json.Unmarshal(line, &row); err != nil {
 				return nil
 			}
-			// A sub-agent's spend is real but is not a TURN of this session, so
-			// it takes the compaction path: folded into the total, never made
-			// the baseline for lastTurn. Left on the usage path, a session whose
-			// final row was a child's would resume with the CHILD's prompt size
-			// as its context gauge — and a child is routinely larger than its
-			// parent, so the first threshold check would auto-compact a
-			// transcript that never grew.
-			//
-			// A host's side-channel call takes the same path. In memory it was
-			// never the snapshot (RecordSideChannelUsage books total-only), but
-			// on disk it was an ordinary row, so a session whose last row was
-			// a side chat's bespoke prompt resumed with THAT as its gauge.
-			if row.Delegated || row.Source != "" {
-				sinceLastTurn = sinceLastTurn.Add(row.Usage)
-				return nil
-			}
-			if haveCum {
-				prevCum = cumulative
-			}
-			betweenLastTwo = sinceLastTurn
-			sinceLastTurn = provider.Usage{}
-			// A real turn ran after that compaction, so its provider-reported
-			// prompt size is the truth again and the estimate is superseded in
-			// its turn. Same handoff as in memory, where the next completed
-			// request overwrites the estimate SetLastTurn seeded.
-			trailingCompaction = false
-			trailingCompactionTokens = 0
-			cumulative = row.Cumulative
-			haveCum = true
+			fold.usage(row.Usage, row.Cumulative, row.Delegated || row.Source != "")
 		}
 		return nil
 	}); ierr != nil {
 		return provider.Usage{}, provider.Usage{}, provider.Usage{}, ierr
 	}
-	if haveCum {
-		// Charge the compactions that ran between the final two turns to the
-		// baseline, not to the turn: delta(cum_N, cum_{N-1} + between) = u_N.
-		prevCum = prevCum.Add(betweenLastTwo)
-		// input/output are monotonic totals -> per-turn = delta.
-		lastTurn.InputTokens = nonNegDelta(cumulative.InputTokens, prevCum.InputTokens)
-		lastTurn.OutputTokens = nonNegDelta(cumulative.OutputTokens, prevCum.OutputTokens)
-		// cache_read/write on the final row already represent the last prompt's
-		// cache hit/creation, not a running total of bytes; use directly.
-		lastTurn.CacheReadTokens = cumulative.CacheReadTokens - prevCum.CacheReadTokens
-		if lastTurn.CacheReadTokens < 0 {
-			lastTurn.CacheReadTokens = cumulative.CacheReadTokens
-		}
-		lastTurn.CacheWriteTokens = cumulative.CacheWriteTokens - prevCum.CacheWriteTokens
-		if lastTurn.CacheWriteTokens < 0 {
-			lastTurn.CacheWriteTokens = cumulative.CacheWriteTokens
-		}
-		lastTurn.CostUSD = cumulative.CostUSD - prevCum.CostUSD
-		if lastTurn.CostUSD < 0 {
-			lastTurn.CostUSD = 0
-		}
-	}
-	// A compaction after the newest turn never reached a cumulative row. Fold
-	// it into the total — but NOT into lastTurn, which reports what that turn
-	// actually spent and is not the compaction's to rewrite.
-	cumulative = cumulative.Add(sinceLastTurn)
-
-	// resumeContext is what a resuming host should SEED the gauge with, and it
-	// is lastTurn only while lastTurn still describes the transcript on disk.
-	//
-	// A compaction after the newest turn breaks that. Compacting and quitting
-	// for the day leaves the gauge reporting the prompt size of a transcript
-	// that no longer exists — measured on a real session, 98k against a ~5.8k
-	// checkpoint, 17× high — and the first threshold check on resume then fires
-	// a pointless auto-compact on an already-condensed transcript. That is the
-	// same stale-high failure the corrections above defend against, arriving
-	// through the one door they left open.
-	//
-	// Compaction spend is still never the answer: its input is transcript-sized
-	// by construction, so seeding FROM the compaction's own usage would read
-	// even higher. The answer is the compaction's RESULT — exactly what
-	// compact.go does in memory, and this is that same re-baseline recovered
-	// from the file so a resumed session does not disagree with the one that
-	// wrote it.
-	resumeContext = lastTurn
-	if trailingCompaction {
-		resumeContext = provider.Usage{InputTokens: trailingCompactionTokens}
-	}
+	cumulative, lastTurn, resumeContext = fold.result()
 	return cumulative, lastTurn, resumeContext, nil
-}
-
-func nonNegDelta(cur, prev int) int {
-	if cur < prev {
-		return cur
-	}
-	return cur - prev
 }
 
 // LoadStats records what reconstructing a session's transcript cost — the fold's
@@ -1335,21 +1094,6 @@ type LoadStats struct {
 	Amends    int
 	TailTakes int
 }
-
-// InterruptStub is the synthetic tool_result injected for a tool_use that was
-// restored without a matching result (an interrupted or lost call). Text is the
-// model-visible explanation and IsError marks it a failure. A planned restart
-// reconciles its interrupted call as expected (IsError:false) rather than a
-// generic abort, so the agent does not read its own successful restart as a
-// failed tool call.
-type InterruptStub struct {
-	Text    string
-	IsError bool
-}
-
-// defaultInterruptStub reconciles an unmatched tool_use as a generic abort — the
-// long-standing behavior for a crash/stop or a lost result.
-var defaultInterruptStub = InterruptStub{Text: "tool call was aborted; no result recorded.", IsError: true}
 
 // OpenSession opens a session file, replaying it into a live transcript, with
 // any interrupted tool call reconciled as a generic abort (see InterruptStub).
@@ -1399,6 +1143,51 @@ func ReadSessionMessages(path string) ([]provider.Message, error) {
 		return nil, err
 	}
 	return r.messages, nil
+}
+
+// ReadSessionTranscript replays a session file read-only and returns what
+// Agent.Resume takes: the messages, the usage figures, and the activated tool
+// groups. Like every reader here it takes no lock (decision 0018), so it can
+// read a session another process is writing.
+//
+// The messages and the usage come from separate passes over the file, so a
+// write landing between them could pair a transcript with figures from after
+// it: a clear, say, would give the old messages a zero gauge. So the usage is
+// read on both sides of the replay. When the two agree, no row that moves the
+// usage landed while the replay ran, and the pair describes one state of the
+// file. When they differ the read is retried, and a session that keeps moving
+// is an error rather than a guess.
+// betweenTranscriptPasses runs after ReadSessionTranscript's replay. It does
+// nothing; a test replaces it to land a write where a real one could.
+var betweenTranscriptPasses = func() {}
+
+func ReadSessionTranscript(path string) (Transcript, error) {
+	const attempts = 5
+	for range attempts {
+		cum, last, resume, err := SessionUsageDetail(path)
+		if err != nil {
+			return Transcript{}, err
+		}
+		r, err := replaySession(path, defaultInterruptStub)
+		if err != nil {
+			return Transcript{}, err
+		}
+		betweenTranscriptPasses()
+		cum2, last2, resume2, err := SessionUsageDetail(path)
+		if err != nil {
+			return Transcript{}, err
+		}
+		if cum2 != cum || last2 != last || resume2 != resume {
+			continue
+		}
+		return Transcript{
+			Messages:         r.messages,
+			Cumulative:       cum,
+			ResumeContext:    resume,
+			ActiveToolGroups: r.activeGroups,
+		}, nil
+	}
+	return Transcript{}, fmt.Errorf("read session %s: it changed during each of %d reads", path, attempts)
 }
 
 // ReadSessionMeta replays a session file read-only and returns its transcript
@@ -1742,135 +1531,6 @@ func SessionMsgVariant(path string, index int) (mv MsgVariants, ok bool, err err
 		return MsgVariants{}, false, walkErr
 	}
 	return mv, ok, nil
-}
-
-// applyImageExclusions replaces every ImageBlock whose content sha256 is in the
-// excluded set with the standard rejected-image note — directly in a message
-// and nested in a tool result. Content-addressed, so one exclude_image
-// directive covers every copy of the image (tool result + codex mirror) and
-// survives reordering. Mutates and returns msgs.
-func applyImageExclusions(msgs []provider.Message, excluded map[string]bool) []provider.Message {
-	isExcluded := func(b provider.ImageBlock) bool { return excluded[imageSHA256(b.Data)] }
-	for mi := range msgs {
-		content := msgs[mi].Content
-		for ci := range content {
-			switch v := content[ci].(type) {
-			case provider.ImageBlock:
-				if isExcluded(v) {
-					content[ci] = provider.TextBlock{Text: imageRejectedNote}
-				}
-			case provider.ToolResultBlock:
-				changed := false
-				for ii := range v.Content {
-					if ib, ok := v.Content[ii].(provider.ImageBlock); ok && isExcluded(ib) {
-						v.Content[ii] = provider.TextBlock{Text: imageRejectedNote}
-						changed = true
-					}
-				}
-				if changed {
-					content[ci] = v
-				}
-			}
-		}
-	}
-	return msgs
-}
-
-// repairToolUseResultPairs walks a restored transcript and
-// synthesises stub tool_result blocks for any assistant
-// tool_use blocks that aren't paired with a matching result in
-// the next message. Anthropic (and OpenAI via the responses API)
-// reject any request whose transcript leaves a tool_use without
-// its matching tool_result immediately after, with errors like:
-//
-//	messages.8: `tool_use` ids were found without `tool_result`
-//	blocks immediately after
-//
-// Corruption gets into the transcript two ways we know of:
-//
-//   - Older terva builds that persisted the assistant tool_use row
-//     before the tool_result row, then crashed between the two.
-//   - Abort paths in older builds that didn't drop the mid-turn
-//     assistant message cleanly.
-//
-// Rather than change runtime semantics (which would risk hiding a
-// real bug), we scrub on load: any unmatched tool_use gets a stub
-// tool_result injected as a RoleTool message so the next
-// outbound request passes the provider's validity check. The stub
-// reads "tool call was aborted; no result recorded." so the
-// model can see what happened and decide whether to retry.
-//
-// Runs once per OpenSession call. No cost on the hot path.
-func repairToolUseResultPairs(msgs []provider.Message) []provider.Message {
-	return repairToolUseResultPairsWith(msgs, defaultInterruptStub)
-}
-
-// repairToolUseResultPairsWith is repairToolUseResultPairs with a caller-chosen
-// stub for the synthesized results — so a planned restart reconciles its
-// interrupted call as expected text (non-error) rather than a generic abort.
-func repairToolUseResultPairsWith(msgs []provider.Message, stub InterruptStub) []provider.Message {
-	if len(msgs) == 0 {
-		return msgs
-	}
-	out := make([]provider.Message, 0, len(msgs)+2)
-	for i, m := range msgs {
-		out = append(out, m)
-		if m.Role != provider.RoleAssistant {
-			continue
-		}
-		// Collect tool_use ids in this assistant message.
-		var ids []string
-		for _, c := range m.Content {
-			if tc, ok := c.(provider.ToolCallBlock); ok {
-				ids = append(ids, tc.ID)
-			}
-		}
-		if len(ids) == 0 {
-			continue
-		}
-		// Look at the next message (if any) and collect tool_result
-		// CallIDs it covers.
-		have := map[string]bool{}
-		if i+1 < len(msgs) && msgs[i+1].Role == provider.RoleTool {
-			for _, c := range msgs[i+1].Content {
-				if tr, ok := c.(provider.ToolResultBlock); ok {
-					have[tr.CallID] = true
-				}
-			}
-		}
-		// Build stubs for any missing id.
-		var stubs []provider.Content
-		for _, id := range ids {
-			if have[id] {
-				continue
-			}
-			stubs = append(stubs, provider.ToolResultBlock{
-				CallID:  id,
-				Content: []provider.Content{provider.TextBlock{Text: stub.Text}},
-				IsError: stub.IsError,
-			})
-		}
-		if len(stubs) == 0 {
-			continue
-		}
-		// Merge into the next tool-role message if present,
-		// otherwise insert a synthetic one right after the
-		// assistant message. Merging keeps the tool-role row
-		// count stable; inserting handles the common case where
-		// no tool message was persisted at all.
-		if i+1 < len(msgs) && msgs[i+1].Role == provider.RoleTool {
-			msgs[i+1].Content = append(msgs[i+1].Content, stubs...)
-			// We already appended m to out; the modified next
-			// message will be appended on the following iteration.
-			continue
-		}
-		out = append(out, provider.Message{
-			Role:    provider.RoleTool,
-			Content: stubs,
-			Time:    m.Time,
-		})
-	}
-	return out
 }
 
 // LatestSession returns the most recent session file for cwd, or "".
@@ -3389,6 +3049,20 @@ func (s *Session) LogError(errText string) error {
 	return nil
 }
 
+// Identity is what an agent adopts when it persists to this session: the
+// file's basename as the ID, the path, and the meta UUID as the cache key.
+// A nil session is the zero identity, so a host can pass what it has.
+func (s *Session) Identity() TranscriptIdentity {
+	if s == nil {
+		return TranscriptIdentity{}
+	}
+	return TranscriptIdentity{
+		ID:       strings.TrimSuffix(filepath.Base(s.Path), ".jsonl"),
+		Path:     s.Path,
+		CacheKey: s.ID,
+	}
+}
+
 // Close flushes and closes the session file. If the session was
 // freshly created in this process and never had any messages
 // appended (the user opened terva, looked around, and exited without
@@ -3634,35 +3308,6 @@ func hydrateMessage(lineBytes []byte, rep *loadReport) (provider.Message, error)
 		return provider.Message{}, err
 	}
 	return hydrateMessageObject(row.Message, rep)
-}
-
-// decodeWireBlock rebuilds one v2 typed block. ok=false means the
-// type is unrecognized (written by a newer terva) — the caller records
-// it and skips, rather than degrading it to an empty text block.
-func decodeWireBlock(b wireBlock) (provider.Content, bool) {
-	switch b.Type {
-	case blockText:
-		return provider.TextBlock{Text: b.Text}, true
-	case blockImage:
-		return provider.ImageBlock{MimeType: b.MimeType, Data: b.Data, ID: b.ImageID}, true
-	case blockToolCall:
-		return provider.ToolCallBlock{ID: b.ID, Name: b.Name, Arguments: b.Arguments, RawArguments: b.RawArguments, Signature: b.Signature}, true
-	case blockToolResult:
-		block := provider.ToolResultBlock{CallID: b.CallID, IsError: b.IsError}
-		for _, inner := range b.Content {
-			if c, ok := decodeWireBlock(inner); ok {
-				block.Content = append(block.Content, c)
-			}
-		}
-		return block, true
-	case blockReasoning:
-		return provider.NormalizeLegacyReasoningShape(provider.ReasoningBlock{
-			ID: b.ReasoningID, Summary: b.Summary, Encrypted: b.Encrypted, Shape: b.Shape,
-		}), true
-	case blockCompaction:
-		return provider.CompactionBlock{ID: b.ID, Encrypted: b.Encrypted, Provider: b.Provider}, true
-	}
-	return nil, false
 }
 
 func hydrateMessageObject(rawMessage []byte, rep *loadReport) (provider.Message, error) {

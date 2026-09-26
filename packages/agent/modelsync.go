@@ -12,8 +12,10 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/modelfiles"
+	"terva.sh/terva/packages/agent/modelreg"
+	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/provider"
-	"terva.sh/terva/packages/provider/auth"
 )
 
 // ModelCachePath returns the on-disk location of the merged model cache.
@@ -28,12 +30,12 @@ func UserModelsPath() string { return config.UserModelsPath() }
 // package so FindModel / ModelsForProvider see live ids immediately.
 // Safe to call before any credentials are known.
 func LoadCachedModels() {
-	c, err := provider.LoadCache(ModelCachePath())
+	c, err := modelfiles.LoadCache(ModelCachePath())
 	if err != nil {
 		return
 	}
 	if len(c.Models) > 0 {
-		provider.SetLiveModels(c.Models)
+		modelreg.SetLiveModels(c.Models)
 	}
 }
 
@@ -43,14 +45,14 @@ func LoadCachedModels() {
 // JSON, negative widths) are surfaced as one warning per line on stderr;
 // the well-formed entries from the rest of the file are still loaded.
 func LoadUserModels() {
-	overrides, warnings := provider.LoadUserModelsWithWarnings(UserModelsPath())
+	overrides, warnings := modelfiles.LoadUserModelsWithWarnings(UserModelsPath())
 	for _, w := range warnings {
 		fmt.Fprintln(os.Stderr, "terva:", w)
 	}
 	if len(overrides) == 0 {
 		return
 	}
-	provider.SetUserOverrides(overrides)
+	modelreg.SetUserOverrides(overrides)
 }
 
 // compatSlots are the two shared compatible provider ids, in picker order.
@@ -71,7 +73,7 @@ func LoadCompatModel() {
 		if ctxWin <= 0 {
 			ctxWin = unknownModelContext
 		}
-		provider.RegisterExtraModel(provider.Model{
+		modelreg.RegisterExtraModel(provider.Model{
 			Provider:      id,
 			ID:            ep.Model,
 			DisplayName:   ep.Model,
@@ -98,9 +100,9 @@ func discoverCompatModels(ctx context.Context, id, baseURL, key string, defCtx i
 		err  error
 	)
 	if anthropic {
-		live, err = provider.DiscoverAnthropicCompatible(ctx, baseURL, key, defCtx, wire)
+		live, err = provider.DiscoverAnthropicCompatible(ctx, baseURL, key, defCtx, wire, modelreg.Active())
 	} else {
-		live, err = provider.DiscoverOpenAICompatible(ctx, baseURL, key, defCtx)
+		live, err = provider.DiscoverOpenAICompatible(ctx, baseURL, key, defCtx, modelreg.Active())
 	}
 	if err != nil {
 		return nil, err
@@ -143,7 +145,7 @@ func EnsureEndpointModels() {
 		if strings.TrimSpace(ep.BaseURL) == "" {
 			continue
 		}
-		if len(provider.ModelsForProvider(id)) > 0 {
+		if len(modelreg.ModelsForProvider(id)) > 0 {
 			continue // the cache already answered for this one
 		}
 		todo = append(todo, pending{id, ep})
@@ -173,7 +175,7 @@ func EnsureEndpointModels() {
 			mu.Lock()
 			defer mu.Unlock()
 			for _, m := range live {
-				provider.RegisterExtraModel(m)
+				modelreg.RegisterExtraModel(m)
 			}
 		}(p)
 	}
@@ -191,7 +193,7 @@ const endpointWarmupTimeout = 3 * time.Second
 // overflows the model's real window and the request fails outright.
 //
 // It is a floor for the genuinely unknown, not a default for the merely
-// unlisted: a model in the baked catalog keeps its curated window (MergeCatalog
+// unlisted: a model in the baked catalog keeps its curated window (the provider's catalog merge
 // preserves it), so this is only reached by models missing from the catalog.
 // `just models-sync` reports exactly which those are.
 const unknownModelContext = 32768
@@ -241,7 +243,7 @@ func RefreshCompatModelsAsync() {
 				return
 			}
 			for _, m := range live {
-				provider.RegisterExtraModel(m)
+				modelreg.RegisterExtraModel(m)
 			}
 		}(id, ep)
 	}
@@ -355,8 +357,8 @@ func ValidateAndRepairConfig() {
 	openCatalogue := cfg.Provider == "ollama" || provider.IsCompatProvider(cfg.Provider) ||
 		build.IsEndpointProvider(cfg.Provider, cfg)
 	if cfg.Provider != "" && cfg.Model != "" && !openCatalogue {
-		if _, err := provider.FindModel(cfg.Provider, cfg.Model); err != nil {
-			if m, err := provider.FindModel("", cfg.Model); err == nil {
+		if _, err := modelreg.FindModel(cfg.Provider, cfg.Model); err != nil {
+			if m, err := modelreg.FindModel("", cfg.Model); err == nil {
 				fix := build.DefaultModelForProvider(cfg.Provider)
 				fmt.Fprintf(os.Stderr,
 					"terva: config.json: model %q belongs to provider %q (config has provider=%q); switched model to %q\n",
@@ -486,7 +488,7 @@ func launchModelRefresh(force bool) {
 func waitModelRefresh() { modelRefreshWG.Wait() }
 
 func refreshModels(cachePath string, force bool) {
-	cached, _ := provider.LoadCache(cachePath)
+	cached, _ := modelfiles.LoadCache(cachePath)
 	if refreshGated(cached, force) {
 		return
 	}
@@ -549,9 +551,9 @@ func refreshModels(cachePath string, force bool) {
 		// gateways, and the openai-compatible endpoint's configured window is
 		// the user's own local server's, which has nothing to do with them.
 		// Anything in the baked catalog keeps its curated window regardless —
-		// MergeCatalog preserves it — so this only lands on models the catalog
+		// the provider's catalog merge preserves it — so this only lands on models the catalog
 		// is missing, which `just models-sync` reports.
-		live, err := provider.DiscoverOpenAICompatible(ctx, oc.baseURL, cred, unknownModelContext)
+		live, err := provider.DiscoverOpenAICompatible(ctx, oc.baseURL, cred, unknownModelContext, modelreg.Active())
 		if err != nil {
 			continue
 		}
@@ -594,8 +596,8 @@ func refreshModels(cachePath string, force bool) {
 	// default model (extra layer) and models.json entries (user layer)
 	// survive this landing at any time relative to other refreshes —
 	// precedence is structural, not call-ordered.
-	provider.SetLiveModels(all)
-	_ = provider.SaveCache(cachePath, provider.ModelCache{
+	modelreg.SetLiveModels(all)
+	_ = modelfiles.SaveCache(cachePath, provider.ModelCache{
 		FetchedAt: time.Now().UTC(),
 		Version:   provider.ModelCacheVersion,
 		Endpoints: endpointsFingerprint(),
@@ -617,7 +619,7 @@ func refreshGated(cached provider.ModelCache, force bool) bool {
 // endpointsFingerprint is a stable signature of the user's configured
 // OpenAI-compatible endpoints (id + base URL). It rides the model cache so a
 // change to the endpoint set forces a re-discovery on the next launch instead
-// of waiting out CacheTTL.
+// of waiting out the provider's six-hour cache TTL.
 func endpointsFingerprint() string {
 	cfg, err := config.LoadConfig()
 	if err != nil || len(cfg.Endpoints) == 0 {

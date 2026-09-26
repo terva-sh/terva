@@ -25,6 +25,28 @@ type Tool interface {
 	Execute(ctx context.Context, args json.RawMessage, progress func(string)) (ToolResult, error)
 }
 
+// LedgerArgsRenderer is implemented by a Tool that renders its own calls'
+// arguments for the executed-actions ledger, the list of state-changing calls
+// that compaction appends to its summary. The engine clips what it returns, as
+// it clips raw arguments. A tool without it is listed with the arguments
+// exactly as the model sent them.
+//
+// The ledger's budget per call is small, and only the tool knows which of its
+// arguments identify the call and which say nothing: BashTool drops a `cd` into
+// the directory it already runs in. Decision 0004: the engine never names a
+// concrete tool, so it cannot know this for any of them.
+type LedgerArgsRenderer interface {
+	LedgerArgs(args json.RawMessage) string
+}
+
+// LedgerFailureNoter is implemented by a Tool that says what one of its failed
+// calls implies about the call's effect. Its note replaces the host policy's
+// CompactionPrompts.LedgerFailed for that tool's calls. A shell command, for
+// one, can change the workspace in its early stages and still exit non-zero.
+type LedgerFailureNoter interface {
+	LedgerFailed() string
+}
+
 // ToolResult is the outcome of Tool.Execute.
 type ToolResult struct {
 	// Content is sent back to the LLM (text and/or images).

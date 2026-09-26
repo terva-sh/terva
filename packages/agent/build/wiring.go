@@ -22,6 +22,7 @@ import (
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // Agent wiring: the adapters, hook engine, MCP setup and event fan-out that
@@ -420,7 +421,7 @@ func OpenWorkGateMessage() string { return swarm.OpenWorkGateMessage() }
 // emits this before the turn that can invoke extension tools, so a
 // subscriber always sees session_start before that session's first
 // tool_call (the ordered-delivery guarantee).
-func EmitSessionStart(mgr *extensions.Manager, sess *core.Session) {
+func EmitSessionStart(mgr *extensions.Manager, sess *session.Session) {
 	if mgr == nil {
 		return
 	}
@@ -434,7 +435,7 @@ func EmitSessionStart(mgr *extensions.Manager, sess *core.Session) {
 		// event with the new cwd) instead of staying on the launch cwd.
 		ev.CWD = sess.Meta.CWD
 		if sess.Meta.CWD != "" {
-			ev.ProjectID = core.ProjectKey(sess.Meta.CWD)
+			ev.ProjectID = session.ProjectKey(sess.Meta.CWD)
 		}
 	}
 	// Bookend a switch: if a DIFFERENT session was last announced, tell
@@ -497,7 +498,7 @@ func WorkspaceChangeObserver(differ *tools.WorkspaceDiffer, extMgr *extensions.M
 // model round trip.
 //
 // The registry read must be race-free: pass Agent.ToolsSnapshot, which takes
-// the lock SetTools writes under. Ranging Agent.Tools directly races a
+// the lock SetTools writes under. Reading the registry outside it races a
 // mid-session /reload-ext.
 func TicketEditWarnResetObserver(registry func() core.Registry) func(core.AgentEvent) {
 	if registry == nil {
@@ -548,14 +549,7 @@ func (NonInteractiveExtHooks) RefreshContext() {}
 
 func (NonInteractiveExtHooks) RefreshTools() {}
 
-// wireNonInteractiveAgentExtHooks installs the same BeforeToolExecute
-// / BeforeTurn / BeforeAssistantMessage / OnEvent hooks the
-// interactive path wires up, so extensions get their normal
-// event-intercept surface in print / json / rpc flows too. When gate
-// is non-nil (--no-yolo) it runs FIRST in BeforeToolExecute, mirroring
-// interactive mode, so a refusal short-circuits before the extension
-// intercept sees the call.
-// BuildHookEngine loads the user config's hooks into an engine, plus a
+// buildHookEngine loads the user config's hooks into an engine, plus a
 // TRUSTED project's hooks (appended — both fire, user first), or nil when
 // none are configured. Hook misbehavior (timeouts, bad JSON) logs to
 // $TERVA_HOME/logs/hooks.log — stderr would corrupt the TUI and a broken
@@ -645,12 +639,13 @@ func HookSpecsFor(args Args, trusted bool) *hooks.Config {
 	return config.MergeHookConfigs(user.Hooks, config.TrustedProjectHooks(args.CWD, trusted))
 }
 
-// BuildBeforeToolExecute composes the tool-call ladder in its
-// canonical order — pre-hooks (may rewrite args; allow/deny are
-// final), the confirm gate (sees post-rewrite args), then the
-// extension intercept. One implementation shared by every mode so
-// the ladders cannot drift apart. hookEng, gate, and extMgr may each
-// be nil.
+// BuildToolGate composes the tool-call ladder in its canonical order —
+// pre-hooks (may rewrite args; allow/deny are final), the confirm gate
+// (sees post-rewrite args), then the extension intercept — as the
+// core.Gate every host hands to core.New. One implementation shared
+// by every mode so the ladders cannot drift apart. hookEng, gate, and
+// extMgr may each be nil; the result never is, and it always writes the
+// audit line.
 //
 // The ladder takes the TURN's context, per call, rather than closing over the
 // host's at wiring time. All three rungs can block — a hook is a subprocess, the
@@ -660,13 +655,14 @@ func HookSpecsFor(args Args, trusted bool) *hooks.Config {
 // descendant of the one the host used to pass, so anything carried in it is
 // still there; what it adds is an end.
 //
-// ag is consulted at gate time, per call, to resolve the tool's optional
-// Preview accessor. It may be nil; a nil ag simply falls back to BuildPreview
-// like any tool that does not opt in. The handle is read per call rather
-// than captured at wiring time because the registry is live and can be
-// swapped across turns.
-func BuildBeforeToolExecute(hookEng *hooks.Engine, gate *core.ConfirmGate, extMgr *extensions.Manager, ag *core.Agent) func(context.Context, provider.ToolCallBlock) (bool, string, json.RawMessage) {
-	return func(ctx context.Context, call provider.ToolCallBlock) (allowed bool, reason string, modArgs json.RawMessage) {
+// The engine passes the tool the call will run, resolved from the registry it
+// pinned for the turn, and the confirm gate's preview comes from that tool's
+// optional Preview accessor. A nil tool falls back to BuildPreview like any
+// tool that does not opt in. This used to take the agent and resolve the tool
+// itself through ag.ToolForCall, which forced every host to build the agent
+// before its gate; inside a turn that lookup returned this same tool.
+func BuildToolGate(hookEng *hooks.Engine, gate *core.ConfirmGate, extMgr *extensions.Manager) core.Gate {
+	return core.GateFunc(func(ctx context.Context, call provider.ToolCallBlock, tool core.Tool) (allowed bool, reason string, modArgs json.RawMessage) {
 		args := call.Arguments
 		// Audit every call with the gate's decision and the mode in force, so
 		// even a yolo session leaves a durable record of what ran and why it
@@ -700,14 +696,9 @@ func BuildBeforeToolExecute(hookEng *hooks.Engine, gate *core.ConfirmGate, extMg
 			// exit 2 is the enforcement spelling.
 		}
 		if !skipGate && gate != nil {
-			// Resolve the tool here, per call, so a Preview contributor is found
-			// even if the registry was rebuilt since wiring. args is post-rewrite,
-			// so the preview the approver reads describes what will actually run.
-			var t core.Tool
-			if ag != nil {
-				ctx, t, _ = ag.ToolForCall(ctx, call.Name)
-			}
-			ok, denyReason, _ := gate.Check(ctx, call.Name, args, core.ToolPreview(t, args, 120), call.ID)
+			// args is post-rewrite, so the preview the approver reads describes
+			// what will actually run.
+			ok, denyReason, _ := gate.Check(ctx, call.Name, args, core.ToolPreview(tool, args, 120), call.ID)
 			if !ok {
 				return false, denyReason, nil
 			}
@@ -726,7 +717,7 @@ func BuildBeforeToolExecute(hookEng *hooks.Engine, gate *core.ConfirmGate, extMg
 			return true, "", args
 		}
 		return true, "", nil
-	}
+	})
 }
 
 // ObserveAgentEventForHooks feeds the two tool events into the hook
@@ -830,182 +821,24 @@ func SlugAgent(agentID, task string) string {
 	return id + "-" + t
 }
 
-// WireHeadlessSessionPersist registers the agent's durable-persistence
-// observers on the on-disk session: every appended message, usage row,
-// post-compaction transcript, and image exclusion flows to disk as it happens,
-// so the real terva session IS the transcript and a crash costs at most the
-// in-flight turn. Used by the long-lived headless front ends — ACP sessions,
-// the workspace daemon, and the bot daemon's paired-DM agent. Also records the
-// session identity on the agent so terva_status can report it. A per-session
-// mutex serialises writes; each of these front ends runs one turn at a time per
-// agent, so this is belt-and-suspenders.
+// WireHeadlessSessionPersist makes the on-disk session the agent's transcript
+// store: every appended message, usage row, post-compaction transcript, and
+// image exclusion flows to disk as it happens, so the real terva session IS the
+// transcript and a crash costs at most the in-flight turn. Used by the
+// long-lived headless front ends — ACP sessions, the workspace daemon, and the
+// bot daemon's paired-DM agent. Also records the session identity on the agent
+// so terva_status can report it.
 //
-// Registers rather than assigns, so a host that also wants to observe messages
-// (a chat-bridge mirror, say) adds its own observer instead of silently
-// replacing durable persistence.
+// The store is attached rather than assigned, so a host that also wants to
+// observe messages (a chat-bridge mirror, say) adds its own observer instead of
+// silently replacing durable persistence.
 //
 // A write failure latches on the agent. The active run returns it at a safe
 // boundary; later runs refuse to start. The live transcript stays available for
-// recovery. Observers record failures without invoking host callbacks here.
-func WireHeadlessSessionPersist(ag *core.Agent, sess *core.Session) {
-	ag.AdoptSessionIdentity(sess)
-	var mu sync.Mutex
-	ag.AddMessageObserver(func(m provider.Message) {
-		mu.Lock()
-		defer mu.Unlock()
-		ag.RecordPersistenceError(sess.AppendMessage(m))
-	})
-	ag.AddUsageObserver(func(u, cum provider.Usage) {
-		mu.Lock()
-		defer mu.Unlock()
-		ag.RecordPersistenceError(sess.AppendUsage(u, cum))
-	})
-	// Sub-agent spend, on its own row marker. Same stream (the cumulative
-	// figure has to stay one coherent timeline so a crash recovers the true
-	// total), different attribution — without which a child's cold prompt reads
-	// as this session's cache collapsing to every offline analysis.
-	ag.AddDelegatedUsageObserver(func(u, cum provider.Usage) {
-		mu.Lock()
-		defer mu.Unlock()
-		ag.RecordPersistenceError(sess.AppendDelegatedUsage(u, cum))
-	})
-	// The host's own one-off completions, marked with the surface that spent
-	// them. Same stream again, and the mark is the whole point: unmarked, an
-	// idle next-step suggestion's request is a turn of this session to every
-	// offline reader, and what the suggestions cost cannot be asked.
-	ag.AddSideChannelUsageObserver(func(source string, u, cum provider.Usage) {
-		mu.Lock()
-		defer mu.Unlock()
-		ag.RecordPersistenceError(sess.AppendSideChannelUsage(source, u, cum))
-	})
-	ag.AddTranscriptCompactedObserver(func(messages []provider.Message, res core.CompactResult) {
-		mu.Lock()
-		defer mu.Unlock()
-		ag.RecordPersistenceError(sess.AppendCompaction(messages, res))
-	})
-	// Lazy-tool activations. activeGroups is in-memory and NewAgent rebuilds it
-	// from config, so without this row a --resume silently drops what the model
-	// activated — and the tools array sits AHEAD of the system prompt and every
-	// message in the provider's cached prefix. The resumed run therefore
-	// invalidates the whole transcript, then invalidates it again when the model
-	// notices the tool is missing and re-activates. Measured at ~$3.13 on one
-	// 225-request session, from a single lost group.
-	ag.AddToolGroupActivatedObserver(func(group string) {
-		mu.Lock()
-		defer mu.Unlock()
-		ag.RecordPersistenceError(sess.AppendToolGroupActivation(group))
-	})
-	// Image-rejection recovery: the agent drops an image the provider 400'd on
-	// and fires this. Persisting an exclude_image directive is what makes the
-	// recovery permanent — the loader re-applies it, so a resumed session never
-	// re-sends the bad image and re-fails.
-	//
-	// This observer did not exist before the hooks became registrations. The
-	// agent fired the event and core.Session could write the directive, but no
-	// host joined them, so every resume re-sent the rejected image and paid the
-	// recovery again. Both doc comments claimed otherwise. The hook was invisible
-	// precisely because nothing referenced it.
-	ag.AddImageExcludedObserver(func(sha256Hex string) {
-		mu.Lock()
-		defer mu.Unlock()
-		ag.RecordPersistenceError(sess.AppendImageExclusion(sha256Hex, "provider rejected the image"))
-	})
-	// Rung 3 of the stuck-loop hatch swapped (or tried to swap) the model. The
-	// swap already wrote a "meta" row via UpdateModel, indistinguishable from a
-	// user /model switch; this records the escalation that caused it so the log
-	// can tell the two apart. The observer fires only when a target is configured,
-	// so unconfigured sessions grow no escalation rows.
-	ag.AddEscalationObserver(func(rec core.EscalationRecord) {
-		mu.Lock()
-		defer mu.Unlock()
-		ag.RecordPersistenceError(sess.AppendEscalation(rec))
-	})
-	// Rung 1 of the stuck-loop hatch: the detector nudged a repeating model. The
-	// nudge only rides the ephemeral tail, so without this row nothing in the log
-	// says it fired. Recorded for every session that runs the (default-on)
-	// detector, not just ones with an escalation target.
-	ag.AddStallObserver(func(rec core.StallRecord) {
-		mu.Lock()
-		defer mu.Unlock()
-		ag.RecordPersistenceError(sess.AppendStall(rec))
-	})
-	// A transient provider failure was waited out. This is the only durable
-	// trace a SUCCESSFUL retry leaves: the abandoned attempt is dropped from the
-	// transcript on purpose, and the error sidecar only records failures nothing
-	// recovered — so absorbing an outage cleanly used to look identical to being
-	// slow. Fires for both ladders; rec.Phase says which, and the compaction one
-	// is the expensive half (each attempt carries the whole transcript).
-	ag.AddRetryObserver(func(rec core.RetryRecord) {
-		mu.Lock()
-		defer mu.Unlock()
-		ag.RecordPersistenceError(sess.AppendRetry(rec))
-	})
-	// What the harness appended to the request after the cache breakpoint — the
-	// generalization of the stall row above. The tail is composed per request and
-	// discarded, so without this a session file holds the model's REACTION to a
-	// prompt injection and no trace of the injection. Fires on change, so a
-	// session whose tail is stable grows one row, not one per turn.
-	ag.AddTailObserver(func(rec core.TailRecord) {
-		mu.Lock()
-		defer mu.Unlock()
-		ag.RecordPersistenceError(sess.AppendTail(rec))
-	})
-	// The cacheable prefix was rebuilt rather than extended, so the provider
-	// re-read everything after the divergence at full price. Nothing else records
-	// it: a mutated prefix is invisible in the transcript and shows up only as a
-	// cache-read figure with no explanation.
-	ag.AddPrefixDivergenceObserver(func(d core.PrefixDivergence) {
-		mu.Lock()
-		defer mu.Unlock()
-		ag.RecordPersistenceError(sess.AppendPrefixDivergence(d))
-	})
-	// Which connection/edge each dispatch physically rode. The prefix row
-	// above proves the BYTES were stable through a cache collapse; this row is
-	// the other half — whether the request re-dialed or changed edge colo —
-	// so a floor-pinned run can finally be read against transport churn
-	// instead of ending at "provider-side".
-	ag.AddTransportObserver(func(ti provider.TransportInfo) {
-		mu.Lock()
-		defer mu.Unlock()
-		ag.RecordPersistenceError(sess.AppendTransport(ti))
-	})
-	// A provider-side cache collapse opened or closed. The detector shipped
-	// observer-only, raising a sticky note and leaving nothing on disk, which
-	// cost the cache investigation twice: a finished session could not say
-	// whether it had fired, and the experiment that would settle the cause has
-	// to run while a session IS collapsed — with nothing announcing that one
-	// currently was.
-	//
-	// The write-once policy lives here rather than in core because core's event
-	// cadence is right for what it serves: the note tracks a changing fact and
-	// wants every update. The file wants the two transitions. Holding the last
-	// ongoing event is what lets the closing row carry the totals the run
-	// reached, since the end-of-run event carries zero counts.
-	//
-	// End is the exception, and it comes off the terminal event rather than the
-	// peak: only that event knows whether the provider served the prefix again
-	// or terva voided its own baseline. Copying it onto the peak is what stops
-	// a voided run reading as a recovery on disk.
-	var cliffPeak core.CacheCliff
-	cliffOpen := false
-	ag.AddCacheCliffObserver(func(cc core.CacheCliff) {
-		mu.Lock()
-		defer mu.Unlock()
-		if cc.Ongoing {
-			cliffPeak = cc
-			if !cliffOpen {
-				cliffOpen = true
-				ag.RecordPersistenceError(sess.AppendCacheCliff(cc, true))
-			}
-			return
-		}
-		if cliffOpen {
-			cliffOpen = false
-			closing := cliffPeak
-			closing.End = cc.End
-			ag.RecordPersistenceError(sess.AppendCacheCliff(closing, false))
-		}
-	})
+// recovery. See core.AttachTranscriptStore.
+func WireHeadlessSessionPersist(ag *core.Agent, sess *session.Session) {
+	ag.AdoptSessionIdentity(sess.Identity())
+	ag.AttachTranscriptStore(session.NewStore(sess))
 }
 
 // mcpAllowSet folds the --mcp names into a set; nil when no allowlist.

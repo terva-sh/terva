@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/attach"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
@@ -450,9 +451,9 @@ func (l *Loop) runTurn(ctx context.Context, m Message) {
 		l.mu.Lock()
 		provName := l.Provider
 		l.mu.Unlock()
-		if mdl, err := provider.FindModel(provName, agent.Model); err == nil && !mdl.Has(provider.CapImageInput) {
+		if mdl, err := modelreg.FindModel(provName, agent.Model()); err == nil && !mdl.Has(provider.CapImageInput) {
 			_ = l.Connector.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID,
-				Text: fmt.Sprintf("note: %s can't see images; only your text reaches it.", agent.Model)})
+				Text: fmt.Sprintf("note: %s can't see images; only your text reaches it.", agent.Model())})
 		}
 	}
 
@@ -505,17 +506,18 @@ func (l *Loop) runTurn(ctx context.Context, m Message) {
 	}
 
 	// Post-turn housekeeping for this long-lived session: condense
-	// after a clean turn that pushed context past the threshold so the
-	// paired user's NEXT message doesn't pay the latency. Failures are
-	// non-fatal — the turn itself succeeded.
-	if turnErr == nil && ctx.Err() == nil && agent.ShouldAutoCompact(core.AutoCompactThreshold) && agent.CanCompact(core.AutoCompactKeepTail) {
+	// after a clean turn when the policy says the context is too full, so
+	// the paired user's NEXT message doesn't pay the latency. Failures are
+	// non-fatal — the turn itself succeeded. No sink: this host has never
+	// announced a post-turn compaction to the user, only its failure.
+	if turnErr == nil && ctx.Err() == nil {
 		// Non-fatal, but not silent. The paired user is told when a compaction
 		// starts (the EvCompactStart notice above), and a discarded error here
 		// meant the one that ran on their behalf after the turn could fail with
 		// nothing said at all — leaving the next message to pay a latency, or hit
 		// a limit, that had already been diagnosed and thrown away.
-		if _, cerr := agent.Compact(ctx, core.AutoCompactKeepTail, nil); cerr != nil &&
-			!errors.Is(cerr, context.Canceled) && !errors.Is(cerr, core.ErrNothingToCompact) {
+		if _, _, cerr := agent.CompactIfDue(ctx, core.CompactAfterTurn, nil); cerr != nil &&
+			!errors.Is(cerr, context.Canceled) {
 			_ = l.Connector.Send(ctx, Outgoing{ChatID: m.ChatID,
 				Text: i18n.T("note: could not condense conversation history (%s); the next message may be slower.", cerr.Error())})
 		}
@@ -656,8 +658,8 @@ func (l *Loop) sendStatus(ctx context.Context, m Message) {
 	cwd := l.CWD
 	l.mu.Unlock()
 
-	model := agent.Model
-	ctxMax := provider.ContextGauge(providerName, model)
+	model := agent.Model()
+	ctxMax := modelreg.ContextGauge(providerName, model)
 	var drops uint64
 	if dc, ok := l.Connector.(DropCounter); ok {
 		drops = dc.InboundDrops()

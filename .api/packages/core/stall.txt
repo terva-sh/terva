@@ -1,0 +1,33 @@
+# packages/core/stall (stable): its exported API, one symbol per line.
+# Written by `just api-snapshot`. `just api-check` fails when it no longer matches the code.
+Detector	type	struct
+Detector.Bind	method	func(a *core.Agent)
+Detector.Enabled	method	func() bool
+Detector.EscalateAutoEnabled	method	func() bool
+Detector.EscalationEnabled	method	func() bool
+Detector.Gate	method	func(inner core.Gate) core.Gate
+Detector.Segment	method	func() core.Segment
+Detector.SetEnabled	method	func(on bool)
+Detector.SetEscalateAuto	method	func(on bool)
+Detector.SetEscalation	method	func(on bool)
+Detector.SetEscalator	method	func(e Escalator)
+Detector.StepGate	method	func() core.StepGate
+Detector.TailDelivered	method	func([]string)
+Detector.WrapGate	method	func(inner core.Gate) core.Gate
+EscalationOutcome	type	struct
+EscalationOutcome.Declined	field	bool
+EscalationOutcome.Note	field	string
+EscalationOutcome.Switched	field	bool
+EscalationOutcome.ToModel	field	string
+EscalationOutcome.ToProvider	field	string
+EscalationRequest	type	struct
+EscalationRequest.Reason	field	string
+EscalationRequest.Signature	field	string
+EscalationRequest.Tool	field	string
+EscalationTarget	type	struct
+EscalationTarget.Model	field	string
+EscalationTarget.Provider	field	string
+Escalator	type	interface
+Escalator.Escalate	method	func(ctx context.Context, r EscalationRequest) (EscalationOutcome, error)
+Escalator.Target	method	func() (EscalationTarget, bool)
+ID	const	untyped string

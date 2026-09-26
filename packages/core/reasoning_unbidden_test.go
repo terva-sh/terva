@@ -60,7 +60,7 @@ func (c *unbiddenReasoningClient) Stream(ctx context.Context, req provider.Reque
 
 func runUnbidden(t *testing.T, c *unbiddenReasoningClient, record string) provider.ReasoningBlock {
 	t.Helper()
-	a := NewAgent(c, "fake-model", "system", Registry{})
+	a := newTestAgent(c, "fake-model", "system", Registry{})
 	if record != "" {
 		a.SetReasoningSummary(record)
 	}
@@ -122,7 +122,7 @@ func TestUnrequestedGeminiSummaryIsBlankedButKeepsItsSignature(t *testing.T) {
 // answer and it stays, recording off or not.
 func TestChatReasoningThatIsTheWholeReplySurvivesRecordingOff(t *testing.T) {
 	c := &unbiddenReasoningClient{shape: provider.ReasoningShapeOpenAIChat}
-	a := NewAgent(c, "fake-model", "system", Registry{})
+	a := newTestAgent(c, "fake-model", "system", Registry{})
 	// A turn whose ONLY substance is reasoning: no text, no tool calls.
 	c.replyIsReasoningOnly = true
 	if err := a.Prompt(context.Background(), "go", nil, func(AgentEvent) {}); err != nil {

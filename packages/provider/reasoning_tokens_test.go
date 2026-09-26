@@ -17,11 +17,11 @@ func TestReasoningTokensDoNotAffectCost(t *testing.T) {
 	withReasoning.ReasoningTokens = 3000
 	withReasoning.ReasoningTokensKnown = true
 
-	if got, want := ComputeCost(m, withReasoning), ComputeCost(m, base); got != want {
+	if got, want := computeCost(m, withReasoning), computeCost(m, base); got != want {
 		t.Fatalf("reasoning tokens changed the cost: %v vs %v — they are a subset of "+
 			"OutputTokens and must never be priced separately", got, want)
 	}
-	if got, want := CacheSavings(m, withReasoning), CacheSavings(m, base); got != want {
+	if got, want := cacheSavings(m, withReasoning), cacheSavings(m, base); got != want {
 		t.Fatalf("reasoning tokens changed cache savings: %v vs %v", got, want)
 	}
 }
@@ -41,7 +41,7 @@ func TestReasoningTokensNeverExceedOutput(t *testing.T) {
 	}
 }
 
-// CostTracker accumulates with total = total.Add(turn) from a zero Usage. A
+// core's cost tracker accumulates with total = total.Add(turn) from a zero Usage. A
 // plain AND on the known flag would let that empty accumulator mark every
 // total unknown, so the sum would disclaim knowledge it actually has.
 func TestAddFromAZeroAccumulatorKeepsKnownness(t *testing.T) {

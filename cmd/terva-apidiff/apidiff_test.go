@@ -37,6 +37,9 @@ func apiFixture(t *testing.T, basePkg, headPkg map[string]string) string {
 			t.Fatal(err)
 		}
 		for name, body := range files {
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(pkgDir, name)), 0o755); err != nil {
+				t.Fatal(err)
+			}
 			if err := os.WriteFile(filepath.Join(pkgDir, name), []byte(body), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -312,5 +315,53 @@ func OnlyUnderATag() {}
 	}
 	if !has(names(report.Added), "OnlyUnderATag") {
 		t.Fatalf("a symbol behind a build tag was left out of the census: %v", names(report.Added))
+	}
+}
+
+// An exp package promises nothing (decision 0021, rule 7), so the census does
+// not count it: a symbol added, removed or changed under exp/ is not evidence
+// for the version, and a new file there is not the shape clause. Checked
+// against a ref and against the working tree, which are read by different
+// paths.
+func TestAPIDiffDoesNotCountExp(t *testing.T) {
+	base := map[string]string{
+		"a.go":     "package sample\n\nfunc Stable() {}\n",
+		"exp/x.go": "package exp\n\nfunc Trial(a int) {}\nfunc Dropped() {}\n",
+	}
+	head := map[string]string{
+		"a.go":       "package sample\n\nfunc Stable() {}\n",
+		"exp/x.go":   "package exp\n\nfunc Trial(a, b int) {}\n",
+		"exp/new.go": "package exp\n\nfunc Fresh() {}\n",
+	}
+	repo := apiFixture(t, base, head)
+	for _, ref := range []string{"head", ""} {
+		report, err := comparePkg(repo, "packages/sample", "base", ref)
+		if err != nil {
+			t.Fatalf("head=%q: %v", ref, err)
+		}
+		if len(report.Added)+len(report.Removed)+len(report.Changed)+len(report.NewFiles) != 0 {
+			t.Errorf("head=%q: exp changes were counted: %+v", ref, report)
+		}
+		if report.BaseSyms != 1 || report.HeadSyms != 1 {
+			t.Errorf("head=%q: census saw %d/%d symbols, want only Stable on each side", ref, report.BaseSyms, report.HeadSyms)
+		}
+	}
+}
+
+// The exclusion is a directory named exp, not a prefix: a package that merely
+// starts with the letters is still counted.
+func TestIsSourceExcludesOnlyAnExpDirectory(t *testing.T) {
+	for path, want := range map[string]bool{
+		"packages/core/exp/x.go":             false,
+		"packages/core/exp/deep/y.go":        false,
+		"packages/core/agent.go":             true,
+		"packages/core/expiry/z.go":          true,
+		"packages/core/export.go":            true,
+		"packages/core/exp/x_test.go":        false,
+		"packages/core/transcriptcodec/c.go": true,
+	} {
+		if got := isSource(path); got != want {
+			t.Errorf("isSource(%q) = %v, want %v", path, got, want)
+		}
 	}
 }

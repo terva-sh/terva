@@ -19,17 +19,17 @@ func compactionMsg(summary string) provider.Message {
 	return m
 }
 
-// --- ClipMiddle ---
+// --- clipMiddle ---
 
 func TestClipMiddleShortStringUntouched(t *testing.T) {
-	if got := ClipMiddle("hello world", 50); got != "hello world" {
+	if got := clipMiddle("hello world", 50); got != "hello world" {
 		t.Fatalf("got %q", got)
 	}
 }
 
 func TestClipMiddleKeepsHeadAndTail(t *testing.T) {
 	s := "START the quick brown fox jumps over the lazy dog again and again and again END"
-	got := ClipMiddle(s, 40)
+	got := clipMiddle(s, 40)
 	if !strings.Contains(got, "START") || !strings.Contains(got, "END") {
 		t.Fatalf("head/tail lost: %q", got)
 	}
@@ -46,7 +46,7 @@ func TestClipMiddleKeepsHeadAndTail(t *testing.T) {
 func TestClipMiddleRuneSafe(t *testing.T) {
 	s := strings.Repeat("héllo wörld — päckage tïtle ", 40)
 	for budget := 1; budget < 120; budget += 7 {
-		got := ClipMiddle(s, budget)
+		got := clipMiddle(s, budget)
 		if n := len([]rune(got)); n > budget {
 			t.Fatalf("budget %d exceeded: %d runes", budget, n)
 		}
@@ -57,7 +57,7 @@ func TestClipMiddleRuneSafe(t *testing.T) {
 }
 
 func TestClipMiddleTinyBudgetHeadCut(t *testing.T) {
-	got := ClipMiddle("abcdefghij", 5)
+	got := clipMiddle("abcdefghij", 5)
 	if got != "abcde" {
 		t.Fatalf("tiny budget should head-cut, got %q", got)
 	}

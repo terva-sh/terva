@@ -3,11 +3,11 @@ package build
 // Image-rejection recovery must be PERSISTED, not just performed.
 //
 // The agent drops an image the provider 400'd on and fires its image-excluded
-// observers; core.Session can write an exclude_image directive; the session
+// observers; session.Session can write an exclude_image directive; the session
 // loader re-applies it on resume. Every piece existed — and nothing joined
 // them, because the hook was an assignable field nobody assigned. So each
 // resume re-sent the rejected image and re-failed, though the doc comments on
-// core.Agent.OnImageExcluded and core.Session.AppendImageExclusion both
+// core.Agent.OnImageExcluded and session.Session.AppendImageExclusion both
 // promised "the recovery is paid once".
 //
 // WireHeadlessSessionPersist now registers the missing observer. This test
@@ -24,8 +24,10 @@ import (
 	"testing"
 	"time"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -68,7 +70,7 @@ func (c *imageRejectClient) Stream(ctx context.Context, req provider.Request) (<
 
 func TestWiredPersistenceRecordsImageExclusion(t *testing.T) {
 	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
-	sess, err := core.NewSessionAtPath(path, "/ws", "openai", "gpt-5.5", "0.0.0")
+	sess, err := session.NewSessionAtPath(path, "/ws", "openai", "gpt-5.5", "0.0.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,8 +94,9 @@ func TestWiredPersistenceRecordsImageExclusion(t *testing.T) {
 		t.Fatal("seeded image is not on disk; the test cannot detect the bug")
 	}
 
-	ag := core.NewAgent(&imageRejectClient{bad: bad}, "gpt-5.5", "system", core.Registry{})
-	ag.RetryBaseDelay = time.Millisecond
+	// The engine's default six retries, from a millisecond instead of two
+	// seconds, so the retry ladder this test walks stays fast.
+	ag := coretest.NewAgent(&imageRejectClient{bad: bad}, "gpt-5.5", "system", core.Registry{}, core.WithRetries(6, time.Millisecond))
 
 	WireHeadlessSessionPersist(ag, sess)
 
@@ -110,7 +113,7 @@ func TestWiredPersistenceRecordsImageExclusion(t *testing.T) {
 
 	// Reload: the loader must apply the directive, so the rejected image never
 	// comes back into the transcript the next turn would send.
-	msgs, err := core.ReadSessionMessages(path)
+	msgs, err := session.ReadSessionMessages(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

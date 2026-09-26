@@ -4,7 +4,7 @@ package provider
 //
 // Most are OpenAI Chat Completions–compatible, so they reuse `openaiClient`
 // with a different name + base URL. A handful speak the Anthropic Messages
-// API and reuse `anthropicClient` via NewAnthropicCompat below.
+// API and reuse `anthropicClient` via newAnthropicCompat below.
 //
 // Providers with a non-trivial protocol (Bedrock Converse, Vertex SSE, Azure
 // Responses, Mistral Conversations) are stubbed so the host wiring compiles.
@@ -14,9 +14,9 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 )
 
@@ -168,11 +168,11 @@ func NewOpenRouter(apiKey, baseURL string) Client {
 // anthropicClient with a custom name.
 // ----------------------------------------------------------------------
 
-// NewAnthropicCompat returns an anthropicClient pinned to a non-default
+// newAnthropicCompat returns an anthropicClient pinned to a non-default
 // base URL and identifying as `name` for cost / logging purposes. Auth is
 // API key (x-api-key header). For OAuth-fronted compatibles (rare) use
-// NewAnthropicOAuth and rename via NameClient.
-func NewAnthropicCompat(name, apiKey, baseURL string) Client {
+// NewAnthropicOAuthSource and rename via NameClient.
+func newAnthropicCompat(name, apiKey, baseURL string, opts ...ClientOption) Client {
 	if baseURL == "" {
 		baseURL = anthropicDefaultBaseURL
 	}
@@ -181,21 +181,22 @@ func NewAnthropicCompat(name, apiKey, baseURL string) Client {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		name:    name,
 		http:    &http.Client{Timeout: 0},
+		host:    applyClientOptions(opts),
 	}
 }
 
 // NewKimiCodingWithHeaders is the Kimi Code client: Kimi behind the
 // Anthropic Messages API at https://api.kimi.com/coding (replaces the
 // older OpenAI-completions-on-/coding/v1 wiring).
-func NewKimiCodingWithHeaders(apiKey, baseURL string, headers map[string]string) Client {
-	return NewKimiCodingSourceWithHeaders(StaticCredential(apiKey), baseURL, headers)
+func NewKimiCodingWithHeaders(apiKey, baseURL string, headers map[string]string, opts ...ClientOption) Client {
+	return NewKimiCodingSourceWithHeaders(StaticCredential(apiKey), baseURL, headers, opts...)
 }
 
 // NewKimiCodingSourceWithHeaders is NewKimiCodingWithHeaders with a
 // CredentialSource, so the subscription OAuth token can rotate without
 // rebuilding the client. Kimi authenticates via x-api-key (not Bearer), so the
 // client stays in non-oauth mode; only the credential value rotates.
-func NewKimiCodingSourceWithHeaders(cred CredentialSource, baseURL string, headers map[string]string) Client {
+func NewKimiCodingSourceWithHeaders(cred CredentialSource, baseURL string, headers map[string]string, opts ...ClientOption) Client {
 	if baseURL == "" {
 		baseURL = "https://api.kimi.com/coding"
 	}
@@ -206,6 +207,7 @@ func NewKimiCodingSourceWithHeaders(cred CredentialSource, baseURL string, heade
 		name:    "kimi",
 		headers: headers,
 		http:    &http.Client{Timeout: 0},
+		host:    applyClientOptions(opts),
 	}
 	// Usage (/usage): Kimi Code reports subscription windows (5h rolling +
 	// weekly) from a dedicated GET {base}/v1/usages — body-only, nothing in
@@ -220,26 +222,26 @@ func NewKimiCodingSourceWithHeaders(cred CredentialSource, baseURL string, heade
 
 // NewMinimaxAnthropic is the anthropic-messages flavor on
 // api.minimax.io/anthropic, catalogued under provider=minimax.
-func NewMinimaxAnthropic(apiKey, baseURL string) Client {
-	return NewAnthropicCompat("minimax", apiKey, firstNonEmptyString(baseURL, "https://api.minimax.io/anthropic"))
+func NewMinimaxAnthropic(apiKey, baseURL string, opts ...ClientOption) Client {
+	return newAnthropicCompat("minimax", apiKey, firstNonEmptyString(baseURL, "https://api.minimax.io/anthropic"), opts...)
 }
 
 // NewMinimaxCNAnthropic is the CN-region MiniMax (anthropic-messages).
-func NewMinimaxCNAnthropic(apiKey, baseURL string) Client {
-	return NewAnthropicCompat("minimax-cn", apiKey, firstNonEmptyString(baseURL, "https://api.minimaxi.com/anthropic"))
+func NewMinimaxCNAnthropic(apiKey, baseURL string, opts ...ClientOption) Client {
+	return newAnthropicCompat("minimax-cn", apiKey, firstNonEmptyString(baseURL, "https://api.minimaxi.com/anthropic"), opts...)
 }
 
 // NewFireworksAnthropic is the main Fireworks route. The
 // anthropic-messages-compatible endpoint at api.fireworks.ai/inference
 // expects Anthropic-style request bodies; use this rather than the
 // OpenAI flavor.
-func NewFireworksAnthropic(apiKey, baseURL string) Client {
-	return NewAnthropicCompat("fireworks", apiKey, firstNonEmptyString(baseURL, "https://api.fireworks.ai/inference"))
+func NewFireworksAnthropic(apiKey, baseURL string, opts ...ClientOption) Client {
+	return newAnthropicCompat("fireworks", apiKey, firstNonEmptyString(baseURL, "https://api.fireworks.ai/inference"), opts...)
 }
 
 // NewVercelGatewayAnthropic — Vercel AI Gateway anthropic-messages route.
-func NewVercelGatewayAnthropic(apiKey, baseURL string) Client {
-	return NewAnthropicCompat("vercel-ai-gateway", apiKey, firstNonEmptyString(baseURL, "https://ai-gateway.vercel.sh"))
+func NewVercelGatewayAnthropic(apiKey, baseURL string, opts ...ClientOption) Client {
+	return newAnthropicCompat("vercel-ai-gateway", apiKey, firstNonEmptyString(baseURL, "https://ai-gateway.vercel.sh"), opts...)
 }
 
 // ----------------------------------------------------------------------
@@ -270,20 +272,17 @@ func (c *unimplementedClient) Stream(ctx context.Context, req Request) (<-chan E
 }
 
 // NewBedrock returns an AWS Bedrock client. See amazon_bedrock.go for the
-// hand-rolled Converse-Stream wire-format parser. Auth is via
-// AWS_BEARER_TOKEN_BEDROCK (the modern Bedrock API key flow); SigV4
-// signing for IAM access-key + secret credentials is not yet wired.
-func NewBedrock(apiKey, baseURL string) Client {
-	return NewBedrockClient(apiKey, baseURL)
+// hand-rolled Converse-Stream wire-format parser. BedrockConfig says how cfg
+// authenticates.
+func NewBedrock(cfg BedrockConfig, baseURL string) Client {
+	return newBedrockClient(cfg, baseURL)
 }
 
 // NewGoogleVertex returns a Vertex AI client. See google_vertex.go for
-// the full auth + URL-rewrite implementation. Requires GOOGLE_CLOUD_PROJECT,
-// GOOGLE_CLOUD_LOCATION, and either GOOGLE_CLOUD_API_KEY or a service-
-// account JSON file pointed to by GOOGLE_APPLICATION_CREDENTIALS (or the
-// default ADC location ~/.config/gcloud/application_default_credentials.json).
-func NewGoogleVertex(apiKey, baseURL string) Client {
-	return NewVertex(apiKey, baseURL)
+// the full auth + URL-rewrite implementation, and VertexConfig for what it
+// needs.
+func NewGoogleVertex(v VertexConfig, opts ...ClientOption) Client {
+	return newVertex(v, opts...)
 }
 
 // NewAzureOpenAIResponses delegates to the real Azure OpenAI client.
@@ -292,8 +291,8 @@ func NewGoogleVertex(apiKey, baseURL string) Client {
 // agent loop) to avoid duplicating the full openai-responses wire
 // client. Models register under provider id `azure-openai-responses`
 // so user catalogs keep working unchanged.
-func NewAzureOpenAIResponses(apiKey, baseURL string) Client {
-	return NewAzureOpenAI(apiKey, baseURL)
+func NewAzureOpenAIResponses(apiKey, baseURL string, cfg AzureOpenAIConfig) Client {
+	return newAzureOpenAI(apiKey, baseURL, cfg)
 }
 
 // NewMistral returns a Mistral client using their OpenAI-compatible Chat
@@ -306,37 +305,41 @@ func NewMistral(apiKey, baseURL string) Client {
 }
 
 // Cloudflare endpoints carry `{CLOUDFLARE_ACCOUNT_ID}` and (for the AI
-// Gateway) `{CLOUDFLARE_GATEWAY_ID}` placeholders that we substitute
-// from env vars at client-construction time. Workers AI uses standard
+// Gateway) `{CLOUDFLARE_GATEWAY_ID}` placeholders, filled from a
+// CloudflareConfig at client-construction time. Workers AI uses standard
 // `Authorization: Bearer <key>`; AI Gateway uses `cf-aig-authorization`
 // (the upstream Authorization header is passed through to whichever
 // downstream provider the gateway forwards to).
 
-func resolveCloudflareURL(template string) (string, error) {
+func resolveCloudflareURL(template string, cfg CloudflareConfig) (string, error) {
 	out := template
-	for _, key := range []string{"CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"} {
-		placeholder := "{" + key + "}"
-		if !strings.Contains(out, placeholder) {
+	for _, p := range []struct{ placeholder, value, field, hint string }{
+		{"{CLOUDFLARE_ACCOUNT_ID}", cfg.AccountID, "AccountID", cfg.AccountIDHint},
+		{"{CLOUDFLARE_GATEWAY_ID}", cfg.GatewayID, "GatewayID", cfg.GatewayIDHint},
+	} {
+		if !strings.Contains(out, p.placeholder) {
 			continue
 		}
-		v := os.Getenv(key)
-		if v == "" {
-			return "", fmt.Errorf("%s is required but not set in env", key)
+		if p.value == "" {
+			if p.hint != "" {
+				return "", errors.New(p.hint)
+			}
+			return "", fmt.Errorf("CloudflareConfig.%s is required but not set", p.field)
 		}
-		out = strings.ReplaceAll(out, placeholder, v)
+		out = strings.ReplaceAll(out, p.placeholder, p.value)
 	}
 	return out, nil
 }
 
 // NewCloudflareWorkersAI returns an OpenAI-compatible client pinned to
-// the Workers AI base URL with {CLOUDFLARE_ACCOUNT_ID} substituted.
-// Returns an erroring client (deferred error on first Stream call) if
-// the env var is missing, so the constructor signature stays the same.
-func NewCloudflareWorkersAI(apiKey, baseURL string) Client {
+// the Workers AI base URL with the account ID substituted. Returns an
+// erroring client (deferred error on first Stream call) when an ID the URL
+// needs is missing, so the constructor signature stays the same.
+func NewCloudflareWorkersAI(apiKey, baseURL string, cfg CloudflareConfig) Client {
 	if baseURL == "" {
 		baseURL = "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
 	}
-	resolved, err := resolveCloudflareURL(baseURL)
+	resolved, err := resolveCloudflareURL(baseURL, cfg)
 	if err != nil {
 		return &unimplementedClient{name: "cloudflare-workers-ai", hint: err.Error(), wire: reasoningWireOpenAICompat}
 	}
@@ -347,11 +350,11 @@ func NewCloudflareWorkersAI(apiKey, baseURL string) Client {
 // route). Sends `cf-aig-authorization` instead of `Authorization` so
 // the gateway authenticates the caller (downstream-provider auth is
 // configured per-gateway in the Cloudflare dashboard).
-func NewCloudflareAIGateway(apiKey, baseURL string) Client {
+func NewCloudflareAIGateway(apiKey, baseURL string, cfg CloudflareConfig) Client {
 	if baseURL == "" {
 		baseURL = "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat"
 	}
-	resolved, err := resolveCloudflareURL(baseURL)
+	resolved, err := resolveCloudflareURL(baseURL, cfg)
 	if err != nil {
 		return &unimplementedClient{name: "cloudflare-ai-gateway", hint: err.Error(), wire: reasoningWireOpenAICompat}
 	}
@@ -380,7 +383,7 @@ func NewGithubCopilot(apiKey, _ string) Client {
 	if apiKey == "" {
 		return &unimplementedClient{name: "github-copilot", hint: "set COPILOT_GITHUB_TOKEN", wire: reasoningWireOpenAICompat}
 	}
-	return NewGithubCopilotClient(apiKey)
+	return newGithubCopilotClient(apiKey)
 }
 
 // ----------------------------------------------------------------------

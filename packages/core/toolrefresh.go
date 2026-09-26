@@ -33,9 +33,9 @@ func (a *Agent) SetToolRefresher(fn func(reason string)) {
 	a.obsMu.Unlock()
 }
 
-// ToolRefreshAvailable reports whether this session can re-resolve its tools.
+// toolRefreshAvailable reports whether this session can re-resolve its tools.
 // A tool reads it BEFORE it acts, so its result can promise the right thing.
-func (a *Agent) ToolRefreshAvailable() bool {
+func (a *Agent) toolRefreshAvailable() bool {
 	if a == nil {
 		return false
 	}

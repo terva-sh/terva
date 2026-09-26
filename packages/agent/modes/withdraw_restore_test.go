@@ -38,7 +38,7 @@ func withdrawn(text string) ctrlproto.Event {
 
 // interruptAndWithdraw plays the daemon's real sequence for an interrupted
 // turn. The order is not cosmetic: core emits EvDone from runLoop's terminal
-// stop and only THEN withdraws in PromptExtra, so "done" genuinely arrives
+// stop and only THEN withdraws in core's promptExtra, so "done" genuinely arrives
 // first and the restore has to work after the turn slot is already released.
 func interruptAndWithdraw(fc *fakeCarrier, text string) {
 	fc.stream <- conv(core.WireEvent{Type: "done"})

@@ -56,7 +56,7 @@ func (w *Workspace) directSession(sess string) (*wsSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	if s.sess == nil || s.sess.Meta.Experience == "" {
+	if s.sess == nil || s.sess.Stage.Experience == "" {
 		return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("directed authorship is only available in a chat or play session"))
 	}
 	return s, nil
@@ -86,14 +86,14 @@ func (s *wsSession) directTurn(text string) error {
 // Deliberately NOT promptBlocks: that persists a synthetic user message (the
 // convention cast.speak and directTurn share), which would litter the scene with a
 // steer the user never wrote. The stage cue instead rides the ephemeral tail for
-// exactly this turn (core.Agent.Advance) — which is also what keeps the request
+// exactly this turn (ContinueWithCue with advanceCue) — which is also what keeps the request
 // from ending on a bare assistant message after a run of directed lines. ErrBusy
 // while a turn is in flight (beginTurn).
 //
 // In a World that routes (W3b), advance IS the meta-narrator's moment: with no
 // new player message to answer, "who does the next beat belong to" is the whole
 // question, so the router picks and the pick voices — the bound character's
-// pick staying exactly the agent.Advance above. With one character (or
+// pick staying exactly the cued turn below. With one character (or
 // coordination off) there is nothing to decide, and advance is unchanged.
 func (s *wsSession) advance() error {
 	if len(s.agent.Messages()) == 0 {
@@ -114,7 +114,7 @@ func (s *wsSession) advance() error {
 				return s.voiceLine(ctx, pick, "")
 			}
 		}
-		return s.agent.Advance(ctx, nil)
+		return s.agent.ContinueWithCue(ctx, nil, advanceCue())
 	}, nil)
 	return nil
 }

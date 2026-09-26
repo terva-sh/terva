@@ -22,7 +22,7 @@ import (
 // of the last-turn delta.
 //
 // Get this wrong and the failure is not cosmetic: the resumed gauge reads
-// roughly double, ShouldAutoCompact fires on the next check, and the user
+// roughly double, the compaction policy fires on the next check, and the user
 // watches terva condense a transcript it condensed thirty seconds ago.
 
 func newUsageSession(t *testing.T) (*Session, string) {

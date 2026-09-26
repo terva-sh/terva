@@ -70,7 +70,7 @@ func TestToolImageMirrorGatedOnModelCapability(t *testing.T) {
 	provider.RegisterExtraModel(provider.Model{Provider: "test", ID: "vision-model"})
 
 	mirrored := func(model string) bool {
-		a := NewAgent(&mirrorFakeClient{}, model, "sys", Registry{"shot": imageTool{}})
+		a := newTestAgent(&mirrorFakeClient{}, model, "sys", Registry{"shot": imageTool{}})
 		if err := a.Prompt(context.Background(), "take a screenshot", nil, func(AgentEvent) {}); err != nil {
 			t.Fatalf("Prompt(%s): %v", model, err)
 		}
@@ -145,7 +145,7 @@ func TestMirrorToolImagesOnlyWhenImagePresent(t *testing.T) {
 // prefix string. IsToolImageMirror checks the marker, with a fallback
 // to the prefix for mirrors persisted before the marker existed.
 func TestIsToolImageMirror(t *testing.T) {
-	a := NewAgent(&mirrorFakeClient{}, "vision-model", "sys", Registry{"shot": imageTool{}})
+	a := newTestAgent(&mirrorFakeClient{}, "vision-model", "sys", Registry{"shot": imageTool{}})
 	t.Cleanup(provider.ResetCatalogLayers)
 	provider.ResetCatalogLayers()
 	provider.RegisterExtraModel(provider.Model{Provider: "test", ID: "vision-model"})

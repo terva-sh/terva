@@ -3,7 +3,6 @@ package provider
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 )
@@ -131,19 +130,16 @@ func NormalizeUserModelProviderKey(key string) string {
 	return key
 }
 
-// LoadUserModelsWithWarnings reads a models.json file, returning the
-// models converted to the internal Model type plus
+// ParseUserModelsWithWarnings parses the contents of a models.json file,
+// returning the models converted to the internal Model type plus
 // human-readable warnings about every recoverable issue it found in
 // the file (unknown provider id, empty model id, malformed JSON for a
 // single provider block, etc.). The caller is responsible for
 // surfacing the warnings; the file is never rejected wholesale unless
-// the top-level JSON itself fails to parse.
-func LoadUserModelsWithWarnings(path string) ([]UserOverride, []string) {
+// the top-level JSON itself fails to parse. Reading the file is the host's
+// (terva's is packages/agent/modelfiles).
+func ParseUserModelsWithWarnings(data []byte) ([]UserOverride, []string) {
 	var warnings []string
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, nil
-	}
 	var file UserModelsFile
 	if err := json.Unmarshal(data, &file); err != nil {
 		warnings = append(warnings, fmt.Sprintf("models.json: parse error: %v (file ignored)", err))
@@ -190,9 +186,9 @@ func LoadUserModelsWithWarnings(path string) ([]UserOverride, []string) {
 			// goes through the same door the editor writes through. Say so
 			// when the file loses characters, or the operator sees a name
 			// they didn't type and has nothing to go on.
-			name := SanitizeDisplayName(um.Name)
+			name := sanitizeDisplayName(um.Name)
 			if name != um.Name {
-				warnings = append(warnings, fmt.Sprintf("models.json: %s/%s name was adjusted to %q (control characters and line breaks are not renderable, and names are capped at %d characters)", normalized, um.ID, name, MaxDisplayNameRunes))
+				warnings = append(warnings, fmt.Sprintf("models.json: %s/%s name was adjusted to %q (control characters and line breaks are not renderable, and names are capped at %d characters)", normalized, um.ID, name, maxDisplayNameRunes))
 			}
 			m := Model{
 				Provider:             normalized,
@@ -276,14 +272,14 @@ func userCaps(um UserModel) (caps map[Capability]bool, reasoning *bool, warnings
 		return nil, nil, nil
 	}
 	known := map[Capability]bool{}
-	for _, c := range KnownCapabilities() {
+	for _, c := range knownCapabilities() {
 		known[c] = true
 	}
 	caps = map[Capability]bool{}
 	for k, v := range um.Capabilities {
 		c := Capability(k)
 		if !known[c] {
-			warnings = append(warnings, fmt.Sprintf("unknown capability %q (kept; this terva understands: %v)", k, KnownCapabilities()))
+			warnings = append(warnings, fmt.Sprintf("unknown capability %q (kept; this terva understands: %v)", k, knownCapabilities()))
 		}
 		caps[c] = v
 	}
@@ -309,26 +305,9 @@ func userCaps(um UserModel) (caps map[Capability]bool, reasoning *bool, warnings
 	return caps, reasoning, warnings
 }
 
-// SetUserOverrides replaces the "user" layer with the given
-// models.json overrides. User entries take precedence over every
-// other layer; nil clears the layer.
-func SetUserOverrides(overrides []UserOverride) {
-	activeMu.Lock()
-	defer activeMu.Unlock()
-	layerUser = append([]UserOverride(nil), overrides...)
-	remergeLocked()
-}
-
-// SetUserModels is the []Model convenience form of SetUserOverrides
-// for callers that build models programmatically (mostly tests): every
-// field including Reasoning is treated as explicitly set. nil clears
-// the user layer.
-//
-// A non-empty DisplayName counts as explicitly set for the same reason,
-// so a caller that spells one out gets it — the merge asks
-// DisplayNameSet, which the JSON loader derives from the raw entry and a
-// hand-built Model has no other way to assert.
-func SetUserModels(models []Model) {
+// userModelOverrides is Registry.SetUserModels' conversion: every field including
+// Reasoning counts as explicitly set, and so does a non-empty DisplayName.
+func userModelOverrides(models []Model) []UserOverride {
 	overrides := make([]UserOverride, 0, len(models))
 	for _, m := range models {
 		if m.DisplayName != "" {
@@ -336,7 +315,7 @@ func SetUserModels(models []Model) {
 		}
 		overrides = append(overrides, UserOverride{Model: m, ReasoningSet: true})
 	}
-	SetUserOverrides(overrides)
+	return overrides
 }
 
 // applyUserOverrides merges the user layer onto base. Fields the user

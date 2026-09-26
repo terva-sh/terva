@@ -6,12 +6,12 @@ import "testing"
 // Active() even when no live overlay has been set yet (the fresh-install
 // `terva --list-models` path, before any model cache exists). Before the
 // fix, models were appended to a nil `active` while activeSet stayed
-// false, so Active() fell back to the static Catalog and dropped them.
+// false, so Active() fell back to the static catalog and dropped them.
 func TestSetUserModelsVisibleWithoutLiveOverlay(t *testing.T) {
 	withCatalogState(t)
-	ResetCatalogLayers() // simulate a never-discovered catalog
+	testReg.Reset() // simulate a never-discovered catalog
 
-	SetUserModels([]Model{{
+	testReg.SetUserModels([]Model{{
 		Provider:      "openai-compatible",
 		ID:            "local-qwen",
 		DisplayName:   "Local Qwen",
@@ -21,7 +21,7 @@ func TestSetUserModelsVisibleWithoutLiveOverlay(t *testing.T) {
 		Source:        "user",
 	}})
 
-	got, err := FindModel("openai-compatible", "local-qwen")
+	got, err := testReg.FindModel("openai-compatible", "local-qwen")
 	if err != nil {
 		t.Fatalf("user model not visible via FindModel without a live overlay: %v", err)
 	}
@@ -31,21 +31,21 @@ func TestSetUserModelsVisibleWithoutLiveOverlay(t *testing.T) {
 
 	// The static catalog must remain alongside the user overlay, not be
 	// clobbered by it.
-	if len(ModelsForProvider("anthropic")) == 0 {
+	if len(testReg.ModelsForProvider("anthropic")) == 0 {
 		t.Fatal("catalog models dropped after SetUserModels seeded the overlay")
 	}
 
 	// And the model must actually appear in the full Active() listing
 	// that --list-models prints.
 	var found bool
-	for _, m := range Active() {
+	for _, m := range testReg.Active() {
 		if m.Provider == "openai-compatible" && m.ID == "local-qwen" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatal("user model absent from Active() listing")
+		t.Fatal("user model absent from testReg.Active() listing")
 	}
 }
 
@@ -56,10 +56,10 @@ func TestSetUserModelsVisibleWithoutLiveOverlay(t *testing.T) {
 // the user-set fields rather than the compat entry masking them.
 func TestSetUserModelsOverridesCompatRegistration(t *testing.T) {
 	withCatalogState(t)
-	ResetCatalogLayers() // simulate a never-discovered catalog
+	testReg.Reset() // simulate a never-discovered catalog
 
 	// Simulate LoadCompatModel: login default model, generic 8192 cap.
-	RegisterExtraModel(Model{
+	testReg.RegisterExtraModel(Model{
 		Provider:      "openai-compatible",
 		ID:            "gemma-local",
 		DisplayName:   "gemma-local",
@@ -70,7 +70,7 @@ func TestSetUserModelsOverridesCompatRegistration(t *testing.T) {
 	})
 
 	// The user's models.json pins a larger response cap for the same id.
-	SetUserModels([]Model{{
+	testReg.SetUserModels([]Model{{
 		Provider:      "openai-compatible",
 		ID:            "gemma-local",
 		ContextWindow: 196608,
@@ -79,7 +79,7 @@ func TestSetUserModelsOverridesCompatRegistration(t *testing.T) {
 		Source:        "user",
 	}})
 
-	got, err := FindModel("openai-compatible", "gemma-local")
+	got, err := testReg.FindModel("openai-compatible", "gemma-local")
 	if err != nil {
 		t.Fatalf("FindModel: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestSetUserModelsOverridesCompatRegistration(t *testing.T) {
 		t.Fatalf("Source = %q, want user", got.Source)
 	}
 	// The override must not have duplicated the entry.
-	if n := len(ModelsForProvider("openai-compatible")); n != 1 {
+	if n := len(testReg.ModelsForProvider("openai-compatible")); n != 1 {
 		t.Fatalf("expected 1 openai-compatible model, got %d", n)
 	}
 }

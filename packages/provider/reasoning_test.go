@@ -28,14 +28,14 @@ func TestReasoningEffortMappings(t *testing.T) {
 		if got := NormalizeReasoning(tc.level); got != tc.normalized {
 			t.Errorf("NormalizeReasoning(%q)=%q want %q", tc.level, got, tc.normalized)
 		}
-		if got := OpenAIReasoningEffort(tc.level); got != tc.openai {
-			t.Errorf("OpenAIReasoningEffort(%q)=%q want %q", tc.level, got, tc.openai)
+		if got := openAIReasoningEffort(tc.level); got != tc.openai {
+			t.Errorf("openAIReasoningEffort(%q)=%q want %q", tc.level, got, tc.openai)
 		}
-		if got := OpenAICompatAnthropicEffort(tc.level); got != tc.anthCompat {
-			t.Errorf("OpenAICompatAnthropicEffort(%q)=%q want %q", tc.level, got, tc.anthCompat)
+		if got := openAICompatAnthropicEffort(tc.level); got != tc.anthCompat {
+			t.Errorf("openAICompatAnthropicEffort(%q)=%q want %q", tc.level, got, tc.anthCompat)
 		}
-		if got := OpenAICodexReasoningEffort(tc.level, tc.model); got != tc.codex {
-			t.Errorf("OpenAICodexReasoningEffort(%q, %q)=%q want %q", tc.level, tc.model, got, tc.codex)
+		if got := openAICodexReasoningEffort(tc.level, tc.model); got != tc.codex {
+			t.Errorf("openAICodexReasoningEffort(%q, %q)=%q want %q", tc.level, tc.model, got, tc.codex)
 		}
 		if got := ReasoningBudget(tc.level); got != tc.budget {
 			t.Errorf("ReasoningBudget(%q)=%d want %d", tc.level, got, tc.budget)

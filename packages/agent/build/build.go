@@ -14,6 +14,7 @@ import (
 	"terva.sh/terva/packages/agent/imagegen"
 	"terva.sh/terva/packages/agent/lore"
 	"terva.sh/terva/packages/agent/mode"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/agent/skills"
@@ -21,9 +22,11 @@ import (
 	"terva.sh/terva/packages/agent/tools/tasks"
 	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/agent/worktree"
-	"terva.sh/terva/packages/buildinfo"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/lazytools"
+	"terva.sh/terva/packages/core/stall"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/provider/buildinfo"
 )
 
 // Resolved is the effective configuration after merging CLI, config, defaults.
@@ -73,7 +76,7 @@ type Resolved struct {
 	ReasoningSummary string
 	// ShowReasoning displays the model's reasoning summary while the turn runs
 	// without recording it. It turns the request flag on by itself, so it works
-	// with ReasoningSummary off; see core.Agent.ShowReasoning.
+	// with ReasoningSummary off; see core.WithShowReasoning.
 	ShowReasoning bool
 	Temperature   *float32
 	// ImageOutput carries the resolved native image-output config (from the
@@ -133,7 +136,7 @@ type Resolved struct {
 	DisableExtensions []string
 
 	// LazyTools enables lazy tool visibility (retro H2·b) on the agent:
-	// NewAgent calls EnableLazyTools(LazyToolActive...) so only the core group
+	// NewAgent attaches lazytools.New(LazyToolActive...) so only the core group
 	// plus the always-active groups are advertised, and the activate_tools tool
 	// is registered so the model can bring hidden groups in on demand. Off by
 	// default. From the user config (config.LazyTools).
@@ -284,7 +287,7 @@ type Resolved struct {
 	// persists past the detector's nudge (rung 3). Retained by SetEscalator and
 	// bound at NewAgent, mirroring asker. Nil for hosts with no swap target — the
 	// detector still nudges, nothing escalates.
-	escalator core.Escalator
+	escalator stall.Escalator
 }
 
 // AdoptReadOnlySet shares the initial policy set during startup assembly.
@@ -902,8 +905,8 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// id against the current provider first); Resolve knows the provider
 	// outright, so it never needed to guess.
 	if !openCatalogue {
-		if _, err := provider.FindModel(provName, model); err != nil {
-			if m, err := provider.FindModel("", model); err == nil && m.Provider != provName {
+		if _, err := modelreg.FindModel(provName, model); err != nil {
+			if m, err := modelreg.FindModel("", model); err == nil && m.Provider != provName {
 				repaired := DefaultModelForProvider(provName)
 				// Say so, unless a provider switch is already being reported —
 				// that notice names both halves of the move, and a second line
@@ -923,7 +926,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 			}
 		}
 	}
-	resolvedModel, err := provider.FindModel(provName, model)
+	resolvedModel, err := modelreg.FindModel(provName, model)
 	if err != nil && openCatalogue {
 		// Any model id the local/custom server understands is valid,
 		// even if not in the baked-in catalog. For openai-compatible,
@@ -953,7 +956,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		// open-catalogue models. The extra layer is upserted by compat
 		// discovery and outranked by models.json, so better data still
 		// wins when it exists.
-		provider.RegisterExtraModel(resolvedModel)
+		modelreg.RegisterExtraModel(resolvedModel)
 		err = nil
 	}
 	if err != nil {
@@ -967,12 +970,12 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		// explicit --model flag), repair the config so the warning
 		// doesn't repeat on every launch.
 		fallback := DefaultModelForProvider(provName)
-		fm, ferr := provider.FindModel(provName, fallback)
+		fm, ferr := modelreg.FindModel(provName, fallback)
 		if ferr != nil {
 			// Even the provider default is gone (catastrophic
 			// catalogue trim). Last resort: any model on this
 			// provider, then the global DefaultModel.
-			if candidates := provider.ModelsForProvider(provName); len(candidates) > 0 {
+			if candidates := modelreg.ModelsForProvider(provName); len(candidates) > 0 {
 				fm = candidates[0]
 				ferr = nil
 			} else {
@@ -1329,10 +1332,10 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// advertised set under lazy tool visibility (retro H2·b). It exists only when
 	// lazy mode is on — otherwise every group is already advertised and there is
 	// nothing to activate — and only with the base coding tools. Visibility only:
-	// it never grants authority (EnableLazyTools + the permission gate keep the
+	// it never grants authority (lazy visibility + the permission gate keep the
 	// full registry callable/gated), so it is classed read-only (no confirm).
 	// lazyVisibilityEngages keys on this registration: no reveal path, no
-	// hiding — a session outside this condition never gets EnableLazyTools.
+	// hiding — a session outside this condition never gets lazy visibility.
 	if eff.Config.LazyToolsOn() && HasBaseWorkspaceTools(args) {
 		reg["activate_tools"] = &tools.ActivateToolsTool{}
 	}
@@ -1683,7 +1686,9 @@ func (r Resolved) NewClient() provider.Client {
 		// WithHTTPClient can reach.
 		c = provider.WithHTTPClient(c, provider.NewHTTPClient(true))
 	}
-	return c
+	// Every client terva builds reads terva's catalog, so a model from the
+	// user's models.json or from discovery carries its limits onto the wire.
+	return provider.WithCatalog(c, modelreg.Registry())
 }
 
 // clientConfig is how Resolved presents itself to a registry entry.
@@ -1696,6 +1701,7 @@ func (r Resolved) clientConfig() clientConfig {
 		AccountID:      r.AccountID,
 		ClientIdentity: r.ClientIdentity,
 		CompatWire:     r.CompatWire,
+		CWD:            r.CWD,
 	}
 }
 
@@ -1703,10 +1709,11 @@ func (r Resolved) dispatchClient() provider.Client {
 	if spec, ok := specFor(r.Provider); ok {
 		return spec.newClient(r.clientConfig())
 	}
+	c := r.clientConfig()
 	if r.AuthMethod == "oauth" {
-		return provider.NewAnthropicOAuthSource(r.clientConfig().credentialSource(), r.BaseURL)
+		return provider.NewAnthropicOAuthSource(c.credentialSource(), r.BaseURL, c.hostOptions()...)
 	}
-	return provider.NewAnthropic(r.Credential, r.BaseURL)
+	return provider.NewAnthropic(r.Credential, r.BaseURL, c.hostOptions()...)
 }
 
 // credentialSource yields the current OAuth access token for this provider,
@@ -1944,7 +1951,7 @@ func (r *Resolved) SetAsker(a core.Asker) {
 // it onto the agent loop (rung 3 of the stuck-loop hatch). Mirrors SetAsker;
 // unlike the asker it drives no tool, so there is nothing to bind into the
 // registry. Nil-safe; hosts with no swap target never call it.
-func (r *Resolved) SetEscalator(e core.Escalator) {
+func (r *Resolved) SetEscalator(e stall.Escalator) {
 	if r == nil {
 		return
 	}
@@ -1976,38 +1983,90 @@ func bindAsker(reg core.Registry, a core.Asker) {
 }
 
 // NewAgent constructs a core.Agent from r. Requires a credential.
-func (r Resolved) NewAgent() *core.Agent {
-	a := core.NewAgent(r.NewClient(), r.Model, r.SystemPrompt, r.ToolRegistry)
-	a.MaxSteps = r.MaxSteps
-	a.MaxTokens = r.MaxOutput
-	a.Reasoning = r.Reasoning
-	a.ReasoningSet = r.ReasoningSet
-	a.ReasoningSummary = r.ReasoningSummary
-	a.ShowReasoning = r.ShowReasoning
-	a.Temperature = r.Temperature
-	a.ImageOutput = r.ImageOutput
-	// The front end's question channel, when there is one. The prefix-change
-	// guard asks from inside the turn policy; hosts with nobody to ask (one-shot
-	// runs, swarm children) leave this nil and the guard stays quiet.
-	a.Asker = r.asker
+//
+// gate decides every tool call the agent makes. Hosts pass the ladder from
+// BuildToolGate, built before the agent; a nil gate panics, as core.New
+// refuses it. extra is appended to the options built here: a host with
+// extensions passes ExtensionFilters over the manager its gate was built
+// with.
+func (r Resolved) NewAgent(gate core.Gate, extra ...core.Option) *core.Agent {
+	asm := NewAssembler(r.PromptSegments())
+	opts := []core.Option{
+		core.WithAssembler(asm),
+		core.WithTools(r.ToolRegistry),
+		core.WithGate(gate),
+		// The agent reads terva's catalog, the one its client reads
+		// (NewClient): output limits, windows and capabilities come from the
+		// same layers.
+		core.WithCatalog(modelreg.Registry()),
+		// The components the assembler carries read the agent: the
+		// shell-result slot hears prompts start and get withdrawn through its
+		// events, the context-pressure tracker reads its gauge and its
+		// compaction policy, and the stuck-loop detector follows the turn
+		// loop's tool steps. The detector also wraps the host's ladder,
+		// outermost, so a call it has proved redundant is answered before any
+		// hook runs or any person is asked about it. Every host builds its
+		// agent here, so none can put it anywhere else.
+		core.WithComponent(asm.ShellResult()),
+		core.WithComponent(asm.ContextPressure()),
+		core.WithComponent(asm.Stall()),
+		// The two recorders measure what went on the wire, through the
+		// dispatch observer, and write their rows through the agent's store.
+		core.WithComponent(asm.PrefixWatch()),
+		core.WithComponent(asm.Transport()),
+		core.WithMaxSteps(r.MaxSteps),
+		core.WithMaxTokens(r.MaxOutput),
+		core.WithReasoningSummary(r.ReasoningSummary),
+		core.WithShowReasoning(r.ShowReasoning),
+		core.WithImageOutput(r.ImageOutput),
+		// The front end's question channel, when there is one. The
+		// prefix-change guard asks from inside the turn policy; hosts with
+		// nobody to ask (one-shot runs, swarm children) leave this nil and the
+		// guard stays quiet.
+		core.WithAsker(r.asker),
+		// The auto_compact knob, read live per threshold check. Every agent
+		// funnels through here, so the policy is universal (TUI, web, acp,
+		// chat, swarm children).
+		core.WithCompactionPolicy(CompactionPolicy{
+			DefaultCompactionPolicy: core.DefaultCompactionPolicy{Mode: config.AutoCompactPolicy},
+			switches:                &compactionSwitches{},
+		}),
+	}
+	// An unset level is no option at all: the engine then applies the model's
+	// own default, which is what ReasoningSet false has always meant.
+	if r.ReasoningSet {
+		opts = append(opts, core.WithReasoning(r.Reasoning))
+	}
+	if r.Temperature != nil {
+		opts = append(opts, core.WithTemperature(*r.Temperature))
+	}
+	// Lazy tool visibility (retro H2·b): advertise only the core group plus the
+	// configured always-active groups; the model brings the rest in on demand
+	// with activate_tools (registered above). Every host funnels through here,
+	// so the opt-in is universal (TUI, web, acp, chat, swarm children) — but it
+	// engages only where the reveal path exists (lazyVisibilityEngages): hiding
+	// groups in a session that never registered activate_tools (chat, play,
+	// --no-tools, --no-workspace-tools) would bury extension and world tools
+	// with no way for the model to bring them back. Play acts ONLY through
+	// world-extension tools, so that is a hard break, not a degradation.
+	if lazyVisibilityEngages(&r) {
+		opts = append(opts, LazyTools(asm, r.LazyToolActive...)...)
+	}
+	a, err := core.New(r.NewClient(), r.Model, append(opts, extra...)...)
+	if err != nil {
+		panic("build: NewAgent: " + err.Error())
+	}
 	// The model-escalation channel, when the host wired one. Nil (headless, swarm
 	// children, or a host with no configured target) leaves rung 3 inert — the
 	// stuck-loop detector still nudges.
-	a.Escalator = r.escalator
+	asm.Stall().SetEscalator(r.escalator)
 	// Auto-escalate policy (config escalation.auto): swap without asking. Off by
 	// default, so a persistent loop prompts first before egressing the transcript.
-	a.SetEscalateAuto(r.EscalateAuto)
-	// Dispatch and compaction use the classification from this assembly.
-	// Copy it so later edits to an assembly cannot change this agent's set.
-	a.ReadOnly = r.readOnlySet.Snapshot()
-	// The directory bash runs in, for the ledger's `cd`-to-nowhere elision. Same
-	// args.CWD BuildToolRegistry hands BashTool, so the two cannot drift into
-	// eliding a `cd` that actually moved the command.
-	a.CWD = r.CWD
-	// The auto_compact knob, read live per threshold check — every agent
-	// funnels through here, so the policy is universal (TUI, web, acp,
-	// chat, swarm children).
-	a.AutoCompactPolicy = config.AutoCompactPolicy
+	asm.Stall().SetEscalateAuto(r.EscalateAuto)
+	// Dispatch and compaction use the classification from this assembly,
+	// published with the registry it classifies. The setter copies the set, so
+	// later edits to an assembly cannot change this agent's.
+	a.SetToolsWithReadOnly(r.ToolRegistry, r.readOnlySet)
 	// Bind the live agent into terva_status so it can report current model,
 	// reasoning, and token usage (the registry — and thus the tool — is
 	// built before the agent exists). This is only the FALLBACK for direct
@@ -2028,18 +2087,6 @@ func (r Resolved) NewAgent() *core.Agent {
 	if rt, ok := r.ToolRegistry["read"].(*tools.ReadTool); ok {
 		rt.Epoch = a
 	}
-	// Lazy tool visibility (retro H2·b): advertise only the core group plus the
-	// configured always-active groups; the model brings the rest in on demand
-	// with activate_tools (registered above). Every host funnels through here,
-	// so the opt-in is universal (TUI, web, acp, chat, swarm children) — but it
-	// engages only where the reveal path exists (lazyVisibilityEngages): hiding
-	// groups in a session that never registered activate_tools (chat, play,
-	// --no-tools, --no-workspace-tools) would bury extension and world tools
-	// with no way for the model to bring them back. Play acts ONLY through
-	// world-extension tools, so that is a hard break, not a degradation.
-	if lazyVisibilityEngages(&r) {
-		a.EnableLazyTools(r.LazyToolActive...)
-	}
 	// Engine features (docs/proposals/activation-continuation.md stage 3):
 	// declared defaults overlaid with the config `engine_features` overrides.
 	// Applied unconditionally — a feature's own semantics decide when it
@@ -2058,16 +2105,26 @@ func (r Resolved) NewAgent() *core.Agent {
 	// before. See activationcontinuation.go for what the override does and does
 	// not buy.
 	if on, ok := ActivationContinuationOverride(r.ActivationContinuation); ok {
-		a.SetActivationContinuation(on)
+		lazytools.Of(a).SetContinuation(on)
 	}
 	// Lore's per-turn provider scans this run's triggered lore entries
 	// against recent messages each turn (nil when lore is off / has no
 	// triggered entries). Every agent funnels through NewAgent, so lore is
 	// universal; the ext-hook wiring composes extension ephemeral context
 	// on top of this.
-	a.ContextProvider = r.PerTurnContext(a)
-	a.ContextProviderPeek = r.PerTurnContextPeek(a)
+	asm.SetTail(r.PerTurnContext(a), r.PerTurnContextPeek(a))
 	return a
+}
+
+// PromptSegments is the system prompt as the segments the assembler sends.
+// Resolve always sets SystemSegments with SystemPrompt as their join; a
+// Resolved assembled by hand with only a SystemPrompt still gets it sent, as
+// one segment.
+func (r Resolved) PromptSegments() []PromptSegment {
+	if len(r.SystemSegments) == 0 && r.SystemPrompt != "" {
+		return []PromptSegment{{Source: "system", Text: r.SystemPrompt}}
+	}
+	return r.SystemSegments
 }
 
 // freshTasksRegistry clones r's tool registry with the task tools rebound to a
@@ -2104,13 +2161,14 @@ func (r Resolved) freshTasksRegistry() (core.Registry, *tasktool.Controller) {
 // owner DM's durable session; the returned controller (nil when tasks are off)
 // is what the caller must wire into the agent's ephemeral card and open-work
 // gate, and it dies with the agent (group boards are live-only working state).
-func (r Resolved) NewAgentWithFreshTasks() (*core.Agent, *tasktool.Controller) {
+// gate and extra are as for NewAgent.
+func (r Resolved) NewAgentWithFreshTasks(gate core.Gate, extra ...core.Option) (*core.Agent, *tasktool.Controller) {
 	reg, ctrl := r.freshTasksRegistry()
 	if ctrl == nil {
-		return r.NewAgent(), nil
+		return r.NewAgent(gate, extra...), nil
 	}
 	r.ToolRegistry = reg // r is a value copy; the caller's Resolved keeps the shared registry
-	return r.NewAgent(), ctrl
+	return r.NewAgent(gate, extra...), ctrl
 }
 
 // HasBaseWorkspaceTools reports whether this session ships the built-in coding

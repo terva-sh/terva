@@ -165,7 +165,7 @@ type Skill struct {
 	// AllowedTools, under lazy tool visibility (retro H2·b), names the tools
 	// this skill depends on: loading the skill activates their capability
 	// groups so they are advertised next turn (tool.go Execute →
-	// Agent.ActivateGroupsForTools). This is strictly a VISIBILITY hint — it
+	// lazytools.Visibility.ActivateForTools). This is strictly a VISIBILITY hint — it
 	// never grants authority, so a revealed tool still faces its normal
 	// permission/trust gate, and it is a no-op when lazy mode is off. Permissions
 	// is parsed for forward-compatibility but not yet enforced.

@@ -6,19 +6,20 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"terva.sh/terva/packages/testsupport"
 )
 
+// geminiImagePayload is the image geminiImageFrame carries.
+var geminiImagePayload = []byte("\xff\xd8\xff\xe0JFIF-not-a-real-jpeg")
+
 // geminiImageFrame is an SSE frame carrying one inline image, the shape Gemini
 // returns for a generated picture.
 func geminiImageFrame(t *testing.T) string {
 	t.Helper()
-	// A tiny but real payload; the client only base64-decodes and writes it.
-	data := base64.StdEncoding.EncodeToString([]byte("\xff\xd8\xff\xe0JFIF-not-a-real-jpeg"))
+	data := base64.StdEncoding.EncodeToString(geminiImagePayload)
 	return `{"candidates":[{"content":{"role":"model","parts":[` +
 		`{"inlineData":{"mimeType":"image/jpeg","data":"` + data + `"}}` +
 		`]},"finishReason":"STOP"}],` +
@@ -26,9 +27,8 @@ func geminiImageFrame(t *testing.T) string {
 		`"candidatesTokensDetails":[{"modality":"IMAGE","tokenCount":1120}]}}`
 }
 
-// streamGeminiImage runs one image response with the given Request.WorkingDir
-// and returns the path the client reported for the saved image.
-func streamGeminiImage(t *testing.T, workingDir string) string {
+// streamGeminiImage runs one image response and returns the final message.
+func streamGeminiImage(t *testing.T, opts ...ClientOption) Message {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
@@ -37,124 +37,88 @@ func streamGeminiImage(t *testing.T, workingDir string) string {
 	}))
 	defer srv.Close()
 
-	evs, err := NewGemini("k", srv.URL).Stream(context.Background(), Request{
-		Model:      "gemini-3.1-flash-image",
-		WorkingDir: workingDir,
-		Messages:   []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "draw"}}}},
+	evs, err := NewGemini("k", srv.URL, opts...).Stream(context.Background(), Request{
+		Model:    "gemini-3.1-flash-image",
+		Messages: []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "draw"}}}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The client reports the saved path as a trailing text block beside the
-	// image itself: "Saved image: `<path>`".
-	var path string
+	var msg Message
 	for ev := range evs {
-		e, ok := ev.(EventDone)
-		if !ok {
-			continue
-		}
-		for _, c := range e.Message.Content {
-			tb, ok := c.(TextBlock)
-			if !ok || !strings.HasPrefix(tb.Text, "Saved image: ") {
-				continue
-			}
-			path = strings.Trim(strings.TrimPrefix(tb.Text, "Saved image: "), "`")
+		if e, ok := ev.(EventDone); ok {
+			msg = e.Message
 		}
 	}
-	return path
+	return msg
 }
 
-// 🪤 The save joined against "." — the PROCESS working directory. terva never
-// chdirs (--cwd moves the agent's workspace, not the process), so a session
-// launched from one directory against a workspace in another wrote its
-// generated images into the launch directory. Proven live 2026-08-14: process
-// cwd /tmp/terva-nb/launchdir, --cwd /tmp/terva-nb/ws, and the JPEG landed in
-// launchdir. The model then reported a bare filename the read tool could not
-// open, because the read tool resolves against the workspace.
-func TestAGeneratedImageLandsInTheWorkingDir(t *testing.T) {
-	ws := testsupport.TempDir(t)
-
-	// Run from a DIFFERENT process cwd, which is the whole point: if the two
-	// were the same the defect would be invisible.
-	launch := testsupport.TempDir(t)
-	restore := chdir(t, launch)
-	defer restore()
-
-	path := streamGeminiImage(t, ws)
-	if path == "" {
-		t.Fatal("no image path reported")
+// The wire saves nothing itself (decision 0021, rule 5). With no saver the
+// image still reaches the transcript, no file appears anywhere, and no path is
+// claimed for a file that does not exist.
+func TestWithoutASaverTheImageIsKeptAndNothingIsWritten(t *testing.T) {
+	dir := testsupport.TempDir(t)
+	t.Chdir(dir)
+	msg := streamGeminiImage(t)
+	if len(msg.Content) != 1 {
+		t.Fatalf("content = %+v, want the image alone", msg.Content)
 	}
-
-	abs := path
-	if !filepath.IsAbs(abs) {
-		abs = filepath.Join(launch, path)
+	if img, ok := msg.Content[0].(ImageBlock); !ok || string(img.Data) != string(geminiImagePayload) {
+		t.Errorf("content[0] = %+v, want the image bytes", msg.Content[0])
 	}
-	if _, err := os.Stat(abs); err != nil {
-		t.Fatalf("reported image path %q does not exist: %v", path, err)
-	}
-
-	// The decisive check: the file is in the workspace, not the launch dir.
-	inWorkspace, err := filepath.Glob(filepath.Join(ws, "terva-gemini-image-*"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(inWorkspace) != 1 {
-		strays, _ := filepath.Glob(filepath.Join(launch, "terva-gemini-image-*"))
-		t.Fatalf("found %d images in the workspace %s (want 1); %d landed in the launch dir instead — "+
-			"the save is joining against the process cwd", len(inWorkspace), ws, len(strays))
-	}
-	if strays, _ := filepath.Glob(filepath.Join(launch, "terva-gemini-image-*")); len(strays) != 0 {
-		t.Errorf("%d image(s) also written to the launch directory %s", len(strays), launch)
+	if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+		t.Errorf("the wire wrote %v", ents)
 	}
 }
 
-// An empty WorkingDir must keep the old behavior exactly: every embedder and
-// helper request that never sets the field still works, writing to the process
-// cwd as it always did.
-func TestAnEmptyWorkingDirStillWritesToTheProcessCwd(t *testing.T) {
-	launch := testsupport.TempDir(t)
-	restore := chdir(t, launch)
-	defer restore()
-
-	path := streamGeminiImage(t, "")
-	if path == "" {
-		t.Fatal("no image path reported")
+// The saver gets the mime type and the bytes, and the path it returns is told
+// to the model beside the image. Where it saves is the host's; the wire passes
+// no directory.
+func TestTheSaverGetsTheImageAndItsPathIsReported(t *testing.T) {
+	var gotMime string
+	var gotData []byte
+	save := func(mime string, data []byte) (string, error) {
+		gotMime, gotData = mime, data
+		return "/ws/pic.jpg", nil
 	}
-	if filepath.IsAbs(path) {
-		t.Errorf("path %q is absolute; an unset WorkingDir should behave as before", path)
+	msg := streamGeminiImage(t, WithImageSaver(save))
+	if gotMime != "image/jpeg" || string(gotData) != string(geminiImagePayload) {
+		t.Errorf("saver got (%q, %q)", gotMime, gotData)
 	}
-	got, err := filepath.Glob(filepath.Join(launch, "terva-gemini-image-*"))
-	if err != nil {
-		t.Fatal(err)
+	if len(msg.Content) != 2 {
+		t.Fatalf("content = %+v, want the image and its path", msg.Content)
 	}
-	if len(got) != 1 {
-		t.Fatalf("found %d images in the process cwd, want 1", len(got))
+	if tb, ok := msg.Content[1].(TextBlock); !ok || tb.Text != "Saved image: `/ws/pic.jpg`" {
+		t.Errorf("content[1] = %+v", msg.Content[1])
 	}
 }
 
-// The path handed back must be usable, and the extension must follow the mime
-// type rather than defaulting to .png for a JPEG.
-func TestTheReportedImagePathMatchesTheMimeType(t *testing.T) {
-	ws := testsupport.TempDir(t)
-	path := streamGeminiImage(t, ws)
-	if !strings.HasSuffix(path, ".jpg") {
-		t.Errorf("path %q does not end in .jpg for an image/jpeg payload", path)
-	}
-	if filepath.Dir(path) != filepath.Clean(ws) {
-		t.Errorf("path %q is not inside the working dir %q", path, ws)
+// A save that fails leaves the image without a path rather than a path to
+// nothing.
+func TestAFailedSaveReportsNoPath(t *testing.T) {
+	save := func(string, []byte) (string, error) { return "", os.ErrPermission }
+	msg := streamGeminiImage(t, WithImageSaver(save))
+	for _, c := range msg.Content {
+		if tb, ok := c.(TextBlock); ok && strings.HasPrefix(tb.Text, "Saved image") {
+			t.Errorf("a failed save reported %q", tb.Text)
+		}
 	}
 }
 
-// chdir moves the process into dir and returns a restore func. Go's t.Chdir
-// arrived in 1.24 and this module targets 1.22.
-func chdir(t *testing.T, dir string) func() {
-	t.Helper()
-	prev, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
+// Vertex serves Gemini through its own transport and takes the same options.
+func TestVertexTakesTheImageSaver(t *testing.T) {
+	called := false
+	c := newVertex(VertexConfig{Project: "p", APIKey: "k"}, WithImageSaver(func(string, []byte) (string, error) { called = true; return "", nil }))
+	rc, ok := c.(*renamedClient)
+	if !ok {
+		t.Fatalf("newVertex returned %T", c)
 	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
+	g, ok := rc.inner.(*geminiClient)
+	if !ok || g.host.saveImage == nil {
+		t.Fatalf("the Vertex Gemini client has no saver: %+v", rc.inner)
 	}
-	return func() { _ = os.Chdir(prev) }
+	_, _ = g.host.saveImage("", nil)
+	if !called {
+		t.Error("the saver given to newVertex is not the one it kept")
+	}
 }

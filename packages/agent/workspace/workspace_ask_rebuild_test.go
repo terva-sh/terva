@@ -8,6 +8,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
@@ -50,7 +51,7 @@ func newAskSession(t *testing.T, id string) *wsSession {
 		t.Skipf("resolve unavailable here: %v", err)
 	}
 	r.SetAsker(&webAsker{s: s})
-	s.agent = core.NewAgent(nil, "claude-sonnet-4-5", "", r.ToolRegistry)
+	s.agent = coretest.NewAgent(nil, "claude-sonnet-4-5", "", r.ToolRegistry)
 	return s
 }
 

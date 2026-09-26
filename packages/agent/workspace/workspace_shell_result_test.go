@@ -16,6 +16,7 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/shellresult"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -74,8 +75,14 @@ func newShellFixture(t *testing.T) *shellFixture {
 	client := &wsCapturingClient{tails: make(chan string, 8)}
 	s.agent.SetClientAndModel(client, "fake-model")
 	// The shipped default is OFF. Said explicitly here, because a fixture that
-	// forgot would assert against a setter that quietly does nothing.
-	s.agent.SetShellResultContext(true)
+	// forgot would assert against a setter that quietly does nothing. Turned on
+	// the way the settings surface does, so the toggle's route to the session's
+	// slot is under test too.
+	f, ok := build.EngineFeatureByID("shell_result_context")
+	if !ok {
+		t.Fatal("no shell_result_context engine feature")
+	}
+	w.applyEngineFeature(f, true)
 	return &shellFixture{w: w, s: s, id: info.ID, cwd: cwd, client: client}
 }
 
@@ -114,7 +121,7 @@ func TestAShellResultOfferedOverTheWireReachesTheNextRequest(t *testing.T) {
 	}
 
 	tail := f.promptAndTail(t, "what should I commit first?")
-	for _, want := range []string{core.ShellResultTag, "git status", "3 files changed"} {
+	for _, want := range []string{shellresult.Tag, "git status", "3 files changed"} {
 		if !strings.Contains(tail, want) {
 			t.Errorf("the tail is missing %q:\n%s", want, tail)
 		}

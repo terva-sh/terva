@@ -8,8 +8,11 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/exp/prefixwatch"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -61,7 +64,7 @@ func (c *scriptedUsageClient) Stream(ctx context.Context, req provider.Request) 
 // streak to the firing threshold, fire AGAIN past it, then recover.
 func TestWireHeadlessSessionPersistWritesCacheCliffTransitionsOnly(t *testing.T) {
 	dir := testsupport.TempDir(t)
-	sess, err := core.NewSession(dir, dir, "prov", "fake-model", "test")
+	sess, err := session.NewSession(dir, dir, "prov", "fake-model", "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,11 +83,12 @@ func TestWireHeadlessSessionPersistWritesCacheCliffTransitionsOnly(t *testing.T)
 		{InputTokens: 1_000, CacheReadTokens: 130_000},
 	}}
 
-	ag := core.NewAgent(client, "fake-model", "", core.Registry{})
-	// Core's zero value is off; the shipped ON default lives in the build
-	// funnel's engine features. The detector short-circuits without it, so a
-	// test that forgot this would pass vacuously with no rows at all.
-	ag.SetPrefixDivergenceRecording(true)
+	// The detector is a component the build funnel connects and switches on.
+	// It does nothing while off, so a test that forgot to switch it on would
+	// pass vacuously with no rows at all.
+	w := &prefixwatch.Watch{}
+	w.SetEnabled(true)
+	ag := coretest.NewAgent(client, "fake-model", "", core.Registry{}, core.WithComponent(w))
 	build.WireHeadlessSessionPersist(ag, sess)
 
 	for i := 0; i < len(client.usage); i++ {
@@ -125,7 +129,7 @@ func TestWireHeadlessSessionPersistWritesCacheCliffTransitionsOnly(t *testing.T)
 // every healthy session on disk.
 func TestWireHeadlessSessionPersistWritesNoCliffRowWhenHealthy(t *testing.T) {
 	dir := testsupport.TempDir(t)
-	sess, err := core.NewSession(dir, dir, "prov", "fake-model", "test")
+	sess, err := session.NewSession(dir, dir, "prov", "fake-model", "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,8 +141,9 @@ func TestWireHeadlessSessionPersistWritesNoCliffRowWhenHealthy(t *testing.T) {
 		{InputTokens: 2_000, CacheReadTokens: 120_000},
 	}}
 
-	ag := core.NewAgent(client, "fake-model", "", core.Registry{})
-	ag.SetPrefixDivergenceRecording(true)
+	w := &prefixwatch.Watch{}
+	w.SetEnabled(true)
+	ag := coretest.NewAgent(client, "fake-model", "", core.Registry{}, core.WithComponent(w))
 	build.WireHeadlessSessionPersist(ag, sess)
 
 	for i := 0; i < len(client.usage); i++ {

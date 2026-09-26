@@ -243,7 +243,7 @@ func SystemSegments(o SystemPromptOpts) []PromptSegment {
 		// system prefix, so it rode every request telling the model to self-monitor
 		// its window, and a recorded session had it doing exactly that. The
 		// harness pushes a context-pressure note when it matters (see
-		// core.contextPressureBands); the model does not have to pull for it.
+		// core/contextpressure); the model does not have to pull for it.
 		//
 		// This hint, not the tool description, is what the status-context-usage
 		// eval scenario measures — "a description cannot beat a system-prompt hint

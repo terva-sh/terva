@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -23,7 +24,7 @@ func TestWriteNewTranscriptReportsFailure(t *testing.T) {
 	if err := sess.Close(); err != nil {
 		t.Fatal(err)
 	}
-	ag := core.NewAgent(nil, "test", "", nil)
+	ag := coretest.NewAgent(nil, "test", "", nil)
 	ag.SetMessages([]provider.Message{msg, msg})
 	before, err := os.ReadFile(sess.Path)
 	if err != nil {

@@ -24,10 +24,10 @@ func TestRebuildRevokesRemovedToolClassification(t *testing.T) {
 	s := newAskSession(t, "classification-rebuild")
 	pol := permissions.NewPolicy(core.ApprovalWorkspace, nil)
 	pol.ReadOnly.Add("removed_extension_tool")
-	s.agent.ReadOnly = pol.ReadOnly
+	s.agent.SetToolsWithReadOnly(s.agent.ToolsSnapshot(), pol.ReadOnly)
 	s.gate = core.NewPolicyGate(pol, nil)
 	s.rebuildTools("extension-reload")
-	if s.agent.ReadOnly.Has("removed_extension_tool") {
+	if _, ro := s.agent.ToolsWithReadOnlySnapshot(); ro.Has("removed_extension_tool") {
 		t.Fatal("rebuild retained read-only authority for a removed extension tool")
 	}
 }
@@ -128,7 +128,7 @@ func TestRebuildToolsClassificationAcrossBackendReload(t *testing.T) {
 				s.args.CWD, s.args.Approval = home, string(mode)
 				pol := permissions.NewPolicy(mode, nil)
 				s.gate = core.NewPolicyGate(pol, nil)
-				s.agent.ReadOnly = pol.ReadOnly
+				s.agent.SetToolsWithReadOnly(s.agent.ToolsSnapshot(), pol.ReadOnly)
 				// Two minutes rather than one. Six of these now run together, each
 				// re-execing a race-instrumented binary five times, and a CI job can
 				// be down to roughly one core under runner load. This is a failure

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 )
 
@@ -21,8 +22,8 @@ func startPerChatLoop(t *testing.T, conn *fakeConnector, client *scriptedClient,
 	}
 	l := &Loop{
 		Connector:     conn,
-		Agent:         core.NewAgent(client, "fake-model", "sys", core.Registry{}),
-		NewChatAgent:  func() *core.Agent { return core.NewAgent(client, "fake-model", "sys", core.Registry{}) },
+		Agent:         coretest.NewAgent(client, "fake-model", "sys", core.Registry{}),
+		NewChatAgent:  func() *core.Agent { return coretest.NewAgent(client, "fake-model", "sys", core.Registry{}) },
 		MaxChatAgents: maxAgents,
 		Admissions:    adm,
 		Pairing:       pairedWith("7"),
@@ -172,7 +173,7 @@ func TestLoopPerChatOffByDefault(t *testing.T) {
 	_ = adm.Approve("g1", ModeAll)
 	l := &Loop{
 		Connector:  conn,
-		Agent:      core.NewAgent(&scriptedClient{reply: "ok"}, "fake-model", "sys", core.Registry{}),
+		Agent:      coretest.NewAgent(&scriptedClient{reply: "ok"}, "fake-model", "sys", core.Registry{}),
 		Admissions: adm,
 		Pairing:    pairedWith("7"),
 		Info:       func(string) {},

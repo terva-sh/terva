@@ -1,10 +1,17 @@
 package workspace
 
 import (
+	"context"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // The retract contract: the detector's zero event MUST render to the empty
@@ -67,5 +74,85 @@ func TestRoughTokens(t *testing.T) {
 		if got := roughTokens(tc.n); got != tc.want {
 			t.Errorf("roughTokens(%d) = %q, want %q", tc.n, got, tc.want)
 		}
+	}
+}
+
+// cliffClient answers dispatch n with steps[n]'s cache shape.
+type cliffClient struct {
+	mu    sync.Mutex
+	n     int
+	steps []provider.Usage
+}
+
+func (c *cliffClient) Name() string { return "cliff-fake" }
+
+func (c *cliffClient) Stream(_ context.Context, req provider.Request) (<-chan provider.Event, error) {
+	c.mu.Lock()
+	u := c.steps[min(c.n, len(c.steps)-1)]
+	c.n++
+	c.mu.Unlock()
+	out := make(chan provider.Event, 3)
+	go func() {
+		defer close(out)
+		out <- provider.EventStart{Provider: c.Name(), Model: req.Model}
+		out <- provider.EventUsage{Usage: u}
+		out <- provider.EventDone{Stop: provider.StopEnd, Message: provider.Message{
+			Role:    provider.RoleAssistant,
+			Content: []provider.Content{provider.TextBlock{Text: "ok"}},
+		}}
+	}()
+	return out, nil
+}
+
+// A session's cliff reaches the host as a keyed warning. Driven through a real
+// session, because the wiring from the session's prefix watch to the note is
+// what this covers: the note text has its own tests above.
+func TestASessionsCacheCliffPostsTheWarning(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	w, err := NewWorkspace(build.Args{Provider: "openai", Model: "gpt-5", CWD: testsupport.TempDir(t)}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	var mu sync.Mutex
+	notes := map[string][2]string{}
+	w.SetNoteSink(func(key, msg, level string) {
+		mu.Lock()
+		notes[key] = [2]string{msg, level}
+		mu.Unlock()
+	})
+	info, err := w.CreateSession(context.Background(), ctrlproto.CreateOpts{Experience: "chat"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	s := w.live(info.ID)
+	if s == nil {
+		t.Fatal("created session is not live")
+	}
+	// A warm dispatch, then three collapses on a large append-only prompt.
+	s.agent.SetClientAndModel(&cliffClient{steps: []provider.Usage{
+		{InputTokens: 200, CacheReadTokens: 60_000},
+		{InputTokens: 55_000, CacheReadTokens: 9_728},
+		{InputTokens: 58_000, CacheReadTokens: 9_728},
+		{InputTokens: 60_000, CacheReadTokens: 9_728},
+	}}, "fake-model")
+	for i := 0; i < 4; i++ {
+		if err := s.prompt("go", nil, core.UserMessageExtras{}); err != nil {
+			t.Fatalf("prompt %d: %v", i, err)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for s.busy() {
+			if time.Now().After(deadline) {
+				t.Fatalf("turn %d never settled", i)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	mu.Lock()
+	got, ok := notes[cacheCliffNoteKey(info.ID)]
+	mu.Unlock()
+	if !ok || got[0] == "" || got[1] != "warn" {
+		t.Fatalf("cliff note = %q (posted %v), want a warn note naming the run", got, ok)
 	}
 }

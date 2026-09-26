@@ -103,7 +103,7 @@ func (t *unparseableProbeTool) Execute(ctx context.Context, raw json.RawMessage,
 // would go looking for an argument it did supply.
 func TestAnUnparseableCallIsRefusedWithoutRunningTheTool(t *testing.T) {
 	tool := &unparseableProbeTool{}
-	ag := &Agent{}
+	ag := &Agent{gate: AllowAll}
 	msg := provider.Message{Role: provider.RoleAssistant, Content: []provider.Content{
 		provider.ToolCallBlock{
 			ID: "toolu_x", Name: "edit",
@@ -135,7 +135,7 @@ func TestAnUnparseableCallIsRefusedWithoutRunningTheTool(t *testing.T) {
 // pass the test above for the worst possible reason.
 func TestAnOrdinaryCallStillReachesItsTool(t *testing.T) {
 	tool := &unparseableProbeTool{}
-	ag := &Agent{}
+	ag := &Agent{gate: AllowAll}
 	msg := provider.Message{Role: provider.RoleAssistant, Content: []provider.Content{
 		provider.ToolCallBlock{ID: "toolu_y", Name: "edit", Arguments: json.RawMessage(`{"path":"a.go"}`)},
 	}}

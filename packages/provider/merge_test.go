@@ -5,7 +5,7 @@ import "testing"
 // bakedIDs returns up to n baked model ids for a provider (test helper).
 func bakedIDs(provider string, n int) []string {
 	var out []string
-	for _, m := range Catalog {
+	for _, m := range catalog {
 		if m.Provider == provider {
 			out = append(out, m.ID)
 			if len(out) == n {
@@ -37,7 +37,7 @@ func TestMergeCatalogAuthoritativePrunesStale(t *testing.T) {
 		{Provider: "opencode-go", ID: ids[0]}, // still offered
 		{Provider: "opencode-go", ID: "brand-new-go-model"},
 	}
-	merged := MergeCatalog(live)
+	merged := mergeCatalog(live)
 
 	if !hasModel(merged, "opencode-go", ids[0]) {
 		t.Errorf("a discovered baked id should remain: %q", ids[0])
@@ -59,7 +59,7 @@ func TestMergeCatalogKeepsNonAuthoritativeBaked(t *testing.T) {
 		t.Skip("no baked opencode model")
 	}
 	live := []Model{{Provider: "opencode", ID: "some-other-discovered-id"}}
-	if !hasModel(MergeCatalog(live), "opencode", ids[0]) {
+	if !hasModel(mergeCatalog(live), "opencode", ids[0]) {
 		t.Errorf("baked opencode id %q must survive (additive, not authoritative)", ids[0])
 	}
 }
@@ -71,7 +71,7 @@ func TestMergeCatalogOfflineKeepsAuthoritativeBaked(t *testing.T) {
 	if len(ids) == 0 {
 		t.Skip("no baked opencode-go model")
 	}
-	if !hasModel(MergeCatalog(nil), "opencode-go", ids[0]) {
+	if !hasModel(mergeCatalog(nil), "opencode-go", ids[0]) {
 		t.Errorf("with no discovery, baked opencode-go %q should remain as a fallback", ids[0])
 	}
 }
@@ -80,19 +80,19 @@ func TestMergeCatalogOfflineKeepsAuthoritativeBaked(t *testing.T) {
 // even when the live endpoint didn't return it (the manual cross-machine URL
 // override case). The user layer is applied after the merge.
 func TestUserModelSurvivesAuthoritativePrune(t *testing.T) {
-	ResetCatalogLayers()
-	defer ResetCatalogLayers()
+	testReg.Reset()
+	defer testReg.Reset()
 	ids := bakedIDs("opencode-go", 1)
 	if len(ids) == 0 {
 		t.Skip("no baked opencode-go model")
 	}
 
 	// Discovery returns opencode-go models that do NOT include the baked id, so
-	// MergeCatalog prunes it — but a models.json override for it must remain.
-	SetLiveModels([]Model{{Provider: "opencode-go", ID: "discovered-only"}})
-	SetUserModels([]Model{{Provider: "opencode-go", ID: ids[0], BaseURL: "http://my-box:8000/v1"}})
+	// mergeCatalog prunes it — but a models.json override for it must remain.
+	testReg.SetLiveModels([]Model{{Provider: "opencode-go", ID: "discovered-only"}})
+	testReg.SetUserModels([]Model{{Provider: "opencode-go", ID: ids[0], BaseURL: "http://my-box:8000/v1"}})
 
-	got, err := FindModel("opencode-go", ids[0])
+	got, err := testReg.FindModel("opencode-go", ids[0])
 	if err != nil {
 		t.Fatalf("a models.json entry must survive the prune, got error: %v", err)
 	}

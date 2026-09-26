@@ -11,6 +11,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/lazytools"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
@@ -626,7 +627,7 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 		}
 	case "lazy_tools":
 		// Persist-only, like auto_title: lazy visibility is resolved at session
-		// build (NewAgent → EnableLazyTools + the activate_tools registration),
+		// build (NewAgent → lazytools.New + the activate_tools registration),
 		// so it applies to new sessions rather than reshaping a running one.
 		on := val == "true"
 		if err := config.MutateConfig(func(c *config.Config) { c.LazyTools = &on }); err != nil {
@@ -655,7 +656,7 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 		default:
 			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown auto_compact %q (steps|turns|off)", val))
 		}
-		// Live for every session: Agent.AutoCompactPolicy re-reads config on each
+		// Live for every session: terva's compaction policy re-reads config on each
 		// threshold check, so this applies on the next check with no rebuild.
 		if err := config.MutateConfig(func(c *config.Config) { c.AutoCompact = val }); err != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
@@ -982,7 +983,7 @@ func (w *Workspace) applyActivationContinuation() {
 			continue
 		}
 		prov, _ := s.currentModel()
-		s.agent.SetActivationContinuation(build.ActivationContinuationFor(cfg.EngineFeatures, cfg.Providers[prov].ActivationContinuation))
+		lazytools.Of(s.agent).SetContinuation(build.ActivationContinuationFor(cfg.EngineFeatures, cfg.Providers[prov].ActivationContinuation))
 	}
 }
 

@@ -48,6 +48,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -252,7 +253,7 @@ func (c *recordingClient) lastStop() provider.StopReason {
 func liveNextStepSession(t *testing.T, p nextStepProbe, cl provider.Client, prov, model, system string) (*Workspace, *wsSession) {
 	t.Helper()
 	w, s, _ := chatTestWorkspace(t, "s-"+p.id)
-	ag := core.NewAgent(cl, model, system, core.Registry{})
+	ag := coretest.NewAgent(cl, model, system, core.Registry{})
 	var msgs []provider.Message
 	for i, text := range p.turns {
 		role := provider.RoleUser

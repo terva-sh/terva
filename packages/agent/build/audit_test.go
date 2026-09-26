@@ -98,18 +98,18 @@ func TestAuditLogEdgeCases(t *testing.T) {
 	}
 }
 
-// The real BeforeToolExecute ladder records through the process sink: an
-// allowed bash call lands in the audit log with its command.
-func TestBeforeToolExecuteAudits(t *testing.T) {
+// The real tool-call ladder records through the process sink: an allowed bash
+// call lands in the audit log with its command.
+func TestToolGateAudits(t *testing.T) {
 	home := testsupport.TempDir(t)
 	prev := auditSink
 	auditSink = newAuditLog(home)
 	t.Cleanup(func() { auditSink.Close(); auditSink = prev })
 
 	// gate=nil → no gate check, call is allowed (mode reports empty).
-	fn := BuildBeforeToolExecute(nil, nil, nil, nil)
+	g := BuildToolGate(nil, nil, nil)
 	call := provider.ToolCallBlock{ID: "T1", Name: "bash", Arguments: []byte(`{"command":"echo hi"}`)}
-	if allowed, _, _ := fn(t.Context(), call); !allowed {
+	if allowed, _, _ := g.CheckTool(t.Context(), call, nil); !allowed {
 		t.Fatal("expected the call to be allowed")
 	}
 	auditSink.Close()

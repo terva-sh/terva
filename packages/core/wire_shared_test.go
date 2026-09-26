@@ -3,12 +3,10 @@ package core
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"terva.sh/terva/packages/provider"
-	"terva.sh/terva/packages/testsupport"
 )
 
 // sharingTool publishes whatever it was configured with, the way share_file
@@ -35,10 +33,10 @@ func shareCall(id string) provider.ToolCallBlock {
 // puts it on the tool-role message's Meta so it persists with the turn.
 func TestExecuteToolsRecordsSharesOnTheMessageNotTheModelsCopy(t *testing.T) {
 	tool := &sharingTool{files: []SharedFile{{ID: "shr_a", Name: "report.pdf", Kind: "document", Size: 12}}}
-	a := NewAgent(&advanceFakeClient{}, "fake-model", "system", Registry{"share_file": tool})
+	a := newTestAgent(&advanceFakeClient{}, "fake-model", "system", Registry{"share_file": tool})
 	assistant := provider.Message{Role: provider.RoleAssistant, Content: []provider.Content{shareCall("call_1")}}
 
-	msg, hadErr := a.executeTools(context.Background(), assistant, a.Tools, func(AgentEvent) {})
+	msg, hadErr := a.executeTools(context.Background(), assistant, a.tools, func(AgentEvent) {})
 	if hadErr {
 		t.Fatalf("executeTools reported an error")
 	}
@@ -70,12 +68,12 @@ func TestExecuteToolsRecordsSharesOnTheMessageNotTheModelsCopy(t *testing.T) {
 // which row it belongs to or the client cannot place any of them.
 func TestExecuteToolsStampsEachShareWithItsOwnCall(t *testing.T) {
 	tool := &sharingTool{files: []SharedFile{{ID: "shr_x", Name: "a.png", Kind: "image"}}}
-	a := NewAgent(&advanceFakeClient{}, "fake-model", "system", Registry{"share_file": tool})
+	a := newTestAgent(&advanceFakeClient{}, "fake-model", "system", Registry{"share_file": tool})
 	assistant := provider.Message{Role: provider.RoleAssistant, Content: []provider.Content{
 		shareCall("call_1"), shareCall("call_2"),
 	}}
 
-	msg, _ := a.executeTools(context.Background(), assistant, a.Tools, func(AgentEvent) {})
+	msg, _ := a.executeTools(context.Background(), assistant, a.tools, func(AgentEvent) {})
 
 	var got []SharedFile
 	if err := json.Unmarshal([]byte(msg.Meta[MetaShared]), &got); err != nil {
@@ -93,10 +91,10 @@ func TestExecuteToolsStampsEachShareWithItsOwnCall(t *testing.T) {
 // something a client may eventually key off.
 func TestExecuteToolsLeavesMetaAloneWhenNothingWasShared(t *testing.T) {
 	tool := &sharingTool{}
-	a := NewAgent(&advanceFakeClient{}, "fake-model", "system", Registry{"share_file": tool})
+	a := newTestAgent(&advanceFakeClient{}, "fake-model", "system", Registry{"share_file": tool})
 	assistant := provider.Message{Role: provider.RoleAssistant, Content: []provider.Content{shareCall("call_1")}}
 
-	msg, _ := a.executeTools(context.Background(), assistant, a.Tools, func(AgentEvent) {})
+	msg, _ := a.executeTools(context.Background(), assistant, a.tools, func(AgentEvent) {})
 	if msg.Meta != nil {
 		t.Errorf("Meta = %v on a turn that shared nothing, want nil", msg.Meta)
 	}
@@ -200,44 +198,5 @@ func TestMessageToWireSurvivesAMalformedShareRecord(t *testing.T) {
 	}
 	if len(w.Content) != 1 {
 		t.Errorf("Content = %+v, want the tool result to render regardless", w.Content)
-	}
-}
-
-// The point of hanging the record on the message: reopen the session days later
-// and the cards are still there, in the right places, with nothing to join.
-func TestSharesSurviveASessionReload(t *testing.T) {
-	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
-	s, err := NewSessionAtPath(path, "/ws", "anthropic", "claude", "0.0.0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	shared := []SharedFile{{ID: "shr_a", CallID: "call_1", Name: "report.pdf", Kind: "document", Size: 9}}
-	raw, err := json.Marshal(shared)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.AppendMessage(provider.Message{
-		Role:    provider.RoleTool,
-		Content: []provider.Content{provider.ToolResultBlock{CallID: "call_1"}},
-		Meta:    map[string]string{MetaShared: string(raw)},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	reopened, msgs, err := OpenSession(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reopened.Close()
-
-	var found []SharedFile
-	for _, m := range msgs {
-		found = append(found, MessageToWire(m).Shared...)
-	}
-	if len(found) != 1 || found[0].ID != "shr_a" || found[0].CallID != "call_1" {
-		t.Fatalf("shares after reload = %+v, want the one that was recorded", found)
 	}
 }

@@ -7,13 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // Google Gemini provider, talking directly to the Generative Language
@@ -60,14 +56,16 @@ func geminiAPIURL(baseURL, relPath string) string {
 
 // geminiClient implements Client against the Gemini Generative Language API.
 type geminiClient struct {
+	catalogRef
 	apiKey  string
 	baseURL string
 	http    *http.Client
+	host    clientHooks
 }
 
 // NewGemini creates a Gemini client using an AI Studio API key.
 // baseURL may be empty; defaults to https://generativelanguage.googleapis.com.
-func NewGemini(apiKey, baseURL string) Client {
+func NewGemini(apiKey, baseURL string, opts ...ClientOption) Client {
 	if baseURL == "" {
 		baseURL = geminiDefaultBaseURL
 	}
@@ -75,6 +73,7 @@ func NewGemini(apiKey, baseURL string) Client {
 		apiKey:  apiKey,
 		baseURL: strings.TrimRight(baseURL, "/"),
 		http:    &http.Client{Timeout: 0},
+		host:    applyClientOptions(opts),
 	}
 }
 
@@ -194,7 +193,7 @@ type gemRequest struct {
 // ---- request building ----
 
 func (c *geminiClient) buildRequest(req Request) (*gemRequest, string, error) {
-	m, err := FindModel("google", req.Model)
+	m, err := c.models().FindModel("google", req.Model)
 	if err != nil {
 		// Not in the catalog — still allow custom ids by falling back
 		// to defaults so users can point at unreleased models or
@@ -300,7 +299,7 @@ func (c *geminiClient) buildRequest(req Request) (*gemRequest, string, error) {
 	// Gemini enforces strict alternation: merge any same-role adjacency an
 	// edit/delete left behind. A card's seeded greeting is a leading assistant
 	// turn, which it also rejects, so prepend a request-scoped user turn.
-	msgs = EnsureLeadingUserTurn(MergeAdjacentSameRole(msgs))
+	msgs = ensureLeadingUserTurn(mergeAdjacentSameRole(msgs))
 	for _, msg := range msgs {
 		switch msg.Role {
 		case RoleUser:
@@ -488,32 +487,6 @@ func geminiSupportsFunctionCalling(modelID string) bool {
 		return false
 	}
 	return true
-}
-
-// saveGeminiImageToWorkingDir writes a generated image into dir.
-//
-// An empty dir means the process working directory, which is what this did
-// unconditionally before Request.WorkingDir existed — and terva never chdirs,
-// so that was the launch directory rather than the session's workspace.
-func saveGeminiImageToWorkingDir(dir, mimeType string, data []byte) (string, error) {
-	ext := ".png"
-	switch strings.ToLower(mimeType) {
-	case "image/jpeg", "image/jpg":
-		ext = ".jpg"
-	case "image/webp":
-		ext = ".webp"
-	case "image/gif":
-		ext = ".gif"
-	}
-	name := "terva-gemini-image-" + uuid.NewString() + ext
-	if dir == "" {
-		dir = "."
-	}
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return "", err
-	}
-	return path, nil
 }
 
 func convertGemToolResultParts(blocks []Content) []gemPart {
@@ -888,7 +861,7 @@ func (c *geminiClient) Stream(ctx context.Context, req Request) (<-chan Event, e
 func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req Request, out chan<- Event) {
 	defer close(out)
 
-	model, _ := FindModel("google", req.Model)
+	model, _ := c.models().FindModel("google", req.Model)
 	out <- EventStart{Model: req.Model, Provider: "google"}
 
 	stream := newSSEStream(resp.Body, "google")
@@ -954,7 +927,12 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 			return
 		}
 		img := ImageBlock{MimeType: mimeType, Data: data}
-		path, _ := saveGeminiImageToWorkingDir(req.WorkingDir, mimeType, data)
+		// The host saves the image (WithImageSaver); a failed or absent save
+		// leaves the image in the transcript without a path.
+		var path string
+		if c.host.saveImage != nil {
+			path, _ = c.host.saveImage(mimeType, data)
+		}
 		blocks = append(blocks, &blockEntry{kind: "image", image: &img, imagePath: path})
 		// Image blocks break the current text run.
 		currentText = nil
@@ -1046,7 +1024,7 @@ func (c *geminiClient) runStream(ctx context.Context, resp *http.Response, req R
 					finalErr = stream.Err()
 				default:
 					stop = StopError
-					finalErr = NewStreamDeathError("google", "a finishReason")
+					finalErr = newStreamDeathError("google", "a finishReason")
 				}
 				sendDone()
 				return

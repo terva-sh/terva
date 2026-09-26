@@ -6,7 +6,7 @@ import (
 	"terva.sh/terva/packages/provider"
 )
 
-// CostTracker accumulates usage across turns in a session.
+// costTracker accumulates usage across turns in a session.
 //
 // Total is the cumulative usage shown in the status bar's "$x.xx"
 // readout. LastTurn is the per-turn usage of the most recent
@@ -19,7 +19,7 @@ import (
 // bar, Telegram bot, SDK). It is the tracker's own lock rather than
 // the Agent mutex so Add can run inside oneTurn's stream loop without
 // serializing against transcript operations.
-type CostTracker struct {
+type costTracker struct {
 	mu       sync.Mutex
 	Total    provider.Usage
 	LastTurn provider.Usage
@@ -46,7 +46,7 @@ type CostTracker struct {
 	// while the session's cumulative figures (which DO survive resume, via
 	// SetTotal) carry the history. Reconstructing a per-response series from
 	// the session file means deriving deltas across cumulative rows with the
-	// compaction corrections SessionUsageDetail already carries, for a strip
+	// compaction corrections session.SessionUsageDetail already carries, for a strip
 	// that is stale the moment the next request lands.
 	recent []provider.Usage
 }
@@ -59,7 +59,7 @@ const recentCap = 32
 
 // Add folds u into the running total, records u as the last-turn
 // snapshot, and returns the new cumulative value.
-func (c *CostTracker) Add(u provider.Usage) provider.Usage {
+func (c *costTracker) Add(u provider.Usage) provider.Usage {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.Total = c.Total.Add(u)
@@ -81,7 +81,7 @@ func (c *CostTracker) Add(u provider.Usage) provider.Usage {
 // transcript-sized cold read in the middle of the strip labelled as a cache
 // miss. That is the same distinction those two methods already draw for
 // LastTurn, for the same reason.
-func (c *CostTracker) RecentUsage() []provider.Usage {
+func (c *costTracker) RecentUsage() []provider.Usage {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]provider.Usage(nil), c.recent...)
@@ -93,7 +93,7 @@ func (c *CostTracker) RecentUsage() []provider.Usage {
 // transcript-sized summarization request overwrite the freshly
 // re-baselined value would leave every threshold check reading
 // stale-high again.
-func (c *CostTracker) AddTotalOnly(u provider.Usage) {
+func (c *costTracker) AddTotalOnly(u provider.Usage) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.Total = c.Total.Add(u)
@@ -112,7 +112,7 @@ func (c *CostTracker) AddTotalOnly(u provider.Usage) {
 // Total-only for the same reason as AddTotalOnly: a sub-agent's prompt is not
 // this session's context, and letting it overwrite the per-turn snapshot would
 // leave every compaction threshold reading a size the transcript never had.
-func (c *CostTracker) AddDelegated(u provider.Usage) {
+func (c *costTracker) AddDelegated(u provider.Usage) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.Total = c.Total.Add(u)
@@ -120,7 +120,7 @@ func (c *CostTracker) AddDelegated(u provider.Usage) {
 }
 
 // DelegatedTotal returns the delegated tally under the tracker lock.
-func (c *CostTracker) DelegatedTotal() provider.Usage {
+func (c *costTracker) DelegatedTotal() provider.Usage {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.Delegated
@@ -131,7 +131,7 @@ func (c *CostTracker) DelegatedTotal() provider.Usage {
 // concerned, for the reason AddTotalOnly gives: a side-channel request's
 // prompt is not this session's context, and letting one overwrite LastTurn
 // would leave every threshold check reading a size the transcript never had.
-func (c *CostTracker) AddSideChannel(u provider.Usage) {
+func (c *costTracker) AddSideChannel(u provider.Usage) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.Total = c.Total.Add(u)
@@ -139,14 +139,14 @@ func (c *CostTracker) AddSideChannel(u provider.Usage) {
 }
 
 // SideChannelTotal returns the side-channel tally under the tracker lock.
-func (c *CostTracker) SideChannelTotal() provider.Usage {
+func (c *costTracker) SideChannelTotal() provider.Usage {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.SideChannel
 }
 
 // CumulativeTotal returns the cumulative usage under the tracker lock.
-func (c *CostTracker) CumulativeTotal() provider.Usage {
+func (c *costTracker) CumulativeTotal() provider.Usage {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.Total
@@ -154,7 +154,7 @@ func (c *CostTracker) CumulativeTotal() provider.Usage {
 
 // LastTurnUsage returns the most recent per-turn snapshot under the
 // tracker lock.
-func (c *CostTracker) LastTurnUsage() provider.Usage {
+func (c *costTracker) LastTurnUsage() provider.Usage {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.LastTurn
@@ -162,7 +162,7 @@ func (c *CostTracker) LastTurnUsage() provider.Usage {
 
 // SetTotal overwrites the cumulative usage. Used to seed a baseline
 // when transferring state from another agent.
-func (c *CostTracker) SetTotal(u provider.Usage) {
+func (c *costTracker) SetTotal(u provider.Usage) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.Total = u
@@ -170,7 +170,7 @@ func (c *CostTracker) SetTotal(u provider.Usage) {
 
 // SetLastTurn overwrites the per-turn snapshot. Used on resume so the
 // gauge reflects the last persisted turn instead of zero.
-func (c *CostTracker) SetLastTurn(u provider.Usage) {
+func (c *costTracker) SetLastTurn(u provider.Usage) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.LastTurn = u

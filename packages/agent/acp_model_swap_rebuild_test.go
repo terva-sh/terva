@@ -102,8 +102,8 @@ func TestACPRebuildTracksAModelSwap(t *testing.T) {
 		t.Errorf("after a rebuild terva_status reports %q — the model is told it is "+
 			"running at the provider the session switched away from", got)
 	}
-	if ag.Model != "claude-sonnet-4-5-20250929" {
-		t.Errorf("the agent's model is %q after the rebuild", ag.Model)
+	if ag.Model() != "claude-sonnet-4-5-20250929" {
+		t.Errorf("the agent's model is %q after the rebuild", ag.Model())
 	}
 }
 

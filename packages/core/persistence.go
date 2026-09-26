@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/core/i18n"
 )
 
 // ErrPersistence identifies a durable-session failure. The live transcript
@@ -22,7 +22,7 @@ func (a *Agent) RecordPersistenceError(err error) {
 	defer a.mu.Unlock()
 	if a.persistenceErr == nil {
 		a.persistenceErr = fmt.Errorf("%w: %s: %w", ErrPersistence,
-			i18n.T("History could not be saved. Preserve the live transcript, fix storage, then reopen the saved session"), err)
+			i18n.In(a.translator).T("History could not be saved. Preserve the live transcript, fix storage, then reopen the saved session"), err)
 	}
 }
 

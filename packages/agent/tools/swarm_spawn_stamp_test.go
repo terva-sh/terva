@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/testsupport"
@@ -28,7 +29,7 @@ func TestSwarmSpawnStampsHostSession(t *testing.T) {
 	defer sw.StopAll()
 	tool := &SwarmSpawnTool{Swarm: sw, Enabled: func() bool { return true }}
 
-	host := core.NewAgent(nil, "m", "s", core.Registry{})
+	host := coretest.NewAgent(nil, "m", "s", core.Registry{})
 	host.AdoptSessionIdentity(&core.Session{Path: "/x/20260712-010137-abcd1234.jsonl", ID: "meta-uuid"})
 	ctx := core.ContextWithAgent(context.Background(), host)
 
@@ -45,7 +46,7 @@ func TestSwarmSpawnStampsHostSession(t *testing.T) {
 	}
 
 	// Live-only host (no transcript): no stamp, no invented id.
-	bare := core.NewAgent(nil, "m", "s", core.Registry{})
+	bare := coretest.NewAgent(nil, "m", "s", core.Registry{})
 	res, err = tool.Execute(core.ContextWithAgent(context.Background(), bare), json.RawMessage(`{"task":"live-only child"}`), nil)
 	if err != nil || res.IsError {
 		t.Fatalf("Execute: err=%v isError=%v", err, res.IsError)

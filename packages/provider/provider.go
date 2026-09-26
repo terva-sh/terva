@@ -295,7 +295,7 @@ func RepairOrphanedToolResults(msgs []Message) []Message {
 	return out
 }
 
-// EnsureLeadingUserTurn prepends a minimal, request-scoped user turn when the
+// ensureLeadingUserTurn prepends a minimal, request-scoped user turn when the
 // first message is an assistant turn. A character card seeds its opening
 // greeting as an assistant message[0]; the Anthropic, Bedrock Converse, and
 // Gemini APIs all reject a conversation that does not begin with a user turn,
@@ -312,7 +312,7 @@ func RepairOrphanedToolResults(msgs []Message) []Message {
 // as a reply to the user, distorting the scene on every request for the whole
 // session. It must carry visible text — these APIs also reject empty or
 // whitespace-only blocks.
-func EnsureLeadingUserTurn(msgs []Message) []Message {
+func ensureLeadingUserTurn(msgs []Message) []Message {
 	if len(msgs) == 0 || msgs[0].Role != RoleAssistant {
 		return msgs
 	}
@@ -322,7 +322,7 @@ func EnsureLeadingUserTurn(msgs []Message) []Message {
 	}}, msgs...)
 }
 
-// MergeAdjacentSameRole coalesces consecutive messages that share a role into one
+// mergeAdjacentSameRole coalesces consecutive messages that share a role into one
 // by concatenating their content — a request-scoped repair for the strict
 // alternation the Anthropic, Bedrock, and Gemini APIs enforce (and that some
 // OpenAI-compatible backends, e.g. Moonshot/Kimi and local templates, do too).
@@ -339,7 +339,7 @@ func EnsureLeadingUserTurn(msgs []Message) []Message {
 // as part of the history prefix. Dormant for well-formed transcripts, which
 // already alternate (a step's parallel tool results are one RoleTool message, so
 // normal turns never trip it).
-func MergeAdjacentSameRole(msgs []Message) []Message {
+func mergeAdjacentSameRole(msgs []Message) []Message {
 	if len(msgs) < 2 {
 		return msgs
 	}
@@ -410,7 +410,7 @@ type Usage struct {
 	// fields above are disjoint because each is billed at its own rate;
 	// reasoning is billed at the output rate and is already inside
 	// OutputTokens, so subtracting it here would silently change every bill.
-	// ComputeCost does not read this field, and a guard pins that.
+	// ApplyCost does not read this field, and a guard pins that.
 	//
 	// Informational on purpose: it is the one part of a reasoning model's
 	// spend that is otherwise invisible, and on this codebase the question
@@ -439,7 +439,7 @@ type Usage struct {
 	// candidatesTokenCount 1450, of which modality IMAGE 1120 — the
 	// remaining 330 are the text and thinking that came with the picture.
 	//
-	// UNLIKE ReasoningTokens, ComputeCost does read this one, because these
+	// UNLIKE ReasoningTokens, ApplyCost does read this one, because these
 	// tokens are billed at their own rate (Model.PriceOutputImage). It is
 	// subtracted from the text-rate base rather than added to it, so the two
 	// rates partition OutputTokens instead of double-counting it.
@@ -468,7 +468,7 @@ func (u Usage) Add(v Usage) Usage {
 // figure a floor rather than a total, and it must say so.
 //
 // The zero Usage is the exception, and it is not a special case for its own
-// sake: CostTracker accumulates with `total = total.Add(turn)` starting from
+// sake: core's cost tracker accumulates with `total = total.Add(turn)` starting from
 // Usage{}, so a plain AND would mark every total unknown no matter what the
 // providers reported. An empty accumulator has not reported anything, so it
 // carries no opinion.
@@ -675,21 +675,6 @@ type Request struct {
 	// (OpenAI-compatible backends may reject unknown parameters).
 	PromptCacheKey string
 
-	// WorkingDir is the directory a provider writes generated files into.
-	//
-	// It exists because Gemini returns a generated image as inline base64 in
-	// the response body, and the client saves it to disk so the assistant
-	// message can carry a path. That save used to join against "." — the
-	// PROCESS working directory, which terva never changes (see
-	// packages/relaunch: --cwd moves the AGENT's workspace, not the process).
-	// So a session started from one directory against a workspace in another
-	// dropped its images wherever the binary happened to be launched.
-	//
-	// Empty preserves that old behavior (the process cwd), which keeps every
-	// caller that does not set it — tests, embedders, one-shot helper
-	// requests — working exactly as before.
-	WorkingDir string
-
 	// ImageOutput, when non-nil, enables native (in-protocol) image output
 	// for this request: the model may draw images inline in its own turn via
 	// the provider's built-in image tool (OpenAI Responses image_generation),
@@ -796,7 +781,7 @@ type ClientCapabilities struct {
 
 // capabilityProvider is implemented by concrete clients that declare
 // capabilities. Wrappers must NOT implement it — they expose Unwrap()
-// and ClientCaps walks down to the concrete client.
+// and clientCaps walks down to the concrete client.
 type capabilityProvider interface {
 	Capabilities() ClientCapabilities
 }
@@ -823,27 +808,27 @@ func clientAs[T any](c Client) (T, bool) {
 	return zero, false
 }
 
-// ClientCaps returns c's capabilities, looking through any wrapper
+// clientCaps returns c's capabilities, looking through any wrapper
 // layers (renamedClient, pollingUsageClient) via Unwrap(). Adding a
 // capability is a struct field, not a new per-capability helper, and
 // callers can never reintroduce the silent-false wrapper gap because
 // there is no per-cap assertion to get wrong.
-func ClientCaps(c Client) ClientCapabilities {
+func clientCaps(c Client) ClientCapabilities {
 	if cp, ok := clientAs[capabilityProvider](c); ok {
 		return cp.Capabilities()
 	}
 	return ClientCapabilities{}
 }
 
-// ClientMirrorsToolImages is a named convenience over ClientCaps for
-// the agent loop's tool-image-mirror decision.
+// ClientMirrorsToolImages reads the client's capabilities, through any
+// wrappers, for the agent loop's tool-image-mirror decision.
 func ClientMirrorsToolImages(c Client) bool {
-	return ClientCaps(c).MirrorsToolImages
+	return clientCaps(c).MirrorsToolImages
 }
 
-// ClientContinuesAssistantPrefill is a named convenience over ClientCaps for
-// the Stage "continue" gate: whether this client's wire format extends a
+// ClientContinuesAssistantPrefill reads the client's capabilities, through any
+// wrappers, for the Stage "continue" gate: whether this client's wire format extends a
 // trailing assistant message (a prefill) rather than starting a fresh turn.
 func ClientContinuesAssistantPrefill(c Client) bool {
-	return ClientCaps(c).ContinuesAssistantPrefill
+	return clientCaps(c).ContinuesAssistantPrefill
 }

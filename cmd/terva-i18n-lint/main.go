@@ -95,6 +95,11 @@ func catalogDirs(roots []string) (map[string]string, error) {
 // a hard error so a silently-dropped block can't ship untranslatable.
 var unresolvedKeyed int
 
+// unreadIn counts i18n.In(tr) calls that are not the receiver of a T, P or
+// Errorf call. Kept in a variable or passed along, an In result renders
+// strings this extractor never sees, so a non-zero count is a hard error too.
+var unreadIn int
+
 func main() {
 	root := flag.String("root", "packages,cmd", "comma-separated directory trees to scan for i18n calls")
 	out := flag.String("out", filepath.Join("packages", "i18n", "locales", "en.json"), "UI reference catalog to write")
@@ -124,6 +129,10 @@ func main() {
 	ui, keyed, err := extract(roots, consts, dirCat)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "terva-i18n-lint:", err)
+		os.Exit(2)
+	}
+	if unreadIn > 0 {
+		fmt.Fprintf(os.Stderr, "terva-i18n-lint: %d i18n.In call(s) are not read through (see above); call T, P or Errorf on the result directly\n", unreadIn)
 		os.Exit(2)
 	}
 	if unresolvedKeyed > 0 {
@@ -240,6 +249,11 @@ func extract(roots []string, consts map[string]string, dirCat map[string]string)
 		// unmarked). A string shared with a core directory naturally lands in
 		// both references (each records its own occurrence).
 		entries := ui[dirCat[filepath.Dir(path)]]
+		for _, in := range unreadInCalls(file) {
+			unreadIn++
+			pos := fset.Position(in.Pos())
+			fmt.Fprintf(os.Stderr, "terva-i18n-lint: %s:%d: i18n.In(…) is not the receiver of T, P or Errorf, so the strings rendered through it cannot be extracted; write i18n.In(tr).T(\"…\") at the call site\n", pos.Filename, pos.Line)
+		}
 		ast.Inspect(file, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
@@ -426,10 +440,19 @@ func stringOrConstArg(call *ast.CallExpr, i int, consts map[string]string) (stri
 }
 
 // i18nFunc returns "T"/"TC"/"TN" when call is a selector call on the i18n
-// package, else "".
+// package, else "". A T, P or Errorf called directly on i18n.In(tr), an
+// engine's own translator, counts too: its arguments sit where the package
+// function's do.
 func i18nFunc(call *ast.CallExpr) string {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
+		return ""
+	}
+	if in, ok := sel.X.(*ast.CallExpr); ok && isInCall(in) {
+		switch sel.Sel.Name {
+		case "T", "P", "Errorf":
+			return sel.Sel.Name
+		}
 		return ""
 	}
 	pkg, ok := sel.X.(*ast.Ident)
@@ -441,6 +464,45 @@ func i18nFunc(call *ast.CallExpr) string {
 		return sel.Sel.Name
 	}
 	return ""
+}
+
+// isInCall reports whether call is i18n.In(…).
+func isInCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "In" {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && pkg.Name == "i18n"
+}
+
+// unreadInCalls returns the i18n.In calls in file that i18nFunc cannot read
+// through: every one that is not the receiver of a T, P or Errorf call.
+func unreadInCalls(file *ast.File) []*ast.CallExpr {
+	read := map[*ast.CallExpr]bool{}
+	var all []*ast.CallExpr
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if isInCall(call) {
+			all = append(all, call)
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && i18nFunc(call) != "" {
+			if in, ok := sel.X.(*ast.CallExpr); ok {
+				read[in] = true
+			}
+		}
+		return true
+	})
+	var unread []*ast.CallExpr
+	for _, in := range all {
+		if !read[in] {
+			unread = append(unread, in)
+		}
+	}
+	return unread
 }
 
 // litArg returns the string value of the i-th argument when it is a string

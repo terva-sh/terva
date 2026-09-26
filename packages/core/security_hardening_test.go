@@ -74,7 +74,7 @@ func TestSessionConcurrentWrites(t *testing.T) {
 // accessors while extension/MCP/trust/lore reloads swap them on other goroutines.
 // Run under -race — an unlocked field read would trip the detector.
 func TestAgentToolsContextConcurrent(t *testing.T) {
-	a := NewAgent(nil, "fake-model", "system", Registry{})
+	a := newTestAgent(nil, "fake-model", "system", Registry{})
 
 	stop := make(chan struct{})
 	var readers sync.WaitGroup
@@ -88,7 +88,7 @@ func TestAgentToolsContextConcurrent(t *testing.T) {
 					return
 				default:
 					_ = a.ToolsSnapshot().Specs()
-					_ = a.ContextPreview()
+					_ = a.FramePreview()
 				}
 			}
 		}()
@@ -101,8 +101,8 @@ func TestAgentToolsContextConcurrent(t *testing.T) {
 			defer writers.Done()
 			for j := 0; j < 300; j++ {
 				a.SetTools(Registry{})
-				a.SetContextProvider(func() string { return "ctx" })
-				a.SetContextProviderPeek(func() string { return "peek" })
+				testFrameOf(a).setHost(func() string { return "ctx" })
+				testFrameOf(a).setPeek(func() string { return "peek" })
 			}
 		}()
 	}

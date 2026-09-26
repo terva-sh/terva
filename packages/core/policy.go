@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/core/i18n"
 )
 
 // ReadOnlySet names side-effect-free tools. Registry assembly adds names;

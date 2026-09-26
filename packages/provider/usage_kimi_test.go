@@ -99,7 +99,7 @@ func TestKimiClientWrappedForUsage(t *testing.T) {
 		t.Error("kimi client should be a UsageRefresher (poll-based usage)")
 	}
 	// The anthropic capability must survive the wrapper (probed via Unwrap).
-	if !ClientCaps(c).ContinuesAssistantPrefill {
+	if !clientCaps(c).ContinuesAssistantPrefill {
 		t.Error("kimi (anthropic) ContinuesAssistantPrefill lost through the usage wrapper")
 	}
 }

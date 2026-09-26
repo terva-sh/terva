@@ -12,8 +12,10 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/lazytools"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // Context computes the /context size breakdown for a session — what fills the
@@ -35,7 +37,11 @@ func (s *wsSession) contextBreakdown() ctrlproto.ContextBreakdown {
 		return b
 	}
 
-	b.SystemBytes = len(ag.System)
+	// One side-effect-free assembly for both sections: opening /context must
+	// never record a phantom "lore fired this turn", and FramePreview reads the
+	// assembler under its own lock, so it never races a live lore or trust reload.
+	frame := ag.FramePreview()
+	b.SystemBytes = len(frame.SystemText())
 	// Snapshot the tool registry under the agent lock (a concurrent extension/MCP
 	// toggle or trust change calls SetTools on another goroutine) before ranging.
 	// Tool weight is the ADVERTISED set — what the model actually receives this
@@ -44,7 +50,7 @@ func (s *wsSession) contextBreakdown() ctrlproto.ContextBreakdown {
 	// capability note), so counting them would over-report the context. The
 	// installed totals ride separate fields for the "N of M tools" split.
 	tools := ag.ToolsSnapshot()
-	advertised, filtered := ag.AdvertisedTools()
+	advertised, filtered := lazytools.Of(ag).Advertised()
 	var advSpecs, allSpecs []provider.Tool
 	for _, spec := range tools.Specs() {
 		allSpecs = append(allSpecs, spec)
@@ -65,18 +71,13 @@ func (s *wsSession) contextBreakdown() ctrlproto.ContextBreakdown {
 		b.ToolCountInstalled = len(allSpecs)
 	}
 
-	// Ephemeral extension/card context, via the lock-guarded, side-effect-free
-	// preview so opening /context never records a phantom "lore fired this turn"
-	// and never races a live lore/trust reload swapping the provider.
-	b.ExtBytes = len(ag.ContextPreview())
-	// The lazy-tool capability note also rides the ephemeral tail (oneTurn appends
-	// it after the host context), but it is NOT part of ContextPreview — it is
-	// pinned per turn, not produced by the context provider. Fold its bytes into
-	// the ephemeral total and expose the attributable share, so /context reflects
-	// what deferred discovery costs (schemas gone, names not): the same "sub-share
-	// of a section" shape as ExtGuidanceBytes under the system prompt.
-	b.LazyNoteBytes = len(ag.CapabilityNote())
-	b.ExtBytes += b.LazyNoteBytes
+	// Ephemeral extension/card context: the frame's Volatile segments.
+	b.ExtBytes = len(frame.VolatileText())
+	// The lazy-tool capability note is one of those segments. Expose its
+	// attributable share, so /context reflects what deferred discovery costs
+	// (schemas gone, names not): the same "sub-share of a section" shape as
+	// ExtGuidanceBytes under the system prompt.
+	b.LazyNoteBytes = lazyNoteBytes(frame)
 	// The lore that fired last turn — the activation trace behind the ExtBytes
 	// tail. Read the retained record (the real turn's trace, not the side-effect-
 	// free peek above), so the Usage pane shows which entries fed the tail and why
@@ -342,34 +343,66 @@ func (s *wsSession) contextNode(id, op string) (ctrlproto.ContextNode, error) {
 	}
 	switch {
 	case id == "sys":
-		// The system prompt, plus which extensions folded static guidance into it.
-		node := ctrlproto.ContextNode{ID: "sys", Kind: "section", Label: "system prompt", Bytes: len(ag.System), Content: ag.System}
-		node.Children = s.extContextItems("static", "sys/xg")
+		// The system prompt, one child per Stable segment of the frame, by tag.
+		// The extensions' static guidance is folded into one of those segments,
+		// so it nests under that one rather than beside them, and the children
+		// still sum to the section.
+		frame := ag.FramePreview()
+		sys := frame.SystemText()
+		node := ctrlproto.ContextNode{ID: "sys", Kind: "section", Label: "system prompt", Bytes: len(sys), Content: sys}
+		node.Children = ctxSegmentNodes(frame, core.Stable, "sys/seg", map[string][]ctrlproto.ContextNode{
+			build.SourceExtensionContext: s.extContextItems("static", "sys/xg"),
+		})
 		return node, nil
 	case id == "tools":
-		advertised, filtered := ag.AdvertisedTools()
+		advertised, filtered := lazytools.Of(ag).Advertised()
 		return ctxToolsNode(ag.ToolsSnapshot(), advertised, filtered), nil
 	case id == "xt":
-		// The ephemeral context, plus the per-extension cards that make up its
-		// ext share (lore/PHI are the remainder, inspectable via the lore surface).
-		txt := ag.ContextPreview()
+		// The ephemeral context, one child per Volatile segment of the frame, by
+		// tag. terva's host segment nests the per-extension cards that make up
+		// its ext share (lore/PHI are the remainder, inspectable via the lore
+		// surface).
+		frame := ag.FramePreview()
+		txt := frame.VolatileText()
 		node := ctrlproto.ContextNode{ID: "xt", Kind: "section", Label: "ext context", Bytes: len(txt), Content: txt}
-		node.Children = s.extContextItems("card", "xt/card")
-		// The lazy-tool capability note rides the same ephemeral tail but isn't in
-		// ContextPreview; surface it as an inspectable leaf so the expanded section
-		// sums to its byte total.
-		if note := ag.CapabilityNote(); note != "" {
-			node.Bytes += len(note)
-			node.Children = append(node.Children, ctrlproto.ContextNode{
-				ID: "xt/lazynote", Kind: "block", Label: "inactive tool groups (capability note)",
-				Bytes: len(note), Summary: ctxFirstLineOf(note), Content: note,
-			})
-		}
+		node.Children = ctxSegmentNodes(frame, core.Volatile, "xt/seg", map[string][]ctrlproto.ContextNode{
+			core.TailHost: s.extContextItems("card", "xt/card"),
+		})
 		return node, nil
 	case strings.HasPrefix(id, "tr/m"):
 		return ctxMessageContentNode(id, ag.Messages())
 	}
 	return ctrlproto.ContextNode{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("unknown context node %q", id))
+}
+
+// lazyNoteBytes is the size of the lazy-tool capability note among the frame's
+// Volatile segments, or 0 when it carries none.
+func lazyNoteBytes(frame core.Frame) int {
+	for _, seg := range frame.Segments {
+		if seg.Stability == core.Volatile && (seg.Tag == lazytools.NoteFull || seg.Tag == lazytools.NoteBrief) {
+			return len(seg.Content)
+		}
+	}
+	return 0
+}
+
+// ctxSegmentNodes lists the frame's segments of one stability as child nodes,
+// labeled by tag, so /context shows what each segment weighs. nested hangs
+// finer-grained nodes under the segment with that tag. An empty Volatile
+// segment is skipped, as it is never sent.
+func ctxSegmentNodes(frame core.Frame, stability core.Stability, idPrefix string, nested map[string][]ctrlproto.ContextNode) []ctrlproto.ContextNode {
+	var out []ctrlproto.ContextNode
+	for i, seg := range frame.Segments {
+		if seg.Stability != stability || (stability == core.Volatile && seg.Content == "") {
+			continue
+		}
+		out = append(out, ctrlproto.ContextNode{
+			ID: fmt.Sprintf("%s/%d", idPrefix, i), Kind: "block", Label: seg.Tag,
+			Bytes: len(seg.Content), Summary: ctxFirstLineOf(seg.Content), Content: seg.Content,
+			Children: nested[seg.Tag],
+		})
+	}
+	return out
 }
 
 // extContextItems surfaces this session's extensions' context contributions of
@@ -417,7 +450,7 @@ func ctxExtItems(items []extensions.ContextItem, kind, idPrefix string) []ctrlpr
 // so the extra nesting level needs no per-leaf refetch.
 //
 // advertised reports whether a tool's schema is actually sent to the model this
-// turn; filtered is true when lazy visibility (or a VisibleTool override) is in
+// turn; filtered is true when lazy visibility is in
 // effect. The section's Bytes is the LIVE cost — only advertised schemas — so
 // /context reports the real context weight, not the full installed registry.
 // Inactive groups are still listed (an operator wants to see what could be
@@ -610,7 +643,7 @@ func (s *wsSession) revealCompaction(id string) (ctrlproto.ContextNode, error) {
 	} else if !strings.HasPrefix(id, "tr/m") {
 		return ctrlproto.ContextNode{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("not a compaction node %q", id))
 	}
-	span, err := core.RevealCompaction(s.sess.Path, target)
+	span, err := session.RevealCompaction(s.sess.Path, target)
 	if err != nil {
 		return ctrlproto.ContextNode{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "reveal: %v", err)
 	}
@@ -621,7 +654,7 @@ func (s *wsSession) revealCompaction(id string) (ctrlproto.ContextNode, error) {
 // nodes with their content inlined. The span's leading message, when the target
 // checkpoint had a predecessor, is that predecessor's summary — surfaced as a
 // nested revealable node so a client can walk the compaction history backward.
-func ctxRevealNode(id string, span core.CompactionSpan) ctrlproto.ContextNode {
+func ctxRevealNode(id string, span session.CompactionSpan) ctrlproto.ContextNode {
 	node := ctrlproto.ContextNode{
 		ID: id, Kind: "event", Label: "compaction",
 		Meta: map[string]string{

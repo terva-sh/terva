@@ -54,6 +54,7 @@ var docsThatShip = []string{
 	"docs/controllers.md",
 	"docs/debugging-prompts.md",
 	"docs/deploy.md",
+	"docs/embedding.md",
 	// design/ and practices/ are DIRECTORIES that ship — everything else on
 	// this list is a single top-level page. Two other places record the same
 	// decision and must agree: release.sh's EXCLUDES (by omission), and

@@ -109,7 +109,7 @@ var modelParams = []ModelParam{
 			return strOrDefault(m.DisplayName, m.ID)
 		},
 		Override:    func(um UserModel) string { return um.Name },
-		SetOverride: func(um *UserModel, s string) error { um.Name = SanitizeDisplayName(s); return nil },
+		SetOverride: func(um *UserModel, s string) error { um.Name = sanitizeDisplayName(s); return nil },
 		// DisplayNameSet, not a src.DisplayName != src.ID heuristic. The
 		// loader backfills DisplayName = ID when `name` is absent, so the
 		// string comparison was the only way to ask "did the operator
@@ -202,7 +202,7 @@ var modelParams = []ModelParam{
 		// the wire: the house rule is jargon inside, plain language out.
 		Key: "defaultReasoning", Label: "default thinking", Kind: ParamEnum,
 		Default: func(m Model) string { return strOrDefault(m.DefaultReasoning, "off") },
-		Options: ThinkingOptions,
+		Options: thinkingOptions,
 		InheritedFrom: func(m Model, global string) string {
 			// Cleared, so the hint cannot quote the very value the row is
 			// offering to replace.
@@ -301,12 +301,12 @@ var modelParams = []ModelParam{
 // row order. The slice is shared; callers must not mutate it.
 func ModelParams() []ModelParam { return modelParams }
 
-// MaxDisplayNameRunes bounds a models.json `name`. Not a layout decision —
+// maxDisplayNameRunes bounds a models.json `name`. Not a layout decision —
 // the render sites do their own width clamping — just a sanity ceiling so a
 // pasted essay can't become a model's name.
-const MaxDisplayNameRunes = 64
+const maxDisplayNameRunes = 64
 
-// SanitizeDisplayName makes an operator-supplied model name safe to print.
+// sanitizeDisplayName makes an operator-supplied model name safe to print.
 //
 // Unlike every other scalar override, this one is rendered raw into a
 // terminal status bar and picker rows, so an ESC in it is not a cosmetic
@@ -315,7 +315,7 @@ const MaxDisplayNameRunes = 64
 // spaces so a multi-line paste becomes one line rather than a torn status
 // bar. Applied at BOTH doors — the editor's SetOverride and the loader —
 // because models.json is hand-edited at least as often as it is written.
-func SanitizeDisplayName(s string) string {
+func sanitizeDisplayName(s string) string {
 	// Escape forms have to be told apart rather than closed on "the next
 	// plausible terminator": '[' is itself in the CSI final-byte range, so a
 	// single-state skip ends ESC[31m immediately and emits "31m".
@@ -371,8 +371,8 @@ func SanitizeDisplayName(s string) string {
 		}
 	}
 	out := strings.Join(strings.Fields(b.String()), " ")
-	if runes := []rune(out); len(runes) > MaxDisplayNameRunes {
-		out = strings.TrimSpace(string(runes[:MaxDisplayNameRunes]))
+	if runes := []rune(out); len(runes) > maxDisplayNameRunes {
+		out = strings.TrimSpace(string(runes[:maxDisplayNameRunes]))
 	}
 	return out
 }
@@ -539,12 +539,12 @@ func setNonNegInt(dst *int, s string) error {
 	return nil
 }
 
-// ThinkingOptions is the per-model thinking ladder a user may pick from,
+// thinkingOptions is the per-model thinking ladder a user may pick from,
 // lowest rung first, and empty for a model that takes no thinking control at
 // all. Only canonical rungs: ReasoningLadderFor marks a rung that reaches THIS
 // model as the same wire value as another, and offering both would be two
 // names for one choice.
-func ThinkingOptions(m Model) []string {
+func thinkingOptions(m Model) []string {
 	var out []string
 	for _, r := range ReasoningLadderFor(m) {
 		if r.SameAs == "" {

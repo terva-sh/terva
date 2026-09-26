@@ -6,6 +6,7 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -95,23 +96,23 @@ func TestSettingsReasoningSummaryAppliesToLiveAgents(t *testing.T) {
 	w := &Workspace{ctx: context.Background(), diag: func(string) {}, sessions: map[string]*wsSession{}}
 	s := &wsSession{id: "s1", ws: w, hub: newWSHub()}
 	w.sessions[s.id] = s
-	s.agent = core.NewAgent(&gatedTurnClient{}, "m", "sys", core.Registry{})
+	s.agent = coretest.NewAgent(&gatedTurnClient{}, "m", "sys", core.Registry{})
 
-	if s.agent.ReasoningSummary != "" {
-		t.Fatalf("a fresh agent should not record reasoning, got %q", s.agent.ReasoningSummary)
+	if s.agent.ReasoningSummary() != "" {
+		t.Fatalf("a fresh agent should not record reasoning, got %q", s.agent.ReasoningSummary())
 	}
 	if err := s.settingsAction("set", map[string]string{"key": "reasoning_summary", "value": "detailed"}); err != nil {
 		t.Fatalf("set reasoning_summary: %v", err)
 	}
-	if s.agent.ReasoningSummary != "detailed" {
-		t.Errorf("live agent = %q, want detailed — the change must not wait for a rebuild", s.agent.ReasoningSummary)
+	if s.agent.ReasoningSummary() != "detailed" {
+		t.Errorf("live agent = %q, want detailed — the change must not wait for a rebuild", s.agent.ReasoningSummary())
 	}
 
 	if err := s.settingsAction("set", map[string]string{"key": "reasoning_summary", "value": ""}); err != nil {
 		t.Fatalf("set reasoning_summary off: %v", err)
 	}
-	if s.agent.ReasoningSummary != "" {
-		t.Errorf("live agent = %q, want off — turning it back off must apply live too", s.agent.ReasoningSummary)
+	if s.agent.ReasoningSummary() != "" {
+		t.Errorf("live agent = %q, want off — turning it back off must apply live too", s.agent.ReasoningSummary())
 	}
 }
 

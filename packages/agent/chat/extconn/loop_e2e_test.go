@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/chat"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -69,7 +70,7 @@ done
 	conn := NewConn("e2e-loop", func(string) {})
 	loop := &chat.Loop{
 		Connector: conn,
-		Agent:     core.NewAgent(&scriptedClient{reply: "scripted-reply"}, "fake-model", "sys", core.Registry{}),
+		Agent:     coretest.NewAgent(&scriptedClient{reply: "scripted-reply"}, "fake-model", "sys", core.Registry{}),
 		Provider:  "fake",
 		CWD:       "/ws",
 		Pairing:   chat.Pairing{AllowedUserID: "u1"}, // pre-paired to the script's sender

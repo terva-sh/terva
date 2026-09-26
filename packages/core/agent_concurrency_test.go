@@ -42,7 +42,7 @@ func (c *costRaceFakeClient) Stream(ctx context.Context, req provider.Request) (
 func TestCostReadDuringTurnIsRaceFree(t *testing.T) {
 	gate := make(chan struct{})
 	client := &costRaceFakeClient{gate: gate}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
@@ -117,8 +117,8 @@ func (c *appendCountingRetryClient) Stream(ctx context.Context, req provider.Req
 // persistence bug where the JSONL kept both attempts.
 func TestRetriedTurnFiresAppendOnceForFinalMessage(t *testing.T) {
 	client := &appendCountingRetryClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
-	a.RetryBaseDelay = time.Millisecond
+	a := newTestAgent(client, "fake-model", "system", Registry{})
+	a.retryBaseDelay = time.Millisecond
 
 	var appended []provider.Message
 	a.AddMessageObserver(func(m provider.Message) {
@@ -181,7 +181,7 @@ func TestConcurrentPromptReturnsErrBusy(t *testing.T) {
 		started: make(chan struct{}, 1),
 		release: make(chan struct{}),
 	}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 
 	first := make(chan error, 1)
 	go func() { first <- a.Prompt(context.Background(), "first", nil, nil) }()

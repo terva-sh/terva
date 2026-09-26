@@ -23,6 +23,7 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -319,7 +320,7 @@ func chatTestWorkspace(t *testing.T, id string) (*Workspace, *wsSession, *fakeCh
 	s.ws = w
 	s.sess = sf
 	s.cwd = root
-	s.agent = core.NewAgent(cl, "fake-model", "", core.Registry{})
+	s.agent = coretest.NewAgent(cl, "fake-model", "", core.Registry{})
 	w.sessions[id] = s
 	// Join any dial this test starts. Nothing here calls Close, so without it a
 	// chatDial goroutine outlives the test body and keeps rebuilding tools —

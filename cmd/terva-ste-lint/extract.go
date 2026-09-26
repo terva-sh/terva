@@ -161,12 +161,8 @@ func extractFile(fset *token.FileSet, rel, src string) ([]Text, error) {
 			// 88-word sentence. Enrolling them was tried and produced only
 			// misfires — noise that would sit in the baseline forever, not a
 			// burn-down list.
-			sel, ok := v.Fun.(*ast.SelectorExpr)
+			sel, ok := i18nSelector(v)
 			if !ok || sel.Sel.Name != "P" || len(v.Args) < 2 {
-				return true
-			}
-			pkg, ok := sel.X.(*ast.Ident)
-			if !ok || pkg.Name != "i18n" {
 				return true
 			}
 			keyLit, ok := v.Args[0].(*ast.BasicLit)
@@ -203,7 +199,7 @@ func extractFile(fset *token.FileSet, rel, src string) ([]Text, error) {
 }
 
 // flatten reconstructs a string-concatenation chain. A non-literal operand — a
-// call like shellName(), a reference like core.SceneStateName — becomes a
+// call like shellName(), a reference like session.SceneStateName — becomes a
 // neutral placeholder, so the sentence keeps its shape without the lint
 // asserting anything about a value only known at run time.
 func flatten(e ast.Expr, consts map[string]string) (string, bool) {
@@ -258,15 +254,35 @@ func flatten(e ast.Expr, consts map[string]string) (string, bool) {
 	return "", false
 }
 
+// i18nSelector returns call's selector when call is a function of the i18n
+// package, i18n.P(…), or a method on an engine's own translator,
+// i18n.In(tr).P(…). The arguments sit in the same places in both, so the
+// callers read either the same way.
+func i18nSelector(call *ast.CallExpr) (*ast.SelectorExpr, bool) {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return nil, false
+	}
+	x := sel.X
+	if in, ok := x.(*ast.CallExpr); ok {
+		inSel, ok := in.Fun.(*ast.SelectorExpr)
+		if !ok || inSel.Sel.Name != "In" {
+			return nil, false
+		}
+		x = inSel.X
+	}
+	pkg, ok := x.(*ast.Ident)
+	if !ok || pkg.Name != "i18n" {
+		return nil, false
+	}
+	return sel, true
+}
+
 // i18nDefaultArg returns the english-default argument of an i18n.D/P/H call,
 // which is always the second: the first is the dotted key.
 func i18nDefaultArg(call *ast.CallExpr) (ast.Expr, bool) {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
+	sel, ok := i18nSelector(call)
 	if !ok || len(call.Args) < 2 {
-		return nil, false
-	}
-	pkg, ok := sel.X.(*ast.Ident)
-	if !ok || pkg.Name != "i18n" {
 		return nil, false
 	}
 	switch sel.Sel.Name {

@@ -169,7 +169,8 @@ func (s *wsSession) memoryAction(action string, args map[string]string) error {
 	// frozen block is refreshed outside a session boundary: it is frozen against
 	// the MODEL's writes (which it sees in the tool's reply), not the user's,
 	// which it has no other way to learn about. rebuildTools re-Resolves and
-	// SetSystem's the result, which re-renders MemoryBlock from these stores.
+	// installs the result in the Assembler (SetStable), which re-renders
+	// MemoryBlock from these stores.
 	s.rebuildTools("memory")
 	s.broadcast(ctrlproto.SurfaceUpdatedEvent("memory"))
 	return nil

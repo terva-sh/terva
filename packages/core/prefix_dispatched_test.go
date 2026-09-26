@@ -15,7 +15,7 @@ import (
 // the test's intention but not with the wire would align with nothing.
 func TestDispatchedPrefixReturnsWhatWentOnTheWire(t *testing.T) {
 	client := &prefixSpyClient{name: "spy"}
-	a := NewAgent(client, "spy-model", "the system prompt", Registry{"noop": noopTool{}})
+	a := newTestAgent(client, "spy-model", "the system prompt", Registry{"noop": noopTool{}})
 
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 		t.Fatalf("Prompt returned %v", err)
@@ -63,7 +63,7 @@ func TestDispatchedPrefixReturnsWhatWentOnTheWire(t *testing.T) {
 // tell apart from a real prefix.
 func TestDispatchedPrefixIsNotOkBeforeTheFirstDispatch(t *testing.T) {
 	client := &prefixSpyClient{name: "spy"}
-	a := NewAgent(client, "spy-model", "the system prompt", Registry{"noop": noopTool{}})
+	a := newTestAgent(client, "spy-model", "the system prompt", Registry{"noop": noopTool{}})
 
 	if _, _, _, ok := a.DispatchedPrefix(client, "spy-model"); ok {
 		t.Fatal("ok before any dispatch; nothing is cached, so there is no prefix to align to")
@@ -76,7 +76,7 @@ func TestDispatchedPrefixIsNotOkBeforeTheFirstDispatch(t *testing.T) {
 func TestDispatchedPrefixRefusesAnotherModelOrClient(t *testing.T) {
 	outgoing := &prefixSpyClient{name: "outgoing"}
 	incoming := &prefixSpyClient{name: "incoming"}
-	a := NewAgent(outgoing, "outgoing-model", "the system prompt", Registry{"noop": noopTool{}})
+	a := newTestAgent(outgoing, "outgoing-model", "the system prompt", Registry{"noop": noopTool{}})
 
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 		t.Fatalf("Prompt returned %v", err)
@@ -102,7 +102,7 @@ func TestDispatchedPrefixRefusesAnotherModelOrClient(t *testing.T) {
 // that mutated it would corrupt the compaction target as a side effect.
 func TestDispatchedPrefixCopiesTheToolsSlice(t *testing.T) {
 	client := &prefixSpyClient{name: "spy"}
-	a := NewAgent(client, "spy-model", "the system prompt", Registry{"noop": noopTool{}})
+	a := newTestAgent(client, "spy-model", "the system prompt", Registry{"noop": noopTool{}})
 
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 		t.Fatalf("Prompt returned %v", err)

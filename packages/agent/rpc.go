@@ -16,12 +16,14 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/extdriver"
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/modes"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
-	"terva.sh/terva/packages/lineframe"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/provider/lineframe"
+	"terva.sh/terva/packages/session"
 )
 
 // runRPCMode implements the JSON-over-stdin/stdout RPC protocol.
@@ -102,8 +104,8 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	mcpAdapter, stopMCP := build.SetupMCP(ctx, args, &r)
 	defer stopMCP()
 
-	ag := r.NewAgent()
 	hookEng := build.BuildHookEngine(args, r.Trusted)
+	ag := r.NewAgent(build.BuildToolGate(hookEng, confirmGate, extMgr), build.ExtensionFilters(ctx, extMgr)...)
 	// The canonical launch wiring — tool-call ladder, extension intercepts,
 	// event observers, context cards, open-work gate — shared with print, json,
 	// bot and swarm. rpc used to reproduce all eleven steps inline, verbatim and
@@ -154,7 +156,7 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	mergeExtTools := func() {
 		rebuildArgs := args
 		rebuildArgs.TrustPin = &r.Trusted
-		rebuildArgs.Model = ag.Model
+		rebuildArgs.Model = ag.Model()
 		askerBinding.rebuild(build.LiveToolSet{
 			Args:    rebuildArgs,
 			Gate:    confirmGate,
@@ -184,7 +186,7 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	// rather than blank — the same resume the native --swarm-agent child has, now
 	// on the rpc carrier. Persistence is observer-driven, so the turn handlers
 	// (runPrompt/runCompact) need no changes.
-	var sess *core.Session
+	var sess *session.Session
 	if args.Session != "" {
 		s, serr := openOrCreateSession(args, r, ag, version)
 		if serr != nil {
@@ -347,7 +349,7 @@ func (b *rpcAskerBinding) bind(a core.Asker) {
 	defer b.mu.Unlock()
 	b.asker = a
 	b.resolved.SetAsker(a)
-	b.agent.Asker = a
+	b.agent.SetAsker(a)
 	bindAgentAsker(b.agent, a)
 }
 
@@ -618,7 +620,7 @@ func (s *rpcServer) dispatch(cmd, id string, raw []byte) {
 			s.writeError(id, cmd, err.Error())
 			return
 		}
-		next, err := provider.FindModel(s.provider, req.Model)
+		next, err := modelreg.FindModel(s.provider, req.Model)
 		if err != nil {
 			s.writeError(id, cmd, err.Error())
 			return
@@ -629,7 +631,7 @@ func (s *rpcServer) dispatch(cmd, id string, raw []byte) {
 		// backends; swapping the id alone would keep firing requests at
 		// the previous endpoint. The rpc server has no rebuild path, so
 		// reject the swap and tell the client to restart the session.
-		if cur, curErr := provider.FindModel(s.provider, s.model); curErr == nil && cur.BaseURL != next.BaseURL {
+		if cur, curErr := modelreg.FindModel(s.provider, s.model); curErr == nil && cur.BaseURL != next.BaseURL {
 			s.writeError(id, cmd, fmt.Sprintf("model %q routes to a different endpoint; restart the rpc session to switch", req.Model))
 			return
 		}
@@ -639,7 +641,7 @@ func (s *rpcServer) dispatch(cmd, id string, raw []byte) {
 
 	case "get_models":
 		out := []map[string]any{}
-		for _, m := range provider.ModelsForProvider(s.provider) {
+		for _, m := range modelreg.ModelsForProvider(s.provider) {
 			out = append(out, map[string]any{
 				"id":                     m.ID,
 				"provider":               m.Provider,
@@ -719,23 +721,17 @@ func (s *rpcServer) runPrompt(id, message string, images []struct {
 		// lives under "error", matching --json and the SDK.
 		s.writeEvent(map[string]any{"type": "error", "error": err.Error()})
 	}
-	// Post-turn housekeeping for this long-lived session: when the
-	// finished turn pushed context past the auto-compact threshold,
-	// condense now — inside the request lifecycle, before `done` — so
-	// the NEXT prompt doesn't pay the latency or bounce off the
-	// window. A failed auto-compact is non-fatal: the turn itself
-	// succeeded, so the failure rides the compact_end event and the
-	// client decides whether to /compact manually.
-	if err == nil && subCtx.Err() == nil && s.agent.ShouldAutoCompact(core.AutoCompactThreshold) && s.agent.CanCompact(core.AutoCompactKeepTail) {
-		start := core.EvCompactStart{Reason: "context near limit"}
-		s.writeEvent(modes.EventToJSON(start))
-		s.agent.EmitLifecycle(start) // reach extensions, not just the RPC client
-		end := core.EvCompactEnd{}
-		if _, cerr := s.agent.Compact(subCtx, core.AutoCompactKeepTail, nil); cerr != nil && !errors.Is(cerr, context.Canceled) && !errors.Is(cerr, core.ErrNothingToCompact) {
-			end.Err = cerr.Error()
-		}
-		s.writeEvent(modes.EventToJSON(end))
-		s.agent.EmitLifecycle(end)
+	// Post-turn housekeeping for this long-lived session: when the policy
+	// says the finished turn left the context too full, condense now —
+	// inside the request lifecycle, before `done` — so the NEXT prompt
+	// doesn't pay the latency or bounce off the window. A failed
+	// auto-compact is non-fatal: the turn itself succeeded, so the failure
+	// rides the compact_end event (which CompactIfDue also sends to
+	// extensions) and the client decides whether to /compact manually.
+	if err == nil && subCtx.Err() == nil {
+		_, _, _ = s.agent.CompactIfDue(subCtx, core.CompactAfterTurn, func(ev core.AgentEvent) {
+			s.writeEvent(modes.EventToJSON(ev))
+		})
 	}
 	s.writeEvent(map[string]any{"type": "done"})
 }
@@ -766,7 +762,7 @@ func (s *rpcServer) runCompact(id string) {
 	// map[string]any would have accepted the whole struct without a murmur
 	// from the compiler — silently turning a documented string field into an
 	// object for every --json consumer.
-	res, err := s.agent.Compact(subCtx, core.AutoCompactKeepTail, nil)
+	res, err := s.agent.Compact(subCtx, s.agent.Compaction(core.CompactRequested).KeepTail, nil)
 	switch {
 	case err == nil:
 		// strategy/usage ride the event because RPC is the programmatic driver —

@@ -37,7 +37,7 @@ func TestRewireLoreContextKeepsTheLiveCards(t *testing.T) {
 	tail := EphemeralTail{Ext: func() string { return "EXT-CARD" }, Tasks: ctrl}
 
 	WireEphemeralTail(ag, tail)
-	before := ag.ContextPreview()
+	before := ag.FramePreview().VolatileText()
 	for _, want := range []string{"EXT-CARD", "ship the thing", "PROJECT-LORE-MARKER"} {
 		if !strings.Contains(before, want) {
 			t.Fatalf("precondition: %q missing from the built tail:\n%s", want, before)
@@ -48,7 +48,7 @@ func TestRewireLoreContextKeepsTheLiveCards(t *testing.T) {
 		t.Fatal("RewireLoreContext reported no resolve")
 	}
 
-	after := ag.ContextPreview()
+	after := ag.FramePreview().VolatileText()
 	for _, want := range []string{"EXT-CARD", "ship the thing"} {
 		if !strings.Contains(after, want) {
 			t.Errorf("%q is gone from the tail after a re-derivation — the model loses it "+
@@ -93,9 +93,9 @@ func TestRewireLoreContextKeepsTheCardOrder(t *testing.T) {
 			at = i
 		}
 	}
-	assertOrder("at build", ag.ContextPreview())
+	assertOrder("at build", ag.FramePreview().VolatileText())
 	RewireLoreContext(ag, args, tail)
-	assertOrder("after the rewire", ag.ContextPreview())
+	assertOrder("after the rewire", ag.FramePreview().VolatileText())
 }
 
 // reloadLore runs on every lore edit, so the rewire is not a once-per-session
@@ -120,7 +120,7 @@ func TestRepeatedRewiresDoNotStackTheCards(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		RewireLoreContext(ag, args, tail)
 	}
-	got := ag.ContextPreview()
+	got := ag.FramePreview().VolatileText()
 	if n := strings.Count(got, "EXT-CARD"); n != 1 {
 		t.Errorf("extension card appears %d times after three rewires, want 1:\n%s", n, got)
 	}
@@ -155,7 +155,7 @@ func loreAgent(t *testing.T) (*core.Agent, Args) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	ag := r.NewAgent()
+	ag := r.NewAgent(core.AllowAll)
 	ag.SetMessages([]provider.Message{{
 		Role:    provider.RoleUser,
 		Content: []provider.Content{provider.TextBlock{Text: "tell me about the dragon"}},

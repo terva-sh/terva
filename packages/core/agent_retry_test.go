@@ -38,8 +38,8 @@ func (c *retryFakeClient) Stream(ctx context.Context, req provider.Request) (<-c
 
 func TestAgentRetriesOverloadedStreamError(t *testing.T) {
 	client := &retryFakeClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
-	a.RetryBaseDelay = time.Millisecond
+	a := newTestAgent(client, "fake-model", "system", Registry{})
+	a.retryBaseDelay = time.Millisecond
 
 	var turnErrs []string
 	err := a.Prompt(context.Background(), "hello", nil, func(ev AgentEvent) {
@@ -95,8 +95,8 @@ func (c *partialRetryFakeClient) Stream(ctx context.Context, req provider.Reques
 
 func TestAgentDropsPartialAssistantBeforeRetry(t *testing.T) {
 	client := &partialRetryFakeClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
-	a.RetryBaseDelay = time.Millisecond
+	a := newTestAgent(client, "fake-model", "system", Registry{})
+	a.retryBaseDelay = time.Millisecond
 
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 		t.Fatalf("Prompt returned %v", err)
@@ -134,8 +134,8 @@ func (c *captureClient) Stream(ctx context.Context, req provider.Request) (<-cha
 
 func TestAgentPropagatesMaxTokens(t *testing.T) {
 	client := &captureClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
-	a.MaxTokens = 64000
+	a := newTestAgent(client, "fake-model", "system", Registry{})
+	a.maxTokens = 64000
 
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 		t.Fatalf("Prompt returned %v", err)
@@ -147,9 +147,9 @@ func TestAgentPropagatesMaxTokens(t *testing.T) {
 
 func TestAgentPropagatesTemperature(t *testing.T) {
 	client := &captureClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 	temp := float32(0)
-	a.Temperature = &temp
+	a.temperature = &temp
 
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 		t.Fatalf("Prompt returned %v", err)
@@ -185,8 +185,8 @@ func (c *untypedErrClient) Stream(ctx context.Context, req provider.Request) (<-
 // enough to burn three retries.)
 func TestAgentDoesNotRetryUntypedProseError(t *testing.T) {
 	client := &untypedErrClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
-	a.RetryBaseDelay = time.Millisecond
+	a := newTestAgent(client, "fake-model", "system", Registry{})
+	a.retryBaseDelay = time.Millisecond
 
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err == nil {
 		t.Fatalf("Prompt should surface the error")
@@ -216,8 +216,8 @@ func (c *permanentErrClient) Stream(ctx context.Context, req provider.Request) (
 
 func TestAgentDoesNotRetryPermanentProviderError(t *testing.T) {
 	client := &permanentErrClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
-	a.RetryBaseDelay = time.Millisecond
+	a := newTestAgent(client, "fake-model", "system", Registry{})
+	a.retryBaseDelay = time.Millisecond
 
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err == nil {
 		t.Fatalf("Prompt should surface the error")
@@ -228,21 +228,21 @@ func TestAgentDoesNotRetryPermanentProviderError(t *testing.T) {
 }
 
 // TestRetryDelayHonorsRetryAfter: a server-stated Retry-After wins over
-// exponential backoff, capped at MaxRetryDelay — the same ceiling terva's own
+// exponential backoff, capped at maxRetryDelay — the same ceiling terva's own
 // backoff climbs to. One bound, not two: a header asking for a wait terva would
 // take on its own judgement is not hostile, and the cap exists to stop the
 // pathological case, not to second-guess a cooperative one.
 func TestRetryDelayHonorsRetryAfter(t *testing.T) {
-	a := NewAgent(&retryFakeClient{}, "fake-model", "system", Registry{})
-	a.RetryBaseDelay = 2 * time.Second
+	a := newTestAgent(&retryFakeClient{}, "fake-model", "system", Registry{})
+	a.retryBaseDelay = 2 * time.Second
 
 	with := provider.NewHTTPError("x", 429, "7", "slow down")
 	if got := a.retryDelay(0, with); got != 7*time.Second {
 		t.Errorf("retryDelay with Retry-After = %v, want 7s", got)
 	}
 	huge := provider.NewHTTPError("x", 429, "600", "slow down")
-	if got := a.retryDelay(0, huge); got != MaxRetryDelay {
-		t.Errorf("retryDelay with huge Retry-After = %v, want the %v cap", got, MaxRetryDelay)
+	if got := a.retryDelay(0, huge); got != maxRetryDelay {
+		t.Errorf("retryDelay with huge Retry-After = %v, want the %v cap", got, maxRetryDelay)
 	}
 	without := provider.NewHTTPError("x", 503, "", "unavailable")
 	if got := a.retryDelay(1, without); got != 4*time.Second {
@@ -256,13 +256,13 @@ func TestRetryDelayHonorsRetryAfter(t *testing.T) {
 // a minute. Doubling early (cheap blips recover in seconds) and flat at the
 // ceiling late (an overloaded backend gets waited out).
 func TestRetryBackoffCurve(t *testing.T) {
-	a := NewAgent(&retryFakeClient{}, "fake-model", "system", Registry{})
+	a := newTestAgent(&retryFakeClient{}, "fake-model", "system", Registry{})
 	err := provider.NewAPIError("openai-codex", "overloaded", true)
 
 	want := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second,
-		16 * time.Second, 32 * time.Second, MaxRetryDelay}
-	if a.MaxRetries != len(want) {
-		t.Fatalf("MaxRetries = %d, want %d (the curve below has one entry per retry)", a.MaxRetries, len(want))
+		16 * time.Second, 32 * time.Second, maxRetryDelay}
+	if a.maxRetries != len(want) {
+		t.Fatalf("MaxRetries = %d, want %d (the curve below has one entry per retry)", a.maxRetries, len(want))
 	}
 	var total time.Duration
 	for i, w := range want {
@@ -282,8 +282,8 @@ func TestRetryBackoffCurve(t *testing.T) {
 	}
 	// A host that sets an absurd MaxRetries must not wrap the shift into a
 	// zero-length "wait".
-	if got := a.retryDelay(64, err); got != MaxRetryDelay {
-		t.Errorf("retryDelay(64) = %v, want the %v cap (shift guard)", got, MaxRetryDelay)
+	if got := a.retryDelay(64, err); got != maxRetryDelay {
+		t.Errorf("retryDelay(64) = %v, want the %v cap (shift guard)", got, maxRetryDelay)
 	}
 }
 
@@ -307,8 +307,8 @@ func (c *quotaErrClient) Stream(ctx context.Context, req provider.Request) (<-ch
 
 func TestAgentDoesNotRetryQuotaExhaustion(t *testing.T) {
 	client := &quotaErrClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
-	a.RetryBaseDelay = time.Millisecond
+	a := newTestAgent(client, "fake-model", "system", Registry{})
+	a.retryBaseDelay = time.Millisecond
 
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err == nil {
 		t.Fatalf("Prompt should surface the error")
@@ -324,8 +324,8 @@ func TestAgentDoesNotRetryQuotaExhaustion(t *testing.T) {
 // attempts against a wall it cannot get past.
 func TestAgentStillRefusesQuotaExhaustionThatSaysTryAgainLater(t *testing.T) {
 	client := &politeQuotaClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
-	a.RetryBaseDelay = time.Millisecond
+	a := newTestAgent(client, "fake-model", "system", Registry{})
+	a.retryBaseDelay = time.Millisecond
 
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err == nil {
 		t.Fatal("Prompt should surface the quota error")

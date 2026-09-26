@@ -25,9 +25,9 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/persona"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // nextSceneMaxTranscript bounds the scene evidence. Smaller than the doctor's
@@ -42,7 +42,7 @@ func (w *Workspace) SessionsNextScene(ctx context.Context, sess string, p ctrlpr
 	if err != nil {
 		return ctrlproto.NextSceneResult{}, err
 	}
-	if s.sess == nil || s.sess.Meta.Experience == "" {
+	if s.sess == nil || s.sess.Stage.Experience == "" {
 		return ctrlproto.NextSceneResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("scene breaks are for chat and play sessions"))
 	}
 	if p.Commit {
@@ -55,7 +55,7 @@ func (w *Workspace) SessionsNextScene(ctx context.Context, sess string, p ctrlpr
 // the roster, and the recorded lore.
 func proposeNextScene(ctx context.Context, s *wsSession, p ctrlproto.NextSceneParams) (ctrlproto.NextSceneResult, error) {
 	ag := s.agent
-	if ag == nil || ag.Client == nil {
+	if ag == nil || ag.Client() == nil {
 		return ctrlproto.NextSceneResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("not logged in"))
 	}
 	msgs := ag.Messages()
@@ -66,7 +66,7 @@ func proposeNextScene(ctx context.Context, s *wsSession, p ctrlproto.NextScenePa
 	if err != nil || strings.TrimSpace(persona.Charter) == "" {
 		return ctrlproto.NextSceneResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("the %s persona is unavailable", dramaturgPersona))
 	}
-	cl := ag.Client
+	cl := ag.Client()
 	_, model := s.currentModel()
 	if strings.TrimSpace(p.Model) != "" {
 		oc, om, err := s.ws.overrideClient(s.argsSnapshot(), p.Provider, p.Model)
@@ -109,7 +109,7 @@ func proposeNextScene(ctx context.Context, s *wsSession, p ctrlproto.NextScenePa
 // The suggestion is the bound character's name (a chat is "their" story) and
 // falls back to the session's title. Both are only a prefill.
 func (s *wsSession) worldForNextScene(boundName string) (id, name string) {
-	if id = strings.TrimSpace(s.sess.Meta.World); id != "" {
+	if id = strings.TrimSpace(s.sess.Stage.World); id != "" {
 		if doc, err := build.NewWorldStore().Get(id); err == nil {
 			return id, doc.Name
 		}
@@ -144,7 +144,7 @@ Rules:
 // renderNextSceneEvidence assembles the scene-break grounding. A free
 // function, like the doctor's evidence renderers, so the prompt is testable
 // without a client.
-func renderNextSceneEvidence(playerLabel, boundName string, roster []string, lore []core.WorldLoreEntry, transcript []provider.Message) string {
+func renderNextSceneEvidence(playerLabel, boundName string, roster []string, lore []session.WorldLoreEntry, transcript []provider.Message) string {
 	var b strings.Builder
 	b.WriteString("THE SCENE THAT IS ENDING (most recent last)\n")
 	charLabel := boundName
@@ -175,9 +175,9 @@ func renderNextSceneEvidence(playerLabel, boundName string, roster []string, lor
 	wrote := false
 	for _, e := range lore {
 		switch {
-		case core.IsSceneState(e.Name):
+		case session.IsSceneState(e.Name):
 			pin = e.Content
-		case core.IsStorySoFar(e.Name):
+		case session.IsStorySoFar(e.Name):
 			prior = e.Content
 		default:
 			scope := "shared"
@@ -253,17 +253,18 @@ func (w *Workspace) commitNextScene(s *wsSession, p ctrlproto.NextSceneParams) (
 	}
 
 	meta := s.sess.Meta
+	stage := s.sess.Stage
 	// The recap replaces any previous one, so scene five carries a single
 	// cumulative entry rather than four stacked ones. It is always-on: a recap
 	// that fires only on keywords is a recap the model reads only by luck.
-	lore := make([]core.WorldLoreEntry, 0, len(meta.WorldLore)+1)
+	lore := make([]session.WorldLoreEntry, 0, len(meta.WorldLore)+1)
 	placed := false
 	for _, e := range meta.WorldLore {
-		if core.IsStorySoFar(e.Name) {
+		if session.IsStorySoFar(e.Name) {
 			if placed {
 				continue
 			}
-			lore = append(lore, core.WorldLoreEntry{Name: core.StorySoFarName, Constant: true, Content: summary})
+			lore = append(lore, session.WorldLoreEntry{Name: session.StorySoFarName, Constant: true, Content: summary})
 			placed = true
 			continue
 		}
@@ -271,13 +272,13 @@ func (w *Workspace) commitNextScene(s *wsSession, p ctrlproto.NextSceneParams) (
 		// the state the next scene opens in, so it is current as of that scene's
 		// message zero. Carrying the parent's count forward would open every scene
 		// with a pin already reported as N turns behind (SD6).
-		if core.IsSceneState(e.Name) {
+		if session.IsSceneState(e.Name) {
 			e.PinnedAt = 0
 		}
 		lore = append(lore, e)
 	}
 	if !placed {
-		lore = append(lore, core.WorldLoreEntry{Name: core.StorySoFarName, Constant: true, Content: summary})
+		lore = append(lore, session.WorldLoreEntry{Name: session.StorySoFarName, Constant: true, Content: summary})
 	}
 
 	// The cold open is attributed to the main character when there is one, so
@@ -296,7 +297,7 @@ func (w *Workspace) commitNextScene(s *wsSession, p ctrlproto.NextSceneParams) (
 	// a story that has one just joins it. A failure here is fatal on purpose:
 	// they asked for the grouping, and silently opening an ungrouped scene would
 	// be the very outcome they were trying to avoid.
-	worldID := meta.World
+	worldID := stage.World
 	if worldID == "" {
 		if name := strings.TrimSpace(p.World); name != "" {
 			saved, err := s.saveWorld(name, "")
@@ -304,7 +305,7 @@ func (w *Workspace) commitNextScene(s *wsSession, p ctrlproto.NextSceneParams) (
 				return ctrlproto.NextSceneResult{}, err
 			}
 			worldID = saved.ID
-			meta = s.sess.Meta // saveWorld stamped membership; re-read before seeding
+			meta, stage = s.sess.Meta, s.sess.Stage // saveWorld stamped membership; re-read before seeding
 		}
 	}
 	opts := ctrlproto.CreateOpts{
@@ -312,23 +313,23 @@ func (w *Workspace) commitNextScene(s *wsSession, p ctrlproto.NextSceneParams) (
 		Provider:   meta.Provider,
 		Model:      meta.Model,
 		Persona:    meta.Persona,
-		Experience: meta.Experience,
-		Card:       meta.Card,
-		Cast:       meta.Cast,
-		Greeting:   meta.Greeting,
-		Background: meta.Background,
+		Experience: stage.Experience,
+		Card:       stage.Card,
+		Cast:       stage.Cast,
+		Greeting:   stage.Greeting,
+		Background: stage.Background,
 	}
 	seed := &sceneSeed{
 		lore:            lore,
 		coordination:    meta.Coordination,
 		world:           worldID,
 		parent:          s.id,
-		castModels:      meta.CastModels,
+		castModels:      stage.CastModels,
 		note:            meta.Note,
-		userName:        meta.UserName,
-		userDescription: meta.UserDescription,
-		userGender:      meta.UserGender,
-		userPronouns:    meta.UserPronouns,
+		userName:        stage.UserName,
+		userDescription: stage.UserDescription,
+		userGender:      stage.UserGender,
+		userPronouns:    stage.UserPronouns,
 		opening:         opening,
 		openingActor:    boundName,
 	}

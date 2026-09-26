@@ -31,6 +31,7 @@ var enrolledDirs = []string{
 	"packages/agent/tools/memory",
 	"packages/agent/worker",
 	"packages/core",
+	"packages/core/lazytools",
 }
 
 // exemptFiles are files inside an enrolled directory whose tool text is not

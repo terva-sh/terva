@@ -33,9 +33,9 @@ func TestImageTokensAreBilledAtTheImageRate(t *testing.T) {
 	const per = 1_000_000.0
 	// 7 in, 330 text out, 1120 image out — each at its own rate.
 	want := 7*0.50/per + 330*3.00/per + 1120*60.00/per
-	got := ComputeCost(m, u)
+	got := computeCost(m, u)
 	if !nearlyEqual(got, want) {
-		t.Errorf("ComputeCost = %.10f, want %.10f", got, want)
+		t.Errorf("computeCost = %.10f, want %.10f", got, want)
 	}
 	// The failure this guards against is collapsing to one rate. Both
 	// collapses are named here so a regression says which way it went.
@@ -57,12 +57,12 @@ func TestImageTokensAreBilledAtTheImageRate(t *testing.T) {
 func TestImageTokensAreNotBilledTwice(t *testing.T) {
 	m, u := nanoBanana()
 	const per = 1_000_000.0
-	// Compare OUTPUT against OUTPUT. ComputeCost also bills the prompt, and
+	// Compare OUTPUT against OUTPUT. computeCost also bills the prompt, and
 	// an earlier version of this test forgot that: it measured the full cost
 	// against an output-only figure, so the two could never be equal and the
 	// test could not fail. A double-billing probe caught it passing.
 	input := float64(u.InputTokens) * m.PriceInput / per
-	outputOnly := ComputeCost(m, u) - input
+	outputOnly := computeCost(m, u) - input
 	doubled := float64(u.OutputTokens)*m.PriceOutput/per + float64(u.ImageOutputTokens)*m.PriceOutputImage/per
 	if nearlyEqual(outputOnly, doubled) {
 		t.Errorf("image tokens billed on top of the full output total (output cost %.10f): they are a subset of it, not a fifth bucket", outputOnly)
@@ -86,8 +86,8 @@ func TestAModelWithoutAnImageRateIsPricedExactlyAsBefore(t *testing.T) {
 			float64(u.OutputTokens)*m.PriceOutput/per +
 			float64(u.CacheReadTokens)*m.PriceCacheRead/per +
 			float64(u.CacheWriteTokens)*m.PriceCacheWrite/per
-		if got := ComputeCost(m, u); !nearlyEqual(got, want) {
-			t.Errorf("usage %+v: ComputeCost = %.10f, want the pre-split %.10f", u, got, want)
+		if got := computeCost(m, u); !nearlyEqual(got, want) {
+			t.Errorf("usage %+v: computeCost = %.10f, want the pre-split %.10f", u, got, want)
 		}
 	}
 }
@@ -99,7 +99,7 @@ func TestATextOnlyTurnOnAnImageModelPaysTheTextRate(t *testing.T) {
 	u := Usage{InputTokens: 10, OutputTokens: 1000} // no image emitted
 	const per = 1_000_000.0
 	want := 10*0.50/per + 1000*3.00/per
-	if got := ComputeCost(m, u); !nearlyEqual(got, want) {
+	if got := computeCost(m, u); !nearlyEqual(got, want) {
 		t.Errorf("text-only turn cost %.10f, want %.10f", got, want)
 	}
 }
@@ -114,7 +114,7 @@ func TestATextOnlyTurnOnAnImageModelPaysTheTextRate(t *testing.T) {
 // is that the day Google publishes a text rate, the zero is a decision someone
 // walks into rather than a number nobody remembers is there.
 func TestATextOnlyTurnOnThisImageModelIsFree(t *testing.T) {
-	m, err := FindModel("google", "gemini-2.5-flash-image")
+	m, err := testReg.FindModel("google", "gemini-2.5-flash-image")
 	if err != nil {
 		t.Fatalf("gemini-2.5-flash-image is not in the catalog: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestATextOnlyTurnOnThisImageModelIsFree(t *testing.T) {
 	u := Usage{InputTokens: 1000, OutputTokens: 5000} // a long answer, no picture
 	const per = 1_000_000.0
 	want := 1000 * m.PriceInput / per // input only
-	if got := ComputeCost(m, u); !nearlyEqual(got, want) {
+	if got := computeCost(m, u); !nearlyEqual(got, want) {
 		t.Fatalf("cost = %.10f, want %.10f (input only) — the output rate is not the 0 this row documents", got, want)
 	}
 }
@@ -136,7 +136,7 @@ func TestATextOnlyTurnOnThisImageModelIsFree(t *testing.T) {
 func TestAnOversizedImageSubsetNeverRefunds(t *testing.T) {
 	m, _ := nanoBanana()
 	u := Usage{OutputTokens: 100, ImageOutputTokens: 900}
-	got := ComputeCost(m, u)
+	got := computeCost(m, u)
 	if got < 0 {
 		t.Errorf("cost went negative (%.10f): an over-large subset refunded money", got)
 	}

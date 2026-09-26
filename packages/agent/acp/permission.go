@@ -19,7 +19,7 @@ import (
 //
 // Correlation (§13): the pending `tool_call` (status pending) is already on
 // the wire — the translator emits it from EvToolCall before executeTools
-// reaches BeforeToolExecute — so we only need to reference the right
+// reaches the agent's tool gate — so we only need to reference the right
 // toolCallId. The gate passes the id being gated straight to
 // ConfirmWithCall; no "current call" session state exists to go stale or to
 // collide when a host_tool_call approval parks concurrently with a model

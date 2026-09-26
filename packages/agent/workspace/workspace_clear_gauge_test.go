@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -25,7 +26,7 @@ func clearGaugeSession(t *testing.T) *wsSession {
 		ws:    &Workspace{ctx: context.Background(), diag: func(string) {}},
 		hub:   newWSHub(),
 		sess:  sess,
-		agent: core.NewAgent(nil, "claude-sonnet-4-5", "", core.Registry{}),
+		agent: coretest.NewAgent(nil, "claude-sonnet-4-5", "", core.Registry{}),
 	}
 }
 

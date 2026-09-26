@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -270,8 +271,8 @@ func TestReadDedupNeverCrossesAgents(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	a1 := core.NewAgent(nil, "m", "", nil)
-	a2 := core.NewAgent(nil, "m", "", nil)
+	a1 := coretest.NewAgent(nil, "m", "", nil)
+	a2 := coretest.NewAgent(nil, "m", "", nil)
 	// Bound epoch points at a1 — the "most recently built" stale bind.
 	tool := &ReadTool{CWD: dir, Epoch: a1}
 

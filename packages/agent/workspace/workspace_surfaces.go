@@ -9,6 +9,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/worktree"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
@@ -400,12 +401,12 @@ func (s *wsSession) usageView() ctrlproto.UsageView {
 		last := ag.LastTurnUsage()
 		uv.ContextTokens = last.PromptTokens()
 		uv.Cumulative = toCtrlUsage(ag.Cost())
-		if snap, ok := ag.Usage(); ok {
+		if snap, ok := provider.ClientUsage(ag.Client()); ok {
 			uv.Windows = usageWindows(snap.Windows)
 		}
 	}
 	if model != "" {
-		uv.Window = provider.ContextGauge("", model)
+		uv.Window = modelreg.ContextGauge("", model)
 	}
 	return uv
 }

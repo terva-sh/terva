@@ -3,12 +3,9 @@ package core
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"terva.sh/terva/packages/provider"
-	"terva.sh/terva/packages/testsupport"
 )
 
 // agentCaptureTool records the agent the dispatch context carried, so
@@ -39,17 +36,17 @@ func TestAgentFromContextOutsideDispatch(t *testing.T) {
 func TestDispatchCarriesCallingAgent(t *testing.T) {
 	cap := &agentCaptureTool{}
 	reg := Registry{"cap": cap}
-	a1 := NewAgent(nil, "m1", "", reg)
-	a2 := NewAgent(nil, "m2", "", reg)
+	a1 := newTestAgent(nil, "m1", "", reg)
+	a2 := newTestAgent(nil, "m2", "", reg)
 
 	tc := provider.ToolCallBlock{ID: "T1", Name: "cap", Arguments: json.RawMessage(`{}`)}
 	sink := func(AgentEvent) {}
 
-	a1.runOneTool(context.Background(), tc, a1.Tools, sink)
+	a1.runOneTool(context.Background(), tc, a1.tools, sink)
 	if cap.got != a1 {
 		t.Fatalf("dispatch from a1 carried %p, want %p", cap.got, a1)
 	}
-	a2.runOneTool(context.Background(), tc, a2.Tools, sink)
+	a2.runOneTool(context.Background(), tc, a2.tools, sink)
 	if cap.got != a2 {
 		t.Fatalf("dispatch from a2 carried %p, want %p", cap.got, a2)
 	}
@@ -64,8 +61,8 @@ func TestDispatchCarriesCallingAgent(t *testing.T) {
 // epoch (read-dedup) can never confuse one agent's transcript state
 // with another's — even though every agent's bump counter starts at 0.
 func TestTranscriptEpochsNeverCollideAcrossAgents(t *testing.T) {
-	a1 := NewAgent(nil, "m", "", nil)
-	a2 := NewAgent(nil, "m", "", nil)
+	a1 := newTestAgent(nil, "m", "", nil)
+	a2 := newTestAgent(nil, "m", "", nil)
 	if a1.TranscriptEpoch() == a2.TranscriptEpoch() {
 		t.Fatalf("two fresh agents share transcript epoch %d", a1.TranscriptEpoch())
 	}
@@ -84,29 +81,17 @@ func TestTranscriptEpochsNeverCollideAcrossAgents(t *testing.T) {
 // TestAdoptSessionIdentity: the agent records the transcript file's
 // basename (what --resume accepts) and path; nil clears both.
 func TestAdoptSessionIdentity(t *testing.T) {
-	dir := testsupport.TempDir(t)
-	s, err := NewSession(dir, dir, "prov", "model", "test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-
-	a := NewAgent(nil, "m", "", nil)
+	a := newTestAgent(nil, "m", "", nil)
 	if id, path := a.SessionIdentity(); id != "" || path != "" {
 		t.Fatalf("fresh agent should have no session identity, got %q %q", id, path)
 	}
 
-	a.AdoptSessionIdentity(s)
-	id, path := a.SessionIdentity()
-	if path != s.Path {
-		t.Fatalf("session path = %q, want %q", path, s.Path)
-	}
-	want := strings.TrimSuffix(filepath.Base(s.Path), ".jsonl")
-	if id != want || id == "" {
-		t.Fatalf("session id = %q, want %q", id, want)
+	a.AdoptSessionIdentity(TranscriptIdentity{ID: "20260708-abc123", Path: "/sessions/x/20260708-abc123.jsonl"})
+	if id, path := a.SessionIdentity(); id != "20260708-abc123" || path != "/sessions/x/20260708-abc123.jsonl" {
+		t.Fatalf("identity = %q %q, want what was adopted", id, path)
 	}
 
-	a.AdoptSessionIdentity(nil)
+	a.AdoptSessionIdentity(TranscriptIdentity{})
 	if id, path := a.SessionIdentity(); id != "" || path != "" {
 		t.Fatalf("nil adoption should clear identity, got %q %q", id, path)
 	}

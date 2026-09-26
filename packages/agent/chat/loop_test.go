@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -170,7 +171,7 @@ func startLoop(t *testing.T, conn *fakeConnector, client provider.Client, pairin
 	t.Helper()
 	l := &Loop{
 		Connector: conn,
-		Agent:     core.NewAgent(client, "fake-model", "sys", core.Registry{}),
+		Agent:     coretest.NewAgent(client, "fake-model", "sys", core.Registry{}),
 		Provider:  "fake",
 		CWD:       "/ws",
 		Pairing:   pairing,

@@ -10,6 +10,7 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/hooks"
+	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -160,13 +161,13 @@ func TestRewireLoreContextFollowsTheVerdict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	ag := r.NewAgent()
+	ag := r.NewAgent(core.AllowAll)
 	ag.SetMessages([]provider.Message{{
 		Role:    provider.RoleUser,
 		Content: []provider.Content{provider.TextBlock{Text: "tell me about the dragon"}},
 	}})
 
-	if strings.Contains(ag.ContextPreview(), "PROJECT-LORE-MARKER") {
+	if strings.Contains(ag.FramePreview().VolatileText(), "PROJECT-LORE-MARKER") {
 		t.Fatal("an UNTRUSTED project's lore was already reaching the model; trust is not gating lore discovery")
 	}
 	if err := config.TrustPath(cwd, false); err != nil {
@@ -176,7 +177,7 @@ func TestRewireLoreContextFollowsTheVerdict(t *testing.T) {
 		t.Fatal("RewireLoreContext reported no resolve; a caller relying on it for its own re-pointing would " +
 			"silently skip that work")
 	}
-	if !strings.Contains(ag.ContextPreview(), "PROJECT-LORE-MARKER") {
+	if !strings.Contains(ag.FramePreview().VolatileText(), "PROJECT-LORE-MARKER") {
 		t.Error("after the verdict moved, the agent's per-turn context still carries the launch answer — a newly " +
 			"trusted project's keyed lore would never fire for the open session")
 	}

@@ -8,8 +8,10 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -40,12 +42,12 @@ func (c *onePassClient) Stream(ctx context.Context, req provider.Request) (<-cha
 // durable persistence plus the session identity terva_status reports.
 func TestWireHeadlessSessionPersistWritesTurns(t *testing.T) {
 	dir := testsupport.TempDir(t)
-	sess, err := core.NewSession(dir, dir, "prov", "fake-model", "test")
+	sess, err := session.NewSession(dir, dir, "prov", "fake-model", "test")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	ag := core.NewAgent(&onePassClient{reply: "hello from the daemon"}, "fake-model", "", core.Registry{})
+	ag := coretest.NewAgent(&onePassClient{reply: "hello from the daemon"}, "fake-model", "", core.Registry{})
 	build.WireHeadlessSessionPersist(ag, sess)
 
 	if id, path := ag.SessionIdentity(); id == "" || path != sess.Path {
@@ -79,18 +81,18 @@ func TestWireHeadlessSessionPersistWritesTurns(t *testing.T) {
 // the model had been shown by reading the harness source.
 //
 // The observer existing in core is not the same as a host writing the row. That
-// distinction has bitten here before: AddImageExcludedObserver was fired by the
-// agent and writable by core.Session for a whole release while no host joined
+// distinction has bitten here before: the image-exclusion observer was fired by the
+// agent and writable by session.Session for a whole release while no host joined
 // them, and both doc comments claimed otherwise.
 func TestWireHeadlessSessionPersistWritesTheEphemeralTail(t *testing.T) {
 	dir := testsupport.TempDir(t)
-	sess, err := core.NewSession(dir, dir, "prov", "fake-model", "test")
+	sess, err := session.NewSession(dir, dir, "prov", "fake-model", "test")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	ag := core.NewAgent(&onePassClient{reply: "sure"}, "fake-model", "", core.Registry{})
-	ag.ContextProvider = func() string { return "[task] finish the migration" }
+	ag := coretest.NewAgent(&onePassClient{reply: "sure"}, "fake-model", "", core.Registry{})
+	coretest.FrameOf(ag).SetHost(func() string { return "[task] finish the migration" })
 	build.WireHeadlessSessionPersist(ag, sess)
 
 	if err := ag.Prompt(context.Background(), "go", nil, func(core.AgentEvent) {}); err != nil {
@@ -177,14 +179,14 @@ func (t *peekTool) Execute(context.Context, json.RawMessage, func(string)) (core
 // Both strategies produce an identical file once Prompt returns.
 func TestSwarmChildTranscriptIsReadableMidTask(t *testing.T) {
 	dir := testsupport.TempDir(t)
-	sess, err := core.NewSession(dir, dir, "prov", "fake-model", "test")
+	sess, err := session.NewSession(dir, dir, "prov", "fake-model", "test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer sess.Close()
 
 	peek := &peekTool{path: sess.Path}
-	ag := core.NewAgent(&twoTurnToolClient{reply: "done"}, "fake-model", "", core.Registry{"peek": peek})
+	ag := coretest.NewAgent(&twoTurnToolClient{reply: "done"}, "fake-model", "", core.Registry{"peek": peek})
 	build.WireHeadlessSessionPersist(ag, sess)
 
 	if err := ag.Prompt(context.Background(), "investigate the thing", nil, func(core.AgentEvent) {}); err != nil {

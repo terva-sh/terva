@@ -47,8 +47,8 @@ func TestReasoningWireTableMatchesTheRealClient(t *testing.T) {
 			Provider:   spec.id,
 			Credential: "dummy-key",
 			AuthMethod: "apikey",
-			// A dummy BaseURL is required, not cosmetic. NewAzureOpenAI returns
-			// an unimplementedClient unless a base URL or resource name is
+			// A dummy BaseURL is required, not cosmetic. The provider's Azure
+			// constructor returns an unimplementedClient unless a base URL or resource name is
 			// resolvable, and it reads AMBIENT env to decide — so without this
 			// the guard would assert against a stub on CI and against the
 			// developer's real Azure config locally.

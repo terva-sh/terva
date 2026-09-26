@@ -1,0 +1,19 @@
+## Context Summary (compacted)
+
+ok
+
+## Executed Tool Calls (authoritative harness record)
+
+The harness extracted this list from the transcript. No model wrote it. Every
+call below already ran, and its effects already exist, unless the entry says
+otherwise. Do not repeat any of them.
+
+A shell command can start with `cd` into the directory it already runs in, or
+with `set +e`. The harness removes both from the entry. Neither one changes
+what the command does.
+
+- bash {"command":"go test ./... && echo done"}
+- bash {"command":"gofmt -w a.go && go vet ./..."}  → FAILED (non-zero exit; earlier stages of the command may still have taken effect)
+- bash {"command":"cd /elsewhere \u0026\u0026 make"}
+- edit {"path":"a.go","oldText":"x","newText":"y"}  → FAILED (its effect does NOT exist; it may still need doing)
+- write {"path":"b.go","content":"package b"}  → OUTCOME UNKNOWN (dispatched, no result recorded)

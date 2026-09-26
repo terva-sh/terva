@@ -23,8 +23,8 @@ func (a *Agent) SetToolsWithReadOnly(reg Registry, readOnly *ReadOnlySet) bool {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	changed := !registryEqual(a.Tools, reg)
-	a.Tools, a.ReadOnly = reg, ro
+	changed := !registryEqual(a.tools, reg)
+	a.tools, a.readOnly = reg, ro
 	return changed
 }
 
@@ -33,7 +33,7 @@ func (a *Agent) SetToolsWithReadOnly(reg Registry, readOnly *ReadOnlySet) bool {
 func (a *Agent) ToolsWithReadOnlySnapshot() (Registry, *ReadOnlySet) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.Tools, a.ReadOnly.Snapshot()
+	return a.tools, a.readOnly.Snapshot()
 }
 
 // ToolForCall resolves a tool with the classification its gate must use.

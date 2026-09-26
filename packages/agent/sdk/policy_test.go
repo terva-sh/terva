@@ -62,12 +62,12 @@ func newRuntime(t *testing.T, cfg Config) *Runtime {
 func TestUserDenyRuleReachesTheEmbeddedAgent(t *testing.T) {
 	denyConfig(t)
 	rt := newRuntime(t, Config{})
-	if rt.agent.BeforeToolExecute == nil {
-		t.Fatal("sdk.New built an agent with no tool gate — a user's permission rules are unenforced")
+	if hostLadder(rt.agent.Gate()) == core.Gate(core.AllowAll) {
+		t.Fatal("sdk.New built an agent with AllowAll — a user's permission rules are unenforced")
 	}
-	allowed, reason, _ := rt.agent.BeforeToolExecute(t.Context(), provider.ToolCallBlock{
+	allowed, reason, _ := rt.agent.Gate().CheckTool(t.Context(), provider.ToolCallBlock{
 		Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`),
-	})
+	}, nil)
 	if allowed {
 		t.Error("a denied tool was allowed to run in an SDK embedding")
 	}
@@ -91,12 +91,12 @@ func TestAnAskWithNoConfirmerFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt := newRuntime(t, Config{})
-	if rt.agent.BeforeToolExecute == nil {
+	if hostLadder(rt.agent.Gate()) == core.Gate(core.AllowAll) {
 		t.Fatal("no gate installed")
 	}
-	allowed, reason, _ := rt.agent.BeforeToolExecute(t.Context(), provider.ToolCallBlock{
+	allowed, reason, _ := rt.agent.Gate().CheckTool(t.Context(), provider.ToolCallBlock{
 		Name: "write", Arguments: json.RawMessage(`{"path":"/tmp/x","content":"y"}`),
-	})
+	}, nil)
 	if allowed {
 		t.Error("a call needing confirmation ran with no confirmer to answer it — the SDK must fail closed")
 	}
@@ -130,9 +130,9 @@ func TestASuppliedConfirmerIsConsulted(t *testing.T) {
 	}
 	conf := &recordingConfirmer{answer: true}
 	rt := newRuntime(t, Config{Confirmer: conf})
-	allowed, _, _ := rt.agent.BeforeToolExecute(t.Context(), provider.ToolCallBlock{
+	allowed, _, _ := rt.agent.Gate().CheckTool(t.Context(), provider.ToolCallBlock{
 		Name: "write", Arguments: json.RawMessage(`{"path":"/tmp/x","content":"y"}`),
-	})
+	}, nil)
 	if len(conf.asked) == 0 {
 		t.Fatal("the supplied Confirmer was never consulted")
 	}
@@ -141,16 +141,26 @@ func TestASuppliedConfirmerIsConsulted(t *testing.T) {
 	}
 }
 
+// hostLadder is the gate the host built, beneath the stuck-loop detector's
+// refusal, which build.NewAgent wraps around every host's gate. The detector
+// is not a permission, and Yolo keeps it.
+func hostLadder(g core.Gate) core.Gate {
+	if u, ok := g.(interface{ Unwrap() core.Gate }); ok {
+		return u.Unwrap()
+	}
+	return g
+}
+
 // Yolo is the named escape hatch: rules do not apply.
 func TestYoloOptsOutOfUserRules(t *testing.T) {
 	denyConfig(t)
 	rt := newRuntime(t, Config{Yolo: true})
-	if rt.agent.BeforeToolExecute == nil {
-		return // no gate at all is the intended yolo shape
+	if hostLadder(rt.agent.Gate()) != core.Gate(core.AllowAll) {
+		t.Error("Yolo:true built a real gate; the embedder asked for AllowAll by name")
 	}
-	allowed, _, _ := rt.agent.BeforeToolExecute(t.Context(), provider.ToolCallBlock{
+	allowed, _, _ := rt.agent.Gate().CheckTool(t.Context(), provider.ToolCallBlock{
 		Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`),
-	})
+	}, nil)
 	if !allowed {
 		t.Error("Yolo:true still enforced the user's deny rule")
 	}

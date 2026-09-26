@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/extensions"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/agent/tools/tasks"
 	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/core"
@@ -59,7 +60,7 @@ func TestBindingASessionIsWhatMakesTheBoardPersist(t *testing.T) {
 		t.Fatalf("an unbound board wrote %v; it has no session to write under", got)
 	}
 
-	ag := core.NewAgent(nil, "some-model", "", nil)
+	ag := coretest.NewAgent(nil, "some-model", "", nil)
 	BindSession(SessionBinding{Agent: ag, Tasks: ctrl, Session: sess})
 
 	// Bound: the pre-bind work is carried into the session's own file.
@@ -88,7 +89,7 @@ func TestBindingNoSessionClearsTheIdentity(t *testing.T) {
 	}
 	defer sess.Close()
 
-	ag := core.NewAgent(nil, "some-model", "", nil)
+	ag := coretest.NewAgent(nil, "some-model", "", nil)
 	BindSession(SessionBinding{Agent: ag, Session: sess})
 	if id, _ := ag.SessionIdentity(); id == "" {
 		t.Fatal("binding a session left no identity")

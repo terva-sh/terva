@@ -15,7 +15,7 @@ package provider
 // alphabetical order of two init functions. The row is curated in models.go
 // now, with its four siblings.
 
-func init() { Catalog = append(Catalog, supplementCatalog...) }
+func init() { catalog = append(catalog, supplementCatalog...) }
 
 var supplementCatalog = []Model{
 	// ----- openai-responses (public OpenAI Responses API) -----

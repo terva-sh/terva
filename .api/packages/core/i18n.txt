@@ -1,0 +1,14 @@
+# packages/core/i18n (unstable): its exported API, one symbol per line.
+# Written by `just api-snapshot`. `just api-check` fails when it no longer matches the code.
+Errorf	func	func(source string, args ...any) error
+In	func	func(tr Translator) Text
+P	func	func(key, english string, args ...any) string
+T	func	func(source string, args ...any) string
+Text	type	struct
+Text.Errorf	method	func(source string, args ...any) error
+Text.P	method	func(key, english string, args ...any) string
+Text.T	method	func(source string, args ...any) string
+Translator	type	interface
+Translator.P	method	func(key, english string, args ...any) string
+Translator.T	method	func(source string, args ...any) string
+Use	func	func(tr Translator)

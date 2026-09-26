@@ -9,7 +9,7 @@ import (
 )
 
 // TestAutoCompactModeOff: `off` silences every automatic path — the
-// pre-turn check (via ShouldAutoCompact), the mid-turn valve, and the
+// pre-turn check, the mid-turn valve, and the
 // oversize-error recovery retry. The purist escape hatch must mean it.
 func TestAutoCompactModeOff(t *testing.T) {
 	// Pre-turn + mid-turn: a saturated multi-step turn runs to completion
@@ -18,13 +18,13 @@ func TestAutoCompactModeOff(t *testing.T) {
 		{usageInput: 190_000, toolCall: true},
 		{usageInput: 195_000, toolCall: false},
 	}}
-	a := NewAgent(client, "claude-sonnet-4-5", "system", Registry{"noop": noopTool{}})
-	a.AutoCompactPolicy = func() AutoCompactMode { return AutoCompactOff }
+	a := newTestAgent(client, "claude-sonnet-4-5", "system", Registry{"noop": noopTool{}})
+	a.compactionPolicy = DefaultCompactionPolicy{Mode: func() AutoCompactMode { return AutoCompactOff }}
 	seedSmallTranscript(a, 8)
 	a.SeedLastTurnUsage(provider.Usage{InputTokens: 190_000}) // pre-turn check would fire
 
-	if a.ShouldAutoCompact(AutoCompactThreshold) {
-		t.Fatal("ShouldAutoCompact must be false in off mode")
+	if a.Compaction(CompactBeforeTurn).Compact {
+		t.Fatal("the before-turn decision must be no in off mode")
 	}
 	if err := a.PromptWithPolicy(context.Background(), "go", nil, nil); err != nil {
 		t.Fatalf("PromptWithPolicy returned %v", err)
@@ -37,11 +37,11 @@ func TestAutoCompactModeOff(t *testing.T) {
 	failing := &policyFakeClient{
 		firstErr: &provider.ProviderError{Provider: "policy-fake", Status: 400, Msg: "maximum context length exceeded"},
 	}
-	b := NewAgent(failing, "fake-model", "system", Registry{})
-	b.AutoCompactPolicy = func() AutoCompactMode { return AutoCompactOff }
+	b := newTestAgent(failing, "fake-model", "system", Registry{})
+	b.compactionPolicy = DefaultCompactionPolicy{Mode: func() AutoCompactMode { return AutoCompactOff }}
 	seedSmallTranscript(b, 8)
 	err := b.PromptWithPolicy(context.Background(), "go", nil, nil)
-	if err == nil || !IsContextLengthError(err) {
+	if err == nil || !isContextLengthError(err) {
 		t.Fatalf("off mode must surface the context-length error, got %v", err)
 	}
 }
@@ -54,8 +54,8 @@ func TestAutoCompactModeTurns(t *testing.T) {
 		{usageInput: 190_000, toolCall: true},
 		{usageInput: 195_000, toolCall: false},
 	}}
-	a := NewAgent(client, "claude-sonnet-4-5", "system", Registry{"noop": noopTool{}})
-	a.AutoCompactPolicy = func() AutoCompactMode { return AutoCompactTurns }
+	a := newTestAgent(client, "claude-sonnet-4-5", "system", Registry{"noop": noopTool{}})
+	a.compactionPolicy = DefaultCompactionPolicy{Mode: func() AutoCompactMode { return AutoCompactTurns }}
 	seedSmallTranscript(a, 8)
 
 	if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
@@ -68,8 +68,8 @@ func TestAutoCompactModeTurns(t *testing.T) {
 	// Pre-turn still fires: primed gauge + long transcript compacts before
 	// the next prompt.
 	client2 := &midTurnFakeClient{steps: []midTurnStep{{usageInput: 8_000, toolCall: false}}}
-	b := NewAgent(client2, "claude-sonnet-4-5", "system", Registry{})
-	b.AutoCompactPolicy = func() AutoCompactMode { return AutoCompactTurns }
+	b := newTestAgent(client2, "claude-sonnet-4-5", "system", Registry{})
+	b.compactionPolicy = DefaultCompactionPolicy{Mode: func() AutoCompactMode { return AutoCompactTurns }}
 	seedSmallTranscript(b, 8)
 	b.SeedLastTurnUsage(provider.Usage{InputTokens: 190_000})
 	if err := b.PromptWithPolicy(context.Background(), "go", nil, nil); err != nil {
@@ -83,14 +83,12 @@ func TestAutoCompactModeTurns(t *testing.T) {
 // TestAutoCompactModeUnknownFallsBackToSteps: a hand-edited config with
 // a typo must degrade to the default policy, not to silence.
 func TestAutoCompactModeUnknownFallsBackToSteps(t *testing.T) {
-	a := NewAgent(nil, "claude-sonnet-4-5", "system", Registry{})
-	a.AutoCompactPolicy = func() AutoCompactMode { return "stepz" }
-	if got := a.autoCompactMode(); got != AutoCompactSteps {
-		t.Fatalf("unknown mode resolved to %q, want steps", got)
+	full := CompactionState{Point: CompactMidTurn, Fraction: 0.9, Messages: 10}
+	if !(DefaultCompactionPolicy{Mode: func() AutoCompactMode { return "stepz" }}).Decide(full).Compact {
+		t.Fatal("an unknown mode did not resolve to steps")
 	}
-	a.AutoCompactPolicy = nil
-	if got := a.autoCompactMode(); got != AutoCompactSteps {
-		t.Fatalf("nil policy resolved to %q, want steps", got)
+	if !(DefaultCompactionPolicy{}).Decide(full).Compact {
+		t.Fatal("no mode did not resolve to steps")
 	}
 }
 
@@ -103,7 +101,7 @@ func TestMidTurnCompactUsesMidTaskAddendum(t *testing.T) {
 		{usageInput: 190_000, toolCall: true},
 		{usageInput: 8_000, toolCall: false},
 	}}
-	a := NewAgent(client, "claude-sonnet-4-5", "system", Registry{"noop": noopTool{}})
+	a := newTestAgent(client, "claude-sonnet-4-5", "system", Registry{"noop": noopTool{}})
 	seedSmallTranscript(a, 4)
 
 	if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
@@ -119,7 +117,7 @@ func TestMidTurnCompactUsesMidTaskAddendum(t *testing.T) {
 
 	// Host-driven (idle) Compact: no addendum.
 	client2 := &midTurnFakeClient{}
-	b := NewAgent(client2, "claude-sonnet-4-5", "system", Registry{})
+	b := newTestAgent(client2, "claude-sonnet-4-5", "system", Registry{})
 	seedSmallTranscript(b, 8)
 	if _, err := b.Compact(context.Background(), AutoCompactKeepTail, nil); err != nil {
 		t.Fatalf("Compact returned %v", err)
@@ -150,7 +148,7 @@ func findCompactRequest(t *testing.T, c *midTurnFakeClient) string {
 // re-baselined.
 func TestCompactUsageCountsTowardTotalOnly(t *testing.T) {
 	client := &midTurnFakeClient{compactUsage: provider.Usage{InputTokens: 170_000, OutputTokens: 900, CostUSD: 1.10}}
-	a := NewAgent(client, "claude-sonnet-4-5", "system", Registry{})
+	a := newTestAgent(client, "claude-sonnet-4-5", "system", Registry{})
 	seedSmallTranscript(a, 8)
 	before := a.Cost()
 
@@ -168,26 +166,5 @@ func TestCompactUsageCountsTowardTotalOnly(t *testing.T) {
 	last := a.LastTurnUsage()
 	if last.InputTokens >= 170_000 {
 		t.Fatalf("last-turn snapshot = %d input tokens; the summarization call clobbered the re-baselined gauge", last.InputTokens)
-	}
-}
-
-// TestPressureNoteCarriesNoDelegationHint: the delegation nudge lives
-// in the always-on swarm system addendum (proactive, shapes the plan
-// from turn one), NOT in the pressure note — by 70% it's too late to
-// restructure the work, and the note must not bloat further. The note
-// itself still fires.
-func TestPressureNoteCarriesNoDelegationHint(t *testing.T) {
-	client := &midTurnFakeClient{steps: []midTurnStep{{usageInput: 150_000, toolCall: false}}}
-	a := NewAgent(client, "claude-sonnet-4-5", "system", Registry{"swarm_spawn": noopTool{}})
-	a.SeedLastTurnUsage(provider.Usage{InputTokens: 150_000}) // 75%
-	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
-		t.Fatalf("Prompt returned %v", err)
-	}
-	eph := client.reqs[0].EphemeralContext
-	if !strings.Contains(eph, "[context pressure]") {
-		t.Fatalf("pressure note missing: %q", eph)
-	}
-	if strings.Contains(eph, "swarm_spawn") {
-		t.Fatalf("delegation hint must not ride the pressure note: %q", eph)
 	}
 }

@@ -60,7 +60,7 @@ func TestAdaptiveThinkingSubstringFallback(t *testing.T) {
 // Keep them in agreement, so that neither one alone carries the family.
 func TestFableCatalogRowsDeclareAdaptiveThinking(t *testing.T) {
 	seen := 0
-	for _, m := range Catalog {
+	for _, m := range catalog {
 		if !strings.Contains(strings.ToLower(m.ID), "fable") {
 			continue
 		}
@@ -82,7 +82,7 @@ func TestFableCatalogRowsDeclareAdaptiveThinking(t *testing.T) {
 func TestFable51CatalogRow(t *testing.T) {
 	var got Model
 	found := false
-	for _, m := range Catalog {
+	for _, m := range catalog {
 		if m.Provider == "anthropic" && m.ID == "claude-fable-5-1" {
 			got, found = m, true
 			break
@@ -105,7 +105,7 @@ func TestFable51CatalogRow(t *testing.T) {
 
 	// Cache reads on Fable 5.1 are 0.025x base input, not the 0.1x that every
 	// other Claude model charges. A "correction" to 1 overstates cache cost
-	// fourfold, and ComputeCost is the only input to the cost tracker.
+	// fourfold, and computeCost is the only input to the cost tracker.
 	if got.PriceCacheRead != 0.25 {
 		t.Errorf("claude-fable-5-1 PriceCacheRead = %v, want 0.25 (0.025x base "+
 			"input, the Fable 5.1 exception)", got.PriceCacheRead)
@@ -126,7 +126,7 @@ func TestFable51CatalogRow(t *testing.T) {
 func TestOpus55CatalogRow(t *testing.T) {
 	var got Model
 	found := false
-	for _, m := range Catalog {
+	for _, m := range catalog {
 		if m.Provider == "anthropic" && m.ID == "claude-opus-5-5" {
 			got, found = m, true
 			break
@@ -170,7 +170,7 @@ func TestOpus55CatalogRow(t *testing.T) {
 
 	// The speculative claude-opus-5 row is a separate model that three tests
 	// resolve by exact id. Adding 5.5 must not have replaced it.
-	if _, err := FindModel("anthropic", "claude-opus-5"); err != nil {
+	if _, err := testReg.FindModel("anthropic", "claude-opus-5"); err != nil {
 		t.Errorf("claude-opus-5 no longer resolves (%v); 5.5 lands beside it, "+
 			"not instead of it", err)
 	}

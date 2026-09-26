@@ -1,0 +1,40 @@
+# Import boundary baseline for the engine (packages/core) and the wire
+# (packages/provider). TestImportBoundary in ../import_boundary_test.go reads
+# this file.
+#
+# Decision: docs/decisions/0021-embeddable-engine.md, rule 6.
+# Plan:     docs/plans/engine-extraction.md, phase 0 (TKT-01M35WJYM).
+#
+# Each line lists one terva package that `go list -deps` reaches from a unit:
+#
+#   <unit> <dependency> <kind> <reason>
+#
+# kind is one of:
+#   wire  the engine's dependency on the wire. It is permanent, not debt.
+#   pure  a leaf with no file, environment, or process I/O.
+#   io    a package that does I/O. The reason names the ticket that removes it.
+#
+# The baseline can only shrink. The test fails on a dependency that is not
+# listed here, and on a line whose dependency is gone. When a change removes
+# an import, delete its line in the same commit.
+#
+# An io entry reached through the wire leaves the engine's list only when the
+# wire's own entry leaves, and after every other path to it is gone.
+
+# The engine.
+packages/core packages/provider   wire  The engine imports the wire by design (decision 0021, L1 over L0).
+packages/core packages/provider/buildinfo pure Reached through the wire (provider/opencode.go). Build identity set once at startup. Moved under the wire by TKT-01M35WJYZ.
+packages/core packages/provider/lineframe pure Reached through the wire (provider/sse.go). A bounded line reader over an io.Reader. Moved under the wire by TKT-01M35WJYZ.
+packages/core packages/core/compactprose pure The neutral compaction text the engine falls back to (TKT-01M35WJZS). Reads nothing; imports only fmt.
+packages/core packages/core/i18n  pure  The engine's translator seam (TKT-01M35WJYZ). Reads nothing, and returns English until a host installs a translator.
+packages/core packages/sessionlock io   Imported by session.go, session_archive.go, session_lock.go. TKT-01M35WK0T moves the session store out.
+packages/core packages/privfs     io    Imported by session*.go (TKT-01M35WK0T), and reached through the wire (TKT-01M35WK03, TKT-01M35WK08).
+packages/core packages/filelock   io    Reached through sessionlock (TKT-01M35WK0T) and the wire's installed_version.go (TKT-01M35WK08).
+packages/core packages/envcompat  io    Reached through the wire only, anthropic.go and installed_version.go. TKT-01M35WK08.
+
+# The wire.
+packages/provider packages/provider/buildinfo pure opencode.go reads the build version for a request header.
+packages/provider packages/provider/lineframe pure sse.go frames text/event-stream responses.
+packages/provider packages/privfs    io    cache.go and usermodels_write.go (TKT-01M35WK03), installed_version.go (TKT-01M35WK08).
+packages/provider packages/filelock  io    installed_version.go locks the CLI version cache. TKT-01M35WK08.
+packages/provider packages/envcompat io    anthropic.go reads DEBUG_ANTHROPIC, installed_version.go reads envcompat.Home(). TKT-01M35WK08.

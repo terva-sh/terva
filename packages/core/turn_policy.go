@@ -12,10 +12,10 @@ package core
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
-	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/core/compactprose"
+	"terva.sh/terva/packages/core/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -33,7 +33,7 @@ func ClassifyRecoverable(err error) (bool, string) {
 
 	// Don't trigger on payload-too-large or context-length overflow;
 	// those paths have their own compact-and-retry handling.
-	if IsPayloadTooLargeError(err) || IsContextLengthError(err) {
+	if isPayloadTooLargeError(err) || isContextLengthError(err) {
 		return false, ""
 	}
 
@@ -103,11 +103,11 @@ func ClassifyRecoverable(err error) (bool, string) {
 	return false, ""
 }
 
-// IsPayloadTooLargeError matches HTTP 413 responses surfaced by the
+// isPayloadTooLargeError matches HTTP 413 responses surfaced by the
 // provider clients — typed status first, with a prose fallback for
 // untyped errors and for providers that phrase oversize rejections
 // without the status code.
-func IsPayloadTooLargeError(err error) bool {
+func isPayloadTooLargeError(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -119,13 +119,13 @@ func IsPayloadTooLargeError(err error) bool {
 	return strings.Contains(msg, "http 413") || strings.Contains(msg, " 413") || strings.HasPrefix(msg, "413 ") || strings.Contains(msg, "payload too large") || strings.Contains(msg, "request entity too large")
 }
 
-// IsContextLengthError matches provider rejections of a transcript that
+// isContextLengthError matches provider rejections of a transcript that
 // outgrew the model's context window. Providers phrase this as an HTTP
 // 400 (no dedicated status like 413), so the message text is the
 // discriminator for typed and untyped errors alike. The needle list is
 // deliberately conservative — a false positive would trigger a
 // compact-and-retry on an unrelated validation error.
-func IsContextLengthError(err error) bool {
+func isContextLengthError(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -182,38 +182,16 @@ const (
 	AutoCompactSteps AutoCompactMode = "steps"
 )
 
-// autoCompactMode resolves the agent's effective mode: the host's live
-// policy hook when set and valid, AutoCompactSteps otherwise (an
-// unknown value from a hand-edited config degrades to the default, not
-// to silence).
-func (a *Agent) autoCompactMode() AutoCompactMode {
-	if a.AutoCompactPolicy != nil {
-		switch m := a.AutoCompactPolicy(); m {
-		case AutoCompactOff, AutoCompactTurns, AutoCompactSteps:
-			return m
-		}
-	}
-	return AutoCompactSteps
-}
-
-// AutoCompactThreshold is the context-window fraction at which a
-// host should condense the transcript after a turn ends. 0.85 leaves
-// enough headroom for one more user prompt + response before the
-// hard limit.
+// AutoCompactThreshold is DefaultCompactionPolicy's context-window fraction
+// to compact at. 0.85 leaves enough headroom for one more user prompt +
+// response before the hard limit.
 const AutoCompactThreshold = 0.85
 
-// AutoCompactKeepTail is the number of most-recent messages auto-compact
-// preserves verbatim after the summary. It is also the floor below which
-// there is nothing to summarize (see CanCompact): a transcript of this
+// AutoCompactKeepTail is DefaultCompactionPolicy's number of most-recent
+// messages to preserve verbatim after the summary. It is also the floor below
+// which there is nothing to summarize (see canCompact): a transcript of this
 // size or smaller is entirely keep-tail.
 const AutoCompactKeepTail = 4
-
-// ContextWarnFraction is the context-window fraction at which the model
-// itself is warned about context pressure (an ephemeral note riding the
-// request tail — see oneTurn). Earlier than AutoCompactThreshold on
-// purpose: the band between the two is the model's window to wrap up or
-// get economical before the harness force-compacts.
-const ContextWarnFraction = 0.70
 
 // ContextUsage reports the most recent request's context consumption
 // (input + cache tokens) and the model's working window from the live
@@ -223,17 +201,17 @@ const ContextWarnFraction = 0.70
 // without lying about the model's true ceiling. window is 0 when the
 // model is unknown; used is 0 before any request lands usage.
 func (a *Agent) ContextUsage() (used, window int) {
-	// a.Model under the lock: SetModel and SetClientAndModel write it there, and
+	// a.model under the lock: SetModel and SetClientAndModel write it there, and
 	// this is called from the turn loop while a host may be swapping models on
 	// another goroutine. The unlocked read this replaces was a real data race —
 	// latent only because nothing had exercised the two concurrently. No caller
 	// holds a.mu (runLoop, oneTurn after its snapshot, compactHeld, the policy
 	// checks), so taking it here cannot re-enter.
 	a.mu.Lock()
-	model := a.Model
+	model := a.model
 	a.mu.Unlock()
 
-	if m, err := provider.FindModel("", model); err == nil {
+	if m, err := a.Catalog().FindModel("", model); err == nil {
 		window = m.EffectiveContextWindow()
 	}
 	last := a.LastTurnUsage()
@@ -241,37 +219,14 @@ func (a *Agent) ContextUsage() (used, window int) {
 	return used, window
 }
 
-// ContextFraction reports the share of the model's context window
-// the last turn consumed (input + cache tokens over the catalog's
-// window). Returns 0 when the window is unknown or no turn has
-// landed usage yet.
-func (a *Agent) ContextFraction() float64 {
-	used, window := a.ContextUsage()
-	if used <= 0 || window <= 0 {
-		return 0
-	}
-	return float64(used) / float64(window)
-}
-
-// ShouldAutoCompact reports whether the transcript has grown past
-// threshold (use AutoCompactThreshold for the standard policy). Always
-// false in AutoCompactOff mode, so every host's opportunistic check
-// (pre-turn, post-turn, idle) inherits the knob without changes.
-func (a *Agent) ShouldAutoCompact(threshold float64) bool {
-	if threshold <= 0 || a.autoCompactMode() == AutoCompactOff {
-		return false
-	}
-	return a.ContextFraction() >= threshold
-}
-
-// CanCompact reports whether Compact(keepTail) would actually have
+// canCompact reports whether Compact(keepTail) would actually have
 // something to summarize — i.e. the transcript is longer than keepTail.
 // Auto-compact gates on this so it never fires a no-op compaction on a
 // transcript that is already entirely keep-tail (which is exactly the
 // state right after a successful compaction). Without the guard, the
 // post-compaction context fraction can still read high enough to
 // re-trigger, producing a spurious "nothing to compact" failure.
-func (a *Agent) CanCompact(keepTail int) bool {
+func (a *Agent) canCompact(keepTail int) bool {
 	if keepTail < 0 {
 		keepTail = 0
 	}
@@ -303,17 +258,17 @@ func (a *Agent) PromptWithPolicy(ctx context.Context, prompt string, images []pr
 // cannot drift between the two entry points.
 func (a *Agent) PromptWithPolicyExtra(ctx context.Context, prompt string, images []provider.ImageBlock, extras UserMessageExtras, sink func(AgentEvent)) error {
 	// A nil sink is legal — the Workspace/web carrier passes nil and relies on
-	// the agent's OnEvent fan-out (via EmitLifecycle below). Prompt normalizes
+	// the agent's OnEvent fan-out (via emitLifecycle below). Prompt normalizes
 	// its own nil sink, but the compact closure calls sink directly, so without
 	// this a firing auto-compact (or 413 retry) would panic the turn goroutine.
 	if sink == nil {
 		sink = func(AgentEvent) {}
 	}
-	compact := func(reason string) error {
+	compact := func(reason string, d CompactionDecision) error {
 		start := EvCompactStart{Reason: reason}
 		sink(start)
-		a.EmitLifecycle(start) // reach extensions: sink here is the host UI sink, not the OnEvent fanout
-		res, err := a.Compact(ctx, AutoCompactKeepTail, func(string) {})
+		a.emitLifecycle(start) // reach extensions: sink here is the host UI sink, not the OnEvent fanout
+		res, err := a.CompactWith(ctx, d, func(string) {})
 		if errors.Is(err, ErrNothingToCompact) {
 			// Nothing left to summarize — not a failure. Report a clean
 			// compact_end so consumers don't surface a phantom error.
@@ -324,7 +279,7 @@ func (a *Agent) PromptWithPolicyExtra(ctx context.Context, prompt string, images
 			ev.Err = err.Error()
 		}
 		sink(ev)
-		a.EmitLifecycle(ev)
+		a.emitLifecycle(ev)
 		return err
 	}
 	// The prefix-change guard, before the auto-compact check because a
@@ -332,7 +287,7 @@ func (a *Agent) PromptWithPolicyExtra(ctx context.Context, prompt string, images
 	// message so the summarizer sees the conversation as it actually stood.
 	a.offerCompactOnPrefixChange(ctx, compact)
 
-	if a.ShouldAutoCompact(AutoCompactThreshold) && a.CanCompact(AutoCompactKeepTail) {
+	if d := a.Compaction(CompactBeforeTurn); d.Compact {
 		// A failed compaction does NOT fail the turn — the same reasoning
 		// offerCompactOnPrefixChange spells out below, which this site did not
 		// inherit. The user asked for a message to be sent, not for it to be
@@ -340,7 +295,7 @@ func (a *Agent) PromptWithPolicyExtra(ctx context.Context, prompt string, images
 		//
 		// And it IS only a precaution here. AutoCompactThreshold is 0.85, so the
 		// request the abort refused to send would almost always have fit. Worse,
-		// this is the one compaction site that runs BEFORE PromptExtra appends the
+		// this is the one compaction site that runs BEFORE promptExtra appends the
 		// user's message, so aborting was also the one that lost it: not in the
 		// transcript, not in the queue, and — because the carrier rebuilds turn
 		// errors from wire text, where the typed provider error is gone — not
@@ -349,7 +304,7 @@ func (a *Agent) PromptWithPolicyExtra(ctx context.Context, prompt string, images
 		// If the transcript genuinely no longer fits, the oversize retry below is
 		// the designed catch, and the provider's own "prompt is too long" is a
 		// better error than "auto-compact before prompt: overloaded" ever was.
-		if cerr := compact("context near limit"); cerr != nil && ctx.Err() != nil {
+		if cerr := compact("context near limit", d); cerr != nil && ctx.Err() != nil {
 			// Cancelled mid-compaction: the user asked to stop, so don't dispatch
 			// the turn they just interrupted. A provider failure is non-fatal; a
 			// cancellation is not.
@@ -359,13 +314,16 @@ func (a *Agent) PromptWithPolicyExtra(ctx context.Context, prompt string, images
 	// Both attempts carry the extras: a retry that dropped the preamble would
 	// re-send the turn without the attachment manifest, and the model would be
 	// asked about files it had just been told about and now could not see.
-	err := a.PromptExtra(ctx, prompt, images, extras, sink)
-	if err != nil && ctx.Err() == nil && (IsPayloadTooLargeError(err) || IsContextLengthError(err)) &&
-		a.autoCompactMode() != AutoCompactOff {
-		if cerr := compact("request too large; retrying"); cerr != nil {
+	err := a.promptExtra(ctx, prompt, images, extras, sink)
+	if err != nil && ctx.Err() == nil && (isPayloadTooLargeError(err) || isContextLengthError(err)) {
+		d := a.Compaction(CompactOversize)
+		if !d.Compact {
 			return err
 		}
-		return a.PromptExtra(ctx, prompt, images, extras, sink)
+		if cerr := compact("request too large; retrying", d); cerr != nil {
+			return err
+		}
+		return a.promptExtra(ctx, prompt, images, extras, sink)
 	}
 	return err
 }
@@ -390,8 +348,12 @@ func (a *Agent) PromptWithPolicyExtra(ctx context.Context, prompt string, images
 // about. The invalidation is a one-time toll, so an offer to avoid it can only
 // ever be made once.
 //
-// It requires cache_aware_compaction, and that is the economics rather than an
-// implementation convenience. With the bespoke summarizer, compacting costs a
+// The policy decides whether to offer at all (CompactPrefixChanged), which is
+// how a host switches the guard. terva answers from its prefix_change_guard
+// engine feature, and the default policy never offers.
+//
+// It also requires the policy to allow CompactWarm, and that is the economics rather
+// than an implementation convenience. With the bespoke summarizer, compacting costs a
 // full-price read of the whole transcript — which is the same full-price read
 // that eating the invalidation costs. There would be no saving to offer, and a
 // dialog that says "compact to pay less" would be lying. The warm summarizer
@@ -401,43 +363,33 @@ func (a *Agent) PromptWithPolicyExtra(ctx context.Context, prompt string, images
 // to have their message dropped: the compact closure already reports the error
 // through EvCompactEnd, and the turn proceeds — expensively, which is exactly
 // the outcome they were trying to avoid, but not destructively.
-func (a *Agent) offerCompactOnPrefixChange(ctx context.Context, compact func(reason string) error) {
-	if !a.prefixGuardOn() || !a.cacheAwareCompactionOn() {
-		return
-	}
-	asker := a.Asker
+func (a *Agent) offerCompactOnPrefixChange(ctx context.Context, compact func(reason string, d CompactionDecision) error) {
+	a.mu.Lock()
+	asker := a.asker
+	a.mu.Unlock()
 	if asker == nil {
 		return
 	}
+	d := a.Compaction(CompactPrefixChanged)
+	if !d.Compact || !strategyAllowed(d.Strategies, CompactWarm) {
+		return
+	}
 	reason, tokens, ok := a.pendingPrefixChange()
-	if !ok || !a.CanCompact(AutoCompactKeepTail) {
+	if !ok || !a.canCompact(d.KeepTail) {
 		return
 	}
 
-	compactNow := i18n.T("Compact first")
+	compactNow := i18n.In(a.translator).T("Compact first")
 	ans, err := AskOne(ctx, asker, UserQuestion{
-		Question: i18n.T(
+		Question: i18n.In(a.translator).T(
 			"Since your last message %s, so the provider's cached prompt no longer matches: the next request re-reads %s tokens at full price instead of serving them from cache. Compact the conversation first? The summary is written against the prompt that is still cached, so it costs a fraction of the re-read.",
-			reason, fmtTokenCount(tokens)),
-		Options: []string{compactNow, i18n.T("Send as-is")},
+			reason, compactprose.Tokens(tokens)),
+		Options: []string{compactNow, i18n.In(a.translator).T("Send as-is")},
 	})
 	if err != nil || ans.Declined || ans.Answer != compactNow {
 		return
 	}
-	_ = compact(i18n.T("prompt cache invalidated: %s", reason))
-}
-
-// fmtTokenCount renders a token count compactly (850, 12.3k, 1.2M) for
-// the context-pressure note, mirroring terva_status's formatting.
-func fmtTokenCount(n int) string {
-	switch {
-	case n >= 1_000_000:
-		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
-	case n >= 1_000:
-		return fmt.Sprintf("%.1fk", float64(n)/1_000)
-	default:
-		return fmt.Sprintf("%d", n)
-	}
+	_ = compact(i18n.In(a.translator).T("prompt cache invalidated: %s", reason), d)
 }
 
 // shortErrorText trims a long http-payload error to something

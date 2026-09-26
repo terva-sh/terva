@@ -68,7 +68,7 @@ func reasoningBlocksOf(t *testing.T, a *Agent) []provider.ReasoningBlock {
 // runAnthropicShaped drives one turn and returns the live reasoning text.
 func runAnthropicShaped(t *testing.T, tune func(*Agent)) (*Agent, string) {
 	t.Helper()
-	a := NewAgent(&anthropicShapedClient{}, "fake-model", "system", Registry{})
+	a := newTestAgent(&anthropicShapedClient{}, "fake-model", "system", Registry{})
 	tune(a)
 	var live string
 	err := a.Prompt(context.Background(), "go", nil, func(ev AgentEvent) {
@@ -190,7 +190,7 @@ func (c *adaptiveShapedClient) Stream(ctx context.Context, req provider.Request)
 // file; a withheld-thinking block contains no chain-of-thought to keep out, so
 // dropping it would buy no privacy and cost the replay Anthropic expects.
 func TestWithheldThinkingSurvivesRecordingOff(t *testing.T) {
-	a := NewAgent(&adaptiveShapedClient{}, "fake-model", "system", Registry{})
+	a := newTestAgent(&adaptiveShapedClient{}, "fake-model", "system", Registry{})
 	if err := a.Prompt(context.Background(), "go", nil, func(AgentEvent) {}); err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}

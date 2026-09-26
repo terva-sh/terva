@@ -5,7 +5,7 @@ import "testing"
 // There were two context-window semantics in the tree, and the surfaces that
 // used them contradicted each other in front of the user.
 //
-// Agent.ContextUsage, the compaction keep-tail budget and ShouldAutoCompact all
+// Agent.ContextUsage, the compaction keep-tail budget and the compaction policy all
 // divide by EffectiveContextWindow. Nine gauge sites read the raw ContextWindow:
 // the TUI status bar, the script-mode payload, the chat-bridge /status line, the
 // web session card, the usage surface and the context inspector. tools/status.go

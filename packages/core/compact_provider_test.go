@@ -67,7 +67,7 @@ func serverCompactingAgent(t *testing.T, compact func(req provider.Request) ([]p
 		compact: compact,
 	}
 	a := cacheAwareAgent(t, client)
-	a.SetProviderCompaction(true)
+	useStrategies(a, CompactProvider, CompactWarm, CompactCold)
 	return a, client
 }
 
@@ -197,7 +197,7 @@ func TestProviderCompactionOnlyRunsWhenItIsBothOnAndAvailable(t *testing.T) {
 			t.Error("the backend was asked to compact while the feature was off")
 			return blobbed("hello"), provider.Usage{}, nil
 		})
-		a.SetProviderCompaction(false)
+		useStrategies(a, CompactWarm, CompactCold)
 		if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 			t.Fatal(err)
 		}
@@ -220,7 +220,7 @@ func TestProviderCompactionOnlyRunsWhenItIsBothOnAndAvailable(t *testing.T) {
 			return saidText("## Goal\nship it", 100), nil
 		}}
 		a := cacheAwareAgent(t, client)
-		a.SetProviderCompaction(true)
+		useStrategies(a, CompactProvider, CompactWarm, CompactCold)
 		if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 			t.Fatal(err)
 		}
@@ -329,8 +329,8 @@ func TestProviderCompactionCarriesTheExecutedActionsLedger(t *testing.T) {
 		{Role: provider.RoleUser, Content: []provider.Content{provider.ToolResultBlock{
 			CallID: "call_1", Content: []provider.Content{provider.TextBlock{Text: "ok"}}}}},
 	}
-	next, res, err := compactViaProvider(context.Background(),
-		&stubCompactor{out: blobbed("do it")}, promptPrefix{model: "warm-model"}, msgs, nil, "/ws")
+	next, res, err := compactViaProvider(context.Background(), nil, neutralProse(),
+		&stubCompactor{out: blobbed("do it")}, promptPrefix{model: "warm-model"}, msgs, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,6 +10,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -132,7 +133,7 @@ func TestGenerateSessionTitleLiveBroadcasts(t *testing.T) {
 		sessions: map[string]*wsSession{},
 		args:     build.Args{Provider: "openai-compatible", BaseURL: srv.URL, APIKey: "k", Model: "fake-model", CWD: tmp},
 	}
-	ag := core.NewAgent(nil, "openai-compatible", "fake-model", core.Registry{})
+	ag := coretest.NewAgent(nil, "openai-compatible", "fake-model", core.Registry{})
 	ag.SetMessages([]provider.Message{{Role: provider.RoleUser,
 		Content: []provider.Content{provider.TextBlock{Text: "the bridge reconnect races Stop"}}}})
 	s := &wsSession{id: id, ws: w, sess: sess, hub: newWSHub(), agent: ag, title: "manual name",

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/core/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -35,8 +35,8 @@ const prefixChangeMinTokens = 50_000
 //
 // It must be RETAINED rather than hashed, because by the time anything can
 // react to a prefix change the agent no longer holds the prefix that changed:
-// an extension reload has already rewritten a.System and a.Tools; a /model
-// switch has already rewritten a.Model and a.Client. What is still warm in the
+// an extension reload has already changed the frame and rewritten a.tools; a /model
+// switch has already rewritten a.model and a.client. What is still warm in the
 // provider's cache is the OLD prefix, and after the swap this struct is the
 // only copy of it left. A digest is enough to NOTICE a change; it is not enough
 // to keep SPENDING against what is still warm, which is what compacting on the
@@ -114,16 +114,17 @@ func (a *Agent) recordDispatch(client provider.Client, req provider.Request) {
 }
 
 // livePrefix is what the NEXT request would be assembled from — the agent's
-// current fields, which a host may have rewritten since the last dispatch. a.mu
+// current fields, which a host may have rewritten since the last dispatch, and
+// system, the Stable text of a frame the caller peeked before taking a.mu. a.mu
 // must be held.
-func (a *Agent) livePrefixLocked() promptPrefix {
+func (a *Agent) livePrefixLocked(system string) promptPrefix {
 	return promptPrefix{
-		model:        a.Model,
-		client:       a.Client,
-		system:       a.System,
-		tools:        a.Tools.SpecsVisible(a.turnToolsLocked(a.Tools).visible),
-		reasoning:    a.Reasoning,
-		reasoningSet: a.ReasoningSet,
+		model:        a.model,
+		client:       a.client,
+		system:       system,
+		tools:        a.tools.SpecsVisible(a.advertiseLocked(a.tools, false)),
+		reasoning:    a.reasoning,
+		reasoningSet: a.reasoningSet,
 		cacheKey:     a.cacheID,
 	}
 }
@@ -141,9 +142,12 @@ func (a *Agent) livePrefixLocked() promptPrefix {
 // And the cost is read from the newest usage row, so the number quoted is always
 // the bill about to be paid rather than some historical high-water mark.
 func (a *Agent) pendingPrefixChange() (reason string, tokens int, ok bool) {
+	// Only the Stable segments are prefix: a Volatile change is free, so the
+	// guard compares their joined text and nothing else.
+	system := a.assemble(AssemblePeek).SystemText()
 	a.mu.Lock()
 	sent := a.lastSent
-	live := a.livePrefixLocked()
+	live := a.livePrefixLocked(system)
 	a.mu.Unlock()
 
 	// Nothing dispatched, so nothing is cached, so there is nothing to lose.
@@ -168,7 +172,7 @@ func (a *Agent) pendingPrefixChange() (reason string, tokens int, ok bool) {
 		return "", 0, false
 	}
 
-	reasons := prefixDiff(*sent, live)
+	reasons := prefixDiff(a.translator, *sent, live)
 	if len(reasons) == 0 {
 		return "", 0, false
 	}
@@ -179,19 +183,19 @@ func (a *Agent) pendingPrefixChange() (reason string, tokens int, ok bool) {
 // Any single entry invalidates the transcript's cache, so the list is a
 // description rather than a severity ranking — one reason and four cost the
 // same, which is precisely why they coalesce into one offer.
-func prefixDiff(sent, live promptPrefix) []string {
+func prefixDiff(tr i18n.Translator, sent, live promptPrefix) []string {
 	var out []string
 	if sent.model != live.model {
-		out = append(out, i18n.T("the model changed (%s → %s)", sent.model, live.model))
+		out = append(out, i18n.In(tr).T("the model changed (%s → %s)", sent.model, live.model))
 	}
 	if !sameClient(sent.client, live.client) {
-		out = append(out, i18n.T("the provider endpoint changed"))
+		out = append(out, i18n.In(tr).T("the provider endpoint changed"))
 	}
 	if !sameTools(sent.tools, live.tools) {
-		out = append(out, i18n.T("the tool set changed"))
+		out = append(out, i18n.In(tr).T("the tool set changed"))
 	}
 	if sent.system != live.system {
-		out = append(out, i18n.T("the system prompt changed"))
+		out = append(out, i18n.In(tr).T("the system prompt changed"))
 	}
 	// Enabling or disabling extended thinking invalidates the cached message
 	// blocks. Whether merely changing the LEVEL does — low to high, same
@@ -201,9 +205,9 @@ func prefixDiff(sent, live promptPrefix) []string {
 	// the line that changes.
 	if (sent.reasoning == "") != (live.reasoning == "") {
 		if live.reasoning == "" {
-			out = append(out, i18n.T("extended thinking was turned off"))
+			out = append(out, i18n.In(tr).T("extended thinking was turned off"))
 		} else {
-			out = append(out, i18n.T("extended thinking was turned on"))
+			out = append(out, i18n.In(tr).T("extended thinking was turned on"))
 		}
 	}
 	return out
@@ -246,7 +250,7 @@ func sameTools(x, y []provider.Tool) bool {
 // the last one dispatched, because that is the one the provider still has warm.
 //
 // This is what "compact on the outgoing model" means in code. A /model switch
-// rewrites a.Model and a.Client immediately — they are read per STEP, not
+// rewrites a.model and a.client immediately — they are read per STEP, not
 // pinned (oneTurn), so the switch lands on the very next request and cannot be
 // gated. By the time a compaction runs in RESPONSE to that switch, the agent
 // already holds the incoming model. Summarizing on it would send a cold,
@@ -255,8 +259,8 @@ func sameTools(x, y []provider.Tool) bool {
 // model still has the whole thing cached; that is where the summary is cheap.
 //
 // Reading the prefix as one struct under one lock also closes a live data race:
-// SetModel and SetClientAndModel write a.Model / a.Client under a.mu, while
-// compactHeld used to read them (and a.Temperature) unlocked. Compact's
+// SetModel and SetClientAndModel write a.model / a.client under a.mu, while
+// compactHeld used to read them (and a.temperature) unlocked. Compact's
 // single-flight guard excludes other TURNS, not a host's model swap — and a
 // swap concurrent with a compaction is not a hypothetical here, it is the
 // headline case.
@@ -269,20 +273,21 @@ func sameTools(x, y []provider.Tool) bool {
 // cache-aware summarizer has nothing to be cache-aware ABOUT, so it must not
 // run.
 func (a *Agent) compactionPrefix() (p promptPrefix, warm bool) {
+	system := a.assemble(AssemblePeek).SystemText()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.lastSent != nil {
 		return *a.lastSent, true
 	}
 	return promptPrefix{
-		model:        a.Model,
-		client:       a.Client,
-		system:       a.System,
-		tools:        a.Tools.SpecsVisible(a.turnToolsLocked(a.Tools).visible),
-		reasoning:    a.Reasoning,
-		reasoningSet: a.ReasoningSet,
+		model:        a.model,
+		client:       a.client,
+		system:       system,
+		tools:        a.tools.SpecsVisible(a.advertiseLocked(a.tools, false)),
+		reasoning:    a.reasoning,
+		reasoningSet: a.reasoningSet,
 		cacheKey:     a.cacheID,
-		temperature:  a.Temperature,
+		temperature:  a.temperature,
 	}, false
 }
 
@@ -335,94 +340,3 @@ func (a *Agent) DispatchedPrefix(client provider.Client, model string) (system s
 	// only surviving description of what the provider cached.
 	return sent.system, append([]provider.Tool(nil), sent.tools...), sent.cacheKey, true
 }
-
-// SetCacheAwareCompaction toggles the cache-aware summarizer (the engine
-// feature cache_aware_compaction; the shipped default — ON — lives in
-// build/enginefeatures.go, core's zero value stays off). Off, a compaction
-// builds its own bespoke prefix — its own system prompt, no tools, the transcript
-// flattened into one text block — which by construction matches nothing the
-// provider has cached, so every compaction is a full-price cold read of the
-// whole conversation. On, it summarizes against the WARM prefix and pays cache
-// rates for the transcript it re-reads.
-//
-// A toggle rather than a replacement because the two paths do not necessarily
-// produce equally good summaries: the cold path gets a purpose-built
-// summarization system prompt and a transcript explicitly framed as material,
-// while the warm path has to ask for a summary from inside the agent's own
-// persona with its tools still advertised. That is a real quality question, and
-// it wants an A/B, not an assertion.
-func (a *Agent) SetCacheAwareCompaction(on bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.cacheAwareCompaction = on
-}
-
-// CacheAwareCompactionEnabled reports whether compaction summarizes against the
-// warm prefix. Exported so a host can show which summarizer is in play — and so
-// the build funnel's default is testable, which is the only place the shipped
-// default actually lives (core's zero value is off).
-func (a *Agent) CacheAwareCompactionEnabled() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.cacheAwareCompaction
-}
-
-func (a *Agent) cacheAwareCompactionOn() bool { return a.CacheAwareCompactionEnabled() }
-
-// SetProviderCompaction toggles handing compaction to the backend (the engine
-// feature provider_compaction). Off in both places — core's zero value and the
-// shipped default — which is the point rather than an oversight.
-//
-// What it changes is not which summarizer runs but what a checkpoint IS. The
-// client strategies produce prose: terva can read it, store it, show it, and
-// replay it against any model on any provider. This produces an encrypted blob
-// only the issuing backend can decrypt, standing in for the assistant turns it
-// removed — cheaper, bounded, and not portable. A conversation compacted this
-// way and then pointed at a different provider has to be rebuilt from the
-// session file and compacted again (ReadSessionPreCompaction), because the
-// alternative is a transcript that reads continuous while missing half its
-// history.
-//
-// The reason it ships off is narrower than that, and worth stating plainly: the
-// saving it exists for is UNMEASURED. That the endpoint works, what it returns,
-// how the blob scales, and that the result is provider-bound but not
-// model-bound are all measured. Whether replacing a client summary with it
-// actually recovers the cache reads a compaction currently costs is not, and
-// that is the only question a default flip should turn on.
-func (a *Agent) SetProviderCompaction(on bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.providerCompaction = on
-}
-
-// ProviderCompactionEnabled reports whether compaction is handed to the
-// backend. Exported for the same reason as CacheAwareCompactionEnabled: a host
-// can show which strategy is in play, and the build funnel's default — the only
-// place the shipped default lives — becomes testable.
-func (a *Agent) ProviderCompactionEnabled() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.providerCompaction
-}
-
-func (a *Agent) providerCompactionOn() bool { return a.ProviderCompactionEnabled() }
-
-// SetPrefixChangeGuard toggles the pre-turn prefix-change guard (the engine
-// feature prefix_change_guard, default ON — but see the economics below, which
-// keep it inert until cache-aware compaction is enabled too).
-func (a *Agent) SetPrefixChangeGuard(on bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.prefixGuard = on
-}
-
-// PrefixChangeGuardEnabled reports whether the pre-turn guard is armed. Note it
-// is inert without CacheAwareCompactionEnabled: the offer is only honest when
-// there is a saving behind it (offerCompactOnPrefixChange).
-func (a *Agent) PrefixChangeGuardEnabled() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.prefixGuard
-}
-
-func (a *Agent) prefixGuardOn() bool { return a.PrefixChangeGuardEnabled() }

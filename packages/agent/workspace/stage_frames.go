@@ -13,6 +13,16 @@ import (
 	"terva.sh/terva/packages/provider"
 )
 
+// advanceCue is the request-scoped cue ▶ Advance runs its turn with, so the
+// model writes the NEXT beat rather than extending what is there. It is
+// load-bearing: a scene may end in authored (directed) lines, which are
+// assistant messages, and a request ending in an assistant message is read by
+// Anthropic as a prefill to extend mid-sentence. The cue keeps a user block last.
+func advanceCue() string {
+	return i18n.P("stage.advance.cue",
+		"[Advance] Continue the scene from where it stands. Write the next beat as the character(s) whose turn it plainly is — do not narrate for the user, do not restate what just happened, and do not begin mid-sentence.")
+}
+
 func frameRecentConversation() string {
 	return i18n.P("stage.frame.recent_conversation", "RECENT CONVERSATION (most recent last)")
 }

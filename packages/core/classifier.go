@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/core/i18n"
 )
 
 // A screening classifier answers tool-call approvals that would otherwise

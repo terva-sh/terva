@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/lazytools"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
@@ -59,13 +60,18 @@ func (t *ActivateToolsTool) Execute(ctx context.Context, raw json.RawMessage, _ 
 	if agent == nil {
 		return toolErr("activate_tools: no agent in context"), nil
 	}
-	names := agent.ToolsInGroup(group)
+	lz := lazytools.Of(agent)
+	if lz == nil {
+		return toolErr("activate_tools: lazy tool visibility is off, so every installed tool is already advertised"), nil
+	}
+	reg := agent.ToolsSnapshot()
+	names := lazytools.ToolsInGroup(reg, group)
 	if len(names) == 0 {
 		return toolErr(fmt.Sprintf("activate_tools: no installed tool group %q; the valid group names are listed in the [inactive tool groups] note", group)), nil
 	}
 	joined := strings.Join(names, ", ")
-	autoContinue := agent.ActivationContinuationEnabled()
-	if !agent.ActivateGroup(group) {
+	autoContinue := lz.ContinuationEnabled()
+	if !lz.Activate(group) {
 		if autoContinue {
 			return activateResult(fmt.Sprintf("Tool group %q is already active: %s. Its tools are available on your next model step — call them directly rather than re-activating; retrying cannot make them appear sooner.", group, joined)), nil
 		}
@@ -81,7 +87,7 @@ func (t *ActivateToolsTool) Execute(ctx context.Context, raw json.RawMessage, _ 
 	// bridging the per-turn pin without a second discovery round-trip. Budgeted:
 	// a sprawling group falls back to a name-only line rather than re-inflating
 	// the schema weight lazy tools defers (renderGroupSchemas).
-	if note := renderGroupSchemas(agent.ToolSpecsInGroup(group), groupSchemaEchoBudget); note != "" {
+	if note := renderGroupSchemas(lazytools.ToolSpecsInGroup(reg, group), groupSchemaEchoBudget); note != "" {
 		msg += "\n\n" + note
 	}
 	return activateResult(msg), nil

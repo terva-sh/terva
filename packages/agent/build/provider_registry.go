@@ -10,9 +10,11 @@ import (
 	"strings"
 	"sync"
 
+	"terva.sh/terva/packages/agent/cliversion"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/modelreg"
+	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/provider"
-	"terva.sh/terva/packages/provider/auth"
 )
 
 // providerSpec is one row of the provider registry (roadmap B4): the
@@ -59,7 +61,7 @@ var providerSpecs = []providerSpec{
 	{
 		id: "anthropic",
 		// Set explicitly rather than left to fall through to
-		// provider.DefaultModel, which is Catalog[0] and therefore the
+		// provider.DefaultModel, which is the first row of the provider's built-in catalog and therefore the
 		// default for every provider that names none. Anthropic's best
 		// default is not automatically anyone else's, and moving the
 		// catalog's first row to change one provider would change them all.
@@ -71,9 +73,9 @@ var providerSpecs = []providerSpec{
 		apiKeyEnv: []string{"ANTHROPIC_API_KEY"},
 		newClient: func(c clientConfig) provider.Client {
 			if c.AuthMethod == "oauth" {
-				return provider.NewAnthropicOAuthSource(c.credentialSource(), c.BaseURL)
+				return provider.NewAnthropicOAuthSource(c.credentialSource(), c.BaseURL, c.hostOptions()...)
 			}
-			return provider.NewAnthropic(c.Credential, c.BaseURL)
+			return provider.NewAnthropic(c.Credential, c.BaseURL, c.hostOptions()...)
 		},
 	},
 	{
@@ -95,7 +97,8 @@ var providerSpecs = []providerSpec{
 		// intentionally ignores OPENAI_API_KEY so both can coexist.
 		newClient: func(c clientConfig) provider.Client {
 			return provider.NewOpenAICodexSource(c.credentialSource(), c.AccountID, c.BaseURL,
-				provider.WithCodexClientIdentity(c.ClientIdentity))
+				provider.WithCodexClientIdentity(c.ClientIdentity),
+				provider.WithCodexCLIVersion(cliversion.Codex))
 		},
 	},
 	{
@@ -116,9 +119,9 @@ var providerSpecs = []providerSpec{
 			// api.kimi.com/coding; subscription OAuth wraps the same
 			// Anthropic-shaped client.
 			if c.AuthMethod == "oauth" {
-				return provider.NewKimiCodingSourceWithHeaders(c.credentialSource(), c.BaseURL, kimiCodeHeaders())
+				return provider.NewKimiCodingSourceWithHeaders(c.credentialSource(), c.BaseURL, kimiCodeHeaders(), c.hostOptions()...)
 			}
-			return provider.NewKimiCodingWithHeaders(c.Credential, c.BaseURL, kimiCodeHeaders())
+			return provider.NewKimiCodingWithHeaders(c.Credential, c.BaseURL, kimiCodeHeaders(), c.hostOptions()...)
 		},
 	},
 	{
@@ -143,7 +146,9 @@ var providerSpecs = []providerSpec{
 		defaultModel: "gemini-flash-latest",
 		envHint:      "GEMINI",
 		apiKeyEnv:    []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"},
-		newClient:    func(c clientConfig) provider.Client { return provider.NewGemini(c.Credential, c.BaseURL) },
+		newClient: func(c clientConfig) provider.Client {
+			return provider.NewGemini(c.Credential, c.BaseURL, c.hostOptions()...)
+		},
 	},
 	{
 		id:             "ollama",
@@ -267,21 +272,27 @@ var providerSpecs = []providerSpec{
 		defaultModel: "MiniMax-M2.7",
 		envHint:      "MINIMAX",
 		apiKeyEnv:    []string{"MINIMAX_API_KEY"},
-		newClient:    func(c clientConfig) provider.Client { return provider.NewMinimaxAnthropic(c.Credential, c.BaseURL) },
+		newClient: func(c clientConfig) provider.Client {
+			return provider.NewMinimaxAnthropic(c.Credential, c.BaseURL, c.hostOptions()...)
+		},
 	},
 	{
 		id:           "minimax-cn",
 		defaultModel: "MiniMax-M2.7",
 		envHint:      "MINIMAX_CN",
 		apiKeyEnv:    []string{"MINIMAX_CN_API_KEY", "MINIMAX_API_KEY"},
-		newClient:    func(c clientConfig) provider.Client { return provider.NewMinimaxCNAnthropic(c.Credential, c.BaseURL) },
+		newClient: func(c clientConfig) provider.Client {
+			return provider.NewMinimaxCNAnthropic(c.Credential, c.BaseURL, c.hostOptions()...)
+		},
 	},
 	{
 		id:           "fireworks",
 		defaultModel: "accounts/fireworks/models/kimi-k2p6",
 		envHint:      "FIREWORKS",
 		apiKeyEnv:    []string{"FIREWORKS_API_KEY"},
-		newClient:    func(c clientConfig) provider.Client { return provider.NewFireworksAnthropic(c.Credential, c.BaseURL) },
+		newClient: func(c clientConfig) provider.Client {
+			return provider.NewFireworksAnthropic(c.Credential, c.BaseURL, c.hostOptions()...)
+		},
 	},
 	{
 		id:           "vercel-ai-gateway",
@@ -290,7 +301,7 @@ var providerSpecs = []providerSpec{
 		envHint:      "AI_GATEWAY",
 		apiKeyEnv:    []string{"AI_GATEWAY_API_KEY"},
 		newClient: func(c clientConfig) provider.Client {
-			return provider.NewVercelGatewayAnthropic(c.Credential, c.BaseURL)
+			return provider.NewVercelGatewayAnthropic(c.Credential, c.BaseURL, c.hostOptions()...)
 		},
 	},
 	{
@@ -314,7 +325,9 @@ var providerSpecs = []providerSpec{
 		envHint:      "AWS",
 		// No apiKeyEnv: bedrock has bespoke multi-source AWS credential
 		// resolution (handled specially in ResolveCredentialFull).
-		newClient: func(c clientConfig) provider.Client { return provider.NewBedrock(c.Credential, c.BaseURL) },
+		newClient: func(c clientConfig) provider.Client {
+			return provider.NewBedrock(bedrockConfig(c.Credential), c.BaseURL)
+		},
 	},
 	{
 		id:           "google-vertex",
@@ -322,7 +335,9 @@ var providerSpecs = []providerSpec{
 		defaultModel: "gemini-2.5-pro",
 		envHint:      "GOOGLE_CLOUD",
 		apiKeyEnv:    []string{"GOOGLE_CLOUD_API_KEY"},
-		newClient:    func(c clientConfig) provider.Client { return provider.NewGoogleVertex(c.Credential, c.BaseURL) },
+		newClient: func(c clientConfig) provider.Client {
+			return provider.NewGoogleVertex(vertexConfig(), c.hostOptions()...)
+		},
 	},
 	{
 		id:           "azure-openai-responses",
@@ -331,7 +346,7 @@ var providerSpecs = []providerSpec{
 		envHint:      "AZURE_OPENAI",
 		apiKeyEnv:    []string{"AZURE_OPENAI_API_KEY"},
 		newClient: func(c clientConfig) provider.Client {
-			return provider.NewAzureOpenAIResponses(c.Credential, c.BaseURL)
+			return provider.NewAzureOpenAIResponses(c.Credential, c.BaseURL, azureOpenAIConfig())
 		},
 	},
 	{
@@ -347,13 +362,17 @@ var providerSpecs = []providerSpec{
 		aliases:   []string{"cloudflare", "workers-ai"},
 		envHint:   "CLOUDFLARE",
 		apiKeyEnv: []string{"CLOUDFLARE_API_KEY"},
-		newClient: func(c clientConfig) provider.Client { return provider.NewCloudflareWorkersAI(c.Credential, c.BaseURL) },
+		newClient: func(c clientConfig) provider.Client {
+			return provider.NewCloudflareWorkersAI(c.Credential, c.BaseURL, cloudflareConfig())
+		},
 	},
 	{
 		id:        "cloudflare-ai-gateway",
 		envHint:   "CLOUDFLARE",
 		apiKeyEnv: []string{"CLOUDFLARE_API_KEY"},
-		newClient: func(c clientConfig) provider.Client { return provider.NewCloudflareAIGateway(c.Credential, c.BaseURL) },
+		newClient: func(c clientConfig) provider.Client {
+			return provider.NewCloudflareAIGateway(c.Credential, c.BaseURL, cloudflareConfig())
+		},
 	},
 	{
 		id:             provider.OpenAICompatProvider,
@@ -377,7 +396,7 @@ var providerSpecs = []providerSpec{
 		id:             provider.AnthropicCompatProvider,
 		noDefaultModel: true,
 		newClient: func(c clientConfig) provider.Client {
-			return provider.NewAnthropicCompatible(c.Credential, c.BaseURL, c.CompatWire)
+			return provider.NewAnthropicCompatible(c.Credential, c.BaseURL, c.CompatWire, c.hostOptions()...)
 		},
 	},
 }
@@ -558,7 +577,7 @@ func registerEndpointLocked(id string, ep config.EndpointConfig) error {
 		// lookup, the rescue picker and every error message route on, and an
 		// operator with three Anthropic endpoints needs to be told WHICH one
 		// refused them.
-		return provider.NewAnthropicCompatOpts(id, c.Credential, firstNonEmpty(c.BaseURL, baseURL), opts)
+		return provider.NewAnthropicCompatOpts(id, c.Credential, firstNonEmpty(c.BaseURL, baseURL), opts, c.hostOptions()...)
 	}
 	s := &providerSpec{
 		id:             id,
@@ -655,7 +674,7 @@ func endpointCredential(id, argsKey string, anthropic bool) (cred, method string
 // serves (llama.cpp, vLLM) have exactly one, and on a server with several the
 // operator picks in /model anyway.
 func EndpointDefaultModel(id string) string {
-	for _, m := range provider.ModelsForProvider(CanonicalEndpointID(id)) {
+	for _, m := range modelreg.ModelsForProvider(CanonicalEndpointID(id)) {
 		if strings.TrimSpace(m.ID) != "" {
 			return m.ID
 		}
@@ -767,6 +786,9 @@ type clientConfig struct {
 	// named endpoints. The zero value is what api.anthropic.com wants, so every
 	// other provider leaves it alone.
 	CompatWire provider.AnthropicCompatOptions
+	// CWD is the session's workspace directory. Generated images are saved
+	// there (see hostOptions); the engine and the wire never learn it.
+	CWD string
 }
 
 func (c clientConfig) credentialSource() provider.CredentialSource {

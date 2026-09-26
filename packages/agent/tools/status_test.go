@@ -7,9 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"terva.sh/terva/packages/buildinfo"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/provider/buildinfo"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -24,9 +26,9 @@ func statusText(r core.ToolResult) string {
 }
 
 func TestStatusToolReportsStaticAndLiveFacts(t *testing.T) {
-	// A bare Agent is enough: the tool only reads Model/Reasoning and
-	// the usage snapshots, all safe on a zero-value agent.
-	ag := &core.Agent{Model: "claude-sonnet-4-5", Reasoning: "high"}
+	// An agent with no client is enough: the tool reads only the model, the
+	// reasoning level and the usage snapshots.
+	ag := coretest.NewAgent(nil, "claude-sonnet-4-5", "", nil, core.WithReasoning("high"))
 	ag.SeedLastTurnUsage(provider.Usage{InputTokens: 10000, CacheReadTokens: 2000})
 	ag.SeedCost(provider.Usage{InputTokens: 12000, OutputTokens: 3000, CostUSD: 0.05})
 
@@ -88,7 +90,7 @@ func TestStatusSetProviderRebindsAfterCrossProviderSwap(t *testing.T) {
 	// Live agent now runs a real anthropic model (post-swap), but the tool
 	// was built for the previous provider ("openai" + oauth) and never
 	// rebuilt — the stale state the bug leaves behind.
-	ag := &core.Agent{Model: "claude-sonnet-4-5"}
+	ag := coretest.NewAgent(nil, "claude-sonnet-4-5", "", nil)
 	ag.SeedLastTurnUsage(provider.Usage{InputTokens: 10000})
 	st := &StatusTool{Provider: "openai", AuthMethod: "oauth", Agent: ag}
 
@@ -219,8 +221,8 @@ func TestFmtTokens(t *testing.T) {
 // built LAST. The dispatch context must win, so each conversation gets
 // its own numbers.
 func TestStatusReportsCallingAgentFromContext(t *testing.T) {
-	stale := &core.Agent{Model: "stale-model"}
-	caller := &core.Agent{Model: "caller-model", Reasoning: "low"}
+	stale := coretest.NewAgent(nil, "stale-model", "", nil)
+	caller := coretest.NewAgent(nil, "caller-model", "", nil, core.WithReasoning("low"))
 
 	st := &StatusTool{Provider: "anthropic", Agent: stale}
 
@@ -251,14 +253,14 @@ func TestStatusReportsCallingAgentFromContext(t *testing.T) {
 // says so explicitly instead of staying silent.
 func TestStatusReportsSessionIdentity(t *testing.T) {
 	dir := testsupport.TempDir(t)
-	sess, err := core.NewSession(dir, dir, "prov", "m", "test")
+	sess, err := session.NewSession(dir, dir, "prov", "m", "test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer sess.Close()
 
-	ag := core.NewAgent(nil, "m", "", nil)
-	ag.AdoptSessionIdentity(sess)
+	ag := coretest.NewAgent(nil, "m", "", nil)
+	ag.AdoptSessionIdentity(sess.Identity())
 	st := &StatusTool{Provider: "anthropic", Agent: ag}
 
 	res, err := st.Execute(context.Background(), nil, nil)
@@ -279,7 +281,7 @@ func TestStatusReportsSessionIdentity(t *testing.T) {
 	}
 
 	// Live-only agent (bot-mode group chats, --no-session).
-	res, err = (&StatusTool{Provider: "anthropic", Agent: core.NewAgent(nil, "m", "", nil)}).Execute(context.Background(), nil, nil)
+	res, err = (&StatusTool{Provider: "anthropic", Agent: coretest.NewAgent(nil, "m", "", nil)}).Execute(context.Background(), nil, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -296,12 +298,12 @@ func TestStatusReportsProjectKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	want := "project: " + core.ProjectKey("/tmp/proj")
+	want := "project: " + session.ProjectKey("/tmp/proj")
 	if text := statusText(res); !strings.Contains(text, want) {
 		t.Errorf("status output missing %q\n--- output ---\n%s", want, text)
 	}
 	d, ok := res.Details.(map[string]any)
-	if !ok || d["project_id"] != core.ProjectKey("/tmp/proj") {
+	if !ok || d["project_id"] != session.ProjectKey("/tmp/proj") {
 		t.Errorf("details missing project_id: %#v", res.Details)
 	}
 }

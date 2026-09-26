@@ -2,19 +2,22 @@ package build
 
 import (
 	"path/filepath"
+	"terva.sh/terva/packages/core/lazytools"
 	"testing"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
-func newBoundSession(t *testing.T, name string) (*core.Session, string) {
+func newBoundSession(t *testing.T, name string) (*session.Session, string) {
 	t.Helper()
 	dir := testsupport.TempDir(t)
 	path := filepath.Join(dir, name)
-	sess, err := core.NewSessionAtPath(path, dir, "openai-codex", "gpt-5.6-sol", "test")
+	sess, err := session.NewSessionAtPath(path, dir, "openai-codex", "gpt-5.6-sol", "test")
 	if err != nil {
 		t.Fatalf("NewSessionAtPath: %v", err)
 	}
@@ -35,27 +38,25 @@ func newBoundSession(t *testing.T, name string) (*core.Session, string) {
 func TestWiredPersistenceAndBindingRoundTripAnActivation(t *testing.T) {
 	sess, path := newBoundSession(t, "s.jsonl")
 
-	live := core.NewAgent(nil, "gpt-5.6-sol", "system", core.Registry{})
-	live.EnableLazyTools()
+	live := coretest.NewAgent(nil, "gpt-5.6-sol", "system", core.Registry{}, LazyTools(nil)...)
 	WireHeadlessSessionPersist(live, sess)
-	if !live.ActivateGroup("index") {
+	if !lazytools.Of(live).Activate("index") {
 		t.Fatal("ActivateGroup reported no change")
 	}
 	if err := sess.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	reopened, _, err := core.OpenSession(path)
+	reopened, _, err := session.OpenSession(path)
 	if err != nil {
 		t.Fatalf("OpenSession: %v", err)
 	}
 	defer reopened.Close()
 
-	resumed := core.NewAgent(nil, "gpt-5.6-sol", "system", core.Registry{})
-	resumed.EnableLazyTools()
+	resumed := coretest.NewAgent(nil, "gpt-5.6-sol", "system", core.Registry{}, LazyTools(nil)...)
 	BindSession(SessionBinding{Agent: resumed, Session: reopened})
 
-	got := resumed.ActiveGroups()
+	got := lazytools.Of(resumed).Active()
 	if len(got) != 1 || got[0] != "index" {
 		t.Errorf("resumed agent ActiveGroups() = %v; want [index] — a resume that "+
 			"drops it re-sends a different tools array and invalidates the whole "+
@@ -68,20 +69,19 @@ func TestWiredPersistenceAndBindingRoundTripAnActivation(t *testing.T) {
 // are the whole answer, not an addition to the outgoing session's.
 func TestBindingASessionWithNoActivationsClearsTheOutgoingSet(t *testing.T) {
 	sessA, pathA := newBoundSession(t, "a.jsonl")
-	ag := core.NewAgent(nil, "gpt-5.6-sol", "system", core.Registry{})
-	ag.EnableLazyTools()
+	ag := coretest.NewAgent(nil, "gpt-5.6-sol", "system", core.Registry{}, LazyTools(nil)...)
 	WireHeadlessSessionPersist(ag, sessA)
-	ag.ActivateGroup("index")
+	lazytools.Of(ag).Activate("index")
 	if err := sessA.Close(); err != nil {
 		t.Fatalf("Close A: %v", err)
 	}
-	reopenedA, _, err := core.OpenSession(pathA)
+	reopenedA, _, err := session.OpenSession(pathA)
 	if err != nil {
 		t.Fatalf("OpenSession A: %v", err)
 	}
 	defer reopenedA.Close()
 	BindSession(SessionBinding{Agent: ag, Session: reopenedA})
-	if got := ag.ActiveGroups(); len(got) != 1 {
+	if got := lazytools.Of(ag).Active(); len(got) != 1 {
 		t.Fatalf("precondition: ActiveGroups() = %v; want [index]", got)
 	}
 
@@ -90,14 +90,14 @@ func TestBindingASessionWithNoActivationsClearsTheOutgoingSet(t *testing.T) {
 	if err := sessB.Close(); err != nil {
 		t.Fatalf("Close B: %v", err)
 	}
-	reopenedB, _, err := core.OpenSession(pathB)
+	reopenedB, _, err := session.OpenSession(pathB)
 	if err != nil {
 		t.Fatalf("OpenSession B: %v", err)
 	}
 	defer reopenedB.Close()
 	BindSession(SessionBinding{Agent: ag, Session: reopenedB})
 
-	if got := ag.ActiveGroups(); len(got) != 0 {
+	if got := lazytools.Of(ag).Active(); len(got) != 0 {
 		t.Errorf("after switching to a session with no activations, ActiveGroups() = %v; "+
 			"want empty — a leaked group is advertised by a session with no row for it, "+
 			"so its next resume drops it and pays the invalidation again", got)
@@ -109,21 +109,19 @@ func TestBindingASessionWithNoActivationsClearsTheOutgoingSet(t *testing.T) {
 // activated group.
 func TestResumingTwiceWritesNoExtraRows(t *testing.T) {
 	sess, path := newBoundSession(t, "s.jsonl")
-	ag := core.NewAgent(nil, "gpt-5.6-sol", "system", core.Registry{})
-	ag.EnableLazyTools()
+	ag := coretest.NewAgent(nil, "gpt-5.6-sol", "system", core.Registry{}, LazyTools(nil)...)
 	WireHeadlessSessionPersist(ag, sess)
-	ag.ActivateGroup("index")
+	lazytools.Of(ag).Activate("index")
 	if err := sess.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
 	for i := 0; i < 3; i++ {
-		reopened, _, err := core.OpenSession(path)
+		reopened, _, err := session.OpenSession(path)
 		if err != nil {
 			t.Fatalf("OpenSession %d: %v", i, err)
 		}
-		resumed := core.NewAgent(nil, "gpt-5.6-sol", "system", core.Registry{})
-		resumed.EnableLazyTools()
+		resumed := coretest.NewAgent(nil, "gpt-5.6-sol", "system", core.Registry{}, LazyTools(nil)...)
 		WireHeadlessSessionPersist(resumed, reopened)
 		BindSession(SessionBinding{Agent: resumed, Session: reopened})
 		if got := reopened.ActiveToolGroups; len(got) != 1 {

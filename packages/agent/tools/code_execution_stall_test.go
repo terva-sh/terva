@@ -12,7 +12,9 @@ import (
 	"sync"
 	"testing"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/stall"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -100,7 +102,7 @@ func finishedTurn() []provider.Event {
 // loopingScriptAgent wires a real agent over the real code_execution and read
 // tools, with the script binding dispatching into the same registry the model
 // uses — the production shape, minus the approval gate.
-func loopingScriptAgent(t *testing.T, turns int) (*core.Agent, *stallScriptedClient) {
+func loopingScriptAgent(t *testing.T, turns int) (*core.Agent, *stall.Detector, *stallScriptedClient) {
 	t.Helper()
 	dir := testsupport.TempDir(t) // deliberately empty: missing.txt never exists
 
@@ -115,11 +117,9 @@ func loopingScriptAgent(t *testing.T, turns int) (*core.Agent, *stallScriptedCli
 		return scriptCallTurn(n)
 	}}
 
-	a := core.NewAgent(client, "m", "you are terva",
-		core.Registry{"code_execution": ce, "read": rt})
-	a.MaxSteps = 20
-	a.SetStallDetection(true)
-	return a, client
+	a, d := coretest.NewAgentWithStall(client, "m", "you are terva",
+		core.Registry{"code_execution": ce, "read": rt}, core.WithMaxSteps(20))
+	return a, d, client
 }
 
 // nudges returns the loop-check notes the harness put on the ephemeral tail.
@@ -139,7 +139,7 @@ func nudges(reqs []provider.Request) []string {
 // the inner-call reporting the detector saw nothing at all and the loop ran
 // unremarked.
 func TestCodeExecutionInnerLoopReachesTheStallDetector(t *testing.T) {
-	a, client := loopingScriptAgent(t, 5)
+	a, _, client := loopingScriptAgent(t, 5)
 	if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}
@@ -147,6 +147,16 @@ func TestCodeExecutionInnerLoopReachesTheStallDetector(t *testing.T) {
 	got := nudges(client.calls())
 	if len(got) == 0 {
 		t.Fatal("a script looping on the same failing host call must reach the stall detector")
+	}
+	// Each note rides one request: the delivery report spends it.
+	seen := map[string]int{}
+	for _, n := range got {
+		seen[n]++
+	}
+	for text, n := range seen {
+		if n != 1 {
+			t.Errorf("a note rode %d requests, want 1:\n%s", n, text)
+		}
 	}
 	joined := strings.Join(got, "\n")
 	if !strings.Contains(joined, "code_execution") {
@@ -163,8 +173,8 @@ func TestCodeExecutionInnerLoopReachesTheStallDetector(t *testing.T) {
 // off: nothing is nudged. It pins the nudge above to the detector rather than
 // to some other note that happens to ride the same tail.
 func TestCodeExecutionInnerLoopSilentWhenDetectionIsOff(t *testing.T) {
-	a, client := loopingScriptAgent(t, 5)
-	a.SetStallDetection(false)
+	a, d, client := loopingScriptAgent(t, 5)
+	d.SetEnabled(false)
 	if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}
@@ -204,10 +214,8 @@ func TestCodeExecutionSucceedingScriptsNeverNudge(t *testing.T) {
 			}},
 		}
 	}}
-	a := core.NewAgent(client, "m", "you are terva",
-		core.Registry{"code_execution": ce, "read": rt})
-	a.MaxSteps = 20
-	a.SetStallDetection(true)
+	a, _ := coretest.NewAgentWithStall(client, "m", "you are terva",
+		core.Registry{"code_execution": ce, "read": rt}, core.WithMaxSteps(20))
 	if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}

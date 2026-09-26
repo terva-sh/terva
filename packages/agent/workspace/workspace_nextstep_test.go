@@ -13,7 +13,10 @@ import (
 	"sync"
 	"testing"
 
+	"terva.sh/terva/packages/core/transcripttest"
+
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -70,7 +73,7 @@ func nextStepSession(t *testing.T, id, reply string) (*Workspace, *wsSession, *n
 	t.Helper()
 	w, s, _ := chatTestWorkspace(t, id)
 	cl := &nextStepClient{reply: reply}
-	ag := core.NewAgent(cl, "fake-model", "the session's own system prompt", core.Registry{})
+	ag := coretest.NewAgent(cl, "fake-model", "the session's own system prompt", core.Registry{})
 	ag.SetMessages([]provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "what broke the build?"}}},
 		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "a missing import in main.go"}}},
@@ -78,8 +81,8 @@ func nextStepSession(t *testing.T, id, reply string) (*Workspace, *wsSession, *n
 	// Both halves wired, differently: the surface must reach for the
 	// side-effect-free one. A suggestion the user may never see must not record
 	// which lore entries fired on the session's behalf.
-	ag.ContextProviderPeek = func() string { return "the peeked tail" }
-	ag.ContextProvider = func() string { return "the recording tail" }
+	coretest.FrameOf(ag).SetPeek(func() string { return "the peeked tail" })
+	coretest.FrameOf(ag).SetHost(func() string { return "the recording tail" })
 	s.agent = ag
 	return w, s, cl
 }
@@ -274,7 +277,7 @@ func TestNextStepOnAnEmptySessionNeverCallsTheModel(t *testing.T) {
 // than panicking on a nil client.
 func TestNextStepWithoutACredentialRefuses(t *testing.T) {
 	w, s, _ := nextStepSession(t, "s1", "run the tests")
-	s.agent = core.NewAgent(nil, "fake-model", "", core.Registry{})
+	s.agent = coretest.NewAgent(nil, "fake-model", "", core.Registry{})
 
 	if _, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{}); err == nil {
 		t.Fatal("a session with no client should refuse, not suggest")
@@ -289,27 +292,28 @@ func TestNextStepBooksItsSpend(t *testing.T) {
 	cl.usage = provider.Usage{InputTokens: 900, OutputTokens: 7}
 	cl.mu.Unlock()
 
-	// Booked on the MARKED observer, under its own source. The plain one is
-	// what a host persists turns on, and a suggestion that reached it would
+	// Booked as a SIDE-CHANNEL record, under its own source. A turn record is
+	// what a host persists turns as, and a suggestion that became one would
 	// land on disk as a turn of the session, which is how the cost of this
 	// call went unmeasured for as long as it did (TKT-01M213C1).
-	var booked provider.Usage
-	var source string
-	var plain int
-	s.agent.AddUsageObserver(func(u, _ provider.Usage) { plain++ })
-	s.agent.AddSideChannelUsageObserver(func(src string, u, _ provider.Usage) { source, booked = src, u })
+	rec := &transcripttest.Recorder{}
+	s.agent.AttachTranscriptStore(rec)
 
 	if _, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{}); err != nil {
 		t.Fatalf("suggest: %v", err)
 	}
-	if booked.OutputTokens != 7 || booked.InputTokens != 900 {
+	side := rec.Usage(core.UsageSideChannel)
+	if len(side) != 1 {
+		t.Fatalf("%d side-channel records, want 1", len(side))
+	}
+	if booked := side[0].Usage; booked.OutputTokens != 7 || booked.InputTokens != 900 {
 		t.Fatalf("booked usage = %+v, want the completion's own", booked)
 	}
-	if source != "next_step" {
+	if source := side[0].Source; source != "next_step" {
 		t.Fatalf("booked under source %q, want next_step", source)
 	}
-	if plain != 0 {
-		t.Fatalf("the plain usage observer fired %d time(s); a suggestion must not persist as a turn", plain)
+	if plain := len(rec.Usage(core.UsageTurn)); plain != 0 {
+		t.Fatalf("%d turn usage record(s); a suggestion must not persist as a turn", plain)
 	}
 }
 

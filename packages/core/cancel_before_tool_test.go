@@ -51,10 +51,10 @@ func TestAnApprovalThatLandsAfterACancelDoesNotRunTheTool(t *testing.T) {
 
 	// Stand in for a confirmer blocked on the daemon's context: it is still
 	// waiting when the turn is cancelled, and then it says yes.
-	ag.BeforeToolExecute = func(context.Context, provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	ag.gate = GateFunc(func(context.Context, provider.ToolCallBlock, Tool) (bool, string, json.RawMessage) {
 		cancel()
 		return true, "", nil
-	}
+	})
 
 	res := ag.runOneTool(ctx, recorderCall(), Registry{"recorder": tool}, func(AgentEvent) {})
 
@@ -77,10 +77,10 @@ func TestAnApprovalThatLandsAfterACancelDoesNotRunTheTool(t *testing.T) {
 func TestACancelledTurnDispatchesNoFurtherTools(t *testing.T) {
 	tool := &cancelProbeTool{}
 	var asked atomic.Bool
-	ag := &Agent{BeforeToolExecute: func(context.Context, provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	ag := &Agent{gate: GateFunc(func(context.Context, provider.ToolCallBlock, Tool) (bool, string, json.RawMessage) {
 		asked.Store(true)
 		return true, "", nil
-	}}
+	})}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -103,9 +103,9 @@ func TestACancelledTurnDispatchesNoFurtherTools(t *testing.T) {
 // worst possible reason.
 func TestALiveTurnStillRunsItsTools(t *testing.T) {
 	tool := &cancelProbeTool{}
-	ag := &Agent{BeforeToolExecute: func(context.Context, provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	ag := &Agent{gate: GateFunc(func(context.Context, provider.ToolCallBlock, Tool) (bool, string, json.RawMessage) {
 		return true, "", nil
-	}}
+	})}
 
 	res := ag.runOneTool(context.Background(), recorderCall(), Registry{"recorder": tool}, func(AgentEvent) {})
 
@@ -124,12 +124,12 @@ func TestACancelMidBatchStopsTheRemainingCalls(t *testing.T) {
 	tool := &cancelProbeTool{}
 	var dispatched atomic.Int32
 	ctx, cancel := context.WithCancel(context.Background())
-	ag := &Agent{BeforeToolExecute: func(context.Context, provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	ag := &Agent{gate: GateFunc(func(context.Context, provider.ToolCallBlock, Tool) (bool, string, json.RawMessage) {
 		if dispatched.Add(1) == 1 {
 			cancel() // the first call's approval outlived the turn
 		}
 		return true, "", nil
-	}}
+	})}
 
 	msg := provider.Message{Role: provider.RoleAssistant, Content: []provider.Content{
 		provider.ToolCallBlock{ID: "a", Name: "recorder", Arguments: json.RawMessage(`{}`)},

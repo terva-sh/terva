@@ -19,18 +19,18 @@ import (
 // after history). Returns nil when there's neither, so composeEphemeral skips
 // it entirely.
 //
-// The closure captures ag and reads ag.Messages() at call time — the core
-// invokes ContextProvider once per turn, after copying the transcript and
-// outside its lock (see core/agent.go), so this is safe and always sees the
-// latest turn. PHI comes last, matching SillyTavern's after-history position.
+// The closure captures ag and reads ag.Messages() at call time — the engine
+// assembles the frame, and so calls this through the Assembler, once per
+// request, after copying the transcript and outside its lock (see
+// core/agent.go), so this is safe and always sees the latest turn. PHI comes last, matching SillyTavern's after-history position.
 func (r *Resolved) PerTurnContext(ag *core.Agent) func() string {
 	return r.tailProvider(ag, true)
 }
 
 // PerTurnContextPeek is the side-effect-free twin of PerTurnContext: it renders
 // the same uncached tail from the agent's current messages but does NOT record
-// which lore fired. Wired to core.Agent.ContextProviderPeek so the UI can SIZE
-// the tail (e.g. /context) without overwriting the "fired last turn" record.
+// which lore fired. The Assembler calls it for core.AssemblePeek, so the UI can
+// SIZE the tail (e.g. /context) without overwriting the "fired last turn" record.
 func (r *Resolved) PerTurnContextPeek(ag *core.Agent) func() string {
 	return r.tailProvider(ag, false)
 }
@@ -456,7 +456,7 @@ func recentLoreScan(msgs []provider.Message) []string {
 
 // composeEphemeral combines context providers into one, concatenating their
 // non-empty outputs blank-line separated. nil providers are dropped; if none
-// remain the result is nil (leaving ContextProvider unset).
+// remain the result is nil (leaving the Assembler with no tail).
 func composeEphemeral(providers ...func() string) func() string {
 	var active []func() string
 	for _, p := range providers {
@@ -531,7 +531,7 @@ type EphemeralTail struct {
 // one of those would fold the same cards in a second time. Both callers pass a
 // bare tail — the build path passes what NewAgent installed, the rewire path
 // passes the fresh Resolve's — which is also why the rewire can hand the whole
-// composed result to SetContextProvider in one write, instead of reading the
+// composed result to Assembler.SetTail in one write, instead of reading the
 // live provider back out from under a turn that may be running.
 func (t EphemeralTail) compose(base func() string) func() string {
 	out := composeEphemeral(t.Ext, base)
@@ -574,8 +574,7 @@ func WireEphemeralTail(ag *core.Agent, t EphemeralTail) {
 	if ag == nil {
 		return
 	}
-	ag.ContextProvider = t.compose(ag.ContextProvider)
-	ag.ContextProviderPeek = t.compose(ag.ContextProviderPeek)
+	mustAssemblerOf(ag, "WireEphemeralTail").wrapTail(t.compose)
 }
 
 // RebindTasks re-keys the built-in task store to a session so the board follows

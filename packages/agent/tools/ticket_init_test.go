@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -201,7 +202,7 @@ func TestTicketInitAsksTheHostToReResolveItsTools(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	dir := testsupport.TempDir(t)
 
-	ag := core.NewAgent(nil, "test-model", "", core.Registry{})
+	ag := coretest.NewAgent(nil, "test-model", "", core.Registry{})
 	var reasons []string
 	ag.SetToolRefresher(func(reason string) { reasons = append(reasons, reason) })
 

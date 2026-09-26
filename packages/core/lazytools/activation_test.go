@@ -1,0 +1,698 @@
+package lazytools
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"strings"
+	"testing"
+
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/provider"
+)
+
+// With lazy tools on and no always-active groups, only the core group is
+// advertised; the inactive groups' tools are hidden and summarized in the
+// cache-free capability note so the model can discover and activate them.
+func TestLazyToolsAdvertisesCoreHidesInactiveWithNote(t *testing.T) {
+	reg := core.Registry{
+		"read":      &flagTool{name: "read"},
+		"mail_send": extTool("mail_send", "mail"),
+		"gh_pr":     extTool("gh_pr", "mcp:github"),
+	}
+	client := &reqCaptureClient{}
+	a, _ := newAgent(client, reg, core.AllowAll)
+
+	if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	adv := specNames(client.tools[0])
+	if !adv["read"] {
+		t.Error("core tool must stay advertised under lazy mode")
+	}
+	if adv["mail_send"] || adv["gh_pr"] {
+		t.Errorf("inactive groups must be hidden, advertised = %v", adv)
+	}
+	note := client.ephemeral[0]
+	for _, want := range []string{"[inactive tool groups]", "mail", "mail_send", "mcp:github", "gh_pr", "activate_tools"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("capability note missing %q; note = %q", want, note)
+		}
+	}
+}
+
+// An essential (load-bearing) extension tool stays advertised even though its
+// group is inactive, while its non-essential sibling in the same group stays
+// hidden — and the capability note lists only the deferred sibling, never the
+// already-visible essential tool. This is the "guidance names a tool the model
+// must see" case: index_search rides along, index_rebuild waits for activation.
+func TestLazyToolsAdvertisesEssentialToolFromInactiveGroup(t *testing.T) {
+	reg := core.Registry{
+		"read":          &flagTool{name: "read"},
+		"index_search":  essentialExtTool("index_search", "index"),
+		"index_rebuild": extTool("index_rebuild", "index"),
+	}
+	client := &reqCaptureClient{}
+	a, _ := newAgent(client, reg, core.AllowAll)
+
+	if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	adv := specNames(client.tools[0])
+	if !adv["index_search"] {
+		t.Error("an essential tool must be advertised even from an inactive group")
+	}
+	if adv["index_rebuild"] {
+		t.Error("a non-essential sibling in the same group must stay hidden")
+	}
+	note := client.ephemeral[0]
+	if !strings.Contains(note, "index_rebuild") {
+		t.Errorf("the capability note should list the deferred sibling; note = %q", note)
+	}
+	if strings.Contains(note, "index_search") {
+		t.Errorf("the capability note must not list the already-advertised essential tool; note = %q", note)
+	}
+}
+
+// Activate brings a group into the advertised set on the NEXT turn, and the
+// capability note drops it.
+func TestActivateGroupTakesEffectNextTurn(t *testing.T) {
+	reg := core.Registry{
+		"read":      &flagTool{name: "read"},
+		"mail_send": extTool("mail_send", "mail"),
+	}
+	client := &reqCaptureClient{}
+	a, v := newAgent(client, reg, core.AllowAll)
+
+	if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
+		t.Fatalf("Prompt 1: %v", err)
+	}
+	if specNames(client.tools[0])["mail_send"] {
+		t.Fatal("mail_send must be hidden before activation")
+	}
+
+	if !v.Activate("mail") {
+		t.Error("Activate should report a change")
+	}
+	if v.Activate("mail") {
+		t.Error("re-activating an active group should report no change")
+	}
+
+	if err := a.Prompt(context.Background(), "again", nil, nil); err != nil {
+		t.Fatalf("Prompt 2: %v", err)
+	}
+	last := client.tools[len(client.tools)-1]
+	if !specNames(last)["mail_send"] {
+		t.Error("mail_send must be advertised after activation")
+	}
+	if strings.Contains(client.ephemeral[len(client.ephemeral)-1], "mail_send") {
+		t.Error("capability note should no longer list an activated group")
+	}
+}
+
+// The active-group set is pinned per segment: a mid-turn Activate (via a
+// tool) does NOT change the current segment's advertised set — it lands on the
+// next pin. This mirrors the Tools/System pin, so activation is one deliberate
+// cache write at a boundary, never mid-turn churn. Activation continuation is
+// switched off here to isolate the pin semantics; the default-on path (the
+// continuation lands the tools within the same Prompt) has its own tests below.
+func TestActivateGroupMidTurnLandsNextTurn(t *testing.T) {
+	reg := core.Registry{
+		"read":      &flagTool{name: "read"},
+		"activate":  &groupActivatorTool{group: "mail"},
+		"mail_send": extTool("mail_send", "mail"),
+	}
+	client := &reqCaptureClient{toolThen: "activate"}
+	a, v := newAgent(client, reg, core.AllowAll)
+	v.SetContinuation(false)
+
+	// Turn 1 has two steps: step 1 calls "activate" (activating mail mid-turn),
+	// step 2 continues. Both steps of turn 1 must still HIDE mail (pinned).
+	if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
+		t.Fatalf("Prompt 1: %v", err)
+	}
+	if len(client.tools) < 2 {
+		t.Fatalf("expected a 2-step turn, got %d requests", len(client.tools))
+	}
+	for i := range 2 {
+		if specNames(client.tools[i])["mail_send"] {
+			t.Errorf("turn-1 step %d advertised mail_send, but a mid-turn activation must not change the pinned set", i+1)
+		}
+	}
+
+	// The next turn picks up the activation.
+	if err := a.Prompt(context.Background(), "next", nil, nil); err != nil {
+		t.Fatalf("Prompt 2: %v", err)
+	}
+	if !specNames(client.tools[len(client.tools)-1])["mail_send"] {
+		t.Error("mail_send must be advertised on the turn after a mid-turn activation")
+	}
+}
+
+// Immediate tool activation, default ON: a tool that activates a group makes
+// that group's tools available on the very NEXT model step, within the same
+// segment — no synthetic continuation, no natural-stop handoff. The completed
+// activate_tools call is the synchronization boundary. This supersedes the old
+// activation-continuation boundary (notes/immediate-tool-activation.md).
+func TestImmediateActivationSameSegment(t *testing.T) {
+	reg := core.Registry{
+		"read":      &flagTool{name: "read"},
+		"activate":  &groupActivatorTool{group: "mail"},
+		"mail_send": extTool("mail_send", "mail"),
+	}
+	client := &reqCaptureClient{toolThen: "activate"}
+	a, _ := newAgent(client, reg, core.AllowAll)
+
+	var causes []string
+	err := a.Prompt(context.Background(), "go", nil, func(ev core.AgentEvent) {
+		if e, ok := ev.(core.EvContinuation); ok {
+			causes = append(causes, e.Cause)
+		}
+	})
+	if err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	// Two requests: the activating tool step, then the next step with the group
+	// already live. No third natural-stop continuation request.
+	if len(client.tools) != 2 {
+		t.Fatalf("want 2 requests (tool step, then live), got %d", len(client.tools))
+	}
+	if specNames(client.tools[0])["mail_send"] {
+		t.Error("the activating step must still hide mail_send (the batch it belongs to is pinned)")
+	}
+	if !specNames(client.tools[1])["mail_send"] {
+		t.Error("the next model step must advertise the newly activated tools")
+	}
+	if strings.Contains(client.ephemeral[1], "mail_send") {
+		t.Error("the refreshed capability note must no longer list the activated group")
+	}
+	// No synthetic continuation, no synthetic nudge on the normal tool path.
+	if len(causes) != 0 {
+		t.Errorf("no EvContinuation should fire on the immediate tool path, got %v", causes)
+	}
+	for _, m := range a.Messages() {
+		if m.Role == provider.RoleUser && m.Meta[core.MetaSynthetic] == "true" {
+			t.Errorf("no synthetic activation nudge should be injected, got %q", textOf(m))
+		}
+	}
+}
+
+// With activation continuation switched off, the boundary contract reverts to
+// the stage-0 pin reuse: a host gate's continuation still sees the old tool
+// set, and a mid-segment activation lands only on the next Prompt.
+func TestActivationContinuationOffReusesPinnedTools(t *testing.T) {
+	reg := core.Registry{
+		"read":      &flagTool{name: "read"},
+		"activate":  &groupActivatorTool{group: "mail"},
+		"mail_send": extTool("mail_send", "mail"),
+	}
+	client := &reqCaptureClient{toolThen: "activate"}
+	a, v := newAgent(client, reg, core.AllowAll)
+	v.SetContinuation(false)
+	a.AddContinuationGate(core.ContinuationGate{Cause: "test", Fire: func(provider.StopReason) (string, bool) {
+		return "keep going", true
+	}})
+
+	// One Prompt, three requests: step 1 activates mail mid-segment, step 2
+	// ends naturally, the host gate re-prompts, step 3 ends. Every request
+	// must still hide mail_send.
+	if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
+		t.Fatalf("Prompt 1: %v", err)
+	}
+	if len(client.tools) != 3 {
+		t.Fatalf("expected 3 requests (tool step, natural end, gate re-prompt), got %d", len(client.tools))
+	}
+	for i, tools := range client.tools {
+		if specNames(tools)["mail_send"] {
+			t.Errorf("request %d advertised mail_send; with the feature off a continuation must reuse the pin", i+1)
+		}
+	}
+
+	// The next Prompt re-pins and picks the activation up.
+	if err := a.Prompt(context.Background(), "next", nil, nil); err != nil {
+		t.Fatalf("Prompt 2: %v", err)
+	}
+	if !specNames(client.tools[len(client.tools)-1])["mail_send"] {
+		t.Error("mail_send must be advertised on the Prompt after the gated one")
+	}
+}
+
+// Real queued input outranks the synthetic nudge: when a message is queued by
+// the time the activating segment ends, no nudge is injected — the queued
+// message continues the Prompt — but the pin still refreshes, so the reply to
+// that message already has the tools live.
+func TestActivationContinuationQueuedInputWins(t *testing.T) {
+	reg := core.Registry{
+		"read":      &flagTool{name: "read"},
+		"activate":  &groupActivatorTool{group: "mail"},
+		"mail_send": extTool("mail_send", "mail"),
+	}
+	client := &reqCaptureClient{toolThen: "activate"}
+	a, _ := newAgent(client, reg, core.AllowAll)
+	client.onCall = func(n int) {
+		if n == 2 { // queued while the model "speaks" its final message
+			a.SetQueuedMessages([]string{"real follow-up"})
+		}
+	}
+
+	var causes []string
+	err := a.Prompt(context.Background(), "go", nil, func(ev core.AgentEvent) {
+		if e, ok := ev.(core.EvContinuation); ok {
+			causes = append(causes, e.Cause)
+		}
+	})
+	if err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if len(client.tools) != 3 {
+		t.Fatalf("want 3 requests (tool step, natural end, queued follow-up), got %d", len(client.tools))
+	}
+	if !specNames(client.tools[2])["mail_send"] {
+		t.Error("the queued follow-up's segment must run with the newly activated tools live")
+	}
+	if len(causes) != 0 {
+		t.Errorf("real input must continue the Prompt without a gate, got causes %v", causes)
+	}
+	for _, m := range a.Messages() {
+		if m.Role == provider.RoleUser && m.Meta[core.MetaSynthetic] == "true" {
+			t.Errorf("no synthetic nudge should be injected when real input waits, got %q", textOf(m))
+		}
+	}
+}
+
+// The natural-stop activation gate is retained as the FALLBACK for a group
+// activated OFF the tool path (a host-side / asynchronous Activate while
+// the model produces a non-tool reply). It stays capped — defense in depth,
+// since activation is monotonic: a pathological run that activates a fresh group
+// on every step stops being continued after continuationCap fires.
+func TestActivationFallbackGateCap(t *testing.T) {
+	reg := core.Registry{"read": &flagTool{name: "read"}}
+	for i := 1; i <= 6; i++ {
+		name := fmt.Sprintf("t%d", i)
+		reg[name] = extTool(name, fmt.Sprintf("g%d", i))
+	}
+	client := &reqCaptureClient{} // no tool calls: every step ends naturally
+	a, v := newAgent(client, reg, core.AllowAll)
+	// Activate a fresh group at the top of every request — an async activation
+	// with no post-tool boundary, so only the fallback gate can land it.
+	client.onCall = func(n int) { v.Activate(fmt.Sprintf("g%d", n)) }
+
+	var causes []string
+	err := a.Prompt(context.Background(), "go", nil, func(ev core.AgentEvent) {
+		if e, ok := ev.(core.EvContinuation); ok {
+			causes = append(causes, e.Cause)
+		}
+	})
+	if err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if len(causes) != continuationCap {
+		t.Errorf("want exactly %d fallback continuations, got %d", continuationCap, len(causes))
+	}
+	for _, c := range causes {
+		if c != "activation" {
+			t.Errorf("fallback continuations should carry the activation cause, got %q", c)
+		}
+	}
+}
+
+// A group activated OFF the tool path has no post-tool boundary to ride, so the
+// natural-stop activation gate is what lands it: one continuation, and the next
+// step advertises the group. This is the fallback the immediate path keeps.
+func TestActivationFallbackGateFiresForAsyncActivation(t *testing.T) {
+	reg := core.Registry{
+		"read":      &flagTool{name: "read"},
+		"mail_send": extTool("mail_send", "mail"),
+	}
+	client := &reqCaptureClient{}
+	a, v := newAgent(client, reg, core.AllowAll)
+	client.onCall = func(n int) {
+		if n == 1 {
+			v.Activate("mail") // async: not via a tool call
+		}
+	}
+
+	var causes []string
+	err := a.Prompt(context.Background(), "go", nil, func(ev core.AgentEvent) {
+		if e, ok := ev.(core.EvContinuation); ok {
+			causes = append(causes, e.Cause)
+		}
+	})
+	if err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if len(client.tools) != 2 {
+		t.Fatalf("want 2 requests (natural end, then fallback continuation), got %d", len(client.tools))
+	}
+	if specNames(client.tools[0])["mail_send"] {
+		t.Error("the first step must hide mail_send (pinned before the async activation)")
+	}
+	if !specNames(client.tools[1])["mail_send"] {
+		t.Error("the fallback continuation must advertise the async-activated group")
+	}
+	if len(causes) != 1 || causes[0] != "activation" {
+		t.Errorf("want one activation continuation from the fallback gate, got %v", causes)
+	}
+}
+
+// The activation gate is a Fallback gate, so a host gate for unfinished work
+// outranks it even when the host registers that gate AFTER construction. The
+// component connects before the host has wired anything, so registration
+// order alone would put the convenience continuation first. Both gates have
+// something to say at the first natural stop: the host gate wins that
+// boundary, and the activation gate takes the next one.
+func TestActivationFallbackGateYieldsToHostGateRegisteredLater(t *testing.T) {
+	reg := core.Registry{
+		"read":      &flagTool{name: "read"},
+		"mail_send": extTool("mail_send", "mail"),
+	}
+	client := &reqCaptureClient{}
+	a, v := newAgent(client, reg, core.AllowAll)
+	// Registered after construction, and fires once.
+	a.AddContinuationGate(core.ContinuationGate{Cause: "open-work", Fire: func(provider.StopReason) (string, bool) {
+		return "finish the open work", true
+	}})
+	client.onCall = func(n int) {
+		if n == 1 {
+			v.Activate("mail") // async, so the activation gate has a reason to fire
+		}
+	}
+
+	var causes []string
+	err := a.Prompt(context.Background(), "go", nil, func(ev core.AgentEvent) {
+		if e, ok := ev.(core.EvContinuation); ok {
+			causes = append(causes, e.Cause)
+		}
+	})
+	if err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if len(causes) == 0 || causes[0] != "open-work" {
+		t.Fatalf("the host gate must win the first boundary over the fallback, got causes %v", causes)
+	}
+	// The host gate's continuation re-pins at the boundary, so the activation
+	// is already live on the next request, and the activation gate then has
+	// nothing newly live to announce.
+	if len(client.tools) < 2 || !specNames(client.tools[1])["mail_send"] {
+		t.Error("the host gate's continuation must advertise the async-activated group")
+	}
+	if slices.Contains(causes, "activation") {
+		t.Errorf("once the host gate's boundary landed the group, the fallback must not fire, got %v", causes)
+	}
+}
+
+// ActivateForTools (skill-driven activation, step 5) resolves tool NAMES to
+// their groups and activates them — but strictly on the visibility axis: the
+// revealed tool is advertised yet STILL gated when called. This is the
+// §Security acceptance gate — activating via a skill grants no authority. It
+// also skips names absent from the registry (an untrusted workspace never
+// loaded them) and the always-on core group.
+func TestActivateGroupsForToolsVisibilityOnly(t *testing.T) {
+	danger := extTool("danger_tool", "danger")
+	reg := core.Registry{
+		"read":        &flagTool{name: "read"},
+		"danger_tool": danger,
+	}
+	client := &reqCaptureClient{toolThen: "danger_tool"}
+	gateFired := false
+	gate := core.GateFunc(func(_ context.Context, call provider.ToolCallBlock, _ core.Tool) (bool, string, json.RawMessage) {
+		if call.Name == "danger_tool" {
+			gateFired = true
+		}
+		return true, "", nil
+	})
+	a, v := newAgent(client, reg, gate)
+
+	// read is core (skipped), "nope" is absent (skipped), danger_tool -> "danger".
+	got := v.ActivateForTools([]string{"danger_tool", "read", "nope"})
+	if len(got) != 1 || got[0] != "danger" {
+		t.Fatalf("ActivateForTools = %v, want [danger]", got)
+	}
+
+	if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if !specNames(client.tools[0])["danger_tool"] {
+		t.Error("a skill-activated tool must be advertised")
+	}
+	if !danger.executed {
+		t.Error("a skill-activated tool must still dispatch")
+	}
+	if !gateFired {
+		t.Error("the permission gate must still fire for a skill-activated tool (visibility != authority)")
+	}
+}
+
+// Off lazy mode, skill-driven activation is a no-op (everything is already
+// advertised — there is nothing to reveal). Off lazy mode means no Visibility
+// is attached: Of returns nil, and every method on a nil Visibility reports
+// the feature as off.
+func TestActivateGroupsForToolsOffLazyNoop(t *testing.T) {
+	reg := core.Registry{"danger_tool": extTool("danger_tool", "danger")}
+	a, err := core.New(nil, "m", core.WithAssembler(core.StaticSystem("s")), core.WithTools(reg), core.WithGate(core.AllowAll))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := Of(a)
+	if v != nil {
+		t.Fatalf("Of(agent without the component) = %v, want nil", v)
+	}
+	if got := v.ActivateForTools([]string{"danger_tool"}); got != nil {
+		t.Errorf("off lazy mode activation must be a no-op, got %v", got)
+	}
+	if v.Activate("danger") {
+		t.Error("Activate on a nil Visibility must report no change")
+	}
+	if got := v.Active(); got != nil {
+		t.Errorf("Active on a nil Visibility = %v, want nil", got)
+	}
+	if v.ContinuationEnabled() {
+		t.Error("ContinuationEnabled on a nil Visibility must be false")
+	}
+	if got := v.Note(); got != "" {
+		t.Errorf("Note on a nil Visibility = %q, want empty", got)
+	}
+	visible, filtered := v.Advertised()
+	if filtered || !visible("danger_tool") {
+		t.Error("a nil Visibility must advertise every tool, unfiltered")
+	}
+	if Of(nil) != nil {
+		t.Error("Of(nil) must be nil")
+	}
+}
+
+// ToolsInGroup lists a group's registered tools and is the activate_tools guard.
+func TestToolsInGroup(t *testing.T) {
+	reg := core.Registry{
+		"read":      &flagTool{name: "read"},
+		"mail_send": extTool("mail_send", "mail"),
+		"mail_read": extTool("mail_read", "mail"),
+	}
+	a, _ := newAgent(nil, reg, core.AllowAll)
+	got := ToolsInGroup(a.ToolsSnapshot(), "mail")
+	if len(got) != 2 || got[0] != "mail_read" || got[1] != "mail_send" {
+		t.Errorf("ToolsInGroup(mail) = %v, want [mail_read mail_send]", got)
+	}
+	if len(ToolsInGroup(a.ToolsSnapshot(), "nope")) != 0 {
+		t.Error("an absent group must return no tools")
+	}
+}
+
+// One tool batch that activates two groups refreshes the pin once and both
+// groups are live on the next model step — no continuation, no double repin.
+func TestImmediateActivationMultipleGroupsOneRepin(t *testing.T) {
+	reg := core.Registry{
+		"read":      &flagTool{name: "read"},
+		"activate":  &multiActivatorTool{groups: []string{"mail", "cal"}},
+		"mail_send": extTool("mail_send", "mail"),
+		"cal_add":   extTool("cal_add", "cal"),
+	}
+	client := &reqCaptureClient{toolThen: "activate"}
+	a, _ := newAgent(client, reg, core.AllowAll)
+
+	var causes []string
+	if err := a.Prompt(context.Background(), "go", nil, func(ev core.AgentEvent) {
+		if e, ok := ev.(core.EvContinuation); ok {
+			causes = append(causes, e.Cause)
+		}
+	}); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if len(client.tools) != 2 {
+		t.Fatalf("want 2 requests, got %d", len(client.tools))
+	}
+	adv := specNames(client.tools[1])
+	if !adv["mail_send"] || !adv["cal_add"] {
+		t.Errorf("both activated groups must be live on the next step, advertised = %v", adv)
+	}
+	if len(causes) != 0 {
+		t.Errorf("one batch activating two groups needs no continuation, got %v", causes)
+	}
+}
+
+// Re-activating an already-active (and already-advertised) group dirties
+// nothing: no refresh, no continuation, and behavior is unchanged.
+func TestImmediateActivationIdempotentAlreadyActive(t *testing.T) {
+	reg := core.Registry{
+		"read":      &flagTool{name: "read"},
+		"activate":  &groupActivatorTool{group: "mail"},
+		"mail_send": extTool("mail_send", "mail"),
+	}
+	client := &reqCaptureClient{toolThen: "activate"}
+	a, v := newAgent(client, reg, core.AllowAll)
+	v.Activate("mail") // already active before the Prompt
+
+	var causes []string
+	if err := a.Prompt(context.Background(), "go", nil, func(ev core.AgentEvent) {
+		if e, ok := ev.(core.EvContinuation); ok {
+			causes = append(causes, e.Cause)
+		}
+	}); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	// mail was pinned from the first step (active before the pin), so the tool's
+	// re-activation reveals nothing new.
+	if !specNames(client.tools[0])["mail_send"] {
+		t.Error("a group active before the Prompt is advertised from the first step")
+	}
+	if len(causes) != 0 {
+		t.Errorf("re-activating an active group must not continue, got %v", causes)
+	}
+	for _, m := range a.Messages() {
+		if m.Role == provider.RoleUser && m.Meta[core.MetaSynthetic] == "true" {
+			t.Errorf("no synthetic nudge on an idempotent activation, got %q", textOf(m))
+		}
+	}
+}
+
+// The newly visible tool is actually usable on the next step: the model calls
+// it, it dispatches through the full registry, and its permission gate still
+// runs (visibility is not authority).
+func TestImmediateActivationNewlyVisibleToolExecutes(t *testing.T) {
+	mail := extTool("mail_send", "mail")
+	reg := core.Registry{
+		"read":      &flagTool{name: "read"},
+		"activate":  &groupActivatorTool{group: "mail"},
+		"mail_send": mail,
+	}
+	client := &seqToolClient{seq: []string{"activate", "mail_send"}} // activate, then use it
+	gateFired := false
+	gate := core.GateFunc(func(_ context.Context, call provider.ToolCallBlock, _ core.Tool) (bool, string, json.RawMessage) {
+		if call.Name == "mail_send" {
+			gateFired = true
+		}
+		return true, "", nil
+	})
+	a, _ := newAgent(client, reg, gate)
+
+	if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if len(client.tools) < 2 || !specNames(client.tools[1])["mail_send"] {
+		t.Fatal("mail_send must be advertised on the step after activation")
+	}
+	if !mail.executed {
+		t.Error("the newly activated tool must dispatch through the full registry")
+	}
+	if !gateFired {
+		t.Error("the newly activated tool must still face its permission gate (visibility != authority)")
+	}
+}
+
+// An essential sibling stays visible before activation; the non-essential
+// sibling appears immediately on the post-activation step, and the refreshed
+// note lists only the (now gone) deferred sibling.
+func TestImmediateActivationEssentialSiblingStaysVisible(t *testing.T) {
+	reg := core.Registry{
+		"read":          &flagTool{name: "read"},
+		"activate":      &groupActivatorTool{group: "index"},
+		"index_search":  essentialExtTool("index_search", "index"),
+		"index_rebuild": extTool("index_rebuild", "index"),
+	}
+	client := &reqCaptureClient{toolThen: "activate"}
+	a, _ := newAgent(client, reg, core.AllowAll)
+
+	if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if !specNames(client.tools[0])["index_search"] {
+		t.Error("the essential tool must be advertised before activation")
+	}
+	if specNames(client.tools[0])["index_rebuild"] {
+		t.Error("the non-essential sibling must be hidden before activation")
+	}
+	if !specNames(client.tools[1])["index_rebuild"] {
+		t.Error("the non-essential sibling must appear on the immediate post-activation step")
+	}
+	if strings.Contains(client.ephemeral[1], "index_rebuild") {
+		t.Error("the refreshed note must not list the now-activated sibling")
+	}
+}
+
+// core.Agent.Resume restores a session's activated groups through the
+// Visibility, because it implements core.GroupRestorer. A resume that forgot a
+// group would re-send a different tools array and invalidate the cached prefix.
+func TestResumeRestoresGroupsThroughVisibility(t *testing.T) {
+	reg := core.Registry{
+		"read":   &flagTool{name: "read"},
+		"g_tool": extTool("g_tool", "g"),
+		"h_tool": extTool("h_tool", "h"),
+	}
+	client := &reqCaptureClient{}
+	a, v := newAgent(client, reg, core.AllowAll)
+
+	a.Resume(core.Transcript{ActiveToolGroups: []string{"g"}})
+	if !slices.Contains(v.Active(), "g") {
+		t.Fatalf("Resume must restore group g through the Visibility, Active() = %v", v.Active())
+	}
+	if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	adv := specNames(client.tools[0])
+	if !adv["g_tool"] {
+		t.Errorf("a restored group must be advertised, advertised = %v", adv)
+	}
+	if adv["h_tool"] {
+		t.Errorf("a group the session never activated must stay hidden, advertised = %v", adv)
+	}
+}
+
+// Each real activation writes one tool_group row through the attached store,
+// by core.Agent.AppendRecord. A re-activation writes nothing, and nor does
+// RestoreActiveGroups, whose groups are already on disk.
+func TestActivationWritesOneRowPerRealActivation(t *testing.T) {
+	reg := core.Registry{
+		"read":      &flagTool{name: "read"},
+		"g_tool":    extTool("g_tool", "g"),
+		"mail_send": extTool("mail_send", "mail"),
+		"cal_add":   extTool("cal_add", "cal"),
+	}
+	a, v := newAgent(nil, reg, core.AllowAll)
+	store := &countingStore{MemoryTranscriptStore: core.NewMemoryTranscriptStore()}
+	a.AttachTranscriptStore(store)
+
+	if !v.Activate("g") {
+		t.Fatal("first Activate(g) must report a change")
+	}
+	if v.Activate("g") {
+		t.Fatal("second Activate(g) must report no change")
+	}
+	// g is already active, read is core, nope is absent: only mail is new.
+	if got := v.ActivateForTools([]string{"g_tool", "mail_send", "read", "nope"}); !slices.Equal(got, []string{"mail"}) {
+		t.Fatalf("ActivateForTools = %v, want [mail]", got)
+	}
+	v.RestoreActiveGroups([]string{"g", "mail", "cal"})
+
+	if rows := store.groupRows(); !slices.Equal(rows, []string{"g", "mail"}) {
+		t.Errorf("tool_group rows = %v, want one per real activation [g mail]", rows)
+	}
+	if got := store.Transcript().ActiveToolGroups; !slices.Equal(got, []string{"g", "mail"}) {
+		t.Errorf("stored ActiveToolGroups = %v, want [g mail]", got)
+	}
+	if err := a.PersistenceError(); err != nil {
+		t.Errorf("the writes must not latch a persistence error: %v", err)
+	}
+}

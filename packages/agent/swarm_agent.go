@@ -60,12 +60,13 @@ func runSwarmAgentMode(ctx context.Context, args build.Args, version string) err
 	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &r, version)
 	defer stopExt()
 
-	ag := r.NewAgent()
+	hookEng := build.BuildHookEngine(args, r.Trusted)
+	ag := r.NewAgent(build.BuildToolGate(hookEng, confirmGate, extMgr), build.ExtensionFilters(ctx, extMgr)...)
 	// nil differ: swarm sub-agents run concurrently sharing one workspace,
 	// so per-sub-agent diffing would race and double-report; the parent
 	// run's workspace_changed captures the net effect of the whole swarm.
 	// nil task controller: a focused sub-agent doesn't carry its own task board.
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, build.BuildHookEngine(args, r.Trusted), nil, nil)
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, hookEng, nil, nil)
 	sess, _ := openOrCreateSession(args, r, ag, version)
 	defer sess.Close()
 	// Stream every message, usage row, compaction, and image exclusion to disk

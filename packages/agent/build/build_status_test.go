@@ -5,7 +5,8 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/tools"
-	"terva.sh/terva/packages/buildinfo"
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/provider/buildinfo"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -28,7 +29,7 @@ func TestResolveRegistersAndBindsStatusTool(t *testing.T) {
 		t.Error("status tool should have no agent bound before NewAgent")
 	}
 
-	ag := r.NewAgent()
+	ag := r.NewAgent(core.AllowAll)
 	if st.Agent != ag {
 		t.Error("NewAgent did not bind the live agent into terva_status")
 	}

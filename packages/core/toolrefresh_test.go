@@ -6,9 +6,9 @@ import "testing"
 // ticket_init is the first caller, and its result text promises the model one
 // of two things depending on the answer here, so both halves are load-bearing.
 func TestToolRefreshReportsWhetherAHostIsListening(t *testing.T) {
-	a := NewAgent(nil, "test-model", "", Registry{})
+	a := newTestAgent(nil, "test-model", "", Registry{})
 
-	if a.ToolRefreshAvailable() {
+	if a.toolRefreshAvailable() {
 		t.Error("a fresh agent claims a refresher before any host installed one")
 	}
 	if a.RequestToolRefresh("ticket-init") {
@@ -17,7 +17,7 @@ func TestToolRefreshReportsWhetherAHostIsListening(t *testing.T) {
 
 	var reasons []string
 	a.SetToolRefresher(func(reason string) { reasons = append(reasons, reason) })
-	if !a.ToolRefreshAvailable() {
+	if !a.toolRefreshAvailable() {
 		t.Error("the agent does not see the refresher it was just given")
 	}
 	if !a.RequestToolRefresh("ticket-init") {
@@ -40,10 +40,10 @@ func TestToolRefreshReportsWhetherAHostIsListening(t *testing.T) {
 // that under the agent lock deadlocks. This test would hang rather than fail,
 // which is the honest shape of the bug it guards.
 func TestToolRefreshCallbackMayReEnterTheAgent(t *testing.T) {
-	a := NewAgent(nil, "test-model", "", Registry{})
+	a := newTestAgent(nil, "test-model", "", Registry{})
 	a.SetToolRefresher(func(string) {
 		a.SetTools(Registry{})
-		a.ActivateGroup("ticket")
+		a.setToolVisibility(nil)
 	})
 	if !a.RequestToolRefresh("ticket-init") {
 		t.Fatal("the request reported no host though one is installed")

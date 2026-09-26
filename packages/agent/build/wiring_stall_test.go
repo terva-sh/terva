@@ -16,15 +16,21 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/stall"
+	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
 func TestWiredPersistenceRecordsStall(t *testing.T) {
 	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
-	sess, err := core.NewSessionAtPath(path, "/ws", "openai-compatible", "gemma-4-26b", "0.0.0")
+	sess, err := session.NewSessionAtPath(path, "/ws", "openai-compatible", "gemma-4-26b", "0.0.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,9 +38,7 @@ func TestWiredPersistenceRecordsStall(t *testing.T) {
 
 	// Detection on, but NO escalation — a stall row must land on its own, for a
 	// plain user who never configured a swap target.
-	ag := core.NewAgent(&spinClient{stopAfter: 5}, "gemma-4-26b", "system", core.Registry{"spin": spinTool{}})
-	ag.MaxSteps = 20
-	ag.SetStallDetection(true)
+	ag, _ := coretest.NewAgentWithStall(&spinClient{stopAfter: 5}, "gemma-4-26b", "system", core.Registry{"spin": spinTool{}}, core.WithMaxSteps(20))
 
 	WireHeadlessSessionPersist(ag, sess)
 
@@ -101,4 +105,113 @@ func readStallRows(t *testing.T, path string) []persistedStall {
 		}
 	}
 	return out
+}
+
+// countingGate stands in for the host's ladder: it allows every call and
+// counts the calls it was asked about.
+type countingGate struct{ asked atomic.Int32 }
+
+func (g *countingGate) CheckTool(context.Context, provider.ToolCallBlock, core.Tool) (bool, string, json.RawMessage) {
+	g.asked.Add(1)
+	return true, "", nil
+}
+
+// capturingClient records the requests it forwards to next.
+type capturingClient struct {
+	next provider.Client
+	mu   sync.Mutex
+	reqs []provider.Request
+}
+
+func (c *capturingClient) Name() string { return c.next.Name() }
+
+func (c *capturingClient) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
+	c.mu.Lock()
+	c.reqs = append(c.reqs, req)
+	c.mu.Unlock()
+	return c.next.Stream(ctx, req)
+}
+
+// terva's NewAgent connects the stuck-loop detector in all four places, for
+// every host at once: the step gate hears the batches, the assembler carries
+// the note and spends it on delivery, and the refusal wraps the host's ladder
+// outermost. A wedged model shows each one: both notes ride exactly one
+// request each, the refused calls never reach the host's gate, and the turn
+// ends.
+func TestNewAgentWiresTheStuckLoopDetector(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	r, err := Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	r.ToolRegistry["spin"] = spinTool{}
+	ladder := &countingGate{}
+	ag := r.NewAgent(ladder)
+	client := &capturingClient{next: &spinClient{stopAfter: 40}}
+	ag.SetClientAndModel(client, "gemma-4-26b")
+
+	var got []core.StallRecord
+	if err := ag.Prompt(context.Background(), "go", nil, func(ev core.AgentEvent) {
+		if s, ok := ev.(core.EvStall); ok {
+			got = append(got, s.StallRecord)
+		}
+	}); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	rungs := map[int]int{}
+	for _, s := range got {
+		rungs[s.Rung]++
+	}
+	// Seven identical results earn the block, three refusals end the turn
+	// (stall.stallRefuseAt and stallRefuseMax, unexported there).
+	if rungs[1] != 1 || rungs[2] != 1 || rungs[3] != 3 || rungs[4] != 1 {
+		t.Errorf("rungs = %v, want one nudge, one hold-off, three refusals and the end of the turn", rungs)
+	}
+	if n := ladder.asked.Load(); n != 7 {
+		t.Errorf("the host's gate was asked %d times, want 7: a refused call reached it", n)
+	}
+	notes := map[string]int{}
+	for _, req := range client.reqs {
+		if strings.Contains(req.EphemeralContext, "[loop check]") {
+			notes[req.EphemeralContext]++
+		}
+	}
+	if len(notes) != 2 {
+		t.Errorf("%d distinct notes reached the model, want the nudge and the hold-off", len(notes))
+	}
+	for text, n := range notes {
+		if n != 1 {
+			t.Errorf("a note rode %d requests, want 1: delivery did not spend it\n%s", n, text)
+		}
+	}
+}
+
+// The host's escalation channel and its auto policy reach the detector, so a
+// loop past the nudge swaps without asking.
+func TestNewAgentBindsTheEscalator(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	r, err := Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	r.ToolRegistry["spin"] = spinTool{}
+	r.SetEscalator(escalatorToTarget{target: stall.EscalationTarget{Provider: "openai-codex", Model: "gpt-5.6-sol"}})
+	r.EscalateAuto = true
+	ag := r.NewAgent(core.AllowAll)
+	ag.SetClientAndModel(&spinClient{stopAfter: 5}, "gemma-4-26b")
+
+	var got []core.EscalationRecord
+	if err := ag.Prompt(context.Background(), "go", nil, func(ev core.AgentEvent) {
+		if e, ok := ev.(core.EvEscalation); ok {
+			got = append(got, e.EscalationRecord)
+		}
+	}); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if len(got) != 1 || got[0].Disposition != core.EscalationSwitched || !got[0].Auto {
+		t.Errorf("want one automatic switch, got %+v", got)
+	}
 }

@@ -54,8 +54,8 @@ func (c *cutShortClient) Stream(ctx context.Context, req provider.Request) (<-ch
 // the second.
 func TestACutShortReplyIsMarkedIncompleteOnDisk(t *testing.T) {
 	client := &cutShortClient{text: "The answer begins", fail: true}
-	a := NewAgent(client, "fake-model", "system", Registry{})
-	a.RetryBaseDelay = time.Millisecond
+	a := newTestAgent(client, "fake-model", "system", Registry{})
+	a.retryBaseDelay = time.Millisecond
 
 	var persisted []provider.Message
 	a.AddMessageObserver(func(m provider.Message) {
@@ -95,7 +95,7 @@ func TestACutShortReplyIsMarkedIncompleteOnDisk(t *testing.T) {
 // would strand every healthy session behind a resume prompt.
 func TestACleanReplyIsNotMarkedIncomplete(t *testing.T) {
 	client := &cutShortClient{text: "A whole answer."}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 
 	var persisted []provider.Message
 	a.AddMessageObserver(func(m provider.Message) {
@@ -127,8 +127,8 @@ func TestACleanReplyIsNotMarkedIncomplete(t *testing.T) {
 // inside oneTurn, which cannot tell a retryable failure from a final one.
 func TestARetriedTurnThatRecoversIsNotMarkedIncomplete(t *testing.T) {
 	client := &partialRetryFakeClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
-	a.RetryBaseDelay = time.Millisecond
+	a := newTestAgent(client, "fake-model", "system", Registry{})
+	a.retryBaseDelay = time.Millisecond
 
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 		t.Fatalf("Prompt: %v", err)

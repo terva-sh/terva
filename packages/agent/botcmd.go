@@ -21,10 +21,12 @@ import (
 	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/procenv"
+	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // detachChild configures cmd to run in its own process group so tty
@@ -555,8 +557,9 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	var loop *chat.Loop
 	resolved.SetAsker(chat.NewChatAsker(ctx, func() *chat.Loop { return loop }))
 
-	agent := resolved.NewAgent()
-	wireBotAgentExtHooks(ctx, agent, extMgr, gate, args, &resolved, resolved.Tasks)
+	agent := newBotAgent(ctx, func(g core.Gate, opts ...core.Option) (*core.Agent, *tasktool.Controller) {
+		return resolved.NewAgent(g, opts...), resolved.Tasks
+	}, extMgr, gate, args, &resolved)
 
 	// Session: optional, same model as the tui; --no-session disables.
 	// The paired DM's agent persists per-message (the same durable hooks
@@ -565,10 +568,10 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 	// Per-chat group agents stay live-only: their transcripts are
 	// bounded working state (LRU-dropped), not conversations the owner
 	// asked to keep.
-	var sess *core.Session
+	var sess *session.Session
 	if !args.NoSess {
 		// The SHARED opener, not a bot-local fork. The fork it replaces called
-		// core.OpenSession + SetMessages and stopped, so bot mode was the one
+		// session.OpenSession + SetMessages and stopped, so bot mode was the one
 		// headless host that skipped applyResumedModel (the bot answered on the
 		// config default while the session file still named another model) and
 		// skipped SeedCost/SeedLastTurnUsage (the AppendUsage observer wired
@@ -620,9 +623,9 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 		// the owner's board; the fresh controller isolates it, and the
 		// board dies with the agent (live-only, like the transcript).
 		NewChatAgent: func() *core.Agent {
-			a, groupTasks := resolved.NewAgentWithFreshTasks()
-			wireBotAgentExtHooks(ctx, a, extMgr, gate, args, &resolved, groupTasks)
-			return a
+			return newBotAgent(ctx, func(g core.Gate, opts ...core.Option) (*core.Agent, *tasktool.Controller) {
+				return resolved.NewAgentWithFreshTasks(g, opts...)
+			}, extMgr, gate, args, &resolved)
 		},
 		IdleAfter: idleAfter,
 		IdleNudge: idlePrompt,

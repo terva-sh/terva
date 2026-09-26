@@ -52,7 +52,7 @@ func TestWebExtHooksRefreshTriggersRebuild(t *testing.T) {
 			// routing surfaces the notice on the meaningful mid-session path.
 			s.agent.SeedLastTurnUsage(provider.Usage{InputTokens: 5000})
 			// Force the next rebuild to differ so it announces a prompt rebuild.
-			s.agent.SetSystem("stale placeholder prompt")
+			build.AssemblerOf(s.agent).SetStable([]build.PromptSegment{{Source: "system", Text: "stale placeholder prompt"}})
 			sub := s.hub.add(nil, true)
 			tc.call()
 			ev, _ := drainUntil(t, sub, ctrlproto.EventNotice)
@@ -101,7 +101,7 @@ func TestPromptRebuildStartupNoiseSuppressed(t *testing.T) {
 
 	// No SeedLastTurnUsage: this is the pre-first-turn state. Force a real diff
 	// so the rebuild isn't skipped as a no-op, then drive the extension hook.
-	s.agent.SetSystem("stale placeholder prompt")
+	build.AssemblerOf(s.agent).SetStable([]build.PromptSegment{{Source: "system", Text: "stale placeholder prompt"}})
 	sub := s.hub.add(nil, true)
 	webExtHooks{s: s}.RefreshTools() // reason "tool-withdrawal", tokens == 0
 

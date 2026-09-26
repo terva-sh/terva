@@ -1,9 +1,11 @@
 package build
 
 import (
+	"terva.sh/terva/packages/core/lazytools"
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -91,12 +93,12 @@ func TestProviderOverrideReachesTheBuiltAgent(t *testing.T) {
 	if r.ActivationContinuation != ActivationContinuationOff {
 		t.Fatalf("Resolve must carry the provider keyword, got %q", r.ActivationContinuation)
 	}
-	if r.NewAgent().ActivationContinuationEnabled() {
+	if lazytools.Of(r.NewAgent(core.AllowAll)).ContinuationEnabled() {
 		t.Error("a provider override of off must switch the feature off, against a global that is on")
 	}
 
 	r = seedActivationConfig(t, false, "openai", ActivationContinuationOn)
-	if !r.NewAgent().ActivationContinuationEnabled() {
+	if !lazytools.Of(r.NewAgent(core.AllowAll)).ContinuationEnabled() {
 		t.Error("a provider override of on must switch the feature on, against a global that is off")
 	}
 }
@@ -112,7 +114,7 @@ func TestOverrideOnAnotherProviderDoesNotMoveThisOne(t *testing.T) {
 	if r.ActivationContinuation != "" {
 		t.Fatalf("a route on openai must not pick up anthropic's keyword, got %q", r.ActivationContinuation)
 	}
-	if !r.NewAgent().ActivationContinuationEnabled() {
+	if !lazytools.Of(r.NewAgent(core.AllowAll)).ContinuationEnabled() {
 		t.Error("an override on another provider must leave this session on the global")
 	}
 }
@@ -140,7 +142,7 @@ func TestNoOverrideIsIdenticalToTheGlobal(t *testing.T) {
 		if want != globalOn {
 			t.Fatalf("seeded global %v did not survive Resolve, got %v", globalOn, want)
 		}
-		if got := r.NewAgent().ActivationContinuationEnabled(); got != want {
+		if got := lazytools.Of(r.NewAgent(core.AllowAll)).ContinuationEnabled(); got != want {
 			t.Errorf("global %v with no override: agent got %v, want %v — an unconfigured provider must be untouched", globalOn, got, want)
 		}
 	}
@@ -160,7 +162,7 @@ func TestEffectiveMatchesTheFunnel(t *testing.T) {
 			if eff == nil {
 				t.Fatal("a resolved route always has an answer, so this must never be nil")
 			}
-			if got := r.NewAgent().ActivationContinuationEnabled(); got != *eff {
+			if got := lazytools.Of(r.NewAgent(core.AllowAll)).ContinuationEnabled(); got != *eff {
 				t.Errorf("keyword %q global %v: funnel says %v, swap would say %v", keyword, globalOn, got, *eff)
 			}
 		}
@@ -173,8 +175,7 @@ func TestEffectiveMatchesTheFunnel(t *testing.T) {
 // override must go back to the global.
 func TestModelSwapReResolvesActivationContinuation(t *testing.T) {
 	newAgent := func() *core.Agent {
-		a := core.NewAgent(nil, "m", "sys", core.Registry{})
-		a.EnableLazyTools()
+		a := coretest.NewAgent(nil, "m", "sys", core.Registry{}, LazyTools(nil)...)
 		return a
 	}
 
@@ -182,15 +183,15 @@ func TestModelSwapReResolvesActivationContinuation(t *testing.T) {
 	on := true
 
 	a := newAgent()
-	if !a.ActivationContinuationEnabled() {
+	if !lazytools.Of(a).ContinuationEnabled() {
 		t.Fatal("the fixture must start on, or the assertions below prove nothing")
 	}
 	ApplyModelSwap(ModelSwap{Agent: a, Provider: "openai-codex", Model: "m2", ActivationContinuation: &off})
-	if a.ActivationContinuationEnabled() {
+	if lazytools.Of(a).ContinuationEnabled() {
 		t.Error("a swap onto a provider that overrides off must switch the agent off")
 	}
 	ApplyModelSwap(ModelSwap{Agent: a, Provider: "anthropic", Model: "m3", ActivationContinuation: &on})
-	if !a.ActivationContinuationEnabled() {
+	if !lazytools.Of(a).ContinuationEnabled() {
 		t.Error("a swap onto a provider with no override must restore the global rather than keep the last provider's answer")
 	}
 }
@@ -199,12 +200,11 @@ func TestModelSwapReResolvesActivationContinuation(t *testing.T) {
 // guarded on the provider being unchanged, so re-resolving would be busywork
 // and must not be required of them.
 func TestModelSwapWithNoOpinionLeavesTheSettingAlone(t *testing.T) {
-	a := core.NewAgent(nil, "m", "sys", core.Registry{})
-	a.EnableLazyTools()
-	a.SetActivationContinuation(false)
+	a := coretest.NewAgent(nil, "m", "sys", core.Registry{}, LazyTools(nil)...)
+	lazytools.Of(a).SetContinuation(false)
 
 	ApplyModelSwap(ModelSwap{Agent: a, Provider: "openai", Model: "m2"})
-	if a.ActivationContinuationEnabled() {
+	if lazytools.Of(a).ContinuationEnabled() {
 		t.Error("a swap with no ActivationContinuation must not change the setting")
 	}
 }

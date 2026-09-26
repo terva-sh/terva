@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -15,7 +16,7 @@ import (
 //
 // info().ContextWindow rides the wire as the denominator for the web session
 // card and app.tsx's ctxTok/ctxWin. It used to be the model's hard ceiling while
-// Agent.ContextUsage — which ShouldAutoCompact reads — used the effective
+// Agent.ContextUsage — which the compaction policy is given — used the effective
 // window. On a model with a DesiredContextWindow the two differ by 3.9x, so the
 // gauge read 21% at the exact moment the conversation was compacted.
 //
@@ -44,7 +45,7 @@ func TestASessionReportsTheWindowAutoCompactionFiresOn(t *testing.T) {
 		sess:     sess,
 		provider: "openai-compatible",
 		model:    id,
-		agent:    core.NewAgent(nil, id, "", core.Registry{}),
+		agent:    coretest.NewAgent(nil, id, "", core.Registry{}),
 	}
 
 	info := s.info()

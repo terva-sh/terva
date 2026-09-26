@@ -2,8 +2,10 @@ package workspace
 
 import (
 	"context"
-	"terva.sh/terva/packages/core"
 	"testing"
+
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/transcripttest"
 
 	"terva.sh/terva/packages/agent/card"
 	"terva.sh/terva/packages/provider"
@@ -23,11 +25,10 @@ func TestRoutedTurnBooksBothSideChannelCalls(t *testing.T) {
 	s := worldTestSession(t, cl, map[string]string{"Elira": "elira-ref"})
 	sub := s.hub.add(nil, true)
 
-	// Usage rows are written by the usage observers, so count what they see.
-	var booked []provider.Usage
-	s.agent.AddUsageObserver(func(u, _ provider.Usage) {
-		booked = append(booked, u)
-	})
+	// Usage rows are what the transcript store receives, so count those. Both
+	// calls are the host's, so they arrive as side-channel records.
+	rec := &transcripttest.Recorder{}
+	s.agent.AttachTranscriptStore(rec)
 
 	if err := s.prompt("I open the door.", nil, core.UserMessageExtras{}); err != nil {
 		t.Fatalf("prompt: %v", err)
@@ -38,6 +39,7 @@ func TestRoutedTurnBooksBothSideChannelCalls(t *testing.T) {
 	if len(cl.requests()) != 2 {
 		t.Fatalf("precondition: expected router + voice = 2 model calls, got %d", len(cl.requests()))
 	}
+	booked := sideChannelUsage(rec)
 	if len(booked) != 2 {
 		t.Fatalf("2 model calls were made but %d were booked — a side-channel call is spending unrecorded", len(booked))
 	}
@@ -68,8 +70,8 @@ func TestDoctorRunBooksUsage(t *testing.T) {
 	reply := `{"note":"fine","proposals":[]}`
 	cl := &scriptedClient{replies: []string{reply, reply}}
 	s := newTurnTestSession(t, cl)
-	var booked []provider.Usage
-	s.agent.AddUsageObserver(func(u, _ provider.Usage) { booked = append(booked, u) })
+	rec := &transcripttest.Recorder{}
+	s.agent.AttachTranscriptStore(rec)
 
 	fields := doctorFields(card.Card{Name: "Ivy"})
 	res, err := doctorRun(context.Background(), cl, "fake-model", "system", "user", fields, s)
@@ -79,7 +81,7 @@ func TestDoctorRunBooksUsage(t *testing.T) {
 	if res.Note != "fine" {
 		t.Errorf("note = %q", res.Note)
 	}
-	if len(booked) != 1 || booked[0] != scriptedCallUsage {
+	if booked := sideChannelUsage(rec); len(booked) != 1 || booked[0] != scriptedCallUsage {
 		t.Fatalf("doctor call booked %v, want exactly one %+v — the doctor is spending unrecorded", booked, scriptedCallUsage)
 	}
 
@@ -92,13 +94,13 @@ func TestDoctorRunBooksUsage(t *testing.T) {
 func TestGenerateTitleBooksUsage(t *testing.T) {
 	cl := &scriptedClient{replies: []string{"A Fine Title", "Another"}}
 	s := newTurnTestSession(t, cl)
-	var booked []provider.Usage
-	s.agent.AddUsageObserver(func(u, _ provider.Usage) { booked = append(booked, u) })
+	rec := &transcripttest.Recorder{}
+	s.agent.AttachTranscriptStore(rec)
 
 	if got := generateTitle(context.Background(), cl, "fake-model", "seed", s); got != "A Fine Title" {
 		t.Errorf("title = %q", got)
 	}
-	if len(booked) != 1 || booked[0] != scriptedCallUsage {
+	if booked := sideChannelUsage(rec); len(booked) != 1 || booked[0] != scriptedCallUsage {
 		t.Fatalf("title call booked %v, want exactly one %+v — titling is spending unrecorded", booked, scriptedCallUsage)
 	}
 
@@ -107,4 +109,15 @@ func TestGenerateTitleBooksUsage(t *testing.T) {
 	if got := generateTitle(context.Background(), cl, "fake-model", "seed", nil); got != "Another" {
 		t.Errorf("nil-session title = %q", got)
 	}
+}
+
+// sideChannelUsage is the per-request usage of every side-channel record rec
+// received: the host's one-off completions, booked against the session under
+// their own mark rather than as turns of it.
+func sideChannelUsage(rec *transcripttest.Recorder) []provider.Usage {
+	var out []provider.Usage
+	for _, r := range rec.Usage(core.UsageSideChannel) {
+		out = append(out, r.Usage)
+	}
+	return out
 }

@@ -2,10 +2,13 @@ package workspace
 
 import (
 	"context"
+	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/core/lazytools"
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -28,9 +31,8 @@ func TestSettingsEngineFeatureTogglesLiveAgents(t *testing.T) {
 	w := &Workspace{ctx: context.Background(), diag: func(string) {}, sessions: map[string]*wsSession{}}
 	s := &wsSession{id: "s1", ws: w, hub: newWSHub()}
 	w.sessions[s.id] = s
-	s.agent = core.NewAgent(&gatedTurnClient{}, "m", "sys", core.Registry{})
-	s.agent.EnableLazyTools()
-	if !s.agent.ActivationContinuationEnabled() {
+	s.agent = coretest.NewAgent(&gatedTurnClient{}, "m", "sys", core.Registry{}, build.LazyTools(nil)...)
+	if !lazytools.Of(s.agent).ContinuationEnabled() {
 		t.Fatal("activation continuation should default on under lazy tools")
 	}
 
@@ -60,7 +62,7 @@ func TestSettingsEngineFeatureTogglesLiveAgents(t *testing.T) {
 	if err := s.settingsAction("set", map[string]string{"key": "activation_continuation", "value": "false"}); err != nil {
 		t.Fatalf("set activation_continuation false: %v", err)
 	}
-	if s.agent.ActivationContinuationEnabled() {
+	if lazytools.Of(s.agent).ContinuationEnabled() {
 		t.Error("the live agent must flip immediately")
 	}
 	cfg, _ := config.LoadConfig()
@@ -75,7 +77,7 @@ func TestSettingsEngineFeatureTogglesLiveAgents(t *testing.T) {
 	if err := s.settingsAction("set", map[string]string{"key": "activation_continuation", "value": "true"}); err != nil {
 		t.Fatalf("set activation_continuation true: %v", err)
 	}
-	if !s.agent.ActivationContinuationEnabled() {
+	if !lazytools.Of(s.agent).ContinuationEnabled() {
 		t.Error("re-enabling must flip the live agent back on")
 	}
 
@@ -94,7 +96,7 @@ func TestSettingsRaatiConveneAndSpareHost(t *testing.T) {
 	w := &Workspace{ctx: context.Background(), diag: func(string) {}, sessions: map[string]*wsSession{}}
 	s := &wsSession{id: "s1", ws: w, hub: newWSHub()}
 	w.sessions[s.id] = s
-	s.agent = core.NewAgent(&gatedTurnClient{}, "m", "sys", core.Registry{})
+	s.agent = coretest.NewAgent(&gatedTurnClient{}, "m", "sys", core.Registry{})
 
 	item, ok := settingsItem(s.settingsView(), "raati_convene")
 	if !ok {

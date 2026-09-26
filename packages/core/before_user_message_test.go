@@ -49,8 +49,8 @@ func userTexts(msgs []provider.Message) []string {
 // the transcript, fires EvUserMessageRejected (not EvUserMessage), ends
 // the run with EvDone, and never reaches the model.
 func TestBeforeUserMessageBlocksInitialPrompt(t *testing.T) {
-	a := NewAgent(endTurnClient{}, "test", "", Registry{})
-	a.BeforeUserMessage = func(string) (bool, string, string) {
+	a := newTestAgent(endTurnClient{}, "test", "", Registry{})
+	a.beforeUserMessage = func(string) (bool, string, string) {
 		return false, "denied", ""
 	}
 
@@ -100,8 +100,8 @@ func TestBeforeUserMessageBlocksInitialPrompt(t *testing.T) {
 // A non-empty replacement rewrites the prompt the model sees — and the
 // rewrite is what lands in the transcript and rides the EvUserMessage.
 func TestBeforeUserMessageRewritesInitialPrompt(t *testing.T) {
-	a := NewAgent(endTurnClient{}, "test", "", Registry{})
-	a.BeforeUserMessage = func(string) (bool, string, string) {
+	a := newTestAgent(endTurnClient{}, "test", "", Registry{})
+	a.beforeUserMessage = func(string) (bool, string, string) {
 		return true, "", "REWRITTEN"
 	}
 
@@ -127,8 +127,8 @@ func TestBeforeUserMessageRewritesInitialPrompt(t *testing.T) {
 // a guard can't be bypassed by typing mid-turn. The bad queued message
 // is dropped from the transcript while the good initial prompt remains.
 func TestBeforeUserMessageGatesQueuedDrain(t *testing.T) {
-	a := NewAgent(endTurnClient{}, "test", "", Registry{})
-	a.BeforeUserMessage = func(text string) (bool, string, string) {
+	a := newTestAgent(endTurnClient{}, "test", "", Registry{})
+	a.beforeUserMessage = func(text string) (bool, string, string) {
 		if text == "queued-bad" {
 			return false, "no", ""
 		}
@@ -171,10 +171,10 @@ func TestBeforeUserMessageGatesQueuedDrain(t *testing.T) {
 // The synthetic at-close gate nudge (a continuation gate's re-prompt) is the
 // host's words, not the user's — it must never reach the BeforeUserMessage guard.
 func TestBeforeUserMessageSkipsSyntheticGateNudge(t *testing.T) {
-	a := NewAgent(endTurnClient{}, "test", "", Registry{})
+	a := newTestAgent(endTurnClient{}, "test", "", Registry{})
 
 	var seen []string
-	a.BeforeUserMessage = func(text string) (bool, string, string) {
+	a.beforeUserMessage = func(text string) (bool, string, string) {
 		seen = append(seen, text)
 		return true, "", ""
 	}

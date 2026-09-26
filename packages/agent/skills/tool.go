@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/lazytools"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
@@ -116,7 +117,7 @@ func (t *Tool) Execute(ctx context.Context, args json.RawMessage, progress func(
 	// has nothing to reveal. No-op off lazy.
 	if len(s.AllowedTools) > 0 {
 		if ag := core.AgentFromContext(ctx); ag != nil {
-			if activated := ag.ActivateGroupsForTools(s.AllowedTools); len(activated) > 0 {
+			if activated := lazytools.Of(ag).ActivateForTools(s.AllowedTools); len(activated) > 0 {
 				body += fmt.Sprintf("\n\n(Activated tool group(s) for this skill: %s — available on your next step; each still requires its normal permission.)", strings.Join(activated, ", "))
 			}
 		}

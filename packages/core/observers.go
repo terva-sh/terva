@@ -26,6 +26,11 @@ import "terva.sh/terva/packages/provider"
 // Ordering is registration order, and it is load-bearing where documented — the
 // workspace registers its client broadcast first so the UI streams before the
 // slower extension fan-out runs.
+//
+// The observers for the records a transcript store keeps (usage, compaction,
+// tool groups, image exclusions, and the diagnostics) are unexported. A host
+// receives those writes through AttachTranscriptStore, which registers them
+// together, so there is one way in rather than two (TKT-01M35WK12).
 
 // AddEventObserver registers fn to receive every AgentEvent the loop emits, in
 // addition to the per-Prompt sink. Observers run before the sink. nil is a
@@ -55,12 +60,12 @@ func (a *Agent) AddMessageObserver(fn func(provider.Message)) {
 	a.obsMu.Unlock()
 }
 
-// AddUsageObserver registers fn to fire after every request's usage row
+// addUsageObserver registers fn to fire after every request's usage row
 // arrives, carrying that request's own usage plus the session's cumulative
-// usage. Hosts persist these so a crash recovers the right cost figure, and so
+// usage. A store persists these so a crash recovers the right cost figure, and so
 // a resume can seed the context gauge from the per-request value (the
 // cumulative one overstates it wildly on long sessions). nil is a no-op.
-func (a *Agent) AddUsageObserver(fn func(u, cumulative provider.Usage)) {
+func (a *Agent) addUsageObserver(fn func(u, cumulative provider.Usage)) {
 	if fn == nil {
 		return
 	}
@@ -69,19 +74,19 @@ func (a *Agent) AddUsageObserver(fn func(u, cumulative provider.Usage)) {
 	a.obsMu.Unlock()
 }
 
-// AddDelegatedUsageObserver registers fn to fire when a sub-agent's spend is
+// addDelegatedUsageObserver registers fn to fire when a sub-agent's spend is
 // booked against this session (RecordDelegatedUsage), carrying the child's
 // increment plus this session's cumulative total. Hosts persist it as a usage
 // row MARKED delegated.
 //
-// Separate from AddUsageObserver because the two answer different questions and
+// Separate from addUsageObserver because the two answer different questions and
 // only one of them is "what did this session's last request cost". Delegated
 // spend was already kept out of the last-turn snapshot and out of RecentUsage()
 // — whose comment warns that folding it in "would put a transcript-sized cold
 // read in the middle of the strip labelled as a cache miss" — but it reached
 // the persistence observer anyway, so the row on disk had exactly that defect.
 // nil is a no-op.
-func (a *Agent) AddDelegatedUsageObserver(fn func(u, cumulative provider.Usage)) {
+func (a *Agent) addDelegatedUsageObserver(fn func(u, cumulative provider.Usage)) {
 	if fn == nil {
 		return
 	}
@@ -90,12 +95,12 @@ func (a *Agent) AddDelegatedUsageObserver(fn func(u, cumulative provider.Usage))
 	a.obsMu.Unlock()
 }
 
-// AddSideChannelUsageObserver registers fn to fire when a host's one-off
+// addSideChannelUsageObserver registers fn to fire when a host's one-off
 // completion is booked against this session (RecordSideChannelUsage), carrying
 // the source that spent it, the request's own usage, and this session's
 // cumulative total. Hosts persist it as a usage row MARKED with the source.
 //
-// Separate from AddUsageObserver for the reason the delegated one is: only the
+// Separate from addUsageObserver for the reason the delegated one is: only the
 // plain observer answers "what did this session's last request cost". A
 // side-channel call was already kept out of the last-turn snapshot in memory,
 // but it reached the persistence observer unmarked, so on disk an idle
@@ -106,7 +111,7 @@ func (a *Agent) AddDelegatedUsageObserver(fn func(u, cumulative provider.Usage))
 // the plain path only while nobody has registered here. A host that wants
 // these calls for telemetry and persists on the plain observer must persist
 // them here too, or they stop reaching disk. nil is a no-op.
-func (a *Agent) AddSideChannelUsageObserver(fn func(source string, u, cumulative provider.Usage)) {
+func (a *Agent) addSideChannelUsageObserver(fn func(source string, u, cumulative provider.Usage)) {
 	if fn == nil {
 		return
 	}
@@ -115,13 +120,13 @@ func (a *Agent) AddSideChannelUsageObserver(fn func(source string, u, cumulative
 	a.obsMu.Unlock()
 }
 
-// AddTranscriptCompactedObserver registers fn to fire after Compact replaces
+// addTranscriptCompactedObserver registers fn to fire after Compact replaces
 // the in-memory transcript with the synthetic summary plus kept tail. Message
 // observers do not fire for that wholesale replacement, so hosts append an
 // explicit compaction checkpoint here. res carries what the compaction cost,
 // so the checkpoint can record it (see CompactResult — that spend is cost, not
 // context, and must never reach a usage row). nil is a no-op.
-func (a *Agent) AddTranscriptCompactedObserver(fn func(messages []provider.Message, res CompactResult)) {
+func (a *Agent) addTranscriptCompactedObserver(fn func(messages []provider.Message, res CompactResult)) {
 	if fn == nil {
 		return
 	}
@@ -130,12 +135,12 @@ func (a *Agent) AddTranscriptCompactedObserver(fn func(messages []provider.Messa
 	a.obsMu.Unlock()
 }
 
-// AddImageExcludedObserver registers fn to fire when image-rejection recovery
+// addImageExcludedObserver registers fn to fire when image-rejection recovery
 // drops an image the provider 400'd on, carrying its sha256. Hosts persist an
 // exclude_image directive so the fix survives: a resumed session re-applies it
 // instead of re-sending the bad image and re-failing. The recovery is paid
 // once. nil is a no-op.
-func (a *Agent) AddImageExcludedObserver(fn func(sha256Hex string)) {
+func (a *Agent) addImageExcludedObserver(fn func(sha256Hex string)) {
 	if fn == nil {
 		return
 	}
@@ -144,58 +149,7 @@ func (a *Agent) AddImageExcludedObserver(fn func(sha256Hex string)) {
 	a.obsMu.Unlock()
 }
 
-// AddToolGroupActivatedObserver registers fn to fire when a capability group is
-// newly activated (activate_tools, or a skill's allowed-tools surfacing). Hosts
-// persist a "tool_group" session row so the activation survives a resume.
-//
-// Without it, activation is in-memory only: NewAgent rebuilds activeGroups from
-// config, so every --resume silently drops what the model activated, changing
-// the tools array the provider has cached the whole transcript behind. nil is a
-// no-op.
-func (a *Agent) AddToolGroupActivatedObserver(fn func(group string)) {
-	if fn == nil {
-		return
-	}
-	a.obsMu.Lock()
-	a.toolGroupObs = append(a.toolGroupObs, fn)
-	a.obsMu.Unlock()
-}
-
-// AddEscalationObserver registers fn to fire when rung 3 of the stuck-loop hatch
-// resolves an escalation decision — a swap to a stronger model, or a decline, a
-// stop, or a failed swap (see EscalationRecord.Disposition). Hosts persist an
-// "escalation" session row here: the swap itself writes only a "meta" row (via
-// UpdateModel), byte-identical to a user /model switch, so this is the provenance
-// that tells a harness escalation apart from a human one in the log. Fires only
-// once a target is configured (unconfigured users get no rows) and for every
-// disposition, not just successful swaps. nil is a no-op.
-func (a *Agent) AddEscalationObserver(fn func(EscalationRecord)) {
-	if fn == nil {
-		return
-	}
-	a.obsMu.Lock()
-	a.escalationObs = append(a.escalationObs, fn)
-	a.obsMu.Unlock()
-}
-
-// AddStallObserver registers fn to fire when the stuck-loop detector nudges —
-// rung 1 of the hatch: a model repeated the same call, or hit the same failure,
-// past the threshold (see StallRecord). Fires once per distinct loop per turn.
-// Hosts persist a "stall" session row here so the detector's action is visible
-// after the fact — the thing that otherwise happens only on the ephemeral tail,
-// leaving no trace of whether it fired. Unlike escalation this needs no
-// configured target: any session with the (default-on) detector records nudges.
-// nil is a no-op.
-func (a *Agent) AddStallObserver(fn func(StallRecord)) {
-	if fn == nil {
-		return
-	}
-	a.obsMu.Lock()
-	a.stallObs = append(a.stallObs, fn)
-	a.obsMu.Unlock()
-}
-
-// AddRetryObserver registers fn to fire each time a transient provider failure
+// addRetryObserver registers fn to fire each time a transient provider failure
 // is retried, from EITHER ladder — the turn loop or compaction (see
 // RetryRecord.Phase). Hosts persist a "retry" session row here.
 //
@@ -205,7 +159,7 @@ func (a *Agent) AddStallObserver(fn func(StallRecord)) {
 // Threading an event sink into Compact would change public API across every
 // host and the SDK to reach the one path that lacks it; an observer is
 // entry-point-agnostic and reaches all of them. nil is a no-op.
-func (a *Agent) AddRetryObserver(fn func(RetryRecord)) {
+func (a *Agent) addRetryObserver(fn func(RetryRecord)) {
 	if fn == nil {
 		return
 	}
@@ -214,7 +168,7 @@ func (a *Agent) AddRetryObserver(fn func(RetryRecord)) {
 	a.obsMu.Unlock()
 }
 
-// AddTailObserver registers fn to fire when the ephemeral tail's COMPOSITION
+// addTailObserver registers fn to fire when the ephemeral tail's COMPOSITION
 // changes — the block of text appended to every request after the prompt-cache
 // breakpoint, which is composed per request and otherwise discarded (see
 // TailRecord). Hosts persist a "tail" session row here, because nothing else
@@ -224,7 +178,7 @@ func (a *Agent) AddRetryObserver(fn func(RetryRecord)) {
 //
 // Fires on change, not per request, so a session whose tail is stable writes one
 // row rather than one per turn. nil is a no-op.
-func (a *Agent) AddTailObserver(fn func(TailRecord)) {
+func (a *Agent) addTailObserver(fn func(TailRecord)) {
 	if fn == nil {
 		return
 	}
@@ -233,58 +187,86 @@ func (a *Agent) AddTailObserver(fn func(TailRecord)) {
 	a.obsMu.Unlock()
 }
 
-// AddPrefixDivergenceObserver registers fn to fire when a dispatch's cacheable
-// prefix diverges from the previous dispatch's at a rung the two SHARE — i.e.
-// the transcript was rebuilt rather than extended, so the provider re-reads
-// everything from that point at full price.
+// DispatchObserver hears each turn request the engine dispatches: the request
+// once it has reached the provider, and then every provider event of its
+// stream. A component that measures what went on the wire attaches through it,
+// such as the prefix watch and the transport recorder in packages/core/exp.
+// Either hook may be nil.
 //
-// Never fires for an ordinary append, which is every healthy request. Hosts
-// persist a "prefix" session row, because this is the one cost driver that
-// leaves no other trace: a mutated prefix looks identical to a healthy one in
-// the transcript, and shows up only as a cache-read figure that nothing explains.
-// nil is a no-op.
-func (a *Agent) AddPrefixDivergenceObserver(fn func(PrefixDivergence)) {
-	if fn == nil {
+// Only the agent's own turn requests are dispatched through it. A compaction's
+// summarizer request, a side channel and a sub-agent are not: their usage does
+// not describe this conversation's prompt, and folding it in is the confusion
+// that once made a child's cold start read as the parent's cache collapsing.
+type DispatchObserver struct {
+	// Sent is called once the provider has accepted the request, with the
+	// request exactly as the engine sent it. It runs on the turn goroutine,
+	// outside the agent's lock, before the stream is read.
+	Sent func(req provider.Request)
+	// Event is called for each provider event of that request's stream, in
+	// order, on the turn goroutine and after the engine has acted on the event.
+	// A row the engine writes for an event, such as the usage row, is therefore
+	// written before any row an observer writes for it. It runs once per
+	// streamed delta, so it must be cheap.
+	Event func(ev provider.Event)
+}
+
+// addDispatchObserver registers o. Observers are snapshotted per request, so
+// one added while a request streams hears the next. An observer with no hooks
+// is a no-op.
+func (a *Agent) addDispatchObserver(o DispatchObserver) {
+	if o.Sent == nil && o.Event == nil {
 		return
 	}
 	a.obsMu.Lock()
-	a.prefixDivObs = append(a.prefixDivObs, fn)
+	a.dispatchObs = append(a.dispatchObs, o)
 	a.obsMu.Unlock()
 }
 
-// AddCacheCliffObserver registers fn to fire when consecutive append-only
-// dispatches collapse to a fraction of the cache they should have hit — the
-// provider-side outage the prefix ladder proves is not terva's bytes. Fires
-// with Ongoing=true on every collapse past the threshold (the run's numbers
-// grow), and exactly once when the run stops, so a host can put up a note
-// while it is true and take it down when it is not.
-//
-// The end-of-run event carries Ongoing=false, zero counts, and an End naming
-// why it stopped. CliffEndRecovered is the run over. CliffEndVoided is terva
-// rebuilding its own prefix, which destroys the baseline rather than the
-// collapse, so the run's length is a floor and the outage may still be live.
-// A host that treats the two alike reports a laundered run as a recovery,
-// which is the defect this End exists to close. nil is a no-op.
-func (a *Agent) AddCacheCliffObserver(fn func(CacheCliff)) {
-	if fn == nil {
-		return
+func (a *Agent) dispatchObservers() []DispatchObserver {
+	a.obsMu.RLock()
+	defer a.obsMu.RUnlock()
+	if len(a.dispatchObs) == 0 {
+		return nil
 	}
-	a.obsMu.Lock()
-	a.cacheCliffObs = append(a.cacheCliffObs, fn)
-	a.obsMu.Unlock()
+	return append([]DispatchObserver(nil), a.dispatchObs...)
 }
 
-// AddTransportObserver registers fn to fire once per dispatch on providers
-// that report transport forensics (which connection/edge the request rode —
-// see provider.TransportInfo). Hosts persist a "net" session row so a cache
-// collapse can be read against a re-dial after the fact. nil is a no-op.
-func (a *Agent) AddTransportObserver(fn func(provider.TransportInfo)) {
-	if fn == nil {
+// AppendDiagnostic hands write to every store attached with
+// AttachTranscriptStore that implements TranscriptDiagnostics, through the same
+// serialized writer as the transcript's own rows, so a component's row is
+// ordered with them and a failed write latches the persistence error the same
+// way (see RecordPersistenceError). With no such store it does nothing.
+//
+// It is how a component records a diagnostic it produces, such as a prefix
+// divergence, without holding the store itself.
+func (a *Agent) AppendDiagnostic(write func(TranscriptDiagnostics) error) {
+	if write == nil {
 		return
 	}
-	a.obsMu.Lock()
-	a.transportObs = append(a.transportObs, fn)
-	a.obsMu.Unlock()
+	a.obsMu.RLock()
+	writers := append([](func(func(TranscriptDiagnostics) error))(nil), a.diagWriters...)
+	a.obsMu.RUnlock()
+	for _, w := range writers {
+		w(write)
+	}
+}
+
+// AppendRecord hands write to every store attached with AttachTranscriptStore,
+// through the same serialized writer as the transcript's own rows. It is the
+// twin of AppendDiagnostic for a record the store contract requires, such as a
+// tool-group activation that a component produces: the row is ordered with the
+// others, and a failed write latches the persistence error. With no store
+// attached it does nothing.
+func (a *Agent) AppendRecord(write func(TranscriptStore) error) {
+	if write == nil {
+		return
+	}
+	a.obsMu.RLock()
+	writers := append([](func(func(TranscriptStore) error))(nil), a.recordWriters...)
+	a.obsMu.RUnlock()
+	for _, w := range writers {
+		w(write)
+	}
 }
 
 // AddQueueDrainedObserver registers fn to fire when the agent loop consumes
@@ -330,12 +312,18 @@ type ContinuationGate struct {
 	// Cap bounds how many times this gate may fire within one Prompt; 0 means
 	// once. Declines don't consume the budget.
 	Cap int
+	// Fallback puts the gate after every gate without it, whatever order they
+	// were registered in. A convenience continuation sets it, so that a gate
+	// for unfinished work (open work, the swarm hold) always outranks it: lazy
+	// tools' activation gate is one.
+	Fallback bool
 }
 
 // AddContinuationGate registers an at-close continuation gate. Gates are
-// consulted in registration order — which IS priority order — and the first
-// that fires wins the boundary; the rest wait for the next natural stop. A
-// gate with a nil Fire is a no-op.
+// consulted in registration order — which IS priority order — with every
+// Fallback gate after the others, and the first that fires wins the
+// boundary; the rest wait for the next natural stop. A gate with a nil Fire
+// is a no-op.
 func (a *Agent) AddContinuationGate(g ContinuationGate) {
 	if g.Fire == nil {
 		return
@@ -368,8 +356,14 @@ func (a *Agent) continuationGateSnapshot() []ContinuationGate {
 	if len(a.continuationGates) == 0 {
 		return nil
 	}
-	gates := make([]ContinuationGate, len(a.continuationGates))
-	copy(gates, a.continuationGates)
+	gates := make([]ContinuationGate, 0, len(a.continuationGates))
+	for _, fallback := range []bool{false, true} {
+		for _, g := range a.continuationGates {
+			if g.Fallback == fallback {
+				gates = append(gates, g)
+			}
+		}
+	}
 	return gates
 }
 
@@ -403,36 +397,6 @@ func (a *Agent) fireTail(rec TailRecord) {
 	}
 }
 
-func (a *Agent) firePrefixDivergence(d PrefixDivergence) {
-	a.obsMu.RLock()
-	obs := make([]func(PrefixDivergence), len(a.prefixDivObs))
-	copy(obs, a.prefixDivObs)
-	a.obsMu.RUnlock()
-	for _, fn := range obs {
-		fn(d)
-	}
-}
-
-func (a *Agent) fireCacheCliff(cc CacheCliff) {
-	a.obsMu.RLock()
-	obs := make([]func(CacheCliff), len(a.cacheCliffObs))
-	copy(obs, a.cacheCliffObs)
-	a.obsMu.RUnlock()
-	for _, fn := range obs {
-		fn(cc)
-	}
-}
-
-func (a *Agent) fireTransport(ti provider.TransportInfo) {
-	a.obsMu.RLock()
-	obs := make([]func(provider.TransportInfo), len(a.transportObs))
-	copy(obs, a.transportObs)
-	a.obsMu.RUnlock()
-	for _, fn := range obs {
-		fn(ti)
-	}
-}
-
 func (a *Agent) fireTranscriptCompacted(messages []provider.Message, res CompactResult) {
 	a.obsMu.RLock()
 	obs := make([]func(messages []provider.Message, res CompactResult), len(a.transcriptCompactedObs))
@@ -463,47 +427,13 @@ func (a *Agent) fireDelegatedUsage(u, cumulative provider.Usage) {
 	}
 }
 
-// fireSideChannelUsage reports whether any observer received the call, so the
-// booking path can fall back to the plain usage observers on a host that never
-// registered one.
-func (a *Agent) fireSideChannelUsage(source string, u, cumulative provider.Usage) bool {
+func (a *Agent) fireSideChannelUsage(source string, u, cumulative provider.Usage) {
 	a.obsMu.RLock()
 	obs := make([]func(source string, u, cumulative provider.Usage), len(a.sideChannelUsageObs))
 	copy(obs, a.sideChannelUsageObs)
 	a.obsMu.RUnlock()
 	for _, fn := range obs {
 		fn(source, u, cumulative)
-	}
-	return len(obs) > 0
-}
-
-func (a *Agent) fireToolGroupActivated(group string) {
-	a.obsMu.RLock()
-	obs := make([]func(group string), len(a.toolGroupObs))
-	copy(obs, a.toolGroupObs)
-	a.obsMu.RUnlock()
-	for _, fn := range obs {
-		fn(group)
-	}
-}
-
-func (a *Agent) fireEscalation(rec EscalationRecord) {
-	a.obsMu.RLock()
-	obs := make([]func(EscalationRecord), len(a.escalationObs))
-	copy(obs, a.escalationObs)
-	a.obsMu.RUnlock()
-	for _, fn := range obs {
-		fn(rec)
-	}
-}
-
-func (a *Agent) fireStall(rec StallRecord) {
-	a.obsMu.RLock()
-	obs := make([]func(StallRecord), len(a.stallObs))
-	copy(obs, a.stallObs)
-	a.obsMu.RUnlock()
-	for _, fn := range obs {
-		fn(rec)
 	}
 }
 

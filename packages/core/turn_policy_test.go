@@ -41,16 +41,16 @@ func TestClassifyRecoverable(t *testing.T) {
 }
 
 func TestIsPayloadTooLargeError(t *testing.T) {
-	if !IsPayloadTooLargeError(&provider.ProviderError{Provider: "openai", Status: 413, Msg: "big"}) {
+	if !isPayloadTooLargeError(&provider.ProviderError{Provider: "openai", Status: 413, Msg: "big"}) {
 		t.Error("typed 413 not detected")
 	}
-	if IsPayloadTooLargeError(&provider.ProviderError{Provider: "openai", Status: 500, Msg: "big"}) {
+	if isPayloadTooLargeError(&provider.ProviderError{Provider: "openai", Status: 500, Msg: "big"}) {
 		t.Error("typed 500 misdetected as 413")
 	}
-	if !IsPayloadTooLargeError(errors.New("anthropic: payload too large")) {
+	if !isPayloadTooLargeError(errors.New("anthropic: payload too large")) {
 		t.Error("prose 413 not detected")
 	}
-	if IsPayloadTooLargeError(nil) {
+	if isPayloadTooLargeError(nil) {
 		t.Error("nil misdetected")
 	}
 }
@@ -64,7 +64,7 @@ func TestIsContextLengthError(t *testing.T) {
 		errors.New("gemini: input token count exceeds the maximum"),
 	}
 	for _, err := range positives {
-		if !IsContextLengthError(err) {
+		if !isContextLengthError(err) {
 			t.Errorf("not detected as context-length: %v", err)
 		}
 		if ok, _ := ClassifyRecoverable(err); ok {
@@ -78,7 +78,7 @@ func TestIsContextLengthError(t *testing.T) {
 		errors.New("maximum retries reached"),
 	}
 	for _, err := range negatives {
-		if IsContextLengthError(err) {
+		if isContextLengthError(err) {
 			t.Errorf("misdetected as context-length: %v", err)
 		}
 	}
@@ -129,7 +129,7 @@ func (c *policyFakeClient) Stream(ctx context.Context, req provider.Request) (<-
 
 func TestPromptWithPolicyCompactsAndRetriesOn413(t *testing.T) {
 	client := &policyFakeClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 	// Seed enough transcript that Compact has something to summarize
 	// beyond its keep-tail.
 	seed := make([]provider.Message, 0, 8)
@@ -171,7 +171,7 @@ func TestPromptWithPolicyCompactsAndRetriesOnContextLength(t *testing.T) {
 	client := &policyFakeClient{
 		firstErr: &provider.ProviderError{Provider: "policy-fake", Status: 400, Msg: "This model's maximum context length is 272000 tokens. However, your messages resulted in 273500 tokens."},
 	}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 	seed := make([]provider.Message, 0, 8)
 	for range 4 {
 		seed = append(seed,
@@ -194,7 +194,7 @@ func TestPromptWithPolicyCompactsAndRetriesOnContextLength(t *testing.T) {
 }
 
 func TestCanCompact(t *testing.T) {
-	a := NewAgent(nil, "fake-model", "system", Registry{})
+	a := newTestAgent(nil, "fake-model", "system", Registry{})
 	msg := func(text string) provider.Message {
 		return provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: text}}}
 	}
@@ -216,8 +216,8 @@ func TestCanCompact(t *testing.T) {
 			seed[i] = msg("m")
 		}
 		a.SetMessages(seed)
-		if got := a.CanCompact(c.keepTail); got != c.want {
-			t.Errorf("CanCompact(n=%d, keepTail=%d) = %v; want %v", c.n, c.keepTail, got, c.want)
+		if got := a.canCompact(c.keepTail); got != c.want {
+			t.Errorf("canCompact(n=%d, keepTail=%d) = %v; want %v", c.n, c.keepTail, got, c.want)
 		}
 	}
 }
@@ -226,7 +226,7 @@ func TestCompactReturnsNothingToCompactSentinel(t *testing.T) {
 	// nil client is never reached: both paths return before any provider
 	// call, which is exactly the contract we want for an opportunistic
 	// auto-compact (no wasted model round-trip).
-	a := NewAgent(nil, "fake-model", "system", Registry{})
+	a := newTestAgent(nil, "fake-model", "system", Registry{})
 
 	// Empty transcript.
 	if _, err := a.Compact(context.Background(), AutoCompactKeepTail, nil); !errors.Is(err, ErrNothingToCompact) {
@@ -266,14 +266,14 @@ func (c *okClient) Stream(ctx context.Context, req provider.Request) (<-chan pro
 
 // TestAutoCompactGuardSkipsWhenNothingToCompact reproduces the spurious
 // "nothing to compact" trigger: usage is over the threshold (so
-// ShouldAutoCompact is true) but the transcript is already entirely
-// keep-tail. The CanCompact guard must skip the pre-turn compaction
+// the policy says compact) but the transcript is already entirely
+// keep-tail. The canCompact guard must skip the pre-turn compaction
 // entirely — no compact_start/compact_end events, no failure — and let
 // the prompt proceed normally.
 func TestAutoCompactGuardSkipsWhenNothingToCompact(t *testing.T) {
 	client := &okClient{}
 	// claude-sonnet-4-5 resolves to a 200k window; prime usage above 85%.
-	a := NewAgent(client, "claude-sonnet-4-5", "system", Registry{})
+	a := newTestAgent(client, "claude-sonnet-4-5", "system", Registry{})
 	a.SeedLastTurnUsage(provider.Usage{InputTokens: 190_000})
 
 	// Tiny transcript: 3 messages, well under keep-tail of 4.
@@ -283,11 +283,11 @@ func TestAutoCompactGuardSkipsWhenNothingToCompact(t *testing.T) {
 		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "q2"}}},
 	})
 
-	if !a.ShouldAutoCompact(AutoCompactThreshold) {
-		t.Fatal("precondition: ShouldAutoCompact should be true with primed usage")
+	if !a.decideCompaction(CompactBeforeTurn).Compact {
+		t.Fatal("precondition: the policy should say compact with primed usage")
 	}
-	if a.CanCompact(AutoCompactKeepTail) {
-		t.Fatal("precondition: CanCompact should be false for a sub-keep-tail transcript")
+	if a.canCompact(AutoCompactKeepTail) {
+		t.Fatal("precondition: canCompact should be false for a sub-keep-tail transcript")
 	}
 
 	var events []string
@@ -317,10 +317,10 @@ func TestAutoCompactGuardSkipsWhenNothingToCompact(t *testing.T) {
 // OnEvent so subscribers see "compacting…".
 func TestPromptWithPolicyNilSinkAutoCompact(t *testing.T) {
 	client := &okClient{}
-	a := NewAgent(client, "claude-sonnet-4-5", "system", Registry{})
+	a := newTestAgent(client, "claude-sonnet-4-5", "system", Registry{})
 	// Prime usage above the 85% auto-compact threshold (200k window).
 	a.SeedLastTurnUsage(provider.Usage{InputTokens: 190_000})
-	// A transcript comfortably longer than keep-tail so CanCompact is true.
+	// A transcript comfortably longer than keep-tail so canCompact is true.
 	seed := make([]provider.Message, 0, 8)
 	for range 4 {
 		seed = append(seed,
@@ -330,7 +330,7 @@ func TestPromptWithPolicyNilSinkAutoCompact(t *testing.T) {
 	}
 	a.SetMessages(seed)
 
-	if !a.ShouldAutoCompact(AutoCompactThreshold) || !a.CanCompact(AutoCompactKeepTail) {
+	if !a.Compaction(CompactBeforeTurn).Compact {
 		t.Fatal("precondition: pre-turn auto-compact should fire")
 	}
 
@@ -359,12 +359,12 @@ func TestPromptWithPolicyNilSinkAutoCompact(t *testing.T) {
 }
 
 func TestContextFractionUnknownModelIsZero(t *testing.T) {
-	a := NewAgent(nil, "model-that-does-not-exist-xyz", "", Registry{})
-	if got := a.ContextFraction(); got != 0 {
+	a := newTestAgent(nil, "model-that-does-not-exist-xyz", "", Registry{})
+	if got := testContextFraction(a); got != 0 {
 		t.Fatalf("ContextFraction = %v, want 0 for unknown model", got)
 	}
-	if a.ShouldAutoCompact(AutoCompactThreshold) {
-		t.Fatal("ShouldAutoCompact true with no usage data")
+	if a.decideCompaction(CompactBeforeTurn).Compact {
+		t.Fatal("the policy said compact with no usage data")
 	}
 }
 
@@ -374,7 +374,7 @@ func TestContextFractionUnknownModelIsZero(t *testing.T) {
 // 272K. At 200k used that is ~0.74 — over the warn line — where the 1.05M
 // max would report a harmless ~0.19 and never compact before the surcharge.
 func TestContextUsageUsesEffectiveWindow(t *testing.T) {
-	a := NewAgent(nil, "gpt-5.6-sol", "", Registry{})
+	a := newTestAgent(nil, "gpt-5.6-sol", "", Registry{})
 	a.SeedLastTurnUsage(provider.Usage{InputTokens: 200_000})
 
 	used, window := a.ContextUsage()
@@ -384,7 +384,18 @@ func TestContextUsageUsesEffectiveWindow(t *testing.T) {
 	if used != 200_000 {
 		t.Fatalf("used = %d, want 200000", used)
 	}
-	if f := a.ContextFraction(); f < 0.70 || f >= 0.85 {
+	if f := testContextFraction(a); f < 0.70 || f >= 0.85 {
 		t.Fatalf("ContextFraction = %v, want in [0.70, 0.85) against the 272K working window", f)
 	}
+}
+
+// testContextFraction is the share of the context window the last turn used:
+// what the removed Agent.ContextFraction returned, kept for the tests that
+// assert on the gauge directly.
+func testContextFraction(a *Agent) float64 {
+	used, window := a.ContextUsage()
+	if used <= 0 || window <= 0 {
+		return 0
+	}
+	return float64(used) / float64(window)
 }

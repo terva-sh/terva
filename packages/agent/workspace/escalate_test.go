@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/stall"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -51,7 +51,7 @@ func TestSessionEscalatorDeclinesWhenAlreadyOnTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := &sessionEscalator{s: &wsSession{provider: "anthropic", model: "claude-sonnet-5"}}
-	out, err := e.Escalate(context.Background(), core.EscalationRequest{})
+	out, err := e.Escalate(context.Background(), stall.EscalationRequest{})
 	if err != nil {
 		t.Fatalf("Escalate errored: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestSessionEscalatorDeclinesWhenAlreadyOnTarget(t *testing.T) {
 func TestSessionEscalatorDeclinesWithoutATarget(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	e := &sessionEscalator{s: &wsSession{provider: "openai-compatible", model: "gemma"}}
-	out, err := e.Escalate(context.Background(), core.EscalationRequest{})
+	out, err := e.Escalate(context.Background(), stall.EscalationRequest{})
 	if err != nil {
 		t.Fatalf("Escalate errored: %v", err)
 	}

@@ -22,8 +22,11 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/stall"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -80,27 +83,25 @@ func (spinTool) Execute(context.Context, json.RawMessage, func(string)) (core.To
 
 // escalatorToTarget swaps (in name only — the client is not really rebuilt here;
 // the turn ends on its own) to a fixed strong target.
-type escalatorToTarget struct{ target core.EscalationTarget }
+type escalatorToTarget struct{ target stall.EscalationTarget }
 
-func (e escalatorToTarget) Target() (core.EscalationTarget, bool) { return e.target, true }
-func (e escalatorToTarget) Escalate(context.Context, core.EscalationRequest) (core.EscalationOutcome, error) {
-	return core.EscalationOutcome{Switched: true, ToProvider: e.target.Provider, ToModel: e.target.Model}, nil
+func (e escalatorToTarget) Target() (stall.EscalationTarget, bool) { return e.target, true }
+func (e escalatorToTarget) Escalate(context.Context, stall.EscalationRequest) (stall.EscalationOutcome, error) {
+	return stall.EscalationOutcome{Switched: true, ToProvider: e.target.Provider, ToModel: e.target.Model}, nil
 }
 
 func TestWiredPersistenceRecordsEscalation(t *testing.T) {
 	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
-	sess, err := core.NewSessionAtPath(path, "/ws", "openai-compatible", "gemma-4-26b", "0.0.0")
+	sess, err := session.NewSessionAtPath(path, "/ws", "openai-compatible", "gemma-4-26b", "0.0.0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer sess.Close()
 
-	ag := core.NewAgent(&spinClient{stopAfter: 5}, "gemma-4-26b", "system", core.Registry{"spin": spinTool{}})
-	ag.MaxSteps = 20
-	ag.SetStallDetection(true)
-	ag.SetStuckLoopEscalation(true)
-	ag.SetEscalateAuto(true) // auto: no Asker to drive in a headless test
-	ag.Escalator = escalatorToTarget{target: core.EscalationTarget{Provider: "openai-codex", Model: "gpt-5.6-sol"}}
+	ag, d := coretest.NewAgentWithStall(&spinClient{stopAfter: 5}, "gemma-4-26b", "system", core.Registry{"spin": spinTool{}}, core.WithMaxSteps(20))
+	d.SetEscalation(true)
+	d.SetEscalateAuto(true) // auto: no Asker to drive in a headless test
+	d.SetEscalator(escalatorToTarget{target: stall.EscalationTarget{Provider: "openai-codex", Model: "gpt-5.6-sol"}})
 
 	WireHeadlessSessionPersist(ag, sess)
 

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -86,7 +87,7 @@ func TestRPCSessionPersistsAndResumes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new session: %v", err)
 	}
-	ag := core.NewAgent(rpcEchoClient{}, "fake-model", "sys", core.Registry{})
+	ag := coretest.NewAgent(rpcEchoClient{}, "fake-model", "sys", core.Registry{})
 	build.WireHeadlessSessionPersist(ag, sess) // what runRPCMode wires when --session is set
 
 	s := &rpcServer{ctx: context.Background(), agent: ag, out: &rpcSyncWriter{}}
@@ -106,7 +107,7 @@ func TestRPCSessionPersistsAndResumes(t *testing.T) {
 
 	// --- second process (the revival): restore the transcript, run another turn.
 	// A revived worker must build ON the prior conversation, not restart it. ---
-	ag2 := core.NewAgent(rpcEchoClient{}, "fake-model", "sys", core.Registry{})
+	ag2 := coretest.NewAgent(rpcEchoClient{}, "fake-model", "sys", core.Registry{})
 	ag2.SetMessages(msgs) // what openOrCreateSession does on resume
 	if n := len(ag2.Messages()); n != 2 {
 		t.Fatalf("revived agent restored %d messages, want the 2 from the prior turn", n)
@@ -136,7 +137,7 @@ func TestRPCSessionPersistsAndResumes(t *testing.T) {
 // --session path opts in. (The inverse guard for the resume feature: it must not
 // start persisting for every rpc run.)
 func TestRPCNoSessionPersistsNothing(t *testing.T) {
-	ag := core.NewAgent(rpcEchoClient{}, "fake-model", "sys", core.Registry{})
+	ag := coretest.NewAgent(rpcEchoClient{}, "fake-model", "sys", core.Registry{})
 	// No WireHeadlessSessionPersist — exactly the runRPCMode path when args.Session
 	// is empty.
 	s := &rpcServer{ctx: context.Background(), agent: ag, out: &rpcSyncWriter{}}

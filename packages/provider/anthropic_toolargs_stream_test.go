@@ -10,7 +10,7 @@ import (
 )
 
 // The repair has one production caller per provider and it lives inside the
-// stream loop, so exercising RepairToolArguments directly proves nothing about
+// stream loop, so exercising repairToolArguments directly proves nothing about
 // whether the loop actually calls it. This drives the real Anthropic SSE path
 // with the frames a live stream sent, and asserts on what came out the far end.
 //

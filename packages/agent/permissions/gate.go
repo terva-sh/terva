@@ -23,7 +23,7 @@ import (
 // auto-allows still apply, so headless automation can run a curated
 // tool set (e.g. plan mode permits the read-only tools). A one-line
 // stderr note tells the human what stance is active; the actual gating
-// happens in the BeforeToolExecute closure that calls gate.Check first.
+// happens in the agent's tool gate (build.BuildToolGate), which calls gate.Check.
 // The second return is the policy's read-only registry, to hand to
 // Resolved.AdoptReadOnlySet so read_only-annotated extension/MCP
 // tools join the classification. Nil alongside a nil gate.

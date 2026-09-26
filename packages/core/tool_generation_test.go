@@ -21,12 +21,12 @@ func TestTurnPinsToolClassificationDuringReload(t *testing.T) {
 					newSet.Add("echo")
 				}
 				client := &pinProbeClient{}
-				a := NewAgent(client, "fake", "", Registry{"echo": oldTool})
-				a.ReadOnly = oldSet
+				a := newTestAgent(client, "fake", "", Registry{"echo": oldTool})
+				a.SetToolsWithReadOnly(a.tools, oldSet)
 				gate := NewPolicyGate(&PermissionPolicy{Mode: mode, ReadOnly: oldSet}, nil)
-				a.BeforeToolExecute = func(ctx context.Context, call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+				a.gate = GateFunc(func(ctx context.Context, call provider.ToolCallBlock, _ Tool) (bool, string, json.RawMessage) {
 					return gate.Check(ctx, call.Name, call.Arguments, "", call.ID)
-				}
+				})
 				blocked, resume := make(chan struct{}), make(chan struct{})
 				client.onFirst = func() { close(blocked); <-resume }
 				done := make(chan error, 1)
@@ -55,8 +55,8 @@ func TestTurnPinsToolClassificationDuringReload(t *testing.T) {
 }
 
 func TestToolGenerationKeepsModeLiveAndIsolatesAgents(t *testing.T) {
-	a := NewAgent(nil, "fake", "", Registry{"echo": &recordingTool{}})
-	a.ReadOnly = NewReadOnlySet("echo")
+	a := newTestAgent(nil, "fake", "", Registry{"echo": &recordingTool{}})
+	a.SetToolsWithReadOnly(a.tools, NewReadOnlySet("echo"))
 	ctx, _, _ := a.ToolForCall(context.Background(), "echo")
 	gate := NewPolicyGate(&PermissionPolicy{Mode: ApprovalWorkspace}, nil)
 	if ok, _, _ := gate.Check(ctx, "echo", nil, "", ""); !ok {
@@ -66,8 +66,8 @@ func TestToolGenerationKeepsModeLiveAndIsolatesAgents(t *testing.T) {
 	if ok, _, _ := gate.Check(ctx, "echo", nil, "", ""); ok {
 		t.Fatal("pinned metadata hid a stricter live approval mode")
 	}
-	child := NewAgent(nil, "fake", "", Registry{"echo": &recordingTool{}})
-	child.SetToolsWithReadOnly(child.Tools, nil)
+	child := newTestAgent(nil, "fake", "", Registry{"echo": &recordingTool{}})
+	child.SetToolsWithReadOnly(child.tools, nil)
 	ctx, _, _ = child.ToolForCall(ctx, "echo")
 	gate.SetMode(ApprovalWorkspace)
 	if ok, _, _ := gate.Check(ctx, "echo", nil, "", ""); ok {
@@ -79,12 +79,12 @@ func TestToolGenerationPreservesRulePrecedence(t *testing.T) {
 	for _, mode := range []ApprovalMode{ApprovalWorkspace, ApprovalAutoEdit, ApprovalPlan} {
 		for _, readOnly := range []bool{true, false} {
 			for _, decision := range []RuleDecision{RuleAllow, RuleDeny, RuleAsk} {
-				a := NewAgent(nil, "fake", "", Registry{"echo": &recordingTool{}})
+				a := newTestAgent(nil, "fake", "", Registry{"echo": &recordingTool{}})
 				ro := NewReadOnlySet()
 				if readOnly {
 					ro.Add("echo")
 				}
-				a.SetToolsWithReadOnly(a.Tools, ro)
+				a.SetToolsWithReadOnly(a.tools, ro)
 				ctx, _, _ := a.ToolForCall(context.Background(), "echo")
 				gate := NewPolicyGate(&PermissionPolicy{Mode: mode}, nil)
 				gate.SetRules([]PermissionRule{{Tool: "echo", Decision: decision, Source: "user"}})

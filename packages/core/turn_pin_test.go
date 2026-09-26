@@ -56,14 +56,14 @@ func (c *pinProbeClient) Stream(ctx context.Context, req provider.Request) (<-ch
 func TestTurnPinsPrefixAgainstMidTurnSwap(t *testing.T) {
 	rec := &recordingTool{}
 	client := &pinProbeClient{}
-	a := NewAgent(client, "fake-model", "orig-system", Registry{"echo": rec})
+	a := newTestAgent(client, "fake-model", "orig-system", Registry{"echo": rec})
 
 	// Between step 1 and step 2, withdraw the tool and rewrite the system
 	// block — exactly what a mid-turn host swap would do.
 	client.onFirst = func() {
 		a.SetTools(Registry{}) // echo gone from the LIVE registry
 		a.mu.Lock()
-		a.System = "CHANGED-MID-TURN"
+		testFrameOf(a).setSystem("CHANGED-MID-TURN")
 		a.mu.Unlock()
 	}
 
@@ -82,7 +82,7 @@ func TestTurnPinsPrefixAgainstMidTurnSwap(t *testing.T) {
 		t.Errorf("step 2 offered %d tools; want 1 (echo pinned for the turn, not the withdrawn live set)", len(client.reqs[1].Tools))
 	}
 	// And the tool actually dispatched, despite being withdrawn live —
-	// proving dispatch used the pinned registry, not a.Tools.
+	// proving dispatch used the pinned registry, not a.tools.
 	if rec.lastArgs == nil {
 		t.Error("echo never executed; dispatch used the live (emptied) registry instead of the pinned one")
 	}
@@ -101,19 +101,19 @@ func TestTurnPinsPrefixAgainstMidTurnSwap(t *testing.T) {
 }
 
 // TestRunOneToolUsesPinnedRegistryRaceFree pins dispatch to the passed
-// registry, decoupled from a.Tools. It must (a) dispatch against the pinned
+// registry, decoupled from a.tools. It must (a) dispatch against the pinned
 // set even when the live registry was emptied, and (b) never race a
 // concurrent SetTools. Run with -race for (b) to mean anything.
 func TestRunOneToolUsesPinnedRegistryRaceFree(t *testing.T) {
 	rec := &recordingTool{}
-	a := NewAgent(nil, "test", "", Registry{})
+	a := newTestAgent(nil, "test", "", Registry{})
 	a.SetTools(Registry{}) // live registry is EMPTY...
 	pinned := Registry{"echo": rec}
 
 	ctx := context.Background()
 	call := provider.ToolCallBlock{ID: "T1", Name: "echo", Arguments: json.RawMessage(`{}`)}
 
-	// (a) dispatch succeeds against the pinned set despite an empty a.Tools.
+	// (a) dispatch succeeds against the pinned set despite an empty a.tools.
 	if res := a.runOneTool(ctx, call, pinned, func(AgentEvent) {}); res.IsError {
 		t.Fatalf("dispatch against pinned registry failed: %v", res.Content)
 	}

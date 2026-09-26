@@ -41,8 +41,8 @@ func TestWorkspaceUserBind(t *testing.T) {
 	live := w.live(info.ID)
 
 	// The {{user}} macro defaults to "User" before any bind.
-	if !strings.Contains(live.agent.System, "known User for years") {
-		t.Fatalf("charter did not resolve the default {{user}}: %q", live.agent.System)
+	if !strings.Contains(live.agent.FramePreview().SystemText(), "known User for years") {
+		t.Fatalf("charter did not resolve the default {{user}}: %q", live.agent.FramePreview().SystemText())
 	}
 
 	const name = "Kira"
@@ -59,14 +59,14 @@ func TestWorkspaceUserBind(t *testing.T) {
 		t.Errorf("SessionInfo = {%q,%q}, want {%q,%q}", si.UserName, si.UserDescription, name, desc)
 	}
 	// The NAME re-baked into the cached charter (a deliberate prefix rebuild).
-	if !strings.Contains(live.agent.System, "known Kira for years") {
-		t.Errorf("bound name did not bake into the charter: %q", live.agent.System)
+	if !strings.Contains(live.agent.FramePreview().SystemText(), "known Kira for years") {
+		t.Errorf("bound name did not bake into the charter: %q", live.agent.FramePreview().SystemText())
 	}
 	if !strings.Contains(live.args.As, name) {
 		t.Errorf("args.As = %q, want %q (threaded for the next rebuild/restart)", live.args.As, name)
 	}
 	// The DESCRIPTION rides the per-turn tail, framed with the name.
-	cp := live.agent.ContextProvider
+	cp := func() string { return live.agent.FramePreview().VolatileText() }
 	if cp == nil || !strings.Contains(cp(), desc) || !strings.Contains(cp(), "About Kira (the user you are interacting with):") {
 		t.Errorf("user description / frame not in the tail: %q", func() string {
 			if cp == nil {
@@ -77,14 +77,14 @@ func TestWorkspaceUserBind(t *testing.T) {
 	}
 
 	// A description-only edit is a free tail update — the prefix must not change.
-	sysBefore := live.agent.System
+	sysBefore := live.agent.FramePreview().SystemText()
 	if err := w.UserBind(ctx, info.ID, ctrlproto.UserBindParams{Name: name, Description: "a battle-scarred veteran"}); err != nil {
 		t.Fatal(err)
 	}
-	if live.agent.System != sysBefore {
+	if live.agent.FramePreview().SystemText() != sysBefore {
 		t.Error("a description-only bind rebuilt the cached prefix; it should be free")
 	}
-	if !strings.Contains(live.agent.ContextProvider(), "a battle-scarred veteran") {
+	if !strings.Contains(live.agent.FramePreview().VolatileText(), "a battle-scarred veteran") {
 		t.Error("description-only edit not reflected in the tail")
 	}
 
@@ -96,11 +96,11 @@ func TestWorkspaceUserBind(t *testing.T) {
 	if live.sess.Meta.UserName != "" || live.sess.Meta.UserDescription != "" {
 		t.Errorf("user persona not cleared: %+v", live.sess.Meta)
 	}
-	if strings.Contains(live.agent.ContextProvider(), "veteran") {
+	if strings.Contains(live.agent.FramePreview().VolatileText(), "veteran") {
 		t.Error("cleared description still in the tail")
 	}
-	if !strings.Contains(live.agent.System, "known User for years") {
-		t.Errorf("charter did not return to the default {{user}} on clear: %q", live.agent.System)
+	if !strings.Contains(live.agent.FramePreview().SystemText(), "known User for years") {
+		t.Errorf("charter did not return to the default {{user}} on clear: %q", live.agent.FramePreview().SystemText())
 	}
 
 	// A saved-persona ref is reserved, not implemented -> bad request.
@@ -162,14 +162,14 @@ func TestUserPersonaReseedsOnResume(t *testing.T) {
 		t.Fatal("resumed session is not live")
 	}
 	// The name is back in the cached charter after a cold rebuild.
-	if !strings.Contains(live.agent.System, "known Kira for years") {
-		t.Errorf("name not re-baked into the charter on restart: %q", live.agent.System)
+	if !strings.Contains(live.agent.FramePreview().SystemText(), "known Kira for years") {
+		t.Errorf("name not re-baked into the charter on restart: %q", live.agent.FramePreview().SystemText())
 	}
 	// The description is back in the tail.
 	if live.user == nil || live.user.Get() != desc {
 		t.Errorf("user description not reseeded on restart: %v", live.user)
 	}
-	if cp := live.agent.ContextProvider; cp == nil || !strings.Contains(cp(), desc) {
+	if cp := func() string { return live.agent.FramePreview().VolatileText() }; cp == nil || !strings.Contains(cp(), desc) {
 		t.Error("reseeded user description not injected into the tail after restart")
 	}
 }
@@ -216,7 +216,7 @@ func TestReloadLorePreservesTailRecords(t *testing.T) {
 		t.Errorf("user handle orphaned by reloadLore: %v", live.user)
 	}
 	// ...and the record the NEW tail reads still carries both.
-	cp := live.agent.ContextProvider
+	cp := func() string { return live.agent.FramePreview().VolatileText() }
 	if cp == nil {
 		t.Fatal("no context provider after reloadLore")
 	}

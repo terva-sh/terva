@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -62,7 +63,7 @@ func TestTheDocumentedTranscriptRoundTripLosesNothing(t *testing.T) {
 		},
 	}
 
-	r := &Runtime{agent: core.NewAgent(nil, "m", "", core.Registry{})}
+	r := &Runtime{agent: coretest.NewAgent(nil, "m", "", core.Registry{})}
 	r.agent.SetMessages(orig)
 
 	// persist … restore, exactly as the package doc describes.
@@ -123,7 +124,7 @@ func TestACompactionSummaryBlockSurvivesTheRoundTrip(t *testing.T) {
 		},
 	}}
 
-	r := &Runtime{agent: core.NewAgent(nil, "m", "", core.Registry{})}
+	r := &Runtime{agent: coretest.NewAgent(nil, "m", "", core.Registry{})}
 	r.agent.SetMessages(orig)
 	r.SetMessages(r.Messages())
 	got := r.agent.Messages()

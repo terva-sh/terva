@@ -66,7 +66,7 @@ func reasoningBlockOf(t *testing.T, a *Agent) provider.ReasoningBlock {
 // provider's reasoning item and break the following turn.
 func TestShowReasoningKeepsTheSummaryOffTheTranscript(t *testing.T) {
 	client := &reasoningFakeClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 	a.SetShowReasoning(true) // display on, persistence off
 
 	var live string
@@ -100,7 +100,7 @@ func TestShowReasoningKeepsTheSummaryOffTheTranscript(t *testing.T) {
 // thing reasoning_summary exists to keep.
 func TestRecordReasoningKeepsTheSummaryInTheTranscript(t *testing.T) {
 	client := &reasoningFakeClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 	a.SetReasoningSummary("detailed")
 	a.SetShowReasoning(true) // both on
 
@@ -122,7 +122,7 @@ func TestRecordReasoningKeepsTheSummaryInTheTranscript(t *testing.T) {
 // the split promises for anyone who never touches either setting.
 func TestNeitherReasoningSwitchAsksForASummary(t *testing.T) {
 	client := &reasoningFakeClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 
 	if err := a.Prompt(context.Background(), "go", nil, func(AgentEvent) {}); err != nil {
 		t.Fatalf("Prompt: %v", err)

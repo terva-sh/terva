@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -44,10 +45,10 @@ func (c *saturatingClient) Stream(ctx context.Context, req provider.Request) (<-
 func TestChatPostTurnAutoCompactFailureIsReported(t *testing.T) {
 	conn := newFakeConnector(Capabilities{})
 	client := &saturatingClient{}
-	agent := core.NewAgent(client, "claude-sonnet-4-5", "sys", core.Registry{})
-	agent.MaxRetries = 0 // the ladder is proven in core; this is about the report
+	// No retries: the ladder is proven in core; this is about the report.
+	agent := coretest.NewAgent(client, "claude-sonnet-4-5", "sys", core.Registry{}, core.WithRetries(0, 0))
 
-	// A transcript comfortably past keep-tail, so CanCompact is true.
+	// A transcript comfortably past keep-tail, so the engine's keep-tail check passes.
 	seed := make([]provider.Message, 0, 8)
 	for range 4 {
 		seed = append(seed,

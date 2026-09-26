@@ -195,7 +195,7 @@ func TestCompactServerSideSurfacesHTTPFailure(t *testing.T) {
 }
 
 // The codex client must be reachable as a ServerCompactor THROUGH a wrapper.
-// A bare type assertion on the outer client is the bug class ClientCaps exists
+// A bare type assertion on the outer client is the bug class clientCaps exists
 // to prevent, and a compactor probed the wrong way would silently report "this
 // provider cannot compact server-side" for every wrapped client.
 func TestServerCompactorFoundThroughAWrapper(t *testing.T) {

@@ -19,6 +19,7 @@ import (
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/hooks"
 	"terva.sh/terva/packages/agent/mode"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/modes"
 	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/agent/permissions"
@@ -31,6 +32,7 @@ import (
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // *Workspace is the in-process ctrlproto carrier the interactive TUI drives —
@@ -120,8 +122,8 @@ func Run(rawArgs []string, version string) error {
 	build.RegisterEndpointsFromConfig()
 
 	// Open the tool-call audit log for this process (lazily backed, so a
-	// no-tool run never touches disk). Every mode's BeforeToolExecute records
-	// through this shared sink — see buildBeforeToolExecute.
+	// no-tool run never touches disk). Every mode's tool gate records
+	// through this shared sink — see build.BuildToolGate.
 	build.InitAudit(config.TervaHome())
 
 	// Subcommand router: `terva bot ...` is handled separately so the
@@ -319,7 +321,7 @@ func Run(rawArgs []string, version string) error {
 	ctx := context.Background()
 
 	// Kick an async refresh of the live model catalog. The first run of
-	// terva hits the network; subsequent runs within CacheTTL do nothing.
+	// terva hits the network; subsequent runs within the provider's six-hour cache TTL do nothing.
 	RefreshModelsAsync()
 	// Always re-list a configured compatible endpoint (not cache gated):
 	// a local server's loaded models change frequently.
@@ -408,20 +410,17 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 	// Everything up to the extension check is wired whether or not this host
 	// has extensions, because none of it is ABOUT extensions.
 	//
-	// The gate especially. This used to sit below a combined
+	// The tool-call ladder is not wired here. It is the agent's constructor
+	// argument, and each caller passes build.BuildToolGate over the same
+	// hookEng, gate and extMgr it hands this function, so the ladder and the
+	// observers read one hook engine. It once sat below a combined
 	// `ag == nil || extMgr == nil` early return, which made the permission gate
-	// conditional on an extension manager existing — the one thing that must
-	// never be conditional on anything. No caller reaches it today (every one
-	// sources its manager from setupNonInteractiveExtensions, which always
-	// builds one; under --no-ext it is live-but-toolless precisely so the hook
-	// wiring stays uniform), and the SDK avoids the helper entirely for this
-	// reason: it calls BuildBeforeToolExecute(nil, gate, nil, ag) directly, which is
-	// the configuration this early return would have silently disarmed.
+	// conditional on an extension manager existing; as a constructor argument
+	// it cannot be conditional on anything.
 	//
-	// build.WireHostToolDispatcher already has this shape — it binds the
+	// build.WireHostToolDispatcher has the same shape — it binds the
 	// scripting host call for any agent and returns early only for the
 	// extension-specific half.
-	ag.BeforeToolExecute = build.BuildBeforeToolExecute(hookEng, gate, extMgr, ag)
 	build.WireHostToolDispatcher(ag, extMgr, gate)
 
 	// The ticket direct-edit warning arms again at every turn boundary. This sits
@@ -433,24 +432,10 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 	// The extension-shaped half, and only it, is conditional.
 	if extMgr != nil {
 		wsObserve := build.WorkspaceChangeObserver(differ, extMgr)
-		ag.BeforeTurn = func(step int) (bool, string) {
-			res := extMgr.InterceptTurnStart(ctx, step)
-			return !res.Block, res.Reason
-		}
-		ag.BeforeAssistantMessage = func(text string) (bool, string, string) {
-			res := extMgr.InterceptAssistantMessage(ctx, text)
-			if res.Block {
-				return false, res.Reason, ""
-			}
-			return true, "", res.ReplaceText
-		}
-		ag.BeforeUserMessage = func(text string) (bool, string, string) {
-			res := extMgr.InterceptUserMessage(ctx, text)
-			if res.Block {
-				return false, res.Reason, ""
-			}
-			return true, "", res.ReplaceText
-		}
+		// The turn and message intercepts are not wired here: they are a
+		// component of the agent, passed to NewAgent as
+		// build.ExtensionFilters over this same extMgr.
+		//
 		// Registration order is delivery order.
 		ag.AddEventObserver(wsObserve)
 		ag.AddEventObserver(func(ev core.AgentEvent) { build.FanoutAgentEvent(extMgr, ev) })
@@ -467,16 +452,23 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 	ag.AddContinuationGate(build.OpenWorkGate(extMgr, tasksCtrl))
 }
 
-// wireBotAgentExtHooks wires a long-lived chat-bot agent to its extension
+// newBotAgent builds a long-lived chat-bot agent and wires it to its extension
 // manager — the same hooks the headless print/json modes use (tool gate +
-// extension interception + live context cards + event fanout) — bundled so
-// botcmd.go needs no extra imports. The bot loop runs turns one at a time, so
-// the per-turn hooks fire exactly as they do in a headless single-shot run.
-// tasksCtrl is per-CONVERSATION, not per-process: the owner DM passes the
-// shared r.Tasks (bound to its durable session); each admitted group passes
-// its own fresh controller so its card and open-work gate read its own board.
-func wireBotAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr *extensions.Manager, gate *core.ConfirmGate, args build.Args, r *build.Resolved, tasksCtrl *tasktool.Controller) {
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, gate, build.BuildHookEngine(args, r.Trusted), tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)), tasksCtrl)
+// extension interception + live context cards + event fanout). The bot loop
+// runs turns one at a time, so the per-turn hooks fire exactly as they do in a
+// headless single-shot run.
+//
+// It builds the agent as well as wiring it, because the ladder is the agent's
+// constructor argument and shares its hook engine with the observers wired
+// here. newAgent returns the agent and its task controller, which is
+// per-CONVERSATION, not per-process: the owner DM pairs r.NewAgent with the
+// shared r.Tasks (bound to its durable session); each admitted group uses
+// r.NewAgentWithFreshTasks so its card and open-work gate read its own board.
+func newBotAgent(ctx context.Context, newAgent func(core.Gate, ...core.Option) (*core.Agent, *tasktool.Controller), extMgr *extensions.Manager, gate *core.ConfirmGate, args build.Args, r *build.Resolved) *core.Agent {
+	hookEng := build.BuildHookEngine(args, r.Trusted)
+	ag, tasksCtrl := newAgent(build.BuildToolGate(hookEng, gate, extMgr), build.ExtensionFilters(ctx, extMgr)...)
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, gate, hookEng, tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)), tasksCtrl)
+	return ag
 }
 
 func runPrintMode(ctx context.Context, args build.Args, version string) error {
@@ -494,8 +486,9 @@ func runPrintMode(ctx context.Context, args build.Args, version string) error {
 	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &r, version)
 	defer stopExt()
 
-	ag := r.NewAgent()
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, build.BuildHookEngine(args, r.Trusted), tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)), r.Tasks)
+	hookEng := build.BuildHookEngine(args, r.Trusted)
+	ag := r.NewAgent(build.BuildToolGate(hookEng, confirmGate, extMgr), build.ExtensionFilters(ctx, extMgr)...)
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, hookEng, tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)), r.Tasks)
 	sess, serr := openOrCreateSession(args, r, ag, version)
 	if serr != nil {
 		if err := headlessSessionErr(args, serr); err != nil {
@@ -537,8 +530,9 @@ func runJSONMode(ctx context.Context, args build.Args, version string) error {
 	extMgr, stopExt := setupNonInteractiveExtensions(ctx, args, &r, version)
 	defer stopExt()
 
-	ag := r.NewAgent()
-	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, build.BuildHookEngine(args, r.Trusted), tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)), r.Tasks)
+	hookEng := build.BuildHookEngine(args, r.Trusted)
+	ag := r.NewAgent(build.BuildToolGate(hookEng, confirmGate, extMgr), build.ExtensionFilters(ctx, extMgr)...)
+	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, confirmGate, hookEng, tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)), r.Tasks)
 	sess, serr := openOrCreateSession(args, r, ag, version)
 	if serr != nil {
 		if err := headlessSessionErr(args, serr); err != nil {
@@ -637,16 +631,16 @@ func loggedInProviderList() []string {
 
 // openOrCreateSession returns a session for the run. sess may be nil
 // with a nil error if session persistence is disabled.
-func openOrCreateSession(args build.Args, r build.Resolved, ag *core.Agent, version string) (*core.Session, error) {
+func openOrCreateSession(args build.Args, r build.Resolved, ag *core.Agent, version string) (*session.Session, error) {
 	if args.NoSess {
 		return nil, nil
 	}
 	// Sweep meta-only files left over from older terva versions (and from
 	// any session that crashed before its first AppendMessage). Cheap;
 	// reads the first few bytes of each file in the cwd's session dir.
-	core.PruneEmptySessions(config.TervaHome(), args.CWD)
+	session.PruneEmptySessions(config.TervaHome(), args.CWD)
 	var (
-		s    *core.Session
+		s    *session.Session
 		msgs []provider.Message
 		err  error
 		// seedFresh marks a brand-new session created at an explicit
@@ -656,7 +650,7 @@ func openOrCreateSession(args build.Args, r build.Resolved, ag *core.Agent, vers
 	)
 	switch {
 	case args.Session != "":
-		s, msgs, err = core.OpenSession(args.Session)
+		s, msgs, err = session.OpenSession(args.Session)
 		// The swarm-agent child passes a fixed --session path that
 		// may not exist yet on first Spawn. Treat ENOENT as "create
 		// a fresh session AT THIS PATH" so the conversation actually
@@ -666,14 +660,14 @@ func openOrCreateSession(args build.Args, r build.Resolved, ag *core.Agent, vers
 		// the picker) never see ENOENT here because they only choose
 		// paths that already exist on disk.
 		if err != nil && errors.Is(err, os.ErrNotExist) {
-			s, err = core.NewSessionAtPath(args.Session, args.CWD, r.Provider, r.Model, version)
+			s, err = session.NewSessionAtPath(args.Session, args.CWD, r.Provider, r.Model, version)
 			msgs = nil
 			seedFresh = err == nil
 		}
 	case args.Continue:
-		latest := core.LatestSession(config.TervaHome(), args.CWD)
+		latest := session.LatestSession(config.TervaHome(), args.CWD)
 		if latest != "" {
-			s, msgs, err = core.OpenSession(latest)
+			s, msgs, err = session.OpenSession(latest)
 		}
 	case args.ResumeID != "":
 		// --resume <id>: direct resume for headless runs (docs/cli.md's
@@ -683,14 +677,14 @@ func openOrCreateSession(args build.Args, r build.Resolved, ag *core.Agent, vers
 		if perr != nil {
 			return nil, perr
 		}
-		s, msgs, err = core.OpenSession(path)
+		s, msgs, err = session.OpenSession(path)
 	case args.Resume:
 		picked, perr := pickSession(args.CWD)
 		if perr != nil {
 			return nil, perr
 		}
 		if picked != "" {
-			s, msgs, err = core.OpenSession(picked)
+			s, msgs, err = session.OpenSession(picked)
 		}
 	}
 	if err != nil {
@@ -725,13 +719,13 @@ func openOrCreateSession(args build.Args, r build.Resolved, ag *core.Agent, vers
 		if seedFresh {
 			seedCardGreeting(s, ag, r.CardGreeting)
 		}
-		if cum, _, resume, uerr := core.SessionUsageDetail(s.Path); uerr == nil {
+		if cum, _, resume, uerr := session.SessionUsageDetail(s.Path); uerr == nil {
 			ag.SeedCost(cum)
 			ag.SeedLastTurnUsage(resume)
 		}
 		return s, nil
 	}
-	fresh, err := core.NewSession(config.TervaHome(), args.CWD, r.Provider, r.Model, version)
+	fresh, err := session.NewSession(config.TervaHome(), args.CWD, r.Provider, r.Model, version)
 	if err != nil {
 		return nil, err
 	}
@@ -755,7 +749,7 @@ func openOrCreateSession(args build.Args, r build.Resolved, ag *core.Agent, vers
 // no longer resolves or has no credential leaves the built model in place and
 // returns a note for the caller to log. The returned (prov, model) always names
 // the agent's actual live model — callers use it for the menu/status line.
-func applyResumedModel(ag *core.Agent, base build.Args, sess *core.Session, builtProv, builtModel string) (prov, model, note string) {
+func applyResumedModel(ag *core.Agent, base build.Args, sess *session.Session, builtProv, builtModel string) (prov, model, note string) {
 	sp, sm := sess.Meta.Provider, sess.Meta.Model
 	if sp == "" || sm == "" || (sp == builtProv && sm == builtModel) {
 		return builtProv, builtModel, "" // nothing stored, or already correct
@@ -803,7 +797,7 @@ func applyResumedModel(ag *core.Agent, base build.Args, sess *core.Session, buil
 // continuity. A request-scoped guard in the provider converters keeps a
 // leading assistant turn valid for APIs (Anthropic) that require the first
 // message to be a user turn.
-func seedCardGreeting(s *core.Session, ag *core.Agent, greeting string) {
+func seedCardGreeting(s *session.Session, ag *core.Agent, greeting string) {
 	if greeting == "" {
 		return
 	}
@@ -825,7 +819,7 @@ func seedCardGreeting(s *core.Session, ag *core.Agent, greeting string) {
 // Rows render through the dialog's formatter — title (or first message),
 // age, model, size, cost — never raw file paths.
 func pickSession(cwd string) (string, error) {
-	summaries := pickableSessions(core.DescribeSessions(config.TervaHome(), cwd))
+	summaries := pickableSessions(session.DescribeSessions(config.TervaHome(), cwd))
 	if len(summaries) == 0 {
 		fmt.Fprintln(os.Stderr, "no sessions for", cwd)
 		return "", nil
@@ -840,7 +834,7 @@ func pickSession(cwd string) (string, error) {
 		// have vanish from the list; letting them pick it unmarked walks them
 		// into a refusal one keystroke later.
 		mark := ""
-		if st, ok := core.DescribeSessionLock(s.Path); ok && (st.Held || !st.Stale) {
+		if st, ok := session.DescribeSessionLock(s.Path); ok && (st.Held || !st.Stale) {
 			mark = "  [open in " + st.Claim.Holder + "]"
 		}
 		fmt.Fprintf(os.Stderr, "  %2d) %s%s\n", i+1, dialogs.FormatSessionRowPlain(s, rowWidth), mark)
@@ -871,7 +865,7 @@ func headlessSessionErr(args build.Args, serr error) error {
 	// turn with no persistence — and a lock refusal means another terva IS
 	// writing that transcript, so "carry on without saving" is the worst
 	// available answer. --continue reaches here, which is the common case.
-	if errors.Is(serr, core.ErrSessionLocked) {
+	if errors.Is(serr, session.ErrSessionLocked) {
 		return serr
 	}
 	fmt.Fprintln(os.Stderr, "session:", serr)
@@ -883,7 +877,7 @@ func headlessSessionErr(args build.Args, serr error) error {
 // session exists.
 func resolveSessionID(cwd, id string) (string, error) {
 	id = strings.TrimSuffix(id, ".jsonl")
-	for _, p := range core.ListSessions(config.TervaHome(), cwd) {
+	for _, p := range session.ListSessions(config.TervaHome(), cwd) {
 		if build.SessionIDFromPath(p) == id {
 			return p, nil
 		}
@@ -894,8 +888,8 @@ func resolveSessionID(cwd, id string) (string, error) {
 // pickableSessions drops zero-message sessions — same rule as the in-TUI
 // dialog: resuming an empty session is a no-op, and fresh/crashed empties
 // would otherwise pad the list until the next prune sweep.
-func pickableSessions(all []core.SessionSummary) []core.SessionSummary {
-	out := make([]core.SessionSummary, 0, len(all))
+func pickableSessions(all []session.SessionSummary) []session.SessionSummary {
+	out := make([]session.SessionSummary, 0, len(all))
 	for _, s := range all {
 		if s.MessageCount == 0 {
 			continue
@@ -911,7 +905,7 @@ func pickableSessions(all []core.SessionSummary) []core.SessionSummary {
 // turn under their own goroutine).
 // It returns and records the first persistence failure; later calls refuse to
 // append through the same agent so an ambiguous write cannot be duplicated.
-func WriteNewTranscript(ag *core.Agent, sess *core.Session, from int) error {
+func WriteNewTranscript(ag *core.Agent, sess *session.Session, from int) error {
 	return writeNewTranscriptLocked(ag, sess, from)
 }
 
@@ -919,7 +913,7 @@ func WriteNewTranscript(ag *core.Agent, sess *core.Session, from int) error {
 // suffix marks that interactive callers must hold persistMu when
 // invoking it so concurrent appends from the agent loop don't race
 // with this catch-up flush.
-func writeNewTranscriptLocked(ag *core.Agent, sess *core.Session, from int) error {
+func writeNewTranscriptLocked(ag *core.Agent, sess *session.Session, from int) error {
 	if sess == nil || ag == nil {
 		return nil
 	}
@@ -1075,7 +1069,7 @@ func printModels(filter string) error {
 		return err
 	}
 	var models []provider.Model
-	for _, m := range provider.Active() {
+	for _, m := range modelreg.Active() {
 		if keep(m) {
 			models = append(models, m)
 		}

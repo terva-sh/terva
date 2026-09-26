@@ -12,9 +12,9 @@ import (
 	"terva.sh/terva/packages/agent/card"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/persona"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // doctorPersona is the built-in card-craft persona whose charter is the card
@@ -106,7 +106,7 @@ func (w *Workspace) CardsDoctor(ctx context.Context, p ctrlproto.DoctorParams) (
 		if err != nil {
 			return ctrlproto.DoctorResult{}, err
 		}
-		if s.sess == nil || s.sess.Meta.Experience == "" {
+		if s.sess == nil || s.sess.Stage.Experience == "" {
 			return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the editor grounds in a chat or play session"))
 		}
 	}
@@ -143,10 +143,10 @@ func cardsDoctor(ctx context.Context, w *Workspace, s *wsSession, c card.Card, p
 	var model string
 	if s != nil {
 		ag := s.agent
-		if ag == nil || ag.Client == nil {
+		if ag == nil || ag.Client() == nil {
 			return ctrlproto.DoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("not logged in"))
 		}
-		cl = ag.Client
+		cl = ag.Client()
 		_, model = s.currentModel()
 		if strings.TrimSpace(p.Model) != "" {
 			cl, model, err = w.overrideClient(s.argsSnapshot(), p.Provider, p.Model)
@@ -289,7 +289,7 @@ Rules:
 // ordinary reply with the BOUND character, who may differ from the character
 // being enriched) and the World lore this character is cleared for. A free
 // function for testability.
-func renderEditorEvidence(charName, boundName, playerLabel string, lore []core.WorldLoreEntry, transcript []provider.Message) string {
+func renderEditorEvidence(charName, boundName, playerLabel string, lore []session.WorldLoreEntry, transcript []provider.Message) string {
 	var b strings.Builder
 	b.WriteString("\n" + i18n.P("stage.editor.scene", "THE PLAYED SCENE (most recent last) — your primary source") + "\n")
 	tail := renderSceneTail(transcript, playerLabel, boundName, editorMaxTranscript)

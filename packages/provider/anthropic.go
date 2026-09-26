@@ -7,11 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
-
-	"terva.sh/terva/packages/envcompat"
 )
 
 const anthropicDefaultBaseURL = "https://api.anthropic.com"
@@ -28,12 +25,13 @@ const AnthropicDefaultAPIVersion = anthropicAPIVersion
 // or 403 on the very first request.
 //
 // claudeCodeVersion is the compiled baseline, and the floor: when a local
-// Claude Code install is newer, effectiveClaudeCodeVersion claims that
+// Claude Code install is newer, claimedClaudeCodeVersion claims that
 // version instead (see anthropic_claude_version.go). Keep the baseline a
 // real released @anthropic-ai/claude-code version, and bump it when
-// Anthropic raises a model's version floor past it.
+// Anthropic raises a model's version floor past it. Opus 5.5 requires 2.1.280
+// (TestTheBaselineMeetsEveryKnownModelFloor).
 const (
-	claudeCodeVersion  = "2.1.267"
+	claudeCodeVersion  = "2.1.280"
 	claudeCodeIdentity = "You are Claude Code, Anthropic's official CLI for Claude."
 )
 
@@ -68,6 +66,7 @@ func fromClaudeCodeToolName(name string, tools []Tool) string {
 
 // anthropicClient implements Client against the Anthropic Messages API.
 type anthropicClient struct {
+	catalogRef
 	cred    CredentialSource
 	baseURL string
 	// oauth selects the Claude-subscription auth MODE: Bearer auth plus the
@@ -119,10 +118,13 @@ type anthropicClient struct {
 	// successful response — the UsageReporter half of /usage. Shared store,
 	// same as the openai client's.
 	usage usageObservation
+
+	// host is what the host supplied through ClientOptions.
+	host clientHooks
 }
 
 // NewAnthropic creates an Anthropic client using an API key. baseURL may be empty.
-func NewAnthropic(apiKey, baseURL string) Client {
+func NewAnthropic(apiKey, baseURL string, opts ...ClientOption) Client {
 	if baseURL == "" {
 		baseURL = anthropicDefaultBaseURL
 	}
@@ -130,18 +132,15 @@ func NewAnthropic(apiKey, baseURL string) Client {
 		cred:    StaticCredential(apiKey),
 		baseURL: strings.TrimRight(baseURL, "/"),
 		http:    &http.Client{Timeout: 0},
+		host:    applyClientOptions(opts),
 	}
 }
 
-// NewAnthropicOAuth creates an Anthropic client using a subscription OAuth access token.
-func NewAnthropicOAuth(accessToken, baseURL string) Client {
-	return NewAnthropicOAuthSource(StaticCredential(accessToken), baseURL)
-}
-
-// NewAnthropicOAuthSource is NewAnthropicOAuth with a CredentialSource instead
-// of a fixed token, so the subscription access token can rotate (refresh)
-// without rebuilding the client — resolved once per Stream.
-func NewAnthropicOAuthSource(cred CredentialSource, baseURL string) Client {
+// NewAnthropicOAuthSource creates an Anthropic client for a subscription
+// OAuth access token read from a CredentialSource, so the token can rotate
+// (refresh) without rebuilding the client. The source is read once per
+// Stream. StaticCredential adapts a fixed token.
+func NewAnthropicOAuthSource(cred CredentialSource, baseURL string, opts ...ClientOption) Client {
 	if baseURL == "" {
 		baseURL = anthropicDefaultBaseURL
 	}
@@ -150,6 +149,7 @@ func NewAnthropicOAuthSource(cred CredentialSource, baseURL string) Client {
 		oauth:   true,
 		baseURL: strings.TrimRight(baseURL, "/"),
 		http:    &http.Client{Timeout: 0},
+		host:    applyClientOptions(opts),
 	}
 }
 
@@ -333,9 +333,9 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 	// (kimi, fireworks, minimax, vercel-ai-gateway, ...). Falling back to a
 	// provider-agnostic lookup keeps things working for catalog-less
 	// configurations (e.g. user passes --model on an obscure third party).
-	m, err := FindModel(c.Name(), req.Model)
+	m, err := c.models().FindModel(c.Name(), req.Model)
 	if err != nil {
-		if m2, err2 := FindModel("", req.Model); err2 == nil {
+		if m2, err2 := c.models().FindModel("", req.Model); err2 == nil {
 			m = m2
 			err = nil
 		}
@@ -349,11 +349,12 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 		maxTok = m.MaxOutput
 	}
 	// Clamp to the model's advertised output cap. A stale per-turn budget
-	// can outlive the model it was sized for: Agent.SetModel swaps the model
-	// id in place without refreshing Agent.MaxTokens, so a /model switch from
-	// a high-cap model (e.g. 128000) to a lower-cap one (sonnet's 64000)
-	// would otherwise send the old budget and earn a hard 400
-	// ("max_tokens: N > CAP"). The OpenAI builder clamps for the same reason.
+	// can still outlive the model it was sized for: Agent.SetModel re-derives
+	// the budget only when the host's catalog knows the new model, and a host
+	// may set any budget it likes. A /model switch from a high-cap model
+	// (e.g. 128000) to a lower-cap one (sonnet's 64000) would then send the
+	// old budget and earn a hard 400 ("max_tokens: N > CAP"). The OpenAI
+	// builder clamps for the same reason.
 	if m.MaxOutput > 0 && maxTok > m.MaxOutput {
 		maxTok = m.MaxOutput
 	}
@@ -418,7 +419,7 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 			// and how much to think; depth is steered by output_config.effort.
 			// Explicit budgets are rejected with a 400, so none is sent.
 			out.Thinking = &anthThinking{Type: "adaptive"}
-			if effort := AnthropicAdaptiveEffort(eff); effort != "" {
+			if effort := anthropicAdaptiveEffort(eff); effort != "" {
 				out.OutputConfig = &anthOutputConfig{Effort: effort}
 			}
 		} else {
@@ -495,7 +496,7 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 	// assistant turn (a card's seeded greeting) valid by prepending a
 	// request-scoped user turn. All operate on the generic message list and never
 	// mutate history.
-	req.Messages = EnsureLeadingUserTurn(MergeAdjacentSameRole(RepairOrphanedToolResults(req.Messages)))
+	req.Messages = ensureLeadingUserTurn(mergeAdjacentSameRole(RepairOrphanedToolResults(req.Messages)))
 	for _, msg := range req.Messages {
 		renameTools := c.oauth
 		switch msg.Role {
@@ -776,16 +777,9 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event
 		return nil, err
 	}
 
-	// Optional debug dump: when $TERVA_DEBUG_ANTHROPIC is a file path
-	// we append every outgoing request body to it, one JSON object
-	// per line. Useful for diffing turn N vs turn N+1 to understand
-	// why the cache prefix isn't matching.
-	if dump := envcompat.Get("DEBUG_ANTHROPIC"); dump != "" {
-		if f, derr := os.OpenFile(dump, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); derr == nil {
-			_, _ = f.Write(body)
-			_, _ = f.Write([]byte{'\n'})
-			_ = f.Close()
-		}
+	// The host's debug dump (WithRequestDump), if it gave one.
+	if c.host.dump != nil {
+		c.host.dump(body)
 	}
 
 	// Resolve the credential once per turn (may refresh an expired OAuth
@@ -810,7 +804,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event
 			httpReq.Header.Set("authorization", "Bearer "+cred)
 			httpReq.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14")
 			httpReq.Header.Set("anthropic-dangerous-direct-browser-access", "true")
-			httpReq.Header.Set("user-agent", "claude-cli/"+effectiveClaudeCodeVersion())
+			httpReq.Header.Set("user-agent", "claude-cli/"+c.claimedClaudeCodeVersion())
 			httpReq.Header.Set("x-app", "cli")
 			// Remove x-api-key entirely by NOT setting it.
 		} else {
@@ -885,9 +879,9 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 
 	// Same lookup-by-actual-provider-id pattern as buildRequest, so cost
 	// calculation works for third-party Anthropic-Messages endpoints.
-	model, _ := FindModel(c.Name(), req.Model)
+	model, _ := c.models().FindModel(c.Name(), req.Model)
 	if model.ID == "" {
-		model, _ = FindModel("", req.Model)
+		model, _ = c.models().FindModel("", req.Model)
 	}
 	out <- EventStart{Model: req.Model, Provider: c.Name()}
 
@@ -1016,7 +1010,7 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 					finalErr = stream.Err()
 				default:
 					stop = StopError
-					finalErr = NewStreamDeathError(c.Name(), "message_stop")
+					finalErr = newStreamDeathError(c.Name(), "message_stop")
 				}
 				sendDone()
 				return

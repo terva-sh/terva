@@ -10,6 +10,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // scriptedClient answers each Stream call with the next scripted reply,
@@ -59,7 +60,7 @@ func (c *scriptedClient) requests() []provider.Request {
 func worldTestSession(t *testing.T, cl provider.Client, roster map[string]string) *wsSession {
 	t.Helper()
 	s := newTurnTestSession(t, cl)
-	s.sess.Meta.Experience = "chat"
+	s.sess.Stage.Experience = "chat"
 	s.args.Cast = roster
 	return s
 }
@@ -106,7 +107,7 @@ func TestRoutedTurnVoicesRosterPick(t *testing.T) {
 		t.Errorf("wire form = %+v, want Routed+Actor", w)
 	}
 	// The session file replays the same attribution (live == replayed).
-	if replayed, err := core.ReadSessionMessages(s.sess.Path); err != nil {
+	if replayed, err := session.ReadSessionMessages(s.sess.Path); err != nil {
 		t.Fatalf("replay: %v", err)
 	} else if got := replayed[len(replayed)-1].Meta[core.MetaActor]; got != "Elira" {
 		t.Errorf("replayed actor = %q, want Elira", got)
@@ -179,7 +180,7 @@ func TestShouldRouteGates(t *testing.T) {
 	}
 	for _, tc := range cases {
 		s := worldTestSession(t, &scriptedClient{}, tc.roster)
-		s.sess.Meta.Experience = tc.experience
+		s.sess.Stage.Experience = tc.experience
 		s.sess.Meta.Coordination = tc.coord
 		if got := s.shouldRoute(tc.text, tc.images); got != tc.want {
 			t.Errorf("%s: shouldRoute = %v, want %v", tc.name, got, tc.want)
@@ -195,7 +196,7 @@ func TestShouldRouteGates(t *testing.T) {
 // renderRouteSystem input), not twice.
 func TestRoutableRosterExcludesBound(t *testing.T) {
 	s := worldTestSession(t, &scriptedClient{}, map[string]string{"Kobeni": "kobeni-ref"})
-	s.sess.Meta.Card = "kobeni-ref"
+	s.sess.Stage.Card = "kobeni-ref"
 	if s.shouldRoute("hi", nil) {
 		t.Fatal("a cast holding only the bound card must stay dormant (N=1)")
 	}
@@ -266,8 +267,14 @@ func TestAdvanceDormantAtNOne(t *testing.T) {
 	drainUntil(t, sub, "done")
 	waitIdle(t, s)
 
-	if reqs := cl.requests(); len(reqs) != 1 {
+	reqs := cl.requests()
+	if len(reqs) != 1 {
 		t.Fatalf("N=1 advance must not route: %d calls", len(reqs))
+	}
+	// The cue is what keeps a scene ending in directed lines from being sent as
+	// a prefill; see advanceCue.
+	if !strings.Contains(reqs[0].EphemeralContext, "[Advance]") {
+		t.Errorf("advance sent no advance cue on the ephemeral tail: %q", reqs[0].EphemeralContext)
 	}
 	msgs := s.agent.Messages()
 	if got := msgs[len(msgs)-1].Meta[core.MetaSource]; got != "" {
@@ -279,7 +286,7 @@ func TestAdvanceDormantAtNOne(t *testing.T) {
 // sees world lore + their own secrets, never another's; the narrator sees all.
 func TestVoiceLoreScoped(t *testing.T) {
 	s := worldTestSession(t, &scriptedClient{}, map[string]string{"Elira": "r1", "Rook": "r2"})
-	s.sess.Meta.WorldLore = []core.WorldLoreEntry{
+	s.sess.Meta.WorldLore = []session.WorldLoreEntry{
 		{Name: "world", Constant: true, Content: "Magic is outlawed."},
 		{Name: "hers", Constant: true, Content: "Elira owes a life.", Audience: []string{"Elira"}},
 		{Name: "his", Constant: true, Content: "Rook is the informant.", Audience: []string{"Rook"}},

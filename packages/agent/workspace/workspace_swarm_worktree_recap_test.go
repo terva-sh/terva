@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
 )
@@ -18,7 +19,7 @@ import (
 // reports the work undone.
 func TestRecapNamesTheLeasedWorktree(t *testing.T) {
 	s := &wsSession{
-		agent: core.NewAgent(nil, "fake-model", "", core.Registry{}),
+		agent: coretest.NewAgent(nil, "fake-model", "", core.Registry{}),
 		hub:   &wsHub{},
 	}
 	s.turnCancel = func(error) {}
@@ -48,7 +49,7 @@ func TestRecapNamesTheLeasedWorktree(t *testing.T) {
 // remove, inverted.
 func TestRecapOmitsTheWorktreeWhenTheTreeIsShared(t *testing.T) {
 	s := &wsSession{
-		agent: core.NewAgent(nil, "fake-model", "", core.Registry{}),
+		agent: coretest.NewAgent(nil, "fake-model", "", core.Registry{}),
 		hub:   &wsHub{},
 	}
 	s.turnCancel = func(error) {}

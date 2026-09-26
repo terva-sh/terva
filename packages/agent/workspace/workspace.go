@@ -20,6 +20,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/hooks"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/agent/restartmarker"
@@ -30,6 +31,7 @@ import (
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/relaunch"
+	"terva.sh/terva/packages/session"
 )
 
 // Workspace is the in-process implementation of [ctrlproto.WorkspaceService]
@@ -340,7 +342,7 @@ func NewWorkspace(args build.Args, version string) (*Workspace, error) {
 	// Close can leave a meta-only file behind. PruneEmptySessions removes any file
 	// with no message row before any resume, so drafts never accrue. (The TUI/CLI
 	// path already prunes; the web daemon did not until here.)
-	core.PruneEmptySessions(w.root, w.cwd)
+	session.PruneEmptySessions(w.root, w.cwd)
 	// Recover a planned-restart marker: an armed supervisor restart wrote it just
 	// before the SIGTERM that replaced the previous image. Consume it once here
 	// (removed from disk, so a crash mid-recovery cannot replay a stale
@@ -600,7 +602,7 @@ func (w *Workspace) Close() error {
 
 // --- path / id helpers ---
 
-func (w *Workspace) sessionsDir() string          { return core.SessionsDir(w.root, w.cwd) }
+func (w *Workspace) sessionsDir() string          { return session.SessionsDir(w.root, w.cwd) }
 func (w *Workspace) sessionPath(id string) string { return filepath.Join(w.sessionsDir(), id+".jsonl") }
 
 // validSessionID reports whether a client-supplied wire session id is a safe
@@ -688,7 +690,7 @@ func (w *Workspace) existing(id string) *wsSession {
 // everywhere else on the wire — had its approvals silently dropped.
 func (w *Workspace) live(sess string) *wsSession {
 	if sess == "" {
-		if p := core.LatestSession(w.root, w.cwd); p != "" {
+		if p := session.LatestSession(w.root, w.cwd); p != "" {
 			sess = build.SessionIDFromPath(p)
 		}
 	}
@@ -703,7 +705,7 @@ func (w *Workspace) sessionLocked(id string) (*wsSession, error) {
 		// marked session no longer exists.
 		if mid := w.markedSessionID(); mid != "" {
 			id = mid
-		} else if p := core.LatestSession(w.root, w.cwd); p != "" {
+		} else if p := session.LatestSession(w.root, w.cwd); p != "" {
 			id = build.SessionIDFromPath(p)
 		} else {
 			return w.createLocked(ctrlproto.CreateOpts{})
@@ -724,12 +726,12 @@ func (w *Workspace) sessionLocked(id string) (*wsSession, error) {
 	// than the generic abort — so the agent does not read its own successful
 	// restart command as a failure. Applied exactly once: stage the "recovered"
 	// notice and drop the marker after this open.
-	var stub core.InterruptStub
+	var stub session.InterruptStub
 	planned := w.restartMarker != nil && w.restartMarker.Session == id
 	if planned {
-		stub = core.InterruptStub{Text: w.plannedInterruptText(), IsError: false}
+		stub = session.InterruptStub{Text: w.plannedInterruptText(), IsError: false}
 	}
-	sess, msgs, err := core.OpenSessionReconciled(path, stub)
+	sess, msgs, err := session.OpenSessionReconciled(path, stub)
 	if err != nil {
 		return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "open session: %v", err)
 	}
@@ -815,10 +817,10 @@ func (w *Workspace) recoveredRestartNotice(m *restartmarker.Marker, session stri
 // fresh as the last worlds.save — the session that just played is the truth.
 // nil for every ordinary create.
 type sceneSeed struct {
-	lore         []core.WorldLoreEntry
+	lore         []session.WorldLoreEntry
 	coordination string
 	world        string
-	castModels   map[string]core.CastRoute
+	castModels   map[string]session.CastRoute
 	note         string
 	// The parent's bound user persona — who the player is in the story. It
 	// outranks the workspace default a fresh immersive session would take:
@@ -854,7 +856,7 @@ func (w *Workspace) createSeededLocked(opts ctrlproto.CreateOpts, seed *sceneSee
 		// providers (subscription vs api-key), and the unqualified lookup may
 		// pick one the workspace holds no credential for — the created
 		// session would then fail its deferred Resolve.
-		if m, e := provider.FindModel(opts.Provider, opts.Model); e == nil {
+		if m, e := modelreg.FindModel(opts.Provider, opts.Model); e == nil {
 			prov, model = m.Provider, m.ID
 		}
 	}
@@ -887,12 +889,12 @@ func (w *Workspace) createSeededLocked(opts ctrlproto.CreateOpts, seed *sceneSee
 			opts.Cast = doc.Characters
 		}
 	}
-	sess, err := core.NewSession(w.root, w.cwd, prov, model, w.version)
+	sess, err := session.NewSession(w.root, w.cwd, prov, model, w.version)
 	if err != nil {
 		return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "create session: %v", err)
 	}
 	if opts.Title != "" {
-		_ = core.RenameSession(sess.Path, opts.Title)
+		_ = session.RenameSession(sess.Path, opts.Title)
 		sess.Meta.Title = opts.Title
 	}
 	// Persist the creation spec (persona + immersive fields) so a daemon restart
@@ -1117,7 +1119,7 @@ func (w *Workspace) Compact(ctx context.Context, sess string) error {
 	if err != nil {
 		return err
 	}
-	return s.compact(ctx)
+	return s.compact(ctx, core.CompactRequested)
 }
 
 func (w *Workspace) Clear(ctx context.Context, sess string) error {
@@ -1261,9 +1263,9 @@ func (w *Workspace) SubscribeReliable(ctx context.Context, sess string) (<-chan 
 // --- session group (WorkspaceService) ---
 
 func (w *Workspace) Sessions(ctx context.Context) ([]ctrlproto.SessionInfo, error) {
-	summaries := core.DescribeSessions(w.root, w.cwd)
+	summaries := session.DescribeSessions(w.root, w.cwd)
 	defID := ""
-	if p := core.LatestSession(w.root, w.cwd); p != "" {
+	if p := session.LatestSession(w.root, w.cwd); p != "" {
 		defID = build.SessionIDFromPath(p)
 	}
 	// Trust is workspace-global (keyed on w.cwd), so every session in this list
@@ -1346,7 +1348,7 @@ func (w *Workspace) ResumeSession(ctx context.Context, sess string) (ctrlproto.S
 }
 
 // ForkSession branches the parent session at fromIndex (see the interface doc):
-// core.BranchSession copies the parent's resolved transcript through fromIndex
+// session.BranchSession copies the parent's resolved transcript through fromIndex
 // into a new parent-linked file, which is then materialized and registered like
 // a create. Broadcasts sessions_changed so a board adds the child's tile.
 func (w *Workspace) ForkSession(ctx context.Context, sess string, fromIndex int) (ctrlproto.SessionInfo, error) {
@@ -1393,12 +1395,12 @@ func (w *Workspace) forkLocked(sess string, fromIndex int) (*wsSession, error) {
 		branchAt = disk
 	}
 	// BranchSession keeps the parent's first N messages; fromIndex is inclusive.
-	newPath, err := core.BranchSession(parentPath, w.root, w.cwd, w.version, branchAt+1)
+	newPath, err := session.BranchSession(parentPath, w.root, w.cwd, w.version, branchAt+1)
 	if err != nil {
 		return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "fork: %v", err)
 	}
 	id := build.SessionIDFromPath(newPath)
-	childSess, msgs, err := core.OpenSession(newPath)
+	childSess, msgs, err := session.OpenSession(newPath)
 	if err != nil {
 		return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "open fork: %v", err)
 	}
@@ -1419,7 +1421,7 @@ func (w *Workspace) RenameSession(ctx context.Context, sess, title string) error
 	if _, err := os.Stat(path); err != nil {
 		return ctrlproto.ErrNoSession
 	}
-	if err := core.RenameSession(path, title); err != nil {
+	if err := session.RenameSession(path, title); err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "rename: %v", err)
 	}
 	if s := w.existing(sess); s != nil {
@@ -1453,7 +1455,7 @@ func (w *Workspace) GenerateSessionTitle(ctx context.Context, sess string) (stri
 	} else {
 		// Read-only, so no write handle: OpenSession would take an
 		// O_APPEND|O_WRONLY handle on a transcript another process may hold.
-		m, meta, err := core.ReadSessionMeta(w.sessionPath(sess))
+		m, meta, err := session.ReadSessionMeta(w.sessionPath(sess))
 		if err != nil {
 			return "", ctrlproto.ErrNoSession
 		}
@@ -1478,7 +1480,7 @@ func (w *Workspace) GenerateSessionTitle(ctx context.Context, sess string) (stri
 		live.applyTitle(title)
 		return title, nil
 	}
-	if err := core.RenameSessionGenerated(w.sessionPath(sess), title); err != nil {
+	if err := session.RenameSessionGenerated(w.sessionPath(sess), title); err != nil {
 		return "", ctrlproto.Errorf(ctrlproto.CodeInternal, "persist title: %v", err)
 	}
 	return title, nil
@@ -1502,16 +1504,16 @@ func (w *Workspace) DeleteSession(ctx context.Context, sess string) error {
 	// Deleting a session deletes its sidecars too: a sidecar is that session's
 	// data, and leaving one would orphan a file no scan lists (sidecars are
 	// filtered from session listings). Best-effort — most sessions never had
-	// one. The list is core.SessionSidecarPaths, so a new sidecar is deleted
+	// one. The list is session.SessionSidecarPaths, so a new sidecar is deleted
 	// here without touching this.
-	for _, sc := range core.SessionSidecarPaths(w.sessionPath(sess)) {
+	for _, sc := range session.SessionSidecarPaths(w.sessionPath(sess)) {
 		_ = os.Remove(sc)
 	}
 	// And the lock's claim record, which is NOT a sidecar (it is runtime state
 	// about who had the session open, never the session's own data) and so is
 	// not in the list above. Leaving one behind would refuse a future session
 	// that happened to land on the same id.
-	core.RemoveSessionLockArtifacts(w.sessionPath(sess))
+	session.RemoveSessionLockArtifacts(w.sessionPath(sess))
 	// A missing file is only "not found" when we never knew the session; if it
 	// was live, close() legitimately pruned an empty transcript.
 	if os.IsNotExist(err) && !existed {
@@ -1545,7 +1547,7 @@ func (w *Workspace) DiscardDraft(ctx context.Context, sess string) error {
 	delete(w.sessions, sess)
 	w.mu.Unlock()
 	_ = os.Remove(w.sessionPath(sess)) // best-effort straggler cleanup
-	if sc := core.ErrorLogPathFor(w.sessionPath(sess)); sc != "" {
+	if sc := session.ErrorLogPathFor(w.sessionPath(sess)); sc != "" {
 		_ = os.Remove(sc)
 	}
 	w.BroadcastAll(ctrlproto.SessionsChangedEvent())
@@ -1563,7 +1565,7 @@ func (w *Workspace) Usage(ctx context.Context, sess string) (core.WireUsage, err
 	if _, err := os.Stat(path); err != nil {
 		return core.WireUsage{}, ctrlproto.ErrNoSession
 	}
-	cum, _, _, err := core.SessionUsageDetail(path)
+	cum, _, _, err := session.SessionUsageDetail(path)
 	if err != nil {
 		return core.WireUsage{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "usage: %v", err)
 	}
@@ -1583,12 +1585,14 @@ func (w *Workspace) UsageSnapshot(ctx context.Context, sess string, refresh bool
 	if s == nil || s.agent == nil {
 		return ctrlproto.UsageInfo{}, nil
 	}
-	ag := s.agent
-	snap, ok := ag.Usage()
+	// One read of the client, so the snapshot and the refreshable flag come
+	// from the same provider even when a model swap lands in between.
+	c := s.agent.Client()
+	snap, ok := provider.ClientUsage(c)
 	if refresh {
-		snap, ok = ag.RefreshUsage(ctx)
+		snap, ok = provider.ClientRefreshUsage(ctx, c)
 	}
-	return usageInfo(snap, ok, ag.UsageRefreshable()), nil
+	return usageInfo(snap, ok, provider.ClientNeedsUsageFetch(c)), nil
 }
 
 // ListResets reports the provider's usage-reset credits for the LIVE session.
@@ -1597,10 +1601,14 @@ func (w *Workspace) UsageSnapshot(ctx context.Context, sess string, refresh bool
 // endpoint; the verb's context bounds it.
 func (w *Workspace) ListResets(ctx context.Context, sess string) (ctrlproto.ResetsListResult, error) {
 	s := w.existing(sess)
-	if s == nil || s.agent == nil || !s.agent.SupportsResets() {
+	if s == nil || s.agent == nil {
 		return ctrlproto.ResetsListResult{}, nil
 	}
-	resets, err := s.agent.ListResets(ctx)
+	c := s.agent.Client()
+	if !provider.ClientSupportsResets(c) {
+		return ctrlproto.ResetsListResult{}, nil
+	}
+	resets, err := provider.ClientListResets(ctx, c)
 	if err != nil {
 		return ctrlproto.ResetsListResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "list resets: %v", err)
 	}
@@ -1613,10 +1621,16 @@ func (w *Workspace) ListResets(ctx context.Context, sess string) (ctrlproto.Rese
 // a clean CodeUnsupported rather than a silent success.
 func (w *Workspace) ConsumeReset(ctx context.Context, sess, id string) (ctrlproto.ResetConsumeResult, error) {
 	s := w.existing(sess)
-	if s == nil || s.agent == nil || !s.agent.SupportsResets() {
+	var c provider.Client
+	if s != nil && s.agent != nil {
+		c = s.agent.Client()
+	}
+	if c == nil || !provider.ClientSupportsResets(c) {
 		return ctrlproto.ResetConsumeResult{}, ctrlproto.Errorf(ctrlproto.CodeUnsupported, "%s", i18n.T("provider does not support usage resets"))
 	}
-	res, err := s.agent.ConsumeReset(ctx, id)
+	// The same client the support check read, so a swap in between cannot
+	// spend a credit on a provider that was never asked.
+	res, err := provider.ClientConsumeReset(ctx, c, id)
 	if err != nil {
 		return ctrlproto.ResetConsumeResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "consume reset: %v", err)
 	}
@@ -1773,7 +1787,7 @@ func (w *Workspace) Models(ctx context.Context, sess string) (ctrlproto.ModelsRe
 	}
 	var out []ctrlproto.ModelInfo
 	ladders := newLadderTable()
-	for _, m := range provider.Active() {
+	for _, m := range modelreg.Active() {
 		if !authed[m.Provider] {
 			continue
 		}
@@ -2132,9 +2146,9 @@ func normalizeSessionReasoning(level string) (string, error) {
 func (w *Workspace) overrideClient(base build.Args, providerName, modelID string) (provider.Client, string, error) {
 	next := base
 	if strings.TrimSpace(modelID) != "" {
-		target, err := provider.FindModel(providerName, modelID)
+		target, err := modelreg.FindModel(providerName, modelID)
 		if providerName == "" && strings.TrimSpace(base.Provider) != "" {
-			if m, e := provider.FindModel(base.Provider, modelID); e == nil {
+			if m, e := modelreg.FindModel(base.Provider, modelID); e == nil {
 				target, err = m, nil
 			}
 		}
@@ -2202,16 +2216,16 @@ func switchReusesClient(curProv string, cur provider.Model, curErr error, target
 // credential for — when they meant "same backend, different model".
 func (w *Workspace) switchModel(s *wsSession, providerName, modelID string, forceRebuild bool) error {
 	curProv, curModel := s.currentModel()
-	target, err := provider.FindModel(providerName, modelID)
+	target, err := modelreg.FindModel(providerName, modelID)
 	if providerName == "" && curProv != "" {
-		if m, err2 := provider.FindModel(curProv, modelID); err2 == nil {
+		if m, err2 := modelreg.FindModel(curProv, modelID); err2 == nil {
 			target, err = m, nil
 		}
 	}
 	if err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("unknown model %q", modelID))
 	}
-	cur, curErr := provider.FindModel(curProv, curModel)
+	cur, curErr := modelreg.FindModel(curProv, curModel)
 	swap := build.ModelSwap{Agent: s.agent, Provider: target.Provider, Model: target.ID}
 	if !switchReusesClient(curProv, cur, curErr, target, forceRebuild) {
 		next := w.args
@@ -2313,7 +2327,7 @@ func (w *Workspace) titleGen(s *wsSession) (bool, provider.Client, string) {
 func (w *Workspace) titleClient(prov, model string) (bool, provider.Client, string) {
 	cfg, _ := config.LoadConfig()
 	if cfg.AutoTitleModel != "" {
-		if t, err := provider.FindModel("", cfg.AutoTitleModel); err == nil {
+		if t, err := modelreg.FindModel("", cfg.AutoTitleModel); err == nil {
 			prov, model = t.Provider, t.ID
 		}
 	}

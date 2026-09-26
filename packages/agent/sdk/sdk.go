@@ -43,6 +43,10 @@
 //
 // For a non-Go consumer, run `terva rpc` and speak the same JSON
 // schema over stdin/stdout. See docs/rpc.md.
+//
+// For a Go host that wants its own conventions rather than terva's, build on
+// the engine (packages/core) directly; examples/harness is a working agent
+// made that way. docs/embedding.md compares the three ways to embed terva.
 package sdk
 
 import (
@@ -178,7 +182,8 @@ type Config struct {
 	//
 	// This is opt-IN because the default has to be the honest one: a `deny`
 	// rule a user wrote in their config means the same thing in every host
-	// that runs their tools, this one included.
+	// that runs their tools, this one included. Without Yolo, New fails when
+	// config.json cannot be read, rather than run without the rules in it.
 	Yolo bool
 }
 
@@ -215,7 +220,9 @@ func effectiveMaxSteps(n int) int {
 }
 
 // New constructs a Runtime from cfg. Returns an error if no
-// credential is available for the requested provider.
+// credential is available for the requested provider, or, unless cfg.Yolo is
+// set, if the user's config.json cannot be read, since it carries the
+// permission rules the runtime would otherwise enforce.
 func New(cfg Config) (*Runtime, error) {
 	args := build.Args{
 		Mode:               mode.JSON, // headless
@@ -256,9 +263,19 @@ func New(cfg Config) (*Runtime, error) {
 	//
 	// AdoptReadOnlySet runs BEFORE NewAgent, as in the CLI: it is what lets
 	// read_only-annotated tools join the classification the gate keys on.
+	//
+	// A user config that cannot be read is an error, not a warning. It carries
+	// the rules and the approval mode, so without it the policy comes back nil
+	// and the agent would run every tool unchecked, and a library has no
+	// stderr to warn on. Refusing to start is the only signal an embedder
+	// cannot miss. Yolo still works, because it asks for no rules.
 	var gate *core.ConfirmGate
 	if !cfg.Yolo {
-		if pol, _ := permissions.BuildPolicy(args.PermInputs()); pol != nil {
+		pol, _, perr := permissions.LoadPolicy(args.PermInputs())
+		if perr != nil {
+			return nil, fmt.Errorf("sdk: %w (repair the file, or set Config.Yolo only if this embedding should run every tool call unchecked)", perr)
+		}
+		if pol != nil {
 			gate = core.NewPolicyGate(pol, cfg.Confirmer)
 			r.AdoptReadOnlySet(pol.ReadOnly)
 			// Screening, inheriting the user's setting when Config.Classifier
@@ -276,13 +293,17 @@ func New(cfg Config) (*Runtime, error) {
 			build.InstallClassifier(gate, r, cfg.Classifier, func(string, ...any) {})
 		}
 	}
-	ag := r.NewAgent()
+	// The agent's gate. core.AllowAll on the Yolo and no-policy paths, which
+	// ran ungated by the embedder's choice before the gate was a constructor
+	// argument and still do; the name is the record of that choice.
+	var toolGate core.Gate = core.AllowAll
 	if gate != nil {
 		// nil hook engine and nil extension manager: the SDK wires neither
 		// (see the package doc's "what an embedder owns"). The gate is the
 		// one thing the USER owns, so it is the one thing installed here.
-		ag.BeforeToolExecute = build.BuildBeforeToolExecute(nil, gate, nil, ag)
+		toolGate = build.BuildToolGate(nil, gate, nil)
 	}
+	ag := r.NewAgent(toolGate)
 	return &Runtime{
 		agent:    ag,
 		provider: r.Provider,
@@ -374,12 +395,14 @@ func (r *Runtime) Cost() Usage {
 }
 
 // Prompt sends a user message and runs the agent loop under the
-// standard turn policy (the same one `terva --json` and the rpc server
-// use): the transcript is auto-compacted before the turn when it is
-// near the context window, and a request rejected with HTTP 413 is
-// condensed and retried once. Returns a channel that emits one Event
-// per agent action, closed when the turn finishes (cleanly or with
-// error); compaction surfaces as compact_start/compact_end events.
+// standard turn policy (the same one the TUI, the daemon and the rpc
+// server use): the transcript is compacted before the turn, between the
+// turn's tool steps, and after the turn whenever the agent's compaction
+// policy says the context is too full, and a request rejected with HTTP
+// 413 is condensed and retried once. Returns a channel that emits one
+// Event per agent action, closed when the turn and any compaction after it
+// finish (cleanly or with error); compaction surfaces as
+// compact_start/compact_end events.
 // Only one Prompt may be active at a time per Runtime; concurrent
 // calls return ErrBusy.
 func (r *Runtime) Prompt(ctx context.Context, text string, images []Image) (<-chan Event, error) {
@@ -418,11 +441,16 @@ func (r *Runtime) Prompt(ctx context.Context, text string, images []Image) (<-ch
 		// auto-compaction near the context window and a compact-and-retry
 		// on HTTP 413 — instead of a lower-level raw loop. Compaction
 		// surfaces as compact_start/compact_end events on the channel.
-		err := r.agent.PromptWithPolicy(subCtx, text, imgBlocks, func(ev core.AgentEvent) {
-			out <- core.EventToWire(ev)
-		})
+		emit := func(ev core.AgentEvent) { out <- core.EventToWire(ev) }
+		err := r.agent.PromptWithPolicy(subCtx, text, imgBlocks, emit)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			out <- Event{Type: "error", Error: err.Error()}
+		}
+		// After a clean turn, the same after-turn check every other front end
+		// makes, so an embedded session compacts where a TUI session does. A
+		// failure rides compact_end; the turn itself succeeded.
+		if err == nil && subCtx.Err() == nil {
+			_, _, _ = r.agent.CompactIfDue(subCtx, core.CompactAfterTurn, emit)
 		}
 	}()
 	return out, nil
@@ -459,7 +487,7 @@ func (r *Runtime) Compact(ctx context.Context, customInstructions string) (Compa
 		r.mu.Unlock()
 	}()
 
-	res, err := r.agent.Compact(subCtx, core.AutoCompactKeepTail, nil)
+	res, err := r.agent.Compact(subCtx, r.agent.Compaction(core.CompactRequested).KeepTail, nil)
 	if err != nil {
 		if errors.Is(err, core.ErrNothingToCompact) {
 			// Nothing to summarize — benign. Return an empty-summary result

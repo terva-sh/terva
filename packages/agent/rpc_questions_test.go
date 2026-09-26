@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
@@ -219,6 +220,10 @@ type rpcQuestionAgentClient struct {
 
 	mu    sync.Mutex
 	calls int
+	// secondFrom is the role of the last message call two was sent. The
+	// queued prompt sends a user message; a continuation of the first turn
+	// sends a tool result.
+	secondFrom provider.Role
 }
 
 func newRPCQuestionAgentClient(blockSecond bool) *rpcQuestionAgentClient {
@@ -248,12 +253,11 @@ func installProductionRPCQuestionAgent(t *testing.T, run rpcQuestionRun, client 
 	if err != nil {
 		t.Fatal(err)
 	}
-	ag := r.NewAgent()
-	ag.Client = client
-	ag.Model = "fake-model"
+	ag := r.NewAgent(core.AllowAll)
+	ag.SetClientAndModel(client, "fake-model")
 	run.server.agent = ag
 	run.server.provider = client.Name()
-	run.server.model = ag.Model
+	run.server.model = ag.Model()
 	binding := &rpcAskerBinding{resolved: &r, agent: ag}
 	run.server.bindAsker = binding.bind
 	return build.LiveToolSet{Args: args}, binding
@@ -311,6 +315,11 @@ func (c *rpcQuestionAgentClient) Stream(ctx context.Context, req provider.Reques
 				},
 			}
 		case 2:
+			if n := len(req.Messages); n > 0 {
+				c.mu.Lock()
+				c.secondFrom = req.Messages[n-1].Role
+				c.mu.Unlock()
+			}
 			close(c.secondCall)
 			if c.secondQuestion {
 				out <- provider.EventDone{
@@ -840,7 +849,7 @@ func TestRPCStructuredQuestionDismissDoesNotCancelQueuedPrompt(t *testing.T) {
 	defer run.close(t)
 
 	client := newRPCQuestionAgentClient(true)
-	run.server.agent = core.NewAgent(client, "fake-model", "system", core.Registry{
+	run.server.agent = coretest.NewAgent(client, "fake-model", "system", core.Registry{
 		"ask_user_question": &tools.AskUserTool{Asker: run.server},
 	})
 	run.server.provider = client.Name()
@@ -864,10 +873,15 @@ func TestRPCStructuredQuestionDismissDoesNotCancelQueuedPrompt(t *testing.T) {
 	// provider sees call two, its explicit barrier proves the queued context is
 	// still alive and was not stolen by dismissal.
 	_ = nextRPCFrameUntil(t, run.out, "done")
-	select {
-	case <-client.secondCall:
-	case <-client.secondCanceled:
-		t.Fatal("dismissing the first question canceled the queued prompt")
+	<-client.secondCall
+	client.mu.Lock()
+	from := client.secondFrom
+	client.mu.Unlock()
+	if from != provider.RoleUser {
+		// TKT-01M398XRR0: dismissal once released the waiting tool before it
+		// cancelled the turn, so the first turn made one more model call, and
+		// the turn's cancellation then aborted it.
+		t.Fatalf("provider call two continued from a %q message, want the queued prompt's user message: the dismissed turn made another model call", from)
 	}
 	select {
 	case <-client.secondCanceled:
@@ -955,7 +969,7 @@ func TestRPCStructuredQuestionEOFLeavesLegacyPromptToDrain(t *testing.T) {
 
 	client := &blockingRPCClient{entered: make(chan struct{}), release: make(chan struct{}), canceled: make(chan struct{})}
 	providerClient := blockingProvider{client}
-	run.server.agent = core.NewAgent(providerClient, "fake-model", "system", core.Registry{})
+	run.server.agent = coretest.NewAgent(providerClient, "fake-model", "system", core.Registry{})
 	run.server.provider = providerClient.Name()
 	run.server.model = "fake-model"
 
@@ -1130,7 +1144,7 @@ func TestRPCStructuredQuestionParentCancellationAbortsRealAgent(t *testing.T) {
 	out := newRPCQuestionFrameWriter()
 	server := &rpcServer{ctx: ctx, out: out, questionCapability: true}
 	client := newRPCQuestionAgentClient(false)
-	server.agent = core.NewAgent(client, "fake-model", "system", core.Registry{
+	server.agent = coretest.NewAgent(client, "fake-model", "system", core.Registry{
 		"ask_user_question": &tools.AskUserTool{Asker: server},
 	})
 	server.provider = client.Name()
@@ -1183,5 +1197,32 @@ func TestRPCStructuredQuestionAuthAndNegotiation(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatalf("auth test server: %v", err)
+	}
+}
+
+// Dismissal must end the turn before it releases the tool waiting on the
+// question. The wait context is a child of the turn's; cancelled the other way
+// round, the tool returns into a live turn and the agent starts another model
+// call (TKT-01M398XRR0). The check runs inside the wait's own cancel, where the
+// turn must already be done.
+func TestCancelOwnedQuestionEndsTheTurnBeforeTheWait(t *testing.T) {
+	turnCtx, turnCancel := context.WithCancel(context.Background())
+	defer turnCancel()
+	_, waitCancel := context.WithCancel(turnCtx)
+	var turnDoneAtWait error
+	calledWait := false
+	cancelOwnedQuestion(&rpcPendingQuestion{
+		turnCancel: turnCancel,
+		cancel: func() {
+			calledWait = true
+			turnDoneAtWait = turnCtx.Err()
+			waitCancel()
+		},
+	})
+	if !calledWait {
+		t.Fatal("the question's wait was never cancelled")
+	}
+	if turnDoneAtWait == nil {
+		t.Fatal("the wait was cancelled while the turn was still live, so the tool returns into a turn that goes on to another model call")
 	}
 }

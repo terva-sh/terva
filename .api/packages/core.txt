@@ -1,0 +1,724 @@
+# packages/core (stable): its exported API, one symbol per line.
+# Written by `just api-snapshot`. `just api-check` fails when it no longer matches the code.
+Agent	type	struct
+Agent.AddContinuationGate	method	func(g ContinuationGate)
+Agent.AddEventObserver	method	func(fn func(AgentEvent))
+Agent.AddMessageObserver	method	func(fn func(provider.Message))
+Agent.AddQueueDrainedObserver	method	func(fn func(drained []string))
+Agent.AdoptSessionIdentity	method	func(id TranscriptIdentity)
+Agent.AppendDiagnostic	method	func(write func(TranscriptDiagnostics) error)
+Agent.AppendRecord	method	func(write func(TranscriptStore) error)
+Agent.Asker	method	func() Asker
+Agent.Assembler	method	func() ContextAssembler
+Agent.AttachTranscriptStore	method	func(store TranscriptStore)
+Agent.Catalog	method	func() provider.ModelCatalog
+Agent.ClearReasoning	method	func()
+Agent.Client	method	func() provider.Client
+Agent.Compact	method	func(ctx context.Context, keepTail int, sink func(delta string)) (CompactResult, error)
+Agent.CompactIfDue	method	func(ctx context.Context, point CompactPoint, sink func(AgentEvent)) (res CompactResult, ran bool, err error)
+Agent.CompactWith	method	func(ctx context.Context, d CompactionDecision, sink func(delta string)) (CompactResult, error)
+Agent.Compaction	method	func(point CompactPoint) CompactionDecision
+Agent.CompactionPolicy	method	func() CompactionPolicy
+Agent.ConsumeContinueResult	method	func() (index int, merged provider.Message, ok bool)
+Agent.ContextUsage	method	func() (used, window int)
+Agent.Continue	method	func(ctx context.Context, sink func(AgentEvent)) error
+Agent.ContinueAssistant	method	func(ctx context.Context, sink func(AgentEvent)) error
+Agent.ContinueWithCue	method	func(ctx context.Context, sink func(AgentEvent), cue string) error
+Agent.ContinuesAssistantPrefill	method	func() bool
+Agent.Cost	method	func() provider.Usage
+Agent.DelegatedCost	method	func() provider.Usage
+Agent.DeleteMessage	method	func(idx int) bool
+Agent.DispatchedPrefix	method	func(client provider.Client, model string) (system string, tools []provider.Tool, cacheKey string, ok bool)
+Agent.DrainQueuedMessages	method	func() []string
+Agent.FramePreview	method	func() Frame
+Agent.Gate	method	func() Gate
+Agent.LastTurnUsage	method	func() provider.Usage
+Agent.LookupTool	method	func(name string) (Tool, bool)
+Agent.Messages	method	func() []provider.Message
+Agent.MessagesWithEpoch	method	func() ([]provider.Message, uint64)
+Agent.Model	method	func() string
+Agent.PendingQueuedMessages	method	func() []string
+Agent.PersistenceError	method	func() error
+Agent.Prompt	method	func(ctx context.Context, text string, images []provider.ImageBlock, sink func(AgentEvent)) error
+Agent.PromptWithPolicy	method	func(ctx context.Context, prompt string, images []provider.ImageBlock, sink func(AgentEvent)) error
+Agent.PromptWithPolicyExtra	method	func(ctx context.Context, prompt string, images []provider.ImageBlock, extras UserMessageExtras, sink func(AgentEvent)) error
+Agent.QueueMessage	method	func(text string) bool
+Agent.QueuedMessageCount	method	func() int
+Agent.Reasoning	method	func() (level string, set bool)
+Agent.ReasoningSummary	method	func() string
+Agent.RecentUsage	method	func() []provider.Usage
+Agent.RecordDelegatedUsage	method	func(u provider.Usage)
+Agent.RecordPersistenceError	method	func(err error)
+Agent.RecordSideChannelUsage	method	func(source string, u provider.Usage)
+Agent.ReplaceMessage	method	func(idx int, msg provider.Message) bool
+Agent.RequestToolRefresh	method	func(reason string) bool
+Agent.RequeueFront	method	func(text string) bool
+Agent.Resume	method	func(t Transcript)
+Agent.Revision	method	func() uint64
+Agent.Run	method	func(ctx context.Context, in Input, sink func(AgentEvent)) error
+Agent.SeedCost	method	func(u provider.Usage)
+Agent.SeedLastTurnUsage	method	func(u provider.Usage)
+Agent.SessionIdentity	method	func() (id, path string)
+Agent.SetAsker	method	func(ask Asker)
+Agent.SetCatalog	method	func(c provider.ModelCatalog)
+Agent.SetClientAndModel	method	func(client provider.Client, model string)
+Agent.SetMessages	method	func(msgs []provider.Message)
+Agent.SetModel	method	func(model string)
+Agent.SetQueuedMessages	method	func(texts []string)
+Agent.SetReasoning	method	func(level string)
+Agent.SetReasoningSummary	method	func(mode string)
+Agent.SetShowReasoning	method	func(on bool)
+Agent.SetToolRefresher	method	func(fn func(reason string))
+Agent.SetTools	method	func(reg Registry) (changed bool)
+Agent.SetToolsWithReadOnly	method	func(reg Registry, readOnly *ReadOnlySet) bool
+Agent.ShiftQueuedMessage	method	func() (string, bool)
+Agent.SideChannelCost	method	func() provider.Usage
+Agent.ToolForCall	method	func(ctx context.Context, name string) (context.Context, Tool, bool)
+Agent.ToolVisibility	method	func() ToolVisibility
+Agent.ToolsSnapshot	method	func() Registry
+Agent.ToolsWithReadOnlySnapshot	method	func() (Registry, *ReadOnlySet)
+Agent.TranscriptEpoch	method	func() uint64
+Agent.Translator	method unstable	func() i18n.Translator
+Agent.TruncateTo	method	func(idx int) bool
+AgentEvent	type	interface
+AgentEvent.Type	method	func() string
+AgentFromContext	func	func(ctx context.Context) *Agent
+AllowAll	var	allowAll
+ApprovalAsk	const	ApprovalMode
+ApprovalAutoEdit	const	ApprovalMode
+ApprovalMode	type	string
+ApprovalPlan	const	ApprovalMode
+ApprovalWorkspace	const	ApprovalMode
+ApprovalYolo	const	ApprovalMode
+AskOne	func	func(ctx context.Context, a Asker, q UserQuestion) (UserAnswer, error)
+Asker	type	interface
+Asker.Ask	method	func(ctx context.Context, qs []UserQuestion) ([]UserAnswer, error)
+AssembleMode	type	int
+AssemblePeek	const	AssembleMode
+AssembleRequest	const	AssembleMode
+AuthExternalMutate	const	Authority
+AuthLocalData	const	Authority
+AuthLocalRead	const	Authority
+AuthNetworkRead	const	Authority
+AuthProcessExec	const	Authority
+AuthUserInteraction	const	Authority
+AuthWorkspaceMutate	const	Authority
+Authority	type	string
+AutoCompactKeepTail	const	untyped int
+AutoCompactMode	type	string
+AutoCompactOff	const	AutoCompactMode
+AutoCompactSteps	const	AutoCompactMode
+AutoCompactThreshold	const	untyped float
+AutoCompactTurns	const	AutoCompactMode
+Binder	type	interface
+Binder.Bind	method	func(a *Agent)
+BuildPreview	func	func(args json.RawMessage, maxLen int) string
+BuildTitleSeed	func	func(msgs []provider.Message, budget int) string
+CacheCliff	type	struct
+CacheCliff.Dispatches	field	int
+CacheCliff.End	field	CliffEnd
+CacheCliff.Ongoing	field	bool
+CacheCliff.RereadTokens	field	int
+Classifier	type	interface
+Classifier.Classify	method	func(ctx context.Context, req ClassifyRequest) ClassifyResult
+ClassifierApprove	const	ClassifierMode
+ClassifierMode	type	string
+ClassifierMode.Enabled	method	func() bool
+ClassifierOff	const	ClassifierMode
+ClassifierScreen	const	ClassifierMode
+ClassifyAbstain	const	ClassifyVerdict
+ClassifyApprove	const	ClassifyVerdict
+ClassifyDeny	const	ClassifyVerdict
+ClassifyRecoverable	func	func(err error) (bool, string)
+ClassifyRequest	type	struct
+ClassifyRequest.Args	field	json.RawMessage
+ClassifyRequest.Mode	field	ApprovalMode
+ClassifyRequest.Preview	field	string
+ClassifyRequest.Tool	field	string
+ClassifyResult	type	struct
+ClassifyResult.Reason	field	string
+ClassifyResult.Verdict	field	ClassifyVerdict
+ClassifyVerdict	type	string
+CleanOneLine	func	func(s string, max int) string
+CliffEnd	type	string
+CliffEndNone	const	CliffEnd
+CliffEndRecovered	const	CliffEnd
+CliffEndVoided	const	CliffEnd
+CompactAfterTurn	const	CompactPoint
+CompactBeforeTurn	const	CompactPoint
+CompactCold	const	CompactStrategy
+CompactMidTurn	const	CompactPoint
+CompactOversize	const	CompactPoint
+CompactPoint	type	string
+CompactPrefixChanged	const	CompactPoint
+CompactProvider	const	CompactStrategy
+CompactRequested	const	CompactPoint
+CompactResult	type	struct
+CompactResult.FallbackReason	field	string
+CompactResult.Strategy	field	CompactStrategy
+CompactResult.Summary	field	string
+CompactResult.SupersededMessages	field	int
+CompactResult.TokensBefore	field	int
+CompactResult.Truncated	field	bool
+CompactResult.Usage	field	provider.Usage
+CompactStrategy	type	string
+CompactWarm	const	CompactStrategy
+CompactWarmFellBack	const	CompactStrategy
+CompactionDecision	type	struct
+CompactionDecision.Compact	field	bool
+CompactionDecision.KeepTail	field	int
+CompactionDecision.Strategies	field	[]CompactStrategy
+CompactionPolicy	type	interface
+CompactionPolicy.Decide	method	func(CompactionState) CompactionDecision
+CompactionPrompter	type	interface
+CompactionPrompter.CompactionPrompts	method	func() CompactionPrompts
+CompactionPrompts	type	struct
+CompactionPrompts.Instruction	field	string
+CompactionPrompts.LedgerFailed	field	func(tool string) string
+CompactionPrompts.LedgerHeader	field	string
+CompactionPrompts.LedgerOmitted	field	func(n int) string
+CompactionPrompts.LedgerUnknown	field	string
+CompactionPrompts.MidTurnAddendum	field	string
+CompactionPrompts.ProviderNotice	field	string
+CompactionPrompts.System	field	string
+CompactionPrompts.TruncatedNotice	field	string
+CompactionPrompts.TruncatedNoticeBare	field	string
+CompactionPrompts.WarmKeepTail	field	func(n int) string
+CompactionPrompts.WarmPreamble	field	string
+CompactionState	type	struct
+CompactionState.Fraction	field	float64
+CompactionState.Messages	field	int
+CompactionState.Point	field	CompactPoint
+CompactionState.Used	field	int
+CompactionState.Window	field	int
+ConfirmDecision	type	struct
+ConfirmDecision.Allow	field	bool
+ConfirmDecision.PersistScopes	field	[]string
+ConfirmDecision.PersistTool	field	bool
+ConfirmDecision.Reason	field	string
+ConfirmDecision.RememberAll	field	bool
+ConfirmDecision.RememberTool	field	bool
+ConfirmGate	type	struct
+ConfirmGate.AllowAll	method	func()
+ConfirmGate.Check	method	func(ctx context.Context, toolName string, args json.RawMessage, preview, callID string) (bool, string, json.RawMessage)
+ConfirmGate.ClassifierMode	method	func() ClassifierMode
+ConfirmGate.ClearAllowAll	method	func()
+ConfirmGate.Grants	method	func() (allowAll bool, tools []string)
+ConfirmGate.Mode	method	func() ApprovalMode
+ConfirmGate.Reset	method	func()
+ConfirmGate.Revoke	method	func(toolName string)
+ConfirmGate.Rules	method	func() []PermissionRule
+ConfirmGate.SetClassifier	method	func(c Classifier, mode ClassifierMode)
+ConfirmGate.SetConfirmer	method	func(c Confirmer)
+ConfirmGate.SetMode	method	func(m ApprovalMode)
+ConfirmGate.SetPersist	method	func(fn func(toolName, argsPattern string))
+ConfirmGate.SetRules	method	func(rules []PermissionRule)
+ConfirmGate.SetScopeDeriver	method	func(fn func(toolName string, args json.RawMessage) []GrantScope)
+ConfirmRequest	type	struct
+ConfirmRequest.CallID	field	string
+ConfirmRequest.Preview	field	string
+ConfirmRequest.Scopes	field	[]GrantScope
+ConfirmRequest.Tool	field	string
+Confirmer	type	interface
+Confirmer.Confirm	method	func(ctx context.Context, toolName string, preview string) ConfirmDecision
+ConfirmerWithCall	type	interface
+ConfirmerWithCall.ConfirmWithCall	method	func(ctx context.Context, toolName, preview, callID string) ConfirmDecision
+ConfirmerWithRequest	type	interface
+ConfirmerWithRequest.ConfirmWithRequest	method	func(ctx context.Context, req ConfirmRequest) ConfirmDecision
+ContentFromWire	func	func(blocks []WireBlock) []provider.Content
+ContentToWire	func	func(blocks []provider.Content) []WireBlock
+ContextAssembler	type	interface
+ContextAssembler.Assemble	method	func(mode AssembleMode) Frame
+ContextWithAgent	func	func(ctx context.Context, a *Agent) context.Context
+ContinuationGate	type	struct
+ContinuationGate.Cap	field	int
+ContinuationGate.Cause	field	string
+ContinuationGate.Fallback	field	bool
+ContinuationGate.Fire	field	func(stop provider.StopReason) (nudge string, ok bool)
+ContinuationGater	type	interface
+ContinuationGater.ContinuationGates	method	func() []ContinuationGate
+ContinueAssistantInput	type	struct
+ContinueInput	type	struct
+ContinueInput.Cue	field	string
+CoreToolGroup	const	untyped string
+DefaultCompactionPolicy	type	struct
+DefaultCompactionPolicy.Decide	method	func(s CompactionState) CompactionDecision
+DefaultCompactionPolicy.KeepTail	field	int
+DefaultCompactionPolicy.Mode	field	func() AutoCompactMode
+DefaultCompactionPolicy.Strategies	field	[]CompactStrategy
+DefaultCompactionPolicy.Threshold	field	float64
+DispatchObserver	type	struct
+DispatchObserver.Event	field	func(ev provider.Event)
+DispatchObserver.Sent	field	func(req provider.Request)
+DispatchWatcher	type	interface
+DispatchWatcher.DispatchObserver	method	func() DispatchObserver
+ErrBusy	var	error
+ErrContinueUnsupported	var	error
+ErrNilGate	var	error
+ErrNoAssistantToContinue	var	error
+ErrNoCompactionStrategy	var	error
+ErrNothingToCompact	var	error
+ErrPersistence	var	error
+ErrUserInterrupted	var	error
+EscalationDeclined	const	EscalationDisposition
+EscalationDisposition	type	string
+EscalationFailed	const	EscalationDisposition
+EscalationRecord	type	struct
+EscalationRecord.Auto	field	bool
+EscalationRecord.Detail	field	string
+EscalationRecord.Disposition	field	EscalationDisposition
+EscalationRecord.FromModel	field	string
+EscalationRecord.Reason	field	string
+EscalationRecord.ToModel	field	string
+EscalationRecord.ToProvider	field	string
+EscalationRecord.Tool	field	string
+EscalationStopped	const	EscalationDisposition
+EscalationSwitched	const	EscalationDisposition
+EvAssistantMessage	type	struct
+EvAssistantMessage.Message	field	provider.Message
+EvAssistantMessage.Type	method	func() string
+EvAssistantStart	type	struct
+EvAssistantStart.Type	method	func() string
+EvCompactEnd	type	struct
+EvCompactEnd.Err	field	string
+EvCompactEnd.Type	method	func() string
+EvCompactEnd.Usage	field	provider.Usage
+EvCompactStart	type	struct
+EvCompactStart.Reason	field	string
+EvCompactStart.Type	method	func() string
+EvContinuation	type	struct
+EvContinuation.Cause	field	string
+EvContinuation.Type	method	func() string
+EvDone	type	struct
+EvDone.Type	method	func() string
+EvEscalation	type	struct
+EvEscalation.Type	method	func() string
+EvReasoningDelta	type	struct
+EvReasoningDelta.Delta	field	string
+EvReasoningDelta.Type	method	func() string
+EvRetry	type	struct
+EvRetry.Attempt	field	int
+EvRetry.Delay	field	time.Duration
+EvRetry.Err	field	string
+EvRetry.Max	field	int
+EvRetry.Provider	field	string
+EvRetry.Type	method	func() string
+EvStall	type	struct
+EvStall.Type	method	func() string
+EvTextDelta	type	struct
+EvTextDelta.Delta	field	string
+EvTextDelta.Type	method	func() string
+EvToolCall	type	struct
+EvToolCall.Args	field	json.RawMessage
+EvToolCall.ID	field	string
+EvToolCall.Name	field	string
+EvToolCall.Type	method	func() string
+EvToolProgress	type	struct
+EvToolProgress.ID	field	string
+EvToolProgress.Text	field	string
+EvToolProgress.Type	method	func() string
+EvToolResult	type	struct
+EvToolResult.ID	field	string
+EvToolResult.Result	field	ToolResult
+EvToolResult.Type	method	func() string
+EvToolUseArgs	type	struct
+EvToolUseArgs.Delta	field	string
+EvToolUseArgs.ID	field	string
+EvToolUseArgs.Type	method	func() string
+EvToolUseEnd	type	struct
+EvToolUseEnd.ID	field	string
+EvToolUseEnd.Type	method	func() string
+EvToolUseStart	type	struct
+EvToolUseStart.ID	field	string
+EvToolUseStart.Name	field	string
+EvToolUseStart.Type	method	func() string
+EvTurnEnd	type	struct
+EvTurnEnd.Err	field	error
+EvTurnEnd.Stop	field	provider.StopReason
+EvTurnEnd.Type	method	func() string
+EvTurnStart	type	struct
+EvTurnStart.Step	field	int
+EvTurnStart.Type	method	func() string
+EvUsage	type	struct
+EvUsage.Cumulative	field	provider.Usage
+EvUsage.Type	method	func() string
+EvUsage.Usage	field	provider.Usage
+EvUserMessage	type	struct
+EvUserMessage.Message	field	provider.Message
+EvUserMessage.Synthetic	field	bool
+EvUserMessage.Type	method	func() string
+EvUserMessageRejected	type	struct
+EvUserMessageRejected.Reason	field	string
+EvUserMessageRejected.Text	field	string
+EvUserMessageRejected.Type	method	func() string
+EvUserMessageWithdrawn	type	struct
+EvUserMessageWithdrawn.Images	field	[]provider.ImageBlock
+EvUserMessageWithdrawn.Index	field	int
+EvUserMessageWithdrawn.Text	field	string
+EvUserMessageWithdrawn.Type	method	func() string
+EventObserver	type	interface
+EventObserver.ObserveEvent	method	func(ev AgentEvent)
+EventToWire	func	func(ev AgentEvent) WireEvent
+EventToWireFull	func	func(ev AgentEvent) WireEvent
+ExtractFailedProvider	func	func(err error) string
+Frame	type	struct
+Frame.Segments	field	[]Segment
+Frame.SystemText	method	func() string
+Frame.Volatile	method	func() []TailBlock
+Frame.VolatileText	method	func() string
+Gate	type	interface
+Gate.CheckTool	method	func(ctx context.Context, call provider.ToolCallBlock, tool Tool) (allowed bool, reason string, modifiedArgs json.RawMessage)
+GateFunc	type	func(ctx context.Context, call provider.ToolCallBlock, tool Tool) (allowed bool, reason string, modifiedArgs json.RawMessage)
+GateFunc.CheckTool	method	func(ctx context.Context, call provider.ToolCallBlock, tool Tool) (bool, string, json.RawMessage)
+GateWrapper	type	interface
+GateWrapper.WrapGate	method	func(inner Gate) Gate
+GrantScope	type	struct
+GrantScope.Display	field	string
+GrantScope.Pattern	field	string
+GroupRestorer	type	interface
+GroupRestorer.RestoreActiveGroups	method	func(groups []string)
+Input	type	interface
+IsReadOnlyAuthority	func	func(a string) bool
+IsToolImageMirror	func	func(msg provider.Message) bool
+IsUserTurn	func	func(msg provider.Message) bool
+LedgerArgsRenderer	type	interface
+LedgerArgsRenderer.LedgerArgs	method	func(args json.RawMessage) string
+LedgerFailureNoter	type	interface
+LedgerFailureNoter.LedgerFailed	method	func() string
+MaxAskQuestions	const	untyped int
+MemoryTranscriptStore	type	struct
+MemoryTranscriptStore.AppendCompaction	method	func(messages []provider.Message, res CompactResult) error
+MemoryTranscriptStore.AppendImageExclusion	method	func(sha256Hex string) error
+MemoryTranscriptStore.AppendMessage	method	func(m provider.Message) error
+MemoryTranscriptStore.AppendToolGroupActivation	method	func(group string) error
+MemoryTranscriptStore.AppendUsage	method	func(r UsageRecord) error
+MemoryTranscriptStore.Transcript	method	func() Transcript
+MessageFilter	type	interface
+MessageFilter.BeforeAssistantMessage	method	func(text string) (allowed bool, reason, replacement string)
+MessageFilter.BeforeUserMessage	method	func(text string) (allowed bool, reason, replacement string)
+MessageFromWire	func	func(w WireMessage) provider.Message
+MessageObserver	type	interface
+MessageObserver.ObserveMessage	method	func(m provider.Message)
+MessageToWire	func	func(m provider.Message) WireMessage
+MessageToWireFull	func	func(m provider.Message) WireMessage
+MetaActor	const	untyped string
+MetaAttachments	const	untyped string
+MetaAttachmentsMissing	const	untyped string
+MetaClear	const	untyped string
+MetaCompaction	const	untyped string
+MetaDirected	const	untyped string
+MetaIncomplete	const	untyped string
+MetaPreamble	const	untyped string
+MetaRouted	const	untyped string
+MetaShared	const	untyped string
+MetaSource	const	untyped string
+MetaSynthetic	const	untyped string
+MetaTokensBefore	const	untyped string
+New	func	func(client provider.Client, model string, opts ...Option) (*Agent, error)
+NewConfirmGate	func	func(inner Confirmer) *ConfirmGate
+NewMemoryTranscriptStore	func	func() *MemoryTranscriptStore
+NewPolicyGate	func	func(policy *PermissionPolicy, inner Confirmer) *ConfirmGate
+NewReadOnlySet	func	func(names ...string) *ReadOnlySet
+Option	type	struct
+PadAnswers	func	func(ans []UserAnswer, n int) []UserAnswer
+ParkTable	type	[T any] struct
+ParkTable.CancelAll	method	func(v T)
+ParkTable.Deliver	method	func(id string, v T) bool
+ParkTable.Len	method	func() int
+ParkTable.Park	method	func(id string) (ch <-chan T, release func(), ok bool)
+ParseApprovalMode	func	func(s string) (ApprovalMode, error)
+ParseClassifierMode	func	func(s string) (ClassifierMode, error)
+PermissionPolicy	type	struct
+PermissionPolicy.Builtin	field	map[string]bool
+PermissionPolicy.DecomposeCommand	field	func(toolName string, args json.RawMessage) []json.RawMessage
+PermissionPolicy.EditTools	field	map[string]bool
+PermissionPolicy.Evaluate	method	func(toolName string, args json.RawMessage) (PolicyVerdict, string)
+PermissionPolicy.Interactive	field	map[string]bool
+PermissionPolicy.Mode	field	ApprovalMode
+PermissionPolicy.ReadOnly	field	*ReadOnlySet
+PermissionPolicy.Rules	field	[]PermissionRule
+PermissionRule	type	struct
+PermissionRule.Args	field	*regexp.Regexp
+PermissionRule.Decision	field	RuleDecision
+PermissionRule.Reason	field	string
+PermissionRule.Source	field	string
+PermissionRule.Tool	field	string
+PolicyVerdict	type	int
+PrefixDivergence	type	struct
+PrefixDivergence.Appended	field	bool
+PrefixDivergence.CachedTokens	field	int
+PrefixDivergence.Label	field	string
+PrefixDivergence.MsgCount	field	int
+PrefixDivergence.Mutation	method	func() bool
+PrefixDivergence.PrevMsgCount	field	int
+PrefixDivergence.Rung	field	int
+PromptInput	type	struct
+PromptInput.Extras	field	UserMessageExtras
+PromptInput.Images	field	[]provider.ImageBlock
+PromptInput.Text	field	string
+QueueObserver	type	interface
+QueueObserver.QueueDrained	method	func(drained []string)
+ReadOnlySet	type	struct
+ReadOnlySet.Add	method	func(names ...string)
+ReadOnlySet.Has	method	func(name string) bool
+ReadOnlySet.Snapshot	method	func() *ReadOnlySet
+Registry	type	map[string]Tool
+Registry.Get	method	func(name string) (Tool, error)
+Registry.Specs	method	func() []provider.Tool
+Registry.SpecsVisible	method	func(visible func(name string) bool) []provider.Tool
+ReportInnerCall	func	func(ctx context.Context, tool string, res ToolResult)
+ResumeAfterCutShort	const	ResumeState
+ResumeAfterTools	const	ResumeState
+ResumeAfterUser	const	ResumeState
+ResumeNotStuck	const	ResumeState
+ResumeState	type	int
+ResumeState.String	method	func() string
+ResumeState.Stuck	method	func() bool
+ResumeStateOf	func	func(msgs []provider.Message) ResumeState
+RetryPhase	type	string
+RetryPhaseCompaction	const	RetryPhase
+RetryPhaseTurn	const	RetryPhase
+RetryRecord	type	struct
+RetryRecord.Attempt	field	int
+RetryRecord.Delay	field	time.Duration
+RetryRecord.Err	field	string
+RetryRecord.Max	field	int
+RetryRecord.Phase	field	RetryPhase
+RetryRecord.Provider	field	string
+RuleAllow	const	RuleDecision
+RuleAsk	const	RuleDecision
+RuleDecision	type	string
+RuleDeny	const	RuleDecision
+SanitizeSlug	func	func(s string) string
+Segment	type	struct
+Segment.Content	field	string
+Segment.Stability	field	Stability
+Segment.Tag	field	string
+SharedFile	type	struct
+SharedFile.CallID	field	string
+SharedFile.Caption	field	string
+SharedFile.ExpiresAt	field	string
+SharedFile.ID	field	string
+SharedFile.Kind	field	string
+SharedFile.Mime	field	string
+SharedFile.Name	field	string
+SharedFile.Size	field	int64
+Stability	type	int
+Stable	const	Stability
+StallRecord	type	struct
+StallRecord.Axis	field	string
+StallRecord.Detail	field	string
+StallRecord.Rung	field	int
+StallRecord.Tool	field	string
+StaticSystem	func	func(text string) ContextAssembler
+StepGate	type	struct
+StepGate.After	field	func(ctx context.Context, s StepState, emit func(AgentEvent)) (stop bool)
+StepGate.Begin	field	func()
+StepGate.Cause	field	string
+StepGate.Inner	field	func(outerCallID, tool string, res ToolResult)
+StepGater	type	interface
+StepGater.StepGate	method	func() StepGate
+StepState	type	struct
+StepState.Assistant	field	provider.Message
+StepState.Results	field	provider.Message
+StripCompactionHeader	func	func(s string) string
+TailBlock	type	struct
+TailBlock.ID	field	string
+TailBlock.Text	field	string
+TailDeliveryObserver	type	interface
+TailDeliveryObserver.TailDelivered	method	func(ids []string)
+TailHost	const	untyped string
+TailRecord	type	struct
+TailRecord.Blocks	field	[]TailBlock
+TailStageCue	const	untyped string
+TitleSeedBudget	const	untyped int
+Tool	type	interface
+Tool.Description	method	func() string
+Tool.Execute	method	func(ctx context.Context, args json.RawMessage, progress func(string)) (ToolResult, error)
+Tool.Name	method	func() string
+Tool.Schema	method	func() json.RawMessage
+ToolEssential	func	func(t Tool) bool
+ToolGroup	func	func(t Tool) string
+ToolImageMirrorPrefix	const	untyped string
+ToolPreview	func	func(t Tool, args json.RawMessage, maxLen int) string
+ToolResult	type	struct
+ToolResult.Content	field	[]provider.Content
+ToolResult.Details	field	any
+ToolResult.IsError	field	bool
+ToolResult.LinesAdded	field	int
+ToolResult.LinesRemoved	field	int
+ToolResult.Shared	field	[]SharedFile
+ToolVisibility	type	interface
+ToolVisibility.Advertise	method	func(reg Registry, pin bool) func(name string) bool
+ToolVisibility.BeginPrompt	method	func() (repin bool)
+ToolVisibility.Grew	method	func(reg Registry) bool
+Transcript	type	struct
+Transcript.ActiveToolGroups	field	[]string
+Transcript.Cumulative	field	provider.Usage
+Transcript.Messages	field	[]provider.Message
+Transcript.ResumeContext	field	provider.Usage
+TranscriptDiagnostics	type	interface
+TranscriptDiagnostics.AppendCacheCliff	method	func(CacheCliff) error
+TranscriptDiagnostics.AppendEscalation	method	func(EscalationRecord) error
+TranscriptDiagnostics.AppendPrefixDivergence	method	func(PrefixDivergence) error
+TranscriptDiagnostics.AppendRetry	method	func(RetryRecord) error
+TranscriptDiagnostics.AppendStall	method	func(StallRecord) error
+TranscriptDiagnostics.AppendTail	method	func(TailRecord) error
+TranscriptDiagnostics.AppendTransport	method	func(provider.TransportInfo) error
+TranscriptIdentity	type	struct
+TranscriptIdentity.CacheKey	field	string
+TranscriptIdentity.ID	field	string
+TranscriptIdentity.Path	field	string
+TranscriptStore	type	interface
+TranscriptStore.AppendCompaction	method	func(messages []provider.Message, res CompactResult) error
+TranscriptStore.AppendImageExclusion	method	func(sha256Hex string) error
+TranscriptStore.AppendMessage	method	func(provider.Message) error
+TranscriptStore.AppendToolGroupActivation	method	func(group string) error
+TranscriptStore.AppendUsage	method	func(UsageRecord) error
+TurnFilter	type	interface
+TurnFilter.BeforeTurn	method	func(step int) (allowed bool, reason string)
+UsageDelegated	const	UsageKind
+UsageFold	type	struct
+UsageFold.AddUsage	method	func(u, cum provider.Usage, sideways bool)
+UsageFold.CompactedTo	method	func(msgs []provider.Message)
+UsageFold.CompactionSpend	method	func(u provider.Usage)
+UsageFold.Result	method	func() (cumulative, lastTurn, resumeContext provider.Usage)
+UsageFromWire	func	func(w WireUsage) provider.Usage
+UsageKind	type	int
+UsageRecord	type	struct
+UsageRecord.Cumulative	field	provider.Usage
+UsageRecord.Kind	field	UsageKind
+UsageRecord.Source	field	string
+UsageRecord.Usage	field	provider.Usage
+UsageSideChannel	const	UsageKind
+UsageToWire	func	func(u provider.Usage) WireUsage
+UsageTurn	const	UsageKind
+UserAnswer	type	struct
+UserAnswer.Answer	field	string
+UserAnswer.Answers	field	[]string
+UserAnswer.Chosen	method	func() []string
+UserAnswer.Declined	field	bool
+UserAnswer.Note	field	string
+UserMessageExtras	type	struct
+UserMessageExtras.Meta	field	map[string]string
+UserMessageExtras.Preamble	field	string
+UserQuestion	type	struct
+UserQuestion.AllowCustom	field	bool
+UserQuestion.MultiSelect	field	bool
+UserQuestion.OptionRecommended	method	func(option string) bool
+UserQuestion.Options	field	[]string
+UserQuestion.Question	field	string
+UserQuestion.RecommendedOptions	field	[]string
+UserQuestion.Slug	field	string
+VerdictAllow	const	PolicyVerdict
+VerdictAsk	const	PolicyVerdict
+VerdictDeny	const	PolicyVerdict
+Volatile	const	Stability
+WireAttachment	type	struct
+WireAttachment.Kind	field	string
+WireAttachment.Mime	field	string
+WireAttachment.Name	field	string
+WireAttachment.Size	field	int64
+WireBlock	type	struct
+WireBlock.Args	field	json.RawMessage
+WireBlock.Bytes	field	int
+WireBlock.CallID	field	string
+WireBlock.Content	field	[]WireBlock
+WireBlock.Data	field	[]byte
+WireBlock.Encrypted	field	string
+WireBlock.ID	field	string
+WireBlock.IsError	field	bool
+WireBlock.MimeType	field	string
+WireBlock.Name	field	string
+WireBlock.Provider	field	string
+WireBlock.ReasoningID	field	string
+WireBlock.Shape	field	string
+WireBlock.Signature	field	string
+WireBlock.Summary	field	string
+WireBlock.Text	field	string
+WireBlock.Type	field	string
+WireEscalation	type	struct
+WireEscalation.Auto	field	bool
+WireEscalation.Detail	field	string
+WireEscalation.Disposition	field	string
+WireEscalation.FromModel	field	string
+WireEscalation.Reason	field	string
+WireEscalation.ToModel	field	string
+WireEscalation.ToProvider	field	string
+WireEscalation.Tool	field	string
+WireEvent	type	struct
+WireEvent.Args	field	json.RawMessage
+WireEvent.Cumulative	field	*WireUsage
+WireEvent.Delta	field	string
+WireEvent.Error	field	string
+WireEvent.Escalation	field	*WireEscalation
+WireEvent.ID	field	string
+WireEvent.IsError	field	bool
+WireEvent.LinesAdded	field	int
+WireEvent.LinesRemoved	field	int
+WireEvent.Map	method	func() map[string]any
+WireEvent.Message	field	*WireMessage
+WireEvent.Name	field	string
+WireEvent.Rejected	field	string
+WireEvent.Result	field	[]WireBlock
+WireEvent.Retry	field	*WireRetry
+WireEvent.Shared	field	[]SharedFile
+WireEvent.Stall	field	*WireStall
+WireEvent.Step	field	int
+WireEvent.Stop	field	string
+WireEvent.Text	field	string
+WireEvent.Type	field	string
+WireEvent.Usage	field	*WireUsage
+WireMessage	type	struct
+WireMessage.Actor	field	string
+WireMessage.Attachments	field	[]WireAttachment
+WireMessage.AttachmentsMissing	field	int
+WireMessage.Compaction	field	bool
+WireMessage.Content	field	[]WireBlock
+WireMessage.Directed	field	bool
+WireMessage.Incomplete	field	bool
+WireMessage.Preamble	field	bool
+WireMessage.Role	field	string
+WireMessage.Routed	field	bool
+WireMessage.Shared	field	[]SharedFile
+WireMessage.Synthetic	field	bool
+WireMessage.Time	field	string
+WireMessage.TokensBefore	field	int
+WireRetry	type	struct
+WireRetry.Attempt	field	int
+WireRetry.DelayMS	field	int64
+WireRetry.Error	field	string
+WireRetry.Max	field	int
+WireRetry.Provider	field	string
+WireStall	type	struct
+WireStall.Axis	field	string
+WireStall.Detail	field	string
+WireStall.Rung	field	int
+WireStall.Tool	field	string
+WireUsage	type	struct
+WireUsage.CacheRead	field	int
+WireUsage.CacheSavedUSD	field	float64
+WireUsage.CacheWrite	field	int
+WireUsage.CostUSD	field	float64
+WireUsage.ImageOutput	field	int
+WireUsage.Input	field	int
+WireUsage.Output	field	int
+WireUsage.Reasoning	field	int
+WireUsage.ReasoningKnown	field	bool
+WithAsker	func	func(ask Asker) Option
+WithAssembler	func	func(asm ContextAssembler) Option
+WithCatalog	func	func(c provider.ModelCatalog) Option
+WithCompactionPolicy	func	func(p CompactionPolicy) Option
+WithComponent	func	func(c any) Option
+WithGate	func	func(g Gate) Option
+WithImageOutput	func	func(cfg *provider.ImageOutputConfig) Option
+WithMaxSteps	func	func(n int) Option
+WithMaxTokens	func	func(n int) Option
+WithReasoning	func	func(level string) Option
+WithReasoningSummary	func	func(mode string) Option
+WithRetries	func	func(max int, base time.Duration) Option
+WithShowReasoning	func	func(show bool) Option
+WithTemperature	func	func(t float32) Option
+WithTools	func	func(tools Registry) Option
+WithTranscriptStore	func	func(store TranscriptStore) Option
+WithTranslator	func unstable	func(tr i18n.Translator) Option

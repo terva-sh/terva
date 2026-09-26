@@ -7,6 +7,7 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -15,7 +16,7 @@ import (
 // broadcasts, so a bare struct would not exercise the path that matters.
 func reasoningSession(t *testing.T, w *Workspace, id string) *wsSession {
 	t.Helper()
-	sess, err := core.NewSessionAtPath(filepath.Join(testsupport.TempDir(t), id+".jsonl"), "/ws", "anthropic", "claude-opus-4-8", "0.0.0")
+	sess, err := session.NewSessionAtPath(filepath.Join(testsupport.TempDir(t), id+".jsonl"), "/ws", "anthropic", "claude-opus-4-8", "0.0.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,21 +53,21 @@ func TestSessionOverrideSurvivesAGlobalChange(t *testing.T) {
 	if err := w.SetSessionReasoning(context.Background(), overridden.id, "max"); err != nil {
 		t.Fatalf("SetSessionReasoning: %v", err)
 	}
-	if got := overridden.agent.Reasoning; got != "max" {
+	if got := reasoningOf(overridden.agent); got != "max" {
 		t.Fatalf("agent reasoning = %q, want max", got)
 	}
 
 	// The global moves to "high".
 	w.applyReasoning("high")
 
-	if got := overridden.agent.Reasoning; got != "max" {
+	if got := reasoningOf(overridden.agent); got != "max" {
 		t.Errorf("a global change clobbered the session's own level: %q, want max", got)
 	}
 	if got := overridden.currentReasoning(); got != "max" {
 		t.Errorf("the override record was lost: %q", got)
 	}
 	// ...and the session that never chose still follows the global.
-	if got := plain.agent.Reasoning; got != "high" {
+	if got := reasoningOf(plain.agent); got != "high" {
 		t.Errorf("an un-overridden session did not follow the global: %q, want high", got)
 	}
 }
@@ -91,12 +92,12 @@ func TestClearingAnOverrideReturnsTheSessionToTheGlobal(t *testing.T) {
 	if got := s.currentReasoning(); got != "" {
 		t.Errorf("override not cleared: %q", got)
 	}
-	if got := s.agent.Reasoning; got != "medium" {
+	if got := reasoningOf(s.agent); got != "medium" {
 		t.Errorf("cleared session did not pick up the global: %q, want medium", got)
 	}
 	// And it TRACKS the global again rather than holding a copy.
 	w.applyReasoning("low")
-	if got := s.agent.Reasoning; got != "low" {
+	if got := reasoningOf(s.agent); got != "low" {
 		t.Errorf("cleared session stopped following the global: %q, want low", got)
 	}
 }
@@ -118,14 +119,14 @@ func TestExplicitOffIsAnOverrideNotAnAbsentOne(t *testing.T) {
 		t.Fatalf("stored override = %q, want the raw \"off\"", got)
 	}
 	// Normalized for the agent, but still an explicit choice.
-	if got := s.agent.Reasoning; got != "" {
+	if got := reasoningOf(s.agent); got != "" {
 		t.Errorf("agent reasoning = %q, want \"\" (off)", got)
 	}
-	if !s.agent.ReasoningSet {
+	if !reasoningSetOf(s.agent) {
 		t.Error("explicit off must set ReasoningSet, or a per-model default would beat it")
 	}
 	w.applyReasoning("maximum")
-	if got := s.agent.Reasoning; got != "" {
+	if got := reasoningOf(s.agent); got != "" {
 		t.Errorf("a global change overrode an explicit off: %q", got)
 	}
 }
@@ -142,13 +143,13 @@ func TestClearingWithNoGlobalFallsBackToTheModelDefault(t *testing.T) {
 	if err := w.SetSessionReasoning(context.Background(), s.id, "high"); err != nil {
 		t.Fatal(err)
 	}
-	if !s.agent.ReasoningSet {
+	if !reasoningSetOf(s.agent) {
 		t.Fatal("precondition: an explicit level should set ReasoningSet")
 	}
 	if err := w.SetSessionReasoning(context.Background(), s.id, ""); err != nil {
 		t.Fatal(err)
 	}
-	if s.agent.ReasoningSet {
+	if reasoningSetOf(s.agent) {
 		t.Error("clearing with no global must leave ReasoningSet false so the model's DefaultReasoning applies")
 	}
 }
@@ -196,4 +197,17 @@ func TestUnknownReasoningLevelIsRefusedByName(t *testing.T) {
 			t.Errorf("%q was refused: %v", ok, err)
 		}
 	}
+}
+
+// reasoningOf is the level a's next turn asks for.
+func reasoningOf(a *core.Agent) string {
+	level, _ := a.Reasoning()
+	return level
+}
+
+// reasoningSetOf reports whether a's level is an explicit choice rather than
+// the model's default.
+func reasoningSetOf(a *core.Agent) bool {
+	_, set := a.Reasoning()
+	return set
 }

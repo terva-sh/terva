@@ -3,14 +3,12 @@ package core
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 
 	"terva.sh/terva/packages/provider"
-	"terva.sh/terva/packages/testsupport"
 )
 
 // The invariant these tests pin: the cache-aware summarizer must reproduce the
@@ -91,23 +89,23 @@ func calledATool(input int) []provider.Event {
 	}
 }
 
-// cacheAwareAgent wires an agent with a real session (so PromptCacheKey is
+// cacheAwareAgent wires an agent with a session identity (so PromptCacheKey is
 // populated), one tool, and a thinking level — everything that has to survive
 // into the warm request unchanged.
 func cacheAwareAgent(t *testing.T, client provider.Client) *Agent {
 	t.Helper()
-	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
-	sess, err := NewSessionAtPath(path, "/ws", "p", "warm-model", "0.0.0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = sess.Close() })
 
-	a := NewAgent(client, "warm-model", "you are terva", Registry{"echo": &recordingTool{}})
-	a.Reasoning = "medium"
-	a.AdoptSessionIdentity(sess)
-	a.SetCacheAwareCompaction(true)
+	a := newTestAgent(client, "warm-model", "you are terva", Registry{"echo": &recordingTool{}})
+	a.reasoning = "medium"
+	a.AdoptSessionIdentity(TranscriptIdentity{ID: "s", Path: "/ws/s.jsonl"})
+	useStrategies(a, CompactWarm, CompactCold)
 	return a
+}
+
+// useStrategies gives a the default policy with strategies s. None is the
+// default policy's nil list, which is cold alone.
+func useStrategies(a *Agent, s ...CompactStrategy) {
+	a.compactionPolicy = DefaultCompactionPolicy{Strategies: s}
 }
 
 // The whole feature, in one assertion: the summarization request must carry the
@@ -202,7 +200,7 @@ func TestCompactionRecordsWhichSummarizerRan(t *testing.T) {
 
 	t.Run("cold", func(t *testing.T) {
 		a := cacheAwareAgent(t, &scriptedClient{name: "scripted", script: summarizes})
-		a.SetCacheAwareCompaction(false)
+		useStrategies(a)
 		if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 			t.Fatal(err)
 		}
@@ -326,7 +324,7 @@ func TestCacheAwareCompactionFallsBackWhenTheModelCallsATool(t *testing.T) {
 	if len(cold.Tools) != 0 {
 		t.Errorf("the fallback advertised %d tools; the bespoke path must advertise none", len(cold.Tools))
 	}
-	if cold.System == a.System {
+	if cold.System == a.FramePreview().SystemText() {
 		t.Error("the fallback reused the agent's system prompt; the bespoke path has its own summarizer system prompt")
 	}
 	if len(cold.Messages) != 1 {
@@ -385,7 +383,7 @@ func TestCompactionIsColdWhenTheFeatureIsOff(t *testing.T) {
 		return saidText("## Goal\nship it", 100), nil
 	}}
 	a := cacheAwareAgent(t, client)
-	a.SetCacheAwareCompaction(false)
+	useStrategies(a)
 
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 		t.Fatalf("Prompt returned %v", err)

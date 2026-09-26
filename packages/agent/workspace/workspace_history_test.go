@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -21,7 +22,7 @@ func historyWorkspace(t *testing.T, n int) (*Workspace, *wsSession) {
 		id:    "s1",
 		ws:    &Workspace{ctx: context.Background(), diag: func(string) {}},
 		hub:   newWSHub(),
-		agent: core.NewAgent(nil, "claude-sonnet-4-5", "", core.Registry{}),
+		agent: coretest.NewAgent(nil, "claude-sonnet-4-5", "", core.Registry{}),
 	}
 	msgs := make([]provider.Message, 0, n)
 	for i := range n {

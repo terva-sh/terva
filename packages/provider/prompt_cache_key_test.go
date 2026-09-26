@@ -35,7 +35,7 @@ func TestOpenAIPromptCacheKeyGatedByBackend(t *testing.T) {
 		t.Errorf("openai prompt_cache_key = %q, want sess-1", req.PromptCacheKey)
 	}
 
-	kimi := NewKimi("token", "https://example.test").(*openaiClient)
+	kimi := newKimiWithHeaders("token", "https://example.test", nil).(*openaiClient)
 	kreq, err := kimi.buildRequest(Request{Model: "m", Messages: msgs, PromptCacheKey: "sess-1"})
 	if err != nil {
 		t.Fatal(err)

@@ -70,17 +70,35 @@ func warmTurn(cacheRead int) []provider.Event {
 	}
 }
 
-// guardAgent is an agent with the guard armed for real: cache-aware compaction
-// on (without it the offer would have no saving behind it), a question channel,
-// and enough transcript that a compaction has something to do.
+// offeringPolicy is the default policy, except that it offers a compaction at
+// CompactPrefixChanged, as terva's does while prefix_change_guard is on.
+type offeringPolicy struct{ DefaultCompactionPolicy }
+
+func (p offeringPolicy) Decide(s CompactionState) CompactionDecision {
+	d := p.DefaultCompactionPolicy.Decide(s)
+	if s.Point == CompactPrefixChanged {
+		d.Compact = true
+	}
+	return d
+}
+
+// offerWith gives a a policy that offers, with strategies s.
+func offerWith(a *Agent, s ...CompactStrategy) {
+	a.compactionPolicy = offeringPolicy{DefaultCompactionPolicy{Strategies: s}}
+}
+
+// guardAgent is an agent with the guard armed for real: a policy that offers,
+// cache-aware compaction allowed (without it the offer would have no saving
+// behind it), a question channel, and enough transcript that a compaction has
+// something to do.
 func guardAgent(t *testing.T, cacheRead int, asker Asker) (*Agent, *scriptedClient) {
 	t.Helper()
 	client := &scriptedClient{name: "scripted", script: func(n int, req provider.Request) ([]provider.Event, error) {
 		return warmTurn(cacheRead), nil
 	}}
-	a := cacheAwareAgent(t, client) // session (cache key), one tool, thinking on, cache-aware on
-	a.SetPrefixChangeGuard(true)
-	a.Asker = asker
+	a := cacheAwareAgent(t, client) // session (cache key), one tool, thinking on
+	offerWith(a, CompactWarm, CompactCold)
+	a.SetAsker(asker)
 
 	// AutoCompactKeepTail is 4, so a compaction needs more than four messages to
 	// have anything to summarize — three turns.
@@ -155,7 +173,7 @@ func TestPrefixGuardCoalescesEveryChangeIntoOneOffer(t *testing.T) {
 	a, _ := guardAgent(t, 90_000, asker)
 
 	a.SetModel("cheaper-model")
-	a.SetSystem("a reloaded system prompt")
+	testFrameOf(a).setSystem("a reloaded system prompt")
 	a.SetTools(Registry{"grep": &reloadedTool{}})
 
 	if err := a.PromptWithPolicy(context.Background(), "next", nil, nil); err != nil {
@@ -281,7 +299,7 @@ func TestPrefixGuardIgnoresASmallCachedPrefix(t *testing.T) {
 func TestPrefixGuardStaysSilentWithoutCacheAwareCompaction(t *testing.T) {
 	asker := acceptsTheOffer()
 	a, _ := guardAgent(t, 90_000, asker)
-	a.SetCacheAwareCompaction(false)
+	offerWith(a) // still offering, but cold alone
 
 	a.SetModel("cheaper-model")
 	if err := a.PromptWithPolicy(context.Background(), "next", nil, nil); err != nil {
@@ -292,13 +310,30 @@ func TestPrefixGuardStaysSilentWithoutCacheAwareCompaction(t *testing.T) {
 	}
 }
 
+// The guard is the policy's to switch. The default policy never offers, so a
+// host that has not asked for the guard gets no question, even with everything
+// else in place: warm compaction allowed, an Asker, and a prefix to lose.
+func TestPrefixGuardIsOffUnderTheDefaultPolicy(t *testing.T) {
+	asker := acceptsTheOffer()
+	a, _ := guardAgent(t, 90_000, asker)
+	useStrategies(a, CompactWarm, CompactCold)
+
+	a.SetModel("cheaper-model")
+	if err := a.PromptWithPolicy(context.Background(), "next", nil, nil); err != nil {
+		t.Fatalf("PromptWithPolicy returned %v", err)
+	}
+	if n := len(asker.questions()); n != 0 {
+		t.Errorf("asked %d questions under the default policy; want 0", n)
+	}
+}
+
 // No question channel — a one-shot run, a swarm child, the chat bridge. Skip the
 // offer. Do NOT silently compact on their behalf: a guard that quietly discards
 // the conversation to save money nobody asked it to save is a worse footgun than
 // the one it guards against.
 func TestPrefixGuardSkipsHostsWithNobodyToAsk(t *testing.T) {
 	a, client := guardAgent(t, 90_000, nil)
-	a.Asker = nil
+	a.SetAsker(nil)
 	before := len(client.calls())
 
 	a.SetModel("cheaper-model")

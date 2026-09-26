@@ -7,7 +7,7 @@ import (
 	"terva.sh/terva/packages/i18n"
 )
 
-// The cache-cliff note. core's detector (cachecliff.go) proves the shape —
+// The cache-cliff note. The detector in core/exp/prefixwatch proves the shape —
 // append-only dispatches whose cache reads collapsed while the prompt kept
 // growing — and this file is only the wording and the keyed-note lifecycle:
 // one note per session, rewritten as the run grows, retracted the moment a

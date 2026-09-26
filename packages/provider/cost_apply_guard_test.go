@@ -67,9 +67,9 @@ func TestEveryProviderPricesThroughApplyCost(t *testing.T) {
 // entirely. Point it at a known-bad line and require a hit.
 func TestTheApplyCostGuardRecognisesADirectAssignment(t *testing.T) {
 	bad := []string{
-		"\t\tusage.CostUSD = ComputeCost(model, usage)",
+		"\t\tusage.CostUSD = computeCost(model, usage)",
 		"u.CostUSD = 0",
-		"\tout.CostUSD=ComputeCost(m, out)",
+		"\tout.CostUSD=computeCost(m, out)",
 	}
 	for _, line := range bad {
 		if !costAssign.MatchString(line) {

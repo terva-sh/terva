@@ -4,6 +4,8 @@ import (
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/lazytools"
+	"terva.sh/terva/packages/session"
 )
 
 // SessionBinding is the session-binding event: everything that has to learn
@@ -42,7 +44,7 @@ type SessionBinding struct {
 	Ext *extensions.Manager
 
 	// Session is the session now in force, or nil for none.
-	Session *core.Session
+	Session *session.Session
 }
 
 // BindSession points one host's session-keyed surfaces at Session.
@@ -63,11 +65,11 @@ func BindSession(b SessionBinding) {
 	//    cache ROUTE, RestoreActiveGroups keeps the tools array on that route
 	//    byte-identical to what is already cached. Restoring here rather than in
 	//    NewAgent is forced: NewAgent runs before the session is known, and it
-	//    is NewAgent's EnableLazyTools that resets the set in the first place.
+	//    is NewAgent's lazytools.New that resets the set in the first place.
 	if b.Agent != nil {
-		b.Agent.AdoptSessionIdentity(b.Session)
+		b.Agent.AdoptSessionIdentity(b.Session.Identity())
 		if b.Session != nil {
-			b.Agent.RestoreActiveGroups(b.Session.ActiveToolGroups)
+			lazytools.Of(b.Agent).RestoreActiveGroups(b.Session.ActiveToolGroups)
 		}
 	}
 	// 2. The board, loaded from the incoming session's file.

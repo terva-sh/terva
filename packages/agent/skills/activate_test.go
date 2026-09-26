@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"terva.sh/terva/packages/core/lazytools"
 	"testing"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -36,8 +38,7 @@ func skillTextOf(r core.ToolResult) string {
 // under lazy tool visibility — visibility only (retro H2·b step 5).
 func TestSkillActivatesAllowedToolGroups(t *testing.T) {
 	reg := core.Registry{"mail_send": skillFakeTool{"mail_send", "mail"}}
-	agent := core.NewAgent(nil, "m", "s", reg)
-	agent.EnableLazyTools()
+	agent := coretest.NewAgent(nil, "m", "s", reg, core.WithComponent(lazytools.New()))
 	ctx := core.ContextWithAgent(context.Background(), agent)
 
 	tool := NewTool([]*Skill{{
@@ -58,7 +59,7 @@ func TestSkillActivatesAllowedToolGroups(t *testing.T) {
 		t.Errorf("skill result should note the activated group: %q", txt)
 	}
 	// The group is now active: a fresh activation reports no change.
-	if agent.ActivateGroup("mail") {
+	if lazytools.Of(agent).Activate("mail") {
 		t.Error("mail should already be active after the skill loaded it")
 	}
 }
@@ -67,8 +68,7 @@ func TestSkillActivatesAllowedToolGroups(t *testing.T) {
 // workspace never loaded that extension) activates nothing — the untrusted-
 // workspace safety half of the §Security gate.
 func TestSkillAllowedToolsAbsentNoActivation(t *testing.T) {
-	agent := core.NewAgent(nil, "m", "s", core.Registry{})
-	agent.EnableLazyTools()
+	agent := coretest.NewAgent(nil, "m", "s", core.Registry{}, core.WithComponent(lazytools.New()))
 	ctx := core.ContextWithAgent(context.Background(), agent)
 
 	tool := NewTool([]*Skill{{Name: "x", Body: "b", AllowedTools: []string{"mail_send"}}})

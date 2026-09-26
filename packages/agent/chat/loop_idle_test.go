@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 )
 
@@ -13,7 +14,7 @@ func startIdleLoop(t *testing.T, conn *fakeConnector, reply string, idle time.Du
 	t.Helper()
 	l := &Loop{
 		Connector: conn,
-		Agent:     core.NewAgent(&scriptedClient{reply: reply}, "fake-model", "sys", core.Registry{}),
+		Agent:     coretest.NewAgent(&scriptedClient{reply: reply}, "fake-model", "sys", core.Registry{}),
 		Provider:  "fake",
 		CWD:       "/ws",
 		Pairing:   pairedWith("7"),

@@ -45,7 +45,7 @@ type AgentFactory interface {
 	//
 	// confirmer is the ACP confirmer the acp package owns; the factory
 	// wires it as the inner Confirmer of the session's ConfirmGate (via
-	// buildBeforeToolExecute) so a policy "ask" drives
+	// build.BuildToolGate) so a policy "ask" drives
 	// session/request_permission (§8). The gate hands each call's id to
 	// ConfirmWithCall directly, so the permission request correlates to the
 	// right toolCallId with no factory-side hook (§13). The confirmer is

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -30,7 +31,7 @@ type fakeHostToolSource struct{ ext bool }
 func (f fakeHostToolSource) HasTool(string) bool { return f.ext }
 
 func TestHostToolDispatcher(t *testing.T) {
-	ag := &core.Agent{Tools: core.Registry{"echo": echoTool{}}}
+	ag := coretest.NewAgent(nil, "fake", "", core.Registry{"echo": echoTool{}})
 	args := json.RawMessage(`{"text":"hi"}`)
 
 	// Happy path: a nil gate allows, the tool runs, text comes back.
@@ -58,7 +59,7 @@ func TestHostToolDispatcher(t *testing.T) {
 }
 
 func TestHostToolDispatchUsesCurrentGeneration(t *testing.T) {
-	ag := core.NewAgent(nil, "fake", "", nil)
+	ag := coretest.NewAgent(nil, "fake", "", nil)
 	gate := core.NewPolicyGate(&core.PermissionPolicy{Mode: core.ApprovalWorkspace, ReadOnly: core.NewReadOnlySet("echo")}, nil)
 	dispatch := buildHostToolDispatcher(ag, gate, fakeHostToolSource{})
 	ag.SetToolsWithReadOnly(core.Registry{"echo": echoTool{}}, core.NewReadOnlySet("echo"))
@@ -73,14 +74,14 @@ func TestHostToolDispatchUsesCurrentGeneration(t *testing.T) {
 
 // Both gate verdicts reached through the host_tool_call door land in the
 // audit log stamped via=host_tool_call — this door checks the gate outside
-// the BeforeToolExecute ladder, whose deferred audit never sees it.
+// the tool-call ladder, whose deferred audit never sees it.
 func TestHostToolDispatcherAudits(t *testing.T) {
 	home := testsupport.TempDir(t)
 	prev := auditSink
 	auditSink = newAuditLog(home)
 	t.Cleanup(func() { auditSink.Close(); auditSink = prev })
 
-	ag := &core.Agent{Tools: core.Registry{"echo": echoTool{}}}
+	ag := coretest.NewAgent(nil, "fake", "", core.Registry{"echo": echoTool{}})
 	// Allowed by a nil gate (the yolo spelling): one allow line, empty mode.
 	d := buildHostToolDispatcher(ag, nil, fakeHostToolSource{})
 	if _, isErr := d(context.Background(), "ext", "echo", json.RawMessage(`{"text":"hi"}`), false); isErr {
@@ -110,7 +111,7 @@ func TestHostToolDispatcherAudits(t *testing.T) {
 }
 
 func TestHostToolDispatcherGateDenies(t *testing.T) {
-	ag := &core.Agent{Tools: core.Registry{"echo": echoTool{}}}
+	ag := coretest.NewAgent(nil, "fake", "", core.Registry{"echo": echoTool{}})
 	// A policy gate in plan mode denies a non-read-only tool.
 	gate := core.NewPolicyGate(&core.PermissionPolicy{
 		Mode:     core.ApprovalPlan,

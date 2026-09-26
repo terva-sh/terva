@@ -45,7 +45,7 @@ func TestWorkspaceNoteSet(t *testing.T) {
 		t.Errorf("live record = %q, want %q", live.note.Get(), note)
 	}
 	// The live per-turn tail injects the note.
-	if cp := live.agent.ContextProvider; cp == nil || !strings.Contains(cp(), note) {
+	if cp := func() string { return live.agent.FramePreview().VolatileText() }; cp == nil || !strings.Contains(cp(), note) {
 		t.Error("author's note is not in the per-turn tail")
 	}
 
@@ -57,7 +57,7 @@ func TestWorkspaceNoteSet(t *testing.T) {
 	if live.sess.Meta.Note != "" || live.note.Get() != "" {
 		t.Errorf("note not cleared: meta=%q record=%q", live.sess.Meta.Note, live.note.Get())
 	}
-	if cp := live.agent.ContextProvider; cp != nil && strings.Contains(cp(), "raining") {
+	if cp := func() string { return live.agent.FramePreview().VolatileText() }; cp != nil && strings.Contains(cp(), "raining") {
 		t.Error("cleared note still in the tail")
 	}
 
@@ -112,7 +112,7 @@ func TestNoteReseedsOnResume(t *testing.T) {
 	if live.note == nil || live.note.Get() != note {
 		t.Errorf("note not reseeded from meta on restart: %v", live.note)
 	}
-	if cp := live.agent.ContextProvider; cp == nil || !strings.Contains(cp(), note) {
+	if cp := func() string { return live.agent.FramePreview().VolatileText() }; cp == nil || !strings.Contains(cp(), note) {
 		t.Error("reseeded note not injected into the tail after restart")
 	}
 }

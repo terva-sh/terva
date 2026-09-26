@@ -12,7 +12,7 @@ package provider
 // the small seed list for kimi / deepseek / google) are not duplicated
 // here; they take precedence on (provider, id) match.
 
-func init() { Catalog = append(Catalog, builtinCatalog...) }
+func init() { catalog = append(catalog, builtinCatalog...) }
 
 // The Gemini 3.6/3.7 Flash rows are priced at an INTRODUCTORY rate that Google
 // publishes an end date for. After it, input and output both double.

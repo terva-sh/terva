@@ -50,19 +50,20 @@ type copilotToken struct {
 	baseURL   string
 }
 
-// copilotTokenCache is a process-wide cache of short-lived Copilot tokens
-// keyed by the user's PAT. Concurrency-safe; safe to call from multiple
-// goroutines (a single agent loop is sequential, but extension intercepts
-// can run in parallel).
+// copilotTokenCache caches short-lived Copilot tokens keyed by the user's PAT.
+// Each client owns one, through its transport: the wire holds no token in a
+// package variable, so two clients in one process never share a cache, and
+// the exchange goes through the client's own HTTP client. Concurrency-safe:
+// a single agent loop is sequential, but extension intercepts can run in
+// parallel.
 type copilotTokenCache struct {
 	mu     sync.Mutex
 	tokens map[string]copilotToken
 	http   *http.Client
 }
 
-var copilotCache = &copilotTokenCache{
-	tokens: map[string]copilotToken{},
-	http:   &http.Client{Timeout: 30 * time.Second},
+func newCopilotTokenCache(httpc *http.Client) *copilotTokenCache {
+	return &copilotTokenCache{tokens: map[string]copilotToken{}, http: httpc}
 }
 
 // exchange swaps a PAT for a short-lived Copilot token. Caller is
@@ -152,10 +153,21 @@ func parseCopilotProxyEndpoint(token string) string {
 type copilotRefreshTransport struct {
 	inner http.RoundTripper
 	pat   string
+	cache *copilotTokenCache
+}
+
+// over rebuilds the transport on base: base's transport carries both the
+// inference requests and the token exchange. WithHTTPClient uses it.
+func (t *copilotRefreshTransport) over(base *http.Client) http.RoundTripper {
+	return &copilotRefreshTransport{
+		inner: roundTripperOf(base),
+		pat:   t.pat,
+		cache: newCopilotTokenCache(exchangeClient(base)),
+	}
 }
 
 func (t *copilotRefreshTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	tok, err := copilotCache.get(req.Context(), t.pat)
+	tok, err := t.cache.get(req.Context(), t.pat)
 	if err != nil {
 		return nil, err
 	}
@@ -179,12 +191,16 @@ func (t *copilotRefreshTransport) RoundTrip(req *http.Request) (*http.Response, 
 	return t.inner.RoundTrip(clone)
 }
 
-// NewGithubCopilotClient returns a Copilot-pinned OpenAI-compat client.
+// newGithubCopilotClient returns a Copilot-pinned OpenAI-compat client.
 // The pat must be a GitHub Personal Access Token with Copilot access.
-func NewGithubCopilotClient(pat string) Client {
+func newGithubCopilotClient(pat string) Client {
 	httpClient := &http.Client{
-		Transport: &copilotRefreshTransport{inner: http.DefaultTransport, pat: pat},
-		Timeout:   0,
+		Transport: &copilotRefreshTransport{
+			inner: http.DefaultTransport,
+			pat:   pat,
+			cache: newCopilotTokenCache(exchangeClient(&http.Client{})),
+		},
+		Timeout: 0,
 	}
 	// Initial baseURL is a sane default; copilotRefreshTransport rewrites
 	// the host on every request based on the freshly-issued token.

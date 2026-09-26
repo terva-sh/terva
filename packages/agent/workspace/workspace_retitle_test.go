@@ -8,6 +8,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -29,7 +30,7 @@ func retitleTestSession(t *testing.T, srvURL, title string, generated bool) *wsS
 		sessions: map[string]*wsSession{},
 		args:     build.Args{Provider: "openai-compatible", BaseURL: srvURL, APIKey: "k", Model: "fake-model", CWD: tmp},
 	}
-	ag := core.NewAgent(nil, "openai-compatible", "fake-model", core.Registry{})
+	ag := coretest.NewAgent(nil, "openai-compatible", "fake-model", core.Registry{})
 	summary := provider.Message{Role: provider.RoleUser,
 		Content: []provider.Content{provider.TextBlock{Text: "## Context Summary (compacted)\n\nbuilt the lexer, parser next"}},
 		Meta:    map[string]string{"compaction": "true"}}

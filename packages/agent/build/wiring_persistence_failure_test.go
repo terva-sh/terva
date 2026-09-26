@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -39,7 +40,7 @@ func TestPersistenceFailureReachesHeadlessCaller(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = sess.Close() })
 			cl := &persistenceFailureClient{}
-			ag := core.NewAgent(cl, "test", "", nil)
+			ag := coretest.NewAgent(cl, "test", "", nil)
 			WireHeadlessSessionPersist(ag, sess)
 			if err := ag.Prompt(context.Background(), "first saved turn", nil, nil); err != nil {
 				t.Fatal(err)

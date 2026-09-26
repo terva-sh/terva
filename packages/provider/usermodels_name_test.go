@@ -25,7 +25,7 @@ func TestOverrideWithoutNameKeepsCatalogDisplayName(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	overrides, warnings := LoadUserModelsWithWarnings(path)
+	overrides, warnings := loadUserModelsWithWarnings(path)
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %v", warnings)
 	}
@@ -55,7 +55,7 @@ func TestNameOverrideWinsAndMarksItself(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	overrides, _ := LoadUserModelsWithWarnings(path)
+	overrides, _ := loadUserModelsWithWarnings(path)
 
 	base := []Model{{Provider: "ollama", ID: "hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_XL", DisplayName: "hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_XL", Source: "live"}}
 	merged := applyUserOverrides(base, overrides)
@@ -80,7 +80,7 @@ func TestNameEqualToIDIsHonored(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	overrides, _ := LoadUserModelsWithWarnings(path)
+	overrides, _ := loadUserModelsWithWarnings(path)
 
 	base := []Model{{Provider: "anthropic", ID: "claude-x", DisplayName: "Claude X (latest)"}}
 	merged := applyUserOverrides(base, overrides)
@@ -102,7 +102,7 @@ func TestNewModelFromFileCarriesTheFlag(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	overrides, _ := LoadUserModelsWithWarnings(path)
+	overrides, _ := loadUserModelsWithWarnings(path)
 	merged := applyUserOverrides(nil, overrides)
 
 	byID := map[string]Model{}
@@ -128,7 +128,7 @@ func TestLoaderSanitizesName(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	overrides, warnings := LoadUserModelsWithWarnings(path)
+	overrides, warnings := loadUserModelsWithWarnings(path)
 	if len(overrides) != 1 {
 		t.Fatalf("want 1 override, got %d", len(overrides))
 	}
@@ -161,12 +161,12 @@ func TestSanitizeDisplayName(t *testing.T) {
 		{"\x1b]0;title\x07after", "after"},   // OSC runs to BEL
 		{"\x1b]0;title\x1b\\after", "after"}, // …or to ST
 		{"trailing\x1b[", "trailing"},        // an unterminated escape eats the rest, by design
-		{strings.Repeat("x", 200), strings.Repeat("x", MaxDisplayNameRunes)},
+		{strings.Repeat("x", 200), strings.Repeat("x", maxDisplayNameRunes)},
 		{"", ""},
 	}
 	for _, c := range cases {
-		if got := SanitizeDisplayName(c.in); got != c.want {
-			t.Errorf("SanitizeDisplayName(%q) = %q, want %q", c.in, got, c.want)
+		if got := sanitizeDisplayName(c.in); got != c.want {
+			t.Errorf("sanitizeDisplayName(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }

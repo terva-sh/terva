@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"terva.sh/terva/packages/lineframe"
+	"terva.sh/terva/packages/provider/lineframe"
 )
 
 // maxSSELineBytes bounds one line of a provider's text/event-stream. It is
@@ -151,7 +151,7 @@ func (s *sseStream) run(r io.Reader, provider string) {
 			// Reject, don't skip: this event's payload is gone, and every
 			// event carries part of one response. Fail loudly, and
 			// permanently — a retry would re-read the same oversized line.
-			s.err = NewStreamLimitError(provider, maxSSELineBytes)
+			s.err = newStreamLimitError(provider, maxSSELineBytes)
 			return
 		case err == nil:
 			// A complete line, terminating newline consumed. Feed it even when
@@ -168,7 +168,7 @@ func (s *sseStream) run(r io.Reader, provider string) {
 		default:
 			// Transport died mid-stream. Drop the half-read event rather than
 			// flushing a truncated payload, and report the real cause.
-			s.err = NewStreamReadError(provider, err)
+			s.err = newStreamReadError(provider, err)
 			return
 		}
 	}

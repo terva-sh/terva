@@ -8,6 +8,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/extensions"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/tools/tasks"
@@ -47,79 +48,86 @@ func TestHeadlessConfirmGateNilWhenYolo(t *testing.T) {
 	}
 }
 
-// TestWireNonInteractiveGateRefusesToolCall verifies the wiring: once
-// wireNonInteractiveAgentExtHooks installs a refusing gate, the
-// agent's BeforeToolExecute closure (the exact callback the agent
-// invokes before every tool — see core/agent.go runOneTool) denies the
-// call with a model-readable reason, before the extension intercept
-// ever sees it.
-func TestWireNonInteractiveGateRefusesToolCall(t *testing.T) {
+// resolvedForGateTest resolves a real, credentialed run for the gate tests
+// below, so each builds its agent through the same Resolved.NewAgent every
+// headless host uses. No request is ever sent.
+func resolvedForGateTest(t *testing.T) build.Resolved {
+	t.Helper()
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	r, err := build.Resolve(build.Args{
+		Provider: "openai", Model: "gpt-5", CWD: testsupport.TempDir(t), NoExt: true, NoMCP: true,
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// TestNonInteractiveAgentGateRefusesToolCall verifies the wiring: an agent
+// built the way the headless hosts build it carries the refusing gate as its
+// constructor argument, and that gate (the exact one the agent asks before every tool; see
+// core/agent.go runOneTool) denies the call with a model-readable reason,
+// before the extension intercept ever sees it.
+func TestNonInteractiveAgentGateRefusesToolCall(t *testing.T) {
 	withTempHome(t)
-	ag := core.NewAgent(nil, "test", "", core.Registry{})
+	r := resolvedForGateTest(t)
 	extMgr := extensions.New(testsupport.TempDir(t), testsupport.TempDir(t), "test", "openai", "gpt-5", build.NonInteractiveExtHooks{})
 	gate, _ := permissions.HeadlessConfirmGate(build.Args{Mode: mode.Print, NoYolo: true, CWD: testsupport.TempDir(t)}.PermInputs())
 
-	wireNonInteractiveAgentExtHooks(context.Background(), ag, extMgr, gate, nil, nil, nil)
+	ag := r.NewAgent(build.BuildToolGate(nil, gate, extMgr))
 
-	if ag.BeforeToolExecute == nil {
-		t.Fatal("BeforeToolExecute was not installed")
-	}
-	allowed, reason, _ := ag.BeforeToolExecute(t.Context(), provider.ToolCallBlock{
+	allowed, reason, _ := ag.Gate().CheckTool(t.Context(), provider.ToolCallBlock{
 		ID:        "T1",
 		Name:      "bash",
 		Arguments: []byte(`{"command":"rm -rf /"}`),
-	})
+	}, nil)
 	if allowed {
-		t.Fatal("BeforeToolExecute allowed a tool call under --no-yolo; want refusal")
+		t.Fatal("the agent's gate allowed a tool call under --no-yolo; want refusal")
 	}
 	if !strings.Contains(reason, "no-yolo") && !strings.Contains(reason, "refused") {
 		t.Errorf("refusal reason is not model-readable: %q", reason)
 	}
 }
 
-// TestWireNonInteractiveNoGateAllowsToolCall verifies that with no
-// gate (yolo), BeforeToolExecute does not refuse on the gate's behalf:
-// a bare extension manager (no subscribers) lets the call through.
-func TestWireNonInteractiveNoGateAllowsToolCall(t *testing.T) {
-	ag := core.NewAgent(nil, "test", "", core.Registry{})
+// TestNonInteractiveAgentNoGateAllowsToolCall verifies that with no confirm
+// gate (yolo), the ladder does not refuse on the gate's behalf: a bare
+// extension manager (no subscribers) lets the call through.
+func TestNonInteractiveAgentNoGateAllowsToolCall(t *testing.T) {
+	withTempHome(t)
+	r := resolvedForGateTest(t)
 	extMgr := extensions.New(testsupport.TempDir(t), testsupport.TempDir(t), "test", "openai", "gpt-5", build.NonInteractiveExtHooks{})
 
-	wireNonInteractiveAgentExtHooks(context.Background(), ag, extMgr, nil, nil, nil, nil)
+	ag := r.NewAgent(build.BuildToolGate(nil, nil, extMgr))
 
-	allowed, reason, _ := ag.BeforeToolExecute(t.Context(), provider.ToolCallBlock{
+	allowed, reason, _ := ag.Gate().CheckTool(t.Context(), provider.ToolCallBlock{
 		ID:        "T1",
 		Name:      "bash",
 		Arguments: []byte(`{"command":"ls"}`),
-	})
+	}, nil)
 	if !allowed {
-		t.Fatalf("BeforeToolExecute refused with yolo on (reason=%q); want allow", reason)
+		t.Fatalf("the ladder refused with yolo on (reason=%q); want allow", reason)
 	}
 }
 
 // TestTheGateIsWiredWithNoExtensionManager: the permission gate is not
 // conditional on extensions.
 //
-// The helper used to open with `if ag == nil || extMgr == nil { return }`, above
-// the line that installs BeforeToolExecute — so a host with a gate and no
+// wireNonInteractiveAgentExtHooks used to install the ladder, below an early
+// return for `ag == nil || extMgr == nil`, so a host with a gate and no
 // extension manager got an agent with NO ladder at all, and every tool call ran
-// unasked. Nothing reached it (every caller's manager comes from
-// setupNonInteractiveExtensions, which always builds one), and the SDK avoids
-// the helper precisely because it wires a gate with no manager. That is a lot of
-// load for an early return to be carrying.
+// unasked. The ladder is now the agent's constructor argument; this pins that a
+// nil manager still yields a gate that refuses.
 func TestTheGateIsWiredWithNoExtensionManager(t *testing.T) {
 	withTempHome(t)
-	ag := core.NewAgent(nil, "test", "", core.Registry{})
+	r := resolvedForGateTest(t)
 	gate, _ := permissions.HeadlessConfirmGate(build.Args{Mode: mode.Print, NoYolo: true, CWD: testsupport.TempDir(t)}.PermInputs())
 
+	ag := r.NewAgent(build.BuildToolGate(nil, gate, nil))
 	wireNonInteractiveAgentExtHooks(context.Background(), ag, nil, gate, nil, nil, nil)
 
-	if ag.BeforeToolExecute == nil {
-		t.Fatal("no ladder was installed for an agent with no extension manager — every tool call would " +
-			"run unasked, gate or no gate")
-	}
-	allowed, reason, _ := ag.BeforeToolExecute(t.Context(), provider.ToolCallBlock{
+	allowed, reason, _ := ag.Gate().CheckTool(t.Context(), provider.ToolCallBlock{
 		ID: "T1", Name: "bash", Arguments: []byte(`{"command":"rm -rf /"}`),
-	})
+	}, nil)
 	if allowed {
 		t.Fatalf("a gated agent with no extensions allowed a tool call (reason=%q)", reason)
 	}
@@ -137,13 +145,10 @@ func TestTheTaskBoardDoesNotDependOnExtensions(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	ag := core.NewAgent(nil, "test", "", core.Registry{})
+	ag := coretest.NewAgentWithAssembler(nil, "test", build.NewAssembler(nil), core.Registry{})
 	wireNonInteractiveAgentExtHooks(context.Background(), ag, nil, nil, nil, nil, ctrl)
 
-	if ag.ContextProvider == nil {
-		t.Fatal("no per-turn context provider: the task card is missing because there were no extensions")
-	}
-	if got := ag.ContextProvider(); !strings.Contains(got, "still visible") {
+	if got := ag.FramePreview().VolatileText(); !strings.Contains(got, "still visible") {
 		t.Errorf("the task card did not reach the model's context: %q", got)
 	}
 }

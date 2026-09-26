@@ -24,6 +24,7 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/agent/raati"
 	"terva.sh/terva/packages/agent/run"
@@ -653,8 +654,15 @@ func (w *Workspace) raatiSummarizeConversation(question, conversation string) (s
 	if err != nil {
 		return "", err
 	}
-	ag := core.NewAgent(r.NewClient(), r.Model,
-		i18n.P("raati.summarizer.system", "You prepare evidence briefs for a deliberation panel. You summarize faithfully and never recommend a verdict."), nil)
+	// core.AllowAll: the registry is nil, so the model is offered no tool and
+	// no call can reach a gate. A tool added here needs the session's ladder.
+	ag, err := core.New(r.NewClient(), r.Model,
+		core.WithAssembler(core.StaticSystem(i18n.P("raati.summarizer.system", "You prepare evidence briefs for a deliberation panel. You summarize faithfully and never recommend a verdict."))),
+		core.WithGate(core.AllowAll),
+		core.WithCatalog(modelreg.Registry()))
+	if err != nil {
+		return "", err
+	}
 	prompt := i18n.P("raati.summarizer.prompt",
 		"A three-member deliberation panel will decide the following question:\n%s\n\nSummarize the conversation below as an evidence brief for that panel. Include the relevant facts, constraints, decisions already made, and points of genuine disagreement. Do not argue for a verdict. Keep the brief under 400 words.\n\nConversation:\n%s",
 		question, conversation)
@@ -700,8 +708,15 @@ func (w *Workspace) raatiClerkAnswer(ctx context.Context, question, evidence str
 	if err != nil {
 		return unanswered()
 	}
-	ag := core.NewAgent(r.NewClient(), r.Model,
-		i18n.P("raati.clerk.system", "You are the clerk of a deliberation panel. Answer the questions of the panel from the record alone. Never answer from your own knowledge, and never guess. Never recommend a verdict. For any question that the record does not answer, reply exactly NOT_IN_RECORD for that item."), nil)
+	// core.AllowAll: the registry is nil, so the model is offered no tool and
+	// no call can reach a gate. A tool added here needs the session's ladder.
+	ag, err := core.New(r.NewClient(), r.Model,
+		core.WithAssembler(core.StaticSystem(i18n.P("raati.clerk.system", "You are the clerk of a deliberation panel. Answer the questions of the panel from the record alone. Never answer from your own knowledge, and never guess. Never recommend a verdict. For any question that the record does not answer, reply exactly NOT_IN_RECORD for that item."))),
+		core.WithGate(core.AllowAll),
+		core.WithCatalog(modelreg.Registry()))
+	if err != nil {
+		return unanswered()
+	}
 	record := evidence
 	if strings.TrimSpace(record) == "" {
 		record = i18n.P("raati.clerk.no_record", "(the requester submitted no evidence. Only the question itself is on the record)")

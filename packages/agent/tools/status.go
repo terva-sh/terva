@@ -8,11 +8,13 @@ import (
 	"sync"
 	"time"
 
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/swarm"
-	"terva.sh/terva/packages/buildinfo"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/provider/buildinfo"
+	"terva.sh/terva/packages/session"
 )
 
 // StatusTool lets the agent query its own runtime status: the model and
@@ -169,8 +171,8 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 		haveAgent        = agent != nil
 	)
 	if haveAgent {
-		model = agent.Model
-		reasoning = agent.Reasoning
+		model = agent.Model()
+		reasoning, _ = agent.Reasoning()
 		sessID, sessPath = agent.SessionIdentity()
 		cum = agent.Cost()
 		last = agent.LastTurnUsage()
@@ -233,7 +235,7 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 	fmt.Fprintf(&sb, "cwd: %s\n", cwd)
 	// The project key: what project-scoped extension state and swarm
 	// coordination key on for this cwd.
-	projectID := core.ProjectKey(cwd)
+	projectID := session.ProjectKey(cwd)
 	fmt.Fprintf(&sb, "project: %s\n", projectID)
 
 	// Session identity: which transcript file this conversation
@@ -257,13 +259,13 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 	// That claim used to be false: nine gauge sites divided by the hard ceiling
 	// while this one and auto-compaction used the effective window, so on a
 	// model with a DesiredContextWindow the bar read 21% at the moment the
-	// conversation was compacted. provider.ContextGauge is the shared accessor
+	// conversation was compacted. modelreg.ContextGauge is the shared accessor
 	// they all go through now; this site keeps its own FindModel because it
 	// also reports the hard ceiling as an aside.
 	ctxWindow := 0
 	modelMax := 0
 	if model != "" {
-		if m, err := provider.FindModel(provName, model); err == nil {
+		if m, err := modelreg.FindModel(provName, model); err == nil {
 			ctxWindow = m.EffectiveContextWindow()
 			modelMax = m.ContextWindow
 		}

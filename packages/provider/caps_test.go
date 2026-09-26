@@ -63,18 +63,18 @@ func TestMergeCapsDoesNotMutate(t *testing.T) {
 // catalog's explicit keys beat live discovery, models.json beats both,
 // and absent keys resolve through the default.
 func TestCapabilityLayerPrecedence(t *testing.T) {
-	t.Cleanup(ResetCatalogLayers)
-	ResetCatalogLayers()
+	t.Cleanup(testReg.Reset)
+	testReg.Reset()
 
 	// deepseek-v4-pro asserts image-input:false in the static catalog (the
 	// V4 API has no vision endpoint yet). A live entry claiming
 	// image-input:true must NOT override that explicit catalog value, but
 	// its other keys fill gaps the catalog left absent.
-	SetLiveModels([]Model{{
+	testReg.SetLiveModels([]Model{{
 		Provider: "deepseek", ID: "deepseek-v4-pro",
 		Caps: map[Capability]bool{CapImageInput: true, CapImageOutput: true},
 	}})
-	m, err := FindModel("deepseek", "deepseek-v4-pro")
+	m, err := testReg.FindModel("deepseek", "deepseek-v4-pro")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,11 +86,11 @@ func TestCapabilityLayerPrecedence(t *testing.T) {
 	}
 
 	// models.json outranks everything.
-	SetUserOverrides([]UserOverride{{
+	testReg.SetUserOverrides([]UserOverride{{
 		Model: Model{Provider: "deepseek", ID: "deepseek-v4-pro",
 			Caps: map[Capability]bool{CapImageInput: true}},
 	}})
-	m, err = FindModel("deepseek", "deepseek-v4-pro")
+	m, err = testReg.FindModel("deepseek", "deepseek-v4-pro")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestCapabilityLayerPrecedence(t *testing.T) {
 	}
 
 	// The catalog literal itself must be untouched by all the merging.
-	for _, cm := range Catalog {
+	for _, cm := range catalog {
 		if cm.Provider == "deepseek" && cm.ID == "deepseek-v4-pro" {
 			if v, ok := cm.Caps[CapImageInput]; !ok || v {
 				t.Error("catalog literal was mutated by the layer merge")
@@ -122,10 +122,10 @@ func TestCapabilityCacheRoundTrip(t *testing.T) {
 		Provider: "openai-compatible", ID: "local-vlm",
 		Caps: map[Capability]bool{CapImageInput: false},
 	}}}
-	if err := SaveCache(path, in); err != nil {
+	if err := saveCache(path, in); err != nil {
 		t.Fatal(err)
 	}
-	out, err := LoadCache(path)
+	out, err := loadCache(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,9 +148,9 @@ func TestCapabilityCacheRoundTrip(t *testing.T) {
 // whose V4 catalog rows assert image-input:true (this is the deliberate
 // behavior change that replaced the provider-wide name check).
 func TestOpenAIImageDropPerModelCapability(t *testing.T) {
-	t.Cleanup(ResetCatalogLayers)
-	ResetCatalogLayers()
-	RegisterExtraModel(Model{
+	t.Cleanup(testReg.Reset)
+	testReg.Reset()
+	testReg.RegisterExtraModel(Model{
 		Provider: "openai-compatible", ID: "blind-model",
 		Caps: map[Capability]bool{CapImageInput: false},
 	})
@@ -160,7 +160,7 @@ func TestOpenAIImageDropPerModelCapability(t *testing.T) {
 		ImageBlock{MimeType: "image/png", Data: []byte("bytes")},
 	}}}
 
-	c := NewOpenAI("token", "https://example.test").(*openaiClient)
+	c := WithCatalog(NewOpenAI("token", "https://example.test"), testReg).(*openaiClient)
 
 	req, err := c.buildRequest(Request{Model: "blind-model", Messages: msgs})
 	if err != nil {
@@ -197,7 +197,7 @@ func TestUserModelCapabilities(t *testing.T) {
 		if err := os.WriteFile(path, []byte(blob), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		return LoadUserModelsWithWarnings(path)
+		return loadUserModelsWithWarnings(path)
 	}
 
 	t.Run("capabilities object", func(t *testing.T) {

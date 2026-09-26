@@ -3,6 +3,7 @@ package workspace
 import (
 	"testing"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/agent/tools/tasks"
 	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/core"
@@ -62,7 +63,7 @@ func bareBoardSession(w *Workspace) *wsSession {
 		id:        "x",
 		ws:        w,
 		hub:       newWSHub(),
-		agent:     core.NewAgent(nil, "fake", "", core.Registry{}),
+		agent:     coretest.NewAgent(nil, "fake", "", core.Registry{}),
 		extPanels: map[string]*webPanel{},
 	}
 }

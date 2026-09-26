@@ -33,13 +33,13 @@ func TestMessageObserversCompose(t *testing.T) {
 // ACP relies on it (translate to session/update before the extension fan-out,
 // so a fan-out can never preempt the editor's narration).
 func TestEventObserversDeliverInRegistrationOrder(t *testing.T) {
-	a := NewAgent(nil, "m", "", Registry{})
+	a := newTestAgent(nil, "m", "", Registry{})
 
 	var order []string
 	a.AddEventObserver(func(AgentEvent) { order = append(order, "first") })
 	a.AddEventObserver(func(AgentEvent) { order = append(order, "second") })
 
-	a.EmitLifecycle(EvCompactStart{Reason: "test"})
+	a.emitLifecycle(EvCompactStart{Reason: "test"})
 
 	if len(order) != 2 || order[0] != "first" || order[1] != "second" {
 		t.Fatalf("delivery order = %v; want [first second]", order)
@@ -50,7 +50,7 @@ func TestEventObserversDeliverInRegistrationOrder(t *testing.T) {
 // shared state cannot beat an observer to it. (The old wrapSink did the same;
 // this pins it against the snapshot rewrite.)
 func TestEventObserversRunBeforeSink(t *testing.T) {
-	a := NewAgent(nil, "m", "", Registry{})
+	a := newTestAgent(nil, "m", "", Registry{})
 
 	var order []string
 	a.AddEventObserver(func(AgentEvent) { order = append(order, "observer") })
@@ -66,16 +66,16 @@ func TestEventObserversRunBeforeSink(t *testing.T) {
 // (ACP's sa.ObserveEvent) need no branch. This is what let the hand-rolled
 // compose-or-overwrite in acp/agent.go collapse to two unconditional calls.
 func TestNilObserverIsDropped(t *testing.T) {
-	a := NewAgent(nil, "m", "", Registry{})
+	a := newTestAgent(nil, "m", "", Registry{})
 
 	a.AddEventObserver(nil)
 	a.AddMessageObserver(nil)
-	a.AddUsageObserver(nil)
-	a.AddTranscriptCompactedObserver(nil)
-	a.AddImageExcludedObserver(nil)
+	a.addUsageObserver(nil)
+	a.addTranscriptCompactedObserver(nil)
+	a.addImageExcludedObserver(nil)
 
 	// Each emit path must be a no-op rather than a nil-call panic.
-	a.EmitLifecycle(EvCompactEnd{})
+	a.emitLifecycle(EvCompactEnd{})
 	a.fireMessageAppended(provider.Message{})
 	a.fireUsage(provider.Usage{}, provider.Usage{})
 	a.fireTranscriptCompacted(nil, CompactResult{})
@@ -89,7 +89,7 @@ func TestNilObserverIsDropped(t *testing.T) {
 // Observers fire outside the registry lock, so an observer may take its own
 // locks, and registration may race an emit. Meaningful only under -race.
 func TestObserverRegistrationIsRaceFree(t *testing.T) {
-	a := NewAgent(nil, "m", "", Registry{})
+	a := newTestAgent(nil, "m", "", Registry{})
 
 	var mu sync.Mutex
 	var seen int

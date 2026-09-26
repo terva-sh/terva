@@ -176,7 +176,7 @@ func TestANewSkillRebuildsThePromptSoTheModelCanSeeIt(t *testing.T) {
 	if len(stats.Removed) != 0 {
 		t.Errorf("Removed = %v, want none", stats.Removed)
 	}
-	if !strings.Contains(s.agent.System, "sys-health") {
+	if !strings.Contains(s.agent.FramePreview().SystemText(), "sys-health") {
 		t.Error("the rebuilt system prompt does not list the new skill")
 	}
 
@@ -199,7 +199,7 @@ func TestEditingASkillBodyDoesNotCostThePromptCache(t *testing.T) {
 	if !w.ReloadSkillsAndPrompt(id).PromptRebuilt {
 		t.Fatal("precondition: adding the skill should have rebuilt once")
 	}
-	systemBefore := s.agent.System
+	systemBefore := s.agent.FramePreview().SystemText()
 
 	writeGlobalSkillFull(t, home, "sys-health", "check the host", "Second draft, much better.")
 	stats := w.ReloadSkillsAndPrompt(id)
@@ -208,7 +208,7 @@ func TestEditingASkillBodyDoesNotCostThePromptCache(t *testing.T) {
 		t.Error("editing only the body rebuilt the prompt — that discards the request-prefix " +
 			"cache on every save, which is the whole cost this path exists to avoid")
 	}
-	if s.agent.System != systemBefore {
+	if s.agent.FramePreview().SystemText() != systemBefore {
 		t.Error("the system prompt changed even though the manifest did not")
 	}
 	if len(stats.Added) != 0 || len(stats.Removed) != 0 {
@@ -256,7 +256,7 @@ func TestADeletedSkillIsReportedAndLeavesThePrompt(t *testing.T) {
 	if len(stats.Removed) != 1 || !strings.Contains(stats.Removed[0], "sys-health") {
 		t.Errorf("Removed = %v, want the deleted skill", stats.Removed)
 	}
-	if strings.Contains(s.agent.System, "sys-health") {
+	if strings.Contains(s.agent.FramePreview().SystemText(), "sys-health") {
 		t.Error("the deleted skill is still listed in the system prompt")
 	}
 	if _, ok := loadSkill(t, s, "sys-health"); ok {

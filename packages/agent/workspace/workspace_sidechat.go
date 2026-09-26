@@ -49,7 +49,7 @@ type sideChatSnapshot struct {
 	model  string
 	// ephemeral is the session's per-turn tail as it stood at open time: the
 	// bound user persona (who you are, your stated gender and pronouns), the
-	// author's note, the World lore in play. It is NOT part of ag.System — the
+	// author's note, the World lore in play. It is NOT part of the system prompt — the
 	// agent assembles it per request — so freezing the system prompt alone left a
 	// side chat as the one surface that did not know who it was talking to. It
 	// would say "he" about a persona whose pronouns every other prompt had right.
@@ -67,22 +67,23 @@ func (w *Workspace) SideChatOpen(ctx context.Context, sess string) (string, erro
 		return "", err
 	}
 	ag := s.agent
-	if ag == nil || ag.Client == nil {
+	if ag == nil || ag.Client() == nil {
 		// No credential resolved for this session yet (a credential-less boot
 		// before /login). Nothing to complete against.
 		return "", ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("not logged in"))
 	}
 
 	_, model := s.currentModel()
+	// FramePreview assembles with AssemblePeek, the side-effect-free twin. A real
+	// turn's assembly records which lore entries fired, and opening an overlay
+	// must not write that state on the session's behalf.
+	frame := ag.FramePreview()
 	snap := &sideChatSnapshot{
-		system: ag.System,
-		msgs:   ag.Messages(), // Messages returns a copy; the freeze is real
-		client: ag.Client,
-		model:  model,
-		// ContextPreview, not ContextProvider: the side-effect-free twin. A real
-		// turn's provider records which lore entries fired, and opening an overlay
-		// must not write that state on the session's behalf.
-		ephemeral: ag.ContextPreview(),
+		system:    frame.SystemText(),
+		msgs:      ag.Messages(), // Messages returns a copy; the freeze is real
+		client:    ag.Client(),
+		model:     model,
+		ephemeral: frame.VolatileText(),
 	}
 
 	s.sidechatMu.Lock()

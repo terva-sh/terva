@@ -20,22 +20,6 @@ func (t viewTool) Execute(context.Context, json.RawMessage, func(string)) (ToolR
 	return ToolResult{}, nil
 }
 
-// TestSetSystemReportsChange: SetSystem is the cache-break signal's source of
-// truth — it must report a real diff and stay silent on an identical
-// re-install (rebuilds re-render the same prompt far more often than not).
-func TestSetSystemReportsChange(t *testing.T) {
-	a := NewAgent(nil, "m", "original", Registry{})
-	if a.SetSystem("original") {
-		t.Error("identical system prompt must not report a change")
-	}
-	if !a.SetSystem("rewritten") {
-		t.Error("a different system prompt must report a change")
-	}
-	if a.System != "rewritten" {
-		t.Errorf("System = %q after swap", a.System)
-	}
-}
-
 // TestSetToolsReportsChange: the verdict must track the model-facing surface
 // (names, descriptions, schemas — what the prompt cache serializes), not
 // implementation identity: re-installing equivalent tool values is silent,
@@ -47,7 +31,7 @@ func TestSetToolsReportsChange(t *testing.T) {
 			"write": viewTool{name: "write", desc: "write a file", schema: `{"type":"object"}`},
 		}
 	}
-	a := NewAgent(nil, "m", "", base())
+	a := newTestAgent(nil, "m", "", base())
 
 	if a.SetTools(base()) {
 		t.Error("an equivalent registry (fresh values, same surface) must not report a change")

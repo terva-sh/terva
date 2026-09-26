@@ -9,7 +9,7 @@ import (
 )
 
 // advanceFakeClient captures every request it is handed so a test can assert the
-// shape of the advance turn (the stage cue on the ephemeral tail).
+// shape of a cued turn (the stage cue on the ephemeral tail).
 type advanceFakeClient struct {
 	reply string
 	reqs  []provider.Request
@@ -32,6 +32,10 @@ func (c *advanceFakeClient) Stream(ctx context.Context, req provider.Request) (<
 	return out, nil
 }
 
+// advanceCue stands in for the cue Stage's advance passes. The text is the
+// workspace's; what these tests pin is what the engine does with any cue.
+const advanceCue = "[Advance] Continue the scene from where it stands."
+
 // directedScene is the state Stage leaves a scene in after the user authors lines
 // into it: the transcript ends in a RUN of assistant messages, the last of which
 // the user wrote, not the model.
@@ -52,8 +56,9 @@ func directedScene() []provider.Message {
 	}
 }
 
-// TestAdvanceAlwaysSendsAStageCue is the whole point of the primitive, and it
-// guards a SILENT corruption rather than an error.
+// TestAdvanceAlwaysSendsAStageCue: a cued turn puts its cue on the ephemeral
+// tail even when nothing else would. It guards a SILENT corruption rather than an
+// error. The workspace passes the advance cue; see its advanceCue.
 //
 // A scene whose transcript ends in authored (directed) lines ends in assistant
 // messages. Dispatching a bare turn there sends a request whose last message is an
@@ -66,12 +71,12 @@ func directedScene() []provider.Message {
 // populate the tail — a plain chat with no lore, note, or user persona.
 func TestAdvanceAlwaysSendsAStageCue(t *testing.T) {
 	client := &advanceFakeClient{reply: "Kobeni finally looked up."}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 	// Deliberately NO ContextProvider: without the cue the tail would be empty.
 	a.SetMessages(directedScene())
 
-	if err := a.Advance(context.Background(), nil); err != nil {
-		t.Fatalf("Advance: %v", err)
+	if err := a.ContinueWithCue(context.Background(), nil, advanceCue); err != nil {
+		t.Fatalf("ContinueWithCue: %v", err)
 	}
 	if len(client.reqs) == 0 {
 		t.Fatal("no request reached the provider")
@@ -92,12 +97,12 @@ func TestAdvanceAlwaysSendsAStageCue(t *testing.T) {
 // both verbs exist.
 func TestAdvanceAppendsANewMessage(t *testing.T) {
 	client := &advanceFakeClient{reply: "Kobeni finally looked up."}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 	a.SetMessages(directedScene())
 	before := len(a.Messages())
 
-	if err := a.Advance(context.Background(), nil); err != nil {
-		t.Fatalf("Advance: %v", err)
+	if err := a.ContinueWithCue(context.Background(), nil, advanceCue); err != nil {
+		t.Fatalf("ContinueWithCue: %v", err)
 	}
 
 	msgs := a.Messages()
@@ -120,11 +125,11 @@ func TestAdvanceAppendsANewMessage(t *testing.T) {
 // "continue the scene".
 func TestAdvanceCueIsOneTurn(t *testing.T) {
 	client := &advanceFakeClient{reply: "..."}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 	a.SetMessages(directedScene())
 
-	if err := a.Advance(context.Background(), nil); err != nil {
-		t.Fatalf("Advance: %v", err)
+	if err := a.ContinueWithCue(context.Background(), nil, advanceCue); err != nil {
+		t.Fatalf("ContinueWithCue: %v", err)
 	}
 	if err := a.Continue(context.Background(), nil); err != nil {
 		t.Fatalf("Continue: %v", err)

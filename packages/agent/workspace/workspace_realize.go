@@ -19,9 +19,9 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/persona"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // realizePersona is the creator/cartographer persona whose charter authors the
@@ -40,7 +40,7 @@ func (w *Workspace) SessionsRealize(ctx context.Context, sess string, p ctrlprot
 	if err != nil {
 		return ctrlproto.RealizeResult{}, err
 	}
-	if s.sess == nil || s.sess.Meta.Experience == "" {
+	if s.sess == nil || s.sess.Stage.Experience == "" {
 		return ctrlproto.RealizeResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("realize is for a chat or play session"))
 	}
 	if p.Commit {
@@ -53,7 +53,7 @@ func (w *Workspace) SessionsRealize(ctx context.Context, sess string, p ctrlprot
 // whole conversation.
 func proposeRealize(ctx context.Context, s *wsSession, p ctrlproto.RealizeParams) (ctrlproto.RealizeResult, error) {
 	ag := s.agent
-	if ag == nil || ag.Client == nil {
+	if ag == nil || ag.Client() == nil {
 		return ctrlproto.RealizeResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("not logged in"))
 	}
 	msgs := ag.Messages()
@@ -61,7 +61,7 @@ func proposeRealize(ctx context.Context, s *wsSession, p ctrlproto.RealizeParams
 	if err != nil || strings.TrimSpace(pers.Charter) == "" {
 		return ctrlproto.RealizeResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("the %s persona is unavailable", realizePersona))
 	}
-	cl := ag.Client
+	cl := ag.Client()
 	_, model := s.currentModel()
 	if strings.TrimSpace(p.Model) != "" {
 		oc, om, err := s.ws.overrideClient(s.argsSnapshot(), p.Provider, p.Model)
@@ -243,8 +243,8 @@ func (w *Workspace) commitRealize(s *wsSession, p ctrlproto.RealizeParams) (ctrl
 // entry with no keys and not marked always-on could never fire, so it is forced
 // constant rather than written dead — a realized setting fact is meant to be
 // available, and the author saw and kept it.
-func realizeLore(in []ctrlproto.RealizeLore) []core.WorldLoreEntry {
-	out := make([]core.WorldLoreEntry, 0, len(in))
+func realizeLore(in []ctrlproto.RealizeLore) []session.WorldLoreEntry {
+	out := make([]session.WorldLoreEntry, 0, len(in))
 	for _, e := range in {
 		name := strings.TrimSpace(e.Name)
 		content := strings.TrimSpace(e.Content)
@@ -257,7 +257,7 @@ func realizeLore(in []ctrlproto.RealizeLore) []core.WorldLoreEntry {
 				keys = append(keys, k)
 			}
 		}
-		out = append(out, core.WorldLoreEntry{
+		out = append(out, session.WorldLoreEntry{
 			Name:     name,
 			Keys:     keys,
 			Constant: e.AlwaysOn || len(keys) == 0,

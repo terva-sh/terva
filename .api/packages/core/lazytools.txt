@@ -1,0 +1,24 @@
+# packages/core/lazytools (stable): its exported API, one symbol per line.
+# Written by `just api-snapshot`. `just api-check` fails when it no longer matches the code.
+New	func	func(active ...string) *Visibility
+NoteBrief	const	untyped string
+NoteFull	const	untyped string
+Of	func	func(a *core.Agent) *Visibility
+ToolSpecsInGroup	func	func(reg core.Registry, group string) []provider.Tool
+ToolsInGroup	func	func(reg core.Registry, group string) []string
+Visibility	type	struct
+Visibility.Activate	method	func(group string) bool
+Visibility.ActivateForTools	method	func(names []string) []string
+Visibility.Active	method	func() []string
+Visibility.Advertise	method	func(reg core.Registry, pin bool) func(name string) bool
+Visibility.Advertised	method	func() (visible func(name string) bool, filtered bool)
+Visibility.BeginPrompt	method	func() bool
+Visibility.Bind	method	func(a *core.Agent)
+Visibility.ContinuationEnabled	method	func() bool
+Visibility.ContinuationGates	method	func() []core.ContinuationGate
+Visibility.Grew	method	func(reg core.Registry) bool
+Visibility.Note	method	func() string
+Visibility.RestoreActiveGroups	method	func(groups []string)
+Visibility.Segment	method	func(mode core.AssembleMode) core.Segment
+Visibility.SetContinuation	method	func(on bool)
+Visibility.TailDelivered	method	func(ids []string)

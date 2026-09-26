@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
@@ -30,7 +31,7 @@ func TestScriptingClassification(t *testing.T) {
 func TestScriptingDispatchKeepsCallingToolGeneration(t *testing.T) {
 	for _, mode := range []core.ApprovalMode{core.ApprovalWorkspace, core.ApprovalAutoEdit, core.ApprovalPlan} {
 		t.Run(string(mode), func(t *testing.T) {
-			ag := core.NewAgent(nil, "fake", "", nil)
+			ag := coretest.NewAgent(nil, "fake", "", nil)
 			ag.SetToolsWithReadOnly(core.Registry{"echo": echoTool{}}, core.NewReadOnlySet("echo"))
 			ctx, _, _ := ag.ToolForCall(context.Background(), "echo")
 			gate := core.NewPolicyGate(&core.PermissionPolicy{Mode: mode}, nil)
@@ -88,10 +89,10 @@ func TestMutatingScriptToolIsNotReadOnly(t *testing.T) {
 
 func TestMutatingScriptToolHostCallWiring(t *testing.T) {
 	cm := &tools.CodeExecutionMutatingTool{}
-	ag := &core.Agent{Tools: core.Registry{
+	ag := coretest.NewAgent(nil, "fake", "", core.Registry{
 		"code_execution_mutating": cm,
 		"echo":                    echoTool{},
-	}}
+	})
 	// The same seam every run mode calls: the mutating tool must be
 	// late-bound too, or it fails closed at execute time and is useless.
 	WireHostToolDispatcher(ag, nil, nil)
@@ -111,10 +112,10 @@ func TestMutatingScriptToolHostCallWiring(t *testing.T) {
 // other write, so a gate that denies it denies the script's call too.
 func TestMutatingScriptToolWriteIsGated(t *testing.T) {
 	cm := &tools.CodeExecutionMutatingTool{}
-	ag := &core.Agent{Tools: core.Registry{
+	ag := coretest.NewAgent(nil, "fake", "", core.Registry{
 		"code_execution_mutating": cm,
 		"echo":                    echoTool{},
-	}}
+	})
 	gate := core.NewPolicyGate(&core.PermissionPolicy{
 		Mode:     core.ApprovalPlan,
 		ReadOnly: core.NewReadOnlySet("read"),
@@ -128,19 +129,19 @@ func TestMutatingScriptToolWriteIsGated(t *testing.T) {
 
 // Each script binding call through code_execution's HostCall lands in the
 // audit log stamped via=code_execution — like ext host_tool_call, this door
-// checks the gate outside the BeforeToolExecute ladder.
+// checks the gate outside the tool-call ladder.
 func TestScriptingHostCallAudits(t *testing.T) {
 	home := testsupport.TempDir(t)
 	prev := auditSink
 	auditSink = newAuditLog(home)
 	t.Cleanup(func() { auditSink.Close(); auditSink = prev })
 
-	ag := &core.Agent{Tools: core.Registry{
+	ag := coretest.NewAgent(nil, "fake", "", core.Registry{
 		"code_execution": &tools.CodeExecutionTool{},
 		"echo":           echoTool{},
-	}}
+	})
 	wireScriptingHostCall(ag, nil) // nil gate = yolo spelling: allowed, empty mode
-	ce := ag.Tools["code_execution"].(*tools.CodeExecutionTool)
+	ce := ag.ToolsSnapshot()["code_execution"].(*tools.CodeExecutionTool)
 	if ce.HostCall == nil {
 		t.Fatal("HostCall not wired")
 	}
@@ -173,10 +174,10 @@ func TestScriptingRegistryAndPlanMode(t *testing.T) {
 
 func TestScriptingHostCallWiring(t *testing.T) {
 	ce := &tools.CodeExecutionTool{}
-	ag := &core.Agent{Tools: core.Registry{
+	ag := coretest.NewAgent(nil, "fake", "", core.Registry{
 		"code_execution": ce,
 		"echo":           echoTool{},
-	}}
+	})
 	// The same seam every run mode calls; extensions absent is fine.
 	WireHostToolDispatcher(ag, nil, nil)
 	if ce.HostCall == nil {
@@ -196,10 +197,10 @@ func TestScriptingHostCallWiring(t *testing.T) {
 
 func TestScriptingHostCallGateDenies(t *testing.T) {
 	ce := &tools.CodeExecutionTool{}
-	ag := &core.Agent{Tools: core.Registry{
+	ag := coretest.NewAgent(nil, "fake", "", core.Registry{
 		"code_execution": ce,
 		"echo":           echoTool{},
-	}}
+	})
 	gate := core.NewPolicyGate(&core.PermissionPolicy{
 		Mode:     core.ApprovalPlan,
 		ReadOnly: core.NewReadOnlySet("read"),
@@ -250,17 +251,15 @@ func (e extTool) Extension() string { return e.source }
 func TestScriptingCatalogWiringAndExtent(t *testing.T) {
 	ce := &tools.CodeExecutionTool{}
 	cm := &tools.CodeExecutionMutatingTool{}
-	ag := &core.Agent{
-		Tools: core.Registry{
-			"code_execution":          ce,
-			"code_execution_mutating": cm,
-			"session_inspect":         namedTool{name: "session_inspect"},                  // curated builtin
-			"memory":                  namedTool{name: "memory"},                           // read-only but writes $TERVA_HOME — excluded
-			"search_docs":             extTool{namedTool{name: "search_docs"}, "ext:docs"}, // read-only plugin
-			"mutate_docs":             extTool{namedTool{name: "mutate_docs"}, "ext:docs"}, // mutating plugin
-		},
-		ReadOnly: core.NewReadOnlySet("memory", "search_docs"),
-	}
+	ag := coretest.NewAgent(nil, "fake", "", core.Registry{
+		"code_execution":          ce,
+		"code_execution_mutating": cm,
+		"session_inspect":         namedTool{name: "session_inspect"},                  // curated builtin
+		"memory":                  namedTool{name: "memory"},                           // read-only but writes $TERVA_HOME — excluded
+		"search_docs":             extTool{namedTool{name: "search_docs"}, "ext:docs"}, // read-only plugin
+		"mutate_docs":             extTool{namedTool{name: "mutate_docs"}, "ext:docs"}, // mutating plugin
+	})
+	ag.SetToolsWithReadOnly(ag.ToolsSnapshot(), core.NewReadOnlySet("memory", "search_docs"))
 	WireHostToolDispatcher(ag, nil, nil)
 
 	if ce.Catalog == nil {
@@ -286,10 +285,8 @@ func TestScriptingCatalogWiringAndExtent(t *testing.T) {
 // compiled-in promise.
 func TestScriptingCatalogReflectsTheLiveRegistry(t *testing.T) {
 	ce := &tools.CodeExecutionTool{}
-	ag := &core.Agent{
-		Tools:    core.Registry{"code_execution": ce},
-		ReadOnly: core.NewReadOnlySet(),
-	}
+	ag := coretest.NewAgent(nil, "fake", "", core.Registry{"code_execution": ce})
+	ag.SetToolsWithReadOnly(ag.ToolsSnapshot(), core.NewReadOnlySet())
 	WireHostToolDispatcher(ag, nil, nil)
 	if ce.Catalog == nil {
 		t.Fatal("catalog not late-bound")

@@ -9,6 +9,7 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 )
 
 // noteExec runs world_note with the given args against a session.
@@ -34,7 +35,7 @@ func revealExec(t *testing.T, s *wsSession, args string) core.ToolResult {
 // name collision (append-only), and the live tail record follows.
 func TestWorldNoteAppendsModelEntry(t *testing.T) {
 	s := worldTestSession(t, &scriptedClient{}, nil)
-	s.sess.Meta.Experience = "play" // the director's session; tail sees all
+	s.sess.Stage.Experience = "play" // the director's session; tail sees all
 	s.worldLore = &build.WorldLoreRecord{}
 
 	if r := noteExec(t, s, `{"name":"The betrayal","content":"The guildmaster sold them out.","audience":[" Elira ","elira"]}`); r.IsError {
@@ -68,9 +69,9 @@ func TestWorldNoteAppendsModelEntry(t *testing.T) {
 // the learned-when ledger; world-shared and unknown entries are refused.
 func TestWorldRevealLearns(t *testing.T) {
 	s := worldTestSession(t, &scriptedClient{}, nil)
-	s.sess.Meta.Experience = "play"
+	s.sess.Stage.Experience = "play"
 	s.worldLore = &build.WorldLoreRecord{}
-	s.sess.Meta.WorldLore = []core.WorldLoreEntry{
+	s.sess.Meta.WorldLore = []session.WorldLoreEntry{
 		{Name: "shared", Constant: true, Content: "x"},
 		{Name: "secret", Constant: true, Content: "y", Audience: []string{"Elira"}},
 	}
@@ -119,7 +120,7 @@ func TestWorldLorePutPreservesLedger(t *testing.T) {
 		t.Fatal(err)
 	}
 	live := w.live(info.ID)
-	if err := live.setWorldLore([]core.WorldLoreEntry{{
+	if err := live.setWorldLore([]session.WorldLoreEntry{{
 		Name: "secret", Constant: true, Content: "y", Model: true,
 		Audience: []string{"Elira", "Rook"}, Learned: map[string]string{"Rook": "2026-07-19T00:00:00Z"},
 	}}); err != nil {
@@ -167,7 +168,7 @@ func TestWorldLorePutNormalizesSceneState(t *testing.T) {
 	}
 	live := w.live(info.ID)
 	pin := live.sess.Meta.WorldLore[0]
-	if pin.Name != core.SceneStateName || !pin.Constant || len(pin.Keys) != 0 || len(pin.Audience) != 0 {
+	if pin.Name != session.SceneStateName || !pin.Constant || len(pin.Keys) != 0 || len(pin.Audience) != 0 {
 		t.Fatalf("pin = %+v (want canonical, constant, shared)", pin)
 	}
 	// A second put under different casing UPDATES the card — never two pins.
@@ -177,7 +178,7 @@ func TestWorldLorePutNormalizesSceneState(t *testing.T) {
 		t.Fatal(err)
 	}
 	lore := live.sess.Meta.WorldLore
-	if len(lore) != 1 || lore[0].Content != "Day 15." || lore[0].Name != core.SceneStateName {
+	if len(lore) != 1 || lore[0].Content != "Day 15." || lore[0].Name != session.SceneStateName {
 		t.Fatalf("the pin must update in place, got %+v", lore)
 	}
 }
@@ -195,14 +196,14 @@ func TestWorldToolsPlayOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tools := w.live(chat.ID).agent.Tools; tools["world_note"] != nil || tools["world_reveal"] != nil {
+	if tools := w.live(chat.ID).agent.ToolsSnapshot(); tools["world_note"] != nil || tools["world_reveal"] != nil {
 		t.Error("chat is pure conversation — no World tools")
 	}
 	play, err := w.CreateSession(ctx, ctrlproto.CreateOpts{Experience: "play", Card: imported.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tools := w.live(play.ID).agent.Tools; tools["world_note"] == nil || tools["world_reveal"] == nil {
+	if tools := w.live(play.ID).agent.ToolsSnapshot(); tools["world_note"] == nil || tools["world_reveal"] == nil {
 		t.Error("the play director should hold world_note + world_reveal")
 	}
 }
@@ -222,7 +223,7 @@ func TestWorldNoteDescriptionRedirectsToReveal(t *testing.T) {
 	}
 	// The SD4 write path: the description is the ONLY place the director
 	// learns the pin exists and that its name is the append-only exception.
-	if !strings.Contains(desc, core.SceneStateName) || !strings.Contains(desc, "replaces the content") {
+	if !strings.Contains(desc, session.SceneStateName) || !strings.Contains(desc, "replaces the content") {
 		t.Errorf("the description must teach the scene-state carve-out:\n%s", desc)
 	}
 }
@@ -232,9 +233,9 @@ func TestWorldNoteDescriptionRedirectsToReveal(t *testing.T) {
 // the canonical name, always-on, shared, model-flagged.
 func TestWorldNoteUpdatesSceneStatePin(t *testing.T) {
 	s := worldTestSession(t, &scriptedClient{}, nil)
-	s.sess.Meta.Experience = "play"
+	s.sess.Stage.Experience = "play"
 	s.worldLore = &build.WorldLoreRecord{}
-	s.sess.Meta.WorldLore = []core.WorldLoreEntry{
+	s.sess.Meta.WorldLore = []session.WorldLoreEntry{
 		{Name: "The betrayal", Constant: true, Content: "The guildmaster sold them out."},
 	}
 
@@ -248,7 +249,7 @@ func TestWorldNoteUpdatesSceneStatePin(t *testing.T) {
 		t.Fatalf("pin should append once, got %+v", got)
 	}
 	pin := got[1]
-	if pin.Name != core.SceneStateName || !pin.Constant || !pin.Model || len(pin.Keys) != 0 || len(pin.Audience) != 0 {
+	if pin.Name != session.SceneStateName || !pin.Constant || !pin.Model || len(pin.Keys) != 0 || len(pin.Audience) != 0 {
 		t.Fatalf("pin = %+v (want canonical name, constant, model, no keys/audience)", pin)
 	}
 
@@ -268,7 +269,7 @@ func TestWorldNoteUpdatesSceneStatePin(t *testing.T) {
 	rec := s.worldLore.Get()
 	found := false
 	for _, e := range rec {
-		if e.Name == core.SceneStateName && strings.Contains(e.Content, "Day 15") {
+		if e.Name == session.SceneStateName && strings.Contains(e.Content, "Day 15") {
 			found = true
 		}
 	}

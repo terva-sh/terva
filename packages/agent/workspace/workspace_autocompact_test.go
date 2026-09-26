@@ -7,8 +7,10 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -51,7 +53,7 @@ func (c *saturatedTurnClient) Stream(ctx context.Context, req provider.Request) 
 func TestWorkspacePostTurnAutoCompact(t *testing.T) {
 	cl := &saturatedTurnClient{}
 	tmp := testsupport.TempDir(t)
-	sess, err := core.NewSession(tmp, tmp, "p", "claude-sonnet-4-5", "test")
+	sess, err := session.NewSession(tmp, tmp, "p", "claude-sonnet-4-5", "test")
 	if err != nil {
 		t.Fatalf("session: %v", err)
 	}
@@ -61,13 +63,13 @@ func TestWorkspacePostTurnAutoCompact(t *testing.T) {
 		ws:    &Workspace{ctx: context.Background(), diag: func(string) {}},
 		hub:   newWSHub(),
 		sess:  sess,
-		agent: core.NewAgent(cl, "claude-sonnet-4-5", "", core.Registry{}),
+		agent: coretest.NewAgent(cl, "claude-sonnet-4-5", "", core.Registry{}),
 		title: "titled",
 	}
 	s.agent.AddEventObserver(func(ev core.AgentEvent) {
 		s.broadcast(ctrlproto.ConversationEvent(core.EventToWire(ev)))
 	})
-	// A transcript comfortably beyond keep-tail so CanCompact is true.
+	// A transcript comfortably beyond keep-tail so the engine's keep-tail check passes.
 	seed := make([]provider.Message, 0, 8)
 	for range 4 {
 		seed = append(seed,
@@ -132,13 +134,13 @@ func (c *saturatedThenFailingClient) Stream(ctx context.Context, req provider.Re
 func TestWorkspacePostTurnAutoCompactAnnouncesFailure(t *testing.T) {
 	cl := &saturatedThenFailingClient{}
 	tmp := testsupport.TempDir(t)
-	sess, err := core.NewSession(tmp, tmp, "p", "claude-sonnet-4-5", "test")
+	sess, err := session.NewSession(tmp, tmp, "p", "claude-sonnet-4-5", "test")
 	if err != nil {
 		t.Fatalf("session: %v", err)
 	}
 	t.Cleanup(func() { sess.Close() })
-	agent := core.NewAgent(cl, "claude-sonnet-4-5", "", core.Registry{})
-	agent.MaxRetries = 0 // the ladder is proven elsewhere; this is about the report
+	// No retries: the ladder is proven elsewhere; this is about the report.
+	agent := coretest.NewAgent(cl, "claude-sonnet-4-5", "", core.Registry{}, core.WithRetries(0, 0))
 	s := &wsSession{
 		id:    "autocompact-fail",
 		ws:    &Workspace{ctx: context.Background(), diag: func(string) {}},

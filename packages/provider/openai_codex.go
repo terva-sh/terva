@@ -85,6 +85,7 @@ func codexSessionID(cacheKey string) string {
 }
 
 type codexClient struct {
+	catalogRef
 	cred      CredentialSource
 	accountID string
 	baseURL   string
@@ -107,6 +108,9 @@ type codexClient struct {
 	resets    []UsageReset
 	hasResets bool
 	resetsAt  time.Time
+
+	// cliVersion is the host's installed Codex CLI version (WithCodexCLIVersion).
+	cliVersion func() string
 }
 
 // NewOpenAICodex creates a client that talks to ChatGPT's Codex endpoint
@@ -177,7 +181,7 @@ func (c *codexClient) Name() string { return "openai-codex" }
 // identities across its own endpoints would be worse than either one.
 func (c *codexClient) identityHeaders() (originator, userAgent string) {
 	if c.identity == CodexIdentityNative {
-		return "codex_cli_rs", codexNativeUserAgent()
+		return "codex_cli_rs", c.codexNativeUserAgent()
 	}
 	return "terva", codexUserAgent()
 }
@@ -196,8 +200,8 @@ func codexUserAgent() string {
 // full Codex CLI arm, codex_identity_ab_test.go). The real Codex CLI's own
 // user-agent carries more than this, and terva has not read that string, so
 // guessing at a richer shape would claim a precision this has not earned.
-func codexNativeUserAgent() string {
-	return fmt.Sprintf("codex_cli_rs/%s", effectiveCodexCLIVersion())
+func (c *codexClient) codexNativeUserAgent() string {
+	return fmt.Sprintf("codex_cli_rs/%s", c.claimedCodexCLIVersion())
 }
 
 // Capabilities declares that tool-result images must be mirrored into
@@ -344,9 +348,9 @@ type codexRequest struct {
 // ---- Request building ----
 
 func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
-	m, err := FindModel("openai-codex", req.Model)
+	m, err := c.models().FindModel("openai-codex", req.Model)
 	if err != nil {
-		m, err = FindModel("openai", req.Model)
+		m, err = c.models().FindModel("openai", req.Model)
 	}
 	if err != nil {
 		return nil, err
@@ -366,7 +370,7 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 	}
 	if m.Reasoning {
 		eff := EffectiveReasoning(req.Reasoning, req.ReasoningSet, m)
-		if effort := OpenAICodexReasoningEffort(eff, req.Model); effort != "" {
+		if effort := openAICodexReasoningEffort(eff, req.Model); effort != "" {
 			// Summary rides the same block, so it is requested only where
 			// there is reasoning to summarize: a model without reasoning, or
 			// one whose effort resolves to off, sends no reasoning config at
@@ -418,7 +422,7 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 	// Same guards as the chat-completions builder: merge any same-role adjacency
 	// an edit/delete left behind, and keep a card's seeded leading-assistant
 	// greeting valid for backends that require user-first.
-	req.Messages = EnsureLeadingUserTurn(MergeAdjacentSameRole(req.Messages))
+	req.Messages = ensureLeadingUserTurn(mergeAdjacentSameRole(req.Messages))
 
 	// Native image editing: the most-recent EditHistory assistant images are
 	// replayed as image_generation_call input items (with their bytes) so the
@@ -914,9 +918,9 @@ func windowLabel(minutes int, fallback string) string {
 func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Request, out chan<- Event) {
 	defer close(out)
 
-	model, _ := FindModel("openai-codex", req.Model)
+	model, _ := c.models().FindModel("openai-codex", req.Model)
 	if model.ID == "" {
-		model, _ = FindModel("openai", req.Model)
+		model, _ = c.models().FindModel("openai", req.Model)
 	}
 	out <- EventStart{Model: req.Model, Provider: "openai-codex"}
 
@@ -1013,7 +1017,7 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 					finalErr = stream.Err()
 				default:
 					stop = StopError
-					finalErr = NewStreamDeathError("openai-codex", "response.completed")
+					finalErr = newStreamDeathError("openai-codex", "response.completed")
 				}
 				sendDone()
 				return
@@ -1202,7 +1206,7 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 				}
 				_ = json.Unmarshal([]byte(ev.Data), &p)
 				// Usage's three prompt fields are DISJOINT — PromptTokens sums
-				// them and ComputeCost prices each at its own rate — so every
+				// them and computeCost prices each at its own rate — so every
 				// detail the wire breaks out has to come off the total.
 				//
 				// cached_tokens is a documented subset of input_tokens. Whether

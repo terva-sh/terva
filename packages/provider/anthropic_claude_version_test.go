@@ -1,6 +1,10 @@
 package provider
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"testing"
 )
@@ -69,16 +73,42 @@ func TestPickClaudeCodeVersionFloorsAtBaseline(t *testing.T) {
 	}
 }
 
-// The effective version is what the OAuth user-agent claims, so whatever the
-// probe finds on the machine running the tests, the result must be a dotted
-// version triple and never older than the compiled baseline.
-func TestEffectiveClaudeCodeVersionNeverBelowBaseline(t *testing.T) {
-	got := effectiveClaudeCodeVersion()
-	if !regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(got) {
-		t.Fatalf("effectiveClaudeCodeVersion() = %q, not a dotted version triple", got)
-	}
-	if got != claudeCodeVersion && !versionTripleNewer(got, claudeCodeVersion) {
-		t.Errorf("effectiveClaudeCodeVersion() = %q is older than the baseline %q", got, claudeCodeVersion)
+// The OAuth user-agent claims the host's installed version only when it is
+// newer than the baseline, and the baseline when the host gives none.
+func TestTheOAuthUserAgentClaimsTheInstalledVersionAboveTheFloor(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		installed func() string
+		want      string
+	}{
+		{"no host version", nil, claudeCodeVersion},
+		{"not known yet", func() string { return "" }, claudeCodeVersion},
+		{"older install", func() string { return "0.1.0" }, claudeCodeVersion},
+		{"newer install", func() string { return "99.0.0" }, "99.0.0"},
+	} {
+		var opts []ClientOption
+		if c.installed != nil {
+			opts = append(opts, WithClaudeCodeVersion(c.installed))
+		}
+		var ua string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ua = r.Header.Get("user-agent")
+			w.Header().Set("content-type", "text/event-stream")
+			fmt.Fprint(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+		}))
+		ch, err := NewAnthropicOAuthSource(StaticCredential("t"), srv.URL, opts...).Stream(context.Background(), Request{
+			Model:    "claude-sonnet-4.5",
+			Messages: []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range ch { //nolint:revive // drain
+		}
+		srv.Close()
+		if ua != "claude-cli/"+c.want {
+			t.Errorf("%s: user-agent %q, want claude-cli/%s", c.name, ua, c.want)
+		}
 	}
 }
 
@@ -87,5 +117,21 @@ func TestEffectiveClaudeCodeVersionNeverBelowBaseline(t *testing.T) {
 func TestBaselineClaudeCodeVersionIsATriple(t *testing.T) {
 	if !regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(claudeCodeVersion) {
 		t.Fatalf("claudeCodeVersion = %q is not a dotted version triple", claudeCodeVersion)
+	}
+}
+
+// knownClaudeCodeFloors are the lowest Claude Code versions Anthropic accepts
+// for a model, where one has been observed. A request that claims less fails
+// with http 400 claude_code_version_too_old. Machines without a newer local
+// install claim the baseline, so the baseline must meet every floor here.
+var knownClaudeCodeFloors = map[string]string{
+	"claude-opus-5-5": "2.1.280", // reported 2026-09-23, TKT-01M37S86TR
+}
+
+func TestTheBaselineMeetsEveryKnownModelFloor(t *testing.T) {
+	for model, floor := range knownClaudeCodeFloors {
+		if versionTripleNewer(floor, claudeCodeVersion) {
+			t.Errorf("claudeCodeVersion %s is below %s, which %s requires; raise the baseline", claudeCodeVersion, floor, model)
+		}
 	}
 }

@@ -1,9 +1,12 @@
 package build
 
 import (
+	"slices"
+	"terva.sh/terva/packages/core/lazytools"
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -40,7 +43,7 @@ func TestEngineFeaturesApplyAtNewAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if !r.NewAgent().ActivationContinuationEnabled() {
+	if !lazytools.Of(r.NewAgent(core.AllowAll)).ContinuationEnabled() {
 		t.Error("activation continuation should default on under lazy tools")
 	}
 
@@ -53,14 +56,14 @@ func TestEngineFeaturesApplyAtNewAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve with override: %v", err)
 	}
-	if r.NewAgent().ActivationContinuationEnabled() {
+	if lazytools.Of(r.NewAgent(core.AllowAll)).ContinuationEnabled() {
 		t.Error("the engine_features override must switch the feature off at build")
 	}
 }
 
 // Cache-aware compaction ships ON, and must be switchable OFF.
 //
-// The default lives ONLY here — core.NewAgent's zero value is off, and every
+// The default lives ONLY here — core.New's zero value is off, and every
 // core test sets the flag explicitly — so without this test a flip back to
 // default-off would break nothing and pass everything. The off switch matters
 // just as much: the cost side of this feature is measured and settled, but its
@@ -74,11 +77,11 @@ func TestCacheAwareCompactionShipsOnAndCanBeSwitchedOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	ag := r.NewAgent()
-	if !ag.CacheAwareCompactionEnabled() {
+	ag := r.NewAgent(core.AllowAll)
+	if !allows(ag, core.CompactWarm) {
 		t.Error("cache_aware_compaction must default ON — a compaction that rebuilds its own prefix re-reads the whole conversation at full price")
 	}
-	if !ag.PrefixChangeGuardEnabled() {
+	if !offers(ag) {
 		t.Error("prefix_change_guard must default ON; it comes alive with cache-aware compaction")
 	}
 
@@ -94,20 +97,53 @@ func TestCacheAwareCompactionShipsOnAndCanBeSwitchedOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve with override: %v", err)
 	}
-	ag = r.NewAgent()
-	if ag.CacheAwareCompactionEnabled() {
+	ag = r.NewAgent(core.AllowAll)
+	if allows(ag, core.CompactWarm) {
 		t.Error("engine_features.cache_aware_compaction=false must switch it off at build")
 	}
 	// The guard stays declared-on, but is inert without the summarizer that gives
 	// its offer something to save — so turning cache-aware off is a complete exit
 	// from both behaviors, with no second toggle to hunt for.
-	if !ag.PrefixChangeGuardEnabled() {
+	if !offers(ag) {
 		t.Error("the guard's own toggle should be untouched by the other feature's override")
 	}
 }
 
+// offers reports whether ag's policy would offer a compaction before a
+// cache-invalidating change.
+func offers(ag *core.Agent) bool { return ag.Compaction(core.CompactPrefixChanged).Compact }
+
+// The guard's own way out: prefix_change_guard=false stops the offer at build,
+// and the feature's Apply flips a live agent both ways.
+func TestPrefixChangeGuardCanBeSwitchedOff(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	if err := config.MutateConfig(func(c *config.Config) {
+		c.EngineFeatures = map[string]bool{"prefix_change_guard": false}
+	}); err != nil {
+		t.Fatalf("override config: %v", err)
+	}
+	r, err := Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	ag := r.NewAgent(core.AllowAll)
+	if offers(ag) {
+		t.Error("engine_features.prefix_change_guard=false must switch the offer off at build")
+	}
+	f, _ := EngineFeatureByID("prefix_change_guard")
+	f.Apply(ag, true)
+	if !offers(ag) {
+		t.Error("switching the feature on did not reach the live agent's policy")
+	}
+	f.Apply(ag, false)
+	if offers(ag) {
+		t.Error("switching the feature off did not reach the live agent's policy")
+	}
+}
+
 // Stuck-loop detection ships ON and must be switchable OFF. Like cache-aware
-// compaction, the shipped default lives ONLY here — core.NewAgent's zero value is
+// compaction, the shipped default lives ONLY here — a zero stall.Detector is
 // off — so without this a flip back to default-off would pass every core test.
 // The off switch matters because the nudge is a model-facing intervention: a
 // deployment that finds it noisy needs a way to silence it without a rebuild.
@@ -119,7 +155,7 @@ func TestStuckLoopDetectionShipsOnAndCanBeSwitchedOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if !r.NewAgent().StallDetectionEnabled() {
+	if !AssemblerOf(r.NewAgent(core.AllowAll)).Stall().Enabled() {
 		t.Error("stuck_loop_detection must default ON — detection + a one-turn nudge is safe (in-band, no model swap, no egress)")
 	}
 
@@ -132,7 +168,7 @@ func TestStuckLoopDetectionShipsOnAndCanBeSwitchedOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve with override: %v", err)
 	}
-	if r.NewAgent().StallDetectionEnabled() {
+	if AssemblerOf(r.NewAgent(core.AllowAll)).Stall().Enabled() {
 		t.Error("engine_features.stuck_loop_detection=false must switch it off at build")
 	}
 }
@@ -150,8 +186,8 @@ func TestStuckLoopEscalationShipsOnAndCanBeSwitchedOff(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 	// On by default, but inert here: a plain Resolve binds no Escalator, so the
-	// flag is armed and the runLoop driver is still a no-op.
-	if !r.NewAgent().StuckLoopEscalationEnabled() {
+	// flag is armed and rung 3 still has nothing to escalate to.
+	if !AssemblerOf(r.NewAgent(core.AllowAll)).Stall().EscalationEnabled() {
 		t.Error("stuck_loop_escalation must default ON (inert without a bound Escalator + a configured target)")
 	}
 
@@ -164,7 +200,7 @@ func TestStuckLoopEscalationShipsOnAndCanBeSwitchedOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve with override: %v", err)
 	}
-	if r.NewAgent().StuckLoopEscalationEnabled() {
+	if AssemblerOf(r.NewAgent(core.AllowAll)).Stall().EscalationEnabled() {
 		t.Error("engine_features.stuck_loop_escalation=false must switch it off at build")
 	}
 }
@@ -180,7 +216,7 @@ func TestEscalationAutoFromConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if r.NewAgent().EscalateAutoEnabled() {
+	if AssemblerOf(r.NewAgent(core.AllowAll)).Stall().EscalateAutoEnabled() {
 		t.Error("auto-escalate must default OFF (ask-first) with no escalation config")
 	}
 
@@ -193,7 +229,7 @@ func TestEscalationAutoFromConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve with override: %v", err)
 	}
-	if !r.NewAgent().EscalateAutoEnabled() {
+	if !AssemblerOf(r.NewAgent(core.AllowAll)).Stall().EscalateAutoEnabled() {
 		t.Error("escalation.auto=true must arm auto-escalate at the build funnel")
 	}
 }
@@ -204,7 +240,7 @@ func TestEscalationAutoFromConfig(t *testing.T) {
 // out of a session nobody knew would go wrong. Two measured sessions lost 10.5%
 // and 32.2% of their spend to zero-cache turns with no trace of why.
 //
-// Like the others, the shipped default lives ONLY here: core.NewAgent's zero
+// Like the others, the shipped default lives ONLY here: core.New's zero
 // value is off, so a flip back to default-off would pass every core test.
 func TestPrefixDivergenceRecordingShipsOnAndCanBeSwitchedOff(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
@@ -214,7 +250,7 @@ func TestPrefixDivergenceRecordingShipsOnAndCanBeSwitchedOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if !r.NewAgent().PrefixDivergenceRecordingEnabled() {
+	if !AssemblerOf(r.NewAgent(core.AllowAll)).PrefixWatch().Enabled() {
 		t.Error("prefix_divergence_recording must default ON — a diagnostic that ships off is never on when the rare event happens")
 	}
 
@@ -227,7 +263,7 @@ func TestPrefixDivergenceRecordingShipsOnAndCanBeSwitchedOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve with override: %v", err)
 	}
-	if r.NewAgent().PrefixDivergenceRecordingEnabled() {
+	if AssemblerOf(r.NewAgent(core.AllowAll)).PrefixWatch().Enabled() {
 		t.Error("engine_features.prefix_divergence_recording=false must switch it off at build")
 	}
 }
@@ -240,7 +276,7 @@ func TestTransportRecordingShipsOnAndCanBeSwitchedOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if !r.NewAgent().TransportRecordingEnabled() {
+	if !AssemblerOf(r.NewAgent(core.AllowAll)).Transport().Enabled() {
 		t.Error("transport_recording must default ON — its value is retrospective, and the sessions it exists for are the ones nobody knew would go wrong")
 	}
 
@@ -253,7 +289,7 @@ func TestTransportRecordingShipsOnAndCanBeSwitchedOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve with override: %v", err)
 	}
-	if r.NewAgent().TransportRecordingEnabled() {
+	if AssemblerOf(r.NewAgent(core.AllowAll)).Transport().Enabled() {
 		t.Error("engine_features.transport_recording=false must switch it off at build")
 	}
 }
@@ -287,7 +323,7 @@ func TestProviderCompactionShipsOffAndCanBeSwitchedOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if r.NewAgent().ProviderCompactionEnabled() {
+	if allows(r.NewAgent(core.AllowAll), core.CompactProvider) {
 		t.Error("provider_compaction is on at build with no override asking for it")
 	}
 
@@ -300,7 +336,45 @@ func TestProviderCompactionShipsOffAndCanBeSwitchedOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve with override: %v", err)
 	}
-	if !r.NewAgent().ProviderCompactionEnabled() {
+	if !allows(r.NewAgent(core.AllowAll), core.CompactProvider) {
 		t.Error("engine_features.provider_compaction=true must switch it on at build — an A/B that cannot enable its own arm cannot be run")
+	}
+}
+
+// allows reports whether ag's compaction policy lets a compaction try st. The
+// engine has no strategy switches; the policy's decision is the whole answer.
+func allows(ag *core.Agent, st core.CompactStrategy) bool {
+	return slices.Contains(ag.Compaction(core.CompactRequested).Strategies, st)
+}
+
+// A strategy feature toggled on a live agent, as the settings surface does
+// through Apply, changes the next compaction's strategies without a rebuild.
+// Cold stays last in every combination: it is the fallback that works on every
+// provider.
+func TestStrategyFeaturesApplyToALiveAgent(t *testing.T) {
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	r, err := Resolve(Args{Provider: "openai", Model: "gpt-5"}, false)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	ag := r.NewAgent(core.AllowAll)
+	warm, _ := EngineFeatureByID("cache_aware_compaction")
+	prov, _ := EngineFeatureByID("provider_compaction")
+
+	for _, tc := range []struct {
+		warm, provider bool
+		want           []core.CompactStrategy
+	}{
+		{false, false, []core.CompactStrategy{core.CompactCold}},
+		{true, false, []core.CompactStrategy{core.CompactWarm, core.CompactCold}},
+		{false, true, []core.CompactStrategy{core.CompactProvider, core.CompactCold}},
+		{true, true, []core.CompactStrategy{core.CompactProvider, core.CompactWarm, core.CompactCold}},
+	} {
+		warm.Apply(ag, tc.warm)
+		prov.Apply(ag, tc.provider)
+		if got := ag.Compaction(core.CompactRequested).Strategies; !slices.Equal(got, tc.want) {
+			t.Errorf("warm=%v provider=%v: strategies = %v, want %v", tc.warm, tc.provider, got, tc.want)
+		}
 	}
 }

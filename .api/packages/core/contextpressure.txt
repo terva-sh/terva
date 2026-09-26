@@ -1,0 +1,16 @@
+# packages/core/contextpressure (stable): its exported API, one symbol per line.
+# Written by `just api-snapshot`. `just api-check` fails when it no longer matches the code.
+ID	const	untyped string
+Noter	type	interface
+Noter.PressureNote	method	func(State) string
+State	type	struct
+State.Band	field	int
+State.Compacts	field	bool
+State.Fraction	field	float64
+State.Used	field	int
+State.Window	field	int
+Tracker	type	struct
+Tracker.Bind	method	func(a *core.Agent)
+Tracker.Segment	method	func() core.Segment
+Tracker.TailDelivered	method	func(ids []string)
+WarnFraction	const	untyped float

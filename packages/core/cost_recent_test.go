@@ -7,7 +7,7 @@ import (
 )
 
 func TestRecentUsageKeepsTheTailOldestFirst(t *testing.T) {
-	var c CostTracker
+	var c costTracker
 	for i := 1; i <= 5; i++ {
 		c.Add(provider.Usage{InputTokens: i})
 	}
@@ -23,7 +23,7 @@ func TestRecentUsageKeepsTheTailOldestFirst(t *testing.T) {
 }
 
 func TestRecentUsageEvictsTheOldest(t *testing.T) {
-	var c CostTracker
+	var c costTracker
 	for i := 1; i <= recentCap+10; i++ {
 		c.Add(provider.Usage{InputTokens: i})
 	}
@@ -45,7 +45,7 @@ func TestRecentUsageEvictsTheOldest(t *testing.T) {
 // context gauge. Let it into the strip and every auto-compact plants a fake
 // cache miss in the middle of the picture.
 func TestCompactionAndDelegationStaySpendNotStrip(t *testing.T) {
-	var c CostTracker
+	var c costTracker
 	c.Add(provider.Usage{InputTokens: 1, CacheReadTokens: 90_000})
 	c.AddTotalOnly(provider.Usage{InputTokens: 120_000}) // a compaction
 	c.AddDelegated(provider.Usage{InputTokens: 40_000})  // a sub-agent
@@ -70,7 +70,7 @@ func TestCompactionAndDelegationStaySpendNotStrip(t *testing.T) {
 // RecentUsage hands out a copy. A caller that sorts or truncates the slice it
 // got back must not be able to reach into the tracker's own tail.
 func TestRecentUsageHandsOutACopy(t *testing.T) {
-	var c CostTracker
+	var c costTracker
 	c.Add(provider.Usage{InputTokens: 7})
 	got := c.RecentUsage()
 	got[0].InputTokens = 999

@@ -114,9 +114,9 @@ type anthropicCompatCapabilities struct {
 // list rates would invent a bill the operator never gets. The context window
 // stays with the operator's endpoint config, which is the one number they did
 // tell us.
-func anthropicCompatCaps(id string) anthropicCompatCapabilities {
+func anthropicCompatCaps(known []Model, id string) anthropicCompatCapabilities {
 	out := anthropicCompatCapabilities{MaxOutput: anthropicCompatMaxOutput}
-	if m, err := FindModel("anthropic", id); err == nil {
+	if m, err := findIn(known, "anthropic", id); err == nil {
 		out.Reasoning = m.Reasoning
 		out.AdaptiveThinking = m.AdaptiveThinking
 		if m.MaxOutput > 0 {
@@ -189,10 +189,10 @@ func (o AnthropicCompatOptions) headers() map[string]string {
 // NewAnthropicCompatOpts builds an Anthropic-Messages client for a third-party
 // or operator-run endpoint, identifying as `name`.
 //
-// It is NewAnthropicCompat plus the operator's wire settings. The existing
-// constructor stays as it is: minimax, fireworks and vercel-ai-gateway are
+// It is the Anthropic-compatible client plus the operator's wire settings.
+// The built-in endpoints keep a constructor without them: minimax, fireworks and vercel-ai-gateway are
 // endpoints terva itself knows the shape of, and they have no operator to ask.
-func NewAnthropicCompatOpts(name, apiKey, baseURL string, o AnthropicCompatOptions) Client {
+func NewAnthropicCompatOpts(name, apiKey, baseURL string, o AnthropicCompatOptions, opts ...ClientOption) Client {
 	if baseURL == "" {
 		baseURL = anthropicDefaultBaseURL
 	}
@@ -205,14 +205,15 @@ func NewAnthropicCompatOpts(name, apiKey, baseURL string, o AnthropicCompatOptio
 		noCache:    o.DisableCaching,
 		headers:    o.headers(),
 		http:       &http.Client{Timeout: 0},
+		host:       applyClientOptions(opts),
 	}
 }
 
 // NewAnthropicCompatible is the shared `anthropic-compatible` slot: the one
 // endpoint a login with no name writes, and the one a second such login
 // replaces. Named endpoints go through NewAnthropicCompatOpts with their own id.
-func NewAnthropicCompatible(apiKey, baseURL string, o AnthropicCompatOptions) Client {
-	return NewAnthropicCompatOpts(AnthropicCompatProvider, apiKey, baseURL, o)
+func NewAnthropicCompatible(apiKey, baseURL string, o AnthropicCompatOptions, opts ...ClientOption) Client {
+	return NewAnthropicCompatOpts(AnthropicCompatProvider, apiKey, baseURL, o, opts...)
 }
 
 // DiscoverAnthropicCompatible lists the models an operator-configured
@@ -228,7 +229,10 @@ func NewAnthropicCompatible(apiKey, baseURL string, o AnthropicCompatOptions) Cl
 // this returns an error and the caller moves on with the default model the
 // operator typed. That is the same degradation the OpenAI-compatible slot
 // already accepts, and the reason the probe treats a 404 as reachable.
-func DiscoverAnthropicCompatible(ctx context.Context, baseURL, key string, defaultCtx int, o AnthropicCompatOptions) ([]Model, error) {
+//
+// known is the catalog the discovered rows borrow capability flags from (see
+// anthropicCompatCaps): the host's, passed in, since the wire holds none.
+func DiscoverAnthropicCompatible(ctx context.Context, baseURL, key string, defaultCtx int, o AnthropicCompatOptions, known []Model) ([]Model, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		return nil, fmt.Errorf("empty base url")
@@ -248,7 +252,7 @@ func DiscoverAnthropicCompatible(ctx context.Context, baseURL, key string, defau
 		if display == "" {
 			display = d.ID
 		}
-		caps := anthropicCompatCaps(d.ID)
+		caps := anthropicCompatCaps(known, d.ID)
 		out = append(out, Model{
 			Provider:      AnthropicCompatProvider,
 			ID:            d.ID,

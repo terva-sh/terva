@@ -9,6 +9,7 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -18,7 +19,7 @@ import (
 // the swap?
 //
 // It deliberately does NOT drive the detector → nudge → escalate trigger: that
-// is fully unit-tested (packages/core/escalate_test.go and stall_test.go), and a
+// is fully unit-tested (packages/core/stall/escalate_test.go and tracker_test.go), and a
 // real model cannot be made to stall deterministically. What only a live run can
 // prove is the tail the fakes stub out — config target → build.Resolve →
 // credential → NewClient → a real request on the new model — which is exactly the
@@ -54,7 +55,7 @@ func TestLiveEscalation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ag := r.NewAgent()
+	ag := r.NewAgent(core.AllowAll)
 	weak := r.Model
 
 	cfg, _ := config.LoadConfig()
@@ -77,7 +78,7 @@ func TestLiveEscalation(t *testing.T) {
 		t.Fatalf("no credential for escalation target %q", cfg.Escalation.Provider)
 	}
 	ag.SetClientAndModel(rr.NewClient(), rr.Model)
-	if ag.Model == weak {
+	if ag.Model() == weak {
 		t.Fatalf("model did not change after the swap (still %q)", weak)
 	}
 	t.Logf("escalated %s → %s", weak, rr.Model)
@@ -85,7 +86,7 @@ func TestLiveEscalation(t *testing.T) {
 	// A real turn on the escalated model proves the rebuilt client actually talks
 	// to the target provider.
 	sessPath := filepath.Join(testsupport.TempDir(t), "probe.jsonl")
-	sess, err := core.NewSessionAtPath(sessPath, r.CWD, rr.Provider, rr.Model, "probe")
+	sess, err := session.NewSessionAtPath(sessPath, r.CWD, rr.Provider, rr.Model, "probe")
 	if err != nil {
 		t.Fatal(err)
 	}

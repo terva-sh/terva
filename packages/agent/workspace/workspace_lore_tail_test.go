@@ -49,7 +49,7 @@ func TestALoreReloadKeepsTheTaskCardInTheModelsContext(t *testing.T) {
 		t.Fatalf("seed task: %v", err)
 	}
 
-	if got := live.agent.ContextPreview(); !strings.Contains(got, "finish the migration") {
+	if got := live.agent.FramePreview().VolatileText(); !strings.Contains(got, "finish the migration") {
 		t.Fatalf("precondition: the task card is not in the model's context at build:\n%s", got)
 	}
 
@@ -57,7 +57,7 @@ func TestALoreReloadKeepsTheTaskCardInTheModelsContext(t *testing.T) {
 	// re-derivation all three verbs run.
 	live.reloadLore()
 
-	if got := live.agent.ContextPreview(); !strings.Contains(got, "finish the migration") {
+	if got := live.agent.FramePreview().VolatileText(); !strings.Contains(got, "finish the migration") {
 		t.Errorf("after a lore edit the model can no longer see its own open work — the "+
 			"task card is gone from the per-turn tail for the rest of the session:\n%s", got)
 	}
@@ -67,7 +67,7 @@ func TestALoreReloadKeepsTheTaskCardInTheModelsContext(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		live.reloadLore()
 	}
-	if n := strings.Count(live.agent.ContextPreview(), "finish the migration"); n != 1 {
+	if n := strings.Count(live.agent.FramePreview().VolatileText(), "finish the migration"); n != 1 {
 		t.Errorf("the task card appears %d times after four lore edits, want 1 — each "+
 			"reload is stacking another copy onto the context window", n)
 	}
@@ -85,7 +85,7 @@ func TestATrustFlipKeepsTheTaskCardInTheModelsContext(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed task: %v", err)
 	}
-	if got := s.agent.ContextPreview(); !strings.Contains(got, "finish the migration") {
+	if got := s.agent.FramePreview().VolatileText(); !strings.Contains(got, "finish the migration") {
 		t.Fatalf("precondition: the task card is not in the model's context at build:\n%s", got)
 	}
 
@@ -93,7 +93,7 @@ func TestATrustFlipKeepsTheTaskCardInTheModelsContext(t *testing.T) {
 		t.Fatalf("Trust: %v", err)
 	}
 
-	if got := s.agent.ContextPreview(); !strings.Contains(got, "finish the migration") {
+	if got := s.agent.FramePreview().VolatileText(); !strings.Contains(got, "finish the migration") {
 		t.Errorf("a trust flip took the task card out of the model's per-turn context:\n%s", got)
 	}
 }

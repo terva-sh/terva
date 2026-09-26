@@ -80,16 +80,16 @@ func NewHTTPError(provider string, status int, retryAfter, body string) *Provide
 		Provider:   provider,
 		Status:     status,
 		Transient:  transientHTTPStatus(status),
-		RetryAfter: ParseRetryAfter(retryAfter),
+		RetryAfter: parseRetryAfter(retryAfter),
 		Msg:        strings.TrimSpace(body),
 	}
 }
 
-// NewStreamDeathError marks a connection that closed before the
+// newStreamDeathError marks a connection that closed before the
 // protocol's terminal frame (anthropic's message_stop, openai's
 // [DONE], …) — a truncation, always worth retrying. Wraps
 // io.ErrUnexpectedEOF so errors.Is keeps working.
-func NewStreamDeathError(provider, terminal string) *ProviderError {
+func newStreamDeathError(provider, terminal string) *ProviderError {
 	return &ProviderError{
 		Provider:  provider,
 		Transient: true,
@@ -98,11 +98,12 @@ func NewStreamDeathError(provider, terminal string) *ProviderError {
 	}
 }
 
-// ErrStreamLimit is the sentinel behind NewStreamLimitError, so callers
-// can errors.Is a limit abort apart from a plain truncation.
+// ErrStreamLimit is the sentinel inside the error a stream returns when one
+// event line exceeds its size limit, so callers can errors.Is a limit abort
+// apart from a plain truncation.
 var ErrStreamLimit = errors.New("event stream line exceeded its size limit")
 
-// NewStreamLimitError marks a stream aborted because a single wire line
+// newStreamLimitError marks a stream aborted because a single wire line
 // exceeded the reader's ceiling.
 //
 // Unlike stream death this is *permanent*, and the distinction is the
@@ -112,7 +113,7 @@ var ErrStreamLimit = errors.New("event stream line exceeded its size limit")
 // every attempt — so marking it transient burns the entire retry budget,
 // paying full input tokens per attempt, to fail in exactly the same place
 // and then blame the network. Transient stays false.
-func NewStreamLimitError(provider string, max int) *ProviderError {
+func newStreamLimitError(provider string, max int) *ProviderError {
 	return &ProviderError{
 		Provider:  provider,
 		Transient: false,
@@ -121,9 +122,9 @@ func NewStreamLimitError(provider string, max int) *ProviderError {
 	}
 }
 
-// NewStreamReadError wraps a transport failure that killed an event
+// newStreamReadError wraps a transport failure that killed an event
 // stream mid-read. Transient: the read failed, not the payload.
-func NewStreamReadError(provider string, err error) *ProviderError {
+func newStreamReadError(provider string, err error) *ProviderError {
 	return &ProviderError{
 		Provider:  provider,
 		Transient: true,
@@ -238,10 +239,10 @@ func transientErrorCode(code, kind, msg string) bool {
 	return saysRetry(msg)
 }
 
-// ParseRetryAfter parses a Retry-After header value: either delay
+// parseRetryAfter parses a Retry-After header value: either delay
 // seconds ("17") or an HTTP-date. Returns 0 for absent or
 // unparseable values, never a negative duration.
-func ParseRetryAfter(v string) time.Duration {
+func parseRetryAfter(v string) time.Duration {
 	v = strings.TrimSpace(v)
 	if v == "" {
 		return 0

@@ -8,7 +8,7 @@ import (
 )
 
 // lazy_tools hiding may engage only where activate_tools exists as the
-// reveal path. Before this rule, EnableLazyTools ran unconditionally on the
+// reveal path. Before this rule, lazy visibility engaged unconditionally on the
 // flag while activate_tools registered only for base-workspace sessions —
 // so flipping the flag on would have hidden extension/world tools in
 // chat/play/--no-tools sessions with no way for the model to reveal them.

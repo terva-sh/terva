@@ -120,8 +120,8 @@ func TestMidTurnAutoCompact(t *testing.T) {
 		{usageInput: 190_000, toolCall: true}, // step 1: 95% of the 200k window
 		{usageInput: 8_000, toolCall: false},  // step 2: post-compact, small again
 	}}
-	a := NewAgent(client, "claude-sonnet-4-5", "system", Registry{"noop": noopTool{}})
-	seedSmallTranscript(a, 4) // beyond keep-tail so CanCompact is true
+	a := newTestAgent(client, "claude-sonnet-4-5", "system", Registry{"noop": noopTool{}})
+	seedSmallTranscript(a, 4) // beyond keep-tail so canCompact is true
 
 	var events []string
 	err := a.Prompt(context.Background(), "go", nil, func(ev AgentEvent) {
@@ -159,7 +159,7 @@ func TestMidTurnAutoCompact(t *testing.T) {
 		t.Fatalf("tool_use/tool_result pair damaged by mid-turn compact (use=%v result=%v)", hasToolUse, hasToolResult)
 	}
 	// The final step's usage re-baselined the gauge far below threshold.
-	if f := a.ContextFraction(); f >= AutoCompactThreshold {
+	if f := testContextFraction(a); f >= AutoCompactThreshold {
 		t.Fatalf("post-turn ContextFraction = %v, want < threshold", f)
 	}
 }
@@ -175,7 +175,7 @@ func TestMidTurnAutoCompactHysteresis(t *testing.T) {
 		{usageInput: 120_000, toolCall: true}, // still saturated after compaction
 		{usageInput: 8_000, toolCall: false},
 	}}
-	a := NewAgent(client, "gpt-4o", "system", Registry{"noop": noopTool{}})
+	a := newTestAgent(client, "gpt-4o", "system", Registry{"noop": noopTool{}})
 	// A transcript whose newest message is so large that even the
 	// post-compaction estimate (summary + kept tail) stays over the
 	// threshold: 0.85 * 128k tokens * 4 chars/token ≈ 435k chars.
@@ -195,77 +195,19 @@ func TestMidTurnAutoCompactHysteresis(t *testing.T) {
 	}
 }
 
-// TestContextPressureNoteInEphemeralContext: past ContextWarnFraction
-// the request's ephemeral tail carries a context-pressure note so the
-// model learns how full its window is without polling terva_status.
-func TestContextPressureNoteInEphemeralContext(t *testing.T) {
-	client := &midTurnFakeClient{steps: []midTurnStep{{usageInput: 150_000, toolCall: false}}}
-	a := NewAgent(client, "claude-sonnet-4-5", "system", Registry{})
-	a.SeedLastTurnUsage(provider.Usage{InputTokens: 150_000}) // 75% of 200k
-
-	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
-		t.Fatalf("Prompt returned %v", err)
-	}
-	if len(client.reqs) != 1 {
-		t.Fatalf("requests = %d, want 1", len(client.reqs))
-	}
-	eph := client.reqs[0].EphemeralContext
-	if !strings.Contains(eph, "[context pressure]") || !strings.Contains(eph, "% full") {
-		t.Fatalf("ephemeral context missing pressure note: %q", eph)
-	}
-
-	// Below the warn threshold: no note.
-	client2 := &midTurnFakeClient{steps: []midTurnStep{{usageInput: 10_000, toolCall: false}}}
-	b := NewAgent(client2, "claude-sonnet-4-5", "system", Registry{})
-	b.SeedLastTurnUsage(provider.Usage{InputTokens: 50_000}) // 25%
-	if err := b.Prompt(context.Background(), "hello", nil, nil); err != nil {
-		t.Fatalf("Prompt returned %v", err)
-	}
-	if eph := client2.reqs[0].EphemeralContext; strings.Contains(eph, "[context pressure]") {
-		t.Fatalf("pressure note should not appear below the warn threshold: %q", eph)
-	}
-}
-
-// TestContextPressureNoteRespectsAutoCompactOff: with auto_compact "off"
-// the note must not promise the 85% auto-compaction valve — it tells the
-// model compaction is disabled and suggests wrapping up / manual /compact.
-func TestContextPressureNoteRespectsAutoCompactOff(t *testing.T) {
-	client := &midTurnFakeClient{steps: []midTurnStep{{usageInput: 150_000, toolCall: false}}}
-	a := NewAgent(client, "claude-sonnet-4-5", "system", Registry{})
-	a.AutoCompactPolicy = func() AutoCompactMode { return AutoCompactOff }
-	a.SeedLastTurnUsage(provider.Usage{InputTokens: 150_000}) // 75% of 200k
-
-	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
-		t.Fatalf("Prompt returned %v", err)
-	}
-	if len(client.reqs) != 1 {
-		t.Fatalf("requests = %d, want 1", len(client.reqs))
-	}
-	eph := client.reqs[0].EphemeralContext
-	if !strings.Contains(eph, "[context pressure]") {
-		t.Fatalf("ephemeral context missing pressure note: %q", eph)
-	}
-	if strings.Contains(eph, "auto-compacted") {
-		t.Errorf("off-mode note still promises auto-compaction: %q", eph)
-	}
-	if !strings.Contains(eph, "automatic compaction off") || !strings.Contains(eph, "/compact") {
-		t.Errorf("off-mode note should say compaction is off and point at manual /compact: %q", eph)
-	}
-}
-
 // TestCompactRebaselinesContextGauge: a successful compaction must reset
 // the stale pre-compaction usage snapshot, otherwise every fraction
 // check until the next completed request re-reads ~full and re-fires.
 func TestCompactRebaselinesContextGauge(t *testing.T) {
 	client := &midTurnFakeClient{}
-	a := NewAgent(client, "claude-sonnet-4-5", "system", Registry{})
+	a := newTestAgent(client, "claude-sonnet-4-5", "system", Registry{})
 	seedSmallTranscript(a, 8)
 	a.SeedLastTurnUsage(provider.Usage{InputTokens: 190_000}) // 95%
 
 	if _, err := a.Compact(context.Background(), AutoCompactKeepTail, nil); err != nil {
 		t.Fatalf("Compact returned %v", err)
 	}
-	if f := a.ContextFraction(); f >= AutoCompactThreshold {
+	if f := testContextFraction(a); f >= AutoCompactThreshold {
 		t.Fatalf("ContextFraction after compaction = %v; want re-baselined below threshold", f)
 	}
 }

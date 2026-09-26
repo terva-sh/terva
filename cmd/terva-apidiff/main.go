@@ -65,6 +65,11 @@ var defaultPkgs = []string{
 	"packages/provider",
 	"packages/agent/tools",
 	"packages/agent/sdk",
+	// packages/session (the JSONL session store, the engine's until
+	// TKT-01M35WK0T) belongs here once a published release contains it. Before
+	// that the base has no source for it and comparePkg refuses, which would
+	// fail the whole run; its API left packages/core, and this list already
+	// reports that removal.
 }
 
 type symbol struct {
@@ -307,10 +312,24 @@ func filesAt(repo, ref, pkg string) (map[string][]byte, error) {
 	return files, err
 }
 
+// expDir is the directory name of an experiments package (decision 0021, rule
+// 7). An exp package promises nothing, so its changes are not evidence for the
+// version and are left out of every census, wherever one sits.
+const expDir = "exp"
+
 // isSource keeps Go sources that are part of the package's surface. Tests are
-// out: they compile into no consumer's build.
+// out: they compile into no consumer's build. So is anything under an exp
+// directory: packages/core/exp is imported by hosts but promises nothing.
 func isSource(path string) bool {
-	return strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go")
+	if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+		return false
+	}
+	for _, seg := range strings.Split(path, "/") {
+		if seg == expDir {
+			return false
+		}
+	}
+	return true
 }
 
 // census extracts every exported symbol a consumer could name.

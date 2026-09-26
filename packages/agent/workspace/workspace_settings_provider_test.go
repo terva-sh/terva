@@ -7,6 +7,7 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -18,7 +19,7 @@ func providerSession(t *testing.T, prov string) *wsSession {
 	w := &Workspace{ctx: context.Background(), diag: func(string) {}, sessions: map[string]*wsSession{}}
 	s := &wsSession{id: "s1", ws: w, hub: newWSHub(), provider: prov}
 	w.sessions[s.id] = s
-	s.agent = core.NewAgent(&gatedTurnClient{}, "m", "sys", core.Registry{})
+	s.agent = coretest.NewAgent(&gatedTurnClient{}, "m", "sys", core.Registry{})
 	return s
 }
 

@@ -26,7 +26,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 )
 
@@ -85,33 +84,28 @@ func (t *azureRewriteTransport) RoundTrip(req *http.Request) (*http.Response, er
 	return t.inner.RoundTrip(req)
 }
 
-// NewAzureOpenAI returns an Azure OpenAI client.
+// newAzureOpenAI returns an Azure OpenAI client.
 //
 // baseURL examples (any is fine; we normalise trailing slashes):
 //
 //	https://my-resource.openai.azure.com
 //	https://my-resource.openai.azure.com/openai/v1
 //
-// apiKey is the Azure resource key. The api-version comes from
-// AZURE_OPENAI_API_VERSION env var (default "2024-10-21").
-func NewAzureOpenAI(apiKey, baseURL string) Client {
+// apiKey is the Azure resource key. An empty baseURL falls back to
+// cfg.BaseURL; with neither, the client reports cfg.Hint on its first request.
+// The api-version is cfg.APIVersion, or defaultAzureAPIVersion when empty.
+func newAzureOpenAI(apiKey, baseURL string, cfg AzureOpenAIConfig) Client {
 	if baseURL == "" {
-		// Try env, then resource-name expansion.
-		baseURL = os.Getenv("AZURE_OPENAI_BASE_URL")
-		if baseURL == "" {
-			if rn := os.Getenv("AZURE_OPENAI_RESOURCE_NAME"); rn != "" {
-				baseURL = "https://" + rn + ".openai.azure.com"
-			}
-		}
+		baseURL = cfg.BaseURL
 	}
 	if baseURL == "" {
-		return &unimplementedClient{
-			name: "azure-openai-responses",
-			hint: "set AZURE_OPENAI_BASE_URL or AZURE_OPENAI_RESOURCE_NAME (or pass --base-url)",
-			wire: reasoningWireOpenAICompat,
+		hint := cfg.Hint
+		if hint == "" {
+			hint = "no Azure OpenAI endpoint (set AzureOpenAIConfig.BaseURL or pass a base URL)"
 		}
+		return &unimplementedClient{name: "azure-openai-responses", hint: hint, wire: reasoningWireOpenAICompat}
 	}
-	apiVersion := os.Getenv("AZURE_OPENAI_API_VERSION")
+	apiVersion := cfg.APIVersion
 	if apiVersion == "" {
 		apiVersion = defaultAzureAPIVersion
 	}

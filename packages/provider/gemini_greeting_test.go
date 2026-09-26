@@ -4,9 +4,9 @@ import "testing"
 
 // A --card seeds its opening greeting as a leading assistant turn. Gemini
 // rejects a leading role:"model" content, so buildRequest must prepend a
-// request-scoped user turn (EnsureLeadingUserTurn).
+// request-scoped user turn (ensureLeadingUserTurn).
 func TestGeminiBuildRequest_LeadingAssistantGetsUserGuard(t *testing.T) {
-	c := &geminiClient{}
+	c := &geminiClient{catalogRef: catalogRef{testReg}}
 	out, _, err := c.buildRequest(Request{
 		Model: "gemini-2.5-flash",
 		Messages: []Message{
@@ -30,7 +30,7 @@ func TestGeminiBuildRequest_LeadingAssistantGetsUserGuard(t *testing.T) {
 
 // A normal user-first conversation is untouched by the guard.
 func TestGeminiBuildRequest_NormalConversationUnchanged(t *testing.T) {
-	c := &geminiClient{}
+	c := &geminiClient{catalogRef: catalogRef{testReg}}
 	out, _, err := c.buildRequest(Request{
 		Model:    "gemini-2.5-flash",
 		Messages: []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},

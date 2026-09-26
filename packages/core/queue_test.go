@@ -74,7 +74,7 @@ func (t *blockingTool) Execute(ctx context.Context, args json.RawMessage, progre
 func TestQueuedMessageInjectedAfterToolBatchBeforeNextModelCall(t *testing.T) {
 	client := &queueFakeClient{}
 	tool := &blockingTool{started: make(chan struct{}), release: make(chan struct{})}
-	a := NewAgent(client, "fake-model", "system", Registry{"echo": tool})
+	a := newTestAgent(client, "fake-model", "system", Registry{"echo": tool})
 
 	var (
 		mu    sync.Mutex
@@ -130,8 +130,8 @@ func queueTestContains(xs []string, want string) bool {
 	return false
 }
 
-func TestQueueMessageSnapshotPopAndDrain(t *testing.T) {
-	a := NewAgent(nil, "fake", "", Registry{})
+func TestQueueMessageSnapshotShiftAndDrain(t *testing.T) {
+	a := newTestAgent(nil, "fake", "", Registry{})
 	if a.QueueMessage("   ") {
 		t.Fatal("blank queue message accepted")
 	}
@@ -140,11 +140,11 @@ func TestQueueMessageSnapshotPopAndDrain(t *testing.T) {
 	if got := a.PendingQueuedMessages(); len(got) != 2 || got[0] != "one" || got[1] != "two" {
 		t.Fatalf("PendingQueuedMessages = %v; want [one two]", got)
 	}
-	if text, ok := a.PopQueuedMessage(); !ok || text != "two" {
-		t.Fatalf("PopQueuedMessage = %q,%v; want two,true", text, ok)
+	if text, ok := a.ShiftQueuedMessage(); !ok || text != "one" {
+		t.Fatalf("ShiftQueuedMessage = %q,%v; want one,true", text, ok)
 	}
-	if got := a.DrainQueuedMessages(); len(got) != 1 || got[0] != "one" {
-		t.Fatalf("DrainQueuedMessages = %v; want [one]", got)
+	if got := a.DrainQueuedMessages(); len(got) != 1 || got[0] != "two" {
+		t.Fatalf("DrainQueuedMessages = %v; want [two]", got)
 	}
 	if got := a.QueuedMessageCount(); got != 0 {
 		t.Fatalf("QueuedMessageCount = %d; want 0", got)
@@ -152,7 +152,7 @@ func TestQueueMessageSnapshotPopAndDrain(t *testing.T) {
 }
 
 func TestSetQueuedMessages(t *testing.T) {
-	a := NewAgent(nil, "fake", "", Registry{})
+	a := newTestAgent(nil, "fake", "", Registry{})
 	a.QueueMessage("one")
 	a.QueueMessage("two")
 	// Replace wholesale (edit/cancel), trimming blanks and dropping empties.
@@ -168,7 +168,7 @@ func TestSetQueuedMessages(t *testing.T) {
 }
 
 func TestQueueFrontOps(t *testing.T) {
-	a := NewAgent(nil, "fake", "", Registry{})
+	a := newTestAgent(nil, "fake", "", Registry{})
 	if a.RequeueFront("  ") {
 		t.Fatal("blank requeue accepted")
 	}

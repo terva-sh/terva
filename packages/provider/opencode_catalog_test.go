@@ -62,7 +62,7 @@ func TestOpenCodeGoCatalogHasRealContextWindows(t *testing.T) {
 	}
 
 	got := map[string]Model{}
-	for _, m := range Catalog {
+	for _, m := range catalog {
 		if m.Provider == "opencode-go" {
 			got[m.ID] = m
 		}
@@ -94,7 +94,7 @@ func TestOpenCodeGoCatalogHasRealContextWindows(t *testing.T) {
 // had it. The generator now stamps the base uniformly, which is the point.
 func TestOpenCodeGoBaseURLsAreUniform(t *testing.T) {
 	const want = "https://opencode.ai/zen/go/v1"
-	for _, m := range Catalog {
+	for _, m := range catalog {
 		if m.Provider != "opencode-go" {
 			continue
 		}

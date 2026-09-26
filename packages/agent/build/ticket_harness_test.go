@@ -13,10 +13,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"terva.sh/terva/packages/core/lazytools"
 	"testing"
 
 	ticket "github.com/terva-sh/git-ticket/ticket"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -102,13 +104,18 @@ func (c *ticketScriptClient) firstTools() map[string]bool {
 // The lazy group: a session in a store-bearing repository hides the ticket
 // tools behind the `ticket` group, names them in the capability note, and
 // activation brings all ten into the advertised set on the next turn. This
-// is the path activate_tools drives through Agent.ActivateGroup.
+// is the path activate_tools drives through lazytools.Visibility.Activate. The
+// agent carries terva's Assembler, because the note rides its frame.
 func TestTicketToolsLazyGroupAdvertisesAndActivates(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, ticketStoreDir(t), nil, "", "", false, nil)
 	client := &ticketScriptClient{}
-	a := core.NewAgent(client, "m", "sys", reg)
-	a.EnableLazyTools()
+	asm := NewAssembler(nil)
+	opts := append([]core.Option{core.WithAssembler(asm), core.WithTools(reg), core.WithGate(core.AllowAll)}, LazyTools(asm)...)
+	a, err := core.New(client, "m", opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if err := a.Prompt(context.Background(), "go", nil, nil); err != nil {
 		t.Fatalf("Prompt: %v", err)
@@ -129,7 +136,7 @@ func TestTicketToolsLazyGroupAdvertisesAndActivates(t *testing.T) {
 		}
 	}
 
-	a.ActivateGroup("ticket")
+	lazytools.Of(a).Activate("ticket")
 	if err := a.Prompt(context.Background(), "again", nil, nil); err != nil {
 		t.Fatalf("Prompt after activation: %v", err)
 	}
@@ -148,7 +155,7 @@ func TestTicketPlanSessionAdvertisesReadsOnly(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	reg := BuildToolRegistry(Args{}, core.ApprovalPlan, ticketStoreDir(t), nil, "", "", false, nil)
 	client := &ticketScriptClient{}
-	a := core.NewAgent(client, "m", "sys", reg)
+	a := coretest.NewAgent(client, "m", "sys", reg)
 
 	if err := a.Prompt(context.Background(), "plan", nil, nil); err != nil {
 		t.Fatalf("Prompt: %v", err)
@@ -197,7 +204,7 @@ func TestTicketLifecycleThroughAgentLoop(t *testing.T) {
 
 	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, dir, nil, "", "", false, nil)
 	client := &ticketScriptClient{}
-	a := core.NewAgent(client, "m", "sys", reg)
+	a := coretest.NewAgent(client, "m", "sys", reg)
 
 	step := func(name string, args map[string]any) {
 		t.Helper()

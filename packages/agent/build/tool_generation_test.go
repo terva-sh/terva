@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
@@ -36,7 +37,7 @@ func TestLiveToolSetCarriesAskerAcrossRebuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	asker := rebuildAsker{}
-	ag := r.NewAgent()
+	ag := r.NewAgent(core.AllowAll)
 	LiveToolSet{Args: args, Asker: asker}.Rebuild(ag)
 	tool, ok := ag.LookupTool("ask_user_question")
 	if !ok {
@@ -53,7 +54,7 @@ func TestToolGenerationReclassifiesSameName(t *testing.T) {
 		t.Run(string(mode), func(t *testing.T) {
 			pol := permissions.NewPolicy(mode, nil)
 			gate := core.NewPolicyGate(pol, nil)
-			ag := core.NewAgent(nil, "fake", "", nil)
+			ag := coretest.NewAgent(nil, "fake", "", nil)
 			for _, state := range []string{"read", "mutate", "removed", "mutate", "read", "network"} {
 				r := Resolved{ToolRegistry: core.Registry{}, ApprovalMode: mode, readOnlySet: permissions.BuiltinReadOnlySet()}
 				info := ExtensionToolInfo{Name: "echo", ReadOnly: state == "read" || state == "network"}

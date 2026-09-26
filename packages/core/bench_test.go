@@ -73,7 +73,7 @@ func benchDeepMessages(turns int) []provider.Message {
 // fixed depth and the alloc numbers reflect the turn alone.
 func BenchmarkDeepSessionTurn(b *testing.B) {
 	history := benchDeepMessages(benchDeepTurns)
-	a := NewAgent(benchNoopClient{}, "bench-model", "you are a benchmark agent", Registry{})
+	a := newTestAgent(benchNoopClient{}, "bench-model", "you are a benchmark agent", Registry{})
 	a.SetMessages(history)
 	base := len(a.messages)
 

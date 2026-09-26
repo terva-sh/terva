@@ -10,12 +10,12 @@ import "testing"
 // Scanned from the catalog rather than a typed-out list of models: the first
 // run IS the audit, and a model added later enrolls itself.
 //
-// 🪤 Catalog, NOT builtinCatalog. This scanned builtinCatalog, the third-party
+// 🪤 catalog, NOT builtinCatalog. This scanned builtinCatalog, the third-party
 // EXTENDED list, so every CURATED row in models.go went unaudited — 322 rungs
 // across 46 models, measured, and openai-codex / kimi / deepseek entirely,
 // since those three have no builtinCatalog rows at all. (anthropic, openai and
 // google do have rows there, so they were partly covered; the file header's
-// "not duplicated here" describes intent more than the data.) Catalog is the
+// "not duplicated here" describes intent more than the data.) catalog is the
 // union — models.go plus builtinCatalog, appended in catalog_builtin.go's init.
 //
 // The same hole in reasoning_wire_census_test.go is what let kimi's
@@ -24,7 +24,7 @@ import "testing"
 func TestLadderNeverDisagreesWithTheEffectMappers(t *testing.T) {
 	checked := 0
 	seen := map[string]bool{}
-	for _, m := range Catalog {
+	for _, m := range catalog {
 		seen[m.Provider] = true
 		ladder := ReasoningLadderFor(m)
 		if ladder == nil {
@@ -68,7 +68,7 @@ func TestLadderNeverDisagreesWithTheEffectMappers(t *testing.T) {
 	// rows and so would stay "seen" through exactly the regression this catches.
 	for _, p := range []string{"openai-codex", "kimi", "deepseek"} {
 		if !seen[p] {
-			t.Errorf("provider %q was not scanned. It lives only in the curated Catalog rows, "+
+			t.Errorf("provider %q was not scanned. It lives only in the curated catalog rows, "+
 				"so this guard is reading builtinCatalog (the third-party extended list) and "+
 				"auditing none of the providers most worth auditing.", p)
 		}
@@ -81,9 +81,9 @@ func TestLadderNeverDisagreesWithTheEffectMappers(t *testing.T) {
 // the rung it names, and the rung it names must itself be unannotated.
 // Otherwise "same as low" could point at a rung that is itself "same as
 // minimum", and neither row would say what it sends.
-// Catalog, not builtinCatalog — same reason as the guard above.
+// catalog, not builtinCatalog — same reason as the guard above.
 func TestCollapseAnnotationsPointAtARealCanonicalRung(t *testing.T) {
-	for _, m := range Catalog {
+	for _, m := range catalog {
 		ladder := ReasoningLadderFor(m)
 		byLevel := map[string]ReasoningRung{}
 		for _, r := range ladder {
@@ -127,7 +127,7 @@ func TestCollapseAnnotationsPointAtARealCanonicalRung(t *testing.T) {
 // loudly rather than passing on an empty set.
 func TestACollapsingModelIsActuallyAnnotated(t *testing.T) {
 	collapsing := 0
-	for _, m := range Catalog {
+	for _, m := range catalog {
 		ladder := ReasoningLadderFor(m)
 		if ladder == nil {
 			continue

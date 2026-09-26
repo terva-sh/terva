@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"terva.sh/terva/packages/core/transcriptcodec"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -117,8 +118,8 @@ func imageMsgs(a *Agent) []provider.ImageBlock {
 func TestImageRecoverySingle(t *testing.T) {
 	bad := []byte{0xBA, 0xDD}
 	client := &imageRejectFakeClient{bad: bad}
-	a := NewAgent(client, "gpt-5.5", "system", Registry{})
-	a.RetryBaseDelay = time.Millisecond
+	a := newTestAgent(client, "gpt-5.5", "system", Registry{})
+	a.retryBaseDelay = time.Millisecond
 	a.SetMessages([]provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Content{provider.ImageBlock{MimeType: "image/png", Data: bad}}},
 	})
@@ -150,18 +151,18 @@ func TestImageRecoverySingle(t *testing.T) {
 func TestImageRecoveryFiresExclusionHook(t *testing.T) {
 	bad := []byte{0xBA, 0xDD}
 	client := &imageRejectFakeClient{bad: bad}
-	a := NewAgent(client, "gpt-5.5", "system", Registry{})
-	a.RetryBaseDelay = time.Millisecond
+	a := newTestAgent(client, "gpt-5.5", "system", Registry{})
+	a.retryBaseDelay = time.Millisecond
 	var excluded []string
-	a.AddImageExcludedObserver(func(sha string) { excluded = append(excluded, sha) })
+	a.addImageExcludedObserver(func(sha string) { excluded = append(excluded, sha) })
 	a.SetMessages([]provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Content{provider.ImageBlock{MimeType: "image/png", Data: bad}}},
 	})
 	if err := a.Prompt(context.Background(), "go", nil, func(AgentEvent) {}); err != nil {
 		t.Fatal(err)
 	}
-	if len(excluded) != 1 || excluded[0] != imageSHA256(bad) {
-		t.Fatalf("OnImageExcluded = %v; want one hash %s", excluded, imageSHA256(bad))
+	if len(excluded) != 1 || excluded[0] != transcriptcodec.ImageSHA256(bad) {
+		t.Fatalf("OnImageExcluded = %v; want one hash %s", excluded, transcriptcodec.ImageSHA256(bad))
 	}
 }
 
@@ -173,8 +174,8 @@ func TestImageRecoveryNewestFirstPreservesOlder(t *testing.T) {
 	bad := []byte{0xBA, 0xDD}   // the culprit
 	good2 := []byte{0x60, 0x02} // newer than the bad one — collateral
 	client := &imageRejectFakeClient{bad: bad}
-	a := NewAgent(client, "gpt-5.5", "system", Registry{})
-	a.RetryBaseDelay = time.Millisecond
+	a := newTestAgent(client, "gpt-5.5", "system", Registry{})
+	a.retryBaseDelay = time.Millisecond
 	img := func(d []byte) provider.Message {
 		return provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.ImageBlock{MimeType: "image/png", Data: d}}}
 	}

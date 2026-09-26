@@ -2,6 +2,7 @@ package build
 
 import (
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/lazytools"
 	"terva.sh/terva/packages/i18n"
 )
 
@@ -51,7 +52,7 @@ var EngineFeatures = []EngineFeature{
 		Desc:              i18n.M("When the agent activates a tool group and finishes its reply, automatically continue it with those tools live instead of waiting for your next message."),
 		Default:           true,
 		RequiresLazyTools: true,
-		Apply:             func(a *core.Agent, on bool) { a.SetActivationContinuation(on) },
+		Apply:             func(a *core.Agent, on bool) { lazytools.Of(a).SetContinuation(on) },
 	},
 	{
 		ID:    "cache_aware_compaction",
@@ -75,7 +76,9 @@ var EngineFeatures = []EngineFeature{
 		// re-run it. That is what the cold path's dedicated summarizer prompt was
 		// buying, and it is the one failure mode worth watching for.
 		Default: true,
-		Apply:   func(a *core.Agent, on bool) { a.SetCacheAwareCompaction(on) },
+		Apply: func(a *core.Agent, on bool) {
+			setCompactionSwitch(a, func(s *compactionSwitches) { s.warm.Store(on) })
+		},
 	},
 	{
 		ID:    "provider_compaction",
@@ -161,7 +164,9 @@ var EngineFeatures = []EngineFeature{
 		// replayed to a provider that cannot decrypt it is amnesia with no
 		// symptom, and the recovery path that catches it is not wired yet.
 		Default: false,
-		Apply:   func(a *core.Agent, on bool) { a.SetProviderCompaction(on) },
+		Apply: func(a *core.Agent, on bool) {
+			setCompactionSwitch(a, func(s *compactionSwitches) { s.provider.Store(on) })
+		},
 	},
 	{
 		ID:    "prefix_change_guard",
@@ -173,7 +178,9 @@ var EngineFeatures = []EngineFeature{
 		// when there is a saving behind it. Measured: an unguarded model switch on
 		// a 66k transcript cost $0.42; guarded, $0.066.
 		Default: true,
-		Apply:   func(a *core.Agent, on bool) { a.SetPrefixChangeGuard(on) },
+		Apply: func(a *core.Agent, on bool) {
+			setCompactionSwitch(a, func(s *compactionSwitches) { s.prefixGuard.Store(on) })
+		},
 	},
 	{
 		ID:    "stuck_loop_detection",
@@ -187,7 +194,11 @@ var EngineFeatures = []EngineFeature{
 		// hatches that act on the signal (ask, escalate) are opt-in and land later.
 		// See docs/proposals/stuck-loop-escalation.md.
 		Default: true,
-		Apply:   func(a *core.Agent, on bool) { a.SetStallDetection(on) },
+		Apply: func(a *core.Agent, on bool) {
+			if asm := AssemblerOf(a); asm != nil {
+				asm.Stall().SetEnabled(on)
+			}
+		},
 	},
 	{
 		ID:    "stuck_loop_escalation",
@@ -195,13 +206,17 @@ var EngineFeatures = []EngineFeature{
 		Title: i18n.M("Escalate stuck loops to a stronger model"),
 		Desc:  i18n.M("When a tool loop keeps going after the nudge, offer to hand the stuck step to a stronger model and continue on it — the swap you'd otherwise make by hand. Requires the detector above (it's the trigger) and an escalation target in config (escalation.provider + escalation.model); with no target it does nothing. You're asked before the swap, which sends the conversation to that provider."),
 		// ON, but INERT without a configured target and a host that binds an
-		// Escalator (a nil Escalator makes the runLoop driver a no-op). So "on"
+		// Escalator (a nil Escalator leaves rung 3 inert, and the hold-off speaks). So "on"
 		// surprises no one: a user with no escalation.target set never sees it, and
 		// one who sets a target is asked before any swap (ask-first; auto is 3c).
 		// This mirrors prefix_change_guard, which is declared-on but inert without
 		// cache-aware compaction. See docs/plans/stuck-loop-escalation-rung3.md.
 		Default: true,
-		Apply:   func(a *core.Agent, on bool) { a.SetStuckLoopEscalation(on) },
+		Apply: func(a *core.Agent, on bool) {
+			if asm := AssemblerOf(a); asm != nil {
+				asm.Stall().SetEscalation(on)
+			}
+		},
 	},
 	{
 		ID:    "prefix_divergence_recording",
@@ -225,7 +240,11 @@ var EngineFeatures = []EngineFeature{
 		// Nobody has measured that, and an off switch is cheaper than finding out
 		// the hard way.
 		Default: true,
-		Apply:   func(a *core.Agent, on bool) { a.SetPrefixDivergenceRecording(on) },
+		Apply: func(a *core.Agent, on bool) {
+			if asm := AssemblerOf(a); asm != nil {
+				asm.PrefixWatch().SetEnabled(on)
+			}
+		},
 	},
 	{
 		ID:    "shell_result_context",
@@ -244,10 +263,14 @@ var EngineFeatures = []EngineFeature{
 		// rather than only what it does, and the client checks before sending: a
 		// daemon reached over `terva serve` may be on another host, and gating
 		// only here would put the output on the wire to that host before
-		// discarding it there. Core is the authority anyway, because a client
-		// that skips the check must not get to decide this for the user.
+		// discarding it there. The slot is the authority anyway, because a
+		// client that skips the check must not get to decide this for the user.
 		Default: false,
-		Apply:   func(a *core.Agent, on bool) { a.SetShellResultContext(on) },
+		Apply: func(a *core.Agent, on bool) {
+			if asm := AssemblerOf(a); asm != nil {
+				asm.ShellResult().SetEnabled(on)
+			}
+		},
 	},
 	{
 		ID:    "transport_recording",
@@ -263,7 +286,11 @@ var EngineFeatures = []EngineFeature{
 		// reads — and the off switch exists for anyone who would rather not
 		// persist edge/request identifiers in session files.
 		Default: true,
-		Apply:   func(a *core.Agent, on bool) { a.SetTransportRecording(on) },
+		Apply: func(a *core.Agent, on bool) {
+			if asm := AssemblerOf(a); asm != nil {
+				asm.Transport().SetEnabled(on)
+			}
+		},
 	},
 }
 

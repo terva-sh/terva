@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"terva.sh/terva/packages/core/lazytools"
 	"testing"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -42,8 +44,7 @@ func activateTextOf(r core.ToolResult) string {
 
 func TestActivateToolsActivatesGroup(t *testing.T) {
 	reg := core.Registry{"mail_send": activateFakeTool{name: "mail_send", group: "mail"}}
-	agent := core.NewAgent(nil, "m", "s", reg)
-	agent.EnableLazyTools()
+	agent := coretest.NewAgent(nil, "m", "s", reg, core.WithComponent(lazytools.New()))
 	ctx := core.ContextWithAgent(context.Background(), agent)
 	tool := &ActivateToolsTool{}
 
@@ -81,8 +82,7 @@ func TestActivateToolsSchemaEchoBudget(t *testing.T) {
 		"crm_query": activateFakeTool{name: "crm_query", group: "crm", desc: big},
 		"crm_write": activateFakeTool{name: "crm_write", group: "crm", desc: big},
 	}
-	agent := core.NewAgent(nil, "m", "s", reg)
-	agent.EnableLazyTools()
+	agent := coretest.NewAgent(nil, "m", "s", reg, core.WithComponent(lazytools.New()))
 	ctx := core.ContextWithAgent(context.Background(), agent)
 
 	res, _ := (&ActivateToolsTool{}).Execute(ctx, json.RawMessage(`{"group":"crm"}`), func(string) {})
@@ -100,8 +100,7 @@ func TestActivateToolsSchemaEchoBudget(t *testing.T) {
 
 func TestActivateToolsUnknownGroupErrors(t *testing.T) {
 	reg := core.Registry{"mail_send": activateFakeTool{name: "mail_send", group: "mail"}}
-	agent := core.NewAgent(nil, "m", "s", reg)
-	agent.EnableLazyTools()
+	agent := coretest.NewAgent(nil, "m", "s", reg, core.WithComponent(lazytools.New()))
 	ctx := core.ContextWithAgent(context.Background(), agent)
 
 	res, _ := (&ActivateToolsTool{}).Execute(ctx, json.RawMessage(`{"group":"nope"}`), func(string) {})

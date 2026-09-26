@@ -56,10 +56,10 @@ func (c *noPrefillFakeClient) Stream(ctx context.Context, req provider.Request) 
 // merged result is stashed for the caller to persist.
 func TestContinueAssistantMergesInPlace(t *testing.T) {
 	client := &prefillFakeClient{cont: " and vanished into the trees."}
-	a := NewAgent(client, "fake-model", "system", Registry{})
+	a := newTestAgent(client, "fake-model", "system", Registry{})
 	// A live steering tail that a normal turn WOULD send — the continue must
 	// suppress it so the assistant message is genuinely last.
-	a.ContextProvider = func() string { return "STEERING NOTE" }
+	testFrameOf(a).setHost(func() string { return "STEERING NOTE" })
 	a.SetMessages([]provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "Tell me a story."}}},
 		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "The knight rode on,"}}},
@@ -110,7 +110,7 @@ func TestContinueAssistantMergesInPlace(t *testing.T) {
 // continue prefills.
 func TestContinueAssistantGuards(t *testing.T) {
 	// No trailing assistant message (ends in a user turn).
-	a := NewAgent(&prefillFakeClient{cont: "x"}, "fake-model", "system", Registry{})
+	a := newTestAgent(&prefillFakeClient{cont: "x"}, "fake-model", "system", Registry{})
 	a.SetMessages([]provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hi"}}},
 	})
@@ -119,7 +119,7 @@ func TestContinueAssistantGuards(t *testing.T) {
 	}
 
 	// A provider that does not support prefill continuation.
-	b := NewAgent(&noPrefillFakeClient{}, "fake-model", "system", Registry{})
+	b := newTestAgent(&noPrefillFakeClient{}, "fake-model", "system", Registry{})
 	b.SetMessages([]provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hi"}}},
 		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "there"}}},

@@ -4,9 +4,9 @@ import "testing"
 
 // A --card seeds its opening greeting as a leading assistant turn. Bedrock
 // Converse rejects a conversation that does not begin with a user turn, so
-// buildRequest must prepend a request-scoped user turn (EnsureLeadingUserTurn).
+// buildRequest must prepend a request-scoped user turn (ensureLeadingUserTurn).
 func TestBedrockBuildRequest_LeadingAssistantGetsUserGuard(t *testing.T) {
-	client := &bedrockClient{region: "us-east-1"}
+	client := &bedrockClient{catalogRef: catalogRef{testReg}, region: "us-east-1"}
 	req, err := client.buildRequest(Request{
 		Model: "anthropic.claude-sonnet-4-5-20250929-v1:0",
 		Messages: []Message{
@@ -30,7 +30,7 @@ func TestBedrockBuildRequest_LeadingAssistantGetsUserGuard(t *testing.T) {
 
 // A normal user-first conversation is untouched by the guard.
 func TestBedrockBuildRequest_NormalConversationUnchanged(t *testing.T) {
-	client := &bedrockClient{region: "us-east-1"}
+	client := &bedrockClient{catalogRef: catalogRef{testReg}, region: "us-east-1"}
 	req, err := client.buildRequest(Request{
 		Model:    "anthropic.claude-sonnet-4-5-20250929-v1:0",
 		Messages: []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},

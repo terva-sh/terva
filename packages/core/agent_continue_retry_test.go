@@ -57,8 +57,8 @@ func (c *prefillRetryFakeClient) Stream(ctx context.Context, req provider.Reques
 // returned nothing.
 func TestContinueSurvivesTransientRetry(t *testing.T) {
 	client := &prefillRetryFakeClient{cont: " and vanished into the trees."}
-	a := NewAgent(client, "fake-model", "system", Registry{})
-	a.RetryBaseDelay = time.Millisecond
+	a := newTestAgent(client, "fake-model", "system", Registry{})
+	a.retryBaseDelay = time.Millisecond
 	a.SetMessages([]provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "Tell me a story."}}},
 		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "The knight rode on,"}}},

@@ -6,17 +6,22 @@ This document describes how terva currently constructs the model context and the
 
 Each model call is built by `packages/core.Agent.oneTurn` from four main pieces:
 
-1. **System prompt**: `Agent.System`, assembled during `agent.Resolve`.
+1. **System prompt**: the `Stable` segments of the request's `core.Frame`,
+   joined with a blank line. terva's assembler, `build.Assembler`, holds the
+   sections `build.SystemSegments` renders during `build.Resolve`, one segment
+   each, tagged by source.
 2. **Transcript messages**: a copy of the in-memory conversation history
    (`Agent.Messages()`).
 3. **Tool specs**: JSON schemas from the currently registered tools
-   (`a.Tools.Specs()`).
+   (`a.tools.Specs()`).
 4. **Reasoning setting**: the normalized reasoning/thinking level, if any.
 
 Two request fields ride alongside those pieces without ever entering the transcript:
 
-- **EphemeralContext**: host-assembled text injected for this request only (an
-  extension's live task card, the context-pressure note). Providers append it as a
+- **EphemeralContext**: text injected for this request only: the frame's
+  `Volatile` segments (terva's one is the host tail, with the task card,
+  extension cards and lore), then the blocks the engine adds itself, such as the
+  context-pressure note. Providers append it as a
   trailing message *after* the cache breakpoint, so the cached prefix (system +
   tools + history) still hits and only this block is re-processed each turn.
 - **PromptCacheKey**: a stable per-conversation identifier (the session's meta
@@ -29,12 +34,12 @@ Conceptually:
 
 ```go
 provider.Request{
-    Model:            a.Model,
-    System:           a.System,
+    Model:            a.model,
+    System:           pinnedFrame.SystemText(), // Stable segments, pinned per turn
     Messages:         a.Messages(),
-    Tools:            a.Tools.Specs(),
-    Reasoning:        a.Reasoning,
-    EphemeralContext: contextProvider(), // per-request tail, never persisted
+    Tools:            a.tools.Specs(),
+    Reasoning:        a.reasoning,
+    EphemeralContext: tail,              // Volatile segments + engine blocks, never persisted
     PromptCacheKey:   cacheKey,          // session meta UUID, cache routing
 }
 ```

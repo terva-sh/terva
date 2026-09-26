@@ -7,6 +7,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -23,7 +24,7 @@ func TestSettingsItemsAllNameDeclaredGroups(t *testing.T) {
 	w := &Workspace{ctx: context.Background(), diag: func(string) {}, sessions: map[string]*wsSession{}}
 	s := &wsSession{id: "s1", ws: w, hub: newWSHub()}
 	w.sessions[s.id] = s
-	s.agent = core.NewAgent(&gatedTurnClient{}, "m", "sys", core.Registry{})
+	s.agent = coretest.NewAgent(&gatedTurnClient{}, "m", "sys", core.Registry{})
 
 	on := true
 	if err := config.MutateConfig(func(c *config.Config) {

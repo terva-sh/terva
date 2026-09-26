@@ -45,14 +45,14 @@ func (w *Workspace) SuggestReply(ctx context.Context, sess string, p ctrlproto.S
 		return ctrlproto.SuggestResult{}, err
 	}
 	ag := s.agent
-	if ag == nil || ag.Client == nil {
+	if ag == nil || ag.Client() == nil {
 		// No credential resolved for this session yet (a credential-less boot
 		// before /login). Nothing to draft against.
 		return ctrlproto.SuggestResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("not logged in"))
 	}
 	// Default to the session's live client + model; a per-generation override
 	// (Phase 7) resolves a fresh client for the chosen model instead.
-	cl := ag.Client
+	cl := ag.Client()
 	_, model := s.currentModel()
 	if strings.TrimSpace(p.Model) != "" {
 		oc, om, err := w.overrideClient(s.argsSnapshot(), p.Provider, p.Model)
@@ -66,7 +66,7 @@ func (w *Workspace) SuggestReply(ctx context.Context, sess string, p ctrlproto.S
 	// visible transcript tail alone. A play or plain-chat session may have none;
 	// the transcript still carries the scene.
 	var c *card.Card
-	if ref := s.sess.Meta.Card; ref != "" {
+	if ref := s.sess.Stage.Card; ref != "" {
 		if sc, err := w.cardStore().Get(ref); err == nil {
 			c = &sc.Card
 		}

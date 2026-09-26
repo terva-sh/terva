@@ -42,7 +42,7 @@ func TestKeepTailBudgetTrimsAnOversizedTail(t *testing.T) {
 	msgs = append(msgs, step("r2", "read", `{"path":"compact.go"}`, bigFile)...)
 
 	window := 200_000
-	budget := int(float64(window) * KeepTailMaxFraction) // 20k
+	budget := int(float64(window) * keepTailMaxFraction) // 20k
 
 	// Today's behavior, with no size cap: the two file reads survive verbatim.
 	unbounded := tailWithinBudget(msgs, AutoCompactKeepTail, 0)
@@ -93,7 +93,7 @@ func TestKeepTailBudgetDoesNotDisturbTheCommonCase(t *testing.T) {
 		msgs = append(msgs, step(fmt.Sprintf("c%d", i), "bash", `{"command":"go test ./..."}`, "ok, 12 packages")...)
 	}
 
-	budget := int(float64(200_000) * KeepTailMaxFraction)
+	budget := int(float64(200_000) * keepTailMaxFraction)
 	bounded := tailWithinBudget(msgs, AutoCompactKeepTail, budget)
 	unbounded := tailWithinBudget(msgs, AutoCompactKeepTail, 0)
 

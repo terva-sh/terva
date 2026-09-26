@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 )
 
@@ -557,7 +558,7 @@ func TestLoopAdmissionAskReplaysHeld(t *testing.T) {
 	l := &Loop{
 		Connector:  conn,
 		Admissions: adm,
-		Agent:      core.NewAgent(&scriptedClient{reply: "ok"}, "fake-model", "sys", core.Registry{}),
+		Agent:      coretest.NewAgent(&scriptedClient{reply: "ok"}, "fake-model", "sys", core.Registry{}),
 		Provider:   "fake",
 		CWD:        "/ws",
 		Pairing:    pairedWith("7"),

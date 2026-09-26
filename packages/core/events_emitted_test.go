@@ -1,15 +1,19 @@
 package core
 
 import (
+	"io/fs"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // TestEveryDeclaredEventIsEmitted pins the producer half of the event
 // contract: every AgentEvent type declared in events.go must be constructed
-// somewhere in this package's non-test code. EvError shipped without that —
+// somewhere in the non-test code of this package or a component under it. EvError shipped without that —
 // declared, wire-serialized, ACP-translated, and emitted nowhere for the
 // fork's whole life — so its serializer branches were dead code that looked
 // alive. (ctrlproto's TestServerHelloAdvertisesServeGatedFeatures pins the
@@ -41,21 +45,29 @@ func TestEveryDeclaredEventIsEmitted(t *testing.T) {
 		t.Fatalf("declaration scan found only %d event types — declRE no longer matches events.go's Type() idiom", len(declared))
 	}
 
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("read package dir: %v", err)
-	}
+	// The engine's own files, and the components under it (packages/core/<name>,
+	// decision 0021): a component emits engine events through a public seam, as
+	// the stuck-loop detector emits EvStall and EvEscalation from its step gate.
 	var sources []string
-	for _, e := range entries {
-		name := e.Name()
+	err = filepath.WalkDir(".", func(name string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if testsupport.SkipScanDir(".", name, e) {
+			return filepath.SkipDir
+		}
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
+			return nil
 		}
 		b, err := os.ReadFile(name)
 		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
+			return err
 		}
 		sources = append(sources, string(b))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("read package tree: %v", err)
 	}
 
 	// No exemptions today: every declared event has a real emission site.
@@ -80,7 +92,7 @@ func TestEveryDeclaredEventIsEmitted(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("%s is declared in events.go but constructed nowhere in package core — a declared event nobody emits is dead wire vocabulary wearing live-looking consumers (see EvError, removed 2026-07-26)", name)
+			t.Errorf("%s is declared in events.go but constructed nowhere under packages/core — a declared event nobody emits is dead wire vocabulary wearing live-looking consumers (see EvError, removed 2026-07-26)", name)
 		}
 	}
 }

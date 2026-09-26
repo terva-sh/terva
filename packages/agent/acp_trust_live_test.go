@@ -124,13 +124,21 @@ func acpTestSession(t *testing.T, cwd string, mcpServers json.RawMessage) (ag *c
 // tool call takes — and reports whether the call was denied and why.
 func acpHookVerdict(t *testing.T, ag *core.Agent) (denied bool, reason string) {
 	t.Helper()
-	if ag.BeforeToolExecute == nil {
-		t.Fatal("the ACP agent wired no tool-call ladder, so nothing could gate a call")
+	// Beneath the stuck-loop detector's refusal, which wraps every host's gate.
+	ladder := ag.Gate()
+	if u, ok := ladder.(interface{ Unwrap() core.Gate }); ok {
+		ladder = u.Unwrap()
 	}
-	allowed, why, _ := ag.BeforeToolExecute(context.Background(), provider.ToolCallBlock{
+	if ladder == core.Gate(core.AllowAll) {
+		t.Fatal("the ACP agent was built with AllowAll, so nothing could gate a call")
+	}
+	// Resolve the tool as the engine does, so the ladder sees the same tool
+	// and the same pinned generation a real call would.
+	ctx, tool, _ := ag.ToolForCall(context.Background(), "bash")
+	allowed, why, _ := ag.Gate().CheckTool(ctx, provider.ToolCallBlock{
 		Name:      "bash",
 		Arguments: json.RawMessage(`{"command":"echo hi"}`),
-	})
+	}, tool)
 	return !allowed, why
 }
 
@@ -197,20 +205,20 @@ func TestACPTrustFlipLetsAProjectsKeyedLoreFire(t *testing.T) {
 		Content: []provider.Content{provider.TextBlock{Text: "tell me about the dragon"}},
 	}})
 
-	if strings.Contains(ag.ContextPreview(), "ACP-LORE-MARKER") {
+	if strings.Contains(ag.FramePreview().VolatileText(), "ACP-LORE-MARKER") {
 		t.Fatal("an UNTRUSTED project's lore already reached the model — trust is not gating lore discovery")
 	}
 	if err := trust(false); err != nil {
 		t.Fatalf("/trust: %v", err)
 	}
-	if !strings.Contains(ag.ContextPreview(), "ACP-LORE-MARKER") {
+	if !strings.Contains(ag.FramePreview().VolatileText(), "ACP-LORE-MARKER") {
 		t.Error("after /trust the project's keyed lore still does not fire — the agent kept the context provider it " +
 			"was built with, so this half of the flip waited for a new session while the confirmation said otherwise")
 	}
 	if err := untrust(); err != nil {
 		t.Fatalf("/untrust: %v", err)
 	}
-	if strings.Contains(ag.ContextPreview(), "ACP-LORE-MARKER") {
+	if strings.Contains(ag.FramePreview().VolatileText(), "ACP-LORE-MARKER") {
 		t.Error("after /untrust the project's lore is still being injected — withdrawal has to reach every surface " +
 			"the grant did")
 	}

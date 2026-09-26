@@ -17,14 +17,17 @@ import (
 	"testing"
 	"time"
 
+	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/extproto"
 	"terva.sh/terva/packages/agent/exttool"
+	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/agent/mcp"
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	jsonl "terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -102,7 +105,7 @@ func (editFileTool) Execute(_ context.Context, raw json.RawMessage, _ func(strin
 // turn for `toolTurns` turns, then a final text turn. Each tool-call turn
 // uses a distinct toolCallId so the editor (and the confirmer) can correlate
 // per call. Used by the permission tests, where a turn does not complete
-// until the tool's BeforeToolExecute gate resolves.
+// until the agent's tool gate resolves.
 type multiToolClient struct {
 	calls     int32
 	toolName  string
@@ -169,7 +172,7 @@ func (t *countingTool) Execute(_ context.Context, _ json.RawMessage, _ func(stri
 // "ask" approval mode that asks about that tool — exercising the Phase 2
 // session/request_permission round-trip. The provided confirmer (the ACP
 // confirmer) is the gate's inner Confirmer, and recordCall is threaded into
-// BeforeToolExecute exactly as the production acpFactory does, so the
+// the agent's tool gate exactly as the production acpFactory does, so the
 // confirmer correlates by toolCallId.
 type fakeFactory struct {
 	client  provider.Client
@@ -212,7 +215,7 @@ type fakeFactory struct {
 	noRecordSwap bool
 
 	// root is the session storage root (a temp TERVA_HOME). When set, the
-	// factory creates a real durable core.Session under it and wires the
+	// factory creates a real durable jsonl.Session under it and wires the
 	// agent's persistence hooks — exercising the Phase 3 durable-session
 	// path. When empty, an in-memory session at a temp path is used so the
 	// permission/cancel tests (which don't care about persistence) keep
@@ -405,10 +408,8 @@ func (f *fakeFactory) buildFakeAgentWithRegistry(reg core.Registry, confirmer co
 	if model == "" {
 		model = "fake-model"
 	}
-	ag := core.NewAgent(f.client, model, "system", reg)
-
 	if f.askTool == "" && f.gateMode == "" {
-		return ag, nil
+		return coretest.NewAgent(f.client, model, "system", reg), nil
 	}
 
 	mode := f.gateMode
@@ -427,10 +428,10 @@ func (f *fakeFactory) buildFakeAgentWithRegistry(reg core.Registry, confirmer co
 	gate := core.NewPolicyGate(pol, confirmer)
 	// The gate forwards call.ID to ConfirmWithCall itself — no correlation
 	// wrapper, mirroring production.
-	ag.BeforeToolExecute = func(ctx context.Context, call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	ag := coretest.NewAgentWithGate(f.client, model, "system", reg, core.GateFunc(func(ctx context.Context, call provider.ToolCallBlock, _ core.Tool) (bool, string, json.RawMessage) {
 		ok, reason, _ := gate.Check(ctx, call.Name, call.Arguments, core.BuildPreview(call.Arguments, 120), call.ID)
 		return ok, reason, nil
-	}
+	}))
 	return ag, gate
 }
 
@@ -487,8 +488,6 @@ func (f *fakeFactory) buildExtensionAgent(ctx context.Context, cwd string, confi
 	if model == "" {
 		model = "fake-model"
 	}
-	ag := core.NewAgent(f.client, model, "system", reg)
-
 	// Workspace-mode policy carrying the manifest's permission rules. Workspace
 	// auto-allows read-only foreign tools (so reader_tool needs no prompt) and
 	// prompts for foreign side-effecting tools; the manifest's writer_tool->ask
@@ -503,8 +502,8 @@ func (f *fakeFactory) buildExtensionAgent(ctx context.Context, cwd string, confi
 
 	// Canonical ladder: gate.Check FIRST (forwarding call.ID to the
 	// confirmer itself), then the extension intercept — mirroring
-	// production's BuildBeforeToolExecute with no correlation wrapper.
-	ag.BeforeToolExecute = func(ctx context.Context, call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	// production's BuildToolGate with no correlation wrapper.
+	ag := coretest.NewAgentWithGate(f.client, model, "system", reg, core.GateFunc(func(ctx context.Context, call provider.ToolCallBlock, _ core.Tool) (bool, string, json.RawMessage) {
 		ok, reason, _ := gate.Check(ctx, call.Name, call.Arguments, core.BuildPreview(call.Arguments, 120), call.ID)
 		if !ok {
 			return false, reason, nil
@@ -517,19 +516,8 @@ func (f *fakeFactory) buildExtensionAgent(ctx context.Context, cwd string, confi
 			return true, "", res.ModifiedArgs
 		}
 		return true, "", nil
-	}
-	ag.BeforeTurn = func(step int) (bool, string) {
-		res := extMgr.InterceptTurnStart(ctx, step)
-		return !res.Block, res.Reason
-	}
-	ag.BeforeAssistantMessage = func(text string) (bool, string, string) {
-		res := extMgr.InterceptAssistantMessage(ctx, text)
-		if res.Block {
-			return false, res.Reason, ""
-		}
-		return true, "", res.ReplaceText
-	}
-	ag.ContextProvider = extMgr.EphemeralContext
+	}), build.ExtensionFilters(ctx, extMgr)...)
+	coretest.FrameOf(ag).SetHost(extMgr.EphemeralContext)
 
 	// The event observer the acp package composes AFTER translateEvent: a
 	// minimal fanout that drives the manager's event emit (the production
@@ -776,23 +764,19 @@ func fanoutToExtensions(mgr *extensions.Manager, ev core.AgentEvent) {
 // set it is a real on-disk session under root (so session/list + session/load
 // see it); otherwise a session at a throwaway temp path. Persistence hooks are
 // wired in both cases so OnMessageAppended writes the transcript.
-func (f *fakeFactory) newDurableSession(cwd string) (*core.Session, error) {
+func (f *fakeFactory) newDurableSession(cwd string) (*jsonl.Session, error) {
 	if f.root != "" {
-		return core.NewSession(f.root, cwd, "fake", "fake-model", "test")
+		return jsonl.NewSession(f.root, cwd, "fake", "fake-model", "test")
 	}
 	dir, err := os.MkdirTemp("", "acp-sess-")
 	if err != nil {
 		return nil, err
 	}
-	return core.NewSessionAtPath(filepath.Join(dir, "s.jsonl"), cwd, "fake", "fake-model", "test")
+	return jsonl.NewSessionAtPath(filepath.Join(dir, "s.jsonl"), cwd, "fake", "fake-model", "test")
 }
 
-func wireFakePersist(ag *core.Agent, sess *core.Session) {
-	ag.AddMessageObserver(func(m provider.Message) { _ = sess.AppendMessage(m) })
-	ag.AddUsageObserver(func(u, cum provider.Usage) { _ = sess.AppendUsage(u, cum) })
-	ag.AddTranscriptCompactedObserver(func(msgs []provider.Message, res core.CompactResult) {
-		_ = sess.AppendCompaction(msgs, res)
-	})
+func wireFakePersist(ag *core.Agent, sess *jsonl.Session) {
+	ag.AttachTranscriptStore(jsonl.NewStore(sess))
 }
 
 func (f *fakeFactory) sessionModel() (prov, model string) {
@@ -880,7 +864,7 @@ func (f *fakeFactory) emptyExtContextFunc() func() []ContextItem {
 }
 
 func (f *fakeFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (SessionAgent, []provider.Message, error) {
-	sess, msgs, err := core.OpenSession(sessionPath)
+	sess, msgs, err := jsonl.OpenSession(sessionPath)
 	if err != nil {
 		return SessionAgent{}, nil, err
 	}
@@ -1049,7 +1033,7 @@ func (f *fakeFactory) ListSessions(cwd string) []SessionInfo {
 	if f.root == "" || cwd == "" {
 		return nil
 	}
-	summaries := core.DescribeSessions(f.root, cwd)
+	summaries := jsonl.DescribeSessions(f.root, cwd)
 	out := make([]SessionInfo, 0, len(summaries))
 	for _, s := range summaries {
 		if s.MessageCount == 0 {
@@ -2008,7 +1992,7 @@ func TestACPSessionPersistsAndLists(t *testing.T) {
 
 	// The transcript must actually be on disk: reopen it directly and check
 	// the user + assistant messages landed.
-	msgs, err := core.ReadSessionMessages(sid)
+	msgs, err := jsonl.ReadSessionMessages(sid)
 	if err != nil {
 		t.Fatalf("OpenSession(%q): %v", sid, err)
 	}

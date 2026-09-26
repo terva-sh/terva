@@ -39,21 +39,21 @@ func TestApplyResumedModel(t *testing.T) {
 	}
 
 	t.Run("re-points to a resolvable stored model", func(t *testing.T) {
-		prov, model, note := applyResumedModel(r.NewAgent(), base, newSessionOn("openai", "gpt-5.5"), r.Provider, r.Model)
+		prov, model, note := applyResumedModel(r.NewAgent(core.AllowAll), base, newSessionOn("openai", "gpt-5.5"), r.Provider, r.Model)
 		if prov != "openai" || model != "gpt-5.5" || note != "" {
 			t.Fatalf("got %s/%s note=%q, want openai/gpt-5.5 with no note", prov, model, note)
 		}
 	})
 
 	t.Run("no-op when the stored model equals the built one", func(t *testing.T) {
-		prov, model, note := applyResumedModel(r.NewAgent(), base, newSessionOn("openai", "gpt-5"), r.Provider, r.Model)
+		prov, model, note := applyResumedModel(r.NewAgent(core.AllowAll), base, newSessionOn("openai", "gpt-5"), r.Provider, r.Model)
 		if prov != "openai" || model != "gpt-5" || note != "" {
 			t.Fatalf("got %s/%s note=%q, want openai/gpt-5 with no note", prov, model, note)
 		}
 	})
 
 	t.Run("keeps the built model and warns when the stored model has no credential", func(t *testing.T) {
-		prov, model, note := applyResumedModel(r.NewAgent(), base, newSessionOn("anthropic", "claude-opus-4-8"), r.Provider, r.Model)
+		prov, model, note := applyResumedModel(r.NewAgent(core.AllowAll), base, newSessionOn("anthropic", "claude-opus-4-8"), r.Provider, r.Model)
 		if prov != "openai" || model != "gpt-5" {
 			t.Fatalf("got %s/%s, want the built openai/gpt-5 to stand", prov, model)
 		}

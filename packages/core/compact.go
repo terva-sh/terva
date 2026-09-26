@@ -9,7 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/core/i18n"
+	"terva.sh/terva/packages/core/transcriptcodec"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -27,9 +28,9 @@ var ErrNothingToCompact = errors.New("nothing to compact: keep-tail covers the w
 // context-window sample: the summarizer reads the whole transcript, so its
 // input count is transcript-sized by construction. Letting it seed the
 // context gauge re-arms every threshold check at stale-high on a transcript
-// that was just condensed. That is why CostTracker.AddTotalOnly exists, why
+// that was just condensed. That is why the cost tracker books it total-only, why
 // SetLastTurn re-baselines below, and why the durable record rides a
-// "compaction" row rather than a "usage" row (SessionUsageDetail derives the
+// "compaction" row rather than a "usage" row (session.SessionUsageDetail derives the
 // gauge from usage rows alone). Three guards, one invariant: compaction spend
 // is cost, never context.
 type CompactResult struct {
@@ -86,6 +87,13 @@ const (
 	CompactCold CompactStrategy = "cold"
 	// CompactWarm is the cache-aware summarizer: the conversation's own prefix,
 	// so the transcript is served from cache.
+	//
+	// It is an option beside cold rather than its replacement, because the two
+	// do not necessarily produce equally good summaries. The cold path gets a
+	// purpose-built summarization system prompt and a transcript framed as
+	// material. The warm path asks for a summary from inside the agent's own
+	// persona with its tools still advertised. A policy lists it to choose the
+	// saving; the default does not.
 	CompactWarm CompactStrategy = "warm"
 	// CompactWarmFellBack is a warm attempt that produced nothing usable and was
 	// finished by the cold one. Both were billed; the fallback RATE is a
@@ -128,8 +136,21 @@ func providerFellBackTo(client CompactStrategy) CompactStrategy {
 // The method blocks until the summary request completes. Emitted
 // events via sink are limited to text deltas from the summary call so
 // the UI can show progress.
+//
+// The strategies come from the policy's CompactRequested decision; a host
+// that wants the policy's keep-tail too passes Compaction(CompactRequested).
+// KeepTail.
 func (a *Agent) Compact(ctx context.Context, keepTail int, sink func(delta string)) (CompactResult, error) {
-	// Single-flight: Compact wholesale-replaces a.messages, so it must
+	d := a.decideCompaction(CompactRequested)
+	d.KeepTail = keepTail
+	return a.CompactWith(ctx, d, sink)
+}
+
+// CompactWith is Compact under a decision's keep-tail and strategies, for a
+// host that asked Compaction(point) itself and runs the compaction its own way,
+// as the daemon does after a turn. Its Compact field is not consulted.
+func (a *Agent) CompactWith(ctx context.Context, d CompactionDecision, sink func(delta string)) (CompactResult, error) {
+	// Single-flight: a compaction wholesale-replaces a.messages, so it must
 	// not run concurrently with a Prompt/Continue turn appending to the
 	// transcript (or another Compact). Return ErrBusy instead.
 	release, ok := a.acquire()
@@ -137,8 +158,13 @@ func (a *Agent) Compact(ctx context.Context, keepTail int, sink func(delta strin
 		return CompactResult{}, ErrBusy
 	}
 	defer release()
-	return a.compactHeld(ctx, keepTail, sink, false)
+	return a.compactHeld(ctx, d.KeepTail, sink, false, d.Strategies)
 }
+
+// ErrNoCompactionStrategy is a compaction whose policy left no strategy to
+// finish it: every listed one failed or could not apply, and the cold
+// summarizer, the usual last resort, was not listed.
+var ErrNoCompactionStrategy = errors.New("no compaction strategy left to try")
 
 // compactMidTurn condenses the transcript from INSIDE an active tool
 // loop (runLoop's step boundary): the single-flight guard is already
@@ -146,15 +172,16 @@ func (a *Agent) Compact(ctx context.Context, keepTail int, sink func(delta strin
 // resuming agent needs a precise ledger of already-executed actions so
 // it never repeats a side effect, which the idle-time format doesn't
 // demand.
-func (a *Agent) compactMidTurn(ctx context.Context, keepTail int) (CompactResult, error) {
-	return a.compactHeld(ctx, keepTail, nil, true)
+func (a *Agent) compactMidTurn(ctx context.Context, keepTail int, strategies []CompactStrategy) (CompactResult, error) {
+	return a.compactHeld(ctx, keepTail, nil, true, strategies)
 }
 
 // compactHeld is Compact's body for callers that already hold the
 // single-flight guard — the mid-turn auto-compact runs inside runLoop,
 // where Prompt/Continue own the slot, so re-acquiring would deadlock
 // into ErrBusy. midTurn selects the mid-task summarization addendum.
-func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta string), midTurn bool) (res CompactResult, err error) {
+// strategies is the decision's list; see CompactionDecision.Strategies.
+func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta string), midTurn bool, strategies []CompactStrategy) (res CompactResult, err error) {
 	if err := a.PersistenceError(); err != nil {
 		return CompactResult{}, err
 	}
@@ -166,10 +193,14 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 	// would otherwise be sent, cold and transcript-sized, to a model that has
 	// never seen this conversation. See compactionPrefix.
 	prefix, warm := a.compactionPrefix()
+	prose := a.compactionPrompts()
 
 	a.mu.Lock()
 	msgs := append([]provider.Message(nil), a.messages...)
-	readOnly := a.ReadOnly.Snapshot()
+	readOnly := a.readOnly.Snapshot()
+	// The ledger asks each call's tool to describe it. SetTools swaps the map
+	// whole and never writes into it, so the reference is a snapshot.
+	tools := a.tools
 	a.mu.Unlock()
 
 	if len(msgs) == 0 {
@@ -207,9 +238,9 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 	// the worst possible moment to refuse one — and the client summarizers below
 	// are still there, still correct, and merely more expensive.
 	var providerReason string
-	if a.providerCompactionOn() {
+	if strategyAllowed(strategies, CompactProvider) {
 		if sc, ok := provider.ServerCompactorFor(prefix.client); ok {
-			next, pres, perr := compactViaProvider(ctx, sc, prefix, msgs, readOnly, a.CWD)
+			next, pres, perr := compactViaProvider(ctx, a.translator, prose, sc, prefix, msgs, readOnly, tools)
 			// The attempt is billed whether or not it lands, so its spend joins
 			// the total either way — a failed compaction that reported nothing
 			// would hide real money in exactly the arm being evaluated.
@@ -235,8 +266,8 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 	// suffix; every message before it feeds the summary, ledger, and counts.
 	// Use the dispatched model's window, which can differ after a model swap.
 	budget := 0
-	if m, err := provider.FindModel("", prefix.model); err == nil {
-		budget = int(float64(m.EffectiveContextWindow()) * KeepTailMaxFraction)
+	if m, err := a.Catalog().FindModel("", prefix.model); err == nil {
+		budget = int(float64(m.EffectiveContextWindow()) * keepTailMaxFraction)
 	}
 	tail := tailWithinBudget(msgs, keepTail, budget)
 	summarizable := msgs[:len(msgs)-len(tail)]
@@ -252,7 +283,7 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 	// The cache-aware path: summarize against the prefix the provider already
 	// holds. Only worth attempting when a prefix was actually dispatched —
 	// otherwise there is nothing warm to be aware of.
-	if warm && a.cacheAwareCompactionOn() {
+	if warm && strategyAllowed(strategies, CompactWarm) {
 		// Watch whether the warm attempt puts text in front of the user before
 		// it fails. It usually won't — a model that answers with a tool_use, or
 		// a request the provider rejects outright, produces no text at all — but
@@ -281,7 +312,7 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 		// triggered by a context-overflow 413 is precisely the one most likely to
 		// overflow again. The fallback is not a safety net bolted onto the design;
 		// it is the second half of it.
-		s, u, stop, werr := a.drainSummaryRetrying(ctx, prefix.client, warmCompactRequest(prefix, msgs, len(tail), midTurn), warmSink, &retries)
+		s, u, stop, werr := a.drainSummaryRetrying(ctx, prefix.client, warmCompactRequest(prose, prefix, msgs, len(tail), midTurn), warmSink, &retries)
 		usage = usage.Add(u)
 		switch {
 		case werr == nil && s != "":
@@ -297,11 +328,14 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 			fallbackReason = warmFallbackReason(stop, werr)
 			if streamed {
 				// sink is non-nil here: streamed can only be set through warmSink.
-				sink("\n\n" + i18n.T("[the cache-aware summarizer did not finish; retrying with the dedicated one]") + "\n\n")
+				sink("\n\n" + i18n.In(a.translator).T("[the cache-aware summarizer did not finish; retrying with the dedicated one]") + "\n\n")
 			}
 		}
 	}
 
+	if summary == "" && !strategyAllowed(strategies, CompactCold) {
+		return CompactResult{}, ErrNoCompactionStrategy
+	}
 	if summary == "" {
 		// The bespoke summarization prefix: its own System, no Tools, the
 		// transcript flattened into one user block. It matches nothing the
@@ -309,13 +343,13 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 		// a full-price cold re-read of the whole conversation. That is the cost
 		// cache_aware_compaction (shipped on) exists to remove; this path now
 		// serves the warm arm's fallbacks and explicit opt-outs.
-		s, u, stop, cerr := a.drainSummaryRetrying(ctx, prefix.client, coldCompactRequest(prefix, transcript, midTurn), sink, &retries)
+		s, u, stop, cerr := a.drainSummaryRetrying(ctx, prefix.client, coldCompactRequest(prose, prefix, transcript, midTurn), sink, &retries)
 		usage = usage.Add(u)
 		if cerr != nil {
 			return CompactResult{}, cerr
 		}
 		if s == "" {
-			return CompactResult{}, i18n.Errorf("empty summary from model")
+			return CompactResult{}, i18n.In(a.translator).Errorf("empty summary from model")
 		}
 		summary = s
 		// The cold path discarded its stop reason entirely. It is the FALLBACK,
@@ -328,7 +362,7 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 	tokensBefore := len(transcript) / 4
 	// usage is the SUM of every attempt, including a warm one that fell back.
 	// It has to be: a.cost folded each attempt into the cumulative total, and
-	// SessionUsageDetail subtracts this row's usage back out of the last-turn
+	// session.SessionUsageDetail subtracts this row's usage back out of the last-turn
 	// delta. Report less than was spent and the context gauge inherits the
 	// difference.
 	// An abandoned server-side attempt is recorded on the row that DID produce
@@ -362,7 +396,7 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 	// after the fact; this serves the model that has to work from a checkpoint
 	// which stops mid-sentence, and which would otherwise read the last complete
 	// thought it can see as the end of the account.
-	ledger := executedActionsLedger(summarizable, readOnly, a.CWD)
+	ledger := executedActionsLedger(prose, summarizable, readOnly, tools)
 	if truncated {
 		// Which notice depends on whether a ledger actually follows. Pointing at
 		// a list of executed calls is the most useful thing the notice can say —
@@ -371,9 +405,9 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 		// promises a list which is not there is worse than one that stays quiet
 		// about it.
 		if ledger != "" {
-			body += "\n\n" + i18n.P("compact.truncated", compactTruncatedNotice)
+			body += "\n\n" + prose.TruncatedNotice
 		} else {
-			body += "\n\n" + i18n.P("compact.truncated.noledger", compactTruncatedNoticeBare)
+			body += "\n\n" + prose.TruncatedNoticeBare
 		}
 	}
 	if ledger != "" {
@@ -459,10 +493,10 @@ const compactMaxTokens = 16384
 // controlled framing available (the model is told, by its system prompt, that
 // it is a summarizer and not an agent), which is why it stays the default and
 // the fallback.
-func coldCompactRequest(prefix promptPrefix, transcript string, midTurn bool) provider.Request {
-	instruction := i18n.P("compact.instruction", compactionPrompt)
+func coldCompactRequest(prose CompactionPrompts, prefix promptPrefix, transcript string, midTurn bool) provider.Request {
+	instruction := prose.Instruction
 	if midTurn {
-		instruction += "\n\n" + i18n.P("compact.instruction.midturn", midTurnCompactionAddendum)
+		instruction += "\n\n" + prose.MidTurnAddendum
 	}
 	// Wrap the transcript in tags so the model treats it as material to
 	// summarize, not a conversation to continue.
@@ -470,7 +504,7 @@ func coldCompactRequest(prefix promptPrefix, transcript string, midTurn bool) pr
 
 	return provider.Request{
 		Model:       prefix.model,
-		System:      i18n.P("compact.system", summarizationSystem),
+		System:      prose.System,
 		MaxTokens:   compactMaxTokens,
 		Temperature: prefix.temperature,
 		Messages: []provider.Message{
@@ -506,10 +540,10 @@ func coldCompactRequest(prefix promptPrefix, transcript string, midTurn bool) pr
 //     the tail is free, because it is already in the cache. keepTail names the
 //     suffix selected before summarization. The instruction tells the model
 //     how many messages will survive verbatim.
-//   - repairToolUseResultPairs is applied because oneTurn applies it, and the
+//   - transcriptcodec.RepairToolUseResultPairs is applied because oneTurn applies it, and the
 //     bytes the provider cached are the REPAIRED ones. It is a no-op on a valid
 //     transcript; here it is a cache-identity requirement, not a safety measure.
-func warmCompactRequest(prefix promptPrefix, msgs []provider.Message, keepTail int, midTurn bool) provider.Request {
+func warmCompactRequest(prose CompactionPrompts, prefix promptPrefix, msgs []provider.Message, keepTail int, midTurn bool) provider.Request {
 	// Pair repair can append result stubs to message content. Give it separate
 	// message headers so the ledger and cold fallback keep the original input.
 	wireMessages := append([]provider.Message(nil), msgs...)
@@ -522,8 +556,8 @@ func warmCompactRequest(prefix promptPrefix, msgs []provider.Message, keepTail i
 		Temperature:      prefix.temperature,
 		PromptCacheKey:   prefix.cacheKey,
 		MaxTokens:        compactMaxTokens,
-		Messages:         repairToolUseResultPairs(wireMessages),
-		EphemeralContext: warmCompactInstruction(keepTail, midTurn),
+		Messages:         transcriptcodec.RepairToolUseResultPairs(wireMessages),
+		EphemeralContext: warmCompactInstruction(prose, keepTail, midTurn),
 	}
 }
 
@@ -532,19 +566,18 @@ func warmCompactRequest(prefix promptPrefix, msgs []provider.Message, keepTail i
 // persona and with its tools still live — so unlike the cold path, which can
 // simply declare "you are a summarization assistant" in a system prompt it
 // owns, this has to actively countermand the work in progress.
-func warmCompactInstruction(keepTail int, midTurn bool) string {
+func warmCompactInstruction(prose CompactionPrompts, keepTail int, midTurn bool) string {
 	var sb strings.Builder
-	sb.WriteString(i18n.P("compact.warm.preamble", warmCompactionPreamble))
+	sb.WriteString(prose.WarmPreamble)
 	sb.WriteString("\n\n")
-	sb.WriteString(i18n.P("compact.instruction", compactionPrompt))
+	sb.WriteString(prose.Instruction)
 	if midTurn {
 		sb.WriteString("\n\n")
-		sb.WriteString(i18n.P("compact.instruction.midturn", midTurnCompactionAddendum))
+		sb.WriteString(prose.MidTurnAddendum)
 	}
 	if keepTail > 0 {
 		sb.WriteString("\n\n")
-		sb.WriteString(i18n.P("compact.warm.keeptail",
-			"terva keeps the %d most recent messages above verbatim alongside your summary. Account for them, but do not reproduce them at length.", keepTail))
+		sb.WriteString(prose.WarmKeepTail(keepTail))
 	}
 	return sb.String()
 }
@@ -559,7 +592,7 @@ func warmCompactInstruction(keepTail int, midTurn bool) string {
 func warmFallbackReason(stop provider.StopReason, err error) string {
 	switch {
 	case err != nil:
-		if IsPayloadTooLargeError(err) || IsContextLengthError(err) {
+		if isPayloadTooLargeError(err) || isContextLengthError(err) {
 			return "rejected_too_large"
 		}
 		// The transient ladder is already exhausted by the time this runs (see
@@ -604,16 +637,16 @@ const providerCompactionMaxShare = 0.8
 // Returns the replacement transcript and a partly-filled CompactResult. The
 // result carries Usage even on the error paths, because the call is billed
 // before it can be judged unusable.
-func compactViaProvider(ctx context.Context, sc provider.ServerCompactor, prefix promptPrefix, msgs []provider.Message, readOnly *ReadOnlySet, cwd string) ([]provider.Message, CompactResult, error) {
+func compactViaProvider(ctx context.Context, tr i18n.Translator, prose CompactionPrompts, sc provider.ServerCompactor, prefix promptPrefix, msgs []provider.Message, readOnly *ReadOnlySet, tools Registry) ([]provider.Message, CompactResult, error) {
 	// No tools, no reasoning config: the endpoint takes neither. What it does
 	// take is the same model, instructions and cache key the conversation has
-	// been running on, and repairToolUseResultPairs because those are the bytes
+	// been running on, and transcriptcodec.RepairToolUseResultPairs because those are the bytes
 	// the provider has already seen (see warmCompactRequest, same reasoning).
 	out, usage, err := sc.CompactServerSide(ctx, provider.Request{
 		Model:          prefix.model,
 		System:         prefix.system,
 		PromptCacheKey: prefix.cacheKey,
-		Messages:       repairToolUseResultPairs(msgs),
+		Messages:       transcriptcodec.RepairToolUseResultPairs(msgs),
 	})
 	res := CompactResult{Usage: usage}
 	if err != nil {
@@ -631,7 +664,7 @@ func compactViaProvider(ctx context.Context, sc provider.ServerCompactor, prefix
 	// Over all of msgs, not a summarizable prefix of it: nothing survives
 	// verbatim on this path, so there is no tail whose calls are still visible.
 	next := append([]provider.Message(nil), out...)
-	next = append(next, providerCompactionNotice(executedActionsLedger(msgs, readOnly, cwd)))
+	next = append(next, providerCompactionNotice(prose, executedActionsLedger(prose, msgs, readOnly, tools)))
 
 	before, after := estimateTokens(msgs), estimateTokens(next)
 	if after > int(float64(before)*providerCompactionMaxShare) {
@@ -650,7 +683,7 @@ func compactViaProvider(ctx context.Context, sc provider.ServerCompactor, prefix
 	// human could read what the model already has. The auditable copy is the
 	// session file, which is append-only: the turns are still above the
 	// compaction row, and ReadSessionPreCompaction reads them back.
-	res.Summary = i18n.T("The provider compacted this conversation on its side. The summary is encrypted and cannot be shown here; the original turns remain in the session file.")
+	res.Summary = i18n.In(tr).T("The provider compacted this conversation on its side. The summary is encrypted and cannot be shown here; the original turns remain in the session file.")
 	return next, res, nil
 }
 
@@ -673,10 +706,8 @@ var errCompactionNotWorthIt = errors.New("server-side compaction reclaimed too l
 // divider rather than as a user turn, and on this path there is no other
 // message to carry that mark — the blob is opaque and the user turns around it
 // are genuinely the user's.
-func providerCompactionNotice(ledger string) provider.Message {
-	body := compactionSummaryHeader + "\n\n" +
-		i18n.P("compact.provider.notice",
-			"The provider compacted the conversation above. The compaction summary holds the earlier assistant turns and their tool calls. You cannot read it as text.")
+func providerCompactionNotice(prose CompactionPrompts, ledger string) provider.Message {
+	body := compactionSummaryHeader + "\n\n" + prose.ProviderNotice
 	if ledger != "" {
 		body += "\n\n" + ledger
 	}
@@ -698,7 +729,7 @@ func providerFallbackReason(err error) string {
 	switch {
 	case errors.Is(err, errCompactionNotWorthIt):
 		return "provider_reclaimed_too_little"
-	case IsPayloadTooLargeError(err) || IsContextLengthError(err):
+	case isPayloadTooLargeError(err) || isContextLengthError(err):
 		return "provider_rejected_too_large"
 	default:
 		var pe *provider.ProviderError
@@ -809,7 +840,7 @@ func (a *Agent) drainSummaryRetrying(ctx context.Context, client provider.Client
 		s, u, st, aerr := a.drainSummary(ctx, client, req, attemptSink)
 		// Accumulate across attempts, abandoned ones included. a.cost has
 		// already folded each attempt into the cumulative total, and
-		// SessionUsageDetail subtracts CompactResult.Usage back out of the
+		// session.SessionUsageDetail subtracts CompactResult.Usage back out of the
 		// last-turn delta — so under-reporting here hands the difference to the
 		// context gauge as phantom turn spend.
 		usage = usage.Add(u)
@@ -830,13 +861,13 @@ func (a *Agent) drainSummaryRetrying(ctx context.Context, client provider.Client
 			Phase:    RetryPhaseCompaction,
 			Provider: providerOf(aerr),
 			Attempt:  *retries + 1, // 1-based, matching the turn ladder
-			Max:      a.MaxRetries,
+			Max:      a.maxRetries,
 			Delay:    delay,
 			Err:      retryErrMsg(aerr),
 		})
 		*retries++
 		if streamed && sink != nil {
-			sink("\n\n" + i18n.T("[the summarizer was interrupted; retrying]") + "\n\n")
+			sink("\n\n" + i18n.In(a.translator).T("[the summarizer was interrupted; retrying]") + "\n\n")
 		}
 		if sleepErr := sleepRetry(ctx, delay); sleepErr != nil {
 			// Cancelled while backing off. Report the cancellation rather than
@@ -894,9 +925,17 @@ const (
 // safe direction: over-reporting costs tokens, under-reporting invites a repeated
 // side effect.
 //
-// cwd is the directory bash commands run in, used only to recognize a shell
-// preamble that identifies nothing (see ledgerArgs). Empty elides nothing.
-func executedActionsLedger(msgs []provider.Message, readOnly *ReadOnlySet, cwd string) string {
+// tools is where each call's tool is looked up, so a tool can render its own
+// entry (LedgerArgsRenderer) and its own failure note (LedgerFailureNoter). A
+// call whose tool is gone, or does not implement them, gets its raw arguments
+// and the policy's note. tools may be nil.
+//
+// The lookup is by name, against the registry as it stands at compaction, not
+// the tool that made the call. A transcript resumed from disk records only the
+// name, so there is nothing else to look up, and the ledger has always resolved
+// by name. A host that registers a different kind of tool under a name that
+// earlier calls used will have those calls described by the new one.
+func executedActionsLedger(prose CompactionPrompts, msgs []provider.Message, readOnly *ReadOnlySet, tools Registry) string {
 	// Pair each call with its outcome. A FAILED call is the case that matters
 	// most and is the easiest to get backwards: its effect does NOT exist, so an
 	// agent told only "you already ran this" would skip work it still has to do.
@@ -925,12 +964,13 @@ func executedActionsLedger(msgs []provider.Message, readOnly *ReadOnlySet, cwd s
 			if !ok || readOnly.Has(tc.Name) {
 				continue
 			}
-			line := "- " + tc.Name + " " + clip(ledgerArgs(tc.Name, tc.Arguments, cwd), ledgerMaxArgChars)
+			tool := tools[tc.Name]
+			line := "- " + tc.Name + " " + clip(ledgerArgs(tool, tc.Arguments), ledgerMaxArgChars)
 			switch {
 			case failed[tc.ID]:
-				line += "  → " + failureNote(tc.Name)
+				line += "  → " + ledgerFailed(prose, tool, tc.Name)
 			case !resolved[tc.ID]:
-				line += "  → OUTCOME UNKNOWN (dispatched, no result recorded)"
+				line += "  → " + prose.LedgerUnknown
 			}
 			if counts[line] == 0 {
 				order = append(order, line)
@@ -953,12 +993,10 @@ func executedActionsLedger(msgs []provider.Message, readOnly *ReadOnlySet, cwd s
 	}
 
 	var sb strings.Builder
-	sb.WriteString(i18n.P("compact.ledger.header", executedActionsHeader))
+	sb.WriteString(prose.LedgerHeader)
 	sb.WriteString("\n\n")
 	if omitted > 0 {
-		sb.WriteString(i18n.P("compact.ledger.omitted",
-			"(this list omits %d earlier calls that changed state. The summary above is the only record of those.)\n\n",
-			omitted))
+		sb.WriteString(prose.LedgerOmitted(omitted))
 	}
 	for _, line := range order {
 		sb.WriteString(line)
@@ -970,134 +1008,22 @@ func executedActionsLedger(msgs []provider.Message, readOnly *ReadOnlySet, cwd s
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-// failureNote describes what a failed call's failure actually implies about its
-// effects. For every ordinary tool that is "nothing happened": an edit that
-// fails writes no bytes, and telling the resuming agent it already ran would
-// make it skip work it still has to do.
-//
-// A SHELL COMMAND IS NOT ONE ACTION. Its result is the exit status of the last
-// stage, and a command that failed can have changed the workspace several times
-// before it got there. Measured on a dogfooded session: 12 bash calls were
-// marked failed in compaction ledgers and ALL TWELVE were composite — six of
-// them `gofmt -w <file> && go test <pkg>`, where the rewrite certainly happened
-// and only the test that followed failed. The ledger told the resuming agent
-// that its effect did not exist.
-//
-// That is the same wrong claim the ledger exists to prevent, pointed the other
-// way, so the note says what the harness actually knows: a non-zero exit, and
-// an unknown amount of work already done.
-func failureNote(tool string) string {
-	if tool == "bash" {
-		return i18n.T("FAILED (non-zero exit; earlier stages of the command may still have taken effect)")
+// ledgerArgs renders one call's arguments for the ledger: the tool's own
+// rendering when it has one, else the arguments as sent.
+func ledgerArgs(tool Tool, args json.RawMessage) string {
+	if r, ok := tool.(LedgerArgsRenderer); ok {
+		return r.LedgerArgs(args)
 	}
-	return i18n.T("FAILED (its effect does NOT exist; it may still need doing)")
+	return strings.TrimSpace(string(args))
 }
 
-// ledgerArgs renders one call's arguments for the ledger, eliding the shell
-// preamble that identifies nothing.
-//
-// A model that believes a shell's working directory carries over between calls
-// re-anchors every command with `cd <cwd>`. It does not carry over — BashTool
-// sets cmd.Dir on every call — so that `cd` is a no-op, and so is a leading
-// `set +e` (the tool runs `sh -c`, which starts with errexit already off).
-// Measured on a dogfooded session: 1,090 of 1,112 `cd`s pointed at the agent's
-// own cwd, and the preamble averaged 92 of the 160 characters below, so more
-// than half of this ledger's identification budget was spent on bytes that say
-// nothing about WHICH command ran. The clip then fell inside the boilerplate and
-// the entry named no command at all.
-//
-// Only a `cd` to cwd is elided; `cd /tmp/build && make` changes WHERE the work
-// happened and survives whole. Anything unparseable, unrecognized, or merely
-// prefix-similar (`cd /srv/app2` against /srv/app) is left exactly as sent —
-// under-eliding costs characters, over-eliding would misreport the action.
-func ledgerArgs(name string, args json.RawMessage, cwd string) string {
-	raw := strings.TrimSpace(string(args))
-	if name != "bash" || cwd == "" {
-		return raw
+// ledgerFailed is the note on a failed call: the tool's own when it has one,
+// else the policy's.
+func ledgerFailed(prose CompactionPrompts, tool Tool, name string) string {
+	if n, ok := tool.(LedgerFailureNoter); ok {
+		return n.LedgerFailed()
 	}
-	var m map[string]any
-	if err := json.Unmarshal(args, &m); err != nil {
-		return raw
-	}
-	cmd, ok := m["command"].(string)
-	if !ok {
-		return raw
-	}
-	stripped := stripShellPreamble(cmd, cwd)
-	if stripped == cmd {
-		return raw
-	}
-	m["command"] = stripped
-	// Without SetEscapeHTML(false) the encoder writes `&&` as `&&`,
-	// spending 12 of the 160 characters below on a two-character operator. Shell
-	// commands are chained with `&&`, so a handful per entry pushed the clip back
-	// past the preamble elision it is paired with here. The ledger is prose the
-	// model reads, never JSON anything parses, so the plain byte is strictly
-	// better. A trailing newline is the encoder's, not ours.
-	var buf strings.Builder
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(m); err != nil {
-		return raw
-	}
-	return strings.TrimRight(buf.String(), "\n")
-}
-
-// stripShellPreamble removes every leading no-op statement from cmd. It loops
-// because the two forms appear in either order and in either combination.
-func stripShellPreamble(cmd, dir string) string {
-	for {
-		rest, cut := cutShellNoop(cmd, dir)
-		if !cut {
-			return cmd
-		}
-		cmd = rest
-	}
-}
-
-// cutShellNoop strips ONE leading no-op statement together with the separator
-// that ends it, reporting whether it found one.
-//
-// The separator is required. Without it the match was not a whole statement —
-// `cd /srv/app2` shares a prefix with /srv/app and `set +export` with `set +e` —
-// and stripping either would rewrite the command into something that never ran.
-func cutShellNoop(cmd, dir string) (string, bool) {
-	s := strings.TrimLeft(cmd, " \t\r\n")
-	n := noopStatementLen(s, dir)
-	if n == 0 {
-		return cmd, false
-	}
-	rest := strings.TrimLeft(s[n:], " \t")
-	switch {
-	case strings.HasPrefix(rest, "&&"):
-		rest = rest[2:]
-	case strings.HasPrefix(rest, ";"), strings.HasPrefix(rest, "\n"):
-		rest = rest[1:]
-	default:
-		return cmd, false
-	}
-	return strings.TrimLeft(rest, " \t\r\n"), true
-}
-
-// noopStatementLen returns the byte length of a leading no-op statement in s, or
-// 0. A `cd` counts only when its argument is exactly dir, bare or quoted; a
-// trailing slash does not match, which under-elides rather than guessing.
-func noopStatementLen(s, dir string) int {
-	if strings.HasPrefix(s, "set +e") {
-		return len("set +e")
-	}
-	const cd = "cd "
-	if !strings.HasPrefix(s, cd) {
-		return 0
-	}
-	arg := strings.TrimLeft(s[len(cd):], " \t")
-	off := len(s) - len(arg)
-	for _, cand := range []string{dir, `"` + dir + `"`, `'` + dir + `'`} {
-		if strings.HasPrefix(arg, cand) {
-			return off + len(cand)
-		}
-	}
-	return 0
+	return prose.LedgerFailed(name)
 }
 
 // clip truncates on a rune boundary so a multi-byte argument can't be cut in
@@ -1112,33 +1038,6 @@ func clip(s string, max int) string {
 	}
 	return string(r[:max]) + "…"
 }
-
-// compactTruncatedNotice rides the checkpoint when the summarizer ran into
-// compactMaxTokens. It points at the ledger deliberately: the one part of the
-// checkpoint a token limit cannot cut short is the part the harness appends
-// after generation.
-const compactTruncatedNotice = `**The summary above stops early.** The model reached its output limit before it
-completed the account. The last section breaks off, and an earlier section can
-omit a fact. The list of tool calls below still records every call. Check the
-workspace, or ask the user. A gap in the summary is not proof that something did
-not happen.`
-
-// compactTruncatedNoticeBare is the same notice for a compaction that produced
-// no ledger, and so has no list to point the model at.
-const compactTruncatedNoticeBare = `**The summary above stops early.** The model reached its output limit before it
-completed the account. The last section breaks off, and an earlier section can
-omit a fact. Check the workspace, or ask the user. A gap in the summary is not
-proof that something did not happen.`
-
-const executedActionsHeader = `## Executed Tool Calls (authoritative harness record)
-
-The harness extracted this list from the transcript. No model wrote it. Every
-call below already ran, and its effects already exist, unless the entry says
-otherwise. Do not repeat any of them.
-
-A shell command can start with ` + "`cd`" + ` into the directory it already runs in, or
-with ` + "`set +e`" + `. The harness removes both from the entry. Neither one changes
-what the command does.`
 
 // estimateTokens is the crude transcript-size heuristic used to
 // re-baseline the context gauge right after compaction (1 token ≈ 4
@@ -1162,7 +1061,7 @@ func estimateTokens(msgs []provider.Message) int {
 	return n / 4
 }
 
-// KeepTailMaxFraction bounds the keep-tail by SIZE as well as by count.
+// keepTailMaxFraction bounds the keep-tail by SIZE as well as by count.
 //
 // A message count is the wrong unit on its own, and the gap is four orders of
 // magnitude: an `ls` result is 20 tokens, a whole-file read is 40k. keepTail is 4
@@ -1186,7 +1085,7 @@ func estimateTokens(msgs []provider.Message) int {
 // the compaction is trimmed. Dropping an oversized read is safe in a way that
 // dropping a write would not be: reads are idempotent, the model can simply read
 // it again, and the summary records what was learned from it.
-const KeepTailMaxFraction = 0.10
+const keepTailMaxFraction = 0.10
 
 // tailWithinBudget picks the trailing messages to preserve verbatim: at most
 // keepTail of them, and at most budget tokens' worth.
@@ -1329,58 +1228,3 @@ func serializeTranscript(msgs []provider.Message) string {
 	}
 	return sb.String()
 }
-
-const summarizationSystem = `Do not continue the conversation. Do not answer any question in the conversation. Output only the structured summary.
-
-You are a context summarization assistant. Read the conversation between the user and a coding assistant. Then produce a structured summary in the exact format that the instruction gives.`
-
-// warmCompactionPreamble opens the cache-aware summarization ask. The cold path
-// gets to say "you are a summarization assistant" in a system prompt it owns;
-// this one has to say it in a trailing user message, against a system prompt
-// that says the model is a coding agent and a tools array that is still live.
-// So it countermands explicitly, and it says why the conversation is about to
-// vanish — a model that understands the summary IS the surviving context writes
-// a better one.
-const warmCompactionPreamble = `[compaction] Stop. Do not continue the task above, and do not call any tool.
-
-The summary you write now replaces the conversation above, and terva then discards that conversation. Nothing else survives. Your summary is the only context that the next model, probably you, will have to continue this work from. Write it with that in mind.`
-
-const compactionPrompt = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that the next model will use to continue the work.
-
-Use this format exactly:
-
-## Goal
-[What does the user want to accomplish? Can be multiple items if the session covers different tasks.]
-
-## Constraints & Preferences
-- [Any constraints, preferences, or requirements that the user gave]
-- [Or "(none)" if the user gave none]
-
-## Progress
-### Done
-- [x] [Completed tasks/changes]
-
-### In Progress
-- [ ] [Current work]
-
-### Blocked
-- [Issues that block progress, if any]
-
-## Key Decisions
-- **[Decision]**: [Brief rationale]
-
-## Next Steps
-1. [Ordered list of what should happen next]
-
-## Critical Context
-- [Any data, examples, or references needed to continue]
-- [Or "(none)" if not applicable]
-
-Keep each section concise. Preserve exact file paths, function names, and error messages.`
-
-const midTurnCompactionAddendum = `This summary interrupts an agent in the middle of a task. The conversation is inside an active tool-use loop. After your summary, the agent resumes directly from the most recent tool results, which terva keeps verbatim. Add one extra section, and make it exhaustive:
-
-## Actions Already Executed
-- [Every action that changed state: files created, edited, or deleted (exact paths). Commands run (the exact command and its outcome). Messages sent. Sub-agents started. The agent that resumes must never repeat one of these. Any ambiguity here causes duplicated side effects.]
-
-Under In Progress, record the precise current step: what the agent was about to do next. Include exact file paths, line numbers, symbol names, and any error text the agent responded to. Do not restate large file contents. Name the file and the relevant location instead.`

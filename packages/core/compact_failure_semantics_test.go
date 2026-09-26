@@ -13,7 +13,7 @@ import (
 // The pre-turn threshold compaction is a PRECAUTION, and a precaution that
 // fails must not take the user's message down with it.
 //
-// It was the only compaction site that could: it runs before PromptExtra
+// It was the only compaction site that could: it runs before promptExtra
 // appends the message, so aborting left the text nowhere — not in the
 // transcript, not in the queue. Every other site fails after the append and the
 // transcript keeps it.
@@ -71,8 +71,8 @@ func (c *compactFailsClient) counts() (turns, compacts int) {
 // primed builds an agent whose gauge already reads over the threshold, so the
 // pre-turn compaction fires on the next PromptWithPolicy.
 func primedOverThreshold(client provider.Client) *Agent {
-	a := NewAgent(client, "claude-sonnet-4-5", "system", Registry{})
-	a.RetryBaseDelay = time.Millisecond
+	a := newTestAgent(client, "claude-sonnet-4-5", "system", Registry{})
+	a.retryBaseDelay = time.Millisecond
 	seedSmallTranscript(a, 8)
 	a.SeedLastTurnUsage(provider.Usage{InputTokens: 190_000})
 	return a

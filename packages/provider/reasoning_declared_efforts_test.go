@@ -24,7 +24,7 @@ func compatModel(efforts []string) Model {
 func TestUndeclaredEffortsBehaveExactlyAsBefore(t *testing.T) {
 	m := compatModel(nil)
 	for _, lv := range []string{"", "minimum", "low", "medium", "high", "maximum", "max"} {
-		want := OpenAIReasoningEffort(lv)
+		want := openAIReasoningEffort(lv)
 		if got := openAICompatEffort(m, lv); got != want {
 			t.Errorf("level %q: got %q, want the unchanged mapping %q", lv, got, want)
 		}

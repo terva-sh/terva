@@ -8,15 +8,16 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/core/transcriptcodec"
 	"terva.sh/terva/packages/provider"
 )
 
 func TestCompactionRetentionPartition(t *testing.T) {
-	model, err := provider.FindModel("", "claude-haiku-4-5")
+	model, err := provider.Builtin().FindModel("", "claude-haiku-4-5")
 	if err != nil {
 		t.Fatal(err)
 	}
-	budget := int(float64(model.EffectiveContextWindow()) * KeepTailMaxFraction)
+	budget := int(float64(model.EffectiveContextWindow()) * keepTailMaxFraction)
 	big := strings.Repeat("x", 4*budget+100)
 	user := func(text string) provider.Message {
 		return provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: text}}}
@@ -54,10 +55,12 @@ func TestCompactionRetentionPartition(t *testing.T) {
 					}
 					return saidText("checkpoint", 100), nil
 				}}
-				a := NewAgent(client, model.ID, "system", Registry{})
-				a.ReadOnly = NewReadOnlySet("read")
+				a := newTestAgent(client, model.ID, "system", Registry{})
+				a.SetToolsWithReadOnly(a.tools, NewReadOnlySet("read"))
 				warmMode := mode == "warm" || mode == "fallback"
-				a.SetCacheAwareCompaction(warmMode)
+				if warmMode {
+					useStrategies(a, CompactWarm, CompactCold)
+				}
 				if warmMode {
 					if err := a.Prompt(context.Background(), "warm the prefix", nil, nil); err != nil {
 						t.Fatal(err)
@@ -67,7 +70,7 @@ func TestCompactionRetentionPartition(t *testing.T) {
 				before := serializeTranscript(a.Messages())
 				var observed []provider.Message
 				var observedResult CompactResult
-				a.AddTranscriptCompactedObserver(func(msgs []provider.Message, res CompactResult) {
+				a.addTranscriptCompactedObserver(func(msgs []provider.Message, res CompactResult) {
 					observed, observedResult = msgs, res
 				})
 				var res CompactResult
@@ -77,7 +80,7 @@ func TestCompactionRetentionPartition(t *testing.T) {
 					if !ok {
 						t.Fatal("could not acquire the turn slot")
 					}
-					res, err = a.compactMidTurn(context.Background(), tc.keep)
+					res, err = a.compactMidTurn(context.Background(), tc.keep, nil)
 					release()
 				} else {
 					res, err = a.Compact(context.Background(), tc.keep, nil)
@@ -97,7 +100,7 @@ func TestCompactionRetentionPartition(t *testing.T) {
 				if want := len(serializeTranscript(summarized)) / 4; res.TokensBefore != want {
 					t.Errorf("TokensBefore = %d; want %d for everything removed", res.TokensBefore, want)
 				}
-				ledger := executedActionsLedger(summarized, a.ReadOnly, a.CWD)
+				ledger := executedActionsLedger(neutralProse(), summarized, a.readOnly, a.tools)
 				body := "## Context Summary (compacted)\n\ncheckpoint"
 				if ledger != "" {
 					body += "\n\n" + ledger
@@ -116,10 +119,10 @@ func TestCompactionRetentionPartition(t *testing.T) {
 					calls = calls[1:]
 					warm := calls[0]
 					wireMessages := append([]provider.Message(nil), tc.msgs...)
-					if !reflect.DeepEqual(warm.Messages, repairToolUseResultPairs(wireMessages)) {
+					if !reflect.DeepEqual(warm.Messages, transcriptcodec.RepairToolUseResultPairs(wireMessages)) {
 						t.Error("warm summary request changed the full transcript")
 					}
-					if warm.EphemeralContext != warmCompactInstruction(len(tail), false) {
+					if warm.EphemeralContext != warmCompactInstruction(neutralProse(), len(tail), false) {
 						t.Errorf("warm summary instruction does not describe the actual %d retained messages", len(tail))
 					}
 				}
@@ -128,7 +131,7 @@ func TestCompactionRetentionPartition(t *testing.T) {
 					wantStrategy = CompactWarm
 				} else {
 					cold := calls[len(calls)-1]
-					want := coldCompactRequest(promptPrefix{model: model.ID}, serializeTranscript(summarized), mode == "midturn")
+					want := coldCompactRequest(neutralProse(), promptPrefix{model: model.ID}, serializeTranscript(summarized), mode == "midturn")
 					if len(cold.Messages) != 1 || !reflect.DeepEqual(cold.Messages[0].Content, want.Messages[0].Content) {
 						t.Error("cold summary input omits content removed from the tail")
 					}
@@ -147,7 +150,7 @@ func TestCompactionRetentionPartition(t *testing.T) {
 func TestCompactionRetentionNoOp(t *testing.T) {
 	for _, n := range []int{0, 2, 4} {
 		t.Run(fmt.Sprint(n), func(t *testing.T) {
-			a := NewAgent(nil, "unknown-model", "system", Registry{})
+			a := newTestAgent(nil, "unknown-model", "system", Registry{})
 			msgs := make([]provider.Message, n)
 			for i := range msgs {
 				msgs[i] = provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "keep me"}}}

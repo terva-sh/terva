@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// RepairToolArguments makes a streamed tool-argument buffer parseable when the
+// repairToolArguments makes a streamed tool-argument buffer parseable when the
 // only thing wrong with it is raw control bytes inside a JSON string.
 //
 // Every provider streams tool arguments as opaque text fragments the model
@@ -31,7 +31,7 @@ import (
 // untouched, and a repair that does not produce valid JSON is discarded in
 // favour of the original — so a caller can never be handed something that
 // parses differently than what the model sent.
-func RepairToolArguments(raw string) string {
+func repairToolArguments(raw string) string {
 	if raw == "" || json.Valid([]byte(raw)) {
 		return raw
 	}
@@ -65,7 +65,7 @@ func RepairToolArguments(raw string) string {
 // the fact: the tool name, the arguments, and the fact a call happened at all
 // were simply gone.
 func FinalizeToolArguments(raw string) (args json.RawMessage, unparsed string) {
-	repaired := RepairToolArguments(raw)
+	repaired := repairToolArguments(raw)
 	if repaired == "" {
 		// No argument buffer at all — a call to a no-argument tool.
 		return json.RawMessage("{}"), ""
@@ -100,7 +100,7 @@ func escapeControlBytesInStrings(s string) string {
 			// close the string. A backslash followed by a RAW control byte is
 			// itself malformed, and is deliberately left that way: guessing at
 			// what the model meant there would be a rewrite, not a repair, and
-			// the validity check in RepairToolArguments discards the attempt.
+			// the validity check in repairToolArguments discards the attempt.
 			b.WriteByte(c)
 			escaped = false
 		case inString && c == '\\':

@@ -151,23 +151,23 @@ func TestSSEStreamCloseUnblocksParkedRead(t *testing.T) {
 }
 
 func TestModelCatalog(t *testing.T) {
-	if len(Catalog) == 0 {
+	if len(catalog) == 0 {
 		t.Fatal("empty catalog")
 	}
-	if _, err := FindModel("anthropic", "claude-sonnet-4-5"); err != nil {
+	if _, err := testReg.FindModel("anthropic", "claude-sonnet-4-5"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := FindModel("openai", "gpt-5"); err != nil {
+	if _, err := testReg.FindModel("openai", "gpt-5"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := FindModel("", "nope"); err == nil {
+	if _, err := testReg.FindModel("", "nope"); err == nil {
 		t.Fatal("expected error")
 	}
 }
 
 func TestComputeCost(t *testing.T) {
-	m, _ := FindModel("anthropic", "claude-sonnet-4-5")
-	cost := ComputeCost(m, Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000})
+	m, _ := testReg.FindModel("anthropic", "claude-sonnet-4-5")
+	cost := computeCost(m, Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000})
 	want := m.PriceInput + m.PriceOutput
 	if cost != want {
 		t.Fatalf("cost=%v want=%v", cost, want)
@@ -289,10 +289,11 @@ func TestAnthropicAdaptiveThinking(t *testing.T) {
 }
 
 // TestAnthropicClampsMaxTokensToModelCap guards the stale-budget 400: a
-// per-turn MaxTokens sized for a high-cap model (Agent.MaxTokens is pinned at
-// build time and NOT refreshed by Agent.SetModel) must be clamped to the
-// resolved model's own MaxOutput, or a /model switch to a lower-cap model
-// sends the old budget and Anthropic rejects it ("max_tokens: 128000 > 64000").
+// per-turn MaxTokens sized for a high-cap model must be clamped to the
+// resolved model's own MaxOutput. Agent.SetModel re-derives the budget only
+// when the host's catalog knows the new model, so a /model switch to a
+// lower-cap model can still send the old budget, which Anthropic rejects
+// ("max_tokens: 128000 > 64000").
 func TestAnthropicClampsMaxTokensToModelCap(t *testing.T) {
 	c := NewAnthropic("x", "").(*anthropicClient)
 
@@ -441,7 +442,7 @@ func TestOpenAICompatAnthropicReasoningEffort(t *testing.T) {
 // into the visible content — which satisfies Kimi too, because the message is
 // no longer empty.
 func TestOpenAIBuildRequestPromotesReasoningOnlyAssistantMessages(t *testing.T) {
-	c := NewKimi("token", "").(*openaiClient)
+	c := newKimiWithHeaders("token", "", nil).(*openaiClient)
 	wire, err := c.buildRequest(Request{
 		Model: "kimi-for-coding",
 		Messages: []Message{
@@ -470,7 +471,7 @@ func TestOpenAIBuildRequestPromotesReasoningOnlyAssistantMessages(t *testing.T) 
 // An assistant turn with no substance at all still has nothing to promote, so
 // the skip survives for the case that actually trips Kimi's validator.
 func TestOpenAIBuildRequestSkipsTrulyEmptyAssistantMessages(t *testing.T) {
-	c := NewKimi("token", "").(*openaiClient)
+	c := newKimiWithHeaders("token", "", nil).(*openaiClient)
 	wire, err := c.buildRequest(Request{
 		Model: "kimi-for-coding",
 		Messages: []Message{
@@ -617,14 +618,14 @@ func TestDiscoverOpenRouter(t *testing.T) {
 // TestOpenAIOmitsZeroMaxTokens guards against sending max_tokens: 0 for
 // discovered models that don't advertise an output cap (MaxOutput == 0).
 func TestOpenAIOmitsZeroMaxTokens(t *testing.T) {
-	SetLiveModels([]Model{
+	testReg.SetLiveModels([]Model{
 		{Provider: "openrouter", ID: "vendor/no-cap", DisplayName: "No Cap"},
 		{Provider: "openrouter", ID: "vendor/reason-no-cap", DisplayName: "Reason No Cap", Reasoning: true},
 		{Provider: "openrouter", ID: "vendor/capped", DisplayName: "Capped", MaxOutput: 4096},
 	})
-	defer SetLiveModels(nil)
+	defer testReg.SetLiveModels(nil)
 
-	c := NewOpenAI("x", "").(*openaiClient)
+	c := WithCatalog(NewOpenAI("x", ""), testReg).(*openaiClient)
 
 	got, err := c.buildRequest(Request{Model: "vendor/no-cap"})
 	if err != nil {

@@ -16,7 +16,7 @@ var discoveryAuthoritative = map[string]bool{
 	"opencode-go": true,
 }
 
-// MergeCatalog returns the baked-in catalog overlaid with live entries.
+// mergeCatalog returns the baked-in catalog overlaid with live entries.
 // Precedence per id: live > catalog; speculative entries are promoted
 // to non-speculative when a matching live id appears.
 //
@@ -25,12 +25,12 @@ var discoveryAuthoritative = map[string]bool{
 // can be populated later from a richer catalog source. For
 // discovery-authoritative providers (see above), baked entries the live
 // endpoint didn't return are dropped as stale.
-func MergeCatalog(live []Model) []Model {
+func mergeCatalog(live []Model) []Model {
 	byKey := func(p, id string) string { return p + "/" + id }
 
-	staticIndex := make(map[string]Model, len(Catalog))
-	staticOrder := make([]string, 0, len(Catalog))
-	for _, m := range Catalog {
+	staticIndex := make(map[string]Model, len(catalog))
+	staticOrder := make([]string, 0, len(catalog))
+	for _, m := range catalog {
 		m.Source = "catalog"
 		k := byKey(m.Provider, m.ID)
 		staticIndex[k] = m
