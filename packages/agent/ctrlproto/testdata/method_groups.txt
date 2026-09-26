@@ -111,6 +111,14 @@ suggest.reply	session
 surface.action	session
 surface.get	session
 surfaces.list	session
+talkoot.create	talkoot
+talkoot.get	talkoot
+talkoot.list	talkoot
+talkoot.pause	talkoot
+talkoot.post	talkoot
+talkoot.resume	talkoot
+talkoot.room	talkoot
+talkoot.update	talkoot
 tenants.list	tenants
 tenants.resume	tenants
 tenants.suspend	tenants

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
@@ -293,7 +294,14 @@ func (a *Aggregate) RouteCommand(federated string) (Source, string, error) {
 // own, and merging the two is not this milestone's job: a member's
 // sessions_changed must never reach a browser as though the hub's own session
 // set had changed, because the browser would refetch a list that did not move.
+//
+// A talkoot's room is not federated either, bare or behind an origin. The hub
+// does not negotiate the talkoot group, and a routed "origin/#talkoot:<id>"
+// would reach a member's room with no group to gate it.
 func (a *Aggregate) Subscribe(ctx context.Context, sess string) (<-chan ctrlproto.Event, error) {
+	if _, local := ctrlproto.SplitFederatedID(sess); strings.HasPrefix(local, ctrlproto.AddrTalkootPrefix) {
+		return nil, ctrlproto.Errorf(ctrlproto.CodeUnsupported, "a fleet hub does not carry talkoot rooms: %s", sess)
+	}
 	if sess == ctrlproto.AddrWorkspace {
 		def, ok := a.Default()
 		if !ok {

@@ -25,6 +25,7 @@ import (
 	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/core/exp/prefixwatch"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/relaunch"
@@ -45,22 +46,24 @@ type wsSession struct {
 	ws    *Workspace
 	agent *core.Agent
 	sess  *session.Session
-	gate  *core.ConfirmGate // nil in pure-yolo (no confirmation needed)
+	gate  *permission.ConfirmGate // nil in pure-yolo (no confirmation needed)
 	// policyNotice holds the permission-policy warnings not yet shown to a
 	// client, such as a project config that could not be parsed and so lost
 	// its deny rules. Guarded by mu. See setPolicyWarnings.
 	policyNotice []string
-	extMgr       *extensions.Manager    // this session's extension subprocesses
-	stopExt      func()                 // tears extMgr down on close
-	tasks        *tasktool.Controller   // the built-in task board (nil when the session has no base workspace tools)
-	memory       *tools.MemoryTool      // durable memory, bound once at session build (nil when --no-memory)
-	files        *tools.FileState       // what the model has seen of each path; survives tool rebuilds
-	ticketCard   *tools.TicketCard      // the per-turn ticket card; survives tool rebuilds (nil with no store)
-	loreEntries  []lore.Entry           // discovered lore, for the lore inspector pane (nil when lore off)
-	note         *build.NoteRecord      // live author's-note record (nil for a coding session); note.set writes it, the per-turn tail reads it
-	user         *build.NoteRecord      // live user-persona description record (nil for a coding session); user.bind writes it, the per-turn tail reads it
-	worldLore    *build.WorldLoreRecord // live World-lore record (nil for a coding session); world.lore.* writes it, the per-turn tail scans it
-	loreFired    *build.LoreFiredRecord // the last turn's lore activation trace (which entries fired, why, what the budget dropped); refreshed on reloadLore
+	extMgr       *extensions.Manager  // this session's extension subprocesses
+	stopExt      func()               // tears extMgr down on close
+	tasks        *tasktool.Controller // the built-in task board (nil when the session has no base workspace tools)
+	// reads are the talkoot deliveries queued here that no turn has read yet.
+	reads       talkootReads
+	memory      *tools.MemoryTool      // durable memory, bound once at session build (nil when --no-memory)
+	files       *tools.FileState       // what the model has seen of each path; survives tool rebuilds
+	ticketCard  *tools.TicketCard      // the per-turn ticket card; survives tool rebuilds (nil with no store)
+	loreEntries []lore.Entry           // discovered lore, for the lore inspector pane (nil when lore off)
+	note        *build.NoteRecord      // live author's-note record (nil for a coding session); note.set writes it, the per-turn tail reads it
+	user        *build.NoteRecord      // live user-persona description record (nil for a coding session); user.bind writes it, the per-turn tail reads it
+	worldLore   *build.WorldLoreRecord // live World-lore record (nil for a coding session); world.lore.* writes it, the per-turn tail scans it
+	loreFired   *build.LoreFiredRecord // the last turn's lore activation trace (which entries fired, why, what the budget dropped); refreshed on reloadLore
 	// extReady is closed once this session's extensions have finished starting
 	// AND their tools have been merged into the agent. launchTurn waits on it,
 	// so the first turn can never go out against a half-registered extension
@@ -106,12 +109,12 @@ type wsSession struct {
 	// the model it was switched to.
 	reasoning  string
 	turnCtx    context.Context
-	turnCancel context.CancelCauseFunc                // non-nil while a turn runs; the cause says who stopped it
-	compacting bool                                   // true while compact() holds the agent; the session's SECOND busy state (see compact)
-	permPark   core.ParkTable[core.ConfirmDecision]   // parked webConfirmer/workerConfirmer waits
-	askPark    core.ParkTable[[]core.UserAnswer]      // parked webAsker waits (one answer per question)
-	permReq    map[string]ctrlproto.PermissionRequest // details for the snapshot
-	askReq     map[string]ctrlproto.AskRequest        // details for the snapshot
+	turnCancel context.CancelCauseFunc                    // non-nil while a turn runs; the cause says who stopped it
+	compacting bool                                       // true while compact() holds the agent; the session's SECOND busy state (see compact)
+	permPark   core.ParkTable[permission.ConfirmDecision] // parked webConfirmer/workerConfirmer waits
+	askPark    core.ParkTable[[]core.UserAnswer]          // parked webAsker waits (one answer per question)
+	permReq    map[string]ctrlproto.PermissionRequest     // details for the snapshot
+	askReq     map[string]ctrlproto.AskRequest            // details for the snapshot
 	askSeq     uint64
 	// tail is the current tail span's swipe state — the ONE switchable span.
 	// Seeded from the session file at materialize (a session may load with
@@ -204,6 +207,11 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 	// un-overridden session wants.
 	if sess.Meta.Reasoning != "" {
 		args.Reasoning = sess.Meta.Reasoning
+	}
+	// A talkoot member's approval mode comes from its roster, on every build,
+	// so it holds after a restart and in a workspace that runs in yolo.
+	if p := w.talkootPostureOf(id); p != "" {
+		args.Approval = p
 	}
 	if sess.Stage.Experience != "" {
 		args.Experience = sess.Stage.Experience
@@ -306,9 +314,9 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 		return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "resolve: %v", err)
 	}
 
-	var gate *core.ConfirmGate
+	var gate *permission.ConfirmGate
 	if pol != nil {
-		gate = core.NewPolicyGate(pol, &webConfirmer{s: s})
+		gate = permission.NewPolicyGate(pol, &webConfirmer{s: s})
 		// The confirm dialog's "always this tool, and save it" answer
 		// (ConfirmDecision.PersistTool) is honoured here. This is the ONLY
 		// production gate that installs the persist callback, and it serves
@@ -336,7 +344,7 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 			if err := addUserPermissionRule(config.PermissionRuleConfig{
 				Tool:     tool,
 				Args:     argsPattern,
-				Decision: string(core.RuleAllow),
+				Decision: string(permission.RuleAllow),
 			}); err != nil {
 				s.diag(fmt.Sprintf("note: could not save always-allow rule for %q: %v", tool, err))
 				return
@@ -407,12 +415,12 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 	r.UseSandbox(w.sandbox)
 
 	// Canonical tool-call ladder (hooks → gate → ext intercept), built before
-	// the agent because core.NewAgent requires it. The gate hands the call id
+	// the agent because core.New requires it. The gate hands the call id
 	// straight to the confirmer (ConfirmWithCall), so no "current call" session
 	// state exists to collide when a host_tool_call approval parks concurrently
 	// with a model call's.
 	hookEng := w.hookEng
-	ag := r.NewAgent(build.BuildToolGate(hookEng, gate, extMgr))
+	ag := r.NewAgent(build.BuildToolGate(hookEng, gate, extMgr), build.ExtensionFilters(w.ctx, extMgr)...)
 	s.agent = ag
 	s.gate = gate
 	// The tool-refresh seam: a tool that changes what registration itself can
@@ -505,27 +513,10 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 	}
 
 	s.bindAgentChannels(ag, gate)
-	if extMgr != nil {
-		ag.BeforeTurn = func(step int) (bool, string) {
-			res := extMgr.InterceptTurnStart(w.ctx, step)
-			return !res.Block, res.Reason
-		}
-		ag.BeforeAssistantMessage = func(text string) (bool, string, string) {
-			res := extMgr.InterceptAssistantMessage(w.ctx, text)
-			if res.Block {
-				return false, res.Reason, ""
-			}
-			return true, "", res.ReplaceText
-		}
-		ag.BeforeUserMessage = func(text string) (bool, string, string) {
-			res := extMgr.InterceptUserMessage(w.ctx, text)
-			if res.Block {
-				return false, res.Reason, ""
-			}
-			return true, "", res.ReplaceText
-		}
-	}
-	// The live cards the model reads each turn. Outside the check above: the
+	// The extension turn and message intercepts are on the agent already, as
+	// build.ExtensionFilters at NewAgent above.
+	//
+	// The live cards the model reads each turn. Not conditional on extMgr: the
 	// task board is not an extension — its card follows r.Tasks, not the
 	// manager — and it was nested there, which made a built-in board's
 	// visibility depend on whether this session had extensions.
@@ -587,6 +578,9 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 	// closes. Broadcast the queue as it stands rather than the drained list, so
 	// a message queued in the same breath is not overwritten by a stale empty.
 	ag.AddQueueDrainedObserver(func([]string) { s.broadcastQueue() })
+	// A talkoot member's reads, attached before any turn so the first one
+	// sees a guard's refusal.
+	s.reads.watch.Do(func() { s.reads.attach(ag) })
 
 	// Durable persistence: every message/usage/compaction flows to the session
 	// JSONL as it happens (also adopts the session identity). Sets the On*
@@ -839,6 +833,17 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 			}
 		}
 	}
+	// talkoot_send / talkoot_handoff / talkoot_roster: only in a session that
+	// holds a seat in a talkoot, so every other session keeps its tool
+	// footprint (decision 0009). Like the chat tools, the seat is a declarative
+	// input: seating and unseating re-run this derivation.
+	if s != nil {
+		if seat, ok := w.talkootSeatOf(s.id); ok {
+			for _, t := range tools.TalkootTools(seat) {
+				r.ToolRegistry[t.Name()] = t
+			}
+		}
+	}
 	// terva_restart: only when the operator enabled self-restart. Left
 	// unclassified in permissions.go so it always prompts before re-execing.
 	if relaunch.Enabled() {
@@ -1013,7 +1018,22 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 		// request — and in practice the wait is zero, because the user spent
 		// longer typing than the subprocesses spent handshaking.
 		s.awaitExtensions(turnCtx)
-		err := gen(turnCtx)
+		// A talkoot member's turn reports what it spent, so the router's caps
+		// see real spend and its working slot frees.
+		endTalkoot, closing := s.ws.talkootTurn(s.id)
+		costBefore := 0.0
+		if endTalkoot != nil {
+			costBefore = s.agent.Cost().CostUSD
+		}
+		var err error
+		if closing {
+			// The talkoots have closed, and no report of this member turn
+			// could reach them. The daemon is going down, so the turn does
+			// not run.
+			err = context.Canceled
+		} else {
+			err = gen(turnCtx)
+		}
 		if afterTurn != nil {
 			afterTurn()
 		}
@@ -1081,6 +1101,11 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 			if cerr := s.compact(s.ws.ctx, core.CompactAfterTurn); cerr != nil && !errors.Is(cerr, context.Canceled) {
 				s.broadcast(ctrlproto.NoticeEvent("error", "", i18n.T("Could not compact the conversation: %s", cerr.Error())))
 			}
+		}
+		// After the compaction, so its spend counts. On a failed turn too, or the
+		// member would stay working. ErrBusy means no turn ran.
+		if endTalkoot != nil {
+			endTalkoot(s.agent.Cost().CostUSD-costBefore, !errors.Is(err, core.ErrBusy))
 		}
 		if restart {
 			if perr := s.prompt(next, nil, core.UserMessageExtras{}); perr != nil {
@@ -1312,7 +1337,19 @@ func (s *wsSession) endTurn(turnCtx context.Context, err error) (next string, re
 	if storageFailed {
 		// Keep unsent input available for recovery. This handle cannot run it.
 	} else if failed {
-		dropped = s.agent.DrainQueuedMessages()
+		// 🔑 A talkoot delivery stays queued for the member's next turn. Its
+		// sender cannot see a drop, and the room records it delivered. It
+		// starts no turn, so an interrupt still stops the member, and a
+		// failure that repeats cannot loop (TKT-01M3B4KK).
+		//
+		// ⚠️ The kept texts go back at the front, oldest first. A text can
+		// reach the queue without s.mu, and one that lands between the
+		// drain and here is newer, so it goes behind them.
+		var kept []string
+		kept, dropped = s.reads.split(s.agent.DrainQueuedMessages())
+		for i := len(kept) - 1; i >= 0; i-- {
+			s.agent.RequeueFront(kept[i])
+		}
 	} else {
 		next, restart = s.agent.ShiftQueuedMessage()
 	}
@@ -2379,11 +2416,28 @@ func (s *wsSession) queue(text string) {
 		}
 		return
 	}
+	// ⚠️ An idle session can still hold a queue, because a failed turn keeps
+	// its talkoot deliveries (endTurn). The oldest text starts the turn, and
+	// this one waits behind the rest.
+	waited := false
+	if s.agent.QueuedMessageCount() > 0 && s.agent.QueueMessage(text) {
+		if head, ok := s.agent.ShiftQueuedMessage(); ok {
+			text, waited = head, true
+		}
+	}
 	s.mu.Unlock()
+	if waited {
+		s.broadcastQueue()
+	}
 	if err := s.prompt(text, nil, core.UserMessageExtras{}); err != nil {
 		// Raced a concurrent Prompt that claimed the slot first: queue onto the
-		// turn that beat us (its boundaries / endTurn shift deliver it).
-		if s.agent.QueueMessage(text) {
+		// turn that beat us (its boundaries / endTurn shift deliver it). A text
+		// that waited goes back at the front, where it was.
+		requeue := s.agent.QueueMessage
+		if waited {
+			requeue = s.agent.RequeueFront
+		}
+		if requeue(text) {
 			s.broadcastQueue()
 		}
 	}
@@ -2424,6 +2478,9 @@ func (s *wsSession) endCompacting() {
 
 // setQueue replaces the pending queue wholesale (edit/cancel) and broadcasts it.
 func (s *wsSession) setQueue(texts []string) {
+	// ⚠️ A talkoot delivery that the edit removes keeps its waiting entry,
+	// which matches nothing. Forgetting it here would race the loop's drain:
+	// a text drained between a snapshot and this replace is being read.
 	s.agent.SetQueuedMessages(texts)
 	s.broadcastQueue()
 }

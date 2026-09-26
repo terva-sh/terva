@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"slices"
 	"testing"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
@@ -208,6 +209,32 @@ func TestViewerIsRefusedEverySpendingVerb(t *testing.T) {
 	} {
 		if !m.Permits(mask) {
 			t.Errorf("a viewer was refused %q, which only reads", m)
+		}
+	}
+}
+
+// A viewer watches a talkoot's room and cannot steer the team, while every
+// role that may prompt may also steer.
+func TestOnlyAViewerIsRefusedTheSteerVerbs(t *testing.T) {
+	steer := []ctrlproto.Method{
+		ctrlproto.MethodTalkootCreate, ctrlproto.MethodTalkootUpdate, ctrlproto.MethodTalkootPost,
+		ctrlproto.MethodTalkootPause, ctrlproto.MethodTalkootResume,
+	}
+	for _, role := range []Role{RoleOwner, RoleOperator, RoleMember, RoleViewer} {
+		p := Principal{Roles: []Role{role}}
+		if !slices.Contains(Grant(p), ctrlproto.GroupTalkoot) {
+			t.Errorf("%s is not granted the talkoot group", role)
+		}
+		mask := Authority(p)
+		for _, m := range []ctrlproto.Method{ctrlproto.MethodTalkootList, ctrlproto.MethodTalkootGet, ctrlproto.MethodTalkootRoom} {
+			if !m.Permits(mask) {
+				t.Errorf("%s was refused %q, which only reads", role, m)
+			}
+		}
+		for _, m := range steer {
+			if got, want := m.Permits(mask), role != RoleViewer; got != want {
+				t.Errorf("%s permitted %q = %v, want %v", role, m, got, want)
+			}
 		}
 	}
 }

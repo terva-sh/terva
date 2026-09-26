@@ -25,6 +25,10 @@ var forwardable = map[ctrlproto.Group]bool{
 	ctrlproto.GroupSession:      true,
 	ctrlproto.GroupControl:      true,
 	ctrlproto.GroupReplay:       true,
+	// A tenant's talkoots run in its own daemon and spend through the same
+	// credential its prompts do. The steer bit, not the proxy, decides who may
+	// change one.
+	ctrlproto.GroupTalkoot: true,
 	// GroupAuth is NOT forwardable, and this is the coupling D4 calls
 	// load-bearing. Tenants share one provider credential, so a tenant holding
 	// auth.* could replace or delete the credential every other tenant is

@@ -381,6 +381,23 @@ func TestCarrierRefusesWorkspaceAddress(t *testing.T) {
 	}
 }
 
+// A talkoot's room is not the replay's stream either. Serving the session's
+// frames there would put a transcript where a client expects room events.
+func TestCarrierRefusesATalkootAddress(t *testing.T) {
+	c, err := Open(writeFixture(t), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	addr := ctrlproto.TalkootAddr("crew")
+	if _, err := c.Subscribe(t.Context(), addr); err == nil {
+		t.Fatalf("Subscribe(%s) returned a stream, want an error", addr)
+	}
+	if _, err := c.SubscribeReliable(t.Context(), addr); err == nil {
+		t.Fatalf("SubscribeReliable(%s) returned a stream, want an error", addr)
+	}
+}
+
 // A side-channel row (an idle suggestion, a side chat) and a sub-agent's row
 // are spend on the session, not prompts of it, and the live gauge never moved
 // for either. A replay that seeded from the LAST usage row took whichever

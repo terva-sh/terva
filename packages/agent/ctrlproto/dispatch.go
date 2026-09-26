@@ -178,6 +178,7 @@ var (
 	noExport       = plain("session export is not available here")
 	noArchive      = plain("session archiving is not available here")
 	noWorkflows    = plain("workflow runs are not available here")
+	noTalkoot      = plain("talkoots are not available here")
 	// Localized rather than plain(): the TUI's /shared dialog reaches this
 	// through the in-process carrier and through `terva attach`, so a user can
 	// meet this answer in a terminal — the same reason noSecrets is localized.

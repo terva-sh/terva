@@ -5,6 +5,7 @@ import (
 
 	"terva.sh/terva/packages/agent/attach"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/talkoot"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/agent/worktree"
 	"terva.sh/terva/packages/secrets"
@@ -107,6 +108,18 @@ func restrictSensitiveReads(sandbox *tools.Sandbox, home, cwd string, allowConfi
 	// connectors configured after startup, which an enumerated list cannot:
 	// AddSecretRoot skips paths that do not exist yet.
 	sandbox.AddSecretNameUnder(home, secrets.KeyFileName)
+
+	// Each talkoot's room key, which seals the room log. A member that reads it
+	// can forge a line the router trusts on replay: a resume that lifts a cap,
+	// or a person's answer. The room beside it stays readable. The seal, not
+	// the deny, is what catches a forged line; the deny keeps the key out of
+	// the way. By name, because talkoots are created after startup.
+	sandbox.AddSecretNameUnder(home, talkoot.KeyFile)
+	// And its head record. The head is the only thing that catches lines cut
+	// from the room's end, so a member that saves a copy can later cut the room
+	// back to it and restore the copy, erasing spend and pauses with no key.
+	sandbox.AddSecretNameUnder(home, talkoot.HeadFile)
+	sandbox.AddSecretNameUnder(home, talkoot.HeadTempFile)
 
 	// logs/ as a whole is denied, but the extension logs are the agent's own
 	// debugging surface and carry no credentials — expose those by name.

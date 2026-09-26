@@ -637,4 +637,35 @@ var dispatch = map[Method]handler{
 	MethodVariantsDrop: act(noVariants, func(c VariantsController, ctx context.Context, f Frame, p VariantsDropParams) error {
 		return c.DropVariant(ctx, f.Sess, p.Epoch, p.Index, p.Variant)
 	}),
+
+	// --------------------------------------------------------------------- talkoot
+	//
+	// Gated by GroupTalkoot as well as by the controller. The id rides params,
+	// so none of these reads f.Sess.
+
+	MethodTalkootList: get(noTalkoot, func(c TalkootController, ctx context.Context, f Frame) (TalkootListResult, error) {
+		list, err := c.Talkoots(ctx)
+		return TalkootListResult{Talkoots: list}, err
+	}),
+	MethodTalkootGet: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootRef) (TalkootView, error) {
+		return c.Talkoot(ctx, p)
+	}),
+	MethodTalkootRoom: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootRoomParams) (TalkootRoomPage, error) {
+		return c.TalkootRoom(ctx, p)
+	}),
+	MethodTalkootCreate: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootCreateParams) (TalkootView, error) {
+		return c.CreateTalkoot(ctx, p)
+	}),
+	MethodTalkootUpdate: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootUpdateParams) (TalkootView, error) {
+		return c.UpdateTalkoot(ctx, p)
+	}),
+	MethodTalkootPost: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootPostParams) (TalkootEnvelope, error) {
+		return c.PostTalkoot(ctx, p)
+	}),
+	MethodTalkootPause: act(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootPauseParams) error {
+		return c.PauseTalkoot(ctx, p)
+	}),
+	MethodTalkootResume: act(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootResumeParams) error {
+		return c.ResumeTalkoot(ctx, p)
+	}),
 }

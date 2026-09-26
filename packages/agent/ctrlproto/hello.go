@@ -53,6 +53,21 @@ const (
 	// Optional and off the base ServerHello. `terva web` advertises it only under
 	// --web-allow-secrets, and refuses to on an unauthenticated listener.
 	GroupSecrets Group = "secrets"
+	// GroupTalkoot carries the talkoot verbs and the room address
+	// [AddrTalkootPrefix]. A talkoot is a persistent agent team: a roster of
+	// members, a sealed room, and a router that wakes each member with its
+	// envelopes. See talkoot.go and docs/proposals/talkoot.md.
+	//
+	// Optional and off the base ServerHello, like GroupReplay. A carrier
+	// advertises it only when it runs talkoots, so a client that negotiates it
+	// is guaranteed the group is served. `terva web` advertises it while
+	// talkoot_enabled is set.
+	//
+	// The group is the unit of negotiation, not of authority. The read verbs
+	// need [CapRead]. The verbs that change a team or wake one need
+	// [CapSteer] as well, so a caller can watch a room without the power to
+	// steer it.
+	GroupTalkoot Group = "talkoot"
 	// GroupTenants manages the ENVIRONMENTS on a multi-tenant host: who is
 	// enrolled, who is running, who is suspended. It is `terva serve`'s own
 	// surface — the operator's view of other people's daemons.

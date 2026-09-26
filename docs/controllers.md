@@ -102,7 +102,7 @@ Adding a carrier is a binding, not new protocol work.
 
 ## Method groups
 
-The surface is split into seven **capability-negotiated groups** with different
+The surface is split into eight **capability-negotiated groups** with different
 rates of change and audiences. A client declares which groups it speaks in its
 hello; a minimal client (the mobile PWA) negotiates only the first two.
 
@@ -114,6 +114,7 @@ hello; a minimal client (the mobile PWA) negotiates only the first two.
 | **auth** | MODEL-PROVIDER credential mutation: establish, repair, and revoke the credential terva uses to reach Anthropic / OpenAI / Kimi, plus forgetting a named endpoint | **categorically higher, and separate from control**; see below. **Optional**: off the base server hello; `terva web` advertises it only under `--web-allow-login`, and never on an unauthenticated listener |
 | **secrets** | terva's **at-rest** encryption posture (what is sealed, what is still plaintext, which components hold a key) and the secret store's grant model | **categorically higher, and separate from auth**; see below. **Optional**: off the base server hello; `terva web` advertises it only under `--web-allow-secrets`, and never on an unauthenticated listener |
 | **replay** | a recorded session's transport (`replay.control` / `replay.state`) and its `replay_state` broadcast | frontend-driving, but **optional**: it is off the base server hello, so only a carrier backing a `ReplayController` advertises it, so a client that negotiates it is guaranteed the group is served |
+| **talkoot** | persistent agent teams: list, read, create, and edit a talkoot, post to it, page its room, pause and resume it, and the room's own address `#talkoot:<id>` | frontend-driving, and **optional**: off the base server hello, and `terva web` advertises it while `talkoot_enabled` is set. The verbs that change or wake a team also need the `steer` capability |
 | **tenants** | the ENVIRONMENTS on a multi-tenant host (`terva serve`): who is enrolled, who is running, who is suspended, and who was refused one | **the operator's, and served by no workspace carrier at all**; see below |
 
 `tenants` is the one group **nothing on this page serves**, and the absence is
@@ -144,7 +145,7 @@ a different question:
 1. **Group**: is this surface one the client negotiated? Refused with
    `unsupported`.
 2. **Capability** (`WithAuthority`): may this caller *cause* this class of
-   effect, meaning read, write or spend? Refused with `forbidden`.
+   effect, meaning read, write, spend or steer? Refused with `forbidden`.
 3. **Method set** (`WithMethods`): was this caller provisioned for this exact
    verb? Refused with `forbidden`.
 
@@ -443,6 +444,28 @@ which advertises the group in its hello; otherwise `unsupported`)
 | `replay.control` | `{action, position?, multiplier?, unit?}` → `{state}` | drive a recorded session's transport: `play` / `pause` / `step` / `seek` / `turn` / `speed`. Only the field the action needs is read |
 | `replay.state` | → `{state}` | the current transport state: `{playing, position, total, speed, mode}` (`mode` = `effective` \| `raw`) |
 
+**talkoot** (optional, served only by a carrier backing a `TalkootController`,
+which advertises the group in its hello; otherwise `unsupported`)
+
+A talkoot is a team of agents with a roster, a sealed room, and a router that
+wakes each member with its envelopes; see
+`docs/proposals/talkoot.md`. The id travels in params, because
+a talkoot is not a session. `by` names the person a room line records. The
+connection carries a capability mask and no identity, so the caller states `by`,
+and it attributes a change without authorizing one. The `steer` capability
+authorizes, and every role except `viewer` holds it.
+
+| Method | Params → Result | Effect |
+|---|---|---|
+| `talkoot.list` | → `{talkoots:[{id, home?, running, problem?}]}` | every talkoot on the host. `running` is true for a talkoot this daemon runs; a talkoot runs in the daemon of its `home` directory. `problem` says why one that should run does not. Read-only |
+| `talkoot.get` | `{id}` → `{TalkootView}` | a running talkoot: its roster fields, the `text` of its `talkoot.md`, each member with its roster entry, its session once it has one, and its `status` (`working`, `paused`, today's `spend_usd` and `turns`), and `held`, the members with a delivery that waits. Read-only |
+| `talkoot.room` | `{id, before?, limit?}` → `{lines, next?, total}` | a page of the room, oldest line first, read backward from `before` (zero is the newest page). `next` is the `before` of the page before this one. A line keeps its type: `envelope`, `turn`, `guard`, `resume`, `delivery`, `seat`, `roster`, or `damaged` for a line that did not parse. Its seal stays in the room. Read-only |
+| `talkoot.create` | `{id, text}` → `{TalkootView}` | write a new talkoot from the whole `talkoot.md` and start it. Its `home` must be this daemon's workspace. Write and steer |
+| `talkoot.update` | `{id, by, text}` → `{TalkootView}` | replace a running talkoot's roster. The id and the home cannot change. A member that leaves loses its seat and keeps its session. The router releases what the old roster held, so this can wake a member. Spend and steer |
+| `talkoot.post` | `{id, by, to?, body, refs?, thread?}` → `{TalkootEnvelope}` | post a person's message. An empty `to` reaches the coordinator. Spend and steer |
+| `talkoot.pause` | `{id, by, member?, chain?, reason?}` | pause one member, one chain, or with neither the whole talkoot. A delivery waits until a resume. Write and steer |
+| `talkoot.resume` | `{id, by, member?, chain?}` | lift a pause, a person's or a guard's, and release what it held. Spend and steer |
+
 **tenants** (served **only** by the `terva serve` supervisor, on its own
 connection, never by a `WorkspaceService` carrier, and never across the
 tenant proxy; see the group note above)
@@ -511,6 +534,19 @@ must render and answer:
 | `locale_changed` | `locale` | the daemon's UI language changed; re-fetch catalogs & re-render |
 | `notice` | `notice:{level, text, ext?, kind?, data?}` | a one-shot, ephemeral message (not persisted, not replayed) |
 | `replay_state` | `replay:{playing, position, total, speed, mode?}` | a recorded session's transport moved (play/pause/seek/speed), so every client's scrubber re-syncs (group `replay`) |
+| `talkoot_envelope` | `talkoot:{id, line}` | a new envelope in a talkoot's room, on the room's address `#talkoot:<id>` (group `talkoot`) |
+| `talkoot_status` | `talkoot:{id, members}` | a member's status changed; `members` holds every member's status, in roster order, on the room's address |
+| `talkoot_roster` | `talkoot:{id, line}` | a person changed the roster; the line names who. Re-read with `talkoot.get` |
+| `talkoots_changed` | none | a talkoot started on this daemon; re-list with `talkoot.list`. On `#workspace`, and only to a client that negotiated the `talkoot` group |
+
+The room's address, `#talkoot:<id>`, needs the `talkoot` group. A connection
+provisioned with an exact verb set (`--web-methods`) also needs `talkoot.room`
+in that set, because the room streams what that verb reads. A subscription
+there sends no snapshot: read the talkoot with `talkoot.get` and
+page the room with `talkoot.room`. Its events are lossy for every subscriber,
+because the router's caller sends them and a slow client must not stall a
+team. A client that misses one re-reads, and loses nothing, since the room
+holds every line.
 
 **Kinded notices.** A notice may carry a machine-readable `kind` plus a
 string-map `data` payload. `text` always stands alone, so a client that

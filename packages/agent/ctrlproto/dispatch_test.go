@@ -271,6 +271,40 @@ func (r *recorder) WorkflowRun(_ context.Context, p WorkflowGetParams) (Workflow
 	return WorkflowRunView{}, nil
 }
 
+// --- TalkootController ---
+func (r *recorder) Talkoots(_ context.Context) ([]TalkootSummary, error) {
+	r.note("Talkoots", "", nil)
+	return nil, nil
+}
+func (r *recorder) Talkoot(_ context.Context, p TalkootRef) (TalkootView, error) {
+	r.note("Talkoot", "", p)
+	return TalkootView{}, nil
+}
+func (r *recorder) TalkootRoom(_ context.Context, p TalkootRoomParams) (TalkootRoomPage, error) {
+	r.note("TalkootRoom", "", p)
+	return TalkootRoomPage{}, nil
+}
+func (r *recorder) CreateTalkoot(_ context.Context, p TalkootCreateParams) (TalkootView, error) {
+	r.note("CreateTalkoot", "", p)
+	return TalkootView{}, nil
+}
+func (r *recorder) UpdateTalkoot(_ context.Context, p TalkootUpdateParams) (TalkootView, error) {
+	r.note("UpdateTalkoot", "", p)
+	return TalkootView{}, nil
+}
+func (r *recorder) PostTalkoot(_ context.Context, p TalkootPostParams) (TalkootEnvelope, error) {
+	r.note("PostTalkoot", "", p)
+	return TalkootEnvelope{}, nil
+}
+func (r *recorder) PauseTalkoot(_ context.Context, p TalkootPauseParams) error {
+	r.note("PauseTalkoot", "", p)
+	return nil
+}
+func (r *recorder) ResumeTalkoot(_ context.Context, p TalkootResumeParams) error {
+	r.note("ResumeTalkoot", "", p)
+	return nil
+}
+
 // --- SharedFilesController ---
 func (r *recorder) SharedFiles(_ context.Context, sess string) ([]SharedFileEntry, error) {
 	r.note("SharedFiles", sess, nil)
@@ -674,6 +708,18 @@ func dispatchCases() []dispatchCase {
 		{MethodWorkflowsList, nil, "WorkflowRuns", nil},
 		{MethodWorkflowsGet, WorkflowGetParams{ID: "wf_abc123"}, "WorkflowRun", WorkflowGetParams{ID: "wf_abc123"}},
 
+		// --- talkoot: eight verbs on one controller, and the id rides params
+		// rather than the frame's sess. The four pairs with the same shape are
+		// where a swapped arm would hide. ---
+		{MethodTalkootList, nil, "Talkoots", nil},
+		{MethodTalkootGet, TalkootRef{ID: "crew"}, "Talkoot", TalkootRef{ID: "crew"}},
+		{MethodTalkootRoom, TalkootRoomParams{ID: "crew", Before: 40, Limit: 10}, "TalkootRoom", TalkootRoomParams{ID: "crew", Before: 40, Limit: 10}},
+		{MethodTalkootCreate, TalkootCreateParams{ID: "crew", Text: "---"}, "CreateTalkoot", TalkootCreateParams{ID: "crew", Text: "---"}},
+		{MethodTalkootUpdate, TalkootUpdateParams{ID: "crew", By: "drew", Text: "---"}, "UpdateTalkoot", TalkootUpdateParams{ID: "crew", By: "drew", Text: "---"}},
+		{MethodTalkootPost, TalkootPostParams{ID: "crew", By: "drew", Body: "go"}, "PostTalkoot", TalkootPostParams{ID: "crew", By: "drew", Body: "go"}},
+		{MethodTalkootPause, TalkootPauseParams{ID: "crew", By: "drew", Member: "lead"}, "PauseTalkoot", TalkootPauseParams{ID: "crew", By: "drew", Member: "lead"}},
+		{MethodTalkootResume, TalkootResumeParams{ID: "crew", By: "drew", Chain: "c1"}, "ResumeTalkoot", TalkootResumeParams{ID: "crew", By: "drew", Chain: "c1"}},
+
 		// --- shared files: the same two-verbs-one-controller shape, and both are
 		// session-scoped — a share belongs to the conversation that produced it,
 		// so a frame's sess reaching the wrong one would hand a user another
@@ -742,7 +788,7 @@ func dispatchCases() []dispatchCase {
 func allGroups() Contract {
 	return Contract{
 		Protocol: Protocol,
-		Groups:   []Group{GroupConversation, GroupSession, GroupControl, GroupReplay, GroupAuth, GroupSecrets},
+		Groups:   []Group{GroupConversation, GroupSession, GroupControl, GroupReplay, GroupAuth, GroupSecrets, GroupTalkoot},
 	}
 }
 

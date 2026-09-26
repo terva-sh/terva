@@ -58,7 +58,8 @@ type Options struct {
 
 	// Hello is this client's side of the handshake. Role is forced to
 	// "client"; Protocol defaults to [ctrlproto.Protocol] when zero. Leaving
-	// Groups nil advertises the conversation, session, and control groups.
+	// Groups nil advertises the conversation, session, control, and talkoot
+	// groups. A server that does not serve one leaves it out of the contract.
 	Hello ctrlproto.Hello
 
 	// OnConnect fires after each successful handshake with the server's
@@ -156,6 +157,7 @@ func New(opts Options) (*Client, error) {
 	if opts.Hello.Groups == nil {
 		opts.Hello.Groups = []ctrlproto.Group{
 			ctrlproto.GroupConversation, ctrlproto.GroupSession, ctrlproto.GroupControl,
+			ctrlproto.GroupTalkoot,
 		}
 	}
 	return &Client{

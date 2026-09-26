@@ -57,8 +57,9 @@ func WithAuthority(mask Capability) ServeOption {
 // not an identity: `prompt` is CapWrite|CapSpend, and so are `suggest.next_step`,
 // `sidechat.ask` and `sessions.doctor`. A mask that admits the first admits all
 // of them, so an embedded consumer that needs exactly `prompt` has no mask it
-// can hold that excludes the rest — the minimum is capAll. Groups cannot help
-// either, because all four live in the groups such a consumer must negotiate.
+// can hold that excludes the rest — the minimum is read, write, and spend.
+// Groups cannot help either, because all four live in the groups such a
+// consumer must negotiate.
 //
 // That is not a gap in the other two. It is what they are for: a group is a
 // surface and a capability is a class of effect, and neither is meant to name
@@ -300,6 +301,9 @@ func (s *serveState) relayWorkspaceEvents(ctx context.Context) {
 				if !ok {
 					return
 				}
+				if s.withheld(ev) {
+					continue
+				}
 				ev = windowSnapshot(ev, window)
 				if strip {
 					ev = stripImageData(ev)
@@ -334,13 +338,28 @@ func (s *serveState) sessionSubs() []string {
 func (s *serveState) subscribe(ctx context.Context, f Frame) {
 	sess := f.Sess
 
-	// The reserved addresses are not sessions, and only one of them exists. A
-	// client must have said it understands them (FeatureWorkspaceEvents) before
-	// it may subscribe to one — otherwise it would receive workspace events
-	// twice, once here and once from the compat pump that is relaying them into
-	// its session subscriptions on its behalf.
+	// The reserved addresses are not sessions. A client must have negotiated
+	// the surface an address belongs to before it may subscribe to one.
+	//
+	// The workspace address needs FeatureWorkspaceEvents, or the client would
+	// receive workspace events twice, once here and once from the compat pump
+	// that relays them into its session subscriptions on its behalf. A talkoot
+	// address needs GroupTalkoot, the group its verbs sit in.
 	if IsReservedAddr(sess) {
+		_, talkoot := TalkootFromAddr(sess)
 		switch {
+		case talkoot:
+			if !s.contract.Has(GroupTalkoot) {
+				s.write(ErrFrame(f.ID, CodeUnsupported, "method group not negotiated: "+string(GroupTalkoot)))
+				return
+			}
+			// A room streams what talkoot.room reads, so a connection
+			// provisioned with a verb set must hold that verb as well as
+			// subscribe. Otherwise the address would read past WithMethods.
+			if s.methods != nil && !s.methods[MethodTalkootRoom] {
+				s.write(ErrFrame(f.ID, CodeForbidden, "not provisioned for this caller: "+string(MethodTalkootRoom)))
+				return
+			}
 		case sess != AddrWorkspace:
 			s.write(ErrFrame(f.ID, CodeNotFound, "unknown reserved address: "+sess))
 			return
@@ -399,6 +418,9 @@ func (s *serveState) subscribe(ctx context.Context, f Frame) {
 				if !ok {
 					return
 				}
+				if s.withheld(ev) {
+					continue
+				}
 				ev = windowSnapshot(ev, window)
 				if strip {
 					ev = stripImageData(ev)
@@ -409,6 +431,15 @@ func (s *serveState) subscribe(ctx context.Context, f Frame) {
 			}
 		}
 	}()
+}
+
+// withheld reports whether ev belongs to a group this connection did not
+// negotiate. The workspace publishes once, to every subscriber, so the edge
+// that knows the contract drops what a client never asked for. A client
+// without the talkoot group cannot answer talkoots_changed, because
+// talkoot.list is refused to it.
+func (s *serveState) withheld(ev Event) bool {
+	return ev.Type == EventTalkootsChanged && !s.contract.Has(GroupTalkoot)
 }
 
 func (s *serveState) unsubscribe(sess string) {

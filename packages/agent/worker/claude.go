@@ -1,8 +1,10 @@
 package worker
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -30,7 +32,7 @@ func init() { Register(claudeBackend()) }
 // Everything here was probed against the real binary (2.1.209) rather than read
 // from documentation — including two flags that WORK BUT ARE ABSENT FROM
 // --help, and two event types that appear in no research note and showed up in
-// a three-second run. See docs/proposals/external-agent-workers.md.
+// a three-second run. See docs/proposals/archive/external-agent-workers.md.
 func claudeBackend() Backend {
 	return Backend{
 		Name: BackendClaude,
@@ -42,6 +44,8 @@ func claudeBackend() Backend {
 		Command:       claudeCommand,
 		Translate:     translateClaude,
 		Steer:         steerClaude,
+		Interrupt:     interruptClaude,
+		ReportsCost:   true,
 		Cursor:        claudeCursor,
 		// The identity is already on --append-system-prompt (see claudeCommand),
 		// so the opening turn is the WORK alone. Sending Briefing.Text here would
@@ -260,6 +264,34 @@ func steerClaude(text string) ([]byte, error) {
 	return append(line, '\n'), nil
 }
 
+// interruptClaude encodes a stream-json control request that stops the child's
+// in-flight turn and leaves the process running. A probe of 2.1.280 on
+// 2026-09-24 confirmed the frame. The child acknowledges it with a
+// control_response line, then ends the turn with a result whose
+// terminal_reason is "aborted_streaming".
+//
+// The request id only has to be unique within this child, and the runner never
+// reads the acknowledgement, so a random id is enough.
+func interruptClaude() ([]byte, error) {
+	var id [8]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return nil, err
+	}
+	frame := map[string]any{
+		"type":       "control_request",
+		"request_id": "terva-interrupt-" + hex.EncodeToString(id[:]),
+		"request":    map[string]any{"subtype": "interrupt"},
+	}
+	line, err := json.Marshal(frame)
+	if err != nil {
+		return nil, err
+	}
+	return append(line, '\n'), nil
+}
+
+// claudeInterrupted is the terminal_reason of a turn that an interrupt stopped.
+const claudeInterrupted = "aborted_streaming"
+
 // translateClaude maps one stdout line into terva's swarm vocabulary.
 //
 // It is a pure function of the line, which is what lets a captured stream be
@@ -287,6 +319,7 @@ func translateClaude(line []byte) []Event {
 		TotalCostUSD  float64         `json:"total_cost_usd"`
 		DurationMS    int             `json:"duration_ms"`
 		StopReason    string          `json:"stop_reason"`
+		TermReason    string          `json:"terminal_reason"`
 		Usage         json.RawMessage `json:"usage"`
 		PermDenials   json.RawMessage `json:"permission_denials"`
 		ThinkingToken int             `json:"estimated_tokens"`
@@ -348,8 +381,18 @@ func translateClaude(line []byte) []Event {
 			"duration_ms": ev.DurationMS,
 			"stop_reason": ev.StopReason,
 		}
-		if ev.IsError {
+		if ev.TermReason != "" {
+			data["terminal_reason"] = ev.TermReason
+		}
+		switch {
+		case ev.IsError:
 			data["error"] = firstNonEmpty(ev.Result, "the worker reported a failure without saying what it was")
+		case ev.TermReason == claudeInterrupted:
+			// 🚨 An interrupted turn still reports subtype "success" and
+			// stop_reason "end_turn". Only terminal_reason tells it apart, and
+			// without an error here the supervisor would record a finished task.
+			// A native child's cancelled turn carries an error the same way.
+			data["error"] = "the turn was interrupted"
 		}
 		if len(ev.Usage) > 0 {
 			var usage map[string]any
@@ -361,6 +404,9 @@ func translateClaude(line []byte) []Event {
 
 	case "rate_limit_event":
 		return nil // telemetry we do not yet model; retained raw
+
+	case "control_response":
+		return nil // the acknowledgement of an interrupt; the result that follows ends the turn
 	}
 	return nil
 }

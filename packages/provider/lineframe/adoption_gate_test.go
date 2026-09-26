@@ -31,12 +31,14 @@ import (
 // transcripts terva is required to read whole.
 var localReaders = map[string]string{
 	// Local trusted FILES. lineframe's package doc excludes these by name.
-	"packages/core/session_portable.go":       "session transcripts and JSONL exports: local files, deliberately uncapped — see this file's own ReadBytes comments",
-	"packages/core/session.go":                "replay of terva's own session file",
+	"packages/session/session_portable.go":    "session transcripts and JSONL exports: local files, deliberately uncapped — see this file's own ReadBytes comments",
+	"packages/session/session.go":             "replay of terva's own session file",
+	"packages/agent/talkoot/room.go":          "replay of a talkoot's room.jsonl, a local file only the daemon writes",
 	"packages/agent/swarm/event.go":           "replay of the durable swarm event log, a file terva wrote",
 	"packages/agent/build/usageledger.go":     "the local usage ledger file",
 	"packages/agent/workflow/runs/journal.go": "the local workflow run journal",
 	"cmd/terva-ste-lint/dictionary.go":        "the checked-in approved-words dictionary",
+	"cmd/terva-apidiff/snapshot.go":           "the checked-in .api manifest",
 
 	// The operator's terminal. Not a peer: there is no framing contract, no
 	// adversary, and a human cannot type a gigabyte without a newline.

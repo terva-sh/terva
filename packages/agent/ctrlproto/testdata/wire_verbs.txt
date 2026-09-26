@@ -110,6 +110,14 @@ suggest.reply	params=SuggestParams	result=SuggestResult
 surface.action	params=SurfaceActionParams	result=-
 surface.get	params=SurfaceGetParams	result=SurfaceResult
 surfaces.list	params=-	result=SurfacesResult
+talkoot.create	params=TalkootCreateParams	result=TalkootView
+talkoot.get	params=TalkootRef	result=TalkootView
+talkoot.list	params=-	result=TalkootListResult
+talkoot.pause	params=TalkootPauseParams	result=-
+talkoot.post	params=TalkootPostParams	result=TalkootEnvelope
+talkoot.resume	params=TalkootResumeParams	result=-
+talkoot.room	params=TalkootRoomParams	result=TalkootRoomPage
+talkoot.update	params=TalkootUpdateParams	result=TalkootView
 tools.display	params=-	result=ToolsDisplayResult
 turn.advance	params=-	result=-
 turn.continue	params=TurnContinueParams	result=-

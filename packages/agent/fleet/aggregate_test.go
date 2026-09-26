@@ -213,6 +213,24 @@ func TestARemoteCommandIsRefusedAndHandsBackNothing(t *testing.T) {
 	}
 }
 
+// A talkoot's room is not federated either, bare or behind an origin. The hub
+// negotiates no talkoot group, so nothing at the hub would gate a routed room.
+func TestATalkootAddressIsNotFederated(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	agg, _, _ := startAggregate(t, ctx)
+	for _, addr := range []string{
+		ctrlproto.TalkootAddr("crew"),
+		ctrlproto.JoinFederatedID("neot", ctrlproto.TalkootAddr("crew")),
+		ctrlproto.JoinFederatedID(LocalOrigin, ctrlproto.TalkootAddr("crew")),
+	} {
+		if _, err := agg.Subscribe(ctx, addr); err == nil {
+			t.Errorf("subscribe to %s returned a stream, want an error", addr)
+		}
+	}
+}
+
 // TestTheWorkspaceAddressIsNotFederated covers the last criterion. A member's
 // workspace events must not arrive as the hub's own, because the browser reads
 // #workspace as "this daemon's session list moved, go re-read it", and a member

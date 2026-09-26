@@ -31,10 +31,21 @@ const (
 	// that credential is shared, which makes this the capability an operator
 	// most wants to withhold.
 	CapSpend
+	// CapSteer changes or wakes a talkoot, a team of agents that runs without
+	// a person at each turn. It is never alone on a verb: a steer verb is
+	// write or spend as well. It is its own bit so that a caller may watch a
+	// room, and even prompt its own sessions, without the power to create a
+	// team, change its roster, or post to it.
+	//
+	// 🚨 The bit binds a ctrlproto caller only. A member whose posture allows
+	// bash can run `terva ctl` against its own daemon with the token that
+	// daemon trusts, and so hold every capability. That is the room seal's
+	// custody gap, and secrets-at-rest §8.15 closes it (docs/permissions.md).
+	CapSteer
 )
 
 // capAll is every capability — what an unrestricted caller holds.
-const capAll = CapRead | CapWrite | CapSpend
+const capAll = CapRead | CapWrite | CapSpend | CapSteer
 
 // readOnlyMethods observe and mutate nothing. Membership here is what makes a
 // verb reachable by a read-only caller, so an entry is a claim that the handler
@@ -66,6 +77,7 @@ var readOnlyMethods = map[Method]bool{
 	MethodI18nCatalog:    true,
 	MethodReplayState:    true,
 	MethodTenantsList:    true,
+	MethodTalkootList:    true, MethodTalkootGet: true, MethodTalkootRoom: true,
 }
 
 // spendingMethods reach a model or an image backend. Membership is a claim that
@@ -96,27 +108,34 @@ var spendingMethods = map[Method]bool{
 	MethodSessionsDoctor: true, MethodSessionsNextScene: true, MethodSessionsRealize: true,
 	MethodCardsDoctor: true, MethodWorldsDoctor: true,
 	MethodBackgroundGenerate: true,
+	// A post wakes a member. A resume and an update release the deliveries a
+	// pause or the old roster held, and each wakes a member too.
+	MethodTalkootPost: true, MethodTalkootResume: true, MethodTalkootUpdate: true,
 }
 
 // Capabilities reports what m does.
 //
 // 🔑 The default is the MOST restrictive answer, not the least. A verb this file
-// has never heard of is treated as both mutating and spending, so a newly added
+// has never heard of is treated as mutating, spending, and steering, so a new
 // method is unreachable by a restricted role until someone classifies it
 // deliberately. The alternative default — "probably harmless" — would mean every
 // forgotten verb silently widens every role, and the forgetting is invisible.
 // TestEveryMethodIsClassified makes the omission loud as well as safe.
 func (m Method) Capabilities() Capability {
+	var steer Capability
+	if steerMethods[m] {
+		steer = CapSteer
+	}
 	if readOnlyMethods[m] {
-		return CapRead
+		return CapRead | steer
 	}
 	if spendingMethods[m] {
-		return CapWrite | CapSpend
+		return CapWrite | CapSpend | steer
 	}
 	if writeOnlyMethods[m] {
-		return CapWrite
+		return CapWrite | steer
 	}
-	return CapWrite | CapSpend
+	return CapWrite | CapSpend | CapSteer
 }
 
 // writeOnlyMethods mutate state without reaching a provider. Listed explicitly
@@ -169,6 +188,18 @@ var writeOnlyMethods = map[Method]bool{
 	// Write, not spend: suspending an environment stops a daemon and sets a
 	// flag. It costs nothing and — deliberately — destroys nothing.
 	MethodTenantsSuspend: true, MethodTenantsResume: true,
+	// Write, not spend: a new talkoot has nothing owed, so it wakes no one
+	// until a post. A pause only holds deliveries.
+	MethodTalkootCreate: true, MethodTalkootPause: true,
+}
+
+// steerMethods change or wake a talkoot. Membership adds [CapSteer] to the
+// verb's class above. It is not a fourth class, because every steer verb is
+// also write or spend, and the census still wants each verb in exactly one of
+// the three.
+var steerMethods = map[Method]bool{
+	MethodTalkootCreate: true, MethodTalkootUpdate: true, MethodTalkootPost: true,
+	MethodTalkootPause: true, MethodTalkootResume: true,
 }
 
 // Permits reports whether a caller holding mask may invoke m: every capability

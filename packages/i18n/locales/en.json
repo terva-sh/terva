@@ -805,6 +805,7 @@
   "this session has no agent to show a shell result to": "this session has no agent to show a shell result to",
   "this session has no resolved provider to scope the setting to": "this session has no resolved provider to scope the setting to",
   "this session has no resolved provider, so there is nothing for this row to scope to": "this session has no resolved provider, so there is nothing for this row to scope to",
+  "this session is a talkoot member, and its roster sets its approval mode": "this session is a talkoot member, and its roster sets its approval mode",
   "this session is not waiting on a reply, so there is nothing to resume": "this session is not waiting on a reply, so there is nothing to resume",
   "this session was never written to disk, so the turns before the compaction are not recoverable": "this session was never written to disk, so the turns before the compaction are not recoverable",
   "this session's provider cannot continue an assistant message": "this session's provider cannot continue an assistant message",

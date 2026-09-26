@@ -13,6 +13,7 @@ import (
 	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/core/lazytools"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
@@ -187,8 +188,8 @@ func featureItem(cfg config.Config, f build.EngineFeature) ctrlproto.SettingItem
 func (s *wsSession) settingsView() ctrlproto.SettingsView {
 	cfg, _ := config.LoadConfig()
 
-	approval := string(core.ApprovalYolo)
-	classifier := string(core.ClassifierOff)
+	approval := string(permission.ApprovalYolo)
+	classifier := string(permission.ClassifierOff)
 	if s.gate != nil {
 		approval = string(s.gate.Mode())
 		classifier = string(s.gate.ClassifierMode())
@@ -530,6 +531,28 @@ func localeOptions() []ctrlproto.SettingOption {
 	return opts
 }
 
+// setApproval switches the session's approval mode, live and not persisted.
+func (s *wsSession) setApproval(val string) error {
+	mode, err := permission.ParseApprovalMode(val)
+	if err != nil {
+		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%v", err)
+	}
+	if s.gate != nil {
+		s.gate.SetMode(mode)
+	}
+	// The gate blocks mutating calls, but the mode must also reshape the
+	// model's tool VIEW — plan withholds mutating built-ins and non-read-
+	// only extension/MCP tools (legacy parity: cli.go setApprovalMode
+	// rebuilds the registry). Record the mode on the session's args so
+	// this rebuild — and every later one (ext reload, MCP toggle, trust
+	// flip) — resolves in it, then swap the tool set live.
+	s.mu.Lock()
+	s.args.Approval = val
+	s.mu.Unlock()
+	s.rebuildTools("approval-mode")
+	return nil
+}
+
 // settingsAction applies a settings change: {action:"set", args:{key,value}}.
 func (s *wsSession) settingsAction(action string, args map[string]string) error {
 	if action != "set" {
@@ -544,23 +567,12 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 		// answer is no regardless of who is asking.
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the approval classifier is set in your user config.json (classifier.mode), not from this surface"))
 	case "approval":
-		mode, err := core.ParseApprovalMode(val)
-		if err != nil {
-			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%v", err)
+		if s.ws.talkootPostureOf(s.id) != "" {
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("this session is a talkoot member, and its roster sets its approval mode"))
 		}
-		if s.gate != nil {
-			s.gate.SetMode(mode) // per-session, live; not persisted
+		if err := s.setApproval(val); err != nil {
+			return err
 		}
-		// The gate blocks mutating calls, but the mode must also reshape the
-		// model's tool VIEW — plan withholds mutating built-ins and non-read-
-		// only extension/MCP tools (legacy parity: cli.go setApprovalMode
-		// rebuilds the registry). Record the mode on the session's args so
-		// this rebuild — and every later one (ext reload, MCP toggle, trust
-		// flip) — resolves in it, then swap the tool set live.
-		s.mu.Lock()
-		s.args.Approval = val
-		s.mu.Unlock()
-		s.rebuildTools("approval-mode")
 	case "trust":
 		// The same verbs /trust and the web drawer's button call, so one act with
 		// one meaning wherever it is spelled: persist the verdict, then apply it

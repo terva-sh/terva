@@ -116,6 +116,9 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 		return err
 	}
 	defer ws.Close()
+	// Talkoots run in a daemon, never in an in-process terminal: see
+	// Workspace.LoadTalkoots.
+	ws.LoadTalkoots()
 	// A credential-less start is fatal only when nothing reachable can fix it.
 	//
 	// With provider login enabled the browser IS a login flow — the Providers
@@ -318,6 +321,7 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 		AllowRestart:   allowRestart,
 		AllowLogin:     allowLogin,
 		AllowSecrets:   allowSecrets,
+		Talkoot:        config.TalkootEnabled(),
 		AllowStage:     allowStage,
 		Methods:        webMethods,
 	})

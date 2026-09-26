@@ -2424,6 +2424,9 @@ export interface WireEvent {
   notice?: Notice
   auth?: AuthState
   replay?: ReplayState
+  // talkoot_envelope, talkoot_status, talkoot_roster: on a talkoot's own
+  // address (talkootAddr).
+  talkoot?: TalkootEvent
   stall?: WireStall
   escalation?: WireEscalation
   retry?: WireRetry
@@ -2441,6 +2444,16 @@ export interface WireEvent {
 // never render it as a session id. The empty string is NOT the same thing — on a
 // command that means "the default session", and the daemon will materialize one.
 export const ADDR_WORKSPACE = '#workspace'
+
+// ADDR_TALKOOT_PREFIX starts a talkoot room's address. Subscribing there needs
+// the `talkoot` group in the hello, and the room sends talkoot_envelope,
+// talkoot_status, and talkoot_roster events. Like ADDR_WORKSPACE it is an
+// address, never a session id.
+export const ADDR_TALKOOT_PREFIX = '#talkoot:'
+
+export function talkootAddr(id: string): string {
+  return ADDR_TALKOOT_PREFIX + id
+}
 
 export interface ServerHello {
   role: string
@@ -2712,6 +2725,14 @@ export type Verb =
   | 'surface.action'
   | 'surface.get'
   | 'surfaces.list'
+  | 'talkoot.create'
+  | 'talkoot.get'
+  | 'talkoot.list'
+  | 'talkoot.pause'
+  | 'talkoot.post'
+  | 'talkoot.resume'
+  | 'talkoot.room'
+  | 'talkoot.update'
   | 'tools.display'
   | 'turn.advance'
   | 'turn.continue'
@@ -2751,6 +2772,163 @@ export type Verb =
   | 'worlds.update'
   | 'workflows.get'
   | 'workflows.list'
+
+// --- talkoots, persistent agent teams (ctrlproto/talkoot.go) ---
+//
+// Served only when the hello carries the `talkoot` group. A talkoot is not a
+// session, so its id rides params. `by` names the person a room line records:
+// the connection has no identity, so the caller states it, and the `steer`
+// capability, not `by`, decides who may change a team.
+
+export interface TalkootSummary {
+  id: string
+  home?: string
+  running: boolean
+  problem?: string
+}
+
+export interface TalkootListResult {
+  talkoots: TalkootSummary[]
+}
+
+export interface TalkootRef {
+  id: string
+}
+
+// TalkootView is a running talkoot. `text` is its talkoot.md, which an editor
+// changes and sends back with talkoot.update.
+export interface TalkootView {
+  id: string
+  name: string
+  title?: string
+  home: string
+  budget_usd_per_day?: number
+  text?: string
+  members: TalkootMember[]
+  held?: string[]
+}
+
+export interface TalkootMember {
+  id: string
+  role: string
+  title?: string
+  persona?: string
+  driver?: string
+  model?: string
+  tier?: string
+  posture?: string
+  workspace?: string
+  reviewer?: boolean
+  budget_usd_per_day?: number
+  turns_per_day?: number
+  session?: string
+  status: TalkootMemberStatus
+}
+
+// TalkootMemberStatus counts the current day's spend and turns.
+export interface TalkootMemberStatus {
+  member: string
+  working?: boolean
+  paused?: string
+  spend_usd?: number
+  turns?: number
+}
+
+export interface TalkootCreateParams {
+  id: string
+  text: string
+}
+
+export interface TalkootUpdateParams {
+  id: string
+  by: string
+  text: string
+}
+
+// An empty `to` reaches the coordinator.
+export interface TalkootPostParams {
+  id: string
+  by: string
+  to?: string[]
+  body: string
+  refs?: string[]
+  thread?: string
+}
+
+// A zero `before` reads the newest page.
+export interface TalkootRoomParams {
+  id: string
+  before?: number
+  limit?: number
+}
+
+// Oldest line first. `next` is the `before` of the page before this one.
+export interface TalkootRoomPage {
+  lines: TalkootLine[]
+  next?: number
+  total: number
+}
+
+// Neither member nor chain pauses the whole talkoot.
+export interface TalkootPauseParams {
+  id: string
+  by: string
+  member?: string
+  chain?: string
+  reason?: string
+}
+
+export interface TalkootResumeParams {
+  id: string
+  by: string
+  member?: string
+  chain?: string
+}
+
+export interface TalkootEnvelope {
+  id: string
+  talkoot: string
+  from: string
+  to: string[]
+  kind: string
+  body: string
+  refs?: string[]
+  thread?: string
+  reply_to?: string
+  chain: TalkootChain
+  at: string
+}
+
+export interface TalkootChain {
+  root: string
+  hops: number
+}
+
+// TalkootLine is one room line. `type` is envelope, turn, guard, resume,
+// delivery, read, seat, roster, or damaged.
+export interface TalkootLine {
+  type: string
+  at: string
+  envelope?: TalkootEnvelope
+  member?: string
+  chain?: string
+  cost_usd?: number
+  guard?: string
+  action?: string
+  reason?: string
+  by?: string
+  spend_usd?: number
+  ref?: string
+  notes?: number
+}
+
+// TalkootEvent carries `line` on talkoot_envelope and talkoot_roster, and
+// every member's status on talkoot_status.
+export interface TalkootEvent {
+  id: string
+  line?: TalkootLine
+  members?: TalkootMemberStatus[]
+}
 
 // --- the workflow dashboard (ctrlproto/workflows.go) ---
 
@@ -2868,6 +3046,13 @@ export interface VerbParams {
   'cards.revision': CardRevisionParams
   'usage.snapshot': UsageSnapshotParams
   'workflows.get': WorkflowGetParams
+  'talkoot.get': TalkootRef
+  'talkoot.room': TalkootRoomParams
+  'talkoot.create': TalkootCreateParams
+  'talkoot.update': TalkootUpdateParams
+  'talkoot.post': TalkootPostParams
+  'talkoot.pause': TalkootPauseParams
+  'talkoot.resume': TalkootResumeParams
 }
 
 // Card revision history. Every write to a card goes through cards.edit — the

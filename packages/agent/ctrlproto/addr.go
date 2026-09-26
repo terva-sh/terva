@@ -33,6 +33,13 @@ const (
 	// Sess (i18n.catalog and files.list are the existing precedent).
 	AddrWorkspace = "#workspace"
 
+	// AddrTalkootPrefix starts the address of one talkoot's room:
+	// "#talkoot:<id>". A subscription there receives the room's envelopes, its
+	// member statuses, and its roster changes. The separator is a colon, not a
+	// slash, because SplitFederatedID cuts at the first slash and would read
+	// "#talkoot" as a daemon's origin.
+	AddrTalkootPrefix = "#talkoot:"
+
 	// reservedPrefix marks an address that is not a session id.
 	reservedPrefix = "#"
 )
@@ -46,4 +53,14 @@ const (
 // by that name, and a client could create a session that shadows an address.
 func IsReservedAddr(sess string) bool {
 	return strings.HasPrefix(sess, reservedPrefix)
+}
+
+// TalkootAddr returns the address of a talkoot's room.
+func TalkootAddr(id string) string { return AddrTalkootPrefix + id }
+
+// TalkootFromAddr returns the talkoot id that addr names. It reports false when
+// addr is not a talkoot address, or names no id.
+func TalkootFromAddr(addr string) (id string, ok bool) {
+	id, ok = strings.CutPrefix(addr, AddrTalkootPrefix)
+	return id, ok && id != ""
 }

@@ -50,19 +50,20 @@ import (
 //     golden regenerated with -update blesses whatever it is given, so its value
 //     is that a reclassification cannot pass unnoticed, not that it is right.
 //
-// Only (2) can say a verb is in the WRONG group. It covers the three gated
+// Only (2) can say a verb is in the WRONG group. It covers the four gated
 // groups, which is where a mistake is a security bug rather than an
 // inconvenience. Sorting conversation from session from control needs judgement
 // no mechanism has, and (3) is what puts that judgement in front of a reviewer.
 
 // gatedControllers maps an optional controller to the group a verb it serves
-// must belong to. These three groups are each advertised only by a carrier that
+// must belong to. These four groups are each advertised only by a carrier that
 // implements the matching controller (see hello.go), so the pairing is a fact
 // about the protocol, not a convention.
 var gatedControllers = map[string]Group{
 	"AuthController":    GroupAuth,
 	"SecretsController": GroupSecrets,
 	"ReplayController":  GroupReplay,
+	"TalkootController": GroupTalkoot,
 }
 
 // methodValuesByName maps each Method constant NAME to its wire string.
@@ -163,6 +164,7 @@ var knownGroups = map[Group]bool{
 	GroupReplay:       true,
 	GroupAuth:         true,
 	GroupSecrets:      true,
+	GroupTalkoot:      true,
 	GroupTenants:      true,
 }
 

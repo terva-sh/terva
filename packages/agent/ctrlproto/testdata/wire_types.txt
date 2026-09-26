@@ -373,6 +373,7 @@ Event
 	notice	*Notice	omitempty
 	replay	*ReplayState	omitempty
 	auth	*AuthState	omitempty
+	talkoot	*TalkootEvent	omitempty
 ExtensionConfigField
 	key	string
 	label	string	omitempty
@@ -1174,6 +1175,111 @@ TailInfo
 	span_start	int
 	variants	int
 	active	int
+TalkootChain
+	root	string
+	hops	int
+TalkootCreateParams
+	id	string
+	text	string
+TalkootEnvelope
+	id	string
+	talkoot	string
+	from	string
+	to	[]string
+	kind	string
+	body	string
+	refs	[]string	omitempty
+	thread	string	omitempty
+	reply_to	string	omitempty
+	chain	TalkootChain
+	at	time.Time
+TalkootEvent
+	id	string
+	line	*TalkootLine	omitempty
+	members	[]TalkootMemberStatus	omitempty
+TalkootLine
+	type	string
+	at	time.Time
+	envelope	*TalkootEnvelope	omitempty
+	member	string	omitempty
+	chain	string	omitempty
+	cost_usd	float64	omitempty
+	guard	string	omitempty
+	action	string	omitempty
+	reason	string	omitempty
+	by	string	omitempty
+	spend_usd	float64	omitempty
+	ref	string	omitempty
+	notes	int	omitempty
+TalkootListResult
+	talkoots	[]TalkootSummary
+TalkootMember
+	id	string
+	role	string
+	title	string	omitempty
+	persona	string	omitempty
+	driver	string	omitempty
+	model	string	omitempty
+	tier	string	omitempty
+	posture	string	omitempty
+	workspace	string	omitempty
+	reviewer	bool	omitempty
+	budget_usd_per_day	float64	omitempty
+	turns_per_day	int	omitempty
+	session	string	omitempty
+	status	TalkootMemberStatus
+TalkootMemberStatus
+	member	string
+	working	bool	omitempty
+	paused	string	omitempty
+	spend_usd	float64	omitempty
+	turns	int	omitempty
+TalkootPauseParams
+	id	string
+	by	string
+	member	string	omitempty
+	chain	string	omitempty
+	reason	string	omitempty
+TalkootPostParams
+	id	string
+	by	string
+	to	[]string	omitempty
+	body	string
+	refs	[]string	omitempty
+	thread	string	omitempty
+TalkootRef
+	id	string
+TalkootResumeParams
+	id	string
+	by	string
+	member	string	omitempty
+	chain	string	omitempty
+TalkootRoomPage
+	lines	[]TalkootLine
+	next	int	omitempty
+	total	int
+TalkootRoomParams
+	id	string
+	before	int	omitempty
+	limit	int	omitempty
+TalkootSummary
+	id	string
+	home	string	omitempty
+	running	bool
+	problem	string	omitempty
+TalkootUpdateParams
+	id	string
+	by	string
+	text	string
+TalkootView
+	id	string
+	name	string
+	title	string	omitempty
+	home	string
+	budget_usd_per_day	float64	omitempty
+	text	string	omitempty
+	members	[]TalkootMember
+	held	[]string	omitempty
 TaskBoardItem
 	id	string
 	status	string

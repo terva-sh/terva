@@ -31,8 +31,8 @@ func TestSpendingVerbsAreCapabilityIdenticalToPrompt(t *testing.T) {
 	for _, m := range provisioned {
 		minimum |= m.Capabilities()
 	}
-	if minimum != capAll {
-		t.Fatalf("the minimum mask is %d, not capAll; the premise has changed", minimum)
+	if minimum != CapRead|CapWrite|CapSpend {
+		t.Fatalf("the minimum mask is %d, not read, write, and spend; the premise has changed", minimum)
 	}
 	for _, m := range []Method{MethodSuggestNextStep, MethodSideChatAsk, MethodSessionsDoctor} {
 		if !m.Permits(minimum) {

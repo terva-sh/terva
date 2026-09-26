@@ -63,6 +63,12 @@ type Options struct {
 	// Never enabled on an unauthenticated listener (see web_mode.go).
 	AllowSecrets bool
 
+	// Talkoot advertises the TALKOOT GROUP: this daemon runs the talkoots homed
+	// in its workspace. Off the base ServerHello because only a daemon that
+	// loaded them serves the verbs. It follows talkoot_enabled, not a flag:
+	// the steer capability, not the listener, gates who may change a team.
+	Talkoot bool
+
 	// AllowStage mounts the Stage app at /stage/ and advertises the `stage`
 	// feature in the hello, so the panel offers an "open in Stage" link. Off by
 	// default (--web-stage) — Stage is the immersive chat/play surface, a distinct
@@ -600,6 +606,9 @@ func buildHello(opts Options, maxUploadBytes, maxAttachmentBytes int64) ctrlprot
 	}
 	if opts.AllowSecrets {
 		hello.Groups = append(hello.Groups, ctrlproto.GroupSecrets)
+	}
+	if opts.Talkoot {
+		hello.Groups = append(hello.Groups, ctrlproto.GroupTalkoot)
 	}
 	if opts.AllowStage {
 		hello.Features = append(hello.Features, ctrlproto.FeatureStage)

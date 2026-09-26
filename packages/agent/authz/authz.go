@@ -148,6 +148,7 @@ var groupsForRole = map[Role][]ctrlproto.Group{
 		ctrlproto.GroupReplay,
 		ctrlproto.GroupAuth,
 		ctrlproto.GroupSecrets,
+		ctrlproto.GroupTalkoot,
 		// 🚨 The owner alone, and not RoleOperator, whose whole definition is
 		// "may run and reconfigure THE HOST but may not touch credentials".
 		// Managing tenants is neither: it reaches into other people's
@@ -165,16 +166,21 @@ var groupsForRole = map[Role][]ctrlproto.Group{
 		ctrlproto.GroupSession,
 		ctrlproto.GroupControl,
 		ctrlproto.GroupReplay,
+		ctrlproto.GroupTalkoot,
 	},
 	RoleMember: {
 		ctrlproto.GroupConversation,
 		ctrlproto.GroupSession,
 		ctrlproto.GroupReplay,
+		ctrlproto.GroupTalkoot,
 	},
+	// A viewer negotiates the talkoot group to watch a room. The steer bit,
+	// which it does not hold, keeps it from changing one.
 	RoleViewer: {
 		ctrlproto.GroupConversation,
 		ctrlproto.GroupSession,
 		ctrlproto.GroupReplay,
+		ctrlproto.GroupTalkoot,
 	},
 }
 
@@ -185,10 +191,15 @@ var groupsForRole = map[Role][]ctrlproto.Group{
 // RoleViewer holds the same groups as RoleMember and differs only here — which
 // is precisely why the capability axis had to exist. On groups alone the two
 // roles are identical.
+//
+// Steer, the power to change or wake a talkoot, goes with prompting. A person
+// who may spend the daemon's credential on a prompt may spend it through a
+// team. A restricted connection that should prompt and not steer holds a mask
+// without it (ctrlproto.WithAuthority).
 var capabilitiesForRole = map[Role]ctrlproto.Capability{
-	RoleOwner:    ctrlproto.CapRead | ctrlproto.CapWrite | ctrlproto.CapSpend,
-	RoleOperator: ctrlproto.CapRead | ctrlproto.CapWrite | ctrlproto.CapSpend,
-	RoleMember:   ctrlproto.CapRead | ctrlproto.CapWrite | ctrlproto.CapSpend,
+	RoleOwner:    ctrlproto.CapRead | ctrlproto.CapWrite | ctrlproto.CapSpend | ctrlproto.CapSteer,
+	RoleOperator: ctrlproto.CapRead | ctrlproto.CapWrite | ctrlproto.CapSpend | ctrlproto.CapSteer,
+	RoleMember:   ctrlproto.CapRead | ctrlproto.CapWrite | ctrlproto.CapSpend | ctrlproto.CapSteer,
 	RoleViewer:   ctrlproto.CapRead,
 }
 

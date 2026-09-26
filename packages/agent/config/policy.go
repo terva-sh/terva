@@ -58,6 +58,16 @@ func ExternalWorkersEnabled() bool {
 	return cfg.ExternalWorkersEnabled != nil && *cfg.ExternalWorkersEnabled
 }
 
+// TalkootEnabled reads the talkoot_enabled flag from the user layer. Read live
+// per call like ExternalWorkersEnabled, so an edit applies without a restart.
+func TalkootEnabled() bool {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return false
+	}
+	return cfg.TalkootEnabled != nil && *cfg.TalkootEnabled
+}
+
 // DefaultSwarmRetentionDays is how long a finished swarm agent's record stays
 // in the live tree when swarm_retention_days is not set.
 //

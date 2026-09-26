@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/attach"
+	"terva.sh/terva/packages/agent/talkoot"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/agent/worktree"
 	"terva.sh/terva/packages/secrets"
@@ -135,6 +136,30 @@ func TestRestrictSensitiveReadsLiftsOnlyConfigWhenClean(t *testing.T) {
 		if err := sb.CheckPathRead(filepath.Join(home, rel)); err == nil {
 			t.Errorf("%s was allowed; only config.json may lift", rel)
 		}
+	}
+}
+
+// 🔑 A talkoot's room key seals the room log. A member that reads it can forge
+// a line the router trusts on replay, so the key is denied by name, to the
+// file tools and to bash, in every talkoot including ones made later. The room
+// beside it stays readable.
+func TestTalkootRoomKeysAreDenied(t *testing.T) {
+	home := testsupport.TempDir(t)
+	sb := &tools.Sandbox{Root: testsupport.TempDir(t)}
+	sb.Lock()
+	restrictSensitiveReads(sb, home, home, true)
+
+	for _, name := range []string{talkoot.KeyFile, talkoot.HeadFile, talkoot.HeadTempFile} {
+		path := filepath.Join(home, "talkoot", "tiger", name)
+		if err := sb.CheckPathRead(path); err == nil {
+			t.Errorf("CheckPathRead allowed a talkoot %s", name)
+		}
+		if err := sb.CheckCommand("cp " + path + " /tmp/saved"); err == nil {
+			t.Errorf("CheckCommand allowed a copy of a talkoot %s", name)
+		}
+	}
+	if err := sb.CheckPathRead(filepath.Join(home, "talkoot", "tiger", talkoot.RoomFile)); err != nil {
+		t.Errorf("the room itself must stay readable: %v", err)
 	}
 }
 

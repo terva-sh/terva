@@ -50,6 +50,7 @@ func runMemberMode(ctx context.Context, args build.Args, version string) error {
 		return err
 	}
 	defer ws.Close()
+	ws.LoadTalkoots()
 
 	m, err := fleet.NewMember(fleet.MemberOptions{
 		HubURL:  hubURL,
