@@ -3,6 +3,7 @@ package dialogs
 import (
 	"testing"
 
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
@@ -13,9 +14,9 @@ import (
 
 func hiddenCatalog(t *testing.T) {
 	t.Helper()
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
-	provider.SetUserModels([]provider.Model{
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
+	modelreg.SetUserModels([]provider.Model{
 		{Provider: "openrouter", ID: "anthropic/claude-sonnet-4.5"},
 		{Provider: "openrouter", ID: "deepseek/deepseek-r1"},
 		{Provider: "openrouter", ID: "meta/llama-3.1"},
@@ -144,7 +145,7 @@ func TestAHiddenModelCanBeRestoredThroughTheToken(t *testing.T) {
 // is holding back — otherwise a shrinking number is unexplained.
 func TestProviderRowCountsExcludeHiddenButAdvertiseThem(t *testing.T) {
 	hiddenCatalog(t)
-	provider.SetUserModels(append(provider.Active(), provider.Model{Provider: "other", ID: "solo"}))
+	modelreg.SetUserModels(append(modelreg.Active(), provider.Model{Provider: "other", ID: "solo"}))
 	d := NewModelDialog()
 	d.Open("", []string{"openrouter", "other"}, nil, []string{"openrouter/deepseek/deepseek-r1"})
 
@@ -198,9 +199,9 @@ func TestAProviderWhoseModelsAreAllHiddenKeepsItsRow(t *testing.T) {
 // row 0, a dozen or more downstrokes back to the same spot for every single
 // model hidden in a long list.
 func TestHidingAModelKeepsTheCursorInPlace(t *testing.T) {
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
-	provider.SetUserModels([]provider.Model{
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
+	modelreg.SetUserModels([]provider.Model{
 		{Provider: "acme", ID: "m1"},
 		{Provider: "acme", ID: "m2"},
 		{Provider: "acme", ID: "m3"},
@@ -260,9 +261,9 @@ func TestHidingAModelKeepsTheCursorInPlace(t *testing.T) {
 // Hiding the bottom row has nothing to slide up into it: the cursor clamps onto
 // the new last row rather than falling off the end or snapping to the top.
 func TestHidingTheLastRowClampsToTheNewLast(t *testing.T) {
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
-	provider.SetUserModels([]provider.Model{
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
+	modelreg.SetUserModels([]provider.Model{
 		{Provider: "acme", ID: "m1"},
 		{Provider: "acme", ID: "m2"},
 		{Provider: "acme", ID: "m3"},
@@ -291,9 +292,9 @@ func TestHidingTheLastRowClampsToTheNewLast(t *testing.T) {
 // list being shown, so the same rule has to hold or restoring a batch of models
 // is just as tedious as hiding one.
 func TestUnhidingUnderTheHiddenTokenKeepsTheCursorInPlace(t *testing.T) {
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
-	provider.SetUserModels([]provider.Model{
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
+	modelreg.SetUserModels([]provider.Model{
 		{Provider: "acme", ID: "m1"},
 		{Provider: "acme", ID: "m2"},
 		{Provider: "acme", ID: "m3"},

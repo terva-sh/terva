@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
-	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -33,11 +33,11 @@ func TestResolveKeepsAModelListedUnderSeveralProviders(t *testing.T) {
 	// catalogue is ever reordered so this is no longer true, the test is
 	// vacuous rather than wrong — say so instead of passing quietly.
 	const id = "gpt-5-pro"
-	bare, err := provider.FindModel("", id)
+	bare, err := modelreg.FindModel("", id)
 	if err != nil {
 		t.Skipf("%s is no longer in the catalogue", id)
 	}
-	if _, err := provider.FindModel("openai", id); err != nil {
+	if _, err := modelreg.FindModel("openai", id); err != nil {
 		t.Skipf("%s is no longer an openai model", id)
 	}
 	if bare.Provider == "openai" {

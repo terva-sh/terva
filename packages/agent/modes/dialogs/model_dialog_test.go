@@ -3,6 +3,7 @@ package dialogs
 import (
 	"testing"
 
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
@@ -118,9 +119,9 @@ func TestModelDialogCapabilityFilter(t *testing.T) {
 // Two providers + no favorites: the dialog opens on the provider stage;
 // selecting a provider scopes the model list; esc walks back then closes.
 func TestModelDialogTwoLevel(t *testing.T) {
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
-	provider.SetUserModels([]provider.Model{
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
+	modelreg.SetUserModels([]provider.Model{
 		{Provider: "alpha", ID: "a-1"}, {Provider: "alpha", ID: "a-2"},
 		{Provider: "beta", ID: "b-1"},
 	})
@@ -154,9 +155,9 @@ func TestModelDialogTwoLevel(t *testing.T) {
 // A single provider with no favorites skips straight into its models; esc
 // then closes (there's no provider list to return to).
 func TestModelDialogSingleProviderSkips(t *testing.T) {
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
-	provider.SetUserModels([]provider.Model{
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
+	modelreg.SetUserModels([]provider.Model{
 		{Provider: "solo", ID: "s-1"}, {Provider: "solo", ID: "s-2"},
 	})
 	d := NewModelDialog()
@@ -172,9 +173,9 @@ func TestModelDialogSingleProviderSkips(t *testing.T) {
 // Favorites add a ★ entry at the top of the provider list that scopes to the
 // starred models across providers.
 func TestModelDialogFavoritesView(t *testing.T) {
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
-	provider.SetUserModels([]provider.Model{
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
+	modelreg.SetUserModels([]provider.Model{
 		{Provider: "alpha", ID: "a-1"}, {Provider: "beta", ID: "b-1"},
 	})
 	d := NewModelDialog()
@@ -192,9 +193,9 @@ func TestModelDialogFavoritesView(t *testing.T) {
 // Ctrl+F toggles a favorite, floats it to the top, keeps the cursor on it,
 // and emits a Favorite action for the host to persist.
 func TestModelDialogFavoriteToggle(t *testing.T) {
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
-	provider.SetUserModels([]provider.Model{
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
+	modelreg.SetUserModels([]provider.Model{
 		{Provider: "solo", ID: "s-1"}, {Provider: "solo", ID: "s-2"},
 	})
 	d := NewModelDialog()
@@ -230,9 +231,9 @@ func TestModelDialogFavoriteToggle(t *testing.T) {
 // Favoriting rebuilds the provider list so the ★ favorites entry and its count
 // appear without reopening (regression: they were built once at Open).
 func TestModelDialogFavoriteUpdatesProviderList(t *testing.T) {
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
-	provider.SetUserModels([]provider.Model{
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
+	modelreg.SetUserModels([]provider.Model{
 		{Provider: "solo", ID: "s-1"}, {Provider: "solo", ID: "s-2"},
 	})
 	d := NewModelDialog()
@@ -257,9 +258,9 @@ func TestModelDialogFavoriteUpdatesProviderList(t *testing.T) {
 // An open picker picks up models that arrive via background /v1/models
 // discovery after it opened (the OpenRouter "only 1 model until restart" case).
 func TestModelDialogReloadsOnCatalogGrowth(t *testing.T) {
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
-	provider.SetLiveModels([]provider.Model{{Provider: "grow", ID: "g-1"}})
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
+	modelreg.SetLiveModels([]provider.Model{{Provider: "grow", ID: "g-1"}})
 
 	d := NewModelDialog()
 	d.Open("", []string{"grow"}, nil, nil) // single provider, 1 model -> model stage
@@ -269,7 +270,7 @@ func TestModelDialogReloadsOnCatalogGrowth(t *testing.T) {
 	}
 
 	// Discovery completes and grows the catalog.
-	provider.SetLiveModels([]provider.Model{
+	modelreg.SetLiveModels([]provider.Model{
 		{Provider: "grow", ID: "g-1"}, {Provider: "grow", ID: "g-2"}, {Provider: "grow", ID: "g-3"},
 	})
 	_ = d.Render(tui.Theme{}, 80) // re-render polls the revision and re-scopes

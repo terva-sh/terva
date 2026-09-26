@@ -4,12 +4,13 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 )
 
 func mustModel(t *testing.T, provider_, id string) provider.Model {
 	t.Helper()
-	m, err := provider.FindModel(provider_, id)
+	m, err := modelreg.FindModel(provider_, id)
 	if err != nil {
 		t.Fatalf("FindModel(%q, %q): %v", provider_, id, err)
 	}

@@ -9,13 +9,13 @@ import "testing"
 // A copy of the row that lost the default would answer as the wrong model.
 func TestKimiK3256kMirrorsK3ExceptWindow(t *testing.T) {
 	withCatalogState(t)
-	ResetCatalogLayers()
+	testReg.Reset()
 
-	k3, err := FindModel("kimi", "k3")
+	k3, err := testReg.FindModel("kimi", "k3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	small, err := FindModel("kimi", "k3-256k")
+	small, err := testReg.FindModel("kimi", "k3-256k")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,10 +52,10 @@ func TestKimiK3256kMirrorsK3ExceptWindow(t *testing.T) {
 // TestKimiCodeRowsCarryTheMoonshotListPrice, which pins them to this one.
 func TestMoonshotK3256kRows(t *testing.T) {
 	withCatalogState(t)
-	ResetCatalogLayers()
+	testReg.Reset()
 
 	for _, provider := range []string{"moonshotai", "moonshotai-cn"} {
-		m, err := FindModel(provider, "k3-256k")
+		m, err := testReg.FindModel(provider, "k3-256k")
 		if err != nil {
 			t.Fatalf("%s: %v", provider, err)
 		}

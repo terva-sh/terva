@@ -97,7 +97,7 @@ func TestForbidToolsCodexDropsTheBuiltInImageTool(t *testing.T) {
 
 // The chat-completions builder enforces the ban the same way.
 func TestForbidToolsOpenAIAdvertisesToolsAndBansTheCall(t *testing.T) {
-	c := &openaiClient{name: "openai"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openai"}
 	req := Request{Model: "gpt-4o", Tools: forbidTools(), Messages: forbidMessages()}
 
 	allowed, err := c.buildRequest(req)
@@ -132,14 +132,14 @@ func TestForbidToolsUnwiredClientsDropTheArray(t *testing.T) {
 		count func(t *testing.T, req Request) int
 	}{
 		{"anthropic", "claude-sonnet-4-5", func(t *testing.T, req Request) int {
-			out, err := (&anthropicClient{}).buildRequest(req)
+			out, err := (&anthropicClient{catalogRef: catalogRef{testReg}}).buildRequest(req)
 			if err != nil {
 				t.Fatal(err)
 			}
 			return len(out.Tools)
 		}},
 		{"gemini", "gemini-2.5-flash", func(t *testing.T, req Request) int {
-			out, _, err := (&geminiClient{}).buildRequest(req)
+			out, _, err := (&geminiClient{catalogRef: catalogRef{testReg}}).buildRequest(req)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -150,7 +150,7 @@ func TestForbidToolsUnwiredClientsDropTheArray(t *testing.T) {
 			return n
 		}},
 		{"bedrock", "anthropic.claude-sonnet-4-5-20250929-v1:0", func(t *testing.T, req Request) int {
-			out, err := (&bedrockClient{region: "us-east-1"}).buildRequest(req)
+			out, err := (&bedrockClient{catalogRef: catalogRef{testReg}, region: "us-east-1"}).buildRequest(req)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -189,7 +189,7 @@ func TestForbidToolsBedrockKeepsTheStubOverToolBlocks(t *testing.T) {
 		},
 		ForbidTools: true,
 	}
-	out, err := (&bedrockClient{region: "us-east-1"}).buildRequest(req)
+	out, err := (&bedrockClient{catalogRef: catalogRef{testReg}, region: "us-east-1"}).buildRequest(req)
 	if err != nil {
 		t.Fatal(err)
 	}

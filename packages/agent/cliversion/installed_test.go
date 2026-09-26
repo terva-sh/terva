@@ -1,4 +1,4 @@
-package provider
+package cliversion
 
 import (
 	"encoding/json"
@@ -16,7 +16,7 @@ import (
 
 func TestInstalledVersionProcesses(t *testing.T) {
 	if os.Getenv("TERVA_VERSION_TEST_CHILD") == "1" {
-		v := newInstalledVersion("codex", codexCLIVersion, func() (string, error) {
+		v := newInstalledVersion("codex", func() (string, error) {
 			f, err := os.OpenFile(filepath.Join(os.Getenv("TERVA_HOME"), "probes"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 			if err != nil {
 				return "", err
@@ -25,7 +25,7 @@ func TestInstalledVersionProcesses(t *testing.T) {
 			_, err = f.WriteString("probe\n")
 			time.Sleep(100 * time.Millisecond)
 			return "99.3.4", err
-		}, pickCodexCLIVersion, parseCodexVersion)
+		}, parseCodexVersion)
 		_ = v.get()
 		waitVersionWorker(t, v)
 		if v.get() != "99.3.4" {
@@ -87,13 +87,13 @@ func TestInstalledVersionAsyncAndSharedTTL(t *testing.T) {
 		<-release
 		return "99.1.2", nil
 	}
-	a := newInstalledVersion("claude", claudeCodeVersion, probe, pickClaudeCodeVersion, parseClaudeVersion)
+	a := newInstalledVersion("claude", probe, parseClaudeVersion)
 	result := make(chan string, 1)
 	go func() { result <- a.get() }()
 	select {
 	case got := <-result:
-		if got != claudeCodeVersion {
-			t.Fatalf("initial version = %s", got)
+		if got != "" {
+			t.Fatalf("initial version = %q, want none until the probe answers", got)
 		}
 	case <-time.After(time.Second):
 		close(release)
@@ -105,7 +105,7 @@ func TestInstalledVersionAsyncAndSharedTTL(t *testing.T) {
 		close(release)
 		t.Fatal("probe never started")
 	}
-	b := newInstalledVersion("claude", claudeCodeVersion, probe, pickClaudeCodeVersion, parseClaudeVersion)
+	b := newInstalledVersion("claude", probe, parseClaudeVersion)
 	_ = b.get()
 	for range 20 {
 		_ = a.get()
@@ -116,7 +116,7 @@ func TestInstalledVersionAsyncAndSharedTTL(t *testing.T) {
 	if a.get() != "99.1.2" || b.get() != "99.1.2" {
 		t.Fatal("workers did not propagate detected version")
 	}
-	c := newInstalledVersion("claude", claudeCodeVersion, probe, pickClaudeCodeVersion, parseClaudeVersion)
+	c := newInstalledVersion("claude", probe, parseClaudeVersion)
 	_ = c.get()
 	waitVersionWorker(t, c)
 	if c.get() != "99.1.2" || calls.Load() != 1 {
@@ -134,7 +134,7 @@ func TestInstalledVersionStaleCacheAndFailedRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	started, release := make(chan struct{}), make(chan struct{})
-	v := newInstalledVersion("codex", codexCLIVersion, func() (string, error) { close(started); <-release; return "", errors.New("unavailable") }, pickCodexCLIVersion, parseCodexVersion)
+	v := newInstalledVersion("codex", func() (string, error) { close(started); <-release; return "", errors.New("unavailable") }, parseCodexVersion)
 	_ = v.get()
 	select {
 	case <-started:

@@ -7,6 +7,8 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/modelfiles"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
@@ -53,11 +55,11 @@ var paramHelp = map[string]func() string{
 // ModelParams describes one model's editable settings: what it would take by
 // default, and what models.json currently pins.
 func (w *Workspace) ModelParams(_ context.Context, p ctrlproto.ModelParamsParams) (ctrlproto.ModelParamsView, error) {
-	m, err := provider.FindModel(p.Provider, p.Model)
+	m, err := modelreg.FindModel(p.Provider, p.Model)
 	if err != nil {
 		return ctrlproto.ModelParamsView{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("unknown model %q", p.Model))
 	}
-	existing, has, err := provider.FindUserModel(config.UserModelsPath(), m.Provider, m.ID)
+	existing, has, err := modelfiles.FindUserModel(config.UserModelsPath(), m.Provider, m.ID)
 	if err != nil {
 		// A models.json that will not parse is worth saying out loud: the operator's
 		// overrides are silently not applying, and a blank form would imply there
@@ -105,12 +107,12 @@ func (w *Workspace) ModelParams(_ context.Context, p ctrlproto.ModelParamsParams
 // a partial map could not tell "untouched" from "cleared" and a client that
 // omitted a field it had not focused would silently wipe it.
 func (w *Workspace) ModelParamsSet(_ context.Context, p ctrlproto.ModelParamsSetParams) error {
-	m, err := provider.FindModel(p.Provider, p.Model)
+	m, err := modelreg.FindModel(p.Provider, p.Model)
 	if err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("unknown model %q", p.Model))
 	}
 	path := config.UserModelsPath()
-	existing, _, err := provider.FindUserModel(path, m.Provider, m.ID)
+	existing, _, err := modelfiles.FindUserModel(path, m.Provider, m.ID)
 	if err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "read models.json: %v", err)
 	}
@@ -130,7 +132,7 @@ func (w *Workspace) ModelParamsSet(_ context.Context, p ctrlproto.ModelParamsSet
 		}
 	}
 
-	if err := provider.UpsertUserModel(path, m.Provider, entry); err != nil {
+	if err := modelfiles.UpsertUserModel(path, m.Provider, entry); err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "save models.json: %v", err)
 	}
 	w.applyUserModels(m.Provider, m.ID)
@@ -169,7 +171,7 @@ func (w *Workspace) ModelAdd(_ context.Context, p ctrlproto.ModelAddParams) erro
 	// Deliberately not CodeConflict. That code is for state that moved on under a
 	// caller who was right, whose answer is to resync. Here the caller asked for
 	// the wrong verb, and the answer is to edit the model instead.
-	if _, err := provider.FindModel(prov, id); err == nil {
+	if _, err := modelreg.FindModel(prov, id); err == nil {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("model %q already exists under %q, edit it instead", id, prov))
 	}
 
@@ -186,7 +188,7 @@ func (w *Workspace) ModelAdd(_ context.Context, p ctrlproto.ModelAddParams) erro
 		}
 	}
 
-	if err := provider.UpsertUserModel(config.UserModelsPath(), prov, entry); err != nil {
+	if err := modelfiles.UpsertUserModel(config.UserModelsPath(), prov, entry); err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "save models.json: %v", err)
 	}
 	w.applyUserModels(prov, id)
@@ -196,11 +198,11 @@ func (w *Workspace) ModelAdd(_ context.Context, p ctrlproto.ModelAddParams) erro
 // ModelParamsReset removes the model's models.json entry outright — back to what
 // terva ships, not to an entry full of blanks.
 func (w *Workspace) ModelParamsReset(_ context.Context, p ctrlproto.ModelParamsParams) error {
-	m, err := provider.FindModel(p.Provider, p.Model)
+	m, err := modelreg.FindModel(p.Provider, p.Model)
 	if err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("unknown model %q", p.Model))
 	}
-	if _, err := provider.RemoveUserModel(config.UserModelsPath(), m.Provider, m.ID); err != nil {
+	if _, err := modelfiles.RemoveUserModel(config.UserModelsPath(), m.Provider, m.ID); err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "save models.json: %v", err)
 	}
 	w.applyUserModels(m.Provider, m.ID)
@@ -215,8 +217,8 @@ func (w *Workspace) ModelParamsReset(_ context.Context, p ctrlproto.ModelParamsP
 // built — so a new base URL still points at the old machine, and the operator
 // watches their edit do nothing.
 func (w *Workspace) applyUserModels(prov, modelID string) {
-	overrides, _ := provider.LoadUserModelsWithWarnings(config.UserModelsPath())
-	provider.SetUserOverrides(overrides)
+	overrides, _ := modelfiles.LoadUserModelsWithWarnings(config.UserModelsPath())
+	modelreg.SetUserOverrides(overrides)
 
 	w.mu.Lock()
 	sessions := make([]*wsSession, 0, len(w.sessions))

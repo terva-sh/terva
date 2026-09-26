@@ -44,11 +44,10 @@ func WithClaudeCodeVersion(installed func() string) ClientOption {
 }
 
 // ImageSaver stores an image a model generated and returns the path it was
-// saved at. Where it saves is the host's to decide; the wire does not know a
-// directory. The Gemini wire calls it for each image in a response and tells
-// the model the path in a text block beside the image; the image bytes reach
-// the transcript either way.
-type ImageSaver func(mimeType string, data []byte) (path string, err error)
+// saved at. dir is the request's WorkingDir. The Gemini wire calls it for each
+// image in a response and tells the model the path in a text block beside the
+// image; the image bytes reach the transcript either way.
+type ImageSaver func(dir, mimeType string, data []byte) (path string, err error)
 
 // WithImageSaver gives the Gemini wire somewhere to save generated images.
 // Without it the wire saves nothing and adds no path.

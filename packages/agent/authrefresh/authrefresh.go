@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/config"
-	"terva.sh/terva/packages/provider/auth"
+	"terva.sh/terva/packages/auth"
 )
 
 const (

@@ -27,7 +27,7 @@
 //
 // Scope: WIRE peers only. Local trusted files (session transcripts, JSONL
 // exports) deliberately read with no size cap and must NOT use this — see the
-// ReadBytes comments in packages/session/session_portable.go.
+// ReadBytes comments in packages/core/session_portable.go.
 //
 // The full inventory of terva's payload boundaries — wire, file, and network —
 // is docs/resource-limits.md.

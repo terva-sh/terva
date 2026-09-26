@@ -187,9 +187,9 @@ func (c *codexClient) compactUsage(reqModel string, u *codexCompactUsage) Usage 
 	if n := usage.InputTokens - usage.CacheWriteTokens; n >= 0 {
 		usage.InputTokens = n
 	}
-	model, _ := FindModel("openai-codex", reqModel)
+	model, _ := c.models().FindModel("openai-codex", reqModel)
 	if model.ID == "" {
-		model, _ = FindModel("openai", reqModel)
+		model, _ = c.models().FindModel("openai", reqModel)
 	}
 	ApplyCost(model, &usage)
 	return usage

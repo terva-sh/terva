@@ -65,7 +65,7 @@ func TestGeminiReportsImageOutputTokens(t *testing.T) {
 // The split is only worth parsing if it reaches the bill. This is the
 // end-to-end statement: a real catalog model, a real response, real money.
 func TestGeminiPricesAGeneratedImageAtTheImageRate(t *testing.T) {
-	m, err := FindModel("google", "gemini-3.1-flash-image")
+	m, err := testReg.FindModel("google", "gemini-3.1-flash-image")
 	if err != nil {
 		t.Fatalf("gemini-3.1-flash-image missing from the catalog: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestGeminiTextResponseHasNoImageTokens(t *testing.T) {
 	if u.ImageOutputTokens != 0 {
 		t.Errorf("ImageOutputTokens = %d on a TEXT-only response, want 0", u.ImageOutputTokens)
 	}
-	m, err := FindModel("google", "gemini-3.1-flash-image")
+	m, err := testReg.FindModel("google", "gemini-3.1-flash-image")
 	if err != nil {
 		t.Fatalf("model lookup: %v", err)
 	}

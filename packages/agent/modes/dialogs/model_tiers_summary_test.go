@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -41,7 +41,7 @@ func providerListDialog(rows ...providerRow) *ModelDialog {
 	// Render re-reads the catalog when the revision moved, which would rebuild
 	// the rows just installed from a catalog these tests deliberately do not
 	// populate. Pinning the revision is what keeps the fixture in place.
-	d.catalogRev = provider.CatalogRevision()
+	d.catalogRev = modelreg.CatalogRevision()
 	return d
 }
 

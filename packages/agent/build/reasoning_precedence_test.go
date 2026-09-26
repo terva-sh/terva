@@ -3,6 +3,7 @@ package build
 import (
 	"testing"
 
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -121,7 +122,7 @@ func TestTheCatalogFallbackAgreesAcrossThePackageSeam(t *testing.T) {
 // marking it as operator-set — fails here rather than silently downgrading K3
 // to K2 in production.
 func TestK3CatalogDefaultStillYieldsToAGlobalLevel(t *testing.T) {
-	m, err := provider.FindModel("kimi", "k3")
+	m, err := modelreg.FindModel("kimi", "k3")
 	if err != nil {
 		t.Fatalf("kimi/k3 is not in the catalog: %v", err)
 	}

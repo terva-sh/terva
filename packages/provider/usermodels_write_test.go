@@ -23,7 +23,7 @@ func TestUserModelTemperature(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	overrides, warnings := LoadUserModelsWithWarnings(path)
+	overrides, warnings := loadUserModelsWithWarnings(path)
 
 	var warm, bad *float32
 	for _, o := range overrides {
@@ -82,7 +82,7 @@ func TestUserModelDefaultReasoning(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	overrides, warnings := LoadUserModelsWithWarnings(path)
+	overrides, warnings := loadUserModelsWithWarnings(path)
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %v", warnings)
 	}
@@ -129,19 +129,19 @@ func TestUpsertInsertReplacePreserve(t *testing.T) {
 	path := filepath.Join(testsupport.TempDir(t), "models.json")
 
 	// Seed an unrelated entry that must survive every later write.
-	if err := UpsertUserModel(path, "openai", UserModel{ID: "gpt-x", ContextWindow: 1000}); err != nil {
+	if err := upsertUserModel(path, "openai", UserModel{ID: "gpt-x", ContextWindow: 1000}); err != nil {
 		t.Fatal(err)
 	}
 	// Insert.
-	if err := UpsertUserModel(path, "anthropic", UserModel{ID: "claude-x", MaxTokens: 64000}); err != nil {
+	if err := upsertUserModel(path, "anthropic", UserModel{ID: "claude-x", MaxTokens: 64000}); err != nil {
 		t.Fatal(err)
 	}
 	// Replace the same id (different value).
-	if err := UpsertUserModel(path, "anthropic", UserModel{ID: "claude-x", MaxTokens: 99000, BaseURL: "http://local"}); err != nil {
+	if err := upsertUserModel(path, "anthropic", UserModel{ID: "claude-x", MaxTokens: 99000, BaseURL: "http://local"}); err != nil {
 		t.Fatal(err)
 	}
 
-	f, err := ReadUserModelsFile(path)
+	f, err := readUserModelsFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,18 +161,18 @@ func TestUpsertInsertReplacePreserve(t *testing.T) {
 // the whole provider block, and a no-match remove reports false.
 func TestRemovePrunesEmptyProvider(t *testing.T) {
 	path := filepath.Join(testsupport.TempDir(t), "models.json")
-	if err := UpsertUserModel(path, "anthropic", UserModel{ID: "claude-x", MaxTokens: 1}); err != nil {
+	if err := upsertUserModel(path, "anthropic", UserModel{ID: "claude-x", MaxTokens: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := UpsertUserModel(path, "openai", UserModel{ID: "gpt-x", MaxTokens: 1}); err != nil {
+	if err := upsertUserModel(path, "openai", UserModel{ID: "gpt-x", MaxTokens: 1}); err != nil {
 		t.Fatal(err)
 	}
 
-	removed, err := RemoveUserModel(path, "anthropic", "claude-x")
+	removed, err := removeUserModel(path, "anthropic", "claude-x")
 	if err != nil || !removed {
 		t.Fatalf("expected removed=true, got removed=%v err=%v", removed, err)
 	}
-	f, _ := ReadUserModelsFile(path)
+	f, _ := readUserModelsFile(path)
 	if _, ok := f.Providers["anthropic"]; ok {
 		t.Error("emptied provider block should have been pruned")
 	}
@@ -181,7 +181,7 @@ func TestRemovePrunesEmptyProvider(t *testing.T) {
 	}
 
 	// No-match remove is a no-op that reports false (not an error).
-	removed, err = RemoveUserModel(path, "anthropic", "nope")
+	removed, err = removeUserModel(path, "anthropic", "nope")
 	if err != nil || removed {
 		t.Errorf("no-match remove: want (false,nil), got (%v,%v)", removed, err)
 	}
@@ -199,11 +199,11 @@ func TestWriteRoundTripsThroughLoader(t *testing.T) {
 		Reasoning:     boolPtr(false),
 		Capabilities:  map[string]bool{"image-input": false},
 	}
-	if err := UpsertUserModel(path, "anthropic", um); err != nil {
+	if err := upsertUserModel(path, "anthropic", um); err != nil {
 		t.Fatal(err)
 	}
 
-	overrides, warnings := LoadUserModelsWithWarnings(path)
+	overrides, warnings := loadUserModelsWithWarnings(path)
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %v", warnings)
 	}
@@ -232,21 +232,21 @@ func TestWriteRoundTripsThroughLoader(t *testing.T) {
 // unset) and reports absence cleanly.
 func TestFindUserModel(t *testing.T) {
 	path := filepath.Join(testsupport.TempDir(t), "models.json")
-	if err := UpsertUserModel(path, "anthropic", UserModel{ID: "claude-x", BaseURL: "http://local"}); err != nil {
+	if err := upsertUserModel(path, "anthropic", UserModel{ID: "claude-x", BaseURL: "http://local"}); err != nil {
 		t.Fatal(err)
 	}
-	um, ok, err := FindUserModel(path, "anthropic", "claude-x")
+	um, ok, err := findUserModel(path, "anthropic", "claude-x")
 	if err != nil || !ok {
 		t.Fatalf("expected found, got ok=%v err=%v", ok, err)
 	}
 	if um.BaseURL != "http://local" || um.ContextWindow != 0 {
 		t.Errorf("raw entry wrong (ctx should be 0/unset): %+v", um)
 	}
-	if _, ok, _ := FindUserModel(path, "anthropic", "missing"); ok {
+	if _, ok, _ := findUserModel(path, "anthropic", "missing"); ok {
 		t.Error("missing id should report not found")
 	}
 	// Missing file: not found, no error.
-	if _, ok, err := FindUserModel(filepath.Join(testsupport.TempDir(t), "none.json"), "anthropic", "x"); ok || err != nil {
+	if _, ok, err := findUserModel(filepath.Join(testsupport.TempDir(t), "none.json"), "anthropic", "x"); ok || err != nil {
 		t.Errorf("missing file: want (false,nil), got (%v,%v)", ok, err)
 	}
 }
@@ -258,7 +258,7 @@ func TestReadMalformedIsError(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadUserModelsFile(path); err == nil {
+	if _, err := readUserModelsFile(path); err == nil {
 		t.Error("malformed file should be an error so a rewrite can't clobber it")
 	}
 }

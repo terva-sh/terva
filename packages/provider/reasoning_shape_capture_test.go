@@ -151,7 +151,7 @@ func TestAnthropicTranscriptReplayedToCodexCarriesNoAnthropicPayload(t *testing.
 // one vendor the other's private deliberation, presented as this model's own
 // prior words.
 func TestAnthropicTranscriptReplayedToChatCarriesNoChainOfThought(t *testing.T) {
-	c := &openaiClient{name: "openai-compatible"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openai-compatible"}
 	out, err := c.buildRequest(Request{
 		Model: "qwen3.8-27b",
 		Messages: []Message{

@@ -182,13 +182,6 @@ type Config struct {
 	// stops new foreign spawns, it does not strand ones already running.
 	ExternalWorkersEnabled *bool `json:"external_workers_enabled,omitempty"`
 
-	// TalkootEnabled turns on Talkoot, the persistent team of agents in
-	// docs/proposals/talkoot.md. Off by default; nil/missing means disabled.
-	// It lives on the user layer only, with no ProjectConfig counterpart,
-	// because a roster names postures, drivers, and spend (decision 0022 rule
-	// 3), and a cloned repository must not turn that on.
-	TalkootEnabled *bool `json:"talkoot_enabled,omitempty"`
-
 	// AutoSwarmNudge controls whether, when auto-swarm is enabled, the system
 	// prompt carries the proactive-delegation guidance (the swarm addendum).
 	// Independent of AutoSwarmEnabled: the tool availability is one toggle, the
@@ -221,7 +214,7 @@ type Config struct {
 	Raati RaatiConfig `json:"raati,omitzero"`
 
 	// Classifier configures the screening classifier that answers tool-call
-	// approvals which would otherwise prompt (see permission.ClassifierMode and
+	// approvals which would otherwise prompt (see core.ClassifierMode and
 	// docs/permissions.md). Off unless the operator turns it on.
 	//
 	// User layer ONLY, and here that is a security property rather than a
@@ -1120,7 +1113,7 @@ func (c Config) StatusLineScripts() map[string]StatusLineScript {
 }
 
 // PermissionRuleConfig is the JSON shape of one permission rule. It
-// compiles into a permission.PermissionRule at load time (compilePermissionRules);
+// compiles into a core.PermissionRule at load time (compilePermissionRules);
 // invalid rules are dropped with a warning rather than failing startup.
 type PermissionRuleConfig struct {
 	// Tool is an exact tool name, or a prefix glob ending in '*'
@@ -1617,24 +1610,6 @@ func lexicallyWithin(root, abs string) bool {
 		return false
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-// ProjectRestrictions names, by JSON field, the project config settings that
-// can only narrow what terva does: deny and ask rules, the extension, MCP, and
-// context-extension disable lists, a false tickets switch, and project_scoped,
-// which keeps an agent's data inside the project. When a project config exists
-// but cannot be parsed, none of them is in force. That fails open, so the
-// warning every host shows for it (permissions.BuildPolicy) names each one.
-//
-// Keep it in step with ProjectConfig: a test checks that every name is one of
-// its JSON fields.
-var ProjectRestrictions = []string{
-	"permissions",
-	"disable_extensions",
-	"disable_mcp",
-	"disable_context_extensions",
-	"tickets",
-	"project_scoped",
 }
 
 // LoadProjectConfig walks from cwd toward the filesystem root and returns the

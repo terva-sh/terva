@@ -21,8 +21,8 @@ import (
 	"strings"
 	"time"
 
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/i18n"
-	"terva.sh/terva/packages/provider"
 )
 
 // StatusScript is one user-defined status-line script — the modes-side
@@ -152,7 +152,7 @@ func (i *Interactive) buildScriptPayload() []byte {
 	}
 	i.mu.Unlock()
 
-	p.ContextMax = provider.ContextGauge(p.Provider, p.Model)
+	p.ContextMax = modelreg.ContextGauge(p.Provider, p.Model)
 	for _, w := range i.statusUsageWindows() {
 		pw := payloadUsageWindow{Label: w.Label, UsedPercent: w.UsedPercent}
 		if !w.ResetsAt.IsZero() {

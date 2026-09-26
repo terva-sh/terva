@@ -89,7 +89,7 @@ background rect — regenerate it by deleting that one line.
 
 ## Where the brand ships
 
-- `packages/provider/auth/assets/terva-logo.png` — the 512px square,
+- `packages/auth/assets/terva-logo.png` — the 512px square,
   embedded in the binary and served at `/logo.png` on the OAuth
   callback pages.
 - `README.md` header — `exports/terva-logo-256.png` (the square

@@ -7,11 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
-
-	"terva.sh/terva/packages/testsupport"
 )
 
 // TestGeminiStreamHappyPath drives the gemini client end-to-end against
@@ -70,16 +67,9 @@ func TestGeminiStreamHappyPath(t *testing.T) {
 	}
 }
 
+// The text and the image arrive in order. Saving the image is the host's
+// (WithImageSaver; gemini_image_workdir_test.go), so a bare client adds no path.
 func TestGeminiStreamInlineImage(t *testing.T) {
-	dir := testsupport.TempDir(t)
-	prev, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prev) })
 	img := base64.StdEncoding.EncodeToString([]byte("png-bytes"))
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
@@ -99,7 +89,7 @@ func TestGeminiStreamInlineImage(t *testing.T) {
 			done = e
 		}
 	}
-	if len(done.Message.Content) != 3 {
+	if len(done.Message.Content) != 2 {
 		t.Fatalf("content count=%d: %+v", len(done.Message.Content), done.Message.Content)
 	}
 	if tb, ok := done.Message.Content[0].(TextBlock); !ok || tb.Text != "here" {
@@ -111,15 +101,6 @@ func TestGeminiStreamInlineImage(t *testing.T) {
 	}
 	if ib.MimeType != "image/png" || string(ib.Data) != "png-bytes" {
 		t.Fatalf("image=%q %q", ib.MimeType, string(ib.Data))
-	}
-	saved, ok := done.Message.Content[2].(TextBlock)
-	if !ok || !strings.Contains(saved.Text, "terva-gemini-image-") || !strings.Contains(saved.Text, ".png") {
-		t.Fatalf("saved path block=%T %+v", done.Message.Content[2], done.Message.Content[2])
-	}
-	path := strings.TrimPrefix(saved.Text, "Saved image: `")
-	path = strings.TrimSuffix(path, "`")
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("saved image missing at %q: %v", path, err)
 	}
 }
 

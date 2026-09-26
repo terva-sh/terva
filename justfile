@@ -347,7 +347,7 @@ test *ARGS:
 test-fast *ARGS:
     go test ./... {{ARGS}}
 
-# Test a single package: `just test-pkg ./packages/provider/auth`. Quiet by
+# Test a single package: `just test-pkg ./packages/auth`. Quiet by
 # default — failures still print in full, but passing tests are one `ok` line
 # instead of a PASS per test (which floods an agent's context for no signal).
 test-pkg PKG *ARGS:

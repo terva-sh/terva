@@ -28,7 +28,7 @@ func TestTheIntroductoryFlashRatesExpireLoudly(t *testing.T) {
 	expired := time.Now().After(expiry.AddDate(0, 0, 1))
 
 	for _, id := range geminiIntroRateModels {
-		m, err := FindModel("google", id)
+		m, err := testReg.FindModel("google", id)
 		if err != nil {
 			t.Errorf("%s: not in the catalog, so the rate it is priced at cannot be checked: %v", id, err)
 			continue
@@ -70,11 +70,11 @@ func TestThePostIntroductoryRatesAreHigherThanTheIntroductoryOnes(t *testing.T) 
 // and the same silent-misbill risk. Pinning the equality here means repricing
 // the target without repricing the alias fails rather than passing quietly.
 func TestTheFlashAliasTracksItsIntroductoryTarget(t *testing.T) {
-	alias, err := FindModel("google", "gemini-flash-latest")
+	alias, err := testReg.FindModel("google", "gemini-flash-latest")
 	if err != nil {
 		t.Fatalf("gemini-flash-latest is not in the catalog: %v", err)
 	}
-	target, err := FindModel("google", "gemini-3.7-flash")
+	target, err := testReg.FindModel("google", "gemini-3.7-flash")
 	if err != nil {
 		t.Fatalf("gemini-3.7-flash is not in the catalog: %v", err)
 	}

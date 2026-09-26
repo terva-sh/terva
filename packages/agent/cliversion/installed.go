@@ -1,4 +1,11 @@
-package provider
+// Package cliversion finds the installed Claude Code and Codex CLI versions
+// that terva's client identities claim, by running each CLI with --version in
+// the background and sharing the result across terva processes through a
+// cache under TERVA_HOME. The wire (packages/provider) does neither: it takes
+// the result through provider.WithClaudeCodeVersion and
+// provider.WithCodexCLIVersion, and keeps its compiled baseline as the floor.
+// Decision 0021, rule 5.
+package cliversion
 
 import (
 	"encoding/json"
@@ -25,16 +32,16 @@ type installedVersion struct {
 	next        time.Time
 	running     bool
 	probe       func() (string, error)
-	pick        func(string) string
 	parse       func(string) (string, bool)
 }
 
-func newInstalledVersion(name, baseline string, probe func() (string, error), pick func(string) string, parse func(string) (string, bool)) *installedVersion {
-	return &installedVersion{name: name, value: baseline, probe: probe, pick: pick, parse: parse}
+func newInstalledVersion(name string, probe func() (string, error), parse func(string) (string, bool)) *installedVersion {
+	return &installedVersion{name: name, probe: probe, parse: parse}
 }
 
 // get never waits for disk access, a subprocess, or another process's lock.
-// The first call returns the baseline while the worker loads the disk cache.
+// The first call returns "" while the worker loads the disk cache, and the wire
+// claims its baseline until a version arrives.
 func (v *installedVersion) get() string {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -48,7 +55,7 @@ func (v *installedVersion) get() string {
 func (v *installedVersion) publish(r installedVersionRecord) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	v.value = v.pick(r.Version)
+	v.value = r.Version
 }
 
 func readInstalledVersion(path string) installedVersionRecord {

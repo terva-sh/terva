@@ -6,8 +6,8 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/i18n"
-	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/session"
 )
 
@@ -138,7 +138,7 @@ func (w *Workspace) WorldSetModel(_ context.Context, p ctrlproto.WorldSetModelPa
 	if prov == "" && model == "" {
 		doc.Model = session.CastRoute{}
 	} else {
-		m, e := provider.FindModel(prov, model)
+		m, e := modelreg.FindModel(prov, model)
 		if e != nil {
 			return ctrlproto.WorldView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown model %q", model))
 		}

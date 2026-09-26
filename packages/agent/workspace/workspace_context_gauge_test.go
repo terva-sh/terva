@@ -6,6 +6,7 @@ import (
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/internal/coretest"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/session"
@@ -26,11 +27,11 @@ import (
 // denominators agreeing, not about any one model.
 func TestASessionReportsTheWindowAutoCompactionFiresOn(t *testing.T) {
 	const id = "gauge-agreement-model"
-	provider.SetUserModels([]provider.Model{{
+	modelreg.SetUserModels([]provider.Model{{
 		Provider: "openai-compatible", ID: id,
 		ContextWindow: 1050000, DesiredContextWindow: 272000,
 	}})
-	t.Cleanup(func() { provider.SetUserModels(nil) })
+	t.Cleanup(func() { modelreg.SetUserModels(nil) })
 
 	tmp := testsupport.TempDir(t)
 	sess, err := session.NewSession(tmp, tmp, "openai-compatible", id, "test")

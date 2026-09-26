@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/modelfiles"
 	"terva.sh/terva/packages/agent/tools"
-	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -32,7 +32,7 @@ func TestModelsInitWritesLoadableScaffold(t *testing.T) {
 		t.Fatalf("scaffold not written at %s: %v", path, err)
 	}
 
-	overrides, warnings := provider.LoadUserModelsWithWarnings(path)
+	overrides, warnings := modelfiles.LoadUserModelsWithWarnings(path)
 	if len(warnings) != 0 {
 		t.Fatalf("scaffold produced warnings: %v", warnings)
 	}

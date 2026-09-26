@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"terva.sh/terva/packages/auth/assets"
 	"terva.sh/terva/packages/i18n"
-	"terva.sh/terva/packages/provider/auth/assets"
 )
 
 // CallbackResult is what an OAuth callback server returns once the

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -21,9 +22,9 @@ import (
 func seedHidden(t *testing.T, cfg config.Config) {
 	t.Helper()
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
-	provider.SetUserModels([]provider.Model{
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
+	modelreg.SetUserModels([]provider.Model{
 		{Provider: "ollama", ID: "tidy-away", MaxOutput: 8192},
 		{Provider: "ollama", ID: "kept", MaxOutput: 8192},
 	})
@@ -132,7 +133,7 @@ func TestHidingLeavesTheCatalogueIntact(t *testing.T) {
 		HiddenModels: []string{"ollama/tidy-away"},
 	})
 
-	if _, err := provider.FindModel("ollama", "tidy-away"); err != nil {
+	if _, err := modelreg.FindModel("ollama", "tidy-away"); err != nil {
 		t.Errorf("a hidden model must stay in the catalogue: %v", err)
 	}
 	r, err := Resolve(Args{Model: "tidy-away"}, false)

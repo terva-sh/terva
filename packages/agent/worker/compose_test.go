@@ -9,9 +9,9 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/filelock"
-	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -135,7 +135,7 @@ func pinWeakTier(t *testing.T, r *build.Resolved) {
 // this test exists.
 func TestEveryProviderWithATierTableStillResolvesAWeakRung(t *testing.T) {
 	seen, checked := map[string]bool{}, 0
-	for _, m := range provider.Active() {
+	for _, m := range modelreg.Active() {
 		if m.Provider == "" || seen[m.Provider] {
 			continue
 		}

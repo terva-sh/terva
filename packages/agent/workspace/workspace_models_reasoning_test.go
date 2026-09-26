@@ -11,6 +11,7 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -32,12 +33,12 @@ func modelsWithReasoning(t *testing.T, global string) map[string]ctrlproto.Model
 	}); err != nil {
 		t.Fatal(err)
 	}
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
 	// The catalog-side rows go into a BASE layer — what the baked-in catalog and
 	// /v1/models discovery fill — because the layer is what makes their
 	// DefaultReasoning terva's fallback rather than a choice someone made.
-	provider.SetLiveModels([]provider.Model{
+	modelreg.SetLiveModels([]provider.Model{
 		{
 			Provider: "workshop", ID: "catalog-default", ContextWindow: 4096, Reasoning: true,
 			DefaultReasoning: "medium",
@@ -50,7 +51,7 @@ func modelsWithReasoning(t *testing.T, global string) map[string]ctrlproto.Model
 	// not be the thing that creates it. Stamping it by hand tested the fixture
 	// and left the loader free to forget — which it did, for any model that
 	// exists only in models.json.
-	provider.SetUserModels([]provider.Model{
+	modelreg.SetUserModels([]provider.Model{
 		{
 			Provider: "workshop", ID: "operator-set", ContextWindow: 4096, Reasoning: true,
 			DefaultReasoning: "minimum",

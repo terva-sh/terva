@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"terva.sh/terva/packages/provider/auth"
+	"terva.sh/terva/packages/auth"
 )
 
 func stale() *auth.OAuthToken {

@@ -7,7 +7,8 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
-	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/agent/modelfiles"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -32,8 +33,8 @@ func TestModelsReportsAModelsJSONOnlyModelAsUserSourcedAndCustom(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
 
 	path := filepath.Join(testsupport.TempDir(t), "models.json")
 	body := `{"providers":{"workshop":{"models":[
@@ -42,11 +43,11 @@ func TestModelsReportsAModelsJSONOnlyModelAsUserSourcedAndCustom(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	overrides, warnings := provider.LoadUserModelsWithWarnings(path)
+	overrides, warnings := modelfiles.LoadUserModelsWithWarnings(path)
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected models.json warnings: %v", warnings)
 	}
-	provider.SetUserOverrides(overrides)
+	modelreg.SetUserOverrides(overrides)
 
 	w := &Workspace{ctx: context.Background(), diag: func(string) {}, sessions: map[string]*wsSession{}}
 	res, err := w.Models(context.Background(), "")

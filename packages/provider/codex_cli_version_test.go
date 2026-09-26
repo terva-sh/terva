@@ -73,24 +73,35 @@ func TestBaselineCodexCLIVersionIsATriple(t *testing.T) {
 	}
 }
 
-// Whatever the probe finds on the machine running the tests, the result must be
-// a dotted triple and never older than the compiled baseline.
-func TestEffectiveCodexCLIVersionNeverBelowBaseline(t *testing.T) {
-	got := effectiveCodexCLIVersion()
-	if !regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(got) {
-		t.Fatalf("effectiveCodexCLIVersion() = %q is not a dotted version triple", got)
+// The native user-agent claims the host's installed version only when it is
+// newer than the baseline, and the baseline when the host gives none.
+func TestTheCodexUserAgentClaimsTheInstalledVersionAboveTheFloor(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		installed func() string
+		want      string
+	}{
+		{"no host version", nil, codexCLIVersion},
+		{"not known yet", func() string { return "" }, codexCLIVersion},
+		{"older install", func() string { return "0.1.0" }, codexCLIVersion},
+		{"newer install", func() string { return "99.1.2" }, "99.1.2"},
+	} {
+		var opts []CodexOption
+		if c.installed != nil {
+			opts = append(opts, WithCodexCLIVersion(c.installed))
+		}
+		cl := NewOpenAICodexSource(StaticCredential("t"), "a", "", append(opts, WithCodexClientIdentity(CodexIdentityNative))...).(*codexClient)
+		if _, ua := cl.identityHeaders(); ua != "codex_cli_rs/"+c.want {
+			t.Errorf("%s: user-agent %q, want codex_cli_rs/%s", c.name, ua, c.want)
+		}
 	}
-	if versionTripleNewer(codexCLIVersion, got) {
-		t.Fatalf("effectiveCodexCLIVersion() = %q is older than the baseline %q", got, codexCLIVersion)
-	}
-	t.Logf("probe resolved %q (baseline %q)", got, codexCLIVersion)
 }
 
 // The user-agent must carry a version, because a bare "codex_cli_rs" is not
 // what the measured arm sent and a version-less client is a shape nobody has
 // observed the backend accept.
 func TestCodexNativeUserAgentCarriesAVersion(t *testing.T) {
-	ua := codexNativeUserAgent()
+	ua := (&codexClient{catalogRef: catalogRef{testReg}}).codexNativeUserAgent()
 	if !regexp.MustCompile(`^codex_cli_rs/\d+\.\d+\.\d+$`).MatchString(ua) {
 		t.Fatalf("codexNativeUserAgent() = %q, want codex_cli_rs/<triple>", ua)
 	}

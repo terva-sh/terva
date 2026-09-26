@@ -60,7 +60,6 @@ import (
 	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/core"
-	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -144,7 +143,7 @@ type Config struct {
 	// Supply one when the embedding has a human in it (a chat UI, a
 	// dashboard, a terminal of your own): the callback receives the tool
 	// name and a preview of the call and returns the decision.
-	Confirmer permission.Confirmer
+	Confirmer core.Confirmer
 
 	// Classifier screens the tool calls the user's rules say to ask about:
 	// one cheap model call decides, BEFORE Confirmer is consulted, whether
@@ -197,7 +196,7 @@ type Runtime struct {
 	provider   string
 	model      string
 	cwd        string
-	classifier permission.ClassifierMode
+	classifier core.ClassifierMode
 
 	// activeCancel is set while a Prompt is streaming.
 	activeCancel context.CancelFunc
@@ -271,14 +270,14 @@ func New(cfg Config) (*Runtime, error) {
 	// and the agent would run every tool unchecked, and a library has no
 	// stderr to warn on. Refusing to start is the only signal an embedder
 	// cannot miss. Yolo still works, because it asks for no rules.
-	var gate *permission.ConfirmGate
+	var gate *core.ConfirmGate
 	if !cfg.Yolo {
 		pol, _, perr := permissions.LoadPolicy(args.PermInputs())
 		if perr != nil {
 			return nil, fmt.Errorf("sdk: %w (repair the file, or set Config.Yolo only if this embedding should run every tool call unchecked)", perr)
 		}
 		if pol != nil {
-			gate = permission.NewPolicyGate(pol, cfg.Confirmer)
+			gate = core.NewPolicyGate(pol, cfg.Confirmer)
 			r.AdoptReadOnlySet(pol.ReadOnly)
 			// Screening, inheriting the user's setting when Config.Classifier
 			// is empty — the same rule Provider and Model follow, and the
@@ -328,7 +327,7 @@ func (r *Runtime) Model() string { r.mu.Lock(); defer r.mu.Unlock(); return r.mo
 func (r *Runtime) CWD() string { r.mu.Lock(); defer r.mu.Unlock(); return r.cwd }
 
 // ClassifierMode reports what authority a screening classifier holds over this
-// runtime's tool calls: permission.ClassifierOff, ClassifierScreen, or
+// runtime's tool calls: core.ClassifierOff, ClassifierScreen, or
 // ClassifierApprove.
 //
 // Worth reading at startup. Config.Classifier INHERITS from the user's
@@ -336,7 +335,7 @@ func (r *Runtime) CWD() string { r.mu.Lock(); defer r.mu.Unlock(); return r.cwd 
 // here — including `approve`, where a model answers yes on the user's behalf
 // and your Confirmer is never called. The SDK deliberately prints nothing
 // anywhere, so this accessor is the only thing that will tell you.
-func (r *Runtime) ClassifierMode() permission.ClassifierMode {
+func (r *Runtime) ClassifierMode() core.ClassifierMode {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.classifier

@@ -9,6 +9,7 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -27,9 +28,9 @@ func modelParamsWorkspace(t *testing.T) *Workspace {
 // ships rather than a fixture that cannot drift with it.
 func aModel(t *testing.T) provider.Model {
 	t.Helper()
-	m, err := provider.FindModel("anthropic", "")
+	m, err := modelreg.FindModel("anthropic", "")
 	if err != nil {
-		models := provider.ModelsForProvider("anthropic")
+		models := modelreg.ModelsForProvider("anthropic")
 		if len(models) == 0 {
 			t.Skip("no anthropic models in the catalog")
 		}

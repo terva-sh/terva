@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/modelfiles"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -21,8 +23,8 @@ func seedModelsJSON(t *testing.T, prov, id string) string {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	overrides, _ := provider.LoadUserModelsWithWarnings(path)
-	provider.SetUserOverrides(overrides)
+	overrides, _ := modelfiles.LoadUserModelsWithWarnings(path)
+	modelreg.SetUserOverrides(overrides)
 	return path
 }
 
@@ -61,8 +63,8 @@ func switched(fc *fakeCarrier) bool {
 // There is nothing to re-resolve TO, so the swap can only fail. Skip it, and
 // say what actually happened instead.
 func TestDeletingTheActiveCustomModelSkipsTheDoomedSwap(t *testing.T) {
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
 	path := seedModelsJSON(t, "acme", "invented")
 
 	i, fc := resetHarness(t, path, "acme", "invented")
@@ -84,8 +86,8 @@ func TestDeletingTheActiveCustomModelSkipsTheDoomedSwap(t *testing.T) {
 // The same delete on a model the session is NOT using needs none of that
 // wording, because nothing is left pointing at it.
 func TestDeletingANonActiveCustomModelKeepsThePlainMessage(t *testing.T) {
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
 	path := seedModelsJSON(t, "acme", "invented")
 
 	// The session is on something else entirely.
@@ -108,9 +110,9 @@ func TestDeletingANonActiveCustomModelKeepsThePlainMessage(t *testing.T) {
 // catalog row underneath it MUST still re-resolve: that is how the restored
 // context window and base URL reach the running session.
 func TestResettingTheActiveCatalogRowStillReResolves(t *testing.T) {
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
-	provider.RegisterExtraModel(provider.Model{
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
+	modelreg.RegisterExtraModel(provider.Model{
 		Provider: "acme", ID: "shipped", ContextWindow: 4000, Source: "catalog",
 	})
 	path := seedModelsJSON(t, "acme", "shipped")

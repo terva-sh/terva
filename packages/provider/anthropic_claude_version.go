@@ -1,57 +1,41 @@
 package provider
 
 import (
-	"context"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Anthropic version-gates new models on the client version the OAuth path
 // claims: a request from a version below a model's floor fails with http 400
 // claude_code_version_too_old. The compiled claudeCodeVersion baseline rots
-// between releases, so when a real Claude Code install is present on this
-// machine we claim its version instead, as long as it is newer than the
-// baseline. That value is real by construction (it is the exact client this
-// machine plausibly presents), and its refresh mechanism is `claude update`,
-// the very command Anthropic's error message tells people to run.
+// between releases, so when the host knows of a real Claude Code install on
+// this machine (WithClaudeCodeVersion) we claim its version instead, as long as
+// it is newer than the baseline. That value is real by construction (it is the
+// exact client this machine plausibly presents), and its refresh mechanism is
+// `claude update`, the very command Anthropic's error message tells people to
+// run.
 //
-// The first caller starts a background refresh and receives the baseline.
-// Later callers receive the cached version, with the baseline as a floor.
-// The shared disk cache limits probes across processes to once per ten minutes.
-var effectiveClaudeCodeVersion = newInstalledVersion("claude", claudeCodeVersion, runClaudeVersionProbe, pickClaudeCodeVersion, parseClaudeVersion).get
+// Finding the install means running it, which the wire does not do (decision
+// 0021, rule 5). terva's harness probes it in packages/agent/cliversion.
 
-// claudeVersionProbeTimeout bounds the background subprocess and the time
-// it holds the shared cache lock.
-const claudeVersionProbeTimeout = 3 * time.Second
-
-// runClaudeVersionProbe executes the locally installed Claude Code CLI and
-// returns its raw --version output. This runs a binary found on PATH — the
-// same class of risk as terva running git. PATH is not project-controlled,
-// and the output is only ever strictly parsed for a dotted version triple.
-func runClaudeVersionProbe() (string, error) {
-	path, err := exec.LookPath("claude")
-	if err != nil {
-		return "", err
+// claimedClaudeCodeVersion is the version the OAuth user-agent claims: the
+// host's installed version when it is newer than the baseline, the baseline
+// otherwise.
+func (c *anthropicClient) claimedClaudeCodeVersion() string {
+	if c.host.claudeVersion == nil {
+		return claudeCodeVersion
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), claudeVersionProbeTimeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "--version").Output()
-	if err != nil {
-		return "", err
-	}
-	return string(out), nil
+	return pickClaudeCodeVersion(c.host.claudeVersion())
 }
 
 // claudeVersionRE matches a dotted version triple, the shape inside Claude
-// Code's "2.1.267 (Claude Code)" output. Anything that does not contain one
-// is discarded rather than guessed at.
+// Code's "2.1.267 (Claude Code)" output, which a host may pass as it is.
+// Anything that does not contain one is discarded rather than guessed at.
 var claudeVersionRE = regexp.MustCompile(`\b(\d+)\.(\d+)\.(\d+)\b`)
 
-// parseClaudeVersion extracts the first dotted version triple from probe
-// output. The bool reports whether one was found.
+// parseClaudeVersion extracts the first dotted version triple from what the
+// host reported. The bool reports whether one was found.
 func parseClaudeVersion(out string) (string, bool) {
 	m := claudeVersionRE.FindString(strings.TrimSpace(out))
 	if m == "" {
@@ -60,9 +44,9 @@ func parseClaudeVersion(out string) (string, bool) {
 	return m, true
 }
 
-// pickClaudeCodeVersion decides what version to claim given raw probe
-// output: the probed version when it parses and is newer than the compiled
-// baseline, the baseline otherwise.
+// pickClaudeCodeVersion decides what version to claim given the host's
+// installed version: that version when it parses and is newer than the
+// compiled baseline, the baseline otherwise.
 func pickClaudeCodeVersion(probeOutput string) string {
 	probed, ok := parseClaudeVersion(probeOutput)
 	if !ok {

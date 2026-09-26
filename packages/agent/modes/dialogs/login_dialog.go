@@ -6,9 +6,9 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
-	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/tui"
 )
 

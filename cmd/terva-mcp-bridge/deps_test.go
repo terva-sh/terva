@@ -73,8 +73,11 @@ func TestTheBridgeStillSharesItsLeafPackages(t *testing.T) {
 	for _, want := range []string{
 		// The bounded frame reader. The bridge reads wire frames from an
 		// untrusted server; re-implementing THAT would re-introduce the
-		// unbounded-line hazard lineframe exists to remove.
-		"terva.sh/terva/packages/lineframe",
+		// unbounded-line hazard lineframe exists to remove. It sits under
+		// the provider tree because the wire uses it (decision 0021 rule 6),
+		// and it imports only the standard library, so sharing it does not
+		// pull packages/provider in; the forbidden check above holds that.
+		"terva.sh/terva/packages/provider/lineframe",
 		// Home resolution, shared because a second copy is what silently wrote
 		// OAuth tokens to a directory terva does not read.
 		"terva.sh/terva/packages/envcompat",

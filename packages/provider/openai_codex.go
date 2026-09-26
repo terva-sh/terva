@@ -370,7 +370,7 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 	}
 	if m.Reasoning {
 		eff := EffectiveReasoning(req.Reasoning, req.ReasoningSet, m)
-		if effort := openAICodexReasoningEffort(eff, req.Model); effort != "" {
+		if effort := OpenAICodexReasoningEffort(eff, req.Model); effort != "" {
 			// Summary rides the same block, so it is requested only where
 			// there is reasoning to summarize: a model without reasoning, or
 			// one whose effort resolves to off, sends no reasoning config at
@@ -422,7 +422,7 @@ func (c *codexClient) buildRequest(req Request) (*codexRequest, error) {
 	// Same guards as the chat-completions builder: merge any same-role adjacency
 	// an edit/delete left behind, and keep a card's seeded leading-assistant
 	// greeting valid for backends that require user-first.
-	req.Messages = ensureLeadingUserTurn(mergeAdjacentSameRole(req.Messages))
+	req.Messages = EnsureLeadingUserTurn(MergeAdjacentSameRole(req.Messages))
 
 	// Native image editing: the most-recent EditHistory assistant images are
 	// replayed as image_generation_call input items (with their bytes) so the
@@ -1017,7 +1017,7 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 					finalErr = stream.Err()
 				default:
 					stop = StopError
-					finalErr = newStreamDeathError("openai-codex", "response.completed")
+					finalErr = NewStreamDeathError("openai-codex", "response.completed")
 				}
 				sendDone()
 				return
@@ -1206,7 +1206,7 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 				}
 				_ = json.Unmarshal([]byte(ev.Data), &p)
 				// Usage's three prompt fields are DISJOINT — PromptTokens sums
-				// them and computeCost prices each at its own rate — so every
+				// them and ComputeCost prices each at its own rate — so every
 				// detail the wire breaks out has to come off the total.
 				//
 				// cached_tokens is a documented subset of input_tokens. Whether

@@ -13,7 +13,7 @@ import "testing"
 // the shape that got through, and no test described it.
 func TestBuildRequest_ThinkingDropsTemperature(t *testing.T) {
 	withCatalogState(t)
-	ResetCatalogLayers() // resolve the model from the baked-in catalog
+	testReg.Reset() // resolve the model from the baked-in catalog
 
 	// claude-haiku-4-5 is the model that produced the 400. It is the built-in
 	// weak rung for anthropic, at thinking high, which is exactly what the tier

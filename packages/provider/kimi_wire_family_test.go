@@ -20,8 +20,8 @@ import (
 func kimiReasoningModel(t *testing.T) Model {
 	t.Helper()
 	withCatalogState(t)
-	ResetCatalogLayers()
-	m, err := FindModel("kimi", "k3")
+	testReg.Reset()
+	m, err := testReg.FindModel("kimi", "k3")
 	if err != nil {
 		t.Fatalf("kimi k3 is not in the catalog: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestKimiReasoningEffectMatchesTheRequestItSends(t *testing.T) {
 				t.Fatalf("reasoning reported unsupported for a reasoning model at %q", level)
 			}
 
-			wire, err := (&anthropicClient{name: "kimi"}).buildRequest(Request{
+			wire, err := (&anthropicClient{catalogRef: catalogRef{testReg}, name: "kimi"}).buildRequest(Request{
 				Model:        m.ID,
 				Reasoning:    level,
 				ReasoningSet: true,
@@ -76,7 +76,7 @@ func TestKimiReasoningEffectMatchesTheRequestItSends(t *testing.T) {
 // this cannot pass on some third wrong body.
 func TestKimiWireDumpIsAnthropicShaped(t *testing.T) {
 	withCatalogState(t)
-	ResetCatalogLayers()
+	testReg.Reset()
 
 	body, field, err := wireBody("kimi", "apikey", Request{
 		Model:    "k3",
@@ -102,7 +102,7 @@ func TestKimiWireDumpIsAnthropicShaped(t *testing.T) {
 // pointing the other way.
 func TestKimiWireDumpIgnoresOAuthFraming(t *testing.T) {
 	withCatalogState(t)
-	ResetCatalogLayers()
+	testReg.Reset()
 
 	req := Request{
 		Model:    "k3",

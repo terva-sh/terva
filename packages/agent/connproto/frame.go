@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"io"
 
-	"terva.sh/terva/packages/lineframe"
+	"terva.sh/terva/packages/provider/lineframe"
 )
 
 // MaxFrameBytes is the largest single wire frame the read side accepts: the

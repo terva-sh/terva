@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/egress"
-	"terva.sh/terva/packages/lineframe"
+	"terva.sh/terva/packages/provider/lineframe"
 )
 
 // This file carries the Streamable-HTTP MCP transport (spec 2025-03-26, single

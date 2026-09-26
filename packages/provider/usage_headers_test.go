@@ -66,7 +66,7 @@ func claudeViaChatCompletionsHeaders() http.Header {
 // forwards x-codex-* and terva read only x-ratelimit-*, so /usage said the
 // endpoint reported no limits while a 17%-spent weekly window rode every turn.
 func TestOpenAIClientReadsCodexHeadersForwardedByAGateway(t *testing.T) {
-	c := &openaiClient{name: "cpa"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "cpa"}
 	c.recordUsageHeaders(codexViaChatCompletionsHeaders())
 
 	snap, ok := c.UsageSnapshot()
@@ -94,7 +94,7 @@ func TestOpenAIClientReadsCodexHeadersForwardedByAGateway(t *testing.T) {
 
 // Same wire, other vendor: the model picked Claude, so the unified set arrived.
 func TestOpenAIClientReadsAnthropicUnifiedHeadersForwardedByAGateway(t *testing.T) {
-	c := &openaiClient{name: "cpa"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "cpa"}
 	c.recordUsageHeaders(claudeViaChatCompletionsHeaders())
 
 	snap, ok := c.UsageSnapshot()

@@ -25,7 +25,7 @@ func usageFromStream(t *testing.T, run func(*http.Response, chan Event)) Usage {
 }
 
 func TestCodexReportsReasoningTokens(t *testing.T) {
-	c := &codexClient{}
+	c := &codexClient{catalogRef: catalogRef{testReg}}
 	frame := `data: {"type":"response.completed","response":{"status":"completed",` +
 		`"usage":{"input_tokens":1000,"output_tokens":700,` +
 		`"output_tokens_details":{"reasoning_tokens":512}}}}` + "\n\n"
@@ -49,7 +49,7 @@ func TestCodexReportsReasoningTokens(t *testing.T) {
 // A response with no details block must stay UNKNOWN rather than reporting a
 // measured zero — the distinction the flag exists to carry.
 func TestCodexWithoutDetailsStaysUnknown(t *testing.T) {
-	c := &codexClient{}
+	c := &codexClient{catalogRef: catalogRef{testReg}}
 	frame := `data: {"type":"response.completed","response":{"status":"completed",` +
 		`"usage":{"input_tokens":1000,"output_tokens":700}}}` + "\n\n"
 
@@ -69,7 +69,7 @@ func TestCodexWithoutDetailsStaysUnknown(t *testing.T) {
 // the split existed on the wire and was thrown away. It must stay folded in —
 // it is billed at the output rate — while also being reported.
 func TestGeminiReportsThoughtsAsReasoningTokens(t *testing.T) {
-	c := &geminiClient{}
+	c := &geminiClient{catalogRef: catalogRef{testReg}}
 	frame := `data: {"candidates":[{"finishReason":"STOP"}],` +
 		`"usageMetadata":{"promptTokenCount":900,"candidatesTokenCount":200,` +
 		`"thoughtsTokenCount":300,"totalTokenCount":1400}}` + "\n\n"
@@ -92,7 +92,7 @@ func TestGeminiReportsThoughtsAsReasoningTokens(t *testing.T) {
 }
 
 func TestOpenAICompatReportsReasoningTokens(t *testing.T) {
-	c := &openaiClient{}
+	c := &openaiClient{catalogRef: catalogRef{testReg}}
 	frame := `data: {"choices":[{"delta":{},"finish_reason":"stop"}],` +
 		`"usage":{"prompt_tokens":1000,"completion_tokens":700,` +
 		`"completion_tokens_details":{"reasoning_tokens":450}}}` + "\n\n" +
@@ -113,7 +113,7 @@ func TestOpenAICompatReportsReasoningTokens(t *testing.T) {
 // Most OpenAI-compatible gateways omit the details block entirely. That is an
 // absence of information, not a zero.
 func TestOpenAICompatWithoutDetailsStaysUnknown(t *testing.T) {
-	c := &openaiClient{}
+	c := &openaiClient{catalogRef: catalogRef{testReg}}
 	frame := `data: {"choices":[{"delta":{},"finish_reason":"stop"}],` +
 		`"usage":{"prompt_tokens":1000,"completion_tokens":700}}` + "\n\n" +
 		"data: [DONE]\n\n"
@@ -130,7 +130,7 @@ func TestOpenAICompatWithoutDetailsStaysUnknown(t *testing.T) {
 // Anthropic is the case the known-flag exists for: thinking rides inside
 // output_tokens with no separate count, so its usage must never claim to know.
 func TestAnthropicNeverClaimsToKnowReasoningTokens(t *testing.T) {
-	c := &anthropicClient{}
+	c := &anthropicClient{catalogRef: catalogRef{testReg}}
 	frame := "event: message_start\n" +
 		`data: {"type":"message_start","message":{"usage":{"input_tokens":1000,"output_tokens":1}}}` + "\n\n" +
 		"event: message_delta\n" +

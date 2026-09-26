@@ -2,17 +2,23 @@ package provider
 
 import "testing"
 
-// withCatalogState snapshots all catalog layers and restores them when
+// testReg is the registry this package's tests write layers into and read
+// back. The wire holds no registry of its own, so a test that means a client
+// to see these layers passes testReg with WithCatalog.
+var testReg = NewRegistry()
+
+// withCatalogState snapshots all of testReg's layers and restores them when
 // the test ends, so tests can install synthetic layers without
 // leaking into each other.
 func withCatalogState(t *testing.T) {
 	t.Helper()
-	activeMu.Lock()
-	prevLive, prevExtra, prevUser, prevMerged := layerLive, layerExtra, layerUser, merged
-	activeMu.Unlock()
+	r := testReg
+	r.mu.Lock()
+	prevLive, prevExtra, prevUser, prevMerged := r.live, r.extra, r.user, r.merged
+	r.mu.Unlock()
 	t.Cleanup(func() {
-		activeMu.Lock()
-		layerLive, layerExtra, layerUser, merged = prevLive, prevExtra, prevUser, prevMerged
-		activeMu.Unlock()
+		r.mu.Lock()
+		r.live, r.extra, r.user, r.merged = prevLive, prevExtra, prevUser, prevMerged
+		r.mu.Unlock()
 	})
 }

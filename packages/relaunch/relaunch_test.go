@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"terva.sh/terva/packages/buildinfo"
+	"terva.sh/terva/packages/provider/buildinfo"
 )
 
 // withStubbedExec swaps the exec/timer indirections for synchronous test doubles

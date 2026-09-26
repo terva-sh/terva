@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -17,7 +18,7 @@ import (
 func TestEveryLadderKeyResolves(t *testing.T) {
 	tbl := newLadderTable()
 	keyed, bare := 0, 0
-	for _, m := range provider.Active() {
+	for _, m := range modelreg.Active() {
 		k := tbl.keyFor(m)
 		if k == "" {
 			bare++
@@ -28,7 +29,7 @@ func TestEveryLadderKeyResolves(t *testing.T) {
 	table := tbl.table()
 	// Re-walk after the table is complete: keyFor interns as it goes, so a key
 	// handed out early must still resolve once every model has been seen.
-	for _, m := range provider.Active() {
+	for _, m := range modelreg.Active() {
 		k := tbl.keyFor(m)
 		if k == "" {
 			continue
@@ -57,7 +58,7 @@ func TestEveryLadderKeyResolves(t *testing.T) {
 func TestLaddersActuallyDeduplicate(t *testing.T) {
 	tbl := newLadderTable()
 	keyed := 0
-	for _, m := range provider.Active() {
+	for _, m := range modelreg.Active() {
 		if tbl.keyFor(m) != "" {
 			keyed++
 		}
@@ -80,11 +81,11 @@ func TestLaddersActuallyDeduplicate(t *testing.T) {
 // must not — the failure that would merge Codex's "high" with Gemini's "HIGH"
 // and describe one model with the other's wire values.
 func TestLadderIdentityTracksTheWireNotTheModel(t *testing.T) {
-	codex, err := provider.FindModel("openai-codex", "gpt-5.6-sol")
+	codex, err := modelreg.FindModel("openai-codex", "gpt-5.6-sol")
 	if err != nil {
 		t.Skipf("fixture missing: %v", err)
 	}
-	gem, err := provider.FindModel("google", "gemini-3-pro-preview")
+	gem, err := modelreg.FindModel("google", "gemini-3-pro-preview")
 	if err != nil {
 		t.Skipf("fixture missing: %v", err)
 	}
@@ -107,7 +108,7 @@ func TestLadderIdentityTracksTheWireNotTheModel(t *testing.T) {
 // say something different and wrong: that the user has switched thinking off.
 func TestModelsWithNoReasoningControlGetNoKey(t *testing.T) {
 	var subject provider.Model
-	for _, m := range provider.Active() {
+	for _, m := range modelreg.Active() {
 		if m.Reasoning && !provider.ReasoningEffectFor(m, "high").Supported {
 			subject = m
 			break
@@ -125,7 +126,7 @@ func TestModelsWithNoReasoningControlGetNoKey(t *testing.T) {
 // The wire rows must carry the CLAMPED budget the builder sends, not the
 // ladder constant — the same bug the TUI dialog had, arriving by a new route.
 func TestWireRowsCarryTheClampedBudget(t *testing.T) {
-	m, err := provider.FindModel("anthropic", "claude-opus-4-1-20250805")
+	m, err := modelreg.FindModel("anthropic", "claude-opus-4-1-20250805")
 	if err != nil {
 		t.Skipf("fixture missing: %v", err)
 	}

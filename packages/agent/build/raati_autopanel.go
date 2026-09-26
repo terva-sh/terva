@@ -35,8 +35,8 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/raati"
 	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/i18n"
-	"terva.sh/terva/packages/provider/auth"
 )
 
 // AutoPanelCandidate is one provider the derivation considered, and what

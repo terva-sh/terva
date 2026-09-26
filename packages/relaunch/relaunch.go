@@ -23,7 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"terva.sh/terva/packages/buildinfo"
+	"terva.sh/terva/packages/provider/buildinfo"
 )
 
 // TERVA_RELAUNCH_* vars carry the outgoing image's handoff (SetHandoff)

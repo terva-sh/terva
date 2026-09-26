@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"terva.sh/terva/packages/lineframe"
 	"terva.sh/terva/packages/privfs"
+	"terva.sh/terva/packages/provider/lineframe"
 )
 
 // InboxMsg is one supervisor→agent control message. The wire form is

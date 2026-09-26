@@ -189,8 +189,8 @@ func (o AnthropicCompatOptions) headers() map[string]string {
 // NewAnthropicCompatOpts builds an Anthropic-Messages client for a third-party
 // or operator-run endpoint, identifying as `name`.
 //
-// It is the Anthropic-compatible client plus the operator's wire settings.
-// The built-in endpoints keep a constructor without them: minimax, fireworks and vercel-ai-gateway are
+// It is NewAnthropicCompat plus the operator's wire settings. The existing
+// constructor stays as it is: minimax, fireworks and vercel-ai-gateway are
 // endpoints terva itself knows the shape of, and they have no operator to ask.
 func NewAnthropicCompatOpts(name, apiKey, baseURL string, o AnthropicCompatOptions, opts ...ClientOption) Client {
 	if baseURL == "" {

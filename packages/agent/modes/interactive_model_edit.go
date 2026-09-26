@@ -5,6 +5,8 @@ package modes
 // re-resolve the active model when it's the one that changed.
 
 import (
+	"terva.sh/terva/packages/agent/modelfiles"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
@@ -16,7 +18,7 @@ func (i *Interactive) openModelEdit(prov, modelID string) {
 	if i.modelEditDialog == nil {
 		return
 	}
-	m, err := provider.FindModel(prov, modelID)
+	m, err := modelreg.FindModel(prov, modelID)
 	if err != nil {
 		i.setStatusErr(err.Error())
 		return
@@ -24,7 +26,7 @@ func (i *Interactive) openModelEdit(prov, modelID string) {
 	var existing provider.UserModel
 	has := false
 	if path := i.cfg.UserModelsPath; path != "" {
-		if um, ok, err := provider.FindUserModel(path, prov, modelID); err == nil {
+		if um, ok, err := modelfiles.FindUserModel(path, prov, modelID); err == nil {
 			existing, has = um, ok
 		} else {
 			i.setStatusErr(i18n.T("read models.json: %s", err))
@@ -44,7 +46,7 @@ func (i *Interactive) applyModelEdit(prov, modelID string, entry provider.UserMo
 		i.setStatusErr(i18n.T("models.json path not configured"))
 		return
 	}
-	if err := provider.UpsertUserModel(path, prov, entry); err != nil {
+	if err := modelfiles.UpsertUserModel(path, prov, entry); err != nil {
 		i.setStatusErr(i18n.T("save models.json: %s", err))
 		return
 	}
@@ -68,10 +70,10 @@ func (i *Interactive) applyModelReset(prov, modelID string) {
 	// nothing left to ask: FindModel fails and the answer defaults to the wrong
 	// half of the message below.
 	synthetic := false
-	if m, ferr := provider.FindModel(prov, modelID); ferr == nil {
+	if m, ferr := modelreg.FindModel(prov, modelID); ferr == nil {
 		synthetic = m.Synthetic
 	}
-	removed, err := provider.RemoveUserModel(path, prov, modelID)
+	removed, err := modelfiles.RemoveUserModel(path, prov, modelID)
 	if err != nil {
 		i.setStatusErr(i18n.T("update models.json: %s", err))
 		return
@@ -114,8 +116,8 @@ func (i *Interactive) applyModelReset(prov, modelID string) {
 // writes well-formed entries, and printing to stderr mid-TUI would
 // corrupt the screen.
 func (i *Interactive) reapplyUserModels() {
-	overrides, _ := provider.LoadUserModelsWithWarnings(i.cfg.UserModelsPath)
-	provider.SetUserOverrides(overrides)
+	overrides, _ := modelfiles.LoadUserModelsWithWarnings(i.cfg.UserModelsPath)
+	modelreg.SetUserOverrides(overrides)
 }
 
 // refreshActiveModel re-resolves the running agent's model when the

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"terva.sh/terva/packages/lineframe"
+	"terva.sh/terva/packages/provider/lineframe"
 )
 
 // readSSE used to be a raw bufio.Scanner whose Err() was never read. The

@@ -3,6 +3,7 @@ package dialogs
 import (
 	"strings"
 
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
@@ -47,7 +48,7 @@ func (d *RescueDialog) Open(current string, loggedInProviders []string, failedPr
 		provSet[p] = true
 	}
 	var filtered []provider.Model
-	for _, m := range provider.Active() {
+	for _, m := range modelreg.Active() {
 		if !provSet[m.Provider] {
 			continue
 		}

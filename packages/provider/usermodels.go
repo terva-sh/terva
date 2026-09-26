@@ -186,9 +186,9 @@ func ParseUserModelsWithWarnings(data []byte) ([]UserOverride, []string) {
 			// goes through the same door the editor writes through. Say so
 			// when the file loses characters, or the operator sees a name
 			// they didn't type and has nothing to go on.
-			name := sanitizeDisplayName(um.Name)
+			name := SanitizeDisplayName(um.Name)
 			if name != um.Name {
-				warnings = append(warnings, fmt.Sprintf("models.json: %s/%s name was adjusted to %q (control characters and line breaks are not renderable, and names are capped at %d characters)", normalized, um.ID, name, maxDisplayNameRunes))
+				warnings = append(warnings, fmt.Sprintf("models.json: %s/%s name was adjusted to %q (control characters and line breaks are not renderable, and names are capped at %d characters)", normalized, um.ID, name, MaxDisplayNameRunes))
 			}
 			m := Model{
 				Provider:             normalized,
@@ -272,14 +272,14 @@ func userCaps(um UserModel) (caps map[Capability]bool, reasoning *bool, warnings
 		return nil, nil, nil
 	}
 	known := map[Capability]bool{}
-	for _, c := range knownCapabilities() {
+	for _, c := range KnownCapabilities() {
 		known[c] = true
 	}
 	caps = map[Capability]bool{}
 	for k, v := range um.Capabilities {
 		c := Capability(k)
 		if !known[c] {
-			warnings = append(warnings, fmt.Sprintf("unknown capability %q (kept; this terva understands: %v)", k, knownCapabilities()))
+			warnings = append(warnings, fmt.Sprintf("unknown capability %q (kept; this terva understands: %v)", k, KnownCapabilities()))
 		}
 		caps[c] = v
 	}

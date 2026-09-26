@@ -13,6 +13,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -204,8 +205,8 @@ func TestEnsureEndpointModelsWarmsAColdCatalog(t *testing.T) {
 	defer srv.Close()
 
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
 
 	ep := config.EndpointConfig{BaseURL: srv.URL + "/v1"}
 	if err := config.SaveConfig(config.Config{
@@ -216,7 +217,7 @@ func TestEnsureEndpointModelsWarmsAColdCatalog(t *testing.T) {
 
 	EnsureEndpointModels()
 
-	models := provider.ModelsForProvider("coldbox")
+	models := modelreg.ModelsForProvider("coldbox")
 	if len(models) != 1 {
 		t.Fatalf("catalog has %d models for the endpoint, want 1", len(models))
 	}
@@ -239,8 +240,8 @@ func TestEnsureEndpointModelsWarmsAColdCatalog(t *testing.T) {
 // and must not cost the whole discovery timeout on every launch.
 func TestEnsureEndpointModelsToleratesADeadServer(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
 
 	if err := config.SaveConfig(config.Config{
 		Endpoints: map[string]config.EndpointConfig{
@@ -257,7 +258,7 @@ func TestEnsureEndpointModelsToleratesADeadServer(t *testing.T) {
 	case <-time.After(endpointWarmupTimeout + 2*time.Second):
 		t.Fatal("the warm-up outlived its own deadline; startup would hang on an unreachable server")
 	}
-	if got := len(provider.ModelsForProvider("deadbox")); got != 0 {
+	if got := len(modelreg.ModelsForProvider("deadbox")); got != 0 {
 		t.Errorf("invented %d models for a server that answered nothing", got)
 	}
 }

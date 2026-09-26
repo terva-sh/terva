@@ -100,7 +100,7 @@ func TestRateLimitDisabled(t *testing.T) {
 // End-to-end on openaiClient: recording headers populates UsageSnapshot, and
 // ClientUsage surfaces it via the UsageReporter contract.
 func TestOpenAIClientRecordsRateLimit(t *testing.T) {
-	c := &openaiClient{name: "groq"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "groq"}
 	if _, ok := c.UsageSnapshot(); ok {
 		t.Error("no usage before any response")
 	}

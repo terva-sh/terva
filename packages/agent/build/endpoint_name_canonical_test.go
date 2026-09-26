@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -18,8 +19,8 @@ import (
 // operator to a different provider — with discovery still working, so the
 // symptom read as "the model picker will not keep my choice".
 func TestRegisteredEndpointIDIsCanonical(t *testing.T) {
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
 
 	// Spellings an operator can actually type into the login form.
 	for _, name := range []string{"NeoT", "  NeoT  ", "NEOT", "neot"} {
@@ -81,8 +82,8 @@ func TestEveryEndpointInTheRegistryIsCanonical(t *testing.T) {
 // The end-to-end shape of the reported bug: a mixed-case endpoint with a
 // discovered model must be selectable through the id Resolve actually uses.
 func TestMixedCaseEndpointIsReachableAfterCanonicalisation(t *testing.T) {
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
 
 	const typed = "NeoT"
 	if err := RegisterOrReplaceEndpoint(typed, config.EndpointConfig{
@@ -93,7 +94,7 @@ func TestMixedCaseEndpointIsReachableAfterCanonicalisation(t *testing.T) {
 	t.Cleanup(func() { UnregisterEndpoint(CanonicalEndpointID(typed)) })
 
 	// Discovery files models under the id the registry holds.
-	provider.RegisterExtraModel(provider.Model{
+	modelreg.RegisterExtraModel(provider.Model{
 		Provider: CanonicalEndpointID(typed), ID: "qwen3.8-27b", DisplayName: "qwen3.8-27b",
 		ContextWindow: 32768, MaxOutput: 4096,
 	})
@@ -107,11 +108,11 @@ func TestMixedCaseEndpointIsReachableAfterCanonicalisation(t *testing.T) {
 	if got := EndpointDefaultModel(resolved); got != "qwen3.8-27b" {
 		t.Errorf("EndpointDefaultModel(%q) = %q, want qwen3.8-27b", resolved, got)
 	}
-	if _, err := provider.FindModel(resolved, "qwen3.8-27b"); err != nil {
+	if _, err := modelreg.FindModel(resolved, "qwen3.8-27b"); err != nil {
 		t.Errorf("FindModel(%q, qwen3.8-27b): %v", resolved, err)
 	}
 	// The dots in the model id are not the bug and must not become one.
-	if _, err := provider.FindModel(resolved, "qwen3-8-27b"); err == nil {
+	if _, err := modelreg.FindModel(resolved, "qwen3-8-27b"); err == nil {
 		t.Error("a dash-for-dot spelling resolved — model ids must be stored verbatim")
 	}
 }

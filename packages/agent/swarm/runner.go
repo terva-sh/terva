@@ -12,9 +12,9 @@ import (
 
 	"terva.sh/terva/packages/agent/procenv"
 	"terva.sh/terva/packages/core"
-	"terva.sh/terva/packages/lineframe"
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/provider/lineframe"
 )
 
 // execRunner spawns `terva --swarm-agent <inbox> --session <path>` in

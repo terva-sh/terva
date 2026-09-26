@@ -62,8 +62,17 @@ from importing anything else of terva's.
 **What it costs.** Every choice terva's harness makes is now yours to make:
 where credentials come from, what the prompt holds, which tools exist and what
 may run. The API is not stable yet: until the engine's stable packages are
-drawn, a minor release may change anything you use. One piece is still
-missing: a model catalog you pass rather than the wire's global one.
+drawn, a minor release may change anything you use. The wire holds no model
+catalog. Build one (`provider.NewRegistry`) and pass it to the agent with
+`Agent.SetCatalog` and to its client with `provider.WithCatalog`. An agent or
+client given none knows the built-in models and nothing else.
+
+A client sends its requests through `http.DefaultTransport`. To route them
+through your own proxy, transport or test server, give the client your HTTP
+client with `provider.WithHTTPClient`. For GitHub Copilot and for Vertex, that
+also carries the exchange that turns your credential into a short-lived token.
+Each client keeps its own token cache. The one request it does not carry is the
+usage poll of the OpenRouter, DeepSeek and Kimi clients.
 
 **Pick it when** terva's conventions are not the ones you want: you want to
 decide what the model sees on each request, keep transcripts in your own store,

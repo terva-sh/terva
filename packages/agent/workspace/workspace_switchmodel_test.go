@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/build"
+	"terva.sh/terva/packages/agent/internal/coretest"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
@@ -55,11 +57,11 @@ func TestSwitchReusesClient(t *testing.T) {
 // agent and record the new session model, with no client rebuild (which would
 // need credentials).
 func TestSwitchModelSameEndpointSwapsInPlace(t *testing.T) {
-	provider.SetUserModels([]provider.Model{
+	modelreg.SetUserModels([]provider.Model{
 		{Provider: "openai-compatible", ID: "same-a", DisplayName: "A", ContextWindow: 8192, MaxOutput: 4096, BaseURL: "http://same.local/v1", Source: "user"},
 		{Provider: "openai-compatible", ID: "same-b", DisplayName: "B", ContextWindow: 8192, MaxOutput: 4096, BaseURL: "http://same.local/v1", Source: "user"},
 	})
-	t.Cleanup(func() { provider.SetUserModels(nil) })
+	t.Cleanup(func() { modelreg.SetUserModels(nil) })
 
 	// switchModel persists the session meta and broadcasts session_updated, so
 	// the session needs a real transcript file behind it.
@@ -73,14 +75,14 @@ func TestSwitchModelSameEndpointSwapsInPlace(t *testing.T) {
 	s := newTestSession()
 	s.ws = w
 	s.sess = sess
-	s.agent = &core.Agent{Model: "same-a"}
+	s.agent = coretest.NewAgent(nil, "same-a", "", nil)
 	s.setModel("openai-compatible", "same-a", false)
 
 	if err := w.switchModel(s, "openai-compatible", "same-b", false); err != nil {
 		t.Fatalf("switchModel: %v", err)
 	}
-	if s.agent.Model != "same-b" {
-		t.Errorf("in-place agent Model = %q, want same-b", s.agent.Model)
+	if s.agent.Model() != "same-b" {
+		t.Errorf("in-place agent Model = %q, want same-b", s.agent.Model())
 	}
 	if prov, model := s.currentModel(); prov != "openai-compatible" || model != "same-b" {
 		t.Errorf("session model = %s/%s, want openai-compatible/same-b", prov, model)
@@ -94,13 +96,13 @@ func TestSwitchModelSameEndpointSwapsInPlace(t *testing.T) {
 // ids. A global first-match would silently hop providers — usually onto one
 // with no credential, failing a switch the user meant as "same backend".
 func TestSwitchModelBareIDPrefersCurrentProvider(t *testing.T) {
-	provider.SetUserModels([]provider.Model{
+	modelreg.SetUserModels([]provider.Model{
 		// The foreign twin comes FIRST so a global first-match would pick it.
 		{Provider: "openai", ID: "dup-model", DisplayName: "Dup (api)", ContextWindow: 8192, MaxOutput: 4096, BaseURL: "http://other.local/v1", Source: "user"},
 		{Provider: "openai-compatible", ID: "dup-model", DisplayName: "Dup", ContextWindow: 8192, MaxOutput: 4096, BaseURL: "http://same.local/v1", Source: "user"},
 		{Provider: "openai-compatible", ID: "cur-model", DisplayName: "Cur", ContextWindow: 8192, MaxOutput: 4096, BaseURL: "http://same.local/v1", Source: "user"},
 	})
-	t.Cleanup(func() { provider.SetUserModels(nil) })
+	t.Cleanup(func() { modelreg.SetUserModels(nil) })
 
 	sess, err := session.NewSessionAtPath(filepath.Join(testsupport.TempDir(t), "s.jsonl"), "/ws", "openai-compatible", "cur-model", "0.0.0")
 	if err != nil {
@@ -112,7 +114,7 @@ func TestSwitchModelBareIDPrefersCurrentProvider(t *testing.T) {
 	s := newTestSession()
 	s.ws = w
 	s.sess = sess
-	s.agent = &core.Agent{Model: "cur-model"}
+	s.agent = coretest.NewAgent(nil, "cur-model", "", nil)
 	s.setModel("openai-compatible", "cur-model", false)
 
 	// Same endpoint under the current provider, so the preferred resolution
@@ -130,11 +132,11 @@ func TestSwitchModelBareIDPrefersCurrentProvider(t *testing.T) {
 // inherited provider/model, or a sub-agent spawned afterward follows the
 // stale pre-swap route (and resolves tiers against the wrong model).
 func TestSwitchModelRefreshesHostRoutedTool(t *testing.T) {
-	provider.SetUserModels([]provider.Model{
+	modelreg.SetUserModels([]provider.Model{
 		{Provider: "openai-compatible", ID: "same-a", DisplayName: "A", ContextWindow: 8192, MaxOutput: 4096, BaseURL: "http://same.local/v1", Source: "user"},
 		{Provider: "openai-compatible", ID: "same-b", DisplayName: "B", ContextWindow: 8192, MaxOutput: 4096, BaseURL: "http://same.local/v1", Source: "user"},
 	})
-	t.Cleanup(func() { provider.SetUserModels(nil) })
+	t.Cleanup(func() { modelreg.SetUserModels(nil) })
 
 	sess, err := session.NewSessionAtPath(filepath.Join(testsupport.TempDir(t), "s.jsonl"), "/ws", "openai-compatible", "same-a", "0.0.0")
 	if err != nil {
@@ -146,7 +148,7 @@ func TestSwitchModelRefreshesHostRoutedTool(t *testing.T) {
 	s := newTestSession()
 	s.ws = w
 	s.sess = sess
-	s.agent = &core.Agent{Model: "same-a"}
+	s.agent = coretest.NewAgent(nil, "same-a", "", nil)
 	s.setModel("openai-compatible", "same-a", false)
 
 	// All three host-routed dispatch tools must be refreshed generically.
@@ -184,19 +186,19 @@ func TestSwitchModelRefreshesHostRoutedTool(t *testing.T) {
 // medium, without re-setting the level by hand on every switch.
 func thinkingModels(t *testing.T) (luna, sol provider.Model) {
 	t.Helper()
-	provider.SetUserModels([]provider.Model{
+	modelreg.SetUserModels([]provider.Model{
 		{Provider: "openai-compatible", ID: "luna", DisplayName: "Luna", ContextWindow: 8192, MaxOutput: 4096,
 			BaseURL: "http://same.local/v1", Source: "user", Reasoning: true, DefaultReasoning: "max"},
 		{Provider: "openai-compatible", ID: "sol", DisplayName: "Sol", ContextWindow: 8192, MaxOutput: 4096,
 			BaseURL: "http://same.local/v1", Source: "user", Reasoning: true, DefaultReasoning: "medium"},
 	})
-	t.Cleanup(func() { provider.SetUserModels(nil) })
+	t.Cleanup(func() { modelreg.SetUserModels(nil) })
 
-	luna, err := provider.FindModel("openai-compatible", "luna")
+	luna, err := modelreg.FindModel("openai-compatible", "luna")
 	if err != nil {
 		t.Fatalf("FindModel(luna): %v", err)
 	}
-	sol, err = provider.FindModel("openai-compatible", "sol")
+	sol, err = modelreg.FindModel("openai-compatible", "sol")
 	if err != nil {
 		t.Fatalf("FindModel(sol): %v", err)
 	}
@@ -219,7 +221,7 @@ func thinkingSession(t *testing.T, w *Workspace, prov, model string) *wsSession 
 	s := newTestSession()
 	s.ws = w
 	s.sess = sess
-	s.agent = &core.Agent{Model: model}
+	s.agent = coretest.NewAgent(nil, model, "", nil)
 	s.setModel(prov, model, false)
 	return s
 }
@@ -237,23 +239,23 @@ func TestSwitchModelRecomputesTheThinkingLevel(t *testing.T) {
 	s := thinkingSession(t, w, "openai-compatible", "luna")
 	// Where a fresh build leaves the session it booted on.
 	applyRawReasoning(s.agent, build.ResolveRawReasoning("", luna, ""))
-	if s.agent.Reasoning != "max" {
-		t.Fatalf("built on luna at %q, want max", s.agent.Reasoning)
+	if reasoningOf(s.agent) != "max" {
+		t.Fatalf("built on luna at %q, want max", reasoningOf(s.agent))
 	}
 
 	if err := w.switchModel(s, "openai-compatible", "sol", false); err != nil {
 		t.Fatalf("switchModel: %v", err)
 	}
-	if s.agent.Reasoning != "medium" {
-		t.Errorf("after switching to sol the agent thinks at %q, want medium — it kept luna's level", s.agent.Reasoning)
+	if reasoningOf(s.agent) != "medium" {
+		t.Errorf("after switching to sol the agent thinks at %q, want medium — it kept luna's level", reasoningOf(s.agent))
 	}
 
 	// And back, so this is a re-resolve rather than a one-way nudge.
 	if err := w.switchModel(s, "openai-compatible", "luna", false); err != nil {
 		t.Fatalf("switchModel back: %v", err)
 	}
-	if s.agent.Reasoning != "max" {
-		t.Errorf("back on luna the agent thinks at %q, want max", s.agent.Reasoning)
+	if reasoningOf(s.agent) != "max" {
+		t.Errorf("back on luna the agent thinks at %q, want max", reasoningOf(s.agent))
 	}
 }
 
@@ -272,8 +274,8 @@ func TestSwitchModelKeepsASessionsOwnThinkingLevel(t *testing.T) {
 	if err := w.switchModel(s, "openai-compatible", "sol", false); err != nil {
 		t.Fatalf("switchModel: %v", err)
 	}
-	if s.agent.Reasoning != "low" {
-		t.Errorf("session level = %q after the switch, want the user's low", s.agent.Reasoning)
+	if reasoningOf(s.agent) != "low" {
+		t.Errorf("session level = %q after the switch, want the user's low", reasoningOf(s.agent))
 	}
 }
 
@@ -291,11 +293,11 @@ func TestGlobalThinkingChangeYieldsToThePerModelLevel(t *testing.T) {
 	w.sessions = map[string]*wsSession{"a": withDefault, "b": plain}
 	w.applyReasoning("high")
 
-	if withDefault.agent.Reasoning != "medium" {
-		t.Errorf("sol thinks at %q after a global change, want its own medium", withDefault.agent.Reasoning)
+	if reasoningOf(withDefault.agent) != "medium" {
+		t.Errorf("sol thinks at %q after a global change, want its own medium", reasoningOf(withDefault.agent))
 	}
 	// A session whose model has no per-model level still follows the global.
-	if plain.agent.Reasoning != "high" {
-		t.Errorf("un-defaulted session = %q, want the global high", plain.agent.Reasoning)
+	if reasoningOf(plain.agent) != "high" {
+		t.Errorf("un-defaulted session = %q, want the global high", reasoningOf(plain.agent))
 	}
 }

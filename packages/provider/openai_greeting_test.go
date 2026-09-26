@@ -8,7 +8,7 @@ import "testing"
 // clone via newOpenAICompat (Moonshot/Kimi, strict local templates), where
 // user-first can be enforced. Mirrors the anthropic/bedrock/gemini tests.
 func TestOAIBuildRequest_LeadingAssistantGetsUserGuard(t *testing.T) {
-	c := &openaiClient{name: "openai"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openai"}
 	out, err := c.buildRequest(Request{
 		Model: "gpt-5",
 		Messages: []Message{
@@ -32,7 +32,7 @@ func TestOAIBuildRequest_LeadingAssistantGetsUserGuard(t *testing.T) {
 
 // A normal user-first conversation is untouched by the guard.
 func TestOAIBuildRequest_NormalConversationUnchanged(t *testing.T) {
-	c := &openaiClient{name: "openai"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openai"}
 	out, err := c.buildRequest(Request{
 		Model:    "gpt-5",
 		Messages: []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
@@ -47,7 +47,7 @@ func TestOAIBuildRequest_NormalConversationUnchanged(t *testing.T) {
 
 // The Codex/Responses builder applies the same guard to its input items.
 func TestCodexBuildRequest_LeadingAssistantGetsUserGuard(t *testing.T) {
-	c := &codexClient{}
+	c := &codexClient{catalogRef: catalogRef{testReg}}
 	out, err := c.buildRequest(Request{
 		Model: "gpt-5",
 		Messages: []Message{

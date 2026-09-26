@@ -237,7 +237,7 @@ func TestBudgetThinkingReportsReasoningTokensUnknown(t *testing.T) {
 // The request shape and the replay have to be right in the SAME body — they are
 // independently correct today and were never checked together.
 func TestAdaptiveRequestReplaysWithheldThinkingAheadOfTheAnswer(t *testing.T) {
-	c := &anthropicClient{}
+	c := &anthropicClient{catalogRef: catalogRef{testReg}}
 	wire, err := c.buildRequest(Request{
 		Model:        "claude-sonnet-5",
 		Reasoning:    "high",

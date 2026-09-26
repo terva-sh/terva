@@ -39,7 +39,7 @@ var (
 
 // openInSystemViewer hands a path to the platform's "open this with whatever
 // handles it" command — the same three-way switch the OAuth browser launch
-// uses (packages/provider/auth/manager.go).
+// uses (packages/auth/manager.go).
 //
 // Start rather than Run: the viewer is a separate application and may well
 // outlive terva, so waiting on it would hang the TUI for as long as the user

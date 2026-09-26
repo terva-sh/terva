@@ -15,6 +15,7 @@ import (
 	"context"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
@@ -54,7 +55,7 @@ func (i *Interactive) openModelAdd(prov, modelID string) {
 		i.setStatusErr(i18n.T("this session cannot add models"))
 		return
 	}
-	src, err := provider.FindModel(prov, modelID)
+	src, err := modelreg.FindModel(prov, modelID)
 	if err != nil {
 		i.setStatusErr(err.Error())
 		return

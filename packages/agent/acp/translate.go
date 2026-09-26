@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -334,7 +335,7 @@ func stopReasonFor(cancelled bool, last provider.StopReason) string {
 // session total and a per-request value would make the editor's stats jump
 // backwards on every turn.
 //
-// `size` is provider.ContextGauge, the same effective-window number the status
+// `size` is modelreg.ContextGauge, the same effective-window number the status
 // bar and /status use, so three surfaces cannot disagree about how full the
 // window is. Zero when the model is unknown, which the spec's optional shape
 // tolerates and is honest: no window is better than a wrong one.
@@ -345,7 +346,7 @@ func (s *session) emitUsage(e core.EvUsage) {
 		"used":          e.Cumulative.PromptTokens(),
 		"cost":          e.Cumulative.CostUSD,
 	}
-	if size := provider.ContextGauge(prov, model); size > 0 {
+	if size := modelreg.ContextGauge(prov, model); size > 0 {
 		update["size"] = size
 	}
 	s.emit(update)

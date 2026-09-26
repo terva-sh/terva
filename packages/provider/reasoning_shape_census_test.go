@@ -89,7 +89,7 @@ func replayedByCodex(t *testing.T, b ReasoningBlock) bool {
 // the visible content of an otherwise-empty turn.
 func replayedByChat(t *testing.T, b ReasoningBlock) bool {
 	t.Helper()
-	c := &openaiClient{name: "openai-compatible"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openai-compatible"}
 	// Route 1: beside a tool call.
 	withTool, err := c.buildRequest(Request{
 		Model: "qwen3.8-27b",

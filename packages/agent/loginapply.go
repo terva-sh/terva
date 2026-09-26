@@ -6,8 +6,9 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/modelreg"
+	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/provider"
-	"terva.sh/terva/packages/provider/auth"
 )
 
 // What a successful login means, beyond a credential landing on disk.
@@ -67,7 +68,7 @@ func ApplyLoginSuccess(store *auth.Store, providerID string, promoteDefault func
 				if ctxWin <= 0 {
 					ctxWin = unknownModelContext
 				}
-				provider.RegisterExtraModel(provider.Model{
+				modelreg.RegisterExtraModel(provider.Model{
 					Provider:      providerID,
 					ID:            ep.Model,
 					DisplayName:   ep.Model,
@@ -137,7 +138,7 @@ func adoptEndpointModels(id string, ep config.EndpointConfig, promoteDefault fun
 		return
 	}
 	for _, m := range live {
-		provider.RegisterExtraModel(m)
+		modelreg.RegisterExtraModel(m)
 	}
 	if promoteDefault == nil {
 		return

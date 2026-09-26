@@ -9,9 +9,9 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/identity"
+	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
-	"terva.sh/terva/packages/provider/auth"
 )
 
 // The Providers pane, read-only.

@@ -5,7 +5,7 @@ import "testing"
 // A leading assistant message (a character card's seeded greeting) must be
 // made valid for Anthropic by prepending a request-scoped user turn.
 func TestBuildRequest_LeadingAssistantGetsUserGuard(t *testing.T) {
-	c := &anthropicClient{}
+	c := &anthropicClient{catalogRef: catalogRef{testReg}}
 	out, err := c.buildRequest(Request{
 		Model: "claude-sonnet-4-5",
 		Messages: []Message{
@@ -29,7 +29,7 @@ func TestBuildRequest_LeadingAssistantGetsUserGuard(t *testing.T) {
 
 // A normal user-first conversation is untouched by the guard.
 func TestBuildRequest_NormalConversationUnchanged(t *testing.T) {
-	c := &anthropicClient{}
+	c := &anthropicClient{catalogRef: catalogRef{testReg}}
 	out, err := c.buildRequest(Request{
 		Model:    "claude-sonnet-4-5",
 		Messages: []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},

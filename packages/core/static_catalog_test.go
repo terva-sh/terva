@@ -15,10 +15,10 @@ import (
 func TestATurnRunsOnModelsTheHostPassesInWithNoFiles(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("HOME", testsupport.TempDir(t))
-	provider.SetUserModels([]provider.Model{{
+	testCatalog.SetUserModels([]provider.Model{{
 		Provider: "framecap", ID: "host-model", ContextWindow: 50_000, MaxOutput: 1234,
 	}})
-	t.Cleanup(func() { provider.SetUserModels(nil) })
+	t.Cleanup(func() { testCatalog.SetUserModels(nil) })
 
 	client := &frameCaptureClient{}
 	a := newTestAgent(client, "host-model", "system", Registry{})
@@ -26,8 +26,11 @@ func TestATurnRunsOnModelsTheHostPassesInWithNoFiles(t *testing.T) {
 	if err := a.Prompt(context.Background(), "hi", nil, nil); err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}
-	if len(client.reqs) != 1 || client.reqs[0].MaxTokens != 1234 {
-		t.Fatalf("requests %d, MaxTokens %d; want one request budgeted at the host model's 1234", len(client.reqs), client.reqs[0].MaxTokens)
+	if len(client.reqs) != 1 {
+		t.Fatalf("sent %d requests, want 1", len(client.reqs))
+	}
+	if got := client.reqs[0].MaxTokens; got != 1234 {
+		t.Fatalf("MaxTokens %d, want the host model's 1234", got)
 	}
 	a.SeedLastTurnUsage(provider.Usage{InputTokens: 25_000})
 	if _, window := a.ContextUsage(); window != 50_000 {

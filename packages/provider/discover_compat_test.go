@@ -25,7 +25,7 @@ func TestDiscoverOpenAICompatible(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := DiscoverOpenAICompatible(context.Background(), srv.URL, "", 8192)
+	got, err := DiscoverOpenAICompatible(context.Background(), srv.URL, "", 8192, testReg.Active())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestDiscoverOpenAICompatibleV1Suffix(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := DiscoverOpenAICompatible(context.Background(), srv.URL+"/v1", "", 4096); err != nil {
+	if _, err := DiscoverOpenAICompatible(context.Background(), srv.URL+"/v1", "", 4096, testReg.Active()); err != nil {
 		t.Fatal(err)
 	}
 	if gotPath != "/v1/models" {

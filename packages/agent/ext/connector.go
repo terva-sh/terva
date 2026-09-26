@@ -31,7 +31,7 @@ import (
 
 	"terva.sh/terva/packages/agent/connsdk"
 	"terva.sh/terva/packages/agent/extproto"
-	"terva.sh/terva/packages/lineframe"
+	"terva.sh/terva/packages/provider/lineframe"
 )
 
 // chatEngineBuffer bounds host→engine frames queued while the engine is

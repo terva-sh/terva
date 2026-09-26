@@ -57,4 +57,4 @@ project's records rather than in the published docs. This example grows with it.
 | 2. Compaction as mechanics and policy | Reflected. The agent leaves `CompactionPolicy` nil and gets `core.DefaultCompactionPolicy`, the neutral one; a host sets its own there. |
 | 3. A wire with no I/O | Reflected. The Anthropic client is built from a key passed as a value, and nothing in the wire reads a file or the environment. |
 | 5. Transcripts behind a store | Reflected. The agent writes to an in-memory `core.TranscriptStore`, and `harness_test.go` resumes a second agent from it. terva's own JSONL store is `packages/session`, which a host may use as well. |
-| 6. A stable engine API | Not yet. The model catalog is still the wire's global registry until `TKT-01M37N9XQF`; the example will pass a static catalog then. When the stable packages are drawn, `imports_test.go` narrows to them. |
+| 6. A stable engine API | Partly reflected. The wire holds no model catalog: `hostCatalog` builds one, and the example passes it to the agent (`SetCatalog`) and to the client (`provider.WithCatalog`). When the stable packages are drawn, `imports_test.go` narrows to them. |

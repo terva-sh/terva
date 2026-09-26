@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"terva.sh/terva/packages/lineframe"
+	"terva.sh/terva/packages/provider/lineframe"
 )
 
 // upstream is a synchronous Streamable-HTTP MCP client to one remote server. The

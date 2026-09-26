@@ -10,10 +10,11 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/modelfiles"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/raati"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/i18n"
-	"terva.sh/terva/packages/provider"
 
 	"terva.sh/terva/packages/privfs"
 )
@@ -185,7 +186,7 @@ func runModelsInit(force bool) error {
 // The proposed JSON goes to stdout (pipeable); guidance goes to stderr.
 func runModelsEndpoints(apply bool) error {
 	path := UserModelsPath()
-	f, err := provider.ReadUserModelsFile(path)
+	f, err := modelfiles.ReadUserModelsFile(path)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", path, err)
 	}
@@ -329,7 +330,7 @@ func runModelsTiers(all bool) error {
 		fmt.Println(header)
 
 		catalog := map[string]bool{}
-		for _, m := range provider.ModelsForProvider(p) {
+		for _, m := range modelreg.ModelsForProvider(p) {
 			catalog[m.ID] = true
 		}
 		for i, name := range ranks {
@@ -374,7 +375,7 @@ func printTierScaffold(providerID string) {
 	}
 	fmt.Printf("    \"swarm_tiers\": { %q: { %s } }\n", providerID, strings.Join(rungs, ", "))
 	var ids []string
-	for _, m := range provider.ModelsForProvider(providerID) {
+	for _, m := range modelreg.ModelsForProvider(providerID) {
 		ids = append(ids, m.ID)
 		if len(ids) >= 8 {
 			break

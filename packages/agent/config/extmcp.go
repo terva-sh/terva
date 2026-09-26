@@ -46,7 +46,7 @@ var projectConfigMu sync.Mutex
 // The four were byte-for-byte identical, which was the danger rather than the
 // consolation: they edit different keys of ONE document whose entire purpose is
 // preserving the keys the others own, they take no lock, and they all wrote the
-// same fixed "<path>.tmp" — a shared scratch name that provider/auth/store.go
+// same fixed "<path>.tmp" — a shared scratch name that packages/auth/store.go
 // and terva-mcp-bridge both document having fixed, because two writers O_TRUNC
 // the same file and the rename publishes a blend of two documents. Three tests
 // separately asserted "preserves unrelated fields" against three of the copies,

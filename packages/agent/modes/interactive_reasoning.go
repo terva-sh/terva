@@ -3,6 +3,7 @@ package modes
 import (
 	"context"
 
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
@@ -14,7 +15,7 @@ func (i *Interactive) openReasoningDialog() {
 	if i.cfg.Carrier == nil {
 		return
 	}
-	model, _ := provider.FindModel(i.cfg.Provider, i.cfg.Model)
+	model, _ := modelreg.FindModel(i.cfg.Provider, i.cfg.Model)
 	i.reasoningDialog.Open(i.sessionReasoning(), i.cfg.Reasoning, model)
 	i.invalidate()
 }
@@ -60,7 +61,7 @@ func (i *Interactive) applyReasoningSelection(level string) {
 		// Testing the global first and falling back to the model's default
 		// puts an OPERATOR's per-model level below the global, which is the
 		// wrong way round — see provider.ResolveReasoning.
-		model, _ := provider.FindModel(i.cfg.Provider, i.cfg.Model)
+		model, _ := modelreg.FindModel(i.cfg.Provider, i.cfg.Model)
 		switch lv, from := provider.ResolveReasoning("", model, i.cfg.Reasoning); from {
 		case provider.ReasoningFromModelOperator:
 			i.statusOK = i18n.T("thinking: following this model's configured level (%s)", lv)

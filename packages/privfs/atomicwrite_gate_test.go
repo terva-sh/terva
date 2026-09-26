@@ -43,9 +43,8 @@ var exemptFromAtomicWrite = map[string]writeExemption{
 
 	// Writes the TEMP half of their own temp+rename. Already atomic; routing
 	// them through privfs would be a simplification, not a fix.
-	filepath.Join("packages", "agent", "worktree", "registry.go"): {"writes the temp half of its own temp+rename", 1},
-	filepath.Join("packages", "provider", "cache.go"):             {"writes the temp half of its own temp+rename", 1},
-	filepath.Join("packages", "provider", "usermodels_write.go"):  {"writes the temp half of its own temp+rename", 1},
+	filepath.Join("packages", "agent", "worktree", "registry.go"):     {"writes the temp half of its own temp+rename", 1},
+	filepath.Join("packages", "agent", "modelfiles", "modelfiles.go"): {"writes the temp half of its own temp+rename (the model cache and models.json)", 1},
 
 	// Files whose CONTENT is their existence. A torn read of a one-line marker
 	// is indistinguishable from an intact one, so atomicity buys nothing.

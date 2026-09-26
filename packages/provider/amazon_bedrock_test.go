@@ -74,15 +74,6 @@ func TestSigV4PathEncoding(t *testing.T) {
 	}
 }
 
-func TestReadAWSCredentialsFile(t *testing.T) {
-	// Smoke test: parses an INI-ish file when present. We don't require
-	// the file to exist on the test host.
-	if _, err := readAWSCredentialsFile("default"); err != nil {
-		// missing file or missing profile is fine — both are non-panics
-		t.Logf("no aws creds available (expected on CI): %v", err)
-	}
-}
-
 func TestNormalizeBedrockToolResultsMovesResultsAdjacentToToolUse(t *testing.T) {
 	msgs := []Message{
 		{Role: RoleAssistant, Content: []Content{ToolCallBlock{ID: "tool-1", Name: "edit", Arguments: json.RawMessage(`{"path":"a"}`)}}},
@@ -156,7 +147,7 @@ func TestBedrockModelSupportsCaching(t *testing.T) {
 		{"some.unknown-model-v1:0", false},
 	}
 	for _, c := range cases {
-		got := bedrockModelSupportsCaching(c.model)
+		got := bedrockModelSupportsCaching(testReg, c.model)
 		if got != c.want {
 			t.Errorf("bedrockModelSupportsCaching(%q) = %v, want %v", c.model, got, c.want)
 		}
@@ -164,7 +155,7 @@ func TestBedrockModelSupportsCaching(t *testing.T) {
 }
 
 func TestBedrockBuildRequestMaxTokens(t *testing.T) {
-	client := &bedrockClient{region: "us-east-1"}
+	client := &bedrockClient{catalogRef: catalogRef{testReg}, region: "us-east-1"}
 
 	// A non-zero MaxTokens must flow through to InferenceConfig so the
 	// model gets its full output budget. This is the regression guard
@@ -202,7 +193,7 @@ func TestBedrockBuildRequestMaxTokens(t *testing.T) {
 func TestBedrockBuildRequestCachingClaudeModel(t *testing.T) {
 	// A Claude model (PriceCacheWrite > 0) should get cachePoint markers
 	// in the system array and on the last user message.
-	client := &bedrockClient{region: "us-east-1"}
+	client := &bedrockClient{catalogRef: catalogRef{testReg}, region: "us-east-1"}
 	req, err := client.buildRequest(Request{
 		Model:  "anthropic.claude-sonnet-4-5-20250929-v1:0",
 		System: "You are a helpful assistant.",
@@ -241,7 +232,7 @@ func TestBedrockBuildRequestCachingClaudeModel(t *testing.T) {
 
 func TestBedrockBuildRequestNoCachingNovaModel(t *testing.T) {
 	// A Nova model (PriceCacheWrite == 0) should NOT get cachePoint markers.
-	client := &bedrockClient{region: "us-east-1"}
+	client := &bedrockClient{catalogRef: catalogRef{testReg}, region: "us-east-1"}
 	req, err := client.buildRequest(Request{
 		Model:  "amazon.nova-pro-v1:0",
 		System: "You are helpful.",
@@ -276,7 +267,7 @@ func TestBedrockBuildRequestNoCachingNovaModel(t *testing.T) {
 func TestBedrockBuildRequestCachingMultiTurn(t *testing.T) {
 	// In a multi-turn conversation the cachePoint should be on the LAST
 	// user message only, not on earlier ones.
-	client := &bedrockClient{region: "us-east-1"}
+	client := &bedrockClient{catalogRef: catalogRef{testReg}, region: "us-east-1"}
 	req, err := client.buildRequest(Request{
 		Model: "anthropic.claude-sonnet-4-5-20250929-v1:0",
 		Messages: []Message{
@@ -317,7 +308,7 @@ func TestBedrockBuildRequestCachingMultiTurn(t *testing.T) {
 
 func TestBedrockBuildRequestCachingNoSystemNoCrash(t *testing.T) {
 	// No system prompt: system array should be nil, not a bare cachePoint.
-	client := &bedrockClient{region: "us-east-1"}
+	client := &bedrockClient{catalogRef: catalogRef{testReg}, region: "us-east-1"}
 	req, err := client.buildRequest(Request{
 		Model:    "anthropic.claude-sonnet-4-5-20250929-v1:0",
 		Messages: []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}},
@@ -369,7 +360,7 @@ func TestBedrockTagLastUserCacheEmpty(t *testing.T) {
 
 func TestBedrockBuildRequestCachingWireJSON(t *testing.T) {
 	// Verify the JSON shape Bedrock actually receives has the right keys.
-	client := &bedrockClient{region: "us-east-1"}
+	client := &bedrockClient{catalogRef: catalogRef{testReg}, region: "us-east-1"}
 	breq, err := client.buildRequest(Request{
 		Model:  "anthropic.claude-sonnet-4-5-20250929-v1:0",
 		System: "be helpful",
@@ -398,7 +389,7 @@ func TestBedrockBuildRequestCachingWireJSON(t *testing.T) {
 // toolUse / toolResult blocks. Bedrock rejects such a request unless
 // toolConfig is present. buildRequest must inject a stub toolConfig.
 func TestBedrockBuildRequestBtwToolHistory(t *testing.T) {
-	client := &bedrockClient{region: "us-east-1"}
+	client := &bedrockClient{catalogRef: catalogRef{testReg}, region: "us-east-1"}
 	req, err := client.buildRequest(Request{
 		Model: "amazon.nova-pro-v1:0",
 		// No tools — simulates /btw side-chat.
@@ -447,7 +438,7 @@ func TestBedrockBuildRequestBtwToolHistory(t *testing.T) {
 // conversational call), we do NOT inject a toolConfig at all — the extra
 // field is unnecessary and some models may behave differently with it.
 func TestBedrockBuildRequestNoToolHistoryNoStub(t *testing.T) {
-	client := &bedrockClient{region: "us-east-1"}
+	client := &bedrockClient{catalogRef: catalogRef{testReg}, region: "us-east-1"}
 	req, err := client.buildRequest(Request{
 		Model: "amazon.nova-pro-v1:0",
 		Messages: []Message{
@@ -463,7 +454,7 @@ func TestBedrockBuildRequestNoToolHistoryNoStub(t *testing.T) {
 }
 
 func TestBedrockBuildRequestSkipsEmptyToolMessages(t *testing.T) {
-	client := &bedrockClient{}
+	client := &bedrockClient{catalogRef: catalogRef{testReg}}
 	req, err := client.buildRequest(Request{Messages: []Message{
 		{Role: RoleTool, Content: []Content{ToolResultBlock{CallID: "missing", Content: []Content{TextBlock{Text: "orphan"}}}}},
 		{Role: RoleUser, Content: []Content{TextBlock{Text: "hello"}}},
@@ -512,7 +503,7 @@ func TestBedrockEventPayloadHelpers(t *testing.T) {
 // which caused image content to be silently dropped and Bedrock to receive an
 // empty or malformed message.
 func TestBedrockBuildRequestImageBlock(t *testing.T) {
-	client := &bedrockClient{region: "us-east-1"}
+	client := &bedrockClient{catalogRef: catalogRef{testReg}, region: "us-east-1"}
 
 	// Minimal 1×1 red JPEG (smallest valid JPEG we can construct inline).
 	// This is 26 bytes: SOI + minimal APP0 marker + EOI.
@@ -568,7 +559,7 @@ func TestBedrockBuildRequestImageBlock(t *testing.T) {
 // content, so the image was silently dropped, leaving Bedrock a toolResult
 // with empty content — which it rejects with HTTP 500.
 func TestBedrockBuildRequestImageInToolResult(t *testing.T) {
-	client := &bedrockClient{region: "us-east-1"}
+	client := &bedrockClient{catalogRef: catalogRef{testReg}, region: "us-east-1"}
 
 	pngHeader := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A} // PNG magic bytes
 

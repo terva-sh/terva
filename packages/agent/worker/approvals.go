@@ -11,8 +11,8 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/mcpbridge"
-	"terva.sh/terva/packages/lineframe"
 	"terva.sh/terva/packages/privfs"
+	"terva.sh/terva/packages/provider/lineframe"
 )
 
 // approvalSocketPath derives a worker's MCP-approval socket from its inbox

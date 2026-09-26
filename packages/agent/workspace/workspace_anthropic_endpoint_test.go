@@ -12,8 +12,8 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/provider"
-	"terva.sh/terva/packages/provider/auth"
 )
 
 // The login form for an Anthropic-compatible endpoint.

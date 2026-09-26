@@ -12,7 +12,7 @@ import (
 
 	"terva.sh/terva/packages/agent"
 	"terva.sh/terva/packages/agent/procenv"
-	"terva.sh/terva/packages/buildinfo"
+	"terva.sh/terva/packages/provider/buildinfo"
 )
 
 // Injected at build time via -ldflags "-X main.version=... -X main.commit=... -X main.date=...".
@@ -91,7 +91,7 @@ func main() {
 	// Record the structured triple before it's folded into the combined
 	// display string — terva_status and the relaunch/startup version
 	// lines read it back to report the running process's build (see
-	// packages/buildinfo).
+	// packages/provider/buildinfo).
 	info := buildinfo.Info{Version: version, Commit: commit, Date: date}
 	buildinfo.Set(info)
 	if err := agent.Run(os.Args[1:], info.String()); err != nil {

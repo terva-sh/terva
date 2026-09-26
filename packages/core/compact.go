@@ -28,7 +28,7 @@ var ErrNothingToCompact = errors.New("nothing to compact: keep-tail covers the w
 // context-window sample: the summarizer reads the whole transcript, so its
 // input count is transcript-sized by construction. Letting it seed the
 // context gauge re-arms every threshold check at stale-high on a transcript
-// that was just condensed. That is why CostTracker.AddTotalOnly exists, why
+// that was just condensed. That is why the cost tracker books it total-only, why
 // SetLastTurn re-baselines below, and why the durable record rides a
 // "compaction" row rather than a "usage" row (session.SessionUsageDetail derives the
 // gauge from usage rows alone). Three guards, one invariant: compaction spend
@@ -87,6 +87,13 @@ const (
 	CompactCold CompactStrategy = "cold"
 	// CompactWarm is the cache-aware summarizer: the conversation's own prefix,
 	// so the transcript is served from cache.
+	//
+	// It is an option beside cold rather than its replacement, because the two
+	// do not necessarily produce equally good summaries. The cold path gets a
+	// purpose-built summarization system prompt and a transcript framed as
+	// material. The warm path asks for a summary from inside the agent's own
+	// persona with its tools still advertised. A policy lists it to choose the
+	// saving; the default does not.
 	CompactWarm CompactStrategy = "warm"
 	// CompactWarmFellBack is a warm attempt that produced nothing usable and was
 	// finished by the cold one. Both were billed; the fallback RATE is a
@@ -190,10 +197,10 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 
 	a.mu.Lock()
 	msgs := append([]provider.Message(nil), a.messages...)
-	readOnly := a.ReadOnly.Snapshot()
+	readOnly := a.readOnly.Snapshot()
 	// The ledger asks each call's tool to describe it. SetTools swaps the map
 	// whole and never writes into it, so the reference is a snapshot.
-	tools := a.Tools
+	tools := a.tools
 	a.mu.Unlock()
 
 	if len(msgs) == 0 {
@@ -231,9 +238,9 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 	// the worst possible moment to refuse one — and the client summarizers below
 	// are still there, still correct, and merely more expensive.
 	var providerReason string
-	if a.strategyAllowed(strategies, CompactProvider) {
+	if strategyAllowed(strategies, CompactProvider) {
 		if sc, ok := provider.ServerCompactorFor(prefix.client); ok {
-			next, pres, perr := compactViaProvider(ctx, prose, sc, prefix, msgs, readOnly, tools)
+			next, pres, perr := compactViaProvider(ctx, a.translator, prose, sc, prefix, msgs, readOnly, tools)
 			// The attempt is billed whether or not it lands, so its spend joins
 			// the total either way — a failed compaction that reported nothing
 			// would hide real money in exactly the arm being evaluated.
@@ -259,8 +266,8 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 	// suffix; every message before it feeds the summary, ledger, and counts.
 	// Use the dispatched model's window, which can differ after a model swap.
 	budget := 0
-	if m, err := provider.FindModel("", prefix.model); err == nil {
-		budget = int(float64(m.EffectiveContextWindow()) * KeepTailMaxFraction)
+	if m, err := a.Catalog().FindModel("", prefix.model); err == nil {
+		budget = int(float64(m.EffectiveContextWindow()) * keepTailMaxFraction)
 	}
 	tail := tailWithinBudget(msgs, keepTail, budget)
 	summarizable := msgs[:len(msgs)-len(tail)]
@@ -276,7 +283,7 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 	// The cache-aware path: summarize against the prefix the provider already
 	// holds. Only worth attempting when a prefix was actually dispatched —
 	// otherwise there is nothing warm to be aware of.
-	if warm && a.strategyAllowed(strategies, CompactWarm) {
+	if warm && strategyAllowed(strategies, CompactWarm) {
 		// Watch whether the warm attempt puts text in front of the user before
 		// it fails. It usually won't — a model that answers with a tool_use, or
 		// a request the provider rejects outright, produces no text at all — but
@@ -321,12 +328,12 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 			fallbackReason = warmFallbackReason(stop, werr)
 			if streamed {
 				// sink is non-nil here: streamed can only be set through warmSink.
-				sink("\n\n" + i18n.T("[the cache-aware summarizer did not finish; retrying with the dedicated one]") + "\n\n")
+				sink("\n\n" + i18n.In(a.translator).T("[the cache-aware summarizer did not finish; retrying with the dedicated one]") + "\n\n")
 			}
 		}
 	}
 
-	if summary == "" && !a.strategyAllowed(strategies, CompactCold) {
+	if summary == "" && !strategyAllowed(strategies, CompactCold) {
 		return CompactResult{}, ErrNoCompactionStrategy
 	}
 	if summary == "" {
@@ -342,7 +349,7 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 			return CompactResult{}, cerr
 		}
 		if s == "" {
-			return CompactResult{}, i18n.Errorf("empty summary from model")
+			return CompactResult{}, i18n.In(a.translator).Errorf("empty summary from model")
 		}
 		summary = s
 		// The cold path discarded its stop reason entirely. It is the FALLBACK,
@@ -585,7 +592,7 @@ func warmCompactInstruction(prose CompactionPrompts, keepTail int, midTurn bool)
 func warmFallbackReason(stop provider.StopReason, err error) string {
 	switch {
 	case err != nil:
-		if IsPayloadTooLargeError(err) || IsContextLengthError(err) {
+		if isPayloadTooLargeError(err) || isContextLengthError(err) {
 			return "rejected_too_large"
 		}
 		// The transient ladder is already exhausted by the time this runs (see
@@ -630,7 +637,7 @@ const providerCompactionMaxShare = 0.8
 // Returns the replacement transcript and a partly-filled CompactResult. The
 // result carries Usage even on the error paths, because the call is billed
 // before it can be judged unusable.
-func compactViaProvider(ctx context.Context, prose CompactionPrompts, sc provider.ServerCompactor, prefix promptPrefix, msgs []provider.Message, readOnly *ReadOnlySet, tools Registry) ([]provider.Message, CompactResult, error) {
+func compactViaProvider(ctx context.Context, tr i18n.Translator, prose CompactionPrompts, sc provider.ServerCompactor, prefix promptPrefix, msgs []provider.Message, readOnly *ReadOnlySet, tools Registry) ([]provider.Message, CompactResult, error) {
 	// No tools, no reasoning config: the endpoint takes neither. What it does
 	// take is the same model, instructions and cache key the conversation has
 	// been running on, and transcriptcodec.RepairToolUseResultPairs because those are the bytes
@@ -676,7 +683,7 @@ func compactViaProvider(ctx context.Context, prose CompactionPrompts, sc provide
 	// human could read what the model already has. The auditable copy is the
 	// session file, which is append-only: the turns are still above the
 	// compaction row, and ReadSessionPreCompaction reads them back.
-	res.Summary = i18n.T("The provider compacted this conversation on its side. The summary is encrypted and cannot be shown here; the original turns remain in the session file.")
+	res.Summary = i18n.In(tr).T("The provider compacted this conversation on its side. The summary is encrypted and cannot be shown here; the original turns remain in the session file.")
 	return next, res, nil
 }
 
@@ -722,7 +729,7 @@ func providerFallbackReason(err error) string {
 	switch {
 	case errors.Is(err, errCompactionNotWorthIt):
 		return "provider_reclaimed_too_little"
-	case IsPayloadTooLargeError(err) || IsContextLengthError(err):
+	case isPayloadTooLargeError(err) || isContextLengthError(err):
 		return "provider_rejected_too_large"
 	default:
 		var pe *provider.ProviderError
@@ -854,13 +861,13 @@ func (a *Agent) drainSummaryRetrying(ctx context.Context, client provider.Client
 			Phase:    RetryPhaseCompaction,
 			Provider: providerOf(aerr),
 			Attempt:  *retries + 1, // 1-based, matching the turn ladder
-			Max:      a.MaxRetries,
+			Max:      a.maxRetries,
 			Delay:    delay,
 			Err:      retryErrMsg(aerr),
 		})
 		*retries++
 		if streamed && sink != nil {
-			sink("\n\n" + i18n.T("[the summarizer was interrupted; retrying]") + "\n\n")
+			sink("\n\n" + i18n.In(a.translator).T("[the summarizer was interrupted; retrying]") + "\n\n")
 		}
 		if sleepErr := sleepRetry(ctx, delay); sleepErr != nil {
 			// Cancelled while backing off. Report the cancellation rather than
@@ -1054,7 +1061,7 @@ func estimateTokens(msgs []provider.Message) int {
 	return n / 4
 }
 
-// KeepTailMaxFraction bounds the keep-tail by SIZE as well as by count.
+// keepTailMaxFraction bounds the keep-tail by SIZE as well as by count.
 //
 // A message count is the wrong unit on its own, and the gap is four orders of
 // magnitude: an `ls` result is 20 tokens, a whole-file read is 40k. keepTail is 4
@@ -1078,7 +1085,7 @@ func estimateTokens(msgs []provider.Message) int {
 // the compaction is trimmed. Dropping an oversized read is safe in a way that
 // dropping a write would not be: reads are idempotent, the model can simply read
 // it again, and the summary records what was learned from it.
-const KeepTailMaxFraction = 0.10
+const keepTailMaxFraction = 0.10
 
 // tailWithinBudget picks the trailing messages to preserve verbatim: at most
 // keepTail of them, and at most budget tokens' worth.

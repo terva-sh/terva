@@ -9,9 +9,9 @@ import "testing"
 // choice wins over the model default.
 func TestBuildRequest_DefaultReasoningVsExplicitOff(t *testing.T) {
 	withCatalogState(t)
-	ResetCatalogLayers() // resolve k3 from the baked-in catalog
+	testReg.Reset() // resolve k3 from the baked-in catalog
 
-	c := &anthropicClient{}
+	c := &anthropicClient{catalogRef: catalogRef{testReg}}
 
 	// Unset global level: the model's DefaultReasoning:"high" drives a
 	// budget-based thinking block.

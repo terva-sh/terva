@@ -4,8 +4,9 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/modelreg"
+	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/provider"
-	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -23,9 +24,9 @@ func TestResolveModelBaseURLBeatsLoginBaseURL(t *testing.T) {
 	}
 
 	// A models.json model pinned to a DIFFERENT endpoint.
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
-	provider.SetUserModels([]provider.Model{{
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
+	modelreg.SetUserModels([]provider.Model{{
 		Provider:      "openai-compatible",
 		ID:            "model-on-gateway",
 		DisplayName:   "Model On Gateway",
@@ -46,7 +47,7 @@ func TestResolveModelBaseURLBeatsLoginBaseURL(t *testing.T) {
 
 // Regression: the open-catalogue fallback must register its synthesized
 // model in the active catalog. Auto-compaction, the status-bar gauge,
-// and /status all read the context window via provider.FindModel — an
+// and /status all read the context window via modelreg.FindModel — an
 // unregistered model left them all seeing 0, so auto-compaction never
 // fired and the configured compat context window was silently dropped.
 func TestResolveRegistersOpenCatalogueModel(t *testing.T) {
@@ -54,13 +55,13 @@ func TestResolveRegistersOpenCatalogueModel(t *testing.T) {
 	if err := config.AuthStoreFor().SetCompatEndpoint("openai-compatible", "", auth.CompatEndpoint{BaseURL: "https://login.example/v1", Model: "login-default", ContextWindow: 192000}); err != nil {
 		t.Fatal(err)
 	}
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
 
 	if _, err := Resolve(Args{Provider: "openai-compatible", Model: "some-unregistered-model"}, false); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	m, err := provider.FindModel("openai-compatible", "some-unregistered-model")
+	m, err := modelreg.FindModel("openai-compatible", "some-unregistered-model")
 	if err != nil {
 		t.Fatalf("synthesized model not in the active catalog: %v", err)
 	}
@@ -77,8 +78,8 @@ func TestResolveUnregisteredModelFallsBackToLoginBaseURL(t *testing.T) {
 	if err := config.AuthStoreFor().SetCompatEndpoint("openai-compatible", "", auth.CompatEndpoint{BaseURL: "https://login.example/v1", Model: "login-default", ContextWindow: 32768}); err != nil {
 		t.Fatal(err)
 	}
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
 
 	r, err := Resolve(Args{Provider: "openai-compatible", Model: "some-unregistered-model"}, false)
 	if err != nil {
@@ -95,9 +96,9 @@ func TestResolveBaseURLFlagBeatsEverything(t *testing.T) {
 	if err := config.AuthStoreFor().SetCompatEndpoint("openai-compatible", "", auth.CompatEndpoint{BaseURL: "https://login.example/v1", Model: "login-default", ContextWindow: 32768}); err != nil {
 		t.Fatal(err)
 	}
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
-	provider.SetUserModels([]provider.Model{{
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
+	modelreg.SetUserModels([]provider.Model{{
 		Provider: "openai-compatible", ID: "model-on-gateway",
 		ContextWindow: 131072, MaxOutput: 16384,
 		BaseURL: "https://gateway.example/v1", Source: "user",

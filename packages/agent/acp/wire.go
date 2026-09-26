@@ -9,7 +9,7 @@ import (
 	"io"
 	"sync"
 
-	"terva.sh/terva/packages/lineframe"
+	"terva.sh/terva/packages/provider/lineframe"
 )
 
 // JSON-RPC 2.0 error codes. The first four are standard; auth_required and

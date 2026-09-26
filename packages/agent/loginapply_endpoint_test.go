@@ -8,7 +8,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
-	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -31,8 +31,8 @@ func TestApplyLoginSuccessAdoptsAnEndpointsModels(t *testing.T) {
 	defer srv.Close()
 
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
 	t.Cleanup(func() { build.UnregisterEndpoint("workshop") })
 	// ApplyLoginSuccess fires a background model refresh; join it while this
 	// test's scratch home is still live, or it leaks into the tests after us.
@@ -56,7 +56,7 @@ func TestApplyLoginSuccessAdoptsAnEndpointsModels(t *testing.T) {
 		return nil
 	})
 
-	models := provider.ModelsForProvider("workshop")
+	models := modelreg.ModelsForProvider("workshop")
 	if len(models) != 2 {
 		t.Fatalf("catalog has %d models for the endpoint, want the 2 it serves", len(models))
 	}
@@ -94,8 +94,8 @@ func TestApplyLoginSuccessAdoptsAnEndpointsModels(t *testing.T) {
 // provider they can pick a model on once it is back.
 func TestApplyLoginSuccessSurvivesAnUnreachableEndpoint(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
 	t.Cleanup(func() { build.UnregisterEndpoint("gone-away") })
 	// Same join as above: even a refresh that discovers nothing is a leaked
 	// goroutine until it finishes.

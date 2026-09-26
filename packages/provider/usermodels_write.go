@@ -3,38 +3,28 @@ package provider
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
-
-	"terva.sh/terva/packages/privfs"
 )
 
 // This file is the write side of $TERVA_HOME/models.json. The read
-// side (LoadUserModelsWithWarnings) parses the file into the active
-// catalog's user layer; these helpers let the TUI model editor persist
-// a single model's overrides without disturbing the rest of the file.
+// side (ParseUserModelsWithWarnings) parses the file into the active
+// catalog's user layer; these let the TUI model editor change a single
+// model's overrides without disturbing the rest of the file. Reading and
+// writing the file itself is the host's (terva's is
+// packages/agent/modelfiles): decision 0021, rule 5.
 
-// ReadUserModelsFile reads and parses a models.json file. A missing or
-// empty file is not an error: it returns a file with a ready-to-use
-// (non-nil) Providers map. A malformed file IS an error, so a caller
-// that's about to rewrite the file never silently clobbers content it
-// couldn't understand.
-func ReadUserModelsFile(path string) (UserModelsFile, error) {
+// ParseUserModelsFile parses the contents of a models.json file. Empty
+// contents are not an error: they give a file with a ready-to-use (non-nil)
+// Providers map. Malformed contents ARE an error, so a caller that's about to
+// rewrite the file never silently clobbers content it couldn't understand.
+func ParseUserModelsFile(data []byte) (UserModelsFile, error) {
 	empty := UserModelsFile{Providers: map[string]UserProvider{}}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return empty, nil
-		}
-		return empty, err
-	}
 	if len(data) == 0 {
 		return empty, nil
 	}
 	var f UserModelsFile
 	if err := json.Unmarshal(data, &f); err != nil {
-		return empty, fmt.Errorf("parse %s: %w", path, err)
+		return empty, err
 	}
 	if f.Providers == nil {
 		f.Providers = map[string]UserProvider{}
@@ -42,11 +32,10 @@ func ReadUserModelsFile(path string) (UserModelsFile, error) {
 	return f, nil
 }
 
-// WriteUserModelsFile writes f to path atomically (temp + rename),
-// pretty-printed with a trailing newline. Provider blocks that hold no
-// models are pruned first, so removing a provider's last override never
-// leaves an empty husk behind.
-func WriteUserModelsFile(path string, f UserModelsFile) error {
+// MarshalUserModelsFile encodes f pretty-printed with a trailing newline.
+// Provider blocks that hold no models are pruned first, so removing a
+// provider's last override never leaves an empty husk behind.
+func MarshalUserModelsFile(f UserModelsFile) ([]byte, error) {
 	if f.Providers == nil {
 		f.Providers = map[string]UserProvider{}
 	}
@@ -55,19 +44,11 @@ func WriteUserModelsFile(path string, f UserModelsFile) error {
 			delete(f.Providers, name)
 		}
 	}
-	if err := privfs.MkdirAll(filepath.Dir(path)); err != nil {
-		return err
-	}
 	b, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
-		return err
+		return nil, err
 	}
-	b = append(b, '\n')
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return append(b, '\n'), nil
 }
 
 // userModelsProviderKeysFor returns every key in f that names the same provider
@@ -99,46 +80,38 @@ func userModelsProviderKeysFor(f UserModelsFile, providerKey string) []string {
 	return append([]string{canonical}, legacy...)
 }
 
-// FindUserModel returns the raw models.json entry for providerKey/id,
-// reporting whether one exists. The editor needs the RAW entry (not the
-// merged Model) to tell "explicitly overridden" apart from "inheriting
-// the catalog default" on a per-field basis. A missing file yields
-// (zero, false, nil).
+// Find returns the raw entry for providerKey/id, reporting whether one exists.
+// The editor needs the RAW entry (not the merged Model) to tell "explicitly
+// overridden" apart from "inheriting the catalog default" on a per-field basis.
 //
 // providerKey is the canonical provider; an entry filed under a legacy
 // spelling of it is found too, because the loader treats that entry as live.
-func FindUserModel(path, providerKey, id string) (UserModel, bool, error) {
-	f, err := ReadUserModelsFile(path)
-	if err != nil {
-		return UserModel{}, false, err
-	}
+func (f UserModelsFile) Find(providerKey, id string) (UserModel, bool) {
 	for _, key := range userModelsProviderKeysFor(f, providerKey) {
 		for _, um := range f.Providers[key].Models {
 			if um.ID == id {
-				return um, true, nil
+				return um, true
 			}
 		}
 	}
-	return UserModel{}, false, nil
+	return UserModel{}, false
 }
 
-// UpsertUserModel inserts or replaces the entry for um.ID under
-// providerKey, preserving every other entry, then writes the file
-// atomically. Provider and id are required.
+// Upsert inserts or replaces the entry for um.ID under providerKey,
+// preserving every other entry. Provider and id are required.
 //
 // The entry always lands under the CANONICAL provider key, and the same id is
 // dropped from every legacy-spelled block on the way. Without that fold, saving
 // against a legacy-keyed file leaves two entries for one model, which the
 // loader applies in map order — so any field set by both flips between runs.
-func UpsertUserModel(path, providerKey string, um UserModel) error {
+func (f *UserModelsFile) Upsert(providerKey string, um UserModel) error {
 	if providerKey == "" || um.ID == "" {
 		return fmt.Errorf("usermodels: provider and model id are required")
 	}
-	f, err := ReadUserModelsFile(path)
-	if err != nil {
-		return err
+	if f.Providers == nil {
+		f.Providers = map[string]UserProvider{}
 	}
-	keys := userModelsProviderKeysFor(f, providerKey)
+	keys := userModelsProviderKeysFor(*f, providerKey)
 	canonical := keys[0]
 	for _, key := range keys[1:] {
 		if block, dropped := userProviderWithout(f.Providers[key], um.ID); dropped {
@@ -158,7 +131,7 @@ func UpsertUserModel(path, providerKey string, um UserModel) error {
 		prov.Models = append(prov.Models, um)
 	}
 	f.Providers[canonical] = prov
-	return WriteUserModelsFile(path, f)
+	return nil
 }
 
 // userProviderWithout returns prov with any entry for id removed, and whether
@@ -180,21 +153,17 @@ func userProviderWithout(prov UserProvider, id string) (UserProvider, bool) {
 	return prov, true
 }
 
-// RemoveUserModel deletes the entry for id under providerKey and writes
-// the file atomically, reporting whether an entry was actually removed.
-// The provider block is dropped when its last model goes (via
-// WriteUserModelsFile's pruning), so a reset leaves no residue.
+// Remove deletes the entry for id under providerKey, reporting whether an
+// entry was actually removed. The provider block is dropped when its last
+// model goes (via MarshalUserModelsFile's pruning), so a reset leaves no
+// residue.
 //
 // Every spelling of the provider is cleared, not just the canonical one. This
 // is the Reset button: leaving a legacy-keyed entry behind would report success
 // and leave the override in force, which is exactly what it used to do.
-func RemoveUserModel(path, providerKey, id string) (bool, error) {
-	f, err := ReadUserModelsFile(path)
-	if err != nil {
-		return false, err
-	}
+func (f *UserModelsFile) Remove(providerKey, id string) bool {
 	removed := false
-	for _, key := range userModelsProviderKeysFor(f, providerKey) {
+	for _, key := range userModelsProviderKeysFor(*f, providerKey) {
 		prov, ok := f.Providers[key]
 		if !ok {
 			continue
@@ -206,11 +175,5 @@ func RemoveUserModel(path, providerKey, id string) (bool, error) {
 		f.Providers[key] = block
 		removed = true
 	}
-	if !removed {
-		return false, nil
-	}
-	if err := WriteUserModelsFile(path, f); err != nil {
-		return false, err
-	}
-	return true, nil
+	return removed
 }

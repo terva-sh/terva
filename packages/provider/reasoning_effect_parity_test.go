@@ -22,9 +22,9 @@ func TestReasoningEffectMatchesWhatTheBuilderSends(t *testing.T) {
 	// fourth for a reason that was not the code's fault.
 	catalogModel := func(t *testing.T, provider, id string) Model {
 		t.Helper()
-		m, err := FindModel(provider, id)
+		m, err := testReg.FindModel(provider, id)
 		if err != nil {
-			t.Fatalf("FindModel(%q, %q): %v — pick an id that is in the builtin catalog", provider, id, err)
+			t.Fatalf("testReg.FindModel(%q, %q): %v — pick an id that is in the builtin catalog", provider, id, err)
 		}
 		return m
 	}
@@ -42,7 +42,7 @@ func TestReasoningEffectMatchesWhatTheBuilderSends(t *testing.T) {
 			provider: "anthropic",
 			id:       "claude-opus-4-1-20250805",
 			send: func(t *testing.T, m Model, level string) (int, string) {
-				c := &anthropicClient{}
+				c := &anthropicClient{catalogRef: catalogRef{testReg}}
 				out, err := c.buildRequest(Request{
 					Model: m.ID, Messages: msgs, Reasoning: level, ReasoningSet: true,
 				})
@@ -60,7 +60,7 @@ func TestReasoningEffectMatchesWhatTheBuilderSends(t *testing.T) {
 			provider: "anthropic",
 			id:       "claude-opus-4-7",
 			send: func(t *testing.T, m Model, level string) (int, string) {
-				c := &anthropicClient{}
+				c := &anthropicClient{catalogRef: catalogRef{testReg}}
 				out, err := c.buildRequest(Request{
 					Model: m.ID, Messages: msgs, Reasoning: level, ReasoningSet: true,
 				})
@@ -79,7 +79,7 @@ func TestReasoningEffectMatchesWhatTheBuilderSends(t *testing.T) {
 			provider: "openai-codex",
 			id:       "gpt-5.6-sol",
 			send: func(t *testing.T, m Model, level string) (int, string) {
-				c := &codexClient{}
+				c := &codexClient{catalogRef: catalogRef{testReg}}
 				out, err := c.buildRequest(Request{
 					Model: m.ID, Messages: msgs, Reasoning: level, ReasoningSet: true,
 				})
@@ -97,7 +97,7 @@ func TestReasoningEffectMatchesWhatTheBuilderSends(t *testing.T) {
 			provider: "groq",
 			id:       "deepseek-r1-distill-llama-70b",
 			send: func(t *testing.T, m Model, level string) (int, string) {
-				c := &openaiClient{}
+				c := &openaiClient{catalogRef: catalogRef{testReg}}
 				out, err := c.buildRequest(Request{
 					Model: m.ID, Messages: msgs, Reasoning: level, ReasoningSet: true,
 				})
@@ -146,9 +146,9 @@ func TestReasoningEffectMatchesGeminiThinkingConfig(t *testing.T) {
 	// was retired upstream (404 "no longer available") and left the catalog;
 	// gemini-3.1-pro-preview is the live pro model and keeps the contrast.
 	for _, id := range []string{"gemini-3.1-pro-preview", "gemini-3-flash-preview"} {
-		m, err := FindModel("google", id)
+		m, err := testReg.FindModel("google", id)
 		if err != nil {
-			t.Fatalf("FindModel(google, %q): %v", id, err)
+			t.Fatalf("testReg.FindModel(google, %q): %v", id, err)
 		}
 		for _, level := range ReasoningLevels {
 			lv := level

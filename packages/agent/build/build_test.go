@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -254,9 +255,9 @@ func TestResolveEnvOnlyBedrockDiscoveredWithoutConfig(t *testing.T) {
 
 func TestResolveOllamaUsesModelBaseURLBeforeDefault(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
-	provider.SetUserModels([]provider.Model{{
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
+	modelreg.SetUserModels([]provider.Model{{
 		Provider:      "ollama",
 		ID:            "qwen-local",
 		DisplayName:   "Qwen Local",
@@ -276,8 +277,8 @@ func TestResolveOllamaUsesModelBaseURLBeforeDefault(t *testing.T) {
 
 func TestResolveOllamaFallsBackToDefaultBaseURL(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
 
 	r, err := Resolve(Args{Provider: "ollama", Model: "any-local-model"}, false)
 	if err != nil {
@@ -292,11 +293,11 @@ func TestResolveOllamaFallsBackToDefaultBaseURL(t *testing.T) {
 // global config; AdaptiveThinking models always omit it.
 func TestResolveTemperaturePrecedence(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
 
 	temp := float32(0.4)
-	provider.SetUserModels([]provider.Model{
+	modelreg.SetUserModels([]provider.Model{
 		{Provider: "ollama", ID: "warm-local", MaxOutput: 8192, Temperature: &temp},
 	})
 
@@ -322,11 +323,11 @@ func TestResolveTemperaturePrecedence(t *testing.T) {
 
 func TestResolveTemperatureOmittedForAdaptiveThinking(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
 
 	temp := float32(0.5)
-	provider.SetUserModels([]provider.Model{
+	modelreg.SetUserModels([]provider.Model{
 		{Provider: "ollama", ID: "adaptive-local", MaxOutput: 8192, Temperature: &temp, AdaptiveThinking: true},
 	})
 	// Even with a per-model temperature AND an explicit flag, an

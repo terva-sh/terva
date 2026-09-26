@@ -3,6 +3,7 @@ package dialogs
 import (
 	"testing"
 
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
@@ -262,7 +263,7 @@ func TestModelDialogCtrlEOpensEditor(t *testing.T) {
 // you re-setting a thinking level every session into something you had to
 // type blind, with an "inherit ()" hint that named nothing.
 func TestEditDefaultThinkingIsAPickerOverTheModelsLadder(t *testing.T) {
-	m, err := provider.FindModel("openai-codex", "gpt-5.6-luna")
+	m, err := modelreg.FindModel("openai-codex", "gpt-5.6-luna")
 	if err != nil {
 		t.Skipf("catalog has no gpt-5.6-luna: %v", err)
 	}
@@ -291,7 +292,7 @@ func TestEditDefaultThinkingIsAPickerOverTheModelsLadder(t *testing.T) {
 // Cycling walks the ladder and comes back to inherit, so a value can always be
 // taken back off — and what it saves is the models.json key the resolver reads.
 func TestEditDefaultThinkingCyclesAndSaves(t *testing.T) {
-	m, err := provider.FindModel("openai-codex", "gpt-5.6-luna")
+	m, err := modelreg.FindModel("openai-codex", "gpt-5.6-luna")
 	if err != nil {
 		t.Skipf("catalog has no gpt-5.6-luna: %v", err)
 	}
@@ -333,7 +334,7 @@ func TestEditDefaultThinkingCyclesAndSaves(t *testing.T) {
 // global set and no per-model value, that is the global — the row used to read
 // "inherit ()" regardless, which is the surface naming nothing at all.
 func TestEditDefaultThinkingHintNamesWhatDecides(t *testing.T) {
-	m, err := provider.FindModel("openai-codex", "gpt-5.6-luna")
+	m, err := modelreg.FindModel("openai-codex", "gpt-5.6-luna")
 	if err != nil {
 		t.Skipf("catalog has no gpt-5.6-luna: %v", err)
 	}

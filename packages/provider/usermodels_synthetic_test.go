@@ -27,7 +27,7 @@ func TestSyntheticMarksAModelThatExistsOnlyInModelsJSON(t *testing.T) {
 	path := writeModelsJSONBody(t, `{"providers":{"openai":{"models":[
 		{"id":"gpt-6-astra","contextWindow":400000,"maxTokens":128000}
 	]}}}`)
-	overrides, warnings := LoadUserModelsWithWarnings(path)
+	overrides, warnings := loadUserModelsWithWarnings(path)
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %v", warnings)
 	}
@@ -48,7 +48,7 @@ func TestOverrideOnACatalogRowIsNotSynthetic(t *testing.T) {
 	path := writeModelsJSONBody(t, `{"providers":{"anthropic":{"models":[
 		{"id":"claude-x","contextWindow":123000}
 	]}}}`)
-	overrides, _ := LoadUserModelsWithWarnings(path)
+	overrides, _ := loadUserModelsWithWarnings(path)
 
 	base := []Model{{Provider: "anthropic", ID: "claude-x", ContextWindow: 200000, Source: "catalog"}}
 	merged := applyUserOverrides(base, overrides)
@@ -81,13 +81,13 @@ func TestSourceCannotTellAnInventedModelFromATweakedOne(t *testing.T) {
 	inventedPath := writeModelsJSONBody(t, `{"providers":{"openai":{"models":[
 		{"id":"gpt-6-astra","contextWindow":400000}
 	]}}}`)
-	inventedOver, _ := LoadUserModelsWithWarnings(inventedPath)
+	inventedOver, _ := loadUserModelsWithWarnings(inventedPath)
 	invented := applyUserOverrides(nil, inventedOver)
 
 	tweakedPath := writeModelsJSONBody(t, `{"providers":{"anthropic":{"models":[
 		{"id":"claude-x","contextWindow":123000}
 	]}}}`)
-	tweakedOver, _ := LoadUserModelsWithWarnings(tweakedPath)
+	tweakedOver, _ := loadUserModelsWithWarnings(tweakedPath)
 	tweaked := applyUserOverrides(
 		[]Model{{Provider: "anthropic", ID: "claude-x", Source: "catalog"}},
 		tweakedOver,

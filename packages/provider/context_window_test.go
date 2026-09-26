@@ -36,7 +36,7 @@ func TestGPT56CatalogEntries(t *testing.T) {
 		{"gpt-5.6-luna", 1.25},
 	}
 	for _, tc := range cases {
-		m, err := FindModel("openai-codex", tc.id)
+		m, err := testReg.FindModel("openai-codex", tc.id)
 		if err != nil {
 			t.Fatalf("FindModel %s: %v", tc.id, err)
 		}
@@ -79,7 +79,7 @@ func TestGPT6CatalogRoutes(t *testing.T) {
 	} {
 		for _, provider := range []string{"openai-responses", "openai-codex"} {
 			t.Run(provider+"/"+tc.id, func(t *testing.T) {
-				m, err := FindModel(provider, tc.id)
+				m, err := testReg.FindModel(provider, tc.id)
 				if err != nil {
 					t.Fatalf("FindModel: %v", err)
 				}
@@ -105,7 +105,7 @@ func TestGPT6CatalogRoutes(t *testing.T) {
 				}
 			})
 		}
-		if _, err := FindModel("openai", tc.id); err == nil {
+		if _, err := testReg.FindModel("openai", tc.id); err == nil {
 			t.Errorf("plain openai catalog exposes %s on the Chat Completions wire", tc.id)
 		}
 	}
@@ -116,14 +116,14 @@ func TestDesiredContextWindowUserOverride(t *testing.T) {
 
 	// A user raises the shipped cost-safe 272K working window toward the
 	// model's true 1.05M max for gpt-5.6-sol via models.json.
-	SetUserModels([]Model{{
+	testReg.SetUserModels([]Model{{
 		Provider:             "openai-codex",
 		ID:                   "gpt-5.6-sol",
 		DesiredContextWindow: 500000,
 		Source:               "user",
 	}})
 
-	got, err := FindModel("openai-codex", "gpt-5.6-sol")
+	got, err := testReg.FindModel("openai-codex", "gpt-5.6-sol")
 	if err != nil {
 		t.Fatalf("FindModel: %v", err)
 	}

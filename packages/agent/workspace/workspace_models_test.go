@@ -6,6 +6,7 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -27,9 +28,9 @@ func TestModelsListsAKeylessNamedEndpointsModels(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
-	provider.SetUserModels([]provider.Model{{
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
+	modelreg.SetUserModels([]provider.Model{{
 		Provider:      "workshop",
 		ID:            "qwen3-coder",
 		ContextWindow: 262144,
@@ -63,9 +64,9 @@ func TestModelsCurrentReflectsFramedSession(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
-	provider.SetUserModels([]provider.Model{
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
+	modelreg.SetUserModels([]provider.Model{
 		{Provider: "workshop", ID: "qwen-a", ContextWindow: 262144},
 		{Provider: "workshop", ID: "qwen-b", ContextWindow: 262144},
 	})
@@ -127,10 +128,10 @@ func TestModelsCarryProviderAuthSoDuplicateIDsAreDistinguishable(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
 	// One model id, three backends — the collision the report describes.
-	provider.SetUserModels([]provider.Model{
+	modelreg.SetUserModels([]provider.Model{
 		{Provider: "anthropic", ID: "deep-v4-pro", ContextWindow: 200000},
 		{Provider: "deepseek", ID: "deep-v4-pro", ContextWindow: 200000},
 		{Provider: "workshop", ID: "deep-v4-pro", ContextWindow: 200000},
@@ -181,9 +182,9 @@ func TestModelsCarryTheOperatorsDisplayName(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
-	provider.SetUserModels([]provider.Model{
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
+	modelreg.SetUserModels([]provider.Model{
 		{Provider: "workshop", ID: "hf.co/unsloth/Qwen3-Coder-30B:Q4_K_XL", DisplayName: "Qwen Coder"},
 		{Provider: "workshop", ID: "plain-local-id"},
 	})

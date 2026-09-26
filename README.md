@@ -220,7 +220,7 @@ sub-packages):
 ```
 cmd/terva/                              main()
 packages/provider/                    LLM client surface, model catalog, streaming clients
-packages/provider/auth/               credential store, api-key probe, oauth, login server
+packages/auth/                        credential store, api-key probe, oauth, login server
 packages/core/                        agent loop, sessions, cost tracking, compaction
 packages/tui/                         terminal raw-mode, input parser, editor, renderer, markdown, view
 packages/agent/                       cli wiring, arg parsing, system prompt, config

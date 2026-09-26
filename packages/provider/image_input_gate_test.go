@@ -41,7 +41,7 @@ var wireBuilders = []wireBuilder{
 		receiver: "anthropicClient", provider: "anthropic", model: "gate-anthropic",
 		build: func(t *testing.T, req Request) any {
 			t.Helper()
-			out, err := (&anthropicClient{}).buildRequest(req)
+			out, err := (&anthropicClient{catalogRef: catalogRef{testReg}}).buildRequest(req)
 			if err != nil {
 				t.Fatalf("anthropic buildRequest: %v", err)
 			}
@@ -52,7 +52,7 @@ var wireBuilders = []wireBuilder{
 		receiver: "openaiClient", provider: "openai", model: "gate-openai",
 		build: func(t *testing.T, req Request) any {
 			t.Helper()
-			out, err := (&openaiClient{}).buildRequest(req)
+			out, err := (&openaiClient{catalogRef: catalogRef{testReg}}).buildRequest(req)
 			if err != nil {
 				t.Fatalf("openai buildRequest: %v", err)
 			}
@@ -63,7 +63,7 @@ var wireBuilders = []wireBuilder{
 		receiver: "codexClient", provider: "openai-codex", model: "gate-codex",
 		build: func(t *testing.T, req Request) any {
 			t.Helper()
-			out, err := (&codexClient{}).buildRequest(req)
+			out, err := (&codexClient{catalogRef: catalogRef{testReg}}).buildRequest(req)
 			if err != nil {
 				t.Fatalf("codex buildRequest: %v", err)
 			}
@@ -74,7 +74,7 @@ var wireBuilders = []wireBuilder{
 		receiver: "geminiClient", provider: "google", model: "gate-gemini",
 		build: func(t *testing.T, req Request) any {
 			t.Helper()
-			out, _, err := (&geminiClient{}).buildRequest(req)
+			out, _, err := (&geminiClient{catalogRef: catalogRef{testReg}}).buildRequest(req)
 			if err != nil {
 				t.Fatalf("gemini buildRequest: %v", err)
 			}
@@ -85,7 +85,7 @@ var wireBuilders = []wireBuilder{
 		receiver: "bedrockClient", provider: "amazon-bedrock", model: "gate-bedrock",
 		build: func(t *testing.T, req Request) any {
 			t.Helper()
-			out, err := (&bedrockClient{region: "us-east-1"}).buildRequest(req)
+			out, err := (&bedrockClient{catalogRef: catalogRef{testReg}, region: "us-east-1"}).buildRequest(req)
 			if err != nil {
 				t.Fatalf("bedrock buildRequest: %v", err)
 			}
@@ -300,11 +300,11 @@ func gateRequest(model string) Request {
 func installGateModel(t *testing.T, b wireBuilder, imageInput bool) {
 	t.Helper()
 	withCatalogState(t)
-	RegisterExtraModel(Model{
+	testReg.RegisterExtraModel(Model{
 		Provider: b.provider, ID: b.model, ContextWindow: 128000, MaxOutput: 4096,
 		Caps: map[Capability]bool{CapImageInput: imageInput},
 	})
-	m, err := FindModel(b.provider, b.model)
+	m, err := testReg.FindModel(b.provider, b.model)
 	if err != nil {
 		t.Fatalf("the synthetic model did not land in the catalog: %v", err)
 	}

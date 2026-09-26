@@ -53,7 +53,7 @@ type Model struct {
 	// pictures.
 	//
 	// 0 means "this model has one output rate", which is every other model
-	// in the catalog, and ApplyCost then prices output exactly as it
+	// in the catalog, and ComputeCost then prices output exactly as it
 	// always did. So a model that never sets this is untouched by it.
 	PriceOutputImage float64
 
@@ -226,9 +226,9 @@ var capDefaults = map[Capability]bool{
 	CapImageOutput: false,
 }
 
-// knownCapabilities lists every capability terva understands, for
+// KnownCapabilities lists every capability terva understands, for
 // models.json validation warnings.
-func knownCapabilities() []Capability {
+func KnownCapabilities() []Capability {
 	return []Capability{CapImageInput, CapImageOutput, CapReasoning}
 }
 
@@ -263,12 +263,12 @@ func mergeCaps(base, over map[Capability]bool) map[Capability]bool {
 	return out
 }
 
-// catalog is the hardcoded, read-only list of supported models.
+// Catalog is the hardcoded, read-only list of supported models.
 // Prices are USD per 1M tokens. The list is curated to what terva's
 // clients (Anthropic Messages + OpenAI Chat Completions) can actually
 // talk to; models that are only reachable through the OpenAI Responses
 // API (o1-pro, o3-pro, gpt-5-pro) are omitted.
-var catalog = []Model{
+var Catalog = []Model{
 	// ---- Anthropic / Claude 4.x ----
 	{
 		Provider: "anthropic", ID: "claude-sonnet-4-5", DisplayName: "Claude Sonnet 4.5 (latest)",
@@ -730,7 +730,7 @@ var catalog = []Model{
 
 // The GPT-6 rows declare OpenAI's published reasoning_effort sets. Only the
 // chat-completions mapper reads ReasoningEfforts; the Responses routes these
-// rows belong to use openAICodexReasoningEffort and ignore it. The lists are
+// rows belong to use OpenAICodexReasoningEffort and ignore it. The lists are
 // here for openai-compatible gateways serving the same ids. Discovery copies
 // them from these rows (openAICompatCaps), which does two things for such a
 // gateway:
@@ -754,7 +754,7 @@ var (
 )
 
 // DefaultModel is used when the user does not specify one.
-var DefaultModel Model = catalog[0] // claude-sonnet-4-5
+var DefaultModel = Catalog[0] // claude-sonnet-4-5
 
 // ----- active (merged) catalog -----
 //
@@ -762,7 +762,7 @@ var DefaultModel Model = catalog[0] // claude-sonnet-4-5
 // highest precedence, and its host reads it through Active, FindModel
 // and ModelsForProvider:
 //
-//	builtin — the baked-in catalog (extended from init()s)
+//	builtin — the baked-in Catalog (extended from init()s)
 //	live    — /v1/models discovery or its disk cache (SetLiveModels)
 //	extra   — individually registered models, e.g. the
 //	          openai-compatible endpoint's listing (RegisterExtraModel)
@@ -800,14 +800,14 @@ func upsertModels(base, layer []Model) []Model {
 // The package holds no Registry: the host owns one and passes it in
 // (docs/plans/model-catalog.md).
 
-// computeCost returns the USD cost for the given usage on model m.
+// ComputeCost returns the USD cost for the given usage on model m.
 //
 // Output is billed at one rate unless the model sets PriceOutputImage, in
 // which case the image tokens inside OutputTokens are split out and billed
 // at their own rate. See Model.PriceOutputImage and Usage.ImageOutputTokens:
 // the image models bill the two 10-20x apart, and both directions of getting
 // it wrong are real money.
-func computeCost(m Model, u Usage) float64 {
+func ComputeCost(m Model, u Usage) float64 {
 	const per = 1_000_000.0
 	return float64(u.InputTokens)*m.PriceInput/per +
 		outputCost(m, u) +
@@ -839,7 +839,7 @@ func outputCost(m Model, u Usage) float64 {
 	return float64(text)*m.PriceOutput/per + float64(image)*m.PriceOutputImage/per
 }
 
-// cacheSavings returns what the prompt cache was worth on this response:
+// CacheSavings returns what the prompt cache was worth on this response:
 // the prompt billed at full input price, minus the prompt as actually
 // billed. Negative when cache writes outweigh the reads they enabled.
 //
@@ -847,7 +847,7 @@ func outputCost(m Model, u Usage) float64 {
 // zero) returns 0 rather than the full prompt price. Free reads would
 // otherwise report the whole prompt as "saved" on every local ollama turn,
 // where the honest answer is that nothing was billed and nothing was saved.
-func cacheSavings(m Model, u Usage) float64 {
+func CacheSavings(m Model, u Usage) float64 {
 	if m.PriceCacheRead == 0 && m.PriceCacheWrite == 0 {
 		return 0
 	}
@@ -871,6 +871,6 @@ func cacheSavings(m Model, u Usage) float64 {
 // — and finds a new one by what it assigns, not by a list someone has to
 // remember to extend.
 func ApplyCost(m Model, u *Usage) {
-	u.CostUSD = computeCost(m, *u)
-	u.CacheSavedUSD = cacheSavings(m, *u)
+	u.CostUSD = ComputeCost(m, *u)
+	u.CacheSavedUSD = CacheSavings(m, *u)
 }

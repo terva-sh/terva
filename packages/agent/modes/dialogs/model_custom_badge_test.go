@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
@@ -30,11 +31,11 @@ func renderPickerRowsFor(t *testing.T, prov string) string {
 // exists only in models.json invites the user to reset it and find out, and
 // finding out costs them the row.
 func TestPickerTagsACustomModelApartFromAnEditedOne(t *testing.T) {
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
 
 	// Nothing underneath it: the append branch stamps Synthetic.
-	provider.SetUserOverrides([]provider.UserOverride{
+	modelreg.SetUserOverrides([]provider.UserOverride{
 		{Model: provider.Model{Provider: "acme", ID: "invented", Source: "user"}},
 	})
 
@@ -51,13 +52,13 @@ func TestPickerTagsACustomModelApartFromAnEditedOne(t *testing.T) {
 // The other half. A tweak on a row some lower layer supplied keeps [edited],
 // because resetting it really does restore the catalog values.
 func TestPickerTagsATweakedCatalogRowAsEdited(t *testing.T) {
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
 
-	provider.RegisterExtraModel(provider.Model{
+	modelreg.RegisterExtraModel(provider.Model{
 		Provider: "acme", ID: "shipped", ContextWindow: 1000, Source: "catalog",
 	})
-	provider.SetUserOverrides([]provider.UserOverride{
+	modelreg.SetUserOverrides([]provider.UserOverride{
 		{Model: provider.Model{Provider: "acme", ID: "shipped", ContextWindow: 2000, Source: "user"}},
 	})
 

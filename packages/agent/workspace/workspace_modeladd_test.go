@@ -8,7 +8,8 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/agent/modelfiles"
+	"terva.sh/terva/packages/agent/modelreg"
 )
 
 // models.add is the way in. Everything else about a custom model already worked:
@@ -33,8 +34,8 @@ func modelAddWorkspace(t *testing.T, authJSON string) *Workspace {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
 	return &Workspace{ctx: context.Background(), diag: func(string) {}, sessions: map[string]*wsSession{}}
 }
 
@@ -68,7 +69,7 @@ func TestModelAddCreatesAModelTheCatalogDoesNotShip(t *testing.T) {
 	}
 
 	// It resolves, which is what makes it selectable at all.
-	m, err := provider.FindModel("workshop", "invented-local")
+	m, err := modelreg.FindModel("workshop", "invented-local")
 	if err != nil {
 		t.Fatalf("the model does not resolve after being added: %v", err)
 	}
@@ -80,7 +81,7 @@ func TestModelAddCreatesAModelTheCatalogDoesNotShip(t *testing.T) {
 	}
 
 	// And it is on disk, under the provider key it was filed against.
-	if _, ok, err := provider.FindUserModel(config.UserModelsPath(), "workshop", "invented-local"); err != nil || !ok {
+	if _, ok, err := modelfiles.FindUserModel(config.UserModelsPath(), "workshop", "invented-local"); err != nil || !ok {
 		t.Fatalf("models.json holds no entry for it (ok=%v, err=%v)", ok, err)
 	}
 
@@ -136,7 +137,7 @@ func TestModelAddRefusesAnIDThatAlreadyResolves(t *testing.T) {
 func TestModelAddRefusesAnIDTheCatalogAlreadyShips(t *testing.T) {
 	w := modelAddWorkspace(t, `{"anthropic":{"api_key":"sk-a"}}`)
 
-	shipped := provider.ModelsForProvider("anthropic")
+	shipped := modelreg.ModelsForProvider("anthropic")
 	if len(shipped) == 0 {
 		t.Skip("no anthropic models in the catalog")
 	}
@@ -170,7 +171,7 @@ func TestModelAddRefusesAProviderWithNoCredential(t *testing.T) {
 
 	// And nothing was written, or a later login would surface a model the user
 	// never successfully added.
-	if _, ok, _ := provider.FindUserModel(config.UserModelsPath(), "anthropic", "invented-anthropic"); ok {
+	if _, ok, _ := modelfiles.FindUserModel(config.UserModelsPath(), "anthropic", "invented-anthropic"); ok {
 		t.Error("the refused model was written to models.json anyway")
 	}
 }

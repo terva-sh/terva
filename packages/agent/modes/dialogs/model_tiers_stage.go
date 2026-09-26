@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
@@ -101,7 +102,7 @@ func (d *ModelDialog) currentRung() (ctrlproto.ModelTierRung, bool) {
 // offering both halves asks the user to pick between two spellings.
 func nextTierThinking(r ctrlproto.ModelTierRung, providerID string) string {
 	var opts []string
-	if m, err := provider.FindModel(providerID, r.Model); err == nil {
+	if m, err := modelreg.FindModel(providerID, r.Model); err == nil {
 		for _, rung := range provider.ReasoningLadderFor(m) {
 			if rung.SameAs == "" {
 				opts = append(opts, rung.Level)

@@ -12,9 +12,9 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/skills"
-	"terva.sh/terva/packages/buildinfo"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/privfs"
+	"terva.sh/terva/packages/provider/buildinfo"
 	"terva.sh/terva/packages/secrets"
 )
 

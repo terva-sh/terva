@@ -50,7 +50,7 @@ func TestDiscoverAnthropicCompatibleInheritsClaudeThinking(t *testing.T) {
 		{"id":"local-llama"}
 	],"has_more":false}`)
 
-	got, err := DiscoverAnthropicCompatible(context.Background(), url, "k", 200000, AnthropicCompatOptions{})
+	got, err := DiscoverAnthropicCompatible(context.Background(), url, "k", 200000, AnthropicCompatOptions{}, testReg.Active())
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestDiscoverAnthropicCompatibleInheritsClaudeThinking(t *testing.T) {
 
 	// The catalog row is the source of truth, so compare against it rather
 	// than against a number that moves whenever Anthropic raises a cap.
-	catalog, err := FindModel("anthropic", "claude-opus-5")
+	catalog, err := testReg.FindModel("anthropic", "claude-opus-5")
 	if err != nil {
 		t.Fatalf("no first-party claude-opus-5 row to inherit from: %v", err)
 	}
@@ -108,12 +108,12 @@ func TestAnthropicCompatRequestCarriesTheEffortKnob(t *testing.T) {
 	withCatalogState(t)
 
 	t.Run("a reasoning row sends thinking and an effort", func(t *testing.T) {
-		SetUserModels([]Model{{
+		testReg.SetUserModels([]Model{{
 			Provider: "my-gateway", ID: "claude-opus-5",
 			ContextWindow: 200000, MaxOutput: 32768,
 			Reasoning: true, AdaptiveThinking: true,
 		}})
-		t.Cleanup(func() { SetUserModels(nil) })
+		t.Cleanup(func() { testReg.SetUserModels(nil) })
 
 		_, body := anthCompatCapture(t, "k", AnthropicCompatOptions{}, Request{
 			Model:        "claude-opus-5",
@@ -143,12 +143,12 @@ func TestAnthropicCompatRequestCarriesTheEffortKnob(t *testing.T) {
 	// for the thinking MODE. Opus 5 rejects an explicit budget, so reading the
 	// id is what keeps that row off the shape the model refuses.
 	t.Run("the id decides the mode when the flag is absent", func(t *testing.T) {
-		SetUserModels([]Model{{
+		testReg.SetUserModels([]Model{{
 			Provider: "my-gateway", ID: "claude-opus-5",
 			ContextWindow: 200000, MaxOutput: 32768,
 			Reasoning: true, AdaptiveThinking: false,
 		}})
-		t.Cleanup(func() { SetUserModels(nil) })
+		t.Cleanup(func() { testReg.SetUserModels(nil) })
 
 		_, body := anthCompatCapture(t, "k", AnthropicCompatOptions{}, Request{
 			Model:        "claude-opus-5",
@@ -170,11 +170,11 @@ func TestAnthropicCompatRequestCarriesTheEffortKnob(t *testing.T) {
 	// The negative control. Without it the test above would pass against code
 	// that sends a thinking block unconditionally.
 	t.Run("a non-reasoning row sends none", func(t *testing.T) {
-		SetUserModels([]Model{{
+		testReg.SetUserModels([]Model{{
 			Provider: "my-gateway", ID: "plain-model",
 			ContextWindow: 200000, MaxOutput: 8192,
 		}})
-		t.Cleanup(func() { SetUserModels(nil) })
+		t.Cleanup(func() { testReg.SetUserModels(nil) })
 
 		_, body := anthCompatCapture(t, "k", AnthropicCompatOptions{}, Request{
 			Model:        "plain-model",
@@ -197,7 +197,7 @@ func TestDiscoverOpenAICompatibleInheritsReasoning(t *testing.T) {
 		{"id":"gemma-4-12b-it"}
 	]}`)
 
-	got, err := DiscoverOpenAICompatible(context.Background(), url, "k", 200000)
+	got, err := DiscoverOpenAICompatible(context.Background(), url, "k", 200000, testReg.Active())
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestOpenAICompatCapsIgnoresAStaleRowFromTheEndpointItself(t *testing.T) {
 	withCatalogState(t)
 
 	const id = "gpt-5.6-sol"
-	curated, err := FindModel("openai-codex", id)
+	curated, err := testReg.FindModel("openai-codex", id)
 	if err != nil || !curated.Reasoning {
 		t.Skipf("no curated reasoning row for %q to prefer", id)
 	}
@@ -236,15 +236,15 @@ func TestOpenAICompatCapsIgnoresAStaleRowFromTheEndpointItself(t *testing.T) {
 	// inheritance existed. This is what a real stale models-cache.json holds,
 	// BaseURL included: DiscoverOpenAICompatible stamps one on every row it
 	// writes, and that is the mark openAICompatCaps uses to skip its own output.
-	SetLiveModels([]Model{{
+	testReg.SetLiveModels([]Model{{
 		Provider: "cpa-openai", ID: id,
 		ContextWindow: 200000, Reasoning: false,
 		BaseURL: "https://cpa-api.example.invalid",
 		Source:  "live",
 	}})
-	t.Cleanup(func() { SetLiveModels(nil) })
+	t.Cleanup(func() { testReg.SetLiveModels(nil) })
 
-	if got := openAICompatCaps(id); !got.Reasoning {
+	if got := openAICompatCaps(testReg.Active(), id); !got.Reasoning {
 		t.Error("discovery inherited its own stale row, so the endpoint stays " +
 			"reasoning-incapable forever and the curated answer never wins")
 	}
@@ -265,23 +265,23 @@ func TestOpenAICompatCapsRefusesToGuessWhenProvidersDisagree(t *testing.T) {
 	const id = "collide-me"
 
 	t.Run("unanimous rows are evidence", func(t *testing.T) {
-		SetLiveModels([]Model{
+		testReg.SetLiveModels([]Model{
 			{Provider: "prov-a", ID: id, Reasoning: true, Source: "live"},
 			{Provider: "prov-b", ID: id, Reasoning: true, Source: "live"},
 		})
-		t.Cleanup(func() { SetLiveModels(nil) })
-		if !openAICompatCaps(id).Reasoning {
+		t.Cleanup(func() { testReg.SetLiveModels(nil) })
+		if !openAICompatCaps(testReg.Active(), id).Reasoning {
 			t.Error("two rows agreed the model reasons and the answer was no")
 		}
 	})
 
 	t.Run("disagreeing rows are not", func(t *testing.T) {
-		SetLiveModels([]Model{
+		testReg.SetLiveModels([]Model{
 			{Provider: "prov-a", ID: id, Reasoning: true, Source: "live"},
 			{Provider: "prov-b", ID: id, Reasoning: false, Source: "live"},
 		})
-		t.Cleanup(func() { SetLiveModels(nil) })
-		if openAICompatCaps(id).Reasoning {
+		t.Cleanup(func() { testReg.SetLiveModels(nil) })
+		if openAICompatCaps(testReg.Active(), id).Reasoning {
 			t.Error("the providers disagree, so this stamped reasoning_effort on " +
 				"an id another row calls incapable; the backend rejects that turn")
 		}
@@ -293,15 +293,15 @@ func TestOpenAICompatCapsRefusesToGuessWhenProvidersDisagree(t *testing.T) {
 	//
 	// Found by the second terva-review on PR #1300, finding-1 (medium).
 	t.Run("a disagreeing effort vocabulary is dropped, not the reasoning flag", func(t *testing.T) {
-		SetLiveModels([]Model{
+		testReg.SetLiveModels([]Model{
 			{Provider: "prov-a", ID: id, Reasoning: true,
 				ReasoningEfforts: []string{"low", "high", "xhigh"}, Source: "live"},
 			{Provider: "prov-b", ID: id, Reasoning: true,
 				ReasoningEfforts: []string{"low", "high"}, Source: "live"},
 		})
-		t.Cleanup(func() { SetLiveModels(nil) })
+		t.Cleanup(func() { testReg.SetLiveModels(nil) })
 
-		got := openAICompatCaps(id)
+		got := openAICompatCaps(testReg.Active(), id)
 		if !got.Reasoning {
 			t.Error("both rows agreed the model reasons, so that answer stands; " +
 				"an argument about the rungs must not void the agreement")
@@ -316,15 +316,15 @@ func TestOpenAICompatCapsRefusesToGuessWhenProvidersDisagree(t *testing.T) {
 	// map, so a different order is the same enum, and calling it a disagreement
 	// would throw away a vocabulary both rows in fact agreed on.
 	t.Run("order alone is not disagreement", func(t *testing.T) {
-		SetLiveModels([]Model{
+		testReg.SetLiveModels([]Model{
 			{Provider: "prov-a", ID: id, Reasoning: true,
 				ReasoningEfforts: []string{"low", "high"}, Source: "live"},
 			{Provider: "prov-b", ID: id, Reasoning: true,
 				ReasoningEfforts: []string{"high", "low"}, Source: "live"},
 		})
-		t.Cleanup(func() { SetLiveModels(nil) })
+		t.Cleanup(func() { testReg.SetLiveModels(nil) })
 
-		if got := openAICompatCaps(id); len(got.ReasoningEfforts) != 2 {
+		if got := openAICompatCaps(testReg.Active(), id); len(got.ReasoningEfforts) != 2 {
 			t.Errorf("got %v, want the two rungs both rows declared", got.ReasoningEfforts)
 		}
 	})
@@ -338,20 +338,20 @@ func TestOpenAIBuildRequestPrefersItsOwnProviderRow(t *testing.T) {
 	withCatalogState(t)
 
 	const id = "gpt-5.6-sol"
-	SetUserModels([]Model{{
+	testReg.SetUserModels([]Model{{
 		Provider: "my-gateway", ID: id,
 		ContextWindow: 200000, MaxOutput: 8192,
 		Reasoning: false,
 	}})
-	t.Cleanup(func() { SetUserModels(nil) })
+	t.Cleanup(func() { testReg.SetUserModels(nil) })
 
 	// The control: the id also exists elsewhere, and that row DOES think. If
 	// the scoped lookup regressed to the bare one, this is the row it finds.
-	if other, err := FindModel("", id); err != nil || !other.Reasoning {
+	if other, err := testReg.FindModel("", id); err != nil || !other.Reasoning {
 		t.Skipf("no reasoning row for %q under another provider; nothing to prefer over", id)
 	}
 
-	c := &openaiClient{name: "my-gateway"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "my-gateway"}
 	out, err := c.buildRequest(Request{
 		Model:        id,
 		Reasoning:    "high",
@@ -391,7 +391,7 @@ func TestDiscoverOpenAICompatibleInheritsGPT6Efforts(t *testing.T) {
 		{"id":"gpt-6-luna"},
 		{"id":"gpt-6-astra"}
 	]}`)
-	got, err := DiscoverOpenAICompatible(context.Background(), url, "k", 200000)
+	got, err := DiscoverOpenAICompatible(context.Background(), url, "k", 200000, testReg.Active())
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}

@@ -18,9 +18,9 @@ import (
 	"terva.sh/terva/packages/agent/modes/discord"
 	"terva.sh/terva/packages/agent/modes/telegram"
 	"terva.sh/terva/packages/agent/secretadmin"
+	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/privfs"
-	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/secrets"
 	"terva.sh/terva/packages/secretstore"
 )

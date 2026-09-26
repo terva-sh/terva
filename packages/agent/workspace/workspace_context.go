@@ -11,7 +11,9 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/extensions"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/lazytools"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/session"
@@ -49,7 +51,7 @@ func (s *wsSession) contextBreakdown() ctrlproto.ContextBreakdown {
 	// capability note), so counting them would over-report the context. The
 	// installed totals ride separate fields for the "N of M tools" split.
 	tools := ag.ToolsSnapshot()
-	advertised, filtered := ag.AdvertisedTools()
+	advertised, filtered := lazytools.Of(ag).Advertised()
 	var advSpecs, allSpecs []provider.Tool
 	for _, spec := range tools.Specs() {
 		allSpecs = append(allSpecs, spec)
@@ -72,14 +74,11 @@ func (s *wsSession) contextBreakdown() ctrlproto.ContextBreakdown {
 
 	// Ephemeral extension/card context: the frame's Volatile segments.
 	b.ExtBytes = len(frame.VolatileText())
-	// The lazy-tool capability note also rides the ephemeral tail (oneTurn appends
-	// it after the host context), but it is NOT part of the frame — it is
-	// pinned per turn, not produced by the context provider. Fold its bytes into
-	// the ephemeral total and expose the attributable share, so /context reflects
-	// what deferred discovery costs (schemas gone, names not): the same "sub-share
-	// of a section" shape as ExtGuidanceBytes under the system prompt.
-	b.LazyNoteBytes = len(ag.CapabilityNote())
-	b.ExtBytes += b.LazyNoteBytes
+	// The lazy-tool capability note is one of those segments. Expose its
+	// attributable share, so /context reflects what deferred discovery costs
+	// (schemas gone, names not): the same "sub-share of a section" shape as
+	// ExtGuidanceBytes under the system prompt.
+	b.LazyNoteBytes = lazyNoteBytes(frame)
 	// The lore that fired last turn — the activation trace behind the ExtBytes
 	// tail. Read the retained record (the real turn's trace, not the side-effect-
 	// free peek above), so the Usage pane shows which entries fed the tail and why
@@ -147,7 +146,7 @@ func (s *wsSession) contextBreakdown() ctrlproto.ContextBreakdown {
 	prov, model := s.currentModel()
 	b.Provider, b.Model = prov, model
 	if model != "" {
-		b.Window = provider.ContextGauge("", model)
+		b.Window = modelreg.ContextGauge("", model)
 	}
 
 	// The TUI status bar's live usage picture (shared with the usage surface):
@@ -357,7 +356,7 @@ func (s *wsSession) contextNode(id, op string) (ctrlproto.ContextNode, error) {
 		})
 		return node, nil
 	case id == "tools":
-		advertised, filtered := ag.AdvertisedTools()
+		advertised, filtered := lazytools.Of(ag).Advertised()
 		return ctxToolsNode(ag.ToolsSnapshot(), advertised, filtered), nil
 	case id == "xt":
 		// The ephemeral context, one child per Volatile segment of the frame, by
@@ -370,21 +369,22 @@ func (s *wsSession) contextNode(id, op string) (ctrlproto.ContextNode, error) {
 		node.Children = ctxSegmentNodes(frame, core.Volatile, "xt/seg", map[string][]ctrlproto.ContextNode{
 			core.TailHost: s.extContextItems("card", "xt/card"),
 		})
-		// The lazy-tool capability note rides the same ephemeral tail but isn't in
-		// the frame; surface it as an inspectable leaf so the expanded section
-		// sums to its byte total.
-		if note := ag.CapabilityNote(); note != "" {
-			node.Bytes += len(note)
-			node.Children = append(node.Children, ctrlproto.ContextNode{
-				ID: "xt/lazynote", Kind: "block", Label: "inactive tool groups (capability note)",
-				Bytes: len(note), Summary: ctxFirstLineOf(note), Content: note,
-			})
-		}
 		return node, nil
 	case strings.HasPrefix(id, "tr/m"):
 		return ctxMessageContentNode(id, ag.Messages())
 	}
 	return ctrlproto.ContextNode{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("unknown context node %q", id))
+}
+
+// lazyNoteBytes is the size of the lazy-tool capability note among the frame's
+// Volatile segments, or 0 when it carries none.
+func lazyNoteBytes(frame core.Frame) int {
+	for _, seg := range frame.Segments {
+		if seg.Stability == core.Volatile && (seg.Tag == lazytools.NoteFull || seg.Tag == lazytools.NoteBrief) {
+			return len(seg.Content)
+		}
+	}
+	return 0
 }
 
 // ctxSegmentNodes lists the frame's segments of one stability as child nodes,
@@ -451,7 +451,7 @@ func ctxExtItems(items []extensions.ContextItem, kind, idPrefix string) []ctrlpr
 // so the extra nesting level needs no per-leaf refetch.
 //
 // advertised reports whether a tool's schema is actually sent to the model this
-// turn; filtered is true when lazy visibility (or a VisibleTool override) is in
+// turn; filtered is true when lazy visibility is in
 // effect. The section's Bytes is the LIVE cost — only advertised schemas — so
 // /context reports the real context weight, not the full installed registry.
 // Inactive groups are still listed (an operator wants to see what could be

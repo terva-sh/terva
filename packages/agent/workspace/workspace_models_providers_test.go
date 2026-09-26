@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
-	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/agent/modelreg"
 )
 
 // 🪤 models.list carries the reachable provider set because it is a SUPERSET of
@@ -27,8 +27,8 @@ func TestModelsCarriesReachableProvidersThatHaveNoModels(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
 
 	w := &Workspace{ctx: context.Background(), diag: func(string) {}, sessions: map[string]*wsSession{}}
 	res, err := w.Models(context.Background(), "")

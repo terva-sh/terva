@@ -34,7 +34,7 @@ func anthCompatCapture(t *testing.T, key string, o AnthropicCompatOptions, req R
 	}))
 	defer srv.Close()
 
-	c := NewAnthropicCompatOpts("my-gateway", key, srv.URL, o)
+	c := WithCatalog(NewAnthropicCompatOpts("my-gateway", key, srv.URL, o), testReg)
 	if req.Model == "" {
 		req.Model = "claude-sonnet-4.5"
 	}
@@ -174,7 +174,7 @@ func TestDiscoverAnthropicCompatiblePagesAndStamps(t *testing.T) {
 	defer srv.Close()
 
 	got, err := DiscoverAnthropicCompatible(context.Background(), srv.URL, "sk", 200000,
-		AnthropicCompatOptions{BearerAuth: true})
+		AnthropicCompatOptions{BearerAuth: true}, testReg.Active())
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestDiscoverAnthropicCompatibleToleratesNoModelsEndpoint(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := DiscoverAnthropicCompatible(context.Background(), srv.URL, "", 0, AnthropicCompatOptions{})
+	got, err := DiscoverAnthropicCompatible(context.Background(), srv.URL, "", 0, AnthropicCompatOptions{}, testReg.Active())
 	if err == nil {
 		t.Fatal("want an error for a 404 model list")
 	}

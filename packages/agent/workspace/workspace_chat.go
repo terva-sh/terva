@@ -26,6 +26,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/extdriver"
 	"terva.sh/terva/packages/agent/extensions"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
@@ -748,7 +749,7 @@ func (h *chatWsHost) Status() string {
 		ctxUsed = last.PromptTokens()
 		queued = ag.QueuedMessageCount()
 	}
-	ctxMax := provider.ContextGauge(prov, model)
+	ctxMax := modelreg.ContextGauge(prov, model)
 	return chat.FormatStatus(chat.StatusSnapshot{
 		Provider: prov, Model: model, CWD: cwd,
 		Usage: usage, Subscription: s.subscription,

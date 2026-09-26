@@ -41,11 +41,11 @@ var unpricedProviders = map[string]string{
 
 func TestEveryProviderPricesSomething(t *testing.T) {
 	withCatalogState(t)
-	ResetCatalogLayers()
+	testReg.Reset()
 
 	type tally struct{ total, unpriced int }
 	byProvider := map[string]*tally{}
-	for _, m := range Active() {
+	for _, m := range testReg.Active() {
 		tl := byProvider[m.Provider]
 		if tl == nil {
 			tl = &tally{}
@@ -98,15 +98,15 @@ func TestEveryProviderPricesSomething(t *testing.T) {
 // platform. They must carry it, so "(sub)" has a number to qualify.
 func TestKimiCodeRowsCarryTheMoonshotListPrice(t *testing.T) {
 	withCatalogState(t)
-	ResetCatalogLayers()
+	testReg.Reset()
 
 	// K3 and its 256k sibling are priced from moonshotai/k3-256k.
-	k3ref, err := FindModel("moonshotai", "k3-256k")
+	k3ref, err := testReg.FindModel("moonshotai", "k3-256k")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"k3", "k3-256k"} {
-		m, err := FindModel("kimi", id)
+		m, err := testReg.FindModel("kimi", id)
 		if err != nil {
 			t.Fatalf("kimi/%s: %v", id, err)
 		}
@@ -118,12 +118,12 @@ func TestKimiCodeRowsCarryTheMoonshotListPrice(t *testing.T) {
 	}
 
 	// The K2-generation rows are priced from moonshotai/kimi-k2-thinking.
-	k2ref, err := FindModel("moonshotai", "kimi-k2-thinking")
+	k2ref, err := testReg.FindModel("moonshotai", "kimi-k2-thinking")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"kimi-for-coding", "kimi-k2-thinking"} {
-		m, err := FindModel("kimi", id)
+		m, err := testReg.FindModel("kimi", id)
 		if err != nil {
 			t.Fatalf("kimi/%s: %v", id, err)
 		}
@@ -139,10 +139,10 @@ func TestKimiCodeRowsCarryTheMoonshotListPrice(t *testing.T) {
 // row, in the file its siblings live in.
 func TestKimiK2ThinkingIsDefinedOnce(t *testing.T) {
 	withCatalogState(t)
-	ResetCatalogLayers()
+	testReg.Reset()
 
 	n := 0
-	for _, m := range Active() {
+	for _, m := range testReg.Active() {
 		if m.Provider == "kimi" && m.ID == "kimi-k2-thinking" {
 			n++
 		}
@@ -246,7 +246,7 @@ var anthropicCacheRateExceptions = map[string]cacheRateRule{
 
 func TestAnthropicCacheRatesFollowTheirMultipliers(t *testing.T) {
 	withCatalogState(t)
-	ResetCatalogLayers()
+	testReg.Reset()
 
 	// Every price here is at most a few hundred dollars per MTok, so an
 	// absolute epsilon is enough to absorb binary rounding (0.1*16.5 lands on
@@ -256,7 +256,7 @@ func TestAnthropicCacheRatesFollowTheirMultipliers(t *testing.T) {
 	used := map[string]bool{}
 	checked := 0
 
-	for _, m := range Active() {
+	for _, m := range testReg.Active() {
 		id := strings.ToLower(m.ID)
 		if !strings.Contains(id, "claude") && !strings.Contains(id, "anthropic") {
 			continue

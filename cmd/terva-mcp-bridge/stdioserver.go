@@ -8,7 +8,7 @@ import (
 	"os"
 	"sync"
 
-	"terva.sh/terva/packages/lineframe"
+	"terva.sh/terva/packages/provider/lineframe"
 )
 
 // bridgeMaxFrameBytes is this bridge's frame ceiling, on BOTH halves of the

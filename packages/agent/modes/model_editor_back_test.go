@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
@@ -29,9 +30,9 @@ import (
 // lands straight on the model list) with the real overlay wiring built.
 func modelEditorFixture(t *testing.T) *Interactive {
 	t.Helper()
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
-	provider.RegisterExtraModel(provider.Model{
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
+	modelreg.RegisterExtraModel(provider.Model{
 		Provider: "acme", ID: "shipped", ContextWindow: 4000, Source: "catalog",
 	})
 

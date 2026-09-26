@@ -16,9 +16,9 @@ import (
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/web"
 	"terva.sh/terva/packages/agent/workspace"
-	"terva.sh/terva/packages/buildinfo"
+	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/i18n"
-	"terva.sh/terva/packages/provider/auth"
+	"terva.sh/terva/packages/provider/buildinfo"
 	"terva.sh/terva/packages/relaunch"
 )
 

@@ -16,7 +16,7 @@ import "testing"
 // apologised for a "technical snag" it had no record of. The reasoning is the
 // turn's only surviving substance, so it rides back as the content.
 func TestOAIBuildRequest_ReasoningOnlyTurnSurvivesReplay(t *testing.T) {
-	c := &openaiClient{name: "openai-compatible"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openai-compatible"}
 	out, err := c.buildRequest(Request{
 		Model: "qwen3.8-27b",
 		Messages: []Message{
@@ -47,7 +47,7 @@ func TestOAIBuildRequest_ReasoningOnlyTurnSurvivesReplay(t *testing.T) {
 // all has no substance to replay and must still be dropped, or the endpoint
 // 400s with "assistant must not be empty".
 func TestOAIBuildRequest_TrulyEmptyAssistantTurnStillDropped(t *testing.T) {
-	c := &openaiClient{name: "openai-compatible"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openai-compatible"}
 	out, err := c.buildRequest(Request{
 		Model: "qwen3.8-27b",
 		Messages: []Message{
@@ -71,7 +71,7 @@ func TestOAIBuildRequest_TrulyEmptyAssistantTurnStillDropped(t *testing.T) {
 // endpoints that read it, and Kimi 400s on an assistant message whose only
 // substance is reasoning_content.
 func TestOAIBuildRequest_PromotedReasoningIsNotAlsoReasoningContent(t *testing.T) {
-	c := &openaiClient{name: "openai-compatible"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openai-compatible"}
 	out, err := c.buildRequest(Request{
 		Model: "qwen3.8-27b",
 		Messages: []Message{
@@ -93,7 +93,7 @@ func TestOAIBuildRequest_PromotedReasoningIsNotAlsoReasoningContent(t *testing.T
 // The established Kimi path is untouched: reasoning alongside a tool call
 // still rides in reasoning_content, and the visible text stays the content.
 func TestOAIBuildRequest_ReasoningWithToolCallUnchanged(t *testing.T) {
-	c := &openaiClient{name: "openai-compatible"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openai-compatible"}
 	out, err := c.buildRequest(Request{
 		Model: "qwen3.8-27b",
 		Messages: []Message{

@@ -16,10 +16,10 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/buildinfo"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
-	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/provider/buildinfo"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -111,7 +111,7 @@ func (i *Interactive) slashStatus() {
 	}
 	// Resolved after the carrier has had its say, so a session that switched
 	// model mid-flight names the model it is actually on.
-	if m, err := provider.FindModel(f.Provider, f.Model); err == nil && m.DisplayNameSet {
+	if m, err := modelreg.FindModel(f.Provider, f.Model); err == nil && m.DisplayNameSet {
 		f.ModelName = m.DisplayName
 	}
 	switch {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/agent/modes/widgets"
 	"terva.sh/terva/packages/core"
@@ -547,9 +548,9 @@ func (i *Interactive) redraw() {
 	// client skewed from the daemon) keeps the raw id, which is what the bar
 	// showed before names existed.
 	modelLabel := i.cfg.Model
-	if m, err := provider.FindModel(i.cfg.Provider, i.cfg.Model); err == nil {
+	if m, err := modelreg.FindModel(i.cfg.Provider, i.cfg.Model); err == nil {
 		// The EFFECTIVE window: this bar is a gauge, and it has to read against
-		// the same number auto-compaction fires on. See provider.ContextGauge.
+		// the same number auto-compaction fires on. See modelreg.ContextGauge.
 		ctxMax = m.EffectiveContextWindow()
 		modelLabel = m.Label()
 	}

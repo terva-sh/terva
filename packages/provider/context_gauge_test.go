@@ -28,8 +28,8 @@ const gaugeTestProvider = "context-gauge-test"
 // every other test expects.
 func withSyntheticModels(t *testing.T, models ...Model) {
 	t.Helper()
-	SetUserModels(models)
-	t.Cleanup(func() { SetUserModels(nil) })
+	testReg.SetUserModels(models)
+	t.Cleanup(func() { testReg.SetUserModels(nil) })
 }
 
 func TestContextGaugeReportsTheEffectiveWindowNotTheHardCeiling(t *testing.T) {
@@ -38,13 +38,13 @@ func TestContextGaugeReportsTheEffectiveWindowNotTheHardCeiling(t *testing.T) {
 		ContextWindow: 1050000, DesiredContextWindow: 272000,
 	})
 
-	if got, want := ContextGauge(gaugeTestProvider, "surcharged"), 272000; got != want {
+	if got, want := testReg.ContextGauge(gaugeTestProvider, "surcharged"), 272000; got != want {
 		t.Errorf("ContextGauge = %d, want the effective window %d — a gauge reading against the "+
 			"hard ceiling shows 21%% at the moment auto-compaction fires", got, want)
 	}
 	// And the hard ceiling is still reachable, because the maxTok clamp and
 	// every surface reporting the model's SPEC needs it.
-	m, err := FindModel(gaugeTestProvider, "surcharged")
+	m, err := testReg.FindModel(gaugeTestProvider, "surcharged")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,11 +69,11 @@ func TestTheGaugeDenominatorEqualsTheAutoCompactionDenominator(t *testing.T) {
 	withSyntheticModels(t, cases...)
 
 	for _, want := range cases {
-		m, err := FindModel(gaugeTestProvider, want.ID)
+		m, err := testReg.FindModel(gaugeTestProvider, want.ID)
 		if err != nil {
 			t.Fatalf("%s: %v", want.ID, err)
 		}
-		if got := ContextGauge(gaugeTestProvider, want.ID); got != m.EffectiveContextWindow() {
+		if got := testReg.ContextGauge(gaugeTestProvider, want.ID); got != m.EffectiveContextWindow() {
 			t.Errorf("%s: gauge denominator %d != auto-compaction denominator %d",
 				want.ID, got, m.EffectiveContextWindow())
 		}
@@ -83,8 +83,8 @@ func TestTheGaugeDenominatorEqualsTheAutoCompactionDenominator(t *testing.T) {
 // An unknown model yields 0, which every caller already renders as "no gauge".
 // Returning the hard ceiling, or panicking, would each be worse in its own way.
 func TestContextGaugeIsZeroForAnUnknownModel(t *testing.T) {
-	if got := ContextGauge(gaugeTestProvider, "no-such-model"); got != 0 {
-		t.Errorf("ContextGauge(unknown) = %d, want 0", got)
+	if got := testReg.ContextGauge(gaugeTestProvider, "no-such-model"); got != 0 {
+		t.Errorf("testReg.ContextGauge(unknown) = %d, want 0", got)
 	}
 }
 
@@ -93,13 +93,13 @@ func TestContextGaugeIsZeroForAnUnknownModel(t *testing.T) {
 // stopped consulting EffectiveContextWindow fails here even if the synthetic
 // cases above were somehow satisfied.
 func TestEveryCatalogModelsGaugeIsItsEffectiveWindow(t *testing.T) {
-	models := Active()
+	models := testReg.Active()
 	if len(models) < 100 {
 		t.Fatalf("the active catalog holds %d models; this scan is not exercising anything", len(models))
 	}
 	var checked, differing int
 	for _, m := range models {
-		got := ContextGauge(m.Provider, m.ID)
+		got := testReg.ContextGauge(m.Provider, m.ID)
 		if got != m.EffectiveContextWindow() {
 			t.Errorf("%s/%s: gauge %d != effective window %d", m.Provider, m.ID, got, m.EffectiveContextWindow())
 		}

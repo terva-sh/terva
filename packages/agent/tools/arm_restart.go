@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/restartmarker"
-	"terva.sh/terva/packages/buildinfo"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/provider/buildinfo"
 )
 
 // ArmRestartTool declares that an imminent, intentional SUPERVISOR restart of

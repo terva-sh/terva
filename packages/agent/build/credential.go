@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"terva.sh/terva/packages/agent/config"
-	"terva.sh/terva/packages/provider/auth"
+	"terva.sh/terva/packages/auth"
 )
 
 // Credential resolution reads the provider registry (providerByID) for each

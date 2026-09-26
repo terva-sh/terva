@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -25,8 +26,8 @@ import (
 // and vercel-ai-gateway misclassifications that the reasoning-wire guard next
 // door was written for.
 func TestNamedEndpointSpeaksTheWireItsDumpAssumes(t *testing.T) {
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
 
 	const id = "neot"
 	if err := RegisterOrReplaceEndpoint(id, config.EndpointConfig{
@@ -64,8 +65,8 @@ func TestNamedEndpointSpeaksTheWireItsDumpAssumes(t *testing.T) {
 // while --dump-prompt=wire still refused the endpoint outright, which is the
 // bug that started this.
 func TestNamedEndpointActuallyDumps(t *testing.T) {
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
 
 	const id = "neot"
 	if err := RegisterOrReplaceEndpoint(id, config.EndpointConfig{

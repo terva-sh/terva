@@ -8,9 +8,9 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/i18n"
-	"terva.sh/terva/packages/provider"
 )
 
 // The swarm tier ladder on the wire. packages/agent/tools owns what a ladder IS
@@ -47,7 +47,7 @@ func (w *Workspace) ModelTiers(_ context.Context, p ctrlproto.ModelTiersParams) 
 		// resolves to a model the catalog no longer has should still render as
 		// its id instead of vanishing.
 		if row.Model != "" {
-			if m, err := provider.FindModel(prov, row.Model); err == nil {
+			if m, err := modelreg.FindModel(prov, row.Model); err == nil {
 				row.Label = m.Label()
 			}
 		}
@@ -68,7 +68,7 @@ func (w *Workspace) ModelTiersSet(_ context.Context, p ctrlproto.ModelTiersSetPa
 		// missing model does not fail here — it silently resolves to nothing
 		// and the sub-agent quietly inherits the host, which is the failure
 		// this whole surface exists to stop being invisible.
-		if _, err := provider.FindModel(prov, pin.Model); err != nil {
+		if _, err := modelreg.FindModel(prov, pin.Model); err != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeNotFound, "%s", i18n.T("unknown model %q", p.Model))
 		}
 	}

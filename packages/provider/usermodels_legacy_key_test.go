@@ -50,7 +50,7 @@ func TestALegacyKeyedOverrideIsVisibleToTheEditor(t *testing.T) {
 			path := writeModelsJSON(t, legacy, id, 500000)
 
 			// The loader treats it as live under the canonical provider...
-			overrides, warnings := LoadUserModelsWithWarnings(path)
+			overrides, warnings := loadUserModelsWithWarnings(path)
 			if len(overrides) != 1 || overrides[0].Model.Provider != canonical {
 				t.Fatalf("loader produced %+v (warnings %v); expected one override under %q",
 					overrides, warnings, canonical)
@@ -58,12 +58,12 @@ func TestALegacyKeyedOverrideIsVisibleToTheEditor(t *testing.T) {
 
 			// ...so the editor, which only ever holds the canonical provider,
 			// must see it too.
-			um, ok, err := FindUserModel(path, canonical, id)
+			um, ok, err := findUserModel(path, canonical, id)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if !ok {
-				t.Fatalf("FindUserModel(%q) found nothing while a %q block holds a live override; "+
+				t.Fatalf("findUserModel(%q) found nothing while a %q block holds a live override; "+
 					"the settings form shows no override and its Reset clears nothing", canonical, legacy)
 			}
 			if um.ContextWindow != 500000 {
@@ -71,14 +71,14 @@ func TestALegacyKeyedOverrideIsVisibleToTheEditor(t *testing.T) {
 			}
 
 			// And Reset must actually reset.
-			removed, err := RemoveUserModel(path, canonical, id)
+			removed, err := removeUserModel(path, canonical, id)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if !removed {
-				t.Fatalf("RemoveUserModel(%q) reported nothing to remove", canonical)
+				t.Fatalf("removeUserModel(%q) reported nothing to remove", canonical)
 			}
-			if left, _ := LoadUserModelsWithWarnings(path); len(left) != 0 {
+			if left, _ := loadUserModelsWithWarnings(path); len(left) != 0 {
 				t.Fatalf("the override survived Reset: %+v", left)
 			}
 		})
@@ -94,11 +94,11 @@ func TestSavingFoldsALegacyBlockIntoTheCanonicalOne(t *testing.T) {
 			const id = "folded-model"
 			path := writeModelsJSON(t, legacy, id, 500000)
 
-			if err := UpsertUserModel(path, canonical, UserModel{ID: id, ContextWindow: 250000}); err != nil {
+			if err := upsertUserModel(path, canonical, UserModel{ID: id, ContextWindow: 250000}); err != nil {
 				t.Fatal(err)
 			}
 
-			f, err := ReadUserModelsFile(path)
+			f, err := readUserModelsFile(path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -135,7 +135,7 @@ func TestBothSpellingsResolveDeterministicallyToTheEditorsBlock(t *testing.T) {
 
 	// Run it enough times that map-order roulette would have shown itself.
 	for i := 0; i < 50; i++ {
-		overrides, warnings := LoadUserModelsWithWarnings(path)
+		overrides, warnings := loadUserModelsWithWarnings(path)
 		if len(overrides) != 2 {
 			t.Fatalf("run %d: got %d overrides, want both entries loaded", i, len(overrides))
 		}

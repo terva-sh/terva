@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -68,13 +69,13 @@ func TestRegisterOrReplaceEndpointRefusesBuiltIn(t *testing.T) {
 // baked-in one. Empty when discovery has found it nothing — the caller must
 // treat that as "no model", not as a usable id.
 func TestEndpointDefaultModel(t *testing.T) {
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
 
 	if got := EndpointDefaultModel("ep-nomodels"); got != "" {
 		t.Errorf("EndpointDefaultModel with nothing discovered = %q, want empty", got)
 	}
-	provider.RegisterExtraModel(provider.Model{
+	modelreg.RegisterExtraModel(provider.Model{
 		Provider: "ep-models", ID: "qwen-local", DisplayName: "qwen-local",
 		ContextWindow: 8192, MaxOutput: 4096,
 	})
@@ -90,8 +91,8 @@ func TestEndpointDefaultModel(t *testing.T) {
 func TestResolveEndpointWithoutModel(t *testing.T) {
 	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
 
 	ep := config.EndpointConfig{BaseURL: "http://ep-nomodel:9000/v1"}
 	if err := config.SaveConfig(config.Config{
@@ -110,7 +111,7 @@ func TestResolveEndpointWithoutModel(t *testing.T) {
 	}
 
 	// Once discovery has found the endpoint a model, that model is the default.
-	provider.RegisterExtraModel(provider.Model{
+	modelreg.RegisterExtraModel(provider.Model{
 		Provider: "ep-nomodel", ID: "served-model", DisplayName: "served-model",
 		ContextWindow: 8192, MaxOutput: 4096, BaseURL: ep.BaseURL,
 	})
@@ -130,8 +131,8 @@ func TestResolveEndpointWithoutModel(t *testing.T) {
 func TestResolveFallsBackToEndpointWhenNothingElseIsLoggedIn(t *testing.T) {
 	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
 	for _, k := range []string{
 		"ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "OPENAI_API_KEY", "GEMINI_API_KEY",
 		"GOOGLE_API_KEY", "DEEPSEEK_API_KEY", "KIMI_API_KEY", "MOONSHOT_API_KEY",
@@ -154,7 +155,7 @@ func TestResolveFallsBackToEndpointWhenNothingElseIsLoggedIn(t *testing.T) {
 	if err := RegisterEndpoint("ep-only", ep); err != nil {
 		t.Fatal(err)
 	}
-	provider.RegisterExtraModel(provider.Model{
+	modelreg.RegisterExtraModel(provider.Model{
 		Provider: "ep-only", ID: "local-llm", DisplayName: "local-llm",
 		ContextWindow: 8192, MaxOutput: 4096, BaseURL: ep.BaseURL,
 	})
@@ -178,8 +179,8 @@ func TestResolveFallsBackToEndpointWhenNothingElseIsLoggedIn(t *testing.T) {
 func TestResolveDoesNotFallBackToAModellessEndpoint(t *testing.T) {
 	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
 	for _, k := range []string{
 		"ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "OPENAI_API_KEY", "GEMINI_API_KEY",
 		"GOOGLE_API_KEY", "DEEPSEEK_API_KEY", "KIMI_API_KEY", "MOONSHOT_API_KEY",

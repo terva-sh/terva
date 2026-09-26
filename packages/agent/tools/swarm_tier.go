@@ -3,7 +3,7 @@ package tools
 import (
 	"strings"
 
-	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/agent/modelreg"
 )
 
 // tierFamily says how to find ONE rung of a provider's ladder in that
@@ -220,7 +220,7 @@ func (f tierFamily) resolvePick(providerID string) TierPick {
 // An operator who wants tomorrow's model today can still pin it by id in
 // swarm_tiers, which is their call to make and not a default's.
 func (f tierFamily) resolve(providerID string) string {
-	models := provider.ModelsForProvider(providerID)
+	models := modelreg.ModelsForProvider(providerID)
 	for _, yes := range f.match {
 		one := tierFamily{match: []string{yes}, unless: f.unless}
 		for _, m := range models {
@@ -487,7 +487,7 @@ func swarmTierRankOf(providerID, modelID string, overrides SwarmTierMap) (int, b
 	// prices its whole catalog at 0 (github-copilot), and reading that as
 	// "everything is equally cheap" would rank every host at the top rung and
 	// switch the cap off exactly where nobody would notice.
-	host, err := provider.FindModel(providerID, modelID)
+	host, err := modelreg.FindModel(providerID, modelID)
 	if err != nil || host.PriceOutput <= 0 {
 		return 0, false
 	}
@@ -497,7 +497,7 @@ func swarmTierRankOf(providerID, modelID string, overrides SwarmTierMap) (int, b
 		if pick.Model == "" {
 			continue
 		}
-		m, err := provider.FindModel(providerID, pick.Model)
+		m, err := modelreg.FindModel(providerID, pick.Model)
 		if err != nil || m.PriceOutput <= 0 {
 			continue
 		}

@@ -9,7 +9,7 @@ import "testing"
 func withLiveModels(t *testing.T, models []Model) {
 	t.Helper()
 	withCatalogState(t)
-	SetLiveModels(models)
+	testReg.SetLiveModels(models)
 }
 
 // outputBudget pulls whichever max-output field buildRequest populated
@@ -40,7 +40,7 @@ func TestBuildRequestDoesNotClampWhenOutputFitsWindow(t *testing.T) {
 		ContextWindow: 128000,
 		MaxOutput:     16384,
 	}})
-	c := &openaiClient{name: "openai"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openai"}
 
 	out, err := c.buildRequest(Request{
 		Model:    "fits-fine",
@@ -67,7 +67,7 @@ func TestBuildRequestClampsLargeWindowAtMaxReserve(t *testing.T) {
 		ContextWindow: window,
 		MaxOutput:     window,
 	}})
-	c := &openaiClient{name: "openrouter"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openrouter"}
 
 	out, err := c.buildRequest(Request{
 		Model:    "nemotron-tight",
@@ -94,7 +94,7 @@ func TestBuildRequestProportionalReserveSmallWindow(t *testing.T) {
 		ContextWindow: window,
 		MaxOutput:     window,
 	}})
-	c := &openaiClient{name: "openai"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openai"}
 
 	out, err := c.buildRequest(Request{
 		Model:    "gpt-4-like",
@@ -118,7 +118,7 @@ func TestBuildRequestClampFloor(t *testing.T) {
 		ContextWindow: 16,
 		MaxOutput:     16,
 	}})
-	c := &openaiClient{name: "openrouter"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openrouter"}
 
 	out, err := c.buildRequest(Request{
 		Model:    "tiny-window",
@@ -142,7 +142,7 @@ func TestBuildRequestClampDoesNotInflate(t *testing.T) {
 		ContextWindow: 262144,
 		MaxOutput:     262144,
 	}})
-	c := &openaiClient{name: "openrouter"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openrouter"}
 
 	out, err := c.buildRequest(Request{
 		Model:     "roomy",

@@ -29,7 +29,7 @@ func Builtin() ModelCatalog { return staticCatalog{} }
 type staticCatalog struct{}
 
 func (staticCatalog) FindModel(provider, id string) (Model, error) {
-	return findIn(catalog, provider, id)
+	return findIn(Catalog, provider, id)
 }
 
 // catalogOr returns c, or Builtin when c is nil: a client its host gave no
@@ -82,7 +82,7 @@ func findIn(models []Model, provider, id string) (Model, error) {
 // Registry is a model catalog built from four declarative layers, lowest to
 // highest precedence:
 //
-//	builtin — the baked-in catalog (extended from init()s)
+//	builtin — the baked-in Catalog (extended from init()s)
 //	live    — /v1/models discovery or its disk cache (SetLiveModels)
 //	extra   — individually registered models, e.g. the
 //	          openai-compatible endpoint's listing (RegisterExtraModel)
@@ -98,7 +98,7 @@ type Registry struct {
 	user  []UserOverride
 	// merged is the cached layer merge, recomputed on every layer write
 	// (writes are rare; reads are hot). nil means no layer has ever been set
-	// and Active serves the baked-in catalog.
+	// and Active serves the baked-in Catalog.
 	merged []Model
 	// rev bumps on every remerge so live UIs (the /model picker) can detect
 	// when background /v1/models discovery has grown the catalog and re-read
@@ -111,7 +111,7 @@ func NewRegistry() *Registry { return &Registry{} }
 
 // remergeLocked recomputes the merged catalog. Callers hold r.mu.
 func (r *Registry) remergeLocked() {
-	out := mergeCatalog(r.live)
+	out := MergeCatalog(r.live)
 	out = upsertModels(out, r.extra)
 	out = applyUserOverrides(out, r.user)
 	r.merged = out
@@ -181,7 +181,7 @@ func (r *Registry) SetUserModels(models []Model) {
 }
 
 // Reset clears every overlay layer (live, extra, user), returning Active to
-// the baked-in catalog. Intended for tests that need a pristine catalog
+// the baked-in Catalog. Intended for tests that need a pristine catalog
 // regardless of what earlier tests installed.
 func (r *Registry) Reset() {
 	r.mu.Lock()
@@ -192,10 +192,10 @@ func (r *Registry) Reset() {
 // Active returns the current merged catalog.
 //
 // When no layer has ever been set it returns the fully-assembled static
-// catalog. Reading the built-in list at call time (rather than capturing it into a
+// Catalog. Reading Catalog at call time (rather than capturing it into a
 // package-level var initializer) is load-bearing: the extended catalog in
 // catalog_builtin.go / extra_models.go is appended from init() functions,
-// which run AFTER package-level var initializers. Snapshotting the list at
+// which run AFTER package-level var initializers. Snapshotting Catalog at
 // var-init time would freeze the picker to the curated seed list and drop
 // every extra provider (openrouter, groq, xai, ...). The same applies to
 // remergeLocked — it only ever runs from a setter call, well after init.
@@ -204,7 +204,7 @@ func (r *Registry) Active() []Model {
 	defer r.mu.RUnlock()
 	src := r.merged
 	if src == nil {
-		src = catalog
+		src = Catalog
 	}
 	out := make([]Model, len(src))
 	copy(out, src)

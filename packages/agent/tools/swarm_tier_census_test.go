@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -53,7 +54,7 @@ func TestEveryListedTierRungResolves(t *testing.T) {
 // the two rungs resolves to something the other also claims.
 func TestSwarmTierFamiliesAreUnambiguous(t *testing.T) {
 	for _, p := range tableProviders() {
-		for _, m := range provider.ModelsForProvider(p) {
+		for _, m := range modelreg.ModelsForProvider(p) {
 			var in []string
 			for _, rung := range swarmRankName {
 				if swarmTierFamilies[p][rung].matches(m.ID) {
@@ -98,7 +99,7 @@ func TestSwarmTierLadderRunsCheapToExpensive(t *testing.T) {
 			if pick.Model == "" {
 				continue
 			}
-			m, err := provider.FindModel(p, pick.Model)
+			m, err := modelreg.FindModel(p, pick.Model)
 			if err != nil || m.PriceOutput == 0 {
 				continue
 			}
@@ -125,7 +126,7 @@ func TestNoTierRungResolvesToASpeculativeModel(t *testing.T) {
 			if pick.Model == "" {
 				continue
 			}
-			m, err := provider.FindModel(p, pick.Model)
+			m, err := modelreg.FindModel(p, pick.Model)
 			if err != nil {
 				t.Errorf("%s/%s resolved to %q, which is not in the catalog", p, swarmRankName[rank], pick.Model)
 				continue
@@ -250,7 +251,7 @@ func TestNoTierRungResolvesToAnImageModel(t *testing.T) {
 			if pick.Model == "" {
 				continue
 			}
-			m, err := provider.FindModel(p, pick.Model)
+			m, err := modelreg.FindModel(p, pick.Model)
 			if err != nil {
 				continue // TestNoTierRungResolvesToASpeculativeModel reports this
 			}
@@ -290,7 +291,7 @@ func TestBuiltinEffortLadderRungsDiffer(t *testing.T) {
 			if len(ranks) < 2 {
 				continue
 			}
-			m, err := provider.FindModel(p, id)
+			m, err := modelreg.FindModel(p, id)
 			if err != nil {
 				continue
 			}
@@ -335,7 +336,7 @@ func TestCheapTierIsNotDearerThanTheLadder(t *testing.T) {
 			if n != TierCheap || picks[i].Model == "" {
 				continue
 			}
-			if m, err := provider.FindModel(p, picks[i].Model); err == nil && m.PriceOutput > 0 {
+			if m, err := modelreg.FindModel(p, picks[i].Model); err == nil && m.PriceOutput > 0 {
 				cheap, haveCheap = m.PriceOutput, true
 			}
 		}
@@ -346,7 +347,7 @@ func TestCheapTierIsNotDearerThanTheLadder(t *testing.T) {
 			if n == TierCheap || picks[i].Model == "" {
 				continue
 			}
-			m, err := provider.FindModel(p, picks[i].Model)
+			m, err := modelreg.FindModel(p, picks[i].Model)
 			if err != nil || m.PriceOutput <= 0 {
 				continue
 			}

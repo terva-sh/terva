@@ -15,6 +15,11 @@
 // during startup, read many times afterward. A binary that never calls
 // Set (an SDK embedder, a test) reads back the zero Info, and consumers
 // degrade gracefully.
+//
+// 🔑 It lives under packages/provider because the wire reads the version for
+// opencode's user agent, and decision 0021 keeps every package the wire
+// imports under the wire's directory. It is a set-once leaf with no I/O, so
+// the bottom layer is a place every other layer can reach it from.
 package buildinfo
 
 import (

@@ -18,7 +18,7 @@ import (
 // Observed against a local gemma4 build whose reply began mid-deliberation and
 // closed with `</think>` before the real answer.
 func TestOAIBuildRequest_PromotedReasoningDropsThinkMarkers(t *testing.T) {
-	c := &openaiClient{name: "openai-compatible"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openai-compatible"}
 	// The literal shape from the session that surfaced this: deliberation, the
 	// closer, then the answer the user was meant to see.
 	raw := "The user is asking what that note means.\nI'll suggest reading the docs.\n</think>That note is an injected context hint from your terva harness."
@@ -52,7 +52,7 @@ func TestOAIBuildRequest_PromotedReasoningDropsThinkMarkers(t *testing.T) {
 // The channel dialect gets the same treatment. A template that prefills
 // `<|channel>thought` and never closes it strands the reply the same way.
 func TestOAIBuildRequest_PromotedReasoningDropsChannelMarkers(t *testing.T) {
-	c := &openaiClient{name: "openai-compatible"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openai-compatible"}
 	raw := "<|channel>thought\nweighing the options\n<channel|>The visible answer."
 	out, err := c.buildRequest(Request{
 		Model: "gemma-4-26b-a4b-it-qat",
@@ -78,7 +78,7 @@ func TestOAIBuildRequest_PromotedReasoningDropsChannelMarkers(t *testing.T) {
 // the turn is what the promotion exists to prevent — but a stray opener must
 // not ride along.
 func TestOAIBuildRequest_PromotedReasoningWithoutCloserKeepsWords(t *testing.T) {
-	c := &openaiClient{name: "openai-compatible"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openai-compatible"}
 	raw := "<think>I never closed this block and just kept going."
 	out, err := c.buildRequest(Request{
 		Model: "gemma-4-26b-a4b-it-qat",
@@ -107,7 +107,7 @@ func TestOAIBuildRequest_PromotedReasoningWithoutCloserKeepsWords(t *testing.T) 
 // ("assistant must not be empty"), which is the guard the promotion sits in
 // front of.
 func TestOAIBuildRequest_MarkerOnlyReasoningIsStillDropped(t *testing.T) {
-	c := &openaiClient{name: "openai-compatible"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openai-compatible"}
 	out, err := c.buildRequest(Request{
 		Model: "gemma-4-26b-a4b-it-qat",
 		Messages: []Message{
@@ -137,7 +137,7 @@ func TestOAIBuildRequest_MarkerOnlyReasoningIsStillDropped(t *testing.T) {
 // Reasoning that never carried a marker is promoted verbatim. The stripper
 // must not chew on ordinary prose.
 func TestOAIBuildRequest_PromotedReasoningWithoutMarkersUnchanged(t *testing.T) {
-	c := &openaiClient{name: "openai-compatible"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openai-compatible"}
 	raw := "Plain deliberation with no markers at all."
 	out, err := c.buildRequest(Request{
 		Model: "gemma-4-26b-a4b-it-qat",
@@ -159,7 +159,7 @@ func TestOAIBuildRequest_PromotedReasoningWithoutMarkersUnchanged(t *testing.T) 
 // so a message that legitimately discusses the markers in prose — this
 // codebase does exactly that — keeps them.
 func TestOAIBuildRequest_VisibleTextKeepsMarkersVerbatim(t *testing.T) {
-	c := &openaiClient{name: "openai-compatible"}
+	c := &openaiClient{catalogRef: catalogRef{testReg}, name: "openai-compatible"}
 	prose := "The marker pair is <think>…</think> for this family."
 	out, err := c.buildRequest(Request{
 		Model: "gemma-4-26b-a4b-it-qat",

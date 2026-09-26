@@ -9,7 +9,7 @@ type catalogBox struct{ c provider.ModelCatalog }
 
 // SetCatalog sets the model catalog the agent reads output limits, context
 // windows and capabilities from. The host passes it in (decision 0021), so two
-// agents in one process can see different models. nil restores the default.
+// agents in one process can see different models. nil restores Builtin.
 //
 // The output budget is re-derived from the new catalog when it has the model,
 // as SetModel does. A catalog without the model leaves the budget as it was,
@@ -26,12 +26,12 @@ func (a *Agent) SetCatalog(c provider.ModelCatalog) {
 	a.refreshMaxTokensLocked()
 }
 
-// Catalog returns the catalog set with SetCatalog, or the default when none
-// is. The default is the wire's package registry until terva holds its own
-// (docs/plans/model-catalog.md); it then becomes provider.Builtin().
+// Catalog returns the catalog set with SetCatalog, or provider.Builtin() when
+// none is: an agent its host gave no catalog knows the compiled-in models and
+// nothing else.
 func (a *Agent) Catalog() provider.ModelCatalog {
 	if b := a.catalog.Load(); b != nil && b.c != nil {
 		return b.c
 	}
-	return provider.DefaultRegistry()
+	return provider.Builtin()
 }

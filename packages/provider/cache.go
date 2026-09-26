@@ -12,18 +12,18 @@ type ModelCache struct {
 	// Endpoints is an opaque signature of the user's configured
 	// OpenAI-compatible endpoints at write time. The discoverer re-runs when
 	// it changes, so adding/removing an endpoint refreshes without waiting out
-	// the six-hour cache TTL. (Computed by the agent layer; the cache just carries it.)
+	// CacheTTL. (Computed by the agent layer; the cache just carries it.)
 	Endpoints string  `json:"endpoints,omitempty"`
 	Models    []Model `json:"models"`
 }
 
-// cacheTTL is how long a discovered list is considered fresh.
-const cacheTTL = 6 * time.Hour
+// CacheTTL is how long a discovered list is considered fresh.
+const CacheTTL = 6 * time.Hour
 
 // ModelCacheVersion is bumped whenever the discovery LOGIC changes — a new
 // provider or endpoint is added to refreshModels. A cache written by an older
-// binary carries a lower version and is treated as stale even within the
-// six-hour TTL, so a newly-added source (e.g. opencode-go) is picked up on the next launch
+// binary carries a lower version and is treated as stale even within CacheTTL,
+// so a newly-added source (e.g. opencode-go) is picked up on the next launch
 // instead of waiting out the time-based TTL.
 //
 //	v2: added opencode / opencode-go /v1/models discovery.
@@ -53,17 +53,17 @@ func MarshalModelCache(c ModelCache) ([]byte, error) {
 	return json.MarshalIndent(c, "", "  ")
 }
 
-// IsFresh reports whether the cache was fetched within the last six hours.
+// IsFresh reports whether the cache was fetched within CacheTTL.
 func (c ModelCache) IsFresh() bool {
 	if c.FetchedAt.IsZero() {
 		return false
 	}
-	return time.Since(c.FetchedAt) < cacheTTL
+	return time.Since(c.FetchedAt) < CacheTTL
 }
 
 // IsCurrent reports whether the cache is fresh AND written by a binary with the
 // same discovery set (ModelCacheVersion). A version mismatch forces
-// re-discovery so newly-added providers appear without waiting out the six-hour TTL.
+// re-discovery so newly-added providers appear without waiting out CacheTTL.
 func (c ModelCache) IsCurrent() bool {
 	return c.IsFresh() && c.Version == ModelCacheVersion
 }

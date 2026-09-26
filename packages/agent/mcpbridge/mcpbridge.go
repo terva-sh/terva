@@ -2,20 +2,20 @@
 // shim that lets a foreign worker ask the orchestrating terva for tool
 // permission. A Claude Code worker points --permission-prompt-tool at it; a
 // `terva rpc --portable` worker points --approval-tool at it. Both reach the
-// SAME place a worker's rpc-native ask reaches: the orchestrator's permission.Confirmer
+// SAME place a worker's rpc-native ask reaches: the orchestrator's core.Confirmer
 // and the human's card.
 //
 // It is the serving side terva did not have. packages/agent/mcp is an MCP
 // *client*; terva ships no MCP *server*. Rather than grow one in-core — which
 // would reverse a standing decision that inbound / port-listening / auth weight
-// stays out of the small static core (see docs/proposals/archive/external-agent-workers.md,
+// stays out of the small static core (see docs/proposals/external-agent-workers.md,
 // "Why a bridge and not an HTTP endpoint") — the bridge is a companion binary,
 // the same move as the OAuth callback bridge.
 //
 // The shape:
 //
 //	worker's MCP client  --tools/call-->        bridge (stdio MCP server, this pkg)
-//	bridge  --Request over the unix socket-->   orchestrating terva --> permission.Confirmer --> human card
+//	bridge  --Request over the unix socket-->   orchestrating terva --> core.Confirmer --> human card
 //	bridge  <--Reply (verdict)------------       orchestrating terva
 //	worker's MCP client  <--permission result--  bridge
 //
@@ -73,7 +73,7 @@ type Request struct {
 }
 
 // Reply is the orchestrator's verdict — the socket's response frame. Its fields
-// mirror the meaningful half of permission.ConfirmDecision. It deliberately does NOT
+// mirror the meaningful half of core.ConfirmDecision. It deliberately does NOT
 // carry the remember-* flags: an MCP permission tool is asked per call and has
 // no session memory for the orchestrator to grant across calls.
 type Reply struct {

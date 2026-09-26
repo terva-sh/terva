@@ -300,7 +300,7 @@ func TestAnthropicReplayHelperEmitsWhenTheBlockIsWhole(t *testing.T) {
 // preceding a tool result to LEAD with its thinking, so "the block is somewhere
 // in the array" is not the property that matters.
 func TestBuildRequestReplaysThinkingAheadOfTheToolCall(t *testing.T) {
-	c := &anthropicClient{}
+	c := &anthropicClient{catalogRef: catalogRef{testReg}}
 	wire, err := c.buildRequest(Request{
 		Model: "claude-opus-4-5",
 		Messages: []Message{

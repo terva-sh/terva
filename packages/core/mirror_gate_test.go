@@ -61,13 +61,13 @@ func (imageTool) Execute(ctx context.Context, args json.RawMessage, progress fun
 // model wastes tokens at best and 400s at worst; unknown models keep
 // the capability's default (true) so old behavior is preserved.
 func TestToolImageMirrorGatedOnModelCapability(t *testing.T) {
-	t.Cleanup(provider.ResetCatalogLayers)
-	provider.ResetCatalogLayers()
-	provider.RegisterExtraModel(provider.Model{
+	t.Cleanup(testCatalog.Reset)
+	testCatalog.Reset()
+	testCatalog.RegisterExtraModel(provider.Model{
 		Provider: "test", ID: "blind-model",
 		Caps: map[provider.Capability]bool{provider.CapImageInput: false},
 	})
-	provider.RegisterExtraModel(provider.Model{Provider: "test", ID: "vision-model"})
+	testCatalog.RegisterExtraModel(provider.Model{Provider: "test", ID: "vision-model"})
 
 	mirrored := func(model string) bool {
 		a := newTestAgent(&mirrorFakeClient{}, model, "sys", Registry{"shot": imageTool{}})
@@ -146,9 +146,9 @@ func TestMirrorToolImagesOnlyWhenImagePresent(t *testing.T) {
 // to the prefix for mirrors persisted before the marker existed.
 func TestIsToolImageMirror(t *testing.T) {
 	a := newTestAgent(&mirrorFakeClient{}, "vision-model", "sys", Registry{"shot": imageTool{}})
-	t.Cleanup(provider.ResetCatalogLayers)
-	provider.ResetCatalogLayers()
-	provider.RegisterExtraModel(provider.Model{Provider: "test", ID: "vision-model"})
+	t.Cleanup(testCatalog.Reset)
+	testCatalog.Reset()
+	testCatalog.RegisterExtraModel(provider.Model{Provider: "test", ID: "vision-model"})
 	if err := a.Prompt(context.Background(), "shot", nil, func(AgentEvent) {}); err != nil {
 		t.Fatal(err)
 	}

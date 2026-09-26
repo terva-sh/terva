@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
@@ -127,7 +128,7 @@ func (i *Interactive) startTurnWithImages(parent context.Context, prompt string,
 		i.mu.Lock()
 		provName, modelID := i.cfg.Provider, i.cfg.Model
 		i.mu.Unlock()
-		if m, err := provider.FindModel(provName, modelID); err == nil && !m.Has(provider.CapImageInput) {
+		if m, err := modelreg.FindModel(provName, modelID); err == nil && !m.Has(provider.CapImageInput) {
 			i.mu.Lock()
 			i.statusErr = i18n.T("note: %s can't see images — %d attachment(s) will be dropped", modelID, len(images))
 			i.mu.Unlock()

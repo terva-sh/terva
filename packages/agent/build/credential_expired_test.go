@@ -10,8 +10,9 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/modelreg"
+	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/provider"
-	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -229,9 +230,9 @@ func TestResolveRequiresCredentialForHostedCatalogModel(t *testing.T) {
 // that only re-points a built-in row's baseUrl.
 func TestResolveKeepsUserPinnedModelKeyless(t *testing.T) {
 	isolate(t)
-	provider.ResetCatalogLayers()
-	defer provider.ResetCatalogLayers()
-	provider.SetUserModels([]provider.Model{{
+	modelreg.ResetCatalogLayers()
+	defer modelreg.ResetCatalogLayers()
+	modelreg.SetUserModels([]provider.Model{{
 		Provider:      "openai",
 		ID:            "local-qwen",
 		DisplayName:   "Local Qwen",

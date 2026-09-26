@@ -13,11 +13,11 @@ import (
 )
 
 func TestCompactionRetentionPartition(t *testing.T) {
-	model, err := provider.FindModel("", "claude-haiku-4-5")
+	model, err := provider.Builtin().FindModel("", "claude-haiku-4-5")
 	if err != nil {
 		t.Fatal(err)
 	}
-	budget := int(float64(model.EffectiveContextWindow()) * KeepTailMaxFraction)
+	budget := int(float64(model.EffectiveContextWindow()) * keepTailMaxFraction)
 	big := strings.Repeat("x", 4*budget+100)
 	user := func(text string) provider.Message {
 		return provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: text}}}
@@ -56,9 +56,11 @@ func TestCompactionRetentionPartition(t *testing.T) {
 					return saidText("checkpoint", 100), nil
 				}}
 				a := newTestAgent(client, model.ID, "system", Registry{})
-				a.ReadOnly = NewReadOnlySet("read")
+				a.SetToolsWithReadOnly(a.tools, NewReadOnlySet("read"))
 				warmMode := mode == "warm" || mode == "fallback"
-				a.SetCacheAwareCompaction(warmMode)
+				if warmMode {
+					useStrategies(a, CompactWarm, CompactCold)
+				}
 				if warmMode {
 					if err := a.Prompt(context.Background(), "warm the prefix", nil, nil); err != nil {
 						t.Fatal(err)
@@ -68,7 +70,7 @@ func TestCompactionRetentionPartition(t *testing.T) {
 				before := serializeTranscript(a.Messages())
 				var observed []provider.Message
 				var observedResult CompactResult
-				a.AddTranscriptCompactedObserver(func(msgs []provider.Message, res CompactResult) {
+				a.addTranscriptCompactedObserver(func(msgs []provider.Message, res CompactResult) {
 					observed, observedResult = msgs, res
 				})
 				var res CompactResult
@@ -98,7 +100,7 @@ func TestCompactionRetentionPartition(t *testing.T) {
 				if want := len(serializeTranscript(summarized)) / 4; res.TokensBefore != want {
 					t.Errorf("TokensBefore = %d; want %d for everything removed", res.TokensBefore, want)
 				}
-				ledger := executedActionsLedger(neutralProse(), summarized, a.ReadOnly, a.Tools)
+				ledger := executedActionsLedger(neutralProse(), summarized, a.readOnly, a.tools)
 				body := "## Context Summary (compacted)\n\ncheckpoint"
 				if ledger != "" {
 					body += "\n\n" + ledger

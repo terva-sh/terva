@@ -31,8 +31,8 @@ import (
 // transcripts terva is required to read whole.
 var localReaders = map[string]string{
 	// Local trusted FILES. lineframe's package doc excludes these by name.
-	"packages/session/session_portable.go":    "session transcripts and JSONL exports: local files, deliberately uncapped — see this file's own ReadBytes comments",
-	"packages/session/session.go":             "replay of terva's own session file",
+	"packages/core/session_portable.go":       "session transcripts and JSONL exports: local files, deliberately uncapped — see this file's own ReadBytes comments",
+	"packages/core/session.go":                "replay of terva's own session file",
 	"packages/agent/swarm/event.go":           "replay of the durable swarm event log, a file terva wrote",
 	"packages/agent/build/usageledger.go":     "the local usage ledger file",
 	"packages/agent/workflow/runs/journal.go": "the local workflow run journal",

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
@@ -55,7 +56,7 @@ type ModelDialog struct {
 	scope      providerRow      // the current stage-2 scope (for re-scoping)
 	scopeLabel string           // stage-2 breadcrumb ("openrouter" / "★ favorites")
 	single     bool             // opened straight into one provider -> esc closes
-	catalogRev uint64           // provider.CatalogRevision() at last read
+	catalogRev uint64           // modelreg.CatalogRevision() at last read
 
 	// promote sub-prompt (Ctrl+D "set as default").
 	promoting       bool
@@ -121,7 +122,7 @@ func (d *ModelDialog) Open(current string, loggedInProviders, favorites, hidden 
 	d.provQuery.Clear()
 	d.provCursor = 0
 	d.current = current
-	d.catalogRev = provider.CatalogRevision()
+	d.catalogRev = modelreg.CatalogRevision()
 
 	d.favorites = make(map[string]bool, len(favorites))
 	for _, k := range favorites {
@@ -182,7 +183,7 @@ func (d *ModelDialog) OpenAt(current string, loggedInProviders, favorites, hidde
 // /v1/models discovery completes) filtered to the logged-in providers.
 func (d *ModelDialog) reloadModels() {
 	d.allModels = nil
-	for _, m := range provider.Active() {
+	for _, m := range modelreg.Active() {
 		if d.provSet[m.Provider] {
 			d.allModels = append(d.allModels, m)
 		}
@@ -469,7 +470,7 @@ func (d *ModelDialog) Render(th tui.Theme, width int) []string {
 	// Pick up models that arrived via background /v1/models discovery after
 	// the picker opened (e.g. logging into OpenRouter, then opening /model
 	// before its ~340 models finished loading).
-	if r := provider.CatalogRevision(); r != d.catalogRev {
+	if r := modelreg.CatalogRevision(); r != d.catalogRev {
 		d.catalogRev = r
 		d.reloadCatalog()
 	}

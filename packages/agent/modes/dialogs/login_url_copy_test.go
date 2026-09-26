@@ -7,7 +7,7 @@ import (
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/modes/widgets"
-	"terva.sh/terva/packages/provider/auth"
+	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/testsupport"
 	"terva.sh/terva/packages/tui"
 )

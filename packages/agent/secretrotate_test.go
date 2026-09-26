@@ -12,8 +12,8 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/privfs"
-	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/secrets"
 	"terva.sh/terva/packages/secretstore"
 	"terva.sh/terva/packages/testsupport"

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/config"
-	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -58,8 +58,8 @@ func TestModelRefreshWritesToLaunchHome(t *testing.T) {
 	launchHome := testsupport.TempDir(t)
 	laterHome := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", launchHome)
-	provider.ResetCatalogLayers()
-	t.Cleanup(provider.ResetCatalogLayers)
+	modelreg.ResetCatalogLayers()
+	t.Cleanup(modelreg.ResetCatalogLayers)
 	if err := config.SaveConfig(config.Config{
 		Endpoints: map[string]config.EndpointConfig{"racer": {BaseURL: srv.URL + "/v1"}},
 	}); err != nil {

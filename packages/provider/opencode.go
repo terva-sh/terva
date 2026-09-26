@@ -105,7 +105,7 @@ func newOpenCodeClient(name, apiKey, baseURL, fallbackBaseURL string) Client {
 // NewOpenCode is the opencode.ai Zen endpoint. Mixed APIs upstream; this
 // constructor wires the openai-completions flavor only. Models that need
 // the anthropic-messages flavor under the same provider should be built
-// as an Anthropic-compatible client against the same base URL, which would need the
+// with NewAnthropicCompat against the same base URL, which would need the
 // session header wired there too. No current model requires that.
 func NewOpenCode(apiKey, baseURL string) Client {
 	return newOpenCodeClient("opencode", apiKey, baseURL, "https://opencode.ai/zen/v1")

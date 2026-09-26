@@ -30,7 +30,7 @@ import (
 // different package entirely, so no compiler and no test forced them to agree.
 //
 // None took a lock, and all four wrote the same fixed "<path>.tmp" — the shared
-// scratch name provider/auth/store.go and terva-mcp-bridge each document having
+// scratch name packages/auth/store.go and terva-mcp-bridge each document having
 // fixed, because two writers truncate and fill the same file and the rename
 // publishes a blend of two documents.
 //
@@ -286,7 +286,7 @@ func TestTwoProjectSettersDoNotLoseEachOthersKeys(t *testing.T) {
 //
 // It still matters. The lock degrades to the in-process mutex on a filesystem
 // that cannot host a lockfile, and the fixed name is also reachable by anything
-// else that ever wrote it — which is why provider/auth/store.go and
+// else that ever wrote it — which is why packages/auth/store.go and
 // terva-mcp-bridge each document having removed the same shared name.
 func TestAWriteDoesNotTouchTheOldSharedTempName(t *testing.T) {
 	cwd := testsupport.TempDir(t)

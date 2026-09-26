@@ -210,7 +210,10 @@ func looksLikeChatModel(id string) bool {
 // to defaultCtx. The API key is optional — keyless local servers are
 // common. Obvious non-chat artefacts (embeddings, rerankers, audio) are
 // skipped to keep the picker focused on usable models.
-func DiscoverOpenAICompatible(ctx context.Context, baseURL, key string, defaultCtx int) ([]Model, error) {
+//
+// known is the catalog the discovered rows borrow reasoning from (see
+// openAICompatCaps): the host's, passed in, since the wire holds none.
+func DiscoverOpenAICompatible(ctx context.Context, baseURL, key string, defaultCtx int, known []Model) ([]Model, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		return nil, fmt.Errorf("empty base url")
@@ -259,7 +262,7 @@ func DiscoverOpenAICompatible(ctx context.Context, baseURL, key string, defaultC
 				break
 			}
 		}
-		caps := openAICompatCaps(d.ID)
+		caps := openAICompatCaps(known, d.ID)
 		out = append(out, Model{
 			Provider:         "openai-compatible",
 			ID:               d.ID,
@@ -329,10 +332,10 @@ type openAICompatCapabilities struct {
 // Only reasoning travels. Vision stays with visionCapsFromID, which biases
 // text-only on purpose, and the output cap stays unset because a gateway's
 // limit is its own.
-func openAICompatCaps(id string) openAICompatCapabilities {
+func openAICompatCaps(known []Model, id string) openAICompatCapabilities {
 	var out openAICompatCapabilities
 	found := false
-	for _, m := range Active() {
+	for _, m := range known {
 		if m.ID != id || m.BaseURL != "" || m.Synthetic {
 			continue
 		}

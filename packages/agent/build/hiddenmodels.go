@@ -2,7 +2,7 @@ package build
 
 import (
 	"terva.sh/terva/packages/agent/config"
-	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/agent/modelreg"
 )
 
 // HiddenModelKeys returns the "provider/id" keys of every active model the
@@ -25,7 +25,7 @@ func HiddenModelKeys() []string {
 		return nil
 	}
 	var out []string
-	for _, m := range provider.Active() {
+	for _, m := range modelreg.Active() {
 		if vis.Hidden(m.Provider, m.ID) {
 			out = append(out, config.ModelKey(m.Provider, m.ID))
 		}

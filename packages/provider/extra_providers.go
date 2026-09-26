@@ -4,7 +4,7 @@ package provider
 //
 // Most are OpenAI Chat Completions–compatible, so they reuse `openaiClient`
 // with a different name + base URL. A handful speak the Anthropic Messages
-// API and reuse `anthropicClient` via newAnthropicCompat below.
+// API and reuse `anthropicClient` via NewAnthropicCompat below.
 //
 // Providers with a non-trivial protocol (Bedrock Converse, Vertex SSE, Azure
 // Responses, Mistral Conversations) are stubbed so the host wiring compiles.
@@ -168,11 +168,11 @@ func NewOpenRouter(apiKey, baseURL string) Client {
 // anthropicClient with a custom name.
 // ----------------------------------------------------------------------
 
-// newAnthropicCompat returns an anthropicClient pinned to a non-default
+// NewAnthropicCompat returns an anthropicClient pinned to a non-default
 // base URL and identifying as `name` for cost / logging purposes. Auth is
 // API key (x-api-key header). For OAuth-fronted compatibles (rare) use
-// NewAnthropicOAuthSource and rename via NameClient.
-func newAnthropicCompat(name, apiKey, baseURL string, opts ...ClientOption) Client {
+// NewAnthropicOAuth and rename via NameClient.
+func NewAnthropicCompat(name, apiKey, baseURL string, opts ...ClientOption) Client {
 	if baseURL == "" {
 		baseURL = anthropicDefaultBaseURL
 	}
@@ -223,12 +223,12 @@ func NewKimiCodingSourceWithHeaders(cred CredentialSource, baseURL string, heade
 // NewMinimaxAnthropic is the anthropic-messages flavor on
 // api.minimax.io/anthropic, catalogued under provider=minimax.
 func NewMinimaxAnthropic(apiKey, baseURL string, opts ...ClientOption) Client {
-	return newAnthropicCompat("minimax", apiKey, firstNonEmptyString(baseURL, "https://api.minimax.io/anthropic"), opts...)
+	return NewAnthropicCompat("minimax", apiKey, firstNonEmptyString(baseURL, "https://api.minimax.io/anthropic"), opts...)
 }
 
 // NewMinimaxCNAnthropic is the CN-region MiniMax (anthropic-messages).
 func NewMinimaxCNAnthropic(apiKey, baseURL string, opts ...ClientOption) Client {
-	return newAnthropicCompat("minimax-cn", apiKey, firstNonEmptyString(baseURL, "https://api.minimaxi.com/anthropic"), opts...)
+	return NewAnthropicCompat("minimax-cn", apiKey, firstNonEmptyString(baseURL, "https://api.minimaxi.com/anthropic"), opts...)
 }
 
 // NewFireworksAnthropic is the main Fireworks route. The
@@ -236,12 +236,12 @@ func NewMinimaxCNAnthropic(apiKey, baseURL string, opts ...ClientOption) Client 
 // expects Anthropic-style request bodies; use this rather than the
 // OpenAI flavor.
 func NewFireworksAnthropic(apiKey, baseURL string, opts ...ClientOption) Client {
-	return newAnthropicCompat("fireworks", apiKey, firstNonEmptyString(baseURL, "https://api.fireworks.ai/inference"), opts...)
+	return NewAnthropicCompat("fireworks", apiKey, firstNonEmptyString(baseURL, "https://api.fireworks.ai/inference"), opts...)
 }
 
 // NewVercelGatewayAnthropic — Vercel AI Gateway anthropic-messages route.
 func NewVercelGatewayAnthropic(apiKey, baseURL string, opts ...ClientOption) Client {
-	return newAnthropicCompat("vercel-ai-gateway", apiKey, firstNonEmptyString(baseURL, "https://ai-gateway.vercel.sh"), opts...)
+	return NewAnthropicCompat("vercel-ai-gateway", apiKey, firstNonEmptyString(baseURL, "https://ai-gateway.vercel.sh"), opts...)
 }
 
 // ----------------------------------------------------------------------
@@ -272,17 +272,17 @@ func (c *unimplementedClient) Stream(ctx context.Context, req Request) (<-chan E
 }
 
 // NewBedrock returns an AWS Bedrock client. See amazon_bedrock.go for the
-// hand-rolled Converse-Stream wire-format parser. BedrockConfig says how cfg
-// authenticates.
+// hand-rolled Converse-Stream wire-format parser and NewBedrockClient for how
+// cfg authenticates.
 func NewBedrock(cfg BedrockConfig, baseURL string) Client {
-	return newBedrockClient(cfg, baseURL)
+	return NewBedrockClient(cfg, baseURL)
 }
 
 // NewGoogleVertex returns a Vertex AI client. See google_vertex.go for
 // the full auth + URL-rewrite implementation, and VertexConfig for what it
 // needs.
 func NewGoogleVertex(v VertexConfig, opts ...ClientOption) Client {
-	return newVertex(v, opts...)
+	return NewVertex(v, opts...)
 }
 
 // NewAzureOpenAIResponses delegates to the real Azure OpenAI client.
@@ -292,7 +292,7 @@ func NewGoogleVertex(v VertexConfig, opts ...ClientOption) Client {
 // client. Models register under provider id `azure-openai-responses`
 // so user catalogs keep working unchanged.
 func NewAzureOpenAIResponses(apiKey, baseURL string, cfg AzureOpenAIConfig) Client {
-	return newAzureOpenAI(apiKey, baseURL, cfg)
+	return NewAzureOpenAI(apiKey, baseURL, cfg)
 }
 
 // NewMistral returns a Mistral client using their OpenAI-compatible Chat
@@ -383,7 +383,7 @@ func NewGithubCopilot(apiKey, _ string) Client {
 	if apiKey == "" {
 		return &unimplementedClient{name: "github-copilot", hint: "set COPILOT_GITHUB_TOKEN", wire: reasoningWireOpenAICompat}
 	}
-	return newGithubCopilotClient(apiKey)
+	return NewGithubCopilotClient(apiKey)
 }
 
 // ----------------------------------------------------------------------

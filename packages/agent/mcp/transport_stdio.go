@@ -11,7 +11,7 @@ import (
 	"terva.sh/terva/packages/agent/internal/pipeio"
 	"terva.sh/terva/packages/agent/procenv"
 	"terva.sh/terva/packages/envcompat"
-	"terva.sh/terva/packages/lineframe"
+	"terva.sh/terva/packages/provider/lineframe"
 )
 
 // stdioTransport speaks MCP over a subprocess's stdin/stdout as newline-delimited

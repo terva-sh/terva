@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -78,13 +79,13 @@ func TestAnthropicEndpointFindsItsOwnModels(t *testing.T) {
 	}
 	t.Cleanup(func() { UnregisterEndpoint(id) })
 
-	provider.RegisterExtraModel(provider.Model{
+	modelreg.RegisterExtraModel(provider.Model{
 		Provider: id, ID: "house-model", DisplayName: "house-model",
 		ContextWindow: 200000, MaxOutput: 4096, Source: "live",
 	})
 
 	c := Resolved{Provider: id, Credential: "k", AuthMethod: "apikey", BaseURL: "http://box:4000"}.NewClient()
-	m, err := provider.FindModel(c.Name(), "house-model")
+	m, err := modelreg.FindModel(c.Name(), "house-model")
 	if err != nil {
 		t.Fatalf("FindModel(%q, house-model): %v — the endpoint cannot see its own models", c.Name(), err)
 	}

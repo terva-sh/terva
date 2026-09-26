@@ -26,9 +26,9 @@ func statusText(r core.ToolResult) string {
 }
 
 func TestStatusToolReportsStaticAndLiveFacts(t *testing.T) {
-	// A bare Agent is enough: the tool only reads Model/Reasoning and
-	// the usage snapshots, all safe on a zero-value agent.
-	ag := &core.Agent{Model: "claude-sonnet-4-5", Reasoning: "high"}
+	// An agent with no client is enough: the tool reads only the model, the
+	// reasoning level and the usage snapshots.
+	ag := coretest.NewAgent(nil, "claude-sonnet-4-5", "", nil, core.WithReasoning("high"))
 	ag.SeedLastTurnUsage(provider.Usage{InputTokens: 10000, CacheReadTokens: 2000})
 	ag.SeedCost(provider.Usage{InputTokens: 12000, OutputTokens: 3000, CostUSD: 0.05})
 
@@ -90,7 +90,7 @@ func TestStatusSetProviderRebindsAfterCrossProviderSwap(t *testing.T) {
 	// Live agent now runs a real anthropic model (post-swap), but the tool
 	// was built for the previous provider ("openai" + oauth) and never
 	// rebuilt — the stale state the bug leaves behind.
-	ag := &core.Agent{Model: "claude-sonnet-4-5"}
+	ag := coretest.NewAgent(nil, "claude-sonnet-4-5", "", nil)
 	ag.SeedLastTurnUsage(provider.Usage{InputTokens: 10000})
 	st := &StatusTool{Provider: "openai", AuthMethod: "oauth", Agent: ag}
 
@@ -221,8 +221,8 @@ func TestFmtTokens(t *testing.T) {
 // built LAST. The dispatch context must win, so each conversation gets
 // its own numbers.
 func TestStatusReportsCallingAgentFromContext(t *testing.T) {
-	stale := &core.Agent{Model: "stale-model"}
-	caller := &core.Agent{Model: "caller-model", Reasoning: "low"}
+	stale := coretest.NewAgent(nil, "stale-model", "", nil)
+	caller := coretest.NewAgent(nil, "caller-model", "", nil, core.WithReasoning("low"))
 
 	st := &StatusTool{Provider: "anthropic", Agent: stale}
 

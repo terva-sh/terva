@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
 )
@@ -167,7 +168,7 @@ func TestTheProviderRowNeverCyclesThroughEmpty(t *testing.T) {
 // who added a model in order to use it, and nobody who was only registering one
 // gets moved off the model they were on.
 func TestOpenAtPutsTheNamedModelUnderTheCursorWithoutSwitching(t *testing.T) {
-	shipped := provider.ModelsForProvider("anthropic")
+	shipped := modelreg.ModelsForProvider("anthropic")
 	if len(shipped) < 2 {
 		t.Skip("need two anthropic models to tell selection from the default landing")
 	}
@@ -195,7 +196,7 @@ func TestOpenAtPutsTheNamedModelUnderTheCursorWithoutSwitching(t *testing.T) {
 // A model the list does not hold must not leave the picker somewhere that does
 // not contain what the status line just named.
 func TestOpenAtFallsBackWhenTheModelIsNotThere(t *testing.T) {
-	if len(provider.ModelsForProvider("anthropic")) == 0 {
+	if len(modelreg.ModelsForProvider("anthropic")) == 0 {
 		t.Skip("no anthropic models in the catalog")
 	}
 	d := NewModelDialog()

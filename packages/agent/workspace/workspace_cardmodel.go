@@ -6,7 +6,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/agent/modelreg"
 )
 
 // Per-card default model on the wire. Like card groups, the store is global
@@ -42,7 +42,7 @@ func (w *Workspace) cardModelStore() *build.CardModelStore { return build.NewCar
 // the routing path and outranks all of this.
 //
 // Both the card and world rungs are resolved through the catalog
-// (provider.FindModel) exactly like an explicit pick, so a pref naming an
+// (modelreg.FindModel) exactly like an explicit pick, so a pref naming an
 // unqualified or now-uncredentialed model degrades to the next rung down instead
 // of seeding an unrunnable session. The workspace rung is trusted as-is, matching
 // createSeededLocked's original base.
@@ -55,7 +55,7 @@ func (w *Workspace) effectiveDefaultModel(cardID, worldID string) (prov, model s
 
 	if worldID = strings.TrimSpace(worldID); worldID != "" {
 		if doc, err := build.NewWorldStore().Get(worldID); err == nil && strings.TrimSpace(doc.Model.Model) != "" {
-			if m, e := provider.FindModel(doc.Model.Provider, doc.Model.Model); e == nil {
+			if m, e := modelreg.FindModel(doc.Model.Provider, doc.Model.Model); e == nil {
 				prov, model, source = m.Provider, m.ID, ctrlproto.DefaultSourceWorld
 			}
 		}
@@ -63,7 +63,7 @@ func (w *Workspace) effectiveDefaultModel(cardID, worldID string) (prov, model s
 
 	if cardID = strings.TrimSpace(cardID); cardID != "" {
 		if cm, ok, _ := w.cardModelStore().Get(cardID); ok {
-			if m, e := provider.FindModel(cm.Provider, cm.Model); e == nil {
+			if m, e := modelreg.FindModel(cm.Provider, cm.Model); e == nil {
 				return m.Provider, m.ID, ctrlproto.DefaultSourceCard
 			}
 		}
@@ -90,7 +90,7 @@ func (w *Workspace) CardModelSet(_ context.Context, p ctrlproto.CardModelSetPara
 	}
 	prov, model := strings.TrimSpace(p.Provider), strings.TrimSpace(p.Model)
 	if prov != "" || model != "" {
-		m, e := provider.FindModel(prov, model)
+		m, e := modelreg.FindModel(prov, model)
 		if e != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "unknown model %q: %v", model, e)
 		}
