@@ -79,6 +79,13 @@ No notes yet.
 
 No notes yet.
 
+## v0.139.1
+
+v0.139.1 breaks no stable symbol of its own. v0.139.0 was published only on
+the project's own forge, so on GitHub v0.139.1 is the first release that
+carries the v0.139.0 changes. If you upgrade from v0.138.2, follow the
+v0.139.0 notes below.
+
 ## v0.139.0
 
 Since v0.138.2: 813 stable break(s) (787 removed, 26 changed), each with a note below, and 0 unstable break(s).
