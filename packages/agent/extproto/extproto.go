@@ -21,7 +21,7 @@ import (
 	"bufio"
 	"encoding/json"
 
-	"terva.sh/terva/packages/lineframe"
+	"terva.sh/terva/packages/provider/lineframe"
 )
 
 // MaxFrameBytes is the largest single wire frame the read side accepts.
@@ -214,7 +214,7 @@ type RegisterToolFromExt struct {
 	// hosts and extensions interoperate unchanged. An extension that
 	// lies here only cheats its own user's policy.
 	ReadOnly bool `json:"read_only,omitempty"`
-	// Authority is the tool's effect class (core.Authority:
+	// Authority is the tool's effect class (permission.Authority:
 	// local-read / workspace-mutation / process-execution /
 	// network-read / external-mutation). It is the richer successor to
 	// ReadOnly: a network-read tool reads nothing locally yet must not
@@ -875,7 +875,7 @@ type EventFromHost struct {
 	// every session_start — including after a /cd — so an extension can
 	// follow the working directory instead of going stale on the launch
 	// cwd. ProjectID is the host's stable, collision-proof key for the
-	// cwd (core.ProjectKey): an extension uses it to scope per-project
+	// cwd (session.ProjectKey): an extension uses it to scope per-project
 	// state without reimplementing the keying. Additive/omitempty —
 	// pre-v2 subscribers ignore them, and a no-session start leaves them
 	// empty.

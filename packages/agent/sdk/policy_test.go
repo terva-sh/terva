@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -45,7 +47,7 @@ func denyConfig(t *testing.T) {
 // looking green.
 func newRuntime(t *testing.T, cfg Config) *Runtime {
 	t.Helper()
-	provider.SetUserModels(nil)
+	modelreg.SetUserModels(nil)
 	cfg.CWD = testsupport.TempDir(t)
 	cfg.Provider = "anthropic"
 	cfg.APIKey = "sk-test-no-request-is-ever-made"
@@ -111,9 +113,9 @@ type recordingConfirmer struct {
 	answer bool
 }
 
-func (c *recordingConfirmer) Confirm(_ context.Context, toolName, preview string) core.ConfirmDecision {
+func (c *recordingConfirmer) Confirm(_ context.Context, toolName, preview string) permission.ConfirmDecision {
 	c.asked = append(c.asked, toolName)
-	return core.ConfirmDecision{Allow: c.answer}
+	return permission.ConfirmDecision{Allow: c.answer}
 }
 
 func TestASuppliedConfirmerIsConsulted(t *testing.T) {

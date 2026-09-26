@@ -17,7 +17,7 @@
 // core learned: PromptSegment.Origin exists because pointing a worker at
 // AGENTS.md required paths the assembler had been throwing away.)
 //
-// See docs/proposals/external-agent-workers.md.
+// See docs/proposals/archive/external-agent-workers.md.
 package worker
 
 import "strings"
@@ -119,7 +119,7 @@ type Route struct {
 }
 
 // Policy is terva's approval posture, to be mapped onto the backend's own
-// permission flags. Deliberately a string and not core.ApprovalMode: what
+// permission flags. Deliberately a string and not permission.ApprovalMode: what
 // crosses is a posture to be translated, not terva's enum to be honored.
 type Policy struct {
 	Posture string

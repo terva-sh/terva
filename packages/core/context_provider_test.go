@@ -230,7 +230,7 @@ func TestPromptCacheKeyFollowsSessionIdentity(t *testing.T) {
 	if err := a.Prompt(context.Background(), "hello again", nil, nil); err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}
-	a.AdoptSessionIdentity(&Session{Path: "/sessions/x/20260708-abc123.jsonl"})
+	a.AdoptSessionIdentity(TranscriptIdentity{ID: "20260708-abc123", Path: "/sessions/x/20260708-abc123.jsonl"})
 	if err := a.Prompt(context.Background(), "again", nil, nil); err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}
@@ -286,8 +286,8 @@ func TestLiveOnlyCacheKeysAreDistinctPerAgent(t *testing.T) {
 func TestUnbindingKeepsACacheKey(t *testing.T) {
 	client := &ephemeralCaptureClient{}
 	a := newTestAgent(client, "fake-model", "system", Registry{})
-	a.AdoptSessionIdentity(&Session{ID: "uuid-real", Path: "/sessions/x/20260708-abc123.jsonl"})
-	a.AdoptSessionIdentity(nil)
+	a.AdoptSessionIdentity(TranscriptIdentity{ID: "20260708-abc123", Path: "/sessions/x/20260708-abc123.jsonl", CacheKey: "uuid-real"})
+	a.AdoptSessionIdentity(TranscriptIdentity{})
 
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 		t.Fatalf("Prompt: %v", err)
@@ -310,8 +310,8 @@ func TestPromptCacheKeyPrefersMetaUUID(t *testing.T) {
 	b := newTestAgent(client, "fake-model", "system", Registry{})
 
 	// Two swarm children: same basename, distinct meta UUIDs.
-	a.AdoptSessionIdentity(&Session{ID: "uuid-child-a", Path: "/swarm/agents/a/session.json"})
-	b.AdoptSessionIdentity(&Session{ID: "uuid-child-b", Path: "/swarm/agents/b/session.json"})
+	a.AdoptSessionIdentity(TranscriptIdentity{ID: "session.json", Path: "/swarm/agents/a/session.json", CacheKey: "uuid-child-a"})
+	b.AdoptSessionIdentity(TranscriptIdentity{ID: "session.json", Path: "/swarm/agents/b/session.json", CacheKey: "uuid-child-b"})
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 		t.Fatalf("Prompt a: %v", err)
 	}

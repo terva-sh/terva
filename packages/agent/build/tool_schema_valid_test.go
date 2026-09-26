@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -26,7 +26,7 @@ import (
 func TestEveryToolSchemaIsValidJSON(t *testing.T) {
 	reg := BuildToolRegistry(
 		Args{CWD: testsupport.TempDir(t)},
-		core.ApprovalYolo,
+		permission.ApprovalYolo,
 		testsupport.TempDir(t),
 		nil, "anthropic", "api-key", false, nil,
 	)

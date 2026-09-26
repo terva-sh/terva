@@ -14,9 +14,9 @@ import (
 
 	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/agent/skills"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -493,7 +493,7 @@ func (i *Interactive) doSessionExport(dst string) {
 	} else {
 		dst = expandTilde(dst)
 	}
-	out, err := core.ExportSession(src, dst)
+	out, err := session.ExportSession(src, dst)
 	if err != nil {
 		i.mu.Lock()
 		i.statusErr = i18n.T("export: %s", err.Error())
@@ -529,7 +529,7 @@ func (i *Interactive) doSessionImport(src string) {
 		i.invalidate()
 		return
 	}
-	newPath, err := core.ImportSession(src, i.cfg.TervaHome, i.cfg.CWD, i.cfg.Version)
+	newPath, err := session.ImportSession(src, i.cfg.TervaHome, i.cfg.CWD, i.cfg.Version)
 	if err != nil {
 		i.mu.Lock()
 		i.statusErr = i18n.T("import: %s", err.Error())
@@ -664,7 +664,7 @@ func (i *Interactive) doSessionTree() {
 	if i.cfg.FlushSession != nil {
 		i.cfg.FlushSession()
 	}
-	roots := core.BuildSessionTree(i.cfg.TervaHome, i.cfg.CWD)
+	roots := session.BuildSessionTree(i.cfg.TervaHome, i.cfg.CWD)
 	if len(roots) == 0 {
 		i.mu.Lock()
 		i.statusErr = i18n.T("tree: no sessions in this directory yet")
@@ -736,7 +736,7 @@ func (i *Interactive) applyForkSelection(msgIdx int) {
 	// msgIdx is 0-indexed message position; copy msgIdx+1 rows so
 	// the selected user message is included.
 	upTo := msgIdx + 1
-	newPath, err := core.BranchSession(src, i.cfg.TervaHome, i.cfg.CWD, i.cfg.Version, upTo)
+	newPath, err := session.BranchSession(src, i.cfg.TervaHome, i.cfg.CWD, i.cfg.Version, upTo)
 	if err != nil {
 		i.mu.Lock()
 		i.statusErr = i18n.T("fork: %s", err.Error())

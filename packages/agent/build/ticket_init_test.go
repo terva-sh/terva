@@ -7,6 +7,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -26,7 +27,7 @@ func (ticketAsker) Ask(context.Context, []core.UserQuestion) ([]core.UserAnswer,
 func TestTicketInitRegistersOnlyWithoutStore(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 
-	plain := BuildToolRegistry(Args{}, core.ApprovalWorkspace, testsupport.TempDir(t), nil, "", "", false, nil)
+	plain := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, testsupport.TempDir(t), nil, "", "", false, nil)
 	if _, ok := plain["ticket_init"]; !ok {
 		t.Error("ticket_init missing from a directory with no store, which is the only place it can act")
 	}
@@ -36,7 +37,7 @@ func TestTicketInitRegistersOnlyWithoutStore(t *testing.T) {
 		}
 	}
 
-	stored := BuildToolRegistry(Args{}, core.ApprovalWorkspace, ticketStoreDir(t), nil, "", "", false, nil)
+	stored := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, ticketStoreDir(t), nil, "", "", false, nil)
 	if _, ok := stored["ticket_init"]; ok {
 		t.Error("ticket_init registered where a store already governs the cwd")
 	}
@@ -52,10 +53,10 @@ func TestTicketInitPrunedInPlanMode(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	dir := testsupport.TempDir(t)
 
-	if _, ok := BuildToolRegistry(Args{}, core.ApprovalWorkspace, dir, nil, "", "", false, nil)["ticket_init"]; !ok {
+	if _, ok := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, dir, nil, "", "", false, nil)["ticket_init"]; !ok {
 		t.Fatal("ticket_init absent in workspace mode: the prune is not what this test is measuring")
 	}
-	if _, ok := BuildToolRegistry(Args{}, core.ApprovalPlan, dir, nil, "", "", false, nil)["ticket_init"]; ok {
+	if _, ok := BuildToolRegistry(Args{}, permission.ApprovalPlan, dir, nil, "", "", false, nil)["ticket_init"]; ok {
 		t.Error("ticket_init survived plan mode, which promises the repository is not written to")
 	}
 }
@@ -65,7 +66,7 @@ func TestTicketInitPrunedInPlanMode(t *testing.T) {
 func TestTicketInitRespectsTheOptOuts(t *testing.T) {
 	t.Run("--no-ticket", func(t *testing.T) {
 		t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-		reg := BuildToolRegistry(Args{NoTicket: true}, core.ApprovalWorkspace, testsupport.TempDir(t), nil, "", "", false, nil)
+		reg := BuildToolRegistry(Args{NoTicket: true}, permission.ApprovalWorkspace, testsupport.TempDir(t), nil, "", "", false, nil)
 		if _, ok := reg["ticket_init"]; ok {
 			t.Error("ticket_init registered under --no-ticket")
 		}
@@ -74,7 +75,7 @@ func TestTicketInitRespectsTheOptOuts(t *testing.T) {
 		home := testsupport.TempDir(t)
 		t.Setenv("TERVA_HOME", home)
 		writeUserConfig(t, home, config.Config{Tickets: ticketsOff()})
-		reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, testsupport.TempDir(t), nil, "", "", false, nil)
+		reg := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, testsupport.TempDir(t), nil, "", "", false, nil)
 		if _, ok := reg["ticket_init"]; ok {
 			t.Error("ticket_init registered though the user turned the ticket tools off")
 		}
@@ -83,7 +84,7 @@ func TestTicketInitRespectsTheOptOuts(t *testing.T) {
 		t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 		dir := testsupport.TempDir(t)
 		writeProjectConfig(t, dir, `{"tickets":false}`)
-		reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, dir, nil, "", "", false, nil)
+		reg := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, dir, nil, "", "", false, nil)
 		if _, ok := reg["ticket_init"]; ok {
 			t.Error("ticket_init registered though the project refused the ticket tools")
 		}

@@ -13,6 +13,7 @@ import (
 	"terva.sh/terva/packages/agent/modes/widgets"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
@@ -139,7 +140,7 @@ type fakeCarrier struct {
 type approvedCall struct {
 	sess   string
 	callID string
-	d      core.ConfirmDecision
+	d      permission.ConfirmDecision
 }
 
 type answeredAsk struct {
@@ -221,7 +222,7 @@ func (f *fakeCarrier) Cancel(ctx context.Context, sess string) error {
 	return nil
 }
 
-func (f *fakeCarrier) Approve(ctx context.Context, sess, callID string, d core.ConfirmDecision) error {
+func (f *fakeCarrier) Approve(ctx context.Context, sess, callID string, d permission.ConfirmDecision) error {
 	f.approves <- approvedCall{sess, callID, d}
 	return nil
 }

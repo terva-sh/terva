@@ -8,6 +8,7 @@ import (
 
 	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -60,7 +61,7 @@ func TestHostToolDispatcher(t *testing.T) {
 
 func TestHostToolDispatchUsesCurrentGeneration(t *testing.T) {
 	ag := coretest.NewAgent(nil, "fake", "", nil)
-	gate := core.NewPolicyGate(&core.PermissionPolicy{Mode: core.ApprovalWorkspace, ReadOnly: core.NewReadOnlySet("echo")}, nil)
+	gate := permission.NewPolicyGate(&permission.PermissionPolicy{Mode: permission.ApprovalWorkspace, ReadOnly: core.NewReadOnlySet("echo")}, nil)
 	dispatch := buildHostToolDispatcher(ag, gate, fakeHostToolSource{})
 	ag.SetToolsWithReadOnly(core.Registry{"echo": echoTool{}}, core.NewReadOnlySet("echo"))
 	if _, failed := dispatch(context.Background(), "ext", "echo", nil, false); failed {
@@ -88,8 +89,8 @@ func TestHostToolDispatcherAudits(t *testing.T) {
 		t.Fatal("expected the nil-gate call to pass")
 	}
 	// Denied by a plan-mode gate: one deny line carrying the reason.
-	gate := core.NewPolicyGate(&core.PermissionPolicy{
-		Mode:     core.ApprovalPlan,
+	gate := permission.NewPolicyGate(&permission.PermissionPolicy{
+		Mode:     permission.ApprovalPlan,
 		ReadOnly: core.NewReadOnlySet("read"),
 	}, nil)
 	d2 := buildHostToolDispatcher(ag, gate, fakeHostToolSource{})
@@ -113,8 +114,8 @@ func TestHostToolDispatcherAudits(t *testing.T) {
 func TestHostToolDispatcherGateDenies(t *testing.T) {
 	ag := coretest.NewAgent(nil, "fake", "", core.Registry{"echo": echoTool{}})
 	// A policy gate in plan mode denies a non-read-only tool.
-	gate := core.NewPolicyGate(&core.PermissionPolicy{
-		Mode:     core.ApprovalPlan,
+	gate := permission.NewPolicyGate(&permission.PermissionPolicy{
+		Mode:     permission.ApprovalPlan,
 		ReadOnly: core.NewReadOnlySet("read"),
 	}, nil)
 	d := buildHostToolDispatcher(ag, gate, fakeHostToolSource{ext: false})

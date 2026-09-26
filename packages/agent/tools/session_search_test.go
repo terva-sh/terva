@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -94,7 +95,7 @@ func toolResultText(t *testing.T, res core.ToolResult) string {
 // that motivated this, 106 distinct paths were reachable only this way.
 func TestSessionSearchFindsAPathNamedOnlyInToolArguments(t *testing.T) {
 	home, cwd := testsupport.TempDir(t), testsupport.TempDir(t)
-	writeRichSessionFixture(t, filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl"), cwd,
+	writeRichSessionFixture(t, filepath.Join(session.SessionsDir(home, cwd), "sess1.jsonl"), cwd,
 		textRow("user", "carry on with the milestone"),
 		callRow("c1", "read", `{"path":"internal/sim/engine/candidate.go"}`),
 		resultRow("c1", "package engine", false),
@@ -116,7 +117,7 @@ func TestSessionSearchFindsAPathNamedOnlyInToolArguments(t *testing.T) {
 // contents, where an error message from a previous session lives.
 func TestSessionSearchFindsTextInsideAToolResult(t *testing.T) {
 	home, cwd := testsupport.TempDir(t), testsupport.TempDir(t)
-	writeRichSessionFixture(t, filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl"), cwd,
+	writeRichSessionFixture(t, filepath.Join(session.SessionsDir(home, cwd), "sess1.jsonl"), cwd,
 		callRow("c1", "bash", `{"command":"go test ./..."}`),
 		resultRow("c1", "--- FAIL: TestCandidateOrder (0.00s)", true),
 	)
@@ -135,7 +136,7 @@ func TestSessionSearchFindsTextInsideAToolResult(t *testing.T) {
 func TestSessionSearchRedactsSnippets(t *testing.T) {
 	home, cwd := testsupport.TempDir(t), testsupport.TempDir(t)
 	secret := "Authorization: Bearer sk-ant-abcdefgh1234567890"
-	writeRichSessionFixture(t, filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl"), cwd,
+	writeRichSessionFixture(t, filepath.Join(session.SessionsDir(home, cwd), "sess1.jsonl"), cwd,
 		callRow("c1", "bash", `{"command":"curl example.test"}`),
 		resultRow("c1", "boom "+secret, true),
 	)
@@ -151,9 +152,9 @@ func TestSessionSearchRedactsSnippets(t *testing.T) {
 func TestSessionSearchNeverReadsAnotherProject(t *testing.T) {
 	home := testsupport.TempDir(t)
 	mine, theirs := testsupport.TempDir(t), testsupport.TempDir(t)
-	writeRichSessionFixture(t, filepath.Join(core.SessionsDir(home, mine), "mine.jsonl"), mine,
+	writeRichSessionFixture(t, filepath.Join(session.SessionsDir(home, mine), "mine.jsonl"), mine,
 		textRow("user", "my own distinctive marker"))
-	writeRichSessionFixture(t, filepath.Join(core.SessionsDir(home, theirs), "theirs.jsonl"), theirs,
+	writeRichSessionFixture(t, filepath.Join(session.SessionsDir(home, theirs), "theirs.jsonl"), theirs,
 		textRow("user", "someone elses private marker"))
 
 	// The no-match line echoes the query, so asserting on the query text would
@@ -176,7 +177,7 @@ func TestSessionSearchNeverReadsAnotherProject(t *testing.T) {
 // it", which is the one answer a search tool must never fake.
 func TestSessionSearchRejectsAnUnknownKind(t *testing.T) {
 	home, cwd := testsupport.TempDir(t), testsupport.TempDir(t)
-	writeRichSessionFixture(t, filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl"), cwd,
+	writeRichSessionFixture(t, filepath.Join(session.SessionsDir(home, cwd), "sess1.jsonl"), cwd,
 		textRow("user", "hello"))
 
 	tool := &SessionSearchTool{TervaHome: home, CWD: cwd}
@@ -194,7 +195,7 @@ func TestSessionSearchRejectsAnUnknownKind(t *testing.T) {
 
 func TestSessionSearchFiltersByKind(t *testing.T) {
 	home, cwd := testsupport.TempDir(t), testsupport.TempDir(t)
-	writeRichSessionFixture(t, filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl"), cwd,
+	writeRichSessionFixture(t, filepath.Join(session.SessionsDir(home, cwd), "sess1.jsonl"), cwd,
 		textRow("user", "look at widget.go please"),
 		callRow("c1", "read", `{"path":"widget.go"}`),
 	)
@@ -227,7 +228,7 @@ func TestSessionSearchDistinguishesNoSessionsFromNoMatch(t *testing.T) {
 	}
 
 	cwd := testsupport.TempDir(t)
-	writeRichSessionFixture(t, filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl"), cwd,
+	writeRichSessionFixture(t, filepath.Join(session.SessionsDir(home, cwd), "sess1.jsonl"), cwd,
 		textRow("user", "hello"))
 	if out := runSearch(t, home, cwd, `{"query":"absent"}`); !strings.Contains(out, "no match") {
 		t.Errorf("a searched-but-empty result should say no match, got:\n%s", out)
@@ -239,7 +240,7 @@ func TestSessionSearchDistinguishesNoSessionsFromNoMatch(t *testing.T) {
 func TestSessionSearchSnippetCentresOnTheMatch(t *testing.T) {
 	home, cwd := testsupport.TempDir(t), testsupport.TempDir(t)
 	long := strings.Repeat("padding ", 400) + "NEEDLE_HERE" + strings.Repeat(" trailing", 400)
-	writeRichSessionFixture(t, filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl"), cwd,
+	writeRichSessionFixture(t, filepath.Join(session.SessionsDir(home, cwd), "sess1.jsonl"), cwd,
 		callRow("c1", "bash", `{"command":"cat big"}`),
 		resultRow("c1", long, false),
 	)
@@ -282,7 +283,7 @@ func writeSubAgentFixture(t *testing.T, home, id, origin string, rows ...string)
 // never lists.
 func TestSessionSearchCoversSubAgentsOfThisProject(t *testing.T) {
 	home, cwd := testsupport.TempDir(t), testsupport.TempDir(t)
-	writeRichSessionFixture(t, filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl"), cwd,
+	writeRichSessionFixture(t, filepath.Join(session.SessionsDir(home, cwd), "sess1.jsonl"), cwd,
 		textRow("user", "delegate the review"))
 	writeSubAgentFixture(t, home, "agent-1", cwd,
 		callRow("c1", "read", `{"path":"internal/world/spec/spec.go"}`),
@@ -311,7 +312,7 @@ func TestSessionSearchCoversSubAgentsOfThisProject(t *testing.T) {
 func TestSessionSearchExcludesSubAgentsOfOtherProjects(t *testing.T) {
 	home := testsupport.TempDir(t)
 	mine, theirs := testsupport.TempDir(t), testsupport.TempDir(t)
-	writeRichSessionFixture(t, filepath.Join(core.SessionsDir(home, mine), "mine.jsonl"), mine,
+	writeRichSessionFixture(t, filepath.Join(session.SessionsDir(home, mine), "mine.jsonl"), mine,
 		textRow("user", "hello"))
 	writeSubAgentFixture(t, home, "agent-theirs", theirs,
 		textRow("assistant", "another projects delegated secret"))
@@ -329,7 +330,7 @@ func TestSessionSearchExcludesSubAgentsOfOtherProjects(t *testing.T) {
 // skipped, not treated as belonging to whoever asked.
 func TestSessionSearchSkipsSubAgentsWithNoProvableOwner(t *testing.T) {
 	home, cwd := testsupport.TempDir(t), testsupport.TempDir(t)
-	writeRichSessionFixture(t, filepath.Join(core.SessionsDir(home, cwd), "mine.jsonl"), cwd,
+	writeRichSessionFixture(t, filepath.Join(session.SessionsDir(home, cwd), "mine.jsonl"), cwd,
 		textRow("user", "hello"))
 	dir := filepath.Join(home, "swarm", "agents", "orphan")
 	if err := os.MkdirAll(dir, 0o755); err != nil {

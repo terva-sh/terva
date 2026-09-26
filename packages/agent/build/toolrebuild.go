@@ -5,6 +5,7 @@ import (
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // LiveToolSet is the rebuild-survivor rule in one place.
@@ -53,7 +54,7 @@ type LiveToolSet struct {
 	// Deprecated: rebuilds derive classification from the current tools.
 	ReadOnly *core.ReadOnlySet
 	// Gate is shared across generations; script bindings use it for approval.
-	Gate *core.ConfirmGate
+	Gate *permission.ConfirmGate
 
 	// Tasks is the session's task controller. A fresh resolve carries a fresh
 	// one over an unbound store; adopting it would leave the model writing

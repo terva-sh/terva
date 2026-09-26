@@ -16,6 +16,7 @@ import (
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // authorizedOK is authorized()'s boolean half. These tests predate the
@@ -521,7 +522,7 @@ func (f *fakeWS) SideChatAsk(ctx context.Context, sess, id string, prior []ctrlp
 	return "", nil
 }
 func (f *fakeWS) SideChatClose(ctx context.Context, sess, id string) error { return nil }
-func (f *fakeWS) Approve(ctx context.Context, sess, callID string, d core.ConfirmDecision) error {
+func (f *fakeWS) Approve(ctx context.Context, sess, callID string, d permission.ConfirmDecision) error {
 	return nil
 }
 func (f *fakeWS) Answer(ctx context.Context, sess, askID string, answers []core.UserAnswer) error {

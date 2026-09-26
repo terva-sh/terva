@@ -39,7 +39,7 @@ import (
 //
 // 🔑 The import allowlist (TKT-01M35WJYM) cannot do this job, because os
 // and os/exec are in the standard library, and a pure use such as
-// os.ErrNotExist imports the same package as os.Remove.
+// os.ErrClosed imports the same package as os.Remove.
 //
 // Network I/O is out of scope. The wire's job is HTTP to providers, so net
 // and net/http are allowed in it. Whether the engine may import them is the
@@ -196,12 +196,12 @@ func p() string {
 import (
 	"errors"
 	"io"
-	"os"
+	"syscall"
 )
 
 func w(sink io.Writer, err error) bool {
 	_, _ = sink.Write([]byte("x"))
-	return errors.Is(err, os.ErrNotExist)
+	return errors.Is(err, syscall.EPIPE)
 }
 `,
 			want: nil,
@@ -262,9 +262,6 @@ var ioBoundaryDeniedFilepath = map[string]bool{
 // Each value is the one-line reason. An entry nothing references fails
 // TestIOBoundary.
 var ioBoundaryAllowlist = map[string]string{
-	"os.ErrNotExist":       "a sentinel error value; comparing against it reads nothing",
-	"os.ErrClosed":         "a sentinel error value; returning it reads nothing",
-	"os.IsNotExist":        "a predicate over an error value the caller already holds",
 	"syscall.ECONNRESET":   "an errno constant the wire matches against a network error it was handed",
 	"syscall.ECONNREFUSED": "an errno constant the wire matches against a network error it was handed",
 	"syscall.EPIPE":        "an errno constant the wire matches against a network error it was handed",
@@ -399,25 +396,34 @@ func ioBoundaryScan(t *testing.T) []ioBoundaryUse {
 	if err != nil {
 		t.Fatalf("type-check packages/provider: %v", err)
 	}
+	// transcriptcodec was carved out of the engine (TKT-01M35WK0T) and the
+	// engine imports it, so it is held to the engine's rule.
+	const codecPath = "terva.sh/terva/packages/core/transcriptcodec"
+	codecInfo := &types.Info{Uses: map[*ast.Ident]types.Object{}}
+	withProvider := ioBoundaryWithPkg{ImporterFrom: src, pkgs: map[string]*types.Package{providerPath: providerPkg}}
+	codecPkg, err := (&types.Config{Importer: withProvider}).Check(codecPath, fset, load("transcriptcodec", "packages/core/transcriptcodec"), codecInfo)
+	if err != nil {
+		t.Fatalf("type-check packages/core/transcriptcodec: %v", err)
+	}
 	coreInfo := &types.Info{Uses: map[*ast.Ident]types.Object{}}
-	coreImp := ioBoundaryWithPkg{ImporterFrom: src, path: providerPath, pkg: providerPkg}
+	coreImp := ioBoundaryWithPkg{ImporterFrom: src, pkgs: map[string]*types.Package{providerPath: providerPkg, codecPath: codecPkg}}
 	if _, err := (&types.Config{Importer: coreImp}).Check("terva.sh/terva/packages/core", fset, load(".", "packages/core"), coreInfo); err != nil {
 		t.Fatalf("type-check packages/core: %v", err)
 	}
-	return append(ioBoundaryUses(fset, providerInfo), ioBoundaryUses(fset, coreInfo)...)
+	uses := append(ioBoundaryUses(fset, providerInfo), ioBoundaryUses(fset, codecInfo)...)
+	return append(uses, ioBoundaryUses(fset, coreInfo)...)
 }
 
 // ioBoundaryWithPkg hands the engine the wire package this test already
 // checked, so provider is type-checked once and has one identity.
 type ioBoundaryWithPkg struct {
 	types.ImporterFrom
-	path string
-	pkg  *types.Package
+	pkgs map[string]*types.Package
 }
 
 func (i ioBoundaryWithPkg) ImportFrom(path, dir string, mode types.ImportMode) (*types.Package, error) {
-	if path == i.path {
-		return i.pkg, nil
+	if pkg, ok := i.pkgs[path]; ok {
+		return pkg, nil
 	}
 	return i.ImporterFrom.ImportFrom(path, dir, mode)
 }

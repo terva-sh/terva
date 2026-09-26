@@ -28,6 +28,7 @@ import (
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/agent/worker"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/relaunch"
@@ -86,6 +87,10 @@ type Workspace struct {
 	// bound to a session id and never follow a client's active pane. See
 	// workspace_chat.go.
 	chat wsChat
+
+	// talkoot holds the seats of native talkoot members: which session speaks
+	// as which member. See workspace_talkoot.go.
+	talkoot wsTalkoot
 
 	// raati is the deliberation board (the raati pane): at most one live
 	// deliberation, run over the workspace swarm. Zero value is an idle
@@ -432,7 +437,7 @@ func (w *Workspace) newRunner(a *swarm.Agent) swarm.Runner {
 // session is gone — a worker revived after a restart, or a spawn with no session
 // stamp — in which case the runner denies the worker's asks cleanly rather than
 // hanging on a human who isn't there.
-func (w *Workspace) workerApprover(a *swarm.Agent) core.Confirmer {
+func (w *Workspace) workerApprover(a *swarm.Agent) permission.Confirmer {
 	s := w.existing(a.SessionID)
 	if s == nil {
 		return nil
@@ -572,12 +577,14 @@ func (w *Workspace) Close() error {
 	// Stop chat bridges before cancelling the workspace context, so a connector's
 	// receive goroutine never outlives the workspace that owns it.
 	w.chatStopAll()
+	w.stopTalkoots()
 	w.mu.Lock()
 	for id, s := range w.sessions {
 		s.close()
 		delete(w.sessions, id)
 	}
 	w.mu.Unlock()
+	w.closeTalkoots()
 	// Before cancel, so the sweep goroutine is joined rather than left to
 	// notice a cancelled context on its own schedule — it may be mid-refresh,
 	// holding the auth lock, and the next instance should not queue behind a
@@ -690,7 +697,7 @@ func (w *Workspace) existing(id string) *wsSession {
 // everywhere else on the wire — had its approvals silently dropped.
 func (w *Workspace) live(sess string) *wsSession {
 	if sess == "" {
-		if p := session.LatestSession(w.root, w.cwd); p != "" {
+		if p := w.latestPersonSession(); p != "" {
 			sess = build.SessionIDFromPath(p)
 		}
 	}
@@ -705,7 +712,7 @@ func (w *Workspace) sessionLocked(id string) (*wsSession, error) {
 		// marked session no longer exists.
 		if mid := w.markedSessionID(); mid != "" {
 			id = mid
-		} else if p := session.LatestSession(w.root, w.cwd); p != "" {
+		} else if p := w.latestPersonSession(); p != "" {
 			id = build.SessionIDFromPath(p)
 		} else {
 			return w.createLocked(ctrlproto.CreateOpts{})
@@ -1188,7 +1195,7 @@ func (w *Workspace) RetryTurn(ctx context.Context, sess string, p ctrlproto.Turn
 	return s.retry(p)
 }
 
-func (w *Workspace) Approve(ctx context.Context, sess, callID string, d core.ConfirmDecision) error {
+func (w *Workspace) Approve(ctx context.Context, sess, callID string, d permission.ConfirmDecision) error {
 	if s := w.live(sess); s != nil {
 		s.approve(callID, d)
 	}
@@ -1205,6 +1212,9 @@ func (w *Workspace) Answer(ctx context.Context, sess, askID string, answers []co
 func (w *Workspace) Subscribe(ctx context.Context, sess string) (<-chan ctrlproto.Event, error) {
 	if sess == ctrlproto.AddrWorkspace {
 		return w.subscribeWorkspace(ctx, false), nil
+	}
+	if id, ok := ctrlproto.TalkootFromAddr(sess); ok {
+		return w.subscribeTalkoot(ctx, id)
 	}
 	s, err := w.resolve(sess)
 	if err != nil {
@@ -1245,6 +1255,10 @@ func (w *Workspace) SubscribeReliable(ctx context.Context, sess string) (<-chan 
 	if sess == ctrlproto.AddrWorkspace {
 		return w.subscribeWorkspace(ctx, true), nil
 	}
+	// Lossy all the same: see subscribeTalkoot.
+	if id, ok := ctrlproto.TalkootFromAddr(sess); ok {
+		return w.subscribeTalkoot(ctx, id)
+	}
 	s, err := w.resolve(sess)
 	if err != nil {
 		return nil, err
@@ -1265,7 +1279,7 @@ func (w *Workspace) SubscribeReliable(ctx context.Context, sess string) (<-chan 
 func (w *Workspace) Sessions(ctx context.Context) ([]ctrlproto.SessionInfo, error) {
 	summaries := session.DescribeSessions(w.root, w.cwd)
 	defID := ""
-	if p := session.LatestSession(w.root, w.cwd); p != "" {
+	if p := w.latestPersonSession(); p != "" {
 		defID = build.SessionIDFromPath(p)
 	}
 	// Trust is workspace-global (keyed on w.cwd), so every session in this list
@@ -1497,6 +1511,9 @@ func (w *Workspace) DeleteSession(ctx context.Context, sess string) error {
 		delete(w.sessions, sess)
 	}
 	w.mu.Unlock()
+	// Outside w.mu, because a revoke waits for a Talkoot call in flight. The
+	// member's next delivery makes it a new session.
+	w.unseatTalkoot(sess)
 	err := os.Remove(w.sessionPath(sess))
 	if err != nil && !os.IsNotExist(err) {
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "delete: %v", err)

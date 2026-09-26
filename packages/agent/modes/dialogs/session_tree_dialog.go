@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -42,7 +42,7 @@ func NewSessionTreeDialog() *SessionTreeDialog { return &SessionTreeDialog{} }
 
 // Open flattens the given forest into indented rows. currentPath
 // is highlighted and non-selectable (enter on it closes the dialog).
-func (d *SessionTreeDialog) Open(roots []*core.TreeNode, currentPath string) bool {
+func (d *SessionTreeDialog) Open(roots []*session.TreeNode, currentPath string) bool {
 	items := flattenTree(roots, currentPath)
 	if len(items) == 0 {
 		return false
@@ -115,10 +115,10 @@ func (d *SessionTreeDialog) Render(th tui.Theme, width int) []string {
 
 // flattenTree walks the forest depth-first and returns one treeItem
 // per node. Each label has the shape "<when>  <first-prompt>  (N msgs)".
-func flattenTree(roots []*core.TreeNode, currentPath string) []treeItem {
+func flattenTree(roots []*session.TreeNode, currentPath string) []treeItem {
 	var out []treeItem
-	var walk func(n *core.TreeNode, depth int)
-	walk = func(n *core.TreeNode, depth int) {
+	var walk func(n *session.TreeNode, depth int)
+	walk = func(n *session.TreeNode, depth int) {
 		label := formatTreeRow(n)
 		out = append(out, treeItem{
 			label: label,
@@ -139,7 +139,7 @@ func flattenTree(roots []*core.TreeNode, currentPath string) []treeItem {
 // formatTreeRow renders one node's label line. Tries to fit a
 // compact "date  preview  (N msgs, $cost)" shape; falls back to
 // the meta id suffix when everything else is empty.
-func formatTreeRow(n *core.TreeNode) string {
+func formatTreeRow(n *session.TreeNode) string {
 	when := formatRelative(n.Summary.Started)
 	preview := strings.TrimSpace(n.Summary.FirstUserText)
 	if preview == "" {

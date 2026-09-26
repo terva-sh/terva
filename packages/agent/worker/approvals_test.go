@@ -16,7 +16,7 @@ import (
 
 	"terva.sh/terva/packages/agent/mcpbridge"
 	"terva.sh/terva/packages/agent/swarm"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -51,9 +51,9 @@ func TestServeApprovalsRoutesToConfirmer(t *testing.T) {
 	var sawTool, sawPreview string
 	r := &Runner{
 		agent: &swarm.Agent{ID: "w-7"},
-		confirmer: confirmFunc(func(_ context.Context, tool, preview string) core.ConfirmDecision {
+		confirmer: confirmFunc(func(_ context.Context, tool, preview string) permission.ConfirmDecision {
 			sawTool, sawPreview = tool, preview
-			return core.ConfirmDecision{Allow: true}
+			return permission.ConfirmDecision{Allow: true}
 		}),
 	}
 	sock := filepath.Join(shortSocketDir(t), "a.ap")
@@ -117,8 +117,8 @@ func TestServeApprovalsDeniesMalformed(t *testing.T) {
 	}
 	r := &Runner{
 		agent: &swarm.Agent{ID: "w"},
-		confirmer: confirmFunc(func(context.Context, string, string) core.ConfirmDecision {
-			return core.ConfirmDecision{Allow: true}
+		confirmer: confirmFunc(func(context.Context, string, string) permission.ConfirmDecision {
+			return permission.ConfirmDecision{Allow: true}
 		}),
 	}
 	sock := filepath.Join(shortSocketDir(t), "a.ap")
@@ -157,12 +157,12 @@ func TestServeApprovalsCancelDenies(t *testing.T) {
 	blocked := make(chan struct{})
 	r := &Runner{
 		agent: &swarm.Agent{ID: "slow"},
-		confirmer: confirmFunc(func(ctx context.Context, _, _ string) core.ConfirmDecision {
+		confirmer: confirmFunc(func(ctx context.Context, _, _ string) permission.ConfirmDecision {
 			close(blocked)
 			// The human walked away. The worker's context is what ends the
 			// wait — a Confirmer that parks is required to honour it.
 			<-ctx.Done()
-			return core.ConfirmDecision{Allow: false, Reason: "worker stopped before the approval was answered"}
+			return permission.ConfirmDecision{Allow: false, Reason: "worker stopped before the approval was answered"}
 		}),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -224,8 +224,8 @@ func TestRunServesApprovalSocketForBackend(t *testing.T) {
 			return exec.Command("true"), nil // a child that exits immediately
 		},
 	}
-	confirmer := confirmFunc(func(context.Context, string, string) core.ConfirmDecision {
-		return core.ConfirmDecision{Allow: true}
+	confirmer := confirmFunc(func(context.Context, string, string) permission.ConfirmDecision {
+		return permission.ConfirmDecision{Allow: true}
 	})
 
 	a := &swarm.Agent{

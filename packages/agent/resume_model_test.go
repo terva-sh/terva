@@ -5,6 +5,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -26,9 +27,9 @@ func TestApplyResumedModel(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 
-	newSessionOn := func(prov, model string) *core.Session {
+	newSessionOn := func(prov, model string) *session.Session {
 		t.Helper()
-		s, err := core.NewSession(testsupport.TempDir(t), dir, prov, model, "test")
+		s, err := session.NewSession(testsupport.TempDir(t), dir, prov, model, "test")
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}

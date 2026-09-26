@@ -3,8 +3,8 @@
 // and the workspace-trust verdict those lean on.
 //
 // It is the config boundary of the permission subsystem. The evaluation ladder
-// itself is packages/core/policy.go; the store, the paths and the on-disk state
-// are packages/agent/config's. What lives here is the policy in between.
+// itself is packages/core/permission/policy.go; the store, the paths and the
+// on-disk state are packages/agent/config's. What lives here is the policy in between.
 //
 // # It does not import package build, and that is the point
 //
@@ -28,6 +28,7 @@ package permissions
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -38,15 +39,16 @@ import (
 	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/envcompat"
 )
 
 // This file is the config boundary of the permission subsystem: it
 // resolves the effective approval mode, compiles JSON rule configs
-// into typed core.PermissionRules (enforcing the project-layer
-// self-approval ban), and assembles the core.PermissionPolicy the
+// into typed permission.PermissionRules (enforcing the project-layer
+// self-approval ban), and assembles the permission.PermissionPolicy the
 // confirm gate evaluates. The evaluation ladder itself lives in
-// packages/core/policy.go.
+// packages/core/permission/policy.go.
 
 // readOnly names the built-in tools with no side effects. This
 // is the explicit classification the approval modes consume — plan
@@ -133,6 +135,11 @@ var readOnly = map[string]bool{
 	// already named every store it can select, and each write to the selected
 	// store still faces its own gate. See docs/permissions.md.
 	"ticket_store": true,
+	// talkoot_roster reads the roster and each member's status. Its siblings
+	// talkoot_send and talkoot_handoff are not here: an envelope starts
+	// another member's turn, which spends that member's budget. Plan mode
+	// still permits them, through planKeeps.
+	"talkoot_roster": true,
 }
 
 // editTools names the file editors auto-edit additionally allows:
@@ -144,11 +151,26 @@ var editTools = map[string]bool{
 }
 
 // interactive names tools whose only effect is asking the user
-// (core.AuthUserInteraction). They are permitted in every mode, plan
+// (permission.AuthUserInteraction). They are permitted in every mode, plan
 // included, and never prompt — and they are exempt from plan mode's
 // registry pruning so the model can still ask while planning.
 var interactive = map[string]bool{
 	"ask_user_question": true,
+}
+
+// planKeeps names side-effecting tools that plan mode still permits. A
+// talkoot member in plan posture only plans, and its plan reaches the team as
+// an envelope: without these tools it could not reply at all. They are not
+// interactive, so a deny or ask rule still stops them. Plan itself never
+// prompts, so with no rule they run unasked. The router's spend, turn, hop,
+// and rate guards bound every send.
+//
+// ⚠️ An envelope starts the recipient's turn in the recipient's own posture.
+// A planning member can wake a member that writes. A person who wants each
+// send approved writes an ask rule for talkoot_send and talkoot_handoff.
+var planKeeps = map[string]bool{
+	"talkoot_send":    true,
+	"talkoot_handoff": true,
 }
 
 // builtin names the first-party tools workspace mode trusts (alongside
@@ -181,6 +203,9 @@ var builtin = map[string]bool{
 	"swarm_spawn":       true,
 	"chat_send_image":   true,
 	"chat_send_file":    true,
+	"talkoot_send":      true,
+	"talkoot_handoff":   true,
+	"talkoot_roster":    true,
 	"share_file":        true,
 	"ask_user_question": true,
 	"worktree_list":     true,
@@ -287,7 +312,7 @@ type Inputs struct {
 //   - mode.Attach and mode.Replay assemble no agent of their own; their rows say
 //     what the resolvers would answer if one ever did.
 var modePosture = map[mode.Mode]struct {
-	approval core.ApprovalMode
+	approval permission.ApprovalMode
 	jailed   bool
 }{
 	// A real user is present to answer the foreign-tool prompts, so the
@@ -295,20 +320,20 @@ var modePosture = map[mode.Mode]struct {
 	// session/request_permission to the editor, in web a broadcast approval
 	// dialog to the browser, in a bot an ask in the paired chat via its
 	// ChatConfirmer.
-	mode.Interactive: {core.ApprovalWorkspace, true},
-	mode.ACP:         {core.ApprovalWorkspace, true},
-	mode.Bot:         {core.ApprovalWorkspace, true},
-	mode.Web:         {core.ApprovalWorkspace, false},
+	mode.Interactive: {permission.ApprovalWorkspace, true},
+	mode.ACP:         {permission.ApprovalWorkspace, true},
+	mode.Bot:         {permission.ApprovalWorkspace, true},
+	mode.Web:         {permission.ApprovalWorkspace, false},
 
 	// Nobody to prompt, so a prompting default would refuse foreign tools and
 	// break unattended automation; and no jail, so that automation isn't
 	// surprised by path confinement.
-	mode.Print:      {core.ApprovalYolo, false},
-	mode.JSON:       {core.ApprovalYolo, false},
-	mode.RPC:        {core.ApprovalYolo, false},
-	mode.SwarmAgent: {core.ApprovalYolo, false},
-	mode.Attach:     {core.ApprovalYolo, false},
-	mode.Replay:     {core.ApprovalYolo, false},
+	mode.Print:      {permission.ApprovalYolo, false},
+	mode.JSON:       {permission.ApprovalYolo, false},
+	mode.RPC:        {permission.ApprovalYolo, false},
+	mode.SwarmAgent: {permission.ApprovalYolo, false},
+	mode.Attach:     {permission.ApprovalYolo, false},
+	mode.Replay:     {permission.ApprovalYolo, false},
 
 	// A member has nobody to prompt either, and it still does NOT get yolo.
 	//
@@ -325,7 +350,7 @@ var modePosture = map[mode.Mode]struct {
 	// commands to a member and no turn starts through this daemon. When
 	// fleet-control lands, routing an approval prompt back to whoever is
 	// driving is part of that design, and this row is where the answer changes.
-	mode.Member: {core.ApprovalWorkspace, true},
+	mode.Member: {permission.ApprovalWorkspace, true},
 	// The supervisor runs no agent and opens no session, so nothing ever
 	// inherits this row — every tenant's posture is decided in that tenant's
 	// own child process, which resolves as mode.Web.
@@ -335,7 +360,7 @@ var modePosture = map[mode.Mode]struct {
 	// value nobody is checking, so the day something does read it, it must not
 	// hand a process that terminates authentication for other people the
 	// posture we give unattended automation.
-	mode.Serve: {core.ApprovalWorkspace, true},
+	mode.Serve: {permission.ApprovalWorkspace, true},
 }
 
 // postureOf answers for a mode with no posture row, and it fails CLOSED: ask
@@ -361,11 +386,11 @@ var modePosture = map[mode.Mode]struct {
 // workspace mode trusts the built-in tools, and trusting anything requires
 // knowing what is running. We do not know that here. A host with no confirmer
 // wired degrades this to refusal (HeadlessConfirmGate), which is also safe.
-func postureOf(m mode.Mode) (core.ApprovalMode, bool) {
+func postureOf(m mode.Mode) (permission.ApprovalMode, bool) {
 	if p, ok := modePosture[m]; ok {
 		return p.approval, p.jailed
 	}
-	return core.ApprovalAsk, true
+	return permission.ApprovalAsk, true
 }
 
 // ResolveApprovalMode picks the effective mode: flag beats the
@@ -377,17 +402,17 @@ func postureOf(m mode.Mode) (core.ApprovalMode, bool) {
 // It reaches it in exactly one case: a config `approval` string that does not
 // parse. That case must fail toward asking, not toward running, which is what
 // its posture row says.
-func ResolveApprovalMode(p Inputs, cfg config.Config) core.ApprovalMode {
+func ResolveApprovalMode(p Inputs, cfg config.Config) permission.ApprovalMode {
 	if p.Approval != "" {
-		if m, err := core.ParseApprovalMode(p.Approval); err == nil {
+		if m, err := permission.ParseApprovalMode(p.Approval); err == nil {
 			return m
 		}
 	}
 	if p.NoYolo {
-		return core.ApprovalAsk
+		return permission.ApprovalAsk
 	}
 	if cfg.Approval != "" {
-		if m, err := core.ParseApprovalMode(cfg.Approval); err == nil {
+		if m, err := permission.ParseApprovalMode(cfg.Approval); err == nil {
 			return m
 		}
 	}
@@ -463,7 +488,7 @@ func ResolveJailNotice(p Inputs, cfg config.Config) JailNotice {
 	n.Persisted = true
 	n.Entry = e
 	switch ResolveApprovalMode(p, cfg) {
-	case core.ApprovalWorkspace, core.ApprovalYolo:
+	case permission.ApprovalWorkspace, permission.ApprovalYolo:
 		n.AutoApproved = true
 	}
 	return n
@@ -516,7 +541,7 @@ func WarnPersistentlyUnjailed(p Inputs) {
 // EffectiveApprovalMode is ResolveApprovalMode with the user config
 // loaded — for call sites (tool-registry build) that don't already
 // hold a Config.
-func EffectiveApprovalMode(p Inputs) core.ApprovalMode {
+func EffectiveApprovalMode(p Inputs) permission.ApprovalMode {
 	cfg, _ := config.LoadConfig()
 	return ResolveApprovalMode(p, cfg)
 }
@@ -526,8 +551,8 @@ func EffectiveApprovalMode(p Inputs) core.ApprovalMode {
 // rule may deny or ask, never allow. Broken rules (bad decision, bad
 // regexp, empty tool) are dropped with a warning instead of failing
 // startup — a typo in one rule must not take the whole binary down.
-func compilePermissionRules(rules []config.PermissionRuleConfig, source string, projectLayer bool) ([]core.PermissionRule, []string) {
-	var out []core.PermissionRule
+func compilePermissionRules(rules []config.PermissionRuleConfig, source string, projectLayer bool) ([]permission.PermissionRule, []string) {
+	var out []permission.PermissionRule
 	var warns []string
 	for i, rc := range rules {
 		warn := func(msg string) {
@@ -537,14 +562,14 @@ func compilePermissionRules(rules []config.PermissionRuleConfig, source string, 
 			warn("tool is required")
 			continue
 		}
-		dec := core.RuleDecision(strings.ToLower(strings.TrimSpace(rc.Decision)))
+		dec := permission.RuleDecision(strings.ToLower(strings.TrimSpace(rc.Decision)))
 		switch dec {
-		case core.RuleAllow, core.RuleDeny, core.RuleAsk:
+		case permission.RuleAllow, permission.RuleDeny, permission.RuleAsk:
 		default:
 			warn(fmt.Sprintf("unknown decision %q (valid: allow, deny, ask)", rc.Decision))
 			continue
 		}
-		if projectLayer && dec == core.RuleAllow {
+		if projectLayer && dec == permission.RuleAllow {
 			warn("project rules may not allow (a cloned repo cannot grant itself tool access); use deny or ask")
 			continue
 		}
@@ -557,7 +582,7 @@ func compilePermissionRules(rules []config.PermissionRuleConfig, source string, 
 				continue
 			}
 		}
-		out = append(out, core.PermissionRule{
+		out = append(out, permission.PermissionRule{
 			Tool:     strings.TrimSpace(rc.Tool),
 			Args:     re,
 			Decision: dec,
@@ -579,19 +604,96 @@ func compilePermissionRules(rules []config.PermissionRuleConfig, source string, 
 // that may `allow`. The restrict-only layers apply only where no
 // higher layer already decided: a repo-specific project rule beats a
 // global extension default, both can tighten but never grant.
-func BuildPolicy(p Inputs) (*core.PermissionPolicy, []string) {
+//
+// A user config that cannot be read is a warning here, and the policy is
+// built from whatever the parse left behind. So is a project config that
+// exists but cannot be read or parsed: its rules are left out, and the warning
+// says so. A host with a person to read the warning prints it. LoadPolicy is
+// the form for a host with nobody to tell.
+func BuildPolicy(p Inputs) (*permission.PermissionPolicy, []string) {
 	var warns []string
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		warns = append(warns, fmt.Sprintf("permissions: user config unreadable, rules ignored: %v", err))
 	}
+	pol, more, perr := policyFromConfig(p, cfg)
+	if perr != nil {
+		warns = append(warns, projectConfigWarning(perr))
+	}
+	return pol, append(warns, more...)
+}
+
+// projectConfigWarning is the warning BuildPolicy gives for a project config
+// that exists but cannot be read or parsed. It names what was lost, not only
+// the file. Every setting in config.ProjectRestrictions can only tighten, so
+// leaving them out runs the agent with fewer checks than the repository's
+// author wrote: its deny and ask rules do not apply, and extensions and MCP
+// servers it disables can start.
+//
+// It is the one report for the whole file, not only for its permission rules.
+// Every host that starts an agent builds a policy, so this reaches the user
+// wherever terva runs (TKT-01M372ESJB): stderr for the headless modes, the
+// first-turn error notice in the daemon and the TUI, and a refusal from
+// LoadPolicy for the SDK. It warns rather than refusing to start extensions and
+// MCP servers, so that a typo in a repository's file cannot take away the
+// user's own tools.
+func projectConfigWarning(err error) string {
+	return fmt.Sprintf("config: project config unreadable, so none of its settings apply until it is fixed. "+
+		"These restrictions are NOT applied: %s. Extensions and MCP servers it disables can start: %v",
+		projectRestrictionList(), err)
+}
+
+// projectRestrictionList renders config.ProjectRestrictions for a message,
+// saying what the permissions field holds.
+func projectRestrictionList() string {
+	names := make([]string, len(config.ProjectRestrictions))
+	for i, n := range config.ProjectRestrictions {
+		if n == "permissions" {
+			n = "permissions (its deny and ask rules)"
+		}
+		names[i] = n
+	}
+	return strings.Join(names, ", ")
+}
+
+// LoadPolicy is BuildPolicy that fails when the user config cannot be read,
+// or when a project config exists and cannot be read or parsed.
+//
+// 🚨 That failure takes the user's permission rules and approval mode with it.
+// Under a headless default of yolo, BuildPolicy then finds nothing to enforce
+// and returns nil, which a host reads as "no gate needed". A host that prints
+// the warning leaves the user a signal. A host that prints nothing, such as the
+// SDK, would run every tool unchecked without one, so it takes the error and
+// refuses to start instead. A broken project config is the same failure for
+// the project's deny and ask rules, and gets the same answer. The remaining
+// warnings, for single rules dropped as malformed, are returned as BuildPolicy
+// returns them.
+func LoadPolicy(p Inputs) (*permission.PermissionPolicy, []string, error) {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return nil, nil, fmt.Errorf("permissions: user config unreadable, so its permission rules and approval mode cannot be applied: %w", err)
+	}
+	pol, warns, perr := policyFromConfig(p, cfg)
+	if perr != nil {
+		return nil, nil, fmt.Errorf("config: project config unreadable, so its restrictions cannot be applied (%s): %w", projectRestrictionList(), perr)
+	}
+	return pol, warns, nil
+}
+
+// policyFromConfig is BuildPolicy after the user config is loaded. The error
+// is a project config that exists but cannot be read or parsed. The policy is
+// still built without it, and each caller decides whether that is a warning or
+// a refusal. A missing project config is not an error.
+func policyFromConfig(p Inputs, cfg config.Config) (*permission.PermissionPolicy, []string, error) {
+	var warns []string
 	mode := ResolveApprovalMode(p, cfg)
 
-	var rules []core.PermissionRule
+	var rules []permission.PermissionRule
 	ur, uw := compilePermissionRules(cfg.Permissions, "user", false)
 	rules = append(rules, ur...)
 	warns = append(warns, uw...)
-	if pc, perr := config.LoadProjectConfig(p.CWD); perr == nil && pc != nil {
+	pc, projErr := config.LoadProjectConfig(p.CWD)
+	if pc != nil {
 		pr, w := compilePermissionRules(pc.Permissions, "project", true)
 		rules = append(rules, pr...)
 		warns = append(warns, w...)
@@ -606,14 +708,14 @@ func BuildPolicy(p Inputs) (*core.PermissionPolicy, []string) {
 	rules = append(rules, er...)
 	warns = append(warns, ew...)
 
-	if mode == core.ApprovalYolo && len(rules) == 0 {
-		return nil, warns
+	if mode == permission.ApprovalYolo && len(rules) == 0 {
+		return nil, warns, projErr
 	}
-	return NewPolicy(mode, rules), warns
+	return NewPolicy(mode, rules), warns, projErr
 }
 
 // decomposeBashForPolicy is the shell splitter the permission policy
-// injects (core.PermissionPolicy.DecomposeCommand). For a bash call that
+// injects (permission.PermissionPolicy.DecomposeCommand). For a bash call that
 // runs more than one command it returns one synthetic `{"command": …}`
 // args object per command, so the policy judges each against the rules
 // independently; for anything else it returns nil and the call is judged
@@ -650,13 +752,13 @@ func decomposeBashForPolicy(toolName string, args json.RawMessage) []json.RawMes
 }
 
 // DeriveGrantScopes is the narrow-grant deriver hosts install on a
-// ConfirmGate (core.ConfirmGate.SetScopeDeriver): for a bash call it turns
+// ConfirmGate (permission.ConfirmGate.SetScopeDeriver): for a bash call it turns
 // the command into the anchored "always allow <command>" options the
 // permission dialog offers next to the blanket grant. Bash-only on
 // purpose — other tools' args have no command grammar to anchor on, and
 // mode defaults already auto-allow the read-only ones. Same layering as
 // decomposeBashForPolicy above: the shell parsing stays out of core.
-func DeriveGrantScopes(toolName string, args json.RawMessage) []core.GrantScope {
+func DeriveGrantScopes(toolName string, args json.RawMessage) []permission.GrantScope {
 	if toolName != "bash" {
 		return nil
 	}
@@ -681,7 +783,7 @@ func DeriveGrantScopes(toolName string, args json.RawMessage) []core.GrantScope 
 // trustProject gates the PROJECT extension roots: an untrusted workspace
 // contributes no project-ext-suggested rules (its extensions don't load).
 // The user-ext (global) root is always read.
-func extensionPermissionRules(cwd string, trustProject bool) ([]core.PermissionRule, []string) {
+func extensionPermissionRules(cwd string, trustProject bool) ([]permission.PermissionRule, []string) {
 	var roots []string
 	if home := config.TervaHome(); home != "" {
 		roots = append(roots, filepath.Join(home, "extensions"))
@@ -691,7 +793,7 @@ func extensionPermissionRules(cwd string, trustProject bool) ([]core.PermissionR
 			roots = append(roots, filepath.Join(cwd, dirName, "extensions"))
 		}
 	}
-	var rules []core.PermissionRule
+	var rules []permission.PermissionRule
 	var warns []string
 	for _, root := range roots {
 		entries, err := os.ReadDir(root)
@@ -765,7 +867,7 @@ func RegisterBuiltin(name string) { builtin[name] = true }
 func IsReadOnly(name string) bool { return readOnly[name] }
 
 // IsInteractive reports whether a tool's only effect is asking the user
-// (core.AuthUserInteraction). Those are permitted in every mode, plan included,
+// (permission.AuthUserInteraction). Those are permitted in every mode, plan included,
 // and are exempt from plan mode's pruning so the model can still ask.
 func IsInteractive(name string) bool { return interactive[name] }
 
@@ -796,7 +898,7 @@ func sortedKeys(m map[string]bool) []string {
 }
 
 // EditToolSet and BuiltinSet return a classification as a fresh map, for a
-// caller assembling a core.PermissionPolicy by hand — acp_mode.go does, and so
+// caller assembling a permission.PermissionPolicy by hand — acp_mode.go does, and so
 // do the ladder tests. Copies, so a hand-built policy cannot reclassify the
 // real one, which an exported map would have allowed.
 func EditToolSet() map[string]bool {
@@ -838,14 +940,15 @@ func InteractiveSet() map[string]bool {
 // Its comment claimed the maps were "the same ones buildPermissionPolicy uses,
 // so a later switch to ask/auto-edit/workspace evaluates tools the same way".
 // Three of them were; the two that decide what a rule MEANS were absent.
-func NewPolicy(mode core.ApprovalMode, rules []core.PermissionRule) *core.PermissionPolicy {
-	return &core.PermissionPolicy{
+func NewPolicy(mode permission.ApprovalMode, rules []permission.PermissionRule) *permission.PermissionPolicy {
+	return &permission.PermissionPolicy{
 		Mode:             mode,
 		Rules:            rules,
 		ReadOnly:         BuiltinReadOnlySet(),
 		EditTools:        EditToolSet(),
 		Builtin:          BuiltinSet(),
 		Interactive:      InteractiveSet(),
+		PlanKeeps:        maps.Clone(planKeeps),
 		DecomposeCommand: decomposeBashForPolicy,
 	}
 }

@@ -26,6 +26,7 @@ import (
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
 	jsonl "terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
@@ -182,7 +183,7 @@ type fakeFactory struct {
 	// gateMode, when set, builds a live gate at this approval mode even when
 	// askTool is empty — so the Phase 4b session/set_mode tests have a gate to
 	// switch and can assert the mode change actually re-gates tools.
-	gateMode core.ApprovalMode
+	gateMode permission.ApprovalMode
 
 	// model is the agent's starting model id (the model selector's current
 	// value). Defaults to "fake-model".
@@ -400,7 +401,7 @@ func (f *fakeFactory) lastNewAgent() *core.Agent {
 // A gate is built when askTool is set (the permission tests) OR when gateMode
 // is set (the Phase 4b mode tests want a live gate to SetMode on, seeded to a
 // known mode). The gate's mode is gateMode when set, else ApprovalAsk.
-func (f *fakeFactory) buildFakeAgentWithRegistry(reg core.Registry, confirmer core.Confirmer) (*core.Agent, *core.ConfirmGate) {
+func (f *fakeFactory) buildFakeAgentWithRegistry(reg core.Registry, confirmer permission.Confirmer) (*core.Agent, *permission.ConfirmGate) {
 	if reg == nil {
 		reg = core.Registry{"edit": editFileTool{}}
 	}
@@ -414,22 +415,22 @@ func (f *fakeFactory) buildFakeAgentWithRegistry(reg core.Registry, confirmer co
 
 	mode := f.gateMode
 	if mode == "" {
-		mode = core.ApprovalAsk
+		mode = permission.ApprovalAsk
 	}
 	// A policy with an empty rule set: every tool not auto-allowed by the mode
 	// defers to the Confirmer (the editor via session/request_permission). The
 	// builtin/read-only classification mirrors the production gate so a switch
 	// to plan/auto-edit/etc. evaluates tools the same way.
-	pol := &core.PermissionPolicy{
+	pol := &permission.PermissionPolicy{
 		Mode:     mode,
 		ReadOnly: core.NewReadOnlySet(),
 		Builtin:  map[string]bool{},
 	}
-	gate := core.NewPolicyGate(pol, confirmer)
+	gate := permission.NewPolicyGate(pol, confirmer)
 	// The gate forwards call.ID to ConfirmWithCall itself — no correlation
 	// wrapper, mirroring production.
 	ag := coretest.NewAgentWithGate(f.client, model, "system", reg, core.GateFunc(func(ctx context.Context, call provider.ToolCallBlock, _ core.Tool) (bool, string, json.RawMessage) {
-		ok, reason, _ := gate.Check(ctx, call.Name, call.Arguments, core.BuildPreview(call.Arguments, 120), call.ID)
+		ok, reason, _ := gate.Check(ctx, call.Name, call.Arguments, permission.BuildPreview(call.Arguments, 120), call.ID)
 		return ok, reason, nil
 	}))
 	return ag, gate
@@ -450,7 +451,7 @@ func (f *fakeFactory) buildFakeAgentWithRegistry(reg core.Registry, confirmer co
 // compiled the same way buildPermissionPolicy compiles it, the real
 // InterceptToolCall, and the production ACP OnEvent composition (bindSession is
 // untouched production code).
-func (f *fakeFactory) buildExtensionAgent(ctx context.Context, cwd string, confirmer core.Confirmer) (*core.Agent, *core.ConfirmGate, func(core.AgentEvent), func(), *extensions.Manager) {
+func (f *fakeFactory) buildExtensionAgent(ctx context.Context, cwd string, confirmer permission.Confirmer) (*core.Agent, *permission.ConfirmGate, func(core.AgentEvent), func(), *extensions.Manager) {
 	extMgr := extensions.New(f.extRoot, cwd, "test", "fake", "fake-model", nonInteractiveExtHooksStub{})
 	// Discover the on-disk fake extension; any load error surfaces as a failed
 	// assertion downstream (no tools registered), so it is not swallowed.
@@ -492,19 +493,19 @@ func (f *fakeFactory) buildExtensionAgent(ctx context.Context, cwd string, confi
 	// auto-allows read-only foreign tools (so reader_tool needs no prompt) and
 	// prompts for foreign side-effecting tools; the manifest's writer_tool->ask
 	// rule makes the prompt explicit regardless of mode.
-	pol := &core.PermissionPolicy{
-		Mode:     core.ApprovalWorkspace,
+	pol := &permission.PermissionPolicy{
+		Mode:     permission.ApprovalWorkspace,
 		Rules:    manifestPermissionRules(f.extRoot),
 		ReadOnly: roSet,
 		Builtin:  map[string]bool{},
 	}
-	gate := core.NewPolicyGate(pol, confirmer)
+	gate := permission.NewPolicyGate(pol, confirmer)
 
 	// Canonical ladder: gate.Check FIRST (forwarding call.ID to the
 	// confirmer itself), then the extension intercept — mirroring
 	// production's BuildToolGate with no correlation wrapper.
 	ag := coretest.NewAgentWithGate(f.client, model, "system", reg, core.GateFunc(func(ctx context.Context, call provider.ToolCallBlock, _ core.Tool) (bool, string, json.RawMessage) {
-		ok, reason, _ := gate.Check(ctx, call.Name, call.Arguments, core.BuildPreview(call.Arguments, 120), call.ID)
+		ok, reason, _ := gate.Check(ctx, call.Name, call.Arguments, permission.BuildPreview(call.Arguments, 120), call.ID)
 		if !ok {
 			return false, reason, nil
 		}
@@ -690,12 +691,12 @@ func (nonInteractiveExtHooksStub) RefreshTools()             {}
 
 // manifestPermissionRules reads every installed extension's extension.json
 // under root/extensions and compiles its `permissions` array into
-// core.PermissionRule values, mirroring how the production
+// permission.PermissionRule values, mirroring how the production
 // buildPermissionPolicy -> extensionPermissionRules path turns an extension's
 // manifest `ask`/`deny` contribution into a gate rule. Only the test's writer
 // tool carries one (decision "ask"), so the gate prompts for it.
-func manifestPermissionRules(root string) []core.PermissionRule {
-	var rules []core.PermissionRule
+func manifestPermissionRules(root string) []permission.PermissionRule {
+	var rules []permission.PermissionRule
 	extRoot := filepath.Join(root, "extensions")
 	entries, err := os.ReadDir(extRoot)
 	if err != nil {
@@ -721,14 +722,14 @@ func manifestPermissionRules(root string) []core.PermissionRule {
 			continue
 		}
 		for _, p := range m.Permissions {
-			dec := core.RuleDecision(p.Decision)
+			dec := permission.RuleDecision(p.Decision)
 			// Like extensions, a manifest may only restrict (ask/deny), never
 			// grant — drop an allow exactly as compilePermissionRules does for
 			// a restrict-only layer.
-			if dec == core.RuleAllow {
+			if dec == permission.RuleAllow {
 				continue
 			}
-			rules = append(rules, core.PermissionRule{
+			rules = append(rules, permission.PermissionRule{
 				Tool:     p.Tool,
 				Decision: dec,
 				Reason:   p.Reason,
@@ -787,7 +788,7 @@ func (f *fakeFactory) sessionModel() (prov, model string) {
 	return "fake", model
 }
 
-func (f *fakeFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (SessionAgent, error) {
+func (f *fakeFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer permission.Confirmer) (SessionAgent, error) {
 	// Extension path: build a real extensions.Manager + the ext-aware agent,
 	// exactly mirroring the production buildAgent extension wiring.
 	if f.extRoot != "" {
@@ -863,7 +864,7 @@ func (f *fakeFactory) emptyExtContextFunc() func() []ContextItem {
 	return func() []ContextItem { return nil }
 }
 
-func (f *fakeFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (SessionAgent, []provider.Message, error) {
+func (f *fakeFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd string, mcpServers json.RawMessage, confirmer permission.Confirmer) (SessionAgent, []provider.Message, error) {
 	sess, msgs, err := jsonl.OpenSession(sessionPath)
 	if err != nil {
 		return SessionAgent{}, nil, err

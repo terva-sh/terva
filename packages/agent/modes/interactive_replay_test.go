@@ -7,8 +7,8 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/modes/widgets"
 	"terva.sh/terva/packages/agent/replay"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 	"terva.sh/terva/packages/tui"
 )
@@ -31,7 +31,7 @@ func TestCarrierReplayStateStashed(t *testing.T) {
 func writeReplayFixture(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
-	sess, err := core.NewSessionAtPath(path, "/cwd", "prov", "model", "v1")
+	sess, err := session.NewSessionAtPath(path, "/cwd", "prov", "model", "v1")
 	if err != nil {
 		t.Fatal(err)
 	}

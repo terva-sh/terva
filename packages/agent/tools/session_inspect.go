@@ -15,6 +15,7 @@ import (
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // SessionInspectTool gives the agent a bounded, filterable view over a session's
@@ -254,7 +255,7 @@ func (t *SessionInspectTool) Execute(ctx context.Context, raw json.RawMessage, _
 	// per provider failure). Read it whole up front so its rows can interleave
 	// into the event stream by timestamp — a turn that died on an overload
 	// leaves the transcript merely quiet, and this is the only record of why.
-	sideErrs, _ := core.ReadSessionErrors(path)
+	sideErrs, _ := session.ReadSessionErrors(path)
 
 	if a.Stats {
 		return sessionStats(ctx, path, sessID, sideErrs)
@@ -334,7 +335,7 @@ type sourceTally struct {
 // Deliberately ignores the listing filters. A half-filtered rollup invites
 // exactly the misreading a rollup is for — "the session spent $3" when that was
 // one tool's share — so the numbers always describe the whole session.
-func sessionStats(ctx context.Context, path, sessID string, sideErrs []core.SessionError) (core.ToolResult, error) {
+func sessionStats(ctx context.Context, path, sessID string, sideErrs []session.SessionError) (core.ToolResult, error) {
 	var (
 		tools      = map[string]int{}
 		failures   = map[string]int{}
@@ -359,9 +360,9 @@ func sessionStats(ctx context.Context, path, sessID string, sideErrs []core.Sess
 		sideChannelCalls int
 		bySource         = map[string]*sourceTally{}
 	)
-	_, truncated, err := streamReplay(ctx, path, siScanCeiling, func(_ int, r core.ReplayRow) {
+	_, truncated, err := streamReplay(ctx, path, siScanCeiling, func(_ int, r session.ReplayRow) {
 		switch r.Kind {
-		case core.ReplayRowUsage:
+		case session.ReplayRowUsage:
 			// A sub-agent's spend is not a turn of THIS session, and mixing it
 			// in wrecks the one number here worth acting on: a fresh child's
 			// prompt is transcript-sized with nothing cached, so it reads as
@@ -395,9 +396,9 @@ func sessionStats(ctx context.Context, path, sessID string, sideErrs []core.Sess
 			if r.Usage.InputTokens == 0 && r.Usage.OutputTokens == 0 && r.Usage.CostUSD == 0 {
 				deadTurns++
 			}
-		case core.ReplayRowCompaction:
+		case session.ReplayRowCompaction:
 			compaction++
-		case core.ReplayRowMessage:
+		case session.ReplayRowMessage:
 			m := r.Message
 			roles[string(m.Role)]++
 			if !m.Time.IsZero() {
@@ -559,7 +560,7 @@ func sessionStats(ctx context.Context, path, sessID string, sideErrs []core.Sess
 // prepended only when the message does not already carry it: the error text is
 // stamped by the client, which usually prefixes its own name, and blindly
 // prepending produced "openai-codex: openai-codex: …".
-func labelSessionError(e core.SessionError) string {
+func labelSessionError(e session.SessionError) string {
 	text := e.Error
 	if e.Provider != "" && !strings.HasPrefix(text, e.Provider+":") {
 		text = e.Provider + ": " + text
@@ -651,13 +652,13 @@ func swarmChildFromProject(tervaHome, cwd, origin string) bool {
 	if origin == "" {
 		return false
 	}
-	return core.SessionsDir(tervaHome, origin) == core.SessionsDir(tervaHome, cwd)
+	return session.SessionsDir(tervaHome, origin) == session.SessionsDir(tervaHome, cwd)
 }
 
-// streamReplay is core.StreamReplayRows behind a package var so a test can
+// streamReplay is session.StreamReplayRows behind a package var so a test can
 // assert the swarm-child project-authorization gate runs BEFORE any transcript
 // scan (the cross-project parsing-DoS the reorder closes).
-var streamReplay = core.StreamReplayRows
+var streamReplay = session.StreamReplayRows
 
 const scanCeilingNotice = "note: part of the transcript was skipped — an oversized row, or the 64 MiB scan ceiling was reached; totals and windows may not cover the whole file (some events may be missing)\n"
 
@@ -711,7 +712,7 @@ type sessScan struct {
 
 	// pending holds sidecar errors not yet placed into the stream, oldest
 	// first. Drained by timestamp as messages pass (see drainErrors).
-	pending []core.SessionError
+	pending []session.SessionError
 
 	// lastUsageAt is the previous stamped usage row's time, for the gap between
 	// consecutive dispatches. Zero until the first stamped row, and never
@@ -790,16 +791,16 @@ func (s *sessScan) takeCall(id string) string {
 
 // addRow dispatches one streamed replay row into the scan. Usage rows carry no
 // text, so they bypass the message flattening entirely.
-func (s *sessScan) addRow(row int, r core.ReplayRow) {
+func (s *sessScan) addRow(row int, r session.ReplayRow) {
 	switch r.Kind {
-	case core.ReplayRowMessage:
+	case session.ReplayRowMessage:
 		// Sidecar errors are timestamped, not row-numbered, so they are placed
 		// just before the first message that postdates them. That puts an
 		// overload immediately after the turn it killed, which is the only
 		// position from which it explains anything.
 		s.drainErrors(r.Message.Time)
 		s.addMessage(row, r.Message)
-	case core.ReplayRowUsage:
+	case session.ReplayRowUsage:
 		// A usage row is the closest event to the request a sidecar error
 		// killed — closer than the next message, which may be many tool calls
 		// later. Guarded on the zero time because drainErrors treats a zero
@@ -809,10 +810,10 @@ func (s *sessScan) addRow(row int, r core.ReplayRow) {
 			s.drainErrors(r.At)
 		}
 		s.addUsage(row, r.Usage, r.Cumulative, r.At)
-	case core.ReplayRowPrefix:
+	case session.ReplayRowPrefix:
 		txt := prefixEventText(r.Prefix)
 		s.add(sessEvent{Row: row, Kind: "prefix", Bytes: len(txt), Text: txt})
-	case core.ReplayRowCliff:
+	case session.ReplayRowCliff:
 		txt := cliffEventText(r.Cliff)
 		s.add(sessEvent{Row: row, Kind: "cliff", Bytes: len(txt), Text: txt})
 	}
@@ -896,7 +897,7 @@ func (s *sessScan) addUsage(row int, u, cum provider.Usage, at time.Time) {
 
 // addMessage flattens one transcript message into per-block events, feeding
 // each through the filters into the bounded retention. The signature matches
-// core.StreamReplayMessages' callback.
+// session.StreamReplayMessages' callback.
 func (s *sessScan) addMessage(row int, m provider.Message) {
 	role := string(m.Role)
 	for _, c := range m.Content {
@@ -1059,7 +1060,7 @@ func (t *SessionInspectTool) resolveFromPath(raw string) (path, id string, err e
 	// The id is only a label on the output. Derived from the filename so a
 	// downloaded transcript still reports the id it was recorded under, which is
 	// what a reader correlates against everything else about that session.
-	return p, core.SessionIDFromPath(p), nil
+	return p, session.SessionIDFromPath(p), nil
 }
 
 // resolvePath maps a session_id (or the current session) to a transcript path,
@@ -1073,7 +1074,7 @@ func (t *SessionInspectTool) resolvePath(ctx context.Context, sessionID string) 
 		if strings.ContainsAny(sessionID, `/\`) || strings.Contains(sessionID, "..") {
 			return "", "", false, fmt.Errorf("invalid session_id")
 		}
-		p := filepath.Join(core.SessionsDir(t.TervaHome, t.CWD), sessionID+".jsonl")
+		p := filepath.Join(session.SessionsDir(t.TervaHome, t.CWD), sessionID+".jsonl")
 		if _, e := os.Stat(p); e == nil {
 			return p, sessionID, false, nil
 		}
@@ -1088,7 +1089,7 @@ func (t *SessionInspectTool) resolvePath(ctx context.Context, sessionID string) 
 			// cannot otherwise locate — which is exactly when you want it.
 			// This project stays FIRST, so an id present in both resolves the
 			// way it always did.
-			if op := core.FindSessionAcrossProjects(t.TervaHome, sessionID); op != "" {
+			if op := session.FindSessionAcrossProjects(t.TervaHome, sessionID); op != "" {
 				return op, sessionID, false, nil
 			}
 		}
@@ -1293,7 +1294,7 @@ func expandSessionEvent(sessID string, e sessEvent, idx, textOffset int) core.To
 			},
 		}
 	}
-	text := core.RedactSecrets(e.Text)
+	text := session.RedactSecrets(e.Text)
 	if textOffset < 0 {
 		textOffset = 0
 	}
@@ -1337,7 +1338,7 @@ func expandSessionEvent(sessID string, e sessEvent, idx, textOffset int) core.To
 // eventSnippet redacts secrets, collapses whitespace to one line, and bounds
 // length on a valid UTF-8 boundary.
 func eventSnippet(s string) string {
-	s = core.RedactSecrets(s)
+	s = session.RedactSecrets(s)
 	s = strings.Join(strings.Fields(s), " ")
 	if len(s) > siSnippetMax {
 		s = strings.ToValidUTF8(s[:siSnippetMax], "") + "…"

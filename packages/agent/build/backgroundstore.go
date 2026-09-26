@@ -18,7 +18,7 @@ import (
 // Stage app to render behind the conversation — no parsing, no identity, just
 // pixels — so this is a much simpler store than cards: one file per background at
 // $TERVA_HOME/backgrounds/<id>.<ext>, the id a content hash (idempotent import).
-// The /media/backgrounds/<id> route serves them; SessionMeta.Background binds one.
+// The /media/backgrounds/<id> route serves them; session.Stage.Background binds one.
 
 // BackgroundsDir is the on-disk background store, $TERVA_HOME/backgrounds.
 func BackgroundsDir() string { return filepath.Join(config.TervaHome(), "backgrounds") }

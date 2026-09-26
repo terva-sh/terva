@@ -146,7 +146,7 @@ func (s *wsSession) pickSpeaker(ctx context.Context, text string) speakerPick {
 		return speakerPick{bound: true} // a stale focus target — degrade
 	}
 	ag := s.agent
-	if ag == nil || ag.Client() == nil {
+	if ag == nil || ag.Client == nil {
 		return speakerPick{bound: true}
 	}
 	boundName, _ := s.boundCharacter()
@@ -163,7 +163,7 @@ func (s *wsSession) pickSpeaker(ctx context.Context, text string) speakerPick {
 	}
 	prompt += "\n\n" + i18n.P("stage.route.pick", "Who speaks next? Reply with exactly one name.")
 	_, model := s.currentModel()
-	out, usage, err := streamText(ctx, ag.Client(), provider.Request{
+	out, usage, err := streamText(ctx, ag.Client, provider.Request{
 		Model:     model,
 		System:    system,
 		MaxTokens: routeMaxTokens,
@@ -211,7 +211,7 @@ func (s *wsSession) voiceLine(ctx context.Context, pick speakerPick, text string
 	// The character's model pin (Phase 7) routes their generation; a pin that
 	// fails to resolve degrades to the session route rather than failing the
 	// line.
-	cl := s.agent.Client()
+	cl := s.agent.Client
 	_, model := s.currentModel()
 	if route, ok := s.castModels()[pick.name]; ok && strings.TrimSpace(route.Model) != "" {
 		if oc, om, err := s.ws.overrideClient(s.argsSnapshot(), route.Provider, route.Model); err == nil {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -37,16 +37,16 @@ func (c *fakeClient) Stream(_ context.Context, req provider.Request) (<-chan pro
 	return ch, nil
 }
 
-func screen(t *testing.T, c *fakeClient) core.ClassifyResult {
+func screen(t *testing.T, c *fakeClient) permission.ClassifyResult {
 	t.Helper()
 	s := New(Options{Client: c, Model: "cheap-model"})
 	if s == nil {
 		t.Fatal("New returned nil for a valid client+model")
 	}
-	return s.Classify(context.Background(), core.ClassifyRequest{
+	return s.Classify(context.Background(), permission.ClassifyRequest{
 		Tool: "bash",
 		Args: json.RawMessage(`{"command":"rm -rf /"}`),
-		Mode: core.ApprovalWorkspace,
+		Mode: permission.ApprovalWorkspace,
 	})
 }
 
@@ -54,18 +54,18 @@ func TestVerdictMapping(t *testing.T) {
 	tests := []struct {
 		name  string
 		reply string
-		want  core.ClassifyVerdict
+		want  permission.ClassifyVerdict
 	}{
-		{"deny", `{"decision":"deny","reason":"wipes the home directory"}`, core.ClassifyDeny},
-		{"allow becomes approve", `{"decision":"allow"}`, core.ClassifyApprove},
+		{"deny", `{"decision":"deny","reason":"wipes the home directory"}`, permission.ClassifyDeny},
+		{"allow becomes approve", `{"decision":"allow"}`, permission.ClassifyApprove},
 		// "ask" is the model saying a human should look, which IS an
 		// abstention: the gate then does exactly what it would have anyway.
-		{"ask becomes abstain", `{"decision":"ask","reason":"consequential"}`, core.ClassifyAbstain},
-		{"unknown vocabulary abstains", `{"decision":"maybe"}`, core.ClassifyAbstain},
-		{"prose abstains", `I think that is fine, go ahead.`, core.ClassifyAbstain},
-		{"empty reply abstains", ``, core.ClassifyAbstain},
-		{"fenced json still parses", "```json\n{\"decision\":\"deny\",\"reason\":\"x\"}\n```", core.ClassifyDeny},
-		{"narration then answer takes the last", `{"draft":1} finally {"decision":"deny","reason":"y"}`, core.ClassifyDeny},
+		{"ask becomes abstain", `{"decision":"ask","reason":"consequential"}`, permission.ClassifyAbstain},
+		{"unknown vocabulary abstains", `{"decision":"maybe"}`, permission.ClassifyAbstain},
+		{"prose abstains", `I think that is fine, go ahead.`, permission.ClassifyAbstain},
+		{"empty reply abstains", ``, permission.ClassifyAbstain},
+		{"fenced json still parses", "```json\n{\"decision\":\"deny\",\"reason\":\"x\"}\n```", permission.ClassifyDeny},
+		{"narration then answer takes the last", `{"draft":1} finally {"decision":"deny","reason":"y"}`, permission.ClassifyDeny},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -92,13 +92,13 @@ func TestDenyCarriesTheReasonThrough(t *testing.T) {
 func TestTransportFailuresAbstainRatherThanDeny(t *testing.T) {
 	t.Run("stream error", func(t *testing.T) {
 		got := screen(t, &fakeClient{streamErr: errors.New("connection refused")})
-		if got.Verdict != core.ClassifyAbstain {
+		if got.Verdict != permission.ClassifyAbstain {
 			t.Fatalf("verdict = %q, want abstain", got.Verdict)
 		}
 	})
 	t.Run("mid-stream error", func(t *testing.T) {
 		got := screen(t, &fakeClient{reply: `{"decision":"deny"}`, doneErr: errors.New("overloaded")})
-		if got.Verdict != core.ClassifyAbstain {
+		if got.Verdict != permission.ClassifyAbstain {
 			t.Fatalf("verdict = %q, want abstain even though a verdict had streamed", got.Verdict)
 		}
 	})
@@ -113,7 +113,7 @@ func TestFailuresReachTheLog(t *testing.T) {
 		Model:  "cheap-model",
 		Logf:   func(f string, a ...any) { lines = append(lines, f) },
 	})
-	s.Classify(context.Background(), core.ClassifyRequest{Tool: "bash", Args: json.RawMessage(`{}`)})
+	s.Classify(context.Background(), permission.ClassifyRequest{Tool: "bash", Args: json.RawMessage(`{}`)})
 	if len(lines) == 0 {
 		t.Fatal("a transport failure produced no log line")
 	}
@@ -135,7 +135,7 @@ func TestNewRefusesAnUnrunnableScreener(t *testing.T) {
 
 func TestNilScreenerAbstains(t *testing.T) {
 	var s *Screener
-	if got := s.Classify(context.Background(), core.ClassifyRequest{}); got.Verdict != core.ClassifyAbstain {
+	if got := s.Classify(context.Background(), permission.ClassifyRequest{}); got.Verdict != permission.ClassifyAbstain {
 		t.Fatalf("nil screener = %q, want abstain", got.Verdict)
 	}
 }
@@ -171,7 +171,7 @@ func TestReasoningIsExplicitlyOff(t *testing.T) {
 func TestConfiguredReasoningSurvives(t *testing.T) {
 	c := &fakeClient{reply: `{"decision":"allow"}`}
 	s := New(Options{Client: c, Model: "m", Reasoning: "low"})
-	s.Classify(context.Background(), core.ClassifyRequest{Tool: "bash", Args: json.RawMessage(`{}`)})
+	s.Classify(context.Background(), permission.ClassifyRequest{Tool: "bash", Args: json.RawMessage(`{}`)})
 	if c.got.Reasoning != "low" {
 		t.Fatalf("Reasoning = %q, want the configured \"low\"", c.got.Reasoning)
 	}
@@ -181,7 +181,7 @@ func TestPromptCarriesTheCall(t *testing.T) {
 	c := &fakeClient{reply: `{"decision":"allow"}`}
 	screen(t, c)
 	body := c.got.Messages[0].Content[0].(provider.TextBlock).Text
-	for _, want := range []string{"bash", "rm -rf /", string(core.ApprovalWorkspace)} {
+	for _, want := range []string{"bash", "rm -rf /", string(permission.ApprovalWorkspace)} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, body)
 		}
@@ -193,7 +193,7 @@ func TestPromptCarriesTheCall(t *testing.T) {
 func TestPolicyReachesTheSystemPrompt(t *testing.T) {
 	c := &fakeClient{reply: `{"decision":"allow"}`}
 	s := New(Options{Client: c, Model: "m", Policy: "never touch /etc"})
-	s.Classify(context.Background(), core.ClassifyRequest{Tool: "bash", Args: json.RawMessage(`{}`)})
+	s.Classify(context.Background(), permission.ClassifyRequest{Tool: "bash", Args: json.RawMessage(`{}`)})
 	if !strings.Contains(c.got.System, "never touch /etc") {
 		t.Fatal("site policy did not reach the system prompt")
 	}
@@ -217,7 +217,7 @@ func TestSystemPromptKeepsTheTokensClassifyParses(t *testing.T) {
 // Malformed args must still render something judgeable rather than asking the
 // model to rule on an empty call.
 func TestRenderCallSurvivesUnparseableArgs(t *testing.T) {
-	out := renderCall(core.ClassifyRequest{Tool: "bash", Args: json.RawMessage(`not json`)})
+	out := renderCall(permission.ClassifyRequest{Tool: "bash", Args: json.RawMessage(`not json`)})
 	if !strings.Contains(out, "not json") {
 		t.Fatalf("unparseable args were dropped:\n%s", out)
 	}

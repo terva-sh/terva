@@ -23,6 +23,7 @@ import (
 	"terva.sh/terva/packages/agent/procenv"
 	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider"
@@ -700,7 +701,7 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 // --approval flag, --no-yolo, or a config "approval" all win over this default.
 func botApprovalDefault(approvalFlag string, noYolo bool, cfgApproval string) string {
 	if approvalFlag == "" && !noYolo && cfgApproval == "" {
-		return string(core.ApprovalYolo)
+		return string(permission.ApprovalYolo)
 	}
 	return ""
 }

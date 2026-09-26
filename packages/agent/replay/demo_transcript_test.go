@@ -9,6 +9,7 @@ import (
 
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // demoTranscript is the fixture the terminal demo is recorded from
@@ -30,7 +31,7 @@ func writeDemoTranscript(t *testing.T, path string) {
 		t.Fatal(err)
 	}
 	_ = os.Remove(path)
-	sess, err := core.NewSessionAtPath(path, "/home/ada/auth-service", "anthropic", "claude-opus-5", "demo")
+	sess, err := session.NewSessionAtPath(path, "/home/ada/auth-service", "anthropic", "claude-opus-5", "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +76,7 @@ func writeDemoTranscript(t *testing.T, path string) {
 		})})))
 	// The person reads the diff, glances at the session-wide option, and
 	// allows this call alone.
-	must(sess.AppendPermission(core.PermissionRecord{
+	must(sess.AppendPermission(session.PermissionRecord{
 		CallID: "call-edit", Tool: "edit", Preview: "auth.go: replace 4 lines with 1",
 		Asked: tick(), Waited: 2600 * time.Millisecond, Allow: true,
 	}))
@@ -84,7 +85,7 @@ func writeDemoTranscript(t *testing.T, path string) {
 	must(sess.AppendMessage(text(provider.RoleAssistant, "The tests, with the race detector since this is a compare.",
 		provider.ToolCallBlock{ID: "call-race", Name: "bash", Arguments: args(map[string]any{"command": "go test -race ./..."})})))
 	// Refused: the person walks past every allow to no, and the agent adapts.
-	must(sess.AppendPermission(core.PermissionRecord{
+	must(sess.AppendPermission(session.PermissionRecord{
 		CallID: "call-race", Tool: "bash", Preview: "go test -race ./...",
 		Asked: tick(), Waited: 2200 * time.Millisecond, Allow: false, Reason: "user declined: the race run takes minutes on this laptop, test the one package",
 	}))
@@ -94,7 +95,7 @@ func writeDemoTranscript(t *testing.T, path string) {
 
 	must(sess.AppendMessage(text(provider.RoleAssistant, "The one package, then.",
 		provider.ToolCallBlock{ID: "call-test", Name: "bash", Arguments: args(map[string]any{"command": "go test ./auth/"})})))
-	must(sess.AppendPermission(core.PermissionRecord{
+	must(sess.AppendPermission(session.PermissionRecord{
 		CallID: "call-test", Tool: "bash", Preview: "go test ./auth/",
 		Asked: tick(), Waited: 1200 * time.Millisecond, Allow: true,
 	}))
@@ -105,14 +106,14 @@ func writeDemoTranscript(t *testing.T, path string) {
 			"questions": []map[string]any{{"question": "How should the changelog entry read?", "options": []string{"Security: constant-time token compare", "Fixed: token compare timing leak", "Skip the changelog"}}},
 		})})))
 	// The person picks the second option and types a note explaining why.
-	must(sess.AppendAsk(core.AskRecord{
+	must(sess.AppendAsk(session.AskRecord{
 		AskID: "ask_1",
-		Questions: core.RecordQuestions([]core.UserQuestion{{
+		Questions: session.RecordQuestions([]core.UserQuestion{{
 			Question: "How should the changelog entry read?", Slug: "changelog",
 			Options:            []string{"Security: constant-time token compare", "Fixed: token compare timing leak", "Skip the changelog"},
 			RecommendedOptions: []string{"Security: constant-time token compare"},
 		}}),
-		Answers: core.RecordAnswers([]core.UserAnswer{{Answer: "Fixed: token compare timing leak", Note: "our users read Fixed, not Security"}}),
+		Answers: session.RecordAnswers([]core.UserAnswer{{Answer: "Fixed: token compare timing leak", Note: "our users read Fixed, not Security"}}),
 		Asked:   tick(), Waited: 2800 * time.Millisecond,
 	}))
 	must(sess.AppendMessage(result("call-ask", "Fixed: token compare timing leak\nnote: our users read Fixed, not Security")))
@@ -124,9 +125,9 @@ func writeDemoTranscript(t *testing.T, path string) {
 			"new_string": "## Unreleased\n\n### Fixed\n\n- Token compare timing leak in verifyToken.\n",
 		})})))
 	// Allowed for the rest of the session: edits to this repo are trusted now.
-	must(sess.AppendPermission(core.PermissionRecord{
+	must(sess.AppendPermission(session.PermissionRecord{
 		CallID: "call-changelog", Tool: "edit", Preview: "CHANGELOG.md: insert 4 lines",
-		Asked: tick(), Waited: 1500 * time.Millisecond, Allow: true, Scope: core.PermissionScopeTool,
+		Asked: tick(), Waited: 1500 * time.Millisecond, Allow: true, Scope: session.PermissionScopeTool,
 	}))
 	must(sess.AppendMessage(result("call-changelog", "edited CHANGELOG.md: 1 replacement")))
 
@@ -138,24 +139,24 @@ func TestDemoTranscript(t *testing.T) {
 	if os.Getenv("UPDATE_FIXTURES") != "" {
 		writeDemoTranscript(t, demoTranscript)
 	}
-	rows, _, err := core.ReadReplayRows(demoTranscript)
+	rows, _, err := session.ReadReplayRows(demoTranscript)
 	if err != nil {
 		t.Fatalf("read the demo transcript (run `UPDATE_FIXTURES=1 go test ./packages/agent/replay/ -run TestDemoTranscript` to regenerate): %v", err)
 	}
-	count := map[core.ReplayRowKind]int{}
+	count := map[session.ReplayRowKind]int{}
 	for _, r := range rows {
 		count[r.Kind]++
 	}
-	if count[core.ReplayRowPermission] != 4 || count[core.ReplayRowAsk] != 1 {
-		t.Fatalf("the demo has %d permission rows and %d ask rows; want 4 and 1", count[core.ReplayRowPermission], count[core.ReplayRowAsk])
+	if count[session.ReplayRowPermission] != 4 || count[session.ReplayRowAsk] != 1 {
+		t.Fatalf("the demo has %d permission rows and %d ask rows; want 4 and 1", count[session.ReplayRowPermission], count[session.ReplayRowAsk])
 	}
 	var refused, widened, noted bool
 	for _, r := range rows {
 		switch r.Kind {
-		case core.ReplayRowPermission:
+		case session.ReplayRowPermission:
 			refused = refused || !r.Permission.Allow
-			widened = widened || r.Permission.Scope == core.PermissionScopeTool
-		case core.ReplayRowAsk:
+			widened = widened || r.Permission.Scope == session.PermissionScopeTool
+		case session.ReplayRowAsk:
 			noted = noted || (len(r.Ask.Answers) == 1 && r.Ask.Answers[0].Note != "")
 		}
 	}

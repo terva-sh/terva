@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // okBackend is a spec that satisfies every contract, so a case below can break
@@ -50,6 +50,15 @@ func TestRegisterRefusesAHalfWiredBackend(t *testing.T) {
 			wants: "Opening but not Steer",
 		},
 		{
+			name: "Interrupt without Steer",
+			spec: func() Backend {
+				b := okBackend("x")
+				b.Interrupt = func() ([]byte, error) { return []byte("{}\n"), nil }
+				return b
+			}(),
+			wants: "Interrupt but not Steer",
+		},
+		{
 			name: "RecognizeAsk without EncodeApprove",
 			spec: func() Backend {
 				b := okBackend("x")
@@ -64,7 +73,7 @@ func TestRegisterRefusesAHalfWiredBackend(t *testing.T) {
 				b := okBackend("x")
 				b.ApprovalSocket = true
 				b.RecognizeAsk = func(Event) (Ask, bool) { return Ask{}, false }
-				b.EncodeApprove = func(string, core.ConfirmDecision) ([]byte, error) { return nil, nil }
+				b.EncodeApprove = func(string, permission.ConfirmDecision) ([]byte, error) { return nil, nil }
 				return b
 			}(),
 			wants: "never both",
@@ -156,8 +165,18 @@ func TestEveryBackendFramesItsLines(t *testing.T) {
 			}
 			checked++
 		}
+		if b.Interrupt != nil {
+			frame, err := b.Interrupt()
+			if err != nil {
+				t.Errorf("%s: Interrupt returned an error: %v", name, err)
+			} else if !strings.HasSuffix(string(frame), "\n") {
+				t.Errorf("%s: Interrupt frame does not end in a newline (%q) — the worker would not read "+
+					"the cancel until the next frame arrived", name, frame)
+			}
+			checked++
+		}
 		if b.EncodeApprove != nil {
-			frame, err := b.EncodeApprove("ask-1", core.ConfirmDecision{Allow: true})
+			frame, err := b.EncodeApprove("ask-1", permission.ConfirmDecision{Allow: true})
 			if err != nil {
 				t.Errorf("%s: EncodeApprove returned an error on an ordinary decision: %v", name, err)
 			} else if !strings.HasSuffix(string(frame), "\n") {

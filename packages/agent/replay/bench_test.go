@@ -6,19 +6,19 @@ import (
 	"strings"
 	"testing"
 
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // benchDeepRows builds a deep artificial session as replay rows: `turns` rounds
 // of user → assistant(text + tool call) → tool result (a sizable block) →
 // assistant(text), a usage row per turn, and one compaction checkpoint
 // mid-session. This is the deep session the replay tooling reconstructs.
-func benchDeepRows(turns int) []core.ReplayRow {
+func benchDeepRows(turns int) []session.ReplayRow {
 	toolOut := strings.Repeat("  scanned a line with enough detail to be non-trivial.\n", 30) // ~1.6 KiB
-	rows := make([]core.ReplayRow, 0, turns*5+1)
+	rows := make([]session.ReplayRow, 0, turns*5+1)
 	msg := func(m provider.Message) {
-		rows = append(rows, core.ReplayRow{Kind: core.ReplayRowMessage, Message: m})
+		rows = append(rows, session.ReplayRow{Kind: session.ReplayRowMessage, Message: m})
 	}
 	for i := range turns {
 		id := fmt.Sprintf("call_%04d", i)
@@ -35,13 +35,13 @@ func benchDeepRows(turns int) []core.ReplayRow {
 		msg(provider.Message{Role: provider.RoleAssistant, Content: []provider.Content{
 			provider.TextBlock{Text: fmt.Sprintf("Step %d looks fine.", i)},
 		}})
-		rows = append(rows, core.ReplayRow{
-			Kind:       core.ReplayRowUsage,
+		rows = append(rows, session.ReplayRow{
+			Kind:       session.ReplayRowUsage,
 			Usage:      provider.Usage{InputTokens: 1000, OutputTokens: 50},
 			Cumulative: provider.Usage{InputTokens: 1000 * (i + 1), OutputTokens: 50 * (i + 1)},
 		})
 		if i == turns/2 { // one mid-session compaction checkpoint
-			rows = append(rows, core.ReplayRow{Kind: core.ReplayRowCompaction, Checkpoint: []provider.Message{
+			rows = append(rows, session.ReplayRow{Kind: session.ReplayRowCompaction, Checkpoint: []provider.Message{
 				{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "summary of the session so far"}}},
 			}})
 		}

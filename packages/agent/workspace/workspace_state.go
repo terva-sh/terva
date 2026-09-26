@@ -6,15 +6,15 @@ import (
 	"os"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/session"
 )
 
-// The session state sidecar on the wire. core owns the file
-// (packages/core/session_state.go) and ctrlproto owns the shapes
+// The session state sidecar on the wire. packages/session owns the file
+// (packages/session/session_state.go) and ctrlproto owns the shapes
 // (session_state.go); this is the daemon in between, and it is deliberately
 // thin — it resolves a session id to a path, holds one lock across the
-// read-modify-write, and translates core's one refusable error into a wire code.
+// read-modify-write, and translates the store's one refusable error into a wire code.
 //
 // Serving it from HERE is the point of the feature: the draft belongs to the
 // session rather than to whichever front end typed it, so the TUI and the web
@@ -45,7 +45,7 @@ func (w *Workspace) statePath(sess string) string {
 			return ""
 		}
 	}
-	return core.SessionStatePathFor(transcript)
+	return session.SessionStatePathFor(transcript)
 }
 
 // SessionState reads a session's durable client state.
@@ -63,7 +63,7 @@ func (w *Workspace) SessionState(_ context.Context, sess string) (ctrlproto.Sess
 	defer w.stateMu.Unlock()
 
 	var out ctrlproto.SessionStateResult
-	if d, ok := core.LoadSessionState(path).Composer(); ok {
+	if d, ok := session.LoadSessionState(path).Composer(); ok {
 		draft := ctrlproto.ComposerDraft{Text: d.Text, Source: d.Source}
 		// Only a real stamp travels. A hand-edited file with no updated_at
 		// would otherwise send year 1 as though it were a time, and a client
@@ -94,17 +94,17 @@ func (w *Workspace) SetComposerDraft(_ context.Context, sess string, p ctrlproto
 	w.stateMu.Lock()
 	defer w.stateMu.Unlock()
 
-	state := core.LoadSessionState(path)
-	if err := state.SetComposer(core.ComposerDraft{Text: p.Text, Source: p.Source}); err != nil {
+	state := session.LoadSessionState(path)
+	if err := state.SetComposer(session.ComposerDraft{Text: p.Text, Source: p.Source}); err != nil {
 		return err
 	}
-	if err := core.SaveSessionState(path, state); err != nil {
+	if err := session.SaveSessionState(path, state); err != nil {
 		// The cap is the one failure a user can act on — shorten the message,
 		// or send it. Localized and given a distinct code so a front end can
 		// say so plainly, instead of reporting an internal error for something
 		// the user did on purpose. Nothing was written; the previous draft (if
 		// any) is still there.
-		if errors.Is(err, core.ErrSessionStateTooLarge) {
+		if errors.Is(err, session.ErrSessionStateTooLarge) {
 			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the draft is too large to keep"))
 		}
 		return err

@@ -24,6 +24,7 @@ import (
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/session"
@@ -93,7 +94,7 @@ type acpFactory struct {
 // NewSessionAgent builds the agent + a fresh durable session at cwd, with
 // persistence hooks wired (§3). The ACP sessionId becomes the session's file
 // path, so a later session/load reopens exactly this transcript.
-func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (acp.SessionAgent, error) {
+func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer permission.Confirmer) (acp.SessionAgent, error) {
 	r, ag, gate, cleanup, observe, extMgr, hooks, err := f.buildAgent(ctx, cwd, mcpServers, confirmer)
 	if err != nil {
 		return acp.SessionAgent{}, err
@@ -129,7 +130,7 @@ func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers
 // LoadSessionAgent reopens the durable session at sessionPath (the ACP
 // sessionId), builds an agent for it, wires persistence, and returns the
 // repaired transcript so the acp package can rehydrate + replay it (§10/§13).
-func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (acp.SessionAgent, []provider.Message, error) {
+func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd string, mcpServers json.RawMessage, confirmer permission.Confirmer) (acp.SessionAgent, []provider.Message, error) {
 	sess, msgs, err := session.OpenSession(sessionPath)
 	if err != nil {
 		// Propagate os.IsNotExist verbatim so the acp package maps a missing
@@ -379,7 +380,7 @@ func (f *acpFactory) SwitchModel(currentProvider, currentModel, targetModelID st
 // ACP twin of Workspace.applyTrust, closed over the pieces a flip has to move
 // (hook engine, extension manager, tool set). It is what makes ACP a live-trust
 // host rather than one whose verdict is fixed at launch.
-func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (build.Resolved, *core.Agent, *core.ConfirmGate, func(), func(core.AgentEvent), *extensions.Manager, acpSessionHooks, error) {
+func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer permission.Confirmer) (build.Resolved, *core.Agent, *permission.ConfirmGate, func(), func(core.AgentEvent), *extensions.Manager, acpSessionHooks, error) {
 	// Each session resolves with its own cwd so tools, system prompt, and
 	// session dir bind to the editor-provided working directory.
 	args := f.args
@@ -416,7 +417,7 @@ func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json
 	if pol == nil {
 		pol = synthYoloPolicy()
 	}
-	confirmGate := core.NewPolicyGate(pol, confirmer)
+	confirmGate := permission.NewPolicyGate(pol, confirmer)
 	roSet := pol.ReadOnly
 
 	r, err := build.Resolve(args, true)
@@ -886,8 +887,8 @@ func renderPanelText(p *extproto.PanelSpec) string {
 // The hand-built version set four of the seven fields and claimed the rest did
 // not matter; Interactive and DecomposeCommand decide what a rule MEANS once
 // the mode tightens, which is the only reason this policy exists.
-func synthYoloPolicy() *core.PermissionPolicy {
-	return permissions.NewPolicy(core.ApprovalYolo, nil)
+func synthYoloPolicy() *permission.PermissionPolicy {
+	return permissions.NewPolicy(permission.ApprovalYolo, nil)
 }
 
 // setupACPMCP starts the editor-provided MCP servers for one session — plus a

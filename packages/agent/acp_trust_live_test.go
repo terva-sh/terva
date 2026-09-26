@@ -18,6 +18,7 @@ import (
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -81,8 +82,8 @@ func acpProjectSkill(t *testing.T, cwd, name string) {
 // these tests are actually asking about.
 type allowingConfirmer struct{}
 
-func (allowingConfirmer) Confirm(context.Context, string, string) core.ConfirmDecision {
-	return core.ConfirmDecision{Allow: true}
+func (allowingConfirmer) Confirm(context.Context, string, string) permission.ConfirmDecision {
+	return permission.ConfirmDecision{Allow: true}
 }
 
 // acpTestSession builds a real ACP session agent for cwd the way

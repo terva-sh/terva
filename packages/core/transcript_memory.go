@@ -4,6 +4,7 @@ import (
 	"strings"
 	"sync"
 
+	"terva.sh/terva/packages/core/transcriptcodec"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -18,7 +19,7 @@ import (
 type MemoryTranscriptStore struct {
 	mu        sync.Mutex
 	messages  []provider.Message
-	usage     usageFold
+	usage     UsageFold
 	groups    []string
 	groupSeen map[string]bool
 	excluded  map[string]bool
@@ -45,15 +46,15 @@ func (s *MemoryTranscriptStore) AppendCompaction(messages []provider.Message, re
 	for _, m := range messages {
 		s.messages = append(s.messages, copyMessage(m))
 	}
-	s.usage.compactedTo(messages)
-	s.usage.compactionSpend(res.Usage)
+	s.usage.CompactedTo(messages)
+	s.usage.CompactionSpend(res.Usage)
 	return nil
 }
 
 func (s *MemoryTranscriptStore) AppendUsage(r UsageRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.usage.usage(r.Usage, r.Cumulative, r.Kind != UsageTurn)
+	s.usage.AddUsage(r.Usage, r.Cumulative, r.Kind != UsageTurn)
 	return nil
 }
 
@@ -92,11 +93,11 @@ func (s *MemoryTranscriptStore) Transcript() Transcript {
 		msgs = append(msgs, copyMessage(m))
 	}
 	if len(s.excluded) > 0 {
-		msgs = applyImageExclusions(msgs, s.excluded)
+		msgs = transcriptcodec.ApplyImageExclusions(msgs, s.excluded)
 	}
-	cum, _, resume := s.usage.result()
+	cum, _, resume := s.usage.Result()
 	return Transcript{
-		Messages:         repairToolUseResultPairs(msgs),
+		Messages:         transcriptcodec.RepairToolUseResultPairs(msgs),
 		Cumulative:       cum,
 		ResumeContext:    resume,
 		ActiveToolGroups: append([]string(nil), s.groups...),

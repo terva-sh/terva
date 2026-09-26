@@ -5,7 +5,7 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/mode"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -33,15 +33,15 @@ func TestPostureFailsClosed(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	for _, m := range []mode.Mode{"", "some-future-mode"} {
 		approval, jailed := postureOf(m)
-		if approval != core.ApprovalAsk {
-			t.Errorf("postureOf(%q) approval = %q, want %q — an unrecognized mode must not be granted trust", m, approval, core.ApprovalAsk)
+		if approval != permission.ApprovalAsk {
+			t.Errorf("postureOf(%q) approval = %q, want %q — an unrecognized mode must not be granted trust", m, approval, permission.ApprovalAsk)
 		}
 		if !jailed {
 			t.Errorf("postureOf(%q) jailed = false — an unrecognized mode must not be handed the filesystem", m)
 		}
 		// And the resolvers must actually carry it, not just the helper.
-		if got := ResolveApprovalMode(Inputs{Mode: m}, config.Config{}); got != core.ApprovalAsk {
-			t.Errorf("ResolveApprovalMode(%q) = %q, want %q", m, got, core.ApprovalAsk)
+		if got := ResolveApprovalMode(Inputs{Mode: m}, config.Config{}); got != permission.ApprovalAsk {
+			t.Errorf("ResolveApprovalMode(%q) = %q, want %q", m, got, permission.ApprovalAsk)
 		}
 		if !ResolveJail(Inputs{Mode: m}) {
 			t.Errorf("ResolveJail(%q) = false, want true", m)

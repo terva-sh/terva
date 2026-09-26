@@ -356,7 +356,7 @@ When you add operator-facing text in Go:
   moved out from behind it. A tool *description* goes through `i18n.D` into
   `locales/tools/`, so an operator can retune it in place (see *Retuning a tool
   description* above). A **gate refusal reason** goes through `i18n.T`: the
-  sentences in `packages/core/confirm.go` that say why a call was refused are
+  sentences in `packages/core/permission/confirm.go` that say why a call was refused are
   read by a person as often as by the model. `i18n.P` remains for canned prose
   that shapes what the user ultimately reads: identity, narration cues,
   summaries, section framing.

@@ -51,7 +51,7 @@ type ToolInfo struct {
 	// classification.
 	ReadOnly bool
 	// Authority carries the extension's effect-class declaration
-	// (register_tool authority; core.Authority). Richer than ReadOnly:
+	// (register_tool authority; permission.Authority). Richer than ReadOnly:
 	// when set it decides read-only classification (only local-read is
 	// auto-allowable), so a network-read tool is not mistaken for a
 	// local read. Empty falls back to ReadOnly.

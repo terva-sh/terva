@@ -6,6 +6,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/session"
 )
 
 // History pages backward through the live transcript — the part a windowed snapshot
@@ -61,7 +62,7 @@ func (w *Workspace) History(_ context.Context, sess string, before, limit int, e
 //
 // Nothing is reconstructed or re-summarized: a compaction row is an append-only
 // checkpoint the loader honors, never a rewrite, so the superseded "message" rows
-// are still sitting in the session file. core.RevealCompaction replays the
+// are still sitting in the session file. session.RevealCompaction replays the
 // loader's walk and snapshots the transcript at the instant before the target
 // checkpoint resets it.
 //
@@ -85,7 +86,7 @@ func (w *Workspace) Reveal(_ context.Context, sess string, ordinal int) (ctrlpro
 		return ctrlproto.RevealResult{}, ctrlproto.Errorf(ctrlproto.CodeNotFound,
 			"%s", i18n.T("this session was never written to disk, so the turns before the compaction are not recoverable"))
 	}
-	span, err := core.RevealCompaction(s.sess.Path, ordinal)
+	span, err := session.RevealCompaction(s.sess.Path, ordinal)
 	if err != nil {
 		return ctrlproto.RevealResult{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "reveal: %v", err)
 	}

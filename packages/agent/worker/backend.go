@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"terva.sh/terva/packages/agent/config"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // Backend is how to drive one coding agent that is not terva — the moral
@@ -19,7 +19,7 @@ import (
 // Anything a backend does NOT need to customise, it leaves nil and inherits.
 //
 // The contract was extracted from what ONE real backend needs, driven against
-// the actual binary (see docs/proposals/external-agent-workers.md, "Probed
+// the actual binary (see docs/proposals/archive/external-agent-workers.md, "Probed
 // against the real CLI"). It is deliberately not more general than that. A
 // second backend will bend it, and bending it against a real second case beats
 // guessing at one now.
@@ -83,6 +83,14 @@ type Backend struct {
 	// unparseable line. Pinned by TestEveryBackendFramesItsLines.
 	Steer func(text string) ([]byte, error)
 
+	// Interrupt encodes a request to stop the child's in-flight turn as a frame
+	// on its stdin. The child stays alive and takes the next turn. Nil means the
+	// backend has no mid-turn interrupt, and the runner says so on a cancel
+	// rather than killing the worker. It shares stdin with Steer, so a backend
+	// that sets Interrupt must also set Steer, and the frame must end in a
+	// newline.
+	Interrupt func() ([]byte, error)
+
 	// RecognizeAsk inspects a translated event and, if it is an approval request
 	// from the worker, returns the Ask and true. Nil means this backend never
 	// asks for approval over its event stream — its worker either cannot be
@@ -98,7 +106,7 @@ type Backend struct {
 	// EncodeApprove encodes a decision as the reply frame for the child's stdin,
 	// correlated to the Ask's id. Required when RecognizeAsk is set, and
 	// NEWLINE-TERMINATED for the reason Steer is — these two share the pipe.
-	EncodeApprove func(askID string, d core.ConfirmDecision) ([]byte, error)
+	EncodeApprove func(askID string, d permission.ConfirmDecision) ([]byte, error)
 
 	// ApprovalSocket says this backend gates tool use through terva's MCP
 	// approval bridge rather than the rpc-native ask carrier. When true, the
@@ -123,6 +131,14 @@ type Backend struct {
 	// way back. Minting means the cursor is durable before there is a process to
 	// lose. (Claude Code takes `--session-id <uuid>`; verified against 2.1.209.)
 	Cursor func(agentID string) string
+
+	// ReportsCost says the child's events carry a dollar figure for its work:
+	// claude's result has total_cost_usd, and the terva backends emit usage
+	// events with a cumulative cost. A Talkoot roster refuses a member on a
+	// backend without it unless the member sets turns_per_day, because a spend
+	// cap on a driver that reports no spend is a cap that never trips. False is
+	// the safe default for a new backend.
+	ReportsCost bool
 }
 
 // Dispatch is everything Command needs to build a child: what to say, where to
@@ -171,7 +187,7 @@ type Event struct {
 }
 
 // Ask is one tool-approval request a worker surfaced — the wire-level analog of
-// a core.Confirmer prompt. The runner routes it to the orchestrator's human and
+// a permission.Confirmer prompt. The runner routes it to the orchestrator's human and
 // replies with the backend's EncodeApprove, correlated by ID.
 type Ask struct {
 	ID      string // the backend's correlation id, echoed back in the reply
@@ -233,6 +249,9 @@ func (b Backend) validate() error {
 	case b.Opening != nil && b.Steer == nil:
 		return fmt.Errorf("backend %q sets Opening but not Steer: the opening turn is encoded BY Steer, "+
 			"and pumpStdin closes stdin outright when Steer is nil — the task would never reach the worker", b.Name)
+	case b.Interrupt != nil && b.Steer == nil:
+		return fmt.Errorf("backend %q sets Interrupt but not Steer: pumpStdin closes stdin outright when Steer "+
+			"is nil, so the interrupt frame would have no pipe to travel on", b.Name)
 	case b.RecognizeAsk != nil && b.EncodeApprove == nil:
 		return fmt.Errorf("backend %q recognises approval asks but cannot answer them (no EncodeApprove): "+
 			"a gated worker would block forever on a verdict nothing writes back", b.Name)
@@ -259,9 +278,11 @@ func Lookup(name string) (Backend, error) {
 	return b, nil
 }
 
-// Names lists the registered backends, sorted. The `swarm_spawn` tool's backend
-// enum is built from this, so a backend that is not registered is not offerable
-// — the schema simply does not mention it, and no model can ask for it.
+// Names lists the registered backends, sorted. The tasks surface sends it to
+// the board and the TUI as TaskList.Backends, the set a human may spawn
+// against. The `swarm_spawn` schema carries no enum: its `backend` is a free
+// string, and AllowSpawn refuses a name that is not registered when the tool
+// runs.
 func Names() []string {
 	mu.RLock()
 	defer mu.RUnlock()

@@ -230,7 +230,7 @@ func (r *repo) entryPath(name string, e *Entry) string {
 	return r.worktreePath(name)
 }
 
-// repoKey mirrors core.ProjectKey: a readable prefix (the repo's directory name)
+// repoKey mirrors session.ProjectKey: a readable prefix (the repo's directory name)
 // plus a collision-proof suffix (a short hash of the absolute common dir). It
 // deliberately matches the retired extension's derivation byte-for-byte — the
 // migration looks up the legacy registry by this same key.

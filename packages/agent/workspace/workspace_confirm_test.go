@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 func waitCond(t *testing.T, what string, cond func() bool) {
@@ -31,16 +31,16 @@ func TestWebConfirmerConcurrentParksDistinct(t *testing.T) {
 	s := newTestSession()
 	c := &webConfirmer{s: s}
 
-	r1 := make(chan core.ConfirmDecision, 1)
-	r2 := make(chan core.ConfirmDecision, 1)
+	r1 := make(chan permission.ConfirmDecision, 1)
+	r2 := make(chan permission.ConfirmDecision, 1)
 	go func() { r1 <- c.ConfirmWithCall(context.Background(), "bash", "model call", "call-A") }()
 	go func() { r2 <- c.ConfirmWithCall(context.Background(), "bash", "host tool call", "hostcall-ext-1") }()
 	waitCond(t, "both Confirms parked under their own ids", func() bool {
 		return s.permPark.Len() == 2
 	})
 
-	s.approve("hostcall-ext-1", core.ConfirmDecision{Allow: false, Reason: "nope"})
-	s.approve("call-A", core.ConfirmDecision{Allow: true})
+	s.approve("hostcall-ext-1", permission.ConfirmDecision{Allow: false, Reason: "nope"})
+	s.approve("call-A", permission.ConfirmDecision{Allow: true})
 
 	select {
 	case d := <-r1:
@@ -65,8 +65,8 @@ func TestWebConfirmerConcurrentParksDistinct(t *testing.T) {
 func TestWebConfirmerIDLessFallbackMintsUnique(t *testing.T) {
 	s := newTestSession()
 	c := &webConfirmer{s: s}
-	r1 := make(chan core.ConfirmDecision, 1)
-	r2 := make(chan core.ConfirmDecision, 1)
+	r1 := make(chan permission.ConfirmDecision, 1)
+	r2 := make(chan permission.ConfirmDecision, 1)
 	go func() { r1 <- c.Confirm(context.Background(), "bash", "first") }()
 	go func() { r2 <- c.Confirm(context.Background(), "bash", "second") }()
 	waitCond(t, "both id-less Confirms parked separately", func() bool {
@@ -74,10 +74,10 @@ func TestWebConfirmerIDLessFallbackMintsUnique(t *testing.T) {
 	})
 	s.mu.Lock()
 	for id := range s.permReq {
-		go s.approve(id, core.ConfirmDecision{Allow: true})
+		go s.approve(id, permission.ConfirmDecision{Allow: true})
 	}
 	s.mu.Unlock()
-	for i, ch := range []chan core.ConfirmDecision{r1, r2} {
+	for i, ch := range []chan permission.ConfirmDecision{r1, r2} {
 		select {
 		case <-ch:
 		case <-time.After(2 * time.Second):
@@ -110,5 +110,5 @@ func TestWorkerConfirmerCarriesAgentID(t *testing.T) {
 		t.Fatalf("PermissionRequest.Agent = %q, want the worker id %q", ev.Permission.Agent, "wk7")
 	}
 	// Unblock the parked Confirm so its goroutine exits cleanly.
-	s.approve(ev.Permission.CallID, core.ConfirmDecision{Allow: true})
+	s.approve(ev.Permission.CallID, permission.ConfirmDecision{Allow: true})
 }

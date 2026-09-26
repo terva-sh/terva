@@ -5,7 +5,7 @@ import (
 
 	ticket "github.com/terva-sh/git-ticket/ticket"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -30,14 +30,14 @@ var ticketWriteToolNames = []string{"ticket_create", "ticket_update", "ticket_tr
 func TestTicketToolsRegisterOnlyWithStore(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 
-	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, ticketStoreDir(t), nil, "", "", false, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, ticketStoreDir(t), nil, "", "", false, nil)
 	for _, name := range append(append([]string{}, ticketToolNames...), ticketWriteToolNames...) {
 		if _, ok := reg[name]; !ok {
 			t.Errorf("%s missing from a session with a ticket store", name)
 		}
 	}
 
-	plain := BuildToolRegistry(Args{}, core.ApprovalWorkspace, testsupport.TempDir(t), nil, "", "", false, nil)
+	plain := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, testsupport.TempDir(t), nil, "", "", false, nil)
 	for _, name := range append(append([]string{}, ticketToolNames...), ticketWriteToolNames...) {
 		if _, ok := plain[name]; ok {
 			t.Errorf("%s registered without any ticket store", name)
@@ -57,7 +57,7 @@ func TestTicketToolsRegisterOnlyWithStore(t *testing.T) {
 func TestTicketToolsPlanModeKeepsOnlyReads(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 
-	plan := BuildToolRegistry(Args{}, core.ApprovalPlan, ticketStoreDir(t), nil, "", "", false, nil)
+	plan := BuildToolRegistry(Args{}, permission.ApprovalPlan, ticketStoreDir(t), nil, "", "", false, nil)
 	for _, name := range ticketToolNames {
 		if _, ok := plan[name]; !ok {
 			t.Errorf("%s should survive plan mode (read-only)", name)

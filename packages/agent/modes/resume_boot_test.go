@@ -12,12 +12,12 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/tui"
 )
 
-func bootPickerSummaries() []core.SessionSummary {
-	return []core.SessionSummary{
+func bootPickerSummaries() []session.SessionSummary {
+	return []session.SessionSummary{
 		{
 			Path:         "/tmp/sessions/one.jsonl",
 			Started:      time.Now().Add(-2 * time.Hour),

@@ -12,7 +12,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/agent/permissions"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
@@ -202,7 +202,7 @@ type Args struct {
 	//
 	// Its semantics are the SAME PortabilityOf classification the worker composer
 	// uses — one table, two consumers — so the two cannot drift. See
-	// docs/proposals/external-agent-workers.md.
+	// docs/proposals/archive/external-agent-workers.md.
 	Portable string
 
 	// Persona selects the active Persona (--Persona): a built-in/on-disk name
@@ -484,14 +484,14 @@ type Args struct {
 	// refusing it. It is OPT-IN because a driver that does not answer would hang
 	// — worse than refuse-by-default — so terva only asks a driver that has
 	// promised (by setting --rpc-approvals) to answer. This is the rpc-native
-	// carrier of core.Confirmer; see docs/proposals/external-agent-workers.md.
+	// carrier of permission.Confirmer; see docs/proposals/archive/external-agent-workers.md.
 	RPCApprovals bool
 
 	// ApprovalSocket routes an rpc-mode run's confirmations through terva's OWN
 	// MCP client to the approval bridge at this unix-socket path: terva spawns
 	// `terva mcp-approval-bridge --socket <path>` as an MCP server and fills the
 	// confirm gate with a Confirmer that calls its approval tool. It is the MCP
-	// carrier of core.Confirmer — the config-OPAQUE sibling of --rpc-approvals,
+	// carrier of permission.Confirmer — the config-OPAQUE sibling of --rpc-approvals,
 	// used by the terva:portable worker so its approvals ride the identical bridge
 	// a foreign (claude) worker uses. Empty means no MCP approval carrier.
 	ApprovalSocket string
@@ -1057,7 +1057,7 @@ func ParseArgs(in []string) (Args, error) {
 			if err != nil {
 				return a, err
 			}
-			if _, perr := core.ParseApprovalMode(strings.ToLower(v)); perr != nil {
+			if _, perr := permission.ParseApprovalMode(strings.ToLower(v)); perr != nil {
 				return a, perr
 			}
 			a.Approval = strings.ToLower(v)
@@ -1072,7 +1072,7 @@ func ParseArgs(in []string) (Args, error) {
 			// --classifier=sceen asked for screening and must not be told at
 			// startup, in a line that scrolls past, that they silently did not
 			// get it.
-			if _, perr := core.ParseClassifierMode(v); perr != nil {
+			if _, perr := permission.ParseClassifierMode(v); perr != nil {
 				return a, perr
 			}
 			a.Classifier = strings.ToLower(strings.TrimSpace(v))

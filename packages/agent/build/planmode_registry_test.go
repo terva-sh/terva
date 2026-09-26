@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/permissions"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -13,7 +13,7 @@ import (
 // permission logic left, because it exercises BuildToolRegistry.
 
 func TestPlanModeFiltersToolRegistry(t *testing.T) {
-	reg := BuildToolRegistry(Args{}, core.ApprovalPlan, testsupport.TempDir(t), nil, "anthropic", "apikey", true, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalPlan, testsupport.TempDir(t), nil, "anthropic", "apikey", true, nil)
 	for name := range reg {
 		// Plan keeps read-only tools plus interactive tools
 		// (ask_user_question) — asking the user is exactly what plan

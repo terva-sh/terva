@@ -146,7 +146,7 @@ type Session struct {
 	Path  string
 	Title string
 	// CWD is the session's working directory and ProjectID its stable
-	// project key (core.ProjectKey). Both refresh on a /cd. Empty when
+	// project key (session.ProjectKey). Both refresh on a /cd. Empty when
 	// the host predates protocol 2 or there is no active session.
 	CWD       string
 	ProjectID string
@@ -581,7 +581,7 @@ func (l *serialLane) close() {
 func ReadOnly() ToolOption { return func(t *toolDef) { t.readOnly = true } }
 
 // Authority effect-classes a tool can declare via WithAuthority. These
-// mirror core.Authority on the wire (kept as strings so this SDK stays
+// mirror permission.Authority on the wire (kept as strings so this SDK stays
 // standalone, the same hand-mirroring extproto uses). Authority is the
 // richer successor to ReadOnly: a network-read tool reads nothing on the
 // local machine yet must not be auto-allowed as read-only.
@@ -699,7 +699,7 @@ type HostInfo struct {
 	SessionPath  string
 	SessionTitle string
 	// ProjectID is the host's stable, collision-proof key for CWD
-	// (core.ProjectKey). Use it to scope per-project state. Refreshes
+	// (session.ProjectKey). Use it to scope per-project state. Refreshes
 	// alongside CWD on session_start.
 	ProjectID string
 

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -66,18 +66,18 @@ func TestSDKClassifierPosture(t *testing.T) {
 		name       string
 		userConfig string // classifier.mode in the user's config.json
 		field      string // Config.Classifier
-		want       core.ClassifierMode
+		want       permission.ClassifierMode
 	}{
 		{
 			name: "off by default, with nothing configured anywhere",
-			want: core.ClassifierOff,
+			want: permission.ClassifierOff,
 		},
 		{
 			// THE decision this wiring implements. Empty field = inherit,
 			// exactly like Provider and Model.
 			name:       "an empty field inherits the user's setting",
 			userConfig: "screen",
-			want:       core.ClassifierScreen,
+			want:       permission.ClassifierScreen,
 		},
 		{
 			// The opt-out has to exist, or "inherit" would mean "cannot
@@ -85,18 +85,18 @@ func TestSDKClassifierPosture(t *testing.T) {
 			name:       "an explicit off opts out of inheritance",
 			userConfig: "screen",
 			field:      "off",
-			want:       core.ClassifierOff,
+			want:       permission.ClassifierOff,
 		},
 		{
 			name:       "an explicit mode beats the user's setting",
 			userConfig: "off",
 			field:      "approve",
-			want:       core.ClassifierApprove,
+			want:       permission.ClassifierApprove,
 		},
 		{
 			name:       "a garbled mode falls back to off rather than guessing",
 			userConfig: "screeeen",
-			want:       core.ClassifierOff,
+			want:       permission.ClassifierOff,
 		},
 	}
 
@@ -124,7 +124,7 @@ func TestSDKYoloHasNoClassifierAndDoesNotPanic(t *testing.T) {
 
 	rt := newRuntime(t, Config{Yolo: true})
 
-	if got := rt.ClassifierMode(); got != core.ClassifierOff {
+	if got := rt.ClassifierMode(); got != permission.ClassifierOff {
 		t.Fatalf("ClassifierMode() = %q under Yolo, want off: a yolo run builds no gate to screen with", got)
 	}
 }
@@ -144,7 +144,7 @@ func TestSDKScreeningNeedsAPolicyToScreen(t *testing.T) {
 
 	rt := newRuntime(t, Config{})
 
-	if got := rt.ClassifierMode(); got != core.ClassifierOff {
+	if got := rt.ClassifierMode(); got != permission.ClassifierOff {
 		t.Fatalf("ClassifierMode() = %q with no permission rules, want off: no policy means no gate, and no gate means nothing to screen", got)
 	}
 }

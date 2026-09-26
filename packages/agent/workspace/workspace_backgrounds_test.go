@@ -22,7 +22,7 @@ func (b fakeImageBackend) Generate(context.Context, imagegen.Request) (imagegen.
 }
 
 // TestWorkspaceBackgroundsAndBind — import/list/delete plus the per-session bind
-// that writes SessionMeta.Background and surfaces on SessionInfo.
+// that writes session.Stage.Background and surfaces on SessionInfo.
 func TestWorkspaceBackgroundsAndBind(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("OPENAI_API_KEY", "test-key")
@@ -52,8 +52,8 @@ func TestWorkspaceBackgroundsAndBind(t *testing.T) {
 		t.Fatal(err)
 	}
 	live := w.live(info.ID)
-	if live.sess.Meta.Background != view.ID {
-		t.Errorf("meta background = %q, want %q", live.sess.Meta.Background, view.ID)
+	if live.sess.Stage.Background != view.ID {
+		t.Errorf("meta background = %q, want %q", live.sess.Stage.Background, view.ID)
 	}
 	if live.info().Background != view.ID {
 		t.Errorf("SessionInfo.Background = %q, want %q", live.info().Background, view.ID)
@@ -68,7 +68,7 @@ func TestWorkspaceBackgroundsAndBind(t *testing.T) {
 	if err := w.BackgroundBind(ctx, info.ID, ctrlproto.BackgroundBindParams{Background: ""}); err != nil {
 		t.Errorf("clearing the background should succeed: %v", err)
 	}
-	if w.live(info.ID).sess.Meta.Background != "" {
+	if w.live(info.ID).sess.Stage.Background != "" {
 		t.Error("background not cleared")
 	}
 
@@ -148,7 +148,7 @@ func TestBackgroundBoundAtCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w.live(info.ID).sess.Meta.Background != view.ID {
-		t.Errorf("bound-at-create background = %q, want %q", w.live(info.ID).sess.Meta.Background, view.ID)
+	if w.live(info.ID).sess.Stage.Background != view.ID {
+		t.Errorf("bound-at-create background = %q, want %q", w.live(info.ID).sess.Stage.Background, view.ID)
 	}
 }

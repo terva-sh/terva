@@ -7,6 +7,7 @@ import (
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // HubService adapts an [Aggregate] to the ctrlproto.WorkspaceService that
@@ -280,7 +281,7 @@ func (s *HubService) ResumeTurn(ctx context.Context, sess string, p ctrlproto.Tu
 	return svc.ResumeTurn(ctx, id, p)
 }
 
-func (s *HubService) Approve(ctx context.Context, sess, callID string, d core.ConfirmDecision) error {
+func (s *HubService) Approve(ctx context.Context, sess, callID string, d permission.ConfirmDecision) error {
 	svc, id, err := s.command(sess)
 	if err != nil {
 		return err

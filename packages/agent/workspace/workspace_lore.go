@@ -177,7 +177,7 @@ func (s *wsSession) rewireTail(rr build.Resolved) {
 		s.note = nr
 	}
 	if ur := rr.User(); ur != nil {
-		ur.Set(s.sess.Meta.UserDescription)
+		ur.Set(s.sess.Stage.UserDescription)
 		s.user = ur
 	}
 	s.loreFired = rr.LoreFired()

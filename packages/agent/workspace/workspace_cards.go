@@ -14,9 +14,9 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/card"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/egress"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/session"
 )
 
 // The card library on the wire. The Workspace is just the access point — the
@@ -414,7 +414,7 @@ func exportFilename(name string) string {
 // CardsDelete removes a card from the library.
 func (w *Workspace) CardsDelete(_ context.Context, p ctrlproto.CardDeleteParams) error {
 	// A card is not a setting a session can do without — it IS the character, and
-	// a session re-resolves SessionMeta.Card on every materialize. Evicting one
+	// a session re-resolves session.Stage.Card on every materialize. Evicting one
 	// with chats on it does not degrade them, it stops them opening for good, and
 	// the bytes are gone so nothing brings them back.
 	//
@@ -425,7 +425,7 @@ func (w *Workspace) CardsDelete(_ context.Context, p ctrlproto.CardDeleteParams)
 	// The scan spans every project because the card library is $TERVA_HOME-wide
 	// while sessions are per-cwd: refusing only on this workspace's chats would
 	// let a delete here break a story someone was telling somewhere else.
-	if n := len(core.SessionsUsingCard(w.root, p.ID)); n > 0 {
+	if n := len(session.SessionsUsingCard(w.root, p.ID)); n > 0 {
 		// Two spellings rather than a plural helper: the Go catalog has T/M/P/H
 		// and no plural form, and "1 chats" in the sentence that refuses a
 		// destructive action reads like a bug in the thing refusing it.

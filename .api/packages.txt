@@ -1,0 +1,33 @@
+# The engine's and the wire's packages, each marked stable or unstable.
+# One "<class> <package>" pair per line. `just api-snapshot` writes a snapshot
+# of each one beside this file; `just api-check` fails when a snapshot no
+# longer matches the code. README.md says what the two classes mean.
+#
+# First drawn 2026-09-24 (TKT-01M39VEJD8). TKT-01M39T6H82 decides the promise
+# and may move the line.
+
+# The engine: the loop, its seams, and the components a host attaches.
+stable    packages/core
+stable    packages/core/contextpressure
+stable    packages/core/lazytools
+stable    packages/core/shellresult
+stable    packages/core/stall
+# The permission model: modes, rules, the confirm gate, the classifier. A
+# ConfirmGate is one core.Gate a host may choose (TKT-01M3B57WHQ).
+stable    packages/core/permission
+# What a host needs to write its own pieces: the transcript-store conformance
+# suite and the neutral compaction prose.
+stable    packages/core/transcripttest
+stable    packages/core/compactprose
+
+# The wire: provider clients, requests and events, the model catalog.
+stable    packages/provider
+
+# Importable, and used across the boundary, but not a shape to build on yet.
+unstable  packages/core/i18n
+unstable  packages/core/transcriptcodec
+unstable  packages/provider/buildinfo
+unstable  packages/provider/lineframe
+
+# packages/core/exp and everything under it are left out on purpose: an
+# experiment promises nothing, and the census skips any exp directory.

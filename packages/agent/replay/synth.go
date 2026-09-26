@@ -5,6 +5,7 @@ import (
 
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // Mode selects how a replay treats compaction checkpoints.
@@ -47,7 +48,7 @@ type Options struct {
 // compaction animation (EvCompactStart/EvCompactEnd) in place. Both play every
 // message row in file order — the effective/raw distinction is only about the
 // compaction beat and the transcript resync a carrier layers on top.
-func Synthesize(rows []core.ReplayRow, opts Options) []Frame {
+func Synthesize(rows []session.ReplayRow, opts Options) []Frame {
 	if opts.Pace.TextRunes <= 0 || opts.Pace.TextInterval <= 0 {
 		opts.Pace = DefaultPace()
 	}
@@ -60,9 +61,9 @@ func Synthesize(rows []core.ReplayRow, opts Options) []Frame {
 	s := &synth{opts: opts}
 	for _, row := range rows {
 		switch row.Kind {
-		case core.ReplayRowMessage:
+		case session.ReplayRowMessage:
 			s.message(row.Message)
-		case core.ReplayRowUsage:
+		case session.ReplayRowUsage:
 			// The live loop emits EvUsage for its own requests only. A
 			// sub-agent's row and a host side-channel row are booked
 			// total-only and never reach the event stream, so a replay that
@@ -72,11 +73,11 @@ func Synthesize(rows []core.ReplayRow, opts Options) []Frame {
 				continue
 			}
 			s.emit(core.EvUsage{Usage: row.Usage, Cumulative: row.Cumulative}, 0)
-		case core.ReplayRowCompaction:
+		case session.ReplayRowCompaction:
 			s.compaction(row.Checkpoint)
-		case core.ReplayRowPermission:
+		case session.ReplayRowPermission:
 			s.permission(row.Permission)
-		case core.ReplayRowAsk:
+		case session.ReplayRowAsk:
 			s.ask(row.Ask)
 		}
 	}
@@ -207,7 +208,7 @@ func (s *synth) textDeltas(text string) {
 // tool call that needs it is already on screen), and the decision follows
 // after the wait the person actually took, clamped so a demo shows the pause
 // without reproducing a lunch break.
-func (s *synth) permission(rec core.PermissionRecord) {
+func (s *synth) permission(rec session.PermissionRecord) {
 	s.emit(EvPermissionRequest{CallID: rec.CallID, Tool: rec.Tool, Preview: rec.Preview}, 0)
 	resolved := EvPermissionResolved{CallID: rec.CallID, Allow: rec.Allow, Reason: rec.Reason, Scope: rec.Scope}
 	s.emit(resolved, s.wait(rec.Waited))
@@ -215,7 +216,7 @@ func (s *synth) permission(rec core.PermissionRecord) {
 }
 
 // ask plays a question exchange the same way.
-func (s *synth) ask(rec core.AskRecord) {
+func (s *synth) ask(rec session.AskRecord) {
 	s.emit(EvAskRequest{AskID: rec.AskID, Questions: rec.UserQuestions()}, 0)
 	qs, as := rec.UserQuestions(), rec.UserAnswers()
 	s.emit(EvAskResolved{AskID: rec.AskID, Answers: as}, s.wait(rec.Waited))

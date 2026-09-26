@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/swarm"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -88,7 +88,7 @@ func TestAnAskLineFromTheWorkerReachesTheConfirmer(t *testing.T) {
 			preview, _ := ev.Data["preview"].(string)
 			return Ask{ID: id, Tool: tool, Preview: preview}, true
 		},
-		EncodeApprove: func(id string, d core.ConfirmDecision) ([]byte, error) {
+		EncodeApprove: func(id string, d permission.ConfirmDecision) ([]byte, error) {
 			b, err := json.Marshal(map[string]any{"type": "approve", "id": id, "allow": d.Allow})
 			// NEWLINE-TERMINATED. writeStdin writes the frame verbatim, so a
 			// child reading lines never sees one without it — this fake was
@@ -113,9 +113,9 @@ done`), nil
 		},
 	}
 
-	confirmer := confirmFunc(func(_ context.Context, tool, preview string) core.ConfirmDecision {
+	confirmer := confirmFunc(func(_ context.Context, tool, preview string) permission.ConfirmDecision {
 		askedTool, askedPreview = tool, preview
-		return core.ConfirmDecision{Allow: true}
+		return permission.ConfirmDecision{Allow: true}
 	})
 
 	a := &swarm.Agent{

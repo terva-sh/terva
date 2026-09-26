@@ -41,9 +41,9 @@ import (
 	"terva.sh/terva/packages/agent/card"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/persona"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 const (
@@ -225,12 +225,12 @@ func (w *Workspace) bookSessionlessUsage(verb ctrlproto.Method, subject, model s
 // session that joined a World after creation, and the doctor would have silently
 // read no scenes at all. The listing folds those rows, and is the same source the
 // Library's own member count comes from. The cheap read is now
-// core.ReadSessionCreation, which does not offer a World to be wrong about.
+// session.ReadSessionCreation, which does not offer a World to be wrong about.
 //
 // A stray id is IGNORED rather than refused: the picker offers only members, so
 // one arriving here is a stale client rather than a request to honour, and
 // failing the whole run over it would cost the author their other scenes.
-// Reading the transcript is sessionless — core.ReadSessionMessages replays it
+// Reading the transcript is sessionless — session.ReadSessionMessages replays it
 // from the file with nothing bound.
 func (w *Workspace) worldDoctorScenes(ctx context.Context, worldID string, ids []string) []worldDoctorScene {
 	if len(ids) == 0 {
@@ -253,7 +253,7 @@ func (w *Workspace) worldDoctorScenes(ctx context.Context, worldID string, ids [
 		if !ok {
 			continue
 		}
-		msgs, err := core.ReadSessionMessages(w.sessionPath(si.ID))
+		msgs, err := session.ReadSessionMessages(w.sessionPath(si.ID))
 		if err != nil || len(msgs) == 0 {
 			continue
 		}
@@ -349,7 +349,7 @@ func budgetShares(sizes []int, total int) []int {
 // renderWorldDoctorEvidence assembles the ensemble read. A free function, like
 // renderDramaturgEvidence and renderEditorEvidence, so the prompt is testable
 // without a session.
-func renderWorldDoctorEvidence(worldName, worldDesc string, roster []worldDoctorCard, lore []core.WorldLoreEntry, scenes []worldDoctorScene, steer string) string {
+func renderWorldDoctorEvidence(worldName, worldDesc string, roster []worldDoctorCard, lore []session.WorldLoreEntry, scenes []worldDoctorScene, steer string) string {
 	var b strings.Builder
 	b.WriteString("THE WORLD — " + worldName + "\n")
 	if strings.TrimSpace(worldDesc) != "" {
@@ -455,7 +455,7 @@ func renderWorldDoctorCard(c worldDoctorCard, budget int) string {
 // renderWorldDoctorLore renders the lorebook within a budget, dropping the
 // LONGEST entries first and saying how many went — so the doctor knows its view
 // is partial rather than concluding the World records less than it does.
-func renderWorldDoctorLore(lore []core.WorldLoreEntry, budget int) string {
+func renderWorldDoctorLore(lore []session.WorldLoreEntry, budget int) string {
 	if len(lore) == 0 {
 		return "(nothing recorded yet)\n"
 	}
@@ -546,7 +546,7 @@ Rules:
 
 // parseWorldDoctorResult validates the reply against the World it was run on.
 // Every rule here is server-side so that every client sees the same contract.
-func parseWorldDoctorResult(raw string, roster []worldDoctorCard, lore []core.WorldLoreEntry) (ctrlproto.WorldDoctorResult, error) {
+func parseWorldDoctorResult(raw string, roster []worldDoctorCard, lore []session.WorldLoreEntry) (ctrlproto.WorldDoctorResult, error) {
 	body := extractJSONObject(raw)
 	if body == "" {
 		return ctrlproto.WorldDoctorResult{}, i18n.Errorf("the world doctor returned no usable proposals")
@@ -609,7 +609,7 @@ func parseWorldDoctorResult(raw string, roster []worldDoctorCard, lore []core.Wo
 	}
 
 	loreNames := map[string]bool{}
-	recorded := map[string]core.WorldLoreEntry{}
+	recorded := map[string]session.WorldLoreEntry{}
 	for _, e := range lore {
 		loreNames[strings.ToLower(e.Name)] = true
 		recorded[strings.ToLower(strings.TrimSpace(e.Name))] = e
@@ -628,7 +628,7 @@ func parseWorldDoctorResult(raw string, roster []worldDoctorCard, lore []core.Wo
 			// the scene-state card is replaced by sessions.doctor and the recap
 			// by a scene break. Neither is this doctor's to write.
 			if p.Name == "" || p.Content == "" || loreNames[strings.ToLower(p.Name)] ||
-				core.IsSceneState(p.Name) || core.IsStorySoFar(p.Name) {
+				session.IsSceneState(p.Name) || session.IsStorySoFar(p.Name) {
 				continue
 			}
 			loreNames[strings.ToLower(p.Name)] = true
@@ -645,7 +645,7 @@ func parseWorldDoctorResult(raw string, roster []worldDoctorCard, lore []core.Wo
 		case ctrlproto.SessionProposalRetire:
 			key := strings.ToLower(strings.TrimSpace(p.Name))
 			e, exists := recorded[key]
-			if !exists || retiring[key] || core.IsSceneState(e.Name) || core.IsStorySoFar(e.Name) {
+			if !exists || retiring[key] || session.IsSceneState(e.Name) || session.IsStorySoFar(e.Name) {
 				continue
 			}
 			retiring[key] = true

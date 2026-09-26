@@ -3,6 +3,7 @@ package workspace
 import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // Everything that lives on a TOOL INSTANCE, and therefore has to be re-bound
@@ -49,6 +50,6 @@ func (s *wsSession) bindResolvedChannels(r *build.Resolved) {
 // gate is passed rather than read from s.gate because the session build binds
 // this before it has finished assembling itself; a rebuild passes s.gate, which
 // is the same gate — it outlives every rebuild by design.
-func (s *wsSession) bindAgentChannels(ag *core.Agent, gate *core.ConfirmGate) {
+func (s *wsSession) bindAgentChannels(ag *core.Agent, gate *permission.ConfirmGate) {
 	build.WireHostToolDispatcher(ag, s.extMgr, gate)
 }

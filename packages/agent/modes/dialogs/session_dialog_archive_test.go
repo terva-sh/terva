@@ -4,23 +4,23 @@ import (
 	"strings"
 	"testing"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/tui"
 )
 
 func archiveDialog(t *testing.T) *SessionDialog {
 	t.Helper()
 	d := NewSessionDialog()
-	d.List = func() []core.SessionSummary {
-		return []core.SessionSummary{
+	d.List = func() []session.SessionSummary {
+		return []session.SessionSummary{
 			{Path: "/s/live-a.jsonl", Title: "live a", MessageCount: 3},
 			{Path: "/s/live-b.jsonl", Title: "live b", MessageCount: 2},
 		}
 	}
-	d.ListArchived = func() []core.ArchivedSession {
-		return []core.ArchivedSession{
-			{SessionSummary: core.SessionSummary{Title: "old one", MessageCount: 12}, ID: "20260101-120000-aaaaaaaa", Bytes: 2048},
-			{SessionSummary: core.SessionSummary{Title: "older", MessageCount: 40}, ID: "20260101-110000-bbbbbbbb", Bytes: 9000},
+	d.ListArchived = func() []session.ArchivedSession {
+		return []session.ArchivedSession{
+			{SessionSummary: session.SessionSummary{Title: "old one", MessageCount: 12}, ID: "20260101-120000-aaaaaaaa", Bytes: 2048},
+			{SessionSummary: session.SessionSummary{Title: "older", MessageCount: 40}, ID: "20260101-110000-bbbbbbbb", Bytes: 9000},
 		}
 	}
 	d.Open("/root", "/cwd")
@@ -157,8 +157,8 @@ func TestSessionDialogArchiveViewHasNoLiveVerbs(t *testing.T) {
 // an `a` that reports "unavailable" after the fact is worse than no binding.
 func TestSessionDialogWithoutArchiveOffersNoArchiveKeys(t *testing.T) {
 	d := NewSessionDialog()
-	d.List = func() []core.SessionSummary {
-		return []core.SessionSummary{{Path: "/s/a.jsonl", Title: "a", MessageCount: 1}}
+	d.List = func() []session.SessionSummary {
+		return []session.SessionSummary{{Path: "/s/a.jsonl", Title: "a", MessageCount: 1}}
 	}
 	d.Open("/root", "/cwd")
 

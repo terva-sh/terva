@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/core"
+
+	"terva.sh/terva/packages/core/permission"
 )
 
 func mustJSON(t *testing.T, v any) json.RawMessage {
@@ -79,7 +81,7 @@ type swipeMessageArgs struct {
 
 type approveArgs struct {
 	CallID   string
-	Decision core.ConfirmDecision
+	Decision permission.ConfirmDecision
 }
 
 type answerArgs struct {
@@ -205,7 +207,7 @@ func (r *recorder) ResumeTurn(_ context.Context, sess string, p TurnResumeParams
 	return nil
 }
 
-func (r *recorder) Approve(_ context.Context, sess, callID string, d core.ConfirmDecision) error {
+func (r *recorder) Approve(_ context.Context, sess, callID string, d permission.ConfirmDecision) error {
 	r.note("Approve", sess, approveArgs{CallID: callID, Decision: d})
 	return nil
 }
@@ -439,7 +441,7 @@ func mandatoryDispatchCases() []dispatchCase {
 			MethodApprove,
 			ApproveParams{CallID: "call-1", Decision: Decision{Allow: true, Reason: "ok"}},
 			"Approve",
-			approveArgs{CallID: "call-1", Decision: core.ConfirmDecision{Allow: true, Reason: "ok"}},
+			approveArgs{CallID: "call-1", Decision: permission.ConfirmDecision{Allow: true, Reason: "ok"}},
 		},
 		{
 			MethodAnswer,

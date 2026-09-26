@@ -14,6 +14,7 @@ import (
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // SessionSearchTool searches THIS project's past transcripts — the cross-session
@@ -88,7 +89,7 @@ const (
 )
 
 // ssSource is one searchable transcript. It exists instead of reusing
-// core.SessionSummary because a summary derives its id from its FILE NAME, and
+// session.SessionSummary because a summary derives its id from its FILE NAME, and
 // every swarm child's transcript is literally named session.json — the id has to
 // come from the agent directory, so it is carried explicitly.
 type ssSource struct {
@@ -202,11 +203,11 @@ func (t *SessionSearchTool) Execute(ctx context.Context, raw json.RawMessage, _ 
 
 // projectSessions lists this cwd's own transcripts, newest first.
 func (t *SessionSearchTool) projectSessions() []ssSource {
-	summaries := core.DescribeSessions(t.TervaHome, t.CWD)
+	summaries := session.DescribeSessions(t.TervaHome, t.CWD)
 	out := make([]ssSource, 0, len(summaries))
 	for _, s := range summaries {
 		out = append(out, ssSource{
-			ID:      core.SessionIDFromPath(s.Path),
+			ID:      session.SessionIDFromPath(s.Path),
 			Path:    s.Path,
 			Title:   s.Title,
 			Started: s.Started,
@@ -341,8 +342,8 @@ func ssScanSession(ctx context.Context, s ssSource, needle string, kinds map[str
 		})
 	}
 	calls := map[string]string{}
-	_, cut, err := core.StreamReplayRows(ctx, s.Path, maxBytes, func(row int, r core.ReplayRow) {
-		if r.Kind != core.ReplayRowMessage {
+	_, cut, err := session.StreamReplayRows(ctx, s.Path, maxBytes, func(row int, r session.ReplayRow) {
+		if r.Kind != session.ReplayRowMessage {
 			return
 		}
 		role := string(r.Message.Role)
@@ -392,7 +393,7 @@ func ssScanSession(ctx context.Context, s ssSource, needle string, kinds map[str
 // itself part of a credential correctly stops matching, rather than steering the
 // window onto the secret.
 func ssSnippet(text, needle string) string {
-	text = core.RedactSecrets(text)
+	text = session.RedactSecrets(text)
 	i := strings.Index(strings.ToLower(text), needle)
 	if i < 0 {
 		i = 0
@@ -416,7 +417,7 @@ func ssSnippet(text, needle string) string {
 		end++
 	}
 	// Already redacted above; RedactAndBound is used for the rune-safe cut.
-	red, _ := core.RedactAndBound(text[start:end], ssSnippetMax)
+	red, _ := session.RedactAndBound(text[start:end], ssSnippetMax)
 	red = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(red, "\r", " "), "\n", " "))
 	var out strings.Builder
 	if start > 0 {

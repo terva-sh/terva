@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/core"
+
+	"terva.sh/terva/packages/core/permission"
 )
 
 var updateGolden = flag.Bool("update", false, "update golden frame files under testdata/")
@@ -629,7 +631,7 @@ func (f *fakeSvc) ListFiles(ctx context.Context, opts FilesListParams) (FilesLis
 	return FilesListResult{Files: []FileEntry{{Path: "src", Dir: true}, {Path: "src/main.go"}}}, nil
 }
 
-func (f *fakeSvc) Approve(ctx context.Context, sess, callID string, d core.ConfirmDecision) error {
+func (f *fakeSvc) Approve(ctx context.Context, sess, callID string, d permission.ConfirmDecision) error {
 	f.mu.Lock()
 	f.approvals = append(f.approvals, callID)
 	f.mu.Unlock()

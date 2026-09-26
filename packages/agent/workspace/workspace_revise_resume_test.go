@@ -7,8 +7,8 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -92,7 +92,7 @@ func TestReviseReanchorsResumeTrimmedDelete(t *testing.T) {
 
 	// A reload from disk must show m129 gone and NOTHING else disturbed — the whole
 	// point of the fix. Before it, on-disk index 99 (m99) was deleted instead.
-	reloaded, err := core.ReadSessionMessages(path)
+	reloaded, err := session.ReadSessionMessages(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestReviseReanchorsResumeTrimmedEditOlder(t *testing.T) {
 		t.Fatalf("edit: %v", err)
 	}
 
-	reloaded, err := core.ReadSessionMessages(path)
+	reloaded, err := session.ReadSessionMessages(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // Service is a [ctrlproto.WorkspaceService] view over a [Client]: the same
@@ -81,7 +82,7 @@ func (s *Service) ForkSession(ctx context.Context, sess string, fromIndex int) (
 	return r.Session, err
 }
 
-func (s *Service) Approve(ctx context.Context, sess, callID string, d core.ConfirmDecision) error {
+func (s *Service) Approve(ctx context.Context, sess, callID string, d permission.ConfirmDecision) error {
 	return s.c.Call(ctx, sess, ctrlproto.MethodApprove, ctrlproto.ApproveParams{
 		CallID: callID, Decision: ctrlproto.DecisionFromCore(d),
 	}, nil)
@@ -197,6 +198,55 @@ func (s *Service) WorkflowRun(ctx context.Context, p ctrlproto.WorkflowGetParams
 	var r ctrlproto.WorkflowRunView
 	err := s.c.Call(ctx, "", ctrlproto.MethodWorkflowsGet, p, &r)
 	return r, err
+}
+
+var _ ctrlproto.TalkootController = (*Service)(nil)
+
+// Talkoots, when the daemon advertised GroupTalkoot. A talkoot is not a
+// session, so every call passes an empty sess and the id rides params.
+
+func (s *Service) Talkoots(ctx context.Context) ([]ctrlproto.TalkootSummary, error) {
+	var r ctrlproto.TalkootListResult
+	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootList, nil, &r)
+	return r.Talkoots, err
+}
+
+func (s *Service) Talkoot(ctx context.Context, p ctrlproto.TalkootRef) (ctrlproto.TalkootView, error) {
+	var r ctrlproto.TalkootView
+	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootGet, p, &r)
+	return r, err
+}
+
+func (s *Service) TalkootRoom(ctx context.Context, p ctrlproto.TalkootRoomParams) (ctrlproto.TalkootRoomPage, error) {
+	var r ctrlproto.TalkootRoomPage
+	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootRoom, p, &r)
+	return r, err
+}
+
+func (s *Service) CreateTalkoot(ctx context.Context, p ctrlproto.TalkootCreateParams) (ctrlproto.TalkootView, error) {
+	var r ctrlproto.TalkootView
+	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootCreate, p, &r)
+	return r, err
+}
+
+func (s *Service) UpdateTalkoot(ctx context.Context, p ctrlproto.TalkootUpdateParams) (ctrlproto.TalkootView, error) {
+	var r ctrlproto.TalkootView
+	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootUpdate, p, &r)
+	return r, err
+}
+
+func (s *Service) PostTalkoot(ctx context.Context, p ctrlproto.TalkootPostParams) (ctrlproto.TalkootEnvelope, error) {
+	var r ctrlproto.TalkootEnvelope
+	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootPost, p, &r)
+	return r, err
+}
+
+func (s *Service) PauseTalkoot(ctx context.Context, p ctrlproto.TalkootPauseParams) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodTalkootPause, p, nil)
+}
+
+func (s *Service) ResumeTalkoot(ctx context.Context, p ctrlproto.TalkootResumeParams) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodTalkootResume, p, nil)
 }
 
 var _ ctrlproto.SharedFilesController = (*Service)(nil)

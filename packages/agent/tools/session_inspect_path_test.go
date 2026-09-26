@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -95,7 +96,7 @@ func TestSessionInspectPathReachesAnotherProjectsSessions(t *testing.T) {
 
 			// A real session belonging to a DIFFERENT project, in its own
 			// bucket under $TERVA_HOME/sessions.
-			otherDir := core.SessionsDir(home, otherProject)
+			otherDir := session.SessionsDir(home, otherProject)
 			if err := os.MkdirAll(otherDir, 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -125,7 +126,7 @@ func TestSessionInspectPathStillRefusesCredentials(t *testing.T) {
 	home := testsupport.TempDir(t)
 	cwd := testsupport.TempDir(t)
 
-	sessions := core.SessionsDir(home, cwd)
+	sessions := session.SessionsDir(home, cwd)
 	if err := os.MkdirAll(sessions, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +170,7 @@ func TestTranscriptCarveOutOpensOnlyTheSanctionedReader(t *testing.T) {
 		t.Run(state, func(t *testing.T) {
 			home := testsupport.TempDir(t)
 			cwd := testsupport.TempDir(t)
-			sessions := core.SessionsDir(home, cwd)
+			sessions := session.SessionsDir(home, cwd)
 			if err := os.MkdirAll(sessions, 0o700); err != nil {
 				t.Fatal(err)
 			}

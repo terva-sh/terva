@@ -8,6 +8,7 @@ import (
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 )
 
 // A directed post lands in the transcript as an attributed assistant message,
@@ -49,7 +50,7 @@ func TestPostDirectedReplayMatchesLive(t *testing.T) {
 		t.Fatalf("live transcript has %d messages, want 3", len(liveMsgs))
 	}
 
-	replayed, err := core.ReadSessionMessages(live.sess.Path)
+	replayed, err := session.ReadSessionMessages(live.sess.Path)
 	if err != nil {
 		t.Fatal(err)
 	}

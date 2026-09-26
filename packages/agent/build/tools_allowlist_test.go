@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/core"
+
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -54,7 +56,7 @@ func TestBuildToolRegistryWarnsUnknownTools(t *testing.T) {
 	// Typo: read survives, edt warns and is dropped.
 	var reg core.Registry
 	out := captureStderr(t, func() {
-		reg = BuildToolRegistry(Args{Tools: []string{"read", "edt"}}, core.ApprovalWorkspace, cwd, nil, "", "", false, nil)
+		reg = BuildToolRegistry(Args{Tools: []string{"read", "edt"}}, permission.ApprovalWorkspace, cwd, nil, "", "", false, nil)
 	})
 	if _, ok := reg["read"]; !ok {
 		t.Error("read should still be registered alongside a typo'd name")
@@ -69,7 +71,7 @@ func TestBuildToolRegistryWarnsUnknownTools(t *testing.T) {
 	// skill is added to the registry by the caller AFTER this --tools filter, so
 	// listing it must not read as a typo.
 	out = captureStderr(t, func() {
-		BuildToolRegistry(Args{Tools: []string{"read", "skill"}}, core.ApprovalWorkspace, cwd, nil, "", "", false, nil)
+		BuildToolRegistry(Args{Tools: []string{"read", "skill"}}, permission.ApprovalWorkspace, cwd, nil, "", "", false, nil)
 	})
 	if strings.Contains(out, "unknown") {
 		t.Errorf("--tools skill must not warn (skill is added by the caller), got %q", out)
@@ -77,7 +79,7 @@ func TestBuildToolRegistryWarnsUnknownTools(t *testing.T) {
 
 	// write is a real tool name that plan mode drops — not a typo, so no warning.
 	out = captureStderr(t, func() {
-		BuildToolRegistry(Args{Tools: []string{"write"}}, core.ApprovalPlan, cwd, nil, "", "", false, nil)
+		BuildToolRegistry(Args{Tools: []string{"write"}}, permission.ApprovalPlan, cwd, nil, "", "", false, nil)
 	})
 	if strings.Contains(out, "unknown") {
 		t.Errorf("a plan-dropped tool name must not warn as unknown, got %q", out)

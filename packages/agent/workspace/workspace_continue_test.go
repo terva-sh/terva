@@ -7,8 +7,8 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // prefillGatedClient advertises ContinuesAssistantPrefill and streams a fixed
@@ -72,7 +72,7 @@ func TestContinueTurnMergesAndPersists(t *testing.T) {
 		t.Errorf("after continue = %v, want [u0 %q]", got, want)
 	}
 	// The extension persisted as a replace amend — a reload reconstructs it.
-	if reloaded, err := core.ReadSessionMessages(s.sess.Path); err != nil {
+	if reloaded, err := session.ReadSessionMessages(s.sess.Path); err != nil {
 		t.Fatalf("reopen: %v", err)
 	} else if got := reviseTexts(reloaded); !reflect.DeepEqual(got, []string{"u0", want}) {
 		t.Errorf("reloaded = %v, want [u0 %q]", got, want)

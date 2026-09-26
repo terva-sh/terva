@@ -6,7 +6,7 @@ import (
 
 	"mvdan.cc/sh/v3/syntax"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // maxGrantScopes caps how many distinct commands a single "always allow"
@@ -41,7 +41,7 @@ const maxGrantScopes = 4
 //
 // Wrappers are anchored conservatively as themselves (`sudo rm` derives
 // `^sudo rm`, not `^rm`) — the wrapper is what the user read.
-func BashGrantScopes(command string) []core.GrantScope {
+func BashGrantScopes(command string) []permission.GrantScope {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return nil
@@ -52,7 +52,7 @@ func BashGrantScopes(command string) []core.GrantScope {
 	}
 
 	var (
-		scopes []core.GrantScope
+		scopes []permission.GrantScope
 		seen   = map[string]bool{}
 		ok     = true
 	)
@@ -83,7 +83,7 @@ func BashGrantScopes(command string) []core.GrantScope {
 			display := strings.Join(tokens, " ")
 			if !seen[display] {
 				seen[display] = true
-				scopes = append(scopes, core.GrantScope{
+				scopes = append(scopes, permission.GrantScope{
 					Display: display,
 					Pattern: "^" + regexp.QuoteMeta(display) + `(?:\s|$)`,
 				})

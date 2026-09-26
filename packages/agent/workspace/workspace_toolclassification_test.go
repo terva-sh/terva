@@ -15,6 +15,7 @@ import (
 	"terva.sh/terva/packages/agent/mcp"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -22,10 +23,10 @@ func TestRebuildRevokesRemovedToolClassification(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("ANTHROPIC_API_KEY", "synthetic-test-key")
 	s := newAskSession(t, "classification-rebuild")
-	pol := permissions.NewPolicy(core.ApprovalWorkspace, nil)
+	pol := permissions.NewPolicy(permission.ApprovalWorkspace, nil)
 	pol.ReadOnly.Add("removed_extension_tool")
 	s.agent.SetToolsWithReadOnly(s.agent.ToolsSnapshot(), pol.ReadOnly)
-	s.gate = core.NewPolicyGate(pol, nil)
+	s.gate = permission.NewPolicyGate(pol, nil)
 	s.rebuildTools("extension-reload")
 	if _, ro := s.agent.ToolsWithReadOnlySnapshot(); ro.Has("removed_extension_tool") {
 		t.Fatal("rebuild retained read-only authority for a removed extension tool")
@@ -114,7 +115,7 @@ func TestRebuildToolsClassificationAcrossBackendReload(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "synthetic-test-key")
 
 	for _, backend := range []string{"ext", "mcp"} {
-		for _, mode := range []core.ApprovalMode{core.ApprovalWorkspace, core.ApprovalAutoEdit, core.ApprovalPlan} {
+		for _, mode := range []permission.ApprovalMode{permission.ApprovalWorkspace, permission.ApprovalAutoEdit, permission.ApprovalPlan} {
 			t.Run(backend+"/"+string(mode), func(t *testing.T) {
 				t.Parallel()
 				home := testsupport.TempDir(t)
@@ -127,7 +128,7 @@ func TestRebuildToolsClassificationAcrossBackendReload(t *testing.T) {
 				s := newAskSession(t, "backend-classification")
 				s.args.CWD, s.args.Approval = home, string(mode)
 				pol := permissions.NewPolicy(mode, nil)
-				s.gate = core.NewPolicyGate(pol, nil)
+				s.gate = permission.NewPolicyGate(pol, nil)
 				s.agent.SetToolsWithReadOnly(s.agent.ToolsSnapshot(), pol.ReadOnly)
 				// Two minutes rather than one. Six of these now run together, each
 				// re-execing a race-instrumented binary five times, and a CI job can
@@ -192,7 +193,7 @@ func TestRebuildToolsClassificationAcrossBackendReload(t *testing.T) {
 						}
 					}
 					callCtx, tool, exists := s.agent.ToolForCall(ctx, name)
-					wantExists := state != "removed" && (mode != core.ApprovalPlan || state == "read")
+					wantExists := state != "removed" && (mode != permission.ApprovalPlan || state == "read")
 					if exists != wantExists {
 						t.Fatalf("%s: registered=%v want=%v", state, exists, wantExists)
 					}

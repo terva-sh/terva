@@ -5,7 +5,7 @@ package acp
 import (
 	"encoding/json"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // Phase 4b: model selection (config options) + approval mode (session modes).
@@ -142,13 +142,13 @@ func (s *agentServer) handleSetConfigOption(params json.RawMessage) (any, error)
 // approvalModeMenu is the ordered list of terva approval modes surfaced as ACP
 // session modes, with human labels and one-line descriptions. The id is the
 // ApprovalMode string so session/set_mode round-trips straight through
-// core.ParseApprovalMode.
+// permission.ParseApprovalMode.
 var approvalModeMenu = []SessionMode{
-	{ID: string(core.ApprovalPlan), Name: "Plan", Description: "Read-only: mutating tools are refused so the model proposes a plan."},
-	{ID: string(core.ApprovalAsk), Name: "Ask", Description: "Prompt before every tool call, reads included."},
-	{ID: string(core.ApprovalAutoEdit), Name: "Auto-edit", Description: "Auto-allow reads and file edits; prompt for everything else."},
-	{ID: string(core.ApprovalWorkspace), Name: "Workspace", Description: "Trust first-party tools and reads; prompt for foreign side effects."},
-	{ID: string(core.ApprovalYolo), Name: "Yolo", Description: "Auto-allow everything."},
+	{ID: string(permission.ApprovalPlan), Name: "Plan", Description: "Read-only: mutating tools are refused so the model proposes a plan."},
+	{ID: string(permission.ApprovalAsk), Name: "Ask", Description: "Prompt before every tool call, reads included."},
+	{ID: string(permission.ApprovalAutoEdit), Name: "Auto-edit", Description: "Auto-allow reads and file edits; prompt for everything else."},
+	{ID: string(permission.ApprovalWorkspace), Name: "Workspace", Description: "Trust first-party tools and reads; prompt for foreign side effects."},
+	{ID: string(permission.ApprovalYolo), Name: "Yolo", Description: "Auto-allow everything."},
 }
 
 // sessionModeState builds the SessionModeState for a session result: the full
@@ -184,7 +184,7 @@ func (s *agentServer) handleSetMode(params json.RawMessage) (any, error) {
 		return nil, errInvalidParams("sessionId is required")
 	}
 
-	mode, err := core.ParseApprovalMode(p.ModeID)
+	mode, err := permission.ParseApprovalMode(p.ModeID)
 	if err != nil {
 		return nil, errInvalidParams(err.Error())
 	}

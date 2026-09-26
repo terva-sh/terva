@@ -10,6 +10,7 @@ import (
 	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // The card doctor's system prompt is the Seppä persona's charter; it must resolve
@@ -80,7 +81,7 @@ func TestRenderEditorEvidence(t *testing.T) {
 		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "Rain hammers the roof."}},
 			Meta: map[string]string{core.MetaSource: core.MetaDirected}},
 	}
-	lore := []core.WorldLoreEntry{{Name: "the-debt", Content: "Elira owes the guild.", Audience: []string{"Elira"}}}
+	lore := []session.WorldLoreEntry{{Name: "the-debt", Content: "Elira owes the guild.", Audience: []string{"Elira"}}}
 	out := renderEditorEvidence("Elira", "Ivy", "Kira", lore, transcript)
 	for _, want := range []string{
 		"THE PLAYED SCENE",

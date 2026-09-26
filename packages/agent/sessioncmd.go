@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/config"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/session"
 )
 
 // runSessionCommand dispatches `terva session`: the release valve for the
@@ -80,7 +80,7 @@ func sessionLockDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return core.SessionsDir(config.TervaHome(), cwd), nil
+	return session.SessionsDir(config.TervaHome(), cwd), nil
 }
 
 // resolveLockTarget turns a session id into a transcript path in this
@@ -134,8 +134,8 @@ func runSessionLocks(args []string) error {
 	shown := 0
 	for _, n := range names {
 		p := filepath.Join(dir, n)
-		st, ok := core.DescribeSessionLock(p)
-		if !ok && !core.SessionIsLocked(p) {
+		st, ok := session.DescribeSessionLock(p)
+		if !ok && !session.SessionIsLocked(p) {
 			continue // nobody holds it and nobody claimed it
 		}
 		shown++
@@ -196,10 +196,10 @@ func runSessionLock(args []string) error {
 		ttl = int(d / time.Second)
 	}
 	holder := sessionClaimHolder()
-	if err := core.ClaimSession(path, reason, holder, ttl); err != nil {
+	if err := session.ClaimSession(path, reason, holder, ttl); err != nil {
 		return sessionLockError(err)
 	}
-	claim, _ := core.SessionLockClaim(path)
+	claim, _ := session.SessionLockClaim(path)
 	fmt.Fprintf(os.Stdout, "%s\n", i18n.T("claimed %s", filepath.Base(path)))
 	fmt.Fprintf(os.Stdout, "%s\n", claim.Describe())
 	return nil
@@ -218,7 +218,7 @@ func runSessionUnlock(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := core.UnlockSession(path); err != nil {
+	if err := session.UnlockSession(path); err != nil {
 		return sessionLockError(err)
 	}
 	fmt.Fprintf(os.Stdout, "%s\n", i18n.T("released the claim on %s", filepath.Base(path)))
@@ -229,7 +229,7 @@ func runSessionUnlock(args []string) error {
 // A lock refusal from `unlock` means a process still has the session, and the
 // remedy is to stop that terva rather than to try harder here.
 func sessionLockError(err error) error {
-	if errors.Is(err, core.ErrSessionLocked) {
+	if errors.Is(err, session.ErrSessionLocked) {
 		return i18n.Errorf("%v\nStop that terva first, then try again.", err)
 	}
 	return err

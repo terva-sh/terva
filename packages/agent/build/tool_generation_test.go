@@ -8,6 +8,7 @@ import (
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -50,23 +51,23 @@ func TestLiveToolSetCarriesAskerAcrossRebuild(t *testing.T) {
 }
 
 func TestToolGenerationReclassifiesSameName(t *testing.T) {
-	for _, mode := range []core.ApprovalMode{core.ApprovalWorkspace, core.ApprovalAutoEdit, core.ApprovalPlan} {
+	for _, mode := range []permission.ApprovalMode{permission.ApprovalWorkspace, permission.ApprovalAutoEdit, permission.ApprovalPlan} {
 		t.Run(string(mode), func(t *testing.T) {
 			pol := permissions.NewPolicy(mode, nil)
-			gate := core.NewPolicyGate(pol, nil)
+			gate := permission.NewPolicyGate(pol, nil)
 			ag := coretest.NewAgent(nil, "fake", "", nil)
 			for _, state := range []string{"read", "mutate", "removed", "mutate", "read", "network"} {
 				r := Resolved{ToolRegistry: core.Registry{}, ApprovalMode: mode, readOnlySet: permissions.BuiltinReadOnlySet()}
 				info := ExtensionToolInfo{Name: "echo", ReadOnly: state == "read" || state == "network"}
 				if state == "network" {
-					info.Authority = string(core.AuthNetworkRead)
+					info.Authority = string(permission.AuthNetworkRead)
 				}
 				if state != "removed" {
 					r.MergeExtensionTools(generationSource{[]ExtensionToolInfo{info}})
 				}
 				r.PublishTools(ag, gate)
 				ctx, _, exists := ag.ToolForCall(context.Background(), "echo")
-				wantExists := state != "removed" && (mode != core.ApprovalPlan || state == "read")
+				wantExists := state != "removed" && (mode != permission.ApprovalPlan || state == "read")
 				if exists != wantExists {
 					t.Fatalf("%s: registered=%v want=%v", state, exists, wantExists)
 				}

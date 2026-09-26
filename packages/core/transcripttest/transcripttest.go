@@ -5,7 +5,7 @@
 // tool groups.
 //
 // A store's own tests call Run. core runs it against MemoryTranscriptStore,
-// and packages/agent/build against the JSONL session file.
+// and packages/session against the JSONL session file.
 package transcripttest
 
 import (

@@ -6,6 +6,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -129,12 +130,12 @@ func TestSystemPromptImmersiveWinsOverExperience(t *testing.T) {
 }
 
 func TestBuildToolRegistryDropsBuiltinsInExperienceModes(t *testing.T) {
-	normal := build.BuildToolRegistry(build.Args{}, core.ApprovalAutoEdit, ".", nil, "anthropic", "", false, nil)
+	normal := build.BuildToolRegistry(build.Args{}, permission.ApprovalAutoEdit, ".", nil, "anthropic", "", false, nil)
 	if len(normal) == 0 {
 		t.Fatal("normal mode should have built-in tools")
 	}
 	for _, exp := range []string{build.ExperienceChat, build.ExperiencePlay} {
-		reg := build.BuildToolRegistry(build.Args{Experience: exp}, core.ApprovalAutoEdit, ".", nil, "anthropic", "", false, nil)
+		reg := build.BuildToolRegistry(build.Args{Experience: exp}, permission.ApprovalAutoEdit, ".", nil, "anthropic", "", false, nil)
 		if len(reg) != 0 {
 			t.Errorf("%s mode should drop built-in tools, got %d", exp, len(reg))
 		}
@@ -147,7 +148,7 @@ func TestBuildToolRegistryDropsBuiltinsInExperienceModes(t *testing.T) {
 // gated on the same !args.NoTools in buildResolved.
 func TestNoToolsSuppressesEveryToolSource(t *testing.T) {
 	// Built-ins: --no-tools empties the registry, like the experience modes.
-	if reg := build.BuildToolRegistry(build.Args{NoTools: true}, core.ApprovalAutoEdit, ".", nil, "anthropic", "", false, nil); len(reg) != 0 {
+	if reg := build.BuildToolRegistry(build.Args{NoTools: true}, permission.ApprovalAutoEdit, ".", nil, "anthropic", "", false, nil); len(reg) != 0 {
 		t.Errorf("--no-tools should drop built-in tools, got %d", len(reg))
 	}
 
@@ -155,13 +156,13 @@ func TestNoToolsSuppressesEveryToolSource(t *testing.T) {
 		{Extension: "world", Name: "travel", Schema: []byte(`{}`)},
 	}}
 	// Sanity: a normal Resolved DOES merge the extension/MCP tool…
-	normal := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: core.ApprovalAutoEdit}
+	normal := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: permission.ApprovalAutoEdit}
 	normal.MergeExtensionTools(src)
 	if _, ok := normal.ToolRegistry["travel"]; !ok {
 		t.Fatal("precondition: normal mode should merge extension tools")
 	}
 	// …but with noTools set, the merge is skipped entirely.
-	none := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: core.ApprovalAutoEdit, NoTools: true}
+	none := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: permission.ApprovalAutoEdit, NoTools: true}
 	none.MergeExtensionTools(src)
 	if _, ok := none.ToolRegistry["travel"]; ok {
 		t.Error("--no-tools must keep extension/MCP tools out of the merge")
@@ -174,14 +175,14 @@ func TestMergeExtensionToolsChatSkipsPlayKeeps(t *testing.T) {
 	}}
 
 	// chat: extension tools do NOT merge (pure conversation).
-	chat := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: core.ApprovalAutoEdit, Experience: build.ExperienceChat}
+	chat := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: permission.ApprovalAutoEdit, Experience: build.ExperienceChat}
 	chat.MergeExtensionTools(src)
 	if _, ok := chat.ToolRegistry["travel"]; ok {
 		t.Error("chat mode must not merge extension tools")
 	}
 
 	// play: extension tools DO merge (the simulated world).
-	play := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: core.ApprovalAutoEdit, Experience: build.ExperiencePlay}
+	play := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: permission.ApprovalAutoEdit, Experience: build.ExperiencePlay}
 	play.MergeExtensionTools(src)
 	if _, ok := play.ToolRegistry["travel"]; !ok {
 		t.Error("play mode must keep extension tools")

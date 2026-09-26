@@ -113,7 +113,7 @@ type WorldController interface {
 
 // WorldLoreEntry is one World lore entry on the wire — the minimal authoring
 // surface (name + trigger keywords + always-on + content + audience) a
-// steering drawer edits. Mirrors core.WorldLoreEntry.
+// steering drawer edits. Mirrors session.WorldLoreEntry.
 type WorldLoreEntry struct {
 	Name string `json:"name"`
 	// Keys are the trigger keywords: the entry injects when one appears in
@@ -182,7 +182,7 @@ type WorldView struct {
 	// starts from. Carried on the view because worlds.set writes it and a
 	// surface that could not read it back would be steering blind.
 	Coordination string `json:"coordination,omitempty"`
-	// Sessions is how many sessions belong to this World (SessionMeta.World).
+	// Sessions is how many sessions belong to this World (session.Stage.World).
 	Sessions int    `json:"sessions,omitempty"`
 	Created  string `json:"created,omitempty"` // RFC 3339
 	Updated  string `json:"updated,omitempty"`

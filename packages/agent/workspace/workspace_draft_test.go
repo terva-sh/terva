@@ -183,7 +183,7 @@ func TestCodingSessionUnaffectedByDraftDeferral(t *testing.T) {
 }
 
 // Worlds W2: keeping a library character "on stage" in a CHAT persists to the
-// session roster (SessionMeta.Cast, the universal roster) but — unlike a play
+// session roster (session.Stage.Cast, the universal roster) but — unlike a play
 // cast — warms no actors and injects no actor_spawn tool. A bogus ref is
 // rejected against the card store.
 func TestChatRosterPersistsWithoutWarmActors(t *testing.T) {

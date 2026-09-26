@@ -10,15 +10,15 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/swarm"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // confirmFunc takes the context because the real ones do: a Confirmer that
 // parks is required to unpark on it, and a fake that quietly ignored it would
 // let a test pass against an implementation the interface forbids.
-type confirmFunc func(ctx context.Context, tool, preview string) core.ConfirmDecision
+type confirmFunc func(ctx context.Context, tool, preview string) permission.ConfirmDecision
 
-func (f confirmFunc) Confirm(ctx context.Context, tool, preview string) core.ConfirmDecision {
+func (f confirmFunc) Confirm(ctx context.Context, tool, preview string) permission.ConfirmDecision {
 	return f(ctx, tool, preview)
 }
 
@@ -39,7 +39,7 @@ func TestRecognizeAndEncodeTervaApproval(t *testing.T) {
 		t.Error("an ask with no id cannot be answered and must not be recognised")
 	}
 
-	frame, err := encodeTervaApprove("ask-3", core.ConfirmDecision{Allow: true, RememberTool: true})
+	frame, err := encodeTervaApprove("ask-3", permission.ConfirmDecision{Allow: true, RememberTool: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,9 +66,9 @@ func TestHandleAskRoutesToConfirmerAndReplies(t *testing.T) {
 		agent:   &swarm.Agent{ID: "flaky-42"},
 		backend: tervaBackend(),
 		stdin:   pw,
-		confirmer: confirmFunc(func(_ context.Context, tool, preview string) core.ConfirmDecision {
+		confirmer: confirmFunc(func(_ context.Context, tool, preview string) permission.ConfirmDecision {
 			sawPreview = preview
-			return core.ConfirmDecision{Allow: true}
+			return permission.ConfirmDecision{Allow: true}
 		}),
 	}
 
@@ -130,12 +130,12 @@ func TestHandleAskCancelDeniesRatherThanHangs(t *testing.T) {
 		agent:   &swarm.Agent{ID: "slow-1"},
 		backend: tervaBackend(),
 		stdin:   pw,
-		confirmer: confirmFunc(func(ctx context.Context, tool, preview string) core.ConfirmDecision {
+		confirmer: confirmFunc(func(ctx context.Context, tool, preview string) permission.ConfirmDecision {
 			close(blocked)
 			// The human walked away. What ends this wait is the worker's
 			// context — which is the whole point of Confirm taking one.
 			<-ctx.Done()
-			return core.ConfirmDecision{Allow: false, Reason: "worker stopped before the approval was answered"}
+			return permission.ConfirmDecision{Allow: false, Reason: "worker stopped before the approval was answered"}
 		}),
 	}
 

@@ -5,15 +5,15 @@ import (
 	"strings"
 	"time"
 
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/tui"
 )
 
 // SessionDialog is the inline picker shown when the user runs /sessions.
 type SessionDialog struct {
 	active   bool
-	sessions []core.SessionSummary
+	sessions []session.SessionSummary
 	cursor   int
 	renaming bool
 	rename   tui.LineBuf
@@ -33,7 +33,7 @@ type SessionDialog struct {
 	vp Viewport
 
 	// Rename, when set, persists a rename instead of the default direct
-	// core.RenameSession write. The ctrlproto path routes it through the
+	// session.RenameSession write. The ctrlproto path routes it through the
 	// service so a live session's in-memory title stays in sync and other
 	// clients get the session_updated broadcast.
 	Rename func(path, title string) error
@@ -42,20 +42,20 @@ type SessionDialog struct {
 	// scan. The ctrlproto path routes it through the service's session
 	// group, which overlays live state (current model, settled title,
 	// usage) the file's meta line can lag behind.
-	List func() []core.SessionSummary
+	List func() []session.SessionSummary
 
 	// ListArchived supplies the archive when the user asks to see it. Nil
 	// means this frontend cannot browse an archive (a replay carrier), and
 	// the picker then does not offer the key at all rather than offering one
 	// that opens an empty list.
-	ListArchived func() []core.ArchivedSession
+	ListArchived func() []session.ArchivedSession
 
 	// archived is the view mode: false lists live sessions, true lists the
 	// archive. One dialog rather than two, because everything but the row
 	// bodies and the verbs is identical — the same viewport, the same
 	// scrolling, the same relative-time column.
 	archived     bool
-	archivedRows []core.ArchivedSession
+	archivedRows []session.ArchivedSession
 
 	// confirming holds a delete under the cursor awaiting a y/n. Delete is the
 	// one verb here that destroys a transcript, and it sits one key away from
@@ -81,7 +81,7 @@ func (d *SessionDialog) rowPlain(i, width int) string {
 }
 
 // archivedSizeTag is what archiving bought, shown on the row that bought it.
-func archivedSizeTag(a core.ArchivedSession) string {
+func archivedSizeTag(a session.ArchivedSession) string {
 	if a.Bytes <= 0 {
 		return ""
 	}
@@ -104,7 +104,7 @@ func (d *SessionDialog) cursorRowTitle() string {
 	if d.cursor < 0 || d.cursor >= d.rowCount() {
 		return ""
 	}
-	var s core.SessionSummary
+	var s session.SessionSummary
 	if d.archived {
 		s = d.archivedRows[d.cursor].SessionSummary
 	} else {
@@ -158,13 +158,13 @@ func NewSessionDialog() *SessionDialog { return &SessionDialog{} }
 // and any stale empties that haven't been pruned yet all stay out
 // of the picker. Resuming an empty session is a no-op anyway.
 func (d *SessionDialog) Open(root, cwd string) {
-	var all []core.SessionSummary
+	var all []session.SessionSummary
 	if d.List != nil {
 		all = d.List()
 	} else {
-		all = core.DescribeSessions(root, cwd)
+		all = session.DescribeSessions(root, cwd)
 	}
-	filtered := make([]core.SessionSummary, 0, len(all))
+	filtered := make([]session.SessionSummary, 0, len(all))
 	for _, s := range all {
 		if s.MessageCount == 0 {
 			continue
@@ -284,7 +284,7 @@ func (d *SessionDialog) Render(th tui.Theme, width int) []string {
 // fit within maxWidth visible characters so the terminal never soft-
 // wraps it into the next row. Exported because the pre-TUI --resume
 // fallback picker (non-TTY boots) renders the same rows.
-func FormatSessionRowPlain(s core.SessionSummary, maxWidth int) string {
+func FormatSessionRowPlain(s session.SessionSummary, maxWidth int) string {
 	when := formatRelative(s.Started)
 	summary := strings.TrimSpace(s.Title)
 	if summary == "" {
@@ -323,7 +323,7 @@ func FormatSessionRowPlain(s core.SessionSummary, maxWidth int) string {
 // Monochrome on purpose — a row is styled as a whole (the selection highlight or
 // a flat mute), so the state has to read from the glyph shape, not colour. The
 // filled/hollow/blank gradient mirrors the web board's busy/idle/cold pills.
-func sessionStatusGlyph(s core.SessionSummary) string {
+func sessionStatusGlyph(s session.SessionSummary) string {
 	switch {
 	case s.Busy:
 		return "● "
@@ -364,7 +364,7 @@ func (d *SessionDialog) HandleKey(k tui.Key) sessionDialogAction {
 				path := d.sessions[d.cursor].Path
 				rename := d.Rename
 				if rename == nil {
-					rename = core.RenameSession
+					rename = session.RenameSession
 				}
 				if rename(path, title) == nil {
 					d.sessions[d.cursor].Title = title

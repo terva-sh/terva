@@ -8,6 +8,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -15,10 +16,10 @@ import (
 // recorded wait, clamped to [Think, WaitCap] so the pause is visible and
 // bounded.
 func TestSynthesizeInteractions(t *testing.T) {
-	rows := []core.ReplayRow{
-		{Kind: core.ReplayRowMessage, Message: msg(provider.RoleUser, provider.TextBlock{Text: "run the tests"})},
-		{Kind: core.ReplayRowPermission, Permission: core.PermissionRecord{CallID: "c1", Tool: "bash", Waited: 10 * time.Minute, Allow: true}},
-		{Kind: core.ReplayRowAsk, Ask: core.AskRecord{AskID: "a1", Questions: []core.RecordQuestion{{Question: "which?"}}, Answers: []core.RecordAnswer{{Answer: "b"}}, Waited: time.Millisecond}},
+	rows := []session.ReplayRow{
+		{Kind: session.ReplayRowMessage, Message: msg(provider.RoleUser, provider.TextBlock{Text: "run the tests"})},
+		{Kind: session.ReplayRowPermission, Permission: session.PermissionRecord{CallID: "c1", Tool: "bash", Waited: 10 * time.Minute, Allow: true}},
+		{Kind: session.ReplayRowAsk, Ask: session.AskRecord{AskID: "a1", Questions: []session.RecordQuestion{{Question: "which?"}}, Answers: []session.RecordAnswer{{Answer: "b"}}, Waited: time.Millisecond}},
 	}
 	pace := DefaultPace()
 	frames := Synthesize(rows, Options{Pace: pace})
@@ -56,7 +57,7 @@ func TestSynthesizeInteractions(t *testing.T) {
 // question shows both beats to a subscriber.
 func TestCarrierPlaysInteractionsOnTheWire(t *testing.T) {
 	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
-	sess, err := core.NewSessionAtPath(path, "/cwd", "prov", "model", "v1")
+	sess, err := session.NewSessionAtPath(path, "/cwd", "prov", "model", "v1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,8 +68,8 @@ func TestCarrierPlaysInteractionsOnTheWire(t *testing.T) {
 		}
 	}
 	must(sess.AppendMessage(provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "go"}}}))
-	must(sess.AppendPermission(core.PermissionRecord{CallID: "c1", Tool: "bash", Preview: "go test", Waited: time.Millisecond, Allow: true}))
-	must(sess.AppendAsk(core.AskRecord{AskID: "a1", Questions: core.RecordQuestions([]core.UserQuestion{{Question: "which?", Options: []string{"a", "b"}}}), Answers: core.RecordAnswers([]core.UserAnswer{{Answer: "b"}}), Waited: time.Millisecond}))
+	must(sess.AppendPermission(session.PermissionRecord{CallID: "c1", Tool: "bash", Preview: "go test", Waited: time.Millisecond, Allow: true}))
+	must(sess.AppendAsk(session.AskRecord{AskID: "a1", Questions: session.RecordQuestions([]core.UserQuestion{{Question: "which?", Options: []string{"a", "b"}}}), Answers: session.RecordAnswers([]core.UserAnswer{{Answer: "b"}}), Waited: time.Millisecond}))
 	must(sess.Close())
 
 	fast := DefaultPace()
@@ -129,7 +130,7 @@ func TestCarrierNamesTheChosenOption(t *testing.T) {
 	if got := permissionOption(EvPermissionResolved{Allow: false}); got != 5 {
 		t.Errorf("a refusal is option %d, want 5", got)
 	}
-	if got := permissionOption(EvPermissionResolved{Allow: true, Scope: core.PermissionScopeTool}); got != 2 {
+	if got := permissionOption(EvPermissionResolved{Allow: true, Scope: session.PermissionScopeTool}); got != 2 {
 		t.Errorf("a session-wide allow is option %d, want 2", got)
 	}
 	if got := permissionOption(EvPermissionResolved{Allow: true}); got != 1 {
@@ -152,11 +153,11 @@ func TestCarrierNamesTheChosenOption(t *testing.T) {
 // reach the event stream. A replay that emitted them moved the gauge on a turn
 // the session never had.
 func TestSynthesizeSkipsSideChannelAndDelegatedUsage(t *testing.T) {
-	rows := []core.ReplayRow{
-		{Kind: core.ReplayRowMessage, Message: msg(provider.RoleUser, provider.TextBlock{Text: "hi"})},
-		{Kind: core.ReplayRowUsage, Usage: provider.Usage{InputTokens: 10}, Cumulative: provider.Usage{InputTokens: 10}},
-		{Kind: core.ReplayRowUsage, Usage: provider.Usage{InputTokens: 5}, Cumulative: provider.Usage{InputTokens: 15}, Source: "next_step"},
-		{Kind: core.ReplayRowUsage, Usage: provider.Usage{InputTokens: 900}, Cumulative: provider.Usage{InputTokens: 915}, Delegated: true},
+	rows := []session.ReplayRow{
+		{Kind: session.ReplayRowMessage, Message: msg(provider.RoleUser, provider.TextBlock{Text: "hi"})},
+		{Kind: session.ReplayRowUsage, Usage: provider.Usage{InputTokens: 10}, Cumulative: provider.Usage{InputTokens: 10}},
+		{Kind: session.ReplayRowUsage, Usage: provider.Usage{InputTokens: 5}, Cumulative: provider.Usage{InputTokens: 15}, Source: "next_step"},
+		{Kind: session.ReplayRowUsage, Usage: provider.Usage{InputTokens: 900}, Cumulative: provider.Usage{InputTokens: 915}, Delegated: true},
 	}
 	var usage []core.EvUsage
 	for _, f := range Synthesize(rows, Options{}) {

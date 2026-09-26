@@ -9,6 +9,7 @@ import (
 
 	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
@@ -108,7 +109,7 @@ func (i *Interactive) CancelTurn() {
 	}
 }
 
-// Confirm implements core.Confirmer: push the request onto the confirmDialog
+// Confirm implements permission.Confirmer: push the request onto the confirmDialog
 // queue, trigger a redraw, and block until the user answers or ctx ends.
 //
 // NOTE ON THE LIVE PATH: no gate is wired to this today. The TUI runs as a front
@@ -124,10 +125,10 @@ func (i *Interactive) CancelTurn() {
 // turn refuses immediately instead of waiting for the front end to remember to
 // clear the queue. CancelAll remains for the case ctx cannot cover — the TUI
 // exiting out from under a request nobody is waiting on any more.
-var _ core.Confirmer = (*Interactive)(nil)
+var _ permission.Confirmer = (*Interactive)(nil)
 
-func (i *Interactive) Confirm(ctx context.Context, toolName string, preview string) core.ConfirmDecision {
-	resp := make(chan core.ConfirmDecision, 1)
+func (i *Interactive) Confirm(ctx context.Context, toolName string, preview string) permission.ConfirmDecision {
+	resp := make(chan permission.ConfirmDecision, 1)
 	i.confirmDialog.Enqueue(&dialogs.ConfirmRequest{
 		ToolName: toolName,
 		Preview:  preview,
@@ -138,7 +139,7 @@ func (i *Interactive) Confirm(ctx context.Context, toolName string, preview stri
 	case d := <-resp:
 		return d
 	case <-ctx.Done():
-		return core.ConfirmDecision{Allow: false, Reason: i18n.T("tool call refused: the turn was cancelled before this approval was answered")}
+		return permission.ConfirmDecision{Allow: false, Reason: i18n.T("tool call refused: the turn was cancelled before this approval was answered")}
 	}
 }
 

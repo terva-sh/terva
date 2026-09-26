@@ -28,6 +28,7 @@ import (
 	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/agent/workspace"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/envcompat"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/privfs"
@@ -403,7 +404,7 @@ func setupNonInteractiveExtensions(ctx context.Context, args build.Args, r *buil
 	}
 }
 
-func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr *extensions.Manager, gate *core.ConfirmGate, hookEng *hooks.Engine, differ *tools.WorkspaceDiffer, tasksCtrl *tasktool.Controller) {
+func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr *extensions.Manager, gate *permission.ConfirmGate, hookEng *hooks.Engine, differ *tools.WorkspaceDiffer, tasksCtrl *tasktool.Controller) {
 	if ag == nil {
 		return
 	}
@@ -464,7 +465,7 @@ func wireNonInteractiveAgentExtHooks(ctx context.Context, ag *core.Agent, extMgr
 // per-CONVERSATION, not per-process: the owner DM pairs r.NewAgent with the
 // shared r.Tasks (bound to its durable session); each admitted group uses
 // r.NewAgentWithFreshTasks so its card and open-work gate read its own board.
-func newBotAgent(ctx context.Context, newAgent func(core.Gate, ...core.Option) (*core.Agent, *tasktool.Controller), extMgr *extensions.Manager, gate *core.ConfirmGate, args build.Args, r *build.Resolved) *core.Agent {
+func newBotAgent(ctx context.Context, newAgent func(core.Gate, ...core.Option) (*core.Agent, *tasktool.Controller), extMgr *extensions.Manager, gate *permission.ConfirmGate, args build.Args, r *build.Resolved) *core.Agent {
 	hookEng := build.BuildHookEngine(args, r.Trusted)
 	ag, tasksCtrl := newAgent(build.BuildToolGate(hookEng, gate, extMgr), build.ExtensionFilters(ctx, extMgr)...)
 	wireNonInteractiveAgentExtHooks(ctx, ag, extMgr, gate, hookEng, tools.NewWorkspaceDiffer(workspaceRootFn(r.Sandbox, r.CWD)), tasksCtrl)

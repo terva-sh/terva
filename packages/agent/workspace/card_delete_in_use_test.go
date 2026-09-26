@@ -26,7 +26,7 @@ func importTestCard(t *testing.T, w *Workspace, name string) string {
 // TestACardWithChatsOnItCannotBeDeleted is the defect.
 //
 // cards.delete was an os.RemoveAll with no in-use check, and a session
-// re-resolves SessionMeta.Card on every materialize — so deleting a card with
+// re-resolves session.Stage.Card on every materialize — so deleting a card with
 // chats on it did not degrade them, it stopped them opening for good, and the
 // bytes were gone so nothing brought them back.
 func TestACardWithChatsOnItCannotBeDeleted(t *testing.T) {

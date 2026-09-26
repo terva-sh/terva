@@ -13,13 +13,15 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"terva.sh/terva/packages/core/lazytools"
 	"testing"
+
+	"terva.sh/terva/packages/core/lazytools"
 
 	ticket "github.com/terva-sh/git-ticket/ticket"
 
 	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -108,7 +110,7 @@ func (c *ticketScriptClient) firstTools() map[string]bool {
 // agent carries terva's Assembler, because the note rides its frame.
 func TestTicketToolsLazyGroupAdvertisesAndActivates(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, ticketStoreDir(t), nil, "", "", false, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, ticketStoreDir(t), nil, "", "", false, nil)
 	client := &ticketScriptClient{}
 	asm := NewAssembler(nil)
 	opts := append([]core.Option{core.WithAssembler(asm), core.WithTools(reg), core.WithGate(core.AllowAll)}, LazyTools(asm)...)
@@ -153,7 +155,7 @@ func TestTicketToolsLazyGroupAdvertisesAndActivates(t *testing.T) {
 // proven at the surface the model actually sees.
 func TestTicketPlanSessionAdvertisesReadsOnly(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
-	reg := BuildToolRegistry(Args{}, core.ApprovalPlan, ticketStoreDir(t), nil, "", "", false, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalPlan, ticketStoreDir(t), nil, "", "", false, nil)
 	client := &ticketScriptClient{}
 	a := coretest.NewAgent(client, "m", "sys", reg)
 
@@ -202,7 +204,7 @@ func TestTicketLifecycleThroughAgentLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, dir, nil, "", "", false, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, dir, nil, "", "", false, nil)
 	client := &ticketScriptClient{}
 	a := coretest.NewAgent(client, "m", "sys", reg)
 

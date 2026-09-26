@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -48,7 +48,7 @@ func TestExtensionPermissionRulesGatedOnTrust(t *testing.T) {
 	trusted, _ := extensionPermissionRules(proj, true)
 	found := false
 	for _, r := range trusted {
-		if r.Tool == "web_fetch_raw" && r.Decision == core.RuleDeny {
+		if r.Tool == "web_fetch_raw" && r.Decision == permission.RuleDeny {
 			found = true
 		}
 	}
@@ -115,7 +115,7 @@ func TestTrustDoesNotUnlockProjectAllow(t *testing.T) {
 	pol, warns := BuildPolicy(Inputs{CWD: proj, Trust: true})
 	if pol != nil {
 		for _, r := range pol.Rules {
-			if r.Source == "project" && r.Decision == core.RuleAllow {
+			if r.Source == "project" && r.Decision == permission.RuleAllow {
 				t.Fatal("trusted project produced a self-allow rule — the self-approval ban must hold even when trusted")
 			}
 		}

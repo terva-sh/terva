@@ -9,7 +9,9 @@ import (
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // hubBuffer bounds a subscriber's event backlog before a lossy client drops
@@ -37,7 +39,7 @@ var _ ctrlproto.WorkspaceService = (*Carrier)(nil)
 type Carrier struct {
 	id       string
 	path     string
-	meta     core.SessionMeta
+	meta     session.SessionMeta
 	mode     Mode
 	autoplay bool
 	player   *Player
@@ -65,7 +67,7 @@ var (
 // Open reads a session transcript and builds a paused replay Carrier over it.
 // Call Close when done to stop the player goroutine and release subscribers.
 func Open(path string, opts Options) (*Carrier, error) {
-	rows, meta, err := core.ReadReplayRows(path)
+	rows, meta, err := session.ReadReplayRows(path)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +91,7 @@ func Open(path string, opts Options) (*Carrier, error) {
 	// Seed the usage gauge from the last recorded turn (playback refreshes it
 	// live as EvUsage frames emit).
 	for _, r := range rows {
-		if r.Kind == core.ReplayRowUsage {
+		if r.Kind == session.ReplayRowUsage {
 			// The cumulative figure is one coherent timeline whoever spent
 			// the row, so the money comes from every row.
 			c.cumUsage = toWireUsage(r.Cumulative)
@@ -385,22 +387,36 @@ func (c *Carrier) sessionInfoLocked() ctrlproto.SessionInfo {
 // and a client that subscribes to both addresses (the TUI does) would
 // otherwise receive every frame twice: a permission prompt would open two
 // dialogs under one call id, and its resolution would close only the second.
+//
+// Every other reserved address is refused too. A talkoot's room is not the
+// replay's stream, and answering it with the session's frames would put a
+// transcript where a client expects room events.
 func (c *Carrier) Subscribe(ctx context.Context, sess string) (<-chan ctrlproto.Event, error) {
-	if sess == ctrlproto.AddrWorkspace {
-		return nil, errNoWorkspaceStream
+	if err := refuseReserved(sess); err != nil {
+		return nil, err
 	}
 	return c.subscribe(ctx, false), nil
 }
 
 // SubscribeReliable is Subscribe with no-drop delivery (the in-process TUI).
 func (c *Carrier) SubscribeReliable(ctx context.Context, sess string) (<-chan ctrlproto.Event, error) {
-	if sess == ctrlproto.AddrWorkspace {
-		return nil, errNoWorkspaceStream
+	if err := refuseReserved(sess); err != nil {
+		return nil, err
 	}
 	return c.subscribe(ctx, true), nil
 }
 
 var errNoWorkspaceStream = ctrlproto.Errorf(ctrlproto.CodeUnsupported, "replay session: no workspace stream")
+
+func refuseReserved(sess string) error {
+	switch {
+	case sess == ctrlproto.AddrWorkspace:
+		return errNoWorkspaceStream
+	case ctrlproto.IsReservedAddr(sess):
+		return ctrlproto.Errorf(ctrlproto.CodeUnsupported, "replay session: no stream at %s", sess)
+	}
+	return nil
+}
 
 // Sessions reports the single replay session.
 func (c *Carrier) Sessions(ctx context.Context) ([]ctrlproto.SessionInfo, error) {
@@ -463,7 +479,7 @@ func (c *Carrier) ToolDisplays(ctx context.Context, sess string) (map[string]ctr
 // Cancel/Approve/Answer are benign no-ops: a replay has no live turn to
 // interrupt and no pending permission/ask to resolve.
 func (c *Carrier) Cancel(ctx context.Context, sess string) error { return nil }
-func (c *Carrier) Approve(ctx context.Context, sess, callID string, d core.ConfirmDecision) error {
+func (c *Carrier) Approve(ctx context.Context, sess, callID string, d permission.ConfirmDecision) error {
 	return nil
 }
 func (c *Carrier) Answer(ctx context.Context, sess, askID string, answers []core.UserAnswer) error {
@@ -642,11 +658,11 @@ func permissionOption(e EvPermissionResolved) int {
 	switch {
 	case !e.Allow:
 		return 5
-	case e.Scope == core.PermissionScopeTool:
+	case e.Scope == session.PermissionScopeTool:
 		return 2
-	case e.Scope == core.PermissionScopeToolSaved:
+	case e.Scope == session.PermissionScopeToolSaved:
 		return 3
-	case e.Scope == core.PermissionScopeAll:
+	case e.Scope == session.PermissionScopeAll:
 		return 4
 	}
 	return 1

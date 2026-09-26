@@ -11,7 +11,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/swarm"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -50,14 +50,14 @@ func TestLiveTervaPortableApprovalBridge(t *testing.T) {
 	}
 
 	t.Run("allow creates the file", func(t *testing.T) {
-		runLivePortableApproval(t, backend, core.ConfirmDecision{Allow: true}, true)
+		runLivePortableApproval(t, backend, permission.ConfirmDecision{Allow: true}, true)
 	})
 	t.Run("deny blocks the file", func(t *testing.T) {
-		runLivePortableApproval(t, backend, core.ConfirmDecision{Allow: false, Reason: "the human said no"}, false)
+		runLivePortableApproval(t, backend, permission.ConfirmDecision{Allow: false, Reason: "the human said no"}, false)
 	})
 }
 
-func runLivePortableApproval(t *testing.T, backend Backend, decision core.ConfirmDecision, wantFile bool) {
+func runLivePortableApproval(t *testing.T, backend Backend, decision permission.ConfirmDecision, wantFile bool) {
 	repo := testsupport.TempDir(t)
 	// Isolate config, and lend the real credential the child needs to log in.
 	tervaHomeWithCredentials(t, "")

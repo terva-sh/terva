@@ -63,7 +63,7 @@ func (s *wsSession) exportMarkdown() (ctrlproto.SessionExport, error) {
 		Title:     strings.TrimSpace(s.sess.Meta.Title),
 		SessionID: s.id,
 		Started:   s.sess.Meta.Started,
-		Player:    exportPlayerLabel(s.sess.Meta.UserName),
+		Player:    exportPlayerLabel(s.sess.Stage.UserName),
 		Character: charName,
 	})
 	if len(body) > exportMaxBytes {

@@ -81,7 +81,7 @@ func (t *CodeExecutionTool) accountedNames() []string {
 }
 
 // Preview contributes this tool's confirmation-prompt line via the optional
-// accessor core.ToolPreview reads. Where BuildPreview can only show the raw
+// accessor permission.ToolPreview reads. Where BuildPreview can only show the raw
 // script wrapped in JSON, the accounted binding plan is what an approver
 // needs. Pure and pre-execution: AnalyzeBindings only parses, HostCall is not
 // consulted, and "" falls back to BuildPreview when the analysis cannot run.

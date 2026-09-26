@@ -52,8 +52,8 @@ func TestWorkspaceUserBind(t *testing.T) {
 	}
 
 	// Persisted to meta and surfaced on SessionInfo.
-	if live.sess.Meta.UserName != name || live.sess.Meta.UserDescription != desc {
-		t.Errorf("meta = {%q,%q}, want {%q,%q}", live.sess.Meta.UserName, live.sess.Meta.UserDescription, name, desc)
+	if live.sess.Stage.UserName != name || live.sess.Stage.UserDescription != desc {
+		t.Errorf("meta = {%q,%q}, want {%q,%q}", live.sess.Stage.UserName, live.sess.Stage.UserDescription, name, desc)
 	}
 	if si := live.info(); si.UserName != name || si.UserDescription != desc {
 		t.Errorf("SessionInfo = {%q,%q}, want {%q,%q}", si.UserName, si.UserDescription, name, desc)
@@ -93,7 +93,7 @@ func TestWorkspaceUserBind(t *testing.T) {
 	if err := w.UserBind(ctx, info.ID, ctrlproto.UserBindParams{}); err != nil {
 		t.Fatal(err)
 	}
-	if live.sess.Meta.UserName != "" || live.sess.Meta.UserDescription != "" {
+	if live.sess.Stage.UserName != "" || live.sess.Stage.UserDescription != "" {
 		t.Errorf("user persona not cleared: %+v", live.sess.Meta)
 	}
 	if strings.Contains(live.agent.FramePreview().VolatileText(), "veteran") {

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -15,8 +15,8 @@ import (
 // scanning disk, and the empty-session filter still applies to wire rows.
 func TestSessionDialogListSeam(t *testing.T) {
 	d := NewSessionDialog()
-	d.List = func() []core.SessionSummary {
-		return []core.SessionSummary{
+	d.List = func() []session.SessionSummary {
+		return []session.SessionSummary{
 			{Path: "/s/a.jsonl", Title: "first", MessageCount: 3},
 			{Path: "/s/empty.jsonl", MessageCount: 0},
 		}
@@ -31,13 +31,13 @@ func TestSessionDialogListSeam(t *testing.T) {
 // broadcast) and keeps the cursor on the same session even when its index
 // shifts; a closed dialog never re-lists.
 func TestSessionDialogRefreshPreservesCursor(t *testing.T) {
-	rows := []core.SessionSummary{
+	rows := []session.SessionSummary{
 		{Path: "/s/a.jsonl", Title: "a", MessageCount: 3},
 		{Path: "/s/b.jsonl", Title: "b", MessageCount: 2},
 		{Path: "/s/c.jsonl", Title: "c", MessageCount: 1},
 	}
 	d := NewSessionDialog()
-	d.List = func() []core.SessionSummary { return rows }
+	d.List = func() []session.SessionSummary { return rows }
 	d.Open("/x", "/y")
 	d.HandleKey(tui.Key{Kind: tui.KeyDown}) // cursor -> b
 	if d.sessions[d.cursor].Path != "/s/b.jsonl" {
@@ -67,12 +67,12 @@ func TestSessionDialogRefreshPreservesCursor(t *testing.T) {
 func TestFormatSessionRowStatusGlyph(t *testing.T) {
 	cases := []struct {
 		name string
-		s    core.SessionSummary
+		s    session.SessionSummary
 		want string
 	}{
-		{"busy", core.SessionSummary{Live: true, Busy: true, Title: "x", MessageCount: 1}, "● "},
-		{"live idle", core.SessionSummary{Live: true, Title: "x", MessageCount: 1}, "○ "},
-		{"cold", core.SessionSummary{Title: "x", MessageCount: 1}, "  "},
+		{"busy", session.SessionSummary{Live: true, Busy: true, Title: "x", MessageCount: 1}, "● "},
+		{"live idle", session.SessionSummary{Live: true, Title: "x", MessageCount: 1}, "○ "},
+		{"cold", session.SessionSummary{Title: "x", MessageCount: 1}, "  "},
 	}
 	for _, c := range cases {
 		row := FormatSessionRowPlain(c.s, 80)
@@ -87,8 +87,8 @@ func TestFormatSessionRowStatusGlyph(t *testing.T) {
 // no-ops when the row has since disappeared.
 func TestSessionDialogGenerateTitleAction(t *testing.T) {
 	d := NewSessionDialog()
-	d.List = func() []core.SessionSummary {
-		return []core.SessionSummary{
+	d.List = func() []session.SessionSummary {
+		return []session.SessionSummary{
 			{Path: "/s/a.jsonl", Title: "old title", MessageCount: 3},
 			{Path: "/s/b.jsonl", MessageCount: 2},
 		}

@@ -13,6 +13,7 @@ import (
 	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -51,14 +52,14 @@ func TestGenerateSessionTitleColdSession(t *testing.T) {
 	srv := titleStubServer(t, "Parser Unicode Refactor", &body)
 	defer srv.Close()
 
-	sess, err := core.NewSession(tmp, tmp, "openai-compatible", "fake-model", "test")
+	sess, err := session.NewSession(tmp, tmp, "openai-compatible", "fake-model", "test")
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
 	_ = sess.AppendMessage(provider.Message{Role: provider.RoleUser,
 		Content: []provider.Content{provider.TextBlock{Text: "help me refactor the parser, it chokes on unicode"}}})
 	// A manual rename beforehand: an explicit generate must overwrite it.
-	_ = core.RenameSession(sess.Path, "my manual name")
+	_ = session.RenameSession(sess.Path, "my manual name")
 	sess.Close()
 	id := build.SessionIDFromPath(sess.Path)
 
@@ -77,7 +78,7 @@ func TestGenerateSessionTitleColdSession(t *testing.T) {
 	if !strings.Contains(body, "help me refactor the parser") {
 		t.Fatalf("seed did not reach the model; request body: %s", body)
 	}
-	got := core.DescribeSessions(tmp, tmp)
+	got := session.DescribeSessions(tmp, tmp)
 	if len(got) == 0 || got[0].Title != "Parser Unicode Refactor" {
 		t.Fatalf("generated title not persisted (manual rename should be overwritten): %+v", got)
 	}
@@ -97,13 +98,13 @@ func TestGenerateSessionTitleRefusals(t *testing.T) {
 		t.Fatal("invalid id should error")
 	}
 
-	sess, err := core.NewSession(tmp, tmp, "openai-compatible", "fake-model", "test")
+	sess, err := session.NewSession(tmp, tmp, "openai-compatible", "fake-model", "test")
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
 	// meta-only file: no messages → nothing to title. Keep a rename row so
 	// Close doesn't prune the empty session before the call.
-	_ = core.RenameSession(sess.Path, "empty")
+	_ = session.RenameSession(sess.Path, "empty")
 	sess.Close()
 	if _, err := w.GenerateSessionTitle(context.Background(), build.SessionIDFromPath(sess.Path)); err == nil {
 		t.Fatal("empty transcript should error, not call the model")
@@ -120,7 +121,7 @@ func TestGenerateSessionTitleLiveBroadcasts(t *testing.T) {
 	srv := titleStubServer(t, "Bridge Reconnect Race", &body)
 	defer srv.Close()
 
-	sess, err := core.NewSession(tmp, tmp, "openai-compatible", "fake-model", "test")
+	sess, err := session.NewSession(tmp, tmp, "openai-compatible", "fake-model", "test")
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}

@@ -10,6 +10,7 @@ import (
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // SessionListTool enumerates recorded sessions. It is the discovery half of the
@@ -102,10 +103,10 @@ func (t *SessionListTool) Execute(_ context.Context, raw json.RawMessage, _ func
 		offset = 0
 	}
 
-	refs := core.ListSessionsAcrossProjects(t.TervaHome)
+	refs := session.ListSessionsAcrossProjects(t.TervaHome)
 	// The current project's bucket, so a "project" scope filters on the same
 	// key the store buckets by rather than re-deriving a path.
-	mine := filepath.Base(core.SessionsDir(t.TervaHome, t.CWD))
+	mine := filepath.Base(session.SessionsDir(t.TervaHome, t.CWD))
 	if scope == "project" {
 		kept := refs[:0:0]
 		for _, r := range refs {
@@ -143,7 +144,7 @@ func (t *SessionListTool) Execute(_ context.Context, raw json.RawMessage, _ func
 		// runs for the listed page alone. A title would need the FOLDED meta
 		// and therefore a full scan, because a rename lands in a later row.
 		where := "(unknown directory)"
-		if c, err := core.ReadSessionCreation(r.Path); err == nil && strings.TrimSpace(c.CWD) != "" {
+		if c, err := session.ReadSessionCreation(r.Path); err == nil && strings.TrimSpace(c.CWD) != "" {
 			where = c.CWD
 			if r.Bucket == mine {
 				where += "  (this project)"

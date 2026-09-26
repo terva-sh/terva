@@ -9,6 +9,8 @@ import (
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
+	"terva.sh/terva/packages/session"
 )
 
 // webConfirmer is a session's tool-approval seam. Unlike ACP (which issues a
@@ -19,18 +21,18 @@ import (
 // tells the others to dismiss their prompt.
 type webConfirmer struct{ s *wsSession }
 
-var _ core.ConfirmerWithRequest = (*webConfirmer)(nil)
-var _ core.ConfirmerWithCall = (*webConfirmer)(nil)
+var _ permission.ConfirmerWithRequest = (*webConfirmer)(nil)
+var _ permission.ConfirmerWithCall = (*webConfirmer)(nil)
 
 // Confirm is the id-less fallback (a gate caller that knows no call id); it
 // mints a unique park key so even two id-less asks can never collide.
-func (c *webConfirmer) Confirm(ctx context.Context, toolName, preview string) core.ConfirmDecision {
-	return c.ConfirmWithRequest(ctx, core.ConfirmRequest{Tool: toolName, Preview: preview})
+func (c *webConfirmer) Confirm(ctx context.Context, toolName, preview string) permission.ConfirmDecision {
+	return c.ConfirmWithRequest(ctx, permission.ConfirmRequest{Tool: toolName, Preview: preview})
 }
 
 // ConfirmWithCall is kept for gate versions that predate ConfirmWithRequest.
-func (c *webConfirmer) ConfirmWithCall(ctx context.Context, toolName, preview, callID string) core.ConfirmDecision {
-	return c.ConfirmWithRequest(ctx, core.ConfirmRequest{Tool: toolName, Preview: preview, CallID: callID})
+func (c *webConfirmer) ConfirmWithCall(ctx context.Context, toolName, preview, callID string) permission.ConfirmDecision {
+	return c.ConfirmWithRequest(ctx, permission.ConfirmRequest{Tool: toolName, Preview: preview, CallID: callID})
 }
 
 // ConfirmWithRequest parks this one call under its own id. The id arrives
@@ -47,11 +49,11 @@ func (c *webConfirmer) ConfirmWithCall(ctx context.Context, toolName, preview, c
 // is running now" rather than "the turn this call belongs to" — and answered nil
 // for any door that ran outside a turn, leaving the park with nothing to cancel
 // it.
-func (c *webConfirmer) ConfirmWithRequest(ctx context.Context, cr core.ConfirmRequest) core.ConfirmDecision {
+func (c *webConfirmer) ConfirmWithRequest(ctx context.Context, cr permission.ConfirmRequest) permission.ConfirmDecision {
 	s := c.s
 	callID := cr.CallID
 	var (
-		ch      <-chan core.ConfirmDecision
+		ch      <-chan permission.ConfirmDecision
 		release func()
 	)
 	if callID != "" {
@@ -96,16 +98,16 @@ func (c *webConfirmer) ConfirmWithRequest(ctx context.Context, cr core.ConfirmRe
 		return d
 	case <-ctx.Done():
 		// Cancelled (client cancel / shutdown): fail closed.
-		return core.ConfirmDecision{Allow: false, Reason: "cancelled"}
+		return permission.ConfirmDecision{Allow: false, Reason: "cancelled"}
 	}
 }
 
 // recordPermission writes the exchange to the transcript so a replay can show
-// the prompt, the pause, and the decision (core.PermissionRecord). A write
+// the prompt, the pause, and the decision (session.PermissionRecord). A write
 // failure is logged and never fails the decision: the tool call is what the
 // person is waiting on, and the row is for a later reader.
-func (s *wsSession) recordPermission(req ctrlproto.PermissionRequest, d core.ConfirmDecision, asked time.Time) {
-	err := s.sess.AppendPermission(core.PermissionRecord{
+func (s *wsSession) recordPermission(req ctrlproto.PermissionRequest, d permission.ConfirmDecision, asked time.Time) {
+	err := s.sess.AppendPermission(session.PermissionRecord{
 		CallID:  req.CallID,
 		Tool:    req.Tool,
 		Preview: req.Preview,
@@ -113,7 +115,7 @@ func (s *wsSession) recordPermission(req ctrlproto.PermissionRequest, d core.Con
 		Waited:  time.Since(asked),
 		Allow:   d.Allow,
 		Reason:  d.Reason,
-		Scope:   core.PermissionScopeOf(d),
+		Scope:   session.PermissionScopeOf(d),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "session %s: could not record the permission exchange: %v\n", s.id, err)
@@ -143,9 +145,9 @@ type workerConfirmer struct {
 	seq     atomic.Uint64
 }
 
-var _ core.Confirmer = (*workerConfirmer)(nil)
+var _ permission.Confirmer = (*workerConfirmer)(nil)
 
-func (c *workerConfirmer) Confirm(ctx context.Context, toolName, preview string) core.ConfirmDecision {
+func (c *workerConfirmer) Confirm(ctx context.Context, toolName, preview string) permission.ConfirmDecision {
 	s := c.s
 	callID := fmt.Sprintf("worker-%s-%d", c.agentID, c.seq.Add(1))
 	// Agent carries the worker id as a first-class field so a board can
@@ -169,9 +171,9 @@ func (c *workerConfirmer) Confirm(ctx context.Context, toolName, preview string)
 	case d := <-ch:
 		return d
 	case <-ctx.Done():
-		return core.ConfirmDecision{Allow: false, Reason: "worker stopped before the approval was answered"}
+		return permission.ConfirmDecision{Allow: false, Reason: "worker stopped before the approval was answered"}
 	case <-c.ctx.Done():
-		return core.ConfirmDecision{Allow: false, Reason: "cancelled (session ending)"}
+		return permission.ConfirmDecision{Allow: false, Reason: "cancelled (session ending)"}
 	}
 }
 
@@ -219,7 +221,7 @@ func (a *webAsker) Ask(ctx context.Context, qs []core.UserQuestion) ([]core.User
 
 // approve delivers a decision to a parked webConfirmer. First answer wins; a
 // decision for an unknown/already-resolved call is a harmless no-op.
-func (s *wsSession) approve(callID string, d core.ConfirmDecision) {
+func (s *wsSession) approve(callID string, d permission.ConfirmDecision) {
 	s.permPark.Deliver(callID, d)
 }
 
@@ -230,10 +232,10 @@ func (s *wsSession) answer(askID string, answers []core.UserAnswer) {
 
 // recordAsk is recordPermission's twin for a question set.
 func (s *wsSession) recordAsk(askID string, qs []core.UserQuestion, ans []core.UserAnswer, asked time.Time) {
-	err := s.sess.AppendAsk(core.AskRecord{
+	err := s.sess.AppendAsk(session.AskRecord{
 		AskID:     askID,
-		Questions: core.RecordQuestions(qs),
-		Answers:   core.RecordAnswers(ans),
+		Questions: session.RecordQuestions(qs),
+		Answers:   session.RecordAnswers(ans),
 		Asked:     asked.UTC(),
 		Waited:    time.Since(asked),
 	})

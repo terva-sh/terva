@@ -25,6 +25,7 @@ import (
 	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/core/exp/prefixwatch"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/relaunch"
@@ -45,7 +46,7 @@ type wsSession struct {
 	ws    *Workspace
 	agent *core.Agent
 	sess  *session.Session
-	gate  *core.ConfirmGate // nil in pure-yolo (no confirmation needed)
+	gate  *permission.ConfirmGate // nil in pure-yolo (no confirmation needed)
 	// policyNotice holds the permission-policy warnings not yet shown to a
 	// client, such as a project config that could not be parsed and so lost
 	// its deny rules. Guarded by mu. See setPolicyWarnings.
@@ -106,12 +107,12 @@ type wsSession struct {
 	// the model it was switched to.
 	reasoning  string
 	turnCtx    context.Context
-	turnCancel context.CancelCauseFunc                // non-nil while a turn runs; the cause says who stopped it
-	compacting bool                                   // true while compact() holds the agent; the session's SECOND busy state (see compact)
-	permPark   core.ParkTable[core.ConfirmDecision]   // parked webConfirmer/workerConfirmer waits
-	askPark    core.ParkTable[[]core.UserAnswer]      // parked webAsker waits (one answer per question)
-	permReq    map[string]ctrlproto.PermissionRequest // details for the snapshot
-	askReq     map[string]ctrlproto.AskRequest        // details for the snapshot
+	turnCancel context.CancelCauseFunc                    // non-nil while a turn runs; the cause says who stopped it
+	compacting bool                                       // true while compact() holds the agent; the session's SECOND busy state (see compact)
+	permPark   core.ParkTable[permission.ConfirmDecision] // parked webConfirmer/workerConfirmer waits
+	askPark    core.ParkTable[[]core.UserAnswer]          // parked webAsker waits (one answer per question)
+	permReq    map[string]ctrlproto.PermissionRequest     // details for the snapshot
+	askReq     map[string]ctrlproto.AskRequest            // details for the snapshot
 	askSeq     uint64
 	// tail is the current tail span's swipe state — the ONE switchable span.
 	// Seeded from the session file at materialize (a session may load with
@@ -204,6 +205,11 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 	// un-overridden session wants.
 	if sess.Meta.Reasoning != "" {
 		args.Reasoning = sess.Meta.Reasoning
+	}
+	// A talkoot member's approval mode comes from its roster, on every build,
+	// so it holds after a restart and in a workspace that runs in yolo.
+	if p := w.talkootPostureOf(id); p != "" {
+		args.Approval = p
 	}
 	if sess.Stage.Experience != "" {
 		args.Experience = sess.Stage.Experience
@@ -306,9 +312,9 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 		return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "resolve: %v", err)
 	}
 
-	var gate *core.ConfirmGate
+	var gate *permission.ConfirmGate
 	if pol != nil {
-		gate = core.NewPolicyGate(pol, &webConfirmer{s: s})
+		gate = permission.NewPolicyGate(pol, &webConfirmer{s: s})
 		// The confirm dialog's "always this tool, and save it" answer
 		// (ConfirmDecision.PersistTool) is honoured here. This is the ONLY
 		// production gate that installs the persist callback, and it serves
@@ -336,7 +342,7 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 			if err := addUserPermissionRule(config.PermissionRuleConfig{
 				Tool:     tool,
 				Args:     argsPattern,
-				Decision: string(core.RuleAllow),
+				Decision: string(permission.RuleAllow),
 			}); err != nil {
 				s.diag(fmt.Sprintf("note: could not save always-allow rule for %q: %v", tool, err))
 				return
@@ -822,6 +828,17 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 			}
 		}
 	}
+	// talkoot_send / talkoot_handoff / talkoot_roster: only in a session that
+	// holds a seat in a talkoot, so every other session keeps its tool
+	// footprint (decision 0009). Like the chat tools, the seat is a declarative
+	// input: seating and unseating re-run this derivation.
+	if s != nil {
+		if seat, ok := w.talkootSeatOf(s.id); ok {
+			for _, t := range tools.TalkootTools(seat) {
+				r.ToolRegistry[t.Name()] = t
+			}
+		}
+	}
 	// terva_restart: only when the operator enabled self-restart. Left
 	// unclassified in permissions.go so it always prompts before re-execing.
 	if relaunch.Enabled() {
@@ -996,7 +1013,22 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 		// request — and in practice the wait is zero, because the user spent
 		// longer typing than the subprocesses spent handshaking.
 		s.awaitExtensions(turnCtx)
-		err := gen(turnCtx)
+		// A talkoot member's turn reports what it spent, so the router's caps
+		// see real spend and its working slot frees.
+		endTalkoot, closing := s.ws.talkootTurn(s.id)
+		costBefore := 0.0
+		if endTalkoot != nil {
+			costBefore = s.agent.Cost().CostUSD
+		}
+		var err error
+		if closing {
+			// The talkoots have closed, and no report of this member turn
+			// could reach them. The daemon is going down, so the turn does
+			// not run.
+			err = context.Canceled
+		} else {
+			err = gen(turnCtx)
+		}
 		if afterTurn != nil {
 			afterTurn()
 		}
@@ -1064,6 +1096,11 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 			if cerr := s.compact(s.ws.ctx, core.CompactAfterTurn); cerr != nil && !errors.Is(cerr, context.Canceled) {
 				s.broadcast(ctrlproto.NoticeEvent("error", "", i18n.T("Could not compact the conversation: %s", cerr.Error())))
 			}
+		}
+		// After the compaction, so its spend counts. On a failed turn too, or the
+		// member would stay working. ErrBusy means no turn ran.
+		if endTalkoot != nil {
+			endTalkoot(s.agent.Cost().CostUSD-costBefore, !errors.Is(err, core.ErrBusy))
 		}
 		if restart {
 			if perr := s.prompt(next, nil, core.UserMessageExtras{}); perr != nil {

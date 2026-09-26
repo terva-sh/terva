@@ -16,6 +16,7 @@ import (
 	"terva.sh/terva/packages/agent/hooks"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -66,7 +67,7 @@ func TestLadderHookDenyRefusesBeforeGate(t *testing.T) {
 func TestLadderHookAllowSkipsRefusingGate(t *testing.T) {
 	// A refusing gate (nil inner, ask policy) would block this call;
 	// the user hook's allow is final and skips it.
-	gate := core.NewConfirmGate(nil)
+	gate := permission.NewConfirmGate(nil)
 	fn := build.BuildToolGate(ladderEngine(t, "allow"), gate, nil)
 	if allowed, reason, _ := callBash(fn, nil); !allowed {
 		t.Fatalf("hook allow should skip the gate, got refusal %q", reason)
@@ -94,13 +95,13 @@ func TestLadderGateSeesRewrittenArgs(t *testing.T) {
 	// ORIGINAL command must not fire once the hook rewrote it away —
 	// and one matching the REWRITTEN command must.
 	withTempHome(t)
-	mkGate := func(pattern string) *core.ConfirmGate {
-		pol := &core.PermissionPolicy{
-			Mode:     core.ApprovalYolo,
-			Rules:    []core.PermissionRule{{Tool: "bash", Args: regexp.MustCompile(pattern), Decision: core.RuleDeny, Source: "user"}},
+	mkGate := func(pattern string) *permission.ConfirmGate {
+		pol := &permission.PermissionPolicy{
+			Mode:     permission.ApprovalYolo,
+			Rules:    []permission.PermissionRule{{Tool: "bash", Args: regexp.MustCompile(pattern), Decision: permission.RuleDeny, Source: "user"}},
 			ReadOnly: permissions.BuiltinReadOnlySet(), EditTools: permissions.EditToolSet(),
 		}
-		return core.NewPolicyGate(pol, nil)
+		return permission.NewPolicyGate(pol, nil)
 	}
 	fn := build.BuildToolGate(ladderEngine(t, "rewrite"), mkGate(`^ls$`), nil)
 	if allowed, _, _ := callBash(fn, nil); !allowed {
@@ -142,16 +143,16 @@ func (f fakePreviewTool) Preview(args json.RawMessage, maxLen int) string {
 // it, so a test can read back what the prompt would have shown.
 type captureConfirmer struct{ previews []string }
 
-func (c *captureConfirmer) Confirm(ctx context.Context, toolName, preview string) core.ConfirmDecision {
+func (c *captureConfirmer) Confirm(ctx context.Context, toolName, preview string) permission.ConfirmDecision {
 	c.previews = append(c.previews, preview)
-	return core.ConfirmDecision{Allow: true}
+	return permission.ConfirmDecision{Allow: true}
 }
 
 func TestLadderPreviewComesFromTheTool(t *testing.T) {
 	withTempHome(t)
 	conf := &captureConfirmer{}
 	tool := fakePreviewTool{name: "bash"}
-	fn := build.BuildToolGate(nil, core.NewConfirmGate(conf), nil)
+	fn := build.BuildToolGate(nil, permission.NewConfirmGate(conf), nil)
 	allowed, _, _ := callBash(fn, tool)
 	if !allowed {
 		t.Fatal("capturing confirmer must allow")
@@ -167,7 +168,7 @@ func TestLadderPreviewFollowsTheRewrite(t *testing.T) {
 	tool := fakePreviewTool{name: "bash"}
 	// The hook rewrites ls -> echo rewritten; the preview must describe what
 	// will run, not what was asked.
-	fn := build.BuildToolGate(ladderEngine(t, "rewrite"), core.NewConfirmGate(conf), nil)
+	fn := build.BuildToolGate(ladderEngine(t, "rewrite"), permission.NewConfirmGate(conf), nil)
 	allowed, _, _ := callBash(fn, tool)
 	if !allowed {
 		t.Fatal("capturing confirmer must allow")

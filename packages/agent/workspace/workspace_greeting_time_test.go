@@ -8,6 +8,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // The deferred greeting persisted with a ZERO Time — "0001-01-01T00:00:00Z" as
@@ -52,7 +53,7 @@ func TestDeferredGreetingIsTimestamped(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	replayed, err := core.ReadSessionMessages(live.sess.Path)
+	replayed, err := session.ReadSessionMessages(live.sess.Path)
 	if err != nil {
 		t.Fatal(err)
 	}

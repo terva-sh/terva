@@ -12,6 +12,7 @@ import (
 	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 	"terva.sh/terva/packages/tui"
 	"terva.sh/terva/packages/tui/tuitest"
@@ -47,7 +48,7 @@ func jfForkFixture(t *testing.T) (*Interactive, string, string) {
 
 	msgs := []provider.Message{jfUser("real-1"), jfAsst("a1"), jfMirror(), jfUser("real-2"), jfAsst("a2")}
 
-	sess, err := core.NewSession(home, cwd, "openai", "gpt-5", "test")
+	sess, err := session.NewSession(home, cwd, "openai", "gpt-5", "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,13 +81,13 @@ func jfForkFixture(t *testing.T) (*Interactive, string, string) {
 // branchFileBesides returns the session file in root/cwd that is not src.
 func branchFileBesides(t *testing.T, root, cwd, src string) string {
 	t.Helper()
-	entries, err := os.ReadDir(core.SessionsDir(root, cwd))
+	entries, err := os.ReadDir(session.SessionsDir(root, cwd))
 	if err != nil {
 		t.Fatalf("read sessions dir: %v", err)
 	}
 	var out []string
 	for _, e := range entries {
-		p := filepath.Join(core.SessionsDir(root, cwd), e.Name())
+		p := filepath.Join(session.SessionsDir(root, cwd), e.Name())
 		if !e.IsDir() && p != src {
 			out = append(out, p)
 		}
@@ -129,7 +130,7 @@ func TestForkingTheSecondTurnCutsAtTheSecondTurn(t *testing.T) {
 	i.handleKey(t.Context(), tui.Key{Kind: tui.KeyEnter})
 
 	branch := branchFileBesides(t, home, cwd, src)
-	bs, bmsgs, err := core.OpenSession(branch)
+	bs, bmsgs, err := session.OpenSession(branch)
 	if err != nil {
 		t.Fatalf("open branch: %v", err)
 	}
@@ -159,7 +160,7 @@ func TestForkingTheFirstTurnIsNotShiftedByTheMirror(t *testing.T) {
 	i.handleKey(t.Context(), tui.Key{Kind: tui.KeyEnter})
 
 	branch := branchFileBesides(t, home, cwd, src)
-	bs, bmsgs, err := core.OpenSession(branch)
+	bs, bmsgs, err := session.OpenSession(branch)
 	if err != nil {
 		t.Fatalf("open branch: %v", err)
 	}
@@ -185,7 +186,7 @@ func TestAPlainJumpAfterADismissedForkDoesNotFork(t *testing.T) {
 	i.openJumpDialog(nil)
 	i.handleKey(t.Context(), tui.Key{Kind: tui.KeyEnter})
 
-	entries, err := os.ReadDir(core.SessionsDir(home, cwd))
+	entries, err := os.ReadDir(session.SessionsDir(home, cwd))
 	if err != nil {
 		t.Fatal(err)
 	}

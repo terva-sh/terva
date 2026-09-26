@@ -18,6 +18,7 @@ import (
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // ScriptingSupported reports whether this binary carries the jsengine
@@ -66,12 +67,12 @@ func init() {
 // and edit calls are gated by the very same code path that gates a read,
 // so a script's write prompts exactly as a model-issued write does, with
 // its own preview and its own audit line.
-func wireScriptingHostCall(ag *core.Agent, gate *core.ConfirmGate) {
+func wireScriptingHostCall(ag *core.Agent, gate *permission.ConfirmGate) {
 	reg, ro := ag.ToolsWithReadOnlySnapshot()
 	wireScriptingRegistry(ag, gate, reg, ro)
 }
 
-func wireScriptingRegistry(ag *core.Agent, gate *core.ConfirmGate, reg core.Registry, ro *core.ReadOnlySet) {
+func wireScriptingRegistry(ag *core.Agent, gate *permission.ConfirmGate, reg core.Registry, ro *core.ReadOnlySet) {
 	dispatch := scriptHostDispatcher(ag, gate)
 	catalog := scriptCatalog(reg, ro)
 	if tool, ok := reg["code_execution"]; ok {
@@ -121,7 +122,7 @@ func scriptCatalog(reg core.Registry, ro *core.ReadOnlySet) *tools.DisclosureCat
 }
 
 // scriptHostDispatcher builds the gated crossing both scripting tools hold.
-func scriptHostDispatcher(ag *core.Agent, gate *core.ConfirmGate) func(context.Context, string, json.RawMessage) (core.ToolResult, error) {
+func scriptHostDispatcher(ag *core.Agent, gate *permission.ConfirmGate) func(context.Context, string, json.RawMessage) (core.ToolResult, error) {
 	return func(ctx context.Context, name string, args json.RawMessage) (core.ToolResult, error) {
 		ctx, target, ok := ag.ToolForCall(ctx, name)
 		if !ok {
@@ -132,7 +133,7 @@ func scriptHostDispatcher(ag *core.Agent, gate *core.ConfirmGate) func(context.C
 		// one per binding call, reads included — and mints its own call id
 		// (see hosttool.go: a borrowed id collides in the confirmer's
 		// pending map when two parks overlap).
-		preview := core.ToolPreview(target, args, 120)
+		preview := permission.ToolPreview(target, args, 120)
 		callID := fmt.Sprintf("script-%s-%d", name, hostGateSeq.Add(1))
 		allowed, reason, _ := gate.Check(ctx, name, args, preview, callID)
 		recordGateAudit(auditViaScriptBinding, name, args, gate, allowed, reason)

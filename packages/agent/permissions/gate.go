@@ -6,6 +6,7 @@ import (
 
 	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // Agent-construction pieces that read Args: the headless confirm gate and
@@ -18,7 +19,7 @@ import (
 // path. There is no interactive prompt in these modes, so the gate is
 // constructed with a nil inner Confirmer: a call the policy says to
 // *ask* about is refused with a model-readable reason (see
-// core.ConfirmGate.Check) instead of running unconfirmed — the
+// permission.ConfirmGate.Check) instead of running unconfirmed — the
 // refuse-by-default posture. Policy allow/deny rules and the mode's
 // auto-allows still apply, so headless automation can run a curated
 // tool set (e.g. plan mode permits the read-only tools). A one-line
@@ -34,7 +35,7 @@ import (
 // requiring the two to agree. All five callers did agree, but a test did not:
 // it passed "json" against an Args carrying no Mode at all, and the
 // disagreement was invisible because only the string reached the message.
-func HeadlessConfirmGate(p Inputs) (*core.ConfirmGate, *core.ReadOnlySet) {
+func HeadlessConfirmGate(p Inputs) (*permission.ConfirmGate, *core.ReadOnlySet) {
 	pol, warns := BuildPolicy(p)
 	for _, w := range warns {
 		fmt.Fprintf(os.Stderr, "note: %s\n", w)
@@ -44,9 +45,9 @@ func HeadlessConfirmGate(p Inputs) (*core.ConfirmGate, *core.ReadOnlySet) {
 	}
 	runMode := string(p.Mode)
 	switch pol.Mode {
-	case core.ApprovalPlan:
+	case permission.ApprovalPlan:
 		fmt.Fprintf(os.Stderr, "note: approval mode 'plan' in %s mode: read-only tools run, everything else is refused\n", runMode)
-	case core.ApprovalYolo:
+	case permission.ApprovalYolo:
 		// Reachable only because rules exist; allow/deny apply
 		// silently. ask rules degrade to allow in yolo (yolo never
 		// prompts), so only a deny rule refuses here.
@@ -64,5 +65,5 @@ func HeadlessConfirmGate(p Inputs) (*core.ConfirmGate, *core.ReadOnlySet) {
 			fmt.Fprintf(os.Stderr, "note: approval mode %q in %s mode refuses tool calls that would need confirmation (no interactive prompt available)\n", pol.Mode, runMode)
 		}
 	}
-	return core.NewPolicyGate(pol, nil), pol.ReadOnly
+	return permission.NewPolicyGate(pol, nil), pol.ReadOnly
 }

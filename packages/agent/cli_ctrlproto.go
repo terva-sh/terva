@@ -24,10 +24,10 @@ import (
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/workspace"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/i18n"
-	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/relaunch"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -549,14 +549,14 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		DeleteSession: func(path string) error {
 			return w.DeleteSession(ctx, build.SessionIDFromPath(path))
 		},
-		ListArchivedSessions: func() []core.ArchivedSession {
-			return core.ListArchivedSessions(config.TervaHome(), w.CWD())
+		ListArchivedSessions: func() []session.ArchivedSession {
+			return session.ListArchivedSessions(config.TervaHome(), w.CWD())
 		},
 		RestoreArchivedSession: func(id string) error {
 			_, err := w.RestoreSession(ctx, ctrlproto.RestoreSessionParams{ID: id})
 			return err
 		},
-		ListSessions: func() []core.SessionSummary {
+		ListSessions: func() []session.SessionSummary {
 			infos, err := w.Sessions(ctx)
 			if err != nil {
 				return nil

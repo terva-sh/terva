@@ -7,7 +7,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/permissions"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/i18n"
 )
 
@@ -24,7 +24,7 @@ func (s *wsSession) permissionsView() *ctrlproto.PermissionsView {
 	// rules to inspect but still has a trust posture, and it is the one a yolo
 	// user most wants stated — nothing is asking, so trust is what is left.
 	v := &ctrlproto.PermissionsView{
-		Mode:    string(core.ApprovalYolo),
+		Mode:    string(permission.ApprovalYolo),
 		CWD:     s.cwd,
 		Trusted: s.trusted.Load(),
 	}
@@ -76,7 +76,7 @@ func (s *wsSession) permissionsAction(action string, args map[string]string) err
 		var err error
 		if args["scope"] == "project" {
 			// Project rules are restrict-only — the self-approval ban forbids allow.
-			if decision == string(core.RuleAllow) {
+			if decision == string(permission.RuleAllow) {
 				return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("add_rule: project rules can't grant allow"))
 			}
 			err = setProjectPermissionRule(s.cwd, rule, true)
@@ -109,7 +109,7 @@ func (s *wsSession) permissionsAction(action string, args map[string]string) err
 
 func validRuleDecision(d string) bool {
 	switch d {
-	case string(core.RuleAllow), string(core.RuleDeny), string(core.RuleAsk):
+	case string(permission.RuleAllow), string(permission.RuleDeny), string(permission.RuleAsk):
 		return true
 	}
 	return false
@@ -202,10 +202,53 @@ func (w *Workspace) refreshAllPolicies() {
 		}
 		// A nil policy (yolo + no rules) means "no rules" — clear them, or a
 		// just-removed rule would linger on the gate.
-		var rules []core.PermissionRule
-		if pol, _ := permissions.BuildPolicy(s.argsSnapshot().PermInputs()); pol != nil {
+		var rules []permission.PermissionRule
+		pol, warns := permissions.BuildPolicy(s.argsSnapshot().PermInputs())
+		if pol != nil {
 			rules = pol.Rules
 		}
 		s.gate.SetRules(rules)
+		s.reloadPolicyWarnings(warns)
+	}
+}
+
+// reloadPolicyWarnings replaces the pending policy warnings after a live rule
+// reload. They go out at once when a client is attached to read them; with none
+// attached they wait for the next turn, as the warnings from a session build do,
+// because a notice broadcast to no one is lost.
+func (s *wsSession) reloadPolicyWarnings(warns []string) {
+	s.setPolicyWarnings(warns)
+	if s.hub.attached() {
+		s.flushPolicyWarnings()
+	}
+}
+
+// setPolicyWarnings records the warnings from building this session's
+// permission policy, replacing any not yet shown.
+//
+// A session-build diagnostic reaches stderr before the TUI owns the screen, a
+// muted note, or the daemon's log, and no web client at all. That was tolerable
+// for most diagnostics and not for these: a project config that cannot be
+// parsed drops every restriction it holds (its deny and ask rules, and the
+// extension and MCP disable lists among them), so the agent runs with fewer
+// checks than the repository's author wrote, and nothing the user reads said so. The
+// warnings are kept here and sent as error notices by flushPolicyWarnings.
+func (s *wsSession) setPolicyWarnings(warns []string) {
+	s.mu.Lock()
+	s.policyNotice = append([]string(nil), warns...)
+	s.mu.Unlock()
+}
+
+// flushPolicyWarnings sends the pending policy warnings to every attached
+// client as error notices, once. It runs when a turn starts, because a notice
+// is not replayed in a snapshot, and at session build no client has attached
+// yet. The TUI and the web client both render notices.
+func (s *wsSession) flushPolicyWarnings() {
+	s.mu.Lock()
+	pending := s.policyNotice
+	s.policyNotice = nil
+	s.mu.Unlock()
+	for _, w := range pending {
+		s.broadcast(ctrlproto.NoticeEvent("error", "", w))
 	}
 }

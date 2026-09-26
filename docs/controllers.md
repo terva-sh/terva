@@ -266,7 +266,7 @@ Every command is a `cmd` frame; the server answers with a `resp` (a bare ok, a
 | `sessions.list` | → `{sessions:[SessionInfo]}` | list sessions, newest activity first |
 | `sessions.create` | `{…CreateOpts}` → `{session}` | mint a session. `CreateOpts` carries title/provider/model/persona and the immersive spec: `experience` (`chat`/`play`), `card`, `cast`, `greeting` and `background`, all persisted to session meta so a restart re-materializes what the session was |
 | `sessions.resume` | → `{session}` | load a persisted transcript |
-| `sessions.fork` | `{from_index}` → `{session}` | branch the frame's session at `from_index` into a NEW parent-linked child: it keeps messages `0..from_index` and diverges after; the parent is untouched (the wire story for `core.BranchSession`) |
+| `sessions.fork` | `{from_index}` → `{session}` | branch the frame's session at `from_index` into a NEW parent-linked child: it keeps messages `0..from_index` and diverges after; the parent is untouched (the wire story for `session.BranchSession`) |
 | `sessions.rename` | `{title}` | set the display nickname |
 | `sessions.generate_title` | → `{title}` | regenerate the title from the transcript with a one-shot model call: the on-demand sibling of the automatic `auto_title` pass, and the backfill for old untitled sessions. **BLOCKS on the model** (the same synchronous posture as `compact`), and an explicit request overwrites whatever title exists, manual renames included. The caller updates its own row from the result; a live session's other clients converge via `session_updated` |
 | `sessions.delete` | — | remove a session + transcript |

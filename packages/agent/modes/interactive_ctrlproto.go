@@ -13,6 +13,7 @@ import (
 	"terva.sh/terva/packages/agent/modes/dialogs"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/tui"
@@ -851,7 +852,7 @@ func (i *Interactive) swapModelCarrier(prov, model string, rescue bool) {
 // answer wins; a late answer for a settled call is ignored by the daemon.
 func (i *Interactive) enqueueCarrierPermission(req ctrlproto.PermissionRequest) {
 	sess := i.carrierSession() // capture: the answer must reach the session that asked
-	resp := make(chan core.ConfirmDecision, 1)
+	resp := make(chan permission.ConfirmDecision, 1)
 	cr := &dialogs.ConfirmRequest{
 		ToolName: req.Tool,
 		Preview:  req.Preview,
@@ -1012,9 +1013,9 @@ func renderPermissionsWireView(th tui.Theme, pv ctrlproto.PermissionsView) (info
 
 	decColor := func(d string) string {
 		switch d {
-		case string(core.RuleAllow):
+		case string(permission.RuleAllow):
 			return th.FG256(th.Accent, d)
-		case string(core.RuleDeny):
+		case string(permission.RuleDeny):
 			return th.FG256(th.Error, d)
 		default:
 			return th.FG256(th.Warning, d)

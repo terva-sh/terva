@@ -8,7 +8,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 )
 
 // A converged Kestrelbridge realize, as Kartoittaja would return it: a World, a
@@ -83,7 +83,7 @@ func TestCommitRealizeSeedsPlaySession(t *testing.T) {
 			t.Fatalf("resolve realized session: %v", err)
 		}
 	}
-	meta := play.sess.Meta
+	meta := play.sess.Stage
 	if meta.Experience != build.ExperiencePlay {
 		t.Errorf("experience = %q, want a play session", meta.Experience)
 	}
@@ -152,7 +152,7 @@ func TestRealizeLoreForcesConstant(t *testing.T) {
 	if len(out) != 3 {
 		t.Fatalf("kept %d entries, want 3 (Keyed, Bare, Marked)", len(out))
 	}
-	by := map[string]core.WorldLoreEntry{}
+	by := map[string]session.WorldLoreEntry{}
 	for _, e := range out {
 		by[e.Name] = e
 	}

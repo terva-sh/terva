@@ -57,8 +57,10 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/mode"
+	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -142,7 +144,7 @@ type Config struct {
 	// Supply one when the embedding has a human in it (a chat UI, a
 	// dashboard, a terminal of your own): the callback receives the tool
 	// name and a preview of the call and returns the decision.
-	Confirmer core.Confirmer
+	Confirmer permission.Confirmer
 
 	// Classifier screens the tool calls the user's rules say to ask about:
 	// one cheap model call decides, BEFORE Confirmer is consulted, whether
@@ -195,7 +197,7 @@ type Runtime struct {
 	provider   string
 	model      string
 	cwd        string
-	classifier core.ClassifierMode
+	classifier permission.ClassifierMode
 
 	// activeCancel is set while a Prompt is streaming.
 	activeCancel context.CancelFunc
@@ -269,14 +271,14 @@ func New(cfg Config) (*Runtime, error) {
 	// and the agent would run every tool unchecked, and a library has no
 	// stderr to warn on. Refusing to start is the only signal an embedder
 	// cannot miss. Yolo still works, because it asks for no rules.
-	var gate *core.ConfirmGate
+	var gate *permission.ConfirmGate
 	if !cfg.Yolo {
 		pol, _, perr := permissions.LoadPolicy(args.PermInputs())
 		if perr != nil {
 			return nil, fmt.Errorf("sdk: %w (repair the file, or set Config.Yolo only if this embedding should run every tool call unchecked)", perr)
 		}
 		if pol != nil {
-			gate = core.NewPolicyGate(pol, cfg.Confirmer)
+			gate = permission.NewPolicyGate(pol, cfg.Confirmer)
 			r.AdoptReadOnlySet(pol.ReadOnly)
 			// Screening, inheriting the user's setting when Config.Classifier
 			// is empty — the same rule Provider and Model follow, and the
@@ -326,7 +328,7 @@ func (r *Runtime) Model() string { r.mu.Lock(); defer r.mu.Unlock(); return r.mo
 func (r *Runtime) CWD() string { r.mu.Lock(); defer r.mu.Unlock(); return r.cwd }
 
 // ClassifierMode reports what authority a screening classifier holds over this
-// runtime's tool calls: core.ClassifierOff, ClassifierScreen, or
+// runtime's tool calls: permission.ClassifierOff, ClassifierScreen, or
 // ClassifierApprove.
 //
 // Worth reading at startup. Config.Classifier INHERITS from the user's
@@ -334,7 +336,7 @@ func (r *Runtime) CWD() string { r.mu.Lock(); defer r.mu.Unlock(); return r.cwd 
 // here — including `approve`, where a model answers yes on the user's behalf
 // and your Confirmer is never called. The SDK deliberately prints nothing
 // anywhere, so this accessor is the only thing that will tell you.
-func (r *Runtime) ClassifierMode() core.ClassifierMode {
+func (r *Runtime) ClassifierMode() permission.ClassifierMode {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.classifier
@@ -507,7 +509,7 @@ func (r *Runtime) SetModel(model string) error {
 	if r.agent == nil {
 		return fmt.Errorf("sdk: no agent")
 	}
-	next, err := provider.FindModel(r.provider, model)
+	next, err := modelreg.FindModel(r.provider, model)
 	if err != nil {
 		return err
 	}
@@ -517,7 +519,7 @@ func (r *Runtime) SetModel(model string) error {
 	// firing requests at the old one. The SDK has no in-place rebuild
 	// (cross-endpoint switches are a fresh Runtime), so reject it
 	// rather than silently mis-route.
-	if cur, curErr := provider.FindModel(r.provider, r.model); curErr == nil && cur.BaseURL != next.BaseURL {
+	if cur, curErr := modelreg.FindModel(r.provider, r.model); curErr == nil && cur.BaseURL != next.BaseURL {
 		return fmt.Errorf("sdk: model %q routes to a different endpoint; create a new Runtime to switch", model)
 	}
 	r.agent.SetModel(model)
@@ -559,7 +561,7 @@ func (r *Runtime) Close() error {
 // ListModels returns every model known to the runtime for the
 // current provider (catalog + live discovery if cached).
 func (r *Runtime) ListModels() []ModelInfo {
-	models := provider.ModelsForProvider(r.Provider())
+	models := modelreg.ModelsForProvider(r.Provider())
 	out := make([]ModelInfo, 0, len(models))
 	for _, m := range models {
 		out = append(out, ModelInfo{

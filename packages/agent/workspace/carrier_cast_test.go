@@ -74,7 +74,7 @@ func TestCarrierPlayInjectsActorSpawn(t *testing.T) {
 }
 
 // TestSessionInfoCarriesCast: a play session's cast (from CreateOpts →
-// SessionMeta.Cast) is surfaced on SessionInfo, so the Stage drawer can show who
+// session.Stage.Cast) is surfaced on SessionInfo, so the Stage drawer can show who
 // the director can bring on stage. A solo chat carries no cast.
 func TestSessionInfoCarriesCast(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
@@ -206,14 +206,14 @@ func TestCastSpeak(t *testing.T) {
 	sub := s.hub.add(nil, true)
 
 	// Refused cases start no turn.
-	s.sess.Meta.Experience = build.ExperiencePlay
+	s.sess.Stage.Experience = build.ExperiencePlay
 	if err := s.speak(""); err == nil {
 		t.Error("empty actor should error")
 	}
 	if err := s.speak("ghost"); err == nil {
 		t.Error("an actor not in the cast should error")
 	}
-	s.sess.Meta.Experience = build.ExperienceChat
+	s.sess.Stage.Experience = build.ExperienceChat
 	if err := s.speak("guide"); err == nil {
 		t.Error("cast.speak on a chat session should error")
 	}
@@ -222,7 +222,7 @@ func TestCastSpeak(t *testing.T) {
 	}
 
 	// A valid actor on a play session starts a directed turn naming the actor.
-	s.sess.Meta.Experience = build.ExperiencePlay
+	s.sess.Stage.Experience = build.ExperiencePlay
 	if err := s.speak("guide"); err != nil {
 		t.Fatalf("speak: %v", err)
 	}

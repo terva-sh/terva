@@ -2,7 +2,10 @@
 
 package build
 
-import "terva.sh/terva/packages/core"
+import (
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
+)
 
 // ScriptingSupported reports whether this binary carries the jsengine
 // scripting consumer (the code_execution tool). Built without
@@ -14,6 +17,6 @@ func ScriptingSupported() bool { return false }
 // wireScriptingHostCall is the no-op twin of the terva_scripting hook in
 // scripting_on.go (called from WireHostToolDispatcher on every
 // agent-construction seam).
-func wireScriptingHostCall(*core.Agent, *core.ConfirmGate) {}
+func wireScriptingHostCall(*core.Agent, *permission.ConfirmGate) {}
 
-func wireScriptingRegistry(*core.Agent, *core.ConfirmGate, core.Registry, *core.ReadOnlySet) {}
+func wireScriptingRegistry(*core.Agent, *permission.ConfirmGate, core.Registry, *core.ReadOnlySet) {}

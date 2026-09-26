@@ -4,8 +4,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/privfs"
+	"terva.sh/terva/packages/session"
 )
 
 // Layout under $TERVA_HOME:
@@ -16,7 +16,7 @@ import (
 //	  projects/<ProjectKey>/memory.md   facts about one repo
 //	  projects/<ProjectKey>/archive/    archived project facts
 //
-// <ProjectKey> is core.ProjectKey(cwd) — the same key the sessions directory
+// <ProjectKey> is session.ProjectKey(cwd) — the same key the sessions directory
 // buckets by, and the same one the memory EXTENSION used for its own per-project
 // dirs, which is what makes the copy-forward below a straight file move rather
 // than a re-keying.
@@ -47,7 +47,7 @@ func ProjectDir(home, cwd string) string {
 	if home == "" || cwd == "" {
 		return ""
 	}
-	return filepath.Join(Root(home), projectsDirName, core.ProjectKey(cwd))
+	return filepath.Join(Root(home), projectsDirName, session.ProjectKey(cwd))
 }
 
 // ArchiveDir is where a scope's archived entries live, given that scope's own
@@ -102,7 +102,7 @@ func Adopt(home, cwd string) error {
 	// The extension bucketed by the same ProjectKey, so the source is the
 	// identically-named directory under its own projects/ tree.
 	return adoptFile(
-		filepath.Join(extRoot, projectsDirName, core.ProjectKey(cwd), projectFileName),
+		filepath.Join(extRoot, projectsDirName, session.ProjectKey(cwd), projectFileName),
 		filepath.Join(dir, projectFileName),
 	)
 }

@@ -13,9 +13,9 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/deliverable"
 	"terva.sh/terva/packages/agent/swarm"
-	"terva.sh/terva/packages/core"
-	"terva.sh/terva/packages/lineframe"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/privfs"
+	"terva.sh/terva/packages/provider/lineframe"
 )
 
 // Runner drives one foreign-agent worker as a swarm.Runner.
@@ -52,7 +52,7 @@ type Runner struct {
 	// verdict. Nil means no approver is watching (a resumed worker whose session
 	// is gone, or a host that wired none); the runner then denies asks cleanly so
 	// the worker unwinds with a reason rather than hanging.
-	confirmer core.Confirmer
+	confirmer permission.Confirmer
 
 	// stdin is the child's input pipe, guarded by stdinMu because two goroutines
 	// write it: pumpStdin (the opening turn and inbox steers) and handleAsk (the
@@ -68,7 +68,7 @@ type Runner struct {
 // routing the worker's permission requests (nil to deny them). The host's
 // Config.NewRunner returns this for any agent carrying a Backend; agents with no
 // backend keep the native swarm.NewExecRunner.
-func NewRunner(a *swarm.Agent, b Backend, resolved build.Resolved, confirmer core.Confirmer) *Runner {
+func NewRunner(a *swarm.Agent, b Backend, resolved build.Resolved, confirmer permission.Confirmer) *Runner {
 	return &Runner{agent: a, backend: b, resolved: resolved, confirmer: confirmer}
 }
 
@@ -386,11 +386,20 @@ func (r *Runner) pumpStdin(brief Briefing, listener *swarm.Listener, lerr error,
 			r.closeStdin()
 			return
 		case "cancel":
-			// terva's cancel aborts the in-flight turn but keeps the daemon
-			// alive. No foreign CLI in the table exposes a mid-turn interrupt
-			// frame, so we cannot honor that without killing the worker outright
-			// — which cancel is explicitly NOT. Surface it rather than pretend.
-			sink.Transcript("worker: " + r.backend.Name + " cannot cancel a turn mid-flight; use stop to end the worker")
+			// Cancel stops the in-flight turn and keeps the worker alive. A
+			// backend with an Interrupt frame does exactly that. One without it
+			// could only be killed, which cancel is explicitly NOT, so say so
+			// rather than pretend.
+			if r.backend.Interrupt == nil {
+				sink.Transcript("worker: " + r.backend.Name + " cannot cancel a turn mid-flight; use stop to end the worker")
+				continue
+			}
+			frame, err := r.backend.Interrupt()
+			if err != nil {
+				sink.Transcript("worker: could not encode an interrupt for " + r.backend.Name + ": " + err.Error())
+				continue
+			}
+			r.writeStdin(frame)
 		}
 	}
 }
@@ -410,9 +419,9 @@ func (r *Runner) pumpStdin(brief Briefing, listener *swarm.Listener, lerr error,
 //
 // A nil Confirmer — a resumed worker whose session is gone — denies cleanly with
 // a reason instead of waiting on an answer that never comes.
-func (r *Runner) decide(ctx context.Context, tool, preview string) core.ConfirmDecision {
+func (r *Runner) decide(ctx context.Context, tool, preview string) permission.ConfirmDecision {
 	if r.confirmer == nil {
-		return core.ConfirmDecision{Allow: false, Reason: "no approver is available for this worker; denied"}
+		return permission.ConfirmDecision{Allow: false, Reason: "no approver is available for this worker; denied"}
 	}
 	return r.confirmer.Confirm(ctx, tool, "worker "+r.agent.ID+": "+preview)
 }

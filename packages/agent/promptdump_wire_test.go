@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/build"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -20,7 +20,7 @@ func TestPromptDumpWireReflectsTheSessionTranscript(t *testing.T) {
 	home := testsupport.TempDir(t)
 	t.Setenv("TERVA_HOME", home)
 
-	sess, err := core.NewSession(home, home, "openai-codex", "gpt-5.6-terra", "test")
+	sess, err := session.NewSession(home, home, "openai-codex", "gpt-5.6-terra", "test")
 	if err != nil {
 		t.Fatal(err)
 	}

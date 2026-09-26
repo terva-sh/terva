@@ -8,6 +8,7 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -37,12 +38,12 @@ func TestTicketOptOutFlagDropsTools(t *testing.T) {
 	dir := ticketStoreDir(t)
 
 	// The control: without the flag this same directory registers all ten.
-	on := BuildToolRegistry(Args{}, core.ApprovalWorkspace, dir, nil, "", "", false, nil)
+	on := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, dir, nil, "", "", false, nil)
 	if _, ok := on["ticket_get"]; !ok {
 		t.Fatal("no ticket tools without the flag either: the store gate is not what this test is measuring")
 	}
 
-	off := BuildToolRegistry(Args{NoTicket: true}, core.ApprovalWorkspace, dir, nil, "", "", false, nil)
+	off := BuildToolRegistry(Args{NoTicket: true}, permission.ApprovalWorkspace, dir, nil, "", "", false, nil)
 	assertNoTicketTools(t, off, "--no-ticket")
 }
 
@@ -52,7 +53,7 @@ func TestTicketOptOutUserConfigDropsTools(t *testing.T) {
 	t.Setenv("TERVA_HOME", home)
 	writeUserConfig(t, home, config.Config{Tickets: ticketsOff()})
 
-	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, ticketStoreDir(t), nil, "", "", false, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, ticketStoreDir(t), nil, "", "", false, nil)
 	assertNoTicketTools(t, reg, "tickets:false on the user layer")
 }
 
@@ -64,7 +65,7 @@ func TestTicketOptOutProjectConfigDropsTools(t *testing.T) {
 	dir := ticketStoreDir(t)
 	writeProjectConfig(t, dir, `{"tickets":false}`)
 
-	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, dir, nil, "", "", false, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, dir, nil, "", "", false, nil)
 	assertNoTicketTools(t, reg, "tickets:false on the project layer")
 }
 
@@ -78,7 +79,7 @@ func TestTicketProjectConfigCannotReEnable(t *testing.T) {
 	dir := ticketStoreDir(t)
 	writeProjectConfig(t, dir, `{"tickets":true}`)
 
-	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, dir, nil, "", "", false, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, dir, nil, "", "", false, nil)
 	assertNoTicketTools(t, reg, "a project's tickets:true over the user's false")
 }
 
@@ -92,7 +93,7 @@ func TestTicketDefaultStaysOn(t *testing.T) {
 	dir := ticketStoreDir(t)
 	writeProjectConfig(t, dir, `{"tickets":true}`)
 
-	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, dir, nil, "", "", false, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, dir, nil, "", "", false, nil)
 	for _, name := range allTicketTools() {
 		if _, ok := reg[name]; !ok {
 			t.Errorf("%s missing though nothing turned the tools off", name)
@@ -212,7 +213,7 @@ func TestTicketAddendumSplitsWithPlanMode(t *testing.T) {
 		t.Error("a session with the write tools is never told the revision protocol")
 	}
 
-	plan, err := Resolve(Args{Provider: "openai", Model: "gpt-5", CWD: dir, Approval: string(core.ApprovalPlan)}, false)
+	plan, err := Resolve(Args{Provider: "openai", Model: "gpt-5", CWD: dir, Approval: string(permission.ApprovalPlan)}, false)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -234,7 +235,7 @@ func TestTicketOptOutLeavesTheStoreOnDisk(t *testing.T) {
 	writeUserConfig(t, home, config.Config{Tickets: ticketsOff()})
 	dir := ticketStoreDir(t)
 
-	reg := BuildToolRegistry(Args{NoTicket: true}, core.ApprovalWorkspace, dir, nil, "", "", false, nil)
+	reg := BuildToolRegistry(Args{NoTicket: true}, permission.ApprovalWorkspace, dir, nil, "", "", false, nil)
 	assertNoTicketTools(t, reg, "the flag and the config key together")
 	if _, err := os.Stat(filepath.Join(dir, ".tickets")); err != nil {
 		t.Errorf("the store itself should be untouched by an opt-out: %v", err)

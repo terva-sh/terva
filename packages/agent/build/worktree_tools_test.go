@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -36,14 +36,14 @@ func TestWorktreeToolsRegisterOnlyInGitRepos(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	repo := gitRepoDir(t)
 
-	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, repo, nil, "", "", false, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, repo, nil, "", "", false, nil)
 	for _, name := range worktreeToolNames {
 		if _, ok := reg[name]; !ok {
 			t.Errorf("%s missing from a git-repo session", name)
 		}
 	}
 
-	plain := BuildToolRegistry(Args{}, core.ApprovalWorkspace, testsupport.TempDir(t), nil, "", "", false, nil)
+	plain := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, testsupport.TempDir(t), nil, "", "", false, nil)
 	for _, name := range worktreeToolNames {
 		if _, ok := plain[name]; ok {
 			t.Errorf("%s registered outside any git repo", name)
@@ -57,7 +57,7 @@ func TestWorktreeToolsPlanModeKeepsOnlyList(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	repo := gitRepoDir(t)
 
-	plan := BuildToolRegistry(Args{}, core.ApprovalPlan, repo, nil, "", "", false, nil)
+	plan := BuildToolRegistry(Args{}, permission.ApprovalPlan, repo, nil, "", "", false, nil)
 	if _, ok := plan["worktree_list"]; !ok {
 		t.Error("worktree_list should survive plan mode (read-only)")
 	}

@@ -11,12 +11,12 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
-// The session state sidecar on the wire (workspace_state.go). core is tested on
-// the FILE (packages/core/session_state_test.go); these are the guards for what
+// The session state sidecar on the wire (workspace_state.go). The store is tested on
+// the FILE (packages/session/session_state_test.go); these are the guards for what
 // the daemon adds on top: id resolution, the tenant-scoped write, and the one
 // error a user can act on.
 
@@ -171,7 +171,7 @@ func TestAnOverCapDraftIsRefusedAndLeavesTheOldOne(t *testing.T) {
 	if err := w.SetComposerDraft(ctx, id, ctrlproto.ComposerDraft{Text: "the keeper"}); err != nil {
 		t.Fatal(err)
 	}
-	huge := strings.Repeat("x", core.MaxSessionStateBytes+1)
+	huge := strings.Repeat("x", session.MaxSessionStateBytes+1)
 	err := w.SetComposerDraft(ctx, id, ctrlproto.ComposerDraft{Text: huge})
 	if err == nil {
 		t.Fatal("an over-cap draft was accepted")

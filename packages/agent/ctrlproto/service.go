@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 
 	"terva.sh/terva/packages/core"
+
+	"terva.sh/terva/packages/core/permission"
 )
 
 // WorkspaceService is everything a frontend needs to drive and manage one
@@ -124,7 +126,7 @@ type WorkspaceService interface {
 	// as an [EventPermissionRequest] event with the matching callID. The first
 	// client to answer wins; late answers for an already-resolved call are
 	// ignored.
-	Approve(ctx context.Context, sess, callID string, d core.ConfirmDecision) error
+	Approve(ctx context.Context, sess, callID string, d permission.ConfirmDecision) error
 
 	// Answer resolves a pending ask previously surfaced as an
 	// [EventAskRequest] event with the matching askID, one answer per
@@ -153,7 +155,7 @@ type WorkspaceService interface {
 	// ForkSession branches sess at fromIndex into a NEW parent-linked session:
 	// the child keeps the parent's messages 0..fromIndex (inclusive) and diverges
 	// after, the parent untouched — SillyTavern's branch/checkpoint, and the wire
-	// story for core.BranchSession. The child inherits the parent's persona and
+	// story for session.BranchSession. The child inherits the parent's persona and
 	// immersive spec. Returns the child's descriptor; [CodeBusy] if the parent has
 	// a turn running (its transcript is moving under the index).
 	ForkSession(ctx context.Context, sess string, fromIndex int) (SessionInfo, error)
@@ -879,7 +881,7 @@ type PermissionsView struct {
 
 // PermissionRule is one compiled approval rule for the inspector: which tool
 // (and optional argument pattern) resolves to what decision, and where it came
-// from. The wire mirror of core.PermissionRule.
+// from. The wire mirror of permission.PermissionRule.
 type PermissionRule struct {
 	Tool      string `json:"tool"`
 	Args      string `json:"args,omitempty"` // regexp source, when the rule is argument-scoped
@@ -1235,7 +1237,8 @@ type SettingOption struct {
 type TaskList struct {
 	Tasks []TaskInfo `json:"tasks"`
 	// Backends are the worker backends a human may spawn against (worker.Names()
-	// — the same set the swarm_spawn tool's enum is built from). Native (empty
+	// — the same registry worker.AllowSpawn checks a swarm_spawn `backend`
+	// against; the tool's schema carries no enum). Native (empty
 	// backend) is always available and is NOT listed here. WorkersEnabled mirrors
 	// config.ExternalWorkersEnabled(): false still lists the backends (so the UI
 	// can show them greyed, with a hint) but a foreign spawn is gated and refused.

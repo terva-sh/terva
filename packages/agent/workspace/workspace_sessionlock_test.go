@@ -7,8 +7,8 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -35,10 +35,10 @@ func TestALiveWorkspaceSessionHoldsItsLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if !core.SessionIsLocked(info.Path) {
+	if !session.SessionIsLocked(info.Path) {
 		t.Fatal("a live workspace session does not hold its lock")
 	}
-	claim, ok := core.SessionLockClaim(info.Path)
+	claim, ok := session.SessionLockClaim(info.Path)
 	if !ok || claim.Reason == "" {
 		t.Fatalf("the claim must say why the session is held: %+v", claim)
 	}
@@ -59,7 +59,7 @@ func TestDeletingASessionTakesItsClaimRecord(t *testing.T) {
 	if err := w.DeleteSession(context.Background(), info.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	for _, p := range core.SessionLockArtifactPaths(path) {
+	for _, p := range session.SessionLockArtifactPaths(path) {
 		if _, err := os.Stat(p); err == nil {
 			t.Errorf("%s survived the delete", p)
 		}
@@ -67,7 +67,7 @@ func TestDeletingASessionTakesItsClaimRecord(t *testing.T) {
 }
 
 // TestArchivingOurOwnLiveSessionStillWorks: the workspace closes its handle
-// before archiving, so the guard added to core.ArchiveSession must never refuse
+// before archiving, so the guard added to session.ArchiveSession must never refuse
 // the daemon that asked for it.
 func TestArchivingOurOwnLiveSessionStillWorks(t *testing.T) {
 	w, _ := lockWorkspace(t)
@@ -90,7 +90,7 @@ func TestArchivingOurOwnLiveSessionStillWorks(t *testing.T) {
 	if _, err := w.ArchiveSession(context.Background(), info.ID); err != nil {
 		t.Fatalf("archiving our own live session must work: %v", err)
 	}
-	for _, p := range core.SessionLockArtifactPaths(info.Path) {
+	for _, p := range session.SessionLockArtifactPaths(info.Path) {
 		if _, err := os.Stat(p); err == nil {
 			t.Errorf("%s survived the archive", p)
 		}

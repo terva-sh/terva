@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 
 	"terva.sh/terva/packages/privfs"
 )
@@ -164,7 +164,7 @@ func InitAudit(home string) { auditSink = newAuditLog(home) }
 // ladder's deferred audit never sees those checks, so each door records its
 // own. A nil gate reports the empty mode, matching the ladder's spelling for
 // a gateless (pure yolo) session.
-func recordGateAudit(via, tool string, args json.RawMessage, gate *core.ConfirmGate, allowed bool, reason string) {
+func recordGateAudit(via, tool string, args json.RawMessage, gate *permission.ConfirmGate, allowed bool, reason string) {
 	mode := ""
 	if gate != nil {
 		mode = string(gate.Mode())

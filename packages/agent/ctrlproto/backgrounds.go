@@ -5,7 +5,7 @@ import "context"
 // Scene backdrops on the wire — the last member of the content-library family.
 // A background is just an image the Stage app renders behind a conversation, so
 // there is no parsing or identity here; the only twist is that a background is
-// BOUND per session (BackgroundBind writes SessionMeta.Background), unlike the
+// BOUND per session (BackgroundBind writes session.Stage.Background), unlike the
 // global card/persona stores.
 //
 // BackgroundsController is OPTIONAL, like the other library controllers: a

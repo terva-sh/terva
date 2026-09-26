@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -37,7 +37,7 @@ func lockCmdFixture(t *testing.T) (id, path string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := core.NewSession(home, realCwd, "openai", "gpt-5", "test")
+	s, err := session.NewSession(home, realCwd, "openai", "gpt-5", "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func lockCmdFixture(t *testing.T) (id, path string) {
 		t.Fatal(err)
 	}
 	_ = s.Close() // closed, so the bucket holds a session nobody has open
-	return core.SessionIDFromPath(path), path
+	return session.SessionIDFromPath(path), path
 }
 
 func TestSessionCommandFallsThroughForEverythingElse(t *testing.T) {
@@ -80,7 +80,7 @@ func TestSessionLockThenUnlockRoundTrips(t *testing.T) {
 	if handled, err := runSessionCommand([]string{"session", "lock", id, "--reason", "held for review"}); !handled || err != nil {
 		t.Fatalf("lock: handled=%v err=%v", handled, err)
 	}
-	claim, ok := core.SessionLockClaim(path)
+	claim, ok := session.SessionLockClaim(path)
 	if !ok || claim.Reason != "held for review" {
 		t.Fatalf("the claim did not record the reason: %+v", claim)
 	}
@@ -88,8 +88,8 @@ func TestSessionLockThenUnlockRoundTrips(t *testing.T) {
 		t.Error("a claim must always carry an expiry")
 	}
 	// The claiming process has exited by now, and the claim must still bind.
-	blocked, _, err := core.OpenSession(path)
-	if !errors.Is(err, core.ErrSessionLocked) {
+	blocked, _, err := session.OpenSession(path)
+	if !errors.Is(err, session.ErrSessionLocked) {
 		t.Fatalf("the claim did not refuse an open: %v", err)
 	}
 	if blocked != nil {
@@ -99,7 +99,7 @@ func TestSessionLockThenUnlockRoundTrips(t *testing.T) {
 	if handled, err := runSessionCommand([]string{"session", "unlock", id}); !handled || err != nil {
 		t.Fatalf("unlock: handled=%v err=%v", handled, err)
 	}
-	reopened, _, err := core.OpenSession(path)
+	reopened, _, err := session.OpenSession(path)
 	if err != nil {
 		t.Fatalf("an unlocked session must open: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestSessionLockRefusesAnIdThatEscapesTheBucket(t *testing.T) {
 
 func TestSessionUnlockRefusesWhileATervaHoldsIt(t *testing.T) {
 	id, path := lockCmdFixture(t)
-	held, _, err := core.OpenSession(path)
+	held, _, err := session.OpenSession(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestSessionUnlockRefusesWhileATervaHoldsIt(t *testing.T) {
 
 func TestSessionLocksListsAHeldSession(t *testing.T) {
 	_, path := lockCmdFixture(t)
-	held, _, err := core.OpenSession(path)
+	held, _, err := session.OpenSession(path)
 	if err != nil {
 		t.Fatal(err)
 	}

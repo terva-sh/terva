@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -29,7 +30,7 @@ func runList(t *testing.T, home, cwd, args string) core.ToolResult {
 // would make a paging assertion depend on filesystem timestamp resolution.
 func seedSession(t *testing.T, home, project, id, marker string, mod time.Time) string {
 	t.Helper()
-	dir := core.SessionsDir(home, project)
+	dir := session.SessionsDir(home, project)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}

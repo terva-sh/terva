@@ -8,7 +8,7 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/tools"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 )
 
 // TestOverrideClientUnknownModel: a per-generation override (Phase 7) naming a
@@ -37,7 +37,7 @@ func TestApplyCastModels(t *testing.T) {
 		"Elira": {Persona: "clothier"},
 		"Guard": {Card: "/x/guard.png"},
 	}
-	applyCastModels(cast, map[string]core.CastRoute{
+	applyCastModels(cast, map[string]session.CastRoute{
 		"Elira": {Provider: "openai", Model: "gpt-5"},
 		"Ghost": {Provider: "x", Model: "y"}, // not in the cast — ignored
 	})

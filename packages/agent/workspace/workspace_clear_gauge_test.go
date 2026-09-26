@@ -7,6 +7,7 @@ import (
 	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -16,7 +17,7 @@ import (
 func clearGaugeSession(t *testing.T) *wsSession {
 	t.Helper()
 	tmp := testsupport.TempDir(t)
-	sess, err := core.NewSession(tmp, tmp, "p", "claude-sonnet-4-5", "test")
+	sess, err := session.NewSession(tmp, tmp, "p", "claude-sonnet-4-5", "test")
 	if err != nil {
 		t.Fatalf("session: %v", err)
 	}

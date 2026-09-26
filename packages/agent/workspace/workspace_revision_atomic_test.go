@@ -12,6 +12,7 @@ import (
 	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -19,7 +20,7 @@ func TestConcurrentRevisionUsesEpochOnce(t *testing.T) {
 	for round := range 30 {
 		t.Run(fmt.Sprint(round), func(t *testing.T) {
 			dir := testsupport.TempDir(t)
-			sess, err := core.NewSession(dir, dir, "test", "test", "test")
+			sess, err := session.NewSession(dir, dir, "test", "test", "test")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -56,7 +57,7 @@ func TestConcurrentRevisionUsesEpochOnce(t *testing.T) {
 			}
 			// Read-only: the session is still open above, and taking a second
 			// write handle on it is what the session lock refuses.
-			replay, err := core.ReadSessionMessages(sess.Path)
+			replay, err := session.ReadSessionMessages(sess.Path)
 			if err != nil {
 				t.Fatal(err)
 			}

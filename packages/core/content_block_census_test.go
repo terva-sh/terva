@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"terva.sh/terva/packages/core/transcriptcodec"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -31,7 +32,7 @@ func TestEveryContentBlockIsHandledByBothEncoders(t *testing.T) {
 	}
 
 	for _, enc := range []struct{ what, path string }{
-		{"session file (encodeWireBlocks)", "session.go"},
+		{"session file (transcriptcodec.EncodeBlocks)", "transcriptcodec/codec.go"},
 		{"ctrlproto (contentToWire)", "wire.go"},
 	} {
 		src := readFile(t, enc.path)
@@ -146,14 +147,14 @@ func TestCompactionBlockRoundTripsBothEncoders(t *testing.T) {
 	msg := provider.Message{Role: provider.RoleAssistant, Content: []provider.Content{want}}
 
 	t.Run("session file", func(t *testing.T) {
-		wire := encodeWireMessage(msg)
+		wire := transcriptcodec.EncodeMessage(msg)
 		if len(wire.Content) != 1 {
 			t.Fatalf("want 1 encoded block, got %d", len(wire.Content))
 		}
-		if wire.Content[0].Type != blockCompaction {
-			t.Errorf("discriminator = %q, want %q", wire.Content[0].Type, blockCompaction)
+		if wire.Content[0].Type != "compaction_summary" { // the on-disk discriminator
+			t.Errorf("discriminator = %q, want %q", wire.Content[0].Type, "compaction_summary")
 		}
-		got, ok := decodeWireBlock(wire.Content[0])
+		got, ok := transcriptcodec.DecodeBlock(wire.Content[0])
 		if !ok {
 			t.Fatal("decode rejected a block this package just encoded")
 		}

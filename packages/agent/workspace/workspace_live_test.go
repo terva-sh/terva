@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/build"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -16,7 +16,7 @@ import (
 // id up verbatim when every sibling method resolved it.
 func TestLiveResolvesDefaultSession(t *testing.T) {
 	root, cwd := testsupport.TempDir(t), testsupport.TempDir(t)
-	sess, err := core.NewSession(root, cwd, "prov", "model", "test")
+	sess, err := session.NewSession(root, cwd, "prov", "model", "test")
 	if err != nil {
 		t.Fatal(err)
 	}

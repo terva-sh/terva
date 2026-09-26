@@ -12,6 +12,7 @@ import (
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -29,12 +30,12 @@ func TestScriptingClassification(t *testing.T) {
 }
 
 func TestScriptingDispatchKeepsCallingToolGeneration(t *testing.T) {
-	for _, mode := range []core.ApprovalMode{core.ApprovalWorkspace, core.ApprovalAutoEdit, core.ApprovalPlan} {
+	for _, mode := range []permission.ApprovalMode{permission.ApprovalWorkspace, permission.ApprovalAutoEdit, permission.ApprovalPlan} {
 		t.Run(string(mode), func(t *testing.T) {
 			ag := coretest.NewAgent(nil, "fake", "", nil)
 			ag.SetToolsWithReadOnly(core.Registry{"echo": echoTool{}}, core.NewReadOnlySet("echo"))
 			ctx, _, _ := ag.ToolForCall(context.Background(), "echo")
-			gate := core.NewPolicyGate(&core.PermissionPolicy{Mode: mode}, nil)
+			gate := permission.NewPolicyGate(&permission.PermissionPolicy{Mode: mode}, nil)
 			dispatch := scriptHostDispatcher(ag, gate)
 			ag.SetToolsWithReadOnly(core.Registry{"echo": echoTool{}}, core.NewReadOnlySet())
 			if _, err := dispatch(ctx, "echo", json.RawMessage(`{}`)); err != nil {
@@ -65,7 +66,7 @@ func TestMutatingScriptToolIsNotReadOnly(t *testing.T) {
 		t.Fatal("code_execution_mutating must classify as a first-party builtin")
 	}
 
-	ws := BuildToolRegistry(Args{}, core.ApprovalWorkspace, testsupport.TempDir(t), nil, "", "", false, nil)
+	ws := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, testsupport.TempDir(t), nil, "", "", false, nil)
 	cm, ok := ws["code_execution_mutating"]
 	if !ok {
 		t.Fatal("code_execution_mutating missing from the workspace registry")
@@ -76,7 +77,7 @@ func TestMutatingScriptToolIsNotReadOnly(t *testing.T) {
 		t.Fatalf("group = %q, want a group of its own, distinct from scripting", g)
 	}
 
-	plan := BuildToolRegistry(Args{}, core.ApprovalPlan, testsupport.TempDir(t), nil, "", "", false, nil)
+	plan := BuildToolRegistry(Args{}, permission.ApprovalPlan, testsupport.TempDir(t), nil, "", "", false, nil)
 	if _, ok := plan["code_execution_mutating"]; ok {
 		t.Fatal("code_execution_mutating must not enter a plan-mode registry: plan mode promises read-only")
 	}
@@ -116,8 +117,8 @@ func TestMutatingScriptToolWriteIsGated(t *testing.T) {
 		"code_execution_mutating": cm,
 		"echo":                    echoTool{},
 	})
-	gate := core.NewPolicyGate(&core.PermissionPolicy{
-		Mode:     core.ApprovalPlan,
+	gate := permission.NewPolicyGate(&permission.PermissionPolicy{
+		Mode:     permission.ApprovalPlan,
 		ReadOnly: core.NewReadOnlySet("read"),
 	}, nil)
 	WireHostToolDispatcher(ag, nil, gate)
@@ -157,7 +158,7 @@ func TestScriptingHostCallAudits(t *testing.T) {
 }
 
 func TestScriptingRegistryAndPlanMode(t *testing.T) {
-	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, testsupport.TempDir(t), nil, "", "", false, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, testsupport.TempDir(t), nil, "", "", false, nil)
 	ce, ok := reg["code_execution"]
 	if !ok {
 		t.Fatal("code_execution missing from the workspace registry")
@@ -166,7 +167,7 @@ func TestScriptingRegistryAndPlanMode(t *testing.T) {
 		t.Fatalf("group = %q, want scripting (lazy visibility)", g)
 	}
 	// Read-only classification means it survives the plan-mode prune.
-	plan := BuildToolRegistry(Args{}, core.ApprovalPlan, testsupport.TempDir(t), nil, "", "", false, nil)
+	plan := BuildToolRegistry(Args{}, permission.ApprovalPlan, testsupport.TempDir(t), nil, "", "", false, nil)
 	if _, ok := plan["code_execution"]; !ok {
 		t.Fatal("code_execution should survive plan mode while its bindings are read-only")
 	}
@@ -201,8 +202,8 @@ func TestScriptingHostCallGateDenies(t *testing.T) {
 		"code_execution": ce,
 		"echo":           echoTool{},
 	})
-	gate := core.NewPolicyGate(&core.PermissionPolicy{
-		Mode:     core.ApprovalPlan,
+	gate := permission.NewPolicyGate(&permission.PermissionPolicy{
+		Mode:     permission.ApprovalPlan,
 		ReadOnly: core.NewReadOnlySet("read"),
 	}, nil)
 	WireHostToolDispatcher(ag, nil, gate)

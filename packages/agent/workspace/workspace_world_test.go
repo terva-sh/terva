@@ -9,8 +9,8 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // World lore (Worlds L1): world.lore.put / world.lore.delete persist to the
@@ -91,12 +91,12 @@ func TestWorldLorePutDeletePersists(t *testing.T) {
 // a targeted entry only its audience (whitespace/case-forgiving), and the
 // scene authority ("") sees everything.
 func TestWorldLoreFor(t *testing.T) {
-	entries := []core.WorldLoreEntry{
+	entries := []session.WorldLoreEntry{
 		{Name: "world", Constant: true, Content: "shared"},
 		{Name: "elira-secret", Keys: []string{"debt"}, Content: "x", Audience: []string{" elira "}},
 		{Name: "pair-secret", Keys: []string{"plan"}, Content: "y", Audience: []string{"Elira", "Rook"}},
 	}
-	names := func(es []core.WorldLoreEntry) string {
+	names := func(es []session.WorldLoreEntry) string {
 		var out []string
 		for _, e := range es {
 			out = append(out, e.Name)
@@ -157,7 +157,7 @@ func TestScenePinStaleReachesSessionInfo(t *testing.T) {
 		live.agent.SetMessages(msgs)
 	}
 	beats(4)
-	put(ctrlproto.WorldLoreEntry{Name: core.SceneStateName, Content: "Veyra waits outside the locked door."})
+	put(ctrlproto.WorldLoreEntry{Name: session.SceneStateName, Content: "Veyra waits outside the locked door."})
 	if got := live.info().ScenePinStale; got != 0 {
 		t.Fatalf("a just-written pin has no drift, got %d", got)
 	}
@@ -174,7 +174,7 @@ func TestScenePinStaleReachesSessionInfo(t *testing.T) {
 	}
 
 	// Rewriting the card clears it.
-	put(ctrlproto.WorldLoreEntry{Name: core.SceneStateName, Content: "Veyra is inside; the requisition is signed."})
+	put(ctrlproto.WorldLoreEntry{Name: session.SceneStateName, Content: "Veyra is inside; the requisition is signed."})
 	if got := live.info().ScenePinStale; got != 0 {
 		t.Fatalf("a rewritten pin clears the drift, got %d", got)
 	}
@@ -186,20 +186,20 @@ func TestScenePinStaleReachesSessionInfo(t *testing.T) {
 // every time an unrelated entry was added would report a card as fresh for
 // exactly as long as the author kept touching other lore.
 func TestStampScenePin(t *testing.T) {
-	pin := func(es []core.WorldLoreEntry) core.WorldLoreEntry {
+	pin := func(es []session.WorldLoreEntry) session.WorldLoreEntry {
 		for _, e := range es {
-			if core.IsSceneState(e.Name) {
+			if session.IsSceneState(e.Name) {
 				return e
 			}
 		}
 		t.Fatalf("no pin in %+v", es)
-		return core.WorldLoreEntry{}
+		return session.WorldLoreEntry{}
 	}
 
 	// First write of the pin dates it at the current message count.
-	prev := []core.WorldLoreEntry{{Name: "The bell", Keys: []string{"bell"}, Content: "Rings at dusk."}}
-	next := append(append([]core.WorldLoreEntry(nil), prev...),
-		core.WorldLoreEntry{Name: core.SceneStateName, Constant: true, Content: "Day 14, first light."})
+	prev := []session.WorldLoreEntry{{Name: "The bell", Keys: []string{"bell"}, Content: "Rings at dusk."}}
+	next := append(append([]session.WorldLoreEntry(nil), prev...),
+		session.WorldLoreEntry{Name: session.SceneStateName, Constant: true, Content: "Day 14, first light."})
 	got := stampScenePin(next, prev, 6)
 	if pin(got).PinnedAt != 6 {
 		t.Fatalf("a new pin dates at the write, got %d", pin(got).PinnedAt)
@@ -209,8 +209,8 @@ func TestStampScenePin(t *testing.T) {
 	// rewritten in the list but its content is identical — it keeps its date,
 	// and the drift keeps growing.
 	prev = got
-	next = append(append([]core.WorldLoreEntry(nil), prev...),
-		core.WorldLoreEntry{Name: "The debt", Keys: []string{"debt"}, Content: "Three favors owed."})
+	next = append(append([]session.WorldLoreEntry(nil), prev...),
+		session.WorldLoreEntry{Name: "The debt", Keys: []string{"debt"}, Content: "Three favors owed."})
 	got = stampScenePin(next, prev, 14)
 	if pin(got).PinnedAt != 6 {
 		t.Errorf("an untouched pin must keep its date, got %d", pin(got).PinnedAt)
@@ -221,7 +221,7 @@ func TestStampScenePin(t *testing.T) {
 
 	// Rewriting the content re-dates it, and the drift resets.
 	prev = got
-	next = []core.WorldLoreEntry{{Name: core.SceneStateName, Constant: true, Content: "Day 14, midmorning. Veyra is inside."}}
+	next = []session.WorldLoreEntry{{Name: session.SceneStateName, Constant: true, Content: "Day 14, midmorning. Veyra is inside."}}
 	got = stampScenePin(next, prev, 14)
 	if pin(got).PinnedAt != 14 {
 		t.Errorf("a rewritten pin re-dates, got %d", pin(got).PinnedAt)
@@ -233,16 +233,16 @@ func TestStampScenePin(t *testing.T) {
 	// No pin at all is not "a pin with zero drift" — the caller must be able to
 	// tell them apart, or a session with no card reads as a current one.
 	if turns, pinned := scenePinDrift(prev[:1], 14); pinned && turns == 0 {
-		if !core.IsSceneState(prev[0].Name) {
+		if !session.IsSceneState(prev[0].Name) {
 			t.Errorf("a session with no pin must report pinned=false")
 		}
 	}
-	if _, pinned := scenePinDrift([]core.WorldLoreEntry{{Name: "The bell", Content: "x"}}, 14); pinned {
+	if _, pinned := scenePinDrift([]session.WorldLoreEntry{{Name: "The bell", Content: "x"}}, 14); pinned {
 		t.Error("a session with no pin must report pinned=false")
 	}
 	// A pin dated ahead of the count (hand-edited meta, imported bundle) clamps.
-	if turns, pinned := scenePinDrift([]core.WorldLoreEntry{
-		{Name: core.SceneStateName, Constant: true, Content: "x", PinnedAt: 99},
+	if turns, pinned := scenePinDrift([]session.WorldLoreEntry{
+		{Name: session.SceneStateName, Constant: true, Content: "x", PinnedAt: 99},
 	}, 14); !pinned || turns != 0 {
 		t.Errorf("a pin dated ahead must clamp to 0, got %d", turns)
 	}
@@ -483,11 +483,11 @@ func TestWorldsImportRemapsAndMints(t *testing.T) {
 				"Elira": "foreign-1",
 				"Ghost": "foreign-2", // no card in the bundle, none local — dropped
 			},
-			CharacterModels: map[string]core.CastRoute{
+			CharacterModels: map[string]session.CastRoute{
 				"Elira": {Provider: "anthropic", Model: "m"},
 				"Ghost": {Provider: "anthropic", Model: "m"},
 			},
-			Lore:         []core.WorldLoreEntry{{Name: "Secret", Keys: []string{"vault"}, Content: "c", Audience: []string{"Elira"}, Learned: map[string]string{"Elira": "2026-07-19T00:00:00Z"}}},
+			Lore:         []session.WorldLoreEntry{{Name: "Secret", Keys: []string{"vault"}, Content: "c", Audience: []string{"Elira"}, Learned: map[string]string{"Elira": "2026-07-19T00:00:00Z"}}},
 			Coordination: "off",
 		},
 		Cards: []build.BundleCard{{Ref: "foreign-1", Name: "Elira", Mime: "application/json", Bytes: []byte(`{"name":"Elira","first_mes":"hi"}`)}},
@@ -673,7 +673,7 @@ func TestPlayInWorldWarmsCardActors(t *testing.T) {
 	doc, err := build.NewWorldStore().Save(build.WorldDoc{
 		Name:       "Lowtown",
 		Characters: map[string]string{"Elira": elira.ID, "Rook": rook.ID},
-		Lore: []core.WorldLoreEntry{
+		Lore: []session.WorldLoreEntry{
 			{Name: "curfew", Constant: true, Content: "The city is under curfew after dark."},
 			{Name: "informant", Constant: true, Content: "Rook is the guild's informant.", Audience: []string{"Rook"}},
 		},

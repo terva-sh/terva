@@ -47,19 +47,9 @@ or ship a single binary.
 
 ## In-process, with your own conventions: the engine
 
-`core.New(client, model, opts...)` is the agent loop with nothing chosen for
-you. Each choice is an option: `WithAssembler` for the frame each request is
-built from, `WithTools` for the tool registry, and `WithGate` for the
-permission gate, the one option `New` requires. `New` returns an error for a
-configuration it cannot build, such as a missing gate. `WithComponent` attaches
-a component such as `stall`, `lazytools` or `contextpressure` through each hook
-it implements. `Agent.Run` starts a turn from an input: `core.PromptInput` for
-a user message, `core.ContinueInput` to resume without one. `New` is the only
-constructor. The agent's settings are private: a host changes one through a
-setter such as `SetModel`, and reads one back through a getter such as
-`Model()` or `Client()`, and both take the agent's lock. Subscription usage
-and resets belong to the client, so pass `Agent.Client()` to
-`provider.ClientUsage` and its siblings. The wire takes
+`core.NewAgent(client, model, assembler, tools, gate)` is the agent loop with
+nothing chosen for you. You pass the provider client, the frame each request is
+built from, the tool registry and the permission gate. The wire takes
 credentials as values and reads nothing itself. The agent writes its
 transcript to a `core.TranscriptStore` you attach, and resumes from a
 `core.Transcript` you load. `core.MemoryTranscriptStore` keeps it in memory,
@@ -72,33 +62,8 @@ from importing anything else of terva's.
 **What it costs.** Every choice terva's harness makes is now yours to make:
 where credentials come from, what the prompt holds, which tools exist and what
 may run. The API is not stable yet: until the engine's stable packages are
-drawn, a minor release may change anything you use. The wire holds no model
-catalog. Build one (`provider.NewRegistry`) and pass it to the agent with
-`core.WithCatalog` and to its client with `provider.WithCatalog`. An agent or
-client given none knows the built-in models and nothing else.
-
-The engine writes text of its own: notes and refusals to the model, and
-messages its turns report. It renders that text in English, or through the
-translator `i18n.Use` installs for the whole process (package
-`packages/core/i18n`). To run two agents in different languages, give each
-its own translator with `core.WithTranslator`. The `stall`, `lazytools` and
-`shellresult` components then speak the agent's language too. Two kinds of
-text do not follow it:
-
-- Compaction prompts and the `contextpressure` note are policy, not
-  translation. They come from the agent's `CompactionPolicy`, which can also
-  word the note as a `contextpressure.Noter`. Without one, they come from the
-  neutral English in `compactprose`. For another language there, give each
-  agent a policy in that language.
-- Text from core's helper functions that your host calls itself, such as
-  `core.ClassifyRecoverable`, still uses the process-wide translator.
-
-A client sends its requests through `http.DefaultTransport`. To route them
-through your own proxy, transport or test server, give the client your HTTP
-client with `provider.WithHTTPClient`. For GitHub Copilot and for Vertex, that
-also carries the exchange that turns your credential into a short-lived token.
-Each client keeps its own token cache. The one request it does not carry is the
-usage poll of the OpenRouter, DeepSeek and Kimi clients.
+drawn, a minor release may change anything you use. One piece is still
+missing: a model catalog you pass rather than the wire's global one.
 
 **Pick it when** terva's conventions are not the ones you want: you want to
 decide what the model sees on each request, keep transcripts in your own store,

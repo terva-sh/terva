@@ -8,6 +8,7 @@ import (
 	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -30,7 +31,7 @@ func TestSwarmSpawnStampsHostSession(t *testing.T) {
 	tool := &SwarmSpawnTool{Swarm: sw, Enabled: func() bool { return true }}
 
 	host := coretest.NewAgent(nil, "m", "s", core.Registry{})
-	host.AdoptSessionIdentity(&core.Session{Path: "/x/20260712-010137-abcd1234.jsonl", ID: "meta-uuid"})
+	host.AdoptSessionIdentity((&session.Session{Path: "/x/20260712-010137-abcd1234.jsonl", ID: "meta-uuid"}).Identity())
 	ctx := core.ContextWithAgent(context.Background(), host)
 
 	res, err := tool.Execute(ctx, json.RawMessage(`{"task":"stamped child"}`), nil)

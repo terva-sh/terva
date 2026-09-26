@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -25,7 +25,7 @@ func writeExtMemory(t *testing.T, home, cwd, userBody, projectBody string) {
 		}
 	}
 	if projectBody != "" {
-		dir := filepath.Join(root, projectsDirName, core.ProjectKey(cwd))
+		dir := filepath.Join(root, projectsDirName, session.ProjectKey(cwd))
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -78,7 +78,7 @@ func TestAdoptLeavesTheOriginals(t *testing.T) {
 	extRoot := filepath.Join(home, extDataDirName, extName)
 	for _, p := range []string{
 		filepath.Join(extRoot, userFileName),
-		filepath.Join(extRoot, projectsDirName, core.ProjectKey(cwd), projectFileName),
+		filepath.Join(extRoot, projectsDirName, session.ProjectKey(cwd), projectFileName),
 	} {
 		b, err := os.ReadFile(p)
 		if err != nil {
@@ -143,7 +143,7 @@ func TestAdoptNoopWithoutExtensionData(t *testing.T) {
 func TestProjectDirUsesProjectKey(t *testing.T) {
 	home := "/home"
 	cwd := "/Users/someone/Workspace/a-repo"
-	want := filepath.Join(home, dirName, projectsDirName, core.ProjectKey(cwd))
+	want := filepath.Join(home, dirName, projectsDirName, session.ProjectKey(cwd))
 	if got := ProjectDir(home, cwd); got != want {
 		t.Fatalf("ProjectDir = %q, want %q", got, want)
 	}

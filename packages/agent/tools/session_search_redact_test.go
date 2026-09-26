@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 )
 
 // The credential used throughout. It carries a leading space because the
@@ -21,7 +21,7 @@ const (
 // the redactor's own definition. A fixture the rule does not recognise would
 // make "no leak" mean "nothing to leak".
 func TestRedactionFixtureIsActuallyACredential(t *testing.T) {
-	if got := core.RedactSecrets(" " + ssKey + " "); strings.Contains(got, ssKeyTail) {
+	if got := session.RedactSecrets(" " + ssKey + " "); strings.Contains(got, ssKeyTail) {
 		t.Fatalf("the test fixture is not recognised as a secret, so these tests would prove nothing: %q", got)
 	}
 }

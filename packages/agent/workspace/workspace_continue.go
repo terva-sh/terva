@@ -5,9 +5,9 @@ import (
 	"sync"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // The "continue" interaction — extend the trailing assistant message as a
@@ -69,7 +69,7 @@ func (s *wsSession) persistContinue() {
 		// idx is the in-memory index of the continued message; persist against the
 		// on-disk index so a reload replaces the right row (see wsSession.diskIndex).
 		if disk, ok := s.diskIndex(idx); ok {
-			s.agent.RecordPersistenceError(s.sess.AppendAmend(core.AmendReplace, disk, &merged, "continue"))
+			s.agent.RecordPersistenceError(s.sess.AppendAmend(session.AmendReplace, disk, &merged, "continue"))
 		}
 	}
 }

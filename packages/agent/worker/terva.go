@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/procenv"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // BackendTerva is the name a SpawnRequest carries to get a terva-driving-terva
@@ -48,6 +48,8 @@ func tervaBackend() Backend {
 		Command:       tervaCommand,
 		Translate:     translateTerva,
 		Steer:         steerTerva,
+		Interrupt:     interruptTerva,
+		ReportsCost:   true,
 		// The identity rides --persona (the child self-assembles it), so the
 		// opening turn is the task and the reporting contract alone — no
 		// workspace line, no pointers. See Briefing.selfAssembledTask.
@@ -81,6 +83,8 @@ func tervaPortableBackend() Backend {
 		Command:       tervaPortableCommand,
 		Translate:     translateTerva, // same rpc wire as the dogfood backend
 		Steer:         steerTerva,
+		Interrupt:     interruptTerva,
+		ReportsCost:   true,
 		Opening:       Briefing.Instructions, // the foreign work turn, exactly as claude
 		// Approvals ride the MCP bridge, NOT the rpc-native ask carrier: the
 		// config-opaque worker gates through terva's own MCP client calling `terva
@@ -222,6 +226,17 @@ func steerTerva(text string) ([]byte, error) {
 	return append(line, '\n'), nil
 }
 
+// interruptTerva encodes the rpc `abort` command, which cancels the child's
+// active turn and leaves the rpc server running. No id, for the reason steerTerva
+// sends none.
+func interruptTerva() ([]byte, error) {
+	line, err := json.Marshal(map[string]any{"type": "abort"})
+	if err != nil {
+		return nil, err
+	}
+	return append(line, '\n'), nil
+}
+
 // translateTerva maps one rpc stdout line into terva's swarm vocabulary.
 //
 // This is the near-identity the dogfood backend exists to demonstrate: the rpc
@@ -284,7 +299,7 @@ func recognizeTervaAsk(ev Event) (Ask, bool) {
 // encodeTervaApprove encodes a decision as the rpc `approve` command the worker
 // is blocked waiting for, correlated to the ask id. The field names match the
 // server's dispatch("approve") reader.
-func encodeTervaApprove(askID string, d core.ConfirmDecision) ([]byte, error) {
+func encodeTervaApprove(askID string, d permission.ConfirmDecision) ([]byte, error) {
 	line, err := json.Marshal(map[string]any{
 		"type":          "approve",
 		"id":            askID,

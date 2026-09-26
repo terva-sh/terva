@@ -4,18 +4,18 @@ import (
 	"testing"
 	"time"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/tui"
 )
 
-func answer(t *testing.T, resp chan core.ConfirmDecision) core.ConfirmDecision {
+func answer(t *testing.T, resp chan permission.ConfirmDecision) permission.ConfirmDecision {
 	t.Helper()
 	select {
 	case d := <-resp:
 		return d
 	case <-time.After(2 * time.Second):
 		t.Fatal("no decision delivered")
-		return core.ConfirmDecision{}
+		return permission.ConfirmDecision{}
 	}
 }
 
@@ -24,11 +24,11 @@ func answer(t *testing.T, resp chan core.ConfirmDecision) core.ConfirmDecision {
 // habitual "5 = no" can never land on a grant.
 func TestConfirmDialogScopedOption(t *testing.T) {
 	d := NewConfirmDialog()
-	resp := make(chan core.ConfirmDecision, 1)
+	resp := make(chan permission.ConfirmDecision, 1)
 	d.Enqueue(&ConfirmRequest{
 		ToolName: "bash",
 		Preview:  "git status",
-		Scopes:   []core.GrantScope{{Display: "git status", Pattern: `^git status(?:\s|$)`}},
+		Scopes:   []permission.GrantScope{{Display: "git status", Pattern: `^git status(?:\s|$)`}},
 		Resp:     resp,
 	})
 
@@ -47,11 +47,11 @@ func TestConfirmDialogScopedOption(t *testing.T) {
 // '5' stays "no" on a scoped request, and '6' is dead on an unscoped one.
 func TestConfirmDialogNumberingStable(t *testing.T) {
 	d := NewConfirmDialog()
-	resp := make(chan core.ConfirmDecision, 1)
+	resp := make(chan permission.ConfirmDecision, 1)
 	d.Enqueue(&ConfirmRequest{
 		ToolName: "bash",
 		Preview:  "git status",
-		Scopes:   []core.GrantScope{{Display: "git status", Pattern: `^git status(?:\s|$)`}},
+		Scopes:   []permission.GrantScope{{Display: "git status", Pattern: `^git status(?:\s|$)`}},
 		Resp:     resp,
 	})
 	if !d.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: '5'}) {
@@ -61,7 +61,7 @@ func TestConfirmDialogNumberingStable(t *testing.T) {
 		t.Fatalf("'5' = %+v, want the refusal it has always been", got)
 	}
 
-	resp2 := make(chan core.ConfirmDecision, 1)
+	resp2 := make(chan permission.ConfirmDecision, 1)
 	d.Enqueue(&ConfirmRequest{ToolName: "bash", Preview: "ls", Resp: resp2})
 	if d.HandleKey(tui.Key{Kind: tui.KeyRune, Rune: '6'}) {
 		t.Fatal("'6' must be inert when no scopes were derived")
@@ -78,11 +78,11 @@ func TestConfirmDialogNumberingStable(t *testing.T) {
 // request answered, unscoped one behind it) must clamp, not panic.
 func TestConfirmDialogCursorClampsAcrossRequests(t *testing.T) {
 	d := NewConfirmDialog()
-	respA := make(chan core.ConfirmDecision, 1)
-	respB := make(chan core.ConfirmDecision, 1)
+	respA := make(chan permission.ConfirmDecision, 1)
+	respB := make(chan permission.ConfirmDecision, 1)
 	d.Enqueue(&ConfirmRequest{
 		ToolName: "bash", Preview: "git status",
-		Scopes: []core.GrantScope{{Display: "git status", Pattern: `^git status(?:\s|$)`}},
+		Scopes: []permission.GrantScope{{Display: "git status", Pattern: `^git status(?:\s|$)`}},
 		Resp:   respA,
 	})
 	d.Enqueue(&ConfirmRequest{ToolName: "bash", Preview: "ls", Resp: respB})

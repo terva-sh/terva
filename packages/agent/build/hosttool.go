@@ -10,6 +10,7 @@ import (
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/extproto"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -35,7 +36,7 @@ var hostGateSeq atomic.Uint64
 // MCP tools (read/grep/glob/bash/web/…). Trust is already enforced
 // upstream — an untrusted project's extensions never load, so a loaded
 // extension is either the user's own or one a trusted project shipped.
-func buildHostToolDispatcher(ag *core.Agent, gate *core.ConfirmGate, mgr hostToolSource) extdriver.HostToolDispatcher {
+func buildHostToolDispatcher(ag *core.Agent, gate *permission.ConfirmGate, mgr hostToolSource) extdriver.HostToolDispatcher {
 	return func(ctx context.Context, extName, toolName string, args json.RawMessage, silent bool) ([]extproto.ContentBlock, bool) {
 		errOut := func(msg string) ([]extproto.ContentBlock, bool) {
 			return []extproto.ContentBlock{{Type: "text", Text: msg}}, true
@@ -59,7 +60,7 @@ func buildHostToolDispatcher(ag *core.Agent, gate *core.ConfirmGate, mgr hostToo
 		// call's, and a borrowed "current call" id would collide in the
 		// confirmer's pending map (the answer reaches one of them, the other
 		// wedges until turn cancel).
-		preview := core.ToolPreview(tool, args, 120)
+		preview := permission.ToolPreview(tool, args, 120)
 		callID := fmt.Sprintf("hostcall-%s-%d", extName, hostGateSeq.Add(1))
 		allowed, reason, _ := gate.Check(ctx, toolName, args, preview, callID)
 		recordGateAudit(auditViaHostToolCall, toolName, args, gate, allowed, reason)
@@ -99,7 +100,7 @@ func contentBlocksFromResult(content []provider.Content) []extproto.ContentBlock
 // scripting host-call path (terva_scripting's code_execution — a no-op
 // stub otherwise), which needs the same ag+gate pair but must not depend
 // on an extension manager being present.
-func WireHostToolDispatcher(ag *core.Agent, extMgr *extensions.Manager, gate *core.ConfirmGate) {
+func WireHostToolDispatcher(ag *core.Agent, extMgr *extensions.Manager, gate *permission.ConfirmGate) {
 	if ag == nil {
 		return
 	}

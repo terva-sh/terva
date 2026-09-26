@@ -38,7 +38,10 @@ deliberately not a read boundary:
   next turn.
 - **Secrets are denied outright**, to reads *and* to `bash`, jailed or not:
   `auth.json`, `config.json`, `trusted.json`, `unjailed.json`, `sessions/`,
-  `swarm/`, `logs/` (except `ext-*.log`), and `shared/`. `/unjail` does not
+  `swarm/`, `logs/` (except `ext-*.log`), and `shared/`. Every key file is
+  denied by name wherever it sits under `$TERVA_HOME`: `secrets.key`, and each
+  talkoot's `room.key`, which seals its room log, with the `room.head` that
+  records the log's end and the `room.head.tmp` it is written through. `/unjail` does not
   lift these. Like the rest of the sandbox this is a speed bump rather than a
   boundary (a runtime-assembled path or an interpreter walks past it), but
   it is the same speed bump on every route.
@@ -124,7 +127,7 @@ lets you revoke this session's grants (see below).
 | `workspace` | **the interactive default.** Every built-in tool (`read`/`write`/`edit`/`bash`, bounded by the sandbox) runs freely, and so does any *extension/MCP* tool classified read-only; foreign tools that can have side effects (a writing extension tool, a mutating MCP tool) ask. The trust axis is origin: your own tools vs foreign code. A foreign tool that declares the `network-read` authority still asks, even though it reads nothing locally (see below) |
 | `auto-edit` | read-only tools (`read`, `terva_status`, `skill`) and the file editors (`write`, `edit`) run freely; everything else asks: `bash`, extension tools, chat sends |
 | `ask` | every tool call asks, read-only included (exactly what `--no-yolo` always did) |
-| `plan` | only read-only tools run, and mutating tools don't even enter the registry, so the model is steered to present a plan. Mutating calls that arrive anyway are refused with a model-readable reason, not prompted |
+| `plan` | only read-only tools run, and mutating tools don't even enter the registry, so the model is steered to present a plan. Mutating calls that arrive anyway are refused with a model-readable reason, not prompted. The one exception is a talkoot member's `talkoot_send` and `talkoot_handoff`, because a planning member's plan reaches its team as an envelope. Plan does not prompt for them, and your deny and ask rules still apply. An envelope starts the recipient's turn in the recipient's own posture, so a planning member can wake a member that writes. Write an ask rule for the two tools to approve each send |
 
 **Defaults differ by run mode.** An interactive session defaults to
 `workspace` (a human is present to answer the foreign-tool prompts) and
@@ -325,7 +328,7 @@ A tool's *authority* is a finer classification than the read-only/mutating
 split, because "side-effect-free" is not one thing. A web fetch reads
 nothing on the local machine yet can leak data, hit a remote server, or
 reach a private network, so folding it into the local-read auto-allow
-would be wrong. The classes (`core.Authority`):
+would be wrong. The classes (`permission.Authority`):
 
 | Authority | Meaning | Example |
 |---|---|---|
@@ -492,6 +495,29 @@ component. An out-of-process extension such as the web extension keeps its own
 SSRF guard, because this in-process guard cannot see the dials of another
 process.
 
+## Steering a talkoot
+
+A talkoot is a team of agents that runs without a person at each turn (see
+`docs/proposals/talkoot.md`). A client reaches one through
+the `talkoot.*` verbs of the control protocol ([controllers.md](controllers.md)).
+The verbs that read a talkoot need only the read capability. The verbs that
+create one, change its roster, post to it, pause it, or resume it also need
+`steer`, a capability of its own. Every role that may prompt holds it, and a
+`viewer` does not, so a viewer can watch a room and cannot steer it. A
+restricted connection can prompt and still lack `steer`.
+
+A member reaches its team through its own tools, `talkoot_send` and
+`talkoot_handoff`, which speak as that member. It never needs the verbs. The
+`steer` capability binds a control-protocol caller, though, and nothing
+more. A member whose posture lets it run `bash` can run `terva ctl` against
+its own daemon, as the daemon's own user, with whatever token that daemon
+trusts. It then holds every capability that token grants. This is the same
+custody gap the room seal has: a member that runs as the daemon's user can
+reach what the daemon can. Posture limits it, since a `plan` member runs no
+`bash`, and so does an ask rule on `bash`. The gap closes only when the
+daemon's keys sit where a member cannot reach them, which is the work of
+secrets at rest, §8.15 (`docs/proposals/secrets-at-rest.md`).
+
 ## Permission rules
 
 Rules let you pre-answer the prompt for specific calls. They live in
@@ -564,6 +590,16 @@ can only tighten, and "refuse more" is always safe to accept from a repo.
 
 Broken rules (bad regexp, unknown decision) are dropped with a stderr
 note; they never fail startup.
+
+A project's `.terva/config.json` that exists but cannot be parsed applies
+none of its settings, including every one that only restricts: its deny and
+ask rules, `disable_extensions`, `disable_mcp`, `disable_context_extensions`,
+`tickets: false`, and `project_scoped`. Extensions and MCP servers it
+disables can start. terva says so wherever you are reading, naming the file
+and each setting: on stderr in the headless modes, and as an error notice on
+the first turn in the TUI and the daemon's clients. It does not refuse to
+start, so a typo in a repository's file cannot take away your own tools. The
+SDK, which has nobody to tell, refuses to start until the file parses.
 
 ## The confirmation dialog
 

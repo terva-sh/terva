@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/config"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -39,10 +39,10 @@ func seedUserConfig(t *testing.T, body string) {
 // warns about anything; any enabled mode runs on to model and credential
 // resolution and says why it gave up. So a note means "it was switched on",
 // and silence means "it was not" — testable without a credential.
-func collectNotes(t *testing.T, host Resolved, override string) (*core.ConfirmGate, []string) {
+func collectNotes(t *testing.T, host Resolved, override string) (*permission.ConfirmGate, []string) {
 	t.Helper()
 	var notes []string
-	g := core.NewConfirmGate(nil)
+	g := permission.NewConfirmGate(nil)
 	InstallClassifier(g, host, override, func(f string, a ...any) {
 		notes = append(notes, fmt.Sprintf(f, a...))
 	})
@@ -99,7 +99,7 @@ func TestClassifierFlagOverridesOnlyTheMode(t *testing.T) {
 	if !strings.Contains(joined, "nonexistent-provider") {
 		t.Fatalf("screening did not use the CONFIG's provider; argv must not redirect it.\nnotes: %s", joined)
 	}
-	if got := g.ClassifierMode(); got != core.ClassifierOff {
+	if got := g.ClassifierMode(); got != permission.ClassifierOff {
 		t.Fatalf("gate reports %q after an unresolvable provider, want off", got)
 	}
 }
@@ -283,7 +283,7 @@ func TestClassifierForStaysOffUnlessAsked(t *testing.T) {
 			cls, mode := ClassifierFor(r, config.Config{
 				Classifier: config.ClassifierConfig{Mode: tc.mode},
 			}, nil)
-			if cls != nil || mode != core.ClassifierOff {
+			if cls != nil || mode != permission.ClassifierOff {
 				t.Fatalf("mode %q produced (%v, %q), want (nil, off)", tc.mode, cls != nil, mode)
 			}
 		})
@@ -301,7 +301,7 @@ func TestClassifierForRefusesWithoutACredential(t *testing.T) {
 		config.Config{Classifier: config.ClassifierConfig{Mode: "screen"}},
 		func(f string, a ...any) { notes = append(notes, f) },
 	)
-	if cls != nil || mode != core.ClassifierOff {
+	if cls != nil || mode != permission.ClassifierOff {
 		t.Fatalf("got (%v, %q), want (nil, off) with no credential", cls != nil, mode)
 	}
 	if len(notes) == 0 {
@@ -313,9 +313,9 @@ func TestClassifierForRefusesWithoutACredential(t *testing.T) {
 // failure path above is indistinguishable from the feature not existing.
 func TestInstallClassifierLeavesTheGateAloneOnFailure(t *testing.T) {
 	isolateHome(t)
-	g := core.NewConfirmGate(nil)
+	g := permission.NewConfirmGate(nil)
 	InstallClassifier(g, Resolved{Provider: "anthropic", Model: "claude-sonnet-4-5"}, "", func(string, ...any) {})
-	if got := g.ClassifierMode(); got != core.ClassifierOff {
+	if got := g.ClassifierMode(); got != permission.ClassifierOff {
 		t.Fatalf("gate reports %q after a failed install, want off", got)
 	}
 	// And a nil gate must not panic: headless yolo builds none at all.

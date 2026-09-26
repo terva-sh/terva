@@ -9,6 +9,7 @@ import (
 	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -47,7 +48,7 @@ func TestSessionsChangedOnRenameAndDelete(t *testing.T) {
 	ctx := context.Background()
 
 	msg := provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hello"}}}
-	s1, err := core.NewSession(tmp, tmp, "anthropic", "m1", "test")
+	s1, err := session.NewSession(tmp, tmp, "anthropic", "m1", "test")
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -118,7 +119,7 @@ func TestSessionsChangedOnCreate(t *testing.T) {
 // in-flight turn (a running turn holds turnCancel).
 func TestSessionInfoReportsLiveAndBusy(t *testing.T) {
 	tmp := testsupport.TempDir(t)
-	sess, err := core.NewSession(tmp, tmp, "anthropic", "m1", "test")
+	sess, err := session.NewSession(tmp, tmp, "anthropic", "m1", "test")
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}

@@ -11,6 +11,7 @@ import (
 	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -20,7 +21,7 @@ import (
 func retitleTestSession(t *testing.T, srvURL, title string, generated bool) *wsSession {
 	t.Helper()
 	tmp := os.Getenv("TERVA_HOME")
-	sess, err := core.NewSession(tmp, tmp, "openai-compatible", "fake-model", "test")
+	sess, err := session.NewSession(tmp, tmp, "openai-compatible", "fake-model", "test")
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}

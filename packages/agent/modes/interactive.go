@@ -15,11 +15,11 @@ import (
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/agent/tools"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
-	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/relaunch"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -285,15 +285,15 @@ type InteractiveConfig struct {
 
 	// RenameSessionFile persists a session rename from the /sessions picker.
 	// Optional: when nil the picker writes the title straight to the session
-	// file (core.RenameSession). The ctrlproto entry point routes it through
+	// file (session.RenameSession). The ctrlproto entry point routes it through
 	// the service so a live session's title stays in sync everywhere.
 	RenameSessionFile func(path, title string) error
 
 	// ListSessions supplies the /sessions picker's rows. Optional: when nil
-	// the picker scans the session store itself (core.DescribeSessions). The
+	// the picker scans the session store itself (session.DescribeSessions). The
 	// ctrlproto entry point routes it through the service's session group,
 	// which overlays live state the file's meta line can lag behind.
-	ListSessions func() []core.SessionSummary
+	ListSessions func() []session.SessionSummary
 
 	// The session lifecycle verbs behind the /sessions picker. Nil means this
 	// frontend does not serve them — a replay carrier has no directory to move
@@ -305,7 +305,7 @@ type InteractiveConfig struct {
 	// is the only handle an archived transcript has.
 	ArchiveSession         func(path string) error
 	DeleteSession          func(path string) error
-	ListArchivedSessions   func() []core.ArchivedSession
+	ListArchivedSessions   func() []session.ArchivedSession
 	RestoreArchivedSession func(id string) error
 
 	// NewSession closes the current session and starts a fresh one in

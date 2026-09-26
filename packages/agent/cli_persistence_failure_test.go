@@ -8,12 +8,13 @@ import (
 	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
 func TestWriteNewTranscriptReportsFailure(t *testing.T) {
 	dir := testsupport.TempDir(t)
-	sess, err := core.NewSession(dir, dir, "test", "test", "test")
+	sess, err := session.NewSession(dir, dir, "test", "test", "test")
 	if err != nil {
 		t.Fatal(err)
 	}

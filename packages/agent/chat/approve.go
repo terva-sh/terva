@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/i18n"
 )
 
@@ -61,9 +61,9 @@ func (c *ChatConfirmer) lock(ctx context.Context) bool {
 
 func (c *ChatConfirmer) unlock() { <-c.sem }
 
-var _ core.Confirmer = (*ChatConfirmer)(nil)
+var _ permission.Confirmer = (*ChatConfirmer)(nil)
 
-// Confirm implements core.Confirmer over the connector's ask surface.
+// Confirm implements permission.Confirmer over the connector's ask surface.
 //
 // ctx is the turn's. It bounds both the queue and the ask: a cancelled turn
 // releases the mutex immediately instead of holding it for the ask's full
@@ -71,19 +71,19 @@ var _ core.Confirmer = (*ChatConfirmer)(nil)
 // behind a turn the user had already abandoned. The daemon's own context is
 // still honoured — the turn context descends from it, so a shutdown cancels
 // this wait too.
-func (c *ChatConfirmer) Confirm(ctx context.Context, toolName string, preview string) core.ConfirmDecision {
+func (c *ChatConfirmer) Confirm(ctx context.Context, toolName string, preview string) permission.ConfirmDecision {
 	// Take the one-ask-at-a-time lock without becoming unstoppable while
 	// waiting for it: an abandoned turn's Confirm must not make a live turn's
 	// wait for the lock outlive its own cancellation.
 	if !c.lock(ctx) {
-		return core.ConfirmDecision{Allow: false,
+		return permission.ConfirmDecision{Allow: false,
 			Reason: "tool call refused: the turn was cancelled while this approval waited its turn to be asked"}
 	}
 	defer c.unlock()
 
 	chatID, replyTo := c.loop.AskTarget()
 	if chatID == "" {
-		return core.ConfirmDecision{Allow: false,
+		return permission.ConfirmDecision{Allow: false,
 			Reason: "tool call refused: approval is required but there is no paired chat to ask in"}
 	}
 	var restrict []string
@@ -110,7 +110,7 @@ func (c *ChatConfirmer) Confirm(ctx context.Context, toolName string, preview st
 		if errors.Is(err, ErrAskTimeout) {
 			reason = "tool call refused: the approval question expired unanswered (fail closed)"
 		}
-		return core.ConfirmDecision{Allow: false, Reason: reason}
+		return permission.ConfirmDecision{Allow: false, Reason: reason}
 	}
 
 	who := ans.Username
@@ -128,11 +128,11 @@ func (c *ChatConfirmer) Confirm(ctx context.Context, toolName string, preview st
 	switch ans.Key {
 	case "approve":
 		c.loop.addNote(noteChat, "approval", i18n.T("tool %q approved by @%s", toolName, who))
-		return core.ConfirmDecision{Allow: true}
+		return permission.ConfirmDecision{Allow: true}
 	case "always":
 		if ans.Attestation == AttestationAttested {
 			c.loop.addNote(noteChat, "approval", i18n.T("tool %q approved by @%s for the rest of the session", toolName, who))
-			return core.ConfirmDecision{Allow: true, RememberTool: true}
+			return permission.ConfirmDecision{Allow: true, RememberTool: true}
 		}
 		// A parsed-text "always" cannot carry a durable grant; say so
 		// where the answer happened and allow this call only.
@@ -143,9 +143,9 @@ func (c *ChatConfirmer) Confirm(ctx context.Context, toolName string, preview st
 		_ = c.loop.Connector.Send(c.ctx, Outgoing{ChatID: chatID,
 			Text: i18n.T("\"always\" needs an attested answer (buttons); allowed once instead.")})
 		c.loop.addNote(noteChat, "approval", i18n.T("tool %q approved once by @%s (a durable \"always\" needs an attested answer)", toolName, who))
-		return core.ConfirmDecision{Allow: true}
+		return permission.ConfirmDecision{Allow: true}
 	default:
-		return core.ConfirmDecision{Allow: false,
+		return permission.ConfirmDecision{Allow: false,
 			Reason: fmt.Sprintf("tool call denied by @%s over chat", who)}
 	}
 }

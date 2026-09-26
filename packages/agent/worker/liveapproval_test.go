@@ -13,7 +13,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/swarm"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -52,14 +52,14 @@ func TestLiveClaudeApprovalBridge(t *testing.T) {
 	}
 
 	t.Run("allow creates the file", func(t *testing.T) {
-		runLiveApproval(t, backend, core.ConfirmDecision{Allow: true}, true)
+		runLiveApproval(t, backend, permission.ConfirmDecision{Allow: true}, true)
 	})
 	t.Run("deny blocks the file", func(t *testing.T) {
-		runLiveApproval(t, backend, core.ConfirmDecision{Allow: false, Reason: "the human said no"}, false)
+		runLiveApproval(t, backend, permission.ConfirmDecision{Allow: false, Reason: "the human said no"}, false)
 	})
 }
 
-func runLiveApproval(t *testing.T, backend Backend, decision core.ConfirmDecision, wantFile bool) {
+func runLiveApproval(t *testing.T, backend Backend, decision permission.ConfirmDecision, wantFile bool) {
 	repo := testsupport.TempDir(t)
 	// Isolate config, and lend the real credential: claude brings its own, but
 	// the terva this spawns as the bridge resolves against the home it inherits.
@@ -146,13 +146,13 @@ func runLiveApproval(t *testing.T, backend Backend, decision core.ConfirmDecisio
 // recordingConfirmer records every approval it is asked and answers with a fixed
 // decision — the test's stand-in for the human's card.
 type recordingConfirmer struct {
-	decision core.ConfirmDecision
+	decision permission.ConfirmDecision
 
 	mu    sync.Mutex
 	calls []struct{ tool, preview string }
 }
 
-func (c *recordingConfirmer) Confirm(_ context.Context, tool, preview string) core.ConfirmDecision {
+func (c *recordingConfirmer) Confirm(_ context.Context, tool, preview string) permission.ConfirmDecision {
 	c.mu.Lock()
 	c.calls = append(c.calls, struct{ tool, preview string }{tool, preview})
 	d := c.decision

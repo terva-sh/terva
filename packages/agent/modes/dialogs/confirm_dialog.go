@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
@@ -20,8 +20,8 @@ type ConfirmRequest struct {
 	// Scopes are the gate's derived narrow-grant options (bash only
 	// today). When non-empty the dialog offers a sixth option: persist
 	// an allow rule scoped to these commands instead of the whole tool.
-	Scopes []core.GrantScope
-	Resp   chan core.ConfirmDecision
+	Scopes []permission.GrantScope
+	Resp   chan permission.ConfirmDecision
 }
 
 // ConfirmDialog is the inline prompt shown before every tool call
@@ -73,7 +73,7 @@ func (d *ConfirmDialog) CancelAll(reason string) {
 	d.mu.Unlock()
 	for _, req := range pending {
 		select {
-		case req.Resp <- core.ConfirmDecision{Allow: false, Reason: reason}:
+		case req.Resp <- permission.ConfirmDecision{Allow: false, Reason: reason}:
 		default:
 		}
 	}
@@ -118,7 +118,7 @@ func (d *ConfirmDialog) AllowAllPending() {
 	d.mu.Unlock()
 	for _, req := range pending {
 		select {
-		case req.Resp <- core.ConfirmDecision{Allow: true, RememberAll: true}:
+		case req.Resp <- permission.ConfirmDecision{Allow: true, RememberAll: true}:
 		default:
 		}
 	}
@@ -128,7 +128,7 @@ func (d *ConfirmDialog) AllowAllPending() {
 // decision picking it sends.
 type confirmOption struct {
 	label    string
-	decision core.ConfirmDecision
+	decision permission.ConfirmDecision
 }
 
 // confirmOptions lists the five fixed responses in vertical order. Keyed
@@ -140,27 +140,27 @@ type confirmOption struct {
 // docs/proposals/i18n-round-2.md.
 var confirmOptions = []struct {
 	label    string
-	decision core.ConfirmDecision
+	decision permission.ConfirmDecision
 }{
 	{
 		label:    i18n.M("yes (run this call)"),
-		decision: core.ConfirmDecision{Allow: true},
+		decision: permission.ConfirmDecision{Allow: true},
 	},
 	{
 		label:    i18n.M("yes, always this tool (skip prompts for this tool for the rest of the session)"),
-		decision: core.ConfirmDecision{Allow: true, RememberTool: true},
+		decision: permission.ConfirmDecision{Allow: true, RememberTool: true},
 	},
 	{
 		label:    i18n.M("yes, always this tool, and save it (adds a permanent allow rule to your config)"),
-		decision: core.ConfirmDecision{Allow: true, PersistTool: true},
+		decision: permission.ConfirmDecision{Allow: true, PersistTool: true},
 	},
 	{
 		label:    i18n.M("yes, always (skip all prompts for the rest of the session)"),
-		decision: core.ConfirmDecision{Allow: true, RememberAll: true},
+		decision: permission.ConfirmDecision{Allow: true, RememberAll: true},
 	},
 	{
 		label:    i18n.M("no (refuse and let the model try something else)"),
-		decision: core.ConfirmDecision{Allow: false, Reason: i18n.M("user declined")},
+		decision: permission.ConfirmDecision{Allow: false, Reason: i18n.M("user declined")},
 	},
 }
 
@@ -190,7 +190,7 @@ func optionsFor(req *ConfirmRequest) []confirmOption {
 		}
 		opts = append(opts, confirmOption{
 			label: i18n.T("yes, always “%s” — save (adds a permanent allow rule scoped to this command)", strings.Join(displays, ", ")),
-			decision: core.ConfirmDecision{
+			decision: permission.ConfirmDecision{
 				Allow:         true,
 				PersistTool:   true,
 				PersistScopes: patterns,
@@ -236,7 +236,7 @@ func (d *ConfirmDialog) HandleKey(k tui.Key) bool {
 			d.activeSince = time.Now()
 		}
 		d.mu.Unlock()
-		req.Resp <- core.ConfirmDecision{Allow: false, Reason: i18n.T("user cancelled")}
+		req.Resp <- permission.ConfirmDecision{Allow: false, Reason: i18n.T("user cancelled")}
 		return true
 	case tui.KeyEnter:
 		selected := opts[min(d.cursor, len(opts)-1)].decision

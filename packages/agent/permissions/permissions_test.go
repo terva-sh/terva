@@ -10,7 +10,7 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/mode"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -19,22 +19,22 @@ func TestResolveApprovalModePrecedence(t *testing.T) {
 		name string
 		args Inputs
 		cfg  config.Config
-		want core.ApprovalMode
+		want permission.ApprovalMode
 	}{
-		{"interactive default is workspace", Inputs{Mode: mode.Interactive}, config.Config{}, core.ApprovalWorkspace},
-		{"headless default is yolo", Inputs{Mode: mode.Print}, config.Config{}, core.ApprovalYolo},
-		{"acp default is workspace (interactive editor)", Inputs{Mode: mode.ACP}, config.Config{}, core.ApprovalWorkspace},
-		{"no-yolo aliases ask", Inputs{Mode: mode.Interactive, NoYolo: true}, config.Config{}, core.ApprovalAsk},
-		{"flag beats no-yolo", Inputs{NoYolo: true, Approval: "plan"}, config.Config{}, core.ApprovalPlan},
-		{"config default applies (interactive)", Inputs{Mode: mode.Interactive}, config.Config{Approval: "auto-edit"}, core.ApprovalAutoEdit},
-		{"flag beats config", Inputs{Approval: "yolo"}, config.Config{Approval: "ask"}, core.ApprovalYolo},
-		{"no-yolo beats config", Inputs{NoYolo: true}, config.Config{Approval: "yolo"}, core.ApprovalAsk},
-		{"bad config value falls back to interactive default", Inputs{Mode: mode.Interactive}, config.Config{Approval: "bogus"}, core.ApprovalWorkspace},
+		{"interactive default is workspace", Inputs{Mode: mode.Interactive}, config.Config{}, permission.ApprovalWorkspace},
+		{"headless default is yolo", Inputs{Mode: mode.Print}, config.Config{}, permission.ApprovalYolo},
+		{"acp default is workspace (interactive editor)", Inputs{Mode: mode.ACP}, config.Config{}, permission.ApprovalWorkspace},
+		{"no-yolo aliases ask", Inputs{Mode: mode.Interactive, NoYolo: true}, config.Config{}, permission.ApprovalAsk},
+		{"flag beats no-yolo", Inputs{NoYolo: true, Approval: "plan"}, config.Config{}, permission.ApprovalPlan},
+		{"config default applies (interactive)", Inputs{Mode: mode.Interactive}, config.Config{Approval: "auto-edit"}, permission.ApprovalAutoEdit},
+		{"flag beats config", Inputs{Approval: "yolo"}, config.Config{Approval: "ask"}, permission.ApprovalYolo},
+		{"no-yolo beats config", Inputs{NoYolo: true}, config.Config{Approval: "yolo"}, permission.ApprovalAsk},
+		{"bad config value falls back to interactive default", Inputs{Mode: mode.Interactive}, config.Config{Approval: "bogus"}, permission.ApprovalWorkspace},
 		// The one path where a bot's mode is actually consulted: botRun settles
 		// args.Approval before this runs in every case EXCEPT an unparseable
 		// config value. That case has to fail toward asking the chat, not toward
 		// running un-gated — a typo in config.json must not arm a Discord room.
-		{"bot with an unparseable config value asks, never yolos", Inputs{Mode: mode.Bot}, config.Config{Approval: "bogus"}, core.ApprovalWorkspace},
+		{"bot with an unparseable config value asks, never yolos", Inputs{Mode: mode.Bot}, config.Config{Approval: "bogus"}, permission.ApprovalWorkspace},
 	}
 	for _, c := range cases {
 		if got := ResolveApprovalMode(c.args, c.cfg); got != c.want {
@@ -79,7 +79,7 @@ func TestCompileRulesProjectCannotAllow(t *testing.T) {
 		t.Fatalf("want allow rule dropped, got %d rules", len(out))
 	}
 	for _, r := range out {
-		if r.Decision == core.RuleAllow {
+		if r.Decision == permission.RuleAllow {
 			t.Fatal("project layer produced an allow rule")
 		}
 		if r.Source != "project" {
@@ -156,7 +156,7 @@ func TestBuildPermissionPolicyUserIsSovereign(t *testing.T) {
 	// The user is sovereign: an explicit user allow beats a project
 	// deny, even one targeting the same call.
 	args, _ := json.Marshal(map[string]string{"command": "rm -rf /"})
-	if v, _ := pol.Evaluate("bash", args); v != core.VerdictAllow {
+	if v, _ := pol.Evaluate("bash", args); v != permission.VerdictAllow {
 		t.Errorf("user allow should beat project deny, got %v", v)
 	}
 }
@@ -177,7 +177,7 @@ func TestBuildPermissionPolicyProjectBeatsExtensionWhereUserSilent(t *testing.T)
 	}
 
 	pol, _ := BuildPolicy(Inputs{CWD: proj})
-	if v, reason := pol.Evaluate("web_fetch_raw", nil); v != core.VerdictDeny || !strings.Contains(reason, "not in this repo") {
+	if v, reason := pol.Evaluate("web_fetch_raw", nil); v != permission.VerdictDeny || !strings.Contains(reason, "not in this repo") {
 		t.Errorf("project deny should beat extension ask where the user is silent: %v %q", v, reason)
 	}
 }

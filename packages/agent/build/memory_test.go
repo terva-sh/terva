@@ -8,6 +8,7 @@ import (
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/agent/tools/memory"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -63,11 +64,11 @@ func TestNoMemoryRemovesTheTool(t *testing.T) {
 	cwd := testsupport.TempDir(t)
 	sandbox := tools.NewSandbox(cwd)
 
-	on := BuildToolRegistry(Args{}, core.ApprovalAsk, cwd, sandbox, "anthropic", "key", false, nil)
+	on := BuildToolRegistry(Args{}, permission.ApprovalAsk, cwd, sandbox, "anthropic", "key", false, nil)
 	if _, ok := on["memory"]; !ok {
 		t.Fatal("memory tool absent by default; it should be on")
 	}
-	off := BuildToolRegistry(Args{NoMemory: true}, core.ApprovalAsk, cwd, sandbox, "anthropic", "key", false, nil)
+	off := BuildToolRegistry(Args{NoMemory: true}, permission.ApprovalAsk, cwd, sandbox, "anthropic", "key", false, nil)
 	if _, ok := off["memory"]; ok {
 		t.Error("--no-memory left the memory tool registered")
 	}
@@ -89,7 +90,7 @@ func TestMemorySurvivesPlanMode(t *testing.T) {
 		t.Error("memory is not classified builtin; workspace mode will prompt for it")
 	}
 	cwd := testsupport.TempDir(t)
-	reg := BuildToolRegistry(Args{}, core.ApprovalPlan, cwd, tools.NewSandbox(cwd), "anthropic", "key", false, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalPlan, cwd, tools.NewSandbox(cwd), "anthropic", "key", false, nil)
 	if _, ok := reg["memory"]; !ok {
 		t.Error("plan mode pruned the memory tool")
 	}
@@ -196,7 +197,7 @@ func TestAMemoryExtensionTakesTheSlotRatherThanEmptyingIt(t *testing.T) {
 // most needs to record what it learned.
 func TestCoreMemorySurvivesAnExtensionToolPlanModeWouldSkip(t *testing.T) {
 	r, _ := memResolved(t)
-	r.ApprovalMode = core.ApprovalPlan
+	r.ApprovalMode = permission.ApprovalPlan
 	r.MergeExtensionTools(fakeExtSource{names: []string{"memory"}, readOnly: false})
 
 	if _, ok := r.ToolRegistry["memory"]; !ok {

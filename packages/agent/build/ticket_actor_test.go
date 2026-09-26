@@ -10,6 +10,7 @@ import (
 
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -70,7 +71,7 @@ func TestTicketToolsCarryTheSubagentActor(t *testing.T) {
 	t.Setenv("TERVA_SWARM_AGENT_ID", "sweep-the-logs-900001")
 	dir := ticketStoreDir(t)
 
-	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, dir, nil, "", "", false, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, dir, nil, "", "", false, nil)
 	ct, ok := reg["ticket_claim"].(*tools.TicketClaimTool)
 	if !ok {
 		t.Fatalf("ticket_claim is %T, not *tools.TicketClaimTool", reg["ticket_claim"])
@@ -91,7 +92,7 @@ func TestTicketInitKeepsThePersonaActorInASwarmChild(t *testing.T) {
 	// No store here, which is the inverse gate ticket_init registers on.
 	dir := testsupport.TempDir(t)
 
-	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, dir, nil, "", "", false, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, dir, nil, "", "", false, nil)
 	ti, ok := reg["ticket_init"].(*tools.TicketInitTool)
 	if !ok {
 		t.Fatalf("ticket_init is %T, not *tools.TicketInitTool", reg["ticket_init"])
@@ -158,7 +159,7 @@ func TestATicketWriteRecordsThePersonaActorWithoutTheModelPassingOne(t *testing.
 	t.Setenv("TERVA_PERSONA_NAME", "Mieli")
 	t.Setenv("TERVA_SWARM_AGENT_ID", "")
 	dir := ticketStoreDir(t)
-	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, dir, nil, "", "", false, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, dir, nil, "", "", false, nil)
 
 	// Not one of these calls names an actor. That absence is the criterion.
 	made := ticketExec(t, reg, "ticket_create", map[string]any{"title": "Prove the actor lands"})

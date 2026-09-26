@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/build"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // promptDumpWire renders the request as the provider would serialize it, in the
@@ -36,7 +36,7 @@ func promptDumpWire(args build.Args, r build.Resolved, msgs []provider.Message) 
 		Temperature:      r.Temperature,
 	}
 	if p := strings.TrimSpace(args.Session); p != "" {
-		if created, err := core.ReadSessionCreation(p); err == nil {
+		if created, err := session.ReadSessionCreation(p); err == nil {
 			req.PromptCacheKey = created.ID
 		}
 	}
@@ -91,7 +91,7 @@ func promptDumpText(args build.Args) (string, error) {
 	// session that is live (or that the user cannot write) neither takes an
 	// append handle on it nor needs one.
 	if p := strings.TrimSpace(args.Session); p != "" {
-		prior, err := core.ReadSessionMessages(p)
+		prior, err := session.ReadSessionMessages(p)
 		if err != nil {
 			return "", err
 		}

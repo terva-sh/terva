@@ -10,10 +10,11 @@ import (
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/session"
 )
 
 // The play cast on the wire. cast.add / cast.remove edit a play session's
-// ensemble mid-scene: they write SessionMeta.Cast (a durable last-wins meta row)
+// ensemble mid-scene: they write session.Stage.Cast (a durable last-wins stage row)
 // and rebuild the actor_spawn tool + cast addendum so the director can voice the
 // new roster on the next turn. Changing the cast reshapes the cached prefix (the
 // actor `enum` and the addendum), so it goes through rebuildTools exactly like a
@@ -37,9 +38,9 @@ func (w *Workspace) CastAdd(_ context.Context, sess string, p ctrlproto.CastMemb
 	// turn the meta-narrator on for a one-character scene (and list them twice
 	// in the router prompt). routableRoster filters reads for sessions that
 	// already carry such an entry; this keeps new ones from being written.
-	if s.sess.Meta.Experience == "chat" {
+	if s.sess.Stage.Experience == "chat" {
 		boundName, _ := s.boundCharacter()
-		if ref == strings.TrimSpace(s.sess.Meta.Card) || strings.EqualFold(name, boundName) {
+		if ref == strings.TrimSpace(s.sess.Stage.Card) || strings.EqualFold(name, boundName) {
 			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("%s is already on stage as the main character", name))
 		}
 	}
@@ -47,7 +48,7 @@ func (w *Workspace) CastAdd(_ context.Context, sess string, p ctrlproto.CastMemb
 	next[name] = ref
 	models := s.castModels()
 	if pinModel := strings.TrimSpace(p.Model); pinModel != "" {
-		models[name] = core.CastRoute{Provider: strings.TrimSpace(p.Provider), Model: pinModel}
+		models[name] = session.CastRoute{Provider: strings.TrimSpace(p.Provider), Model: pinModel}
 	} else {
 		delete(models, name) // re-adding without a model clears any prior pin
 	}
@@ -94,7 +95,7 @@ func (s *wsSession) speak(actor string) error {
 	if actor == "" {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("cast.speak needs an actor"))
 	}
-	if s.sess.Meta.Experience != build.ExperiencePlay {
+	if s.sess.Stage.Experience != build.ExperiencePlay {
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("a cast is only available for play sessions"))
 	}
 	if _, ok := s.castRefs()[actor]; !ok {
@@ -120,7 +121,7 @@ func (w *Workspace) castSession(sess string) (*wsSession, error) {
 	// session. In a play session it warms actors for actor_spawn; in a chat it is
 	// the directed-authorship roster, voiced on demand (post.line/suggest) with no
 	// warm agents. applyCast gates the play-only machinery.
-	if s.sess == nil || s.sess.Meta.Experience == "" {
+	if s.sess == nil || s.sess.Stage.Experience == "" {
 		return nil, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("a roster is only available in a chat or play session"))
 	}
 	if s.busy() {
@@ -142,11 +143,11 @@ func (s *wsSession) castRefs() map[string]string {
 
 // castModels returns a mutable copy of the session's per-actor model pins
 // (Phase 7), persisted in session meta parallel to the cast refs.
-func (s *wsSession) castModels() map[string]core.CastRoute {
+func (s *wsSession) castModels() map[string]session.CastRoute {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make(map[string]core.CastRoute, len(s.sess.Meta.CastModels))
-	for k, v := range s.sess.Meta.CastModels {
+	out := make(map[string]session.CastRoute, len(s.sess.Stage.CastModels))
+	for k, v := range s.sess.Stage.CastModels {
 		out[k] = v
 	}
 	return out
@@ -154,7 +155,7 @@ func (s *wsSession) castModels() map[string]core.CastRoute {
 
 // castRoutesToView converts the persisted per-actor model pins to their wire
 // shape for SessionInfo; nil when there are none (so the field is omitted).
-func castRoutesToView(models map[string]core.CastRoute) map[string]ctrlproto.CastRoute {
+func castRoutesToView(models map[string]session.CastRoute) map[string]ctrlproto.CastRoute {
 	if len(models) == 0 {
 		return nil
 	}
@@ -168,7 +169,7 @@ func castRoutesToView(models map[string]core.CastRoute) map[string]ctrlproto.Cas
 // applyCastModels overlays per-actor model pins onto a freshly-built cast: an
 // actor named in `models` runs on its pinned provider+model; the rest inherit the
 // host/tier route. A pin for a name not in the cast is simply ignored.
-func applyCastModels(cast map[string]tools.CastMember, models map[string]core.CastRoute) {
+func applyCastModels(cast map[string]tools.CastMember, models map[string]session.CastRoute) {
 	for name, route := range models {
 		if m, ok := cast[name]; ok {
 			m.Provider = route.Provider
@@ -181,7 +182,7 @@ func applyCastModels(cast map[string]tools.CastMember, models map[string]core.Ca
 // applyCast validates the new cast, persists it, rebuilds the actor_spawn tool +
 // cast addendum, and retires any removed actors' warm agents. The refs in
 // `removed` have already been dropped from `next`.
-func (s *wsSession) applyCast(next map[string]string, models map[string]core.CastRoute, removed []string) error {
+func (s *wsSession) applyCast(next map[string]string, models map[string]session.CastRoute, removed []string) error {
 	args := s.argsSnapshot()
 	args.Cast = next
 	// Warm actors + the actor_spawn tool are a PLAY skin (CastSkinActive), built

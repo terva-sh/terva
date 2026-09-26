@@ -63,7 +63,7 @@ func sessionsDoctor(ctx context.Context, s *wsSession, p ctrlproto.SessionDoctor
 		return ctrlproto.SessionDoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("the session doctor reads a chat or play session"))
 	}
 	ag := s.agent
-	if ag == nil || ag.Client() == nil {
+	if ag == nil || ag.Client == nil {
 		return ctrlproto.SessionDoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("not logged in"))
 	}
 	pers, err := persona.Resolve(dramaturgPersona)
@@ -71,7 +71,7 @@ func sessionsDoctor(ctx context.Context, s *wsSession, p ctrlproto.SessionDoctor
 		return ctrlproto.SessionDoctorResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("the %s persona is unavailable", dramaturgPersona))
 	}
 	// Default to the session's live client + model; an override resolves fresh.
-	cl := ag.Client()
+	cl := ag.Client
 	_, model := s.currentModel()
 	if strings.TrimSpace(p.Model) != "" {
 		oc, om, err := s.ws.overrideClient(s.argsSnapshot(), p.Provider, p.Model)

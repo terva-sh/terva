@@ -7,6 +7,7 @@ import (
 
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 func msg(role provider.Role, blocks ...provider.Content) provider.Message {
@@ -36,16 +37,16 @@ func collapse(in []string) []string {
 // tool-using prompt: a first turn that calls a tool, its result, then a
 // terminal text turn closed by EvDone.
 func TestSynthesizeTurnOrdering(t *testing.T) {
-	rows := []core.ReplayRow{
-		{Kind: core.ReplayRowMessage, Message: msg(provider.RoleUser, provider.TextBlock{Text: "hi"})},
-		{Kind: core.ReplayRowMessage, Message: msg(provider.RoleAssistant,
+	rows := []session.ReplayRow{
+		{Kind: session.ReplayRowMessage, Message: msg(provider.RoleUser, provider.TextBlock{Text: "hi"})},
+		{Kind: session.ReplayRowMessage, Message: msg(provider.RoleAssistant,
 			provider.TextBlock{Text: "let me look"},
 			provider.ToolCallBlock{ID: "t1", Name: "read", Arguments: []byte(`{"p":"x"}`)},
 		)},
-		{Kind: core.ReplayRowMessage, Message: msg(provider.RoleTool,
+		{Kind: session.ReplayRowMessage, Message: msg(provider.RoleTool,
 			provider.ToolResultBlock{CallID: "t1", Content: []provider.Content{provider.TextBlock{Text: "data"}}},
 		)},
-		{Kind: core.ReplayRowMessage, Message: msg(provider.RoleAssistant, provider.TextBlock{Text: "all done"})},
+		{Kind: session.ReplayRowMessage, Message: msg(provider.RoleAssistant, provider.TextBlock{Text: "all done"})},
 	}
 	got := collapse(eventTypes(Synthesize(rows, Options{Mode: ModeRaw})))
 	want := []string{
@@ -67,9 +68,9 @@ func TestSynthesizeTurnOrdering(t *testing.T) {
 // paced deltas that reassemble losslessly.
 func TestSynthesizeChunksText(t *testing.T) {
 	long := strings.Repeat("x", 20) // ceil(20/6) = 4 chunks
-	rows := []core.ReplayRow{
-		{Kind: core.ReplayRowMessage, Message: msg(provider.RoleUser, provider.TextBlock{Text: "go"})},
-		{Kind: core.ReplayRowMessage, Message: msg(provider.RoleAssistant, provider.TextBlock{Text: long})},
+	rows := []session.ReplayRow{
+		{Kind: session.ReplayRowMessage, Message: msg(provider.RoleUser, provider.TextBlock{Text: "go"})},
+		{Kind: session.ReplayRowMessage, Message: msg(provider.RoleAssistant, provider.TextBlock{Text: long})},
 	}
 	frames := Synthesize(rows, Options{})
 	deltas := 0
@@ -95,12 +96,12 @@ func TestSynthesizeChunksText(t *testing.T) {
 // TestSynthesizeModes checks that effective mode animates compaction and raw
 // mode plays straight through it.
 func TestSynthesizeModes(t *testing.T) {
-	rows := []core.ReplayRow{
-		{Kind: core.ReplayRowMessage, Message: msg(provider.RoleUser, provider.TextBlock{Text: "a"})},
-		{Kind: core.ReplayRowMessage, Message: msg(provider.RoleAssistant, provider.TextBlock{Text: "b"})},
-		{Kind: core.ReplayRowCompaction, Checkpoint: []provider.Message{msg(provider.RoleUser, provider.TextBlock{Text: "sum"})}},
-		{Kind: core.ReplayRowMessage, Message: msg(provider.RoleUser, provider.TextBlock{Text: "c"})},
-		{Kind: core.ReplayRowMessage, Message: msg(provider.RoleAssistant, provider.TextBlock{Text: "d"})},
+	rows := []session.ReplayRow{
+		{Kind: session.ReplayRowMessage, Message: msg(provider.RoleUser, provider.TextBlock{Text: "a"})},
+		{Kind: session.ReplayRowMessage, Message: msg(provider.RoleAssistant, provider.TextBlock{Text: "b"})},
+		{Kind: session.ReplayRowCompaction, Checkpoint: []provider.Message{msg(provider.RoleUser, provider.TextBlock{Text: "sum"})}},
+		{Kind: session.ReplayRowMessage, Message: msg(provider.RoleUser, provider.TextBlock{Text: "c"})},
+		{Kind: session.ReplayRowMessage, Message: msg(provider.RoleAssistant, provider.TextBlock{Text: "d"})},
 	}
 	eff := eventTypes(Synthesize(rows, Options{Mode: ModeEffective}))
 	if !slices.Contains(eff, "compact_start") || !slices.Contains(eff, "compact_end") {
@@ -117,13 +118,13 @@ func TestSynthesizeModes(t *testing.T) {
 func TestSynthesizeSyntheticUserStaysInPrompt(t *testing.T) {
 	synthetic := msg(provider.RoleUser, provider.TextBlock{Text: "continue"})
 	synthetic.Meta = map[string]string{core.MetaSynthetic: "true"}
-	rows := []core.ReplayRow{
-		{Kind: core.ReplayRowMessage, Message: msg(provider.RoleUser, provider.TextBlock{Text: "start"})},
-		{Kind: core.ReplayRowMessage, Message: msg(provider.RoleAssistant,
+	rows := []session.ReplayRow{
+		{Kind: session.ReplayRowMessage, Message: msg(provider.RoleUser, provider.TextBlock{Text: "start"})},
+		{Kind: session.ReplayRowMessage, Message: msg(provider.RoleAssistant,
 			provider.TextBlock{Text: "ok"},
 			provider.ToolCallBlock{ID: "t1", Name: "x", Arguments: []byte(`{}`)},
 		)},
-		{Kind: core.ReplayRowMessage, Message: synthetic},
+		{Kind: session.ReplayRowMessage, Message: synthetic},
 	}
 	frames := Synthesize(rows, Options{Mode: ModeRaw})
 	// The one EvDone is the synthesized close at end-of-rows, not one before

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // syncBuf is a mutex-guarded io.Writer so a test can read frames the server
@@ -75,7 +75,7 @@ func TestRPCConfirmAsksAndAwaitsApprove(t *testing.T) {
 			out := &syncBuf{}
 			s := &rpcServer{ctx: context.Background(), out: out}
 
-			got := make(chan core.ConfirmDecision, 1)
+			got := make(chan permission.ConfirmDecision, 1)
 			go func() { got <- s.Confirm(context.Background(), "bash", "rm -rf /tmp/x") }()
 
 			id := waitForAsk(t, out)
@@ -104,7 +104,7 @@ func TestRPCConfirmAsksAndAwaitsApprove(t *testing.T) {
 func TestRPCConfirmRememberFlagsCross(t *testing.T) {
 	out := &syncBuf{}
 	s := &rpcServer{ctx: context.Background(), out: out}
-	got := make(chan core.ConfirmDecision, 1)
+	got := make(chan permission.ConfirmDecision, 1)
 	go func() { got <- s.Confirm(context.Background(), "read", "/etc/hosts") }()
 	id := waitForAsk(t, out)
 	s.dispatch("approve", id, []byte(`{"type":"approve","id":"`+id+`","allow":true,"remember_tool":true}`))
@@ -137,7 +137,7 @@ func TestRPCConfirmCancelledDenies(t *testing.T) {
 	out := &syncBuf{}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &rpcServer{ctx: ctx, out: out}
-	got := make(chan core.ConfirmDecision, 1)
+	got := make(chan permission.ConfirmDecision, 1)
 	go func() { got <- s.Confirm(context.Background(), "bash", "sleep 100") }()
 	waitForAsk(t, out)
 	cancel()
@@ -168,7 +168,7 @@ func TestRPCAbortUnparksPendingApproval(t *testing.T) {
 	defer cancelTurn()
 	s.setCancel(cancelTurn)
 
-	got := make(chan core.ConfirmDecision, 1)
+	got := make(chan permission.ConfirmDecision, 1)
 	go func() { got <- s.Confirm(turnCtx, "bash", "sleep 100") }()
 	waitForAsk(t, out)
 
@@ -188,13 +188,13 @@ func TestRPCAbortUnparksPendingApproval(t *testing.T) {
 }
 
 // TestRPCGateRoutesThroughAskApprove is the whole point, end to end: a
-// core.ConfirmGate backed by the rpc server routes a would-be-refused tool call
+// permission.ConfirmGate backed by the rpc server routes a would-be-refused tool call
 // through the wire and honours the driver's verdict. This is the "5th carrier"
 // filling the nil-inner hole — Check now asks instead of refusing.
 func TestRPCGateRoutesThroughAskApprove(t *testing.T) {
 	out := &syncBuf{}
 	s := &rpcServer{ctx: context.Background(), out: out}
-	gate := core.NewConfirmGate(s) // no policy: every not-yet-allowed call asks the inner Confirmer
+	gate := permission.NewConfirmGate(s) // no policy: every not-yet-allowed call asks the inner Confirmer
 
 	type res struct {
 		allow  bool

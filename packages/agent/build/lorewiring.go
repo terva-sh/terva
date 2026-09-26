@@ -11,6 +11,7 @@ import (
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // PerTurnContext returns a per-turn context provider for this run's uncached
@@ -98,7 +99,7 @@ func (r *Resolved) tailProvider(ag *core.Agent, record bool) func() string {
 			if ws := world.Get(); len(ws) > 0 {
 				merged := make([]lore.Entry, 0, len(ws)+len(triggered))
 				for _, e := range ws {
-					if core.IsSceneState(e.Name) {
+					if session.IsSceneState(e.Name) {
 						sceneState = strings.TrimSpace(e.Content)
 						continue
 					}
@@ -581,7 +582,7 @@ func WireEphemeralTail(ag *core.Agent, t EphemeralTail) {
 // the active session across open / resume / fork / /new / /cd / close. Call it
 // wherever EmitSessionStart fires. nil ctrl is a no-op; a rebind error is
 // swallowed (a persistence hiccup must not break session start).
-func RebindTasks(ctrl *tasktool.Controller, sess *core.Session) {
+func RebindTasks(ctrl *tasktool.Controller, sess *session.Session) {
 	if ctrl == nil {
 		return
 	}
@@ -754,7 +755,7 @@ func newWorldLoreRecord(immersive bool) *WorldLoreRecord {
 // engine entries for the per-turn scan. Source "world" tags the activation
 // trace; DefaultOrder keeps world entries peers of a card's book, with input
 // position (world first — see tailProvider) breaking the tie.
-func WorldLoreEntries(meta []core.WorldLoreEntry) []lore.Entry {
+func WorldLoreEntries(meta []session.WorldLoreEntry) []lore.Entry {
 	if len(meta) == 0 {
 		return nil
 	}

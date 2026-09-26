@@ -8,12 +8,12 @@ import (
 
 	"terva.sh/terva/packages/agent/mcp"
 	"terva.sh/terva/packages/agent/mcpbridge"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // mcpApprovalConfirmer routes a tool confirmation through terva's OWN MCP client
 // to an approval tool, mapping its {behavior} result back to a
-// core.ConfirmDecision. It is the MCP carrier of core.Confirmer, and it is
+// permission.ConfirmDecision. It is the MCP carrier of permission.Confirmer, and it is
 // transport-blind: the client underneath may be a local stdio bridge (`terva rpc
 // --approval-socket`, the terva:portable worker) or a REMOTE Streamable-HTTP
 // endpoint (`--approval-http`, a foreign orchestrator gating the worker over the
@@ -47,7 +47,7 @@ func withEitherDone(a, b context.Context) (context.Context, context.CancelFunc) 
 // ctx is the calling turn's; c.ctx is the server's. The call is bounded by
 // whichever ends first — an orchestrator that never answers no longer holds a
 // cancelled turn open for the full approval timeout.
-func (c *mcpApprovalConfirmer) Confirm(ctx context.Context, toolName, preview string) core.ConfirmDecision {
+func (c *mcpApprovalConfirmer) Confirm(ctx context.Context, toolName, preview string) permission.ConfirmDecision {
 	// terva already has a rendered preview, so pass it directly — the endpoint
 	// prefers an explicit preview over one derived from Claude-style input.
 	args, _ := json.Marshal(map[string]any{"tool_name": toolName, "preview": preview})
@@ -55,26 +55,26 @@ func (c *mcpApprovalConfirmer) Confirm(ctx context.Context, toolName, preview st
 	defer cancel()
 	res, err := c.client.CallTool(callCtx, c.tool, args)
 	if err != nil {
-		return core.ConfirmDecision{Allow: false, Reason: "approval endpoint unreachable: " + err.Error()}
+		return permission.ConfirmDecision{Allow: false, Reason: "approval endpoint unreachable: " + err.Error()}
 	}
 	if len(res.Content) == 0 || res.Content[0].Text == "" {
-		return core.ConfirmDecision{Allow: false, Reason: "empty approval result from the endpoint"}
+		return permission.ConfirmDecision{Allow: false, Reason: "empty approval result from the endpoint"}
 	}
 	var pr struct {
 		Behavior string `json:"behavior"`
 		Message  string `json:"message"`
 	}
 	if err := json.Unmarshal([]byte(res.Content[0].Text), &pr); err != nil {
-		return core.ConfirmDecision{Allow: false, Reason: "unparseable approval result from the endpoint"}
+		return permission.ConfirmDecision{Allow: false, Reason: "unparseable approval result from the endpoint"}
 	}
 	if pr.Behavior == "allow" {
-		return core.ConfirmDecision{Allow: true}
+		return permission.ConfirmDecision{Allow: true}
 	}
 	reason := pr.Message
 	if reason == "" {
 		reason = "denied by the orchestrator"
 	}
-	return core.ConfirmDecision{Allow: false, Reason: reason}
+	return permission.ConfirmDecision{Allow: false, Reason: reason}
 }
 
 // approvalHTTPTimeoutMS is the default per-call bound for both carriers: a human
@@ -88,7 +88,7 @@ const approvalHTTPTimeoutMS = 10 * 60 * 1000
 // approval eventually times out to deny — the designed "deny-and-park" — rather
 // than hanging the worker's turn forever. Returns (nil, nil, err) if the bridge
 // cannot start; the caller then leaves the gate's refuse-by-default in place.
-func startBridgeConfirmer(ctx context.Context, exe, socket, cwd string) (core.Confirmer, func(), error) {
+func startBridgeConfirmer(ctx context.Context, exe, socket, cwd string) (permission.Confirmer, func(), error) {
 	client, err := mcp.Start(ctx, mcpbridge.ServerName, mcp.ServerConfig{
 		Command:   exe,
 		Args:      []string{"mcp-approval-bridge", "--socket", socket},
@@ -124,7 +124,7 @@ type approvalHTTPConfig struct {
 // the gate's refuse-by-default in place (fail closed). A build with the
 // terva_no_mcp_http tag has no http transport, so Start fails "not compiled in"
 // and the run stays refuse-by-default, never silently open.
-func startHTTPConfirmer(ctx context.Context, spec, cwd string) (core.Confirmer, func(), error) {
+func startHTTPConfirmer(ctx context.Context, spec, cwd string) (permission.Confirmer, func(), error) {
 	var cfg approvalHTTPConfig
 	if err := json.Unmarshal([]byte(spec), &cfg); err != nil {
 		return nil, nil, fmt.Errorf("parse --approval-http: %w", err)

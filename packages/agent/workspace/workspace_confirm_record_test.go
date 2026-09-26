@@ -6,7 +6,10 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/core"
+
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -16,7 +19,7 @@ import (
 func TestWebConfirmerAndAskerRecordExchanges(t *testing.T) {
 	s := newTestSession()
 	path := filepath.Join(testsupport.TempDir(t), "s.jsonl")
-	sess, err := core.NewSessionAtPath(path, "/cwd", "prov", "model", "v1")
+	sess, err := session.NewSessionAtPath(path, "/cwd", "prov", "model", "v1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,12 +30,12 @@ func TestWebConfirmerAndAskerRecordExchanges(t *testing.T) {
 	}
 
 	c := &webConfirmer{s: s}
-	decided := make(chan core.ConfirmDecision, 1)
+	decided := make(chan permission.ConfirmDecision, 1)
 	go func() {
-		decided <- c.ConfirmWithRequest(context.Background(), core.ConfirmRequest{Tool: "bash", Preview: "go test", CallID: "call-1"})
+		decided <- c.ConfirmWithRequest(context.Background(), permission.ConfirmRequest{Tool: "bash", Preview: "go test", CallID: "call-1"})
 	}()
 	waitFor(t, "a parked permission", func() bool { return s.permPark.Len() == 1 })
-	s.approve("call-1", core.ConfirmDecision{Allow: false, Reason: "not now"})
+	s.approve("call-1", permission.ConfirmDecision{Allow: false, Reason: "not now"})
 	if d := <-decided; d.Allow {
 		t.Fatal("decision lost")
 	}
@@ -53,7 +56,7 @@ func TestWebConfirmerAndAskerRecordExchanges(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancelled := make(chan struct{})
 	go func() {
-		c.ConfirmWithRequest(ctx, core.ConfirmRequest{Tool: "bash", CallID: "call-2"})
+		c.ConfirmWithRequest(ctx, permission.ConfirmRequest{Tool: "bash", CallID: "call-2"})
 		close(cancelled)
 	}()
 	waitFor(t, "a parked permission", func() bool { return s.permPark.Len() == 1 })
@@ -63,11 +66,11 @@ func TestWebConfirmerAndAskerRecordExchanges(t *testing.T) {
 	if err := sess.Close(); err != nil {
 		t.Fatal(err)
 	}
-	rows, _, err := core.ReadReplayRows(path)
+	rows, _, err := session.ReadReplayRows(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 3 || rows[1].Kind != core.ReplayRowPermission || rows[2].Kind != core.ReplayRowAsk {
+	if len(rows) != 3 || rows[1].Kind != session.ReplayRowPermission || rows[2].Kind != session.ReplayRowAsk {
 		t.Fatalf("rows: %+v", rows)
 	}
 	p := rows[1].Permission

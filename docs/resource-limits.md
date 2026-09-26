@@ -97,11 +97,11 @@ the other providers send small deltas.
 
 The classification matters as much as the bound. An over-limit line is
 *deterministic*, because the server re-sends the identical event on every
-attempt, so `newStreamLimitError` sets `Transient: false`. Marking it transient
+attempt, so `NewStreamLimitError` sets `Transient: false`. Marking it transient
 (which is what the old discarded-`Err()` path did, by falling through to
-`newStreamDeathError`) spends the whole retry budget, and the input tokens for
+`NewStreamDeathError`) spends the whole retry budget, and the input tokens for
 each attempt, to fail in the same place and then blame the network. A genuine
-mid-stream transport failure keeps `Transient: true` via `newStreamReadError`
+mid-stream transport failure keeps `Transient: true` via `NewStreamReadError`
 and now carries its cause instead of being laundered into a generic truncation.
 
 ## Local files (trusted, large caps)

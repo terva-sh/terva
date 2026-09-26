@@ -3,7 +3,7 @@ package build
 import (
 	"testing"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -20,7 +20,7 @@ func TestWorldStoreRoundTrip(t *testing.T) {
 	doc, err := s.Save(WorldDoc{
 		Name:         "Lowtown",
 		Characters:   map[string]string{"Elira": "elira-1"},
-		Lore:         []core.WorldLoreEntry{{Name: "secret", Constant: true, Content: "y", Audience: []string{"Elira"}, Learned: map[string]string{"Rook": "2026-07-19T00:00:00Z"}}},
+		Lore:         []session.WorldLoreEntry{{Name: "secret", Constant: true, Content: "y", Audience: []string{"Elira"}, Learned: map[string]string{"Rook": "2026-07-19T00:00:00Z"}}},
 		Coordination: "focus:Elira",
 	})
 	if err != nil {
@@ -40,7 +40,7 @@ func TestWorldStoreRoundTrip(t *testing.T) {
 	}
 
 	// An update keeps the id and Created — a World mutates in place.
-	got.Lore = append(got.Lore, core.WorldLoreEntry{Name: "new", Constant: true, Content: "z"})
+	got.Lore = append(got.Lore, session.WorldLoreEntry{Name: "new", Constant: true, Content: "z"})
 	updated, err := s.Save(got)
 	if err != nil {
 		t.Fatal(err)

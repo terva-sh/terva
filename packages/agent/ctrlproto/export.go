@@ -23,7 +23,7 @@ const (
 	// with each turn under its speaker. Lossy on purpose — no tool calls, no
 	// reasoning, no unchosen variants.
 	ExportMarkdown = "markdown"
-	// ExportTervaSession is the raw JSONL round-trip (core.ExportSession), the
+	// ExportTervaSession is the raw JSONL round-trip (session.ExportSession), the
 	// meaning tui-ctrlproto-parity reserved this verb for.
 	ExportTervaSession = "tervasession"
 )

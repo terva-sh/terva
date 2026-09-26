@@ -6,7 +6,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -38,13 +38,17 @@ func TestCreateSessionPersistsImmersiveSpec(t *testing.T) {
 	// Read back from disk. Read-only on purpose: the session is still live in
 	// the workspace above, and a second WRITE handle on it is what the session
 	// lock exists to refuse.
-	_, meta, err := core.ReadSessionMeta(info.Path)
+	_, meta, err := session.ReadSessionMeta(info.Path)
 	if err != nil {
 		t.Fatalf("reopen %s: %v", info.Path, err)
 	}
-	if meta.Experience != "play" || meta.Persona != "kertoja" {
+	stage, err := session.ReadSessionStage(info.Path)
+	if err != nil {
+		t.Fatalf("reopen %s: %v", info.Path, err)
+	}
+	if stage.Experience != "play" || meta.Persona != "kertoja" {
 		t.Errorf("persisted meta = {experience:%q persona:%q}, want {play kertoja}",
-			meta.Experience, meta.Persona)
+			stage.Experience, meta.Persona)
 	}
 
 	// An unknown experience is a clean bad-request, not a silent default.

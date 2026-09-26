@@ -10,12 +10,12 @@ import (
 	"testing"
 )
 
-// discardedOpenSession matches an assignment that calls core.OpenSession (or
+// discardedOpenSession matches an assignment that calls session.OpenSession (or
 // OpenSessionReconciled) and throws the *Session away: `_, msgs, err := ...`.
 //
 // The first return is the only one that carries the write handle, so `_` in
 // THAT position is the whole defect. The match is anchored to the start of a
-// statement for exactly that reason: `sess, _, err := core.OpenSession(...)`
+// statement for exactly that reason: `sess, _, err := session.OpenSession(...)`
 // discards the messages and keeps the handle, which is correct and common, and
 // an unanchored `_,` would flag every one of them.
 var discardedOpenSession = regexp.MustCompile(
@@ -24,7 +24,7 @@ var discardedOpenSession = regexp.MustCompile(
 // TestNoDiscardedOpenSessionHandle bans taking a session's WRITE handle for
 // what is really a read.
 //
-// core.OpenSession returns a live O_APPEND|O_WRONLY handle and a bufio.Writer.
+// session.OpenSession returns a live O_APPEND|O_WRONLY handle and a bufio.Writer.
 // Three call sites asked it only for the replayed messages and dropped the
 // *Session on the floor: packages/agent/build/sessionread.go (every extension
 // session read), packages/agent/tools/actor_spawn.go (reading a swarm child
@@ -37,7 +37,7 @@ var discardedOpenSession = regexp.MustCompile(
 // refusal. The parent reading a running child's transcript would contend with
 // the child forever, and nothing about the call site would say why.
 //
-// The remedy is core.ReadSessionMessages, or core.ReadSessionMeta when the
+// The remedy is session.ReadSessionMessages, or session.ReadSessionMeta when the
 // caller also needs a field off the meta. Both replay read-only.
 func TestNoDiscardedOpenSessionHandle(t *testing.T) {
 	root := filepath.Join("..", "..")
@@ -56,10 +56,10 @@ func TestNoDiscardedOpenSessionHandle(t *testing.T) {
 		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		// packages/core owns the function and reads it in its own tests, where
+		// packages/session owns the function and reads it in its own tests, where
 		// a discarded handle is the thing under test rather than a mistake.
 		rel, relErr := filepath.Rel(root, path)
-		if relErr == nil && strings.HasPrefix(filepath.ToSlash(rel), "packages/core/") {
+		if relErr == nil && strings.HasPrefix(filepath.ToSlash(rel), "packages/session/") {
 			return nil
 		}
 		b, readErr := os.ReadFile(path)
@@ -82,7 +82,7 @@ func TestNoDiscardedOpenSessionHandle(t *testing.T) {
 		t.Errorf("these call sites take a session's write handle and discard it:\n  %s\n\n"+
 			"OpenSession returns a live O_APPEND|O_WRONLY handle. Discarding it leaks a "+
 			"descriptor, and once sessions take a cross-process lock it also holds that lock "+
-			"until the process exits. Use core.ReadSessionMessages, or core.ReadSessionMeta "+
+			"until the process exits. Use session.ReadSessionMessages, or session.ReadSessionMeta "+
 			"when you need the meta too.", strings.Join(offenders, "\n  "))
 	}
 }

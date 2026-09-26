@@ -7,7 +7,7 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -179,7 +179,7 @@ func TestEffectiveDefaultModelWorldRung(t *testing.T) {
 	}
 
 	// Given one, it outranks the workspace.
-	doc.Model = core.CastRoute{Provider: "openai", Model: "gpt-5.5"}
+	doc.Model = session.CastRoute{Provider: "openai", Model: "gpt-5.5"}
 	if doc, err = store.Save(doc); err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestEffectiveDefaultModelWorldRung(t *testing.T) {
 	// A World naming a model this workspace cannot run degrades to the floor,
 	// exactly like the card rung — a default that resolves to nothing must not
 	// seed an unrunnable session.
-	doc.Model = core.CastRoute{Provider: "openai", Model: "no-such-model-xyz"}
+	doc.Model = session.CastRoute{Provider: "openai", Model: "no-such-model-xyz"}
 	if _, err = store.Save(doc); err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestSessionCreatedInAWorldOpensOnItsModel(t *testing.T) {
 	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	store := build.NewWorldStore()
-	doc, err := store.Save(build.WorldDoc{Name: "Bellhaven", Model: core.CastRoute{Provider: "openai", Model: "gpt-5.5"}})
+	doc, err := store.Save(build.WorldDoc{Name: "Bellhaven", Model: session.CastRoute{Provider: "openai", Model: "gpt-5.5"}})
 	if err != nil {
 		t.Fatal(err)
 	}

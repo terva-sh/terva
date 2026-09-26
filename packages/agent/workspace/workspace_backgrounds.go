@@ -11,8 +11,8 @@ import (
 )
 
 // Scene backdrops on the wire. The store is global (like cards), but a
-// background is BOUND per session — backgrounds.bind writes SessionMeta.Background
-// (a durable meta row) and broadcasts a snapshot so the open view re-renders.
+// background is BOUND per session — backgrounds.bind writes session.Stage.Background
+// (a durable stage row) and broadcasts a snapshot so the open view re-renders.
 // Backgrounds are inert images, so there is no trust gate.
 var _ ctrlproto.BackgroundsController = (*Workspace)(nil)
 

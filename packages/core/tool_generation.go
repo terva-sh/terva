@@ -12,6 +12,16 @@ type toolGeneration struct {
 
 type toolGenerationKey struct{}
 
+// ReadOnlyForCall returns a copy of the read-only set pinned to the call ctx
+// belongs to, or nil when ctx carries no pinned generation. A gate classifies
+// the call with it, so the tool metadata it reads comes from the same
+// generation as the implementation the call executes. Pass the context
+// ToolForCall returned.
+func ReadOnlyForCall(ctx context.Context) *ReadOnlySet {
+	g, _ := ctx.Value(toolGenerationKey{}).(toolGeneration)
+	return g.readOnly.Snapshot()
+}
+
 // SetToolsWithReadOnly publishes tools and their classification together.
 // Build a fresh registry before calling this method; never mutate it after
 // publication. The classification is copied. Nil classifies every tool as

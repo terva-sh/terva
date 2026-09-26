@@ -64,7 +64,7 @@ func markIndices(s *wsSession) []int {
 // BELOW it shifts every later message down one — so the mark must move too, or it
 // names a different message than the one it describes.
 //
-// The file-replay half did this from the start (core.ShiftVariantKeysOnDelete,
+// The file-replay half did this from the start (session.ShiftVariantKeysOnDelete,
 // called by walkSession, pinned by TestMessageVariantShiftsOnDelete). The LIVE
 // half did not: deleteMessage removed the message and invalidated the tail span
 // but never touched s.msgVars.

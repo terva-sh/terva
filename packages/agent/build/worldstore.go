@@ -13,7 +13,7 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/slug"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 
 	"terva.sh/terva/packages/privfs"
 )
@@ -23,7 +23,7 @@ import (
 // a rewrite (the proposal's pillar 2): the doc below is exactly the session's
 // World state (roster + pins + lore incl. the audience/learned axes +
 // coordination), lifted verbatim. Saved Worlds are listed beside sessions and
-// group the sessions created in them (SessionMeta.World).
+// group the sessions created in them (session.Stage.World).
 //
 // Sync semantics are EXPLICIT, not live: a session created in a World copies
 // the World in; play mutates the session's own copy; worlds.save writes a
@@ -46,8 +46,8 @@ type WorldDoc struct {
 	Description string `json:"description,omitempty"`
 	// Characters is the roster (name → card ref), CharacterModels the per-
 	// character model pins — the session Cast/CastModels shape, unchanged.
-	Characters      map[string]string         `json:"characters,omitempty"`
-	CharacterModels map[string]core.CastRoute `json:"character_models,omitempty"`
+	Characters      map[string]string            `json:"characters,omitempty"`
+	CharacterModels map[string]session.CastRoute `json:"character_models,omitempty"`
 	// Model is the World's OWN default model — the middle rung of the
 	// Card → World → Workspace ladder Workspace.effectiveDefaultModel walks.
 	// Empty means the World states no preference and the workspace default
@@ -60,15 +60,15 @@ type WorldDoc struct {
 	// zero value and every reader tests Model.Model for emptiness, so it is noise
 	// rather than a second state. Kept a value rather than a pointer because that
 	// is how CastRoute is held everywhere else (CharacterModels above,
-	// SessionMeta.CastModels), and nil would mean nothing here that the zero
+	// session.Stage.CastModels), and nil would mean nothing here that the zero
 	// value does not already mean.
-	Model core.CastRoute `json:"model,omitempty"`
+	Model session.CastRoute `json:"model,omitempty"`
 	// Lore is the World's lorebook, audience scoping and learned-when ledger
 	// included — the whole point of saving is that this survives the session.
-	Lore         []core.WorldLoreEntry `json:"lore,omitempty"`
-	Coordination string                `json:"coordination,omitempty"`
-	Created      time.Time             `json:"created"`
-	Updated      time.Time             `json:"updated"`
+	Lore         []session.WorldLoreEntry `json:"lore,omitempty"`
+	Coordination string                   `json:"coordination,omitempty"`
+	Created      time.Time                `json:"created"`
+	Updated      time.Time                `json:"updated"`
 }
 
 // WorldStore is the library rooted at WorldsDir(). Created lazily on first

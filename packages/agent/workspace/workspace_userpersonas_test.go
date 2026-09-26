@@ -41,16 +41,16 @@ func TestUserPersonasDefaultAndRef(t *testing.T) {
 	if got := reviseTexts(live.agent.Messages()); len(got) != 1 || !strings.Contains(got[0], "Kira") {
 		t.Errorf("default-persona greeting = %v, want it to contain Kira", got)
 	}
-	if live.sess.Meta.UserName != "Kira" {
-		t.Errorf("session user name = %q, want Kira (the default, stamped in meta)", live.sess.Meta.UserName)
+	if live.sess.Stage.UserName != "Kira" {
+		t.Errorf("session user name = %q, want Kira (the default, stamped in meta)", live.sess.Stage.UserName)
 	}
 
 	// Binding a saved persona by ref applies its name + description.
 	if err := w.UserBind(ctx, info.ID, ctrlproto.UserBindParams{Ref: "aria"}); err != nil {
 		t.Fatal(err)
 	}
-	if live.sess.Meta.UserName != "Aria" {
-		t.Errorf("after bind ref, user name = %q, want Aria", live.sess.Meta.UserName)
+	if live.sess.Stage.UserName != "Aria" {
+		t.Errorf("after bind ref, user name = %q, want Aria", live.sess.Stage.UserName)
 	}
 	if err := w.UserBind(ctx, info.ID, ctrlproto.UserBindParams{Ref: "nope"}); err == nil {
 		t.Error("binding a missing saved persona should error")
@@ -61,7 +61,7 @@ func TestUserPersonasDefaultAndRef(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w.live(coding.ID).sess.Meta.UserName != "" {
+	if w.live(coding.ID).sess.Stage.UserName != "" {
 		t.Error("a coding session must not receive the default user persona")
 	}
 

@@ -312,24 +312,10 @@ func filesAt(repo, ref, pkg string) (map[string][]byte, error) {
 	return files, err
 }
 
-// expDir is the directory name of an experiments package (decision 0021, rule
-// 7). An exp package promises nothing, so its changes are not evidence for the
-// version and are left out of every census, wherever one sits.
-const expDir = "exp"
-
 // isSource keeps Go sources that are part of the package's surface. Tests are
-// out: they compile into no consumer's build. So is anything under an exp
-// directory: packages/core/exp is imported by hosts but promises nothing.
+// out: they compile into no consumer's build.
 func isSource(path string) bool {
-	if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-		return false
-	}
-	for _, seg := range strings.Split(path, "/") {
-		if seg == expDir {
-			return false
-		}
-	}
-	return true
+	return strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go")
 }
 
 // census extracts every exported symbol a consumer could name.

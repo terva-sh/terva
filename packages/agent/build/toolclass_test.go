@@ -6,7 +6,7 @@ import (
 	ticket "github.com/terva-sh/git-ticket/ticket"
 
 	"terva.sh/terva/packages/agent/permissions"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -42,6 +42,9 @@ var registeredElsewhere = map[string]string{
 	"terva_arm_restart": "workspace injectExtraTools, iff relaunch enabled",
 	"chat_send_image":   "workspace injectExtraTools, iff a chat bridge is bound",
 	"chat_send_file":    "workspace injectExtraTools, iff a chat bridge is bound",
+	"talkoot_send":      "workspace injectExtraTools, iff the session holds a talkoot seat",
+	"talkoot_handoff":   "workspace injectExtraTools, iff the session holds a talkoot seat",
+	"talkoot_roster":    "workspace injectExtraTools, iff the session holds a talkoot seat",
 	"share_file":        "workspace injectExtraTools — every session the workspace host serves",
 }
 
@@ -72,7 +75,7 @@ func toolUniverse(t *testing.T) map[string]bool {
 	if _, err := ticket.Init(dir, ticket.InitOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, dir, nil, "", "", false, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, dir, nil, "", "", false, nil)
 	if len(reg) < 9 {
 		t.Fatalf("registry yielded only %d tools; the universe is not seeing them", len(reg))
 	}
@@ -84,7 +87,7 @@ func toolUniverse(t *testing.T) map[string]bool {
 	// above can never see it. A second registry in a git repo with no store is
 	// what puts it in the universe, and without this the trusted-origin test
 	// would read its builtin entry as stale and demand its deletion.
-	for name := range BuildToolRegistry(Args{}, core.ApprovalWorkspace, gitRepoDir(t), nil, "", "", false, nil) {
+	for name := range BuildToolRegistry(Args{}, permission.ApprovalWorkspace, gitRepoDir(t), nil, "", "", false, nil) {
 		u[name] = true
 	}
 	for name := range registeredElsewhere {

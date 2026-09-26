@@ -7,8 +7,8 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/session"
 )
 
 // The archive group: the verb between keeping a session forever and destroying it.
@@ -36,15 +36,15 @@ func (w *Workspace) ArchiveSession(_ context.Context, sess string) (ctrlproto.Ar
 	}
 	w.mu.Unlock()
 
-	a, err := core.ArchiveSession(w.root, w.cwd, sess)
+	a, err := session.ArchiveSession(w.root, w.cwd, sess)
 	if err != nil {
-		if errors.Is(err, core.ErrNoSuchSession) {
+		if errors.Is(err, session.ErrNoSuchSession) {
 			return ctrlproto.ArchivedSessionInfo{}, ctrlproto.ErrNoSession
 		}
 		// Another terva has it open. That is the caller's problem to fix rather
 		// than ours to report as a fault, so it is a bad request carrying the
 		// holder rather than an internal error.
-		if errors.Is(err, core.ErrSessionLocked) {
+		if errors.Is(err, session.ErrSessionLocked) {
 			return ctrlproto.ArchivedSessionInfo{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("archive: %v", err))
 		}
 		return ctrlproto.ArchivedSessionInfo{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("archive: %v", err))
@@ -56,7 +56,7 @@ func (w *Workspace) ArchiveSession(_ context.Context, sess string) (ctrlproto.Ar
 
 // ArchivedSessions lists this directory's archive, newest archived first.
 func (w *Workspace) ArchivedSessions(_ context.Context) ([]ctrlproto.ArchivedSessionInfo, error) {
-	list := core.ListArchivedSessions(w.root, w.cwd)
+	list := session.ListArchivedSessions(w.root, w.cwd)
 	out := make([]ctrlproto.ArchivedSessionInfo, 0, len(list))
 	for _, a := range list {
 		out = append(out, archivedInfo(a))
@@ -73,11 +73,11 @@ func (w *Workspace) RestoreSession(ctx context.Context, p ctrlproto.RestoreSessi
 	if !validSessionID(p.ID) {
 		return ctrlproto.SessionInfo{}, ctrlproto.ErrNoSession
 	}
-	_, err := core.RestoreSession(w.root, w.cwd, p.ID)
+	_, err := session.RestoreSession(w.root, w.cwd, p.ID)
 	switch {
-	case errors.Is(err, core.ErrSessionNotArchived):
+	case errors.Is(err, session.ErrSessionNotArchived):
 		return ctrlproto.SessionInfo{}, ctrlproto.Errorf(ctrlproto.CodeNoSession, "%s", i18n.T("no archived session %q", p.ID))
-	case errors.Is(err, core.ErrSessionExists):
+	case errors.Is(err, session.ErrSessionExists):
 		return ctrlproto.SessionInfo{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("a session with that id is already active; it was left untouched"))
 	case err != nil:
 		return ctrlproto.SessionInfo{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "%s", i18n.T("restore: %v", err))
@@ -88,7 +88,7 @@ func (w *Workspace) RestoreSession(ctx context.Context, p ctrlproto.RestoreSessi
 	// usually restored to be looked at later, not resumed on the spot, and
 	// opening one here would build an agent nobody asked for.
 	info := ctrlproto.SessionInfo{ID: p.ID}
-	for _, s := range core.DescribeSessions(w.root, w.cwd) {
+	for _, s := range session.DescribeSessions(w.root, w.cwd) {
 		if build.SessionIDFromPath(s.Path) != p.ID {
 			continue
 		}
@@ -101,7 +101,7 @@ func (w *Workspace) RestoreSession(ctx context.Context, p ctrlproto.RestoreSessi
 	return info, nil
 }
 
-func archivedInfo(a core.ArchivedSession) ctrlproto.ArchivedSessionInfo {
+func archivedInfo(a session.ArchivedSession) ctrlproto.ArchivedSessionInfo {
 	out := ctrlproto.ArchivedSessionInfo{
 		ID:           a.ID,
 		Title:        a.Title,

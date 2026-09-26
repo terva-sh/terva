@@ -28,6 +28,7 @@ import (
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // worldNoteDesc is the English default for tool.world_note.description. The
@@ -55,7 +56,7 @@ func (t *worldNoteTool) Description() string {
 	// The scene-state sentence is the SD4 write path: the proposal's "model-
 	// writable through world_note" is exactly this carve-out, and the
 	// description is the only place the director learns the pin exists.
-	return i18n.D("tool.world_note.description", worldNoteDesc, core.SceneStateName)
+	return i18n.D("tool.world_note.description", worldNoteDesc, session.SceneStateName)
 }
 
 func (t *worldNoteTool) Schema() json.RawMessage {
@@ -107,12 +108,12 @@ func (t *worldNoteTool) Execute(_ context.Context, raw json.RawMessage, _ func(s
 	// writing its reserved name replaces the card's content in place. Keys and
 	// audience are discarded — the pin is always-on and shared by definition
 	// (see worldLoreFromWire, which normalizes user puts the same way).
-	if core.IsSceneState(name) {
-		entry := core.WorldLoreEntry{Name: core.SceneStateName, Constant: true, Content: content, Model: true}
-		next := make([]core.WorldLoreEntry, 0, len(entries)+1)
+	if session.IsSceneState(name) {
+		entry := session.WorldLoreEntry{Name: session.SceneStateName, Constant: true, Content: content, Model: true}
+		next := make([]session.WorldLoreEntry, 0, len(entries)+1)
 		updated := false
 		for _, e := range entries {
-			if core.IsSceneState(e.Name) {
+			if session.IsSceneState(e.Name) {
 				if !updated {
 					next = append(next, entry)
 					updated = true
@@ -134,7 +135,7 @@ func (t *worldNoteTool) Execute(_ context.Context, raw json.RawMessage, _ func(s
 			return worldToolErr(fmt.Sprintf("world_note: an entry named %q already exists — entries are append-only, pick a fresh name (or reveal the existing one with world_reveal)", e.Name)), nil
 		}
 	}
-	entry := core.WorldLoreEntry{
+	entry := session.WorldLoreEntry{
 		Name:     name,
 		Keys:     trimList(a.Keys),
 		Audience: dedupeNames(a.Audience),
@@ -142,7 +143,7 @@ func (t *worldNoteTool) Execute(_ context.Context, raw json.RawMessage, _ func(s
 		Model:    true,
 	}
 	entry.Constant = len(entry.Keys) == 0
-	next := append(append([]core.WorldLoreEntry(nil), entries...), entry)
+	next := append(append([]session.WorldLoreEntry(nil), entries...), entry)
 	if err := t.s.setWorldLore(next); err != nil {
 		return core.ToolResult{}, err
 	}
@@ -194,7 +195,7 @@ func (t *worldRevealTool) Execute(_ context.Context, raw json.RawMessage, _ func
 	if entryName == "" || who == "" {
 		return worldToolErr("world_reveal: entry and character are required"), nil
 	}
-	entries := append([]core.WorldLoreEntry(nil), t.s.sess.Meta.WorldLore...)
+	entries := append([]session.WorldLoreEntry(nil), t.s.sess.Meta.WorldLore...)
 	idx := -1
 	for i, e := range entries {
 		if strings.EqualFold(e.Name, entryName) {
@@ -238,7 +239,7 @@ func worldToolErr(msg string) core.ToolResult {
 	return core.ToolResult{Content: []provider.Content{provider.TextBlock{Text: msg}}, IsError: true}
 }
 
-func worldEntryNames(entries []core.WorldLoreEntry) []string {
+func worldEntryNames(entries []session.WorldLoreEntry) []string {
 	out := make([]string, 0, len(entries))
 	for _, e := range entries {
 		out = append(out, e.Name)

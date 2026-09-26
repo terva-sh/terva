@@ -230,7 +230,7 @@ func (s *Sandbox) isTranscript(target string) bool {
 //
 // Opening the sanctioned reader while the raw ones stay shut therefore REDUCES
 // what leaks rather than widening it. session_inspect redacts credential
-// shapes (core.RedactSecrets) and bounds its output; `cat` of a copy does
+// shapes (session.RedactSecrets) and bounds its output; `cat` of a copy does
 // neither. The carve-out is narrow on both axes: only .jsonl, and only under a
 // root the host registered for the purpose. auth.json, the secrets key, the
 // web token, logs/ and config.json are refused here exactly as they are

@@ -9,9 +9,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"terva.sh/terva/packages/core/lazytools"
 	"testing"
 	"time"
+
+	"terva.sh/terva/packages/core/lazytools"
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
@@ -25,6 +26,7 @@ import (
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/relaunch"
@@ -164,7 +166,7 @@ func TestWebConfirmerApproveWins(t *testing.T) {
 	s.turnCtx = t.Context()
 	s.mu.Unlock()
 
-	result := make(chan core.ConfirmDecision, 1)
+	result := make(chan permission.ConfirmDecision, 1)
 	go func() {
 		result <- (&webConfirmer{s: s}).ConfirmWithCall(context.Background(), "bash", "ls -la", "call_42")
 	}()
@@ -177,7 +179,7 @@ func TestWebConfirmerApproveWins(t *testing.T) {
 		t.Fatalf("permission payload: %+v", ev.Permission)
 	}
 
-	s.approve("call_42", core.ConfirmDecision{Allow: true, RememberTool: true})
+	s.approve("call_42", permission.ConfirmDecision{Allow: true, RememberTool: true})
 	select {
 	case d := <-result:
 		if !d.Allow || !d.RememberTool {
@@ -244,7 +246,7 @@ func TestPendingPermissionRecordedForSnapshot(t *testing.T) {
 		t.Fatalf("pending permission not recorded for snapshot: %+v", req)
 	}
 
-	s.approve("c9", core.ConfirmDecision{Allow: true})
+	s.approve("c9", permission.ConfirmDecision{Allow: true})
 	if ev := recvEvent(t, sub); ev.Type != ctrlproto.EventPermissionResolved {
 		t.Fatalf("want permission_resolved, got %q", ev.Type)
 	}
@@ -263,7 +265,7 @@ func TestWebConfirmerCancelFailsClosed(t *testing.T) {
 	// ConfirmGate.Check does, instead of staging s.turnCtx.
 	ctx, cancel := context.WithCancel(context.Background())
 
-	result := make(chan core.ConfirmDecision, 1)
+	result := make(chan permission.ConfirmDecision, 1)
 	go func() {
 		result <- (&webConfirmer{s: s}).ConfirmWithCall(ctx, "bash", "rm -rf /", "c1")
 	}()
@@ -1588,17 +1590,17 @@ func TestExtensionStatus(t *testing.T) {
 // gate's mode + rules, reflects the live allow-all grant, and revoke_all clears
 // it (broadcasting a surface refresh); unknown actions error.
 func TestPermissionsSurface(t *testing.T) {
-	pol := &core.PermissionPolicy{
-		Mode: core.ApprovalWorkspace,
-		Rules: []core.PermissionRule{
-			{Tool: "bash", Decision: core.RuleAsk, Source: "user"},
-			{Tool: "read", Decision: core.RuleAllow, Source: "builtin"},
+	pol := &permission.PermissionPolicy{
+		Mode: permission.ApprovalWorkspace,
+		Rules: []permission.PermissionRule{
+			{Tool: "bash", Decision: permission.RuleAsk, Source: "user"},
+			{Tool: "read", Decision: permission.RuleAllow, Source: "builtin"},
 		},
 	}
-	s := &wsSession{id: "x", hub: newWSHub(), gate: core.NewPolicyGate(pol, nil)}
+	s := &wsSession{id: "x", hub: newWSHub(), gate: permission.NewPolicyGate(pol, nil)}
 
 	v := s.permissionsView()
-	if v.Mode != string(core.ApprovalWorkspace) {
+	if v.Mode != string(permission.ApprovalWorkspace) {
 		t.Errorf("mode = %q, want workspace", v.Mode)
 	}
 	if len(v.Rules) != 2 || v.Rules[0].Tool != "bash" || v.Rules[0].Decision != "ask" || v.Rules[1].Decision != "allow" {
@@ -1860,7 +1862,7 @@ func TestPermissionsRuleAction(t *testing.T) {
 	// Gate with an explicit policy (so SetRules isn't a no-op) + an allow-all
 	// confirmer, so a tool is allowed unless a deny RULE blocks it — isolating
 	// the rule effect from builtin classification.
-	gate := core.NewPolicyGate(&core.PermissionPolicy{Mode: core.ApprovalWorkspace}, allowConfirmer{})
+	gate := permission.NewPolicyGate(&permission.PermissionPolicy{Mode: permission.ApprovalWorkspace}, allowConfirmer{})
 	s := &wsSession{id: "x", hub: newWSHub(), ws: w, gate: gate, args: build.Args{}}
 	w.sessions["x"] = s
 
@@ -1896,8 +1898,8 @@ func TestPermissionsRuleAction(t *testing.T) {
 
 type allowConfirmer struct{}
 
-func (allowConfirmer) Confirm(_ context.Context, tool, preview string) core.ConfirmDecision {
-	return core.ConfirmDecision{Allow: true}
+func (allowConfirmer) Confirm(_ context.Context, tool, preview string) permission.ConfirmDecision {
+	return permission.ConfirmDecision{Allow: true}
 }
 
 // TestProjectScopeEditing covers project-scoped writes: a project permission
@@ -2473,12 +2475,12 @@ func TestSettingsSurface(t *testing.T) {
 	if pol == nil {
 		t.Skip("no policy for web mode")
 	}
-	gate := core.NewPolicyGate(pol, nil)
+	gate := permission.NewPolicyGate(pol, nil)
 	w := &Workspace{sessions: map[string]*wsSession{}}
 	s := &wsSession{id: "x", ws: w, hub: newWSHub(), gate: gate, agent: coretest.NewAgent(nil, "fake", "", core.Registry{}), extPanels: map[string]*webPanel{}}
 
 	v := s.settingsView()
-	if settingValue(v, "approval") != string(core.ApprovalWorkspace) {
+	if settingValue(v, "approval") != string(permission.ApprovalWorkspace) {
 		t.Errorf("approval value = %q, want workspace", settingValue(v, "approval"))
 	}
 	if settingValue(v, "reasoning") == "<missing>" || settingValue(v, "auto_title") == "<missing>" {
@@ -2488,7 +2490,7 @@ func TestSettingsSurface(t *testing.T) {
 	if err := s.settingsAction("set", map[string]string{"key": "approval", "value": "plan"}); err != nil {
 		t.Fatalf("set approval: %v", err)
 	}
-	if gate.Mode() != core.ApprovalPlan {
+	if gate.Mode() != permission.ApprovalPlan {
 		t.Errorf("gate mode = %v, want plan", gate.Mode())
 	}
 	if err := s.settingsAction("set", map[string]string{"key": "nope"}); err == nil {

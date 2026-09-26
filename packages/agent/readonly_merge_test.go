@@ -8,6 +8,7 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -36,16 +37,16 @@ func (t *fakeMergedTool) Execute(ctx context.Context, args json.RawMessage, prog
 // classification (so the gate allows it), while an unannotated tool
 // stays invisible and would be refused by the gate backstop.
 func TestPlanModeAdmitsReadOnlyExtensionTools(t *testing.T) {
-	pol := &core.PermissionPolicy{
-		Mode:      core.ApprovalPlan,
+	pol := &permission.PermissionPolicy{
+		Mode:      permission.ApprovalPlan,
 		ReadOnly:  permissions.BuiltinReadOnlySet(),
 		EditTools: permissions.EditToolSet(),
 	}
-	gate := core.NewPolicyGate(pol, nil)
+	gate := permission.NewPolicyGate(pol, nil)
 
 	r := &build.Resolved{
 		ToolRegistry: core.Registry{},
-		ApprovalMode: core.ApprovalPlan,
+		ApprovalMode: permission.ApprovalPlan,
 	}
 	r.AdoptReadOnlySet(pol.ReadOnly)
 	r.MergeExtensionTools(&fakeToolSource{infos: []build.ExtensionToolInfo{
@@ -71,13 +72,13 @@ func TestPlanModeAdmitsReadOnlyExtensionTools(t *testing.T) {
 // grows outside plan mode, so auto-edit can auto-allow annotated
 // extension tools.
 func TestNonPlanModeMergeMarksReadOnly(t *testing.T) {
-	pol := &core.PermissionPolicy{
-		Mode:      core.ApprovalAutoEdit,
+	pol := &permission.PermissionPolicy{
+		Mode:      permission.ApprovalAutoEdit,
 		ReadOnly:  permissions.BuiltinReadOnlySet(),
 		EditTools: permissions.EditToolSet(),
 	}
-	gate := core.NewPolicyGate(pol, nil)
-	r := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: core.ApprovalAutoEdit}
+	gate := permission.NewPolicyGate(pol, nil)
+	r := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: permission.ApprovalAutoEdit}
 	r.AdoptReadOnlySet(pol.ReadOnly)
 	r.MergeExtensionTools(&fakeToolSource{infos: []build.ExtensionToolInfo{
 		{Extension: "x", Name: "peek_things", Schema: []byte(`{}`), ReadOnly: true},
@@ -100,21 +101,21 @@ func TestNonPlanModeMergeMarksReadOnly(t *testing.T) {
 // even if it also set the legacy read_only bool, while a local-read
 // authority is treated as read-only.
 func TestAuthorityOverridesReadOnly(t *testing.T) {
-	pol := &core.PermissionPolicy{
-		Mode:      core.ApprovalWorkspace,
+	pol := &permission.PermissionPolicy{
+		Mode:      permission.ApprovalWorkspace,
 		ReadOnly:  permissions.BuiltinReadOnlySet(),
 		EditTools: permissions.EditToolSet(),
 		Builtin:   permissions.BuiltinSet(),
 	}
-	gate := core.NewPolicyGate(pol, nil)
-	r := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: core.ApprovalWorkspace}
+	gate := permission.NewPolicyGate(pol, nil)
+	r := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: permission.ApprovalWorkspace}
 	r.AdoptReadOnlySet(pol.ReadOnly)
 	r.MergeExtensionTools(&fakeToolSource{infos: []build.ExtensionToolInfo{
 		// Declares network-read AND the legacy read_only bool: authority
 		// wins, so it must NOT be auto-allowed as read-only.
-		{Extension: "web", Name: "web_fetch", Schema: []byte(`{}`), ReadOnly: true, Authority: string(core.AuthNetworkRead)},
+		{Extension: "web", Name: "web_fetch", Schema: []byte(`{}`), ReadOnly: true, Authority: string(permission.AuthNetworkRead)},
 		// Declares local-read: auto-allowable like a read-only tool.
-		{Extension: "x", Name: "peek_things", Schema: []byte(`{}`), Authority: string(core.AuthLocalRead)},
+		{Extension: "x", Name: "peek_things", Schema: []byte(`{}`), Authority: string(permission.AuthLocalRead)},
 	}})
 
 	if pol.ReadOnly.Has("web_fetch") {
@@ -135,12 +136,12 @@ func TestAuthorityOverridesReadOnly(t *testing.T) {
 // is not admitted to the plan-mode registry (plan permits local reads
 // only), even with read_only=true set.
 func TestAuthorityNetworkReadExcludedFromPlan(t *testing.T) {
-	pol := &core.PermissionPolicy{Mode: core.ApprovalPlan, ReadOnly: permissions.BuiltinReadOnlySet(), EditTools: permissions.EditToolSet()}
-	r := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: core.ApprovalPlan}
+	pol := &permission.PermissionPolicy{Mode: permission.ApprovalPlan, ReadOnly: permissions.BuiltinReadOnlySet(), EditTools: permissions.EditToolSet()}
+	r := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: permission.ApprovalPlan}
 	r.AdoptReadOnlySet(pol.ReadOnly)
 	r.MergeExtensionTools(&fakeToolSource{infos: []build.ExtensionToolInfo{
-		{Extension: "web", Name: "web_fetch", Schema: []byte(`{}`), ReadOnly: true, Authority: string(core.AuthNetworkRead)},
-		{Extension: "x", Name: "peek_things", Schema: []byte(`{}`), Authority: string(core.AuthLocalRead)},
+		{Extension: "web", Name: "web_fetch", Schema: []byte(`{}`), ReadOnly: true, Authority: string(permission.AuthNetworkRead)},
+		{Extension: "x", Name: "peek_things", Schema: []byte(`{}`), Authority: string(permission.AuthLocalRead)},
 	}})
 	if _, ok := r.ToolRegistry["web_fetch"]; ok {
 		t.Error("network-read tool must stay out of the plan-mode registry")
@@ -155,17 +156,17 @@ func TestAuthorityNetworkReadExcludedFromPlan(t *testing.T) {
 // auto-allowable like read-only — it joins the auto-allow set, runs with
 // no prompt in workspace mode, and stays available in plan mode.
 func TestAuthorityLocalDataAutoAllowed(t *testing.T) {
-	pol := &core.PermissionPolicy{
-		Mode:      core.ApprovalWorkspace,
+	pol := &permission.PermissionPolicy{
+		Mode:      permission.ApprovalWorkspace,
 		ReadOnly:  permissions.BuiltinReadOnlySet(),
 		EditTools: permissions.EditToolSet(),
 		Builtin:   permissions.BuiltinSet(),
 	}
-	gate := core.NewPolicyGate(pol, nil)
-	r := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: core.ApprovalWorkspace}
+	gate := permission.NewPolicyGate(pol, nil)
+	r := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: permission.ApprovalWorkspace}
 	r.AdoptReadOnlySet(pol.ReadOnly)
 	r.MergeExtensionTools(&fakeToolSource{infos: []build.ExtensionToolInfo{
-		{Extension: "memory", Name: "memory", Schema: []byte(`{}`), Authority: string(core.AuthLocalData)},
+		{Extension: "memory", Name: "memory", Schema: []byte(`{}`), Authority: string(permission.AuthLocalData)},
 	}})
 	if !pol.ReadOnly.Has("memory") {
 		t.Error("local-data authority should join the auto-allow set")
@@ -176,11 +177,11 @@ func TestAuthorityLocalDataAutoAllowed(t *testing.T) {
 
 	// Plan mode: a local-data tool is read-only-equivalent, so it stays
 	// in the registry (unlike a network-read / mutating tool).
-	planPol := &core.PermissionPolicy{Mode: core.ApprovalPlan, ReadOnly: permissions.BuiltinReadOnlySet(), EditTools: permissions.EditToolSet()}
-	rp := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: core.ApprovalPlan}
+	planPol := &permission.PermissionPolicy{Mode: permission.ApprovalPlan, ReadOnly: permissions.BuiltinReadOnlySet(), EditTools: permissions.EditToolSet()}
+	rp := &build.Resolved{ToolRegistry: core.Registry{}, ApprovalMode: permission.ApprovalPlan}
 	rp.AdoptReadOnlySet(planPol.ReadOnly)
 	rp.MergeExtensionTools(&fakeToolSource{infos: []build.ExtensionToolInfo{
-		{Extension: "memory", Name: "memory", Schema: []byte(`{}`), Authority: string(core.AuthLocalData)},
+		{Extension: "memory", Name: "memory", Schema: []byte(`{}`), Authority: string(permission.AuthLocalData)},
 	}})
 	if _, ok := rp.ToolRegistry["memory"]; !ok {
 		t.Error("local-data tool should be available in plan mode")

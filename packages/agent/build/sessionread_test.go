@@ -3,8 +3,8 @@ package build
 import (
 	"testing"
 
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -13,7 +13,7 @@ func TestSessionHistoryReader(t *testing.T) {
 	cwd := testsupport.TempDir(t)
 
 	// Write a real session to disk.
-	s, err := core.NewSession(home, cwd, "anthropic", "claude-opus-4-5", "test")
+	s, err := session.NewSession(home, cwd, "anthropic", "claude-opus-4-5", "test")
 	if err != nil {
 		t.Fatalf("new session: %v", err)
 	}

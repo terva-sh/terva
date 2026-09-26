@@ -2,12 +2,14 @@ package build
 
 import (
 	"path/filepath"
-	"terva.sh/terva/packages/core/lazytools"
 	"testing"
+
+	"terva.sh/terva/packages/core/lazytools"
 
 	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
@@ -145,7 +147,7 @@ func TestResumingTwiceWritesNoExtraRows(t *testing.T) {
 func TestBuiltinSessionSearchWinsAToolNameCollision(t *testing.T) {
 	reg := core.Registry{"session_search": &tools.SessionSearchTool{}}
 	// nil read-only set — this test is about the registry, not the policy.
-	MergeToolsForMode(reg, core.ApprovalAsk, nil, fakeExtSource{names: []string{"session_search"}})
+	MergeToolsForMode(reg, permission.ApprovalAsk, nil, fakeExtSource{names: []string{"session_search"}})
 
 	if _, ok := reg["session_search"].(*tools.SessionSearchTool); !ok {
 		t.Fatalf("an extension's session_search shadowed the built-in; the model would get "+
@@ -159,7 +161,7 @@ func TestBuiltinSessionSearchWinsAToolNameCollision(t *testing.T) {
 // conversation TEXT (clustering, summarisation, export).
 func TestASearchExtensionsOtherToolsStillMerge(t *testing.T) {
 	reg := core.Registry{"session_search": &tools.SessionSearchTool{}}
-	MergeToolsForMode(reg, core.ApprovalAsk, nil, fakeExtSource{names: []string{"session_search", "session_topics"}})
+	MergeToolsForMode(reg, permission.ApprovalAsk, nil, fakeExtSource{names: []string{"session_search", "session_topics"}})
 
 	if _, ok := reg["session_topics"]; !ok {
 		t.Error("a non-colliding extension tool was dropped alongside the superseded one")

@@ -1,0 +1,343 @@
+package session
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"time"
+
+	"terva.sh/terva/packages/core"
+
+	"terva.sh/terva/packages/provider"
+)
+
+// ReplayRowKind identifies a transcript row the session player walks forward.
+type ReplayRowKind string
+
+const (
+	// ReplayRowMessage is a persisted conversation message (user/assistant/tool).
+	ReplayRowMessage ReplayRowKind = "message"
+	// ReplayRowUsage is a per-turn usage row (with its running cumulative).
+	ReplayRowUsage ReplayRowKind = "usage"
+	// ReplayRowCompaction is a checkpoint: the summary the loader would honor by
+	// resetting the transcript. The player animates it (effective mode) or
+	// ignores it (raw mode) — it never rewrites earlier rows.
+	ReplayRowCompaction ReplayRowKind = "compaction"
+	// ReplayRowPrefix is a cacheable-prefix divergence: the request was rebuilt
+	// rather than extended, so the provider re-read everything past the rung at
+	// full price.
+	ReplayRowPrefix ReplayRowKind = "prefix"
+	// ReplayRowCliff opens or closes a run of dispatches whose cache reads
+	// collapsed while the prompt kept growing.
+	ReplayRowCliff ReplayRowKind = "cliff"
+	// ReplayRowPermission is a tool call held at the permission prompt and the
+	// decision a person took, with how long they took. ReplayRowAsk is the
+	// agent asking a question set and the answers. Neither changes the
+	// transcript; both exist so a replay can show the person in the loop.
+	ReplayRowPermission ReplayRowKind = "permission"
+	ReplayRowAsk        ReplayRowKind = "ask"
+)
+
+// ReplayRow is one transcript row preserved in file order. It is the forward
+// twin of RevealCompaction's backward reconstruction: where OpenSession
+// collapses history at each "compaction" checkpoint (resetting its message
+// set), ReadReplayRows keeps every row so a player can re-emit the session as
+// a live-looking scene — including the pre-compaction turns a checkpoint later
+// summarized away. See docs/proposals/session-player.md.
+type ReplayRow struct {
+	Kind ReplayRowKind
+
+	// Message is set when Kind == ReplayRowMessage.
+	Message provider.Message
+
+	// Usage/Cumulative are set when Kind == ReplayRowUsage, as recorded.
+	Usage      provider.Usage
+	Cumulative provider.Usage
+	// Delegated marks a usage row as a SUB-AGENT's spend booked against this
+	// session rather than a request this session sent. A cost or cache-hit
+	// rollup that mixes them reports the child's cold prompt as the parent
+	// missing its cache.
+	Delegated bool
+	// Source names the host surface that spent a usage row's tokens on this
+	// session's credentials ("next_step", "side_chat", ...), empty for a turn
+	// of the session. A rollup that counts these as turns reports an idle
+	// suggestion as a billed turn, and cannot say what the suggestions cost.
+	Source string
+	// At is when a usage row was written, ZERO for rows from before the stamp
+	// existed. Unlike Message.Time it is NOT backfilled from a neighbour: a
+	// message's time only has to order the scene, while this one is read to
+	// measure gaps between dispatches, and a guessed instant would answer that
+	// question with a fabrication rather than an absence.
+	At time.Time
+
+	// Checkpoint is the summary output a compaction folded its input into,
+	// set when Kind == ReplayRowCompaction. Honoring it replaces the live
+	// transcript with these messages (what OpenSession does); the player uses
+	// it to animate the compaction and resync the effective transcript.
+	Checkpoint []provider.Message
+
+	// Prefix is set when Kind == ReplayRowPrefix. Appended is always false:
+	// the observer that writes these rows never fires for an ordinary append,
+	// so a row on disk is a rebuild by construction.
+	Prefix core.PrefixDivergence
+	// Cliff is set when Kind == ReplayRowCliff. Ongoing distinguishes the row
+	// that OPENS a collapse run from the one that closes it with the totals
+	// the run reached.
+	Cliff core.CacheCliff
+
+	// Permission is set when Kind == ReplayRowPermission; Ask when Kind ==
+	// ReplayRowAsk.
+	Permission PermissionRecord
+	Ask        AskRecord
+}
+
+// ReadReplayRows walks a session JSONL and returns every message, usage, and
+// compaction row in file order, WITHOUT OpenSession's checkpoint collapse,
+// plus the session's metadata. Read-only; the live session is untouched.
+//
+// meta/directive/rename rows carry no replay event and are skipped. Empty
+// messages are dropped to mirror OpenSession's transcript build. Corrupt rows
+// are skipped rather than failing the whole read (best-effort, like the
+// loader), so a partially-written tail still plays up to the last good row.
+func ReadReplayRows(path string) ([]ReplayRow, SessionMeta, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, SessionMeta{}, err
+	}
+	defer f.Close()
+
+	var meta SessionMeta
+	var rows []ReplayRow
+	rep := &loadReport{}
+	if _, err := walkSession(f, rep, sessionWalkHooks{
+		onMeta: func(m SessionMeta, _ []byte) { meta = m },
+		onPermission: func(rec PermissionRecord, _ []byte) {
+			rows = append(rows, ReplayRow{Kind: ReplayRowPermission, Permission: rec})
+		},
+		onAsk: func(rec AskRecord, _ []byte) {
+			rows = append(rows, ReplayRow{Kind: ReplayRowAsk, Ask: rec})
+		},
+		onMessage: func(m provider.Message, _ int, _ []byte) {
+			rows = append(rows, ReplayRow{Kind: ReplayRowMessage, Message: m})
+		},
+		onUsage: func(u, cum provider.Usage, _ int, delegated bool, source string, at time.Time, _ []byte) {
+			rows = append(rows, ReplayRow{Kind: ReplayRowUsage, Usage: u, Cumulative: cum, Delegated: delegated, Source: source, At: at})
+		},
+		onCompaction: func(out, _ []provider.Message, _ int, _ []byte) {
+			// walkSession aliases `out` as its live effective transcript after the
+			// checkpoint, and a following amend (delete/replace) mutates that backing
+			// array in place — so a retained reference would be corrupted later. Copy
+			// per the walk-hook contract (sessionWalkHooks doc).
+			rows = append(rows, ReplayRow{Kind: ReplayRowCompaction, Checkpoint: append([]provider.Message(nil), out...)})
+		},
+	}); err != nil {
+		return nil, SessionMeta{}, err
+	}
+	// Same zero-Time backfill OpenSession applies (see backfillZeroTimes): a
+	// pre-stamp-fix greeting row must not play back from year one.
+	last := meta.Started
+	for i := range rows {
+		if rows[i].Kind != ReplayRowMessage {
+			continue
+		}
+		if rows[i].Message.Time.IsZero() {
+			rows[i].Message.Time = last
+		} else {
+			last = rows[i].Message.Time
+		}
+	}
+	return rows, meta, nil
+}
+
+// StreamReplayMessages walks a session JSONL like ReadReplayRows but retains
+// nothing: each message row is hydrated, handed to fn with its replay-row
+// index, then discarded — so a caller inspecting a large transcript holds one
+// message at a time instead of the whole file. Usage and compaction rows are
+// counted (keeping row numbers aligned with ReadReplayRows' indexes, except
+// for corrupt rows, which that reader drops) but never decoded — skipping
+// checkpoint hydration entirely. Input is bounded at the read boundary: any
+// single row past jsonlPerLineCeiling is skipped without being materialized
+// whole (flagging truncated), and maxBytes > 0 caps the cumulative row bytes
+// scanned; hitting either stops the walk with truncated=true and everything
+// streamed so far still delivered. ctx is checked per delivered row so a long
+// scan aborts promptly (returning ctx.Err()). Corrupt rows are skipped
+// (best-effort, like the loader). The meta row is returned whenever present.
+//
+// Callers that also want the per-turn usage rows — what a turn cost, and how
+// much of it hit the prefix cache — want [StreamReplayRows], which this
+// delegates to. Cost is not derivable from the messages alone.
+func StreamReplayMessages(ctx context.Context, path string, maxBytes int64, fn func(row int, m provider.Message)) (meta SessionMeta, truncated bool, err error) {
+	return StreamReplayRows(ctx, path, maxBytes, func(row int, r ReplayRow) {
+		if r.Kind == ReplayRowMessage {
+			fn(row, r.Message)
+		}
+	})
+}
+
+// StreamReplayRows is StreamReplayMessages' general form: it delivers message
+// AND usage rows in file order, under the same retain-nothing, bounded-input,
+// cancellable contract. A usage row carries the turn's own Usage plus the
+// running Cumulative exactly as recorded.
+//
+// Compaction rows are still counted but not hydrated — a checkpoint's message
+// set is the one row whose payload is unbounded in the number of messages it
+// holds, and materializing it would defeat the streaming guarantee the callers
+// of this function are here for. Anything needing checkpoints wants
+// ReadReplayRows.
+func StreamReplayRows(ctx context.Context, path string, maxBytes int64, fn func(row int, r ReplayRow)) (meta SessionMeta, truncated bool, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return SessionMeta{}, false, err
+	}
+	defer f.Close()
+
+	row := 0
+	rep := &loadReport{}
+	// Streaming twin of backfillZeroTimes: the meta row leads the file, so its
+	// Started is in hand before any pre-stamp-fix zero-Time row streams past.
+	var last time.Time
+	// An oversized row is skipped by the reader (never hydrated); it still means
+	// the window is incomplete, so flag truncation.
+	onOversize := func(int64) { truncated = true }
+	walkErr := forEachJSONLLineBounded(f, jsonlPerLineCeiling, maxBytes, onOversize, func(line []byte) error {
+		// Cancellation is checked once per delivered row so a long scan aborts
+		// promptly; the drain/cumulative bounds cap the only path fn doesn't see.
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
+		var head sessionLineHead
+		if err := json.Unmarshal(line, &head); err != nil {
+			return nil
+		}
+		switch head.Type {
+		case "permission":
+			var prow struct {
+				Permission *PermissionRecord `json:"permission"`
+			}
+			if err := json.Unmarshal(line, &prow); err == nil && prow.Permission != nil {
+				fn(row, ReplayRow{Kind: ReplayRowPermission, Permission: *prow.Permission})
+			}
+			row++
+		case "ask":
+			var arow struct {
+				Ask *AskRecord `json:"ask"`
+			}
+			if err := json.Unmarshal(line, &arow); err == nil && arow.Ask != nil {
+				fn(row, ReplayRow{Kind: ReplayRowAsk, Ask: *arow.Ask})
+			}
+			row++
+		case "meta":
+			var mrow struct {
+				Meta SessionMeta `json:"meta"`
+			}
+			if err := json.Unmarshal(line, &mrow); err == nil {
+				meta = mrow.Meta
+				if last.IsZero() {
+					last = meta.Started
+				}
+			}
+		case "message":
+			m, err := hydrateMessage(line, rep)
+			if err != nil || len(m.Content) == 0 {
+				return nil
+			}
+			if m.Time.IsZero() {
+				m.Time = last
+			} else {
+				last = m.Time
+			}
+			fn(row, ReplayRow{Kind: ReplayRowMessage, Message: m})
+			row++
+		case "usage":
+			// Decoded, unlike compaction: a usage row is two fixed-size token
+			// structs, so hydrating it costs nothing the stream cares about.
+			// A corrupt one is skipped like any other row, but still consumes
+			// its row number so coordinates stay aligned with ReadReplayRows.
+			var urow struct {
+				Usage      provider.Usage `json:"usage"`
+				Cumulative provider.Usage `json:"cumulative"`
+				// Delegated marks a SUB-AGENT's spend booked against this
+				// session. It is not optional detail: this struct omitted it
+				// while its twin ReadReplayRows decoded it, and session_inspect
+				// — the only production reader of ReplayRow.Delegated — reads
+				// through THIS decoder. So `if r.Delegated` had never once been
+				// true in production, and a sub-agent's 250k cold prompt was
+				// counted as one of this session's own turns. The cache-hit
+				// rate, which the tool's own text calls "the single most
+				// actionable number here", was computed over the child's
+				// prompts — inverting the exact diagnosis the field was added
+				// to make possible.
+				Delegated bool `json:"delegated"`
+				// Source, for the same reason and through the same lesson:
+				// session_inspect reads through this decoder, so a field the
+				// other one learns and this one does not is a field no
+				// production reader ever sees.
+				Source string     `json:"source"`
+				At     *time.Time `json:"at"`
+			}
+			if err := json.Unmarshal(line, &urow); err == nil {
+				out := ReplayRow{
+					Kind:       ReplayRowUsage,
+					Usage:      urow.Usage,
+					Cumulative: urow.Cumulative,
+					Delegated:  urow.Delegated,
+					Source:     urow.Source,
+				}
+				if urow.At != nil {
+					out.At = *urow.At
+				}
+				fn(row, out)
+			}
+			row++
+		case "compaction":
+			row++
+		// The two rows that diagnose a cache collapse. They were write-only
+		// until this reader learned them: terva spent the tokens to record its
+		// own cache behaviour and then had no route back to the measurement,
+		// which is what made the corpus sweep in TKT-01M29HFZEX impossible
+		// through any sanctioned reader.
+		//
+		// Neither increments row. Row numbers stay aligned with
+		// ReadReplayRows' slice indexes, and that reader emits message, usage
+		// and compaction rows only. An informational row therefore reports the
+		// coordinate of the next replay row, which is where it sits in the
+		// conversation. Incrementing here would shift every later row's
+		// coordinate away from the twin reader instead.
+		case recordPrefix:
+			var prow struct {
+				Prefix prefixDivergenceRecord `json:"prefix"`
+			}
+			if err := json.Unmarshal(line, &prow); err == nil {
+				fn(row, ReplayRow{Kind: ReplayRowPrefix, Prefix: core.PrefixDivergence{
+					Rung:         prow.Prefix.Rung,
+					Label:        prow.Prefix.Label,
+					MsgCount:     prow.Prefix.Messages,
+					PrevMsgCount: prow.Prefix.PrevMessages,
+					CachedTokens: prow.Prefix.CachedTokens,
+				}})
+			}
+		case recordCliff:
+			var crow struct {
+				Cliff cacheCliffRecord `json:"cliff"`
+			}
+			if err := json.Unmarshal(line, &crow); err == nil {
+				fn(row, ReplayRow{Kind: ReplayRowCliff, Cliff: core.CacheCliff{
+					Dispatches:   crow.Cliff.Dispatches,
+					RereadTokens: crow.Cliff.RereadTokens,
+					Ongoing:      crow.Cliff.Ongoing,
+					End:          core.CliffEnd(crow.Cliff.End),
+				}})
+			}
+		}
+		return nil
+	})
+	if errors.Is(walkErr, errJSONLCumulative) {
+		truncated = true
+		walkErr = nil
+	}
+	if walkErr != nil {
+		return SessionMeta{}, truncated, walkErr // e.g. context.Canceled or an I/O error
+	}
+	return meta, truncated, nil
+}

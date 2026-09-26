@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/build"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -26,7 +26,7 @@ func TestALockedSessionIsFatalEvenWhenTheRunNamedNoTarget(t *testing.T) {
 	if err := headlessSessionErr(build.Args{Continue: true}, locked); err == nil {
 		t.Fatal("a locked session was swallowed, so the run would proceed with no persistence")
 	}
-	if err := headlessSessionErr(build.Args{Continue: true}, locked); !errors.Is(err, core.ErrSessionLocked) {
+	if err := headlessSessionErr(build.Args{Continue: true}, locked); !errors.Is(err, session.ErrSessionLocked) {
 		t.Fatalf("the returned error lost its identity: %v", err)
 	}
 }
@@ -50,14 +50,14 @@ func TestAnExplicitTargetStaysFatal(t *testing.T) {
 // triage: a real session held by this process refuses a real second open.
 func TestALiveSessionRefusesASecondOpenEndToEnd(t *testing.T) {
 	dir := testsupport.TempDir(t)
-	s, err := core.NewSession(dir, dir, "openai", "gpt-5", "test")
+	s, err := session.NewSession(dir, dir, "openai", "gpt-5", "test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	second, _, err := core.OpenSession(s.Path)
-	if !errors.Is(err, core.ErrSessionLocked) {
+	second, _, err := session.OpenSession(s.Path)
+	if !errors.Is(err, session.ErrSessionLocked) {
 		t.Fatalf("a held session must refuse a second open, got %v", err)
 	}
 	// A refusal must hand back nothing. A returned handle would be a write
@@ -72,4 +72,4 @@ func TestALiveSessionRefusesASecondOpenEndToEnd(t *testing.T) {
 type testBusyError struct{}
 
 func (e *testBusyError) Error() string { return "session is open in another terva" }
-func (e *testBusyError) Unwrap() error { return core.ErrSessionLocked }
+func (e *testBusyError) Unwrap() error { return session.ErrSessionLocked }

@@ -9,8 +9,8 @@ import (
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/internal/coretest"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -18,7 +18,7 @@ func TestRevisionWriteFailurePreservesLiveState(t *testing.T) {
 	for _, op := range []string{"edit older", "edit tail", "delete", "clear", "swipe", "swipe message", "prune", "drop", "post"} {
 		t.Run(op, func(t *testing.T) {
 			dir := testsupport.TempDir(t)
-			sess, err := core.NewSession(dir, dir, "test", "test", "test")
+			sess, err := session.NewSession(dir, dir, "test", "test", "test")
 			if err != nil {
 				t.Fatal(err)
 			}

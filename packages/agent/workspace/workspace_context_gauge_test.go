@@ -8,6 +8,7 @@ import (
 	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -32,7 +33,7 @@ func TestASessionReportsTheWindowAutoCompactionFiresOn(t *testing.T) {
 	t.Cleanup(func() { provider.SetUserModels(nil) })
 
 	tmp := testsupport.TempDir(t)
-	sess, err := core.NewSession(tmp, tmp, "openai-compatible", id, "test")
+	sess, err := session.NewSession(tmp, tmp, "openai-compatible", id, "test")
 	if err != nil {
 		t.Fatalf("session: %v", err)
 	}

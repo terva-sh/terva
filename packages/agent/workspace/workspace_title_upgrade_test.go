@@ -134,7 +134,7 @@ func TestPlayerTurnsIgnoresMachineAuthoredMessages(t *testing.T) {
 func TestTitleUpgradeIsImmersiveOnly(t *testing.T) {
 	s := titleTestSession(t, "Kobeni", 5)
 	s.setTitle("Kobeni", true)
-	s.sess.Meta.Experience = ""
+	s.sess.Stage.Experience = ""
 	before := s.title
 	s.upgradeImmersiveTitle(context.Background())
 	if s.title != before {

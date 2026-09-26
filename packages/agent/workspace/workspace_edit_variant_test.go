@@ -7,8 +7,8 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -117,7 +117,7 @@ func TestEditTailProducesSwipeableVariant(t *testing.T) {
 		t.Fatalf("after swipe-back = %v, want [u0 a0]", got)
 	}
 	// Persisted: a reload reconstructs the same 2-take tail (active is the swiped-to 0).
-	start, takes, active, err := core.SessionTail(info.Path)
+	start, takes, active, err := session.SessionTail(info.Path)
 	if err != nil {
 		t.Fatalf("SessionTail: %v", err)
 	}
@@ -362,7 +362,7 @@ func TestPruneVariants(t *testing.T) {
 	if got := reviseText(s.agent.Messages()[1]); got != "a0-p2" {
 		t.Fatalf("prune should keep the active take, message 1 = %q, want a0-p2", got)
 	}
-	if vs, _ := core.SessionVariants(w.sessionPath(id)); len(vs) != 0 {
+	if vs, _ := session.SessionVariants(w.sessionPath(id)); len(vs) != 0 {
 		t.Fatalf("prune should close the position on disk, got %+v", vs)
 	}
 }

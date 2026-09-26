@@ -12,6 +12,7 @@ import (
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -385,7 +386,7 @@ func TestSessionInspectExpandPagesFullText(t *testing.T) {
 	home := testsupport.TempDir(t)
 	cwd := testsupport.TempDir(t)
 	long := strings.Repeat("report line\n", 2000) // 24000B, > siExpandMax
-	writeSessionFixture(t, filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl"), cwd, "hi", long)
+	writeSessionFixture(t, filepath.Join(session.SessionsDir(home, cwd), "sess1.jsonl"), cwd, "hi", long)
 	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
 	run := func(args string) core.ToolResult {
 		t.Helper()
@@ -477,7 +478,7 @@ func TestSessionInspectScanCeilingNotice(t *testing.T) {
 	for i := 0; i < 40; i++ {
 		msgs = append(msgs, strings.Repeat("padding ", 16))
 	}
-	writeSessionFixture(t, filepath.Join(core.SessionsDir(home, cwd), "big.jsonl"), cwd, msgs...)
+	writeSessionFixture(t, filepath.Join(session.SessionsDir(home, cwd), "big.jsonl"), cwd, msgs...)
 	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
 
 	res, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"big"}`), func(string) {})
@@ -549,7 +550,7 @@ func TestSessionInspectResolvesAnotherProjectsSessionByID(t *testing.T) {
 	cwd := testsupport.TempDir(t)
 	other := testsupport.TempDir(t)
 
-	otherDir := core.SessionsDir(home, other)
+	otherDir := session.SessionsDir(home, other)
 	if err := os.MkdirAll(otherDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -578,8 +579,8 @@ func TestSessionInspectPrefersThisProjectsSession(t *testing.T) {
 	const id = "20260101-000000-deadbeef"
 
 	for _, p := range []struct{ dir, marker string }{
-		{core.SessionsDir(home, cwd), "mine"},
-		{core.SessionsDir(home, other), "theirs"},
+		{session.SessionsDir(home, cwd), "mine"},
+		{session.SessionsDir(home, other), "theirs"},
 	} {
 		if err := os.MkdirAll(p.dir, 0o700); err != nil {
 			t.Fatal(err)
@@ -734,7 +735,7 @@ func TestSessionInspectPaddedZeroArgsList(t *testing.T) {
 	for i := range msgs {
 		msgs[i] = fmt.Sprintf("message %02d", i)
 	}
-	writeSessionFixture(t, filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl"), cwd, msgs...)
+	writeSessionFixture(t, filepath.Join(session.SessionsDir(home, cwd), "sess1.jsonl"), cwd, msgs...)
 	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
 
 	padded := `{"session_id":"sess1","cursor":0,"event_kinds":["message"],"expand":0,"limit":40,"text_offset":0}`
@@ -798,7 +799,7 @@ func writeUsageSessionFixture(t *testing.T, path, cwd string) {
 func TestSessionInspectSurfacesUsage(t *testing.T) {
 	home := testsupport.TempDir(t)
 	cwd := testsupport.TempDir(t)
-	writeUsageSessionFixture(t, filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl"), cwd)
+	writeUsageSessionFixture(t, filepath.Join(session.SessionsDir(home, cwd), "sess1.jsonl"), cwd)
 	tool := &SessionInspectTool{TervaHome: home, CWD: cwd}
 
 	res, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess1","event_kinds":["usage"]}`), func(string) {})
@@ -853,7 +854,7 @@ func TestSessionInspectSurfacesUsage(t *testing.T) {
 // writeErrorSidecar writes the .errors.jsonl companion for a transcript.
 func writeErrorSidecar(t *testing.T, transcript string, rows ...string) {
 	t.Helper()
-	if err := os.WriteFile(core.ErrorLogPathFor(transcript), []byte(strings.Join(rows, "\n")+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(session.ErrorLogPathFor(transcript), []byte(strings.Join(rows, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -872,7 +873,7 @@ func writeErrorSidecar(t *testing.T, transcript string, rows ...string) {
 func TestSessionInspectUsesUsageStamps(t *testing.T) {
 	home := testsupport.TempDir(t)
 	cwd := testsupport.TempDir(t)
-	path := filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl")
+	path := filepath.Join(session.SessionsDir(home, cwd), "sess1.jsonl")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -929,7 +930,7 @@ func TestSessionInspectUsesUsageStamps(t *testing.T) {
 func TestSessionInspectToleratesUnstampedUsage(t *testing.T) {
 	home := testsupport.TempDir(t)
 	cwd := testsupport.TempDir(t)
-	path := filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl")
+	path := filepath.Join(session.SessionsDir(home, cwd), "sess1.jsonl")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -970,7 +971,7 @@ func TestSessionInspectToleratesUnstampedUsage(t *testing.T) {
 func TestSessionInspectPlacesSidecarErrors(t *testing.T) {
 	home := testsupport.TempDir(t)
 	cwd := testsupport.TempDir(t)
-	path := filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl")
+	path := filepath.Join(session.SessionsDir(home, cwd), "sess1.jsonl")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1028,7 +1029,7 @@ func TestSessionInspectPlacesSidecarErrors(t *testing.T) {
 func TestSessionInspectStats(t *testing.T) {
 	home := testsupport.TempDir(t)
 	cwd := testsupport.TempDir(t)
-	path := filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl")
+	path := filepath.Join(session.SessionsDir(home, cwd), "sess1.jsonl")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1115,7 +1116,7 @@ func TestSessionInspectStats(t *testing.T) {
 func TestSessionInspectHitRateCountsCacheWrites(t *testing.T) {
 	home := testsupport.TempDir(t)
 	cwd := testsupport.TempDir(t)
-	path := filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl")
+	path := filepath.Join(session.SessionsDir(home, cwd), "sess1.jsonl")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1158,7 +1159,7 @@ func TestSessionInspectHitRateCountsCacheWrites(t *testing.T) {
 func TestSessionInspectStatsBreaksOutSideChannelSpend(t *testing.T) {
 	home := testsupport.TempDir(t)
 	cwd := testsupport.TempDir(t)
-	path := filepath.Join(core.SessionsDir(home, cwd), "sess1.jsonl")
+	path := filepath.Join(session.SessionsDir(home, cwd), "sess1.jsonl")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1209,7 +1210,7 @@ func TestSessionInspectStatsBreaksOutSideChannelSpend(t *testing.T) {
 func TestSessionInspectStatsNamesUnpricedCost(t *testing.T) {
 	home := testsupport.TempDir(t)
 	cwd := testsupport.TempDir(t)
-	path := filepath.Join(core.SessionsDir(home, cwd), "subs.jsonl")
+	path := filepath.Join(session.SessionsDir(home, cwd), "subs.jsonl")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}

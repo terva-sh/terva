@@ -8,61 +8,7 @@
 # implements (decision 0021, rule 1).
 #
 # Seeded from origin/sothr-main at 8ae116db on 2026-09-23.
-packages/core/session.go	os.File	2
-packages/core/session.go	os.O_APPEND	4
-packages/core/session.go	os.O_CREATE	2
-packages/core/session.go	os.O_EXCL	1
-packages/core/session.go	os.O_WRONLY	4
-packages/core/session.go	os.Open	10
-packages/core/session.go	os.ReadDir	7
-packages/core/session.go	os.Remove	5
-packages/core/session.go	os.Stat	2
-packages/core/session_archive.go	os.File	1
-packages/core/session_archive.go	os.O_CREATE	2
-packages/core/session_archive.go	os.O_TRUNC	2
-packages/core/session_archive.go	os.O_WRONLY	2
-packages/core/session_archive.go	os.Open	4
-packages/core/session_archive.go	os.ReadDir	1
-packages/core/session_archive.go	os.Remove	12
-packages/core/session_archive.go	os.Rename	2
-packages/core/session_archive.go	os.Stat	6
-packages/core/session_lock.go	os.Executable	1
-packages/core/session_portable.go	os.MkdirAll	1
-packages/core/session_portable.go	os.O_CREATE	3
-packages/core/session_portable.go	os.O_EXCL	2
-packages/core/session_portable.go	os.O_TRUNC	1
-packages/core/session_portable.go	os.O_WRONLY	3
-packages/core/session_portable.go	os.Open	3
-packages/core/session_portable.go	os.OpenFile	1
-packages/core/session_portable.go	os.ReadDir	2
-packages/core/session_portable.go	os.Stat	2
-packages/core/session_replay.go	os.Open	2
-packages/core/session_reveal.go	os.Open	1
-packages/core/session_state.go	os.ReadFile	1
-packages/core/session_state.go	os.Remove	1
-packages/provider/amazon_bedrock.go	os.Getenv	7
-packages/provider/amazon_bedrock.go	os.ReadFile	1
-packages/provider/amazon_bedrock.go	os.UserHomeDir	1
-packages/provider/anthropic.go	os.O_APPEND	1
-packages/provider/anthropic.go	os.O_CREATE	1
-packages/provider/anthropic.go	os.O_WRONLY	1
-packages/provider/anthropic.go	os.OpenFile	1
-packages/provider/anthropic_claude_version.go	os/exec.CommandContext	1
-packages/provider/anthropic_claude_version.go	os/exec.LookPath	1
-packages/provider/azure_openai.go	os.Getenv	3
-packages/provider/cache.go	os.ReadFile	1
-packages/provider/cache.go	os.Rename	1
-packages/provider/cache.go	os.WriteFile	1
-packages/provider/codex_cli_version.go	os/exec.CommandContext	1
-packages/provider/codex_cli_version.go	os/exec.LookPath	1
-packages/provider/extra_providers.go	os.Getenv	1
-packages/provider/gemini.go	os.WriteFile	1
-packages/provider/google_vertex.go	os.Getenv	4
-packages/provider/google_vertex.go	os.ReadFile	1
-packages/provider/google_vertex.go	os.Stat	1
-packages/provider/google_vertex.go	os.UserHomeDir	1
-packages/provider/installed_version.go	os.ReadFile	1
-packages/provider/usermodels.go	os.ReadFile	1
-packages/provider/usermodels_write.go	os.ReadFile	1
-packages/provider/usermodels_write.go	os.Rename	1
-packages/provider/usermodels_write.go	os.WriteFile	1
+#
+# Empty since TKT-01M35WK0T moved the JSONL session store to packages/session
+# (2026-09-23): the engine and the wire perform no file, environment or
+# process I/O. Keep it that way.

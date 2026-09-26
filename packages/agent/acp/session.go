@@ -13,6 +13,8 @@ import (
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
+	jsonl "terva.sh/terva/packages/session"
 )
 
 // session is one ACP session bound 1:1 to a core.Agent (§3). One terva acp
@@ -29,7 +31,7 @@ type session struct {
 	// gate). session/set_mode switches its approval mode at runtime via
 	// gate.SetMode (copy-on-write, race-safe) — no agent rebuild needed,
 	// which keeps the ACP confirmer wired as the inner Confirmer (§4b).
-	gate *core.ConfirmGate
+	gate *permission.ConfirmGate
 
 	// sandbox is the session's filesystem/shell confinement, shared by
 	// pointer with every tool in the agent's registry. The native /jail and
@@ -107,7 +109,7 @@ type session struct {
 	// session IS the transcript. Its Path is this session's id, the durable
 	// identity a later session/load reopens. Held here so disconnect teardown
 	// can Close() it (flush + drop the empty-stub file).
-	durable *core.Session
+	durable *jsonl.Session
 
 	// cleanup stops this session's per-session subprocesses: the MCP servers
 	// the factory started from the session/new|load mcpServers payload, AND
@@ -158,7 +160,7 @@ type editSnapshot struct {
 	existed bool
 }
 
-func newSession(id, cwd string, agent *core.Agent, durable *core.Session, srv *agentServer) *session {
+func newSession(id, cwd string, agent *core.Agent, durable *jsonl.Session, srv *agentServer) *session {
 	return &session{
 		id:            id,
 		cwd:           cwd,

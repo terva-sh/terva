@@ -7,7 +7,7 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -50,7 +50,7 @@ func loreNames(v ctrlproto.WorldView) []string {
 
 func TestWorldsLorePutAndDelete(t *testing.T) {
 	w, ctx := worldEditFixture(t)
-	world := savedWorld(t, build.WorldDoc{Name: "Bellhaven", Lore: []core.WorldLoreEntry{
+	world := savedWorld(t, build.WorldDoc{Name: "Bellhaven", Lore: []session.WorldLoreEntry{
 		{Name: "Curfew", Keys: []string{"curfew"}, Content: "The bells ring at dusk.", Learned: map[string]string{"Kobeni": "2026-01-01T00:00:00Z"}},
 		{Name: "Docks", Keys: []string{"docks"}, Content: "Tar and rope."},
 	}})

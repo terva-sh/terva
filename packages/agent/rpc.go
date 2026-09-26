@@ -21,6 +21,7 @@ import (
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/provider/lineframe"
 	"terva.sh/terva/packages/session"
@@ -50,9 +51,9 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	// When --no-yolo is set there is no interactive prompt to confirm
 	// tool calls, so the gate is built with a nil inner Confirmer and
 	// refuses every call with a model-readable reason (see
-	// core.ConfirmGate.Check). headlessConfirmGate also prints the
+	// permission.ConfirmGate.Check). headlessConfirmGate also prints the
 	// one-line stderr note. nil when yolo is on (gate.Check on a nil
-	// *core.ConfirmGate always allows).
+	// *permission.ConfirmGate always allows).
 	confirmGate, roSet := permissions.HeadlessConfirmGate(args.PermInputs())
 	r, err := build.Resolve(args, true)
 	if err != nil {
@@ -241,7 +242,7 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	// opted in: a tool that needs confirmation now asks over the wire instead of
 	// being refused outright. Only when a gate exists (a non-yolo mode built one)
 	// and only on opt-in — a driver that never answers must keep the safe
-	// refuse-by-default rather than hang. See core.ConfirmGate.Check.
+	// refuse-by-default rather than hang. See permission.ConfirmGate.Check.
 	if args.RPCApprovals && confirmGate != nil {
 		confirmGate.SetConfirmer(server)
 	}
@@ -432,7 +433,7 @@ type rpcServer struct {
 	// empty. pendMu guards only the id counter.
 	pendMu sync.Mutex
 	askSeq int
-	asks   core.ParkTable[core.ConfirmDecision]
+	asks   core.ParkTable[permission.ConfirmDecision]
 }
 
 // rpcAuthToken returns the embedder-supplied RPC auth token. Both
@@ -568,7 +569,7 @@ func (s *rpcServer) dispatch(cmd, id string, raw []byte) {
 	case "approve":
 		// The driver's answer to an `ask` frame. `id` (the command id) is the
 		// ask id being answered — the correlation the ask frame carried. The
-		// decision fields mirror core.ConfirmDecision so a driver can also grant
+		// decision fields mirror permission.ConfirmDecision so a driver can also grant
 		// a session-scoped "always" (remember) without a second round trip.
 		var req struct {
 			Allow        bool   `json:"allow"`
@@ -580,7 +581,7 @@ func (s *rpcServer) dispatch(cmd, id string, raw []byte) {
 			s.writeError(id, cmd, err.Error())
 			return
 		}
-		ok := s.asks.Deliver(id, core.ConfirmDecision{
+		ok := s.asks.Deliver(id, permission.ConfirmDecision{
 			Allow:        req.Allow,
 			Reason:       req.Reason,
 			RememberTool: req.RememberTool,
@@ -889,9 +890,9 @@ func (s *rpcServer) currentTurnCancel() context.CancelFunc {
 	return s.activeCancel
 }
 
-var _ core.Confirmer = (*rpcServer)(nil)
+var _ permission.Confirmer = (*rpcServer)(nil)
 
-// Confirm implements core.Confirmer over the rpc wire. It emits an `ask` frame
+// Confirm implements permission.Confirmer over the rpc wire. It emits an `ask` frame
 // naming the tool and its preview, then BLOCKS until the driver answers with a
 // matching `approve` command (or the server's context is cancelled). This is the
 // fill for rpc.go's historical nil-inner gate — the Confirmer-shaped hole whose
@@ -906,7 +907,7 @@ var _ core.Confirmer = (*rpcServer)(nil)
 // nothing here could see the turn end — which also cancelled asks that did not
 // belong to the aborted turn. rpc runs one turn at a time, so that was safe
 // rather than correct.
-func (s *rpcServer) Confirm(ctx context.Context, toolName, preview string) core.ConfirmDecision {
+func (s *rpcServer) Confirm(ctx context.Context, toolName, preview string) permission.ConfirmDecision {
 	s.pendMu.Lock()
 	s.askSeq++
 	id := fmt.Sprintf("ask-%d", s.askSeq)
@@ -923,13 +924,13 @@ func (s *rpcServer) Confirm(ctx context.Context, toolName, preview string) core.
 	case d := <-ch:
 		return d
 	case <-ctx.Done():
-		return core.ConfirmDecision{Allow: false, Reason: "the turn was aborted before this approval was answered (fail closed)"}
+		return permission.ConfirmDecision{Allow: false, Reason: "the turn was aborted before this approval was answered (fail closed)"}
 	case <-s.ctx.Done():
 		// The session is going away; deny so the tool call unwinds with a
 		// model-readable reason rather than hanging the shutdown.
-		return core.ConfirmDecision{Allow: false, Reason: "approval request cancelled (session ending)"}
+		return permission.ConfirmDecision{Allow: false, Reason: "approval request cancelled (session ending)"}
 	case <-s.closedSignal():
-		return core.ConfirmDecision{Allow: false, Reason: "approval request cancelled (rpc connection closed)"}
+		return permission.ConfirmDecision{Allow: false, Reason: "approval request cancelled (rpc connection closed)"}
 	}
 }
 

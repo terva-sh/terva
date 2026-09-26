@@ -21,7 +21,7 @@ var mkdirModeRe = regexp.MustCompile(`os\.MkdirAll\([^,]+,\s*(0o?[0-7]{3,4})\s*\
 // exemption is one file's licence to hand-type a mode, and how many times.
 //
 // The count is the point. This map used to hold reasons alone, so an exemption
-// covered the whole FILE — and packages/core/session_portable.go was exempt for
+// covered the whole FILE — and packages/session/session_portable.go was exempt for
 // its EXPORT, which legitimately writes where the user asked, while the same
 // file's ImportSession and BranchSession quietly created live transcripts in
 // the data home at 0644 under a 0755 dir. One argued write sheltered two
@@ -52,7 +52,7 @@ var exemptFromOwnerOnly = map[string]exemption{
 	// a 0700 directory appearing in someone's source tree would be a surprise.
 	filepath.Join("packages", "agent", "tools", "write.go"):          {"the Write tool creates parents for a user-supplied path", 1},
 	filepath.Join("packages", "agent", "tools", "generate_image.go"): {"writes the image to a user-supplied output path", 1},
-	filepath.Join("packages", "core", "session_portable.go"):         {"portable export writes to a user-chosen destination", 1},
+	filepath.Join("packages", "session", "session_portable.go"):      {"portable export writes to a user-chosen destination", 1},
 
 	// A private temp dir the OS already isolates, holding a tree that becomes
 	// an executable and must stay traversable.

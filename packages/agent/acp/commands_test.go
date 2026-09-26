@@ -13,6 +13,7 @@ import (
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -375,7 +376,7 @@ func TestACPSlashSkillsNoneDiscovered(t *testing.T) {
 // real mode to report.
 func TestACPSlashPermissionsExecutesNatively(t *testing.T) {
 	client := &countingTextClient{}
-	factory := &fakeFactory{client: client, tools: core.Registry{}, gateMode: core.ApprovalAsk}
+	factory := &fakeFactory{client: client, tools: core.Registry{}, gateMode: permission.ApprovalAsk}
 	h, sid, teardown := commandSetup(t, factory)
 	defer teardown()
 	_ = h.drainUpdates()

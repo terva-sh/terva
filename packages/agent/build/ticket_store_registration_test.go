@@ -9,7 +9,7 @@ import (
 	ticket "github.com/terva-sh/git-ticket/ticket"
 
 	"terva.sh/terva/packages/agent/tools"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -56,7 +56,7 @@ func seedConfiguredTicketStore(t *testing.T, home string) string {
 func TestTicketStoreToolIsOffByDefault(t *testing.T) {
 	seedTicketStoresConfig(t, nil)
 
-	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, ticketStoreDir(t), nil, "", "", false, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, ticketStoreDir(t), nil, "", "", false, nil)
 
 	if _, ok := reg["ticket_store"]; ok {
 		t.Error("ticket_store registered with no ticket_stores configured; the feature must ship off")
@@ -75,7 +75,7 @@ func TestTicketStoreToolRegistersWhenConfigured(t *testing.T) {
 	}
 	seedTicketStoresConfig(t, map[string]string{"personal": other})
 
-	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, ticketStoreDir(t), nil, "", "", false, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, ticketStoreDir(t), nil, "", "", false, nil)
 
 	if _, ok := reg["ticket_store"]; !ok {
 		t.Fatal("ticket_store missing though a usable store is configured")
@@ -87,7 +87,7 @@ func TestTicketStoreToolRegistersWhenConfigured(t *testing.T) {
 func TestTicketStoreToolStaysAwayWhenEveryEntryIsRefused(t *testing.T) {
 	seedTicketStoresConfig(t, map[string]string{"bad": "relative/path"})
 
-	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, ticketStoreDir(t), nil, "", "", false, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, ticketStoreDir(t), nil, "", "", false, nil)
 
 	if _, ok := reg["ticket_store"]; ok {
 		t.Error("ticket_store registered though every configured entry was refused")
@@ -100,7 +100,7 @@ func TestTicketStoreToolStaysAwayWhenEveryEntryIsRefused(t *testing.T) {
 func TestBuiltTicketCardFollowsTheCore(t *testing.T) {
 	seedTicketStoresConfig(t, nil)
 
-	reg := BuildToolRegistry(Args{}, core.ApprovalWorkspace, ticketStoreDir(t), nil, "", "", false, nil)
+	reg := BuildToolRegistry(Args{}, permission.ApprovalWorkspace, ticketStoreDir(t), nil, "", "", false, nil)
 
 	tc := tools.TicketCoreFor(reg)
 	if tc == nil {

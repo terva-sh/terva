@@ -20,7 +20,7 @@ func (f *fakeSettingsStore) SetStatusLineRows([][]string) error { return nil }
 // newApprovalTestInteractive wires an Interactive onto the fake carrier — the
 // shipping seam. The gate lives daemon-side: the TUI reads the settings and
 // permissions surfaces and pushes changes back as surface actions, never
-// touching a *core.Agent or a *core.ConfirmGate.
+// touching a *core.Agent or a *permission.ConfirmGate.
 func newApprovalTestInteractive(c *fakeCarrier) *Interactive {
 	return &Interactive{
 		turns: newTurnEngine(),

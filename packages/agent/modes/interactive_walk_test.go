@@ -8,6 +8,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/replay"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -66,7 +67,7 @@ func TestReplayResolutionWalksTheDialog(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rc.Close()
-	c := &answerSpy{Carrier: rc, decisions: make(chan core.ConfirmDecision, 4), answers: make(chan []core.UserAnswer, 4)}
+	c := &answerSpy{Carrier: rc, decisions: make(chan permission.ConfirmDecision, 4), answers: make(chan []core.UserAnswer, 4)}
 	i := newReplayTestInteractive(t, rc)
 	i.cfg.Carrier = c
 	i.actions = make(chan func(), 64)
@@ -136,11 +137,11 @@ func TestReplayResolutionWalksTheDialog(t *testing.T) {
 // decision here, so this is where a test sees what the walk answered.
 type answerSpy struct {
 	*replay.Carrier
-	decisions chan core.ConfirmDecision
+	decisions chan permission.ConfirmDecision
 	answers   chan []core.UserAnswer
 }
 
-func (s *answerSpy) Approve(ctx context.Context, sess, callID string, d core.ConfirmDecision) error {
+func (s *answerSpy) Approve(ctx context.Context, sess, callID string, d permission.ConfirmDecision) error {
 	s.decisions <- d
 	return nil
 }

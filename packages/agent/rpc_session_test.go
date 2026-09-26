@@ -11,6 +11,7 @@ import (
 	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -83,7 +84,7 @@ func TestRPCSessionPersistsAndResumes(t *testing.T) {
 	sessPath := filepath.Join(dir, "worker.json")
 
 	// --- first process: fresh session, one turn, then it "dies" (Close). ---
-	sess, err := core.NewSessionAtPath(sessPath, dir, "echo", "fake-model", "test")
+	sess, err := session.NewSessionAtPath(sessPath, dir, "echo", "fake-model", "test")
 	if err != nil {
 		t.Fatalf("new session: %v", err)
 	}
@@ -96,7 +97,7 @@ func TestRPCSessionPersistsAndResumes(t *testing.T) {
 
 	// The turn reached disk: reopening the file restores the user prompt and the
 	// assistant reply, in order.
-	reopened, msgs, err := core.OpenSession(sessPath)
+	reopened, msgs, err := session.OpenSession(sessPath)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -120,7 +121,7 @@ func TestRPCSessionPersistsAndResumes(t *testing.T) {
 
 	// Both turns are now in the durable transcript — the second stacked on the
 	// first, proving continuity across the revival.
-	all, err := core.ReadSessionMessages(sessPath)
+	all, err := session.ReadSessionMessages(sessPath)
 	if err != nil {
 		t.Fatalf("final reopen: %v", err)
 	}

@@ -7,15 +7,15 @@ import (
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // persistConfirmer answers every prompt with the confirm dialog's "always this
 // tool — save to config" choice (ConfirmDecision.PersistTool).
 type persistConfirmer struct{}
 
-func (persistConfirmer) Confirm(_ context.Context, tool, preview string) core.ConfirmDecision {
-	return core.ConfirmDecision{Allow: true, PersistTool: true}
+func (persistConfirmer) Confirm(_ context.Context, tool, preview string) permission.ConfirmDecision {
+	return permission.ConfirmDecision{Allow: true, PersistTool: true}
 }
 
 // A PersistTool answer must reach durable USER config — the promise the TUI's
@@ -62,7 +62,7 @@ func TestDurableGrantPersistsToUserConfig(t *testing.T) {
 	}
 	found := 0
 	for _, r := range cfg.Permissions {
-		if r.Tool == "bash" && r.Args == "" && r.Decision == string(core.RuleAllow) {
+		if r.Tool == "bash" && r.Args == "" && r.Decision == string(permission.RuleAllow) {
 			found++
 		}
 	}
@@ -75,18 +75,18 @@ func TestDurableGrantPersistsToUserConfig(t *testing.T) {
 // but narrowed to the derived command patterns the gate offered.
 type scopedPersistConfirmer struct{}
 
-func (scopedPersistConfirmer) Confirm(_ context.Context, tool, preview string) core.ConfirmDecision {
-	return core.ConfirmDecision{Allow: true}
+func (scopedPersistConfirmer) Confirm(_ context.Context, tool, preview string) permission.ConfirmDecision {
+	return permission.ConfirmDecision{Allow: true}
 }
-func (scopedPersistConfirmer) ConfirmWithRequest(_ context.Context, req core.ConfirmRequest) core.ConfirmDecision {
+func (scopedPersistConfirmer) ConfirmWithRequest(_ context.Context, req permission.ConfirmRequest) permission.ConfirmDecision {
 	if len(req.Scopes) == 0 {
-		return core.ConfirmDecision{Allow: true}
+		return permission.ConfirmDecision{Allow: true}
 	}
 	patterns := make([]string, len(req.Scopes))
 	for i, s := range req.Scopes {
 		patterns[i] = s.Pattern
 	}
-	return core.ConfirmDecision{Allow: true, PersistTool: true, PersistScopes: patterns}
+	return permission.ConfirmDecision{Allow: true, PersistTool: true, PersistScopes: patterns}
 }
 
 // The scoped end-to-end: buildSession's deriver turns the bash command into
@@ -128,7 +128,7 @@ func TestScopedGrantPersistsAndComposes(t *testing.T) {
 	wantArgs := `^git status(?:\s|$)`
 	found := 0
 	for _, r := range cfg.Permissions {
-		if r.Tool == "bash" && r.Args == wantArgs && r.Decision == string(core.RuleAllow) {
+		if r.Tool == "bash" && r.Args == wantArgs && r.Decision == string(permission.RuleAllow) {
 			found++
 		}
 	}
@@ -159,7 +159,7 @@ type tripwireConfirmer struct {
 	note string
 }
 
-func (c tripwireConfirmer) Confirm(_ context.Context, tool, preview string) core.ConfirmDecision {
+func (c tripwireConfirmer) Confirm(_ context.Context, tool, preview string) permission.ConfirmDecision {
 	c.t.Errorf("confirmer consulted for %s %q: %s", tool, preview, c.note)
-	return core.ConfirmDecision{Allow: false, Reason: "tripwire"}
+	return permission.ConfirmDecision{Allow: false, Reason: "tripwire"}
 }

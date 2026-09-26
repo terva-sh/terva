@@ -14,7 +14,9 @@ import (
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/provider"
+	jsonl "terva.sh/terva/packages/session"
 )
 
 // AgentFactory builds a fresh core.Agent for a new ACP session. The agent
@@ -24,9 +26,9 @@ import (
 // Returning an error fails session/new.
 //
 // Both factory methods also OWN durable persistence (§3): they create or
-// reopen the on-disk core.Session and wire OnMessageAppended / OnUsage /
+// reopen the on-disk jsonl.Session and wire OnMessageAppended / OnUsage /
 // OnTranscriptCompacted so the real terva session IS the transcript. The
-// returned *core.Session's Path is the durable identity the acp package uses
+// returned *jsonl.Session's Path is the durable identity the acp package uses
 // as the ACP sessionId, so a later session/load can reopen exactly this
 // transcript. The acp package never touches TervaHome / the session root
 // itself — that lives with the host, behind this interface.
@@ -50,7 +52,7 @@ type AgentFactory interface {
 	// ConfirmWithCall directly, so the permission request correlates to the
 	// right toolCallId with no factory-side hook (§13). The confirmer is
 	// bound to the session by the acp package after construction.
-	NewSessionAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (SessionAgent, error)
+	NewSessionAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer permission.Confirmer) (SessionAgent, error)
 
 	// LoadSessionAgent reopens the durable session at sessionPath (the ACP
 	// sessionId), builds an agent for it with persistence hooks wired, and
@@ -59,7 +61,7 @@ type AgentFactory interface {
 	// context via SetMessages and replays the history to the editor BEFORE
 	// returning the load response (§13). mcpServers/confirmer are wired as
 	// in NewSessionAgent.
-	LoadSessionAgent(ctx context.Context, sessionPath, cwd string, mcpServers json.RawMessage, confirmer core.Confirmer) (SessionAgent, []provider.Message, error)
+	LoadSessionAgent(ctx context.Context, sessionPath, cwd string, mcpServers json.RawMessage, confirmer permission.Confirmer) (SessionAgent, []provider.Message, error)
 
 	// ListSessions returns the durable sessions known to the host, newest
 	// first, optionally filtered to cwd (empty cwd means all working
@@ -93,9 +95,9 @@ type AgentFactory interface {
 // provider/model (the model selector's current value).
 type SessionAgent struct {
 	Agent    *core.Agent
-	Session  *core.Session
-	Cleanup  func()            // stops per-session MCP + extension subprocesses; never nil
-	Gate     *core.ConfirmGate // nil when the session has no gate (pure yolo)
+	Session  *jsonl.Session
+	Cleanup  func()                  // stops per-session MCP + extension subprocesses; never nil
+	Gate     *permission.ConfirmGate // nil when the session has no gate (pure yolo)
 	Provider string
 	Model    string
 
@@ -386,7 +388,7 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, factory AgentFactory, 
 	srv.conn = newConn(r, w, srv.dispatch)
 	// On disconnect, flush + close every durable session so the last turn is
 	// persisted and a freshly-created-but-never-prompted session drops its
-	// empty stub file (core.Session.Close handles that). Sessions append
+	// empty stub file (jsonl.Session.Close handles that). Sessions append
 	// per-message during turns, so this is a defensive final flush, not the
 	// primary persistence path.
 	defer srv.closeSessions()
@@ -781,7 +783,7 @@ func (s *agentServer) handleSessionLoad(ctx context.Context, params json.RawMess
 
 	// Seed cost from the on-disk usage rows so the editor's usage view and
 	// our own cumulative meter resume at the right figure rather than zero.
-	if cum, _, resume, uerr := core.SessionUsageDetail(p.SessionID); uerr == nil {
+	if cum, _, resume, uerr := jsonl.SessionUsageDetail(p.SessionID); uerr == nil {
 		ag.SeedCost(cum)
 		ag.SeedLastTurnUsage(resume)
 	}

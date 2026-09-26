@@ -10,8 +10,8 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/restartmarker"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -21,7 +21,7 @@ import (
 // leaves — so the reconciliation path has something to repair.
 func seedSession(t *testing.T, home, cwd string, interrupted bool) string {
 	t.Helper()
-	s, err := core.NewSession(home, cwd, "openai", "gpt-5", "test")
+	s, err := session.NewSession(home, cwd, "openai", "gpt-5", "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestPlannedRestartResumesAndReconciles(t *testing.T) {
 	defer w.Close()
 
 	// Sanity: without the marker the empty-id default would pick `latest`.
-	if got := build.SessionIDFromPath(core.LatestSession(home, cwd)); got != latest {
+	if got := build.SessionIDFromPath(session.LatestSession(home, cwd)); got != latest {
 		t.Fatalf("precondition: latest-on-disk = %q, want %q", got, latest)
 	}
 
@@ -162,7 +162,7 @@ func TestRecoveredRestartNoticeShape(t *testing.T) {
 
 func setMtime(t *testing.T, home, cwd, id string, when time.Time) {
 	t.Helper()
-	p := filepath.Join(core.SessionsDir(home, cwd), id+".jsonl")
+	p := filepath.Join(session.SessionsDir(home, cwd), id+".jsonl")
 	if err := os.Chtimes(p, when, when); err != nil {
 		t.Fatal(err)
 	}

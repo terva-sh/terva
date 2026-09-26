@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// core.Confirmer.Confirm takes a context, and the interface's contract is that
+// permission.Confirmer.Confirm takes a context, and the interface's contract is that
 // an implementation which PARKS must unpark on it. That contract is load-bearing
 // in a way most are not: the caller blocks inside ConfirmGate.Check, which blocks
 // the turn goroutine, so a confirmer that ignores its context holds a cancelled

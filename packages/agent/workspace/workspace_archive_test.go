@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -28,7 +28,7 @@ func archiveWorkspace(t *testing.T) *Workspace {
 
 func seedTranscript(t *testing.T, w *Workspace, id, title string) string {
 	t.Helper()
-	dir := core.SessionsDir(w.root, w.cwd)
+	dir := session.SessionsDir(w.root, w.cwd)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestWorkspaceArchiveListRestore(t *testing.T) {
 		t.Errorf("preview = %q, want the first user message so an untitled row is still legible", info.Preview)
 	}
 
-	if got := len(core.ListSessions(w.root, w.cwd)); got != 1 {
+	if got := len(session.ListSessions(w.root, w.cwd)); got != 1 {
 		t.Fatalf("%d sessions listed after archiving, want 1", got)
 	}
 
@@ -83,7 +83,7 @@ func TestWorkspaceArchiveListRestore(t *testing.T) {
 	if restored.Title != "to archive" {
 		t.Errorf("restored info title = %q, want the session's title", restored.Title)
 	}
-	if got := len(core.ListSessions(w.root, w.cwd)); got != 2 {
+	if got := len(session.ListSessions(w.root, w.cwd)); got != 2 {
 		t.Errorf("%d sessions listed after restore, want 2", got)
 	}
 	if got, _ := w.ArchivedSessions(ctx); len(got) != 0 {
@@ -131,7 +131,7 @@ func TestArchiveVerbsRejectPathTraversal(t *testing.T) {
 	// sessions directory usually names nothing, so "no such session" and "the
 	// guard stopped it" are indistinguishable. Put a real file where the
 	// traversal would land and prove it is still there.
-	outside := filepath.Join(core.SessionsDir(w.root, w.cwd), "..", "someone-elses.jsonl")
+	outside := filepath.Join(session.SessionsDir(w.root, w.cwd), "..", "someone-elses.jsonl")
 	if err := os.MkdirAll(filepath.Dir(outside), 0o700); err != nil {
 		t.Fatal(err)
 	}

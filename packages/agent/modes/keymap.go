@@ -17,7 +17,7 @@ package modes
 import (
 	"context"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/tui"
 )
@@ -480,18 +480,18 @@ func (i *Interactive) keyCycleToolDisplay(context.Context, tui.Key) keyOutcome {
 // included) are deliberately OFF the wheel — reach them through /settings
 // or the --approval flag, so a stray keypress can't drop you into the
 // strictest testing posture or the most dangerous one.
-var approvalWheel = []core.ApprovalMode{core.ApprovalPlan, core.ApprovalWorkspace, core.ApprovalAutoEdit}
+var approvalWheel = []permission.ApprovalMode{permission.ApprovalPlan, permission.ApprovalWorkspace, permission.ApprovalAutoEdit}
 
 // nextApprovalMode returns the wheel entry after cur. A mode that isn't on
 // the wheel (ask, yolo, or unset) resolves to the workspace default, so
 // shift+tab from any starting posture lands somewhere sensible.
-func nextApprovalMode(cur core.ApprovalMode) core.ApprovalMode {
+func nextApprovalMode(cur permission.ApprovalMode) permission.ApprovalMode {
 	for idx, m := range approvalWheel {
 		if m == cur {
 			return approvalWheel[(idx+1)%len(approvalWheel)]
 		}
 	}
-	return core.ApprovalWorkspace
+	return permission.ApprovalWorkspace
 }
 
 // keyCycleApprovalMode (shift+tab) advances the approval mode one step along
@@ -503,7 +503,7 @@ func (i *Interactive) keyCycleApprovalMode(_ context.Context, _ tui.Key) keyOutc
 	if i.cfg.Carrier == nil {
 		return keyPass
 	}
-	next := nextApprovalMode(core.ApprovalMode(i.approvalModeLabel()))
+	next := nextApprovalMode(permission.ApprovalMode(i.approvalModeLabel()))
 	i.applyApprovalMode(string(next))
 	// Optimistically advance the cached mode so a rapid second shift+tab
 	// computes from the value we just set, not a stale one: the carrier's

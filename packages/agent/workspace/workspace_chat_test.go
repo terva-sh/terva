@@ -26,6 +26,7 @@ import (
 	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -311,7 +312,7 @@ func chatTestWorkspace(t *testing.T, id string) (*Workspace, *wsSession, *fakeCh
 	root := testsupport.TempDir(t)
 	w := &Workspace{ctx: context.Background(), root: root, cwd: root,
 		sessions: map[string]*wsSession{}, diag: func(string) {}}
-	sf, err := core.NewSessionAtPath(filepath.Join(root, id+".jsonl"), root, "fake", "fake-model", "0.0.0")
+	sf, err := session.NewSessionAtPath(filepath.Join(root, id+".jsonl"), root, "fake", "fake-model", "0.0.0")
 	if err != nil {
 		t.Fatal(err)
 	}

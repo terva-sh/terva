@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -114,8 +114,8 @@ func TestExtConfigSecretRowMasksButKeepsTheCaret(t *testing.T) {
 func TestSessionRenameTakesAnInsertionMidTitle(t *testing.T) {
 	saved := ""
 	d := NewSessionDialog()
-	d.List = func() []core.SessionSummary {
-		return []core.SessionSummary{{Path: "/s/a.jsonl", Title: "the fix", MessageCount: 2}}
+	d.List = func() []session.SessionSummary {
+		return []session.SessionSummary{{Path: "/s/a.jsonl", Title: "the fix", MessageCount: 2}}
 	}
 	d.Rename = func(path, title string) error {
 		saved = title

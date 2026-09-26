@@ -32,11 +32,11 @@ import (
 	"terva.sh/terva/packages/agent/modes"
 	"terva.sh/terva/packages/agent/modes/widgets"
 	"terva.sh/terva/packages/agent/workspace"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/fswalk"
 	"terva.sh/terva/packages/i18n"
-	"terva.sh/terva/packages/provider/auth"
 	"terva.sh/terva/packages/relaunch"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/tui"
 )
 
@@ -447,7 +447,7 @@ func runAttachMode(ctx context.Context, args build.Args, version string) error {
 		// daemon, so the picker's `g` reports unavailability instead of
 		// firing a method the daemon can't serve.
 		GenerateSessionTitle: generateTitleFn,
-		ListSessions: func() []core.SessionSummary {
+		ListSessions: func() []session.SessionSummary {
 			list, lerr := svc.Sessions(ctx)
 			if lerr != nil {
 				return nil

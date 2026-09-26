@@ -18,7 +18,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/agent/tools"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/i18n"
 )
 
@@ -41,7 +41,7 @@ import (
 // A nil warnf sends notes to stderr, matching HeadlessConfirmGate, which
 // already announces the gate's stance there. Nothing is installed unless a
 // classifier actually built, so every failure path leaves the gate untouched.
-func InstallClassifier(gate *core.ConfirmGate, r Resolved, override string, warnf func(format string, args ...any)) {
+func InstallClassifier(gate *permission.ConfirmGate, r Resolved, override string, warnf func(format string, args ...any)) {
 	if gate == nil {
 		return
 	}
@@ -69,9 +69,9 @@ func InstallClassifier(gate *core.ConfirmGate, r Resolved, override string, warn
 	// approvals" is not something to leave implicit anywhere — least of all in
 	// approve mode, where nobody is asked at all.
 	switch clsMode {
-	case core.ClassifierApprove:
+	case permission.ClassifierApprove:
 		warnf("%s", i18n.T("classifier: APPROVE mode — a model may permit tool calls on your behalf without asking"))
-	case core.ClassifierScreen:
+	case permission.ClassifierScreen:
 		warnf("%s", i18n.T("classifier: screen mode — a model may refuse tool calls; approvals still reach you"))
 	}
 }
@@ -89,28 +89,28 @@ func InstallClassifier(gate *core.ConfirmGate, r Resolved, override string, warn
 // silently becomes an expensive one, and this runs on gated calls for a whole
 // session. warnf is where that noise goes; a caller that passes nil gets
 // silence and deserves what it gets.
-func ClassifierFor(r Resolved, cfg config.Config, warnf func(format string, args ...any)) (core.Classifier, core.ClassifierMode) {
+func ClassifierFor(r Resolved, cfg config.Config, warnf func(format string, args ...any)) (permission.Classifier, permission.ClassifierMode) {
 	if warnf == nil {
 		warnf = func(string, ...any) {}
 	}
 
-	clsMode, err := core.ParseClassifierMode(cfg.Classifier.Mode)
+	clsMode, err := permission.ParseClassifierMode(cfg.Classifier.Mode)
 	if err != nil {
 		warnf("%s", i18n.T("classifier: %v; screening stays off", err))
-		return nil, core.ClassifierOff
+		return nil, permission.ClassifierOff
 	}
 	if !clsMode.Enabled() {
-		return nil, core.ClassifierOff
+		return nil, permission.ClassifierOff
 	}
 
 	res, model, reasoning, err := classifierTarget(r, cfg)
 	if err != nil {
 		warnf("%s", i18n.T("classifier: %v; screening stays off", err))
-		return nil, core.ClassifierOff
+		return nil, permission.ClassifierOff
 	}
 	if !res.HasCredential() {
 		warnf("%s", i18n.T("classifier: no credential for provider %q; screening stays off", res.Provider))
-		return nil, core.ClassifierOff
+		return nil, permission.ClassifierOff
 	}
 
 	timeout := time.Duration(cfg.Classifier.TimeoutMS) * time.Millisecond
@@ -125,7 +125,7 @@ func ClassifierFor(r Resolved, cfg config.Config, warnf func(format string, args
 		// Defensive: New refuses what it cannot run, and a typed-nil in the
 		// interface would give the gate a classifier it thinks is live.
 		warnf("%s", i18n.T("classifier: could not build a screener for %q/%q; screening stays off", res.Provider, model))
-		return nil, core.ClassifierOff
+		return nil, permission.ClassifierOff
 	}
 	return s, clsMode
 }

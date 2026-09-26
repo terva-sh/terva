@@ -4,11 +4,11 @@ import (
 	"context"
 	"time"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 )
 
-// Session state on the wire: the per-session client state core keeps beside the
-// transcript at <session>.state.json (packages/core/session_state.go). Its
+// Session state on the wire: the per-session client state the session store keeps beside the
+// transcript at <session>.state.json (packages/session/session_state.go). Its
 // first tenant is the composer draft — the message the user typed and did not
 // send. Serving it from the daemon rather than from each front end is what
 // makes it ONE draft: the TUI and the web panel see the same unsent text
@@ -39,8 +39,8 @@ import (
 // source the way a copied literal can. Aliases so a front end reading only
 // ctrlproto still finds the domain it has to send.
 const (
-	ComposerSourceUser       = core.ComposerSourceUser
-	ComposerSourceSuggestion = core.ComposerSourceSuggestion
+	ComposerSourceUser       = session.ComposerSourceUser
+	ComposerSourceSuggestion = session.ComposerSourceSuggestion
 )
 
 // ComposerDraft is the composer tenant on the wire: one unsent message and

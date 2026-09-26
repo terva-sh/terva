@@ -20,6 +20,7 @@ import (
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/session"
@@ -661,7 +662,7 @@ func HookSpecsFor(args Args, trusted bool) *hooks.Config {
 // tool that does not opt in. This used to take the agent and resolve the tool
 // itself through ag.ToolForCall, which forced every host to build the agent
 // before its gate; inside a turn that lookup returned this same tool.
-func BuildToolGate(hookEng *hooks.Engine, gate *core.ConfirmGate, extMgr *extensions.Manager) core.Gate {
+func BuildToolGate(hookEng *hooks.Engine, gate *permission.ConfirmGate, extMgr *extensions.Manager) core.Gate {
 	return core.GateFunc(func(ctx context.Context, call provider.ToolCallBlock, tool core.Tool) (allowed bool, reason string, modArgs json.RawMessage) {
 		args := call.Arguments
 		// Audit every call with the gate's decision and the mode in force, so
@@ -698,7 +699,7 @@ func BuildToolGate(hookEng *hooks.Engine, gate *core.ConfirmGate, extMgr *extens
 		if !skipGate && gate != nil {
 			// args is post-rewrite, so the preview the approver reads describes
 			// what will actually run.
-			ok, denyReason, _ := gate.Check(ctx, call.Name, args, core.ToolPreview(tool, args, 120), call.ID)
+			ok, denyReason, _ := gate.Check(ctx, call.Name, args, permission.ToolPreview(tool, args, 120), call.ID)
 			if !ok {
 				return false, denyReason, nil
 			}

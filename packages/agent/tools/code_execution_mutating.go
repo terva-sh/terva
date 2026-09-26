@@ -154,7 +154,7 @@ func scriptStringArg(args []any, i int, sig, field string) (string, error) {
 }
 
 // Preview contributes this tool's confirmation-prompt line via the optional
-// accessor core.ToolPreview reads. Where BuildPreview can only show the raw
+// accessor permission.ToolPreview reads. Where BuildPreview can only show the raw
 // script wrapped in JSON, the accounted binding plan is the one thing an
 // approver needs and the one thing only this tool can compute.
 //

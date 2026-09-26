@@ -13,6 +13,7 @@ import (
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // CastMember is one dispatchable actor in a --play cast: a role-bound identity
@@ -357,7 +358,7 @@ func actorReply(sessionPath string, transcript []string) string {
 		// writing. OpenSession was wrong twice here: it returned a live
 		// O_APPEND|O_WRONLY handle that nothing closed, and a write handle on a
 		// running child's session is exactly what the session lock refuses.
-		if msgs, err := core.ReadSessionMessages(sessionPath); err == nil {
+		if msgs, err := session.ReadSessionMessages(sessionPath); err == nil {
 			if line := lastAssistantText(msgs); line != "" {
 				return line
 			}

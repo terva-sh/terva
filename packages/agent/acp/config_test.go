@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/core"
+
+	"terva.sh/terva/packages/core/permission"
 	jsonl "terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -48,7 +50,7 @@ func TestACPSessionNewAdvertisesModelAndModes(t *testing.T) {
 		client:   &textTurnClient{reply: "hi"},
 		tools:    core.Registry{},
 		models:   modelMenu(),
-		gateMode: core.ApprovalWorkspace, // a real gate so modes are advertised
+		gateMode: permission.ApprovalWorkspace, // a real gate so modes are advertised
 	}
 	h, sid, teardown := permSetup(t, factory)
 	defer teardown()
@@ -93,8 +95,8 @@ func TestACPSessionNewAdvertisesModelAndModes(t *testing.T) {
 	if modes == nil {
 		t.Fatal("session/new advertised no modes; want the approval-mode menu")
 	}
-	if modes["currentModeId"] != string(core.ApprovalWorkspace) {
-		t.Errorf("currentModeId = %v; want %q", modes["currentModeId"], core.ApprovalWorkspace)
+	if modes["currentModeId"] != string(permission.ApprovalWorkspace) {
+		t.Errorf("currentModeId = %v; want %q", modes["currentModeId"], permission.ApprovalWorkspace)
 	}
 	available, _ := modes["availableModes"].([]any)
 	if len(available) != 5 {
@@ -315,7 +317,7 @@ func TestACPSetModeChangesApprovalBehavior(t *testing.T) {
 	factory := &fakeFactory{
 		client:   client,
 		tools:    core.Registry{"do_thing": tool},
-		gateMode: core.ApprovalYolo, // start in yolo: tools auto-run
+		gateMode: permission.ApprovalYolo, // start in yolo: tools auto-run
 		models:   modelMenu(),
 	}
 	h, sid, teardown := permSetup(t, factory)
@@ -339,10 +341,10 @@ func TestACPSetModeChangesApprovalBehavior(t *testing.T) {
 	// ---- switch to ask ----
 	modeRes := h.call(MethodSessionSetMode, map[string]any{
 		"sessionId": sid,
-		"modeId":    string(core.ApprovalAsk),
+		"modeId":    string(permission.ApprovalAsk),
 	})
 	_ = modeRes
-	assertCurrentModeUpdate(t, h, string(core.ApprovalAsk))
+	assertCurrentModeUpdate(t, h, string(permission.ApprovalAsk))
 
 	// ---- prompt 2 under ask: the SAME tool now triggers a permission ----
 	req2 := h.send(MethodSessionPromptName, map[string]any{
@@ -369,7 +371,7 @@ func TestACPSetModeUnknownInvalidParams(t *testing.T) {
 	factory := &fakeFactory{
 		client:   &textTurnClient{reply: "hi"},
 		tools:    core.Registry{},
-		gateMode: core.ApprovalWorkspace,
+		gateMode: permission.ApprovalWorkspace,
 	}
 	h, sid, teardown := permSetup(t, factory)
 	defer teardown()

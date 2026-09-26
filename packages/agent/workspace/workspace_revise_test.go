@@ -7,8 +7,8 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -82,7 +82,7 @@ func TestEditDeleteMessageReviseTranscript(t *testing.T) {
 		t.Errorf("live transcript = %v, want %v", got, want)
 	}
 	// Persisted: a reload from disk reproduces the revised transcript.
-	reloaded, err := core.ReadSessionMessages(info.Path)
+	reloaded, err := session.ReadSessionMessages(info.Path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

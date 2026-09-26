@@ -6,9 +6,9 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // Saved-World CONTENT edits, sessionless (WS-1).
@@ -136,13 +136,13 @@ func (w *Workspace) WorldSetModel(_ context.Context, p ctrlproto.WorldSetModelPa
 	}
 	prov, model := strings.TrimSpace(p.Provider), strings.TrimSpace(p.Model)
 	if prov == "" && model == "" {
-		doc.Model = core.CastRoute{}
+		doc.Model = session.CastRoute{}
 	} else {
 		m, e := provider.FindModel(prov, model)
 		if e != nil {
 			return ctrlproto.WorldView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("unknown model %q", model))
 		}
-		doc.Model = core.CastRoute{Provider: m.Provider, Model: m.ID}
+		doc.Model = session.CastRoute{Provider: m.Provider, Model: m.ID}
 	}
 	return w.saveWorldDoc(store, doc, "set world model")
 }

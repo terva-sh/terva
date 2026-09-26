@@ -30,6 +30,7 @@ import (
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -168,11 +169,11 @@ func plantedDefaultWorkspace(t *testing.T) (*Workspace, *wsSession) {
 	root := testsupport.TempDir(t)
 	w := &Workspace{ctx: context.Background(), root: root, cwd: root,
 		sessions: map[string]*wsSession{}, diag: func(string) {}}
-	dir := core.SessionsDir(root, root)
+	dir := session.SessionsDir(root, root)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	sf, err := core.NewSessionAtPath(filepath.Join(dir, "s1.jsonl"), root, "fake", "fake-model", "0.0.0")
+	sf, err := session.NewSessionAtPath(filepath.Join(dir, "s1.jsonl"), root, "fake", "fake-model", "0.0.0")
 	if err != nil {
 		t.Fatal(err)
 	}

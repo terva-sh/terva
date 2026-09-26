@@ -119,7 +119,7 @@ type Manager struct {
 
 // SessionIdentity is the core-free snapshot the Manager remembers so it
 // can bookend a session_start with a matching session_end. ProjectID is
-// precomputed by the caller (it needs core.ProjectKey) so the manager can
+// precomputed by the caller (it needs session.ProjectKey) so the manager can
 // build the event without importing core.
 type SessionIdentity struct {
 	ID        string

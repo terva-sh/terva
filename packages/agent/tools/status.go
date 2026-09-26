@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
@@ -171,8 +170,8 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 		haveAgent        = agent != nil
 	)
 	if haveAgent {
-		model = agent.Model()
-		reasoning, _ = agent.Reasoning()
+		model = agent.Model
+		reasoning = agent.Reasoning
 		sessID, sessPath = agent.SessionIdentity()
 		cum = agent.Cost()
 		last = agent.LastTurnUsage()
@@ -259,13 +258,13 @@ func (t *StatusTool) Execute(ctx context.Context, _ json.RawMessage, _ func(stri
 	// That claim used to be false: nine gauge sites divided by the hard ceiling
 	// while this one and auto-compaction used the effective window, so on a
 	// model with a DesiredContextWindow the bar read 21% at the moment the
-	// conversation was compacted. modelreg.ContextGauge is the shared accessor
+	// conversation was compacted. provider.ContextGauge is the shared accessor
 	// they all go through now; this site keeps its own FindModel because it
 	// also reports the hard ceiling as an aside.
 	ctxWindow := 0
 	modelMax := 0
 	if model != "" {
-		if m, err := modelreg.FindModel(provName, model); err == nil {
+		if m, err := provider.FindModel(provName, model); err == nil {
 			ctxWindow = m.EffectiveContextWindow()
 			modelMax = m.ContextWindow
 		}

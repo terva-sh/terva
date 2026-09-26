@@ -10,7 +10,7 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/skills"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -118,7 +118,7 @@ func TestBundlePermissionRulesRestrictOnly(t *testing.T) {
 	if pol == nil {
 		t.Fatal("bundle rules exist; policy must be non-nil")
 	}
-	var fromExt []core.PermissionRule
+	var fromExt []permission.PermissionRule
 	for _, r := range pol.Rules {
 		if strings.HasPrefix(r.Source, "extension") {
 			fromExt = append(fromExt, r)
@@ -128,7 +128,7 @@ func TestBundlePermissionRulesRestrictOnly(t *testing.T) {
 		t.Fatalf("want 2 surviving extension rules (allow dropped), got %+v", fromExt)
 	}
 	for _, r := range fromExt {
-		if r.Decision == core.RuleAllow {
+		if r.Decision == permission.RuleAllow {
 			t.Fatal("extension bundle granted itself an allow rule")
 		}
 	}
@@ -138,7 +138,7 @@ func TestBundlePermissionRulesRestrictOnly(t *testing.T) {
 	}
 	// And the deny has teeth.
 	args, _ := json.Marshal(map[string]string{"url": "http://169.254.169.254/iam"})
-	if v, reason := pol.Evaluate("web_fetch", args); v != core.VerdictDeny || !strings.Contains(reason, "metadata") {
+	if v, reason := pol.Evaluate("web_fetch", args); v != permission.VerdictDeny || !strings.Contains(reason, "metadata") {
 		t.Errorf("bundle deny rule should fire: %v %q", v, reason)
 	}
 }
@@ -173,7 +173,7 @@ func TestBundleRulesOrderedBetweenProjectAndUser(t *testing.T) {
 	}
 	// User is sovereign: the user's allow wins over the project deny
 	// and the extension ask on the same tool.
-	if v, _ := pol.Evaluate("x", nil); v != core.VerdictAllow {
+	if v, _ := pol.Evaluate("x", nil); v != permission.VerdictAllow {
 		t.Errorf("user allow should win the three-layer conflict, got %v", v)
 	}
 }

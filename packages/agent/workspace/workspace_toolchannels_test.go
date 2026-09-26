@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"terva.sh/terva/packages/core"
+
+	"terva.sh/terva/packages/core/permission"
 )
 
 // The rule in workspace_toolchannels.go, enforced without naming the channels.
@@ -67,7 +69,7 @@ func TestARebuildKeepsEveryToolChannel(t *testing.T) {
 	// The session fixture builds the registry the way buildSession does. Bind
 	// the agent-side half too, which is what buildSession's bindAgentChannels
 	// does — without it there is no "before" to lose.
-	s.gate = core.NewConfirmGate(nil)
+	s.gate = permission.NewConfirmGate(nil)
 	s.bindAgentChannels(s.agent, s.gate)
 
 	before := boundFuncFields(t, s.agent)

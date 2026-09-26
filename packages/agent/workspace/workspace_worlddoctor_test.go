@@ -9,8 +9,8 @@ import (
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/card"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -59,7 +59,7 @@ func TestRenderWorldDoctorEvidence(t *testing.T) {
 			{Rule: "empty-personality", Severity: "warn", Field: "personality", Detail: "no personality written"},
 		}},
 	}
-	lore := []core.WorldLoreEntry{{Name: "The Bureau", Content: "Public Safety runs the hunts.", Constant: true}}
+	lore := []session.WorldLoreEntry{{Name: "The Bureau", Content: "Public Safety runs the hunts.", Constant: true}}
 
 	got := renderWorldDoctorEvidence("Tokyo Division", "devil hunters on salary", roster, lore, nil, "give Kobeni a rival")
 
@@ -145,7 +145,7 @@ func TestBudgetShares(t *testing.T) {
 // The lorebook is the one input that grows without bound — realize alone lands
 // ~25 entries — so it is budgeted, and a partial view must SAY it is partial.
 func TestRenderWorldDoctorLoreBudget(t *testing.T) {
-	lore := []core.WorldLoreEntry{
+	lore := []session.WorldLoreEntry{
 		{Name: "Short", Content: "brief"},
 		{Name: "Long", Content: strings.Repeat("x", 500)},
 	}
@@ -169,7 +169,7 @@ func TestParseWorldDoctorResult(t *testing.T) {
 		{Name: "Kobeni", Ref: "kobeni-1", Card: card.Card{Name: "Kobeni", Description: "a nervous devil hunter", Personality: "anxious"}},
 		{Name: "Aki", Ref: "aki-2", Card: card.Card{Name: "Aki", Description: "her senior"}},
 	}
-	lore := []core.WorldLoreEntry{{Name: "The Bureau", Content: "Public Safety runs the hunts."}}
+	lore := []session.WorldLoreEntry{{Name: "The Bureau", Content: "Public Safety runs the hunts."}}
 
 	reply := `{"note":"the cast has no authority figure",
 	 "card_proposals":[
@@ -239,8 +239,8 @@ func TestParseWorldDoctorResult(t *testing.T) {
 // sessions.doctor and the recap to a scene break. Neither is a World's to write.
 func TestParseWorldDoctorResultRefusesTheReservedPins(t *testing.T) {
 	reply := `{"world_proposals":[
-	  {"id":"w1","kind":"lore_entry","rationale":"x","name":"` + core.SceneStateName + `","content":"Day 2"},
-	  {"id":"w2","kind":"lore_entry","rationale":"x","name":"` + core.StorySoFarName + `","content":"Previously"}]}`
+	  {"id":"w1","kind":"lore_entry","rationale":"x","name":"` + session.SceneStateName + `","content":"Day 2"},
+	  {"id":"w2","kind":"lore_entry","rationale":"x","name":"` + session.StorySoFarName + `","content":"Previously"}]}`
 	res, err := parseWorldDoctorResult(reply, nil, nil)
 	if err != nil {
 		t.Fatal(err)

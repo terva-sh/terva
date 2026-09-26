@@ -7,8 +7,8 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/persona"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/session"
 )
 
 // The persona library on the wire. Reads (list/get) are open; create/edit are
@@ -48,7 +48,7 @@ func (w *Workspace) PersonasGet(_ context.Context, p ctrlproto.PersonaGetParams)
 	// Counted by the persona's own name rather than the requested ref: a session
 	// records what SetCreationSpec was given, and a caller may have asked for the
 	// same persona by a namespaced ref or a differently-cased stem.
-	v.SessionsUsing = len(core.SessionsUsingPersona(w.root, found.Name))
+	v.SessionsUsing = len(session.SessionsUsingPersona(w.root, found.Name))
 	return v, nil
 }
 

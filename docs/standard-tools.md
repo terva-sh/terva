@@ -83,7 +83,7 @@ tool's authority explicitly, and do **not** collapse "read-only" and
   no other side effect, so it is permitted in every mode and never
   prompts.
 
-The taxonomy now exists as `core.Authority` (`packages/core/policy.go`), and an
+The taxonomy now exists as `permission.Authority` (`packages/core/permission/policy.go`), and an
 extension/MCP tool can declare its class via the `authority` field on
 `register_tool` (`ext.WithAuthority` in the Go SDK). Declared authority decides
 read-only classification, and `local-read` and `local-data` are auto-allowable,
@@ -549,6 +549,8 @@ rather than patching a live one:
 | `generate_image` | an `image` config block resolves a backend | workspace mutation | see above |
 | `raati_convene` | `raati.convene_tool` is set, in base workspace sessions only | *(unclassified, always prompts)* | the agent convenes its own deliberation panel. A convening spends real sub-agent turns, so every call hits the approval gate; the run mirrors onto the live raati pane. Skin-gated out of `--chat`/`--play`. See [raati.md](raati.md). |
 | `chat_send_image` / `chat_send_file` | a chat bridge is connected **and bound to this session**, and the connector advertises the capability | external mutation | sends into the paired chat. Bound per session, so a second session never sees another's chat tools. See [connectors.md](connectors.md). |
+| `talkoot_send` / `talkoot_handoff` | the session holds a **seat in a talkoot**, as a native member | external mutation | sends an envelope through the Talkoot router, which starts another member's turn and spends that member's budget. The seat names the sender. Plan mode keeps both, because a planning member's plan reaches the team as an envelope; the user's rules still apply. The MCP bridge for external members serves the same definitions (`tools.TalkootToolDefs`). The Talkoot proposal holds the design. |
+| `talkoot_roster` | the session holds a seat in a talkoot | local read-only | lists each member with its title, role, driver, and status. |
 | `terva_restart` | self-restart is enabled (`--allow-restart`) on a platform with `exec(2)`, in the TUI as well as web | *(unclassified, always prompts)* | re-execs the running binary in place, preserving the session. See below. |
 | `terva_arm_restart` | self-restart is enabled (`--allow-restart`), web session | *(unclassified, always prompts)* | declares that an imminent **supervisor** restart is planned for this session, just before the agent runs the supervisor command itself (e.g. `systemctl --user restart` to apply a changed unit, which `terva_restart`'s self-exec cannot do). Writes a short-lived on-disk marker so the SIGTERM that replaces the process is treated as planned: the interrupted command reconciles as expected (not a failure) and the exact session resumes. terva stays supervisor-agnostic, this only records intent. Shares `terva_restart`'s unclassified treatment for the same reason. |
 
@@ -746,7 +748,7 @@ For each proposed tool, answer:
 
 ## References
 
-- Policy ladder: `packages/core/policy.go`, `packages/agent/build/permissions.go`
+- Policy ladder: `packages/core/permission/policy.go`, `packages/agent/build/permissions.go`
 - Tools: `packages/agent/tools/`
 - Conditional-tool injection: `packages/agent/workspace/workspace_session.go`
 - Swarm/worktree: `packages/agent/swarm/`, `--swarm-worktrees`

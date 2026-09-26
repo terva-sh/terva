@@ -8,13 +8,14 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/core"
+
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
 // AskUserTool asks the user a structured clarifying question mid-turn and
 // resumes with their answer. Its only effect is the prompt, so the
-// permission policy permits it in every mode (see core.AuthUserInteraction).
+// permission policy permits it in every mode (see permission.AuthUserInteraction).
 //
 // Asker is the front-end channel (set after the registry is built, like
 // the confirm gate's Confirmer). Only the workspace host sets it; every

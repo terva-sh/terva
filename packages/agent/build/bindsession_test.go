@@ -9,7 +9,7 @@ import (
 	"terva.sh/terva/packages/agent/internal/coretest"
 	"terva.sh/terva/packages/agent/tools/tasks"
 	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -44,7 +44,7 @@ func boardFiles(t *testing.T, dir string) []string {
 // what rpc and ACP shipped.
 func TestBindingASessionIsWhatMakesTheBoardPersist(t *testing.T) {
 	home := testsupport.TempDir(t)
-	sess, err := core.NewSession(home, home, "anthropic", "some-model", "test")
+	sess, err := session.NewSession(home, home, "anthropic", "some-model", "test")
 	if err != nil {
 		t.Fatalf("new session: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestBindingASessionIsWhatMakesTheBoardPersist(t *testing.T) {
 // precondition.
 func TestBindingNoSessionClearsTheIdentity(t *testing.T) {
 	home := testsupport.TempDir(t)
-	sess, err := core.NewSession(home, home, "anthropic", "some-model", "test")
+	sess, err := session.NewSession(home, home, "anthropic", "some-model", "test")
 	if err != nil {
 		t.Fatalf("new session: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestBindingNoSessionClearsTheIdentity(t *testing.T) {
 // neither event. ACP was that host.
 func TestSupplyingAManagerAnnouncesTheSession(t *testing.T) {
 	home := testsupport.TempDir(t)
-	sess, err := core.NewSession(home, home, "anthropic", "some-model", "test")
+	sess, err := session.NewSession(home, home, "anthropic", "some-model", "test")
 	if err != nil {
 		t.Fatalf("new session: %v", err)
 	}

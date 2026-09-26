@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -24,7 +24,7 @@ import (
 // later is covered by having been added — a test naming today's seven could not
 // fail when an eighth arrives unset.
 func TestNewPolicyFillsEveryField(t *testing.T) {
-	p := NewPolicy(core.ApprovalYolo, nil)
+	p := NewPolicy(permission.ApprovalYolo, nil)
 
 	v := reflect.ValueOf(*p)
 	typ := v.Type()
@@ -47,7 +47,7 @@ func TestNewPolicyFillsEveryField(t *testing.T) {
 // The two the ACP twin actually omitted, named so a regression says which
 // behaviour went away rather than just "a field is zero".
 func TestTheTwoFieldsTheACPTwinOmitted(t *testing.T) {
-	p := NewPolicy(core.ApprovalPlan, nil)
+	p := NewPolicy(permission.ApprovalPlan, nil)
 
 	// Interactive: ask_user_question is permitted in every mode and never
 	// prompts. Without it, plan mode — which an ACP client reaches through
@@ -69,7 +69,7 @@ func TestTheTwoFieldsTheACPTwinOmitted(t *testing.T) {
 	}
 }
 
-// Nothing outside this package may compose a core.PermissionPolicy literal.
+// Nothing outside this package may compose a permission.PermissionPolicy literal.
 // The defect was a second one built by hand; a hand-written list of known
 // builders cannot fail when a third appears.
 func TestNobodyElseComposesAPermissionPolicy(t *testing.T) {
@@ -126,7 +126,7 @@ func TestNobodyElseComposesAPermissionPolicy(t *testing.T) {
 		t.Fatalf("scanned only %d Go files; the walk is broken and this census proves nothing", scanned)
 	}
 	for _, o := range offenders {
-		t.Errorf("%s composes a core.PermissionPolicy literal — use permissions.NewPolicy. "+
+		t.Errorf("%s composes a permission.PermissionPolicy literal — use permissions.NewPolicy. "+
 			"The last hand-built one set four of seven fields and changed how rules were evaluated.", o)
 	}
 }

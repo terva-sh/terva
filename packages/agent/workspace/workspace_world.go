@@ -8,8 +8,8 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/ctrlproto"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
+	"terva.sh/terva/packages/session"
 )
 
 // World lore on the wire (Worlds L1). world.lore.put / world.lore.delete write
@@ -51,18 +51,18 @@ func (w *Workspace) WorldLorePut(_ context.Context, sess string, p ctrlproto.Wor
 // would quietly reshape it.
 //
 // replace names the entry this one supersedes; empty upserts by entry.Name.
-func putWorldLore(book []core.WorldLoreEntry, entry core.WorldLoreEntry, replace string) ([]core.WorldLoreEntry, error) {
+func putWorldLore(book []session.WorldLoreEntry, entry session.WorldLoreEntry, replace string) ([]session.WorldLoreEntry, error) {
 	replace = strings.TrimSpace(replace)
 	if replace == "" {
 		replace = entry.Name
 	}
-	next := make([]core.WorldLoreEntry, 0, len(book)+1)
+	next := make([]session.WorldLoreEntry, 0, len(book)+1)
 	placed := false
 	for _, e := range book {
 		// The scene-state pin (SD4) matches its slot case-insensitively: there
 		// is one card, however an import spelled it, and a put addressed to the
 		// pin must update that card, never stand a second one beside it.
-		samePin := core.IsSceneState(entry.Name) && core.IsSceneState(e.Name)
+		samePin := session.IsSceneState(entry.Name) && session.IsSceneState(e.Name)
 		switch {
 		case e.Name == replace || samePin:
 			if placed {
@@ -93,9 +93,9 @@ func putWorldLore(book []core.WorldLoreEntry, entry core.WorldLoreEntry, replace
 // deleteWorldLore drops the entry named name, refusing when nothing matched —
 // the other half of the shared rule (see putWorldLore). Returns nil (not an
 // empty slice) for an emptied book, so the field marshals away.
-func deleteWorldLore(book []core.WorldLoreEntry, name string) ([]core.WorldLoreEntry, error) {
+func deleteWorldLore(book []session.WorldLoreEntry, name string) ([]session.WorldLoreEntry, error) {
 	name = strings.TrimSpace(name)
-	next := make([]core.WorldLoreEntry, 0, len(book))
+	next := make([]session.WorldLoreEntry, 0, len(book))
 	for _, e := range book {
 		if e.Name != name {
 			next = append(next, e)
@@ -236,7 +236,7 @@ func (s *wsSession) saveWorld(name, description string) (build.WorldDoc, error) 
 	// stale instead of being cleared. Neither direction is safe by inspection, so
 	// TestWorldSaveClassifiesEveryWorldDocField makes the classification a thing
 	// you have to write down.
-	doc := build.WorldDoc{ID: s.sess.Meta.World}
+	doc := build.WorldDoc{ID: s.sess.Stage.World}
 	if doc.ID != "" {
 		if prev, err := store.Get(doc.ID); err == nil {
 			doc = prev
@@ -266,7 +266,7 @@ func (s *wsSession) saveWorld(name, description string) (build.WorldDoc, error) 
 	// The World lifts the WHOLE stage: the bound character joins the saved
 	// roster (the cast deliberately excludes them in-session), so the World
 	// sheet lists every character and chat-in-World can bind any of them.
-	if boundRef := strings.TrimSpace(s.sess.Meta.Card); boundRef != "" {
+	if boundRef := strings.TrimSpace(s.sess.Stage.Card); boundRef != "" {
 		if boundName, _ := s.boundCharacter(); boundName != "" && boundName != "the character" {
 			if _, in := doc.Characters[boundName]; !in {
 				doc.Characters[boundName] = boundRef
@@ -280,7 +280,7 @@ func (s *wsSession) saveWorld(name, description string) (build.WorldDoc, error) 
 	if err != nil {
 		return build.WorldDoc{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "save world: %v", err)
 	}
-	if s.sess.Meta.World != saved.ID {
+	if s.sess.Stage.World != saved.ID {
 		if err := s.sess.SetWorld(saved.ID); err != nil {
 			return build.WorldDoc{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "stamp world membership: %v", err)
 		}
@@ -354,9 +354,9 @@ func (w *Workspace) WorldSetCharacterModel(_ context.Context, p ctrlproto.WorldS
 		delete(doc.CharacterModels, name)
 	} else {
 		if doc.CharacterModels == nil {
-			doc.CharacterModels = map[string]core.CastRoute{}
+			doc.CharacterModels = map[string]session.CastRoute{}
 		}
-		doc.CharacterModels[name] = core.CastRoute{Provider: provider, Model: model}
+		doc.CharacterModels[name] = session.CastRoute{Provider: provider, Model: model}
 	}
 	saved, err := store.Save(doc)
 	if err != nil {
@@ -509,7 +509,7 @@ func worldDocToView(d build.WorldDoc, sessions int) ctrlproto.WorldView {
 // record gets only what the tail's speaker may see (L2): the tail feeds the
 // BOUND character's generations in a chat, so it is audience-filtered for
 // them; a play session's tail feeds the director, who sees everything.
-func (s *wsSession) setWorldLore(entries []core.WorldLoreEntry) error {
+func (s *wsSession) setWorldLore(entries []session.WorldLoreEntry) error {
 	entries = stampScenePin(entries, s.sess.Meta.WorldLore, s.messageCount())
 	if err := s.sess.SetWorldLore(entries); err != nil {
 		return ctrlproto.Errorf(ctrlproto.CodeInternal, "set World lore: %v", err)
@@ -528,18 +528,18 @@ func (s *wsSession) setWorldLore(entries []core.WorldLoreEntry) error {
 // entry rewrites the whole list, and re-dating the pin then would make it read
 // as fresh every time the author touched anything else — which is precisely the
 // signal being measured. An unchanged pin carries its old stamp forward.
-func stampScenePin(next, prev []core.WorldLoreEntry, msgs int) []core.WorldLoreEntry {
+func stampScenePin(next, prev []session.WorldLoreEntry, msgs int) []session.WorldLoreEntry {
 	was, had := "", 0
 	for _, e := range prev {
-		if core.IsSceneState(e.Name) {
+		if session.IsSceneState(e.Name) {
 			was, had = strings.TrimSpace(e.Content), e.PinnedAt
 			break
 		}
 	}
-	out := make([]core.WorldLoreEntry, len(next))
+	out := make([]session.WorldLoreEntry, len(next))
 	copy(out, next)
 	for i, e := range out {
-		if !core.IsSceneState(e.Name) {
+		if !session.IsSceneState(e.Name) {
 			continue
 		}
 		if strings.TrimSpace(e.Content) == was {
@@ -556,9 +556,9 @@ func stampScenePin(next, prev []core.WorldLoreEntry, msgs int) []core.WorldLoreE
 // written, and whether there is a pin to be stale at all. A pin stamped ahead
 // of the count (a hand-edited meta, a bundle import) clamps to 0 rather than
 // reporting negative drift.
-func scenePinDrift(entries []core.WorldLoreEntry, msgs int) (turns int, pinned bool) {
+func scenePinDrift(entries []session.WorldLoreEntry, msgs int) (turns int, pinned bool) {
 	for _, e := range entries {
-		if !core.IsSceneState(e.Name) {
+		if !session.IsSceneState(e.Name) {
 			continue
 		}
 		if n := msgs - e.PinnedAt; n > 0 {
@@ -583,7 +583,7 @@ func (s *wsSession) messageCount() int {
 // there is a pin, 0 when there is none (the field is omitempty, so a session
 // with no pin carries nothing rather than a "0 turns stale" that would read as
 // a current card).
-func scenePinStaleFor(entries []core.WorldLoreEntry, msgs int) int {
+func scenePinStaleFor(entries []session.WorldLoreEntry, msgs int) int {
 	turns, pinned := scenePinDrift(entries, msgs)
 	if !pinned {
 		return 0
@@ -594,7 +594,7 @@ func scenePinStaleFor(entries []core.WorldLoreEntry, msgs int) int {
 // tailLoreAudience is who the session tail speaks for, for lore scoping: the
 // bound character in a chat, the all-seeing director ("") in play.
 func (s *wsSession) tailLoreAudience() string {
-	if s.sess.Meta.Experience != "chat" {
+	if s.sess.Stage.Experience != "chat" {
 		return ""
 	}
 	name, _ := s.boundCharacter()
@@ -605,11 +605,11 @@ func (s *wsSession) tailLoreAudience() string {
 // (no audience) plus those whose audience names them. The empty name is the
 // scene authority — the narrator, the play director, the router — and sees
 // everything.
-func worldLoreFor(entries []core.WorldLoreEntry, name string) []core.WorldLoreEntry {
+func worldLoreFor(entries []session.WorldLoreEntry, name string) []session.WorldLoreEntry {
 	if name == "" {
 		return entries
 	}
-	var out []core.WorldLoreEntry
+	var out []session.WorldLoreEntry
 	for _, e := range entries {
 		if len(e.Audience) == 0 || audienceHas(e.Audience, name) {
 			out = append(out, e)
@@ -633,22 +633,22 @@ func audienceHas(audience []string, name string) bool {
 // form. The engine's activation rule is the contract (see lore.ParseEntry): an
 // entry needs content, and needs keys unless it is constant — otherwise it
 // could never fire.
-func worldLoreFromWire(e ctrlproto.WorldLoreEntry) (core.WorldLoreEntry, error) {
+func worldLoreFromWire(e ctrlproto.WorldLoreEntry) (session.WorldLoreEntry, error) {
 	name := strings.TrimSpace(e.Name)
 	if name == "" {
-		return core.WorldLoreEntry{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("a World lore entry needs a name"))
+		return session.WorldLoreEntry{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("a World lore entry needs a name"))
 	}
 	content := strings.TrimSpace(e.Content)
 	if content == "" {
-		return core.WorldLoreEntry{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("a World lore entry needs content"))
+		return session.WorldLoreEntry{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("a World lore entry needs content"))
 	}
 	// The pinned scene-state card (SD4) is always-on and shared BY DEFINITION —
 	// a keyed or secret state card is a contradiction (state that only sometimes
 	// applies isn't state; a clock some characters can't see isn't the scene's
 	// clock). Normalize rather than reject, so every writer — the drawer form,
 	// the doctor's accept, a hand-typed put — lands the same canonical pin.
-	if core.IsSceneState(name) {
-		return core.WorldLoreEntry{Name: core.SceneStateName, Constant: true, Content: content}, nil
+	if session.IsSceneState(name) {
+		return session.WorldLoreEntry{Name: session.SceneStateName, Constant: true, Content: content}, nil
 	}
 	var keys []string
 	for _, k := range e.Keys {
@@ -657,7 +657,7 @@ func worldLoreFromWire(e ctrlproto.WorldLoreEntry) (core.WorldLoreEntry, error) 
 		}
 	}
 	if len(keys) == 0 && !e.Constant {
-		return core.WorldLoreEntry{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("a World lore entry needs trigger keywords, or mark it always-on"))
+		return session.WorldLoreEntry{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("a World lore entry needs trigger keywords, or mark it always-on"))
 	}
 	if e.Constant {
 		keys = nil
@@ -673,11 +673,11 @@ func worldLoreFromWire(e ctrlproto.WorldLoreEntry) (core.WorldLoreEntry, error) 
 		}
 		audience = append(audience, t)
 	}
-	return core.WorldLoreEntry{Name: name, Keys: keys, Constant: e.Constant, Content: content, Audience: audience}, nil
+	return session.WorldLoreEntry{Name: name, Keys: keys, Constant: e.Constant, Content: content, Audience: audience}, nil
 }
 
 // worldLoreToView maps persisted World lore onto the wire view for SessionInfo.
-func worldLoreToView(entries []core.WorldLoreEntry) []ctrlproto.WorldLoreEntry {
+func worldLoreToView(entries []session.WorldLoreEntry) []ctrlproto.WorldLoreEntry {
 	if len(entries) == 0 {
 		return nil
 	}

@@ -7,8 +7,8 @@ import (
 
 	"terva.sh/terva/packages/agent/extensions"
 	"terva.sh/terva/packages/agent/extproto"
-	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/session"
 )
 
 // sessionHistoryReader serves an extension's list_sessions /
@@ -30,10 +30,10 @@ func newSessionHistoryReader(tervaHome, cwd string) *sessionHistoryReader {
 // projectID that doesn't match the active project returns nothing —
 // cross-project reads are not granted over this channel.
 func (r *sessionHistoryReader) ListSessions(_ /*extName*/, projectID string) []extproto.SessionInfo {
-	if projectID != "" && projectID != core.ProjectKey(r.cwd) {
+	if projectID != "" && projectID != session.ProjectKey(r.cwd) {
 		return nil
 	}
-	summaries := core.DescribeSessions(r.tervaHome, r.cwd)
+	summaries := session.DescribeSessions(r.tervaHome, r.cwd)
 	out := make([]extproto.SessionInfo, 0, len(summaries))
 	for _, s := range summaries {
 		info := extproto.SessionInfo{
@@ -58,12 +58,12 @@ func (r *sessionHistoryReader) ReadSession(_ /*extName*/, sessionID string) ([]e
 	if sessionID == "" || strings.ContainsAny(sessionID, `/\`) || strings.Contains(sessionID, "..") {
 		return nil, false
 	}
-	path := filepath.Join(core.SessionsDir(r.tervaHome, r.cwd), sessionID+".jsonl")
+	path := filepath.Join(session.SessionsDir(r.tervaHome, r.cwd), sessionID+".jsonl")
 	// Read-only. This used to call OpenSession, which returns a live
 	// O_APPEND|O_WRONLY handle, and the handle was discarded rather than
 	// closed: an extension that read a session leaked one file descriptor and
 	// one buffer per call, and took a write handle on a session it only reads.
-	msgs, err := core.ReadSessionMessages(path)
+	msgs, err := session.ReadSessionMessages(path)
 	if err != nil {
 		return nil, false
 	}
@@ -81,11 +81,11 @@ func (r *sessionHistoryReader) ReadSession(_ /*extName*/, sessionID string) ([]e
 // sites already use; the implementation moved to core so the tool layer can
 // share it without a second copy.
 func SessionIDFromPath(path string) string {
-	return core.SessionIDFromPath(path)
+	return session.SessionIDFromPath(path)
 }
 
 // LooksLikeSessionID reports whether s has the session filename-stem shape
-// core.NewSession generates — YYYYMMDD-HHMMSS-xxxxxxxx (8 digits, dash, 6
+// session.NewSession generates — YYYYMMDD-HHMMSS-xxxxxxxx (8 digits, dash, 6
 // digits, dash, 8 lowercase hex), .jsonl suffix tolerated. The --resume flag
 // consumes its optional value only on a match, so a positional prompt after
 // -r is never mistaken for a session id.

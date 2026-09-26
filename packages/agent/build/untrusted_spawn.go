@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // UntrustedSpawnGateTool is the approval-gate door name for spawning
@@ -43,7 +43,7 @@ var untrustedSpawnSeq atomic.Uint64
 // The tool treats a nil closure as "cannot ask" and keeps the old
 // refusal-with-guidance, so a mode with no human attached never blocks a turn
 // waiting for one.
-func UntrustedSpawnConfirmer(gate *core.ConfirmGate) func(ctx context.Context, preview string) (bool, string) {
+func UntrustedSpawnConfirmer(gate *permission.ConfirmGate) func(ctx context.Context, preview string) (bool, string) {
 	if gate == nil {
 		return nil
 	}

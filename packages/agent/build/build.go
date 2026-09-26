@@ -24,6 +24,7 @@ import (
 	"terva.sh/terva/packages/agent/worktree"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/core/lazytools"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/core/stall"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/provider/buildinfo"
@@ -183,7 +184,7 @@ type Resolved struct {
 	// ApprovalMode is the effective approval mode at resolve time.
 	// Plan mode shrinks the registry to read-only tools and keeps
 	// mutating extension tools out of the merge.
-	ApprovalMode core.ApprovalMode
+	ApprovalMode permission.ApprovalMode
 
 	// Experience is the meta-mode ("", chat, play). chat additionally keeps
 	// extension tools out of the merge (pure conversation); play keeps them.
@@ -301,7 +302,7 @@ func (r *Resolved) AdoptReadOnlySet(s *core.ReadOnlySet) {
 
 // PublishTools binds instance-local dispatchers before publishing the registry
 // and its classification together. The caller must finish assembly first.
-func (r *Resolved) PublishTools(ag *core.Agent, gate *core.ConfirmGate) bool {
+func (r *Resolved) PublishTools(ag *core.Agent, gate *permission.ConfirmGate) bool {
 	wireScriptingRegistry(ag, gate, r.ToolRegistry, r.readOnlySet)
 	return ag.SetToolsWithReadOnly(r.ToolRegistry, r.readOnlySet)
 }
@@ -439,7 +440,7 @@ func (r *Resolved) MergeExtensionTools(mgr ExtensionToolSource) {
 // legacy read_only bool. An empty authority falls back to that bool.
 func ExtToolReadOnly(info ExtensionToolInfo) bool {
 	if info.Authority != "" {
-		return core.IsReadOnlyAuthority(info.Authority)
+		return permission.IsReadOnlyAuthority(info.Authority)
 	}
 	return info.ReadOnly
 }
@@ -449,8 +450,8 @@ func ExtToolReadOnly(info ExtensionToolInfo) bool {
 // something on the strength of "an extension supplies X" — the memory
 // stand-down is the one that matters — must ask the same question the merge
 // will, or it acts on a tool that never arrives.
-func ExtToolRegisters(info ExtensionToolInfo, mode core.ApprovalMode) bool {
-	return mode != core.ApprovalPlan || ExtToolReadOnly(info)
+func ExtToolRegisters(info ExtensionToolInfo, mode permission.ApprovalMode) bool {
+	return mode != permission.ApprovalPlan || ExtToolReadOnly(info)
 }
 
 // MergeToolsForMode folds an extension/MCP source's tools into reg for
@@ -464,7 +465,7 @@ func ExtToolRegisters(info ExtensionToolInfo, mode core.ApprovalMode) bool {
 // two cannot drift; the live switch rebuilds reg from scratch and
 // re-merges, which is why this is registry-only (no system-prompt
 // coupling).
-func MergeToolsForMode(reg core.Registry, mode core.ApprovalMode, roSet *core.ReadOnlySet, mgr ExtensionToolSource) bool {
+func MergeToolsForMode(reg core.Registry, mode permission.ApprovalMode, roSet *core.ReadOnlySet, mgr ExtensionToolSource) bool {
 	if mgr == nil || reg == nil {
 		return false
 	}
@@ -515,7 +516,7 @@ type ExtensionToolInfo struct {
 	// classification.
 	ReadOnly bool
 	// Authority carries the source's effect-class declaration
-	// (extension register_tool authority; core.Authority). When set it
+	// (extension register_tool authority; permission.Authority). When set it
 	// overrides ReadOnly for classification: only local-read is treated
 	// as auto-allowable read-only, so a network-read tool is admitted
 	// neither in plan nor by the read-only auto-allow. Empty falls back
@@ -2194,7 +2195,7 @@ var extraBuiltinTools []func(cwd string, sandbox *tools.Sandbox) (string, core.T
 // flows into ReadTool so reading an image file returns inline pixels for
 // a vision model but an actionable text result otherwise. Called on
 // every agent rebuild, so a /model switch re-derives the verdict.
-func BuildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbox *tools.Sandbox, provName, authMethod string, visionCapable bool, imageReg *imagegen.Registry) core.Registry {
+func BuildToolRegistry(args Args, approval permission.ApprovalMode, cwd string, sandbox *tools.Sandbox, provName, authMethod string, visionCapable bool, imageReg *imagegen.Registry) core.Registry {
 	// chat and play both drop the built-in coding tools (read/write/edit/bash/
 	// …): chat is pure conversation, play acts only through a world extension's
 	// tools. --no-tools does the same. --no-workspace-tools also drops them, but
@@ -2394,7 +2395,7 @@ func BuildToolRegistry(args Args, approval core.ApprovalMode, cwd string, sandbo
 	// confirm gate as the backstop for anything that arrives later.
 	// Interactive tools (ask_user_question) are kept: asking the user
 	// is exactly what plan mode wants when requirements are unclear.
-	if approval == core.ApprovalPlan {
+	if approval == permission.ApprovalPlan {
 		for name := range all {
 			if !permissions.IsReadOnly(name) && !permissions.IsInteractive(name) {
 				delete(all, name)

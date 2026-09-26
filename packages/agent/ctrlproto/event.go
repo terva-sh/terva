@@ -51,6 +51,10 @@ type Event struct {
 	// to any session, and the client that started the login may not have one in
 	// focus when it lands.
 	Auth *AuthState `json:"auth,omitempty"`
+	// Talkoot is set on the talkoot_envelope, talkoot_status, and
+	// talkoot_roster events, which ride a talkoot's own address
+	// ([TalkootAddr]).
+	Talkoot *TalkootEvent `json:"talkoot,omitempty"`
 }
 
 // Control-plane event types. These extend the [core.WireEvent] type space; the
@@ -116,6 +120,19 @@ const (
 	// it is told, and polling auth.providers for it would mean a panel that
 	// updates on the next tick rather than the moment you finish.
 	EventAuthState = "auth_state"
+	// EventTalkootEnvelope carries a new envelope in a talkoot's room
+	// (Talkoot.Line), on the room's address.
+	EventTalkootEnvelope = "talkoot_envelope"
+	// EventTalkootStatus carries every member's status after one changed
+	// (Talkoot.Members), on the room's address.
+	EventTalkootStatus = "talkoot_status"
+	// EventTalkootRoster says a person changed the roster (Talkoot.Line, which
+	// names who). A client re-reads the talkoot with talkoot.get.
+	EventTalkootRoster = "talkoot_roster"
+	// EventTalkootsChanged signals that the set of talkoots this daemon runs
+	// changed. Like sessions_changed it carries no payload and rides
+	// [AddrWorkspace], and a client answers it with talkoot.list.
+	EventTalkootsChanged = "talkoots_changed"
 )
 
 // Notice is a transient host-originated message shown in the conversation area
@@ -267,7 +284,7 @@ type PermissionRequest struct {
 	Scopes []GrantScope `json:"scopes,omitempty"`
 }
 
-// GrantScope is the wire form of [core.GrantScope]: one derived
+// GrantScope is the wire form of [permission.GrantScope]: one derived
 // narrow-grant option. Display is what the dialog shows ("git status"),
 // Pattern the RE2 a scoped grant persists.
 type GrantScope struct {

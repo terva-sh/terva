@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/core"
+
+	"terva.sh/terva/packages/core/permission"
 )
 
 // Method names a command carried in a [KindCmd] frame. Names are grouped by
@@ -403,6 +405,21 @@ const (
 	MethodReplayControl Method = "replay.control" // params ReplayControlParams, result ReplayStateResult (sess in frame)
 	MethodReplayState   Method = "replay.state"   // result ReplayStateResult (sess in frame)
 
+	// --- talkoot group (optional; served only by a TalkootController) ---
+	//
+	// Session-independent: a talkoot is a team of sessions, not one of them, so
+	// its id travels in params. The read verbs need CapRead. The rest also need
+	// CapSteer (capability.go). See talkoot.go.
+
+	MethodTalkootList   Method = "talkoot.list"   // result TalkootListResult; read-only
+	MethodTalkootGet    Method = "talkoot.get"    // params TalkootRef, result TalkootView; read-only
+	MethodTalkootRoom   Method = "talkoot.room"   // params TalkootRoomParams, result TalkootRoomPage; read-only
+	MethodTalkootCreate Method = "talkoot.create" // params TalkootCreateParams, result TalkootView
+	MethodTalkootUpdate Method = "talkoot.update" // params TalkootUpdateParams, result TalkootView
+	MethodTalkootPost   Method = "talkoot.post"   // params TalkootPostParams, result TalkootEnvelope
+	MethodTalkootPause  Method = "talkoot.pause"  // params TalkootPauseParams
+	MethodTalkootResume Method = "talkoot.resume" // params TalkootResumeParams
+
 	// --- tenants group (served ONLY by the `terva serve` supervisor; see
 	// [GroupTenants] and tenants.go — deliberately absent from the dispatch
 	// table, so no WorkspaceService carrier can serve them) ---
@@ -456,6 +473,9 @@ func (m Method) Group() Group {
 	case MethodSecretsStatus, MethodSecretsList, MethodSecretsGrant, MethodSecretsRevoke,
 		MethodSecretsForget:
 		return GroupSecrets
+	case MethodTalkootList, MethodTalkootGet, MethodTalkootRoom, MethodTalkootCreate,
+		MethodTalkootUpdate, MethodTalkootPost, MethodTalkootPause, MethodTalkootResume:
+		return GroupTalkoot
 	case MethodTenantsList, MethodTenantsSuspend, MethodTenantsResume:
 		return GroupTenants
 	}
@@ -1019,7 +1039,7 @@ type FilesListResult struct {
 
 // --- decision / answer wire forms ---
 
-// Decision is the wire form of [core.ConfirmDecision] carried in
+// Decision is the wire form of [permission.ConfirmDecision] carried in
 // [ApproveParams].
 type Decision struct {
 	Allow        bool   `json:"allow"`
@@ -1034,8 +1054,8 @@ type Decision struct {
 }
 
 // Core converts a wire Decision to the core type.
-func (d Decision) Core() core.ConfirmDecision {
-	return core.ConfirmDecision{
+func (d Decision) Core() permission.ConfirmDecision {
+	return permission.ConfirmDecision{
 		Allow:         d.Allow,
 		Reason:        d.Reason,
 		RememberTool:  d.RememberTool,
@@ -1046,7 +1066,7 @@ func (d Decision) Core() core.ConfirmDecision {
 }
 
 // DecisionFromCore converts a core decision to its wire form.
-func DecisionFromCore(c core.ConfirmDecision) Decision {
+func DecisionFromCore(c permission.ConfirmDecision) Decision {
 	return Decision{
 		Allow:         c.Allow,
 		Reason:        c.Reason,
@@ -1058,7 +1078,7 @@ func DecisionFromCore(c core.ConfirmDecision) Decision {
 }
 
 // GrantScopesFromCore converts derived core grant scopes to their wire form.
-func GrantScopesFromCore(scopes []core.GrantScope) []GrantScope {
+func GrantScopesFromCore(scopes []permission.GrantScope) []GrantScope {
 	if len(scopes) == 0 {
 		return nil
 	}
@@ -1070,13 +1090,13 @@ func GrantScopesFromCore(scopes []core.GrantScope) []GrantScope {
 }
 
 // CoreGrantScopes converts wire grant scopes back to the core type.
-func CoreGrantScopes(scopes []GrantScope) []core.GrantScope {
+func CoreGrantScopes(scopes []GrantScope) []permission.GrantScope {
 	if len(scopes) == 0 {
 		return nil
 	}
-	out := make([]core.GrantScope, len(scopes))
+	out := make([]permission.GrantScope, len(scopes))
 	for i, s := range scopes {
-		out[i] = core.GrantScope{Display: s.Display, Pattern: s.Pattern}
+		out[i] = permission.GrantScope{Display: s.Display, Pattern: s.Pattern}
 	}
 	return out
 }

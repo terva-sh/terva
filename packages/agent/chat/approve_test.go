@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 )
 
 // confirmLoop builds a loop over a native-ask fake whose answer is
@@ -89,7 +89,7 @@ func TestChatConfirmerTextFallback(t *testing.T) {
 	l.mu.Unlock()
 	c := NewChatConfirmer(context.Background(), l)
 
-	type decision struct{ d core.ConfirmDecision }
+	type decision struct{ d permission.ConfirmDecision }
 	done := make(chan decision, 1)
 	go func() { done <- decision{c.Confirm(context.Background(), "Bash", "sleep 999")} }()
 
@@ -176,7 +176,7 @@ func TestChatConfirmerCancelledTurnUnparksAndReleasesTheSlot(t *testing.T) {
 	conn.hold = make(chan struct{}) // the first ask parks until we say otherwise
 
 	abandoned, cancelAbandoned := context.WithCancel(context.Background())
-	first := make(chan core.ConfirmDecision, 1)
+	first := make(chan permission.ConfirmDecision, 1)
 	go func() { first <- c.Confirm(abandoned, "Bash", "sleep 999") }()
 	<-conn.asked // the question is out and the slot is taken
 
@@ -194,7 +194,7 @@ func TestChatConfirmerCancelledTurnUnparksAndReleasesTheSlot(t *testing.T) {
 	// context reached Confirm this call blocked on the mutex until the first
 	// ask timed out, so the failure here was a two-minute stall, not an error.
 	close(conn.hold)
-	second := make(chan core.ConfirmDecision, 1)
+	second := make(chan permission.ConfirmDecision, 1)
 	go func() { second <- c.Confirm(context.Background(), "Bash", "make test") }()
 	select {
 	case d := <-second:
@@ -212,12 +212,12 @@ func TestChatConfirmerCancelWhileWaitingForTheSlot(t *testing.T) {
 	conn, c := confirmLoop(Answer{Key: "approve", UserID: "7", Username: "u7", Attestation: AttestationAttested})
 	conn.hold = make(chan struct{})
 
-	blocking := make(chan core.ConfirmDecision, 1)
+	blocking := make(chan permission.ConfirmDecision, 1)
 	go func() { blocking <- c.Confirm(context.Background(), "Bash", "sleep 999") }()
 	<-conn.asked // the slot is taken and will not be given up
 
 	queued, cancelQueued := context.WithCancel(context.Background())
-	second := make(chan core.ConfirmDecision, 1)
+	second := make(chan permission.ConfirmDecision, 1)
 	go func() { second <- c.Confirm(queued, "Bash", "make test") }()
 	cancelQueued()
 
