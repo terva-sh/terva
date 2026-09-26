@@ -328,7 +328,7 @@ A tool's *authority* is a finer classification than the read-only/mutating
 split, because "side-effect-free" is not one thing. A web fetch reads
 nothing on the local machine yet can leak data, hit a remote server, or
 reach a private network, so folding it into the local-read auto-allow
-would be wrong. The classes (`core.Authority`):
+would be wrong. The classes (`permission.Authority`):
 
 | Authority | Meaning | Example |
 |---|---|---|

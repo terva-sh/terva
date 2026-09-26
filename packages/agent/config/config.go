@@ -221,7 +221,7 @@ type Config struct {
 	Raati RaatiConfig `json:"raati,omitzero"`
 
 	// Classifier configures the screening classifier that answers tool-call
-	// approvals which would otherwise prompt (see core.ClassifierMode and
+	// approvals which would otherwise prompt (see permission.ClassifierMode and
 	// docs/permissions.md). Off unless the operator turns it on.
 	//
 	// User layer ONLY, and here that is a security property rather than a
@@ -1120,7 +1120,7 @@ func (c Config) StatusLineScripts() map[string]StatusLineScript {
 }
 
 // PermissionRuleConfig is the JSON shape of one permission rule. It
-// compiles into a core.PermissionRule at load time (compilePermissionRules);
+// compiles into a permission.PermissionRule at load time (compilePermissionRules);
 // invalid rules are dropped with a warning rather than failing startup.
 type PermissionRuleConfig struct {
 	// Tool is an exact tool name, or a prefix glob ending in '*'
