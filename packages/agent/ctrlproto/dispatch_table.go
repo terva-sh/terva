@@ -665,6 +665,9 @@ var dispatch = map[Method]handler{
 	MethodTalkootDecide: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootDecideParams) (TalkootProposal, error) {
 		return c.DecideTalkoot(ctx, p)
 	}),
+	MethodTalkootKickoff: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootKickoffParams) (TalkootKickoff, error) {
+		return c.KickoffTalkoot(ctx, p)
+	}),
 	MethodTalkootCreate: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootCreateParams) (TalkootView, error) {
 		return c.CreateTalkoot(ctx, p)
 	}),

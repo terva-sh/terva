@@ -123,6 +123,10 @@ const (
 	// EventTalkootEnvelope carries a new envelope in a talkoot's room
 	// (Talkoot.Line), on the room's address.
 	EventTalkootEnvelope = "talkoot_envelope"
+	// EventTalkootIntro carries a member's plain introduction card, a line of
+	// type intro with no envelope (Talkoot.Line, whose Text holds the card),
+	// on the room's address.
+	EventTalkootIntro = "talkoot_intro"
 	// EventTalkootAnswer carries a person's answer to a member's question, an
 	// answer line (Talkoot.Line), on the room's address. A member cites it as
 	// answer:<id>, and the line's Ref holds the id.

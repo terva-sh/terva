@@ -2426,8 +2426,8 @@ export interface WireEvent {
   notice?: Notice
   auth?: AuthState
   replay?: ReplayState
-  // talkoot_envelope, talkoot_answer, talkoot_status, talkoot_roster,
-  // talkoot_inbox, talkoot_inbox_resolved: on a talkoot's own address
+  // talkoot_envelope, talkoot_intro, talkoot_answer, talkoot_status,
+  // talkoot_roster, talkoot_inbox, talkoot_inbox_resolved: on a talkoot's own address
   // (talkootAddr).
   talkoot?: TalkootEvent
   stall?: WireStall
@@ -2450,7 +2450,7 @@ export const ADDR_WORKSPACE = '#workspace'
 
 // ADDR_TALKOOT_PREFIX starts a talkoot room's address. Subscribing there needs
 // the `talkoot` group in the hello, and the room sends talkoot_envelope,
-// talkoot_answer, talkoot_status, talkoot_roster, talkoot_inbox, and
+// talkoot_intro, talkoot_answer, talkoot_status, talkoot_roster, talkoot_inbox, and
 // talkoot_inbox_resolved events. Like ADDR_WORKSPACE it is an
 // address, never a session id.
 export const ADDR_TALKOOT_PREFIX = '#talkoot:'
@@ -2733,6 +2733,7 @@ export type Verb =
   | 'talkoot.decide'
   | 'talkoot.get'
   | 'talkoot.inbox'
+  | 'talkoot.kickoff'
   | 'talkoot.list'
   | 'talkoot.pause'
   | 'talkoot.post'
@@ -2945,7 +2946,7 @@ export interface TalkootChain {
 }
 
 // TalkootLine is one room line. `type` is envelope, turn, guard, resume,
-// delivery, read, seat, roster, answer, or damaged.
+// delivery, read, seat, roster, answer, intro, or damaged.
 export interface TalkootLine {
   type: string
   at: string
@@ -2970,6 +2971,9 @@ export interface TalkootLine {
   // On an answer line: the person's answer to the questions `member`
   // asked. `ref` holds the answer's id.
   answers?: TalkootAnswered[]
+  // On an intro line: `member`'s plain introduction card, built from its
+  // roster entry, for a member that took no introduction turn.
+  text?: string
 }
 
 // TalkootInboxResult is the talkoot.inbox reply, oldest card first.
@@ -2982,16 +2986,46 @@ export interface TalkootInboxResult {
 // on its `session`, which resolves the member's own card too. Decide a
 // proposal card with talkoot.decide; it has no session, and `member` is its
 // proposer, which may be a person (`human:<name>`). `id` is the call id of a
-// permission, the ask id of a question, or the id of a proposal.
+// permission, the ask id of a question, or the id of a proposal. A kickoff
+// card waits on a new team: run it or skip it with talkoot.kickoff. Its `id`
+// is `kickoff`, and it has no session and no member.
 export interface TalkootCard {
   session: string
   member: string
-  kind: 'permission' | 'ask' | 'proposal'
+  kind: 'permission' | 'ask' | 'proposal' | 'kickoff'
   id: string
   at?: string
   permission?: PermissionRequest
   ask?: AskRequest
   proposal?: TalkootProposal
+  kickoff?: TalkootKickoff
+}
+
+// TalkootKickoff is a team's introductions: each member in roster order, the
+// coordinator last, with an estimated cost. A member whose model has no price
+// counts in `unpriced_turns`, and one with `plain` set gets a plain card at no
+// cost.
+export interface TalkootKickoff {
+  state: 'waiting' | 'running' | 'done' | 'skipped'
+  by?: string
+  members: TalkootKickoffMember[]
+  estimate_usd: number
+  unpriced_turns?: number
+}
+
+export interface TalkootKickoffMember {
+  member: string
+  model?: string
+  estimate_usd?: number
+  plain?: string
+}
+
+// TalkootKickoffParams runs a team's introductions, or with `skip` writes a
+// plain card for each member with no model call. A team has one kickoff.
+export interface TalkootKickoffParams {
+  id: string
+  by: string
+  skip?: boolean
 }
 
 // TalkootOp is one roster change: `add` a member, `edit` its fields, `remove`
@@ -3092,8 +3126,8 @@ export interface TalkootDecideParams {
   reason?: string
 }
 
-// TalkootEvent carries `line` on talkoot_envelope, talkoot_answer, and
-// talkoot_roster, every
+// TalkootEvent carries `line` on talkoot_envelope, talkoot_intro,
+// talkoot_answer, and talkoot_roster, every
 // member's status on talkoot_status, and `card` on talkoot_inbox and
 // talkoot_inbox_resolved. A resolved card carries no request.
 export interface TalkootEvent {
@@ -3231,6 +3265,7 @@ export interface VerbParams {
   'talkoot.proposals': TalkootProposalsParams
   'talkoot.propose': TalkootProposeParams
   'talkoot.decide': TalkootDecideParams
+  'talkoot.kickoff': TalkootKickoffParams
 }
 
 // Card revision history. Every write to a card goes through cards.edit — the

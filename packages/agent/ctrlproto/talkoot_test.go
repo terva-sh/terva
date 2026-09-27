@@ -108,7 +108,7 @@ func TestTalkootFromAddr(t *testing.T) {
 // that changes or wakes a talkoot.
 func TestTheSteerVerbsNeedTheSteerBit(t *testing.T) {
 	steer := []Method{MethodTalkootCreate, MethodTalkootUpdate, MethodTalkootPost, MethodTalkootPause, MethodTalkootResume,
-		MethodTalkootPropose, MethodTalkootDecide, MethodTalkootRecruit}
+		MethodTalkootPropose, MethodTalkootDecide, MethodTalkootRecruit, MethodTalkootKickoff}
 	for _, m := range steer {
 		if m.Capabilities()&CapSteer == 0 {
 			t.Errorf("%s does not need CapSteer", m)
@@ -126,10 +126,10 @@ func TestTheSteerVerbsNeedTheSteerBit(t *testing.T) {
 		}
 	}
 	// Posting wakes a member, so it spends as well as steers. So does an
-	// approval, which releases what the old roster held. A proposal names a
-	// person as its author, a claim only a caller that could update the
-	// roster may make.
-	for _, m := range []Method{MethodTalkootPost, MethodTalkootDecide, MethodTalkootPropose} {
+	// approval, which releases what the old roster held, and a kickoff,
+	// which wakes each member. A proposal names a person as its author, a
+	// claim only a caller that could update the roster may make.
+	for _, m := range []Method{MethodTalkootPost, MethodTalkootDecide, MethodTalkootPropose, MethodTalkootKickoff} {
 		if m.Permits(CapRead | CapWrite | CapSteer) {
 			t.Errorf("%s is permitted without CapSpend", m)
 		}

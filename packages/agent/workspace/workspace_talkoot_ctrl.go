@@ -128,6 +128,14 @@ func (w *Workspace) DecideTalkoot(ctx context.Context, p ctrlproto.TalkootDecide
 	return wireProposal(out), nil
 }
 
+func (w *Workspace) KickoffTalkoot(ctx context.Context, p ctrlproto.TalkootKickoffParams) (ctrlproto.TalkootKickoff, error) {
+	out, err := w.talkootKickoff(ctx, p.ID, p.By, p.Skip)
+	if err != nil {
+		return ctrlproto.TalkootKickoff{}, talkootWireErr(err, ctrlproto.CodeBadRequest)
+	}
+	return out, nil
+}
+
 // talkootWireErr gives a talkoot error its wire code. An error the API does
 // not name takes fallback: bad_request on a verb whose errors are almost all a
 // caller's input (a roster that fails its rules, a send the router refuses),
@@ -138,7 +146,8 @@ func talkootWireErr(err error, fallback string) error {
 		return nil
 	case errors.Is(err, ErrTalkootNotFound), errors.Is(err, ErrTalkootNotHere):
 		return ctrlproto.Wrap(ctrlproto.CodeNotFound, err)
-	case errors.Is(err, ErrTalkootClosed), errors.Is(err, ErrTalkootExists), errors.Is(err, talkoot.ErrProposalStale):
+	case errors.Is(err, ErrTalkootClosed), errors.Is(err, ErrTalkootExists), errors.Is(err, talkoot.ErrProposalStale),
+		errors.Is(err, ErrKickoffRan):
 		return ctrlproto.Wrap(ctrlproto.CodeConflict, err)
 	case errors.Is(err, talkoot.ErrDisabled):
 		return ctrlproto.Wrap(ctrlproto.CodeUnsupported, err)
@@ -195,6 +204,7 @@ func wireTalkootLine(l talkoot.Line) ctrlproto.TalkootLine {
 		Type: l.Type, At: l.At, Member: l.Member, Chain: l.Chain, CostUSD: l.CostUSD,
 		Guard: l.Guard, Action: l.Action, Reason: l.Reason, By: l.By, SpendUSD: l.SpendUSD,
 		Ref: l.Ref, Notes: l.Notes, Proposal: l.Proposal, Proposer: l.Proposer, Edited: l.Edited,
+		Text: l.Text,
 	}
 	if len(l.Changes) > 0 {
 		out.Changes = wireChanges(l.Changes)
@@ -216,6 +226,10 @@ func wireTalkootEvent(ev talkootEvent) (ctrlproto.Event, bool) {
 	case "envelope":
 		if ev.Line != nil {
 			return ctrlproto.TalkootEnvelopeEvent(ev.Talkoot, wireTalkootLine(*ev.Line)), true
+		}
+	case "intro":
+		if ev.Line != nil {
+			return ctrlproto.TalkootIntroEvent(ev.Talkoot, wireTalkootLine(*ev.Line)), true
 		}
 	case "answer":
 		if ev.Line != nil {

@@ -1191,6 +1191,7 @@ TalkootCard
 	permission	*PermissionRequest	omitempty
 	ask	*AskRequest	omitempty
 	proposal	*TalkootProposal	omitempty
+	kickoff	*TalkootKickoff	omitempty
 TalkootChain
 	root	string
 	hops	int
@@ -1229,6 +1230,21 @@ TalkootEvent
 	card	*TalkootCard	omitempty
 TalkootInboxResult
 	cards	[]TalkootCard
+TalkootKickoff
+	state	string
+	by	string	omitempty
+	members	[]TalkootKickoffMember
+	estimate_usd	float64
+	unpriced_turns	int	omitempty
+TalkootKickoffMember
+	member	string
+	model	string	omitempty
+	estimate_usd	*float64	omitempty
+	plain	string	omitempty
+TalkootKickoffParams
+	id	string
+	by	string
+	skip	bool	omitempty
 TalkootLine
 	type	string
 	at	time.Time
@@ -1248,6 +1264,7 @@ TalkootLine
 	edited	bool	omitempty
 	changes	[]TalkootMemberChange	omitempty
 	answers	[]TalkootAnswered	omitempty
+	text	string	omitempty
 TalkootListResult
 	talkoots	[]TalkootSummary
 TalkootMember

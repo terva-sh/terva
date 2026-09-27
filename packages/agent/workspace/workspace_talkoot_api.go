@@ -156,6 +156,13 @@ func (w *Workspace) talkootCreate(ctx context.Context, id string, text []byte) (
 	if err := w.startTalkoot(r.ID); err != nil {
 		return undo(err)
 	}
+	// The talkoot runs now, so a failure here costs the kickoff card and not
+	// the talkoot. talkoot.kickoff still runs one for a team with no record.
+	if run, err := w.talkootRunOf(id); err == nil {
+		if err := w.waitKickoff(run); err != nil {
+			w.diagf("talkoot %s: could not record the kickoff: %v", id, err)
+		}
+	}
 	return w.talkootGet(ctx, id)
 }
 
@@ -343,8 +350,9 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 	}
 	// The roster line records who changed the roster. It is part of the
 	// update: an update the room cannot record does not happen.
+	changes := talkoot.Diff(prev, next)
 	if err := run.room.Append(talkoot.Line{Type: talkoot.LineRoster, At: time.Now(), By: humanBy(by), Ref: talkoot.RosterRevision(text),
-		Proposal: from.proposal, Proposer: from.proposer, Edited: from.edited, Changes: talkoot.Diff(prev, next)}); err != nil {
+		Proposal: from.proposal, Proposer: from.proposer, Edited: from.edited, Changes: changes}); err != nil {
 		return abort(fmt.Errorf("talkoot: the room could not record the roster change: %w", err))
 	}
 	rosterSealed = true
@@ -404,6 +412,7 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 	}); err != nil {
 		return talkootView{}, err
 	}
+	w.introduceJoined(run, by, changes)
 	return w.talkootGet(ctx, id)
 }
 

@@ -176,10 +176,7 @@ func TestARecruiterProposesAMemberWithANewPersona(t *testing.T) {
 	if _, ok := persona.Lookup("rook"); ok {
 		t.Fatal("the persona exists before a person approved it")
 	}
-	cards, err := w.talkootInbox(t.Context(), "crew")
-	if err != nil {
-		t.Fatal(err)
-	}
+	cards := inbox(t, w)
 	if len(cards) != 1 || cards[0].Proposal == nil || cards[0].Proposal.Persona == nil || cards[0].Proposal.Persona.Text != rookDraft ||
 		!strings.Contains(cards[0].Proposal.Title, "with the new persona Rook") {
 		t.Fatalf("cards: %+v", cards)
@@ -240,7 +237,7 @@ func TestARecruiterProposalIsBounded(t *testing.T) {
 	if _, err := w.talkootPropose("crew", talkoot.RecruiterPrefix+info.ID, nil, "01M3AAAAAAAAAAAAAAAAAAAAAA", "why", "", nil); err == nil || !strings.Contains(err.Error(), "a person undoes a change") {
 		t.Errorf("a recruiter undo: err = %v", err)
 	}
-	if cards, _ := w.talkootInbox(t.Context(), "crew"); len(cards) != 0 {
+	if cards := inbox(t, w); len(cards) != 0 {
 		t.Errorf("a refused proposal made cards: %+v", cards)
 	}
 }

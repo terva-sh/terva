@@ -369,6 +369,8 @@ func (rt *Router) replay(l Line) {
 		if l.Ref != "" && len(l.Answers) > 0 {
 			rt.answers[l.Ref] = Citation{Answer: l.Ref, Asker: l.Member, At: l.At, Answers: l.Answers}
 		}
+	case LineIntro:
+		rt.cardLocked(l)
 	case LineDamaged:
 		// 🚨 A damaged line may have been a turn, and its spend is gone. The
 		// talkoot stays paused until a person has looked and resumes it.

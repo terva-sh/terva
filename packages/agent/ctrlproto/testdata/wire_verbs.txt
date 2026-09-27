@@ -114,6 +114,7 @@ talkoot.create	params=TalkootCreateParams	result=TalkootView
 talkoot.decide	params=TalkootDecideParams	result=TalkootProposal
 talkoot.get	params=TalkootRef	result=TalkootView
 talkoot.inbox	params=TalkootRef	result=TalkootInboxResult
+talkoot.kickoff	params=TalkootKickoffParams	result=TalkootKickoff
 talkoot.list	params=-	result=TalkootListResult
 talkoot.pause	params=TalkootPauseParams	result=-
 talkoot.post	params=TalkootPostParams	result=TalkootEnvelope

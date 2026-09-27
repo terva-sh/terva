@@ -116,6 +116,8 @@ var spendingMethods = map[Method]bool{
 	// proposal is an update.
 	MethodTalkootPost: true, MethodTalkootResume: true, MethodTalkootUpdate: true,
 	MethodTalkootDecide: true,
+	// A kickoff wakes each member for its introduction.
+	MethodTalkootKickoff: true,
 	// A proposal only makes a card, but it names a person as its author, and
 	// the card and the roster line show that name. Only a caller that could
 	// make the change itself with talkoot.update may claim a person's name.
@@ -215,6 +217,7 @@ var steerMethods = map[Method]bool{
 	MethodTalkootPropose: true, MethodTalkootDecide: true,
 	// A recruiter files roster proposals, so binding one steers the team.
 	MethodTalkootRecruit: true,
+	MethodTalkootKickoff: true,
 }
 
 // Permits reports whether a caller holding mask may invoke m: every capability

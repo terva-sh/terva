@@ -55,13 +55,21 @@ func startInboxCrew(t *testing.T, provider http.HandlerFunc, posture string) (*W
 	return w, room
 }
 
+// inbox returns the crew's cards without the kickoff card, which every new
+// talkoot shows, and which workspace_talkoot_kickoff_test.go covers.
 func inbox(t *testing.T, w *Workspace) []ctrlproto.TalkootCard {
 	t.Helper()
 	r, err := w.TalkootInbox(t.Context(), ctrlproto.TalkootRef{ID: "crew"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return r.Cards
+	var out []ctrlproto.TalkootCard
+	for _, c := range r.Cards {
+		if c.Kind != ctrlproto.TalkootCardKickoff {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // A member's question shows in its own session and in the talkoot's inbox. A

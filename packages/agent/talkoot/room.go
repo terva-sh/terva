@@ -46,6 +46,10 @@ const (
 	// and its answer in Answers (answer.go). A member cites it as
 	// answer:<id>.
 	LineAnswer = "answer"
+	// LineIntro is a member's plain introduction card: Member, and the card
+	// in Text, which the workspace builds from the member's entry. The
+	// coordinator reads it as a note (intro.go).
+	LineIntro = "intro"
 	// LineDamaged is never written. Read returns it in place of a line that
 	// does not parse.
 	LineDamaged = "damaged"
@@ -86,6 +90,8 @@ type Line struct {
 	Changes  []MemberChange `json:"changes,omitempty"`
 	// Answers is set on an answer line.
 	Answers []Answered `json:"answers,omitempty"`
+	// Text is set on an intro line.
+	Text string `json:"text,omitempty"`
 	// Kid names the key that sealed the line, and MAC is the seal. MAC must
 	// stay the last field: the seal covers every byte before it (seal.go).
 	Kid string `json:"kid,omitempty"`

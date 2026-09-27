@@ -55,6 +55,9 @@ type TalkootController interface {
 	// DecideTalkoot approves or declines a proposal. Only an approval writes
 	// the roster.
 	DecideTalkoot(ctx context.Context, p TalkootDecideParams) (TalkootProposal, error)
+	// KickoffTalkoot runs a team's introductions, or with Skip writes a plain
+	// card for each member. A team runs one kickoff.
+	KickoffTalkoot(ctx context.Context, p TalkootKickoffParams) (TalkootKickoff, error)
 	// RecruitTalkoot creates a recruiter session for a talkoot, such as a
 	// Hautoja session. It holds no seat, and it proposes members for a person
 	// to decide.
@@ -252,8 +255,8 @@ type TalkootChain struct {
 }
 
 // TalkootLine is one line of the room. Type says which fields it sets:
-// envelope, turn, guard, resume, delivery, read, seat, roster, or answer. A line that
-// did not parse reads as damaged. The seal that the room keeps on each line
+// envelope, turn, guard, resume, delivery, read, seat, roster, answer, or
+// intro. A line that did not parse reads as damaged. The seal that the room keeps on each line
 // stays in the room.
 type TalkootLine struct {
 	Type     string           `json:"type"`
@@ -281,6 +284,9 @@ type TalkootLine struct {
 	// Member asked. Ref holds the answer's id, which a member cites as
 	// answer:<id>.
 	Answers []TalkootAnswered `json:"answers,omitempty"`
+	// Text is set on an intro line: a member's plain introduction card, built
+	// from its roster entry, for a member that took no introduction turn.
+	Text string `json:"text,omitempty"`
 }
 
 // TalkootInboxResult is the talkoot.inbox reply, oldest card first.
@@ -293,6 +299,7 @@ const (
 	TalkootCardPermission = "permission"
 	TalkootCardAsk        = "ask"
 	TalkootCardProposal   = "proposal"
+	TalkootCardKickoff    = "kickoff"
 )
 
 // TalkootCard is a question or an approval that a member waits on. It is the
@@ -303,22 +310,67 @@ const (
 // The router sends envelopes and nothing else, so it has no way to answer a
 // card.
 type TalkootCard struct {
-	// Session is the member's session. A proposal card has none.
+	// Session is the member's session. A proposal or a kickoff card has none.
 	Session string `json:"session"`
 	// Member is the member that waits, or a proposal's proposer, which may be
-	// a person (human:<name>).
+	// a person (human:<name>). A kickoff card has none.
 	Member string `json:"member"`
-	// Kind is permission, ask, or proposal.
+	// Kind is permission, ask, proposal, or kickoff.
 	Kind string `json:"kind"`
-	// ID is the call id of a permission, the ask id of a question, or the id
-	// of a proposal.
+	// ID is the call id of a permission, the ask id of a question, the id of
+	// a proposal, or kickoff.
 	ID string    `json:"id"`
 	At time.Time `json:"at,omitzero"`
-	// Permission, Ask, or Proposal is set by kind. All are unset on the card
-	// of an [EventTalkootInboxResolved].
+	// Permission, Ask, Proposal, or Kickoff is set by kind. All are unset on
+	// the card of an [EventTalkootInboxResolved].
 	Permission *PermissionRequest `json:"permission,omitempty"`
 	Ask        *AskRequest        `json:"ask,omitempty"`
 	Proposal   *TalkootProposal   `json:"proposal,omitempty"`
+	Kickoff    *TalkootKickoff    `json:"kickoff,omitempty"`
+}
+
+// The states of a kickoff.
+const (
+	TalkootKickoffWaiting = "waiting" // the card waits for a person
+	TalkootKickoffRunning = "running" // the introductions run
+	TalkootKickoffDone    = "done"    // every introduction ran or became a card
+	TalkootKickoffSkipped = "skipped" // a person skipped the introductions
+)
+
+// TalkootKickoff is a team's kickoff: the introductions it runs, in roster
+// order with the coordinator last, and what they are estimated to cost.
+//
+// 🔑 The figures are estimates. Each assumes one turn of a fixed size, priced
+// from the member's model in the catalog. A turn's real cost still counts
+// against the member's caps like any other.
+type TalkootKickoff struct {
+	State string `json:"state"`
+	// By is the person who ran or skipped the kickoff.
+	By      string                 `json:"by,omitempty"`
+	Members []TalkootKickoffMember `json:"members"`
+	// EstimateUSD sums the members whose model has a price. UnpricedTurns
+	// counts the introduction turns of the members whose model has none.
+	EstimateUSD   float64 `json:"estimate_usd"`
+	UnpricedTurns int     `json:"unpriced_turns,omitempty"`
+}
+
+// TalkootKickoffMember is one member's part of a kickoff.
+type TalkootKickoffMember struct {
+	Member string `json:"member"`
+	Model  string `json:"model,omitempty"`
+	// EstimateUSD is unset when the member's model has no price.
+	EstimateUSD *float64 `json:"estimate_usd,omitempty"`
+	// Plain says why the member gets a plain card and no turn. A plain card
+	// costs nothing.
+	Plain string `json:"plain,omitempty"`
+}
+
+// TalkootKickoffParams is the talkoot.kickoff payload. Skip writes a plain
+// card for each member, with no model call.
+type TalkootKickoffParams struct {
+	ID   string `json:"id"`
+	By   string `json:"by"`
+	Skip bool   `json:"skip,omitempty"`
 }
 
 // TalkootOp is one roster change in a proposal: add, edit, remove, or look.
@@ -471,6 +523,11 @@ type TalkootEvent struct {
 // TalkootEnvelopeEvent builds an [EventTalkootEnvelope] event.
 func TalkootEnvelopeEvent(id string, l TalkootLine) Event {
 	return Event{WireEvent: core.WireEvent{Type: EventTalkootEnvelope}, Talkoot: &TalkootEvent{ID: id, Line: &l}}
+}
+
+// TalkootIntroEvent builds an [EventTalkootIntro] event.
+func TalkootIntroEvent(id string, l TalkootLine) Event {
+	return Event{WireEvent: core.WireEvent{Type: EventTalkootIntro}, Talkoot: &TalkootEvent{ID: id, Line: &l}}
 }
 
 // TalkootAnswerEvent builds an [EventTalkootAnswer] event.

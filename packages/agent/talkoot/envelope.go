@@ -31,6 +31,10 @@ const (
 	// (Router.Propose). A proposal is an envelope so that the sender's rate
 	// limit and the chain's hop limit count it (decision 0025 rule 7).
 	KindProposal Kind = "proposal"
+	// KindIntro asks a member to introduce itself. A person's action writes
+	// it (Router.Introduce), and it wakes the member and roots a chain, as a
+	// post does. A member cannot send one.
+	KindIntro Kind = "intro"
 )
 
 // wakes reports whether an envelope of this kind starts a turn.

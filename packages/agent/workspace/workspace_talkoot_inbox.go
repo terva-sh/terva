@@ -190,7 +190,8 @@ func (w *Workspace) talkootCardEvent(c openCard, ev ctrlproto.Event) {
 }
 
 // talkootInbox returns every open card of a talkoot, oldest first: the
-// questions and approvals its members wait on, and its pending proposals.
+// questions and approvals its members wait on, its pending proposals, and a
+// kickoff that waits for a person.
 // It reads every live session, and not only the seated ones, so a member that
 // left the roster still shows the cards it waits on.
 func (w *Workspace) talkootInbox(ctx context.Context, id string) ([]ctrlproto.TalkootCard, error) {
@@ -205,6 +206,9 @@ func (w *Workspace) talkootInbox(ctx context.Context, id string) ([]ctrlproto.Ta
 	}
 	w.mu.Unlock()
 	out := append([]ctrlproto.TalkootCard{}, w.proposalCards(id, run.dir)...)
+	if c, ok := w.kickoffCard(run); ok {
+		out = append(out, c)
+	}
 	for _, s := range all {
 		out = append(out, s.inboxCards(id)...)
 	}

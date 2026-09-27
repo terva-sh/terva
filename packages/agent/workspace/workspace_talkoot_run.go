@@ -30,6 +30,7 @@ var (
 	ErrTalkootNotHere  = errors.New("talkoot: this workspace does not run that talkoot")
 	ErrTalkootClosed   = errors.New("talkoot: the talkoot has stopped")
 	ErrTalkootExists   = errors.New("talkoot: that id is taken")
+	ErrKickoffRan      = errors.New("talkoot: the team has had its kickoff")
 )
 
 // talkootRunLock is held by the one process that runs a talkoot.
@@ -70,6 +71,20 @@ type talkootRun struct {
 	// whether or not the member is still on the roster. Guarded by
 	// wsTalkoot.mu, which is taken after mu.
 	open map[string]int
+
+	// kicking is set while this process runs the talkoot's kickoff. A
+	// recorded running kickoff without it was cut short, and may run again.
+	kicking atomic.Bool
+	// kickMu guards kickWoke and kickLed. A join holds it across its
+	// introduction, so the coordinator's introduction cannot come between
+	// the join's choice of instruction and its envelope.
+	kickMu sync.Mutex
+	// kickWoke lists the members the running kickoff woke, with a member
+	// that joined during it. The coordinator waits for their turns.
+	kickWoke []string
+	// kickLed is set once the kickoff turns to the coordinator. A member
+	// that joins after that messages the coordinator, as on a running team.
+	kickLed bool
 
 	emit func(talkootEvent)
 	// flushMu holds one flush from taking its lines to sending them, so a
@@ -113,7 +128,7 @@ func (r *talkootRun) observe(l talkoot.Line) {
 	r.evMu.Unlock()
 }
 
-// flush sends the envelope, answer, and roster lines queued since the last
+// flush sends the envelope, intro, answer, and roster lines queued since the last
 // flush, and the member statuses that changed.
 func (r *talkootRun) flush() {
 	r.flushMu.Lock()
@@ -126,6 +141,8 @@ func (r *talkootRun) flush() {
 		switch lines[i].Type {
 		case talkoot.LineEnvelope:
 			r.emit(talkootEvent{Talkoot: r.id, Kind: "envelope", Line: &lines[i]})
+		case talkoot.LineIntro:
+			r.emit(talkootEvent{Talkoot: r.id, Kind: "intro", Line: &lines[i]})
 		case talkoot.LineAnswer:
 			r.emit(talkootEvent{Talkoot: r.id, Kind: "answer", Line: &lines[i]})
 		case talkoot.LineRoster:
@@ -315,7 +332,10 @@ func (w *Workspace) talkootDriversFor(run *talkootRun) talkoot.Drivers {
 	return w.talkootDrivers(
 		func(_ string, m talkoot.Member) (string, error) { return w.memberSession(run, m) },
 		func(_ string, m talkoot.Member) (string, error) {
-			return "", errors.New("worker members are not bound to an agent yet")
+			if err := memberUnbound(m); err != nil {
+				return "", err
+			}
+			return "", fmt.Errorf("talkoot: native member %s reached the worker driver", m.ID)
 		},
 		func(sessID, member string, r talkoot.Receipt) { w.talkootRead(sessID, run, member, r) },
 	)
@@ -353,17 +373,15 @@ func (w *Workspace) memberSession(run *talkootRun, m talkoot.Member) (string, er
 	return s.id, nil
 }
 
-// createMemberLocked makes a native member's session. It seats the session
-// before building it, so the build sees the member's posture and tools. It
-// returns the seat it replaced, for the caller to revoke outside w.mu.
-func (w *Workspace) createMemberLocked(run *talkootRun, m talkoot.Member) (*wsSession, *seatBinding, error) {
-	prov, model, _ := w.effectiveDefaultModel("", "")
-	reasoning := ""
+// memberModel resolves the provider and model a native member runs, and the
+// reasoning its tier sets. A kickoff prices the same model the turn runs.
+func (w *Workspace) memberModel(m talkoot.Member) (prov, model, reasoning string, err error) {
+	prov, model, _ = w.effectiveDefaultModel("", "")
 	switch {
 	case m.Model != "":
 		found, err := modelreg.FindModel("", m.Model)
 		if err != nil {
-			return nil, nil, fmt.Errorf("model %q: %w", m.Model, err)
+			return "", "", "", fmt.Errorf("model %q: %w", m.Model, err)
 		}
 		prov, model = found.Provider, found.ID
 	case m.Tier != "":
@@ -371,6 +389,17 @@ func (w *Workspace) createMemberLocked(run *talkootRun, m talkoot.Member) (*wsSe
 		if pick := tools.ResolveSwarmTier(prov, model, m.Tier, build.SwarmTierMap(cfg.SwarmTiers)); pick.Model != "" {
 			model, reasoning = pick.Model, pick.Reasoning
 		}
+	}
+	return prov, model, reasoning, nil
+}
+
+// createMemberLocked makes a native member's session. It seats the session
+// before building it, so the build sees the member's posture and tools. It
+// returns the seat it replaced, for the caller to revoke outside w.mu.
+func (w *Workspace) createMemberLocked(run *talkootRun, m talkoot.Member) (*wsSession, *seatBinding, error) {
+	prov, model, reasoning, err := w.memberModel(m)
+	if err != nil {
+		return nil, nil, err
 	}
 	sess, err := session.NewSession(w.root, w.cwd, prov, model, w.version)
 	if err != nil {

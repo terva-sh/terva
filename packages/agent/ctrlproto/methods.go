@@ -424,6 +424,7 @@ const (
 	MethodTalkootPause     Method = "talkoot.pause"     // params TalkootPauseParams
 	MethodTalkootRecruit   Method = "talkoot.recruit"   // params TalkootRecruitParams, result SessionResult
 	MethodTalkootResume    Method = "talkoot.resume"    // params TalkootResumeParams
+	MethodTalkootKickoff   Method = "talkoot.kickoff"   // params TalkootKickoffParams, result TalkootKickoff
 
 	// --- tenants group (served ONLY by the `terva serve` supervisor; see
 	// [GroupTenants] and tenants.go — deliberately absent from the dispatch
@@ -481,7 +482,7 @@ func (m Method) Group() Group {
 	case MethodTalkootList, MethodTalkootGet, MethodTalkootRoom, MethodTalkootInbox, MethodTalkootCreate,
 		MethodTalkootProposals, MethodTalkootPropose, MethodTalkootDecide,
 		MethodTalkootUpdate, MethodTalkootPost, MethodTalkootPause, MethodTalkootResume,
-		MethodTalkootRecruit:
+		MethodTalkootRecruit, MethodTalkootKickoff:
 		return GroupTalkoot
 	case MethodTenantsList, MethodTenantsSuspend, MethodTenantsResume:
 		return GroupTenants
