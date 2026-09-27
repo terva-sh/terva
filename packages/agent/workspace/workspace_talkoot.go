@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -62,6 +63,12 @@ type wsTalkoot struct {
 	// foldOnce reads the seat lines of the talkoots homed here that this
 	// workspace does not run, once, for the terminal beside a daemon.
 	foldOnce sync.Once
+	// folded holds each room's size at its last fold, by talkoot id. A room
+	// only grows, so a room at the same size holds no new seat line.
+	folded map[string]int64
+	// foldErrs holds the last read failure of each room the fold could not
+	// read, so a repeated fold reports it once.
+	foldErrs map[string]string
 	// problems says why a talkoot homed here did not start.
 	problems  map[string]string
 	watchers  map[string]map[int]func(talkootEvent)
@@ -123,6 +130,19 @@ type talkootSeat struct {
 var errSeatRevoked = errors.New("this session no longer holds that seat in the talkoot")
 
 func (s talkootSeat) Send(o talkoot.Outgoing) (talkoot.Envelope, error) {
+	ctx := context.Background()
+	ho, err := s.w.checkTicketHandoff(ctx, s.b, o)
+	if err != nil {
+		return talkoot.Envelope{}, err
+	}
+	e, err := s.send(o)
+	if err != nil {
+		return e, err
+	}
+	return e, ho.move(ctx, s.w.cwd, e)
+}
+
+func (s talkootSeat) send(o talkoot.Outgoing) (talkoot.Envelope, error) {
 	s.b.mu.RLock()
 	defer s.b.mu.RUnlock()
 	if s.b.revoked {

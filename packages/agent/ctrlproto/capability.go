@@ -35,7 +35,9 @@ const (
 	// a person at each turn. It is never alone on a verb: a steer verb is
 	// write or spend as well. It is its own bit so that a caller may watch a
 	// room, and even prompt its own sessions, without the power to create a
-	// team, change its roster, or post to it.
+	// team, change its roster, or post to it. A session that a talkoot drives
+	// is the team's, not the caller's: a write or a spend on it needs this bit
+	// too (steer_session.go).
 	//
 	// 🚨 The bit binds a ctrlproto caller only. A member whose posture allows
 	// bash can run `terva ctl` against its own daemon with the token that

@@ -53,6 +53,28 @@ func NewHubService(agg *Aggregate) (*HubService, error) {
 // member's session months later.
 var _ ctrlproto.WorkspaceService = (*HubService)(nil)
 
+var _ ctrlproto.TalkootSessions = (*HubService)(nil)
+
+// SteersTalkoot answers the dispatch steer rule for the workspace that owns
+// sess. A command passes through to a local session, so a local workspace
+// must answer, or a hub would carry a write past the rule that the workspace
+// alone enforces.
+//
+// A member's session answers false, because the hub refuses every command to
+// one. 🚨 When fleet-control routes commands to members, this must ask the
+// member, or the rule opens for every member session.
+//
+// A local workspace that cannot answer counts as bound, the default the
+// dispatch rule gives a carrier without the method.
+func (s *HubService) SteersTalkoot(sess string) bool {
+	svc, id, err := s.command(sess)
+	if err != nil {
+		return false
+	}
+	ts, ok := svc.(ctrlproto.TalkootSessions)
+	return !ok || ts.SteersTalkoot(id)
+}
+
 // read resolves a session-addressed read to the workspace that owns it, which
 // may be a member.
 func (s *HubService) read(federated string) (ctrlproto.WorkspaceService, string, error) {

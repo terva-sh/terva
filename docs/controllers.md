@@ -453,7 +453,11 @@ wakes each member with its envelopes; see
 a talkoot is not a session. `by` names the person a room line records. The
 connection carries a capability mask and no identity, so the caller states `by`,
 and it attributes a change without authorizing one. The `steer` capability
-authorizes, and every role except `viewer` holds it.
+authorizes, and every role except `viewer` holds it. A member's session and a
+recruiter's session belong to the team, so a verb that writes to one or spends
+on it needs `steer` as well as its own class. That covers `approve` and
+`answer` on an inbox card's `session`. Reads stay open
+([permissions.md](permissions.md#steering-a-talkoot)).
 
 | Method | Params → Result | Effect |
 |---|---|---|

@@ -62,7 +62,12 @@ type Carrier struct {
 var (
 	_ ctrlproto.WorkspaceService = (*Carrier)(nil)
 	_ ctrlproto.ReplayController = (*Carrier)(nil)
+	_ ctrlproto.TalkootSessions  = (*Carrier)(nil)
 )
+
+// SteersTalkoot answers the dispatch steer rule: a replay runs no talkoot, so
+// no session it plays is bound.
+func (c *Carrier) SteersTalkoot(string) bool { return false }
 
 // Open reads a session transcript and builds a paused replay Carrier over it.
 // Call Close when done to stop the player goroutine and release subscribers.

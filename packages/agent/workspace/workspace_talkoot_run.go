@@ -3,6 +3,7 @@ package workspace
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -524,18 +525,56 @@ func (w *Workspace) foldTalkootMembers() {
 		if err != nil || !sameDir(r.Home, w.cwd) {
 			continue
 		}
-		lines, err := talkoot.OpenRoom(filepath.Join(talkoot.Dir(), id)).Read()
+		room := talkoot.OpenRoom(filepath.Join(talkoot.Dir(), id))
+		fi, err := os.Stat(room.Path())
+		if errors.Is(err, fs.ErrNotExist) {
+			// No room yet, so no seat line.
+			continue
+		}
 		if err != nil {
-			w.diagf("talkoot %s: could not read the room for its member sessions: %v", id, err)
+			w.foldFailed(id, err)
 			continue
 		}
 		w.talkoot.mu.Lock()
+		seen, ok := w.talkoot.folded[id]
+		w.talkoot.mu.Unlock()
+		if ok && seen == fi.Size() {
+			continue
+		}
+		lines, err := room.Read()
+		if err != nil {
+			w.foldFailed(id, err)
+			continue
+		}
+		w.talkoot.mu.Lock()
+		delete(w.talkoot.foldErrs, id)
 		for _, l := range lines {
 			if l.Type == talkoot.LineSeat && l.Ref != "" {
 				w.talkoot.markMemberLocked(l.Ref)
 			}
 		}
+		if w.talkoot.folded == nil {
+			w.talkoot.folded = map[string]int64{}
+		}
+		// The size from before the read. A line appended since then makes the
+		// next fold read the room again, which is the safe direction.
+		w.talkoot.folded[id] = fi.Size()
 		w.talkoot.mu.Unlock()
+	}
+}
+
+// foldFailed reports a room the fold could not read. A miss in the steer rule
+// folds again, so it says each failure once.
+func (w *Workspace) foldFailed(id string, err error) {
+	w.talkoot.mu.Lock()
+	said := w.talkoot.foldErrs[id] == err.Error()
+	if w.talkoot.foldErrs == nil {
+		w.talkoot.foldErrs = map[string]string{}
+	}
+	w.talkoot.foldErrs[id] = err.Error()
+	w.talkoot.mu.Unlock()
+	if !said {
+		w.diagf("talkoot %s: could not read the room for its member sessions: %v", id, err)
 	}
 }
 

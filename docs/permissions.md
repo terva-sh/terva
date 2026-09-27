@@ -506,6 +506,18 @@ create one, change its roster, post to it, pause it, or resume it also need
 `viewer` does not, so a viewer can watch a room and cannot steer it. A
 restricted connection can prompt and still lack `steer`.
 
+A session that a talkoot drives belongs to the team. That is a member's
+session, and a recruiter's. A caller without `steer` can read such a session,
+and every verb that writes to it or spends on it answers `forbidden`: a
+prompt, a queued message, an answer or an approval, a transcript edit, a
+rename, and a delete among them. Otherwise a caller could prompt a member into
+a send or a roster proposal, and so steer the team through the member. A
+former member's session stays the team's, and so does the session of a member
+that another process runs. The daemon checks the rule for every verb in one
+place, before the verb's handler runs. A server that cannot tell which
+sessions a talkoot drives refuses such a caller every session write, its own
+sessions included, rather than guess.
+
 A member reaches its team through its own tools, `talkoot_send` and
 `talkoot_handoff`, which speak as that member. It never needs the verbs. The
 `steer` capability binds a control-protocol caller, though, and nothing

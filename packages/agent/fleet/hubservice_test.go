@@ -365,3 +365,42 @@ func (r *restartSpy) Restart(context.Context) error {
 	r.restarted = true
 	return nil
 }
+
+// steerSvc is a local workspace whose talkoot drives the sessions in bound.
+type steerSvc struct {
+	*fakeSvc
+	bound map[string]bool
+}
+
+func (s *steerSvc) SteersTalkoot(id string) bool { return s.bound[id] }
+
+// The hub carries a command through to a local session, so the dispatch steer
+// rule has to reach the local workspace's answer through it. A session on a
+// member or an unknown origin answers false, because the hub refuses every
+// command to one.
+func TestTheHubAsksTheLocalWorkspaceWhetherATalkootDrivesASession(t *testing.T) {
+	local := &steerSvc{fakeSvc: newFakeSvc(ctrlproto.SessionInfo{ID: "l1"}), bound: map[string]bool{"l1": true, "": true}}
+	agg, err := NewAggregate(nil, Source{Origin: LocalOrigin, Svc: local})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs, err := NewHubService(agg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The empty id reaches the local workspace, which answers for the session
+	// it resolves to.
+	for sess, want := range map[string]bool{"l1": true, LocalOrigin + "/l1": true, "": true, "l2": false, "neot/l1": false} {
+		if got := hs.SteersTalkoot(sess); got != want {
+			t.Errorf("SteersTalkoot(%q) = %v, want %v", sess, got, want)
+		}
+	}
+
+	plain, err := NewAggregate(nil, Source{Origin: LocalOrigin, Svc: newFakeSvc(ctrlproto.SessionInfo{ID: "l1"})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !(&HubService{agg: plain}).SteersTalkoot("l1") {
+		t.Error("a local workspace that cannot answer counts as unbound, so the hub fails open")
+	}
+}

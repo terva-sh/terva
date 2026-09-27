@@ -204,6 +204,15 @@ func (s *serveState) handle(ctx context.Context, f Frame) {
 		s.write(ErrFrame(f.ID, CodeForbidden, "not provisioned for this caller: "+string(f.Method)))
 		return
 	}
+	// The FOURTH gate reads the target, not the verb: a write or a spend on a
+	// session that a talkoot drives steers the team (steer_session.go). A
+	// caller that holds steer never pays for the lookup.
+	if s.authority&CapSteer == 0 {
+		if why := s.steerRefusal(f); why != "" {
+			s.write(ErrFrame(f.ID, CodeForbidden, why+", and steering a talkoot is not permitted for this caller: "+string(f.Method)))
+			return
+		}
+	}
 
 	// subscribe/unsubscribe are not service calls: they start and stop this
 	// connection's event pump and touch s.subs, which no handler may reach.
