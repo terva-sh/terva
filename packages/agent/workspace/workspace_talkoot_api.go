@@ -429,22 +429,18 @@ func (w *Workspace) talkootRoom(ctx context.Context, id string, before, limit in
 	if err != nil {
 		return talkootRoomPage{}, err
 	}
-	// The run's own room: a second Room over the file would keep its own
-	// place in the chain.
-	lines, err := run.room.Read()
-	if err != nil {
-		return talkootRoomPage{}, err
-	}
 	if limit <= 0 {
 		limit = talkootPageDefault
 	}
 	limit = min(limit, talkootPageMax)
-	end := len(lines)
-	if before > 0 && before < end {
-		end = before
+	// The run's own room: a second Room over the file would keep its own
+	// place in the chain, and its own page index. Page reads from the
+	// checkpoint before the page, so a call costs the page, not the room.
+	lines, start, total, err := run.room.Page(before, limit)
+	if err != nil {
+		return talkootRoomPage{}, err
 	}
-	start := max(0, end-limit)
-	return talkootRoomPage{Lines: lines[start:end], Next: start, Total: len(lines)}, nil
+	return talkootRoomPage{Lines: lines, Next: start, Total: total}, nil
 }
 
 // talkootPause pauses a member, a chain, or the whole talkoot for a person.

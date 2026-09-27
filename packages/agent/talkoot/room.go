@@ -3,11 +3,14 @@ package talkoot
 import (
 	"bufio"
 	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -104,6 +107,33 @@ type Room struct {
 	count   int
 	// observers see each line after it is sealed and written.
 	observers []func(Line)
+	// The page index. The first scan builds it, and each append keeps it.
+	// entries counts the entries the file's lines make, lineNo is the number
+	// of the file's last line, and status holds the entries a scan adds after
+	// them for the head. stale sends the next Page to a full scan, which
+	// rebuilds the index: an append failed, or could not learn where its line
+	// landed, or a checkpoint no longer starts a line.
+	checkpoints []checkpoint
+	entries     int
+	lineNo      int
+	status      []Line
+	indexed     bool
+	stale       bool
+}
+
+// roomCheckpointEvery is how many entries lie between two checkpoints. A page
+// reads at most this many lines before its own.
+const roomCheckpointEvery = 64
+
+// checkpoint is a place a page can start to verify from. The entry at index
+// entry is file line lineNo, starts at byte off, and seals to good. sum is the
+// SHA-256 of the line, which tells a page that the line at off is still this
+// one.
+type checkpoint struct {
+	entry, lineNo int
+	off           int64
+	good          string
+	sum           [sha256.Size]byte
 }
 
 // OpenRoom returns the room of the talkoot in dir. The room file, its key,
@@ -206,19 +236,37 @@ func (r *Room) appendLocked(l Line) error {
 	if err != nil {
 		return fmt.Errorf("talkoot: room: %w", err)
 	}
-	if fi, err := f.Stat(); err == nil && fi.Size() > 0 {
+	// The line starts at the file's size, past the newline that ends a torn
+	// line. os.File leaves Seek on an append-mode file unspecified, so the
+	// size comes from Stat, under r.mu.
+	lead, size := 0, int64(-1)
+	if fi, err := f.Stat(); err == nil {
+		size = fi.Size()
 		last := make([]byte, 1)
-		if _, err := f.ReadAt(last, fi.Size()-1); err == nil && last[0] != '\n' {
-			b = append([]byte{'\n'}, b...)
+		if size > 0 {
+			if _, err := f.ReadAt(last, size-1); err == nil && last[0] != '\n' {
+				b = append([]byte{'\n'}, b...)
+				lead = 1
+			}
 		}
 	}
 	if _, err := f.Write(b); err != nil {
+		// Some of the bytes may be on disk, so the index no longer knows where
+		// the lines are.
+		r.stale = true
 		_ = f.Close()
 		return fmt.Errorf("talkoot: room: %w", err)
 	}
 	if err := f.Close(); err != nil {
+		r.stale = true
 		return fmt.Errorf("talkoot: room: %w", err)
 	}
+	if size < 0 {
+		// Nothing says where the line landed.
+		r.stale = true
+		size = 0
+	}
+	r.indexAppendLocked(size+int64(lead), r.last, b[lead:len(b)-1])
 	r.last = mac
 	r.count++
 	l.Kid = ""
@@ -246,15 +294,14 @@ func (r *Room) Read() ([]Line, error) {
 }
 
 // scanLocked verifies the room from its first line and leaves last and count
-// at the end of the chain, where the next Append continues.
+// at the end of the chain, where the next Append continues. The first scan
+// also builds the page index.
 func (r *Room) scanLocked() ([]Line, error) {
 	k := *r.key
 	h, headWhy := readHead(r.dir, k)
-	damaged := func(format string, a ...any) Line {
-		return Line{Type: LineDamaged, Reason: fmt.Sprintf(format, a...)}
-	}
 	var out []Line
-	good, count := "", 0
+	var cps []checkpoint
+	good, count, lineNo := "", 0, 0
 	sawHead := h.Count == 0
 	f, err := os.Open(r.path)
 	switch {
@@ -263,56 +310,40 @@ func (r *Room) scanLocked() ([]Line, error) {
 		return nil, fmt.Errorf("talkoot: room: %w", err)
 	default:
 		defer f.Close()
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-		for n := 1; sc.Scan(); n++ {
-			raw := sc.Bytes()
+		err := roomLines(f, 0, 0, func(n int, start int64, raw []byte) bool {
+			lineNo = n
 			if len(raw) == 0 {
-				continue
+				return true
 			}
-			body, mac, ok := unseal(raw)
-			if !ok {
-				out = append(out, damaged("line %d of the room carries no seal", n))
-				continue
+			if len(out)%roomCheckpointEvery == 0 {
+				cps = append(cps, checkpoint{entry: len(out), lineNo: n, off: start, good: good, sum: sha256.Sum256(raw)})
 			}
-			// 🚨 A line verifies only against the last line that verified.
-			// Accepting the MAC a failed line claimed would let a member
-			// replay any genuine pair of lines: a copy of the line before a
-			// person's resume, then the resume. After a failure, nothing
-			// later is trusted until the router writes again, and it writes
-			// on from the last line that verified.
-			valid := hmac.Equal([]byte(mac), []byte(k.lineMAC(good, body)))
+			l, mac, valid := verifyRoomLine(k, good, raw, n)
 			// The head names the last line written. A line that claims its
 			// MAC is that line, even when its seal fails, so the end was not
 			// cut: the failure is already reported for the line itself.
-			if mac == h.Last {
+			if mac != "" && mac == h.Last {
 				sawHead = true
 			}
-			if !valid {
-				out = append(out, damaged("line %d of the room fails its seal", n))
-				continue
+			if valid {
+				good = mac
+				count++
 			}
-			good = mac
-			count++
-			var l Line
-			if json.Unmarshal(body, &l) != nil || l.Type == "" || l.Type == LineDamaged || l.Kid != k.id {
-				out = append(out, damaged("line %d of the room does not parse", n))
-				continue
-			}
-			l.Kid, l.MAC = "", ""
 			out = append(out, l)
-		}
-		if err := sc.Err(); err != nil {
+			return true
+		})
+		if err != nil {
 			return out, fmt.Errorf("talkoot: room: %w", err)
 		}
 	}
+	lines := len(out)
 	switch {
 	case headWhy != "":
-		out = append(out, damaged("%s", headWhy))
+		out = append(out, damagedLine("%s", headWhy))
 	case !sawHead:
-		out = append(out, damaged("the room ends before the last line the router wrote, so lines were cut from its end"))
+		out = append(out, damagedLine("the room ends before the last line the router wrote, so lines were cut from its end"))
 	case count < h.Count:
-		out = append(out, damaged("%d of the %d lines the router wrote are missing or fail their seal", h.Count-count, h.Count))
+		out = append(out, damagedLine("%d of the %d lines the router wrote are missing or fail their seal", h.Count-count, h.Count))
 	}
 	// 🚨 Only the first scan sets where the next line goes. After that, the
 	// router's own last line is the truth. Adopting the file as it reads now
@@ -320,5 +351,206 @@ func (r *Room) scanLocked() ([]Line, error) {
 	if !r.scanned {
 		r.scanned, r.last, r.count = true, good, count
 	}
+	// The index follows the file as it reads now. It only says where lines
+	// are, so rebuilding it after the first scan moves no append position.
+	if !r.indexed || r.stale {
+		r.indexed, r.stale = true, false
+		r.checkpoints, r.entries, r.lineNo = cps, lines, lineNo
+		r.status = append([]Line(nil), out[lines:]...)
+	}
 	return out, nil
+}
+
+// indexAppendLocked records raw, the line an append wrote at off, sealed to
+// good.
+//
+// 🔑 The entries a scan adds for the head go with the first append: that
+// append rewrites the head to name its own line, and a scan from then on
+// reports no cut and no missing line. So Page reports what Read would.
+func (r *Room) indexAppendLocked(off int64, good string, raw []byte) {
+	r.lineNo++
+	if r.entries%roomCheckpointEvery == 0 {
+		r.checkpoints = append(r.checkpoints, checkpoint{entry: r.entries, lineNo: r.lineNo, off: off, good: good, sum: sha256.Sum256(raw)})
+	}
+	r.entries++
+	r.status = nil
+}
+
+// Page returns up to limit entries of what Read returns: the newest ones
+// before entry before, or the newest of all when before is 0 or past the end.
+// It also returns the index of the first entry, and how many entries Read
+// would return.
+//
+// 🔑 A page reads the file from the checkpoint at or before its first entry,
+// so it costs its own lines and fewer than roomCheckpointEvery more, not the
+// whole room. Each line it returns is still verified against its seal.
+func (r *Room) Page(before, limit int) ([]Line, int, int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.loadLocked(); err != nil {
+		return nil, 0, 0, err
+	}
+	if !r.indexed || r.stale {
+		// The scan that builds the index has read every entry already.
+		return r.scanPageLocked(before, limit)
+	}
+	total := r.entries + len(r.status)
+	start, end := pageBounds(total, before, limit)
+	var out []Line
+	if fileEnd := min(end, r.entries); start < fileEnd {
+		lines, err := r.readEntriesLocked(start, fileEnd)
+		if errors.Is(err, errCheckpointMoved) {
+			r.stale = true
+			return r.scanPageLocked(before, limit)
+		}
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		out = lines
+	}
+	for i := max(start, r.entries); i < end; i++ {
+		out = append(out, r.status[i-r.entries])
+	}
+	return out, start, total, nil
+}
+
+// scanPageLocked serves a page from a full scan, which also rebuilds the index.
+func (r *Room) scanPageLocked(before, limit int) ([]Line, int, int, error) {
+	all, err := r.scanLocked()
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	start, end := pageBounds(len(all), before, limit)
+	return all[start:end], start, len(all), nil
+}
+
+// errCheckpointMoved says a checkpoint's offset no longer starts its line: a
+// line before it changed length, or lines were added or cut before it, since
+// the index was built.
+var errCheckpointMoved = errors.New("talkoot: room: a checkpoint no longer starts its line")
+
+// pageBounds is the page of limit entries that ends before before, out of
+// total.
+func pageBounds(total, before, limit int) (int, int) {
+	end := total
+	if before > 0 && before < end {
+		end = before
+	}
+	return max(0, end-max(limit, 0)), end
+}
+
+// readEntriesLocked verifies and returns the entries the file's lines make
+// from index start up to end, from the checkpoint at or before start.
+func (r *Room) readEntriesLocked(start, end int) ([]Line, error) {
+	i := sort.Search(len(r.checkpoints), func(i int) bool { return r.checkpoints[i].entry > start }) - 1
+	if i < 0 {
+		return nil, fmt.Errorf("talkoot: room: no checkpoint before entry %d", start)
+	}
+	cp := r.checkpoints[i]
+	f, err := os.Open(r.path)
+	if err != nil {
+		return nil, fmt.Errorf("talkoot: room: %w", err)
+	}
+	defer f.Close()
+	// 🚨 A line before the checkpoint that changed length, or a line added or
+	// cut there, moves every line after it. The old offset then starts inside
+	// a line, or at the start of another one, so the page checks both and goes
+	// back to a full scan instead.
+	if cp.off > 0 {
+		prev := make([]byte, 1)
+		if _, err := f.ReadAt(prev, cp.off-1); err != nil || prev[0] != '\n' {
+			return nil, errCheckpointMoved
+		}
+	}
+	if _, err := f.Seek(cp.off, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("talkoot: room: %w", err)
+	}
+	k := *r.key
+	good, e := cp.good, cp.entry
+	out := make([]Line, 0, end-start)
+	moved := false
+	err = roomLines(f, cp.off, cp.lineNo-1, func(n int, _ int64, raw []byte) bool {
+		if len(raw) == 0 {
+			return true
+		}
+		if e == cp.entry && sha256.Sum256(raw) != cp.sum {
+			moved = true
+			return false
+		}
+		l, mac, valid := verifyRoomLine(k, good, raw, n)
+		if valid {
+			good = mac
+		}
+		if e >= start {
+			out = append(out, l)
+		}
+		e++
+		return e < end
+	})
+	if moved {
+		return nil, errCheckpointMoved
+	}
+	if err != nil {
+		return out, fmt.Errorf("talkoot: room: %w", err)
+	}
+	// 🚨 The file lost lines this daemon read or wrote. A short page would
+	// hide that, so the page says so.
+	if len(out) < end-start {
+		out = append(out, damagedLine("the room ends before entry %d, which this daemon read or wrote, so lines were cut from it", start+len(out)))
+	}
+	return out, nil
+}
+
+// damagedLine is the entry that stands for a line, or a part of the room,
+// that does not verify.
+func damagedLine(format string, a ...any) Line {
+	return Line{Type: LineDamaged, Reason: fmt.Sprintf(format, a...)}
+}
+
+// verifyRoomLine checks one line of the room against good, the MAC of the last
+// line that verified. It returns the line's entry, the MAC the line claims,
+// and whether its seal verifies, which moves the chain on even when the body
+// does not parse.
+func verifyRoomLine(k roomKey, good string, raw []byte, n int) (Line, string, bool) {
+	body, mac, ok := unseal(raw)
+	if !ok {
+		return damagedLine("line %d of the room carries no seal", n), "", false
+	}
+	// 🚨 A line verifies only against the last line that verified. Accepting
+	// the MAC a failed line claimed would let a member replay any genuine pair
+	// of lines: a copy of the line before a person's resume, then the resume.
+	// After a failure, nothing later is trusted until the router writes again,
+	// and it writes on from the last line that verified.
+	if !hmac.Equal([]byte(mac), []byte(k.lineMAC(good, body))) {
+		return damagedLine("line %d of the room fails its seal", n), mac, false
+	}
+	var l Line
+	if json.Unmarshal(body, &l) != nil || l.Type == "" || l.Type == LineDamaged || l.Kid != k.id {
+		return damagedLine("line %d of the room does not parse", n), mac, true
+	}
+	l.Kid, l.MAC = "", ""
+	return l, mac, true
+}
+
+// roomLines calls fn with each line of f from byte off on, numbered on from
+// n, with the byte it starts at, until fn returns false. It splits lines as
+// bufio.ScanLines does, and refuses a line above 16 MiB.
+func roomLines(f *os.File, off int64, n int, fn func(n int, start int64, raw []byte) bool) error {
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	pos, start := off, off
+	sc.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		adv, tok, err := bufio.ScanLines(data, atEOF)
+		if adv > 0 {
+			start, pos = pos, pos+int64(adv)
+		}
+		return adv, tok, err
+	})
+	for sc.Scan() {
+		n++
+		if !fn(n, start, sc.Bytes()) {
+			return nil
+		}
+	}
+	return sc.Err()
 }
