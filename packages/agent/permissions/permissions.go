@@ -175,9 +175,13 @@ var interactive = map[string]bool{
 // ⚠️ An envelope starts the recipient's turn in the recipient's own posture.
 // A planning member can wake a member that writes. A person who wants each
 // send approved writes an ask rule for talkoot_send and talkoot_handoff.
+//
+// talkoot_propose writes a proposal and changes no roster. Only a person's
+// approval applies it, so a planning member may propose.
 var planKeeps = map[string]bool{
 	"talkoot_send":    true,
 	"talkoot_handoff": true,
+	"talkoot_propose": true,
 }
 
 // builtin names the first-party tools workspace mode trusts (alongside
@@ -215,6 +219,7 @@ var builtin = map[string]bool{
 	"talkoot_roster":     true,
 	"talkoot_note_write": true,
 	"talkoot_note_read":  true,
+	"talkoot_propose":    true,
 	"share_file":         true,
 	"ask_user_question":  true,
 	"worktree_list":      true,

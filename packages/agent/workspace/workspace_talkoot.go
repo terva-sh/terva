@@ -101,7 +101,13 @@ func (b *seatBinding) revoke() {
 // the binding's read lock and refuses a revoked binding. An unseat, or a seat
 // as another member, then stops every older instance, and no call slips in
 // between the check and the router.
-type talkootSeat struct{ b *seatBinding }
+//
+// w is the workspace the seat proposes through. Every seat carries it, so no
+// path can hand the tools a seat that panics on a proposal.
+type talkootSeat struct {
+	b *seatBinding
+	w *Workspace
+}
 
 var errSeatRevoked = errors.New("this session no longer holds that seat in the talkoot")
 
@@ -284,7 +290,7 @@ func (w *Workspace) talkootTurn(sessID string) (end func(costUSD float64, ran bo
 		w.talkoot.mu.Unlock()
 		return nil, true
 	}
-	seat, run, member := talkootSeat{b: b}, b.run, b.member
+	seat, run, member := talkootSeat{b: b, w: w}, b.run, b.member
 	if run.open == nil {
 		run.open = map[string]int{}
 	}
@@ -328,7 +334,7 @@ func (w *Workspace) talkootSeatOf(sessID string) (talkootSeat, bool) {
 	w.talkoot.mu.Lock()
 	defer w.talkoot.mu.Unlock()
 	b, ok := w.talkoot.seats[sessID]
-	return talkootSeat{b: b}, ok
+	return talkootSeat{b: b, w: w}, ok
 }
 
 // talkootNativeDriver delivers to a native member through its session's

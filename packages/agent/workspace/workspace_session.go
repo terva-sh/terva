@@ -115,6 +115,7 @@ type wsSession struct {
 	askPark    core.ParkTable[[]core.UserAnswer]          // parked webAsker waits (one answer per question)
 	permReq    map[string]ctrlproto.PermissionRequest     // details for the snapshot
 	askReq     map[string]ctrlproto.AskRequest            // details for the snapshot
+	cards      map[cardKey]openCard                       // when each card opened, and its talkoot seat
 	askSeq     uint64
 	// tail is the current tail span's swipe state — the ONE switchable span.
 	// Seeded from the session file at materialize (a session may load with

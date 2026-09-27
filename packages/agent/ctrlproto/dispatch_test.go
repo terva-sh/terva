@@ -280,6 +280,26 @@ func (r *recorder) Talkoot(_ context.Context, p TalkootRef) (TalkootView, error)
 	r.note("Talkoot", "", p)
 	return TalkootView{}, nil
 }
+func (r *recorder) ProposeTalkoot(_ context.Context, p TalkootProposeParams) (TalkootProposal, error) {
+	r.note("ProposeTalkoot", "", p)
+	return TalkootProposal{}, nil
+}
+
+func (r *recorder) TalkootProposals(_ context.Context, p TalkootProposalsParams) (TalkootProposalsResult, error) {
+	r.note("TalkootProposals", "", p)
+	return TalkootProposalsResult{}, nil
+}
+
+func (r *recorder) DecideTalkoot(_ context.Context, p TalkootDecideParams) (TalkootProposal, error) {
+	r.note("DecideTalkoot", "", p)
+	return TalkootProposal{}, nil
+}
+
+func (r *recorder) TalkootInbox(_ context.Context, p TalkootRef) (TalkootInboxResult, error) {
+	r.note("TalkootInbox", "", p)
+	return TalkootInboxResult{}, nil
+}
+
 func (r *recorder) TalkootRoom(_ context.Context, p TalkootRoomParams) (TalkootRoomPage, error) {
 	r.note("TalkootRoom", "", p)
 	return TalkootRoomPage{}, nil
@@ -714,6 +734,10 @@ func dispatchCases() []dispatchCase {
 		{MethodTalkootList, nil, "Talkoots", nil},
 		{MethodTalkootGet, TalkootRef{ID: "crew"}, "Talkoot", TalkootRef{ID: "crew"}},
 		{MethodTalkootRoom, TalkootRoomParams{ID: "crew", Before: 40, Limit: 10}, "TalkootRoom", TalkootRoomParams{ID: "crew", Before: 40, Limit: 10}},
+		{MethodTalkootInbox, TalkootRef{ID: "crew"}, "TalkootInbox", TalkootRef{ID: "crew"}},
+		{MethodTalkootProposals, TalkootProposalsParams{ID: "crew", All: true}, "TalkootProposals", TalkootProposalsParams{ID: "crew", All: true}},
+		{MethodTalkootPropose, TalkootProposeParams{ID: "crew", By: "sothr", Undo: "01M3E7YRGWZ42BPP2J4AKG62B7"}, "ProposeTalkoot", TalkootProposeParams{ID: "crew", By: "sothr", Undo: "01M3E7YRGWZ42BPP2J4AKG62B7"}},
+		{MethodTalkootDecide, TalkootDecideParams{ID: "crew", By: "sothr", Proposal: "p", Decision: "decline"}, "DecideTalkoot", TalkootDecideParams{ID: "crew", By: "sothr", Proposal: "p", Decision: "decline"}},
 		{MethodTalkootCreate, TalkootCreateParams{ID: "crew", Text: "---"}, "CreateTalkoot", TalkootCreateParams{ID: "crew", Text: "---"}},
 		{MethodTalkootUpdate, TalkootUpdateParams{ID: "crew", By: "drew", Text: "---"}, "UpdateTalkoot", TalkootUpdateParams{ID: "crew", By: "drew", Text: "---"}},
 		{MethodTalkootPost, TalkootPostParams{ID: "crew", By: "drew", Body: "go"}, "PostTalkoot", TalkootPostParams{ID: "crew", By: "drew", Body: "go"}},

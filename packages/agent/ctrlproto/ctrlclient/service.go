@@ -223,6 +223,30 @@ func (s *Service) TalkootRoom(ctx context.Context, p ctrlproto.TalkootRoomParams
 	return r, err
 }
 
+func (s *Service) TalkootInbox(ctx context.Context, p ctrlproto.TalkootRef) (ctrlproto.TalkootInboxResult, error) {
+	var r ctrlproto.TalkootInboxResult
+	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootInbox, p, &r)
+	return r, err
+}
+
+func (s *Service) ProposeTalkoot(ctx context.Context, p ctrlproto.TalkootProposeParams) (ctrlproto.TalkootProposal, error) {
+	var r ctrlproto.TalkootProposal
+	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootPropose, p, &r)
+	return r, err
+}
+
+func (s *Service) TalkootProposals(ctx context.Context, p ctrlproto.TalkootProposalsParams) (ctrlproto.TalkootProposalsResult, error) {
+	var r ctrlproto.TalkootProposalsResult
+	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootProposals, p, &r)
+	return r, err
+}
+
+func (s *Service) DecideTalkoot(ctx context.Context, p ctrlproto.TalkootDecideParams) (ctrlproto.TalkootProposal, error) {
+	var r ctrlproto.TalkootProposal
+	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootDecide, p, &r)
+	return r, err
+}
+
 func (s *Service) CreateTalkoot(ctx context.Context, p ctrlproto.TalkootCreateParams) (ctrlproto.TalkootView, error) {
 	var r ctrlproto.TalkootView
 	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootCreate, p, &r)

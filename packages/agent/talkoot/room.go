@@ -30,8 +30,13 @@ const (
 	// id in Ref. An empty Ref unbinds it. The workspace writes these; the
 	// router ignores them.
 	LineSeat = "seat"
-	// LineRoster records a person's change to the roster: By, and the sha256
-	// of the new talkoot.md in Ref. The router ignores it.
+	// LineRoster records a change to the roster: By, the person who made or
+	// approved it, and the sha256 of the new talkoot.md in Ref. Changes holds
+	// each member before and after, and a change from a proposal names it in
+	// Proposal and its proposer in Proposer. Edited says the person replaced
+	// the proposal's operations with their own, so Changes are not what the
+	// proposer asked for. A line from before those fields has only By and
+	// Ref. The router ignores it.
 	LineRoster = "roster"
 	// LineDamaged is never written. Read returns it in place of a line that
 	// does not parse.
@@ -65,6 +70,11 @@ type Line struct {
 	// about, and Notes counts the notes a delivery carried.
 	Ref   string `json:"ref,omitempty"`
 	Notes int    `json:"notes,omitempty"`
+	// Proposal, Proposer, Edited, and Changes are set on a roster line.
+	Proposal string         `json:"proposal,omitempty"`
+	Proposer string         `json:"proposer,omitempty"`
+	Edited   bool           `json:"edited,omitempty"`
+	Changes  []MemberChange `json:"changes,omitempty"`
 	// Kid names the key that sealed the line, and MAC is the seal. MAC must
 	// stay the last field: the seal covers every byte before it (seal.go).
 	Kid string `json:"kid,omitempty"`

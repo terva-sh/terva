@@ -64,19 +64,67 @@ type Roster struct {
 // Member is one agent in a talkoot. Identity is ID and Persona. Authority is
 // everything from Driver down, and it sits here rather than on the persona
 // because a persona grants nothing (decision 0022 rule 2).
+//
+// A new field needs a class in MemberFields. The JSON names match the YAML
+// names, because a roster line in the room carries members.
 type Member struct {
-	ID              string  `yaml:"id"`
-	Role            string  `yaml:"role"`
-	Title           string  `yaml:"title,omitempty"`
-	Persona         string  `yaml:"persona,omitempty"`
-	Driver          string  `yaml:"driver,omitempty"`
-	Model           string  `yaml:"model,omitempty"`
-	Tier            string  `yaml:"tier,omitempty"`
-	Posture         string  `yaml:"posture,omitempty"`
-	Workspace       string  `yaml:"workspace,omitempty"`
-	Reviewer        bool    `yaml:"reviewer,omitempty"`
-	BudgetUSDPerDay float64 `yaml:"budget_usd_per_day,omitempty"`
-	TurnsPerDay     int     `yaml:"turns_per_day,omitempty"`
+	ID              string  `yaml:"id" json:"id"`
+	Role            string  `yaml:"role" json:"role"`
+	Title           string  `yaml:"title,omitempty" json:"title,omitempty"`
+	Persona         string  `yaml:"persona,omitempty" json:"persona,omitempty"`
+	Driver          string  `yaml:"driver,omitempty" json:"driver,omitempty"`
+	Model           string  `yaml:"model,omitempty" json:"model,omitempty"`
+	Tier            string  `yaml:"tier,omitempty" json:"tier,omitempty"`
+	Posture         string  `yaml:"posture,omitempty" json:"posture,omitempty"`
+	Workspace       string  `yaml:"workspace,omitempty" json:"workspace,omitempty"`
+	Reviewer        bool    `yaml:"reviewer,omitempty" json:"reviewer,omitempty"`
+	BudgetUSDPerDay float64 `yaml:"budget_usd_per_day,omitempty" json:"budget_usd_per_day,omitempty"`
+	TurnsPerDay     int     `yaml:"turns_per_day,omitempty" json:"turns_per_day,omitempty"`
+}
+
+// FieldClass says who may change a member field, and how (decision 0025
+// rule 2). Look changes what a person sees, voice changes what the member
+// says and does, and authority changes what the member may do.
+type FieldClass string
+
+const (
+	ClassLook      FieldClass = "look"
+	ClassVoice     FieldClass = "voice"
+	ClassAuthority FieldClass = "authority"
+)
+
+// MemberFields gives every member field its class, by its YAML name, in the
+// order a roster lists them.
+//
+// 🔑 An id is authority, not identity to rename. It is the member's seat and
+// its address in the room, so a new id is a remove and an add.
+var MemberFields = []struct {
+	Name  string
+	Class FieldClass
+}{
+	{"id", ClassAuthority},
+	{"role", ClassAuthority},
+	{"title", ClassLook},
+	{"persona", ClassVoice},
+	{"driver", ClassAuthority},
+	{"model", ClassAuthority},
+	{"tier", ClassAuthority},
+	{"posture", ClassAuthority},
+	{"workspace", ClassAuthority},
+	{"reviewer", ClassAuthority},
+	{"budget_usd_per_day", ClassAuthority},
+	{"turns_per_day", ClassAuthority},
+}
+
+// ClassOf returns the class of a member field, and false for a name that is
+// not a member field.
+func ClassOf(field string) (FieldClass, bool) {
+	for _, f := range MemberFields {
+		if f.Name == field {
+			return f.Class, true
+		}
+	}
+	return "", false
 }
 
 // Writes reports whether the member's posture lets it change files. Every

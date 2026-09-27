@@ -653,6 +653,18 @@ var dispatch = map[Method]handler{
 	MethodTalkootRoom: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootRoomParams) (TalkootRoomPage, error) {
 		return c.TalkootRoom(ctx, p)
 	}),
+	MethodTalkootInbox: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootRef) (TalkootInboxResult, error) {
+		return c.TalkootInbox(ctx, p)
+	}),
+	MethodTalkootProposals: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootProposalsParams) (TalkootProposalsResult, error) {
+		return c.TalkootProposals(ctx, p)
+	}),
+	MethodTalkootPropose: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootProposeParams) (TalkootProposal, error) {
+		return c.ProposeTalkoot(ctx, p)
+	}),
+	MethodTalkootDecide: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootDecideParams) (TalkootProposal, error) {
+		return c.DecideTalkoot(ctx, p)
+	}),
 	MethodTalkootCreate: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootCreateParams) (TalkootView, error) {
 		return c.CreateTalkoot(ctx, p)
 	}),

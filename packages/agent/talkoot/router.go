@@ -481,6 +481,53 @@ func (rt *Router) Send(from string, o Outgoing) (Envelope, error) {
 	return e, nil
 }
 
+// Propose records a member's roster proposal as an envelope addressed to no
+// member, and returns it. It passes the guards a send passes: the chain needs
+// a person at its root, and the rate and hop limits count it. It delivers
+// nothing. The proposal itself waits for a person, outside the router.
+func (rt *Router) Propose(from, summary string) (Envelope, error) {
+	if _, ok := rt.roster.member(from); !ok {
+		return Envelope{}, fmt.Errorf("talkoot: %q is not a member of %s", from, rt.roster.ID)
+	}
+	if err := checkSummary(summary); err != nil {
+		return Envelope{}, err
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	e, _, err := rt.sendLocked(from, Outgoing{To: []string{}, Kind: KindProposal, Body: summary}, rt.now())
+	return e, err
+}
+
+// ProposeAs records a person's roster proposal. Like a post, it starts its own
+// chain, and no guard applies to a person.
+func (rt *Router) ProposeAs(human, summary string) (Envelope, error) {
+	if !tokenPattern.MatchString(human) {
+		return Envelope{}, fmt.Errorf("talkoot: the person's name %q must be 1 to 64 letters, digits, and . _ @ -", human)
+	}
+	if err := checkSummary(summary); err != nil {
+		return Envelope{}, err
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	now := rt.now()
+	e := rt.envelope(HumanPrefix+human, Outgoing{To: []string{}, Kind: KindProposal, Body: summary}, now)
+	e.Chain = Chain{Root: e.ID}
+	if err := rt.room.Append(Line{Type: LineEnvelope, At: now, Envelope: &e}); err != nil {
+		return Envelope{}, err
+	}
+	return e, nil
+}
+
+func checkSummary(summary string) error {
+	if strings.TrimSpace(summary) == "" {
+		return errors.New("talkoot: the proposal's summary is empty")
+	}
+	if len(summary) > MaxBodyBytes {
+		return fmt.Errorf("talkoot: the proposal's summary is %d bytes, above the %d limit", len(summary), MaxBodyBytes)
+	}
+	return nil
+}
+
 func (rt *Router) sendLocked(from string, o Outgoing, now time.Time) (Envelope, []delivery, error) {
 	guard := func(name, action, reason, chain string, err error) (Envelope, []delivery, error) {
 		l := Line{Type: LineGuard, At: now, Guard: name, Action: action, Reason: reason, Chain: chain}
@@ -529,24 +576,35 @@ func (rt *Router) sendLocked(from string, o Outgoing, now time.Time) (Envelope, 
 		return guard(GuardHops, ActionPaused, reason, root, fmt.Errorf("%w (this chain: %s)", ErrPaused, reason))
 	}
 
-	var to, dropped []string
-	for _, id := range o.To {
-		if t, ok := rt.recent[dedupeKey(from, id, o.Kind, o.Body)]; ok && now.Sub(t) < rt.limits.DuplicateWindow {
-			dropped = append(dropped, id)
-			continue
+	// A proposal has no recipient to drop a duplicate for. The rate limit
+	// bounds a member that proposes the same change again and again.
+	//
+	// 🚨 validateOutgoing already refuses the kind on a send. This refusal
+	// does not rely on it: a proposal with a recipient would skip the dedupe
+	// and land as a note.
+	if o.Kind == KindProposal && len(o.To) > 0 {
+		return Envelope{}, nil, errors.New("talkoot: a proposal is addressed to no member")
+	}
+	if o.Kind != KindProposal {
+		var to, dropped []string
+		for _, id := range o.To {
+			if t, ok := rt.recent[dedupeKey(from, id, o.Kind, o.Body)]; ok && now.Sub(t) < rt.limits.DuplicateWindow {
+				dropped = append(dropped, id)
+				continue
+			}
+			to = append(to, id)
 		}
-		to = append(to, id)
-	}
-	if len(to) == 0 {
-		return guard(GuardDuplicate, ActionDropped, "the same body to the same recipients", "", ErrDuplicate)
-	}
-	if len(dropped) > 0 {
-		if err := rt.room.Append(Line{Type: LineGuard, At: now, Guard: GuardDuplicate, Action: ActionDropped,
-			Member: from, Reason: "already sent to " + strings.Join(dropped, ", ")}); err != nil {
-			return Envelope{}, nil, err
+		if len(to) == 0 {
+			return guard(GuardDuplicate, ActionDropped, "the same body to the same recipients", "", ErrDuplicate)
 		}
+		if len(dropped) > 0 {
+			if err := rt.room.Append(Line{Type: LineGuard, At: now, Guard: GuardDuplicate, Action: ActionDropped,
+				Member: from, Reason: "already sent to " + strings.Join(dropped, ", ")}); err != nil {
+				return Envelope{}, nil, err
+			}
+		}
+		o.To = to
 	}
-	o.To = to
 
 	cs.hops = hops
 	e := rt.envelope(from, o, now)

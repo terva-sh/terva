@@ -3,6 +3,8 @@ package workspace
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/talkoot"
@@ -77,6 +79,46 @@ func (w *Workspace) ResumeTalkoot(ctx context.Context, p ctrlproto.TalkootResume
 	return talkootWireErr(w.talkootResume(ctx, p.ID, p.By, p.Member, p.Chain), ctrlproto.CodeBadRequest)
 }
 
+func (w *Workspace) TalkootInbox(ctx context.Context, p ctrlproto.TalkootRef) (ctrlproto.TalkootInboxResult, error) {
+	cards, err := w.talkootInbox(ctx, p.ID)
+	if err != nil {
+		return ctrlproto.TalkootInboxResult{}, talkootWireErr(err, ctrlproto.CodeInternal)
+	}
+	return ctrlproto.TalkootInboxResult{Cards: cards}, nil
+}
+
+func (w *Workspace) ProposeTalkoot(ctx context.Context, p ctrlproto.TalkootProposeParams) (ctrlproto.TalkootProposal, error) {
+	if !talkoot.ValidPerson(strings.TrimPrefix(p.By, talkoot.HumanPrefix)) {
+		return ctrlproto.TalkootProposal{}, ctrlproto.Wrap(ctrlproto.CodeBadRequest,
+			fmt.Errorf("talkoot: %q must name a person in 1 to 64 letters, digits, and . _ @ -", p.By))
+	}
+	out, err := w.talkootPropose(p.ID, humanBy(p.By), wireOps(p.Ops), p.Undo, p.Why, nil)
+	if err != nil {
+		return ctrlproto.TalkootProposal{}, talkootWireErr(err, ctrlproto.CodeBadRequest)
+	}
+	return wireProposal(out), nil
+}
+
+func (w *Workspace) TalkootProposals(ctx context.Context, p ctrlproto.TalkootProposalsParams) (ctrlproto.TalkootProposalsResult, error) {
+	list, err := w.talkootProposals(p.ID, p.All)
+	if err != nil {
+		return ctrlproto.TalkootProposalsResult{}, talkootWireErr(err, ctrlproto.CodeInternal)
+	}
+	out := ctrlproto.TalkootProposalsResult{Proposals: make([]ctrlproto.TalkootProposal, 0, len(list))}
+	for _, pr := range list {
+		out.Proposals = append(out.Proposals, wireProposal(pr))
+	}
+	return out, nil
+}
+
+func (w *Workspace) DecideTalkoot(ctx context.Context, p ctrlproto.TalkootDecideParams) (ctrlproto.TalkootProposal, error) {
+	out, err := w.talkootDecide(ctx, p.ID, p.By, p.Proposal, p.Decision, wireOps(p.Ops), p.Reason)
+	if err != nil {
+		return ctrlproto.TalkootProposal{}, talkootWireErr(err, ctrlproto.CodeBadRequest)
+	}
+	return wireProposal(out), nil
+}
+
 // talkootWireErr gives a talkoot error its wire code. An error the API does
 // not name takes fallback: bad_request on a verb whose errors are almost all a
 // caller's input (a roster that fails its rules, a send the router refuses),
@@ -87,7 +129,7 @@ func talkootWireErr(err error, fallback string) error {
 		return nil
 	case errors.Is(err, ErrTalkootNotFound), errors.Is(err, ErrTalkootNotHere):
 		return ctrlproto.Wrap(ctrlproto.CodeNotFound, err)
-	case errors.Is(err, ErrTalkootClosed), errors.Is(err, ErrTalkootExists):
+	case errors.Is(err, ErrTalkootClosed), errors.Is(err, ErrTalkootExists), errors.Is(err, talkoot.ErrProposalStale):
 		return ctrlproto.Wrap(ctrlproto.CodeConflict, err)
 	case errors.Is(err, talkoot.ErrDisabled):
 		return ctrlproto.Wrap(ctrlproto.CodeUnsupported, err)
@@ -131,7 +173,10 @@ func wireTalkootLine(l talkoot.Line) ctrlproto.TalkootLine {
 	out := ctrlproto.TalkootLine{
 		Type: l.Type, At: l.At, Member: l.Member, Chain: l.Chain, CostUSD: l.CostUSD,
 		Guard: l.Guard, Action: l.Action, Reason: l.Reason, By: l.By, SpendUSD: l.SpendUSD,
-		Ref: l.Ref, Notes: l.Notes,
+		Ref: l.Ref, Notes: l.Notes, Proposal: l.Proposal, Proposer: l.Proposer, Edited: l.Edited,
+	}
+	if len(l.Changes) > 0 {
+		out.Changes = wireChanges(l.Changes)
 	}
 	if l.Envelope != nil {
 		e := wireTalkootEnvelope(*l.Envelope)
@@ -158,6 +203,10 @@ func wireTalkootEvent(ev talkootEvent) (ctrlproto.Event, bool) {
 			members = append(members, wireTalkootStatus(s))
 		}
 		return ctrlproto.TalkootStatusEvent(ev.Talkoot, members), true
+	case "inbox":
+		if ev.Wire != nil {
+			return *ev.Wire, true
+		}
 	}
 	return ctrlproto.Event{}, false
 }

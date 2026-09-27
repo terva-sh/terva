@@ -2424,8 +2424,8 @@ export interface WireEvent {
   notice?: Notice
   auth?: AuthState
   replay?: ReplayState
-  // talkoot_envelope, talkoot_status, talkoot_roster: on a talkoot's own
-  // address (talkootAddr).
+  // talkoot_envelope, talkoot_status, talkoot_roster, talkoot_inbox,
+  // talkoot_inbox_resolved: on a talkoot's own address (talkootAddr).
   talkoot?: TalkootEvent
   stall?: WireStall
   escalation?: WireEscalation
@@ -2447,7 +2447,8 @@ export const ADDR_WORKSPACE = '#workspace'
 
 // ADDR_TALKOOT_PREFIX starts a talkoot room's address. Subscribing there needs
 // the `talkoot` group in the hello, and the room sends talkoot_envelope,
-// talkoot_status, and talkoot_roster events. Like ADDR_WORKSPACE it is an
+// talkoot_status, talkoot_roster, talkoot_inbox, and talkoot_inbox_resolved
+// events. Like ADDR_WORKSPACE it is an
 // address, never a session id.
 export const ADDR_TALKOOT_PREFIX = '#talkoot:'
 
@@ -2726,10 +2727,14 @@ export type Verb =
   | 'surface.get'
   | 'surfaces.list'
   | 'talkoot.create'
+  | 'talkoot.decide'
   | 'talkoot.get'
+  | 'talkoot.inbox'
   | 'talkoot.list'
   | 'talkoot.pause'
   | 'talkoot.post'
+  | 'talkoot.proposals'
+  | 'talkoot.propose'
   | 'talkoot.resume'
   | 'talkoot.room'
   | 'talkoot.update'
@@ -2920,14 +2925,132 @@ export interface TalkootLine {
   spend_usd?: number
   ref?: string
   notes?: number
+  // On a roster line: the approved proposal, its proposer, whether the
+  // person replaced its operations, and each member before and after. A
+  // person's own edit sets `changes` alone.
+  proposal?: string
+  proposer?: string
+  edited?: boolean
+  changes?: TalkootMemberChange[]
 }
 
-// TalkootEvent carries `line` on talkoot_envelope and talkoot_roster, and
-// every member's status on talkoot_status.
+// TalkootInboxResult is the talkoot.inbox reply, oldest card first.
+export interface TalkootInboxResult {
+  cards: TalkootCard[]
+}
+
+// TalkootCard is a question, an approval, or a roster proposal that waits
+// for a person. Answer a permission or an ask card with `approve` or `answer`
+// on its `session`, which resolves the member's own card too. Decide a
+// proposal card with talkoot.decide; it has no session, and `member` is its
+// proposer, which may be a person (`human:<name>`). `id` is the call id of a
+// permission, the ask id of a question, or the id of a proposal.
+export interface TalkootCard {
+  session: string
+  member: string
+  kind: 'permission' | 'ask' | 'proposal'
+  id: string
+  at?: string
+  permission?: PermissionRequest
+  ask?: AskRequest
+  proposal?: TalkootProposal
+}
+
+// TalkootOp is one roster change: `add` a member, `edit` its fields, `remove`
+// it, or `look`, which sets look fields only. `set` holds fields by their
+// roster names, and a null or empty value removes one.
+export interface TalkootOp {
+  op: 'add' | 'edit' | 'remove' | 'look'
+  member: string
+  set?: Record<string, string | number | boolean | null>
+}
+
+// TalkootMemberEntry is a member as its roster writes it.
+export interface TalkootMemberEntry {
+  id: string
+  role: string
+  title?: string
+  persona?: string
+  driver?: string
+  model?: string
+  tier?: string
+  posture?: string
+  workspace?: string
+  reviewer?: boolean
+  budget_usd_per_day?: number
+  turns_per_day?: number
+}
+
+// TalkootMemberChange is one member before and after a roster change. Mark
+// each field in `authority`, and flag each in `widens`, which grant more.
+export interface TalkootMemberChange {
+  member: string
+  before?: TalkootMemberEntry
+  after?: TalkootMemberEntry
+  widens?: string[]
+  authority?: string[]
+}
+
+// TalkootProposal is a roster change that waits for a person. Only
+// talkoot.decide applies it. `problem` says why an approval was refused.
+export interface TalkootProposal {
+  id: string
+  proposer: string
+  at: string
+  title: string
+  summary: string
+  why?: string
+  class: 'look' | 'voice' | 'authority'
+  self_authority?: boolean
+  undoes?: string
+  envelope?: string
+  ops: TalkootOp[]
+  changes: TalkootMemberChange[]
+  status: 'pending' | 'approved' | 'declined'
+  decided_by?: string
+  decided_at?: string
+  reason?: string
+  // Set when the person approved changed operations, which `applied` holds.
+  // `ops` stays what the proposer asked for.
+  edited?: boolean
+  applied?: TalkootOp[]
+  problem?: string
+}
+
+export interface TalkootProposeParams {
+  id: string
+  by: string
+  ops?: TalkootOp[]
+  undo?: string
+  why?: string
+}
+
+export interface TalkootProposalsParams {
+  id: string
+  all?: boolean
+}
+
+export interface TalkootProposalsResult {
+  proposals: TalkootProposal[]
+}
+
+export interface TalkootDecideParams {
+  id: string
+  by: string
+  proposal: string
+  decision: 'approve' | 'decline'
+  ops?: TalkootOp[]
+  reason?: string
+}
+
+// TalkootEvent carries `line` on talkoot_envelope and talkoot_roster, every
+// member's status on talkoot_status, and `card` on talkoot_inbox and
+// talkoot_inbox_resolved. A resolved card carries no request.
 export interface TalkootEvent {
   id: string
   line?: TalkootLine
   members?: TalkootMemberStatus[]
+  card?: TalkootCard
 }
 
 // --- the workflow dashboard (ctrlproto/workflows.go) ---
@@ -3053,6 +3176,10 @@ export interface VerbParams {
   'talkoot.post': TalkootPostParams
   'talkoot.pause': TalkootPauseParams
   'talkoot.resume': TalkootResumeParams
+  'talkoot.inbox': TalkootRef
+  'talkoot.proposals': TalkootProposalsParams
+  'talkoot.propose': TalkootProposeParams
+  'talkoot.decide': TalkootDecideParams
 }
 
 // Card revision history. Every write to a card goes through cards.edit — the

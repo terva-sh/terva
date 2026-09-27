@@ -42,6 +42,19 @@ type TalkootController interface {
 	PauseTalkoot(ctx context.Context, p TalkootPauseParams) error
 	// ResumeTalkoot lifts a pause, and releases the deliveries it held.
 	ResumeTalkoot(ctx context.Context, p TalkootResumeParams) error
+	// TalkootInbox returns every question and approval that a member of the
+	// talkoot waits on, oldest first. A client answers a card with approve or
+	// answer on the card's session. The inbox has no answer verb of its own.
+	TalkootInbox(ctx context.Context, p TalkootRef) (TalkootInboxResult, error)
+	// ProposeTalkoot records a person's roster proposal, which waits in the
+	// inbox like a member's. Undo takes this path.
+	ProposeTalkoot(ctx context.Context, p TalkootProposeParams) (TalkootProposal, error)
+	// TalkootProposals lists a talkoot's proposals, the waiting ones unless
+	// All is set.
+	TalkootProposals(ctx context.Context, p TalkootProposalsParams) (TalkootProposalsResult, error)
+	// DecideTalkoot approves or declines a proposal. Only an approval writes
+	// the roster.
+	DecideTalkoot(ctx context.Context, p TalkootDecideParams) (TalkootProposal, error)
 }
 
 // TalkootSummary is one talkoot in a list.
@@ -216,6 +229,172 @@ type TalkootLine struct {
 	SpendUSD float64          `json:"spend_usd,omitempty"`
 	Ref      string           `json:"ref,omitempty"`
 	Notes    int              `json:"notes,omitempty"`
+	// Proposal, Proposer, Edited, and Changes are set on a roster line: the
+	// proposal an approval applied, who proposed it, whether the person
+	// replaced its operations, and each member before and after. A person's
+	// own edit sets Changes alone.
+	Proposal string                `json:"proposal,omitempty"`
+	Proposer string                `json:"proposer,omitempty"`
+	Edited   bool                  `json:"edited,omitempty"`
+	Changes  []TalkootMemberChange `json:"changes,omitempty"`
+}
+
+// TalkootInboxResult is the talkoot.inbox reply, oldest card first.
+type TalkootInboxResult struct {
+	Cards []TalkootCard `json:"cards"`
+}
+
+// The kinds of an inbox card.
+const (
+	TalkootCardPermission = "permission"
+	TalkootCardAsk        = "ask"
+	TalkootCardProposal   = "proposal"
+)
+
+// TalkootCard is a question or an approval that a member waits on. It is the
+// same card the member's session shows, and an answer on either resolves both.
+//
+// 🔑 Answer a permission or an ask card with [MethodApprove] or
+// [MethodAnswer] on Session, and a proposal card with [MethodTalkootDecide].
+// The router sends envelopes and nothing else, so it has no way to answer a
+// card.
+type TalkootCard struct {
+	// Session is the member's session. A proposal card has none.
+	Session string `json:"session"`
+	// Member is the member that waits, or a proposal's proposer, which may be
+	// a person (human:<name>).
+	Member string `json:"member"`
+	// Kind is permission, ask, or proposal.
+	Kind string `json:"kind"`
+	// ID is the call id of a permission, the ask id of a question, or the id
+	// of a proposal.
+	ID string    `json:"id"`
+	At time.Time `json:"at,omitzero"`
+	// Permission, Ask, or Proposal is set by kind. All are unset on the card
+	// of an [EventTalkootInboxResolved].
+	Permission *PermissionRequest `json:"permission,omitempty"`
+	Ask        *AskRequest        `json:"ask,omitempty"`
+	Proposal   *TalkootProposal   `json:"proposal,omitempty"`
+}
+
+// TalkootOp is one roster change in a proposal: add, edit, remove, or look.
+// Member names the member in each, the new one in an add. Set holds the
+// fields by their roster names, and a null or empty value removes a field.
+type TalkootOp struct {
+	Op     string         `json:"op"`
+	Member string         `json:"member"`
+	Set    map[string]any `json:"set,omitempty"`
+}
+
+// TalkootMemberEntry is a member as its roster writes it.
+type TalkootMemberEntry struct {
+	ID              string  `json:"id"`
+	Role            string  `json:"role"`
+	Title           string  `json:"title,omitempty"`
+	Persona         string  `json:"persona,omitempty"`
+	Driver          string  `json:"driver,omitempty"`
+	Model           string  `json:"model,omitempty"`
+	Tier            string  `json:"tier,omitempty"`
+	Posture         string  `json:"posture,omitempty"`
+	Workspace       string  `json:"workspace,omitempty"`
+	Reviewer        bool    `json:"reviewer,omitempty"`
+	BudgetUSDPerDay float64 `json:"budget_usd_per_day,omitempty"`
+	TurnsPerDay     int     `json:"turns_per_day,omitempty"`
+}
+
+// TalkootMemberChange is one member before and after a roster change. Before
+// is unset for an added member, and After for a removed one. Widens names the
+// authority fields that grant more, and Authority every authority field that
+// changes, so a card can mark each.
+type TalkootMemberChange struct {
+	Member    string              `json:"member"`
+	Before    *TalkootMemberEntry `json:"before,omitempty"`
+	After     *TalkootMemberEntry `json:"after,omitempty"`
+	Widens    []string            `json:"widens,omitempty"`
+	Authority []string            `json:"authority,omitempty"`
+}
+
+// The states of a proposal.
+const (
+	TalkootProposalPending  = "pending"
+	TalkootProposalApproved = "approved"
+	TalkootProposalDeclined = "declined"
+)
+
+// TalkootProposal is a roster change that waits for a person (decision
+// 0025). A member proposes it with talkoot_propose, or a person with
+// talkoot.propose, and only [MethodTalkootDecide] applies it.
+type TalkootProposal struct {
+	ID       string    `json:"id"`
+	Proposer string    `json:"proposer"`
+	At       time.Time `json:"at"`
+	// Title says who proposes what, and says so first when a member changes
+	// its own authority.
+	Title   string `json:"title"`
+	Summary string `json:"summary"`
+	Why     string `json:"why,omitempty"`
+	// Class is the widest class the change touches: look, voice, or
+	// authority.
+	Class string `json:"class"`
+	// SelfAuthority is set when a member proposes a change to its own
+	// authority fields.
+	SelfAuthority bool   `json:"self_authority,omitempty"`
+	Undoes        string `json:"undoes,omitempty"`
+	// Envelope is the room envelope that recorded the proposal.
+	Envelope string      `json:"envelope,omitempty"`
+	Ops      []TalkootOp `json:"ops"`
+	// Changes previews each member while the proposal waits, and records
+	// what applied once it is approved.
+	Changes   []TalkootMemberChange `json:"changes"`
+	Status    string                `json:"status"`
+	DecidedBy string                `json:"decided_by,omitempty"`
+	DecidedAt time.Time             `json:"decided_at,omitzero"`
+	Reason    string                `json:"reason,omitempty"`
+	// Edited is set when the person approved changed operations, and Applied
+	// holds them. Ops stays what the proposer asked for.
+	Edited  bool        `json:"edited,omitempty"`
+	Applied []TalkootOp `json:"applied,omitempty"`
+	// Problem says why an approval was refused. The proposal still waits,
+	// and a person declines it or approves an edited version.
+	Problem string `json:"problem,omitempty"`
+}
+
+// TalkootProposeParams is the talkoot.propose payload: Ops, or Undo with the
+// id of an approved proposal to reverse.
+type TalkootProposeParams struct {
+	ID   string      `json:"id"`
+	By   string      `json:"by"`
+	Ops  []TalkootOp `json:"ops,omitempty"`
+	Undo string      `json:"undo,omitempty"`
+	Why  string      `json:"why,omitempty"`
+}
+
+// TalkootProposalsParams is the talkoot.proposals payload.
+type TalkootProposalsParams struct {
+	ID  string `json:"id"`
+	All bool   `json:"all,omitempty"`
+}
+
+// TalkootProposalsResult is the talkoot.proposals reply, oldest first.
+type TalkootProposalsResult struct {
+	Proposals []TalkootProposal `json:"proposals"`
+}
+
+// The decisions a person makes on a proposal.
+const (
+	TalkootDecisionApprove = "approve"
+	TalkootDecisionDecline = "decline"
+)
+
+// TalkootDecideParams is the talkoot.decide payload. Ops, on an approval,
+// replaces the proposal's operations with the person's edit.
+type TalkootDecideParams struct {
+	ID       string      `json:"id"`
+	By       string      `json:"by"`
+	Proposal string      `json:"proposal"`
+	Decision string      `json:"decision"`
+	Ops      []TalkootOp `json:"ops,omitempty"`
+	Reason   string      `json:"reason,omitempty"`
 }
 
 // TalkootEvent is the body of the talkoot_* events on a [TalkootAddr]
@@ -227,6 +406,8 @@ type TalkootEvent struct {
 	// Members is set on [EventTalkootStatus]: every member's status, in
 	// roster order.
 	Members []TalkootMemberStatus `json:"members,omitempty"`
+	// Card is set on [EventTalkootInbox] and [EventTalkootInboxResolved].
+	Card *TalkootCard `json:"card,omitempty"`
 }
 
 // TalkootEnvelopeEvent builds an [EventTalkootEnvelope] event.
@@ -242,6 +423,16 @@ func TalkootRosterEvent(id string, l TalkootLine) Event {
 // TalkootStatusEvent builds an [EventTalkootStatus] event.
 func TalkootStatusEvent(id string, members []TalkootMemberStatus) Event {
 	return Event{WireEvent: core.WireEvent{Type: EventTalkootStatus}, Talkoot: &TalkootEvent{ID: id, Members: members}}
+}
+
+// TalkootInboxEvent builds an [EventTalkootInbox] event.
+func TalkootInboxEvent(id string, c TalkootCard) Event {
+	return Event{WireEvent: core.WireEvent{Type: EventTalkootInbox}, Talkoot: &TalkootEvent{ID: id, Card: &c}}
+}
+
+// TalkootInboxResolvedEvent builds an [EventTalkootInboxResolved] event.
+func TalkootInboxResolvedEvent(id string, c TalkootCard) Event {
+	return Event{WireEvent: core.WireEvent{Type: EventTalkootInboxResolved}, Talkoot: &TalkootEvent{ID: id, Card: &c}}
 }
 
 // TalkootsChangedEvent builds an [EventTalkootsChanged] signal.

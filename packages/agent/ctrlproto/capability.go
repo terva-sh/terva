@@ -78,6 +78,7 @@ var readOnlyMethods = map[Method]bool{
 	MethodReplayState:    true,
 	MethodTenantsList:    true,
 	MethodTalkootList:    true, MethodTalkootGet: true, MethodTalkootRoom: true,
+	MethodTalkootInbox: true, MethodTalkootProposals: true,
 }
 
 // spendingMethods reach a model or an image backend. Membership is a claim that
@@ -109,8 +110,14 @@ var spendingMethods = map[Method]bool{
 	MethodCardsDoctor: true, MethodWorldsDoctor: true,
 	MethodBackgroundGenerate: true,
 	// A post wakes a member. A resume and an update release the deliveries a
-	// pause or the old roster held, and each wakes a member too.
+	// pause or the old roster held, and each wakes a member too. An approved
+	// proposal is an update.
 	MethodTalkootPost: true, MethodTalkootResume: true, MethodTalkootUpdate: true,
+	MethodTalkootDecide: true,
+	// A proposal only makes a card, but it names a person as its author, and
+	// the card and the roster line show that name. Only a caller that could
+	// make the change itself with talkoot.update may claim a person's name.
+	MethodTalkootPropose: true,
 }
 
 // Capabilities reports what m does.
@@ -200,6 +207,7 @@ var writeOnlyMethods = map[Method]bool{
 var steerMethods = map[Method]bool{
 	MethodTalkootCreate: true, MethodTalkootUpdate: true, MethodTalkootPost: true,
 	MethodTalkootPause: true, MethodTalkootResume: true,
+	MethodTalkootPropose: true, MethodTalkootDecide: true,
 }
 
 // Permits reports whether a caller holding mask may invoke m: every capability

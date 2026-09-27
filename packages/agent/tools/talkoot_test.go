@@ -16,6 +16,22 @@ type fakeSeat struct {
 	roster []TalkootRosterEntry
 	// dir and member back the notes, when a test sets them.
 	dir, member string
+	// proposed records each proposal, and proposeErr fails the next one.
+	proposed   []fakeProposal
+	proposeErr error
+}
+
+type fakeProposal struct {
+	ops       []talkoot.Op
+	undo, why string
+}
+
+func (s *fakeSeat) Propose(ops []talkoot.Op, undo, why string) (talkoot.Proposal, error) {
+	if s.proposeErr != nil {
+		return talkoot.Proposal{}, s.proposeErr
+	}
+	s.proposed = append(s.proposed, fakeProposal{ops, undo, why})
+	return talkoot.Proposal{ID: "01M3E7YRGWZ42BPP2J4AKG62B7", Summary: talkoot.Summarize(ops)}, nil
 }
 
 func (s *fakeSeat) WriteNote(name, text string) (string, error) {
@@ -129,8 +145,8 @@ func TestTalkootToolsRefuseWithoutASeat(t *testing.T) {
 func TestTalkootToolDefsMatchTheNativeTools(t *testing.T) {
 	defs := TalkootToolDefs()
 	tools := TalkootTools(nil)
-	if len(defs) != 5 || len(tools) != 5 {
-		t.Fatalf("want five tools, got %d defs and %d tools", len(defs), len(tools))
+	if len(defs) != 6 || len(tools) != 6 {
+		t.Fatalf("want six tools, got %d defs and %d tools", len(defs), len(tools))
 	}
 	for i, d := range defs {
 		tool := tools[i]
@@ -155,5 +171,33 @@ func TestTalkootRosterKeepsEachMemberOnOneLine(t *testing.T) {
 	}
 	if n := strings.Count(got, "\n"); n != 1 || strings.ContainsRune(got, ' ') {
 		t.Errorf("want one line, got %d breaks in %q", n, got)
+	}
+}
+
+// talkoot_propose passes the batch and the reason to the seat, and says the
+// roster waits for a person. It needs a reason, and a seat.
+func TestTalkootProposeHandsTheBatchToTheSeat(t *testing.T) {
+	seat := &fakeSeat{}
+	tool := &TalkootProposeTool{Seat: seat}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"ops":[{"op":"edit","member":"jev","set":{"posture":"ask"}}],"why":"jev needs to run the tests"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seat.proposed) != 1 || seat.proposed[0].why != "jev needs to run the tests" ||
+		len(seat.proposed[0].ops) != 1 || seat.proposed[0].ops[0].Set["posture"] != "ask" {
+		t.Fatalf("the seat got %+v", seat.proposed)
+	}
+	text := res.Content[0].(provider.TextBlock).Text
+	if !strings.Contains(text, "01M3E7YRGWZ42BPP2J4AKG62B7") || !strings.Contains(text, "until a person approves") {
+		t.Errorf("the result says %q", text)
+	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"undo":"01M3E7YRGWZ42BPP2J4AKG62B7","why":" "}`), nil); err == nil {
+		t.Error("a proposal with no reason went through")
+	}
+	if len(seat.proposed) != 1 {
+		t.Error("a refused call reached the seat")
+	}
+	if _, err := (&TalkootProposeTool{}).Execute(context.Background(), json.RawMessage(`{"why":"x"}`), nil); err == nil {
+		t.Error("a tool with no seat proposed")
 	}
 }

@@ -1175,12 +1175,28 @@ TailInfo
 	span_start	int
 	variants	int
 	active	int
+TalkootCard
+	session	string
+	member	string
+	kind	string
+	id	string
+	at	time.Time	omitzero
+	permission	*PermissionRequest	omitempty
+	ask	*AskRequest	omitempty
+	proposal	*TalkootProposal	omitempty
 TalkootChain
 	root	string
 	hops	int
 TalkootCreateParams
 	id	string
 	text	string
+TalkootDecideParams
+	id	string
+	by	string
+	proposal	string
+	decision	string
+	ops	[]TalkootOp	omitempty
+	reason	string	omitempty
 TalkootEnvelope
 	id	string
 	talkoot	string
@@ -1197,6 +1213,9 @@ TalkootEvent
 	id	string
 	line	*TalkootLine	omitempty
 	members	[]TalkootMemberStatus	omitempty
+	card	*TalkootCard	omitempty
+TalkootInboxResult
+	cards	[]TalkootCard
 TalkootLine
 	type	string
 	at	time.Time
@@ -1211,6 +1230,10 @@ TalkootLine
 	spend_usd	float64	omitempty
 	ref	string	omitempty
 	notes	int	omitempty
+	proposal	string	omitempty
+	proposer	string	omitempty
+	edited	bool	omitempty
+	changes	[]TalkootMemberChange	omitempty
 TalkootListResult
 	talkoots	[]TalkootSummary
 TalkootMember
@@ -1228,12 +1251,35 @@ TalkootMember
 	turns_per_day	int	omitempty
 	session	string	omitempty
 	status	TalkootMemberStatus
+TalkootMemberChange
+	member	string
+	before	*TalkootMemberEntry	omitempty
+	after	*TalkootMemberEntry	omitempty
+	widens	[]string	omitempty
+	authority	[]string	omitempty
+TalkootMemberEntry
+	id	string
+	role	string
+	title	string	omitempty
+	persona	string	omitempty
+	driver	string	omitempty
+	model	string	omitempty
+	tier	string	omitempty
+	posture	string	omitempty
+	workspace	string	omitempty
+	reviewer	bool	omitempty
+	budget_usd_per_day	float64	omitempty
+	turns_per_day	int	omitempty
 TalkootMemberStatus
 	member	string
 	working	bool	omitempty
 	paused	string	omitempty
 	spend_usd	float64	omitempty
 	turns	int	omitempty
+TalkootOp
+	op	string
+	member	string
+	set	map[string]any	omitempty
 TalkootPauseParams
 	id	string
 	by	string
@@ -1247,6 +1293,37 @@ TalkootPostParams
 	body	string
 	refs	[]string	omitempty
 	thread	string	omitempty
+TalkootProposal
+	id	string
+	proposer	string
+	at	time.Time
+	title	string
+	summary	string
+	why	string	omitempty
+	class	string
+	self_authority	bool	omitempty
+	undoes	string	omitempty
+	envelope	string	omitempty
+	ops	[]TalkootOp
+	changes	[]TalkootMemberChange
+	status	string
+	decided_by	string	omitempty
+	decided_at	time.Time	omitzero
+	reason	string	omitempty
+	edited	bool	omitempty
+	applied	[]TalkootOp	omitempty
+	problem	string	omitempty
+TalkootProposalsParams
+	id	string
+	all	bool	omitempty
+TalkootProposalsResult
+	proposals	[]TalkootProposal
+TalkootProposeParams
+	id	string
+	by	string
+	ops	[]TalkootOp	omitempty
+	undo	string	omitempty
+	why	string	omitempty
 TalkootRef
 	id	string
 TalkootResumeParams

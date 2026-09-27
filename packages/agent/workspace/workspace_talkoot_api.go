@@ -2,8 +2,6 @@ package workspace
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -217,6 +215,20 @@ func (w *Workspace) talkootUpdate(ctx context.Context, id, by string, text []byt
 	}
 	run.update.Lock()
 	defer run.update.Unlock()
+	return w.applyRosterLocked(ctx, run, by, text, next, rosterSource{})
+}
+
+// rosterSource names the proposal a roster change came from, and whether the
+// person replaced its operations. It is empty for a person's own edit.
+type rosterSource struct {
+	proposal, proposer string
+	edited             bool
+}
+
+// applyRosterLocked commits a validated roster: the room lines, the file, the
+// router, the seats, and each posture. The caller holds run.update.
+func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by string, text []byte, next talkoot.Roster, from rosterSource) (talkootView, error) {
+	id := run.id
 	prev := *run.roster.Load()
 	// The text that holds now, named by the line that corrects a failed
 	// update. Only that line reads it, so an unreadable file leaves its
@@ -291,8 +303,7 @@ func (w *Workspace) talkootUpdate(ctx context.Context, id, by string, text []byt
 			// says so, and names the roster that still holds.
 			ref := ""
 			if prevErr == nil {
-				back := sha256.Sum256(prevText)
-				ref = hex.EncodeToString(back[:])
+				ref = talkoot.RosterRevision(prevText)
 			}
 			if rerr := run.room.Append(talkoot.Line{Type: talkoot.LineRoster, At: time.Now(), By: humanBy(by),
 				Ref: ref, Reason: "the update failed, and the roster is unchanged"}); rerr != nil {
@@ -311,8 +322,8 @@ func (w *Workspace) talkootUpdate(ctx context.Context, id, by string, text []byt
 	}
 	// The roster line records who changed the roster. It is part of the
 	// update: an update the room cannot record does not happen.
-	sum := sha256.Sum256(text)
-	if err := run.room.Append(talkoot.Line{Type: talkoot.LineRoster, At: time.Now(), By: humanBy(by), Ref: hex.EncodeToString(sum[:])}); err != nil {
+	if err := run.room.Append(talkoot.Line{Type: talkoot.LineRoster, At: time.Now(), By: humanBy(by), Ref: talkoot.RosterRevision(text),
+		Proposal: from.proposal, Proposer: from.proposer, Edited: from.edited, Changes: talkoot.Diff(prev, next)}); err != nil {
 		return abort(fmt.Errorf("talkoot: the room could not record the roster change: %w", err))
 	}
 	rosterSealed = true

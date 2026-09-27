@@ -25,10 +25,15 @@ const (
 	KindNote Kind = "note"
 	// KindAnswer replies to a question and wakes the recipient.
 	KindAnswer Kind = "answer"
+	// KindProposal records a roster proposal. It is addressed to no member,
+	// because a person decides it, and the router alone writes one
+	// (Router.Propose). A proposal is an envelope so that the sender's rate
+	// limit and the chain's hop limit count it (decision 0025 rule 7).
+	KindProposal Kind = "proposal"
 )
 
 // wakes reports whether an envelope of this kind starts a turn.
-func (k Kind) wakes() bool { return k != KindNote }
+func (k Kind) wakes() bool { return k != KindNote && k != KindProposal }
 
 // refKinds are the reference namespaces an envelope may carry.
 //

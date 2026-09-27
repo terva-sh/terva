@@ -50,7 +50,11 @@ type talkootRun struct {
 	// update serializes roster updates, so each one diffs against the roster
 	// it replaces. It is taken before mu.
 	update sync.Mutex
-	closed bool
+	// propose holds one proposal from its count of the pending ones to its
+	// save, so concurrent proposers cannot pass the cap together. It is
+	// taken before mu, and nothing that holds update or mu waits for it.
+	propose sync.Mutex
+	closed  bool
 	// stopping is set when shutdown stops the router. An update then refuses,
 	// so it cannot swap in a router that was never stopped.
 	stopping bool
@@ -77,10 +81,13 @@ type talkootRun struct {
 // talkootEvent is a change a client of the talkoot wants to see.
 type talkootEvent struct {
 	Talkoot string
-	// Kind is envelope, status, roster, or loaded.
+	// Kind is envelope, status, roster, inbox, or loaded.
 	Kind   string
 	Line   *talkoot.Line
 	Status []talkoot.Status
+	// Wire is an inbox event, built in its wire form, because an inbox
+	// card is made of wire requests already.
+	Wire *ctrlproto.Event
 }
 
 // do runs fn against the router, then sends the events it caused.

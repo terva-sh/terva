@@ -106,7 +106,8 @@ func TestTalkootFromAddr(t *testing.T) {
 // capability a role held before the bit existed, and it must not reach a verb
 // that changes or wakes a talkoot.
 func TestTheSteerVerbsNeedTheSteerBit(t *testing.T) {
-	steer := []Method{MethodTalkootCreate, MethodTalkootUpdate, MethodTalkootPost, MethodTalkootPause, MethodTalkootResume}
+	steer := []Method{MethodTalkootCreate, MethodTalkootUpdate, MethodTalkootPost, MethodTalkootPause, MethodTalkootResume,
+		MethodTalkootPropose, MethodTalkootDecide}
 	for _, m := range steer {
 		if m.Capabilities()&CapSteer == 0 {
 			t.Errorf("%s does not need CapSteer", m)
@@ -118,14 +119,19 @@ func TestTheSteerVerbsNeedTheSteerBit(t *testing.T) {
 			t.Errorf("%s is refused to an unrestricted caller", m)
 		}
 	}
-	for _, m := range []Method{MethodTalkootList, MethodTalkootGet, MethodTalkootRoom} {
+	for _, m := range []Method{MethodTalkootList, MethodTalkootGet, MethodTalkootRoom, MethodTalkootInbox, MethodTalkootProposals} {
 		if !m.Permits(CapRead) {
 			t.Errorf("%s is refused to a read-only caller, who may watch a room", m)
 		}
 	}
-	// Posting wakes a member, so it spends as well as steers.
-	if MethodTalkootPost.Permits(CapRead | CapWrite | CapSteer) {
-		t.Error("talkoot.post is permitted without CapSpend")
+	// Posting wakes a member, so it spends as well as steers. So does an
+	// approval, which releases what the old roster held. A proposal names a
+	// person as its author, a claim only a caller that could update the
+	// roster may make.
+	for _, m := range []Method{MethodTalkootPost, MethodTalkootDecide, MethodTalkootPropose} {
+		if m.Permits(CapRead | CapWrite | CapSteer) {
+			t.Errorf("%s is permitted without CapSpend", m)
+		}
 	}
 }
 
@@ -224,6 +230,59 @@ func TestARoomNeedsTalkootRoomOnAProvisionedConnection(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Errorf("subscribe to a room answered %q (%+v), want %q", got, r.Error, tc.want)
+			}
+		})
+	}
+}
+
+// 🚨 An inbox card carries a member's tool call and its preview, which is what
+// talkoot.inbox reads. A connection provisioned to watch a room, and not to
+// read the inbox, must not get the cards on the room's address.
+func TestAnInboxCardNeedsTalkootInboxOnAProvisionedConnection(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		methods []Method
+		want    bool
+	}{
+		{"the room alone", []Method{MethodSubscribe, MethodTalkootRoom}, false},
+		{"the room and the inbox", []Method{MethodSubscribe, MethodTalkootRoom, MethodTalkootInbox}, true},
+		{"every verb", nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newFakeSvc()
+			client, server := newMemPair()
+			hello := ServerHello("terva-test", "0")
+			hello.Groups = append(hello.Groups, GroupTalkoot)
+			var opts []ServeOption
+			if tc.methods != nil {
+				opts = append(opts, WithMethods(tc.methods...))
+			}
+			go ServeConn(t.Context(), server, svc, hello, opts...)
+
+			push(t, client, HelloFrame(Hello{Role: RoleClient, Protocol: Protocol,
+				Groups: []Group{GroupConversation, GroupTalkoot}}))
+			pull(t, client)
+			room := TalkootAddr("crew")
+			push(t, client, mustCmd(t, 1, room, MethodSubscribe, nil))
+			if r := pull(t, client); r.Error != nil {
+				t.Fatalf("subscribe to the room: %+v", r.Error)
+			}
+
+			card := TalkootCard{Session: "s1", Member: "helm", Kind: TalkootCardPermission, ID: "c1",
+				Permission: &PermissionRequest{CallID: "c1", Tool: "bash", Preview: "rm -rf build"}}
+			svc.broadcast(room, TalkootInboxEvent("crew", card))
+			// A positive control: a room event every watcher gets, sent after.
+			svc.broadcast(room, TalkootStatusEvent("crew", nil))
+			f := pull(t, client)
+			for f.Kind != KindEvent {
+				f = pull(t, client)
+			}
+			got := f.Event != nil && f.Event.Type == EventTalkootInbox
+			if got != tc.want {
+				t.Errorf("first room event = %+v, want talkoot_inbox %v", f.Event, tc.want)
+			}
+			if !got && (f.Event == nil || f.Event.Type != EventTalkootStatus) {
+				t.Errorf("the control event did not arrive: %+v", f.Event)
 			}
 		})
 	}

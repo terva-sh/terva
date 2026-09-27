@@ -30,6 +30,10 @@ type TalkootSeat interface {
 	ReadNote(ref string) (string, error)
 	// ListNotes lists every note in the talkoot, newest first.
 	ListNotes() ([]talkoot.Note, error)
+	// Propose submits a roster proposal from the seat's member: ops, or the
+	// inverse of the approved proposal undo names. It never changes the
+	// roster. A person decides.
+	Propose(ops []talkoot.Op, undo, why string) (talkoot.Proposal, error)
 }
 
 // TalkootRosterEntry is one member as talkoot_roster shows it.
@@ -54,7 +58,7 @@ type TalkootToolDef struct {
 // returns the i18n.D call, and it resolves a constant only inside its own
 // file. Keep both shapes, or the gate passes text it never read.
 const (
-	talkootSendDesc = "Send an envelope to one or more members of your talkoot. The router records it in the room and delivers it. A message or an answer starts a turn for each recipient. A note does not start a turn. The recipient reads a note at its next turn. To pass work to a member, use talkoot_handoff."
+	talkootSendDesc = "Send an envelope to one or more members of your talkoot. The router records it in the room and delivers it. A message or an answer starts a turn for each recipient. A note does not start a turn. The recipient reads a note at its next turn.\n\nTo pass work to a member, use talkoot_handoff. To ask a person a question, use ask_user_question and not this tool. The question goes to the inbox of the talkoot."
 
 	talkootHandoffDesc = "Pass work to one or more members of your talkoot. A handoff must carry at least one reference: a ticket, a branch, a commit, a path, or a note. The work travels by reference and not as a summary, so give the reference that holds it. The handoff starts a turn for each recipient."
 
@@ -63,6 +67,8 @@ const (
 	talkootNoteWriteDesc = "Write a note for your talkoot. Every member of the talkoot can read it with talkoot_note_read. A second write with the same name replaces your note. The tool returns a note reference. Put that reference in the refs of an envelope, so the recipients can read the note. Use a note for a report that is too long for an envelope."
 
 	talkootNoteReadDesc = "Read a note of your talkoot. Give the note reference from an envelope, as in note:atlas/plan.md. With no note, the tool lists every note, the newest first. One result holds at most 2000 lines and 50 KiB. If the note is larger, the tool cuts the result and gives the offset of the next line."
+
+	talkootProposeDesc = "Propose a change to the roster of your talkoot. A person must approve the proposal. This tool never changes the roster itself. The proposal goes to the inbox of the talkoot as a card, and the tool returns its id.\n\nGive ops, or give undo with the id of an approved proposal. An op is add, edit, remove, or look. An add or an edit sets member fields, such as role, title, persona, posture, or tier. A look op sets look fields only, such as title. Give the reason for the change in why, so the person can decide."
 
 	talkootToProp     = `"to":{"type":"array","items":{"type":"string"},"minItems":1,"description":"The ids of the members that get the envelope. Call talkoot_roster for the ids."}`
 	talkootBodyProp   = `"body":{"type":"string","description":"The text of the envelope."}`
@@ -77,6 +83,8 @@ const (
 
 	talkootNoteWriteSchema = `{"type":"object","properties":{"name":{"type":"string","description":"The name of the note, as in plan.md. Use only letters, digits, and . _ -. The name cannot start with a dot."},"text":{"type":"string","description":"The text of the note. A note holds at most 256 KiB."}},"required":["name","text"]}`
 
+	talkootProposeSchema = `{"type":"object","properties":{"ops":{"type":"array","maxItems":32,"items":{"type":"object","properties":{"op":{"type":"string","enum":["add","edit","remove","look"],"description":"The change to make to one member."},"member":{"type":"string","description":"The id of the member. For add, the id of the new member."},"set":{"type":"object","description":"The fields to set, by their names in the roster, as in {\"posture\":\"ask\"}. A null or empty value removes the field."}},"required":["op","member"]},"description":"The changes, in order. The person approves all of them, or none."},"undo":{"type":"string","description":"The id of an approved proposal to reverse. Do not give ops with undo."},"why":{"type":"string","description":"Why the team needs the change. The person reads it on the card."}},"required":["why"]}`
+
 	talkootNoteReadSchema = `{"type":"object","properties":{"note":{"type":"string","description":"The note reference, as in note:atlas/plan.md. Leave it out to list every note."},"offset":{"type":"integer","description":"The first line to read. The first line of the note is 1."},"limit":{"type":"integer","description":"The maximum number of lines to read. One result holds at most 2000 lines and 50 KiB."}}}`
 )
 
@@ -90,7 +98,7 @@ func TalkootToolDefs() []TalkootToolDef {
 	return out
 }
 
-// TalkootTools returns the five tools for one seat.
+// TalkootTools returns the six tools for one seat.
 func TalkootTools(seat TalkootSeat) []core.Tool {
 	return []core.Tool{
 		&TalkootSendTool{Seat: seat},
@@ -98,7 +106,39 @@ func TalkootTools(seat TalkootSeat) []core.Tool {
 		&TalkootRosterTool{Seat: seat},
 		&TalkootNoteWriteTool{Seat: seat},
 		&TalkootNoteReadTool{Seat: seat},
+		&TalkootProposeTool{Seat: seat},
 	}
+}
+
+// TalkootProposeTool proposes a roster change for a person to decide.
+type TalkootProposeTool struct{ Seat TalkootSeat }
+
+func (t *TalkootProposeTool) Name() string { return "talkoot_propose" }
+func (t *TalkootProposeTool) Description() string {
+	return i18n.D("tool.talkoot_propose.description", talkootProposeDesc)
+}
+func (t *TalkootProposeTool) Schema() json.RawMessage { return json.RawMessage(talkootProposeSchema) }
+func (t *TalkootProposeTool) Execute(_ context.Context, raw json.RawMessage, _ func(string)) (core.ToolResult, error) {
+	if t.Seat == nil {
+		return core.ToolResult{}, errors.New("this session is not a member of a talkoot")
+	}
+	var a struct {
+		Ops  []talkoot.Op `json:"ops"`
+		Undo string       `json:"undo"`
+		Why  string       `json:"why"`
+	}
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return core.ToolResult{}, fmt.Errorf("invalid args: %w", err)
+	}
+	if strings.TrimSpace(a.Why) == "" {
+		return core.ToolResult{}, errors.New("give the reason for the change in why, so the person can decide")
+	}
+	p, err := t.Seat.Propose(a.Ops, a.Undo, a.Why)
+	if err != nil {
+		return core.ToolResult{}, err
+	}
+	text := fmt.Sprintf("Proposal %s waits for a person in the inbox: %s. The roster does not change until a person approves it.", p.ID, oneLine(p.Summary))
+	return core.ToolResult{Content: []provider.Content{provider.TextBlock{Text: text}}}, nil
 }
 
 type talkootSendArgs struct {

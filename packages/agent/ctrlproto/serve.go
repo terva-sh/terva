@@ -434,12 +434,23 @@ func (s *serveState) subscribe(ctx context.Context, f Frame) {
 }
 
 // withheld reports whether ev belongs to a group this connection did not
-// negotiate. The workspace publishes once, to every subscriber, so the edge
-// that knows the contract drops what a client never asked for. A client
-// without the talkoot group cannot answer talkoots_changed, because
-// talkoot.list is refused to it.
+// negotiate, or shows what a verb it was not provisioned for reads. The
+// workspace publishes once, to every subscriber, so the edge that knows the
+// contract drops what a client never asked for. A client without the talkoot
+// group cannot answer talkoots_changed, because talkoot.list is refused to it.
+//
+// An inbox card carries a member's tool call and its preview, which is what
+// talkoot.inbox reads. A connection provisioned with a verb set that holds
+// talkoot.room and not talkoot.inbox may watch the room, and it must not read
+// the cards through it.
 func (s *serveState) withheld(ev Event) bool {
-	return ev.Type == EventTalkootsChanged && !s.contract.Has(GroupTalkoot)
+	switch ev.Type {
+	case EventTalkootsChanged:
+		return !s.contract.Has(GroupTalkoot)
+	case EventTalkootInbox, EventTalkootInboxResolved:
+		return s.methods != nil && !s.methods[MethodTalkootInbox]
+	}
+	return false
 }
 
 func (s *serveState) unsubscribe(sess string) {

@@ -411,14 +411,18 @@ const (
 	// its id travels in params. The read verbs need CapRead. The rest also need
 	// CapSteer (capability.go). See talkoot.go.
 
-	MethodTalkootList   Method = "talkoot.list"   // result TalkootListResult; read-only
-	MethodTalkootGet    Method = "talkoot.get"    // params TalkootRef, result TalkootView; read-only
-	MethodTalkootRoom   Method = "talkoot.room"   // params TalkootRoomParams, result TalkootRoomPage; read-only
-	MethodTalkootCreate Method = "talkoot.create" // params TalkootCreateParams, result TalkootView
-	MethodTalkootUpdate Method = "talkoot.update" // params TalkootUpdateParams, result TalkootView
-	MethodTalkootPost   Method = "talkoot.post"   // params TalkootPostParams, result TalkootEnvelope
-	MethodTalkootPause  Method = "talkoot.pause"  // params TalkootPauseParams
-	MethodTalkootResume Method = "talkoot.resume" // params TalkootResumeParams
+	MethodTalkootList      Method = "talkoot.list"      // result TalkootListResult; read-only
+	MethodTalkootGet       Method = "talkoot.get"       // params TalkootRef, result TalkootView; read-only
+	MethodTalkootRoom      Method = "talkoot.room"      // params TalkootRoomParams, result TalkootRoomPage; read-only
+	MethodTalkootInbox     Method = "talkoot.inbox"     // params TalkootRef, result TalkootInboxResult; read-only
+	MethodTalkootProposals Method = "talkoot.proposals" // params TalkootProposalsParams, result TalkootProposalsResult; read-only
+	MethodTalkootPropose   Method = "talkoot.propose"   // params TalkootProposeParams, result TalkootProposal
+	MethodTalkootDecide    Method = "talkoot.decide"    // params TalkootDecideParams, result TalkootProposal
+	MethodTalkootCreate    Method = "talkoot.create"    // params TalkootCreateParams, result TalkootView
+	MethodTalkootUpdate    Method = "talkoot.update"    // params TalkootUpdateParams, result TalkootView
+	MethodTalkootPost      Method = "talkoot.post"      // params TalkootPostParams, result TalkootEnvelope
+	MethodTalkootPause     Method = "talkoot.pause"     // params TalkootPauseParams
+	MethodTalkootResume    Method = "talkoot.resume"    // params TalkootResumeParams
 
 	// --- tenants group (served ONLY by the `terva serve` supervisor; see
 	// [GroupTenants] and tenants.go — deliberately absent from the dispatch
@@ -473,7 +477,8 @@ func (m Method) Group() Group {
 	case MethodSecretsStatus, MethodSecretsList, MethodSecretsGrant, MethodSecretsRevoke,
 		MethodSecretsForget:
 		return GroupSecrets
-	case MethodTalkootList, MethodTalkootGet, MethodTalkootRoom, MethodTalkootCreate,
+	case MethodTalkootList, MethodTalkootGet, MethodTalkootRoom, MethodTalkootInbox, MethodTalkootCreate,
+		MethodTalkootProposals, MethodTalkootPropose, MethodTalkootDecide,
 		MethodTalkootUpdate, MethodTalkootPost, MethodTalkootPause, MethodTalkootResume:
 		return GroupTalkoot
 	case MethodTenantsList, MethodTenantsSuspend, MethodTenantsResume:

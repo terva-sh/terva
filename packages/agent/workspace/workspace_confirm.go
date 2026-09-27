@@ -76,14 +76,10 @@ func (c *webConfirmer) ConfirmWithRequest(ctx context.Context, cr permission.Con
 		Preview: cr.Preview,
 		Scopes:  ctrlproto.GrantScopesFromCore(cr.Scopes),
 	}
-	s.mu.Lock()
-	s.permReq[callID] = req
-	s.mu.Unlock()
+	s.openPermission(req)
 	defer func() {
 		release()
-		s.mu.Lock()
-		delete(s.permReq, callID)
-		s.mu.Unlock()
+		s.closePermission(callID)
 		s.broadcast(ctrlproto.PermissionResolvedEvent(callID))
 	}()
 
@@ -155,14 +151,10 @@ func (c *workerConfirmer) Confirm(ctx context.Context, toolName, preview string)
 	// "worker <id>:" preview stay as human-facing labeling, not the contract.
 	req := ctrlproto.PermissionRequest{CallID: callID, Tool: toolName, Preview: preview, Agent: c.agentID}
 	ch, release, _ := s.permPark.Park(callID) // per-agent seq: never collides
-	s.mu.Lock()
-	s.permReq[callID] = req
-	s.mu.Unlock()
+	s.openPermission(req)
 	defer func() {
 		release()
-		s.mu.Lock()
-		delete(s.permReq, callID)
-		s.mu.Unlock()
+		s.closePermission(callID)
 		s.broadcast(ctrlproto.PermissionResolvedEvent(callID))
 	}()
 
@@ -192,14 +184,10 @@ func (a *webAsker) Ask(ctx context.Context, qs []core.UserQuestion) ([]core.User
 
 	req := ctrlproto.NewAskRequest(askID, qs)
 	ch, release, _ := s.askPark.Park(askID) // minted seq: never collides
-	s.mu.Lock()
-	s.askReq[askID] = req
-	s.mu.Unlock()
+	s.openAsk(req)
 	defer func() {
 		release()
-		s.mu.Lock()
-		delete(s.askReq, askID)
-		s.mu.Unlock()
+		s.closeAsk(askID)
 		s.broadcast(ctrlproto.AskResolvedEvent(askID))
 	}()
 

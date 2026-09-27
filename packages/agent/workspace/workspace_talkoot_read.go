@@ -159,7 +159,7 @@ func (w *Workspace) talkootRead(sessID string, run *talkootRun, member string, r
 	if b == nil || b.run != run || b.member != member {
 		return
 	}
-	if err := (talkootSeat{b: b}).read(r); err != nil {
+	if err := (talkootSeat{b: b, w: w}).read(r); err != nil {
 		w.diagf("talkoot: session %s could not report a read: %v", sessID, err)
 	}
 }

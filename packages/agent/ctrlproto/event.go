@@ -129,6 +129,13 @@ const (
 	// EventTalkootRoster says a person changed the roster (Talkoot.Line, which
 	// names who). A client re-reads the talkoot with talkoot.get.
 	EventTalkootRoster = "talkoot_roster"
+	// EventTalkootInbox carries a question or an approval that a member now
+	// waits on (Talkoot.Card), on the room's address.
+	EventTalkootInbox = "talkoot_inbox"
+	// EventTalkootInboxResolved says that a card left the inbox: a person
+	// answered it, or the member's turn ended first (Talkoot.Card, with the
+	// request unset).
+	EventTalkootInboxResolved = "talkoot_inbox_resolved"
 	// EventTalkootsChanged signals that the set of talkoots this daemon runs
 	// changed. Like sessions_changed it carries no payload and rides
 	// [AddrWorkspace], and a client answers it with talkoot.list.
