@@ -680,4 +680,8 @@ var dispatch = map[Method]handler{
 	MethodTalkootResume: act(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootResumeParams) error {
 		return c.ResumeTalkoot(ctx, p)
 	}),
+	MethodTalkootRecruit: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootRecruitParams) (SessionResult, error) {
+		info, err := c.RecruitTalkoot(ctx, p)
+		return SessionResult{Session: info}, err
+	}),
 }

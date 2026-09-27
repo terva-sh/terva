@@ -80,7 +80,8 @@ func TestEveryBuiltinPersonaHasAGroup(t *testing.T) {
 
 	want := map[string]string{
 		"Dramaturgi": "Stage", "Kartoittaja": "Stage", "Kertoja": "Stage",
-		"Seppä": "Stage", "Toimittaja": "Stage",
+		"Hautoja": "Talkoot",
+		"Seppä":   "Stage", "Toimittaja": "Stage",
 		"Mieli":      "Coding",
 		"KUSANAGI-2": "Deliberation", "MAGATAMA-3": "Deliberation", "YATA-1": "Deliberation",
 		"Arkkitehti": "Review", "Huoltaja": "Review", "Kirjuri": "Review",

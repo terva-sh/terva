@@ -909,6 +909,11 @@ func (w *Workspace) createSeededLocked(opts ctrlproto.CreateOpts, seed *sceneSee
 	if err := sess.SetCreationSpec(opts.Persona, opts.Experience, opts.Card, opts.Cast, opts.Greeting); err != nil {
 		return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "persist session spec: %v", err)
 	}
+	if opts.Recruit != "" {
+		if err := sess.SetRecruit(opts.Recruit); err != nil {
+			return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "persist the recruit binding: %v", err)
+		}
+	}
 	// A default saved user persona pre-fills a fresh immersive session's identity,
 	// so a new chat opens as "you" rather than the literal "User" (rough-edge #5).
 	// Stamped into meta before buildSession, so its name threads into the {{user}}
@@ -993,6 +998,13 @@ func (w *Workspace) createSeededLocked(opts ctrlproto.CreateOpts, seed *sceneSee
 			}
 			msgs = append(msgs, m)
 		}
+	}
+	if opts.Recruit != "" {
+		m, err := recruitGreetingMessage(sess, opts.Recruit)
+		if err != nil {
+			return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "seed the recruiter greeting: %v", err)
+		}
+		msgs = append(msgs, m)
 	}
 	id := build.SessionIDFromPath(sess.Path)
 	// Untrimmed: the in-memory transcript IS the on-disk one, so the zero
@@ -1341,6 +1353,13 @@ func (w *Workspace) Sessions(ctx context.Context) ([]ctrlproto.SessionInfo, erro
 }
 
 func (w *Workspace) CreateSession(ctx context.Context, opts ctrlproto.CreateOpts) (ctrlproto.SessionInfo, error) {
+	// ⚠️ Checked before w.mu: talkootRunOf takes the talkoot lock, and a
+	// talkoot that seats a member takes w.mu under its own.
+	if opts.Recruit != "" {
+		if err := w.checkRecruit(&opts); err != nil {
+			return ctrlproto.SessionInfo{}, err
+		}
+	}
 	w.mu.Lock()
 	s, err := w.createLocked(opts)
 	w.mu.Unlock()

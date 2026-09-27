@@ -49,6 +49,7 @@ func claudeBackend() Backend {
 		Interrupt:     interruptClaude,
 		ReportsCost:   true,
 		Tools:         claudeTools,
+		Installed:     claudeInstalled,
 		Cursor:        claudeCursor,
 		// The identity is already on --append-system-prompt (see claudeCommand),
 		// so the opening turn is the WORK alone. Sending Briefing.Text here would
@@ -59,6 +60,13 @@ func claudeBackend() Backend {
 		// --permission-prompt-tool at a `terva mcp-approval-bridge` reaching it.
 		ApprovalSocket: true,
 	}
+}
+
+// claudeInstalled reports whether a claude binary is on PATH, which is where
+// claudeCommand looks for it.
+func claudeInstalled() bool {
+	_, err := exec.LookPath("claude")
+	return err == nil
 }
 
 // claudeCommand builds the child invocation.

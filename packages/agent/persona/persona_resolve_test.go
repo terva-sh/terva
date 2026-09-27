@@ -18,19 +18,20 @@ func freshHome(t *testing.T) string {
 	return home
 }
 
-// The embedded crew is the 16 personas (Mieli + 7 review specialists +
+// The embedded crew is the 17 personas (Mieli + 7 review specialists +
 // Kertoja the play director + Seppä the card doctor + Toimittaja the
 // character editor + Dramaturgi the session doctor + Kartoittaja the
-// creator + the 3 raati panelists); the team READMEs are not personas.
+// creator + Hautoja the Talkoot recruiter + the 3 raati panelists); the team
+// READMEs are not personas.
 func TestEmbeddedCrew(t *testing.T) {
 	freshHome(t)
 	got := listEmbedded()
-	if len(got) != 16 {
+	if len(got) != 17 {
 		names := make([]string, len(got))
 		for i, p := range got {
 			names[i] = p.Name
 		}
-		t.Fatalf("embedded crew: got %d personas %v, want 16", len(got), names)
+		t.Fatalf("embedded crew: got %d personas %v, want 17", len(got), names)
 	}
 	by := map[string]Persona{}
 	for _, p := range got {

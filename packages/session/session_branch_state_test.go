@@ -301,3 +301,53 @@ func TestBranchLoreIsItsOwnCopy(t *testing.T) {
 		t.Errorf("editing the branch changed the parent's lore to %q", got)
 	}
 }
+
+// A recruiter binding is granted to one session by a steer verb, so neither a
+// fork nor an import carries it. Both are only writes, and a copy that kept it
+// would be a recruiter made without the authority to make one.
+func TestARecruiterBindingDoesNotTravel(t *testing.T) {
+	dir := testsupport.TempDir(t)
+	s, err := NewSession(dir, dir, "anthropic", "claude-opus-5", "0.126.19")
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	seed(t, s)
+	if err := s.SetRecruit("crew"); err != nil {
+		t.Fatalf("SetRecruit: %v", err)
+	}
+	path := s.Path
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	parent, _, err := OpenSession(path)
+	if err != nil {
+		t.Fatalf("open parent: %v", err)
+	}
+	defer parent.Close()
+	if parent.Meta.Recruit != "crew" {
+		t.Fatalf("the probe is void: the parent holds recruit %q", parent.Meta.Recruit)
+	}
+
+	branch, err := BranchSession(path, dir, dir, "0.126.19", 1)
+	if err != nil {
+		t.Fatalf("BranchSession: %v", err)
+	}
+	exported, err := ExportSession(path, testsupport.TempDir(t))
+	if err != nil {
+		t.Fatalf("ExportSession: %v", err)
+	}
+	imported, err := ImportSession(exported, testsupport.TempDir(t), dir, "0.126.19")
+	if err != nil {
+		t.Fatalf("ImportSession: %v", err)
+	}
+	for name, p := range map[string]string{"branch": branch, "import": imported} {
+		c, _, err := OpenSession(p)
+		if err != nil {
+			t.Fatalf("open %s: %v", name, err)
+		}
+		if c.Meta.Recruit != "" {
+			t.Errorf("the %s kept the recruiter binding %q", name, c.Meta.Recruit)
+		}
+		c.Close()
+	}
+}

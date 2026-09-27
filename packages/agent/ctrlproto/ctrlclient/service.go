@@ -265,6 +265,12 @@ func (s *Service) PostTalkoot(ctx context.Context, p ctrlproto.TalkootPostParams
 	return r, err
 }
 
+func (s *Service) RecruitTalkoot(ctx context.Context, p ctrlproto.TalkootRecruitParams) (ctrlproto.SessionInfo, error) {
+	var r ctrlproto.SessionResult
+	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootRecruit, p, &r)
+	return r.Session, err
+}
+
 func (s *Service) PauseTalkoot(ctx context.Context, p ctrlproto.TalkootPauseParams) error {
 	return s.c.Call(ctx, "", ctrlproto.MethodTalkootPause, p, nil)
 }

@@ -79,6 +79,15 @@ func (w *Workspace) ResumeTalkoot(ctx context.Context, p ctrlproto.TalkootResume
 	return talkootWireErr(w.talkootResume(ctx, p.ID, p.By, p.Member, p.Chain), ctrlproto.CodeBadRequest)
 }
 
+// RecruitTalkoot creates a recruiter session through CreateSession, which
+// runs the recruiter checks. It is the only door the wire has to one.
+func (w *Workspace) RecruitTalkoot(ctx context.Context, p ctrlproto.TalkootRecruitParams) (ctrlproto.SessionInfo, error) {
+	if strings.TrimSpace(p.ID) == "" {
+		return ctrlproto.SessionInfo{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "talkoot: name the talkoot to recruit for")
+	}
+	return w.CreateSession(ctx, ctrlproto.CreateOpts{Recruit: p.ID, Persona: p.Persona})
+}
+
 func (w *Workspace) TalkootInbox(ctx context.Context, p ctrlproto.TalkootRef) (ctrlproto.TalkootInboxResult, error) {
 	cards, err := w.talkootInbox(ctx, p.ID)
 	if err != nil {
@@ -92,7 +101,7 @@ func (w *Workspace) ProposeTalkoot(ctx context.Context, p ctrlproto.TalkootPropo
 		return ctrlproto.TalkootProposal{}, ctrlproto.Wrap(ctrlproto.CodeBadRequest,
 			fmt.Errorf("talkoot: %q must name a person in 1 to 64 letters, digits, and . _ @ -", p.By))
 	}
-	out, err := w.talkootPropose(p.ID, humanBy(p.By), wireOps(p.Ops), p.Undo, p.Why, nil)
+	out, err := w.talkootPropose(p.ID, humanBy(p.By), wireOps(p.Ops), p.Undo, p.Why, "", nil)
 	if err != nil {
 		return ctrlproto.TalkootProposal{}, talkootWireErr(err, ctrlproto.CodeBadRequest)
 	}

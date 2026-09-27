@@ -302,6 +302,13 @@ func runAttachMode(ctx context.Context, args build.Args, version string) error {
 	}
 	var cur ctrlproto.SessionInfo
 	switch {
+	case args.Recruit != "":
+		// A recruiter session is always new: it opens on its static
+		// greeting and waits for the person to write first.
+		cur, err = svc.RecruitTalkoot(ctx, ctrlproto.TalkootRecruitParams{ID: args.Recruit, Persona: args.Persona})
+		if err != nil {
+			return fmt.Errorf("attach: --recruit %s: %w", args.Recruit, err)
+		}
 	case args.ResumeID != "":
 		cur, err = svc.ResumeSession(ctx, build.SessionIDFromPath(args.ResumeID))
 		if err != nil {

@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -40,34 +39,6 @@ import (
 // dominate it; the default system prompt is ~240), paid once per cache lifetime
 // rather than per turn.
 const personaCharterBudget = 3500
-
-var (
-	personaMacroRe  = regexp.MustCompile(`\{\{char\}\}|\{\{user\}\}|<START>`)
-	personaAccentRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
-
-	// Code regions, blanked before the macro scan. Fences first: a fenced block
-	// may contain backticks, and stripping spans first would leave its fence
-	// markers behind to pair up with the wrong thing.
-	personaFenceRe    = regexp.MustCompile("(?s)```.*?```")
-	personaCodeSpanRe = regexp.MustCompile("`[^`\n]*`")
-)
-
-// stripCodeRegions blanks fenced blocks and inline code spans.
-//
-// The macro check is about a macro that would be EMITTED: personas get no
-// substitution, so a `{{char}}` left over from a converted character card
-// reaches the model as four literal braces where a name should be. A macro
-// written as code is being SHOWN, not used — and terva ships two personas whose
-// whole job is editing character cards, so charters that discuss macros are a
-// normal thing to write, not a mistake.
-//
-// Blanking rather than deleting: a scan only asks whether a match EXISTS, and
-// splicing the text around removals could join two halves into a macro that was
-// never written.
-func stripCodeRegions(s string) string {
-	blank := func(m string) string { return strings.Repeat(" ", len(m)) }
-	return personaCodeSpanRe.ReplaceAllStringFunc(personaFenceRe.ReplaceAllStringFunc(s, blank), blank)
-}
 
 // runPersonaCommand dispatches `terva persona ...` subcommands. Returns
 // (handled=true, err) when rawArgs starts with "persona"; otherwise
@@ -206,28 +177,9 @@ func validateOnePersona(path string) (ok bool) {
 		fmt.Printf("✗ %s: %v\n", path, err)
 		return false
 	}
-	var problems, warns, notes []string
-	p, perr := persona.Parse(string(raw), path)
-	if perr != nil {
-		problems = append(problems, perr.Error())
-	} else {
-		if p.Charter == "" {
-			problems = append(problems, "empty charter body")
-		}
-		if p.AccentColor != "" && !personaAccentRe.MatchString(p.AccentColor) {
-			problems = append(problems, fmt.Sprintf("accent_color %q is not a #RRGGBB hex value", p.AccentColor))
-		}
-		// Resolve `extends` here so the verdict is about the charter that will
-		// actually be assembled, not the half of it in this file. A bad extends
-		// is a hard error at run time (ResolvePersona composes on every path),
-		// so it must be a problem here too — reporting it as a warning would
-		// print a ✓ for a persona that cannot start.
-		composed, cerr := persona.ComposeCharter(p)
-		if cerr != nil {
-			problems = append(problems, cerr.Error())
-		} else {
-			p = composed
-		}
+	var warns, notes []string
+	p, problems := persona.Check(raw, path)
+	if len(problems) == 0 {
 		// The static-block budget only applies to an ADDITIVE charter, which the
 		// host injects as a bounded block. An immersive charter becomes the whole
 		// system prompt (the --system-prompt path), so the budget does not bind.
@@ -241,9 +193,6 @@ func validateOnePersona(path string) (ok bool) {
 		if p.Charter != "" {
 			notes = append(notes, charterScopeNote(p))
 		}
-	}
-	if personaMacroRe.MatchString(stripCodeRegions(string(raw))) {
-		problems = append(problems, "leftover SillyTavern macro ({{char}}/{{user}}/<START>) — personas get no macro substitution, so it reaches the model literally; write it as `code` if you meant to discuss it")
 	}
 
 	if len(problems) > 0 {

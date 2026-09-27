@@ -120,6 +120,7 @@ talkoot.pause	talkoot
 talkoot.post	talkoot
 talkoot.proposals	talkoot
 talkoot.propose	talkoot
+talkoot.recruit	talkoot
 talkoot.resume	talkoot
 talkoot.room	talkoot
 talkoot.update	talkoot

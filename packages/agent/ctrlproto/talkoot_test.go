@@ -1,6 +1,7 @@
 package ctrlproto
 
 import (
+	"encoding/json"
 	"testing"
 )
 
@@ -107,7 +108,7 @@ func TestTalkootFromAddr(t *testing.T) {
 // that changes or wakes a talkoot.
 func TestTheSteerVerbsNeedTheSteerBit(t *testing.T) {
 	steer := []Method{MethodTalkootCreate, MethodTalkootUpdate, MethodTalkootPost, MethodTalkootPause, MethodTalkootResume,
-		MethodTalkootPropose, MethodTalkootDecide}
+		MethodTalkootPropose, MethodTalkootDecide, MethodTalkootRecruit}
 	for _, m := range steer {
 		if m.Capabilities()&CapSteer == 0 {
 			t.Errorf("%s does not need CapSteer", m)
@@ -320,5 +321,24 @@ func TestARoomNeedsReadAuthority(t *testing.T) {
 				t.Errorf("subscribe to a room answered %q (%+v), want %q", got, r.Error, tc.want)
 			}
 		})
+	}
+}
+
+// sessions.create needs only CapWrite, so it must not bind a recruiter, which
+// files roster proposals. The field never crosses the wire, and
+// talkoot.recruit, a steer verb, is the only door to one.
+func TestSessionsCreateCannotBindARecruiter(t *testing.T) {
+	var o CreateOpts
+	if err := json.Unmarshal([]byte(`{"persona":"hautoja","recruit":"crew"}`), &o); err != nil {
+		t.Fatal(err)
+	}
+	if o.Recruit != "" {
+		t.Fatalf("sessions.create decoded recruit %q from the wire", o.Recruit)
+	}
+	if MethodSessionCreate.Capabilities()&CapSteer != 0 {
+		t.Fatal("sessions.create needs CapSteer; the recruiter door can move back to it")
+	}
+	if MethodTalkootRecruit.Permits(CapRead | CapWrite | CapSpend) {
+		t.Fatal("talkoot.recruit is open to a caller without CapSteer")
 	}
 }

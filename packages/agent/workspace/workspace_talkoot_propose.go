@@ -30,9 +30,11 @@ const maxWhyBytes = 4 * 1024
 // was, such as an edit to the value a field already has.
 var errProposalChangesNothing = errors.New("talkoot: the proposal changes no member")
 
-// talkootPropose records a proposal from a member, or from a person when from
-// starts with human:. still, when set, runs inside the router call and
-// refuses for a seat that an update retired.
+// talkootPropose records a proposal from a member, from a person when from
+// starts with human:, or from a recruiter session when it starts with
+// recruiter:. draft, when set, is a recruiter's new persona file. still, when
+// set, runs inside the router call and refuses for a seat that an update
+// retired.
 //
 // It checks the whole batch against the roster rules before anything is
 // written, so a batch that fails makes no envelope and no card.
@@ -43,13 +45,34 @@ var errProposalChangesNothing = errors.New("talkoot: the proposal changes no mem
 // while it revokes seats, and a revoke waits for the seat call. run.propose
 // is safe to wait on, because its holder waits only for mu, and an update
 // releases mu before it revokes.
-func (w *Workspace) talkootPropose(id, from string, ops []talkoot.Op, undo, why string, still func() error) (talkoot.Proposal, error) {
+func (w *Workspace) talkootPropose(id, from string, ops []talkoot.Op, undo, why, draft string, still func() error) (talkoot.Proposal, error) {
 	run, err := w.talkootRunOf(id)
 	if err != nil {
 		return talkoot.Proposal{}, err
 	}
 	if len(why) > maxWhyBytes {
 		return talkoot.Proposal{}, fmt.Errorf("talkoot: the reason is %d bytes, above the %d limit", len(why), maxWhyBytes)
+	}
+	recruiter := strings.HasPrefix(from, talkoot.RecruiterPrefix)
+	var pd *talkoot.PersonaDraft
+	if recruiter {
+		if undo != "" {
+			return talkoot.Proposal{}, errors.New("talkoot: a recruiter proposes members, and a person undoes a change")
+		}
+		if err := checkRecruitOps(ops); err != nil {
+			return talkoot.Proposal{}, err
+		}
+	}
+	if draft != "" {
+		// 🔑 Only a recruiter writes a persona through a proposal. A member's
+		// talkoot_propose has no persona field, and a person writes one
+		// through the persona library.
+		if !recruiter {
+			return talkoot.Proposal{}, errors.New("talkoot: only a recruiter proposes a new persona")
+		}
+		if pd, err = checkPersonaDraft(draft, ops); err != nil {
+			return talkoot.Proposal{}, err
+		}
 	}
 	if undo != "" {
 		if len(ops) > 0 {
@@ -70,7 +93,7 @@ func (w *Workspace) talkootPropose(id, from string, ops []talkoot.Op, undo, why 
 	if err != nil {
 		return talkoot.Proposal{}, fmt.Errorf("talkoot: read the roster: %w", err)
 	}
-	changes, _, _, err := w.proposalPreview(id, text, ops)
+	changes, _, _, err := w.proposalPreview(id, text, ops, pd)
 	if err != nil {
 		return talkoot.Proposal{}, err
 	}
@@ -97,6 +120,8 @@ func (w *Workspace) talkootPropose(id, from string, ops []talkoot.Op, undo, why 
 		}
 		if person, ok := strings.CutPrefix(from, talkoot.HumanPrefix); ok {
 			env, err = rt.ProposeAs(person, summary)
+		} else if session, ok := strings.CutPrefix(from, talkoot.RecruiterPrefix); ok {
+			env, err = rt.ProposeRecruit(session, summary)
 		} else {
 			env, err = rt.Propose(from, summary)
 		}
@@ -109,7 +134,7 @@ func (w *Workspace) talkootPropose(id, from string, ops []talkoot.Op, undo, why 
 	p := talkoot.Proposal{
 		ID: talkoot.NewProposalID(now), Proposer: from, At: now, Base: talkoot.RosterRevision(text),
 		Ops: ops, Summary: summary, Why: why, Undoes: undo, Envelope: env.ID,
-		Changes: changes, Status: talkoot.ProposalPending,
+		Changes: changes, Status: talkoot.ProposalPending, Persona: pd,
 	}
 	if err := talkoot.SaveProposal(run.dir, p); err != nil {
 		// ⚠️ The room holds the envelope, and no card waits for it. The
@@ -121,8 +146,9 @@ func (w *Workspace) talkootPropose(id, from string, ops []talkoot.Op, undo, why 
 }
 
 // proposalPreview applies a batch to the roster text and checks the result as
-// an update would: the roster rules and this workspace's own.
-func (w *Workspace) proposalPreview(id string, text []byte, ops []talkoot.Op) ([]talkoot.MemberChange, []byte, talkoot.Roster, error) {
+// an update would: the roster rules and this workspace's own. d, when set, is
+// a drafted persona that resolves as if it were in the library.
+func (w *Workspace) proposalPreview(id string, text []byte, ops []talkoot.Op, d *talkoot.PersonaDraft) ([]talkoot.MemberChange, []byte, talkoot.Roster, error) {
 	cur, err := talkoot.Parse(text, id+"/"+talkoot.FileName)
 	if err != nil {
 		return nil, nil, talkoot.Roster{}, err
@@ -131,7 +157,7 @@ func (w *Workspace) proposalPreview(id string, text []byte, ops []talkoot.Op) ([
 	if err != nil {
 		return nil, nil, talkoot.Roster{}, err
 	}
-	nr, err := w.parseRoster(id, next)
+	nr, err := w.parseRosterEnv(id, next, envWithDraft(d))
 	if err != nil {
 		return nil, nil, talkoot.Roster{}, err
 	}
@@ -277,7 +303,7 @@ func (w *Workspace) talkootDecide(ctx context.Context, id, by, pid, decision str
 	} else if talkoot.RosterRevision(text) != p.Base {
 		return refused(fmt.Errorf("%w; decline it, or approve it with its operations edited against the roster as it is now", talkoot.ErrProposalStale))
 	}
-	changes, next, nr, err := w.proposalPreview(id, text, ops)
+	changes, next, nr, err := w.proposalPreview(id, text, ops, p.Persona)
 	if err != nil {
 		if edit {
 			// The person's own edit failed. The proposal as made has no new
@@ -285,6 +311,27 @@ func (w *Workspace) talkootDecide(ctx context.Context, id, by, pid, decision str
 			return talkoot.Proposal{}, err
 		}
 		return refused(err)
+	}
+	// A drafted persona is written only when the operations that apply still
+	// name it. A person's edit can drop it, and then no file is written.
+	writeDraft := opsUseDraft(ops, p.Persona)
+	if writeDraft {
+		if !w.libraryTrusted() {
+			return refused(errors.New("talkoot: the approval writes a persona, and writing a persona requires a trusted workspace"))
+		}
+		if taken := personaTaken(p.Persona); taken != "" {
+			return refused(fmt.Errorf("talkoot: the persona name %q is now taken by %s; decline this proposal, and ask the recruiter for another name", p.Persona.Name, taken))
+		}
+		// 🚨 The record is a file, so it can change after propose checked it.
+		// The write checks the draft again, as propose did.
+		if !strings.HasPrefix(p.Proposer, talkoot.RecruiterPrefix) {
+			return refused(fmt.Errorf("talkoot: only a recruiter proposes a new persona, and this proposal came from %s", p.Proposer))
+		}
+		if d, err := checkPersonaDraft(p.Persona.Text, ops); err != nil {
+			return refused(err)
+		} else if d.Name != p.Persona.Name {
+			return refused(fmt.Errorf("talkoot: the persona text names %q, and the proposal names %q", d.Name, p.Persona.Name))
+		}
 	}
 	// 🔑 The record says approved before the roster changes, so every roster
 	// change from a proposal has an approved record behind it, and its undo
@@ -297,13 +344,37 @@ func (w *Workspace) talkootDecide(ctx context.Context, id, by, pid, decision str
 	if err := talkoot.SaveProposal(run.dir, p); err != nil {
 		return talkoot.Proposal{}, fmt.Errorf("talkoot: the approval of proposal %s could not be recorded, so the roster is unchanged: %w", p.ID, err)
 	}
-	if _, err := w.applyRosterLocked(ctx, run, by, next, nr, rosterSource{proposal: p.ID, proposer: p.Proposer, edited: edit}); err != nil {
+	unapprove := func() {
 		if rerr := talkoot.SaveProposal(run.dir, waiting); rerr != nil {
 			// ⚠️ The record says approved over a roster that did not change.
 			// Its undo changes no member, so the daemon refuses it.
 			w.diagf("talkoot %s: proposal %s was not applied, and its record could not go back to pending: %v", id, p.ID, rerr)
 		}
+	}
+	// The persona goes in before the roster that names it, so a roster never
+	// names a persona the library does not hold.
+	var written string
+	if writeDraft {
+		if written, err = writePersonaDraft(p.Persona); err != nil {
+			// A file the library cannot read still holds the path, and the
+			// name check above does not see it. refused puts the record back.
+			return refused(fmt.Errorf("%w; the roster is unchanged", err))
+		}
+	}
+	if _, err := w.applyRosterLocked(ctx, run, by, next, nr, rosterSource{proposal: p.ID, proposer: p.Proposer, edited: edit}); err != nil {
+		if written != "" {
+			if rerr := os.Remove(written); rerr != nil {
+				// ⚠️ The file now holds the name, so the next approval would
+				// refuse it as taken. The card names the file to remove.
+				w.diagf("talkoot %s: proposal %s was not applied, and the persona it wrote could not be removed: %v", id, p.ID, rerr)
+				return refused(fmt.Errorf("talkoot: the roster change failed (%v), and the persona file %s it wrote could not be removed; remove that file before you approve again", err, written))
+			}
+		}
+		unapprove()
 		return talkoot.Proposal{}, err
+	}
+	if written != "" {
+		w.broadcastLibraryChanged()
 	}
 	resolved()
 	return p, nil
@@ -339,8 +410,11 @@ func wireProposal(p talkoot.Proposal) ctrlproto.TalkootProposal {
 		Status: p.Status, DecidedBy: p.DecidedBy, DecidedAt: p.DecidedAt, Reason: p.Reason,
 		Edited: p.Edited, Problem: p.Problem,
 	}
-	if !strings.HasPrefix(p.Proposer, talkoot.HumanPrefix) {
+	if isMemberProposer(p.Proposer) {
 		out.SelfAuthority = talkoot.SelfAuthority(p.Proposer, p.Ops)
+	}
+	if p.Persona != nil {
+		out.Persona = &ctrlproto.TalkootPersonaDraft{Name: p.Persona.Name, Text: p.Persona.Text}
 	}
 	for _, op := range p.Ops {
 		out.Ops = append(out.Ops, ctrlproto.TalkootOp{Op: op.Op, Member: op.Member, Set: op.Set})
@@ -360,12 +434,22 @@ func proposalTitle(p talkoot.Proposal) string {
 		return "proposal " + p.ID + " does not read"
 	case p.Proposer == "":
 		return "proposal " + p.ID + ", whose record did not read, was " + p.Status
-	case !strings.HasPrefix(p.Proposer, talkoot.HumanPrefix) && talkoot.SelfAuthority(p.Proposer, p.Ops):
+	case isMemberProposer(p.Proposer) && talkoot.SelfAuthority(p.Proposer, p.Ops):
 		return p.Proposer + " proposes a change to its own authority: " + p.Summary
+	case strings.HasPrefix(p.Proposer, talkoot.RecruiterPrefix) && p.Persona != nil:
+		return "recruiter session " + strings.TrimPrefix(p.Proposer, talkoot.RecruiterPrefix) + " proposes, with the new persona " + p.Persona.Name + ": " + p.Summary
+	case strings.HasPrefix(p.Proposer, talkoot.RecruiterPrefix):
+		return "recruiter session " + strings.TrimPrefix(p.Proposer, talkoot.RecruiterPrefix) + " proposes: " + p.Summary
 	case p.Undoes != "":
 		return p.Proposer + " proposes an undo: " + p.Summary
 	}
 	return p.Proposer + " proposes: " + p.Summary
+}
+
+// isMemberProposer reports whether a proposer is a member, and not a person or
+// a recruiter.
+func isMemberProposer(proposer string) bool {
+	return !strings.HasPrefix(proposer, talkoot.HumanPrefix) && !strings.HasPrefix(proposer, talkoot.RecruiterPrefix)
 }
 
 func wireChanges(cs []talkoot.MemberChange) []ctrlproto.TalkootMemberChange {
@@ -409,7 +493,7 @@ func (s talkootSeat) Propose(ops []talkoot.Op, undo, why string) (talkoot.Propos
 	if s.b.revoked {
 		return talkoot.Proposal{}, errSeatRevoked
 	}
-	return s.w.talkootPropose(s.b.run.id, s.b.member, ops, undo, why, func() error {
+	return s.w.talkootPropose(s.b.run.id, s.b.member, ops, undo, why, "", func() error {
 		if s.b.retired.Load() {
 			return errSeatRevoked
 		}

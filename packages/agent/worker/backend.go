@@ -149,6 +149,13 @@ type Backend struct {
 	// --allowedTools pre-approves the tools it names, so it could widen past
 	// the posture. --tools restricts the built-in set.
 	Tools func(names []string) ([]string, error)
+
+	// Installed reports whether this machine can run the backend now, such as
+	// whether its binary is on PATH. Nil means always, as for the terva
+	// backends, which run this binary. The Talkoot recruiter offers only an
+	// installed driver. Nothing refuses a dispatch on it: the child's own
+	// failure to start says more than a guess made in advance.
+	Installed func() bool
 }
 
 // command builds the child for d. A tools list on a backend with no Tools

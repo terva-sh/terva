@@ -162,6 +162,12 @@ func (w *Workspace) talkootCreate(ctx context.Context, id string, text []byte) (
 // parseRoster checks a roster the way Load does, and the rules this
 // workspace adds: it is homed here, and it has no native member in a worktree.
 func (w *Workspace) parseRoster(id string, text []byte) (talkoot.Roster, error) {
+	return w.parseRosterEnv(id, text, talkootEnv())
+}
+
+// parseRosterEnv is parseRoster against env, which a recruiter's proposal
+// widens by the persona it drafted.
+func (w *Workspace) parseRosterEnv(id string, text []byte, env talkoot.Env) (talkoot.Roster, error) {
 	if !config.TalkootEnabled() {
 		return talkoot.Roster{}, talkoot.ErrDisabled
 	}
@@ -175,7 +181,7 @@ func (w *Workspace) parseRoster(id string, text []byte) (talkoot.Roster, error) 
 		return talkoot.Roster{}, err
 	}
 	r.ID = id
-	if err := talkoot.Validate(r, talkootEnv()); err != nil {
+	if err := talkoot.Validate(r, env); err != nil {
 		return talkoot.Roster{}, err
 	}
 	if !sameDir(r.Home, w.cwd) {

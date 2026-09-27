@@ -305,7 +305,7 @@ func (rt *Router) replay(l Line) {
 			rt.owed[owedKey(e.ID, to)] = len(rt.held)
 			rt.held = append(rt.held, pending{env: *e, to: to})
 		}
-		if !strings.HasPrefix(e.From, HumanPrefix) {
+		if !strings.HasPrefix(e.From, HumanPrefix) && !strings.HasPrefix(e.From, RecruiterPrefix) {
 			// Only the envelopes still inside a window matter to a guard, so
 			// replay loads no more than those.
 			if rt.now().Sub(e.At) < rt.limits.SendWindow {
@@ -527,6 +527,27 @@ func (rt *Router) ProposeAs(human, summary string) (Envelope, error) {
 	defer rt.mu.Unlock()
 	now := rt.now()
 	e := rt.envelope(HumanPrefix+human, Outgoing{To: []string{}, Kind: KindProposal, Body: summary}, now)
+	e.Chain = Chain{Root: e.ID}
+	if err := rt.room.Append(Line{Type: LineEnvelope, At: now, Envelope: &e}); err != nil {
+		return Envelope{}, err
+	}
+	return e, nil
+}
+
+// ProposeRecruit records a recruiter session's roster proposal. A recruiter is
+// not a member, so no member guard applies, and like a person's proposal it
+// starts its own chain. The workspace's cap on pending proposals bounds it.
+func (rt *Router) ProposeRecruit(session, summary string) (Envelope, error) {
+	if !tokenPattern.MatchString(session) {
+		return Envelope{}, fmt.Errorf("talkoot: the recruiter session %q must be 1 to 64 letters, digits, and . _ @ -", session)
+	}
+	if err := checkSummary(summary); err != nil {
+		return Envelope{}, err
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	now := rt.now()
+	e := rt.envelope(RecruiterPrefix+session, Outgoing{To: []string{}, Kind: KindProposal, Body: summary}, now)
 	e.Chain = Chain{Root: e.ID}
 	if err := rt.room.Append(Line{Type: LineEnvelope, At: now, Envelope: &e}); err != nil {
 		return Envelope{}, err

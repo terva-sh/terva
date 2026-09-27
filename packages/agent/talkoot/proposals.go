@@ -48,7 +48,8 @@ var ErrProposalStale = errors.New("talkoot: the roster changed since this was pr
 // Proposal is a batch of roster changes that waits for a person.
 type Proposal struct {
 	ID string `json:"id"`
-	// Proposer is a member id, or human: and a name for a person.
+	// Proposer is a member id, human: and a name for a person, or recruiter:
+	// and a session id for a recruiter.
 	Proposer string    `json:"proposer"`
 	At       time.Time `json:"at"`
 	// Base is RosterRevision of talkoot.md when the proposal was made. An
@@ -75,6 +76,22 @@ type Proposal struct {
 	Applied []Op `json:"applied,omitempty"`
 	// Problem says why an approval was refused. The proposal still waits.
 	Problem string `json:"problem,omitempty"`
+	// Persona is a new persona file that a recruiter drafted for the member
+	// the operations add or edit. An approval writes it to the persona
+	// library, byte for byte as the card showed it, before the roster
+	// changes. Only a recruiter's proposal carries one.
+	Persona *PersonaDraft `json:"persona,omitempty"`
+}
+
+// MaxPersonaDraftBytes bounds a drafted persona file. A built-in charter runs
+// near 3 KiB.
+const MaxPersonaDraftBytes = 16 * 1024
+
+// PersonaDraft is a persona file that a proposal carries. Name is the
+// reference the member entry uses, and Text is the whole file.
+type PersonaDraft struct {
+	Name string `json:"name"`
+	Text string `json:"text"`
 }
 
 // RosterRevision names one text of talkoot.md.

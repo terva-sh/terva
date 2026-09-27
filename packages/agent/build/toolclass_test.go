@@ -44,10 +44,10 @@ var registeredElsewhere = map[string]string{
 	"chat_send_file":     "workspace injectExtraTools, iff a chat bridge is bound",
 	"talkoot_send":       "workspace injectExtraTools, iff the session holds a talkoot seat",
 	"talkoot_handoff":    "workspace injectExtraTools, iff the session holds a talkoot seat",
-	"talkoot_roster":     "workspace injectExtraTools, iff the session holds a talkoot seat",
+	"talkoot_roster":     "workspace injectExtraTools, iff the session holds a talkoot seat or recruits for a talkoot",
 	"talkoot_note_write": "workspace injectExtraTools, iff the session holds a talkoot seat",
 	"talkoot_note_read":  "workspace injectExtraTools, iff the session holds a talkoot seat",
-	"talkoot_propose":    "workspace injectExtraTools, iff the session holds a talkoot seat",
+	"talkoot_propose":    "workspace injectExtraTools, iff the session holds a talkoot seat or recruits for a talkoot",
 	"share_file":         "workspace injectExtraTools — every session the workspace host serves",
 }
 

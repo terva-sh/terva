@@ -422,6 +422,7 @@ const (
 	MethodTalkootUpdate    Method = "talkoot.update"    // params TalkootUpdateParams, result TalkootView
 	MethodTalkootPost      Method = "talkoot.post"      // params TalkootPostParams, result TalkootEnvelope
 	MethodTalkootPause     Method = "talkoot.pause"     // params TalkootPauseParams
+	MethodTalkootRecruit   Method = "talkoot.recruit"   // params TalkootRecruitParams, result SessionResult
 	MethodTalkootResume    Method = "talkoot.resume"    // params TalkootResumeParams
 
 	// --- tenants group (served ONLY by the `terva serve` supervisor; see
@@ -479,7 +480,8 @@ func (m Method) Group() Group {
 		return GroupSecrets
 	case MethodTalkootList, MethodTalkootGet, MethodTalkootRoom, MethodTalkootInbox, MethodTalkootCreate,
 		MethodTalkootProposals, MethodTalkootPropose, MethodTalkootDecide,
-		MethodTalkootUpdate, MethodTalkootPost, MethodTalkootPause, MethodTalkootResume:
+		MethodTalkootUpdate, MethodTalkootPost, MethodTalkootPause, MethodTalkootResume,
+		MethodTalkootRecruit:
 		return GroupTalkoot
 	case MethodTenantsList, MethodTenantsSuspend, MethodTenantsResume:
 		return GroupTenants

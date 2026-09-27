@@ -218,7 +218,7 @@ func TestViewerIsRefusedEverySpendingVerb(t *testing.T) {
 func TestOnlyAViewerIsRefusedTheSteerVerbs(t *testing.T) {
 	steer := []ctrlproto.Method{
 		ctrlproto.MethodTalkootCreate, ctrlproto.MethodTalkootUpdate, ctrlproto.MethodTalkootPost,
-		ctrlproto.MethodTalkootPause, ctrlproto.MethodTalkootResume,
+		ctrlproto.MethodTalkootPause, ctrlproto.MethodTalkootResume, ctrlproto.MethodTalkootRecruit,
 	}
 	for _, role := range []Role{RoleOwner, RoleOperator, RoleMember, RoleViewer} {
 		p := Principal{Roles: []Role{role}}

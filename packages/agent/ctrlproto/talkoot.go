@@ -55,6 +55,18 @@ type TalkootController interface {
 	// DecideTalkoot approves or declines a proposal. Only an approval writes
 	// the roster.
 	DecideTalkoot(ctx context.Context, p TalkootDecideParams) (TalkootProposal, error)
+	// RecruitTalkoot creates a recruiter session for a talkoot, such as a
+	// Hautoja session. It holds no seat, and it proposes members for a person
+	// to decide.
+	RecruitTalkoot(ctx context.Context, p TalkootRecruitParams) (SessionInfo, error)
+}
+
+// TalkootRecruitParams is the payload of [MethodTalkootRecruit].
+type TalkootRecruitParams struct {
+	// ID is the talkoot to recruit for. This daemon must run it.
+	ID string `json:"id"`
+	// Persona is the recruiter's persona. Empty means Hautoja.
+	Persona string `json:"persona,omitempty"`
 }
 
 // TalkootSummary is one talkoot in a list.
@@ -355,8 +367,9 @@ const (
 )
 
 // TalkootProposal is a roster change that waits for a person (decision
-// 0025). A member proposes it with talkoot_propose, or a person with
-// talkoot.propose, and only [MethodTalkootDecide] applies it.
+// 0025). A member or a recruiter session proposes it with talkoot_propose, or
+// a person with talkoot.propose, and only [MethodTalkootDecide] applies it.
+// A recruiter's Proposer starts with recruiter: and names its session.
 type TalkootProposal struct {
 	ID       string    `json:"id"`
 	Proposer string    `json:"proposer"`
@@ -390,6 +403,17 @@ type TalkootProposal struct {
 	// Problem says why an approval was refused. The proposal still waits,
 	// and a person declines it or approves an edited version.
 	Problem string `json:"problem,omitempty"`
+	// Persona is a new persona file that a recruiter drafted, shown whole on
+	// the card. An approval writes it to the persona library before the
+	// roster changes, when the operations that apply still name it.
+	Persona *TalkootPersonaDraft `json:"persona,omitempty"`
+}
+
+// TalkootPersonaDraft is a persona file that a proposal carries: the name the
+// member entry uses, and the whole file.
+type TalkootPersonaDraft struct {
+	Name string `json:"name"`
+	Text string `json:"text"`
 }
 
 // TalkootProposeParams is the talkoot.propose payload: Ops, or Undo with the

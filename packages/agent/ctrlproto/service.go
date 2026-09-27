@@ -397,6 +397,9 @@ type SessionInfo struct {
 	Provider string `json:"provider,omitempty"`
 	Model    string `json:"model,omitempty"`
 	Persona  string `json:"persona,omitempty"` // loaded persona/agent name
+	// Recruit names the talkoot this session recruits for, when it is a
+	// Talkoot recruiter session such as Hautoja.
+	Recruit string `json:"recruit,omitempty"`
 	// Reasoning is this session's thinking-level override as the user chose it
 	// ("off", "high", "max", …), or "" when the session follows the global
 	// setting. Raw rather than normalized so a client can tell an explicit
@@ -533,6 +536,16 @@ type CreateOpts struct {
 	// Background binds a scene backdrop (a backgrounds-library id) at creation;
 	// it can also be set or changed later via backgrounds.bind.
 	Background string `json:"background,omitempty"`
+	// Recruit makes the session a Talkoot recruiter for the named talkoot. It
+	// runs the Hautoja persona unless Persona names another, opens on a static
+	// greeting with no model call, and holds no seat: it reads the roster and
+	// proposes members, and a person decides. It cannot combine with an
+	// immersive experience, a card, a World, or a background.
+	//
+	// 🔑 It never crosses the wire. sessions.create needs only CapWrite, and a
+	// recruiter files roster proposals, which is steering. A client binds one
+	// with [MethodTalkootRecruit], which needs [CapSteer].
+	Recruit string `json:"-"`
 }
 
 // ContextBreakdown is a byte-size accounting of what fills the model's context

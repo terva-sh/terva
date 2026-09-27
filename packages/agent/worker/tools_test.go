@@ -1,9 +1,14 @@
 package worker
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/testsupport"
 )
 
 // flagArg returns the value after flag in args, and whether flag appears.
@@ -107,5 +112,35 @@ func TestADispatchListNeedsABackendThatNarrows(t *testing.T) {
 	}
 	if _, err := b.command(Dispatch{Dir: "/w", Tools: []string{}}); err == nil {
 		t.Error("an empty list reached a backend that cannot narrow")
+	}
+}
+
+// Installed follows PATH for claude, and the terva backends, which run this
+// binary, are always installed.
+func TestInstalledFollowsPath(t *testing.T) {
+	claude, err := Lookup(BackendClaude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := testsupport.TempDir(t)
+	t.Setenv("PATH", dir)
+	if claude.Installed() {
+		t.Error("claude reports installed with no claude on PATH")
+	}
+	bin := filepath.Join(dir, "claude")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !claude.Installed() {
+		t.Error("claude reports not installed with claude on PATH")
+	}
+	for _, name := range Names() {
+		b, _ := Lookup(name)
+		if name != BackendClaude && b.Installed != nil {
+			t.Errorf("%s: a backend that runs this binary needs no Installed check", name)
+		}
 	}
 }

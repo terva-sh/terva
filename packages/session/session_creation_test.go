@@ -108,6 +108,7 @@ func driveEveryMetaWriter(t *testing.T, s *Session) {
 	must("SetCoordination", s.SetCoordination("solo"))
 	must("SetWorld", s.SetWorld("world-id"))
 	must("SetParent", s.SetParent("parent-id"))
+	must("SetRecruit", s.SetRecruit("crew"))
 	must("SetCast", s.SetCast(map[string]string{"actor": "persona"}, map[string]CastRoute{"actor": {Provider: "openai", Model: "gpt-5"}}))
 	must("SetWorldLore", s.SetWorldLore([]WorldLoreEntry{{Keys: []string{"key"}, Content: "content"}}))
 	must("bumpFormatForAmend", s.bumpFormatForAmend())

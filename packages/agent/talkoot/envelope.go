@@ -47,6 +47,11 @@ var refKinds = []string{"ticket", "path", "note", "branch", "commit", "url", "an
 // id cannot carry it, because idPattern admits no colon.
 const HumanPrefix = "human:"
 
+// RecruiterPrefix marks a proposal from a recruiter session: a native session
+// bound to the talkoot that holds no seat, such as one running Hautoja. It is
+// neither a member nor a person. It can propose, and a person still decides.
+const RecruiterPrefix = "recruiter:"
+
 // Size limits for one envelope. They keep every room line well inside the
 // room reader's line limit, so one envelope cannot stop the room replaying.
 const (
@@ -217,6 +222,8 @@ func render(r Roster, e Envelope) string {
 		sender = m.ID + " (" + m.Role + ")"
 	} else if name, ok := strings.CutPrefix(e.From, HumanPrefix); ok {
 		sender = name + " (the person you work for)"
+	} else if session, ok := strings.CutPrefix(e.From, RecruiterPrefix); ok {
+		sender = "recruiter session " + session
 	} else {
 		// A member removed from the roster since it sent, seen in a replay.
 		sender = e.From + " (no longer a member)"

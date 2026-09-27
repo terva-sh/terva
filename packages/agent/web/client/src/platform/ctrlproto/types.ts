@@ -238,6 +238,8 @@ export interface SessionInfo {
   provider?: string
   model?: string
   persona?: string
+  // recruit names the talkoot a recruiter session recruits for.
+  recruit?: string
   // reasoning is this session's thinking-level override as the user chose it
   // ('off' | 'minimum' | 'low' | 'medium' | 'high' | 'maximum' | 'max'), or ''
   // when the session follows the global setting. Raw rather than normalized:
@@ -2737,6 +2739,7 @@ export type Verb =
   | 'talkoot.proposals'
   | 'talkoot.propose'
   | 'talkoot.resume'
+  | 'talkoot.recruit'
   | 'talkoot.room'
   | 'talkoot.update'
   | 'tools.display'
@@ -2893,6 +2896,14 @@ export interface TalkootResumeParams {
   chain?: string
 }
 
+// talkoot.recruit creates a recruiter session for a talkoot: Hautoja unless
+// persona names another, a static greeting, and no seat. It needs steer, so
+// sessions.create cannot bind a recruiter.
+export interface TalkootRecruitParams {
+  id: string
+  persona?: string
+}
+
 export interface TalkootEnvelope {
   id: string
   talkoot: string
@@ -3044,6 +3055,15 @@ export interface TalkootProposal {
   edited?: boolean
   applied?: TalkootOp[]
   problem?: string
+  // A new persona file that a recruiter drafted, shown whole on the card. An
+  // approval writes it before the roster changes.
+  persona?: TalkootPersonaDraft
+}
+
+// TalkootPersonaDraft is a persona file that a proposal carries.
+export interface TalkootPersonaDraft {
+  name: string
+  text: string
 }
 
 export interface TalkootProposeParams {
@@ -3206,6 +3226,7 @@ export interface VerbParams {
   'talkoot.post': TalkootPostParams
   'talkoot.pause': TalkootPauseParams
   'talkoot.resume': TalkootResumeParams
+  'talkoot.recruit': TalkootRecruitParams
   'talkoot.inbox': TalkootRef
   'talkoot.proposals': TalkootProposalsParams
   'talkoot.propose': TalkootProposeParams

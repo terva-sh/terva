@@ -347,6 +347,9 @@ func importedMetaRow(line []byte, owner SessionMeta) ([]byte, error) {
 	row.Meta.Version = owner.Version
 	row.Meta.Parent = ""
 	row.Meta.ForkPoint = 0
+	// A recruiter binding is authority that talkoot.recruit granted to one
+	// session, and a talkoot id from another machine names nothing here.
+	row.Meta.Recruit = ""
 	return json.Marshal(row)
 }
 
@@ -461,6 +464,10 @@ func BranchSession(parentPath, root, cwd, version string, upToMessageIdx int) (s
 	// title reads as manual), which is what blocks automatic re-titling — so the
 	// fork would keep a name describing the scene it diverged from, forever.
 	branchMeta.Title = ""
+	// 🔑 A recruiter binding does not travel. talkoot.recruit, a steer verb,
+	// grants it to one session, and a fork is only a write. A fork of a
+	// recruiter is a plain conversation, and a person opens a new recruiter.
+	branchMeta.Recruit = ""
 	// The lorebook and the Stage state travel as their own rows, below.
 	branchMeta.WorldLore = nil
 	branchMeta.legacyStage = Stage{}

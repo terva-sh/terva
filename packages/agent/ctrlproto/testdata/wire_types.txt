@@ -1002,6 +1002,7 @@ SessionInfo
 	provider	string	omitempty
 	model	string	omitempty
 	persona	string	omitempty
+	recruit	string	omitempty
 	reasoning	string	omitempty
 	experience	string	omitempty
 	background	string	omitempty
@@ -1301,6 +1302,9 @@ TalkootPauseParams
 	member	string	omitempty
 	chain	string	omitempty
 	reason	string	omitempty
+TalkootPersonaDraft
+	name	string
+	text	string
 TalkootPostParams
 	id	string
 	by	string
@@ -1328,6 +1332,7 @@ TalkootProposal
 	edited	bool	omitempty
 	applied	[]TalkootOp	omitempty
 	problem	string	omitempty
+	persona	*TalkootPersonaDraft	omitempty
 TalkootProposalsParams
 	id	string
 	all	bool	omitempty
@@ -1339,6 +1344,9 @@ TalkootProposeParams
 	ops	[]TalkootOp	omitempty
 	undo	string	omitempty
 	why	string	omitempty
+TalkootRecruitParams
+	id	string
+	persona	string	omitempty
 TalkootRef
 	id	string
 TalkootResumeParams

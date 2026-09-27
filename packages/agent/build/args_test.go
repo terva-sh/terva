@@ -545,3 +545,24 @@ func TestParseWebMethodsRefusesRepeatedOccurrences(t *testing.T) {
 		t.Fatalf("one occurrence with several methods was rejected: %v %v", ok.WebMethods, err)
 	}
 }
+
+// --recruit opens a new recruiter session in the daemon, so only terva attach
+// takes it, and never with --resume.
+func TestRecruitNeedsAttach(t *testing.T) {
+	a, err := ParseArgs([]string{"--attach", "--recruit", "crew", "--persona", "rook"})
+	if err != nil || a.Recruit != "crew" || a.Persona != "rook" {
+		t.Fatalf("attach --recruit: %+v, %v", a.Recruit, err)
+	}
+	if _, err := ParseArgs([]string{"--recruit", "crew"}); err == nil || !strings.Contains(err.Error(), "needs terva attach") {
+		t.Errorf("--recruit without attach: err = %v", err)
+	}
+	for _, resume := range [][]string{{"--resume"}, {"--resume", "20260926-161200-0a1b2c3d"}, {"-r"}, {"--continue"}, {"-c"}} {
+		in := append([]string{"--attach", "--recruit", "crew"}, resume...)
+		if _, err := ParseArgs(in); err == nil || !strings.Contains(err.Error(), "--recruit opens a new session") {
+			t.Errorf("%v: err = %v, want the recruit refusal", resume, err)
+		}
+	}
+	if _, err := ParseArgs([]string{"--attach", "--recruit"}); err == nil {
+		t.Error("--recruit with no talkoot must be refused")
+	}
+}

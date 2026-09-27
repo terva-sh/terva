@@ -12,7 +12,8 @@ import (
 // dispatchablePersonas includes only personas with a non-empty good_for: the
 // embedded crew's 7 review specialists qualify (plus the Stage four — Seppä,
 // Toimittaja, Dramaturgi, and Kartoittaja); the default Mieli (no good_for)
-// does not, and neither does Kertoja.
+// does not, and neither does Kertoja. Nor does Hautoja: it works only in a
+// recruiter session, which holds the tools its charter needs.
 //
 // Note the conflation this pins: dispatchability is inferred from good_for,
 // which is also just a display field in Stage's persona sheet. That is why the
@@ -35,6 +36,9 @@ func TestDispatchablePersonas(t *testing.T) {
 		}
 		if len(p.GoodFor) == 0 {
 			t.Errorf("%s is in the roster but has empty good_for", p.Name)
+		}
+		if p.Name == "Hautoja" {
+			t.Error("Hautoja is dispatchable, but a swarm child has no recruiter tools")
 		}
 	}
 }

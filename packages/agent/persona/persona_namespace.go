@@ -84,6 +84,10 @@ func (p Persona) matches(query string) bool {
 	return name == strings.ToLower(p.Name) || name == strings.ToLower(p.stem())
 }
 
+// Matches reports whether a query resolves to p by the rule Lookup uses: its
+// name or its file stem, and its namespace when the query names one.
+func (p Persona) Matches(query string) bool { return p.matches(query) }
+
 // FromExtension reports whether the Persona came from an extension bundle.
 func (p Persona) FromExtension() bool { return strings.HasPrefix(p.Source, "ext:") }
 

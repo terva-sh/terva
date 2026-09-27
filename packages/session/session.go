@@ -197,6 +197,11 @@ type SessionMeta struct {
 	// persisted so a daemon restart re-materializes the session as the chosen
 	// persona rather than falling back to the workspace default.
 	Persona string `json:"persona,omitempty"`
+	// Recruit names the talkoot this session recruits for, when it is a
+	// recruiter session such as Hautoja. It holds no seat, and it can read the
+	// roster and propose a member. Persisted so a daemon restart keeps the
+	// binding.
+	Recruit string `json:"recruit,omitempty"`
 	// Reasoning is this session's thinking-level override as the user typed it
 	// ("off", "high", "max", …), or "" to inherit the global level. Raw rather
 	// than normalized so an explicit "off" stays distinguishable from an absent
@@ -2446,6 +2451,16 @@ func (s *Session) SetParent(id string) error {
 		return nil
 	}
 	s.Meta.Parent = id
+	return s.writeMeta()
+}
+
+// SetRecruit binds the session to the talkoot it recruits for. A no-op on a
+// nil receiver.
+func (s *Session) SetRecruit(talkoot string) error {
+	if s == nil {
+		return nil
+	}
+	s.Meta.Recruit = talkoot
 	return s.writeMeta()
 }
 

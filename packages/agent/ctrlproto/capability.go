@@ -198,6 +198,9 @@ var writeOnlyMethods = map[Method]bool{
 	// Write, not spend: a new talkoot has nothing owed, so it wakes no one
 	// until a post. A pause only holds deliveries.
 	MethodTalkootCreate: true, MethodTalkootPause: true,
+	// Write, not spend: a recruiter opens on a static greeting. The prompt
+	// that talks to it is the verb that costs money.
+	MethodTalkootRecruit: true,
 }
 
 // steerMethods change or wake a talkoot. Membership adds [CapSteer] to the
@@ -208,6 +211,8 @@ var steerMethods = map[Method]bool{
 	MethodTalkootCreate: true, MethodTalkootUpdate: true, MethodTalkootPost: true,
 	MethodTalkootPause: true, MethodTalkootResume: true,
 	MethodTalkootPropose: true, MethodTalkootDecide: true,
+	// A recruiter files roster proposals, so binding one steers the team.
+	MethodTalkootRecruit: true,
 }
 
 // Permits reports whether a caller holding mask may invoke m: every capability

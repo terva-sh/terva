@@ -320,6 +320,10 @@ func (r *recorder) PauseTalkoot(_ context.Context, p TalkootPauseParams) error {
 	r.note("PauseTalkoot", "", p)
 	return nil
 }
+func (r *recorder) RecruitTalkoot(_ context.Context, p TalkootRecruitParams) (SessionInfo, error) {
+	r.note("RecruitTalkoot", "", p)
+	return SessionInfo{}, nil
+}
 func (r *recorder) ResumeTalkoot(_ context.Context, p TalkootResumeParams) error {
 	r.note("ResumeTalkoot", "", p)
 	return nil
@@ -743,6 +747,7 @@ func dispatchCases() []dispatchCase {
 		{MethodTalkootPost, TalkootPostParams{ID: "crew", By: "drew", Body: "go"}, "PostTalkoot", TalkootPostParams{ID: "crew", By: "drew", Body: "go"}},
 		{MethodTalkootPause, TalkootPauseParams{ID: "crew", By: "drew", Member: "lead"}, "PauseTalkoot", TalkootPauseParams{ID: "crew", By: "drew", Member: "lead"}},
 		{MethodTalkootResume, TalkootResumeParams{ID: "crew", By: "drew", Chain: "c1"}, "ResumeTalkoot", TalkootResumeParams{ID: "crew", By: "drew", Chain: "c1"}},
+		{MethodTalkootRecruit, TalkootRecruitParams{ID: "crew", Persona: "hautoja"}, "RecruitTalkoot", TalkootRecruitParams{ID: "crew", Persona: "hautoja"}},
 
 		// --- shared files: the same two-verbs-one-controller shape, and both are
 		// session-scoped — a share belongs to the conversation that produced it,
