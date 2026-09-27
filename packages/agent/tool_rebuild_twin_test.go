@@ -30,6 +30,7 @@ import (
 var rebuildExempt = map[string]string{
 	"injectExtraTools":     "workspace-only: the tools it folds in are the web daemon's own, and no such tool exists under rpc or acp",
 	"bindResolvedChannels": "workspace-only: the tools carrying a front-end channel are the daemon's; rpc and acp have no channel to re-bind, which is why a freshly-minted instance costs them nothing",
+	"narrowMemberTools":    "workspace-only: it narrows a Talkoot member to its roster tools list, and only the daemon seats a member; an rpc or acp session has no seat and keeps its tools",
 }
 
 func TestTheSharedRebuildCarriesEverySurvivorTheWorkspaceDoes(t *testing.T) {

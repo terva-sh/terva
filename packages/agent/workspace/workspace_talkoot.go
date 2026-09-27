@@ -29,6 +29,17 @@ func talkootEnv() talkoot.Env {
 			return b.ReportsCost, nil
 		},
 		Tiers: tools.SwarmTierNames(),
+		DriverTools: func(driver string, list []string) error {
+			b, err := worker.Lookup(driver)
+			if err != nil {
+				return err
+			}
+			if b.Tools == nil {
+				return errors.New("the backend has no allowlist that covers every tool")
+			}
+			_, err = b.Tools(list)
+			return err
+		},
 	}
 }
 

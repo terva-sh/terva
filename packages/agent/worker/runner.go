@@ -156,7 +156,7 @@ func (r *Runner) Run(ctx context.Context, sink swarm.Sink) error {
 		}
 	}
 
-	cmd, err := r.backend.Command(dispatch)
+	cmd, err := r.backend.command(dispatch)
 	if err != nil {
 		return fmt.Errorf("worker %s: build command: %w", r.backend.Name, err)
 	}

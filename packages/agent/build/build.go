@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -332,6 +333,29 @@ func (r *Resolved) AddExtraTools(extra []core.Tool) {
 		r.ToolRegistry[t.Name()] = t
 	}
 	r.rebuildSystemPrompt()
+}
+
+// NarrowTools removes every tool that keep refuses, and re-renders the system
+// prompt so that it names only the tools that remain. It returns the removed
+// names, sorted. It only removes, so it cannot give back a tool that the
+// approval mode pruned in Resolve.
+//
+// 🔑 Unlike Args.Tools, which filters the built-in tools inside Resolve, this
+// runs on the finished registry: extension, MCP, skill, and host tools
+// included. A Talkoot member's tools list uses it (TKT-01M39VWN6).
+func (r *Resolved) NarrowTools(keep func(name string, t core.Tool) bool) []string {
+	var removed []string
+	for name, t := range r.ToolRegistry {
+		if !keep(name, t) {
+			delete(r.ToolRegistry, name)
+			removed = append(removed, name)
+		}
+	}
+	if len(removed) > 0 {
+		slices.Sort(removed)
+		r.rebuildSystemPrompt()
+	}
+	return removed
 }
 
 // rebuildSystemPrompt re-renders SystemPrompt from the captured

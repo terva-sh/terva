@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -199,5 +200,16 @@ func TestTalkootProposeHandsTheBatchToTheSeat(t *testing.T) {
 	}
 	if _, err := (&TalkootProposeTool{}).Execute(context.Background(), json.RawMessage(`{"why":"x"}`), nil); err == nil {
 		t.Error("a tool with no seat proposed")
+	}
+}
+
+// 🚨 Every Talkoot tool is a seat tool, so a member's tools list never cuts
+// the member off from its team. The seat is a list of names, not a prefix,
+// so a new Talkoot tool that is not on it fails here.
+func TestEveryTalkootToolIsASeatTool(t *testing.T) {
+	for _, tool := range TalkootTools(nil) {
+		if !slices.Contains(talkoot.SeatTools, tool.Name()) {
+			t.Errorf("%s is not in talkoot.SeatTools, so a tools list would remove it", tool.Name())
+		}
 	}
 }

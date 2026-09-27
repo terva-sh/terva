@@ -112,6 +112,9 @@ type TalkootMember struct {
 	Reviewer        bool    `json:"reviewer,omitempty"`
 	BudgetUSDPerDay float64 `json:"budget_usd_per_day,omitempty"`
 	TurnsPerDay     int     `json:"turns_per_day,omitempty"`
+	// Tools narrows the member to these tools. Absent means the posture's
+	// full set, and the seat tools stay either way.
+	Tools []string `json:"tools,omitempty"`
 	// Session is the member's session id, once its first delivery made one.
 	Session string              `json:"session,omitempty"`
 	Status  TalkootMemberStatus `json:"status"`
@@ -288,18 +291,19 @@ type TalkootOp struct {
 
 // TalkootMemberEntry is a member as its roster writes it.
 type TalkootMemberEntry struct {
-	ID              string  `json:"id"`
-	Role            string  `json:"role"`
-	Title           string  `json:"title,omitempty"`
-	Persona         string  `json:"persona,omitempty"`
-	Driver          string  `json:"driver,omitempty"`
-	Model           string  `json:"model,omitempty"`
-	Tier            string  `json:"tier,omitempty"`
-	Posture         string  `json:"posture,omitempty"`
-	Workspace       string  `json:"workspace,omitempty"`
-	Reviewer        bool    `json:"reviewer,omitempty"`
-	BudgetUSDPerDay float64 `json:"budget_usd_per_day,omitempty"`
-	TurnsPerDay     int     `json:"turns_per_day,omitempty"`
+	ID              string   `json:"id"`
+	Role            string   `json:"role"`
+	Title           string   `json:"title,omitempty"`
+	Persona         string   `json:"persona,omitempty"`
+	Driver          string   `json:"driver,omitempty"`
+	Model           string   `json:"model,omitempty"`
+	Tier            string   `json:"tier,omitempty"`
+	Posture         string   `json:"posture,omitempty"`
+	Workspace       string   `json:"workspace,omitempty"`
+	Reviewer        bool     `json:"reviewer,omitempty"`
+	BudgetUSDPerDay float64  `json:"budget_usd_per_day,omitempty"`
+	TurnsPerDay     int      `json:"turns_per_day,omitempty"`
+	Tools           []string `json:"tools,omitempty"`
 }
 
 // TalkootMemberChange is one member before and after a roster change. Before

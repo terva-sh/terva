@@ -2826,6 +2826,8 @@ export interface TalkootMember {
   reviewer?: boolean
   budget_usd_per_day?: number
   turns_per_day?: number
+  // Narrows the member to these tools; absent is the posture's full set.
+  tools?: string[]
   session?: string
   status: TalkootMemberStatus
 }
@@ -2979,6 +2981,8 @@ export interface TalkootMemberEntry {
   reviewer?: boolean
   budget_usd_per_day?: number
   turns_per_day?: number
+  // Narrows the member to these tools; absent is the posture's full set.
+  tools?: string[]
 }
 
 // TalkootMemberChange is one member before and after a roster change. Mark

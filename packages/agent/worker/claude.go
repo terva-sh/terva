@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 
 	"terva.sh/terva/packages/agent/mcpbridge"
 	"terva.sh/terva/packages/agent/procenv"
+	"terva.sh/terva/packages/agent/talkoot"
 )
 
 // tervaExe resolves the path to THIS terva binary. Two callers self-exec it: a
@@ -46,6 +48,7 @@ func claudeBackend() Backend {
 		Steer:         steerClaude,
 		Interrupt:     interruptClaude,
 		ReportsCost:   true,
+		Tools:         claudeTools,
 		Cursor:        claudeCursor,
 		// The identity is already on --append-system-prompt (see claudeCommand),
 		// so the opening turn is the WORK alone. Sending Briefing.Text here would
@@ -127,6 +130,21 @@ func claudeCommand(d Dispatch) (*exec.Cmd, error) {
 			"--permission-prompt-tool", mcpbridge.PermissionToolRef,
 		)
 	}
+	// A tools list narrows the built-in set, and --strict-mcp-config bounds
+	// the MCP servers on both paths. With the bridge, the block above set it,
+	// so the servers are the bridge alone. Without it, the flag with no config
+	// loads none. Either way, the person's own servers bring no tool past the
+	// list. A non-nil empty list is seat tools alone, and narrows to nothing.
+	if d.Tools != nil {
+		names, err := claudeTools(d.Tools)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, "--tools", strings.Join(names, ","))
+		if !canAsk {
+			args = append(args, "--strict-mcp-config")
+		}
+	}
 	if pm := claudePermissionMode(d.Briefing.Policy.Posture, canAsk); pm != "" {
 		args = append(args, "--permission-mode", pm)
 	}
@@ -140,6 +158,43 @@ func claudeCommand(d Dispatch) (*exec.Cmd, error) {
 	// a subscription login outright.
 	cmd.Env = procenv.Inherited()
 	return cmd, nil
+}
+
+// claudeToolNames maps terva's core tools onto Claude Code's built-in ones.
+var claudeToolNames = map[string]string{
+	"read": "Read", "write": "Write", "edit": "Edit",
+	"bash": "Bash", "grep": "Grep", "glob": "Glob",
+}
+
+// claudeTools maps a tools allowlist onto Claude Code's --tools names. A seat
+// tool reaches Claude through the Talkoot MCP bridge, not --tools, so it maps
+// to nothing. Any other name, a pattern included, is refused: Claude has no
+// tool terva can name for it.
+//
+// ⚠️ With a list, --strict-mcp-config loads only the servers in --mcp-config.
+// The Talkoot MCP bridge (decision 0023) is not built yet. When it is, it
+// must join the --mcp-config on both paths, or the seat tools go with the
+// person's own servers.
+func claudeTools(names []string) ([]string, error) {
+	var out []string
+	for _, n := range names {
+		if slices.Contains(talkoot.SeatTools, n) {
+			continue
+		}
+		c, ok := claudeToolNames[n]
+		if !ok {
+			return nil, fmt.Errorf("claude has no tool for %q; it can narrow to read, write, edit, bash, grep, and glob", n)
+		}
+		if !slices.Contains(out, c) {
+			out = append(out, c)
+		}
+	}
+	if len(out) == 0 {
+		// --tools "" disables every built-in tool, which is what a list of
+		// seat tools alone asks for.
+		return []string{""}, nil
+	}
+	return out, nil
 }
 
 // claudeModel maps terva's model id onto Claude's namespace.

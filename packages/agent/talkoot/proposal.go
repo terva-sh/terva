@@ -157,9 +157,32 @@ func checkValue(field string, v any) error {
 		case float64:
 			ok = !math.IsNaN(n) && !math.IsInf(n, 0)
 		}
+	case reflect.Slice:
+		// A list of strings. It arrives as []any from JSON, and as []string
+		// from Go.
+		var items []any
+		switch l := v.(type) {
+		case []any:
+			items, ok = l, true
+		case []string:
+			for _, s := range l {
+				items = append(items, s)
+			}
+			ok = true
+		}
+		for _, item := range items {
+			s, isString := item.(string)
+			if !isString {
+				ok = false
+				break
+			}
+			if len(s) > MaxValueBytes {
+				return fmt.Errorf("%s holds an entry of %d bytes, above the %d limit", field, len(s), MaxValueBytes)
+			}
+		}
 	}
 	if !ok {
-		want := map[reflect.Kind]string{reflect.String: "a string", reflect.Bool: "true or false", reflect.Int: "a whole number", reflect.Float64: "a number"}[fieldKinds[field]]
+		want := map[reflect.Kind]string{reflect.String: "a string", reflect.Bool: "true or false", reflect.Int: "a whole number", reflect.Float64: "a number", reflect.Slice: "a list of strings"}[fieldKinds[field]]
 		return fmt.Errorf("%s must be %s", field, want)
 	}
 	return nil
@@ -306,7 +329,8 @@ func applyNode(members *yaml.Node, op Op) error {
 func unset(v any) bool { return v == nil || v == "" }
 
 // setField sets key in a mapping node. A value that replaces another keeps
-// the comments on the one it replaces.
+// the comments on the one it replaces, and a list keeps the flow style the
+// person wrote, such as tools: [read].
 func setField(m *yaml.Node, key string, v any) error {
 	var val yaml.Node
 	if err := val.Encode(v); err != nil {
@@ -316,6 +340,9 @@ func setField(m *yaml.Node, key string, v any) error {
 		if m.Content[i].Value == key {
 			old := m.Content[i+1]
 			val.HeadComment, val.LineComment, val.FootComment = old.HeadComment, old.LineComment, old.FootComment
+			if old.Kind == yaml.SequenceNode && val.Kind == yaml.SequenceNode {
+				val.Style |= old.Style & yaml.FlowStyle
+			}
 			m.Content[i+1] = &val
 			return nil
 		}
@@ -444,7 +471,7 @@ func Diff(before, after Roster) []MemberChange {
 		switch {
 		case !ok:
 			out = append(out, MemberChange{Member: a.ID, After: &a})
-		case b != a:
+		case !reflect.DeepEqual(b, a):
 			out = append(out, MemberChange{Member: a.ID, Before: &b, After: &a})
 		}
 	}
@@ -529,7 +556,9 @@ func baseline(c MemberChange) Member {
 //   - a spend or turn cap raised or lifted;
 //   - the coordinator role, or the reviewer flag;
 //   - a worker driver it did not have;
-//   - a move of a writing member into the shared checkout.
+//   - a move of a writing member into the shared checkout;
+//   - a tools list lifted, or one that gains a tool the old list did not
+//     allow.
 //
 // An added member is measured against a default member. Every other change
 // to an authority field is in AuthorityChanges.
@@ -559,6 +588,9 @@ func Widens(c MemberChange) []string {
 	}
 	if was.Workspace != WorkspaceShared && is.Workspace == WorkspaceShared && is.Writes() {
 		out = append(out, "workspace")
+	}
+	if toolsWiden(was.Tools, is.Tools) {
+		out = append(out, "tools")
 	}
 	return out
 }

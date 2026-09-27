@@ -148,7 +148,7 @@ func (w *Workspace) wireTalkootView(v talkootView) ctrlproto.TalkootView {
 		out.Members = append(out.Members, ctrlproto.TalkootMember{
 			ID: mm.ID, Role: mm.Role, Title: mm.Title, Persona: mm.Persona, Driver: mm.Driver,
 			Model: mm.Model, Tier: mm.Tier, Posture: mm.Posture, Workspace: mm.Workspace,
-			Reviewer: mm.Reviewer, BudgetUSDPerDay: mm.BudgetUSDPerDay, TurnsPerDay: mm.TurnsPerDay,
+			Reviewer: mm.Reviewer, BudgetUSDPerDay: mm.BudgetUSDPerDay, TurnsPerDay: mm.TurnsPerDay, Tools: mm.Tools,
 			Session: m.Session, Status: wireTalkootStatus(m.Status),
 		})
 	}

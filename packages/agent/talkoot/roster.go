@@ -80,6 +80,10 @@ type Member struct {
 	Reviewer        bool    `yaml:"reviewer,omitempty" json:"reviewer,omitempty"`
 	BudgetUSDPerDay float64 `yaml:"budget_usd_per_day,omitempty" json:"budget_usd_per_day,omitempty"`
 	TurnsPerDay     int     `yaml:"turns_per_day,omitempty" json:"turns_per_day,omitempty"`
+	// Tools narrows the member to the named tools, and absent means the
+	// posture's full set. It never widens: a tool the posture refuses stays
+	// refused. The seat tools stay without a listing (SeatTools).
+	Tools []string `yaml:"tools,omitempty" json:"tools,omitempty"`
 }
 
 // FieldClass says who may change a member field, and how (decision 0025
@@ -114,6 +118,7 @@ var MemberFields = []struct {
 	{"reviewer", ClassAuthority},
 	{"budget_usd_per_day", ClassAuthority},
 	{"turns_per_day", ClassAuthority},
+	{"tools", ClassAuthority},
 }
 
 // ClassOf returns the class of a member field, and false for a name that is
@@ -218,6 +223,10 @@ type Env struct {
 	Driver func(name string) (reportsCost bool, err error)
 	// Tiers is every tier name a member may set.
 	Tiers []string
+	// DriverTools refuses a tools list that a worker backend cannot pass to
+	// its harness: a backend with no allowlist, or a name it cannot express.
+	// Validate never asks it about DriverNative, which narrows every tool.
+	DriverTools func(driver string, tools []string) error
 }
 
 // incomplete names the Env fields that are unset. Validate fails closed on
@@ -233,6 +242,9 @@ func (e Env) incomplete() []string {
 	}
 	if len(e.Tiers) == 0 {
 		out = append(out, "Tiers")
+	}
+	if e.DriverTools == nil {
+		out = append(out, "DriverTools")
 	}
 	return out
 }
@@ -346,6 +358,13 @@ func Validate(r Roster, env Env) error {
 		if m.TurnsPerDay < 0 {
 			add("%s: turns_per_day is negative", who)
 		}
+		toolsOK := true
+		if m.Tools != nil {
+			if err := checkTools(m.Tools); err != nil {
+				add("%s: %v", who, err)
+				toolsOK = false
+			}
+		}
 
 		if m.Driver != DriverNative {
 			reportsCost, err := env.Driver(m.Driver)
@@ -355,6 +374,12 @@ func Validate(r Roster, env Env) error {
 			case !reportsCost && m.TurnsPerDay <= 0:
 				// A spend cap on a driver that reports no spend never trips.
 				add("%s: driver %q reports no cost, so the member needs turns_per_day", who, m.Driver)
+			}
+			// An unregistered driver is one problem, not two.
+			if err == nil && m.Tools != nil && toolsOK {
+				if err := env.DriverTools(m.Driver, m.Tools); err != nil {
+					add("%s: driver %q cannot narrow its tools: %v", who, m.Driver, err)
+				}
 			}
 		}
 	}

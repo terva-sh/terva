@@ -2,6 +2,7 @@ package talkoot
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"os/exec"
@@ -73,6 +74,18 @@ func fakeEnv() Env {
 			return cost, nil
 		},
 		Tiers: []string{"weak", "medium", "strong", "cheap"},
+		// claude can narrow the core tools, and acp:codex cannot narrow.
+		DriverTools: func(driver string, tools []string) error {
+			if driver != "claude" {
+				return errors.New("the backend has no allowlist")
+			}
+			for _, t := range tools {
+				if !slices.Contains([]string{"read", "write", "edit", "bash", "grep", "glob"}, t) {
+					return fmt.Errorf("claude has no tool %q", t)
+				}
+			}
+			return nil
+		},
 	}
 }
 
@@ -177,6 +190,21 @@ func TestValidateRefusals(t *testing.T) {
 		{"no-cost driver without turns", func(r *Roster) { r.Members[3].TurnsPerDay = 0 }, `yelp: driver "acp:codex" reports no cost, so the member needs turns_per_day`},
 		{"missing persona", func(r *Roster) { r.Members[4].Persona = "nobody" }, `gage: persona "nobody" not found`},
 		{"unregistered driver", func(r *Roster) { r.Members[2].Driver = "gemini" }, `jev: driver "gemini" is not registered`},
+		{"an empty tools list", func(r *Roster) { r.Members[0].Tools = []string{} }, "helm: tools is empty"},
+		{"a bad tool name", func(r *Roster) { r.Members[0].Tools = []string{"read", "rm -rf"} }, `helm: tool "rm -rf" must be`},
+		{"a star inside a name", func(r *Roster) { r.Members[0].Tools = []string{"mcp_*_x"} }, `helm: tool "mcp_*_x" must be`},
+		{"a tool named twice", func(r *Roster) { r.Members[0].Tools = []string{"read", "read"} }, `helm: tool "read" appears twice`},
+		{"too many tools", func(r *Roster) {
+			for i := range MaxTools + 1 {
+				r.Members[0].Tools = append(r.Members[0].Tools, fmt.Sprintf("t%d", i))
+			}
+		}, "helm: tools names 65 tools, above the 64 limit"},
+		{"an unregistered driver with tools", func(r *Roster) {
+			r.Members[2].Driver = "gemini"
+			r.Members[2].Tools = []string{"read"}
+		}, `jev: driver "gemini" is not registered`},
+		{"tools on a backend with no allowlist", func(r *Roster) { r.Members[3].Tools = []string{"read"} }, `yelp: driver "acp:codex" cannot narrow its tools`},
+		{"a tool the backend cannot name", func(r *Roster) { r.Members[2].Tools = []string{"read", "mcp_github_*"} }, `jev: driver "claude" cannot narrow its tools: claude has no tool "mcp_github_*"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -281,6 +309,7 @@ func TestValidateFailsClosedOnAnIncompleteEnv(t *testing.T) {
 		func(e *Env) { e.PersonaExists = nil },
 		func(e *Env) { e.Driver = nil },
 		func(e *Env) { e.Tiers = nil },
+		func(e *Env) { e.DriverTools = nil },
 	} {
 		env := fakeEnv()
 		strip(&env)

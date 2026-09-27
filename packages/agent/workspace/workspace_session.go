@@ -409,6 +409,7 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 	// Web-only built-ins that live outside Resolve (swarm_spawn, terva_restart,
 	// and the --play actor_spawn cast skin).
 	w.injectExtraTools(s, &r, args)
+	w.narrowMemberTools(id, &r)
 
 	// Re-point this session's file tools at the workspace-shared sandbox so
 	// /jail is one workspace-wide posture (and survives the rebuilds below),
@@ -1421,6 +1422,7 @@ func (s *wsSession) rebuildTools(reason string) {
 		rr.MergeExtensionTools(s.ws.mcpAdapter)
 	}
 	s.ws.injectExtraTools(s, &rr, args)
+	s.ws.narrowMemberTools(s.id, &rr)
 	// Keep the workspace-shared sandbox (and its live /jail state) across the
 	// rebuild — Resolve just minted a fresh unlocked one for the new tools.
 	rr.UseSandbox(s.ws.sandbox)

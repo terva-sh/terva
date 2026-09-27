@@ -17,6 +17,7 @@ import (
 	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/talkoot"
 	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/filelock"
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/session"
@@ -435,6 +436,47 @@ func (w *Workspace) talkootPostureOf(sessID string) string {
 		return ""
 	}
 	return m.Posture
+}
+
+// narrowMemberTools removes from a seated member's registry every tool its
+// roster tools list does not name. A session with no seat, or a member with
+// no list, keeps every tool. The approval mode pruned inside Resolve first,
+// so the result is the intersection, and the list never widens.
+//
+// 🚨 This runs after injectExtraTools, on the finished registry. Args.Tools
+// filters inside Resolve and misses the extension, MCP, skill, and host
+// tools, so a filter there would leave them all in place.
+func (w *Workspace) narrowMemberTools(sessID string, r *build.Resolved) {
+	list := w.talkootToolsOf(sessID)
+	if list == nil {
+		return
+	}
+	r.NarrowTools(memberToolFilter(list))
+}
+
+// memberToolFilter keeps a tool that list allows, by its name and its group.
+func memberToolFilter(list []string) func(string, core.Tool) bool {
+	return func(name string, t core.Tool) bool { return talkoot.MatchTool(list, name, core.ToolGroup(t)) }
+}
+
+// talkootToolsOf returns the tools list the roster gives a seated session,
+// or nil for a session with no seat or a member with no list.
+//
+// 🚨 A seat whose member the roster no longer holds narrows to the seat tools
+// alone. An update stores the new roster before it unseats a leaver, and a
+// rebuild in that window must not hand the leaver the full set.
+func (w *Workspace) talkootToolsOf(sessID string) []string {
+	w.talkoot.mu.Lock()
+	b := w.talkoot.seats[sessID]
+	w.talkoot.mu.Unlock()
+	if b == nil {
+		return nil
+	}
+	m, ok := memberOf(*b.run.roster.Load(), b.member)
+	if !ok {
+		return []string{}
+	}
+	return m.Tools
 }
 
 // latestPersonSession is the newest session that no talkoot member ever held,

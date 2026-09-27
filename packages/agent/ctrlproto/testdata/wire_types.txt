@@ -1249,6 +1249,7 @@ TalkootMember
 	reviewer	bool	omitempty
 	budget_usd_per_day	float64	omitempty
 	turns_per_day	int	omitempty
+	tools	[]string	omitempty
 	session	string	omitempty
 	status	TalkootMemberStatus
 TalkootMemberChange
@@ -1270,6 +1271,7 @@ TalkootMemberEntry
 	reviewer	bool	omitempty
 	budget_usd_per_day	float64	omitempty
 	turns_per_day	int	omitempty
+	tools	[]string	omitempty
 TalkootMemberStatus
 	member	string
 	working	bool	omitempty

@@ -386,7 +386,7 @@ func wireEntry(m *talkoot.Member) *ctrlproto.TalkootMemberEntry {
 	return &ctrlproto.TalkootMemberEntry{
 		ID: m.ID, Role: m.Role, Title: m.Title, Persona: m.Persona, Driver: m.Driver, Model: m.Model,
 		Tier: m.Tier, Posture: m.Posture, Workspace: m.Workspace, Reviewer: m.Reviewer,
-		BudgetUSDPerDay: m.BudgetUSDPerDay, TurnsPerDay: m.TurnsPerDay,
+		BudgetUSDPerDay: m.BudgetUSDPerDay, TurnsPerDay: m.TurnsPerDay, Tools: m.Tools,
 	}
 }
 

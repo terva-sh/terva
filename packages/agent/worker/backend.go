@@ -139,6 +139,26 @@ type Backend struct {
 	// cap on a driver that reports no spend is a cap that never trips. False is
 	// the safe default for a new backend.
 	ReportsCost bool
+
+	// Tools maps a tools allowlist in terva's names onto the names the
+	// backend's own allowlist flag takes, and refuses a name it cannot
+	// express. Nil means the backend has no allowlist that covers every tool,
+	// and a Talkoot roster that sets tools for it is refused (TKT-01M39VWN6).
+	//
+	// 🔑 The flag must remove tools, never approve them. Claude Code's
+	// --allowedTools pre-approves the tools it names, so it could widen past
+	// the posture. --tools restricts the built-in set.
+	Tools func(names []string) ([]string, error)
+}
+
+// command builds the child for d. A tools list on a backend with no Tools
+// mapping is refused rather than dropped, so a list never widens to the
+// posture's full set on its way to a worker.
+func (b Backend) command(d Dispatch) (*exec.Cmd, error) {
+	if d.Tools != nil && b.Tools == nil {
+		return nil, fmt.Errorf("backend %s cannot narrow a worker's tools, and the dispatch carries a tools list", b.Name)
+	}
+	return b.Command(d)
 }
 
 // Dispatch is everything Command needs to build a child: what to say, where to
@@ -175,6 +195,12 @@ type Dispatch struct {
 	// minted Cursor. Empty means no persistence (the process holds the
 	// conversation in memory only, and a revival starts blank).
 	SessionPath string
+
+	// Tools narrows the child to these tools, in terva's names. Nil means
+	// the posture's full set. A non-nil empty list narrows to nothing, so a
+	// list that loses its entries on the way fails closed. Only a backend
+	// with a Tools mapping reads it.
+	Tools []string
 }
 
 // Event is one thing that happened, in terva's swarm vocabulary rather than a

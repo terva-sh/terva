@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -238,8 +239,9 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 		return talkootView{}, errors.New("talkoot: an update cannot move the talkoot's home")
 	}
 
-	// Sort each seated member: it keeps its session with a new posture, or it
-	// loses its seat.
+	// Sort each seated member: it keeps its session with a new posture or a
+	// new tools list, or it loses its seat. A postureChange with no posture
+	// is a tools change.
 	type postureChange struct {
 		sid, to string
 		s       *wsSession
@@ -257,7 +259,11 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 		case !kept || m.Driver != talkoot.DriverNative || m.Persona != old.Persona || m.Model != old.Model || m.Tier != old.Tier:
 			leaving[old.ID] = sid
 		case m.Posture != old.Posture:
+			// setApproval rebuilds the tool view, so it narrows to a new
+			// tools list too.
 			postures = append(postures, postureChange{sid: sid, to: m.Posture})
+		case !slices.Equal(m.Tools, old.Tools):
+			postures = append(postures, postureChange{sid: sid})
 		}
 	}
 	w.talkoot.mu.Unlock()
@@ -267,14 +273,23 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 	}
 
 	// setPostures applies each new posture in full: the args, the gate, and
-	// the tool view. It runs after the commit.
+	// the tool view. A tools change rebuilds the view alone. It runs after the
+	// commit, so the rebuild reads the new roster.
 	setPostures := func() {
 		for _, c := range postures {
 			if c.s == nil {
 				continue
 			}
+			if c.to == "" {
+				c.s.rebuildTools("talkoot-tools")
+				continue
+			}
 			if err := c.s.setApproval(c.to); err != nil {
 				w.diagf("talkoot %s: posture for session %s: %v", id, c.s.id, err)
+				// A failed posture must not leave a narrower tools list
+				// unapplied. setApproval fails only on a mode it cannot
+				// parse, which a validated roster never holds.
+				c.s.rebuildTools("talkoot-tools")
 			}
 		}
 	}

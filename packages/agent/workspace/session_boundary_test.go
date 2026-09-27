@@ -84,10 +84,11 @@ var sessionMayReachWorkspace = map[string]string{
 	// --- talkoot seats ---
 	// The workspace owns each talkoot's router and the seats that bind a
 	// session to a member.
-	"talkootPostureOf": "the settings pane refuses an approval change on a talkoot member, because the member's roster owns its posture",
-	"talkootTurn":      "a talkoot member's turn reports its spend to the router, which frees the member's working slot",
-	"talkootSeatOf":    "a card that opens stamps the talkoot and member of the seat, so the card reaches that talkoot's inbox",
-	"talkootCardEvent": "a card that opens or closes tells the watchers of its talkoot, so the inbox resolves with the member's own view",
+	"talkootPostureOf":  "the settings pane refuses an approval change on a talkoot member, because the member's roster owns its posture",
+	"talkootTurn":       "a talkoot member's turn reports its spend to the router, which frees the member's working slot",
+	"narrowMemberTools": "a rebuild narrows a seated member to its roster tools list, or a rebuild would hand back every tool the list removed",
+	"talkootSeatOf":     "a card that opens stamps the talkoot and member of the seat, so the card reaches that talkoot's inbox",
+	"talkootCardEvent":  "a card that opens or closes tells the watchers of its talkoot, so the inbox resolves with the member's own view",
 }
 
 // The two members that must NEVER appear. They are not merely undeclared — they are

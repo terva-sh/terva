@@ -34,7 +34,7 @@ func TestEveryMemberFieldHasAClass(t *testing.T) {
 		}
 		seen[f.Name] = true
 	}
-	for field, want := range map[string]FieldClass{"title": ClassLook, "persona": ClassVoice, "posture": ClassAuthority, "id": ClassAuthority} {
+	for field, want := range map[string]FieldClass{"title": ClassLook, "persona": ClassVoice, "posture": ClassAuthority, "id": ClassAuthority, "tools": ClassAuthority} {
 		if got, _ := ClassOf(field); got != want {
 			t.Errorf("%s is %s, want %s", field, got, want)
 		}
