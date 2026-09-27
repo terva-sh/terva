@@ -210,6 +210,12 @@ type Args struct {
 	// the embedded Mieli default.
 	Persona string
 
+	// Recruit opens a Talkoot recruiter session for the named talkoot
+	// (--recruit ID): a Hautoja session, unless --persona names another, that
+	// proposes members for a person to approve. Only terva attach honors it,
+	// because a talkoot runs in the daemon.
+	Recruit string
+
 	// Card loads a SillyTavern Character Card V2 (.json or .png) as the
 	// immersive identity for a chat/play session (--card <path>). It implies
 	// --chat when no Experience mode is set and is not valid in regular coding
@@ -462,6 +468,10 @@ type Args struct {
 	// config's approval default, else yolo. Resolution lives in
 	// ResolveApprovalMode (permissions.go).
 	Approval string
+	// TalkootMember marks a session that holds a seat in a talkoot. Its
+	// permission policy then refuses the git ticket CLI through bash. The
+	// workspace sets it from the seat on every build.
+	TalkootMember bool
 
 	// Classifier overrides the screening classifier's mode for this run:
 	// "off", "screen", or "approve". Empty means the user config decides,
@@ -561,6 +571,8 @@ func (a Args) PermInputs() permissions.Inputs {
 		Jail:     a.Jail,
 		NoJail:   a.NoJail,
 		Trust:    a.Trust,
+
+		TalkootMember: a.TalkootMember,
 	}
 }
 
@@ -911,6 +923,12 @@ func ParseArgs(in []string) (Args, error) {
 				return a, err
 			}
 			a.Persona = v
+		case "--recruit":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.Recruit = v
 		case "--card":
 			v, err := want(&i, arg)
 			if err != nil {
@@ -1214,6 +1232,13 @@ func ParseArgs(in []string) (Args, error) {
 			return a, i18n.Errorf("--task and a positional prompt are mutually exclusive")
 		}
 		a.Prompt = strings.Join(positional, " ")
+	}
+
+	if a.Recruit != "" && a.Mode != mode.Attach {
+		return a, i18n.Errorf("--recruit needs terva attach, because a talkoot runs in the daemon")
+	}
+	if a.Recruit != "" && (a.Resume || a.Continue) {
+		return a, i18n.Errorf("--recruit opens a new session, so it cannot combine with --resume or --continue")
 	}
 
 	if (a.WebChatConnector == "") != (a.WebChatSession == "") {

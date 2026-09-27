@@ -518,6 +518,16 @@ reach what the daemon can. Posture limits it, since a `plan` member runs no
 daemon's keys sit where a member cannot reach them, which is the work of
 secrets at rest, §8.15 (`docs/proposals/secrets-at-rest.md`).
 
+A member's policy also carries one built-in rule, ahead of your rules and in
+every posture. It denies every `git ticket` command through `bash`, reads
+included. It covers the command quoted, spaced, cased, or after git options. A member works tickets through the ticket tools instead. They write
+under the member's own actor, record the member's claims, and refuse a close
+of work the member authored. The CLI would write as you. The refusal names the
+rule's source as `talkoot`. The rule reads command text, so it steers the
+member and does not bind it. A git alias, a shell variable, eval, another
+interpreter, or a direct edit of a ticket file gets past it. Each of those
+writes a file under `.tickets/`, which the diff shows to the member's reviewer.
+
 ## Permission rules
 
 Rules let you pre-answer the prompt for specific calls. They live in

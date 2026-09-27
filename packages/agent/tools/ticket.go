@@ -43,6 +43,11 @@ type TicketCore struct {
 	// gives: agent:terva/<persona>. ActorName is the display name.
 	ActorID   string
 	ActorName string
+	// Member reports the Talkoot seat this session holds now, if any. The
+	// workspace sets it on a seated session. While it answers, the session's
+	// writes carry the member's actor, its claims are recorded, and its
+	// closures are checked (ticket_member.go). nil means no seat.
+	Member func() (TicketMember, bool)
 	// SubagentID is this process's swarm id, and empty outside a swarm child.
 	// A sub-agent works a ticket and never closes one, so the write tools read
 	// this to refuse a closure rather than being dropped from the registry.

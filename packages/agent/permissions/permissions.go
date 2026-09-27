@@ -289,7 +289,53 @@ type Inputs struct {
 	NoJail bool
 	// Trust is --trust: trust the working directory for this invocation only.
 	Trust bool
+	// TalkootMember is set for a session that holds a seat in a talkoot. Its
+	// policy then refuses the git ticket CLI through bash (memberTicketRule).
+	TalkootMember bool
 }
+
+// memberTicketRule refuses a Talkoot member the git ticket CLI. A member works
+// tickets through the ticket tools. They write under the member's own actor,
+// record its claims, and check that it did not author a change it closes
+// (TKT-01M396R1T). The CLI writes as the person, and a claim through it would
+// leave no record.
+//
+// 🔑 It goes first, so a user or project allow rule cannot reach past it, and
+// it denies rather than asks, so it holds in yolo. It refuses every git ticket
+// command, reads too, because a subcommand or status can be quoted or cased
+// past any list of them. The ticket tools cover the reads.
+//
+// ⚠️ It steers a model off the CLI, and it is not a boundary. It reads command
+// text, so a git alias, a variable, eval, or another interpreter gets past it,
+// and so does an edit of the ticket file. Every one of those writes a file
+// under .tickets/, and the diff shows it to the member's reviewer.
+var memberTicketRule = permission.PermissionRule{
+	Tool:     "bash",
+	Args:     memberTicketCLI,
+	Decision: permission.RuleDeny,
+	Reason:   "a Talkoot member works tickets through the ticket tools, which write under its own actor, record its claims, and check that it did not author a change it closes",
+	Source:   "talkoot",
+}
+
+// memberTicketCLI matches a git ticket invocation: git, any global options,
+// then ticket, or git-ticket. It matches where a command starts: at the start
+// of the line, after a separator or an opening bracket, after a runner such
+// as sudo, env, xargs, or eval and its options, or inside sh -c. So a message or an echo that
+// only names git ticket passes. Quotes, ANSI-C quotes ($'x'), and backslashes
+// may sit around or inside the words, as the shell removes them. An option
+// value may be quoted with spaces in it, and case is ignored.
+var memberTicketCLI = func() *regexp.Regexp {
+	const q = `(?:\$?['"]|\\)*`
+	letters := func(w string) string { return q + strings.Join(strings.Split(w, ""), q) + q }
+	gap := q + `\s+` + q
+	val := `(?:"[^"]*"|'[^']*'|\S+)`
+	start := `(?:^|[\n;&|({` + "`" + `]|\$\(|\b(?:ba|z|da|k)?sh(?:\s+-\S+)*\s+-\w*c\s|\s-(?:exec|execdir|ok|okdir)\s)\s*`
+	runner := `(?:\w+=` + val + `\s+|(?:sudo|doas|env|command|builtin|exec|nohup|nice|ionice|time|xargs|eval|setsid|stdbuf|timeout|chrt|taskset)(?:\s+(?:-\S+(?:\s+[^-\s]\S*)?|\d\S*))*\s+)*`
+	path := `(?:[^\s'"]*/)?`
+	opt := `-(?:[Cc]` + gap + val + `|-(?:git-dir|work-tree|namespace|config-env|super-prefix)` + gap + val + `|[\w-]*(?:=` + val + `)?)`
+	return regexp.MustCompile(`(?i)` + start + runner + q + path + letters("git") +
+		`(?:-` + letters("ticket") + `|(?:` + gap + opt + `)*` + gap + letters("ticket") + `)(?:[\s;|&()<>` + "`" + `]|$)`)
+}()
 
 // modePosture is the security posture a run mode inherits when nothing
 // overrides it: the approval mode its sessions default to, and whether the
@@ -703,6 +749,9 @@ func policyFromConfig(p Inputs, cfg config.Config) (*permission.PermissionPolicy
 	mode := ResolveApprovalMode(p, cfg)
 
 	var rules []permission.PermissionRule
+	if p.TalkootMember {
+		rules = append(rules, memberTicketRule)
+	}
 	ur, uw := compilePermissionRules(cfg.Permissions, "user", false)
 	rules = append(rules, ur...)
 	warns = append(warns, uw...)

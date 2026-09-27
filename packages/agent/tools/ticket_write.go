@@ -26,7 +26,12 @@ import (
 	"terva.sh/terva/packages/i18n"
 )
 
+// actor is who this session's writes record: the member's actor while the
+// session holds a Talkoot seat, else the configured one.
 func (c *TicketCore) actor() ticket.Actor {
+	if m, ok := c.member(); ok {
+		return ticket.Actor{ID: m.Actor, Name: m.ID}
+	}
 	return ticket.Actor{ID: c.ActorID, Name: c.ActorName}
 }
 
@@ -226,6 +231,12 @@ func (t *TicketCreateTool) Execute(ctx context.Context, raw json.RawMessage, pro
 	if strings.TrimSpace(in.Title) == "" {
 		return ticketResult(nil, fmt.Errorf("give title: the one-line title of the new ticket"))
 	}
+	if refusal := t.refuseMemberCreateClosed(in.Status); refusal != "" {
+		return ticketResult(nil, fmt.Errorf("%s", refusal))
+	}
+	if refusal := t.refuseHoldersText(raw); refusal != "" {
+		return ticketResult(nil, fmt.Errorf("%s", refusal))
+	}
 	s, err := t.open()
 	if err != nil {
 		return ticketResult(nil, err)
@@ -387,6 +398,9 @@ func (t *TicketUpdateTool) Execute(ctx context.Context, raw json.RawMessage, pro
 	if len(raw) > 0 {
 		_ = json.Unmarshal(raw, &in)
 	}
+	if refusal := t.refuseHoldersText(raw); refusal != "" {
+		return ticketResult(nil, fmt.Errorf("%s", refusal))
+	}
 	ms := in.mutations()
 	if len(ms) == 0 {
 		return ticketResult(nil, fmt.Errorf("give at least one change, for example title, priority, or add_labels"))
@@ -451,6 +465,14 @@ func (t *TicketTransitionTool) Execute(ctx context.Context, raw json.RawMessage,
 	// Closure is the dispatcher's call, never the sub-agent's. Refused before the
 	// write, so a refused close changes nothing.
 	if refusal := t.refuseSubagentClosure(in.Ref, in.Status); refusal != "" {
+		return ticketResult(nil, fmt.Errorf("%s", refusal))
+	}
+	// A Talkoot member closes only work it did not author, and only as a
+	// reviewer.
+	if refusal := t.refuseMemberClosure(ctx, in.Ref, in.Status); refusal != "" {
+		return ticketResult(nil, fmt.Errorf("%s", refusal))
+	}
+	if refusal := t.refuseHoldersText(raw); refusal != "" {
 		return ticketResult(nil, fmt.Errorf("%s", refusal))
 	}
 	s, id, err := t.applyMutation(ctx, in.Ref, in.IfRevision, ticket.SetStatus{Status: in.Status, Reason: in.Reason})
@@ -552,12 +574,12 @@ func (t *TicketClaimTool) Execute(ctx context.Context, raw json.RawMessage, prog
 	if in.Release {
 		return t.applyWrite(ctx, in.Ref, in.IfRevision, ticket.ReleaseClaim{})
 	}
-	s, id, err := t.applyMutation(ctx, in.Ref, in.IfRevision, ticket.ClaimTicket{
+	s, id, err := t.applyMutation(ctx, in.Ref, in.IfRevision, t.claimMutation(ctx, in.Ref, ticket.ClaimTicket{
 		Branch:    in.Branch,
 		ExpiresIn: time.Duration(in.ExpiresInMinutes) * time.Minute,
 		Force:     in.Force,
 		Session:   t.sessionID(),
-	})
+	}))
 	if err != nil {
 		return ticketResult(nil, err)
 	}
@@ -695,6 +717,9 @@ func (t *TicketCommentTool) Execute(ctx context.Context, raw json.RawMessage, pr
 	}
 	if strings.TrimSpace(in.Text) == "" {
 		return ticketResult(nil, fmt.Errorf("give text: the Markdown text of the entry"))
+	}
+	if refusal := t.refuseHoldersText(raw); refusal != "" {
+		return ticketResult(nil, fmt.Errorf("%s", refusal))
 	}
 	var m ticket.Mutation
 	switch in.Kind {

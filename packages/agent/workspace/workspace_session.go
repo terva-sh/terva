@@ -214,6 +214,9 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 	if p := w.talkootPostureOf(id); p != "" {
 		args.Approval = p
 	}
+	if _, ok := w.talkootSeatOf(id); ok {
+		args.TalkootMember = true
+	}
 	if sess.Stage.Experience != "" {
 		args.Experience = sess.Stage.Experience
 	}
@@ -842,6 +845,18 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 	if s != nil {
 		if seat, ok := w.talkootSeatOf(s.id); ok {
 			for _, t := range tools.TalkootTools(seat) {
+				r.ToolRegistry[t.Name()] = t
+			}
+			// The ticket tools write as the member, and check its closures,
+			// for as long as the session holds the seat.
+			if tc := tools.TicketCoreFor(r.ToolRegistry); tc != nil {
+				id := s.id
+				tc.Member = func() (tools.TicketMember, bool) { return w.sessionTicketMember(id) }
+			}
+		} else if id := s.recruitOf(); id != "" {
+			// A recruiter session holds no seat. It reads the roster and
+			// proposes, and nothing else of the member tools.
+			for _, t := range tools.RecruitTools(talkootRecruit{w: w, session: s.id, talkoot: id}) {
 				r.ToolRegistry[t.Name()] = t
 			}
 		}
@@ -2634,6 +2649,7 @@ func (s *wsSession) info() ctrlproto.SessionInfo {
 		Provider:        prov,
 		Model:           model,
 		Persona:         persona,
+		Recruit:         s.recruitOf(),
 		Reasoning:       reasoning,
 		Experience:      s.sess.Stage.Experience,
 		Background:      s.sess.Stage.Background,

@@ -60,7 +60,7 @@ type TalkootToolDef struct {
 const (
 	talkootSendDesc = "Send an envelope to one or more members of your talkoot. The router records it in the room and delivers it. A message or an answer starts a turn for each recipient. A note does not start a turn. The recipient reads a note at its next turn.\n\nTo pass work to a member, use talkoot_handoff. To ask a person a question, use ask_user_question and not this tool. The question goes to the inbox of the talkoot."
 
-	talkootHandoffDesc = "Pass work to one or more members of your talkoot. A handoff must carry at least one reference: a ticket, a branch, a commit, a path, or a note. The work travels by reference and not as a summary, so give the reference that holds it. The handoff starts a turn for each recipient."
+	talkootHandoffDesc = "Pass work to one or more members of your talkoot. A handoff must carry at least one reference: a ticket, a branch, a commit, a path, or a note. The work travels by reference and not as a summary, so give the reference that holds it. The handoff starts a turn for each recipient.\n\nA ticket reference also moves the claim on that ticket to the recipient. Such a handoff goes to one member. You must hold the claim, or the ticket must have no claim."
 
 	talkootRosterDesc = "List the members of your talkoot. The result gives the id, title, role, driver, and status of each member. Call this tool to find the ids that talkoot_send and talkoot_handoff accept."
 
@@ -75,9 +75,9 @@ const (
 	talkootThreadProp = `"thread":{"type":"string","description":"An optional thread id. Give the same id again to keep a conversation together."}`
 	talkootReplyProp  = `"reply_to":{"type":"string","description":"The id of the envelope that this one replies to."}`
 
-	talkootSendSchema = `{"type":"object","properties":{` + talkootToProp + `,"kind":{"type":"string","enum":["message","note","answer"],"description":"A message starts a turn. An answer replies to a question and starts a turn. A note waits for the next turn of the recipient."},` + talkootBodyProp + `,"refs":{"type":"array","items":{"type":"string"},"description":"Optional references. Start each reference with its kind: ticket, path, note, branch, commit, or url. Put a colon before the value, as in path:src/main.go. A path is relative to the home checkout of the talkoot. A note reference comes from talkoot_note_write."},` + talkootThreadProp + `,` + talkootReplyProp + `},"required":["to","kind","body"]}`
+	talkootSendSchema = `{"type":"object","properties":{` + talkootToProp + `,"kind":{"type":"string","enum":["message","note","answer"],"description":"A message starts a turn. An answer replies to a question and starts a turn. A note waits for the next turn of the recipient."},` + talkootBodyProp + `,"refs":{"type":"array","items":{"type":"string"},"description":"Start each optional reference with its kind: ticket, path, note, branch, commit, url, or answer. Put a colon before the value, as in path:src/main.go. A path is relative to the home checkout of the talkoot. A note reference comes from talkoot_note_write. An answer reference comes from ask_user_question, and it shows the recipient the decision of the person. Without it, a teammate reads your claim of a decision as your word only."},` + talkootThreadProp + `,` + talkootReplyProp + `},"required":["to","kind","body"]}`
 
-	talkootHandoffSchema = `{"type":"object","properties":{` + talkootToProp + `,` + talkootBodyProp + `,"refs":{"type":"array","items":{"type":"string"},"minItems":1,"description":"The references that hold the work. Give at least one. Start each reference with its kind: ticket, path, note, branch, or commit. Put a colon before the value, as in branch:feat/login. A path is relative to the home checkout of the talkoot."},` + talkootThreadProp + `,` + talkootReplyProp + `},"required":["to","body","refs"]}`
+	talkootHandoffSchema = `{"type":"object","properties":{` + talkootToProp + `,` + talkootBodyProp + `,"refs":{"type":"array","items":{"type":"string"},"minItems":1,"description":"The references that hold the work. Give at least one. Start each reference with its kind: ticket, path, note, branch, or commit. Put a colon before the value, as in branch:feat/login. A path is relative to the home checkout of the talkoot. Beside the work, an answer reference from ask_user_question shows the decision of the person."},` + talkootThreadProp + `,` + talkootReplyProp + `},"required":["to","body","refs"]}`
 
 	talkootRosterSchema = `{"type":"object","properties":{}}`
 
@@ -204,6 +204,11 @@ func talkootSend(seat TalkootSeat, o talkoot.Outgoing) (core.ToolResult, error) 
 		return core.ToolResult{}, errors.New("this session is not a member of a talkoot")
 	}
 	e, err := seat.Send(o)
+	var moved *ClaimNotMovedError
+	if errors.As(err, &moved) {
+		text := fmt.Sprintf("Sent %s %s to %s, but the ticket claim did not move: %v. Do not send the handoff again. Ask a person to move the claim.", e.Kind, e.ID, strings.Join(e.To, ", "), moved.Err)
+		return core.ToolResult{Content: []provider.Content{provider.TextBlock{Text: text}}, Details: e}, nil
+	}
 	if err != nil {
 		return core.ToolResult{}, err
 	}
