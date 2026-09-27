@@ -1,9 +1,16 @@
-# 05: One core, many front ends
+# 05: One harness, many front ends
 
 terva presents the same agent through a terminal UI, a browser panel, an
 immersive browser app, an editor protocol, chat platforms, several headless
 modes, an embedding library, and a session replayer. This chapter is about how
 that stays one system instead of nine.
+
+In the three layers of [chapter 01](01-what-a-harness-does.md), this chapter
+is the harness. The front ends belong to the base, and none of them drives the
+agent core directly. Each one is a client of the harness's control plane, and
+the harness runs the one agent core. That is why the chapter's title names the
+harness. It was "one core, many front ends" until 2026-09-25, when "core" came
+to mean the agent core alone.
 
 ## The failure mode being avoided
 

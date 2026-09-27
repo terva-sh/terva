@@ -37,6 +37,7 @@ and they are not worth your time.
 | 04 | [Permission and sandboxing](04-permission-and-sandbox.md) | The two axes, the chokepoint, authority classification, durable grants, what a jail is and is not |
 | 05 | [Extensibility and protocols](05-extensibility-and-protocols.md) | In- versus out-of-process, the footprint ladder, versioning a plugin wire, MCP as an adapter |
 | 06 | [Operating and evidence](06-operating-and-evidence.md) | Sessions, accounting, observability, and how to test a system whose central component is nondeterministic |
+| 07 | [Extracting an engine](07-extracting-an-engine.md) | Splitting the loop out of a harness, the boundary and the census, a stability promise, and the first release that ships it |
 
 ## The short version
 

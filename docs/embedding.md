@@ -4,13 +4,23 @@ There are three ways to put terva inside another program. They differ in how
 much of terva comes with it, and in who decides what the agent sees, which
 tools it has, and where its transcript lives.
 
+In terms of terva's three layers
+([What a harness does](design/01-what-a-harness-does.md) draws them), each way
+takes a different set. RPC and the SDK hand you the agent core with terva's
+harness around it. The engine hands you the agent core alone, and the harness
+is yours to write. A fourth arrangement runs the other way round: terva's
+harness around an agent that is not terva. The
+[last section](#the-other-way-round-the-harness-around-another-agent)
+describes it.
+
 | | Over RPC | The SDK | The engine |
 |---|---|---|---|
+| Layers | The core and the harness, with terva's tools, extensions and MCP servers | The core and the harness, with terva's tools | The core alone |
 | Runs | `terva rpc` as a child process | `packages/agent/sdk` in your Go process | `packages/core` and `packages/provider` in your Go process |
 | Language | Any that can spawn a process and read its pipes | Go | Go |
 | Conventions | terva's, in full | terva's, minus what the SDK lists as yours | Yours |
 | Configuration | `$TERVA_HOME`, the same as the CLI | `$TERVA_HOME/config.json`, env vars, and `sdk.Config` | Only the values you pass |
-| Compatibility | The protocol's major version | The SDK's exported API | None yet |
+| Compatibility | The protocol's major version | The SDK's exported API | The stable packages, measured before 1.0 (below) |
 | Start from | [rpc.md](rpc.md), `examples/rpc/` | `examples/sdk/` | `examples/harness/` |
 
 ## Over RPC
@@ -112,3 +122,40 @@ usage poll of the OpenRouter, DeepSeek and Kimi clients.
 **Pick it when** terva's conventions are not the ones you want: you want to
 decide what the model sees on each request, keep transcripts in your own store,
 or expose only tools you wrote.
+
+## The other way round: the harness around another agent
+
+The three ways above put terva's agent core inside your program. terva can
+also keep its harness and hand the work to an agent that is not terva. A
+**worker backend** runs that agent as a background worker of a terva session.
+The `claude` backend drives Claude Code, and the `terva` backend drives another
+terva over `terva rpc`.
+
+The worker gets terva's conventions without terva's prompt:
+
+- **A briefing, not terva's system prompt.** It names the task, the workspace
+  and the persona, and it points the worker at the project's `AGENTS.md` for
+  the worker to read itself.
+- **Approvals come back to terva.** A worker whose approval posture asks sends
+  each request to the session that dispatched it, through
+  `terva mcp-approval-bridge` for Claude Code. It surfaces there like any other
+  approval.
+- **The session tracks it.** The worker appears on the task board with its
+  cost, and it takes a `backend` option on `swarm_spawn`, on the board, and on
+  `/swarm`.
+
+**Know what stays outside terva.** The worker is a separate process with its
+own tools and its own credentials. terva's permission rules do not reach
+inside it. terva maps its approval posture onto the worker's own permission
+mode, and only the requests the worker asks about come back.
+
+Worker backends are **off by default**. Set `external_workers_enabled` to
+`true` in `config.json`, or turn on **External agent workers** in the web
+panel's settings. The setting sits under auto-swarm, because `backend` is an
+option of `swarm_spawn`, so auto-swarm must be on too. Until then, every
+dispatch to a backend is refused.
+
+The reverse also works. `terva rpc --portable` strips terva's harness-local
+self-context from the prompt, so another harness can run terva as its worker
+([cli.md](cli.md)).
+

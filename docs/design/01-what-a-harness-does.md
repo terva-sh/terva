@@ -158,6 +158,18 @@ behind one interface, and projects one agent loop through a terminal UI, a
 browser panel, an editor protocol, chat platforms, an embedding SDK, and several
 headless modes.
 
+It is built in three layers, and the logo draws them. The wildcard at the
+centre is the **agent core**: the loop, the events, the seams for tools and
+permission, and the interface every model provider sits behind. The core reads
+no file and no environment variable, so any program that wants an agent loop
+can host it. The shell around the wildcard is the **harness**. It holds terva's
+own choices about what the core runs with: configuration, permission policy,
+session files and credentials. The block under the shell is the **base**, where
+the harness meets the world. It holds the front ends, and the tools, extensions
+and servers that give the agent its reach. A drawing of the logo pulled apart
+into those three parts is at
+[`assets/captures/three-layers.svg`](../../assets/captures/three-layers.svg).
+
 *(Counts of providers, tools, packages and protocol methods live in the
 implementation tier, where they carry a commit and a date. This tier avoids
 them on purpose: a number in a conceptual document is a number nobody

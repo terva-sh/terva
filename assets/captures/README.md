@@ -23,6 +23,7 @@ development repository says why they live here and not under `docs/`.
 | `terminal-demo.jsonl` | The source transcript of the terminal demo: a fix in `auth.go`, two permission prompts, one question. Hand-authored, no real provider, no secret. | `UPDATE_FIXTURES=1 go test ./packages/agent/replay/ -run TestDemoTranscript` rewrites it from the scene in `demo_transcript_test.go`; the same test without the flag checks it still replays. | none; it is source |
 | `terminal-demo.cast` | The terminal demo, recorded by replaying the transcript through the real TUI. | `just demo-record` | `terminal-demo.cast.stamp` |
 | `terminal-demo.gif` | The same cast rendered for README, which cannot run a player. | `just demo-gif` | shares the cast's stamp |
+| `three-layers.svg` | terva's three layers as the three parts of the logo: the wildcard is the agent core, the shell is the harness, the footer block is the base. | Hand-drawn. The part paths are copied from `assets/brand/terva-logo.svg` and only moved or scaled; copy them again when the logo changes. It names no package, because the architecture overview is where those are checked. | none; it is source |
 
 ## Recipes
 

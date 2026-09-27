@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1980 860" role="img" aria-labelledby="three-layers-title three-layers-desc">
+  <title id="three-layers-title">terva's three layers, drawn as the three parts of the logo</title>
+  <desc id="three-layers-desc">The terva logo on the left, then the same logo pulled apart into its three parts. The orange wildcard asterisk is the agent core, the engine and the wire. The white hexagonal shell is the harness, terva's composition and policy. The amber footer block is the base, where the harness touches the world.</desc>
+  <!-- Hand-drawn (decision 0020). The part geometry is copied from
+       assets/brand/terva-logo.svg, the source of truth, and only translated
+       or scaled here. If the logo changes, copy the paths again. Package
+       names stay out of this file: docs/architecture/01-overview.md names
+       them, and it is where they are checked. -->
+  <defs>
+    <g id="shell">
+      <path d="M492 161.14L212 322.79L212 477L288 477L288 366.67L492 248.89Z"/>
+      <path d="M532 161.14L812 322.79L812 477L736 477L736 366.67L532 248.89Z"/>
+      <path d="M212 515L212 669.21L373.71 762.57L407.76 694.47L288 625.33L288 515Z"/>
+      <path d="M812 515L812 669.21L650.29 762.57L616.24 694.47L736 625.33L736 515Z"/>
+    </g>
+    <g id="wildcard">
+      <rect x="488" y="387" width="48" height="218"/>
+      <rect x="488" y="387" width="48" height="218" transform="rotate(60 512 496)"/>
+      <rect x="488" y="387" width="48" height="218" transform="rotate(-60 512 496)"/>
+    </g>
+    <path id="footer" d="M442.47 702L581.53 702A4 4 0 0 1 585.11 704.21L636.76 807.53A10 10 0 0 1 627.82 822L396.18 822A10 10 0 0 1 387.24 807.53L438.89 704.21A4 4 0 0 1 442.47 702Z"/>
+  </defs>
+
+  <rect width="1980" height="860" fill="#0A0A09"/>
+
+  <!-- The whole logo, at half size. -->
+  <g transform="translate(-26 152) scale(0.5)">
+    <use href="#shell" fill="#F5F1E8"/>
+    <use href="#wildcard" fill="#F29100"/>
+    <use href="#footer" fill="#FDB515"/>
+  </g>
+
+  <!-- Pulled apart. -->
+  <path d="M430 400H510M490 384L510 400L490 416" fill="none" stroke="#7A7979" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <use href="#wildcard" fill="#F29100" transform="translate(188 -96)"/>
+  <use href="#shell" fill="#F5F1E8" transform="translate(688 -96)"/>
+  <use href="#footer" fill="#FDB515" transform="translate(1248 -362)"/>
+
+  <g font-family="JetBrains Mono, DejaVu Sans Mono, monospace" text-anchor="middle">
+    <text x="230" y="740" font-size="36" fill="#7A7979">terva</text>
+
+    <text x="700" y="740" font-size="44" fill="#F29100">Agent core</text>
+    <text x="700" y="786" font-size="26" fill="#7A7979">the wildcard</text>
+    <text x="700" y="822" font-size="26" fill="#F5F1E8">the engine and the wire</text>
+
+    <text x="1200" y="740" font-size="44" fill="#F5F1E8">Harness</text>
+    <text x="1200" y="786" font-size="26" fill="#7A7979">the harness shell</text>
+    <text x="1200" y="822" font-size="26" fill="#F5F1E8">composition and policy</text>
+
+    <text x="1760" y="740" font-size="44" fill="#FDB515">Base</text>
+    <text x="1760" y="786" font-size="26" fill="#7A7979">the footer block</text>
+    <text x="1760" y="822" font-size="26" fill="#F5F1E8">where it meets the world</text>
+  </g>
+</svg>

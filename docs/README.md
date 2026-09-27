@@ -3,9 +3,13 @@
 terva is a harness for tool-using agents: a single Go binary running a
 permissioned agent loop, projected through many front ends and extensible in
 any language. It ships wired for coding, with read, write and run across your
-project, but the core is general: hand it extensions or MCP servers and it
-operates whatever they expose, all under one permission and policy model.
-This page maps everything under `docs/`.
+project, but nothing underneath is specific to code: hand it extensions or MCP
+servers and it operates whatever they expose, all under one permission and
+policy model. It is built in three layers: an agent core, the harness around
+it, and a base where it meets the world.
+[What a harness does](design/01-what-a-harness-does.md) draws them, and
+[Embedding terva](embedding.md) says how to take one on its own. This page maps
+everything under `docs/`.
 
 **Want to run it?** Start with the [CLI reference](cli.md), which opens with
 [the ways to run terva](cli.md#ways-to-run-terva) (the terminal UI, the web

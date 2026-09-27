@@ -333,7 +333,110 @@ from a lookup with no matches.
 
 ---
 
-## G. Structural tensions we have not resolved
+## G. Extracting an engine
+
+In September 2026 terva split its agent core out of the harness, over three days of
+pull requests, and then shipped the split in a release with a promise about what stays
+stable. None of the defects below reached a public release. The two Windows stops cost
+two version numbers. The generalized versions, with their
+evidence tags, are in [practices 07](../practices/07-extracting-an-engine.md).
+
+### Every feature that left needed a seam, and some seams did not need to stay
+
+Feature after feature moved out of the engine into components, and almost every move
+needed a public hook the engine did not have. There were eight in all: a report of which
+ephemeral blocks a request carried, a gate between tool steps, an observer of each
+request sent, a way to write a diagnostic row, and four more. The context-pressure note
+needed none, because it reused the hook the first move had added. The rule that decided each case was that a hook terva needed and a generic
+host could not reach meant a missing seam, and the repair was the seam.
+
+Three of those hooks were later made private again. Once components attached through
+one entry point, which asks a component which capability interfaces it implements, a
+seam for a component no longer had to be a method on the engine. A ninth seam, to order
+components' prompt segments, was proposed and declined as new API for no measured
+problem.
+
+> **Rule.** Keep a generic host that uses only the public API, and let it find the
+> missing seams. Then attach components through one point, so a new seam is a new
+> interface rather than a new method.
+
+### An observer that moved changed the order of the rows
+
+The cache-cliff detector used to run inside the engine, after the engine recorded a
+request's usage. As a dispatch observer it heard each stream event before the engine
+acted on it, so it wrote its row ahead of the usage row it depends on. Review caught it
+before merge. The observer now fires after the engine acts, and a store test asserts
+that the first cliff row follows the usage rows. A probe with the old order fails it.
+
+> **Rule.** When inline code becomes an observer, its position in the sequence is part
+> of the contract. Test the order of what it writes.
+
+### The default was load-bearing in thirteen tests
+
+The global model catalog left in three pull requests: a seam that changed nothing, then
+terva holding its own catalog, then the global's removal. The third step failed exactly
+thirteen wire tests, and each was a test whose client had leaned on the global without
+saying so. Moving the permission model later took the same three steps. It was planned as two
+pull requests and became three when the reviewer could not read the second one whole.
+
+> **Rule.** Remove a global by expanding, migrating, then contracting, each step merged
+> green. Expect the contract step to find the hidden dependents. That is the step doing
+> its job.
+
+### The census counted less than was there
+
+The release census, which counts API breaks, read each package directory recursively.
+A subpackage's `New` therefore masked the removal of the parent's `New`. Against the
+previous release it reported 594 removals, and the fixed census reports 615: twenty-one
+removals were hidden. Nobody saw a failure. The bug surfaced while the per-directory
+snapshot was being designed. A second tool had the same shape: the check that a stable
+signature names only stable symbols passed with nothing to check, because a trailing
+comment on the module line hid the module path from it.
+
+> **Rule.** A counting tool whose bug makes it count less still looks healthy. Give it a
+> case with a known answer, and make that case fail when the count is short.
+
+### Two releases stopped at the Windows job
+
+The fork's own CI runs Linux containers only. Windows runs in the public mirror's CI, at
+go-live, before the tag. v0.139.0 stopped there on five tests: `HOME` against
+`USERPROFILE`, a path quoted with `%q`, and a path separator in golden output. v0.139.1
+stopped on the embedded skill files. They had no line-ending pin, so a Windows checkout
+gave them CRLF, and the prompt goldens failed on output that printed identical. Neither
+version reached the public tag, and four earlier releases had stopped at the same job.
+
+> **Rule.** A platform that only the last gate runs is a platform you test at release
+> time. Pin line endings for every file you compare byte for byte, and run each
+> platform before the gate that publishes.
+
+### A pipe that had been judged safe
+
+A CI step read the newest tag with `git tag | head -1` under `pipefail`. It failed 93 times
+in 100 in the CI image and not once in 200 on a workstation, exiting 141 with no output.
+An earlier review had rated the same shape latent, because a tag list is far smaller than
+a pipe buffer. That reasoning was wrong. Once `head` has its line and exits, the next
+write git makes takes `SIGPIPE`, whatever the buffer size. Asking git for one ref failed
+none of a hundred runs.
+
+> **Rule.** Under `pipefail`, do not let a consumer stop early. Ask the producer for
+> fewer lines.
+
+### The reviewer's limits shaped the pull requests
+
+The automated reviewer gives up when the diff, the discussion and the attached files
+pass 256 KiB. That stopped three extraction pull requests: one was split, and two were
+reviewed locally instead. A declined finding came back in new words on a later run, and
+a disposition written only in a ticket came back because the reviewer reads the pull
+request. The pull request that wrote the first release's migration notes merged without a model
+review after three provider failures, on the maintainer's word.
+
+> **Rule.** Size pull requests to the reviewer, record each disposition where the
+> reviewer reads, and decide before you need it what happens when the reviewer is
+> down.
+
+---
+
+## H. Structural tensions we have not resolved
 
 Not lessons but open problems, recorded honestly because a design document that
 only lists solved problems is marketing.
@@ -341,7 +444,9 @@ only lists solved problems is marketing.
 - **Mass re-concentrates faster than extraction relieves it.** Every
   decomposition of the last year worked, and the gravity moved rather than
   dissipating. The pattern to confront is that extraction has been moving
-  *code*, not *state or ownership*.
+  *code*, not *state or ownership*. The engine extraction (section G) is the one
+  exception so far: each feature took its state with it into a component. The
+  harness's own hubs are unchanged.
 - **Three protocol surfaces, three answers to the approval question.** The
   control plane, the RPC wire, and the editor protocol share an event
   vocabulary and diverge on approvals. Two of the three are standards we do not
@@ -352,9 +457,9 @@ only lists solved problems is marketing.
 - **Hand-maintained data at scale.** A model catalog of hundreds of rows, priced
   by hand, is the sole input to cost accounting and has no staleness signal.
 - **Invariants enforced by convention.** Several load-bearing rules are held
-  by comments and single tests rather than by types: lock ordering, a required
-  assignment without which a host is ungated, and a cross-process display
-  invariant.
+  by comments and single tests rather than by types: lock ordering and a
+  cross-process display invariant. A third, the assignment without which a host
+  ran ungated, became a required constructor argument in the extraction.
 
 The standing agenda that tracks these, with per-subsystem evidence, lives in the
 development repository under `docs/architecture/`.

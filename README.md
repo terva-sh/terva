@@ -16,12 +16,29 @@
 ## What is it?
 
 An agent harness in a single static Go binary: a coding agent out of the box,
-open to anything you can wire a tool to. One hardened, test-backed core — the
-agent loop, event wire, permission policy, and two dozen model providers —
-projected through many front ends and extensible in any language.
+open to anything you can wire a tool to. It is built in three layers, and the
+logo draws them:
 
-Two first-class front ends ship in the box, both driving that same core over
-the control plane — same sessions, same permissions, same event stream:
+<p align="center">
+  <img src="assets/captures/three-layers.svg" alt="The terva logo pulled apart into its three parts: the orange wildcard is the agent core, the white shell is the harness, and the amber footer block is the base" width="720" />
+</p>
+
+- the **agent core**, the wildcard: one hardened, test-backed agent loop and
+  event wire, and one interface to two dozen model providers. It reads no file
+  and no environment variable.
+- the **harness**, the shell: terva's composition and conventions, meaning
+  configuration, the permission policy, the model registry, sessions,
+  credentials, and the daemon every front end talks to.
+- the **base**, the footer block: the front ends, and the tools, extensions,
+  MCP servers, skills and connectors that reach the world, in any language.
+
+Take the whole binary, or only the piece you need: the core alone in your own
+program, the core and harness through the Go SDK or `terva rpc`, or terva's
+harness around another agent. [docs/embedding.md](docs/embedding.md) compares
+the ways in.
+
+Two first-class front ends ship in the box, both clients of that same harness
+over its control plane — same sessions, same permissions, same event stream:
 
 - a **terminal UI** (`terva`) — the default: hand-rolled, fast, with slash
   commands, inline images, and message queueing. See [docs/tui.md](docs/tui.md).
@@ -219,31 +236,41 @@ just install-dev   # non-stripped, pprof-enabled build (see docs/profiling.md)
 `go test ./...` skips the tagged builds, the i18n check, and the overlay check,
 so a green partial run is not a green CI.
 
-Source layout (single Go module; the top-level packages are `provider`,
-`core`, `tui`, and `agent`, with `agent` further split into focused
-sub-packages):
+Source layout (single Go module), grouped by layer:
 
 ```
-cmd/terva/                              main()
-packages/provider/                    LLM client surface, model catalog, streaming clients
+cmd/terva/                            main()
+
+# the agent core
+packages/core/                        agent loop, events, tools, permission seam, cost, compaction
+packages/core/{stall,lazytools,...}   components a host attaches with core.WithComponent
+packages/provider/                    the wire: Client interface, streaming clients, baked model rows
+
+# the harness
+packages/agent/                       cli wiring, arg parsing, config
+packages/agent/build/                 Resolve(): the core, assembled with terva's policies and prompt
+packages/agent/modelreg/              terva's model registry
+packages/session/                     JSONL sessions, the core's transcript store
 packages/auth/                        credential store, api-key probe, oauth, login server
-packages/core/                        agent loop, sessions, cost tracking, compaction
+packages/agent/swarm/                 background subagent runtime
+packages/agent/card/                  SillyTavern Character Card V2 parser (json + png)
+packages/agent/lore/                  keyed-context (lore) engine: selection, budget, recursion
+packages/agent/sdk/                   public Go SDK: the core and harness in your own process
+
+# the base
 packages/tui/                         terminal raw-mode, input parser, editor, renderer, markdown, view
-packages/agent/                       cli wiring, arg parsing, system prompt, config
-packages/agent/extensions/            extension subprocess manager
-packages/agent/extproto/              extension wire-format types
 packages/agent/modes/                 interactive tui, print, json, dialogs
 packages/agent/tools/                 read, write, edit, bash, terva_status, sandbox
 packages/agent/skills/                skill discovery, frontmatter parser, skill tool
-packages/agent/card/                  SillyTavern Character Card V2 parser (json + png)
-packages/agent/lore/                  keyed-context (lore) engine: selection, budget, recursion
-packages/agent/swarm/                 background subagent runtime
-packages/agent/sdk/                   public Go SDK for embedding terva in-process (package sdk)
+packages/agent/extensions/            extension subprocess manager
+packages/agent/extproto/              extension wire-format types
 packages/agent/ext/                   public Go SDK for writing extensions (package ext)
 ```
 
-Downstream consumers can depend on individual packages:
-`go get terva.sh/terva/packages/core` pulls only `core` and its transitive deps (today: `provider`), no agent or TUI code.
+Downstream consumers can depend on the layers separately:
+`go get terva.sh/terva/packages/core` pulls only the agent core and the wire,
+no harness or TUI code. [docs/embedding.md](docs/embedding.md) says which way in
+suits which program, and what each one promises before 1.0.
 
 ## Lineage
 

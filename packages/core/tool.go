@@ -1,5 +1,6 @@
-// Package core implements the agent loop, tool runtime, and session
-// persistence. It is provider-agnostic: it talks to an LLM only through
+// Package core implements the agent loop and the tool runtime. It reads and
+// writes no file: a host that wants the transcript kept attaches a
+// TranscriptStore. It is provider-agnostic: it talks to an LLM only through
 // the provider.Client interface.
 package core
 

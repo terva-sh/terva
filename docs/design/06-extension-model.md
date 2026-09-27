@@ -7,6 +7,10 @@ case until it is a monolith with a plugin API bolted on.
 This chapter covers the two questions that decide it: **what should be built
 in**, and **how should everything else attach**.
 
+In the three layers of [chapter 01](01-what-a-harness-does.md), this is the
+base: the capability the agent reaches through, attached to the harness
+without a change to the agent core.
+
 ## Why the built-in tool count is the number to watch
 
 The instinct is that adding a tool is cheap, because it is a few hundred lines and

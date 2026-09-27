@@ -28,18 +28,20 @@ that one generalizes.
 ## Read in order
 
 The chapters build on each other. Read 01–03 and you understand the engine;
-everything after that is what was built around it.
+everything after that is what was built around it. The layer column places
+each chapter in the three layers that chapter 01 draws: the agent core, the
+harness around it, and the base where terva meets the world.
 
-| | Chapter | The question it answers |
-|---|---|---|
-| 01 | [What a harness does](01-what-a-harness-does.md) | Why anything sits between a model and your machine at all, and what the eight jobs of that layer are |
-| 02 | [The agent loop](02-the-agent-loop.md) | The turn/step cycle: how one prompt becomes many model calls and tool executions, and how it stops |
-| 03 | [Context and cost](03-context-and-cost.md) | The context window as a budget: what fills it, what caching rewards, and how compaction reclaims it |
-| 04 | [The permission model](04-permission-model.md) | One chokepoint, two orthogonal axes, seven authority classes, and why the axes must not be merged |
-| 05 | [One core, many front ends](05-one-core-many-front-ends.md) | The control plane: why the terminal UI is a network client of a daemon it usually hosts itself |
-| 06 | [The extension model](06-extension-model.md) | Four seams for adding capability, the footprint ladder for choosing between them, and why most of them are out-of-process |
-| 07 | [State and identity](07-state-and-identity.md) | What survives a restart: sessions, personas, experiences, keyed context, and the play domain |
-| 08 | [Lessons](08-lessons.md) | What we got wrong, what the corrections cost, and the rules we now hold ourselves to |
+| | Chapter | Layer | The question it answers |
+|---|---|---|---|
+| 01 | [What a harness does](01-what-a-harness-does.md) | all three | Why anything sits between a model and your machine at all, and what the eight jobs of that layer are |
+| 02 | [The agent loop](02-the-agent-loop.md) | agent core | The turn/step cycle: how one prompt becomes many model calls and tool executions, and how it stops |
+| 03 | [Context and cost](03-context-and-cost.md) | agent core | The context window as a budget: what fills it, what caching rewards, and how compaction reclaims it |
+| 04 | [The permission model](04-permission-model.md) | core and harness | One chokepoint, two orthogonal axes, seven authority classes, and why the axes must not be merged. The chokepoint is in the core; the policy behind it is the harness's |
+| 05 | [One harness, many front ends](05-one-core-many-front-ends.md) | harness | The control plane: why the terminal UI is a network client of a daemon it usually hosts itself |
+| 06 | [The extension model](06-extension-model.md) | base | Four seams for adding capability, the footprint ladder for choosing between them, and why most of them are out-of-process |
+| 07 | [State and identity](07-state-and-identity.md) | harness | What survives a restart: sessions, personas, experiences, keyed context, and the play domain |
+| 08 | [Lessons](08-lessons.md) | all three | What we got wrong, what the corrections cost, and the rules we now hold ourselves to |
 
 ## The shortest possible summary
 
