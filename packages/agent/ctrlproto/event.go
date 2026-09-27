@@ -51,8 +51,8 @@ type Event struct {
 	// to any session, and the client that started the login may not have one in
 	// focus when it lands.
 	Auth *AuthState `json:"auth,omitempty"`
-	// Talkoot is set on the talkoot_envelope, talkoot_status, and
-	// talkoot_roster events, which ride a talkoot's own address
+	// Talkoot is set on the talkoot_envelope, talkoot_answer, talkoot_status,
+	// and talkoot_roster events, which ride a talkoot's own address
 	// ([TalkootAddr]).
 	Talkoot *TalkootEvent `json:"talkoot,omitempty"`
 }
@@ -123,6 +123,10 @@ const (
 	// EventTalkootEnvelope carries a new envelope in a talkoot's room
 	// (Talkoot.Line), on the room's address.
 	EventTalkootEnvelope = "talkoot_envelope"
+	// EventTalkootAnswer carries a person's answer to a member's question, an
+	// answer line (Talkoot.Line), on the room's address. A member cites it as
+	// answer:<id>, and the line's Ref holds the id.
+	EventTalkootAnswer = "talkoot_answer"
 	// EventTalkootStatus carries every member's status after one changed
 	// (Talkoot.Members), on the room's address.
 	EventTalkootStatus = "talkoot_status"

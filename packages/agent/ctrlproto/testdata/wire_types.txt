@@ -1175,6 +1175,12 @@ TailInfo
 	span_start	int
 	variants	int
 	active	int
+TalkootAnswered
+	question	string
+	chosen	[]string	omitempty
+	note	string	omitempty
+	declined	bool	omitempty
+	omitted	int	omitempty
 TalkootCard
 	session	string
 	member	string
@@ -1187,6 +1193,11 @@ TalkootCard
 TalkootChain
 	root	string
 	hops	int
+TalkootCitation
+	answer	string
+	asker	string
+	at	time.Time
+	answers	[]TalkootAnswered
 TalkootCreateParams
 	id	string
 	text	string
@@ -1209,6 +1220,7 @@ TalkootEnvelope
 	reply_to	string	omitempty
 	chain	TalkootChain
 	at	time.Time
+	cites	[]TalkootCitation	omitempty
 TalkootEvent
 	id	string
 	line	*TalkootLine	omitempty
@@ -1234,6 +1246,7 @@ TalkootLine
 	proposer	string	omitempty
 	edited	bool	omitempty
 	changes	[]TalkootMemberChange	omitempty
+	answers	[]TalkootAnswered	omitempty
 TalkootListResult
 	talkoots	[]TalkootSummary
 TalkootMember

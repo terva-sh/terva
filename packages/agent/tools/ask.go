@@ -26,6 +26,23 @@ type AskUserTool struct {
 	Asker core.Asker
 }
 
+// CitedAsker is an Asker that also records each answer where a teammate can
+// check it. The workspace's asker is one: a person's answer to a Talkoot
+// member's question becomes a room line.
+type CitedAsker interface {
+	AskCited(ctx context.Context, qs []core.UserQuestion) ([]core.UserAnswer, AnswerRecord, error)
+}
+
+// AnswerRecord says where a CitedAsker recorded an answer.
+type AnswerRecord struct {
+	// Ref is the reference that names the recorded answer, empty when nothing
+	// recorded it. A session outside a talkoot records nothing.
+	Ref string
+	// Err says why an answer that should have been recorded was not. The
+	// answer itself still stands.
+	Err error
+}
+
 // askQuestion is one question within a call. The singular top-level
 // fields on askArgs are the same shape, kept so a model that emits the
 // original one-question form still works.
@@ -143,14 +160,50 @@ func (t *AskUserTool) Execute(ctx context.Context, raw json.RawMessage, progress
 		}, nil
 	}
 
-	answers, err := t.Asker.Ask(ctx, qs)
+	var answers []core.UserAnswer
+	var rec AnswerRecord
+	if c, ok := t.Asker.(CitedAsker); ok {
+		answers, rec, err = c.AskCited(ctx, qs)
+	} else {
+		answers, err = t.Asker.Ask(ctx, qs)
+	}
 	if err != nil {
 		// Context cancelled or front-end failure — surface as an error
 		// result so the model knows the question was not answered.
 		return core.ToolResult{}, fmt.Errorf("ask_user_question: %w", err)
 	}
 	answers = core.PadAnswers(answers, len(qs))
-	return askResult(qs, answers), nil
+	return withRecord(askResult(qs, answers), rec), nil
+}
+
+// withRecord tells the model the reference that proves the answer to a
+// teammate. A Talkoot router prints the answer itself beside an envelope that
+// cites it, so the claim does not rest on the sender's word. When the record
+// failed, the model learns that too, so it does not relay the decision as if
+// a teammate could check it.
+func withRecord(res core.ToolResult, rec AnswerRecord) core.ToolResult {
+	var text, key string
+	var val any
+	switch {
+	case rec.Ref != "":
+		text = fmt.Sprintf("\n\nThe talkoot room records this answer as %s. To tell a teammate the decision of the person, put %s in the refs of your envelope. The recipient then sees the answer of the person, and not only your account of it.", rec.Ref, rec.Ref)
+		key, val = "cite", rec.Ref
+	case rec.Err != nil:
+		text = fmt.Sprintf("\n\nThe talkoot room could not record this answer, so a teammate cannot check it (%v). If you tell a teammate this decision, say that it is your report only.", rec.Err)
+		key, val = "cite_error", rec.Err.Error()
+	default:
+		return res
+	}
+	if len(res.Content) > 0 {
+		if tb, ok := res.Content[0].(provider.TextBlock); ok {
+			tb.Text += text
+			res.Content[0] = tb
+		}
+	}
+	if d, ok := res.Details.(map[string]any); ok {
+		d[key] = val
+	}
+	return res
 }
 
 // questions normalises the two accepted shapes into one list: the

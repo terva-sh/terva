@@ -205,6 +205,31 @@ type TalkootEnvelope struct {
 	ReplyTo string       `json:"reply_to,omitempty"`
 	Chain   TalkootChain `json:"chain"`
 	At      time.Time    `json:"at"`
+	// Cites holds the person's answers that the envelope's answer: references
+	// name, as the router found them in the room. The router sets it.
+	Cites []TalkootCitation `json:"cites,omitempty"`
+}
+
+// TalkootCitation is a person's answer that an envelope cites: the answer
+// line's id, the member that asked, when the person answered, and each
+// question with its answer.
+type TalkootCitation struct {
+	Answer  string            `json:"answer"`
+	Asker   string            `json:"asker"`
+	At      time.Time         `json:"at"`
+	Answers []TalkootAnswered `json:"answers"`
+}
+
+// TalkootAnswered is a person's answer to one question a member asked. Chosen
+// holds every option picked, or the person's own text. A declined question
+// has none.
+type TalkootAnswered struct {
+	Question string   `json:"question"`
+	Chosen   []string `json:"chosen,omitempty"`
+	Note     string   `json:"note,omitempty"`
+	Declined bool     `json:"declined,omitempty"`
+	// Omitted counts the choices past the answer line's bound.
+	Omitted int `json:"omitted,omitempty"`
 }
 
 // TalkootChain ties an envelope to the person's post that began its work.
@@ -215,7 +240,7 @@ type TalkootChain struct {
 }
 
 // TalkootLine is one line of the room. Type says which fields it sets:
-// envelope, turn, guard, resume, delivery, read, seat, or roster. A line that
+// envelope, turn, guard, resume, delivery, read, seat, roster, or answer. A line that
 // did not parse reads as damaged. The seal that the room keeps on each line
 // stays in the room.
 type TalkootLine struct {
@@ -240,6 +265,10 @@ type TalkootLine struct {
 	Proposer string                `json:"proposer,omitempty"`
 	Edited   bool                  `json:"edited,omitempty"`
 	Changes  []TalkootMemberChange `json:"changes,omitempty"`
+	// Answers is set on an answer line: a person's answer to the questions
+	// Member asked. Ref holds the answer's id, which a member cites as
+	// answer:<id>.
+	Answers []TalkootAnswered `json:"answers,omitempty"`
 }
 
 // TalkootInboxResult is the talkoot.inbox reply, oldest card first.
@@ -405,7 +434,8 @@ type TalkootDecideParams struct {
 // address.
 type TalkootEvent struct {
 	ID string `json:"id"`
-	// Line is set on [EventTalkootEnvelope] and [EventTalkootRoster].
+	// Line is set on [EventTalkootEnvelope], [EventTalkootAnswer], and
+	// [EventTalkootRoster].
 	Line *TalkootLine `json:"line,omitempty"`
 	// Members is set on [EventTalkootStatus]: every member's status, in
 	// roster order.
@@ -417,6 +447,11 @@ type TalkootEvent struct {
 // TalkootEnvelopeEvent builds an [EventTalkootEnvelope] event.
 func TalkootEnvelopeEvent(id string, l TalkootLine) Event {
 	return Event{WireEvent: core.WireEvent{Type: EventTalkootEnvelope}, Talkoot: &TalkootEvent{ID: id, Line: &l}}
+}
+
+// TalkootAnswerEvent builds an [EventTalkootAnswer] event.
+func TalkootAnswerEvent(id string, l TalkootLine) Event {
+	return Event{WireEvent: core.WireEvent{Type: EventTalkootAnswer}, Talkoot: &TalkootEvent{ID: id, Line: &l}}
 }
 
 // TalkootRosterEvent builds an [EventTalkootRoster] event.

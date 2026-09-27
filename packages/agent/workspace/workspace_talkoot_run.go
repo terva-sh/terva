@@ -112,8 +112,8 @@ func (r *talkootRun) observe(l talkoot.Line) {
 	r.evMu.Unlock()
 }
 
-// flush sends the envelope lines queued since the last flush, and the member
-// statuses that changed.
+// flush sends the envelope, answer, and roster lines queued since the last
+// flush, and the member statuses that changed.
 func (r *talkootRun) flush() {
 	r.flushMu.Lock()
 	defer r.flushMu.Unlock()
@@ -125,6 +125,8 @@ func (r *talkootRun) flush() {
 		switch lines[i].Type {
 		case talkoot.LineEnvelope:
 			r.emit(talkootEvent{Talkoot: r.id, Kind: "envelope", Line: &lines[i]})
+		case talkoot.LineAnswer:
+			r.emit(talkootEvent{Talkoot: r.id, Kind: "answer", Line: &lines[i]})
 		case talkoot.LineRoster:
 			r.emit(talkootEvent{Talkoot: r.id, Kind: "roster", Line: &lines[i]})
 		}

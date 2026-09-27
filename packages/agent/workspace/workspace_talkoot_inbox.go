@@ -3,11 +3,16 @@ package workspace
 import (
 	"cmp"
 	"context"
+	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/talkoot"
+	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/core"
 )
 
 // The talkoot inbox: every question and approval that a member of a talkoot
@@ -26,6 +31,37 @@ import (
 // 🔑 An answer reaches a card only through Workspace.Approve and
 // Workspace.Answer, the approve and answer verbs of a ctrlproto client. The
 // router holds its drivers, which deliver envelopes and never answer.
+
+// recordTalkootAnswer records a person's answer to a seated member's question
+// as a room line, and returns the answer: reference that cites it. A session
+// with no seat records nothing. A seat whose record fails returns the error,
+// which the member reads with the answer.
+//
+// 🔑 Only Workspace.Answer fills the park this answer came from, so the line
+// stands for the person's client, as an approval does. The seat is the one the
+// session holds when the answer lands: a member that left the roster has no
+// seat, and its answer stays out of the room.
+func (s *wsSession) recordTalkootAnswer(qs []core.UserQuestion, ans []core.UserAnswer) tools.AnswerRecord {
+	if s.ws == nil {
+		return tools.AnswerRecord{}
+	}
+	seat, ok := s.ws.talkootSeatOf(s.id)
+	if !ok || seat.b == nil {
+		return tools.AnswerRecord{}
+	}
+	// ⚠️ ask pads today, but the index below must not rest on a caller.
+	ans = core.PadAnswers(ans, len(qs))
+	out := make([]talkoot.Answered, len(qs))
+	for i, q := range qs {
+		out[i] = talkoot.Answered{Question: q.Question, Chosen: ans[i].Chosen(), Note: ans[i].Note, Declined: ans[i].Declined}
+	}
+	id, err := seat.Answer(out)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "session %s: could not record the answer in talkoot %s: %v\n", s.id, seat.b.run.id, err)
+		return tools.AnswerRecord{Err: err}
+	}
+	return tools.AnswerRecord{Ref: "answer:" + id}
+}
 
 // cardKey names an open card. A call id and an ask id come from different
 // sequences, so the kind is part of the key.

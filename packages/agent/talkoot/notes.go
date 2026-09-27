@@ -90,6 +90,13 @@ func (r remedy) missingNote() string {
 	return "write it with talkoot_note_write first, and cite the reference that returns"
 }
 
+func (r remedy) missingAnswer() string {
+	if r.person {
+		return "cite an answer by the id the room shows"
+	}
+	return "cite the answer: reference that ask_user_question returned, or one that an envelope to you cited"
+}
+
 // checkPathRef refuses a path: reference that cannot resolve under the
 // talkoot's home checkout for every reader.
 //

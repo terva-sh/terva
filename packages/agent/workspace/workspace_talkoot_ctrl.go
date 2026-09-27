@@ -160,11 +160,23 @@ func wireTalkootStatus(s talkoot.Status) ctrlproto.TalkootMemberStatus {
 }
 
 func wireTalkootEnvelope(e talkoot.Envelope) ctrlproto.TalkootEnvelope {
-	return ctrlproto.TalkootEnvelope{
+	out := ctrlproto.TalkootEnvelope{
 		ID: e.ID, Talkoot: e.Talkoot, From: e.From, To: e.To, Kind: string(e.Kind), Body: e.Body,
 		Refs: e.Refs, Thread: e.Thread, ReplyTo: e.ReplyTo,
 		Chain: ctrlproto.TalkootChain{Root: e.Chain.Root, Hops: e.Chain.Hops}, At: e.At,
 	}
+	for _, c := range e.Cites {
+		out.Cites = append(out.Cites, ctrlproto.TalkootCitation{Answer: c.Answer, Asker: c.Asker, At: c.At, Answers: wireAnswered(c.Answers)})
+	}
+	return out
+}
+
+func wireAnswered(qs []talkoot.Answered) []ctrlproto.TalkootAnswered {
+	out := make([]ctrlproto.TalkootAnswered, 0, len(qs))
+	for _, q := range qs {
+		out = append(out, ctrlproto.TalkootAnswered{Question: q.Question, Chosen: q.Chosen, Note: q.Note, Declined: q.Declined, Omitted: q.Omitted})
+	}
+	return out
 }
 
 // wireTalkootLine copies a room line without its seal. The kid and the MAC
@@ -177,6 +189,9 @@ func wireTalkootLine(l talkoot.Line) ctrlproto.TalkootLine {
 	}
 	if len(l.Changes) > 0 {
 		out.Changes = wireChanges(l.Changes)
+	}
+	if len(l.Answers) > 0 {
+		out.Answers = wireAnswered(l.Answers)
 	}
 	if l.Envelope != nil {
 		e := wireTalkootEnvelope(*l.Envelope)
@@ -192,6 +207,10 @@ func wireTalkootEvent(ev talkootEvent) (ctrlproto.Event, bool) {
 	case "envelope":
 		if ev.Line != nil {
 			return ctrlproto.TalkootEnvelopeEvent(ev.Talkoot, wireTalkootLine(*ev.Line)), true
+		}
+	case "answer":
+		if ev.Line != nil {
+			return ctrlproto.TalkootAnswerEvent(ev.Talkoot, wireTalkootLine(*ev.Line)), true
 		}
 	case "roster":
 		if ev.Line != nil {

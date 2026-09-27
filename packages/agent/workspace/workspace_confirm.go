@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/session"
@@ -173,9 +174,30 @@ func (c *workerConfirmer) Confirm(ctx context.Context, toolName, preview string)
 // broadcast an ask-request, park until the first [Workspace.Answer].
 type webAsker struct{ s *wsSession }
 
-var _ core.Asker = (*webAsker)(nil)
+var (
+	_ core.Asker       = (*webAsker)(nil)
+	_ tools.CitedAsker = (*webAsker)(nil)
+)
 
+// Ask asks and records nothing in a talkoot's room. Its callers, such as
+// ticket_init and the raati clerk, cannot hand a reference on, so a room line
+// would only widen where the answer goes.
 func (a *webAsker) Ask(ctx context.Context, qs []core.UserQuestion) ([]core.UserAnswer, error) {
+	return a.ask(ctx, qs)
+}
+
+// AskCited asks, and records the answer in the room when the session holds a
+// Talkoot seat. ask_user_question is its caller, and it tells the member the
+// reference.
+func (a *webAsker) AskCited(ctx context.Context, qs []core.UserQuestion) ([]core.UserAnswer, tools.AnswerRecord, error) {
+	ans, err := a.ask(ctx, qs)
+	if err != nil || len(qs) == 0 {
+		return ans, tools.AnswerRecord{}, err
+	}
+	return ans, a.s.recordTalkootAnswer(qs, ans), nil
+}
+
+func (a *webAsker) ask(ctx context.Context, qs []core.UserQuestion) ([]core.UserAnswer, error) {
 	s := a.s
 	if len(qs) == 0 {
 		return nil, nil

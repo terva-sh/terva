@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -124,19 +123,6 @@ type talkootSeat struct {
 var errSeatRevoked = errors.New("this session no longer holds that seat in the talkoot")
 
 func (s talkootSeat) Send(o talkoot.Outgoing) (talkoot.Envelope, error) {
-	ctx := context.Background()
-	ho, err := s.w.checkTicketHandoff(ctx, s.b, o)
-	if err != nil {
-		return talkoot.Envelope{}, err
-	}
-	e, err := s.send(o)
-	if err != nil {
-		return e, err
-	}
-	return e, ho.move(ctx, s.w.cwd, e)
-}
-
-func (s talkootSeat) send(o talkoot.Outgoing) (talkoot.Envelope, error) {
 	s.b.mu.RLock()
 	defer s.b.mu.RUnlock()
 	if s.b.revoked {

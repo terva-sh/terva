@@ -179,6 +179,9 @@ type Router struct {
 	held    []pending
 	notes   map[string][]string  // member -> rendered notes for its next turn
 	refused map[string]time.Time // member and guard -> when its last refusal line was written
+	// answers holds every person's answer in the room by its id, for the
+	// answer: references a send cites.
+	answers map[string]Citation
 	// owed holds, during replay only, the index in held of each envelope and
 	// recipient that has no outcome yet.
 	owed map[string]int
@@ -204,6 +207,7 @@ func NewRouter(r Roster, room *Room, d Drivers, l Limits, now func() time.Time) 
 		pauses: pauses{},
 		sends:  map[string][]time.Time{}, recent: map[string]time.Time{},
 		notes: map[string][]string{}, refused: map[string]time.Time{}, owed: map[string]int{},
+		answers: map[string]Citation{},
 	}
 	rt.day = rt.dayOf(now())
 	lines, err := room.Read()
@@ -359,6 +363,12 @@ func (rt *Router) replay(l Line) {
 		if l.Chain != "" {
 			rt.active[l.Member] = l.Chain
 		}
+	case LineAnswer:
+		// An answer outlives its asker's seat. A member that left the roster
+		// still asked the question, and the person still answered it.
+		if l.Ref != "" && len(l.Answers) > 0 {
+			rt.answers[l.Ref] = Citation{Answer: l.Ref, Asker: l.Member, At: l.At, Answers: l.Answers}
+		}
 	case LineDamaged:
 		// 🚨 A damaged line may have been a turn, and its spend is gone. The
 		// talkoot stays paused until a person has looked and resumes it.
@@ -440,9 +450,15 @@ func (rt *Router) Post(human string, to []string, body string, refs []string, th
 		return Envelope{}, err
 	}
 	rt.mu.Lock()
+	cites, err := rt.citesLocked(o.Refs, remedy{person: true})
+	if err != nil {
+		rt.mu.Unlock()
+		return Envelope{}, err
+	}
 	now := rt.now()
 	e := rt.envelope(HumanPrefix+human, o, now)
 	e.Chain = Chain{Root: e.ID}
+	e.Cites = cites
 	rt.chain(e.ID)
 	if err := rt.room.Append(Line{Type: LineEnvelope, At: now, Envelope: &e}); err != nil {
 		rt.mu.Unlock()
@@ -548,6 +564,13 @@ func (rt *Router) sendLocked(from string, o Outgoing, now time.Time) (Envelope, 
 		return Envelope{}, nil, err
 	}
 
+	// A citation that does not resolve is a mistake in the send, and not a
+	// guard trip, so it refuses before any guard counts the send.
+	cites, err := rt.citesLocked(o.Refs, remedy{})
+	if err != nil {
+		return Envelope{}, nil, err
+	}
+
 	root := rt.active[from]
 	if root == "" {
 		return guard(GuardHumanRoot, ActionRefused, "no human post at the root of the chain", "", ErrNoHumanRoot)
@@ -609,6 +632,7 @@ func (rt *Router) sendLocked(from string, o Outgoing, now time.Time) (Envelope, 
 	cs.hops = hops
 	e := rt.envelope(from, o, now)
 	e.Chain = Chain{Root: root, Hops: hops}
+	e.Cites = cites
 	if err := rt.room.Append(Line{Type: LineEnvelope, At: now, Envelope: &e}); err != nil {
 		return Envelope{}, nil, err
 	}

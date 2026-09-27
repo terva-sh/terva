@@ -2424,8 +2424,9 @@ export interface WireEvent {
   notice?: Notice
   auth?: AuthState
   replay?: ReplayState
-  // talkoot_envelope, talkoot_status, talkoot_roster, talkoot_inbox,
-  // talkoot_inbox_resolved: on a talkoot's own address (talkootAddr).
+  // talkoot_envelope, talkoot_answer, talkoot_status, talkoot_roster,
+  // talkoot_inbox, talkoot_inbox_resolved: on a talkoot's own address
+  // (talkootAddr).
   talkoot?: TalkootEvent
   stall?: WireStall
   escalation?: WireEscalation
@@ -2447,8 +2448,8 @@ export const ADDR_WORKSPACE = '#workspace'
 
 // ADDR_TALKOOT_PREFIX starts a talkoot room's address. Subscribing there needs
 // the `talkoot` group in the hello, and the room sends talkoot_envelope,
-// talkoot_status, talkoot_roster, talkoot_inbox, and talkoot_inbox_resolved
-// events. Like ADDR_WORKSPACE it is an
+// talkoot_answer, talkoot_status, talkoot_roster, talkoot_inbox, and
+// talkoot_inbox_resolved events. Like ADDR_WORKSPACE it is an
 // address, never a session id.
 export const ADDR_TALKOOT_PREFIX = '#talkoot:'
 
@@ -2904,6 +2905,27 @@ export interface TalkootEnvelope {
   reply_to?: string
   chain: TalkootChain
   at: string
+  // The person's answers that the envelope's answer: refs name, as the
+  // router found them in the room.
+  cites?: TalkootCitation[]
+}
+
+// TalkootCitation is a person's answer that an envelope cites.
+export interface TalkootCitation {
+  answer: string
+  asker: string
+  at: string
+  answers: TalkootAnswered[]
+}
+
+// TalkootAnswered is a person's answer to one question a member asked.
+export interface TalkootAnswered {
+  question: string
+  chosen?: string[]
+  note?: string
+  declined?: boolean
+  // The choices past the answer line's bound.
+  omitted?: number
 }
 
 export interface TalkootChain {
@@ -2912,7 +2934,7 @@ export interface TalkootChain {
 }
 
 // TalkootLine is one room line. `type` is envelope, turn, guard, resume,
-// delivery, read, seat, roster, or damaged.
+// delivery, read, seat, roster, answer, or damaged.
 export interface TalkootLine {
   type: string
   at: string
@@ -2934,6 +2956,9 @@ export interface TalkootLine {
   proposer?: string
   edited?: boolean
   changes?: TalkootMemberChange[]
+  // On an answer line: the person's answer to the questions `member`
+  // asked. `ref` holds the answer's id.
+  answers?: TalkootAnswered[]
 }
 
 // TalkootInboxResult is the talkoot.inbox reply, oldest card first.
@@ -3047,7 +3072,8 @@ export interface TalkootDecideParams {
   reason?: string
 }
 
-// TalkootEvent carries `line` on talkoot_envelope and talkoot_roster, every
+// TalkootEvent carries `line` on talkoot_envelope, talkoot_answer, and
+// talkoot_roster, every
 // member's status on talkoot_status, and `card` on talkoot_inbox and
 // talkoot_inbox_resolved. A resolved card carries no request.
 export interface TalkootEvent {

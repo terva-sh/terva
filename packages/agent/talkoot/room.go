@@ -38,6 +38,11 @@ const (
 	// proposer asked for. A line from before those fields has only By and
 	// Ref. The router ignores it.
 	LineRoster = "roster"
+	// LineAnswer records a person's answer to a member's question: Member,
+	// the member that asked, the answer's own id in Ref, and each question
+	// and its answer in Answers (answer.go). A member cites it as
+	// answer:<id>.
+	LineAnswer = "answer"
 	// LineDamaged is never written. Read returns it in place of a line that
 	// does not parse.
 	LineDamaged = "damaged"
@@ -67,7 +72,8 @@ type Line struct {
 	By       string    `json:"by,omitempty"`
 	SpendUSD float64   `json:"spend_usd,omitempty"`
 	// Ref is the envelope a delivery, read, queued, or failed-delivery line is
-	// about, and Notes counts the notes a delivery carried.
+	// about, or an answer line's own id. Notes counts the notes a delivery
+	// carried.
 	Ref   string `json:"ref,omitempty"`
 	Notes int    `json:"notes,omitempty"`
 	// Proposal, Proposer, Edited, and Changes are set on a roster line.
@@ -75,6 +81,8 @@ type Line struct {
 	Proposer string         `json:"proposer,omitempty"`
 	Edited   bool           `json:"edited,omitempty"`
 	Changes  []MemberChange `json:"changes,omitempty"`
+	// Answers is set on an answer line.
+	Answers []Answered `json:"answers,omitempty"`
 	// Kid names the key that sealed the line, and MAC is the seal. MAC must
 	// stay the last field: the seal covers every byte before it (seal.go).
 	Kid string `json:"kid,omitempty"`
