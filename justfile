@@ -422,7 +422,7 @@ api-since REF="":
     set -euo pipefail
     ref="{{REF}}"
     if [ -z "$ref" ]; then
-      ref=$(git tag -l 'pub/v*' --sort=-v:refname | head -1)
+      ref=$(git for-each-ref --count=1 --sort=-v:refname --format='%(refname:short)' 'refs/tags/pub/v*')
       [ -n "$ref" ] || { echo "no pub/v* tag here — pass a ref: just api-since <ref>" >&2; exit 2; }
     fi
     go run ./cmd/terva-apidiff -snapshot-dir .api -since "$ref"
@@ -437,7 +437,7 @@ migration-notes REF="":
     set -euo pipefail
     ref="{{REF}}"
     if [ -z "$ref" ]; then
-      ref=$(git tag -l 'pub/v*' --sort=-v:refname | head -1)
+      ref=$(git for-each-ref --count=1 --sort=-v:refname --format='%(refname:short)' 'refs/tags/pub/v*')
       [ -n "$ref" ] || { echo "migration-notes: SKIPPED (no pub/v* tag here; git fetch --tags origin, or pass a ref: just migration-notes <ref>)"; exit 0; }
     fi
     go run ./cmd/terva-apidiff -snapshot-dir .api -since "$ref" -notes docs/migrating.md -require

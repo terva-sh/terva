@@ -11,6 +11,26 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.139.2](https://github.com/terva-sh/terva/releases/tag/v0.139.2) — 2026-09-25
+
+### Breaking changes
+
+- the session store and the permission model leave the engine
+- core: build an engine from options, a gate and components
+- provider: the wire reads nothing from the machine, and takes its model catalog from the host
+
+### Features
+
+- api: a recorded promise for the stable packages, with migration notes
+- talkoot: persistent teams of agents that talk to each other
+- worker: stop a worker's turn without stopping the worker
+
+### Fixes
+
+- permissions: a project config that cannot be parsed no longer drops its rules in silence
+- skills: keep carriage returns out of the builtin skills
+- a revived worker keeps its approvals, and three smaller fixes
+
 ## [v0.138.2](https://github.com/terva-sh/terva/releases/tag/v0.138.2) — 2026-09-22
 
 ### Features
