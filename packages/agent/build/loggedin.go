@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -69,6 +70,30 @@ func LoggedInProviders() []string {
 		}
 	}
 	return out
+}
+
+// ProviderConfigured reports whether terva holds anything that reaches
+// provider p: a credential that EXISTS, or a backend that needs none. It is
+// the presence twin of [LoggedInProviders], and it differs in one way.
+//
+// An expired login counts. hasCredential never refreshes a token, so this
+// makes no network call and writes nothing to auth.json. The caller that
+// needs a usable credential resolves one later, and that resolve reports the
+// lapse with its own error.
+func ProviderConfigured(p string) bool {
+	switch {
+	case p == "ollama":
+		return true
+	case isCompatProvider(p):
+		return config.AuthStoreFor().CompatEndpointFor(p).Configured()
+	}
+	if cfg, err := config.LoadConfig(); err == nil {
+		if ep, ok := cfg.Endpoints[p]; ok {
+			return strings.TrimSpace(ep.BaseURL) != ""
+		}
+	}
+	creds, _ := config.AuthStoreFor().Load()
+	return hasCredential(p, creds, auth.Describe(creds))
 }
 
 // LoggedInProviderSet is [LoggedInProviders] keyed for membership tests.

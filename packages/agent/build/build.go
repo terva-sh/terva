@@ -705,7 +705,11 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// eff.Config is project-over-user (the project layer is trusted-gated in
 	// ResolveConfig), so this yields: --provider flag > project (trusted) >
 	// user config > anthropic. Repairs below stay on cfg (the user layer).
-	provName := firstNonEmpty(argProvider, canonicalProvider(eff.Config.Provider), "anthropic")
+	// pinProvider/pinModel are the configured pair (project over user). They
+	// are locals so the unknown-provider drop below can clear them without
+	// writing through eff, which is a read view.
+	pinProvider, pinModel := canonicalProvider(eff.Config.Provider), eff.Config.Model
+	provName := firstNonEmpty(argProvider, pinProvider, "anthropic")
 	// Gate --insecure: it skips TLS verification for the inference client
 	// only, and only for a self-signed custom endpoint. Restrict it to the
 	// openai-compatible / ollama providers (plain http.Client clients, no
@@ -715,31 +719,53 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	if args.Insecure && (strings.TrimSpace(args.BaseURL) == "" || !(isCompatProvider(provName) || provName == "ollama")) {
 		return Resolved{}, fmt.Errorf("--insecure is only allowed for the openai-compatible, anthropic-compatible or ollama provider with an explicit --base-url")
 	}
+	// droppedUnknown marks a provider name this build does not know: removed,
+	// renamed, or an endpoint that did not register. Nobody can have chosen it
+	// in any sense Resolve can honor, so it is not a pick.
+	droppedUnknown := false
 	if !IsKnownProvider(provName) {
-		// Unknown provider (maybe removed or renamed). Fall back to
-		// the first provider that has credentials, or anthropic.
-		provName = "anthropic"
-		if _, _, _, err := ResolveCredentialFull("openai", ""); err == nil {
-			provName = "openai"
+		// Drop the name rather than guess a replacement. "anthropic" below is the
+		// same placeholder an empty config gets, and the credential scan further
+		// down replaces it with whatever is actually reachable, in ProviderIDs
+		// order. This used to walk a hardcoded list of five providers, fall to
+		// anthropic when none of them held a credential, and write anthropic
+		// back as the config pin. Every new session then seeded from that pin
+		// and failed with "no credential for anthropic", although a named
+		// endpoint or a compatible slot was logged in the whole time.
+		droppedUnknown = true
+		// The model belonged to the unknown provider, so it goes as well.
+		if pinProvider != "" && !IsKnownProvider(pinProvider) {
+			pinProvider, pinModel = "", ""
+			// Only these two fields, and only on the user layer that holds the
+			// dead name: cfg is this run's in-memory copy, and writing all of it
+			// back would undo whatever another instance changed meanwhile.
+			if p := canonicalProvider(cfg.Provider); p != "" && !IsKnownProvider(p) {
+				cfg.Provider, cfg.Model = "", ""
+				// Re-checked inside the mutation: another instance may have
+				// written a working pin since cfg was read, and that one stays.
+				_ = config.MutateConfig(func(c *config.Config) {
+					if canonicalProvider(c.Provider) == p {
+						c.Provider, c.Model = "", ""
+					}
+				})
+			} else if p != "" {
+				// The dead name came from the project layer, and it was
+				// shadowing a user pin that still works.
+				pinProvider, pinModel = p, cfg.Model
+			}
 		}
-		if _, _, _, err := ResolveCredentialFull("openai-codex", ""); err == nil {
-			provName = "openai-codex"
+		if argProvider != "" {
+			args.Model = ""
 		}
-		if _, _, _, err := ResolveCredentialFull("kimi", ""); err == nil {
-			provName = "kimi"
-		}
-		if _, _, _, err := ResolveCredentialFull("deepseek", ""); err == nil {
-			provName = "deepseek"
-		}
-		if _, _, _, err := ResolveCredentialFull("anthropic", ""); err == nil {
-			provName = "anthropic"
-		}
-		// Reset the saved config so this doesn't keep happening. Only these two
-		// fields: cfg is this run's in-memory copy and writing all of it back
-		// would undo whatever another instance changed while we were resolving.
-		cfg.Provider = provName
-		cfg.Model = ""
-		_ = config.MutateConfig(func(c *config.Config) { c.Provider, c.Model = provName, "" })
+		// 🚨 The key and base URL went with the unknown name. Nothing says
+		// which vendor they belong to, and the fallback below would otherwise
+		// send them to whichever provider it lands on.
+		args.APIKey, args.BaseURL = "", ""
+		// An unknown --provider or session provider lands on the configured
+		// pin when that pin is known, exactly as if nothing had been named.
+		// Landing on the placeholder instead would report a lapse on an
+		// anthropic pin nobody made, with the real pin's model attached.
+		provName = firstNonEmpty(pinProvider, "anthropic")
 	}
 
 	var (
@@ -789,7 +815,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		compatBaseURL = stored.BaseURL
 		// Inert for the OpenAI slot, which never stores any of them.
 		compatWire = stored.AnthropicOptions()
-		if args.Model == "" && eff.Config.Model == "" {
+		if args.Model == "" && pinModel == "" {
 			args.Model = stored.Model
 		}
 		storedKey, _, _, _ := ResolveCredentialFull(provName, args.APIKey)
@@ -803,18 +829,34 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// has no credentials, auto-fall-back to whichever provider is actually
 	// logged in. That way running plain `terva` after `/login` (any provider)
 	// never shows a "not logged in" banner.
-	userPickedProvider := args.Provider != ""
+	userPickedProvider := args.Provider != "" && !droppedUnknown
 	// Whether this provider is a PIN — the user's own choice — or merely the
 	// built-in default nobody selected. config.Provider is written only by
 	// /login, /model, or a repair, so a non-empty value means chosen; an empty
 	// one leaves provName at "anthropic" by default, which no one picked.
 	// Overriding a default is housekeeping; overriding a choice is a decision
 	// the user should get to make, so the two are recorded differently.
-	pinnedProvider := !userPickedProvider && canonicalProvider(eff.Config.Provider) != ""
+	pinnedProvider := !userPickedProvider && pinProvider != ""
 	// The failure that made the pin unusable, captured before the scan below
 	// overwrites credErr with the replacement's (nil) one.
 	pinnedErr := credErr
 	var switched *ProviderSwitch
+	// fallbackModel is the model the scan below chose alongside an open-catalogue
+	// backend. The pinned model belongs to the provider that just failed, and an
+	// open catalogue skips the "belongs to a different provider" repair further
+	// down, so without this the backend would receive the dead pin's model id.
+	var fallbackModel string
+	// openFallbackModel keeps the pinned model when the backend lists it, since
+	// a gateway in front of the same vendor serves the same ids. Otherwise it
+	// takes the backend's own model.
+	openFallbackModel := func(id, own string) string {
+		if pin := pinModel; pin != "" {
+			if _, err := modelreg.FindModel(id, pin); err == nil {
+				return pin
+			}
+		}
+		return own
+	}
 	if credErr != nil && !userPickedProvider && provName != "ollama" {
 		// Scan every known provider (not a hardcoded subset) so any
 		// env-based credential is discovered, e.g. an env-only
@@ -823,8 +865,23 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		// pointing TERVA_HOME at a fresh home dir. Iteration order of
 		// ProviderIDs defines fallback priority. ollama is skipped:
 		// it has no credential and would always "match".
+		// slot is the first shared compatible slot that /login gave a base URL
+		// and a model, key or no key. The scan used to skip both slots, so a
+		// user whose only login was one of them got "no credentials found for
+		// any provider" at boot.
+		var slot string
 		for _, other := range ProviderIDs() {
-			if other == provName || other == "ollama" || isCompatProvider(other) {
+			if other == provName || other == "ollama" {
+				continue
+			}
+			// A shared compatible slot waits until the loop ends: it is the last
+			// resort, after every credentialed built-in and every named endpoint.
+			if isCompatProvider(other) {
+				if slot == "" {
+					if ep := config.AuthStoreFor().CompatEndpointFor(other); ep.Configured() && strings.TrimSpace(ep.Model) != "" {
+						slot = other
+					}
+				}
 				continue
 			}
 			// A named endpoint is reachable WITHOUT a credential — that is the
@@ -832,8 +889,8 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 			// ResolveCredentialFull about a keyless one gets "no credential", so
 			// the scan used to walk straight past the only backend the operator
 			// could actually reach and report "no credential for anthropic".
-			// Endpoints sort after the built-ins in ProviderIDs, so this is the
-			// last resort it should be.
+			// Endpoints sort after the built-ins in ProviderIDs, so they come
+			// last, ahead only of the compatible slots.
 			if ep, ok := eff.Config.Endpoints[other]; ok {
 				// Only if it can actually run something. An endpoint whose models
 				// have not been discovered has no model id to offer, and falling
@@ -843,7 +900,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 					continue
 				}
 				if pinnedProvider {
-					switched = &ProviderSwitch{From: provName, FromModel: eff.Config.Model, Err: pinnedErr}
+					switched = &ProviderSwitch{From: provName, FromModel: pinModel, Err: pinnedErr}
 				}
 				provName = other
 				cred, method = endpointCredential(other, args.APIKey, ep.IsAnthropic())
@@ -854,16 +911,29 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 				// provider the user did not name, and so the one where a wrong
 				// auth style is hardest to attribute.
 				compatWire = EndpointAnthropicOptions(ep)
+				fallbackModel = openFallbackModel(other, EndpointDefaultModel(other))
 				break
 			}
 			if c, m, a, err := ResolveCredentialFull(other, args.APIKey); err == nil {
 				if pinnedProvider {
-					switched = &ProviderSwitch{From: provName, FromModel: eff.Config.Model, Err: pinnedErr}
+					switched = &ProviderSwitch{From: provName, FromModel: pinModel, Err: pinnedErr}
 				}
 				provName = other
 				cred, method, accountID, credErr = c, m, a, err
 				break
 			}
+		}
+		if credErr != nil && slot != "" {
+			stored := config.AuthStoreFor().CompatEndpointFor(slot)
+			if pinnedProvider {
+				switched = &ProviderSwitch{From: provName, FromModel: pinModel, Err: pinnedErr}
+			}
+			provName = slot
+			storedKey, _, _, _ := ResolveCredentialFull(slot, args.APIKey)
+			cred, method, accountID, credErr = firstNonEmpty(storedKey, slot), "apikey", "", nil
+			compatCtx, compatBaseURL = stored.ContextWindow, stored.BaseURL
+			compatWire = stored.AnthropicOptions()
+			fallbackModel = openFallbackModel(slot, stored.Model)
 		}
 	}
 
@@ -873,7 +943,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	openCatalogue := provName == "ollama" || isCompatProvider(provName) || IsEndpointProvider(provName, cfg)
 	// --model flag > project (trusted) > user config (eff.Config is the
 	// project-over-user read view; cfg stays the user layer for repairs).
-	model := firstNonEmpty(args.Model, eff.Config.Model)
+	model := firstNonEmpty(args.Model, fallbackModel, pinModel)
 	// A hidden model that is ALSO the configured default is a contradiction only
 	// the user can settle, so say so rather than guess which half they meant.
 	//
@@ -886,7 +956,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// picker preference would be destructive out of all proportion. The built-in
 	// per-provider fallback is exempt too: nobody chose it, so erroring on it
 	// would brick a launch over a config the user never wrote.
-	if args.Model == "" && model != "" && model == eff.Config.Model {
+	if args.Model == "" && model != "" && model == pinModel {
 		if hidden, rule := config.NewModelVisibility(eff.Config.HiddenModels).HiddenBy(provName, model); hidden {
 			return Resolved{}, fmt.Errorf(
 				"model %q is your configured default but is hidden by the rule %q.\n"+

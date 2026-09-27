@@ -43,12 +43,22 @@ func (w *Workspace) cardModelStore() *build.CardModelStore { return build.NewCar
 //
 // Both the card and world rungs are resolved through the catalog
 // (modelreg.FindModel) exactly like an explicit pick, so a pref naming an
-// unqualified or now-uncredentialed model degrades to the next rung down instead
-// of seeding an unrunnable session. The workspace rung is trusted as-is, matching
-// createSeededLocked's original base.
+// unqualified model degrades to the next rung down instead of seeding an
+// unrunnable session. They do NOT degrade on a missing credential. A card or a
+// World names its model on purpose, and a run that quietly moved it onto
+// another provider would spend on an account nobody aimed it at. Its session
+// refuses instead, and the refusal names the model.
+//
+// The configured default is different: it degrades when no login reaches its
+// provider. A default is not a pick, but the session seeded from it resolves
+// with the provider EXPLICIT, and an explicit provider gets no credential
+// fallback. A pin left on a provider the user has since logged out of therefore
+// failed every new session with "no credential for anthropic". Boot had already
+// fallen back past the same pin, and existing sessions ran fine. The boot model
+// stays as-is: it is the last resort, and boot did the credential fallback.
 func (w *Workspace) effectiveDefaultModel(cardID, worldID string) (prov, model string, source ctrlproto.DefaultSource) {
 	prov, model = w.provider, w.model
-	if dp, dm, _ := w.defaultModel(); dp != "" && dm != "" {
+	if dp, dm, _ := w.defaultModel(); dp != "" && dm != "" && w.defaultReachable(dp) {
 		prov, model = dp, dm
 	}
 	source = ctrlproto.DefaultSourceWorkspace
@@ -69,6 +79,21 @@ func (w *Workspace) effectiveDefaultModel(cardID, worldID string) (prov, model s
 		}
 	}
 	return prov, model, source
+}
+
+// defaultReachable reports whether a configured default on provider p can seed
+// a session ([build.ProviderConfigured]).
+//
+// 🔑 A pin whose login EXPIRED counts, on purpose. Its session refuses with
+// CodeNoCredential, and the host offers /login or the other provider for that
+// one session. Seeding the fallback instead would bill another account with
+// nothing asked (TestADefaultSessionStillRefusesRatherThanSwitchingItself). A
+// login that is simply absent has no such offer to make, so it degrades.
+//
+// ⚠️ A presence check, never a resolve: createSeededLocked reaches this with
+// w.mu held, and a resolve can refresh a token over the network.
+func (w *Workspace) defaultReachable(p string) bool {
+	return build.ProviderConfigured(p)
 }
 
 // ModelDefaultFor is the wire face of effectiveDefaultModel — the single default

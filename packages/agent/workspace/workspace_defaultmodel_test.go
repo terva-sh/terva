@@ -2,11 +2,14 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/session"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -289,5 +292,123 @@ func TestDefaultModelPrecedence(t *testing.T) {
 	prov, model, scope = untrusted.defaultModel()
 	if prov != "anthropic" || model != "claude-opus-4-8" || scope != ctrlproto.ScopeGlobal {
 		t.Errorf("an untrusted project default must not shadow the global one, got %s/%s@%s", prov, model, scope)
+	}
+}
+
+// A configured default whose provider has lost its credential must not seed a
+// new session. Boot already falls back past the pin to a provider that works;
+// the live config read used to drag every new session back onto the dead pin,
+// where its deferred Resolve refused with "no credential for anthropic" — an
+// explicit provider gets no fallback — while existing sessions kept running.
+func TestNewSessionSkipsUncredentialedConfiguredDefault(t *testing.T) {
+	isolatedCredentials(t)
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	if err := config.MutateConfig(func(c *config.Config) {
+		c.Provider, c.Model = "anthropic", "claude-opus-4-8"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w, err := NewWorkspace(build.Args{CWD: testsupport.TempDir(t), NoExt: true, NoMCP: true}, "test")
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	defer w.Close()
+	info, err := w.CreateSession(context.Background(), ctrlproto.CreateOpts{})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if info.Provider != "openai" {
+		t.Errorf("new session provider = %s/%s, want openai (the boot fallback, not the uncredentialed pin)", info.Provider, info.Model)
+	}
+	res, _ := w.ModelDefaultFor(context.Background(), ctrlproto.DefaultForParams{})
+	if res.Provider != "openai" {
+		t.Errorf("ModelDefaultFor = %s/%s, want the provider a new session actually gets", res.Provider, res.Model)
+	}
+}
+
+// A configured default on a keyless provider still seeds. The reachability
+// check must not read "no credential" as "not reachable" for a backend that
+// never needs one.
+func TestNewSessionSeedsFromAKeylessConfiguredDefault(t *testing.T) {
+	isolatedCredentials(t)
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	if err := config.MutateConfig(func(c *config.Config) {
+		c.Provider, c.Model = "ollama", "llama3"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w, err := NewWorkspace(build.Args{Provider: "openai", Model: "gpt-5", CWD: testsupport.TempDir(t), NoExt: true, NoMCP: true}, "test")
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	defer w.Close()
+	info, err := w.CreateSession(context.Background(), ctrlproto.CreateOpts{})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if info.Provider != "ollama" || info.Model != "llama3" {
+		t.Errorf("new session = %s/%s, want the keyless ollama/llama3 default", info.Provider, info.Model)
+	}
+}
+
+// isolatedCredentials points TERVA_HOME at a fresh directory and blanks every
+// provider credential the environment could leak into the fallback scan.
+func isolatedCredentials(t *testing.T) {
+	t.Helper()
+	t.Setenv("TERVA_HOME", testsupport.TempDir(t))
+	for _, k := range []string{
+		"ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "OPENAI_API_KEY", "GEMINI_API_KEY",
+		"GOOGLE_API_KEY", "DEEPSEEK_API_KEY", "KIMI_API_KEY", "MOONSHOT_API_KEY",
+		"AWS_ACCESS_KEY_ID", "AWS_PROFILE", "AWS_BEARER_TOKEN_BEDROCK", "GROQ_API_KEY",
+		"XAI_API_KEY", "OPENROUTER_API_KEY", "MISTRAL_API_KEY", "TOGETHER_API_KEY",
+		"CEREBRAS_API_KEY", "HF_TOKEN", "ZAI_API_KEY", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+	} {
+		t.Setenv(k, "")
+	}
+	// Bedrock also reads the shared AWS files, so point them at nothing.
+	missing := testsupport.TempDir(t)
+	t.Setenv("AWS_CONFIG_FILE", missing+"/config")
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", missing+"/credentials")
+	if err := config.SetKimiCLIFallbackDisabled(true); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A default set after boot, on a login that has since expired, still seeds.
+// Its session refuses and the host offers the switch, rather than the default
+// giving way to the boot model in silence.
+func TestNewSessionKeepsAnExpiredDefaultSetAfterBoot(t *testing.T) {
+	isolatedCredentials(t)
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	w, err := NewWorkspace(build.Args{Provider: "openai", Model: "gpt-5", CWD: testsupport.TempDir(t), NoExt: true, NoMCP: true}, "test")
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	defer w.Close()
+	// No refresh_token, so the refresh refuses without a network call.
+	if err := config.AuthStoreFor().SetOAuth("anthropic", auth.OAuthToken{
+		AccessToken: "expired-access-token",
+		TokenType:   "Bearer",
+		Expiry:      time.Now().Add(-24 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.MutateConfig(func(c *config.Config) {
+		c.Provider, c.Model = "anthropic", "claude-opus-4-8"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if p, _, _ := w.effectiveDefaultModel("", ""); p != "anthropic" {
+		t.Errorf("default = %s, want the expired anthropic pin kept so its session can offer the switch", p)
+	}
+	// The seed is only half the promise. The session must refuse with the
+	// code a host reads as "offer /login or the switch".
+	info, err := w.CreateSession(context.Background(), ctrlproto.CreateOpts{})
+	if err == nil {
+		t.Fatalf("a session opened on %s/%s over an expired default", info.Provider, info.Model)
+	}
+	var wire *ctrlproto.Error
+	if !errors.As(err, &wire) || wire.Code != ctrlproto.CodeNoCredential {
+		t.Errorf("err = %v, want %q", err, ctrlproto.CodeNoCredential)
 	}
 }
