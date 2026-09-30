@@ -118,11 +118,13 @@ talkoot.kickoff	params=TalkootKickoffParams	result=TalkootKickoff
 talkoot.list	params=-	result=TalkootListResult
 talkoot.pause	params=TalkootPauseParams	result=-
 talkoot.post	params=TalkootPostParams	result=TalkootEnvelope
+talkoot.preview	params=TalkootPreviewParams	result=TalkootPreview
 talkoot.proposals	params=TalkootProposalsParams	result=TalkootProposalsResult
 talkoot.propose	params=TalkootProposeParams	result=TalkootProposal
 talkoot.recruit	params=TalkootRecruitParams	result=SessionResult
 talkoot.resume	params=TalkootResumeParams	result=-
 talkoot.room	params=TalkootRoomParams	result=TalkootRoomPage
+talkoot.templates	params=-	result=TalkootTemplatesResult
 talkoot.update	params=TalkootUpdateParams	result=TalkootView
 tools.display	params=-	result=ToolsDisplayResult
 turn.advance	params=-	result=-

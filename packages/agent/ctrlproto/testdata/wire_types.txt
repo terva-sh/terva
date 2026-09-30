@@ -1202,7 +1202,12 @@ TalkootCitation
 	answers	[]TalkootAnswered
 TalkootCreateParams
 	id	string
-	text	string
+	text	string	omitempty
+	template	string	omitempty
+	home	string	omitempty
+	budget_usd_per_day	float64	omitempty
+	drop	[]string	omitempty
+	digest	string	omitempty
 TalkootDecideParams
 	id	string
 	by	string
@@ -1329,6 +1334,25 @@ TalkootPostParams
 	body	string
 	refs	[]string	omitempty
 	thread	string	omitempty
+TalkootPreview
+	template	TalkootTemplate
+	id	string
+	home	string
+	budget_usd_per_day	float64
+	members	[]TalkootPreviewMember
+	text	string
+	problems	[]string	omitempty
+	digest	string
+TalkootPreviewMember
+	<embedded>	TalkootRosterMember
+	available	bool
+	problem	string	omitempty
+TalkootPreviewParams
+	template	string
+	id	string
+	home	string	omitempty
+	budget_usd_per_day	float64	omitempty
+	drop	[]string	omitempty
 TalkootProposal
 	id	string
 	proposer	string
@@ -1379,11 +1403,34 @@ TalkootRoomParams
 	id	string
 	before	int	omitempty
 	limit	int	omitempty
+TalkootRosterMember
+	id	string
+	role	string
+	title	string	omitempty
+	persona	string	omitempty
+	driver	string
+	model	string	omitempty
+	tier	string	omitempty
+	posture	string
+	workspace	string
+	reviewer	bool	omitempty
+	budget_usd_per_day	float64	omitempty
+	turns_per_day	int	omitempty
+	tools	[]string	omitempty
 TalkootSummary
 	id	string
 	home	string	omitempty
 	running	bool
 	problem	string	omitempty
+TalkootTemplate
+	name	string
+	title	string	omitempty
+	description	string	omitempty
+	source	string
+	members	int
+	problem	string	omitempty
+TalkootTemplatesResult
+	templates	[]TalkootTemplate
 TalkootUpdateParams
 	id	string
 	by	string

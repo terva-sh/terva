@@ -120,7 +120,8 @@ func TestTheSteerVerbsNeedTheSteerBit(t *testing.T) {
 			t.Errorf("%s is refused to an unrestricted caller", m)
 		}
 	}
-	for _, m := range []Method{MethodTalkootList, MethodTalkootGet, MethodTalkootRoom, MethodTalkootInbox, MethodTalkootProposals} {
+	for _, m := range []Method{MethodTalkootList, MethodTalkootGet, MethodTalkootRoom, MethodTalkootInbox, MethodTalkootProposals,
+		MethodTalkootTemplates, MethodTalkootPreview} {
 		if !m.Permits(CapRead) {
 			t.Errorf("%s is refused to a read-only caller, who may watch a room", m)
 		}

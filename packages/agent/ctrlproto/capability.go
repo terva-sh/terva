@@ -81,6 +81,8 @@ var readOnlyMethods = map[Method]bool{
 	MethodTenantsList:    true,
 	MethodTalkootList:    true, MethodTalkootGet: true, MethodTalkootRoom: true,
 	MethodTalkootInbox: true, MethodTalkootProposals: true,
+	// A preview writes nothing: create recomputes the roster it showed.
+	MethodTalkootTemplates: true, MethodTalkootPreview: true,
 }
 
 // spendingMethods reach a model or an image backend. Membership is a claim that

@@ -2737,11 +2737,13 @@ export type Verb =
   | 'talkoot.list'
   | 'talkoot.pause'
   | 'talkoot.post'
+  | 'talkoot.preview'
   | 'talkoot.proposals'
   | 'talkoot.propose'
   | 'talkoot.resume'
   | 'talkoot.recruit'
   | 'talkoot.room'
+  | 'talkoot.templates'
   | 'talkoot.update'
   | 'tools.display'
   | 'turn.advance'
@@ -2846,9 +2848,77 @@ export interface TalkootMemberStatus {
   turns?: number
 }
 
+// talkoot.create takes a whole talkoot.md in `text`, or a template filled in
+// as for talkoot.preview plus the `digest` that preview returned. The daemon
+// recomputes the roster and refuses a digest that no longer matches.
 export interface TalkootCreateParams {
   id: string
+  text?: string
+  template?: string
+  home?: string
+  budget_usd_per_day?: number
+  drop?: string[]
+  digest?: string
+}
+
+export interface TalkootTemplatesResult {
+  templates: TalkootTemplate[]
+}
+
+// `source` is user, ext:<extension>, builtin, or repo. A repo template's name
+// starts with "repo:". `problem` says why a template cannot be used.
+export interface TalkootTemplate {
+  name: string
+  title?: string
+  description?: string
+  source: string
+  members: number
+  problem?: string
+}
+
+// An empty `home` is the daemon's own directory, and a zero budget keeps the
+// template's suggestion. `drop` leaves members out.
+export interface TalkootPreviewParams {
+  template: string
+  id: string
+  home?: string
+  budget_usd_per_day?: number
+  drop?: string[]
+}
+
+// The roster a template would become. `text` is what create writes, and
+// create needs `digest` back. Create refuses while `problems` is not empty or
+// a member is unavailable.
+export interface TalkootPreview {
+  template: TalkootTemplate
+  id: string
+  home: string
+  budget_usd_per_day: number
+  members: TalkootPreviewMember[]
   text: string
+  problems?: string[]
+  digest: string
+}
+
+export interface TalkootRosterMember {
+  id: string
+  role: string
+  title?: string
+  persona?: string
+  driver: string
+  model?: string
+  tier?: string
+  posture: string
+  workspace: string
+  reviewer?: boolean
+  budget_usd_per_day?: number
+  turns_per_day?: number
+  tools?: string[]
+}
+
+export interface TalkootPreviewMember extends TalkootRosterMember {
+  available: boolean
+  problem?: string
 }
 
 export interface TalkootUpdateParams {
@@ -3266,6 +3336,7 @@ export interface VerbParams {
   'talkoot.propose': TalkootProposeParams
   'talkoot.decide': TalkootDecideParams
   'talkoot.kickoff': TalkootKickoffParams
+  'talkoot.preview': TalkootPreviewParams
 }
 
 // Card revision history. Every write to a card goes through cards.edit — the

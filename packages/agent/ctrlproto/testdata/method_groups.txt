@@ -119,11 +119,13 @@ talkoot.kickoff	talkoot
 talkoot.list	talkoot
 talkoot.pause	talkoot
 talkoot.post	talkoot
+talkoot.preview	talkoot
 talkoot.proposals	talkoot
 talkoot.propose	talkoot
 talkoot.recruit	talkoot
 talkoot.resume	talkoot
 talkoot.room	talkoot
+talkoot.templates	talkoot
 talkoot.update	talkoot
 tenants.list	tenants
 tenants.resume	tenants

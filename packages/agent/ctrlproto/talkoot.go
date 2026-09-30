@@ -31,9 +31,15 @@ type TalkootController interface {
 	Talkoot(ctx context.Context, p TalkootRef) (TalkootView, error)
 	// TalkootRoom returns a page of the room, oldest line first.
 	TalkootRoom(ctx context.Context, p TalkootRoomParams) (TalkootRoomPage, error)
-	// CreateTalkoot writes a new talkoot from the text of its talkoot.md, and
-	// starts it. Its home must be this daemon's workspace.
+	// CreateTalkoot writes a new talkoot from the text of its talkoot.md, or
+	// from a template and the digest of its preview, and starts it. Its home
+	// must be this daemon's workspace.
 	CreateTalkoot(ctx context.Context, p TalkootCreateParams) (TalkootView, error)
+	// TalkootTemplates lists the templates a talkoot can be created from.
+	TalkootTemplates(ctx context.Context) (TalkootTemplatesResult, error)
+	// PreviewTalkoot shows the roster a template would become, and writes
+	// nothing.
+	PreviewTalkoot(ctx context.Context, p TalkootPreviewParams) (TalkootPreview, error)
 	// UpdateTalkoot replaces a running talkoot's roster.
 	UpdateTalkoot(ctx context.Context, p TalkootUpdateParams) (TalkootView, error)
 	// PostTalkoot posts a person's message to the team.
@@ -147,9 +153,98 @@ type TalkootMemberStatus struct {
 
 // TalkootCreateParams is the talkoot.create payload. Text is the whole
 // talkoot.md: YAML frontmatter, then the charter.
+//
+// It takes one of two forms. Text is a whole talkoot.md. Template names a
+// template, and Home, BudgetUSDPerDay, and Drop fill it in as in
+// [TalkootPreviewParams]. The template form also needs Digest, from a
+// talkoot.preview of the same inputs.
+//
+// 🔑 The digest binds create to a roster the caller previewed. Create
+// recomputes the roster and refuses when the digest differs, so a client must
+// ask for the preview, and a template that changed after the preview is
+// refused rather than applied. It does not prove that a person read the
+// preview: a caller can pass the digest straight back. The web view shows
+// the preview to a person, and a repository template also needs a trusted
+// workspace.
 type TalkootCreateParams struct {
 	ID   string `json:"id"`
-	Text string `json:"text"`
+	Text string `json:"text,omitempty"`
+
+	Template        string   `json:"template,omitempty"`
+	Home            string   `json:"home,omitempty"`
+	BudgetUSDPerDay float64  `json:"budget_usd_per_day,omitempty"`
+	Drop            []string `json:"drop,omitempty"`
+	Digest          string   `json:"digest,omitempty"`
+}
+
+// TalkootTemplatesResult is the talkoot.templates reply.
+type TalkootTemplatesResult struct {
+	Templates []TalkootTemplate `json:"templates"`
+}
+
+// TalkootTemplate is one template. Source is user, ext:<extension>, builtin,
+// or repo. A repository template's name starts with "repo:", and it comes
+// from the daemon's own checkout. Problem says why a template cannot be used.
+type TalkootTemplate struct {
+	Name        string `json:"name"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	Source      string `json:"source"`
+	Members     int    `json:"members"`
+	Problem     string `json:"problem,omitempty"`
+}
+
+// TalkootPreviewParams is the talkoot.preview payload. An empty Home is the
+// daemon's own directory. A zero BudgetUSDPerDay keeps the template's
+// suggestion. Drop names the members to leave out.
+type TalkootPreviewParams struct {
+	Template        string   `json:"template"`
+	ID              string   `json:"id"`
+	Home            string   `json:"home,omitempty"`
+	BudgetUSDPerDay float64  `json:"budget_usd_per_day,omitempty"`
+	Drop            []string `json:"drop,omitempty"`
+}
+
+// TalkootPreview is the roster a template would become. Text is the
+// talkoot.md create would write, and Digest, a hash of the id and the text, is
+// what create needs back.
+// Problems lists every rule the roster breaks here. Create refuses while
+// there is one.
+type TalkootPreview struct {
+	Template        TalkootTemplate        `json:"template"`
+	ID              string                 `json:"id"`
+	Home            string                 `json:"home"`
+	BudgetUSDPerDay float64                `json:"budget_usd_per_day"`
+	Members         []TalkootPreviewMember `json:"members"`
+	Text            string                 `json:"text"`
+	Problems        []string               `json:"problems,omitempty"`
+	Digest          string                 `json:"digest"`
+}
+
+// TalkootPreviewMember is one member as the roster would write it, with the
+// defaults applied. Available is false when this machine cannot run the
+// member, and Problem says why.
+type TalkootPreviewMember struct {
+	TalkootRosterMember
+	Available bool   `json:"available"`
+	Problem   string `json:"problem,omitempty"`
+}
+
+// TalkootRosterMember is what the roster says about one member.
+type TalkootRosterMember struct {
+	ID              string   `json:"id"`
+	Role            string   `json:"role"`
+	Title           string   `json:"title,omitempty"`
+	Persona         string   `json:"persona,omitempty"`
+	Driver          string   `json:"driver"`
+	Model           string   `json:"model,omitempty"`
+	Tier            string   `json:"tier,omitempty"`
+	Posture         string   `json:"posture"`
+	Workspace       string   `json:"workspace"`
+	Reviewer        bool     `json:"reviewer,omitempty"`
+	BudgetUSDPerDay float64  `json:"budget_usd_per_day,omitempty"`
+	TurnsPerDay     int      `json:"turns_per_day,omitempty"`
+	Tools           []string `json:"tools,omitempty"`
 }
 
 // TalkootUpdateParams is the talkoot.update payload. Text replaces the whole

@@ -295,6 +295,16 @@ func (r *recorder) DecideTalkoot(_ context.Context, p TalkootDecideParams) (Talk
 	return TalkootProposal{}, nil
 }
 
+func (r *recorder) TalkootTemplates(_ context.Context) (TalkootTemplatesResult, error) {
+	r.note("TalkootTemplates", "", nil)
+	return TalkootTemplatesResult{}, nil
+}
+
+func (r *recorder) PreviewTalkoot(_ context.Context, p TalkootPreviewParams) (TalkootPreview, error) {
+	r.note("PreviewTalkoot", "", p)
+	return TalkootPreview{}, nil
+}
+
 func (r *recorder) KickoffTalkoot(_ context.Context, p TalkootKickoffParams) (TalkootKickoff, error) {
 	r.note("KickoffTalkoot", "", p)
 	return TalkootKickoff{}, nil
@@ -749,6 +759,8 @@ func dispatchCases() []dispatchCase {
 		{MethodTalkootDecide, TalkootDecideParams{ID: "crew", By: "sothr", Proposal: "p", Decision: "decline"}, "DecideTalkoot", TalkootDecideParams{ID: "crew", By: "sothr", Proposal: "p", Decision: "decline"}},
 		{MethodTalkootKickoff, TalkootKickoffParams{ID: "crew", By: "sothr", Skip: true}, "KickoffTalkoot", TalkootKickoffParams{ID: "crew", By: "sothr", Skip: true}},
 		{MethodTalkootCreate, TalkootCreateParams{ID: "crew", Text: "---"}, "CreateTalkoot", TalkootCreateParams{ID: "crew", Text: "---"}},
+		{MethodTalkootTemplates, nil, "TalkootTemplates", nil},
+		{MethodTalkootPreview, TalkootPreviewParams{Template: "coding", ID: "crew", Drop: []string{"kirjuri"}}, "PreviewTalkoot", TalkootPreviewParams{Template: "coding", ID: "crew", Drop: []string{"kirjuri"}}},
 		{MethodTalkootUpdate, TalkootUpdateParams{ID: "crew", By: "drew", Text: "---"}, "UpdateTalkoot", TalkootUpdateParams{ID: "crew", By: "drew", Text: "---"}},
 		{MethodTalkootPost, TalkootPostParams{ID: "crew", By: "drew", Body: "go"}, "PostTalkoot", TalkootPostParams{ID: "crew", By: "drew", Body: "go"}},
 		{MethodTalkootPause, TalkootPauseParams{ID: "crew", By: "drew", Member: "lead"}, "PauseTalkoot", TalkootPauseParams{ID: "crew", By: "drew", Member: "lead"}},

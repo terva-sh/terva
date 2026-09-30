@@ -48,7 +48,13 @@ func (w *Workspace) TalkootRoom(ctx context.Context, p ctrlproto.TalkootRoomPara
 }
 
 func (w *Workspace) CreateTalkoot(ctx context.Context, p ctrlproto.TalkootCreateParams) (ctrlproto.TalkootView, error) {
-	v, err := w.talkootCreate(ctx, p.ID, []byte(p.Text))
+	var v talkootView
+	var err error
+	if p.Template != "" {
+		v, err = w.createFromTemplate(ctx, p)
+	} else {
+		v, err = w.talkootCreate(ctx, p.ID, []byte(p.Text))
+	}
 	if err != nil {
 		return ctrlproto.TalkootView{}, talkootWireErr(err, ctrlproto.CodeBadRequest)
 	}
@@ -147,7 +153,7 @@ func talkootWireErr(err error, fallback string) error {
 	case errors.Is(err, ErrTalkootNotFound), errors.Is(err, ErrTalkootNotHere):
 		return ctrlproto.Wrap(ctrlproto.CodeNotFound, err)
 	case errors.Is(err, ErrTalkootClosed), errors.Is(err, ErrTalkootExists), errors.Is(err, talkoot.ErrProposalStale),
-		errors.Is(err, ErrKickoffRan):
+		errors.Is(err, ErrKickoffRan), errors.Is(err, ErrPreviewStale):
 		return ctrlproto.Wrap(ctrlproto.CodeConflict, err)
 	case errors.Is(err, talkoot.ErrDisabled):
 		return ctrlproto.Wrap(ctrlproto.CodeUnsupported, err)

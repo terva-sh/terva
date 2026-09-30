@@ -91,3 +91,9 @@ packages/agent/web/client/src/locales/**     linguist-generated=true
 # rule would match neither and append a duplicate.
 .tickets/**/*.md text eol=lf
 .tickets/**/*.md merge=gitticket
+
+# The built-in Talkoot templates are embedded, and a preview's digest is a hash
+# of the roster one becomes. The charter is normalised before hashing, but pin
+# the files to LF anyway, so an embedded template reads the same on every
+# checkout.
+packages/agent/talkoot/templates/*.md text eol=lf
