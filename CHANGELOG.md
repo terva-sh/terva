@@ -11,6 +11,23 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.139.3](https://github.com/terva-sh/terva/releases/tag/v0.139.3) — 2026-09-26
+
+### Features
+
+- talkoot: Hautoja, a recruiter that proposes new members
+- talkoot: a member gets only the tools its job needs
+- talkoot: a member relays a person's answer with proof
+- talkoot: a new member introduces itself, and a new team waits for a kickoff
+- talkoot: members hand tickets to each other, and only a reviewer closes one
+- talkoot: members propose roster changes, and a person decides from one inbox
+
+### Fixes
+
+- provider: a new session no longer picks a provider that is logged out
+- talkoot: a room page reads the page, not the whole room
+- talkoot: a write or spend on a team session needs steer
+
 ## [v0.139.2](https://github.com/terva-sh/terva/releases/tag/v0.139.2) — 2026-09-25
 
 ### Breaking changes
