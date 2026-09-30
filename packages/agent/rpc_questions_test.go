@@ -859,7 +859,7 @@ func TestRPCStructuredQuestionDismissDoesNotCancelQueuedPrompt(t *testing.T) {
 	_ = nextRPCFrameUntil(t, run.out, "response")
 	questionID, _ := questionBatch(t, nextRPCFrameUntil(t, run.out, "question"))
 
-	// This prompt waits on turnMu while the first agent turn is parked.
+	// This prompt waits in the turn queue while the first agent turn is parked.
 	sendRPCQuestionCommand(t, run.in, map[string]any{"id": "prompt-2", "type": "prompt", "message": "queued"})
 	sendRPCQuestionCommand(t, run.in, map[string]any{"id": questionID, "type": "question_dismiss"})
 	if frame := nextRPCFrameUntil(t, run.out, "question_dismissed"); frame["id"] != questionID {
