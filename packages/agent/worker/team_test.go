@@ -318,8 +318,13 @@ func TestRunRefusesATeamWithNoInbox(t *testing.T) {
 			return exec.Command("true"), nil
 		},
 	}
-	a := teamAgent(t, "tk-noinbox")
-	a.InboxPath = ""
+	// 🔑 Not teamAgent: its socket dir sits under /tmp, which Windows lacks,
+	// and this refusal needs no socket, so it runs on every platform.
+	a := &swarm.Agent{
+		ID:           "tk-noinbox",
+		Dir:          testsupport.TempDir(t),
+		EventLogPath: filepath.Join(testsupport.TempDir(t), "events.jsonl"),
+	}
 	team := func(context.Context, string, json.RawMessage) mcpbridge.TeamReply { return mcpbridge.TeamReply{} }
 	err := NewRunner(a, backend, loadedRepo(t), nil).WithTeam(team).Run(context.Background(), nopSink{})
 	if err == nil || !strings.Contains(err.Error(), "needs an inbox path") {
