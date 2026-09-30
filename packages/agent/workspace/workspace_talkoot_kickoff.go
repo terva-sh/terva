@@ -60,8 +60,8 @@ func (w *Workspace) kickoffPlan(run *talkootRun, state string) (ctrlproto.Talkoo
 		for _, m := range kickoffOrder(r) {
 			km := ctrlproto.TalkootKickoffMember{Member: m.ID}
 			switch {
-			case memberUnbound(m) != nil:
-				km.Plain = memberUnbound(m).Error()
+			case w.memberUnbound(m) != nil:
+				km.Plain = w.memberUnbound(m).Error()
 			case pausedWhy(rt, m.ID) != "":
 				km.Plain = pausedWhy(rt, m.ID)
 			}

@@ -58,8 +58,6 @@ type workerHost interface {
 	state(id string) (exists, live bool)
 	// holds returns the limits the agent was spawned with, as persisted.
 	holds(id string) (swarm.SpawnRequest, bool)
-	// agentSnapshot reports what the agent is doing, as the tasks pane shows it.
-	agentSnapshot(id string) (swarm.AgentSnapshot, bool)
 	send(id, text string) error
 	stop(id string) error
 	// exited waits up to d for the agent's process to end, and reports
@@ -277,14 +275,6 @@ func (h swarmWorkers) state(id string) (bool, bool) {
 		return true, true
 	}
 	return true, false
-}
-
-func (h swarmWorkers) agentSnapshot(id string) (swarm.AgentSnapshot, bool) {
-	a := h.f.Get(id)
-	if a == nil || a.ID != id {
-		return swarm.AgentSnapshot{}, false
-	}
-	return a.Snapshot(), true
 }
 
 func (h swarmWorkers) holds(id string) (swarm.SpawnRequest, bool) {

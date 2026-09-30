@@ -362,3 +362,41 @@ func TestInterruptedResultBecomesAnErrorTaskEnd(t *testing.T) {
 		t.Errorf("a completed turn must carry no error, got %v", evs)
 	}
 }
+
+// The child echoes each user turn it takes, so a talkoot member reads its
+// envelope when the turn does. The echo's shape follows a probe of 2.1.283 on
+// 2026-09-28: isReplay set, and texts that queued behind a turn folded into
+// one message. The marker an interrupt writes carries no isReplay.
+func TestClaudeEchoesItsUserTurnsAndMarksThem(t *testing.T) {
+	r := loadedRepo(t)
+	b := Compose(r, demoTask(), Workspace{Path: "/leases/wt-1"})
+	cmd, err := claudeCommand(Dispatch{Briefing: b, Dir: "/leases/wt-1", Cursor: claudeCursor("a-1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(cmd.Args, " "), "--replay-user-messages") {
+		t.Errorf("without --replay-user-messages the child reports no reads:\n%s", strings.Join(cmd.Args, " "))
+	}
+	for _, c := range []struct {
+		line   string
+		replay bool
+	}{
+		{`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"B"},{"type":"text","text":"C"}]},"isReplay":true}`, true},
+		{`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}`, false},
+	} {
+		evs := translateClaude([]byte(c.line))
+		if len(evs) != 1 || evs[0].Type != "user_message" {
+			t.Fatalf("want one user_message, got %v", evs)
+		}
+		if got, ok := evs[0].Data["replay"].(bool); !ok || got != c.replay {
+			t.Errorf("replay = %v (set %v), want %v for %s", got, ok, c.replay, c.line)
+		}
+	}
+	claude, err := Lookup(BackendClaude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !claude.ReportsReads || claude.TurnPerText {
+		t.Errorf("claude says ReportsReads %v and TurnPerText %v, want true and false: it echoes each turn, and folds queued texts", claude.ReportsReads, claude.TurnPerText)
+	}
+}

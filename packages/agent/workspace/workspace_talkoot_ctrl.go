@@ -9,7 +9,6 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/look"
 	"terva.sh/terva/packages/agent/persona"
-	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/agent/talkoot"
 )
 
@@ -25,8 +24,7 @@ func (w *Workspace) Talkoots(ctx context.Context) ([]ctrlproto.TalkootSummary, e
 	}
 	out := make([]ctrlproto.TalkootSummary, 0, len(list))
 	for _, s := range list {
-		out = append(out, ctrlproto.TalkootSummary{ID: s.ID, Home: s.Home, Running: s.Running, Problem: s.Problem,
-			Name: s.Name, Title: s.Title, Color: s.Color, OwnColor: s.OwnColor, State: s.State})
+		out = append(out, ctrlproto.TalkootSummary{ID: s.ID, Home: s.Home, Running: s.Running, Problem: s.Problem})
 	}
 	return out, nil
 }
@@ -66,40 +64,6 @@ func (w *Workspace) OpenTalkootRef(ctx context.Context, p ctrlproto.TalkootOpenR
 	return ctrlproto.TalkootRefText{Ref: t.Ref, Text: t.Text, Size: t.Size, Truncated: t.Truncated, Binary: t.Binary}, nil
 }
 
-// TalkootWorker reports the swarm agent a worker member is seated on, for
-// the view's event view. The tasks surface cannot serve it: that list is
-// scoped to the session asking, and a talkoot's workers belong to the
-// talkoot's address instead. The tail holds tool output, so the verb needs
-// the write capability (capability.go).
-func (w *Workspace) TalkootWorker(ctx context.Context, p ctrlproto.TalkootWorkerParams) (ctrlproto.TaskInfo, error) {
-	run, err := w.talkootRunOf(p.ID)
-	if err != nil {
-		return ctrlproto.TaskInfo{}, talkootWireErr(err, ctrlproto.CodeInternal)
-	}
-	m, ok := memberOf(*run.roster.Load(), p.Member)
-	if !ok {
-		return ctrlproto.TaskInfo{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "talkoot: %s has no member %q", p.ID, p.Member)
-	}
-	if memberDriver(m) == talkoot.DriverNative {
-		return ctrlproto.TaskInfo{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "talkoot: member %s is native and has no worker; open its session", p.Member)
-	}
-	w.talkoot.mu.Lock()
-	id := run.seats[p.Member]
-	w.talkoot.mu.Unlock()
-	if id == "" {
-		return ctrlproto.TaskInfo{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "talkoot: member %s has no worker yet; its first delivery starts one", p.Member)
-	}
-	var snap swarm.AgentSnapshot
-	found := false
-	if h := w.workers(); h != nil {
-		snap, found = h.agentSnapshot(id)
-	}
-	if !found {
-		return ctrlproto.TaskInfo{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "talkoot: worker %s of member %s is not in the swarm", id, p.Member)
-	}
-	return taskInfo(snap), nil
-}
-
 func (w *Workspace) CreateTalkoot(ctx context.Context, p ctrlproto.TalkootCreateParams) (ctrlproto.TalkootView, error) {
 	var v talkootView
 	var err error
@@ -117,19 +81,11 @@ func (w *Workspace) CreateTalkoot(ctx context.Context, p ctrlproto.TalkootCreate
 func (w *Workspace) UpdateTalkoot(ctx context.Context, p ctrlproto.TalkootUpdateParams) (ctrlproto.TalkootView, error) {
 	var v talkootView
 	var err error
-	forms := 0
-	for _, set := range []bool{p.Text != "", len(p.Ops) > 0, p.Color != nil} {
-		if set {
-			forms++
-		}
-	}
 	switch {
-	case forms > 1:
-		return ctrlproto.TalkootView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "talkoot: an update holds one of the whole text, a list of operations, and a colour")
-	case forms == 0:
-		return ctrlproto.TalkootView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "talkoot: an update needs the whole text, a list of operations, or a colour")
-	case p.Color != nil:
-		v, err = w.talkootColor(ctx, p.ID, p.By, *p.Color)
+	case p.Text != "" && len(p.Ops) > 0:
+		return ctrlproto.TalkootView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "talkoot: an update holds the whole text or a list of operations, not both")
+	case p.Text == "" && len(p.Ops) == 0:
+		return ctrlproto.TalkootView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "talkoot: an update needs the whole text or a list of operations")
 	case len(p.Ops) > 0:
 		v, err = w.talkootEdit(ctx, p.ID, p.By, wireOps(p.Ops))
 	default:
@@ -237,16 +193,12 @@ func (w *Workspace) wireTalkootView(v talkootView) ctrlproto.TalkootView {
 	r := v.Roster
 	out := ctrlproto.TalkootView{
 		ID: r.ID, Name: r.Name, Title: r.Title, Home: r.Home, BudgetUSDPerDay: r.BudgetUSDPerDay,
-		Color: look.TeamColor(r.ID, r.Color), OwnColor: r.Color,
 		Text: string(v.Text), Members: make([]ctrlproto.TalkootMember, 0, len(v.Members)), Held: v.Held,
 	}
 	members := make([]talkoot.Member, 0, len(v.Members))
-	statuses := make([]talkoot.Status, 0, len(v.Members))
 	for _, m := range v.Members {
 		members = append(members, m.Member)
-		statuses = append(statuses, m.Status)
 	}
-	out.State = talkoot.TeamState(statuses)
 	marks := talkootMarks(members)
 	for _, m := range v.Members {
 		mm := m.Member
@@ -316,9 +268,7 @@ func wireMark(m *look.Mark) *ctrlproto.TalkootMark {
 }
 
 func wireTalkootStatus(s talkoot.Status) ctrlproto.TalkootMemberStatus {
-	return ctrlproto.TalkootMemberStatus{Member: s.Member, Presence: s.Presence(), Working: s.Working, Tool: s.Tool, Paused: s.Paused,
-		Pauses: s.Pauses, SpendUSD: s.SpendUSD, Turns: s.Turns, Idle: s.Idle,
-		Expression: s.Expression, Intensity: s.Intensity, ExpressionCause: s.ExpressionCause}
+	return ctrlproto.TalkootMemberStatus{Member: s.Member, Working: s.Working, Tool: s.Tool, Paused: s.Paused, SpendUSD: s.SpendUSD, Turns: s.Turns, Idle: s.Idle}
 }
 
 func wireTalkootEnvelope(e talkoot.Envelope) ctrlproto.TalkootEnvelope {
@@ -348,8 +298,7 @@ func wireTalkootLine(l talkoot.Line) ctrlproto.TalkootLine {
 		Type: l.Type, At: l.At, Member: l.Member, Chain: l.Chain, CostUSD: l.CostUSD,
 		Guard: l.Guard, Action: l.Action, Reason: l.Reason, By: l.By, SpendUSD: l.SpendUSD,
 		Ref: l.Ref, Notes: l.Notes, Proposal: l.Proposal, Proposer: l.Proposer, Edited: l.Edited,
-		Text: l.Text, Tool: l.Tool, Attempt: l.Attempt, Card: l.Card, Outcome: l.Outcome,
-		ColorBefore: l.ColorBefore, ColorAfter: l.ColorAfter,
+		Text: l.Text,
 	}
 	if len(l.Changes) > 0 {
 		out.Changes = wireChanges(l.Changes)
@@ -389,16 +338,10 @@ func wireTalkootEvent(ev talkootEvent) (ctrlproto.Event, bool) {
 		for _, s := range ev.Status {
 			members = append(members, wireTalkootStatus(s))
 		}
-		e := ctrlproto.TalkootStatusEvent(ev.Talkoot, members)
-		e.Talkoot.State = talkoot.TeamState(ev.Status)
-		return e, true
+		return ctrlproto.TalkootStatusEvent(ev.Talkoot, members), true
 	case "inbox":
 		if ev.Wire != nil {
 			return *ev.Wire, true
-		}
-	case "beat":
-		if ev.Beat != nil {
-			return ctrlproto.TalkootBeatEvent(ev.Talkoot, wireTalkootBeat(*ev.Beat)), true
 		}
 	}
 	return ctrlproto.Event{}, false

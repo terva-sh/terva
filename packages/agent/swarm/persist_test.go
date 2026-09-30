@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -983,5 +984,80 @@ func TestAgentPathHelpersShareOneStateDir(t *testing.T) {
 	}
 	if filepath.Base(events) != "events.jsonl" {
 		t.Errorf("event log basename = %q, want events.jsonl", filepath.Base(events))
+	}
+}
+
+// A worker's tools list survives meta.json and a Reload, and an empty list,
+// which narrows to none, stays apart from no list, which narrows nothing.
+func TestSpawnKeepsTheToolsListThroughAReload(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		tools []string
+	}{{"none", nil}, {"empty", []string{}}, {"two", []string{"read", "grep"}}} {
+		t.Run(c.name, func(t *testing.T) {
+			root := testsupport.TempDir(t)
+			f := New(Config{
+				Root: root, RepoRoot: root,
+				NewRunner: func(a *Agent) Runner {
+					return RunnerFunc(func(ctx context.Context, _ Sink) error { <-ctx.Done(); return ctx.Err() })
+				},
+			})
+			a, err := f.SpawnReq(context.Background(), SpawnRequest{Task: "x", Tools: c.tools})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.Stop(a.ID); err != nil {
+				t.Fatal(err)
+			}
+			a.Wait()
+			g := New(Config{Root: root, RepoRoot: root})
+			if loaded, errs := g.Reload(); loaded != 1 || len(errs) > 0 {
+				t.Fatalf("reload loaded=%d errs=%v", loaded, errs)
+			}
+			got := g.Get(a.ID).Tools
+			if (got == nil) != (c.tools == nil) || !slices.Equal(got, c.tools) {
+				t.Errorf("tools after a reload = %#v, want %#v", got, c.tools)
+			}
+		})
+	}
+}
+
+// A turn-end hook given at the spawn or the resume is on the agent before its
+// runner starts, so a turn that ends at once is heard. A hook set after the
+// call returned could miss it.
+func TestTheTurnEndHookHearsAnImmediateTurn(t *testing.T) {
+	root := testsupport.TempDir(t)
+	f := New(Config{
+		Root: root, RepoRoot: root,
+		NewRunner: func(a *Agent) Runner {
+			return RunnerFunc(func(ctx context.Context, sink Sink) error {
+				IngestEvent(NewEvent("task_end", map[string]any{"step": float64(1)}), nil, sink, a)
+				return nil
+			})
+		},
+	})
+	heard := make(chan string, 2)
+	a, err := f.SpawnReq(context.Background(), SpawnRequest{Task: "x", OnTurnEnd: func(int, string) { heard <- "spawn" }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	select {
+	case <-heard:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the spawn's hook missed the first turn")
+	}
+	r, err := f.ResumeHooked(context.Background(), a.ID, func(int, string) { heard <- "resume" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Wait()
+	select {
+	case got := <-heard:
+		if got != "resume" {
+			t.Errorf("heard %q, want the resume's hook", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the resume's hook missed the first turn")
 	}
 }

@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -9,19 +8,6 @@ import (
 	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/agent/talkoot"
 )
-
-// errWorkerUnbound is why a worker member takes no turn. The worker driver
-// and the introductions both read it through memberUnbound, so both change
-// when TKT-01M396QY3 binds worker members to an agent.
-var errWorkerUnbound = errors.New("worker members are not bound to an agent yet")
-
-// memberUnbound says why m has no process to run a turn, or returns nil.
-func memberUnbound(m talkoot.Member) error {
-	if m.Driver == talkoot.DriverNative {
-		return nil
-	}
-	return errWorkerUnbound
-}
 
 // skippedIntro is why a skipped kickoff's members get plain cards.
 const skippedIntro = "the person skipped the introductions"
@@ -37,8 +23,8 @@ func (w *Workspace) introduce(run *talkootRun, by string, m talkoot.Member, mode
 		why := plain
 		switch {
 		case why != "":
-		case memberUnbound(m) != nil:
-			why = memberUnbound(m).Error()
+		case w.memberUnbound(m) != nil:
+			why = w.memberUnbound(m).Error()
 		default:
 			why = pausedWhy(rt, m.ID)
 		}

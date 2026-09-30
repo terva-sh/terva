@@ -512,6 +512,8 @@ and every verb that writes to it or spends on it answers `forbidden`: a
 prompt, a queued message, an answer or an approval, a transcript edit, a
 rename, and a delete among them. Otherwise a caller could prompt a member into
 a send or a roster proposal, and so steer the team through the member. A
+worker member's approvals wait on the talkoot's own address, `#talkoot:<id>`,
+and an approval there needs `steer` too. A
 former member's session stays the team's, and so does the session of a member
 that another process runs. The daemon checks the rule for every verb in one
 place, before the verb's handler runs. A server that cannot tell which

@@ -57,6 +57,10 @@ type wsTalkoot struct {
 	mu    sync.Mutex
 	seats map[string]*seatBinding // by session id
 	runs  map[string]*talkootRun  // by talkoot id
+	// carriers park the asks of each talkoot's workers, by talkoot id. A
+	// carrier outlives its run, so an ask that waits while the run loads
+	// again stays in the inbox and can still be answered.
+	carriers map[string]*wsSession
 	// members holds every session that held a seat in a talkoot homed here,
 	// seated now or not. None of them is the person's default session.
 	members map[string]bool
@@ -468,32 +472,33 @@ func (d talkootNativeDriver) deliver(talkootID string, m talkoot.Member, text st
 	return nil
 }
 
-// talkootWorkerDriver delivers to a worker member as its next user turn.
+// talkootWorkerDriver delivers to a worker member: it spawns the member's
+// worker, or sends the text as the worker's next user turn.
 type talkootWorkerDriver struct {
-	agentOf memberBinding
-	send    func(agentID, text string) error
+	deliver func(m talkoot.Member, text string, r *talkoot.Receipt) error
 }
 
-func (d talkootWorkerDriver) Deliver(talkootID string, m talkoot.Member, text string) error {
-	id, err := d.agentOf(talkootID, m)
-	if err != nil {
+func (d talkootWorkerDriver) Deliver(_ string, m talkoot.Member, text string) error {
+	if err := d.deliver(m, text, nil); err != nil {
 		return fmt.Errorf("member %s: %w", m.ID, err)
 	}
-	if err := d.send(id, text); err != nil {
+	return nil
+}
+
+// DeliverRead makes the worker driver a talkoot.ReadDriver. The worker takes
+// the envelope's chain when its turn reads the text, on a backend that says
+// when, and when the worker accepts the text on any other.
+func (d talkootWorkerDriver) DeliverRead(_ string, m talkoot.Member, text string, r talkoot.Receipt) error {
+	if err := d.deliver(m, text, &r); err != nil {
 		return fmt.Errorf("member %s: %w", m.ID, err)
 	}
 	return nil
 }
 
 // talkootDrivers wires both drivers to this workspace's sessions and swarm.
-func (w *Workspace) talkootDrivers(sessionOf, agentOf memberBinding, read func(sessID, member string, r talkoot.Receipt)) talkoot.Drivers {
+func (w *Workspace) talkootDrivers(sessionOf memberBinding, deliverWorker func(m talkoot.Member, text string, r *talkoot.Receipt) error, read func(sessID, member string, r talkoot.Receipt)) talkoot.Drivers {
 	return talkoot.Drivers{
 		Native: talkootNativeDriver{sessionOf: sessionOf, resolve: w.resolve, read: read},
-		Worker: talkootWorkerDriver{agentOf: agentOf, send: func(id, text string) error {
-			if w.swarm == nil {
-				return fmt.Errorf("the workspace has no swarm")
-			}
-			return w.swarm.SendUserTurn(id, text)
-		}},
+		Worker: talkootWorkerDriver{deliver: deliverWorker},
 	}
 }

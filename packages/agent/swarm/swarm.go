@@ -87,6 +87,11 @@ type Config struct {
 	// backing mechanism is unavailable).
 	AcquireWorktree func(ctx context.Context, req WorktreeReq) (WorktreeLease, error)
 
+	// Retain, when set, keeps an agent out of the retention sweep while it
+	// returns true, however long the agent has been inert. A host that owns
+	// an agent beyond one session, such as a talkoot's worker, sets it.
+	Retain func(a *Agent) bool
+
 	// NewRunner produces the Runner for an Agent. If nil, the default
 	// `terva --swarm-agent ...` exec runner is used. Tests inject a fake
 	// here.
@@ -494,6 +499,13 @@ type SpawnRequest struct {
 	// and what a directory means stays the host's business.
 	SharedTree bool
 
+	// Dir, when set, is a directory the caller leased for the agent and
+	// keeps. The agent runs there, leased, and the swarm neither acquires a
+	// lease nor releases this one. A revival needs the caller to re-acquire
+	// it and pass it to ResumeIn. It must be an absolute path other than
+	// RepoRoot, and the spawn must set Approval.
+	Dir string
+
 	// Backend selects a worker backend — an agent that is not terva (see
 	// Agent.Backend). Empty means a native terva swarm agent, which is what
 	// every spawn has always been and what every spawn still is unless someone
@@ -507,6 +519,19 @@ type SpawnRequest struct {
 	// (yolo in a lease, else the dispatcher's posture); a value forces it. The
 	// swarm carries it opaquely.
 	Approval string
+
+	// Tools, when non-nil, narrows a worker backend to these tools, in
+	// terva's names. Nil is the backend's full set, and a non-nil empty list
+	// narrows to none. The swarm carries it opaquely, as it does Approval.
+	Tools []string
+
+	// OnTurnEnd, when set, is the agent's OnTurnEnd from its start. A caller
+	// that set it after SpawnReq returned could miss a fast first turn.
+	OnTurnEnd func(step int, errMsg string)
+
+	// OnEvent, when set, is the agent's OnEvent from its start, for the same
+	// reason.
+	OnEvent func(Event)
 
 	// Schema, when non-empty, is the JSON schema the agent's report must
 	// match (see Agent.Schema — the structured-deliverable contract).
@@ -578,8 +603,21 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 
 	dir := f.cfg.RepoRoot
 	leased := false
+	ownerLease := false
 	var releaseWorktree func()
-	if f.cfg.AcquireWorktree != nil && !req.SharedTree {
+	if req.Dir != "" {
+		d, err := f.ownerLeaseDir(req.Dir)
+		if err != nil {
+			return nil, err
+		}
+		// 🚨 A leased worker with no posture of its own defaults to yolo.
+		// The caller that leased the dir decides the posture there, so it
+		// must name one.
+		if strings.TrimSpace(req.Approval) == "" {
+			return nil, errors.New("swarm: a spawn in a caller's lease needs an explicit approval posture")
+		}
+		dir, leased, ownerLease = d, true, true
+	} else if f.cfg.AcquireWorktree != nil && !req.SharedTree {
 		lease, err := f.cfg.AcquireWorktree(ctx, WorktreeReq{
 			AgentID:  id,
 			Task:     task,
@@ -626,6 +664,7 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 		Task:         task,
 		Dir:          dir,
 		Leased:       leased,
+		OwnerLease:   ownerLease,
 		Origin:       f.cfg.RepoRoot,
 		Started:      f.cfg.Now(),
 		Model:        strings.TrimSpace(req.Model),
@@ -637,6 +676,7 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 		Card:         strings.TrimSpace(req.Card),
 		Backend:      strings.TrimSpace(req.Backend),
 		Approval:     strings.TrimSpace(req.Approval),
+		Tools:        cloneTools(req.Tools),
 		Schema:       req.Schema,
 		SessionID:    sessionID,
 		InboxPath:    inboxPath,
@@ -648,6 +688,8 @@ func (f *Swarm) SpawnReq(ctx context.Context, req SpawnRequest) (*Agent, error) 
 		done:         make(chan struct{}),
 
 		releaseWorktree: releaseWorktree,
+		OnTurnEnd:       req.OnTurnEnd,
+		OnEvent:         req.OnEvent,
 	}
 	// The agent's lifetime is swarm-scoped, deliberately NOT the
 	// caller's ctx: a spawn arrives on a turn's tool-dispatch context,
@@ -1243,4 +1285,32 @@ func lastN(lines []string, n int) []string {
 		return lines
 	}
 	return lines[len(lines)-n:]
+}
+
+// ownerLeaseDir checks a directory a caller leased for an agent, and returns
+// it clean. The home checkout is refused: it is no lease, and a leased agent
+// may run with more autonomy than the checkout allows.
+func (f *Swarm) ownerLeaseDir(raw string) (string, error) {
+	d := strings.TrimSpace(raw)
+	if d == "" || !filepath.IsAbs(d) {
+		return "", fmt.Errorf("swarm: a caller's lease must be an absolute path, got %q", raw)
+	}
+	d = filepath.Clean(d)
+	if root := f.cfg.RepoRoot; root != "" {
+		// 🚨 A symlink can name the checkout under another path, so both
+		// sides compare as the filesystem resolves them. A lease that does
+		// not resolve is refused: a caller's lease exists before the spawn.
+		real, err := filepath.EvalSymlinks(d)
+		if err != nil {
+			return "", fmt.Errorf("swarm: a caller's lease must exist: %w", err)
+		}
+		home := filepath.Clean(root)
+		if r, err := filepath.EvalSymlinks(home); err == nil {
+			home = r
+		}
+		if rel, err := filepath.Rel(home, real); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return "", errors.New("swarm: a caller's lease cannot be the home checkout or a directory in it")
+		}
+	}
+	return d, nil
 }

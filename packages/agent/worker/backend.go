@@ -140,6 +140,24 @@ type Backend struct {
 	// the safe default for a new backend.
 	ReportsCost bool
 
+	// ReportsReads says the worker emits a user_message event when a user
+	// turn enters its conversation, and not before, with each text the turn
+	// takes as a text block. A user_message whose data sets replay false is
+	// one the worker wrote itself, and reads nothing. A Talkoot member then takes a queued envelope's chain when
+	// its turn reads the text, as a native member does. Without it, the member
+	// takes the chain when the worker accepts the text, which is early for a
+	// busy worker. False is the safe default for a new backend.
+	ReportsReads bool
+
+	// TurnPerText says every text the worker takes ends in a turn end of its
+	// own, a text that arrives while a turn runs included, and a turn that
+	// fails still ends. A Talkoot member then holds its working slot until
+	// the worker has ended a turn for each text it was sent. Without it, the
+	// slot frees at the first turn end, because a backend that folds queued
+	// texts into one turn would never end the rest, and the member would
+	// hold its slot for good. False is the safe default for a new backend.
+	TurnPerText bool
+
 	// Tools maps a tools allowlist in terva's names onto the names the
 	// backend's own allowlist flag takes, and refuses a name it cannot
 	// express. Nil means the backend has no allowlist that covers every tool,

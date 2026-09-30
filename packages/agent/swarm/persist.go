@@ -63,6 +63,13 @@ type agentMeta struct {
 	// clears the flag with the lease (buildDetachedAgent).
 	Approval string `json:"approval,omitempty"`
 	Leased   bool   `json:"leased,omitempty"`
+	// OwnerLease records that the spawn's caller owns the lease. Reload
+	// moves the agent to RepoRoot as for any lease, and the flag stays, so
+	// Resume refuses the agent until its owner re-acquires the lease.
+	OwnerLease bool `json:"owner_lease,omitempty"`
+	// Tools is a pointer so that an empty list, which narrows to none,
+	// survives the file apart from an absent one, which narrows nothing.
+	Tools *[]string `json:"tools,omitempty"`
 	// Origin is the spawning swarm's RepoRoot — the project this agent belongs
 	// to. Durable because it is the only record of ownership that survives
 	// worktree isolation: Dir is a lease path that hashes to a different
@@ -106,7 +113,9 @@ func writeAgentMeta(stateDir string, a *Agent) error {
 		Card:         a.Card,
 		Backend:      a.Backend,
 		Approval:     a.Approval,
+		Tools:        toolsRef(a.Tools),
 		Leased:       a.Leased,
+		OwnerLease:   a.OwnerLease,
 		Origin:       a.Origin,
 		Schema:       a.Schema,
 		InboxPath:    a.InboxPath,
@@ -252,7 +261,9 @@ func (f *Swarm) buildDetachedAgent(m agentMeta) *Agent {
 		Card:         m.Card,
 		Backend:      m.Backend,
 		Approval:     m.Approval,
+		Tools:        toolsOf(m.Tools),
 		Leased:       leased,
+		OwnerLease:   m.OwnerLease,
 		Origin:       m.Origin,
 		Schema:       m.Schema,
 		InboxPath:    m.InboxPath,
@@ -399,9 +410,47 @@ func replayEventsIntoAgent(a *Agent, evs []Event) {
 // ctx is reserved for call-scoped setup; the resumed agent's lifetime
 // is swarm-scoped (see SpawnReq) and ends only via Stop/StopAllAndWait.
 func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
+	return f.ResumeHooked(ctx, id, nil)
+}
+
+// ResumeHooked is Resume with onTurnEnd set on the revived agent before its
+// runner starts, so no turn ends unheard.
+func (f *Swarm) ResumeHooked(ctx context.Context, id string, onTurnEnd func(step int, errMsg string)) (*Agent, error) {
+	return f.ResumeIn(ctx, id, "", Hooks{OnTurnEnd: onTurnEnd})
+}
+
+// Hooks are the callbacks a revived agent carries from its start, so none of
+// its first events goes unheard. See Agent.OnTurnEnd and Agent.OnEvent.
+type Hooks struct {
+	OnTurnEnd func(step int, errMsg string)
+	OnEvent   func(Event)
+}
+
+// ResumeIn is ResumeHooked for an agent whose lease its spawn's caller owns
+// (SpawnRequest.Dir). dir is the lease the owner re-acquired, and the agent
+// runs there, leased. An empty dir revives as Resume does.
+//
+// 🚨 An agent with an owner's lease is never revived without one. Reload
+// moved it to RepoRoot, and its explicit posture was chosen for its own
+// worktree, so a revival there would run that posture in the operator's live
+// checkout.
+func (f *Swarm) ResumeIn(ctx context.Context, id, dir string, hooks Hooks) (*Agent, error) {
 	existing := f.Get(id)
 	if existing == nil {
 		return nil, fmt.Errorf("swarm: no such agent %q", id)
+	}
+	if existing.OwnerLease && dir == "" {
+		return nil, fmt.Errorf("swarm: agent %s runs in a lease its owner keeps; the owner revives it", existing.ID)
+	}
+	if dir != "" && !existing.OwnerLease {
+		return nil, fmt.Errorf("swarm: agent %s has no owner's lease to revive into", existing.ID)
+	}
+	if dir != "" {
+		d, err := f.ownerLeaseDir(dir)
+		if err != nil {
+			return nil, err
+		}
+		dir = d
 	}
 	existing.mu.Lock()
 	st := existing.status
@@ -422,7 +471,7 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 		Persona:    existing.Persona,
 		Experience: existing.Experience, Substrate: existing.Substrate, Card: existing.Card,
 		Backend:  existing.Backend,
-		Approval: existing.Approval, Leased: existing.Leased,
+		Approval: existing.Approval, Leased: existing.Leased, OwnerLease: existing.OwnerLease, Tools: toolsRef(existing.Tools),
 		// Origin is spawn-time ownership; dropping it here would persist an
 		// empty origin and permanently orphan the agent from its project.
 		Origin:    existing.Origin,
@@ -433,6 +482,9 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 		// writeAgentMeta below would persist an empty session_id and
 		// permanently un-scope the agent from its host session.
 		SessionID: existing.SessionID,
+	}
+	if dir != "" {
+		m.Dir, m.Leased = dir, true
 	}
 
 	a := &Agent{
@@ -449,7 +501,9 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 		Card:         m.Card,
 		Backend:      m.Backend,
 		Approval:     m.Approval,
+		Tools:        toolsOf(m.Tools),
 		Leased:       m.Leased,
+		OwnerLease:   m.OwnerLease,
 		Origin:       m.Origin,
 		Schema:       m.Schema,
 		SessionID:    m.SessionID,
@@ -461,6 +515,8 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 		status:       StatusPending,
 		activity:     "resuming",
 		done:         make(chan struct{}),
+		OnTurnEnd:    hooks.OnTurnEnd,
+		OnEvent:      hooks.OnEvent,
 	}
 	// Carry the previous transcript forward so the dashboard doesn't
 	// flash empty between resume and the first new event.
@@ -497,4 +553,29 @@ func (f *Swarm) Resume(ctx context.Context, id string) (*Agent, error) {
 
 	go f.run(a)
 	return a, nil
+}
+
+// cloneTools copies a tools list and keeps nil apart from empty.
+func cloneTools(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	return append([]string{}, in...)
+}
+
+// toolsRef is a tools list as meta.json holds it.
+func toolsRef(in []string) *[]string {
+	if in == nil {
+		return nil
+	}
+	out := cloneTools(in)
+	return &out
+}
+
+// toolsOf is a tools list read back from meta.json.
+func toolsOf(in *[]string) []string {
+	if in == nil {
+		return nil
+	}
+	return cloneTools(*in)
 }

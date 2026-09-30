@@ -3,6 +3,7 @@ package swarm
 import (
 	"context"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -228,5 +229,21 @@ func TestInertSincePrefersFinishedThenLastEventThenStarted(t *testing.T) {
 	silent := &Agent{Started: started}
 	if got := silent.inertSince(); !got.Equal(started) {
 		t.Errorf("with neither, inertSince = %v, want Started %v", got, started)
+	}
+}
+
+// A host's Retain keeps an old terminal agent out of the sweep, and the
+// sweep still archives what Retain lets go.
+func TestSweepSkipsWhatTheHostRetains(t *testing.T) {
+	f := newRetentionSwarm(t)
+	kept := spawnFinished(t, f, "a member's worker", 9*24*time.Hour)
+	gone := spawnFinished(t, f, "old finished work", 9*24*time.Hour)
+	f.cfg.Retain = func(a *Agent) bool { return a.ID == kept.ID }
+	archived, errs := f.SweepRetention(7 * 24 * time.Hour)
+	if len(errs) > 0 {
+		t.Fatal(errs)
+	}
+	if slices.Contains(archived, kept.ID) || !slices.Contains(archived, gone.ID) {
+		t.Errorf("archived %v, want %s and not %s", archived, gone.ID, kept.ID)
 	}
 }

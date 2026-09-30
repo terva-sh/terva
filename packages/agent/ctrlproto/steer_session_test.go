@@ -181,6 +181,8 @@ func TestABoundSessionNeedsSteerToWriteOrSpend(t *testing.T) {
 		{MethodSessionDelete, member, nil},
 		{MethodCancel, member, nil},
 		{MethodSessionRestore, "", RestoreSessionParams{ID: member}},
+		// A talkoot's address names the carrier of its worker members' asks.
+		{MethodApprove, TalkootAddr("crew"), ApproveParams{}},
 	}
 	for _, c := range steers {
 		t.Run("refused/"+string(c.method), func(t *testing.T) {

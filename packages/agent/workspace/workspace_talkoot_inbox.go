@@ -80,7 +80,12 @@ type openCard struct {
 // openPermission records a pending approval for the snapshot, and shows it in
 // the inbox of the session's talkoot.
 func (s *wsSession) openPermission(req ctrlproto.PermissionRequest) {
-	c := s.cardSeat()
+	s.openPermissionAs(req, s.cardSeat())
+}
+
+// openPermissionAs is openPermission with the card's seat given. A talkoot's
+// carrier holds no seat, so it names the worker member's.
+func (s *wsSession) openPermissionAs(req ctrlproto.PermissionRequest, c openCard) {
 	s.mu.Lock()
 	s.permReq[req.CallID] = req
 	s.setCardLocked(cardKey{id: req.CallID}, c)
@@ -211,6 +216,9 @@ func (w *Workspace) talkootInbox(ctx context.Context, id string) ([]ctrlproto.Ta
 	}
 	for _, s := range all {
 		out = append(out, s.inboxCards(id)...)
+	}
+	if c := w.talkootCarrierOf(id); c != nil {
+		out = append(out, c.inboxCards(id)...)
 	}
 	slices.SortFunc(out, func(a, b ctrlproto.TalkootCard) int {
 		return cmp.Or(a.At.Compare(b.At), strings.Compare(a.Session, b.Session), strings.Compare(a.ID, b.ID))

@@ -82,6 +82,15 @@ type Workspace struct {
 	cancel context.CancelFunc
 
 	swarm *swarm.Swarm // workspace-global background agents (the tasks pane)
+	// talkootWorkers runs Talkoot worker members in place of the swarm, for
+	// a test. Nil uses the swarm.
+	talkootWorkers workerHost
+	// talkootLeases acquires worker members' worktrees. Nil is the
+	// workspace's own repository. A test sets a fake.
+	talkootLeases memberLeaser
+	// talkootIdleClock, when set, maps a worker member's idle stop to the
+	// wait a test uses.
+	talkootIdleClock func(time.Duration) time.Duration
 
 	// chat is the workspace's chat-bridge registry (the chat pane). Bridges are
 	// bound to a session id and never follow a client's active pane. See
@@ -375,6 +384,9 @@ func NewWorkspace(args build.Args, version string) (*Workspace, error) {
 	// persists but never interprets: no label -> the native `terva --swarm-agent`
 	// child; a label -> a foreign worker driven behind the same supervisor seams.
 	swarmCfg.NewRunner = w.newRunner
+	// A talkoot's seated worker outlives any quiet week: its member stops it
+	// for idleness and revives it with its conversation.
+	swarmCfg.Retain = retainTalkootWorker
 	w.swarm = swarm.New(swarmCfg)
 	_, _ = w.swarm.Reload()
 	// Retire the records Reload just re-registered that nobody has wanted for a
@@ -438,6 +450,11 @@ func (w *Workspace) newRunner(a *swarm.Agent) swarm.Runner {
 // stamp — in which case the runner denies the worker's asks cleanly rather than
 // hanging on a human who isn't there.
 func (w *Workspace) workerApprover(a *swarm.Agent) permission.Confirmer {
+	// A talkoot's worker names the talkoot as its dispatching session, and
+	// the talkoot's inbox takes its asks.
+	if id, ok := ctrlproto.TalkootFromAddr(a.SessionID); ok {
+		return &talkootConfirmer{w: w, talkoot: id, agentID: a.ID}
+	}
 	s := w.existing(a.SessionID)
 	if s == nil {
 		return nil
@@ -1208,6 +1225,12 @@ func (w *Workspace) RetryTurn(ctx context.Context, sess string, p ctrlproto.Turn
 }
 
 func (w *Workspace) Approve(ctx context.Context, sess, callID string, d permission.ConfirmDecision) error {
+	if id, ok := ctrlproto.TalkootFromAddr(sess); ok {
+		if c := w.talkootCarrierOf(id); c != nil {
+			c.approve(callID, d)
+		}
+		return nil
+	}
 	if s := w.live(sess); s != nil {
 		s.approve(callID, d)
 	}

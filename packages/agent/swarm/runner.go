@@ -96,6 +96,14 @@ func IngestEvent(ev Event, log *EventLog, sink Sink, a *Agent) {
 			a.setUsage(u)
 		}
 	}
+	if a != nil {
+		a.mu.Lock()
+		fn := a.OnEvent
+		a.mu.Unlock()
+		if fn != nil {
+			fn(ev)
+		}
+	}
 	if step, errMsg, ok := taskLevelTurnEnd(ev); ok && a != nil {
 		// Derive the structured deliverable (schema spawns only) BEFORE the
 		// OnTurnEnd fan-out, so a recap subscriber reading the snapshot in
@@ -453,6 +461,13 @@ func (r *execRunner) Run(ctx context.Context, sink Sink) error {
 	_ = log.Append(NewEvent("agent_stopped", map[string]any{"reason": "exit", "code": 0}))
 	sink.Activity("done")
 	return nil
+}
+
+// TaskTurnEnd reports whether ev is an event that fires the agent's
+// OnTurnEnd, and the step and error that OnTurnEnd receives for it. OnEvent
+// sees that event before the OnTurnEnd goroutine starts.
+func TaskTurnEnd(ev Event) (step int, errMsg string, ok bool) {
+	return taskLevelTurnEnd(ev)
 }
 
 // taskLevelTurnEnd reports whether ev marks a swarm task completing —

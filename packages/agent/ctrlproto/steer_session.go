@@ -86,6 +86,12 @@ func (s *serveState) steerRefusal(f Frame) string {
 			return "the params name no session to check"
 		}
 	}
+	// 🚨 A talkoot's address names its carrier, where the asks of its worker
+	// members wait. It is the team's, as a member's session is, so an approval
+	// there needs steer too.
+	if _, talkoot := TalkootFromAddr(id); talkoot {
+		return "a talkoot drives this session"
+	}
 	if ts.SteersTalkoot(id) {
 		return "a talkoot drives this session"
 	}

@@ -50,6 +50,12 @@ func tervaBackend() Backend {
 		Steer:         steerTerva,
 		Interrupt:     interruptTerva,
 		ReportsCost:   true,
+		// Each follow-up is an rpc prompt, and core emits user_message as
+		// the prompt's turn starts, carrying the prompt text.
+		ReportsReads: true,
+		// terva rpc runs each prompt as a turn, in the order the prompts
+		// arrived, and every prompt ends with done.
+		TurnPerText: true,
 		// The identity rides --persona (the child self-assembles it), so the
 		// opening turn is the task and the reporting contract alone — no
 		// workspace line, no pointers. See Briefing.selfAssembledTask.
@@ -85,6 +91,8 @@ func tervaPortableBackend() Backend {
 		Steer:         steerTerva,
 		Interrupt:     interruptTerva,
 		ReportsCost:   true,
+		ReportsReads:  true,                  // the same rpc prompts as the dogfood backend
+		TurnPerText:   true,                  // the same rpc prompts as the dogfood backend
 		Opening:       Briefing.Instructions, // the foreign work turn, exactly as claude
 		// Approvals ride the MCP bridge, NOT the rpc-native ask carrier: the
 		// config-opaque worker gates through terva's own MCP client calling `terva

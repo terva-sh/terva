@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/config"
-	"terva.sh/terva/packages/agent/look"
 	"terva.sh/terva/packages/agent/talkoot"
 	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/privfs"
@@ -24,9 +23,6 @@ type talkootSummary struct {
 	Running bool
 	// Problem says why a talkoot homed here is not running.
 	Problem string
-	// Name, Title, Color, and OwnColor come from the roster, and State from
-	// the run's last flush.
-	Name, Title, Color, OwnColor, State string
 }
 
 // talkootMemberView is one member as a client sees it.
@@ -74,11 +70,9 @@ func (w *Workspace) talkootList(ctx context.Context) ([]talkootSummary, error) {
 		sum := talkootSummary{ID: id, Problem: w.talkoot.problems[id]}
 		if run := w.talkoot.runs[id]; run != nil {
 			sum.Running = true
-			r := run.roster.Load()
-			sum.Home, sum.Name, sum.Title, sum.Color, sum.OwnColor = r.Home, r.Name, r.Title, look.TeamColor(id, r.Color), r.Color
-			sum.State = run.teamState()
+			sum.Home = run.roster.Load().Home
 		} else if r, err := talkoot.Load(id, talkootEnv()); err == nil {
-			sum.Home, sum.Name, sum.Title, sum.Color, sum.OwnColor = r.Home, r.Name, r.Title, look.TeamColor(id, r.Color), r.Color
+			sum.Home = r.Home
 		} else if sum.Problem == "" {
 			sum.Problem = err.Error()
 		}
@@ -117,7 +111,7 @@ func (w *Workspace) talkootGet(ctx context.Context, id string) (talkootView, err
 		// talkoot.
 		v.Text, _ = os.ReadFile(filepath.Join(run.dir, talkoot.FileName))
 		status := map[string]talkoot.Status{}
-		for _, st := range run.overlay(rt.Statuses()) {
+		for _, st := range run.overlayIdle(rt.Statuses()) {
 			status[st.Member] = st
 		}
 		w.talkoot.mu.Lock()
@@ -414,12 +408,8 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 	// The roster line records who changed the roster. It is part of the
 	// update: an update the room cannot record does not happen.
 	changes := talkoot.Diff(prev, next)
-	line := talkoot.Line{Type: talkoot.LineRoster, At: time.Now(), By: humanBy(by), Ref: talkoot.RosterRevision(text),
-		Proposal: from.proposal, Proposer: from.proposer, Edited: from.edited, Changes: changes}
-	if prev.Color != next.Color {
-		line.ColorBefore, line.ColorAfter = look.TeamColor(id, prev.Color), look.TeamColor(id, next.Color)
-	}
-	if err := run.room.Append(line); err != nil {
+	if err := run.room.Append(talkoot.Line{Type: talkoot.LineRoster, At: time.Now(), By: humanBy(by), Ref: talkoot.RosterRevision(text),
+		Proposal: from.proposal, Proposer: from.proposer, Edited: from.edited, Changes: changes}); err != nil {
 		return abort(fmt.Errorf("talkoot: the room could not record the roster change: %w", err))
 	}
 	rosterSealed = true
@@ -522,8 +512,6 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 		return talkootView{}, err
 	}
 	w.introduceJoined(run, by, changes)
-	// The list shows the roster's name and colour.
-	w.announceTalkoots()
 	return w.talkootGet(ctx, id)
 }
 

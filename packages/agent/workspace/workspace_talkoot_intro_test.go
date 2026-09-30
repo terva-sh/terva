@@ -184,8 +184,8 @@ func TestAJoinWithAnUnreadableKickoffGetsAPlainCard(t *testing.T) {
 	}
 }
 
-// A worker member has no process yet, and a member the team's pause holds
-// cannot take a turn. Each gets a plain card from its entry, and no turn. A
+// A worker member without the user's external_workers gate, and a member the
+// team's pause holds, cannot take a turn. Each gets a plain card from its entry, and no turn. A
 // client receives a card as a talkoot_intro event.
 func TestAMemberThatCannotTakeATurnGetsAPlainCard(t *testing.T) {
 	w := startedCrew(t, okProvider)
@@ -201,11 +201,11 @@ func TestAMemberThatCannotTakeATurnGetsAPlainCard(t *testing.T) {
 	if _, err := w.talkootUpdate(ctx, "crew", "sothr", []byte(withTess)); err != nil {
 		t.Fatal(err)
 	}
-	if cards := cardsFor(t, "tess"); len(cards) != 1 || !strings.Contains(cards[0].Text, "not bound to an agent") || !strings.Contains(cards[0].Text, "tess, the specialist") {
+	if cards := cardsFor(t, "tess"); len(cards) != 1 || !strings.Contains(cards[0].Text, "external_workers") || !strings.Contains(cards[0].Text, "tess, the specialist") {
 		t.Fatalf("tess's card: %+v", cards)
 	}
 	if len(introsTo(t, "tess")) != 0 {
-		t.Error("a worker with no process got an introduction turn")
+		t.Error("a worker without the gate got an introduction turn")
 	}
 	if l := nextEvent(t, room, ctrlproto.EventTalkootIntro).Talkoot.Line; l == nil || l.Type != talkoot.LineIntro || l.Member != "tess" || !strings.Contains(l.Text, "tess, the specialist") {
 		t.Errorf("the talkoot_intro event carried %+v", l)

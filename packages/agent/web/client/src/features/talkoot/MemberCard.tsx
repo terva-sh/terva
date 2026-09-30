@@ -11,7 +11,7 @@ const POSTURES = ['plan', 'ask', 'auto-edit', 'workspace', 'yolo']
 // The fields the card edits as text, in the order it shows them, by class.
 // Decision 0025 sorts every field into look, voice, or authority.
 const VOICE = ['persona'] as const
-const AUTHORITY = ['driver', 'model', 'tier', 'posture', 'workspace', 'tools', 'budget_usd_per_day', 'turns_per_day'] as const
+const AUTHORITY = ['driver', 'model', 'tier', 'posture', 'workspace', 'tools', 'budget_usd_per_day', 'turns_per_day', 'idle_stop'] as const
 type Field = 'title' | (typeof VOICE)[number] | (typeof AUTHORITY)[number]
 
 const LABELS: Record<Field, () => string> = {
@@ -25,6 +25,7 @@ const LABELS: Record<Field, () => string> = {
   tools: () => t('Tools'),
   budget_usd_per_day: () => t('Budget per day, USD'),
   turns_per_day: () => t('Turns per day'),
+  idle_stop: () => t('Stop the worker when idle for'),
 }
 
 // shown is a field as the card's text box holds it.

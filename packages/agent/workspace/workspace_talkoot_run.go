@@ -7,7 +7,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -19,7 +18,6 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/talkoot"
-	"terva.sh/terva/packages/agent/talkoot/expression"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/filelock"
@@ -144,43 +142,21 @@ type talkootRun struct {
 	kickLed bool
 
 	emit func(talkootEvent)
-	// unbound says why nothing listens for a member, or returns nil. It is
-	// the workspace's memberUnbound, and a status reads it for offline.
-	unbound func(talkoot.Member) error
-	// waiting holds the keys of each member's open questions and approvals
-	// in the inbox. Guarded by evMu.
-	waiting map[string]map[string]bool
 	// flushMu holds one flush from taking its lines to sending them, so a
 	// watcher sees events in the room's order.
 	flushMu sync.Mutex
 	evMu    sync.Mutex
 	pending []talkoot.Line
 	last    map[string]talkoot.Status
-
-	// face is the run's expression engine (workspace_talkoot_face.go). It
-	// reads every sealed line in observe. beats holds the beats it played
-	// that no flush has sent, and faceTimer flushes the run when an
-	// expression changes with time. Guarded by evMu, except face, which is
-	// set once before the run observes a line.
-	face        expression.Engine
-	beats       []expression.Beat
-	faceTimer   *time.Timer
-	faceStopped bool
-
-	// team is the team state the last flush found, guarded by evMu, and
-	// teamChanged runs when a flush finds another (workspace_talkoot_team.go).
-	team        string
-	teamChanged func()
 }
 
 // talkootEvent is a change a client of the talkoot wants to see.
 type talkootEvent struct {
 	Talkoot string
-	// Kind is envelope, status, roster, inbox, beat, or loaded.
+	// Kind is envelope, status, roster, inbox, or loaded.
 	Kind   string
 	Line   *talkoot.Line
 	Status []talkoot.Status
-	Beat   *expression.Beat
 	// Wire is an inbox event, built in its wire form, because an inbox
 	// card is made of wire requests already.
 	Wire *ctrlproto.Event
@@ -223,17 +199,10 @@ func (r *talkootRun) tryDo(fn func(*talkoot.Router) error) bool {
 
 // observe queues each sealed line. It runs with the room locked, so it only
 // queues; flush sends.
-//
-// 🔑 The engine reads the line under evMu, the lock the queue takes. A flush
-// reads the faces under the same lock as it takes the queue, so a status never
-// shows a reaction to a line that a later flush sends.
 func (r *talkootRun) observe(l talkoot.Line) {
 	r.evMu.Lock()
-	defer r.evMu.Unlock()
-	if r.face != nil {
-		r.beats = append(r.beats, r.face.Observe(l)...)
-	}
 	r.pending = append(r.pending, l)
+	r.evMu.Unlock()
 }
 
 // flush sends the envelope, intro, answer, and roster lines queued since the last
@@ -242,10 +211,8 @@ func (r *talkootRun) flush() {
 	r.flushMu.Lock()
 	defer r.flushMu.Unlock()
 	r.evMu.Lock()
-	lines, beats := r.pending, r.beats
-	r.pending, r.beats = nil, nil
-	now := time.Now()
-	faces := r.facesLocked(now)
+	lines := r.pending
+	r.pending = nil
 	r.evMu.Unlock()
 	for i := range lines {
 		switch lines[i].Type {
@@ -259,42 +226,28 @@ func (r *talkootRun) flush() {
 			r.emit(talkootEvent{Talkoot: r.id, Kind: "roster", Line: &lines[i]})
 		}
 	}
-	for i := range beats {
-		r.emit(talkootEvent{Talkoot: r.id, Kind: "beat", Beat: &beats[i]})
-	}
 	r.mu.RLock()
 	if r.closed {
 		r.mu.RUnlock()
 		return
 	}
-	st := r.overlayWith(r.router.Statuses(), faces)
+	st := r.overlayIdle(r.router.Statuses())
 	r.mu.RUnlock()
 	r.evMu.Lock()
-	r.armFaceLocked(now)
 	changed := len(st) != len(r.last)
 	next := make(map[string]talkoot.Status, len(st))
 	for _, s := range st {
 		next[s.Member] = s
-		if !sameStatus(r.last[s.Member], s) {
+		if r.last[s.Member] != s {
 			changed = true
 		}
 	}
 	r.last = next
-	team := talkoot.TeamState(st)
-	moved := team != r.team
-	r.team = team
 	r.evMu.Unlock()
 	if changed {
 		r.emit(talkootEvent{Talkoot: r.id, Kind: "status", Status: st})
 	}
-	if moved && r.teamChanged != nil {
-		r.teamChanged()
-	}
 }
-
-// sameStatus reports whether two statuses of a member are equal. A status
-// holds a list of pause kinds, so == cannot compare it.
-func sameStatus(a, b talkoot.Status) bool { return reflect.DeepEqual(a, b) }
 
 // LoadTalkoots starts every talkoot homed in this workspace's directory. The
 // daemon hosts call it once after NewWorkspace. The in-process terminal does
@@ -376,17 +329,11 @@ func (w *Workspace) startTalkoot(id string) error {
 	run := &talkootRun{id: id, dir: dir, room: talkoot.OpenRoom(dir), lock: lk, seats: map[string]string{}}
 	run.roster.Store(&r)
 	run.emit = w.talkootEmit
-	run.teamChanged = w.announceTalkoots
-	run.unbound = w.memberUnbound
 	lines, err := run.room.Read()
 	if err != nil {
 		lk.Release()
 		return err
 	}
-	// 🔑 The engine replays the room before the run observes a line, and
-	// nothing writes the room between the two: this process holds the run
-	// lock, and no router exists yet.
-	run.startFace(lines, w.talkootFaceRows)
 	for _, l := range lines {
 		if l.Type != talkoot.LineSeat {
 			continue
@@ -825,7 +772,6 @@ func (w *Workspace) closeTalkoots() {
 		}
 		r.closed = true
 		r.mu.Unlock()
-		r.stopFace()
 		w.closeIdleStops(r)
 		r.lock.Release()
 	}

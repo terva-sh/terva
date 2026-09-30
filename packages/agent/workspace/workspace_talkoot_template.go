@@ -192,6 +192,6 @@ func wireRosterMember(m talkoot.Member) ctrlproto.TalkootRosterMember {
 		ID: m.ID, Role: m.Role, Title: m.Title, Mark: wireMark(m.Mark), Persona: m.Persona, Driver: m.Driver,
 		Model: m.Model, Tier: m.Tier, Posture: m.Posture, Workspace: m.Workspace,
 		Reviewer: m.Reviewer, BudgetUSDPerDay: m.BudgetUSDPerDay, TurnsPerDay: m.TurnsPerDay,
-		Tools: m.Tools,
+		Tools: m.Tools, IdleStop: m.IdleStop,
 	}
 }

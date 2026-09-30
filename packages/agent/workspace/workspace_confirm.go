@@ -151,12 +151,21 @@ func (c *workerConfirmer) Confirm(ctx context.Context, toolName, preview string)
 	// correlate this ask to the worker's lane tile; the callID prefix and the
 	// "worker <id>:" preview stay as human-facing labeling, not the contract.
 	req := ctrlproto.PermissionRequest{CallID: callID, Tool: toolName, Preview: preview, Agent: c.agentID}
-	ch, release, _ := s.permPark.Park(callID) // per-agent seq: never collides
-	s.openPermission(req)
+	return parkWorkerAsk(ctx, c.ctx, s, req, func() { s.openPermission(req) })
+}
+
+// parkWorkerAsk parks a worker's ask on s, opens its card with open, and
+// waits for the answer, the worker's stop, or the daemon's end.
+func parkWorkerAsk(ctx, daemon context.Context, s *wsSession, req ctrlproto.PermissionRequest, open func()) permission.ConfirmDecision {
+	ch, release, ok := s.permPark.Park(req.CallID)
+	if !ok {
+		return permission.ConfirmDecision{Allow: false, Reason: "the ask id " + req.CallID + " is already waiting"}
+	}
+	open()
 	defer func() {
 		release()
-		s.closePermission(callID)
-		s.broadcast(ctrlproto.PermissionResolvedEvent(callID))
+		s.closePermission(req.CallID)
+		s.broadcast(ctrlproto.PermissionResolvedEvent(req.CallID))
 	}()
 
 	s.broadcast(ctrlproto.PermissionEvent(req))
@@ -165,7 +174,7 @@ func (c *workerConfirmer) Confirm(ctx context.Context, toolName, preview string)
 		return d
 	case <-ctx.Done():
 		return permission.ConfirmDecision{Allow: false, Reason: "worker stopped before the approval was answered"}
-	case <-c.ctx.Done():
+	case <-daemon.Done():
 		return permission.ConfirmDecision{Allow: false, Reason: "cancelled (session ending)"}
 	}
 }

@@ -135,6 +135,7 @@ func (r *Runner) Run(ctx context.Context, sink swarm.Sink) error {
 
 	dispatch := Dispatch{
 		Briefing:    brief,
+		Tools:       r.agent.Tools,
 		Dir:         r.agent.Dir,
 		Cursor:      cursor,
 		Resuming:    r.agent.Resuming,

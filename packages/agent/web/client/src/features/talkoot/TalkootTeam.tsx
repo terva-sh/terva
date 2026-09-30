@@ -10,6 +10,7 @@ import { TalkootInbox } from './TalkootInbox'
 import { RoomLine, RoomExchange } from './RoomLine'
 import { OpenRefContext } from './RefChip'
 import { MarksContext, MemberMark } from './MemberMark'
+import { MemberCard } from './MemberCard'
 import { validPerson } from './person'
 import { useTalkoot } from './useTalkoot'
 
@@ -45,6 +46,7 @@ export function TalkootTeam({
   const { state, error, loadOlder } = useTalkoot(client, hub, id, generation)
   const [selected, setSelected] = useState('')
   const [actionError, setActionError] = useState('')
+  const [cardOpen, setCardOpen] = useState(false)
   // What the person has read, per member. Two people can share a browser,
   // so the store is keyed by the person, and a change of name loads theirs.
   const seenKey = `terva_talkoot_seen:${id}:${validPerson(person) ? person : ''}`
@@ -137,6 +139,7 @@ export function TalkootTeam({
                   <span class={`talkoot-member-activity presence-${p}`}>
                     {p === 'working' && m.status?.tool ? t('running %s', m.status.tool) : PRESENCE_LABEL[p]()}
                     {m.status?.paused ? `: ${m.status.paused}` : ''}
+                    {m.status?.idle && !m.status.working ? ` · ${t('worker stopped while idle')}` : ''}
                   </span>
                 </button>
                 {canSteer && (
@@ -168,6 +171,11 @@ export function TalkootTeam({
                 {[member.role, member.persona, member.driver, member.posture].filter(Boolean).join(' · ')}
               </span>
             )}
+            {member && (
+              <button class="btn sm ghost" aria-expanded={cardOpen} onClick={() => setCardOpen(!cardOpen)}>
+                {cardOpen ? t('Hide the member card') : t('Member card')}
+              </button>
+            )}
             {member?.session && (
               <button class="btn sm ghost" onClick={() => onOpenSession(member.session!)}>
                 {t('Open session')}
@@ -176,6 +184,18 @@ export function TalkootTeam({
           </div>
           {(error || actionError) && <div class="talkoot-error">{error || actionError}</div>}
           {!canSteer && <div class="talkoot-note">{t('Set your name above to post, answer, and pause.')}</div>}
+          {member && cardOpen && (
+            <MemberCard
+              key={member.id}
+              client={client}
+              id={id}
+              member={member}
+              person={person}
+              canSteer={canSteer}
+              onPause={() => pause({ member: member.id })}
+              onResume={() => resume({ member: member.id })}
+            />
+          )}
           <TalkootInbox client={client} id={id} cards={state.cards} person={person} canSteer={canSteer} onError={setActionError} />
           <OpenRefContext.Provider value={openRef}>
             <div class="talkoot-log" role="log" ref={tail.ref} onScroll={tail.onScroll}>

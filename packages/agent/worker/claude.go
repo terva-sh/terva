@@ -48,9 +48,13 @@ func claudeBackend() Backend {
 		Steer:         steerClaude,
 		Interrupt:     interruptClaude,
 		ReportsCost:   true,
-		Tools:         claudeTools,
-		Installed:     claudeInstalled,
-		Cursor:        claudeCursor,
+		// --replay-user-messages echoes each user turn as the turn takes it.
+		// It does not end a turn for each text: texts that queue behind a
+		// turn fold into one, so TurnPerText stays false.
+		ReportsReads: true,
+		Tools:        claudeTools,
+		Installed:    claudeInstalled,
+		Cursor:       claudeCursor,
 		// The identity is already on --append-system-prompt (see claudeCommand),
 		// so the opening turn is the WORK alone. Sending Briefing.Text here would
 		// tell the model who it is a second time.
@@ -84,6 +88,11 @@ func claudeCommand(d Dispatch) (*exec.Cmd, error) {
 		"--output-format", "stream-json",
 		// stream-json needs --verbose to emit the full event stream.
 		"--verbose",
+		// The child echoes each user turn, with isReplay set, as the turn
+		// takes it. A probe of 2.1.283 on 2026-09-28 found the echo at the
+		// turn's start, and texts that queued behind a turn folded into one
+		// echo and one turn. A talkoot member reads its envelopes there.
+		"--replay-user-messages",
 	}
 
 	// The cursor is ours, minted before the process existed. On a revival we
@@ -386,6 +395,7 @@ func translateClaude(line []byte) []Event {
 		Usage         json.RawMessage `json:"usage"`
 		PermDenials   json.RawMessage `json:"permission_denials"`
 		ThinkingToken int             `json:"estimated_tokens"`
+		IsReplay      bool            `json:"isReplay"`
 	}
 	if err := json.Unmarshal(line, &ev); err != nil || ev.Type == "" {
 		return nil // not an event; the runner keeps the raw line as transcript
@@ -431,7 +441,9 @@ func translateClaude(line []byte) []Event {
 		if err := json.Unmarshal(ev.Message, &msg); err != nil {
 			return nil
 		}
-		return []Event{{Type: "user_message", Data: map[string]any{"message": msg}}}
+		// replay tells the child's echo of a user turn from the user events
+		// it writes itself: tool results, and the marker an interrupt leaves.
+		return []Event{{Type: "user_message", Data: map[string]any{"message": msg, "replay": ev.IsReplay}}}
 
 	case "result":
 		// The terminal event, and the one that has no analog abroad: a foreign

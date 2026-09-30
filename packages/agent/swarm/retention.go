@@ -118,6 +118,9 @@ func (f *Swarm) SweepRetention(olderThan time.Duration) (archived []string, errs
 		if now.Sub(a.inertSince()) <= olderThan {
 			continue
 		}
+		if f.cfg.Retain != nil && f.cfg.Retain(a) {
+			continue
+		}
 		if err := f.Archive(a.ID); err != nil {
 			errs = append(errs, fmt.Errorf("retention sweep: %w", err))
 			continue

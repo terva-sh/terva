@@ -1,6 +1,7 @@
 package talkoot
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -126,6 +127,43 @@ func TestAnUnreportedTurnPausesTheMember(t *testing.T) {
 	paused("after a restart")
 }
 
+// A turn whose process stopped is charged what it spent, and the member
+// pauses with the reason, live and after a restart. A bad cost is charged as
+// nothing, and the reason says so.
+func TestAStoppedTurnIsChargedAndPauses(t *testing.T) {
+	f := newFixture(t, nil)
+	if err := f.router.TurnStopped("jev", 0.25, "the worker stopped before its turn ended"); err != nil {
+		t.Fatal(err)
+	}
+	check := func(when string) {
+		t.Helper()
+		for _, s := range f.router.Statuses() {
+			if s.Member != "jev" {
+				continue
+			}
+			if !strings.Contains(s.Paused, "the worker stopped before its turn ended") {
+				t.Errorf("%s: paused %q, want the stop", when, s.Paused)
+			}
+			if s.Turns != 1 || s.SpendUSD != 0.25 {
+				t.Errorf("%s: %d turns and $%v, want one turn charged $0.25", when, s.Turns, s.SpendUSD)
+			}
+		}
+	}
+	check("live")
+	f.reopen()
+	check("after a restart")
+
+	g := newFixture(t, nil)
+	if err := g.router.TurnStopped("jev", math.NaN(), "stopped"); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range g.router.Statuses() {
+		if s.Member == "jev" && (s.SpendUSD != 0 || !strings.Contains(s.Paused, "turn cost of NaN")) {
+			t.Errorf("a NaN cost: spend $%v, paused %q", s.SpendUSD, s.Paused)
+		}
+	}
+}
+
 // 🚨 A member an update removed can still be mid-turn, and its turn spent the
 // team's money. The new router counts it toward the talkoot's budget, live
 // and in replay, or every removal would lower the team's spend for the day.
@@ -168,5 +206,84 @@ func TestAFormerMembersTurnCountsTowardTheTeam(t *testing.T) {
 	teamPaused("after a restart")
 	if err := f.router.TurnEnded("../x", 1); err == nil {
 		t.Error("want a turn for a name that is no member id refused")
+	}
+}
+
+// A queued turn is charged and counted, and the member's working slot stays
+// as it is.
+func TestAQueuedTurnIsChargedAndHoldsNoSlot(t *testing.T) {
+	f := newFixture(t, nil)
+	f.post()
+	status := func() Status {
+		for _, s := range f.router.Statuses() {
+			if s.Member == "helm" {
+				return s
+			}
+		}
+		t.Fatal("no status for helm")
+		return Status{}
+	}
+	if !status().Working {
+		t.Fatal("the post left helm idle")
+	}
+	if err := f.router.QueuedTurnEnded("helm", 0.2); err != nil {
+		t.Fatal(err)
+	}
+	s := status()
+	if !s.Working {
+		t.Error("a queued turn freed helm's working slot")
+	}
+	if s.Turns != 1 || s.SpendUSD != 0.2 {
+		t.Errorf("%d turns and $%v, want one turn charged $0.2", s.Turns, s.SpendUSD)
+	}
+	f.reopen()
+	if s := status(); s.SpendUSD != 0.2 {
+		t.Errorf("after a restart, $%v, want $0.2", s.SpendUSD)
+	}
+}
+
+// FreeSlot frees a working member's slot and records no turn. On a member
+// that holds no slot it does nothing.
+func TestFreeSlotFreesTheSlotWithoutATurn(t *testing.T) {
+	f := newFixture(t, nil)
+	f.post()
+	status := func() Status {
+		for _, s := range f.router.Statuses() {
+			if s.Member == "helm" {
+				return s
+			}
+		}
+		t.Fatal("no status for helm")
+		return Status{}
+	}
+	if err := f.router.FreeSlot("helm"); err != nil {
+		t.Fatal(err)
+	}
+	if s := status(); s.Working || s.Turns != 0 {
+		t.Errorf("working %v with %d turns, want the slot free and no turn", s.Working, s.Turns)
+	}
+	if err := f.router.FreeSlot("helm"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.router.FreeSlot("Not An Id"); err == nil {
+		t.Error("FreeSlot took a name that is not a member id")
+	}
+}
+
+// A queued turn whose process stopped is charged, pauses the member, and
+// leaves its working slot as it is.
+func TestAStoppedQueuedTurnIsChargedAndPauses(t *testing.T) {
+	f := newFixture(t, nil)
+	f.post()
+	if err := f.router.QueuedTurnStopped("helm", 0.2, "the worker stopped before its turn ended"); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range f.router.Statuses() {
+		if s.Member != "helm" {
+			continue
+		}
+		if !s.Working || s.SpendUSD != 0.2 || !strings.Contains(s.Paused, "stopped before its turn ended") {
+			t.Errorf("working %v, $%v, paused %q; want still working, $0.2, paused", s.Working, s.SpendUSD, s.Paused)
+		}
 	}
 }

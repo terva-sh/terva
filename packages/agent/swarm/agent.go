@@ -29,6 +29,10 @@ type Agent struct {
 	// A lease is a git worktree, NOT a security sandbox, so this gates
 	// AUTONOMY, not privilege. Persisted in meta.json so Resume keeps it.
 	Leased bool
+	// OwnerLease is true when the spawn's caller leased Dir and keeps the
+	// lease (SpawnRequest.Dir). The swarm neither acquires nor releases it,
+	// and a revival needs the dir from its owner: see ResumeIn.
+	OwnerLease bool
 	// Origin is the RepoRoot of the swarm that spawned this agent — the
 	// project the agent BELONGS to, as distinct from Dir, the directory it
 	// happens to run in. The two are equal for a shared-cwd agent and differ
@@ -97,6 +101,10 @@ type Agent struct {
 	// swarm carries it opaquely and the backend interprets it. Persisted in
 	// meta.json so a revived worker keeps the operator's choice.
 	Approval string
+
+	// Tools, when non-nil, narrows a worker backend to these tools (see
+	// SpawnRequest.Tools). Persisted, so a revived worker keeps its limit.
+	Tools []string
 
 	// Schema, when non-empty, is the JSON schema the agent's deliverable
 	// must match (the structured-deliverable contract): a native child gets
@@ -229,6 +237,12 @@ type Agent struct {
 	// the initial task completes, so Wait() never unblocks for them.
 	OnTurnEnd func(step int, errMsg string)
 
+	// OnEvent, if set, receives every event the runner ingests, after the
+	// durable log and the sink have it, on the runner's own goroutine and in
+	// order. It must not block: the runner reads its child's next event only
+	// after OnEvent returns. Guarded by mu.
+	OnEvent func(Event)
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	runner Runner
@@ -306,6 +320,10 @@ func (a *Agent) Err() error {
 // and by /swarm wait <id>.
 func (a *Agent) Wait() { <-a.done }
 
+// Done is closed when the agent's run ends: its process exited, or it was
+// never started here. A revival makes a new Agent with a Done of its own.
+func (a *Agent) Done() <-chan struct{} { return a.done }
+
 // SetOnTurnEnd installs (or clears, with nil) the per-turn callback
 // fired from the runner when the child daemon emits a turn_end
 // event. Safe to call from any goroutine: the runner reads the
@@ -313,6 +331,14 @@ func (a *Agent) Wait() { <-a.done }
 func (a *Agent) SetOnTurnEnd(fn func(step int, errMsg string)) {
 	a.mu.Lock()
 	a.OnTurnEnd = fn
+	a.mu.Unlock()
+}
+
+// SetOnEvent installs (or clears, with nil) the per-event callback. See
+// OnEvent.
+func (a *Agent) SetOnEvent(fn func(Event)) {
+	a.mu.Lock()
+	a.OnEvent = fn
 	a.mu.Unlock()
 }
 

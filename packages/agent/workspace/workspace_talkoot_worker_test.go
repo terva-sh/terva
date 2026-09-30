@@ -107,25 +107,6 @@ func (f *fakeWorkers) adopt(id string, ev workerEvents) (float64, error) {
 	return f.totals[id], nil
 }
 
-func (f *fakeWorkers) agentSnapshot(id string) (swarm.AgentSnapshot, bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if _, ok := f.live[id]; !ok {
-		return swarm.AgentSnapshot{}, false
-	}
-	return swarm.AgentSnapshot{ID: id, Status: swarm.StatusRunning, Activity: "working", Tail: "user: " + f.lastSentLocked(id), CostUSD: f.totals[id]}, true
-}
-
-// lastSentLocked is the last text sent to worker id. The caller holds f.mu.
-func (f *fakeWorkers) lastSentLocked(id string) string {
-	for i := len(f.sent) - 1; i >= 0; i-- {
-		if who, text, _ := strings.Cut(f.sent[i], "|"); who == id {
-			return text
-		}
-	}
-	return ""
-}
-
 func (f *fakeWorkers) holds(id string) (swarm.SpawnRequest, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

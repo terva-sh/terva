@@ -200,3 +200,45 @@ func TestRevivedLeasedWorkerLosesAutonomyWithItsLease(t *testing.T) {
 		t.Errorf("revival in the shared checkout dispatched posture %q, want the dispatcher's %q", d.posture, "ask")
 	}
 }
+
+// A tools list set at the spawn reaches the backend's dispatch, so a roster
+// member's limit binds its worker.
+func TestWorkerToolsReachDispatch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the inbox is a unix socket")
+	}
+	tervaHome(t, "")
+	repo := testsupport.TempDir(t)
+	r, err := build.Resolve(build.Args{CWD: repo}, false)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	captured := make(chan []string, 1)
+	backend := tervaBackend()
+	backend.Name = "recorder"
+	backend.Command = func(d Dispatch) (*exec.Cmd, error) {
+		select {
+		case captured <- d.Tools:
+		default:
+		}
+		return exec.Command("true"), nil
+	}
+	// A backend without a mapping refuses a tools list at the dispatch.
+	backend.Tools = func(names []string) ([]string, error) { return names, nil }
+	f := swarm.New(swarm.Config{
+		Root: testsupport.TempDir(t), RepoRoot: repo,
+		NewRunner: func(a *swarm.Agent) swarm.Runner { return NewRunner(a, backend, r, nil) },
+	})
+	defer f.StopAll()
+	if _, err := f.SpawnReq(context.Background(), swarm.SpawnRequest{Task: "do the thing", Tools: []string{"read"}}); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	select {
+	case got := <-captured:
+		if len(got) != 1 || got[0] != "read" {
+			t.Errorf("dispatched tools = %#v, want [read]", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("backend Command was never invoked")
+	}
+}

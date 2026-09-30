@@ -165,7 +165,7 @@ func TestARoutedPostStartsATurnOnAnIdleNativeMember(t *testing.T) {
 	drivers := talkoot.Drivers{
 		Native: talkootNativeDriver{sessionOf: bindOnly("helm", s.id), resolve: sessionResolver(s),
 			read: func(string, string, talkoot.Receipt) {}},
-		Worker: talkootWorkerDriver{agentOf: bindOnly("", ""), send: func(string, string) error { return nil }},
+		Worker: talkootWorkerDriver{deliver: func(talkoot.Member, string, *talkoot.Receipt) error { return nil }},
 	}
 	dir := testsupport.TempDir(t)
 	if err := talkoot.CreateRoom(dir); err != nil {
@@ -209,16 +209,9 @@ func TestDriversNameAMemberWithNothingBound(t *testing.T) {
 	if err := native.Deliver("crew", talkoot.Member{ID: "helm"}, "x"); err == nil || !strings.Contains(err.Error(), "member helm: nothing is bound") {
 		t.Errorf("native: %v", err)
 	}
-	var sent []string
-	w := talkootWorkerDriver{agentOf: bindOnly("jev", "agent-7"), send: func(id, text string) error {
-		sent = append(sent, id+"|"+text)
-		return nil
-	}}
-	if err := w.Deliver("crew", talkoot.Member{ID: "yelp"}, "x"); err == nil || !strings.Contains(err.Error(), "member yelp: nothing is bound") {
+	w := talkootWorkerDriver{deliver: func(talkoot.Member, string, *talkoot.Receipt) error { return errors.New("external workers are off") }}
+	if err := w.Deliver("crew", talkoot.Member{ID: "yelp"}, "x"); err == nil || !strings.Contains(err.Error(), "member yelp: external workers are off") {
 		t.Errorf("worker: %v", err)
-	}
-	if err := w.Deliver("crew", talkoot.Member{ID: "jev"}, "build it"); err != nil || len(sent) != 1 || sent[0] != "agent-7|build it" {
-		t.Errorf("a bound worker gets the text as its next turn: %v, %v", sent, err)
 	}
 }
 

@@ -2427,8 +2427,8 @@ export interface WireEvent {
   auth?: AuthState
   replay?: ReplayState
   // talkoot_envelope, talkoot_intro, talkoot_answer, talkoot_status,
-  // talkoot_roster, talkoot_inbox, talkoot_inbox_resolved, talkoot_beat: on a
-  // talkoot's own address (talkootAddr).
+  // talkoot_roster, talkoot_inbox, talkoot_inbox_resolved: on a talkoot's own address
+  // (talkootAddr).
   talkoot?: TalkootEvent
   stall?: WireStall
   escalation?: WireEscalation
@@ -2450,8 +2450,8 @@ export const ADDR_WORKSPACE = '#workspace'
 
 // ADDR_TALKOOT_PREFIX starts a talkoot room's address. Subscribing there needs
 // the `talkoot` group in the hello, and the room sends talkoot_envelope,
-// talkoot_intro, talkoot_answer, talkoot_status, talkoot_roster, talkoot_inbox,
-// talkoot_inbox_resolved, and talkoot_beat events. Like ADDR_WORKSPACE it is an
+// talkoot_intro, talkoot_answer, talkoot_status, talkoot_roster, talkoot_inbox, and
+// talkoot_inbox_resolved events. Like ADDR_WORKSPACE it is an
 // address, never a session id.
 export const ADDR_TALKOOT_PREFIX = '#talkoot:'
 
@@ -2733,7 +2733,6 @@ export type Verb =
   | 'talkoot.decide'
   | 'talkoot.get'
   | 'talkoot.inbox'
-  | 'talkoot.trace'
   | 'talkoot.kickoff'
   | 'talkoot.list'
   | 'talkoot.pause'
@@ -2744,7 +2743,6 @@ export type Verb =
   | 'talkoot.resume'
   | 'talkoot.recruit'
   | 'talkoot.ref'
-  | 'talkoot.worker'
   | 'talkoot.room'
   | 'talkoot.templates'
   | 'talkoot.update'
@@ -2795,22 +2793,11 @@ export type Verb =
 // the connection has no identity, so the caller states it, and the `steer`
 // capability, not `by`, decides who may change a team.
 
-// TeamState is a team's combined state, which its mark's eyes show.
-export type TeamState = 'offline' | 'needs-you' | 'busy' | 'paused' | 'online'
-
-// A summary's `name`, `title`, `color`, and `own_color` come from the roster,
-// with the colour's default filled in. `state` is set for a talkoot this
-// daemon runs, as of its last status event.
 export interface TalkootSummary {
   id: string
   home?: string
   running: boolean
   problem?: string
-  name?: string
-  title?: string
-  color?: string
-  own_color?: string
-  state?: TeamState
 }
 
 export interface TalkootListResult {
@@ -2822,19 +2809,13 @@ export interface TalkootRef {
 }
 
 // TalkootView is a running talkoot. `text` is its talkoot.md, which an editor
-// changes and sends back with talkoot.update. `color` is the team mark's
-// colour with the default filled in, `own_color` the one the roster sets, and
-// `state` the team's combined state. A daemon from before the team mark sends
-// none of the three.
+// changes and sends back with talkoot.update.
 export interface TalkootView {
   id: string
   name: string
   title?: string
   home: string
   budget_usd_per_day?: number
-  color?: string
-  own_color?: string
-  state?: TeamState
   text?: string
   members: TalkootMember[]
   held?: string[]
@@ -2870,65 +2851,16 @@ export interface TalkootMember {
 // TalkootMemberStatus counts the current day's spend and turns.
 export interface TalkootMemberStatus {
   member: string
-  // The member's one state, as the daemon decides it. A daemon from before
-  // the field leaves it out.
-  presence?: string
   working?: boolean
   // The tool the member's turn runs now. Empty between tools, and for a
   // driver that reports no tool events.
   tool?: string
-  // Every pause that holds the member: the joined reasons, and their kinds
-  // (person, spend, turns, team, cost, guard, room, failed).
   paused?: string
-  pauses?: string[]
   spend_usd?: number
   turns?: number
   // The member's worker process stopped for idleness. The next envelope
   // revives it.
   idle?: boolean
-  // The held pose the member's face shows, as its expression engine reads
-  // the room. Empty or absent draws the default pose for `presence`.
-  // `intensity` 0 is the base pose and 1 its strong form: draw the strongest
-  // form you have at or below it. `expression_cause` names the signals
-  // behind it, for debugging a face, never for drawing.
-  expression?: string
-  intensity?: number
-  expression_cause?: string
-}
-
-// TalkootBeat is a beat a member's face plays once: happy, glance,
-// slow-blink, or fast-blink. `toward` is the member id a glance goes to.
-export interface TalkootBeat {
-  member: string
-  beat: string
-  toward?: string
-  cause: string
-  at: string
-}
-
-// talkoot.trace reads a member's expression trace, oldest entry first, for
-// debugging a face. The daemon keeps a bounded number of entries in memory.
-export interface TalkootTraceParams {
-  id: string
-  member: string
-}
-
-export interface TalkootTraceEntry {
-  at: string
-  signal: string
-  expression?: string
-  intensity?: number
-  beat?: string
-  toward?: string
-  cause?: string
-}
-
-// `seed` is a 64-bit number, sent as a decimal string, because a JS number
-// holds only 53 bits.
-export interface TalkootTraceResult {
-  member: string
-  seed: string
-  entries: TalkootTraceEntry[]
 }
 
 // talkoot.create takes a whole talkoot.md in `text`, or a template filled in
@@ -2975,14 +2907,6 @@ export interface TalkootPreviewParams {
 export interface TalkootOpenRefParams {
   id: string
   ref: string
-}
-
-// talkoot.worker reports the swarm agent a worker member is seated on, as a
-// TaskInfo. The tasks surface cannot: its list is scoped to the session
-// asking, and a talkoot's workers belong to the talkoot's address.
-export interface TalkootWorkerParams {
-  id: string
-  member: string
 }
 
 export interface TalkootRefText {
@@ -3039,15 +2963,13 @@ export interface TalkootPreviewMember extends TalkootRosterMember {
   problem?: string
 }
 
-// TalkootUpdateParams holds one of `text`, the whole talkoot.md, `ops`, a
-// person's field edit applied at once to the roster as it is now, and
-// `color`, the team colour, where an empty string returns it to the default.
+// TalkootUpdateParams holds `text`, the whole talkoot.md, or `ops`, a
+// person's field edit applied at once to the roster as it is now.
 export interface TalkootUpdateParams {
   id: string
   by: string
   text?: string
   ops?: TalkootOp[]
-  color?: string
 }
 
 // An empty `to` reaches the coordinator.
@@ -3139,8 +3061,7 @@ export interface TalkootChain {
 }
 
 // TalkootLine is one room line. `type` is envelope, turn, guard, resume,
-// delivery, read, seat, roster, answer, intro, damaged, or a signal:
-// tool_error, retry, card_open, or card_close.
+// delivery, read, seat, roster, answer, intro, or damaged.
 export interface TalkootLine {
   type: string
   at: string
@@ -3162,24 +3083,12 @@ export interface TalkootLine {
   proposer?: string
   edited?: boolean
   changes?: TalkootMemberChange[]
-  // On a roster line that changed the team colour: the colour before and
-  // after, each with the default filled in.
-  color_before?: string
-  color_after?: string
   // On an answer line: the person's answer to the questions `member`
   // asked. `ref` holds the answer's id.
   answers?: TalkootAnswered[]
   // On an intro line: `member`'s plain introduction card, built from its
   // roster entry, for a member that took no introduction turn.
   text?: string
-  // On a signal line: the tool call that failed (its call id in `ref`) or
-  // that a permission card asks about, a retry's failed attempt from 1, the
-  // card's kind (permission or question, with its id in `ref`), and how it
-  // closed (approved, denied, answered, expired, or cancelled).
-  tool?: string
-  attempt?: number
-  card?: string
-  outcome?: string
 }
 
 // TalkootInboxResult is the talkoot.inbox reply, oldest card first.
@@ -3345,17 +3254,13 @@ export interface TalkootDecideParams {
 
 // TalkootEvent carries `line` on talkoot_envelope, talkoot_intro,
 // talkoot_answer, and talkoot_roster, every
-// member's status and the team `state` on talkoot_status, `card` on
-// talkoot_inbox and talkoot_inbox_resolved, and `beat` on talkoot_beat. A
-// resolved card carries no request. Beats are live only: a reconnect replays
-// none.
+// member's status on talkoot_status, and `card` on talkoot_inbox and
+// talkoot_inbox_resolved. A resolved card carries no request.
 export interface TalkootEvent {
   id: string
   line?: TalkootLine
   members?: TalkootMemberStatus[]
-  state?: TeamState
   card?: TalkootCard
-  beat?: TalkootBeat
 }
 
 // --- the workflow dashboard (ctrlproto/workflows.go) ---
@@ -3483,14 +3388,12 @@ export interface VerbParams {
   'talkoot.resume': TalkootResumeParams
   'talkoot.recruit': TalkootRecruitParams
   'talkoot.inbox': TalkootRef
-  'talkoot.trace': TalkootTraceParams
   'talkoot.proposals': TalkootProposalsParams
   'talkoot.propose': TalkootProposeParams
   'talkoot.decide': TalkootDecideParams
   'talkoot.kickoff': TalkootKickoffParams
   'talkoot.preview': TalkootPreviewParams
   'talkoot.ref': TalkootOpenRefParams
-  'talkoot.worker': TalkootWorkerParams
 }
 
 // Card revision history. Every write to a card goes through cards.edit — the
