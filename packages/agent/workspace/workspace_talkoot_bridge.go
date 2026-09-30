@@ -196,7 +196,7 @@ func (s workerSeat) Roster() ([]tools.TalkootRosterEntry, error) {
 			return errWorkerUnseated
 		}
 		status := map[string]talkoot.Status{}
-		for _, st := range rt.Statuses() {
+		for _, st := range s.run.overlay(rt.Statuses()) {
 			status[st.Member] = st
 		}
 		for _, m := range rt.Members() {
@@ -266,9 +266,10 @@ func (a *workerAsker) AskCited(ctx context.Context, qs []core.UserQuestion) ([]c
 		return nil, tools.AnswerRecord{}, fmt.Errorf("the ask id %s is already waiting", req.AskID)
 	}
 	carrier.openAskAs(req, openCard{at: time.Now(), talkoot: s.run.id, member: member})
+	outcome := talkoot.OutcomeCancelled
 	defer func() {
 		release()
-		carrier.closeAsk(req.AskID)
+		carrier.closeAsk(req.AskID, outcome)
 		carrier.broadcast(ctrlproto.AskResolvedEvent(req.AskID))
 	}()
 	carrier.broadcast(ctrlproto.AskEvent(req))
@@ -277,12 +278,14 @@ func (a *workerAsker) AskCited(ctx context.Context, qs []core.UserQuestion) ([]c
 	select {
 	case ans := <-ch:
 		ans = core.PadAnswers(ans, len(qs))
+		outcome = talkoot.OutcomeAnswered
 		return ans, s.recordAnswer(qs, ans), nil
 	case <-ctx.Done():
 		// The bridge hung up, or the worker stopped. No one waits for the
 		// answer, so the card closes.
 		return core.PadAnswers(nil, len(qs)), tools.AnswerRecord{}, ctx.Err()
 	case <-wait.C:
+		outcome = talkoot.OutcomeExpired
 		return core.PadAnswers(nil, len(qs)), tools.AnswerRecord{}, fmt.Errorf("the person did not answer within %s", workerQuestionWait)
 	case <-s.w.ctx.Done():
 		return core.PadAnswers(nil, len(qs)), tools.AnswerRecord{}, errors.New("cancelled (session ending)")

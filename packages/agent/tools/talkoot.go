@@ -385,12 +385,14 @@ func oneLine(s string) string {
 }
 
 func talkootStatusText(s talkoot.Status) string {
-	switch {
-	case s.Paused != "":
+	switch p := s.Presence(); p {
+	case talkoot.PresencePaused:
 		return "paused: " + s.Paused
-	case s.Working:
-		return "working"
+	case talkoot.PresenceWaiting:
+		return "waiting for a person"
+	case talkoot.PresenceOffline:
+		return "offline: a message to it does not arrive now"
 	default:
-		return "idle"
+		return p
 	}
 }

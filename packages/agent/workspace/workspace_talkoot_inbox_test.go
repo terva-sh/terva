@@ -2,15 +2,20 @@ package workspace
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/mcpbridge"
+	"terva.sh/terva/packages/agent/talkoot"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/core/permission"
 )
@@ -197,9 +202,9 @@ func TestOnlyASeatedSessionReachesTheInbox(t *testing.T) {
 		t.Fatalf("talkoot.inbox = %+v, want h2, the older card, then h1, and not the loner's card", got)
 	}
 
-	loner.closePermission("l1")
-	helm.closePermission("h2")
-	helm.closeAsk("h1")
+	loner.closePermission("l1", talkoot.OutcomeApproved)
+	helm.closePermission("h2", talkoot.OutcomeApproved)
+	helm.closeAsk("h1", talkoot.OutcomeAnswered)
 	if len(kinds) != 4 || kinds[2] != ctrlproto.EventTalkootInboxResolved || kinds[3] != ctrlproto.EventTalkootInboxResolved {
 		t.Fatalf("the closes sent %v", kinds)
 	}
@@ -215,4 +220,87 @@ func TestTheInboxOfAnUnknownTalkootIsNotFound(t *testing.T) {
 	if code := talkootCode(err); code != ctrlproto.CodeNotFound {
 		t.Fatalf("talkoot.inbox of an unknown talkoot answered %v (%q)", err, code)
 	}
+}
+
+// A member with a question or an approval open in the inbox is waiting, until
+// the last of its cards closes, and a status event says so.
+func TestAnOpenCardMakesItsMemberWait(t *testing.T) {
+	cwd := talkootHome(t)
+	w := openTalkootWorkspace(t, cwd)
+	ctx := t.Context()
+	if _, err := w.CreateTalkoot(ctx, ctrlproto.TalkootCreateParams{ID: "crew", Text: string(crewText(cwd))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.PostTalkoot(ctx, ctrlproto.TalkootPostParams{ID: "crew", By: "sothr", To: []string{"helm"}, Body: "start"}); err != nil {
+		t.Fatal(err)
+	}
+	// The test provider fails helm's turn, and a pause would hide the wait.
+	resumeFailed(t, w, "crew", "helm")
+	helm := w.existing(memberView(t, w, "crew", "helm").Session)
+	if helm == nil {
+		t.Fatal("helm's session is not live")
+	}
+	var mu sync.Mutex
+	var seen []string
+	stop := w.talkootWatch("crew", func(ev talkootEvent) {
+		if ev.Kind != "status" {
+			return
+		}
+		for _, s := range ev.Status {
+			if s.Member == "helm" {
+				mu.Lock()
+				seen = append(seen, wireTalkootStatus(s).Presence)
+				mu.Unlock()
+			}
+		}
+	})
+	defer stop()
+	presence := func() string { return memberView(t, w, "crew", "helm").Status.Presence() }
+	if p := presence(); p != "idle" {
+		t.Fatalf("before any card helm is %s", p)
+	}
+	// The question opens twice under one id, and one close ends it.
+	helm.openAsk(ctrlproto.AskRequest{AskID: "h1", Question: "Which port?"})
+	helm.openAsk(ctrlproto.AskRequest{AskID: "h1", Question: "Which port?"})
+	helm.openPermission(ctrlproto.PermissionRequest{CallID: "h2", Tool: "bash"})
+	waitTalkoot(t, "helm to wait", func() bool { return presence() == "waiting" })
+	helm.closeAsk("h1", talkoot.OutcomeAnswered)
+	if p := presence(); p != "waiting" {
+		t.Errorf("with the approval still open helm is %s", p)
+	}
+	helm.closePermission("h2", talkoot.OutcomeApproved)
+	waitTalkoot(t, "helm to stop waiting", func() bool { return presence() == "idle" })
+	waitTalkoot(t, "the status events", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Contains(seen, "waiting") && seen[len(seen)-1] == "idle"
+	})
+}
+
+// A worker member's question opens on the talkoot's carrier, and it makes the
+// member wait as a native member's question does, until a person answers.
+func TestAWorkerQuestionMakesItsMemberWait(t *testing.T) {
+	w, _ := seatedWorker(t)
+	waiting := func() bool { return memberView(t, w, "crew", "jev").Status.Waiting }
+	if waiting() {
+		t.Fatal("jev waits before it asks")
+	}
+	team := w.workerTeam(crewWorker("agent-1"))
+	got := make(chan mcpbridge.TeamReply, 1)
+	go func() {
+		got <- team(t.Context(), "ask_user_question", json.RawMessage(`{"question":"Ship the schema today?","options":["Ship it","Hold"]}`))
+	}()
+	waitTalkoot(t, "jev to wait", waiting)
+	if p := wireTalkootStatus(memberView(t, w, "crew", "jev").Status).Presence; p != "waiting" {
+		t.Errorf("jev's presence is %q while its question is open", p)
+	}
+	cards := askCards(t, w)
+	if len(cards) != 1 {
+		t.Fatalf("%d question cards, want 1", len(cards))
+	}
+	if err := w.Answer(t.Context(), cards[0].Session, cards[0].ID, []core.UserAnswer{{Answer: "Ship it"}}); err != nil {
+		t.Fatal(err)
+	}
+	teamReply(t, got)
+	waitTalkoot(t, "jev to stop waiting", func() bool { return !waiting() })
 }

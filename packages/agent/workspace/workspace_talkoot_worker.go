@@ -32,8 +32,10 @@ import (
 // with the running total then. A host calls them with the worker's id.
 type workerEvents struct {
 	// turnEnd reports a turn's end. texts counts the user texts the turn
-	// took, as the worker echoed them, and 0 when it echoed none.
-	turnEnd func(id string, totalUSD float64, reply string, texts int)
+	// took, as the worker echoed them, and 0 when it echoed none. failed is
+	// the turn's error, or empty for a turn that finished or that a person
+	// interrupted.
+	turnEnd func(id string, totalUSD float64, reply string, texts int, failed string)
 	exit    func(id string, totalUSD float64)
 	// tool reports a tool call the worker starts, or with an empty name the
 	// end of one. It runs on the worker's event path, as the events arrive.
@@ -41,6 +43,9 @@ type workerEvents struct {
 	// userTurn reports the text of a user turn as it enters the worker's
 	// conversation, on a backend that reports reads.
 	userTurn func(text string)
+	// signal reports a tool call that failed or a provider retry, on the
+	// worker's event path.
+	signal func(workerSignal)
 }
 
 // workerHost is the swarm surface a worker member runs on. The workspace's
@@ -58,6 +63,8 @@ type workerHost interface {
 	state(id string) (exists, live bool)
 	// holds returns the limits the agent was spawned with, as persisted.
 	holds(id string) (swarm.SpawnRequest, bool)
+	// agentSnapshot reports what the agent is doing, as the tasks pane shows it.
+	agentSnapshot(id string) (swarm.AgentSnapshot, bool)
 	send(id, text string) error
 	stop(id string) error
 	// exited waits up to d for the agent's process to end, and reports
@@ -74,12 +81,13 @@ type swarmWorkers struct{ f *swarm.Swarm }
 func (h swarmWorkers) hook(ev workerEvents) (swarm.Hooks, func(*swarm.Agent)) {
 	agent := make(chan *swarm.Agent, 1)
 	var counts turnTexts
+	var calls workerCalls
 	onTurnEnd := func(_ int, errMsg string) {
 		a := <-agent
 		agent <- a
-		counts.report(errMsg, func(texts int, errMsg string) {
+		counts.report(errMsg, func(end queuedEnd) {
 			s := a.Snapshot()
-			ev.turnEnd(a.ID, s.CostUSD, turnReply(s.LastAssistant, errMsg), texts)
+			ev.turnEnd(a.ID, s.CostUSD, turnReply(s.LastAssistant, end.errMsg), end.texts, end.failure())
 		})
 	}
 	started := func(a *swarm.Agent) {
@@ -93,6 +101,11 @@ func (h swarmWorkers) hook(ev workerEvents) (swarm.Hooks, func(*swarm.Agent)) {
 		if ev.tool != nil {
 			for _, t := range workerToolActivity(e) {
 				ev.tool(t.id, t.name)
+			}
+		}
+		if ev.signal != nil {
+			for _, sig := range calls.signals(e) {
+				ev.signal(sig)
 			}
 		}
 		taken := workerUserTexts(e)
@@ -127,6 +140,18 @@ type turnTexts struct {
 type queuedEnd struct {
 	texts  int
 	errMsg string
+	// interrupted says the turn ended because something asked it to stop,
+	// such as a person, and not because it failed.
+	interrupted bool
+}
+
+// failure is the turn's error as a failure, or empty for a turn that
+// finished or that something interrupted.
+func (e queuedEnd) failure() string {
+	if e.interrupted {
+		return ""
+	}
+	return e.errMsg
 }
 
 // see counts the taken texts of event e, and queues the turn at its end.
@@ -135,15 +160,17 @@ func (c *turnTexts) see(e swarm.Event, taken int) {
 	defer c.mu.Unlock()
 	c.texts += taken
 	if _, errMsg, ok := swarm.TaskTurnEnd(e); ok {
-		c.ended = append(c.ended, queuedEnd{texts: c.texts, errMsg: errMsg})
+		interrupted, _ := e.Data["interrupted"].(bool)
+		c.ended = append(c.ended, queuedEnd{texts: c.texts, errMsg: errMsg, interrupted: interrupted})
 		c.texts = 0
 	}
 }
 
 // report hands fn the oldest queued turn end. When none waits, because no
 // event path saw the end, it hands fn the callback's own error and no texts,
-// so the turn end still reports.
-func (c *turnTexts) report(errMsg string, fn func(texts int, errMsg string)) {
+// so the turn end still reports. Such an error counts as a failure, because
+// nothing says it was an interrupt.
+func (c *turnTexts) report(errMsg string, fn func(queuedEnd)) {
 	c.reporting.Lock()
 	defer c.reporting.Unlock()
 	c.mu.Lock()
@@ -152,7 +179,7 @@ func (c *turnTexts) report(errMsg string, fn func(texts int, errMsg string)) {
 		next, c.ended = c.ended[0], c.ended[1:]
 	}
 	c.mu.Unlock()
-	fn(next.texts, next.errMsg)
+	fn(next)
 }
 
 // workerUserTexts returns the text blocks of a user_message event: the texts
@@ -275,6 +302,14 @@ func (h swarmWorkers) state(id string) (bool, bool) {
 		return true, true
 	}
 	return true, false
+}
+
+func (h swarmWorkers) agentSnapshot(id string) (swarm.AgentSnapshot, bool) {
+	a := h.f.Get(id)
+	if a == nil || a.ID != id {
+		return swarm.AgentSnapshot{}, false
+	}
+	return a.Snapshot(), true
 }
 
 func (h swarmWorkers) holds(id string) (swarm.SpawnRequest, bool) {
@@ -859,7 +894,31 @@ func (w *Workspace) workerEvents(run *talkootRun, member string, token uint64) w
 				})
 			}
 		},
-		turnEnd: func(id string, total float64, reply string, texts int) {
+		signal: func(sig workerSignal) {
+			// 🔑 The process must run the member when the signal happens, not
+			// when the queue writes it. A revival between the two must not
+			// drop a signal the member's process sent. takeWorkerRead holds
+			// the same lock on this path, and nothing holds it long.
+			w.talkoot.mu.Lock()
+			current := run.workerRun[member] == token
+			w.talkoot.mu.Unlock()
+			if !current {
+				return
+			}
+			// The event path must not wait for the run, so the run's queue
+			// takes the router call, as it takes a read's.
+			//
+			// ⚠️ The queue runs apart from the turn's end, so a signal can
+			// land after the turn line of the turn it came from.
+			run.later(func() {
+				if err := run.do(func(rt *talkoot.Router) error {
+					return sig.record(rt, member)
+				}); err != nil && !errors.Is(err, ErrTalkootClosed) {
+					w.diagf("talkoot %s: worker member %s could not record a signal: %v", run.id, member, err)
+				}
+			})
+		},
+		turnEnd: func(id string, total float64, reply string, texts int, failed string) {
 			settle()
 			// A turn on a backend that folds pays exactly the texts it
 			// echoed, none included.
@@ -883,6 +942,9 @@ func (w *Workspace) workerEvents(run *talkootRun, member string, token uint64) w
 					w.talkoot.mu.Unlock()
 					if err := run.do(func(rt *talkoot.Router) error {
 						w.postWorkerReply(rt, member, reply)
+						if failed != "" {
+							return rt.QueuedTurnFailed(member, cost, failureReason(failed))
+						}
 						return rt.QueuedTurnEnded(member, cost)
 					}); err != nil {
 						w.diagf("talkoot %s: worker member %s could not report a queued turn: %v", run.id, member, err)
@@ -900,6 +962,9 @@ func (w *Workspace) workerEvents(run *talkootRun, member string, token uint64) w
 			w.talkoot.mu.Unlock()
 			if err := run.do(func(rt *talkoot.Router) error {
 				w.postWorkerReply(rt, member, reply)
+				if failed != "" {
+					return rt.TurnFailed(member, cost, failureReason(failed))
+				}
 				return rt.TurnEnded(member, cost)
 			}); err != nil {
 				w.diagf("talkoot %s: worker member %s could not report its turn: %v", run.id, member, err)

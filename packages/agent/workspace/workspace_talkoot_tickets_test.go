@@ -102,6 +102,7 @@ func readSeatOf(t *testing.T, w *Workspace, member string) talkootSeat {
 	waitTalkoot(t, member+" reads its post", func() bool {
 		return len(roomLines(t, "crew", func(l talkoot.Line) bool { return l.Type == talkoot.LineRead && l.Member == member })) > 0
 	})
+	resumeFailed(t, w, "crew", member)
 	return seat
 }
 
@@ -235,6 +236,8 @@ func TestAHandoffThatNamesATicketMovesItsClaim(t *testing.T) {
 	if n := roomEnvelopes(t, w); n != after {
 		t.Fatalf("a refused handoff reached the room: %d envelopes, want %d", n, after)
 	}
+	// jev's handoff woke helm, and that turn fails too.
+	resumeFailed(t, w, "crew", "helm")
 	e, err := helm.Send(talkoot.Outgoing{To: []string{"vartija"}, Kind: talkoot.KindHandoff, Body: "Review the login fix.", Refs: []string{"ticket:" + id, "ticket:" + id}})
 	if err != nil {
 		t.Fatalf("helm hands the ticket to the reviewer, named twice: %v", err)

@@ -111,8 +111,15 @@ func TestAPersonsAnswerIsRecordedAndCitable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	last := page.Lines[len(page.Lines)-1]
-	if last.Type != talkoot.LineAnswer || len(last.Answers) != 2 || last.Answers[0].Declined || !last.Answers[1].Declined {
+	// A card line from the question before can land after the answer line,
+	// through the run's queue, so the test reads the last answer line.
+	var last talkoot.Line
+	for _, l := range page.Lines {
+		if l.Type == talkoot.LineAnswer {
+			last = l
+		}
+	}
+	if last.Ref != short.Ref[len("answer:"):] || len(last.Answers) != 2 || last.Answers[0].Declined || !last.Answers[1].Declined {
 		t.Errorf("the short answer line: %+v", last)
 	}
 

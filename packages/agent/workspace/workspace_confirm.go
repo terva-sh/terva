@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/talkoot"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/core/permission"
@@ -78,9 +79,15 @@ func (c *webConfirmer) ConfirmWithRequest(ctx context.Context, cr permission.Con
 		Scopes:  ctrlproto.GrantScopesFromCore(cr.Scopes),
 	}
 	s.openPermission(req)
+	outcome := talkoot.OutcomeCancelled
 	defer func() {
 		release()
-		s.closePermission(callID)
+		if outcome != talkoot.OutcomeApproved {
+			// The gate returns the refusal as a failed result, which is no
+			// tool error: the card_close line records it.
+			s.signals.refuse(callID)
+		}
+		s.closePermission(callID, outcome)
 		s.broadcast(ctrlproto.PermissionResolvedEvent(callID))
 	}()
 
@@ -92,6 +99,7 @@ func (c *webConfirmer) ConfirmWithRequest(ctx context.Context, cr permission.Con
 		// Recorded only when a person decided: a cancelled prompt is not an
 		// exchange, and a replay that showed one resolving would lie.
 		s.recordPermission(req, d, asked)
+		outcome = permissionOutcome(d)
 		return d
 	case <-ctx.Done():
 		// Cancelled (client cancel / shutdown): fail closed.
@@ -162,15 +170,17 @@ func parkWorkerAsk(ctx, daemon context.Context, s *wsSession, req ctrlproto.Perm
 		return permission.ConfirmDecision{Allow: false, Reason: "the ask id " + req.CallID + " is already waiting"}
 	}
 	open()
+	outcome := talkoot.OutcomeCancelled
 	defer func() {
 		release()
-		s.closePermission(req.CallID)
+		s.closePermission(req.CallID, outcome)
 		s.broadcast(ctrlproto.PermissionResolvedEvent(req.CallID))
 	}()
 
 	s.broadcast(ctrlproto.PermissionEvent(req))
 	select {
 	case d := <-ch:
+		outcome = permissionOutcome(d)
 		return d
 	case <-ctx.Done():
 		return permission.ConfirmDecision{Allow: false, Reason: "worker stopped before the approval was answered"}
@@ -216,9 +226,10 @@ func (a *webAsker) ask(ctx context.Context, qs []core.UserQuestion) ([]core.User
 	req := ctrlproto.NewAskRequest(askID, qs)
 	ch, release, _ := s.askPark.Park(askID) // minted seq: never collides
 	s.openAsk(req)
+	outcome := talkoot.OutcomeCancelled
 	defer func() {
 		release()
-		s.closeAsk(askID)
+		s.closeAsk(askID, outcome)
 		s.broadcast(ctrlproto.AskResolvedEvent(askID))
 	}()
 
@@ -232,6 +243,7 @@ func (a *webAsker) ask(ctx context.Context, qs []core.UserQuestion) ([]core.User
 		// per question, so square it here rather than at every caller.
 		padded := core.PadAnswers(ans, len(qs))
 		s.recordAsk(askID, qs, padded, asked)
+		outcome = talkoot.OutcomeAnswered
 		return padded, nil
 	case <-ctx.Done():
 		return core.PadAnswers(nil, len(qs)), ctx.Err()
@@ -261,4 +273,12 @@ func (s *wsSession) recordAsk(askID string, qs []core.UserQuestion, ans []core.U
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "session %s: could not record the ask exchange: %v\n", s.id, err)
 	}
+}
+
+// permissionOutcome is how a person's decision closes a permission card.
+func permissionOutcome(d permission.ConfirmDecision) string {
+	if d.Allow {
+		return talkoot.OutcomeApproved
+	}
+	return talkoot.OutcomeDenied
 }

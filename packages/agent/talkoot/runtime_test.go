@@ -4,6 +4,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -144,6 +145,9 @@ func TestAStoppedTurnIsChargedAndPauses(t *testing.T) {
 			if !strings.Contains(s.Paused, "the worker stopped before its turn ended") {
 				t.Errorf("%s: paused %q, want the stop", when, s.Paused)
 			}
+			if !slices.Equal(s.Pauses, []string{pauseFailed}) {
+				t.Errorf("%s: pause kinds %v, want failed", when, s.Pauses)
+			}
 			if s.Turns != 1 || s.SpendUSD != 0.25 {
 				t.Errorf("%s: %d turns and $%v, want one turn charged $0.25", when, s.Turns, s.SpendUSD)
 			}
@@ -153,13 +157,98 @@ func TestAStoppedTurnIsChargedAndPauses(t *testing.T) {
 	f.reopen()
 	check("after a restart")
 
+	// A stop whose cost cannot be counted holds the member for both, live
+	// and after a restart.
 	g := newFixture(t, nil)
 	if err := g.router.TurnStopped("jev", math.NaN(), "stopped"); err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range g.router.Statuses() {
-		if s.Member == "jev" && (s.SpendUSD != 0 || !strings.Contains(s.Paused, "turn cost of NaN")) {
-			t.Errorf("a NaN cost: spend $%v, paused %q", s.SpendUSD, s.Paused)
+	both := func(when string) {
+		t.Helper()
+		for _, s := range g.router.Statuses() {
+			if s.Member != "jev" {
+				continue
+			}
+			if s.SpendUSD != 0 || !strings.Contains(s.Paused, "turn cost of NaN") || !strings.Contains(s.Paused, "stopped") {
+				t.Errorf("%s: a NaN cost: spend $%v, paused %q", when, s.SpendUSD, s.Paused)
+			}
+			if !slices.Equal(s.Pauses, []string{pauseCost, pauseFailed}) {
+				t.Errorf("%s: pause kinds %v, want cost and failed", when, s.Pauses)
+			}
+		}
+	}
+	both("live")
+	g.reopen()
+	both("after a restart")
+}
+
+// A turn that ended in an error pauses its member with the kind failed, live
+// and after a restart, and a guard line says why.
+func TestAFailedTurnPausesTheMemberAsFailed(t *testing.T) {
+	f := newFixture(t, nil)
+	if err := f.router.TurnFailed("jev", 0.1, "the provider refused the request"); err != nil {
+		t.Fatal(err)
+	}
+	check := func(when string) {
+		t.Helper()
+		for _, s := range f.router.Statuses() {
+			if s.Member != "jev" {
+				continue
+			}
+			if !slices.Equal(s.Pauses, []string{pauseFailed}) || !strings.Contains(s.Paused, "the provider refused the request") {
+				t.Errorf("%s: pause kinds %v, paused %q, want failed with the error", when, s.Pauses, s.Paused)
+			}
+			if s.Working || s.Turns != 1 || s.SpendUSD != 0.1 {
+				t.Errorf("%s: working %v, %d turns, $%v, want one turn charged $0.1", when, s.Working, s.Turns, s.SpendUSD)
+			}
+		}
+	}
+	check("live")
+	if g := f.guard(GuardFailed); len(g) != 1 || g[0].Member != "jev" {
+		t.Errorf("want one failed guard line for jev, got %+v", g)
+	}
+	f.reopen()
+	check("after a restart")
+}
+
+// A room written before the failed kind has turn lines with a reason and no
+// guard. They replay as the cost pauses they set then.
+func TestAnOldTurnLineWithAReasonReplaysAsACostPause(t *testing.T) {
+	f := newFixture(t, nil)
+	if err := OpenRoom(f.dir).Append(Line{Type: LineTurn, At: f.clock.now(), Member: "jev", Reason: "the worker stopped before its turn ended"}); err != nil {
+		t.Fatal(err)
+	}
+	f.reopen()
+	for _, s := range f.router.Statuses() {
+		if s.Member == "jev" && !slices.Equal(s.Pauses, []string{pauseCost}) {
+			t.Errorf("pause kinds %v, want cost", s.Pauses)
+		}
+	}
+}
+
+// A status lists every kind that holds the member, from the talkoot and from
+// the member, once each and in a fixed order. A chain's pause holds no member.
+func TestAStatusListsEveryPauseKindThatHoldsTheMember(t *testing.T) {
+	f := newFixture(t, nil)
+	if err := f.router.TurnEnded("jev", math.NaN()); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.router.TurnFailed("jev", 0, "boom"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.router.Pause("human:sothr", "", "", "lunch"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.router.Pause("human:sothr", "jev", "", "look at this"); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range f.router.Statuses() {
+		want := []string{pausePerson}
+		if s.Member == "jev" {
+			want = []string{pausePerson, pauseCost, pauseFailed}
+		}
+		if !slices.Equal(s.Pauses, want) {
+			t.Errorf("%s: pause kinds %v, want %v", s.Member, s.Pauses, want)
 		}
 	}
 }

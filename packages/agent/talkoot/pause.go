@@ -13,13 +13,14 @@ const (
 	pauseCost   = "cost"   // a driver reported a cost that cannot be counted
 	pauseGuard  = "guard"  // the hop limit tripped
 	pauseRoom   = "room"   // the room could not record something, or cannot be trusted
+	pauseFailed = "failed" // the member's driver failed: a turn ended in an error, or its process stopped
 )
 
 // pauseKinds is the order a status lists reasons in.
 //
 // Each cap is a kind of its own, so a member over its spend and its turns
 // shows both, and a resume that lifts one still names the other.
-var pauseKinds = []string{pausePerson, pauseSpend, pauseTurns, pauseTeam, pauseCost, pauseGuard, pauseRoom}
+var pauseKinds = []string{pausePerson, pauseSpend, pauseTurns, pauseTeam, pauseCost, pauseGuard, pauseRoom, pauseFailed}
 
 // talkootScope is the scope of a pause on every member at once.
 const talkootScope = "talkoot"
@@ -54,6 +55,8 @@ func kindOfGuard(guard string) string {
 		return pauseCost
 	case GuardRoom:
 		return pauseRoom
+	case GuardFailed:
+		return pauseFailed
 	}
 	return pauseGuard
 }
@@ -82,6 +85,21 @@ func (p pauses) reason(scope string) string {
 		}
 	}
 	return strings.Join(out, "; ")
+}
+
+// kinds lists the kind of every pause on any of scopes, once each, in
+// pauseKinds order, or nil when there is none.
+func (p pauses) kinds(scopes ...string) []string {
+	var out []string
+	for _, k := range pauseKinds {
+		for _, s := range scopes {
+			if p.has(s, k) {
+				out = append(out, k)
+				break
+			}
+		}
+	}
+	return out
 }
 
 func (p pauses) drop(scope, kind string) {

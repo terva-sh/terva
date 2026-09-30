@@ -755,7 +755,14 @@ func (s *rpcServer) runPromptIn(turn <-chan struct{}, id, message string, images
 			s.writeEvent(modes.EventToJSON(ev))
 		})
 	}
-	s.writeEvent(map[string]any{"type": "done"})
+	// done repeats a failed prompt's error, so a driver that keys on done
+	// alone, such as a Talkoot worker, knows the prompt failed. An abort is
+	// no failure, and done carries no error for it.
+	done := map[string]any{"type": "done"}
+	if err != nil && !errors.Is(err, context.Canceled) {
+		done["error"] = err.Error()
+	}
+	s.writeEvent(done)
 }
 
 // runCompact mirrors runPrompt's terminal-event contract for an explicit

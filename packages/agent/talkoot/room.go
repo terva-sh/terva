@@ -50,6 +50,13 @@ const (
 	// in Text, which the workspace builds from the member's entry. The
 	// coordinator reads it as a note (intro.go).
 	LineIntro = "intro"
+	// LineToolError, LineRetry, LineCardOpen, and LineCardClose are signals:
+	// things that happened to a member, which a reader of the room replays,
+	// such as the expression engine (signals.go). The router ignores them.
+	LineToolError = "tool_error"
+	LineRetry     = "retry"
+	LineCardOpen  = "card_open"
+	LineCardClose = "card_close"
 	// LineDamaged is never written. Read returns it in place of a line that
 	// does not parse.
 	LineDamaged = "damaged"
@@ -92,6 +99,11 @@ type Line struct {
 	Answers []Answered `json:"answers,omitempty"`
 	// Text is set on an intro line.
 	Text string `json:"text,omitempty"`
+	// Tool, Attempt, Card, and Outcome are set on a signal line (signals.go).
+	Tool    string `json:"tool,omitempty"`
+	Attempt int    `json:"attempt,omitempty"`
+	Card    string `json:"card,omitempty"`
+	Outcome string `json:"outcome,omitempty"`
 	// Kid names the key that sealed the line, and MAC is the seal. MAC must
 	// stay the last field: the seal covers every byte before it (seal.go).
 	Kid string `json:"kid,omitempty"`

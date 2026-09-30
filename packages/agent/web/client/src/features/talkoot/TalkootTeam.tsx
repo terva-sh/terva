@@ -13,6 +13,7 @@ import { MarksContext, MemberMark } from './MemberMark'
 import { MemberCard } from './MemberCard'
 import { validPerson } from './person'
 import { useTalkoot } from './useTalkoot'
+import { isWorker, WorkerEvents } from './WorkerEvents'
 
 // ROOM selects the room rather than a member's conversation.
 const ROOM = '#room'
@@ -22,6 +23,7 @@ const PRESENCE_LABEL: Record<Presence, () => string> = {
   working: () => t('working'),
   waiting: () => t('waiting for you'),
   paused: () => t('paused'),
+  offline: () => t('offline'),
 }
 
 // TalkootTeam is one talkoot: the member sidebar, the selected view (the room
@@ -47,6 +49,7 @@ export function TalkootTeam({
   const [selected, setSelected] = useState('')
   const [actionError, setActionError] = useState('')
   const [cardOpen, setCardOpen] = useState(false)
+  const [eventsOpen, setEventsOpen] = useState(false)
   // What the person has read, per member. Two people can share a browser,
   // so the store is keyed by the person, and a change of name loads theirs.
   const seenKey = `terva_talkoot_seen:${id}:${validPerson(person) ? person : ''}`
@@ -128,7 +131,7 @@ export function TalkootTeam({
             const p = presence(m, state.cards)
             const unread = m.id === current ? 0 : unreadFor(state.lines, m.id, seen[m.id] ?? '', me)
             return (
-              <div key={m.id} class={`talkoot-member-row${current === m.id ? ' on' : ''}`}>
+              <div key={m.id} class={`talkoot-member-row presence-${p}${current === m.id ? ' on' : ''}`}>
                 <button class="talkoot-member" onClick={() => setSelected(m.id)}>
                   <span class="talkoot-member-name">
                     {m.id === lead?.id && <span title={t('Pinned: the coordinator')}>📌 </span>}
@@ -176,14 +179,21 @@ export function TalkootTeam({
                 {cardOpen ? t('Hide the member card') : t('Member card')}
               </button>
             )}
-            {member?.session && (
-              <button class="btn sm ghost" onClick={() => onOpenSession(member.session!)}>
-                {t('Open session')}
+            {member && isWorker(member) ? (
+              <button class="btn sm ghost" aria-expanded={eventsOpen} onClick={() => setEventsOpen(!eventsOpen)}>
+                {eventsOpen ? t('Hide the worker events') : t('Worker events')}
               </button>
+            ) : (
+              member?.session && (
+                <button class="btn sm ghost" onClick={() => onOpenSession(member.session!)}>
+                  {t('Open session')}
+                </button>
+              )
             )}
           </div>
           {(error || actionError) && <div class="talkoot-error">{error || actionError}</div>}
           {!canSteer && <div class="talkoot-note">{t('Set your name above to post, answer, and pause.')}</div>}
+          {member && eventsOpen && isWorker(member) && <WorkerEvents key={member.id} client={client} id={id} member={member} />}
           {member && cardOpen && (
             <MemberCard
               key={member.id}

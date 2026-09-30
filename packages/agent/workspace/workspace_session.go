@@ -55,7 +55,10 @@ type wsSession struct {
 	stopExt      func()               // tears extMgr down on close
 	tasks        *tasktool.Controller // the built-in task board (nil when the session has no base workspace tools)
 	// reads are the talkoot deliveries queued here that no turn has read yet.
-	reads       talkootReads
+	reads talkootReads
+	// signals turns a talkoot member's failed tool calls and retries into
+	// room lines (workspace_talkoot_signals.go).
+	signals     nativeSignals
 	memory      *tools.MemoryTool      // durable memory, bound once at session build (nil when --no-memory)
 	files       *tools.FileState       // what the model has seen of each path; survives tool rebuilds
 	ticketCard  *tools.TicketCard      // the per-turn ticket card; survives tool rebuilds (nil with no store)
@@ -588,6 +591,8 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 			s.ws.talkootActivity(s.id, "", "")
 		}
 	})
+	// A talkoot member's failed tool calls and retries become room lines.
+	ag.AddEventObserver(func(ev core.AgentEvent) { s.signals.observe(s.ws, s.id, ev) })
 	ag.AddEventObserver(func(ev core.AgentEvent) { build.ObserveAgentEventForHooks(hookEng, ev) })
 	// The queue is mirrored, not tracked, so every mutation has to announce
 	// itself. The host performs — and therefore announces — all of them but
@@ -1069,7 +1074,10 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 		if perr := s.agent.PersistenceError(); perr != nil && !errors.Is(err, core.ErrPersistence) {
 			err = errors.Join(err, perr)
 		}
-		if err != nil && (errors.Is(err, core.ErrPersistence) || (!errors.Is(err, context.Canceled) && !errors.Is(err, core.ErrBusy))) {
+		// A failed turn is one that shows the error banner. A cancel was
+		// asked for, and ErrBusy means no turn ran.
+		failed := err != nil && (errors.Is(err, core.ErrPersistence) || (!errors.Is(err, context.Canceled) && !errors.Is(err, core.ErrBusy)))
+		if failed {
 			s.broadcast(ctrlproto.ConversationEvent(core.WireEvent{Type: "error", Error: err.Error()}))
 			// The banner is transient; persist the failure to the session's
 			// error sidecar (alongside the transcript, not in it) so a red X is
@@ -1132,9 +1140,19 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 			}
 		}
 		// After the compaction, so its spend counts. On a failed turn too, or the
-		// member would stay working. ErrBusy means no turn ran.
+		// member would stay working. ErrBusy means no turn ran. A failed turn
+		// pauses the member until a person looks.
+		//
+		// ⚠️ A cancelled turn was asked to stop, by a person, a restart, or the
+		// daemon going down, so it is no failure. The test is the turn's
+		// context, as core's is: a person's interrupt can come back as a
+		// provider error that is not context.Canceled.
 		if endTalkoot != nil {
-			endTalkoot(s.agent.Cost().CostUSD-costBefore, !errors.Is(err, core.ErrBusy))
+			why := ""
+			if failed && turnCtx.Err() == nil {
+				why = err.Error()
+			}
+			endTalkoot(s.agent.Cost().CostUSD-costBefore, !errors.Is(err, core.ErrBusy), why)
 		}
 		if restart {
 			if perr := s.prompt(next, nil, core.UserMessageExtras{}); perr != nil {

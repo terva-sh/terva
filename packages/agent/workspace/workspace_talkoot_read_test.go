@@ -187,6 +187,7 @@ func TestAFailedTurnKeepsTheEnvelopeForTheNextTurn(t *testing.T) {
 	if _, ok := readLine(t, "helm", second.ID); ok {
 		t.Error("the kept envelope was read before a turn read it")
 	}
+	resumeFailed(t, w, "crew", "helm")
 	if e := sendAs(t, w, "helm"); e.Chain.Root != first.ID {
 		t.Errorf("helm sends in %q, want the chain it read, %q", e.Chain.Root, first.ID)
 	}
@@ -326,5 +327,28 @@ func TestANativeDriverWithoutAReadReportRefuses(t *testing.T) {
 	var r talkoot.Receipt
 	if err := d.DeliverRead("crew", talkoot.Member{ID: "helm"}, "x", r); err == nil {
 		t.Error("a native driver with no read report delivered")
+	}
+}
+
+// A turn a person interrupts was asked to stop, so it does not pause the
+// member the way a failed turn does.
+func TestAnInterruptedTurnDoesNotPauseTheMember(t *testing.T) {
+	w, _, entered := openHeldWorkspaceWith(t, func(release <-chan struct{}, entered chan<- struct{}) http.HandlerFunc {
+		return heldProvider(release, entered, true)
+	})
+	if _, err := w.talkootPost(context.Background(), "crew", "sothr", nil, "Plan it.", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	s, err := w.resolve(memberView(t, w, "crew", "helm").Session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.interruptTurn()
+	waitTalkoot(t, "helm's turn to end", func() bool {
+		return len(roomLines(t, "crew", func(l talkoot.Line) bool { return l.Type == talkoot.LineTurn && l.Member == "helm" })) > 0
+	})
+	if st := memberView(t, w, "crew", "helm").Status; st.Paused != "" || len(st.Pauses) != 0 {
+		t.Errorf("an interrupted turn paused helm: %q %v", st.Paused, st.Pauses)
 	}
 }

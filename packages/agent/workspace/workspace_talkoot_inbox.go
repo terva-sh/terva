@@ -76,10 +76,12 @@ type cardKey struct {
 }
 
 // openCard is when a card opened, and the seat that owned the session then.
-// talkoot is empty for a session with no seat.
+// talkoot is empty for a session with no seat. run is the talkoot's run when
+// the card opened, which counts the card as its member's wait.
 type openCard struct {
 	at              time.Time
 	talkoot, member string
+	run             *talkootRun
 }
 
 // openPermission records a pending approval for the snapshot, and shows it in
@@ -91,6 +93,8 @@ func (s *wsSession) openPermission(req ctrlproto.PermissionRequest) {
 // openPermissionAs is openPermission with the card's seat given. A talkoot's
 // carrier holds no seat, so it names the worker member's.
 func (s *wsSession) openPermissionAs(req ctrlproto.PermissionRequest, c openCard) {
+	c = s.ws.talkootWaiting(c, s.waitKey(cardKey{id: req.CallID}), true)
+	s.ws.talkootCard(c, talkoot.CardPermission, req.CallID, req.Tool, "")
 	s.mu.Lock()
 	s.permReq[req.CallID] = req
 	s.setCardLocked(cardKey{id: req.CallID}, c)
@@ -99,7 +103,8 @@ func (s *wsSession) openPermissionAs(req ctrlproto.PermissionRequest, c openCard
 }
 
 // closePermission removes a pending approval from the snapshot and the inbox.
-func (s *wsSession) closePermission(callID string) {
+// outcome says how it closed, as a card_close line records it.
+func (s *wsSession) closePermission(callID, outcome string) {
 	k := cardKey{id: callID}
 	s.mu.Lock()
 	delete(s.permReq, callID)
@@ -107,6 +112,8 @@ func (s *wsSession) closePermission(callID string) {
 	delete(s.cards, k)
 	s.mu.Unlock()
 	s.ws.talkootCardEvent(c, ctrlproto.TalkootInboxResolvedEvent(c.talkoot, s.cardHead(c, ctrlproto.TalkootCardPermission, callID)))
+	s.ws.talkootWaiting(c, s.waitKey(k), false)
+	s.ws.talkootCard(c, talkoot.CardPermission, callID, "", outcome)
 }
 
 // openAsk is openPermission for a question set.
@@ -116,6 +123,8 @@ func (s *wsSession) openAsk(req ctrlproto.AskRequest) {
 
 // openAskAs is openAsk with the card's seat given, as openPermissionAs is.
 func (s *wsSession) openAskAs(req ctrlproto.AskRequest, c openCard) {
+	c = s.ws.talkootWaiting(c, s.waitKey(cardKey{ask: true, id: req.AskID}), true)
+	s.ws.talkootCard(c, talkoot.CardQuestion, req.AskID, "", "")
 	s.mu.Lock()
 	s.askReq[req.AskID] = req
 	s.setCardLocked(cardKey{ask: true, id: req.AskID}, c)
@@ -124,7 +133,7 @@ func (s *wsSession) openAskAs(req ctrlproto.AskRequest, c openCard) {
 }
 
 // closeAsk is closePermission for a question set.
-func (s *wsSession) closeAsk(askID string) {
+func (s *wsSession) closeAsk(askID, outcome string) {
 	k := cardKey{ask: true, id: askID}
 	s.mu.Lock()
 	delete(s.askReq, askID)
@@ -132,6 +141,19 @@ func (s *wsSession) closeAsk(askID string) {
 	delete(s.cards, k)
 	s.mu.Unlock()
 	s.ws.talkootCardEvent(c, ctrlproto.TalkootInboxResolvedEvent(c.talkoot, s.cardHead(c, ctrlproto.TalkootCardAsk, askID)))
+	s.ws.talkootWaiting(c, s.waitKey(k), false)
+	s.ws.talkootCard(c, talkoot.CardQuestion, askID, "", outcome)
+}
+
+// waitKey names a card of this session among every card of a talkoot. The
+// talkoot's carrier holds the cards of all its workers, so the session is
+// part of the key.
+func (s *wsSession) waitKey(k cardKey) string {
+	kind := "permission"
+	if k.ask {
+		kind = "ask"
+	}
+	return s.id + "\x00" + kind + "\x00" + k.id
 }
 
 // cardSeat stamps a card with the time and the seat that holds the session.
@@ -141,7 +163,7 @@ func (s *wsSession) cardSeat() openCard {
 		return c
 	}
 	if seat, ok := s.ws.talkootSeatOf(s.id); ok && seat.b != nil {
-		c.talkoot, c.member = seat.b.run.id, seat.b.member
+		c.talkoot, c.member, c.run = seat.b.run.id, seat.b.member, seat.b.run
 	}
 	return c
 }

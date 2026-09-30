@@ -55,6 +55,15 @@ func TestTranslateTervaIsNearIdentity(t *testing.T) {
 		}
 	}
 
+	// A failed prompt's done carries its error onto task_end, where the
+	// swarm's turn end reads it. A done with none is a turn that finished.
+	if evs := translateTerva([]byte(`{"type":"done","error":"the provider refused the request"}`)); len(evs) != 1 || evs[0].Data["error"] != "the provider refused the request" {
+		t.Errorf("a failed done = %v, want task_end with the error", evs)
+	}
+	if evs := translateTerva([]byte(`{"type":"done"}`)); len(evs) != 1 || evs[0].Data["error"] != nil {
+		t.Errorf("a done = %v, want task_end with no error", evs)
+	}
+
 	// The pass-through must preserve the payload the sink reads — here the
 	// assistant message's content blocks.
 	evs := translateTerva([]byte(`{"type":"assistant_message","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}`))

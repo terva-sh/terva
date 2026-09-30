@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -142,6 +143,12 @@ type talkootRun struct {
 	kickLed bool
 
 	emit func(talkootEvent)
+	// unbound says why nothing listens for a member, or returns nil. It is
+	// the workspace's memberUnbound, and a status reads it for offline.
+	unbound func(talkoot.Member) error
+	// waiting holds the keys of each member's open questions and approvals
+	// in the inbox. Guarded by evMu.
+	waiting map[string]map[string]bool
 	// flushMu holds one flush from taking its lines to sending them, so a
 	// watcher sees events in the room's order.
 	flushMu sync.Mutex
@@ -231,14 +238,14 @@ func (r *talkootRun) flush() {
 		r.mu.RUnlock()
 		return
 	}
-	st := r.overlayIdle(r.router.Statuses())
+	st := r.overlay(r.router.Statuses())
 	r.mu.RUnlock()
 	r.evMu.Lock()
 	changed := len(st) != len(r.last)
 	next := make(map[string]talkoot.Status, len(st))
 	for _, s := range st {
 		next[s.Member] = s
-		if r.last[s.Member] != s {
+		if !sameStatus(r.last[s.Member], s) {
 			changed = true
 		}
 	}
@@ -248,6 +255,10 @@ func (r *talkootRun) flush() {
 		r.emit(talkootEvent{Talkoot: r.id, Kind: "status", Status: st})
 	}
 }
+
+// sameStatus reports whether two statuses of a member are equal. A status
+// holds a list of pause kinds, so == cannot compare it.
+func sameStatus(a, b talkoot.Status) bool { return reflect.DeepEqual(a, b) }
 
 // LoadTalkoots starts every talkoot homed in this workspace's directory. The
 // daemon hosts call it once after NewWorkspace. The in-process terminal does
@@ -329,6 +340,7 @@ func (w *Workspace) startTalkoot(id string) error {
 	run := &talkootRun{id: id, dir: dir, room: talkoot.OpenRoom(dir), lock: lk, seats: map[string]string{}}
 	run.roster.Store(&r)
 	run.emit = w.talkootEmit
+	run.unbound = w.memberUnbound
 	lines, err := run.room.Read()
 	if err != nil {
 		lk.Release()

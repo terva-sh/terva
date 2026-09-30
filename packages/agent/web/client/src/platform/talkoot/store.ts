@@ -195,11 +195,16 @@ export function applyTalkootEvent(s: TalkootState, ev: WireEvent): TalkootState 
 }
 
 // Presence is a member's one state (docs/proposals/talkoot.md, "Presence").
-// The wire carries working and paused. Waiting is a card in the inbox that
-// names the member. The daemon does not report stopped or failed yet.
-export type Presence = 'idle' | 'working' | 'waiting' | 'paused'
+// The daemon decides it. A daemon from before the field sends none, and the
+// view then works it out from the status and the inbox as it did before. A
+// state this client does not know reads as idle.
+export type Presence = 'idle' | 'working' | 'waiting' | 'paused' | 'offline'
+
+const PRESENCES: readonly string[] = ['idle', 'working', 'waiting', 'paused', 'offline']
 
 export function presence(m: TalkootMember, cards: TalkootCard[]): Presence {
+  const p = m.status?.presence
+  if (p !== undefined) return PRESENCES.includes(p) ? (p as Presence) : 'idle'
   if (m.status?.paused) return 'paused'
   if (cards.some((c) => c.member === m.id && (c.kind === 'ask' || c.kind === 'permission'))) return 'waiting'
   if (m.status?.working) return 'working'
@@ -270,7 +275,9 @@ export function roomItems(lines: TalkootLine[]): RoomItem[] {
   return out.map((it) => (it.kind === 'exchange' && it.lines.length === 1 ? { kind: 'line', line: it.lines[0] } : it))
 }
 
-const HIDDEN_LINES = new Set(['delivery', 'read', 'seat', 'turn'])
+// A signal line is for the expression engine, and a person reads its effect
+// on the member's face, not the line.
+const HIDDEN_LINES = new Set(['delivery', 'read', 'seat', 'turn', 'tool_error', 'retry', 'card_open', 'card_close'])
 
 // unreadFor counts the envelopes from member to the person newer than seenAt,
 // the time of the last line the person saw in that member's view. A time,

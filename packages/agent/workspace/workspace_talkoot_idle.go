@@ -274,17 +274,6 @@ func (r *talkootRun) idleMembers() []string {
 	return slices.Collect(maps.Keys(r.idle))
 }
 
-// overlayIdle marks the statuses of the members whose worker stopped for
-// idleness. The router does not know a member's process.
-func (r *talkootRun) overlayIdle(st []talkoot.Status) []talkoot.Status {
-	r.evMu.Lock()
-	defer r.evMu.Unlock()
-	for i := range st {
-		st[i].Idle = r.idle[st[i].Member]
-	}
-	return st
-}
-
 // retainTalkootWorker is the swarm's retention rule for a talkoot's worker:
 // the sweep keeps an agent a talkoot's room seats now, however long it has
 // been stopped, so a member stopped for idleness keeps its conversation.

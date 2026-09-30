@@ -3,6 +3,7 @@ package workspace
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	"terva.sh/terva/packages/agent/swarm"
@@ -24,7 +25,7 @@ func TestTurnTextsReportsEachTurnWhole(t *testing.T) {
 		errMsg string
 	}
 	var reports []got
-	rec := func(texts int, errMsg string) { reports = append(reports, got{texts, errMsg}) }
+	rec := func(e queuedEnd) { reports = append(reports, got{e.texts, e.errMsg}) }
 	// The second turn's callback runs first, with its own empty error.
 	c.report("", rec)
 	c.report("the first failed", rec)
@@ -55,7 +56,7 @@ func TestAClaudeFoldedEchoCountsEachText(t *testing.T) {
 		}
 	}
 	var texts int
-	c.report("", func(n int, _ string) { texts = n })
+	c.report("", func(e queuedEnd) { texts = e.texts })
 	if texts != 2 {
 		t.Errorf("the folded turn counted %d texts, want 2", texts)
 	}
@@ -95,7 +96,7 @@ func TestAFoldedClaudeTurnPaysForEachText(t *testing.T) {
 		waitTalkoot(t, "the send", func() bool { _, sent, _, _ := fw.snapshot(); return len(sent) == i+1 })
 	}
 	ev := fw.ev(t, "agent-1")
-	ev.turnEnd("agent-1", 0.1, "", 1) // A
+	ev.turnEnd("agent-1", 0.1, "", 1, "") // A
 	run := w.talkoot.runs["crew"]
 	w.talkoot.mu.Lock()
 	owed := run.workerOwed["jev"]
@@ -103,7 +104,7 @@ func TestAFoldedClaudeTurnPaysForEachText(t *testing.T) {
 	if owed != 2 {
 		t.Fatalf("after A the worker owes %d turns, want 2 for B and C", owed)
 	}
-	ev.turnEnd("agent-1", 0.3, "", 2) // B and C, folded
+	ev.turnEnd("agent-1", 0.3, "", 2, "") // B and C, folded
 	waitTalkoot(t, "the idle stop", func() bool { return slices.Contains(stoppedWorkers(fw), "agent-1") })
 }
 
@@ -120,7 +121,7 @@ func TestATervaTurnPaysForOneText(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitTalkoot(t, "the send", func() bool { _, sent, _, _ := fw.snapshot(); return len(sent) == 1 })
-	fw.ev(t, "agent-1").turnEnd("agent-1", 0.1, "", 2) // A
+	fw.ev(t, "agent-1").turnEnd("agent-1", 0.1, "", 2, "") // A
 	if !jevWorking(t, w) {
 		t.Fatal("a terva turn that echoed two texts paid for B as well")
 	}
@@ -140,8 +141,8 @@ func TestAFoldedTurnWithNoEchoPaysForNone(t *testing.T) {
 	}
 	waitTalkoot(t, "the send", func() bool { _, sent, _, _ := fw.snapshot(); return len(sent) == 1 })
 	ev := fw.ev(t, "agent-1")
-	ev.turnEnd("agent-1", 0.1, "", 1) // A
-	ev.turnEnd("agent-1", 0.2, "", 0) // a turn that took no text
+	ev.turnEnd("agent-1", 0.1, "", 1, "") // A
+	ev.turnEnd("agent-1", 0.2, "", 0, "") // a turn that took no text
 	run := w.talkoot.runs["crew"]
 	w.talkoot.mu.Lock()
 	owed := run.workerOwed["jev"]
@@ -151,5 +152,47 @@ func TestAFoldedTurnWithNoEchoPaysForNone(t *testing.T) {
 	}
 	if got := memberView(t, w, "crew", "jev").Status.SpendUSD; got < 0.19 || got > 0.21 {
 		t.Errorf("spend = %v, want the 0.2 both turns spent", got)
+	}
+}
+
+// A claude turn that a person interrupted is no failure, and one that ended
+// in an error is, through the translator and the hook's own reading. A
+// talkoot pauses a member for a failure only.
+func TestAClaudeInterruptIsNoFailure(t *testing.T) {
+	b, err := worker.Lookup(worker.BackendClaude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c turnTexts
+	for _, line := range []string{
+		`{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","terminal_reason":"aborted_streaming","num_turns":1,"total_cost_usd":0.01}`,
+		`{"type":"result","subtype":"error_during_execution","is_error":true,"result":"overloaded","num_turns":1,"total_cost_usd":0.02}`,
+	} {
+		for _, e := range b.Translate([]byte(line)) {
+			c.see(swarm.NewEvent(e.Type, e.Data), 0)
+		}
+	}
+	var failures []string
+	for range 2 {
+		c.report("", func(e queuedEnd) { failures = append(failures, e.failure()) })
+	}
+	if want := []string{"", "overloaded"}; !slices.Equal(failures, want) {
+		t.Errorf("failures %q, want %q", failures, want)
+	}
+}
+
+// 🚨 A failure's text reaches the room and every member's roster, so a key in
+// it is redacted, the text is one line, and a long one is cut.
+func TestAFailureReasonIsRedactedAndBounded(t *testing.T) {
+	got := failureReason("openai-compatible: Post \"https://api.example/v1?key=AIzaSECRET123\":\n  refused\tnow")
+	if strings.Contains(got, "AIzaSECRET123") || strings.ContainsAny(got, "\n\t") {
+		t.Errorf("reason %q keeps the key or a line break", got)
+	}
+	if !strings.Contains(got, "refused now") {
+		t.Errorf("reason %q lost the error", got)
+	}
+	long := failureReason(strings.Repeat("x", 3*maxFailureReason))
+	if len(long) > maxFailureReason+40 || !strings.Contains(long, "more bytes") {
+		t.Errorf("a long reason is %d bytes: %q", len(long), long[len(long)-30:])
 	}
 }

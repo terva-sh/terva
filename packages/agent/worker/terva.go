@@ -279,8 +279,17 @@ func translateTerva(line []byte) []Event {
 		// is it — so synthesize the task-level event the swarm's OnTurnEnd keys
 		// on, exactly as the claude backend synthesizes one from `result`. A
 		// native swarm child emits task_end per ag.Prompt; this makes the dogfood
-		// worker fire OnTurnEnd per prompt the same way.
-		return []Event{{Type: "task_end", Data: map[string]any{}}}
+		// worker fire OnTurnEnd per prompt the same way. A failed prompt's
+		// done carries its error, which task_end carries on, as the claude
+		// backend's does.
+		data := map[string]any{}
+		var done struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(line, &done) == nil && done.Error != "" {
+			data["error"] = done.Error
+		}
+		return []Event{{Type: "task_end", Data: data}}
 	default:
 		// Everything else is already a swarm event. Pass it through whole; Type
 		// is carried on the Event, so drop the duplicate from Data (swarm.Event's

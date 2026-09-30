@@ -1843,18 +1843,7 @@ a.shared-file__row:hover { background: color-mix(in srgb, var(--accent) 12%, tra
    the room or a member's conversation, the inbox, and the composer. */
 .talkoot { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .talkoot-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
-.talkoot-teams { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-.talkoot-team-pick { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px 3px 4px; font: inherit; background: none; border: 1px solid transparent; border-radius: 6px; cursor: pointer; color: inherit; }
-.talkoot-team-pick:hover { background: var(--hover, rgba(127, 127, 127, 0.12)); }
-.talkoot-team-pick.on { border-color: var(--line); background: var(--hover, rgba(127, 127, 127, 0.12)); }
-.talkoot-team-state { color: var(--muted); font-size: var(--fs-note); }
-.talkoot-team-state.state-needs-you { color: var(--warn, var(--danger)); }
-.talkoot-team-color { position: relative; font-size: var(--fs-note); }
-.talkoot-team-color > summary { cursor: pointer; color: var(--muted); }
-.talkoot-team-color > .talkoot-picker { position: absolute; z-index: 5; top: 1.8em; left: 0; width: 15em; padding: 6px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
-.talkoot-swatch { width: 20px; height: 20px; border: 1px solid var(--line); border-radius: 50%; padding: 0; cursor: pointer; }
-.talkoot-swatch[aria-pressed="true"] { outline: 2px solid var(--fg, currentColor); outline-offset: 1px; }
-.talkoot-swatch-dot { display: inline-block; width: 0.8em; height: 0.8em; border-radius: 50%; vertical-align: middle; }
+.talkoot-pick { font: inherit; }
 .talkoot-person { margin-left: auto; font-size: var(--fs-note); color: var(--muted); }
 .talkoot-person-input { font: inherit; width: 10em; }
 .talkoot-error { margin: 6px 12px; color: var(--danger); font-size: var(--fs-note); }
@@ -1866,14 +1855,12 @@ a.shared-file__row:hover { background: color-mix(in srgb, var(--accent) 12%, tra
 .talkoot-member-row.on, .talkoot-member.on { background: var(--panel); }
 .talkoot-member { flex: 1 1 auto; min-width: 0; text-align: left; font: inherit; background: none; border: 0; color: inherit; padding: 6px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
 .talkoot-member-name { font-weight: 600; display: flex; align-items: center; gap: 6px; }
-.talkoot-member.with-mark { flex-direction: row; align-items: center; gap: 8px; }
-.talkoot-member.with-mark > .talkoot-mark { margin: 0; }
-.talkoot-member-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.talkoot-motion { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: var(--fs-note); color: var(--muted); }
 .talkoot-member-activity { font-size: var(--fs-note); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .talkoot-member-activity.presence-working { color: var(--ok); }
 .talkoot-member-activity.presence-waiting { color: var(--warning); }
 .talkoot-member-activity.presence-paused { color: var(--danger); }
+/* Nothing listens for an offline member, so its mark fades. */
+.talkoot-member-row.presence-offline .talkoot-mark { opacity: 0.45; }
 .talkoot-unread { background: var(--user); color: var(--user-fg); border-radius: 999px; font-size: 11px; padding: 0 6px; }
 .talkoot-side-foot { margin-top: auto; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); }
 .talkoot-spend { font-size: var(--fs-note); color: var(--muted); font-variant-numeric: tabular-nums; }

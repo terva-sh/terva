@@ -90,6 +90,8 @@ var sessionMayReachWorkspace = map[string]string{
 	"narrowMemberTools": "a rebuild narrows a seated member to its roster tools list, or a rebuild would hand back every tool the list removed",
 	"talkootSeatOf":     "a card that opens stamps the talkoot and member of the seat, so the card reaches that talkoot's inbox",
 	"talkootCardEvent":  "a card that opens or closes tells the watchers of its talkoot, so the inbox resolves with the member's own view",
+	"talkootWaiting":    "a card that opens or closes changes whether its member waits for a person, which the member's presence shows",
+	"talkootCard":       "a card that opens or closes is a signal line in its talkoot's room, which the expression engine replays",
 }
 
 // The two members that must NEVER appear. They are not merely undeclared — they are

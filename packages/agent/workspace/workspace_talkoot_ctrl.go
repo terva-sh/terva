@@ -9,6 +9,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/look"
 	"terva.sh/terva/packages/agent/persona"
+	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/agent/talkoot"
 )
 
@@ -62,6 +63,40 @@ func (w *Workspace) OpenTalkootRef(ctx context.Context, p ctrlproto.TalkootOpenR
 		return ctrlproto.TalkootRefText{}, talkootWireErr(err, ctrlproto.CodeBadRequest)
 	}
 	return ctrlproto.TalkootRefText{Ref: t.Ref, Text: t.Text, Size: t.Size, Truncated: t.Truncated, Binary: t.Binary}, nil
+}
+
+// TalkootWorker reports the swarm agent a worker member is seated on, for
+// the view's event view. The tasks surface cannot serve it: that list is
+// scoped to the session asking, and a talkoot's workers belong to the
+// talkoot's address instead. The tail holds tool output, so the verb needs
+// the write capability (capability.go).
+func (w *Workspace) TalkootWorker(ctx context.Context, p ctrlproto.TalkootWorkerParams) (ctrlproto.TaskInfo, error) {
+	run, err := w.talkootRunOf(p.ID)
+	if err != nil {
+		return ctrlproto.TaskInfo{}, talkootWireErr(err, ctrlproto.CodeInternal)
+	}
+	m, ok := memberOf(*run.roster.Load(), p.Member)
+	if !ok {
+		return ctrlproto.TaskInfo{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "talkoot: %s has no member %q", p.ID, p.Member)
+	}
+	if memberDriver(m) == talkoot.DriverNative {
+		return ctrlproto.TaskInfo{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "talkoot: member %s is native and has no worker; open its session", p.Member)
+	}
+	w.talkoot.mu.Lock()
+	id := run.seats[p.Member]
+	w.talkoot.mu.Unlock()
+	if id == "" {
+		return ctrlproto.TaskInfo{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "talkoot: member %s has no worker yet; its first delivery starts one", p.Member)
+	}
+	var snap swarm.AgentSnapshot
+	found := false
+	if h := w.workers(); h != nil {
+		snap, found = h.agentSnapshot(id)
+	}
+	if !found {
+		return ctrlproto.TaskInfo{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "talkoot: worker %s of member %s is not in the swarm", id, p.Member)
+	}
+	return taskInfo(snap), nil
 }
 
 func (w *Workspace) CreateTalkoot(ctx context.Context, p ctrlproto.TalkootCreateParams) (ctrlproto.TalkootView, error) {
@@ -268,7 +303,8 @@ func wireMark(m *look.Mark) *ctrlproto.TalkootMark {
 }
 
 func wireTalkootStatus(s talkoot.Status) ctrlproto.TalkootMemberStatus {
-	return ctrlproto.TalkootMemberStatus{Member: s.Member, Working: s.Working, Tool: s.Tool, Paused: s.Paused, SpendUSD: s.SpendUSD, Turns: s.Turns, Idle: s.Idle}
+	return ctrlproto.TalkootMemberStatus{Member: s.Member, Presence: s.Presence(), Working: s.Working, Tool: s.Tool, Paused: s.Paused,
+		Pauses: s.Pauses, SpendUSD: s.SpendUSD, Turns: s.Turns, Idle: s.Idle}
 }
 
 func wireTalkootEnvelope(e talkoot.Envelope) ctrlproto.TalkootEnvelope {
@@ -298,7 +334,7 @@ func wireTalkootLine(l talkoot.Line) ctrlproto.TalkootLine {
 		Type: l.Type, At: l.At, Member: l.Member, Chain: l.Chain, CostUSD: l.CostUSD,
 		Guard: l.Guard, Action: l.Action, Reason: l.Reason, By: l.By, SpendUSD: l.SpendUSD,
 		Ref: l.Ref, Notes: l.Notes, Proposal: l.Proposal, Proposer: l.Proposer, Edited: l.Edited,
-		Text: l.Text,
+		Text: l.Text, Tool: l.Tool, Attempt: l.Attempt, Card: l.Card, Outcome: l.Outcome,
 	}
 	if len(l.Changes) > 0 {
 		out.Changes = wireChanges(l.Changes)

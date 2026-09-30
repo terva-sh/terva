@@ -42,6 +42,8 @@ type TalkootController interface {
 	PreviewTalkoot(ctx context.Context, p TalkootPreviewParams) (TalkootPreview, error)
 	// OpenTalkootRef reads the file a path: or note: reference names.
 	OpenTalkootRef(ctx context.Context, p TalkootOpenRefParams) (TalkootRefText, error)
+	// TalkootWorker reports the swarm agent a worker member is seated on.
+	TalkootWorker(ctx context.Context, p TalkootWorkerParams) (TaskInfo, error)
 	// UpdateTalkoot replaces a running talkoot's roster.
 	UpdateTalkoot(ctx context.Context, p TalkootUpdateParams) (TalkootView, error)
 	// PostTalkoot posts a person's message to the team.
@@ -158,17 +160,25 @@ type TalkootMark struct {
 	Color string `json:"color,omitempty"`
 }
 
-// TalkootMemberStatus is a member's state as the router sees it. Spend and
+// TalkootMemberStatus is a member's state as the daemon sees it. Spend and
 // turns count the current day.
 type TalkootMemberStatus struct {
-	Member  string `json:"member"`
-	Working bool   `json:"working,omitempty"`
+	Member string `json:"member"`
+	// Presence is the member's one state: idle, working, waiting, paused, or
+	// offline. docs/proposals/talkoot.md, "Presence", defines them. A daemon
+	// from before this field leaves it empty.
+	Presence string `json:"presence,omitempty"`
+	Working  bool   `json:"working,omitempty"`
 	// Tool names the tool the member's turn runs now. It is empty between
 	// tools and for a member whose driver reports no tool events.
-	Tool     string  `json:"tool,omitempty"`
-	Paused   string  `json:"paused,omitempty"`
-	SpendUSD float64 `json:"spend_usd,omitempty"`
-	Turns    int     `json:"turns,omitempty"`
+	Tool string `json:"tool,omitempty"`
+	// Paused joins the reasons of every pause that holds the member, and
+	// Pauses lists their kinds: person, spend, turns, team, cost, guard,
+	// room, and failed.
+	Paused   string   `json:"paused,omitempty"`
+	Pauses   []string `json:"pauses,omitempty"`
+	SpendUSD float64  `json:"spend_usd,omitempty"`
+	Turns    int      `json:"turns,omitempty"`
 	// Idle says the member's worker process stopped for idleness. The next
 	// envelope revives it.
 	Idle bool `json:"idle,omitempty"`
@@ -222,6 +232,13 @@ type TalkootTemplate struct {
 type TalkootOpenRefParams struct {
 	ID  string `json:"id"`
 	Ref string `json:"ref"`
+}
+
+// TalkootWorkerParams is the talkoot.worker payload: a worker member of a
+// running talkoot.
+type TalkootWorkerParams struct {
+	ID     string `json:"id"`
+	Member string `json:"member"`
 }
 
 // TalkootRefText is the file a reference names. Size is the file's size, and
@@ -428,6 +445,16 @@ type TalkootLine struct {
 	// Text is set on an intro line: a member's plain introduction card, built
 	// from its roster entry, for a member that took no introduction turn.
 	Text string `json:"text,omitempty"`
+	// Tool, Attempt, Card, and Outcome are set on a signal line: tool_error,
+	// retry, card_open, or card_close. Tool names the tool call that failed,
+	// with its call id in Ref, or that a permission card asks about. Attempt counts a retry's failed
+	// attempt from 1. Card is permission or question, with its id in Ref.
+	// Outcome says how a card closed: approved, denied, answered, expired, or
+	// cancelled.
+	Tool    string `json:"tool,omitempty"`
+	Attempt int    `json:"attempt,omitempty"`
+	Card    string `json:"card,omitempty"`
+	Outcome string `json:"outcome,omitempty"`
 }
 
 // TalkootInboxResult is the talkoot.inbox reply, oldest card first.

@@ -56,6 +56,12 @@ type Backend struct {
 	// It must be a PURE FUNCTION of the line. That is what lets a captured
 	// stream be replayed through it as a golden fixture, and what lets a stream
 	// recorded under one CLI version be re-translated after an upgrade.
+	//
+	// A turn's end is a task_end event, with an error when the turn did not
+	// finish. When something asked the turn to stop, such as a person's
+	// interrupt, the event also carries interrupted: true. A talkoot pauses
+	// a member whose turn ended in an error as failed, and an interrupt
+	// without that mark reads as a failure.
 	Translate func(line []byte) []Event
 
 	// Opening is the text of the FIRST user turn — the one that delivers the

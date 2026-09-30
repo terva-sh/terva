@@ -1,0 +1,2 @@
+{"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"retry_delay_ms":593,"error_status":529,"error":"overloaded","session_id":"8ed623f9-c6bb-45ac-a5a9-6ddf7a7504db","uuid":"490c7602-2a14-4313-b722-7f01a80fd8f6"}
+{"type":"system","subtype":"api_retry","attempt":2,"max_retries":10,"retry_delay_ms":1107,"error_status":529,"error":"overloaded","session_id":"8ed623f9-c6bb-45ac-a5a9-6ddf7a7504db","uuid":"9d4a6551-c686-4f70-9287-db9274a9633d"}

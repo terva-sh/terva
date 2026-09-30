@@ -676,15 +676,33 @@ The view appears when the daemon runs with `talkoot_enabled` set in
   takes effect when you press Enter or leave the field, and the browser
   keeps it. It names who acted. The `steer` capability decides who may act.
 - **The sidebar.** The room comes first, then each member with its state:
-  idle, working, waiting for you, or paused. A working native member also
-  names the tool it runs, as in "running grep". A count shows the messages a
-  member sent you since you last opened its view. The coordinator is pinned.
+  idle, working, waiting for you, paused, or offline. The daemon decides the
+  state. Waiting means a question or an approval of the member's is open in
+  the inbox. Offline means nothing can run the member now, such as a worker
+  member while `external_workers` is off, and its mark fades. A paused
+  member also shows why. A turn that fails pauses its member, and so does a
+  worker process that stops in a turn, until you resume the member. A turn
+  you stop yourself does not. A working native member also names the tool it
+  runs, as in "running grep". A count shows the messages a member sent you
+  since you last opened its view. The coordinator is pinned.
 - **Marks.** Each member has a mark, a small shape in its own colour. It
   appears in the sidebar, beside the member's messages, and on its inbox
   cards. A member without one takes its persona's mark or accent colour, and
   two members of one persona take different shapes. A member added without
   a shape moves no one's mark. A shape you set, a reorder, or a removal can
   move another member's default. A mark you set never moves.
+- **The member card.** **Member card** in a member's view opens the one place
+  to see and change it. The card has three sections:
+  - **Look:** the title, and pickers for the shape and the colour. **Reset**
+    returns the mark to its default.
+  - **Instructions:** the persona, with its charter and the work it suits.
+  - **Driver and limits:** the driver, the model or tier, the posture, the
+    workspace, the tools, and the daily budget and turns.
+
+  **Save changes** sends only the fields you changed, and it applies at once.
+  The room records each edit as a roster line in your name. An empty field
+  returns the member to its default. The card also pauses and removes the
+  member. A removal asks twice.
 - **The main view.** A new team opens on the coordinator's conversation with
   you. A member's view shows only your exchanges with it, and another
   person's exchanges show in the room. Until you set a name, a member's view
@@ -699,7 +717,13 @@ The view appears when the daemon runs with `talkoot_enabled` set in
   open, or the coordinator in the room. Name a member with `@id` to reach it.
 - **The inbox.** Questions, tool approvals, roster proposals, and a new team's
   kickoff wait above the log. An answer to a question or an approval also
-  resolves the card in the member's own session.
+  resolves the card in the member's own session. A question card says that
+  the room keeps your answer, and that a teammate may see it.
+- **Proposal cards.** A roster proposal lists each member it touches, field by
+  field, before and after. It marks each authority field, and it flags each
+  one that grants more. A member that joins shows in full, and so does a new
+  persona. A change of marks, such as a theme, shows each mark before and
+  after, side by side.
 - **Pause and resume.** Pause one member, one chain from a message, or the
   whole team.
 

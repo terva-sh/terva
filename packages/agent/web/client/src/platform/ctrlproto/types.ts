@@ -2743,6 +2743,7 @@ export type Verb =
   | 'talkoot.resume'
   | 'talkoot.recruit'
   | 'talkoot.ref'
+  | 'talkoot.worker'
   | 'talkoot.room'
   | 'talkoot.templates'
   | 'talkoot.update'
@@ -2851,11 +2852,17 @@ export interface TalkootMember {
 // TalkootMemberStatus counts the current day's spend and turns.
 export interface TalkootMemberStatus {
   member: string
+  // The member's one state, as the daemon decides it. A daemon from before
+  // the field leaves it out.
+  presence?: string
   working?: boolean
   // The tool the member's turn runs now. Empty between tools, and for a
   // driver that reports no tool events.
   tool?: string
+  // Every pause that holds the member: the joined reasons, and their kinds
+  // (person, spend, turns, team, cost, guard, room, failed).
   paused?: string
+  pauses?: string[]
   spend_usd?: number
   turns?: number
   // The member's worker process stopped for idleness. The next envelope
@@ -2907,6 +2914,14 @@ export interface TalkootPreviewParams {
 export interface TalkootOpenRefParams {
   id: string
   ref: string
+}
+
+// talkoot.worker reports the swarm agent a worker member is seated on, as a
+// TaskInfo. The tasks surface cannot: its list is scoped to the session
+// asking, and a talkoot's workers belong to the talkoot's address.
+export interface TalkootWorkerParams {
+  id: string
+  member: string
 }
 
 export interface TalkootRefText {
@@ -3061,7 +3076,8 @@ export interface TalkootChain {
 }
 
 // TalkootLine is one room line. `type` is envelope, turn, guard, resume,
-// delivery, read, seat, roster, answer, intro, or damaged.
+// delivery, read, seat, roster, answer, intro, damaged, or a signal:
+// tool_error, retry, card_open, or card_close.
 export interface TalkootLine {
   type: string
   at: string
@@ -3089,6 +3105,14 @@ export interface TalkootLine {
   // On an intro line: `member`'s plain introduction card, built from its
   // roster entry, for a member that took no introduction turn.
   text?: string
+  // On a signal line: the tool call that failed (its call id in `ref`) or
+  // that a permission card asks about, a retry's failed attempt from 1, the
+  // card's kind (permission or question, with its id in `ref`), and how it
+  // closed (approved, denied, answered, expired, or cancelled).
+  tool?: string
+  attempt?: number
+  card?: string
+  outcome?: string
 }
 
 // TalkootInboxResult is the talkoot.inbox reply, oldest card first.
@@ -3394,6 +3418,7 @@ export interface VerbParams {
   'talkoot.kickoff': TalkootKickoffParams
   'talkoot.preview': TalkootPreviewParams
   'talkoot.ref': TalkootOpenRefParams
+  'talkoot.worker': TalkootWorkerParams
 }
 
 // Card revision history. Every write to a card goes through cards.edit — the

@@ -111,7 +111,7 @@ func (w *Workspace) talkootGet(ctx context.Context, id string) (talkootView, err
 		// talkoot.
 		v.Text, _ = os.ReadFile(filepath.Join(run.dir, talkoot.FileName))
 		status := map[string]talkoot.Status{}
-		for _, st := range run.overlayIdle(rt.Statuses()) {
+		for _, st := range run.overlay(rt.Statuses()) {
 			status[st.Member] = st
 		}
 		w.talkoot.mu.Lock()

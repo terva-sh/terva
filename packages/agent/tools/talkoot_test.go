@@ -116,7 +116,9 @@ func TestTalkootRosterShowsEachMember(t *testing.T) {
 	seat := &fakeSeat{roster: []TalkootRosterEntry{
 		{Member: talkoot.Member{ID: "helm", Title: "Lead", Role: "coordinator", Driver: "native"}, Status: talkoot.Status{Working: true}},
 		{Member: talkoot.Member{ID: "jev", Role: "specialist", Driver: "claude"}, Self: true},
-		{Member: talkoot.Member{ID: "gage", Role: "reviewer", Driver: "native"}, Status: talkoot.Status{Paused: "over budget"}},
+		{Member: talkoot.Member{ID: "gage", Role: "reviewer", Driver: "native"}, Status: talkoot.Status{Paused: "over budget", Pauses: []string{"spend"}}},
+		{Member: talkoot.Member{ID: "vartija", Role: "reviewer", Driver: "native"}, Status: talkoot.Status{Working: true, Waiting: true}},
+		{Member: talkoot.Member{ID: "kaiku", Role: "specialist", Driver: "codex"}, Status: talkoot.Status{Offline: true}},
 	}}
 	got, err := talkootText(t, &TalkootRosterTool{Seat: seat}, `{}`)
 	if err != nil {
@@ -126,6 +128,8 @@ func TestTalkootRosterShowsEachMember(t *testing.T) {
 		"- helm: Lead; role coordinator; driver native; working",
 		"- jev (you); role specialist; driver claude; idle",
 		"- gage; role reviewer; driver native; paused: over budget",
+		"- vartija; role reviewer; driver native; waiting for a person",
+		"- kaiku; role specialist; driver codex; offline: a message to it does not arrive now",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("want %q in:\n%s", want, got)

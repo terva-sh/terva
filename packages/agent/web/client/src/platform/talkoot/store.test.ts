@@ -104,22 +104,6 @@ describe('the talkoot store', () => {
     expect(compareTime('2026-09-27T12:00:05+02:00', '2026-09-27T10:00:05Z')).toBe(0)
   })
 
-  it('keeps each member\'s newest beat, with a fresh key for every play', () => {
-    let s = emptyTalkoot('crew')
-    const beat = (member: string, name: string, toward?: string) =>
-      ev('talkoot_beat', { id: 'crew', beat: { member, beat: name, toward, cause: 'c', at: '2026-09-30T10:00:00Z' } })
-    s = applyTalkootEvent(s, beat('jev', 'glance', 'helm'))
-    expect(s.beats.jev).toEqual({ name: 'glance', key: 1, toward: 'helm' })
-    s = applyTalkootEvent(s, beat('helm', 'happy'))
-    s = applyTalkootEvent(s, beat('jev', 'glance', 'helm'))
-    expect(s.beats.jev.key).toBe(3)
-    expect(s.beats.helm).toEqual({ name: 'happy', key: 2, toward: undefined })
-    // A beat of another talkoot, or one with no member, changes nothing.
-    const other = ev('talkoot_beat', { id: 'other', beat: { member: 'jev', beat: 'happy', cause: 'c', at: '2026-09-30T10:00:00Z' } })
-    expect(applyTalkootEvent(s, other)).toBe(s)
-    expect(applyTalkootEvent(s, ev('talkoot_beat', { id: 'crew' }))).toBe(s)
-  })
-
   it('folds status, inbox, and roster events for its own talkoot only', () => {
     let s = setView(emptyTalkoot('crew'), view())
     s = applyTalkootEvent(s, ev('talkoot_status', { id: 'crew', members: [{ member: 'jev', presence: 'working', working: true }] }))
@@ -226,20 +210,6 @@ describe('the talkoot store', () => {
 })
 
 describe('the talkoot hub', () => {
-  it('hands talkoots_changed to the list listeners, whatever its address', () => {
-    const hub = new TalkootHub()
-    const list = vi.fn()
-    const room = vi.fn()
-    const stop = hub.onList(list)
-    hub.listen('crew', room)
-    expect(hub.dispatch('#workspace', { type: 'talkoots_changed' } as WireEvent)).toBe(true)
-    expect(list).toHaveBeenCalledTimes(1)
-    expect(room).not.toHaveBeenCalled()
-    stop()
-    hub.dispatch('#workspace', { type: 'talkoots_changed' } as WireEvent)
-    expect(list).toHaveBeenCalledTimes(1)
-  })
-
   it('hands a room address to its listeners and nothing else', () => {
     const hub = new TalkootHub()
     const fn = vi.fn()

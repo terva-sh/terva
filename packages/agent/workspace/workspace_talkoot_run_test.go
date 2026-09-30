@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -76,6 +77,19 @@ func waitTalkoot(t *testing.T, what string, ok func() bool) {
 		}
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// resumeFailed waits for member's failed turn to pause it, and resumes the
+// member as a person does after a look. The test provider refuses every
+// request, so each native turn fails, and a failed turn holds its member.
+func resumeFailed(t *testing.T, w *Workspace, id, member string) {
+	t.Helper()
+	waitTalkoot(t, member+"'s failed turn to pause it", func() bool {
+		return slices.Contains(memberView(t, w, id, member).Status.Pauses, "failed")
+	})
+	if err := w.talkootResume(context.Background(), id, "sothr", member, ""); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func memberView(t *testing.T, w *Workspace, id, member string) talkootMemberView {
@@ -207,6 +221,11 @@ func TestAPostMakesTheCoordinatorsSession(t *testing.T) {
 	if turns := roomLines(t, "crew", func(l talkoot.Line) bool { return l.Type == talkoot.LineTurn && l.Member == "helm" }); len(turns) != 1 {
 		t.Errorf("want the turn recorded once, got %+v", turns)
 	}
+	// The test provider refuses the request, so the turn failed, and the
+	// member waits for a person.
+	if st := memberView(t, w, "crew", "helm").Status; !slices.Equal(st.Pauses, []string{"failed"}) || !strings.Contains(st.Paused, "refuses every request") {
+		t.Errorf("paused %q with kinds %v, want failed with the provider's error", st.Paused, st.Pauses)
+	}
 }
 
 // The roster owns a member's posture, so the settings surface cannot change it.
@@ -303,7 +322,7 @@ func TestAMemberSessionRecreatesWhenItsFileIsGone(t *testing.T) {
 	if _, err := w.talkootPost(ctx, "crew", "sothr", nil, "Plan it.", nil, ""); err != nil {
 		t.Fatal(err)
 	}
-	waitTalkoot(t, "helm's turn to end", func() bool { return !memberView(t, w, "crew", "helm").Status.Working })
+	resumeFailed(t, w, "crew", "helm")
 	first := memberView(t, w, "crew", "helm").Session
 	if err := w.DeleteSession(ctx, first); err != nil {
 		t.Fatal(err)
@@ -810,6 +829,7 @@ func TestUpdateUnseatsALeaverAndRenewsATierChange(t *testing.T) {
 	if got := memberView(t, w, "crew", "helm").Session; got != "" {
 		t.Errorf("want helm unbound until its next delivery, got %q", got)
 	}
+	resumeFailed(t, w, "crew", "helm")
 	if _, err := w.talkootPost(ctx, "crew", "sothr", nil, "Again.", nil, ""); err != nil {
 		t.Fatal(err)
 	}

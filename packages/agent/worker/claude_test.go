@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -356,10 +357,17 @@ func TestInterruptedResultBecomesAnErrorTaskEnd(t *testing.T) {
 	if r, _ := evs[0].Data["terminal_reason"].(string); r != "aborted_streaming" {
 		t.Errorf("terminal_reason should pass through, got %v", evs[0].Data["terminal_reason"])
 	}
+	if i, _ := evs[0].Data["interrupted"].(bool); !i {
+		t.Errorf("an interrupted turn must be marked interrupted, got %v", evs[0].Data)
+	}
 
 	done := `{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","terminal_reason":"completed","num_turns":1}`
-	if evs := translateClaude([]byte(done)); len(evs) != 1 || evs[0].Data["error"] != nil {
-		t.Errorf("a completed turn must carry no error, got %v", evs)
+	if evs := translateClaude([]byte(done)); len(evs) != 1 || evs[0].Data["error"] != nil || evs[0].Data["interrupted"] != nil {
+		t.Errorf("a completed turn must carry no error and no interrupt, got %v", evs)
+	}
+	failed := `{"type":"result","subtype":"error_during_execution","is_error":true,"result":"overloaded","num_turns":1}`
+	if evs := translateClaude([]byte(failed)); len(evs) != 1 || evs[0].Data["error"] == nil || evs[0].Data["interrupted"] != nil {
+		t.Errorf("a failed turn must carry its error and no interrupt, got %v", evs)
 	}
 }
 
@@ -398,5 +406,58 @@ func TestClaudeEchoesItsUserTurnsAndMarksThem(t *testing.T) {
 	}
 	if !claude.ReportsReads || claude.TurnPerText {
 		t.Errorf("claude says ReportsReads %v and TurnPerText %v, want true and false: it echoes each turn, and folds queued texts", claude.ReportsReads, claude.TurnPerText)
+	}
+}
+
+// A system/api_retry event becomes the retry event a terva worker sends, so
+// the workspace reads one shape. A retry with no attempt is dropped.
+func TestTranslateClaudeRetry(t *testing.T) {
+	line := `{"type":"system","subtype":"api_retry","attempt":2,"max_retries":10,"retry_delay_ms":500,"error_status":529,"error":"overloaded","session_id":"s"}`
+	evs := translateClaude([]byte(line))
+	if len(evs) != 1 || evs[0].Type != "retry" {
+		t.Fatalf("api_retry -> %v, want one retry event", evs)
+	}
+	r, _ := evs[0].Data["retry"].(map[string]any)
+	if r["attempt"] != 2 || r["max"] != 10 || r["delay_ms"] != int64(500) || r["error"] != "overloaded (HTTP 529)" {
+		t.Fatalf("retry = %v", r)
+	}
+	noStatus := `{"type":"system","subtype":"api_retry","attempt":1,"error_status":null}`
+	if r, _ := translateClaude([]byte(noStatus))[0].Data["retry"].(map[string]any); r["error"] != "the request failed" {
+		t.Fatalf("a retry with no response = %v", r)
+	}
+	if evs := translateClaude([]byte(`{"type":"system","subtype":"api_retry"}`)); len(evs) != 0 {
+		t.Fatalf("a retry with no attempt -> %v, want dropped", evs)
+	}
+}
+
+// Claude Code 2.1.284 sends api_retry under the flags claudeCommand passes,
+// without --include-partial-messages, and each event it sent becomes a retry.
+// The fixture is the two retry events of a probe on 2026-09-30.
+//
+// Re-capture: run a local server that answers every request with HTTP 529 and
+// an overloaded_error body, then run claude with ANTHROPIC_BASE_URL at it, a
+// dummy ANTHROPIC_API_KEY, a throwaway HOME and CLAUDE_CONFIG_DIR, and the
+// flags of claudeCommand. The run spends nothing. Keep the api_retry lines.
+func TestTranslateCapturedClaudeRetries(t *testing.T) {
+	text, err := os.ReadFile("testdata/claude-2.1.284-api-retry.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(string(text)), "\n") {
+		for _, e := range translateClaude([]byte(line)) {
+			if e.Type != "retry" {
+				t.Fatalf("api_retry -> %s", e.Type)
+			}
+			r, _ := e.Data["retry"].(map[string]any)
+			got = append(got, r)
+		}
+	}
+	want := []map[string]any{
+		{"attempt": 1, "max": 10, "delay_ms": int64(593), "error": "overloaded (HTTP 529)"},
+		{"attempt": 2, "max": 10, "delay_ms": int64(1107), "error": "overloaded (HTTP 529)"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("retries = %v, want %v", got, want)
 	}
 }

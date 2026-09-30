@@ -107,6 +107,25 @@ func (f *fakeWorkers) adopt(id string, ev workerEvents) (float64, error) {
 	return f.totals[id], nil
 }
 
+func (f *fakeWorkers) agentSnapshot(id string) (swarm.AgentSnapshot, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.live[id]; !ok {
+		return swarm.AgentSnapshot{}, false
+	}
+	return swarm.AgentSnapshot{ID: id, Status: swarm.StatusRunning, Activity: "working", Tail: "user: " + f.lastSentLocked(id), CostUSD: f.totals[id]}, true
+}
+
+// lastSentLocked is the last text sent to worker id. The caller holds f.mu.
+func (f *fakeWorkers) lastSentLocked(id string) string {
+	for i := len(f.sent) - 1; i >= 0; i-- {
+		if who, text, _ := strings.Cut(f.sent[i], "|"); who == id {
+			return text
+		}
+	}
+	return ""
+}
+
 func (f *fakeWorkers) holds(id string) (swarm.SpawnRequest, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -177,7 +196,7 @@ func (f *fakeWorkers) end(t *testing.T, id string, total float64, reply string) 
 	f.totals[id] = total
 	f.mu.Unlock()
 	// A typical turn echoed the one text that started it.
-	f.ev(t, id).turnEnd(id, total, reply, 1)
+	f.ev(t, id).turnEnd(id, total, reply, 1, "")
 }
 
 // exit reports that the worker's process ended.
@@ -291,6 +310,14 @@ func TestAWorkerMemberNeedsTheExternalWorkersGate(t *testing.T) {
 	m, _ := memberOf(*w.talkoot.runs["crew"].roster.Load(), "jev")
 	if err := w.memberUnbound(m); err == nil || !strings.Contains(err.Error(), "external_workers") {
 		t.Errorf("unbound = %v, want the gate named", err)
+	}
+	// Nothing can listen for the member, so its status says offline, and a
+	// native member beside it is not.
+	if p := wireTalkootStatus(memberView(t, w, "crew", "jev").Status).Presence; p != "offline" {
+		t.Errorf("jev is %q, want offline", p)
+	}
+	if p := memberView(t, w, "crew", "helm").Status.Presence(); p == "offline" {
+		t.Error("a native member is offline")
 	}
 	if err := w.deliverWorker(w.talkoot.runs["crew"], m, "x"); err == nil {
 		t.Error("a delivery ran without the gate")
@@ -408,8 +435,8 @@ func TestAWorkerThatExitsInATurnFreesItsMember(t *testing.T) {
 	fw.exit(t, "agent-1")
 	waitTalkoot(t, "the member to stop working", func() bool { return !jevWorking(t, w) })
 	v := memberView(t, w, "crew", "jev")
-	if !strings.Contains(v.Status.Paused, "stopped before its turn ended") {
-		t.Errorf("paused %q, want the member paused for a person", v.Status.Paused)
+	if !strings.Contains(v.Status.Paused, "stopped before its turn ended") || !slices.Equal(v.Status.Pauses, []string{"failed"}) {
+		t.Errorf("paused %q with kinds %v, want the member paused as failed for a person", v.Status.Paused, v.Status.Pauses)
 	}
 	// The turn is charged what the worker spent before it stopped.
 	if v.Status.SpendUSD < 0.14 || v.Status.SpendUSD > 0.16 {
@@ -419,6 +446,44 @@ func TestAWorkerThatExitsInATurnFreesItsMember(t *testing.T) {
 	fw.end(t, "agent-1", 0.4, "late")
 	if got := memberView(t, w, "crew", "jev").Status; got.Turns != turns || got.SpendUSD != v.Status.SpendUSD {
 		t.Errorf("a stale report counted: turns %d -> %d, spend %v -> %v", turns, got.Turns, v.Status.SpendUSD, got.SpendUSD)
+	}
+}
+
+// A worker turn that ended in an error pauses its member with the kind failed,
+// and is charged what it spent. A turn with no failure pauses nobody.
+func TestAWorkerTurnThatFailsPausesItsMember(t *testing.T) {
+	cwd := workerHome(t, true)
+	w := openTalkootWorkspace(t, cwd)
+	fw := newFakeWorkers()
+	w.talkootWorkers = fw
+	ctx := t.Context()
+	if _, err := w.talkootCreate(ctx, "crew", workerCrew(cwd, "")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.talkootPost(ctx, "crew", "sothr", []string{"jev"}, "Start.", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	waitTalkoot(t, "the spawn", func() bool { s, _, _, _ := fw.snapshot(); return len(s) == 1 })
+	fw.end(t, "agent-1", 0.1, "Done.")
+	waitTalkoot(t, "the first turn end", func() bool { return !jevWorking(t, w) })
+	if v := memberView(t, w, "crew", "jev"); v.Status.Paused != "" || len(v.Status.Pauses) != 0 {
+		t.Fatalf("a finished turn paused the member: %q %v", v.Status.Paused, v.Status.Pauses)
+	}
+	if _, err := w.talkootPost(ctx, "crew", "sothr", []string{"jev"}, "Again.", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	waitTalkoot(t, "the second turn", func() bool { _, sent, _, _ := fw.snapshot(); return len(sent) == 1 })
+	fw.mu.Lock()
+	fw.totals["agent-1"] = 0.3
+	fw.mu.Unlock()
+	fw.ev(t, "agent-1").turnEnd("agent-1", 0.3, "The turn failed: overloaded", 1, "overloaded")
+	waitTalkoot(t, "the failed turn end", func() bool { return !jevWorking(t, w) })
+	v := memberView(t, w, "crew", "jev")
+	if !slices.Equal(v.Status.Pauses, []string{"failed"}) || !strings.Contains(v.Status.Paused, "overloaded") {
+		t.Errorf("paused %q with kinds %v, want failed with the error", v.Status.Paused, v.Status.Pauses)
+	}
+	if v.Status.SpendUSD < 0.29 || v.Status.SpendUSD > 0.31 {
+		t.Errorf("spend = %v, want the 0.3 the worker reported", v.Status.SpendUSD)
 	}
 }
 
@@ -696,7 +761,7 @@ func TestAReloadedWorkerHoldsItsSpawnRequest(t *testing.T) {
 	}
 	req.Persona = " vartija "
 	f := swarm.New(cfg)
-	id, err := swarmWorkers{f: f}.spawn(context.Background(), req, workerEvents{turnEnd: func(string, float64, string, int) {}, exit: func(string, float64) {}})
+	id, err := swarmWorkers{f: f}.spawn(context.Background(), req, workerEvents{turnEnd: func(string, float64, string, int, string) {}, exit: func(string, float64) {}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -194,7 +194,7 @@ func (s talkootSeat) Roster() ([]tools.TalkootRosterEntry, error) {
 			return errSeatRevoked
 		}
 		status := map[string]talkoot.Status{}
-		for _, st := range rt.Statuses() {
+		for _, st := range s.b.run.overlay(rt.Statuses()) {
 			status[st.Member] = st
 		}
 		for _, m := range rt.Members() {
@@ -260,14 +260,20 @@ func (s talkootSeat) notes(fn func(dir string) error) error {
 // update can revoke the seat mid-turn, and a refusal would also leave the
 // member working for good.
 func (s talkootSeat) TurnEnded(costUSD float64) error {
-	return s.turnEnded(costUSD, nil)
+	return s.turnEnded(costUSD, "", nil)
 }
 
 // turnEnded is TurnEnded, and it calls settled inside the router call once
-// the router has the report.
-func (s talkootSeat) turnEnded(costUSD float64, settled func()) error {
+// the router has the report. A turn with a failure pauses the member with
+// the kind failed.
+func (s talkootSeat) turnEnded(costUSD float64, failed string, settled func()) error {
 	return s.b.run.do(func(rt *talkoot.Router) error {
-		err := rt.TurnEnded(s.b.member, costUSD)
+		var err error
+		if failed != "" {
+			err = rt.TurnFailed(s.b.member, costUSD, failureReason(failed))
+		} else {
+			err = rt.TurnEnded(s.b.member, costUSD)
+		}
 		if settled != nil {
 			settled()
 		}
@@ -356,8 +362,9 @@ func (w *Workspace) talkootActivity(sessID, callID, tool string) {
 }
 
 // talkootTurn opens a seated session's turn, and returns the func that ends
-// it. The end reports the turn's cost when a turn ran. Close waits for every
-// open turn to end. A session without a seat gets nil.
+// it. The end reports the turn's cost when a turn ran, and its error when it
+// failed. Close waits for every open turn to end. A session without a seat
+// gets nil.
 //
 // The run counts the member's open turns apart from its roster, so shutdown
 // finds a turn whose member an update removed. The count drops inside the
@@ -368,7 +375,7 @@ func (w *Workspace) talkootActivity(sessID, callID, tool string) {
 // w.talkoot.mu, which closeTalkoots also holds to set closing. A turn is
 // either counted before the talkoots close, or refused with closing true, and
 // then the caller does not run it: no report of it could reach a closed run.
-func (w *Workspace) talkootTurn(sessID string) (end func(costUSD float64, ran bool), closing bool) {
+func (w *Workspace) talkootTurn(sessID string) (end func(costUSD float64, ran bool, failed string), closing bool) {
 	w.talkoot.mu.Lock()
 	b := w.talkoot.seats[sessID]
 	if b == nil {
@@ -386,7 +393,7 @@ func (w *Workspace) talkootTurn(sessID string) (end func(costUSD float64, ran bo
 	run.open[member]++
 	w.talkoot.turns.Add(1)
 	w.talkoot.mu.Unlock()
-	return func(costUSD float64, ran bool) {
+	return func(costUSD float64, ran bool, failed string) {
 		defer w.talkoot.turns.Add(-1)
 		done := false
 		settle := func() {
@@ -406,7 +413,7 @@ func (w *Workspace) talkootTurn(sessID string) (end func(costUSD float64, ran bo
 		if !ran {
 			return
 		}
-		if err := seat.turnEnded(costUSD, settle); err != nil {
+		if err := seat.turnEnded(costUSD, failed, settle); err != nil {
 			w.diagf("talkoot: session %s could not report its turn: %v", sessID, err)
 		}
 	}, false

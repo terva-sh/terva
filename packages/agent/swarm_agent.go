@@ -180,10 +180,18 @@ func runSwarmAgentMode(ctx context.Context, args build.Args, version string) err
 		// supervisor watches for (one whole ag.Prompt round). It is
 		// distinct from the core agent's per-turn turn_end events
 		// (which carry "stop", not "step"); see swarm.taskLevelTurnEnd.
-		em.emit("task_end", map[string]any{
+		end := map[string]any{
 			"step":  step,
 			"error": errString(err),
-		})
+		}
+		if c.Err() != nil {
+			// A cancelled prompt was asked to stop. A talkoot does not pause
+			// a member for it, as it does for a failure. The test is the
+			// turn's context, because a cancel can come back as a provider
+			// error that is not context.Canceled.
+			end["interrupted"] = true
+		}
+		em.emit("task_end", end)
 
 		mu.Lock()
 		busyTurn = false

@@ -466,6 +466,8 @@ func translateClaude(line []byte) []Event {
 			return []Event{{Type: "agent_ready", Data: data}}
 		case "thinking_tokens":
 			return nil // pure telemetry; the raw line is kept, nothing to model
+		case "api_retry":
+			return translateClaudeRetry(line)
 		}
 		return nil
 
@@ -518,6 +520,9 @@ func translateClaude(line []byte) []Event {
 			// without an error here the supervisor would record a finished task.
 			// A native child's cancelled turn carries an error the same way.
 			data["error"] = "the turn was interrupted"
+			// A talkoot does not pause a member for an interrupt, as it does
+			// for a failure.
+			data["interrupted"] = true
 		}
 		if len(ev.Usage) > 0 {
 			var usage map[string]any
@@ -534,6 +539,41 @@ func translateClaude(line []byte) []Event {
 		return nil // the acknowledgement of an interrupt; the result that follows ends the turn
 	}
 	return nil
+}
+
+// translateClaudeRetry maps a system/api_retry event onto the retry event a
+// terva worker sends, the shape of core.WireRetry. The fields are read apart
+// from the other events, so a field of an unexpected type here cannot drop
+// any other event.
+//
+// Claude Code's headless documentation says the event needs
+// --include-partial-messages as well as --verbose. A probe of 2.1.284 on
+// 2026-09-30 found it with --verbose alone, the flags claudeCommand passes, so
+// terva does not pass the other (TKT-01M3R65KYY). The probe's events are in
+// testdata/claude-2.1.284-api-retry.jsonl.
+func translateClaudeRetry(line []byte) []Event {
+	var ev struct {
+		Attempt     int    `json:"attempt"`
+		MaxRetries  int    `json:"max_retries"`
+		DelayMS     int64  `json:"retry_delay_ms"`
+		ErrorStatus *int   `json:"error_status"`
+		Error       string `json:"error"`
+	}
+	if json.Unmarshal(line, &ev) != nil || ev.Attempt < 1 {
+		return nil
+	}
+	why := firstNonEmpty(ev.Error, "the request failed")
+	if ev.ErrorStatus != nil {
+		why += fmt.Sprintf(" (HTTP %d)", *ev.ErrorStatus)
+	}
+	retry := map[string]any{"attempt": ev.Attempt, "error": why}
+	if ev.MaxRetries > 0 {
+		retry["max"] = ev.MaxRetries
+	}
+	if ev.DelayMS > 0 {
+		retry["delay_ms"] = ev.DelayMS
+	}
+	return []Event{{Type: "retry", Data: map[string]any{"retry": retry}}}
 }
 
 func firstNonEmpty(vals ...string) string {

@@ -1270,6 +1270,10 @@ TalkootLine
 	changes	[]TalkootMemberChange	omitempty
 	answers	[]TalkootAnswered	omitempty
 	text	string	omitempty
+	tool	string	omitempty
+	attempt	int	omitempty
+	card	string	omitempty
+	outcome	string	omitempty
 TalkootListResult
 	talkoots	[]TalkootSummary
 TalkootMark
@@ -1320,9 +1324,11 @@ TalkootMemberEntry
 	idle_stop	string	omitempty
 TalkootMemberStatus
 	member	string
+	presence	string	omitempty
 	working	bool	omitempty
 	tool	string	omitempty
 	paused	string	omitempty
+	pauses	[]string	omitempty
 	spend_usd	float64	omitempty
 	turns	int	omitempty
 	idle	bool	omitempty
@@ -1468,6 +1474,9 @@ TalkootView
 	text	string	omitempty
 	members	[]TalkootMember
 	held	[]string	omitempty
+TalkootWorkerParams
+	id	string
+	member	string
 TaskBoardItem
 	id	string
 	status	string

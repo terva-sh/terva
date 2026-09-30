@@ -338,7 +338,7 @@ Stream notifications during a `prompt` or `compact`. Structured-question events 
 | `assistant_message` | `message` | Final assistant message after the model turn ends (see Message shape) |
 | `usage` | `usage`, `cumulative` | Per-turn + cumulative tokens / cost, each `{input, output, cache_read, cache_write, cost_usd}` plus the optional fields below |
 | `turn_end` | `stop`, optional `error` | One model call finished. `stop` is `end`, `tool_use`, `length`, `error`, or `aborted` |
-| `done` | (none) | The sole terminal event of a `prompt` or `compact`: exactly one per operation, on every outcome (success, no-op, error, or cancellation) |
+| `done` | optional `error` | The sole terminal event of a `prompt` or `compact`: exactly one per operation, on every outcome (success, no-op, error, or cancellation). A `prompt` that failed repeats its error in `error`, so a driver that reads only `done` knows it failed. An aborted prompt carries no `error` |
 | `error` | `error` | Error message under the canonical `error` field (prompt failures and explicit-`compact` failures alike) |
 | `compact_done` | `summary` | Result of an explicit `compact` (summary text; empty on a no-op). Not terminal; a `done` follows |
 | `compact_start` | `text` | An automatic, policy-driven compaction began inside a `prompt` (`text` carries the reason) |
