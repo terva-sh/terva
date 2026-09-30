@@ -311,7 +311,10 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 			// sentence. What this switch governs is the UNASKED offer; /nextstep
 			// asks for one either way, and a user reading "off" here should not
 			// conclude the command is unavailable to them.
-			Description: i18n.T("After a reply, if you go quiet with an empty composer, offer a short suggested next message as ghost text. Tab or the right arrow accepts it, and nothing is sent until you send it. Costs one extra model call per reply you pause on. /nextstep asks for one on demand whether this is on or off."),
+			//
+			// The connection list is provider.ToolBanKeepsCache as the
+			// description reads it (TKT-01M2ZT3SM). Change both together.
+			Description: i18n.T("After a reply, if you go quiet with an empty composer, offer a short suggested next message as ghost text. Tab or the right arrow accepts it, and nothing is sent until you send it. Costs one extra model call per reply you pause on. The offer runs only on a connection whose prompt cache it can read: Anthropic or an Anthropic-compatible endpoint, or OpenAI, ChatGPT, or another OpenAI-compatible provider serving a model other than Claude. /nextstep asks for one on demand whether this is on or off, on every connection."),
 			Note:        i18n.T("off by default — applies live"),
 		},
 		{

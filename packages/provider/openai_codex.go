@@ -227,7 +227,7 @@ func (c *codexClient) codexNativeUserAgent() string {
 // only carries a string (see buildRequest), so image bytes can't ride
 // along with the tool result and are delivered via the mirror instead.
 func (c *codexClient) Capabilities() ClientCapabilities {
-	return ClientCapabilities{MirrorsToolImages: true, ReasoningWire: reasoningWireCodex}
+	return ClientCapabilities{MirrorsToolImages: true, ReasoningWire: reasoningWireCodex, EnforcesToolBan: true, ToolBanSendsChoice: true}
 }
 
 // ---- Responses API wire types (subset needed for terva's surface) ----

@@ -169,8 +169,12 @@ func (c *anthropicClient) Name() string {
 // Messages API extends a trailing assistant message as a prefill (the basis for
 // the Stage "continue" interaction), so ContinuesAssistantPrefill is true.
 // MirrorsToolImages stays false — Anthropic carries images inside tool results.
+// EnforcesToolBan is true without ToolBanSendsChoice: under ForbidTools the
+// tools stay on the wire with no tool_choice, and Stream withholds any call.
+// ReasoningInPrefix is true because the thinking configuration and the effort
+// are part of what Anthropic caches.
 func (c *anthropicClient) Capabilities() ClientCapabilities {
-	return ClientCapabilities{ContinuesAssistantPrefill: true, ReasoningWire: reasoningWireAnthropic}
+	return ClientCapabilities{ContinuesAssistantPrefill: true, ReasoningWire: reasoningWireAnthropic, EnforcesToolBan: true, ReasoningInPrefix: true}
 }
 
 // version is the `anthropic-version` header this endpoint expects.
@@ -457,11 +461,13 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 		out.Temperature = nil
 	}
 
-	// WireTools, not req.Tools: this client sends no tool_choice, so it cannot
-	// hold the model back from a call and must drop the array under ForbidTools
-	// rather than advertise tools it cannot police. Byte-identical to before
-	// wherever ForbidTools is unset, which is every real turn.
-	for _, t := range req.WireTools() {
+	// req.Tools under ForbidTools too, and still no tool_choice. Anthropic
+	// invalidates the cached messages when tool_choice changes, so a
+	// tool_choice of "none" would keep only the tools block warm and rewrite
+	// the whole transcript on every side request (TKT-01M2ZT3SK). The ban is
+	// enforced after the wire instead: Stream withholds any call the model
+	// makes, so none reaches the caller.
+	for _, t := range req.Tools {
 		name := t.Name
 		if c.oauth {
 			name = toClaudeCodeToolName(name)
@@ -860,6 +866,9 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event
 
 	out := make(chan Event, 16)
 	go c.runStream(ctx, resp, req, out)
+	if req.ForbidTools {
+		return withholdToolCalls(out), nil
+	}
 	return out, nil
 }
 

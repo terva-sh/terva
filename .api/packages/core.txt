@@ -29,6 +29,7 @@ Agent.Cost	method	func() provider.Usage
 Agent.DelegatedCost	method	func() provider.Usage
 Agent.DeleteMessage	method	func(idx int) bool
 Agent.DispatchedPrefix	method	func(client provider.Client, model string) (system string, tools []provider.Tool, cacheKey string, ok bool)
+Agent.DispatchedReasoning	method	func(client provider.Client, model string) (reasoning string, set bool, ok bool)
 Agent.DrainQueuedMessages	method	func() []string
 Agent.FramePreview	method	func() Frame
 Agent.Gate	method	func() Gate

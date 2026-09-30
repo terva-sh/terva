@@ -340,3 +340,19 @@ func (a *Agent) DispatchedPrefix(client provider.Client, model string) (system s
 	// only surviving description of what the provider cached.
 	return sent.system, append([]provider.Tool(nil), sent.tools...), sent.cacheKey, true
 }
+
+// DispatchedReasoning reports the reasoning level the last request oneTurn put
+// on the wire, under the same client and model match as DispatchedPrefix. On a
+// wire that renders the thinking settings into the cached prompt
+// (provider.ReasoningInPrefix), a side request that reads the conversation's
+// cache must send this level, because a different one invalidates the cached
+// messages. set is Request.ReasoningSet as that request carried it.
+func (a *Agent) DispatchedReasoning(client provider.Client, model string) (reasoning string, set bool, ok bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	sent := a.lastSent
+	if sent == nil || sent.model != model || !sameClient(sent.client, client) {
+		return "", false, false
+	}
+	return sent.reasoning, sent.reasoningSet, true
+}

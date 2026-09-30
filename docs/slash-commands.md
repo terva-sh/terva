@@ -152,6 +152,8 @@ Asks the agent for the smallest next step and offers it as **ghost text** in the
 
 The same offer can arrive on its own, without the command, if you switch on **Suggest a next step automatically** in `/settings`: after a reply, if you go quiet at an empty composer for half a minute, terva asks once. That setting is off by default, because it spends money on terva's own initiative. It governs only the automatic offer; `/nextstep` works whether it is on or off, since a command you typed is not unbidden.
 
+The automatic offer also needs a connection whose prompt cache it can read. There it costs a small fraction of a turn. Elsewhere it would pay to read the whole conversation again, and with Claude it would also write it to the cache again. Today that means Anthropic or an Anthropic-compatible endpoint, or OpenAI, ChatGPT, or another OpenAI-compatible provider serving a model other than Claude. Gemini and Bedrock connections make no automatic offer, and neither does Claude through an OpenAI-compatible gateway such as OpenRouter. `/nextstep` still works on all of them, at that full price. On Anthropic the suggestion thinks at the conversation's own reasoning level, because a different level would miss the cache.
+
 Two differences when you ask rather than wait:
 
 - **It reports back.** A failure, or an answer of "nothing obvious to suggest", shows on the status line. The automatic offer stays silent about both: you didn't ask, so an error banner would cost you more than the feature saves.

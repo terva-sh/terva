@@ -120,3 +120,35 @@ func TestDispatchedPrefixCopiesTheToolsSlice(t *testing.T) {
 		t.Fatal("a caller's write reached the retained prefix; the record must outlive the call unchanged")
 	}
 }
+
+// A side request on a wire that renders thinking into the prompt must send the
+// reasoning the last turn sent, or it misses the cached messages. The reader is
+// checked against the wire, and after a change of level it must still report
+// the level the provider cached, not the new one.
+func TestDispatchedReasoningReturnsWhatWentOnTheWire(t *testing.T) {
+	client := &prefixSpyClient{name: "spy"}
+	a := newTestAgent(client, "spy-model", "the system prompt", Registry{"noop": noopTool{}})
+	if _, _, ok := a.DispatchedReasoning(client, "spy-model"); ok {
+		t.Fatal("ok before any dispatch; nothing is cached")
+	}
+	a.SetReasoning("high")
+	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
+		t.Fatalf("Prompt returned %v", err)
+	}
+	sent := client.calls()
+	if len(sent) != 1 || sent[0].Reasoning != "high" {
+		t.Fatalf("the turn did not carry the level this test set, so it proves nothing: %+v", sent)
+	}
+
+	a.SetReasoning("low")
+	reasoning, set, ok := a.DispatchedReasoning(client, "spy-model")
+	if !ok {
+		t.Fatal("not ok after a dispatch that landed")
+	}
+	if reasoning != sent[0].Reasoning || set != sent[0].ReasoningSet {
+		t.Errorf("reasoning = %q, set = %v; the wire got %q, %v", reasoning, set, sent[0].Reasoning, sent[0].ReasoningSet)
+	}
+	if _, _, ok := a.DispatchedReasoning(client, "other-model"); ok {
+		t.Error("ok for another model; the cache is keyed on the model")
+	}
+}

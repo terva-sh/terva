@@ -208,12 +208,21 @@ func sideChatMessage(role provider.Role, text string) provider.Message {
 // Returning it rather than exposing an opt-in variant is the point: a caller now
 // has to look at the usage to ignore it.
 func streamText(ctx context.Context, cl provider.Client, req provider.Request) (string, provider.Usage, error) {
+	out, usage, _, err := streamTextStop(ctx, cl, req)
+	return out, usage, err
+}
+
+// streamTextStop is streamText that also reports why the model stopped. Under
+// ForbidTools a client can withhold a call the model made, and then the stop
+// is StopToolUse over text that led up to a call nobody ran.
+func streamTextStop(ctx context.Context, cl provider.Client, req provider.Request) (string, provider.Usage, provider.StopReason, error) {
 	stream, err := cl.Stream(ctx, req)
 	if err != nil {
-		return "", provider.Usage{}, err
+		return "", provider.Usage{}, "", err
 	}
 	var sb strings.Builder
 	var usage provider.Usage
+	var stop provider.StopReason
 	for ev := range stream {
 		switch e := ev.(type) {
 		case provider.EventTextDelta:
@@ -226,14 +235,15 @@ func streamText(ctx context.Context, cl provider.Client, req provider.Request) (
 			if e.Err != nil {
 				// The spend is real even when the turn errored out, so hand the
 				// usage back rather than swallowing it with the error.
-				return "", usage, e.Err
+				return "", usage, e.Stop, e.Err
 			}
+			stop = e.Stop
 		}
 	}
 	if ctx.Err() != nil {
-		return "", usage, ctx.Err()
+		return "", usage, stop, ctx.Err()
 	}
-	return sb.String(), usage, nil
+	return sb.String(), usage, stop, nil
 }
 
 // clientOf is the client ag's next turn sends with, or nil when there is no

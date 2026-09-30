@@ -10,6 +10,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -630,11 +631,15 @@ type Request struct {
 	// near the front of the cached prefix, so a side request that drops them is a
 	// guaranteed full-price miss, and the miss grows with the transcript.
 	//
-	// The contract for a client is strict: a client that cannot ENFORCE this MUST
-	// drop Tools rather than send them. A caller sets this when a tool call would
-	// be unsafe and not merely unwanted, so a client with no enforcement gives up
-	// the cache saving and keeps the safety. Discouraging a call in the prompt is
-	// not enforcement. WireTools applies that rule in one line.
+	// The contract for a client is strict: no tool call may reach the caller. A
+	// client enforces that in one of two ways. It sends an explicit tool_choice
+	// of "none" and keeps the tools (openai, codex), or it keeps the tools,
+	// sends no tool_choice, and withholds any call from the events it returns
+	// (anthropic, withholdToolCalls). A client that can do neither MUST drop
+	// Tools rather than send them. A caller sets this when a tool call would be
+	// unsafe and not merely unwanted, so a client with no enforcement gives up
+	// the cache saving and keeps the safety. Discouraging a call in the prompt
+	// is not enforcement. WireTools applies that fallback in one line.
 	ForbidTools bool
 
 	// Reasoning is "", "minimum", "low", "medium", "high", "maximum", or
@@ -696,8 +701,8 @@ type Request struct {
 // It is nil under ForbidTools, which is the fallback that field's contract
 // requires: a client with no way to stop a tool call drops the array instead of
 // advertising tools it cannot hold the model back from. A client that DOES
-// enforce the ban, by sending an explicit tool_choice of "none", ignores this
-// and sends Tools, which is where the cache saving comes from.
+// enforce the ban ignores this and sends Tools, which is where the cache saving
+// comes from. Such a client declares ClientCapabilities.EnforcesToolBan.
 func (r Request) WireTools() []Tool {
 	if r.ForbidTools {
 		return nil
@@ -783,6 +788,28 @@ type ClientCapabilities struct {
 	// cover it only asserted a provider appeared SOMEWHERE, never that the
 	// answer was right, and kept both offenders in its escape set.
 	ReasoningWire reasoningWire
+
+	// EnforcesToolBan is true for a client that keeps the conversation's tools
+	// on the wire under ForbidTools and still lets no call reach the caller. A
+	// client without it drops the tools under the flag (WireTools), so its side
+	// request diverges from the cached prefix right after the system prompt.
+	EnforcesToolBan bool
+
+	// ToolBanSendsChoice is true when the client enforces the ban with an
+	// explicit tool_choice of "none". Keeping the tools is necessary and not
+	// always sufficient: Anthropic invalidates the cached messages when
+	// tool_choice changes, so a Claude model behind such a wire, as an
+	// OpenAI-compatible gateway serves one, still misses. The anthropic client
+	// sends no tool_choice and withholds calls instead (TKT-01M2ZT3SK).
+	ToolBanSendsChoice bool
+
+	// ReasoningInPrefix is true for a wire that renders the thinking settings
+	// into the cached prompt. Anthropic invalidates the cached messages when
+	// the thinking configuration or the effort changes, so a side request that
+	// reads the conversation's cache there must send the reasoning its last
+	// turn sent. The OpenAI wires do not render it, so a side request there
+	// can turn reasoning off.
+	ReasoningInPrefix bool
 }
 
 // capabilityProvider is implemented by concrete clients that declare
@@ -824,6 +851,38 @@ func clientCaps(c Client) ClientCapabilities {
 		return cp.Capabilities()
 	}
 	return ClientCapabilities{}
+}
+
+// ToolBanKeepsCache reports whether a ForbidTools request to model on c can
+// read the prompt cache of the conversation's ordinary turns. The client must
+// keep the tools on the wire (EnforcesToolBan, read through any wrappers). A
+// client that bans the call with tool_choice (ToolBanSendsChoice) must also
+// serve a model other than Claude. An OpenAI-compatible gateway such as
+// OpenRouter can serve Claude, and it forwards tool_choice, which invalidates
+// Anthropic's cached messages.
+//
+// The thinking settings must match too, which is the caller's half:
+// ReasoningInPrefix says where they are part of the prefix.
+//
+// ⚠️ The model test reads the id, so a gateway alias that hides the family
+// passes it. The next-step offer is the one caller (TKT-01M2ZT3SM), and there
+// the cost of a miss is a suggestion at full price, not a wrong answer.
+func ToolBanKeepsCache(c Client, model string) bool {
+	caps := clientCaps(c)
+	if !caps.EnforcesToolBan {
+		return false
+	}
+	if !caps.ToolBanSendsChoice {
+		return true
+	}
+	id := strings.ToLower(model)
+	return !strings.Contains(id, "claude") && !strings.HasPrefix(id, "anthropic/")
+}
+
+// ReasoningInPrefix reads ClientCapabilities.ReasoningInPrefix through any
+// wrappers.
+func ReasoningInPrefix(c Client) bool {
+	return clientCaps(c).ReasoningInPrefix
 }
 
 // ClientMirrorsToolImages reads the client's capabilities, through any

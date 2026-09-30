@@ -33,8 +33,11 @@ Client.Name	method	func() string
 Client.Stream	method	func(ctx context.Context, req Request) (<-chan Event, error)
 ClientCapabilities	type	struct
 ClientCapabilities.ContinuesAssistantPrefill	field	bool
+ClientCapabilities.EnforcesToolBan	field	bool
 ClientCapabilities.MirrorsToolImages	field	bool
+ClientCapabilities.ReasoningInPrefix	field	bool
 ClientCapabilities.ReasoningWire	field	reasoningWire
+ClientCapabilities.ToolBanSendsChoice	field	bool
 ClientConsumeReset	func unstable	func(ctx context.Context, c Client, id string) (UsageResetResult, error)
 ClientContinuesAssistantPrefill	func	func(c Client) bool
 ClientListResets	func unstable	func(ctx context.Context, c Client) ([]UsageReset, error)
@@ -258,6 +261,7 @@ ReasoningFromModelCatalog	const unstable	ReasoningSource
 ReasoningFromModelOperator	const unstable	ReasoningSource
 ReasoningFromNothing	const unstable	ReasoningSource
 ReasoningFromSession	const unstable	ReasoningSource
+ReasoningInPrefix	func	func(c Client) bool
 ReasoningLadder	func unstable	func() string
 ReasoningLadderFor	func unstable	func(m Model) []ReasoningRung
 ReasoningLevels	var	[]string
@@ -326,6 +330,7 @@ Tool	type	struct
 Tool.Description	field	string
 Tool.Name	field	string
 Tool.Schema	field	json.RawMessage
+ToolBanKeepsCache	func	func(c Client, model string) bool
 ToolCallBlock	type	struct
 ToolCallBlock.Arguments	field	json.RawMessage
 ToolCallBlock.ID	field	string

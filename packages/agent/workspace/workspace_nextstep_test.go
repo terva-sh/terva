@@ -28,15 +28,37 @@ type nextStepClient struct {
 	reqs  []provider.Request
 	reply string
 	usage provider.Usage
+	// stop is the reason the fake reports, StopEnd when unset. StopToolUse
+	// with a reply is what a client that withheld a call returns.
+	stop provider.StopReason
+	// dropsTools makes the client one that cannot enforce the tool ban, the way
+	// Gemini and Bedrock cannot. Such a client drops the tools from a
+	// ForbidTools request, so a suggestion never reads the cached prefix.
+	dropsTools bool
+	// anthropicWire makes the client ban calls without a tool_choice and
+	// render the thinking settings into its prefix, as the anthropic client
+	// does. Unset, it is an OpenAI-style wire that bans with a tool_choice.
+	anthropicWire bool
 }
 
 func (c *nextStepClient) Name() string { return "nextstep" }
 
+func (c *nextStepClient) Capabilities() provider.ClientCapabilities {
+	return provider.ClientCapabilities{
+		EnforcesToolBan:    !c.dropsTools,
+		ToolBanSendsChoice: !c.anthropicWire,
+		ReasoningInPrefix:  c.anthropicWire,
+	}
+}
+
 func (c *nextStepClient) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
 	c.mu.Lock()
 	c.reqs = append(c.reqs, req)
-	reply, usage := c.reply, c.usage
+	reply, usage, stop := c.reply, c.usage, c.stop
 	c.mu.Unlock()
+	if stop == "" {
+		stop = provider.StopEnd
+	}
 
 	out := make(chan provider.Event, 4)
 	go func() {
@@ -46,7 +68,7 @@ func (c *nextStepClient) Stream(ctx context.Context, req provider.Request) (<-ch
 		if usage != (provider.Usage{}) {
 			out <- provider.EventUsage{Usage: usage}
 		}
-		out <- provider.EventDone{Stop: provider.StopEnd}
+		out <- provider.EventDone{Stop: stop}
 	}()
 	return out, nil
 }
@@ -87,6 +109,34 @@ func nextStepSession(t *testing.T, id, reply string) (*Workspace, *wsSession, *n
 	return w, s, cl
 }
 
+// asked is the /nextstep request. Most tests here are about the request itself,
+// and an unasked suggestion runs only after a real turn warms the prefix, so
+// they ask for one. TestAnUnaskedNextStepRunsOnlyWhereTheCacheAligns covers the
+// unasked gate.
+var asked = ctrlproto.NextStepParams{OnDemand: true}
+
+// warm gives the session an advertised tool and a model, and runs one real
+// turn, so the provider holds the prefix warm and the agent retains it.
+func warm(t *testing.T, s *wsSession) {
+	t.Helper()
+	warmOn(t, s, "fake-model")
+}
+
+// warmOn is warm with the session's model named.
+func warmOn(t *testing.T, s *wsSession, model string) {
+	t.Helper()
+	s.agent.SetTools(core.Registry{"read": nextStepFakeTool{}})
+	// The bare harness session carries no model, where a built one is seeded
+	// from the session record. The suggestion is sent on s.model, and a prefix
+	// is warm only for the model that wrote it, so an unset one correctly
+	// refuses to align with anything.
+	s.setModel("fake", model, false)
+	s.agent.SetModel(model)
+	if err := s.agent.Prompt(context.Background(), "what broke it?", nil, nil); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+}
+
 func sessionFilePath(t *testing.T, w *Workspace, id string) string {
 	t.Helper()
 	return filepath.Join(w.root, id+".jsonl")
@@ -109,7 +159,7 @@ func readSessionFile(t *testing.T, path string) []byte {
 func TestNextStepAsksAgainstTheSessionsOwnPrefix(t *testing.T) {
 	w, _, cl := nextStepSession(t, "s1", "run the tests")
 
-	got, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{})
+	got, err := w.SuggestNextStep(context.Background(), "s1", asked)
 	if err != nil {
 		t.Fatalf("suggest: %v", err)
 	}
@@ -178,7 +228,7 @@ func TestNextStepRecordsNothing(t *testing.T) {
 	before := readSessionFile(t, path)
 	beforeMsgs := len(s.agent.Messages())
 
-	if _, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{}); err != nil {
+	if _, err := w.SuggestNextStep(context.Background(), "s1", asked); err != nil {
 		t.Fatalf("suggest: %v", err)
 	}
 
@@ -209,7 +259,7 @@ func TestNextStepRecordsNothing(t *testing.T) {
 func TestNextStepRereadsTheTranscriptOnEachCall(t *testing.T) {
 	w, s, cl := nextStepSession(t, "s1", "run the tests")
 
-	if _, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{}); err != nil {
+	if _, err := w.SuggestNextStep(context.Background(), "s1", asked); err != nil {
 		t.Fatalf("first suggest: %v", err)
 	}
 	if n := len(cl.lastReq(t).Messages); n != 3 {
@@ -219,7 +269,7 @@ func TestNextStepRereadsTheTranscriptOnEachCall(t *testing.T) {
 	s.agent.SetMessages(append(s.agent.Messages(),
 		provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "fixed it, what now?"}}}))
 
-	if _, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{}); err != nil {
+	if _, err := w.SuggestNextStep(context.Background(), "s1", asked); err != nil {
 		t.Fatalf("second suggest: %v", err)
 	}
 	req := cl.lastReq(t)
@@ -244,7 +294,7 @@ func TestNextStepReturnsOneShortLine(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w, _, _ := nextStepSession(t, "s1", tc.reply)
-			got, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{})
+			got, err := w.SuggestNextStep(context.Background(), "s1", asked)
 			if err != nil {
 				t.Fatalf("suggest: %v", err)
 			}
@@ -261,7 +311,7 @@ func TestNextStepOnAnEmptySessionNeverCallsTheModel(t *testing.T) {
 	w, s, cl := nextStepSession(t, "s1", "run the tests")
 	s.agent.SetMessages(nil)
 
-	got, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{})
+	got, err := w.SuggestNextStep(context.Background(), "s1", asked)
 	if err != nil {
 		t.Fatalf("suggest: %v", err)
 	}
@@ -279,7 +329,7 @@ func TestNextStepWithoutACredentialRefuses(t *testing.T) {
 	w, s, _ := nextStepSession(t, "s1", "run the tests")
 	s.agent = coretest.NewAgent(nil, "fake-model", "", core.Registry{})
 
-	if _, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{}); err == nil {
+	if _, err := w.SuggestNextStep(context.Background(), "s1", asked); err == nil {
 		t.Fatal("a session with no client should refuse, not suggest")
 	}
 }
@@ -299,7 +349,7 @@ func TestNextStepBooksItsSpend(t *testing.T) {
 	rec := &transcripttest.Recorder{}
 	s.agent.AttachTranscriptStore(rec)
 
-	if _, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{}); err != nil {
+	if _, err := w.SuggestNextStep(context.Background(), "s1", asked); err != nil {
 		t.Fatalf("suggest: %v", err)
 	}
 	side := rec.Usage(core.UsageSideChannel)
@@ -345,7 +395,9 @@ func TestOnDemandAsksAsTheUserAsking(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			w, _, cl := nextStepSession(t, "s1", "run the tests")
+			w, s, cl := nextStepSession(t, "s1", "run the tests")
+			// Warm, so the unasked variant runs too.
+			warm(t, s)
 			if _, err := w.SuggestNextStep(context.Background(), "s1", tc.params); err != nil {
 				t.Fatalf("suggest: %v", err)
 			}
@@ -412,18 +464,7 @@ func (nextStepFakeTool) Execute(ctx context.Context, _ json.RawMessage, _ func(s
 // would align with nothing, which is the exact bug this replaces.
 func TestNextStepAlignsWithTheMainLine(t *testing.T) {
 	w, s, cl := nextStepSession(t, "s1", "run the tests")
-	s.agent.SetTools(core.Registry{"read": nextStepFakeTool{}})
-	// The bare harness session carries no model, where a built one is seeded from
-	// the session record. It matters here and nowhere else in this file: the
-	// suggestion is sent on s.model, and a prefix is warm only for the model that
-	// wrote it, so an unset one correctly refuses to align with anything.
-	s.setModel("fake", "fake-model", false)
-
-	// One real turn, so a provider now holds this prefix warm and the agent has
-	// retained what produced it.
-	if err := s.agent.Prompt(context.Background(), "what broke it?", nil, nil); err != nil {
-		t.Fatalf("prompt: %v", err)
-	}
+	warm(t, s)
 	main := cl.lastReq(t)
 	if len(main.Tools) == 0 {
 		t.Fatal("the main turn advertised no tools, so this test cannot tell alignment from the old fallback")
@@ -475,7 +516,8 @@ func TestNextStepSendsNoCacheKeyWhenUnaligned(t *testing.T) {
 	s.setModel("fake", "fake-model", false)
 
 	// No Prompt call, so the agent has dispatched nothing and holds no prefix.
-	if _, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{}); err != nil {
+	// Only an asked suggestion reaches the fallback: an unasked one does not run.
+	if _, err := w.SuggestNextStep(context.Background(), "s1", asked); err != nil {
 		t.Fatalf("suggest: %v", err)
 	}
 	req := cl.lastReq(t)
@@ -484,5 +526,182 @@ func TestNextStepSendsNoCacheKeyWhenUnaligned(t *testing.T) {
 	}
 	if req.PromptCacheKey != "" {
 		t.Errorf("unaligned, the suggestion carried cache key %q; a divergent prompt must not ride the conversation's route", req.PromptCacheKey)
+	}
+}
+
+// An unasked suggestion runs only where it reads the conversation's cache. Where
+// it cannot, it re-reads the whole transcript at full price, and on Anthropic it
+// also re-writes it: 73 percent of a long session's spend (TKT-01M213C1). The
+// user asked for nothing, so nothing runs and nothing is spent.
+//
+// Each case also asks on demand, with the same session. That call must reach
+// the client, so the silence of the unasked call is the gate and not a fixture
+// that cannot call at all.
+func TestAnUnaskedNextStepRunsOnlyWhereTheCacheAligns(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		warm          bool
+		dropsTools    bool
+		anthropicWire bool
+		model         string
+		runs          bool
+	}{
+		{name: "aligned", warm: true, runs: true},
+		{name: "no warm prefix", warm: false},
+		{name: "a client that drops the tools", warm: true, dropsTools: true},
+		// A gateway can serve Claude on a wire that keeps the tools, and the
+		// ban's tool_choice still invalidates Anthropic's cached messages.
+		{name: "a claude model behind a gateway", warm: true, model: "anthropic/claude-opus-4.8"},
+		// The anthropic wire bans the call without a tool_choice, so Claude
+		// keeps its cache there (TKT-01M2ZT3SK).
+		{name: "a claude model on the anthropic wire", warm: true, anthropicWire: true, model: "claude-opus-5-5", runs: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, s, cl := nextStepSession(t, "s1", "run the tests")
+			cl.mu.Lock()
+			cl.dropsTools = tc.dropsTools
+			cl.anthropicWire = tc.anthropicWire
+			cl.usage = provider.Usage{InputTokens: 900, OutputTokens: 7}
+			cl.mu.Unlock()
+			if tc.warm {
+				model := tc.model
+				if model == "" {
+					model = "fake-model"
+				}
+				warmOn(t, s, model)
+			}
+			rec := &transcripttest.Recorder{}
+			s.agent.AttachTranscriptStore(rec)
+			before := cl.calls()
+
+			got, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{})
+			if err != nil {
+				t.Fatalf("suggest: %v", err)
+			}
+			calls := cl.calls() - before
+			booked := len(rec.Usage(core.UsageSideChannel))
+			if tc.runs {
+				if calls != 1 || got.Line != "run the tests" || booked != 1 {
+					t.Fatalf("aligned, the unasked suggestion made %d call(s), booked %d, and returned %q; want one call, one booking, and the line",
+						calls, booked, got.Line)
+				}
+			} else if calls != 0 || got.Line != "" || booked != 0 {
+				t.Fatalf("the unasked suggestion made %d call(s), booked %d, and returned %q; it cannot read the cache, so it must not run",
+					calls, booked, got.Line)
+			}
+
+			before = cl.calls()
+			if _, err := w.SuggestNextStep(context.Background(), "s1", asked); err != nil {
+				t.Fatalf("suggest on demand: %v", err)
+			}
+			if n := cl.calls() - before; n != 1 {
+				t.Fatalf("/nextstep made %d call(s); a suggestion the user asked for runs everywhere", n)
+			}
+		})
+	}
+}
+
+// Where the thinking settings are part of the cached prefix, an aligned
+// suggestion sends the reasoning the last turn sent. Anthropic invalidates the
+// cached messages when the thinking configuration or the effort changes, so a
+// suggestion with reasoning off would re-write the whole transcript
+// (TKT-01M2ZT3SK). Its cap rises so the model can think and still write the
+// line.
+//
+// The other wires keep reasoning off at the small cap, aligned or not, and the
+// anthropic wire keeps it off when the prefix is cold. Each case compares with
+// what the main turn sent, and the level is set away from the default so a
+// suggestion that sent the default would fail.
+func TestNextStepSendsTheTurnsReasoningWhereItIsPartOfThePrefix(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		anthropicWire bool
+		warm          bool
+		matches       bool
+	}{
+		{name: "anthropic wire, aligned", anthropicWire: true, warm: true, matches: true},
+		{name: "anthropic wire, cold", anthropicWire: true},
+		{name: "openai wire, aligned", warm: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, s, cl := nextStepSession(t, "s1", "run the tests")
+			cl.mu.Lock()
+			cl.anthropicWire = tc.anthropicWire
+			cl.mu.Unlock()
+			s.agent.SetReasoning("high")
+			if tc.warm {
+				warm(t, s)
+			} else {
+				s.setModel("fake", "fake-model", false)
+			}
+			if _, err := w.SuggestNextStep(context.Background(), "s1", asked); err != nil {
+				t.Fatalf("suggest: %v", err)
+			}
+			req := cl.lastReq(t)
+			if tc.matches {
+				cl.mu.Lock()
+				main := cl.reqs[len(cl.reqs)-2]
+				cl.mu.Unlock()
+				if main.Reasoning != "high" {
+					t.Fatalf("the main turn sent reasoning %q, so this case proves nothing", main.Reasoning)
+				}
+				if req.Reasoning != main.Reasoning || req.ReasoningSet != main.ReasoningSet {
+					t.Fatalf("reasoning = %q, set = %v; the main turn sent %q, %v, and any difference invalidates the cached messages",
+						req.Reasoning, req.ReasoningSet, main.Reasoning, main.ReasoningSet)
+				}
+				if req.MaxTokens != nextStepThinkingMaxTokens {
+					t.Fatalf("MaxTokens = %d, want %d: the model thinks before the line", req.MaxTokens, nextStepThinkingMaxTokens)
+				}
+				if len(req.Tools) == 0 || !req.ForbidTools {
+					t.Fatalf("%d tools, ForbidTools %v; an aligned suggestion keeps the tools and bans the call", len(req.Tools), req.ForbidTools)
+				}
+				return
+			}
+			if req.Reasoning != "" || !req.ReasoningSet || req.MaxTokens != nextStepMaxTokens {
+				t.Fatalf("reasoning = %q, set = %v, MaxTokens = %d; want an explicit off at %d",
+					req.Reasoning, req.ReasoningSet, req.MaxTokens, nextStepMaxTokens)
+			}
+		})
+	}
+}
+
+// A model that answers with a tool call writes its text as the lead-in to that
+// call. Under the ban the client withholds the call and reports StopToolUse,
+// and the lead-in must not reach the composer as the user's next line. The
+// same text with an ordinary stop is offered, so the fixture's text is a line
+// the surface would show.
+func TestNextStepOffersNothingWhenTheModelTriedACall(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		stop provider.StopReason
+		want string
+	}{
+		{name: "the model answered", stop: provider.StopEnd, want: "Let me read main.go first."},
+		{name: "the model tried a call", stop: provider.StopToolUse, want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, s, cl := nextStepSession(t, "s1", "Let me read main.go first.")
+			cl.mu.Lock()
+			cl.anthropicWire = true
+			cl.usage = provider.Usage{InputTokens: 900, OutputTokens: 7}
+			cl.mu.Unlock()
+			warm(t, s)
+			cl.mu.Lock()
+			cl.stop = tc.stop
+			cl.mu.Unlock()
+			rec := &transcripttest.Recorder{}
+			s.agent.AttachTranscriptStore(rec)
+
+			got, err := w.SuggestNextStep(context.Background(), "s1", ctrlproto.NextStepParams{})
+			if err != nil {
+				t.Fatalf("suggest: %v", err)
+			}
+			if got.Line != tc.want {
+				t.Fatalf("line = %q, want %q", got.Line, tc.want)
+			}
+			if n := len(rec.Usage(core.UsageSideChannel)); n != 1 {
+				t.Fatalf("%d side-channel bookings, want 1: the call spent either way", n)
+			}
+		})
 	}
 }

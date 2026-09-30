@@ -129,7 +129,7 @@ func (c *openaiClient) Name() string {
 // can see images is the separate per-model capability the loop checks
 // alongside this.
 func (c *openaiClient) Capabilities() ClientCapabilities {
-	return ClientCapabilities{MirrorsToolImages: true, ReasoningWire: reasoningWireOpenAICompat}
+	return ClientCapabilities{MirrorsToolImages: true, ReasoningWire: reasoningWireOpenAICompat, EnforcesToolBan: true, ToolBanSendsChoice: true}
 }
 
 // ---- wire types ----

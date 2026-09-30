@@ -47,6 +47,24 @@ const (
 	// see the request below. Leave the two together.
 	nextStepMaxTokens = 200
 
+	// nextStepThinkingMaxTokens bounds a suggestion that sends the
+	// conversation's own reasoning, which it must where the thinking settings
+	// are part of the cached prefix (provider.ReasoningInPrefix). The model
+	// thinks before the line, and on an adaptive model the cap covers both, so
+	// 200 would end the call inside its thinking with no line. max_tokens is
+	// not part of the prefix, so this costs no cache.
+	//
+	// ⚠️ This is not the bound on a model that thinks to a fixed budget
+	// (Claude 4.5 and earlier). The anthropic client raises max_tokens above
+	// the level's budget, so the bound there is that budget plus 1024 answer
+	// tokens: 9,216 at medium, 17,408 at high, 33,792 at maximum. The budget
+	// is part of the cached prompt, so a smaller one would miss the cache.
+	// The level is the one the user chose for their own turns, and a budget
+	// is a ceiling, not a spend. No budget model has been measured here: the
+	// 2026-09-30 probe ran the adaptive claude-sonnet-5, which spent 24 output
+	// tokens at medium (TKT-01M2ZT3SK).
+	nextStepThinkingMaxTokens = 4096
+
 	// nextStepMaxRunes bounds what reaches the composer. The token cap governs
 	// spend; this governs the promise, and they are not the same job — a model
 	// that ignores "one line" must not be able to push a paragraph into the
@@ -114,8 +132,9 @@ var _ ctrlproto.NextStepController = (*Workspace)(nil)
 // that should surface. Callers show nothing and must not treat it as an error.
 //
 // p.OnDemand switches the ask to the variant for a suggestion the user asked
-// for. It changes the question's framing and nothing else — same cap, same
-// reasoning-off, same tool ban, same nothing-recorded.
+// for. It changes the question's framing, and one more thing: an unasked
+// suggestion runs only where it can read the conversation's cache
+// (nextStepAligns), and an asked one runs everywhere.
 func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlproto.NextStepParams) (ctrlproto.NextStepResult, error) {
 	s, err := w.resolve(sess)
 	if err != nil {
@@ -163,8 +182,39 @@ func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlprot
 	// never sees must not write that state on the session's behalf.
 	frame := ag.FramePreview()
 	system, tools, cacheKey, aligned := ag.DispatchedPrefix(cl, model)
+	// 🚨 An unasked suggestion that cannot read the conversation's cache
+	// re-reads the whole transcript at full price, and on Anthropic re-writes
+	// it: measured at 73 percent of a long session (TKT-01M213C1, 2026-09-20).
+	// The user asked for nothing, so it does not run. /nextstep still does,
+	// because a typed command is the user choosing to pay.
+	if !p.OnDemand && !nextStepAligns(cl, model, aligned) {
+		return ctrlproto.NextStepResult{}, nil
+	}
 	if !aligned {
 		system, tools, cacheKey = frame.SystemText(), nil, ""
+	}
+	// Reasoning OFF, explicitly — ReasoningSet is what makes it beat the
+	// model's own default rather than merely failing to ask for thinking.
+	//
+	// Two reasons, and the first is not a preference. On OpenAI's reasoning
+	// path the cap is sent as max_completion_tokens, which counts reasoning
+	// tokens too, so nextStepMaxTokens would be spent thinking and the call
+	// would return an empty string — a feature that looks enabled and never
+	// fires. The second is that the user is sitting in front of an idle
+	// composer: a suggestion that arrives after a long think has missed the
+	// moment it was for.
+	//
+	// 🔑 Except where the thinking settings are part of the cached prefix.
+	// Anthropic invalidates the cached messages when the thinking configuration
+	// or the effort changes, so an aligned suggestion there with reasoning off
+	// re-writes the whole transcript: 73 percent of one long session
+	// (TKT-01M2ZT3SK). There it sends the level the last turn sent, with a cap
+	// that leaves room to think.
+	reasoning, reasoningSet, maxTokens := "", true, nextStepMaxTokens
+	if aligned && provider.ReasoningInPrefix(cl) {
+		if r, set, ok := ag.DispatchedReasoning(cl, model); ok {
+			reasoning, reasoningSet, maxTokens = r, set, nextStepThinkingMaxTokens
+		}
 	}
 	body := i18n.P("nextstep.ask", nextStepBody)
 	if p.OnDemand {
@@ -172,28 +222,17 @@ func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlprot
 	}
 	msgs = append(msgs, nextStepMessage(NextStepTag+" "+body))
 
-	out, usage, err := streamText(ctx, cl, provider.Request{
+	out, usage, stop, err := streamTextStop(ctx, cl, provider.Request{
 		Model:     model,
 		System:    system,
 		Messages:  msgs,
-		MaxTokens: nextStepMaxTokens,
+		MaxTokens: maxTokens,
 		// Empty unless the prefix aligned, which is what keeps a divergent
 		// prompt off the conversation's cache route.
 		PromptCacheKey:   cacheKey,
 		EphemeralContext: frame.VolatileText(),
-		// Reasoning OFF, explicitly — ReasoningSet is what makes it beat the
-		// model's own default rather than merely failing to ask for thinking.
-		//
-		// Two reasons, and the first is not a preference. On OpenAI's reasoning
-		// path the cap is sent as max_completion_tokens, which counts reasoning
-		// tokens too, so nextStepMaxTokens would be spent thinking and the call
-		// would return an empty string — a feature that looks enabled and never
-		// fires. (Anthropic self-corrects, raising the cap above its thinking
-		// budget; nothing guarantees the next provider does either.) The second
-		// is that the user is sitting in front of an idle composer: a suggestion
-		// that arrives after a long think has missed the moment it was for.
-		Reasoning:    "",
-		ReasoningSet: true,
+		Reasoning:        reasoning,
+		ReasoningSet:     reasoningSet,
 		// The tools the last real dispatch advertised, and a ban on calling any
 		// of them. A suggestion is a sentence the user may choose to send; it
 		// must not be able to act, and least of all while they are away from the
@@ -206,9 +245,10 @@ func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlprot
 		// the entire transcript at full price. Measured at a fifth to a third of
 		// two whole sessions (TKT-01M213C1T).
 		//
-		// ForbidTools moves the ban from "do not advertise" to "may not call",
-		// which each client either enforces with an explicit tool_choice or
-		// honours by dropping the array and giving up the saving. Set
+		// ForbidTools moves the ban from "do not advertise" to "may not call".
+		// Each client enforces it with an explicit tool_choice, or by withholding
+		// any call from its stream, or honours it by dropping the array and
+		// giving up the saving. Set
 		// unconditionally, including when tools is empty: the ban is a property
 		// of this request, not a consequence of what happens to be in the slice.
 		Tools:       tools,
@@ -221,7 +261,24 @@ func (w *Workspace) SuggestNextStep(ctx context.Context, sess string, p ctrlprot
 	if err != nil {
 		return ctrlproto.NextStepResult{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "suggest a next step: %v", err)
 	}
+	// A model that answered with a call wrote its text as the lead-in to that
+	// call, such as "Let me read main.go first". The client withheld the call,
+	// and the lead-in is not a line the user would send, so nothing is
+	// offered. The spend is already booked above.
+	if stop == provider.StopToolUse {
+		return ctrlproto.NextStepResult{}, nil
+	}
 	return ctrlproto.NextStepResult{Line: firstLine(out)}, nil
+}
+
+// nextStepAligns reports whether a suggestion reads the conversation's cached
+// prefix: the last real dispatch was to this client and model, and the tool
+// ban keeps that cache on this client and model. A client that drops the tools
+// diverges right after the system prompt, and a Claude model invalidates the
+// cached messages under the ban, so there every suggestion pays for the whole
+// transcript.
+func nextStepAligns(cl provider.Client, model string, aligned bool) bool {
+	return aligned && provider.ToolBanKeepsCache(cl, model)
 }
 
 // firstLine reduces a completion to the one line that may reach the composer:
