@@ -117,29 +117,7 @@ func (w *Workspace) taskList(sessionID string) *ctrlproto.TaskList {
 	snaps := w.swarm.SnapshotFor(sessionID)
 	out := make([]ctrlproto.TaskInfo, 0, len(snaps))
 	for _, s := range snaps {
-		out = append(out, ctrlproto.TaskInfo{
-			ID:               s.ID,
-			Task:             s.Task,
-			Status:           string(s.Status),
-			Activity:         s.Activity,
-			Turns:            s.Turns,
-			ToolCalls:        s.ToolCalls,
-			LastEvent:        ctrlTimeString(s.LastEvent),
-			Model:            s.Model,
-			Provider:         s.Provider,
-			Reasoning:        s.Reasoning,
-			Persona:          s.Persona,
-			Backend:          s.Backend,
-			Dir:              s.Dir,
-			Started:          ctrlTimeString(s.Started),
-			Finished:         ctrlTimeString(s.Finished),
-			Err:              s.Err,
-			CostUSD:          s.CostUSD,
-			Deliverable:      s.Deliverable,
-			DeliverableError: s.DeliverableError,
-			Tail:             s.Tail,
-			Lines:            s.Lines,
-		})
+		out = append(out, taskInfo(s))
 	}
 	// Advertise the spawn capability so the board's swarm lane can offer a
 	// backend picker (native is implicit; foreign backends are listed even when
@@ -148,6 +126,33 @@ func (w *Workspace) taskList(sessionID string) *ctrlproto.TaskList {
 	// terva by design (swarm.Archive), and a count is a read path — the one
 	// that grows into a list, then into "open it just to look".
 	return &ctrlproto.TaskList{Tasks: out, Backends: worker.Names(), WorkersEnabled: config.ExternalWorkersEnabled()}
+}
+
+// taskInfo is the tasks pane's row for one swarm agent.
+func taskInfo(s swarm.AgentSnapshot) ctrlproto.TaskInfo {
+	return ctrlproto.TaskInfo{
+		ID:               s.ID,
+		Task:             s.Task,
+		Status:           string(s.Status),
+		Activity:         s.Activity,
+		Turns:            s.Turns,
+		ToolCalls:        s.ToolCalls,
+		LastEvent:        ctrlTimeString(s.LastEvent),
+		Model:            s.Model,
+		Provider:         s.Provider,
+		Reasoning:        s.Reasoning,
+		Persona:          s.Persona,
+		Backend:          s.Backend,
+		Dir:              s.Dir,
+		Started:          ctrlTimeString(s.Started),
+		Finished:         ctrlTimeString(s.Finished),
+		Err:              s.Err,
+		CostUSD:          s.CostUSD,
+		Deliverable:      s.Deliverable,
+		DeliverableError: s.DeliverableError,
+		Tail:             s.Tail,
+		Lines:            s.Lines,
+	}
 }
 
 // hasTasks reports whether the tasks pane should be offered to this session:

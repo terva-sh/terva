@@ -576,6 +576,18 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 		}
 	})
 	ag.AddEventObserver(func(ev core.AgentEvent) { build.FanoutAgentEvent(extMgr, ev) })
+	// A talkoot member's sidebar names the tool its turn runs. Only tool and
+	// turn events reach the workspace, so a text delta costs one type switch.
+	ag.AddEventObserver(func(ev core.AgentEvent) {
+		switch e := ev.(type) {
+		case core.EvToolCall:
+			s.ws.talkootActivity(s.id, e.ID, e.Name)
+		case core.EvToolResult:
+			s.ws.talkootActivity(s.id, e.ID, "")
+		case core.EvTurnEnd, core.EvDone:
+			s.ws.talkootActivity(s.id, "", "")
+		}
+	})
 	ag.AddEventObserver(func(ev core.AgentEvent) { build.ObserveAgentEventForHooks(hookEng, ev) })
 	// The queue is mirrored, not tracked, so every mutation has to announce
 	// itself. The host performs — and therefore announces — all of them but

@@ -661,6 +661,74 @@ default**; `--web-stage` mounts it at `/stage/`, alongside the control panel at
   `docs/proposals/stage-surface.md`: the session model, the interaction grammar,
   the content library, and the two-app split.
 
+## Talkoot: watching a team
+
+The web panel is the one place to watch a talkoot, a persistent team of agents
+(see `docs/proposals/talkoot.md`). There is no terminal
+view. A command-line caller can act on a talkoot through `terva ctl`, and it
+does not render the room.
+
+The view appears when the daemon runs with `talkoot_enabled` set in
+`$TERVA_HOME/config.json`. The **⁂** button in the header opens it.
+
+- **Your name.** The connection carries no identity, so the view asks for the
+  name the room records beside your posts, answers, and pauses. The name
+  takes effect when you press Enter or leave the field, and the browser
+  keeps it. It names who acted. The `steer` capability decides who may act.
+- **The sidebar.** The room comes first, then each member with its state:
+  idle, working, waiting for you, or paused. A working native member also
+  names the tool it runs, as in "running grep". A count shows the messages a
+  member sent you since you last opened its view. The coordinator is pinned.
+- **Marks.** Each member has a mark, a small shape in its own colour. It
+  appears in the sidebar, beside the member's messages, and on its inbox
+  cards. A member without one takes its persona's mark or accent colour, and
+  two members of one persona take different shapes. A member added without
+  a shape moves no one's mark. A shape you set, a reorder, or a removal can
+  move another member's default. A mark you set never moves.
+- **The member card.** **Member card** in a member's view opens the one place
+  to see and change it. The card has three sections:
+  - **Look:** the title, and pickers for the shape and the colour. **Reset**
+    returns the mark to its default.
+  - **Instructions:** the persona, with its charter and the work it suits.
+  - **Driver and limits:** the driver, the model or tier, the posture, the
+    workspace, the tools, and the daily budget and turns.
+
+  **Save changes** sends only the fields you changed, and it applies at once.
+  The room records each edit as a roster line in your name. An empty field
+  returns the member to its default. The card also pauses and removes the
+  member. A removal asks twice.
+- **The main view.** A new team opens on the coordinator's conversation with
+  you. A member's view shows only your exchanges with it, and another
+  person's exchanges show in the room. Until you set a name, a member's view
+  shows its exchanges with every person. The room shows every message in
+  order, and it collapses a run of messages between two members into one
+  line that expands in place.
+- **References.** A `path:` or `note:` reference under a message opens in
+  place when you click it. A `path:` reads from the home checkout, and a
+  `note:` from the talkoot's notes. Neither follows a link out. A long file
+  shows its first 256 KiB. Other references, such as a `ticket:`, stay labels.
+- **The composer.** A post with no `@member` reaches the member whose view is
+  open, or the coordinator in the room. Name a member with `@id` to reach it.
+- **The inbox.** Questions, tool approvals, roster proposals, and a new team's
+  kickoff wait above the log. An answer to a question or an approval also
+  resolves the card in the member's own session. A question card says that
+  the room keeps your answer, and that a teammate may see it.
+- **Proposal cards.** A roster proposal lists each member it touches, field by
+  field, before and after. It marks each authority field, and it flags each
+  one that grants more. A member that joins shows in full, and so does a new
+  persona. A change of marks, such as a theme, shows each mark before and
+  after, side by side.
+- **Pause and resume.** Pause one member, one chain from a message, or the
+  whole team.
+
+**New team** creates a talkoot from a template. Pick a template, name the team,
+and optionally set a daily budget. **Preview** shows every member's driver,
+model, posture, workspace, and limits. A member that this machine cannot run,
+such as one whose driver is not installed, must be dropped before **Create the
+team** is enabled. A template from the repository needs a trusted workspace.
+[controllers.md](controllers.md) documents the `talkoot.templates`,
+`talkoot.preview`, and `talkoot.create` verbs behind the form.
+
 ## Building the client
 
 The web client is a Preact + Vite **multi-page app (MPA)** under

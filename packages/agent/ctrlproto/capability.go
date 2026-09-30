@@ -156,6 +156,15 @@ func (m Method) Capabilities() Capability {
 // apart from "nobody has looked at it yet" — those are the same value and very
 // different facts.
 var writeOnlyMethods = map[Method]bool{
+	// 🔑 talkoot.ref changes nothing, and it is still not read-only. It reads
+	// any file in the home checkout by its path, and no read-only verb returns
+	// a file's contents.
+	MethodTalkootRef: true,
+	// 🔑 talkoot.worker changes nothing either. It returns a worker's
+	// transcript tail, which holds tool output such as a file's contents. The
+	// tasks surface is no precedent: its list is scoped to the caller's own
+	// session, and a talkoot's workers are in no caller's session.
+	MethodTalkootWorker: true,
 	// Classified at the 2026-09 rebase: the model catalog and tier edits, and a
 	// composer draft, mutate config or session state and reach no provider.
 	MethodModelAdd: true, MethodModelHide: true, MethodModelTiersSet: true,

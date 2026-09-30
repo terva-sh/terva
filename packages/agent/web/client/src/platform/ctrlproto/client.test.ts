@@ -107,7 +107,7 @@ describe('ctrlproto Client', () => {
         // daemon's base hello, so asking costs nothing when it is not served,
         // while not asking makes the Secrets tab's one call fail with "method
         // group not negotiated" on a daemon that WOULD have served it.
-        groups: ['conversation', 'session', 'control', 'auth', 'secrets'],
+        groups: ['conversation', 'session', 'control', 'auth', 'secrets', 'talkoot'],
         features: ['images', 'image-data', 'resolve-events', 'workspace-events', 'history-window'],
       },
     })

@@ -165,7 +165,24 @@ func (w *Workspace) proposalPreview(id string, text []byte, ops []talkoot.Op, d 
 	if len(changes) == 0 {
 		return nil, nil, talkoot.Roster{}, errProposalChangesNothing
 	}
+	withMarks(changes, cur, nr)
 	return changes, next, nr, nil
+}
+
+// withMarks records each changed member's resolved mark in each roster. A
+// default depends on the other members of a persona, so only the daemon,
+// which holds both rosters, can say what a reset or a new member will look
+// like.
+func withMarks(changes []talkoot.MemberChange, before, after talkoot.Roster) {
+	was, will := talkootMarks(before.Members), talkootMarks(after.Members)
+	for i := range changes {
+		if m, ok := was[changes[i].Member]; ok && changes[i].Before != nil {
+			changes[i].MarkBefore = &m
+		}
+		if m, ok := will[changes[i].Member]; ok && changes[i].After != nil {
+			changes[i].MarkAfter = &m
+		}
+	}
 }
 
 // pendingProposals returns the talkoot's pending proposals. A record that
@@ -458,6 +475,7 @@ func wireChanges(cs []talkoot.MemberChange) []ctrlproto.TalkootMemberChange {
 		out = append(out, ctrlproto.TalkootMemberChange{
 			Member: c.Member, Before: wireEntry(c.Before), After: wireEntry(c.After),
 			Widens: talkoot.Widens(c), Authority: talkoot.AuthorityChanges(c),
+			MarkBefore: wireMark(c.MarkBefore), MarkAfter: wireMark(c.MarkAfter),
 		})
 	}
 	return out
@@ -468,7 +486,7 @@ func wireEntry(m *talkoot.Member) *ctrlproto.TalkootMemberEntry {
 		return nil
 	}
 	return &ctrlproto.TalkootMemberEntry{
-		ID: m.ID, Role: m.Role, Title: m.Title, Persona: m.Persona, Driver: m.Driver, Model: m.Model,
+		ID: m.ID, Role: m.Role, Title: m.Title, Mark: wireMark(m.Mark), Persona: m.Persona, Driver: m.Driver, Model: m.Model,
 		Tier: m.Tier, Posture: m.Posture, Workspace: m.Workspace, Reviewer: m.Reviewer,
 		BudgetUSDPerDay: m.BudgetUSDPerDay, TurnsPerDay: m.TurnsPerDay, Tools: m.Tools,
 	}

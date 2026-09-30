@@ -2742,6 +2742,8 @@ export type Verb =
   | 'talkoot.propose'
   | 'talkoot.resume'
   | 'talkoot.recruit'
+  | 'talkoot.ref'
+  | 'talkoot.worker'
   | 'talkoot.room'
   | 'talkoot.templates'
   | 'talkoot.update'
@@ -2833,8 +2835,16 @@ export interface TalkootMember {
   reviewer?: boolean
   budget_usd_per_day?: number
   turns_per_day?: number
+  // How long a worker member's process stays up with no turn, such as 30m,
+  // or off. Absent means 30 minutes.
+  idle_stop?: string
   // Narrows the member to these tools; absent is the posture's full set.
   tools?: string[]
+  // The member's whole mark, with the defaults filled in. own_mark is what the
+  // roster sets, and absent means the member takes the default. A daemon from
+  // before marks sends neither.
+  mark?: TalkootMark
+  own_mark?: TalkootMark
   session?: string
   status: TalkootMemberStatus
 }
@@ -2843,9 +2853,15 @@ export interface TalkootMember {
 export interface TalkootMemberStatus {
   member: string
   working?: boolean
+  // The tool the member's turn runs now. Empty between tools, and for a
+  // driver that reports no tool events.
+  tool?: string
   paused?: string
   spend_usd?: number
   turns?: number
+  // The member's worker process stopped for idleness. The next envelope
+  // revives it.
+  idle?: boolean
 }
 
 // talkoot.create takes a whole talkoot.md in `text`, or a template filled in
@@ -2886,6 +2902,30 @@ export interface TalkootPreviewParams {
   drop?: string[]
 }
 
+// talkoot.ref reads the file a path: or note: reference names. `size` is the
+// file's size, and `truncated` is set when `text` is only its start. `binary`
+// is set for a file that is not UTF-8 text, and `text` is then empty.
+export interface TalkootOpenRefParams {
+  id: string
+  ref: string
+}
+
+// talkoot.worker reports the swarm agent a worker member is seated on, as a
+// TaskInfo. The tasks surface cannot: its list is scoped to the session
+// asking, and a talkoot's workers belong to the talkoot's address.
+export interface TalkootWorkerParams {
+  id: string
+  member: string
+}
+
+export interface TalkootRefText {
+  ref: string
+  text: string
+  size: number
+  truncated?: boolean
+  binary?: boolean
+}
+
 // The roster a template would become. `text` is what create writes, and
 // create needs `digest` back. Create refuses while `problems` is not empty or
 // a member is unavailable.
@@ -2900,10 +2940,18 @@ export interface TalkootPreview {
   digest: string
 }
 
+// A member's shape and colour. The shape is one of MARK_SHAPES, and the
+// colour is #RRGGBB.
+export interface TalkootMark {
+  shape?: string
+  color?: string
+}
+
 export interface TalkootRosterMember {
   id: string
   role: string
   title?: string
+  mark?: TalkootMark
   persona?: string
   driver: string
   model?: string
@@ -2913,6 +2961,9 @@ export interface TalkootRosterMember {
   reviewer?: boolean
   budget_usd_per_day?: number
   turns_per_day?: number
+  // How long a worker member's process stays up with no turn, such as 30m,
+  // or off. Absent means 30 minutes.
+  idle_stop?: string
   tools?: string[]
 }
 
@@ -2921,10 +2972,13 @@ export interface TalkootPreviewMember extends TalkootRosterMember {
   problem?: string
 }
 
+// TalkootUpdateParams holds `text`, the whole talkoot.md, or `ops`, a
+// person's field edit applied at once to the roster as it is now.
 export interface TalkootUpdateParams {
   id: string
   by: string
-  text: string
+  text?: string
+  ops?: TalkootOp[]
 }
 
 // An empty `to` reaches the coordinator.
@@ -3100,11 +3154,13 @@ export interface TalkootKickoffParams {
 
 // TalkootOp is one roster change: `add` a member, `edit` its fields, `remove`
 // it, or `look`, which sets look fields only. `set` holds fields by their
-// roster names, and a null or empty value removes one.
+// roster names, and a null or empty value removes one. `tools` takes a list
+// of names, and `mark` a shape and a colour.
+export type TalkootOpValue = string | number | boolean | null | string[] | TalkootMark
 export interface TalkootOp {
   op: 'add' | 'edit' | 'remove' | 'look'
   member: string
-  set?: Record<string, string | number | boolean | null>
+  set?: Record<string, TalkootOpValue>
 }
 
 // TalkootMemberEntry is a member as its roster writes it.
@@ -3112,6 +3168,7 @@ export interface TalkootMemberEntry {
   id: string
   role: string
   title?: string
+  mark?: TalkootMark
   persona?: string
   driver?: string
   model?: string
@@ -3121,6 +3178,9 @@ export interface TalkootMemberEntry {
   reviewer?: boolean
   budget_usd_per_day?: number
   turns_per_day?: number
+  // How long a worker member's process stays up with no turn, such as 30m,
+  // or off. Absent means 30 minutes.
+  idle_stop?: string
   // Narrows the member to these tools; absent is the posture's full set.
   tools?: string[]
 }
@@ -3133,6 +3193,11 @@ export interface TalkootMemberChange {
   after?: TalkootMemberEntry
   widens?: string[]
   authority?: string[]
+  // The member's whole marks, defaults filled in, before and after. A reset
+  // leaves no mark in `after`, so draw these. A daemon from before them
+  // sends neither.
+  mark_before?: TalkootMark
+  mark_after?: TalkootMark
 }
 
 // TalkootProposal is a roster change that waits for a person. Only
@@ -3337,6 +3402,8 @@ export interface VerbParams {
   'talkoot.decide': TalkootDecideParams
   'talkoot.kickoff': TalkootKickoffParams
   'talkoot.preview': TalkootPreviewParams
+  'talkoot.ref': TalkootOpenRefParams
+  'talkoot.worker': TalkootWorkerParams
 }
 
 // Card revision history. Every write to a card goes through cards.edit — the

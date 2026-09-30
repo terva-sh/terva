@@ -123,10 +123,12 @@ talkoot.preview	talkoot
 talkoot.proposals	talkoot
 talkoot.propose	talkoot
 talkoot.recruit	talkoot
+talkoot.ref	talkoot
 talkoot.resume	talkoot
 talkoot.room	talkoot
 talkoot.templates	talkoot
 talkoot.update	talkoot
+talkoot.worker	talkoot
 tenants.list	tenants
 tenants.resume	tenants
 tenants.suspend	tenants

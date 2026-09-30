@@ -86,6 +86,7 @@ var sessionMayReachWorkspace = map[string]string{
 	// session to a member.
 	"talkootPostureOf":  "the settings pane refuses an approval change on a talkoot member, because the member's roster owns its posture",
 	"talkootTurn":       "a talkoot member's turn reports its spend to the router, which frees the member's working slot",
+	"talkootActivity":   "a talkoot member's tool events name the tool its turn runs, for the team's sidebar",
 	"narrowMemberTools": "a rebuild narrows a seated member to its roster tools list, or a rebuild would hand back every tool the list removed",
 	"talkootSeatOf":     "a card that opens stamps the talkoot and member of the seat, so the card reaches that talkoot's inbox",
 	"talkootCardEvent":  "a card that opens or closes tells the watchers of its talkoot, so the inbox resolves with the member's own view",

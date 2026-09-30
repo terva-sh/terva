@@ -674,6 +674,12 @@ var dispatch = map[Method]handler{
 	MethodTalkootPreview: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootPreviewParams) (TalkootPreview, error) {
 		return c.PreviewTalkoot(ctx, p)
 	}),
+	MethodTalkootRef: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootOpenRefParams) (TalkootRefText, error) {
+		return c.OpenTalkootRef(ctx, p)
+	}),
+	MethodTalkootWorker: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootWorkerParams) (TaskInfo, error) {
+		return c.TalkootWorker(ctx, p)
+	}),
 	MethodTalkootCreate: ask(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootCreateParams) (TalkootView, error) {
 		return c.CreateTalkoot(ctx, p)
 	}),

@@ -265,6 +265,18 @@ func (s *Service) PreviewTalkoot(ctx context.Context, p ctrlproto.TalkootPreview
 	return r, err
 }
 
+func (s *Service) OpenTalkootRef(ctx context.Context, p ctrlproto.TalkootOpenRefParams) (ctrlproto.TalkootRefText, error) {
+	var r ctrlproto.TalkootRefText
+	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootRef, p, &r)
+	return r, err
+}
+
+func (s *Service) TalkootWorker(ctx context.Context, p ctrlproto.TalkootWorkerParams) (ctrlproto.TaskInfo, error) {
+	var r ctrlproto.TaskInfo
+	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootWorker, p, &r)
+	return r, err
+}
+
 func (s *Service) CreateTalkoot(ctx context.Context, p ctrlproto.TalkootCreateParams) (ctrlproto.TalkootView, error) {
 	var r ctrlproto.TalkootView
 	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootCreate, p, &r)

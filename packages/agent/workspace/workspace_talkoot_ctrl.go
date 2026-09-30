@@ -7,6 +7,9 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/look"
+	"terva.sh/terva/packages/agent/persona"
+	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/agent/talkoot"
 )
 
@@ -47,6 +50,55 @@ func (w *Workspace) TalkootRoom(ctx context.Context, p ctrlproto.TalkootRoomPara
 	return out, nil
 }
 
+// OpenTalkootRef reads the file a path: or note: reference names, for the
+// view to show in place. A path: resolves in the roster's home checkout, and
+// a note in the talkoot's notes. Neither follows a link out.
+func (w *Workspace) OpenTalkootRef(ctx context.Context, p ctrlproto.TalkootOpenRefParams) (ctrlproto.TalkootRefText, error) {
+	run, err := w.talkootRunOf(p.ID)
+	if err != nil {
+		return ctrlproto.TalkootRefText{}, talkootWireErr(err, ctrlproto.CodeInternal)
+	}
+	t, err := talkoot.ReadRef(run.dir, run.roster.Load().Home, p.Ref)
+	if err != nil {
+		return ctrlproto.TalkootRefText{}, talkootWireErr(err, ctrlproto.CodeBadRequest)
+	}
+	return ctrlproto.TalkootRefText{Ref: t.Ref, Text: t.Text, Size: t.Size, Truncated: t.Truncated, Binary: t.Binary}, nil
+}
+
+// TalkootWorker reports the swarm agent a worker member is seated on, for
+// the view's event view. The tasks surface cannot serve it: that list is
+// scoped to the session asking, and a talkoot's workers belong to the
+// talkoot's address instead. The tail holds tool output, so the verb needs
+// the write capability (capability.go).
+func (w *Workspace) TalkootWorker(ctx context.Context, p ctrlproto.TalkootWorkerParams) (ctrlproto.TaskInfo, error) {
+	run, err := w.talkootRunOf(p.ID)
+	if err != nil {
+		return ctrlproto.TaskInfo{}, talkootWireErr(err, ctrlproto.CodeInternal)
+	}
+	m, ok := memberOf(*run.roster.Load(), p.Member)
+	if !ok {
+		return ctrlproto.TaskInfo{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "talkoot: %s has no member %q", p.ID, p.Member)
+	}
+	if memberDriver(m) == talkoot.DriverNative {
+		return ctrlproto.TaskInfo{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "talkoot: member %s is native and has no worker; open its session", p.Member)
+	}
+	w.talkoot.mu.Lock()
+	id := run.seats[p.Member]
+	w.talkoot.mu.Unlock()
+	if id == "" {
+		return ctrlproto.TaskInfo{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "talkoot: member %s has no worker yet; its first delivery starts one", p.Member)
+	}
+	var snap swarm.AgentSnapshot
+	found := false
+	if h := w.workers(); h != nil {
+		snap, found = h.agentSnapshot(id)
+	}
+	if !found {
+		return ctrlproto.TaskInfo{}, ctrlproto.Errorf(ctrlproto.CodeNotFound, "talkoot: worker %s of member %s is not in the swarm", id, p.Member)
+	}
+	return taskInfo(snap), nil
+}
+
 func (w *Workspace) CreateTalkoot(ctx context.Context, p ctrlproto.TalkootCreateParams) (ctrlproto.TalkootView, error) {
 	var v talkootView
 	var err error
@@ -62,7 +114,18 @@ func (w *Workspace) CreateTalkoot(ctx context.Context, p ctrlproto.TalkootCreate
 }
 
 func (w *Workspace) UpdateTalkoot(ctx context.Context, p ctrlproto.TalkootUpdateParams) (ctrlproto.TalkootView, error) {
-	v, err := w.talkootUpdate(ctx, p.ID, p.By, []byte(p.Text))
+	var v talkootView
+	var err error
+	switch {
+	case p.Text != "" && len(p.Ops) > 0:
+		return ctrlproto.TalkootView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "talkoot: an update holds the whole text or a list of operations, not both")
+	case p.Text == "" && len(p.Ops) == 0:
+		return ctrlproto.TalkootView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "talkoot: an update needs the whole text or a list of operations")
+	case len(p.Ops) > 0:
+		v, err = w.talkootEdit(ctx, p.ID, p.By, wireOps(p.Ops))
+	default:
+		v, err = w.talkootUpdate(ctx, p.ID, p.By, []byte(p.Text))
+	}
 	if err != nil {
 		return ctrlproto.TalkootView{}, talkootWireErr(err, ctrlproto.CodeBadRequest)
 	}
@@ -167,20 +230,80 @@ func (w *Workspace) wireTalkootView(v talkootView) ctrlproto.TalkootView {
 		ID: r.ID, Name: r.Name, Title: r.Title, Home: r.Home, BudgetUSDPerDay: r.BudgetUSDPerDay,
 		Text: string(v.Text), Members: make([]ctrlproto.TalkootMember, 0, len(v.Members)), Held: v.Held,
 	}
+	members := make([]talkoot.Member, 0, len(v.Members))
+	for _, m := range v.Members {
+		members = append(members, m.Member)
+	}
+	marks := talkootMarks(members)
 	for _, m := range v.Members {
 		mm := m.Member
 		out.Members = append(out.Members, ctrlproto.TalkootMember{
 			ID: mm.ID, Role: mm.Role, Title: mm.Title, Persona: mm.Persona, Driver: mm.Driver,
 			Model: mm.Model, Tier: mm.Tier, Posture: mm.Posture, Workspace: mm.Workspace,
-			Reviewer: mm.Reviewer, BudgetUSDPerDay: mm.BudgetUSDPerDay, TurnsPerDay: mm.TurnsPerDay, Tools: mm.Tools,
+			Reviewer: mm.Reviewer, BudgetUSDPerDay: mm.BudgetUSDPerDay, TurnsPerDay: mm.TurnsPerDay, Tools: mm.Tools, IdleStop: mm.IdleStop,
+			Mark: ctrlproto.TalkootMark(marks[mm.ID]), OwnMark: wireMark(mm.Mark),
 			Session: m.Session, Status: wireTalkootStatus(m.Status),
 		})
 	}
 	return out
 }
 
+// talkootMarks gives each member its whole mark. A member's own mark wins,
+// then its persona's mark and accent colour, then a shape and colour from its
+// id (look.Resolve). A member with no persona runs as the default persona, so
+// its default comes from that one.
+func talkootMarks(members []talkoot.Member) map[string]look.Mark {
+	type resolved struct {
+		key    string
+		source look.Source
+	}
+	cache := map[string]resolved{}
+	// 🔑 Members group by the persona they run, not by how the roster names
+	// it. A member with no persona runs the default, and so shares its group
+	// with a member that names the default.
+	resolve := func(ref string) resolved {
+		if r, ok := cache[ref]; ok {
+			return r
+		}
+		var p persona.Persona
+		var ok bool
+		if ref == "" {
+			var err error
+			p, err = persona.Resolve("")
+			ok = err == nil
+		} else {
+			p, ok = persona.Lookup(ref)
+		}
+		r := resolved{key: ref}
+		if ok {
+			r = resolved{key: p.Namespace + "/" + p.Name, source: look.Source{Mark: p.Mark, Accent: p.AccentColor}}
+		}
+		cache[ref] = r
+		return r
+	}
+	who := make([]look.Who, 0, len(members))
+	for _, m := range members {
+		r := resolve(m.Persona)
+		w := look.Who{ID: m.ID, Persona: r.key, Source: r.source}
+		if m.Mark != nil {
+			w.Mark = *m.Mark
+		}
+		who = append(who, w)
+	}
+	return look.Resolve(who)
+}
+
+// wireMark is a roster mark on the wire, and nil for none.
+func wireMark(m *look.Mark) *ctrlproto.TalkootMark {
+	if m == nil {
+		return nil
+	}
+	w := ctrlproto.TalkootMark(*m)
+	return &w
+}
+
 func wireTalkootStatus(s talkoot.Status) ctrlproto.TalkootMemberStatus {
-	return ctrlproto.TalkootMemberStatus{Member: s.Member, Working: s.Working, Paused: s.Paused, SpendUSD: s.SpendUSD, Turns: s.Turns}
+	return ctrlproto.TalkootMemberStatus{Member: s.Member, Working: s.Working, Tool: s.Tool, Paused: s.Paused, SpendUSD: s.SpendUSD, Turns: s.Turns, Idle: s.Idle}
 }
 
 func wireTalkootEnvelope(e talkoot.Envelope) ctrlproto.TalkootEnvelope {

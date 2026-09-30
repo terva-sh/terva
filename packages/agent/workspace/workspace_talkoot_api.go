@@ -232,6 +232,37 @@ func (w *Workspace) talkootUpdate(ctx context.Context, id, by string, text []byt
 	return w.applyRosterLocked(ctx, run, by, text, next, rosterSource{})
 }
 
+// talkootEdit applies a person's own field edit: the operations of a
+// proposal, applied at once. The member card sends one.
+//
+// 🔑 The operations apply to the text as it is when the lock is held, not to
+// the text the card was drawn from. A card sends only the fields the person
+// changed, so an edit made meanwhile to another field survives, where a whole
+// text drawn from the old view would undo it.
+func (w *Workspace) talkootEdit(ctx context.Context, id, by string, ops []talkoot.Op) (talkootView, error) {
+	if !talkoot.ValidPerson(strings.TrimPrefix(by, talkoot.HumanPrefix)) {
+		return talkootView{}, fmt.Errorf("talkoot: %q must name a person in 1 to 64 letters, digits, and . _ @ -", by)
+	}
+	run, err := w.talkootRunOf(id)
+	if err != nil {
+		return talkootView{}, err
+	}
+	run.update.Lock()
+	defer run.update.Unlock()
+	text, err := os.ReadFile(filepath.Join(run.dir, talkoot.FileName))
+	if err != nil {
+		return talkootView{}, fmt.Errorf("talkoot: read the roster: %w", err)
+	}
+	_, next, nr, err := w.proposalPreview(id, text, ops, nil)
+	if errors.Is(err, errProposalChangesNothing) {
+		return talkootView{}, errors.New("talkoot: the edit changes no member")
+	}
+	if err != nil {
+		return talkootView{}, err
+	}
+	return w.applyRosterLocked(ctx, run, by, next, nr, rosterSource{})
+}
+
 // rosterSource names the proposal a roster change came from, and whether the
 // person replaced its operations. It is empty for a person's own edit.
 type rosterSource struct {

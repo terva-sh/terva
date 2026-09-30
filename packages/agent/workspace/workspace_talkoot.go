@@ -316,6 +316,41 @@ func (w *Workspace) unseatTalkoot(sessID string) {
 	}
 }
 
+// talkootActivity records a tool call a seated session starts, or with an
+// empty name the end of one. An empty id with an empty name ends every call,
+// for a turn that ended. A session with no seat, or a revoked one, records
+// nothing.
+func (w *Workspace) talkootActivity(sessID, callID, tool string) {
+	// ⚠️ This runs on the agent's event path of every session, so it must not
+	// wait on either lock. A revoke holds, or waits for, the seat's write
+	// lock, and an RLock queues behind it. The tool is only a view, so a busy
+	// lock skips the update, and the router clears every call when the turn
+	// ends.
+	if !w.talkoot.mu.TryLock() {
+		return
+	}
+	b := w.talkoot.seats[sessID]
+	w.talkoot.mu.Unlock()
+	if b == nil {
+		return
+	}
+	if !b.mu.TryRLock() {
+		return
+	}
+	defer b.mu.RUnlock()
+	if b.revoked {
+		return
+	}
+	_ = b.run.do(func(rt *talkoot.Router) error {
+		if tool != "" {
+			rt.ToolStarted(b.member, callID, tool)
+		} else {
+			rt.ToolEnded(b.member, callID)
+		}
+		return nil
+	})
+}
+
 // talkootTurn opens a seated session's turn, and returns the func that ends
 // it. The end reports the turn's cost when a turn ran. Close waits for every
 // open turn to end. A session without a seat gets nil.

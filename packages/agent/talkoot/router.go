@@ -170,6 +170,7 @@ type Router struct {
 	turning   map[string]bool        // member -> a delivered envelope started or joined a turn
 	epoch     map[string]int         // member -> turns ended, so a late delivery sees one ended
 	inflight  map[string]int         // member -> deliveries routed and not yet returned
+	tools     map[string][]toolCall  // member -> the tool calls its turn runs now, oldest first
 	pauses    pauses
 	sends     map[string][]time.Time
 	recent    map[string]time.Time // dedupe key -> when sent
@@ -204,6 +205,7 @@ func NewRouter(r Roster, room *Room, d Drivers, l Limits, now func() time.Time) 
 		spend: map[string]float64{}, turns: map[string]int{},
 		chains: map[string]*chainState{}, active: map[string]string{}, grants: map[string]*grants{},
 		turning: map[string]bool{}, epoch: map[string]int{}, inflight: map[string]int{},
+		tools:  map[string][]toolCall{},
 		pauses: pauses{},
 		sends:  map[string][]time.Time{}, recent: map[string]time.Time{},
 		notes: map[string][]string{}, refused: map[string]time.Time{}, owed: map[string]int{},
@@ -972,6 +974,7 @@ func (rt *Router) turnEnded(m Member, costUSD float64, badCost string) error {
 	now := rt.now()
 	rt.roll(now)
 	rt.turning[member] = false
+	delete(rt.tools, member)
 	rt.epoch[member]++
 	rt.spend[member] += costUSD
 	rt.turns[member]++
@@ -1125,11 +1128,46 @@ func (rt *Router) scopeCheck(by, member, chain string) error {
 
 // Status is a member's state as the router sees it.
 type Status struct {
-	Member   string
-	Working  bool
+	Member  string
+	Working bool
+	// Tool is the newest tool call the member's turn still runs, or empty.
+	// It is set only while the member works, so no ended turn leaves a tool
+	// behind.
+	Tool     string
 	Paused   string
 	SpendUSD float64
 	Turns    int
+}
+
+// toolCall is one tool call a member's turn runs.
+type toolCall struct{ id, name string }
+
+// ToolStarted records a tool call a member's turn runs. The host calls it
+// from the member's session events. It records nothing in the room: the tool
+// is a view of the turn, not a fact the team keeps.
+func (rt *Router) ToolStarted(member, id, name string) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	calls := slices.DeleteFunc(rt.tools[member], func(c toolCall) bool { return c.id == id })
+	rt.tools[member] = append(calls, toolCall{id: id, name: name})
+}
+
+// ToolEnded drops a tool call that returned. An empty id drops every call,
+// for a turn that ended. A turn can run calls in parallel, so the end of one
+// leaves the others named.
+func (rt *Router) ToolEnded(member, id string) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if id == "" {
+		delete(rt.tools, member)
+		return
+	}
+	calls := slices.DeleteFunc(rt.tools[member], func(c toolCall) bool { return c.id == id })
+	if len(calls) == 0 {
+		delete(rt.tools, member)
+		return
+	}
+	rt.tools[member] = calls
 }
 
 // Members returns the roster's members, in roster order.
@@ -1152,7 +1190,12 @@ func (rt *Router) Statuses() []Status {
 				why = append(why, r)
 			}
 		}
-		out = append(out, Status{Member: m.ID, Working: rt.busy(m.ID), Paused: strings.Join(why, "; "),
+		busy := rt.busy(m.ID)
+		var tool string
+		if calls := rt.tools[m.ID]; busy && len(calls) > 0 {
+			tool = calls[len(calls)-1].name
+		}
+		out = append(out, Status{Member: m.ID, Working: busy, Tool: tool, Paused: strings.Join(why, "; "),
 			SpendUSD: rt.spend[m.ID], Turns: rt.turns[m.ID]})
 	}
 	return out

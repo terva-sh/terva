@@ -1458,3 +1458,45 @@ func TestBothMemberCapsAreRecordedWhenTheyTrip(t *testing.T) {
 		f.reopen()
 	}
 }
+
+// 🔑 The sidebar names the tool a member runs. An ended turn must clear it,
+// so no activity line sticks, and a member that is not working reports none.
+// A turn can run calls in parallel, so one call's end leaves the others.
+func TestStatusNamesTheToolOnlyWhileTheMemberWorks(t *testing.T) {
+	f := newFixture(t, nil)
+	tool := func(member string) string {
+		for _, s := range f.router.Statuses() {
+			if s.Member == member {
+				return s.Tool
+			}
+		}
+		t.Fatalf("no status for %s", member)
+		return ""
+	}
+	f.router.ToolStarted("jev", "c0", "bash")
+	if got := tool("jev"); got != "" {
+		t.Errorf("a member that is not working must report no tool, got %q", got)
+	}
+	f.post() // helm is now working
+	f.router.ToolStarted("helm", "c1", "grep")
+	f.router.ToolStarted("helm", "c2", "read")
+	if got := tool("helm"); got != "read" {
+		t.Errorf("the newest running call = %q, want read", got)
+	}
+	f.router.ToolEnded("helm", "c2")
+	if got := tool("helm"); got != "grep" {
+		t.Errorf("after read returned, the call still running = %q, want grep", got)
+	}
+	f.router.ToolEnded("helm", "c1")
+	if got := tool("helm"); got != "" {
+		t.Errorf("with every call returned = %q, want none", got)
+	}
+	f.router.ToolStarted("helm", "c3", "edit")
+	if err := f.router.TurnEnded("helm", 0.1); err != nil {
+		t.Fatal(err)
+	}
+	f.post()
+	if got := tool("helm"); got != "" {
+		t.Errorf("the next turn must not inherit the ended turn's tool, got %q", got)
+	}
+}

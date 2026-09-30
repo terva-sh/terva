@@ -1272,6 +1272,9 @@ TalkootLine
 	text	string	omitempty
 TalkootListResult
 	talkoots	[]TalkootSummary
+TalkootMark
+	shape	string	omitempty
+	color	string	omitempty
 TalkootMember
 	id	string
 	role	string
@@ -1286,6 +1289,9 @@ TalkootMember
 	budget_usd_per_day	float64	omitempty
 	turns_per_day	int	omitempty
 	tools	[]string	omitempty
+	idle_stop	string	omitempty
+	mark	TalkootMark
+	own_mark	*TalkootMark	omitempty
 	session	string	omitempty
 	status	TalkootMemberStatus
 TalkootMemberChange
@@ -1294,10 +1300,13 @@ TalkootMemberChange
 	after	*TalkootMemberEntry	omitempty
 	widens	[]string	omitempty
 	authority	[]string	omitempty
+	mark_before	*TalkootMark	omitempty
+	mark_after	*TalkootMark	omitempty
 TalkootMemberEntry
 	id	string
 	role	string
 	title	string	omitempty
+	mark	*TalkootMark	omitempty
 	persona	string	omitempty
 	driver	string	omitempty
 	model	string	omitempty
@@ -1308,16 +1317,22 @@ TalkootMemberEntry
 	budget_usd_per_day	float64	omitempty
 	turns_per_day	int	omitempty
 	tools	[]string	omitempty
+	idle_stop	string	omitempty
 TalkootMemberStatus
 	member	string
 	working	bool	omitempty
+	tool	string	omitempty
 	paused	string	omitempty
 	spend_usd	float64	omitempty
 	turns	int	omitempty
+	idle	bool	omitempty
 TalkootOp
 	op	string
 	member	string
 	set	map[string]any	omitempty
+TalkootOpenRefParams
+	id	string
+	ref	string
 TalkootPauseParams
 	id	string
 	by	string
@@ -1390,6 +1405,12 @@ TalkootRecruitParams
 	persona	string	omitempty
 TalkootRef
 	id	string
+TalkootRefText
+	ref	string
+	text	string
+	size	int64
+	truncated	bool	omitempty
+	binary	bool	omitempty
 TalkootResumeParams
 	id	string
 	by	string
@@ -1407,6 +1428,7 @@ TalkootRosterMember
 	id	string
 	role	string
 	title	string	omitempty
+	mark	*TalkootMark	omitempty
 	persona	string	omitempty
 	driver	string
 	model	string	omitempty
@@ -1417,6 +1439,7 @@ TalkootRosterMember
 	budget_usd_per_day	float64	omitempty
 	turns_per_day	int	omitempty
 	tools	[]string	omitempty
+	idle_stop	string	omitempty
 TalkootSummary
 	id	string
 	home	string	omitempty
@@ -1434,7 +1457,8 @@ TalkootTemplatesResult
 TalkootUpdateParams
 	id	string
 	by	string
-	text	string
+	text	string	omitempty
+	ops	[]TalkootOp	omitempty
 TalkootView
 	id	string
 	name	string
@@ -1444,6 +1468,9 @@ TalkootView
 	text	string	omitempty
 	members	[]TalkootMember
 	held	[]string	omitempty
+TalkootWorkerParams
+	id	string
+	member	string
 TaskBoardItem
 	id	string
 	status	string

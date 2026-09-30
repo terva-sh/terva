@@ -343,3 +343,32 @@ func TestSessionsCreateCannotBindARecruiter(t *testing.T) {
 		t.Fatal("talkoot.recruit is open to a caller without CapSteer")
 	}
 }
+
+// 🔑 talkoot.ref returns a file's contents from the home checkout, so a
+// read-only watcher of a room cannot call it. It changes no team, so it needs
+// no steer bit either.
+func TestTalkootRefNeedsWriteButNotSteer(t *testing.T) {
+	if MethodTalkootRef.Permits(CapRead) {
+		t.Error("talkoot.ref is permitted to a read-only caller")
+	}
+	if !MethodTalkootRef.Permits(CapRead | CapWrite) {
+		t.Error("talkoot.ref needs more than write")
+	}
+	if MethodTalkootRef.Group() != GroupTalkoot {
+		t.Errorf("talkoot.ref is in group %v", MethodTalkootRef.Group())
+	}
+}
+
+// 🔑 talkoot.worker returns a worker's transcript tail, which holds tool
+// output, so a read-only caller may not use it, as for talkoot.ref.
+func TestTalkootWorkerNeedsWrite(t *testing.T) {
+	if MethodTalkootWorker.Permits(CapRead) {
+		t.Error("talkoot.worker is permitted to a read-only caller")
+	}
+	if !MethodTalkootWorker.Permits(CapRead | CapWrite) {
+		t.Error("talkoot.worker needs more than write")
+	}
+	if MethodTalkootWorker.Group() != GroupTalkoot {
+		t.Errorf("talkoot.worker is in group %v", MethodTalkootWorker.Group())
+	}
+}

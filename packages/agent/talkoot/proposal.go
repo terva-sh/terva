@@ -12,6 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"terva.sh/terva/packages/agent/look"
 	"terva.sh/terva/packages/core/permission"
 )
 
@@ -50,6 +51,11 @@ type MemberChange struct {
 	Member string  `json:"member"`
 	Before *Member `json:"before,omitempty"`
 	After  *Member `json:"after,omitempty"`
+	// MarkBefore and MarkAfter are the member's whole marks, with the
+	// defaults filled in, as each roster resolves them. A reset leaves no
+	// mark in After, so a card draws these instead.
+	MarkBefore *look.Mark `json:"mark_before,omitempty"`
+	MarkAfter  *look.Mark `json:"mark_after,omitempty"`
 }
 
 // CheckOps checks the shape of a batch against the roster it would change:
@@ -180,9 +186,42 @@ func checkValue(field string, v any) error {
 				return fmt.Errorf("%s holds an entry of %d bytes, above the %d limit", field, len(s), MaxValueBytes)
 			}
 		}
+	case reflect.Pointer:
+		// A mark: shape and color. It arrives as a map from JSON, and as a
+		// look.Mark from Go.
+		var m look.Mark
+		switch x := v.(type) {
+		case look.Mark:
+			m, ok = x, true
+		case *look.Mark:
+			ok = x != nil
+			if ok {
+				m = *x
+			}
+		case map[string]any:
+			ok = true
+			for k, val := range x {
+				s, isString := val.(string)
+				switch {
+				case !isString:
+					ok = false
+				case k == "shape":
+					m.Shape = s
+				case k == "color":
+					m.Color = s
+				default:
+					return fmt.Errorf("%s has no field %q; it takes shape and color", field, k)
+				}
+			}
+		}
+		if ok {
+			if p := look.Check(m); len(p) > 0 {
+				return fmt.Errorf("%s", strings.Join(p, "; "))
+			}
+		}
 	}
 	if !ok {
-		want := map[reflect.Kind]string{reflect.String: "a string", reflect.Bool: "true or false", reflect.Int: "a whole number", reflect.Float64: "a number", reflect.Slice: "a list of strings"}[fieldKinds[field]]
+		want := map[reflect.Kind]string{reflect.String: "a string", reflect.Bool: "true or false", reflect.Int: "a whole number", reflect.Float64: "a number", reflect.Slice: "a list of strings", reflect.Pointer: "a mark with a shape and a color"}[fieldKinds[field]]
 		return fmt.Errorf("%s must be %s", field, want)
 	}
 	return nil

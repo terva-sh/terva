@@ -40,6 +40,10 @@ type TalkootController interface {
 	// PreviewTalkoot shows the roster a template would become, and writes
 	// nothing.
 	PreviewTalkoot(ctx context.Context, p TalkootPreviewParams) (TalkootPreview, error)
+	// OpenTalkootRef reads the file a path: or note: reference names.
+	OpenTalkootRef(ctx context.Context, p TalkootOpenRefParams) (TalkootRefText, error)
+	// TalkootWorker reports the swarm agent a worker member is seated on.
+	TalkootWorker(ctx context.Context, p TalkootWorkerParams) (TaskInfo, error)
 	// UpdateTalkoot replaces a running talkoot's roster.
 	UpdateTalkoot(ctx context.Context, p TalkootUpdateParams) (TalkootView, error)
 	// PostTalkoot posts a person's message to the team.
@@ -136,19 +140,40 @@ type TalkootMember struct {
 	// Tools narrows the member to these tools. Absent means the posture's
 	// full set, and the seat tools stay either way.
 	Tools []string `json:"tools,omitempty"`
+	// IdleStop is how long a worker member's process stays up with no turn,
+	// such as 30m, or off. Absent means 30 minutes.
+	IdleStop string `json:"idle_stop,omitempty"`
+	// Mark is the member's whole mark, with the defaults filled in from its
+	// persona and its id. OwnMark is what the roster sets, and absent means
+	// the member takes the default.
+	Mark    TalkootMark  `json:"mark"`
+	OwnMark *TalkootMark `json:"own_mark,omitempty"`
 	// Session is the member's session id, once its first delivery made one.
 	Session string              `json:"session,omitempty"`
 	Status  TalkootMemberStatus `json:"status"`
 }
 
+// TalkootMark is a member's shape and colour. The shape is one of a closed
+// set, and the colour is #RRGGBB.
+type TalkootMark struct {
+	Shape string `json:"shape,omitempty"`
+	Color string `json:"color,omitempty"`
+}
+
 // TalkootMemberStatus is a member's state as the router sees it. Spend and
 // turns count the current day.
 type TalkootMemberStatus struct {
-	Member   string  `json:"member"`
-	Working  bool    `json:"working,omitempty"`
+	Member  string `json:"member"`
+	Working bool   `json:"working,omitempty"`
+	// Tool names the tool the member's turn runs now. It is empty between
+	// tools and for a member whose driver reports no tool events.
+	Tool     string  `json:"tool,omitempty"`
 	Paused   string  `json:"paused,omitempty"`
 	SpendUSD float64 `json:"spend_usd,omitempty"`
 	Turns    int     `json:"turns,omitempty"`
+	// Idle says the member's worker process stopped for idleness. The next
+	// envelope revives it.
+	Idle bool `json:"idle,omitempty"`
 }
 
 // TalkootCreateParams is the talkoot.create payload. Text is the whole
@@ -194,6 +219,31 @@ type TalkootTemplate struct {
 	Problem     string `json:"problem,omitempty"`
 }
 
+// TalkootOpenRefParams is the talkoot.ref payload: a path: or note:
+// reference, as an envelope carries it.
+type TalkootOpenRefParams struct {
+	ID  string `json:"id"`
+	Ref string `json:"ref"`
+}
+
+// TalkootWorkerParams is the talkoot.worker payload: a worker member of a
+// running talkoot.
+type TalkootWorkerParams struct {
+	ID     string `json:"id"`
+	Member string `json:"member"`
+}
+
+// TalkootRefText is the file a reference names. Size is the file's size, and
+// Truncated is set when Text holds only the first part of it. Binary is set
+// for a file that is not UTF-8 text, and Text is then empty.
+type TalkootRefText struct {
+	Ref       string `json:"ref"`
+	Text      string `json:"text"`
+	Size      int64  `json:"size"`
+	Truncated bool   `json:"truncated,omitempty"`
+	Binary    bool   `json:"binary,omitempty"`
+}
+
 // TalkootPreviewParams is the talkoot.preview payload. An empty Home is the
 // daemon's own directory. A zero BudgetUSDPerDay keeps the template's
 // suggestion. Drop names the members to leave out.
@@ -232,27 +282,32 @@ type TalkootPreviewMember struct {
 
 // TalkootRosterMember is what the roster says about one member.
 type TalkootRosterMember struct {
-	ID              string   `json:"id"`
-	Role            string   `json:"role"`
-	Title           string   `json:"title,omitempty"`
-	Persona         string   `json:"persona,omitempty"`
-	Driver          string   `json:"driver"`
-	Model           string   `json:"model,omitempty"`
-	Tier            string   `json:"tier,omitempty"`
-	Posture         string   `json:"posture"`
-	Workspace       string   `json:"workspace"`
-	Reviewer        bool     `json:"reviewer,omitempty"`
-	BudgetUSDPerDay float64  `json:"budget_usd_per_day,omitempty"`
-	TurnsPerDay     int      `json:"turns_per_day,omitempty"`
-	Tools           []string `json:"tools,omitempty"`
+	ID              string       `json:"id"`
+	Role            string       `json:"role"`
+	Title           string       `json:"title,omitempty"`
+	Mark            *TalkootMark `json:"mark,omitempty"`
+	Persona         string       `json:"persona,omitempty"`
+	Driver          string       `json:"driver"`
+	Model           string       `json:"model,omitempty"`
+	Tier            string       `json:"tier,omitempty"`
+	Posture         string       `json:"posture"`
+	Workspace       string       `json:"workspace"`
+	Reviewer        bool         `json:"reviewer,omitempty"`
+	BudgetUSDPerDay float64      `json:"budget_usd_per_day,omitempty"`
+	TurnsPerDay     int          `json:"turns_per_day,omitempty"`
+	Tools           []string     `json:"tools,omitempty"`
+	IdleStop        string       `json:"idle_stop,omitempty"`
 }
 
-// TalkootUpdateParams is the talkoot.update payload. Text replaces the whole
-// talkoot.md. The id and the home cannot change.
+// TalkootUpdateParams is the talkoot.update payload. It holds one of Text and
+// Ops. Text replaces the whole talkoot.md. Ops is a person's field edit, the
+// operations of a proposal, applied at once to the roster as it is now. The
+// id and the home cannot change.
 type TalkootUpdateParams struct {
-	ID   string `json:"id"`
-	By   string `json:"by"`
-	Text string `json:"text"`
+	ID   string      `json:"id"`
+	By   string      `json:"by"`
+	Text string      `json:"text,omitempty"`
+	Ops  []TalkootOp `json:"ops,omitempty"`
 }
 
 // TalkootPostParams is the talkoot.post payload. An empty To reaches the
@@ -405,7 +460,9 @@ const (
 // The router sends envelopes and nothing else, so it has no way to answer a
 // card.
 type TalkootCard struct {
-	// Session is the member's session. A proposal or a kickoff card has none.
+	// Session is the member's session. A worker member has no session, so its
+	// card names the talkoot's address, [TalkootAddr], and approve answers it
+	// there. A proposal or a kickoff card has none.
 	Session string `json:"session"`
 	// Member is the member that waits, or a proposal's proposer, which may be
 	// a person (human:<name>). A kickoff card has none.
@@ -479,19 +536,21 @@ type TalkootOp struct {
 
 // TalkootMemberEntry is a member as its roster writes it.
 type TalkootMemberEntry struct {
-	ID              string   `json:"id"`
-	Role            string   `json:"role"`
-	Title           string   `json:"title,omitempty"`
-	Persona         string   `json:"persona,omitempty"`
-	Driver          string   `json:"driver,omitempty"`
-	Model           string   `json:"model,omitempty"`
-	Tier            string   `json:"tier,omitempty"`
-	Posture         string   `json:"posture,omitempty"`
-	Workspace       string   `json:"workspace,omitempty"`
-	Reviewer        bool     `json:"reviewer,omitempty"`
-	BudgetUSDPerDay float64  `json:"budget_usd_per_day,omitempty"`
-	TurnsPerDay     int      `json:"turns_per_day,omitempty"`
-	Tools           []string `json:"tools,omitempty"`
+	ID              string       `json:"id"`
+	Role            string       `json:"role"`
+	Title           string       `json:"title,omitempty"`
+	Mark            *TalkootMark `json:"mark,omitempty"`
+	Persona         string       `json:"persona,omitempty"`
+	Driver          string       `json:"driver,omitempty"`
+	Model           string       `json:"model,omitempty"`
+	Tier            string       `json:"tier,omitempty"`
+	Posture         string       `json:"posture,omitempty"`
+	Workspace       string       `json:"workspace,omitempty"`
+	Reviewer        bool         `json:"reviewer,omitempty"`
+	BudgetUSDPerDay float64      `json:"budget_usd_per_day,omitempty"`
+	TurnsPerDay     int          `json:"turns_per_day,omitempty"`
+	Tools           []string     `json:"tools,omitempty"`
+	IdleStop        string       `json:"idle_stop,omitempty"`
 }
 
 // TalkootMemberChange is one member before and after a roster change. Before
@@ -504,6 +563,11 @@ type TalkootMemberChange struct {
 	After     *TalkootMemberEntry `json:"after,omitempty"`
 	Widens    []string            `json:"widens,omitempty"`
 	Authority []string            `json:"authority,omitempty"`
+	// MarkBefore and MarkAfter are the member's whole marks, with the
+	// defaults filled in, before and after. A reset leaves no mark in After,
+	// so a card draws these.
+	MarkBefore *TalkootMark `json:"mark_before,omitempty"`
+	MarkAfter  *TalkootMark `json:"mark_after,omitempty"`
 }
 
 // The states of a proposal.

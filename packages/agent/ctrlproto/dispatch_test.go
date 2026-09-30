@@ -305,6 +305,16 @@ func (r *recorder) PreviewTalkoot(_ context.Context, p TalkootPreviewParams) (Ta
 	return TalkootPreview{}, nil
 }
 
+func (r *recorder) OpenTalkootRef(_ context.Context, p TalkootOpenRefParams) (TalkootRefText, error) {
+	r.note("OpenTalkootRef", "", p)
+	return TalkootRefText{}, nil
+}
+
+func (r *recorder) TalkootWorker(_ context.Context, p TalkootWorkerParams) (TaskInfo, error) {
+	r.note("TalkootWorker", "", p)
+	return TaskInfo{}, nil
+}
+
 func (r *recorder) KickoffTalkoot(_ context.Context, p TalkootKickoffParams) (TalkootKickoff, error) {
 	r.note("KickoffTalkoot", "", p)
 	return TalkootKickoff{}, nil
@@ -761,6 +771,8 @@ func dispatchCases() []dispatchCase {
 		{MethodTalkootCreate, TalkootCreateParams{ID: "crew", Text: "---"}, "CreateTalkoot", TalkootCreateParams{ID: "crew", Text: "---"}},
 		{MethodTalkootTemplates, nil, "TalkootTemplates", nil},
 		{MethodTalkootPreview, TalkootPreviewParams{Template: "coding", ID: "crew", Drop: []string{"kirjuri"}}, "PreviewTalkoot", TalkootPreviewParams{Template: "coding", ID: "crew", Drop: []string{"kirjuri"}}},
+		{MethodTalkootRef, TalkootOpenRefParams{ID: "crew", Ref: "path:docs/plan.md"}, "OpenTalkootRef", TalkootOpenRefParams{ID: "crew", Ref: "path:docs/plan.md"}},
+		{MethodTalkootWorker, TalkootWorkerParams{ID: "crew", Member: "jev"}, "TalkootWorker", TalkootWorkerParams{ID: "crew", Member: "jev"}},
 		{MethodTalkootUpdate, TalkootUpdateParams{ID: "crew", By: "drew", Text: "---"}, "UpdateTalkoot", TalkootUpdateParams{ID: "crew", By: "drew", Text: "---"}},
 		{MethodTalkootPost, TalkootPostParams{ID: "crew", By: "drew", Body: "go"}, "PostTalkoot", TalkootPostParams{ID: "crew", By: "drew", Body: "go"}},
 		{MethodTalkootPause, TalkootPauseParams{ID: "crew", By: "drew", Member: "lead"}, "PauseTalkoot", TalkootPauseParams{ID: "crew", By: "drew", Member: "lead"}},

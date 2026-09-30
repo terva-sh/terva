@@ -149,7 +149,10 @@ export class Client implements ConnectableClient {
             // nothing when the daemon does not offer it, while NOT asking
             // guarantees "method group not negotiated" for a pane we do show.
             // The pane itself reads the negotiated groups before rendering.
-            groups: ['conversation', 'session', 'control', 'auth', 'secrets'],
+            // talkoot = the team verbs and the #talkoot: addresses. The daemon
+            // offers it only while talkoot_enabled is set, and the Talkoot
+            // view appears only when the hello grants it.
+            groups: ['conversation', 'session', 'control', 'auth', 'secrets', 'talkoot'],
             // images = inbound attachments on prompt; image-data = outbound
             // image payloads in the transcript (agent-generated images, echoed
             // attachments, tool-result screenshots) render as real pixels.
