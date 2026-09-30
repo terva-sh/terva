@@ -62,6 +62,7 @@ scripting, and an embeddable RPC/SDK.
 - run modes beyond the two UIs: an **editor integration over ACP** (Agent Client Protocol — drive terva from Zed and other ACP editors), print, json, and a JSON-RPC server for embedding. Every front end is a thin client of one agent loop and one event stream, spoken over the `ctrlproto` control plane ([docs/controllers.md](docs/controllers.md)).
 - background subagents: fan work out to parallel **swarm** agents from within a session.
 - **RAATI**: convene a panel of models to argue a decision to a recorded verdict, instead of trusting one model's first answer. See [docs/raati.md](docs/raati.md).
+- **Talkoot**: run a persistent team of agents in one checkout, native terva members beside Claude Code, with roles, budgets, and an inbox where they ask you. Watch it in the web panel. See [docs/talkoot.md](docs/talkoot.md).
 - chat connectors: built-in telegram and discord bridges, **external
   connectors in any language** (separate executables speaking a small
   versioned JSON protocol), and connectors bundled inside extensions —
@@ -204,6 +205,7 @@ The reference guides:
 | [docs/skills.md](docs/skills.md) | `SKILL.md` reusable instructions: anatomy, discovery, authoring |
 | [docs/personas.md](docs/personas.md) | Personas and immersive chat/play: charters, immersive identities, character cards, the cast + `actor_spawn`, and the mode flags |
 | [docs/raati.md](docs/raati.md) | RAATI: the deliberation primitive — several models argue a decision to a recorded verdict |
+| [docs/talkoot.md](docs/talkoot.md) | Talkoot: a persistent team of agents in one checkout, with roles, budgets, guards, and an inbox for you |
 | [docs/workflows.md](docs/workflows.md) | Scripted multi-agent orchestration with `terva workflow run`: a JavaScript program that spawns and sequences sub-agents |
 | [docs/context-construction.md](docs/context-construction.md) | What actually goes into the model's context each turn, and in what order |
 | [docs/debugging-prompts.md](docs/debugging-prompts.md) | Inspecting the assembled prompt (`--dump-prompt`), the lore engine, and card/lore/greeting troubleshooting |

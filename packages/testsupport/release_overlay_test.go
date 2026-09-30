@@ -91,6 +91,7 @@ var docsThatShip = []string{
 	"docs/skills.md",
 	"docs/slash-commands.md",
 	"docs/standard-tools.md",
+	"docs/talkoot.md",
 	"docs/themes.md",
 	"docs/tui.md",
 	"docs/web-interface.md",

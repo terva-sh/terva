@@ -664,7 +664,7 @@ default**; `--web-stage` mounts it at `/stage/`, alongside the control panel at
 ## Talkoot: watching a team
 
 The web panel is the one place to watch a talkoot, a persistent team of agents
-(see `docs/proposals/talkoot.md`). There is no terminal
+([talkoot.md](talkoot.md) covers setting one up). There is no terminal
 view. A command-line caller can act on a talkoot through `terva ctl`, and it
 does not render the room.
 
@@ -698,6 +698,13 @@ The view appears when the daemon runs with `talkoot_enabled` set in
   sets how much the faces move: full motion, subtle motion, or no motion.
   The browser keeps the choice. When your system asks for reduced motion,
   the faces stay still. The state label always shows beside the face.
+- **The team mark.** Each team in the header is a button with the team's
+  mark, its name, and its state: offline, needs you, busy, paused, or online.
+  The mark is the team's body in the team's colour, and its eyes show that
+  state. The open team also names the browser tab, as the team's name and
+  state, and its mark becomes the tab's icon. **Team colour** in the header
+  picks the colour, and **Default** returns to the one the team's id picks.
+  The picker needs your name, because the room records the change.
 - **The member card.** **Member card** in a member's view opens the one place
   to see and change it. The card has three sections:
   - **Look:** the title, and pickers for the shape and the colour. **Reset**

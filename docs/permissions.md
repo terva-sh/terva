@@ -498,7 +498,7 @@ process.
 ## Steering a talkoot
 
 A talkoot is a team of agents that runs without a person at each turn (see
-`docs/proposals/talkoot.md`). A client reaches one through
+[talkoot.md](talkoot.md)). A client reaches one through
 the `talkoot.*` verbs of the control protocol ([controllers.md](controllers.md)).
 The verbs that read a talkoot need only the read capability. The verbs that
 create one, change its roster, post to it, pause it, or resume it also need

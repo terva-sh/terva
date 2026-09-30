@@ -49,6 +49,7 @@ the field have learned about this category, generalized and evidence-graded.
 | [models.md](models.md) | Models & providers in practice |
 | [personas.md](personas.md) | Personas and crews |
 | [raati.md](raati.md) | RAATI: the three-seat deliberation panel |
+| [talkoot.md](talkoot.md) | Talkoot: a persistent team of agents, with you in the loop |
 | [workflows.md](workflows.md) | Scripted multi-agent orchestration: `terva workflow run` |
 | [permissions.md](permissions.md) | Approval modes, typed rules, the sandbox |
 | [context-construction.md](context-construction.md) | What goes into the model's context each turn |
