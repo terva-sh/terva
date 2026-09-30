@@ -356,6 +356,37 @@ Astra accepts `low`, `medium`, `high`, `xhigh`, and `max` reasoning efforts.
 terva sends its `max` rung without clamping for Astra. Native image output
 remains unasserted until the ChatGPT subscription route can be live-tested.
 
+### GPT-6.1 Sol
+
+Select `gpt-6.1-sol` through either Responses provider:
+
+```bash
+# ChatGPT subscription
+terva --provider openai-codex --model gpt-6.1-sol
+
+# OpenAI API key
+terva --provider openai-responses --model gpt-6.1-sol
+```
+
+Your account must have access to the model. The provider defaults remain
+`gpt-6-sol`.
+
+GPT-6.1 Sol accepts `low`, `medium`, `high`, `xhigh`, and `max` reasoning
+efforts. It does not accept `none` or `minimal`. Terva maps `minimum` to
+`low`, `maximum` to `xhigh`, and `max` to native `max`. The `off` setting
+omits the effort field, which lets the server use its default, `medium`.
+
+Tool calling requires the Responses API, so the plain `openai` catalog
+does not expose this model. Compatible gateways inherit its effort set
+from the catalog during discovery.
+
+The model has a 1,050,000-token context limit and a 128,000-token output
+limit. Terva uses a 272,000-token default working window. Prices per million
+tokens are $2 input, $0.10 cached input, $2.50 cache write, and $10 output.
+Above 272,000 input tokens, input and cache rates double for the full
+request, and output costs 1.5 times the standard rate. See OpenAI's
+[GPT-6.1 Sol model page](https://developers.openai.com/api/docs/models/gpt-6.1-sol).
+
 ### GPT-6 Sol and GPT-6 Luna
 
 OpenAI released GPT-6 Sol and GPT-6 Luna on September 22, 2026, in the API

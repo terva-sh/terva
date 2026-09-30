@@ -389,7 +389,8 @@ func TestDiscoverOpenAICompatibleInheritsGPT6Efforts(t *testing.T) {
 	url := modelsServer(t, `{"data":[
 		{"id":"gpt-6-sol"},
 		{"id":"gpt-6-luna"},
-		{"id":"gpt-6-astra"}
+		{"id":"gpt-6-astra"},
+		{"id":"gpt-6.1-sol"}
 	]}`)
 	got, err := DiscoverOpenAICompatible(context.Background(), url, "k", 200000, testReg.Active())
 	if err != nil {
@@ -404,6 +405,7 @@ func TestDiscoverOpenAICompatibleInheritsGPT6Efforts(t *testing.T) {
 		{"gpt-6-sol", map[string]string{"off": "none", "minimum": "low", "low": "low", "medium": "medium", "high": "high", "maximum": "xhigh", "max": "max"}},
 		{"gpt-6-luna", map[string]string{"off": "none", "minimum": "low", "low": "low", "medium": "medium", "high": "high", "maximum": "xhigh", "max": "max"}},
 		{"gpt-6-astra", map[string]string{"off": "", "minimum": "low", "low": "low", "medium": "medium", "high": "high", "maximum": "xhigh", "max": "max"}},
+		{"gpt-6.1-sol", map[string]string{"off": "", "minimum": "low", "low": "low", "medium": "medium", "high": "high", "maximum": "xhigh", "max": "max"}},
 	} {
 		row := m[tc.id]
 		if len(row.ReasoningEfforts) == 0 {

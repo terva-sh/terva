@@ -70,7 +70,7 @@ func MaxIsNative(m Model) bool {
 func openAIResponsesNativeMax(model string) bool {
 	id := strings.ToLower(model)
 	switch id {
-	case "gpt-6-astra", "gpt-6-sol", "gpt-6-luna":
+	case "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol":
 		return true
 	}
 	return strings.HasPrefix(id, "gpt-5.6-")

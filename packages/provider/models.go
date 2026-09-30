@@ -703,6 +703,12 @@ var catalog = []Model{
 		Caps: map[Capability]bool{CapImageOutput: true},
 	},
 	{
+		Provider: "openai-codex", ID: "gpt-6.1-sol", DisplayName: "GPT-6.1 Sol",
+		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
+		MaxOutput: 128000, Reasoning: true, ReasoningEfforts: gpt6AstraEfforts,
+		PriceInput: 2, PriceOutput: 10, PriceCacheRead: 0.1, PriceCacheWrite: 2.5,
+	},
+	{
 		// OpenAI announced a staged rollout on 2026-09-03. Catalog presence
 		// lets entitled accounts select Astra without claiming universal access.
 		// CapImageOutput stays unset until this route is live-verified.
@@ -744,7 +750,7 @@ var catalog = []Model{
 //   - "maximum" and "max" reach xhigh and max, where the undeclared mapper
 //     clamps both to "high" for fear of an unknown server.
 //
-// Astra's page lists no "none", so off still omits the field for it.
+// Astra and GPT-6.1 Sol list no "none", so off omits the field for them.
 // Every row with a given id must declare the same set, or discovery drops
 // the list rather than pick one (see sameEffortSet). The codex and Responses
 // rows therefore share these variables.
