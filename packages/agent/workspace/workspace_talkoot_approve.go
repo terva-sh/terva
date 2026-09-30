@@ -100,6 +100,15 @@ func (c *talkootConfirmer) Confirm(ctx context.Context, toolName, preview string
 // new worker's first ask finds its seat. The wait ends early when ctx does:
 // a binding can hold the lock while a revived worker's inbox starts.
 func (w *Workspace) talkootWorkerSeat(ctx context.Context, id, agentID string) (*wsSession, string, bool) {
+	var carrier *wsSession
+	_, member, ok := w.talkootWorker(ctx, id, agentID, func() { carrier = w.talkootCarrierLocked(id) })
+	return carrier, member, ok
+}
+
+// talkootWorker returns the run of talkoot id and the member whose seat holds
+// worker agentID, as talkootWorkerSeat describes. locked, when set, runs under
+// w.talkoot.mu once the member is found.
+func (w *Workspace) talkootWorker(ctx context.Context, id, agentID string, locked func()) (*talkootRun, string, bool) {
 	w.talkoot.mu.Lock()
 	run := w.talkoot.runs[id]
 	w.talkoot.mu.Unlock()
@@ -124,7 +133,10 @@ func (w *Workspace) talkootWorkerSeat(ctx context.Context, id, agentID string) (
 	}
 	for member, sid := range run.seats {
 		if sid == agentID {
-			return w.talkootCarrierLocked(id), member, true
+			if locked != nil {
+				locked()
+			}
+			return run, member, true
 		}
 	}
 	return nil, "", false

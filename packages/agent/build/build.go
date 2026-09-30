@@ -14,6 +14,7 @@ import (
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/agent/imagegen"
 	"terva.sh/terva/packages/agent/lore"
+	"terva.sh/terva/packages/agent/mcpbridge"
 	"terva.sh/terva/packages/agent/mode"
 	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/permissions"
@@ -469,13 +470,23 @@ func ExtToolReadOnly(info ExtensionToolInfo) bool {
 	return info.ReadOnly
 }
 
+// lazyToolActive is the run's always-active tool groups: the configured ones,
+// and on a --team-socket run the Talkoot bridge's. A member that has to
+// activate its team verbs before it sees them may never reply to its team.
+func lazyToolActive(configured []string, args Args) []string {
+	if args.TeamSocket == "" {
+		return configured
+	}
+	return append(slices.Clone(configured), "mcp:"+mcpbridge.TeamServerName)
+}
+
 // ExtToolRegisters reports whether the merge would admit this tool under mode,
 // ignoring name collisions. Exported and shared because a caller that decides
 // something on the strength of "an extension supplies X" — the memory
 // stand-down is the one that matters — must ask the same question the merge
 // will, or it acts on a tool that never arrives.
 func ExtToolRegisters(info ExtensionToolInfo, mode permission.ApprovalMode) bool {
-	return mode != permission.ApprovalPlan || ExtToolReadOnly(info)
+	return mode != permission.ApprovalPlan || ExtToolReadOnly(info) || info.PlanKeep
 }
 
 // MergeToolsForMode folds an extension/MCP source's tools into reg for
@@ -551,6 +562,10 @@ type ExtensionToolInfo struct {
 	// under lazy tool visibility, rather than deferring behind activate_tools
 	// with the rest of its group. Extension-only; MCP tools leave it false.
 	Essential bool
+	// PlanKeep admits a side-effecting tool in plan mode, as the policy's
+	// PlanKeeps permits it there. Only the Talkoot bridge's tools set it, so
+	// a planning member can still reply to its team.
+	PlanKeep bool
 }
 
 // toolSummariesFromRegistry rebuilds the system-prompt tool list
@@ -1615,7 +1630,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 		DisableContextExtensions: eff.Config.DisableContextExtensions,
 		DisableExtensions:        eff.Config.DisableExtensions,
 		LazyTools:                eff.Config.LazyToolsOn(),
-		LazyToolActive:           eff.Config.LazyToolActive,
+		LazyToolActive:           lazyToolActive(eff.Config.LazyToolActive, args),
 		EngineFeatures:           eff.Config.EngineFeatures,
 		EscalateAuto:             eff.Config.Escalation != nil && eff.Config.Escalation.Auto,
 		Trusted:                  trusted,
@@ -2330,6 +2345,13 @@ func BuildToolRegistry(args Args, approval permission.ApprovalMode, cwd string, 
 		// row, so there is nothing for a read policy to bound.
 		"session_list":      &tools.SessionListTool{TervaHome: config.TervaHome(), CWD: cwd},
 		"ask_user_question": &tools.AskUserTool{},
+	}
+	// A --team-socket run asks through the Talkoot bridge's ask_user_question,
+	// which carries the same text and puts the card in the talkoot's inbox.
+	// The native one has no channel in rpc, and two question tools would make
+	// the model pick the one that cannot ask.
+	if args.TeamSocket != "" {
+		delete(all, "ask_user_question")
 	}
 	// Durable memory. The stores are bound here (not lazily) so the tool and the
 	// injected block read one instance per session and cannot diverge; Adopt

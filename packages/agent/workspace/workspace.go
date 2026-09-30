@@ -440,7 +440,7 @@ func (w *Workspace) newRunner(a *swarm.Agent) swarm.Runner {
 	if err != nil {
 		return failedRunner{fmt.Errorf("worker %s: resolve briefing: %w", a.Backend, err)}
 	}
-	return worker.NewRunner(a, b, resolved, w.workerApprover(a))
+	return worker.NewRunner(a, b, resolved, w.workerApprover(a)).WithTeam(w.workerTeam(a))
 }
 
 // workerApprover is the orchestrator's approval seam for a worker: it routes the
@@ -1238,6 +1238,12 @@ func (w *Workspace) Approve(ctx context.Context, sess, callID string, d permissi
 }
 
 func (w *Workspace) Answer(ctx context.Context, sess, askID string, answers []core.UserAnswer) error {
+	if id, ok := ctrlproto.TalkootFromAddr(sess); ok {
+		if c := w.talkootCarrierOf(id); c != nil {
+			c.answer(askID, answers)
+		}
+		return nil
+	}
 	if s := w.live(sess); s != nil {
 		s.answer(askID, answers)
 	}

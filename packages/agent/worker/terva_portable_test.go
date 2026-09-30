@@ -112,6 +112,34 @@ func TestTervaPortableWiresApprovalSocket(t *testing.T) {
 	}
 }
 
+// A terva:portable member reaches its team through the Talkoot bridge on
+// --team-socket, which terva rpc runs on its own MCP client. The dogfood
+// backend is no Talkoot member backend and opens no team socket.
+func TestTervaPortableWiresTheTeamSocket(t *testing.T) {
+	if !tervaPortableBackend().TeamBridge {
+		t.Error("terva:portable must opt into the team socket so the runner serves one")
+	}
+	if tervaBackend().TeamBridge {
+		t.Error("the dogfood terva backend has no team bridge")
+	}
+	r := loadedRepo(t)
+	b := Compose(r, demoTask(), Workspace{Path: "/lease/wt-3"})
+	cmd, err := tervaPortableCommand(Dispatch{Briefing: b, Dir: "/lease/wt-3", TeamSocket: "/lease/wt-3/in.tk"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := flagValue(cmd.Args, "--team-socket"); v != "/lease/wt-3/in.tk" {
+		t.Errorf("--team-socket = %q, want the served socket path", v)
+	}
+	bare, err := tervaPortableCommand(Dispatch{Briefing: b, Dir: "/lease/wt-3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := flagValue(bare.Args, "--team-socket"); v != "" {
+		t.Errorf("no served socket must mean no --team-socket, got %q", v)
+	}
+}
+
 func join2(a, b string) string {
 	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
 	switch {

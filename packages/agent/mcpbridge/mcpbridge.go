@@ -27,6 +27,10 @@
 // Fail-closed is the load-bearing property: if the orchestrator is unreachable,
 // the bridge returns DENY, never allow. An approval carrier that opened up when
 // it lost contact with the human would be the worst failure this design has.
+//
+// The package serves a second tool set the same way. ServeTeam gives an
+// external Talkoot member its seat tools (decision 0023) over a socket of its
+// own, and the orchestrator runs each call as the member's native tool would.
 package mcpbridge
 
 import (
@@ -34,7 +38,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -97,14 +100,22 @@ type permissionResult struct {
 // orchestrator over the unix socket at socketPath. It returns when in reaches
 // EOF (the worker's CLI closed the bridge) or ctx is cancelled.
 func Serve(ctx context.Context, in io.Reader, out io.Writer, socketPath string) error {
-	s := &server{socket: socketPath, out: out}
+	s := &server{socket: socketPath, out: out, name: ServerName, tools: []any{toolDef()}}
+	s.call = s.handleCall
 	return s.run(ctx, in)
 }
 
+// server is one stdio MCP server that relays its tool calls over a unix
+// socket. The approval server and the Talkoot team server differ only in
+// name, tools, and call.
 type server struct {
 	socket  string
 	out     io.Writer
 	writeMu sync.Mutex
+
+	name  string
+	tools []any
+	call  func(ctx context.Context, req jsonrpcReq)
 }
 
 // jsonrpcReq is one inbound MCP message. ID is kept raw so a request's id is
@@ -151,14 +162,14 @@ func (s *server) handle(ctx context.Context, line []byte) {
 		s.reply(req.ID, map[string]any{
 			"protocolVersion": protocolVersion,
 			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": ServerName, "version": "1"},
+			"serverInfo":      map[string]any{"name": s.name, "version": "1"},
 		}, nil)
 	case "notifications/initialized":
 		// A notification — no response. (The client sends it after initialize.)
 	case "tools/list":
-		s.reply(req.ID, map[string]any{"tools": []any{toolDef()}}, nil)
+		s.reply(req.ID, map[string]any{"tools": s.tools}, nil)
 	case "tools/call":
-		s.handleCall(ctx, req)
+		s.call(ctx, req)
 	case "ping":
 		s.reply(req.ID, map[string]any{}, nil)
 	default:
@@ -256,9 +267,17 @@ func (s *server) handleCall(ctx context.Context, req jsonrpcReq) {
 // if the orchestrator drops the connection (EOF → error → deny) or the bridge is
 // shutting down (ctx cancelled).
 func (s *server) ask(ctx context.Context, req Request) (Reply, error) {
+	var reply Reply
+	err := s.roundTrip(ctx, "approval", req, &reply)
+	return reply, err
+}
+
+// roundTrip writes req to the orchestrator as one JSON line and decodes its one
+// reply line into reply. what names the exchange in an error.
+func (s *server) roundTrip(ctx context.Context, what string, req, reply any) error {
 	conn, err := net.Dial("unix", s.socket)
 	if err != nil {
-		return Reply{}, err
+		return err
 	}
 	defer conn.Close()
 
@@ -275,26 +294,25 @@ func (s *server) ask(ctx context.Context, req Request) (Reply, error) {
 
 	line, _ := json.Marshal(req)
 	if _, err := conn.Write(append(line, '\n')); err != nil {
-		return Reply{}, err
+		return err
 	}
 	// REJECT, not recover: this connection carries exactly ONE reply, so a
 	// frame skipped here is not a gap in a stream — it is the whole answer, and
 	// silently continuing would hang the approval.
 	respLine, tooLong, err := lineframe.ReadFrame(bufio.NewReader(conn), lineframe.DefaultMaxBytes)
 	if tooLong {
-		return Reply{}, fmt.Errorf("approval reply from the orchestrator exceeded %d bytes", lineframe.DefaultMaxBytes)
+		return fmt.Errorf("%s reply from the orchestrator exceeded %d bytes", what, lineframe.DefaultMaxBytes)
 	}
 	if len(bytes.TrimSpace(respLine)) == 0 {
 		if err != nil {
-			return Reply{}, err
+			return err
 		}
-		return Reply{}, errors.New("empty approval reply from orchestrator")
+		return fmt.Errorf("empty %s reply from orchestrator", what)
 	}
-	var reply Reply
-	if err := json.Unmarshal(bytes.TrimSpace(respLine), &reply); err != nil {
-		return Reply{}, fmt.Errorf("malformed approval reply: %w", err)
+	if err := json.Unmarshal(bytes.TrimSpace(respLine), reply); err != nil {
+		return fmt.Errorf("malformed %s reply: %w", what, err)
 	}
-	return reply, nil
+	return nil
 }
 
 // preview compacts a tool's input into a one-line card summary. The card shows

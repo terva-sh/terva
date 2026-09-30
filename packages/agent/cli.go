@@ -186,6 +186,9 @@ func Run(rawArgs []string, version string) error {
 	if handled, err := runMCPApprovalBridgeCommand(rawArgs); handled {
 		return err
 	}
+	if handled, err := runMCPTalkootBridgeCommand(rawArgs); handled {
+		return err
+	}
 	if handled, err := runWorkflowCommand(rawArgs, version); handled {
 		return err
 	}

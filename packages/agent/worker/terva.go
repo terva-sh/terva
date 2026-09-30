@@ -101,6 +101,9 @@ func tervaPortableBackend() Backend {
 		// covers approvals too. tervaPortableCommand points --approval-socket at
 		// the path the runner served here.
 		ApprovalSocket: true,
+		// The Talkoot bridge rides terva's own MCP client too, through
+		// --team-socket, the carrier claude reaches through --mcp-config.
+		TeamBridge: true,
 	}
 }
 
@@ -201,6 +204,11 @@ func tervaPortableCommand(d Dispatch) (*exec.Cmd, error) {
 	// the identical carrier claude gets via --permission-prompt-tool.
 	if d.ApprovalSocket != "" {
 		args = append(args, "--approval-socket", d.ApprovalSocket)
+	}
+	// The Talkoot bridge: terva rpc runs it as its one MCP server, and exits if
+	// it does not load (build.Args.TeamSocket).
+	if d.TeamSocket != "" {
+		args = append(args, "--team-socket", d.TeamSocket)
 	}
 	cmd := exec.Command(exe, args...)
 	cmd.Dir = d.Dir

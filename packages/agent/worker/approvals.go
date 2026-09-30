@@ -25,13 +25,16 @@ func approvalSocketPath(inbox string) string {
 	return strings.TrimSuffix(inbox, ".sock") + ".ap"
 }
 
-// approvalListener serves one worker's MCP approval socket. Each accepted
-// connection is one approval question (from the `terva mcp-approval-bridge` the
-// worker runs as its permission tool): read a Request, route it to the runner's
-// Confirmer via decide, write back the Reply. It is the socket-carrier sibling
-// of handleAsk's stdin carrier — both terminate at the same decide, so a
-// worker's approval reaches the identical human card whichever backend asked.
-type approvalListener struct {
+// socketListener serves one of a worker's bridge sockets. Each accepted
+// connection is one question from a bridge the worker runs, answered by handle.
+//
+// The approval socket is one. Each connection is one approval question (from
+// the `terva mcp-approval-bridge` the worker runs as its permission tool): read
+// a Request, route it to the runner's Confirmer via decide, write back the
+// Reply. It is the socket-carrier sibling of handleAsk's stdin carrier — both
+// terminate at the same decide, so a worker's approval reaches the identical
+// human card whichever backend asked. The Talkoot team socket is the other.
+type socketListener struct {
 	ln   net.Listener
 	path string
 }
@@ -40,7 +43,13 @@ type approvalListener struct {
 // and serves it until Close. ctx is the run's context: it cancels an approval
 // parked on a human when the worker is stopped, so a teardown denies rather than
 // hanging.
-func (r *Runner) serveApprovals(ctx context.Context, path string) (*approvalListener, error) {
+func (r *Runner) serveApprovals(ctx context.Context, path string) (*socketListener, error) {
+	return serveSocket(path, func(conn net.Conn) { r.handleApprovalConn(ctx, conn) })
+}
+
+// serveSocket opens a unix socket at path with 0600 permissions and passes
+// each connection to handle on a goroutine of its own, until Close.
+func serveSocket(path string, handle func(net.Conn)) (*socketListener, error) {
 	if err := privfs.MkdirAll(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
@@ -55,26 +64,26 @@ func (r *Runner) serveApprovals(ctx context.Context, path string) (*approvalList
 	// dial it. (The same posture --web-addr unix: relies on.)
 	_ = os.Chmod(path, 0o600)
 
-	al := &approvalListener{ln: ln, path: path}
-	go al.acceptLoop(ctx, r)
-	return al, nil
+	sl := &socketListener{ln: ln, path: path}
+	go sl.acceptLoop(handle)
+	return sl, nil
 }
 
-func (al *approvalListener) acceptLoop(ctx context.Context, r *Runner) {
+func (sl *socketListener) acceptLoop(handle func(net.Conn)) {
 	for {
-		conn, err := al.ln.Accept()
+		conn, err := sl.ln.Accept()
 		if err != nil {
 			return // listener closed (Close) — the run is tearing down
 		}
-		go r.handleApprovalConn(ctx, conn)
+		go handle(conn)
 	}
 }
 
 // Close stops accepting and removes the socket file. Idempotent enough for a
 // defer: a second Close just re-errors on the closed listener, which we ignore.
-func (al *approvalListener) Close() error {
-	err := al.ln.Close()
-	_ = os.Remove(al.path)
+func (sl *socketListener) Close() error {
+	err := sl.ln.Close()
+	_ = os.Remove(sl.path)
 	return err
 }
 

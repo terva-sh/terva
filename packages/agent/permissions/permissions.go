@@ -36,7 +36,10 @@ import (
 	"strings"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/mcp"
+	"terva.sh/terva/packages/agent/mcpbridge"
 	"terva.sh/terva/packages/agent/mode"
+	"terva.sh/terva/packages/agent/talkoot"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/core/permission"
@@ -292,6 +295,41 @@ type Inputs struct {
 	// TalkootMember is set for a session that holds a seat in a talkoot. Its
 	// policy then refuses the git ticket CLI through bash (memberTicketRule).
 	TalkootMember bool
+	// TeamBridge is set for a worker that reaches its talkoot through the
+	// Talkoot MCP bridge (--team-socket). Its policy then lets the bridge's
+	// tools through in every posture (teamBridgeRules).
+	TeamBridge bool
+}
+
+// TeamBridgeTools names the Talkoot bridge's tools as terva's MCP client
+// registers them: mcp_terva_talkoot_talkoot_send and its siblings.
+func TeamBridgeTools() []string {
+	out := make([]string, len(talkoot.BridgeTools))
+	for i, t := range talkoot.BridgeTools {
+		out[i] = mcp.NamespaceTool(mcpbridge.TeamServerName, t)
+	}
+	return out
+}
+
+// teamBridgeRules allows each of the Talkoot bridge's tools.
+//
+// 🔑 The daemon is these tools' one gate (decision 0023). It runs the person's
+// hooks and rules against the native tool name and opens the card in the
+// talkoot's inbox, as it does for a claude worker, which pre-approves the same
+// three tools. A gate here as well would ask the person twice for one send.
+// The rules go first, so a worker's own rule for mcp_* does not stop a call the
+// daemon has still to judge.
+func teamBridgeRules() []permission.PermissionRule {
+	var rules []permission.PermissionRule
+	for _, name := range TeamBridgeTools() {
+		rules = append(rules, permission.PermissionRule{
+			Tool:     name,
+			Decision: permission.RuleAllow,
+			Reason:   "the talkoot's daemon gates this call",
+			Source:   "talkoot",
+		})
+	}
+	return rules
 }
 
 // memberTicketRule refuses a Talkoot member the git ticket CLI. A member works
@@ -749,6 +787,9 @@ func policyFromConfig(p Inputs, cfg config.Config) (*permission.PermissionPolicy
 	mode := ResolveApprovalMode(p, cfg)
 
 	var rules []permission.PermissionRule
+	if p.TeamBridge {
+		rules = append(rules, teamBridgeRules()...)
+	}
 	if p.TalkootMember {
 		rules = append(rules, memberTicketRule)
 	}
@@ -774,7 +815,15 @@ func policyFromConfig(p Inputs, cfg config.Config) (*permission.PermissionPolicy
 	if mode == permission.ApprovalYolo && len(rules) == 0 {
 		return nil, warns, projErr
 	}
-	return NewPolicy(mode, rules), warns, projErr
+	pol := NewPolicy(mode, rules)
+	if p.TeamBridge {
+		// Plan refuses before the rules run. A planning member replies to its
+		// team as a native one does, through planKeeps.
+		for _, name := range TeamBridgeTools() {
+			pol.PlanKeeps[name] = true
+		}
+	}
+	return pol, warns, projErr
 }
 
 // decomposeBashForPolicy is the shell splitter the permission policy

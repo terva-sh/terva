@@ -49,18 +49,23 @@ func (s *wsSession) recordTalkootAnswer(qs []core.UserQuestion, ans []core.UserA
 	if !ok || seat.b == nil {
 		return tools.AnswerRecord{}
 	}
+	id, err := seat.Answer(answeredOf(qs, ans))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "session %s: could not record the answer in talkoot %s: %v\n", s.id, seat.b.run.id, err)
+		return tools.AnswerRecord{Err: err}
+	}
+	return tools.AnswerRecord{Ref: "answer:" + id}
+}
+
+// answeredOf pairs each question with its answer for the room.
+func answeredOf(qs []core.UserQuestion, ans []core.UserAnswer) []talkoot.Answered {
 	// ⚠️ ask pads today, but the index below must not rest on a caller.
 	ans = core.PadAnswers(ans, len(qs))
 	out := make([]talkoot.Answered, len(qs))
 	for i, q := range qs {
 		out[i] = talkoot.Answered{Question: q.Question, Chosen: ans[i].Chosen(), Note: ans[i].Note, Declined: ans[i].Declined}
 	}
-	id, err := seat.Answer(out)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "session %s: could not record the answer in talkoot %s: %v\n", s.id, seat.b.run.id, err)
-		return tools.AnswerRecord{Err: err}
-	}
-	return tools.AnswerRecord{Ref: "answer:" + id}
+	return out
 }
 
 // cardKey names an open card. A call id and an ask id come from different
@@ -106,7 +111,11 @@ func (s *wsSession) closePermission(callID string) {
 
 // openAsk is openPermission for a question set.
 func (s *wsSession) openAsk(req ctrlproto.AskRequest) {
-	c := s.cardSeat()
+	s.openAskAs(req, s.cardSeat())
+}
+
+// openAskAs is openAsk with the card's seat given, as openPermissionAs is.
+func (s *wsSession) openAskAs(req ctrlproto.AskRequest, c openCard) {
 	s.mu.Lock()
 	s.askReq[req.AskID] = req
 	s.setCardLocked(cardKey{ask: true, id: req.AskID}, c)

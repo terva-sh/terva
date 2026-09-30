@@ -3,6 +3,7 @@ package build
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +18,8 @@ import (
 	"terva.sh/terva/packages/agent/exttool"
 	"terva.sh/terva/packages/agent/hooks"
 	"terva.sh/terva/packages/agent/mcp"
+	"terva.sh/terva/packages/agent/mcpbridge"
+	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/swarm"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
@@ -118,6 +121,9 @@ type MCPToolAdapter struct {
 	// excluded server resurrected mid-session.
 	allowed map[string]bool
 
+	// team marks a --team-socket run, whose bridge tools plan mode keeps.
+	team bool
+
 	// Per-server stderr log handles are tracked here (not in a SetupMCP
 	// closure) so a server started LIVE via the /mcp dialog — long after
 	// SetupMCP returned — gets its log handle closed by the same stop func.
@@ -162,6 +168,7 @@ func (a *MCPToolAdapter) Tools() []ExtensionToolInfo {
 			Description: t.Description,
 			Schema:      t.Schema,
 			ReadOnly:    t.ReadOnly,
+			PlanKeep:    a.team && t.Server == mcpbridge.TeamServerName,
 		}
 	}
 	return out
@@ -180,13 +187,52 @@ func (a *MCPToolAdapter) NewExtensionTool(info ExtensionToolInfo) core.Tool {
 // r.Trusted is the Workspace Trust verdict: when false the project's MCP
 // servers are NEVER started (only the user's), so a cloned repo cannot spawn
 // subprocesses until the user trusts it (Phase 6).
+//
+// A run with --team-socket starts the Talkoot bridge alone (Args.TeamSocket).
 func SetupMCP(ctx context.Context, args Args, r *Resolved) (*MCPToolAdapter, func()) {
-	if args.NoMCP {
+	mcpCfg, allowed, ok := mcpServersFor(args, r)
+	if !ok {
 		return nil, func() {}
+	}
+	// Build a Manager even when nothing is configured or everything is
+	// disabled: the /mcp dialog can live-enable a server later via
+	// StartOne, and an empty Manager is a valid no-op (no subprocesses).
+	// Only --no-mcp (handled above) skips the Manager entirely.
+	adapter := &MCPToolAdapter{allowed: allowed, team: args.TeamSocket != ""}
+	mgr := mcp.StartAll(ctx, mcpCfg, args.CWD, adapter.StderrFor)
+	adapter.Mgr = mgr
+	for _, w := range mgr.Warnings() {
+		fmt.Fprintln(os.Stderr, "note:", w)
+	}
+	r.MergeExtensionTools(adapter)
+	// StopAll first so the stderr pumps have finished writing, then release
+	// the log handles (including any opened by a live StartOne).
+	stop := func() {
+		mgr.StopAll()
+		adapter.closeLogs()
+	}
+	return adapter, stop
+}
+
+// mcpServersFor chooses the servers SetupMCP starts and the run's --mcp
+// allowlist (nil for none). ok is false when the run starts no Manager.
+func mcpServersFor(args Args, r *Resolved) (cfg *mcp.Config, allowed map[string]bool, ok bool) {
+	if args.TeamSocket != "" {
+		// The bridge is the run's one server, and the allowlist keeps the /mcp
+		// dialog's live enable from adding another beside it.
+		cfg, err := teamMCPConfig(args.TeamSocket)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "talkoot bridge:", err)
+			return nil, nil, false
+		}
+		return cfg, map[string]bool{mcpbridge.TeamServerName: true}, true
+	}
+	if args.NoMCP {
+		return nil, nil, false
 	}
 	user, err := config.LoadConfig()
 	if err != nil {
-		return nil, func() {}
+		return nil, nil, false
 	}
 	mcpCfg := config.MergeMCPConfigs(user.MCP, config.TrustedProjectMCP(args.CWD, r.Trusted))
 	// Drop servers the user or (restrict-only) project has disabled before
@@ -204,24 +250,45 @@ func SetupMCP(ctx context.Context, args Args, r *Resolved) (*MCPToolAdapter, fun
 	// spawn. The same set rides the adapter so the /mcp dialog's live
 	// enable path can't resurrect a server this run excluded.
 	applyMCPAllowlist(mcpCfg, args.WithMCP)
-	// Build a Manager even when nothing is configured or everything is
-	// disabled: the /mcp dialog can live-enable a server later via
-	// StartOne, and an empty Manager is a valid no-op (no subprocesses).
-	// Only --no-mcp (handled above) skips the Manager entirely.
-	adapter := &MCPToolAdapter{allowed: mcpAllowSet(args.WithMCP)}
-	mgr := mcp.StartAll(ctx, mcpCfg, args.CWD, adapter.StderrFor)
-	adapter.Mgr = mgr
-	for _, w := range mgr.Warnings() {
-		fmt.Fprintln(os.Stderr, "note:", w)
+	return mcpCfg, mcpAllowSet(args.WithMCP), true
+}
+
+// tervaExecutable locates this binary, which serves the Talkoot bridge. A test
+// points it at a built terva, since os.Executable is the test binary there.
+var tervaExecutable = os.Executable
+
+// teamMCPConfig is the one server a --team-socket run starts: this binary's
+// mcp-talkoot-bridge, relaying to socket.
+func teamMCPConfig(socket string) (*mcp.Config, error) {
+	exe, err := tervaExecutable()
+	if err != nil {
+		return nil, fmt.Errorf("locate terva: %w", err)
 	}
-	r.MergeExtensionTools(adapter)
-	// StopAll first so the stderr pumps have finished writing, then release
-	// the log handles (including any opened by a live StartOne).
-	stop := func() {
-		mgr.StopAll()
-		adapter.closeLogs()
+	return &mcp.Config{Servers: map[string]mcp.ServerConfig{
+		mcpbridge.TeamServerName: {Command: exe, Args: []string{"mcp-talkoot-bridge", "--socket", socket}, TimeoutMS: mcpbridge.TeamCallTimeoutMS},
+	}}, nil
+}
+
+// TeamBridgeReady reports whether a --team-socket run's bridge started and
+// listed every seat tool. A member without them cannot answer its team, so
+// the caller refuses to run rather than let it work unheard, as the worker
+// runner stops a claude member whose bridge did not load.
+func (a *MCPToolAdapter) TeamBridgeReady() error {
+	if a == nil || a.Mgr == nil {
+		return errors.New("the Talkoot bridge did not start")
 	}
-	return adapter, stop
+	have := map[string]bool{}
+	for _, t := range a.Mgr.Tools() {
+		if t.Server == mcpbridge.TeamServerName {
+			have[t.Name] = true
+		}
+	}
+	for _, name := range permissions.TeamBridgeTools() {
+		if !have[name] {
+			return fmt.Errorf("the Talkoot bridge did not list %s (%s)", name, strings.Join(a.Mgr.Warnings(), "; "))
+		}
+	}
+	return nil
 }
 
 // AllowsThisRun reports whether the --mcp allowlist admits the named

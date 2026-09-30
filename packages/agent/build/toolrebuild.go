@@ -88,9 +88,7 @@ type LiveToolSet struct {
 	TicketCard *tools.TicketCard
 
 	// Ext and MCP are the two tool sources a fresh Resolve knows nothing about.
-	// Order is load-bearing and matches the build order: MergeExtensionTools is
-	// first-write-wins, so merging extensions first keeps an extension tool
-	// winning a name collision against an MCP server's.
+	// Their merge order is load-bearing, and toolSources holds it.
 	Ext *extensions.Manager
 	MCP *MCPToolAdapter
 
@@ -98,6 +96,27 @@ type LiveToolSet struct {
 	// Hosts that negotiate a channel after a rebuild keep it here rather than
 	// reading the agent concurrently while the registry is being published.
 	Asker core.Asker
+}
+
+// toolSources is the merge order of Rebuild's two tool sources. The merge is
+// first-write-wins, so an extension's tool wins a name collision against an
+// MCP server's.
+//
+// 🔑 A --team-socket run's bridge goes first. The run's policy allows the
+// bridge's tool names (permissions.TeamBridgeTools), so an extension tool
+// that took one of those names would skip the worker's gate as well.
+func (s LiveToolSet) toolSources() []ExtensionToolSource {
+	var out []ExtensionToolSource
+	if s.MCP != nil && s.MCP.team {
+		out = append(out, s.MCP)
+	}
+	if s.Ext != nil {
+		out = append(out, &ExtToolAdapter{Mgr: s.Ext})
+	}
+	if s.MCP != nil && !s.MCP.team {
+		out = append(out, s.MCP)
+	}
+	return out
 }
 
 // Rebuild re-resolves and swaps the result onto ag, reporting whether the
@@ -118,11 +137,8 @@ func (s LiveToolSet) Rebuild(ag *core.Agent) bool {
 	r.UseFiles(s.Files)
 	r.UseSandbox(s.Sandbox)
 	r.UseTicketCard(s.TicketCard)
-	if s.Ext != nil {
-		r.MergeExtensionTools(&ExtToolAdapter{Mgr: s.Ext})
-	}
-	if s.MCP != nil {
-		r.MergeExtensionTools(s.MCP)
+	for _, src := range s.toolSources() {
+		r.MergeExtensionTools(src)
 	}
 	// A front-end channel belongs to the live session, not to a resolved tool
 	// registry. Carry the explicit survivor onto every fresh registry so

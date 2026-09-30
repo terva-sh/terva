@@ -2,6 +2,8 @@ package workspace
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,12 +15,30 @@ import (
 // seatedWorker creates the crew talkoot and binds jev's worker as agent-1.
 func seatedWorker(t *testing.T) (*Workspace, *fakeWorkers) {
 	t.Helper()
+	return seatedWorkerWith(t, "")
+}
+
+// seatedWorkerWith is seatedWorker with more of jev's roster fields, as YAML.
+func seatedWorkerWith(t *testing.T, jev string) (*Workspace, *fakeWorkers) {
+	t.Helper()
+	return seatedWorkerConfig(t, jev, "")
+}
+
+// seatedWorkerConfig is seatedWorkerWith under a user config of cfg, which the
+// workspace reads as it opens. An empty cfg keeps workerHome's.
+func seatedWorkerConfig(t *testing.T, jev, cfg string) (*Workspace, *fakeWorkers) {
+	t.Helper()
 	cwd := workerHome(t, true)
+	if cfg != "" {
+		if err := os.WriteFile(filepath.Join(os.Getenv("TERVA_HOME"), "config.json"), []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	w := openTalkootWorkspace(t, cwd)
 	fw := newFakeWorkers()
 	w.talkootWorkers = fw
 	ctx := t.Context()
-	if _, err := w.talkootCreate(ctx, "crew", workerCrew(cwd, "")); err != nil {
+	if _, err := w.talkootCreate(ctx, "crew", workerCrew(cwd, jev)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.talkootPost(ctx, "crew", "sothr", []string{"jev"}, "Start.", nil, ""); err != nil {

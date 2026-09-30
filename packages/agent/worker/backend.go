@@ -122,6 +122,17 @@ type Backend struct {
 	// terva:portable (config-opaque) use the socket.
 	ApprovalSocket bool
 
+	// TeamBridge says Command can put the Talkoot MCP bridge on the worker's
+	// MCP config (decision 0023). When the host gives the runner a Team, the
+	// runner opens a second 0600 socket beside the approval one and hands its
+	// path to Command as Dispatch.TeamSocket. A member without its seat tools
+	// cannot answer its team, so a worker whose bridge did not load must stop.
+	// Either the backend's Translate reports the worker's MCP servers on
+	// agent_ready as mcp_servers, a map from server name to status, and the
+	// runner stops the worker (claude), or the worker exits by itself (`terva
+	// rpc --team-socket`).
+	TeamBridge bool
+
 	// Cursor mints the resume token BEFORE the process starts, from the agent
 	// id. Nil means the backend cannot resume.
 	//
@@ -209,6 +220,13 @@ type Dispatch struct {
 	// config and names its tool to the CLI's permission flag. Empty means "no
 	// approval carrier wired" — the worker's own headless default (deny) applies.
 	ApprovalSocket string
+
+	// TeamSocket is the unix-socket path the worker's Talkoot bridge dials to
+	// reach its member's seat. Non-empty only for a backend with TeamBridge
+	// whose runner has a Team. Command then puts a `terva mcp-talkoot-bridge
+	// --socket <path>` on the worker's MCP config, or passes the path to a
+	// terva worker as --team-socket.
+	TeamSocket string
 
 	// SessionPath is the per-agent session file the worker persists its
 	// conversation to (the swarm's <root>/agents/<id>/session.json). A terva

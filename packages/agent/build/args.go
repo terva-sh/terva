@@ -517,6 +517,15 @@ type Args struct {
 	// carrier fails to start and the run stays refuse-by-default (fail closed).
 	ApprovalHTTP string
 
+	// TeamSocket runs the Talkoot MCP bridge (decision 0023) as this run's one
+	// MCP server: terva's own MCP client spawns `terva mcp-talkoot-bridge
+	// --socket <path>`, and the model gets its seat tools. The worker runner
+	// sets it for a terva:portable member. The user's and the project's MCP
+	// servers do not start beside it, as claude's --strict-mcp-config keeps
+	// them out of a claude member, so no other server can take the names the
+	// policy lets through (permissions.TeamBridgeTools). Empty means no bridge.
+	TeamSocket string
+
 	ListModels bool
 	// ListModelsFilter narrows --list-models output (the `=FILTER`
 	// form): a comma list of source terms (user | live | catalog |
@@ -573,6 +582,7 @@ func (a Args) PermInputs() permissions.Inputs {
 		Trust:    a.Trust,
 
 		TalkootMember: a.TalkootMember,
+		TeamBridge:    a.TeamSocket != "",
 	}
 }
 
@@ -1070,6 +1080,12 @@ func ParseArgs(in []string) (Args, error) {
 				return a, err
 			}
 			a.ApprovalHTTP = v
+		case "--team-socket":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.TeamSocket = v
 		case "--approval":
 			v, err := want(&i, arg)
 			if err != nil {

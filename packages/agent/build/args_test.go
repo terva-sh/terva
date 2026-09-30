@@ -427,6 +427,22 @@ func TestParseArgsRPCApprovals(t *testing.T) {
 	}
 }
 
+// --team-socket names the Talkoot bridge's socket, and the run's policy then
+// lets the bridge's tools through.
+func TestParseArgsTeamSocket(t *testing.T) {
+	a, err := ParseArgs([]string{"rpc", "--team-socket", "/leases/wt-7/in.tk"})
+	if err != nil {
+		t.Fatalf("ParseArgs: %v", err)
+	}
+	if a.TeamSocket != "/leases/wt-7/in.tk" || !a.PermInputs().TeamBridge {
+		t.Errorf("TeamSocket = %q, TeamBridge = %v", a.TeamSocket, a.PermInputs().TeamBridge)
+	}
+	b, _ := ParseArgs([]string{"rpc"})
+	if b.TeamSocket != "" || b.PermInputs().TeamBridge {
+		t.Error("a run without --team-socket has no bridge")
+	}
+}
+
 func TestParseArgsApprovalSocket(t *testing.T) {
 	a, err := ParseArgs([]string{"--approval-socket", "/leases/wt-7/in.ap"})
 	if err != nil {

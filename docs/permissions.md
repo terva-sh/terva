@@ -521,7 +521,19 @@ sessions a talkoot drives refuses such a caller every session write, its own
 sessions included, rather than guess.
 
 A member reaches its team through its own tools, `talkoot_send` and
-`talkoot_handoff`, which speak as that member. It never needs the verbs. The
+`talkoot_handoff`, which speak as that member. It never needs the verbs. A
+Claude Code member calls the same tools through the Talkoot MCP bridge. The
+runner opens a socket for that member's worker, and the socket names the
+member. Each call takes a native member's path through the daemon: your
+pre-tool-use hooks, then the policy a native member in the same posture
+holds, your rules included, then your post-tool-use hooks. A call the policy
+asks about opens a permission card in the talkoot's inbox. A config that the
+daemon cannot read refuses the call. Extension intercepts do not run,
+because the worker has no session. The socket's 0600 permissions keep
+other users out, and not other processes of your user, as for the approval
+socket. A `terva:portable` member's own policy lets the four bridge tools
+through in every posture, as a Claude Code member's `--allowedTools` does,
+because the daemon asks on its behalf. The
 `steer` capability binds a control-protocol caller, though, and nothing
 more. A member whose posture lets it run `bash` can run `terva ctl` against
 its own daemon, as the daemon's own user, with whatever token that daemon

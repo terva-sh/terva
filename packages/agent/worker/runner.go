@@ -54,6 +54,10 @@ type Runner struct {
 	// the worker unwinds with a reason rather than hanging.
 	confirmer permission.Confirmer
 
+	// team answers the worker's seat-tool calls when it is a Talkoot member.
+	// Nil means the worker has no seat tools. See WithTeam.
+	team Team
+
 	// stdin is the child's input pipe, guarded by stdinMu because two goroutines
 	// write it: pumpStdin (the opening turn and inbox steers) and handleAsk (the
 	// approve replies). One frame per lock keeps them from interleaving on the
@@ -156,6 +160,21 @@ func (r *Runner) Run(ctx context.Context, sink swarm.Sink) error {
 			sink.Transcript("worker: approval bridge socket unavailable (" + aerr.Error() + "); tool approvals will be denied")
 		}
 	}
+	// A Talkoot member's seat tools ride a socket of their own. Unlike the
+	// approval socket, one that cannot open fails the spawn: a member that
+	// cannot reach its team would work and never report.
+	if r.team != nil && r.backend.TeamBridge {
+		if r.agent.InboxPath == "" {
+			return fmt.Errorf("worker %s: a Talkoot member needs an inbox path to derive its bridge socket from", r.backend.Name)
+		}
+		tkPath := teamSocketPath(r.agent.InboxPath)
+		tl, terr := r.serveTeam(ctx, tkPath)
+		if terr != nil {
+			return fmt.Errorf("worker %s: open the Talkoot bridge socket: %w", r.backend.Name, terr)
+		}
+		dispatch.TeamSocket = tkPath
+		defer tl.Close()
+	}
 
 	cmd, err := r.backend.command(dispatch)
 	if err != nil {
@@ -217,6 +236,9 @@ func (r *Runner) Run(ctx context.Context, sink swarm.Sink) error {
 	// stdout: the vendor's event stream. Every line is retained raw; every line
 	// the backend can translate becomes swarm events through the shared ingest
 	// path, so a foreign worker's dashboard behaves exactly like a native one's.
+	// bridgeErr is set when the worker reports that its Talkoot bridge did not
+	// connect. The stdout reader writes it before stdoutDone closes.
+	var bridgeErr error
 	stdoutDone := make(chan struct{})
 	go func() {
 		defer close(stdoutDone)
@@ -243,6 +265,15 @@ func (r *Runner) Run(ctx context.Context, sink swarm.Sink) error {
 					appendRaw(raw, trimmed)
 					for _, ev := range r.backend.Translate([]byte(trimmed)) {
 						ev, pendingErr = carryTurnError(ev, pendingErr)
+						// Claude reports its servers at the start of each turn,
+						// so a worker that exits without this event ran no turn
+						// and did no work without its seat tools.
+						if dispatch.TeamSocket != "" && bridgeErr == nil && ev.Type == "agent_ready" {
+							if bridgeErr = teamBridgeLoaded(ev.Data); bridgeErr != nil {
+								sink.Transcript("worker: " + bridgeErr.Error() + "; stopping it")
+								_ = cmd.Process.Kill()
+							}
+						}
 						// An approval request is intercepted, not mirrored to the
 						// sink: it is a question, and the runner answers it (routing
 						// to the orchestrator's human) rather than surfacing it as a
@@ -313,6 +344,10 @@ func (r *Runner) Run(ctx context.Context, sink swarm.Sink) error {
 	exit := 0
 	if ee, ok := err.(*exec.ExitError); ok {
 		exit = ee.ExitCode()
+	}
+	if bridgeErr != nil {
+		_ = log.Append(swarm.NewEvent("agent_stopped", map[string]any{"reason": "team_bridge", "error": bridgeErr.Error()}))
+		return fmt.Errorf("worker %s: %w", r.backend.Name, bridgeErr)
 	}
 	if err != nil && ctx.Err() != nil {
 		_ = log.Append(swarm.NewEvent("agent_stopped", map[string]any{"reason": "cancelled"}))

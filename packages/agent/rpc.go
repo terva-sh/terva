@@ -104,6 +104,13 @@ func runRPCMode(ctx context.Context, args build.Args, version string) error {
 	// tools; a fresh Resolve carries none of them.
 	mcpAdapter, stopMCP := build.SetupMCP(ctx, args, &r)
 	defer stopMCP()
+	if args.TeamSocket != "" {
+		// 🚨 A member whose bridge did not load would work with no way to
+		// reach its team. Exiting ends the worker, and the runner reports it.
+		if err := mcpAdapter.TeamBridgeReady(); err != nil {
+			return err
+		}
+	}
 
 	hookEng := build.BuildHookEngine(args, r.Trusted)
 	ag := r.NewAgent(build.BuildToolGate(hookEng, confirmGate, extMgr), build.ExtensionFilters(ctx, extMgr)...)
@@ -396,7 +403,7 @@ type rpcServer struct {
 	extReady <-chan struct{}
 
 	writeMu      sync.Mutex
-	turnMu       sync.Mutex // serialises one prompt at a time
+	turns        rpcTurnQueue // runs one prompt or compact at a time, in arrival order
 	activeCancel context.CancelFunc
 	authed       bool
 
@@ -545,10 +552,14 @@ func (s *rpcServer) dispatch(cmd, id string, raw []byte) {
 			return
 		}
 		s.markTurnStarted()
+		// 🔑 The place in line is taken here, on the read loop, so turns run
+		// in the order their commands arrived. A goroutine that took it would
+		// race the others for it.
+		turn := s.turns.join()
 		s.inFlight.Add(1)
 		go func() {
 			defer s.inFlight.Done()
-			s.runPrompt(id, req.Message, req.Images)
+			s.runPromptIn(turn, id, req.Message, req.Images)
 		}()
 
 	case "abort":
@@ -595,10 +606,11 @@ func (s *rpcServer) dispatch(cmd, id string, raw []byte) {
 
 	case "compact":
 		s.markTurnStarted()
+		turn := s.turns.join()
 		s.inFlight.Add(1)
 		go func() {
 			defer s.inFlight.Done()
-			s.runCompact(id)
+			s.runCompactIn(turn, id)
 		}()
 
 	case "get_state":
@@ -676,15 +688,24 @@ func (s *rpcServer) awaitExtensions(ctx context.Context) {
 	}
 }
 
-// runPrompt executes a single prompt turn and streams events out.
-// Holds turnMu so a second concurrent prompt blocks until this one
-// finishes; the user can abort with the abort command.
+// runPrompt executes a single prompt turn and streams events out, after
+// every turn already in line.
 func (s *rpcServer) runPrompt(id, message string, images []struct {
 	MimeType string `json:"mime_type"`
 	Data     []byte `json:"data"`
 }) {
-	s.turnMu.Lock()
-	defer s.turnMu.Unlock()
+	s.runPromptIn(s.turns.join(), id, message, images)
+}
+
+// runPromptIn runs a prompt turn once turn comes up, and holds the line until
+// it finishes. A prompt that arrives meanwhile waits behind it, and the user
+// can abort it with the abort command.
+func (s *rpcServer) runPromptIn(turn <-chan struct{}, id, message string, images []struct {
+	MimeType string `json:"mime_type"`
+	Data     []byte `json:"data"`
+}) {
+	<-turn
+	defer s.turns.leave()
 
 	subCtx, cancel := context.WithCancel(s.ctx)
 	s.setCancel(cancel)
@@ -746,8 +767,13 @@ func (s *rpcServer) runPrompt(id, message string, images []struct {
 // cancellation emits no result event (the prior turn signal already covers it)
 // but still terminates with "done".
 func (s *rpcServer) runCompact(id string) {
-	s.turnMu.Lock()
-	defer s.turnMu.Unlock()
+	s.runCompactIn(s.turns.join(), id)
+}
+
+// runCompactIn runs a compaction once turn comes up, as runPromptIn does.
+func (s *rpcServer) runCompactIn(turn <-chan struct{}, id string) {
+	<-turn
+	defer s.turns.leave()
 
 	subCtx, cancel := context.WithCancel(s.ctx)
 	s.setCancel(cancel)
@@ -798,6 +824,43 @@ func (s *rpcServer) runCompact(id string) {
 		s.writeEvent(map[string]any{"type": "error", "error": err.Error()})
 	}
 	s.writeEvent(map[string]any{"type": "done"})
+}
+
+// rpcTurnQueue runs turns one at a time, in the order they joined. A
+// sync.Mutex does not promise its waiters that order, so prompts queued behind
+// a busy turn could run out of the order they arrived.
+type rpcTurnQueue struct {
+	mu      sync.Mutex
+	busy    bool
+	waiting []chan struct{}
+}
+
+// join takes the next place in line. The channel closes when the turn may run,
+// and the turn then calls leave once.
+func (q *rpcTurnQueue) join() <-chan struct{} {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	ch := make(chan struct{})
+	if !q.busy {
+		q.busy = true
+		close(ch)
+		return ch
+	}
+	q.waiting = append(q.waiting, ch)
+	return ch
+}
+
+// leave ends the running turn and starts the next one in line.
+func (q *rpcTurnQueue) leave() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.waiting) == 0 {
+		q.busy = false
+		return
+	}
+	next := q.waiting[0]
+	q.waiting = q.waiting[1:]
+	close(next)
 }
 
 // snapshotState builds the get_state response.

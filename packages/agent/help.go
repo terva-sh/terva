@@ -136,6 +136,7 @@ func PrintHelp(version string) {
 		// system prompt. It was undocumented long enough to be mistaken for a
 		// headless mode, which is what -p / --json / rpc are.
 		row{"--portable", i18n.T("drop terva's harness-local self-context from the system prompt, so the agent runs on what its briefing gave it — for driving terva as a worker from another harness. Not a run mode; pairs with -p / --json / rpc")},
+		row{"--team-socket PATH", i18n.T("rpc only: run the Talkoot MCP bridge at PATH as the run's only MCP server, so a Talkoot member can reach its team. The worker runner sets it. See docs/rpc.md")},
 		row{"--portable=strict", i18n.T("also drop terva's own discovery (AGENTS.md, skills, lore), proving the briefing stands alone")},
 		row{"--persona NAME|FILE", i18n.T("load a persona (built-in/on-disk name or .md path) as the identity")},
 		row{"--recruit ID", i18n.T("with terva attach, open a Talkoot recruiter session for talkoot ID: Hautoja reads the roster, asks about the job, and proposes a member for you to approve")},

@@ -63,6 +63,9 @@ func claudeBackend() Backend {
 		// wire: the runner serves a socket and claudeCommand points
 		// --permission-prompt-tool at a `terva mcp-approval-bridge` reaching it.
 		ApprovalSocket: true,
+		// The seat tools ride a second MCP server beside the approval one,
+		// and the init event reports whether it connected.
+		TeamBridge: true,
 	}
 }
 
@@ -124,43 +127,69 @@ func claudeCommand(d Dispatch) (*exec.Cmd, error) {
 	// {behavior:"allow"|"deny"} reply (a deny blocks the tool, recorded in
 	// permission_denials). --strict-mcp-config so the worker's MCP surface is
 	// EXACTLY the bridge, never the human's own configured servers.
+	//
+	// The Talkoot bridge, when the runner served one, joins the same config
+	// as a second server (decision 0023). It carries the member's seat tools.
 	canAsk := d.ApprovalSocket != ""
-	if canAsk {
+	servers := map[string]any{}
+	if canAsk || d.TeamSocket != "" {
 		exe, err := tervaExe()
 		if err != nil {
-			return nil, fmt.Errorf("locate terva for the approval bridge: %w", err)
+			return nil, fmt.Errorf("locate terva for the MCP bridges: %w", err)
 		}
-		cfg, err := json.Marshal(map[string]any{
-			"mcpServers": map[string]any{
-				mcpbridge.ServerName: map[string]any{
-					"command": exe,
-					"args":    []string{"mcp-approval-bridge", "--socket", d.ApprovalSocket},
-				},
-			},
-		})
+		if canAsk {
+			servers[mcpbridge.ServerName] = map[string]any{
+				"command": exe,
+				"args":    []string{"mcp-approval-bridge", "--socket", d.ApprovalSocket},
+			}
+		}
+		if d.TeamSocket != "" {
+			servers[mcpbridge.TeamServerName] = map[string]any{
+				"command": exe,
+				"args":    []string{"mcp-talkoot-bridge", "--socket", d.TeamSocket},
+				// A question waits for a person. Claude's own bound is about 28
+				// hours, so this sets the approval carrier's instead, and an
+				// unanswered question ends as an error the member reads.
+				"timeout": mcpbridge.TeamCallTimeoutMS,
+			}
+		}
+		cfg, err := json.Marshal(map[string]any{"mcpServers": servers})
 		if err != nil {
 			return nil, err
 		}
-		args = append(args,
-			"--mcp-config", string(cfg),
-			"--strict-mcp-config",
-			"--permission-prompt-tool", mcpbridge.PermissionToolRef,
-		)
+		args = append(args, "--mcp-config", string(cfg))
 	}
-	// A tools list narrows the built-in set, and --strict-mcp-config bounds
-	// the MCP servers on both paths. With the bridge, the block above set it,
-	// so the servers are the bridge alone. Without it, the flag with no config
-	// loads none. Either way, the person's own servers bring no tool past the
-	// list. A non-nil empty list is seat tools alone, and narrows to nothing.
+	// --strict-mcp-config makes the servers above the worker's whole MCP
+	// surface. Either bridge sets it, and so does a tools list: without a
+	// config, the flag loads no server. Either way, the person's own servers
+	// bring no tool past the list or the posture, and none can take the
+	// Talkoot server's name and its pre-approved tools (decision 0023, rule 3).
+	if canAsk || d.TeamSocket != "" || d.Tools != nil {
+		args = append(args, "--strict-mcp-config")
+	}
+	if canAsk {
+		args = append(args, "--permission-prompt-tool", mcpbridge.PermissionToolRef)
+	}
+	// The daemon gates each seat-tool call with the member's own policy: its
+	// posture, the person's rules, and a card when the policy asks. Claude
+	// would also send each MCP call to the permission tool, and that card
+	// would not know the rules. So the seat tools are pre-approved here, and
+	// the daemon is their one gate.
+	if d.TeamSocket != "" {
+		args = append(args, "--allowedTools", strings.Join(claudeSeatTools(), ","))
+		// The bridge's ask_user_question is the member's one question tool.
+		// Claude's own would reach the approval bridge as a permission card,
+		// and its answer would not reach the room.
+		args = append(args, "--disallowedTools", "AskUserQuestion")
+	}
+	// A tools list narrows the built-in set. A non-nil empty list is seat
+	// tools alone, and narrows to nothing.
 	if d.Tools != nil {
 		names, err := claudeTools(d.Tools)
 		if err != nil {
 			return nil, err
 		}
 		args = append(args, "--tools", strings.Join(names, ","))
-		if !canAsk {
-			args = append(args, "--strict-mcp-config")
-		}
 	}
 	if pm := claudePermissionMode(d.Briefing.Policy.Posture, canAsk); pm != "" {
 		args = append(args, "--permission-mode", pm)
@@ -183,15 +212,22 @@ var claudeToolNames = map[string]string{
 	"bash": "Bash", "grep": "Grep", "glob": "Glob",
 }
 
+// claudeSeatTools names the bridge's seat tools as Claude calls them.
+func claudeSeatTools() []string {
+	var out []string
+	for _, t := range talkoot.BridgeTools {
+		out = append(out, "mcp__"+mcpbridge.TeamServerName+"__"+t)
+	}
+	return out
+}
+
 // claudeTools maps a tools allowlist onto Claude Code's --tools names. A seat
 // tool reaches Claude through the Talkoot MCP bridge, not --tools, so it maps
 // to nothing. Any other name, a pattern included, is refused: Claude has no
 // tool terva can name for it.
 //
-// ⚠️ With a list, --strict-mcp-config loads only the servers in --mcp-config.
-// The Talkoot MCP bridge (decision 0023) is not built yet. When it is, it
-// must join the --mcp-config on both paths, or the seat tools go with the
-// person's own servers.
+// ⚠️ With a list, --strict-mcp-config loads only the servers in --mcp-config,
+// so the Talkoot bridge joins that config on both paths (claudeCommand).
 func claudeTools(names []string) ([]string, error) {
 	var out []string
 	for _, n := range names {
@@ -396,6 +432,10 @@ func translateClaude(line []byte) []Event {
 		PermDenials   json.RawMessage `json:"permission_denials"`
 		ThinkingToken int             `json:"estimated_tokens"`
 		IsReplay      bool            `json:"isReplay"`
+		MCPServers    []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+		} `json:"mcp_servers"`
 	}
 	if err := json.Unmarshal(line, &ev); err != nil || ev.Type == "" {
 		return nil // not an event; the runner keeps the raw line as transcript
@@ -408,12 +448,22 @@ func translateClaude(line []byte) []Event {
 			// The version stamp arrives here, free, in the first event of the run
 			// we were doing anyway — no second process, and it is the version that
 			// ACTUALLY RAN rather than one a separate probe reported.
-			return []Event{{Type: "agent_ready", Data: map[string]any{
+			data := map[string]any{
 				"backend":    BackendClaude,
 				"version":    ev.CLIVersion,
 				"model":      ev.Model,
 				"session_id": ev.SessionID,
-			}}}
+			}
+			// The runner reads the Talkoot bridge's status here (TeamBridge).
+			// An init with no list reports none, so the runner can say so.
+			if ev.MCPServers != nil {
+				servers := map[string]any{}
+				for _, sv := range ev.MCPServers {
+					servers[sv.Name] = sv.Status
+				}
+				data["mcp_servers"] = servers
+			}
+			return []Event{{Type: "agent_ready", Data: data}}
 		case "thinking_tokens":
 			return nil // pure telemetry; the raw line is kept, nothing to model
 		}
