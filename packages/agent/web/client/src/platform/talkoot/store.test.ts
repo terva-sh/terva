@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { TalkootCard, TalkootEnvelope, TalkootLine, TalkootView, WireEvent } from '../ctrlproto/types'
+import type { TalkootCard, TalkootEnvelope, TalkootLine, TalkootMember, TalkootView, WireEvent } from '../ctrlproto/types'
 import { TalkootHub } from './hub'
 import {
   applyTalkootEvent,
@@ -104,18 +104,32 @@ describe('the talkoot store', () => {
     expect(compareTime('2026-09-27T12:00:05+02:00', '2026-09-27T10:00:05Z')).toBe(0)
   })
 
+  it('keeps each member\'s newest beat, with a fresh key for every play', () => {
+    let s = emptyTalkoot('crew')
+    const beat = (member: string, name: string, toward?: string) =>
+      ev('talkoot_beat', { id: 'crew', beat: { member, beat: name, toward, cause: 'c', at: '2026-09-30T10:00:00Z' } })
+    s = applyTalkootEvent(s, beat('jev', 'glance', 'helm'))
+    expect(s.beats.jev).toEqual({ name: 'glance', key: 1, toward: 'helm' })
+    s = applyTalkootEvent(s, beat('helm', 'happy'))
+    s = applyTalkootEvent(s, beat('jev', 'glance', 'helm'))
+    expect(s.beats.jev.key).toBe(3)
+    expect(s.beats.helm).toEqual({ name: 'happy', key: 2, toward: undefined })
+    // A beat of another talkoot, or one with no member, changes nothing.
+    const other = ev('talkoot_beat', { id: 'other', beat: { member: 'jev', beat: 'happy', cause: 'c', at: '2026-09-30T10:00:00Z' } })
+    expect(applyTalkootEvent(s, other)).toBe(s)
+    expect(applyTalkootEvent(s, ev('talkoot_beat', { id: 'crew' }))).toBe(s)
+  })
+
   it('folds status, inbox, and roster events for its own talkoot only', () => {
     let s = setView(emptyTalkoot('crew'), view())
-    s = applyTalkootEvent(s, ev('talkoot_status', { id: 'crew', members: [{ member: 'jev', working: true }] }))
+    s = applyTalkootEvent(s, ev('talkoot_status', { id: 'crew', members: [{ member: 'jev', presence: 'working', working: true }] }))
     expect(s.view!.members[1].status.working).toBe(true)
 
     const card: TalkootCard = { session: 's1', member: 'jev', kind: 'ask', id: 'a1' }
     s = applyTalkootEvent(s, ev('talkoot_inbox', { id: 'crew', card }))
     expect(s.cards).toHaveLength(1)
-    expect(presence(s.view!.members[1], s.cards)).toBe('waiting')
     s = applyTalkootEvent(s, ev('talkoot_inbox_resolved', { id: 'crew', card }))
     expect(s.cards).toHaveLength(0)
-    expect(presence(s.view!.members[1], s.cards)).toBe('working')
 
     s = applyTalkootEvent(s, ev('talkoot_roster', { id: 'crew', line: { type: 'roster', at: '2026-09-27T10:00:00Z', by: 'sothr' } }))
     expect(rosterStale(s)).toBe(true)
@@ -138,9 +152,22 @@ describe('the talkoot store', () => {
     expect(other).toBe(s)
   })
 
-  it('shows a paused member as paused before anything else', () => {
-    const m = { id: 'jev', role: 'specialist', status: { member: 'jev', working: true, paused: 'budget' } }
-    expect(presence(m, [{ session: 's', member: 'jev', kind: 'ask', id: 'a' }])).toBe('paused')
+  it('reads the presence the daemon decided', () => {
+    const ask: TalkootCard[] = [{ session: 's', member: 'jev', kind: 'ask', id: 'a' }]
+    const at = (status: TalkootMember['status'], cards: TalkootCard[] = []) => presence({ id: 'jev', role: 'specialist', status }, cards)
+    expect(at({ member: 'jev', presence: 'working', working: true }, ask)).toBe('working')
+    expect(at({ member: 'jev', presence: 'offline' })).toBe('offline')
+    // A newer daemon can send a state this client does not know.
+    expect(at({ member: 'jev', presence: 'dreaming' })).toBe('idle')
+  })
+
+  it('works out the presence from an older daemon status that has none', () => {
+    const ask: TalkootCard[] = [{ session: 's', member: 'jev', kind: 'ask', id: 'a' }]
+    const at = (status: TalkootMember['status'], cards: TalkootCard[] = []) => presence({ id: 'jev', role: 'specialist', status }, cards)
+    expect(at({ member: 'jev', working: true, paused: 'budget' }, ask)).toBe('paused')
+    expect(at({ member: 'jev', working: true }, ask)).toBe('waiting')
+    expect(at({ member: 'jev', working: true })).toBe('working')
+    expect(at({ member: 'jev' })).toBe('idle')
   })
 
   it('filters a member conversation with the person', () => {
@@ -182,9 +209,37 @@ describe('the talkoot store', () => {
     expect(items.map((i) => i.kind)).toEqual(['exchange', 'line', 'line'])
     expect(items[0].kind === 'exchange' && items[0].lines).toHaveLength(2)
   })
+
+  it('keeps an exchange whole across signal lines', () => {
+    const lines: TalkootLine[] = [
+      env('helm', ['jev'], '2026-09-27T10:00:00Z'),
+      { type: 'tool_error', at: '2026-09-27T10:00:01Z', member: 'jev', tool: 'bash' },
+      { type: 'retry', at: '2026-09-27T10:00:01Z', member: 'jev', attempt: 1 },
+      { type: 'card_open', at: '2026-09-27T10:00:01Z', member: 'jev', card: 'question', ref: 'a1' },
+      { type: 'card_close', at: '2026-09-27T10:00:01Z', member: 'jev', card: 'question', ref: 'a1', outcome: 'answered' },
+      env('jev', ['helm'], '2026-09-27T10:00:02Z'),
+    ]
+    const items = roomItems(lines)
+    expect(items.map((i) => i.kind)).toEqual(['exchange'])
+    expect(items[0].kind === 'exchange' && items[0].lines).toHaveLength(2)
+  })
 })
 
 describe('the talkoot hub', () => {
+  it('hands talkoots_changed to the list listeners, whatever its address', () => {
+    const hub = new TalkootHub()
+    const list = vi.fn()
+    const room = vi.fn()
+    const stop = hub.onList(list)
+    hub.listen('crew', room)
+    expect(hub.dispatch('#workspace', { type: 'talkoots_changed' } as WireEvent)).toBe(true)
+    expect(list).toHaveBeenCalledTimes(1)
+    expect(room).not.toHaveBeenCalled()
+    stop()
+    hub.dispatch('#workspace', { type: 'talkoots_changed' } as WireEvent)
+    expect(list).toHaveBeenCalledTimes(1)
+  })
+
   it('hands a room address to its listeners and nothing else', () => {
     const hub = new TalkootHub()
     const fn = vi.fn()

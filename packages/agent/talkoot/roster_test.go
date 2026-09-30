@@ -11,8 +11,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/look"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -171,6 +173,7 @@ func TestValidateRefusals(t *testing.T) {
 		{"NaN member budget", func(r *Roster) { r.Members[2].BudgetUSDPerDay = math.NaN() }, "jev: budget_usd_per_day is not a positive number"},
 		{"posture in another case", func(r *Roster) { r.Members[0].Posture = "YOLO" }, `posture "YOLO" is not an approval mode`},
 		{"no home", func(r *Roster) { r.Home = "" }, "home is missing"},
+		{"bad team colour", func(r *Roster) { r.Color = "orange" }, `color "orange" is not a #RRGGBB value`},
 		{"two coordinators", func(r *Roster) { r.Members[1].Role = RoleCoordinator }, "exactly one coordinator, and this one has 2"},
 		{"no coordinator", func(r *Roster) { r.Members[0].Role = RoleSpecialist }, "exactly one coordinator, and this one has 0"},
 		{"bad role", func(r *Roster) { r.Members[4].Role = "boss" }, `gage: role "boss"`},
@@ -183,6 +186,9 @@ func TestValidateRefusals(t *testing.T) {
 		{"yolo in the shared checkout", func(r *Roster) { r.Members[0].Posture = "yolo" }, "helm: posture yolo needs workspace: worktree"},
 		{"bad posture", func(r *Roster) { r.Members[0].Posture = "godmode" }, `posture "godmode"`},
 		{"bad workspace", func(r *Roster) { r.Members[0].Workspace = "home" }, `workspace "home"`},
+		{"mark shape outside the set", func(r *Roster) { r.Members[0].Mark = &look.Mark{Shape: "star"} }, `helm: mark shape "star"`},
+		{"mark color that is not hex", func(r *Roster) { r.Members[0].Mark = &look.Mark{Color: "blue"} }, `helm: mark color "blue"`},
+		{"empty mark", func(r *Roster) { r.Members[0].Mark = &look.Mark{} }, "helm: mark sets neither shape nor color"},
 		{"model and tier", func(r *Roster) { r.Members[0].Model = "opus" }, "helm: set model or tier, not both"},
 		{"bad tier", func(r *Roster) { r.Members[0].Tier = "huge" }, `tier "huge"`},
 		{"member over the team budget", func(r *Roster) { r.Members[2].BudgetUSDPerDay = 41 }, "jev: budget_usd_per_day 41.00 is above the talkoot's 40.00"},
@@ -204,6 +210,11 @@ func TestValidateRefusals(t *testing.T) {
 			r.Members[2].Tools = []string{"read"}
 		}, `jev: driver "gemini" is not registered`},
 		{"tools on a backend with no allowlist", func(r *Roster) { r.Members[3].Tools = []string{"read"} }, `yelp: driver "acp:codex" cannot narrow its tools`},
+		{"yolo on a worker, even in a worktree", func(r *Roster) { r.Members[2].Posture = "yolo" }, "jev: posture yolo is not open to a worker member"},
+		{"idle_stop that is no duration", func(r *Roster) { r.Members[2].IdleStop = "soon" }, `jev: idle_stop "soon" is not a duration`},
+		{"idle_stop under a minute", func(r *Roster) { r.Members[2].IdleStop = "30s" }, "jev: idle_stop 30s is shorter than 1m0s"},
+		{"idle_stop below zero", func(r *Roster) { r.Members[2].IdleStop = "-5m" }, "jev: idle_stop -5m0s is shorter than"},
+		{"idle_stop on a native member", func(r *Roster) { r.Members[0].IdleStop = "30m" }, "helm: idle_stop is for a worker member"},
 		{"a tool the backend cannot name", func(r *Roster) { r.Members[2].Tools = []string{"read", "mcp_github_*"} }, `jev: driver "claude" cannot narrow its tools: claude has no tool "mcp_github_*"`},
 	}
 	for _, tc := range cases {
@@ -382,5 +393,26 @@ func TestListSkipsDirectoriesWithoutARoster(t *testing.T) {
 	}
 	if ids, err := listIn(filepath.Join(dir, "missing")); err != nil || ids != nil {
 		t.Errorf("a missing directory is no talkoots, got %v, %v", ids, err)
+	}
+}
+
+// A worker member's idle stop reads its roster value, and the default without
+// one. idle_stop off keeps the process up, and each accepted value passes
+// Validate.
+func TestIdleStopAfter(t *testing.T) {
+	for v, want := range map[string]time.Duration{"": DefaultIdleStop, "2h": 2 * time.Hour, "1m": time.Minute} {
+		if d, on := (Member{IdleStop: v}).IdleStopAfter(); !on || d != want {
+			t.Errorf("IdleStopAfter(%q) = %v, %v; want %v", v, d, on, want)
+		}
+	}
+	if _, on := (Member{IdleStop: IdleStopOff}).IdleStopAfter(); on {
+		t.Error("idle_stop off still stops")
+	}
+	for _, v := range []string{"30m", "2h", "1m", "off"} {
+		r := mustParse(t, tigerTeam)
+		r.Members[2].IdleStop = v
+		if err := Validate(r, fakeEnv()); err != nil {
+			t.Errorf("idle_stop %q refused: %v", v, err)
+		}
 	}
 }

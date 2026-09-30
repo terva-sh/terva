@@ -7,6 +7,8 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +19,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/talkoot"
+	"terva.sh/terva/packages/agent/talkoot/expression"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/filelock"
@@ -71,6 +74,60 @@ type talkootRun struct {
 	// whether or not the member is still on the roster. Guarded by
 	// wsTalkoot.mu, which is taken after mu.
 	open map[string]int
+	// workerMu serializes the binding of worker members, so two deliveries
+	// cannot spawn two workers for one member.
+	workerMu sync.Mutex
+	// workerCost holds each worker's last reported running total, by swarm
+	// id, so a turn costs the difference. Guarded by wsTalkoot.mu.
+	workerCost map[string]float64
+	// workerRun names, by member, the current process of its worker, and
+	// workerTurn the process whose turn is open. A report from any other
+	// process is stale. workerSeq numbers them. Guarded by wsTalkoot.mu.
+	workerRun  map[string]uint64
+	workerTurn map[string]uint64
+	workerSeq  uint64
+	// workerOwed counts, by member, the messages its current process was
+	// sent that it has not ended a turn for: the spawn's task, and each send.
+	// A message sent while a turn runs becomes a turn of its own after it,
+	// so the worker is idle only once nothing is owed. workerAdopted marks a
+	// process this run adopted: a turn of the run before may still run in
+	// it, so nothing here knows when it is idle. Guarded by wsTalkoot.mu.
+	workerOwed    map[string]int
+	workerAdopted map[string]bool
+	// workerReads lists, by member, the deliveries sent to its worker that
+	// wait for the worker's turn to read them. Guarded by wsTalkoot.mu.
+	workerReads map[string][]workerRead
+	// readSeq numbers the worker deliveries in order, and lastRead holds,
+	// by member, the number of the newest one it read. Guarded by
+	// wsTalkoot.mu.
+	readSeq  uint64
+	lastRead map[string]uint64
+	// laterQ holds the calls later runs in order, and laterBusy says a
+	// goroutine drains it. Guarded by laterMu.
+	laterMu   sync.Mutex
+	laterQ    []func()
+	laterBusy bool
+	// idleArm holds, by member, the timer that stops its idle worker, and
+	// idleGen numbers the arms, so a timer that a delivery overtook stands
+	// down. idleClosed arms no more once the run closes. Guarded by
+	// wsTalkoot.mu.
+	idleArm    map[string]idleArm
+	idleGen    map[string]uint64
+	idleClosed bool
+	// sendMu holds, by member, the lock a delivery to it holds from its
+	// binding through its send, so two deliveries reach the worker in the
+	// order they bound. Guarded by wsTalkoot.mu.
+	sendMu map[string]*sync.Mutex
+	// idle lists the members whose worker stopped for idleness. Guarded by
+	// evMu, because flush reads it beside the statuses.
+	idle map[string]bool
+	// leaseHolders lists, by member, every worker that has run in the
+	// member's worktree in this run. A release waits for all of them.
+	// Guarded by wsTalkoot.mu.
+	leaseHolders map[string]map[string]bool
+	// unleaseGen numbers, by member, the releases of its worktree. Only the
+	// newest may give it back. Guarded by wsTalkoot.mu.
+	unleaseGen map[string]uint64
 
 	// kicking is set while this process runs the talkoot's kickoff. A
 	// recorded running kickoff without it was cut short, and may run again.
@@ -87,21 +144,43 @@ type talkootRun struct {
 	kickLed bool
 
 	emit func(talkootEvent)
+	// unbound says why nothing listens for a member, or returns nil. It is
+	// the workspace's memberUnbound, and a status reads it for offline.
+	unbound func(talkoot.Member) error
+	// waiting holds the keys of each member's open questions and approvals
+	// in the inbox. Guarded by evMu.
+	waiting map[string]map[string]bool
 	// flushMu holds one flush from taking its lines to sending them, so a
 	// watcher sees events in the room's order.
 	flushMu sync.Mutex
 	evMu    sync.Mutex
 	pending []talkoot.Line
 	last    map[string]talkoot.Status
+
+	// face is the run's expression engine (workspace_talkoot_face.go). It
+	// reads every sealed line in observe. beats holds the beats it played
+	// that no flush has sent, and faceTimer flushes the run when an
+	// expression changes with time. Guarded by evMu, except face, which is
+	// set once before the run observes a line.
+	face        expression.Engine
+	beats       []expression.Beat
+	faceTimer   *time.Timer
+	faceStopped bool
+
+	// team is the team state the last flush found, guarded by evMu, and
+	// teamChanged runs when a flush finds another (workspace_talkoot_team.go).
+	team        string
+	teamChanged func()
 }
 
 // talkootEvent is a change a client of the talkoot wants to see.
 type talkootEvent struct {
 	Talkoot string
-	// Kind is envelope, status, roster, inbox, or loaded.
+	// Kind is envelope, status, roster, inbox, beat, or loaded.
 	Kind   string
 	Line   *talkoot.Line
 	Status []talkoot.Status
+	Beat   *expression.Beat
 	// Wire is an inbox event, built in its wire form, because an inbox
 	// card is made of wire requests already.
 	Wire *ctrlproto.Event
@@ -120,12 +199,41 @@ func (r *talkootRun) do(fn func(*talkoot.Router) error) error {
 	return err
 }
 
+// tryDo is do for a caller that must not wait: it runs fn only when run.mu
+// is free for reading now, and reports whether it ran. A run that closed does
+// not run it.
+//
+// The flush runs on a goroutine of its own, because a flush waits for the one
+// before it and for the watchers. Flushes stay in order: flushMu serializes
+// them, the queued lines leave in the order they sealed, and a status event
+// carries the statuses as they are when it is sent.
+func (r *talkootRun) tryDo(fn func(*talkoot.Router) error) bool {
+	if !r.mu.TryRLock() {
+		return false
+	}
+	if r.closed {
+		r.mu.RUnlock()
+		return false
+	}
+	_ = fn(r.router)
+	r.mu.RUnlock()
+	go r.flush()
+	return true
+}
+
 // observe queues each sealed line. It runs with the room locked, so it only
 // queues; flush sends.
+//
+// 🔑 The engine reads the line under evMu, the lock the queue takes. A flush
+// reads the faces under the same lock as it takes the queue, so a status never
+// shows a reaction to a line that a later flush sends.
 func (r *talkootRun) observe(l talkoot.Line) {
 	r.evMu.Lock()
+	defer r.evMu.Unlock()
+	if r.face != nil {
+		r.beats = append(r.beats, r.face.Observe(l)...)
+	}
 	r.pending = append(r.pending, l)
-	r.evMu.Unlock()
 }
 
 // flush sends the envelope, intro, answer, and roster lines queued since the last
@@ -134,8 +242,10 @@ func (r *talkootRun) flush() {
 	r.flushMu.Lock()
 	defer r.flushMu.Unlock()
 	r.evMu.Lock()
-	lines := r.pending
-	r.pending = nil
+	lines, beats := r.pending, r.beats
+	r.pending, r.beats = nil, nil
+	now := time.Now()
+	faces := r.facesLocked(now)
 	r.evMu.Unlock()
 	for i := range lines {
 		switch lines[i].Type {
@@ -149,28 +259,42 @@ func (r *talkootRun) flush() {
 			r.emit(talkootEvent{Talkoot: r.id, Kind: "roster", Line: &lines[i]})
 		}
 	}
+	for i := range beats {
+		r.emit(talkootEvent{Talkoot: r.id, Kind: "beat", Beat: &beats[i]})
+	}
 	r.mu.RLock()
 	if r.closed {
 		r.mu.RUnlock()
 		return
 	}
-	st := r.router.Statuses()
+	st := r.overlayWith(r.router.Statuses(), faces)
 	r.mu.RUnlock()
 	r.evMu.Lock()
+	r.armFaceLocked(now)
 	changed := len(st) != len(r.last)
 	next := make(map[string]talkoot.Status, len(st))
 	for _, s := range st {
 		next[s.Member] = s
-		if r.last[s.Member] != s {
+		if !sameStatus(r.last[s.Member], s) {
 			changed = true
 		}
 	}
 	r.last = next
+	team := talkoot.TeamState(st)
+	moved := team != r.team
+	r.team = team
 	r.evMu.Unlock()
 	if changed {
 		r.emit(talkootEvent{Talkoot: r.id, Kind: "status", Status: st})
 	}
+	if moved && r.teamChanged != nil {
+		r.teamChanged()
+	}
 }
+
+// sameStatus reports whether two statuses of a member are equal. A status
+// holds a list of pause kinds, so == cannot compare it.
+func sameStatus(a, b talkoot.Status) bool { return reflect.DeepEqual(a, b) }
 
 // LoadTalkoots starts every talkoot homed in this workspace's directory. The
 // daemon hosts call it once after NewWorkspace. The in-process terminal does
@@ -252,11 +376,17 @@ func (w *Workspace) startTalkoot(id string) error {
 	run := &talkootRun{id: id, dir: dir, room: talkoot.OpenRoom(dir), lock: lk, seats: map[string]string{}}
 	run.roster.Store(&r)
 	run.emit = w.talkootEmit
+	run.teamChanged = w.announceTalkoots
+	run.unbound = w.memberUnbound
 	lines, err := run.room.Read()
 	if err != nil {
 		lk.Release()
 		return err
 	}
+	// 🔑 The engine replays the room before the run observes a line, and
+	// nothing writes the room between the two: this process holds the run
+	// lock, and no router exists yet.
+	run.startFace(lines, w.talkootFaceRows)
 	for _, l := range lines {
 		if l.Type != talkoot.LineSeat {
 			continue
@@ -307,6 +437,13 @@ func (w *Workspace) startTalkoot(id string) error {
 		}
 	}
 	w.talkoot.mu.Unlock()
+	var seated []string
+	for _, l := range lines {
+		if l.Type == talkoot.LineSeat && l.Ref != "" && !slices.Contains(seated, l.Member) {
+			seated = append(seated, l.Member)
+		}
+	}
+	w.retryMemberReleases(run, seated)
 
 	w.talkootEmit(talkootEvent{Talkoot: id, Kind: "loaded"})
 	w.BroadcastAll(ctrlproto.TalkootsChangedEvent())
@@ -326,16 +463,13 @@ func memberOf(r talkoot.Roster, id string) (talkoot.Member, bool) {
 }
 
 // talkootDriversFor binds a run's members: a native member to its session,
-// made on its first delivery; a worker member to nothing yet. A native
-// member's reads reach the run's router through the member's seat.
+// and a worker member to its worker, each made on its first delivery. A
+// native member's reads reach the run's router through the member's seat.
 func (w *Workspace) talkootDriversFor(run *talkootRun) talkoot.Drivers {
 	return w.talkootDrivers(
 		func(_ string, m talkoot.Member) (string, error) { return w.memberSession(run, m) },
-		func(_ string, m talkoot.Member) (string, error) {
-			if err := memberUnbound(m); err != nil {
-				return "", err
-			}
-			return "", fmt.Errorf("talkoot: native member %s reached the worker driver", m.ID)
+		func(m talkoot.Member, text string, r *talkoot.Receipt) error {
+			return w.deliverWorkerRead(run, m, text, r)
 		},
 		func(sessID, member string, r talkoot.Receipt) { w.talkootRead(sessID, run, member, r) },
 	)
@@ -691,6 +825,8 @@ func (w *Workspace) closeTalkoots() {
 		}
 		r.closed = true
 		r.mu.Unlock()
+		r.stopFace()
+		w.closeIdleStops(r)
 		r.lock.Release()
 	}
 }

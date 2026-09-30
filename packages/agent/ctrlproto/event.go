@@ -144,7 +144,12 @@ const (
 	// answered it, or the member's turn ended first (Talkoot.Card, with the
 	// request unset).
 	EventTalkootInboxResolved = "talkoot_inbox_resolved"
-	// EventTalkootsChanged signals that the set of talkoots this daemon runs
+	// EventTalkootBeat carries a beat a member's face plays once
+	// (Talkoot.Beat), on the room's address. Beats are live only: a client
+	// that reconnects gets none of the ones it missed.
+	EventTalkootBeat = "talkoot_beat"
+	// EventTalkootsChanged signals that the talkoot list changed: a talkoot
+	// started on this daemon, its roster changed, or its team state
 	// changed. Like sessions_changed it carries no payload and rides
 	// [AddrWorkspace], and a client answers it with talkoot.list.
 	EventTalkootsChanged = "talkoots_changed"

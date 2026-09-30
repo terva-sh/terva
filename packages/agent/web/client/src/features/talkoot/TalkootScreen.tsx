@@ -3,9 +3,12 @@ import { t } from '../../i18n'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { TalkootListResult, TalkootSummary } from '../../platform/ctrlproto/types'
 import type { TalkootHub } from '../../platform/talkoot/hub'
+import { MARK_PALETTE } from '../../platform/talkoot/marks'
 import { TalkootTeam } from './TalkootTeam'
 import { NewTalkoot } from './NewTalkoot'
-import { useTalkootPerson } from './person'
+import { useTalkootPerson, validPerson } from './person'
+import { TeamMark, teamStateLabel } from './TeamMark'
+import { teamIcon } from './face/team'
 
 // TalkootScreen is the web client's one surface for watching a talkoot: a list
 // of the talkoots on this host, and the team view of the one picked. Nothing
@@ -51,9 +54,15 @@ export function TalkootScreen({
     if (generation > 0) void refresh()
   }, [client, generation])
 
+  // The daemon says when the list changed: a team started, its roster
+  // changed, or its state did. The list then reads again.
+  useEffect(() => hub.onList(() => void refresh()), [client, hub])
+
   const running = useMemo(() => (list ?? []).filter((x) => x.running), [list])
   // Open the picked talkoot, or the first one running here.
   const current = running.find((x) => x.id === picked)?.id ?? running[0]?.id ?? ''
+  const team = running.find((x) => x.id === current)
+  useTeamTab(creating ? undefined : team)
 
   const pick = (id: string) => {
     setPicked(id)
@@ -64,19 +73,33 @@ export function TalkootScreen({
   return (
     <div class="talkoot">
       <header class="talkoot-bar">
-        <select
-          class="talkoot-pick"
-          aria-label={t('Talkoot')}
-          value={current}
-          onChange={(e) => pick((e.target as HTMLSelectElement).value)}
-        >
-          {running.length === 0 && <option value="">{t('No talkoot runs here')}</option>}
+        <nav class="talkoot-teams" aria-label={t('Teams')}>
+          {running.length === 0 && <span class="talkoot-note">{t('No talkoot runs here')}</span>}
           {running.map((x) => (
-            <option key={x.id} value={x.id}>
-              {x.id}
-            </option>
+            <button
+              key={x.id}
+              class={`talkoot-team-pick${x.id === current ? ' on' : ''}`}
+              aria-pressed={x.id === current}
+              onClick={() => pick(x.id)}
+            >
+              <TeamMark color={x.color} state={x.state} size={24} />
+              <span class="talkoot-team-name">{x.title || x.name || x.id}</span>
+              {teamStateLabel(x.state) && <span class={`talkoot-team-state state-${x.state}`}>{teamStateLabel(x.state)}</span>}
+            </button>
           ))}
-        </select>
+        </nav>
+        {team?.color && !creating && (
+          <TeamColor
+            team={team}
+            person={person}
+            onChange={(color) =>
+              client.send('talkoot.update', { id: team.id, by: person, color }).then(
+                () => refresh(),
+                (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
+              )
+            }
+          />
+        )}
         <button class="btn sm" onClick={() => setCreating(true)}>
           {t('New team')}
         </button>
@@ -130,6 +153,68 @@ export function TalkootScreen({
       )}
     </div>
   )
+}
+
+// TeamColor picks the team mark's colour from the palette, or returns it to
+// the default the talkoot id picks. A change is a roster change, so it needs a
+// person's name, as every other edit of the team does.
+function TeamColor({ team, person, onChange }: { team: TalkootSummary; person: string; onChange: (color: string) => void }) {
+  const can = validPerson(person)
+  return (
+    <details class="talkoot-team-color">
+      <summary title={can ? undefined : t('Set your name to change the team')}>{t('Team colour')}</summary>
+      <div class="talkoot-picker" role="group" aria-label={t('Team colour')}>
+        {MARK_PALETTE.map((c) => (
+          <button
+            key={c}
+            class="talkoot-swatch"
+            style={{ background: c }}
+            disabled={!can}
+            aria-label={c}
+            aria-pressed={sameColor(team.color, c)}
+            onClick={() => !sameColor(team.color, c) && onChange(c)}
+          />
+        ))}
+        {/* Default is live only when the roster sets a colour to remove. */}
+        <button class="btn sm ghost" disabled={!can || !team.own_color} onClick={() => onChange('')}>
+          {t('Default')}
+        </button>
+      </div>
+    </details>
+  )
+}
+
+// sameColor compares two #RRGGBB values, in which hex case changes nothing.
+// The daemon refuses a colour the team shows already on the same terms.
+const sameColor = (a: string | undefined, b: string) => a?.toLowerCase() === b.toLowerCase()
+
+// useTeamTab puts the open team in the browser tab: its name and state in the
+// title, and its mark as the icon. Leaving the team puts terva's own back.
+function useTeamTab(team: TalkootSummary | undefined) {
+  const name = team ? team.title || team.name || team.id : ''
+  useEffect(() => {
+    if (!team?.color) return
+    const title = document.title
+    const links = [...document.querySelectorAll<HTMLLinkElement>('link[rel~="icon"]')]
+    const saved = links.map((l) => ({ href: l.getAttribute('href'), type: l.getAttribute('type') }))
+    const state = teamStateLabel(team.state)
+    document.title = state ? `${name} · ${state}` : name
+    const href = 'data:image/svg+xml,' + encodeURIComponent(teamIcon(team.color, team.state))
+    for (const l of links) {
+      l.setAttribute('href', href)
+      l.setAttribute('type', 'image/svg+xml')
+    }
+    return () => {
+      document.title = title
+      links.forEach((l, i) => {
+        const s = saved[i]
+        if (s.href === null) l.removeAttribute('href')
+        else l.setAttribute('href', s.href)
+        if (s.type === null) l.removeAttribute('type')
+        else l.setAttribute('type', s.type)
+      })
+    }
+  }, [team?.id, team?.color, team?.state, name])
 }
 
 // PersonInput edits the person's name as a draft, and commits it on Enter or

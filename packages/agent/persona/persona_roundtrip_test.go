@@ -37,6 +37,15 @@ func TestEveryPersonaFieldSurvivesTheWriteReadRoundTrip(t *testing.T) {
 			f.SetBool(true)
 		case reflect.Slice:
 			f.Set(reflect.Append(f, reflect.ValueOf("x-"+name)))
+		case reflect.Struct:
+			// A struct of strings, such as the mark: every field takes a
+			// sentinel of its own.
+			for j := 0; j < f.NumField(); j++ {
+				if f.Field(j).Kind() != reflect.String {
+					t.Fatalf("Persona.%s.%s has kind %s this test doesn't know how to populate — teach it", name, f.Type().Field(j).Name, f.Field(j).Kind())
+				}
+				f.Field(j).SetString("x-" + name + "-" + f.Type().Field(j).Name)
+			}
 		default:
 			t.Fatalf("Persona.%s has kind %s this test doesn't know how to populate — teach it", name, f.Kind())
 		}

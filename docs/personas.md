@@ -31,6 +31,7 @@ specialty: security review        # short label for `persona list` / the roster
 summary: Evidence-first application-security engineer for source-code review.
 emoji: 🛡️                          # optional; leads the welcome banner
 accent_color: "#f7768e"           # optional; tints the welcome banner; #RRGGBB
+mark: {shape: shield, color: "#f7768e"}  # optional; a Talkoot member's shape and colour
 recommended_skills: []            # skill names only (surfaced, never embedded)
 good_for: [secure-code-review, threat-modeling, vulnerability-triage]
 avoid_for: [pure-style-review]

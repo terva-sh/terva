@@ -58,7 +58,8 @@ func TestMembersThatNameTheDefaultPersonaShareItsGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	var members []talkoot.Member
-	// Five of each fill the ten shapes, so any shared shape is a group split.
+	// One group gives its ten members ten different shapes, so any shared
+	// shape is a group split.
 	for _, id := range []string{"a", "b", "c", "d", "e"} {
 		members = append(members, talkoot.Member{ID: id}, talkoot.Member{ID: id + "-named", Persona: def.Name})
 	}

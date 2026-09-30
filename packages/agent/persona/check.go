@@ -4,6 +4,10 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"gopkg.in/yaml.v3"
+
+	"terva.sh/terva/packages/agent/look"
 )
 
 var (
@@ -34,6 +38,20 @@ func stripCodeRegions(s string) string {
 	return personaCodeSpanRe.ReplaceAllStringFunc(personaFenceRe.ReplaceAllStringFunc(s, blank), blank)
 }
 
+// writtenMark returns the mark the frontmatter writes, and nil when it writes
+// none. Parse cannot tell `mark: {}` from no mark, and a roster refuses the
+// first, so Check reads the key itself to refuse it too.
+func writtenMark(raw []byte) *look.Mark {
+	front, _ := splitFrontmatter(string(raw))
+	var fm struct {
+		Mark *look.Mark `yaml:"mark"`
+	}
+	if yaml.Unmarshal([]byte(front), &fm) != nil {
+		return nil
+	}
+	return fm.Mark
+}
+
 // Check parses a persona file and reports every problem that would stop it
 // from starting: a parse failure, an empty charter, a bad accent colour, an
 // extends that does not resolve, and a leftover character-card macro. The
@@ -52,6 +70,9 @@ func Check(raw []byte, source string) (Persona, []string) {
 		}
 		if p.AccentColor != "" && !personaAccentRe.MatchString(p.AccentColor) {
 			problems = append(problems, fmt.Sprintf("accent_color %q is not a #RRGGBB hex value", p.AccentColor))
+		}
+		if m := writtenMark(raw); m != nil {
+			problems = append(problems, look.Check(markOf(m))...)
 		}
 		// Resolve `extends` here so the verdict is about the charter that will
 		// actually be assembled, not the half of it in this file. A bad extends

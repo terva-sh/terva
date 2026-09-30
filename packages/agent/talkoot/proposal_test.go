@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"terva.sh/terva/packages/agent/look"
 )
 
 // Every member field has exactly one class, and every class names a field. A
@@ -94,7 +96,7 @@ func TestApplyOpsKeepsCommentsAndTheCharter(t *testing.T) {
 func TestEachOperationChangesTheRoster(t *testing.T) {
 	_, r := mustApply(t, commented,
 		Op{Op: OpAdd, Member: "scout", Set: map[string]any{"role": "specialist", "title": "Scout", "turns_per_day": float64(30)}},
-		Op{Op: OpLook, Member: "helm", Set: map[string]any{"title": "Helm"}},
+		Op{Op: OpLook, Member: "helm", Set: map[string]any{"title": "Helm", "mark": map[string]any{"shape": "hexagon", "color": "#3B82F6"}}},
 		Op{Op: OpEdit, Member: "helm", Set: map[string]any{"persona": ""}},
 		Op{Op: OpRemove, Member: "atlas"},
 	)
@@ -109,9 +111,31 @@ func TestEachOperationChangesTheRoster(t *testing.T) {
 	if helm.Title != "Helm" || helm.Persona != "" {
 		t.Errorf("helm is %+v, want a title and no persona", helm)
 	}
+	if helm.Mark == nil || *helm.Mark != (look.Mark{Shape: "hexagon", Color: "#3B82F6"}) {
+		t.Errorf("helm's mark is %+v, want the look operation's", helm.Mark)
+	}
 	scout, _ := r.member("scout")
 	if scout.Title != "Scout" || scout.TurnsPerDay != 30 || scout.Posture != "plan" || scout.Driver != DriverNative {
 		t.Errorf("scout is %+v, want its fields and the defaults", scout)
+	}
+}
+
+// A null mark returns a member to its default, the way a null resets any
+// field, so the card's reset needs no mark of its own.
+func TestALookOpClearsAMarkWithNull(t *testing.T) {
+	set, _ := mustApply(t, commented,
+		Op{Op: OpLook, Member: "helm", Set: map[string]any{"mark": map[string]any{"shape": "tab", "color": "#46A758"}}},
+	)
+	var ops []Op
+	if err := json.Unmarshal([]byte(`[{"op": "look", "member": "helm", "set": {"mark": null}}]`), &ops); err != nil {
+		t.Fatal(err)
+	}
+	out, r := mustApply(t, set, ops...)
+	if helm, _ := r.member("helm"); helm.Mark != nil {
+		t.Errorf("helm's mark is %+v, want none", helm.Mark)
+	}
+	if strings.Contains(out, "mark:") {
+		t.Errorf("the mark stayed in the text:\n%s", out)
 	}
 }
 
@@ -129,6 +153,9 @@ func TestCheckOpsRefusesABadBatch(t *testing.T) {
 		{"an id change", []Op{{Op: OpEdit, Member: "helm", Set: map[string]any{"id": "pilot"}}}, "id cannot change"},
 		{"authority in a look", []Op{{Op: OpLook, Member: "helm", Set: map[string]any{"posture": "yolo"}}}, "look fields only"},
 		{"voice in a look", []Op{{Op: OpLook, Member: "helm", Set: map[string]any{"persona": "koestaja"}}}, "look fields only"},
+		{"a mark shape outside the set", []Op{{Op: OpLook, Member: "helm", Set: map[string]any{"mark": map[string]any{"shape": "star"}}}}, `mark shape "star"`},
+		{"a mark that is not a mark", []Op{{Op: OpLook, Member: "helm", Set: map[string]any{"mark": "hexagon"}}}, "a mark with a shape and a color"},
+		{"a mark with another field", []Op{{Op: OpLook, Member: "helm", Set: map[string]any{"mark": map[string]any{"shape": "tab", "eyes": "big"}}}}, `no field "eyes"`},
 		{"a missing member", []Op{{Op: OpEdit, Member: "ghost", Set: map[string]any{"title": "x"}}}, "not a member"},
 		{"an add of a member", []Op{{Op: OpAdd, Member: "helm", Set: map[string]any{"role": "specialist"}}}, "already a member"},
 		{"an edit after its remove", []Op{{Op: OpRemove, Member: "atlas"}, {Op: OpEdit, Member: "atlas", Set: map[string]any{"title": "x"}}}, "not a member"},

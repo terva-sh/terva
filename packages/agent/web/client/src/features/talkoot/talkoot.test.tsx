@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact'
 import { fakeClient } from '../../platform/ctrlproto/testing'
 import type { TalkootPreview, TalkootView, TaskInfo, Verb, WireEvent } from '../../platform/ctrlproto/types'
 import { TalkootHub } from '../../platform/talkoot/hub'
@@ -11,7 +11,7 @@ import { TalkootTeam } from './TalkootTeam'
 import { RoomExchange, RoomLine } from './RoomLine'
 import { useTalkootPerson } from './person'
 import { eyeColor, MARK_SHAPES } from '../../platform/talkoot/marks'
-import { drawnShapes } from './MemberMark'
+import { drawnShapes, MemberMark } from './MemberMark'
 import { LOAD_RETRY_MAX_MS, REFRESH_RETRY_MS } from './useTalkoot'
 import { WORKER_POLL_MS } from './WorkerEvents'
 import type { TalkootLine } from '../../platform/ctrlproto/types'
@@ -116,7 +116,7 @@ describe('a worker member stopped while idle', () => {
     await screen.findByText(/worker stopped while idle/)
     hub.dispatch('#talkoot:crew', {
       type: 'talkoot_status',
-      talkoot: { id: 'crew', members: [{ member: 'mieli', working: true }] },
+      talkoot: { id: 'crew', members: [{ member: 'mieli', presence: 'working', working: true }] },
     } as WireEvent)
     await waitFor(() => expect(screen.queryByText(/worker stopped while idle/)).toBeNull())
   })
@@ -255,7 +255,7 @@ describe('the initial load', () => {
     // The question is answered, and the member starts working, before the
     // stale inbox read comes back still holding the card.
     hub.dispatch('#talkoot:crew', { type: 'talkoot_inbox_resolved', talkoot: { id: 'crew', card } } as WireEvent)
-    hub.dispatch('#talkoot:crew', { type: 'talkoot_status', talkoot: { id: 'crew', members: [{ member: 'mieli', working: true }] } } as WireEvent)
+    hub.dispatch('#talkoot:crew', { type: 'talkoot_status', talkoot: { id: 'crew', members: [{ member: 'mieli', presence: 'working', working: true }] } } as WireEvent)
     answerInbox({ cards: [card] })
     await waitFor(() => expect(document.querySelector('.talkoot-member-row .presence-working')).toBeTruthy())
     expect(document.querySelector('.talkoot-inbox')).toBeNull()
@@ -727,6 +727,157 @@ describe('a slow answer', () => {
   })
 })
 
+describe('the team mark', () => {
+  const teams = {
+    talkoots: [
+      { id: 'crew', name: 'crew', title: 'The crew', running: true, color: '#12A594', own_color: '#12A594', state: 'needs-you' },
+      { id: 'lake', name: 'lake', running: true, color: '#E5484D', state: 'online' },
+    ],
+  }
+  const screenClient = () =>
+    fakeClient({
+      respond: (method: Verb) => {
+        if (method === 'talkoot.list') return teams
+        if (method === 'talkoot.update') return crew
+        return teamRespond(method)
+      },
+    })
+
+  it('lists each team with its mark, its name, and its state, and opens the one picked', async () => {
+    const client = screenClient()
+    render(<TalkootScreen client={client} hub={new TalkootHub()} generation={1} onOpenSession={() => {}} onClose={() => {}} />)
+    await screen.findByText('The crew')
+    const picks = [...document.querySelectorAll('.talkoot-team-pick')]
+    expect(picks.map((b) => b.querySelector('.talkoot-team-name')!.textContent)).toEqual(['The crew', 'lake'])
+    const marks = picks.map((b) => b.querySelector('.talkoot-mark')!)
+    expect(marks.map((m) => [m.getAttribute('data-shape'), m.getAttribute('data-pose')])).toEqual([
+      ['team', 'looking-up'],
+      ['team', 'open'],
+    ])
+    expect(marks[0].querySelector('.body-fill')?.getAttribute('fill')).toBe('#12A594')
+    expect(picks[0].querySelector('.talkoot-team-state')!.textContent).toBe('needs you')
+    expect(picks[0].getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(picks[1])
+    await waitFor(() => expect(client.last('talkoot.get')?.params).toEqual({ id: 'lake' }))
+  })
+
+  it('reads the list again when the daemon says it changed', async () => {
+    const client = screenClient()
+    const hub = new TalkootHub()
+    render(<TalkootScreen client={client} hub={hub} generation={1} onOpenSession={() => {}} onClose={() => {}} />)
+    await screen.findByText('The crew')
+    const before = client.sent('talkoot.list').length
+    hub.dispatch('#workspace', { type: 'talkoots_changed' } as WireEvent)
+    await waitFor(() => expect(client.sent('talkoot.list').length).toBe(before + 1))
+  })
+
+  it('puts the open team in the tab, and gives the tab back on leaving', async () => {
+    document.title = 'terva'
+    const icon = document.createElement('link')
+    icon.rel = 'icon'
+    icon.type = 'image/svg+xml'
+    icon.href = './favicon.svg'
+    document.head.appendChild(icon)
+    try {
+      const view = render(<TalkootScreen client={screenClient()} hub={new TalkootHub()} generation={1} onOpenSession={() => {}} onClose={() => {}} />)
+      await waitFor(() => expect(document.title).toBe('The crew · needs you'))
+      expect(icon.getAttribute('href')).toMatch(/^data:image\/svg\+xml,/)
+      expect(decodeURIComponent(icon.getAttribute('href')!)).toContain('#12A594')
+      view.unmount()
+      expect(document.title).toBe('terva')
+      expect(icon.getAttribute('href')).toBe('./favicon.svg')
+    } finally {
+      icon.remove()
+    }
+  })
+
+  it('sets the team colour as the person, and returns it to the default', async () => {
+    localStorage.setItem('terva_talkoot_person', 'sothr')
+    const client = screenClient()
+    render(<TalkootScreen client={client} hub={new TalkootHub()} generation={1} onOpenSession={() => {}} onClose={() => {}} />)
+    await screen.findByText('The crew')
+    fireEvent.click(screen.getByText('Team colour'))
+    fireEvent.click(screen.getByLabelText('#E5484D'))
+    await waitFor(() => expect(client.last('talkoot.update')?.params).toEqual({ id: 'crew', by: 'sothr', color: '#E5484D' }))
+    fireEvent.click(screen.getByText('Default'))
+    await waitFor(() => expect(client.last('talkoot.update')?.params).toEqual({ id: 'crew', by: 'sothr', color: '' }))
+  })
+
+  it('names no state the daemon has not sent', async () => {
+    document.title = 'terva'
+    const client = fakeClient({
+      respond: (method: Verb) => {
+        if (method === 'talkoot.list') return { talkoots: [{ ...teams.talkoots[0], state: undefined }] }
+        return teamRespond(method)
+      },
+    })
+    const view = render(<TalkootScreen client={client} hub={new TalkootHub()} generation={1} onOpenSession={() => {}} onClose={() => {}} />)
+    await waitFor(() => expect(document.title).toBe('The crew'))
+    expect(document.querySelector('.talkoot-team-state')).toBeNull()
+    view.unmount()
+  })
+
+  it('takes an own colour in another hex case as the swatch it matches', async () => {
+    localStorage.setItem('terva_talkoot_person', 'sothr')
+    const client = fakeClient({
+      respond: (method: Verb) => {
+        if (method === 'talkoot.list') return { talkoots: [{ ...teams.talkoots[0], color: '#e5484d', own_color: '#e5484d' }] }
+        return teamRespond(method)
+      },
+    })
+    render(<TalkootScreen client={client} hub={new TalkootHub()} generation={1} onOpenSession={() => {}} onClose={() => {}} />)
+    await screen.findByText('The crew')
+    fireEvent.click(screen.getByText('Team colour'))
+    const swatch = screen.getByLabelText('#E5484D')
+    expect(swatch.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(swatch)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(client.sent('talkoot.update')).toHaveLength(0)
+  })
+
+  it('offers no reset to a team that shows its default colour', async () => {
+    localStorage.setItem('terva_talkoot_person', 'sothr')
+    const client = fakeClient({
+      respond: (method: Verb) => {
+        if (method === 'talkoot.list') return { talkoots: [{ ...teams.talkoots[0], own_color: undefined }] }
+        return teamRespond(method)
+      },
+    })
+    render(<TalkootScreen client={client} hub={new TalkootHub()} generation={1} onOpenSession={() => {}} onClose={() => {}} />)
+    await screen.findByText('The crew')
+    fireEvent.click(screen.getByText('Team colour'))
+    expect((screen.getByText('Default') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByLabelText('#E5484D') as HTMLButtonElement).disabled).toBe(false)
+  })
+})
+
+describe('a team colour line', () => {
+  it('says who changed the roster, and shows the new colour', () => {
+    render(<RoomLine line={{ type: 'roster', at: '2026-09-30T10:00:00Z', by: 'human:sothr', color_before: '#12A594', color_after: '#E5484D' }} />)
+    const line = document.querySelector('.talkoot-line.system')!
+    // The line cannot tell a colour update from a text update that also
+    // changed the team's other fields, so it claims no more than the roster.
+    expect(line.textContent).toMatch(/^sothr changed the roster; the team colour/)
+    expect((line.querySelector('.talkoot-swatch-dot') as HTMLElement).style.background.toLowerCase()).toMatch(/e5484d|229, 72, 77/)
+  })
+
+  it('shows a colour that changed beside the members that changed', () => {
+    render(
+      <RoomLine
+        line={{ type: 'roster', at: '2026-09-30T10:00:00Z', by: 'human:sothr', changes: [{ member: 'jev' }], color_before: '#12A594', color_after: '#E5484D' }}
+      />,
+    )
+    const line = document.querySelector('.talkoot-line.system')!
+    expect(line.textContent).toMatch(/sothr changed the roster \(jev\); the team colour/)
+    expect(line.querySelector('.talkoot-swatch-dot')).not.toBeNull()
+  })
+
+  it('shows no colour on a roster line that kept it', () => {
+    render(<RoomLine line={{ type: 'roster', at: '2026-09-30T10:00:00Z', by: 'human:sothr', changes: [{ member: 'jev' }] }} />)
+    expect(document.querySelector('.talkoot-line.system .talkoot-swatch-dot')).toBeNull()
+  })
+})
+
 describe('an answer line', () => {
   it('names the member it answered when the room records no person', () => {
     render(<RoomLine line={{ type: 'answer', at: '2026-09-27T10:00:00Z', member: 'arkkitehti', answers: [] }} />)
@@ -740,10 +891,20 @@ describe('a member at work, and the files it cites', () => {
     const hub = new TalkootHub()
     render(<TalkootTeam client={client} hub={hub} id="crew" generation={1} person="sothr" onOpenSession={() => {}} />)
     await screen.findByText('Hello from the lead')
-    hub.dispatch('#talkoot:crew', { type: 'talkoot_status', talkoot: { id: 'crew', members: [{ member: 'arkkitehti', working: true, tool: 'grep' }] } } as WireEvent)
+    hub.dispatch('#talkoot:crew', { type: 'talkoot_status', talkoot: { id: 'crew', members: [{ member: 'arkkitehti', presence: 'working', working: true, tool: 'grep' }] } } as WireEvent)
     await screen.findByText('running grep')
-    hub.dispatch('#talkoot:crew', { type: 'talkoot_status', talkoot: { id: 'crew', members: [{ member: 'arkkitehti', working: false }] } } as WireEvent)
+    hub.dispatch('#talkoot:crew', { type: 'talkoot_status', talkoot: { id: 'crew', members: [{ member: 'arkkitehti', presence: 'idle' }] } } as WireEvent)
     await waitFor(() => expect(screen.queryByText('running grep')).toBeNull())
+  })
+
+  it('labels an offline member and fades its row', async () => {
+    const client = teamClient()
+    const hub = new TalkootHub()
+    render(<TalkootTeam client={client} hub={hub} id="crew" generation={1} person="sothr" onOpenSession={() => {}} />)
+    await screen.findByText('Hello from the lead')
+    hub.dispatch('#talkoot:crew', { type: 'talkoot_status', talkoot: { id: 'crew', members: [{ member: 'arkkitehti', presence: 'offline' }] } } as WireEvent)
+    await waitFor(() => expect(document.querySelector('.talkoot-member-row.presence-offline')).toBeTruthy())
+    expect(document.querySelector('.talkoot-member-row.presence-offline .presence-offline')!.textContent).toBe('offline')
   })
 
   it('opens a path: reference in place, and leaves a ticket: reference a label', async () => {
@@ -837,8 +998,61 @@ describe('member marks', () => {
     expect(side).toEqual(['shield', 'hexagon'])
     const post = document.querySelector('.talkoot-line.envelope .talkoot-mark')
     expect(post?.getAttribute('data-shape')).toBe('shield')
-    expect(post?.querySelector('g')?.getAttribute('fill')).toBe('#FFB224')
+    expect(post?.querySelector('.body-fill')?.getAttribute('fill')).toBe('#FFB224')
     expect(document.querySelector('.talkoot-card-from .talkoot-mark')?.getAttribute('data-shape')).toBe('shield')
+  })
+
+  it('shows the engine\'s expression on the sidebar face, and plays its beats', async () => {
+    const client = fakeClient({ respond: (method: Verb) => (method === 'talkoot.get' ? marked : teamRespond(method)) })
+    const hub = new TalkootHub()
+    render(<TalkootTeam client={client} hub={hub} id="crew" generation={1} person="sothr" onOpenSession={() => {}} />)
+    await screen.findByText('Hello from the lead')
+    const planner = () => document.querySelector('.talkoot-member-row .talkoot-mark[data-shape="hexagon"]')!
+    expect(planner().getAttribute('data-pose')).toBe('open')
+    hub.dispatch('#talkoot:crew', {
+      type: 'talkoot_status',
+      talkoot: { id: 'crew', members: [{ member: 'arkkitehti', presence: 'idle', expression: 'frustrated', intensity: 1, expression_cause: 'turn 2 failed' }] },
+    } as WireEvent)
+    await waitFor(() => expect(planner().getAttribute('data-pose')).toBe('frustrated'))
+    expect(planner().getAttribute('data-intensity')).toBe('1')
+
+    // The lead sits above the planner, so a glance at the lead moves the
+    // planner's eyes left.
+    const eyeX = () => Number(/translate\(([-\d.]+)px/.exec((planner().querySelector('.eyes:not(.edge) .eye.l') as SVGGElement).style.transform)![1])
+    const held = eyeX()
+    let least = held
+    const watch = setInterval(() => (least = Math.min(least, eyeX())), 5)
+    hub.dispatch('#talkoot:crew', {
+      type: 'talkoot_beat',
+      talkoot: { id: 'crew', beat: { member: 'arkkitehti', beat: 'glance', toward: 'mieli', cause: 'sent message e2 to mieli -> glance', at: '2026-09-30T10:00:00Z' } },
+    } as WireEvent)
+    await waitFor(() => expect(least).toBeLessThan(held))
+    clearInterval(watch)
+
+    // Without an expression the face goes back to the default pose.
+    hub.dispatch('#talkoot:crew', { type: 'talkoot_status', talkoot: { id: 'crew', members: [{ member: 'arkkitehti', presence: 'working', working: true }] } } as WireEvent)
+    await waitFor(() => expect(planner().getAttribute('data-pose')).toBe('focused'))
+  })
+
+  it('plays no beat the store held before the mark mounted', () => {
+    // The store keeps each member's newest beat. A mark that mounts later,
+    // for a member added again, must not play it a second time.
+    vi.useFakeTimers()
+    try {
+      const mark = { shape: 'hexagon', color: '#3E63DD' }
+      const eyes = (c: Element) => [...c.querySelectorAll('.eyes:not(.edge) .eye')].map((e) => (e as SVGGElement).style.transform)
+      const { container: still } = render(<MemberMark mark={mark} size={32} face={{ pose: 'open' }} />)
+      const held = eyes(still)
+      const { container } = render(<MemberMark mark={mark} size={32} face={{ pose: 'open', beat: { name: 'glance', key: 7, toward: -1 } }} />)
+      for (let ms = 0; ms <= 3000; ms += 50) {
+        expect(eyes(container)).toEqual(held)
+        act(() => {
+          vi.advanceTimersByTime(50)
+        })
+      }
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('draws nothing for a member of a daemon from before marks', async () => {
@@ -901,8 +1115,10 @@ describe('the member card', () => {
     fireEvent.click(screen.getByRole('button', { name: '#3E63DD' }))
     await waitFor(() => expect(client.last('talkoot.update')).toBeTruthy())
     expect(client.last('talkoot.update')!.params).toMatchObject({ ops: [{ op: 'look', member: 'mieli', set: { mark: { shape: 'tab', color: '#3E63DD' } } }] })
-    fireEvent.click(screen.getByRole('button', { name: 'hexagon' }))
-    await waitFor(() => expect(client.last('talkoot.update')!.params).toMatchObject({ ops: [{ set: { mark: { shape: 'hexagon' } } }] }))
+    const shapes = screen.getByRole('group', { name: 'Shape' }).querySelectorAll('button')
+    expect([...shapes].map((b) => b.getAttribute('aria-label'))).toEqual([...MARK_SHAPES])
+    fireEvent.click(screen.getByRole('button', { name: 'gem' }))
+    await waitFor(() => expect(client.last('talkoot.update')!.params).toMatchObject({ ops: [{ set: { mark: { shape: 'gem' } } }] }))
     fireEvent.click(screen.getByText('Reset the mark to its default'))
     await waitFor(() => expect(client.last('talkoot.update')!.params).toMatchObject({ ops: [{ op: 'look', set: { mark: null } }] }))
   })

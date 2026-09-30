@@ -4,6 +4,7 @@ import { HUMAN_PREFIX, isPerson, lineKey } from '../../platform/talkoot/store'
 import { clockTime } from '../../ui/formatting'
 import { Markdown } from '../../ui/Markdown'
 import { RefChip } from './RefChip'
+import { MarkOf } from './MemberMark'
 
 // who names a sender or a recipient: a member id, or a person's name without
 // its human: prefix.
@@ -33,6 +34,7 @@ export function RoomLine({
     return (
       <article class={`talkoot-line envelope kind-${e.kind}${isPerson(e.from) ? ' from-person' : ''}`}>
         <header class="talkoot-line-head">
+          <MarkOf id={e.from} />
           <strong>{who(e.from)}</strong>
           <span class="talkoot-line-to">→ {e.to.map(who).join(', ')}</span>
           {e.kind !== 'message' && <span class="talkoot-kind">{e.kind}</span>}
@@ -68,6 +70,7 @@ export function RoomLine({
       return (
         <article class="talkoot-line intro">
           <header class="talkoot-line-head">
+            <MarkOf id={line.member} />
             <strong>{line.member}</strong>
             <span class="talkoot-kind">{t('introduction')}</span>
           </header>
@@ -82,15 +85,29 @@ export function RoomLine({
           {answerText(line.answers ?? [])}
         </div>
       )
-    case 'roster':
+    case 'roster': {
+      const swatch = line.color_after && (
+        <span class="talkoot-swatch-dot" style={{ background: line.color_after }} aria-label={line.color_after} />
+      )
+      // The line does not record which form of update wrote it, and a text
+      // update can change the colour with the members or the team's other
+      // fields. So a colour change sits beside the members, and the line
+      // says the roster changed rather than the colour alone.
       return (
         <div class="talkoot-line system">
           {line.proposal
             ? t('%s approved a roster change from %s', who(line.by ?? ''), who(line.proposer ?? ''))
             : t('%s changed the roster', who(line.by ?? ''))}
           {line.changes && line.changes.length > 0 && ` (${line.changes.map((c) => c.member).join(', ')})`}
+          {swatch && (
+            <>
+              {'; '}
+              {t('the team colour')} {swatch}
+            </>
+          )}
         </div>
       )
+    }
     case 'guard':
       return (
         <div class="talkoot-line system warn">

@@ -15,10 +15,12 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/look"
 	"terva.sh/terva/packages/core/permission"
 )
 
@@ -50,13 +52,17 @@ var ErrDisabled = errors.New("talkoot: disabled; set talkoot_enabled in $TERVA_H
 type Roster struct {
 	// ID is the directory name under Dir. It is the talkoot's address in
 	// #talkoot:<id>, so it never changes.
-	ID              string   `yaml:"-"`
-	Name            string   `yaml:"name"`
-	Title           string   `yaml:"title,omitempty"`
-	Home            string   `yaml:"home"`
-	BudgetUSDPerDay float64  `yaml:"budget_usd_per_day"`
-	Members         []Member `yaml:"members"`
-	Charter         string   `yaml:"-"`
+	ID              string  `yaml:"-"`
+	Name            string  `yaml:"name"`
+	Title           string  `yaml:"title,omitempty"`
+	Home            string  `yaml:"home"`
+	BudgetUSDPerDay float64 `yaml:"budget_usd_per_day"`
+	// Color is the team mark's colour, a #RRGGBB value. Absent, the talkoot
+	// id picks one (look.TeamColor). The team mark has one body, so a
+	// colour is all a roster sets.
+	Color   string   `yaml:"color,omitempty"`
+	Members []Member `yaml:"members"`
+	Charter string   `yaml:"-"`
 	// Source is the path the roster was read from, for error messages.
 	Source string `yaml:"-"`
 }
@@ -68,22 +74,54 @@ type Roster struct {
 // A new field needs a class in MemberFields. The JSON names match the YAML
 // names, because a roster line in the room carries members.
 type Member struct {
-	ID              string  `yaml:"id" json:"id"`
-	Role            string  `yaml:"role" json:"role"`
-	Title           string  `yaml:"title,omitempty" json:"title,omitempty"`
-	Persona         string  `yaml:"persona,omitempty" json:"persona,omitempty"`
-	Driver          string  `yaml:"driver,omitempty" json:"driver,omitempty"`
-	Model           string  `yaml:"model,omitempty" json:"model,omitempty"`
-	Tier            string  `yaml:"tier,omitempty" json:"tier,omitempty"`
-	Posture         string  `yaml:"posture,omitempty" json:"posture,omitempty"`
-	Workspace       string  `yaml:"workspace,omitempty" json:"workspace,omitempty"`
-	Reviewer        bool    `yaml:"reviewer,omitempty" json:"reviewer,omitempty"`
-	BudgetUSDPerDay float64 `yaml:"budget_usd_per_day,omitempty" json:"budget_usd_per_day,omitempty"`
-	TurnsPerDay     int     `yaml:"turns_per_day,omitempty" json:"turns_per_day,omitempty"`
+	ID    string `yaml:"id" json:"id"`
+	Role  string `yaml:"role" json:"role"`
+	Title string `yaml:"title,omitempty" json:"title,omitempty"`
+	// Mark is the member's shape and colour. Absent, it comes from the
+	// persona (look.Resolve).
+	Mark            *look.Mark `yaml:"mark,omitempty" json:"mark,omitempty"`
+	Persona         string     `yaml:"persona,omitempty" json:"persona,omitempty"`
+	Driver          string     `yaml:"driver,omitempty" json:"driver,omitempty"`
+	Model           string     `yaml:"model,omitempty" json:"model,omitempty"`
+	Tier            string     `yaml:"tier,omitempty" json:"tier,omitempty"`
+	Posture         string     `yaml:"posture,omitempty" json:"posture,omitempty"`
+	Workspace       string     `yaml:"workspace,omitempty" json:"workspace,omitempty"`
+	Reviewer        bool       `yaml:"reviewer,omitempty" json:"reviewer,omitempty"`
+	BudgetUSDPerDay float64    `yaml:"budget_usd_per_day,omitempty" json:"budget_usd_per_day,omitempty"`
+	TurnsPerDay     int        `yaml:"turns_per_day,omitempty" json:"turns_per_day,omitempty"`
 	// Tools narrows the member to the named tools, and absent means the
 	// posture's full set. It never widens: a tool the posture refuses stays
 	// refused. The seat tools stay without a listing (SeatTools).
 	Tools []string `yaml:"tools,omitempty" json:"tools,omitempty"`
+	// IdleStop is how long a worker member's process stays up with no turn,
+	// as a Go duration such as 30m, or off to keep it up. Absent means
+	// DefaultIdleStop. The next envelope revives a stopped worker.
+	IdleStop string `yaml:"idle_stop,omitempty" json:"idle_stop,omitempty"`
+}
+
+// DefaultIdleStop is a worker member's idle stop when its roster entry names
+// none.
+const DefaultIdleStop = 30 * time.Minute
+
+// MinIdleStop is the shortest idle stop a roster may set. A shorter one would
+// stop a worker between the turns of one piece of work.
+const MinIdleStop = time.Minute
+
+// IdleStopOff is the idle_stop value that keeps a worker's process up.
+const IdleStopOff = "off"
+
+// IdleStopAfter returns how long the member's worker may idle before its
+// process stops, and false when it never stops. An invalid value, which
+// Validate refuses, reads as the default.
+func (m Member) IdleStopAfter() (time.Duration, bool) {
+	v := strings.TrimSpace(m.IdleStop)
+	if v == IdleStopOff {
+		return 0, false
+	}
+	if d, err := time.ParseDuration(v); err == nil && d >= MinIdleStop {
+		return d, true
+	}
+	return DefaultIdleStop, true
 }
 
 // FieldClass says who may change a member field, and how (decision 0025
@@ -109,6 +147,7 @@ var MemberFields = []struct {
 	{"id", ClassAuthority},
 	{"role", ClassAuthority},
 	{"title", ClassLook},
+	{"mark", ClassLook},
 	{"persona", ClassVoice},
 	{"driver", ClassAuthority},
 	{"model", ClassAuthority},
@@ -119,6 +158,7 @@ var MemberFields = []struct {
 	{"budget_usd_per_day", ClassAuthority},
 	{"turns_per_day", ClassAuthority},
 	{"tools", ClassAuthority},
+	{"idle_stop", ClassAuthority},
 }
 
 // ClassOf returns the class of a member field, and false for a name that is
@@ -290,6 +330,9 @@ func Validate(r Roster, env Env) error {
 	if len(r.Members) == 0 {
 		add("members is empty")
 	}
+	if r.Color != "" && !look.ValidColor(r.Color) {
+		add("color %q is not a #RRGGBB value", r.Color)
+	}
 
 	seen := map[string]bool{}
 	coordinators := 0
@@ -320,6 +363,11 @@ func Validate(r Roster, env Env) error {
 			add("%s: reviewer is for a specialist, not a %s", who, m.Role)
 		}
 
+		if m.Mark != nil {
+			for _, p := range look.Check(*m.Mark) {
+				add("%s: %s", who, p)
+			}
+		}
 		if m.Persona != "" && !env.PersonaExists(m.Persona) {
 			add("%s: persona %q not found", who, m.Persona)
 		}
@@ -366,7 +414,26 @@ func Validate(r Roster, env Env) error {
 			}
 		}
 
+		if v := strings.TrimSpace(m.IdleStop); v != "" {
+			switch d, err := time.ParseDuration(v); {
+			case m.Driver == DriverNative:
+				add("%s: idle_stop is for a worker member; a native member has no process to stop", who)
+			case v == IdleStopOff:
+			case err != nil:
+				add("%s: idle_stop %q is not a duration such as 30m, or off", who, m.IdleStop)
+			case d < MinIdleStop:
+				add("%s: idle_stop %s is shorter than %s", who, d, MinIdleStop)
+			}
+		}
+
 		if m.Driver != DriverNative {
+			// 🚨 A worker backend maps yolo onto its own bypass mode, such as
+			// Claude's bypassPermissions, which terva's gate never sees. The
+			// person ruled it out for roster workers on 2026-09-27
+			// (TKT-01M396QY3), and TKT-01M39TE0 may revisit it.
+			if m.Posture == string(permission.ApprovalYolo) {
+				add("%s: posture yolo is not open to a worker member", who)
+			}
 			reportsCost, err := env.Driver(m.Driver)
 			switch {
 			case err != nil:

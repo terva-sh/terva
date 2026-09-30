@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/look"
 	"terva.sh/terva/packages/agent/talkoot"
 	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/privfs"
@@ -23,6 +24,9 @@ type talkootSummary struct {
 	Running bool
 	// Problem says why a talkoot homed here is not running.
 	Problem string
+	// Name, Title, Color, and OwnColor come from the roster, and State from
+	// the run's last flush.
+	Name, Title, Color, OwnColor, State string
 }
 
 // talkootMemberView is one member as a client sees it.
@@ -70,9 +74,11 @@ func (w *Workspace) talkootList(ctx context.Context) ([]talkootSummary, error) {
 		sum := talkootSummary{ID: id, Problem: w.talkoot.problems[id]}
 		if run := w.talkoot.runs[id]; run != nil {
 			sum.Running = true
-			sum.Home = run.roster.Load().Home
+			r := run.roster.Load()
+			sum.Home, sum.Name, sum.Title, sum.Color, sum.OwnColor = r.Home, r.Name, r.Title, look.TeamColor(id, r.Color), r.Color
+			sum.State = run.teamState()
 		} else if r, err := talkoot.Load(id, talkootEnv()); err == nil {
-			sum.Home = r.Home
+			sum.Home, sum.Name, sum.Title, sum.Color, sum.OwnColor = r.Home, r.Name, r.Title, look.TeamColor(id, r.Color), r.Color
 		} else if sum.Problem == "" {
 			sum.Problem = err.Error()
 		}
@@ -111,7 +117,7 @@ func (w *Workspace) talkootGet(ctx context.Context, id string) (talkootView, err
 		// talkoot.
 		v.Text, _ = os.ReadFile(filepath.Join(run.dir, talkoot.FileName))
 		status := map[string]talkoot.Status{}
-		for _, st := range rt.Statuses() {
+		for _, st := range run.overlay(rt.Statuses()) {
 			status[st.Member] = st
 		}
 		w.talkoot.mu.Lock()
@@ -292,6 +298,22 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 	}
 	var postures []postureChange
 	leaving := map[string]string{} // member id -> session id
+	// retiring lists the workers of worker members that lost their seats.
+	// They stop once the update commits.
+	var retiring []string
+	// unleasing lists the worker members that leave their worktree: they
+	// leave the roster, turn native, or move to the home checkout. Each
+	// gives its worktree back once its worker has stopped.
+	var unleasing []string
+	for _, old := range prev.Members {
+		if old.Driver == talkoot.DriverNative || old.Workspace != talkoot.WorkspaceWorktree {
+			continue
+		}
+		if m, kept := memberOf(next, old.ID); kept && m.Driver != talkoot.DriverNative && m.Workspace == talkoot.WorkspaceWorktree {
+			continue
+		}
+		unleasing = append(unleasing, old.ID)
+	}
 	w.talkoot.mu.Lock()
 	for _, old := range prev.Members {
 		sid := run.seats[old.ID]
@@ -299,6 +321,16 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 			continue
 		}
 		m, kept := memberOf(next, old.ID)
+		if old.Driver != talkoot.DriverNative {
+			// A worker takes its posture, tools, persona, and model at its
+			// spawn, and cannot change them live. A change to any of them
+			// gives the member a new worker on its next delivery.
+			if !kept || !sameWorker(old, m) {
+				leaving[old.ID] = sid
+				retiring = append(retiring, sid)
+			}
+			continue
+		}
 		switch {
 		case !kept || m.Driver != talkoot.DriverNative || m.Persona != old.Persona || m.Model != old.Model || m.Tier != old.Tier:
 			leaving[old.ID] = sid
@@ -382,8 +414,12 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 	// The roster line records who changed the roster. It is part of the
 	// update: an update the room cannot record does not happen.
 	changes := talkoot.Diff(prev, next)
-	if err := run.room.Append(talkoot.Line{Type: talkoot.LineRoster, At: time.Now(), By: humanBy(by), Ref: talkoot.RosterRevision(text),
-		Proposal: from.proposal, Proposer: from.proposer, Edited: from.edited, Changes: changes}); err != nil {
+	line := talkoot.Line{Type: talkoot.LineRoster, At: time.Now(), By: humanBy(by), Ref: talkoot.RosterRevision(text),
+		Proposal: from.proposal, Proposer: from.proposer, Edited: from.edited, Changes: changes}
+	if prev.Color != next.Color {
+		line.ColorBefore, line.ColorAfter = look.TeamColor(id, prev.Color), look.TeamColor(id, next.Color)
+	}
+	if err := run.room.Append(line); err != nil {
 		return abort(fmt.Errorf("talkoot: the room could not record the roster change: %w", err))
 	}
 	rosterSealed = true
@@ -419,6 +455,37 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 	// retires here, so no call through the new router passes it.
 	unseated := map[string]*seatBinding{}
 	w.talkoot.mu.Lock()
+	// Every worker seated now in a member's worktree runs there, whether
+	// this run bound it or found it live, and whether this update keeps it,
+	// retires it, or moves the member out. A release, now or after a later
+	// update, waits for it. Each release takes a new generation, and an
+	// older one stands down.
+	for _, old := range prev.Members {
+		if sid := run.seats[old.ID]; sid != "" && old.Driver != talkoot.DriverNative && old.Workspace == talkoot.WorkspaceWorktree {
+			holdLeaseLocked(run, old.ID, sid)
+		}
+	}
+	unleaseGen := make(map[string]uint64, len(unleasing))
+	for _, member := range unleasing {
+		unleaseGen[member] = nextUnleaseLocked(run, member)
+	}
+	// 🚨 A worker bound after the scan above, while this update waited for
+	// the run, was never checked. It is checked here, under the lock its
+	// binding records under, so one of the two sees the other.
+	for _, old := range prev.Members {
+		wid := run.seats[old.ID]
+		if old.Driver == talkoot.DriverNative || wid == "" || leaving[old.ID] != "" {
+			continue
+		}
+		if m, kept := memberOf(next, old.ID); kept && sameWorker(old, m) {
+			continue
+		}
+		if err := run.room.Append(talkoot.Line{Type: talkoot.LineSeat, At: time.Now(), Member: old.ID}); err != nil {
+			w.diagf("talkoot %s: could not record that %s lost its worker: %v", run.id, old.ID, err)
+		}
+		delete(run.seats, old.ID)
+		retiring = append(retiring, wid)
+	}
 	for member, sid := range leaving {
 		delete(run.seats, member)
 		if b := w.talkoot.seats[sid]; b != nil {
@@ -430,6 +497,17 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 	w.talkoot.mu.Unlock()
 	run.mu.Unlock()
 
+	if h := w.workers(); h != nil {
+		for _, id := range retiring {
+			if err := h.stop(id); err != nil {
+				w.diagf("talkoot %s: could not stop the worker %s of a member that lost its seat: %v", run.id, id, err)
+			}
+		}
+	}
+	for _, member := range unleasing {
+		go w.releaseMemberLease(run, member, unleaseGen[member])
+	}
+	w.reconcileIdleStops(run)
 	for sid, b := range unseated {
 		b.revoke()
 		if s := w.existing(sid); s != nil {
@@ -444,6 +522,8 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 		return talkootView{}, err
 	}
 	w.introduceJoined(run, by, changes)
+	// The list shows the roster's name and colour.
+	w.announceTalkoots()
 	return w.talkootGet(ctx, id)
 }
 
@@ -527,4 +607,13 @@ func humanBy(by string) string {
 		return by
 	}
 	return talkoot.HumanPrefix + by
+}
+
+// sameWorker reports whether a worker member can keep its worker across a
+// roster change: nothing it took at its spawn changed. A tools list compares
+// nil apart from empty, since an empty list narrows to seat tools alone.
+func sameWorker(a, b talkoot.Member) bool {
+	return a.Driver == b.Driver && a.Persona == b.Persona && a.Model == b.Model && a.Tier == b.Tier &&
+		a.Posture == b.Posture && a.Workspace == b.Workspace &&
+		(a.Tools == nil) == (b.Tools == nil) && slices.Equal(a.Tools, b.Tools)
 }

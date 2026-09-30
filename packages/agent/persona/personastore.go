@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"terva.sh/terva/packages/agent/look"
 	"terva.sh/terva/packages/agent/slug"
 
 	"terva.sh/terva/packages/privfs"
@@ -51,6 +52,7 @@ func Marshal(p Persona) ([]byte, error) {
 		Summary:           strings.TrimSpace(p.Summary),
 		Emoji:             strings.TrimSpace(p.Emoji),
 		AccentColor:       strings.TrimSpace(p.AccentColor),
+		Mark:              markPtr(p.Mark),
 		Group:             strings.TrimSpace(p.Group),
 		RecommendedSkills: p.RecommendedSkills,
 		GoodFor:           p.GoodFor,
@@ -296,4 +298,11 @@ func Delete(name string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func markPtr(m look.Mark) *look.Mark {
+	if m == (look.Mark{}) {
+		return nil
+	}
+	return &m
 }

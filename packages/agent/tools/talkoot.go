@@ -68,7 +68,7 @@ const (
 
 	talkootNoteReadDesc = "Read a note of your talkoot. Give the note reference from an envelope, as in note:atlas/plan.md. With no note, the tool lists every note, the newest first. One result holds at most 2000 lines and 50 KiB. If the note is larger, the tool cuts the result and gives the offset of the next line."
 
-	talkootProposeDesc = "Propose a change to the roster of your talkoot. A person must approve the proposal. This tool never changes the roster itself. The proposal goes to the inbox of the talkoot as a card, and the tool returns its id.\n\nGive ops, or give undo with the id of an approved proposal. An op is add, edit, remove, or look. An add or an edit sets member fields, such as role, title, persona, posture, or tier. A look op sets look fields only, such as title. Give the reason for the change in why, so the person can decide."
+	talkootProposeDesc = "Propose a change to the roster of your talkoot. A person must approve the proposal. This tool never changes the roster itself. The proposal goes to the inbox of the talkoot as a card, and the tool returns its id.\n\nGive ops, or give undo with the id of an approved proposal. An op is add, edit, remove, or look. An add or an edit sets member fields, such as role, title, persona, posture, or tier. A look op sets look fields only: title, and mark. A mark has a shape and a color, as in {\"shape\": \"hexagon\", \"color\": \"#3E63DD\"}. Give the reason for the change in why, so the person can decide."
 
 	talkootToProp     = `"to":{"type":"array","items":{"type":"string"},"minItems":1,"description":"The ids of the members that get the envelope. Call talkoot_roster for the ids."}`
 	talkootBodyProp   = `"body":{"type":"string","description":"The text of the envelope."}`

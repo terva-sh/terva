@@ -25,7 +25,8 @@ func (w *Workspace) Talkoots(ctx context.Context) ([]ctrlproto.TalkootSummary, e
 	}
 	out := make([]ctrlproto.TalkootSummary, 0, len(list))
 	for _, s := range list {
-		out = append(out, ctrlproto.TalkootSummary{ID: s.ID, Home: s.Home, Running: s.Running, Problem: s.Problem})
+		out = append(out, ctrlproto.TalkootSummary{ID: s.ID, Home: s.Home, Running: s.Running, Problem: s.Problem,
+			Name: s.Name, Title: s.Title, Color: s.Color, OwnColor: s.OwnColor, State: s.State})
 	}
 	return out, nil
 }
@@ -116,11 +117,19 @@ func (w *Workspace) CreateTalkoot(ctx context.Context, p ctrlproto.TalkootCreate
 func (w *Workspace) UpdateTalkoot(ctx context.Context, p ctrlproto.TalkootUpdateParams) (ctrlproto.TalkootView, error) {
 	var v talkootView
 	var err error
+	forms := 0
+	for _, set := range []bool{p.Text != "", len(p.Ops) > 0, p.Color != nil} {
+		if set {
+			forms++
+		}
+	}
 	switch {
-	case p.Text != "" && len(p.Ops) > 0:
-		return ctrlproto.TalkootView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "talkoot: an update holds the whole text or a list of operations, not both")
-	case p.Text == "" && len(p.Ops) == 0:
-		return ctrlproto.TalkootView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "talkoot: an update needs the whole text or a list of operations")
+	case forms > 1:
+		return ctrlproto.TalkootView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "talkoot: an update holds one of the whole text, a list of operations, and a colour")
+	case forms == 0:
+		return ctrlproto.TalkootView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "talkoot: an update needs the whole text, a list of operations, or a colour")
+	case p.Color != nil:
+		v, err = w.talkootColor(ctx, p.ID, p.By, *p.Color)
 	case len(p.Ops) > 0:
 		v, err = w.talkootEdit(ctx, p.ID, p.By, wireOps(p.Ops))
 	default:
@@ -228,12 +237,16 @@ func (w *Workspace) wireTalkootView(v talkootView) ctrlproto.TalkootView {
 	r := v.Roster
 	out := ctrlproto.TalkootView{
 		ID: r.ID, Name: r.Name, Title: r.Title, Home: r.Home, BudgetUSDPerDay: r.BudgetUSDPerDay,
+		Color: look.TeamColor(r.ID, r.Color), OwnColor: r.Color,
 		Text: string(v.Text), Members: make([]ctrlproto.TalkootMember, 0, len(v.Members)), Held: v.Held,
 	}
 	members := make([]talkoot.Member, 0, len(v.Members))
+	statuses := make([]talkoot.Status, 0, len(v.Members))
 	for _, m := range v.Members {
 		members = append(members, m.Member)
+		statuses = append(statuses, m.Status)
 	}
+	out.State = talkoot.TeamState(statuses)
 	marks := talkootMarks(members)
 	for _, m := range v.Members {
 		mm := m.Member
@@ -303,7 +316,9 @@ func wireMark(m *look.Mark) *ctrlproto.TalkootMark {
 }
 
 func wireTalkootStatus(s talkoot.Status) ctrlproto.TalkootMemberStatus {
-	return ctrlproto.TalkootMemberStatus{Member: s.Member, Working: s.Working, Tool: s.Tool, Paused: s.Paused, SpendUSD: s.SpendUSD, Turns: s.Turns, Idle: s.Idle}
+	return ctrlproto.TalkootMemberStatus{Member: s.Member, Presence: s.Presence(), Working: s.Working, Tool: s.Tool, Paused: s.Paused,
+		Pauses: s.Pauses, SpendUSD: s.SpendUSD, Turns: s.Turns, Idle: s.Idle,
+		Expression: s.Expression, Intensity: s.Intensity, ExpressionCause: s.ExpressionCause}
 }
 
 func wireTalkootEnvelope(e talkoot.Envelope) ctrlproto.TalkootEnvelope {
@@ -333,7 +348,8 @@ func wireTalkootLine(l talkoot.Line) ctrlproto.TalkootLine {
 		Type: l.Type, At: l.At, Member: l.Member, Chain: l.Chain, CostUSD: l.CostUSD,
 		Guard: l.Guard, Action: l.Action, Reason: l.Reason, By: l.By, SpendUSD: l.SpendUSD,
 		Ref: l.Ref, Notes: l.Notes, Proposal: l.Proposal, Proposer: l.Proposer, Edited: l.Edited,
-		Text: l.Text,
+		Text: l.Text, Tool: l.Tool, Attempt: l.Attempt, Card: l.Card, Outcome: l.Outcome,
+		ColorBefore: l.ColorBefore, ColorAfter: l.ColorAfter,
 	}
 	if len(l.Changes) > 0 {
 		out.Changes = wireChanges(l.Changes)
@@ -373,10 +389,16 @@ func wireTalkootEvent(ev talkootEvent) (ctrlproto.Event, bool) {
 		for _, s := range ev.Status {
 			members = append(members, wireTalkootStatus(s))
 		}
-		return ctrlproto.TalkootStatusEvent(ev.Talkoot, members), true
+		e := ctrlproto.TalkootStatusEvent(ev.Talkoot, members)
+		e.Talkoot.State = talkoot.TeamState(ev.Status)
+		return e, true
 	case "inbox":
 		if ev.Wire != nil {
 			return *ev.Wire, true
+		}
+	case "beat":
+		if ev.Beat != nil {
+			return ctrlproto.TalkootBeatEvent(ev.Talkoot, wireTalkootBeat(*ev.Beat)), true
 		}
 	}
 	return ctrlproto.Event{}, false

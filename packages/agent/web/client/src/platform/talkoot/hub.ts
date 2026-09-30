@@ -9,6 +9,16 @@ import { ADDR_TALKOOT_PREFIX, type WireEvent } from '../ctrlproto/types'
 // #talkoot: address here, and a view listens.
 export class TalkootHub {
   private listeners = new Map<string, Set<(ev: WireEvent) => void>>()
+  private lists = new Set<() => void>()
+
+  // onList registers fn for talkoots_changed, which says the talkoot list
+  // changed, and returns its removal.
+  onList(fn: () => void): () => void {
+    this.lists.add(fn)
+    return () => {
+      this.lists.delete(fn)
+    }
+  }
 
   // listen registers fn for one talkoot's events, and returns its removal.
   listen(id: string, fn: (ev: WireEvent) => void): () => void {
@@ -26,7 +36,12 @@ export class TalkootHub {
 
   // dispatch delivers ev when addr is a talkoot address, and reports whether
   // it was one, so the caller stops routing it.
+  // talkoots_changed rides #workspace, and it goes to the list listeners.
   dispatch(addr: string, ev: WireEvent): boolean {
+    if (ev.type === 'talkoots_changed') {
+      for (const fn of [...this.lists]) fn()
+      return true
+    }
     if (!addr.startsWith(ADDR_TALKOOT_PREFIX)) return false
     const set = this.listeners.get(addr.slice(ADDR_TALKOOT_PREFIX.length))
     if (set) for (const fn of [...set]) fn(ev)

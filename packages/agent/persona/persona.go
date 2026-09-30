@@ -34,6 +34,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/look"
 	"terva.sh/terva/packages/i18n"
 )
 
@@ -61,12 +62,15 @@ const BuiltinRoot = "personas/builtin"
 // distinction is easy to lose because both live in the same field, and losing
 // it costs a fleet the operating guidance it thought it had.
 type Persona struct {
-	Name              string
-	Pronunciation     string
-	Specialty         string
-	Summary           string
-	Emoji             string
-	AccentColor       string
+	Name          string
+	Pronunciation string
+	Specialty     string
+	Summary       string
+	Emoji         string
+	AccentColor   string
+	// Mark is the shape and colour a Talkoot member built from this persona
+	// takes, unless its roster entry sets its own. Zero means none.
+	Mark              look.Mark
 	RecommendedSkills []string
 	GoodFor           []string
 	AvoidFor          []string
@@ -163,19 +167,20 @@ func (p Persona) GroupLabel() string {
 // omitempty affects marshaling only, so parsing is unchanged (an absent optional
 // field already meant its zero value).
 type frontmatter struct {
-	Name              string   `yaml:"name"`
-	Pronunciation     string   `yaml:"pronunciation,omitempty"`
-	Specialty         string   `yaml:"specialty,omitempty"`
-	Summary           string   `yaml:"summary,omitempty"`
-	Emoji             string   `yaml:"emoji,omitempty"`
-	AccentColor       string   `yaml:"accent_color,omitempty"`
-	Group             string   `yaml:"group,omitempty"`
-	RecommendedSkills []string `yaml:"recommended_skills,omitempty"`
-	GoodFor           []string `yaml:"good_for,omitempty"`
-	AvoidFor          []string `yaml:"avoid_for,omitempty"`
-	Immersive         bool     `yaml:"immersive,omitempty"`
-	AgentIntroduction string   `yaml:"agent_introduction,omitempty"`
-	Extends           string   `yaml:"extends,omitempty"`
+	Name              string     `yaml:"name"`
+	Pronunciation     string     `yaml:"pronunciation,omitempty"`
+	Specialty         string     `yaml:"specialty,omitempty"`
+	Summary           string     `yaml:"summary,omitempty"`
+	Emoji             string     `yaml:"emoji,omitempty"`
+	AccentColor       string     `yaml:"accent_color,omitempty"`
+	Mark              *look.Mark `yaml:"mark,omitempty"`
+	Group             string     `yaml:"group,omitempty"`
+	RecommendedSkills []string   `yaml:"recommended_skills,omitempty"`
+	GoodFor           []string   `yaml:"good_for,omitempty"`
+	AvoidFor          []string   `yaml:"avoid_for,omitempty"`
+	Immersive         bool       `yaml:"immersive,omitempty"`
+	AgentIntroduction string     `yaml:"agent_introduction,omitempty"`
+	Extends           string     `yaml:"extends,omitempty"`
 }
 
 // Parse parses a Persona .md (YAML frontmatter + charter body). A
@@ -196,6 +201,7 @@ func Parse(raw, source string) (Persona, error) {
 		Summary:           strings.TrimSpace(fm.Summary),
 		Emoji:             strings.TrimSpace(fm.Emoji),
 		AccentColor:       strings.TrimSpace(fm.AccentColor),
+		Mark:              markOf(fm.Mark),
 		Group:             strings.TrimSpace(fm.Group),
 		RecommendedSkills: fm.RecommendedSkills,
 		GoodFor:           fm.GoodFor,
@@ -459,4 +465,11 @@ func stemOf(source string) string {
 		}
 	}
 	return strings.TrimSuffix(path.Base(filepath.ToSlash(s)), ".md")
+}
+
+func markOf(m *look.Mark) look.Mark {
+	if m == nil {
+		return look.Mark{}
+	}
+	return look.Mark{Shape: strings.TrimSpace(m.Shape), Color: strings.TrimSpace(m.Color)}
 }

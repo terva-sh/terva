@@ -29,9 +29,9 @@ const (
 	// chain the member works in from then on, and the envelope in Ref. A
 	// delivery line names the chain itself when its driver reports no reads.
 	LineRead = "read"
-	// LineSeat binds a native member to its session: Member, and the session
-	// id in Ref. An empty Ref unbinds it. The workspace writes these; the
-	// router ignores them.
+	// LineSeat binds a member to what runs it: Member, and in Ref the session
+	// id of a native member or the swarm id of a worker member. An empty Ref
+	// unbinds it. The workspace writes these; the router ignores them.
 	LineSeat = "seat"
 	// LineRoster records a change to the roster: By, the person who made or
 	// approved it, and the sha256 of the new talkoot.md in Ref. Changes holds
@@ -50,6 +50,13 @@ const (
 	// in Text, which the workspace builds from the member's entry. The
 	// coordinator reads it as a note (intro.go).
 	LineIntro = "intro"
+	// LineToolError, LineRetry, LineCardOpen, and LineCardClose are signals:
+	// things that happened to a member, which a reader of the room replays,
+	// such as the expression engine (signals.go). The router ignores them.
+	LineToolError = "tool_error"
+	LineRetry     = "retry"
+	LineCardOpen  = "card_open"
+	LineCardClose = "card_close"
 	// LineDamaged is never written. Read returns it in place of a line that
 	// does not parse.
 	LineDamaged = "damaged"
@@ -88,10 +95,20 @@ type Line struct {
 	Proposer string         `json:"proposer,omitempty"`
 	Edited   bool           `json:"edited,omitempty"`
 	Changes  []MemberChange `json:"changes,omitempty"`
+	// ColorBefore and ColorAfter are set on a roster line that changed the
+	// team colour: the whole colour before and after, with the default
+	// filled in, so a reset still names the colour it shows.
+	ColorBefore string `json:"color_before,omitempty"`
+	ColorAfter  string `json:"color_after,omitempty"`
 	// Answers is set on an answer line.
 	Answers []Answered `json:"answers,omitempty"`
 	// Text is set on an intro line.
 	Text string `json:"text,omitempty"`
+	// Tool, Attempt, Card, and Outcome are set on a signal line (signals.go).
+	Tool    string `json:"tool,omitempty"`
+	Attempt int    `json:"attempt,omitempty"`
+	Card    string `json:"card,omitempty"`
+	Outcome string `json:"outcome,omitempty"`
 	// Kid names the key that sealed the line, and MAC is the seal. MAC must
 	// stay the last field: the seal covers every byte before it (seal.go).
 	Kid string `json:"kid,omitempty"`
