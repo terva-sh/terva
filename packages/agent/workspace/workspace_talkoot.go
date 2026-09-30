@@ -396,6 +396,10 @@ func (w *Workspace) talkootTurn(sessID string) (end func(costUSD float64, ran bo
 	run.open[member]++
 	w.talkoot.turns.Add(1)
 	w.talkoot.mu.Unlock()
+	// The router sees the member as working from here, though a person may
+	// have started this turn and no delivery did (TKT-01M3SMDS89).
+	run.nativeTurn(member, 1)
+	run.flush()
 	return func(costUSD float64, ran bool, failed string, interrupted bool) {
 		defer w.talkoot.turns.Add(-1)
 		done := false
@@ -413,7 +417,16 @@ func (w *Workspace) talkootTurn(sessID string) (end func(costUSD float64, ran bo
 		// A turn that did not run, or whose report the router refused, still
 		// closes here.
 		defer settle()
+		// 🔑 The member stops counting as busy before the router hears the
+		// turn end, so the release that the report makes sees the slot free.
+		run.nativeTurn(member, -1)
 		if !ran {
+			// A delivery may have waited on this turn's slot, and no report
+			// releases it.
+			_ = run.do(func(rt *talkoot.Router) error {
+				rt.Release()
+				return nil
+			})
 			return
 		}
 		if err := seat.turnEnded(costUSD, failed, interrupted, settle); err != nil {
@@ -447,9 +460,19 @@ type talkootNativeDriver struct {
 	// read reports a delivery the session's turn has read. DeliverRead
 	// refuses to run without it.
 	read func(sessID, member string, r talkoot.Receipt)
+	// busy reports whether the member's session runs a turn. Nil reports
+	// none.
+	busy func(member string) bool
 }
 
-var _ talkoot.ReadDriver = talkootNativeDriver{}
+var (
+	_ talkoot.ReadDriver = talkootNativeDriver{}
+	_ talkoot.BusyDriver = talkootNativeDriver{}
+)
+
+// Busy makes the native driver a talkoot.BusyDriver, so the router counts a
+// turn that a person started in the member's session.
+func (d talkootNativeDriver) Busy(member string) bool { return d.busy != nil && d.busy(member) }
 
 func (d talkootNativeDriver) Deliver(talkootID string, m talkoot.Member, text string) error {
 	return d.deliver(talkootID, m, text, nil)
@@ -506,9 +529,9 @@ func (d talkootWorkerDriver) DeliverRead(_ string, m talkoot.Member, text string
 }
 
 // talkootDrivers wires both drivers to this workspace's sessions and swarm.
-func (w *Workspace) talkootDrivers(sessionOf memberBinding, deliverWorker func(m talkoot.Member, text string, r *talkoot.Receipt) error, read func(sessID, member string, r talkoot.Receipt)) talkoot.Drivers {
+func (w *Workspace) talkootDrivers(sessionOf memberBinding, deliverWorker func(m talkoot.Member, text string, r *talkoot.Receipt) error, read func(sessID, member string, r talkoot.Receipt), busy func(member string) bool) talkoot.Drivers {
 	return talkoot.Drivers{
-		Native: talkootNativeDriver{sessionOf: sessionOf, resolve: w.resolve, read: read},
+		Native: talkootNativeDriver{sessionOf: sessionOf, resolve: w.resolve, read: read, busy: busy},
 		Worker: talkootWorkerDriver{deliver: deliverWorker},
 	}
 }

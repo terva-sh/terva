@@ -475,6 +475,91 @@ func TestTheWorkingLimitQueuesAndReleasesOnTurnEnd(t *testing.T) {
 	}
 }
 
+// busyNative is a native driver that says which members run a turn that no
+// delivery started (BusyDriver).
+type busyNative struct {
+	*recorder
+	mu   sync.Mutex
+	busy map[string]bool
+}
+
+func (d *busyNative) Busy(member string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.busy[member]
+}
+
+func (d *busyNative) set(member string, on bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.busy[member] = on
+}
+
+// A turn a person starts in a member's session holds a working slot, though
+// no delivery started it. The member shows as working, a delivery joins its
+// turn instead of waking it, and a delivery to another member waits for the
+// slot (TKT-01M3SMDS89).
+func TestATurnAPersonStartedHoldsAWorkingSlot(t *testing.T) {
+	f := newFixture(t, func(_ *Roster, l *Limits) { l.MaxWorking = 1 })
+	native := &busyNative{recorder: f.native, busy: map[string]bool{}}
+	rt, err := NewRouter(f.roster, OpenRoom(f.dir), Drivers{Native: native, Worker: f.worker}, f.limits, f.clock.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.router = rt
+	working := func(member string) bool {
+		for _, s := range f.router.Statuses() {
+			if s.Member == member {
+				return s.Working
+			}
+		}
+		t.Fatalf("no status for %s", member)
+		return false
+	}
+	woke := func(member string) []bool {
+		var out []bool
+		for _, l := range f.lines() {
+			if l.Type == LineDelivery && l.Member == member {
+				out = append(out, l.Woke)
+			}
+		}
+		return out
+	}
+
+	native.set("helm", true)
+	if !working("helm") {
+		t.Error("helm runs a turn a person started, so it must show as working")
+	}
+	f.post("atlas")
+	if got := f.native.to("atlas"); len(got) != 0 {
+		t.Fatalf("helm holds the only working slot, so atlas must wait, got %q", got)
+	}
+	if g := f.guard(GuardWorking); len(g) != 1 || g[0].Member != "atlas" {
+		t.Fatalf("atlas's wait must be in the room: %+v", g)
+	}
+	f.post("helm")
+	if got := f.native.to("helm"); len(got) != 1 {
+		t.Fatalf("a delivery to a working member joins its turn, got %q", got)
+	}
+	if got := woke("helm"); len(got) != 1 || got[0] {
+		t.Errorf("the delivery joined helm's turn, so it must not say woke: %v", got)
+	}
+
+	native.set("helm", false)
+	if err := f.router.TurnEnded("helm", 0.1); err != nil {
+		t.Fatal(err)
+	}
+	if working("helm") {
+		t.Error("helm's turn ended, so it must not show as working")
+	}
+	if got := f.native.to("atlas"); len(got) != 1 {
+		t.Errorf("helm's turn ended, so atlas must get the post, got %q", got)
+	}
+	if got := woke("atlas"); len(got) != 1 || !got[0] {
+		t.Errorf("atlas was idle, so its delivery must say woke: %v", got)
+	}
+}
+
 // 🔑 A cap that a restart resets is a cap anyone can clear, so spend and
 // pauses come back from the room.
 func TestARestartKeepsTheDaysSpendAndThePauses(t *testing.T) {

@@ -41,6 +41,20 @@ type ReadDriver interface {
 	DeliverRead(talkoot string, m Member, text string, r Receipt) error
 }
 
+// A BusyDriver says when a member runs a turn that no delivery started, such
+// as one a person started in the member's session. The router counts that
+// turn as working: it takes a working slot, the member shows as working, and
+// a delivery joins it rather than waking the member.
+//
+// A driver that is only a Driver tells the router nothing, and the router
+// sees only the turns its deliveries start.
+//
+// Busy runs with the router locked, so it must not call the router.
+type BusyDriver interface {
+	Driver
+	Busy(member string) bool
+}
+
 // Receipt names one delivery to a [ReadDriver]. Only the router makes one.
 type Receipt struct {
 	member, ref, chain string
@@ -136,7 +150,8 @@ type grant struct {
 	// and Read moves the member.
 	reads bool
 	// woke says no turn of the member ran when the grant was made, so this
-	// delivery starts one.
+	// delivery starts one. The grant is made before the driver runs, so a
+	// BusyDriver does not yet count the turn this delivery starts.
 	//
 	// ⚠️ A delivery marks the member turning once its driver returns, so the
 	// next delivery in the same dispatch loop sees the turn. Two dispatch
@@ -736,7 +751,20 @@ func (rt *Router) routeLocked(e Envelope, to string, retry bool) []delivery {
 
 // busy reports whether a member holds a working slot: a turn is running, or a
 // delivery to it is on its way.
-func (rt *Router) busy(id string) bool { return rt.turning[id] || rt.inflight[id] > 0 }
+func (rt *Router) busy(id string) bool {
+	return rt.turning[id] || rt.inflight[id] > 0 || rt.driverBusy(id)
+}
+
+// driverBusy reports whether the member's driver says the member runs a turn
+// that no delivery started (BusyDriver).
+func (rt *Router) driverBusy(id string) bool {
+	m, ok := rt.roster.member(id)
+	if !ok {
+		return false
+	}
+	d, ok := rt.drivers.forMember(m).(BusyDriver)
+	return ok && d.Busy(id)
+}
 
 func (rt *Router) workingCount() int {
 	n := 0
@@ -827,7 +855,7 @@ func (rt *Router) dispatch(ds []delivery) {
 // turn starts, which can be before Deliver returns.
 func (rt *Router) claimLocked(id, root string, reads bool) *grant {
 	g := &grant{root: root, notes: rt.notes[id], epoch: rt.epoch[id], reads: reads,
-		woke: !rt.turning[id]}
+		woke: !rt.turning[id] && !rt.driverBusy(id)}
 	delete(rt.notes, id)
 	if reads {
 		return g

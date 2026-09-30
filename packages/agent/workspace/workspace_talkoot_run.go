@@ -74,6 +74,15 @@ type talkootRun struct {
 	// whether or not the member is still on the roster. Guarded by
 	// wsTalkoot.mu, which is taken after mu.
 	open map[string]int
+	// native counts, by member, the turns its native session runs, whether
+	// a delivery or a person started them. The native driver reports it to
+	// the router (talkoot.BusyDriver), which sees no other sign of a turn a
+	// person started. Guarded by nativeMu.
+	//
+	// 🔑 nativeMu is a leaf. The router takes it with its own lock held, so
+	// nothing may call the router while holding it.
+	nativeMu sync.Mutex
+	native   map[string]int
 	// workerMu serializes the binding of worker members, so two deliveries
 	// cannot spawn two workers for one member.
 	workerMu sync.Mutex
@@ -166,6 +175,11 @@ type talkootRun struct {
 	beats       []expression.Beat
 	faceTimer   *time.Timer
 	faceStopped bool
+
+	// team is the team state the last flush found, guarded by evMu, and
+	// teamChanged runs when a flush finds another (workspace_talkoot_team.go).
+	team        string
+	teamChanged func()
 }
 
 // talkootEvent is a change a client of the talkoot wants to see.
@@ -275,9 +289,15 @@ func (r *talkootRun) flush() {
 		}
 	}
 	r.last = next
+	team := talkoot.TeamState(st)
+	moved := team != r.team
+	r.team = team
 	r.evMu.Unlock()
 	if changed {
 		r.emit(talkootEvent{Talkoot: r.id, Kind: "status", Status: st})
+	}
+	if moved && r.teamChanged != nil {
+		r.teamChanged()
 	}
 }
 
@@ -365,6 +385,7 @@ func (w *Workspace) startTalkoot(id string) error {
 	run := &talkootRun{id: id, dir: dir, room: talkoot.OpenRoom(dir), lock: lk, seats: map[string]string{}}
 	run.roster.Store(&r)
 	run.emit = w.talkootEmit
+	run.teamChanged = w.announceTalkoots
 	run.unbound = w.memberUnbound
 	lines, err := run.room.Read()
 	if err != nil {
@@ -450,6 +471,25 @@ func memberOf(r talkoot.Roster, id string) (talkoot.Member, bool) {
 	return talkoot.Member{}, false
 }
 
+// nativeTurn adds delta to the member's count of running native turns.
+func (r *talkootRun) nativeTurn(member string, delta int) {
+	r.nativeMu.Lock()
+	defer r.nativeMu.Unlock()
+	if r.native == nil {
+		r.native = map[string]int{}
+	}
+	if r.native[member] += delta; r.native[member] <= 0 {
+		delete(r.native, member)
+	}
+}
+
+// nativeBusy reports whether the member's native session runs a turn.
+func (r *talkootRun) nativeBusy(member string) bool {
+	r.nativeMu.Lock()
+	defer r.nativeMu.Unlock()
+	return r.native[member] > 0
+}
+
 // talkootDriversFor binds a run's members: a native member to its session,
 // and a worker member to its worker, each made on its first delivery. A
 // native member's reads reach the run's router through the member's seat.
@@ -460,6 +500,7 @@ func (w *Workspace) talkootDriversFor(run *talkootRun) talkoot.Drivers {
 			return w.deliverWorkerRead(run, m, text, r)
 		},
 		func(sessID, member string, r talkoot.Receipt) { w.talkootRead(sessID, run, member, r) },
+		run.nativeBusy,
 	)
 }
 

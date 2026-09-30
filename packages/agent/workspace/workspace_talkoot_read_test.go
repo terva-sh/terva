@@ -393,3 +393,49 @@ func TestALateInterruptDoesNotMarkAFinishedTurn(t *testing.T) {
 		t.Errorf("a turn that finished before the interrupt says interrupted: %+v", l)
 	}
 }
+
+// A turn a person starts in a member's session is a turn the router sees: the
+// member shows as working, and a delivery joins the turn rather than waking
+// the member. A delivery to the idle member still wakes it (TKT-01M3SMDS89).
+func TestATurnAPersonStartsShowsTheMemberWorking(t *testing.T) {
+	w, release, entered := openHeldWorkspace(t)
+	if _, err := w.talkootPost(context.Background(), "crew", "sothr", []string{"helm"}, "Plan it.", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	release()
+	working := func() bool { return memberView(t, w, "crew", "helm").Status.Working }
+	waitTalkoot(t, "helm's first turn to end", func() bool { return !working() })
+	deliveries := func() []talkoot.Line {
+		return roomLines(t, "crew", func(l talkoot.Line) bool { return l.Type == talkoot.LineDelivery && l.Member == "helm" })
+	}
+	// The delivery claims its member before the session's turn starts, so
+	// the count that turn raises cannot hide the wake.
+	if ds := deliveries(); len(ds) != 1 || !ds[0].Woke {
+		t.Fatalf("the delivery that woke idle helm must say woke: %+v", ds)
+	}
+	s, err := w.resolve(memberView(t, w, "crew", "helm").Session)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var turnCtx context.Context
+	waitTalkoot(t, "the turn slot", func() bool {
+		ctx, err := s.beginTurn()
+		turnCtx = ctx
+		return err == nil
+	})
+	hold := make(chan struct{})
+	s.launchTurn(turnCtx, func(context.Context) error { <-hold; return nil }, nil)
+	waitTalkoot(t, "helm to show as working in the person's turn", working)
+
+	if _, err := w.talkootPost(context.Background(), "crew", "sothr", []string{"helm"}, "And this.", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	waitTalkoot(t, "the second delivery", func() bool { return len(deliveries()) == 2 })
+	if l := deliveries()[1]; l.Woke {
+		t.Errorf("a delivery into the person's turn says it woke helm: %+v", l)
+	}
+	close(hold)
+	waitTalkoot(t, "helm to finish its turns", func() bool { return !working() })
+}
