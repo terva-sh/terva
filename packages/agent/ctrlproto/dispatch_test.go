@@ -325,6 +325,11 @@ func (r *recorder) TalkootInbox(_ context.Context, p TalkootRef) (TalkootInboxRe
 	return TalkootInboxResult{}, nil
 }
 
+func (r *recorder) TalkootTrace(_ context.Context, p TalkootTraceParams) (TalkootTraceResult, error) {
+	r.note("TalkootTrace", "", p)
+	return TalkootTraceResult{}, nil
+}
+
 func (r *recorder) TalkootRoom(_ context.Context, p TalkootRoomParams) (TalkootRoomPage, error) {
 	r.note("TalkootRoom", "", p)
 	return TalkootRoomPage{}, nil
@@ -764,6 +769,7 @@ func dispatchCases() []dispatchCase {
 		{MethodTalkootGet, TalkootRef{ID: "crew"}, "Talkoot", TalkootRef{ID: "crew"}},
 		{MethodTalkootRoom, TalkootRoomParams{ID: "crew", Before: 40, Limit: 10}, "TalkootRoom", TalkootRoomParams{ID: "crew", Before: 40, Limit: 10}},
 		{MethodTalkootInbox, TalkootRef{ID: "crew"}, "TalkootInbox", TalkootRef{ID: "crew"}},
+		{MethodTalkootTrace, TalkootTraceParams{ID: "crew", Member: "helm"}, "TalkootTrace", TalkootTraceParams{ID: "crew", Member: "helm"}},
 		{MethodTalkootProposals, TalkootProposalsParams{ID: "crew", All: true}, "TalkootProposals", TalkootProposalsParams{ID: "crew", All: true}},
 		{MethodTalkootPropose, TalkootProposeParams{ID: "crew", By: "sothr", Undo: "01M3E7YRGWZ42BPP2J4AKG62B7"}, "ProposeTalkoot", TalkootProposeParams{ID: "crew", By: "sothr", Undo: "01M3E7YRGWZ42BPP2J4AKG62B7"}},
 		{MethodTalkootDecide, TalkootDecideParams{ID: "crew", By: "sothr", Proposal: "p", Decision: "decline"}, "DecideTalkoot", TalkootDecideParams{ID: "crew", By: "sothr", Proposal: "p", Decision: "decline"}},

@@ -229,6 +229,12 @@ func (s *Service) TalkootInbox(ctx context.Context, p ctrlproto.TalkootRef) (ctr
 	return r, err
 }
 
+func (s *Service) TalkootTrace(ctx context.Context, p ctrlproto.TalkootTraceParams) (ctrlproto.TalkootTraceResult, error) {
+	var r ctrlproto.TalkootTraceResult
+	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootTrace, p, &r)
+	return r, err
+}
+
 func (s *Service) ProposeTalkoot(ctx context.Context, p ctrlproto.TalkootProposeParams) (ctrlproto.TalkootProposal, error) {
 	var r ctrlproto.TalkootProposal
 	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootPropose, p, &r)

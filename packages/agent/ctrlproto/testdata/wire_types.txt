@@ -1182,6 +1182,12 @@ TalkootAnswered
 	note	string	omitempty
 	declined	bool	omitempty
 	omitted	int	omitempty
+TalkootBeat
+	member	string
+	beat	string
+	toward	string	omitempty
+	cause	string
+	at	time.Time
 TalkootCard
 	session	string
 	member	string
@@ -1232,7 +1238,9 @@ TalkootEvent
 	id	string
 	line	*TalkootLine	omitempty
 	members	[]TalkootMemberStatus	omitempty
+	state	string	omitempty
 	card	*TalkootCard	omitempty
+	beat	*TalkootBeat	omitempty
 TalkootInboxResult
 	cards	[]TalkootCard
 TalkootKickoff
@@ -1268,6 +1276,8 @@ TalkootLine
 	proposer	string	omitempty
 	edited	bool	omitempty
 	changes	[]TalkootMemberChange	omitempty
+	color_before	string	omitempty
+	color_after	string	omitempty
 	answers	[]TalkootAnswered	omitempty
 	text	string	omitempty
 	tool	string	omitempty
@@ -1332,6 +1342,9 @@ TalkootMemberStatus
 	spend_usd	float64	omitempty
 	turns	int	omitempty
 	idle	bool	omitempty
+	expression	string	omitempty
+	intensity	int	omitempty
+	expression_cause	string	omitempty
 TalkootOp
 	op	string
 	member	string
@@ -1451,6 +1464,11 @@ TalkootSummary
 	home	string	omitempty
 	running	bool
 	problem	string	omitempty
+	name	string	omitempty
+	title	string	omitempty
+	color	string	omitempty
+	own_color	string	omitempty
+	state	string	omitempty
 TalkootTemplate
 	name	string
 	title	string	omitempty
@@ -1460,17 +1478,36 @@ TalkootTemplate
 	problem	string	omitempty
 TalkootTemplatesResult
 	templates	[]TalkootTemplate
+TalkootTraceEntry
+	at	time.Time
+	signal	string
+	expression	string	omitempty
+	intensity	int	omitempty
+	beat	string	omitempty
+	toward	string	omitempty
+	cause	string	omitempty
+TalkootTraceParams
+	id	string
+	member	string
+TalkootTraceResult
+	member	string
+	seed	uint64	string
+	entries	[]TalkootTraceEntry
 TalkootUpdateParams
 	id	string
 	by	string
 	text	string	omitempty
 	ops	[]TalkootOp	omitempty
+	color	*string	omitempty
 TalkootView
 	id	string
 	name	string
 	title	string	omitempty
 	home	string
 	budget_usd_per_day	float64	omitempty
+	color	string
+	own_color	string	omitempty
+	state	string
 	text	string	omitempty
 	members	[]TalkootMember
 	held	[]string	omitempty

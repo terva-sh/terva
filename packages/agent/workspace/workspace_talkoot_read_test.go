@@ -331,7 +331,8 @@ func TestANativeDriverWithoutAReadReportRefuses(t *testing.T) {
 }
 
 // A turn a person interrupts was asked to stop, so it does not pause the
-// member the way a failed turn does.
+// member the way a failed turn does. Its turn line says it was interrupted,
+// and the delivery that started it says it woke helm.
 func TestAnInterruptedTurnDoesNotPauseTheMember(t *testing.T) {
 	w, _, entered := openHeldWorkspaceWith(t, func(release <-chan struct{}, entered chan<- struct{}) http.HandlerFunc {
 		return heldProvider(release, entered, true)
@@ -350,5 +351,45 @@ func TestAnInterruptedTurnDoesNotPauseTheMember(t *testing.T) {
 	})
 	if st := memberView(t, w, "crew", "helm").Status; st.Paused != "" || len(st.Pauses) != 0 {
 		t.Errorf("an interrupted turn paused helm: %q %v", st.Paused, st.Pauses)
+	}
+	turns := roomLines(t, "crew", func(l talkoot.Line) bool { return l.Type == talkoot.LineTurn && l.Member == "helm" })
+	if len(turns) != 1 || !turns[0].Interrupted {
+		t.Errorf("helm's turn lines = %+v, want one that says it was interrupted", turns)
+	}
+	ds := roomLines(t, "crew", func(l talkoot.Line) bool { return l.Type == talkoot.LineDelivery && l.Member == "helm" })
+	if len(ds) != 1 || !ds[0].Woke {
+		t.Errorf("helm's delivery lines = %+v, want one that woke it", ds)
+	}
+}
+
+// An interrupt that arrives after a turn returned cleanly finds a finished
+// turn, so its turn line does not say interrupted.
+func TestALateInterruptDoesNotMarkAFinishedTurn(t *testing.T) {
+	w, _, entered := openHeldWorkspaceWith(t, func(release <-chan struct{}, entered chan<- struct{}) http.HandlerFunc {
+		return heldProvider(release, entered, true)
+	})
+	if _, err := w.talkootPost(context.Background(), "crew", "sothr", nil, "Plan it.", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	s, err := w.resolve(memberView(t, w, "crew", "helm").Session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	helmTurns := func() []talkoot.Line {
+		return roomLines(t, "crew", func(l talkoot.Line) bool { return l.Type == talkoot.LineTurn && l.Member == "helm" })
+	}
+	s.interruptTurn()
+	waitTalkoot(t, "the first turn to end", func() bool { return len(helmTurns()) == 1 })
+	var turnCtx context.Context
+	waitTalkoot(t, "the turn slot", func() bool {
+		ctx, err := s.beginTurn()
+		turnCtx = ctx
+		return err == nil
+	})
+	s.launchTurn(turnCtx, func(context.Context) error { return nil }, s.interruptTurn)
+	waitTalkoot(t, "the second turn to end", func() bool { return len(helmTurns()) == 2 })
+	if l := helmTurns()[1]; l.Interrupted {
+		t.Errorf("a turn that finished before the interrupt says interrupted: %+v", l)
 	}
 }

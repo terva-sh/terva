@@ -96,7 +96,7 @@ func TestAFoldedClaudeTurnPaysForEachText(t *testing.T) {
 		waitTalkoot(t, "the send", func() bool { _, sent, _, _ := fw.snapshot(); return len(sent) == i+1 })
 	}
 	ev := fw.ev(t, "agent-1")
-	ev.turnEnd("agent-1", 0.1, "", 1, "") // A
+	ev.turnEnd("agent-1", 0.1, "", 1, "", false) // A
 	run := w.talkoot.runs["crew"]
 	w.talkoot.mu.Lock()
 	owed := run.workerOwed["jev"]
@@ -104,7 +104,7 @@ func TestAFoldedClaudeTurnPaysForEachText(t *testing.T) {
 	if owed != 2 {
 		t.Fatalf("after A the worker owes %d turns, want 2 for B and C", owed)
 	}
-	ev.turnEnd("agent-1", 0.3, "", 2, "") // B and C, folded
+	ev.turnEnd("agent-1", 0.3, "", 2, "", false) // B and C, folded
 	waitTalkoot(t, "the idle stop", func() bool { return slices.Contains(stoppedWorkers(fw), "agent-1") })
 }
 
@@ -121,7 +121,7 @@ func TestATervaTurnPaysForOneText(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitTalkoot(t, "the send", func() bool { _, sent, _, _ := fw.snapshot(); return len(sent) == 1 })
-	fw.ev(t, "agent-1").turnEnd("agent-1", 0.1, "", 2, "") // A
+	fw.ev(t, "agent-1").turnEnd("agent-1", 0.1, "", 2, "", false) // A
 	if !jevWorking(t, w) {
 		t.Fatal("a terva turn that echoed two texts paid for B as well")
 	}
@@ -141,8 +141,8 @@ func TestAFoldedTurnWithNoEchoPaysForNone(t *testing.T) {
 	}
 	waitTalkoot(t, "the send", func() bool { _, sent, _, _ := fw.snapshot(); return len(sent) == 1 })
 	ev := fw.ev(t, "agent-1")
-	ev.turnEnd("agent-1", 0.1, "", 1, "") // A
-	ev.turnEnd("agent-1", 0.2, "", 0, "") // a turn that took no text
+	ev.turnEnd("agent-1", 0.1, "", 1, "", false) // A
+	ev.turnEnd("agent-1", 0.2, "", 0, "", false) // a turn that took no text
 	run := w.talkoot.runs["crew"]
 	w.talkoot.mu.Lock()
 	owed := run.workerOwed["jev"]

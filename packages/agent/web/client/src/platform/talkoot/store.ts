@@ -35,10 +35,24 @@ export interface TalkootState {
   // second roster change during a refresh still triggers another.
   rosterGen: number
   viewGen: number
+  // beats holds the newest beat of each member, for the face to play once.
+  // A beat is live only, so a reconnect keeps none it missed.
+  beats: Record<string, PlayedBeat>
+  // beatSeq counts the beats played, and each beat takes the next count as
+  // its key, so the same beat twice plays twice.
+  beatSeq: number
+}
+
+// PlayedBeat is a member's newest beat. `toward` is the member id a glance
+// goes to.
+export interface PlayedBeat {
+  name: string
+  key: number
+  toward?: string
 }
 
 export function emptyTalkoot(id: string): TalkootState {
-  return { id, view: null, lines: [], paged: false, cards: [], rosterGen: 0, viewGen: 0 }
+  return { id, view: null, lines: [], paged: false, cards: [], rosterGen: 0, viewGen: 0, beats: {}, beatSeq: 0 }
 }
 
 // HUMAN_PREFIX marks a person in an envelope's from and to.
@@ -189,6 +203,12 @@ export function applyTalkootEvent(s: TalkootState, ev: WireEvent): TalkootState 
       const key = cardKey(t.card)
       const cards = s.cards.filter((c) => cardKey(c) !== key)
       return cards.length === s.cards.length ? s : { ...s, cards }
+    }
+    case 'talkoot_beat': {
+      const b = t.beat
+      if (!b?.member || !b.beat) return s
+      const key = s.beatSeq + 1
+      return { ...s, beatSeq: key, beats: { ...s.beats, [b.member]: { name: b.beat, key, toward: b.toward } } }
     }
   }
   return s

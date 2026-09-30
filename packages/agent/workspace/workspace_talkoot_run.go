@@ -19,6 +19,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/talkoot"
+	"terva.sh/terva/packages/agent/talkoot/expression"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/filelock"
@@ -155,15 +156,26 @@ type talkootRun struct {
 	evMu    sync.Mutex
 	pending []talkoot.Line
 	last    map[string]talkoot.Status
+
+	// face is the run's expression engine (workspace_talkoot_face.go). It
+	// reads every sealed line in observe. beats holds the beats it played
+	// that no flush has sent, and faceTimer flushes the run when an
+	// expression changes with time. Guarded by evMu, except face, which is
+	// set once before the run observes a line.
+	face        expression.Engine
+	beats       []expression.Beat
+	faceTimer   *time.Timer
+	faceStopped bool
 }
 
 // talkootEvent is a change a client of the talkoot wants to see.
 type talkootEvent struct {
 	Talkoot string
-	// Kind is envelope, status, roster, inbox, or loaded.
+	// Kind is envelope, status, roster, inbox, beat, or loaded.
 	Kind   string
 	Line   *talkoot.Line
 	Status []talkoot.Status
+	Beat   *expression.Beat
 	// Wire is an inbox event, built in its wire form, because an inbox
 	// card is made of wire requests already.
 	Wire *ctrlproto.Event
@@ -206,10 +218,17 @@ func (r *talkootRun) tryDo(fn func(*talkoot.Router) error) bool {
 
 // observe queues each sealed line. It runs with the room locked, so it only
 // queues; flush sends.
+//
+// 🔑 The engine reads the line under evMu, the lock the queue takes. A flush
+// reads the faces under the same lock as it takes the queue, so a status never
+// shows a reaction to a line that a later flush sends.
 func (r *talkootRun) observe(l talkoot.Line) {
 	r.evMu.Lock()
+	defer r.evMu.Unlock()
+	if r.face != nil {
+		r.beats = append(r.beats, r.face.Observe(l)...)
+	}
 	r.pending = append(r.pending, l)
-	r.evMu.Unlock()
 }
 
 // flush sends the envelope, intro, answer, and roster lines queued since the last
@@ -218,8 +237,10 @@ func (r *talkootRun) flush() {
 	r.flushMu.Lock()
 	defer r.flushMu.Unlock()
 	r.evMu.Lock()
-	lines := r.pending
-	r.pending = nil
+	lines, beats := r.pending, r.beats
+	r.pending, r.beats = nil, nil
+	now := time.Now()
+	faces := r.facesLocked(now)
 	r.evMu.Unlock()
 	for i := range lines {
 		switch lines[i].Type {
@@ -233,14 +254,18 @@ func (r *talkootRun) flush() {
 			r.emit(talkootEvent{Talkoot: r.id, Kind: "roster", Line: &lines[i]})
 		}
 	}
+	for i := range beats {
+		r.emit(talkootEvent{Talkoot: r.id, Kind: "beat", Beat: &beats[i]})
+	}
 	r.mu.RLock()
 	if r.closed {
 		r.mu.RUnlock()
 		return
 	}
-	st := r.overlay(r.router.Statuses())
+	st := r.overlayWith(r.router.Statuses(), faces)
 	r.mu.RUnlock()
 	r.evMu.Lock()
+	r.armFaceLocked(now)
 	changed := len(st) != len(r.last)
 	next := make(map[string]talkoot.Status, len(st))
 	for _, s := range st {
@@ -346,6 +371,10 @@ func (w *Workspace) startTalkoot(id string) error {
 		lk.Release()
 		return err
 	}
+	// 🔑 The engine replays the room before the run observes a line, and
+	// nothing writes the room between the two: this process holds the run
+	// lock, and no router exists yet.
+	run.startFace(lines, w.talkootFaceRows)
 	for _, l := range lines {
 		if l.Type != talkoot.LineSeat {
 			continue
@@ -784,6 +813,7 @@ func (w *Workspace) closeTalkoots() {
 		}
 		r.closed = true
 		r.mu.Unlock()
+		r.stopFace()
 		w.closeIdleStops(r)
 		r.lock.Release()
 	}

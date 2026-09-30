@@ -653,6 +653,13 @@ ci-web-smoke:
         echo "  Stop it (a leftover 'vite preview' is the usual culprit), or send this"; \
         echo "  run somewhere else with SMOKE_PORT=<free port>."; \
         exit 1; \
+    elif node -e "const n=require('net'),s=n.connect(Number(process.env.SMOKE_STUDIO_PORT||4174),'127.0.0.1');s.on('connect',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1));setTimeout(()=>{s.destroy();process.exit(1)},1500)" 2>/dev/null; then \
+        echo "ci-web-smoke: REFUSED — 127.0.0.1:${SMOKE_STUDIO_PORT:-4174} is already serving."; \
+        echo "  The studio smokes (talkoot-studio.smoke.ts) reuse a dev server on that"; \
+        echo "  port, which may be serving another checkout's studio and pose table."; \
+        echo "  Stop it (a leftover 'npm run dev' is the usual culprit), or send this"; \
+        echo "  run somewhere else with SMOKE_STUDIO_PORT=<free port>."; \
+        exit 1; \
     else \
         npm --prefix packages/agent/web/client run test:smoke -- --project=chromium; \
     fi

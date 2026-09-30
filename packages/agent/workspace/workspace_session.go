@@ -1152,7 +1152,12 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 			if failed && turnCtx.Err() == nil {
 				why = err.Error()
 			}
-			endTalkoot(s.agent.Cost().CostUSD-costBefore, !errors.Is(err, core.ErrBusy), why)
+			// Only a person's interrupt counts as one. A restart or the
+			// daemon going down cancels with another cause. A turn that
+			// returned no error finished, so an interrupt that came after
+			// it does not count.
+			interrupted := err != nil && errors.Is(context.Cause(turnCtx), core.ErrUserInterrupted)
+			endTalkoot(s.agent.Cost().CostUSD-costBefore, !errors.Is(err, core.ErrBusy), why, interrupted)
 		}
 		if restart {
 			if perr := s.prompt(next, nil, core.UserMessageExtras{}); perr != nil {

@@ -75,6 +75,9 @@ export type MockBackendOptions = {
   // (the composer's file drop, behind "attachments") has to ask for it.
   features?: string[]
   maxAttachmentBytes?: number
+  // Groups the server hello grants. Default none; the Talkoot view shows only
+  // when the hello grants the talkoot group.
+  groups?: string[]
   // Withhold the response to these verbs until release() answers them.
   //
   // deferHello holds the WHOLE boot, which is the right tool when the surface
@@ -118,6 +121,7 @@ export async function installMockBackend(page: Page, opts: MockBackendOptions = 
           protocol: 1,
           features: opts.features ?? [],
           max_attachment_bytes: opts.maxAttachmentBytes ?? 0,
+          ...(opts.groups ? { groups: opts.groups } : {}),
         },
       }),
     )

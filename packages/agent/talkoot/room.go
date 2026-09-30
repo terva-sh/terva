@@ -95,6 +95,11 @@ type Line struct {
 	Proposer string         `json:"proposer,omitempty"`
 	Edited   bool           `json:"edited,omitempty"`
 	Changes  []MemberChange `json:"changes,omitempty"`
+	// ColorBefore and ColorAfter are set on a roster line that changed the
+	// team colour: the whole colour before and after, with the default
+	// filled in, so a reset still names the colour it shows.
+	ColorBefore string `json:"color_before,omitempty"`
+	ColorAfter  string `json:"color_after,omitempty"`
 	// Answers is set on an answer line.
 	Answers []Answered `json:"answers,omitempty"`
 	// Text is set on an intro line.
@@ -104,6 +109,22 @@ type Line struct {
 	Attempt int    `json:"attempt,omitempty"`
 	Card    string `json:"card,omitempty"`
 	Outcome string `json:"outcome,omitempty"`
+	// DaySpendUSD and DayBudgetUSD are set on a turn line of a member with a
+	// daily budget of its own: the member's spend today, this turn included,
+	// and that budget. The expression engine reads worry from them, so the
+	// line holds both and a replay needs neither the roster nor the day.
+	DaySpendUSD  float64 `json:"day_spend_usd,omitempty"`
+	DayBudgetUSD float64 `json:"day_budget_usd,omitempty"`
+	// Woke is set on a delivery line whose envelope reached an idle member,
+	// so its turn started there. Interrupted is set on a turn line of a turn
+	// that something asked to stop. The expression engine plays a fast blink
+	// for each.
+	Woke        bool `json:"woke,omitempty"`
+	Interrupted bool `json:"interrupted,omitempty"`
+	// Reviewer is set on a woke delivery line of a member the roster flags
+	// as a reviewer, so the turn it started is a review. The expression
+	// engine holds skeptical until that turn's line.
+	Reviewer bool `json:"reviewer,omitempty"`
 	// Kid names the key that sealed the line, and MAC is the seal. MAC must
 	// stay the last field: the seal covers every byte before it (seal.go).
 	Kid string `json:"kid,omitempty"`

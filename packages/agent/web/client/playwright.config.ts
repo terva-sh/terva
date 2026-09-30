@@ -9,6 +9,10 @@ import { defineConfig, devices } from '@playwright/test'
 // unit-test browser behaviors — see tests/smoke/README.md for scope.
 
 const PORT = Number(process.env.SMOKE_PORT ?? 4173)
+// The Talkoot Avatar Studio is not in dist/, so its smokes run against the dev
+// server, which is also the only place the studio exists. talkoot-studio.smoke.ts
+// reads the same variable.
+const STUDIO_PORT = Number(process.env.SMOKE_STUDIO_PORT ?? 4174)
 
 // CI runs this on the same musl (Alpine) image as every other job, where
 // Playwright's OWN Chromium — a glibc build — cannot start at all. The job
@@ -70,21 +74,30 @@ export default defineConfig({
     // Chromium alone cannot defend it. Needs `npx playwright install webkit`.
     { name: 'webkit-mobile', use: { ...devices['iPhone 13'] }, testMatch: '**/overflow.smoke.ts' },
   ],
-  webServer: {
-    // Serve the actual built artifact (the dist/ that go:embed ships into the
-    // binary), not the dev server — the smoke suite should exercise what users
-    // actually get. The backend WebSocket is mocked per-test (page.routeWebSocket),
-    // so no terva server, workspace, or credential is needed.
-    // --host 127.0.0.1 pins the IPv4 loopback; vite preview otherwise binds
-    // "localhost" (IPv6 ::1 on some machines), which the 127.0.0.1 url never sees.
-    command: `npm run build && npm run preview -- --host 127.0.0.1 --port ${PORT} --strictPort`,
-    url: `http://127.0.0.1:${PORT}`,
-    // Local reuse is a speed choice for repeat runs, and it has a sharp edge: a
-    // server left over from an earlier build serves THAT bundle, so the suite
-    // silently reports on code you are no longer running. `just ci-web-smoke`
-    // refuses to start when this port is occupied for exactly that reason —
-    // keep the two in step if this line or PORT changes.
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  webServer: [
+    {
+      // Serve the actual built artifact (the dist/ that go:embed ships into the
+      // binary), not the dev server — the smoke suite should exercise what users
+      // actually get. The backend WebSocket is mocked per-test (page.routeWebSocket),
+      // so no terva server, workspace, or credential is needed.
+      // --host 127.0.0.1 pins the IPv4 loopback; vite preview otherwise binds
+      // "localhost" (IPv6 ::1 on some machines), which the 127.0.0.1 url never sees.
+      command: `npm run build && npm run preview -- --host 127.0.0.1 --port ${PORT} --strictPort`,
+      url: `http://127.0.0.1:${PORT}`,
+      // Local reuse is a speed choice for repeat runs, and it has a sharp edge: a
+      // server left over from an earlier build serves THAT bundle, so the suite
+      // silently reports on code you are no longer running. `just ci-web-smoke`
+      // refuses to start when this port is occupied for exactly that reason —
+      // keep the two in step if this line or PORT changes.
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+    },
+    {
+      // The dev server, for studio.html. The studio's Save lives here too.
+      command: `npx vite --host 127.0.0.1 --port ${STUDIO_PORT} --strictPort`,
+      url: `http://127.0.0.1:${STUDIO_PORT}/studio.html`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+    },
+  ],
 })

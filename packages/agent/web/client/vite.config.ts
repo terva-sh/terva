@@ -4,6 +4,7 @@
 import { defineConfig } from 'vitest/config'
 import preact from '@preact/preset-vite'
 import { VitePWA } from 'vite-plugin-pwa'
+import { studioSave } from './scripts/studio-save'
 
 // The build output (dist/) is embedded into the terva binary via go:embed
 // (see ../assets.go), so it must be fully self-contained. base: './' keeps
@@ -12,6 +13,8 @@ export default defineConfig({
   base: './',
   plugins: [
     preact(),
+    // The Talkoot Avatar Studio's Save, in the dev server only.
+    studioSave(),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'favicon.ico', 'apple-touch-icon.png'],
@@ -156,6 +159,10 @@ export default defineConfig({
     // two entries in ONE client workspace. Rollup chunk-splits the shared
     // platform/ui/features code, so the apps share bytes in dist rather than
     // duplicating them. One vitest, one typecheck, one i18n catalog, one embed.
+    //
+    // studio.html, the Talkoot Avatar Studio, is left out on purpose. The dev
+    // server serves any page in this folder, so `npm run dev` has it, and the
+    // binary never carries a design tool (TKT-01M3NSM90G).
     rollupOptions: {
       input: {
         main: 'index.html',

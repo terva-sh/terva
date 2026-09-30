@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'preact/hooks'
-import { t } from '../../i18n'
+import { t, tr } from '../../i18n'
 import { usePinnedTail } from '../../ui/pinnedtail'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { TalkootLine, TalkootMember, TalkootRefText } from '../../platform/ctrlproto/types'
@@ -11,6 +11,8 @@ import { RoomLine, RoomExchange } from './RoomLine'
 import { OpenRefContext } from './RefChip'
 import { MarksContext, MemberMark } from './MemberMark'
 import { MemberCard } from './MemberCard'
+import { faceFor, sideIn } from './face/adapter'
+import { MOTIONS, setMotionSetting, useMotionState, type Motion } from './face/motion'
 import { validPerson } from './person'
 import { useTalkoot } from './useTalkoot'
 import { isWorker, WorkerEvents } from './WorkerEvents'
@@ -116,6 +118,9 @@ export function TalkootTeam({
   const resume = (target: { member?: string; chain?: string }) =>
     act(client.send('talkoot.resume', { id, by: person, ...target }))
 
+  const sidebar = orderMembers(members, lead?.id)
+  const sidebarIds = sidebar.map((m) => m.id)
+
   const teamPaused = members.length > 0 && members.every((m) => m.status?.paused)
   const spend = members.reduce((n, m) => n + (m.status?.spend_usd ?? 0), 0)
 
@@ -127,22 +132,29 @@ export function TalkootTeam({
             <span class="talkoot-member-name">{t('Room')}</span>
             <span class="talkoot-member-activity">{t('every message, in order')}</span>
           </button>
-          {orderMembers(members, lead?.id).map((m) => {
+          {sidebar.map((m) => {
             const p = presence(m, state.cards)
             const unread = m.id === current ? 0 : unreadFor(state.lines, m.id, seen[m.id] ?? '', me)
             return (
               <div key={m.id} class={`talkoot-member-row presence-${p}${current === m.id ? ' on' : ''}`}>
-                <button class="talkoot-member" onClick={() => setSelected(m.id)}>
-                  <span class="talkoot-member-name">
-                    {m.id === lead?.id && <span title={t('Pinned: the coordinator')}>📌 </span>}
-                    <MemberMark mark={m.mark} />
-                    {m.title || m.id}
-                    {unread > 0 && <span class="talkoot-unread">{unread}</span>}
-                  </span>
-                  <span class={`talkoot-member-activity presence-${p}`}>
-                    {p === 'working' && m.status?.tool ? t('running %s', m.status.tool) : PRESENCE_LABEL[p]()}
-                    {m.status?.paused ? `: ${m.status.paused}` : ''}
-                    {m.status?.idle && !m.status.working ? ` · ${t('worker stopped while idle')}` : ''}
+                <button class="talkoot-member with-mark" onClick={() => setSelected(m.id)}>
+                  {/* The face adds to the state label beside it and never replaces it. */}
+                  <MemberMark
+                    mark={m.mark}
+                    size={24}
+                    face={faceFor(m.status, p, state.beats[m.id], (to) => sideIn(sidebarIds, m.id, to))}
+                  />
+                  <span class="talkoot-member-text">
+                    <span class="talkoot-member-name">
+                      {m.id === lead?.id && <span title={t('Pinned: the coordinator')}>📌 </span>}
+                      {m.title || m.id}
+                      {unread > 0 && <span class="talkoot-unread">{unread}</span>}
+                    </span>
+                    <span class={`talkoot-member-activity presence-${p}`}>
+                      {p === 'working' && m.status?.tool ? t('running %s', m.status.tool) : PRESENCE_LABEL[p]()}
+                      {m.status?.paused ? `: ${m.status.paused}` : ''}
+                      {m.status?.idle && !m.status.working ? ` · ${t('worker stopped while idle')}` : ''}
+                    </span>
                   </span>
                 </button>
                 {canSteer && (
@@ -159,6 +171,7 @@ export function TalkootTeam({
           })}
           <div class="talkoot-side-foot">
             <span class="talkoot-spend">{t('Today: $%s', spend.toFixed(2))}</span>
+            <MotionPicker />
             {canSteer && (
               <button class="btn sm" onClick={() => (teamPaused ? resume({}) : pause({}))}>
                 {teamPaused ? t('Resume the team') : t('Pause the team')}
@@ -280,4 +293,28 @@ function loadSeen(key: string): Record<string, string> {
 
 function saveSeen(key: string, seen: Record<string, string>) {
   localStorage.setItem(key, JSON.stringify(seen))
+}
+
+// MotionPicker sets how much the marks move. The system's reduced-motion
+// setting still wins, so the picker says when it does.
+function MotionPicker() {
+  const { setting: v, reduced } = useMotionState()
+  return (
+    <label class="talkoot-motion">
+      <span>{t('Marks')}</span>
+      <select
+        value={v}
+        onChange={(e) => {
+          setMotionSetting((e.target as HTMLSelectElement).value as Motion)
+        }}
+      >
+        {MOTIONS.map((o) => (
+          <option key={o.id} value={o.id}>
+            {tr(o.name)}
+          </option>
+        ))}
+      </select>
+      {reduced && <span class="talkoot-note">{t('Your system asks for reduced motion, so the marks stay still.')}</span>}
+    </label>
+  )
 }

@@ -96,7 +96,7 @@ func TestAFailedSendAfterTheTurnItJoinedEndedFreesTheSlot(t *testing.T) {
 	fw.onSend = func() {
 		// A's turn ends while B's send runs. Its router call waits for this
 		// delivery, and its own count lands first.
-		go ev.turnEnd("agent-1", 0.1, "", 0, "")
+		go ev.turnEnd("agent-1", 0.1, "", 0, "", false)
 		waitTalkoot(t, "A's turn end", func() bool {
 			w.talkoot.mu.Lock()
 			defer w.talkoot.mu.Unlock()

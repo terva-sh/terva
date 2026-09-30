@@ -1,0 +1,363 @@
+{
+ "eye": {
+  "dx": 3,
+  "H": 5.2,
+  "W": 1.55,
+  "L": 3.1,
+  "BW": 0.6
+ },
+ "turnLimit": 45,
+ "ms": 320,
+ "look": {
+  "outline": 0.8,
+  "edge": 0.5,
+  "drift": 0.2,
+  "read": 0.45
+ },
+ "poses": {
+  "open": {
+   "forms": [
+    {
+     "l": {
+      "slitLen": 1,
+      "slitRot": 0,
+      "eyeX": 0,
+      "eyeY": 0,
+      "pupilPos": 0,
+      "pupilScale": 1,
+      "tilt": 0,
+      "spread": 0,
+      "pupilAngle": 60,
+      "pupilRot": 0
+     },
+     "r": null
+    }
+   ]
+  },
+  "focused": {
+   "forms": [
+    {
+     "l": {
+      "slitLen": 0.55,
+      "slitRot": 0,
+      "eyeX": 0,
+      "eyeY": 0.2,
+      "pupilPos": -0.3,
+      "pupilScale": 0.8,
+      "tilt": 0,
+      "spread": 0,
+      "pupilAngle": 60,
+      "pupilRot": 0
+     },
+     "r": null,
+     "loop": "focus"
+    },
+    {
+     "l": {
+      "slitLen": 0.55,
+      "slitRot": 0,
+      "eyeX": 0,
+      "eyeY": 0.5,
+      "pupilPos": 2.2,
+      "pupilScale": 1,
+      "tilt": 0,
+      "spread": 0.15,
+      "pupilAngle": 90,
+      "pupilRot": 0
+     },
+     "r": null,
+     "loop": "focus"
+    }
+   ]
+  },
+  "looking-up": {
+   "forms": [
+    {
+     "l": {
+      "slitLen": 1,
+      "slitRot": 0,
+      "eyeX": 0,
+      "eyeY": -0.9,
+      "pupilPos": 0.8,
+      "pupilScale": 1,
+      "tilt": 0,
+      "spread": 0,
+      "pupilAngle": 60,
+      "pupilRot": 0
+     },
+     "r": null,
+     "loop": "lookup"
+    },
+    {
+     "l": {
+      "slitLen": 0.9,
+      "slitRot": 0,
+      "eyeX": 0,
+      "eyeY": 0.4,
+      "pupilPos": 1.8,
+      "pupilScale": 1,
+      "tilt": 0,
+      "spread": 0.85,
+      "pupilAngle": 58,
+      "pupilRot": 0
+     },
+     "r": null,
+     "loop": "lookup"
+    }
+   ]
+  },
+  "half-lidded": {
+   "forms": [
+    {
+     "l": {
+      "slitLen": 0.45,
+      "slitRot": 0,
+      "eyeX": 0,
+      "eyeY": 1.2,
+      "pupilPos": -0.3,
+      "pupilScale": 0.65,
+      "tilt": 0,
+      "spread": 0,
+      "pupilAngle": 60,
+      "pupilRot": 0
+     },
+     "r": null
+    }
+   ]
+  },
+  "closed-squint": {
+   "forms": [
+    {
+     "l": {
+      "slitLen": 0.75,
+      "slitRot": 90,
+      "eyeX": 0,
+      "eyeY": 1.9,
+      "pupilPos": 0,
+      "pupilScale": 0,
+      "tilt": 14,
+      "spread": 0,
+      "pupilAngle": 60,
+      "pupilRot": 0
+     },
+     "r": null
+    }
+   ]
+  },
+  "worried": {
+   "forms": [
+    {
+     "l": {
+      "slitLen": 0.85,
+      "slitRot": 0,
+      "eyeX": 0,
+      "eyeY": -0.2,
+      "pupilPos": 0.35,
+      "pupilScale": 0.8,
+      "tilt": -16,
+      "spread": 0,
+      "pupilAngle": 60,
+      "pupilRot": 0
+     },
+     "r": null
+    },
+    {
+     "l": {
+      "slitLen": 0.85,
+      "slitRot": 0,
+      "eyeX": 0,
+      "eyeY": -0.2,
+      "pupilPos": 2.2,
+      "pupilScale": 1,
+      "tilt": -11,
+      "spread": 0.85,
+      "pupilAngle": 72,
+      "pupilRot": -15
+     },
+     "r": null
+    }
+   ]
+  },
+  "frustrated": {
+   "forms": [
+    {
+     "l": {
+      "slitLen": 0.8,
+      "slitRot": 90,
+      "eyeX": 0,
+      "eyeY": 0.3,
+      "pupilPos": 0,
+      "pupilScale": 0,
+      "tilt": 24,
+      "spread": 0,
+      "pupilAngle": 60,
+      "pupilRot": 0
+     },
+     "r": null
+    },
+    {
+     "l": {
+      "slitLen": 0.7,
+      "slitRot": 0,
+      "eyeX": 0,
+      "eyeY": 0.6,
+      "pupilPos": 2.2,
+      "pupilScale": 1,
+      "tilt": 0,
+      "spread": 0.85,
+      "pupilAngle": 65,
+      "pupilRot": 20
+     },
+     "r": null
+    }
+   ]
+  },
+  "skeptical": {
+   "forms": [
+    {
+     "l": {
+      "slitLen": 0.95,
+      "slitRot": 90,
+      "eyeX": 0,
+      "eyeY": 0,
+      "pupilPos": 0,
+      "pupilScale": 0,
+      "tilt": 0,
+      "spread": 0,
+      "pupilAngle": 60,
+      "pupilRot": 0
+     },
+     "r": {
+      "slitLen": 0.45,
+      "slitRot": 90,
+      "eyeX": 0,
+      "eyeY": 0,
+      "pupilPos": 0,
+      "pupilScale": 0,
+      "tilt": 0,
+      "spread": 0,
+      "pupilAngle": 60,
+      "pupilRot": 0
+     },
+     "loop": "skeptic"
+    },
+    {
+     "l": {
+      "slitLen": 0.9,
+      "slitRot": 0,
+      "eyeX": 0,
+      "eyeY": 0.4,
+      "pupilPos": 2.2,
+      "pupilScale": 1,
+      "tilt": 0,
+      "spread": 0.85,
+      "pupilAngle": 45,
+      "pupilRot": 0
+     },
+     "r": {
+      "slitLen": 0.7,
+      "slitRot": 0,
+      "eyeX": 0,
+      "eyeY": 0.6,
+      "pupilPos": 2.2,
+      "pupilScale": 1,
+      "tilt": 0,
+      "spread": 0.3,
+      "pupilAngle": 90,
+      "pupilRot": 0
+     }
+    }
+   ]
+  },
+  "closed": {
+   "forms": [
+    {
+     "l": {
+      "slitLen": 0.85,
+      "slitRot": 90,
+      "eyeX": 0,
+      "eyeY": 2,
+      "pupilPos": 0,
+      "pupilScale": 0,
+      "tilt": 0,
+      "spread": 0,
+      "pupilAngle": 60,
+      "pupilRot": 0
+     },
+     "r": null
+    }
+   ]
+  }
+ },
+ "beats": {
+  "happy": {
+   "steps": [
+    {
+     "row": {
+      "slitLen": 0,
+      "pupilScale": 0.8,
+      "spread": 1,
+      "eyeY": -0.6
+     },
+     "ms": 180,
+     "hold": 950
+    }
+   ],
+   "back": 260
+  },
+  "glance": {
+   "steps": [
+    {
+     "set": {
+      "eyeX": 2.2
+     },
+     "min": {
+      "pupilPos": 0
+     },
+     "ms": 200,
+     "hold": 750
+    }
+   ],
+   "back": 260
+  },
+  "slow-blink": {
+   "steps": [
+    {
+     "set": {
+      "slitLen": 0.05,
+      "pupilScale": 0
+     },
+     "ms": 520,
+     "hold": 240
+    }
+   ],
+   "back": 520
+  },
+  "fast-blink": {
+   "steps": [
+    {
+     "set": {
+      "slitLen": 0.05,
+      "pupilScale": 0
+     },
+     "ms": 70,
+     "hold": 40
+    },
+    {
+     "set": {},
+     "ms": 70,
+     "hold": 90
+    },
+    {
+     "set": {
+      "slitLen": 0.05,
+      "pupilScale": 0
+     },
+     "ms": 70,
+     "hold": 40
+    }
+   ],
+   "back": 90
+  }
+ }
+}

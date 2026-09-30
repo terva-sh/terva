@@ -196,7 +196,7 @@ func (f *fakeWorkers) end(t *testing.T, id string, total float64, reply string) 
 	f.totals[id] = total
 	f.mu.Unlock()
 	// A typical turn echoed the one text that started it.
-	f.ev(t, id).turnEnd(id, total, reply, 1, "")
+	f.ev(t, id).turnEnd(id, total, reply, 1, "", false)
 }
 
 // exit reports that the worker's process ended.
@@ -476,7 +476,7 @@ func TestAWorkerTurnThatFailsPausesItsMember(t *testing.T) {
 	fw.mu.Lock()
 	fw.totals["agent-1"] = 0.3
 	fw.mu.Unlock()
-	fw.ev(t, "agent-1").turnEnd("agent-1", 0.3, "The turn failed: overloaded", 1, "overloaded")
+	fw.ev(t, "agent-1").turnEnd("agent-1", 0.3, "The turn failed: overloaded", 1, "overloaded", false)
 	waitTalkoot(t, "the failed turn end", func() bool { return !jevWorking(t, w) })
 	v := memberView(t, w, "crew", "jev")
 	if !slices.Equal(v.Status.Pauses, []string{"failed"}) || !strings.Contains(v.Status.Paused, "overloaded") {
@@ -484,6 +484,35 @@ func TestAWorkerTurnThatFailsPausesItsMember(t *testing.T) {
 	}
 	if v.Status.SpendUSD < 0.29 || v.Status.SpendUSD > 0.31 {
 		t.Errorf("spend = %v, want the 0.3 the worker reported", v.Status.SpendUSD)
+	}
+}
+
+// A worker turn that something interrupted pauses nobody, and its turn line
+// says it was interrupted.
+func TestAnInterruptedWorkerTurnSaysSo(t *testing.T) {
+	cwd := workerHome(t, true)
+	w := openTalkootWorkspace(t, cwd)
+	fw := newFakeWorkers()
+	w.talkootWorkers = fw
+	ctx := t.Context()
+	if _, err := w.talkootCreate(ctx, "crew", workerCrew(cwd, "")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.talkootPost(ctx, "crew", "sothr", []string{"jev"}, "Start.", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	waitTalkoot(t, "the spawn", func() bool { s, _, _, _ := fw.snapshot(); return len(s) == 1 })
+	fw.mu.Lock()
+	fw.totals["agent-1"] = 0.2
+	fw.mu.Unlock()
+	fw.ev(t, "agent-1").turnEnd("agent-1", 0.2, "", 1, "", true)
+	waitTalkoot(t, "the interrupted turn end", func() bool { return !jevWorking(t, w) })
+	if v := memberView(t, w, "crew", "jev"); v.Status.Paused != "" || len(v.Status.Pauses) != 0 {
+		t.Errorf("an interrupt paused the member: %q %v", v.Status.Paused, v.Status.Pauses)
+	}
+	turns := roomLines(t, "crew", func(l talkoot.Line) bool { return l.Type == talkoot.LineTurn && l.Member == "jev" })
+	if len(turns) != 1 || !turns[0].Interrupted {
+		t.Errorf("jev's turn lines = %+v, want one that says it was interrupted", turns)
 	}
 }
 
@@ -761,7 +790,7 @@ func TestAReloadedWorkerHoldsItsSpawnRequest(t *testing.T) {
 	}
 	req.Persona = " vartija "
 	f := swarm.New(cfg)
-	id, err := swarmWorkers{f: f}.spawn(context.Background(), req, workerEvents{turnEnd: func(string, float64, string, int, string) {}, exit: func(string, float64) {}})
+	id, err := swarmWorkers{f: f}.spawn(context.Background(), req, workerEvents{turnEnd: func(string, float64, string, int, string, bool) {}, exit: func(string, float64) {}})
 	if err != nil {
 		t.Fatal(err)
 	}

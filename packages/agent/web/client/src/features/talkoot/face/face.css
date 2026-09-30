@@ -1,0 +1,51 @@
+/* The Talkoot face (docs/proposals/talkoot-members.md, "The face"). Every
+   moving part is a CSS transform or an SVG geometry property on a small
+   inline SVG, so the browser eases it and no script runs for each frame. --t
+   is the length of the stage that shows now.
+
+   The sizes come from the pose table (poses.json), not from here: the outline
+   and edge widths as attributes, the drift and reading reach as --wander and
+   --read. The studio edits that table, and this file only moves things. */
+.talkoot-mark { overflow: visible; }
+.talkoot-mark .outline { fill: var(--fg); stroke: var(--fg); stroke-linejoin: round; }
+.talkoot-mark .eyes.edge { stroke-linejoin: round; }
+.talkoot-mark .eye, .talkoot-mark .rotor, .talkoot-mark .pupil, .talkoot-mark .bar, .talkoot-mark .pupil-gate { transition: transform var(--t) ease-in-out; }
+.talkoot-mark .slit { transition: y var(--t) ease-in-out, height var(--t) ease-in-out; }
+.talkoot-mark .body-fill, .talkoot-mark .outline, .talkoot-mark .eyes { transition: opacity 320ms; }
+/* Nothing listens for an offline member, so its mark fades. */
+.talkoot-mark.faded .body-fill, .talkoot-mark.faded .outline { opacity: 0.32; }
+.talkoot-mark.faded .eyes { opacity: 0.5; }
+/* Below 24 pixels the pupil does not draw, and the slit carries the pose. */
+.talkoot-mark.tiny .pupil-gate { transform: scale(0); }
+.talkoot-mark.still *, .talkoot-mark.motion-off * { transition: none !important; animation: none !important; }
+/* Loops and ambient motion run at full motion only. Subtle keeps the moves
+   between poses and the beats. */
+.talkoot-mark.motion-full .bob { animation: talkoot-breath 4.4s ease-in-out var(--phase) infinite; }
+.talkoot-mark.motion-full .blinker { animation: talkoot-blink var(--blink-every) var(--phase) infinite; }
+.talkoot-mark.motion-full.wander:not(.no-drift) .wanderer { animation: talkoot-wander 13s ease-in-out var(--phase) infinite; }
+.talkoot-mark.motion-full.loop-focus .bob { animation-duration: 1.7s; }
+/* Reading: small hops to one side and one quick return, far below a glance. */
+.talkoot-mark.motion-full.loop-focus:not(.no-read) .eyes { animation: talkoot-read 2.8s linear var(--phase) infinite; }
+.talkoot-mark.motion-full.loop-lookup .eyes { animation: talkoot-lookside 2.6s ease-in-out infinite alternate; }
+.talkoot-mark.motion-full.loop-skeptic .eye.l .stretcher { animation: talkoot-stretch 2.4s ease-in-out infinite alternate; }
+.talkoot-mark.motion-full.loop-skeptic .eye.r .stretcher { animation: talkoot-stretch 2.4s ease-in-out infinite alternate-reverse; }
+@keyframes talkoot-breath { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-0.45px); } }
+@keyframes talkoot-blink { 0%, 95% { transform: scaleY(1); } 96.5% { transform: scaleY(0.08); } 98%, 100% { transform: scaleY(1); } }
+@keyframes talkoot-lookside { from { transform: translateX(-0.9px); } to { transform: translateX(0.9px); } }
+@keyframes talkoot-stretch { from { transform: scaleY(1); } to { transform: scaleY(0.6); } }
+/* The drift moves the pupil along its slit only, at uneven stops, so it never
+   reads as looking up or as a glance. */
+@keyframes talkoot-wander {
+  0%, 6%, 100% { transform: translateY(0); }
+  14%, 27% { transform: translateY(calc(var(--wander) * -0.7)); }
+  38%, 52% { transform: translateY(calc(var(--wander) * 0.45)); }
+  63%, 74% { transform: translateY(calc(var(--wander) * -1)); }
+  86%, 93% { transform: translateY(calc(var(--wander) * 0.2)); }
+}
+@keyframes talkoot-read {
+  0%, 10% { transform: translateX(calc(var(--read) * -1)); }
+  14%, 32% { transform: translateX(calc(var(--read) * -0.33)); }
+  36%, 54% { transform: translateX(calc(var(--read) * 0.33)); }
+  58%, 76% { transform: translateX(var(--read)); }
+  84%, 100% { transform: translateX(calc(var(--read) * -1)); }
+}

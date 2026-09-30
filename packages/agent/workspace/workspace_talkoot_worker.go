@@ -34,8 +34,9 @@ type workerEvents struct {
 	// turnEnd reports a turn's end. texts counts the user texts the turn
 	// took, as the worker echoed them, and 0 when it echoed none. failed is
 	// the turn's error, or empty for a turn that finished or that a person
-	// interrupted.
-	turnEnd func(id string, totalUSD float64, reply string, texts int, failed string)
+	// interrupted. interrupted says something asked the turn to stop. A
+	// worker cannot tell a person's interrupt from another cancel.
+	turnEnd func(id string, totalUSD float64, reply string, texts int, failed string, interrupted bool)
 	exit    func(id string, totalUSD float64)
 	// tool reports a tool call the worker starts, or with an empty name the
 	// end of one. It runs on the worker's event path, as the events arrive.
@@ -87,7 +88,7 @@ func (h swarmWorkers) hook(ev workerEvents) (swarm.Hooks, func(*swarm.Agent)) {
 		agent <- a
 		counts.report(errMsg, func(end queuedEnd) {
 			s := a.Snapshot()
-			ev.turnEnd(a.ID, s.CostUSD, turnReply(s.LastAssistant, end.errMsg), end.texts, end.failure())
+			ev.turnEnd(a.ID, s.CostUSD, turnReply(s.LastAssistant, end.errMsg), end.texts, end.failure(), end.interrupted)
 		})
 	}
 	started := func(a *swarm.Agent) {
@@ -918,7 +919,7 @@ func (w *Workspace) workerEvents(run *talkootRun, member string, token uint64) w
 				}
 			})
 		},
-		turnEnd: func(id string, total float64, reply string, texts int, failed string) {
+		turnEnd: func(id string, total float64, reply string, texts int, failed string, interrupted bool) {
 			settle()
 			// A turn on a backend that folds pays exactly the texts it
 			// echoed, none included.
@@ -962,8 +963,11 @@ func (w *Workspace) workerEvents(run *talkootRun, member string, token uint64) w
 			w.talkoot.mu.Unlock()
 			if err := run.do(func(rt *talkoot.Router) error {
 				w.postWorkerReply(rt, member, reply)
-				if failed != "" {
+				switch {
+				case failed != "":
 					return rt.TurnFailed(member, cost, failureReason(failed))
+				case interrupted:
+					return rt.TurnInterrupted(member, cost)
 				}
 				return rt.TurnEnded(member, cost)
 			}); err != nil {

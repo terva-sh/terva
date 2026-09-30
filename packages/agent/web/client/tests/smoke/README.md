@@ -29,6 +29,13 @@ mocks the control-plane WebSocket (`/ws`) with `page.routeWebSocket`, playing ju
 enough of the ctrlproto handshake (`installMockBackend` in `support.ts`) for the
 app to connect, select a session, and receive transcript events.
 
+The one exception is `talkoot-studio.smoke.ts`. The Talkoot Avatar Studio is
+not in `dist/`, so the config also starts the Vite dev server on
+`SMOKE_STUDIO_PORT` (default 4174), and those tests open `studio.html` there.
+Its Save test writes `poses.json` through the dev server. It first checks that
+the server writes this checkout's file, and stops if a reused server belongs
+to another one. `src/studio/README.md` describes the studio.
+
 ## Scope — durable critical flows only
 
 Each case defends a behavior that genuinely needs a real browser: layout,

@@ -3,9 +3,11 @@ package workspace
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 
 	"terva.sh/terva/packages/agent/talkoot"
+	"terva.sh/terva/packages/agent/talkoot/expression"
 	"terva.sh/terva/packages/session"
 )
 
@@ -14,13 +16,22 @@ import (
 // for the member, and overlay adds that half.
 
 // overlay fills in the host's half of each status: a worker stopped for
-// idleness, a question or approval open in the inbox, and a member nothing
-// listens for.
+// idleness, a question or approval open in the inbox, a member nothing
+// listens for, and the expression its face shows now.
 //
 // 🔑 Offline reads memberUnbound, the check a worker delivery and an
 // introduction read, so a status never says a member listens when a
 // delivery would refuse it.
 func (r *talkootRun) overlay(st []talkoot.Status) []talkoot.Status {
+	r.evMu.Lock()
+	faces := r.facesLocked(time.Now())
+	r.evMu.Unlock()
+	return r.overlayWith(st, faces)
+}
+
+// overlayWith is overlay with the faces read already.
+func (r *talkootRun) overlayWith(st []talkoot.Status, faces map[string]expression.Expression) []talkoot.Status {
+	faceOverlay(st, faces)
 	roster := r.roster.Load()
 	offline := make([]bool, len(st))
 	if r.unbound != nil && roster != nil {

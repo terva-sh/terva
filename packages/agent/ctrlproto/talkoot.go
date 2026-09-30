@@ -56,6 +56,10 @@ type TalkootController interface {
 	// talkoot waits on, oldest first. A client answers a card with approve or
 	// answer on the card's session. The inbox has no answer verb of its own.
 	TalkootInbox(ctx context.Context, p TalkootRef) (TalkootInboxResult, error)
+	// TalkootTrace returns a member's expression trace: the signals its
+	// face's engine received and what it chose, newest last. It is for
+	// debugging a face.
+	TalkootTrace(ctx context.Context, p TalkootTraceParams) (TalkootTraceResult, error)
 	// ProposeTalkoot records a person's roster proposal, which waits in the
 	// inbox like a member's. Undo takes this path.
 	ProposeTalkoot(ctx context.Context, p TalkootProposeParams) (TalkootProposal, error)
@@ -91,6 +95,19 @@ type TalkootSummary struct {
 	Running bool `json:"running"`
 	// Problem says why a talkoot does not run, when it should.
 	Problem string `json:"problem,omitempty"`
+	// Name and Title come from the roster, Color is the team mark's colour
+	// with the default filled in, and OwnColor is the colour the roster
+	// sets. A roster that cannot be read leaves them empty.
+	Name     string `json:"name,omitempty"`
+	Title    string `json:"title,omitempty"`
+	Color    string `json:"color,omitempty"`
+	OwnColor string `json:"own_color,omitempty"`
+	// State is the team's combined state, for a talkoot this daemon runs:
+	// offline, needs-you, busy, paused, or online. It is the state the run
+	// last sent on its status event, and a change sends talkoots_changed,
+	// so a list that reads again on that event follows it. A talkoot that
+	// has just started may have none yet.
+	State string `json:"state,omitempty"`
 }
 
 // TalkootListResult is the talkoot.list reply.
@@ -113,6 +130,12 @@ type TalkootView struct {
 	Title           string  `json:"title,omitempty"`
 	Home            string  `json:"home"`
 	BudgetUSDPerDay float64 `json:"budget_usd_per_day,omitempty"`
+	// Color is the team mark's colour with the default filled in, and
+	// OwnColor is the colour the roster sets, empty for the default. State
+	// is the team's combined state.
+	Color    string `json:"color"`
+	OwnColor string `json:"own_color,omitempty"`
+	State    string `json:"state"`
 	// Text is the talkoot.md the roster came from. An editor changes it and
 	// sends it back with talkoot.update.
 	Text    string          `json:"text,omitempty"`
@@ -182,6 +205,55 @@ type TalkootMemberStatus struct {
 	// Idle says the member's worker process stopped for idleness. The next
 	// envelope revives it.
 	Idle bool `json:"idle,omitempty"`
+	// Expression is the held pose the member's face shows, as its engine
+	// reads the room: open, focused, looking-up, half-lidded,
+	// closed-squint, worried, frustrated, skeptical, or closed. Empty draws
+	// the default pose for Presence. Intensity 0 is the base pose and 1 its
+	// strong form, and a client draws the strongest form it has at or below
+	// it. ExpressionCause names the signals behind the expression, for a
+	// person who debugs a face. docs/proposals/talkoot-members.md, "The
+	// face", is the design.
+	Expression      string `json:"expression,omitempty"`
+	Intensity       int    `json:"intensity,omitempty"`
+	ExpressionCause string `json:"expression_cause,omitempty"`
+}
+
+// TalkootBeat is a beat a member's face plays once: happy, glance,
+// slow-blink, or fast-blink. Toward names the member a glance goes to.
+type TalkootBeat struct {
+	Member string    `json:"member"`
+	Beat   string    `json:"beat"`
+	Toward string    `json:"toward,omitempty"`
+	Cause  string    `json:"cause"`
+	At     time.Time `json:"at"`
+}
+
+// TalkootTraceParams is the talkoot.trace payload.
+type TalkootTraceParams struct {
+	ID     string `json:"id"`
+	Member string `json:"member"`
+}
+
+// TalkootTraceResult is the talkoot.trace reply: the seed that drives the
+// engine's choices, and the member's trace, oldest first. The trace holds a
+// bounded number of entries, and it lives in the daemon's memory only. The
+// seed travels as a decimal string, because a JS number holds only 53 bits.
+type TalkootTraceResult struct {
+	Member  string              `json:"member"`
+	Seed    uint64              `json:"seed,string"`
+	Entries []TalkootTraceEntry `json:"entries"`
+}
+
+// TalkootTraceEntry is one signal the engine received and what it chose.
+// Expression and Beat are empty when the signal changed nothing.
+type TalkootTraceEntry struct {
+	At         time.Time `json:"at"`
+	Signal     string    `json:"signal"`
+	Expression string    `json:"expression,omitempty"`
+	Intensity  int       `json:"intensity,omitempty"`
+	Beat       string    `json:"beat,omitempty"`
+	Toward     string    `json:"toward,omitempty"`
+	Cause      string    `json:"cause,omitempty"`
 }
 
 // TalkootCreateParams is the talkoot.create payload. Text is the whole
@@ -307,15 +379,17 @@ type TalkootRosterMember struct {
 	IdleStop        string       `json:"idle_stop,omitempty"`
 }
 
-// TalkootUpdateParams is the talkoot.update payload. It holds one of Text and
-// Ops. Text replaces the whole talkoot.md. Ops is a person's field edit, the
-// operations of a proposal, applied at once to the roster as it is now. The
-// id and the home cannot change.
+// TalkootUpdateParams is the talkoot.update payload. It holds one of Text,
+// Ops, and Color. Text replaces the whole talkoot.md. Ops is a person's field
+// edit, the operations of a proposal, applied at once to the roster as it is
+// now. Color sets the team colour, and an empty string returns it to the
+// default. The id and the home cannot change.
 type TalkootUpdateParams struct {
-	ID   string      `json:"id"`
-	By   string      `json:"by"`
-	Text string      `json:"text,omitempty"`
-	Ops  []TalkootOp `json:"ops,omitempty"`
+	ID    string      `json:"id"`
+	By    string      `json:"by"`
+	Text  string      `json:"text,omitempty"`
+	Ops   []TalkootOp `json:"ops,omitempty"`
+	Color *string     `json:"color,omitempty"`
 }
 
 // TalkootPostParams is the talkoot.post payload. An empty To reaches the
@@ -438,6 +512,10 @@ type TalkootLine struct {
 	Proposer string                `json:"proposer,omitempty"`
 	Edited   bool                  `json:"edited,omitempty"`
 	Changes  []TalkootMemberChange `json:"changes,omitempty"`
+	// ColorBefore and ColorAfter are set on a roster line that changed the
+	// team colour, each with the default filled in.
+	ColorBefore string `json:"color_before,omitempty"`
+	ColorAfter  string `json:"color_after,omitempty"`
 	// Answers is set on an answer line: a person's answer to the questions
 	// Member asked. Ref holds the answer's id, which a member cites as
 	// answer:<id>.
@@ -691,10 +769,13 @@ type TalkootEvent struct {
 	// [EventTalkootRoster].
 	Line *TalkootLine `json:"line,omitempty"`
 	// Members is set on [EventTalkootStatus]: every member's status, in
-	// roster order.
+	// roster order. State is the team's combined state from them.
 	Members []TalkootMemberStatus `json:"members,omitempty"`
+	State   string                `json:"state,omitempty"`
 	// Card is set on [EventTalkootInbox] and [EventTalkootInboxResolved].
 	Card *TalkootCard `json:"card,omitempty"`
+	// Beat is set on [EventTalkootBeat].
+	Beat *TalkootBeat `json:"beat,omitempty"`
 }
 
 // TalkootEnvelopeEvent builds an [EventTalkootEnvelope] event.
@@ -725,6 +806,11 @@ func TalkootStatusEvent(id string, members []TalkootMemberStatus) Event {
 // TalkootInboxEvent builds an [EventTalkootInbox] event.
 func TalkootInboxEvent(id string, c TalkootCard) Event {
 	return Event{WireEvent: core.WireEvent{Type: EventTalkootInbox}, Talkoot: &TalkootEvent{ID: id, Card: &c}}
+}
+
+// TalkootBeatEvent builds an [EventTalkootBeat] event.
+func TalkootBeatEvent(id string, b TalkootBeat) Event {
+	return Event{WireEvent: core.WireEvent{Type: EventTalkootBeat}, Talkoot: &TalkootEvent{ID: id, Beat: &b}}
 }
 
 // TalkootInboxResolvedEvent builds an [EventTalkootInboxResolved] event.

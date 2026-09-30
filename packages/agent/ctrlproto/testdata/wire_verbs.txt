@@ -126,6 +126,7 @@ talkoot.ref	params=TalkootOpenRefParams	result=TalkootRefText
 talkoot.resume	params=TalkootResumeParams	result=-
 talkoot.room	params=TalkootRoomParams	result=TalkootRoomPage
 talkoot.templates	params=-	result=TalkootTemplatesResult
+talkoot.trace	params=TalkootTraceParams	result=TalkootTraceResult
 talkoot.update	params=TalkootUpdateParams	result=TalkootView
 talkoot.worker	params=TalkootWorkerParams	result=TaskInfo
 tools.display	params=-	result=ToolsDisplayResult

@@ -80,7 +80,7 @@ var readOnlyMethods = map[Method]bool{
 	MethodReplayState:    true,
 	MethodTenantsList:    true,
 	MethodTalkootList:    true, MethodTalkootGet: true, MethodTalkootRoom: true,
-	MethodTalkootInbox: true, MethodTalkootProposals: true,
+	MethodTalkootInbox: true, MethodTalkootProposals: true, MethodTalkootTrace: true,
 	// A preview writes nothing: create recomputes the roster it showed.
 	MethodTalkootTemplates: true, MethodTalkootPreview: true,
 }

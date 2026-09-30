@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"terva.sh/terva/packages/testsupport"
 )
@@ -374,5 +375,93 @@ func TestAStoppedQueuedTurnIsChargedAndPauses(t *testing.T) {
 		if !s.Working || s.SpendUSD != 0.2 || !strings.Contains(s.Paused, "stopped before its turn ended") {
 			t.Errorf("working %v, $%v, paused %q; want still working, $0.2, paused", s.Working, s.SpendUSD, s.Paused)
 		}
+	}
+}
+
+// A turn line of a member with a budget of its own carries the member's spend
+// today and that budget, so the expression engine reads worry from the line
+// alone. The spend starts again with the day. A member with no budget of its
+// own carries neither.
+func TestATurnLineCarriesTheDaysSpendAndBudget(t *testing.T) {
+	f := newFixture(t, nil)
+	for _, c := range []float64{1.5, 2} {
+		if err := f.router.TurnEnded("jev", c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.router.TurnEnded("helm", 1); err != nil {
+		t.Fatal(err)
+	}
+	f.clock.advance(24 * time.Hour)
+	if err := f.router.TurnEnded("jev", 0.5); err != nil {
+		t.Fatal(err)
+	}
+	type day struct{ spend, budget float64 }
+	var got []day
+	for _, l := range f.lines() {
+		if l.Type == LineTurn {
+			got = append(got, day{l.DaySpendUSD, l.DayBudgetUSD})
+		}
+	}
+	want := []day{{1.5, 20}, {3.5, 20}, {0, 0}, {0.5, 20}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("turn lines' day spend and budget = %v, want %v", got, want)
+	}
+}
+
+// A delivery to an idle member says it woke the member. One that lands while
+// the member's turn runs does not, and after the turn ends the next one wakes
+// it again. An interrupted turn says so on its turn line, and pauses nothing.
+func TestADeliverySaysItWokeAnIdleMember(t *testing.T) {
+	f := newFixture(t, nil)
+	f.post("helm")
+	f.post("helm")
+	if err := f.router.TurnInterrupted("helm", 0.5); err != nil {
+		t.Fatal(err)
+	}
+	f.post("helm")
+	var woke []bool
+	var interrupted []bool
+	for _, l := range f.lines() {
+		switch {
+		case l.Type == LineDelivery && l.Member == "helm":
+			woke = append(woke, l.Woke)
+		case l.Type == LineTurn && l.Member == "helm":
+			interrupted = append(interrupted, l.Interrupted)
+		}
+	}
+	if want := []bool{true, false, true}; !slices.Equal(woke, want) {
+		t.Errorf("delivery lines' woke = %v, want %v", woke, want)
+	}
+	if want := []bool{true}; !slices.Equal(interrupted, want) {
+		t.Errorf("turn lines' interrupted = %v, want %v", interrupted, want)
+	}
+	if why := f.pausedWhy("helm"); why != "" {
+		t.Errorf("an interrupt paused helm: %q", why)
+	}
+}
+
+// The delivery that wakes a reviewer says the member is a reviewer, so the
+// turn it started is a review. A delivery that joins a running turn says
+// neither, and a delivery that wakes a member that is no reviewer says only
+// that it woke it.
+func TestADeliveryThatWakesAReviewerSaysSo(t *testing.T) {
+	f := newFixture(t, nil)
+	f.post("yelp")
+	f.post("yelp")
+	f.post("helm")
+	type seen struct {
+		member         string
+		woke, reviewer bool
+	}
+	var got []seen
+	for _, l := range f.lines() {
+		if l.Type == LineDelivery {
+			got = append(got, seen{l.Member, l.Woke, l.Reviewer})
+		}
+	}
+	want := []seen{{"yelp", true, true}, {"yelp", false, false}, {"helm", true, false}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("delivery lines = %+v, want %+v", got, want)
 	}
 }

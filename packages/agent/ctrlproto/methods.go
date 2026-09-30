@@ -415,6 +415,7 @@ const (
 	MethodTalkootGet       Method = "talkoot.get"       // params TalkootRef, result TalkootView; read-only
 	MethodTalkootRoom      Method = "talkoot.room"      // params TalkootRoomParams, result TalkootRoomPage; read-only
 	MethodTalkootInbox     Method = "talkoot.inbox"     // params TalkootRef, result TalkootInboxResult; read-only
+	MethodTalkootTrace     Method = "talkoot.trace"     // params TalkootTraceParams, result TalkootTraceResult; read-only
 	MethodTalkootProposals Method = "talkoot.proposals" // params TalkootProposalsParams, result TalkootProposalsResult; read-only
 	MethodTalkootTemplates Method = "talkoot.templates" // result TalkootTemplatesResult; read-only
 	MethodTalkootPreview   Method = "talkoot.preview"   // params TalkootPreviewParams, result TalkootPreview; read-only
@@ -483,7 +484,7 @@ func (m Method) Group() Group {
 	case MethodSecretsStatus, MethodSecretsList, MethodSecretsGrant, MethodSecretsRevoke,
 		MethodSecretsForget:
 		return GroupSecrets
-	case MethodTalkootList, MethodTalkootGet, MethodTalkootRoom, MethodTalkootInbox, MethodTalkootCreate,
+	case MethodTalkootList, MethodTalkootGet, MethodTalkootRoom, MethodTalkootInbox, MethodTalkootTrace, MethodTalkootCreate,
 		MethodTalkootProposals, MethodTalkootPropose, MethodTalkootDecide,
 		MethodTalkootUpdate, MethodTalkootPost, MethodTalkootPause, MethodTalkootResume,
 		MethodTalkootRecruit, MethodTalkootKickoff, MethodTalkootTemplates, MethodTalkootPreview, MethodTalkootRef,

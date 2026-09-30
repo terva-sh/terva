@@ -75,7 +75,7 @@ func TestARealSwarmShowsATalkootWorkerOnlyThroughTheHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := swarmWorkers{f: f}.spawn(context.Background(), req, workerEvents{turnEnd: func(string, float64, string, int, string) {}, exit: func(string, float64) {}})
+	id, err := swarmWorkers{f: f}.spawn(context.Background(), req, workerEvents{turnEnd: func(string, float64, string, int, string, bool) {}, exit: func(string, float64) {}})
 	if err != nil {
 		t.Fatal(err)
 	}

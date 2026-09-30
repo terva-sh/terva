@@ -135,6 +135,14 @@ type grant struct {
 	// reads is set for a ReadDriver. The grant then leaves the chain alone,
 	// and Read moves the member.
 	reads bool
+	// woke says no turn of the member ran when the grant was made, so this
+	// delivery starts one.
+	//
+	// ⚠️ A delivery marks the member turning once its driver returns, so the
+	// next delivery in the same dispatch loop sees the turn. Two dispatch
+	// loops that race for one idle member can both see it idle, and then
+	// both lines say woke.
+	woke bool
 }
 
 const (
@@ -797,7 +805,7 @@ func (rt *Router) dispatch(ds []delivery) {
 				chain = ""
 			}
 			_ = rt.room.Append(Line{Type: LineDelivery, At: rt.now(), Member: id, Chain: chain,
-				Ref: d.env.ID, Notes: len(g.notes)})
+				Ref: d.env.ID, Notes: len(g.notes), Woke: g.woke, Reviewer: g.woke && d.member.Reviewer})
 			// 🔑 A turn that ended while the driver ran was the turn this
 			// delivery started or joined. Marking the member busy now would
 			// hold a slot that no turn end will ever free.
@@ -818,7 +826,8 @@ func (rt *Router) dispatch(ds []delivery) {
 // the delivery's chain too. The member may send in that chain the moment its
 // turn starts, which can be before Deliver returns.
 func (rt *Router) claimLocked(id, root string, reads bool) *grant {
-	g := &grant{root: root, notes: rt.notes[id], epoch: rt.epoch[id], reads: reads}
+	g := &grant{root: root, notes: rt.notes[id], epoch: rt.epoch[id], reads: reads,
+		woke: !rt.turning[id]}
 	delete(rt.notes, id)
 	if reads {
 		return g
@@ -949,6 +958,19 @@ func (rt *Router) TurnEnded(member string, costUSD float64) error {
 	return rt.turnEnded(m, costUSD, h, true)
 }
 
+// TurnInterrupted is TurnEnded for a turn that something asked to stop, such
+// as a person. An interrupt is no failure, so nothing pauses. The turn line
+// says the turn was interrupted.
+func (rt *Router) TurnInterrupted(member string, costUSD float64) error {
+	m, err := rt.turnMember(member)
+	if err != nil {
+		return err
+	}
+	costUSD, h := costHold(costUSD)
+	h.interrupted = true
+	return rt.turnEnded(m, costUSD, h, true)
+}
+
 // TurnUnreported records a member turn whose cost will never arrive, such as
 // one still running when the daemon stops. The turn counts as free, and the
 // member pauses until a person looks, the same as for a bad cost. The turn
@@ -1052,7 +1074,11 @@ func (rt *Router) QueuedTurnFailed(member string, costUSD float64, why string) e
 // turnHold is the pause a turn sets on its member: a kind and a reason. The
 // zero value sets none. badCost is a cost pause's reason beside a failed
 // one, when the failed turn's cost cannot be counted either.
-type turnHold struct{ kind, reason, badCost string }
+type turnHold struct {
+	kind, reason, badCost string
+	// interrupted marks the turn line of a turn something asked to stop.
+	interrupted bool
+}
 
 // guard names the guard of a turnHold's pause line.
 func (h turnHold) guard() string {
@@ -1086,7 +1112,7 @@ func failedHold(costUSD float64, why string) (float64, turnHold) {
 		why = "the member's turn failed"
 	}
 	if bad := badCost(costUSD); bad != "" {
-		return 0, turnHold{pauseFailed, why, bad}
+		return 0, turnHold{kind: pauseFailed, reason: why, badCost: bad}
 	}
 	return costUSD, turnHold{kind: pauseFailed, reason: why}
 }
@@ -1119,7 +1145,10 @@ func (rt *Router) turnEnded(m Member, costUSD float64, h turnHold, slot bool) er
 	rt.spend[member] += costUSD
 	rt.turns[member]++
 	rt.teamSpend += costUSD
-	tl := Line{Type: LineTurn, At: now, Member: member, Chain: rt.active[member], CostUSD: costUSD, Reason: h.reason}
+	tl := Line{Type: LineTurn, At: now, Member: member, Chain: rt.active[member], CostUSD: costUSD, Reason: h.reason, Interrupted: h.interrupted}
+	if m.BudgetUSDPerDay > 0 {
+		tl.DaySpendUSD, tl.DayBudgetUSD = rt.spend[member], m.BudgetUSDPerDay
+	}
 	if h.kind == pauseFailed {
 		// The guard names the kind, so replay restores a failure as one and
 		// not as a cost pause.
@@ -1304,6 +1333,13 @@ type Status struct {
 	// nothing listens for the member, so a delivery now would not reach it.
 	Waiting bool
 	Offline bool
+	// Expression, Intensity, and ExpressionCause are set by the host's
+	// expression engine: the held pose the member's face shows, its form,
+	// and the signals behind it. An empty Expression draws the default pose
+	// for the member's presence.
+	Expression      string
+	Intensity       int
+	ExpressionCause string
 }
 
 // Presence states: a member is in exactly one. docs/proposals/talkoot.md,
@@ -1331,6 +1367,52 @@ func (s Status) Presence() string {
 		return PresenceWorking
 	}
 	return PresenceIdle
+}
+
+// Team states: the team mark shows one, from its members' presences.
+// docs/proposals/talkoot-members.md, "The talkoot's own mark", defines them.
+const (
+	TeamOffline  = "offline"
+	TeamNeedsYou = "needs-you"
+	TeamBusy     = "busy"
+	TeamPaused   = "paused"
+	TeamOnline   = "online"
+)
+
+// TeamState is the team's combined state. The rows apply in order and the
+// first match wins: every member offline, any member that waits on a person
+// or stopped on a failure, any member at work, every member that listens
+// paused, and online for any other mix. A team with no member is offline.
+func TeamState(st []Status) string {
+	listening, paused := 0, 0
+	busy, needs := false, false
+	for _, s := range st {
+		switch s.Presence() {
+		case PresenceOffline:
+			continue
+		case PresenceWaiting:
+			needs = true
+		case PresencePaused:
+			paused++
+			if slices.Contains(s.Pauses, pauseFailed) {
+				needs = true
+			}
+		case PresenceWorking:
+			busy = true
+		}
+		listening++
+	}
+	switch {
+	case listening == 0:
+		return TeamOffline
+	case needs:
+		return TeamNeedsYou
+	case busy:
+		return TeamBusy
+	case paused == listening:
+		return TeamPaused
+	}
+	return TeamOnline
 }
 
 // toolCall is one tool call a member's turn runs.

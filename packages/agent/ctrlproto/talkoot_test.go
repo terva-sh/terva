@@ -38,6 +38,16 @@ func TestATalkootEventArrivesOnTheRoomAddress(t *testing.T) {
 	if got := f.Event.Talkoot.Line.Envelope.Body; got != "go" {
 		t.Errorf("envelope body %q, want %q", got, "go")
 	}
+
+	// A beat takes the same address, with no filter of its own.
+	svc.broadcast(addr, TalkootBeatEvent("crew", TalkootBeat{Member: "lead", Beat: "glance", Toward: "atlas", Cause: "sent message e1 to atlas -> glance"}))
+	b := pullEvent(t, client, EventTalkootBeat)
+	if b.Sess != addr || b.Event == nil || b.Event.Talkoot == nil || b.Event.Talkoot.Beat == nil {
+		t.Fatalf("the beat did not arrive on %s: %+v", addr, b)
+	}
+	if got := *b.Event.Talkoot.Beat; got.Member != "lead" || got.Beat != "glance" || got.Toward != "atlas" {
+		t.Errorf("beat = %+v", got)
+	}
 }
 
 // A client that did not negotiate the group may not watch a room, the same

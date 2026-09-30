@@ -691,6 +691,13 @@ The view appears when the daemon runs with `talkoot_enabled` set in
   two members of one persona take different shapes. A member added without
   a shape moves no one's mark. A shape you set, a reorder, or a removal can
   move another member's default. A mark you set never moves.
+- **Faces.** In the sidebar each mark has eyes that show the member's state:
+  focused while it works, looking up while it waits for you, closed and
+  faded while offline, and worried, squinting, or half shut while paused,
+  by the most serious reason. The **Marks** picker in the sidebar footer
+  sets how much the faces move: full motion, subtle motion, or no motion.
+  The browser keeps the choice. When your system asks for reduced motion,
+  the faces stay still. The state label always shows beside the face.
 - **The member card.** **Member card** in a member's view opens the one place
   to see and change it. The card has three sections:
   - **Look:** the title, and pickers for the shape and the colour. **Reset**

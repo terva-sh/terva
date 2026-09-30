@@ -25,6 +25,7 @@ import (
 	"terva.sh/terva/packages/agent/persona"
 	"terva.sh/terva/packages/agent/restartmarker"
 	"terva.sh/terva/packages/agent/swarm"
+	"terva.sh/terva/packages/agent/talkoot/expression"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/agent/worker"
 	"terva.sh/terva/packages/core"
@@ -91,6 +92,10 @@ type Workspace struct {
 	// talkootIdleClock, when set, maps a worker member's idle stop to the
 	// wait a test uses.
 	talkootIdleClock func(time.Duration) time.Duration
+	// talkootFaceRows, when set, is the expression table every talkoot this
+	// workspace starts uses, in place of expression.DefaultTable. A test sets
+	// it before the talkoot starts.
+	talkootFaceRows []expression.Row
 
 	// chat is the workspace's chat-bridge registry (the chat pane). Bridges are
 	// bound to a session id and never follow a client's active pane. See

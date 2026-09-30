@@ -75,8 +75,14 @@ const PROSE_ATTRS = new Set(['placeholder', 'title', 'aria-label', 'alt'])
 // Bare/window-qualified calls whose first literal argument a user reads.
 const PROSE_CALLS = new Set(['confirm', 'prompt', 'alert'])
 
+// studio/ is the Talkoot Avatar Studio, a page the dev server serves and the
+// build leaves out (studio.html), so no user reads it and nothing there is
+// translated.
+const devOnly = (rel) => rel.startsWith('studio/') || rel.startsWith('studio\\')
+
 for (const file of walk(SRC)) {
   const rel = relative(SRC, file)
+  if (devOnly(rel)) continue
   const cat = catalogs[catalogOf(rel)]
   const text = readFileSync(file, 'utf8')
   const lines = text.split('\n')
