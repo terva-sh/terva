@@ -370,6 +370,8 @@ The host saves the parent association and any explicit thread restriction, witho
 The admission store uses a version-2 envelope and still reads both legacy map formats.
 Older hosts reject that envelope and forget approvals, rather than interpreting thread restrictions as grants.
 Owner-only `/approve` sets a mention restriction; `/approve all` removes that restriction. Neither command widens the parent's policy.
+Thread admission commands accept no target ID. Use the owner DM to name another chat.
+An admitted owner-DM thread accepts owner control commands without a mention, even with a mention restriction.
 Owner-only `/revoke` mutes the thread until reapproval and leaves the parent unchanged. These restrictions survive restart.
 Parent revocation stops its threads, cancels active turns, and discards queued prompts and held content.
 Container removal revokes group/channel parent access and preserves each thread's own restrictions. Reapproving the parent restores inheritance.

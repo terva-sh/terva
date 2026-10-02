@@ -106,8 +106,12 @@ func (g *gate) route(ctx context.Context, conn Connector, m Message) action {
 			return actHandled
 		}
 		if err != nil {
-			if _, _, revoke := splitCommand(g.stripLeadingMention(m), "/revoke"); revoke && m.UserID == paired {
-				g.revoke(ctx, conn, m, m.ChatID)
+			if _, args, revoke := splitCommand(g.stripLeadingMention(m), "/revoke"); revoke && m.UserID == paired {
+				if len(args) != 0 {
+					g.threadAdmissionUsage(ctx, conn, m)
+				} else {
+					g.revoke(ctx, conn, m, m.ChatID)
+				}
 			}
 			return actHandled
 		}
@@ -218,14 +222,22 @@ func (g *gate) routeGroup(ctx context.Context, conn Connector, m Message, paired
 		if !isOwner {
 			return g.ownerOnly(ctx, conn, m)
 		}
+		if m.ChatKind == "thread" && (len(args) > 1 || len(args) == 1 && !strings.EqualFold(args[0], ModeAll)) {
+			g.threadAdmissionUsage(ctx, conn, m)
+			return actHandled
+		}
 		// Approved in the chat itself: record the container it belongs to so a
 		// later removal from that container revokes this chat with its siblings.
 		g.approve(ctx, conn, m, m.ChatID, modeFromArgs(args), m.ScopeID)
 		return actHandled
 	}
-	if _, _, ok := splitCommand(text, "/revoke"); ok {
+	if _, args, ok := splitCommand(text, "/revoke"); ok {
 		if !isOwner {
 			return g.ownerOnly(ctx, conn, m)
+		}
+		if m.ChatKind == "thread" && len(args) != 0 {
+			g.threadAdmissionUsage(ctx, conn, m)
+			return actHandled
 		}
 		g.revoke(ctx, conn, m, m.ChatID)
 		return actHandled
@@ -248,7 +260,9 @@ func (g *gate) routeGroup(ctx context.Context, conn Connector, m Message, paired
 		return actHandled
 	}
 
-	if mode == ModeMention && !g.mentionsBot(m) {
+	ownerDMControl := isOwner && m.ParentChatKind == "dm" &&
+		(text == "/status" || text == "/stop" || text == "/help" || text == "/start" || IsStopCommand(text))
+	if mode == ModeMention && !ownerDMControl && !g.mentionsBot(m) {
 		return actHandled
 	}
 
@@ -280,6 +294,11 @@ func (g *gate) ownerOnly(ctx context.Context, conn Connector, m Message) action 
 	_ = conn.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID,
 		Text: "only the paired owner can do that."})
 	return actHandled
+}
+
+func (g *gate) threadAdmissionUsage(ctx context.Context, conn Connector, m Message) {
+	_ = conn.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID,
+		Text: i18n.T("Inside a thread, use /approve [all] or /revoke. Use the owner DM to name another chat.")})
 }
 
 func (g *gate) approve(ctx context.Context, conn Connector, m Message, chatID, mode, scope string) {

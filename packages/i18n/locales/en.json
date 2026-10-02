@@ -151,6 +151,7 @@
   "History could not be saved. Preserve the live transcript, fix storage, then reopen the saved session": "History could not be saved. Preserve the live transcript, fix storage, then reopen the saved session",
   "How tool calls are gated for this session.": "How tool calls are gated for this session.",
   "Inline images": "Inline images",
+  "Inside a thread, use /approve [all] or /revoke. Use the owner DM to name another chat.": "Inside a thread, use /approve [all] or /revoke. Use the owner DM to name another chat.",
   "Interface": "Interface",
   "Keep trying": "Keep trying",
   "Language": "Language",
