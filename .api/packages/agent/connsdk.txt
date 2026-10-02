@@ -51,10 +51,12 @@ Config.Capabilities	field	Capabilities
 Config.Configured	field	func() bool
 Config.Name	field	string
 Config.NewTransport	field	func(s Session) (Transport, error)
+Config.ProtocolMin	field	int
 Config.Reset	field	func() error
 Config.Secrets	field	*SealedState
 Config.Setup	field	func() error
 Config.Status	field	func() (string, error)
+Config.Verbs	field	map[string]func() error
 Config.Version	field	string
 Entity	type	struct
 Entity.Kind	field	string
@@ -82,6 +84,8 @@ Message.ChatKind	field	string
 Message.ChatTitle	field	string
 Message.Entities	field	[]Entity
 Message.ID	field	string
+Message.ParentChatID	field	string
+Message.ParentChatKind	field	string
 Message.ReplyTo	field	string
 Message.ScopeID	field	string
 Message.TS	field	int64
@@ -133,6 +137,7 @@ Session	type	struct
 Session.DataDir	field	string
 Session.HostFeatures	field	[]string
 Session.Protocol	field	int
+Session.Warn	method	func(message string)
 Session.ZotVersion	field	string
 Speaker	type	struct
 Speaker.AvatarPath	field	string

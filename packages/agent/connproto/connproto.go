@@ -204,19 +204,23 @@ type ChatMembershipFromConn struct {
 // the chat ("dm", "group", "thread", "channel"; kind "" reads as dm,
 // the v1 assumption).
 type MessageFromConn struct {
-	Type        string       `json:"type"` // "message"
-	ID          string       `json:"id,omitempty"`
-	TS          int64        `json:"ts,omitempty"`
-	ChatID      string       `json:"chat_id"`
-	ChatKind    string       `json:"chat_kind,omitempty"`
-	ChatTitle   string       `json:"chat_title,omitempty"`
-	ScopeID     string       `json:"scope_id,omitempty"`
-	UserID      string       `json:"user_id"`
-	Username    string       `json:"username,omitempty"`
-	ReplyTo     string       `json:"reply_to,omitempty"`
-	Text        string       `json:"text,omitempty"`
-	Entities    []Entity     `json:"entities,omitempty"`
-	Attachments []Attachment `json:"attachments,omitempty"`
+	Type      string `json:"type"` // "message"
+	ID        string `json:"id,omitempty"`
+	TS        int64  `json:"ts,omitempty"`
+	ChatID    string `json:"chat_id"`
+	ChatKind  string `json:"chat_kind,omitempty"`
+	ChatTitle string `json:"chat_title,omitempty"`
+	ScopeID   string `json:"scope_id,omitempty"`
+	// ParentChatID and ParentChatKind identify a thread's containing chat.
+	// Both require protocol 2 and the negotiated chat_parents feature.
+	ParentChatID   string       `json:"parent_chat_id,omitempty"`
+	ParentChatKind string       `json:"parent_chat_kind,omitempty"`
+	UserID         string       `json:"user_id"`
+	Username       string       `json:"username,omitempty"`
+	ReplyTo        string       `json:"reply_to,omitempty"`
+	Text           string       `json:"text,omitempty"`
+	Entities       []Entity     `json:"entities,omitempty"`
+	Attachments    []Attachment `json:"attachments,omitempty"`
 }
 
 // ResultFromConn acknowledges one command. MessageID (protocol 2) is

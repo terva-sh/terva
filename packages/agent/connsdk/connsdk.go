@@ -17,6 +17,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -81,18 +83,22 @@ type Attachment struct {
 // describe the chat. A transport that fills ID gets true reply
 // threading; one that leaves it empty behaves like a v1 connector.
 type Message struct {
-	ID          string
-	TS          int64
-	ChatID      string
-	ChatKind    string
-	ChatTitle   string
-	ScopeID     string // container the chat belongs to (e.g. Discord guild); "" = scopeless
-	UserID      string
-	Username    string
-	ReplyTo     string
-	Text        string
-	Entities    []Entity
-	Attachments []Attachment
+	ID        string
+	TS        int64
+	ChatID    string
+	ChatKind  string
+	ChatTitle string
+	ScopeID   string // container the chat belongs to (e.g. Discord guild); "" = scopeless
+	// ParentChatID and ParentChatKind identify the containing dm/group/channel
+	// for a thread. Declare chat_parents; the SDK negotiates its emission.
+	ParentChatID   string
+	ParentChatKind string
+	UserID         string
+	Username       string
+	ReplyTo        string
+	Text           string
+	Entities       []Entity
+	Attachments    []Attachment
 }
 
 // Entity is one span of markup on Text (stage B; declare "entities" in
@@ -255,6 +261,23 @@ type Session struct {
 	// HostFeatures is what the host declared it consumes (protocol 2);
 	// optional constructs outside this set are wasted bytes at best.
 	HostFeatures []string
+
+	// 🔑 Warn is a method over this pointer, not an exported func
+	// field, so a hand-built Session drops the line instead of
+	// panicking on a nil func.
+	w *frameWriter
+}
+
+// Warn sends one operator-facing line to the host as a warn frame.
+// terva surfaces it live in its own output, never in a chat; stderr
+// only reaches the connector's log file. Safe from any goroutine. On
+// a Session the SDK did not build, such as a zero value in a test,
+// Warn drops the line.
+func (s Session) Warn(message string) {
+	if s.w == nil {
+		return
+	}
+	_ = s.w.write(connproto.WarnFromConn{Type: "warn", Message: message})
 }
 
 // MessageIDSender is the optional Transport upgrade for protocol 2:
@@ -366,6 +389,15 @@ type Config struct {
 	Version      string
 	Capabilities Capabilities
 
+	// ProtocolMin is the lowest wire version this connector accepts.
+	// Zero, or anything below connproto.ProtocolVersion, accepts every
+	// version the SDK speaks. Set it to 2 when the transport depends on
+	// message ids: at protocol 1 the SDK drops in-reply-to and the
+	// chat-event streams, so the connector would run quietly wrong. A
+	// host that cannot meet the floor refuses the spawn at the
+	// handshake, before connect.
+	ProtocolMin int
+
 	// NewTransport builds the transport when the host asks to
 	// connect (`run` verb). Required.
 	NewTransport func(s Session) (Transport, error)
@@ -378,6 +410,15 @@ type Config struct {
 	// Configured backs `terva bot`'s configured probe; nil means
 	// always configured (e.g. config via env vars).
 	Configured func() bool
+
+	// Verbs adds operator verbs to Main, such as an end-to-end-encrypted
+	// connector's device verification. Main dispatches them like the
+	// built-in verbs and lists them in usage, but `terva bot` never
+	// invokes them: an operator runs them on the binary. Main reads the
+	// verb from the last argv element, so a verb takes no positional
+	// arguments. A name that is empty or collides with a built-in verb,
+	// or a nil func, makes Main panic.
+	Verbs map[string]func() error
 
 	// Secrets, when set, declares this connector's sealed state in the
 	// handshake, so the host can re-seal it during a key rotation without
@@ -406,61 +447,109 @@ func (c Config) secretsDecl() *connproto.SecretsDecl {
 }
 
 // Main dispatches the lifecycle verb (the LAST argv element — terva
-// appends it after any manifest args) and exits. Call it from your
-// connector's func main.
+// appends it after any manifest args). A failure exits non-zero, and a
+// success returns, so the connector's deferred calls still run. Call
+// it from your connector's func main.
 func Main(cfg Config) {
-	if len(os.Args) < 2 {
-		usage(cfg.Name)
-		os.Exit(2)
-	}
-	switch verb := os.Args[len(os.Args)-1]; verb {
-	case "run":
-		err := Serve(cfg, os.Stdin, os.Stdout, os.Stderr)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, cfg.Name+":", err)
-			os.Exit(1)
-		}
-	case "setup":
-		if cfg.Setup == nil {
-			fmt.Println("nothing to set up for", cfg.Name)
-			return
-		}
-		if err := cfg.Setup(); err != nil {
-			fmt.Fprintln(os.Stderr, cfg.Name+": setup:", err)
-			os.Exit(1)
-		}
-	case "status":
-		if cfg.Status == nil {
-			fmt.Println(cfg.Name, "reports no status")
-			return
-		}
-		text, err := cfg.Status()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, cfg.Name+": status:", err)
-			os.Exit(1)
-		}
-		fmt.Println(text)
-	case "reset":
-		if cfg.Reset == nil {
-			fmt.Println("nothing to reset for", cfg.Name)
-			return
-		}
-		if err := cfg.Reset(); err != nil {
-			fmt.Fprintln(os.Stderr, cfg.Name+": reset:", err)
-			os.Exit(1)
-		}
-	case "configured":
-		if cfg.Configured != nil && !cfg.Configured() {
-			os.Exit(1)
-		}
-	default:
-		usage(cfg.Name)
-		os.Exit(2)
+	if code := dispatch(cfg, os.Args, os.Stdin, os.Stdout, os.Stderr); code != 0 {
+		os.Exit(code)
 	}
 }
 
-func usage(name string) {
-	fmt.Fprintf(os.Stderr, "%s — terva chat connector\nusage: %s {run|setup|status|reset|configured}\n(`run` speaks the terva connector protocol on stdio; the rest are for `terva bot`)\n", name, name)
+// builtinVerbs are the verbs `terva bot` drives, in usage order.
+var builtinVerbs = []string{"run", "setup", "status", "reset", "configured"}
+
+// dispatch is Main without the process exit, so tests can drive it:
+// it runs the verb in args and returns the exit code.
+func dispatch(cfg Config, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	custom := checkVerbs(cfg.Verbs)
+	if len(args) < 2 {
+		usage(stderr, cfg.Name, custom)
+		return 2
+	}
+	switch verb := args[len(args)-1]; verb {
+	case "run":
+		err := Serve(cfg, stdin, stdout, stderr)
+		if err != nil {
+			fmt.Fprintln(stderr, cfg.Name+":", err)
+			return 1
+		}
+	case "setup":
+		if cfg.Setup == nil {
+			fmt.Fprintln(stdout, "nothing to set up for", cfg.Name)
+			return 0
+		}
+		if err := cfg.Setup(); err != nil {
+			fmt.Fprintln(stderr, cfg.Name+": setup:", err)
+			return 1
+		}
+	case "status":
+		if cfg.Status == nil {
+			fmt.Fprintln(stdout, cfg.Name, "reports no status")
+			return 0
+		}
+		text, err := cfg.Status()
+		if err != nil {
+			fmt.Fprintln(stderr, cfg.Name+": status:", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, text)
+	case "reset":
+		if cfg.Reset == nil {
+			fmt.Fprintln(stdout, "nothing to reset for", cfg.Name)
+			return 0
+		}
+		if err := cfg.Reset(); err != nil {
+			fmt.Fprintln(stderr, cfg.Name+": reset:", err)
+			return 1
+		}
+	case "configured":
+		if cfg.Configured != nil && !cfg.Configured() {
+			return 1
+		}
+	default:
+		fn, ok := cfg.Verbs[verb]
+		if !ok {
+			usage(stderr, cfg.Name, custom)
+			return 2
+		}
+		if err := fn(); err != nil {
+			fmt.Fprintln(stderr, cfg.Name+": "+verb+":", err)
+			return 1
+		}
+	}
+	return 0
+}
+
+// checkVerbs returns the custom verb names, sorted, and panics on a
+// name the dispatcher could never reach. It runs on every invocation,
+// so a bad Config fails the first time anyone runs the binary, not
+// only when someone types the broken verb.
+func checkVerbs(verbs map[string]func() error) []string {
+	names := make([]string, 0, len(verbs))
+	for name, fn := range verbs {
+		switch {
+		case name == "":
+			panic("connsdk: Config.Verbs has an empty verb name")
+		case slices.Contains(builtinVerbs, name):
+			panic(fmt.Sprintf("connsdk: Config.Verbs[%q] collides with the built-in verb", name))
+		case fn == nil:
+			panic(fmt.Sprintf("connsdk: Config.Verbs[%q] is nil", name))
+		}
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+func usage(w io.Writer, name string, custom []string) {
+	verbs := strings.Join(append(slices.Clone(builtinVerbs), custom...), "|")
+	note := "the rest are for `terva bot`"
+	if len(custom) > 0 {
+		note = "setup, status, reset and configured are for `terva bot`, which never runs " +
+			strings.Join(custom, ", ") + "; an operator runs those by hand"
+	}
+	fmt.Fprintf(w, "%s — terva chat connector\nusage: %s {%s}\n(`run` speaks the terva connector protocol on stdio; %s)\n", name, name, verbs, note)
 }
 
 // Serve runs the protocol loop: hello/hello_ack, then frames until
@@ -472,12 +561,17 @@ func usage(name string) {
 // carrier differs; there is exactly one implementation of the
 // connector protocol's author side.
 //
-// Config's lifecycle verbs (Setup/Status/Reset/Configured) are Main's
-// business; Serve only uses Name, Version, Capabilities, and
-// NewTransport.
+// Config's lifecycle verbs (Setup/Status/Reset/Configured) and Verbs
+// are Main's business; Serve only uses Name, Version, Capabilities,
+// ProtocolMin, Secrets, and NewTransport.
 func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 	if cfg.NewTransport == nil {
 		return fmt.Errorf("connsdk: Config.NewTransport is required")
+	}
+	floor := max(cfg.ProtocolMin, connproto.ProtocolVersion)
+	if floor > connproto.ProtocolMax {
+		// A hello with min above max offers a range no host accepts.
+		return fmt.Errorf("connsdk: Config.ProtocolMin %d is above the highest protocol this SDK speaks (%d)", cfg.ProtocolMin, connproto.ProtocolMax)
 	}
 	w := &frameWriter{w: out}
 
@@ -485,7 +579,7 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 		Type:        "hello",
 		Name:        cfg.Name,
 		Version:     cfg.Version,
-		ProtocolMin: connproto.ProtocolVersion,
+		ProtocolMin: floor,
 		ProtocolMax: connproto.ProtocolMax,
 		Capabilities: connproto.Capabilities{
 			MaxTextLen:        cfg.Capabilities.MaxTextLen,
@@ -514,8 +608,10 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 	if err := json.Unmarshal(ackLine, &ack); err != nil || ack.Type != "hello_ack" {
 		return fmt.Errorf("expected hello_ack, got %q", ackLine)
 	}
-	if ack.Protocol < connproto.ProtocolVersion || ack.Protocol > connproto.ProtocolMax {
-		return fmt.Errorf("host negotiated protocol %d; this SDK speaks %d..%d", ack.Protocol, connproto.ProtocolVersion, connproto.ProtocolMax)
+	if ack.Protocol < floor || ack.Protocol > connproto.ProtocolMax {
+		// A correct host never answers below protocol_min; this catches
+		// one that ignores it, before NewTransport runs.
+		return fmt.Errorf("host negotiated protocol %d; this connector speaks %d..%d", ack.Protocol, floor, connproto.ProtocolMax)
 	}
 	// Renamed hosts send terva_version (and keep terva_version for the
 	// deprecation window); either spelling fills the same field.
@@ -523,7 +619,7 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 	if hostVersion == "" {
 		hostVersion = ack.ZotVersion // rename:keep — frozen wire field
 	}
-	session := Session{DataDir: ack.DataDir, ZotVersion: hostVersion, Protocol: ack.Protocol} // rename:keep — public SDK API
+	session := Session{DataDir: ack.DataDir, ZotVersion: hostVersion, Protocol: ack.Protocol, w: w} // rename:keep — public SDK API
 	if ack.Capabilities != nil {
 		session.HostFeatures = ack.Capabilities.Features
 	}
@@ -638,6 +734,10 @@ func Serve(cfg Config, in io.Reader, out io.Writer, errlog io.Writer) error {
 						frame.ChatKind = m.ChatKind
 						frame.ChatTitle = m.ChatTitle
 						frame.ScopeID = m.ScopeID
+						if slices.Contains(session.HostFeatures, "chat_parents") && slices.Contains(cfg.Capabilities.Features, "chat_parents") {
+							frame.ParentChatID = m.ParentChatID
+							frame.ParentChatKind = m.ParentChatKind
+						}
 						for _, e := range m.Entities {
 							frame.Entities = append(frame.Entities, connproto.Entity{
 								Kind: e.Kind, Offset: e.Offset, Length: e.Length, UserID: e.UserID,

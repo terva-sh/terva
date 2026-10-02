@@ -414,6 +414,96 @@ func TestServeReceiveDeathExitsPromptly(t *testing.T) {
 	}
 }
 
+func TestServeProtocolFloorDefaultsToTheSDKMinimum(t *testing.T) {
+	for _, min := range []int{0, -3} {
+		cfg := testConfig(&stubTransport{sent: make(chan Outgoing, 1)})
+		cfg.ProtocolMin = min
+		h := newHarness(t, cfg)
+		if hello := h.next("hello"); hello["protocol_min"] != float64(connproto.ProtocolVersion) {
+			t.Errorf("ProtocolMin %d: hello protocol_min = %v, want %d", min, hello["protocol_min"], connproto.ProtocolVersion)
+		}
+		h.toSDK.Close()
+		_ = h.serveErr()
+	}
+}
+
+// A connector with a floor of 2 advertises it, and a host that answers
+// with protocol 1 anyway is refused before the transport exists.
+func TestServeProtocolFloorRefusesALowerHost(t *testing.T) {
+	built := false
+	cfg := testConfig(&stubTransport{sent: make(chan Outgoing, 1)})
+	cfg.ProtocolMin = 2
+	cfg.NewTransport = func(Session) (Transport, error) { built = true; return nil, errors.New("unreachable") }
+	h := newHarness(t, cfg)
+	if hello := h.next("hello"); hello["protocol_min"] != float64(2) {
+		t.Errorf("hello protocol_min = %v, want 2", hello["protocol_min"])
+	}
+	h.send(connproto.HelloAckFromHost{Type: "hello_ack", Protocol: 1})
+	err := h.serveErr()
+	if err == nil || !strings.Contains(err.Error(), "protocol 1") || !strings.Contains(err.Error(), "speaks 2..") {
+		t.Errorf("serve err = %v, want a refusal of protocol 1 naming the floor", err)
+	}
+	if built {
+		t.Error("NewTransport ran after the host answered below the floor")
+	}
+}
+
+func TestServeProtocolFloorAboveTheSDKMaximum(t *testing.T) {
+	var out strings.Builder
+	cfg := testConfig(&stubTransport{})
+	cfg.ProtocolMin = connproto.ProtocolMax + 1
+	err := Serve(cfg, strings.NewReader(""), &out, io.Discard)
+	want := fmt.Sprintf("ProtocolMin %d is above the highest protocol this SDK speaks (%d)", connproto.ProtocolMax+1, connproto.ProtocolMax)
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("serve err = %v, want %q", err, want)
+	}
+	if out.Len() != 0 {
+		t.Errorf("Serve wrote %q before refusing the config", out.String())
+	}
+}
+
+// warnStubTransport warns through its Session from the Receive
+// goroutine, the way a transport reports a degraded room mid-sync.
+type warnStubTransport struct {
+	stubTransport
+	session Session
+}
+
+func (s *warnStubTransport) Receive(ctx context.Context, deliver func(Message)) error {
+	s.session.Warn("room !abc undecryptable")
+	deliver(Message{ChatID: "c", UserID: "u", Text: "inbound"})
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestSessionWarnReachesTheHost(t *testing.T) {
+	tr := &warnStubTransport{stubTransport: stubTransport{sent: make(chan Outgoing, 1)}}
+	cfg := testConfig(tr)
+	cfg.NewTransport = func(s Session) (Transport, error) { tr.session = s; return tr, nil }
+	h := newHarness(t, cfg)
+	h.next("hello")
+	h.send(connproto.HelloAckFromHost{Type: "hello_ack", Protocol: 2})
+	h.send(connproto.ConnectFromHost{Type: "connect"})
+	h.next("connected")
+	if w := h.next("warn"); w["message"] != "room !abc undecryptable" {
+		t.Errorf("warn = %v", w)
+	}
+	// The frame after the warn is still well-formed: the warn did not
+	// interleave with the message the same goroutine delivered next.
+	if msg := h.next("message"); msg["text"] != "inbound" {
+		t.Errorf("message after warn = %v", msg)
+	}
+	h.send(connproto.ShutdownFromHost{Type: "shutdown"})
+	_ = h.serveErr()
+}
+
+// A Session a connector's own test builds by hand has no writer; Warn
+// must drop the line rather than panic.
+func TestZeroSessionWarnIsANoOp(t *testing.T) {
+	var s Session
+	s.Warn("nobody is listening")
+}
+
 func TestServeStdinClose(t *testing.T) {
 	tr := &stubTransport{sent: make(chan Outgoing, 1)}
 	h := newHarness(t, testConfig(tr))
@@ -788,4 +878,83 @@ func TestServeChatEvents(t *testing.T) {
 	}
 	h2.send(connproto.ShutdownFromHost{Type: "shutdown"})
 	_ = h2.serveErr()
+}
+
+// dispatchCase runs dispatch with argv ending in verb and returns the
+// exit code and both streams.
+func dispatchCase(t *testing.T, cfg Config, verb string) (int, string, string) {
+	t.Helper()
+	var stdout, stderr strings.Builder
+	code := dispatch(cfg, []string{"conn", "--manifest-arg", verb}, strings.NewReader(""), &stdout, &stderr)
+	return code, stdout.String(), stderr.String()
+}
+
+func TestDispatchRunsACustomVerb(t *testing.T) {
+	ran := false
+	cfg := Config{Name: "mx", Verbs: map[string]func() error{
+		"verify": func() error { ran = true; return nil },
+		"broken": func() error { return errors.New("device not cross-signed") },
+	}}
+
+	if code, _, stderr := dispatchCase(t, cfg, "verify"); code != 0 || !ran || stderr != "" {
+		t.Errorf("verify: code %d, ran %v, stderr %q", code, ran, stderr)
+	}
+	code, _, stderr := dispatchCase(t, cfg, "broken")
+	if code != 1 || stderr != "mx: broken: device not cross-signed\n" {
+		t.Errorf("broken: code %d, stderr %q", code, stderr)
+	}
+}
+
+func TestDispatchUsageListsCustomVerbs(t *testing.T) {
+	noop := func() error { return nil }
+	cfg := Config{Name: "mx", Verbs: map[string]func() error{"verify": noop, "recover": noop}}
+	code, _, stderr := dispatchCase(t, cfg, "nonsense")
+	if code != 2 {
+		t.Errorf("unknown verb: code %d, want 2", code)
+	}
+	if !strings.Contains(stderr, "{run|setup|status|reset|configured|recover|verify}") {
+		t.Errorf("usage does not list the custom verbs sorted after the built-ins:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "`terva bot`, which never runs recover, verify; an operator runs those by hand") {
+		t.Errorf("usage does not say terva bot never runs the custom verbs:\n%s", stderr)
+	}
+}
+
+// With no custom verbs the usage text is the one Main always printed.
+func TestDispatchUsageWithoutCustomVerbsIsUnchanged(t *testing.T) {
+	code, _, stderr := dispatchCase(t, Config{Name: "mx"}, "nonsense")
+	want := "mx — terva chat connector\nusage: mx {run|setup|status|reset|configured}\n(`run` speaks the terva connector protocol on stdio; the rest are for `terva bot`)\n"
+	if code != 2 || stderr != want {
+		t.Errorf("code %d, usage %q, want %q", code, stderr, want)
+	}
+}
+
+func TestDispatchBuiltInStillWins(t *testing.T) {
+	code, stdout, _ := dispatchCase(t, Config{Name: "mx", Status: func() (string, error) { return "ok", nil }}, "status")
+	if code != 0 || stdout != "ok\n" {
+		t.Errorf("status: code %d, stdout %q", code, stdout)
+	}
+	if code, _, _ := dispatchCase(t, Config{Name: "mx", Configured: func() bool { return false }}, "configured"); code != 1 {
+		t.Errorf("configured=false: code %d, want 1", code)
+	}
+}
+
+func TestDispatchPanicsOnAnUnreachableVerb(t *testing.T) {
+	noop := func() error { return nil }
+	for name, verbs := range map[string]map[string]func() error{
+		"collides": {"status": noop},
+		"empty":    {"": noop},
+		"nil func": {"verify": nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Error("dispatch did not panic")
+				}
+			}()
+			// The verb typed is a built-in one: the panic must not wait
+			// for someone to type the broken verb.
+			dispatchCase(t, Config{Name: "mx", Verbs: verbs}, "configured")
+		})
+	}
 }

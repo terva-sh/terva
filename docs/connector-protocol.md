@@ -70,6 +70,7 @@ The full feature-string vocabulary (declare only what you implement):
 | `asks` | interactive questions with attributed answers | ask block |
 | `speaker:full` / `speaker:name_only` | alternate outbound identities | speaker block |
 | `threads_out` | opening work-stream threads | threads block |
+| `chat_parents` | parent context on inbound thread messages | threads block |
 | `typing_stop` | withdrawing the typing indicator on demand | the `typing` rule |
 | `attachment_kinds` | labeled beyond-image attachments | attachment rules |
 
@@ -96,7 +97,10 @@ connector-SDK deprecation window; the Go SDK already handles this for you.
 
 Versioning is negotiated, not announce-only: hello carries
 `protocol_min`/`protocol_max`, and terva refuses the spawn with a clear
-error when its own version falls outside the range. terva kills a
+error when its own version falls outside the range. A connector that
+depends on protocol-2 message ids sends `protocol_min: 2`, so an older
+host refuses it here rather than at `connect`. The Go SDK sets this from
+`Config.ProtocolMin`. terva kills a
 spawned connector that sends no hello within 3 seconds; a connector
 carried inside an extension gets 5, measured after the extension
 registers the connector role (itself allowed 3).
@@ -137,7 +141,8 @@ Use `warn` for what an operator must see live (degraded auth, a
 reconnecting gateway, a dropped attachment) and your own stderr, which
 lands in `$TERVA_HOME/logs/connector-<name>.log`, for everything else.
 Nothing you emit on either channel is visible to the humans in the
-chat; to reach them, send a message.
+chat; to reach them, send a message. In the Go SDK, a transport sends a
+`warn` with `Session.Warn`.
 
 Interactive asks (protocol 2, feature `"asks"`) need two things. Declare the
 feature in your hello `capabilities.features` AND implement the rendering, and
@@ -348,6 +353,37 @@ deletes, and reactions touching those messages must carry that
 same thread `chat_id`, per the correlation rule above.
 `from_message_id` anchors the thread where your service supports it
 and may be absent. Flat services simply don't declare the feature.
+
+At protocol 2, connectors can declare `chat_parents` and send the following fields when the host also declares it:
+
+```json
+{"type":"message","id":"m10","chat_id":"opaque-thread","chat_kind":"thread",
+ "parent_chat_id":"parent-room","parent_chat_kind":"group","user_id":"u1","text":"hello"}
+```
+
+Both parent fields must be present and nonempty. The parent kind must be `dm`, `group`, or `channel`.
+The parent ID must differ from the thread ID. The connector classifies the containing chat from service metadata.
+The host never parses a thread ID to find its parent. `scope_id` remains a revocation grouping key and grants no access.
+
+A DM thread admits only the paired owner. A group or channel thread inherits its parent's current mention/all policy.
+The host saves the parent association and any explicit thread restriction, without copying the parent's grant.
+The admission store uses a version-2 envelope and still reads both legacy map formats.
+Older hosts reject that envelope and forget approvals, rather than interpreting thread restrictions as grants.
+Owner-only `/approve` sets a mention restriction; `/approve all` removes that restriction. Neither command widens the parent's policy.
+Owner-only `/revoke` mutes the thread until reapproval and leaves the parent unchanged. These restrictions survive restart.
+Parent revocation stops its threads, cancels active turns, and discards queued prompts and held content.
+Container removal revokes group/channel parent access and preserves each thread's own restrictions. Reapproving the parent restores inheritance.
+DM-parent threads in the removed scope are muted individually. Threads outside that scope stay unchanged.
+If persistence fails, revocation still stops runtime access. The host warns that a restart may restore access.
+Mention-mode changes affect later and queued prompts. An active reply completes unless access is revoked.
+
+Missing metadata retains explicit thread approval for legacy connectors. Invalid or unnegotiated metadata causes the host to drop the message.
+After a connector upgrade reports parent context, an existing thread approval becomes a restriction and cannot bypass parent approval.
+After the host saves a parent association, missing or conflicting metadata also causes a drop, including after restart.
+Nonowners can create at most 256 automatic associations per parent, subject to a 4,096-association budget.
+Standalone records consume no association slots. Owner messages and explicit owner-created records can still bind at capacity.
+The host never evicts associations or restrictions to admit a new thread.
+Thread IDs still identify conversations, outbound targets, and event correlation. Owner questions still target the canonical owner DM.
 
 Rules:
 

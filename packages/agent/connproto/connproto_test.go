@@ -72,6 +72,12 @@ var goldenFrames = []goldenFrame{
 		`{"type":"message","id":"m10","ts":1751469000123,"chat_id":"c1","chat_kind":"group","chat_title":"ops","user_id":"u1","username":"drew","reply_to":"m9","text":"hi"}`,
 	},
 	{
+		"message with parent chat",
+		MessageFromConn{Type: "message", ID: "m10", ChatID: "opaque-thread", ChatKind: "thread",
+			ParentChatID: "c1", ParentChatKind: "group", UserID: "u1", Text: "hi"},
+		`{"type":"message","id":"m10","chat_id":"opaque-thread","chat_kind":"thread","parent_chat_id":"c1","parent_chat_kind":"group","user_id":"u1","text":"hi"}`,
+	},
+	{
 		// Stage B: minimum-viable markup; bot_mention drives group
 		// mention-gating.
 		"message with entities",

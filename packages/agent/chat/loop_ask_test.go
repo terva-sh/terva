@@ -395,6 +395,15 @@ func TestLoopAdmissionAsk(t *testing.T) {
 	if _, ok := adm.Mode("g9"); ok {
 		t.Error("removal did not revoke")
 	}
+	l.onMembership(context.Background(), mb)
+	select {
+	case <-conn.asked:
+	default:
+		t.Fatal("re-invite did not ask again")
+	}
+	if mode, ok := adm.Mode("g9"); !ok || mode != ModeAll {
+		t.Errorf("re-invite admission = %q,%v, want all", mode, ok)
+	}
 }
 
 // TestLoopAdmissionAskIgnored: "ignore" (or a timeout) leaves the

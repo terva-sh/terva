@@ -141,6 +141,20 @@ explicit intent.
 | `reset` | inherits your tty | forget credentials |
 | `configured` | none | exit 0 = configured, anything else = not |
 
+A connector can add operator verbs of its own, such as a device check
+for an end-to-end-encrypted service. `terva bot` never invokes them. An
+operator runs them on the connector binary directly. In the Go SDK, set
+`Config.Verbs`:
+
+```go
+Verbs: map[string]func() error{"verify": verifyDevice},
+```
+
+`Main` dispatches these like the built-in verbs and lists them in its
+usage line. The verb is the last argument, so a verb takes no positional
+arguments. A name that is empty or collides with a built-in verb, or a
+nil func, makes `Main` panic on every invocation.
+
 Connector stderr during `run` lands in
 `$TERVA_HOME/logs/connector-<name>.log`. Keep credentials in your own
 state dir. The Go SDK's `connsdk.StateDir(name)` returns
@@ -179,6 +193,17 @@ func main() {
 `Transport` is six methods (`Connect`, `Receive`, `Send`,
 `SendImage`, `SendFile`, `Typing`); the SDK handles framing,
 handshake, verb dispatch, and result correlation.
+
+Keep the `Session` that `NewTransport` receives. `s.Warn("...")` sends
+an operator-facing line that terva shows live, such as a dropped
+attachment or a room the connector cannot decrypt. Your stderr only
+reaches the connector's log file. `Warn` is safe from any goroutine.
+
+By default the SDK accepts protocol 1, and at protocol 1 it drops
+message ids, true in-reply-to, and the chat-event streams. A transport
+whose edits, reactions, or asks depend on message ids sets
+`ProtocolMin: 2` in `Config`. An older terva then refuses the connector
+at the handshake with an upgrade message, instead of running it wrong.
 `cmd/terva-telegram-connector` is the worked example, the in-tree
 telegram transport wrapped for the external path (it registers as
 `telegram-ext` and keeps its token in its own `SealedState`, so it can
@@ -289,6 +314,9 @@ owner, approve that chat:
 - On connectors that report admission (discord), being added to a
   server asks you directly in your DM: approve, approve-all, or
   ignore. Ignoring or letting it expire keeps the chat silent.
+  Removal revokes approval and cancels any pending admission question.
+  A re-invite asks again without a restart. Removing the bot from a container
+  resets its chats' questions and held messages; other containers keep their state.
 - Group members get **reach, not authority**: their messages start
   turns in approved chats, but `/approve`, `/revoke`, `/stop`, and
   `/status` answer only to you, and tool-approval questions go to your
@@ -298,6 +326,22 @@ owner, approve that chat:
   its persisted session; group contexts are held live for the ~8 most
   recently active chats and dropped least-recently-used beyond that.
   `/status` and `/stop` act on the chat you say them in.
+
+### Threads
+
+Connectors that negotiate `chat_parents` report each thread's containing chat.
+Threads in your DM accept only your messages. Threads in an approved group follow that group's current mention/all mode.
+Each thread keeps its own conversation and reply target. Permission questions still go to your main DM.
+
+Say `/revoke` in a thread to mute only that thread. The mute survives restart.
+Say `/approve` to restore mention-only replies, or `/approve all` to follow the parent's mode without an extra mention restriction.
+A thread cannot widen its parent's policy. Revoking the parent stops all its threads.
+Reapproving a group or channel parent after container removal restores inheritance and preserves each thread's own restrictions.
+Container removal mutes only the DM threads in that scope. Use `/approve all` in each affected thread to restore it.
+If the host cannot save a revocation, it still stops runtime access and warns that a restart may restore access.
+Connectors without parent metadata retain separate thread approvals.
+When an upgraded connector reports parent metadata, existing thread approvals also require the parent's permission.
+Approve the parent chat to restore inherited access.
 
 ### Tools, extensions, and MCP
 

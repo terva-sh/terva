@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"terva.sh/terva/packages/i18n"
 )
 
 // Pairing is the first-user-claims policy shared by the daemon loop
@@ -41,6 +43,8 @@ const (
 // between them again.
 //
 // Gate v2 (connproto v2 stage B) is kind-aware:
+//   - Threads with parent context inherit the current parent policy, subject
+//     to durable thread restrictions. DM parents still require the owner.
 //   - DMs: exactly the v1 policy — first /start claims, the owner
 //     converses, everyone else is refused. Plus the owner can
 //     `/approve <chat-id> [all]` / `/revoke <chat-id>` from the DM.
@@ -77,14 +81,42 @@ type gate struct {
 	// and sets neither.
 	held       held
 	onAdmitted func(ctx context.Context, msgs []Message)
+	onRevoked  func(chatID, scope string)
 }
 
 // route decides what to do with m, sending pairing/help replies
 // itself through conn.
 func (g *gate) route(ctx context.Context, conn Connector, m Message) action {
 	g.mu.Lock()
-	paired := g.pairing.AllowedUserID
+	paired, adm := g.pairing.AllowedUserID, g.admissions
 	g.mu.Unlock()
+	if m.ParentChatID != "" || m.ParentChatKind != "" {
+		if paired == "" {
+			return actHandled
+		}
+		validKind := m.ParentChatKind == "dm" || m.ParentChatKind == "group" || m.ParentChatKind == "channel"
+		if m.ParentChatKind == "dm" && m.UserID != paired {
+			return actHandled
+		}
+		if m.ChatID == "" || m.ChatKind != "thread" || m.ParentChatID == "" || m.ParentChatID == m.ChatID || !validKind {
+			return actHandled
+		}
+		valid, err := adm.bind(m, paired)
+		if !valid {
+			return actHandled
+		}
+		if err != nil {
+			if _, _, revoke := splitCommand(g.stripLeadingMention(m), "/revoke"); revoke && m.UserID == paired {
+				g.revoke(ctx, conn, m, m.ChatID)
+			}
+			return actHandled
+		}
+	} else if adm.inherited(m.ChatID) {
+		return actHandled
+	}
+	if m.ParentChatKind == "dm" && m.UserID != paired {
+		return actHandled
+	}
 
 	if isDM(m.ChatKind) {
 		return g.routeDM(ctx, conn, m, paired)
@@ -202,7 +234,7 @@ func (g *gate) routeGroup(ctx context.Context, conn Connector, m Message, paired
 	g.mu.Lock()
 	adm := g.admissions
 	g.mu.Unlock()
-	mode, approved := adm.Mode(m.ChatID)
+	mode, approved := adm.effective(m, paired)
 	if !approved {
 		// Silent-by-default: the security boundary for group reach. Held,
 		// not lost — an approval answers what the chat asked (held.go).
@@ -265,6 +297,11 @@ func (g *gate) approve(ctx context.Context, conn Connector, m Message, chatID, m
 		return
 	}
 	n := g.release(ctx, chatID, mode)
+	if adm.inherited(chatID) {
+		_ = conn.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID,
+			Text: i18n.T("saved thread policy: %s%s. The parent policy still applies. /revoke silences this thread.", mode, heldClause(n))})
+		return
+	}
 	how := "when mentioned"
 	if mode == ModeAll {
 		how = "on every message"
@@ -273,14 +310,19 @@ func (g *gate) approve(ctx context.Context, conn Connector, m Message, chatID, m
 		Text: fmt.Sprintf("approved — i'll respond in this chat %s%s. /revoke reverses.", how, heldClause(n))})
 }
 
-// release hands the chat's held messages that fit mode to onAdmitted and
-// reports how many. Mention mode replays only the mentions: approving
-// "when mentioned" must not deliver a burst the owner never consented
-// to. What does not fit is dropped with the rest — held content has one
-// chance, at the moment of approval.
+// release filters held messages through the current policy. It also releases
+// held children when their parent is approved. Each buffer has one replay.
 func (g *gate) release(ctx context.Context, chatID, mode string) int {
 	g.mu.Lock()
 	msgs := g.held.take(chatID)
+	for id, c := range g.held.chats {
+		for _, hm := range c.msgs {
+			if hm.m.ParentChatID == chatID {
+				msgs = append(msgs, g.held.take(id)...)
+				break
+			}
+		}
+	}
 	fn := g.onAdmitted
 	g.mu.Unlock()
 	if fn == nil {
@@ -288,7 +330,7 @@ func (g *gate) release(ctx context.Context, chatID, mode string) int {
 	}
 	fit := msgs[:0]
 	for _, m := range msgs {
-		if mode == ModeAll || g.mentionsBot(m) {
+		if g.allowedPrompt(m) {
 			fit = append(fit, m)
 		}
 	}
@@ -303,7 +345,55 @@ func (g *gate) release(ctx context.Context, chatID, mode string) int {
 func (g *gate) forget(chatID string) {
 	g.mu.Lock()
 	g.held.drop(chatID)
+	for id, c := range g.held.chats {
+		for _, hm := range c.msgs {
+			if hm.m.ParentChatID == chatID {
+				g.held.drop(id)
+				break
+			}
+		}
+	}
 	g.mu.Unlock()
+}
+
+func (g *gate) forgetScope(scope string) {
+	if scope == "" {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for id, c := range g.held.chats {
+		for _, hm := range c.msgs {
+			if hm.m.ScopeID == scope {
+				g.held.drop(id)
+				break
+			}
+		}
+	}
+}
+
+// allowedPrompt rechecks access for replay and queued inherited prompts.
+func (g *gate) allowedPrompt(m Message) bool {
+	g.mu.Lock()
+	owner, adm := g.pairing.AllowedUserID, g.admissions
+	g.mu.Unlock()
+	if m.ParentChatID != "" {
+		if valid, err := adm.bind(m, owner); !valid || err != nil {
+			return false
+		}
+	}
+	mode, approved := adm.effective(m, owner)
+	return approved && (mode == ModeAll || g.mentionsBot(m))
+}
+
+// allowedReply checks whether an admitted turn may still reply. A new mention
+// restriction applies to later prompts; revocation suppresses active replies.
+func (g *gate) allowedReply(m Message) bool {
+	g.mu.Lock()
+	owner, adm := g.pairing.AllowedUserID, g.admissions
+	g.mu.Unlock()
+	_, approved := adm.effective(m, owner)
+	return approved
 }
 
 // heldEdited / heldDeleted keep the buffer current with the chat. Both
@@ -343,9 +433,13 @@ func (g *gate) revoke(ctx context.Context, conn Connector, m Message, chatID str
 		return
 	}
 	g.forget(chatID)
-	if err := adm.Revoke(chatID); err != nil {
+	err := adm.Revoke(chatID)
+	if g.onRevoked != nil {
+		g.onRevoked(chatID, "")
+	}
+	if err != nil {
 		_ = conn.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID,
-			Text: "couldn't save the revocation: " + err.Error()})
+			Text: i18n.T("revoked for this process. Could not save the revocation, so a restart may restore access: %s", err)})
 		return
 	}
 	_ = conn.Send(ctx, Outgoing{ChatID: m.ChatID, ReplyTo: m.ID,

@@ -112,6 +112,7 @@ type Session struct {
 	mu             sync.Mutex
 	caps           chat.Capabilities
 	protocol       int // negotiated wire version (see connproto)
+	chatParents    bool
 	pending        map[string]chan connproto.ResultFromConn
 	pendingAsks    map[string]*pendingAsk
 	connectPending chan connectOutcome
@@ -170,7 +171,7 @@ type pendingAsk struct {
 // and B); advertised in hello_ack so connectors never emit constructs
 // nobody reads.
 var hostFeatures = []string{"message_ids", "chat_kinds", "asks", "entities", "chat_membership",
-	"edits_in", "deletes_in", "reactions_in", "attachment_kinds"}
+	"edits_in", "deletes_in", "reactions_in", "attachment_kinds", "chat_parents"}
 
 type connectOutcome struct {
 	identity chat.Identity
@@ -269,6 +270,7 @@ func (s *Session) Start(helloTimeout time.Duration) error {
 
 	s.mu.Lock()
 	s.protocol = version
+	s.chatParents = version >= 2 && contains(hello.Capabilities.Features, "chat_parents")
 	s.caps = chat.Capabilities{
 		MaxTextLen:      hello.Capabilities.MaxTextLen,
 		TypingRefresh:   time.Duration(hello.Capabilities.TypingRefreshMS) * time.Millisecond,
@@ -420,20 +422,36 @@ func (s *Session) handleFrame(line []byte) {
 			s.logf("bad message frame: %v", err)
 			return
 		}
+		var fields map[string]json.RawMessage
+		_ = json.Unmarshal(line, &fields)
+		_, hasParentID := fields["parent_chat_id"]
+		_, hasParentKind := fields["parent_chat_kind"]
+		if hasParentID || hasParentKind {
+			s.mu.Lock()
+			negotiated := s.chatParents
+			s.mu.Unlock()
+			validKind := msg.ParentChatKind == "dm" || msg.ParentChatKind == "group" || msg.ParentChatKind == "channel"
+			if !negotiated || msg.ChatID == "" || msg.ChatKind != "thread" || msg.ParentChatID == "" || msg.ParentChatID == msg.ChatID || !validKind {
+				s.logf("invalid or unnegotiated parent context: message dropped")
+				return
+			}
+		}
 		images, files := s.ingestAttachments(msg.ID, msg.Attachments)
 		m := chat.Message{
-			ID:        msg.ID,
-			TS:        msg.TS,
-			ChatID:    msg.ChatID,
-			ChatKind:  msg.ChatKind,
-			ChatTitle: msg.ChatTitle,
-			ScopeID:   msg.ScopeID,
-			UserID:    msg.UserID,
-			Username:  msg.Username,
-			ReplyTo:   msg.ReplyTo,
-			Text:      joinCaptions(msg.Text, msg.Attachments),
-			Images:    images,
-			Files:     files,
+			ID:             msg.ID,
+			TS:             msg.TS,
+			ChatID:         msg.ChatID,
+			ChatKind:       msg.ChatKind,
+			ChatTitle:      msg.ChatTitle,
+			ScopeID:        msg.ScopeID,
+			ParentChatID:   msg.ParentChatID,
+			ParentChatKind: msg.ParentChatKind,
+			UserID:         msg.UserID,
+			Username:       msg.Username,
+			ReplyTo:        msg.ReplyTo,
+			Text:           joinCaptions(msg.Text, msg.Attachments),
+			Images:         images,
+			Files:          files,
 		}
 		for _, e := range msg.Entities {
 			m.Entities = append(m.Entities, chat.Entity{

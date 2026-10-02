@@ -33,12 +33,15 @@ type Message struct {
 	ChatKind  string // "dm" (also ""), "group", "thread", "channel"
 	ChatTitle string // display-only; "" for DMs
 	ScopeID   string // container the chat belongs to (e.g. Discord guild); "" = scopeless
-	UserID    string // sender, for pairing/allowlist
-	Username  string // sender's handle, for pairing acknowledgments
-	ReplyTo   string // id of the message THIS one replies to; "" = none
-	Text      string
-	Entities  []Entity // minimum-viable markup; empty for most messages
-	Images    []provider.ImageBlock
+	// ParentChatID and ParentChatKind identify a thread's containing chat.
+	ParentChatID   string
+	ParentChatKind string
+	UserID         string // sender, for pairing/allowlist
+	Username       string // sender's handle, for pairing acknowledgments
+	ReplyTo        string // id of the message THIS one replies to; "" = none
+	Text           string
+	Entities       []Entity // minimum-viable markup; empty for most messages
+	Images         []provider.ImageBlock
 	// Files are non-image attachments (stage E), already moved into a
 	// host-owned per-message directory the agent can read with its
 	// normal tools. The consumer cleans the directory after the turn.

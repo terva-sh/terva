@@ -93,12 +93,19 @@ type Loop struct {
 	pairedChatID string // chat to nudge into; learned from inbound, seeded from pairing
 	armed        bool   // a real user message re-arms; a nudge disarms
 	// ask bookkeeping (guarded by mu)
-	ownerID        string          // current paired user; tracks runtime claims
-	activeChatID   string          // chat of the running turn ("" between turns)
-	activeChatKind string          // its kind; owner asks avoid non-DM origins
+	ownerID        string // current paired user; tracks runtime claims
+	activeChatID   string // chat of the running turn ("" between turns)
+	activeChatKind string // its kind; owner asks avoid non-DM origins
+	activeParentID string
+	activeScopeID  string
 	activeMsgID    string          // message that started the running turn
 	textAsk        *pendingTextAsk // outstanding text-fallback ask, one at a time
-	admissionAsked map[string]bool // membership asks fired, per chat (never nag)
+	// membershipMu serializes lifecycle changes with admission answer application.
+	// It never spans an Ask or a connector send.
+	membershipMu      sync.Mutex
+	admissionAsked    map[string]*admissionAsk // guarded by membershipMu; retained until removal
+	membershipQueueMu sync.Mutex
+	membershipTail    <-chan struct{} // guarded by membershipQueueMu
 	// gate is the router Run built. The membership ask approves without
 	// going through it, and the edit/delete handlers must keep its held
 	// buffer current — both reach it here.
@@ -130,7 +137,14 @@ type chatAgentState struct {
 // matching message from an allowed responder.
 type pendingTextAsk struct {
 	ask     Ask
+	ctx     context.Context
 	answers chan Answer // buffered(1); first valid answer wins
+}
+
+type admissionAsk struct {
+	scope  string
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 func (l *Loop) info(s string) {
@@ -152,14 +166,10 @@ func (l *Loop) warn(s string) {
 // Run drives the loop. Blocks until ctx cancels or the connector
 // fails permanently.
 func (l *Loop) Run(ctx context.Context) error {
-	// Admission events (stage B): install before Connect so nothing is
-	// missed; each event runs on its own goroutine because the
-	// handler contract forbids blocking the delivery path and the
-	// admission ask blocks by design.
+	// Install before Connect; preparation follows delivery order, but asks
+	// wait independently so removal can invalidate an outstanding answer.
 	if ms, ok := l.Connector.(MembershipHandlerSetter); ok {
-		ms.SetMembershipHandler(func(mb Membership) {
-			go l.onMembership(ctx, mb)
-		})
+		ms.SetMembershipHandler(l.membershipHandler(ctx))
 	}
 	// Stage-D inbound events, with the tabled host defaults: edits
 	// rewrite still-queued prompts in place, deletions withdraw them,
@@ -282,6 +292,7 @@ func (l *Loop) Run(ctx context.Context) error {
 // have already passed the gate's mode filter; from here they are
 // ordinary prompts, attributed and per-chat like any other.
 func (l *Loop) attachGate(g *gate) {
+	g.onRevoked = l.cancelRevoked
 	g.onAdmitted = func(ctx context.Context, msgs []Message) {
 		l.info(fmt.Sprintf("%s: chat %s admitted — answering %d message(s) that were waiting", l.Connector.Name(), msgs[0].ChatID, len(msgs)))
 		for _, m := range msgs {
@@ -404,6 +415,7 @@ func (l *Loop) drainQueue(parent context.Context) {
 			l.busy = false
 			l.activeCancel = nil
 			l.activeChatID, l.activeMsgID, l.activeChatKind = "", "", ""
+			l.activeParentID, l.activeScopeID = "", ""
 			// Count idle from when the agent went quiet, not from the last
 			// inbound — a long turn shouldn't trip the nudge mid-work.
 			l.lastActivity = time.Now()
@@ -416,6 +428,7 @@ func (l *Loop) drainQueue(parent context.Context) {
 		turnCtx, cancel := context.WithCancel(parent)
 		l.activeCancel = cancel
 		l.activeChatID, l.activeMsgID, l.activeChatKind = m.ChatID, m.ID, m.ChatKind
+		l.activeParentID, l.activeScopeID = m.ParentChatID, m.ScopeID
 		// Remember the consumed text so a later edit event that changes
 		// nothing (embed unfurls) isn't narrated as a user edit.
 		l.recordMsgTextLocked(m.ChatID, m.ID, m.Text)
@@ -435,6 +448,15 @@ func (l *Loop) drainQueue(parent context.Context) {
 // with the final assistant text. (The active-turn bookkeeping that
 // approval asks read lives in drainQueue, with no gap after dequeue.)
 func (l *Loop) runTurn(ctx context.Context, m Message) {
+	if g := l.heldGate(); g != nil {
+		g.mu.Lock()
+		adm := g.admissions
+		g.mu.Unlock()
+		if (!isDM(m.ChatKind) || m.ParentChatID != "" || m.ParentChatKind != "" || adm.inherited(m.ChatID)) && !g.allowedPrompt(m) {
+			cleanupFiles(m)
+			return
+		}
+	}
 	stopTyping := l.startTyping(ctx, m.ChatID)
 	defer stopTyping()
 
@@ -534,12 +556,40 @@ func (l *Loop) runTurn(ctx context.Context, m Message) {
 		reply = "(no reply)"
 	}
 	for _, chunk := range ChunkMessage(reply, l.Connector.Capabilities().MaxTextLen) {
+		if g := l.heldGate(); g != nil && !isDM(m.ChatKind) && !g.allowedReply(m) {
+			return
+		}
 		// context.Background(): the reply must go out even when the
 		// turn was cancelled or the parent is shutting down.
 		if err := l.Connector.Send(context.Background(), Outgoing{ChatID: m.ChatID, Text: chunk}); err != nil {
 			l.warn(fmt.Sprintf("%s: send: %v", l.Connector.Name(), err))
 			break
 		}
+	}
+}
+
+// cancelRevoked cancels active work and discards queued content in the chat,
+// its threads, or a removed container. Cleanup happens outside the queue lock.
+func (l *Loop) cancelRevoked(chatID, scope string) {
+	l.mu.Lock()
+	if l.activeChatID == chatID || l.activeParentID == chatID || (scope != "" && l.activeScopeID == scope) {
+		if l.activeCancel != nil {
+			l.activeCancel()
+		}
+	}
+	var dropped []Message
+	kept := l.queue[:0]
+	for _, m := range l.queue {
+		if m.ChatID == chatID || m.ParentChatID == chatID || (scope != "" && m.ScopeID == scope) {
+			dropped = append(dropped, m)
+		} else {
+			kept = append(kept, m)
+		}
+	}
+	l.queue = kept
+	l.mu.Unlock()
+	for _, m := range dropped {
+		cleanupFiles(m)
 	}
 }
 
@@ -752,8 +802,12 @@ func (l *Loop) textFallbackAsk(ctx context.Context, a Ask) (Answer, error) {
 	if timeout <= 0 {
 		timeout = DefaultAskTimeout
 	}
-	p := &pendingTextAsk{ask: a, answers: make(chan Answer, 1)}
+	p := &pendingTextAsk{ask: a, ctx: ctx, answers: make(chan Answer, 1)}
 	l.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		l.mu.Unlock()
+		return Answer{}, err
+	}
 	if l.textAsk != nil {
 		l.mu.Unlock()
 		return Answer{}, fmt.Errorf("another ask is already waiting for an answer")
@@ -926,61 +980,131 @@ func containsUserID(list []string, v string) bool {
 	return false
 }
 
-// onMembership reacts to the bot's own admission changing. Being
-// added to an unapproved chat fires ONE ask in the owner's DM — the
-// trust hook that replaces a command the owner has to know; being
-// removed revokes any standing approval (a chat we were kicked from
-// must not stay approved for a future re-add).
+// scheduleMembership orders answers with membership callbacks. A removal
+// already delivered must invalidate an answer before that answer can replay.
+func (l *Loop) scheduleMembership(ctx context.Context, work func()) <-chan struct{} {
+	l.membershipQueueMu.Lock()
+	previous := l.membershipTail
+	done := make(chan struct{})
+	l.membershipTail = done
+	l.membershipQueueMu.Unlock()
+	go func() {
+		defer close(done)
+		if previous != nil {
+			select {
+			case <-previous:
+			case <-ctx.Done():
+				return
+			}
+		}
+		if ctx.Err() == nil {
+			work()
+		}
+	}()
+	return done
+}
+
+func (l *Loop) enqueueMembership(ctx context.Context, mb Membership) func() {
+	var ask func()
+	done := l.scheduleMembership(ctx, func() { ask = l.prepareMembership(ctx, mb) })
+	return func() {
+		<-done
+		if ask != nil {
+			ask()
+		}
+	}
+}
+
+// membershipHandler keeps disk access and owner answers off the delivery path.
+func (l *Loop) membershipHandler(ctx context.Context) func(Membership) {
+	return func(mb Membership) {
+		run := l.enqueueMembership(ctx, mb)
+		go run()
+	}
+}
+
+// onMembership is the synchronous form used by lifecycle tests.
 func (l *Loop) onMembership(ctx context.Context, mb Membership) {
-	if l.Admissions == nil {
-		return
+	l.enqueueMembership(ctx, mb)()
+}
+
+func (l *Loop) prepareMembership(ctx context.Context, mb Membership) func() {
+	l.membershipMu.Lock()
+	defer l.membershipMu.Unlock()
+	if l.Admissions == nil || ctx.Err() != nil {
+		return nil
 	}
 	switch mb.Change {
 	case "removed":
 		// Revoke the whole container first — a guild kick must drop every channel
 		// approved under it, not just the one this event names — then the named
 		// chat if it survived (scopeless approvals aren't caught by scope).
-		revoked, _ := l.Admissions.RevokeScope(mb.ScopeID)
+		denied, revoked, _ := l.Admissions.revokeScope(mb.ScopeID)
 		if _, approved := l.Admissions.Mode(mb.ChatID); approved {
-			_ = l.Admissions.Revoke(mb.ChatID)
 			revoked++
 		}
+		_ = l.Admissions.revokeRemoved(mb.ChatID)
+		targets := map[string]bool{mb.ChatID: true}
+		for _, chatID := range denied {
+			targets[chatID] = true
+			l.cancelRevoked(chatID, "")
+			l.forgetHeld(chatID)
+		}
+		for chatID, claim := range l.admissionAsked {
+			if targets[chatID] || (mb.ScopeID != "" && claim.scope == mb.ScopeID) {
+				delete(l.admissionAsked, chatID)
+				claim.cancel()
+				l.forgetHeld(chatID)
+			}
+		}
+		// Cancellation frees the text slot now; its old deferred cleanup must
+		// not prevent or erase the next invitation's question.
+		l.mu.Lock()
+		if l.textAsk != nil && l.textAsk.ctx != nil && l.textAsk.ctx.Err() != nil {
+			l.textAsk = nil
+		}
+		l.mu.Unlock()
+		l.cancelRevoked(mb.ChatID, mb.ScopeID)
 		if revoked > 0 {
 			l.info(fmt.Sprintf("%s: removed from %s — revoked %d approval(s)", l.Connector.Name(), describeChat(mb), revoked))
 		}
 		l.forgetHeld(mb.ChatID)
-		return
+		if g := l.heldGate(); g != nil {
+			g.forgetScope(mb.ScopeID)
+		}
+		return nil
 	case "added":
 	default:
-		return
+		return nil
 	}
 	if _, approved := l.Admissions.Mode(mb.ChatID); approved {
-		return
+		return nil
 	}
 
-	// Claiming the chat's one ask is a test-and-set under the lock — two
-	// membership frames for the same chat must not both prompt — but the
-	// claim is only taken once we can actually REACH the owner. A claim
-	// burned without a question going out silences the chat for the whole
-	// run with nobody ever prompted, and re-announcement cannot heal it:
-	// the duplicate hits the suppression, not the ask.
 	l.mu.Lock()
 	owner := l.ownerID
 	ownerDM := l.pairedChatID
+	l.mu.Unlock()
 	if owner == "" || ownerDM == "" {
-		l.mu.Unlock()
-		return
+		return nil
 	}
 	if l.admissionAsked == nil {
-		l.admissionAsked = map[string]bool{}
+		l.admissionAsked = map[string]*admissionAsk{}
 	}
-	asked := l.admissionAsked[mb.ChatID]
-	l.admissionAsked[mb.ChatID] = true
-	l.mu.Unlock()
-	if asked {
+	if l.admissionAsked[mb.ChatID] != nil {
+		return nil
+	}
+	askCtx, cancel := context.WithCancel(ctx)
+	claim := &admissionAsk{scope: mb.ScopeID, ctx: askCtx, cancel: cancel}
+	l.admissionAsked[mb.ChatID] = claim
+	return func() { l.askAdmission(ctx, mb, owner, ownerDM, claim) }
+}
+
+func (l *Loop) askAdmission(ctx context.Context, mb Membership, owner, ownerDM string, claim *admissionAsk) {
+	defer claim.cancel()
+	if claim.ctx.Err() != nil {
 		return
 	}
-
 	by := mb.ByUsername
 	if by == "" {
 		by = mb.ByUserID
@@ -988,7 +1112,7 @@ func (l *Loop) onMembership(ctx context.Context, mb Membership) {
 	if by == "" {
 		by = "someone"
 	}
-	ans, err := l.Ask(ctx, Ask{
+	ans, err := l.Ask(claim.ctx, Ask{
 		ChatID: ownerDM,
 		Text:   fmt.Sprintf("i was added to %s by @%s. approve it?", describeChat(mb), by),
 		Options: []AskOption{
@@ -999,25 +1123,33 @@ func (l *Loop) onMembership(ctx context.Context, mb Membership) {
 		RestrictTo:     []string{owner},
 		TimeoutOutcome: "ignored — the chat stays silent",
 	})
+	var out *Outgoing
+	<-l.scheduleMembership(ctx, func() {
+		out = l.applyAdmissionAnswer(ctx, mb, ownerDM, claim, ans, err)
+	})
+	if out != nil {
+		_ = l.Connector.Send(ctx, *out)
+	}
+}
+
+func (l *Loop) applyAdmissionAnswer(ctx context.Context, mb Membership, ownerDM string, claim *admissionAsk, ans Answer, err error) *Outgoing {
+	l.membershipMu.Lock()
+	defer l.membershipMu.Unlock()
+	// Identity, rather than cancellation alone, protects a new invitation
+	// from connectors that return an old answer or error after removal.
+	if l.admissionAsked[mb.ChatID] != claim || claim.ctx.Err() != nil {
+		return nil
+	}
 	if err != nil {
-		// A question the owner never SAW must not count as asked. The
-		// paired chat id is seeded from the paired USER id until the
-		// owner's first inbound DM (see Run), so on a service where those
-		// differ this ask is addressed to a chat the connector rejects —
-		// release the claim so a re-announcement or a later membership
-		// frame can retry once the id is real. A TIMEOUT is different:
-		// the owner saw the question and let it expire, which is an
-		// answer, so that claim stays burned and we never nag.
+		// An undelivered question can retry, including when the initial
+		// owner DM id was wrong. Expiry counts as an answer; never nag.
 		if !errors.Is(err, ErrAskTimeout) {
-			l.releaseAdmissionAsk(mb.ChatID)
+			delete(l.admissionAsked, mb.ChatID)
 		} else {
-			// An expiry is a "no" the owner gave by not answering, and
-			// the held messages go with it. An UNDELIVERED question is
-			// not: the chat stays promptable, and what it said stays
-			// held (bounded, expiring) for the retry.
+			// Retain held content only for a retryable delivery failure.
 			l.forgetHeld(mb.ChatID)
 		}
-		return // fail closed either way: the chat stays silent; /approve still works
+		return nil // fail closed either way: the chat stays silent; /approve still works
 	}
 	switch ans.Key {
 	case "approve", "approve_all":
@@ -1027,28 +1159,16 @@ func (l *Loop) onMembership(ctx context.Context, mb Membership) {
 			mode, how = ModeAll, "on every message"
 		}
 		if err := l.Admissions.ApproveScoped(mb.ChatID, mode, mb.ScopeID); err != nil {
-			_ = l.Connector.Send(ctx, Outgoing{ChatID: ownerDM,
-				Text: "couldn't save the approval: " + err.Error()})
-			return
+			return &Outgoing{ChatID: ownerDM, Text: "couldn't save the approval: " + err.Error()}
 		}
 		n := l.releaseHeld(ctx, mb.ChatID, mode)
-		_ = l.Connector.Send(ctx, Outgoing{ChatID: ownerDM,
-			Text: fmt.Sprintf("approved — i'll respond in %s %s%s.", describeChat(mb), how, heldClause(n))})
+		return &Outgoing{ChatID: ownerDM,
+			Text: fmt.Sprintf("approved — i'll respond in %s %s%s.", describeChat(mb), how, heldClause(n))}
 	default:
-		// Ignored: stays silent, the dedupe map keeps us from asking
-		// again this run, and what the chat said is dropped — it was
-		// only ever held for a yes. /approve in the chat still works.
+		// A later manual approval must not replay content the owner declined.
 		l.forgetHeld(mb.ChatID)
 	}
-}
-
-// releaseAdmissionAsk gives back a chat's ask claim after a question
-// that never reached the owner, so the next membership frame for that
-// chat can try again.
-func (l *Loop) releaseAdmissionAsk(chatID string) {
-	l.mu.Lock()
-	delete(l.admissionAsked, chatID)
-	l.mu.Unlock()
+	return nil
 }
 
 // describeChat renders a membership event's chat for humans.
