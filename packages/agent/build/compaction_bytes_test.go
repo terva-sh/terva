@@ -149,6 +149,7 @@ func TestTervasCompactionTextIsUnchanged(t *testing.T) {
 	got = strings.ReplaceAll(got, home, "<TERVA_HOME>")
 	got = strings.ReplaceAll(got, cwd, "<CWD>")
 	got = normalizeGoldenPaths(got)
+	got = dropTaggedGroups(t, got)
 	got = regexp.MustCompile(`Current date: \d{4}-\d{2}-\d{2}`).ReplaceAllString(got, "Current date: <DATE>")
 	golden := filepath.Join("testdata", "compaction_requests.golden")
 	if *updateCompactionGolden {

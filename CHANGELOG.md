@@ -11,6 +11,25 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.139.5](https://github.com/terva-sh/terva/releases/tag/v0.139.5) — 2026-09-30
+
+### Features
+
+- provider: support GPT-6.1 Sol
+- talkoot: member marks and the team mark
+- talkoot: members have faces
+- talkoot: presence, failed turns, and room signals
+- talkoot: templates, a preview, and create from a template
+- talkoot: worker members reach their team through an MCP bridge
+- talkoot: worker members run on a worker of their own
+- web: the Talkoot view, where a person watches and steers a team
+
+### Fixes
+
+- nextstep: a suggestion reads the conversation's cache
+- rpc: run queued prompts in the order they arrived
+- talkoot: the router counts a turn a person starts in a native session
+
 ## [v0.139.3](https://github.com/terva-sh/terva/releases/tag/v0.139.3) — 2026-09-26
 
 ### Features

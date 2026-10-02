@@ -88,6 +88,35 @@ func TestCodeExecutionReadArgsMapPositionally(t *testing.T) {
 	}
 }
 
+// A loop over glob's string hands read one character at a time. The read
+// error then names that cause, as the candidate dry run of 2026-10-01 needed.
+// A failed read of a real path keeps the plain error.
+func TestCodeExecutionOneCharacterReadNamesTheStringLoop(t *testing.T) {
+	failRead := func(_ context.Context, tool string, _ json.RawMessage) (core.ToolResult, error) {
+		if tool == "read" {
+			return core.ToolResult{Content: []provider.Content{provider.TextBlock{Text: "read: . is a directory"}}, IsError: true}, nil
+		}
+		return core.ToolResult{Content: []provider.Content{provider.TextBlock{Text: "./a.go\n"}}}, nil
+	}
+	run := func(script string) string {
+		t.Helper()
+		tool := &CodeExecutionTool{HostCall: failRead}
+		args, _ := json.Marshal(map[string]string{"script": script})
+		res, err := tool.Execute(context.Background(), args, nil)
+		if err != nil {
+			t.Fatalf("execute: %v", err)
+		}
+		return ceResultText(res)
+	}
+	const hint = "glob and grep return one string"
+	if got := run(`for (const f of glob("*.go")) { read(f) }`); !strings.Contains(got, hint) || !strings.Contains(got, "is a directory") {
+		t.Errorf("a one-character read must name the string loop and keep the read error: %q", got)
+	}
+	if got := run(`read("./a.go")`); strings.Contains(got, hint) {
+		t.Errorf("a failed read of a real path keeps the plain error: %q", got)
+	}
+}
+
 func TestCodeExecutionHostErrorIsCatchable(t *testing.T) {
 	host := &fakeHost{fail: true}
 	res := execTool(t, host, `{"script":"try { read(\"x\") } catch (e) { print(\"blocked:\", String(e).includes(\"denied by test\")) }"}`)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"terva.sh/terva/packages/agent/jsengine"
 	"terva.sh/terva/packages/core"
@@ -51,11 +52,11 @@ type codeExecArgs struct {
 	Timeout int    `json:"timeout,omitempty"`
 }
 
-const codeExecSchema = `{"type":"object","properties":{"script":{"type":"string","description":"A short JavaScript program. You can call read(path[,offset,limit]), grep(pattern[,path]), and glob(pattern[,path]). Each function returns the text output of the tool as a string. Use print(...) to return a result. The program runs inside a function body. Therefore return works as an early exit.\n\nread gives at most 2000 lines and 50 KiB. A larger read throws. It does not give a part of the file. Pass offset and limit to read a large file in parts."},"timeout":{"type":"integer","description":"The maximum run time in seconds. The tool then stops the program. The default is 30 seconds, and the maximum is 120 seconds."}},"required":["script"]}`
+const codeExecSchema = `{"type":"object","properties":{"script":{"type":"string","description":"A short JavaScript program. You can call read(path[,offset,limit]), grep(pattern[,path]), and glob(pattern[,path]). Each function returns the text output of the tool as a string. Use print(...) to return a result. The program runs inside a function body. Therefore return works as an early exit.\n\nglob and grep give one result per line in one string. Use .trim().split('\\n') to get an array before a loop. With no match, glob gives the line (no files matched).\n\nread gives at most 2000 lines and 50 KiB. A larger read throws. It does not give a part of the file. Pass offset and limit to read a large file in parts."},"timeout":{"type":"integer","description":"The maximum run time in seconds. The tool then stops the program. The default is 30 seconds, and the maximum is 120 seconds."}},"required":["script"]}`
 
 func (t *CodeExecutionTool) Name() string { return "code_execution" }
 func (t *CodeExecutionTool) Description() string {
-	return i18n.D("tool.code_execution.description", "Run a short JavaScript program. The program can call read(path[,offset,limit]), grep(pattern[,path]), and glob(pattern[,path]) as functions. Use print(...) to return a result. The program runs inside a function body. Therefore return works as an early exit.\n\nThe tool returns the printed output only. The results of the calls in the program do not enter your context. Therefore use this tool for a read-only task with many steps, when a large output gives a small answer. Examples are to count the matches, to extract one field, or to join the results from several files.\n\nThe program has no access to the file system, the network, require, or other globals. Each read, grep, and glob call obeys the usual permission gate. The program can make 50 calls to the host and can print 32KB. The default time limit is 30 seconds.\n\nOne read gives at most 2000 lines and 50 KiB. A larger read throws. The error gives the offset to continue from. The tool does not give a part of the file, because a program cannot see a cut result. Pass offset and limit to read a large file in parts. To find one thing in a large file, use grep.")
+	return i18n.D("tool.code_execution.description", "Run a short JavaScript program. The program can call read(path[,offset,limit]), grep(pattern[,path]), and glob(pattern[,path]) as functions. Each call returns one string. Use print(...) to return a result. The program runs inside a function body. Therefore return works as an early exit.\n\nglob and grep give one result per line. Use .trim().split('\\n') to get an array before a loop. A loop over the string itself visits single characters.\n\nThe tool returns the printed output only. The results of the calls in the program do not enter your context. Therefore use this tool for a read-only task with many steps, when a large output gives a small answer. Examples are to count the matches, to extract one field, or to join the results from several files.\n\nThe program has no access to the file system, the network, require, or other globals. Each read, grep, and glob call obeys the usual permission gate. The program can make 50 calls to the host and can print 32KB. The default time limit is 30 seconds.\n\nOne read gives at most 2000 lines and 50 KiB. A larger read throws. The error gives the offset to continue from. The tool does not give a part of the file, because a program cannot see a cut result. Pass offset and limit to read a large file in parts. To find one thing in a large file, use grep.")
 }
 func (t *CodeExecutionTool) Schema() json.RawMessage { return json.RawMessage(codeExecSchema) }
 
@@ -229,12 +230,27 @@ func (t *CodeExecutionTool) typedBindings() map[string]jsengine.TypedBinding {
 	return tb
 }
 
+// readHintBinding adds a hint to a read that fails on a path of one
+// character. In the candidate dry run of 2026-10-01 a script looped
+// `for (const f of glob(...))` over glob's string, so read got "." and "("
+// and failed with "read: . is a directory" and "read: ./(: no such file".
+// Neither error named the cause.
+func readHintBinding(next jsengine.Binding) jsengine.Binding {
+	return func(ctx context.Context, args []string) (string, error) {
+		out, err := next(ctx, args)
+		if err != nil && len(args) > 0 && utf8.RuneCountInString(args[0]) == 1 {
+			return "", fmt.Errorf("%w (the path is one character, %q. glob and grep return one string. Use .trim().split('\\n') to get an array of paths before a loop)", err, args[0])
+		}
+		return out, err
+	}
+}
+
 // readOnlyScriptBindings is the read-only binding set. The mutating tool
 // takes it as the base of its superset, so a script that only looks at
 // the workspace behaves identically under either tool.
 func readOnlyScriptBindings(call hostCallFn) map[string]jsengine.Binding {
 	return map[string]jsengine.Binding{
-		"read": hostBinding(call, "read", func(args []string) (map[string]any, error) {
+		"read": readHintBinding(hostBinding(call, "read", func(args []string) (map[string]any, error) {
 			if len(args) < 1 {
 				return nil, fmt.Errorf("read(path[,offset,limit]) needs a path")
 			}
@@ -254,7 +270,7 @@ func readOnlyScriptBindings(call hostCallFn) map[string]jsengine.Binding {
 				m["limit"] = n
 			}
 			return m, nil
-		}),
+		})),
 		"grep": hostBinding(call, "grep", func(args []string) (map[string]any, error) {
 			if len(args) < 1 {
 				return nil, fmt.Errorf("grep(pattern[,path]) needs a pattern")

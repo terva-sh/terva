@@ -52,6 +52,7 @@ Agent.RecordDelegatedUsage	method	func(u provider.Usage)
 Agent.RecordPersistenceError	method	func(err error)
 Agent.RecordSideChannelUsage	method	func(source string, u provider.Usage)
 Agent.ReplaceMessage	method	func(idx int, msg provider.Message) bool
+Agent.RequestRepin	method	func()
 Agent.RequestToolRefresh	method	func(reason string) bool
 Agent.RequeueFront	method	func(text string) bool
 Agent.Resume	method	func(t Transcript)

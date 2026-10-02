@@ -27,6 +27,22 @@ func normalizeGoldenPaths(got string) string {
 	return slashAfterPlaceholders(got, filepath.Separator)
 }
 
+// dropTaggedGroups removes the tool group lines that a build tag adds to the
+// [inactive tool groups] note, so one golden serves the tagged and the untagged
+// build. Each line must appear in every note first. A tagged build that stops
+// listing its groups fails here, and the removal does not hide that.
+func dropTaggedGroups(t *testing.T, got string) string {
+	t.Helper()
+	notes := strings.Count(got, "[inactive tool groups]")
+	for _, line := range taggedGroupLines {
+		if n := strings.Count(got, line); n != notes || n == 0 {
+			t.Fatalf("%d [inactive tool groups] notes, but %q appears %d times", notes, line, n)
+		}
+		got = strings.ReplaceAll(got, line, "")
+	}
+	return got
+}
+
 // The Windows form, driven on any platform: a release once went to its public
 // CI and failed there, because the goldens held "/" and Windows wrote "\".
 func TestSlashAfterPlaceholders(t *testing.T) {

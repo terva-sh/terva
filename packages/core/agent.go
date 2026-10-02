@@ -241,6 +241,11 @@ type Agent struct {
 	// the check-and-set needs no separate lock and never blocks.
 	running atomic.Bool
 
+	// repinRequested asks the run loop to take a fresh pin after the tool batch
+	// that is running. RequestRepin sets it, and the loop clears it when it
+	// re-pins. See RequestRepin.
+	repinRequested atomic.Bool
+
 	// catalog is the model catalog (SetCatalog); nil reads the default.
 	catalog atomic.Pointer[catalogBox]
 
@@ -1592,6 +1597,28 @@ func (a *Agent) pinTurn() turnPin {
 	return turnPin{system: system, tools: a.tools, visible: a.advertiseLocked(a.tools, true), readOnly: a.readOnly.Snapshot()}
 }
 
+// RequestRepin asks the run loop to take a fresh pin of the system prompt and
+// the tool registry after the current tool batch, so the next model step of
+// the same turn runs with what the host published since the turn began.
+//
+// The default is the opposite on purpose (see pinTurn): a mid-turn change
+// waits for the next segment, because re-reading the prefix evicts the prompt
+// cache. RequestRepin is for a host change the rest of the turn must not miss.
+// The first caller moves a Talkoot member into or out of a worktree: the
+// rebuilt tools carry the new working directory, and the old pinned instances
+// would keep running in the old one.
+//
+// Call it after the host publishes the new tools. A request made outside a
+// turn is dropped when the next turn starts, because that turn's first pin
+// already reads the current registry. The re-pin never touches a call in
+// flight. It takes effect at the next model step.
+func (a *Agent) RequestRepin() {
+	if a == nil {
+		return
+	}
+	a.repinRequested.Store(true)
+}
+
 // fireContinuationGate consults the at-close gates in registration order and
 // returns the first willing gate's nudge and cause, consuming one unit of that
 // gate's per-Prompt budget. fires is indexed alongside gates; declines cost
@@ -1653,6 +1680,12 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 	// never mixes the immediate-refresh and the next-Prompt semantics within one.
 	vis := a.ToolVisibility()
 	repin := vis != nil && vis.BeginPrompt()
+
+	// A re-pin request left over from an earlier turn is already satisfied:
+	// the pin below reads the current prefix. Clear it before pinning, so it
+	// cannot force a second, unrequested pin after this turn's first tool
+	// batch. A request that lands after the clear is honoured as usual.
+	a.repinRequested.Store(false)
 
 	// One pin per segment; the whole Prompt is a single segment until a
 	// boundary refreshes it (repinForContinuation) — see pinTurn.
@@ -1947,7 +1980,12 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 			// to stop and a continuation gate to fire. Visibility-only against the
 			// pinned registry (repinActivatedVisibility), and a no-op unless the
 			// set grew, so it never churns the cache on an ordinary tool call.
-			if repin {
+			if a.repinRequested.CompareAndSwap(true, false) {
+				// The host published a change this turn must not miss, such
+				// as a new working directory (RequestRepin). A full pin, so
+				// the next step dispatches to the new tool instances.
+				pin = a.pinTurn()
+			} else if repin {
 				pin = a.repinActivatedVisibility(pin, vis)
 			}
 			continue
