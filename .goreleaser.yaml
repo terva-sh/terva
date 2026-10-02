@@ -95,7 +95,15 @@ builds:
       - terva_acp
       - terva_scripting
       - terva_workflows
+    hooks:
+      post:
+        - cmd: 'go run ./scripts/check-desktop-loader.go {{ .Os }} {{ .Arch }} "{{ .Path }}"'
+          env:
+            - GOOS=
+            - GOARCH=
     ldflags:
+      # The Alpine builder otherwise selects musl, but the desktop stack needs glibc.
+      - '{{ if eq .Os "linux" }}-I {{ if eq .Arch "amd64" }}/lib64/ld-linux-x86-64.so.2{{ else }}/lib/ld-linux-aarch64.so.1{{ end }}{{ end }}'
       - -s -w
       - -X main.version={{.Version}}
       - -X main.commit={{.Commit}}
