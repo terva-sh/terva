@@ -162,10 +162,14 @@ describe('styles.css keys the palette off data-scheme', () => {
   it('declares each palette literal exactly once', () => {
     // The reason the switch re-maps tokens instead of restating colours: two
     // arms now want the dark palette, and a copied hex would drift between them.
+    // The literals live in ui/tokens.css (generated from
+    // assets/brand/tokens.json), and styles.css must not restate any of them.
+    const TOKENS = readFileSync(resolve(__dirname, 'ui/tokens.css'), 'utf8')
     for (const token of ['bg', 'fg', 'muted', 'line', 'panel', 'user']) {
       for (const arm of ['light', 'dark']) {
-        const decls = CSS.match(new RegExp(`--c-${token}-${arm}:`, 'g')) ?? []
+        const decls = TOKENS.match(new RegExp(`--c-${token}-${arm}:`, 'g')) ?? []
         expect(decls.length, `--c-${token}-${arm} must be declared once`).toBe(1)
+        expect(CSS, `styles.css restates --c-${token}-${arm}`).not.toMatch(new RegExp(`--c-${token}-${arm}:`))
       }
     }
   })

@@ -47,6 +47,12 @@ the icon:
 
 ## Palette
 
+`tokens.json` is the source of truth for every colour, this table included.
+The web client generates its palette from it, and
+`packages/testsupport/brand_tokens_test.go` checks this table and the
+landing page against it. Change a colour there first. See
+`docs/design-system.md`.
+
 | Role                  |       Hex | Use                                      |
 | --------------------- | --------: | ---------------------------------------- |
 | **Tar Black**         | `#11100E` | Primary dark background                  |

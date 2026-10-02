@@ -38,24 +38,10 @@
 :root {
   color-scheme: light dark;
 
-  /* The two palettes, each literal declared exactly once. Only these six
-     tokens differ between light and dark; everything below is scheme-
-     independent. They are named apart from the tokens the sheet USES so the
-     switch below is a re-mapping and never a second copy of a colour — the
-     copied-colour drift the theme guards exist to stop. */
-  --c-bg-light: #ffffff;
-  --c-bg-dark: #0a0a09; /* Deep Tar — matches the brand app-icon bg + PWA splash */
-  --c-fg-light: #16171a;
-  --c-fg-dark: #e9e9ec;
-  --c-muted-light: #6b7280;
-  --c-muted-dark: #9aa0a6;
-  --c-line-light: #e5e7eb;
-  --c-line-dark: #26272b;
-  --c-panel-light: #f6f7f9;
-  --c-panel-dark: #141518;
-  --c-user-light: #2f6feb;
-  --c-user-dark: #3b82f6;
-
+  /* The two palettes live in ui/tokens.css, generated from
+     assets/brand/tokens.json, as --c-<role>-light and --c-<role>-dark. Only
+     those six roles differ between light and dark. The switch below re-maps
+     the names this sheet USES onto one arm, and never restates a colour. */
   /* Light is the base arm; the two rules after this block switch to dark. */
   --bg: var(--c-bg-light);
   --fg: var(--c-fg-light);
@@ -64,15 +50,8 @@
   --panel: var(--c-panel-light);
   --user: var(--c-user-light);
 
-  --user-fg: #ffffff;
-  --accent: #b5651d; /* birch tar */
-  --danger: #d1453b;
-  /* Amber, the step between "fine" and "wrong". It was used a dozen times as
-     `var(--warning)` and never actually declared, so every one of those
-     was the literal riding a fallback — the exact copied-colour drift the theme
-     guard exists to stop. Declared here, it is one value again. */
-  --warning: #d1901f;
-  --ok: #2f9e44;
+  /* --user-fg, --accent, --danger, --warning, --ok and --hover are
+     scheme-independent, and also come from ui/tokens.css. */
   --radius: 12px;
   /* density tokens (convention #5): pane-surface type + spacing */
   --fs-ui: 13px; /* labels, tab titles, row text */
@@ -1845,10 +1824,10 @@ a.shared-file__row:hover { background: color-mix(in srgb, var(--accent) 12%, tra
 .talkoot-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .talkoot-teams { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .talkoot-team-pick { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px 3px 4px; font: inherit; background: none; border: 1px solid transparent; border-radius: 6px; cursor: pointer; color: inherit; }
-.talkoot-team-pick:hover { background: var(--hover, rgba(127, 127, 127, 0.12)); }
-.talkoot-team-pick.on { border-color: var(--line); background: var(--hover, rgba(127, 127, 127, 0.12)); }
+.talkoot-team-pick:hover { background: var(--hover); }
+.talkoot-team-pick.on { border-color: var(--line); background: var(--hover); }
 .talkoot-team-state { color: var(--muted); font-size: var(--fs-note); }
-.talkoot-team-state.state-needs-you { color: var(--warn, var(--danger)); }
+.talkoot-team-state.state-needs-you { color: var(--warning); }
 .talkoot-team-color { position: relative; font-size: var(--fs-note); }
 .talkoot-team-color > summary { cursor: pointer; color: var(--muted); }
 .talkoot-team-color > .talkoot-picker { position: absolute; z-index: 5; top: 1.8em; left: 0; width: 15em; padding: 6px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
@@ -1870,13 +1849,14 @@ a.shared-file__row:hover { background: color-mix(in srgb, var(--accent) 12%, tra
 .talkoot-member.with-mark > .talkoot-mark { margin: 0; }
 .talkoot-member-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .talkoot-motion { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: var(--fs-note); color: var(--muted); }
-.talkoot-member-activity { font-size: var(--fs-note); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.talkoot-member-activity, .talkoot-member-model { font-size: var(--fs-note); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .talkoot-member-activity.presence-working { color: var(--ok); }
 .talkoot-member-activity.presence-waiting { color: var(--warning); }
 .talkoot-member-activity.presence-paused { color: var(--danger); }
 .talkoot-unread { background: var(--user); color: var(--user-fg); border-radius: 999px; font-size: 11px; padding: 0 6px; }
 .talkoot-side-foot { margin-top: auto; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); }
 .talkoot-spend { font-size: var(--fs-note); color: var(--muted); font-variant-numeric: tabular-nums; }
+.talkoot-budget { display: flex; flex-direction: column; gap: 6px; }
 .talkoot-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .talkoot-main-head { display: flex; align-items: baseline; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .talkoot-main-meta { font-size: var(--fs-note); color: var(--muted); }

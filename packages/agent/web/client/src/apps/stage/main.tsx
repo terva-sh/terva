@@ -3,8 +3,10 @@ import { Stage } from './Stage'
 import { applyPortraits, portraitsOn } from './portraits'
 import { applyTheme, currentTheme } from './theme'
 import { trackSafeArea } from '../../ui/safearea'
-// ui/ui.css first: it styles what the shared ui/ components and markdown.ts
+// ui/tokens.css first: the palette, generated from assets/brand/tokens.json.
+// ui/ui.css next: it styles what the shared ui/ components and markdown.ts
 // emit, and importing it ahead of the app sheet lets the app override.
+import '../../ui/tokens.css'
 import '../../ui/ui.css'
 import './stage.css'
 

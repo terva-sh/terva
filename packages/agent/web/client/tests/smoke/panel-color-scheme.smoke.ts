@@ -13,11 +13,11 @@ import { installMockBackend } from './support'
 // The palette literals are repeated below on purpose. Deriving them from the
 // sheet would make this pass against any two colours that merely differ,
 // including a half-applied palette; naming them means the test knows what dark
-// IS. They are styles.css --c-bg-light / --c-bg-dark.
+// IS. They are --c-bg-light / --c-bg-dark (assets/brand/tokens.json).
 const LIGHT = 'rgb(255, 255, 255)'
 const DARK = 'rgb(10, 10, 9)'
 
-// styles.css --accent (birch tar) and the dark palette's --user. The glyph is
+// --accent (birch tar) and the dark palette's --user, from tokens.json. The glyph is
 // coloured by WHICH mode is active, not by whether the default is overridden,
 // so these two must differ from each other and from the neutral auto state.
 const BIRCH_TAR = 'rgb(181, 101, 29)'

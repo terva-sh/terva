@@ -244,6 +244,13 @@ web-test:
     ./scripts/web-deps.sh install
     npm --prefix packages/agent/web/client test
 
+# Regenerate packages/agent/web/client/src/ui/tokens.css from
+# assets/brand/tokens.json, the one source for the web palette. Commit both
+# files, then run `just web-build`. The vitest suite fails while they disagree.
+design-tokens:
+    ./scripts/web-deps.sh ensure
+    npm --prefix packages/agent/web/client exec -- vitest run src/ui/tokens -u
+
 # Fast web inner-loop gate: unit tests, typecheck, and i18n check (no build).
 # Run this after touching packages/agent/web/client/src; `just web-check` is the
 # complete pre-push gate.

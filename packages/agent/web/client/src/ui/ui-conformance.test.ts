@@ -16,9 +16,13 @@ import { describe, expect, it } from 'vitest'
 
 const read = (p: string) => readFileSync(resolve(__dirname, p), 'utf8')
 const base = read('ui.css')
+// Both apps load ui/tokens.css (the palette, generated from
+// assets/brand/tokens.json) ahead of their own sheet, so each app's declared
+// set is its sheet plus the tokens.
+const tokens = read('tokens.css')
 const APPS: Array<[string, string]> = [
-  ['panel (styles.css)', read('../styles.css')],
-  ['stage (stage.css)', read('../apps/stage/stage.css')],
+  ['panel (styles.css)', tokens + read('../styles.css')],
+  ['stage (stage.css)', tokens + read('../apps/stage/stage.css')],
 ]
 
 // The documented --ui-* vocabulary (see ui.css "token contract"). The base and
@@ -303,5 +307,125 @@ describe('the base consumes only shared tokens', () => {
     const all = consumedProps(base)
     expect(all.length).toBeGreaterThan(5)
     expect(all.some((t) => t.startsWith('--ui-'))).toBe(true)
+  })
+})
+
+// The checks above hold the --ui-* contract. None of them looks at an app's
+// private tokens, and three bugs lived there at once:
+//
+//   - stage.css declared `--stage-on-accent: var(--stage-on-accent)`. A
+//     replace-all that turned the repeated literal into a token also rewrote
+//     the token's own definition. A self-reference is a cycle, so the property
+//     is invalid, and every rule that set text on an accent fill drew light
+//     text on Dusk, Nocturne and Rose. The contract check passed, because the
+//     token was "defined".
+//   - styles.css read `var(--warn, var(--danger))`, but the panel declares
+//     --warning. The fallback hid the mistake, and a team that waited on you
+//     showed red, not amber.
+//   - styles.css read `var(--hover, …)`, which nothing declared.
+//
+// So two rules hold for every sheet an app loads. No property refers to
+// itself, and every property a rule reads is declared, whether or not the read
+// carries a fallback. A fallback is a default for a value someone may set. It
+// is not a substitute for a declaration.
+describe('every custom property an app reads is declared', () => {
+  const strip = (sheet: string) => sheet.replace(/\/\*[\s\S]*?\*\//g, ' ')
+  const declared = (sheet: string) => {
+    const s = new Set<string>()
+    for (const m of strip(sheet).matchAll(/(--[a-z0-9-]+)\s*:/g)) s.add(m[1])
+    return s
+  }
+  const reads = (sheet: string) => {
+    const s = new Set<string>()
+    for (const m of strip(sheet).matchAll(/var\(\s*(--[a-z0-9-]+)/g)) s.add(m[1])
+    return s
+  }
+
+  // Every sheet each app loads, beyond ui.css. face.css arrives with the
+  // panel's Talkoot member marks.
+  const SHEETS: Array<[string, string[]]> = [
+    ['panel', ['tokens.css', '../styles.css', '../features/talkoot/face/face.css']],
+    ['stage', ['tokens.css', '../apps/stage/stage.css']],
+  ]
+
+  // Inputs that script sets on an element, so no sheet declares them. Each
+  // names the file that sets it and the text that sets it there. A template
+  // such as `--p${i}t` cannot be found by name, which is why this is a list
+  // and not a scan of the TypeScript.
+  const RUNTIME_INPUTS: Record<string, [string, string]> = {
+    '--toast-lift': ['../features/conversation/Composer.tsx', "'--toast-lift'"],
+    '--hubl': ['../app.tsx', "'--hubl'"],
+    '--hubr': ['../app.tsx', "'--hubr'"],
+    '--hubm': ['../app.tsx', "'--hubm'"],
+    '--p0t': ['../app.tsx', '`--p${i}t`'],
+    '--p1t': ['../app.tsx', '`--p${i}t`'],
+    '--p2t': ['../app.tsx', '`--p${i}t`'],
+    '--p0b': ['../app.tsx', '`--p${i}b`'],
+    '--p1b': ['../app.tsx', '`--p${i}b`'],
+    '--p2b': ['../app.tsx', '`--p${i}b`'],
+    '--t': ['../features/talkoot/MemberMark.tsx', "'--t'"],
+    '--phase': ['../features/talkoot/MemberMark.tsx', "'--phase'"],
+    '--blink-every': ['../features/talkoot/MemberMark.tsx', "'--blink-every'"],
+    '--wander': ['../features/talkoot/MemberMark.tsx', "'--wander'"],
+    '--read': ['../features/talkoot/MemberMark.tsx', "'--read'"],
+  }
+
+  const baseDeclared = declared(base)
+
+  for (const [app, files] of SHEETS) {
+    const sheets = files.map((f) => [f, read(f)] as const)
+    const appDeclared = new Set([...baseDeclared, ...sheets.flatMap(([, s]) => [...declared(s)])])
+
+    for (const [file, sheet] of sheets) {
+      it(`${app}: ${file} declares no property in terms of itself`, () => {
+        const cycles: string[] = []
+        for (const m of strip(sheet).matchAll(/(--[a-z0-9-]+)\s*:\s*([^;{}]*)/g)) {
+          if (new RegExp(`var\\(\\s*${m[1]}[\\s,)]`).test(m[2])) cycles.push(m[1])
+        }
+        expect(cycles, `${file}: ${cycles.join(', ')} refers to itself, so it is invalid and every reader falls back to inherit`).toEqual([])
+      })
+
+      it(`${app}: ${file} reads only properties that ${app} declares`, () => {
+        const missing = [...reads(sheet)].filter((p) => !appDeclared.has(p) && !(p in RUNTIME_INPUTS))
+        expect(
+          missing,
+          `${file} reads ${missing.join(', ')}, which ${app} never declares. Declare it, use the token ` +
+            `that exists, or, if script sets it, add it to RUNTIME_INPUTS with the file that sets it.`,
+        ).toEqual([])
+      })
+    }
+  }
+
+  it('the runtime-input list holds no stale entry', () => {
+    const allReads = new Set(SHEETS.flatMap(([, files]) => files.flatMap((f) => [...reads(read(f))])))
+    for (const [prop, [file, setter]] of Object.entries(RUNTIME_INPUTS)) {
+      expect(allReads.has(prop), `${prop} is in RUNTIME_INPUTS but no sheet reads it any more`).toBe(true)
+      expect(read(file).includes(setter), `${prop}: ${file} no longer contains ${setter}`).toBe(true)
+    }
+  })
+
+  // Teeth: a regex that matched nothing would pass the checks above forever.
+  it('actually finds the reads and the declarations', () => {
+    expect(reads(read('../styles.css')).has('--warning')).toBe(true)
+    expect(declared(read('tokens.css')).has('--warning')).toBe(true)
+    expect(reads(read('../apps/stage/stage.css')).has('--stage-on-accent')).toBe(true)
+  })
+})
+
+// The panel declares each scheme-dependent colour twice, as --c-<role>-light and
+// --c-<role>-dark, and the scheme blocks re-point --<role> between them. A role
+// with only one half would follow one scheme and stay stuck in the other. The
+// renderer refuses such a table, and this holds the committed output too.
+describe('the panel palette has a light and a dark value for every role', () => {
+  const panel = read('tokens.css')
+  const roles = (scheme: string) =>
+    new Set([...panel.matchAll(new RegExp(`--c-([a-z0-9-]+)-${scheme}\\s*:`, 'g'))].map((m) => m[1]))
+
+  it('pairs every --c-*-light with a --c-*-dark', () => {
+    const light = roles('light')
+    const dark = roles('dark')
+    expect(light.size).toBeGreaterThan(3)
+    expect([...light].filter((r) => !dark.has(r)), 'roles with no dark value').toEqual([])
+    expect([...dark].filter((r) => !light.has(r)), 'roles with no light value').toEqual([])
   })
 })

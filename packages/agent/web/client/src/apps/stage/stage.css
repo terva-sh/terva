@@ -3,28 +3,13 @@
  * immersive — a full-bleed scene background, avatar-anchored rows. */
 
 :root {
-  --stage-bg: #0a0a09;
-  --stage-surface: #171613;
-  --stage-surface-2: #201e19;
-  --stage-line: #2a2823;
-  --stage-fg: #ece7dd;
-  --stage-muted: #9a9384;
-  --stage-accent: #c9a45a;
-  --stage-user: #2c3a3f;
-  --stage-ok: #7fbf8a;
-  --stage-danger: #d67a6a; /* also the --stage-status--closed red */
-  /* The step between ok and danger. Was two near-identical ambers copied into
-     the lint counts and the doctor severities; one token now, so a preset that
-     ever wants its own warning has a single place to say so. */
-  --stage-warn: #d6a86a;
+  /* The palette lives in ui/tokens.css, generated from
+     assets/brand/tokens.json: Dusk on :root, and each other preset on
+     :root[data-theme='<name>'] (theme.ts sets it). Shape stays here. */
   --stage-radius: 8px; /* Stage's common control/card radius */
-  /* Text drawn ON --stage-accent. Near-black suits the three dark presets,
-     whose accents are light; Parchment's accent is a mid-brown that near-black
-     sits at ~3:1 against, so it overrides this below. */
-  --stage-on-accent: var(--stage-on-accent);
   /* Stage's mapping onto the shared vocabulary ui/ui.css speaks. Declared once
      here rather than per preset: custom properties resolve at use time, so a
-     data-theme override of --stage-* below flows through untouched. */
+     data-theme override of --stage-* in ui/tokens.css flows through untouched. */
   --ui-bg: var(--stage-surface);
   --ui-surface: var(--stage-surface-2);
   --ui-fg: var(--stage-fg);
@@ -35,41 +20,6 @@
   --ui-warn: var(--stage-warn);
   --ui-ok: var(--stage-ok);
   --ui-radius: var(--stage-radius);
-}
-
-/* Theme presets (theme.ts): the base :root above is Dusk (the no-attribute
-   default); a chosen preset overrides it via data-theme on the document root. */
-:root[data-theme='parchment'] {
-  --stage-bg: #efe7d6;
-  --stage-surface: #e6dcc6;
-  --stage-surface-2: #dacdb2;
-  --stage-line: #c8b895;
-  --stage-fg: #35302a;
-  --stage-muted: #7c7262;
-  --stage-accent: #9a5f2c;
-  --stage-user: #cdd8d0;
-  /* The one light preset: its accent needs light text on it, not near-black. */
-  --stage-on-accent: #fbf7ee;
-}
-:root[data-theme='nocturne'] {
-  --stage-bg: #0b0e14;
-  --stage-surface: #141922;
-  --stage-surface-2: #1c2430;
-  --stage-line: #2a3444;
-  --stage-fg: #dce4f0;
-  --stage-muted: #8b96a8;
-  --stage-accent: #6f9bd8;
-  --stage-user: #223140;
-}
-:root[data-theme='rose'] {
-  --stage-bg: #140a0e;
-  --stage-surface: #211318;
-  --stage-surface-2: #2c1a21;
-  --stage-line: #3a252d;
-  --stage-fg: #f0dde3;
-  --stage-muted: #ab8b93;
-  --stage-accent: #d87a97;
-  --stage-user: #3a2530;
 }
 
 /* box-sizing, the control shrink floor, the 16px input floor, tap-highlight,
@@ -131,7 +81,7 @@ button:disabled {
   color: var(--stage-muted);
 }
 .stage-status--open {
-  color: #6fbf73;
+  color: var(--stage-ok);
 }
 .stage-status--connecting {
   color: var(--stage-accent);
@@ -5847,7 +5797,7 @@ button:disabled {
   flex: none;
 }
 .stage-worldroster__face--none {
-  background: var(--stage-surface-3, var(--stage-line));
+  background: var(--stage-line);
 }
 .stage-worldroster__who {
   display: flex;
@@ -5955,11 +5905,11 @@ button:disabled {
   font-size: 0.7rem;
   padding: 0.05rem 0.35rem;
   border-radius: 999px;
-  background: var(--stage-surface-3, var(--stage-line));
+  background: var(--stage-line);
   color: var(--stage-muted);
 }
 .stage-lorebook__key {
-  font-family: var(--stage-mono, monospace);
+  font-family: monospace;
 }
 /* One line of the entry's text, so the list reads as content rather than as a
    column of names you have to open to identify. */

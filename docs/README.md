@@ -57,6 +57,7 @@ the field have learned about this category, generalized and evidence-graded.
 | [native-image-output.md](native-image-output.md) | The model drawing images inline (`native_output`, Codex) |
 | [scripting.md](scripting.md) | `code_execution` and `code_execution_mutating`: the in-engine JavaScript sandbox |
 | [themes.md](themes.md) | TUI themes |
+| [design-system.md](design-system.md) | The colour tokens behind the web panel, Stage and terva.sh |
 | [skills.md](skills.md) | `SKILL.md` instruction files |
 | [debugging-prompts.md](debugging-prompts.md) | Inspecting / debugging a prompt |
 | [prompt-labels.md](prompt-labels.md) | The source labels and portability classes `--dump-prompt` prints |

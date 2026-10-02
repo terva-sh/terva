@@ -62,6 +62,7 @@ var docsThatShip = []string{
 	// reach $TERVA_HOME/docs for the agent to read. docs_test.go's
 	// TestEveryDocsSubdirIsClassified guards that half.
 	"docs/design",
+	"docs/design-system.md",
 	"docs/extension-protocol.md",
 	"docs/extensions.md",
 	"docs/fleet.md",

@@ -17,13 +17,15 @@ import { describe, expect, it } from 'vitest'
 // in the sheet. Any rule wanting that colour should name the token, so every
 // other theme's override reaches it.
 const CSS = readFileSync(resolve(__dirname, 'stage.css'), 'utf8')
+// The palettes live in ui/tokens.css, generated from assets/brand/tokens.json.
+const TOKENS = readFileSync(resolve(__dirname, '../../ui/tokens.css'), 'utf8')
 
 // The :root blocks that declare the palettes — the base (Dusk) and the
 // data-theme presets.
 function paletteBlocks(): { name: string; body: string }[] {
   const out: { name: string; body: string }[] = []
   const re = /:root(\[data-theme='([a-z]+)'\])?\s*\{([^}]*)\}/g
-  for (const m of CSS.matchAll(re)) out.push({ name: m[2] ?? 'dusk', body: m[3] })
+  for (const m of TOKENS.matchAll(re)) out.push({ name: m[2] ?? 'dusk', body: m[3] })
   return out
 }
 
@@ -41,9 +43,8 @@ describe('stage.css theme tokens', () => {
   })
 
   it('declares no palette colour outside a :root block', () => {
-    // Everything that is not a palette declaration — i.e. the actual rules.
-    let rules = CSS
-    for (const b of blocks) rules = rules.replace(b.body, '')
+    // stage.css declares no palette, so the whole sheet is rules.
+    const rules = CSS
 
     const leaks: string[] = []
     for (const b of blocks) {
