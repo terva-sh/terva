@@ -77,7 +77,40 @@ builds:
       - -X main.commit={{.Commit}}
       - -X main.date={{.Date}}
 
+  - id: terva-desktop
+    main: ./cmd/terva
+    binary: terva-desktop
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+    tags:
+      - terva_desktop
+      - terva_web
+      - terva_acp
+      - terva_scripting
+      - terva_workflows
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
 archives:
+  - id: terva-desktop
+    ids: [terva-desktop]
+    name_template: "{{ .ProjectName }}-desktop_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+    format_overrides:
+      - goos: windows
+        formats: [zip]
   - id: terva
     ids: [terva]
     # Human-friendly name: terva_0.1.0_darwin_arm64.tar.gz (the full build).

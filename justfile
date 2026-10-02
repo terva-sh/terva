@@ -97,6 +97,11 @@ build:
     go build -trimpath -ldflags "{{ldflags}}" -o bin/terva ./cmd/terva
     @echo "built bin/terva ({{version}}, {{commit}})"
 
+# Build the separate desktop artifact with its native runtime dependency.
+build-desktop:
+    @mkdir -p bin
+    CGO_ENABLED=0 go build -trimpath -tags terva_desktop,terva_web,terva_acp,terva_scripting,terva_workflows -ldflags "{{ldflags}}" -o bin/terva-desktop ./cmd/terva
+
 # Build a lean binary with every chat connector AND the remote-MCP HTTP transport
 # tagged out (-tags terva_no_telegram,terva_no_discord,terva_no_mcp_http): no chat
 # transports or SDKs, and no MCP egress (stdio MCP servers still work).
@@ -377,6 +382,7 @@ check:
     go vet ./packages/agent/...
     go vet -tags terva_web ./packages/agent/web/ ./packages/agent/
     go vet -tags terva_acp ./packages/agent/acp/ ./packages/agent/
+    go vet -tags terva_desktop,terva_web ./packages/agent/
 
 # End-to-end harness only: builds the real binary, drives print/json
 # modes against a fake provider. Included in `just test` / `just ci`
@@ -552,10 +558,22 @@ ci-web:
 # "code_execution is not wired to the approval gate in this session". Without
 # the tag that tool does not exist, so an untagged run of the rebuild guard
 # cannot see the field at all.
+# Desktop cross-builds need no GUI. Linux test executables need a glibc loader.
+ci-desktop:
+    @mkdir -p bin
+    go vet -tags terva_desktop,terva_web ./packages/agent/
+    go test -race ./packages/agent/desktop/
+    go test -tags terva_desktop,terva_web -race -run '^TestDesktop' ./packages/agent/
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags terva_desktop,terva_web,terva_acp,terva_scripting,terva_workflows -o bin/desktop-check-linux-amd64 ./cmd/terva
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags terva_desktop,terva_web,terva_acp,terva_scripting,terva_workflows -o bin/desktop-check-linux-arm64 ./cmd/terva
+    CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -tags terva_desktop,terva_web,terva_acp,terva_scripting,terva_workflows -o bin/desktop-check-darwin-amd64 ./cmd/terva
+    CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -tags terva_desktop,terva_web,terva_acp,terva_scripting,terva_workflows -o bin/desktop-check-darwin-arm64 ./cmd/terva
+    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags terva_desktop,terva_web,terva_acp,terva_scripting,terva_workflows -o bin/desktop-check-windows-amd64.exe ./cmd/terva
+
 ci-scripting:
     go build -tags terva_scripting ./...
     go vet -tags terva_scripting ./packages/agent/tools/ ./packages/agent/build/ ./packages/agent/workspace/
-    go test -tags terva_scripting -race -run 'CodeExecution|Scripting' ./packages/agent/tools/ ./packages/agent/build/
+    go test -tags terva_scripting -race -run 'CodeExecution|Scripting|TestTervasCompactionTextIsUnchanged|TestTheWireRequestIsUnchangedByteForByte' ./packages/agent/tools/ ./packages/agent/build/
     go test -tags terva_scripting -race -run 'ToolChannel|RebuildTools' ./packages/agent/workspace/
 
 # The workflow engine's CLI seam (behind -tags terva_workflows): build/vet/
@@ -690,7 +708,7 @@ boundary-guard BASE="":
 # build/test + the web client's vitest suite and dist determinism check
 # (Node-gated) + the Playwright smokes (Node-, browser- and CI-gated) +
 # terva_pprof tag build + public packaging drift check, as a pre-push gate.
-ci: lint test ci-acp ci-web ci-scripting ci-workflows ci-web-client ci-web-smoke
+ci: lint test ci-acp ci-web ci-desktop ci-scripting ci-workflows ci-web-client ci-web-smoke
     go build -tags terva_no_telegram,terva_no_discord ./...
     # The engine's boundary baselines only shrink. The remote lane's Engine
     # boundary guard job runs this against the pull request's base.

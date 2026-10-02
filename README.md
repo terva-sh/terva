@@ -44,6 +44,8 @@ over its control plane — same sessions, same permissions, same event stream:
   commands, inline images, and message queueing. See [docs/tui.md](docs/tui.md).
 - a **web UI** (`terva web`) — a browser control panel, not a viewer: drive
   sessions, approve tool calls, edit settings, watch the transcript stream.
+  The separate desktop artifact adds `terva-desktop desktop`, a native window
+  with its own local server. Closing the window stops that server.
   See [docs/web.md](docs/web.md) to serve it and
   [docs/web-interface.md](docs/web-interface.md) for what it shows.
 

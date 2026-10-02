@@ -67,6 +67,15 @@ func webCredentialBoot(credErr error, allowLogin bool) error {
 // It names the flag rather than only the problem, because "start it differently"
 // is the actionable half and the operator is already at a shell.
 func runWebMode(ctx context.Context, args build.Args, version string) error {
+	lock, err := acquireWebHome()
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	return runWebServer(ctx, args, version, nil)
+}
+
+func runWebServer(ctx context.Context, args build.Args, version string, ready func(string, string)) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	// Settle the bearer token before anything reads it. args is a copy, so
@@ -75,11 +84,13 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 	// arrived by file or environment, not just one typed on the command line.
 	// Miss this and an env-provisioned daemon silently refuses to self-restart
 	// and refuses to bind, both on the grounds that it has no auth.
-	tok, err := build.ResolveWebToken(args)
-	if err != nil {
-		return err
+	if !args.Desktop {
+		tok, err := build.ResolveWebToken(args)
+		if err != nil {
+			return err
+		}
+		args.WebToken = tok
 	}
-	args.WebToken = tok
 
 	// Whether this daemon can accept a provider login is settled here, before
 	// anything else, because it answers two questions rather than one: it gates
@@ -271,6 +282,9 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 	stopRecord := func() {}
 	defer func() { stopRecord() }()
 	onListen := func(network, addr string) {
+		if ready != nil {
+			ready(network, addr)
+		}
 		stop, err := config.PublishListenRecord(config.ListenRecord{
 			Endpoint: config.EndpointForListener(network, addr),
 			Version:  version,
@@ -312,6 +326,7 @@ func runWebMode(ctx context.Context, args build.Args, version string) error {
 		AuthHeader:     args.WebAuthHeader,
 		TrustedProxies: trustedProxies,
 		Token:          args.WebToken,
+		SessionCookie:  args.Desktop,
 		AllowInsecure:  args.WebInsecure,
 		InsecureCIDRs:  insecureCIDRs,
 		Version:        version,

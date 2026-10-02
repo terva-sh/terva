@@ -42,6 +42,7 @@ type Options struct {
 	AuthHeader     string       // trusted forward-auth header (proxy asserts identity)
 	TrustedProxies []*net.IPNet // peers (besides loopback) allowed to assert AuthHeader
 	Token          string       // bearer token required when no forward-auth is used
+	SessionCookie  bool         // keep the owned desktop server's cookie scoped to the browser session
 	AllowInsecure  bool         // permit a non-loopback bind with no auth mode (blanket: any source)
 	InsecureCIDRs  []*net.IPNet // source networks granted no-auth access (scoped insecure); permits a non-loopback bind
 	Version        string       // reported in the ctrlproto hello

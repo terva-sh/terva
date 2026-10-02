@@ -200,7 +200,7 @@ func runUpdate(version string) error {
 	// (docs/plans/archive/rename-terva.md, phase 1) — an installed terva must be
 	// able to self-update into an archive whose member is `terva`, so
 	// this updater ships BEFORE any archive containing the new name.
-	newBin, tried := findExtractedBinary(extractDir, runtime.GOOS)
+	newBin, tried := findArtifactBinary(extractDir, runtime.GOOS)
 	if newBin == "" {
 		// Names come from the list actually searched. The hardcoded message
 		// here read "a terva or terva binary" — the second name was the legacy
@@ -263,7 +263,26 @@ func findExtractedBinary(extractDir, goos string) (path string, tried []string) 
 //
 //	{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
 func releaseAssetName(version string) (name, format string, err error) {
-	return releaseAssetNameFor(version, runtime.GOOS, runtime.GOARCH)
+	name, format, err = releaseAssetNameFor(version, runtime.GOOS, runtime.GOARCH)
+	if desktopArtifact && err == nil {
+		name = strings.Replace(name, "terva_", "terva-desktop_", 1)
+	}
+	return name, format, err
+}
+
+func findArtifactBinary(extractDir, goos string) (string, []string) {
+	if !desktopArtifact {
+		return findExtractedBinary(extractDir, goos)
+	}
+	name := "terva-desktop"
+	if goos == "windows" {
+		name += ".exe"
+	}
+	path := filepath.Join(extractDir, name)
+	if st, err := os.Stat(path); err == nil && !st.IsDir() {
+		return path, []string{name}
+	}
+	return "", []string{name}
 }
 
 // releaseAssetNameFor is releaseAssetName with the platform as parameters.

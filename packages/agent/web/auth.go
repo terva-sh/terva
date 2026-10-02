@@ -54,7 +54,7 @@ func authMiddleware(opts Options, next http.Handler) http.Handler {
 		// query) and a later PWA launch authenticate without the token in every
 		// URL. Only when the token itself was presented — never for forward-auth.
 		if opts.Token != "" && constantTimeEqual(requestToken(r), opts.Token) {
-			setTokenCookie(w, r, opts.Token)
+			setTokenCookie(w, r, opts.Token, opts.SessionCookie)
 		}
 		// Carry the principal to the handlers. Attached here, at the only place
 		// that authenticated it, so no handler can be reached with an identity
@@ -309,9 +309,13 @@ const tokenCookieMaxAge = 30 * 24 * 60 * 60 // seconds
 // setTokenCookie persists a validated token as a cookie so subsequent same-origin
 // requests (assets, the WebSocket handshake, a PWA relaunch) authenticate without
 // it in the URL. No-op when the request already carried the matching cookie.
-func setTokenCookie(w http.ResponseWriter, r *http.Request, token string) {
+func setTokenCookie(w http.ResponseWriter, r *http.Request, token string, sessionOnly bool) {
 	if c, err := r.Cookie(tokenCookie); err == nil && c.Value == token {
 		return
+	}
+	maxAge := tokenCookieMaxAge
+	if sessionOnly {
+		maxAge = 0
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     tokenCookie,
@@ -320,7 +324,7 @@ func setTokenCookie(w http.ResponseWriter, r *http.Request, token string) {
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
 		Secure:   requestIsHTTPS(r),
-		MaxAge:   tokenCookieMaxAge,
+		MaxAge:   maxAge,
 	})
 }
 

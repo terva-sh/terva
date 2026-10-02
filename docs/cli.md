@@ -52,6 +52,12 @@ all in [Modes](#modes) below.
 
 ## Flags
 
+`terva desktop` opens a native window with an owned loopback server. It needs
+the separate desktop artifact. `--desktop-port PORT` selects a fixed port;
+the default is random. Closing the window stops the server and preserves
+session records. See [Native desktop window](web.md#native-desktop-window)
+for runtime requirements and provider login.
+
 | Flag | Description |
 |---|---|
 | `--provider <id>` | Pick the provider. Around thirty are built in: `anthropic`, `openai`, `openai-codex`, `google`, `kimi`, `deepseek`, `groq`, `mistral`, `xai`, `github-copilot`, `openrouter`, `amazon-bedrock`, `ollama`, `openai-compatible`, `anthropic-compatible`, and more. [providers.md](providers.md) has the full list with login methods; `terva --list-models` prints what your credentials can actually reach. |

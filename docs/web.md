@@ -20,6 +20,52 @@ The protocol it speaks is the `ctrlproto` control plane.
 (ticket `TKT-01M1RRT6N`) live in the development repository, not the public
 release tree.
 
+## Native desktop window
+
+The separate `terva-desktop` release artifact opens this panel in a native
+window. The regular full and lean artifacts keep their static runtime.
+
+```bash
+terva-desktop desktop
+terva-desktop desktop --desktop-port 9134
+```
+
+For a source build, run `just build-desktop`, then
+`./bin/terva-desktop desktop`. The build uses `terva_desktop` and `terva_web`.
+The desktop artifact also includes the optional features of the full artifact.
+
+The window owns a new server at `127.0.0.1` on a random free port. An explicit
+`--desktop-port` selects a stable origin, but startup fails if that port is busy.
+Browser preferences belong to the origin and may reset when the port changes.
+Closing the window stops its server and saves session records. Active turns
+stop. A later launch can reopen the saved sessions.
+
+Startup refuses a live daemon in the same `TERVA_HOME`. Stop that daemon or
+select a separate home. The first version cannot attach to a daemon. Desktop
+startup also rejects listener, token, forward-auth, insecure, fleet, OIDC,
+inherited-socket and self-restart options.
+
+The server requires a fresh temporary token. The native window submits it
+through the login form and receives an HTTP-only session cookie. The token
+never enters the window URL or browser local storage. It expires when the
+owned server stops. Desktop mode ignores `TERVA_WEB_TOKEN`.
+
+Provider login remains opt-in with `--web-allow-login`. Without configured
+provider credentials, add that flag and use the Providers pane. Secret
+management also retains its separate `--web-allow-secrets` opt-in. Links to
+other origins open the system browser. Native camera, microphone and script
+clipboard reads remain disabled. Keyboard paste uses the native engine.
+
+| Platform | Required runtime |
+|---|---|
+| Linux | glibc loader, GTK4 and WebKitGTK 6.0; no GTK3 fallback |
+| macOS | WKWebView from the operating system |
+| Windows | Microsoft WebView2 Runtime |
+
+The desktop artifact uses tuohi v0.1.0 without cgo. On Linux it still needs
+the glibc loader. The existing Alpine container uses the regular artifact
+and keeps its current runtime requirements.
+
 ## Running it
 
 ```bash
@@ -29,6 +75,11 @@ terva web               # serves http://127.0.0.1:8730 (loopback, no auth)
 
 Open the address in a browser. On mobile, use *Add to Home Screen*. It is an
 installable PWA.
+
+The web and desktop commands hold one server ownership lock per `TERVA_HOME`.
+A second server refuses startup in that home. Stop the owner or select a
+separate home. The operating system releases the lock after a crash or
+self-restart. Session records remain on disk.
 
 Flags:
 

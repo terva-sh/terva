@@ -222,6 +222,9 @@ func Run(rawArgs []string, version string) error {
 	if len(rawArgs) > 0 && rawArgs[0] == "web" {
 		rawArgs = append([]string{"--web"}, rawArgs[1:]...)
 	}
+	if len(rawArgs) > 0 && rawArgs[0] == "desktop" {
+		rawArgs = append([]string{"--desktop"}, rawArgs[1:]...)
+	}
 	// `terva member` is shorthand for `terva --member` (the fleet check-in
 	// daemon), routed like `terva web`. Unlike web and acp this one needs no
 	// build tag: packages/agent/fleet carries none, so a lean binary can check
@@ -266,7 +269,11 @@ func Run(rawArgs []string, version string) error {
 		// build-tag modes routed via an argv shim, so their --help lands here).
 		switch args.Mode {
 		case mode.Web:
-			build.PrintWebHelp()
+			if args.Desktop {
+				build.PrintDesktopHelp()
+			} else {
+				build.PrintWebHelp()
+			}
 		case mode.Serve:
 			build.PrintServeHelp()
 		default:
@@ -344,6 +351,9 @@ func Run(rawArgs []string, version string) error {
 	case mode.ACP:
 		return runACPMode(ctx, args, version)
 	case mode.Web:
+		if args.Desktop {
+			return runDesktopMode(ctx, args, version)
+		}
 		return runWebMode(ctx, args, version)
 	case mode.Member:
 		return runMemberMode(ctx, args, version)

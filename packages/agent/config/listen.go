@@ -18,11 +18,9 @@ package config
 // check the guess against. Reading a file out of the home under discussion has
 // no such gap.
 //
-// One record per home, last writer wins. Two daemons serving one home is an
-// odd shape — they would already be fighting over config.json — and naming the
-// most recent one to bind is both the honest answer and the useful one. If that
-// ever becomes a real deployment, this grows into a directory keyed by pid; it
-// is deliberately not that yet.
+// One record per home. The web and desktop commands hold server.lock while
+// they own that home. Older versions can still overwrite the record, so stop
+// checks the recorded PID before it removes the file.
 //
 // Liveness is a heartbeat, not a pid: a pid outlives the process that owned it,
 // so probing one finds something very much alive that has nothing to do with

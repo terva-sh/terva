@@ -338,7 +338,7 @@ func handleLogin(opts Options) http.HandlerFunc {
 			return
 		}
 		loginSucceeded(who)
-		setTokenCookie(w, r, opts.Token)
+		setTokenCookie(w, r, opts.Token, opts.SessionCookie)
 		http.Redirect(w, r, safeNext(r.PostFormValue("next")), http.StatusSeeOther)
 	}
 }

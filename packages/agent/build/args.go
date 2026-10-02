@@ -41,6 +41,8 @@ type Args struct {
 	ReplaySpeed float64
 
 	// Web control-panel mode (--web / `terva web`, build tag terva_web).
+	Desktop             bool
+	DesktopPort         int
 	WebAddr             string   // listen address (default 127.0.0.1:8730)
 	WebAuthHeader       string   // trust this forward-auth header as the authenticated user (e.g. X-Forwarded-User)
 	WebTrustedProxies   []string // IPs/CIDRs (besides loopback) allowed to assert the forward-auth header
@@ -591,6 +593,7 @@ func ParseArgs(in []string) (Args, error) {
 	a := Args{Mode: mode.Interactive, MaxSteps: 0, WithSkills: true}
 	positional := []string{}
 	taskFromFile := false
+	desktopModeConflict := false
 
 	want := func(i *int, flag string) (string, error) {
 		*i++
@@ -602,6 +605,10 @@ func ParseArgs(in []string) (Args, error) {
 
 	for i := 0; i < len(in); i++ {
 		arg := in[i]
+		switch arg {
+		case "-p", "--print", "--json", "--rpc", "--acp", "--member", "--serve", "--attach", "--replay", "--swarm-agent":
+			desktopModeConflict = true
+		}
 		switch arg {
 		case "-h", "--help":
 			a.Help = true
@@ -617,6 +624,18 @@ func ParseArgs(in []string) (Args, error) {
 			a.Mode = mode.ACP
 		case "--web":
 			a.Mode = mode.Web
+		case "--desktop":
+			a.Desktop = true
+			a.Mode = mode.Web
+		case "--desktop-port":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.DesktopPort, err = strconv.Atoi(v)
+			if err != nil || a.DesktopPort < 1 || a.DesktopPort > 65535 {
+				return a, i18n.Errorf("--desktop-port requires a port from 1 to 65535")
+			}
 		case "--fleet-addr":
 			v, err := want(&i, arg)
 			if err != nil {
@@ -1282,6 +1301,14 @@ func ParseArgs(in []string) (Args, error) {
 			return a, i18n.Errorf("--cwd %q is not a directory", a.CWD)
 		}
 		a.CWD = abs
+	}
+	if a.DesktopPort != 0 && !a.Desktop {
+		return a, i18n.Errorf("--desktop-port requires terva desktop")
+	}
+	if a.Desktop {
+		if desktopModeConflict || a.Mode != mode.Web || a.WebAddr != "" || a.WebToken != "" || a.WebTokenFile != "" || a.WebTokenRequireFile || a.WebAuthHeader != "" || len(a.WebTrustedProxies) != 0 || a.WebInsecure || len(a.WebInsecureCIDRs) != 0 || a.FleetAddr != "" || a.AllowRestart {
+			return a, i18n.Errorf("terva desktop owns its listener and authentication; daemon and restart options cannot be combined with it")
+		}
 	}
 	return a, nil
 }
