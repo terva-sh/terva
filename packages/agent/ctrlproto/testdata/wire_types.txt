@@ -1297,6 +1297,10 @@ TalkootMember
 	driver	string	omitempty
 	model	string	omitempty
 	tier	string	omitempty
+	resolved_provider	string	omitempty
+	resolved_model	string	omitempty
+	model_source	string	omitempty
+	model_problem	string	omitempty
 	posture	string	omitempty
 	workspace	string	omitempty
 	reviewer	bool	omitempty
@@ -1499,12 +1503,14 @@ TalkootUpdateParams
 	text	string	omitempty
 	ops	[]TalkootOp	omitempty
 	color	*string	omitempty
+	team_budget_waived	*bool	omitempty
 TalkootView
 	id	string
 	name	string
 	title	string	omitempty
 	home	string
 	budget_usd_per_day	float64	omitempty
+	team_budget_waived	bool	omitempty
 	color	string
 	own_color	string	omitempty
 	state	string

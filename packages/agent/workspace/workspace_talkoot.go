@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -11,6 +13,8 @@ import (
 	"terva.sh/terva/packages/agent/talkoot"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/agent/worker"
+	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/provider"
 )
 
 // talkootEnv resolves a roster's names against this binary: the persona
@@ -104,6 +108,10 @@ type seatBinding struct {
 	// the new router passes, even one that got past revoked before the
 	// update. The revoke itself waits until the run's lock is released.
 	retired atomic.Bool
+	// personSends counts the envelopes this seat sent to a person. A turn that
+	// raised it already answered the person in its own words, so its final
+	// prose is not mirrored too (talkootTurn).
+	personSends atomic.Uint64
 }
 
 // revoke stops the binding. It waits for a call in flight to finish.
@@ -160,7 +168,49 @@ func (s talkootSeat) send(o talkoot.Outgoing) (talkoot.Envelope, error) {
 		e, err = rt.Send(s.b.member, o)
 		return err
 	})
+	if err == nil && slices.ContainsFunc(e.To, func(to string) bool { return strings.HasPrefix(to, talkoot.HumanPrefix) }) {
+		s.b.personSends.Add(1)
+	}
 	return e, err
+}
+
+// publishReply uses the binding that opened the turn. A reseat cannot make
+// an old turn speak as a new member. Cost reporting still uses the old seat.
+func (s talkootSeat) publishReply(body string) error {
+	s.b.mu.RLock()
+	defer s.b.mu.RUnlock()
+	if s.b.revoked {
+		return nil
+	}
+	return s.b.run.do(func(rt *talkoot.Router) error {
+		if s.b.retired.Load() {
+			return nil
+		}
+		_, err := rt.PublishReply(s.b.member, body)
+		if errors.Is(err, talkoot.ErrNoHumanRoot) || errors.Is(err, talkoot.ErrDuplicate) {
+			// Private-session work has no room root. A duplicate already exists.
+			return nil
+		}
+		return err
+	})
+}
+
+// finalTalkootText selects only the completed final assistant message.
+// Tool-step commentary and reasoning never become a room reply.
+func finalTalkootText(msgs []provider.Message) string {
+	if len(msgs) == 0 || msgs[len(msgs)-1].Role != provider.RoleAssistant {
+		return ""
+	}
+	m := msgs[len(msgs)-1]
+	if m.Meta[core.MetaIncomplete] == "true" {
+		return ""
+	}
+	for _, c := range m.Content {
+		if _, tool := c.(provider.ToolCallBlock); tool {
+			return ""
+		}
+	}
+	return assistantVisibleText(m)
 }
 
 // Answer records a person's answer to this seat's question in the room, and
@@ -364,10 +414,11 @@ func (w *Workspace) talkootActivity(sessID, callID, tool string) {
 	})
 }
 
-// talkootTurn opens a seated session's turn, and returns the func that ends
-// it. The end reports the turn's cost when a turn ran, its error when it
-// failed, and whether a person interrupted it. Close waits for every open turn to end. A session without a seat
-// gets nil.
+// talkootTurn opens a seated session's turn and captures its end and reply
+// callbacks. The reply callback runs only after a successful generation,
+// before the session releases its turn slot. The end reports cost, failure,
+// and interruption. Close waits for every open turn to end. An unseated
+// session gets nil callbacks.
 //
 // The run counts the member's open turns apart from its roster, so shutdown
 // finds a turn whose member an update removed. The count drops inside the
@@ -378,16 +429,16 @@ func (w *Workspace) talkootActivity(sessID, callID, tool string) {
 // w.talkoot.mu, which closeTalkoots also holds to set closing. A turn is
 // either counted before the talkoots close, or refused with closing true, and
 // then the caller does not run it: no report of it could reach a closed run.
-func (w *Workspace) talkootTurn(sessID string) (end func(costUSD float64, ran bool, failed string, interrupted bool), closing bool) {
+func (w *Workspace) talkootTurn(sessID string) (end func(costUSD float64, ran bool, failed string, interrupted bool), publish func(string), closing bool) {
 	w.talkoot.mu.Lock()
 	b := w.talkoot.seats[sessID]
 	if b == nil {
 		w.talkoot.mu.Unlock()
-		return nil, false
+		return nil, nil, false
 	}
 	if w.talkoot.closing {
 		w.talkoot.mu.Unlock()
-		return nil, true
+		return nil, nil, true
 	}
 	seat, run, member := talkootSeat{b: b, w: w}, b.run, b.member
 	if run.open == nil {
@@ -400,6 +451,18 @@ func (w *Workspace) talkootTurn(sessID string) (end func(costUSD float64, ran bo
 	// have started this turn and no delivery did (TKT-01M3SMDS89).
 	run.nativeTurn(member, 1)
 	run.flush()
+	sentBefore := b.personSends.Load()
+	publish = func(body string) {
+		// 🚨 A turn that already messaged a person would post twice: once in
+		// its chosen words and again as its final prose, which the body
+		// dedupe misses whenever the two differ.
+		if b.personSends.Load() != sentBefore {
+			return
+		}
+		if err := seat.publishReply(body); err != nil {
+			w.diagf("talkoot: session %s could not publish its reply: %v", sessID, err)
+		}
+	}
 	return func(costUSD float64, ran bool, failed string, interrupted bool) {
 		defer w.talkoot.turns.Add(-1)
 		done := false
@@ -432,7 +495,7 @@ func (w *Workspace) talkootTurn(sessID string) (end func(costUSD float64, ran bo
 		if err := seat.turnEnded(costUSD, failed, interrupted, settle); err != nil {
 			w.diagf("talkoot: session %s could not report its turn: %v", sessID, err)
 		}
-	}, false
+	}, publish, false
 }
 
 func (t *wsTalkoot) markMemberLocked(sessID string) {
@@ -501,7 +564,7 @@ func (d talkootNativeDriver) deliver(talkootID string, m talkoot.Member, text st
 		return fmt.Errorf("member %s: the native driver reports no reads", m.ID)
 	}
 	receipt := *r
-	s.queueTalkoot(text, func() { d.read(s.id, m.ID, receipt) })
+	s.queueTalkoot(text, receipt.FromPerson(), func() { d.read(s.id, m.ID, receipt) })
 	return nil
 }
 

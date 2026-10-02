@@ -34,6 +34,9 @@ type talkootMemberView struct {
 	Member  talkoot.Member
 	Status  talkoot.Status
 	Session string
+	// Resolved model fields describe a live native session, or the model a
+	// native member would use on its next delivery. Reading never seats it.
+	ResolvedProvider, ResolvedModel, ModelSource, ModelProblem string
 }
 
 // talkootView is a running talkoot.
@@ -125,10 +128,41 @@ func (w *Workspace) talkootGet(ctx context.Context, id string) (talkootView, err
 			v.Members = append(v.Members, talkootMemberView{Member: m, Status: status[m.ID], Session: run.seats[m.ID]})
 		}
 		w.talkoot.mu.Unlock()
+		for i := range v.Members {
+			w.resolveTalkootMemberModel(&v.Members[i])
+		}
 		v.Held = rt.Held()
 		return nil
 	})
 	return v, err
+}
+
+// resolveTalkootMemberModel reads an already-live session before resolving
+// the roster. It never opens a persisted session or starts a worker.
+func (w *Workspace) resolveTalkootMemberModel(v *talkootMemberView) {
+	if v.Member.Driver != talkoot.DriverNative {
+		return
+	}
+	w.mu.Lock()
+	s := w.sessions[v.Session]
+	w.mu.Unlock()
+	if s != nil {
+		v.ResolvedProvider, v.ResolvedModel = s.currentModel()
+		v.ModelSource = "session"
+		return
+	}
+	prov, model, _, err := w.memberModel(v.Member)
+	if err != nil {
+		v.ModelProblem = err.Error()
+		return
+	}
+	v.ResolvedProvider, v.ResolvedModel = prov, model
+	v.ModelSource = "default"
+	if v.Member.Model != "" {
+		v.ModelSource = "model"
+	} else if v.Member.Tier != "" {
+		v.ModelSource = "tier"
+	}
 }
 
 // talkootCreate makes a talkoot from the text of its talkoot.md and starts it.
@@ -137,6 +171,14 @@ func (w *Workspace) talkootCreate(ctx context.Context, id string, text []byte) (
 	r, err := w.parseRoster(id, text)
 	if err != nil {
 		return talkootView{}, err
+	}
+	// 🚨 A team starts with its aggregate cap. Create needs write and steer,
+	// not spend, and records no waiver attribution, so a waiver is a separate
+	// person's update after creation (decision 0027). The check reads the
+	// decoded roster, so it covers raw text and every template, whatever YAML
+	// form set the field.
+	if r.TeamBudgetWaived {
+		return talkootView{}, errors.New("talkoot: a new team cannot start with its team budget waived; create it, then waive the cap as a separate update")
 	}
 	if err := privfs.MkdirAll(talkoot.Dir()); err != nil {
 		return talkootView{}, err
@@ -199,11 +241,6 @@ func (w *Workspace) parseRosterEnv(id string, text []byte, env talkoot.Env) (tal
 	}
 	if !sameDir(r.Home, w.cwd) {
 		return talkoot.Roster{}, fmt.Errorf("talkoot: home %s is not this workspace's directory, %s", r.Home, w.cwd)
-	}
-	for _, m := range r.Members {
-		if m.Driver == talkoot.DriverNative && m.Workspace == talkoot.WorkspaceWorktree {
-			return talkoot.Roster{}, fmt.Errorf("talkoot: native member %s cannot run in a worktree yet", m.ID)
-		}
 	}
 	return r, nil
 }
@@ -276,6 +313,10 @@ type rosterSource struct {
 	edited             bool
 }
 
+// writeRosterFile is the last write of a roster update. A test replaces it to
+// fail that step alone, after the room lines are already written.
+var writeRosterFile = privfs.WriteFile
+
 // applyRosterLocked commits a validated roster: the room lines, the file, the
 // router, the seats, and each posture. The caller holds run.update.
 func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by string, text []byte, next talkoot.Roster, from rosterSource) (talkootView, error) {
@@ -301,15 +342,16 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 	// retiring lists the workers of worker members that lost their seats.
 	// They stop once the update commits.
 	var retiring []string
-	// unleasing lists the worker members that leave their worktree: they
-	// leave the roster, turn native, or move to the home checkout. Each
-	// gives its worktree back once its worker has stopped.
+	// unleasing lists the members that leave their worktree: they leave the
+	// roster or move to the home checkout. Each gives its worktree back once
+	// every worker that ran there has stopped. A native member has no worker,
+	// so its worktree goes back at once.
 	var unleasing []string
 	for _, old := range prev.Members {
-		if old.Driver == talkoot.DriverNative || old.Workspace != talkoot.WorkspaceWorktree {
+		if old.Workspace != talkoot.WorkspaceWorktree {
 			continue
 		}
-		if m, kept := memberOf(next, old.ID); kept && m.Driver != talkoot.DriverNative && m.Workspace == talkoot.WorkspaceWorktree {
+		if m, kept := memberOf(next, old.ID); kept && m.Workspace == talkoot.WorkspaceWorktree {
 			continue
 		}
 		unleasing = append(unleasing, old.ID)
@@ -332,7 +374,10 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 			continue
 		}
 		switch {
-		case !kept || m.Driver != talkoot.DriverNative || m.Persona != old.Persona || m.Model != old.Model || m.Tier != old.Tier:
+		// A session's working directory is fixed when it is built, so a
+		// member that moves between its worktree and the home checkout gets
+		// a fresh session.
+		case !kept || m.Driver != talkoot.DriverNative || m.Persona != old.Persona || m.Model != old.Model || m.Tier != old.Tier || m.Workspace != old.Workspace:
 			leaving[old.ID] = sid
 		case m.Posture != old.Posture:
 			// setApproval rebuilds the tool view, so it narrows to a new
@@ -416,6 +461,13 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 	changes := talkoot.Diff(prev, next)
 	line := talkoot.Line{Type: talkoot.LineRoster, At: time.Now(), By: humanBy(by), Ref: talkoot.RosterRevision(text),
 		Proposal: from.proposal, Proposer: from.proposer, Edited: from.edited, Changes: changes}
+	if prev.TeamBudgetWaived != next.TeamBudgetWaived {
+		if next.TeamBudgetWaived {
+			line.Reason = "the team daily cost limit is waived; member limits still apply"
+		} else {
+			line.Reason = "the team daily cost limit is restored"
+		}
+	}
 	if prev.Color != next.Color {
 		line.ColorBefore, line.ColorAfter = look.TeamColor(id, prev.Color), look.TeamColor(id, next.Color)
 	}
@@ -432,8 +484,18 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 	// 🚨 The file is written last, once nothing can fail. A roster on disk
 	// that the running router refused would apply at the next start, after
 	// the caller was told the update failed.
-	if err := privfs.WriteFile(filepath.Join(run.dir, talkoot.FileName), text); err != nil {
+	if err := writeRosterFile(filepath.Join(run.dir, talkoot.FileName), text); err != nil {
 		return abort(err)
+	}
+	// 🚨 A restored cap is enforced only once the restoration has committed.
+	// Enforced earlier, a failed update left a team-spend pause line in the
+	// room for a cap that was never restored. The pause itself is set in
+	// memory before the line, and replay derives it from the turn lines, so a
+	// line the room cannot write costs the explanation, not the pause.
+	if prev.TeamBudgetWaived && !next.TeamBudgetWaived {
+		if err := rt.EnforceTeamBudget(); err != nil {
+			w.diagf("talkoot %s: could not record the restored team cap: %v", id, err)
+		}
 	}
 	run.router.Stop()
 	run.router = rt
@@ -461,7 +523,7 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 	// update, waits for it. Each release takes a new generation, and an
 	// older one stands down.
 	for _, old := range prev.Members {
-		if sid := run.seats[old.ID]; sid != "" && old.Driver != talkoot.DriverNative && old.Workspace == talkoot.WorkspaceWorktree {
+		if sid := run.seats[old.ID]; sid != "" && old.Workspace == talkoot.WorkspaceWorktree {
 			holdLeaseLocked(run, old.ID, sid)
 		}
 	}

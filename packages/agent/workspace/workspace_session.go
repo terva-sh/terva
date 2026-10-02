@@ -220,6 +220,14 @@ func (w *Workspace) buildSession(id string, sess *session.Session, msgs []provid
 	if _, ok := w.talkootSeatOf(id); ok {
 		args.TalkootMember = true
 	}
+	// A native member in a worktree works in its own checkout: its file tools
+	// resolve and its bash runs there. The session file stays in the
+	// workspace's sessions directory, so the seat still finds it.
+	if dir, ok, err := w.talkootMemberDir(id); err != nil {
+		return nil, fmt.Errorf("talkoot member worktree: %w", err)
+	} else if ok {
+		args.CWD = dir
+	}
 	if sess.Stage.Experience != "" {
 		args.Experience = sess.Stage.Experience
 	}
@@ -1054,11 +1062,22 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 		s.awaitExtensions(turnCtx)
 		// A talkoot member's turn reports what it spent, so the router's caps
 		// see real spend and its working slot frees.
-		endTalkoot, closing := s.ws.talkootTurn(s.id)
+		endTalkoot, publishTalkoot, closing := s.ws.talkootTurn(s.id)
 		costBefore := 0.0
 		if endTalkoot != nil {
 			costBefore = s.agent.Cost().CostUSD
 		}
+		// 🚨 A seat alone does not make a turn Talkoot work. A person can type
+		// into a member's session directly, and that answer is private. Only a
+		// turn that a delivery started may publish its final reply to the room.
+		// A private turn that drains a delivery partway stays private.
+		openedBefore := s.reads.opened.Load()
+		usersBefore := s.reads.users.Load()
+		s.reads.fresh.Store(true)
+		// 🚨 A successful turn can append no assistant message. The transcript's
+		// last reply then belongs to an earlier turn, and the member's chain may
+		// have moved since. Only a reply this turn produced may be published.
+		repliesBefore := s.reads.replies.Load()
 		var err error
 		if closing {
 			// The talkoots have closed, and no report of this member turn
@@ -1094,6 +1113,14 @@ func (s *wsSession) launchTurn(turnCtx context.Context, gen func(context.Context
 			// "done" idempotently: the cancel-during-tools path emits the
 			// agent's own done AND returns an error, producing two.
 			s.broadcast(ctrlproto.ConversationEvent(core.WireEvent{Type: "done"}))
+		}
+		// Publish before endTurn frees the session for another prompt or a
+		// compaction changes its transcript. Failed and cancelled generations
+		// must never expose a partial reply to the room.
+		if publishTalkoot != nil && err == nil && turnCtx.Err() == nil &&
+			s.reads.opened.Load() != openedBefore && s.reads.users.Load()-usersBefore == 1 &&
+			s.reads.replies.Load() != repliesBefore {
+			publishTalkoot(finalTalkootText(s.agent.Messages()))
 		}
 		next, restart := s.endTurn(turnCtx, err)
 		// Snapshot-on-done: the transcript now contains the sealed final step,

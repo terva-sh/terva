@@ -23,15 +23,30 @@ type fakeLeases struct {
 	released []string
 	// none lists the members that hold no worktree.
 	none []string
+	// root, when set, makes each lease a real directory under it, which a
+	// native member's session needs to be built in.
+	root string
+	// onAcquire, when set, runs at each acquire, outside l.mu.
+	onAcquire func()
 }
 
 func (l *fakeLeases) acquire(talkootID, member string) (string, error) {
+	if l.onAcquire != nil {
+		l.onAcquire()
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.err != nil {
 		return "", l.err
 	}
 	l.acquired = append(l.acquired, member)
+	if l.root != "" {
+		dir := filepath.Join(l.root, talkootID, member)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return "", err
+		}
+		return dir, nil
+	}
 	return "/leases/" + talkootID + "/" + member, nil
 }
 

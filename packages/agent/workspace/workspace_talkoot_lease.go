@@ -129,6 +129,72 @@ func (w *Workspace) memberLease(run *talkootRun, member string) (string, error) 
 	return dir, nil
 }
 
+// prepareMemberDir acquires a native member's worktree lease and caches its
+// directory on the run. It runs git, so it must not run under w.mu. The lease
+// is the member's, keyed by talkoot and member, so acquiring it again after a
+// restart returns the same checkout.
+func (w *Workspace) prepareMemberDir(run *talkootRun, member string) error {
+	dir, err := w.memberLease(run, member)
+	if err != nil {
+		return err
+	}
+	w.talkoot.mu.Lock()
+	if run.memberDirs == nil {
+		run.memberDirs = map[string]string{}
+	}
+	run.memberDirs[member] = dir
+	w.talkoot.mu.Unlock()
+	return nil
+}
+
+// nativeWorktreeSeat returns the run and member of a seated native member in
+// a worktree, and false for any other session.
+func (w *Workspace) nativeWorktreeSeat(sessID string) (*talkootRun, string, bool) {
+	w.talkoot.mu.Lock()
+	b := w.talkoot.seats[sessID]
+	w.talkoot.mu.Unlock()
+	if b == nil {
+		return nil, "", false
+	}
+	m, ok := memberOf(*b.run.roster.Load(), b.member)
+	if !ok || m.Driver != talkoot.DriverNative || m.Workspace != talkoot.WorkspaceWorktree {
+		return nil, "", false
+	}
+	return b.run, b.member, true
+}
+
+// prepareSessionDir acquires the worktree of the native member a session is
+// seated as, before resolve takes w.mu to build it. Any other session needs
+// nothing.
+func (w *Workspace) prepareSessionDir(sessID string) error {
+	run, member, ok := w.nativeWorktreeSeat(sessID)
+	if !ok {
+		return nil
+	}
+	return w.prepareMemberDir(run, member)
+}
+
+// talkootMemberDir returns the worktree a seated native member's session runs
+// in, and false for any other session. It only reads the directory cached by
+// prepareMemberDir, so a build under w.mu runs no git.
+//
+// 🚨 A member whose lease was not acquired fails the session build. Nothing
+// falls back to the home checkout, where the roster's one-writer rule assumed
+// the member would not write (TKT-01M396QWR5 for workers).
+func (w *Workspace) talkootMemberDir(sessID string) (string, bool, error) {
+	run, member, ok := w.nativeWorktreeSeat(sessID)
+	if !ok {
+		return "", false, nil
+	}
+	w.talkoot.mu.Lock()
+	dir := run.memberDirs[member]
+	w.talkoot.mu.Unlock()
+	if dir == "" {
+		return "", false, fmt.Errorf("member %s has no worktree lease, so its session is not built", member)
+	}
+	return dir, true, nil
+}
+
 // workerStopWait bounds how long a leaving member's worktree waits for its
 // worker to stop before it is given back.
 const workerStopWait = 2 * time.Minute
@@ -155,8 +221,12 @@ func nextUnleaseLocked(run *talkootRun, member string) uint64 {
 	return run.unleaseGen[member]
 }
 
-// leaseHeld reports whether a worker that ran in member's worktree may still
-// run.
+// leaseHeld reports whether a worker or a native session that ran in
+// member's worktree may still run there.
+//
+// 🔑 A native member that leaves its worktree keeps its old session until
+// that session's turn ends, and the turn's tools still work in the worktree.
+// So a native holder holds the lease while its session runs a turn.
 func (w *Workspace) leaseHeld(run *talkootRun, h workerHost, member string) bool {
 	w.talkoot.mu.Lock()
 	ids := make([]string, 0, len(run.leaseHolders[member]))
@@ -165,7 +235,12 @@ func (w *Workspace) leaseHeld(run *talkootRun, h workerHost, member string) bool
 	}
 	w.talkoot.mu.Unlock()
 	for _, id := range ids {
-		if _, live := h.state(id); live {
+		if h != nil {
+			if _, live := h.state(id); live {
+				return true
+			}
+		}
+		if s := w.existing(id); s != nil && s.busy() {
 			return true
 		}
 	}
@@ -190,9 +265,9 @@ func (w *Workspace) releaseMemberLease(run *talkootRun, member string, gen uint6
 	h := w.workers()
 	deadline := time.Now().Add(workerStopWait)
 	for {
-		if h == nil || !w.leaseHeld(run, h, member) {
+		if !w.leaseHeld(run, h, member) {
 			run.workerMu.Lock()
-			if h != nil && w.leaseHeld(run, h, member) {
+			if w.leaseHeld(run, h, member) {
 				run.workerMu.Unlock()
 				continue
 			}
@@ -203,19 +278,20 @@ func (w *Workspace) releaseMemberLease(run *talkootRun, member string, gen uint6
 				run.workerMu.Unlock()
 				return
 			}
-			if m, ok := memberOf(*run.roster.Load(), member); !ok || m.Driver == talkoot.DriverNative || m.Workspace != talkoot.WorkspaceWorktree {
+			if m, ok := memberOf(*run.roster.Load(), member); !ok || m.Workspace != talkoot.WorkspaceWorktree {
 				w.leases().release(run.id, member)
 				w.talkoot.mu.Lock()
 				delete(run.leaseHolders, member)
+				delete(run.memberDirs, member)
 				w.talkoot.mu.Unlock()
 			}
 			run.workerMu.Unlock()
 			return
 		}
 		if time.Now().After(deadline) {
-			// ⚠️ A worker that will not stop keeps the worktree claimed. The
-			// claim reads as stale once this process ends.
-			w.diagf("talkoot %s: a worker of member %s did not stop, so its worktree stays claimed", run.id, member)
+			// ⚠️ A worker or a turn that will not stop keeps the worktree
+			// claimed. The claim reads as stale once this process ends.
+			w.diagf("talkoot %s: member %s still ran in its worktree, so the worktree stays claimed", run.id, member)
 			return
 		}
 		select {
@@ -234,7 +310,7 @@ func (w *Workspace) releaseMemberLease(run *talkootRun, member string, gen uint6
 func (w *Workspace) retryMemberReleases(run *talkootRun, seated []string) {
 	r := *run.roster.Load()
 	for _, member := range seated {
-		if m, ok := memberOf(r, member); ok && m.Driver != talkoot.DriverNative && m.Workspace == talkoot.WorkspaceWorktree {
+		if m, ok := memberOf(r, member); ok && m.Workspace == talkoot.WorkspaceWorktree {
 			continue
 		}
 		go func() {

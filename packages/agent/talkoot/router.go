@@ -58,7 +58,14 @@ type BusyDriver interface {
 // Receipt names one delivery to a [ReadDriver]. Only the router makes one.
 type Receipt struct {
 	member, ref, chain string
+	// person is set when a person sent the envelope, not a member.
+	person bool
 }
+
+// FromPerson reports whether a person sent the delivered envelope. A native
+// session mirrors its final reply to the room only for a turn that a person's
+// delivery started: a teammate's handoff is answered to the teammate.
+func (r Receipt) FromPerson() bool { return r.person }
 
 // Drivers picks a driver by the member's driver field.
 type Drivers struct {
@@ -121,8 +128,10 @@ var (
 )
 
 type chainState struct {
-	hops      int
-	allowance int // hops allowed before the chain pauses; a resume adds HopLimit
+	// human and thread come only from the sealed root post, never from a send.
+	human, thread string
+	hops          int
+	allowance     int // hops allowed before the chain pauses; a resume adds HopLimit
 }
 
 type pending struct {
@@ -198,6 +207,8 @@ type Router struct {
 	pauses    pauses
 	sends     map[string][]time.Time
 	recent    map[string]time.Time // dedupe key -> when sent
+	// replyBodies bounds final-reply dedupe to the same window as sends.
+	replyBodies map[string]time.Time // sender, chain, body -> when sent
 	// held are the deliveries that wait for a resume or a working slot.
 	// Replay rebuilds them: a waking envelope with no delivery line and no
 	// failed-delivery line for a recipient is still owed to it.
@@ -233,7 +244,7 @@ func NewRouter(r Roster, room *Room, d Drivers, l Limits, now func() time.Time) 
 		pauses: pauses{},
 		sends:  map[string][]time.Time{}, recent: map[string]time.Time{},
 		notes: map[string][]string{}, refused: map[string]time.Time{}, owed: map[string]int{},
-		answers: map[string]Citation{},
+		answers: map[string]Citation{}, replyBodies: map[string]time.Time{},
 	}
 	rt.day = rt.dayOf(now())
 	lines, err := room.Read()
@@ -253,6 +264,11 @@ func NewRouter(r Roster, room *Room, d Drivers, l Limits, now func() time.Time) 
 			return nil, fmt.Errorf("talkoot: the room is damaged, and the pause for it cannot be recorded: %w", err)
 		}
 		rt.replay(l)
+	}
+	// A person can waive a cap that already paused the team. Historical
+	// team-spend guards then stop blocking, but every other pause remains.
+	if r.TeamBudgetWaived {
+		rt.pauses.drop(talkootScope, pauseTeam)
 	}
 	// Settled deliveries left gaps in held. What remains is still owed.
 	owed := rt.held[:0]
@@ -315,6 +331,7 @@ func (rt *Router) replay(l Line) {
 		if e == nil {
 			return
 		}
+		rt.rootLocked(*e)
 		cs := rt.chain(e.Chain.Root)
 		cs.hops = max(cs.hops, e.Chain.Hops)
 		// A note waits in its recipient's buffer until a delivery line
@@ -338,6 +355,7 @@ func (rt *Router) replay(l Line) {
 				rt.sends[e.From] = append(rt.sends[e.From], e.At)
 			}
 			if rt.now().Sub(e.At) < rt.limits.DuplicateWindow {
+				rt.replyBodies[replyBodyKey(e.From, e.Chain.Root, e.Body)] = e.At
 				for _, to := range e.To {
 					rt.recent[dedupeKey(e.From, to, e.Kind, e.Body)] = e.At
 				}
@@ -483,7 +501,7 @@ func (rt *Router) Post(human string, to []string, body string, refs []string, th
 		to = []string{rt.roster.coordinator().ID}
 	}
 	o := Outgoing{To: to, Kind: KindMessage, Body: body, Refs: refs, Thread: thread}
-	if err := validateOutgoing(rt.roster, o, remedy{person: true}); err != nil {
+	if err := validateOutgoing(rt.roster, o, remedy{person: true}, ""); err != nil {
 		return Envelope{}, err
 	}
 	if err := rt.checkNotes(o.Refs, remedy{person: true}); err != nil {
@@ -520,13 +538,27 @@ func (rt *Router) Send(from string, o Outgoing) (Envelope, error) {
 	if _, ok := rt.roster.member(from); !ok {
 		return Envelope{}, fmt.Errorf("talkoot: %q is not a member of %s", from, rt.roster.ID)
 	}
-	if err := validateOutgoing(rt.roster, o, remedy{}); err != nil {
-		return Envelope{}, err
-	}
 	if err := rt.checkNotes(o.Refs, remedy{}); err != nil {
 		return Envelope{}, err
 	}
 	rt.mu.Lock()
+	// Resolve aliases under the same lock that chooses the active chain.
+	// A queued post grants no identity until the member reads it.
+	human := ""
+	if cs := rt.chains[rt.active[from]]; cs != nil {
+		human = cs.human
+	}
+	o.To = slices.Clone(o.To)
+	for i, to := range o.To {
+		if _, member := rt.roster.member(to); !member && human != "" &&
+			(to == "human" || to == strings.TrimPrefix(human, HumanPrefix)) {
+			o.To[i] = human
+		}
+	}
+	if err := validateOutgoing(rt.roster, o, remedy{}, human); err != nil {
+		rt.mu.Unlock()
+		return Envelope{}, err
+	}
 	now := rt.now()
 	e, ds, err := rt.sendLocked(from, o, now)
 	rt.mu.Unlock()
@@ -606,6 +638,15 @@ func checkSummary(summary string) error {
 }
 
 func (rt *Router) sendLocked(from string, o Outgoing, now time.Time) (Envelope, []delivery, error) {
+	return rt.sendHopLocked(from, o, now, true)
+}
+
+// sendHopLocked is sendLocked. With hop false the envelope takes no hop: it
+// carries the chain's current count, cannot trip the hop pause, and leaves
+// the allowance for member work. Only the room-only reply mirror uses it.
+// Replay takes the largest hop count it reads, so such an envelope changes
+// nothing there either.
+func (rt *Router) sendHopLocked(from string, o Outgoing, now time.Time, hop bool) (Envelope, []delivery, error) {
 	guard := func(name, action, reason, chain string, err error) (Envelope, []delivery, error) {
 		l := Line{Type: LineGuard, At: now, Guard: name, Action: action, Reason: reason, Chain: chain}
 		if action != ActionPaused || chain == "" {
@@ -633,7 +674,7 @@ func (rt *Router) sendLocked(from string, o Outgoing, now time.Time) (Envelope, 
 	}
 
 	root := rt.active[from]
-	if root == "" {
+	if root == "" || rt.chain(root).human == "" {
 		return guard(GuardHumanRoot, ActionRefused, "no human post at the root of the chain", "", ErrNoHumanRoot)
 	}
 	cs := rt.chain(root)
@@ -653,8 +694,11 @@ func (rt *Router) sendLocked(from string, o Outgoing, now time.Time) (Envelope, 
 		return guard(GuardRate, ActionRefused, reason, "", ErrRateLimited)
 	}
 
-	hops := cs.hops + 1
-	if hops > cs.allowance {
+	hops := cs.hops
+	if hop {
+		hops++
+	}
+	if hop && hops > cs.allowance {
 		reason := fmt.Sprintf("the chain reached %d hops", cs.hops)
 		rt.pauses.set(chainScope(root), pauseGuard, reason)
 		return guard(GuardHops, ActionPaused, reason, root, fmt.Errorf("%w (this chain: %s)", ErrPaused, reason))
@@ -698,10 +742,13 @@ func (rt *Router) sendLocked(from string, o Outgoing, now time.Time) (Envelope, 
 		return Envelope{}, nil, err
 	}
 	rt.sends[from] = append(rt.sends[from], now)
-	// The dedupe map holds whole bodies, so it drops what has left the window.
-	for k, t := range rt.recent {
-		if now.Sub(t) >= rt.limits.DuplicateWindow {
-			delete(rt.recent, k)
+	rt.replyBodies[replyBodyKey(from, root, e.Body)] = now
+	// Both dedupe maps hold whole bodies, so drop what left the window.
+	for _, recent := range []map[string]time.Time{rt.recent, rt.replyBodies} {
+		for k, t := range recent {
+			if now.Sub(t) >= rt.limits.DuplicateWindow {
+				delete(recent, k)
+			}
 		}
 	}
 	var ds []delivery
@@ -710,6 +757,55 @@ func (rt *Router) sendLocked(from string, o Outgoing, now time.Time) (Envelope, 
 		ds = append(ds, rt.routeLocked(e, id, false)...)
 	}
 	return e, ds, nil
+}
+
+// rootLocked remembers only a genuine person's root post or introduction.
+// Replay and live routing use the same rule, including after roster updates.
+func (rt *Router) rootLocked(e Envelope) {
+	name, human := strings.CutPrefix(e.From, HumanPrefix)
+	if human && ValidPerson(name) && e.ID != "" && e.ID == e.Chain.Root && e.Chain.Hops == 0 &&
+		(e.Kind == KindMessage || e.Kind == KindIntro) {
+		cs := rt.chain(e.ID)
+		cs.human, cs.thread = e.From, e.Thread
+	}
+}
+
+// replyBodyKey lets final-reply mirroring recognize a body already sent to
+// any recipient in this chain. It shares the bounded dedupe window.
+func replyBodyKey(from, root, body string) string {
+	return dedupeKey(from, "chain:"+root, "", body)
+}
+
+// PublishReply records a completed native assistant reply for the root
+// person. It uses the send guards and never delivers to another member.
+// A body already sent in this chain within the dedupe window needs no mirror.
+func (rt *Router) PublishReply(from, body string) (Envelope, error) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if _, ok := rt.roster.member(from); !ok {
+		return Envelope{}, fmt.Errorf("talkoot: %q is not a member of %s", from, rt.roster.ID)
+	}
+	if strings.TrimSpace(body) == "" {
+		return Envelope{}, nil
+	}
+	root := rt.active[from]
+	cs := rt.chains[root]
+	if cs == nil || cs.human == "" {
+		return Envelope{}, ErrNoHumanRoot
+	}
+	now := rt.now()
+	if at, ok := rt.replyBodies[replyBodyKey(from, root, body)]; ok && now.Sub(at) < rt.limits.DuplicateWindow {
+		return Envelope{}, nil
+	}
+	o := Outgoing{To: []string{cs.human}, Kind: KindMessage, Body: body, Thread: cs.thread, ReplyTo: root}
+	if err := validateOutgoing(rt.roster, o, remedy{}, cs.human); err != nil {
+		return Envelope{}, err
+	}
+	// 🚨 The mirror delivers no work, so it takes no hop. Taking one used the
+	// chain's allowance twice per turn and let a room-only copy pause the
+	// chain at its hop limit. It still respects pauses and the send rate.
+	e, _, err := rt.sendHopLocked(from, o, now, false)
+	return e, err
 }
 
 func (rt *Router) envelope(from string, o Outgoing, now time.Time) Envelope {
@@ -727,7 +823,13 @@ func (rt *Router) envelope(from string, o Outgoing, now time.Time) Envelope {
 // retry marks a delivery that already waited, so a second wait writes no
 // second queued line to the room.
 func (rt *Router) routeLocked(e Envelope, to string, retry bool) []delivery {
-	m, _ := rt.roster.member(to)
+	rt.rootLocked(e)
+	m, ok := rt.roster.member(to)
+	if !ok {
+		// Person replies exist in the room only. They take no working slot,
+		// buffer no note, and never reach a delivery driver.
+		return nil
+	}
 	if !e.Kind.wakes() {
 		rt.notes[to] = append(rt.notes[to], render(rt.roster, e))
 		return nil
@@ -807,7 +909,8 @@ func (rt *Router) dispatch(ds []delivery) {
 		rt.mu.Unlock()
 		var err error
 		if reads {
-			err = rd.DeliverRead(rt.roster.ID, d.member, text, Receipt{member: id, ref: d.env.ID, chain: g.root})
+			err = rd.DeliverRead(rt.roster.ID, d.member, text, Receipt{member: id, ref: d.env.ID, chain: g.root,
+				person: strings.HasPrefix(d.env.From, HumanPrefix)})
 		} else {
 			err = d.driver.Deliver(rt.roster.ID, d.member, text)
 		}
@@ -1241,7 +1344,7 @@ func (rt *Router) capTrips(m Member, h turnHold) []capTrip {
 	if limit := m.TurnsPerDay; limit > 0 && rt.turns[m.ID] >= limit {
 		trip(GuardTurns, m.ID, pauseTurns, fmt.Sprintf("used %d of the member's %d turns a day", rt.turns[m.ID], limit))
 	}
-	if limit := rt.roster.BudgetUSDPerDay; rt.teamSpend >= limit {
+	if limit := rt.roster.BudgetUSDPerDay; !rt.roster.TeamBudgetWaived && rt.teamSpend >= limit {
 		trip(GuardTeamSpend, "", pauseTeam, fmt.Sprintf("spent $%.2f of the talkoot's $%.2f a day", rt.teamSpend, limit))
 	}
 	return out

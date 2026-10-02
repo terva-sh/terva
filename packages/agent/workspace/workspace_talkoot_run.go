@@ -137,6 +137,11 @@ type talkootRun struct {
 	// unleaseGen numbers, by member, the releases of its worktree. Only the
 	// newest may give it back. Guarded by wsTalkoot.mu.
 	unleaseGen map[string]uint64
+	// memberDirs holds, by member, the worktree a native member's lease
+	// returned. The lease is acquired outside w.mu, because the worktree
+	// engine runs git, and a session build under w.mu reads it from here.
+	// A release drops the entry. Guarded by wsTalkoot.mu.
+	memberDirs map[string]string
 
 	// kicking is set while this process runs the talkoot's kickoff. A
 	// recorded running kickoff without it was cut short, and may run again.
@@ -512,8 +517,13 @@ func (w *Workspace) talkootDriversFor(run *talkootRun) talkoot.Drivers {
 // session made early could vanish before it ever ran. When one does, the next
 // delivery makes another, and nothing is lost: it held nothing.
 func (w *Workspace) memberSession(run *talkootRun, m talkoot.Member) (string, error) {
+	// A worktree member takes its lease before its session exists, and
+	// outside w.mu, because the worktree engine runs git. A lease that fails
+	// fails the delivery. The session build reads the cached directory.
 	if m.Workspace == talkoot.WorkspaceWorktree {
-		return "", errors.New("native members cannot run in a worktree yet")
+		if err := w.prepareMemberDir(run, m.ID); err != nil {
+			return "", err
+		}
 	}
 	w.talkoot.mu.Lock()
 	id := run.seats[m.ID]

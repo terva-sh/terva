@@ -1251,10 +1251,11 @@ describe('the member card', () => {
     await open(client)
     fireEvent.input(screen.getByLabelText('Title'), { target: { value: 'Chief' } })
     fireEvent.click(screen.getByText('Save changes'))
-    fireEvent.input(screen.getByLabelText('Model'), { target: { value: 'opus' } })
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: '#custom' } })
+    fireEvent.input(screen.getByLabelText('Custom model'), { target: { value: 'opus' } })
     done({})
     await waitFor(() => expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('Lead'))
-    expect((screen.getByLabelText('Model') as HTMLInputElement).value).toBe('opus')
+    expect((screen.getByLabelText('Custom model') as HTMLInputElement).value).toBe('opus')
   })
 
   it('offers no reset for a member on its default mark', async () => {

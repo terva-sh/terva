@@ -2832,6 +2832,7 @@ export interface TalkootView {
   title?: string
   home: string
   budget_usd_per_day?: number
+  team_budget_waived?: boolean
   color?: string
   own_color?: string
   state?: TeamState
@@ -2848,6 +2849,11 @@ export interface TalkootMember {
   driver?: string
   model?: string
   tier?: string
+  // Native model resolution reads a live session first, without creating one.
+  resolved_provider?: string
+  resolved_model?: string
+  model_source?: 'session' | 'model' | 'tier' | 'default'
+  model_problem?: string
   posture?: string
   workspace?: string
   reviewer?: boolean
@@ -3048,6 +3054,7 @@ export interface TalkootUpdateParams {
   text?: string
   ops?: TalkootOp[]
   color?: string
+  team_budget_waived?: boolean
 }
 
 // An empty `to` reaches the coordinator.

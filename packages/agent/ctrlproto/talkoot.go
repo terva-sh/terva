@@ -125,11 +125,12 @@ type TalkootRef struct {
 
 // TalkootView is a running talkoot.
 type TalkootView struct {
-	ID              string  `json:"id"`
-	Name            string  `json:"name"`
-	Title           string  `json:"title,omitempty"`
-	Home            string  `json:"home"`
-	BudgetUSDPerDay float64 `json:"budget_usd_per_day,omitempty"`
+	ID               string  `json:"id"`
+	Name             string  `json:"name"`
+	Title            string  `json:"title,omitempty"`
+	Home             string  `json:"home"`
+	BudgetUSDPerDay  float64 `json:"budget_usd_per_day,omitempty"`
+	TeamBudgetWaived bool    `json:"team_budget_waived,omitempty"`
 	// Color is the team mark's colour with the default filled in, and
 	// OwnColor is the colour the roster sets, empty for the default. State
 	// is the team's combined state.
@@ -148,18 +149,23 @@ type TalkootView struct {
 // TalkootMember is one member: what the roster says, and what the router
 // reports.
 type TalkootMember struct {
-	ID              string  `json:"id"`
-	Role            string  `json:"role"`
-	Title           string  `json:"title,omitempty"`
-	Persona         string  `json:"persona,omitempty"`
-	Driver          string  `json:"driver,omitempty"`
-	Model           string  `json:"model,omitempty"`
-	Tier            string  `json:"tier,omitempty"`
-	Posture         string  `json:"posture,omitempty"`
-	Workspace       string  `json:"workspace,omitempty"`
-	Reviewer        bool    `json:"reviewer,omitempty"`
-	BudgetUSDPerDay float64 `json:"budget_usd_per_day,omitempty"`
-	TurnsPerDay     int     `json:"turns_per_day,omitempty"`
+	ID      string `json:"id"`
+	Role    string `json:"role"`
+	Title   string `json:"title,omitempty"`
+	Persona string `json:"persona,omitempty"`
+	Driver  string `json:"driver,omitempty"`
+	Model   string `json:"model,omitempty"`
+	Tier    string `json:"tier,omitempty"`
+	// A live native session wins over a fresh roster resolution.
+	ResolvedProvider string  `json:"resolved_provider,omitempty"`
+	ResolvedModel    string  `json:"resolved_model,omitempty"`
+	ModelSource      string  `json:"model_source,omitempty"`
+	ModelProblem     string  `json:"model_problem,omitempty"`
+	Posture          string  `json:"posture,omitempty"`
+	Workspace        string  `json:"workspace,omitempty"`
+	Reviewer         bool    `json:"reviewer,omitempty"`
+	BudgetUSDPerDay  float64 `json:"budget_usd_per_day,omitempty"`
+	TurnsPerDay      int     `json:"turns_per_day,omitempty"`
 	// Tools narrows the member to these tools. Absent means the posture's
 	// full set, and the seat tools stay either way.
 	Tools []string `json:"tools,omitempty"`
@@ -379,17 +385,19 @@ type TalkootRosterMember struct {
 	IdleStop        string       `json:"idle_stop,omitempty"`
 }
 
-// TalkootUpdateParams is the talkoot.update payload. It holds one of Text,
-// Ops, and Color. Text replaces the whole talkoot.md. Ops is a person's field
-// edit, the operations of a proposal, applied at once to the roster as it is
-// now. Color sets the team colour, and an empty string returns it to the
-// default. The id and the home cannot change.
+// TalkootUpdateParams is the talkoot.update payload. It holds exactly one
+// of Text, Ops, Color, and TeamBudgetWaived. Text replaces talkoot.md. Ops
+// applies a person's member-field edits to the current roster. Color sets
+// the team colour, or returns it to its default when empty. The waiver skips
+// only the team cost cap. The id and home cannot change.
 type TalkootUpdateParams struct {
 	ID    string      `json:"id"`
 	By    string      `json:"by"`
 	Text  string      `json:"text,omitempty"`
 	Ops   []TalkootOp `json:"ops,omitempty"`
 	Color *string     `json:"color,omitempty"`
+	// TeamBudgetWaived changes only the team cap waiver, not member limits.
+	TeamBudgetWaived *bool `json:"team_budget_waived,omitempty"`
 }
 
 // TalkootPostParams is the talkoot.post payload. An empty To reaches the

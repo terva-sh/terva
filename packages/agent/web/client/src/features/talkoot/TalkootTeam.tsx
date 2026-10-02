@@ -11,6 +11,8 @@ import { RoomLine, RoomExchange } from './RoomLine'
 import { OpenRefContext } from './RefChip'
 import { MarksContext, MemberMark } from './MemberMark'
 import { MemberCard } from './MemberCard'
+import { TeamBudget } from './TeamBudget'
+import { memberModelSummary } from './memberModel'
 import { faceFor, sideIn } from './face/adapter'
 import { MOTIONS, setMotionSetting, useMotionState, type Motion } from './face/motion'
 import { validPerson } from './person'
@@ -150,6 +152,7 @@ export function TalkootTeam({
                       {m.title || m.id}
                       {unread > 0 && <span class="talkoot-unread">{unread}</span>}
                     </span>
+                    <span class="talkoot-member-model" title={memberModelSummary(m)}>{memberModelSummary(m)}</span>
                     <span class={`talkoot-member-activity presence-${p}`}>
                       {p === 'working' && m.status?.tool ? t('running %s', m.status.tool) : PRESENCE_LABEL[p]()}
                       {m.status?.paused ? `: ${m.status.paused}` : ''}
@@ -171,6 +174,7 @@ export function TalkootTeam({
           })}
           <div class="talkoot-side-foot">
             <span class="talkoot-spend">{t('Today: $%s', spend.toFixed(2))}</span>
+            {view && <TeamBudget client={client} view={view} person={person} canSteer={canSteer} onError={setActionError} />}
             <MotionPicker />
             {canSteer && (
               <button class="btn sm" onClick={() => (teamPaused ? resume({}) : pause({}))}>
@@ -184,7 +188,7 @@ export function TalkootTeam({
             <strong>{current === ROOM ? t('Room') : member?.title || current}</strong>
             {member && (
               <span class="talkoot-main-meta">
-                {[member.role, member.persona, member.driver, member.posture].filter(Boolean).join(' · ')}
+                {[member.role, member.persona, member.driver, member.posture, memberModelSummary(member)].filter(Boolean).join(' · ')}
               </span>
             )}
             {member && (

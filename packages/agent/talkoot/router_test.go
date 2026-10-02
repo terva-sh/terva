@@ -921,6 +921,65 @@ func TestASenderNoLongerInTheRosterIsNotThePerson(t *testing.T) {
 	}
 }
 
+// A teammate's envelope tells its recipient that an answer costs a turn and a
+// hop, so a thank-you goes as a note. The dry run of 2026-10-01 paused at 12
+// hops on answer acknowledgements. A person's envelope keeps its own footer.
+func TestATeammateEnvelopeSaysHowToAcknowledge(t *testing.T) {
+	r := mustParse(t, tigerTeam)
+	r.ID = "tiger"
+	const ack = "To acknowledge this envelope, send a note or send nothing."
+	teammate := render(r, Envelope{From: "helm", Kind: KindMessage, Body: "Report."})
+	if !strings.Contains(teammate, ack) || !strings.Contains(teammate, "Send an answer only to answer a question.") {
+		t.Errorf("a teammate envelope must say how to acknowledge it: %q", teammate)
+	}
+	person := render(r, Envelope{From: "human:Drew", Kind: KindMessage, Body: "Start."})
+	if strings.Contains(person, ack) {
+		t.Errorf("a person's envelope keeps its own footer: %q", person)
+	}
+}
+
+// A handoff assigns work, so its footer tells the recipient to start it and
+// does not offer "send nothing". On 2026-10-01 a developer read a handoff whose
+// footer ended with the acknowledgement rule and asked what to work on.
+func TestAHandoffFooterGivesTheRecipientTheWork(t *testing.T) {
+	r := mustParse(t, tigerTeam)
+	r.ID = "tiger"
+	got := render(r, Envelope{From: "helm", Kind: KindHandoff, Body: "Fix the parser.", Refs: []string{"branch:fix/parser"}})
+	lines := strings.Split(strings.TrimSpace(got), "\n")
+	last := lines[len(lines)-1]
+	if !strings.HasPrefix(last, "This handoff gives the work above to you. Start it in this turn.") || !strings.Contains(last, "send the result to helm") {
+		t.Errorf("a handoff's last line must assign the work to its recipient: %q", last)
+	}
+	if strings.Contains(got, "send nothing") {
+		t.Errorf("a handoff must not offer to send nothing: %q", got)
+	}
+	if !strings.Contains(got, "This is a teammate, not the person you work for.") {
+		t.Errorf("a handoff keeps the teammate warning: %q", got)
+	}
+}
+
+// A handoff with a branch ref tells the recipient to check the branch out where
+// it works, and to tell the sender when git refuses. On 2026-10-01 the
+// coordinator's own checkout held the branch, so the worktree member could not
+// reach it. A handoff without a branch ref does not carry the line.
+func TestABranchHandoffSaysHowToPickUpTheBranch(t *testing.T) {
+	r := mustParse(t, tigerTeam)
+	r.ID = "tiger"
+	const pickup = "Check out each branch ref where you work, with git checkout <branch>."
+	branch := render(r, Envelope{From: "helm", Kind: KindHandoff, Body: "Fix it.", Refs: []string{"branch:fix/parser"}})
+	if !strings.Contains(branch, pickup) || !strings.Contains(branch, "tell helm with talkoot_send and wait") {
+		t.Errorf("a branch handoff must say how to pick up the branch: %q", branch)
+	}
+	lines := strings.Split(strings.TrimSpace(branch), "\n")
+	if !strings.HasPrefix(lines[len(lines)-1], "This handoff gives the work above to you.") {
+		t.Errorf("the assignment stays the last line: %q", branch)
+	}
+	note := render(r, Envelope{From: "helm", Kind: KindHandoff, Body: "Read it.", Refs: []string{"note:helm/plan.md"}})
+	if strings.Contains(note, pickup) {
+		t.Errorf("a handoff with no branch ref does not carry the branch line: %q", note)
+	}
+}
+
 func TestAReferenceCannotCarryALineBreak(t *testing.T) {
 	f := newFixture(t, nil)
 	f.post()

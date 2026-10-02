@@ -148,16 +148,12 @@ func TestCreateMakesTheRoomAndRefusesAnExistingID(t *testing.T) {
 	}
 }
 
-func TestCreateRefusesAForeignHomeAndANativeWorktreeMember(t *testing.T) {
+func TestCreateRefusesAForeignHome(t *testing.T) {
 	cwd := talkootHome(t)
 	w := openTalkootWorkspace(t, cwd)
 	ctx := context.Background()
 	if _, err := w.talkootCreate(ctx, "crew", crewText(testsupport.TempDir(t))); err == nil || !strings.Contains(err.Error(), "not this workspace's directory") {
 		t.Errorf("want a foreign home refused, got %v", err)
-	}
-	text := "---\nname: crew\nhome: " + cwd + "\nbudget_usd_per_day: 5\nmembers:\n  - id: helm\n    role: coordinator\n  - id: jev\n    role: specialist\n    workspace: worktree\n---\n"
-	if _, err := w.talkootCreate(ctx, "crew", []byte(text)); err == nil || !strings.Contains(err.Error(), "cannot run in a worktree") {
-		t.Errorf("want a native worktree member refused, got %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(talkoot.Dir(), "crew")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a refused create must leave nothing behind: %v", err)

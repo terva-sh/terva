@@ -394,6 +394,15 @@ func templateDoc(raw []byte) (*yaml.Node, []byte, error) {
 	if mapValue(m, "home") != nil {
 		return nil, nil, errors.New("a template sets no home; the person picks it when creating the talkoot")
 	}
+	if v := mapValue(m, "team_budget_waived"); v != nil {
+		var waived bool
+		if err := v.Decode(&waived); err != nil {
+			return nil, nil, err
+		}
+		if waived {
+			return nil, nil, errors.New("a template cannot waive the team budget; a person can waive it after creation")
+		}
+	}
 	return m, body, nil
 }
 

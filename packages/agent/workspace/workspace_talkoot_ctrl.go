@@ -118,16 +118,18 @@ func (w *Workspace) UpdateTalkoot(ctx context.Context, p ctrlproto.TalkootUpdate
 	var v talkootView
 	var err error
 	forms := 0
-	for _, set := range []bool{p.Text != "", len(p.Ops) > 0, p.Color != nil} {
+	for _, set := range []bool{p.Text != "", len(p.Ops) > 0, p.Color != nil, p.TeamBudgetWaived != nil} {
 		if set {
 			forms++
 		}
 	}
 	switch {
 	case forms > 1:
-		return ctrlproto.TalkootView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "talkoot: an update holds one of the whole text, a list of operations, and a colour")
+		return ctrlproto.TalkootView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "talkoot: an update holds one of the whole text, member operations, a colour, or a team budget waiver")
 	case forms == 0:
-		return ctrlproto.TalkootView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "talkoot: an update needs the whole text, a list of operations, or a colour")
+		return ctrlproto.TalkootView{}, ctrlproto.Errorf(ctrlproto.CodeBadRequest, "talkoot: an update needs the whole text, member operations, a colour, or a team budget waiver")
+	case p.TeamBudgetWaived != nil:
+		v, err = w.talkootBudgetWaiver(ctx, p.ID, p.By, *p.TeamBudgetWaived)
 	case p.Color != nil:
 		v, err = w.talkootColor(ctx, p.ID, p.By, *p.Color)
 	case len(p.Ops) > 0:
@@ -237,7 +239,7 @@ func (w *Workspace) wireTalkootView(v talkootView) ctrlproto.TalkootView {
 	r := v.Roster
 	out := ctrlproto.TalkootView{
 		ID: r.ID, Name: r.Name, Title: r.Title, Home: r.Home, BudgetUSDPerDay: r.BudgetUSDPerDay,
-		Color: look.TeamColor(r.ID, r.Color), OwnColor: r.Color,
+		Color: look.TeamColor(r.ID, r.Color), OwnColor: r.Color, TeamBudgetWaived: r.TeamBudgetWaived,
 		Text: string(v.Text), Members: make([]ctrlproto.TalkootMember, 0, len(v.Members)), Held: v.Held,
 	}
 	members := make([]talkoot.Member, 0, len(v.Members))
@@ -253,6 +255,7 @@ func (w *Workspace) wireTalkootView(v talkootView) ctrlproto.TalkootView {
 		out.Members = append(out.Members, ctrlproto.TalkootMember{
 			ID: mm.ID, Role: mm.Role, Title: mm.Title, Persona: mm.Persona, Driver: mm.Driver,
 			Model: mm.Model, Tier: mm.Tier, Posture: mm.Posture, Workspace: mm.Workspace,
+			ResolvedProvider: m.ResolvedProvider, ResolvedModel: m.ResolvedModel, ModelSource: m.ModelSource, ModelProblem: m.ModelProblem,
 			Reviewer: mm.Reviewer, BudgetUSDPerDay: mm.BudgetUSDPerDay, TurnsPerDay: mm.TurnsPerDay, Tools: mm.Tools, IdleStop: mm.IdleStop,
 			Mark: ctrlproto.TalkootMark(marks[mm.ID]), OwnMark: wireMark(mm.Mark),
 			Session: m.Session, Status: wireTalkootStatus(m.Status),

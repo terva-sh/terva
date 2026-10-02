@@ -681,6 +681,13 @@ func ctrlTimeString(t time.Time) string {
 // needed. An empty id resolves to the default session (latest on disk, or a
 // fresh one). Used by Prompt/Subscribe/Resume.
 func (w *Workspace) resolve(id string) (*wsSession, error) {
+	// A native Talkoot member in a worktree needs its lease before its
+	// session is built, and acquiring it runs git, so it happens before w.mu.
+	if id != "" && w.existing(id) == nil {
+		if err := w.prepareSessionDir(id); err != nil {
+			return nil, err
+		}
+	}
 	w.mu.Lock()
 	had := len(w.sessions)
 	s, err := w.sessionLocked(id)

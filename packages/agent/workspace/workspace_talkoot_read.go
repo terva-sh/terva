@@ -3,6 +3,7 @@ package workspace
 import (
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"terva.sh/terva/packages/agent/talkoot"
 	"terva.sh/terva/packages/core"
@@ -30,20 +31,43 @@ type talkootReads struct {
 	mu      sync.Mutex
 	pending []talkootRead
 	watch   sync.Once
+	// taken counts the deliveries any turn of this session has read.
+	taken atomic.Uint64
+	// fresh is set when a turn starts and cleared by its first user message.
+	// opened counts the turns whose first user message was a person's
+	// delivery. A turn that leaves opened unchanged was started by a person
+	// typing into the session, or by a teammate's handoff, so its final reply
+	// is not mirrored to the room (launchTurn). A handoff's answer belongs to
+	// the teammate, who reports onward.
+	fresh  atomic.Bool
+	opened atomic.Uint64
+	// users counts the user messages a person or a delivery wrote. A turn that
+	// adds more than one took input after its opening delivery: another
+	// delivery moves the member's chain, and a person's message is private.
+	// Either way the final reply no longer answers only the opening delivery,
+	// so launchTurn does not mirror it.
+	users atomic.Uint64
+	// replies counts the assistant messages this session's turns appended. A
+	// turn that leaves it unchanged produced no reply of its own, so the last
+	// assistant message in the transcript belongs to an earlier turn and must
+	// not be published again (launchTurn).
+	replies atomic.Uint64
 }
 
 type talkootRead struct {
 	text string
-	read func()
+	// person is set when a person sent the delivery, not a member.
+	person bool
+	read   func()
 }
 
 // queueTalkoot queues a delivery's text into the session, and calls read
 // when a turn reads it. The entry is in place before the text is queued, so
 // a turn that starts at once finds it.
-func (s *wsSession) queueTalkoot(text string, read func()) {
+func (s *wsSession) queueTalkoot(text string, person bool, read func()) {
 	s.reads.watch.Do(func() { s.reads.attach(s.agent) })
 	s.reads.mu.Lock()
-	s.reads.pending = append(s.reads.pending, talkootRead{text: strings.TrimSpace(text), read: read})
+	s.reads.pending = append(s.reads.pending, talkootRead{text: strings.TrimSpace(text), person: person, read: read})
 	s.reads.mu.Unlock()
 	s.queue(text)
 }
@@ -71,24 +95,40 @@ func (r *talkootReads) onEvent(ev core.AgentEvent) {
 // observe reads each delivery whose text a user message carries. It runs on
 // the turn's goroutine before the next model call, with no lock held.
 func (r *talkootReads) observe(m provider.Message) {
-	if m.Role != provider.RoleUser || m.Meta[core.MetaSynthetic] == "true" {
+	if m.Role == provider.RoleAssistant {
+		r.replies.Add(1)
 		return
 	}
-	var reads []func()
+	if !core.IsUserTurn(m) {
+		return
+	}
+	r.users.Add(1)
+	var reads []talkootRead
 	r.mu.Lock()
 	for _, b := range m.Content {
 		if len(r.pending) == 0 {
 			break
 		}
 		if tb, ok := b.(provider.TextBlock); ok {
-			if fn := r.takeLocked(strings.TrimSpace(tb.Text)); fn != nil {
-				reads = append(reads, fn)
+			if d, ok := r.takeLocked(strings.TrimSpace(tb.Text)); ok {
+				reads = append(reads, d)
 			}
 		}
 	}
 	r.mu.Unlock()
-	for _, fn := range reads {
-		fn()
+	// 🚨 An opening message that carries two deliveries answers two chains,
+	// and the member is active in only the last one. Such a turn is not
+	// mirrored. Core appends one text per message today, so this is a guard.
+	// A teammate's handoff opens a turn that reports to the teammate, so only
+	// a person's delivery counts.
+	if r.fresh.Swap(false) && len(reads) == 1 && reads[0].person {
+		r.opened.Add(1)
+	}
+	if len(reads) > 0 {
+		r.taken.Add(uint64(len(reads)))
+	}
+	for _, d := range reads {
+		d.read()
 	}
 }
 
@@ -136,14 +176,14 @@ func (r *talkootReads) pendingLocked(text string) bool {
 	return false
 }
 
-func (r *talkootReads) takeLocked(text string) func() {
+func (r *talkootReads) takeLocked(text string) (talkootRead, bool) {
 	for i, p := range r.pending {
 		if p.text == text {
 			r.pending = append(r.pending[:i], r.pending[i+1:]...)
-			return p.read
+			return p, true
 		}
 	}
-	return nil
+	return talkootRead{}, false
 }
 
 // talkootRead moves a member into the chain of a delivery its session's turn

@@ -107,8 +107,8 @@ func TestAnApprovedAddIntroducesTheNewMember(t *testing.T) {
 	if n := len(introsTo(t, "helm")) + len(introsTo(t, "jev")); n != 0 {
 		t.Errorf("the add introduced %d members that were already on the roster", n)
 	}
-	// The member's replies ride the introduction's chain: a note to the room
-	// and a message to the coordinator.
+	// The member's replies ride the introduction's chain: its explicit note
+	// and coordinator message, then its distinct final reply to the person.
 	sent := roomLines(t, "crew", func(l talkoot.Line) bool {
 		return l.Type == talkoot.LineEnvelope && l.Envelope.From == "atlas" && l.Envelope.Chain.Root == e.ID
 	})
@@ -116,8 +116,8 @@ func TestAnApprovedAddIntroducesTheNewMember(t *testing.T) {
 	for _, l := range sent {
 		got = append(got, string(l.Envelope.Kind)+" to "+strings.Join(l.Envelope.To, ","))
 	}
-	if strings.Join(got, "; ") != "note to jev; message to helm" {
-		t.Errorf("atlas sent %q, want a note to jev and a message to helm", got)
+	if strings.Join(got, "; ") != "note to jev; message to helm; message to human:kaisa" {
+		t.Errorf("atlas sent %q, want a note to jev, a message to helm, and the final reply to kaisa", got)
 	}
 }
 

@@ -113,11 +113,40 @@ member card, and pause and resume.
 - **Your name** is what the room records beside your posts, answers, and
   pauses. The browser keeps it. The name records who acted, and the `steer`
   capability decides who may act.
+- **The team daily limit** appears below today's spend. **Waive team daily
+  limit** keeps it off until you press **Restore team daily limit**, including
+  across a restart or a daily reset. Member spend and turn limits still apply.
+  Restoring the limit counts today's existing spend at once. The room records
+  who changed it.
 - **Pause** stops one member, one chain of messages, or the whole team.
   **Resume** lifts the pause.
 
-The browser tab carries the team: its title reads the team name and its
+The browser tab carries the team. Its title reads the team name and its
 state, and its icon is the team's mark.
+
+The sidebar and member card show each native member's resolved provider and
+model, even before it has a session. An existing session's model takes
+precedence and is labelled "live session". Reading the roster creates no
+sessions and makes no provider calls. An external backend shows its requested
+model or tier, or "backend default", rather than claiming a live model.
+
+The member card offers the native model catalog, a search box, and a custom
+model input. Tier choices are `weak`, `medium`, `strong`, and `cheap`.
+Choosing a model clears the tier in the same edit. Choosing a tier clears
+the model. External backends keep their own model names and do not receive
+the native catalog.
+
+A member can reply to the person who started its current chain with
+`talkoot_send` to `human:<name>`, `human`, or that person's exact name. Member
+ids take precedence over aliases. A member cannot choose another person, and
+a handoff still needs a member recipient. Replies to a person stay in the
+room and wake nobody.
+
+A successful native turn's completed final reply also appears in the room,
+with the member as sender and the original chain and thread. The router
+suppresses a matching recent body that member already sent in that chain.
+Failed, cancelled, incomplete, and tool-step output stays out of the room.
+The normal rate, hop, body-size, and pause guards still apply.
 
 ## The roster
 
@@ -165,6 +194,7 @@ write it by hand, and the daemon reads it when it starts.
 | `title` | no | A longer title for the view |
 | `home` | yes | The checkout the team works in. It must be the daemon's directory |
 | `budget_usd_per_day` | yes | The team's daily spend cap in US dollars, above 0 |
+| `team_budget_waived` | no | `true` waives the team cap until a person restores it. Default `false`. Member limits still apply |
 | `color` | no | The team mark's colour, as `#RRGGBB`. Absent, the id picks one |
 | `members` | yes | The members, below |
 
@@ -255,9 +285,16 @@ your rules, and a card in the inbox when the policy asks.
   message reaches the coordinator as a note.
 
 A worker member runs as a process. It stops after `idle_stop` with no turn,
-and the next message wakes it. A worker in a worktree keeps its lease across
-a restart. If the lease fails, the delivery fails, and the member never falls
-back to the home checkout.
+and the next message wakes it. A member in a worktree, native or worker, keeps
+its lease across a restart. If the lease fails, the delivery fails, and the
+member never falls back to the home checkout.
+
+A native member with `workspace: worktree` runs its session in its own
+worktree: `read`, `write`, `edit`, and `bash` work in that checkout. Its
+session file stays with the team's other sessions. A member that moves between
+its worktree and the home checkout gets a fresh session, and a member that
+leaves its worktree gives it back. A worktree that holds work is kept, with its
+claim dropped.
 
 Check the terms of your provider before you seat a member on a subscription.
 [providers.md](providers.md) says why.
@@ -291,6 +328,11 @@ roster rather than an afterthought.
 - **Budgets.** The team's `budget_usd_per_day` is required. A member can have
   its own budget and a daily turn cap too. The daemon checks the caps after
   each turn, so one turn can take a member past its cap before it pauses.
+  A person may persistently waive only the aggregate team cost cap with
+  `team_budget_waived: true`. Accounting continues. Enabling it lifts an
+  existing team-spend pause, but no other pause. Restoring it counts current
+  spend immediately. Templates cannot enable the waiver; create the team
+  first and then make an explicit update.
 - **The day** is the daemon's local day. The counters start again at local
   midnight. A pause stays until you resume it.
 - **Pauses stack.** A member can be paused for its spend, its turns, the
@@ -374,9 +416,6 @@ capability it needs, and the events a talkoot sends.
 ## What it does not do yet
 
 - The terminal interface has no Talkoot view. Watch a team in the web panel.
-- A native member cannot run in a worktree, so a native team shares one
-  checkout, and one member at most can write to it. No member can run `yolo`
-  as a result.
 - There is no driver for Codex or for other ACP agents.
 - The guard values and the daily budget period are fixed.
 - A member on another machine cannot join a team.

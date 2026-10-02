@@ -57,6 +57,9 @@ type Roster struct {
 	Title           string  `yaml:"title,omitempty"`
 	Home            string  `yaml:"home"`
 	BudgetUSDPerDay float64 `yaml:"budget_usd_per_day"`
+	// TeamBudgetWaived disables only the team cap until a person restores it.
+	// Member spend and turn caps still apply. The configured cap is retained.
+	TeamBudgetWaived bool `yaml:"team_budget_waived,omitempty"`
 	// Color is the team mark's colour, a #RRGGBB value. Absent, the talkoot
 	// id picks one (look.TeamColor). The team mark has one body, so a
 	// colour is all a roster sets.

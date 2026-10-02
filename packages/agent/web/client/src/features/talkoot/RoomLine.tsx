@@ -99,6 +99,7 @@ export function RoomLine({
             ? t('%s approved a roster change from %s', who(line.by ?? ''), who(line.proposer ?? ''))
             : t('%s changed the roster', who(line.by ?? ''))}
           {line.changes && line.changes.length > 0 && ` (${line.changes.map((c) => c.member).join(', ')})`}
+          {line.reason && `; ${line.reason}`}
           {swatch && (
             <>
               {'; '}

@@ -302,7 +302,7 @@ func TestEveryQueuedDeliveryIsRead(t *testing.T) {
 	const n = 300
 	var read atomic.Int64
 	for i := range n {
-		s.queueTalkoot(fmt.Sprintf("[talkoot crew] message %d", i), func() { read.Add(1) })
+		s.queueTalkoot(fmt.Sprintf("[talkoot crew] message %d", i), false, func() { read.Add(1) })
 	}
 	close(tool.release)
 	waitTalkoot(t, "every queued delivery to be read", func() bool { return read.Load() == n })

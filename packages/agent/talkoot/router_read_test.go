@@ -49,6 +49,27 @@ func newReadFixture(t *testing.T) *fixture {
 	return f
 }
 
+// The receipt says who sent the delivered envelope, so a native session can
+// mirror only the turns a person started.
+func TestAReceiptSaysWhetherAPersonSentIt(t *testing.T) {
+	f := newFixture(t, nil)
+	f.reads = &reader{recorder: recorder{name: "native"}, f: f}
+	f.reopen()
+	f.post("helm")
+	if r := f.reads.take(); !r.FromPerson() {
+		t.Fatal("a person's post arrived as a teammate's delivery")
+	}
+	if err := f.router.Read(Receipt{member: "helm", chain: f.envelopes()[0].Envelope.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.send("helm", Outgoing{To: []string{"atlas"}, Body: "Over to you."}); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.reads.take(); r.FromPerson() {
+		t.Fatal("a teammate's handoff arrived as a person's delivery")
+	}
+}
+
 func (f *fixture) rootOfSend(from, to, body string) string {
 	f.t.Helper()
 	e, err := f.send(from, Outgoing{To: []string{to}, Body: body})

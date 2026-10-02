@@ -1,12 +1,17 @@
+import { Fragment } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { t } from '../../i18n'
 import type { ClientLike } from '../../platform/ctrlproto/client'
-import type { PersonaView, TalkootMark, TalkootMember, TalkootOp, TalkootOpValue } from '../../platform/ctrlproto/types'
+import type { ModelInfo, ModelsResult, PersonaView, TalkootMark, TalkootMember, TalkootOp, TalkootOpValue } from '../../platform/ctrlproto/types'
 import { MARK_PALETTE, MARK_SHAPES } from '../../platform/talkoot/marks'
 import { MemberMark } from './MemberMark'
+import { memberModelSummary } from './memberModel'
 
 // The postures a member may take: terva's approval modes.
 const POSTURES = ['plan', 'ask', 'auto-edit', 'workspace', 'yolo']
+// Mirrors tools.SwarmTierNames, including the separate cost tier.
+const TIERS = ['weak', 'medium', 'strong', 'cheap']
+const CUSTOM_MODEL = '#custom'
 
 // The fields the card edits as text, in the order it shows them, by class.
 // Decision 0025 sorts every field into look, voice, or authority.
@@ -71,6 +76,23 @@ export function MemberCard({
 }) {
   const [draft, setDraft] = useState<Partial<Record<Field, string>>>({})
   const [removing, setRemoving] = useState(false)
+  const [models, setModels] = useState<ModelInfo[]>([])
+  const [catalogError, setCatalogError] = useState('')
+  const [modelSearch, setModelSearch] = useState('')
+  const [customModel, setCustomModel] = useState(false)
+  const driver = draft.driver ?? member.driver ?? 'native'
+  const hasCatalog = driver === '' || driver === 'native' || driver === 'terva'
+  useEffect(() => {
+    let live = true
+    setModels([])
+    setCatalogError('')
+    if (!hasCatalog) return
+    client.send<ModelsResult>('models.list', {}, '').then(
+      (res) => live && setModels(res.models ?? []),
+      (e: unknown) => live && setCatalogError(e instanceof Error ? e.message : String(e)),
+    )
+    return () => { live = false }
+  }, [client, hasCatalog])
   const [voice, setVoice] = useState<PersonaView | null>(null)
   // The card keeps its own error, so a save does not clear an error the
   // inbox or the composer showed.
@@ -157,6 +179,14 @@ export function MemberCard({
   const save = () => {
     const sent = Object.fromEntries(changed.map((f) => [f, draft[f]!])) as Partial<Record<Field, string>>
     const set = Object.fromEntries(changed.map((f) => [f, valueOf(f, sent[f]!)]))
+    // Send the pair in one edit, even when the cleared field was already
+    // empty in this snapshot. Another editor may have set it meanwhile.
+    if (changed.includes('model') || changed.includes('tier')) {
+      sent.model = draft.model ?? shown(member, 'model')
+      sent.tier = draft.tier ?? shown(member, 'tier')
+      set.model = valueOf('model', sent.model)
+      set.tier = valueOf('tier', sent.tier)
+    }
     // A saved box leaves the draft, unless the person typed in it again while
     // the save was on its way. A refused save keeps the draft to fix. Save
     // waits for the answer, so a second click cannot send the edit again.
@@ -168,10 +198,53 @@ export function MemberCard({
     })
   }
 
-  const field = (f: Field) => (
+  const chooseModel = (model: string) => setDraft((d) => ({ ...d, model, tier: '' }))
+  const modelValue = draft.model ?? shown(member, 'model')
+  // Roster models are IDs, not provider-qualified routes. Keep duplicate
+  // catalog IDs as one choice and let the daemon resolve their provider.
+  const modelIDs = [...new Set(models.filter((m) => !m.hidden || m.id === modelValue).map((m) => m.id))]
+  const visibleModels = modelIDs.filter((id) => id === modelValue || id.toLowerCase().includes(modelSearch.toLowerCase()))
+  const modelField = (
+    <Fragment key="model">
+      <label class="talkoot-field">
+        <span>{t('Model')}</span>
+        <select
+          disabled={!canSteer}
+          value={customModel ? CUSTOM_MODEL : modelValue}
+          onChange={(e) => {
+            const v = e.currentTarget.value
+            setCustomModel(v === CUSTOM_MODEL)
+            if (v !== CUSTOM_MODEL) chooseModel(v)
+          }}
+        >
+          <option value="">{t('(default)')}</option>
+          {modelValue && !visibleModels.includes(modelValue) && <option value={modelValue}>{modelValue}</option>}
+          {hasCatalog && visibleModels.map((id) => <option key={id} value={id}>{id}</option>)}
+          <option value={CUSTOM_MODEL}>{t('Custom model')}</option>
+        </select>
+      </label>
+      {hasCatalog && <label class="talkoot-field">
+        <span>{t('Search models')}</span>
+        <input disabled={!canSteer} type="search" value={modelSearch} onInput={(e) => setModelSearch(e.currentTarget.value)} />
+      </label>}
+      {customModel && <label class="talkoot-field">
+        <span>{t('Custom model')}</span>
+        <input disabled={!canSteer} value={modelValue} onInput={(e) => chooseModel(e.currentTarget.value)} />
+      </label>}
+      {catalogError && <p class="talkoot-note">{t('Could not load models: %s', catalogError)}</p>}
+      {!hasCatalog && <p class="talkoot-note">{t('This backend uses its own model names. Native models are not offered here.')}</p>}
+    </Fragment>
+  )
+
+  const field = (f: Field) => f === 'model' ? modelField : (
     <label key={f} class="talkoot-field">
       <span>{LABELS[f]()}</span>
-      {f === 'posture' ? (
+      {f === 'tier' ? (
+        <select disabled={!canSteer} value={draft.tier ?? shown(member, 'tier')} onChange={(e) => setDraft((d) => ({ ...d, tier: e.currentTarget.value, model: '' }))}>
+          <option value="">{t('(default)')}</option>
+          {[...TIERS, ...(member.tier && !TIERS.includes(member.tier) ? [member.tier] : [])].map((tier) => <option key={tier} value={tier}>{tier}</option>)}
+        </select>
+      ) : f === 'posture' ? (
         <select disabled={!canSteer} value={draft[f] ?? shown(member, f)} onChange={(e) => setDraft({ ...draft, [f]: e.currentTarget.value })}>
           <option value="">{t('(default)')}</option>
           {/* A posture this client does not list still shows as itself. */}
@@ -264,6 +337,7 @@ export function MemberCard({
       <fieldset class="talkoot-card-section class-authority">
         <legend>{t('Driver and limits')}</legend>
         <p class="talkoot-note">{t('These fields decide what the member can do.')}</p>
+        <p class="talkoot-note">{memberModelSummary(member)}</p>
         {AUTHORITY.map(field)}
       </fieldset>
 
@@ -272,7 +346,7 @@ export function MemberCard({
           <button class="btn primary" disabled={changed.length === 0 || saving} onClick={save}>
             {t('Save changes')}
           </button>
-          <button class="btn" disabled={changed.length === 0} onClick={() => setDraft({})}>
+          <button class="btn" disabled={changed.length === 0} onClick={() => { setDraft({}); setCustomModel(false); setModelSearch('') }}>
             {t('Discard')}
           </button>
           <button class="btn" onClick={member.status?.paused ? onResume : onPause}>
