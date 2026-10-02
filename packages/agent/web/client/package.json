@@ -16,7 +16,7 @@
     "i18n-check": "node scripts/i18n-extract.mjs --check"
   },
   "dependencies": {
-    "markdown-it": "^14.3.0",
+    "markdown-it": "^14.3.2",
     "preact": "^10.25.4"
   },
   "devDependencies": {
