@@ -18,10 +18,11 @@ import (
 // Everything else that walks must consult SkipScanDir. Adding an entry here is
 // a claim that the walk cannot reach repository source; check before adding.
 var walksOutsideTheRepo = map[string]string{
-	filepath.Join("examples", "embed_test.go"):                   "walks the embedded FS roots, not a directory on disk",
-	filepath.Join("packages", "testsupport", "repowalk.go"):      "defines the predicate",
-	filepath.Join("packages", "testsupport", "repowalk_test.go"): "tests the predicate against synthetic trees",
-	filepath.Join("packages", "agent", "ticketgroom_test.go"):    "fingerprints a throwaway .tickets store under TempDir to prove groom writes nothing",
+	filepath.Join("examples", "embed_test.go"):                                "walks the embedded FS roots, not a directory on disk",
+	filepath.Join("packages", "testsupport", "repowalk.go"):                   "defines the predicate",
+	filepath.Join("packages", "testsupport", "repowalk_test.go"):              "tests the predicate against synthetic trees",
+	filepath.Join("packages", "agent", "ticketgroom_test.go"):                 "fingerprints a throwaway .tickets store under TempDir to prove groom writes nothing",
+	filepath.Join("packages", "agent", "tools", "gosh", "gnucompare_test.go"): "walks session transcript directories named in GOSH_GNU_TRANSCRIPTS, never the source tree",
 }
 
 // TestEveryRepoWalkConsultsSkipScanDir enforces the adoption that SkipScanDir's

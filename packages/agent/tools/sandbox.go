@@ -667,6 +667,36 @@ func canonicalOrParent(p string) (string, error) {
 	}
 }
 
+// HoldsSecrets reports whether dir is, or contains, a path the read tools
+// refuse by root: a secret root, a transcript root, a directory whose files
+// are denied by name, or a guarded component tree.
+//
+// 🚨 Those rules match by path. A tool that moves or deletes a directory
+// must ask this first, because a renamed parent carries the secret out from
+// under its root, and every later read of the new path is then allowed.
+func (s *Sandbox) HoldsSecrets(dir string) bool {
+	if s == nil {
+		return false
+	}
+	d, err := canonicalOrParent(dir)
+	if err != nil {
+		return true
+	}
+	roots := append(append([]string{}, s.secretRoots...), s.transcriptRoots...)
+	for _, g := range s.secretNames {
+		roots = append(roots, g.dir)
+	}
+	for _, g := range s.guardedRoots {
+		roots = append(roots, g.dir)
+	}
+	for _, r := range roots {
+		if isUnder(d, r) {
+			return true
+		}
+	}
+	return false
+}
+
 // isUnder reports whether target is equal to root or a descendant of it.
 func isUnder(root, target string) bool {
 	rootSep := root

@@ -1,13 +1,11 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,6 +41,16 @@ type BashTool struct {
 	// Keys here win over inherited duplicates (appended last). NEVER put
 	// secrets here — bash is an unguarded egress channel.
 	Env map[string]string
+
+	// Runner runs each script. Nil runs the host shell.
+	Runner ShellRunner
+}
+
+func (t *BashTool) runner() ShellRunner {
+	if t.Runner != nil {
+		return t.Runner
+	}
+	return hostShell{}
 }
 
 type bashArgs struct {
@@ -98,7 +106,11 @@ func (t *BashTool) Description() string {
 	// reference and become unoverridable), and a translator or an operator
 	// tuning this text needs the whole paragraph in one piece to move the
 	// shell name and the directory where their language puts them.
-	return i18n.D("tool.bash.description", bashDesc, shellName(), where)
+	desc := i18n.D("tool.bash.description", bashDesc, t.runner().ShellName(), where)
+	if notes := t.runner().Notes(); notes != "" {
+		desc += "\n\n" + notes
+	}
+	return desc
 }
 func (t *BashTool) Schema() json.RawMessage { return json.RawMessage(bashSchema) }
 
@@ -132,81 +144,16 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	defer cancel()
 
 	start := time.Now()
-	cmd := newShellCmd(runCtx, a.Command)
-	cmd.Dir = cwd
-	// Inherit the process environment, then append terva facts so they win
-	// over any inherited duplicate (Go uses the last value for a repeated key).
-	cmd.Env = os.Environ()
-	for _, k := range sortedKeys(t.Env) {
-		cmd.Env = append(cmd.Env, k+"="+t.Env[k])
-	}
-	setProcessGroup(cmd)
-
-	// Capture merged stdout+stderr with line-by-line streaming.
-	pr, pw := io.Pipe()
-	cmd.Stdout = pw
-	cmd.Stderr = pw
-
-	if err := cmd.Start(); err != nil {
+	out := &bashOutput{spill: newSpillWriter(), progress: progress}
+	exitCode, err := t.runner().Run(runCtx, ShellRequest{Script: a.Command, Dir: cwd, Env: t.Env, Output: out})
+	spill := out.spill
+	spill.Close()
+	if err != nil {
 		return core.ToolResult{}, fmt.Errorf("start: %w", err)
 	}
 
-	// captured holds the in-memory result we show inline (capped at
-	// maxBashBytes). spill tees the *complete* stream to a temp file so
-	// the "full output" link is genuinely full, not a re-labeled copy of
-	// the capped buffer. totalBytes tracks the real, un-capped size.
-	captured := &bytes.Buffer{}
-	spill := newSpillWriter()
-	var totalBytes int64
-	done := make(chan struct{})
-
-	// Watch for context cancellation and kill the entire process
-	// group immediately. exec.CommandContext only kills the direct
-	// process, but child processes (e.g. grep spawned by the shell)
-	// keep the output pipe open and block cmd.Wait() indefinitely.
-	go func() {
-		select {
-		case <-runCtx.Done():
-			killProcessGroup(cmd)
-			// Close the write end so the reader goroutine unblocks.
-			pw.Close()
-		case <-done:
-		}
-	}()
-	go func() {
-		defer close(done)
-		buf := make([]byte, 4096)
-		for {
-			n, err := pr.Read(buf)
-			if n > 0 {
-				chunk := buf[:n]
-				totalBytes += int64(n)
-				spill.Write(chunk)
-				if captured.Len() < maxBashBytes {
-					room := maxBashBytes - captured.Len()
-					if n > room {
-						captured.Write(chunk[:room])
-					} else {
-						captured.Write(chunk)
-					}
-				}
-				if progress != nil {
-					progress(string(chunk))
-				}
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
-
-	waitErr := cmd.Wait()
-	pw.Close()
-	<-done
-	spill.Close()
-
-	output := captured.String()
-	truncBytes := totalBytes > int64(maxBashBytes)
+	output := out.captured.String()
+	truncBytes := out.total > int64(maxBashBytes)
 	lines := strings.Split(output, "\n")
 	truncLines := false
 	if len(lines) > maxBashLines {
@@ -214,15 +161,6 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		truncLines = true
 	}
 	trimmed := strings.Join(lines, "\n")
-
-	exitCode := 0
-	if waitErr != nil {
-		if ee, ok := waitErr.(*exec.ExitError); ok {
-			exitCode = ee.ExitCode()
-		} else {
-			exitCode = -1
-		}
-	}
 
 	elapsed := time.Since(start)
 
