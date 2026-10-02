@@ -46,7 +46,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [blacksmith-4vcpu-ubuntu-2404, blacksmith-6vcpu-macos-15, blacksmith-4vcpu-windows-2025]
     steps:
       - uses: actions/checkout@v4
 
@@ -123,7 +123,7 @@ jobs:
   web-client:
     name: web client tests
     if: ${{ github.server_url == 'https://github.com' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
 
