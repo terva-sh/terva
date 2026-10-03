@@ -11,6 +11,23 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.139.7](https://github.com/terva-sh/terva/releases/tag/v0.139.7) — 2026-10-02
+
+### Features
+
+- desktop: open an owned local server in a native window
+- talkoot: give native team members their own worktrees
+- tools: add an experimental in-process shell backend
+
+### Fixes
+
+- chat: inherit parent admission and ask again after a re-invite
+- chat: keep thread commands scoped and owner controls available
+- core: refresh the pinned tool set after a tool batch
+- desktop: pin and verify Linux glibc interpreters
+- web: avoid quadratic work in automatic link detection
+- web: unify palette roles and guard text contrast
+
 ## [v0.139.5](https://github.com/terva-sh/terva/releases/tag/v0.139.5) — 2026-09-30
 
 ### Features
