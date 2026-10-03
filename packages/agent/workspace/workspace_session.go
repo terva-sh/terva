@@ -872,6 +872,10 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 			for _, t := range tools.TalkootTools(seat) {
 				r.ToolRegistry[t.Name()] = t
 			}
+			// talkoot_workspace: only a member with workspace: either moves.
+			if _, _, err := w.movableSeat(s.id); err == nil {
+				r.ToolRegistry["talkoot_workspace"] = &tools.TalkootWorkspaceTool{Mover: talkootMover{w: w, sid: s.id}}
+			}
 			// The ticket tools write as the member, and check its closures,
 			// for as long as the session holds the seat.
 			if tc := tools.TicketCoreFor(r.ToolRegistry); tc != nil {

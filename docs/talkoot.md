@@ -209,8 +209,8 @@ write it by hand, and the daemon reads it when it starts.
 | `mark` | The member's mark, as `shape` and `color`. Absent, it comes from the persona |
 | `driver` | What runs the member. Default `native`. See [Drivers](#drivers) |
 | `model` or `tier` | The model id, or a tier: `weak`, `medium`, `strong`, or `cheap`. Not both |
-| `posture` | The member's approval mode. Default `auto-edit` in a worktree, `plan` otherwise |
-| `workspace` | `shared`, the team's home checkout, or `worktree`, a worktree leased for the member. Default `shared` |
+| `posture` | The member's approval mode. Default `auto-edit` for `workspace: worktree` or `either`, `plan` otherwise. A movable member runs in `plan` while it is outside its worktree |
+| `workspace` | `shared`, the team's home checkout, `worktree`, a worktree leased for the member, or `either`, which starts in the home checkout and lets the member move. Default `shared` |
 | `reviewer` | `true` lets a specialist close a ticket another member worked |
 | `budget_usd_per_day` | The member's own daily spend cap, no higher than the team's |
 | `turns_per_day` | A daily cap on the member's turns |
@@ -221,9 +221,10 @@ The daemon checks the roster when it loads it, and names every problem it
 finds. Beyond the formats above, the rules are these:
 
 - At most one member can write to the shared checkout. Give every other
-  member `posture: plan` or `workspace: worktree`.
+  member `posture: plan`, `workspace: worktree`, or `workspace: either`.
 - `posture: yolo` needs `workspace: worktree`, and a worker member can never
   have it.
+- `workspace: either` is for a native member only.
 - `reviewer` is for a specialist only.
 - `idle_stop` is for a worker member only, since a native member has no
   process to stop.
@@ -295,6 +296,32 @@ session file stays with the team's other sessions. A member that moves between
 its worktree and the home checkout gets a fresh session, and a member that
 leaves its worktree gives it back. A worktree that holds work is kept, with its
 claim dropped.
+
+A native member with `workspace: either` starts in the home checkout in `plan`,
+whatever its `posture` says, so it can read there and cannot write. It moves
+with the `talkoot_workspace` tool, and keeps its conversation:
+
+- `enter` takes the member's worktree lease and moves the member in. There
+  the member runs in its own `posture`, and checks out a branch itself with
+  `git switch <branch>`. The move applies to its next tool call, in the same
+  turn.
+- `leave` moves the member back to the home checkout in `plan`. The member
+  commits first and runs `git switch --detach`, so another checkout can take
+  its branch. The member keeps its lease, so a later `enter` returns to the
+  same worktree. The lease goes back when the run starts again or the roster
+  changes, never on a member's own `leave`, because giving a worktree back
+  runs git in it.
+- `status` says where the member works.
+
+The tool runs no git inside the member's worktree. The daemon runs outside the
+member's sandbox, so the member runs git there in its own `bash`, which its
+sandbox and gate cover. `enter` still takes the lease through the worktree
+engine, whose `git worktree add` runs from the home checkout, as every delivery
+to a `workspace: worktree` member does. `write` and `edit` refuse git's own
+files, so a member cannot plant a hook or filter for that git without an
+approved `bash` call.
+
+Each run starts a movable member in the home checkout, after a restart too.
 
 Check the terms of your provider before you seat a member on a subscription.
 [providers.md](providers.md) says why.

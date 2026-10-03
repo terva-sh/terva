@@ -22,6 +22,7 @@ import (
 	"terva.sh/terva/packages/agent/talkoot/expression"
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/core/permission"
 	"terva.sh/terva/packages/filelock"
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/session"
@@ -142,6 +143,17 @@ type talkootRun struct {
 	// engine runs git, and a session build under w.mu reads it from here.
 	// A release drops the entry. Guarded by wsTalkoot.mu.
 	memberDirs map[string]string
+	// inside marks, by member, a workspace: either member that entered its
+	// worktree with talkoot_workspace. Absent means the home checkout, which
+	// is where every movable member starts, after a restart too. Guarded by
+	// wsTalkoot.mu.
+	inside map[string]bool
+	// moveMu serializes talkoot_workspace moves with roster updates. An update
+	// holds it for its whole apply, so no move lands between the postures it
+	// computes and the postures it applies. A move waits out a slow update,
+	// which is rare and costs only that wait. It is taken after update and
+	// before mu, and a move never takes update.
+	moveMu sync.Mutex
 
 	// kicking is set while this process runs the talkoot's kickoff. A
 	// recorded running kickoff without it was cut short, and may run again.
@@ -520,7 +532,10 @@ func (w *Workspace) memberSession(run *talkootRun, m talkoot.Member) (string, er
 	// A worktree member takes its lease before its session exists, and
 	// outside w.mu, because the worktree engine runs git. A lease that fails
 	// fails the delivery. The session build reads the cached directory.
-	if m.Workspace == talkoot.WorkspaceWorktree {
+	w.talkoot.mu.Lock()
+	inside := run.inside[m.ID]
+	w.talkoot.mu.Unlock()
+	if m.Workspace == talkoot.WorkspaceWorktree || m.Workspace == talkoot.WorkspaceEither && inside {
 		if err := w.prepareMemberDir(run, m.ID); err != nil {
 			return "", err
 		}
@@ -640,7 +655,26 @@ func (w *Workspace) talkootPostureOf(sessID string) string {
 	if !ok {
 		return ""
 	}
+	w.talkoot.mu.Lock()
+	defer w.talkoot.mu.Unlock()
+	return effectivePostureLocked(b.run, m)
+}
+
+// effectivePostureLocked is the approval mode a member runs in now. A
+// workspace: either member outside its worktree runs in plan, so it cannot
+// write to the home checkout, whatever its roster posture says. The caller
+// holds w.talkoot.mu.
+func effectivePostureLocked(run *talkootRun, m talkoot.Member) string {
+	if m.Workspace == talkoot.WorkspaceEither && !run.inside[m.ID] {
+		return string(permission.ApprovalPlan)
+	}
 	return m.Posture
+}
+
+// leasesWorktree reports whether a member with this workspace can hold a
+// worktree lease.
+func leasesWorktree(ws string) bool {
+	return ws == talkoot.WorkspaceWorktree || ws == talkoot.WorkspaceEither
 }
 
 // narrowMemberTools removes from a seated member's registry every tool its

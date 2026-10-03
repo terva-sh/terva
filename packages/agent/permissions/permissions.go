@@ -185,6 +185,10 @@ var planKeeps = map[string]bool{
 	"talkoot_send":    true,
 	"talkoot_handoff": true,
 	"talkoot_propose": true,
+	// talkoot_workspace moves a workspace: either member into its worktree.
+	// Outside the worktree the member runs in plan, so without this it could
+	// never enter.
+	"talkoot_workspace": true,
 }
 
 // builtin names the first-party tools workspace mode trusts (alongside
@@ -223,6 +227,7 @@ var builtin = map[string]bool{
 	"talkoot_note_write": true,
 	"talkoot_note_read":  true,
 	"talkoot_propose":    true,
+	"talkoot_workspace":  true,
 	"share_file":         true,
 	"ask_user_question":  true,
 	"worktree_list":      true,

@@ -38,6 +38,10 @@ const (
 const (
 	WorkspaceShared   = "shared"   // the talkoot's home checkout
 	WorkspaceWorktree = "worktree" // a worktree leased for this member
+	// WorkspaceEither starts the member in the home checkout, read-only, and
+	// lets it enter and leave its own worktree with talkoot_workspace. Only a
+	// native member can move.
+	WorkspaceEither = "either"
 )
 
 // DriverNative runs a member as a daemon session. Any other driver names a
@@ -224,7 +228,9 @@ func applyDefaults(m *Member) {
 		m.Workspace = WorkspaceShared
 	}
 	if m.Posture == "" {
-		if m.Workspace == WorkspaceWorktree {
+		// A member that can enter a worktree writes there. Outside it, the
+		// workspace runs it in plan whatever its posture says.
+		if m.Workspace == WorkspaceWorktree || m.Workspace == WorkspaceEither {
 			m.Posture = string(permission.ApprovalAutoEdit)
 		} else {
 			m.Posture = string(permission.ApprovalPlan)
@@ -396,8 +402,18 @@ func Validate(r Roster, env Env) error {
 				sharedWriters = append(sharedWriters, who)
 			}
 		case WorkspaceWorktree:
+		case WorkspaceEither:
+			// 🚨 A movable member is read-only in the home checkout and writes
+			// only in its own worktree, so it is not a shared writer. yolo
+			// stays a worktree-only posture.
+			if m.Driver != DriverNative {
+				add("%s: workspace either is for a native member; a worker cannot move", who)
+			}
+			if m.Posture == string(permission.ApprovalYolo) {
+				add("%s: posture yolo needs workspace: worktree", who)
+			}
 		default:
-			add("%s: workspace %q is not shared or worktree", who, m.Workspace)
+			add("%s: workspace %q is not shared, worktree, or either", who, m.Workspace)
 		}
 
 		if !finite(m.BudgetUSDPerDay) || m.BudgetUSDPerDay < 0 {

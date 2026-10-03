@@ -19,6 +19,8 @@ const MaxTools = 64
 var SeatTools = []string{
 	"talkoot_send", "talkoot_handoff", "talkoot_roster", "talkoot_note_write",
 	"talkoot_note_read", "talkoot_propose", "ask_user_question",
+	// talkoot_workspace is registered only for a workspace: either member.
+	"talkoot_workspace",
 }
 
 // BridgeTools are the seat tools the MCP bridge serves an external member.

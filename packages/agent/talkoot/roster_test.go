@@ -128,6 +128,21 @@ func TestParseReadsEveryFieldInTheProposalTable(t *testing.T) {
 	}
 }
 
+// A movable member is read-only in the home checkout, so two of them that
+// write are not two shared writers, and each defaults to auto-edit.
+func TestMovableMembersAreNotSharedWriters(t *testing.T) {
+	r := mustParse(t, tigerTeam)
+	r.Members[1].Workspace, r.Members[1].Posture = WorkspaceEither, "auto-edit"
+	r.Members[4].Workspace, r.Members[4].Posture = WorkspaceEither, "auto-edit"
+	if err := Validate(r, fakeEnv()); err != nil {
+		t.Fatalf("two movable writers were refused: %v", err)
+	}
+	d := mustParse(t, "---\nname: t\nhome: /x\nbudget_usd_per_day: 1\nmembers:\n  - id: a\n    role: coordinator\n  - id: b\n    role: specialist\n    workspace: either\n---\n")
+	if got := d.Members[1].Posture; got != "auto-edit" {
+		t.Errorf("a movable member defaults to %q, want auto-edit", got)
+	}
+}
+
 func TestDefaultsFollowTheWorkspace(t *testing.T) {
 	r := mustParse(t, "---\nname: t\nhome: /x\nbudget_usd_per_day: 1\nmembers:\n  - id: a\n    role: coordinator\n  - id: b\n    role: specialist\n    workspace: worktree\n---\n")
 	a, b := r.Members[0], r.Members[1]
@@ -186,6 +201,11 @@ func TestValidateRefusals(t *testing.T) {
 		{"yolo in the shared checkout", func(r *Roster) { r.Members[0].Posture = "yolo" }, "helm: posture yolo needs workspace: worktree"},
 		{"bad posture", func(r *Roster) { r.Members[0].Posture = "godmode" }, `posture "godmode"`},
 		{"bad workspace", func(r *Roster) { r.Members[0].Workspace = "home" }, `workspace "home"`},
+		{"a worker that moves", func(r *Roster) { r.Members[3].Workspace = WorkspaceEither }, "yelp: workspace either is for a native member"},
+		{"yolo in a movable member", func(r *Roster) {
+			r.Members[0].Workspace = WorkspaceEither
+			r.Members[0].Posture = "yolo"
+		}, "helm: posture yolo needs workspace: worktree"},
 		{"mark shape outside the set", func(r *Roster) { r.Members[0].Mark = &look.Mark{Shape: "star"} }, `helm: mark shape "star"`},
 		{"mark color that is not hex", func(r *Roster) { r.Members[0].Mark = &look.Mark{Color: "blue"} }, `helm: mark color "blue"`},
 		{"empty mark", func(r *Roster) { r.Members[0].Mark = &look.Mark{} }, "helm: mark sets neither shape nor color"},

@@ -151,16 +151,38 @@ func (w *Workspace) prepareMemberDir(run *talkootRun, member string) error {
 // a worktree, and false for any other session.
 func (w *Workspace) nativeWorktreeSeat(sessID string) (*talkootRun, string, bool) {
 	w.talkoot.mu.Lock()
+	defer w.talkoot.mu.Unlock()
 	b := w.talkoot.seats[sessID]
-	w.talkoot.mu.Unlock()
 	if b == nil {
 		return nil, "", false
 	}
 	m, ok := memberOf(*b.run.roster.Load(), b.member)
-	if !ok || m.Driver != talkoot.DriverNative || m.Workspace != talkoot.WorkspaceWorktree {
+	if !ok || m.Driver != talkoot.DriverNative {
+		return nil, "", false
+	}
+	// A workspace: either member is in its worktree only after it entered.
+	if m.Workspace != talkoot.WorkspaceWorktree && !(m.Workspace == talkoot.WorkspaceEither && b.run.inside[b.member]) {
 		return nil, "", false
 	}
 	return b.run, b.member, true
+}
+
+// outOfWorktree reports whether the roster and the member's moves keep
+// member out of its worktree now, so its lease may go back.
+func (w *Workspace) outOfWorktree(run *talkootRun, member string) bool {
+	m, ok := memberOf(*run.roster.Load(), member)
+	if !ok {
+		return true
+	}
+	switch m.Workspace {
+	case talkoot.WorkspaceWorktree:
+		return false
+	case talkoot.WorkspaceEither:
+		w.talkoot.mu.Lock()
+		defer w.talkoot.mu.Unlock()
+		return !run.inside[member]
+	}
+	return true
 }
 
 // prepareSessionDir acquires the worktree of the native member a session is
@@ -278,7 +300,7 @@ func (w *Workspace) releaseMemberLease(run *talkootRun, member string, gen uint6
 				run.workerMu.Unlock()
 				return
 			}
-			if m, ok := memberOf(*run.roster.Load(), member); !ok || m.Workspace != talkoot.WorkspaceWorktree {
+			if w.outOfWorktree(run, member) {
 				w.leases().release(run.id, member)
 				w.talkoot.mu.Lock()
 				delete(run.leaseHolders, member)
@@ -308,9 +330,10 @@ func (w *Workspace) releaseMemberLease(run *talkootRun, member string, gen uint6
 // worker still ran, ends here. A member that holds no worktree, such as a
 // worker in the home checkout, waits for nothing.
 func (w *Workspace) retryMemberReleases(run *talkootRun, seated []string) {
-	r := *run.roster.Load()
 	for _, member := range seated {
-		if m, ok := memberOf(r, member); ok && m.Workspace == talkoot.WorkspaceWorktree {
+		// A movable member starts each run in the home checkout, so its
+		// lease from the last run goes back too.
+		if !w.outOfWorktree(run, member) {
 			continue
 		}
 		go func() {

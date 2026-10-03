@@ -320,6 +320,11 @@ var writeRosterFile = privfs.WriteFile
 // applyRosterLocked commits a validated roster: the room lines, the file, the
 // router, the seats, and each posture. The caller holds run.update.
 func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by string, text []byte, next talkoot.Roster, from rosterSource) (talkootView, error) {
+	// 🚨 No talkoot_workspace move may land between the postures this update
+	// computes and the postures it applies, so it holds moveMu for the whole
+	// apply.
+	run.moveMu.Lock()
+	defer run.moveMu.Unlock()
 	id := run.id
 	prev := *run.roster.Load()
 	// The text that holds now, named by the line that corrects a failed
@@ -348,10 +353,14 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 	// so its worktree goes back at once.
 	var unleasing []string
 	for _, old := range prev.Members {
-		if old.Workspace != talkoot.WorkspaceWorktree {
+		if !leasesWorktree(old.Workspace) {
 			continue
 		}
-		if m, kept := memberOf(next, old.ID); kept && m.Workspace == talkoot.WorkspaceWorktree {
+		// A member that stays in a worktree, or stays movable, keeps its
+		// lease. A move to either gives the member a fresh session that
+		// starts in the home checkout, so it gives the lease back.
+		if m, kept := memberOf(next, old.ID); kept && (m.Workspace == talkoot.WorkspaceWorktree ||
+			m.Workspace == talkoot.WorkspaceEither && old.Workspace == talkoot.WorkspaceEither) {
 			continue
 		}
 		unleasing = append(unleasing, old.ID)
@@ -382,7 +391,7 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 		case m.Posture != old.Posture:
 			// setApproval rebuilds the tool view, so it narrows to a new
 			// tools list too.
-			postures = append(postures, postureChange{sid: sid, to: m.Posture})
+			postures = append(postures, postureChange{sid: sid, to: effectivePostureLocked(run, m)})
 		case !slices.Equal(m.Tools, old.Tools):
 			postures = append(postures, postureChange{sid: sid})
 		}
@@ -523,8 +532,13 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 	// update, waits for it. Each release takes a new generation, and an
 	// older one stands down.
 	for _, old := range prev.Members {
-		if sid := run.seats[old.ID]; sid != "" && old.Workspace == talkoot.WorkspaceWorktree {
+		if sid := run.seats[old.ID]; sid != "" && leasesWorktree(old.Workspace) {
 			holdLeaseLocked(run, old.ID, sid)
+		}
+		// A member that stops being movable, or becomes movable, starts its
+		// next session in the home checkout.
+		if m, kept := memberOf(next, old.ID); !kept || m.Workspace != talkoot.WorkspaceEither || old.Workspace != talkoot.WorkspaceEither {
+			delete(run.inside, old.ID)
 		}
 	}
 	unleaseGen := make(map[string]uint64, len(unleasing))

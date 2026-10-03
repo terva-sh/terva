@@ -39,6 +39,11 @@ import (
 var sessionMayMutateArgs = map[string]string{
 	"Approval": "the approval mode is a live settings switch, and it rides into buildToolRegistry and the merges — plan mode withholds mutating tools from the rebuilt view",
 	"Cast":     "the --play cast is edited live from the cast pane; a rebuild re-derives actor_spawn's cast skin from it",
+	// A workspace: either Talkoot member moves between its worktree and the
+	// home checkout (talkoot_workspace). The rebuild re-mints read, write,
+	// edit, bash, grep, and glob with this CWD, so it must be recorded here or
+	// the next rebuild would send the member back.
+	"CWD": "a workspace: either Talkoot member's move between its worktree and the home checkout; every rebuild re-mints the file tools and bash from it",
 
 	// The user's own identity, which the per-turn tail renders.
 	"As":           "the user persona's name, changed live from the settings pane",
