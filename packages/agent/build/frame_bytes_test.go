@@ -56,7 +56,7 @@ func TestTheWireRequestIsUnchangedByteForByte(t *testing.T) {
 	tail := EphemeralTail{Ext: func() string { return "EXT-CARD" }, Tasks: ctrl}
 	WireEphemeralTail(ag, tail)
 	rec := &recordingClient{}
-	ag.SetClientAndModel(rec, ag.Model())
+	ag.SetClientAndModel(rec, "", ag.Model())
 
 	if err := ag.Prompt(context.Background(), "and the dragon's hoard?", nil, func(core.AgentEvent) {}); err != nil {
 		t.Fatalf("first prompt: %v", err)

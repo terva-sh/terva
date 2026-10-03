@@ -90,6 +90,12 @@ func TestTheUsageSnapshotIsCarriedBeforeTheNewClientIsInstalled(t *testing.T) {
 	if ag.Client() != provider.Client(nc) || ag.Model() != "new-model" {
 		t.Errorf("agent did not end on the new client/model: %v / %q", ag.Client(), ag.Model())
 	}
+	// The engine resolves the model under this provider for its context
+	// window, so a swap that left it behind would compact against the old
+	// provider's catalog entry.
+	if ag.Provider() != "new-prov" {
+		t.Errorf("agent provider = %q, want new-prov", ag.Provider())
+	}
 }
 
 // A swap keeps the agent's registry, so terva_status still carries the previous
@@ -151,13 +157,16 @@ func TestBothPathsRepointTheHostRoutedTools(t *testing.T) {
 // assignment; everything else in the event still applies to it.
 func TestSwapOverrideReplacesTheAssignmentAndNothingElse(t *testing.T) {
 	ag, routed, status := swapFixture()
-	var got string
+	var got, gotProv string
 	ApplyModelSwap(ModelSwap{
 		Agent: ag, Client: &swapClient{}, Provider: "new-prov", Model: "new-model", AuthMethod: "oauth",
-		Swap: func(_ provider.Client, m string) { got = m },
+		Swap: func(_ provider.Client, p, m string) { gotProv, got = p, m },
 	})
 	if got != "new-model" {
 		t.Errorf("the host's Swap was not used (got %q)", got)
+	}
+	if gotProv != "new-prov" {
+		t.Errorf("the host's Swap got provider %q, want new-prov", gotProv)
 	}
 	if ag.Model() == "new-model" {
 		t.Error("ApplyModelSwap assigned the model itself despite the host supplying Swap")
@@ -230,9 +239,9 @@ func TestTheRouteIsRecordedAfterTheAgentHasMoved(t *testing.T) {
 	var modelAtSwap string
 	ApplyModelSwap(ModelSwap{
 		Agent: ag, Client: &swapClient{}, Provider: "new-prov", Model: "new-model", Session: sess,
-		Swap: func(c provider.Client, m string) {
+		Swap: func(c provider.Client, p, m string) {
 			modelAtSwap = sess.Meta.Model
-			ag.SetClientAndModel(c, m)
+			ag.SetClientAndModel(c, p, m)
 		},
 	})
 	if modelAtSwap != "old-model" {

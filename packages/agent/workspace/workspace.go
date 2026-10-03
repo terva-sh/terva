@@ -219,6 +219,13 @@ type Workspace struct {
 	noteMu sync.Mutex
 	diag   func(string)
 
+	// modelRefWarned holds each model reference whose ambiguity warning was
+	// already reported, keyed by the setting and the reference. The title
+	// model is read on every title pass and a member's model on every member
+	// build, and a warning each time buries the one note that says what to
+	// change.
+	modelRefWarned sync.Map
+
 	// noteSink, when set, receives notes that REPLACE their predecessor under
 	// a key rather than appending — the swarm worktree record and the cache
 	// cliff warning. Optional: a host that has no such surface (the web/ACP
@@ -2403,11 +2410,7 @@ func (w *Workspace) titleGen(s *wsSession) (bool, provider.Client, string) {
 // unconditionally used to break titling for custom-endpoint sessions).
 func (w *Workspace) titleClient(prov, model string) (bool, provider.Client, string) {
 	cfg, _ := config.LoadConfig()
-	if cfg.AutoTitleModel != "" {
-		if t, err := modelreg.FindModel("", cfg.AutoTitleModel); err == nil {
-			prov, model = t.Provider, t.ID
-		}
-	}
+	prov, model = w.titleModel(cfg.AutoTitleModel, prov, model)
 	next := w.args
 	next.Provider = prov
 	next.Model = model
@@ -2420,6 +2423,34 @@ func (w *Workspace) titleClient(prov, model string) (bool, provider.Client, stri
 		return false, nil, ""
 	}
 	return true, r.NewClient(), r.Model
+}
+
+// titleModel is the provider and model a title runs on: ref when it names a
+// model, else the session's own. ref is provider/id or a bare id, and a bare
+// id prefers the session's provider, so a model id that two providers list
+// stays on the provider the session already pays.
+func (w *Workspace) titleModel(ref, prov, model string) (string, string) {
+	if ref == "" {
+		return prov, model
+	}
+	t, warning, err := modelreg.ResolveRef(ref, prov)
+	if err != nil {
+		return prov, model
+	}
+	w.warnModelRefOnce("auto_title_model", ref, warning)
+	return t.Provider, t.ID
+}
+
+// warnModelRefOnce reports a model reference's ambiguity warning the first time
+// setting resolves ref, and stays quiet after. An empty warning reports
+// nothing.
+func (w *Workspace) warnModelRefOnce(setting, ref, warning string) {
+	if warning == "" {
+		return
+	}
+	if _, seen := w.modelRefWarned.LoadOrStore(setting+"\x00"+ref, true); !seen {
+		w.diagf("terva: %s: %s", setting, warning)
+	}
 }
 
 const titleSystem = "You write concise, specific titles for chat sessions. Reply with only the title. Use at most six words. Do not add quotes. Do not end with punctuation."

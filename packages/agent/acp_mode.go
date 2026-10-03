@@ -285,12 +285,28 @@ func modelOptionsFor(models []provider.Model, authed map[string]bool) []acp.Mode
 //     same-provider model that routes to a DIFFERENT endpoint is rejected only
 //     if we cannot build a client for it — building one is the in-process win
 //     over rpc (which has no rebuild path and rejects outright).
+//
+// targetModelID is the menu's provider/id value. An editor that stored a value
+// before the menu was qualified sends a bare id. A bare id with no slash
+// prefers the session's current provider. A stored gateway id that reads as
+// provider/id, such as vercel-ai-gateway's openai/gpt-5.2-pro, resolves to
+// the direct provider instead, which is the cost of modelreg.ResolveRef's
+// split-first order.
+//
+// The resolver's ambiguity warning is not printed on success. A menu value is
+// qualified by construction, so a pick of the openai row of openai/gpt-5.2-pro
+// meant the openai row, and a note on every such pick is noise. It rides the
+// refusal instead, the one place a stored gateway id surfaces, so the user
+// learns how to write the gateway's row.
 func (f *acpFactory) SwitchModel(currentProvider, currentModel, targetModelID string) (acp.ModelSwitch, error) {
-	target, err := modelreg.FindModel("", targetModelID)
+	target, warning, err := modelreg.ResolveRef(targetModelID, currentProvider)
 	if err != nil {
 		return acp.ModelSwitch{}, err
 	}
 	if authed := acpLoggedInProviders(); !authed[target.Provider] {
+		if warning != "" {
+			return acp.ModelSwitch{}, fmt.Errorf("provider %q is not authenticated (%s)", target.Provider, warning)
+		}
 		return acp.ModelSwitch{}, fmt.Errorf("provider %q is not authenticated; run terva interactively and /login first", target.Provider)
 	}
 

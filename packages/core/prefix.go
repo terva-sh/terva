@@ -46,10 +46,14 @@ const prefixChangeMinTokens = 50_000
 // segment so a mid-turn host swap can't evict the cache underneath a running
 // tool loop. A pin is what a turn intends to send; this is what was sent.
 type promptPrefix struct {
-	model  string
-	client provider.Client
-	system string
-	tools  []provider.Tool
+	model string
+	// providerID is the catalog provider model resolved under when this
+	// prefix was taken, so compaction sizes its keep-tail against the same
+	// entry the turn did.
+	providerID string
+	client     provider.Client
+	system     string
+	tools      []provider.Tool
 
 	// reasoning is prefix, unintuitively. It is not rendered into the prompt at
 	// all — but changing the thinking configuration invalidates the cached
@@ -93,7 +97,7 @@ type promptPrefix struct {
 // has never seen. Compaction's own request deliberately does NOT record — it is
 // a side computation, not a turn, and its prefix is not the one the conversation
 // continues from.
-func (a *Agent) recordDispatch(client provider.Client, req provider.Request) {
+func (a *Agent) recordDispatch(client provider.Client, providerID string, req provider.Request) {
 	// Shallow-copy the spec slice: it is retained across turns, and
 	// SpecsVisible builds it fresh per call today but is under no obligation
 	// to keep doing so.
@@ -102,6 +106,7 @@ func (a *Agent) recordDispatch(client provider.Client, req provider.Request) {
 	defer a.mu.Unlock()
 	a.lastSent = &promptPrefix{
 		model:        req.Model,
+		providerID:   providerID,
 		client:       client,
 		system:       req.System,
 		tools:        tools,
@@ -120,6 +125,7 @@ func (a *Agent) recordDispatch(client provider.Client, req provider.Request) {
 func (a *Agent) livePrefixLocked(system string) promptPrefix {
 	return promptPrefix{
 		model:        a.model,
+		providerID:   a.providerID,
 		client:       a.client,
 		system:       system,
 		tools:        a.tools.SpecsVisible(a.advertiseLocked(a.tools, false)),
@@ -281,6 +287,7 @@ func (a *Agent) compactionPrefix() (p promptPrefix, warm bool) {
 	}
 	return promptPrefix{
 		model:        a.model,
+		providerID:   a.providerID,
 		client:       a.client,
 		system:       system,
 		tools:        a.tools.SpecsVisible(a.advertiseLocked(a.tools, false)),

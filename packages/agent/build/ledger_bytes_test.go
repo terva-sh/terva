@@ -32,7 +32,7 @@ func TestTervasLedgerIsUnchanged(t *testing.T) {
 	}
 	ag := r.NewAgent(core.AllowAll)
 	c := &summaryClient{}
-	ag.SetClientAndModel(c, ag.Model())
+	ag.SetClientAndModel(c, "", ag.Model())
 	call := func(id, name, args string) provider.Message {
 		return provider.Message{Role: provider.RoleAssistant, Content: []provider.Content{provider.ToolCallBlock{ID: id, Name: name, Arguments: json.RawMessage(args)}}}
 	}

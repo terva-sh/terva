@@ -654,7 +654,7 @@ func botRun(svc chat.Service, rawTail []string, version string) error {
 				Model:      next.Model,
 				AuthMethod: next.AuthMethod,
 				BaseURL:    next.BaseURL,
-				Swap:       func(c provider.Client, m string) { loop.SetClientAndModel(c, m) },
+				Swap:       func(c provider.Client, p, m string) { loop.SetClientAndModel(c, p, m) },
 				// Re-resolved for the target provider, so a bot that switches
 				// provider gets that provider's activation-continuation answer
 				// rather than keeping the one it started on. loop.Agent is the

@@ -46,10 +46,11 @@ type ModelSwap struct {
 	// still correct.
 	Provider, Model, AuthMethod, BaseURL string
 
-	// Swap overrides how the client and model reach the agent. Bot mode is the
-	// only caller that needs it: one swap has to fan out across every per-chat
-	// agent, which it does through its Loop. Nil means Agent.SetClientAndModel.
-	Swap func(client provider.Client, model string)
+	// Swap overrides how the client, provider and model reach the agent. Bot
+	// mode is the only caller that needs it: one swap has to fan out across
+	// every per-chat agent, which it does through its Loop. Nil means
+	// Agent.SetClientAndModel.
+	Swap func(client provider.Client, providerID, model string)
 
 	// Session is the durable session to record the new route on, or nil for a
 	// host that has none.
@@ -117,11 +118,13 @@ func ApplyModelSwap(s ModelSwap) {
 		if snap, ok := provider.ClientUsage(s.Agent.Client()); ok {
 			provider.SeedClientUsage(s.Client, snap)
 		}
-		// 2. Install the new client and model.
+		// 2. Install the new client, provider and model. The provider moves
+		//    with them, or the engine keeps resolving the model under the old
+		//    provider's catalog entry and compacts against its window.
 		if s.Swap != nil {
-			s.Swap(s.Client, s.Model)
+			s.Swap(s.Client, s.Provider, s.Model)
 		} else {
-			s.Agent.SetClientAndModel(s.Client, s.Model)
+			s.Agent.SetClientAndModel(s.Client, s.Provider, s.Model)
 		}
 		// 3. A client swap keeps the agent's registry, so terva_status still
 		//    reports the PREVIOUS provider identity — and because

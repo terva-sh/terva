@@ -149,7 +149,7 @@ func TestNewAgentWiresTheStuckLoopDetector(t *testing.T) {
 	ladder := &countingGate{}
 	ag := r.NewAgent(ladder)
 	client := &capturingClient{next: &spinClient{stopAfter: 40}}
-	ag.SetClientAndModel(client, "gemma-4-26b")
+	ag.SetClientAndModel(client, "", "gemma-4-26b")
 
 	var got []core.StallRecord
 	if err := ag.Prompt(context.Background(), "go", nil, func(ev core.AgentEvent) {
@@ -201,7 +201,7 @@ func TestNewAgentBindsTheEscalator(t *testing.T) {
 	r.SetEscalator(escalatorToTarget{target: stall.EscalationTarget{Provider: "openai-codex", Model: "gpt-5.6-sol"}})
 	r.EscalateAuto = true
 	ag := r.NewAgent(core.AllowAll)
-	ag.SetClientAndModel(&spinClient{stopAfter: 5}, "gemma-4-26b")
+	ag.SetClientAndModel(&spinClient{stopAfter: 5}, "", "gemma-4-26b")
 
 	var got []core.EscalationRecord
 	if err := ag.Prompt(context.Background(), "go", nil, func(ev core.AgentEvent) {

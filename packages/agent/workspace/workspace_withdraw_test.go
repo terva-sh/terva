@@ -79,7 +79,7 @@ func newWithdrawFixture(t *testing.T) *withdrawFixture {
 		t.Fatal("created session is not live")
 	}
 	client := &hangingClient{started: make(chan struct{}, 1)}
-	s.agent.SetClientAndModel(client, "fake-model")
+	s.agent.SetClientAndModel(client, "", "fake-model")
 	return &withdrawFixture{w: w, s: s, id: info.ID, cwd: cwd, client: client}
 }
 
@@ -192,7 +192,7 @@ func TestAnAnsweredPromptSurvivesAReload(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	s := w.live(info.ID)
-	s.agent.SetClientAndModel(&answeringFakeClient{}, "fake-model")
+	s.agent.SetClientAndModel(&answeringFakeClient{}, "", "fake-model")
 
 	if err := s.prompt("keep me", nil, core.UserMessageExtras{}); err != nil {
 		t.Fatalf("prompt: %v", err)

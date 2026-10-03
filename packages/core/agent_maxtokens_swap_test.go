@@ -83,7 +83,7 @@ func TestSetClientAndModelRefreshesMaxTokens(t *testing.T) {
 
 	a := &Agent{model: "big-cap", maxTokens: 128000}
 	a.SetCatalog(testCatalog)
-	a.SetClientAndModel(&swapFakeClient{name: "anthropic"}, "small-cap")
+	a.SetClientAndModel(&swapFakeClient{name: "anthropic"}, "", "small-cap")
 	if a.maxTokens != 64000 {
 		t.Fatalf("after SetClientAndModel to small-cap, MaxTokens = %d; want 64000", a.maxTokens)
 	}

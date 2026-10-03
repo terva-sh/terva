@@ -64,7 +64,7 @@ func compactionAgent(t *testing.T, cwd string, client provider.Client) *core.Age
 		t.Fatalf("Resolve: %v", err)
 	}
 	ag := r.NewAgent(core.AllowAll)
-	ag.SetClientAndModel(client, ag.Model())
+	ag.SetClientAndModel(client, "", ag.Model())
 	ag.SetMessages([]provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "write the file"}}},
 		{Role: provider.RoleAssistant, Content: []provider.Content{provider.ToolCallBlock{ID: "c1", Name: "write", Arguments: json.RawMessage(`{"path":"a.txt","content":"x"}`)}}},

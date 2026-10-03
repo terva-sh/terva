@@ -726,7 +726,13 @@ func (c *openaiClient) UsageSnapshot() (UsageSnapshot, bool) {
 func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req Request, out chan<- Event) {
 	defer close(out)
 
-	model, _ := c.models().FindModel("", req.Model)
+	// Priced under the client's own provider first, as buildRequest sizes the
+	// request: an endpoint that lists a model id another provider also lists
+	// has its own prices, and the first row with the id is not it.
+	model, err := c.models().FindModel(c.Name(), req.Model)
+	if err != nil {
+		model, _ = c.models().FindModel("", req.Model)
+	}
 	out <- EventStart{Model: req.Model, Provider: c.Name()}
 
 	stream := newSSEStream(resp.Body, c.Name())

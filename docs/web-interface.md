@@ -24,7 +24,9 @@ instead, set it in `config.json` (off by default so no extra tokens are spent):
 ```
 
 `auto_title_model` is optional; leave it out to title with the session's own
-model. Either way you can always rename a session by hand; a manual name is
+model. Write it as `provider/id`. A bare model ID uses the session's provider
+when that provider lists it. See
+[Naming a model in a setting](models.md#naming-a-model-in-a-setting). Either way you can always rename a session by hand; a manual name is
 never overwritten by the automatic pass.
 
 You can also generate a title **on demand**: the ✨ button next to rename in

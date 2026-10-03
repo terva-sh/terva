@@ -659,7 +659,8 @@ func (w *Workspace) raatiSummarizeConversation(question, conversation string) (s
 	ag, err := core.New(r.NewClient(), r.Model,
 		core.WithAssembler(core.StaticSystem(i18n.P("raati.summarizer.system", "You prepare evidence briefs for a deliberation panel. You summarize faithfully and never recommend a verdict."))),
 		core.WithGate(core.AllowAll),
-		core.WithCatalog(modelreg.Registry()))
+		core.WithCatalog(modelreg.Registry()),
+		core.WithProvider(r.Provider))
 	if err != nil {
 		return "", err
 	}
@@ -713,7 +714,8 @@ func (w *Workspace) raatiClerkAnswer(ctx context.Context, question, evidence str
 	ag, err := core.New(r.NewClient(), r.Model,
 		core.WithAssembler(core.StaticSystem(i18n.P("raati.clerk.system", "You are the clerk of a deliberation panel. Answer the questions of the panel from the record alone. Never answer from your own knowledge, and never guess. Never recommend a verdict. For any question that the record does not answer, reply exactly NOT_IN_RECORD for that item."))),
 		core.WithGate(core.AllowAll),
-		core.WithCatalog(modelreg.Registry()))
+		core.WithCatalog(modelreg.Registry()),
+		core.WithProvider(r.Provider))
 	if err != nil {
 		return unanswered()
 	}

@@ -254,7 +254,7 @@ func installProductionRPCQuestionAgent(t *testing.T, run rpcQuestionRun, client 
 		t.Fatal(err)
 	}
 	ag := r.NewAgent(core.AllowAll)
-	ag.SetClientAndModel(client, "fake-model")
+	ag.SetClientAndModel(client, "", "fake-model")
 	run.server.agent = ag
 	run.server.provider = client.Name()
 	run.server.model = ag.Model()

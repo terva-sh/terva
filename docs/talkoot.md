@@ -208,7 +208,7 @@ write it by hand, and the daemon reads it when it starts.
 | `persona` | The persona the member speaks as. See [personas.md](personas.md) |
 | `mark` | The member's mark, as `shape` and `color`. Absent, it comes from the persona |
 | `driver` | What runs the member. Default `native`. See [Drivers](#drivers) |
-| `model` or `tier` | The model id, or a tier: `weak`, `medium`, `strong`, or `cheap`. Not both |
+| `model` or `tier` | The model, as `provider/id` or a bare id, or a tier: `weak`, `medium`, `strong`, or `cheap`. Not both. A bare id uses the team's default provider when that provider lists it. See [Naming a model in a setting](models.md#naming-a-model-in-a-setting) |
 | `posture` | The member's approval mode. Default `auto-edit` for `workspace: worktree` or `either`, `plan` otherwise. A movable member runs in `plan` while it is outside its worktree |
 | `workspace` | `shared`, the team's home checkout, `worktree`, a worktree leased for the member, or `either`, which starts in the home checkout and lets the member move. Default `shared` |
 | `reviewer` | `true` lets a specialist close a ticket another member worked |

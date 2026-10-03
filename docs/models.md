@@ -313,6 +313,40 @@ gateway adds models, this list goes stale the moment OpenCode retires one or
 ships another, and nothing will tell you it has. That is the trade an
 enumeration makes.
 
+### Naming a model in a setting
+
+Two providers can list one model ID. The built-in `anthropic` provider and an
+Anthropic-compatible endpoint that you named `cpa` can both list
+`claude-opus-5-5`, with different windows and prices. A setting that names a
+model therefore accepts `provider/id`, which names exactly one row:
+
+```json
+{
+  "auto_title_model": "cpa/claude-opus-5-5"
+}
+```
+
+These settings read a model reference this way:
+
+- `auto_title_model` in `config.json`. See [web-interface.md](web-interface.md).
+- The `model` of a Talkoot member. See [talkoot.md](talkoot.md).
+- The model menu of an ACP client, which sends `provider/id` for each row.
+
+terva reads the part before the first slash as a provider. When that provider
+lists the rest as a model ID, the reference names that model. Otherwise the
+whole reference is a model ID. A bare ID uses the provider you are on, when that
+provider lists it. If it does not, the bare ID uses the first provider that
+lists it.
+
+Some gateways list IDs that already contain a slash, such as
+`openai/gpt-5.2-pro` on `vercel-ai-gateway`. That text also names the `openai`
+row, and the `openai` row wins. To name the gateway's model, put the gateway in
+front: `vercel-ai-gateway/openai/gpt-5.2-pro`. When `auto_title_model` or a
+Talkoot member's `model` matches both ways, terva prints a note that gives the
+other form, once for each value. The ACP menu sends a qualified value for each
+row, so a choice from it prints no note. When an editor sends a stored value
+whose provider you are not logged in to, the refusal gives the other form.
+
 ## Per-provider notes
 
 What each provider does differently once you are reaching it. Getting a

@@ -43,6 +43,7 @@ Agent.PersistenceError	method	func() error
 Agent.Prompt	method	func(ctx context.Context, text string, images []provider.ImageBlock, sink func(AgentEvent)) error
 Agent.PromptWithPolicy	method	func(ctx context.Context, prompt string, images []provider.ImageBlock, sink func(AgentEvent)) error
 Agent.PromptWithPolicyExtra	method	func(ctx context.Context, prompt string, images []provider.ImageBlock, extras UserMessageExtras, sink func(AgentEvent)) error
+Agent.Provider	method	func() string
 Agent.QueueMessage	method	func(text string) bool
 Agent.QueuedMessageCount	method	func() int
 Agent.Reasoning	method	func() (level string, set bool)
@@ -63,7 +64,7 @@ Agent.SeedLastTurnUsage	method	func(u provider.Usage)
 Agent.SessionIdentity	method	func() (id, path string)
 Agent.SetAsker	method	func(ask Asker)
 Agent.SetCatalog	method	func(c provider.ModelCatalog)
-Agent.SetClientAndModel	method	func(client provider.Client, model string)
+Agent.SetClientAndModel	method	func(client provider.Client, providerID, model string)
 Agent.SetMessages	method	func(msgs []provider.Message)
 Agent.SetModel	method	func(model string)
 Agent.SetQueuedMessages	method	func(texts []string)
@@ -617,6 +618,7 @@ WithGate	func	func(g Gate) Option
 WithImageOutput	func	func(cfg *provider.ImageOutputConfig) Option
 WithMaxSteps	func	func(n int) Option
 WithMaxTokens	func	func(n int) Option
+WithProvider	func	func(id string) Option
 WithReasoning	func	func(level string) Option
 WithReasoningSummary	func	func(mode string) Option
 WithRetries	func	func(max int, base time.Duration) Option

@@ -73,7 +73,7 @@ func newShellFixture(t *testing.T) *shellFixture {
 		t.Fatal("created session is not live")
 	}
 	client := &wsCapturingClient{tails: make(chan string, 8)}
-	s.agent.SetClientAndModel(client, "fake-model")
+	s.agent.SetClientAndModel(client, "", "fake-model")
 	// The shipped default is OFF. Said explicitly here, because a fixture that
 	// forgot would assert against a setter that quietly does nothing. Turned on
 	// the way the settings surface does, so the toggle's route to the session's

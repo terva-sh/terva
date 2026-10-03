@@ -1241,21 +1241,21 @@ func (l *Loop) recordCtx(m Message, total int) {
 	l.mu.Unlock()
 }
 
-// SetClientAndModel swaps the provider client and model on the
-// primary agent and every live per-chat agent, and remembers the swap
-// for agents minted later — a credential refresh must reach every
-// conversation, including ones that don't exist yet.
-func (l *Loop) SetClientAndModel(client provider.Client, model string) {
+// SetClientAndModel swaps the provider client, the catalog provider and
+// the model on the primary agent and every live per-chat agent, and
+// remembers the swap for agents minted later — a credential refresh must
+// reach every conversation, including ones that don't exist yet.
+func (l *Loop) SetClientAndModel(client provider.Client, providerID, model string) {
 	l.mu.Lock()
-	l.clientSwap = func(a *core.Agent) { a.SetClientAndModel(client, model) }
+	l.clientSwap = func(a *core.Agent) { a.SetClientAndModel(client, providerID, model) }
 	agents := make([]*core.Agent, 0, len(l.chatAgents))
 	for _, st := range l.chatAgents {
 		agents = append(agents, st.agent)
 	}
 	l.mu.Unlock()
-	l.Agent.SetClientAndModel(client, model)
+	l.Agent.SetClientAndModel(client, providerID, model)
 	for _, a := range agents {
-		a.SetClientAndModel(client, model)
+		a.SetClientAndModel(client, providerID, model)
 	}
 }
 

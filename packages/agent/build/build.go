@@ -2109,6 +2109,11 @@ func (r Resolved) NewAgent(gate core.Gate, extra ...core.Option) *core.Agent {
 		// (NewClient): output limits, windows and capabilities come from the
 		// same layers.
 		core.WithCatalog(modelreg.Registry()),
+		// The provider scopes every catalog lookup the engine makes, so the
+		// window auto-compaction fires on is the one the gauge shows. Two
+		// providers can list one id (anthropic and an anthropic-compatible
+		// endpoint), and the first entry is not the one the user overrode.
+		core.WithProvider(r.Provider),
 		// The components the assembler carries read the agent: the
 		// shell-result slot hears prompts start and get withdrawn through its
 		// events, the context-pressure tracker reads its gauge and its

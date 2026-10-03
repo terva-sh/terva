@@ -146,7 +146,7 @@ func (s *wsSession) contextBreakdown() ctrlproto.ContextBreakdown {
 	prov, model := s.currentModel()
 	b.Provider, b.Model = prov, model
 	if model != "" {
-		b.Window = modelreg.ContextGauge("", model)
+		b.Window = modelreg.ContextGauge(prov, model)
 	}
 
 	// The TUI status bar's live usage picture (shared with the usage surface):

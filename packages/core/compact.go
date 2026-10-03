@@ -266,7 +266,7 @@ func (a *Agent) compactHeld(ctx context.Context, keepTail int, sink func(delta s
 	// suffix; every message before it feeds the summary, ledger, and counts.
 	// Use the dispatched model's window, which can differ after a model swap.
 	budget := 0
-	if m, err := a.Catalog().FindModel("", prefix.model); err == nil {
+	if m, err := a.lookupModel(prefix.providerID, prefix.model); err == nil {
 		budget = int(float64(m.EffectiveContextWindow()) * keepTailMaxFraction)
 	}
 	tail := tailWithinBudget(msgs, keepTail, budget)

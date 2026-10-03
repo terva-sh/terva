@@ -70,7 +70,7 @@ func TestCompactionTargetsTheOutgoingModel(t *testing.T) {
 	}
 
 	// The switch. The agent's own fields have already moved on.
-	a.SetClientAndModel(incoming, "incoming-model")
+	a.SetClientAndModel(incoming, "", "incoming-model")
 
 	if _, err := a.Compact(context.Background(), 0, nil); err != nil {
 		t.Fatalf("Compact returned %v", err)
@@ -143,7 +143,7 @@ func TestFailedDispatchDoesNotBecomeTheCompactionTarget(t *testing.T) {
 
 	// A swap to an endpoint that rejects the request outright.
 	dead := &refusedClient{}
-	a.SetClientAndModel(dead, "dead-model")
+	a.SetClientAndModel(dead, "", "dead-model")
 	if err := a.Prompt(context.Background(), "does this land?", nil, nil); err == nil {
 		t.Fatal("Prompt against the refusing client returned nil; want the dispatch error")
 	}

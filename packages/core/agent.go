@@ -53,11 +53,16 @@ var ErrUserInterrupted = errors.New("turn interrupted by the user")
 // The setters and getters take the agent's lock. An exported field could be
 // read or written without it, which races a turn on another goroutine.
 type Agent struct {
-	client    provider.Client
-	model     string
-	tools     Registry
-	maxSteps  int
-	reasoning string
+	client provider.Client
+	model  string
+	// providerID is the catalog provider the model resolves under ("cpa",
+	// "anthropic"), set by WithProvider and SetClientAndModel. Empty means the
+	// host never said, and lookups fall back to the first entry with the id.
+	// See lookupModel.
+	providerID string
+	tools      Registry
+	maxSteps   int
+	reasoning  string
 	// reasoningSet reports the global reasoning level was explicitly chosen by
 	// the user (flag/config/settings, including "off"), so it wins over a
 	// model's DefaultReasoning. False means unset — fall back to the per-model
@@ -797,9 +802,9 @@ func (a *Agent) TruncateTo(idx int) bool {
 
 // SetModel swaps the active model under the lock that oneTurn snapshots
 // request fields with, so a host can change models on another goroutine
-// without racing a starting turn. It only mutates the model id — the
-// caller is responsible for ensuring the current Client can serve the
-// new model (same provider AND same resolved endpoint). When the model
+// without racing a starting turn. It only mutates the model id and keeps the
+// provider — the caller is responsible for ensuring the current Client can
+// serve the new model (same provider AND same resolved endpoint). When the model
 // routes to a different base URL or needs a different client, rebuild
 // the agent (or use SetClientAndModel) instead; mutating the id alone
 // would keep firing requests at the previous endpoint.
@@ -820,7 +825,7 @@ func (a *Agent) SetModel(model string) {
 // field, so a swap to a model missing from the catalog leaves the previous
 // working budget untouched rather than zeroing it. Caller holds a.mu.
 func (a *Agent) refreshMaxTokensLocked() {
-	if m, err := a.Catalog().FindModel("", a.model); err == nil && m.MaxOutput > 0 {
+	if m, err := a.lookupModel(a.providerID, a.model); err == nil && m.MaxOutput > 0 {
 		a.maxTokens = m.MaxOutput
 	}
 }
@@ -1017,17 +1022,33 @@ func dropUnrecordableThinking(m provider.Message) provider.Message {
 	return m
 }
 
-// SetClientAndModel atomically swaps both the provider client and the
-// model, for hosts that re-resolve a fresh client (a different endpoint,
-// rotated credentials) while keeping the same transcript. Both fields
-// move together under the lock so a turn can never observe the new
-// client paired with the old model or vice versa.
-func (a *Agent) SetClientAndModel(client provider.Client, model string) {
+// SetClientAndModel atomically swaps the provider client, the catalog
+// provider the model resolves under, and the model, for hosts that re-resolve
+// a fresh client (a different endpoint, a different provider, rotated
+// credentials) while keeping the same transcript. All three move together
+// under the lock so a turn can never observe the new client paired with the
+// old model or vice versa.
+//
+// providerID is required in the signature because a swap is exactly where it
+// goes stale: a swap from anthropic to an anthropic-compatible endpoint that
+// lists the same model id would otherwise keep reading the anthropic entry's
+// window, and auto-compaction would ignore the endpoint's desired window.
+// Empty means unscoped, as WithProvider describes.
+func (a *Agent) SetClientAndModel(client provider.Client, providerID, model string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.client = client
+	a.providerID = providerID
 	a.model = model
 	a.refreshMaxTokensLocked()
+}
+
+// Provider returns the catalog provider the model resolves under, as
+// WithProvider or SetClientAndModel set it. Empty when no host said.
+func (a *Agent) Provider() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.providerID
 }
 
 // Client returns the provider client the next turn sends with. It reads under
@@ -1942,7 +1963,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 			// the capability's default (true), preserving old behavior.
 			mirrorImages := provider.ClientMirrorsToolImages(a.client)
 			if mirrorImages {
-				if m, err := a.Catalog().FindModel("", a.model); err == nil && !m.Has(provider.CapImageInput) {
+				if m, err := a.lookupModel(a.providerID, a.model); err == nil && !m.Has(provider.CapImageInput) {
 					mirrorImages = false
 				}
 			}
@@ -2328,6 +2349,7 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, visi
 	// copy of the transcript while we hold the lock.
 	a.mu.Lock()
 	model := a.model
+	providerID := a.providerID
 	reasoning := a.reasoning
 	reasoningSet := a.reasoningSet
 	reasoningSummary := a.reasoningSummary
@@ -2345,11 +2367,20 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, visi
 
 	// Native image output is offered only when the live model advertises
 	// CapImageOutput, so swapping to (or away from) an image-capable model
-	// toggles it with no rebuild. Look it up under the current client's
-	// provider — the capability is provider-specific (only the Responses/codex
-	// path implements it), and an id can exist under more than one provider.
+	// toggles it with no rebuild. Look it up under the agent's provider, then
+	// the current client's — the capability is provider-specific (only the
+	// Responses/codex path implements it), and an id can exist under more than
+	// one provider. No bare-id fallback here: offering a tool the wire cannot
+	// serve is worse than not offering it.
 	if imageOutput != nil {
-		if m, err := a.Catalog().FindModel(client.Name(), model); err != nil || !m.Has(provider.CapImageOutput) {
+		m, err := provider.Model{}, errNoProvider
+		if providerID != "" {
+			m, err = a.Catalog().FindModel(providerID, model)
+		}
+		if err != nil {
+			m, err = a.Catalog().FindModel(client.Name(), model)
+		}
+		if err != nil || !m.Has(provider.CapImageOutput) {
 			imageOutput = nil
 		}
 	}
@@ -2428,7 +2459,7 @@ func (a *Agent) oneTurn(ctx context.Context, system string, tools Registry, visi
 	// This prefix is now warm at the provider. Retain it: a host swap (an
 	// extension reload, a /model switch) can overwrite the agent's copy at any
 	// moment, and this then becomes the only record of what is actually cached.
-	a.recordDispatch(client, req)
+	a.recordDispatch(client, providerID, req)
 
 	// Tell the dispatch observers what went on the wire. Placed beside
 	// recordDispatch because both answer "what did we just put on the wire",

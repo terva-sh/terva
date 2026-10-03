@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"terva.sh/terva/packages/agent/skills"
 	"terva.sh/terva/packages/agent/tools"
@@ -310,13 +311,28 @@ type ExtCommandResult struct {
 }
 
 // ModelOption is one selectable model in the ACP `model` config option. ID is
-// the wire value (the model id the editor echoes back on
-// session/set_config_option); DisplayName is the human label; Provider is the
-// owning provider id (for grouping / the cross-provider switch).
+// the model id; DisplayName is the human label; Provider is the owning
+// provider id. Value is the wire value the editor echoes back on
+// session/set_config_option.
 type ModelOption struct {
 	ID          string
 	Provider    string
 	DisplayName string
+}
+
+// Value is the option's wire value: provider/id. Two providers can list one
+// model id, the built-in anthropic row and an anthropic-compatible endpoint's
+// copy, and a bare id sent the same value for both rows, so picking the
+// endpoint's row switched to anthropic.
+func (o ModelOption) Value() string { return ModelValue(o.Provider, o.ID) }
+
+// ModelValue is the wire value for a provider and a model id: provider/id, or
+// the bare id when the provider is unknown.
+func ModelValue(provider, id string) string {
+	if provider == "" {
+		return id
+	}
+	return provider + "/" + id
 }
 
 // ModelSwitch is the host's resolution of a model change. When Reuse is true
@@ -357,6 +373,17 @@ type AgentInfo struct {
 // agentServer holds the ACP method handlers and the live session map. One
 // per connection. It mirrors rpcServer: a single connection serving requests
 // over the hand-rolled wire, here multiplexed across several sessions (§3).
+// promptBoundHook, when set, is called with the session id once a
+// session/prompt has looked up the session it will run on, and before it waits
+// on that session's turnMu. It is nil outside tests.
+//
+// 🔑 A test that queues a prompt behind a running turn and then reloads the
+// session needs the lookup to happen first. Nothing on the wire orders the two,
+// so on a loaded machine the reload could win, and the prompt then ran
+// correctly on the new binding while the test reported an orphan
+// (TKT-01M3ZP75FNPJSWEYZP5V5V8JBE).
+var promptBoundHook atomic.Pointer[func(sessionID string)]
+
 type agentServer struct {
 	conn    *conn
 	factory AgentFactory
@@ -887,6 +914,9 @@ func (s *agentServer) handleSessionPrompt(ctx context.Context, params json.RawMe
 		return nil, &rpcError{Code: CodeResourceNotFound, Message: "unknown session: " + p.SessionID}
 	}
 
+	if hook := promptBoundHook.Load(); hook != nil {
+		(*hook)(p.SessionID)
+	}
 	sess.turnMu.Lock()
 	defer sess.turnMu.Unlock()
 

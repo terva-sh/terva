@@ -79,6 +79,26 @@ No notes yet.
 
 No notes yet.
 
+## v0.140.0
+
+Since v0.139.7: 1 stable break(s) (0 removed, 1 changed), each with a note below, and 0 unstable break(s).
+
+### Agent.SetClientAndModel takes the catalog provider
+
+`SetClientAndModel` now takes the catalog provider between the client and the
+model: `a.SetClientAndModel(client, "cpa", model)`. Pass the provider the
+model resolves under, the same ID you pass to `provider.ModelCatalog.FindModel`.
+Pass `""` when you do not know it. The agent then takes the first catalog entry
+with the model ID, which is what it did before.
+
+Also pass `core.WithProvider` to `core.New`. Without the provider, the agent
+reads the wrong entry when two providers list one model ID. The context window
+that auto-compaction measures against then comes from that wrong entry, and so
+do the output budget and the image capabilities. `Agent.Provider` reports the
+current value.
+
+Covers: `packages/core.Agent.SetClientAndModel`.
+
 ## v0.139.2
 
 v0.139.2 breaks no stable symbol of its own. v0.139.0 and v0.139.1 were

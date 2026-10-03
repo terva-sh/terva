@@ -406,7 +406,7 @@ func (s *wsSession) usageView() ctrlproto.UsageView {
 		}
 	}
 	if model != "" {
-		uv.Window = modelreg.ContextGauge("", model)
+		uv.Window = modelreg.ContextGauge(prov, model)
 	}
 	return uv
 }

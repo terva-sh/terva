@@ -136,7 +136,8 @@ func TestASessionsCacheCliffPostsTheWarning(t *testing.T) {
 		{InputTokens: 55_000, CacheReadTokens: 9_728},
 		{InputTokens: 58_000, CacheReadTokens: 9_728},
 		{InputTokens: 60_000, CacheReadTokens: 9_728},
-	}}, "fake-model")
+	}}, "", "fake-model")
+
 	for i := 0; i < 4; i++ {
 		if err := s.prompt("go", nil, core.UserMessageExtras{}); err != nil {
 			t.Fatalf("prompt %d: %v", i, err)

@@ -127,7 +127,7 @@ func TestNewAgentAttachesTheShellResultSlot(t *testing.T) {
 	slot.Set("git status", "3 files changed")
 
 	held := &tailClient{hold: true, tails: make(chan string, 4), started: make(chan struct{}, 1)}
-	a.SetClientAndModel(held, "fake-model")
+	a.SetClientAndModel(held, "", "fake-model")
 	ctx, cancel := context.WithCancelCause(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -146,7 +146,7 @@ func TestNewAgentAttachesTheShellResultSlot(t *testing.T) {
 	}
 
 	answering := &tailClient{tails: make(chan string, 4)}
-	a.SetClientAndModel(answering, "fake-model")
+	a.SetClientAndModel(answering, "", "fake-model")
 	if err := a.Prompt(context.Background(), "what should I commit first?", nil, func(core.AgentEvent) {}); err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestNewAgentCarriesTervasPressureNote(t *testing.T) {
 	}
 	a := r.NewAgent(core.AllowAll)
 	client := &tailClient{tails: make(chan string, 4)}
-	a.SetClientAndModel(client, "claude-sonnet-4-5")
+	a.SetClientAndModel(client, "", "claude-sonnet-4-5")
 	a.SeedLastTurnUsage(provider.Usage{InputTokens: 150_000}) // 75% of 200k
 
 	if err := a.Prompt(context.Background(), "hello", nil, func(core.AgentEvent) {}); err != nil {

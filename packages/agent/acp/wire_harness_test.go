@@ -943,11 +943,24 @@ func (f *fakeFactory) ModelOptions() []ModelOption { return f.models }
 // switchClient (or a fresh fake) with Reuse=false (cross-provider, transcript
 // preserved).
 func (f *fakeFactory) SwitchModel(currentProvider, currentModel, targetModelID string) (ModelSwitch, error) {
+	// The production factory's rule (modelreg.ResolveRef) in miniature: the
+	// menu's provider/id value names one row; a bare id prefers the current
+	// provider, then the first row with that id.
 	var target *ModelOption
 	for i := range f.models {
-		if f.models[i].ID == targetModelID {
+		if f.models[i].Value() == targetModelID {
 			target = &f.models[i]
 			break
+		}
+	}
+	for i := range f.models {
+		if target == nil && f.models[i].ID == targetModelID && f.models[i].Provider == currentProvider {
+			target = &f.models[i]
+		}
+	}
+	for i := range f.models {
+		if target == nil && f.models[i].ID == targetModelID {
+			target = &f.models[i]
 		}
 	}
 	if target == nil {
@@ -971,7 +984,7 @@ func (f *fakeFactory) SwitchModel(currentProvider, currentModel, targetModelID s
 	// session's agent — that a switch reaches it at all.
 	sw.Apply = func(ag *core.Agent) {
 		if sw.Client != nil {
-			ag.SetClientAndModel(sw.Client, sw.Model)
+			ag.SetClientAndModel(sw.Client, "", sw.Model)
 			return
 		}
 		ag.SetModel(sw.Model)

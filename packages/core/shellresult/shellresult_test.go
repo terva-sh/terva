@@ -331,7 +331,7 @@ func TestAWithdrawnPromptGivesTheShellResultBack(t *testing.T) {
 
 	// The retyped question must find the shell context still there.
 	answering := &capturingClient{}
-	a.SetClientAndModel(answering, a.Model())
+	a.SetClientAndModel(answering, "", a.Model())
 	if err := a.Prompt(context.Background(), "what should I commit first?", nil, noop); err != nil {
 		t.Fatalf("second Prompt: %v", err)
 	}
@@ -357,14 +357,14 @@ func TestALaterWithdrawalDoesNotResurrectASpentResult(t *testing.T) {
 
 	// A later, unrelated prompt is interrupted.
 	silent := &capturingSilentClient{started: make(chan struct{}, 1)}
-	a.SetClientAndModel(silent, a.Model())
+	a.SetClientAndModel(silent, "", a.Model())
 	rec := promptThenInterrupt(t, a, silent, "something else entirely")
 	if !rec.withdrawn() {
 		t.Fatal("no withdrawal happened, so the restore path was never reached")
 	}
 
 	third := &capturingClient{}
-	a.SetClientAndModel(third, a.Model())
+	a.SetClientAndModel(third, "", a.Model())
 	if err := a.Prompt(context.Background(), "third", nil, noop); err != nil {
 		t.Fatalf("third Prompt: %v", err)
 	}

@@ -82,7 +82,7 @@ func TestNewAgentWiresTheRecorders(t *testing.T) {
 			f, _ := EngineFeatureByID(id)
 			f.Apply(ag, on)
 		}
-		ag.SetClientAndModel(transportClient{}, "gpt-5")
+		ag.SetClientAndModel(transportClient{}, "", "gpt-5")
 		st := &recorderStore{}
 		ag.AttachTranscriptStore(st)
 		for i := 0; i < 2; i++ {

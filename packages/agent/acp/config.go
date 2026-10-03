@@ -31,7 +31,7 @@ func (s *agentServer) sessionConfigOptions(sess *session) []SessionConfigOption 
 	if len(opts) == 0 {
 		return nil
 	}
-	_, current := sess.currentModel()
+	curProv, current := sess.currentModel()
 	values := make([]SessionConfigSelectOption, 0, len(opts))
 	for _, o := range opts {
 		label := o.DisplayName
@@ -39,7 +39,7 @@ func (s *agentServer) sessionConfigOptions(sess *session) []SessionConfigOption 
 			label = o.ID
 		}
 		values = append(values, SessionConfigSelectOption{
-			Value:       o.ID,
+			Value:       o.Value(),
 			Name:        label,
 			Description: o.Provider,
 		})
@@ -50,7 +50,7 @@ func (s *agentServer) sessionConfigOptions(sess *session) []SessionConfigOption 
 		Type:         SessionConfigSelectType,
 		Description:  "The model terva runs for this session.",
 		Category:     ConfigCategoryModel,
-		CurrentValue: current,
+		CurrentValue: ModelValue(curProv, current),
 		Options:      values,
 	}}
 }

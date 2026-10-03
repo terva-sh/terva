@@ -210,10 +210,10 @@ func (a *Agent) ContextUsage() (used, window int) {
 	// holds a.mu (runLoop, oneTurn after its snapshot, compactHeld, the policy
 	// checks), so taking it here cannot re-enter.
 	a.mu.Lock()
-	model := a.model
+	model, providerID := a.model, a.providerID
 	a.mu.Unlock()
 
-	if m, err := a.Catalog().FindModel("", model); err == nil {
+	if m, err := a.lookupModel(providerID, model); err == nil {
 		window = m.EffectiveContextWindow()
 	}
 	last := a.LastTurnUsage()

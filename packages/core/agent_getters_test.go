@@ -30,7 +30,7 @@ func TestGettersDoNotRaceTheSetters(t *testing.T) {
 		defer wg.Done()
 		for i := range n {
 			if i%2 == 0 {
-				a.SetClientAndModel(other, "m1")
+				a.SetClientAndModel(other, "", "m1")
 			} else {
 				a.SetModel("m2")
 			}

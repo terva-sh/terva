@@ -72,8 +72,8 @@ func TestACPSessionNewAdvertisesModelAndModes(t *testing.T) {
 	if model["type"] != SessionConfigSelectType {
 		t.Errorf("model option type = %v; want %q", model["type"], SessionConfigSelectType)
 	}
-	if model["currentValue"] != "fake-model" {
-		t.Errorf("model currentValue = %v; want fake-model", model["currentValue"])
+	if model["currentValue"] != "fake/fake-model" {
+		t.Errorf("model currentValue = %v; want fake/fake-model", model["currentValue"])
 	}
 	opts, _ := model["options"].([]any)
 	if len(opts) != 3 {
@@ -82,7 +82,7 @@ func TestACPSessionNewAdvertisesModelAndModes(t *testing.T) {
 	var sawAlt bool
 	for _, o := range opts {
 		m, _ := o.(map[string]any)
-		if m["value"] == "alt-model" {
+		if m["value"] == "fake/alt-model" {
 			sawAlt = true
 		}
 	}
@@ -155,14 +155,14 @@ func TestACPSetConfigOptionSwitchesModelSameProvider(t *testing.T) {
 	res := h.call(MethodSessionSetConfigOpt, map[string]any{
 		"sessionId": sid,
 		"configId":  ConfigIDModel,
-		"value":     "alt-model",
+		"value":     "fake/alt-model",
 	})
 
 	// The response echoes the refreshed option list with the new currentValue.
 	configOptions, _ := res["configOptions"].([]any)
 	model := findConfigOption(t, configOptions, ConfigIDModel)
-	if model == nil || model["currentValue"] != "alt-model" {
-		t.Fatalf("set_config_option response currentValue = %v; want alt-model", model["currentValue"])
+	if model == nil || model["currentValue"] != "fake/alt-model" {
+		t.Fatalf("set_config_option response currentValue = %v; want fake/alt-model", model["currentValue"])
 	}
 
 	// The agent's effective model actually changed (not just the menu state).
@@ -183,7 +183,7 @@ func TestACPSetConfigOptionSwitchesModelSameProvider(t *testing.T) {
 	}
 
 	// config_option_update must have been emitted with the new currentValue.
-	assertConfigOptionUpdate(t, h, "alt-model")
+	assertConfigOptionUpdate(t, h, "fake/alt-model")
 }
 
 // TestACPSetConfigOptionSwitchesModelCrossProvider proves verification (b) for
@@ -204,12 +204,12 @@ func TestACPSetConfigOptionSwitchesModelCrossProvider(t *testing.T) {
 	res := h.call(MethodSessionSetConfigOpt, map[string]any{
 		"sessionId": sid,
 		"configId":  ConfigIDModel,
-		"value":     "cross-model",
+		"value":     "other/cross-model",
 	})
 	configOptions, _ := res["configOptions"].([]any)
 	model := findConfigOption(t, configOptions, ConfigIDModel)
-	if model == nil || model["currentValue"] != "cross-model" {
-		t.Fatalf("currentValue = %v; want cross-model", model["currentValue"])
+	if model == nil || model["currentValue"] != "other/cross-model" {
+		t.Fatalf("currentValue = %v; want other/cross-model", model["currentValue"])
 	}
 
 	ag := factory.lastNewAgent()
@@ -227,7 +227,7 @@ func TestACPSetConfigOptionSwitchesModelCrossProvider(t *testing.T) {
 		t.Error("cross-provider switch should not Reuse the client")
 	}
 
-	assertConfigOptionUpdate(t, h, "cross-model")
+	assertConfigOptionUpdate(t, h, "other/cross-model")
 }
 
 // TestACPSetConfigOptionPersistsModel proves the model change is written to the
@@ -516,7 +516,59 @@ func TestACPSetConfigOptionToleratesNoRecordHook(t *testing.T) {
 		"value":     "alt-model",
 	})
 	configOptions, _ := res["configOptions"].([]any)
-	if model := findConfigOption(t, configOptions, ConfigIDModel); model == nil || model["currentValue"] != "alt-model" {
+	if model := findConfigOption(t, configOptions, ConfigIDModel); model == nil || model["currentValue"] != "fake/alt-model" {
 		t.Fatalf("the switch did not land without a record hook: %v", res)
+	}
+}
+
+// Two providers list one model id, the way the built-in anthropic row and an
+// anthropic-compatible endpoint's copy do. The menu sent the bare id for both
+// rows, so the editor could not say which it meant, and the switch landed on
+// the first row. Each row now sends its own provider/id value.
+func TestACPModelMenuTellsRowsWithOneIDApart(t *testing.T) {
+	factory := &fakeFactory{
+		client: &textTurnClient{reply: "hi"},
+		tools:  core.Registry{},
+		models: []ModelOption{
+			{ID: "fake-model", Provider: "fake", DisplayName: "Fake Model"},
+			{ID: "fake-model", Provider: "other", DisplayName: "Fake Model via other"},
+		},
+		switchClient: &textTurnClient{reply: "from the other provider"},
+	}
+	h, sid, teardown := permSetup(t, factory)
+	defer teardown()
+
+	set := func(value string) map[string]any {
+		t.Helper()
+		res := h.call(MethodSessionSetConfigOpt, map[string]any{
+			"sessionId": sid,
+			"configId":  ConfigIDModel,
+			"value":     value,
+		})
+		configOptions, _ := res["configOptions"].([]any)
+		model := findConfigOption(t, configOptions, ConfigIDModel)
+		if model == nil {
+			t.Fatalf("set_config_option %q returned no model option: %v", value, res)
+		}
+		return model
+	}
+
+	model := set("other/fake-model")
+	if model["currentValue"] != "other/fake-model" {
+		t.Fatalf("currentValue = %v after picking the other row; want other/fake-model", model["currentValue"])
+	}
+	seen := map[any]bool{}
+	for _, o := range model["options"].([]any) {
+		v := o.(map[string]any)["value"]
+		if seen[v] {
+			t.Errorf("two menu rows send the value %v, so the editor cannot tell them apart", v)
+		}
+		seen[v] = true
+	}
+
+	// An editor that stored a bare value before the menu was qualified still
+	// switches, and the bare id stays on the provider the session is on.
+	if model := set("fake-model"); model["currentValue"] != "other/fake-model" {
+		t.Errorf("a bare id moved the session to %v; want it to stay on other/fake-model", model["currentValue"])
 	}
 }

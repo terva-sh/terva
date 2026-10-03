@@ -77,7 +77,7 @@ func TestLiveEscalation(t *testing.T) {
 	if !rr.HasCredential() {
 		t.Fatalf("no credential for escalation target %q", cfg.Escalation.Provider)
 	}
-	ag.SetClientAndModel(rr.NewClient(), rr.Model)
+	ag.SetClientAndModel(rr.NewClient(), rr.Provider, rr.Model)
 	if ag.Model() == weak {
 		t.Fatalf("model did not change after the swap (still %q)", weak)
 	}

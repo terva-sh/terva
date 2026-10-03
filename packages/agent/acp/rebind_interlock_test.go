@@ -20,6 +20,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -199,10 +200,31 @@ func TestACPAPromptQueuedBehindARebindIsRefusedNotOrphaned(t *testing.T) {
 	}
 
 	// A second prompt for the same id: it blocks on the OLD session's turnMu.
+	// The load below must not reach the server's session map before this
+	// prompt has looked its session up. If the load wins, the prompt binds
+	// the new session and correctly runs there, and the test would report
+	// an orphan that never happened (TKT-01M3ZP75FNPJSWEYZP5V5V8JBE). The
+	// hook goes in after the first turn has started, so the first bind it
+	// sees is this prompt's.
+	var binds atomic.Int32
+	bound := make(chan struct{})
+	hook := func(id string) {
+		if id == sid && binds.Add(1) == 1 {
+			close(bound)
+		}
+	}
+	promptBoundHook.Store(&hook)
+	t.Cleanup(func() { promptBoundHook.Store(nil) })
+
 	second := h.send(MethodSessionPromptName, map[string]any{
 		"sessionId": sid,
 		"prompt":    []any{map[string]any{"type": "text", "text": "two"}},
 	})
+	select {
+	case <-bound:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the queued prompt never looked its session up")
+	}
 
 	loadID := h.send(MethodSessionLoad, map[string]any{
 		"sessionId":  sid,

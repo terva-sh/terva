@@ -567,10 +567,13 @@ func (w *Workspace) memberModel(m talkoot.Member) (prov, model, reasoning string
 	prov, model, _ = w.effectiveDefaultModel("", "")
 	switch {
 	case m.Model != "":
-		found, err := modelreg.FindModel("", m.Model)
+		// provider/id or a bare id. A bare id prefers the default provider, so
+		// a model id two providers list runs where the rest of the run does.
+		found, warning, err := modelreg.ResolveRef(m.Model, prov)
 		if err != nil {
 			return "", "", "", fmt.Errorf("model %q: %w", m.Model, err)
 		}
+		w.warnModelRefOnce("talkoot member "+m.ID+" model", m.Model, warning)
 		prov, model = found.Provider, found.ID
 	case m.Tier != "":
 		cfg, _ := config.LoadConfig()

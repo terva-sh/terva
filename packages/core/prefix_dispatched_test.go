@@ -81,7 +81,7 @@ func TestDispatchedPrefixRefusesAnotherModelOrClient(t *testing.T) {
 	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
 		t.Fatalf("Prompt returned %v", err)
 	}
-	a.SetClientAndModel(incoming, "incoming-model")
+	a.SetClientAndModel(incoming, "", "incoming-model")
 
 	if _, _, _, ok := a.DispatchedPrefix(incoming, "incoming-model"); ok {
 		t.Error("ok for the incoming pair; that model has never seen this conversation")

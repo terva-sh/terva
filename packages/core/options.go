@@ -30,6 +30,7 @@ type settings struct {
 	components []any
 
 	catalog    provider.ModelCatalog
+	providerID string
 	store      TranscriptStore
 	asker      Asker
 	compaction CompactionPolicy
@@ -76,6 +77,9 @@ func New(client provider.Client, model string, opts ...Option) (*Agent, error) {
 	}
 
 	a := newAgent(client, model, s.assembler, s.tools, gate)
+	// The provider before the catalog: SetCatalog re-derives MaxTokens through
+	// a lookup that the provider scopes.
+	a.providerID = s.providerID
 	// The catalog first: SetCatalog re-derives MaxTokens from the model's cap,
 	// and a WithMaxTokens the host passed must win over that, not lose to it.
 	if s.catalog != nil {
@@ -161,6 +165,19 @@ func WithComponent(c any) Option {
 // agent knows the built-in models.
 func WithCatalog(c provider.ModelCatalog) Option {
 	return option(func(s *settings) error { s.catalog = c; return nil })
+}
+
+// WithProvider names the catalog provider the model resolves under, such as
+// "anthropic" or an operator's named endpoint "cpa". Every catalog lookup the
+// agent makes (the context window auto-compaction measures against, the
+// output budget, the image capabilities) asks for this provider's entry first.
+//
+// Without it, a lookup takes the first entry with the model id, which on a
+// catalog where two providers list the same id is the wrong one: an override
+// on cpa/claude-opus-5-5 lost to the built-in anthropic/claude-opus-5-5.
+// SetClientAndModel changes it at runtime.
+func WithProvider(id string) Option {
+	return option(func(s *settings) error { s.providerID = id; return nil })
 }
 
 // WithTranscriptStore attaches store, as AttachTranscriptStore does.
