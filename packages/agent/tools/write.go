@@ -49,6 +49,9 @@ func (t *WriteTool) Execute(ctx context.Context, raw json.RawMessage, progress f
 		return core.ToolResult{}, fmt.Errorf("path is required%s", argHint(raw, writeSchema))
 	}
 	path := resolvePath(t.CWD, a.Path)
+	if err := refuseGitAdmin(path); err != nil {
+		return core.ToolResult{}, err
+	}
 	if err := t.Sandbox.CheckPath(path); err != nil {
 		return core.ToolResult{}, err
 	}

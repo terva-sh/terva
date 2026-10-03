@@ -58,6 +58,9 @@ func (t *EditTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		return core.ToolResult{}, fmt.Errorf("at least one edit is required%s", argHint(raw, editSchema))
 	}
 	path := resolvePath(t.CWD, a.Path)
+	if err := refuseGitAdmin(path); err != nil {
+		return core.ToolResult{}, err
+	}
 	if err := t.Sandbox.CheckPath(path); err != nil {
 		return core.ToolResult{}, err
 	}

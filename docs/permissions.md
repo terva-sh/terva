@@ -25,6 +25,19 @@ deliberately not a read boundary:
   surface that exists to be agent-written (the built-in `handoff` skill parks
   session-to-session documents there; requiring `/unjail` for a built-in
   skill would make the jail an obstacle to route around).
+- **Git's own files are refused** to `write`, `edit` and image output, jailed
+  or not: any path with a `.git` component, as given or after symlinks
+  resolve. That covers a repository's `.git` directory and a linked
+  worktree's `.git` file. A hook, a filter driver in `config` or
+  `info/attributes`, `core.fsmonitor`, or a `.git` file pointed at another
+  gitdir all run a command the next time git runs there, and git runs there
+  from the daemon (the worktree engine) and from you. `write` needs no
+  approval in `auto-edit`, so the change has to go through `bash`, which asks.
+  Names that only contain `.git`, such as `.gitignore` or `.github/`, are
+  ordinary files. The check is by path, so it does not cover git files that
+  sit outside a `.git` component: a hooks directory named by
+  `core.hooksPath`, or a bare repository whose directory has another name.
+  Keep those out of a writable checkout, or set them through `bash`.
 - **Ticket stores** are written through the git-ticket library rather than
   through `write` or `edit`, so the jail's write boundary never sees them. The
   store a workspace discovers sits inside the working directory anyway. A

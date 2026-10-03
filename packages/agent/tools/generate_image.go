@@ -90,6 +90,9 @@ func (t *GenerateImageTool) Execute(ctx context.Context, raw json.RawMessage, pr
 			continue
 		}
 		dst := t.savePath(a.Path, i, len(res.Images), img.MimeType)
+		if err := refuseGitAdmin(dst); err != nil {
+			return core.ToolResult{}, err
+		}
 		if err := t.Sandbox.CheckPath(dst); err != nil {
 			return core.ToolResult{}, err
 		}
