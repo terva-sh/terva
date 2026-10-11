@@ -11,6 +11,20 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.140.0](https://github.com/terva-sh/terva/releases/tag/v0.140.0) — 2026-10-02
+
+### Breaking changes
+
+- models: resolve models and their limits under the selected provider
+
+### Features
+
+- talkoot: let members move between the home checkout and a worktree
+
+### Fixes
+
+- tools: protect Git administration files from direct writes
+
 ## [v0.139.7](https://github.com/terva-sh/terva/releases/tag/v0.139.7) — 2026-10-02
 
 ### Features
