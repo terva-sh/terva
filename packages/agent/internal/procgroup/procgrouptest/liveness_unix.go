@@ -37,13 +37,17 @@ func Zombie(pid int) bool {
 }
 
 // psZombie reads the process state from ps(1). The stat column starts with Z
-// for a zombie, and ps exits non-zero when pid names no process.
+// for a zombie, and ps exits non-zero when pid names no process. A process
+// that has begun to exit carries the E flag before it shows Z. On macOS CI a
+// kill(2) on the group already found no member while this helper, reading
+// only Z, still called the exiting member alive. It counts as gone here.
 func psZombie(pid int) bool {
 	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		return false
 	}
-	return strings.HasPrefix(strings.TrimSpace(string(out)), "Z")
+	stat := strings.TrimSpace(string(out))
+	return strings.HasPrefix(stat, "Z") || strings.ContainsRune(stat, 'E')
 }
 
 func procZombie(pid int) bool {
