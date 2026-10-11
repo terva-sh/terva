@@ -56,9 +56,17 @@ const codeExecSchema = `{"type":"object","properties":{"script":{"type":"string"
 
 func (t *CodeExecutionTool) Name() string { return "code_execution" }
 func (t *CodeExecutionTool) Description() string {
-	return i18n.D("tool.code_execution.description", "Run a short JavaScript program. The program can call read(path[,offset,limit]), grep(pattern[,path]), and glob(pattern[,path]) as functions. Each call returns one string. Use print(...) to return a result. The program runs inside a function body. Therefore return works as an early exit.\n\nglob and grep give one result per line. Use .trim().split('\\n') to get an array before a loop. A loop over the string itself visits single characters.\n\nThe tool returns the printed output only. The results of the calls in the program do not enter your context. Therefore use this tool for a read-only task with many steps, when a large output gives a small answer. Examples are to count the matches, to extract one field, or to join the results from several files.\n\nThe program has no access to the file system, the network, require, or other globals. Each read, grep, and glob call obeys the usual permission gate. The program can make 50 calls to the host and can print 32KB. The default time limit is 30 seconds.\n\nOne read gives at most 2000 lines and 50 KiB. A larger read throws. The error gives the offset to continue from. The tool does not give a part of the file, because a program cannot see a cut result. Pass offset and limit to read a large file in parts. To find one thing in a large file, use grep.")
+	description := i18n.D("tool.code_execution.description", "Run a short JavaScript program. The program can call read(path[,offset,limit]), grep(pattern[,path]), and glob(pattern[,path]) as functions. Each call returns one string. Use print(...) to return a result. The program runs inside a function body. Therefore return works as an early exit.\n\nglob and grep give one result per line. Use .trim().split('\\n') to get an array before a loop. A loop over the string itself visits single characters.\n\nThe tool returns the printed output only. The results of the calls in the program do not enter your context. Therefore use this tool for a read-only task with many steps, when a large output gives a small answer. Examples are to count the matches, to extract one field, or to join the results from several files.\n\nThe program has no access to the file system, the network, require, or other globals. Each read, grep, and glob call obeys the usual permission gate. The program can make 50 calls to the host and can print 32KB. The default time limit is 30 seconds.\n\nOne read gives at most 2000 lines and 50 KiB. A larger read throws. The error gives the offset to continue from. The tool does not give a part of the file, because a program cannot see a cut result. Pass offset and limit to read a large file in parts. To find one thing in a large file, use grep.")
+	if t.Catalog != nil {
+		description += "\n\n" + scriptDisclosureDescription()
+	}
+	return description
 }
 func (t *CodeExecutionTool) Schema() json.RawMessage { return json.RawMessage(codeExecSchema) }
+
+func scriptDisclosureDescription() string {
+	return i18n.D("tool.code_execution.disclosure", "Use tools() to list the tools that this session exposes. Use describe(name) to read one tool's schema. call(name, args) returns its text.\n\ncallResult(name, args) returns text, structuredContent, isError, and attachment descriptions. Pass the tool name as a string literal. Each call obeys the usual permission gate.")
+}
 
 // ToolGroupName places code_execution in the lazily-activated "scripting"
 // group (core.ToolGroup): an optional capability, not a core coding tool,
@@ -76,7 +84,7 @@ var scriptReadOnlyBindings = []string{"read", "grep", "glob"}
 // disclosure exists to rule out.
 func (t *CodeExecutionTool) accountedNames() []string {
 	names := append([]string(nil), scriptReadOnlyBindings...)
-	names = append(names, "tools", "describe", "call")
+	names = append(names, "tools", "describe", "call", "callResult")
 	names = append(names, t.Catalog.Names()...)
 	return names
 }
@@ -124,14 +132,24 @@ func bindingPlanList(bindings []string, refs jsengine.BindingRefs) string {
 // model-issued call uses.
 type hostCallFn func(ctx context.Context, tool string, args json.RawMessage) (core.ToolResult, error)
 
-// dispatchHostTool is the single crossing from a script binding to a host
-// tool. Both scripting tools route through it so the gate semantics, the
-// error shape, and the flattening of a tool result to script-visible text
-// cannot drift apart between a read-only and a mutating caller.
+// dispatchHostTool preserves the string return and error behavior of existing bindings.
 func dispatchHostTool(ctx context.Context, call hostCallFn, tool string, fields map[string]any) (string, error) {
-	raw, err := json.Marshal(fields)
+	res, err := dispatchHostToolResult(ctx, call, tool, fields)
 	if err != nil {
 		return "", err
+	}
+	text := textFromContent(res.Content)
+	if res.IsError {
+		return "", fmt.Errorf("%s", strings.TrimSpace(text))
+	}
+	return text, nil
+}
+
+// dispatchHostToolResult is the shared gated crossing for text and structured calls.
+func dispatchHostToolResult(ctx context.Context, call hostCallFn, tool string, fields map[string]any) (core.ToolResult, error) {
+	raw, err := json.Marshal(fields)
+	if err != nil {
+		return core.ToolResult{}, err
 	}
 	// Mark the dispatch as script-originated. The result returns to the
 	// running program, never to the model's transcript, so a tool that
@@ -152,14 +170,10 @@ func dispatchHostTool(ctx context.Context, call hostCallFn, tool string, fields 
 			Content: []provider.Content{provider.TextBlock{Text: err.Error()}},
 			IsError: true,
 		})
-		return "", err
+		return core.ToolResult{}, err
 	}
 	core.ReportInnerCall(ctx, tool, res)
-	text := textFromContent(res.Content)
-	if res.IsError {
-		return "", fmt.Errorf("%s", strings.TrimSpace(text))
-	}
-	return text, nil
+	return res, nil
 }
 
 // hostBinding adapts one allowlisted host tool to a string-shaped
@@ -222,9 +236,7 @@ func (t *CodeExecutionTool) bindings() map[string]jsengine.Binding {
 	return b
 }
 
-// typedBindings returns the catalog's call() binding, the one disclosure
-// binding whose second argument is an object and cannot survive flattening
-// to strings.
+// typedBindings preserves object arguments for call and callResult.
 func (t *CodeExecutionTool) typedBindings() map[string]jsengine.TypedBinding {
 	_, tb := disclosureBindings(t.Catalog, t.HostCall)
 	return tb

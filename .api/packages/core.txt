@@ -455,6 +455,8 @@ ToolResult.IsError	field	bool
 ToolResult.LinesAdded	field	int
 ToolResult.LinesRemoved	field	int
 ToolResult.Shared	field	[]SharedFile
+ToolResult.StructuredContent	field	json.RawMessage
+ToolResult.StructuredContentOmitted	field	bool
 ToolVisibility	type	interface
 ToolVisibility.Advertise	method	func(reg Registry, pin bool) func(name string) bool
 ToolVisibility.BeginPrompt	method	func() (repin bool)

@@ -23,6 +23,8 @@ type CatalogEntry struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	Schema      json.RawMessage `json:"schema"`
+	// Declaration is generated on demand by Describe, never by List.
+	Declaration string `json:"declaration,omitempty"`
 	// Source is where the tool comes from: "builtin" for the fixed
 	// meta/inspection set, or the extension/MCP provenance for a disclosed
 	// plugin tool, so a script (and a reader of its plan) can tell a curated
@@ -87,6 +89,7 @@ func (c *DisclosureCatalog) Describe(name string) (CatalogEntry, error) {
 	if !ok {
 		return CatalogEntry{}, &notDisclosedError{name: name}
 	}
+	e.Declaration = scriptToolDeclaration(e.Name, e.Schema)
 	return e, nil
 }
 

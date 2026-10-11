@@ -52,6 +52,12 @@ type LedgerFailureNoter interface {
 type ToolResult struct {
 	// Content is sent back to the LLM (text and/or images).
 	Content []provider.Content
+	// StructuredContent is explicit JSON output for programmatic consumers.
+	// Display text is never parsed to populate it; Details remains private UI data.
+	StructuredContent json.RawMessage `json:"structuredContent,omitempty"`
+	// StructuredContentOmitted reports that an output budget discarded structured JSON.
+	// Display content remains available to text consumers.
+	StructuredContentOmitted bool `json:"structuredContentOmitted,omitempty"`
 	// IsError marks this result as an error to the LLM.
 	IsError bool
 	// Details is arbitrary data for UIs and logs; not sent to the LLM.

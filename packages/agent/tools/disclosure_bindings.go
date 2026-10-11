@@ -44,8 +44,8 @@ func disclosureBindings(catalog *DisclosureCatalog, call hostCallFn) (map[string
 			return string(b), nil
 		},
 	}
-	typed := map[string]jsengine.TypedBinding{
-		"call": func(ctx context.Context, args []any) (any, error) {
+	callBinding := func(structured bool) jsengine.TypedBinding {
+		return func(ctx context.Context, args []any) (any, error) {
 			if catalog == nil {
 				return nil, errNoCatalog()
 			}
@@ -69,8 +69,16 @@ func disclosureBindings(catalog *DisclosureCatalog, call hostCallFn) (map[string
 			if fields == nil {
 				fields = map[string]any{}
 			}
-			return dispatchHostTool(ctx, call, name, fields)
-		},
+			if !structured {
+				return dispatchHostTool(ctx, call, name, fields)
+			}
+			res, err := dispatchHostToolResult(ctx, call, name, fields)
+			if err != nil {
+				return nil, err
+			}
+			return scriptResultEnvelope(res)
+		}
 	}
+	typed := map[string]jsengine.TypedBinding{"call": callBinding(false), "callResult": callBinding(true)}
 	return bindings, typed
 }

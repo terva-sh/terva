@@ -337,7 +337,7 @@ func (w *refWalker) walkExpression(e ast.Expression) {
 	case *ast.CallExpression:
 		if id := calleeIdentifier(n.Callee); id != nil {
 			w.reference(id, true)
-			if string(id.Name) == "call" {
+			if string(id.Name) == "call" || string(id.Name) == "callResult" {
 				w.callTarget(n.ArgumentList)
 			}
 		} else {

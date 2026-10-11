@@ -383,6 +383,10 @@ func (t *Tool) Execute(ctx context.Context, args json.RawMessage, progress func(
 	if err != nil {
 		return core.ToolResult{}, err
 	}
+	omitted := len(res.StructuredContent) > 1<<20
+	if omitted {
+		res.StructuredContent = nil
+	}
 	var content []provider.Content
 	for _, c := range res.Content {
 		switch c.Type {
@@ -404,7 +408,7 @@ func (t *Tool) Execute(ctx context.Context, args json.RawMessage, progress func(
 	if len(content) == 0 {
 		content = append(content, provider.TextBlock{Text: ""})
 	}
-	return core.ToolResult{Content: content, IsError: res.IsError}, nil
+	return core.ToolResult{Content: content, StructuredContent: res.StructuredContent, StructuredContentOmitted: omitted, IsError: res.IsError}, nil
 }
 
 func sortedKeys[V any](m map[string]V) []string {

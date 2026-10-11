@@ -138,7 +138,7 @@ such thing as a partially accounted run.**
 ## The disclosure surface
 
 `code_execution` can discover more of the host than its three fixed bindings,
-and call a curated subset of it. Three verbs, all of which the pre-check
+and call a curated subset of it. Four verbs, all of which the pre-check
 accounts for like any other binding:
 
 - **`tools()`** lists what is disclosed this session: name, one-line
@@ -146,6 +146,8 @@ accounts for like any other binding:
   the tool came from). It runs in-engine: no host call, no approval prompt.
 - **`describe(name)`** returns one tool's real JSON Schema, so a script
   learns the argument shape rather than guessing it. Also in-engine.
+  Its `declaration` field contains a compact TypeScript overload for `call`.
+  The declaration uses the exact tool name, including its namespace.
 - **`call(name, args)`** invokes a disclosed tool. The name **must be a
   string literal**: `call("session_inspect", {expand: 1})`, never
   `call(someVariable, …)`. The literal is what keeps the pre-check load-
@@ -154,6 +156,9 @@ accounts for like any other binding:
   anything runs. A computed name is refused before the engine starts, for
   the same reason `bash` is not in the binding set: the authority would hide
   inside a value the walker cannot read.
+- **`callResult(name, args)`** invokes the same disclosed tools through the same gate.
+  It returns a result object with text, explicit structured content, error state,
+  and descriptors for omitted attachments. The name must be a string literal here too.
 
 What is disclosed is deliberately narrow (proposal §12.7): the fixed
 meta/inspection builtins (`session_inspect`, `session_search`,
@@ -172,6 +177,52 @@ reflects what is actually installed rather than a compiled-in promise. Every
 `call()` goes through the same approval gate and audit line as a
 model-issued call; the disclosure changes *discoverability*, never
 authority.
+
+### Structured results
+
+Use `callResult` when a tool supplies structured output:
+
+```js
+const result = callResult("mcp_inventory_list", {limit: 10});
+if (result.isError) {
+  print(result.text);
+  return;
+}
+if (result.structuredContent !== null) {
+  print(result.structuredContent.items.length);
+} else {
+  print(result.text);
+}
+```
+
+The example requires a disclosed read-only MCP inventory tool.
+The result has four fields:
+
+| Field | Meaning |
+|---|---|
+| `text` | The tool's display text, with omission markers for non-text blocks |
+| `structuredContent` | Explicit JSON output from the tool, or `null` when absent |
+| `isError` | The tool's error flag |
+| `attachments` | Descriptors for omitted non-text blocks, including image MIME type and byte count |
+
+MCP `structuredContent` reaches scripts through this field.
+The MCP adapter omits structured output above 1 MiB before retaining a tool result.
+It records the omission and preserves display content for direct and legacy text calls.
+`callResult` throws an import-limit error for omitted structured output.
+JSON numbers become JavaScript numbers. Integers are exact through `2^53 - 1`.
+Tools should encode larger identifiers as strings when scripts need their exact values.
+Attachment types are `image` or `other`; scripts never receive attachment bytes.
+Host tools can supply it through `core.ToolResult.StructuredContent`.
+Display-only `Details` does not enter the script.
+The bridge never parses display text as JSON.
+It also omits image bytes and other non-text payloads.
+
+Permission and dispatch failures throw, as they do with `call`.
+A tool error returns an envelope with `isError: true` so a script can inspect it.
+Invalid structured JSON and results above the 1 MiB import limit throw.
+The limit covers the complete JSON envelope, including text and attachment descriptors.
+The usual host-call, printed-output, and time budgets still apply.
+Existing `call`, `read`, `grep`, `glob`, `write`, and `edit` keep their text behavior.
 
 ## The script environment
 
@@ -243,6 +294,23 @@ it, with a catchable error: a truncated result is indistinguishable in-script
 from a genuinely short one, and would quietly corrupt whatever the script
 computed from it. It does not bound what a script allocates on its own; only
 the time limit does.
+
+## Schema-derived declarations
+
+`JSON.parse(describe(name)).declaration` returns a TypeScript declaration for that disclosed tool.
+It describes required and optional fields, nested objects and arrays, and primitive enum values.
+The generator also handles unions and intersections.
+Declarations are reference text; scripts still run as JavaScript.
+
+The listing from `tools()` contains no declarations.
+The bridge generates one only when you describe a tool that the catalog admits.
+It preserves the existing disclosure and permission boundaries.
+
+Each declaration has an 8 KiB size limit.
+The generator also bounds schema size, depth, and node count.
+Unsupported constructs, such as references and conditional schemas, use `unknown` with an explanatory note.
+The original JSON Schema remains available and defines runtime constraints.
+TypeScript does not enforce every JSON Schema rule, including numeric bounds and exclusive unions.
 
 ## Permissions
 
@@ -332,13 +400,12 @@ never registers.
 - **Typed bindings and globals.** `Binding` flattens every argument and
   return to a string. `TypedBinding` keeps JS types across the boundary, and
   `Options.Globals` hands a script input without encoding it into the
-  source. `code_execution` uses only the string form; the mutating tool uses
-  it for `read`/`grep`/`glob` and the typed form for `write`/`edit`, because
-  an array of replacements does not survive being flattened to a string.
+  source. Both tools use string bindings for `read`/`grep`/`glob` and typed
+  bindings for `call`/`callResult`, which accept argument objects.
+  The mutating tool also uses typed bindings for `write`/`edit`, because
+  an array of replacements does not survive flattening to a string.
   One deliberate difference between them: a string binding drops a trailing
   `undefined`/`null` argument, where a typed binding keeps argument
   positions.
 - **The binding-reference pre-check.** `AnalyzeBindings` walks the script's
-  AST and reports which bindings it names. `code_execution_mutating` runs it
-  as a precondition; `code_execution` does not use it, because a read-only
-  tool has nothing to withhold.
+  AST and reports which bindings it names. Both tools run it before execution.

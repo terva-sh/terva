@@ -334,8 +334,9 @@ type ContentItem struct {
 
 // CallResult is the outcome of tools/call.
 type CallResult struct {
-	Content []ContentItem `json:"content"`
-	IsError bool          `json:"isError"`
+	Content           []ContentItem   `json:"content"`
+	StructuredContent json.RawMessage `json:"structuredContent,omitempty"`
+	IsError           bool            `json:"isError"`
 }
 
 // CallTool invokes one tool with raw JSON arguments.
