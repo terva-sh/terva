@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bufio"
 	"io"
 	"os"
 	"path/filepath"
@@ -37,8 +38,9 @@ type Terminal interface {
 
 // ProcTerm is a Terminal bound to the current process's tty.
 type ProcTerm struct {
-	out *os.File
-	in  *os.File
+	out         *os.File
+	in          *os.File
+	inputReader *bufio.Reader
 
 	// resizeMu guards resizeCBs and resizeNextID. The signal goroutine
 	// reads them while the main loop registers and detaches, so both
@@ -54,6 +56,8 @@ type ProcTerm struct {
 	// used to run per registration, so N callbacks left N goroutines
 	// each walking all N callbacks: N squared invocations per resize.
 	resizeOnce sync.Once
+	resizeStop chan struct{}
+	resizeDone chan struct{}
 }
 
 // NewProcTerm returns a Terminal bound to stdin/stdout.
@@ -134,25 +138,28 @@ func (p *ProcTerm) fireResize() {
 func (p *ProcTerm) EnterRaw() (func() error, error) {
 	fd := int(p.in.Fd())
 	if !term.IsTerminal(fd) {
-		return func() error { return nil }, nil
+		p.resumeResizeHandler()
+		return func() error { p.stopResizeHandler(); return nil }, nil
 	}
 	st, err := term.MakeRaw(fd)
 	if err != nil {
 		return nil, err
 	}
-	return func() error { return term.Restore(fd, st) }, nil
+	p.resumeResizeHandler()
+	return func() error {
+		p.stopResizeHandler()
+		return term.Restore(fd, st)
+	}, nil
 }
 
 func (p *ProcTerm) ReadByte() (byte, error) {
-	var b [1]byte
-	_, err := p.in.Read(b[:])
-	return b[0], err
+	return readProcStdin(p)
 }
 
 // PeekByteTimeout uses a platform-specific non-blocking read to decide
 // whether another byte is available within d. If not, returns (0, false, nil).
 func (p *ProcTerm) PeekByteTimeout(d time.Duration) (byte, bool, error) {
-	return peekStdin(p.in, d)
+	return peekProcStdin(p, d)
 }
 
 // ---- terminal control sequences ----

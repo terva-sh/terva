@@ -319,7 +319,7 @@ func (t *vertexTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	newPath := fmt.Sprintf("/v1/projects/%s/locations/%s/publishers/google/models/%s%s",
 		t.cfg.project, t.cfg.location, modelID, verb)
 	clone := req.Clone(req.Context())
-	clone.URL.Host = t.cfg.location + "-aiplatform.googleapis.com"
+	clone.URL.Host = vertexHost(t.cfg.location)
 	clone.URL.Path = newPath
 	// Drop existing auth header and pick the right one.
 	clone.Header.Del("x-goog-api-key")
@@ -346,7 +346,7 @@ func newVertex(v VertexConfig, opts ...ClientOption) Client {
 	}
 	inner := &geminiClient{
 		apiKey:  "vertex-placeholder", // overwritten by transport
-		baseURL: "https://" + cfg.location + "-aiplatform.googleapis.com",
+		baseURL: "https://" + vertexHost(cfg.location),
 		http: &http.Client{
 			Transport: &vertexTransport{
 				inner: http.DefaultTransport,
@@ -359,6 +359,13 @@ func newVertex(v VertexConfig, opts ...ClientOption) Client {
 	}
 	// Wrap so Name() reports "google-vertex" instead of "google".
 	return &renamedClient{inner: inner, name: "google-vertex"}
+}
+
+func vertexHost(location string) string {
+	if location == "global" {
+		return "aiplatform.googleapis.com"
+	}
+	return location + "-aiplatform.googleapis.com"
 }
 
 // renamedClient wraps a Client and overrides its Name(). Used for

@@ -544,6 +544,10 @@ By default this uses:
 
 Catalog ships with `deepseek-v4-pro` (reasoning) and `deepseek-v4-flash`. These are exactly the IDs returned by `GET https://api.deepseek.com/models` today. You can add additional model IDs to `models.json` under the `deepseek` provider.
 
+The direct V4 models accept `none`, `low`, `high`, and `max` reasoning effort.
+The `max` setting sends the distinct `max` value. The `maximum` setting maps to `high` through the shared effort ladder.
+Compatible gateways retain their own declared effort limits.
+
 Credential lookup order for DeepSeek:
 
 1. `--api-key`

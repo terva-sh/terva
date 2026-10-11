@@ -3,6 +3,8 @@ package build
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	"terva.sh/terva/packages/provider"
@@ -144,11 +146,10 @@ func vertexConfig() provider.VertexConfig {
 	}
 	credPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
 	if credPath == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			candidate := home + "/.config/gcloud/application_default_credentials.json"
-			if _, err := os.Stat(candidate); err == nil {
-				credPath = candidate
-			}
+		home, _ := os.UserHomeDir()
+		candidate := gcloudADCPath(runtime.GOOS, home, os.Getenv("CLOUDSDK_CONFIG"), os.Getenv("APPDATA"))
+		if _, err := os.Stat(candidate); err == nil {
+			credPath = candidate
 		}
 	}
 	if credPath == "" {
@@ -162,6 +163,24 @@ func vertexConfig() provider.VertexConfig {
 	}
 	cfg.CredentialsJSON = b
 	return cfg
+}
+
+func gcloudADCPath(goos, home, cloudConfig, appData string) string {
+	dir := cloudConfig
+	if dir == "" {
+		if goos == "windows" {
+			if appData == "" {
+				return ""
+			}
+			dir = filepath.Join(appData, "gcloud")
+		} else {
+			if home == "" {
+				return ""
+			}
+			dir = filepath.Join(home, ".config", "gcloud")
+		}
+	}
+	return filepath.Join(dir, "application_default_credentials.json")
 }
 
 // cloudflareConfig resolves the account and gateway IDs the Cloudflare

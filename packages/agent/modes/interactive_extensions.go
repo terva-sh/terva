@@ -70,6 +70,10 @@ func (i *Interactive) invokeExtensionCommand(ctx context.Context, name, args str
 		i.invalidate()
 		return
 	}
+	i.applyExtensionCommandResponse(name, resp)
+}
+
+func (i *Interactive) applyExtensionCommandResponse(name string, resp extproto.CommandResponseFromExt) {
 	if resp.Error != "" {
 		i.mu.Lock()
 		i.statusErr = i18n.T("extension /%s: %s", name, resp.Error)
@@ -111,6 +115,7 @@ func (i *Interactive) invokeExtensionCommand(ctx context.Context, name, args str
 		})
 	case "display":
 		i.appendExtensionNote(name, resp.Display, "info")
+		i.invalidate()
 	case "noop", "":
 		// nothing
 	default:

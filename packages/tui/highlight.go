@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -137,16 +138,32 @@ func stripANSIBackgrounds(s string) string {
 		for p := 0; p < len(params); p++ {
 			param := params[p]
 			switch param {
-			case "48":
-				// 48;5;N or 48;2;R;G;B background color.
-				if p+1 < len(params) && params[p+1] == "5" {
-					p += 2
+			case "38", "48":
+				// Color channels are values, even when they resemble SGR codes.
+				width := 0
+				if p+1 < len(params) {
+					switch params[p+1] {
+					case "5":
+						width = 3
+					case "2":
+						width = 5
+					}
+				}
+				if width == 0 || p+width > len(params) {
+					p = len(params)
 					continue
 				}
-				if p+1 < len(params) && params[p+1] == "2" {
-					p += 4
-					continue
+				valid := true
+				for _, channel := range params[p+2 : p+width] {
+					n, err := strconv.Atoi(channel)
+					if err != nil || n < 0 || n > 255 {
+						valid = false
+					}
 				}
+				if param == "38" && valid {
+					kept = append(kept, params[p:p+width]...)
+				}
+				p += width - 1
 				continue
 			case "49":
 				continue

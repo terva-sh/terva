@@ -388,14 +388,16 @@ var catalog = []Model{
 	{
 		Provider: "deepseek", ID: "deepseek-v4-pro", DisplayName: "DeepSeek V4 Pro",
 		ContextWindow: 1000000, MaxOutput: 384000, Reasoning: true,
-		PriceInput: 0.435, PriceOutput: 0.87, PriceCacheRead: 0.003625,
+		ReasoningEfforts: []string{"none", "low", "high", "max"},
+		PriceInput:       0.435, PriceOutput: 0.87, PriceCacheRead: 0.003625,
 		BaseURL: "https://api.deepseek.com",
 		Caps:    map[Capability]bool{CapImageInput: false},
 	},
 	{
 		Provider: "deepseek", ID: "deepseek-v4-flash", DisplayName: "DeepSeek V4 Flash",
 		ContextWindow: 1000000, MaxOutput: 384000, Reasoning: true,
-		PriceInput: 0.14, PriceOutput: 0.28, PriceCacheRead: 0.0028,
+		ReasoningEfforts: []string{"none", "low", "high", "max"},
+		PriceInput:       0.14, PriceOutput: 0.28, PriceCacheRead: 0.0028,
 		BaseURL: "https://api.deepseek.com",
 		Caps:    map[Capability]bool{CapImageInput: false},
 	},

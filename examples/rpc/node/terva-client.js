@@ -86,7 +86,7 @@ async function main() {
           break;
         }
         case "error":
-          process.stderr.write(`\n[error] ${ev.message}\n`);
+          process.stderr.write(`\n[error] ${ev.error}\n`);
           exitCode = 1;
           break;
         case "done":

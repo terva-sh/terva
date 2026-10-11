@@ -10,8 +10,7 @@ package tui
 // ever subscribes more than once again: N subscriptions mean the signal
 // is delivered N times, and each delivery walks every callback.
 //
-// Windows has no SIGWINCH and resize_windows.go leaves
-// installResizeHandler empty, so this is Unix only.
+// Windows uses size polling because it has no SIGWINCH.
 
 import (
 	"sync/atomic"

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -22,6 +23,7 @@ func clearCloudEnv(t *testing.T) string {
 		"AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE",
 		"AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_RESOURCE_NAME", "AZURE_OPENAI_API_VERSION",
 		"GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "GOOGLE_CLOUD_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS",
+		"CLOUDSDK_CONFIG", "APPDATA",
 		"CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID",
 	} {
 		t.Setenv(k, "")
@@ -29,6 +31,7 @@ func clearCloudEnv(t *testing.T) string {
 	home := testsupport.TempDir(t)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
 	return home
 }
 
@@ -126,10 +129,16 @@ func TestVertexConfigResolvesAuthAndSaysWhatIsMissing(t *testing.T) {
 		t.Errorf("no auth: %v", cfg)
 	}
 
-	adc := filepath.Join(home, ".config", "gcloud", "application_default_credentials.json")
+	adc := gcloudADCPath(runtime.GOOS, home, "", os.Getenv("APPDATA"))
 	writeFile(t, adc, `{"type":"authorized_user"}`)
 	if cfg := vertexConfig(); string(cfg.CredentialsJSON) != `{"type":"authorized_user"}` || cfg.Hint != "" {
 		t.Errorf("gcloud's default file: %v", cfg)
+	}
+	override := filepath.Join(home, "custom-gcloud")
+	writeFile(t, filepath.Join(override, "application_default_credentials.json"), `{"type":"override"}`)
+	t.Setenv("CLOUDSDK_CONFIG", override)
+	if cfg := vertexConfig(); string(cfg.CredentialsJSON) != `{"type":"override"}` {
+		t.Errorf("gcloud config override was not used")
 	}
 
 	explicit := filepath.Join(home, "sa.json")
@@ -149,6 +158,19 @@ func TestVertexConfigResolvesAuthAndSaysWhatIsMissing(t *testing.T) {
 	t.Setenv("GOOGLE_CLOUD_API_KEY", "key")
 	if cfg := vertexConfig(); cfg.APIKey != "key" || cfg.CredentialsJSON != nil || cfg.Hint != "" {
 		t.Errorf("an API key should need no file: %v", cfg)
+	}
+}
+
+func TestGcloudADCPlatformPaths(t *testing.T) {
+	for _, tc := range []struct{ goos, home, config, appData, want string }{
+		{"linux", "home", "", "", filepath.Join("home", ".config", "gcloud", "application_default_credentials.json")},
+		{"windows", "home", "", "roaming", filepath.Join("roaming", "gcloud", "application_default_credentials.json")},
+		{"windows", "home", "custom", "roaming", filepath.Join("custom", "application_default_credentials.json")},
+		{"windows", "home", "", "", ""},
+	} {
+		if got := gcloudADCPath(tc.goos, tc.home, tc.config, tc.appData); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.goos, got, tc.want)
+		}
 	}
 }
 

@@ -1,6 +1,53 @@
 package provider
 
-import "testing"
+import (
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+)
+
+type vertexRecordingTransport struct {
+	request *http.Request
+}
+
+func (r *vertexRecordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.request = req
+	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+}
+
+func TestVertexRequestHosts(t *testing.T) {
+	for _, tc := range []struct{ location, host string }{
+		{"global", "aiplatform.googleapis.com"},
+		{"us-central1", "us-central1-aiplatform.googleapis.com"},
+	} {
+		t.Run(tc.location, func(t *testing.T) {
+			client := newVertex(VertexConfig{Project: "project", Location: tc.location, APIKey: "synthetic"}).(*renamedClient).inner.(*geminiClient)
+			if client.baseURL != "https://"+tc.host {
+				t.Fatalf("base URL = %q", client.baseURL)
+			}
+			recorder := &vertexRecordingTransport{}
+			transport := client.http.Transport.(*vertexTransport)
+			transport.inner = recorder
+			req, err := http.NewRequest("POST", client.baseURL+"/v1beta/models/gemini-test:streamGenerateContent?alt=sse", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := transport.RoundTrip(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			wantPath := "/v1/projects/project/locations/" + tc.location + "/publishers/google/models/gemini-test:streamGenerateContent"
+			if recorder.request.URL.Host != tc.host || recorder.request.URL.Path != wantPath || recorder.request.URL.RawQuery != "alt=sse" {
+				t.Fatalf("outbound URL = %s", recorder.request.URL)
+			}
+			if req.URL.Path != "/v1beta/models/gemini-test:streamGenerateContent" {
+				t.Fatal("transport mutated the source request")
+			}
+		})
+	}
+}
 
 // The wire parses the credentials file's contents; finding and reading the file
 // is the host's (terva's is packages/agent/build/cloud_config.go).

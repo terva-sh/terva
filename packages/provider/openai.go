@@ -331,6 +331,10 @@ func (c *openaiClient) buildRequest(req Request) (*oaiRequest, error) {
 			MaxOutput:     8192,
 		}
 	}
+	// A direct DeepSeek effort enum does not describe compatible gateways.
+	if m.Provider == "deepseek" && c.Name() != "deepseek" {
+		m.ReasoningEfforts = nil
+	}
 	req.Messages = enforceImageInput(m, req.Messages)
 	out := &oaiRequest{
 		Model:         req.Model,

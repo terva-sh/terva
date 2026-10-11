@@ -102,7 +102,7 @@ def main() -> int:
             elif t == "done":
                 break
             elif t == "error":
-                print(f"\n[error] {ev.get('message')}", file=sys.stderr)
+                print(f"\n[error] {ev.get('error')}", file=sys.stderr)
                 return 1
         print()
         return 0

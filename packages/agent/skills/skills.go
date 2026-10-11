@@ -613,13 +613,40 @@ func scanTier(t tier) ([]*Skill, []error) {
 	if err != nil {
 		return nil, nil // missing dir is fine
 	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		return entries[i].Type()&os.ModeSymlink == 0 && entries[j].Type()&os.ModeSymlink != 0
+	})
 	var errs []error
 	var out []*Skill
+	seen := make(map[string]bool)
 	for _, e := range entries {
-		if !e.IsDir() {
+		if !e.IsDir() && e.Type()&os.ModeSymlink == 0 {
 			continue
 		}
-		path := filepath.Join(t.dir, e.Name(), "SKILL.md")
+		dir := filepath.Join(t.dir, e.Name())
+		if info, err := os.Stat(dir); err != nil {
+			if !os.IsNotExist(err) {
+				errs = append(errs, fmt.Errorf("%s: %w", dir, err))
+			}
+			continue
+		} else if !info.IsDir() {
+			continue
+		}
+		resolvedDir, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				errs = append(errs, fmt.Errorf("%s: %w", dir, err))
+			}
+			continue
+		}
+		if seen[resolvedDir] {
+			continue
+		}
+		resourceDir := dir
+		if e.Type()&os.ModeSymlink != 0 {
+			resourceDir = resolvedDir
+		}
+		path := filepath.Join(resourceDir, "SKILL.md")
 		s, err := load(path, t.label, t.namespace)
 		if err != nil {
 			if !os.IsNotExist(err) {
@@ -627,6 +654,7 @@ func scanTier(t tier) ([]*Skill, []error) {
 			}
 			continue
 		}
+		seen[resolvedDir] = true
 		if clean := sanitizeName(s.Name); clean != s.Name {
 			errs = append(errs, fmt.Errorf("%s: skill name %q contains %q, which is reserved to separate a namespace from a name; loaded as %q", path, s.Name, nameSep, clean))
 			s.Name = clean

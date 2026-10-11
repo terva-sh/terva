@@ -266,30 +266,27 @@ func ForeignCompactions(msgs []Message, providerName string) []int {
 }
 
 // RepairOrphanedToolResults removes tool_result content blocks (and
-// entire messages that become empty) when the matching tool_use ID
-// does not appear anywhere in the given messages. Resume tails,
+// entire messages that become empty) without a preceding unmatched tool_use.
+// Each call occurrence permits one result, including reused IDs. Resume tails,
 // compaction repair, and provider request builders all need this so
 // the upstream API never sees a tool_call_id with no corresponding
 // assistant tool_call earlier in the same request.
 //
 // Unstable: a helper carries no promise before 1.0.
 func RepairOrphanedToolResults(msgs []Message) []Message {
-	useIDs := map[string]bool{}
-	for _, m := range msgs {
-		for _, c := range m.Content {
-			if tc, ok := c.(ToolCallBlock); ok {
-				useIDs[tc.ID] = true
-			}
-		}
-	}
+	pending := map[string]int{}
 	out := make([]Message, 0, len(msgs))
 	for _, m := range msgs {
 		var filtered []Content
 		for _, c := range m.Content {
+			if tc, ok := c.(ToolCallBlock); ok {
+				pending[tc.ID]++
+			}
 			if tr, ok := c.(ToolResultBlock); ok {
-				if !useIDs[tr.CallID] {
+				if pending[tr.CallID] == 0 {
 					continue
 				}
+				pending[tr.CallID]--
 			}
 			filtered = append(filtered, c)
 		}

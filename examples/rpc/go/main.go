@@ -39,6 +39,7 @@ func main() {
 		"message": prompt,
 	})
 
+	failed := false
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	for sc.Scan() {
@@ -52,11 +53,15 @@ func main() {
 		case "tool_call":
 			fmt.Fprintf(os.Stderr, "\n[tool] %v\n", ev["name"])
 		case "error":
-			fmt.Fprintf(os.Stderr, "\n[error] %v\n", ev["message"])
+			fmt.Fprintf(os.Stderr, "\n[error] %v\n", ev["error"])
+			failed = true
 		case "done":
 			fmt.Println()
 			stdin.Close()
 			_ = cmd.Wait()
+			if failed {
+				os.Exit(1)
+			}
 			return
 		}
 	}

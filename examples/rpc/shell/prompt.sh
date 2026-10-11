@@ -40,7 +40,7 @@ cmd=$(jq -nc --arg msg "$prompt" '{id:"1",type:"prompt",message:$msg}')
       echo >&2 "[tool] $name"
       ;;
     error)
-      echo >&2 "[error] $(echo "$line" | jq -r '.message // ""')"
+      echo >&2 "[error] $(echo "$line" | jq -r '.error // ""')"
       exit 1
       ;;
     done)

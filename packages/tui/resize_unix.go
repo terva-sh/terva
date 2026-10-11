@@ -30,6 +30,19 @@ func (p *ProcTerm) SetNonblock(enable bool) error {
 	return syscall.SetNonblock(int(p.in.Fd()), enable)
 }
 
+func (p *ProcTerm) resumeResizeHandler() {}
+func (p *ProcTerm) stopResizeHandler()   {}
+
+func readProcStdin(p *ProcTerm) (byte, error) {
+	var b [1]byte
+	_, err := p.in.Read(b[:])
+	return b[0], err
+}
+
+func peekProcStdin(p *ProcTerm, d time.Duration) (byte, bool, error) {
+	return peekStdin(p.in, d)
+}
+
 // peekStdin polls the stdin fd for up to d; if a byte is ready, reads
 // and returns it. Returns (0, false, nil) on timeout.
 //
