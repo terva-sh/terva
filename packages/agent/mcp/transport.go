@@ -34,6 +34,16 @@ type transport interface {
 	Close()
 }
 
+// protocolVersionSetter is implemented by a transport whose wire carries the
+// negotiated protocol version outside the JSON-RPC frames. Streamable HTTP sends
+// it as the MCP-Protocol-Version header on every request after initialize; stdio
+// has no such place, so it does not implement this. The Client calls it once,
+// with the version the server answered at initialize, before it sends anything
+// else.
+type protocolVersionSetter interface {
+	setProtocolVersion(version string)
+}
+
 // transportFactory builds a non-stdio transport from a config. Kinds register
 // one from their own build-tagged file's init(), so a lean build that drops the
 // tag simply has no factory for that kind.

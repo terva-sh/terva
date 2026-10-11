@@ -36,16 +36,27 @@ func init() { registerTransport("http", newHTTPTransport) }
 // id like any other transport. Request-scoped only: a tools-only client needs no
 // standalone GET channel for server-initiated messages (deferred behind this
 // same seam — see docs/plans/mcp-http-transport.md OQ-3).
+//
+// A server request can still arrive on a POST's SSE stream, ahead of the
+// response it relates to. The Client's reply is one more POST, which the spec
+// answers with 202 and no body. Send keeps that reply's id out of error
+// correlation, because the id belongs to the server's id space. It also
+// completes the reply POST before it returns, and pushes nothing from its
+// response.
 type httpTransport struct {
 	url     string
 	headers map[string]string
 	client  *http.Client
 	in      chan []byte
 
-	mu          sync.Mutex
-	sessionID   string
-	lastEventID string // tracked from SSE `id:` for a future resumable GET channel
-	closed      bool
+	mu        sync.Mutex
+	sessionID string
+	// protocolVersion is the version the server answered at initialize, which
+	// the Client sets through setProtocolVersion. Empty until then, so the
+	// initialize POST goes out without the header.
+	protocolVersion string
+	lastEventID     string // tracked from SSE `id:` for a future resumable GET channel
+	closed          bool
 
 	closeCh   chan struct{}
 	closeOnce sync.Once
@@ -55,6 +66,48 @@ type httpTransport struct {
 	// transport gives the child. It was discarded here, which is why an
 	// over-limit SSE frame had nowhere to be reported.
 	stderr io.Writer
+}
+
+// The Client finds the setter by a type assertion, so a renamed method would
+// drop the header with no error. This line makes that a build failure.
+var _ protocolVersionSetter = (*httpTransport)(nil)
+
+// setProtocolVersion records the version the server negotiated. Every request
+// sent after it carries the version as MCP-Protocol-Version, the DELETE on Close
+// included.
+//
+// The initialize POST goes out before this is called, so it carries no version,
+// and that is deliberate. The spec asks for the header on requests after
+// initialize, and it makes a server answer 400 to a version it does not support.
+// Our offer on the initialize POST would turn a server that negotiates down into
+// one that refuses the handshake.
+func (t *httpTransport) setProtocolVersion(version string) {
+	t.mu.Lock()
+	t.protocolVersion = version
+	t.mu.Unlock()
+}
+
+// sessionHeaders is the session state one request carries: the id the server
+// assigned and the protocol version it negotiated. Send takes it when the frame
+// is sent, so a request goes out with the state of that moment.
+type sessionHeaders struct {
+	id      string
+	version string
+}
+
+// setHeaders applies the configured headers, and then the two the protocol
+// owns. The protocol's come last, so a configured header of the same name does
+// not replace the session id or the negotiated version.
+func (t *httpTransport) setHeaders(req *http.Request, sess sessionHeaders) {
+	for k, v := range t.headers {
+		req.Header.Set(k, v)
+	}
+	if sess.id != "" {
+		req.Header.Set("Mcp-Session-Id", sess.id)
+	}
+	if sess.version != "" {
+		req.Header.Set("MCP-Protocol-Version", sess.version)
+	}
 }
 
 // warnf reports a wire-level problem to the server's log. Nil-safe: a transport
@@ -100,37 +153,50 @@ func newHTTPTransport(cfg ServerConfig, _ string, stderr io.Writer) (transport, 
 	}, nil
 }
 
-// Send dispatches one frame on its OWN goroutine and returns immediately. The
+// Send dispatches a request on its OWN goroutine and returns immediately. The
 // response's frame(s) — or, on a transport failure, one synthetic error frame
 // correlated to the request's id — arrive via Incoming(), so the Client's single
 // wait path (its select + timeout) governs every outcome. A synchronous Send
 // that read the whole response would block the caller past its timeout and let a
-// hung server wedge the turn. Notifications (no id) that fail are dropped: there
-// is nothing waiting to tell.
-func (t *httpTransport) Send(_ context.Context, frame []byte) error {
+// hung server wedge the turn.
+//
+// A notification or a reply has no waiter, and the spec answers it with 202 and
+// no body. Send performs that POST before it returns, bounded by ctx and by
+// Close, so a bound the caller holds covers the whole exchange: the Client's
+// reply slots then limit the reply POSTs in flight. Nothing from the response
+// reaches Incoming. A failure is logged and dropped, because nothing waits to be
+// told, so Send still reports an error only for a closed transport.
+func (t *httpTransport) Send(ctx context.Context, frame []byte) error {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
 		return errors.New("mcp http transport is closed")
 	}
 	t.wg.Add(1)
-	sid := t.sessionID
+	sess := sessionHeaders{id: t.sessionID, version: t.protocolVersion}
 	t.mu.Unlock()
 
+	id := idOf(frame)
+	if len(id) == 0 {
+		defer t.wg.Done()
+		t.doRequest(ctx, frame, sess, nil)
+		return nil
+	}
 	go func() {
 		defer t.wg.Done()
-		t.doRequest(frame, sid, idOf(frame))
+		t.doRequest(context.Background(), frame, sess, id)
 	}()
 	return nil
 }
 
-// doRequest performs one POST and funnels its response into Incoming(). Its
-// request context is cancelled when the transport closes, so Close never blocks
-// waiting on a hung server. The caller's context is deliberately NOT used to
-// bound the request — the Client's per-call timeout is the wait budget, and it
-// governs via the response channel, not by killing the request mid-stream.
-func (t *httpTransport) doRequest(frame []byte, sid string, id json.RawMessage) {
-	ctx, cancel := context.WithCancel(context.Background())
+// doRequest performs one POST and funnels a request's response into Incoming().
+// Its request context is cancelled when the transport closes, so Close never
+// blocks waiting on a hung server. For a request, parent is Background: the
+// Client's per-call timeout is the wait budget, and it governs via the response
+// channel, not by killing the request mid-stream. For a frame with no waiter
+// (id is nil), parent is the sender's context, which bounds the whole POST.
+func (t *httpTransport) doRequest(parent context.Context, frame []byte, sess sessionHeaders, id json.RawMessage) {
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	stop := make(chan struct{})
 	defer close(stop)
@@ -149,12 +215,7 @@ func (t *httpTransport) doRequest(frame []byte, sid string, id json.RawMessage) 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	for k, v := range t.headers {
-		req.Header.Set(k, v)
-	}
-	if sid != "" {
-		req.Header.Set("Mcp-Session-Id", sid)
-	}
+	t.setHeaders(req, sess)
 
 	resp, err := t.client.Do(req)
 	if err != nil {
@@ -181,20 +242,42 @@ func (t *httpTransport) doRequest(frame []byte, sid string, id json.RawMessage) 
 		// never true: a dead remote session left the Client believing it was
 		// connected, re-sending against an id the server had forgotten and
 		// failing every call with a fresh 404 forever.
-		if resp.StatusCode == http.StatusNotFound && sid != "" {
+		if resp.StatusCode == http.StatusNotFound && sess.id != "" {
 			t.sessionEnded()
 		}
+		return
+	}
+	if len(id) == 0 {
+		discardResponse(resp)
 		return
 	}
 	t.readResponse(resp, id)
 }
 
+// discardResponse closes the response to a notification or a reply without
+// parsing it. The spec answers both with 202 and no body, and nothing waits on
+// whatever a server sends instead. An event stream is closed unread, because a
+// server can hold it open and a read would wait on it. Any other body is
+// drained up to a small limit, so the connection can be reused.
+func discardResponse(resp *http.Response) {
+	if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	}
+	_ = resp.Body.Close()
+}
+
 // pushError funnels a transport failure back as a JSON-RPC error frame correlated
 // to the request's id, so the waiting call fails with a real message instead of
-// timing out blind. A notification (no id) has no waiter, so its failure is
-// dropped.
+// timing out blind. A notification or a reply (no id) has no waiter, so its
+// failure goes to the server log and is dropped. A failure caused by Close is
+// not worth a line.
 func (t *httpTransport) pushError(id json.RawMessage, err error) {
 	if len(id) == 0 {
+		select {
+		case <-t.closeCh:
+		default:
+			t.warnf("a notification or reply was not delivered: %v", err)
+		}
 		return
 	}
 	frame, merr := json.Marshal(map[string]any{
@@ -208,24 +291,26 @@ func (t *httpTransport) pushError(id json.RawMessage, err error) {
 	t.push(frame)
 }
 
-// idOf extracts a request's id for error correlation, or nil for a notification.
+// idOf extracts a request's id for error correlation, or nil when nothing waits
+// on the frame. A notification has no id. A reply to a server request has no
+// method, and its id is the server's: a synthetic error under that id could fail
+// whichever pending call of ours shares the number.
 func idOf(frame []byte) json.RawMessage {
 	var m struct {
-		ID json.RawMessage `json:"id"`
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
 	}
-	if json.Unmarshal(frame, &m) != nil {
-		return nil
-	}
-	if len(m.ID) == 0 || string(m.ID) == "null" {
+	if json.Unmarshal(frame, &m) != nil || m.Method == "" || !hasID(m.ID) {
 		return nil
 	}
 	return m.ID
 }
 
-// readResponse funnels a POST response's frame(s) into `in`. A JSON body is one
-// frame; an SSE stream is parsed for `data:` events; an empty body (202 Accepted
-// for a notification) yields nothing. reqID is the request's id (nil for a
-// notification), used by the SSE path to stop once the matching response arrives.
+// readResponse funnels the frame(s) of a request's POST response into `in`. A
+// JSON body is one frame; an SSE stream is parsed for `data:` events; an empty
+// body yields nothing. reqID is the request's id, used by the SSE path to stop
+// once the matching response arrives. A frame with no id never gets here (see
+// discardResponse).
 func (t *httpTransport) readResponse(resp *http.Response, reqID json.RawMessage) {
 	defer resp.Body.Close()
 	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
@@ -245,8 +330,9 @@ func (t *httpTransport) readResponse(resp *http.Response, reqID json.RawMessage)
 // it has been delivered, the read returns (defer-closing the body): the spec lets
 // a server hold the POST stream open after the response, and this tools-only client
 // has no waiter for anything further on it, so blocking in Scan until session end
-// would leak one goroutine + one connection per call. A nil reqID (or a stream that
-// never carries the matching id) falls back to reading to EOF as before.
+// would leak one goroutine + one connection per call. A stream that never carries
+// the matching id falls back to reading to EOF as before. Only a request's response
+// gets here, so reqID is never nil.
 func (t *httpTransport) readSSE(body io.Reader, reqID json.RawMessage) {
 	// lineframe, not bufio.Scanner. A `data:` line over the ceiling made
 	// Scan() return false, and because sc.Err() was never read the loop exited
@@ -301,15 +387,18 @@ func (t *httpTransport) readSSE(body io.Reader, reqID json.RawMessage) {
 	flush() // a final event with no trailing blank line
 }
 
-// frameHasID reports whether a JSON-RPC frame carries the given request id, so the
-// SSE reader can recognise the response it was waiting for. A parse miss or absent
-// id is not the response (notifications and server requests carry a different id or
-// none), so the reader keeps going rather than closing early on the wrong frame.
+// frameHasID reports whether a JSON-RPC frame is the response to the given request
+// id, so the SSE reader can recognise the response it was waiting for. A parse miss
+// or absent id is not the response, so the reader keeps going rather than closing
+// early on the wrong frame. Neither is a frame with a method: a server request
+// numbers its id in the server's own space and can repeat ours, and the reader
+// must stay open for the response that follows it.
 func frameHasID(frame, id json.RawMessage) bool {
 	var m struct {
-		ID json.RawMessage `json:"id"`
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
 	}
-	if json.Unmarshal(frame, &m) != nil || len(m.ID) == 0 {
+	if json.Unmarshal(frame, &m) != nil || len(m.ID) == 0 || m.Method != "" {
 		return false
 	}
 	return bytes.Equal(bytes.TrimSpace(m.ID), bytes.TrimSpace(id))
@@ -344,28 +433,27 @@ func (t *httpTransport) shutdown(deleteSession bool) {
 	t.closeOnce.Do(func() {
 		t.mu.Lock()
 		t.closed = true
-		sid := t.sessionID
+		sess := sessionHeaders{id: t.sessionID, version: t.protocolVersion}
 		t.mu.Unlock()
 		close(t.closeCh)
 		t.wg.Wait()
 		close(t.in)
-		if deleteSession && sid != "" {
-			go t.deleteSession(sid)
+		if deleteSession && sess.id != "" {
+			go t.deleteSession(sess)
 		}
 	})
 }
 
-func (t *httpTransport) deleteSession(sid string) {
+// deleteSession sends the spec's session teardown. It is a request after
+// initialize like any other, so it carries the negotiated version too.
+func (t *httpTransport) deleteSession(sess sessionHeaders) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, t.url, nil)
 	if err != nil {
 		return
 	}
-	req.Header.Set("Mcp-Session-Id", sid)
-	for k, v := range t.headers {
-		req.Header.Set(k, v)
-	}
+	t.setHeaders(req, sess)
 	if resp, err := t.client.Do(req); err == nil {
 		resp.Body.Close()
 	}

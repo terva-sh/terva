@@ -5,12 +5,18 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/agent/tools/resultcap"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
+	"terva.sh/terva/packages/testsupport"
 )
 
 // fakeInvoker returns a canned result (or error) so the conversion logic
@@ -107,6 +113,82 @@ func TestExecuteInvokeErrorBecomesToolError(t *testing.T) {
 	res := exec(t, inv, nil)
 	if !res.IsError {
 		t.Fatal("an invoke error must surface as is_error, not a Go error")
+	}
+}
+
+// useSpillDir points os.TempDir at a fresh directory so a spill is visible to
+// the test and removed with it.
+func useSpillDir(t *testing.T) string {
+	t.Helper()
+	dir := testsupport.TempDir(t)
+	t.Setenv("TMPDIR", dir)
+	if runtime.GOOS == "windows" {
+		t.Setenv("TMP", dir)
+		t.Setenv("TEMP", dir)
+	}
+	return dir
+}
+
+// An extension's text over the cap is cut, the full text spills to a private
+// file the pointer names, and images pass untouched.
+func TestExecuteTextOverTheCapSpills(t *testing.T) {
+	dir := useSpillDir(t)
+	big := strings.Repeat("extension output line\n", 3*resultcap.MaxBytes/22)
+	raw := []byte{0x1, 0x2, 0x3}
+	inv := &fakeInvoker{resp: extproto.ToolResultFromExt{Content: []extproto.ContentBlock{
+		{Type: "text", Text: big},
+		{Type: "image", MimeType: "image/png", Data: base64.StdEncoding.EncodeToString(raw)},
+	}}}
+	res := exec(t, inv, nil)
+
+	if len(res.Content) != 3 {
+		t.Fatalf("want cut text, image, pointer; got %d blocks", len(res.Content))
+	}
+	kept := res.Content[0].(provider.TextBlock).Text
+	if len(kept) > resultcap.MaxBytes || !strings.HasPrefix(big, kept) {
+		t.Fatalf("inline text is %d bytes, want a prefix of at most %d", len(kept), resultcap.MaxBytes)
+	}
+	if ib, ok := res.Content[1].(provider.ImageBlock); !ok || string(ib.Data) != string(raw) {
+		t.Fatalf("image changed: %#v", res.Content[1])
+	}
+	details := res.Details.(map[string]any)
+	path, _ := details["full_output_path"].(string)
+	if path == "" || filepath.Dir(path) != dir || !strings.HasPrefix(filepath.Base(path), "terva-ext-") {
+		t.Fatalf("full_output_path = %q, want terva-ext-<hex>.log in %s", path, dir)
+	}
+	if details["extension"] != "ext" || details["tool"] != "tool" {
+		t.Fatalf("the cap dropped the ownership details: %v", details)
+	}
+	pointer := res.Content[2].(provider.TextBlock).Text
+	if !strings.Contains(pointer, "\nfull output: "+path+"\n") || !strings.Contains(pointer, "Read this file with offset and limit") {
+		t.Fatalf("pointer does not send the model to the file: %q", pointer)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != big {
+		t.Fatalf("spill holds %d bytes (%v), want the full %d", len(got), err, len(big))
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("spill file mode = %o, want 600", info.Mode().Perm())
+	}
+}
+
+func TestExecuteTextUnderTheCapIsUnchanged(t *testing.T) {
+	dir := useSpillDir(t)
+	text := strings.Repeat("q", resultcap.MaxBytes)
+	inv := &fakeInvoker{resp: extproto.ToolResultFromExt{Content: []extproto.ContentBlock{{Type: "text", Text: text}}}}
+	res := exec(t, inv, nil)
+	if len(res.Content) != 1 || res.Content[0].(provider.TextBlock).Text != text {
+		t.Fatalf("a result at the limit changed: %d blocks", len(res.Content))
+	}
+	if _, ok := res.Details.(map[string]any)["full_output_path"]; ok {
+		t.Fatal("a result at the limit names a spill file")
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("a result at the limit wrote %d file(s)", len(entries))
 	}
 }
 

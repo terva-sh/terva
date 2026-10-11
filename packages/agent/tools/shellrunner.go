@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+
+	"terva.sh/terva/packages/agent/tools/resultcap"
 )
 
 // ShellRunner runs one script for the bash tool. The host runner starts the
@@ -113,7 +115,7 @@ func (hostShell) Run(ctx context.Context, req ShellRequest) (int, error) {
 type bashOutput struct {
 	mu       sync.Mutex
 	captured bytes.Buffer
-	spill    *spillWriter
+	spill    *resultcap.SpillWriter
 	total    int64
 	progress func(string)
 }

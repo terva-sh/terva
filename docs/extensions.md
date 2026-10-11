@@ -890,7 +890,10 @@ user's trust, and the host's event loop. A few habits keep it a good neighbor:
   description, and every context block, occupies the cached prefix and adds noise
   to the model's choices. Register only the tools the model actually needs, write
   tight schemas and one-line descriptions, and keep context blocks to a few KB
-  (the host trims larger). Trace a bloated window with `/context`: the
+  (the host trims larger). The host withdraws an MCP tool whose description is
+  over 4 KiB or whose input schema is over 16 KiB (see [MCP
+  behavior](mcp.md#behavior)). It does not apply those limits to an extension
+  tool, so the size of yours is up to you. Trace a bloated window with `/context`: the
   **Extensions** tab shows what you inject, the **Overview** tab attributes size
   across system prompt, tools, and transcript. Under [lazy tool
   visibility](standard-tools.md#lazy-tool-visibility-lazy_tools) your tools defer
@@ -900,6 +903,15 @@ user's trust, and the host's event loop. A few habits keep it a good neighbor:
   `"essential"` field on `register_tool`) to keep it advertised; leave the rest
   deferred. The host caps essential tools per extension (3), so this stays a
   scalpel, not a way to opt out of lazy mode.
+- **Keep your results small.** The host caps the text of one tool result at
+  50 KiB, the limit its own `bash` and `read` tools use. Past the cap it keeps
+  the first 50 KiB and writes the full text to a private file (mode 0600)
+  named `terva-ext-<hex>.log` in the OS temp directory. It then appends a note
+  that names the file and the line to continue from, so the model pages the
+  rest with `read` instead of calling your tool again. Images do not count
+  toward the cap and pass through unchanged. A tool that can return more than
+  the cap should take a limit or a page argument, so the model can ask for
+  less.
 - **Feature-detect, and degrade gracefully.** Gate a protocol-N feature on
   `Host().ProtocolVersion`. Declare `RequireProtocol(n)` *only* when your
   extension genuinely can't function without it, because it makes an older host

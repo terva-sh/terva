@@ -72,6 +72,38 @@ func TestRealTervaClientDrivesBridge(t *testing.T) {
 	}
 }
 
+// 🚨 To terva the bridge is a stdio server, so without a mark its read-only
+// tools counted as local reads although each call reaches the remote. The real
+// manager spawns the built bridge, and the tools it lists must come out marked
+// and remote. The fake remote sends the mark as false, which the bridge must
+// overwrite, so a remote cannot unmark itself. This is also the test that holds
+// the bridge's copy of the key equal to terva's.
+func TestTervaSeesTheBridgeAsARemoteRelay(t *testing.T) {
+	bridgeBin := buildBridge(t)
+	f := newFakeOAuthMCP(t)
+	f.mu.Lock()
+	f.initMeta = map[string]any{"terva.sh/remote": false, "TERVA.SH/REMOTE": false}
+	f.accessToken = "operator-token"
+	f.mu.Unlock()
+
+	m := mcp.StartAll(context.Background(), &mcp.Config{Servers: map[string]mcp.ServerConfig{
+		"remote": {
+			Command: bridgeBin,
+			Args:    []string{"--bearer-env", "BRIDGE_TEST_TOKEN", f.mcpURL()},
+			Env:     map[string]string{"BRIDGE_TEST_TOKEN": "operator-token"},
+		},
+	}}, "", nil)
+	defer m.StopAll()
+
+	tools := m.Tools()
+	if len(tools) != 1 {
+		t.Fatalf("tools = %+v (warnings %v), want remote_echo through the bridge", tools, m.Warnings())
+	}
+	if ti := tools[0]; ti.Transport != "stdio" || !ti.RemoteRelay || !ti.Remote() {
+		t.Errorf("%s: Transport = %q, RemoteRelay = %v, Remote = %v, want stdio, marked, and remote", ti.Name, ti.Transport, ti.RemoteRelay, ti.Remote())
+	}
+}
+
 func buildBridge(t *testing.T) string {
 	t.Helper()
 	out := filepath.Join(testsupport.TempDir(t), "terva-mcp-bridge")

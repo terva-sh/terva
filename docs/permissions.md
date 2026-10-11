@@ -156,7 +156,7 @@ lets you revoke this session's grants (see below).
 | mode | behavior |
 |---|---|
 | `yolo` | every tool call runs without asking. `ask` rules don't prompt here, because yolo never prompts, but `deny` rules still block |
-| `workspace` | **the interactive default.** Every built-in tool (`read`/`write`/`edit`/`bash`, bounded by the sandbox) runs freely, and so does any *extension/MCP* tool classified read-only; foreign tools that can have side effects (a writing extension tool, a mutating MCP tool) ask. The trust axis is origin: your own tools vs foreign code. A foreign tool that declares the `network-read` authority still asks, even though it reads nothing locally (see below) |
+| `workspace` | **the interactive default.** Every built-in tool (`read`/`write`/`edit`/`bash`, bounded by the sandbox) runs freely, and so does any *extension/MCP* tool classified read-only; foreign tools that can have side effects (a writing extension tool, a mutating MCP tool) ask. The trust axis is origin: your own tools vs foreign code. A foreign tool with the `network-read` authority still asks, even though it reads nothing locally. That includes a read-only tool on a remote MCP server, reached directly or through `terva-mcp-bridge` (see below) |
 | `auto-edit` | read-only tools (`read`, `terva_status`, `skill`) and the file editors (`write`, `edit`) run freely; everything else asks: `bash`, extension tools, chat sends |
 | `ask` | every tool call asks, read-only included (exactly what `--no-yolo` always did) |
 | `plan` | only read-only tools run, and mutating tools don't even enter the registry, so the model is steered to present a plan. Mutating calls that arrive anyway are refused with a model-readable reason, not prompted. The one exception is a talkoot member's `talkoot_send` and `talkoot_handoff`, because a planning member's plan reaches its team as an envelope. Plan does not prompt for them, and your deny and ask rules still apply. An envelope starts the recipient's turn in the recipient's own posture, so a planning member can wake a member that writes. Write an ask rule for the two tools to approve each send |
@@ -343,9 +343,9 @@ tool, are treated as mutating. In headless modes (`-p`, `--json`,
 refuse-by-default posture while still letting `plan` mode and explicit
 allow rules drive useful headless automation.
 
-**Bot mode is the exception**: `terva bot run` still defaults to
-`yolo`, but a prompting mode (`--approval ask`, `workspace`, …) WORKS
-there: a tool call that needs confirmation is posed as a question in
+**Bot mode is the exception**: `terva bot run` defaults to `workspace`
+and jailed, like an interactive session, because the paired owner is
+there to answer. A tool call that needs confirmation is posed as a question in
 the paired chat (buttons where the connector supports interactive
 asks, a numbered plain-text question everywhere else) and the turn
 blocks on the answer. Only the paired owner may answer; an unanswered
@@ -397,12 +397,42 @@ being mistaken for a local read. Second, `user-interaction` is permitted
 in every mode including `plan`: gating a clarifying question behind an
 approval prompt is nonsensical.
 
-Extensions and MCP tools declare their class via the `authority` field on
+Extensions declare their class via the `authority` field on
 `register_tool` (`ext.WithAuthority` in the Go SDK). A declared authority
 decides read-only classification (`local-read` and `local-data` are
 auto-allowable, everything else is not), and it **wins over** the legacy
 `read_only` bool, which is consulted only when the authority is empty. An
 unknown value is treated as side-effecting.
+
+MCP has no authority field, so terva derives a class from the tool's
+annotations and its server's transport:
+
+| MCP tool | Class |
+|---|---|
+| `readOnlyHint: true` on a `stdio` server | read-only, like the legacy `read_only` bool |
+| `readOnlyHint: true` on an `http` server | `network-read` |
+| `readOnlyHint: true` on a `stdio` server marked as a remote relay | `network-read` |
+| `readOnlyHint: true` and `destructiveHint: true` | side-effecting |
+| no `readOnlyHint` | side-effecting |
+
+A remote read-only tool reads nothing on this machine, but every call sends
+the arguments the model chose to that server. That is the `network-read`
+case, so the tool asks in `workspace` and `auto-edit` and does not register
+in `plan`. A `stdio` server's read-only tool keeps the local-read treatment,
+because installing the server was already consent to run it.
+
+A `stdio` server can mark itself as a relay to a remote server. The mark is
+`"terva.sh/remote": true` in the `_meta` of its `initialize` result.
+`terva-mcp-bridge` sets it, and replaces any value that the remote server
+sent at that key. terva then treats the server's read-only tools as
+`network-read`. The mark can only add prompts, so terva needs no reason to
+trust it. A server that sets it falsely asks more, and a server that leaves
+it out keeps the local-read treatment. A third-party bridge such as
+`mcp-remote` sets no mark, so [mcp.md](mcp.md#oauth-servers-terva-mcp-bridge)
+gives an ask rule for its tools.
+
+An allow rule trusts a remote tool you rely on;
+[mcp.md](mcp.md#permissions-example) shows the shape.
 
 An extension reload or MCP reconnect rebuilds read-only classification from
 the current tools. A tool that becomes mutating loses its previous automatic

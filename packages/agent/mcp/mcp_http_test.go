@@ -27,14 +27,39 @@ type fakeHTTPMCP struct {
 	held    chan struct{} // closed when a held tools/call handler unblocks (client hung up)
 	auth    string        // if set, require Authorization: Bearer <auth>
 	fail500 bool          // answer tools/call with HTTP 500
+	tools   string        // if set, the JSON array tools/list answers instead of the one echo tool
+	// negotiate, if set, is the protocolVersion initialize answers instead of
+	// the one terva offers.
+	negotiate string
 
 	mu         sync.Mutex
-	sawSession []string // Mcp-Session-Id seen on non-initialize requests
+	sawSession []string     // Mcp-Session-Id seen on non-initialize requests
+	seen       []seenHeader // the protocol headers of every request, in arrival order
 	deleted    bool
+}
+
+// seenHeader is what the fake recorded of one request. method is the JSON-RPC
+// method, or "DELETE" for the session teardown. versions holds every
+// MCP-Protocol-Version value, so an absent header and an empty one differ.
+type seenHeader struct {
+	method   string
+	session  string
+	versions []string
+}
+
+func (f *fakeHTTPMCP) record(method string, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seen = append(f.seen, seenHeader{
+		method:   method,
+		session:  r.Header.Get("Mcp-Session-Id"),
+		versions: r.Header.Values("MCP-Protocol-Version"),
+	})
 }
 
 func (f *fakeHTTPMCP) handler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodDelete {
+		f.record("DELETE", r)
 		f.mu.Lock()
 		f.deleted = true
 		f.mu.Unlock()
@@ -51,6 +76,7 @@ func (f *fakeHTTPMCP) handler(w http.ResponseWriter, r *http.Request) {
 		Method string `json:"method"`
 	}
 	_ = json.Unmarshal(body, &req)
+	f.record(req.Method, r)
 
 	if req.Method != "initialize" {
 		f.mu.Lock()
@@ -67,7 +93,14 @@ func (f *fakeHTTPMCP) handler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 		return
 	}
-	resp := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":%s}`, *req.ID, resultFor(req.Method))
+	result := resultFor(req.Method)
+	if f.tools != "" && req.Method == "tools/list" {
+		result = `{"tools":` + f.tools + `}`
+	}
+	if f.negotiate != "" && req.Method == "initialize" {
+		result = `{"protocolVersion":"` + f.negotiate + `","capabilities":{"tools":{}},"serverInfo":{"name":"fake","version":"1"}}`
+	}
+	resp := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":%s}`, *req.ID, result)
 	if req.Method == "initialize" {
 		w.Header().Set("Mcp-Session-Id", "sess-xyz")
 	}
@@ -141,6 +174,36 @@ func TestHTTPTransportHandshakeAndCall(t *testing.T) {
 	for _, s := range saw {
 		if s != "sess-xyz" {
 			t.Errorf("session id not echoed on a request: got %q, all=%v", s, saw)
+		}
+	}
+}
+
+// An http server's tools report a remote transport, so the host can give a
+// read-only one the network-read authority. A tool that claims readOnlyHint and
+// destructiveHint together is not read-only on either transport.
+func TestHTTPToolInfoCarriesTransportAndHints(t *testing.T) {
+	f := &fakeHTTPMCP{tools: `[
+		{"name":"search","inputSchema":{"type":"object"},"annotations":{"readOnlyHint":true}},
+		{"name":"wipe","inputSchema":{"type":"object"},"annotations":{"readOnlyHint":true,"destructiveHint":true}},
+		{"name":"lookup","inputSchema":{"type":"object"},"annotations":{"readOnlyHint":true,"destructiveHint":false}},
+		{"name":"post","inputSchema":{"type":"object"}}
+	]`}
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	m := StartAll(context.Background(), &Config{Servers: map[string]ServerConfig{"remote": {Transport: "http", URL: srv.URL}}}, "", nil)
+	defer m.StopAll()
+
+	want := map[string]bool{"mcp_remote_search": true, "mcp_remote_wipe": false, "mcp_remote_lookup": true, "mcp_remote_post": false}
+	infos := m.Tools()
+	if len(infos) != len(want) {
+		t.Fatalf("tools = %+v (warnings %v), want %d", infos, m.Warnings(), len(want))
+	}
+	for _, ti := range infos {
+		if ti.ReadOnly != want[ti.Name] {
+			t.Errorf("%s: ReadOnly = %v, want %v", ti.Name, ti.ReadOnly, want[ti.Name])
+		}
+		if ti.Transport != "http" || !ti.Remote() {
+			t.Errorf("%s: Transport = %q, Remote = %v, want http and remote", ti.Name, ti.Transport, ti.Remote())
 		}
 	}
 }
@@ -392,6 +455,102 @@ func TestHTTPTransportSessionDeleteOnStop(t *testing.T) {
 		return f.deleted
 	}) {
 		t.Error("Stop did not DELETE the session")
+	}
+}
+
+// runHTTPSession drives one whole session against f: the handshake, one
+// tools/call, and Stop. It returns what the fake recorded once the DELETE has
+// landed, so the teardown is part of the record.
+func runHTTPSession(t *testing.T, f *fakeHTTPMCP, cfg ServerConfig) []seenHeader {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+	cfg.Transport, cfg.URL = "http", srv.URL
+
+	cl, err := Start(context.Background(), "remote", cfg, "", nil)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if _, err := cl.CallTool(context.Background(), "echo", nil); err != nil {
+		cl.Stop()
+		t.Fatalf("CallTool: %v", err)
+	}
+	cl.Stop()
+	// f.record runs before f.deleted is set, so the DELETE is in the record.
+	if !waitFor(func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.deleted
+	}) {
+		t.Fatal("Stop did not DELETE the session")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]seenHeader(nil), f.seen...)
+}
+
+// Every request after initialize carries MCP-Protocol-Version with the version
+// the server answered. The fake negotiates down to an older version, so a
+// transport that sent terva's offer instead fails here. The initialize POST
+// carries no version, because the spec makes a server answer 400 to a version
+// it does not support, and that would refuse the handshake that negotiates down.
+func TestHTTPTransportSendsNegotiatedProtocolVersion(t *testing.T) {
+	const negotiated = "2025-03-26"
+	// The premise. A fake that answered the offer could not tell the
+	// negotiated version from the offered one.
+	if negotiated == protocolVersion {
+		t.Fatalf("the fake must negotiate a version other than the offer %q", protocolVersion)
+	}
+	seen := runHTTPSession(t, &fakeHTTPMCP{negotiate: negotiated}, ServerConfig{})
+
+	methods := map[string]bool{}
+	for _, s := range seen {
+		methods[s.method] = true
+		if s.method == "initialize" {
+			if len(s.versions) != 0 {
+				t.Errorf("initialize carried MCP-Protocol-Version %q, want no header before the version is negotiated", s.versions)
+			}
+			continue
+		}
+		if len(s.versions) != 1 || s.versions[0] != negotiated {
+			t.Errorf("%s carried MCP-Protocol-Version %q, want exactly [%s] (the server's answer, not the offer %s)",
+				s.method, s.versions, negotiated, protocolVersion)
+		}
+	}
+	// A record that missed a request would pass the loop above unseen.
+	for _, m := range []string{"initialize", "notifications/initialized", "tools/list", "tools/call", "DELETE"} {
+		if !methods[m] {
+			t.Errorf("the fake recorded no %s request; recorded %+v", m, seen)
+		}
+	}
+}
+
+// The protocol owns the session id and the version, so a configured header of
+// either name does not replace them, on a POST or on the DELETE. The DELETE used
+// to apply the configured headers after the session id.
+func TestHTTPTransportProtocolHeadersOverrideConfiguredOnes(t *testing.T) {
+	const negotiated = "2025-03-26"
+	cfg := ServerConfig{Headers: map[string]string{
+		"Mcp-Session-Id":       "configured-session",
+		"MCP-Protocol-Version": "1999-01-01",
+	}}
+	seen := runHTTPSession(t, &fakeHTTPMCP{negotiate: negotiated}, cfg)
+
+	checked := 0
+	for _, s := range seen {
+		if s.method != "tools/list" && s.method != "DELETE" {
+			continue
+		}
+		checked++
+		if s.session != "sess-xyz" {
+			t.Errorf("%s carried Mcp-Session-Id %q, want the server's sess-xyz", s.method, s.session)
+		}
+		if len(s.versions) != 1 || s.versions[0] != negotiated {
+			t.Errorf("%s carried MCP-Protocol-Version %q, want exactly [%s]", s.method, s.versions, negotiated)
+		}
+	}
+	if checked != 2 {
+		t.Errorf("checked %d of the tools/list and DELETE requests, want 2; recorded %+v", checked, seen)
 	}
 }
 

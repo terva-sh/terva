@@ -32,8 +32,9 @@ type fakeOAuthMCP struct {
 	refreshToken  string
 	registered    bool
 	refreshes     int
-	lastAuthHdr   string // Authorization seen on the last /mcp call
-	expiresIn     int    // access-token lifetime handed out at /token (0 = unset)
+	lastAuthHdr   string         // Authorization seen on the last /mcp call
+	expiresIn     int            // access-token lifetime handed out at /token (0 = unset)
+	initMeta      map[string]any // the _meta of the initialize result (nil = none)
 }
 
 func newFakeOAuthMCP(t *testing.T) *fakeOAuthMCP {
@@ -163,11 +164,17 @@ func (f *fakeOAuthMCP) handleMCP(w http.ResponseWriter, r *http.Request) {
 	switch req.Method {
 	case "initialize":
 		w.Header().Set("Mcp-Session-Id", "sess-1")
-		writeRPC(w, req.ID, map[string]any{
+		res := map[string]any{
 			"protocolVersion": protocolVersion,
 			"capabilities":    map[string]any{"tools": map[string]any{}},
 			"serverInfo":      map[string]any{"name": "fake-remote", "version": "1"},
-		})
+		}
+		f.mu.Lock()
+		if f.initMeta != nil {
+			res["_meta"] = f.initMeta
+		}
+		f.mu.Unlock()
+		writeRPC(w, req.ID, res)
 	case "tools/list":
 		writeRPC(w, req.ID, map[string]any{
 			"tools": []map[string]any{{"name": "remote_echo", "description": "echoes", "inputSchema": map[string]any{"type": "object"}}},
@@ -241,9 +248,12 @@ func TestBridgeLoginThenRelay(t *testing.T) {
 		`{"jsonrpc":"2.0","id":4,"method":"ping"}`,
 	})
 
-	// initialize relayed the remote's real serverInfo.
+	// initialize relayed the remote's real serverInfo, and the bridge's mark.
 	if got := string(responses["1"].Result); !strings.Contains(got, "fake-remote") {
 		t.Errorf("initialize result did not carry the remote serverInfo: %s", got)
+	}
+	if got := string(responses["1"].Result); !strings.Contains(got, `"_meta":{"terva.sh/remote":true}`) {
+		t.Errorf("initialize result did not carry the remote mark: %s", got)
 	}
 	// tools/list exposed the remote tool 1:1.
 	if got := string(responses["2"].Result); !strings.Contains(got, "remote_echo") {
@@ -351,7 +361,10 @@ func driveStdio(t *testing.T, up *upstream, initRes json.RawMessage, requests []
 	t.Helper()
 	in := strings.NewReader(strings.Join(requests, "\n") + "\n")
 	out := &syncBuffer{}
-	srv := newStdioServer(up, initRes, in, out)
+	srv, err := newStdioServer(up, initRes, in, out)
+	if err != nil {
+		t.Fatalf("newStdioServer: %v", err)
+	}
 	if err := srv.serve(context.Background()); err != nil {
 		t.Fatalf("serve: %v", err)
 	}

@@ -13,21 +13,29 @@
 // Deliberately not implemented (yet): resources, prompts, sampling, elicitation,
 // and the standalone GET SSE channel for server-initiated messages. Tools are the
 // value; the rest can arrive behind the same seam when wanted.
+//
+// A server request still gets an answer. ping gets an empty result, and every
+// other method gets JSON-RPC error -32601 (method not found). Notifications are
+// ignored. A server that stops reading loses replies rather than stall the
+// client (see takeReplySlot).
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 // protocolVersion is what we offer at initialize. Servers negotiate
-// down; whatever they answer is accepted and recorded (tools/list and
-// tools/call have been wire-stable across versions).
+// down; whatever they answer is accepted (tools/list and tools/call have
+// been wire-stable across versions) and handed to the transport, which
+// carries it where its wire needs it (see protocolVersionSetter).
 const protocolVersion = "2025-06-18"
 
 // ServerConfig configures one MCP server. It describes a stdio subprocess by
@@ -75,11 +83,23 @@ type ToolDef struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"inputSchema"`
-	// Annotations carries the spec's behavior hints; readOnlyHint
-	// feeds terva's permission classification (plan-mode admission).
+	// Annotations carries the spec's behavior hints, which feed terva's
+	// permission classification (plan-mode admission, the read-only
+	// auto-allow). readOnly says how the two combine.
 	Annotations struct {
 		ReadOnlyHint bool `json:"readOnlyHint"`
+		// DestructiveHint defaults to true in the spec, which gives it meaning
+		// only when readOnlyHint is false. An absent key decodes false here, so
+		// only an explicit true counts, and that is the contradiction readOnly
+		// refuses.
+		DestructiveHint bool `json:"destructiveHint"`
 	} `json:"annotations"`
+}
+
+// readOnly reports whether the tool claims no side effects. A tool that also
+// claims destructiveHint contradicts itself, so the stricter claim wins.
+func (d ToolDef) readOnly() bool {
+	return d.Annotations.ReadOnlyHint && !d.Annotations.DestructiveHint
 }
 
 // jsonrpc plumbing ----------------------------------------------------
@@ -91,14 +111,28 @@ type rpcRequest struct {
 	Params  any    `json:"params,omitempty"`
 }
 
+// rpcMessage is one inbound frame before dispatchLoop sorts it: a response to
+// one of our requests, or a request or notification from the server. ID stays
+// raw because a server request may carry a string id, which the reply echoes.
+type rpcMessage struct {
+	ID     json.RawMessage `json:"id"`
+	Method string          `json:"method"`
+	Result json.RawMessage `json:"result"`
+	Error  *rpcError       `json:"error"`
+}
+
+// rpcResponse is what a pending call receives.
 type rpcResponse struct {
+	Result json.RawMessage
+	Error  *rpcError
+}
+
+// rpcReply answers a server request.
+type rpcReply struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      *int64          `json:"id"`
-	Result  json.RawMessage `json:"result"`
-	Error   *rpcError       `json:"error"`
-	// Method is set on server-initiated requests/notifications, which
-	// we acknowledge-or-ignore (tools-only client).
-	Method string `json:"method"`
+	ID      json.RawMessage `json:"id"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
 }
 
 type rpcError struct {
@@ -108,6 +142,26 @@ type rpcError struct {
 
 func (e *rpcError) Error() string { return fmt.Sprintf("mcp error %d: %s", e.Code, e.Message) }
 
+// errMethodNotFound is the JSON-RPC code for a method the receiver lacks.
+const errMethodNotFound = -32601
+
+const (
+	// replyTimeout bounds one reply write, the budget notify has.
+	replyTimeout = 15 * time.Second
+	// maxPendingReplies caps the reply writes in flight, and with them the
+	// goroutines a flooding server can make terva hold (see answer).
+	maxPendingReplies = 64
+	// replySlotWait is how long the dispatch loop waits for a reply slot: far
+	// longer than a burst takes to drain, short enough to pause only once.
+	replySlotWait = time.Second
+)
+
+// hasID reports whether a frame carries an id. MCP forbids a null id, so a
+// null counts as none.
+func hasID(id json.RawMessage) bool {
+	return len(id) > 0 && string(id) != "null"
+}
+
 // Client is one running MCP server connection. Safe for concurrent CallTool
 // use: id allocation and sends are serialized, responses correlate by id. It is
 // transport-agnostic — the wire (a stdio subprocess, a Streamable-HTTP session)
@@ -115,7 +169,11 @@ func (e *rpcError) Error() string { return fmt.Sprintf("mcp error %d: %s", e.Cod
 type Client struct {
 	name      string
 	transport transport
-	timeout   time.Duration
+	// kind is the configured wire ("stdio" or "http"), kept for the permission
+	// classification: a remote server's read-only tool still sends its
+	// arguments off the machine.
+	kind    string
+	timeout time.Duration
 
 	idMu   sync.Mutex // guards nextID allocation
 	nextID int64
@@ -127,9 +185,22 @@ type Client struct {
 	// died or was stopped and the dispatch loop has exited). The Manager watches
 	// this to withdraw a server that dies unexpectedly.
 	done chan struct{}
+	// replySlots holds one token per reply write in flight.
+	replySlots chan struct{}
+	// replyStuck is set when a wait for a reply slot ran out, and cleared by
+	// the next reply write that completes. While it is set, answer drops.
+	replyStuck atomic.Bool
+	// stopping is closed by Stop, so a dispatch loop waiting for a reply
+	// slot never outlasts the client.
+	stopping chan struct{}
+	stopOnce sync.Once
 
 	tools      []ToolDef
 	serverInfo string
+	// remoteRelay is set when the server's initialize result carries the
+	// remote mark (markedRemote). Like kind, it is read only after Start
+	// returns.
+	remoteRelay bool
 }
 
 // Start spawns the server, performs the initialize handshake, and
@@ -147,14 +218,10 @@ func Start(ctx context.Context, name string, cfg ServerConfig, cwd string, stder
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{
-		name:      name,
-		transport: tr,
-		timeout:   timeout,
-		pending:   map[int64]chan rpcResponse{},
-		done:      make(chan struct{}),
-	}
-	go c.dispatchLoop()
+	c := newClient(name, tr, timeout)
+	// kind is read only after Start returns, so this write does not race the
+	// dispatch loop newClient started.
+	c.kind = cfg.transportKind()
 
 	if err := c.initialize(ctx); err != nil {
 		c.Stop()
@@ -165,6 +232,21 @@ func Start(ctx context.Context, name string, cfg ServerConfig, cwd string, stder
 		return nil, err
 	}
 	return c, nil
+}
+
+// newClient wraps a connected transport and starts its dispatch loop.
+func newClient(name string, tr transport, timeout time.Duration) *Client {
+	c := &Client{
+		name:       name,
+		transport:  tr,
+		timeout:    timeout,
+		pending:    map[int64]chan rpcResponse{},
+		done:       make(chan struct{}),
+		replySlots: make(chan struct{}, maxPendingReplies),
+		stopping:   make(chan struct{}),
+	}
+	go c.dispatchLoop()
+	return c
 }
 
 // Name returns the configured server name.
@@ -184,25 +266,28 @@ func (c *Client) Done() <-chan struct{} { return c.done }
 // so a stdio subprocess and an HTTP session share one correlation path.
 func (c *Client) dispatchLoop() {
 	for frame := range c.transport.Incoming() {
-		var resp rpcResponse
-		if err := json.Unmarshal(frame, &resp); err != nil {
+		var msg rpcMessage
+		if err := json.Unmarshal(frame, &msg); err != nil {
 			continue // not ours to fix; skip the frame
 		}
-		// Server-initiated traffic: a tools-only client answers nothing and
-		// ignores notifications. (Requests would need an error reply to be
-		// spec-pristine; in practice tools-only servers don't send any.)
-		if resp.Method != "" && resp.Result == nil && resp.Error == nil {
+		// A method with no result or error is server-initiated traffic: a
+		// request, or a notification when it has no id. A server numbers its
+		// requests in its own id space, so one can carry the id of a pending
+		// call. The method is what keeps it from resolving that call.
+		if msg.Method != "" && msg.Result == nil && msg.Error == nil {
+			c.answer(msg)
 			continue
 		}
-		if resp.ID == nil {
-			continue
+		var id int64
+		if !hasID(msg.ID) || json.Unmarshal(msg.ID, &id) != nil {
+			continue // our requests carry integer ids; this answers none of them
 		}
 		c.mu.Lock()
-		ch, ok := c.pending[*resp.ID]
-		delete(c.pending, *resp.ID)
+		ch, ok := c.pending[id]
+		delete(c.pending, id)
 		c.mu.Unlock()
 		if ok {
-			ch <- resp
+			ch <- rpcResponse{Result: msg.Result, Error: msg.Error}
 		}
 	}
 	// Incoming closed: the server died or the session ended. Fail everything
@@ -218,6 +303,75 @@ func (c *Client) dispatchLoop() {
 	// Manager's watcher wakes on this to decide whether the exit was a crash to
 	// withdraw or an intentional Stop.
 	close(c.done)
+}
+
+// answer replies to one server request: an empty result for ping, and
+// errMethodNotFound for any other method, because a tools-only client serves
+// nothing else. A notification has no id and gets no reply.
+//
+// The write runs off the dispatch loop. A stdio server that stops reading stdin
+// until terva reads its stdout would otherwise deadlock the loop on the pipe.
+// The pipeio gate (stdio) or a separate POST (http) keeps it apart from the
+// request writes.
+func (c *Client) answer(msg rpcMessage) {
+	if !hasID(msg.ID) {
+		return
+	}
+	reply := rpcReply{JSONRPC: "2.0", ID: msg.ID}
+	if msg.Method == "ping" {
+		reply.Result = json.RawMessage(`{}`)
+	} else {
+		reply.Error = &rpcError{Code: errMethodNotFound, Message: "Method not found"}
+	}
+	if !c.takeReplySlot() {
+		return
+	}
+	go func() {
+		defer func() { <-c.replySlots }()
+		ctx, cancel := context.WithTimeout(context.Background(), replyTimeout)
+		defer cancel()
+		if c.write(ctx, reply) == nil {
+			c.replyStuck.Store(false)
+		}
+	}()
+}
+
+// takeReplySlot reserves a slot for one reply write, or reports that the reply
+// must be dropped.
+//
+// Two simpler rules each failed under test. Dropping whenever the slots were
+// full lost replies in a burst from a server that was reading: the dispatch loop
+// outruns the writes that the gate serializes, so the slots fill although no
+// write blocks. Blocking until a slot freed deadlocked on a server that floods
+// requests before it reads: the loop stopped draining stdout, the server blocked
+// on stdout and never reached stdin, and replyTimeout then tore the connection
+// down.
+//
+// So full slots get a bounded wait. A burst frees a slot well inside
+// replySlotWait, and the reply goes out. A server that stopped reading frees
+// none: the wait runs out once, replyStuck is set, and from then on replies are
+// dropped at once, so the loop keeps draining stdout. The next reply write that
+// completes clears the flag.
+func (c *Client) takeReplySlot() bool {
+	select {
+	case c.replySlots <- struct{}{}:
+		return true
+	default:
+	}
+	if c.replyStuck.Load() {
+		return false
+	}
+	wait := time.NewTimer(replySlotWait)
+	defer wait.Stop()
+	select {
+	case c.replySlots <- struct{}{}:
+		return true
+	case <-wait.C:
+		c.replyStuck.Store(true)
+		return false
+	case <-c.stopping:
+		return false
+	}
 }
 
 // call sends one request and waits for its response or timeout.
@@ -295,7 +449,42 @@ func (c *Client) initialize(ctx context.Context) error {
 	}
 	_ = json.Unmarshal(res, &init)
 	c.serverInfo = init.ServerInfo.Name
+	c.remoteRelay = markedRemote(res)
+	// 🔑 The server's answer, not our offer: the two differ when the server
+	// negotiated down. It is set before the initialized notification, because
+	// that is the first request the spec says must carry it.
+	if vs, ok := c.transport.(protocolVersionSetter); ok {
+		vs.setProtocolVersion(init.ProtocolVersion)
+	}
 	return c.notify(ctx, "notifications/initialized", map[string]any{})
+}
+
+// remoteMetaKey is the _meta key by which a server says that each call it
+// takes leaves the machine. terva-mcp-bridge sets it in its initialize result.
+// The bridge keeps its own copy of the key, because it takes no dependency on
+// this package. Its integration test runs the built bridge against this reader.
+const remoteMetaKey = "terva.sh/remote"
+
+// markedRemote reports whether an initialize result carries the remote mark,
+// JSON true at remoteMetaKey under _meta. Both keys match exactly, as MCP keys
+// do, and any other value is no mark. Only the bool is kept, so no server text
+// from _meta reaches the prompt.
+//
+// 🔑 The mark needs no trust, because it can only tighten. It moves a stdio
+// server's read-only tools from a local read to network-read, which asks more.
+// A server that sets it falsely costs itself prompts, and a server that leaves
+// it out keeps the stdio treatment it had. That is decision 0009's rule that
+// an untrusted layer may only restrict.
+func markedRemote(res json.RawMessage) bool {
+	var top map[string]json.RawMessage
+	if json.Unmarshal(res, &top) != nil {
+		return false
+	}
+	var meta map[string]json.RawMessage
+	if json.Unmarshal(top["_meta"], &meta) != nil {
+		return false
+	}
+	return string(bytes.TrimSpace(meta[remoteMetaKey])) == "true"
 }
 
 func (c *Client) listTools(ctx context.Context) error {
@@ -365,5 +554,6 @@ func (c *Client) Stop() {
 	c.mu.Lock()
 	c.closed = true
 	c.mu.Unlock()
+	c.stopOnce.Do(func() { close(c.stopping) })
 	c.transport.Close()
 }

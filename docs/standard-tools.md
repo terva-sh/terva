@@ -84,8 +84,11 @@ tool's authority explicitly, and do **not** collapse "read-only" and
   prompts.
 
 The taxonomy now exists as `permission.Authority` (`packages/core/permission/policy.go`), and an
-extension/MCP tool can declare its class via the `authority` field on
-`register_tool` (`ext.WithAuthority` in the Go SDK). Declared authority decides
+extension tool can declare its class via the `authority` field on
+`register_tool` (`ext.WithAuthority` in the Go SDK). An MCP tool cannot
+declare one, so terva classifies a read-only tool as `network-read` when its
+server is a remote `http` server, or a `stdio` relay that marks itself as
+remote, as `terva-mcp-bridge` does (see [mcp.md](mcp.md)). Declared authority decides
 read-only classification, and `local-read` and `local-data` are auto-allowable,
 so a `network-read` tool is gated like a side-effecting tool (it prompts in
 `workspace`/`auto-edit`, is refused in `plan`) even if it also set the legacy

@@ -11,6 +11,10 @@
 // It is NOT a chat connector: its wire to terva is plain MCP stdio, not connsdk.
 // It shares only the "ship a companion binary" packaging precedent.
 //
+// Its initialize result carries the terva.sh/remote _meta mark (markRemote), so
+// terva gives the relayed read-only tools the network-read authority that an
+// in-core http server's read-only tools have.
+//
 // Usage:
 //
 //	terva-mcp-bridge login <url>     one-time interactive OAuth (opens a browser)
@@ -38,6 +42,9 @@ import (
 	"time"
 )
 
+// protocolVersion is what the bridge offers the remote at initialize. The
+// remote can answer with an older version, and only that answer goes out as
+// MCP-Protocol-Version (see upstream.negotiatedVersion).
 const protocolVersion = "2025-06-18"
 
 var version = "0.0.0" // -ldflags "-X main.version=..."
@@ -156,9 +163,11 @@ func runRelay(ctx context.Context, opts options) error {
 	if err != nil {
 		return fmt.Errorf("connecting to %s: %w", opts.remoteURL, err)
 	}
+	srv, err := newStdioServer(up, initRes, os.Stdin, os.Stdout)
+	if err != nil {
+		return fmt.Errorf("connecting to %s: %w", opts.remoteURL, err)
+	}
 	fmt.Fprintf(os.Stderr, "terva-mcp-bridge: connected to %s\n", opts.remoteURL)
-
-	srv := newStdioServer(up, initRes, os.Stdin, os.Stdout)
 	return srv.serve(ctx)
 }
 

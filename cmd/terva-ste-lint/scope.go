@@ -15,6 +15,9 @@ import "strings"
 // addition is a decision someone made.
 var enrolledDirs = []string{
 	"packages/agent/tools",
+	// The pointer an MCP or extension result carries after a cut. It is
+	// harness text in a third party's result, so it is ours to hold.
+	"packages/agent/tools/resultcap",
 	"packages/agent/tools/tasks/tasktool",
 	"packages/agent/skills",
 	"packages/agent/workspace",

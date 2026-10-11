@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -9,8 +10,11 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
+	"terva.sh/terva/packages/agent/tools/resultcap"
 	"terva.sh/terva/packages/core"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -27,9 +31,21 @@ type ToolInfo struct {
 	Name        string // namespaced: mcp_<server>_<tool>
 	Description string
 	Schema      json.RawMessage
-	// ReadOnly mirrors the server's readOnlyHint annotation.
+	// ReadOnly mirrors the server's readOnlyHint annotation, unless the tool
+	// also claims destructiveHint.
 	ReadOnly bool
+	// Transport is the server's configured wire: "stdio" or "http".
+	Transport string
+	// RemoteRelay reports that the server marked itself as a relay to a
+	// remote server, as terva-mcp-bridge does (see markedRemote).
+	RemoteRelay bool
 }
+
+// Remote reports whether a call to the tool leaves this machine. Every
+// transport except stdio counts as remote, so an empty value or a transport
+// added later fails closed. A stdio server counts as remote when it marked
+// itself as a relay, because terva spawns it here but it sends each call on.
+func (t ToolInfo) Remote() bool { return t.Transport != "stdio" || t.RemoteRelay }
 
 // NamespaceTool builds the registry name for a server's tool. The
 // mcp_ prefix keeps origins visible in transcripts, permission rules
@@ -121,15 +137,63 @@ func StartAll(ctx context.Context, cfg *Config, cwd string, stderrFor func(serve
 	return m
 }
 
+// A server writes its tools' descriptions and schemas, and terva places them
+// verbatim in the cached prompt prefix. There they cost every later request,
+// and they reach the model with the weight of a tool definition. These limits
+// are the caps Aura measured on real servers, after it flagged the uncapped
+// text as an injection and flood surface (its commit 66e014a5b).
+//
+// A tool over either limit is withdrawn, never cut. A cut description can drop
+// the sentence that matters, and a cut schema no longer says what the server
+// accepts. Aura's fallback, an empty {} schema, leaves the tool uncallable
+// without a word to anyone.
+const (
+	// maxToolDescriptionBytes bounds one tool's description.
+	maxToolDescriptionBytes = 4 << 10
+	// maxToolSchemaBytes bounds one tool's input schema, measured compact,
+	// which is how a provider sends it. A server's indentation does not count.
+	maxToolSchemaBytes = 16 << 10
+)
+
+// oversizedMetadata explains why a tool's server-supplied text is over its
+// limit, or returns "" when it fits.
+func oversizedMetadata(t ToolDef) string {
+	if n := len(t.Description); n > maxToolDescriptionBytes {
+		return i18n.T("tool %s withdrawn: its description is %d bytes, over the %d-byte limit", t.Name, n, maxToolDescriptionBytes)
+	}
+	if n := compactLen(t.InputSchema); n > maxToolSchemaBytes {
+		return i18n.T("tool %s withdrawn: its input schema is %d bytes, over the %d-byte limit", t.Name, n, maxToolSchemaBytes)
+	}
+	return ""
+}
+
+// compactLen is the size of raw JSON with insignificant whitespace removed,
+// or its raw size when it does not parse.
+func compactLen(raw json.RawMessage) int {
+	var b bytes.Buffer
+	if err := json.Compact(&b, raw); err != nil {
+		return len(raw)
+	}
+	return b.Len()
+}
+
 // indexRoutesLocked registers (or re-registers) the namespaced routes
 // for one already-started client. The caller holds m.mu. First
 // registration wins on collision with a *different* server — the same
 // convention StartAll's sorted pass uses — and a tool whose namespace is
 // already taken is recorded as shadowed. Re-indexing the same server is
 // harmless (its own routes overwrite themselves).
+//
+// A tool whose metadata is over its limit gets no route, which withdraws it
+// from Tools, Call and Status at once, and a warning that the /mcp dialog
+// shows.
 func (m *Manager) indexRoutesLocked(name string, cl *Client) {
 	for _, t := range cl.Tools() {
 		ns := NamespaceTool(name, t.Name)
+		if why := oversizedMetadata(t); why != "" {
+			m.warns = append(m.warns, fmt.Sprintf("mcp server %s: %s", name, why))
+			continue
+		}
 		if r, taken := m.routes[ns]; taken && r.server != name {
 			m.warns = append(m.warns, fmt.Sprintf("mcp server %s: tool %s shadowed (name %s already registered)", name, t.Name, ns))
 			continue
@@ -226,8 +290,8 @@ func (m *Manager) watch(name string, cl *Client) {
 }
 
 // StopOne stops a single running server and removes its routes. No-op if
-// the server isn't running. Client.Stop (which can block up to 2s) runs
-// off-lock, matching StopAll.
+// the server isn't running. Client.Stop (which can block through the stdio
+// grace and terminate grace) runs off-lock, matching StopAll.
 func (m *Manager) StopOne(name string) {
 	if m == nil {
 		return
@@ -301,10 +365,13 @@ func (m *Manager) Tools() []ToolInfo {
 		cl := m.clients[name]
 		for _, t := range cl.Tools() {
 			ns := NamespaceTool(name, t.Name)
-			if r, ok := m.routes[ns]; !ok || r.server != name {
-				continue // shadowed
+			// The tool check matters when two of one server's names clean to
+			// the same namespace and only one of them holds the route, as when
+			// the other was withdrawn for its metadata.
+			if r, ok := m.routes[ns]; !ok || r.server != name || r.tool != t.Name {
+				continue // shadowed or withdrawn
 			}
-			out = append(out, ToolInfo{client: cl, wireName: t.Name, Server: name, Name: ns, Description: t.Description, Schema: t.InputSchema, ReadOnly: t.Annotations.ReadOnlyHint})
+			out = append(out, ToolInfo{client: cl, wireName: t.Name, Server: name, Name: ns, Description: t.Description, Schema: t.InputSchema, ReadOnly: t.readOnly(), Transport: cl.kind, RemoteRelay: cl.remoteRelay})
 		}
 	}
 	return out
@@ -322,7 +389,15 @@ func (m *Manager) Call(ctx context.Context, namespaced string, args json.RawMess
 	return cl.CallTool(ctx, r.tool, args)
 }
 
-// StopAll shuts every server down.
+// stopAllDeadline bounds StopAll. It outlasts the stdio escalation, so every
+// stdio Close has issued its group kill by the deadline, and the margin gives
+// the killed group time to be reaped.
+const stopAllDeadline = stdioCloseGrace + stdioTerminateGrace + 2*time.Second
+
+// StopAll shuts every server down at once and returns within stopAllDeadline.
+// A server that is still stopping then is abandoned to finish in the
+// background. The watcher does not report the stop as a crash, because the
+// clients leave the map before any of them stops.
 func (m *Manager) StopAll() {
 	if m == nil {
 		return
@@ -334,8 +409,33 @@ func (m *Manager) StopAll() {
 	}
 	m.clients = map[string]*Client{}
 	m.mu.Unlock()
+	stopConcurrently(clients, stopAllDeadline)
+}
+
+// stopConcurrently stops every client at once. It reports whether all of them
+// stopped before the deadline. A sequential loop added one stdio grace per
+// server that held out, which several hung servers turned into a long exit.
+func stopConcurrently(clients []*Client, deadline time.Duration) bool {
+	var wg sync.WaitGroup
 	for _, c := range clients {
-		c.Stop()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.Stop()
+		}()
+	}
+	stopped := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(stopped)
+	}()
+	timer := time.NewTimer(deadline)
+	defer timer.Stop()
+	select {
+	case <-stopped:
+		return true
+	case <-timer.C:
+		return false
 	}
 }
 
@@ -408,7 +508,14 @@ func (t *Tool) Execute(ctx context.Context, args json.RawMessage, progress func(
 	if len(content) == 0 {
 		content = append(content, provider.TextBlock{Text: ""})
 	}
-	return core.ToolResult{Content: content, StructuredContent: res.StructuredContent, StructuredContentOmitted: omitted, IsError: res.IsError}, nil
+	// The server decides how much text it returns, up to the 4 MiB frame
+	// limit, so bound it here the way bash and read bound their own output.
+	content, spill := resultcap.Cap(content, "mcp")
+	out := core.ToolResult{Content: content, StructuredContent: res.StructuredContent, StructuredContentOmitted: omitted, IsError: res.IsError}
+	if spill != "" {
+		out.Details = map[string]any{"full_output_path": spill}
+	}
+	return out, nil
 }
 
 func sortedKeys[V any](m map[string]V) []string {

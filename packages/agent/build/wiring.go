@@ -110,8 +110,8 @@ func (a *ExtToolAdapter) NewExtensionTool(info ExtensionToolInfo) core.Tool {
 // ExtensionToolSource" bet). MCP tools therefore inherit every
 // downstream behavior for free: registry merge, system-prompt
 // re-render, the confirm-gate ladder, and plan mode's
-// side-effect rules (readOnlyHint-annotated tools are admitted,
-// the rest excluded).
+// side-effect rules (a readOnlyHint-annotated tool on a stdio server that is
+// not a marked relay is admitted, the rest excluded; see mcpToolAuthority).
 type MCPToolAdapter struct {
 	Mgr *mcp.Manager
 
@@ -168,10 +168,27 @@ func (a *MCPToolAdapter) Tools() []ExtensionToolInfo {
 			Description: t.Description,
 			Schema:      t.Schema,
 			ReadOnly:    t.ReadOnly,
+			Authority:   mcpToolAuthority(t),
 			PlanKeep:    a.team && t.Server == mcpbridge.TeamServerName,
 		}
 	}
 	return out
+}
+
+// mcpToolAuthority is the authority an MCP tool carries, since MCP has no
+// field to declare one. A read-only tool on a remote server reads nothing
+// here, but every call sends the model's arguments to that server, so it is
+// network-read (decision 0005). A stdio server's read-only tool stays a local
+// read: installing the server was already consent to run it. A stdio server
+// that marks itself as a relay, as terva-mcp-bridge does, sends each call on
+// to a remote server, so its read-only tools are network-read too
+// (mcp.ToolInfo.Remote). Every other tool leaves the authority empty and is
+// side-effecting by its ReadOnly bool.
+func mcpToolAuthority(t mcp.ToolInfo) string {
+	if t.ReadOnly && t.Remote() {
+		return string(permission.AuthNetworkRead)
+	}
+	return ""
 }
 
 func (a *MCPToolAdapter) NewExtensionTool(info ExtensionToolInfo) core.Tool {

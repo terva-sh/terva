@@ -141,8 +141,8 @@ type Resolved struct {
 	// LazyTools enables lazy tool visibility (retro H2·b) on the agent:
 	// NewAgent attaches lazytools.New(LazyToolActive...) so only the core group
 	// plus the always-active groups are advertised, and the activate_tools tool
-	// is registered so the model can bring hidden groups in on demand. Off by
-	// default. From the user config (config.LazyTools).
+	// is registered so the model can bring hidden groups in on demand. On by
+	// default. From the user config (config.LazyToolsOn).
 	LazyTools      bool
 	LazyToolActive []string
 
@@ -555,7 +555,9 @@ type ExtensionToolInfo struct {
 	// overrides ReadOnly for classification: only local-read is treated
 	// as auto-allowable read-only, so a network-read tool is admitted
 	// neither in plan nor by the read-only auto-allow. Empty falls back
-	// to ReadOnly. MCP tools leave it empty (they have only readOnlyHint).
+	// to ReadOnly. MCP has no authority field, so the adapter derives one:
+	// network-read for a read-only tool on a remote server, else empty
+	// (mcpToolAuthority).
 	Authority string
 	// Essential carries the source's load-bearing declaration (extension
 	// register_tool essential): the tool stays advertised every turn even

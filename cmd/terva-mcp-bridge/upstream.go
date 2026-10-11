@@ -29,6 +29,13 @@ type upstream struct {
 
 	mu        sync.Mutex
 	sessionID string
+	// negotiatedVersion is the protocolVersion the remote answered to the
+	// bridge's own initialize. It is not the bridge's offer, and not the version
+	// terva offers the bridge over stdio: that initialize never reaches the
+	// remote. initialize sets it, and every request after that sends it as
+	// MCP-Protocol-Version. It is empty until then, so the initialize POST and
+	// its 401 replay go out without the header.
+	negotiatedVersion string
 }
 
 func newUpstream(remoteURL string, hc *http.Client, auth authSource, headers map[string]string) *upstream {
@@ -97,7 +104,7 @@ func (u *upstream) doWithReauth(ctx context.Context, raw []byte) (body []byte, s
 
 // initialize runs the MCP handshake: the initialize request (which assigns the
 // session id) followed by the initialized notification. Returns the server's
-// initialize result so main can log what it connected to.
+// initialize result, which the stdio server answers terva's initialize with.
 func (u *upstream) initialize(ctx context.Context) (json.RawMessage, error) {
 	params, _ := json.Marshal(map[string]any{
 		"protocolVersion": protocolVersion,
@@ -108,6 +115,17 @@ func (u *upstream) initialize(ctx context.Context) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 🔑 The remote's answer, not our offer: the two differ when the remote
+	// negotiated down. It is set before the initialized notification, because
+	// that is the first request the spec says must carry it. A result with no
+	// protocolVersion leaves it empty, and the remote then assumes 2025-03-26.
+	var init struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	_ = json.Unmarshal(res, &init)
+	u.mu.Lock()
+	u.negotiatedVersion = init.ProtocolVersion
+	u.mu.Unlock()
 	if err := u.notify(ctx, "notifications/initialized", nil); err != nil {
 		return nil, fmt.Errorf("initialized notification: %w", err)
 	}
@@ -118,6 +136,11 @@ func (u *upstream) initialize(ctx context.Context) (json.RawMessage, error) {
 // any WWW-Authenticate header (for the 401 path). A response may be a JSON body or
 // an SSE stream; either way the JSON-RPC object is extracted. A >=400 status
 // other than 401 surfaces as an error carrying the body.
+//
+// Every request the bridge sends to the MCP endpoint goes through here, and it
+// opens no GET stream and sends no session DELETE. So this is the one place
+// that sets the two protocol headers. They come after the operator's --header
+// values, so a --header of the same name does not replace them.
 func (u *upstream) do(ctx context.Context, frame []byte) (body []byte, status int, wwwAuth string, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.url, bytes.NewReader(frame))
 	if err != nil {
@@ -134,10 +157,13 @@ func (u *upstream) do(ctx context.Context, frame []byte) (body []byte, status in
 		req.Header.Set("Authorization", h)
 	}
 	u.mu.Lock()
-	sid := u.sessionID
+	sid, ver := u.sessionID, u.negotiatedVersion
 	u.mu.Unlock()
 	if sid != "" {
 		req.Header.Set("Mcp-Session-Id", sid)
+	}
+	if ver != "" {
+		req.Header.Set("MCP-Protocol-Version", ver)
 	}
 
 	resp, err := u.hc.Do(req)

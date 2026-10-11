@@ -4,11 +4,11 @@
 // the live host (agent.extToolAdapter) and the acp wire harness so both
 // exercise the identical conversion.
 //
-// It depends only on core + provider + extproto and reaches the owning
-// extension through the small Invoker interface, so it never imports the
-// extensions host layer (keeping that layer free of core/provider and
-// avoiding an import cycle with packages that the agent package itself
-// imports, e.g. acp).
+// It depends only on core + provider + extproto, plus the resultcap leaf
+// that bounds result text, and reaches the owning extension through the
+// small Invoker interface, so it never imports the extensions host layer
+// (keeping that layer free of core/provider and avoiding an import cycle
+// with packages that the agent package itself imports, e.g. acp).
 package exttool
 
 import (
@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/agent/tools/resultcap"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/provider"
 )
@@ -130,7 +131,15 @@ func (t *extensionTool) Execute(ctx context.Context, args json.RawMessage, _ fun
 		// Defensive: an empty content slice would confuse the model.
 		out.Content = []provider.Content{provider.TextBlock{Text: "(extension returned no content)"}}
 	}
-	out.Details = map[string]any{"extension": t.extension, "tool": t.name}
+	// The extension decides how much text it returns, so bound it here the
+	// way bash and read bound their own output.
+	var spill string
+	out.Content, spill = resultcap.Cap(out.Content, "ext")
+	details := map[string]any{"extension": t.extension, "tool": t.name}
+	if spill != "" {
+		details["full_output_path"] = spill
+	}
+	out.Details = details
 	return out, nil
 }
 

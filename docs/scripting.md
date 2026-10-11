@@ -163,7 +163,10 @@ accounts for like any other binding:
 What is disclosed is deliberately narrow (proposal §12.7): the fixed
 meta/inspection builtins (`session_inspect`, `session_search`,
 `terva_status`, `task_list`, `skill`) plus any extension or MCP tool the
-session classifies as read-only. Tools that only write terva's own state
+session classifies as read-only. A read-only tool on a remote MCP server,
+reached directly or through `terva-mcp-bridge`, is
+`network-read` rather than read-only, so it is not disclosed
+([permissions.md](permissions.md#authority-classes)). Tools that only write terva's own state
 under `$TERVA_HOME` (the task writers, `memory`, `share_file`,
 `deliver_result`) classify as read-only for plan mode but are **not**
 disclosed: a script's reach is bounded by what it is worth letting a script

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"terva.sh/terva/packages/agent/tools/resultcap"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/provider"
@@ -20,7 +21,7 @@ import (
 
 const (
 	maxReadLines = 2000
-	maxReadBytes = 50 * 1024
+	maxReadBytes = resultcap.MaxBytes
 	// maxReadFileBytes bounds how much of a file we pull into memory
 	// before line-splitting and applying offset/limit. It is much larger
 	// than maxReadBytes so offset-based paging can reach content past the

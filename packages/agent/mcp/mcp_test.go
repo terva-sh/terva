@@ -207,12 +207,71 @@ func TestReadOnlyHintMapsToToolInfo(t *testing.T) {
 	got := map[string]bool{}
 	for _, ti := range m.Tools() {
 		got[ti.Name] = ti.ReadOnly
+		// A stdio server runs on this machine, so its read-only tool stays a
+		// local read.
+		if ti.Transport != "stdio" || ti.Remote() {
+			t.Errorf("%s: Transport = %q, Remote = %v, want stdio and local", ti.Name, ti.Transport, ti.Remote())
+		}
 	}
 	if !got["mcp_s_peek"] {
 		t.Error("readOnlyHint-annotated tool should report ReadOnly")
 	}
 	if got["mcp_s_add"] {
 		t.Error("unannotated tool must default to mutating")
+	}
+}
+
+// A stdio server that marks itself as a relay, as terva-mcp-bridge does, counts
+// as remote: terva spawns it here, but it sends each call on. The unmarked case
+// is TestReadOnlyHintMapsToToolInfo.
+func TestAMarkedStdioServerIsRemote(t *testing.T) {
+	stub := buildStub(t)
+	m := StartAll(context.Background(), &Config{Servers: map[string]ServerConfig{"s": {Command: stub, Args: []string{"--remote-mark"}}}}, "", nil)
+	defer m.StopAll()
+	tools := m.Tools()
+	if len(tools) == 0 {
+		t.Fatalf("no tools (warnings %v)", m.Warnings())
+	}
+	for _, ti := range tools {
+		if ti.Transport != "stdio" || !ti.RemoteRelay || !ti.Remote() {
+			t.Errorf("%s: Transport = %q, RemoteRelay = %v, Remote = %v, want stdio, marked, and remote", ti.Name, ti.Transport, ti.RemoteRelay, ti.Remote())
+		}
+	}
+}
+
+// Only JSON true at the exact key under the exact _meta key is the mark.
+// Anything else leaves a stdio server local, which is the treatment it had
+// before the mark existed.
+func TestMarkedRemoteReadsOnlyTheExactMark(t *testing.T) {
+	for in, want := range map[string]bool{
+		`{"_meta":{"terva.sh/remote":true}}`:               true,
+		`{"_meta":{"terva.sh/remote": true ,"x":1},"y":2}`: true,
+		`{"_meta":{"terva.sh/remote":false}}`:              false,
+		`{"_meta":{"terva.sh/remote":"true"}}`:             false,
+		`{"_meta":{"terva.sh/remote":1}}`:                  false,
+		`{"_meta":{"terva.sh/remote":null}}`:               false,
+		`{"_meta":{"TERVA.SH/REMOTE":true}}`:               false,
+		`{"_META":{"terva.sh/remote":true}}`:               false,
+		`{"terva.sh/remote":true}`:                         false,
+		`{"_meta":{}}`:                                     false,
+		`{"_meta":"terva.sh/remote"}`:                      false,
+		`{"_meta":null}`:                                   false,
+		`{}`:                                               false,
+		`[]`:                                               false,
+		`null`:                                             false,
+		``:                                                 false,
+	} {
+		if got := markedRemote(json.RawMessage(in)); got != want {
+			t.Errorf("markedRemote(%s) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+// An absent transport is not proof of a local server, so a hand-built ToolInfo
+// counts as remote.
+func TestToolInfoWithoutTransportIsRemote(t *testing.T) {
+	if !(ToolInfo{}).Remote() {
+		t.Error("a ToolInfo with no transport reported a local server")
 	}
 }
 
