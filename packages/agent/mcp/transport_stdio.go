@@ -9,9 +9,18 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/internal/pipeio"
+	"terva.sh/terva/packages/agent/internal/procgroup"
 	"terva.sh/terva/packages/agent/procenv"
 	"terva.sh/terva/packages/envcompat"
 	"terva.sh/terva/packages/provider/lineframe"
+)
+
+// Close escalates through procgroup.Stop. It waits stdioCloseGrace after stdin
+// closes, asks the whole process group to stop, and kills the group
+// stdioTerminateGrace later.
+const (
+	stdioCloseGrace     = 2 * time.Second
+	stdioTerminateGrace = time.Second
 )
 
 // stdioTransport speaks MCP over a subprocess's stdin/stdout as newline-delimited
@@ -63,6 +72,10 @@ func newStdioTransport(cfg ServerConfig, cwd string, stderr io.Writer) (*stdioTr
 	if stderr != nil {
 		cmd.Stderr = stderr
 	}
+	// 🔑 `npx -y` and `uvx` run the real server as a grandchild that holds
+	// the launcher's stdout. Leading its own group is what lets Close reach
+	// that grandchild; killing the direct child alone orphaned it.
+	procgroup.Isolate(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -135,9 +148,12 @@ func (t *stdioTransport) Send(ctx context.Context, frame []byte) error {
 
 func (t *stdioTransport) Incoming() <-chan []byte { return t.in }
 
-// Close closes stdin (the polite MCP shutdown) and reaps the process, killing it
-// after a short grace period. When the process has already died (stdout EOF), the
-// Wait returns immediately and the grace timer never fires.
+// Close closes stdin (the polite MCP shutdown) and reaps the process. A server
+// still running after stdioCloseGrace gets Terminate on its process group, and
+// Kill on the group stdioTerminateGrace later. When the server and its group
+// have already exited, Close returns as soon as the leader is reaped.
+//
+// On Windows, Kill ends the group leader alone (see procgroup_windows.go).
 func (t *stdioTransport) Close() {
 	t.closeOnce.Do(func() {
 		close(t.closed)
@@ -145,14 +161,10 @@ func (t *stdioTransport) Close() {
 		if t.cmd == nil || t.cmd.Process == nil {
 			return
 		}
-		select {
-		case <-t.waitDone:
-		case <-time.After(2 * time.Second):
-			_ = t.cmd.Process.Kill()
-			// A descendant can retain stdout after the direct child dies.
-			// Release the reader before the single cmd.Wait owner runs.
-			_ = t.stdout.Close()
-			<-t.waitDone
-		}
+		// A descendant outside the group (one that called setsid) can still
+		// hold stdout. The release frees the reader after the Kill, so the
+		// single cmd.Wait owner can run.
+		procgroup.Stop(t.cmd.Process, t.waitDone, stdioCloseGrace, stdioTerminateGrace,
+			func() { _ = t.stdout.Close() })
 	})
 }

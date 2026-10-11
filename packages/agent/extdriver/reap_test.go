@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"terva.sh/terva/packages/agent/internal/procgroup/procgrouptest"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -52,7 +53,7 @@ func TestReadLoopReapsSelfExitedExtension(t *testing.T) {
 	if ext.cmd.ProcessState == nil {
 		t.Error("ProcessState nil after waitDone closed — Wait did not run")
 	}
-	if procIsZombie(ext.cmd.Process.Pid) {
+	if procgrouptest.Zombie(ext.cmd.Process.Pid) {
 		t.Errorf("pid %d is still a zombie after reap", ext.cmd.Process.Pid)
 	}
 
@@ -113,7 +114,7 @@ func TestSpawnReapsHandshakeFailureChild(t *testing.T) {
 			gone = true // ESRCH
 			break
 		}
-		if procIsZombie(childPID) {
+		if procgrouptest.Zombie(childPID) {
 			t.Fatalf("handshake-failure child pid %d is a zombie — killed but not reaped", childPID)
 		}
 		time.Sleep(20 * time.Millisecond)

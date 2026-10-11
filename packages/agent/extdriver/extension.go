@@ -163,6 +163,9 @@ type Extension struct {
 	waitDone chan struct{}
 	waitErr  error
 
+	// groupOnce runs the one teardown of the process group. See endGroup.
+	groupOnce sync.Once
+
 	// readyCh is closed when the extension sends a ReadyFromExt
 	// frame, or when the host gives up waiting (registrationGrace).
 	readyCh   chan struct{}

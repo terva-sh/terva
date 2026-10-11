@@ -753,8 +753,12 @@ stays an explicit user-config decision (see [hooks.md](hooks.md),
    receive key events, and push redraws while the panel is focused.
 6. **Shutdown**: terva queues `shutdown` and gives the writer 200 ms to flush.
    It then closes stdin, even if the extension stopped reading a full pipe.
-   After the caller's exit grace expires, terva requests group termination and
-   waits one more second before a forced kill. The process has one reap owner.
+   terva waits the caller's exit grace for the whole process group to exit,
+   so a child that the extension started must exit too. When the grace
+   expires, terva requests group termination and waits one more second before
+   a forced kill. Extensions stop side by side against one grace. The process
+   has one reap owner. An extension that exits on its own has its remaining
+   group terminated at once.
 
 Tool, command, and intercept deadlines include time spent waiting for room in
 the extension's outbound queue. Cancellation stops that wait, and shutdown
@@ -907,11 +911,13 @@ user's trust, and the host's event loop. A few habits keep it a good neighbor:
   50 KiB, the limit its own `bash` and `read` tools use. Past the cap it keeps
   the first 50 KiB and writes the full text to a private file (mode 0600)
   named `terva-ext-<hex>.log` in the OS temp directory. It then appends a note
-  that names the file and the line to continue from, so the model pages the
-  rest with `read` instead of calling your tool again. Images do not count
-  toward the cap and pass through unchanged. A tool that can return more than
-  the cap should take a limit or a page argument, so the model can ask for
-  less.
+  that names the file and where to continue, so the model pages the rest with
+  `read` instead of calling your tool again. The note gives a line as `offset`
+  when the cut ends a line, and a byte as `byte_offset` when the cut falls
+  inside one. Images do not count toward the cap and pass through unchanged.
+  The host removes the file when the session that made the call ends. A tool
+  that can return more than the cap should take a limit or a page argument,
+  so the model can ask for less.
 - **Feature-detect, and degrade gracefully.** Gate a protocol-N feature on
   `Host().ProtocolVersion`. Declare `RequireProtocol(n)` *only* when your
   extension genuinely can't function without it, because it makes an older host

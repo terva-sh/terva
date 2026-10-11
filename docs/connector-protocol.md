@@ -438,15 +438,29 @@ Rules:
   assumption.
 - On `shutdown` or stdin closing, exit promptly. The host gives the shutdown
   frame 200 ms to flush, then closes stdin without waiting for a blocked writer.
-  It waits two seconds for exit, requests termination, then kills the process
-  after one more second. Windows uses the final kill if termination is unsupported.
+  It waits two seconds for the connector and every process in its process
+  group to exit. If any remain, it asks the group to stop, and kills the group
+  one second later if any still remain. The connector leads that group, so
+  the real connector behind a launcher such as `npx` or `uv run` stops with
+  the launcher, and so does any child the connector started. On Windows the
+  host can see the connector process alone. It stops the wait when that
+  process exits, and the final kill ends that process alone, so a child that
+  outlives it keeps running.
+- Because the connector leads its own process group, the terminal's `SIGINT`
+  and `SIGHUP` do not reach it. terva stops it as part of its own shutdown,
+  and `terva bot run` returns only after it has stopped the group. If terva dies
+  without its shutdown (`SIGKILL`, a crash), the connector sees its stdin
+  close, and a connector that ignores that EOF keeps running.
 - Send deadlines cover writing the request and waiting for its result.
-  Cancellation during a pipe write closes the stream and stops the child,
-  because a partial frame cannot safely precede another request. The existing
-  restart budget applies. The host does not resend the failed message.
+  Cancellation during a pipe write closes the stream and kills the connector's
+  process group at once, because a partial frame cannot safely precede another
+  request. The existing restart budget applies. The host does not resend the
+  failed message.
 - Crashes are loud, not silent: terva restarts a crashed connector with
   backoff and surfaces every attempt, but gives up after 3 crashes in
-  60 seconds and reports the bridge as broken.
+  60 seconds and reports the bridge as broken. Before each restart terva
+  stops what is left of the crashed process group the same way, so an old
+  process never runs beside its replacement.
 - **Reconnects recover, first connect discards.** On the first-ever
   connect after setup, discard history: never replay messages that
   predate that first connect into agent turns. On every later connect,

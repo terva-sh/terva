@@ -1,4 +1,4 @@
-package extdriver
+package procgroup
 
 import (
 	"go/ast"
@@ -28,19 +28,20 @@ var procPairs = []struct {
 	// isolate is the function whose Windows body must actually do something.
 	isolate string
 }{
-	{filepath.Join("..", "extdriver"), "proc_unix.go", "proc_windows.go", "isolateExtensionProcess"},
-	{filepath.Join("..", "tools"), "bash_unix.go", "bash_windows.go", "setProcessGroup"},
+	{".", "procgroup_unix.go", "procgroup_windows.go", "Isolate"},
+	{filepath.Join("..", "..", "tools"), "bash_unix.go", "bash_windows.go", "setProcessGroup"},
 }
 
 // Every function the rest of the package CALLS must exist on both halves of a
-// platform pair. A Windows file missing one does not fail the build until
+// platform pair, and so must every exported one, because its callers live in
+// other packages. A Windows file missing one does not fail the build until
 // someone builds for Windows, which on a unix-only development machine is
 // never.
 //
 // Scoped to the shared contract rather than to every declaration: a private
-// helper used only inside the unix file (signalExtensionGroup) is an
-// implementation detail, and demanding a Windows twin for it would be
-// demanding a copy of the unix design.
+// helper used only inside the unix file (signalGroup) is an implementation
+// detail, and demanding a Windows twin for it would be demanding a copy of the
+// unix design.
 func TestEachProcessPairDeclaresTheSameFunctions(t *testing.T) {
 	for _, p := range procPairs {
 		unix := funcsIn(t, filepath.Join(p.dir, p.unix))
@@ -49,12 +50,12 @@ func TestEachProcessPairDeclaresTheSameFunctions(t *testing.T) {
 
 		shared := 0
 		for fn := range unix {
-			if !called[fn] {
+			if !called[fn] && !ast.IsExported(fn) {
 				continue // an internal helper of the unix implementation
 			}
 			shared++
 			if !win[fn] {
-				t.Errorf("%s declares %s, the rest of the package calls it, and %s does not "+
+				t.Errorf("%s declares %s, a caller uses it, and %s does not "+
 					"declare it — the Windows build has no equivalent", p.unix, fn, p.windows)
 			}
 		}

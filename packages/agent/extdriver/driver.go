@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"terva.sh/terva/packages/agent/extproto"
+	"terva.sh/terva/packages/agent/internal/procgroup"
 	"terva.sh/terva/packages/agent/procenv"
 	"terva.sh/terva/packages/privfs"
 )
@@ -631,7 +632,7 @@ func (d *Driver) spawn(ctx context.Context, ext *Extension) (retErr error) {
 	cmd.Stderr = logFile
 	// Isolate into its own process group (kitty-cwd fix). Paired with the
 	// group-targeted teardown below so background children are reaped.
-	isolateExtensionProcess(cmd)
+	procgroup.Isolate(cmd)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -655,10 +656,13 @@ func (d *Driver) spawn(ctx context.Context, ext *Extension) (retErr error) {
 	// that leave the child alive — a bad or wrong-typed hello — don't strand a
 	// live, untracked process; killing an already-dead group is a harmless
 	// no-op. The success path returns nil and hands reaping to readLoop.
+	// The group had its Kill, so a racing stopExtensions must not signal
+	// its id again once the reap freed it: latch the one teardown.
 	defer func() {
 		if retErr != nil {
-			killExtensionGroup(ext.cmd.Process)
+			procgroup.Kill(ext.cmd.Process)
 			ext.reap()
+			ext.groupOnce.Do(func() {})
 		}
 	}()
 
@@ -700,12 +704,12 @@ func (d *Driver) spawn(ctx context.Context, ext *Extension) (retErr error) {
 		select {
 		case got = <-scanned:
 		case <-time.After(helloTimeout):
-			killExtensionGroup(cmd.Process)
+			procgroup.Kill(cmd.Process)
 			<-scanned // ReadFrame returns once the killed process's stdout closes.
 			fmt.Fprintf(logFile, "[terva] extension %s failed to handshake within %s; killed and skipped\n", ext.Manifest.Name, helloTimeout)
 			return fmt.Errorf("extension %s failed to send hello within %s", ext.Manifest.Name, helloTimeout)
 		case <-ctx.Done():
-			killExtensionGroup(cmd.Process)
+			procgroup.Kill(cmd.Process)
 			<-scanned
 			return ctx.Err()
 		}
@@ -721,14 +725,14 @@ func (d *Driver) spawn(ctx context.Context, ext *Extension) (retErr error) {
 		// hard deadline is what keeps a launcher that only ever reports
 		// progress from holding the slot forever.
 		if time.Now().After(hardDeadline) {
-			killExtensionGroup(cmd.Process)
+			procgroup.Kill(cmd.Process)
 			fmt.Fprintf(logFile, "[terva] extension %s still bootstrapping after %s; killed and skipped\n", ext.Manifest.Name, maxBootstrapWait)
 			return fmt.Errorf("extension %s was still bootstrapping after %s", ext.Manifest.Name, maxBootstrapWait)
 		}
 		d.noteBootstrap(ext, msg, logFile)
 	}
 	if got.tooLong {
-		killExtensionGroup(cmd.Process)
+		procgroup.Kill(cmd.Process)
 		return fmt.Errorf("extension %s hello frame exceeded %d bytes", ext.Manifest.Name, extproto.MaxFrameBytes)
 	}
 	if got.err != nil && len(got.line) == 0 {
@@ -750,7 +754,7 @@ func (d *Driver) spawn(ctx context.Context, ext *Extension) (retErr error) {
 	if hello.MinProtocol > extproto.ProtocolVersion {
 		// scanned was already consumed by the success select above, so
 		// don't receive from it again; just kill the subprocess.
-		killExtensionGroup(cmd.Process)
+		procgroup.Kill(cmd.Process)
 		fmt.Fprintf(logFile, "[terva] extension %s requires protocol >= %d; host speaks %d; skipped\n",
 			ext.Manifest.Name, hello.MinProtocol, extproto.ProtocolVersion)
 		return fmt.Errorf("extension %s requires protocol version %d but this host speaks %d; upgrade terva",
@@ -799,7 +803,7 @@ func (d *Driver) spawn(ctx context.Context, ext *Extension) (retErr error) {
 		// Tear down the writer goroutine we just started so it doesn't
 		// leak on this failed spawn.
 		ext.quitOnce.Do(func() { close(ext.quit) })
-		killExtensionGroup(cmd.Process)
+		procgroup.Kill(cmd.Process)
 		return fmt.Errorf("send hello_ack: %w", err)
 	}
 
@@ -1272,7 +1276,8 @@ func (d *Driver) readLoop(ext *Extension, reader *bufio.Reader) {
 		// were just dropped from the indexes above, so calls would now
 		// fail as "unknown" with no explanation. Tell the user once,
 		// and point them at the log (stderr is already tee'd there).
-		if !ext.stopping.Load() && d.hooks != nil {
+		selfExit := !ext.stopping.Load()
+		if selfExit && d.hooks != nil {
 			d.hooks.Notify(ext.Manifest.Name, "error",
 				fmt.Sprintf("extension %q exited unexpectedly; its tools and commands are unavailable (see %s)", ext.Manifest.Name, ext.LogPath))
 		}
@@ -1283,6 +1288,13 @@ func (d *Driver) readLoop(ext *Extension, reader *bufio.Reader) {
 		// as a zombie until teardown; a teardown-driven exit is reaped here too,
 		// with stopExtensions awaiting the same waitDone.
 		ext.reap()
+		// A self-exited extension stays loaded until a stop, which can come
+		// hours later, when its group id may name another group. End what is
+		// left of the group now, straight after the reap. A teardown-driven
+		// exit leaves this to stopExtensions, which gives the group its grace.
+		if selfExit {
+			ext.endGroup(0)
+		}
 	}()
 
 	for {
@@ -1590,8 +1602,9 @@ func (d *Driver) SendPanelClose(extName, panelID string) error {
 }
 
 // Stop cleanly terminates every extension. Sends ShutdownFromHost,
-// waits up to gracePeriod for each subprocess to exit, then SIGTERMs
-// (and SIGKILLs after another second) the holdouts.
+// waits up to gracePeriod for each extension's process group to empty,
+// then sends Terminate (and Kill after terminateGrace) to the groups
+// that still have a member.
 func (d *Driver) Stop(gracePeriod time.Duration) {
 	d.mu.RLock()
 	exts := make([]*Extension, 0, len(d.ext))
@@ -1607,6 +1620,35 @@ func (d *Driver) Stop(gracePeriod time.Duration) {
 // the shutdown frame) before the pipe is closed. A healthy extension
 // drains instantly; only a wedged one hits the timeout.
 const writerFlushGrace = 200 * time.Millisecond
+
+// terminateGrace is how long an extension's process group has after
+// Terminate before endGroup kills it.
+const terminateGrace = time.Second
+
+// endGroup ends the extension's process group through procgroup.Stop:
+// it waits up to grace for the group to empty, then sends Terminate,
+// then Kill. A clean exit of the main process is not the end, because a
+// child it started can outlive it. The read loop stays the one cmd.Wait
+// owner, and Stop only watches waitDone.
+//
+// 🚨 procgroup.Stop asks about the group by number. Once the group is
+// empty and its leader reaped, the number can name another group, and a
+// Stop that started then would signal that group. So the teardown runs
+// once, under groupOnce, and it starts straight after a reap or while
+// the leader is unreaped. A later call waits for that teardown and
+// signals nothing.
+func (e *Extension) endGroup(grace time.Duration) {
+	e.groupOnce.Do(func() {
+		// A descendant outside the group can retain stdout after the
+		// Kill. The release frees the reader, so the read loop can reach
+		// the reap.
+		procgroup.Stop(e.cmd.Process, e.waitDone, grace, terminateGrace, func() {
+			if e.stdout != nil {
+				_ = e.stdout.Close()
+			}
+		})
+	})
+}
 
 func stopExtensions(exts []*Extension, gracePeriod time.Duration) {
 	for _, ext := range exts {
@@ -1638,7 +1680,21 @@ func stopExtensions(exts []*Extension, gracePeriod time.Duration) {
 		}
 	}
 
+	// The read loop is the sole cmd.Wait owner (Extension.reap): closing
+	// stdin above drives the extension to EOF, its read loop exits, and its
+	// deferred reap harvests the process and closes waitDone. endGroup
+	// waits for that reap and for the rest of the group, and escalates if
+	// either does not come on its own — never calling Wait here, so there
+	// is exactly one Wait and no race with readLoop. (A child killed
+	// mid-handshake is reaped by spawn's own error path, which closes
+	// waitDone the same way.)
+	//
+	// The groups stop side by side against one deadline, so a pass over
+	// many extensions lasts one grace and one terminateGrace at most. One
+	// at a time, every group that holds out would add its own escalation
+	// to the pass, and a group with a lingering child now counts.
 	deadline := time.Now().Add(gracePeriod)
+	var wg sync.WaitGroup
 	for _, ext := range exts {
 		if ext.cmd == nil {
 			if ext.logFile != nil {
@@ -1646,35 +1702,18 @@ func stopExtensions(exts []*Extension, gracePeriod time.Duration) {
 			}
 			continue
 		}
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			remaining = 100 * time.Millisecond
-		}
-		// The read loop is the sole cmd.Wait owner (Extension.reap): closing
-		// stdin above drives the extension to EOF, its read loop exits, and its
-		// deferred reap harvests the process and closes waitDone. Escalate to
-		// the process group if it doesn't go on its own, then await that same
-		// completion — never calling Wait here, so there is exactly one Wait
-		// and no race with readLoop. (A child killed mid-handshake is reaped by
-		// spawn's own error path, which closes waitDone the same way.)
-		select {
-		case <-ext.waitDone:
-		case <-time.After(remaining):
-			terminateExtensionGroup(ext.cmd.Process)
-			select {
-			case <-ext.waitDone:
-			case <-time.After(time.Second):
-				killExtensionGroup(ext.cmd.Process)
-				// A descendant can retain stdout after the group leader dies.
-				// Release the reader so it can reach the single reap owner.
-				if ext.stdout != nil {
-					_ = ext.stdout.Close()
-				}
-				<-ext.waitDone
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				remaining = 100 * time.Millisecond
 			}
-		}
-		if ext.logFile != nil {
-			_ = ext.logFile.Close()
-		}
+			ext.endGroup(remaining)
+			if ext.logFile != nil {
+				_ = ext.logFile.Close()
+			}
+		}()
 	}
+	wg.Wait()
 }

@@ -9,13 +9,13 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"terva.sh/terva/packages/agent/chat"
 	"terva.sh/terva/packages/agent/chat/connhost"
 	"terva.sh/terva/packages/agent/connproto"
 	"terva.sh/terva/packages/agent/internal/pipeio"
+	"terva.sh/terva/packages/agent/internal/procgroup"
 	"terva.sh/terva/packages/agent/procenv"
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/secretstore"
@@ -32,6 +32,10 @@ const (
 	defaultRestartMax     = 3                // crashes tolerated per window
 	defaultRestartWindow  = 60 * time.Second
 	defaultRestartDelay   = time.Second // base backoff, doubles per attempt
+	// A stop waits defaultStopGrace after stdin closes, asks the process
+	// group to stop, and kills the group defaultTerminateGrace later.
+	defaultStopGrace      = 2 * time.Second
+	defaultTerminateGrace = time.Second
 )
 
 // inboundBuffer bounds how many normalized messages can queue between
@@ -69,6 +73,13 @@ type Proxy struct {
 	restartMax     int
 	restartWindow  time.Duration
 	restartDelay   time.Duration
+	stopGrace      time.Duration
+	terminateGrace time.Duration
+
+	// live counts the children this proxy started that are not yet gone.
+	// Each holds it from cmd.Start until its stop has finished, so Receive
+	// can wait out every process group it ran.
+	live sync.WaitGroup
 
 	mu       sync.Mutex
 	child    *child
@@ -96,6 +107,14 @@ type child struct {
 	// session's reader).
 	waited   chan struct{}
 	stopOnce sync.Once
+
+	stopGrace, terminateGrace time.Duration
+
+	// sigMu orders kill against the end of the teardown. finished is set
+	// under it once the teardown is over, or once kill saw the group
+	// gone. From then on the group id may name another group.
+	sigMu    sync.Mutex
+	finished bool
 }
 
 // NewProxy builds the proxy for a loaded manifest. manifestDir is the
@@ -112,6 +131,8 @@ func NewProxy(m Manifest, manifestDir, tervaHome string, warn func(string)) *Pro
 		restartMax:     defaultRestartMax,
 		restartWindow:  defaultRestartWindow,
 		restartDelay:   defaultRestartDelay,
+		stopGrace:      defaultStopGrace,
+		terminateGrace: defaultTerminateGrace,
 		inbound:        make(chan chat.Message, inboundBuffer),
 		childExit:      make(chan error, 4),
 	}
@@ -192,8 +213,14 @@ func (p *Proxy) Connect(ctx context.Context) (chat.Identity, error) {
 
 // Receive delivers inbound messages until ctx ends, restarting the
 // child on crashes. handle is called from this goroutine only, in
-// arrival order.
+// arrival order. It returns only after every child it ran is gone,
+// process group included.
 func (p *Proxy) Receive(ctx context.Context, handle func(chat.Message)) error {
+	// 🔑 The child leads its own process group, so the terminal's ^C
+	// reaches terva and not the connector. A caller that exits when
+	// Receive returns would cut short the stop that Connect's goroutine
+	// starts, and leave the group running.
+	defer p.stopAll()
 	for {
 		select {
 		case <-ctx.Done():
@@ -205,11 +232,18 @@ func (p *Proxy) Receive(ctx context.Context, handle func(chat.Message)) error {
 				return ctx.Err()
 			}
 			if err := p.restart(ctx, exitErr); err != nil {
-				p.shutdownChild()
 				return err
 			}
 		}
 	}
+}
+
+// stopAll stops the current child and waits until every child this proxy
+// started is gone. Another goroutine can hold the current child's stop, so
+// the wait on live is what makes the return mean gone.
+func (p *Proxy) stopAll() {
+	p.shutdownChild()
+	p.live.Wait()
 }
 
 // restart applies the crash budget and respawns. A respawn failure is
@@ -278,6 +312,10 @@ func (p *Proxy) spawnAndConnect(ctx context.Context) error {
 	// boundary into connector processes (see procenv).
 	cmd.Env = procenv.Inherited()
 	cmd.Stderr = logFile
+	// 🔑 A launcher (`npx`, `uv run`, a shell script) runs the real
+	// connector as its own child. Leading a process group is what lets a
+	// stop reach that child. A signal to the launcher alone orphaned it.
+	procgroup.Isolate(cmd)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -296,11 +334,12 @@ func (p *Proxy) spawnAndConnect(ctx context.Context) error {
 		logFile.Close()
 		return fmt.Errorf("spawn connector %q: %w", p.manifest.Name, err)
 	}
-	c := &child{cmd: cmd, stdout: stdout, logFile: logFile, waited: make(chan struct{})}
-	c.stdin = pipeio.New(stdin, func() {
-		_ = cmd.Process.Kill()
-		_ = stdout.Close()
-	})
+	p.live.Add(1)
+	c := &child{
+		cmd: cmd, stdout: stdout, logFile: logFile, waited: make(chan struct{}),
+		stopGrace: p.stopGrace, terminateGrace: p.terminateGrace,
+	}
+	c.stdin = pipeio.New(stdin, c.kill)
 
 	fr := connproto.NewFrameReader(stdout, func(msg string) {
 		p.warnf("connector %q: %s", p.manifest.Name, msg)
@@ -342,9 +381,15 @@ func (p *Proxy) spawnAndConnect(ctx context.Context) error {
 	// reader. Before the session starts, this abort owns the reap.
 	if err := session.Start(p.helloTimeout); err != nil {
 		c.stdin.Close()
-		_ = cmd.Process.Kill()
-		_ = stdout.Close()
-		go func() { _ = cmd.Wait(); close(c.waited); logFile.Close() }()
+		c.kill()
+		go func() {
+			defer p.live.Done()
+			_ = cmd.Wait()
+			close(c.waited)
+			// The group already had its Kill. Nothing signals it again.
+			c.finish()
+			logFile.Close()
+		}()
 		return fmt.Errorf("%w (see %s)", err, logPath)
 	}
 
@@ -359,6 +404,7 @@ func (p *Proxy) spawnAndConnect(ctx context.Context) error {
 	// detaches the child before stdin closes, so deliberate shutdowns
 	// and failed-connect cleanups don't burn restart budget.
 	go func() {
+		defer p.live.Done()
 		<-session.Done()
 		fmt.Fprintf(logFile, "[terva] connector session ended at %s (err=%v)\n", time.Now().Format(time.RFC3339), session.Err())
 		go func() { _ = cmd.Wait(); close(c.waited); logFile.Close() }()
@@ -370,8 +416,9 @@ func (p *Proxy) spawnAndConnect(ctx context.Context) error {
 			p.session = nil
 		}
 		p.mu.Unlock()
-		// A closed protocol stream does not prove the process exited. Finish
-		// cleanup before a restart can replace this child.
+		// A closed protocol stream does not prove the process exited, and a
+		// reaped leader does not prove its group did. Finish the stop before
+		// a restart can start a replacement beside what is left.
 		c.stop()
 		if !wasCurrent {
 			return
@@ -531,9 +578,10 @@ func (cc *childConn) WriteFrameContext(ctx context.Context, b []byte) error {
 }
 
 // shutdownChild gracefully stops the current child: shutdown frame,
-// stdin close, then SIGTERM/SIGKILL on a deadline. Safe to call when
-// no child is running, and safe against a concurrent session end (the
-// reaping goroutine owns cmd.Wait; we only watch c.waited).
+// stdin close, then Terminate and Kill on its process group on a
+// deadline. Safe to call when no child is running, and safe against a
+// concurrent session end (the reaping goroutine owns cmd.Wait; we only
+// watch c.waited).
 func (p *Proxy) shutdownChild() {
 	p.mu.Lock()
 	c := p.child
@@ -558,24 +606,50 @@ func (p *Proxy) shutdownChild() {
 	c.stop()
 }
 
+// stop closes stdin and then ends the child's process group through
+// procgroup.Stop. It returns once the leader is reaped and the group is
+// empty, or once the leader is reaped after the group Kill.
 func (c *child) stop() {
 	c.stopOnce.Do(func() {
 		c.stdin.Close()
-		select {
-		case <-c.waited:
-			return
-		case <-time.After(2 * time.Second):
-		}
-		_ = c.cmd.Process.Signal(syscall.SIGTERM)
-		select {
-		case <-c.waited:
-			return
-		case <-time.After(time.Second):
-		}
-		_ = c.cmd.Process.Kill()
-		_ = c.stdout.Close()
-		<-c.waited
+		// A descendant outside the group (one that called setsid) can
+		// still hold stdout. The release frees the session's reader after
+		// the Kill, so the session ends and the reaping goroutine runs.
+		procgroup.Stop(c.cmd.Process, c.waited, c.stopGrace, c.terminateGrace,
+			func() { _ = c.stdout.Close() })
+		c.finish()
 	})
+}
+
+// kill ends the child's process group at once. The two abort paths use
+// it: a handshake that failed, and a write cancelled mid-frame, after
+// which the stream cannot carry another request.
+//
+// 🚨 kill signals by number, which os.Process.Kill never did. Once the
+// group is empty and its leader reaped, the number can name another
+// group, and procgroup.Gone then reports that group as a member left. So
+// kill signals only before the teardown finished, and only straight
+// after a check that found the leader unreaped or a member left. The
+// first time it finds the group gone, it latches finished as well.
+func (c *child) kill() {
+	c.sigMu.Lock()
+	if !c.finished {
+		if procgroup.Gone(c.cmd.Process, c.waited) {
+			c.finished = true
+		} else {
+			procgroup.Kill(c.cmd.Process)
+		}
+	}
+	c.sigMu.Unlock()
+	_ = c.stdout.Close()
+}
+
+// finish marks the teardown over, so a later kill never signals the
+// group id again.
+func (c *child) finish() {
+	c.sigMu.Lock()
+	c.finished = true
+	c.sigMu.Unlock()
 }
 
 // SetChatEventHandlers installs the stage-D inbound event consumers

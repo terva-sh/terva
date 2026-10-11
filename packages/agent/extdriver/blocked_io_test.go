@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"terva.sh/terva/packages/agent/internal/procgroup"
 	"terva.sh/terva/packages/testsupport"
 )
 
@@ -83,7 +84,7 @@ func TestBlockedExtensionStopAndRestart(t *testing.T) {
 		select {
 		case <-ext.waitDone:
 		default:
-			killExtensionGroup(ext.cmd.Process)
+			procgroup.Kill(ext.cmd.Process)
 		}
 		d.Stop(time.Second)
 	})
