@@ -118,7 +118,13 @@ func TestACPPeerAuthorityRequiresCurrentClientGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(sa.Session.Meta.AdditionalRoots, []string{peer}) {
+	// The session records the canonical root: /private/var on macOS, the long
+	// name for a Windows 8.3 temp path.
+	canonicalPeer, err := filepath.EvalSymlinks(peer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(sa.Session.Meta.AdditionalRoots, []string{canonicalPeer}) {
 		t.Fatal("launch grants leaked into peer metadata", sa.Session.Meta.AdditionalRoots)
 	}
 	if err := sa.Sandbox.CheckPath(filepath.Join(launch, "file")); err != nil {
