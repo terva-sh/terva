@@ -35,7 +35,7 @@ func LoadCachedModels() {
 		return
 	}
 	if len(c.Models) > 0 {
-		modelreg.SetLiveModels(c.Models)
+		modelreg.SetLiveModels(modelsForBedrockRegion(c, build.BedrockRegion()))
 	}
 }
 
@@ -94,13 +94,15 @@ func LoadCompatModel() {
 // startup warm-up, the background refresh, the full catalog sweep, the
 // post-login adoption — reaches an endpoint the operator defined, and each of
 // them would otherwise have had to remember that half of them are Anthropic.
-func discoverCompatModels(ctx context.Context, id, baseURL, key string, defCtx int, anthropic bool, wire provider.AnthropicCompatOptions) ([]provider.Model, error) {
+func discoverCompatModels(ctx context.Context, id, baseURL, key string, defCtx int, anthropic bool, wire provider.AnthropicCompatOptions, native string) ([]provider.Model, error) {
 	var (
 		live []provider.Model
 		err  error
 	)
 	if anthropic {
 		live, err = provider.DiscoverAnthropicCompatible(ctx, baseURL, key, defCtx, wire, modelreg.Active())
+	} else if native != "" {
+		live, err = provider.DiscoverLocalCompatible(ctx, baseURL, key, native, defCtx, modelreg.Active())
 	} else {
 		live, err = provider.DiscoverOpenAICompatible(ctx, baseURL, key, defCtx, modelreg.Active())
 	}
@@ -168,7 +170,7 @@ func EnsureEndpointModels() {
 			}
 			cred, _, _ := build.ResolveCredential(p.id, "")
 			live, err := discoverCompatModels(ctx, p.id, p.ep.BaseURL, cred, defCtx,
-				p.ep.IsAnthropic(), build.EndpointAnthropicOptions(p.ep))
+				p.ep.IsAnthropic(), build.EndpointAnthropicOptions(p.ep), p.ep.ModelDiscovery)
 			if err != nil {
 				return
 			}
@@ -238,7 +240,7 @@ func RefreshCompatModelsAsync() {
 			// by construction.
 			key, _, _ := build.ResolveCredential(id, "")
 			live, err := discoverCompatModels(ctx, id, ep.BaseURL, key,
-				compatDefaultContext(id), anthropic, ep.AnthropicOptions())
+				compatDefaultContext(id), anthropic, ep.AnthropicOptions(), "")
 			if err != nil {
 				return
 			}
@@ -442,8 +444,7 @@ func moveEndpointCredential(from, to string) {
 // we have credentials for. Refreshed results are merged into the
 // active catalog and persisted to the on-disk cache.
 //
-// Silent on error: discovery is a nice-to-have. Callers can still use
-// the baked-in catalog if this fails.
+// Bedrock errors reach the host diagnostic sink. The catalog remains usable.
 func RefreshModelsAsync() {
 	launchModelRefresh(false)
 }
@@ -453,9 +454,8 @@ func RefreshModelsAsync() {
 // credential is added mid-session (e.g. /login to opencode-go), the just-
 // connected provider's /v1/models list must land without a restart — even
 // when a still-fresh cache written for some OTHER provider would normally
-// short-circuit discovery. The cache fingerprint tracks user-defined
-// endpoints, not which built-in providers have credentials, so a new login
-// alone doesn't invalidate it; forcing does.
+// short-circuit discovery. Cache scopes track endpoints and Bedrock signing
+// availability, but not provider login identities; forcing bypasses both.
 func RefreshModelsForceAsync() {
 	launchModelRefresh(true)
 }
@@ -488,16 +488,133 @@ func launchModelRefresh(force bool) {
 func waitModelRefresh() { modelRefreshWG.Wait() }
 
 func refreshModels(cachePath string, force bool) {
+	refreshModelsWithBedrock(cachePath, force, provider.DiscoverBedrock)
+}
+
+func refreshModelsWithBedrock(cachePath string, force bool, discover bedrockDiscoverFunc) {
+	refreshModelsWithDiscovery(cachePath, force, discover, provider.DiscoverDeepSeek)
+}
+
+func refreshModelsWithDiscovery(cachePath string, force bool, discover bedrockDiscoverFunc, deepseek deepseekDiscoverFunc) {
 	cached, _ := modelfiles.LoadCache(cachePath)
-	if refreshGated(cached, force) {
+	bedrockCfg := build.BedrockDiscoveryConfig()
+	otherGated := otherRefreshGated(cached, force)
+	bedrockGated := bedrockRefreshGated(cached, force, bedrockCfg)
+	if otherGated && bedrockGated {
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	var all []provider.Model
+	_, _, credentialErr := build.ResolveCredential("amazon-bedrock", "")
+	bedrockConfigured := credentialErr == nil || bedrockCfg.HasSigningCredentials() || os.Getenv("AWS_SECRET_ACCESS_KEY") != ""
+	type bedrockResult struct {
+		models []provider.Model
+		err    error
+	}
+	var bedrockResults chan bedrockResult
+	if bedrockConfigured && !bedrockGated {
+		// Bedrock must not consume the deadline other providers need.
+		bedrockResults = make(chan bedrockResult, 1)
+		go func() {
+			bedrockCtx, stop := context.WithTimeout(ctx, 10*time.Second)
+			defer stop()
+			live, err := refreshBedrockDiscovery(bedrockCtx, cached, bedrockCfg, discover)
+			bedrockResults <- bedrockResult{live, err}
+		}()
+	}
 
+	all := discoverOtherModelsWithDeepSeek(ctx, cached, otherGated, deepseek)
+	otherFetchedAt := cached.FetchedAt
+	if !otherGated {
+		otherFetchedAt = time.Time{}
+		if len(all) > 0 {
+			otherFetchedAt = time.Now().UTC()
+		}
+	}
+	if len(all) == 0 {
+		all = cachedOtherModels(cached)
+	}
+	bedrockFetchedAt, bedrockRetryAt := cached.BedrockFetchedAt, cached.BedrockRetryAt
+	bedrockDiagnostic := cached.BedrockDiagnostic
+	if bedrockGated {
+		for _, m := range modelsForBedrockRegion(cached, bedrockCfg.Region) {
+			if m.Provider == "amazon-bedrock" {
+				all = append(all, m)
+			}
+		}
+	} else {
+		bedrockFetchedAt, bedrockRetryAt = time.Now().UTC(), time.Time{}
+		bedrockDiagnostic = ""
+		if bedrockConfigured {
+			result := <-bedrockResults
+			all = append(all, result.models...)
+			if result.err != nil {
+				bedrockDiagnostic = result.err.Error()
+				sameScope := cached.BedrockRegion == bedrockCfg.Region && cached.BedrockSigning == bedrockCfg.HasSigningCredentials() && cached.BedrockScope == build.BedrockDiscoveryScope()
+				if force || !sameScope || cached.BedrockDiagnostic != bedrockDiagnostic {
+					reportModelDiscoveryDiagnostic("Bedrock model discovery: " + bedrockDiagnostic)
+				}
+				if bedrockCfg.HasSigningCredentials() {
+					bedrockFetchedAt = time.Time{}
+					bedrockRetryAt = time.Now().UTC().Add(5 * time.Minute)
+				}
+			}
+		}
+	}
+	if len(all) == 0 && !bedrockConfigured {
+		return
+	}
+	modelreg.SetLiveModels(all)
+	_ = modelfiles.SaveCache(cachePath, provider.ModelCache{
+		FetchedAt:         otherFetchedAt,
+		Version:           provider.ModelCacheVersion,
+		Endpoints:         endpointsFingerprint(),
+		BedrockRegion:     bedrockCfg.Region,
+		BedrockSigning:    bedrockCfg.HasSigningCredentials(),
+		BedrockScope:      build.BedrockDiscoveryScope(),
+		BedrockFetchedAt:  bedrockFetchedAt,
+		BedrockRetryAt:    bedrockRetryAt,
+		BedrockDiagnostic: bedrockDiagnostic,
+		Models:            all,
+	})
+}
+
+func cachedOtherModels(cached provider.ModelCache) []provider.Model {
+	var out []provider.Model
+	for _, m := range cached.Models {
+		if m.Provider != "amazon-bedrock" {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func discoverOtherModels(ctx context.Context, cached provider.ModelCache, gated bool) []provider.Model {
+	return discoverOtherModelsWithDeepSeek(ctx, cached, gated, provider.DiscoverDeepSeek)
+}
+
+type deepseekDiscoverFunc func(context.Context, string, string) ([]provider.Model, error)
+
+func discoverOtherModelsWithDeepSeek(ctx context.Context, cached provider.ModelCache, gated bool, deepseek deepseekDiscoverFunc) []provider.Model {
+	if gated {
+		return cachedOtherModels(cached)
+	}
+	var all []provider.Model
+	if cred, method, err := build.ResolveCredential("deepseek", ""); err == nil && method == "apikey" {
+		live, derr := deepseek(ctx, cred, "")
+		if derr == nil {
+			all = append(all, live...)
+		} else {
+			// Another provider's successful refresh must not erase this offline list.
+			for _, m := range cached.Models {
+				if m.Provider == "deepseek" {
+					all = append(all, m)
+				}
+			}
+		}
+	}
 	if cred, method, err := build.ResolveCredential("anthropic", ""); err == nil && method == "apikey" {
 		// /v1/models on Anthropic is API-key only; OAuth tokens can
 		// also list models via the bearer header, but we skip OAuth
@@ -582,38 +699,94 @@ func refreshModels(cachePath string, force bool) {
 				defCtx = ep.ContextWindow
 			}
 			live, derr := discoverCompatModels(ctx, id, ep.BaseURL, cred, defCtx,
-				ep.IsAnthropic(), build.EndpointAnthropicOptions(ep))
+				ep.IsAnthropic(), build.EndpointAnthropicOptions(ep), ep.ModelDiscovery)
 			if derr != nil {
 				continue
 			}
 			all = append(all, live...)
 		}
 	}
-	if len(all) == 0 {
-		return
-	}
-	// SetLiveModels writes only the "live" catalog layer; the compat
-	// default model (extra layer) and models.json entries (user layer)
-	// survive this landing at any time relative to other refreshes —
-	// precedence is structural, not call-ordered.
-	modelreg.SetLiveModels(all)
-	_ = modelfiles.SaveCache(cachePath, provider.ModelCache{
-		FetchedAt: time.Now().UTC(),
-		Version:   provider.ModelCacheVersion,
-		Endpoints: endpointsFingerprint(),
-		Models:    all,
-	})
+	return all
 }
 
 // refreshGated reports whether a discovery run should be skipped because the
-// on-disk cache is still authoritative. A forced run (a credential just
-// changed mid-session) never skips: the cache fingerprint tracks user-defined
-// endpoints, not which built-in providers have credentials, so a fresh login
-// alone wouldn't otherwise invalidate it. An unforced run skips a cache that
-// is current (fresh + matching discovery version) AND whose endpoint
-// fingerprint is unchanged.
+// independent provider groups are current. Forced refreshes bypass both.
 func refreshGated(cached provider.ModelCache, force bool) bool {
+	return otherRefreshGated(cached, force) && bedrockRefreshGated(cached, force, build.BedrockDiscoveryConfig())
+}
+
+func otherRefreshGated(cached provider.ModelCache, force bool) bool {
 	return !force && cached.IsCurrent() && cached.Endpoints == endpointsFingerprint()
+}
+
+func bedrockRefreshGated(cached provider.ModelCache, force bool, cfg provider.BedrockConfig) bool {
+	if force || cached.Version != provider.ModelCacheVersion || cached.BedrockRegion != cfg.Region || cached.BedrockScope != build.BedrockDiscoveryScope() {
+		return false
+	}
+	signing := cfg.HasSigningCredentials()
+	if cached.BedrockSigning != signing {
+		return false
+	}
+	return cached.BedrockRetryAt.After(time.Now()) || (provider.ModelCache{FetchedAt: cached.BedrockFetchedAt}).IsFresh()
+}
+
+var modelDiscoveryDiagnostic = struct {
+	sync.Mutex
+	sink func(string)
+}{sink: func(msg string) { fmt.Fprintln(os.Stderr, "terva:", msg) }}
+
+func setModelDiscoveryDiagnostic(sink func(string)) func(string) {
+	modelDiscoveryDiagnostic.Lock()
+	defer modelDiscoveryDiagnostic.Unlock()
+	previous := modelDiscoveryDiagnostic.sink
+	modelDiscoveryDiagnostic.sink = sink
+	return previous
+}
+
+func reportModelDiscoveryDiagnostic(msg string) {
+	// Delivery and sink changes share the lock, so the TUI can take ownership.
+	modelDiscoveryDiagnostic.Lock()
+	defer modelDiscoveryDiagnostic.Unlock()
+	if modelDiscoveryDiagnostic.sink != nil {
+		modelDiscoveryDiagnostic.sink(msg)
+	}
+}
+
+func modelsForBedrockRegion(cached provider.ModelCache, region string) []provider.Model {
+	var out []provider.Model
+	scope := build.BedrockDiscoveryScope()
+	for _, m := range cached.Models {
+		if m.Provider != "amazon-bedrock" || cached.BedrockRegion == region && cached.Version == provider.ModelCacheVersion && cached.BedrockScope == scope {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+type bedrockDiscoverFunc func(context.Context, provider.BedrockConfig, string, provider.ModelCatalog) ([]provider.Model, error)
+
+func refreshBedrockDiscovery(ctx context.Context, cached provider.ModelCache, cfg provider.BedrockConfig, discover bedrockDiscoverFunc) ([]provider.Model, error) {
+	var live []provider.Model
+	var err error
+	if !cfg.HasSigningCredentials() {
+		err = fmt.Errorf("%s", cfg.Hint)
+	} else {
+		live, err = discover(ctx, cfg, "", provider.Builtin())
+	}
+	if err == nil {
+		return live, nil
+	}
+	// A failed page is not evidence that previously discovered IDs vanished.
+	seen := make(map[string]bool, len(live))
+	for _, m := range live {
+		seen[m.ID] = true
+	}
+	for _, m := range modelsForBedrockRegion(cached, cfg.Region) {
+		if m.Provider == "amazon-bedrock" && !seen[m.ID] {
+			live = append(live, m)
+		}
+	}
+	return live, err
 }
 
 // endpointsFingerprint is a stable signature of the user's configured
@@ -635,6 +808,10 @@ func endpointsFingerprint() string {
 		sb.WriteString(id)
 		sb.WriteByte('=')
 		sb.WriteString(cfg.Endpoints[id].BaseURL)
+		if native := cfg.Endpoints[id].ModelDiscovery; native != "" {
+			sb.WriteByte('|')
+			sb.WriteString(native)
+		}
 		sb.WriteByte(';')
 	}
 	return sb.String()

@@ -48,7 +48,7 @@ func TestModelRefreshWritesToLaunchHome(t *testing.T) {
 	// refresh's only discovery source, or this test would hit real provider
 	// APIs from whatever machine runs it.
 	for _, k := range []string{
-		"ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "OPENAI_API_KEY",
+		"DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "OPENAI_API_KEY",
 		"KIMI_API_KEY", "MOONSHOT_API_KEY", "GEMINI_API_KEY",
 		"GOOGLE_API_KEY", "OPENROUTER_API_KEY",
 	} {

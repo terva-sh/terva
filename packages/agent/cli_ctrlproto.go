@@ -138,11 +138,18 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 	// below — before raw mode, exactly where the legacy path prints them.
 	var diagMu sync.Mutex
 	var bootDiags []string
+	var modelBootDiags []string
 	w.SetDiag(func(msg string) {
 		diagMu.Lock()
 		bootDiags = append(bootDiags, msg)
 		diagMu.Unlock()
 	})
+	previousModelDiag := setModelDiscoveryDiagnostic(func(msg string) {
+		diagMu.Lock()
+		modelBootDiags = append(modelBootDiags, msg)
+		diagMu.Unlock()
+	})
+	defer setModelDiscoveryDiagnostic(previousModelDiag)
 
 	// Session selection: --continue reopens the latest session for this cwd
 	// (the Workspace's empty-id resolution is exactly that, falling back to a
@@ -255,6 +262,10 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 	for _, d := range bootDiags {
 		fmt.Fprintln(os.Stderr, d)
 	}
+	for _, d := range modelBootDiags {
+		fmt.Fprintln(os.Stderr, d)
+	}
+	modelBootDiags = nil
 	diagMu.Unlock()
 
 	initialCfg, _ := config.LoadConfig()
@@ -645,6 +656,14 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 	// From here on the TUI owns the screen: route daemon diagnostics into the
 	// ext-notes block instead of stderr, which would corrupt the frame.
 	w.SetDiag(func(msg string) { iv.Notify("workspace", "info", msg) })
+	setModelDiscoveryDiagnostic(func(msg string) { iv.Notify("models", "info", msg) })
+	diagMu.Lock()
+	pendingModelDiags := modelBootDiags
+	modelBootDiags = nil
+	diagMu.Unlock()
+	for _, msg := range pendingModelDiags {
+		iv.Notify("models", "info", msg)
+	}
 	// Keyed notes REPLACE their predecessor instead of stacking one line per
 	// change — the swarm worktree record is live state, not an event log.
 	w.SetNoteSink(func(key, msg, level string) { iv.ReplaceNote("workspace", key, msg, level) })

@@ -71,6 +71,7 @@ func TestEveryStringConfigFieldIsClassified(t *testing.T) {
 		"disable_mcp[]":                       "server names",
 		"endpoints.*.baseUrl":                 "a base URL for a provider endpoint; credentials there would arrive via apiKeyEnv",
 		"endpoints.*.api":                     "a wire name (\"\" or \"anthropic\"), selecting which protocol the endpoint speaks",
+		"endpoints.*.modelDiscovery":          "a native metadata adapter name, never a credential",
 		"endpoints.*.anthropicVersion":        "an anthropic-version header value such as 2023-06-01 — a published API version, not a credential",
 		"endpoints.*.anthropicBeta":           "anthropic-beta feature flags such as context-1m-2025-08-07; public opt-in names, and the one header on this endpoint that is deliberately NOT where the key goes (that is apiKeyEnv/auth.json)",
 		"endpoints.*.authStyle":               "which header carries the key (x-api-key or bearer) — the NAME of a header, never its value",

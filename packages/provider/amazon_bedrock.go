@@ -48,7 +48,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -60,6 +59,7 @@ type bedrockClient struct {
 	// bearerToken or sigv4 is populated.
 	bearerToken string
 	sigv4       *bedrockSigV4Creds
+	credentials BedrockCredentialSource
 
 	region  string
 	baseURL string
@@ -83,8 +83,11 @@ func newBedrockClient(cfg BedrockConfig, baseURL string) Client {
 	if region == "" {
 		region = "us-east-1"
 	}
+	if !validBedrockRegion(region) {
+		return &unimplementedClient{name: "amazon-bedrock", hint: "invalid AWS region; use lowercase letters, digits and hyphens", wire: reasoningWireNone}
+	}
 	if baseURL == "" {
-		baseURL = "https://bedrock-runtime." + region + ".amazonaws.com"
+		baseURL = bedrockEndpoint("bedrock-runtime", region)
 	}
 	c := &bedrockClient{
 		region:  region,
@@ -93,6 +96,10 @@ func newBedrockClient(cfg BedrockConfig, baseURL string) Client {
 	}
 	if cfg.BearerToken != "" {
 		c.bearerToken = cfg.BearerToken
+		return c
+	}
+	if cfg.Credentials != nil {
+		c.credentials = cfg.Credentials
 		return c
 	}
 	if cfg.AccessKeyID != "" && cfg.SecretAccessKey != "" {
@@ -226,6 +233,9 @@ func bedrockStripGeoPrefix(modelID string) string {
 // silently dropping images for every unknown Bedrock model would be the worse
 // regression.
 func bedrockCatalogModel(cat ModelCatalog, modelID string) Model {
+	if m, err := cat.FindModel("amazon-bedrock", modelID); err == nil {
+		return m
+	}
 	m, _ := cat.FindModel("amazon-bedrock", bedrockStripGeoPrefix(modelID))
 	return m
 }
@@ -236,6 +246,9 @@ func bedrockCatalogModel(cat ModelCatalog, modelID string) Model {
 // model with a write price in the catalog supports cachePoint markers.
 // Nova models use automatic caching and don't need explicit markers.
 func bedrockModelSupportsCaching(cat ModelCatalog, modelID string) bool {
+	if m, err := cat.FindModel("amazon-bedrock", modelID); err == nil {
+		return m.PriceCacheWrite > 0
+	}
 	modelID = bedrockStripGeoPrefix(modelID)
 	if m, err := cat.FindModel("amazon-bedrock", modelID); err == nil {
 		return m.PriceCacheWrite > 0
@@ -525,6 +538,18 @@ func (c *bedrockClient) Stream(ctx context.Context, req Request) (<-chan Event, 
 	httpReq.Header.Set("accept", "application/vnd.amazon.eventstream")
 	if c.bearerToken != "" {
 		httpReq.Header.Set("authorization", "Bearer "+c.bearerToken)
+	} else if c.credentials != nil {
+		keys, err := c.credentials(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("bedrock: signing credentials: %w", err)
+		}
+		if keys.AccessKeyID == "" || keys.SecretAccessKey == "" {
+			return nil, fmt.Errorf("bedrock: signing credential source returned incomplete keys")
+		}
+		creds := &bedrockSigV4Creds{keys.AccessKeyID, keys.SecretAccessKey, keys.SessionToken}
+		if err := signSigV4(httpReq, body, "bedrock", c.region, creds, time.Now().UTC()); err != nil {
+			return nil, fmt.Errorf("bedrock: sigv4 sign: %w", err)
+		}
 	} else if c.sigv4 != nil {
 		if err := signSigV4(httpReq, body, "bedrock", c.region, c.sigv4, time.Now().UTC()); err != nil {
 			return nil, fmt.Errorf("bedrock: sigv4 sign: %w", err)
@@ -943,26 +968,28 @@ func signSigV4(req *http.Request, payload []byte, service, region string, creds 
 
 	// Canonical query string: keys sorted by name, each key and value
 	// URI-escaped (RFC 3986).
-	q := req.URL.Query()
-	var qKeys []string
-	for k := range q {
-		qKeys = append(qKeys, k)
-	}
-	sort.Strings(qKeys)
-	var canonQuery strings.Builder
-	for i, k := range qKeys {
-		if i > 0 {
-			canonQuery.WriteByte('&')
+	type queryPair struct{ key, value string }
+	var pairs []queryPair
+	for k, vs := range req.URL.Query() {
+		for _, v := range vs {
+			pairs = append(pairs, queryPair{sigV4EncodeSegment(k), sigV4EncodeSegment(v)})
 		}
-		canonQuery.WriteString(url.QueryEscape(k))
-		canonQuery.WriteByte('=')
-		canonQuery.WriteString(url.QueryEscape(q.Get(k)))
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].key != pairs[j].key {
+			return pairs[i].key < pairs[j].key
+		}
+		return pairs[i].value < pairs[j].value
+	})
+	var queryPairs []string
+	for _, p := range pairs {
+		queryPairs = append(queryPairs, p.key+"="+p.value)
 	}
 
 	// Canonical request.
 	canonReq := req.Method + "\n" +
 		canonicalSigV4Path(req.URL.Path) + "\n" +
-		canonQuery.String() + "\n" +
+		strings.Join(queryPairs, "&") + "\n" +
 		canonHdrs.String() + "\n" +
 		signedHeaders + "\n" +
 		payloadHash

@@ -68,6 +68,12 @@ func TalkootEnabled() bool {
 	return cfg.TalkootEnabled != nil && *cfg.TalkootEnabled
 }
 
+// AWSCLIProfileEnabled reports user consent for the Bedrock CLI adapter.
+func AWSCLIProfileEnabled() bool {
+	cfg, err := LoadConfig()
+	return err == nil && cfg.Providers["amazon-bedrock"].AWSCLICredentials
+}
+
 // DefaultSwarmRetentionDays is how long a finished swarm agent's record stays
 // in the live tree when swarm_retention_days is not set.
 //

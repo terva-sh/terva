@@ -88,9 +88,8 @@ type Config struct {
 	// id ("openai-codex"). It TUNES a provider terva already knows, where
 	// Endpoints below REGISTERS one that it does not.
 	//
-	// User layer only, and deliberately absent from ProjectConfig: the one
-	// setting here changes how terva identifies itself to a third party, and a
-	// cloned repository must not make that choice for the operator.
+	// User layer only. These settings include client identity and credential
+	// helper execution, which a cloned repository must not select.
 	Providers map[string]ProviderSettings `json:"providers,omitempty"`
 
 	// Endpoints are user-defined backends, each registered as its own provider
@@ -558,6 +557,10 @@ type Config struct {
 // ProviderSettings are the operator's settings for one provider (the provider
 // id is the map key in Config.Providers).
 type ProviderSettings struct {
+	// AWSCLICredentials lets Bedrock resolve AWS_PROFILE through the AWS CLI.
+	// It is off by default. The CLI may execute the profile's credential_process.
+	AWSCLICredentials bool `json:"aws_cli_credentials,omitempty"`
+
 	// ClientIdentity selects the name terva presents on this provider's wire.
 	// Empty is the default and means terva identifies itself. "native" means
 	// terva presents that provider's own first-party CLI identity instead.
@@ -610,6 +613,9 @@ type EndpointConfig struct {
 	BaseURL       string `json:"baseUrl"`                 // required, e.g. http://box:8000/v1
 	APIKeyEnv     string `json:"apiKeyEnv,omitempty"`     // env var holding the key (optional)
 	ContextWindow int    `json:"contextWindow,omitempty"` // default ctx for models lacking a hint
+	// ModelDiscovery selects read-only native metadata: "lmstudio" or "llamacpp".
+	// Empty selects the generic model list. This does not change the inference wire.
+	ModelDiscovery string `json:"modelDiscovery,omitempty"`
 
 	// API names the wire this endpoint speaks: "openai" (Chat Completions) or
 	// "anthropic" (Messages). Empty means "openai".

@@ -17,12 +17,21 @@ AzureOpenAIConfig.Hint	field unstable	string
 BedrockConfig	type unstable	struct
 BedrockConfig.AccessKeyID	field unstable	string
 BedrockConfig.BearerToken	field unstable	string
+BedrockConfig.Credentials	field unstable	BedrockCredentialSource
 BedrockConfig.GoString	method unstable	func() string
+BedrockConfig.HasSigningCredentials	method unstable	func() bool
 BedrockConfig.Hint	field unstable	string
 BedrockConfig.Region	field unstable	string
 BedrockConfig.SecretAccessKey	field unstable	string
 BedrockConfig.SessionToken	field unstable	string
 BedrockConfig.String	method unstable	func() string
+BedrockCredentialSource	type unstable	func(context.Context) (BedrockSigningCredentials, error)
+BedrockSigningCredentials	type unstable	struct
+BedrockSigningCredentials.AccessKeyID	field unstable	string
+BedrockSigningCredentials.GoString	method unstable	func() string
+BedrockSigningCredentials.SecretAccessKey	field unstable	string
+BedrockSigningCredentials.SessionToken	field unstable	string
+BedrockSigningCredentials.String	method unstable	func() string
 Builtin	func	func() ModelCatalog
 CapImageInput	const	Capability
 CapImageOutput	const	Capability
@@ -70,7 +79,10 @@ Credits.Used	field	float64
 DefaultModel	var unstable	Model
 DiscoverAnthropic	func unstable	func(ctx context.Context, apiKey, baseURL string) ([]Model, error)
 DiscoverAnthropicCompatible	func unstable	func(ctx context.Context, baseURL, key string, defaultCtx int, o AnthropicCompatOptions, known []Model) ([]Model, error)
+DiscoverBedrock	func unstable	func(ctx context.Context, cfg BedrockConfig, baseURL string, known ModelCatalog) ([]Model, error)
+DiscoverDeepSeek	func unstable	func(ctx context.Context, apiKey, baseURL string) ([]Model, error)
 DiscoverGoogle	func unstable	func(ctx context.Context, apiKey, baseURL string) ([]Model, error)
+DiscoverLocalCompatible	func unstable	func(ctx context.Context, baseURL, key, kind string, defaultCtx int, known []Model) ([]Model, error)
 DiscoverOpenAI	func unstable	func(ctx context.Context, apiKey, baseURL string) ([]Model, error)
 DiscoverOpenAICompatible	func unstable	func(ctx context.Context, baseURL, key string, defaultCtx int, known []Model) ([]Model, error)
 DiscoverOpenRouter	func unstable	func(ctx context.Context, baseURL string) ([]Model, error)
@@ -154,6 +166,12 @@ Model.Speculative	field	bool
 Model.Synthetic	field	bool
 Model.Temperature	field	*float32
 ModelCache	type unstable	struct
+ModelCache.BedrockDiagnostic	field unstable	string
+ModelCache.BedrockFetchedAt	field unstable	time.Time
+ModelCache.BedrockRegion	field unstable	string
+ModelCache.BedrockRetryAt	field unstable	time.Time
+ModelCache.BedrockScope	field unstable	string
+ModelCache.BedrockSigning	field unstable	bool
 ModelCache.Endpoints	field unstable	string
 ModelCache.FetchedAt	field unstable	time.Time
 ModelCache.IsCurrent	method unstable	func() bool

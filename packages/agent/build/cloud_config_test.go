@@ -29,6 +29,7 @@ func clearCloudEnv(t *testing.T) string {
 		t.Setenv(k, "")
 	}
 	home := testsupport.TempDir(t)
+	t.Setenv("TERVA_HOME", filepath.Join(home, "terva"))
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
@@ -82,6 +83,38 @@ func TestBedrockConfigResolvesInTheOldOrder(t *testing.T) {
 	t.Setenv("AWS_REGION", "eu-central-1")
 	if cfg := bedrockConfig(""); cfg.Region != "eu-central-1" {
 		t.Errorf("region = %q", cfg.Region)
+	}
+}
+
+func TestBedrockDiscoveryConfigSeparatesSigningFromBearer(t *testing.T) {
+	home := clearCloudEnv(t)
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "bearer")
+	if cfg := BedrockDiscoveryConfig(); cfg.AccessKeyID != "" || cfg.BearerToken != "" || !strings.Contains(cfg.Hint, "bearer") {
+		t.Fatalf("bearer-only discovery: %v", cfg)
+	}
+	writeFile(t, filepath.Join(home, ".aws", "credentials"), "[work]\naws_access_key_id=PROFILEAK\naws_secret_access_key=PROFILESK\naws_session_token=PROFILEST\n")
+	t.Setenv("AWS_PROFILE", "work")
+	if cfg := BedrockDiscoveryConfig(); cfg.AccessKeyID != "PROFILEAK" || cfg.SessionToken != "PROFILEST" || cfg.BearerToken != "" {
+		t.Fatalf("profile with bearer: %v", cfg)
+	}
+	t.Setenv("AWS_ACCESS_KEY_ID", "ENVAK")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "ENVSK")
+	t.Setenv("AWS_SESSION_TOKEN", "ENVST")
+	t.Setenv("AWS_DEFAULT_REGION", "eu-west-1")
+	if cfg := BedrockDiscoveryConfig(); cfg.AccessKeyID != "ENVAK" || cfg.SessionToken != "ENVST" || cfg.Region != "eu-west-1" {
+		t.Fatalf("environment with bearer: %v", cfg)
+	}
+	if cfg := bedrockConfig("stored-bearer"); cfg.BearerToken != "stored-bearer" || cfg.AccessKeyID != "" {
+		t.Fatal("discovery changed inference precedence")
+	}
+	t.Setenv("AWS_REGION", "us-west-2")
+	if BedrockRegion() != "us-west-2" {
+		t.Fatal("AWS_REGION must precede AWS_DEFAULT_REGION")
+	}
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_PROFILE", "missing")
+	if cfg := BedrockDiscoveryConfig(); cfg.AccessKeyID != "" || !strings.Contains(cfg.Hint, "AWS_PROFILE") || strings.Contains(cfg.Hint, "PROFILESK") {
+		t.Fatalf("missing profile: %v", cfg)
 	}
 }
 

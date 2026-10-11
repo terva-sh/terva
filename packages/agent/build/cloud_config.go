@@ -1,12 +1,17 @@
 package build
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
+	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/provider"
 )
 
@@ -26,7 +31,8 @@ import (
 //  2. AWS_BEARER_TOKEN_BEDROCK: the bearer route.
 //  3. AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (+ optional
 //     AWS_SESSION_TOKEN): SigV4.
-//  4. AWS_PROFILE: that profile's keys from ~/.aws/credentials, SigV4.
+//  4. The user-enabled AWS CLI adapter resolves the complete AWS_PROFILE.
+//  5. Otherwise AWS_PROFILE reads static keys from ~/.aws/credentials.
 //
 // The region is AWS_REGION, then AWS_DEFAULT_REGION; the wire defaults it.
 func bedrockConfig(credential string) provider.BedrockConfig {
@@ -45,8 +51,62 @@ func bedrockConfig(credential string) provider.BedrockConfig {
 		cfg.BearerToken = token
 		return cfg
 	}
+	return bedrockSigningConfig(cfg)
+}
+
+// BedrockRegion resolves the region shared by inference and discovery.
+func BedrockRegion() string {
+	if region := os.Getenv("AWS_REGION"); region != "" {
+		return region
+	}
+	if region := os.Getenv("AWS_DEFAULT_REGION"); region != "" {
+		return region
+	}
+	return "us-east-1"
+}
+
+// BedrockDiscoveryConfig resolves SigV4 keys independently of bearer inference.
+// Hint describes a missing capability without exposing profile contents.
+func BedrockDiscoveryConfig() provider.BedrockConfig {
+	cfg := bedrockSigningConfig(provider.BedrockConfig{
+		Region: BedrockRegion(),
+		Hint:   "Bedrock discovery needs AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or static keys in AWS_PROFILE; bearer tokens support inference only",
+	})
+	if cfg.Credentials != nil {
+		cfg.Hint = "Bedrock discovery uses AWS CLI credentials; check AWS_PROFILE and sign in with the AWS CLI if needed"
+	} else if cfg.AccessKeyID == "" && strings.TrimSpace(os.Getenv("AWS_PROFILE")) != "" {
+		cfg.Hint = "Bedrock discovery could not read static keys from AWS_PROFILE; enable the AWS CLI user setting for SSO or role profiles"
+	}
+	return cfg
+}
+
+// BedrockDiscoveryScope separates named profiles and signing adapters.
+// It contains no credential values. Account changes still need a forced refresh.
+func BedrockDiscoveryScope() string {
+	if os.Getenv("AWS_ACCESS_KEY_ID") != "" && os.Getenv("AWS_SECRET_ACCESS_KEY") != "" {
+		return "environment"
+	}
+	if config.AWSCLIProfileEnabled() {
+		return "cli:" + os.Getenv("AWS_PROFILE")
+	}
+	if profile := os.Getenv("AWS_PROFILE"); profile != "" {
+		return "static:" + profile
+	}
+	return "none"
+}
+
+func bedrockSigningConfig(cfg provider.BedrockConfig) provider.BedrockConfig {
 	if ak, sk := os.Getenv("AWS_ACCESS_KEY_ID"), os.Getenv("AWS_SECRET_ACCESS_KEY"); ak != "" && sk != "" {
 		cfg.AccessKeyID, cfg.SecretAccessKey, cfg.SessionToken = ak, sk, os.Getenv("AWS_SESSION_TOKEN")
+		return cfg
+	}
+	if config.AWSCLIProfileEnabled() {
+		profile := os.Getenv("AWS_PROFILE")
+		if strings.TrimSpace(profile) == "" {
+			cfg.Hint = "AWS CLI credentials need an explicit AWS_PROFILE"
+			return cfg
+		}
+		cfg.Credentials = awsProfileCredentials(profile)
 		return cfg
 	}
 	if profile := os.Getenv("AWS_PROFILE"); profile != "" {
@@ -55,6 +115,29 @@ func bedrockConfig(credential string) provider.BedrockConfig {
 		}
 	}
 	return cfg
+}
+
+var awsProfileSources = struct {
+	sync.Mutex
+	sources map[string]provider.BedrockCredentialSource
+}{sources: make(map[string]provider.BedrockCredentialSource)}
+
+func awsProfileCredentials(profile string) provider.BedrockCredentialSource {
+	home, _ := os.UserHomeDir()
+	scope := strings.Join([]string{profile, home, os.Getenv("AWS_CONFIG_FILE"), os.Getenv("AWS_SHARED_CREDENTIALS_FILE")}, "\x00")
+	awsProfileSources.Lock()
+	source := awsProfileSources.sources[scope]
+	if source == nil {
+		source = auth.NewAWSProfileSource(profile)
+		awsProfileSources.sources[scope] = source
+	}
+	awsProfileSources.Unlock()
+	return func(ctx context.Context) (provider.BedrockSigningCredentials, error) {
+		if !config.AWSCLIProfileEnabled() {
+			return provider.BedrockSigningCredentials{}, errors.New("AWS CLI credentials are disabled; enable the Bedrock user setting or start a session with another credential")
+		}
+		return source(ctx)
+	}
 }
 
 // awsKeys is one profile's keys from ~/.aws/credentials.

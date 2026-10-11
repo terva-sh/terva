@@ -3,6 +3,7 @@ package build
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"terva.sh/terva/packages/agent/config"
 	"terva.sh/terva/packages/auth"
@@ -92,7 +93,7 @@ func ResolveCredentialFull(provider, explicit string) (cred, method, accountID s
 		}
 	}
 	if provider == "amazon-bedrock" {
-		if os.Getenv("AWS_ACCESS_KEY_ID") != "" || os.Getenv("AWS_PROFILE") != "" ||
+		if os.Getenv("AWS_ACCESS_KEY_ID") != "" || strings.TrimSpace(os.Getenv("AWS_PROFILE")) != "" ||
 			os.Getenv("AWS_BEARER_TOKEN_BEDROCK") != "" {
 			return "<aws>", "apikey", "", nil
 		}

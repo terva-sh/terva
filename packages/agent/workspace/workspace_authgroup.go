@@ -611,6 +611,11 @@ func (w *Workspace) saveEndpoint(ctx context.Context, name, providerID string, c
 		return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", probeErr.Error())
 	}
 	ep := config.EndpointConfig{BaseURL: ce.BaseURL, ContextWindow: ce.ContextWindow}
+	if !anthropic {
+		if cfg, err := config.LoadConfig(); err == nil {
+			ep.ModelDiscovery = cfg.Endpoints[name].ModelDiscovery
+		}
+	}
 	if anthropic {
 		ep.API = config.EndpointAPIAnthropic
 		ep.AnthropicVersion = ce.APIVersion

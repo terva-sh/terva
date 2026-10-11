@@ -133,7 +133,7 @@ func adoptEndpointModels(id string, ep config.EndpointConfig, promoteDefault fun
 	// the endpoint's own id when the server does want one.
 	key, _, _ := build.ResolveCredential(id, "")
 	live, err := discoverCompatModels(ctx, id, ep.BaseURL, key, defCtx,
-		ep.IsAnthropic(), build.EndpointAnthropicOptions(ep))
+		ep.IsAnthropic(), build.EndpointAnthropicOptions(ep), ep.ModelDiscovery)
 	if err != nil || len(live) == 0 {
 		return
 	}

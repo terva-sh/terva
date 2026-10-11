@@ -20,9 +20,76 @@ terva's built-in provider catalog includes:
 `--list-models` or the `/model` picker shows the full catalog across all built-in providers. The sources:
 
 - **User**: your `models.json` entries, which take precedence over everything below.
-- **Live**: IDs discovered from `GET /v1/models` using your stored API key (cached for 6h in `$TERVA_HOME/models-cache.json`, refreshed in the background on startup; entries loaded from that cache show `cache`).
+- **Live**: IDs discovered from provider model-list APIs, including Bedrock foundation models and inference profiles (cached for 6h in `$TERVA_HOME/models-cache.json`, refreshed in the background on startup).
 - **Catalog**: models baked into terva, covering Claude, GPT/Codex, Gemini/Gemma, Kimi/Moonshot, DeepSeek, Groq-hosted Llama/Gemma/Compound, OpenRouter-routed models, Bedrock model ids, Vertex model ids, Azure OpenAI deployments, Copilot models, and other provider-specific catalog entries.
 - **Speculative**: IDs that appear in the upstream generator but aren't live on the public API yet. They'll 404 today and start working the moment the provider ships them.
+
+### Amazon Bedrock discovery
+
+Bedrock discovery uses SigV4 credentials to call `ListFoundationModels` and
+`ListInferenceProfiles`. Set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`,
+with `AWS_SESSION_TOKEN` for temporary credentials. Alternatively, set
+`AWS_PROFILE` to a static-key profile in `~/.aws/credentials`. Enable the
+user-only AWS CLI setting for SSO or role profiles. Discovery uses
+environment keys before profile keys.
+
+Discovery runs when the existing credential resolver makes Bedrock available,
+including AWS environment keys, an explicit static profile, or the user-enabled
+[AWS CLI profile adapter](providers.md#aws-sso-and-role-profiles). This applies
+even when your selected model uses another provider.
+
+Inference can still use `AWS_BEARER_TOKEN_BEDROCK` or a stored bearer token.
+Discovery resolves signing keys separately, so a bearer token does not hide
+available signing keys or an enabled profile source. Discovery and inference
+share the adapter's memory cache. Each discovery request resolves credentials
+again, so a later page can use refreshed keys. With only a bearer token,
+terva keeps the catalog and compatible cached results, and reports the missing discovery credentials on
+stderr. The signing identity needs `bedrock:ListFoundationModels` and
+`bedrock:ListInferenceProfiles`. Those permissions do not grant invocation
+access to the bearer identity or the signing identity.
+
+The live list includes text-output, on-demand foundation models and active
+system or application inference profiles. Profiles use the IDs AWS returns.
+An entry in this list does not prove model entitlement, Converse support,
+or direct invocation access. Some foundation models require an inference
+profile for invocation.
+
+`AWS_REGION` selects the discovery and runtime region, followed by
+`AWS_DEFAULT_REGION`, then `us-east-1`. Discovered entries use that region's
+runtime endpoint. A region, named-profile, or signing-adapter change invalidates
+cached Bedrock entries before startup loads them. Changing accounts within
+the same profile or replacing environment credentials requires a forced
+refresh, such as the refresh after `/login`, or removal of the model cache.
+Adding or removing signing keys also invalidates the cache's freshness.
+
+If a list call or a later profile page fails, terva reports a diagnostic and
+keeps partial results plus compatible cached Bedrock entries. Bedrock retries
+after a five-minute delay, independently of other providers' cache freshness.
+A forced refresh bypasses that delay. The TUI shows diagnostics as notifications;
+other hosts report them on stderr. Identical notices are suppressed until a
+successful discovery, a forced refresh, or a region, profile, or signing-state change.
+A successful refresh replaces the previous
+live Bedrock list; the built-in catalog remains an offline fallback. Retained
+offline results for other providers remain stale and eligible for refresh.
+
+Exact catalog IDs retain their verified limits and prices. A new profile
+inherits those values when all its model ARNs identify one exact foundation
+model. Unknown models and mixed-model profiles keep unknown limits and prices.
+The normal runtime defaults still apply where a request needs a token limit.
+Your `models.json` overrides take precedence, including explicit endpoints.
+
+### Direct DeepSeek discovery
+
+The direct DeepSeek provider lists account-visible IDs from its `/models` API.
+New IDs can appear in the picker without a catalog update or a manual model list.
+Discovery uses your resolved DeepSeek API key and the existing six-hour cache.
+The refresh after `/login` bypasses that cache.
+
+Known IDs keep their catalog limits, prices, and reasoning metadata.
+New IDs have unknown limits and prices; normal runtime defaults still apply.
+Discovery treats unknown IDs as text-only until you supply capability overrides.
+Your `models.json` entries take precedence over discovery.
+An unavailable DeepSeek list keeps cached IDs, even when another endpoint refreshes successfully.
 
 ## Choosing and sizing a model
 
@@ -658,8 +725,9 @@ key is kept are all in
 This section is about the two things that are properties of the **model** rather
 than of the server: its size, and which reasoning efforts it accepts.
 
-Discovery names a model without describing it, which is where both problems come
-from.
+Generic discovery can name a model without describing its limits.
+Named LM Studio and llama.cpp endpoints can opt into native runtime metadata;
+see [native local model metadata](providers.md#native-local-model-metadata).
 
 **Context size and max response tokens.** The standard `/v1/models` response only lists model ids, so terva can't always know a model's limits. It reads non-standard hints when the server provides them (vLLM's `max_model_len`, some gateways' `context_length`), and otherwise uses the default context window you set at login. For exact per-model values, `maxTokens` included since the login form does not capture it, pin the model in `models.json`:
 

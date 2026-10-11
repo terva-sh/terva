@@ -172,6 +172,13 @@ func TestSaveEndpointTwiceIsAnEdit(t *testing.T) {
 	if err := w.saveEndpoint(context.Background(), "edited-box", provider.OpenAICompatProvider, auth.CompatEndpoint{BaseURL: srv.URL + "/v1", ContextWindow: 0}, ""); err != nil {
 		t.Fatalf("first save: %v", err)
 	}
+	if err := config.MutateConfig(func(c *config.Config) {
+		ep := c.Endpoints["edited-box"]
+		ep.ModelDiscovery = "lmstudio"
+		c.Endpoints["edited-box"] = ep
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := w.saveEndpoint(context.Background(), "edited-box", provider.OpenAICompatProvider, auth.CompatEndpoint{BaseURL: srv.URL + "/v1", ContextWindow: 65536}, ""); err != nil {
 		t.Fatalf("re-saving the same endpoint should be an edit, not a collision: %v", err)
 	}
@@ -186,6 +193,9 @@ func TestSaveEndpointTwiceIsAnEdit(t *testing.T) {
 		t.Errorf("the endpoint appears %d times in the provider list, want exactly 1", n)
 	}
 	c, _ := config.LoadConfig()
+	if c.Endpoints["edited-box"].ModelDiscovery != "lmstudio" {
+		t.Error("reconnecting discarded native discovery")
+	}
 	if got := c.Endpoints["edited-box"].ContextWindow; got != 65536 {
 		t.Errorf("context window = %d, want the edited 65536", got)
 	}

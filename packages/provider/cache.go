@@ -15,8 +15,19 @@ type ModelCache struct {
 	// OpenAI-compatible endpoints at write time. The discoverer re-runs when
 	// it changes, so adding/removing an endpoint refreshes without waiting out
 	// the six-hour cache TTL. (Computed by the agent layer; the cache just carries it.)
-	Endpoints string  `json:"endpoints,omitempty"`
-	Models    []Model `json:"models"`
+	Endpoints string `json:"endpoints,omitempty"`
+	// BedrockRegion scopes discovered IDs and runtime URLs to one AWS region.
+	BedrockRegion string `json:"bedrock_region,omitempty"`
+	// BedrockSigning forces discovery when signing keys become available.
+	BedrockSigning bool `json:"bedrock_signing,omitempty"`
+	// BedrockScope separates profiles and signing adapters without secret values.
+	BedrockScope string `json:"bedrock_scope,omitempty"`
+	// Bedrock freshness does not control retries for other discovery sources.
+	BedrockFetchedAt time.Time `json:"bedrock_fetched_at,omitempty"`
+	BedrockRetryAt   time.Time `json:"bedrock_retry_at,omitempty"`
+	// BedrockDiagnostic holds sanitized text to suppress repeated notices.
+	BedrockDiagnostic string  `json:"bedrock_diagnostic,omitempty"`
+	Models            []Model `json:"models"`
 }
 
 // cacheTTL is how long a discovered list is considered fresh.
@@ -32,9 +43,11 @@ const cacheTTL = 6 * time.Hour
 //	v3: added user-defined endpoint (config.json "endpoints") discovery.
 //	v4: openai-compatible discovery asserts image-input per model id
 //	    (text-only by default), so cached entries re-resolve their caps.
+//	v5: added region-scoped Bedrock foundation and inference-profile discovery.
+//	v6: separated profile and signing-adapter scopes for refreshable credentials.
 //
 // Unstable: terva's on-disk file format carries no promise before 1.0.
-const ModelCacheVersion = 4
+const ModelCacheVersion = 6
 
 // ParseModelCache decodes a model cache as the file holds it. A model with no
 // Source is marked "cache". Reading and writing the file is the host's (terva's
@@ -69,9 +82,9 @@ func (c ModelCache) IsFresh() bool {
 	return time.Since(c.FetchedAt) < cacheTTL
 }
 
-// IsCurrent reports whether the cache is fresh AND written by a binary with the
-// same discovery set (ModelCacheVersion). A version mismatch forces
-// re-discovery so newly-added providers appear without waiting out the six-hour TTL.
+// IsCurrent checks the shared list's freshness and discovery version.
+// Hosts check Bedrock scope and freshness separately. A version mismatch
+// forces discovery without waiting for the six-hour TTL.
 func (c ModelCache) IsCurrent() bool {
 	return c.IsFresh() && c.Version == ModelCacheVersion
 }

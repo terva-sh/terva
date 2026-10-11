@@ -397,17 +397,13 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 			Note:        i18n.T("applies to the next convening"),
 		})
 	}
-	// Provider-scoped settings. The group is flat and each item names its
-	// provider, because there is one such setting today; a provider with several
-	// would earn a descent, and inventing that navigation for one row costs a
-	// level of depth for nothing.
-	//
-	// The row renders on every session, not only a codex one. It governs one
-	// provider, so an off-provider session could argue for hiding it, but hiding
-	// it makes the setting findable only by already running the provider it
-	// configures. The note carries the scope instead, which is the honest half
-	// of what hiding was buying, and the write works from anywhere: a user on
-	// anthropic can set the identity their next codex session starts with.
+	// Provider settings stay visible across sessions. Each row names its scope.
+	items = append(items, ctrlproto.SettingItem{
+		Key: "bedrock_aws_cli_credentials", Group: "provider", Label: i18n.T("Bedrock AWS CLI credentials"), Type: "bool",
+		Value:       boolStr(cfg.Providers["amazon-bedrock"].AWSCLICredentials),
+		Description: i18n.T("Use the AWS CLI to resolve AWS_PROFILE for Bedrock. This supports SSO and role profiles. The CLI may run your profile's credential helper. You must sign in with the AWS CLI yourself."),
+		Note:        i18n.T("user config only; off by default; applies to new sessions; disabling stops future helper calls"),
+	})
 	identityNote := i18n.T("saved in your user config, never read from a project config — applies to new sessions")
 	if prov, _ := s.currentModel(); prov != "openai-codex" {
 		identityNote = i18n.T("openai-codex only — this session runs on another provider, so this changes what your next codex session sends, not this one")
@@ -777,6 +773,20 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
 		}
 		s.ws.BroadcastAll(ctrlproto.LocaleChangedEvent(i18n.ActiveLang()))
+	case "bedrock_aws_cli_credentials":
+		if val != "true" && val != "false" {
+			return ctrlproto.Errorf(ctrlproto.CodeBadRequest, "%s", i18n.T("AWS CLI credentials must be true or false"))
+		}
+		if err := config.MutateConfig(func(c *config.Config) {
+			if c.Providers == nil {
+				c.Providers = map[string]config.ProviderSettings{}
+			}
+			p := c.Providers["amazon-bedrock"]
+			p.AWSCLICredentials = val == "true"
+			c.Providers["amazon-bedrock"] = p
+		}); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
 	case "codex_client_identity":
 		// Validated against the provider's own vocabulary rather than a literal
 		// list here, so the wire cannot become a header-injection point: an

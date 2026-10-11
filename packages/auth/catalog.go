@@ -62,6 +62,8 @@ func EnvProviderInfo(provider string) (EnvProvider, bool) {
 				"For Bedrock API keys, set:",
 				"  AWS_BEARER_TOKEN_BEDROCK=...",
 				"  AWS_REGION=us-east-1",
+				"For AWS SSO, sign in with the AWS CLI and set AWS_PROFILE.",
+				"Enable Bedrock AWS CLI credentials in /settings.",
 			},
 			DocPath: docs,
 		}, true

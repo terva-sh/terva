@@ -344,8 +344,72 @@ export AWS_BEARER_TOKEN_BEDROCK=bedrock-api-key-...
 export AWS_REGION=us-east-1
 ```
 
-ECS task roles, IRSA, and other AWS SDK credential-chain sources are also
-supported.
+Without an opt-in, `AWS_PROFILE` reads static keys from `~/.aws/credentials`.
+SSO and role profiles need the AWS CLI adapter below.
+
+#### AWS SSO and role profiles
+
+Install AWS CLI v2 in an absolute directory on `PATH`. Configure a named
+profile and sign in yourself:
+
+```bash
+aws configure sso --profile work
+aws sso login --profile work
+export AWS_PROFILE=work
+export AWS_REGION=us-east-1
+```
+
+Enable **Bedrock AWS CLI credentials** under **Provider** in `/settings`.
+The same setting appears in the web settings pane. Alternatively, add this
+to your user `config.json`:
+
+```json
+{
+  "providers": {
+    "amazon-bedrock": { "aws_cli_credentials": true }
+  }
+}
+```
+
+The setting is off by default. A project config cannot enable it.
+It applies to model discovery and new Bedrock inference sessions.
+Disabling it stops future helper calls
+from clients that already use the adapter.
+
+The adapter runs `aws configure export-credentials --profile work --format
+process` with prompts and paging disabled. The AWS CLI resolves SSO sessions,
+assumed roles, source profiles, web identity, and `credential_process` according
+to your AWS configuration. A profile helper can execute commands outside
+terva's tool permissions. Enable this setting only for AWS profiles you trust.
+The CLI and its helpers inherit terva's process environment, which can include
+other providers' environment credentials.
+Direct container-role and instance-metadata discovery are outside this adapter.
+Profiles with `credential_source = Ec2InstanceMetadata` are also unsupported,
+because the adapter disables EC2 metadata access.
+
+Inference keeps its current precedence: an explicit or stored bearer token,
+then `AWS_BEARER_TOKEN_BEDROCK`, then environment signing keys. With none of
+those, the enabled adapter resolves the complete named profile. It takes
+precedence over that profile's static credentials-file entry, so a role
+profile does not accidentally use its source identity. With the adapter off,
+terva retains static-profile behavior. Discovery resolves signing credentials
+separately from inference bearer tokens. It uses environment signing keys,
+then the enabled profile adapter, then static profile keys when the adapter is off.
+
+Credentials stay in memory. Discovery and inference share the profile source.
+Concurrent requests share a refresh. The adapter
+refreshes before expiry and rechecks non-expiring keys after five minutes.
+If a refresh fails, requests return an error instead of reusing older keys.
+Helper failures, including internal timeouts, have a five-second retry delay.
+Each refresh has a ten-second deadline and accepts at most 64 KiB of output.
+Helper failures suppress stdout and stderr. Check your profile, CLI version,
+and login if resolution fails. Terva never starts `aws sso login` for you.
+
+`AWS_REGION`, then `AWS_DEFAULT_REGION`, then `us-east-1` selects the Bedrock
+region. The adapter does not use the profile's region setting. Set the region
+explicitly when you use a profile from another region. The CLI runs in your
+home directory, so use absolute paths for AWS config overrides and profile
+helpers that depend on a specific location.
 
 Example:
 
@@ -517,6 +581,48 @@ launch.
 The web panel's **Providers** pane lists your named endpoints and can forget one
 (its definition *and* its key; a sign-out would only clear the key and leave the
 server configured).
+
+#### Native local model metadata
+
+Set `modelDiscovery` on a named OpenAI endpoint to select its native metadata API:
+
+```json
+{
+  "endpoints": {
+    "studio": {
+      "baseUrl": "http://localhost:1234/v1",
+      "modelDiscovery": "lmstudio"
+    },
+    "llama": {
+      "baseUrl": "http://localhost:8080/v1",
+      "modelDiscovery": "llamacpp"
+    }
+  }
+}
+```
+
+LM Studio discovery reads loaded instances from `/api/v1/models`.
+llama.cpp discovery reads loaded router models from `/models`.
+A direct llama.cpp server can also report its active context through `/props`.
+These requests use your endpoint key and never load, unload, or download a model.
+The `/props` request disables automatic loading.
+
+Runtime context limits take precedence over the endpoint's default window.
+Without a runtime limit, discovery retains matching catalog limits before using the endpoint default.
+Known output limits remain capped by the active context window.
+Discovery does not use a model's training limit as its active context size.
+Your per-model `models.json` overrides still win.
+Native requests have short deadlines and bounded responses.
+llama.cpp probes at most sixteen models, four at a time, with a 250 ms deadline per probe.
+Models without runtime metadata use the sizing fallback above.
+Unsupported or unavailable native APIs fall back to the generic `/v1/models` list.
+An absent or unknown `modelDiscovery` value uses generic discovery.
+The setting does not change the inference protocol or create a new provider identity.
+
+Native discovery uses the existing endpoint cache, with a six-hour lifetime.
+The cache captures only models loaded when discovery runs.
+An empty or partial snapshot stays cached even after other models finish loading.
+Reconnect the endpoint with `/login` to force discovery after changing its loaded models.
 
 **Leaving the name empty** puts the endpoint in the single shared
 `openai-compatible` slot in `auth.json`, which holds exactly one: logging in
@@ -786,7 +892,8 @@ For each request, terva checks credentials in this order:
 3. `$TERVA_HOME/auth.json`.
 4. Custom provider credentials from `$TERVA_HOME/models.json`, when configured.
 
-Bedrock then uses the AWS SDK credential chain for the actual request.
+Bedrock uses its bearer or SigV4 adapter for the actual request.
+The [AWS SSO adapter](#aws-sso-and-role-profiles) is an explicit user opt-in.
 
 ## The /login flow in detail
 

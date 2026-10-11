@@ -1,6 +1,9 @@
 package provider
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // The four providers whose credentials or endpoint are not a single API key
 // take them as a Config value. The wire reads no environment variable and no
@@ -40,7 +43,40 @@ type BedrockConfig struct {
 	SecretAccessKey string `json:"-"`
 	SessionToken    string `json:"-"`
 
+	// Credentials supplies fresh signing keys per request. BearerToken wins;
+	// when Credentials is set, it takes precedence over static signing keys.
+	Credentials BedrockCredentialSource `json:"-"`
+
 	Hint string
+}
+
+// BedrockSigningCredentials holds one set of SigV4 keys from the host.
+// Secret fields do not appear in JSON or formatted values.
+//
+// Unstable: a vendor's credentials carry no promise before 1.0.
+type BedrockSigningCredentials struct {
+	AccessKeyID     string `json:"-"`
+	SecretAccessKey string `json:"-"`
+	SessionToken    string `json:"-"`
+}
+
+func (c BedrockSigningCredentials) String() string {
+	return fmt.Sprintf("BedrockSigningCredentials{AccessKeyID:%q SecretAccessKey:%q SessionToken:%q}",
+		redacted(c.AccessKeyID), redacted(c.SecretAccessKey), redacted(c.SessionToken))
+}
+
+func (c BedrockSigningCredentials) GoString() string { return "provider." + c.String() }
+
+// BedrockCredentialSource supplies signing keys without provider-side I/O.
+// A source must support concurrent callers and respect cancellation.
+//
+// Unstable: a vendor's credential source carries no promise before 1.0.
+type BedrockCredentialSource func(context.Context) (BedrockSigningCredentials, error)
+
+// HasSigningCredentials reports a source or complete static signing keys.
+// It does not prove that the source can resolve keys or invoke a model.
+func (c BedrockConfig) HasSigningCredentials() bool {
+	return c.Credentials != nil || c.AccessKeyID != "" && c.SecretAccessKey != ""
 }
 
 func (c BedrockConfig) String() string {

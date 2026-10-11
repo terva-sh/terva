@@ -141,7 +141,7 @@ func hasCredential(providerID string, creds auth.Credentials, states map[string]
 		}
 	case "amazon-bedrock":
 		// The AWS chain, mirroring ResolveCredential.
-		if os.Getenv("AWS_ACCESS_KEY_ID") != "" || os.Getenv("AWS_PROFILE") != "" ||
+		if os.Getenv("AWS_ACCESS_KEY_ID") != "" || strings.TrimSpace(os.Getenv("AWS_PROFILE")) != "" ||
 			os.Getenv("AWS_BEARER_TOKEN_BEDROCK") != "" {
 			return true
 		}

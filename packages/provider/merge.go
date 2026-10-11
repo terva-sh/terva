@@ -52,6 +52,11 @@ func mergeCatalog(live []Model) []Model {
 			// exposes these), but mark as live and non-speculative.
 			s.Source = "live"
 			s.Speculative = false
+			// Bedrock discovery routes through the selected AWS region.
+			// User endpoint overrides still apply in the final layer.
+			if l.Provider == "amazon-bedrock" && l.BaseURL != "" {
+				s.BaseURL = l.BaseURL
+			}
 			if l.DisplayName != "" {
 				s.DisplayName = l.DisplayName
 			}
