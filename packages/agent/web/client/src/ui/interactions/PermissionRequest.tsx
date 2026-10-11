@@ -1,6 +1,6 @@
 import { t } from '../../i18n'
 import type { Decision, PermissionRequest as PermissionRequestData } from '../../platform/ctrlproto/types'
-import { truncate } from '../../ui/formatting'
+import { truncate } from '../formatting'
 
 export function PermissionRequest({
   request,

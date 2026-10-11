@@ -155,10 +155,11 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    // Multi-page app: the panel (index.html) and the Stage app (stage.html) are
-    // two entries in ONE client workspace. Rollup chunk-splits the shared
-    // platform/ui/features code, so the apps share bytes in dist rather than
-    // duplicating them. One vitest, one typecheck, one i18n catalog, one embed.
+    // Multi-page app: the panel (index.html), the Stage app (stage.html), and
+    // the Talkoot app (talkoot.html) are entries in ONE client workspace.
+    // Rollup chunk-splits the shared platform/ui/features code, so the apps
+    // share bytes in dist rather than duplicating them. One vitest, one
+    // typecheck, one i18n catalog, one embed.
     //
     // studio.html, the Talkoot Avatar Studio, is left out on purpose. The dev
     // server serves any page in this folder, so `npm run dev` has it, and the
@@ -167,6 +168,7 @@ export default defineConfig({
       input: {
         main: 'index.html',
         stage: 'stage.html',
+        talkoot: 'talkoot.html',
       },
     },
   },

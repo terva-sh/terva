@@ -66,6 +66,24 @@ func (w *Workspace) OpenTalkootRef(ctx context.Context, p ctrlproto.TalkootOpenR
 	return ctrlproto.TalkootRefText{Ref: t.Ref, Text: t.Text, Size: t.Size, Truncated: t.Truncated, Binary: t.Binary}, nil
 }
 
+// TalkootNotes lists the notes the members wrote for the team, newest first.
+// It returns names and sizes only. A person opens a note with talkoot.ref.
+func (w *Workspace) TalkootNotes(ctx context.Context, p ctrlproto.TalkootRef) (ctrlproto.TalkootNotesResult, error) {
+	run, err := w.talkootRunOf(p.ID)
+	if err != nil {
+		return ctrlproto.TalkootNotesResult{}, talkootWireErr(err, ctrlproto.CodeInternal)
+	}
+	notes, err := talkoot.ListNotes(run.dir)
+	if err != nil {
+		return ctrlproto.TalkootNotesResult{}, talkootWireErr(err, ctrlproto.CodeInternal)
+	}
+	out := ctrlproto.TalkootNotesResult{Notes: make([]ctrlproto.TalkootNote, 0, len(notes))}
+	for _, n := range notes {
+		out.Notes = append(out.Notes, ctrlproto.TalkootNote{Ref: n.Ref, Member: n.Member, Name: n.Name, Size: n.Size, At: n.ModTime})
+	}
+	return out, nil
+}
+
 // TalkootWorker reports the swarm agent a worker member is seated on, for
 // the view's event view. The tasks surface cannot serve it: that list is
 // scoped to the session asking, and a talkoot's workers belong to the

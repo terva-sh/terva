@@ -3,7 +3,7 @@
 // table with these before it sends one, and the dev server's Save
 // (scripts/studio-save.ts) checks it again before it writes.
 
-import type { Table } from '../features/talkoot/face/poses'
+import type { Table } from '../ui/talkoot/face/poses'
 
 export const ROW_KEYS = ['slitLen', 'slitRot', 'eyeX', 'eyeY', 'pupilPos', 'pupilScale', 'tilt', 'spread', 'pupilAngle', 'pupilRot']
 const LOOPS = ['focus', 'lookup', 'skeptic']

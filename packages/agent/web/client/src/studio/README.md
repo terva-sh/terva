@@ -20,11 +20,11 @@ Then open `http://localhost:5173/studio.html`.
 ## What it draws with
 
 Every mark on the page is the product's `FaceMark`, from
-`src/features/talkoot/MemberMark.tsx`. The studio provides a `TuningContext`
+`src/ui/talkoot/MemberMark.tsx`. The studio provides a `TuningContext`
 with its live copy of the pose table, so every mark follows an edit as it
 happens. The product draws with the same context and the committed table.
 
-The pose table is `src/features/talkoot/face/poses.json`. It holds every
+The pose table is `src/ui/talkoot/face/poses.json`. It holds every
 number the face uses: the eye's proportions, the poses and their strong forms,
 the beats, the move time, the shut-to-turn limit, and the look (outline and
 edge widths, and the reach of the drift and the reading scan).

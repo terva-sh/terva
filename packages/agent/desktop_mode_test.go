@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -209,5 +210,35 @@ func TestDesktopHomeConflictAndRecovery(t *testing.T) {
 	write()
 	if err := desktopHomeAvailable(); err == nil {
 		t.Fatal("accepted fresh daemon heartbeat")
+	}
+}
+
+func TestDesktopAppStartPage(t *testing.T) {
+	origin := "http://127.0.0.1:9134"
+	if got := desktopLoginURL(origin, desktopApps[""].page); got != origin+"/auth" {
+		t.Fatalf("panel login moved: %s", got)
+	}
+	got := desktopLoginURL(origin, desktopApps["talkoot"].page)
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The native token fill runs only on /auth, so the query must not move it.
+	if u.Path != "/auth" || u.Query().Get("next") != "/talkoot/" {
+		t.Fatalf("talkoot window opens on %s", got)
+	}
+	if desktopApps["talkoot"].title != "terva Talkoot" {
+		t.Fatalf("talkoot window title %q", desktopApps["talkoot"].title)
+	}
+}
+
+func TestDesktopTalkootNeedsTheFlag(t *testing.T) {
+	home := testsupport.TempDir(t)
+	t.Setenv("TERVA_HOME", home)
+	args := build.Args{CWD: home, Desktop: true, DesktopApp: "talkoot", NoExt: true}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := runDesktopMode(ctx, args, "test"); err == nil || !strings.Contains(err.Error(), "talkoot_enabled") {
+		t.Fatalf("desktop opened Talkoot while it is off: %v", err)
 	}
 }

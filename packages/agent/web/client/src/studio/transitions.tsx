@@ -2,9 +2,9 @@
 // and the gallery of every clip the check finds.
 
 import { useEffect, useMemo, useState } from 'preact/hooks'
-import { BODIES, FaceMark, type Face } from '../features/talkoot/MemberMark'
-import { needsShut, maxTurn, type Table } from '../features/talkoot/face/poses'
-import { TuningContext, useTuning } from '../features/talkoot/face/tuning'
+import { BODIES, FaceMark, type Face } from '../ui/talkoot/MemberMark'
+import { needsShut, maxTurn, type Table } from '../ui/talkoot/face/poses'
+import { TuningContext, useTuning } from '../ui/talkoot/face/tuning'
 import agreed from './agreed-clips.json'
 import { clipKey, formId, formsOf, frameAt, glanceRows, parseForm, rowsOfForm, runCheck, summary, type Finding } from './check'
 import { PALETTE } from './data'

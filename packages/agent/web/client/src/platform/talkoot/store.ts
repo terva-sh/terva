@@ -10,7 +10,7 @@ import type {
 
 // The state of one talkoot as the web view holds it: the roster and each
 // member's status, the room lines it has read, and the inbox. Pure functions
-// only. The hook in features/talkoot drives them from the wire.
+// only. The hook in ui/talkoot drives them from the wire.
 //
 // 🔑 Every view of a talkoot is a filter over one room log: the room itself,
 // the coordinator's conversation, and each member's conversation with the
@@ -166,7 +166,8 @@ export function setCards(s: TalkootState, cards: TalkootCard[]): TalkootState {
   return { ...s, cards }
 }
 
-function cardKey(c: TalkootCard): string {
+// cardKey identifies a card, so a view can mark and find it.
+export function cardKey(c: TalkootCard): string {
   return `${c.kind}:${c.session}:${c.id}`
 }
 
@@ -298,6 +299,65 @@ export function roomItems(lines: TalkootLine[]): RoomItem[] {
 // A signal line is for the expression engine, and a person reads its effect
 // on the member's face, not the line.
 const HIDDEN_LINES = new Set(['delivery', 'read', 'seat', 'turn', 'tool_error', 'retry', 'card_open', 'card_close'])
+
+// A ThreadItem is one entry of the Talkoot app's room: a line, a thread of the
+// teammate messages one chain holds, or a card that waits for a person.
+export type ThreadItem =
+  | { kind: 'line'; line: TalkootLine }
+  | { kind: 'thread'; root: string; members: string[]; lines: TalkootLine[] }
+  | { kind: 'card'; card: TalkootCard }
+
+// threadItems lays out the room as a conversation. A person's post, a reply to
+// a person, and every line that is not an envelope stand at the top level.
+// Teammate messages, which no person sent or receives, gather by the chain
+// they belong to, into one thread at the place the chain's first teammate
+// message arrived. A thread of one message is a plain line, because there is
+// nothing to fold.
+//
+// 🔑 The chain, not the pair of members, is the thread. The router starts a
+// chain at a person's post and counts every hop after it, so a chain is the
+// whole piece of work that one post set off. Folding runs of messages between
+// the same two members, as roomItems does, splits that work apart as soon as
+// a third member speaks.
+//
+// Cards go into the conversation at the time they opened. A card with no time
+// goes at the end, where a new card belongs.
+export function threadItems(lines: TalkootLine[], cards: TalkootCard[] = []): ThreadItem[] {
+  const out: ThreadItem[] = []
+  const threads = new Map<string, Extract<ThreadItem, { kind: 'thread' }>>()
+  for (const l of lines) {
+    if (HIDDEN_LINES.has(l.type)) continue
+    const root = teammatePair(l) ? l.envelope?.chain?.root : undefined
+    if (!root) {
+      out.push({ kind: 'line', line: l })
+      continue
+    }
+    const e = l.envelope!
+    let th = threads.get(root)
+    if (!th) {
+      th = { kind: 'thread', root, members: [], lines: [] }
+      threads.set(root, th)
+      out.push(th)
+    }
+    th.lines.push(l)
+    for (const m of [e.from, ...e.to]) if (!th.members.includes(m)) th.members.push(m)
+  }
+  const items: ThreadItem[] = out.map((it) => (it.kind === 'thread' && it.lines.length === 1 ? { kind: 'line', line: it.lines[0] } : it))
+  if (cards.length === 0) return items
+  // Each card goes in front of the first item that is newer than it.
+  const timed = cards.filter((c) => c.at).sort((a, b) => compareTime(a.at!, b.at!))
+  const merged: ThreadItem[] = []
+  let ci = 0
+  for (const it of items) {
+    const at = it.kind === 'line' ? it.line.at : it.kind === 'thread' ? it.lines[0].at : ''
+    while (ci < timed.length && at && compareTime(timed[ci].at!, at) < 0) merged.push({ kind: 'card', card: timed[ci++] })
+    merged.push(it)
+  }
+  while (ci < timed.length) merged.push({ kind: 'card', card: timed[ci++] })
+  for (const c of cards) if (!c.at) merged.push({ kind: 'card', card: c })
+  return merged
+}
+
 
 // unreadFor counts the envelopes from member to the person newer than seenAt,
 // the time of the last line the person saw in that member's view. A time,

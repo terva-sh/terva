@@ -117,6 +117,7 @@ talkoot.get	talkoot
 talkoot.inbox	talkoot
 talkoot.kickoff	talkoot
 talkoot.list	talkoot
+talkoot.notes	talkoot
 talkoot.pause	talkoot
 talkoot.post	talkoot
 talkoot.preview	talkoot

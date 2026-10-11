@@ -8,6 +8,7 @@ import { trackSafeArea } from './ui/safearea'
 import './ui/tokens.css'
 import './ui/ui.css'
 import './styles.css'
+import './ui/talkoot/talkoot.css'
 
 // Freeze the notch insets into --safe-* before first paint so a top bar survives
 // a fixed overlay (see ui/safearea.ts).

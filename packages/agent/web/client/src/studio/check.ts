@@ -3,7 +3,7 @@
 // glance. It is pure. The studio passes inside(), which asks the browser
 // whether a point lies in a body, and a smoke test runs it as a gate.
 
-import { beatStages, maxTurn, needsShut, rowsAt, rowsOf, turnOf, type Rows, type Table } from '../features/talkoot/face/poses'
+import { beatStages, maxTurn, needsShut, rowsAt, rowsOf, turnOf, type Rows, type Table } from '../ui/talkoot/face/poses'
 
 // A FormRef names one form of a pose: the pose, and its intensity.
 export interface FormRef {

@@ -1,13 +1,14 @@
 import { test, expect, type Page } from '@playwright/test'
-import { installMockBackend, panelSessionURL } from './support'
+import { installMockBackend } from './support'
 
-// The Talkoot faces in a real browser: eight members in the sidebar, each in a
-// state that draws its own pose, and the idle CPU those eight cost. happy-dom
+// The Talkoot faces in a real browser: eight members in the Talkoot app's
+// rail, each in a state that draws its own pose, and the idle CPU those eight
+// cost. happy-dom
 // runs no CSS animation, so neither can be checked there.
 //
 // TKT-01M39TTDH3 asks that eight animated marks add no idle CPU anyone can
 // measure. The second test measures it: the main thread's task time while the
-// sidebar sits idle, in alternating windows at full motion and with motion off.
+// rail sits idle, in alternating windows at full motion and with motion off.
 
 const member = (id: string, shape: string, color: string, status: Record<string, unknown>) => ({
   id,
@@ -45,7 +46,6 @@ const POSES: Record<string, string> = {
 
 async function openCrew(page: Page, motion: string) {
   await page.addInitScript((m) => {
-    localStorage.setItem('terva_talkoot_open', '1')
     localStorage.setItem('terva_talkoot_motion', m)
   }, motion)
   await installMockBackend(page, {
@@ -64,13 +64,13 @@ async function openCrew(page: Page, motion: string) {
       return undefined
     },
   })
-  await page.goto(panelSessionURL)
-  await expect(page.locator('.talkoot-member-row .talkoot-mark')).toHaveCount(CREW.members.length)
+  await page.goto('/talkoot.html')
+  await expect(page.locator('.tka-member .talkoot-mark')).toHaveCount(CREW.members.length)
 }
 
-test('each member in the sidebar shows the face of its state beside its label', async ({ page }) => {
+test('each member in the rail shows the face of its state beside its label', async ({ page }) => {
   await openCrew(page, 'full')
-  const rows = page.locator('.talkoot-member-row')
+  const rows = page.locator('.tka-member')
   for (const [i, m] of CREW.members.entries()) {
     const row = rows.nth(i)
     await expect(row.locator('.talkoot-mark')).toHaveAttribute('data-pose', POSES[m.id])
@@ -83,7 +83,7 @@ test('each member in the sidebar shows the face of its state beside its label', 
   const box = await rows.nth(0).locator('.talkoot-mark').boundingBox()
   expect(box?.width).toBe(24)
   const shots = process.env.SMOKE_SHOTS
-  if (shots) await page.locator('.talkoot-side').screenshot({ path: `${shots}/talkoot-faces-sidebar.png` })
+  if (shots) await page.locator('.tka-rail').screenshot({ path: `${shots}/talkoot-faces-sidebar.png` })
 })
 
 test('eight animated faces add no measurable idle CPU', async ({ page, browserName }) => {

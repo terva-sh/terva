@@ -1,12 +1,11 @@
 import { test, expect } from '@playwright/test'
-import { installMockBackend, panelSessionURL } from './support'
+import { installMockBackend } from './support'
 
 // The backend fixture spends nothing. Native turn-to-room delivery has Go
 // integration tests; this checks the shipped browser renders that room data.
 test('a first team shows replies and can persist a team-only budget waiver', async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 620 })
   await page.addInitScript(() => {
-    localStorage.setItem('terva_talkoot_open', '1')
     localStorage.setItem('terva_talkoot_person', 'Drew')
     localStorage.setItem('terva_talkoot_motion', 'off')
   })
@@ -48,9 +47,9 @@ test('a first team shows replies and can persist a team-only budget waiver', asy
       return undefined
     },
   })
-  await page.goto(panelSessionURL)
+  await page.goto('/talkoot.html')
   await expect(page.getByText('Ready to work. The team can see this reply.')).toBeVisible()
-  const rows = page.locator('.talkoot-member-row')
+  const rows = page.locator('.tka-member')
   await expect(rows.nth(0).locator('.talkoot-member-model')).toHaveText('openai / gpt-live (live session)')
   await expect(rows.nth(1).locator('.talkoot-member-model')).toHaveText('anthropic / claude-tier')
   await expect(page.getByText('Team daily limit: $20.00')).toBeVisible()
@@ -69,8 +68,8 @@ test('a first team shows replies and can persist a team-only budget waiver', asy
   backend.pushEvent({ type: 'talkoot_roster', talkoot: { id: 'crew' } }, '#talkoot:crew')
   await expect(page.getByText('Team daily limit: $20.00')).toBeVisible()
 
-  await rows.nth(1).locator('button.talkoot-member').click()
-  await page.getByRole('button', { name: 'Member card', exact: true }).click()
+  await rows.nth(1).locator('button.tka-item').click()
+  await page.getByRole('button', { name: 'Details', exact: true }).click()
   const card = page.getByRole('region', { name: 'Member card' })
   const model = card.getByRole('combobox', { name: 'Model', exact: true })
   await expect(model).toHaveCount(1)

@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/preact'
-import { AskRequest } from './AskRequest'
-import { PermissionRequest } from './PermissionRequest'
+import { AskRequest } from '../../ui/interactions/AskRequest'
+import { PermissionRequest } from '../../ui/interactions/PermissionRequest'
 
 afterEach(cleanup)
 

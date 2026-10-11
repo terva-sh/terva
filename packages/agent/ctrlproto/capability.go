@@ -81,6 +81,9 @@ var readOnlyMethods = map[Method]bool{
 	MethodTenantsList:    true,
 	MethodTalkootList:    true, MethodTalkootGet: true, MethodTalkootRoom: true,
 	MethodTalkootInbox: true, MethodTalkootProposals: true, MethodTalkootTrace: true,
+	// A note listing names each note, its author, size, and time, and never its
+	// text. Reading a note is talkoot.ref, which is not read-only.
+	MethodTalkootNotes: true,
 	// A preview writes nothing: create recomputes the roster it showed.
 	MethodTalkootTemplates: true, MethodTalkootPreview: true,
 }

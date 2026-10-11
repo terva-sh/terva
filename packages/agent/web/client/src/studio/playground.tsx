@@ -2,8 +2,8 @@
 // that edit the pose table, and Save.
 
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { BODIES, FaceMark, type Face } from '../features/talkoot/MemberMark'
-import { defaultLook, rowsOf, TABLE, type Row, type Table } from '../features/talkoot/face/poses'
+import { BODIES, FaceMark, type Face } from '../ui/talkoot/MemberMark'
+import { defaultLook, rowsOf, TABLE, type Row, type Table } from '../ui/talkoot/face/poses'
 import { formatTable, NAME, validTable } from './table'
 import { formId, formsOf, parseForm, type FormRef } from './check'
 import { BEAT_BUTTONS, GEO, PRESENCES, RANGES } from './data'
@@ -179,7 +179,7 @@ export function Playground() {
       if (!res.ok) return setNote(`Not saved: ${msg}`)
       // The file now holds these numbers, so the browser's copy is not needed.
       keepTable(null)
-      setNote('Saved to src/features/talkoot/face/poses.json. Commit it.')
+      setNote('Saved to src/ui/talkoot/face/poses.json. Commit it.')
     } catch (e) {
       setNote(`Not saved: ${(e as Error).message}. Save needs the dev server (npm run dev).`)
     }

@@ -44,13 +44,19 @@ func runDesktopMode(ctx context.Context, args build.Args, version string) error 
 	if cfg.WebOIDC != nil {
 		return i18n.Errorf("terva desktop cannot use web_oidc; use a separate TERVA_HOME without daemon authentication configuration")
 	}
+	// 🔑 The daemon mounts /talkoot/ only while Talkoot is on, so a window
+	// opened without it would land on a page that is not there.
+	if args.DesktopApp == "talkoot" && (cfg.TalkootEnabled == nil || !*cfg.TalkootEnabled) {
+		return i18n.Errorf("terva desktop --desktop-app talkoot needs \"talkoot_enabled\": true in %s", config.ConfigPath())
+	}
 	if err := desktopHomeAvailable(); err != nil {
 		return err
 	}
 	if err := prepareDesktopBackend(); err != nil {
 		return err
 	}
-	app := &tuohi.App{Name: "terva", Icon: web.DesktopIcon(), Exit: true}
+	start := desktopApps[args.DesktopApp]
+	app := &tuohi.App{Name: start.title, Icon: web.DesktopIcon(), Exit: true}
 	if err := checkDesktopBackend(app.Backend()); err != nil {
 		return err
 	}
@@ -60,7 +66,7 @@ func runDesktopMode(ctx context.Context, args build.Args, version string) error 
 	}
 	args.WebToken = hex.EncodeToString(secret[:])
 	args.WebAddr = net.JoinHostPort("127.0.0.1", strconv.Itoa(args.DesktopPort))
-	window := &desktopWindow{app: app}
+	window := &desktopWindow{app: app, page: start.page, title: start.title}
 	return desktop.Run(ctx, window, args.WebToken, func(ctx context.Context, ready func(string)) error {
 		return runWebServer(ctx, args, version, func(network, addr string) {
 			ready("http://" + addr)
@@ -103,13 +109,31 @@ func desktopHomeAvailable() error {
 	return nil
 }
 
+// desktopApps maps --desktop-app to the page the window opens on and its
+// title. The empty name is the control panel.
+var desktopApps = map[string]struct{ page, title string }{
+	"":        {"/", "terva"},
+	"talkoot": {"/talkoot/", "terva Talkoot"},
+}
+
+// desktopLoginURL is the login page that sends the window on to page once the
+// token form is submitted.
+func desktopLoginURL(origin, page string) string {
+	if page == "/" {
+		return origin + "/auth"
+	}
+	return origin + "/auth?next=" + url.QueryEscape(page)
+}
+
 type desktopWindow struct {
-	app  *tuohi.App
-	view *tuohi.View
+	app   *tuohi.App
+	view  *tuohi.View
+	page  string
+	title string
 }
 
 func (w *desktopWindow) Show(origin, token string) error {
-	w.view = &tuohi.View{URL: origin + "/auth", Title: "terva", Frame: true, Width: 1200, Height: 800}
+	w.view = &tuohi.View{URL: desktopLoginURL(origin, w.page), Title: w.title, Frame: true, Width: 1200, Height: 800}
 	w.view.Ready = func() {
 		quotedOrigin, _ := json.Marshal(origin)
 		quotedToken, _ := json.Marshal(token)

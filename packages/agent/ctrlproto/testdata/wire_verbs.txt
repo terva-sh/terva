@@ -116,6 +116,7 @@ talkoot.get	params=TalkootRef	result=TalkootView
 talkoot.inbox	params=TalkootRef	result=TalkootInboxResult
 talkoot.kickoff	params=TalkootKickoffParams	result=TalkootKickoff
 talkoot.list	params=-	result=TalkootListResult
+talkoot.notes	params=TalkootRef	result=TalkootNotesResult
 talkoot.pause	params=TalkootPauseParams	result=-
 talkoot.post	params=TalkootPostParams	result=TalkootEnvelope
 talkoot.preview	params=TalkootPreviewParams	result=TalkootPreview

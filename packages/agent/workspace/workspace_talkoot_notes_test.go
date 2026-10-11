@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/talkoot"
 )
 
@@ -94,5 +96,47 @@ func TestStartMakesTheNotesDirectoryOfAnOlderTalkoot(t *testing.T) {
 	openTalkootWorkspace(t, cwd).LoadTalkoots()
 	if fi, err := os.Stat(notes); err != nil || !fi.IsDir() {
 		t.Errorf("the restarted talkoot has no notes directory: %v", err)
+	}
+}
+
+// talkoot.notes lists every member's notes for a person, newest first, with
+// names and sizes and never the text.
+func TestTalkootNotesListsTheTeamsNotesForAPerson(t *testing.T) {
+	cwd := talkootHome(t)
+	w := openTalkootWorkspace(t, cwd)
+	ctx := context.Background()
+	if _, err := w.talkootCreate(ctx, "crew", crewText(cwd)); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(talkoot.Dir(), "crew")
+	if _, err := talkoot.WriteNote(dir, "helm", "plan.md", "the plan"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := talkoot.WriteNote(dir, "jev", "review.md", "looks right"); err != nil {
+		t.Fatal(err)
+	}
+	// Make the order certain: jev's note is the newer one.
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(filepath.Join(dir, talkoot.NotesDir, "helm", "plan.md"), old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := w.TalkootNotes(ctx, ctrlproto.TalkootRef{ID: "crew"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Notes) != 2 {
+		t.Fatalf("listed %+v, want two notes", got.Notes)
+	}
+	first, second := got.Notes[0], got.Notes[1]
+	if first.Ref != "note:jev/review.md" || first.Member != "jev" || first.Name != "review.md" || first.Size != int64(len("looks right")) {
+		t.Errorf("the newest note is %+v", first)
+	}
+	if second.Ref != "note:helm/plan.md" || !second.At.Before(first.At) {
+		t.Errorf("the older note is %+v", second)
+	}
+
+	if _, err := w.TalkootNotes(ctx, ctrlproto.TalkootRef{ID: "nobody"}); err == nil {
+		t.Error("listed the notes of a talkoot that does not run here")
 	}
 }

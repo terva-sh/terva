@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { handle, TABLE_PATH, type Req, type Res } from '../../scripts/studio-save'
-import { rowsOf, TABLE, type Table } from '../features/talkoot/face/poses'
+import { rowsOf, TABLE, type Table } from '../ui/talkoot/face/poses'
 import { eyePoints, formId, formsOf, parseForm, runCheck } from './check'
 import { formatTable, validTable } from './table'
 
@@ -103,7 +103,7 @@ describe('the transition check', () => {
 describe('the table file', () => {
   it('reads the committed table as valid, and writes it back byte for byte', () => {
     expect(validTable(TABLE)).toBeNull()
-    expect(formatTable(TABLE)).toBe(read('src/features/talkoot/face/poses.json'))
+    expect(formatTable(TABLE)).toBe(read('src/ui/talkoot/face/poses.json'))
   })
 
   it('refuses a table the renderer cannot read', () => {
@@ -163,7 +163,7 @@ describe('Save', () => {
     await handle(req('', {}, 'GET'), r)
     expect(r.statusCode).toBe(200)
     expect(r.body).toBe(TABLE_PATH)
-    expect(TABLE_PATH.endsWith('/src/features/talkoot/face/poses.json')).toBe(true)
+    expect(TABLE_PATH.endsWith('/src/ui/talkoot/face/poses.json')).toBe(true)
   })
 
   it('refuses a body over 1 MiB', async () => {

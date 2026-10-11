@@ -4,8 +4,8 @@
 // reads it. The browser's copy of the table is put back afterwards, so a
 // self-test never keeps its rolled pose.
 
-import { BODIES } from '../features/talkoot/MemberMark'
-import { rowsAt, rowsOf } from '../features/talkoot/face/poses'
+import { BODIES } from '../ui/talkoot/MemberMark'
+import { rowsAt, rowsOf } from '../ui/talkoot/face/poses'
 import { formId, formsOf, runCheck } from './check'
 import { BEAT_BUTTONS, PRESENCES, TEAM_BODIES, TEAM_STATES } from './data'
 import type { Studio } from './state'

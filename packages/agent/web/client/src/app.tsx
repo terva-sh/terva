@@ -80,9 +80,9 @@ import { ConversationTimeline } from './features/conversation/ConversationTimeli
 import type { ToolHints } from './features/conversation/toolcard/display'
 import { ResumeBar } from './features/conversation/ResumeBar'
 import type { ToolView } from './features/conversation/types'
-import { AskRequest as AskRequestView } from './features/interactions/AskRequest'
+import { AskRequest as AskRequestView } from './ui/interactions/AskRequest'
 import { ToastDock, useToast } from './features/interactions/Toast'
-import { PermissionRequest as PermissionRequestView } from './features/interactions/PermissionRequest'
+import { PermissionRequest as PermissionRequestView } from './ui/interactions/PermissionRequest'
 import { ModelParamsForm } from './features/models/ModelParamsForm'
 import { ModelTiersPanel } from './features/models/ModelTiersPanel'
 import { ModelPicker } from './features/models/ModelPicker'
@@ -120,10 +120,8 @@ import { CopyButton } from './ui/CopyButton'
 import { ConnectionBanner } from './ui/Loading'
 import { deadlineClass, deadlineOf, deadlineStyle } from './ui/deadline'
 import { humanBytes, humanCount, localInstant } from './ui/formatting'
-import { stageHref, takeNavParams } from './ui/navlinks'
+import { stageHref, talkootHref, takeNavParams } from './ui/navlinks'
 import { usePinnedTail } from './ui/pinnedtail'
-import { TalkootScreen } from './features/talkoot/TalkootScreen'
-import { TalkootHub } from './platform/talkoot/hub'
 
 const TOOL_VIEWS: ToolView[] = ['full', 'grouped', 'minimal', 'hidden']
 
@@ -329,22 +327,10 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   // verbs exist at all, and a tab that calls one the daemon never negotiated is
   // a tab whose every control answers "method group not negotiated".
   const [canReadSecrets, setCanReadSecrets] = useState(false)
-  // Talkoot: the web view is the one surface for watching a team. It shows
-  // only when the hello grants the talkoot group. The hub takes the events of
-  // each #talkoot: address from the one onEvent below. connGen counts
-  // connections, because a subscription dies with its socket.
+  // Talkoot: the ⁂ button opens the Talkoot app, and shows only when the hello
+  // grants the talkoot group. The panel's own Talkoot view is frozen in
+  // ui/talkoot until a cleanup removes it, and nothing here mounts it.
   const [canTalkoot, setCanTalkoot] = useState(false)
-  const [talkootOpen, setTalkootOpen] = useState(() => localStorage.getItem('terva_talkoot_open') === '1')
-  const [connGen, setConnGen] = useState(0)
-  // Whether the current socket has its hello. The status can turn open before
-  // the hello lands, and connGen then still names the last connection, so the
-  // Talkoot view would subscribe before the group is negotiated.
-  const [helloed, setHelloed] = useState(false)
-  const [talkootHub] = useState(() => new TalkootHub())
-  const openTalkoot = (open: boolean) => {
-    setTalkootOpen(open)
-    localStorage.setItem('terva_talkoot_open', open ? '1' : '0')
-  }
   const [wsSecrets, setWsSecrets] = useState<SecretsStatus | null>(null)
   const [wsSecretsErr, setWsSecretsErr] = useState('')
   // Whether the daemon serves the Stage app (--web-stage). When set, the topbar
@@ -1167,13 +1153,8 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   useEffect(() => {
     const c = createClient()
     clientRef.current = c
-    c.onStatus = (s) => {
-      setStatus(s)
-      if (s !== 'open') setHelloed(false)
-    }
+    c.onStatus = setStatus
     c.onEvent = (sess, ev) => {
-      // A talkoot's room has its own address, and only the Talkoot view reads it.
-      if (talkootHub.dispatch(sess, ev)) return
       // Worker approvals: a swarm worker parked on a tool call has its approval
       // routed to the dispatching session's card, riding that session's stream as
       // a permission_request whose `agent` names the worker. Fold every approval
@@ -1214,8 +1195,6 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       setCanRestart(!!hello?.features?.includes('restart'))
       setCanReadSecrets(!!hello?.groups?.includes('secrets'))
       setCanTalkoot(!!hello?.groups?.includes('talkoot'))
-      setConnGen((g) => g + 1)
-      setHelloed(true)
       setStageEnabled(!!hello?.features?.includes('stage'))
       canListFiles.current = !!hello?.features?.includes('files-list')
       // Whether this carrier has an upload route at all, and what it will take.
@@ -2427,13 +2406,9 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           ⊞
         </button>
         {canTalkoot && (
-          <button
-            class={`icon${talkootOpen ? ' on' : ''}`}
-            title={t('Talkoot teams')}
-            onClick={() => openTalkoot(!talkootOpen)}
-          >
+          <a class="icon" href={talkootHref()} title={t('Open the Talkoot app')} aria-label={t('Open the Talkoot app')}>
             ⁂
-          </button>
+          </a>
         )}
         {curSess && (
           <button
@@ -2640,20 +2615,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
 
       <div class="workspace">
         <div class="main">
-          {talkootOpen && canTalkoot ? (
-            <TalkootScreen
-              client={clientRef.current!}
-              hub={talkootHub}
-              generation={status === 'open' && helloed ? connGen : 0}
-              onOpenSession={(id) => {
-                openTalkoot(false)
-                selectSession(id)
-                setViewMode('focus')
-                localStorage.setItem('terva_viewmode', 'focus')
-              }}
-              onClose={() => openTalkoot(false)}
-            />
-          ) : !curSess ? (
+          {!curSess ? (
             // Session-less boot state: the session-focused landing. A fresh tab
             // lands here rather than adopting the global-current session.
             <PanelLanding

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'preact/hooks'
 import { t, tr } from '../../i18n'
-import { usePinnedTail } from '../../ui/pinnedtail'
+import { usePinnedTail } from '../pinnedtail'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import type { TalkootLine, TalkootMember, TalkootRefText } from '../../platform/ctrlproto/types'
 import type { TalkootHub } from '../../platform/talkoot/hub'
@@ -22,7 +22,7 @@ import { isWorker, WorkerEvents } from './WorkerEvents'
 // ROOM selects the room rather than a member's conversation.
 const ROOM = '#room'
 
-const PRESENCE_LABEL: Record<Presence, () => string> = {
+export const PRESENCE_LABEL: Record<Presence, () => string> = {
   idle: () => t('idle'),
   working: () => t('working'),
   waiting: () => t('waiting for you'),
@@ -281,13 +281,13 @@ export function TalkootTeam({
 }
 
 // orderMembers puts the coordinator first and keeps the roster order.
-function orderMembers(members: TalkootMember[], lead?: string): TalkootMember[] {
+export function orderMembers(members: TalkootMember[], lead?: string): TalkootMember[] {
   return [...members].sort((a, b) => (a.id === lead ? -1 : b.id === lead ? 1 : 0))
 }
 
 // The time of the last line the person saw in each member's view, kept per
 // talkoot in this browser. It is a view preference, like pins.
-function loadSeen(key: string): Record<string, string> {
+export function loadSeen(key: string): Record<string, string> {
   try {
     return JSON.parse(localStorage.getItem(key) ?? '{}') as Record<string, string>
   } catch {
@@ -295,13 +295,13 @@ function loadSeen(key: string): Record<string, string> {
   }
 }
 
-function saveSeen(key: string, seen: Record<string, string>) {
+export function saveSeen(key: string, seen: Record<string, string>) {
   localStorage.setItem(key, JSON.stringify(seen))
 }
 
 // MotionPicker sets how much the marks move. The system's reduced-motion
 // setting still wins, so the picker says when it does.
-function MotionPicker() {
+export function MotionPicker() {
   const { setting: v, reduced } = useMotionState()
   return (
     <label class="talkoot-motion">

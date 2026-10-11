@@ -5,10 +5,10 @@ in the loop. *Talkoot* is Finnish for a community work party, where neighbours
 gather to do together what one household cannot. Each member of the team has a
 role, a persona, and limits of its own. Members talk to each other in a shared
 room and hand work over as tickets, branches, commits, paths, and notes. When a
-decision is yours, a member asks you in the inbox and waits for your answer.
+decision is yours, a member asks you with a card and waits for your answer.
 
-The terva daemon runs the team, and the web panel is where you watch and steer
-it. A member is a native terva session or an external harness that terva
+The terva daemon runs the team, and the Talkoot app, which `terva web` serves,
+is where you watch and steer it. A member is a native terva session or an external harness that terva
 drives as a worker, such as Claude Code. Every member works under the same
 permission model, and a member's authority comes from the team's roster, never
 from its persona.
@@ -40,7 +40,7 @@ terva web
 
 A daemon that was already running reads the key when it starts, so restart
 it after you change the key. The **⁂** button in the web panel's header opens
-the Talkoot view. [web.md](web.md) covers `terva web` itself.
+the Talkoot app at `/talkoot/`. [web.md](web.md) covers `terva web` itself.
 
 A member whose driver is not `native` also needs external workers:
 
@@ -58,7 +58,7 @@ workers** while `auto_swarm` is on. Without `auto_swarm`, set it in
 
 ## Your first team
 
-1. Open the Talkoot view with **⁂**, and press **New team**.
+1. Open the Talkoot app with **⁂**, and press **New team**.
 2. Pick a template, such as `coding`. Name the team, and set a daily budget in
    US dollars, or keep the template's.
 3. Press **Preview**. The preview lists each member with its role, driver,
@@ -68,7 +68,7 @@ workers** while `auto_swarm` is on. Without `auto_swarm`, set it in
 4. Press **Create the team**.
 
 A new team starts no work on its own. A **Start the team** card waits in the
-inbox, with the estimated cost of the introductions. **Run the introductions**
+conversation, with the estimated cost of the introductions. **Run the introductions**
 has each member introduce itself, and then the coordinator asks you the first
 question. **Skip them** starts the team without them.
 
@@ -101,15 +101,17 @@ ask you when a decision is yours.
 
 ## Watch and steer it
 
-The web panel is the one place to watch a talkoot. [The Talkoot section of
-web.md](web.md#talkoot-watching-a-team) describes the view in full: the
-sidebar of members and their states, the room, each member's own view, the
-member card, and pause and resume.
+The Talkoot app is the one place to watch a talkoot. [The Talkoot section of
+web.md](web.md#talkoot-watching-a-team) describes the app in full: the rail of
+teams and members, the room and its threads, each member's own thread, the
+side panel with the member card, its work, and the team's notes, and pause
+and resume.
 
-- **The inbox** holds what waits for you: a member's question, a tool call its
-  posture asks about, a roster proposal, and a new team's kickoff. One answer
-  resolves the card in the inbox and in the member's own session. The room
-  keeps your answer to a question, so a teammate may see it.
+- **Cards** hold what waits for you: a member's question, a tool call its
+  posture asks about, a roster proposal, and a new team's kickoff. Each sits
+  in the conversation at the time it opened. One answer resolves the card in
+  the app and in the member's own session. The room keeps your answer to a
+  question, so a teammate may see it.
 - **Your name** is what the room records beside your posts, answers, and
   pauses. The browser keeps it. The name records who acted, and the `steer`
   capability decides who may act.
@@ -124,7 +126,7 @@ member card, and pause and resume.
 The browser tab carries the team. Its title reads the team name and its
 state, and its icon is the team's mark.
 
-The sidebar and member card show each native member's resolved provider and
+The rail and member card show each native member's resolved provider and
 model, even before it has a session. An existing session's model takes
 precedence and is labelled "live session". Reading the roster creates no
 sessions and makes no provider calls. An external backend shows its requested
@@ -183,7 +185,7 @@ Keep the user guides true to the code. The writer changes files, the checker
 reviews each branch, and the lead asks the person before a merge.
 ```
 
-The web panel's **New team** form writes this file for you. You can also
+The Talkoot app's **New team** form writes this file for you. You can also
 write it by hand, and the daemon reads it when it starts.
 
 ### Team keys
@@ -344,7 +346,7 @@ It makes no model call until you write. It reads the roster, asks about the
 job, and proposes a member for you to approve. It offers only the drivers
 installed on this machine. [cli.md](cli.md) documents the flag.
 
-The member card in the web panel changes a member directly, and the room
+The member card in the Talkoot app changes a member directly, and the room
 records each edit as a roster line in your name.
 
 ## Guards and spend
@@ -442,7 +444,7 @@ capability it needs, and the events a talkoot sends.
 
 ## What it does not do yet
 
-- The terminal interface has no Talkoot view. Watch a team in the web panel.
+- The terminal interface has no Talkoot view. Watch a team in the Talkoot app.
 - There is no driver for Codex or for other ACP agents.
 - The guard values and the daily budget period are fixed.
 - A member on another machine cannot join a team.

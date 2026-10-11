@@ -42,6 +42,8 @@ type TalkootController interface {
 	PreviewTalkoot(ctx context.Context, p TalkootPreviewParams) (TalkootPreview, error)
 	// OpenTalkootRef reads the file a path: or note: reference names.
 	OpenTalkootRef(ctx context.Context, p TalkootOpenRefParams) (TalkootRefText, error)
+	// TalkootNotes lists the notes the members wrote for the team.
+	TalkootNotes(ctx context.Context, p TalkootRef) (TalkootNotesResult, error)
 	// TalkootWorker reports the swarm agent a worker member is seated on.
 	TalkootWorker(ctx context.Context, p TalkootWorkerParams) (TaskInfo, error)
 	// UpdateTalkoot replaces a running talkoot's roster.
@@ -541,6 +543,21 @@ type TalkootLine struct {
 	Attempt int    `json:"attempt,omitempty"`
 	Card    string `json:"card,omitempty"`
 	Outcome string `json:"outcome,omitempty"`
+}
+
+// TalkootNotesResult is the talkoot.notes reply, newest note first.
+type TalkootNotesResult struct {
+	Notes []TalkootNote `json:"notes"`
+}
+
+// TalkootNote is one note a member wrote for the team. Ref is the note:
+// reference that talkoot.ref opens, and At is when the note last changed.
+type TalkootNote struct {
+	Ref    string    `json:"ref"`
+	Member string    `json:"member"`
+	Name   string    `json:"name"`
+	Size   int64     `json:"size"`
+	At     time.Time `json:"at"`
 }
 
 // TalkootInboxResult is the talkoot.inbox reply, oldest card first.

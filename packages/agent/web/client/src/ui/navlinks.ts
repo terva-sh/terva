@@ -46,6 +46,11 @@ export function panelHref(session?: string, pane?: string): string {
   return href('/', { session, pane })
 }
 
+/** Link to the Talkoot app. */
+export function talkootHref(): string {
+  return '/talkoot/'
+}
+
 /** Link to Stage, optionally opening straight into a session's chat. */
 export function stageHref(session?: string): string {
   return href('/stage/', { session })

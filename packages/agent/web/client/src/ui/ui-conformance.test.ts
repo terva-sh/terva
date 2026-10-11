@@ -342,10 +342,11 @@ describe('every custom property an app reads is declared', () => {
   }
 
   // Every sheet each app loads, beyond ui.css. face.css arrives with the
-  // panel's Talkoot member marks.
+  // Talkoot member marks, and talkoot.css with the Talkoot views.
   const SHEETS: Array<[string, string[]]> = [
-    ['panel', ['tokens.css', '../styles.css', '../features/talkoot/face/face.css']],
+    ['panel', ['tokens.css', '../styles.css', 'talkoot/talkoot.css', 'talkoot/face/face.css']],
     ['stage', ['tokens.css', '../apps/stage/stage.css']],
+    ['talkoot', ['tokens.css', '../styles.css', 'talkoot/talkoot.css', 'talkoot/face/face.css', '../apps/talkoot/app.css']],
   ]
 
   // Inputs that script sets on an element, so no sheet declares them. Each
@@ -363,11 +364,11 @@ describe('every custom property an app reads is declared', () => {
     '--p0b': ['../app.tsx', '`--p${i}b`'],
     '--p1b': ['../app.tsx', '`--p${i}b`'],
     '--p2b': ['../app.tsx', '`--p${i}b`'],
-    '--t': ['../features/talkoot/MemberMark.tsx', "'--t'"],
-    '--phase': ['../features/talkoot/MemberMark.tsx', "'--phase'"],
-    '--blink-every': ['../features/talkoot/MemberMark.tsx', "'--blink-every'"],
-    '--wander': ['../features/talkoot/MemberMark.tsx', "'--wander'"],
-    '--read': ['../features/talkoot/MemberMark.tsx', "'--read'"],
+    '--t': ['talkoot/MemberMark.tsx', "'--t'"],
+    '--phase': ['talkoot/MemberMark.tsx', "'--phase'"],
+    '--blink-every': ['talkoot/MemberMark.tsx', "'--blink-every'"],
+    '--wander': ['talkoot/MemberMark.tsx', "'--wander'"],
+    '--read': ['talkoot/MemberMark.tsx', "'--read'"],
   }
 
   const baseDeclared = declared(base)

@@ -1,7 +1,7 @@
 // Small pieces the studio's sections share.
 
 import { render, type ComponentChildren } from 'preact'
-import type { Body } from '../features/talkoot/MemberMark'
+import type { Body } from '../ui/talkoot/MemberMark'
 import type { Inside } from './check'
 import { PALETTE } from './data'
 

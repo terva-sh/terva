@@ -44,6 +44,7 @@ type Args struct {
 	// Web control-panel mode (--web / `terva web`, build tag terva_web).
 	Desktop             bool
 	DesktopPort         int
+	DesktopApp          string   // the app the desktop window opens on (--desktop-app): "" for the control panel, or "talkoot"
 	WebAddr             string   // listen address (default 127.0.0.1:8730)
 	WebAuthHeader       string   // trust this forward-auth header as the authenticated user (e.g. X-Forwarded-User)
 	WebTrustedProxies   []string // IPs/CIDRs (besides loopback) allowed to assert the forward-auth header
@@ -595,6 +596,7 @@ func ParseArgs(in []string) (Args, error) {
 	positional := []string{}
 	taskFromFile := false
 	desktopModeConflict := false
+	desktopAppSet := false
 
 	want := func(i *int, flag string) (string, error) {
 		*i++
@@ -637,6 +639,20 @@ func ParseArgs(in []string) (Args, error) {
 			if err != nil || a.DesktopPort < 1 || a.DesktopPort > 65535 {
 				return a, i18n.Errorf("--desktop-port requires a port from 1 to 65535")
 			}
+		case "--desktop-app":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			switch v {
+			case "panel":
+				a.DesktopApp = ""
+			case "talkoot":
+				a.DesktopApp = v
+			default:
+				return a, i18n.Errorf("--desktop-app requires panel or talkoot")
+			}
+			desktopAppSet = true
 		case "--fleet-addr":
 			v, err := want(&i, arg)
 			if err != nil {
@@ -1325,6 +1341,9 @@ func ParseArgs(in []string) (Args, error) {
 	}
 	if a.DesktopPort != 0 && !a.Desktop {
 		return a, i18n.Errorf("--desktop-port requires terva desktop")
+	}
+	if desktopAppSet && !a.Desktop {
+		return a, i18n.Errorf("--desktop-app requires terva desktop")
 	}
 	if a.Desktop {
 		if desktopModeConflict || a.Mode != mode.Web || a.WebAddr != "" || a.WebToken != "" || a.WebTokenFile != "" || a.WebTokenRequireFile || a.WebAuthHeader != "" || len(a.WebTrustedProxies) != 0 || a.WebInsecure || len(a.WebInsecureCIDRs) != 0 || a.FleetAddr != "" || a.AllowRestart {

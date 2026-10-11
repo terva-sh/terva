@@ -158,7 +158,7 @@ export function TalkootScreen({
 // TeamColor picks the team mark's colour from the palette, or returns it to
 // the default the talkoot id picks. A change is a roster change, so it needs a
 // person's name, as every other edit of the team does.
-function TeamColor({ team, person, onChange }: { team: TalkootSummary; person: string; onChange: (color: string) => void }) {
+export function TeamColor({ team, person, onChange }: { team: TalkootSummary; person: string; onChange: (color: string) => void }) {
   const can = validPerson(person)
   return (
     <details class="talkoot-team-color">
@@ -190,7 +190,7 @@ const sameColor = (a: string | undefined, b: string) => a?.toLowerCase() === b.t
 
 // useTeamTab puts the open team in the browser tab: its name and state in the
 // title, and its mark as the icon. Leaving the team puts terva's own back.
-function useTeamTab(team: TalkootSummary | undefined) {
+export function useTeamTab(team: TalkootSummary | undefined) {
   const name = team ? team.title || team.name || team.id : ''
   useEffect(() => {
     if (!team?.color) return
@@ -220,7 +220,7 @@ function useTeamTab(team: TalkootSummary | undefined) {
 // PersonInput edits the person's name as a draft, and commits it on Enter or
 // when the field loses focus. Committed on each key, every prefix of a name
 // would act as a person and write read marks under its own key.
-function PersonInput({ person, onCommit }: { person: string; onCommit: (name: string) => void }) {
+export function PersonInput({ person, onCommit }: { person: string; onCommit: (name: string) => void }) {
   const [draft, setDraft] = useState(person)
   useEffect(() => setDraft(person), [person])
   const commit = () => {

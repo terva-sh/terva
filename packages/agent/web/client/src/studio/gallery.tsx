@@ -2,8 +2,8 @@
 // of eight members, and the talkoot's own mark beside member marks.
 
 import { useState } from 'preact/hooks'
-import { BODIES, FaceMark } from '../features/talkoot/MemberMark'
-import { defaultLook } from '../features/talkoot/face/poses'
+import { BODIES, FaceMark } from '../ui/talkoot/MemberMark'
+import { defaultLook } from '../ui/talkoot/face/poses'
 import { formId, formsOf } from './check'
 import { NAMES, PALETTE, PRESENCES, SHAPES, TEAM_BODIES, TEAM_STATES } from './data'
 import { useStudio } from './state'

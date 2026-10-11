@@ -28,7 +28,14 @@ window. The regular full and lean artifacts keep their static runtime.
 ```bash
 terva-desktop desktop
 terva-desktop desktop --desktop-port 9134
+terva-desktop desktop --desktop-app talkoot
 ```
+
+`--desktop-app talkoot` opens the window on the [Talkoot app](#talkoot-watching-a-team)
+instead of the panel, with the title "terva Talkoot". Talkoot must be on in the
+user configuration (`"talkoot_enabled": true`), or startup fails. A link to the
+panel from the app, such as a member's session, opens in the same window. The
+panel's ⁂ returns to the app. `--desktop-app panel` is the default.
 
 For a source build, run `just build-desktop`, then
 `./bin/terva-desktop desktop`. The build uses `terva_desktop` and `terva_web`.
@@ -714,83 +721,116 @@ default**; `--web-stage` mounts it at `/stage/`, alongside the control panel at
 
 ## Talkoot: watching a team
 
-The web panel is the one place to watch a talkoot, a persistent team of agents
-([talkoot.md](talkoot.md) covers setting one up). There is no terminal
-view. A command-line caller can act on a talkoot through `terva ctl`, and it
-does not render the room.
+The Talkoot app at `/talkoot/` is the one place to watch a talkoot, a
+persistent team of agents ([talkoot.md](talkoot.md) covers setting one up).
+There is no terminal view. A command-line caller can act on a talkoot through
+`terva ctl`, and it does not render the room.
 
-The view appears when the daemon runs with `talkoot_enabled` set in
-`$TERVA_HOME/config.json`. The **⁂** button in the header opens it.
+The daemon serves the app when it runs with `talkoot_enabled` set in
+`$TERVA_HOME/config.json`. The **⁂** button in the control panel's header
+opens it, and the app's **Panel** link returns. The app is a page of its own
+with its own manifest, so a browser can install it beside the panel. It
+signs in the way the panel does, and it calls the panel's verbs: the
+`talkoot` group, and the few others the shared Talkoot views use, such as
+`answer`, `approve`, and `models.list`. It ships no wire of its own, as
+decision 0028 records.
 
-- **Your name.** The connection carries no identity, so the view asks for the
-  name the room records beside your posts, answers, and pauses. The name
-  takes effect when you press Enter or leave the field, and the browser
-  keeps it. It names who acted. The `steer` capability decides who may act.
-- **The sidebar.** The room comes first, then each member with its state:
-  idle, working, waiting for you, paused, or offline. The daemon decides the
-  state. Waiting means a question or an approval of the member's is open in
-  the inbox. Offline means nothing can run the member now, such as a worker
-  member while `external_workers` is off, and its mark fades. A paused
-  member also shows why. A turn that fails pauses its member, and so does a
-  worker process that stops in a turn, until you resume the member. A turn
-  you stop yourself does not. A working native member also names the tool it
-  runs, as in "running grep". A count shows the messages a member sent you
-  since you last opened its view. The coordinator is pinned.
+The app has three columns: the rail on the left, the conversation in the
+middle, and the side panel on the right while it is open. Below 1100 pixels
+the side panel lies over the conversation. Below 760 pixels the rail becomes a
+drawer that **☰** opens.
+
+- **Your name.** The connection carries no identity, so the app asks for the
+  name the room records beside your posts, answers, and pauses. The field is
+  at the foot of the rail. The name takes effect when you press Enter or
+  leave the field, and the browser keeps it. It names who acted. The `steer`
+  capability decides who may act.
+- **The rail.** Every team on the daemon comes first, each with its mark and
+  its state, and **New team**. The open team follows, with **Team colour**
+  and the room, which counts the cards that wait for you. Then each member
+  with its model and its state: idle, working, waiting for you, paused, or
+  offline. The daemon decides the state. Waiting means a question or an
+  approval of the member's waits for you. Offline means nothing can run the
+  member now, such as a worker member while `external_workers` is off, and
+  its mark fades. A paused member also shows why. A turn that fails pauses
+  its member, and so does a worker process that stops in a turn, until you
+  resume the member. A turn you stop yourself does not. A working native
+  member also names the tool it runs, as in "running grep". A count shows the
+  messages a member sent you since you last opened its thread. The
+  coordinator is pinned. The foot of the rail shows today's spend, the team
+  daily limit, **Pause the team**, and the **Marks** picker.
 - **Marks.** Each member has a mark, a small shape in its own colour. It
-  appears in the sidebar, beside the member's messages, and on its inbox
-  cards. A member without one takes its persona's mark or accent colour, and
-  two members of one persona take different shapes. A member added without
-  a shape moves no one's mark. A shape you set, a reorder, or a removal can
+  appears in the rail, beside the member's messages, and on its cards. A
+  member without one takes its persona's mark or accent colour, and two
+  members of one persona take different shapes. A member added without a
+  shape moves no one's mark. A shape you set, a reorder, or a removal can
   move another member's default. A mark you set never moves.
-- **Faces.** In the sidebar each mark has eyes that show the member's state:
+- **Faces.** In the rail each mark has eyes that show the member's state:
   focused while it works, looking up while it waits for you, closed and
   faded while offline, and worried, squinting, or half shut while paused,
-  by the most serious reason. The **Marks** picker in the sidebar footer
-  sets how much the faces move: full motion, subtle motion, or no motion.
-  The browser keeps the choice. When your system asks for reduced motion,
-  the faces stay still. The state label always shows beside the face.
-- **The team mark.** Each team in the header is a button with the team's
-  mark, its name, and its state: offline, needs you, busy, paused, or online.
-  The mark is the team's body in the team's colour, and its eyes show that
-  state. The open team also names the browser tab, as the team's name and
-  state, and its mark becomes the tab's icon. **Team colour** in the header
-  picks the colour, and **Default** returns to the one the team's id picks.
-  The picker needs your name, because the room records the change.
-- **The member card.** **Member card** in a member's view opens the one place
-  to see and change it. The card has three sections:
-  - **Look:** the title, and pickers for the shape and the colour. **Reset**
-    returns the mark to its default.
-  - **Instructions:** the persona, with its charter and the work it suits.
-  - **Driver and limits:** the driver, the model or tier, the posture, the
-    workspace, the tools, and the daily budget and turns.
-
-  **Save changes** sends only the fields you changed, and it applies at once.
-  The room records each edit as a roster line in your name. An empty field
-  returns the member to its default. The card also pauses and removes the
-  member. A removal asks twice.
-- **The main view.** A new team opens on the coordinator's conversation with
-  you. A member's view shows only your exchanges with it, and another
-  person's exchanges show in the room. Until you set a name, a member's view
-  shows its exchanges with every person. The room shows every message in
-  order, and it collapses a run of messages between two members into one
-  line that expands in place.
-- **References.** A `path:` or `note:` reference under a message opens in
-  place when you click it. A `path:` reads from the home checkout, and a
-  `note:` from the talkoot's notes. Neither follows a link out. A long file
-  shows its first 256 KiB. Other references, such as a `ticket:`, stay labels.
-- **The composer.** A post with no `@member` reaches the member whose view is
-  open, or the coordinator in the room. Name a member with `@id` to reach it.
-- **The inbox.** Questions, tool approvals, roster proposals, and a new team's
-  kickoff wait above the log. An answer to a question or an approval also
-  resolves the card in the member's own session. A question card says that
-  the room keeps your answer, and that a teammate may see it.
+  by the most serious reason. The **Marks** picker sets how much the faces
+  move: full motion, subtle motion, or no motion. The browser keeps the
+  choice. When your system asks for reduced motion, the faces stay still.
+  The state label always shows beside the face.
+- **The team mark.** The team's mark is its body in the team's colour, and
+  its eyes show the team's state: offline, needs you, busy, paused, or
+  online. The open team also names the browser tab, as the team's name and
+  state, and its mark becomes the tab's icon. **Team colour** picks the
+  colour, and **Default** returns to the one the team's id picks. The picker
+  needs your name, because the room records the change.
+- **The conversation.** The app opens on the room, which shows every message
+  in order. Messages between members fold by chain into one thread, which
+  names who spoke, counts the messages, and opens in place. Your posts and
+  the replies to you stay outside the threads. A member's thread shows only
+  your exchanges with it, and another person's exchanges show in the room.
+  Until you set a name, a member's thread shows its exchanges with every
+  person.
+- **Cards.** Questions, tool approvals, roster proposals, and a new team's
+  kickoff sit in the conversation at the time they opened. A member's thread
+  shows that member's cards. A strip above the composer counts the cards
+  that wait, and **Show the oldest** scrolls to the one that has waited
+  longest. An answer to a question or an approval also resolves the card in
+  the member's own session. A question card says that the room keeps your
+  answer, and that a teammate may see it.
 - **Proposal cards.** A roster proposal lists each member it touches, field by
   field, before and after. It marks each authority field, and it flags each
   one that grants more. A member that joins shows in full, and so does a new
   persona. A change of marks, such as a theme, shows each mark before and
   after, side by side.
-- **Pause and resume.** Pause one member, one chain from a message, or the
-  whole team.
+- **The composer.** A post with no `@member` reaches the member whose thread
+  is open, or the coordinator in the room. Name a member with `@id` to reach
+  it. Type `@` and the composer offers the member ids. The arrow keys move
+  through them, and Enter or Tab picks one.
+- **The side panel.** **Details** in the conversation's header opens it. In a
+  member's thread it has four tabs:
+  - **Member:** the member card, the one place to see and change a member.
+    It has three sections. **Look** holds the title, and pickers for the
+    shape and the colour. **Reset** returns the mark to its default.
+    **Instructions** holds the persona, with its charter and the work it
+    suits. **Driver and limits** holds the driver, the model or tier, the
+    posture, the workspace, the tools, and the daily budget and turns. **Save
+    changes** sends only the fields you changed, and it applies at once. The
+    room records each edit as a roster line in your name. An empty field
+    returns the member to its default. The card also pauses and removes the
+    member. A removal asks twice.
+  - **Work:** the member's state, the tool it runs, why it is paused, its
+    spend today, and its turns. A worker member shows its events. A native
+    member's session opens in the control panel, in a new tab.
+  - **Notes:** the notes the members wrote for the team, newest first. A note
+    opens in the **File** tab.
+  - **File:** the text a reference names.
+
+  In the room only **Notes** and **File** show.
+- **References.** A `path:` or `note:` reference under a message opens in the
+  side panel when you click it. A `path:` reads from the home checkout, and a
+  `note:` from the talkoot's notes. Neither follows a link out. A long file
+  shows its first 256 KiB. Other references, such as a `ticket:`, stay labels.
+- **Pause and resume.** Pause one member from the rail, one chain from its
+  thread or a message, or the whole team from the foot of the rail.
+
+The control panel had a Talkoot view of its own before the app. The panel no
+longer shows it, and its code waits in `src/ui/talkoot/` for a cleanup to
+remove it.
 
 **New team** creates a talkoot from a template. Pick a template, name the team,
 and optionally set a daily budget. **Preview** shows every member's driver,
@@ -803,12 +843,14 @@ team** is enabled. A template from the repository needs a trusted workspace.
 ## Building the client
 
 The web client is a Preact + Vite **multi-page app (MPA)** under
-`packages/agent/web/client/`, building **two** apps from one workspace: the
-control **panel** (`index.html`) and, behind `--web-stage`, the immersive
-**[Stage](#stage-the-immersive-chatplay-surface)** app (`stage.html`). Rollup
-chunk-splits the code they share, so the two apps share bytes in `dist/` rather
-than duplicating them, and one npm project keeps a single typecheck, i18n catalog,
-mock-backend smoke harness, and `web-verify-dist` gate across both. The build
+`packages/agent/web/client/`, building **three** apps from one workspace: the
+control **panel** (`index.html`), behind `--web-stage` the immersive
+**[Stage](#stage-the-immersive-chatplay-surface)** app (`stage.html`), and,
+while `talkoot_enabled` is on, the **[Talkoot app](#talkoot-watching-a-team)**
+(`talkoot.html`). Rollup chunk-splits the code they share, so the apps share
+bytes in `dist/` rather than duplicating them, and one npm project keeps a
+single typecheck, i18n catalog, mock-backend smoke harness, and
+`web-verify-dist` gate across all three. The build
 output (`client/dist/`) is **committed** and embedded via `go:embed`, so
 `go build -tags terva_web` and the release pipeline need no Node.js. After
 changing anything under `client/src`, rebuild and commit:
@@ -820,16 +862,20 @@ just web-build     # npm ci + vite build -> client/dist (commit the result)
 The client source is organized by dependency direction, low to high:
 
 - `src/platform/`: Preact-free protocol, conversation-state, and image-policy
-  modules; **fully shared** by both apps (the consistency layer);
+  modules; **fully shared** by every app (the consistency layer);
 - `src/ui/`: small shared presentation primitives plus browser and formatting
-  helpers;
+  helpers, and the Talkoot views in `src/ui/talkoot/`, which the Talkoot app
+  renders;
 - `src/features/`: reusable Preact features and feature-local behavior
   (conversation attachments, interactions, sessions, model UI), shared
   selectively;
 - `src/app.tsx`: the control-**panel** composition root (owns the transport and
-  every verb); and
+  every verb);
 - `src/apps/stage/`: the **Stage** composition root, with its own routes,
-  shell, theme, and PWA manifest.
+  shell, theme, and PWA manifest; and
+- `src/apps/talkoot/`: the **Talkoot app** composition root, with its own
+  layout and PWA manifest. Like Stage, it may import `src/ui/` and
+  `src/platform/`, and never `src/features/`.
 
 The layering is enforced by `boundaries.test.ts`: an app may import
 `platform`/`ui`/`features`; those lower layers never import an app; and **the

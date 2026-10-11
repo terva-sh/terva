@@ -3,9 +3,9 @@
 
 import { createContext } from 'preact'
 import { useContext } from 'preact/hooks'
-import type { Motion } from '../features/talkoot/face/motion'
-import { TABLE, type Table } from '../features/talkoot/face/poses'
-import type { Edge } from '../features/talkoot/face/tuning'
+import type { Motion } from '../ui/talkoot/face/motion'
+import { TABLE, type Table } from '../ui/talkoot/face/poses'
+import type { Edge } from '../ui/talkoot/face/tuning'
 import type { Finding } from './check'
 import type { Presence } from './data'
 

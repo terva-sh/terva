@@ -31,56 +31,79 @@ export function TalkootInbox({
   onError: (msg: string) => void
 }) {
   if (cards.length === 0) return null
-  const act = (p: Promise<unknown>) => p.then(() => onError(''), (e: unknown) => onError(e instanceof Error ? e.message : String(e)))
   return (
     <section class="talkoot-inbox" aria-label={t('Inbox')}>
       <h3 class="talkoot-inbox-head">{tn(cards.length, '%d card waits for you', '%d cards wait for you')}</h3>
       {cards.map((c) => (
-        <div key={`${c.kind}:${c.session}:${c.id}`} class="talkoot-card">
-          {c.member && (
-            <div class="talkoot-card-from">
-              <MarkOf id={c.member} /> {who(c.member)}
-            </div>
-          )}
-          {!canSteer ? (
-            <div class="talkoot-note">{cardSummary(c)}</div>
-          ) : c.kind === 'permission' && c.permission ? (
-            <PermissionRequest
-              request={c.permission}
-              onDecide={(callID: string, decision: Decision) =>
-                void act(client.send('approve', { call_id: callID, decision }, c.session))
-              }
-            />
-          ) : c.kind === 'ask' && c.ask ? (
-            <>
-              {/* The room keeps the answer sealed, so it cannot be redacted
-                  later. The card is the one place to warn. */}
-              <div class="talkoot-note talkoot-ask-kept">{t('This answer is kept in the talkoot room, and a teammate may see it.')}</div>
-              <AskRequest
-                request={c.ask}
-                onAnswer={(askID, answers) =>
-                  void act(client.send('answer', { ask_id: askID, answer: answers[0] ?? { answer: '' }, answers }, c.session))
-                }
-              />
-            </>
-          ) : c.kind === 'proposal' && c.proposal ? (
-            <ProposalCard
-              proposal={c.proposal}
-              onDecide={(decision) =>
-                void act(client.send('talkoot.decide', { id, by: person, proposal: c.proposal!.id, decision }))
-              }
-            />
-          ) : c.kind === 'kickoff' && c.kickoff ? (
-            <KickoffCard
-              kickoff={c.kickoff}
-              onRun={(skip) => void act(client.send('talkoot.kickoff', { id, by: person, skip }))}
-            />
-          ) : (
-            <div class="talkoot-note">{cardSummary(c)}</div>
-          )}
-        </div>
+        <InboxCard key={`${c.kind}:${c.session}:${c.id}`} client={client} id={id} card={c} person={person} canSteer={canSteer} onError={onError} />
       ))}
     </section>
+  )
+}
+
+// InboxCard is one card that waits for a person, with the controls that
+// decide it. The panel lists every card in its inbox. The Talkoot app puts
+// each card into the conversation at the time it opened.
+export function InboxCard({
+  client,
+  id,
+  card: c,
+  person,
+  canSteer,
+  onError,
+}: {
+  client: ClientLike
+  id: string
+  card: TalkootCard
+  person: string
+  canSteer: boolean
+  onError: (msg: string) => void
+}) {
+  const act = (p: Promise<unknown>) => p.then(() => onError(''), (e: unknown) => onError(e instanceof Error ? e.message : String(e)))
+  return (
+    <div class="talkoot-card">
+      {c.member && (
+        <div class="talkoot-card-from">
+          <MarkOf id={c.member} /> {who(c.member)}
+        </div>
+      )}
+      {!canSteer ? (
+        <div class="talkoot-note">{cardSummary(c)}</div>
+      ) : c.kind === 'permission' && c.permission ? (
+        <PermissionRequest
+          request={c.permission}
+          onDecide={(callID: string, decision: Decision) =>
+            void act(client.send('approve', { call_id: callID, decision }, c.session))
+          }
+        />
+      ) : c.kind === 'ask' && c.ask ? (
+        <>
+          {/* The room keeps the answer sealed, so it cannot be redacted
+              later. The card is the one place to warn. */}
+          <div class="talkoot-note talkoot-ask-kept">{t('This answer is kept in the talkoot room, and a teammate may see it.')}</div>
+          <AskRequest
+            request={c.ask}
+            onAnswer={(askID, answers) =>
+              void act(client.send('answer', { ask_id: askID, answer: answers[0] ?? { answer: '' }, answers }, c.session))
+            }
+          />
+        </>
+      ) : c.kind === 'proposal' && c.proposal ? (
+        <ProposalCard
+          proposal={c.proposal}
+          onDecide={(decision) =>
+            void act(client.send('talkoot.decide', { id, by: person, proposal: c.proposal!.id, decision }))
+          }
+        />
+      ) : c.kind === 'kickoff' && c.kickoff ? (
+        <KickoffCard
+          kickoff={c.kickoff}
+          onRun={(skip) => void act(client.send('talkoot.kickoff', { id, by: person, skip }))}
+        />
+      ) : (
+        <div class="talkoot-note">{cardSummary(c)}</div>
+      )}
+    </div>
   )
 }
 

@@ -2,9 +2,9 @@
 // presences it can show, and the slider ranges. The pose table is not here. It
 // is poses.json, which the renderer reads and Save writes.
 
-import { TEAM_BODY, type Body } from '../features/talkoot/MemberMark'
-import { TEAM_LOOKS } from '../features/talkoot/face/team'
-import type { Row } from '../features/talkoot/face/poses'
+import { TEAM_BODY, type Body } from '../ui/talkoot/MemberMark'
+import { TEAM_LOOKS } from '../ui/talkoot/face/team'
+import type { Row } from '../ui/talkoot/face/poses'
 
 // TEAM_BODIES are the candidate team-only bodies from the prototype. Each is
 // a group, not one of the member shapes. TKT-01M3NSM9RP picks one for the

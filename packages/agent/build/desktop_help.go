@@ -14,6 +14,8 @@ its server and preserves sessions. A live daemon in the same TERVA_HOME
 prevents startup. Use a separate TERVA_HOME to run both.
 
   --desktop-port PORT    use this loopback port (default: random free port)
+  --desktop-app NAME     open on panel (default) or talkoot, which needs
+                         talkoot_enabled in the user configuration
   --web-allow-login      allow provider login from the Providers pane
   --cwd DIR              use this workspace directory
 

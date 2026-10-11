@@ -2745,6 +2745,7 @@ export type Verb =
   | 'talkoot.resume'
   | 'talkoot.recruit'
   | 'talkoot.ref'
+  | 'talkoot.notes'
   | 'talkoot.worker'
   | 'talkoot.room'
   | 'talkoot.templates'
@@ -2990,6 +2991,22 @@ export interface TalkootOpenRefParams {
 export interface TalkootWorkerParams {
   id: string
   member: string
+}
+
+// TalkootNote is one note a member wrote for the team, as talkoot.notes lists
+// it: the note: reference talkoot.ref opens, the author, the name, the size in
+// bytes, and when it last changed. The list never carries a note's text.
+export interface TalkootNote {
+  ref: string
+  member: string
+  name: string
+  size: number
+  at: string
+}
+
+// TalkootNotesResult is the talkoot.notes reply, newest note first.
+export interface TalkootNotesResult {
+  notes: TalkootNote[]
 }
 
 export interface TalkootRefText {
@@ -3498,6 +3515,7 @@ export interface VerbParams {
   'talkoot.kickoff': TalkootKickoffParams
   'talkoot.preview': TalkootPreviewParams
   'talkoot.ref': TalkootOpenRefParams
+  'talkoot.notes': TalkootRef
   'talkoot.worker': TalkootWorkerParams
 }
 

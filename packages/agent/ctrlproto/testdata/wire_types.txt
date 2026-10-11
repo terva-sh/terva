@@ -1350,6 +1350,14 @@ TalkootMemberStatus
 	expression	string	omitempty
 	intensity	int	omitempty
 	expression_cause	string	omitempty
+TalkootNote
+	ref	string
+	member	string
+	name	string
+	size	int64
+	at	time.Time
+TalkootNotesResult
+	notes	[]TalkootNote
 TalkootOp
 	op	string
 	member	string

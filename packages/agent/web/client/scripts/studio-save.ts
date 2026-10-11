@@ -1,6 +1,6 @@
 // The Talkoot Avatar Studio's Save (studio.html). A Vite plugin that runs in
 // the dev server only: POST /__studio/save writes the face's pose table,
-// src/features/talkoot/face/poses.json, so a pose tuned in the studio becomes
+// src/ui/talkoot/face/poses.json, so a pose tuned in the studio becomes
 // an ordinary diff to commit.
 //
 // It writes that one file and no other. A request must come from the page the
@@ -15,10 +15,10 @@ import { rename, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import type { Plugin } from 'vite'
 import { formatTable, validTable } from '../src/studio/table'
-import type { Table } from '../src/features/talkoot/face/poses'
+import type { Table } from '../src/ui/talkoot/face/poses'
 
 export const SAVE_ROUTE = '/__studio/save'
-export const TABLE_PATH = fileURLToPath(new URL('../src/features/talkoot/face/poses.json', import.meta.url))
+export const TABLE_PATH = fileURLToPath(new URL('../src/ui/talkoot/face/poses.json', import.meta.url))
 
 const LIMIT = 1 << 20
 

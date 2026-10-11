@@ -114,7 +114,7 @@ func newSupervisorMux(ctx context.Context, resolve TenantResolver, panel ctrlpro
 	// a supervisor that was never asked for it does not grow a second app.
 	//
 	// Served LOCALLY rather than proxied, which is the opposite of the rule two
-	// blocks down and for the opposite reason. stageHandler and stageShellHandler
+	// blocks down and for the opposite reason. appHandler and appShellHandler
 	// read embedded build output and never touch config.TervaHome(), so there is
 	// no tenant's bytes to fetch from a child — these are the same bytes for
 	// everyone, exactly like "/" and /assets/ above. Proxying them would cost a
@@ -134,12 +134,20 @@ func newSupervisorMux(ctx context.Context, resolve TenantResolver, panel ctrlpro
 	// the hello, so a child that advertises Stage on a host without these routes
 	// has the claim stripped rather than the link broken.
 	if opts.AllowStage {
-		for _, p := range stagePwaShellPaths() {
-			mux.Handle(p, securityHeaders(stageShellHandler()))
-		}
-		mux.Handle("/stage/assets/", securityHeaders(stageShellHandler()))
-		mux.Handle("/stage/", authMiddleware(opts, securityHeaders(stageHandler())))
+		mountApp(mux, opts, stagePrefix, stagePage, stageManifest)
 	}
+
+	// ---- the Talkoot app, always ----
+	//
+	// Served locally for Stage's reason above: it is embedded build output, the
+	// same bytes for every tenant. Unlike Stage it is mounted whatever the
+	// supervisor's own config says, because the decision is not the host's to
+	// make. A tenant's talkoot_enabled lives in its own home, and its child
+	// grants the talkoot group in the hello it sends. The panel offers the app
+	// only to a connection that holds the group, and the app says so to one that
+	// does not. Mounting it conditionally here would turn that link into the
+	// panel's SPA fallback for a tenant that has Talkoot on.
+	mountApp(mux, opts, talkootPrefix, talkootPage, talkootManifest)
 
 	// ---- the tenant's, every byte of it, proxied to their child ----
 	//

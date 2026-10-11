@@ -1,8 +1,8 @@
 import { t, tn } from '../../i18n'
 import type { TalkootAnswered, TalkootLine } from '../../platform/ctrlproto/types'
 import { HUMAN_PREFIX, isPerson, lineKey } from '../../platform/talkoot/store'
-import { clockTime } from '../../ui/formatting'
-import { Markdown } from '../../ui/Markdown'
+import { clockTime } from '../formatting'
+import { Markdown } from '../Markdown'
 import { RefChip } from './RefChip'
 import { MarkOf } from './MemberMark'
 

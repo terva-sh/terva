@@ -11,7 +11,7 @@ import { test, expect } from '@playwright/test'
 //   - Save, through the dev server's own route, into poses.json.
 
 const STUDIO = `http://127.0.0.1:${Number(process.env.SMOKE_STUDIO_PORT ?? 4174)}/studio.html`
-const TABLE = new URL('../../src/features/talkoot/face/poses.json', import.meta.url)
+const TABLE = new URL('../../src/ui/talkoot/face/poses.json', import.meta.url)
 const AGREED: string[] = JSON.parse(readFileSync(new URL('../../src/studio/agreed-clips.json', import.meta.url), 'utf8'))
 
 interface Finding {
@@ -76,7 +76,7 @@ test('Save writes poses.json from the studio page, and only from it', async ({ p
   await page.getByRole('button', { name: 'Save to poses.json' }).click()
   // The save goes through the dev server, which a busy runner can hold past
   // the 5 s default (TKT-01M3SSWY02).
-  await expect(page.locator('#note')).toContainText('Saved to src/features/talkoot/face/poses.json', { timeout: 20_000 })
+  await expect(page.locator('#note')).toContainText('Saved to src/ui/talkoot/face/poses.json', { timeout: 20_000 })
   // The committed table saved unedited writes the same bytes back.
   expect(readFileSync(TABLE, 'utf8')).toBe(before)
 

@@ -2,7 +2,7 @@
 // a click.
 
 import { useEffect, useState } from 'preact/hooks'
-import { BODIES, FaceMark, type Body, type Face } from '../features/talkoot/MemberMark'
+import { BODIES, FaceMark, type Body, type Face } from '../ui/talkoot/MemberMark'
 import { parseForm } from './check'
 import { TEAM_BODIES } from './data'
 import { useStudio } from './state'

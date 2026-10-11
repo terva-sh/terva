@@ -441,13 +441,15 @@ func newMux(ctx context.Context, svc ctrlproto.WorkspaceService, opts Options) *
 		// content-addressed shared bundle already ungated at /assets/, and holds no
 		// token or session. These specific routes are matched ahead of the gated
 		// /stage/ catch-all by ServeMux's longest-prefix rule.
-		for _, p := range stagePwaShellPaths() {
-			mux.Handle(p, securityHeaders(stageShellHandler()))
-		}
-		mux.Handle("/stage/assets/", securityHeaders(stageShellHandler()))
 		// The Stage shell (stage.html) and its client routes stay gated, so an
 		// unauthenticated navigation to /stage/ answers with the login form.
-		mux.Handle("/stage/", authMiddleware(opts, securityHeaders(stageHandler())))
+		mountApp(mux, opts, stagePrefix, stagePage, stageManifest)
+	}
+	// The Talkoot app, mounted when this daemon runs talkoots: the same
+	// condition that grants the talkoot group in the hello. Its shell files and
+	// bundle sit outside the gate and its HTML behind it, for Stage's reasons.
+	if opts.Talkoot {
+		mountApp(mux, opts, talkootPrefix, talkootPage, talkootManifest)
 	}
 	mux.Handle("/", authMiddleware(opts, securityHeaders(staticHandler())))
 	return mux

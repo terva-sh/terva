@@ -3,9 +3,9 @@
 // dev server serves it as studio.html, and the build leaves it out.
 
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import type { Motion } from '../features/talkoot/face/motion'
-import { TABLE, type Table } from '../features/talkoot/face/poses'
-import { TuningContext, type Edge, type Tuning } from '../features/talkoot/face/tuning'
+import type { Motion } from '../ui/talkoot/face/motion'
+import { TABLE, type Table } from '../ui/talkoot/face/poses'
+import { TuningContext, type Edge, type Tuning } from '../ui/talkoot/face/tuning'
 import { Grid, Sidebar, Team } from './gallery'
 import { Playground } from './playground'
 import { selftest } from './selftest'
