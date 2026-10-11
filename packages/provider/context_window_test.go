@@ -27,13 +27,16 @@ func TestEffectiveContextWindow(t *testing.T) {
 }
 
 func TestGPT56CatalogEntries(t *testing.T) {
+	// Prices from developers.openai.com/api/docs/pricing on 2026-10-10. The
+	// rows carried $5/$30, $2.50/$15 and $1/$6 until then, and models.dev
+	// agreed with the page, not the rows.
 	cases := []struct {
-		id         string
-		cacheWrite float64
+		id                      string
+		in, out, cacheR, cacheW float64
 	}{
-		{"gpt-5.6-sol", 6.25},
-		{"gpt-5.6-terra", 3.125},
-		{"gpt-5.6-luna", 1.25},
+		{"gpt-5.6-sol", 4, 20, 0.4, 5},
+		{"gpt-5.6-terra", 2, 12, 0.2, 2.5},
+		{"gpt-5.6-luna", 0.2, 1.2, 0.02, 0.25},
 	}
 	for _, tc := range cases {
 		m, err := testReg.FindModel("openai-codex", tc.id)
@@ -55,8 +58,10 @@ func TestGPT56CatalogEntries(t *testing.T) {
 		if m.EffectiveContextWindow() != 272000 {
 			t.Errorf("%s EffectiveContextWindow = %d, want 272000", tc.id, m.EffectiveContextWindow())
 		}
-		if m.PriceCacheWrite != tc.cacheWrite {
-			t.Errorf("%s PriceCacheWrite = %g, want %g (1.25x input)", tc.id, m.PriceCacheWrite, tc.cacheWrite)
+		if m.PriceInput != tc.in || m.PriceOutput != tc.out || m.PriceCacheRead != tc.cacheR || m.PriceCacheWrite != tc.cacheW {
+			t.Errorf("%s prices = %g / %g / %g / %g, want %g / %g / %g / %g (in / out / cache read / cache write)",
+				tc.id, m.PriceInput, m.PriceOutput, m.PriceCacheRead, m.PriceCacheWrite,
+				tc.in, tc.out, tc.cacheR, tc.cacheW)
 		}
 		if m.MaxOutput != 128000 || !m.Reasoning {
 			t.Errorf("%s limits: MaxOutput=%d Reasoning=%v", tc.id, m.MaxOutput, m.Reasoning)

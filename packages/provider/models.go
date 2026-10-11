@@ -1,6 +1,6 @@
 package provider
 
-import ()
+import "sort"
 
 // Model describes a single LLM we know about.
 type Model struct {
@@ -17,10 +17,14 @@ type Model struct {
 	// a value above ContextWindow is clamped down. User-settable per model
 	// via models.json `desiredContextWindow`.
 	DesiredContextWindow int
-	// ContextSurchargeAt is the input-token count above which the provider
+	// ContextSurchargeAt is the prompt-token count above which the provider
 	// charges a higher rate (OpenAI bills 2x input / 1.5x output past 272K on
-	// GPT-5.6). Informational: it names the natural cost-safe value for
-	// DesiredContextWindow. 0 means no surcharge tier.
+	// GPT-5.6). It names the natural cost-safe value for DesiredContextWindow.
+	// 0 means no surcharge tier.
+	//
+	// computeCost does not read it: the rates live in LongContextTiers. A row
+	// that declares tiers sets this to the lowest tier's threshold, and
+	// TestLongContextTiersAgreeWithSurcharge holds the two together.
 	ContextSurchargeAt int
 
 	MaxOutput int
@@ -56,6 +60,16 @@ type Model struct {
 	// in the catalog, and ApplyCost then prices output exactly as it
 	// always did. So a model that never sets this is untouched by it.
 	PriceOutputImage float64
+
+	// LongContextTiers are the price sheets a provider bills once a request's
+	// prompt grows past a threshold, sorted by Above. The Price fields above
+	// are the sheet below the first threshold. nil means one sheet at every
+	// prompt length.
+	//
+	// 🔑 A list, because models.dev publishes several steps for some models
+	// (the Qwen rows step up past 32K, 128K and 256K). Treat it as immutable
+	// after construction, the same as Caps: Model copies share it.
+	LongContextTiers []PriceTier
 
 	// Speculative marks models whose ids are known from the upstream
 	// vendor's CLI but not yet live on their public API. They'll 404
@@ -164,6 +178,59 @@ type Model struct {
 	// they'd replace ("Claude Sonnet 4.5 (latest)" vs claude-sonnet-4-5).
 	// Set by applyUserOverrides; never by the catalog or live layers.
 	DisplayNameSet bool
+}
+
+// PriceTier is one long-context price sheet: the USD-per-1M rates that apply
+// to a whole response once its prompt passes Above tokens.
+//
+// A zero rate means "no separate rate for this class", and the response pays
+// the rate of the step below for it, down to the base sheet. models.dev
+// leaves cache_write off most tiers whose base sheet has one, and billing
+// those tokens as free above the line would understate more than the
+// inherited rate does.
+type PriceTier struct {
+	Above      int // prompt tokens; the tier applies when Usage.PromptTokens() > Above
+	Input      float64
+	Output     float64
+	CacheRead  float64
+	CacheWrite float64
+}
+
+// pricedFor returns m with its Price fields swapped for the sheet a response
+// of this usage is billed at.
+//
+// The prompt counts input, cache reads and cache writes, and the whole
+// response moves to the higher sheet; neither vendor splits it at the line.
+// Anthropic states both rules for Haiku 5.5. OpenAI's page says ">272K input
+// tokens", and its usage object reports cached_tokens as a subset of
+// input_tokens, so its own "input tokens" are the whole prompt too.
+func (m Model) pricedFor(u Usage) Model {
+	prompt := u.PromptTokens()
+	var passed []PriceTier
+	for _, t := range m.LongContextTiers {
+		if prompt > t.Above {
+			passed = append(passed, t)
+		}
+	}
+	// Each step passed is laid over the one below it, lowest first, so an
+	// unset rate inherits from the nearest step that sets it. The sort makes
+	// that hold whatever order a models.json lists the steps in.
+	// TestLongContextTiersAgreeWithSurcharge walks the steps the same way.
+	sort.Slice(passed, func(i, j int) bool { return passed[i].Above < passed[j].Above })
+	for _, t := range passed {
+		m.PriceInput = rateOr(t.Input, m.PriceInput)
+		m.PriceOutput = rateOr(t.Output, m.PriceOutput)
+		m.PriceCacheRead = rateOr(t.CacheRead, m.PriceCacheRead)
+		m.PriceCacheWrite = rateOr(t.CacheWrite, m.PriceCacheWrite)
+	}
+	return m
+}
+
+func rateOr(tier, base float64) float64 {
+	if tier > 0 {
+		return tier
+	}
+	return base
 }
 
 // Label is the model's name for a surface that would otherwise print the
@@ -366,6 +433,27 @@ var catalog = []Model{
 		ContextWindow: 1000000, MaxOutput: 128000, Reasoning: true, AdaptiveThinking: true,
 		PriceInput: 4, PriceOutput: 20, PriceCacheRead: 0.2, PriceCacheWrite: 5,
 	},
+	// Haiku 5.5 (2026-10-07) is the first anthropic row priced by prompt
+	// length. Up to 100,000 prompt tokens it is $0.10/$0.50; over that, EVERY
+	// rate is 5x — input, output, both cache writes and the cache read — and
+	// the prompt length counts cache reads and writes too. The Price fields
+	// are the low tier, with the standard 0.1x / 1.25x cache pair, and
+	// LongContextTiers carries the high one.
+	//
+	// The row keeps the honest 1M ContextWindow but ships a 100K working
+	// window, the same shape the GPT-5.6/6 rows use for OpenAI's 272K line.
+	// Auto-compaction then holds a session under the surcharge by default,
+	// and a user who raises desiredContextWindow is billed the high tier.
+	//
+	// AdaptiveThinking is required. Thinking is adaptive and on by default, an
+	// explicit budget is a 400, and temperature/top_p/top_k must be omitted.
+	{
+		Provider: "anthropic", ID: "claude-haiku-5-5", DisplayName: "Claude Haiku 5.5",
+		ContextWindow: 1000000, DesiredContextWindow: 100000, ContextSurchargeAt: 100000,
+		MaxOutput: 128000, Reasoning: true, AdaptiveThinking: true,
+		PriceInput: 0.1, PriceOutput: 0.5, PriceCacheRead: 0.01, PriceCacheWrite: 0.125,
+		LongContextTiers: []PriceTier{{Above: 100000, Input: 0.5, Output: 2.5, CacheRead: 0.05, CacheWrite: 0.625}},
+	},
 
 	// ---- DeepSeek ----
 	// The current public DeepSeek API exposes the V4 family on
@@ -556,9 +644,10 @@ var catalog = []Model{
 	// (DiscoverOpenRouter) and overlays this on refresh.
 	{
 		Provider: "openrouter", ID: "anthropic/claude-sonnet-4.5", DisplayName: "Claude Sonnet 4.5 (OpenRouter)",
-		ContextWindow: 1000000, MaxOutput: 64000, Reasoning: true,
+		ContextWindow: 1000000, ContextSurchargeAt: 200000, MaxOutput: 64000, Reasoning: true,
 		PriceInput: 3, PriceOutput: 15, PriceCacheRead: 0.3, PriceCacheWrite: 3.75,
-		BaseURL: openrouterDefaultBaseURL,
+		LongContextTiers: []PriceTier{{Above: 200000, Input: 6, Output: 22.5, CacheRead: 0.6, CacheWrite: 7.5}},
+		BaseURL:          openrouterDefaultBaseURL,
 	},
 
 	// ---- Speculative: Anthropic ----
@@ -631,9 +720,10 @@ var catalog = []Model{
 	},
 	{
 		Provider: "openai", ID: "gpt-5.4", DisplayName: "GPT-5.4",
-		ContextWindow: 272000, MaxOutput: 128000, Reasoning: true,
+		ContextWindow: 272000, ContextSurchargeAt: 272000, MaxOutput: 128000, Reasoning: true,
 		PriceInput: 2.5, PriceOutput: 15, PriceCacheRead: 0.25,
-		Speculative: true,
+		LongContextTiers: []PriceTier{{Above: 272000, Input: 5, Output: 22.5, CacheRead: 0.5}},
+		Speculative:      true,
 	},
 	{
 		Provider: "openai", ID: "gpt-5.4-mini", DisplayName: "GPT-5.4 mini",
@@ -643,9 +733,10 @@ var catalog = []Model{
 	},
 	{
 		Provider: "openai", ID: "gpt-5.5", DisplayName: "GPT-5.5",
-		ContextWindow: 272000, MaxOutput: 128000, Reasoning: true,
+		ContextWindow: 272000, ContextSurchargeAt: 272000, MaxOutput: 128000, Reasoning: true,
 		PriceInput: 5, PriceOutput: 30, PriceCacheRead: 0.5,
-		Speculative: true,
+		LongContextTiers: []PriceTier{{Above: 272000, Input: 10, Output: 45, CacheRead: 1}},
+		Speculative:      true,
 	},
 
 	// ---- OpenAI Codex / ChatGPT subscription backend ----
@@ -662,9 +753,10 @@ var catalog = []Model{
 	},
 	{
 		Provider: "openai-codex", ID: "gpt-5.4", DisplayName: "GPT-5.4",
-		ContextWindow: 272000, MaxOutput: 128000, Reasoning: true,
+		ContextWindow: 272000, ContextSurchargeAt: 272000, MaxOutput: 128000, Reasoning: true,
 		PriceInput: 2.5, PriceOutput: 15, PriceCacheRead: 0.25,
-		Caps: map[Capability]bool{CapImageOutput: true},
+		LongContextTiers: []PriceTier{{Above: 272000, Input: 5, Output: 22.5, CacheRead: 0.5}},
+		Caps:             map[Capability]bool{CapImageOutput: true},
 	},
 	{
 		Provider: "openai-codex", ID: "gpt-5.4-mini", DisplayName: "GPT-5.4 mini",
@@ -674,8 +766,9 @@ var catalog = []Model{
 	},
 	{
 		Provider: "openai-codex", ID: "gpt-5.5", DisplayName: "GPT-5.5",
-		ContextWindow: 272000, MaxOutput: 128000, Reasoning: true,
+		ContextWindow: 272000, ContextSurchargeAt: 272000, MaxOutput: 128000, Reasoning: true,
 		PriceInput: 5, PriceOutput: 30, PriceCacheRead: 0.5,
+		LongContextTiers: []PriceTier{{Above: 272000, Input: 10, Output: 45, CacheRead: 1}},
 		// Native image output via the Responses image_generation tool —
 		// live-verified against the Codex subscription backend (2026-07-17).
 		Caps: map[Capability]bool{CapImageOutput: true},
@@ -683,32 +776,40 @@ var catalog = []Model{
 
 	// GPT-5.6 tiers (Sol/Terra/Luna), GA 2026-07-09 on both the API and
 	// the Codex subscription backend. `gpt-5.6` upstream aliases Sol.
+	//
+	// Prices from developers.openai.com/api/docs/pricing on 2026-10-10.
+	// OpenAI calls Sol's $4/$20 promotional, "available at least through
+	// November 21, 2026"; check the page after that date.
 	{
 		Provider: "openai-codex", ID: "gpt-5.6-sol", DisplayName: "GPT-5.6 Sol",
 		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
 		MaxOutput: 128000, Reasoning: true,
-		PriceInput: 5, PriceOutput: 30, PriceCacheRead: 0.5, PriceCacheWrite: 6.25,
-		Caps: map[Capability]bool{CapImageOutput: true},
+		PriceInput: 4, PriceOutput: 20, PriceCacheRead: 0.4, PriceCacheWrite: 5,
+		LongContextTiers: []PriceTier{{Above: 272000, Input: 8, Output: 30, CacheRead: 0.8, CacheWrite: 10}},
+		Caps:             map[Capability]bool{CapImageOutput: true},
 	},
 	{
 		Provider: "openai-codex", ID: "gpt-5.6-terra", DisplayName: "GPT-5.6 Terra",
 		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
 		MaxOutput: 128000, Reasoning: true,
-		PriceInput: 2.5, PriceOutput: 15, PriceCacheRead: 0.25, PriceCacheWrite: 3.125,
-		Caps: map[Capability]bool{CapImageOutput: true},
+		PriceInput: 2, PriceOutput: 12, PriceCacheRead: 0.2, PriceCacheWrite: 2.5,
+		LongContextTiers: []PriceTier{{Above: 272000, Input: 4, Output: 18, CacheRead: 0.4, CacheWrite: 5}},
+		Caps:             map[Capability]bool{CapImageOutput: true},
 	},
 	{
 		Provider: "openai-codex", ID: "gpt-5.6-luna", DisplayName: "GPT-5.6 Luna",
 		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
 		MaxOutput: 128000, Reasoning: true,
-		PriceInput: 1, PriceOutput: 6, PriceCacheRead: 0.1, PriceCacheWrite: 1.25,
-		Caps: map[Capability]bool{CapImageOutput: true},
+		PriceInput: 0.2, PriceOutput: 1.2, PriceCacheRead: 0.02, PriceCacheWrite: 0.25,
+		LongContextTiers: []PriceTier{{Above: 272000, Input: 0.4, Output: 1.8, CacheRead: 0.04, CacheWrite: 0.5}},
+		Caps:             map[Capability]bool{CapImageOutput: true},
 	},
 	{
 		Provider: "openai-codex", ID: "gpt-6.1-sol", DisplayName: "GPT-6.1 Sol",
 		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
 		MaxOutput: 128000, Reasoning: true, ReasoningEfforts: gpt6AstraEfforts,
 		PriceInput: 2, PriceOutput: 10, PriceCacheRead: 0.1, PriceCacheWrite: 2.5,
+		LongContextTiers: []PriceTier{{Above: 272000, Input: 4, Output: 15, CacheRead: 0.2, CacheWrite: 5}},
 	},
 	{
 		// OpenAI announced a staged rollout on 2026-09-03. Catalog presence
@@ -718,6 +819,7 @@ var catalog = []Model{
 		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
 		MaxOutput: 128000, Reasoning: true, ReasoningEfforts: gpt6AstraEfforts,
 		PriceInput: 10, PriceOutput: 50, PriceCacheRead: 1, PriceCacheWrite: 12.5,
+		LongContextTiers: []PriceTier{{Above: 272000, Input: 20, Output: 75, CacheRead: 2, CacheWrite: 25}},
 	},
 	{
 		// OpenAI launched Sol and Luna on 2026-09-22 for Plus, Pro, Business,
@@ -727,12 +829,14 @@ var catalog = []Model{
 		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
 		MaxOutput: 128000, Reasoning: true, ReasoningEfforts: gpt6Efforts,
 		PriceInput: 2, PriceOutput: 10, PriceCacheRead: 0.2, PriceCacheWrite: 2.5,
+		LongContextTiers: []PriceTier{{Above: 272000, Input: 4, Output: 15, CacheRead: 0.4, CacheWrite: 5}},
 	},
 	{
 		Provider: "openai-codex", ID: "gpt-6-luna", DisplayName: "GPT-6 Luna",
 		ContextWindow: 1050000, DesiredContextWindow: 272000, ContextSurchargeAt: 272000,
 		MaxOutput: 128000, Reasoning: true, ReasoningEfforts: gpt6Efforts,
 		PriceInput: 0.1, PriceOutput: 0.5, PriceCacheRead: 0.01, PriceCacheWrite: 0.125,
+		LongContextTiers: []PriceTier{{Above: 272000, Input: 0.2, Output: 0.75, CacheRead: 0.02, CacheWrite: 0.25}},
 	},
 }
 
@@ -817,7 +921,11 @@ func upsertModels(base, layer []Model) []Model {
 // at their own rate. See Model.PriceOutputImage and Usage.ImageOutputTokens:
 // the image models bill the two 10-20x apart, and both directions of getting
 // it wrong are real money.
+//
+// A model with LongContextTiers is billed at the sheet its prompt length
+// selects; see pricedFor.
 func computeCost(m Model, u Usage) float64 {
+	m = m.pricedFor(u)
 	const per = 1_000_000.0
 	return float64(u.InputTokens)*m.PriceInput/per +
 		outputCost(m, u) +
@@ -857,7 +965,13 @@ func outputCost(m Model, u Usage) float64 {
 // zero) returns 0 rather than the full prompt price. Free reads would
 // otherwise report the whole prompt as "saved" on every local ollama turn,
 // where the honest answer is that nothing was billed and nothing was saved.
+//
+// The counterfactual is priced on the same sheet computeCost used. An
+// uncached copy of the prompt has the same length, so it falls in the same
+// tier, and a base-rate counterfactual against a long-tier bill would report
+// a loss where the cache saved money.
 func cacheSavings(m Model, u Usage) float64 {
+	m = m.pricedFor(u)
 	if m.PriceCacheRead == 0 && m.PriceCacheWrite == 0 {
 		return 0
 	}

@@ -1210,7 +1210,7 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 								CachedTokens int `json:"cached_tokens"`
 								// GPT-5.6+ reports the prefix it WROTE to cache
 								// here, billed at 1.25x uncached input
-								// (PriceCacheWrite 6.25 against PriceInput 5).
+								// (PriceCacheWrite 5 against PriceInput 4).
 								// Dropping it understates the bill and leaves
 								// the cache-cliff detector reading writes as 0
 								// forever — openai/codex shipped the same bug

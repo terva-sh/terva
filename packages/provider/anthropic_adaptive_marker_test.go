@@ -30,6 +30,8 @@ func TestAdaptiveThinkingSubstringFallback(t *testing.T) {
 		// would still pass every other case in this list.
 		"claude-opus-5-5",
 		"us.anthropic.claude-opus-5-5",
+		"claude-haiku-5-5",
+		"anthropic.claude-haiku-5-5",
 	}
 	for _, id := range adaptive {
 		if !usesAdaptiveThinking(Model{ID: id}) {
@@ -46,6 +48,10 @@ func TestAdaptiveThinkingSubstringFallback(t *testing.T) {
 		"claude-opus-4-5",
 		"claude-opus-4-6",
 		"claude-haiku-4-5",
+		// Haiku 3.5's ids put the version first, so "5-haiku" sits in them.
+		// The "haiku-5" marker must not reach across that.
+		"claude-3-5-haiku-20241022",
+		"claude-3-5-haiku-latest",
 		"claude-3-opus-20240229",
 	}
 	for _, id := range budget {
@@ -173,5 +179,55 @@ func TestOpus55CatalogRow(t *testing.T) {
 	if _, err := testReg.FindModel("anthropic", "claude-opus-5"); err != nil {
 		t.Errorf("claude-opus-5 no longer resolves (%v); 5.5 lands beside it, "+
 			"not instead of it", err)
+	}
+}
+
+// Haiku 5.5 charges 5x on every rate once a prompt passes 100,000 tokens, so
+// its row ships a 100K working window over the real 1M ceiling. The window
+// is the part a later edit is most likely to "tidy" away, and nothing else
+// would notice: sessions would simply compact at 1M and bill at the high tier.
+func TestHaiku55CatalogRow(t *testing.T) {
+	got, err := testReg.FindModel("anthropic", "claude-haiku-5-5")
+	if err != nil {
+		t.Fatalf("no anthropic/claude-haiku-5-5 row: %v", err)
+	}
+	if got.Speculative {
+		t.Error("claude-haiku-5-5 is marked Speculative, but it is live on the public API")
+	}
+	if !got.AdaptiveThinking {
+		t.Error("claude-haiku-5-5 must set AdaptiveThinking: it rejects an " +
+			"explicit thinking budget and non-default sampling params")
+	}
+
+	// The ceiling stays honest; the working window and the surcharge line
+	// carry the 100K.
+	if got.ContextWindow != 1000000 || got.MaxOutput != 128000 {
+		t.Errorf("claude-haiku-5-5 limits = %d ctx / %d out, want 1000000 / 128000",
+			got.ContextWindow, got.MaxOutput)
+	}
+	if got.DesiredContextWindow != 100000 || got.ContextSurchargeAt != 100000 {
+		t.Errorf("claude-haiku-5-5 desired / surcharge = %d / %d, want 100000 / 100000",
+			got.DesiredContextWindow, got.ContextSurchargeAt)
+	}
+	if w := got.EffectiveContextWindow(); w != 100000 {
+		t.Errorf("claude-haiku-5-5 EffectiveContextWindow = %d, want 100000, "+
+			"so auto-compaction stays under the long-context surcharge", w)
+	}
+
+	// The low tier, which is what a session under the working window pays.
+	if got.PriceInput != 0.1 || got.PriceOutput != 0.5 ||
+		got.PriceCacheRead != 0.01 || got.PriceCacheWrite != 0.125 {
+		t.Errorf("claude-haiku-5-5 pricing = in %v / out %v / cache-read %v / cache-write %v, "+
+			"want 0.1 / 0.5 / 0.01 / 0.125", got.PriceInput, got.PriceOutput,
+			got.PriceCacheRead, got.PriceCacheWrite)
+	}
+
+	// Haiku 4.5 lands beside it and keeps the budget-thinking path.
+	h45, err := testReg.FindModel("anthropic", "claude-haiku-4-5")
+	if err != nil {
+		t.Fatalf("claude-haiku-4-5 no longer resolves: %v", err)
+	}
+	if usesAdaptiveThinking(h45) {
+		t.Error("claude-haiku-4-5 now takes the adaptive path and loses its thinking budget")
 	}
 }

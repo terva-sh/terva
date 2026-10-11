@@ -303,7 +303,7 @@ List models known for the current provider.
 
 Response data: `{"models":[{"id":"...","provider":"...","context_window":200000,"desired_context_window":0,"context_surcharge_at":0,"max_output":8192,"reasoning":true}, ...]}`.
 
-`context_window` is the model max: the hard ceiling. `desired_context_window` is the working window that drives auto-compaction (0 = use the max); `context_surcharge_at` is the input-token count above which the provider bills a higher rate (0 = no surcharge tier), which is the natural cost-safe value for the desired window. See [models.md](models.md).
+`context_window` is the model max: the hard ceiling. `desired_context_window` is the working window that drives auto-compaction (0 = use the max); `context_surcharge_at` is the prompt-token count above which the provider bills a higher rate (0 = no surcharge tier), which is the natural cost-safe value for the desired window. It is where the model's first long-context price step starts, and terva's cost figures bill the higher rate past it. See [models.md](models.md).
 
 ### `ping`
 

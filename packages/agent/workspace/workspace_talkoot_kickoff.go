@@ -13,6 +13,7 @@ import (
 	"terva.sh/terva/packages/agent/ctrlproto"
 	"terva.sh/terva/packages/agent/modelreg"
 	"terva.sh/terva/packages/agent/talkoot"
+	"terva.sh/terva/packages/provider"
 )
 
 // The introduction turn a kickoff estimate assumes: the member's system prompt,
@@ -85,7 +86,9 @@ func (w *Workspace) kickoffPlan(run *talkootRun, state string) (ctrlproto.Talkoo
 }
 
 // estimateIntro prices one introduction turn of m. The estimate is nil when
-// the model cannot be resolved or has no price.
+// the model cannot be resolved or has no price. It goes through ApplyCost, so
+// a member whose model bills a long-context tier is priced at the sheet its
+// intro prompt selects.
 func (w *Workspace) estimateIntro(m talkoot.Member, in, out int) (string, *float64) {
 	prov, model, _, err := w.memberModel(m)
 	if err != nil {
@@ -95,8 +98,9 @@ func (w *Workspace) estimateIntro(m talkoot.Member, in, out int) (string, *float
 	if err != nil || (found.PriceInput == 0 && found.PriceOutput == 0) {
 		return model, nil
 	}
-	usd := float64(in)*found.PriceInput/1e6 + float64(out)*found.PriceOutput/1e6
-	return model, &usd
+	u := provider.Usage{InputTokens: in, OutputTokens: out}
+	provider.ApplyCost(found, &u)
+	return model, &u.CostUSD
 }
 
 // kickoffCard is the inbox card of a kickoff that waits for a person.

@@ -302,8 +302,8 @@ type anthRequest struct {
 }
 
 // usesAdaptiveThinking reports whether a model only supports the
-// adaptive thinking mode (Opus 4.7 and later, Sonnet 5, and the whole
-// Fable family). These models reject explicit thinking budgets and
+// adaptive thinking mode (Opus 4.7 and later, Sonnet 5, Haiku 5, and the
+// whole Fable family). These models reject explicit thinking budgets and
 // non-default sampling parameters. The catalog flag is authoritative; the
 // id-substring fallback catches the same family when reached through an
 // Anthropic-Messages-compatible proxy whose catalog row predates the flag.
@@ -325,7 +325,7 @@ func adaptiveThinkingFromID(id string) bool {
 	l := strings.ToLower(id)
 	for _, marker := range []string{
 		"opus-4-7", "opus-4.7", "opus-4-8", "opus-4.8",
-		"opus-5", "sonnet-5", "fable",
+		"opus-5", "sonnet-5", "haiku-5", "fable",
 	} {
 		if strings.Contains(l, marker) {
 			return true

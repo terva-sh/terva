@@ -88,14 +88,55 @@ type mdModel struct {
 		Output  int `json:"output"`
 	} `json:"limit"`
 	Cost struct {
-		Input      float64 `json:"input"`
-		Output     float64 `json:"output"`
-		CacheRead  float64 `json:"cache_read"`
-		CacheWrite float64 `json:"cache_write"`
+		Input      float64  `json:"input"`
+		Output     float64  `json:"output"`
+		CacheRead  float64  `json:"cache_read"`
+		CacheWrite float64  `json:"cache_write"`
+		Tiers      []mdTier `json:"tiers"`
 	} `json:"cost"`
 	Modalities struct {
 		Input []string `json:"input"`
 	} `json:"modalities"`
+}
+
+// mdTier is one long-context step: the sheet billed once the prompt reaches
+// Tier.Size. models.dev spells the threshold both ways, 200000 and 200001
+// (and 262144 against 262145); tiersFrom folds both onto terva's "above
+// 200000".
+type mdTier struct {
+	Input      float64 `json:"input"`
+	Output     float64 `json:"output"`
+	CacheRead  float64 `json:"cache_read"`
+	CacheWrite float64 `json:"cache_write"`
+	Tier       struct {
+		Type string `json:"type"`
+		Size int    `json:"size"`
+	} `json:"tier"`
+}
+
+// tiersFrom converts models.dev tiers into catalog tiers, in ascending order.
+// Only "context" tiers are prompt-length steps; any other type is dropped
+// rather than billed as one.
+func tiersFrom(md []mdTier) []tier {
+	var out []tier
+	for _, t := range md {
+		if t.Tier.Type != "context" {
+			continue
+		}
+		above := t.Tier.Size
+		// A round number plus one is the same step written as "from".
+		if above%1000 == 1 || above%1024 == 1 {
+			above--
+		}
+		// Every prompt passes a step at zero, so it would replace the base
+		// sheet rather than step up from it.
+		if above <= 0 {
+			continue
+		}
+		out = append(out, tier{Above: above, In: t.Input, Out: t.Output, CacheRead: t.CacheRead, CacheWrite: t.CacheWrite})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Above < out[j].Above })
+	return out
 }
 
 func (m mdModel) vision() bool {
@@ -105,6 +146,12 @@ func (m mdModel) vision() bool {
 		}
 	}
 	return false
+}
+
+// tier is one LongContextTiers step on a catalog row.
+type tier struct {
+	Above                          int
+	In, Out, CacheRead, CacheWrite float64
 }
 
 // entry is one catalog row, however it was sourced.
@@ -118,6 +165,7 @@ type entry struct {
 	In, Out     float64
 	CacheRead   float64
 	CacheWrite  float64
+	Tiers       []tier // long-context steps; becomes LongContextTiers
 	// known is false when neither models.dev nor the baked catalog can say how
 	// big this model's context is. Such a model still runs — it just falls back
 	// to a guessed default — so it is reported loudly rather than papered over.
@@ -204,6 +252,7 @@ func reconcile(t target, md mdCatalog, served []string, baked map[string]entry) 
 				Out:         m.Cost.Output,
 				CacheRead:   m.Cost.CacheRead,
 				CacheWrite:  m.Cost.CacheWrite,
+				Tiers:       tiersFrom(m.Cost.Tiers),
 				known:       m.Limit.Context > 0,
 			}
 			// models.dev has the model but not its limits — keep whatever the
@@ -343,11 +392,54 @@ func parseBaked(src, provider string) map[string]entry {
 			Out:         atof(line, "PriceOutput"),
 			CacheRead:   atof(line, "PriceCacheRead"),
 			CacheWrite:  atof(line, "PriceCacheWrite"),
+			Tiers:       parseTiers(line),
 		}
 		e.known = e.Context > 0
 		out[id] = e
 	}
 	return out
+}
+
+// tierRE matches one PriceTier literal inside a LongContextTiers list.
+var tierRE = regexp.MustCompile(`\{Above: \d+[^{}]*\}`)
+
+// parseTiers reads a baked row's LongContextTiers back, so a row models.dev
+// has never heard of keeps its tiers across a sync.
+func parseTiers(line string) []tier {
+	_, list, ok := strings.Cut(line, "LongContextTiers: []PriceTier{")
+	if !ok {
+		return nil
+	}
+	var out []tier
+	for _, lit := range tierRE.FindAllString(list, -1) {
+		out = append(out, tier{
+			Above:      atoi(grp(regexp.MustCompile(`Above: (\d+)`), lit)),
+			In:         atof(lit, "Input"),
+			Out:        atof(lit, "Output"),
+			CacheRead:  atof(lit, "CacheRead"),
+			CacheWrite: atof(lit, "CacheWrite"),
+		})
+	}
+	return out
+}
+
+// renderTiers emits a LongContextTiers list, leaving out zero rates the way
+// the hand-written rows do.
+func renderTiers(ts []tier) string {
+	parts := make([]string, 0, len(ts))
+	for _, t := range ts {
+		lit := fmt.Sprintf("Above: %d", t.Above)
+		for _, f := range []struct {
+			name string
+			v    float64
+		}{{"Input", t.In}, {"Output", t.Out}, {"CacheRead", t.CacheRead}, {"CacheWrite", t.CacheWrite}} {
+			if f.v > 0 {
+				lit += fmt.Sprintf(", %s: %s", f.name, num(f.v))
+			}
+		}
+		parts = append(parts, "{"+lit+"}")
+	}
+	return "[]PriceTier{" + strings.Join(parts, ", ") + "}"
 }
 
 // render emits the catalog rows.
@@ -367,12 +459,21 @@ func render(t target, es []entry) string {
 		if e.Context == 0 {
 			continue
 		}
-		fmt.Fprintf(&b, "\t{Provider: %q, ID: %q, DisplayName: %q, ContextWindow: %d, MaxOutput: %d, Reasoning: %t",
-			t.provider, e.ID, firstNonEmpty(e.DisplayName, e.ID), e.Context, e.MaxOutput, e.Reasoning)
+		fmt.Fprintf(&b, "\t{Provider: %q, ID: %q, DisplayName: %q, ContextWindow: %d",
+			t.provider, e.ID, firstNonEmpty(e.DisplayName, e.ID), e.Context)
+		// The working-window hint is the first step, which is the rule
+		// TestLongContextTiersAgreeWithSurcharge holds every row to.
+		if len(e.Tiers) > 0 {
+			fmt.Fprintf(&b, ", ContextSurchargeAt: %d", e.Tiers[0].Above)
+		}
+		fmt.Fprintf(&b, ", MaxOutput: %d, Reasoning: %t", e.MaxOutput, e.Reasoning)
 		fmt.Fprintf(&b, ", PriceInput: %s, PriceOutput: %s, PriceCacheRead: %s",
 			num(e.In), num(e.Out), num(e.CacheRead))
 		if e.CacheWrite > 0 {
 			fmt.Fprintf(&b, ", PriceCacheWrite: %s", num(e.CacheWrite))
+		}
+		if len(e.Tiers) > 0 {
+			fmt.Fprintf(&b, ", LongContextTiers: %s", renderTiers(e.Tiers))
 		}
 		fmt.Fprintf(&b, ", BaseURL: %q},\n", t.baseURL)
 	}

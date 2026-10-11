@@ -195,13 +195,43 @@ Place a `models.json` in `$TERVA_HOME` (macOS: `~/Library/Application Support/te
 }
 ```
 
-Supported fields per model: `id` (required), `name`, `reasoning`, `contextWindow`, `desiredContextWindow`, `maxTokens`, `temperature`, `defaultReasoning`, `reasoningEfforts`, `capabilities`, `baseUrl`, `priceInput`, `priceOutput`, `priceCacheRead`, `priceCacheWrite`, `priceOutputImage`. `name` is what to call the model on screen **in place of its id** (see [Renaming a model](#renaming-a-model)); `contextWindow` is the model's total token budget (the hard ceiling: it drives the context gauge and clamps `maxTokens`); `desiredContextWindow` is an optional smaller *working* window that moves the auto-compaction thresholds only, so you can compact earlier on a large-window model, say to stay under a long-context pricing surcharge, without pretending the model is smaller; `maxTokens` is the cap on a single response; `temperature` (0–2) is the model's default sampling temperature, used when no `--temperature` flag is given and ignored for adaptive-thinking models (which reject sampling params); `defaultReasoning` is the thinking level for this model, and a value you set here outranks the global **Thinking** setting, unlike the one terva ships in its own catalog, which yields to it (full order in [CLI](cli.md#per-session-thinking)); `reasoningEfforts` is the list of `reasoning_effort` values this model actually accepts (`["none", "low", "medium", "xhigh"]`, say; see [Declaring which efforts a model accepts](#declaring-which-efforts-a-model-accepts)); `capabilities` is an object of explicit capability assertions (`image-input`, `image-output`, `reasoning`) that override what terva would otherwise infer (`{"image-input": false}` on a vision-less local model, say). These are editable in-app from the `/model` picker with `Ctrl+E`; `defaultReasoning` is a picker there rather than a text box, offering the levels **this** model can actually tell apart (several rungs reach some models as one wire value, and it does not offer both), and the row is absent for a model that takes no thinking setting at all. Several are especially worth setting for local / OpenAI-compatible models that aren't in the built-in catalog; see [Local models](#local-models-with-ollama).
+Supported fields per model: `id` (required), `name`, `reasoning`, `contextWindow`, `desiredContextWindow`, `maxTokens`, `temperature`, `defaultReasoning`, `reasoningEfforts`, `capabilities`, `baseUrl`, `priceInput`, `priceOutput`, `priceCacheRead`, `priceCacheWrite`, `priceOutputImage`, `longContextTiers`, `contextSurchargeAt`. `name` is what to call the model on screen **in place of its id** (see [Renaming a model](#renaming-a-model)); `contextWindow` is the model's total token budget (the hard ceiling: it drives the context gauge and clamps `maxTokens`); `desiredContextWindow` is an optional smaller *working* window that moves the auto-compaction thresholds only, so you can compact earlier on a large-window model, say to stay under a long-context pricing surcharge, without pretending the model is smaller; `maxTokens` is the cap on a single response; `temperature` (0–2) is the model's default sampling temperature, used when no `--temperature` flag is given and ignored for adaptive-thinking models (which reject sampling params); `defaultReasoning` is the thinking level for this model, and a value you set here outranks the global **Thinking** setting, unlike the one terva ships in its own catalog, which yields to it (full order in [CLI](cli.md#per-session-thinking)); `reasoningEfforts` is the list of `reasoning_effort` values this model actually accepts (`["none", "low", "medium", "xhigh"]`, say; see [Declaring which efforts a model accepts](#declaring-which-efforts-a-model-accepts)); `capabilities` is an object of explicit capability assertions (`image-input`, `image-output`, `reasoning`) that override what terva would otherwise infer (`{"image-input": false}` on a vision-less local model, say). These are editable in-app from the `/model` picker with `Ctrl+E`; `defaultReasoning` is a picker there rather than a text box, offering the levels **this** model can actually tell apart (several rungs reach some models as one wire value, and it does not offer both), and the row is absent for a model that takes no thinking setting at all. Several are especially worth setting for local / OpenAI-compatible models that aren't in the built-in catalog; see [Local models](#local-models-with-ollama).
 
 Prices are USD per 1M tokens. `priceOutputImage` is the separate output rate for **image** tokens, for models that bill a generated picture differently from the text beside it. Gemini's nano-banana family charges $3/1M for text but $60/1M for images on the same model, in the same response. Leave it unset (0) for every ordinary model: output is then billed at the single `priceOutput` rate exactly as before. When it is set, terva splits the response's output tokens by modality and bills each part at its own rate.
 
 A few retired provider keys are still accepted and rewritten to their current names: `anthropic-messages` maps to `anthropic`, `moonshot-ai` and `kimi-code` map to `kimi`, and `deepseek-chat` and `deepseek-ai` map to `deepseek`. Everything else is used exactly as written: `openai-responses`, `openai-codex`, `moonshot`, `groq`, `openrouter`, `github-copilot`, `amazon-bedrock`, `google-vertex`, `azure-openai-responses`, `fireworks`, `vercel-ai-gateway`, `mistral`, `xai` and the rest are live provider ids or aliases, so a block keyed with one applies to that provider and no other.
 
 User-defined models show `source: user` in `--list-models` and take precedence over both the baked-in catalog and live-discovered models. Missing or invalid files are silently ignored.
+
+#### Long-context prices
+
+Some models bill by prompt length. Past a threshold, the whole request moves to a higher price sheet. Claude Haiku 5.5 costs five times as much above 100,000 prompt tokens, and OpenAI's GPT-5.4 and later models raise their rates above 272,000. The built-in catalog carries these steps, and terva's cost figures bill each response at the sheet its prompt length selects. The prompt length counts cached tokens, both reads and writes.
+
+`longContextTiers` declares the steps for a model of your own, or corrects them for a catalog model. Each step names the prompt length it starts above and the rates that apply past it:
+
+```json
+{
+  "providers": {
+    "openai-compatible": {
+      "models": [
+        {
+          "id": "my-gateway-model",
+          "contextWindow": 1000000,
+          "priceInput": 1, "priceOutput": 5, "priceCacheRead": 0.2,
+          "longContextTiers": [
+            { "above": 32000, "priceInput": 1.8, "priceOutput": 9 },
+            { "above": 128000, "priceInput": 3, "priceOutput": 15 }
+          ]
+        }
+      ]
+    }
+  }
+}
+```
+
+A response with a 32,001-token prompt pays $1.80 input and $9 output per million tokens, for all of its tokens. A response past 128,000 pays the second step. A rate you leave out of a step is billed at the rate of the step below it, or at the model's base rate when no lower step sets one. A step with no positive `above` is skipped with a warning.
+
+On a catalog model, your list replaces the catalog's steps as a whole. To bill a gateway at one flat price where the catalog has steps, give it a single step at the base prices. `contextSurchargeAt` is the prompt length where the higher prices start. It defaults to your first step. It does not change the bill. It is the value to compare with `desiredContextWindow` when you want auto-compaction to keep a session under the higher prices.
 
 ### Renaming a model
 
@@ -349,31 +379,36 @@ against. Re-derive them from the picker rather than trusting the numbers here.
 
 #### When there is no pattern to write
 
-Not every provider's clutter has a shape a glob can catch. OpenCode Go serves 37
-models while its landing page promotes 28. The extra nine are seven superseded
-releases (`glm-5`, where `glm-5.1` through `5.3` are current; `kimi-k2.5`, where
-`k2.6` and `k3` are), plus a preview and an experimental vision build. Nothing
-about an id says "older", so this one is a plain enumeration:
+Not every provider's clutter has a shape a glob can catch. OpenCode Go serves 45
+models while its documentation lists 32. The extra thirteen are twelve superseded
+releases and previews (`glm-5` and `glm-5.1`, where `5.2` and `5.3` are current;
+`kimi-k2.5`, where `k2.6` and `k3` are; `hy3-preview`, where `hy3` has shipped),
+plus an alpha. Nothing about an id says "older", so this one is a plain
+enumeration:
 
 ```json
 {
   "hidden_models": [
-    "opencode-go/deepseek-v4-flash-vision-exp",
+    "opencode-go/deepseek-flash",
     "opencode-go/glm-5",
+    "opencode-go/glm-5.1",
     "opencode-go/grok-4.5",
     "opencode-go/hy3-preview",
     "opencode-go/kimi-k2.5",
     "opencode-go/mimo-v2-omni",
     "opencode-go/mimo-v2-pro",
     "opencode-go/minimax-m2.5",
-    "opencode-go/qwen3.5-plus"
+    "opencode-go/omen-alpha",
+    "opencode-go/qwen3.5-plus",
+    "opencode-go/qwen3.6-plus",
+    "opencode-go/qwen3.7-max"
   ]
 }
 ```
 
-All nine still work: they are served, they keep their real context windows, and
-`--model` reaches them. This only trims the picker to the lineup OpenCode
-currently promotes.
+All thirteen still work: they are served, they keep their real context windows,
+and `--model` reaches them. This only trims the picker to the lineup OpenCode
+currently documents.
 
 Treat it as a snapshot, not a rule. Where `openrouter/*` keeps working as that
 gateway adds models, this list goes stale the moment OpenCode retires one or
@@ -564,6 +599,39 @@ GPT-6, even on an account that OpenAI has not yet given GPT-6. A sub-agent on
 such an account fails when the request reaches OpenAI. GPT-5.6 is listed
 behind GPT-6 only so that the ladder still resolves if a later catalog drops
 the GPT-6 rows. To keep a rung on GPT-5.6, pin it by id in `swarm_tiers`.
+
+### Claude Haiku 5.5
+
+Anthropic released Claude Haiku 5.5 on October 7, 2026. Select it on the
+`anthropic` provider:
+
+```bash
+terva --provider anthropic --model claude-haiku-5-5
+```
+
+The model has a 1,000,000-token context limit and a 128,000-token output
+limit. Anthropic prices it by prompt length. Up to 100,000 prompt tokens, the
+prices per million tokens are $0.10 input, $0.01 cached input, $0.125 cache
+write, and $0.50 output. Above 100,000 prompt tokens, every one of those rates
+is five times higher for the whole request. Cache reads and writes count toward
+the prompt length. See Anthropic's
+[Haiku 5.5 model page](https://platform.claude.com/docs/en/models/haiku-5-5/overview)
+and [long context pricing](https://platform.claude.com/docs/en/about-claude/pricing#long-context-pricing).
+
+terva therefore uses 100,000 tokens as the default working window, so
+auto-compaction keeps a session under the higher prices. To use more of the
+1,000,000-token window, set `desiredContextWindow` for the model in
+`models.json`, or edit it from the `/model` picker. Above 100,000 prompt
+tokens, terva's cost figures bill the higher prices, as Anthropic does (see
+[Long-context prices](#long-context-prices)).
+
+Thinking is adaptive, and terva sends the effort level rather than a thinking
+budget. The model rejects `temperature`, so terva omits it.
+
+The `weak` and `cheap` rungs of the
+[swarm tier ladder](#swarm-sub-agent-tiers-weak--medium--strong--cheap) stay on
+Claude Haiku 4.5. To send them to Haiku 5.5, pin the rungs by id in
+`swarm_tiers`.
 
 ### Kimi Code
 

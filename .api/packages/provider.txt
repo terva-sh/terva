@@ -152,6 +152,7 @@ Model.EffectiveContextWindow	method	func() int
 Model.Has	method	func(c Capability) bool
 Model.ID	field	string
 Model.Label	method	func() string
+Model.LongContextTiers	field	[]PriceTier
 Model.MaxOutput	field	int
 Model.PriceCacheRead	field	float64
 Model.PriceCacheWrite	field	float64
@@ -252,6 +253,12 @@ ParamTriState	const unstable	ParamKind
 ParseModelCache	func unstable	func(b []byte) (ModelCache, error)
 ParseUserModelsFile	func unstable	func(data []byte) (UserModelsFile, error)
 ParseUserModelsWithWarnings	func unstable	func(data []byte) ([]UserOverride, []string)
+PriceTier	type	struct
+PriceTier.Above	field	int
+PriceTier.CacheRead	field	float64
+PriceTier.CacheWrite	field	float64
+PriceTier.Input	field	float64
+PriceTier.Output	field	float64
 ProviderError	type	struct
 ProviderError.Error	method	func() string
 ProviderError.Msg	field	string
@@ -416,11 +423,13 @@ UserModel	type unstable	struct
 UserModel.API	field unstable	string
 UserModel.BaseURL	field unstable	string
 UserModel.Capabilities	field unstable	map[string]bool
+UserModel.ContextSurchargeAt	field unstable	int
 UserModel.ContextWindow	field unstable	int
 UserModel.DefaultReasoning	field unstable	string
 UserModel.DesiredContextWindow	field unstable	int
 UserModel.ID	field unstable	string
 UserModel.Input	field unstable	[]string
+UserModel.LongContextTiers	field unstable	[]UserPriceTier
 UserModel.MaxTokens	field unstable	int
 UserModel.Name	field unstable	string
 UserModel.PriceCacheRead	field unstable	float64
@@ -439,6 +448,12 @@ UserModelsFile.Upsert	method unstable	func(providerKey string, um UserModel) err
 UserOverride	type unstable	struct
 UserOverride.Model	field unstable	Model
 UserOverride.ReasoningSet	field unstable	bool
+UserPriceTier	type unstable	struct
+UserPriceTier.Above	field unstable	int
+UserPriceTier.PriceCacheRead	field unstable	float64
+UserPriceTier.PriceCacheWrite	field unstable	float64
+UserPriceTier.PriceInput	field unstable	float64
+UserPriceTier.PriceOutput	field unstable	float64
 UserProvider	type unstable	struct
 UserProvider.Models	field unstable	[]UserModel
 ValidCodexIdentity	func unstable	func(s string) bool

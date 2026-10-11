@@ -77,7 +77,9 @@ type UserModel struct {
 	PriceOutput          float64         `json:"priceOutput"`
 	PriceCacheRead       float64         `json:"priceCacheRead"`
 	PriceCacheWrite      float64         `json:"priceCacheWrite"`
-	PriceOutputImage     float64         `json:"priceOutputImage"` // output rate for IMAGE tokens; 0 = one output rate
+	PriceOutputImage     float64         `json:"priceOutputImage"`             // output rate for IMAGE tokens; 0 = one output rate
+	ContextSurchargeAt   int             `json:"contextSurchargeAt,omitempty"` // cost-safe working window; defaults to the first longContextTiers step
+	LongContextTiers     []UserPriceTier `json:"longContextTiers,omitempty"`   // replaces the catalog's tiers wholesale when set
 	BaseURL              string          `json:"baseUrl,omitempty"`
 	Temperature          *float32        `json:"temperature,omitempty"`      // default sampling temperature (0–2); nil = inherit
 	DefaultReasoning     string          `json:"defaultReasoning,omitempty"` // per-model reasoning level when no global level is set; "" = inherit
@@ -85,6 +87,37 @@ type UserModel struct {
 	Capabilities         map[string]bool `json:"capabilities,omitempty"`
 	Input                []string        `json:"input"` // legacy capability spelling, see above
 	API                  string          `json:"api"`   // informational only
+}
+
+// UserPriceTier is one models.json long-context step: the rates billed once
+// a response's prompt passes Above tokens. A rate left at 0 bills that class
+// at the rate of the step below, down to the model's base rate (see
+// PriceTier).
+//
+// Unstable: terva's on-disk file format carries no promise before 1.0.
+type UserPriceTier struct {
+	Above           int     `json:"above"`
+	PriceInput      float64 `json:"priceInput,omitempty"`
+	PriceOutput     float64 `json:"priceOutput,omitempty"`
+	PriceCacheRead  float64 `json:"priceCacheRead,omitempty"`
+	PriceCacheWrite float64 `json:"priceCacheWrite,omitempty"`
+}
+
+// userTiers converts models.json tiers into catalog tiers in ascending order,
+// dropping a step with no threshold, since every prompt would pass it.
+func userTiers(in []UserPriceTier) (tiers []PriceTier, warnings []string) {
+	for i, t := range in {
+		if t.Above <= 0 {
+			warnings = append(warnings, fmt.Sprintf("longContextTiers entry #%d has no positive \"above\"; skipped", i))
+			continue
+		}
+		tiers = append(tiers, PriceTier{
+			Above: t.Above, Input: t.PriceInput, Output: t.PriceOutput,
+			CacheRead: t.PriceCacheRead, CacheWrite: t.PriceCacheWrite,
+		})
+	}
+	sort.Slice(tiers, func(i, j int) bool { return tiers[i].Above < tiers[j].Above })
+	return tiers, warnings
 }
 
 // UserOverride is one models.json entry held in the user layer: the
@@ -176,6 +209,10 @@ func ParseUserModelsWithWarnings(data []byte) ([]UserOverride, []string) {
 				warnings = append(warnings, fmt.Sprintf("models.json: provider %q entry #%d has empty id; skipped", providerName, i))
 				continue
 			}
+			if um.ContextSurchargeAt < 0 {
+				warnings = append(warnings, fmt.Sprintf("models.json: %s/%s has negative contextSurchargeAt; clamped to 0", normalized, um.ID))
+				um.ContextSurchargeAt = 0
+			}
 			if um.ContextWindow < 0 || um.DesiredContextWindow < 0 || um.MaxTokens < 0 {
 				warnings = append(warnings, fmt.Sprintf("models.json: %s/%s has negative contextWindow/desiredContextWindow/maxTokens; clamped to 0", normalized, um.ID))
 				if um.ContextWindow < 0 {
@@ -191,6 +228,14 @@ func ParseUserModelsWithWarnings(data []byte) ([]UserOverride, []string) {
 			if um.Temperature != nil && (*um.Temperature < 0 || *um.Temperature > 2) {
 				warnings = append(warnings, fmt.Sprintf("models.json: %s/%s temperature %g is out of range [0,2]; ignored", normalized, um.ID, *um.Temperature))
 				um.Temperature = nil
+			}
+			tiers, tierWarnings := userTiers(um.LongContextTiers)
+			for _, w := range tierWarnings {
+				warnings = append(warnings, fmt.Sprintf("models.json: %s/%s: %s", normalized, um.ID, w))
+			}
+			surchargeAt := um.ContextSurchargeAt
+			if surchargeAt == 0 && len(tiers) > 0 {
+				surchargeAt = tiers[0].Above
 			}
 			caps, reasoningFromCaps, capWarnings := userCaps(um)
 			for _, w := range capWarnings {
@@ -217,6 +262,8 @@ func ParseUserModelsWithWarnings(data []byte) ([]UserOverride, []string) {
 				PriceCacheRead:       um.PriceCacheRead,
 				PriceCacheWrite:      um.PriceCacheWrite,
 				PriceOutputImage:     um.PriceOutputImage,
+				ContextSurchargeAt:   surchargeAt,
+				LongContextTiers:     tiers,
 				BaseURL:              um.BaseURL,
 				Temperature:          um.Temperature,
 				DefaultReasoning:     um.DefaultReasoning,
@@ -403,6 +450,15 @@ func applyUserOverrides(base []Model, overrides []UserOverride) []Model {
 		}
 		if um.PriceOutputImage > 0 {
 			existing.PriceOutputImage = um.PriceOutputImage
+		}
+		// The tiers replace the catalog's as a set. Merging step by step would
+		// leave a catalog step the operator meant to remove, and a gateway that
+		// bills differently from the vendor needs to say so as a whole.
+		if len(um.LongContextTiers) > 0 {
+			existing.LongContextTiers = um.LongContextTiers
+		}
+		if um.ContextSurchargeAt > 0 {
+			existing.ContextSurchargeAt = um.ContextSurchargeAt
 		}
 		// Every editor-managed override merges through the shared registry, so
 		// adding one needs no edit here — just a ModelParam entry. That now

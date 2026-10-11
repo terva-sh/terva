@@ -12,9 +12,9 @@ import (
 // The opencode-go hiding example in docs/models.md must still describe the
 // catalog it is derived from.
 //
-// That snippet lists nine model ids to hide, and the prose around it claims
-// arithmetic: the gateway serves 33 models, promotes 24, and the extra nine are
-// the difference. All of it was computed from the catalog on the day it was
+// That snippet lists model ids to hide, and the prose around it claims
+// arithmetic: the gateway serves N models, its documentation lists M, and the
+// extra ones are the difference. All of it was computed from the catalog on the day it was
 // written, and none of it is self-maintaining. The doc says so itself — "it goes
 // stale the moment OpenCode retires or adds a model, and nothing will announce
 // that" — and this test is the thing that announces it.
@@ -110,11 +110,11 @@ func TestOpenCodeGoDocSnippetMatchesCatalog(t *testing.T) {
 
 	// ---- the prose arithmetic must still hold ----
 
-	claimRE := regexp.MustCompile(`OpenCode Go serves (\d+)\s+models while its landing page promotes (\d+)`)
+	claimRE := regexp.MustCompile(`OpenCode Go serves (\d+)\s+models while its documentation lists (\d+)`)
 	claim := claimRE.FindStringSubmatch(doc)
 	if claim == nil {
-		t.Fatal(`could not find the "OpenCode Go serves N models while its landing page ` +
-			`promotes M" claim in docs/models.md — if the sentence was reworded, update ` +
+		t.Fatal(`could not find the "OpenCode Go serves N models while its documentation ` +
+			`lists M" claim in docs/models.md — if the sentence was reworded, update ` +
 			"this test so the numbers stay checked.")
 	}
 	claimedServed, claimedPromoted := atoiOrFatal(t, claim[1]), atoiOrFatal(t, claim[2])
