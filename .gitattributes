@@ -97,3 +97,9 @@ packages/agent/web/client/src/locales/**     linguist-generated=true
 # the files to LF anyway, so an embedded template reads the same on every
 # checkout.
 packages/agent/talkoot/templates/*.md text eol=lf
+
+# terva-models-sync rewrites the baked blocks in the built-in catalog and reads
+# them back. TestRenderRoundTripsTheBakedBlock compares its render to the file
+# line by line. A Windows checkout gave each line a trailing CR, so the v0.141.0
+# release gate failed there on two lines that printed identically.
+packages/provider/catalog_builtin.go text eol=lf

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,6 +13,11 @@ func TestPeerNoticePreservesJailPosture(t *testing.T) {
 	primary, peer := testsupport.TempDir(t), testsupport.TempDir(t)
 	sb := tools.NewSandbox(primary)
 	if err := sb.AddRoot(peer); err != nil {
+		t.Fatal(err)
+	}
+	// The notice names the canonical root that AddRoot stored.
+	peer, err := filepath.EvalSymlinks(peer)
+	if err != nil {
 		t.Fatal(err)
 	}
 	posture := "fixture posture notice"

@@ -43,7 +43,12 @@ func TestResolveAdditionalDirectories(t *testing.T) {
 	if err := r.Sandbox.CheckPath(filepath.Join(outside, "file")); err == nil {
 		t.Fatal("Resolve escaped grant")
 	}
-	if !strings.Contains(r.SystemPrompt, peer) {
+	// The prompt names the canonical root that the sandbox stored.
+	canonicalPeer, err := filepath.EvalSymlinks(peer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.SystemPrompt, canonicalPeer) {
 		t.Fatal("model prompt does not name peer root")
 	}
 }

@@ -25,8 +25,12 @@ func init() {
 	if strings.Join(os.Args[1:], " ") != "configure export-credentials --profile work --format process --no-cli-auto-prompt --no-cli-pager" || os.Getenv("AWS_CLI_AUTO_PROMPT") != "off" || os.Getenv("AWS_PAGER") != "" || os.Getenv("AWS_EC2_METADATA_DISABLED") != "true" {
 		os.Exit(11)
 	}
+	// Getwd reports the resolved directory, /private/var on macOS, so compare
+	// both sides after symlinks resolve.
 	wd, _ := os.Getwd()
-	if wd != os.Getenv("TERVA_TEST_AWS_HOME") {
+	wd, _ = filepath.EvalSymlinks(wd)
+	home, _ := filepath.EvalSymlinks(os.Getenv("TERVA_TEST_AWS_HOME"))
+	if wd == "" || wd != home {
 		os.Exit(12)
 	}
 	switch os.Getenv("TERVA_TEST_AWS_MODE") {
