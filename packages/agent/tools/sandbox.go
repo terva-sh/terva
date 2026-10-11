@@ -5,17 +5,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
-// Sandbox guards tool access to the filesystem and shell. When Locked
-// is true (1), file tools refuse paths outside Root and bash runs with
-// a restricted environment.
+// Sandbox confines writes to workspace roots and guards sensitive reads.
+// Shell commands use heuristics rather than process-level confinement.
 //
 // The value is designed to be shared across tool instances (by pointer).
-// Enable/Disable are atomic so they can be toggled from the TUI.
+// Root changes and lock changes are safe during concurrent tool calls.
 type Sandbox struct {
-	Root string
+	rootMu     sync.RWMutex
+	primary    string
+	additional []string
 
 	// secretRoots are paths the READ tools refuse even though reads are
 	// otherwise unconfined: credentials, transcripts, and the logs that
@@ -43,7 +45,7 @@ type Sandbox struct {
 	// rather than at setup. See AddGuardedRoot.
 	guardedRoots []guardedRoot
 
-	// writableRoots are directories OUTSIDE Root that mutating tools may
+	// writableRoots are host-owned directories that mutating tools may
 	// still target when jailed — terva-owned surfaces that exist to be
 	// agent-written (the handoffs dir). Nothing here loosens containment
 	// for the rest of the filesystem. Same set-once-at-setup contract as
@@ -93,8 +95,116 @@ type guardedRoot struct {
 
 // NewSandbox returns a Sandbox rooted at cwd. It starts unlocked.
 func NewSandbox(root string) *Sandbox {
-	s := &Sandbox{Root: root}
+	s := &Sandbox{primary: root}
 	return s
+}
+
+// PrimaryRoot returns the anchor for relative tool paths.
+func (s *Sandbox) PrimaryRoot() string {
+	if s == nil {
+		return ""
+	}
+	s.rootMu.RLock()
+	defer s.rootMu.RUnlock()
+	return s.primary
+}
+
+// Roots returns a copy of the primary root followed by explicit peer roots.
+func (s *Sandbox) Roots() []string {
+	if s == nil {
+		return nil
+	}
+	s.rootMu.RLock()
+	defer s.rootMu.RUnlock()
+	return append([]string{s.primary}, s.additional...)
+}
+
+func directoryRoot(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("sandbox root is empty")
+	}
+	root, err := canonical(path)
+	if err != nil {
+		return "", fmt.Errorf("sandbox root: %w", err)
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return "", fmt.Errorf("sandbox root: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("sandbox root %q is not a directory", path)
+	}
+	return root, nil
+}
+
+// AddRoot grants writes under an existing directory supplied by the host.
+func (s *Sandbox) AddRoot(path string) error {
+	root, err := directoryRoot(path)
+	if err != nil {
+		return err
+	}
+	s.rootMu.Lock()
+	defer s.rootMu.Unlock()
+	primary, _ := canonical(s.primary)
+	if isUnder(root, primary) && isUnder(primary, root) {
+		return nil
+	}
+	for _, existing := range s.additional {
+		if isUnder(root, existing) && isUnder(existing, root) {
+			return nil
+		}
+	}
+	s.additional = append(s.additional, root)
+	return nil
+}
+
+// RemoveRoot revokes a peer root. It cannot remove the primary root.
+func (s *Sandbox) RemoveRoot(path string) error {
+	root, err := canonicalOrParent(path)
+	if err != nil {
+		return err
+	}
+	s.rootMu.Lock()
+	defer s.rootMu.Unlock()
+	primary, _ := canonical(s.primary)
+	if isUnder(root, primary) && isUnder(primary, root) {
+		return fmt.Errorf("cannot remove the primary sandbox root")
+	}
+	for i, existing := range s.additional {
+		if isUnder(root, existing) && isUnder(existing, root) {
+			s.additional = append(s.additional[:i], s.additional[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("sandbox root %q is not registered", path)
+}
+
+// SetPrimaryRoot changes the anchor and retains distinct peer roots.
+func (s *Sandbox) SetPrimaryRoot(path string) error {
+	root, err := directoryRoot(path)
+	if err != nil {
+		return err
+	}
+	s.rootMu.Lock()
+	defer s.rootMu.Unlock()
+	s.primary = root
+	for i, existing := range s.additional {
+		if isUnder(root, existing) && isUnder(existing, root) {
+			s.additional = append(s.additional[:i], s.additional[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
+func (s *Sandbox) writeRoots() ([]string, error) {
+	roots := s.Roots()
+	primary, err := canonical(roots[0])
+	if err != nil {
+		return nil, fmt.Errorf("sandbox root: %w", err)
+	}
+	roots[0] = primary
+	return roots, nil
 }
 
 // Lock enables sandboxing.
@@ -107,10 +217,9 @@ func (s *Sandbox) Unlock() { s.locked.Store(false) }
 // Locked reports whether the sandbox is enforcing limits.
 func (s *Sandbox) Locked() bool { return s != nil && s.locked.Load() }
 
-// CheckPath verifies that path resolves inside the WRITABLE sandbox root.
-// Read-only roots do NOT satisfy it — mutating tools (write/edit) must
-// stay within the jail's working directory. Returns an error describing
-// the violation if not. No-op when unlocked. Callers should pass an
+// CheckPath verifies that path resolves inside a writable sandbox root.
+// It returns an error for paths outside workspace and host-owned grants.
+// It is a no-op when unlocked. Callers should pass an
 // already-absolute path (use resolvePath() first).
 func (s *Sandbox) CheckPath(path string) error {
 	return s.checkUnder(path)
@@ -372,7 +481,7 @@ func (s *Sandbox) checkUnder(path string) error {
 	if !s.Locked() {
 		return nil
 	}
-	rootAbs, err := canonical(s.Root)
+	roots, err := s.writeRoots()
 	if err != nil {
 		return fmt.Errorf("sandbox root: %w", err)
 	}
@@ -382,8 +491,10 @@ func (s *Sandbox) checkUnder(path string) error {
 	if err != nil {
 		return fmt.Errorf("sandbox path: %w", err)
 	}
-	if isUnder(rootAbs, target) {
-		return nil
+	for _, root := range roots {
+		if isUnder(root, target) {
+			return nil
+		}
 	}
 	if s.underWritableGrant(target) {
 		return nil
@@ -398,10 +509,14 @@ func (s *Sandbox) checkUnder(path string) error {
 	// classifier can see it — but the scratch case is not what that edge is
 	// for. Naming the scratch dir keeps the ordinary case a reviewable tool
 	// call and leaves the edge for writes that deserve it.
-	if s.ScratchDir != "" {
-		return fmt.Errorf("jailed: cannot WRITE %q — it is outside the sandbox root %q. Reading it is allowed. Put scratch files under %s. Ask the user to run /unjail if you need to write here", path, s.Root, s.ScratchDir)
+	rootDescription := fmt.Sprintf("root %q", roots[0])
+	if len(roots) > 1 {
+		rootDescription = fmt.Sprintf("roots %q", roots)
 	}
-	return fmt.Errorf("jailed: cannot WRITE %q — it is outside the sandbox root %q. Reading it is allowed. Ask the user to run /unjail if you need to write here", path, s.Root)
+	if s.ScratchDir != "" {
+		return fmt.Errorf("jailed: cannot WRITE %q — it is outside the sandbox %s. Reading it is allowed. Put scratch files under %s. Ask the user to run /unjail if you need to write here", path, rootDescription, s.ScratchDir)
+	}
+	return fmt.Errorf("jailed: cannot WRITE %q — it is outside the sandbox %s. Reading it is allowed. Ask the user to run /unjail if you need to write here", path, rootDescription)
 }
 
 // underWritableGrant reports whether target falls inside a directory
@@ -521,7 +636,7 @@ func (s *Sandbox) checkSecretArgs(cmd string) error {
 			continue
 		}
 		if !filepath.IsAbs(arg) {
-			arg = filepath.Join(s.Root, arg)
+			arg = filepath.Join(s.PrimaryRoot(), arg)
 		}
 		if err := s.CheckPathRead(arg); err != nil {
 			return err
@@ -719,7 +834,7 @@ func (s *Sandbox) DisplayPath(abs, given string) string {
 	if !s.Locked() {
 		return given
 	}
-	rootAbs, err := canonical(s.Root)
+	rootAbs, err := canonical(s.PrimaryRoot())
 	if err != nil {
 		return given
 	}
@@ -766,7 +881,7 @@ func cdTarget(seg string) (string, bool) {
 // root, with ~ and $HOME expansion) and rejects it only when it lands
 // outside the root.
 func (s *Sandbox) checkCDTarget(dir string) error {
-	rootAbs, err := canonical(s.Root)
+	roots, err := s.writeRoots()
 	if err != nil {
 		return fmt.Errorf("sandbox root: %w", err)
 	}
@@ -782,14 +897,16 @@ func (s *Sandbox) checkCDTarget(dir string) error {
 	if !filepath.IsAbs(expanded) {
 		// Relative targets (including `..`) resolve against the sandbox
 		// root, which is the bash tool's working directory when jailed.
-		expanded = filepath.Join(s.Root, expanded)
+		expanded = filepath.Join(roots[0], expanded)
 	}
 	target, err := canonicalOrParent(expanded)
 	if err != nil {
 		return fmt.Errorf("sandbox path: %w", err)
 	}
-	if isUnder(rootAbs, target) {
-		return nil
+	for _, root := range roots {
+		if isUnder(root, target) {
+			return nil
+		}
 	}
 	// A directory the agent may WRITE is a directory it must be able to work
 	// IN. Granting the write and refusing the `cd` is not a narrower rule, it

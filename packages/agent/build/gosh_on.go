@@ -26,8 +26,8 @@ func bashRunner(cwd string, sb *tools.Sandbox) tools.ShellRunner {
 		return nil
 	}
 	root := cwd
-	if sb != nil && sb.Root != "" {
-		root = sb.Root
+	if sb != nil && sb.PrimaryRoot() != "" {
+		root = sb.PrimaryRoot()
 	}
 	return gosh.New(root, sb)
 }

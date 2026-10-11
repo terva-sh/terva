@@ -483,6 +483,7 @@
   "Workspace (providers, about)": "Workspace (providers, about)",
   "Workspace default": "Workspace default",
   "Workspace trust": "Workspace trust",
+  "Workspace write roots": "Workspace write roots",
   "You are": "You are",
   "Your OpenAI-compatible endpoints — each is its own provider and lists its own models.": "Your OpenAI-compatible endpoints — each is its own provider and lists its own models.",
   "Your models.json overrides this model, so it can be reset to defaults": "Your models.json overrides this model, so it can be reset to defaults",

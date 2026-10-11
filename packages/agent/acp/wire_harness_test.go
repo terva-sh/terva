@@ -248,7 +248,9 @@ type fakeFactory struct {
 	// sandbox, when set, is carried onto every SessionAgent so the Phase 4c
 	// /jail and /unjail tests can assert the command flips its Locked() state.
 	// nil leaves SessionAgent.Sandbox nil (the no-sandbox degradation path).
-	sandbox *tools.Sandbox
+	sandbox       *tools.Sandbox
+	lastNewRoots  []string
+	lastLoadRoots []string
 
 	// skillList, when non-nil, is returned by the SessionAgent's Skills
 	// snapshot func so the /skills test can seed a known set. A nil slice with
@@ -788,7 +790,10 @@ func (f *fakeFactory) sessionModel() (prov, model string) {
 	return "fake", model
 }
 
-func (f *fakeFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer permission.Confirmer) (SessionAgent, error) {
+func (f *fakeFactory) NewSessionAgent(ctx context.Context, cwd string, additionalDirs []string, mcpServers json.RawMessage, confirmer permission.Confirmer) (SessionAgent, error) {
+	f.loadedMu.Lock()
+	f.lastNewRoots = append([]string(nil), additionalDirs...)
+	f.loadedMu.Unlock()
 	// Extension path: build a real extensions.Manager + the ext-aware agent,
 	// exactly mirroring the production buildAgent extension wiring.
 	if f.extRoot != "" {
@@ -864,7 +869,10 @@ func (f *fakeFactory) emptyExtContextFunc() func() []ContextItem {
 	return func() []ContextItem { return nil }
 }
 
-func (f *fakeFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd string, mcpServers json.RawMessage, confirmer permission.Confirmer) (SessionAgent, []provider.Message, error) {
+func (f *fakeFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd string, additionalDirs []string, mcpServers json.RawMessage, confirmer permission.Confirmer) (SessionAgent, []provider.Message, error) {
+	f.loadedMu.Lock()
+	f.lastLoadRoots = append([]string(nil), additionalDirs...)
+	f.loadedMu.Unlock()
 	sess, msgs, err := jsonl.OpenSession(sessionPath)
 	if err != nil {
 		return SessionAgent{}, nil, err

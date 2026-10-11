@@ -199,6 +199,7 @@ func metaRowWithoutCWD(line []byte) ([]byte, error) {
 		return nil, err
 	}
 	row.Meta.CWD = ""
+	row.Meta.AdditionalRoots = nil
 	// At is preserved: the timeline's own ordering information is part of what
 	// makes a later row meaningful.
 	return json.Marshal(row)
@@ -343,6 +344,8 @@ func importedMetaRow(line []byte, owner SessionMeta) ([]byte, error) {
 	}
 	row.Meta.ID = owner.ID
 	row.Meta.CWD = owner.CWD
+	// A portable session cannot transfer filesystem write authority.
+	row.Meta.AdditionalRoots = nil
 	row.Meta.Started = owner.Started
 	row.Meta.Version = owner.Version
 	row.Meta.Parent = ""

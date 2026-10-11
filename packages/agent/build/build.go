@@ -1177,6 +1177,11 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	}
 
 	sandbox := tools.NewSandbox(args.CWD)
+	for _, root := range args.AddDirs {
+		if err := sandbox.AddRoot(root); err != nil {
+			return Resolved{}, err
+		}
+	}
 	perms := args.PermInputs()
 	if permissions.ResolveJail(perms) {
 		sandbox.Lock()
@@ -1529,6 +1534,7 @@ func Resolve(args Args, requireCred bool) (Resolved, error) {
 	// from exactly this and overwrites only its deliberately-live inputs.
 	sysOpts := SystemPromptOpts{
 		CWD:               args.CWD,
+		AdditionalRoots:   sandbox.Roots()[1:],
 		Tools:             summaries,
 		Custom:            custom,
 		Append:            append_,

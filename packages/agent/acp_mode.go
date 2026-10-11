@@ -25,6 +25,7 @@ import (
 	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/core/permission"
+	"terva.sh/terva/packages/i18n"
 	"terva.sh/terva/packages/privfs"
 	"terva.sh/terva/packages/provider"
 	"terva.sh/terva/packages/session"
@@ -94,8 +95,12 @@ type acpFactory struct {
 // NewSessionAgent builds the agent + a fresh durable session at cwd, with
 // persistence hooks wired (§3). The ACP sessionId becomes the session's file
 // path, so a later session/load reopens exactly this transcript.
-func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer permission.Confirmer) (acp.SessionAgent, error) {
-	r, ag, gate, cleanup, observe, extMgr, hooks, err := f.buildAgent(ctx, cwd, mcpServers, confirmer)
+func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, additionalDirs []string, mcpServers json.RawMessage, confirmer permission.Confirmer) (acp.SessionAgent, error) {
+	ownedRoots, err := f.peerRoots(cwd, additionalDirs)
+	if err != nil {
+		return acp.SessionAgent{}, err
+	}
+	r, ag, gate, cleanup, observe, extMgr, hooks, err := f.buildAgentWithRoots(ctx, cwd, ownedRoots, mcpServers, confirmer)
 	if err != nil {
 		return acp.SessionAgent{}, err
 	}
@@ -105,6 +110,11 @@ func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers
 		return acp.SessionAgent{}, err
 	}
 	build.WireHeadlessSessionPersist(ag, sess)
+	if err := sess.SetAdditionalRoots(ownedRoots); err != nil {
+		_ = sess.Close()
+		cleanup()
+		return acp.SessionAgent{}, err
+	}
 	build.BindSession(build.SessionBinding{Agent: ag, Tasks: r.Tasks, Ext: extMgr, Session: sess})
 	return acp.SessionAgent{
 		Agent:            ag,
@@ -130,7 +140,7 @@ func (f *acpFactory) NewSessionAgent(ctx context.Context, cwd string, mcpServers
 // LoadSessionAgent reopens the durable session at sessionPath (the ACP
 // sessionId), builds an agent for it, wires persistence, and returns the
 // repaired transcript so the acp package can rehydrate + replay it (§10/§13).
-func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd string, mcpServers json.RawMessage, confirmer permission.Confirmer) (acp.SessionAgent, []provider.Message, error) {
+func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd string, additionalDirs []string, mcpServers json.RawMessage, confirmer permission.Confirmer) (acp.SessionAgent, []provider.Message, error) {
 	sess, msgs, err := session.OpenSession(sessionPath)
 	if err != nil {
 		// Propagate os.IsNotExist verbatim so the acp package maps a missing
@@ -146,7 +156,12 @@ func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd stri
 	if cwd == "" {
 		cwd = sess.Meta.CWD
 	}
-	r, ag, gate, cleanup, observe, extMgr, hooks, err := f.buildAgent(ctx, cwd, mcpServers, confirmer)
+	ownedRoots, err := f.peerRoots(cwd, additionalDirs)
+	if err != nil {
+		_ = sess.Close()
+		return acp.SessionAgent{}, nil, err
+	}
+	r, ag, gate, cleanup, observe, extMgr, hooks, err := f.buildAgentWithRoots(ctx, cwd, ownedRoots, mcpServers, confirmer)
 	if err != nil {
 		_ = sess.Close()
 		return acp.SessionAgent{}, nil, err
@@ -154,6 +169,11 @@ func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd stri
 	// As in NewSessionAgent: a resumed session reopens the board it left behind
 	// rather than an empty one, and announces itself to subscribing extensions.
 	build.WireHeadlessSessionPersist(ag, sess)
+	if err := sess.SetAdditionalRoots(ownedRoots); err != nil {
+		_ = sess.Close()
+		cleanup()
+		return acp.SessionAgent{}, nil, err
+	}
 	build.BindSession(build.SessionBinding{Agent: ag, Tasks: r.Tasks, Ext: extMgr, Session: sess})
 	// Re-point the agent at the session's OWN stored model, not just the menu:
 	// before this, ACP resume DISPLAYED the stored model (a prior model switch,
@@ -193,6 +213,22 @@ func (f *acpFactory) LoadSessionAgent(ctx context.Context, sessionPath, cwd stri
 		UntrustWorkspace: acpUntrustWorkspace(ctx, r.CWD, hooks.ApplyTrust),
 		RecordModelSwap:  hooks.RecordSwap,
 	}, msgs, nil
+}
+
+func (f *acpFactory) peerRoots(cwd string, dirs []string) ([]string, error) {
+	if cwd == "" {
+		cwd = f.args.CWD
+	}
+	owned := tools.NewSandbox(cwd)
+	for _, dir := range dirs {
+		if !filepath.IsAbs(dir) {
+			return nil, i18n.Errorf("ACP peer directory %q must be absolute", dir)
+		}
+		if err := owned.AddRoot(dir); err != nil {
+			return nil, err
+		}
+	}
+	return owned.Roots()[1:], nil
 }
 
 // ListSessions enumerates durable terva sessions for session/list (§10),
@@ -397,9 +433,14 @@ func (f *acpFactory) SwitchModel(currentProvider, currentModel, targetModelID st
 // (hook engine, extension manager, tool set). It is what makes ACP a live-trust
 // host rather than one whose verdict is fixed at launch.
 func (f *acpFactory) buildAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer permission.Confirmer) (build.Resolved, *core.Agent, *permission.ConfirmGate, func(), func(core.AgentEvent), *extensions.Manager, acpSessionHooks, error) {
+	return f.buildAgentWithRoots(ctx, cwd, nil, mcpServers, confirmer)
+}
+
+func (f *acpFactory) buildAgentWithRoots(ctx context.Context, cwd string, additionalDirs []string, mcpServers json.RawMessage, confirmer permission.Confirmer) (build.Resolved, *core.Agent, *permission.ConfirmGate, func(), func(core.AgentEvent), *extensions.Manager, acpSessionHooks, error) {
 	// Each session resolves with its own cwd so tools, system prompt, and
 	// session dir bind to the editor-provided working directory.
 	args := f.args
+	args.AddDirs = append(append([]string{}, args.AddDirs...), additionalDirs...)
 	if cwd != "" {
 		args.CWD = cwd
 	}

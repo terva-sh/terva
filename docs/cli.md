@@ -81,6 +81,7 @@ for runtime requirements and provider login.
 | `--replay <path>` | Play a recorded transcript back through the TUI instead of starting a live session (see Modes). |
 | `--speed <x>` | Playback multiplier for a replay: `0.5` plays at half the recorded pace, `2` at double. The `[` and `]` keys change it during playback. |
 | `--cwd <path>` | Use `<path>` as the working directory. |
+| `--add-dir <path>` | Grant writes in an additional existing directory. Repeat the flag for each peer directory. |
 | `--trust` | Trust the cwd for **this run only**: project-local extensions, skills, hooks, MCP, and context files load as if the directory were in the trust store, but nothing is persisted. The headless analog of answering the TUI's trust prompt; `terva trust` is the persistent form. |
 | `--project` / `--no-project` | Force project-scoped mode on / off for this run, overriding `project_scoped` in `.terva/config.json`. Scoped: data lives in a project-local home and only the project's own extensions load; login and trust stay global. |
 | `-e`, `--ext <path>` | Load an extension from `<path>` for this run (repeatable; wins against installed extensions of the same name). |

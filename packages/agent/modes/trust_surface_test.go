@@ -59,6 +59,15 @@ func TestPermissionsInspectorStatesTheTrustPosture(t *testing.T) {
 	}
 }
 
+func TestPermissionsInspectorStatesPeerWriteRoots(t *testing.T) {
+	for _, mode := range []string{"workspace", "yolo"} {
+		text := permissionsText(t, ctrlproto.PermissionsView{Mode: mode, CWD: "/work/main", WritableRoots: []string{"/work/main", "/work/peer"}})
+		if !strings.Contains(text, "/work/main") || !strings.Contains(text, "/work/peer") || !strings.Contains(text, "workspace write roots") {
+			t.Fatalf("peer authority hidden in %s: %s", mode, text)
+		}
+	}
+}
+
 // /trust told ctrlproto users to restart terva for a change that had already
 // taken effect across every open session — the most reliable way to make a
 // working feature look broken.

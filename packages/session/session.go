@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -169,11 +170,12 @@ const (
 
 // SessionMeta is written as the first line of every session file.
 type SessionMeta struct {
-	ID       string    `json:"id"`
-	CWD      string    `json:"cwd"`
-	Model    string    `json:"model"`
-	Provider string    `json:"provider"`
-	Started  time.Time `json:"started"`
+	ID              string    `json:"id"`
+	CWD             string    `json:"cwd"`
+	AdditionalRoots []string  `json:"additional_roots,omitempty"`
+	Model           string    `json:"model"`
+	Provider        string    `json:"provider"`
+	Started         time.Time `json:"started"`
 	// Version is the app version that created the session —
 	// informational only. FormatVersion is the schema contract.
 	Version string `json:"version"`
@@ -1558,14 +1560,15 @@ func LatestSession(root, cwd string) string {
 
 // SessionSummary describes one on-disk session at a glance for UI pickers.
 type SessionSummary struct {
-	Path          string
-	Started       time.Time
-	Model         string
-	Provider      string
-	MessageCount  int
-	FirstUserText string
-	TotalCost     float64
-	Title         string
+	AdditionalRoots []string
+	Path            string
+	Started         time.Time
+	Model           string
+	Provider        string
+	MessageCount    int
+	FirstUserText   string
+	TotalCost       float64
+	Title           string
 	// TitleGenerated reports machine provenance for Title (see
 	// Session.TitleGenerated); false for user renames and meta-line titles.
 	TitleGenerated bool
@@ -1799,6 +1802,7 @@ func describeSessionFromMeta(path string, r io.Reader) (SessionSummary, SessionM
 				s.Started = row.Meta.Started
 				s.Model = row.Meta.Model
 				s.Provider = row.Meta.Provider
+				s.AdditionalRoots = append([]string(nil), row.Meta.AdditionalRoots...)
 				// A rename outranks a LATER meta row's Title, which is stale by
 				// construction — no rename path writes back into Session.Meta.
 				// This fold is byte-identical to replaySessionWith's and had the
@@ -2298,6 +2302,22 @@ func (s *Session) writeMeta() error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.writeMetaLocked()
+}
+
+// SetAdditionalRoots records peer directories for display, without write authority.
+func (s *Session) SetAdditionalRoots(roots []string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if slices.Equal(roots, s.Meta.AdditionalRoots) {
+		return nil
+	}
+	old := s.Meta.AdditionalRoots
+	s.Meta.AdditionalRoots = append([]string(nil), roots...)
+	if err := s.writeMetaLocked(); err != nil {
+		s.Meta.AdditionalRoots = old
+		return err
+	}
+	return nil
 }
 
 // writeMetaLocked is writeMeta's body; the caller must hold writeMu. Used by

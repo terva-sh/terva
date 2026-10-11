@@ -123,7 +123,7 @@ func TestACPResumeRecordsTheStoredModelForLaterRebuilds(t *testing.T) {
 
 	// A session whose stored model is a DIFFERENT provider than the one this
 	// factory resolves to.
-	fresh, err := f.NewSessionAgent(ctx, cwd, nil, allowingConfirmer{})
+	fresh, err := f.NewSessionAgent(ctx, cwd, nil, nil, allowingConfirmer{})
 	if err != nil {
 		t.Fatalf("NewSessionAgent: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestACPResumeRecordsTheStoredModelForLaterRebuilds(t *testing.T) {
 	fresh.Cleanup()
 	_ = fresh.Session.Close()
 
-	sa, _, err := f.LoadSessionAgent(ctx, path, cwd, nil, allowingConfirmer{})
+	sa, _, err := f.LoadSessionAgent(ctx, path, cwd, nil, nil, allowingConfirmer{})
 	if err != nil {
 		t.Fatalf("LoadSessionAgent: %v", err)
 	}

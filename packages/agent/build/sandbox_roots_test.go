@@ -145,7 +145,7 @@ func TestRestrictSensitiveReadsLiftsOnlyConfigWhenClean(t *testing.T) {
 // beside it stays readable.
 func TestTalkootRoomKeysAreDenied(t *testing.T) {
 	home := testsupport.TempDir(t)
-	sb := &tools.Sandbox{Root: testsupport.TempDir(t)}
+	sb := tools.NewSandbox(testsupport.TempDir(t))
 	sb.Lock()
 	restrictSensitiveReads(sb, home, home, true)
 
@@ -298,7 +298,7 @@ func TestScratchGrantLeavesTheWriteJailStanding(t *testing.T) {
 // for.
 func TestWorktreeRootIsWritableAndWorkable(t *testing.T) {
 	home := testsupport.TempDir(t)
-	sb := &tools.Sandbox{Root: testsupport.TempDir(t)}
+	sb := tools.NewSandbox(testsupport.TempDir(t))
 	sb.Lock()
 	allowWorktreeWrites(sb, home)
 
@@ -372,7 +372,7 @@ func TestRestrictSensitiveReadsLeavesJailRootWritable(t *testing.T) {
 // and AddSecretRoot skips paths that do not exist yet.
 func TestComponentKeysAreDeniedWhereverTheyLive(t *testing.T) {
 	home := testsupport.TempDir(t)
-	sb := &tools.Sandbox{Root: testsupport.TempDir(t)}
+	sb := tools.NewSandbox(testsupport.TempDir(t))
 	sb.Lock()
 	restrictSensitiveReads(sb, home, home, true)
 

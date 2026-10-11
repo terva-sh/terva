@@ -31,7 +31,8 @@ type Args struct {
 	Model    string
 	APIKey   string
 
-	BaseURL string // override provider base URL (for tests/self-hosted)
+	BaseURL string   // override provider base URL (for tests/self-hosted)
+	AddDirs []string // explicit peer directories granted write access by --add-dir
 
 	// ReplayPath is the recorded session transcript to play back (--replay /
 	// `terva replay <file>`, Mode == mode.Replay).
@@ -1169,6 +1170,12 @@ func ParseArgs(in []string) (Args, error) {
 				return a, err
 			}
 			a.CWD = v
+		case "--add-dir":
+			v, err := want(&i, arg)
+			if err != nil {
+				return a, err
+			}
+			a.AddDirs = append(a.AddDirs, v)
 		case "--swarm-agent":
 			v, err := want(&i, arg)
 			if err != nil {
@@ -1301,6 +1308,20 @@ func ParseArgs(in []string) (Args, error) {
 			return a, i18n.Errorf("--cwd %q is not a directory", a.CWD)
 		}
 		a.CWD = abs
+	}
+	for i, path := range a.AddDirs {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return a, fmt.Errorf("%s: %w", i18n.T("--add-dir %q", path), err)
+		}
+		info, err := os.Stat(abs)
+		if err != nil {
+			return a, fmt.Errorf("%s: %w", i18n.T("--add-dir %q", path), err)
+		}
+		if !info.IsDir() {
+			return a, i18n.Errorf("--add-dir %q is not a directory", path)
+		}
+		a.AddDirs[i] = abs
 	}
 	if a.DesktopPort != 0 && !a.Desktop {
 		return a, i18n.Errorf("--desktop-port requires terva desktop")

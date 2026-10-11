@@ -668,6 +668,7 @@ PermissionsView
 	grants	[]string	omitempty
 	cwd	string	omitempty
 	trusted	bool	omitempty
+	writable_roots	[]string	omitempty
 PersonaDeleteParams
 	ref	string	omitempty
 	name	string	omitempty

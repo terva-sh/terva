@@ -1253,6 +1253,7 @@ export interface PermissionsView {
   // place. cwd is empty against a daemon predating the field.
   cwd?: string
   trusted?: boolean
+  writable_roots?: string[]
 }
 
 // Notice is a one-shot host-originated message shown in the conversation area

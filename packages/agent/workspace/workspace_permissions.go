@@ -28,6 +28,9 @@ func (s *wsSession) permissionsView() *ctrlproto.PermissionsView {
 		CWD:     s.cwd,
 		Trusted: s.trusted.Load(),
 	}
+	if s.ws != nil && s.ws.sandbox.Locked() {
+		v.WritableRoots = s.ws.sandbox.Roots()
+	}
 	if s.gate == nil {
 		return v // pure-yolo: no gate, nothing else to inspect
 	}

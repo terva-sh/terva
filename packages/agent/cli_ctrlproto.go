@@ -23,6 +23,7 @@ import (
 	"terva.sh/terva/packages/agent/modes"
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/skills"
+	"terva.sh/terva/packages/agent/tools"
 	"terva.sh/terva/packages/agent/workspace"
 	"terva.sh/terva/packages/auth"
 	"terva.sh/terva/packages/i18n"
@@ -363,6 +364,7 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 	// Forward-declared so the session-group closures below can re-point the
 	// running TUI (the legacy entry point uses the same pattern).
 	var iv *modes.Interactive
+	jailNotice := peerRootJailNotice(permissions.JailNoticeFor(args.PermInputs()).Message(), w.Sandbox())
 	iv = modes.NewInteractive(modes.InteractiveConfig{
 		Terminal:                 term,
 		Theme:                    experienceTheme(theme, r.Experience),
@@ -472,7 +474,7 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 		OpenSessionsOnBoot:  args.Resume && args.ResumeID == "",
 		Trusted:             bootTrusted,
 		GatedContentPresent: config.HasGatedProjectContent(w.CWD()),
-		JailNotice:          permissions.JailNoticeFor(args.PermInputs()).Message(),
+		JailNotice:          jailNotice,
 
 		// --- in-TUI login ---
 		// The TUI drives the workspace's AuthController, exactly as the web panel
@@ -669,6 +671,19 @@ func runInteractiveCtrlproto(ctx context.Context, args build.Args, version strin
 	w.SetNoteSink(func(key, msg, level string) { iv.ReplaceNote("workspace", key, msg, level) })
 
 	return iv.Run(ctx)
+}
+
+func peerRootJailNotice(posture string, sandbox *tools.Sandbox) string {
+	if !sandbox.Locked() {
+		return posture
+	}
+	if roots := sandbox.Roots(); len(roots) > 1 {
+		if posture != "" {
+			posture += "\n"
+		}
+		posture += i18n.T("workspace write roots: %s", strings.Join(roots, ", "))
+	}
+	return posture
 }
 
 // carrierExtHost satisfies modes.ExtensionHost. Asserted here, not in the

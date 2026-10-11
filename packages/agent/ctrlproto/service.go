@@ -890,6 +890,8 @@ type PermissionsView struct {
 	// pane with the rest of the switches (key "trust"); this is the inspector.
 	CWD     string `json:"cwd,omitempty"`
 	Trusted bool   `json:"trusted,omitempty"`
+	// WritableRoots lists user-supplied workspace roots, excluding host scratch grants.
+	WritableRoots []string `json:"writable_roots,omitempty"`
 }
 
 // PermissionRule is one compiled approval rule for the inspector: which tool

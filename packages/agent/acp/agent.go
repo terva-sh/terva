@@ -53,7 +53,7 @@ type AgentFactory interface {
 	// ConfirmWithCall directly, so the permission request correlates to the
 	// right toolCallId with no factory-side hook (§13). The confirmer is
 	// bound to the session by the acp package after construction.
-	NewSessionAgent(ctx context.Context, cwd string, mcpServers json.RawMessage, confirmer permission.Confirmer) (SessionAgent, error)
+	NewSessionAgent(ctx context.Context, cwd string, additionalDirs []string, mcpServers json.RawMessage, confirmer permission.Confirmer) (SessionAgent, error)
 
 	// LoadSessionAgent reopens the durable session at sessionPath (the ACP
 	// sessionId), builds an agent for it with persistence hooks wired, and
@@ -62,7 +62,7 @@ type AgentFactory interface {
 	// context via SetMessages and replays the history to the editor BEFORE
 	// returning the load response (§13). mcpServers/confirmer are wired as
 	// in NewSessionAgent.
-	LoadSessionAgent(ctx context.Context, sessionPath, cwd string, mcpServers json.RawMessage, confirmer permission.Confirmer) (SessionAgent, []provider.Message, error)
+	LoadSessionAgent(ctx context.Context, sessionPath, cwd string, additionalDirs []string, mcpServers json.RawMessage, confirmer permission.Confirmer) (SessionAgent, []provider.Message, error)
 
 	// ListSessions returns the durable sessions known to the host, newest
 	// first, optionally filtered to cwd (empty cwd means all working
@@ -585,7 +585,7 @@ func (s *agentServer) handleSessionNew(ctx context.Context, params json.RawMessa
 	// to the session after construction (the session does not exist yet).
 	confirmer := newConfirmer()
 
-	sa, err := s.factory.NewSessionAgent(ctx, p.CWD, p.MCPServers, confirmer)
+	sa, err := s.factory.NewSessionAgent(ctx, p.CWD, p.AdditionalDirectories, p.MCPServers, confirmer)
 	if err != nil {
 		return nil, errInternal("build agent: " + err.Error())
 	}
@@ -789,7 +789,7 @@ func (s *agentServer) handleSessionLoad(ctx context.Context, params json.RawMess
 	// one running and wait for it to flush, and only then close.
 	s.releasePriorDurable(p.SessionID)
 
-	sa, msgs, err := s.factory.LoadSessionAgent(ctx, p.SessionID, cwd, p.MCPServers, confirmer)
+	sa, msgs, err := s.factory.LoadSessionAgent(ctx, p.SessionID, cwd, p.AdditionalDirectories, p.MCPServers, confirmer)
 	if err != nil {
 		// A missing / unreadable session file is the resource-not-found case;
 		// anything else is an internal failure building the agent.

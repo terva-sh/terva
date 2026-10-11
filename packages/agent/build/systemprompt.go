@@ -21,12 +21,13 @@ type ToolSummary struct {
 
 // SystemPromptOpts configures BuildSystemPrompt.
 type SystemPromptOpts struct {
-	CWD          string
-	Tools        []ToolSummary
-	Custom       string          // if set, replaces the default identity entirely
-	Append       []PromptSegment // extra labeled blocks appended after the identity
-	Now          time.Time
-	TervaDocsDir string
+	CWD             string
+	AdditionalRoots []string
+	Tools           []ToolSummary
+	Custom          string          // if set, replaces the default identity entirely
+	Append          []PromptSegment // extra labeled blocks appended after the identity
+	Now             time.Time
+	TervaDocsDir    string
 	// TervaExamplesDir is $TERVA_HOME/examples, where the deployment/setup
 	// examples install. Empty drops the hint (same guard as the docs hint).
 	TervaExamplesDir string
@@ -264,7 +265,11 @@ func SystemSegments(o SystemPromptOpts) []PromptSegment {
 		if cwd == "" {
 			cwd = "."
 		}
-		add(SourceFooter, i18n.P("system.footer", "Current date: %s\nCurrent working directory: %s\n", o.Now.Format("2006-01-02"), cwd))
+		footer := i18n.P("system.footer", "Current date: %s\nCurrent working directory: %s\n", o.Now.Format("2006-01-02"), cwd)
+		if len(o.AdditionalRoots) > 0 {
+			footer += i18n.P("system.additional_roots", "The user grants writes in these additional workspace directories:\n%s\nUse absolute paths for these directories. Relative paths use the current working directory. Tool permissions still apply.", strings.Join(o.AdditionalRoots, "\n"))
+		}
+		add(SourceFooter, footer)
 	}
 
 	if o.Portable != PortableOff {

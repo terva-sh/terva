@@ -101,6 +101,7 @@ func driveEveryMetaWriter(t *testing.T, s *Session) {
 	must("UpdateModel", s.UpdateModel("anthropic", "claude-elsewhere"))
 	must("UpdateReasoning", s.UpdateReasoning("high"))
 	must("StampVersion", s.StampVersion("v99.0.0"))
+	must("SetAdditionalRoots", s.SetAdditionalRoots([]string{"/explicit-peer"}))
 	must("SetCreationSpec", s.SetCreationSpec("kartoittaja-c", "play", "card-ref", map[string]string{"actor": "persona"}, 3))
 	must("SetBackground", s.SetBackground("backdrop-id"))
 	must("SetNote", s.SetNote("an author's note"))

@@ -155,6 +155,7 @@ func PrintHelp(version string) {
 	)
 	section(i18n.T("workspace, tools, skills"),
 		row{"--cwd PATH", i18n.T("treat PATH (an existing directory) as the working directory")},
+		row{"--add-dir PATH", i18n.T("grant writes in an additional existing directory (repeatable)")},
 		// building blocks — each turns off one capability, independently:
 		row{"--no-workspace-tools", i18n.T("turn off all built-in base tools (read/write/edit/bash/grep/glob, status, ask, generate_image); keep extensions + MCP + skills (least-privilege for bots)")},
 		row{"--ext PATH", i18n.T("load an extension from PATH for this run only (repeatable; bypasses config)")},

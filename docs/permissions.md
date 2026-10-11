@@ -5,7 +5,7 @@ Two orthogonal controls decide what the agent may do:
 - the **approval mode** and **permission rules** decide *whether a tool
   call runs at all* (this page);
 - the **sandbox** (`/jail` in [tui.md](tui.md)) bounds *what a running
-  tool can touch* (writes under the cwd, command heuristics).
+  tool can touch* (writes under granted workspace roots, command heuristics).
 
 They compose: a call must pass the approval layer first, then run
 within whatever the sandbox permits. Keeping the axes separate is
@@ -13,15 +13,34 @@ deliberate: a single conflated "trust level" is the known failure
 mode in this design space. The interactive default pairs them: the
 `workspace` approval mode trusts your built-in tools *because* the
 sandbox (jailed by default) bounds their **writes** to the working
-directory.
+directory and any peer directories the user explicitly grants.
 
 ## What the jail does and does not confine
+
+Use `--add-dir /absolute/peer` to grant writes in a peer directory for this launch.
+Repeat the flag to add more peers. The default grants no peer directories.
+terva validates each directory and rejects writes through symlinks that escape the granted roots.
+The permission gate still decides whether each tool call may run.
+The permissions inspector shows the workspace write roots in the TUI and web client.
+Relative tool paths, shell startup, project configuration, and context discovery use the primary working directory.
+Use absolute paths for peer files. Project configuration cannot grant peer directories.
+
+ACP honors `additionalDirectories` on session creation and load.
+ACP clients must supply absolute peer paths on each creation or load request.
+An empty or omitted list grants no session peers; process-level `--add-dir` grants still apply.
+ACP records canonical session peer paths for display. Transcript metadata cannot grant write authority.
+Session listings omit these paths so clients cannot mistake historical metadata for current grants.
+Session export and import discard machine-specific peer grants.
+CLI launches must supply `--add-dir` again when they resume a session.
+The experimental `terva_gosh` in-process shell remains confined to the primary directory.
+The default host shell can enter peer directories.
 
 The jail is a **write** boundary plus a set of command heuristics. It is
 deliberately not a read boundary:
 
+
 - **Writes** (`write`, `edit`, image output, chat attachments) are confined
-  to the working directory, plus `$TERVA_HOME/handoffs/`, the one terva-owned
+  to the working directory and explicit peers, plus `$TERVA_HOME/handoffs/`, the one terva-owned
   surface that exists to be agent-written (the built-in `handoff` skill parks
   session-to-session documents there; requiring `/unjail` for a built-in
   skill would make the jail an obstacle to route around).

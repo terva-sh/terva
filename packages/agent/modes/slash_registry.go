@@ -519,6 +519,9 @@ func (i *Interactive) slashJail(_ context.Context, parts []string, _ string) boo
 	}
 	i.cfg.Sandbox.Lock()
 	msg := "jailed to " + i.cfg.CWD + " (tools cannot touch paths outside this directory)"
+	if roots := i.cfg.Sandbox.Roots(); len(roots) > 1 {
+		msg = i18n.T("writes jailed to workspace roots: %s", strings.Join(roots, ", "))
+	}
 
 	if wantsAlways(parts) {
 		if err := config.RejailPath(i.cfg.CWD); err != nil {

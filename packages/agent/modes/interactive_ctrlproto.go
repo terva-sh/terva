@@ -987,11 +987,18 @@ func renderTrustPosture(th tui.Theme, pv ctrlproto.PermissionsView) []string {
 		state = th.FG256(th.Accent, i18n.T("trusted"))
 		hint = i18n.T("project extensions, skills, and context files load here. /untrust to stop.")
 	}
-	return []string{
+	out := []string{
 		"",
 		th.FG256(th.Accent, tui.Bold(i18n.T("workspace trust"))) + "  " + state + th.FG256(th.Muted, "  "+pv.CWD),
 		th.FG256(th.Muted, "  "+hint),
 	}
+	if len(pv.WritableRoots) > 1 {
+		out = append(out, th.FG256(th.Accent, i18n.T("workspace write roots")))
+		for _, root := range pv.WritableRoots {
+			out = append(out, th.FG256(th.Muted, "  "+root))
+		}
+	}
+	return out
 }
 
 // renderPermissionsWireView paints the /permissions inspector from the wire

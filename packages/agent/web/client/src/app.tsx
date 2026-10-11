@@ -4901,6 +4901,13 @@ export function PermissionsBody({
         <span class="perm-mode-val">{v.mode}</span>
       </div>
 
+      {(v.writable_roots?.length ?? 0) > 1 && (
+        <div class="perm-section">
+          <div class="perm-head"><span>{t('Workspace write roots')}</span></div>
+          {v.writable_roots?.map((root) => <div key={root} class="perm-grant">{root}</div>)}
+        </div>
+      )}
+
       {(v.allow_all || grants.length > 0) && (
         <div class="perm-section">
           <div class="perm-head">

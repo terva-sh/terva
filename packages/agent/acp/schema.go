@@ -168,7 +168,7 @@ type AuthMethod struct {
 
 // NewSessionParams are the session/new request params. mcpServers carries the
 // ACP McpServer union array (Phase 4a wires its stdio entries — see mcp.go's
-// ParseMCPServers). additionalDirectories is accepted and currently ignored.
+// ParseMCPServers). additionalDirectories grants peer workspace write roots.
 type NewSessionParams struct {
 	CWD                   string          `json:"cwd"`
 	MCPServers            json.RawMessage `json:"mcpServers,omitempty"`
@@ -210,9 +210,8 @@ type CancelParams struct {
 
 // LoadSessionParams are the session/load request params. mcpServers is
 // REQUIRED on the wire and wired the same as session/new (Phase 4a — stdio
-// entries spawn per-session MCP servers). additionalDirectories is accepted
-// and currently ignored (terva reads local FS under cwd; honoring extra roots
-// is a later item).
+// entries spawn per-session MCP servers). additionalDirectories supplies peer
+// grants for this load. Empty or omitted input grants no peers; launch grants apply.
 type LoadSessionParams struct {
 	SessionID             string          `json:"sessionId"`
 	CWD                   string          `json:"cwd"`
@@ -248,14 +247,13 @@ type ListSessionsResult struct {
 }
 
 // SessionInfo is one entry in a session/list response. sessionId+cwd are
-// required; additionalDirectories/title/updatedAt are optional. updatedAt is
+// required; title/updatedAt are optional. updatedAt is
 // an ISO 8601 (RFC 3339) timestamp.
 type SessionInfo struct {
-	SessionID             string   `json:"sessionId"`
-	CWD                   string   `json:"cwd"`
-	AdditionalDirectories []string `json:"additionalDirectories,omitempty"`
-	Title                 string   `json:"title,omitempty"`
-	UpdatedAt             string   `json:"updatedAt,omitempty"`
+	SessionID string `json:"sessionId"`
+	CWD       string `json:"cwd"`
+	Title     string `json:"title,omitempty"`
+	UpdatedAt string `json:"updatedAt,omitempty"`
 }
 
 // ---- session/request_permission (agent -> client, Phase 2) ----

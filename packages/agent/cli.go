@@ -48,8 +48,8 @@ var _ modes.Carrier = (*workspace.Workspace)(nil)
 // directory change without re-wiring.
 func workspaceRootFn(sandbox *tools.Sandbox, cwd string) func() string {
 	return func() string {
-		if sandbox != nil && sandbox.Root != "" {
-			return sandbox.Root
+		if sandbox != nil && sandbox.PrimaryRoot() != "" {
+			return sandbox.PrimaryRoot()
 		}
 		return cwd
 	}
