@@ -236,6 +236,10 @@ environment is deliberately bare:
 - **Host functions**: `read(path[,offset,limit])`, `grep(pattern[,path])`,
   `glob(pattern[,path])`; each returns the corresponding tool's text output
   as a string, and throws on tool failure (catchable with `try`/`catch`).
+  A `read` that the tool would cut also throws, with the line to resume
+  from. A single line longer than 50 KiB cannot come back to a script in
+  parts, because each part is itself a cut result. The error sends the model
+  to the `read` tool, which pages that line with `byte_offset`.
 - **Output**: `print(...)` (and `console.log`) append to the result buffer.
   Only printed output returns to the model; a script that prints nothing gets
   told so.

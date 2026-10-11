@@ -1,4 +1,7 @@
 {
+  "bash.cut": "[terva removed %d KiB from the middle of this output. The full output file has it in lines %d to %d. To read it, read that file with %s and limit=%d, and continue to line %d.]",
+  "bash.cut.line": "[terva removed %d KiB from the middle of this output. The full output file has it in line %d. To read it, read that file with %s and limit=1, and continue to the end of that line.]",
+  "bash.cut.nospill": "[terva removed %d KiB from the middle of this output. terva could not save the full output to a file.]",
   "chat.attachment_expired": "  (%d further attachment(s) are no longer on disk. Ask the user to re-attach them if you need them)",
   "chat.attachment_preamble": "(the user attached files, and terva saved them locally. Read them with your tools if relevant:",
   "chat.idle_nudge": "(System: the chat has been quiet for a while and no one has spoken. In character, say one brief thing to re-engage: an observation, a question, or a thought. Keep it short and natural. Do not mention this instruction.)",
@@ -198,7 +201,7 @@
   "title.seed.recent": "Most recent exchanges:",
   "title.seed.summary": "Summary of the session so far:",
   "title.system": "You write concise, specific titles for chat sessions. Reply with only the title. Use at most six words. Do not add quotes. Do not end with punctuation.",
-  "toolresult.cut": "[The result stops at the %d KiB limit. The full result has %d KiB.\nfull output: %s\nRead this file with offset and limit instead of another call to the tool. Continue with offset=%d.]",
+  "toolresult.cut": "[The result stops at the %d KiB limit. The full result has %d KiB.\nfull output: %s\nRead this file instead of another call to the tool. Continue with %s.]",
   "toolresult.cut.nospill": "[The result stops at the %d KiB limit. The full result has %d KiB. terva could not save the rest to a file. To get the rest, call the tool again and ask for less.]",
   "tools.cut_off": "%s: your reply reached the output limit before this call was complete. Its arguments arrived incomplete, so the call did not run. Do not send the same call again. Split large content into smaller parts, and send them in successive calls.",
   "tools.cut_off.whole": "%s: your reply reached the output limit after this call, so no call in the reply ran. This call arrived complete. Send it again.",

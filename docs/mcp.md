@@ -96,7 +96,10 @@ only, no project surface at all.)
   server answers with a redirect to another host, the egress guard strips
   `Authorization` and nothing else, so a secret in a custom header rides the hop
   to that new host. Reading `${ENV}` keeps the value out of the config file. It
-  does not protect the value in transit.
+  does not protect the value in transit. After initialize, terva adds two
+  headers of its own to every request: `Mcp-Session-Id` when the server
+  assigned a session, and `MCP-Protocol-Version` with the version the server
+  negotiated. A configured header of either name does not replace them.
 - `auth.bearer_env`: names an env var whose value rides as
   `Authorization: Bearer <value>`. **Tokens are never inlined in config**: they
   live in the environment, the same posture as provider keys, so a shared or
@@ -167,6 +170,22 @@ connectors; it is **not** a chat connector, since its wire to terva is plain MCP
 - `--bearer-env VAR` makes the bridge a static-auth relay too (no OAuth), so one
   mechanism can cover every remote server if you prefer; in-core `http` stays the
   lighter path for static auth.
+- After initialize, each request that the bridge sends to the remote server
+  carries `MCP-Protocol-Version`. The value is the version that the remote
+  server negotiated with the bridge, the same rule as the in-core `http`
+  transport.
+- The bridge marks itself as a relay to a remote server. Its `initialize`
+  result carries `"terva.sh/remote": true` in `_meta`, and the bridge replaces
+  any value that the remote server put at that key. terva then classifies the
+  bridge's read-only tools as `network-read`, the same as the read-only tools
+  of an in-core `http` server (see [Behavior](#behavior)). Each call reaches
+  the remote server, so these tools ask in `workspace` and `auto-edit`, and
+  `plan` does not offer them.
+- A third-party bridge such as `mcp-remote` does not set the mark. To terva it
+  is an ordinary `stdio` server, so its read-only tools count as local reads
+  and run without a prompt in `workspace`, although each call reaches the
+  remote server. Add an ask rule such as
+  `{ "tool": "mcp_linear_*", "decision": "ask" }` to make its tools ask too.
 
 ## Behavior
 
@@ -182,8 +201,42 @@ connectors; it is **not** a chat connector, since its wire to terva is plain MCP
 - Text and image result content map to the transcript natively;
   other content kinds degrade to their JSON so nothing is silently
   dropped.
-- In `plan` approval mode MCP tools (unknown side effects) are not
-  offered at all.
+- The text of one result is capped at 50 KiB, the limit the built-in
+  `bash` and `read` tools use. A server can otherwise return up to the
+  4 MiB frame limit in one call, which is enough to fill the context
+  window. Past the cap, terva keeps the first 50 KiB and writes the full
+  text to a private file (mode 0600) named `terva-mcp-<hex>.log` in the
+  OS temp directory. It then appends a note that names the file and where
+  to continue, so the model pages the rest with `read` instead of calling
+  the tool again. The note gives a line as `offset` when the cut ends a
+  line, and a byte as `byte_offset` when the cut falls inside one, which
+  is the usual shape of a compact JSON result. Images do not count toward
+  the cap and pass through unchanged. The file never goes under
+  `$TERVA_HOME/sessions`, which the agent cannot read, and terva removes it
+  when the session that made the call ends.
+- A tool whose description is over 4 KiB, or whose input schema is over
+  16 KiB, is withdrawn. The schema is measured without whitespace, as a
+  provider sends it. A server writes this text, and terva places it in the
+  cached prompt prefix, where it costs every request and speaks to the
+  model with the weight of a tool definition. A withdrawn tool is absent
+  from the tool list and from the server's tool count, and a call to it
+  fails. Each withdrawal prints a startup note, and `/mcp` shows the
+  first note for the server. The server's other tools are not affected.
+  terva never cuts or replaces a schema, because a cut schema no longer
+  says what the server accepts.
+- Classification follows the tool's annotations and the server's
+  transport ([permissions.md](permissions.md#authority-classes) has the
+  table). A tool with `readOnlyHint: true` on a `stdio` server counts as a
+  read: it runs without a prompt in `workspace` and `auto-edit`, and `plan`
+  offers it. The same tool on an `http` server is `network-read`, because
+  every call sends its arguments off the machine. It asks in `workspace`
+  and `auto-edit`, and `plan` does not offer it. A `stdio` server that
+  marks itself as a relay to a remote server gets the `http` treatment.
+  The mark is `"terva.sh/remote": true` in the `_meta` of its `initialize`
+  result, and `terva-mcp-bridge` sets it. Any other value, or no value, is
+  no mark. A tool that also sets `destructiveHint: true`, or sets no
+  `readOnlyHint`, has unknown side effects: it asks, and `plan` does not
+  offer it.
 
 ## Enabling and disabling servers (`/mcp`)
 
@@ -204,7 +257,8 @@ error. Two toggles, mirroring `/extensions`:
   in an untrusted workspace, because refusing to spawn is always safe.
 - `l`: open a scrollable view of that server's log
   (`$TERVA_HOME/logs/mcp-<name>.log`) without leaving the TUI. A server
-  that failed to start also shows a one-line reason inline.
+  that failed to start, or that had a tool withdrawn, also shows a
+  one-line reason inline.
 
 Toggles apply **live**: enabling spawns the server and its `mcp_*` tools
 appear on the next turn; disabling stops the subprocess and removes its
@@ -229,3 +283,10 @@ Auto-allow one read-only MCP tool, force prompts for the rest:
   ]
 }
 ```
+
+The same shape trusts a read-only tool on a remote `http` server, or behind
+`terva-mcp-bridge`, which otherwise asks on every call. Name the one tool
+rather than `mcp_<server>_*`, so a mutating tool the server adds later still
+asks. An allow rule does not
+bring a remote tool into `plan`, because plan refuses the call before any
+rule runs.

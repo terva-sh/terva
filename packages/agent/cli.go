@@ -25,6 +25,7 @@ import (
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/run"
 	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/agent/tools/resultcap"
 	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/agent/workspace"
 	"terva.sh/terva/packages/core"
@@ -57,6 +58,11 @@ func workspaceRootFn(sandbox *tools.Sandbox, cwd string) func() string {
 
 // Run is the top-level entrypoint for the terva binary.
 func Run(rawArgs []string, version string) error {
+	// A spill file that a tool call kept with no session in its context
+	// belongs to this process: print, json and rpc mode, a bot, the TUI's
+	// shell escape. A workspace session removes its own when it closes.
+	defer resultcap.RemoveUnowned()
+
 	// Resolve the operator's UI language and load its message catalog
 	// before any user-facing output. English/unset is a no-op — i18n.T then
 	// returns each source string verbatim. A malformed tag is a warning, not

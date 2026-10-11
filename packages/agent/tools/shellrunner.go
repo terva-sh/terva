@@ -1,14 +1,10 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"os"
 	"os/exec"
-	"sync"
-
-	"terva.sh/terva/packages/agent/tools/resultcap"
 )
 
 // ShellRunner runs one script for the bash tool. The host runner starts the
@@ -104,36 +100,4 @@ func (hostShell) Run(ctx context.Context, req ShellRequest) (int, error) {
 		return -1, nil
 	}
 	return 0, nil
-}
-
-// bashOutput is the bash tool's sink for a runner's output. captured holds
-// the inline result (capped at maxBashBytes). spill tees the complete stream
-// to a temp file, so the "full output" link is genuinely full and not a
-// relabeled copy of the capped buffer. total tracks the real, uncapped size.
-// The mutex matters for an in-process runner, where a background job and the
-// foreground can write at once.
-type bashOutput struct {
-	mu       sync.Mutex
-	captured bytes.Buffer
-	spill    *resultcap.SpillWriter
-	total    int64
-	progress func(string)
-}
-
-func (o *bashOutput) Write(p []byte) (int, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	o.total += int64(len(p))
-	o.spill.Write(p)
-	if room := maxBashBytes - o.captured.Len(); room > 0 {
-		if len(p) > room {
-			o.captured.Write(p[:room])
-		} else {
-			o.captured.Write(p)
-		}
-	}
-	if o.progress != nil {
-		o.progress(string(p))
-	}
-	return len(p), nil
 }

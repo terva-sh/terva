@@ -53,6 +53,26 @@ func (i *Interactive) CarrierSessionID() string { return i.carrierSession() }
 // so the pump test can compress the wait.
 var carrierResubscribeDelay = 2 * time.Second
 
+// subscribeCarrier subscribes to addr and reports whether a failure is
+// transient: the carrier reconnects on its own, and its transport was down
+// at some point across the attempt. Both pumps retry a transient failure and
+// treat any other failure as final.
+//
+// 🔑 Reconnecting() is read before the attempt as well as after it. The
+// transport can come back between a failed subscribe and the check after it.
+// A pump that asked only afterwards then read "connected", took the in-process
+// fail-stop, and never subscribed again. A failure with the transport up at
+// both reads came from a live connection, so it stays final.
+func subscribeCarrier(ctx context.Context, c Carrier, addr string) (ch <-chan ctrlproto.Event, transient bool, err error) {
+	rc, reconnects := c.(ReconnectingCarrier)
+	downBefore := reconnects && rc.Reconnecting()
+	ch, err = c.SubscribeReliable(ctx, addr)
+	if err != nil && reconnects {
+		transient = downBefore || rc.Reconnecting()
+	}
+	return ch, transient, err
+}
+
 // runWorkspaceLoop is the pump's sibling: a reliable subscription to the
 // WORKSPACE, feeding the facts that are true of the daemon rather than of any
 // session — a workspace surface changing (tasks, mcp, chat, settings,
@@ -71,12 +91,12 @@ var carrierResubscribeDelay = 2 * time.Second
 // exactly the fallback this replaces.
 func (i *Interactive) runWorkspaceLoop(ctx context.Context) {
 	for ctx.Err() == nil {
-		ch, err := i.cfg.Carrier.SubscribeReliable(ctx, ctrlproto.AddrWorkspace)
+		ch, transient, err := subscribeCarrier(ctx, i.cfg.Carrier, ctrlproto.AddrWorkspace)
 		if err != nil {
 			// Transient, on an attached carrier whose transport is down: the
 			// session pump owns the user-visible outage message, so just wait
 			// and retry quietly.
-			if rc, ok := i.cfg.Carrier.(ReconnectingCarrier); ok && rc.Reconnecting() {
+			if transient {
 				select {
 				case <-ctx.Done():
 					return
@@ -128,13 +148,13 @@ func (i *Interactive) runCarrierLoop(ctx context.Context) {
 			cancel()
 			continue
 		}
-		ch, err := i.cfg.Carrier.SubscribeReliable(subCtx, sess)
+		ch, transient, err := subscribeCarrier(subCtx, i.cfg.Carrier, sess)
 		if err != nil {
 			cancel()
 			// A reconnecting carrier (terva attach) fails transiently while
 			// its transport is down: show the outage, back off, retry. An
 			// in-process carrier error is a real bug — keep the fail-stop.
-			if rc, ok := i.cfg.Carrier.(ReconnectingCarrier); ok && rc.Reconnecting() {
+			if transient {
 				wasDown = true
 				i.setStatusErr(i18n.T("connection lost — reconnecting…"))
 				i.invalidate()

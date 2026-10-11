@@ -160,7 +160,7 @@ func TestExecuteTextOverTheCapSpills(t *testing.T) {
 		t.Fatalf("the cap dropped the ownership details: %v", details)
 	}
 	pointer := res.Content[2].(provider.TextBlock).Text
-	if !strings.Contains(pointer, "\nfull output: "+path+"\n") || !strings.Contains(pointer, "Read this file with offset and limit") {
+	if !strings.Contains(pointer, "\nfull output: "+path+"\n") || !strings.Contains(pointer, "Read this file instead of another call to the tool") {
 		t.Fatalf("pointer does not send the model to the file: %q", pointer)
 	}
 	got, err := os.ReadFile(path)

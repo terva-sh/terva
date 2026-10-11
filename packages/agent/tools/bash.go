@@ -121,6 +121,11 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	if strings.TrimSpace(a.Command) == "" {
 		return core.ToolResult{}, fmt.Errorf("command is required%s", argHint(raw, bashSchema))
 	}
+	// A model can send CRLF line ends. The shell keeps each CR as part of its
+	// line, so `<<'EOF'` asks for "EOF\r". A terminator on the last line has no
+	// line end and reads "EOF", and the heredoc runs to the end of the script.
+	// Convert before the checks, so that they read the text that runs.
+	a.Command = strings.ReplaceAll(a.Command, "\r\n", "\n")
 	if err := t.Sandbox.CheckCommand(a.Command); err != nil {
 		return core.ToolResult{}, err
 	}
@@ -151,15 +156,9 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		return core.ToolResult{}, fmt.Errorf("start: %w", err)
 	}
 
-	output := out.captured.String()
 	truncBytes := out.total > int64(maxBashBytes)
-	lines := strings.Split(output, "\n")
-	truncLines := false
-	if len(lines) > maxBashLines {
-		lines = lines[:maxBashLines]
-		truncLines = true
-	}
-	trimmed := strings.Join(lines, "\n")
+	truncLines := out.lines() > maxBashLines
+	shown := out.view(spill.Path() != "")
 
 	elapsed := time.Since(start)
 
@@ -177,18 +176,12 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	// makes the model's reasoning about it more natural too.
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "$ %s\n", a.Command)
-	if trimmed != "" {
+	if shown != "" {
 		sb.WriteString("\n")
-		sb.WriteString(trimmed)
-		if !strings.HasSuffix(trimmed, "\n") {
+		sb.WriteString(shown)
+		if !strings.HasSuffix(shown, "\n") {
 			sb.WriteString("\n")
 		}
-	}
-	if truncLines {
-		fmt.Fprintf(&sb, "... [truncated at %d lines]\n", maxBashLines)
-	}
-	if truncBytes {
-		fmt.Fprintf(&sb, "... [truncated at %d bytes]\n", maxBashBytes)
 	}
 	sb.WriteString("\n")
 	if exitCode == 0 {
@@ -217,11 +210,19 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		fullPath = spill.Path()
 		if fullPath != "" {
 			// Point the model at the spill explicitly: it's a readable file,
-			// so `read` (with offset/limit to page) reaches the dropped tail
-			// without re-running the command and re-truncating.
-			fmt.Fprintf(&sb, " (full output: %s — read this file, paging with offset/limit, instead of re-running)", fullPath)
+			// so `read` reaches the part cut from the middle of the inline view
+			// without re-running the command and cutting it again. The cut
+			// marker names the exact read call, by line or by byte_offset, so
+			// the footer points at it and gives no position of its own.
+			fmt.Fprintf(&sb, " (full output: %s — read this file as the note in the middle of the output says, and do not run the command again)", fullPath)
 		}
 	} else {
+		spill.Discard()
+	}
+	// The session removes a kept spill when it ends. A spill that failed part
+	// way leaves a partial file that no pointer names, so it goes now.
+	resultcap.Track(ctx, fullPath)
+	if fullPath == "" {
 		spill.Discard()
 	}
 	fmt.Fprintf(&sb, "  Took %s", humanDuration(elapsed))
@@ -231,7 +232,7 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	}
 
 	isErr := exitCode != 0 || ctx.Err() != nil || timedOut
-	if matchExitBenign(hint, trimmed, ctx.Err() != nil, timedOut) {
+	if matchExitBenign(hint, shown, ctx.Err() != nil, timedOut) {
 		isErr = false
 	}
 	return core.ToolResult{

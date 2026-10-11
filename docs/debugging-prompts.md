@@ -92,9 +92,10 @@ last input item, and it is *your* synthetic turn, not what the conversation
 really did next. Compare `head -n -1` of the earlier dump against the later one,
 or every pair will report a difference on its final line. Two other artifacts
 bite the same way: cutting a transcript mid-tool-call makes the loader fill the
-gap with `tool call was aborted; no result recorded.`, which the next cut
-replaces with the real output; and consecutive same-role messages are **merged**
-into one item by the codex/chat builders, so a fixture of two user turns in a
+gap with the interrupt stub (`The transcript has no result for this tool call,
+…`), which the next cut replaces with the real output; and consecutive
+same-role messages are **merged** into one item by the codex/chat builders, so
+a fixture of two user turns in a
 row does not produce two items.
 
 `--session` is replayed **read-only**. No append handle is taken, and a session

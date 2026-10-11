@@ -105,7 +105,7 @@ the guard alone, and it does not change which calls prompt. See
 
 | Tool | Authority | Notes |
 |---|---|---|
-| `read` | local read-only | files + inline images for vision models |
+| `read` | local read-only | files + inline images for vision models; pages by line with `offset`/`limit`, and by byte with `byte_offset` inside a line longer than the 50 KiB cap |
 | `write` | workspace mutation | overwrites; description steers toward `edit` for partial changes; optional `mode` (octal ≤ `0777`) sets permission bits, e.g. an executable script, in one reviewable step |
 | `edit` | workspace mutation | exact-match replacements, whitespace-tolerant fallback |
 | `bash` | process execution | merged stdout/stderr, timeout; description carries git/secrets/file-tool-preference guardrails |

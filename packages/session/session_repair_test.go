@@ -1,6 +1,7 @@
 package session
 
 import (
+	"strings"
 	"testing"
 
 	"terva.sh/terva/packages/core/transcriptcodec"
@@ -35,6 +36,18 @@ func TestRepairToolUseResultPairsAppendsStub(t *testing.T) {
 	}
 	if !tr.IsError {
 		t.Errorf("expected IsError=true on stub")
+	}
+	// The stub must not claim what the call did. A process can die after a call
+	// wrote its file and before the result row, so "aborted" told the model to
+	// redo work that can already exist.
+	text := tr.Content[0].(provider.TextBlock).Text
+	if strings.Contains(text, "aborted") {
+		t.Errorf("the stub still claims the call was aborted: %q", text)
+	}
+	for _, want := range []string{"no result", "effect is unknown", "Check the current state before you repeat the call"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the stub lacks %q: %q", want, text)
+		}
 	}
 }
 

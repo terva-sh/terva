@@ -158,8 +158,95 @@ func TestCapCutsALongLineOnARuneBoundary(t *testing.T) {
 	if !utf8.ValidString(kept) || len(kept) != MaxBytes-1 {
 		t.Fatalf("kept %d bytes (valid UTF-8: %v), want %d", len(kept), utf8.ValidString(kept), MaxBytes-1)
 	}
-	if line := continueLine(t, textOf(t, out[1])); line != 1 {
-		t.Fatalf("offset = %d, want 1 for a one-line result", line)
+	// A line offset would send the reader back to byte 0, so the pointer must
+	// name the first byte left out instead.
+	pointer := textOf(t, out[1])
+	if strings.Contains(pointer, "offset=1.") && !strings.Contains(pointer, "byte_offset=") {
+		t.Fatalf("a cut inside the only line continues by line: %q", pointer)
+	}
+	if off := continueByte(t, pointer); off != len(kept) {
+		t.Fatalf("byte_offset = %d, want %d", off, len(kept))
+	}
+}
+
+var byteOffsetRe = regexp.MustCompile(`Continue with byte_offset=(\d+)\.`)
+
+// continueByte reads the byte position the pointer gives.
+func continueByte(t *testing.T, pointer string) int {
+	t.Helper()
+	m := byteOffsetRe.FindStringSubmatch(pointer)
+	if m == nil {
+		t.Fatalf("pointer gives no byte_offset: %q", pointer)
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n
+}
+
+// A cut inside a line of a later block counts the earlier blocks and the
+// newline that joins them in the spill, so the position is a spill position.
+func TestCapCountsEarlierBlocksInTheBytePosition(t *testing.T) {
+	useTempDir(t)
+	first := "head line\n"
+	second := strings.Repeat("{\"k\":1}", MaxBytes/4) // one line, far over the budget
+	out, path := Cap([]provider.Content{provider.TextBlock{Text: first}, provider.TextBlock{Text: second}}, "test")
+	if path == "" {
+		t.Fatal("an oversized result did not spill")
+	}
+	kept := textOf(t, out[1])
+	off := continueByte(t, textOf(t, out[2]))
+	if want := len(first) + 1 + len(kept); off != want {
+		t.Fatalf("byte_offset = %d, want %d", off, want)
+	}
+	spilled, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(spilled[:off]) != first+"\n"+kept {
+		t.Fatal("the spill bytes before byte_offset are not the text the model saw")
+	}
+}
+
+// A cut that ends a line still continues by line: offset is what read pages
+// by, and a byte here would hand the model the unfamiliar form for no gain.
+func TestContinuation(t *testing.T) {
+	for _, tc := range []struct{ seen, want string }{
+		{"", "offset=1"},
+		{"abc\n", "offset=2"},
+		{"a\nb\n", "offset=3"},
+		{"abc", "byte_offset=3"},
+		{"a\nbc", "byte_offset=4"},
+		{"é", "byte_offset=2"},
+	} {
+		if got := Continuation(tc.seen); got != tc.want {
+			t.Errorf("Continuation(%q) = %q, want %q", tc.seen, got, tc.want)
+		}
+	}
+}
+
+func TestRuneCut(t *testing.T) {
+	invalid := "ab" + strings.Repeat("\x80", 8) // continuation bytes with no start
+	for _, tc := range []struct {
+		s    string
+		n    int
+		want int
+	}{
+		{"abc", -1, 0},
+		{"abc", 0, 0},
+		{"abc", 2, 2},
+		{"abc", 3, 3},
+		{"abc", 9, 3},
+		{"aé", 2, 1},           // inside a two-byte rune
+		{"a€", 3, 1},           // inside a three-byte rune, at its last byte
+		{"a𝄞", 4, 1},           // inside a four-byte rune, at its last byte
+		{"a𝄞b", 5, 5},          // after the rune: no move
+		{"€", 2, 0},            // a rune at the start moves the cut to 0
+		{invalid, 7, 7},        // no rune start within three bytes: cut at n
+		{invalid, 4, 1},        // the b three bytes back is a rune start: move to it
+		{"\x80\x80\x80", 2, 0}, // the start of the text is always a cut point
+	} {
+		if got := RuneCut(tc.s, tc.n); got != tc.want {
+			t.Errorf("RuneCut(%q, %d) = %d, want %d", tc.s, tc.n, got, tc.want)
+		}
 	}
 }
 

@@ -123,7 +123,7 @@ These truncate and tell the model how to page for more.
 | Boundary | Limit | Where | On exceed |
 | --- | --- | --- | --- |
 | `read` in-memory file load | 10 MiB | `tools.maxReadFileBytes` | tail beyond the cap not loaded (noted in output) |
-| `read` output slice | 50 KiB | `tools.maxReadBytes` | truncated + `continue with offset=` hint |
+| `read` output slice | 50 KiB | `tools.maxReadBytes` | truncated + `continue with offset=` hint; a single line over the cap is cut inside the line + `byte_offset=` hint |
 | `read` line count | 2000 | `tools.maxReadLines` | truncated + hint |
 | `read` inline image | 5 MiB | `tools.maxImageBytes` | rejected with a size error |
 | `grep` per-file scan | 10 MiB | `tools.maxReadFileBytes` | stops at the cap |

@@ -33,7 +33,7 @@ import (
 //     stream: true
 //   - SSE events: response.output_item.added, response.output_text.delta,
 //     response.function_call_arguments.delta, response.output_item.done,
-//     response.completed, response.failed, error
+//     response.completed, response.incomplete, response.failed, error
 //
 // The access_token comes from the OpenAI OAuth flow (auth.openai.com).
 // The accountID is parsed from the id_token JWT's `chatgpt_account_id`
@@ -970,10 +970,11 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 		stop     StopReason = StopEnd
 		finalErr error
 		// sawTerminal tracks the wire's terminal frame
-		// (response.completed/.done, or the .failed/error variants). If
-		// the raw channel closes before one of these (connection death
-		// mid-stream, including mid-tool-call), the response is truncated
-		// and we surface an error instead of a clean StopEnd.
+		// (response.completed/.done/.incomplete, or the .failed/error
+		// variants). If the raw channel closes before one of these
+		// (connection death mid-stream, including mid-tool-call), the
+		// response is truncated and we surface an error instead of a clean
+		// StopEnd.
 		sawTerminal bool
 	)
 
@@ -1197,7 +1198,11 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 						}
 					}
 				}
-			case "response.completed", "response.done":
+			case "response.completed", "response.done", "response.incomplete":
+				// response.incomplete carries the same response object, usage
+				// included, so it shares this arm. A reader that skips it sees
+				// the close that follows as a dropped connection: a transient
+				// error, retried at full input cost into the same output cap.
 				var p struct {
 					Response struct {
 						Usage struct {
@@ -1219,7 +1224,10 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 								CacheWriteTokens int `json:"cache_write_tokens"`
 							} `json:"input_tokens_details"`
 						} `json:"usage"`
-						Status string `json:"status"`
+						Status            string `json:"status"`
+						IncompleteDetails struct {
+							Reason string `json:"reason"`
+						} `json:"incomplete_details"`
 					} `json:"response"`
 				}
 				_ = json.Unmarshal([]byte(ev.Data), &p)
@@ -1258,9 +1266,12 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 						break
 					}
 				}
-				if hadTool {
+				switch {
+				case head.Type == "response.incomplete":
+					stop = responsesIncompleteStop(p.Response.IncompleteDetails.Reason)
+				case hadTool:
 					stop = StopToolUse
-				} else {
+				default:
 					stop = StopEnd
 				}
 				sawTerminal = true
@@ -1338,4 +1349,24 @@ func (c *codexClient) runStream(ctx context.Context, resp *http.Response, req Re
 			}
 		}
 	}
+}
+
+// responsesIncompleteStop maps the incomplete_details.reason of a Responses
+// response.incomplete frame onto a stop.
+//
+// max_output_tokens is the output cap, so it is StopLength, tool calls or
+// not: a call the cap cut has incomplete arguments, and core answers each
+// such call rather than running it.
+//
+// Every other reason (content_filter today) is StopEnd with no error, and is
+// never promoted to StopToolUse. That mirrors the Chat Completions reader,
+// where a content_filter finish stays StopEnd and its calls do not run: the
+// server stopped the reply, not the model, so a call in it may be cut. A
+// transient error would be worse still, since the retry re-sends the
+// identical request into the same filter at full input cost.
+func responsesIncompleteStop(reason string) StopReason {
+	if reason == "max_output_tokens" {
+		return StopLength
+	}
+	return StopEnd
 }

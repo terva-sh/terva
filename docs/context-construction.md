@@ -335,10 +335,17 @@ All built-in file tools resolve paths the same way:
 - Directories are rejected.
 - If the extension is `.png`, `.jpg`, `.jpeg`, `.gif`, or `.webp`, the file is returned as an image block.
 - Other files are read as text.
-- Text reads are capped at 50 KiB.
+- Text reads are capped at 50 KiB. The cap stops at the last whole line that
+  fits, and the note gives the next line as `offset`.
+- A first line longer than 50 KiB is cut at the cap, on a UTF-8 rune
+  boundary. The note then gives the next byte as `byte_offset`.
 - Text output is capped at 2000 selected lines.
 - `offset` is 1-indexed and selects the starting line.
-- `limit` restricts selected line count.
+- `byte_offset` is 0-indexed and selects the starting byte. The result starts
+  inside the line that holds that byte. A position inside a rune moves back to
+  the start of the rune. `offset` and `byte_offset` together are refused.
+- `limit` restricts selected line count. With `byte_offset`, the part of the
+  first line counts as one line.
 - Files that look binary are rejected if a NUL byte appears in the first 8 KiB.
 - Returned text is raw content without injected line numbers; the TUI renders its own gutter.
 
@@ -387,8 +394,22 @@ Rules:
 - Optional `timeout` is in seconds.
 - stdout and stderr are merged.
 - Output streams to the UI and is captured for the model.
-- Captured output is capped at 50 KiB and 2000 lines.
-- Truncated full output may be written to a temp file and referenced in the result.
+- terva converts CRLF line ends in `command` to LF before the command runs. A
+  CR left in place becomes part of each line, so a heredoc terminator never
+  matches.
+- Captured output is capped at 50 KiB and 2000 lines. Past either cap, the
+  result keeps the head and the tail of the output, each within half of each
+  cap, so the error at the end of a long build stays in view. A note between
+  them says how much terva removed and which lines of the full output file
+  hold it. It names a first `read` that starts at the first removed byte and
+  stays within one read's limits, and the line to continue to. That `read`
+  starts with `offset` when the head ends a line, and with `byte_offset` when
+  the head ends inside one. A cut inside one line asks for `limit=1` and the
+  rest of that line, and `read` pages the line by byte. The note is the only
+  continuation in the result: the footer names the file and points to the
+  note. The exit footer stays last.
+- Truncated full output is written to a temp file, `terva-bash-<hex>.log`, and
+  referenced in the result. terva removes the file when the session ends.
 - On Unix, terva starts the command in its own process group so cancellation can terminate child processes.
 - A command that reads `$?` in the statement immediately after a pipeline is
   refused before it runs, when that pipeline's last stage is a transparent

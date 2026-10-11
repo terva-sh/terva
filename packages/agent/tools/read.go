@@ -110,16 +110,20 @@ type readArgs struct {
 	Path   string `json:"path"`
 	Offset int    `json:"offset,omitempty"`
 	Limit  int    `json:"limit,omitempty"`
+	// ByteOffset is a 0-based position in the file. It continues a line that
+	// the byte cap cut, which a line offset cannot do. 0 means "not given".
+	ByteOffset int `json:"byte_offset,omitempty"`
 }
 
 const readSchema = `{"type":"object","properties":{"path":{"type":"string"},` +
 	`"offset":{"type":"integer","description":"The first line to read. The first line of the file is 1. Use offset with limit to read a large file in parts. When the tool cuts a result, it gives the offset to continue from."},` +
-	`"limit":{"type":"integer","description":"The maximum number of lines to read. The tool applies its own caps as well: one result holds at most 2000 lines and 50 KiB."}},` +
+	`"limit":{"type":"integer","description":"The maximum number of lines to read. The tool applies its own caps as well: one result holds at most 2000 lines and 50 KiB."},` +
+	`"byte_offset":{"type":"integer","description":"The first byte to read. The first byte of the file is 0. When the tool cuts a line that is longer than 50 KiB, it gives the byte_offset to continue from. Do not use it with offset."}},` +
 	`"required":["path"]}`
 
 func (t *ReadTool) Name() string { return "read" }
 func (t *ReadTool) Description() string {
-	return i18n.D("tool.read.description", "Read a file from disk.\n\nOne result holds at most 2000 lines and 50 KiB. If the range is larger, the tool cuts the result, says so, and gives the offset of the next line. Use offset and limit to read the next part. To find one thing in a large file, use grep.\n\nUse this tool also to examine a local image. Give the path to a png, jpg, gif, or webp file. The tool returns the pixels of the image in your context, and a model with vision can see them.")
+	return i18n.D("tool.read.description", "Read a file from disk.\n\nOne result holds at most 2000 lines and 50 KiB. If the range is larger, the tool cuts the result, says so, and gives the offset of the next line. Use offset and limit to read the next part. If one line is longer than 50 KiB, the tool cuts the line and gives a byte_offset. To find one thing in a large file, use grep.\n\nUse this tool also to examine a local image. Give the path to a png, jpg, gif, or webp file. The tool returns the pixels of the image in your context, and a model with vision can see them.")
 }
 func (t *ReadTool) Schema() json.RawMessage { return json.RawMessage(readSchema) }
 
@@ -130,6 +134,16 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	}
 	if a.Path == "" {
 		return core.ToolResult{}, fmt.Errorf("path is required%s", argHint(raw, readSchema))
+	}
+	// 🔑 offset and byte_offset both say where the read starts, so a call with
+	// both has two starts. Refuse it rather than pick one: a silent winner hides
+	// the mistake, and the model then pages from a place it did not ask for.
+	// limit stays legal with byte_offset, because it still counts lines.
+	if a.ByteOffset < 0 {
+		return core.ToolResult{}, fmt.Errorf("byte_offset %d is negative. byte_offset counts bytes from the start of the file, and the first byte is 0", a.ByteOffset)
+	}
+	if a.ByteOffset > 0 && a.Offset > 0 {
+		return core.ToolResult{}, fmt.Errorf("give offset or byte_offset, not both. offset is a line number, and byte_offset is a byte position in the file. Each one sets where the read starts. To continue a line that the tool cut, give byte_offset alone")
 	}
 	path := resolvePath(t.CWD, a.Path)
 	// Read-side check: a deny list over the secret roots, not containment.
@@ -231,7 +245,8 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		t.Files.Record(path, data, "read")
 	}
 
-	lines := strings.Split(string(data), "\n")
+	text := string(data)
+	lines := strings.Split(text, "\n")
 	// Trim trailing empty line from final \n.
 	if n := len(lines); n > 0 && lines[n-1] == "" {
 		lines = lines[:n-1]
@@ -254,8 +269,34 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		}, nil
 	}
 
-	start := 0
-	if a.Offset > 0 {
+	// byte_offset is the same trap in bytes. The file is loaded up to
+	// maxReadFileBytes only, so a position past that is out of reach as well,
+	// and the message says which of the two applies.
+	if a.ByteOffset > 0 && a.ByteOffset >= len(text) {
+		msg := fmt.Sprintf("%s has %d byte(s). byte_offset %d is past the end of the file. Note: byte_offset counts bytes from 0, and offset counts lines from 1.\n", shown, len(text), a.ByteOffset)
+		if truncFile {
+			msg = fmt.Sprintf("%s is larger than %d MiB, and read loads only the first %d bytes. byte_offset %d is past them. To find one thing in a large file, use grep.\n", shown, maxReadFileBytes/(1024*1024), len(text), a.ByteOffset)
+		}
+		return core.ToolResult{
+			Content: []provider.Content{provider.TextBlock{Text: msg}},
+			Details: map[string]any{
+				"path":        path,
+				"total_bytes": len(text),
+				"past_eof":    true,
+			},
+		}, nil
+	}
+
+	// start is the first line returned, 0-based. With byte_offset, startByte is
+	// the position the result starts at, and col is how far into line start
+	// that position falls. A position inside a rune moves back to the rune's
+	// first byte, so the result never opens with half a character.
+	start, col, startByte := 0, 0, -1
+	if a.ByteOffset > 0 {
+		startByte = resultcap.RuneCut(text, a.ByteOffset)
+		start = strings.Count(text[:startByte], "\n")
+		col = startByte - (strings.LastIndexByte(text[:startByte], '\n') + 1)
+	} else if a.Offset > 0 {
 		start = a.Offset - 1
 		if start > len(lines) {
 			start = len(lines)
@@ -265,22 +306,44 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	if a.Limit > 0 && start+a.Limit < end {
 		end = start + a.Limit
 	}
-	selected := lines[start:end]
-
 	truncLines := false
-	if len(selected) > maxReadLines {
-		selected = selected[:maxReadLines]
+	if end-start > maxReadLines {
+		end = start + maxReadLines
 		truncLines = true
+	}
+	selected := lines[start:end]
+	if col > 0 {
+		selected = append([]string{selected[0][col:]}, selected[1:]...)
 	}
 
 	// Apply the byte cap to the SELECTED slice (post offset/limit), so a
-	// large window is trimmed but paging still works. We count bytes
-	// including the trailing newline we emit per line. We always keep at
-	// least one line so a single over-cap line still returns content
-	// (truncated) rather than an empty result.
-	truncBytes := false
+	// large window is trimmed but paging still works. The count includes the
+	// newline we emit after each line. The cap stops at the last whole line
+	// that fits, and the note gives the next line as offset.
+	//
+	// The first line is the exception, in two ways. It stays whole while it
+	// fits the cap by itself, so a line of exactly 50 KiB is not split for its
+	// newline. And a first line longer than the cap is cut at the cap, on a
+	// rune boundary. The note then gives the byte after the cut as
+	// byte_offset: a line offset would return the same part of the line again,
+	// and the rest of the line would be out of reach.
+	truncBytes, cutInLine := false, false
+	nextByte := 0
 	byteCount := 0
 	for i, line := range selected {
+		if i == 0 && len(line) > maxReadBytes {
+			keep := resultcap.RuneCut(line, maxReadBytes)
+			if startByte < 0 {
+				startByte = 0
+				for _, l := range lines[:start] {
+					startByte += len(l) + 1
+				}
+			}
+			nextByte = startByte + keep
+			selected = []string{line[:keep]}
+			truncBytes, cutInLine = true, true
+			break
+		}
 		byteCount += len(line) + 1 // +1 for the '\n' we emit below
 		if byteCount > maxReadBytes && i > 0 {
 			selected = selected[:i]
@@ -307,14 +370,17 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	// pass as `offset` to continue. offset/limit count LINES, so a paging hint
 	// MUST be a line number; reporting the byte cap (51200) as if it were an
 	// offset is exactly what sends an agent past EOF to an empty result.
+	// A cut inside a line continues by byte instead, so nextOffset stays 0.
 	nextOffset := 0
-	if truncLines || truncBytes {
+	if (truncLines || truncBytes) && !cutInLine {
 		nextOffset = start + len(selected) + 1
 	}
 	if truncLines || truncBytes || truncFile {
 		sb.WriteString("\n")
 	}
 	switch {
+	case cutInLine:
+		sb.WriteString(fmt.Sprintf("... [The result stops inside line %d, at the %d KiB limit. Continue with byte_offset=%d.]\n", start+1, maxReadBytes/1024, nextByte))
 	case truncBytes:
 		sb.WriteString(fmt.Sprintf("... [output truncated at %d KiB — continue with offset=%d]\n", maxReadBytes/1024, nextOffset))
 	case truncLines:
@@ -347,14 +413,15 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		return core.ToolResult{
 			Content: []provider.Content{provider.TextBlock{Text: scriptTruncationMessage(
 				shown, start+1, start+len(selected), len(lines), nextOffset,
-				truncBytes, truncLines, truncFile)}},
+				truncBytes, truncLines, truncFile, cutInLine)}},
 			IsError: true,
 			Details: map[string]any{
-				"path":        path,
-				"start_line":  start + 1,
-				"total_lines": len(lines),
-				"next_offset": nextOffset,
-				"truncated":   true,
+				"path":             path,
+				"start_line":       start + 1,
+				"total_lines":      len(lines),
+				"next_offset":      nextOffset,
+				"next_byte_offset": nextByte,
+				"truncated":        true,
 			},
 		}, nil
 	}
@@ -390,7 +457,7 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		epoch = ag
 	}
 	if epoch != nil && !isScriptCall(ctx) {
-		key := fmt.Sprintf("%s\x00%d\x00%d", path, a.Offset, a.Limit)
+		key := fmt.Sprintf("%s\x00%d\x00%d\x00%d", path, a.Offset, a.Limit, a.ByteOffset)
 		if t.dedupHit(epoch.TranscriptEpoch(), key, fnv64(out)) {
 			return core.ToolResult{
 				Content: []provider.Content{provider.TextBlock{Text: fmt.Sprintf(
@@ -417,6 +484,9 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 			"file_truncated":  truncFile,
 			"total_lines":     len(lines),
 			"next_offset":     nextOffset, // 0 when not truncated
+			// The position to pass as byte_offset after a cut inside a line,
+			// and 0 otherwise. It and next_offset are never both set.
+			"next_byte_offset": nextByte,
 		},
 	}, nil
 }
@@ -426,9 +496,19 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 // limit that applied, the range that did come back, and the line to resume
 // from. Without the third a script can only guess, and the recorded session
 // guessed for 30 turns.
-func scriptTruncationMessage(shown string, firstLine, lastLine, totalLines, nextOffset int, truncBytes, truncLines, truncFile bool) string {
+//
+// A cut inside one line has no line to resume from. The script binding takes
+// no byte_offset, and it would not help: every piece of a long line is itself
+// a cut result, so a script read of it throws again. The message therefore
+// sends the model to the read tool, which returns the line in parts.
+func scriptTruncationMessage(shown string, firstLine, lastLine, totalLines, nextOffset int, truncBytes, truncLines, truncFile, cutInLine bool) string {
 	var b strings.Builder
 	switch {
+	case cutInLine:
+		fmt.Fprintf(&b, "read %s: line %d is longer than the %d KiB limit. A script cannot get a part of one line. ", shown, firstLine, maxReadBytes/1024)
+		fmt.Fprintf(&b, "To read the line in parts, call the read tool outside the script with offset=%d. ", firstLine)
+		b.WriteString("To find one thing in a large file, call grep.")
+		return b.String()
 	case truncBytes:
 		fmt.Fprintf(&b, "read %s: the result stops at the %d KiB limit. ", shown, maxReadBytes/1024)
 	case truncLines:

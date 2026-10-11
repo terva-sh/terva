@@ -113,8 +113,13 @@ func TestMCPTextResultOverTheCapSpills(t *testing.T) {
 		t.Fatalf("full_output_path = %q, want terva-mcp-<hex>.log in %s", path, dir)
 	}
 	pointer := blocks[2].(provider.TextBlock).Text
-	if !strings.Contains(pointer, "\nfull output: "+path+"\n") || !strings.Contains(pointer, "Read this file with offset and limit") {
+	if !strings.Contains(pointer, "\nfull output: "+path+"\n") || !strings.Contains(pointer, "Read this file instead of another call to the tool") {
 		t.Fatalf("pointer does not send the model to the file: %q", pointer)
+	}
+	// The result is one line, so the cut falls inside it, and a line offset
+	// would send the model back to the start of what it already has.
+	if want := fmt.Sprintf("Continue with byte_offset=%d.", resultcap.MaxBytes); !strings.Contains(pointer, want) {
+		t.Fatalf("pointer does not continue inside the line with %q: %q", want, pointer)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil || string(got) != big {

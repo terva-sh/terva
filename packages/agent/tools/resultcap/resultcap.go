@@ -18,6 +18,7 @@ package resultcap
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,9 +38,10 @@ const MaxBytes = 50 * 1024
 //
 // Over the limit, Cap writes every text block to a spill file, one newline
 // between blocks, and returns the content cut to MaxBytes of text with a
-// pointer block appended. The pointer names the file and the line the cut fell
-// on, so the model can read the rest with offset and limit. Image blocks keep
-// their place and do not count toward the limit.
+// pointer block appended. The pointer names the file and where the rest starts,
+// so the model can read it with the read tool: a line when the cut ends a line,
+// and a byte when the cut falls inside one, which is the usual shape of a JSON
+// result. Image blocks keep their place and do not count toward the limit.
 //
 // kind names the source in the file name, as in terva-<kind>-<hex>.log. path is
 // the spill file, or "" when nothing was cut or the spill failed. A failed
@@ -59,7 +61,10 @@ func Cap(content []provider.Content, kind string) (out []provider.Content, path 
 	spill := NewSpillWriter(kind)
 	out = make([]provider.Content, 0, len(content)+1)
 	budget := MaxBytes
-	line := 1 // the spill-file line that holds the first byte left out
+	// The first byte left out, as a spill-file line and a spill-file byte.
+	// last is the byte before it, which says whether the cut ends a line.
+	line, off := 1, 0
+	var last byte = '\n'
 	cut, first := false, true
 	for _, c := range content {
 		tb, ok := c.(provider.TextBlock)
@@ -70,7 +75,7 @@ func Cap(content []provider.Content, kind string) (out []provider.Content, path 
 		if !first {
 			spill.Write([]byte("\n"))
 			if !cut {
-				line++
+				line, off, last = line+1, off+1, '\n'
 			}
 		}
 		first = false
@@ -78,25 +83,71 @@ func Cap(content []provider.Content, kind string) (out []provider.Content, path 
 		if cut {
 			continue
 		}
-		if len(tb.Text) <= budget {
+		n := len(tb.Text)
+		if n <= budget {
 			out = append(out, tb)
-			budget -= len(tb.Text)
-			line += strings.Count(tb.Text, "\n")
-			continue
-		}
-		n := cutPoint(tb.Text, budget)
-		if n > 0 {
-			out = append(out, provider.TextBlock{Text: tb.Text[:n]})
+		} else {
+			n = cutPoint(tb.Text, budget)
+			cut = true
+			if n > 0 {
+				out = append(out, provider.TextBlock{Text: tb.Text[:n]})
+			}
 		}
 		line += strings.Count(tb.Text[:n], "\n")
-		cut = true
+		off += n
+		if n > 0 {
+			last = tb.Text[n-1]
+		}
+		budget -= n
 	}
 	spill.Close()
 	path = spill.Path()
 	if path == "" {
 		spill.Discard() // a write that failed part way leaves a partial file
 	}
-	return append(out, provider.TextBlock{Text: pointer(path, total, line)}), path
+	return append(out, provider.TextBlock{Text: pointer(path, total, resumeAt(line, off, last != '\n'))}), path
+}
+
+// Continuation names the read argument that continues a file after its first
+// len(seen) bytes, where seen is exactly those bytes. A file that seen leaves
+// at the end of a line continues by line, as offset=N. A file that seen leaves
+// inside a line continues by byte, as byte_offset=N, because a line offset
+// would send the reader back to the start of a line it already has.
+//
+// The bash cut marker passes its head, the start of its spill file, to name
+// where the cut part starts. Cap names its own continuation the same way.
+func Continuation(seen string) string {
+	inLine := seen != "" && seen[len(seen)-1] != '\n'
+	return resumeAt(strings.Count(seen, "\n")+1, len(seen), inLine)
+}
+
+// resumeAt formats a continuation. line is the 1-indexed line that holds the
+// first byte left out, and off is the 0-based position of that byte.
+func resumeAt(line, off int, inLine bool) string {
+	if inLine {
+		return fmt.Sprintf("byte_offset=%d", off)
+	}
+	return fmt.Sprintf("offset=%d", line)
+}
+
+// RuneCut returns where to cut s so that the head holds at most n bytes and
+// does not end in part of a rune. A cut inside a rune moves back to the first
+// byte of that rune. It moves back at most utf8.UTFMax-1 bytes, so text that is
+// not valid UTF-8 still cuts at n, and a reader that pages by RuneCut always
+// moves on.
+func RuneCut(s string, n int) int {
+	if n >= len(s) {
+		return len(s)
+	}
+	if n <= 0 {
+		return 0
+	}
+	for k := n; k > n-utf8.UTFMax; k-- {
+		if k == 0 || utf8.RuneStart(s[k]) {
+			return k
+		}
+	}
+	return n
 }
 
 // cutPoint returns how many bytes of s to keep within budget. It prefers the
@@ -114,20 +165,16 @@ func cutPoint(s string, budget int) int {
 	if i := strings.LastIndexByte(s[:budget], '\n'); i >= 0 && i+1 >= budget/2 {
 		return i + 1
 	}
-	n := budget
-	for n > 0 && !utf8.RuneStart(s[n]) {
-		n--
-	}
-	return n
+	return RuneCut(s, budget)
 }
 
 // pointer is the note Cap appends after a cut. It mirrors the bash footer: it
 // names the full output and tells the model to page that file with read rather
-// than call the tool again, which would only cut the same result again. The
-// offset is a line, because read pages by line, and a byte count here is what
-// a model mistakes for an offset. The path ends its own line, because a period
-// after it gets copied into the read call.
-func pointer(path string, total, line int) string {
+// than call the tool again, which would only cut the same result again. next is
+// a Continuation: a line where the cut ends a line, because read pages by line,
+// and a byte only where the cut falls inside one. The path ends its own line,
+// because a period after it gets copied into the read call.
+func pointer(path string, total int, next string) string {
 	kib := (total + 1023) / 1024
 	if path == "" {
 		return i18n.P("toolresult.cut.nospill",
@@ -135,8 +182,8 @@ func pointer(path string, total, line int) string {
 			MaxBytes/1024, kib)
 	}
 	return i18n.P("toolresult.cut",
-		"[The result stops at the %d KiB limit. The full result has %d KiB.\nfull output: %s\nRead this file with offset and limit instead of another call to the tool. Continue with offset=%d.]",
-		MaxBytes/1024, kib, path, line)
+		"[The result stops at the %d KiB limit. The full result has %d KiB.\nfull output: %s\nRead this file instead of another call to the tool. Continue with %s.]",
+		MaxBytes/1024, kib, path, next)
 }
 
 // SpillWriter tees a tool's complete output to a temp file as it arrives, so a

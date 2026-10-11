@@ -18,9 +18,16 @@ type InterruptStub struct {
 	IsError bool
 }
 
-// DefaultInterruptStub reconciles an unmatched tool_use as a generic abort — the
-// long-standing behavior for a crash/stop or a lost result.
-var DefaultInterruptStub = InterruptStub{Text: "tool call was aborted; no result recorded.", IsError: true}
+// DefaultInterruptStub reconciles an unmatched tool_use as a failure whose
+// effect is unknown: the behavior for a crash, a stop, or a lost result.
+//
+// The text claims nothing about what the call did. A process can die after a
+// call wrote its file and before its result reached the transcript, so the old
+// "tool call was aborted" told a model to redo work that can already exist.
+var DefaultInterruptStub = InterruptStub{
+	Text:    "The transcript has no result for this tool call, so its effect is unknown. Check the current state before you repeat the call.",
+	IsError: true,
+}
 
 // RepairToolUseResultPairs walks a restored transcript and
 // synthesises stub tool_result blocks for any assistant
@@ -43,8 +50,8 @@ var DefaultInterruptStub = InterruptStub{Text: "tool call was aborted; no result
 // real bug), we scrub on load: any unmatched tool_use gets a stub
 // tool_result injected as a RoleTool message so the next
 // outbound request passes the provider's validity check. The stub
-// reads "tool call was aborted; no result recorded." so the
-// model can see what happened and decide whether to retry.
+// (DefaultInterruptStub) says the call has no result and an unknown
+// effect, so the model checks the state before it decides to retry.
 //
 // Runs once per OpenSession call. No cost on the hot path.
 func RepairToolUseResultPairs(msgs []provider.Message) []provider.Message {

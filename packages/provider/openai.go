@@ -755,6 +755,7 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 		toolName  string
 		toolArgs  strings.Builder
 		announced bool
+		ended     bool // EventToolEnd sent
 	}
 	var (
 		blocks       []*blockEntry
@@ -763,6 +764,7 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 		reasoningBuf strings.Builder
 		usage        Usage
 		stop         StopReason = StopEnd
+		finish       string     // last non-empty finish_reason
 		finalErr     error
 		// sawDone tracks the [DONE] terminal frame. If the raw channel
 		// closes before it (TCP drop mid-stream, including mid-tool-call),
@@ -790,6 +792,40 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 		// deltas will start a fresh text block after this tool.
 		currentText = nil
 		return t
+	}
+
+	// endToolBlocks closes each announced tool block once. A tool_calls
+	// finish and the promotion below both call it, and a server that sends
+	// both must not close a block twice.
+	endToolBlocks := func() {
+		for _, b := range blocks {
+			if b.kind == "tool_use" && b.announced && !b.ended {
+				b.ended = true
+				out <- EventToolEnd{ID: b.toolID}
+			}
+		}
+	}
+
+	// promoteToolStop reports a clean end that carries tool calls as
+	// StopToolUse, because core runs tools on nothing else. Several servers
+	// send finish_reason "stop" (or none) with tool calls: Gemini's
+	// OpenAI-compatible endpoint when it streams, LiteLLM in front of Ollama,
+	// OpenVINO Model Server, Open WebUI, and OpenAI itself when tool_choice
+	// names a function. Without this the turn ended and the calls never ran.
+	// StopLength stays: a cut-off call has incomplete arguments. A
+	// content_filter end stays too: the server stopped the reply, not the
+	// model.
+	promoteToolStop := func() {
+		if stop != StopEnd || finish == "content_filter" {
+			return
+		}
+		for _, b := range blocks {
+			if b.kind == "tool_use" {
+				stop = StopToolUse
+				endToolBlocks()
+				return
+			}
+		}
 	}
 
 	assembleMsg := func() Message {
@@ -848,6 +884,7 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 			}
 			if ev.Data == "[DONE]" {
 				sawDone = true
+				promoteToolStop()
 				sendDone()
 				return
 			}
@@ -974,6 +1011,9 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 						}
 					}
 				}
+				if ch.FinishReason != "" {
+					finish = ch.FinishReason
+				}
 				switch ch.FinishReason {
 				case "stop":
 					stop = StopEnd
@@ -981,11 +1021,7 @@ func (c *openaiClient) runStream(ctx context.Context, resp *http.Response, req R
 					stop = StopLength
 				case "tool_calls", "function_call":
 					stop = StopToolUse
-					for _, b := range blocks {
-						if b.kind == "tool_use" && b.announced {
-							out <- EventToolEnd{ID: b.toolID}
-						}
-					}
+					endToolBlocks()
 				}
 			}
 		}

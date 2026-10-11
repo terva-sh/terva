@@ -341,7 +341,9 @@ func TestBashEnvExported(t *testing.T) {
 }
 
 // TestBashSpillFooterIsActionable: a truncated run points the model at the
-// spill file with a read-it-don't-rerun hint, not a bare path.
+// spill file with a read-it-don't-rerun hint, not a bare path. The footer
+// sends the model to the cut marker for the position, and names none itself,
+// so the result never carries two continuations.
 func TestBashSpillFooterIsActionable(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix shell only")
@@ -358,8 +360,14 @@ func TestBashSpillFooterIsActionable(t *testing.T) {
 		defer os.Remove(p)
 	}
 	got := res.Content[0].(provider.TextBlock).Text
-	if !strings.Contains(got, "read this file") || !strings.Contains(got, "offset/limit") {
+	if !strings.Contains(got, "read this file as the note in the middle of the output says") {
 		t.Fatalf("spill footer not actionable: %q", got)
+	}
+	if n := continueRe.FindAllStringIndex(got, -1); len(n) != 0 {
+		t.Fatalf("the result gives a continuation outside the cut marker: %q", got[n[0][0]:])
+	}
+	if n := strings.Count(got, "To read it, read that file with "); n != 1 {
+		t.Fatalf("the result gives %d read calls for the cut part, want the marker's one", n)
 	}
 }
 

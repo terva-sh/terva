@@ -22,6 +22,7 @@ import (
 	"terva.sh/terva/packages/agent/permissions"
 	"terva.sh/terva/packages/agent/raati"
 	"terva.sh/terva/packages/agent/tools"
+	"terva.sh/terva/packages/agent/tools/resultcap"
 	"terva.sh/terva/packages/agent/tools/tasks/tasktool"
 	"terva.sh/terva/packages/core"
 	"terva.sh/terva/packages/core/exp/prefixwatch"
@@ -87,6 +88,10 @@ type wsSession struct {
 	trusted       atomic.Bool // workspace trust (project extensions/skills gating); mutated live by Trust/Untrust
 	hub           *wsHub
 	subscription  bool // credential is an OAuth ("sub") token, not a paid api key
+	// spills holds the spill files this session's tool calls kept, the cut
+	// output of bash, MCP and extension calls. Every turn context carries it,
+	// and close removes the files.
+	spills resultcap.Spills
 
 	// revisionMu serializes transcript revisions with turn/compaction admission.
 	// See revise for lock order and publication rules.
@@ -1032,7 +1037,7 @@ func (s *wsSession) beginTurnHeld() (context.Context, error) {
 	}
 	// WithCancelCause, so a cancel can say WHY: core withdraws a not-yet-answered
 	// prompt only for core.ErrUserInterrupted. See cancelTurn / interruptTurn.
-	turnCtx, cancel := context.WithCancelCause(s.ws.ctx)
+	turnCtx, cancel := context.WithCancelCause(resultcap.WithSpills(s.ws.ctx, &s.spills))
 	s.turnCtx, s.turnCancel = turnCtx, cancel
 	return turnCtx, nil
 }
@@ -2842,7 +2847,8 @@ func (s *wsSession) setTitle(t string, generated bool) {
 }
 
 // close cancels any turn, tears down this session's extension subprocesses,
-// closes all subscribers, and closes the session file.
+// closes all subscribers, closes the session file, and removes the spill files
+// its tool calls kept.
 func (s *wsSession) close() {
 	// A mirror without a session has nowhere to deliver.
 	if s.ws != nil {
@@ -2875,6 +2881,9 @@ func (s *wsSession) close() {
 	if s.sess != nil {
 		_ = s.sess.Close()
 	}
+	// After cancelTurn, though a call can still finish later. The closed set
+	// deletes what such a call keeps.
+	s.spills.Remove()
 }
 
 func toImageBlocks(imgs []ctrlproto.Image) []provider.ImageBlock {

@@ -177,3 +177,27 @@ func TestBashFooterCarriesTheHint(t *testing.T) {
 		t.Fatal("a match-exit pipeline that produced output must not be flagged as an error")
 	}
 }
+
+// A heredoc sent with CRLF line ends runs as it would with LF. Without the
+// conversion the shell keeps each CR. The opener's delimiter becomes "EOF\r",
+// the last line of the command has no line end and so reads "EOF", and the
+// heredoc runs to the end of the script with the terminator in its body.
+func TestBashNormalizesCRLF(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix shell only")
+	}
+	tool := &BashTool{CWD: testsupport.TempDir(t)}
+	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"command": "echo before\r\ncat <<'EOF'\r\nhello\r\nEOF",
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := res.Content[0].(provider.TextBlock).Text
+	if strings.Contains(got, "\r") {
+		t.Errorf("a CR reached the shell or its output: %q", got)
+	}
+	if want := "\n\nbefore\nhello\n\n[exit 0]"; !strings.Contains(got, want) {
+		t.Errorf("output = %q, want it to contain %q", got, want)
+	}
+}

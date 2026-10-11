@@ -1927,6 +1927,19 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) (err error) 
 			return err
 		}
 
+		// A reply the output limit stopped keeps its tool calls, and the turn
+		// ends below without running them. Answer each call here, in the same
+		// shape a tool batch takes, so the session file, the live events and the
+		// next request all say why it did not run. Left unanswered, the next
+		// request filled the gap with the generic interrupt stub, and a model
+		// told "aborted" sends the same oversized call again.
+		if stop == provider.StopLength && messageHasToolCall(assistantMsg) {
+			a.answerCutOffCalls(assistantMsg, sink)
+			if err := a.PersistenceError(); err != nil {
+				return err
+			}
+		}
+
 		if stop == provider.StopToolUse {
 			// Execute each tool call, append a single tool-results message, continue.
 			toolCtx := context.WithValue(ctx, toolGenerationKey{}, toolGeneration{agent: a, tools: pin.tools, readOnly: pin.readOnly})
@@ -2721,6 +2734,44 @@ func (a *Agent) executeTools(ctx context.Context, msg provider.Message, tools Re
 	return out, hadError
 }
 
+// answerCutOffCalls appends one tool-role message that answers every tool call
+// in msg, a reply that stopped at the output limit, with an error result. No
+// call runs. It writes the message the way runLoop writes a tool batch: an
+// EvToolResult per call, then the in-memory append and the durable one, so a
+// front end sees each call resolve as failed rather than wait on it.
+func (a *Agent) answerCutOffCalls(msg provider.Message, sink func(AgentEvent)) {
+	cut := cutOffCallIndex(msg)
+	var results []provider.Content
+	for i, c := range msg.Content {
+		tc, ok := c.(provider.ToolCallBlock)
+		if !ok {
+			continue
+		}
+		var text string
+		switch {
+		case i == cut:
+			text = cutOffCallMessage(a.translator, tc.Name, true)
+		case tc.RawArguments != "":
+			// Whole but mis-encoded: the defect is the encoding, not the limit.
+			text = unparseableArgsMessage(tc.Name, tc.RawArguments)
+		default:
+			text = cutOffCallMessage(a.translator, tc.Name, false)
+		}
+		res := ToolResult{Content: []provider.Content{provider.TextBlock{Text: text}}, IsError: true}
+		results = append(results, provider.ToolResultBlock{CallID: tc.ID, Content: res.Content, IsError: true})
+		sink(EvToolResult{ID: tc.ID, Result: res})
+	}
+	if len(results) == 0 {
+		return
+	}
+	out := provider.Message{Role: provider.RoleTool, Content: results, Time: time.Now()}
+	a.mu.Lock()
+	a.messages = append(a.messages, out)
+	a.rev++
+	a.mu.Unlock()
+	a.fireMessageAppended(out)
+}
+
 // agentCtxKey carries the executing *Agent through the context passed
 // to tool Execute calls. Several live agents can share one tool
 // registry (bot mode mints an agent per chat; the map stays shared so
@@ -2753,6 +2804,22 @@ func AgentFromContext(ctx context.Context) *Agent {
 func abortedToolResult(why string) ToolResult {
 	return ToolResult{
 		Content: []provider.Content{provider.TextBlock{Text: "aborted: " + why}},
+		IsError: true,
+	}
+}
+
+// interruptedToolResult is the answer for a call that a cancel or a timeout
+// stopped while it ran. It is not abortedToolResult, because that one speaks
+// for a call that never started. This call did start, so its effect is
+// unknown: an MCP call that times out after its request went out can still do
+// its work on the server. The compaction ledger says the same of a failed call
+// (compactprose.LedgerFailed), and both tell the model to look before it
+// repeats the call. The error text stays at the end.
+func interruptedToolResult(tr i18n.Translator, err error) ToolResult {
+	return ToolResult{
+		Content: []provider.Content{provider.TextBlock{Text: i18n.In(tr).P("tools.interrupted",
+			"interrupted: a cancel or a timeout stopped this call while it ran. Its effect is unknown: none, some, or all of it can exist. Check the current state before you repeat the call. Error: %s",
+			err.Error())}},
 		IsError: true,
 	}
 }
@@ -2869,10 +2936,19 @@ func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, tools
 		})
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				res = ToolResult{
-					Content: []provider.Content{provider.TextBlock{Text: "aborted: " + err.Error()}},
-					IsError: true,
+				// A read-only call changed nothing whenever it stopped, so
+				// "aborted" is the whole truth for it. Any other call can have
+				// done its work before the cancel or the timeout reached it.
+				// The set is the one this turn pinned, and an empty one counts
+				// every tool as a change, which is the safe direction.
+				if ReadOnlyForCall(ctx).Has(tc.Name) {
+					res = ToolResult{
+						Content: []provider.Content{provider.TextBlock{Text: "aborted: " + err.Error()}},
+						IsError: true,
+					}
+					return
 				}
+				res = interruptedToolResult(a.translator, err)
 				return
 			}
 			res = ToolResult{

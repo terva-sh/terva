@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -152,6 +153,125 @@ func TestACancelMidBatchStopsTheRemainingCalls(t *testing.T) {
 	// answering nothing.
 	if got := len(out.Content); got != 3 {
 		t.Errorf("got %d results for 3 calls; a skipped call still owes the model a reply", got)
+	}
+}
+
+// cancelMidRunTool stands in for a call that is under way when the turn is
+// cancelled: an MCP request already sent, a write partway through. It cancels
+// the turn itself, from inside Execute, and returns the error a tool that
+// reads its ctx returns.
+type cancelMidRunTool struct {
+	name   string
+	cancel context.CancelFunc
+}
+
+func (t *cancelMidRunTool) Name() string            { return t.name }
+func (t *cancelMidRunTool) Description() string     { return "cancelled while it runs" }
+func (t *cancelMidRunTool) Schema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (t *cancelMidRunTool) Execute(ctx context.Context, _ json.RawMessage, _ func(string)) (ToolResult, error) {
+	t.cancel()
+	<-ctx.Done()
+	return ToolResult{}, ctx.Err()
+}
+
+// A call that a cancel stopped while it ran is not a call that never started.
+// Its effect is unknown, so a call that can change state says so and asks the
+// model to look before it repeats the call. A read-only call changed nothing
+// either way, so it keeps the plain "aborted". Run through the loop, because
+// the read-only set has to be the one the turn pinned, and only the loop pins.
+func TestACallInterruptedWhileItRunsSaysItsEffectIsUnknown(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		readOnly bool
+	}{{"changes state", false}, {"read-only", true}} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			tool := &cancelMidRunTool{name: "remote", cancel: cancel}
+			client := &scriptedClient{name: "scripted", script: func(int, provider.Request) ([]provider.Event, error) {
+				call := provider.ToolCallBlock{ID: "c1", Name: "remote", Arguments: json.RawMessage(`{}`)}
+				return []provider.Event{provider.EventDone{Stop: provider.StopToolUse, Message: provider.Message{
+					Role: provider.RoleAssistant, Content: []provider.Content{call},
+				}}}, nil
+			}}
+			ag := newTestAgent(client, "m", "", Registry{"remote": tool})
+			ro := NewReadOnlySet()
+			if c.readOnly {
+				ro.Add("remote")
+			}
+			ag.SetToolsWithReadOnly(Registry{"remote": tool}, ro)
+
+			_ = ag.Prompt(ctx, "call it", nil, nil) // the turn ends on the cancel
+
+			msgs := ag.Messages()
+			last := msgs[len(msgs)-1]
+			if last.Role != provider.RoleTool || len(last.Content) != 1 {
+				t.Fatalf("want one tool result at the end, got %+v", last)
+			}
+			tr := last.Content[0].(provider.ToolResultBlock)
+			text := blockText(tr)
+			if !tr.IsError {
+				t.Errorf("an interrupted call came back as a success: %q", text)
+			}
+			if !strings.Contains(text, context.Canceled.Error()) {
+				t.Errorf("the result dropped the error text: %q", text)
+			}
+			if c.readOnly {
+				if !strings.HasPrefix(text, "aborted: ") {
+					t.Errorf("a read-only call lost its plain aborted wording: %q", text)
+				}
+				return
+			}
+			for _, want := range []string{"interrupted", "while it ran", "effect is unknown", "Check the current state before you repeat the call"} {
+				if !strings.Contains(text, want) {
+					t.Errorf("a call that can change state lacks %q: %q", want, text)
+				}
+			}
+			if strings.HasPrefix(text, "aborted") {
+				t.Errorf("a call that ran still reads as aborted: %q", text)
+			}
+		})
+	}
+}
+
+// The tool's own timeout, with the turn still live, is the MCP case: the
+// request went out and the server can have done the work. It reads the same
+// as a cancel. A ctx with no pinned generation counts the tool as one that can
+// change state, which is the safe direction.
+func TestAToolTimeoutReadsAsAnUnknownEffect(t *testing.T) {
+	tool := &timeoutTool{}
+	ag := &Agent{gate: AllowAll}
+
+	res := ag.runOneTool(context.Background(), provider.ToolCallBlock{ID: "c1", Name: "slow", Arguments: json.RawMessage(`{}`)},
+		Registry{"slow": tool}, func(AgentEvent) {})
+
+	text := resultText(res)
+	if !res.IsError || !strings.Contains(text, "effect is unknown") || !strings.Contains(text, context.DeadlineExceeded.Error()) {
+		t.Errorf("a timed-out call does not say its effect is unknown, with the error kept: %q", text)
+	}
+}
+
+type timeoutTool struct{}
+
+func (timeoutTool) Name() string            { return "slow" }
+func (timeoutTool) Description() string     { return "times out" }
+func (timeoutTool) Schema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (timeoutTool) Execute(context.Context, json.RawMessage, func(string)) (ToolResult, error) {
+	return ToolResult{}, fmt.Errorf("mcp call: %w", context.DeadlineExceeded)
+}
+
+// The calls that never started keep their wording: nothing ran, so "aborted"
+// is the truth for them, and a check-the-state warning there would send the
+// model looking for effects that cannot exist.
+func TestACallCancelledBeforeItStartsStillReadsAsAborted(t *testing.T) {
+	ag := &Agent{gate: AllowAll}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	res := ag.runOneTool(ctx, recorderCall(), Registry{"recorder": &cancelProbeTool{}}, func(AgentEvent) {})
+
+	if text := resultText(res); !strings.HasPrefix(text, "aborted: ") || strings.Contains(text, "effect is unknown") {
+		t.Errorf("a call that never started lost its aborted wording: %q", text)
 	}
 }
 

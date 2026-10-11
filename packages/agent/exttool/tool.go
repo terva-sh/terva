@@ -135,6 +135,7 @@ func (t *extensionTool) Execute(ctx context.Context, args json.RawMessage, _ fun
 	// way bash and read bound their own output.
 	var spill string
 	out.Content, spill = resultcap.Cap(out.Content, "ext")
+	resultcap.Track(ctx, spill)
 	details := map[string]any{"extension": t.extension, "tool": t.name}
 	if spill != "" {
 		details["full_output_path"] = spill
