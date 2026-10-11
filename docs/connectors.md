@@ -287,11 +287,14 @@ without them, which is exactly the mention-gated group posture terva
 defaults to). Run `terva bot run --connector discord`; config lives in
 `$TERVA_HOME/discord.json` (0600).
 
-From then on, any DM you send is forwarded to the agent as a user prompt. Attached photos or `image/*` documents are downloaded and passed to vision-capable models (other attachment kinds are staged as files the agent reads with its tools). In-bot commands: `/help`, `/status`, `/stop` (cancel the current turn), `/approve`/`/revoke` (groups). Telegram config lives in `$TERVA_HOME/bot.json` (mode 0600).
+From then on, any DM you send is forwarded to the agent as a user prompt. Attached photos or `image/*` documents are downloaded and passed to vision-capable models. On Discord, other attachment kinds are staged as files the agent reads with its tools. The Telegram connector drops them. In-bot commands: `/help`, `/status`, `/stop` (cancel the current turn), `/approve`/`/revoke` (groups). Telegram config lives in `$TERVA_HOME/bot.json` (mode 0600).
 
 Bot mode respects the usual terva flags: `--provider`, `--model`, `--cwd`, `--thinking`, `--continue`, `--no-session`, `--no-tools`, and so on. Run `terva tg run -c --model claude-opus-4-1` to resume the latest session on Opus, for example. The paired DM's transcript persists **message by message** (the same durable hooks the TUI and ACP sessions use), so a daemon crash costs at most the in-flight turn and a restart with `--continue` picks the conversation back up; ask the bot to run `terva_status` to get the session id and file. Group chats are live-only (see below).
 
 ### Groups
+
+The Telegram connector serves private chats only, so this section
+applies to connectors that deliver group messages, such as Discord.
 
 Non-DM chats are **silent by default**. Dropping the bot into a group
 gives it no voice and nobody there any reach until you, the paired

@@ -281,6 +281,16 @@ func TestHMACWithThePublicKeyIsRejected(t *testing.T) {
 // Then the control: a real rotation, where the IdP publishes the new kid, is
 // accepted on the same refetch path. Together they show the refetch exists
 // and that it is a lookup, not a fallback.
+//
+// ⚠️ The rotation half retries, and the refusal half does not. go-oidc's
+// RemoteKeySet wakes the callers that wait on a key fetch before it clears the
+// finished fetch (keysFromRemote in oidc/jwks.go, v3.20.0 and v3.21.0). A
+// refetch that starts in that gap gets the old result, which holds only k1,
+// so one exchange straight after a refetch can be refused. With -race and
+// every CPU busy, a single attempt failed 29 runs of 300 on 2026-10-10. The
+// library promises that rotation is honoured eventually, so that is what this
+// asserts. Drop the loop once go-oidc clears inflight before it wakes the
+// waiters.
 func TestUnknownKidIsRefusedAndRotationIsHonoured(t *testing.T) {
 	f := newFakeIdP(t)
 	p := f.provider(t, Config{})
@@ -299,9 +309,22 @@ func TestUnknownKidIsRefusedAndRotationIsHonoured(t *testing.T) {
 	}
 
 	// Now the IdP really rotates: k2 is published, and the same token verifies.
+	// Five seconds is far longer than the gap, so a refetch that never
+	// happens still fails here, with the last error.
 	f.key, f.keyID = rotated, "k2"
-	if _, err := p.Exchange(context.Background(), "code", "", pkce, f.srv.Client()); err != nil {
-		t.Fatalf("a token under a freshly published kid was refused: %v", err)
+	deadline := time.Now().Add(5 * time.Second)
+	for attempt := 1; ; attempt++ {
+		_, err := p.Exchange(context.Background(), "code", "", pkce, f.srv.Client())
+		if err == nil {
+			if attempt > 1 {
+				t.Logf("rotation honoured on attempt %d (go-oidc stale refetch)", attempt)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("a token under a freshly published kid was refused on all %d attempts, last: %v", attempt, err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

@@ -1,6 +1,6 @@
 // Package procenv sanitizes the environment handed to long-lived
 // child processes — extensions, external connectors, swarm agents,
-// and (future) MCP servers.
+// and MCP stdio servers.
 //
 // Threat model: a hostile or compromised value in the *inherited*
 // environment can hijack any dynamically-linked or interpreted child
