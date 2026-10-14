@@ -11,6 +11,23 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.141.3](https://github.com/terva-sh/terva/releases/tag/v0.141.3) — 2026-10-11
+
+### Features
+
+- mcp: bound what MCP servers and extensions put in front of the model
+- provider: add Claude Haiku 5.5 and bill long-context price tiers
+- provider: discover Bedrock, DeepSeek, and local model metadata
+- scripting: return structured tool results and typed declarations
+- web: add the Talkoot app
+- workspace: grant writes in additional directories
+
+### Fixes
+
+- correct Windows input, linked skills, and provider replies
+- stop MCP servers, extensions, and connectors as whole process groups
+- tell the model what happened to its tool calls and keep long output useful
+
 ## [v0.140.0](https://github.com/terva-sh/terva/releases/tag/v0.140.0) — 2026-10-02
 
 ### Breaking changes
