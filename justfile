@@ -97,11 +97,6 @@ build:
     go build -trimpath -ldflags "{{ldflags}}" -o bin/terva ./cmd/terva
     @echo "built bin/terva ({{version}}, {{commit}})"
 
-# Build the separate desktop artifact with its native runtime dependency.
-build-desktop:
-    @mkdir -p bin
-    CGO_ENABLED=0 go build -trimpath -tags terva_desktop,terva_web,terva_acp,terva_scripting,terva_workflows -ldflags "{{ldflags}}" -o bin/terva-desktop ./cmd/terva
-
 # Build a lean binary with every chat connector AND the remote-MCP HTTP transport
 # tagged out (-tags terva_no_telegram,terva_no_discord,terva_no_mcp_http): no chat
 # transports or SDKs, and no MCP egress (stdio MCP servers still work).
@@ -112,15 +107,16 @@ build-min:
 
 # Build and install the FULL terva from source into your Go bin (GOBIN, else
 # GOPATH/bin) via `go install`. "Full" = every optional feature compiled in,
-# including the `terva acp` editor run mode (-tags terva_acp) and the
-# `terva web` browser control panel (-tags terva_web); telegram is in by
+# including the `terva acp` editor run mode (-tags terva_acp), the
+# `terva web` browser control panel (-tags terva_web), and the `terva desktop`
+# window over it (-tags terva_desktop); telegram is in by
 # default. This is the binary to point an ACP editor (Zed) at. For the lean
 # variant, see `just build-min`. The web panel embeds the prebuilt client from
 # packages/agent/web/client/dist (committed); run `just web-build` after
 # changing the client.
 install:
-    go install -trimpath -tags terva_acp,terva_web,terva_scripting,terva_workflows -ldflags "{{ldflags}}" ./cmd/terva
-    @dest="$(go env GOBIN)"; [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; echo "installed terva (full, terva_acp,terva_web,terva_scripting,terva_workflows) -> $dest/terva"
+    go install -trimpath -tags terva_acp,terva_web,terva_desktop,terva_scripting,terva_workflows -ldflags "{{ldflags}}" ./cmd/terva
+    @dest="$(go env GOBIN)"; [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; echo "installed terva (full, terva_acp,terva_web,terva_desktop,terva_scripting,terva_workflows) -> $dest/terva"
 
 # Like `just install` (full features, terva_acp, into GOBIN/GOPATH bin)
 # but NON-STRIPPED: no `-s -w`, no `-trimpath`, so symbols and source
@@ -131,8 +127,8 @@ install:
 # links the /debug/pprof endpoint (kept out of every other build); even
 # here it stays off until you set TERVA_PPROF=localhost:6060.
 install-dev:
-    go install -tags terva_acp,terva_pprof,terva_web,terva_scripting,terva_workflows -ldflags "{{debug_ldflags}}" ./cmd/terva
-    @dest="$(go env GOBIN)"; [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; echo "installed terva (dev, non-stripped, terva_acp,terva_pprof,terva_web,terva_scripting,terva_workflows) -> $dest/terva"
+    go install -tags terva_acp,terva_pprof,terva_web,terva_desktop,terva_scripting,terva_workflows -ldflags "{{debug_ldflags}}" ./cmd/terva
+    @dest="$(go env GOBIN)"; [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; echo "installed terva (dev, non-stripped, terva_acp,terva_pprof,terva_web,terva_desktop,terva_scripting,terva_workflows) -> $dest/terva"
 
 # Install the standalone git-ticket CLI at the version THIS TREE PINS in go.mod.
 #

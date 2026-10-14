@@ -52,8 +52,8 @@ all in [Modes](#modes) below.
 
 ## Flags
 
-`terva desktop` opens a native window with an owned loopback server. It needs
-the separate desktop artifact. `--desktop-port PORT` selects a fixed port;
+`terva desktop` opens a native window with an owned loopback server. The full
+build includes it, and the min build does not. `--desktop-port PORT` selects a fixed port;
 the default is random. `--desktop-app talkoot` opens the window on the
 Talkoot app instead of the panel. Closing the window stops the server and preserves
 session records. See [Native desktop window](web.md#native-desktop-window)

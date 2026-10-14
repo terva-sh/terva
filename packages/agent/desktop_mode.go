@@ -24,8 +24,6 @@ import (
 	"terva.sh/terva/packages/agent/web"
 )
 
-const desktopArtifact = true
-
 func runDesktopMode(ctx context.Context, args build.Args, version string) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()

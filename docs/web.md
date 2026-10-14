@@ -22,13 +22,13 @@ release tree.
 
 ## Native desktop window
 
-The separate `terva-desktop` release artifact opens this panel in a native
-window. The regular full and lean artifacts keep their static runtime.
+`terva desktop` opens this panel in a native window. The full build includes
+the command. The min build does not.
 
 ```bash
-terva-desktop desktop
-terva-desktop desktop --desktop-port 9134
-terva-desktop desktop --desktop-app talkoot
+terva desktop
+terva desktop --desktop-port 9134
+terva desktop --desktop-app talkoot
 ```
 
 `--desktop-app talkoot` opens the window on the [Talkoot app](#talkoot-watching-a-team)
@@ -37,9 +37,10 @@ user configuration (`"talkoot_enabled": true`), or startup fails. A link to the
 panel from the app, such as a member's session, opens in the same window. The
 panel's ⁂ returns to the app. `--desktop-app panel` is the default.
 
-For a source build, run `just build-desktop`, then
-`./bin/terva-desktop desktop`. The build uses `terva_desktop` and `terva_web`.
-The desktop artifact also includes the optional features of the full artifact.
+For a source build, `just install` includes the `terva_desktop` and
+`terva_web` tags. Releases through v0.141.3 shipped a separate
+`terva-desktop` archive. Its updater looks for that archive, which no longer
+ships, so replace a `terva-desktop` install with the full `terva` build once.
 
 The window owns a new server at `127.0.0.1` on a random free port. An explicit
 `--desktop-port` selects a stable origin, but startup fails if that port is busy.
@@ -69,9 +70,11 @@ clipboard reads remain disabled. Keyboard paste uses the native engine.
 | macOS | WKWebView from the operating system |
 | Windows | Microsoft WebView2 Runtime |
 
-The desktop artifact uses tuohi v0.1.0 without cgo. On Linux it still needs
-the glibc loader. The existing Alpine container uses the regular artifact
-and keeps its current runtime requirements.
+The desktop stack uses tuohi v0.1.0 without cgo. On Linux it still needs the
+glibc loader, so the full Linux binary does not start on a musl system such
+as Alpine. Use the static min build there, or install `gcompat`. The
+installer picks the min build on musl. The container image adds `gcompat` and
+keeps the full build.
 
 ## Running it
 

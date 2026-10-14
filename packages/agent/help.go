@@ -107,7 +107,7 @@ func PrintHelp(version string) {
 		row{"terva raati \"q\"", i18n.T("convene a three-unit deliberation panel; prints verdict + dissent")},
 		row{"terva ticket ...", i18n.T("work the repository's .tickets/ ledger (embedded git-ticket; `terva ticket ui` browses it full-screen, and `/ticket` opens the same view in the tui; `terva ticket groom` reports which drafts are worth a look and changes nothing; `terva ticket help` lists commands)")},
 		row{"terva web", i18n.T("browser control panel (self-hosted web ui)")},
-		row{"terva desktop", i18n.T("native window with an owned local server (separate desktop artifact)")},
+		row{"terva desktop", i18n.T("native window with an owned local server (full build only)")},
 		row{"--desktop", i18n.T("open the desktop window (same as terva desktop)")},
 		row{"--desktop-port PORT", i18n.T("desktop loopback port (default: random free port)")},
 		row{"--desktop-app NAME", i18n.T("the app the desktop window opens on: panel (default) or talkoot")},

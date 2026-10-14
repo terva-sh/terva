@@ -21,11 +21,17 @@ before:
 builds:
   # Two channel binaries from one source tree, differing only in build
   # tags. `terva` is the FULL build — every optional feature compiled in:
-  # the ACP editor run mode (-tags terva_acp) plus the telegram connector
-  # (linked by default). It is what the install one-liner pulls. `terva-min`
-  # is the LEAN build (-tags terva_no_telegram): no chat connectors linked
-  # and ACP left as its no-op stub. Both archives unpack the same `terva`
-  # command; pick the one whose footprint you want.
+  # the ACP editor run mode (-tags terva_acp), the `terva desktop` native
+  # window, plus the telegram connector (linked by default). It is what the
+  # install one-liner pulls. `terva-min` is the LEAN build (-tags
+  # terva_no_telegram): no chat connectors linked, no desktop, and ACP left
+  # as its no-op stub. Both archives unpack the same `terva` command; pick
+  # the one whose footprint you want.
+  #
+  # ⚠️ The desktop stack (tuohi over purego) makes the full Linux binary
+  # name the glibc loader as its ELF interpreter, so it does not start on a
+  # musl host without gcompat. `terva-min` stays static, and install.sh
+  # picks it on musl. The Dockerfile adds gcompat for the same reason.
   - id: terva
     main: ./cmd/terva
     binary: terva
@@ -40,18 +46,28 @@ builds:
         goarch: arm64
     flags:
       - -trimpath
-    # Full build: compile in the ACP run mode, the web control panel, and
-    # both jsengine consumers (code_execution + the workflow engine; sobek).
-    # Telegram is in by default, so no tag is needed to keep it. terva_web
-    # embeds the prebuilt client from packages/agent/web/client/dist (committed
-    # to the tree, so the release needs no Node.js — rebuild it with
-    # `just web-build` before cutting a release if the client changed).
+    # Full build: compile in the ACP run mode, the web control panel, the
+    # desktop window over it, and both jsengine consumers (code_execution +
+    # the workflow engine; sobek). Telegram is in by default, so no tag is
+    # needed to keep it. terva_web embeds the prebuilt client from
+    # packages/agent/web/client/dist (committed to the tree, so the release
+    # needs no Node.js — rebuild it with `just web-build` before cutting a
+    # release if the client changed).
     tags:
       - terva_acp
       - terva_web
+      - terva_desktop
       - terva_scripting
       - terva_workflows
+    hooks:
+      post:
+        - cmd: 'go run ./scripts/check-desktop-loader.go {{ .Os }} {{ .Arch }} "{{ .Path }}"'
+          env:
+            - GOOS=
+            - GOARCH=
     ldflags:
+      # The Alpine builder otherwise selects musl, but the desktop stack needs glibc.
+      - '{{ if eq .Os "linux" }}-I {{ if eq .Arch "amd64" }}/lib64/ld-linux-x86-64.so.2{{ else }}/lib/ld-linux-aarch64.so.1{{ end }}{{ end }}'
       - -s -w
       - -X main.version={{.Version}}
       - -X main.commit={{.Commit}}
@@ -77,48 +93,8 @@ builds:
       - -X main.commit={{.Commit}}
       - -X main.date={{.Date}}
 
-  - id: terva-desktop
-    main: ./cmd/terva
-    binary: terva-desktop
-    env:
-      - CGO_ENABLED=0
-    goos: [linux, darwin, windows]
-    goarch: [amd64, arm64]
-    ignore:
-      - goos: windows
-        goarch: arm64
-    flags:
-      - -trimpath
-    tags:
-      - terva_desktop
-      - terva_web
-      - terva_acp
-      - terva_scripting
-      - terva_workflows
-    hooks:
-      post:
-        - cmd: 'go run ./scripts/check-desktop-loader.go {{ .Os }} {{ .Arch }} "{{ .Path }}"'
-          env:
-            - GOOS=
-            - GOARCH=
-    ldflags:
-      # The Alpine builder otherwise selects musl, but the desktop stack needs glibc.
-      - '{{ if eq .Os "linux" }}-I {{ if eq .Arch "amd64" }}/lib64/ld-linux-x86-64.so.2{{ else }}/lib/ld-linux-aarch64.so.1{{ end }}{{ end }}'
-      - -s -w
-      - -X main.version={{.Version}}
-      - -X main.commit={{.Commit}}
-      - -X main.date={{.Date}}
 
 archives:
-  - id: terva-desktop
-    ids: [terva-desktop]
-    name_template: "{{ .ProjectName }}-desktop_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    files:
-      - LICENSE
-      - README.md
-    format_overrides:
-      - goos: windows
-        formats: [zip]
   - id: terva
     ids: [terva]
     # Human-friendly name: terva_0.1.0_darwin_arm64.tar.gz (the full build).
@@ -212,7 +188,7 @@ dockers_v2:
       - linux/arm64
     labels:
       "org.opencontainers.image.title": "terva"
-      "org.opencontainers.image.description": "agent harness in a single static binary"
+      "org.opencontainers.image.description": "agent harness in a single binary"
       "org.opencontainers.image.source": "https://github.com/terva-sh/terva"
       "org.opencontainers.image.url": "https://terva.sh"
       "org.opencontainers.image.version": "{{ .Version }}"
@@ -249,8 +225,11 @@ release:
 
     or download a binary below, `chmod +x`, and drop it on your `$PATH`.
     Two builds ship: `terva_*` is the full binary (every feature compiled
-    in, including the `terva acp` editor mode); `terva-min_*` is the lean
-    build with the chat connectors left out. Both install the `terva` command.
+    in, including the `terva acp` editor mode and the `terva desktop`
+    window); `terva-min_*` is the lean build with the chat connectors and
+    desktop left out. Both install the `terva` command. On Linux the full
+    binary needs glibc; on a musl system such as Alpine, use `terva-min_*`
+    (the one-liner picks it for you) or install `gcompat`.
     {{- if contains (readFile "docs/migrating.md") (printf "\n## %s\n" .Tag) }}
 
     Upgrading code that imports terva's Go packages? The

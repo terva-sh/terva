@@ -44,8 +44,8 @@ over its control plane — same sessions, same permissions, same event stream:
   commands, inline images, and message queueing. See [docs/tui.md](docs/tui.md).
 - a **web UI** (`terva web`) — a browser control panel, not a viewer: drive
   sessions, approve tool calls, edit settings, watch the transcript stream.
-  The separate desktop artifact adds `terva-desktop desktop`, a native window
-  with its own local server. Closing the window stops that server.
+  `terva desktop` opens the same panel in a native window with its own local
+  server. Closing the window stops that server.
   See [docs/web.md](docs/web.md) to serve it and
   [docs/web-interface.md](docs/web-interface.md) for what it shows.
 
@@ -130,7 +130,7 @@ just install      # into $GOBIN (else $GOPATH/bin)
 
 ### Prebuilt binaries
 
-Every release on the [releases page](https://github.com/terva-sh/terva/releases) ships archives for Linux, macOS, and Windows on amd64 and arm64 (except windows/arm64), plus a `checksums.txt` file. Each platform comes in two builds: **`terva`** (full — every feature compiled in, including the ACP editor mode; what the one-liner installs) and **`terva-min`** (lean — chat connectors left out). Both unpack the same `terva` command. Download, verify, `chmod +x`, and drop on your `$PATH`. [CHANGELOG.md](CHANGELOG.md) lists what changed in each version.
+Every release on the [releases page](https://github.com/terva-sh/terva/releases) ships archives for Linux, macOS, and Windows on amd64 and arm64 (except windows/arm64), plus a `checksums.txt` file. Each platform comes in two builds: **`terva`** (full — every feature compiled in, including the ACP editor mode and the `terva desktop` window; what the one-liner installs) and **`terva-min`** (lean — chat connectors and desktop left out). Both unpack the same `terva` command. On Linux the full build needs glibc; on musl (Alpine) use `terva-min`, which the one-liner picks for you, or install `gcompat`. Download, verify, `chmod +x`, and drop on your `$PATH`. [CHANGELOG.md](CHANGELOG.md) lists what changed in each version.
 
 ## Authenticate
 

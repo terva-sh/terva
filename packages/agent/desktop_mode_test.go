@@ -3,8 +3,6 @@
 package agent
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -125,56 +123,12 @@ func TestDesktopFreshHomeAndRelaunch(t *testing.T) {
 	}
 }
 
-func TestDesktopArchiveSurvivesSelfUpdate(t *testing.T) {
+// The desktop window ships in the full build, so a desktop install updates
+// from the full archive.
+func TestDesktopUpdatesFromTheFullArchive(t *testing.T) {
 	name, _, err := releaseAssetName("1.2.3")
-	if err != nil || !strings.HasPrefix(name, "terva-desktop_1.2.3_") {
+	if err != nil || !strings.HasPrefix(name, "terva_1.2.3_") {
 		t.Fatalf("desktop updater chose %q: %v", name, err)
-	}
-	dir := testsupport.TempDir(t)
-	archive := filepath.Join(dir, "desktop.tar.gz")
-	f, err := os.Create(archive)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gz := gzip.NewWriter(f)
-	tw := tar.NewWriter(gz)
-	body := []byte("desktop binary fixture")
-	if err := tw.WriteHeader(&tar.Header{Name: "terva-desktop", Mode: 0755, Size: int64(len(body))}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tw.Write(body); err != nil {
-		t.Fatal(err)
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := gz.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
-	out := filepath.Join(dir, "extracted")
-	if err := os.Mkdir(out, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := extractArchive(archive, "tar.gz", out); err != nil {
-		t.Fatal(err)
-	}
-	bin, _ := findArtifactBinary(out, "linux")
-	if bin == "" {
-		t.Fatal("desktop archive was not recognized")
-	}
-	current := filepath.Join(dir, "installed")
-	if err := os.WriteFile(current, []byte("old binary"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := replaceBinary(current, bin); err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile(current)
-	if err != nil || string(got) != string(body) {
-		t.Fatalf("update installed %q: %v", got, err)
 	}
 }
 

@@ -16,9 +16,13 @@
 # servers belong in a derived image (examples/deploy/docker/
 # Dockerfile.tools); the extension/MCP container story is documented
 # in docs/deploy.md.
+#
+# gcompat supplies the glibc loader that the full Linux binary names as its
+# ELF interpreter (the `terva desktop` stack needs it). Without it the binary
+# fails with "not found" before main runs, headless commands included.
 FROM alpine:3.22
 
-RUN apk add --no-cache bash git curl ca-certificates openssh-client tzdata \
+RUN apk add --no-cache bash git curl ca-certificates openssh-client tzdata gcompat \
 	&& addgroup -S terva && adduser -S -G terva -h /home/terva terva \
 	&& mkdir -p /data /work && chown terva:terva /data /work
 

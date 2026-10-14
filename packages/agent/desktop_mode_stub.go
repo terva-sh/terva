@@ -9,8 +9,6 @@ import (
 	"terva.sh/terva/packages/agent/build"
 )
 
-const desktopArtifact = false
-
 func runDesktopMode(_ context.Context, _ build.Args, _ string) error {
-	return i18n.Errorf("desktop mode not built in; install the separate desktop artifact or build with -tags terva_desktop,terva_web")
+	return i18n.Errorf("desktop mode not built in; install the full terva build or build with -tags terva_desktop,terva_web")
 }

@@ -19,8 +19,8 @@ prevents startup. Use a separate TERVA_HOME to run both.
   --web-allow-login      allow provider login from the Providers pane
   --cwd DIR              use this workspace directory
 
-Install the separate desktop artifact. Source builds need both
-terva_desktop and terva_web tags. Linux requires glibc, GTK4 and
+The full build includes this command. The min build does not. Source
+builds need both terva_desktop and terva_web tags. Linux requires glibc, GTK4 and
 WebKitGTK 6.0. macOS uses WKWebView. Windows requires WebView2.
 Daemon attachment will come later.`))
 }

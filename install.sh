@@ -87,6 +87,16 @@ case "$uname_m" in
   *) die "unsupported arch: $uname_m" ;;
 esac
 
+# The full Linux build names the glibc loader as its ELF interpreter (the
+# desktop stack needs it), so on a musl system such as Alpine it does not
+# start. The lean build is static; install that instead. The archive still
+# unpacks a `terva` binary.
+FLAVOR="$BINARY"
+if [ "$OS" = linux ] && ldd --version 2>&1 | grep -qi musl; then
+  FLAVOR="${BINARY}-min"
+  msg "musl libc detected; installing the lean ${FLAVOR} build"
+fi
+
 # ---- resolve version ----
 
 if [ "$VERSION" = "latest" ]; then
@@ -128,7 +138,7 @@ mkdir -p "$PREFIX"
 
 # ---- download + verify + extract ----
 
-ARCHIVE="${BINARY}_${VER_NUM}_${OS}_${ARCH}.tar.gz"
+ARCHIVE="${FLAVOR}_${VER_NUM}_${OS}_${ARCH}.tar.gz"
 BASE_URL="${HOST}/${OWNER}/${REPO}/releases/download/${VERSION}"
 ARCHIVE_URL="${BASE_URL}/${ARCHIVE}"
 CHECKSUMS_URL="${BASE_URL}/checksums.txt"
