@@ -118,6 +118,28 @@ install:
     go install -trimpath -tags terva_acp,terva_web,terva_desktop,terva_scripting,terva_workflows -ldflags "{{ldflags}}" ./cmd/terva
     @dest="$(go env GOBIN)"; [ -n "$dest" ] || dest="$(go env GOPATH)/bin"; echo "installed terva (full, terva_acp,terva_web,terva_desktop,terva_scripting,terva_workflows) -> $dest/terva"
 
+# Build the full terva from this tree under a second name, so a build of
+# unmerged work runs beside the stable install and never replaces it. It
+# rebuilds the web client first, because the binary embeds client/dist and a
+# stale dist serves the old app with no warning. That rewrites the committed
+# dist in this tree. Read the parenthesised commit in `--version`, not the
+# pseudo-version in front of it. Do not run `terva update` on this build,
+# because it would replace the build with a release. Default:
+# ~/.local/bin/terva-dogfood. `just dogfood` is a different recipe: it runs a
+# scenario under testdata/scenarios/.
+dogfood-build DEST=(env_var_or_default("HOME", "~") + "/.local/bin/terva-dogfood"): web-build
+    @mkdir -p "$(dirname '{{DEST}}')"
+    go build -trimpath -tags terva_acp,terva_web,terva_desktop,terva_scripting,terva_workflows -ldflags "{{ldflags}}" -o '{{DEST}}' ./cmd/terva
+    @echo "built dogfood terva ({{commit}}) -> {{DEST}}"
+
+# Serve the web client from source with hot reload, proxied to a running
+# daemon at DAEMON (scripts/dev-daemon.ts). Start the daemon first, for
+# example `terva web` on a throwaway TERVA_HOME. Open /talkoot.html for the
+# Talkoot app.
+web-dev DAEMON="http://127.0.0.1:8730":
+    ./scripts/web-deps.sh ensure
+    TERVA_DEV_DAEMON='{{DAEMON}}' npm --prefix packages/agent/web/client run dev
+
 # Like `just install` (full features, terva_acp, into GOBIN/GOPATH bin)
 # but NON-STRIPPED: no `-s -w`, no `-trimpath`, so symbols and source
 # paths survive for `sample`, pprof, and friends. Optimizations stay ON

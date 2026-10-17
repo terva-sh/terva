@@ -11,6 +11,12 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.141.4](https://github.com/terva-sh/terva/releases/tag/v0.141.4) — 2026-10-14
+
+### Features
+
+- release: ship terva desktop in the full build
+
 ## [v0.141.3](https://github.com/terva-sh/terva/releases/tag/v0.141.3) — 2026-10-11
 
 ### Features

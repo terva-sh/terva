@@ -4,7 +4,13 @@
 import { defineConfig } from 'vitest/config'
 import preact from '@preact/preset-vite'
 import { VitePWA } from 'vite-plugin-pwa'
+import { env } from 'node:process'
 import { studioSave } from './scripts/studio-save'
+import { daemonProxy } from './scripts/dev-daemon'
+
+// The dev server proxies a running daemon when TERVA_DEV_DAEMON names one
+// (scripts/dev-daemon.ts). `just web-dev` sets it.
+const daemon = env.TERVA_DEV_DAEMON
 
 // The build output (dist/) is embedded into the terva binary via go:embed
 // (see ../assets.go), so it must be fully self-contained. base: './' keeps
@@ -146,6 +152,7 @@ export default defineConfig({
       },
     }),
   ],
+  server: daemon ? { proxy: daemonProxy(daemon) } : {},
   test: {
     // Runs before every test file. It repairs the Web Storage globals that
     // Node 25 claims before happy-dom can install its own, and does nothing
