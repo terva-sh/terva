@@ -5,6 +5,7 @@ import type { TalkootListResult, TalkootSummary, TalkootTemplate, TalkootTemplat
 import type { TalkootHub } from '../../platform/talkoot/hub'
 import { panelHref } from '../../ui/navlinks'
 import { NewTalkoot } from '../../ui/talkoot/NewTalkoot'
+import { noticeSupport, useTalkootNotify, useTeamNotices } from '../../ui/talkoot/notify'
 import { useTalkootPerson } from '../../ui/talkoot/person'
 import { PersonInput, useTeamTab } from '../../ui/talkoot/TalkootScreen'
 import { TeamMark, teamStateLabel } from '../../ui/talkoot/TeamMark'
@@ -28,6 +29,7 @@ export function Shell({ client, hub, generation, workspace = '' }: { client: Cli
   // The drawer is the rail on a narrow screen, here and in TeamView.
   const [drawer, setDrawer] = useState(false)
   const [person, setPerson] = useTalkootPerson()
+  const [notify, setNotify, refused] = useTalkootNotify()
 
   // Only the newest list read may land. One that started before a create
   // would otherwise replace the list with one that lacks the new team.
@@ -55,6 +57,8 @@ export function Shell({ client, hub, generation, workspace = '' }: { client: Cli
   const current = running.find((x) => x.id === picked)?.id ?? running[0]?.id ?? ''
   const team = running.find((x) => x.id === current)
   useTeamTab(creating ? undefined : team)
+  // TeamView hears the open team's cards. This covers every other team.
+  useTeamNotices(client, running, creating ? '' : current, notify)
 
   const pick = (id: string) => {
     setPicked(id)
@@ -78,6 +82,13 @@ export function Shell({ client, hub, generation, workspace = '' }: { client: Cli
       <a class="btn sm ghost" href={panelHref()} title={t('Open the control panel')}>
         {t('Panel')}
       </a>
+      {noticeSupport() !== 'none' && (
+        <label class="tka-notify talkoot-note">
+          <input type="checkbox" checked={notify} onChange={(e) => void setNotify((e.target as HTMLInputElement).checked)} />{' '}
+          {t('Notify me when a card waits')}
+        </label>
+      )}
+      {refused && <span class="talkoot-note">{t('The browser refused notifications. Allow them for this site, then try again.')}</span>}
     </div>
   )
 
@@ -95,6 +106,7 @@ export function Shell({ client, hub, generation, workspace = '' }: { client: Cli
         you={you}
         listError={error}
         onTeamChanged={() => void refresh()}
+        notify={notify}
       />
     )
   }

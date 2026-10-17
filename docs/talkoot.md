@@ -134,7 +134,18 @@ and resume.
   **Resume** lifts the pause.
 
 The browser tab carries the team. Its title reads the team name and its
-state, and its icon is the team's mark.
+state, and its icon is the team's mark. The desktop window takes the same
+title.
+
+**Notify me when a card waits**, below your name in the rail, posts one
+notification for each new card while the app is not in front. It names the
+team and the member, such as "lead asks you to approve a tool call", and
+never the card's text, because a notification can show on a locked screen.
+A team you do not have open posts one notification when it starts to wait
+on you, and not one for each card after that. The setting is off until you turn it on, and the browser keeps it. A browser
+asks for its permission when you turn it on. The desktop window posts a
+native notification instead, because its webview refuses the web API. On
+macOS that needs terva inside an app bundle.
 
 The rail and member card show each native member's resolved provider and
 model, even before it has a session. An existing session's model takes

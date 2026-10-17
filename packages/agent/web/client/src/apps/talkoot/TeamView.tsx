@@ -19,6 +19,7 @@ import { loadSeen, MotionPicker, orderMembers, PRESENCE_LABEL, saveSeen } from '
 import { TeamBudget } from '../../ui/talkoot/TeamBudget'
 import { SaveTemplate } from '../../ui/talkoot/SaveTemplate'
 import { useTalkoot } from '../../ui/talkoot/useTalkoot'
+import { useCardNotices } from '../../ui/talkoot/notify'
 import { SidePanel, type SideTab } from './SidePanel'
 import { Thread } from './Thread'
 
@@ -42,6 +43,7 @@ export function TeamView({
   you,
   listError,
   onTeamChanged,
+  notify = false,
 }: {
   client: ClientLike
   hub: TalkootHub
@@ -53,9 +55,13 @@ export function TeamView({
   you: ComponentChildren
   listError: string
   onTeamChanged: () => void
+  notify?: boolean
 }) {
   const id = team.id
   const { state, error, loadOlder, refreshView } = useTalkoot(client, hub, id, generation)
+  // After useTalkoot, so its listener folds a card in first. The notice
+  // listener still reads the cards of the last render, before the event.
+  useCardNotices(hub, id, team.title || team.name || id, notify, state.cards)
   const [selected, setSelected] = useState(ROOM)
   const [actionError, setActionError] = useState('')
   const [drawer, setDrawer] = useState(false)

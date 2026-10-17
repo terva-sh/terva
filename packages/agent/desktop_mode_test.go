@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
@@ -17,6 +19,9 @@ import (
 
 	"terva.sh/terva/packages/agent/build"
 	"terva.sh/terva/packages/agent/config"
+	"terva.sh/terva/packages/agent/ctrlproto"
+	"terva.sh/terva/packages/agent/desktop"
+	"terva.sh/terva/packages/agent/workspace"
 	"terva.sh/terva/packages/relaunch"
 	"terva.sh/terva/packages/testsupport"
 )
@@ -183,6 +188,78 @@ func TestDesktopAppStartPage(t *testing.T) {
 	}
 	if desktopApps["talkoot"].title != "terva Talkoot" {
 		t.Fatalf("talkoot window title %q", desktopApps["talkoot"].title)
+	}
+}
+
+// The page posts a notification through tervaNotify, because the webview
+// denies the web API. It goes out under the window's name, clipped.
+func TestDesktopNotifyBinding(t *testing.T) {
+	var got []string
+	b := desktopBindings("terva Talkoot", func(name, title, message string) error {
+		got = append(got, name, title, message)
+		return nil
+	})
+	fn, ok := b["tervaNotify"].(func(string, string) error)
+	if !ok {
+		t.Fatalf("tervaNotify is %T", b["tervaNotify"])
+	}
+	if err := fn(" crew ", strings.Repeat("é", 500)); err != nil {
+		t.Fatal(err)
+	}
+	if got[0] != "terva Talkoot" || got[1] != "crew" {
+		t.Fatalf("posted %q", got[:2])
+	}
+	if r := []rune(got[2]); len(r) != desktopNoticeMax || r[len(r)-1] != '…' {
+		t.Fatalf("message kept %d runes", len(r))
+	}
+}
+
+// A launcher starts the window in a directory with no teams and no checkout.
+// The picker's choice becomes the workspace, the next launch reopens it, and
+// a team made there binds to it.
+func TestTheDesktopWindowServesThePickedDirectory(t *testing.T) {
+	home := testsupport.TempDir(t)
+	t.Setenv("TERVA_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"talkoot_enabled": true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	start := testsupport.TempDir(t)
+	chosen := testsupport.TempDir(t)
+	statePath := filepath.Join(home, desktop.StateFile)
+
+	args := build.Args{CWD: start}
+	if src := desktopWorkspace(&args, statePath, func() string { return chosen }); src != desktop.SourcePicked || !desktop.SameDir(args.CWD, chosen) {
+		t.Fatalf("first launch serves %s (%s), want the picked %s", args.CWD, src, chosen)
+	}
+	again := build.Args{CWD: start}
+	if src := desktopWorkspace(&again, statePath, func() string { t.Fatal("the picker opened on a second launch"); return "" }); src != desktop.SourceRemembered || !desktop.SameDir(again.CWD, chosen) {
+		t.Fatalf("second launch serves %s (%s), want the remembered %s", again.CWD, src, chosen)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	t.Cleanup(srv.Close)
+	ws, err := workspace.NewWorkspace(build.Args{
+		Provider: "openai-compatible", BaseURL: srv.URL, APIKey: "k", Model: "fake-model",
+		CWD: again.CWD, NoExt: true, NoMCP: true,
+	}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ws.Close() })
+	pv, err := ws.PreviewTalkoot(t.Context(), ctrlproto.TalkootPreviewParams{Template: "coding", ID: "team"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !desktop.SameDir(pv.Home, chosen) {
+		t.Fatalf("a new team binds to %s, want the picked %s", pv.Home, chosen)
+	}
+	if _, err := ws.CreateTalkoot(t.Context(), ctrlproto.TalkootCreateParams{ID: "team", Template: "coding", Digest: pv.Digest}); err != nil {
+		t.Fatal(err)
+	}
+	if !desktopHoldsTeam(chosen) || desktopHoldsTeam(start) {
+		t.Fatal("the created team does not name the picked directory as its home")
 	}
 }
 
