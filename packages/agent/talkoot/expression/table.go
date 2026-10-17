@@ -529,7 +529,7 @@ func (m *mood) oldestCard() (string, time.Time, bool) {
 // isMember reports whether id names a member rather than a person or the
 // recruiter.
 func isMember(id string) bool {
-	return id != "" && !strings.HasPrefix(id, talkoot.HumanPrefix) && !strings.HasPrefix(id, talkoot.RecruiterPrefix)
+	return id != "" && !strings.HasPrefix(id, talkoot.HumanPrefix) && !talkoot.IsSessionProposer(id)
 }
 
 // poseName names a pose and its form, for a cause.

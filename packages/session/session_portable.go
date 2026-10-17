@@ -353,6 +353,7 @@ func importedMetaRow(line []byte, owner SessionMeta) ([]byte, error) {
 	// A recruiter binding is authority that talkoot.recruit granted to one
 	// session, and a talkoot id from another machine names nothing here.
 	row.Meta.Recruit = ""
+	row.Meta.Manager = false
 	return json.Marshal(row)
 }
 
@@ -471,6 +472,7 @@ func BranchSession(parentPath, root, cwd, version string, upToMessageIdx int) (s
 	// grants it to one session, and a fork is only a write. A fork of a
 	// recruiter is a plain conversation, and a person opens a new recruiter.
 	branchMeta.Recruit = ""
+	branchMeta.Manager = false
 	// The lorebook and the Stage state travel as their own rows, below.
 	branchMeta.WorldLore = nil
 	branchMeta.legacyStage = Stage{}

@@ -37,13 +37,13 @@ To **confirm** instead of refuse, opt into an approval carrier that fills the ga
 
 A backend sets **one** carrier, never several; each fails closed, leaving the refuse-by-default in place if it can't start.
 
-`--team-socket <path>` gives a Talkoot member its team verbs. terva's own MCP client runs the Talkoot bridge, `terva mcp-talkoot-bridge --socket <path>`, and the model gets `mcp_terva_talkoot_talkoot_send`, `mcp_terva_talkoot_talkoot_handoff`, `mcp_terva_talkoot_talkoot_roster`, and `mcp_terva_talkoot_ask_user_question`. The worker runner sets the flag for a `terva:portable` member, and the socket it opens names that member. Five things change for the run:
+`--team-socket <path>` gives a Talkoot member its team verbs. terva's own MCP client runs the Talkoot bridge, `terva mcp-talkoot-bridge --socket <path>`, and the model gets `mcp_terva_talkoot_talkoot_send`, `mcp_terva_talkoot_talkoot_handoff`, `mcp_terva_talkoot_talkoot_roster`, `mcp_terva_talkoot_talkoot_propose`, and `mcp_terva_talkoot_ask_user_question`. The worker runner sets the flag for a `terva:portable` member, and the socket it opens names that member. Five things change for the run:
 
 - The bridge is the run's only MCP server. Your MCP servers and the project's do not start beside it, as `--strict-mcp-config` keeps them out of a Claude Code member.
-- The run's policy lets the four tools through in every posture, `plan` included. The orchestrating daemon gates each call as the member's native `talkoot_send` or `talkoot_handoff`, with your hooks and rules, so a gate here would ask twice for one send. The bridge's tools register before any extension's, so an extension tool cannot take one of their names.
-- The four tools are advertised from the first turn, even with lazy tool visibility on.
+- The run's policy lets the five tools through in every posture, `plan` included. The orchestrating daemon gates each call as the member's native tool of the same name, with your hooks and rules, so a gate here would ask twice for one call. The bridge's tools register before any extension's, so an extension tool cannot take one of their names.
+- The five tools are advertised from the first turn, even with lazy tool visibility on.
 - The native `ask_user_question` leaves the registry. The bridge's copy has the same text, and its question opens a card in the talkoot's inbox, where the native one would find no channel. The daemon waits nine and a half minutes for the person, and then tells the model the question went unanswered and closes the card. The run's call to the bridge allows ten minutes, the approval carrier's bound, so the daemon's answer always arrives first.
-- If the bridge does not start or does not list all four tools, `terva rpc` exits with an error, so a member that cannot reach its team does not work.
+- If the bridge does not start or does not list all five tools, `terva rpc` exits with an error, so a member that cannot reach its team does not work.
 
 Structured questions use a separate, opt-in carrier. The server advertises support
 as `capabilities.structured_questions` in every `hello` response. A client enables

@@ -1350,6 +1350,30 @@ describe('the proposal card', () => {
     expect(screen.getByText('read, grep')).toBeTruthy()
   })
 
+  it('shows each team field before and after, the charter whole, and flags a raised budget', async () => {
+    const client = proposalClient({
+      ...base,
+      class: 'authority',
+      changes: [],
+      team: [
+        { field: 'title', class: 'look', after: 'Lake crew' },
+        { field: 'charter', class: 'voice', before: 'Work from tickets.', after: 'Work from tickets only.' },
+        { field: 'budget_usd_per_day', class: 'authority', before: 5, after: 9, widens: true },
+      ],
+    })
+    render(<TalkootTeam client={client} hub={new TalkootHub()} id="crew" generation={1} person="sothr" onOpenSession={() => {}} />)
+    const row = (await screen.findByText('9 (grants more)')).closest('tr')!
+    expect(row.className).toContain('authority')
+    expect(row.className).toContain('widens')
+    expect(row.textContent).toContain('5')
+    const title = screen.getByText('Lake crew').closest('tr')!
+    expect(title.className).not.toContain('authority')
+    expect(title.textContent).toContain('(default)')
+    expect(screen.getByText('The charter changes')).toBeTruthy()
+    expect(screen.getByText('Work from tickets.')).toBeTruthy()
+    expect(screen.getByText('Work from tickets only.')).toBeTruthy()
+  })
+
   it('shows a look batch as marks before and after, side by side', async () => {
     const client = proposalClient({
       ...base,

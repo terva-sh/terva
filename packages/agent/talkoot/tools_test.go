@@ -118,7 +118,7 @@ func TestAProposalEditsTheToolsList(t *testing.T) {
 	if got := AuthorityChanges(changes[0]); strings.Join(got, ",") != "tools" {
 		t.Errorf("the authority changes are %v", got)
 	}
-	undo, err := Inverse(changes)
+	undo, err := Inverse(changes, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

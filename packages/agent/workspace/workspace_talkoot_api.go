@@ -204,6 +204,11 @@ func (w *Workspace) talkootCreate(ctx context.Context, id string, text []byte) (
 	if err := w.startTalkoot(r.ID); err != nil {
 		return undo(err)
 	}
+	// The team exists, so the manager's draft of it is spent. A failure here
+	// leaves a draft whose id Create now refuses, and the person discards it.
+	if _, err := talkoot.DeleteDraft(w.cwd, id); err != nil {
+		w.diagf("talkoot %s: could not remove its draft: %v", id, err)
+	}
 	// The talkoot runs now, so a failure here costs the kickoff card and not
 	// the talkoot. talkoot.kickoff still runs one for a team with no record.
 	if run, err := w.talkootRunOf(id); err == nil {
@@ -296,9 +301,9 @@ func (w *Workspace) talkootEdit(ctx context.Context, id, by string, ops []talkoo
 	if err != nil {
 		return talkootView{}, fmt.Errorf("talkoot: read the roster: %w", err)
 	}
-	_, next, nr, err := w.proposalPreview(id, text, ops, nil)
+	_, _, next, nr, err := w.proposalPreview(id, text, ops, nil)
 	if errors.Is(err, errProposalChangesNothing) {
-		return talkootView{}, errors.New("talkoot: the edit changes no member")
+		return talkootView{}, errors.New("talkoot: the edit changes no member and no team field")
 	}
 	if err != nil {
 		return talkootView{}, err
@@ -469,7 +474,7 @@ func (w *Workspace) applyRosterLocked(ctx context.Context, run *talkootRun, by s
 	// update: an update the room cannot record does not happen.
 	changes := talkoot.Diff(prev, next)
 	line := talkoot.Line{Type: talkoot.LineRoster, At: time.Now(), By: humanBy(by), Ref: talkoot.RosterRevision(text),
-		Proposal: from.proposal, Proposer: from.proposer, Edited: from.edited, Changes: changes}
+		Proposal: from.proposal, Proposer: from.proposer, Edited: from.edited, Changes: changes, Team: talkoot.DiffTeam(prev, next)}
 	if prev.TeamBudgetWaived != next.TeamBudgetWaived {
 		if next.TeamBudgetWaived {
 			line.Reason = "the team daily cost limit is waived; member limits still apply"

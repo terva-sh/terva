@@ -65,11 +65,14 @@ type Proposal struct {
 	Envelope string `json:"envelope,omitempty"`
 	// Changes previews each member before and after while the proposal
 	// waits, and records what applied once it is approved.
-	Changes   []MemberChange `json:"changes"`
-	Status    string         `json:"status"`
-	DecidedBy string         `json:"decided_by,omitempty"`
-	DecidedAt time.Time      `json:"decided_at,omitzero"`
-	Reason    string         `json:"reason,omitempty"`
+	Changes []MemberChange `json:"changes"`
+	// Team previews each team field the proposal changes, and records what
+	// applied, as Changes does for members.
+	Team      []TeamChange `json:"team,omitempty"`
+	Status    string       `json:"status"`
+	DecidedBy string       `json:"decided_by,omitempty"`
+	DecidedAt time.Time    `json:"decided_at,omitzero"`
+	Reason    string       `json:"reason,omitempty"`
 	// Edited is set when the person approved changed operations, and Applied
 	// holds them. Ops stays what the proposer asked for.
 	Edited  bool `json:"edited,omitempty"`

@@ -113,10 +113,13 @@ surface.get	session
 surfaces.list	session
 talkoot.create	talkoot
 talkoot.decide	talkoot
+talkoot.discard_draft	talkoot
+talkoot.drafts	talkoot
 talkoot.get	talkoot
 talkoot.inbox	talkoot
 talkoot.kickoff	talkoot
 talkoot.list	talkoot
+talkoot.manager	talkoot
 talkoot.notes	talkoot
 talkoot.pause	talkoot
 talkoot.post	talkoot

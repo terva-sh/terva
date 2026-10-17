@@ -100,11 +100,64 @@ func TestAReseatedWorkerSendIsRefused(t *testing.T) {
 	}
 }
 
+// A worker proposes through the bridge as the member that holds its seat
+// (decision 0023, amended 2026-10-15). The proposal waits in the inbox under
+// that member's name, and the roster does not change until a person approves.
+func TestAWorkerProposesAsItsMember(t *testing.T) {
+	w, _ := seatedWorker(t)
+	settleReads(t, w)
+	before := memberView(t, w, "crew", "helm").Member.Posture
+	r := bridgeCall(t, w, "agent-1", "talkoot_propose", `{"ops":[{"op":"edit","member":"helm","set":{"posture":"ask"}}],"why":"helm should ask first"}`)
+	if r.IsError {
+		t.Fatalf("reply = %+v, want the proposal id", r)
+	}
+	cards := inbox(t, w)
+	var got []ctrlproto.TalkootCard
+	for _, c := range cards {
+		if c.Kind == ctrlproto.TalkootCardProposal {
+			got = append(got, c)
+		}
+	}
+	if len(got) != 1 || got[0].Member != "jev" || got[0].Proposal == nil || got[0].Proposal.Why != "helm should ask first" {
+		t.Fatalf("proposal cards = %+v, want one from jev", got)
+	}
+	if !strings.Contains(r.Text, got[0].ID) {
+		t.Errorf("reply %q does not name proposal %s", r.Text, got[0].ID)
+	}
+	if after := memberView(t, w, "crew", "helm").Member.Posture; after != before {
+		t.Fatalf("a proposal changed helm's posture from %q to %q", before, after)
+	}
+}
+
+// The seat can move between the preview and the write. A proposal checks the
+// seat again inside the router call, and writes no card.
+func TestAReseatedWorkerProposalIsRefused(t *testing.T) {
+	w, _ := seatedWorker(t)
+	settleReads(t, w)
+	run, member, ok := w.talkootWorker(t.Context(), "crew", "agent-1", nil)
+	if !ok {
+		t.Fatal("agent-1 holds no seat")
+	}
+	seat := workerSeat{ctx: t.Context(), w: w, run: run, member: member, agentID: "agent-1"}
+	w.talkoot.mu.Lock()
+	run.seats["jev"] = "agent-2"
+	w.talkoot.mu.Unlock()
+	ops := []talkoot.Op{{Op: talkoot.OpEdit, Member: "helm", Set: map[string]any{"posture": "ask"}}}
+	if _, err := seat.Propose(ops, "", "why"); err != errWorkerUnseated {
+		t.Fatalf("propose after the seat moved: %v, want the unseated refusal", err)
+	}
+	for _, c := range inbox(t, w) {
+		if c.Kind == ctrlproto.TalkootCardProposal {
+			t.Fatalf("a refused proposal left a card: %+v", c)
+		}
+	}
+}
+
 // The bridge serves the team verbs alone. The orchestrator refuses any other
 // seat tool, whatever a bridge process sends.
 func TestTheBridgeServesTeamVerbsOnly(t *testing.T) {
 	w, _ := seatedWorker(t)
-	for _, tool := range []string{"talkoot_note_write", "talkoot_propose", "bash"} {
+	for _, tool := range []string{"talkoot_note_write", "talkoot_note_read", "bash"} {
 		r := bridgeCall(t, w, "agent-1", tool, `{}`)
 		if want := fmt.Sprintf("the talkoot bridge does not serve %q", tool); !r.IsError || r.Text != want {
 			t.Errorf("%s: reply = %+v, want a refusal", tool, r)
@@ -135,6 +188,26 @@ func TestAWorkerSendMeetsThePersonsRules(t *testing.T) {
 	}
 	if got := sentBy(t, "jev", "Done."); len(got) != 0 {
 		t.Fatalf("a denied send reached the room: %+v", got)
+	}
+}
+
+// A bridged proposal meets the same gate: the person's deny rule for
+// talkoot_propose stops it before any card opens (review 2461 on #1671).
+func TestAWorkerProposalMeetsThePersonsRules(t *testing.T) {
+	w, _ := seatedWorker(t)
+	settleReads(t, w)
+	cfg := `{"talkoot_enabled": true, "external_workers_enabled": true, "permissions": [{"tool": "talkoot_propose", "decision": "deny", "reason": "no proposals today"}]}`
+	if err := os.WriteFile(filepath.Join(os.Getenv("TERVA_HOME"), "config.json"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := bridgeCall(t, w, "agent-1", "talkoot_propose", `{"ops":[{"op":"edit","member":"helm","set":{"posture":"ask"}}],"why":"helm should ask first"}`)
+	if !r.IsError || !strings.Contains(r.Text, "no proposals today") {
+		t.Fatalf("reply = %+v, want the rule's refusal", r)
+	}
+	for _, c := range inbox(t, w) {
+		if c.Kind == ctrlproto.TalkootCardProposal {
+			t.Fatalf("a denied proposal left a card: %+v", c)
+		}
 	}
 }
 

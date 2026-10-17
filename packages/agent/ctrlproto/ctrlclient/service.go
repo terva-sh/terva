@@ -319,6 +319,22 @@ func (s *Service) RecruitTalkoot(ctx context.Context, p ctrlproto.TalkootRecruit
 	return r.Session, err
 }
 
+func (s *Service) ManagerTalkoot(ctx context.Context) (ctrlproto.SessionInfo, error) {
+	var r ctrlproto.SessionResult
+	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootManager, nil, &r)
+	return r.Session, err
+}
+
+func (s *Service) TalkootDrafts(ctx context.Context) (ctrlproto.TalkootDraftsResult, error) {
+	var r ctrlproto.TalkootDraftsResult
+	err := s.c.Call(ctx, "", ctrlproto.MethodTalkootDrafts, nil, &r)
+	return r, err
+}
+
+func (s *Service) DiscardTalkootDraft(ctx context.Context, p ctrlproto.TalkootRef) error {
+	return s.c.Call(ctx, "", ctrlproto.MethodTalkootDiscard, p, nil)
+}
+
 func (s *Service) PauseTalkoot(ctx context.Context, p ctrlproto.TalkootPauseParams) error {
 	return s.c.Call(ctx, "", ctrlproto.MethodTalkootPause, p, nil)
 }

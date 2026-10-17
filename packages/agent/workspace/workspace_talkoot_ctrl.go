@@ -375,6 +375,7 @@ func wireTalkootLine(l talkoot.Line) ctrlproto.TalkootLine {
 	if len(l.Changes) > 0 {
 		out.Changes = wireChanges(l.Changes)
 	}
+	out.Team = wireTeamChanges(l.Team)
 	if len(l.Answers) > 0 {
 		out.Answers = wireAnswered(l.Answers)
 	}

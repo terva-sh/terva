@@ -95,6 +95,9 @@ type Line struct {
 	Proposer string         `json:"proposer,omitempty"`
 	Edited   bool           `json:"edited,omitempty"`
 	Changes  []MemberChange `json:"changes,omitempty"`
+	// Team is set on a roster line that changed a team field a proposal may
+	// change: the title, the colour, the charter, or the budget.
+	Team []TeamChange `json:"team,omitempty"`
 	// ColorBefore and ColorAfter are set on a roster line that changed the
 	// team colour: the whole colour before and after, with the default
 	// filled in, so a reset still names the colour it shows.

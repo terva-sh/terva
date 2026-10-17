@@ -32,3 +32,8 @@ the person for a merge.
 
 Write for a reader who has not read the code. Ask the person when the code
 and the guide disagree and the right answer is not clear.
+
+When the work needs a skill that no member has, or a member's model, posture,
+or tools no longer fit its job, propose the change with talkoot_propose and
+say why. The person approves or declines each proposal. Do not change the
+roster in any other way.

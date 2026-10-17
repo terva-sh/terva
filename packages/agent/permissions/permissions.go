@@ -143,6 +143,12 @@ var readOnly = map[string]bool{
 	// another member's turn, which spends that member's budget. Plan mode
 	// still permits them, through planKeeps.
 	"talkoot_roster": true,
+	// talkoot_teams lists the daemon's talkoots for the team manager. It reads
+	// rosters and states, as talkoot_roster does.
+	"talkoot_teams": true,
+	// talkoot_templates lists the team templates for the team manager, or
+	// returns the text of one. It reads the files the builder reads.
+	"talkoot_templates": true,
 	// The two note tools read and write only the talkoot's notes under
 	// $TERVA_HOME, never the workspace: the AuthorityLocalData rationale of
 	// the task tools and memory above. A note wakes nobody and spends
@@ -185,6 +191,9 @@ var planKeeps = map[string]bool{
 	"talkoot_send":    true,
 	"talkoot_handoff": true,
 	"talkoot_propose": true,
+	// talkoot_draft saves a draft under $TERVA_HOME and writes no roster. Only
+	// the person's Create makes the team, so a planning manager may draft.
+	"talkoot_draft": true,
 	// talkoot_workspace moves a workspace: either member into its worktree.
 	// Outside the worktree the member runs in plan, so without this it could
 	// never enter.
@@ -224,6 +233,9 @@ var builtin = map[string]bool{
 	"talkoot_send":       true,
 	"talkoot_handoff":    true,
 	"talkoot_roster":     true,
+	"talkoot_teams":      true,
+	"talkoot_templates":  true,
+	"talkoot_draft":      true,
 	"talkoot_note_write": true,
 	"talkoot_note_read":  true,
 	"talkoot_propose":    true,

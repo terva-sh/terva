@@ -28,3 +28,8 @@ not. The developer asks the person for a merge only after the reviewer
 approves.
 
 Ask the person when a decision is theirs to make. Do not guess.
+
+When the work needs a skill that no member has, or a member's model, posture,
+or tools no longer fit its job, propose the change with talkoot_propose and
+say why. The person approves or declines each proposal. Do not change the
+roster in any other way.

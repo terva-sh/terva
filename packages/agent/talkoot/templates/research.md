@@ -44,3 +44,8 @@ source for each claim.
 
 Report what the sources say and where they disagree. Ask the person when the
 question itself is unclear.
+
+When a question needs a researcher with a skill that no member has, or a
+member's model, posture, or tools no longer fit its job, propose the change
+with talkoot_propose and say why. The person approves or declines each
+proposal. Do not change the roster in any other way.

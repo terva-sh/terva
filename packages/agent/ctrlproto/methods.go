@@ -431,6 +431,9 @@ const (
 	MethodTalkootPost         Method = "talkoot.post"          // params TalkootPostParams, result TalkootEnvelope
 	MethodTalkootPause        Method = "talkoot.pause"         // params TalkootPauseParams
 	MethodTalkootRecruit      Method = "talkoot.recruit"       // params TalkootRecruitParams, result SessionResult
+	MethodTalkootManager      Method = "talkoot.manager"       // no params, result SessionResult
+	MethodTalkootDrafts       Method = "talkoot.drafts"        // no params, result TalkootDraftsResult; read-only
+	MethodTalkootDiscard      Method = "talkoot.discard_draft" // params TalkootRef
 	MethodTalkootResume       Method = "talkoot.resume"        // params TalkootResumeParams
 	MethodTalkootKickoff      Method = "talkoot.kickoff"       // params TalkootKickoffParams, result TalkootKickoff
 
@@ -490,7 +493,7 @@ func (m Method) Group() Group {
 	case MethodTalkootList, MethodTalkootGet, MethodTalkootRoom, MethodTalkootInbox, MethodTalkootTrace, MethodTalkootCreate,
 		MethodTalkootProposals, MethodTalkootPropose, MethodTalkootDecide,
 		MethodTalkootUpdate, MethodTalkootPost, MethodTalkootPause, MethodTalkootResume,
-		MethodTalkootRecruit, MethodTalkootKickoff, MethodTalkootTemplates, MethodTalkootPreview, MethodTalkootRef,
+		MethodTalkootRecruit, MethodTalkootManager, MethodTalkootDrafts, MethodTalkootDiscard, MethodTalkootKickoff, MethodTalkootTemplates, MethodTalkootPreview, MethodTalkootRef,
 		MethodTalkootNotes, MethodTalkootWorker, MethodTalkootSaveTemplate:
 		return GroupTalkoot
 	case MethodTenantsList, MethodTenantsSuspend, MethodTenantsResume:

@@ -27,15 +27,22 @@ export function TeamBuilder({
   taken,
   onCreated,
   onCancel,
+  initialDraft,
 }: {
   client: ClientLike
   taken: string[]
   onCreated: (id: string) => void
   onCancel: () => void
+  // A team the team manager drafted. The builder opens on it, and the person
+  // still previews and creates it.
+  initialDraft?: { id: string; text: string }
 }) {
   const [templates, setTemplates] = useState<TalkootTemplate[]>([])
   const [personas, setPersonas] = useState<string[]>([])
-  const [id, setId] = useState('')
+  const [id, setId] = useState(initialDraft?.id ?? '')
+  // A draft shows no form until its preview lands, so no edit can race the
+  // seed and drop the draft's members.
+  const [seeding, setSeeding] = useState(!!initialDraft)
   const [team, setTeam] = useState<DraftTeam>(() => emptyDraft(''))
   const [seed, setSeed] = useState('')
   const [preview, setPreview] = useState<TalkootPreview | null>(null)
@@ -52,6 +59,25 @@ export function TeamBuilder({
       // A daemon that serves no persona library answers with no list.
       (r) => setPersonas((r.personas ?? []).map((p) => p.ref)),
       () => {},
+    )
+  }, [client])
+
+  // 🔑 A draft opens as the daemon reads it: the builder's own preview of the
+  // manager's text fills the form, so the person edits the members the roster
+  // really names. Nothing is created until the person previews and creates.
+  useEffect(() => {
+    if (!initialDraft) return
+    client.send<TalkootPreview>('talkoot.preview', { text: initialDraft.text, id: initialDraft.id }).then(
+      (pv) => {
+        const d = draftFromPreview(pv, initialDraft.id)
+        // A roster with no title reads its name as the title. Keep it empty.
+        change(d.title === initialDraft.id ? { ...d, title: '' } : d)
+        setSeeding(false)
+      },
+      (e: unknown) => {
+        setError(e instanceof Error ? e.message : String(e))
+        setSeeding(false)
+      },
     )
   }, [client])
 
@@ -132,6 +158,14 @@ export function TeamBuilder({
 
   const previewMembers = preview?.members ?? []
   const blocked = !preview || previewMembers.some((m) => !m.available) || (preview.problems?.length ?? 0) > 0
+
+  if (seeding)
+    return (
+      <div class="talkoot-new talkoot-builder">
+        <h2>{t('Build a team')}</h2>
+        <p class="talkoot-note">{t('Loading the draft…')}</p>
+      </div>
+    )
 
   return (
     <div class="talkoot-new talkoot-builder">

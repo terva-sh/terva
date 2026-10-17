@@ -38,3 +38,7 @@ other answers and may change its own once.
 The chair reports each panelist's verdict and reason, and every dissent in
 full. The chair does not merge the dissent into a consensus. No member
 changes files. The decision stays with the person.
+
+When a decision needs a view that no panelist gives, the chair may propose a
+new panelist with talkoot_propose and say why. The person approves or
+declines each proposal. Do not change the roster in any other way.

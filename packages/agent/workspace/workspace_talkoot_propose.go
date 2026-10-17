@@ -28,7 +28,7 @@ const maxWhyBytes = 4 * 1024
 
 // errProposalChangesNothing refuses a batch that leaves every member as it
 // was, such as an edit to the value a field already has.
-var errProposalChangesNothing = errors.New("talkoot: the proposal changes no member")
+var errProposalChangesNothing = errors.New("talkoot: the proposal changes no member and no team field")
 
 // talkootPropose records a proposal from a member, from a person when from
 // starts with human:, or from a recruiter session when it starts with
@@ -54,6 +54,9 @@ func (w *Workspace) talkootPropose(id, from string, ops []talkoot.Op, undo, why,
 		return talkoot.Proposal{}, fmt.Errorf("talkoot: the reason is %d bytes, above the %d limit", len(why), maxWhyBytes)
 	}
 	recruiter := strings.HasPrefix(from, talkoot.RecruiterPrefix)
+	// The team manager may propose every change, removal and yolo included
+	// (docs/proposals/talkoot-team-manager.md). A person still decides.
+	manager := strings.HasPrefix(from, talkoot.ManagerPrefix)
 	var pd *talkoot.PersonaDraft
 	if recruiter {
 		if undo != "" {
@@ -67,8 +70,8 @@ func (w *Workspace) talkootPropose(id, from string, ops []talkoot.Op, undo, why,
 		// 🔑 Only a recruiter writes a persona through a proposal. A member's
 		// talkoot_propose has no persona field, and a person writes one
 		// through the persona library.
-		if !recruiter {
-			return talkoot.Proposal{}, errors.New("talkoot: only a recruiter proposes a new persona")
+		if !recruiter && !manager {
+			return talkoot.Proposal{}, errors.New("talkoot: only a recruiter or the team manager proposes a new persona")
 		}
 		if pd, err = checkPersonaDraft(draft, ops); err != nil {
 			return talkoot.Proposal{}, err
@@ -85,15 +88,22 @@ func (w *Workspace) talkootPropose(id, from string, ops []talkoot.Op, undo, why,
 		if applied.Status != talkoot.ProposalApproved {
 			return talkoot.Proposal{}, fmt.Errorf("talkoot: proposal %s is %s, and only an approved proposal can be undone", undo, applied.Status)
 		}
-		if ops, err = talkoot.Inverse(applied.Changes); err != nil {
+		if ops, err = talkoot.Inverse(applied.Changes, applied.Team); err != nil {
 			return talkoot.Proposal{}, err
 		}
+	}
+	// 🔑 The team op is the team manager's and a person's alone (decision
+	// 0025, amendment of 2026-10-15). A member or a recruiter that proposes a
+	// team change needs a new decision. The check follows the undo, because the
+	// undo of a team change is a team op too.
+	if talkoot.HasTeamOp(ops) && !manager && !strings.HasPrefix(from, talkoot.HumanPrefix) {
+		return talkoot.Proposal{}, errors.New("talkoot: only the team manager or a person proposes a change to the team's own fields")
 	}
 	text, err := os.ReadFile(filepath.Join(run.dir, talkoot.FileName))
 	if err != nil {
 		return talkoot.Proposal{}, fmt.Errorf("talkoot: read the roster: %w", err)
 	}
-	changes, _, _, err := w.proposalPreview(id, text, ops, pd)
+	changes, team, _, _, err := w.proposalPreview(id, text, ops, pd)
 	if err != nil {
 		return talkoot.Proposal{}, err
 	}
@@ -122,6 +132,8 @@ func (w *Workspace) talkootPropose(id, from string, ops []talkoot.Op, undo, why,
 			env, err = rt.ProposeAs(person, summary)
 		} else if session, ok := strings.CutPrefix(from, talkoot.RecruiterPrefix); ok {
 			env, err = rt.ProposeRecruit(session, summary)
+		} else if session, ok := strings.CutPrefix(from, talkoot.ManagerPrefix); ok {
+			env, err = rt.ProposeManager(session, summary)
 		} else {
 			env, err = rt.Propose(from, summary)
 		}
@@ -134,7 +146,7 @@ func (w *Workspace) talkootPropose(id, from string, ops []talkoot.Op, undo, why,
 	p := talkoot.Proposal{
 		ID: talkoot.NewProposalID(now), Proposer: from, At: now, Base: talkoot.RosterRevision(text),
 		Ops: ops, Summary: summary, Why: why, Undoes: undo, Envelope: env.ID,
-		Changes: changes, Status: talkoot.ProposalPending, Persona: pd,
+		Changes: changes, Team: team, Status: talkoot.ProposalPending, Persona: pd,
 	}
 	if err := talkoot.SaveProposal(run.dir, p); err != nil {
 		// ⚠️ The room holds the envelope, and no card waits for it. The
@@ -148,25 +160,25 @@ func (w *Workspace) talkootPropose(id, from string, ops []talkoot.Op, undo, why,
 // proposalPreview applies a batch to the roster text and checks the result as
 // an update would: the roster rules and this workspace's own. d, when set, is
 // a drafted persona that resolves as if it were in the library.
-func (w *Workspace) proposalPreview(id string, text []byte, ops []talkoot.Op, d *talkoot.PersonaDraft) ([]talkoot.MemberChange, []byte, talkoot.Roster, error) {
+func (w *Workspace) proposalPreview(id string, text []byte, ops []talkoot.Op, d *talkoot.PersonaDraft) ([]talkoot.MemberChange, []talkoot.TeamChange, []byte, talkoot.Roster, error) {
 	cur, err := talkoot.Parse(text, id+"/"+talkoot.FileName)
 	if err != nil {
-		return nil, nil, talkoot.Roster{}, err
+		return nil, nil, nil, talkoot.Roster{}, err
 	}
 	next, err := talkoot.ApplyOps(text, ops)
 	if err != nil {
-		return nil, nil, talkoot.Roster{}, err
+		return nil, nil, nil, talkoot.Roster{}, err
 	}
 	nr, err := w.parseRosterEnv(id, next, envWithDraft(d))
 	if err != nil {
-		return nil, nil, talkoot.Roster{}, err
+		return nil, nil, nil, talkoot.Roster{}, err
 	}
-	changes := talkoot.Diff(cur, nr)
-	if len(changes) == 0 {
-		return nil, nil, talkoot.Roster{}, errProposalChangesNothing
+	changes, team := talkoot.Diff(cur, nr), talkoot.DiffTeam(cur, nr)
+	if len(changes) == 0 && len(team) == 0 {
+		return nil, nil, nil, talkoot.Roster{}, errProposalChangesNothing
 	}
 	withMarks(changes, cur, nr)
-	return changes, next, nr, nil
+	return changes, team, next, nr, nil
 }
 
 // withMarks records each changed member's resolved mark in each roster. A
@@ -320,7 +332,12 @@ func (w *Workspace) talkootDecide(ctx context.Context, id, by, pid, decision str
 	} else if talkoot.RosterRevision(text) != p.Base {
 		return refused(fmt.Errorf("%w; decline it, or approve it with its operations edited against the roster as it is now", talkoot.ErrProposalStale))
 	}
-	changes, next, nr, err := w.proposalPreview(id, text, ops, p.Persona)
+	// 🚨 The record is a file, so it can change after propose checked it. A
+	// team op that the person did not write must come from the manager.
+	if !edit && talkoot.HasTeamOp(ops) && !strings.HasPrefix(p.Proposer, talkoot.ManagerPrefix) && !strings.HasPrefix(p.Proposer, talkoot.HumanPrefix) {
+		return refused(fmt.Errorf("talkoot: only the team manager or a person proposes a change to the team's own fields, and this proposal came from %s", p.Proposer))
+	}
+	changes, team, next, nr, err := w.proposalPreview(id, text, ops, p.Persona)
 	if err != nil {
 		if edit {
 			// The person's own edit failed. The proposal as made has no new
@@ -341,8 +358,8 @@ func (w *Workspace) talkootDecide(ctx context.Context, id, by, pid, decision str
 		}
 		// 🚨 The record is a file, so it can change after propose checked it.
 		// The write checks the draft again, as propose did.
-		if !strings.HasPrefix(p.Proposer, talkoot.RecruiterPrefix) {
-			return refused(fmt.Errorf("talkoot: only a recruiter proposes a new persona, and this proposal came from %s", p.Proposer))
+		if !talkoot.IsSessionProposer(p.Proposer) {
+			return refused(fmt.Errorf("talkoot: only a recruiter or the team manager proposes a new persona, and this proposal came from %s", p.Proposer))
 		}
 		if d, err := checkPersonaDraft(p.Persona.Text, ops); err != nil {
 			return refused(err)
@@ -354,7 +371,7 @@ func (w *Workspace) talkootDecide(ctx context.Context, id, by, pid, decision str
 	// change from a proposal has an approved record behind it, and its undo
 	// works. A record that does not save changes nothing. A roster that then
 	// fails puts the record back to pending.
-	p.Status, p.Changes, p.Edited, p.Problem = talkoot.ProposalApproved, changes, edit, ""
+	p.Status, p.Changes, p.Team, p.Edited, p.Problem = talkoot.ProposalApproved, changes, team, edit, ""
 	if edit {
 		p.Applied = ops
 	}
@@ -423,7 +440,7 @@ func wireProposal(p talkoot.Proposal) ctrlproto.TalkootProposal {
 	out := ctrlproto.TalkootProposal{
 		ID: p.ID, Proposer: p.Proposer, At: p.At, Title: proposalTitle(p), Summary: p.Summary, Why: p.Why,
 		Class: string(talkoot.ClassOfOps(p.Ops)), Undoes: p.Undoes, Envelope: p.Envelope,
-		Ops: make([]ctrlproto.TalkootOp, 0, len(p.Ops)), Changes: wireChanges(p.Changes),
+		Ops: make([]ctrlproto.TalkootOp, 0, len(p.Ops)), Changes: wireChanges(p.Changes), Team: wireTeamChanges(p.Team),
 		Status: p.Status, DecidedBy: p.DecidedBy, DecidedAt: p.DecidedAt, Reason: p.Reason,
 		Edited: p.Edited, Problem: p.Problem,
 	}
@@ -457,6 +474,10 @@ func proposalTitle(p talkoot.Proposal) string {
 		return "recruiter session " + strings.TrimPrefix(p.Proposer, talkoot.RecruiterPrefix) + " proposes, with the new persona " + p.Persona.Name + ": " + p.Summary
 	case strings.HasPrefix(p.Proposer, talkoot.RecruiterPrefix):
 		return "recruiter session " + strings.TrimPrefix(p.Proposer, talkoot.RecruiterPrefix) + " proposes: " + p.Summary
+	case strings.HasPrefix(p.Proposer, talkoot.ManagerPrefix) && p.Persona != nil:
+		return "the team manager proposes, with the new persona " + p.Persona.Name + ": " + p.Summary
+	case strings.HasPrefix(p.Proposer, talkoot.ManagerPrefix):
+		return "the team manager proposes: " + p.Summary
 	case p.Undoes != "":
 		return p.Proposer + " proposes an undo: " + p.Summary
 	}
@@ -466,7 +487,19 @@ func proposalTitle(p talkoot.Proposal) string {
 // isMemberProposer reports whether a proposer is a member, and not a person or
 // a recruiter.
 func isMemberProposer(proposer string) bool {
-	return !strings.HasPrefix(proposer, talkoot.HumanPrefix) && !strings.HasPrefix(proposer, talkoot.RecruiterPrefix)
+	return !strings.HasPrefix(proposer, talkoot.HumanPrefix) && !talkoot.IsSessionProposer(proposer)
+}
+
+func wireTeamChanges(cs []talkoot.TeamChange) []ctrlproto.TalkootTeamChange {
+	if len(cs) == 0 {
+		return nil
+	}
+	out := make([]ctrlproto.TalkootTeamChange, 0, len(cs))
+	for _, c := range cs {
+		class, _ := talkoot.TeamClassOf(c.Field)
+		out = append(out, ctrlproto.TalkootTeamChange{Field: c.Field, Class: string(class), Before: c.Before, After: c.After, Widens: talkoot.TeamWidens(c)})
+	}
+	return out
 }
 
 func wireChanges(cs []talkoot.MemberChange) []ctrlproto.TalkootMemberChange {

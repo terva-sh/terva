@@ -364,6 +364,18 @@ func (r *recorder) RecruitTalkoot(_ context.Context, p TalkootRecruitParams) (Se
 	r.note("RecruitTalkoot", "", p)
 	return SessionInfo{}, nil
 }
+func (r *recorder) ManagerTalkoot(_ context.Context) (SessionInfo, error) {
+	r.note("ManagerTalkoot", "", nil)
+	return SessionInfo{}, nil
+}
+func (r *recorder) TalkootDrafts(_ context.Context) (TalkootDraftsResult, error) {
+	r.note("TalkootDrafts", "", nil)
+	return TalkootDraftsResult{}, nil
+}
+func (r *recorder) DiscardTalkootDraft(_ context.Context, p TalkootRef) error {
+	r.note("DiscardTalkootDraft", "", p)
+	return nil
+}
 func (r *recorder) ResumeTalkoot(_ context.Context, p TalkootResumeParams) error {
 	r.note("ResumeTalkoot", "", p)
 	return nil
@@ -796,6 +808,9 @@ func dispatchCases() []dispatchCase {
 		{MethodTalkootPause, TalkootPauseParams{ID: "crew", By: "drew", Member: "lead"}, "PauseTalkoot", TalkootPauseParams{ID: "crew", By: "drew", Member: "lead"}},
 		{MethodTalkootResume, TalkootResumeParams{ID: "crew", By: "drew", Chain: "c1"}, "ResumeTalkoot", TalkootResumeParams{ID: "crew", By: "drew", Chain: "c1"}},
 		{MethodTalkootRecruit, TalkootRecruitParams{ID: "crew", Persona: "hautoja"}, "RecruitTalkoot", TalkootRecruitParams{ID: "crew", Persona: "hautoja"}},
+		{MethodTalkootManager, nil, "ManagerTalkoot", nil},
+		{MethodTalkootDrafts, nil, "TalkootDrafts", nil},
+		{MethodTalkootDiscard, TalkootRef{ID: "lake"}, "DiscardTalkootDraft", TalkootRef{ID: "lake"}},
 
 		// --- shared files: the same two-verbs-one-controller shape, and both are
 		// session-scoped — a share belongs to the conversation that produced it,

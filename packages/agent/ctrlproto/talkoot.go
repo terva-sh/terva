@@ -81,6 +81,32 @@ type TalkootController interface {
 	// Hautoja session. It holds no seat, and it proposes members for a person
 	// to decide.
 	RecruitTalkoot(ctx context.Context, p TalkootRecruitParams) (SessionInfo, error)
+	// ManagerTalkoot returns the daemon's team manager session, and creates
+	// it the first time. It holds no seat, and it proposes changes to any
+	// team for a person to decide.
+	ManagerTalkoot(ctx context.Context) (SessionInfo, error)
+	// TalkootDrafts lists the team manager's drafts of new teams for this
+	// workspace. A draft is no team until a person creates it.
+	TalkootDrafts(ctx context.Context) (TalkootDraftsResult, error)
+	// DiscardTalkootDraft removes one draft of this workspace.
+	DiscardTalkootDraft(ctx context.Context, p TalkootRef) error
+}
+
+// TalkootDraftsResult is the talkoot.drafts reply, newest first.
+type TalkootDraftsResult struct {
+	Drafts []TalkootDraft `json:"drafts"`
+}
+
+// TalkootDraft is one new team the team manager drafted. Text is the roster as
+// the manager wrote it, with no home. A client previews it with
+// talkoot.preview, and only talkoot.create makes the team. Problem says why
+// the draft file cannot be read, and such a draft can only be discarded.
+type TalkootDraft struct {
+	ID      string `json:"id"`
+	Text    string `json:"text"`
+	Why     string `json:"why"`
+	At      string `json:"at"`
+	Problem string `json:"problem,omitempty"`
 }
 
 // TalkootRecruitParams is the payload of [MethodTalkootRecruit].
@@ -536,6 +562,9 @@ type TalkootLine struct {
 	Proposer string                `json:"proposer,omitempty"`
 	Edited   bool                  `json:"edited,omitempty"`
 	Changes  []TalkootMemberChange `json:"changes,omitempty"`
+	// Team is set on a roster line that changed the team's title, colour,
+	// charter, or budget.
+	Team []TalkootTeamChange `json:"team,omitempty"`
 	// ColorBefore and ColorAfter are set on a roster line that changed the
 	// team colour, each with the default filled in.
 	ColorBefore string `json:"color_before,omitempty"`
@@ -688,6 +717,18 @@ type TalkootMemberEntry struct {
 	IdleStop        string       `json:"idle_stop,omitempty"`
 }
 
+// TalkootTeamChange is one team field before and after a roster change: the
+// title, the colour, the charter, or the daily budget. An unset Before or
+// After is a field the roster does not set. Class is look, voice, or
+// authority, and Widens is set on a raised budget.
+type TalkootTeamChange struct {
+	Field  string `json:"field"`
+	Class  string `json:"class"`
+	Before any    `json:"before,omitempty"`
+	After  any    `json:"after,omitempty"`
+	Widens bool   `json:"widens,omitempty"`
+}
+
 // TalkootMemberChange is one member before and after a roster change. Before
 // is unset for an added member, and After for a removed one. Widens names the
 // authority fields that grant more, and Authority every authority field that
@@ -737,11 +778,14 @@ type TalkootProposal struct {
 	Ops      []TalkootOp `json:"ops"`
 	// Changes previews each member while the proposal waits, and records
 	// what applied once it is approved.
-	Changes   []TalkootMemberChange `json:"changes"`
-	Status    string                `json:"status"`
-	DecidedBy string                `json:"decided_by,omitempty"`
-	DecidedAt time.Time             `json:"decided_at,omitzero"`
-	Reason    string                `json:"reason,omitempty"`
+	Changes []TalkootMemberChange `json:"changes"`
+	// Team previews each team field the proposal changes, and records what
+	// applied once it is approved.
+	Team      []TalkootTeamChange `json:"team,omitempty"`
+	Status    string              `json:"status"`
+	DecidedBy string              `json:"decided_by,omitempty"`
+	DecidedAt time.Time           `json:"decided_at,omitzero"`
+	Reason    string              `json:"reason,omitempty"`
 	// Edited is set when the person approved changed operations, and Applied
 	// holds them. Ops stays what the proposer asked for.
 	Edited  bool        `json:"edited,omitempty"`

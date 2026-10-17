@@ -96,6 +96,30 @@ func TestTheBuiltinCodingTeamIsAValidRoster(t *testing.T) {
 	}
 }
 
+// Each built-in charter tells members how to ask for a roster change, and
+// that the person decides (TKT-01M4YQR29).
+func TestEveryBuiltinCharterNamesTheProposalPath(t *testing.T) {
+	list := builtinTemplateList()
+	if len(list) < 6 {
+		t.Fatalf("%d built-in templates, want at least 6", len(list))
+	}
+	for _, tmpl := range list {
+		text, err := Instantiate(tmpl, "/src/app", 0, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", tmpl.Name, err)
+		}
+		r, err := Parse(text, tmpl.Name+".md")
+		if err != nil {
+			t.Fatalf("%s: %v", tmpl.Name, err)
+		}
+		// The charter wraps at any word, so compare its words.
+		charter := strings.Join(strings.Fields(r.Charter), " ")
+		if !strings.Contains(charter, "talkoot_propose") || !strings.Contains(charter, "The person approves or declines each proposal.") {
+			t.Errorf("%s: the charter does not name talkoot_propose and the person's decision:\n%s", tmpl.Name, r.Charter)
+		}
+	}
+}
+
 func TestInstantiateFillsHomeAndBudgetAndDropsMembers(t *testing.T) {
 	tmpl := parseTemplate("small", []byte(smallTemplate), SourceUser, "small.md")
 	if tmpl.Problem != "" {

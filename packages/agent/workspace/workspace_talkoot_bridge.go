@@ -229,8 +229,18 @@ func (s workerSeat) recordAnswer(qs []core.UserQuestion, ans []core.UserAnswer) 
 func (workerSeat) WriteNote(string, string) (string, error) { return "", errNotBridged }
 func (workerSeat) ReadNote(string) (string, error)          { return "", errNotBridged }
 func (workerSeat) ListNotes() ([]talkoot.Note, error)       { return nil, errNotBridged }
-func (workerSeat) Propose([]talkoot.Op, string, string) (talkoot.Proposal, error) {
-	return talkoot.Proposal{}, errNotBridged
+
+// Propose submits a roster proposal from the worker's member (decision 0023,
+// amended 2026-10-15). It waits for a person as a native member's does. The
+// seat check runs inside the router call, so a worker that lost its seat
+// during the preview proposes nothing.
+func (s workerSeat) Propose(ops []talkoot.Op, undo, why string) (talkoot.Proposal, error) {
+	return s.w.talkootPropose(s.run.id, s.member, ops, undo, why, "", func() error {
+		if !s.holds() {
+			return errWorkerUnseated
+		}
+		return nil
+	})
 }
 
 // workerQuestionWait is mcpbridge.TeamQuestionWait. A test shortens it.

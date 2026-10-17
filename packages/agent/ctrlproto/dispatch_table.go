@@ -708,4 +708,14 @@ var dispatch = map[Method]handler{
 		info, err := c.RecruitTalkoot(ctx, p)
 		return SessionResult{Session: info}, err
 	}),
+	MethodTalkootManager: get(noTalkoot, func(c TalkootController, ctx context.Context, f Frame) (SessionResult, error) {
+		info, err := c.ManagerTalkoot(ctx)
+		return SessionResult{Session: info}, err
+	}),
+	MethodTalkootDrafts: get(noTalkoot, func(c TalkootController, ctx context.Context, f Frame) (TalkootDraftsResult, error) {
+		return c.TalkootDrafts(ctx)
+	}),
+	MethodTalkootDiscard: act(noTalkoot, func(c TalkootController, ctx context.Context, f Frame, p TalkootRef) error {
+		return c.DiscardTalkootDraft(ctx, p)
+	}),
 }

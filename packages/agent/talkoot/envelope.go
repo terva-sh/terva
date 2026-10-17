@@ -56,6 +56,17 @@ const HumanPrefix = "human:"
 // neither a member nor a person. It can propose, and a person still decides.
 const RecruiterPrefix = "recruiter:"
 
+// ManagerPrefix marks a proposal from the daemon's team manager: one native
+// session outside every talkoot (docs/proposals/talkoot-team-manager.md). Like
+// a recruiter it is neither a member nor a person, and a person decides.
+const ManagerPrefix = "manager:"
+
+// IsSessionProposer reports whether from names a recruiter or the team
+// manager: a session that proposes and holds no seat.
+func IsSessionProposer(from string) bool {
+	return strings.HasPrefix(from, RecruiterPrefix) || strings.HasPrefix(from, ManagerPrefix)
+}
+
 // Size limits for one envelope. They keep every room line well inside the
 // room reader's line limit, so one envelope cannot stop the room replaying.
 const (
@@ -232,6 +243,8 @@ func render(r Roster, e Envelope) string {
 		sender = name + " (the person you work for)"
 	} else if session, ok := strings.CutPrefix(e.From, RecruiterPrefix); ok {
 		sender = "recruiter session " + session
+	} else if strings.HasPrefix(e.From, ManagerPrefix) {
+		sender = "the team manager"
 	} else {
 		// A member removed from the roster since it sent, seen in a replay.
 		sender = e.From + " (no longer a member)"

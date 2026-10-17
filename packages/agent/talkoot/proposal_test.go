@@ -160,7 +160,7 @@ func TestCheckOpsRefusesABadBatch(t *testing.T) {
 		{"an add of a member", []Op{{Op: OpAdd, Member: "helm", Set: map[string]any{"role": "specialist"}}}, "already a member"},
 		{"an edit after its remove", []Op{{Op: OpRemove, Member: "atlas"}, {Op: OpEdit, Member: "atlas", Set: map[string]any{"title": "x"}}}, "not a member"},
 		{"a bad id", []Op{{Op: OpAdd, Member: "Scout", Set: map[string]any{"role": "specialist"}}}, "lower case"},
-		{"an unknown operation", []Op{{Op: "rename", Member: "helm"}}, "add, edit, remove, or look"},
+		{"an unknown operation", []Op{{Op: "rename", Member: "helm"}}, "add, edit, remove, look, or team"},
 		{"a nested value", []Op{{Op: OpEdit, Member: "helm", Set: map[string]any{"title": []any{"a"}}}}, "title must be a string"},
 		{"a fractional count", []Op{{Op: OpEdit, Member: "helm", Set: map[string]any{"turns_per_day": 2.5}}}, "turns_per_day must be a whole number"},
 		{"a string flag", []Op{{Op: OpEdit, Member: "helm", Set: map[string]any{"reviewer": "yes"}}}, "reviewer must be true or false"},
@@ -193,7 +193,7 @@ func TestInverseUndoesEachKindOfChange(t *testing.T) {
 	if len(changes) != 3 {
 		t.Fatalf("Diff = %+v, want three changes", changes)
 	}
-	undo, err := Inverse(changes)
+	undo, err := Inverse(changes, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestInverseUndoesEachKindOfChange(t *testing.T) {
 	if d := Diff(before, back); len(d) != 0 {
 		t.Fatalf("after the undo these members still differ: %+v", d)
 	}
-	if _, err := Inverse(nil); err == nil {
+	if _, err := Inverse(nil, nil); err == nil {
 		t.Error("an empty change has something to undo")
 	}
 }
@@ -214,7 +214,7 @@ func TestAnUndoLeavesDefaultsUnwritten(t *testing.T) {
 		Op{Op: OpRemove, Member: "atlas"},
 		Op{Op: OpEdit, Member: "helm", Set: map[string]any{"posture": "ask", "driver": "claude"}},
 	)
-	undo, err := Inverse(Diff(before, after))
+	undo, err := Inverse(Diff(before, after), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

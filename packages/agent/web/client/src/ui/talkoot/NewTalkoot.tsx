@@ -31,6 +31,7 @@ export function NewTalkoot({
   onCancel,
   initialTemplate = '',
   initialBuild = false,
+  initialDraft,
 }: {
   client: ClientLike
   taken: string[]
@@ -39,6 +40,8 @@ export function NewTalkoot({
   // The template the first-run page picked, or the builder it opened.
   initialTemplate?: string
   initialBuild?: boolean
+  // A team manager's draft, which opens the builder on it.
+  initialDraft?: { id: string; text: string }
 }) {
   const [templates, setTemplates] = useState<TalkootTemplate[] | null>(null)
   const [template, setTemplate] = useState(initialTemplate)
@@ -53,7 +56,7 @@ export function NewTalkoot({
   const seq = useRef(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [building, setBuilding] = useState(initialBuild)
+  const [building, setBuilding] = useState(initialBuild || !!initialDraft)
 
   useEffect(() => {
     client.send<TalkootTemplatesResult>('talkoot.templates', null).then(
@@ -119,7 +122,8 @@ export function NewTalkoot({
   const blocked = preview ? preview.result.members.some((m) => !m.available) || (preview.result.problems?.length ?? 0) > 0 : true
   const picked = templates?.find((x) => x.name === template)
 
-  if (building) return <TeamBuilder client={client} taken={taken} onCreated={onCreated} onCancel={() => setBuilding(false)} />
+  if (building)
+    return <TeamBuilder client={client} taken={taken} onCreated={onCreated} onCancel={() => setBuilding(false)} initialDraft={initialDraft} />
 
   return (
     <div class="talkoot-new">

@@ -50,7 +50,7 @@ func (w *Workspace) steersTalkoot(id string) bool {
 		return true
 	}
 	if s := w.existing(id); s != nil {
-		return s.recruitOf() != ""
+		return s.recruitOf() != "" || s.isManager()
 	}
 	// 🔑 A cold recruiter is still bound: its meta names the talkoot, and a
 	// resume rebuilds it with the recruiter's tools. An id that names no file
@@ -64,7 +64,7 @@ func (w *Workspace) steersTalkoot(id string) bool {
 	}
 	// 🚨 A file that exists and does not read could hold a recruit binding,
 	// so it counts as bound. Answering false would fail open.
-	return err != nil || meta.Recruit != ""
+	return err != nil || meta.Recruit != "" || meta.Manager
 }
 
 func (w *Workspace) isTalkootMember(id string) bool {

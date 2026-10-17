@@ -86,6 +86,8 @@ var readOnlyMethods = map[Method]bool{
 	MethodTalkootNotes: true,
 	// A preview writes nothing: create recomputes the roster it showed.
 	MethodTalkootTemplates: true, MethodTalkootPreview: true,
+	// A draft is a roster nobody created. It reads as a template does.
+	MethodTalkootDrafts: true,
 }
 
 // spendingMethods reach a model or an image backend. Membership is a claim that
@@ -222,6 +224,10 @@ var writeOnlyMethods = map[Method]bool{
 	// Write, not spend: a recruiter opens on a static greeting. The prompt
 	// that talks to it is the verb that costs money.
 	MethodTalkootRecruit: true,
+	// The team manager also opens on a static greeting.
+	MethodTalkootManager: true,
+	// A discard removes a draft file and wakes no one.
+	MethodTalkootDiscard: true,
 }
 
 // steerMethods change or wake a talkoot. Membership adds [CapSteer] to the
@@ -234,6 +240,11 @@ var steerMethods = map[Method]bool{
 	MethodTalkootPropose: true, MethodTalkootDecide: true,
 	// A recruiter files roster proposals, so binding one steers the team.
 	MethodTalkootRecruit: true,
+	// The team manager files proposals to every team.
+	MethodTalkootManager: true,
+	// 🔑 A discard decides that a team the manager offered is not made, which
+	// only a caller that may create a team itself may decide.
+	MethodTalkootDiscard: true,
 	MethodTalkootKickoff: true,
 	// 🔑 A user template shadows a built-in or extension template of the same
 	// name in every workspace on this home. So a save decides what a familiar

@@ -53,7 +53,7 @@ func TestTheBridgeToolsNeedTheBridge(t *testing.T) {
 
 func TestTeamBridgeToolNames(t *testing.T) {
 	got := TeamBridgeTools()
-	want := []string{"mcp_terva_talkoot_talkoot_send", "mcp_terva_talkoot_talkoot_handoff", "mcp_terva_talkoot_talkoot_roster", "mcp_terva_talkoot_ask_user_question"}
+	want := []string{"mcp_terva_talkoot_talkoot_send", "mcp_terva_talkoot_talkoot_handoff", "mcp_terva_talkoot_talkoot_roster", "mcp_terva_talkoot_talkoot_propose", "mcp_terva_talkoot_ask_user_question"}
 	if len(got) != len(want) {
 		t.Fatalf("names = %v, want %v", got, want)
 	}

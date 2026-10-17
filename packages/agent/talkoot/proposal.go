@@ -28,7 +28,50 @@ const (
 	OpRemove = "remove"
 	// OpLook is an edit of look fields only.
 	OpLook = "look"
+	// OpTeam sets the team's own fields in Set (TeamFields). It names no
+	// member. Only the team manager and a person propose one (decision 0025,
+	// amendment of 2026-10-15).
+	OpTeam = "team"
 )
+
+// MaxCharterBytes bounds a charter that a team op sets. A built-in template's
+// charter runs near 1 KiB.
+const MaxCharterBytes = 16 * 1024
+
+// TeamFields gives each team field a proposal may change its class, in the
+// order a card lists them. The title and the colour are look, the charter is
+// voice, and the budget is authority (decision 0025, amendment).
+//
+// 🔑 team_budget_waived is absent on purpose. Only a person's talkoot.update
+// waives the team cap (decision 0027).
+var TeamFields = []struct {
+	Name  string
+	Class FieldClass
+}{
+	{"title", ClassLook},
+	{"color", ClassLook},
+	{"charter", ClassVoice},
+	{"budget_usd_per_day", ClassAuthority},
+}
+
+// TeamClassOf returns the class of a team field a proposal may change, and
+// false for any other name.
+func TeamClassOf(field string) (FieldClass, bool) {
+	for _, f := range TeamFields {
+		if f.Name == field {
+			return f.Class, true
+		}
+	}
+	return "", false
+}
+
+// TeamChange is one team field before and after a change. A nil value is a
+// field the roster does not set.
+type TeamChange struct {
+	Field  string `json:"field"`
+	Before any    `json:"before,omitempty"`
+	After  any    `json:"after,omitempty"`
+}
 
 // MaxOps bounds one batch, so a card stays readable.
 const MaxOps = 32
@@ -74,6 +117,12 @@ func CheckOps(r Roster, ops []Op) error {
 	}
 	for i, op := range ops {
 		at := fmt.Sprintf("operation %d (%s %s)", i+1, op.Op, op.Member)
+		if op.Op == OpTeam {
+			if err := checkTeamOp(r, op); err != nil {
+				return fmt.Errorf("talkoot: operation %d (team): %w", i+1, err)
+			}
+			continue
+		}
 		if !idPattern.MatchString(op.Member) {
 			return fmt.Errorf("talkoot: %s: member id %q must be lower case letters, digits, and dashes, starting with a letter", at, op.Member)
 		}
@@ -113,10 +162,149 @@ func CheckOps(r Roster, ops []Op) error {
 			}
 			delete(live, op.Member)
 		default:
-			return fmt.Errorf("talkoot: %s: the operation must be add, edit, remove, or look", at)
+			return fmt.Errorf("talkoot: %s: the operation must be add, edit, remove, look, or team", at)
 		}
 	}
 	return nil
+}
+
+// checkTeamOp checks one team op: no member, at least one field, each field a
+// team field, and each value of its kind.
+//
+// 🔑 The field's current value must fit a proposal too. Parse sets no size
+// limit, so talkoot.update can write a charter above MaxCharterBytes. A
+// proposal that shortened it would apply, and its undo, which restores the
+// old value through the same checks, would be refused. So every approved team
+// change keeps an undo, and a person changes such a field with talkoot.update.
+func checkTeamOp(r Roster, op Op) error {
+	now := teamValues(r)
+	if op.Member != "" {
+		return fmt.Errorf("a team operation names no member, and this one names %q", op.Member)
+	}
+	if len(op.Set) == 0 {
+		return errors.New("set names no team field to change")
+	}
+	for k, v := range op.Set {
+		if k == "team_budget_waived" {
+			return errors.New("no proposal waives the team budget; a person does that with talkoot.update (decision 0027)")
+		}
+		if _, ok := TeamClassOf(k); !ok {
+			return fmt.Errorf("%q is not a team field a proposal may change; it changes title, color, charter, or budget_usd_per_day", k)
+		}
+		if err := checkTeamValue(k, v); err != nil {
+			return err
+		}
+		if err := checkTeamValue(k, now[k]); err != nil {
+			return fmt.Errorf("the team's %s now does not fit a proposal (%v), so the undo of this change could not restore it; a person changes it with talkoot.update", k, err)
+		}
+	}
+	return nil
+}
+
+func checkTeamValue(field string, v any) error {
+	if field == "budget_usd_per_day" {
+		var n float64
+		switch x := v.(type) {
+		case int:
+			n = float64(x)
+		case float64:
+			n = x
+		default:
+			return errors.New("budget_usd_per_day must be a number; a team always keeps a daily budget")
+		}
+		if math.IsNaN(n) || math.IsInf(n, 0) || n <= 0 {
+			return errors.New("budget_usd_per_day must be a positive number")
+		}
+		return nil
+	}
+	if unset(v) {
+		return nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("%s must be a string", field)
+	}
+	limit := MaxValueBytes
+	if field == "charter" {
+		limit = MaxCharterBytes
+	}
+	if len(s) > limit {
+		return fmt.Errorf("%s is %d bytes, above the %d limit", field, len(s), limit)
+	}
+	if field == "color" && !look.ValidColor(s) {
+		return fmt.Errorf("color %q is not a #RRGGBB value", s)
+	}
+	if field == "title" && strings.ContainsAny(s, "\r\n") {
+		return errors.New("a title is one line")
+	}
+	return nil
+}
+
+// HasTeamOp reports whether a batch changes a team field.
+func HasTeamOp(ops []Op) bool {
+	return slices.ContainsFunc(ops, func(op Op) bool { return op.Op == OpTeam })
+}
+
+// applyTeam sets a team op's fields on a parsed roster, as the text would
+// parse after the op.
+func applyTeam(r *Roster, op Op) {
+	for k, v := range op.Set {
+		s, _ := v.(string)
+		switch k {
+		case "title":
+			r.Title = s
+		case "color":
+			r.Color = s
+		case "charter":
+			r.Charter = strings.TrimSpace(s)
+		case "budget_usd_per_day":
+			switch n := v.(type) {
+			case int:
+				r.BudgetUSDPerDay = float64(n)
+			case float64:
+				r.BudgetUSDPerDay = n
+			}
+		}
+	}
+}
+
+// teamValues returns the team fields a proposal may change, by name. An unset
+// string is nil.
+func teamValues(r Roster) map[string]any {
+	str := func(s string) any {
+		if s == "" {
+			return nil
+		}
+		return s
+	}
+	return map[string]any{
+		"title": str(r.Title), "color": str(r.Color), "charter": str(r.Charter),
+		"budget_usd_per_day": r.BudgetUSDPerDay,
+	}
+}
+
+// DiffTeam returns each team field that differs between two rosters, in the
+// order of TeamFields.
+func DiffTeam(before, after Roster) []TeamChange {
+	was, is := teamValues(before), teamValues(after)
+	var out []TeamChange
+	for _, f := range TeamFields {
+		if !reflect.DeepEqual(was[f.Name], is[f.Name]) {
+			out = append(out, TeamChange{Field: f.Name, Before: was[f.Name], After: is[f.Name]})
+		}
+	}
+	return out
+}
+
+// TeamWidens reports whether a team change grants more: a daily budget
+// raised.
+func TeamWidens(c TeamChange) bool {
+	if c.Field != "budget_usd_per_day" {
+		return false
+	}
+	was, ok1 := c.Before.(float64)
+	is, ok2 := c.After.(float64)
+	return ok1 && ok2 && is > was
 }
 
 // fieldKinds maps each member field's YAML name to its Go kind.
@@ -263,6 +451,20 @@ func ApplyOps(text []byte, ops []Op) ([]byte, error) {
 		return nil, errors.New("talkoot: the roster has no members list")
 	}
 	for _, op := range ops {
+		if op.Op == OpTeam {
+			if err := applyTeamNode(doc.Content[0], op); err != nil {
+				return nil, err
+			}
+			if c, ok := op.Set["charter"]; ok {
+				s, _ := c.(string)
+				if s = strings.TrimSpace(s); s == "" {
+					body = nil
+				} else {
+					body = []byte("\n" + s + "\n")
+				}
+			}
+			continue
+		}
 		if err := applyNode(members, op); err != nil {
 			return nil, err
 		}
@@ -293,10 +495,34 @@ func ApplyOps(text []byte, ops []Op) ([]byte, error) {
 		return nil, err
 	}
 	before.Members = want
+	for _, op := range ops {
+		if op.Op == OpTeam {
+			applyTeam(&before, op)
+		}
+	}
 	if !reflect.DeepEqual(before, after) {
 		return nil, errors.New("talkoot: the roster text did not take the change as proposed")
 	}
 	return out, nil
+}
+
+// applyTeamNode sets a team op's frontmatter fields on the roster's top
+// mapping. The charter is the body, so ApplyOps writes it.
+func applyTeamNode(root *yaml.Node, op Op) error {
+	for _, f := range TeamFields {
+		v, ok := op.Set[f.Name]
+		if !ok || f.Name == "charter" {
+			continue
+		}
+		if unset(v) {
+			dropField(root, f.Name)
+			continue
+		}
+		if err := setField(root, f.Name, v); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // valueOf returns the value node of key in a mapping node.
@@ -439,6 +665,8 @@ func applyRaw(in []map[string]any, ops []Op) []map[string]any {
 			if i >= 0 {
 				out = slices.Delete(out, i, i+1)
 			}
+		case OpTeam:
+			// A team op changes no member.
 		}
 	}
 	return out
@@ -526,9 +754,17 @@ func Diff(before, after Roster) []MemberChange {
 // adds back a removed one with its old fields, and sets each edited field
 // back. A driver or a workspace that held its default goes back to unset
 // rather than to its value, and a posture is always written. A member added
-// back joins at the end of the list.
-func Inverse(changes []MemberChange) ([]Op, error) {
+// back joins at the end of the list. Each team field goes back too, in one
+// team op.
+func Inverse(changes []MemberChange, team []TeamChange) ([]Op, error) {
 	var ops []Op
+	if len(team) > 0 {
+		set := map[string]any{}
+		for _, c := range team {
+			set[c.Field] = c.Before
+		}
+		ops = append(ops, Op{Op: OpTeam, Set: set})
+	}
 	for _, c := range changes {
 		switch {
 		case c.Before == nil && c.After != nil:
@@ -697,8 +933,12 @@ func ClassOfOps(ops []Op) FieldClass {
 		if op.Op == OpAdd || op.Op == OpRemove {
 			return ClassAuthority
 		}
+		classOf := ClassOf
+		if op.Op == OpTeam {
+			classOf = TeamClassOf
+		}
 		for k := range op.Set {
-			if class, _ := ClassOf(k); rank[class] > rank[out] {
+			if class, _ := classOf(k); rank[class] > rank[out] {
 				out = class
 			}
 		}
@@ -717,6 +957,9 @@ func Summarize(ops []Op) string {
 		}
 		slices.Sort(keys)
 		s := op.Op + " " + op.Member
+		if op.Op == OpTeam {
+			s = "team"
+		}
 		if len(keys) > 0 && op.Op != OpAdd {
 			s += " (" + strings.Join(keys, ", ") + ")"
 		}

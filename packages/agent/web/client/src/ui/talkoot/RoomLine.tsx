@@ -9,8 +9,18 @@ import { MarkOf } from './MemberMark'
 // who names a sender or a recipient: a member id, or a person's name without
 // its human: prefix.
 export function who(addr: string): string {
+  if (addr.startsWith(RECRUITER_PREFIX)) return t('the recruiter')
+  if (addr.startsWith(MANAGER_PREFIX)) return t('the team manager')
   return isPerson(addr) ? addr.slice(HUMAN_PREFIX.length) : addr
 }
+
+// RECRUITER_PREFIX marks a recruiter session as a proposer
+// (talkoot.RecruiterPrefix). The session id after it means nothing to a
+// person.
+const RECRUITER_PREFIX = 'recruiter:'
+
+// MANAGER_PREFIX marks the team manager as a proposer (talkoot.ManagerPrefix).
+const MANAGER_PREFIX = 'manager:'
 
 // answerText is a person's answers, one per question.
 function answerText(answers: TalkootAnswered[]): string {
@@ -99,6 +109,7 @@ export function RoomLine({
             ? t('%s approved a roster change from %s', who(line.by ?? ''), who(line.proposer ?? ''))
             : t('%s changed the roster', who(line.by ?? ''))}
           {line.changes && line.changes.length > 0 && ` (${line.changes.map((c) => c.member).join(', ')})`}
+          {line.team && line.team.length > 0 && `; ${t('the team: %s', line.team.map((c) => c.field).join(', '))}`}
           {line.reason && `; ${line.reason}`}
           {swatch && (
             <>

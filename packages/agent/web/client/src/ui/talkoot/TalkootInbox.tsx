@@ -1,7 +1,7 @@
 import { t, tn } from '../../i18n'
 import type { ClientLike } from '../../platform/ctrlproto/client'
 import { useContext } from 'preact/hooks'
-import type { Decision, TalkootCard, TalkootKickoff, TalkootMemberChange, TalkootMemberEntry, TalkootProposal } from '../../platform/ctrlproto/types'
+import type { Decision, TalkootCard, TalkootKickoff, TalkootMemberChange, TalkootMemberEntry, TalkootProposal, TalkootTeamChange } from '../../platform/ctrlproto/types'
 import { AskRequest } from '../interactions/AskRequest'
 import { PermissionRequest } from '../interactions/PermissionRequest'
 import { who } from './RoomLine'
@@ -135,6 +135,7 @@ function ProposalCard({ proposal, onDecide }: { proposal: TalkootProposal; onDec
       </div>
       <p>{proposal.summary}</p>
       {proposal.why && <p class="talkoot-note">{proposal.why}</p>}
+      {proposal.team && proposal.team.length > 0 && <TeamFields changes={proposal.team} />}
       {looks.length > 0 && <LookBatch changes={looks} />}
       <ul class="talkoot-changes">
         {proposal.changes.map((ch) => (
@@ -217,6 +218,50 @@ function ChangeFields({ change }: { change: TalkootMemberChange }) {
         })}
       </tbody>
     </table>
+  )
+}
+
+// TeamFields lists each team field a proposal changes, before and after, with
+// its class. A raised budget is flagged. A charter is long, so it shows whole
+// in a disclosure, before and after.
+function TeamFields({ changes }: { changes: TalkootTeamChange[] }) {
+  const short = changes.filter((c) => c.field !== 'charter')
+  const charter = changes.find((c) => c.field === 'charter')
+  return (
+    <div class="talkoot-team-change">
+      <div class="talkoot-note">{t('The team changes')}</div>
+      {short.length > 0 && (
+        <table class="talkoot-fields">
+          <tbody>
+            {short.map((c) => (
+              <tr key={c.field} class={`${c.class === 'authority' ? 'authority' : ''}${c.widens ? ' widens' : ''}`}>
+                <th>
+                  {c.field}
+                  {c.class === 'authority' && <span class="talkoot-kind">{t('authority')}</span>}
+                </th>
+                <td>{fieldText(c.before) || t('(default)')}</td>
+                <td>→</td>
+                <td>
+                  {fieldText(c.after) || t('(default)')}
+                  {c.widens && ` ${t('(grants more)')}`}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {charter && (
+        <details open>
+          <summary>
+            {t('The charter changes')} <span class="talkoot-kind">{charter.class}</span>
+          </summary>
+          <div class="talkoot-note">{t('Before')}</div>
+          <pre class="preview">{fieldText(charter.before) || t('(none)')}</pre>
+          <div class="talkoot-note">{t('After')}</div>
+          <pre class="preview">{fieldText(charter.after) || t('(none)')}</pre>
+        </details>
+      )}
+    </div>
   )
 }
 

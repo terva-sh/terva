@@ -1,12 +1,22 @@
+import type { ComponentChildren } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { t, tn } from '../../i18n'
 import type { ClientLike } from '../../platform/ctrlproto/client'
-import type { TalkootListResult, TalkootSummary, TalkootTemplate, TalkootTemplatesResult } from '../../platform/ctrlproto/types'
+import type {
+  ServerHello,
+  TalkootDraft,
+  TalkootDraftsResult,
+  TalkootListResult,
+  TalkootSummary,
+  TalkootTemplate,
+  TalkootTemplatesResult,
+} from '../../platform/ctrlproto/types'
 import type { TalkootHub } from '../../platform/talkoot/hub'
-import { panelHref } from '../../ui/navlinks'
+import { AppSwitcher } from '../../ui/AppSwitcher'
 import { NewTalkoot } from '../../ui/talkoot/NewTalkoot'
 import { noticeSupport, useTalkootNotify, useTeamNotices } from '../../ui/talkoot/notify'
 import { useTalkootPerson } from '../../ui/talkoot/person'
+import { TeamManager } from '../../ui/talkoot/TeamManager'
 import { PersonInput, useTeamTab } from '../../ui/talkoot/TalkootScreen'
 import { TeamMark, teamStateLabel } from '../../ui/talkoot/TeamMark'
 import { TeamView } from './TeamView'
@@ -14,15 +24,41 @@ import { TeamView } from './TeamView'
 // Shell holds what is true across teams: the talkoots on this daemon, the one
 // open, the person's name, and whether the new-team form is open. TeamView
 // draws one team. The rail's team list and the person's name come from here.
-export function Shell({ client, hub, generation, workspace = '' }: { client: ClientLike; hub: TalkootHub; generation: number; workspace?: string }) {
+//
+// link is a ?team= and ?member= deep link, already validated. Its team wins over
+// the one this browser last opened, and its member opens only in that team.
+export function Shell({
+  client,
+  hub,
+  generation,
+  workspace = '',
+  hello,
+  link = { team: '', member: '' },
+}: {
+  client: ClientLike
+  hub: TalkootHub
+  generation: number
+  workspace?: string
+  hello?: ServerHello | null
+  link?: { team: string; member: string }
+}) {
   const [list, setList] = useState<TalkootSummary[] | null>(null)
   const [error, setError] = useState('')
-  const [picked, setPicked] = useState(() => localStorage.getItem('terva_talkoot') ?? '')
+  const [picked, setPicked] = useState(() => link.team || (localStorage.getItem('terva_talkoot') ?? ''))
+  // The link is spent the first time the person picks a team, so coming back
+  // to the linked team later opens its room rather than the linked member.
+  const [linked, setLinked] = useState(link)
   const [creating, setCreating] = useState(false)
-  // What the first-run page opened the form on: a template, or the builder.
-  const [start, setStart] = useState<{ template?: string; build?: boolean }>({})
-  const create = (s: { template?: string; build?: boolean } = {}) => {
+  // What the first-run page opened the form on: a template, the builder, or a
+  // team manager's draft.
+  const [start, setStart] = useState<Start>({})
+  // 🔑 Each open of the form remounts it. The form reads its start only on
+  // mount, so a second Review while the builder is open would otherwise keep
+  // the first draft's id and members.
+  const [opened, setOpened] = useState(0)
+  const create = (s: Start = {}) => {
     setStart(s)
+    setOpened((n) => n + 1)
     setCreating(true)
     setDrawer(false)
   }
@@ -34,8 +70,28 @@ export function Shell({ client, hub, generation, workspace = '' }: { client: Cli
   // Only the newest list read may land. One that started before a create
   // would otherwise replace the list with one that lacks the new team.
   const reads = useRef(0)
+  const [drafts, setDrafts] = useState<TalkootDraft[]>([])
+  const draftReads = useRef(0)
+  // A daemon without the verb answers with an error, and the app shows no
+  // drafts rather than a problem.
+  const refreshDrafts = () => {
+    const mine = ++draftReads.current
+    client.send<TalkootDraftsResult>('talkoot.drafts', null).then(
+      (r) => {
+        if (mine === draftReads.current) setDrafts(r.drafts ?? [])
+      },
+      () => {},
+    )
+  }
+  const discard = (id: string) => {
+    client.send('talkoot.discard_draft', { id }).then(
+      () => refreshDrafts(),
+      (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
+    )
+  }
   const refresh = () => {
     const mine = ++reads.current
+    refreshDrafts()
     return client.send<TalkootListResult>('talkoot.list', null).then(
       (r) => {
         if (mine !== reads.current) return
@@ -61,27 +117,36 @@ export function Shell({ client, hub, generation, workspace = '' }: { client: Cli
   useTeamNotices(client, running, creating ? '' : current, notify)
 
   const pick = (id: string) => {
+    setLinked({ team: '', member: '' })
     setPicked(id)
     localStorage.setItem('terva_talkoot', id)
     setCreating(false)
     setDrawer(false)
   }
 
+  // The app switcher heads the rail, above the teams, wherever the rail is
+  // drawn: here, and in TeamView.
   const teams = (
-    <TeamList
-      teams={running}
-      broken={(list ?? []).filter((x) => !x.running && x.problem)}
-      current={creating ? '' : current}
-      onPick={pick}
-      onNew={() => create()}
-    />
+    <>
+      <div class="tka-apps">
+        <AppSwitcher hello={hello} current="talkoot" />
+      </div>
+      <TeamList
+        teams={running}
+        broken={(list ?? []).filter((x) => !x.running && x.problem)}
+        current={creating ? '' : current}
+        onPick={pick}
+        onNew={() => create()}
+        // The first-run page shows the drafts itself, so the rail does not
+        // list them twice.
+        drafts={!creating && !team ? null : <DraftList drafts={drafts} onReview={(d) => create({ draft: d })} onDiscard={discard} />}
+      />
+    </>
   )
   const you = (
     <div class="tka-you">
       <span class="talkoot-note">{t('You are')}</span> <PersonInput person={person} onCommit={setPerson} />
-      <a class="btn sm ghost" href={panelHref()} title={t('Open the control panel')}>
-        {t('Panel')}
-      </a>
+      <TeamManager client={client} />
       {noticeSupport() !== 'none' && (
         <label class="tka-notify talkoot-note">
           <input type="checkbox" checked={notify} onChange={(e) => void setNotify((e.target as HTMLInputElement).checked)} />{' '}
@@ -105,6 +170,7 @@ export function Shell({ client, hub, generation, workspace = '' }: { client: Cli
         teams={teams}
         you={you}
         listError={error}
+        initialMember={current === linked.team ? linked.member : ''}
         onTeamChanged={() => void refresh()}
         notify={notify}
       />
@@ -127,6 +193,7 @@ export function Shell({ client, hub, generation, workspace = '' }: { client: Cli
         {error && <div class="talkoot-error">{error}</div>}
         {creating ? (
           <NewTalkoot
+            key={opened}
             client={client}
             taken={(list ?? []).map((x) => x.id)}
             onCreated={(id) => {
@@ -139,12 +206,58 @@ export function Shell({ client, hub, generation, workspace = '' }: { client: Cli
             onCancel={() => setCreating(false)}
             initialTemplate={start.template}
             initialBuild={start.build}
+            initialDraft={start.draft}
           />
         ) : (
-          list && <FirstRun client={client} workspace={workspace} person={person} onPerson={setPerson} onCreate={create} />
+          list && (
+            <FirstRun
+              client={client}
+              workspace={workspace}
+              person={person}
+              onPerson={setPerson}
+              onCreate={create}
+              drafts={<DraftList drafts={drafts} onReview={(d) => create({ draft: d })} onDiscard={discard} />}
+            />
+          )
         )}
       </main>
     </div>
+  )
+}
+
+// Start is what the new-team form opens on.
+type Start = { template?: string; build?: boolean; draft?: { id: string; text: string } }
+
+// DraftList shows the team manager's drafts of new teams. Review opens the
+// builder on one, and only the person's Create there makes the team.
+function DraftList({
+  drafts,
+  onReview,
+  onDiscard,
+}: {
+  drafts: TalkootDraft[]
+  onReview: (d: TalkootDraft) => void
+  onDiscard: (id: string) => void
+}) {
+  if (drafts.length === 0) return null
+  return (
+    <section class="talkoot-drafts" aria-label={t('Drafts from the team manager')}>
+      <h3 class="tka-head">{t('Drafts from the team manager')}</h3>
+      {drafts.map((d) => (
+        <div key={d.id} class="talkoot-draft">
+          <strong>{d.id}</strong>
+          {d.problem ? <p class="talkoot-error">{t('This draft cannot be read: %s', d.problem)}</p> : <p class="talkoot-note">{d.why}</p>}
+          <div class="card-actions">
+            <button class="btn sm" disabled={!!d.problem} onClick={() => onReview(d)}>
+              {t('Review')}
+            </button>
+            <button class="btn sm ghost" onClick={() => onDiscard(d.id)}>
+              {t('Discard')}
+            </button>
+          </div>
+        </div>
+      ))}
+    </section>
   )
 }
 
@@ -157,12 +270,14 @@ function FirstRun({
   person,
   onPerson,
   onCreate,
+  drafts,
 }: {
   client: ClientLike
   workspace: string
   person: string
   onPerson: (name: string) => void
-  onCreate: (s?: { template?: string; build?: boolean }) => void
+  onCreate: (s?: Start) => void
+  drafts: ComponentChildren
 }) {
   const [templates, setTemplates] = useState<TalkootTemplate[]>([])
   useEffect(() => {
@@ -187,6 +302,7 @@ function FirstRun({
         <PersonInput person={person} onCommit={onPerson} />
       </label>
       {!person && <p class="talkoot-note">{t('The team addresses you by this name. You need one to post, answer, and pause.')}</p>}
+      {drafts}
       <h3>{t('Pick a template')}</h3>
       <ul class="talkoot-template-list">
         {templates.map((x) => (
@@ -204,6 +320,10 @@ function FirstRun({
         <button class="btn ghost" onClick={() => onCreate({ build: true })}>
           {t('Build a team member by member')}
         </button>
+      </p>
+      <p>
+        <TeamManager client={client} primary />{' '}
+        <span class="talkoot-note">{t('Or describe the team you want to the team manager. It drafts a team for you to review and create.')}</span>
       </p>
       <h3>{t('What happens next')}</h3>
       <ol class="talkoot-steps">
@@ -225,12 +345,14 @@ function TeamList({
   current,
   onPick,
   onNew,
+  drafts,
 }: {
   teams: TalkootSummary[]
   broken: TalkootSummary[]
   current: string
   onPick: (id: string) => void
   onNew: () => void
+  drafts: ComponentChildren
 }) {
   return (
     <section class="tka-section" aria-label={t('Teams')}>
@@ -250,6 +372,7 @@ function TeamList({
       <button class="btn sm" onClick={onNew}>
         {t('New team')}
       </button>
+      {drafts}
     </section>
   )
 }
