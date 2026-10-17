@@ -222,7 +222,14 @@ export function useTeamTab(team: TalkootSummary | undefined) {
 // would act as a person and write read marks under its own key.
 export function PersonInput({ person, onCommit }: { person: string; onCommit: (name: string) => void }) {
   const [draft, setDraft] = useState(person)
-  useEffect(() => setDraft(person), [person])
+  // Only a change of the committed name replaces the draft. A mount-time
+  // reset would run after the first keystroke and erase it.
+  const last = useRef(person)
+  useEffect(() => {
+    if (last.current === person) return
+    last.current = person
+    setDraft(person)
+  }, [person])
   const commit = () => {
     if (draft.trim() !== person) onCommit(draft)
   }

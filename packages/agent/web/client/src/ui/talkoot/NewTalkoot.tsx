@@ -8,6 +8,7 @@ import type {
   TalkootTemplatesResult,
   TalkootView,
 } from '../../platform/ctrlproto/types'
+import { TeamBuilder } from './TeamBuilder'
 
 const ID = /^[a-z][a-z0-9-]*$/
 
@@ -28,14 +29,19 @@ export function NewTalkoot({
   taken,
   onCreated,
   onCancel,
+  initialTemplate = '',
+  initialBuild = false,
 }: {
   client: ClientLike
   taken: string[]
   onCreated: (id: string) => void
   onCancel: () => void
+  // The template the first-run page picked, or the builder it opened.
+  initialTemplate?: string
+  initialBuild?: boolean
 }) {
   const [templates, setTemplates] = useState<TalkootTemplate[] | null>(null)
-  const [template, setTemplate] = useState('')
+  const [template, setTemplate] = useState(initialTemplate)
   const [id, setId] = useState('')
   const [budget, setBudget] = useState('')
   const [drop, setDrop] = useState<string[]>([])
@@ -47,13 +53,15 @@ export function NewTalkoot({
   const seq = useRef(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [building, setBuilding] = useState(initialBuild)
 
   useEffect(() => {
     client.send<TalkootTemplatesResult>('talkoot.templates', null).then(
       (r) => {
         setTemplates(r.templates)
         const first = r.templates.find((x) => !x.problem)
-        if (first) setTemplate(first.name)
+        const wanted = r.templates.find((x) => x.name === initialTemplate && !x.problem)
+        if (!wanted && first) setTemplate(first.name)
       },
       (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
     )
@@ -111,9 +119,17 @@ export function NewTalkoot({
   const blocked = preview ? preview.result.members.some((m) => !m.available) || (preview.result.problems?.length ?? 0) > 0 : true
   const picked = templates?.find((x) => x.name === template)
 
+  if (building) return <TeamBuilder client={client} taken={taken} onCreated={onCreated} onCancel={() => setBuilding(false)} />
+
   return (
     <div class="talkoot-new">
       <h2>{t('New team from a template')}</h2>
+      <p class="talkoot-note">
+        {t('No template fits?')}{' '}
+        <button class="btn sm" onClick={() => setBuilding(true)}>
+          {t('Build a team')}
+        </button>
+      </p>
       {error && <div class="talkoot-error">{error}</div>}
       <label class="talkoot-field">
         <span>{t('Template')}</span>
@@ -131,6 +147,9 @@ export function NewTalkoot({
           {picked.source === 'repo' && ` ${t('This template comes from the repository. Read every member below before you create the team.')}`}
         </p>
       )}
+      <p class="talkoot-note talkoot-template-sources">
+        {t('Templates come from your own directory, $TERVA_HOME/talkoot-templates, then your extensions, then the built-in set, then this repository\'s .terva/talkoot. To add one, save a running team as a template, or put a roster without a home in your directory.')}
+      </p>
       {templates?.filter((x) => x.problem).map((x) => (
         <p key={x.name} class="talkoot-note">
           {x.name}: {x.problem}

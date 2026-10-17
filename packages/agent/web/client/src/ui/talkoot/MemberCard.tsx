@@ -8,9 +8,9 @@ import { MemberMark } from './MemberMark'
 import { memberModelSummary } from './memberModel'
 
 // The postures a member may take: terva's approval modes.
-const POSTURES = ['plan', 'ask', 'auto-edit', 'workspace', 'yolo']
+export const POSTURES = ['plan', 'ask', 'auto-edit', 'workspace', 'yolo']
 // Mirrors tools.SwarmTierNames, including the separate cost tier.
-const TIERS = ['weak', 'medium', 'strong', 'cheap']
+export const TIERS = ['weak', 'medium', 'strong', 'cheap']
 const CUSTOM_MODEL = '#custom'
 
 // The fields the card edits as text, in the order it shows them, by class.

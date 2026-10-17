@@ -240,8 +240,6 @@ export interface SessionInfo {
   persona?: string
   // recruit names the talkoot a recruiter session recruits for.
   recruit?: string
-  // manager is set on the daemon's Talkoot team manager session.
-  manager?: boolean
   // reasoning is this session's thinking-level override as the user chose it
   // ('off' | 'minimum' | 'low' | 'medium' | 'high' | 'maximum' | 'max'), or ''
   // when the session follows the global setting. Raw rather than normalized:
@@ -324,11 +322,6 @@ export interface SessionInfo {
   // its tile status off these (orchestration frontend stage 4.0).
   live?: boolean
   busy?: boolean
-  // waiting = what a live session waits on a person for: 'approval' while a
-  // tool call waits for approval, 'question' while a question set waits for an
-  // answer. Absent when it waits on nothing. The daemon pushes sessions_changed
-  // when a request opens or closes, so a re-list keeps it current.
-  waiting?: 'approval' | 'question'
 }
 
 // CreateOpts parameterizes sessions.create. Beyond the coding fields
@@ -2751,9 +2744,6 @@ export type Verb =
   | 'talkoot.propose'
   | 'talkoot.resume'
   | 'talkoot.recruit'
-  | 'talkoot.manager'
-  | 'talkoot.drafts'
-  | 'talkoot.discard_draft'
   | 'talkoot.ref'
   | 'talkoot.notes'
   | 'talkoot.worker'
@@ -2970,23 +2960,6 @@ export interface TalkootSaveTemplateParams {
   id: string
   name: string
   description?: string
-}
-
-// talkoot.drafts lists the team manager's drafts of new teams for this
-// workspace, newest first. `text` is a roster with no home: preview it with
-// talkoot.preview{id, text}. Only talkoot.create makes the team.
-export interface TalkootDraftsResult {
-  drafts: TalkootDraft[]
-}
-
-// `problem` says why the draft file cannot be read. Such a draft can only be
-// discarded.
-export interface TalkootDraft {
-  id: string
-  text: string
-  why: string
-  at: string
-  problem?: string
 }
 
 export interface TalkootTemplatesResult {
@@ -3226,8 +3199,6 @@ export interface TalkootLine {
   proposer?: string
   edited?: boolean
   changes?: TalkootMemberChange[]
-  // Set on a roster line that changed the team's own fields.
-  team?: TalkootTeamChange[]
   // On a roster line that changed the team colour: the colour before and
   // after, each with the default filled in.
   color_before?: string
@@ -3348,17 +3319,6 @@ export interface TalkootMemberChange {
   mark_after?: TalkootMark
 }
 
-// TalkootTeamChange is one team field before and after a roster change: the
-// title, the colour, the charter, or the daily budget. An unset `before` or
-// `after` is a field the roster does not set. `widens` marks a raised budget.
-export interface TalkootTeamChange {
-  field: 'title' | 'color' | 'charter' | 'budget_usd_per_day'
-  class: 'look' | 'voice' | 'authority'
-  before?: string | number
-  after?: string | number
-  widens?: boolean
-}
-
 // TalkootProposal is a roster change that waits for a person. Only
 // talkoot.decide applies it. `problem` says why an approval was refused.
 export interface TalkootProposal {
@@ -3374,8 +3334,6 @@ export interface TalkootProposal {
   envelope?: string
   ops: TalkootOp[]
   changes: TalkootMemberChange[]
-  // Each team field the proposal changes, before and after.
-  team?: TalkootTeamChange[]
   status: 'pending' | 'approved' | 'declined'
   decided_by?: string
   decided_at?: string
@@ -3571,7 +3529,6 @@ export interface VerbParams {
   'talkoot.ref': TalkootOpenRefParams
   'talkoot.notes': TalkootRef
   'talkoot.save_template': TalkootSaveTemplateParams
-  'talkoot.discard_draft': TalkootRef
   'talkoot.worker': TalkootWorkerParams
 }
 

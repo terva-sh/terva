@@ -12,6 +12,7 @@ import { OpenRefContext } from './RefChip'
 import { MarksContext, MemberMark } from './MemberMark'
 import { MemberCard } from './MemberCard'
 import { TeamBudget } from './TeamBudget'
+import { SaveTemplate } from './SaveTemplate'
 import { memberModelSummary } from './memberModel'
 import { faceFor, sideIn } from './face/adapter'
 import { MOTIONS, setMotionSetting, useMotionState, type Motion } from './face/motion'
@@ -175,6 +176,7 @@ export function TalkootTeam({
           <div class="talkoot-side-foot">
             <span class="talkoot-spend">{t('Today: $%s', spend.toFixed(2))}</span>
             {view && <TeamBudget client={client} view={view} person={person} canSteer={canSteer} onError={setActionError} />}
+            <SaveTemplate client={client} id={id} onError={setActionError} />
             <MotionPicker />
             {canSteer && (
               <button class="btn sm" onClick={() => (teamPaused ? resume({}) : pause({}))}>

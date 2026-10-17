@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -95,6 +96,175 @@ func TestATalkootIsCreatedFromTheBuiltinCodingTeam(t *testing.T) {
 	again, err := w.PreviewTalkoot(ctx, ctrlproto.TalkootPreviewParams{Template: "coding", ID: "team"})
 	if err != nil || len(again.Problems) == 0 {
 		t.Errorf("a second preview of a taken id: %+v, %v", again.Problems, err)
+	}
+}
+
+// The person chose six built-in templates on 2026-10-14 (TKT-01M4YQN86).
+// Each one must preview clean on a fresh install: real personas, the roster
+// rules, and native drivers only.
+func TestEveryBuiltinTemplatePreviewsClean(t *testing.T) {
+	cwd := talkootHome(t)
+	w := openTalkootWorkspace(t, cwd)
+	ctx := t.Context()
+	list, err := w.TalkootTemplates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, tm := range list.Templates {
+		if tm.Source != talkoot.SourceBuiltin {
+			continue
+		}
+		got = append(got, tm.Name)
+		if tm.Problem != "" || tm.Description == "" || tm.Title == "" {
+			t.Errorf("template %s = %+v", tm.Name, tm)
+			continue
+		}
+		pv, err := w.PreviewTalkoot(ctx, ctrlproto.TalkootPreviewParams{Template: tm.Name, ID: "t-" + tm.Name})
+		if err != nil {
+			t.Errorf("%s: %v", tm.Name, err)
+			continue
+		}
+		if len(pv.Problems) != 0 {
+			t.Errorf("%s has problems on a fresh install: %v", tm.Name, pv.Problems)
+		}
+		for _, m := range pv.Members {
+			if !m.Available || m.Driver != talkoot.DriverNative {
+				t.Errorf("%s: member %s uses driver %s; a built-in team must run on any install", tm.Name, m.ID, m.Driver)
+			}
+		}
+	}
+	want := []string{"coding", "decision-council", "documentation", "personal-assistant", "research", "review-pair"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("built-in templates = %v, want %v", got, want)
+	}
+}
+
+// The team builder (TKT-01M4YQN88) previews a roster the person composed,
+// with no template, and creates it through talkoot.create text.
+func TestAComposedRosterPreviewsAndCreatesWithoutATemplate(t *testing.T) {
+	cwd := talkootHome(t)
+	w := openTalkootWorkspace(t, cwd)
+	ctx := t.Context()
+	composed := "---\nname: duo\nbudget_usd_per_day: 3\nmembers:\n  - id: lead\n    role: coordinator\n    persona: mieli\n  - id: helper\n    role: specialist\n    persona: kirjuri\n    posture: auto-edit\n  - id: second\n    role: specialist\n    posture: auto-edit\n---\n\nWork in pairs.\n"
+
+	// Two writers in the shared checkout: the preview names the rule.
+	bad, err := w.PreviewTalkoot(ctx, ctrlproto.TalkootPreviewParams{Text: composed, ID: "duo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(bad.Problems, "; "), "members helper, second can all write to the shared checkout") {
+		t.Fatalf("two shared writers previewed without a problem: %v", bad.Problems)
+	}
+
+	fixed := strings.Replace(composed, "  - id: second\n    role: specialist\n    posture: auto-edit\n", "  - id: second\n    role: specialist\n", 1)
+	pv, err := w.PreviewTalkoot(ctx, ctrlproto.TalkootPreviewParams{Text: fixed, ID: "duo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pv.Problems) != 0 || !sameDir(pv.Home, cwd) || len(pv.Members) != 3 || pv.Template.Source != talkoot.SourceComposed {
+		t.Fatalf("preview = %+v", pv)
+	}
+	v, err := w.CreateTalkoot(ctx, ctrlproto.TalkootCreateParams{ID: "duo", Text: pv.Text})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.ID != "duo" || len(v.Members) != 3 || !strings.Contains(v.Text, "Work in pairs.") {
+		t.Fatalf("create returned %+v", v)
+	}
+
+	// The web composer quotes every scalar and writes lists and marks in flow
+	// style (builder.ts composeRoster). That shape must preview clean too.
+	web := "---\nname: \"trio\"\nbudget_usd_per_day: 4\nmembers:\n  - id: \"lead\"\n    role: \"coordinator\"\n    persona: \"mieli\"\n    posture: \"auto-edit\"\n  - id: \"check\"\n    role: \"specialist\"\n    mark: {shape: \"circle\", color: \"#336699\"}\n    reviewer: true\n    turns_per_day: 10\n    tools: [\"read\", \"grep\"]\n---\n\nKeep it short.\n"
+	wv, err := w.PreviewTalkoot(ctx, ctrlproto.TalkootPreviewParams{Text: web, ID: "trio"})
+	if err != nil || len(wv.Problems) != 0 || len(wv.Members) != 2 {
+		t.Fatalf("the web composer's roster: %+v, %v", wv, err)
+	}
+
+	// A composed roster may not carry a home or a waiver, and not both forms.
+	for name, p := range map[string]ctrlproto.TalkootPreviewParams{
+		"home":   {Text: strings.Replace(fixed, "name: duo\n", "name: duo\nhome: /elsewhere\n", 1), ID: "x"},
+		"waiver": {Text: strings.Replace(fixed, "name: duo\n", "name: duo\nteam_budget_waived: true\n", 1), ID: "x"},
+		"both":   {Text: fixed, Template: "coding", ID: "x"},
+	} {
+		if _, err := w.PreviewTalkoot(ctx, p); err == nil {
+			t.Errorf("a composed roster with %s previewed", name)
+		}
+	}
+}
+
+// The team builder starts from a template by copying the preview's member
+// rows. A member field the wire row lacks would drop out of the composed
+// roster in silence, so the row must carry every field the roster has.
+func TestThePreviewRowCarriesEveryMemberField(t *testing.T) {
+	tags := map[string]bool{}
+	rt := reflect.TypeOf(ctrlproto.TalkootRosterMember{})
+	for i := 0; i < rt.NumField(); i++ {
+		tags[strings.Split(rt.Field(i).Tag.Get("json"), ",")[0]] = true
+	}
+	for _, f := range talkoot.MemberFields {
+		if !tags[f.Name] {
+			t.Errorf("TalkootRosterMember has no %q field; a builder seeded from a template drops it", f.Name)
+		}
+	}
+}
+
+// Save as template: a running team becomes a user template that the form
+// lists, without the home, colour, or waiver of the team it came from.
+func TestARunningTeamIsSavedAsAUserTemplate(t *testing.T) {
+	cwd := talkootHome(t)
+	w := openTalkootWorkspace(t, cwd)
+	ctx := t.Context()
+	pv, err := w.PreviewTalkoot(ctx, ctrlproto.TalkootPreviewParams{Template: "review-pair", ID: "pair"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.CreateTalkoot(ctx, ctrlproto.TalkootCreateParams{ID: "pair", Template: "review-pair", Digest: pv.Digest}); err != nil {
+		t.Fatal(err)
+	}
+	color := "#336699"
+	if _, err := w.UpdateTalkoot(ctx, ctrlproto.TalkootUpdateParams{ID: "pair", By: "drew", Color: &color}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := w.SaveTalkootTemplate(ctx, ctrlproto.TalkootSaveTemplateParams{ID: "pair", Name: "our-pair", Description: "Our pair."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "our-pair" || got.Source != talkoot.SourceUser || got.Members != 2 || got.Description != "Our pair." || got.Problem != "" {
+		t.Fatalf("saved template = %+v", got)
+	}
+	raw, err := os.ReadFile(filepath.Join(talkoot.TemplatesDir(), "our-pair.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gone := range []string{"home:", "color:", cwd} {
+		if strings.Contains(string(raw), gone) {
+			t.Errorf("the saved template keeps %q:\n%s", gone, raw)
+		}
+	}
+	list, err := w.TalkootTemplates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := false
+	for _, tm := range list.Templates {
+		listed = listed || (tm.Name == "our-pair" && tm.Source == talkoot.SourceUser)
+	}
+	if !listed {
+		t.Fatalf("the form does not list the saved template: %+v", list.Templates)
+	}
+	again, err := w.PreviewTalkoot(ctx, ctrlproto.TalkootPreviewParams{Template: "our-pair", ID: "pair-two"})
+	if err != nil || len(again.Problems) != 0 {
+		t.Fatalf("a preview of the saved template: %v, %v", again.Problems, err)
+	}
+
+	var ce *ctrlproto.Error
+	if _, err := w.SaveTalkootTemplate(ctx, ctrlproto.TalkootSaveTemplateParams{ID: "pair", Name: "our-pair"}); !errors.As(err, &ce) || ce.Code != ctrlproto.CodeConflict {
+		t.Errorf("a second save of one name: %v", err)
+	}
+	if _, err := w.SaveTalkootTemplate(ctx, ctrlproto.TalkootSaveTemplateParams{ID: "nobody", Name: "x"}); !errors.As(err, &ce) || ce.Code != ctrlproto.CodeNotFound {
+		t.Errorf("a save of a team that does not exist: %v", err)
 	}
 }
 

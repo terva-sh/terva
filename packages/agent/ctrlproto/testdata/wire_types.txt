@@ -1004,7 +1004,6 @@ SessionInfo
 	model	string	omitempty
 	persona	string	omitempty
 	recruit	string	omitempty
-	manager	bool	omitempty
 	reasoning	string	omitempty
 	experience	string	omitempty
 	background	string	omitempty
@@ -1034,7 +1033,6 @@ SessionInfo
 	subscription	bool	omitempty
 	live	bool	omitempty
 	busy	bool	omitempty
-	waiting	string	omitempty
 SessionProposal
 	id	string
 	kind	string
@@ -1224,14 +1222,6 @@ TalkootDecideParams
 	decision	string
 	ops	[]TalkootOp	omitempty
 	reason	string	omitempty
-TalkootDraft
-	id	string
-	text	string
-	why	string
-	at	string
-	problem	string	omitempty
-TalkootDraftsResult
-	drafts	[]TalkootDraft
 TalkootEnvelope
 	id	string
 	talkoot	string
@@ -1287,7 +1277,6 @@ TalkootLine
 	proposer	string	omitempty
 	edited	bool	omitempty
 	changes	[]TalkootMemberChange	omitempty
-	team	[]TalkootTeamChange	omitempty
 	color_before	string	omitempty
 	color_after	string	omitempty
 	answers	[]TalkootAnswered	omitempty
@@ -1425,7 +1414,6 @@ TalkootProposal
 	envelope	string	omitempty
 	ops	[]TalkootOp
 	changes	[]TalkootMemberChange
-	team	[]TalkootTeamChange	omitempty
 	status	string
 	decided_by	string	omitempty
 	decided_at	time.Time	omitzero
@@ -1499,12 +1487,6 @@ TalkootSummary
 	color	string	omitempty
 	own_color	string	omitempty
 	state	string	omitempty
-TalkootTeamChange
-	field	string
-	class	string
-	before	any	omitempty
-	after	any	omitempty
-	widens	bool	omitempty
 TalkootTemplate
 	name	string
 	title	string	omitempty

@@ -18,9 +18,7 @@ import { PersonInput, TeamColor } from '../../ui/talkoot/TalkootScreen'
 import { loadSeen, MotionPicker, orderMembers, PRESENCE_LABEL, saveSeen } from '../../ui/talkoot/TalkootTeam'
 import { TeamBudget } from '../../ui/talkoot/TeamBudget'
 import { SaveTemplate } from '../../ui/talkoot/SaveTemplate'
-import { Recruit } from '../../ui/talkoot/Recruit'
 import { useTalkoot } from '../../ui/talkoot/useTalkoot'
-import { useCardNotices } from '../../ui/talkoot/notify'
 import { SidePanel, type SideTab } from './SidePanel'
 import { Thread } from './Thread'
 
@@ -43,9 +41,7 @@ export function TeamView({
   teams,
   you,
   listError,
-  initialMember = '',
   onTeamChanged,
-  notify = false,
 }: {
   client: ClientLike
   hub: TalkootHub
@@ -56,18 +52,11 @@ export function TeamView({
   teams: ComponentChildren
   you: ComponentChildren
   listError: string
-  // A member to open on first render, from a ?member= link. A member the team
-  // does not have falls back to the room, as any unknown selection does.
-  initialMember?: string
   onTeamChanged: () => void
-  notify?: boolean
 }) {
   const id = team.id
   const { state, error, loadOlder, refreshView } = useTalkoot(client, hub, id, generation)
-  // After useTalkoot, so its listener folds a card in first. The notice
-  // listener still reads the cards of the last render, before the event.
-  useCardNotices(hub, id, team.title || team.name || id, notify, state.cards)
-  const [selected, setSelected] = useState(initialMember || ROOM)
+  const [selected, setSelected] = useState(ROOM)
   const [actionError, setActionError] = useState('')
   const [drawer, setDrawer] = useState(false)
   // A jump to a card waits for the view that holds it to render.
@@ -200,7 +189,6 @@ export function TeamView({
                 <span class="talkoot-spend">{t('Today: $%s', spend.toFixed(2))}</span>
                 {view && <TeamBudget client={client} view={view} person={person} canSteer={canSteer} onError={setActionError} />}
                 <SaveTemplate client={client} id={id} onError={setActionError} />
-                {canSteer && <Recruit key={id} client={client} id={id} onError={setActionError} />}
                 {canSteer && (
                   <button class="btn sm" onClick={() => (teamPaused ? resume({}) : pause({}))}>
                     {teamPaused ? t('Resume the team') : t('Pause the team')}

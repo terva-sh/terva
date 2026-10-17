@@ -419,18 +419,20 @@ const (
 	MethodTalkootProposals Method = "talkoot.proposals" // params TalkootProposalsParams, result TalkootProposalsResult; read-only
 	MethodTalkootTemplates Method = "talkoot.templates" // result TalkootTemplatesResult; read-only
 	MethodTalkootPreview   Method = "talkoot.preview"   // params TalkootPreviewParams, result TalkootPreview; read-only
-	MethodTalkootRef       Method = "talkoot.ref"       // params TalkootOpenRefParams, result TalkootRefText
-	MethodTalkootNotes     Method = "talkoot.notes"     // params TalkootRef, result TalkootNotesResult; read-only
-	MethodTalkootWorker    Method = "talkoot.worker"    // params TalkootWorkerParams, result TaskInfo
-	MethodTalkootPropose   Method = "talkoot.propose"   // params TalkootProposeParams, result TalkootProposal
-	MethodTalkootDecide    Method = "talkoot.decide"    // params TalkootDecideParams, result TalkootProposal
-	MethodTalkootCreate    Method = "talkoot.create"    // params TalkootCreateParams, result TalkootView
-	MethodTalkootUpdate    Method = "talkoot.update"    // params TalkootUpdateParams, result TalkootView
-	MethodTalkootPost      Method = "talkoot.post"      // params TalkootPostParams, result TalkootEnvelope
-	MethodTalkootPause     Method = "talkoot.pause"     // params TalkootPauseParams
-	MethodTalkootRecruit   Method = "talkoot.recruit"   // params TalkootRecruitParams, result SessionResult
-	MethodTalkootResume    Method = "talkoot.resume"    // params TalkootResumeParams
-	MethodTalkootKickoff   Method = "talkoot.kickoff"   // params TalkootKickoffParams, result TalkootKickoff
+	// talkoot.save_template writes a running team's roster to the user tier.
+	MethodTalkootSaveTemplate Method = "talkoot.save_template" // params TalkootSaveTemplateParams, result TalkootTemplate
+	MethodTalkootRef          Method = "talkoot.ref"           // params TalkootOpenRefParams, result TalkootRefText
+	MethodTalkootNotes        Method = "talkoot.notes"         // params TalkootRef, result TalkootNotesResult; read-only
+	MethodTalkootWorker       Method = "talkoot.worker"        // params TalkootWorkerParams, result TaskInfo
+	MethodTalkootPropose      Method = "talkoot.propose"       // params TalkootProposeParams, result TalkootProposal
+	MethodTalkootDecide       Method = "talkoot.decide"        // params TalkootDecideParams, result TalkootProposal
+	MethodTalkootCreate       Method = "talkoot.create"        // params TalkootCreateParams, result TalkootView
+	MethodTalkootUpdate       Method = "talkoot.update"        // params TalkootUpdateParams, result TalkootView
+	MethodTalkootPost         Method = "talkoot.post"          // params TalkootPostParams, result TalkootEnvelope
+	MethodTalkootPause        Method = "talkoot.pause"         // params TalkootPauseParams
+	MethodTalkootRecruit      Method = "talkoot.recruit"       // params TalkootRecruitParams, result SessionResult
+	MethodTalkootResume       Method = "talkoot.resume"        // params TalkootResumeParams
+	MethodTalkootKickoff      Method = "talkoot.kickoff"       // params TalkootKickoffParams, result TalkootKickoff
 
 	// --- tenants group (served ONLY by the `terva serve` supervisor; see
 	// [GroupTenants] and tenants.go — deliberately absent from the dispatch
@@ -489,7 +491,7 @@ func (m Method) Group() Group {
 		MethodTalkootProposals, MethodTalkootPropose, MethodTalkootDecide,
 		MethodTalkootUpdate, MethodTalkootPost, MethodTalkootPause, MethodTalkootResume,
 		MethodTalkootRecruit, MethodTalkootKickoff, MethodTalkootTemplates, MethodTalkootPreview, MethodTalkootRef,
-		MethodTalkootNotes, MethodTalkootWorker:
+		MethodTalkootNotes, MethodTalkootWorker, MethodTalkootSaveTemplate:
 		return GroupTalkoot
 	case MethodTenantsList, MethodTenantsSuspend, MethodTenantsResume:
 		return GroupTenants

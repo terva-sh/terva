@@ -40,6 +40,9 @@ const (
 	SourceExtPrefix = "ext:"
 	// RepoPrefix starts the name of a repository template.
 	RepoPrefix = "repo:"
+	// SourceComposed is a roster a person composed in the team builder. It
+	// lives in no file and lists in no tier.
+	SourceComposed = "composed"
 )
 
 // TemplatesDirName is the directory a user template or an extension's
@@ -115,6 +118,16 @@ func Templates(repoDir string) []Template {
 		add(repoTemplates(repoDir))
 	}
 	return out
+}
+
+// ComposedTemplate reads a roster a person composed as a template, so a
+// preview and Instantiate treat it as they treat a file. It refuses what a
+// template refuses: a home, a waived team budget, and an oversized text.
+func ComposedTemplate(raw []byte) Template {
+	if len(raw) > maxTemplateSize {
+		return Template{Source: SourceComposed, Problem: fmt.Sprintf("the roster is larger than %d bytes", maxTemplateSize)}
+	}
+	return parseTemplate("composed", raw, SourceComposed, "composed roster")
 }
 
 // LookupTemplate finds one template by name.

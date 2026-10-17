@@ -40,6 +40,9 @@ type TalkootController interface {
 	// PreviewTalkoot shows the roster a template would become, and writes
 	// nothing.
 	PreviewTalkoot(ctx context.Context, p TalkootPreviewParams) (TalkootPreview, error)
+	// SaveTalkootTemplate writes a running talkoot's roster as a user
+	// template, without its home, colour, or budget waiver.
+	SaveTalkootTemplate(ctx context.Context, p TalkootSaveTemplateParams) (TalkootTemplate, error)
 	// OpenTalkootRef reads the file a path: or note: reference names.
 	OpenTalkootRef(ctx context.Context, p TalkootOpenRefParams) (TalkootRefText, error)
 	// TalkootNotes lists the notes the members wrote for the team.
@@ -290,6 +293,15 @@ type TalkootCreateParams struct {
 	Digest          string   `json:"digest,omitempty"`
 }
 
+// TalkootSaveTemplateParams is the talkoot.save_template payload. ID names a
+// running talkoot, and Name is the new template's file stem in
+// $TERVA_HOME/talkoot-templates. Description is optional.
+type TalkootSaveTemplateParams struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
 // TalkootTemplatesResult is the talkoot.templates reply.
 type TalkootTemplatesResult struct {
 	Templates []TalkootTemplate `json:"templates"`
@@ -334,9 +346,11 @@ type TalkootRefText struct {
 
 // TalkootPreviewParams is the talkoot.preview payload. An empty Home is the
 // daemon's own directory. A zero BudgetUSDPerDay keeps the template's
-// suggestion. Drop names the members to leave out.
+// suggestion. Drop names the members to leave out. Text is a roster a person
+// composed, with no home, in place of a template. Send one of the two.
 type TalkootPreviewParams struct {
-	Template        string   `json:"template"`
+	Template        string   `json:"template,omitempty"`
+	Text            string   `json:"text,omitempty"`
 	ID              string   `json:"id"`
 	Home            string   `json:"home,omitempty"`
 	BudgetUSDPerDay float64  `json:"budget_usd_per_day,omitempty"`

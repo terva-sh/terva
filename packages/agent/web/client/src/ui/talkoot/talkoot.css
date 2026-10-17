@@ -27,6 +27,9 @@
 .talkoot-error { margin: 6px 12px; color: var(--danger); font-size: var(--fs-note); }
 .talkoot-note { color: var(--muted); font-size: var(--fs-note); }
 .talkoot-empty { padding: 24px; display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+.talkoot-first-run { max-width: 760px; overflow-y: auto; }
+.talkoot-template-list, .talkoot-steps { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; }
+.talkoot-template-list { list-style: none; padding-left: 0; }
 .talkoot-team { flex: 1; min-height: 0; display: flex; }
 .talkoot-side { width: 230px; flex: none; overflow-y: auto; border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 6px 0; }
 .talkoot-member-row { display: flex; align-items: center; }
@@ -100,6 +103,9 @@
 .talkoot-field { display: flex; align-items: center; gap: 10px; }
 .talkoot-field > span { width: 11em; color: var(--muted); }
 .talkoot-field input, .talkoot-field select { font: inherit; }
+.talkoot-charter { align-items: flex-start; }
+.talkoot-charter textarea { font: inherit; flex: 1; min-width: 0; }
+.talkoot-builder-member { display: flex; flex-direction: column; gap: 4px; }
 .talkoot-preview table { border-collapse: collapse; width: 100%; font-size: var(--fs-note); }
 .talkoot-preview th, .talkoot-preview td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .talkoot-preview tr.unavailable td { color: var(--danger); }

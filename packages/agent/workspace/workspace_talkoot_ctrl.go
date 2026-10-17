@@ -245,7 +245,7 @@ func talkootWireErr(err error, fallback string) error {
 	case errors.Is(err, ErrTalkootNotFound), errors.Is(err, ErrTalkootNotHere):
 		return ctrlproto.Wrap(ctrlproto.CodeNotFound, err)
 	case errors.Is(err, ErrTalkootClosed), errors.Is(err, ErrTalkootExists), errors.Is(err, talkoot.ErrProposalStale),
-		errors.Is(err, ErrKickoffRan), errors.Is(err, ErrPreviewStale):
+		errors.Is(err, ErrKickoffRan), errors.Is(err, ErrPreviewStale), errors.Is(err, talkoot.ErrTemplateExists):
 		return ctrlproto.Wrap(ctrlproto.CodeConflict, err)
 	case errors.Is(err, talkoot.ErrDisabled):
 		return ctrlproto.Wrap(ctrlproto.CodeUnsupported, err)

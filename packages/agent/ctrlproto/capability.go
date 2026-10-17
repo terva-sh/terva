@@ -168,6 +168,9 @@ var writeOnlyMethods = map[Method]bool{
 	// tasks surface is no precedent: its list is scoped to the caller's own
 	// session, and a talkoot's workers are in no caller's session.
 	MethodTalkootWorker: true,
+	// Write, not spend: a saved template lands in the user tier and wakes no
+	// one. It also steers (steerMethods below).
+	MethodTalkootSaveTemplate: true,
 	// Classified at the 2026-09 rebase: the model catalog and tier edits, and a
 	// composer draft, mutate config or session state and reach no provider.
 	MethodModelAdd: true, MethodModelHide: true, MethodModelTiersSet: true,
@@ -232,6 +235,11 @@ var steerMethods = map[Method]bool{
 	// A recruiter files roster proposals, so binding one steers the team.
 	MethodTalkootRecruit: true,
 	MethodTalkootKickoff: true,
+	// 🔑 A user template shadows a built-in or extension template of the same
+	// name in every workspace on this home. So a save decides what a familiar
+	// name such as coding creates next, which only a caller that may create a
+	// team itself may decide (PR #1665 review).
+	MethodTalkootSaveTemplate: true,
 }
 
 // Permits reports whether a caller holding mask may invoke m: every capability

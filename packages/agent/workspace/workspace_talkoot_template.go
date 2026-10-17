@@ -43,6 +43,44 @@ func (w *Workspace) PreviewTalkoot(ctx context.Context, p ctrlproto.TalkootPrevi
 	return pv, nil
 }
 
+// SaveTalkootTemplate writes a running talkoot's roster to the user tier as a
+// template. The roster file is read under the run's read lock, so the saved
+// text is one roster and never half of an update.
+func (w *Workspace) SaveTalkootTemplate(ctx context.Context, p ctrlproto.TalkootSaveTemplateParams) (ctrlproto.TalkootTemplate, error) {
+	if !config.TalkootEnabled() {
+		return ctrlproto.TalkootTemplate{}, talkootWireErr(talkoot.ErrDisabled, ctrlproto.CodeInternal)
+	}
+	run, err := w.talkootRunOf(p.ID)
+	if err != nil {
+		return ctrlproto.TalkootTemplate{}, talkootWireErr(err, ctrlproto.CodeInternal)
+	}
+	var text []byte
+	err = run.do(func(*talkoot.Router) error {
+		var rerr error
+		text, rerr = os.ReadFile(filepath.Join(run.dir, talkoot.FileName))
+		return rerr
+	})
+	if err != nil {
+		return ctrlproto.TalkootTemplate{}, talkootWireErr(err, ctrlproto.CodeInternal)
+	}
+	tmpl, err := talkoot.TemplateFromRoster(text, p.Description)
+	if err != nil {
+		return ctrlproto.TalkootTemplate{}, talkootWireErr(err, ctrlproto.CodeInternal)
+	}
+	if _, err := talkoot.SaveTemplate(p.Name, tmpl); err != nil {
+		code := ctrlproto.CodeInternal
+		if errors.Is(err, talkoot.ErrTemplateInvalid) {
+			code = ctrlproto.CodeBadRequest
+		}
+		return ctrlproto.TalkootTemplate{}, talkootWireErr(err, code)
+	}
+	saved, ok := talkoot.LookupTemplate("", p.Name)
+	if !ok {
+		return ctrlproto.TalkootTemplate{}, ctrlproto.Errorf(ctrlproto.CodeInternal, "talkoot: template %s was saved and does not list", p.Name)
+	}
+	return wireTemplate(saved), nil
+}
+
 // createFromTemplate is talkoot.create's template form. It recomputes the
 // preview, so what it writes is exactly what the caller was shown.
 func (w *Workspace) createFromTemplate(ctx context.Context, p ctrlproto.TalkootCreateParams) (talkootView, error) {
@@ -86,9 +124,21 @@ func (w *Workspace) talkootPreview(p ctrlproto.TalkootPreviewParams) (ctrlproto.
 	if !talkoot.ValidID(p.ID) {
 		return ctrlproto.TalkootPreview{}, nil, fmt.Errorf("talkoot: id %q must be lower case letters, digits, and dashes, starting with a letter", p.ID)
 	}
-	tmpl, ok := w.lookupTalkootTemplate(p.Template)
-	if !ok {
-		return ctrlproto.TalkootPreview{}, nil, fmt.Errorf("%w: no template named %q", ErrTalkootNotFound, p.Template)
+	var tmpl talkoot.Template
+	switch {
+	case p.Template != "" && p.Text != "":
+		return ctrlproto.TalkootPreview{}, nil, errors.New("talkoot: send text or a template, not both")
+	case p.Text != "":
+		// 🔑 A composed roster reads as a template, so it carries no home and
+		// no waiver, and the person's directory fills in home as it does for a
+		// file. Create takes the preview's text, never the builder's.
+		tmpl = talkoot.ComposedTemplate([]byte(p.Text))
+	default:
+		var ok bool
+		tmpl, ok = w.lookupTalkootTemplate(p.Template)
+		if !ok {
+			return ctrlproto.TalkootPreview{}, nil, fmt.Errorf("%w: no template named %q", ErrTalkootNotFound, p.Template)
+		}
 	}
 	home := p.Home
 	if strings.TrimSpace(home) == "" {
