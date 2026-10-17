@@ -109,11 +109,6 @@ export function PanelLanding(
         {/* i18n-exempt — the terva wordmark, a product name */}
         <span class="landing-brand">terva</span>
         <span class="landing-top__spacer" />
-        {stageEnabled && (
-          <a class="landing-top__link" href={stageHref('')} title={t('Open Stage')}>
-            🎭 {t('Stage')}
-          </a>
-        )}
         {/* Same indicator as the app's top bar, and it carried the same flaw:
             colour with no text and no label. The visible wording is the
             connection banner app.tsx renders above this screen. */}

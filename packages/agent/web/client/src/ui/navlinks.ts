@@ -1,11 +1,12 @@
-// Cross-app deep links between the panel (/) and Stage (/stage/).
+// Cross-app deep links between the panel (/), Stage (/stage/), and the Talkoot
+// app (/talkoot/). This file is the one vocabulary every app reads and writes.
 //
-// The two apps are separate documents in separate service-worker scopes, so
-// moving between them is a full navigation: the WebSocket closes and the
-// destination reconnects from scratch. Neither app has a router, and both boot
-// to a default — the panel to its `current` session, Stage to the library. That
-// made round-tripping to read a session's context a manual hunt through the
-// other app's list.
+// The apps are separate documents in separate service-worker scopes, so moving
+// between them is a full navigation: the WebSocket closes and the destination
+// reconnects from scratch. No app has a router, and each boots to a default —
+// the panel to its `current` session, Stage to the library, Talkoot to the last
+// team's room. That made round-tripping to read a session's context a manual
+// hunt through the other app's list.
 //
 // The session travels as a QUERY PARAM rather than a path segment. A path would
 // drag in the service worker's navigation handling, where `navigateFallback` is
@@ -17,14 +18,22 @@
 // first presented, so the destination is already authenticated, and copying
 // tokens into more URLs only widens where they can leak.
 
-// Session ids are `<date>-<time>-<hex>` (core.Session's filename stem). Anything
-// else arrived from a hand-edited URL and is ignored rather than pushed into
-// app state.
-const SESSION_ID = /^[0-9]{8}-[0-9]{6}-[0-9a-f]{8}$/
+// Session ids are `<date>-<time>-<hex>` (core.Session's filename stem). Behind a
+// fleet hub every id also carries the member that owns it, as `<origin>/<id>`
+// (ctrlproto.JoinFederatedID), the hub's own sessions included. The origin
+// pattern mirrors ctrlproto.ValidOrigin: a lower-case host name. Anything else
+// arrived from a hand-edited URL and is ignored rather than pushed into app
+// state.
+const SESSION_ID = /^(?:[a-z0-9](?:[a-z0-9.-]{0,61}[a-z0-9])?\/)?[0-9]{8}-[0-9]{6}-[0-9a-f]{8}$/
 
 // Panes are a small closed vocabulary on the panel side; only the ones a link is
 // allowed to open are listed, so a crafted URL cannot address arbitrary surfaces.
-const PANES = new Set(['context', 'tasks', 'worktree'])
+// Each entry is a surface id the daemon declares (workspace_surfaces.go).
+const PANES = new Set(['context', 'tasks', 'worktrees'])
+
+// Talkoot ids and member ids share one rule in Go (talkoot.ValidID, roster.go):
+// a lower-case letter, then up to 31 lower-case letters, digits, or hyphens.
+const TALKOOT_ID = /^[a-z][a-z0-9-]{0,31}$/
 
 // Card ids are the store's own shape: a name slug plus a content hash, or the
 // bare hash for an unnamed card (build.cardID). The store already refuses a
@@ -46,9 +55,12 @@ export function panelHref(session?: string, pane?: string): string {
   return href('/', { session, pane })
 }
 
-/** Link to the Talkoot app. */
-export function talkootHref(): string {
-  return '/talkoot/'
+/**
+ * Link to the Talkoot app, optionally opening one team, and one member's thread
+ * in it. A member without a team says nothing, so it is dropped.
+ */
+export function talkootHref(team?: string, member?: string): string {
+  return href('/talkoot/', { team, member: team ? member : undefined })
 }
 
 /** Link to Stage, optionally opening straight into a session's chat. */
@@ -70,20 +82,39 @@ export function stageCardHref(card: string): string {
  * silently drag you back to a session you had since navigated away from.
  */
 export function takeNavParams(): { session: string; pane: string; card: string } {
-  if (typeof location === 'undefined') return { session: '', pane: '', card: '' }
+  const p = take({ session: (v) => SESSION_ID.test(v), pane: (v) => PANES.has(v), card: (v) => CARD_ID.test(v) })
+  return { session: p.session, pane: p.pane, card: p.card }
+}
+
+/**
+ * Read the Talkoot app's deep-link params, `?team=` and `?member=`, and remove
+ * them from the address bar, for the reason takeNavParams gives. A member read
+ * without a team is dropped: a member id names nobody until a team scopes it.
+ */
+export function takeTalkootParams(): { team: string; member: string } {
+  const p = take({ team: (v) => TALKOOT_ID.test(v), member: (v) => TALKOOT_ID.test(v) })
+  return { team: p.team, member: p.team ? p.member : '' }
+}
+
+// take reads each named param, keeps the value only when its check passes, and
+// strips every named param that was present, valid or not. A rejected value
+// left in the URL would be re-read on every reload.
+function take<K extends string>(checks: Record<K, (v: string) => boolean>): Record<K, string> {
+  const names = Object.keys(checks) as K[]
+  const out = Object.fromEntries(names.map((k) => [k, ''])) as Record<K, string>
+  if (typeof location === 'undefined') return out
   const q = new URLSearchParams(location.search)
-  const rawSession = q.get('session') ?? ''
-  const rawPane = q.get('pane') ?? ''
-  const rawCard = q.get('card') ?? ''
-  const session = SESSION_ID.test(rawSession) ? rawSession : ''
-  const pane = PANES.has(rawPane) ? rawPane : ''
-  const card = CARD_ID.test(rawCard) ? rawCard : ''
-  if ((rawSession || rawPane || rawCard) && typeof history !== 'undefined' && history.replaceState) {
-    q.delete('session')
-    q.delete('pane')
-    q.delete('card')
+  let seen = false
+  for (const k of names) {
+    const raw = q.get(k)
+    if (raw === null) continue
+    seen = true
+    if (checks[k](raw)) out[k] = raw
+    q.delete(k)
+  }
+  if (seen && typeof history !== 'undefined' && history.replaceState) {
     const rest = q.toString()
     history.replaceState(null, '', location.pathname + (rest ? `?${rest}` : '') + location.hash)
   }
-  return { session, pane, card }
+  return out
 }

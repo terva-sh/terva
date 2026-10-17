@@ -29,6 +29,7 @@ func SessionSummariesFromInfos(infos []ctrlproto.SessionInfo) []session.SessionS
 			Title:        in.Title,
 			Live:         in.Live,
 			Busy:         in.Busy,
+			Waiting:      in.Waiting,
 		})
 	}
 	return out

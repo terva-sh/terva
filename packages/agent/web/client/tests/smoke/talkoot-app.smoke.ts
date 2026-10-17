@@ -150,14 +150,44 @@ test('the Talkoot app turns the rail into a drawer on a narrow screen', async ({
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/talkoot-app-narrow-member.png` })
 })
 
-test("the control panel's ⁂ button opens the Talkoot app", async ({ page }) => {
-  // A person who left the old view open has this flag stored. It no longer
-  // mounts anything.
-  await page.addInitScript(() => localStorage.setItem('terva_talkoot_open', '1'))
-  await installMockBackend(page, { groups: ['conversation', 'session', 'control', 'talkoot'] })
+test('the app switcher moves from the panel to the Talkoot app and back', async ({ page, baseURL }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('terva_talkoot_person', 'Drew')
+    // A person who left the old panel view open has this flag stored. It no
+    // longer mounts anything.
+    localStorage.setItem('terva_talkoot_open', '1')
+  })
+  // vite preview serves the app as talkoot.html, not at /talkoot/. Map the
+  // app's real address onto that file, and its relative assets onto /assets/,
+  // so the test follows the exact link the switcher writes.
+  await page.route(/\/talkoot\/(\?.*)?$/, async (route) =>
+    route.fulfill({ response: await route.fetch({ url: `${baseURL}/talkoot.html` }) }),
+  )
+  await page.route(/\/talkoot\/assets\//, async (route) =>
+    route.fulfill({ response: await route.fetch({ url: route.request().url().replace('/talkoot/assets/', '/assets/') }) }),
+  )
+  await installMockBackend(page, {
+    groups: ['conversation', 'session', 'control', 'talkoot'],
+    respond: (method) => (method === 'talkoot.list' ? { talkoots: [] } : undefined),
+  })
+
   await page.goto(panelSessionURL)
-  const open = page.getByRole('link', { name: 'Open the Talkoot app' })
-  await expect(open).toHaveAttribute('href', '/talkoot/')
-  // The panel no longer mounts a Talkoot view of its own.
+  // The panel no longer mounts a Talkoot view of its own, and no ⁂ button.
   await expect(page.locator('.talkoot-bar, .talkoot-team')).toHaveCount(0)
+  await expect(page.getByRole('link', { name: 'Open the Talkoot app' })).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Panel', exact: true }).click()
+  await page.getByRole('menuitem', { name: /Talkoot/ }).click()
+  await expect(page).toHaveURL(/\/talkoot\/$/)
+  await expect(page.getByText('No talkoot runs in this workspace yet.')).toBeVisible()
+  if (SHOTS) {
+    await page.getByRole('button', { name: 'Talkoot', exact: true }).click()
+    await page.screenshot({ path: `${SHOTS}/talkoot-app-switcher.png` })
+    await page.keyboard.press('Escape')
+  }
+
+  await page.getByRole('button', { name: 'Talkoot', exact: true }).click()
+  await page.getByRole('menuitem', { name: /Panel/ }).click()
+  await expect(page).toHaveURL(`${baseURL}/`)
+  await expect(page.locator('.topbar')).toBeVisible()
 })

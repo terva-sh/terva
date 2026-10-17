@@ -40,6 +40,8 @@
 }
 .tka-section { display: flex; flex-direction: column; gap: 2px; padding: 0 8px; }
 .tka-section > .btn { align-self: flex-start; margin: 4px 6px 0; }
+/* The app switcher heads the rail, above the team list. */
+.tka-apps { display: flex; padding: 0 8px; }
 .tka-head {
   margin: 0 6px 4px;
   font-size: var(--fs-note);
@@ -82,6 +84,7 @@
   border-top: 1px solid var(--line);
 }
 .tka-you .talkoot-person-input { flex: 1; min-width: 8rem; }
+.tka-notify { flex-basis: 100%; display: flex; align-items: center; gap: 4px; cursor: pointer; }
 
 /* ---------------------------------------------------------------- the conversation */
 

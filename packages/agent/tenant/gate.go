@@ -101,6 +101,11 @@ func routeBackedFeatures(c Carrier) map[string]bool {
 		// deliberate always-true from an oversight.
 		ctrlproto.FeatureAttachments: true,
 		ctrlproto.FeatureSharedFiles: true,
+		// /supervisor, the operator panel. Always false HERE, because a child
+		// never decides it: a tenant's own daemon claiming the feature would
+		// offer every person on that tenant a link to a page the supervisor
+		// refuses them. NarrowHello adds it afterwards, from the principal.
+		ctrlproto.FeatureOperatorPanel: false,
 	}
 }
 
@@ -129,9 +134,18 @@ func ForwardableFeatures(offered []string, c Carrier) []string {
 // rather than the principal: a feature naming a route this supervisor does not
 // mount is an affordance nothing can serve. Two filters, two questions — may
 // this caller use it, and does this host have it at all.
+//
+// One feature is ADDED here rather than filtered: FeatureOperatorPanel, for a
+// person whose grant includes the tenants group. That is the same test
+// requireTenantsGrant applies to /supervisor itself, so the link is offered to
+// exactly the people the page lets in. The group stays off the connection; only
+// the one bit crosses.
 func NarrowHello(h ctrlproto.Hello, p authz.Principal, c Carrier) ctrlproto.Hello {
 	h.Groups = ForwardableGroups(h.Groups, p)
 	h.Features = ForwardableFeatures(h.Features, c)
+	if slices.Contains(authz.Grant(p), ctrlproto.GroupTenants) {
+		h.Features = append(h.Features, ctrlproto.FeatureOperatorPanel)
+	}
 	return h
 }
 

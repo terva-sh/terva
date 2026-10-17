@@ -2,6 +2,7 @@ package ctrlproto
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -165,9 +166,23 @@ func TestValidOrigin(t *testing.T) {
 	}{
 		{"neot", true},
 		{"build-box-2", true},
+		{"local", true},
+		{"laptop.lan", true},
+		{"a", true},
 		{"", false},
 		{"neot/extra", false},
 		{"/", false},
+		// The host-name shape (D3 in docs/proposals/web-hub.md): lower case
+		// only, no leading or trailing punctuation, no spaces or markup.
+		{"Neot", false},
+		{"-neot", false},
+		{"neot-", false},
+		{".neot", false},
+		{"neot box", false},
+		{"<b>neot</b>", false},
+		{"neot_box", false},
+		{strings.Repeat("a", 63), true},
+		{strings.Repeat("a", 64), false},
 	}
 	for _, c := range cases {
 		if got := ValidOrigin(c.origin); got != c.want {

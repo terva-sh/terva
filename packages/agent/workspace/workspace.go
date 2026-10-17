@@ -950,6 +950,11 @@ func (w *Workspace) createSeededLocked(opts ctrlproto.CreateOpts, seed *sceneSee
 			return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "persist the recruit binding: %v", err)
 		}
 	}
+	if opts.Manager {
+		if err := sess.SetManager(); err != nil {
+			return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "persist the manager mark: %v", err)
+		}
+	}
 	// A default saved user persona pre-fills a fresh immersive session's identity,
 	// so a new chat opens as "you" rather than the literal "User" (rough-edge #5).
 	// Stamped into meta before buildSession, so its name threads into the {{user}}
@@ -1039,6 +1044,13 @@ func (w *Workspace) createSeededLocked(opts ctrlproto.CreateOpts, seed *sceneSee
 		m, err := recruitGreetingMessage(sess, opts.Recruit)
 		if err != nil {
 			return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "seed the recruiter greeting: %v", err)
+		}
+		msgs = append(msgs, m)
+	}
+	if opts.Manager {
+		m, err := managerGreetingMessage(sess)
+		if err != nil {
+			return nil, ctrlproto.Errorf(ctrlproto.CodeInternal, "seed the team manager greeting: %v", err)
 		}
 		msgs = append(msgs, m)
 	}
@@ -1394,6 +1406,7 @@ func (w *Workspace) Sessions(ctx context.Context) ([]ctrlproto.SessionInfo, erro
 			info.Trusted = s.trusted.Load()
 			info.Live = true
 			info.Busy = s.busyNow()
+			info.Waiting = s.waitingNow()
 		}
 		out = append(out, info)
 	}

@@ -32,19 +32,43 @@ terva desktop --desktop-app talkoot
 ```
 
 `--desktop-app talkoot` opens the window on the [Talkoot app](#talkoot-watching-a-team)
-instead of the panel, with the title "terva Talkoot". Talkoot must be on in the
+instead of the panel. The window title starts as "terva Talkoot" and then
+follows the page, so it names the open team and its state. Talkoot must be on in the
 user configuration (`"talkoot_enabled": true`), or startup fails. A link to the
 panel from the app, such as a member's session, opens in the same window. The
-panel's ⁂ returns to the app. `--desktop-app panel` is the default.
+panel's app switcher returns to the app. `--desktop-app panel` is the default.
+
+A daemon serves the teams of the directory it runs in, and a desktop launcher
+usually starts terva in `$HOME`. So the Talkoot window chooses its workspace
+directory in this order:
+
+1. The directory that `--cwd` names.
+2. The start directory, when a team names it as its home or it is the top of a
+   git checkout.
+3. The directory the last launch served, when it still exists. The window
+   records it in `$TERVA_HOME/desktop.json`.
+4. A directory you choose in a picker.
+
+When you cancel the picker, the window serves the start directory and does
+not remember it, so the next launch asks again. A team you create in the
+window binds to the directory it serves. stderr names that directory at each
+launch. The panel window keeps the start directory.
 
 For a source build, `just install` includes the `terva_desktop` and
 `terva_web` tags. Releases through v0.141.3 shipped a separate
 `terva-desktop` archive. Its updater looks for that archive, which no longer
 ships, so replace a `terva-desktop` install with the full `terva` build once.
 
-The window owns a new server at `127.0.0.1` on a random free port. An explicit
-`--desktop-port` selects a stable origin, but startup fails if that port is busy.
-Browser preferences belong to the origin and may reset when the port changes.
+The window owns a new server at `127.0.0.1`. The first launch takes a random
+free port, and the window records it in `$TERVA_HOME/desktop.json`. Each later
+launch on the same home reuses that port, so the window opens the same origin
+and keeps the app's preferences: your name, the open team, and the face motion
+setting. Each `TERVA_HOME` remembers its own port.
+
+When the remembered port is busy, the window starts on a new random port and
+says so on stderr. That launch opens with fresh preferences, because browser
+preferences belong to the origin. An explicit `--desktop-port` always wins,
+but startup fails if that port is busy.
 Closing the window stops its server and saves session records. Active turns
 stop. A later launch can reopen the saved sessions.
 
@@ -668,6 +692,37 @@ daemon as a second client: same sessions, same live stream as the browser
 panel, with the PWA's reconnect/resync discipline. See docs/tui.md
 §"Attaching to a running daemon".
 
+## Moving between apps
+
+The daemon can serve more than one web app: the control panel at `/`, the
+[Talkoot app](#talkoot-watching-a-team) at `/talkoot/`, and
+[Stage](#stage-the-immersive-chatplay-surface) at `/stage/`. Each app has the
+same app switcher. It names the app on screen, and it opens a menu of every app
+this daemon serves. In the panel it sits beside **☰**, in the Talkoot app at
+the top of the rail, and in Stage in the library's header.
+
+The switcher lists an app only when the daemon serves it, and it reads that
+from the connection's hello. A daemon that serves only the panel shows no
+switcher. On a fleet hub the switcher leaves out the Talkoot app, because a hub
+does not serve team rooms yet. Under `terva serve`, a person who may manage
+environments also sees the **Operator panel**, which opens `/supervisor` (see
+[serve.md](serve.md#the-operator-panel)).
+
+Each move between apps is a full page load. The new app opens its own
+connection and loads its own state.
+
+A link can open an app on one thing. Each app reads these parameters once and
+removes them from the address bar:
+
+| App | Parameters | Opens |
+|---|---|---|
+| Panel, `/` | `?session=ID`, and optionally `&pane=context`, `tasks`, or `worktrees` | the session, and that pane beside it |
+| Talkoot, `/talkoot/` | `?team=ID`, and optionally `&member=ID` | the team's room, or that member's thread |
+| Stage, `/stage/` | `?session=ID` or `?card=ID` | the chat, or the character studio |
+
+On a fleet hub a session ID carries its machine, as `neot/20261011-090000-1a2b3c4d`.
+An app ignores a value that is not a valid ID.
+
 ## Stage: the immersive chat/play surface
 
 **Stage** is terva's SillyTavern-inspired chat/play front end, a second web app
@@ -700,7 +755,7 @@ default**; `--web-stage` mounts it at `/stage/`, alongside the control panel at
   ("Stage surface") that writes the config knob; because the `/stage/` route is
   mounted when the web server starts, the toggle takes effect on the next launch
   (a persist-only setting, like lazy tool loading). Once on, the daemon advertises the `stage` hello feature,
-  which a panel reads to offer an "open in Stage" link. Access is gated by the same
+  which the app switcher reads to list Stage. Access is gated by the same
   auth as the panel: Stage inherits it, and there is no separate gate.
 - **Under `terva serve`, the answer has two halves and they belong to different
   people.** The supervisor's own `--web-stage` (or `web_stage` in *its* config)
@@ -714,7 +769,7 @@ default**; `--web-stage` mounts it at `/stage/`, alongside the control panel at
   lives inside the home the isolation exists to keep it out of.
   So a tenant who turns `web_stage` on where the operator has not gets the `stage`
   feature **stripped from the hello** the supervisor forwards, rather than an
-  "open in Stage" link that lands on a route the host does not serve. See
+  app switcher entry that lands on a route the host does not serve. See
   `tenant.Carrier` and `NarrowHello`.
 - **Status.** Stage is **opt-in while it matures**. That is progressive
   disclosure: the panel is the power surface, and Stage is turned on per
@@ -730,8 +785,8 @@ There is no terminal view. A command-line caller can act on a talkoot through
 `terva ctl`, and it does not render the room.
 
 The daemon serves the app when it runs with `talkoot_enabled` set in
-`$TERVA_HOME/config.json`. The **⁂** button in the control panel's header
-opens it, and the app's **Panel** link returns. The app is a page of its own
+`$TERVA_HOME/config.json`. The app switcher in the control panel's header
+opens it, and the same switcher at the top of the app's rail returns. The app is a page of its own
 with its own manifest, so a browser can install it beside the panel. It
 signs in the way the panel does, and it calls the panel's verbs: the
 `talkoot` group, and the few others the shared Talkoot views use, such as

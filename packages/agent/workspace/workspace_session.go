@@ -893,6 +893,12 @@ func (w *Workspace) injectExtraTools(s *wsSession, r *build.Resolved, args build
 			for _, t := range tools.RecruitTools(talkootRecruit{w: w, session: s.id, talkoot: id}) {
 				r.ToolRegistry[t.Name()] = t
 			}
+		} else if s.isManager() {
+			// The team manager holds no seat either. It reads every team and
+			// proposes to any of them.
+			for _, t := range tools.ManagerTools(talkootManager{w: w, session: s.id}) {
+				r.ToolRegistry[t.Name()] = t
+			}
 		}
 	}
 	// terva_restart: only when the operator enabled self-restart. Left
@@ -2713,6 +2719,7 @@ func (s *wsSession) info() ctrlproto.SessionInfo {
 	prov, model, title, persona, sub := s.provider, s.model, s.title, s.persona, s.subscription
 	reasoning := s.reasoning
 	busy := s.turnCancel != nil
+	waiting := s.waitingLocked()
 	s.mu.Unlock()
 	info := ctrlproto.SessionInfo{
 		ID:              s.id,
@@ -2721,6 +2728,7 @@ func (s *wsSession) info() ctrlproto.SessionInfo {
 		Model:           model,
 		Persona:         persona,
 		Recruit:         s.recruitOf(),
+		Manager:         s.isManager(),
 		Reasoning:       reasoning,
 		Experience:      s.sess.Stage.Experience,
 		Background:      s.sess.Stage.Background,
@@ -2742,8 +2750,9 @@ func (s *wsSession) info() ctrlproto.SessionInfo {
 		Subscription:    sub,
 		// info() only ever describes a materialized session, so Live is always
 		// true here; the cold rows are built in Workspace.Sessions without it.
-		Live: true,
-		Busy: busy,
+		Live:    true,
+		Busy:    busy,
+		Waiting: waiting,
 	}
 	if s.agent != nil {
 		info.Messages = len(s.agent.Messages())
@@ -2804,6 +2813,24 @@ func (s *wsSession) busyNow() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.turnCancel != nil
+}
+
+// waitingNow is busyNow for SessionInfo.Waiting.
+func (s *wsSession) waitingNow() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.waitingLocked()
+}
+
+// waitingLocked names what the session waits on a person for. Caller holds s.mu.
+func (s *wsSession) waitingLocked() string {
+	switch {
+	case len(s.permReq) > 0:
+		return ctrlproto.WaitingApproval
+	case len(s.askReq) > 0:
+		return ctrlproto.WaitingQuestion
+	}
+	return ""
 }
 
 // setModel records this session's live model identity — on the session AND in

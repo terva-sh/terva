@@ -100,6 +100,7 @@ func (s *wsSession) openPermissionAs(req ctrlproto.PermissionRequest, c openCard
 	s.setCardLocked(cardKey{id: req.CallID}, c)
 	s.mu.Unlock()
 	s.ws.talkootCardEvent(c, ctrlproto.TalkootInboxEvent(c.talkoot, s.permissionCard(c, req)))
+	s.waitingChanged()
 }
 
 // closePermission removes a pending approval from the snapshot and the inbox.
@@ -114,6 +115,7 @@ func (s *wsSession) closePermission(callID, outcome string) {
 	s.ws.talkootCardEvent(c, ctrlproto.TalkootInboxResolvedEvent(c.talkoot, s.cardHead(c, ctrlproto.TalkootCardPermission, callID)))
 	s.ws.talkootWaiting(c, s.waitKey(k), false)
 	s.ws.talkootCard(c, talkoot.CardPermission, callID, "", outcome)
+	s.waitingChanged()
 }
 
 // openAsk is openPermission for a question set.
@@ -130,6 +132,7 @@ func (s *wsSession) openAskAs(req ctrlproto.AskRequest, c openCard) {
 	s.setCardLocked(cardKey{ask: true, id: req.AskID}, c)
 	s.mu.Unlock()
 	s.ws.talkootCardEvent(c, ctrlproto.TalkootInboxEvent(c.talkoot, s.askCard(c, req)))
+	s.waitingChanged()
 }
 
 // closeAsk is closePermission for a question set.
@@ -143,6 +146,17 @@ func (s *wsSession) closeAsk(askID, outcome string) {
 	s.ws.talkootCardEvent(c, ctrlproto.TalkootInboxResolvedEvent(c.talkoot, s.cardHead(c, ctrlproto.TalkootCardAsk, askID)))
 	s.ws.talkootWaiting(c, s.waitKey(k), false)
 	s.ws.talkootCard(c, talkoot.CardQuestion, askID, "", outcome)
+	s.waitingChanged()
+}
+
+// waitingChanged tells every client that SessionInfo.Waiting may have moved.
+// A view that is not subscribed to this session hears neither request, and the
+// session list is where it reads the state, so the push is a re-list signal.
+func (s *wsSession) waitingChanged() {
+	if s.ws == nil {
+		return
+	}
+	s.ws.BroadcastAll(ctrlproto.SessionsChangedEvent())
 }
 
 // waitKey names a card of this session among every card of a talkoot. The

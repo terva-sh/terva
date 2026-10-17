@@ -204,6 +204,10 @@ type SessionMeta struct {
 	// roster and propose a member. Persisted so a daemon restart keeps the
 	// binding.
 	Recruit string `json:"recruit,omitempty"`
+	// Manager marks the daemon's Talkoot team manager: one session outside
+	// every talkoot that reads every team and proposes changes to any of them
+	// (docs/proposals/talkoot-team-manager.md). Persisted so a restart keeps it.
+	Manager bool `json:"manager,omitempty"`
 	// Reasoning is this session's thinking-level override as the user typed it
 	// ("off", "high", "max", …), or "" to inherit the global level. Raw rather
 	// than normalized so an explicit "off" stays distinguishable from an absent
@@ -1599,6 +1603,10 @@ type SessionSummary struct {
 	// since a session you are not attached to has no live state to show.
 	Live bool
 	Busy bool
+	// Waiting names what a live session waits on a person for ("approval" or
+	// "question", ctrlproto.SessionInfo.Waiting), or "" when it waits on nothing.
+	// Set on the same path as Live and Busy.
+	Waiting string
 }
 
 // renameSourceGenerated marks a rename row written by machine titling
@@ -2481,6 +2489,16 @@ func (s *Session) SetRecruit(talkoot string) error {
 		return nil
 	}
 	s.Meta.Recruit = talkoot
+	return s.writeMeta()
+}
+
+// SetManager marks the session as the Talkoot team manager. A no-op on a nil
+// receiver.
+func (s *Session) SetManager() error {
+	if s == nil {
+		return nil
+	}
+	s.Meta.Manager = true
 	return s.writeMeta()
 }
 

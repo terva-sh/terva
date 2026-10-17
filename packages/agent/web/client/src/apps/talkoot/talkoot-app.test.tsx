@@ -218,8 +218,38 @@ describe('the composer', () => {
   })
 })
 
+describe('links and the app switcher', () => {
+  it('opens the member a ?member= link names, in the team the link names', async () => {
+    // The link's team wins over the one this browser opened last.
+    localStorage.setItem('terva_talkoot', 'elsewhere')
+    const client = fakeClient({ respond })
+    render(<Shell client={client} hub={new TalkootHub()} generation={1} link={{ team: 'crew', member: 'writer' }} />)
+    await screen.findByText('Keep the old URL?')
+    await waitFor(() => expect(document.querySelector('.tka-main-head strong')!.textContent).toBe('Writer'))
+    expect(screen.queryByText('Refresh the install page')).toBeNull()
+  })
+
+  it('falls back to the room for a member the team does not have', async () => {
+    const client = fakeClient({ respond })
+    render(<Shell client={client} hub={new TalkootHub()} generation={1} link={{ team: 'crew', member: 'nobody' }} />)
+    await screen.findByText('Refresh the install page')
+    expect(document.querySelector('.tka-main-head strong')!.textContent).toBe('# room')
+  })
+
+  it('heads the rail with the app switcher, which replaces the Panel link', async () => {
+    const client = fakeClient({ respond })
+    render(<Shell client={client} hub={new TalkootHub()} generation={1} hello={{ role: 'server', groups: ['talkoot'] }} />)
+    await screen.findByText('Refresh the install page')
+    const rail = document.querySelector('.tka-rail')!
+    expect(rail.firstElementChild!.classList.contains('tka-apps')).toBe(true)
+    expect(document.querySelector('.tka-you a')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Talkoot/ }))
+    expect(screen.getAllByRole('menuitem').map((a) => a.getAttribute('href'))).toEqual(['/', '/talkoot/'])
+  })
+})
+
 describe('the screen with no team', () => {
-  it('opens the rail as a drawer, so the name and the panel link stay reachable', async () => {
+  it('opens the rail as a drawer, so the name and the app switcher stay reachable', async () => {
     const client = fakeClient({ respond: (m) => (m === 'talkoot.list' ? { talkoots: [] } : {}) })
     render(<Shell client={client} hub={new TalkootHub()} generation={1} />)
     await screen.findByText('No talkoot runs in this workspace yet.')
@@ -229,6 +259,118 @@ describe('the screen with no team', () => {
     expect(shell.classList.contains('drawer-open')).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: 'Close the menu' }))
     expect(shell.classList.contains('drawer-open')).toBe(false)
+  })
+})
+
+describe('the first-run page', () => {
+  const respond = (m: string) => {
+    if (m === 'talkoot.list') return { talkoots: [] }
+    if (m === 'talkoot.templates') return { templates: [{ name: 'review-pair', title: 'Review pair', description: 'A developer and a reviewer.', source: 'builtin', members: 2 }] }
+    return {}
+  }
+
+  it('names the workspace, asks for the name in place, and opens the form on the template picked', async () => {
+    localStorage.removeItem('terva_talkoot_person')
+    const client = fakeClient({ respond: (m) => respond(m) })
+    render(<Shell client={client} hub={new TalkootHub()} generation={1} workspace="/home/me/src/app" />)
+    await screen.findByText('Start your first team')
+    expect(screen.getByText(/Teams here belong to \/home\/me\/src\/app/)).toBeTruthy()
+    expect(screen.getByText(/You need one to post, answer, and pause/)).toBeTruthy()
+    const name = screen.getByLabelText('Your name in the room', { selector: '.talkoot-first-run input' }) as HTMLInputElement
+    fireEvent.input(name, { target: { value: 'sothr' } })
+    fireEvent.keyDown(name, { key: 'Enter' })
+    await waitFor(() => expect(localStorage.getItem('terva_talkoot_person')).toBe('sothr'))
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Review pair' }))
+    await screen.findByText('New team from a template')
+    await waitFor(() => expect((document.querySelector('.talkoot-new select') as HTMLSelectElement).value).toBe('review-pair'))
+  })
+
+  it('opens the builder from the first-run page', async () => {
+    const client = fakeClient({ respond: (m) => respond(m) })
+    render(<Shell client={client} hub={new TalkootHub()} generation={1} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Build a team member by member' }))
+    expect(await screen.findByRole('heading', { name: 'Build a team' })).toBeTruthy()
+  })
+})
+
+describe('the team manager drafts', () => {
+  const draft = { id: 'lake', text: '---\nname: lake\nbudget_usd_per_day: 3\nmembers:\n  - id: helm\n    role: coordinator\n---\n', why: 'A crew for the lake house.', at: '2026-10-15T10:00:00Z' }
+  const respond = (m: Verb, p: unknown) => {
+    if (m === 'talkoot.list') return { talkoots: [] }
+    if (m === 'talkoot.drafts') return { drafts: [draft] }
+    if (m === 'talkoot.templates') return { templates: [] }
+    if (m === 'talkoot.preview') {
+      const q = p as { id: string; text: string }
+      return {
+        template: { name: 'composed', title: q.id, source: 'composed', members: 1 },
+        id: q.id, home: '/w', budget_usd_per_day: 3, digest: 'd', text: q.text,
+        members: [{ id: 'helm', role: 'coordinator', driver: 'native', posture: 'workspace', workspace: 'shared', available: true }],
+      }
+    }
+    return {}
+  }
+
+  it('opens the builder on a draft, with its name, budget, and members, and creates nothing', async () => {
+    const client = fakeClient({ respond })
+    render(<Shell client={client} hub={new TalkootHub()} generation={1} />)
+    expect(await screen.findByText('A crew for the lake house.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Review' }))
+    expect(await screen.findByRole('heading', { name: 'Build a team' })).toBeTruthy()
+    await waitFor(() => expect((screen.getByLabelText('Daily budget (USD)') as HTMLInputElement).value).toBe('3'))
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('lake')
+    expect((screen.getByLabelText('Title', { selector: '.talkoot-builder > label > input' }) as HTMLInputElement).value).toBe('')
+    expect(client.commands.find((c) => c.method === 'talkoot.preview')?.params).toEqual({ text: draft.text, id: 'lake' })
+    expect(client.commands.some((c) => c.method === 'talkoot.create')).toBe(false)
+  })
+
+  it('shows no form to edit until the draft loads', async () => {
+    const client = fakeClient({ respond: (m, p) => (m === 'talkoot.preview' ? new Promise(() => {}) : respond(m, p)) })
+    render(<Shell client={client} hub={new TalkootHub()} generation={1} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Review' }))
+    expect(await screen.findByText('Loading the draft…')).toBeTruthy()
+    expect(screen.queryByLabelText('Name')).toBeNull()
+  })
+
+  it('opens the second draft when Review is pressed while the builder shows the first', async () => {
+    const second = { ...draft, id: 'pond', why: 'A crew for the pond.', text: draft.text.replace('name: lake', 'name: pond') }
+    const client = fakeClient({ respond: (m, p) => (m === 'talkoot.drafts' ? { drafts: [draft, second] } : respond(m, p)) })
+    render(<Shell client={client} hub={new TalkootHub()} generation={1} />)
+    await screen.findByText('A crew for the pond.')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Review' })[0])
+    await waitFor(() => expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('lake'))
+    // The rail lists the drafts while the form is open.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Review' })[1])
+    await waitFor(() => expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('pond'))
+  })
+
+  it('lists a draft that does not read, offers only Discard', async () => {
+    const client = fakeClient({ respond: (m, p) => (m === 'talkoot.drafts' ? { drafts: [{ id: 'torn', text: '', why: '', at: '', problem: 'not valid JSON' }] } : respond(m, p)) })
+    render(<Shell client={client} hub={new TalkootHub()} generation={1} />)
+    expect(await screen.findByText('This draft cannot be read: not valid JSON')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Review' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Discard' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('discards a draft and reads the list again', async () => {
+    const client = fakeClient({ respond })
+    render(<Shell client={client} hub={new TalkootHub()} generation={1} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Discard' }))
+    await waitFor(() => expect(client.commands.find((c) => c.method === 'talkoot.discard_draft')?.params).toEqual({ id: 'lake' }))
+    await waitFor(() => expect(client.commands.filter((c) => c.method === 'talkoot.drafts').length).toBeGreaterThan(1))
+  })
+
+  it('shows no drafts when the daemon has no drafts verb', async () => {
+    const client = fakeClient({
+      respond: (m, p) => {
+        if (m === 'talkoot.drafts') throw new Error('unknown method')
+        return respond(m, p)
+      },
+    })
+    render(<Shell client={client} hub={new TalkootHub()} generation={1} />)
+    await screen.findByText('Start your first team')
+    expect(screen.queryByText('Drafts from the team manager')).toBeNull()
+    expect(document.querySelector('.talkoot-error')).toBeNull()
   })
 })
 

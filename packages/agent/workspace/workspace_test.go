@@ -1509,7 +1509,7 @@ func TestSessionSummariesFromInfos(t *testing.T) {
 	got := SessionSummariesFromInfos([]ctrlproto.SessionInfo{{
 		ID: "ab12", Title: "fix the parser", Provider: "openai", Model: "gpt-5.5",
 		Path: "/s/ab12.jsonl", Created: "2026-07-04T10:00:00Z", Messages: 7,
-		Usage: core.WireUsage{CostUSD: 1.25}, Live: true, Busy: true,
+		Usage: core.WireUsage{CostUSD: 1.25}, Live: true, Busy: true, Waiting: ctrlproto.WaitingQuestion,
 	}})
 	if len(got) != 1 {
 		t.Fatalf("got %d summaries, want 1", len(got))
@@ -1520,8 +1520,8 @@ func TestSessionSummariesFromInfos(t *testing.T) {
 		t.Fatalf("summary = %+v", s)
 	}
 	// The live flags ride through so the picker can glyph a busy/live row.
-	if !s.Live || !s.Busy {
-		t.Fatalf("live/busy not carried: Live=%v Busy=%v", s.Live, s.Busy)
+	if !s.Live || !s.Busy || s.Waiting != ctrlproto.WaitingQuestion {
+		t.Fatalf("live/busy/waiting not carried: Live=%v Busy=%v Waiting=%q", s.Live, s.Busy, s.Waiting)
 	}
 }
 

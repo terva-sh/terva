@@ -318,6 +318,9 @@ body {
   /* with its own row the controls have spare width — let the model id use it
      (up to its full text) instead of truncating at the desktop clamp */
   .topbar .model-btn { flex: 1 1 auto; max-width: max-content; }
+  /* The app switcher keeps its mark and caret and drops its name: the row of
+     controls has no room for a word, and the menu names every app. */
+  .topbar .appsw-name { display: none; }
 }
 .topbar .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
 .spacer { flex: 1; }
@@ -912,6 +915,50 @@ button.ident-home:hover .persona { text-decoration: underline; }
 .modal-scrim { position: fixed; inset: 0; background: #0006; z-index: 40; display: flex; align-items: flex-start; justify-content: center; padding: 8vh 12px 12px; }
 .modal { width: min(560px, 96vw); max-height: 82vh; display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 40px #0007; overflow: hidden; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+
+/* session quick switcher (features/sessions/SessionPalette.tsx). It rides
+   .modal-scrim and .modal, so it opens where the model picker does. */
+.spal { width: min(620px, 96vw); }
+.spal-q { display: flex; align-items: center; gap: 8px; margin: 10px 12px; padding: 0 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel); }
+.spal-q input { flex: 1; min-width: 0; padding: 9px 0; font: inherit; border: 0; background: none; color: var(--fg); outline: none; }
+.spal-q:focus-within { border-color: var(--accent); }
+.spal-count { flex: none; color: var(--muted); font-size: var(--fs-detail); }
+/* ⌕ draws small in most fonts, so both copies of it are sized up. */
+.spal-glass, .jump-glass { flex: none; color: var(--muted); font-size: 17px; line-height: 1; }
+.spal-list { overflow-y: auto; padding: 0 6px 6px; }
+.spal-grp { position: sticky; top: 0; background: var(--bg); font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; padding: 8px 8px 4px; }
+.spal-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 8px; cursor: pointer; }
+.spal-row.sel { background: var(--panel); box-shadow: inset 2px 0 0 var(--accent); }
+.spal-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.spal-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spal-title mark { background: color-mix(in srgb, var(--accent) 28%, transparent); color: inherit; border-radius: 3px; }
+.spal-meta { font-size: var(--fs-detail); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spal-row.here .spal-title { font-weight: 600; }
+/* The same three states the drawer groups by, plus the one only this list
+   shows. Shape and colour both carry it, so it survives a colour-blind read. */
+.spal-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; box-sizing: border-box; border: 2px solid var(--muted); }
+.spal-dot.busy { border-color: var(--accent); border-right-color: transparent; }
+.spal-dot.idle { border-color: var(--ok); background: var(--ok); }
+.spal-dot.waiting { border-color: var(--warning); background: var(--warning); border-radius: 2px; transform: rotate(45deg) scale(.85); }
+.spal-chip { flex: none; font-size: var(--fs-note); padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.spal-chip.warn { border-color: transparent; background: color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning); }
+.spal-chip.busy { border-color: transparent; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.spal-when { flex: none; width: 34px; text-align: right; font-size: var(--fs-detail); color: var(--muted); }
+.spal-empty, .spal-more { padding: 10px 14px; font-size: var(--fs-detail); color: var(--muted); }
+.spal-foot { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 8px 12px; border-top: 1px solid var(--line); font-size: var(--fs-detail); color: var(--muted); }
+.spal-foot kbd, .jump-btn kbd { font: inherit; font-size: var(--fs-note); padding: 0 5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; background: var(--panel); color: var(--muted); }
+.spal-shortcut { margin-left: auto; }
+.spal-board { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
+.spal-board:hover { text-decoration: underline; }
+/* The header control that opens it. A touch screen has no Mod+K, so this is
+   its only way in; a phone shows the glass alone. */
+.jump-btn { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line); background: none; color: var(--muted); font: inherit; font-size: var(--fs-detail); cursor: pointer; }
+.jump-btn:hover { color: var(--fg); background: var(--panel); }
+@media (max-width: 760px) {
+  .jump-btn .jump-label, .jump-btn kbd { display: none; }
+  .spal-foot > span[aria-hidden] { display: none; }
+  .spal-when { display: none; }
+}
 
 /* model picker */
 .picker .pick-search { margin: 10px 12px; padding: 9px 12px; font: inherit; border-radius: 9px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); }

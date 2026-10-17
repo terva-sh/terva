@@ -96,6 +96,13 @@ button:disabled {
   align-items: center;
   gap: 0.75rem;
 }
+/* The app switcher keeps its mark and caret on a phone and drops its name:
+   the header has no room for the word, and the menu names every app. */
+@media (max-width: 560px) {
+  .stage-topbar .appsw-name {
+    display: none;
+  }
+}
 .stage-theme-pick {
   font: inherit;
   font-size: 0.8rem;

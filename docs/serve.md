@@ -125,6 +125,13 @@ and no single `terva web` daemon serves it. That absence is the design: a
 supervisor that served `tenants.*` on a tenant's connection and merely checked
 for an admin role would be one bug away from tenant-to-admin escalation.
 
+The web panel's app switcher lists the operator panel for a person whose role
+may open it. The supervisor tells the panel with the `operator-panel` hello
+feature, which carries one bit and no method. It adds the feature itself, after
+it narrows the tenant's hello, and it strips one that a tenant's daemon claims.
+The link only saves typing the address. `/supervisor` still checks the role on
+every request.
+
 ## Stage under the supervisor
 
 Whether [Stage](web.md#stage-the-immersive-chatplay-surface) is available has

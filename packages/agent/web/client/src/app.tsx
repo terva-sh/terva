@@ -57,6 +57,7 @@ import type {
   SkillInfo,
   Status,
   Surface,
+  ServerHello,
   SurfaceMeta,
   TaskInfo,
   TaskList,
@@ -99,6 +100,7 @@ import { applyGroupFilter, cycleGroup, stageSystemGroup, SYS_STAGE, type GroupFi
 import { AuthStepForm } from './features/providers/AuthStepForm'
 import { SessionInfo as SessionInfoView } from './features/sessions/SessionInfo'
 import { SessionPicker } from './features/sessions/SessionPicker'
+import { anotherDialogOpen, isPaletteShortcut, paletteShortcutKeys, SessionPalette } from './features/sessions/SessionPalette'
 import type { ImageAttachment } from './platform/conversation/images'
 import { uploadFile, type FileAttachment } from './features/conversation/attachments'
 import {
@@ -120,7 +122,8 @@ import { CopyButton } from './ui/CopyButton'
 import { ConnectionBanner } from './ui/Loading'
 import { deadlineClass, deadlineOf, deadlineStyle } from './ui/deadline'
 import { humanBytes, humanCount, localInstant } from './ui/formatting'
-import { stageHref, talkootHref, takeNavParams } from './ui/navlinks'
+import { stageHref, takeNavParams } from './ui/navlinks'
+import { AppSwitcher } from './ui/AppSwitcher'
 import { usePinnedTail } from './ui/pinnedtail'
 
 const TOOL_VIEWS: ToolView[] = ['full', 'grouped', 'minimal', 'hidden']
@@ -255,6 +258,9 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   const [permission, setPermission] = useState<PermissionRequest | null>(null)
   const [ask, setAsk] = useState<AskRequest | null>(null)
   const [drawer, setDrawer] = useState(false)
+  // The session quick switcher (SessionPalette), opened by Mod+K or the header
+  // control.
+  const [palette, setPalette] = useState(false)
   // Toasts. Call sites pick notify.error / notify.ok / notify.note by what
   // KIND of thing happened; how long each kind lives is Toast.tsx's decision,
   // not theirs. Only an error waits to be dismissed.
@@ -327,14 +333,16 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   // verbs exist at all, and a tab that calls one the daemon never negotiated is
   // a tab whose every control answers "method group not negotiated".
   const [canReadSecrets, setCanReadSecrets] = useState(false)
-  // Talkoot: the ⁂ button opens the Talkoot app, and shows only when the hello
-  // grants the talkoot group. The panel's own Talkoot view is frozen in
-  // ui/talkoot until a cleanup removes it, and nothing here mounts it.
-  const [canTalkoot, setCanTalkoot] = useState(false)
+  // The hello, kept whole for the app switcher, which reads the features and
+  // groups that say which other apps this daemon serves. The panel's own
+  // Talkoot view is frozen in ui/talkoot until a cleanup removes it, and
+  // nothing here mounts it; the switcher opens the Talkoot app instead.
+  const [hello, setHello] = useState<ServerHello | null>(null)
   const [wsSecrets, setWsSecrets] = useState<SecretsStatus | null>(null)
   const [wsSecretsErr, setWsSecretsErr] = useState('')
-  // Whether the daemon serves the Stage app (--web-stage). When set, the topbar
-  // shows a link across to /stage/; the panel is otherwise unaware of Stage.
+  // Whether the daemon serves the Stage app (--web-stage). The switcher lists
+  // Stage from the hello; this flag gates the links that carry a session or a
+  // persona across to it (an immersive session's 🎭, the persona sheet).
   const [stageEnabled, setStageEnabled] = useState(false)
   // Whether this carrier can stage file attachments (ctrlproto "attachments"),
   // and the per-file ceiling it advertised. 0 = it did not say, so let the
@@ -1194,7 +1202,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
       document.documentElement.lang = lang
       setCanRestart(!!hello?.features?.includes('restart'))
       setCanReadSecrets(!!hello?.groups?.includes('secrets'))
-      setCanTalkoot(!!hello?.groups?.includes('talkoot'))
+      setHello(hello ?? null)
       setStageEnabled(!!hello?.features?.includes('stage'))
       canListFiles.current = !!hello?.features?.includes('files-list')
       // Whether this carrier has an upload route at all, and what it will take.
@@ -1334,14 +1342,32 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
   // anything up. Gated on the socket being OPEN and not on `drawer` alone — a
   // send on a still-connecting socket rejects, and the drawer would then hold
   // whatever the list said before it opened.
+  //
+  // The quick switcher marks busy rows the same way, so it re-lists on the same
+  // cadence while it is open. A request that opens or closes is pushed
+  // (sessions_changed); a turn boundary is not.
   useEffect(() => {
-    if (!drawer || status !== 'open') return
+    if (!(drawer || palette) || status !== 'open') return
     if (clientRef.current) refreshSessions(clientRef.current)
     const id = setInterval(() => {
       if (clientRef.current) refreshSessions(clientRef.current)
     }, 4000)
     return () => clearInterval(id)
-  }, [drawer, status, refreshSessions])
+  }, [drawer, palette, status, refreshSessions])
+
+  // Mod+K opens the quick switcher from anywhere in the panel, the composer
+  // included: the key does nothing there in a browser, and a person reaching
+  // for it is mid-thought about a different session. A second press closes it.
+  // While another dialog is open the key is left alone (anotherDialogOpen).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!isPaletteShortcut(e) || anotherDialogOpen()) return
+      e.preventDefault()
+      setPalette((open) => !open)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   // The workflow lane on its own, slower cadence, and only while something could
   // still be moving.
@@ -2363,6 +2389,7 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         <button class="icon" title={t('Sessions')} onClick={() => setDrawer((d) => !d)}>
           ☰
         </button>
+        <AppSwitcher hello={hello} current="panel" />
         {/* The wordmark doubles as a home button: clicking it leaves the focused
             session for the landing (goToLanding also forgets the tab's session, so
             a reload stays on the landing). Only interactive when a session IS
@@ -2379,6 +2406,22 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
             <span class="sess-title">{current?.title || curInfo?.title || t('new chat')}</span>
           </div>
         )}
+        <button
+          class="jump-btn"
+          title={t('Jump to a session (%s)', paletteShortcutKeys().join('+'))}
+          aria-label={t('Jump to a session')}
+          aria-haspopup="dialog"
+          aria-keyshortcuts={paletteShortcutKeys()[0] === 'Ctrl' ? 'Control+K' : 'Meta+K'}
+          onClick={() => setPalette(true)}
+        >
+          <span class="jump-glass" aria-hidden="true">
+            ⌕
+          </span>
+          <span class="jump-label">{t('Jump')}</span>
+          {paletteShortcutKeys().map((k) => (
+            <kbd key={k}>{k}</kbd>
+          ))}
+        </button>
         {/* Session-specific controls (info, board/focus, model) act on the
             framed session, so they are hidden on the session-less landing —
             in particular the model button would otherwise fire models.switch
@@ -2405,11 +2448,6 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
         >
           ⊞
         </button>
-        {canTalkoot && (
-          <a class="icon" href={talkootHref()} title={t('Open the Talkoot app')} aria-label={t('Open the Talkoot app')}>
-            ⁂
-          </a>
-        )}
         {curSess && (
           <button
             class={`icon${viewMode === 'board' ? ' on' : ''}`}
@@ -2473,13 +2511,10 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
             ${cost.toFixed(4)}
           </button>
         )}
-        {stageEnabled && (
-          <a
-            class="icon"
-            href={stageHref(curInfo?.experience ? curSess : '')}
-            title={t('Open Stage')}
-            aria-label={t('Open Stage')}
-          >
+        {/* The switcher opens Stage itself. This link stays only for an
+            immersive session, because it carries that session across. */}
+        {stageEnabled && curSess && curInfo?.experience && (
+          <a class="icon" href={stageHref(curSess)} title={t('Open this session in Stage')} aria-label={t('Open this session in Stage')}>
             🎭
           </a>
         )}
@@ -2584,6 +2619,32 @@ export function App({ createClient = () => new Client() }: { createClient?: () =
           onClose={() => setPickerOpen(false)}
         />
       ) : null}
+
+      {palette && (
+        <SessionPalette
+          sessions={sessions}
+          current={curSess}
+          liveBusy={liveBusy}
+          onSelect={(id) => {
+            setPalette(false)
+            selectSession(id)
+            setViewMode('focus')
+            localStorage.setItem('terva_viewmode', 'focus')
+          }}
+          onClose={() => setPalette(false)}
+          // The board needs a session to frame it, and it is pointless from
+          // the board itself.
+          onOpenBoard={
+            curSess && viewMode !== 'board'
+              ? () => {
+                  setPalette(false)
+                  setViewMode('board')
+                  localStorage.setItem('terva_viewmode', 'board')
+                }
+              : undefined
+          }
+        />
+      )}
 
       {drawer && (
         <SessionPicker

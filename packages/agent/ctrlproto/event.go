@@ -90,7 +90,8 @@ const (
 	// extension panel opened/closed, status appeared); the client re-lists.
 	EventSurfacesChanged = "surfaces_changed"
 	// EventSessionsChanged signals that the SET of sessions changed shape —
-	// create, delete, rename, or a cold session materializing live. It carries
+	// create, delete, rename, or a cold session materializing live — or that a
+	// session started or stopped waiting on a person (SessionInfo.Waiting). It carries
 	// no payload: a client answers it by re-running sessions.list, which is the
 	// single source of truth (a delta in the event would invent a second). Like
 	// surfaces_changed it is workspace-scoped, broadcast on [AddrWorkspace] via

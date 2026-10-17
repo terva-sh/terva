@@ -1,6 +1,9 @@
 package ctrlproto
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // The federated id: how a hub names an object that lives on one of its members.
 //
@@ -56,12 +59,26 @@ func SplitFederatedID(federated string) (origin, id string) {
 	return before, after
 }
 
+// originPattern is a lower-case host name: letters, digits, dots, and
+// hyphens, 1 to 63 characters, starting and ending with a letter or digit.
+// The web client mirrors it in src/ui/navlinks.ts to check a session link.
+var originPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]{0,61}[a-z0-9])?$`)
+
 // ValidOrigin reports whether origin can name a fleet member.
 //
-// An origin must be non-empty and must not contain the separator, because
-// JoinFederatedID's round trip rests on the first slash belonging to the join.
-// An origin with a slash in it would silently re-parse as a different member.
+// The separator is the reason the rule exists: JoinFederatedID's round trip
+// rests on the first slash belonging to the join, so an origin with a slash in
+// it would silently re-parse as a different member.
+//
+// The rest of the shape is narrower than the round trip needs, on purpose. An
+// origin is a name a member claims for itself until enrolment pins a key, and
+// it lands in every session id, every link, and every label a person reads.
+// Lower case keeps "Neot" and "neot" from being two members a person cannot
+// tell apart. A host-name shape keeps spaces, markup, and look-alike
+// characters out of all of those places. docs/proposals/web-hub.md, D3,
+// records the choice.
+//
 // Enrollment is where a hub applies this, before an origin ever reaches an id.
 func ValidOrigin(origin string) bool {
-	return origin != "" && !strings.Contains(origin, FederatedIDSep)
+	return originPattern.MatchString(origin)
 }

@@ -1,7 +1,7 @@
 # The terva web panel: what each surface does
 
 Every surface the browser control panel puts in front of you once it is open:
-the panes, the model picker, usage, tool-call display, slash commands,
+the session quick switcher, the panes, the model picker, usage, tool-call display, slash commands,
 @-file mentions, attachments, shared files, and the queue. This is a reference
 to look a control up in.
 
@@ -42,6 +42,41 @@ compaction**, the moment a session has provably outgrown the name its
 opening earned. Only machine-generated titles refresh; a session you named
 by hand keeps its name (title provenance is tracked in the transcript, so
 this holds across restarts too).
+
+## Jumping to a session
+
+The quick switcher opens a session without a trip through the drawer or the
+board. Press **Ctrl+K**, or **⌘K** on a Mac, anywhere in the panel. The
+composer is included. On a touch screen, use the **⌕ Jump** control in the
+header. Press the shortcut again to close the switcher.
+
+Type a word from a session's title, and the list keeps the sessions whose
+title holds it. An untitled session matches on its id. **↑** and **↓** move the
+selection, **Enter** opens it, and **Esc** closes the switcher without a
+change. The selection starts on the first session that is not the one on
+screen.
+
+The list has two parts:
+
+- **Waiting on you** holds each session that waits for an approval or for an
+  answer to a question. A session far down the list still appears here. The
+  person is the only one who can move it, so it never falls below the cut.
+- **Recent** holds every other match, newest activity first. A dot shows each
+  session's state, as the drawer does. A session with a turn in flight says
+  **working**. On a [fleet](fleet.md) hub, a session from a member names its
+  machine.
+
+The list shows 50 sessions at most. Past that, the switcher says so, and more
+of the title narrows the list. **Open the board** leaves for the board, which
+shows every session at once.
+
+The switcher stays in the panel, so the connection stays open. While the
+switcher is open, it re-lists the sessions every four seconds. The daemon also
+pushes a re-list when a request for approval or an answer opens or closes. On
+a fleet hub, a member's change shows on the next re-list.
+
+The TUI's `/sessions` picker shows the same state with **◆** in front of a
+session that waits on you.
 
 ## Panes
 

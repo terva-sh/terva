@@ -6,7 +6,7 @@ export function composingKey(event: KeyboardEvent, composing: boolean): boolean 
   return composing || event.isComposing || event.keyCode === 229
 }
 
-export function useComposition(ref: RefObject<HTMLTextAreaElement>) {
+export function useComposition(ref: RefObject<HTMLTextAreaElement | HTMLInputElement>) {
   const active = useRef(false)
   useLayoutEffect(() => {
     const input = ref.current

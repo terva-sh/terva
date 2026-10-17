@@ -76,6 +76,12 @@ type Options struct {
 	// product from the control panel, opted into per deployment.
 	AllowStage bool
 
+	// FleetHub advertises the `fleet-hub` feature: this daemon fronts member
+	// machines that check in (--fleet-addr). It mounts nothing and gates no
+	// verb. It tells a client which role the daemon plays, so the web client
+	// can withhold the apps a hub does not serve.
+	FleetHub bool
+
 	// Methods, when non-empty, restricts every connection to exactly these
 	// verbs (--web-methods). Empty serves whatever the groups and the mask
 	// already allow, which is what this daemon did before the option existed.
@@ -615,6 +621,9 @@ func buildHello(opts Options, maxUploadBytes, maxAttachmentBytes int64) ctrlprot
 	}
 	if opts.AllowStage {
 		hello.Features = append(hello.Features, ctrlproto.FeatureStage)
+	}
+	if opts.FleetHub {
+		hello.Features = append(hello.Features, ctrlproto.FeatureFleetHub)
 	}
 	return hello
 }

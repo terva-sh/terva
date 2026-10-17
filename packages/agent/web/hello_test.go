@@ -46,6 +46,7 @@ func TestEveryPermissionGateReachesTheHello(t *testing.T) {
 		{name: "login", opts: Options{AllowLogin: true}, group: ctrlproto.GroupAuth},
 		{name: "secrets", opts: Options{AllowSecrets: true}, group: ctrlproto.GroupSecrets},
 		{name: "talkoot", opts: Options{Talkoot: true}, group: ctrlproto.GroupTalkoot},
+		{name: "fleet hub", opts: Options{FleetHub: true}, feature: ctrlproto.FeatureFleetHub},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			off, on := base, buildHello(tc.opts, 0, 0)

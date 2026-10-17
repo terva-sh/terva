@@ -73,6 +73,54 @@ func TestNarrowHelloDoesNotMutateTheChildsFeatures(t *testing.T) {
 	}
 }
 
+// The operator panel is offered to exactly the people /supervisor lets in:
+// those whose grant includes the tenants group, which today is the owner.
+// The group itself never crosses (see the group census below); one feature
+// does.
+func TestOnlyAPersonWhoMayOpenTheOperatorPanelIsOfferedIt(t *testing.T) {
+	child := ctrlproto.Hello{Role: ctrlproto.RoleServer, Groups: []ctrlproto.Group{ctrlproto.GroupConversation}}
+	for _, role := range []authz.Role{authz.RoleOwner, authz.RoleOperator, authz.RoleMember, authz.RoleViewer} {
+		got := NarrowHello(child, principal(role), Carrier{})
+		offered := slices.Contains(got.Features, ctrlproto.FeatureOperatorPanel)
+		may := slices.Contains(authz.Grant(principal(role)), ctrlproto.GroupTenants)
+		if offered != may {
+			t.Errorf("%s: operator panel offered = %v, but the page would let them in = %v", role, offered, may)
+		}
+		if slices.Contains(got.Groups, ctrlproto.GroupTenants) {
+			t.Errorf("%s: the tenants group crossed to a tenant connection: %v", role, got.Groups)
+		}
+	}
+	// The positive control: the owner must actually be offered it, or the loop
+	// above passes against a NarrowHello that never adds the feature at all.
+	if !slices.Contains(NarrowHello(child, principal(authz.RoleOwner), Carrier{}).Features, ctrlproto.FeatureOperatorPanel) {
+		t.Fatal("the owner was not offered the operator panel")
+	}
+}
+
+// A child is a tenant's own daemon, and a tenant controls its config. Its claim
+// to the feature must not reach a person the supervisor would refuse.
+func TestAChildCannotClaimTheOperatorPanel(t *testing.T) {
+	child := ctrlproto.Hello{Role: ctrlproto.RoleServer, Features: []string{ctrlproto.FeatureOperatorPanel}}
+	got := NarrowHello(child, principal(authz.RoleMember), Carrier{Stage: true}).Features
+	if slices.Contains(got, ctrlproto.FeatureOperatorPanel) {
+		t.Errorf("a member was offered the operator panel because the child claimed it: %v", got)
+	}
+	got = NarrowHello(child, principal(authz.RoleOwner), Carrier{}).Features
+	if n := countOf(got, ctrlproto.FeatureOperatorPanel); n != 1 {
+		t.Errorf("the owner's hello names the operator panel %d times, want once: %v", n, got)
+	}
+}
+
+func countOf(xs []string, x string) int {
+	n := 0
+	for _, v := range xs {
+		if v == x {
+			n++
+		}
+	}
+	return n
+}
+
 // --- the censuses, read from source so they cannot go stale ---
 
 // notRouteBacked names every ctrlproto feature that is NOT backed by an HTTP
@@ -91,6 +139,7 @@ var notRouteBacked = map[string]string{
 	ctrlproto.FeatureWorkspaceEvents: "events on the socket",
 	ctrlproto.FeatureHistoryWindow:   "conversation.history, session group",
 	ctrlproto.FeatureRestart:         "control.restart, control group — restarts the CHILD, which is the tenant's own daemon",
+	ctrlproto.FeatureFleetHub:        "names the daemon's role; the member listener is its own socket, not a route the supervisor carries",
 }
 
 // A census over the ctrlproto source itself: every Feature constant must be

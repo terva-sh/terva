@@ -37,7 +37,7 @@ func runMemberMode(ctx context.Context, args build.Args, version string) error {
 		return fmt.Errorf("terva member: --origin %q is reserved for the hub's own workspace, pick another name for this machine", fleet.LocalOrigin)
 	}
 	if !ctrlproto.ValidOrigin(origin) {
-		return fmt.Errorf("terva member: --origin %q is not usable: it becomes the prefix of a federated session id, so it cannot be empty or contain %q", origin, ctrlproto.FederatedIDSep)
+		return fmt.Errorf("terva member: --origin %q is not usable: it becomes the prefix of every session id the hub shows, so it must be a lower-case host name (letters, digits, dots, and hyphens, up to 63 characters, starting and ending with a letter or digit), for example neot or build-box", origin)
 	}
 
 	token, err := readFleetToken(args.FleetTokenFile)

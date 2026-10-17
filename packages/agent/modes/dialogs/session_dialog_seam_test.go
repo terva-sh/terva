@@ -61,8 +61,9 @@ func TestSessionDialogRefreshPreservesCursor(t *testing.T) {
 	}
 }
 
-// A row's leading glyph reflects the session's live state — ● a turn in flight,
-// ○ materialized but idle, two spaces for a cold on-disk session — so the
+// A row's leading glyph reflects the session's live state — ◆ waiting on the
+// person, ● a turn in flight, ○ materialized but idle, two spaces for a cold
+// on-disk session — so the
 // attached /sessions picker shows at a glance which sessions are running.
 func TestFormatSessionRowStatusGlyph(t *testing.T) {
 	cases := []struct {
@@ -70,6 +71,7 @@ func TestFormatSessionRowStatusGlyph(t *testing.T) {
 		s    session.SessionSummary
 		want string
 	}{
+		{"waiting", session.SessionSummary{Live: true, Busy: true, Waiting: "approval", Title: "x", MessageCount: 1}, "◆ "},
 		{"busy", session.SessionSummary{Live: true, Busy: true, Title: "x", MessageCount: 1}, "● "},
 		{"live idle", session.SessionSummary{Live: true, Title: "x", MessageCount: 1}, "○ "},
 		{"cold", session.SessionSummary{Title: "x", MessageCount: 1}, "  "},

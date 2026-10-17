@@ -62,7 +62,7 @@ func NewMember(opts MemberOptions) (*Member, error) {
 		return nil, errors.New("fleet: a member needs a token to present to the hub")
 	}
 	if !ctrlproto.ValidOrigin(opts.Origin) {
-		return nil, fmt.Errorf("fleet: %q is not a usable origin: it must be non-empty and free of %q, because it prefixes every federated id the hub mints for this member", opts.Origin, ctrlproto.FederatedIDSep)
+		return nil, fmt.Errorf("fleet: %q is not a usable origin: it must be a lower-case host name (letters, digits, dots, and hyphens, starting and ending with a letter or digit), because it prefixes every federated id the hub mints for this member", opts.Origin)
 	}
 	target, err := MemberURL(opts.HubURL, opts.Origin)
 	if err != nil {

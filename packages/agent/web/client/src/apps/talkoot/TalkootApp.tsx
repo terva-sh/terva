@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { Client } from '../../platform/ctrlproto/client'
-import { ADDR_WORKSPACE, type CatalogView, type Status } from '../../platform/ctrlproto/types'
+import { ADDR_WORKSPACE, type CatalogView, type ServerHello, type Status } from '../../platform/ctrlproto/types'
 import { TalkootHub } from '../../platform/talkoot/hub'
 import { applyServerCatalog, setLocale, t } from '../../i18n'
-import { panelHref } from '../../ui/navlinks'
+import { panelHref, takeTalkootParams } from '../../ui/navlinks'
 import { Shell } from './Shell'
+
+// A ?team= and ?member= link, read once before the first render. Reading it
+// also strips it from the address bar, so this is module scope: it must run
+// exactly once, and a reconnect must not reapply it.
+const bootNav = takeTalkootParams()
 
 // What the app knows about the daemon: nothing yet, a daemon that runs
 // talkoots, or one that does not grant the talkoot group to this connection.
@@ -17,9 +22,14 @@ type Grant = 'unknown' | 'granted' | 'refused'
 export function TalkootApp() {
   const [status, setStatus] = useState<Status>('connecting')
   const [grant, setGrant] = useState<Grant>('unknown')
+  // The hello, kept whole for the app switcher.
+  const [hello, setHello] = useState<ServerHello | null>(null)
   // generation counts connections. A subscription lives on one socket, so the
   // team view subscribes again and reads again on every new one.
   const [generation, setGeneration] = useState(0)
+  // The daemon's directory, which the first-run page names. Absent from a
+  // daemon that predates the hello field.
+  const [workspace, setWorkspace] = useState('')
   // i18nEpoch re-renders when the server catalog lands, without touching
   // generation, which would resubscribe.
   const [, setI18nEpoch] = useState(0)
@@ -36,6 +46,7 @@ export function TalkootApp() {
     }
     client.onReady = (hello) => {
       document.documentElement.lang = setLocale(hello?.locale ?? 'en')
+      setWorkspace(hello?.cwd ?? '')
       client
         .send<{ catalog: CatalogView }>('i18n.catalog', {}, '')
         .then((r) => {
@@ -46,6 +57,7 @@ export function TalkootApp() {
         .catch(() => {
           /* an older daemon, or offline: the bundled catalog stands in */
         })
+      setHello(hello ?? null)
       const ok = !!hello?.groups?.includes('talkoot')
       setGrant(ok ? 'granted' : 'refused')
       // talkoots_changed rides #workspace, so the team list hears a new team.
@@ -72,7 +84,7 @@ export function TalkootApp() {
   }
   return (
     <div class="talkoot-app">
-      <Shell client={client} hub={hub} generation={generation} />
+      <Shell client={client} hub={hub} generation={generation} workspace={workspace} hello={hello} link={bootNav} />
     </div>
   )
 }

@@ -400,6 +400,8 @@ type SessionInfo struct {
 	// Recruit names the talkoot this session recruits for, when it is a
 	// Talkoot recruiter session such as Hautoja.
 	Recruit string `json:"recruit,omitempty"`
+	// Manager is set on the daemon's Talkoot team manager session.
+	Manager bool `json:"manager,omitempty"`
 	// Reasoning is this session's thinking-level override as the user chose it
 	// ("off", "high", "max", …), or "" when the session follows the global
 	// setting. Raw rather than normalized so a client can tell an explicit
@@ -501,7 +503,21 @@ type SessionInfo struct {
 	// unknown rather than idle/cold.
 	Live bool `json:"live,omitempty"`
 	Busy bool `json:"busy,omitempty"`
+	// Waiting reports that a live session waits on a person: [WaitingApproval]
+	// while a tool call waits for approval, [WaitingQuestion] while a question
+	// set waits for an answer, and "" otherwise. An approval wins when both are
+	// open. A view that is not subscribed to the session hears of neither
+	// request, so without this field nothing outside the session itself could
+	// show that it waits. The daemon broadcasts [EventSessionsChanged] when a
+	// request opens or closes, so a client re-lists rather than polls.
+	Waiting string `json:"waiting,omitempty"`
 }
+
+// The values of [SessionInfo.Waiting].
+const (
+	WaitingApproval = "approval"
+	WaitingQuestion = "question"
+)
 
 // CreateOpts parameterizes [WorkspaceService.CreateSession]. All fields are
 // optional; empty values fall back to the workspace defaults. Persona and the
@@ -546,6 +562,10 @@ type CreateOpts struct {
 	// recruiter files roster proposals, which is steering. A client binds one
 	// with [MethodTalkootRecruit], which needs [CapSteer].
 	Recruit string `json:"-"`
+	// Manager makes the session the daemon's Talkoot team manager. Like
+	// Recruit it never crosses the wire: [MethodTalkootManager], which needs
+	// [CapSteer], sets it.
+	Manager bool `json:"-"`
 }
 
 // ContextBreakdown is a byte-size accounting of what fills the model's context

@@ -195,6 +195,31 @@ const (
 	// reaches every client on the wire (core.SharedFile rides the tool result
 	// either way) — what the feature gates is whether there is a link behind it.
 	FeatureSharedFiles = "shared-files"
+	// FeatureFleetHub advertises that this daemon is a fleet hub: it fronts the
+	// sessions of member machines that check in (--fleet-addr), so every
+	// session id it lists carries an origin.
+	//
+	// Presentation only. It names the daemon's role so a client can label what
+	// it shows and withhold what a hub does not serve. The web client hides the
+	// Talkoot app on a hub, because a hub grants the talkoot group and then
+	// refuses every room subscription (fleet/aggregate.go). It gates no verb.
+	FeatureFleetHub = "fleet-hub"
+)
+
+// Carrier-appended features: added by the SUPERVISOR under `terva serve`, for
+// one person, after the child's hello has been narrowed. A child never decides
+// them, and tenant.NarrowHello strips one a child claims.
+const (
+	// FeatureOperatorPanel tells a client that THIS person may open the
+	// supervisor's operator panel at /supervisor, so an app switcher can offer
+	// it.
+	//
+	// 🔑 A feature and not the tenants group, because the group is the
+	// boundary: GroupTenants is served on the supervisor's own connection only,
+	// and a tenant connection never names it (tenant/gate.go, D8). The feature
+	// carries one bit, "you may open that page", and no verb rides it. The page
+	// checks the role again on every request (web/supervisorpanel.go).
+	FeatureOperatorPanel = "operator-panel"
 )
 
 // Hello is the handshake frame each side sends once at connect time. The

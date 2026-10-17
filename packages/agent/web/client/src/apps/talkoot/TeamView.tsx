@@ -14,10 +14,13 @@ import { OpenRefContext, ShowRefContext } from '../../ui/talkoot/RefChip'
 import { RoomLine } from '../../ui/talkoot/RoomLine'
 import { InboxCard } from '../../ui/talkoot/TalkootInbox'
 import { TalkootComposer } from '../../ui/talkoot/TalkootComposer'
-import { TeamColor } from '../../ui/talkoot/TalkootScreen'
+import { PersonInput, TeamColor } from '../../ui/talkoot/TalkootScreen'
 import { loadSeen, MotionPicker, orderMembers, PRESENCE_LABEL, saveSeen } from '../../ui/talkoot/TalkootTeam'
 import { TeamBudget } from '../../ui/talkoot/TeamBudget'
+import { SaveTemplate } from '../../ui/talkoot/SaveTemplate'
+import { Recruit } from '../../ui/talkoot/Recruit'
 import { useTalkoot } from '../../ui/talkoot/useTalkoot'
+import { useCardNotices } from '../../ui/talkoot/notify'
 import { SidePanel, type SideTab } from './SidePanel'
 import { Thread } from './Thread'
 
@@ -36,24 +39,35 @@ export function TeamView({
   team,
   generation,
   person,
+  onPerson,
   teams,
   you,
   listError,
+  initialMember = '',
   onTeamChanged,
+  notify = false,
 }: {
   client: ClientLike
   hub: TalkootHub
   team: TalkootSummary
   generation: number
   person: string
+  onPerson?: (name: string) => void
   teams: ComponentChildren
   you: ComponentChildren
   listError: string
+  // A member to open on first render, from a ?member= link. A member the team
+  // does not have falls back to the room, as any unknown selection does.
+  initialMember?: string
   onTeamChanged: () => void
+  notify?: boolean
 }) {
   const id = team.id
   const { state, error, loadOlder, refreshView } = useTalkoot(client, hub, id, generation)
-  const [selected, setSelected] = useState(ROOM)
+  // After useTalkoot, so its listener folds a card in first. The notice
+  // listener still reads the cards of the last render, before the event.
+  useCardNotices(hub, id, team.title || team.name || id, notify, state.cards)
+  const [selected, setSelected] = useState(initialMember || ROOM)
   const [actionError, setActionError] = useState('')
   const [drawer, setDrawer] = useState(false)
   // A jump to a card waits for the view that holds it to render.
@@ -185,6 +199,8 @@ export function TeamView({
               <section class="tka-section tka-foot">
                 <span class="talkoot-spend">{t('Today: $%s', spend.toFixed(2))}</span>
                 {view && <TeamBudget client={client} view={view} person={person} canSteer={canSteer} onError={setActionError} />}
+                <SaveTemplate client={client} id={id} onError={setActionError} />
+                {canSteer && <Recruit key={id} client={client} id={id} onError={setActionError} />}
                 {canSteer && (
                   <button class="btn sm" onClick={() => (teamPaused ? resume({}) : pause({}))}>
                     {teamPaused ? t('Resume the team') : t('Pause the team')}
@@ -215,7 +231,15 @@ export function TeamView({
                 </button>
               </header>
               {(listError || error || actionError) && <div class="talkoot-error">{listError || error || actionError}</div>}
-              {!canSteer && <div class="talkoot-note tka-banner">{t('Set your name in the menu to post, answer, and pause.')}</div>}
+              {/* The name is asked for in place, before the first action that
+                  needs it, rather than as a refusal after one. */}
+              {!canSteer && (
+                <label class="talkoot-field tka-banner tka-ask-name">
+                  <span>{t('Your name in the room')}</span>
+                  {onPerson ? <PersonInput person={person} onCommit={onPerson} /> : null}
+                  <span class="talkoot-note">{t('You need one to post, answer, and pause.')}</span>
+                </label>
+              )}
               <div class="talkoot-log tka-log" role="log" ref={tail.ref} onScroll={tail.onScroll}>
                 {state.next !== undefined && (
                   <button class="btn sm ghost talkoot-older" onClick={() => void loadOlder()}>

@@ -318,13 +318,18 @@ func FormatSessionRowPlain(s session.SessionSummary, maxWidth int) string {
 }
 
 // sessionStatusGlyph is a fixed-width (2-column) prefix conveying a session's
-// live state: ● a turn is in flight, ○ materialized but idle, or two spaces for
-// a cold on-disk session (the common case for a local picker or an old daemon).
+// live state: ◆ it waits on a person for an approval or an answer, ● a turn is
+// in flight, ○ materialized but idle, or two spaces for a cold on-disk session
+// (the common case for a local picker or an old daemon). Waiting outranks busy:
+// a session parked on an approval still holds its turn, and the person is the
+// one who can move it.
 // Monochrome on purpose — a row is styled as a whole (the selection highlight or
 // a flat mute), so the state has to read from the glyph shape, not colour. The
 // filled/hollow/blank gradient mirrors the web board's busy/idle/cold pills.
 func sessionStatusGlyph(s session.SessionSummary) string {
 	switch {
+	case s.Waiting != "":
+		return "◆ "
 	case s.Busy:
 		return "● "
 	case s.Live:

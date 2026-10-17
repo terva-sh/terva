@@ -338,6 +338,7 @@ func runWebServer(ctx context.Context, args build.Args, version string, ready fu
 		AllowSecrets:   allowSecrets,
 		Talkoot:        config.TalkootEnabled(),
 		AllowStage:     allowStage,
+		FleetHub:       args.FleetAddr != "",
 		Methods:        webMethods,
 	})
 }

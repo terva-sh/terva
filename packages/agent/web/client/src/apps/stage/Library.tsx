@@ -11,7 +11,7 @@ import { CREATOR_PERSONA } from './creator'
 import { applyPortraits, portraitsOn } from './portraits'
 import { relativeTime } from './format'
 import { t, tn, tr } from '../../i18n'
-import { panelHref } from '../../ui/navlinks'
+import { AppSwitcher } from '../../ui/AppSwitcher'
 import { ConnectionBanner, Placeholder } from '../../ui/Loading'
 import { fileToBase64 } from '../../ui/browser'
 // Stage's own formatBytes is gone: it is ui/formatting's humanBytes, which took
@@ -47,6 +47,7 @@ import type {
   WorldsListResult,
   Group,
   CardGroupsResult,
+  ServerHello,
 } from '../../platform/ctrlproto/types'
 
 type SessionsResult = { sessions: SessionInfo[] }
@@ -248,6 +249,9 @@ export function personaDeleteWarning(name: string, chats: number, shadowsBuiltin
 // or file-pick, a recent-chats strip, and the persona roster.
 export function Library(props: {
   client: ClientLike
+  // The hello, for the app switcher. Absent until the daemon answers, and
+  // the switcher renders nothing until it lists a second app.
+  hello?: ServerHello | null
   ready: boolean
   status: Status
   onOpenChat: (session: string) => void
@@ -949,7 +953,7 @@ export function Library(props: {
           <button class="stage-nav-link stage-you-link" onClick={props.onEditYou} title={t('The identities you play as')}>
             {t('🎭 You')}
           </button>
-          <a class="stage-nav-link" href={panelHref()} title={t('Open the control panel')}>{t('⌂ Panel')}</a>
+          <AppSwitcher hello={props.hello} current="stage" />
           <select
             class="stage-theme-pick"
             title={t('Theme')}

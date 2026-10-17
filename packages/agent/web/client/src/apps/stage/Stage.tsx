@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { Client } from '../../platform/ctrlproto/client'
-import type { CardSummary, CatalogView, Status } from '../../platform/ctrlproto/types'
+import type { CardSummary, CatalogView, ServerHello, Status } from '../../platform/ctrlproto/types'
 import { setLocale, applyServerCatalog, t } from '../../i18n'
 import { takeNavParams } from '../../ui/navlinks'
 import { Library } from './Library'
@@ -50,6 +50,8 @@ const bootNav = takeNavParams()
 export function Stage() {
   const [status, setStatus] = useState<Status>('connecting')
   const [ready, setReady] = useState(false)
+  // The hello, kept whole for the app switcher in the library's top bar.
+  const [hello, setHello] = useState<ServerHello | null>(null)
   // generation counts CONNECTIONS, not renders. Every hello — the first and every
   // one after a reconnect — bumps it, and the chat's subscription effect depends on
   // it. Server-side subscriptions live and die with the socket, so without this a
@@ -94,6 +96,7 @@ export function Stage() {
         .catch(() => {
           /* older server / offline — the bundle stands in */
         })
+      setHello(hello ?? null)
       setReady(true)
       setGeneration((g) => g + 1)
     }
@@ -166,6 +169,7 @@ export function Stage() {
   return (
     <Library
       client={client}
+      hello={hello}
       ready={ready}
       status={status}
       onOpenChat={(session) => setView({ screen: 'chat', session })}

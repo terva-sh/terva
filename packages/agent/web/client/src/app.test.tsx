@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/preact'
 
 import { App, countdown, CtxRow, ProvidersBody, ResetRow, shortWindow, wtStatus } from './app'
+import { paletteShortcutKeys } from './features/sessions/SessionPalette'
 import { fakeClient } from './platform/ctrlproto/testing'
 import { localInstant } from './ui/formatting'
 import { ADDR_WORKSPACE } from './platform/ctrlproto/types'
@@ -293,23 +294,70 @@ describe('App transport lifecycle', () => {
     expect(client.isConnected()).toBe(false)
   })
 
-  // The restart control and the Stage link are both gated on hello features. A
-  // panel that offers restart to a daemon without it produces an error the user
-  // cannot act on; one that hides Stage when it IS enabled loses the only
-  // in-product route to the other app.
-  it('gates the Stage link on the hello feature', async () => {
+  // The app switcher is the in-product route to Stage, and it lists Stage only
+  // when the hello says the daemon serves it. One that hides Stage when it IS
+  // enabled loses the route; one that offers it when it is not links to a page
+  // the daemon never mounted. A panel with no other app shows no switcher.
+  it('lists Stage in the app switcher only when the hello serves it', async () => {
     const client = fakeClient()
     render(<App createClient={() => client} />)
 
     await act(async () => {
       client.onReady({ features: [] } as never)
     })
+    expect(document.querySelector('.appsw-btn')).toBeNull()
     expect(document.querySelector('a[href*="/stage/"]')).toBeNull()
 
     await act(async () => {
       client.onReady({ features: ['stage'] } as never)
     })
-    expect(document.querySelector('a[href*="/stage/"]')).not.toBeNull()
+    const btn = document.querySelector<HTMLButtonElement>('.appsw-btn')
+    expect(btn).not.toBeNull()
+    await act(async () => {
+      btn!.click()
+    })
+    expect(document.querySelector('.appsw-menu a[href="/stage/"]')).not.toBeNull()
+  })
+
+  // The quick switcher opens from the keyboard anywhere in the panel, and from
+  // the header for a touch screen, which has no Mod+K.
+  it('opens the session quick switcher on Mod+K and from the header', async () => {
+    const client = fakeClient()
+    render(<App createClient={() => client} />)
+    await act(async () => {
+      client.onReady({ features: [] } as never)
+    })
+    expect(screen.queryByRole('dialog', { name: 'Jump to a session' })).toBeNull()
+
+    const mod = paletteShortcutKeys()[0] === 'Ctrl' ? { ctrlKey: true } : { metaKey: true }
+    fireEvent.keyDown(window, { key: 'k', ...mod })
+    expect(screen.getByRole('dialog', { name: 'Jump to a session' })).toBeTruthy()
+    // A second press closes it, as it does in the apps this habit comes from.
+    fireEvent.keyDown(window, { key: 'k', ...mod })
+    expect(screen.queryByRole('dialog', { name: 'Jump to a session' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to a session' }))
+    expect(screen.getByRole('dialog', { name: 'Jump to a session' })).toBeTruthy()
+  })
+
+  // Another dialog owns the screen, so the key is left alone: two modal
+  // layers would make Escape close the wrong one.
+  it('leaves Mod+K alone while another dialog is open', async () => {
+    const client = fakeClient()
+    render(<App createClient={() => client} />)
+    await act(async () => {
+      client.onReady({ features: [] } as never)
+    })
+    const other = document.createElement('div')
+    other.className = 'modal-scrim'
+    document.body.appendChild(other)
+    const mod = paletteShortcutKeys()[0] === 'Ctrl' ? { ctrlKey: true } : { metaKey: true }
+    expect(fireEvent.keyDown(window, { key: 'k', ...mod })).toBe(true)
+    expect(screen.queryByRole('dialog', { name: 'Jump to a session' })).toBeNull()
+    // The positive control: with the other dialog gone, the same key opens it.
+    other.remove()
+    fireEvent.keyDown(window, { key: 'k', ...mod })
+    expect(screen.getByRole('dialog', { name: 'Jump to a session' })).toBeTruthy()
   })
 })
 

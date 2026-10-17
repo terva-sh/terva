@@ -139,3 +139,74 @@ func TestSessionInfoReportsLiveAndBusy(t *testing.T) {
 		t.Error("a session with an in-flight turn must report Busy")
 	}
 }
+
+// A session that waits on a person says so in the listing, and the daemon
+// pushes a re-list each time a request opens or closes. A board or palette that
+// is not subscribed to the session hears neither request, so the list is the
+// only place it can read the state.
+func TestSessionInfoReportsWhatALiveSessionWaitsOn(t *testing.T) {
+	tmp := testsupport.TempDir(t)
+	w := &Workspace{root: tmp, cwd: tmp, version: "test", ctx: context.Background(), diag: func(string) {}, sessions: map[string]*wsSession{}}
+	ctx := context.Background()
+
+	sess, err := session.NewSession(tmp, tmp, "anthropic", "m1", "test")
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	live := newTestSession()
+	live.id, live.ws, live.sess = build.SessionIDFromPath(sess.Path), w, sess
+	live.agent = coretest.NewAgent(nil, "anthropic", "m1", core.Registry{})
+	w.sessions[live.id] = live
+
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, err := w.Subscribe(subCtx, ctrlproto.AddrWorkspace)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	waiting := func(when string) string {
+		t.Helper()
+		list, err := w.Sessions(ctx)
+		if err != nil {
+			t.Fatalf("%s: Sessions: %v", when, err)
+		}
+		row, ok := infoByID(list, live.id)
+		if !ok {
+			t.Fatalf("%s: the live session is missing from the list", when)
+		}
+		if got := live.info().Waiting; got != row.Waiting {
+			t.Fatalf("%s: info() says %q and the list says %q", when, got, row.Waiting)
+		}
+		return row.Waiting
+	}
+
+	// The positive control: an idle session waits on nothing.
+	if got := waiting("idle"); got != "" {
+		t.Fatalf("an idle session reports Waiting=%q", got)
+	}
+
+	live.openAsk(ctrlproto.AskRequest{AskID: "a1", Question: "Which port?"})
+	assertSessionsChanged(t, ch, "after a question opened")
+	if got := waiting("a question open"); got != ctrlproto.WaitingQuestion {
+		t.Fatalf("Waiting = %q with a question open, want %q", got, ctrlproto.WaitingQuestion)
+	}
+
+	// An approval outranks a question: it holds the turn on a tool call.
+	live.openPermission(ctrlproto.PermissionRequest{CallID: "c1", Tool: "bash"})
+	assertSessionsChanged(t, ch, "after an approval opened")
+	if got := waiting("both open"); got != ctrlproto.WaitingApproval {
+		t.Fatalf("Waiting = %q with both open, want %q", got, ctrlproto.WaitingApproval)
+	}
+
+	live.closePermission("c1", "approved")
+	assertSessionsChanged(t, ch, "after the approval closed")
+	if got := waiting("the question left"); got != ctrlproto.WaitingQuestion {
+		t.Fatalf("Waiting = %q after the approval closed, want %q", got, ctrlproto.WaitingQuestion)
+	}
+
+	live.closeAsk("a1", "answered")
+	assertSessionsChanged(t, ch, "after the question closed")
+	if got := waiting("nothing open"); got != "" {
+		t.Fatalf("Waiting = %q with nothing open", got)
+	}
+}

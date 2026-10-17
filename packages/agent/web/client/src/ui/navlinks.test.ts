@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, expect, it, beforeEach } from 'vitest'
-import { panelHref, stageCardHref, stageHref, takeNavParams } from './navlinks'
+import { panelHref, stageCardHref, stageHref, takeNavParams, takeTalkootParams, talkootHref } from './navlinks'
 
 function at(url: string) {
   history.replaceState(null, '', url)
@@ -68,6 +68,38 @@ describe('takeNavParams', () => {
     expect(takeNavParams().pane).toBe('')
   })
 
+  it('names panes by the surface ids the daemon declares', () => {
+    // The worktree pane's id is "worktrees". The allowlist once said
+    // "worktree", so that link passed the check and opened no pane at all.
+    at('/?pane=worktrees')
+    expect(takeNavParams().pane).toBe('worktrees')
+    at('/?pane=worktree')
+    expect(takeNavParams().pane).toBe('')
+  })
+
+  it('reads a fleet hub session id, which carries its origin', () => {
+    // Behind a hub every session id is <origin>/<id>, the hub's own included
+    // ("local/…"). Rejecting the slash broke every session link on a hub.
+    for (const good of ['neot/20260720-182451-27cbde4a', 'local/20260720-182451-27cbde4a', 'build-box.lan/20260720-182451-27cbde4a']) {
+      at(`/?session=${encodeURIComponent(good)}`)
+      expect(takeNavParams().session, good).toBe(good)
+    }
+  })
+
+  it('rejects an origin that ctrlproto.ValidOrigin would refuse', () => {
+    for (const bad of [
+      'Neot/20260720-182451-27cbde4a',
+      'a/b/20260720-182451-27cbde4a',
+      '-neot/20260720-182451-27cbde4a',
+      '../20260720-182451-27cbde4a',
+      '/20260720-182451-27cbde4a',
+      'neot/not-an-id',
+    ]) {
+      at(`/?session=${encodeURIComponent(bad)}`)
+      expect(takeNavParams().session, bad).toBe('')
+    }
+  })
+
   it('still strips a rejected param', () => {
     // Otherwise a bad value would persist in the URL and be re-read forever.
     at('/?session=nope&pane=admin')
@@ -102,5 +134,45 @@ describe('takeNavParams card', () => {
 
   it('builds a studio link', () => {
     expect(stageCardHref('kobeni-a1b2c3d4e5f6')).toBe('/stage/?card=kobeni-a1b2c3d4e5f6')
+  })
+})
+
+// The Talkoot app's deep link: a team, and one member's thread in it. Both ids
+// follow the Go rule in talkoot/roster.go, so a hand-edited value that the
+// daemon would refuse never reaches app state.
+describe('talkootHref / takeTalkootParams', () => {
+  beforeEach(() => at('/talkoot/'))
+
+  it('links bare, to a team, and to a member of a team', () => {
+    expect(talkootHref()).toBe('/talkoot/')
+    expect(talkootHref('crew')).toBe('/talkoot/?team=crew')
+    expect(talkootHref('crew', 'developer')).toBe('/talkoot/?team=crew&member=developer')
+  })
+
+  it('drops a member with no team, which names nobody', () => {
+    expect(talkootHref('', 'developer')).toBe('/talkoot/')
+    at('/talkoot/?member=developer')
+    expect(takeTalkootParams()).toEqual({ team: '', member: '' })
+    expect(location.search).toBe('')
+  })
+
+  it('reads a team and a member and strips both', () => {
+    at('/talkoot/?team=crew&member=developer')
+    expect(takeTalkootParams()).toEqual({ team: 'crew', member: 'developer' })
+    expect(location.search).toBe('')
+  })
+
+  it('rejects an id the daemon would refuse, and still strips it', () => {
+    for (const bad of ['Crew', '1crew', 'has space', '../x', 'a'.repeat(33)]) {
+      at('/talkoot/?team=' + encodeURIComponent(bad))
+      expect(takeTalkootParams().team, bad).toBe('')
+      expect(location.search).toBe('')
+    }
+  })
+
+  it('leaves the other apps\' params alone', () => {
+    at('/talkoot/?team=crew&session=20260720-182451-27cbde4a')
+    expect(takeTalkootParams().team).toBe('crew')
+    expect(location.search).toBe('?session=20260720-182451-27cbde4a')
   })
 })

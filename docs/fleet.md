@@ -119,6 +119,11 @@ alongside the hub's own.
 sessions list as `neot/<id>`. Pick something stable and short; it is how you
 will tell two machines apart in the panel.
 
+An origin is a lower-case host name: letters, digits, dots, and hyphens, up to
+63 characters, starting and ending with a letter or digit. The member and the
+hub both refuse any other name. Lower case keeps `Neot` and `neot` from naming
+two machines that look the same.
+
 `local` is reserved for the hub's own workspace.
 
 ## What a fleet does today, and what it refuses
