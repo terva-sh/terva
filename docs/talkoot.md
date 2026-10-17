@@ -61,13 +61,6 @@ workers** while `auto_swarm` is on. Without `auto_swarm`, set it in
 
 ## Your first team
 
-A workspace with no team opens the Talkoot app on a first-run page. It says
-what a talkoot is, names the directory the teams belong to, asks for your name
-in the room, lists the templates, and shows the steps below. Pick a template
-there, or choose **Build a team member by member**. A team view without your
-name asks for it in place, above the conversation, before you post, answer,
-or pause.
-
 1. Open the Talkoot app with **⁂**, and press **New team**.
 2. Pick a template, such as `coding`. Name the team, and set a daily budget in
    US dollars, or keep the template's.
@@ -134,18 +127,7 @@ and resume.
   **Resume** lifts the pause.
 
 The browser tab carries the team. Its title reads the team name and its
-state, and its icon is the team's mark. The desktop window takes the same
-title.
-
-**Notify me when a card waits**, below your name in the rail, posts one
-notification for each new card while the app is not in front. It names the
-team and the member, such as "lead asks you to approve a tool call", and
-never the card's text, because a notification can show on a locked screen.
-A team you do not have open posts one notification when it starts to wait
-on you, and not one for each card after that. The setting is off until you turn it on, and the browser keeps it. A browser
-asks for its permission when you turn it on. The desktop window posts a
-native notification instead, because its webview refuses the web API. On
-macOS that needs terva inside an app bundle.
+state, and its icon is the team's mark.
 
 The rail and member card show each native member's resolved provider and
 model, even before it has a session. An existing session's model takes
@@ -267,10 +249,7 @@ same name in a later one:
 1. Your own, in `$TERVA_HOME/talkoot-templates/*.md`.
 2. Each enabled global extension's `talkoot-templates/` directory, named
    `ext:<extension>`.
-3. The built-in set: `coding`, `personal-assistant`, `research`,
-   `decision-council`, `documentation`, and `review-pair`. Every member of a
-   built-in team runs on the native driver, so each one works on a fresh
-   install.
+3. The built-in `coding`.
 4. The repository's own, in `.terva/talkoot/*.md`, named `repo:<name>`. A
    repository template never hides another.
 
@@ -278,19 +257,6 @@ A repository template is listed by name only until you trust the workspace,
 because a cloned repository controls it. terva reads at most 64 template
 files of at most 64 KiB each from the repository, follows no symbolic links,
 and skips `README.md`.
-
-When no template fits, choose **Build a team** in the **New team** form. The
-builder starts empty or from any template. It edits each member with the
-member card's fields and holds the charter on the same screen. **Preview**
-sends the composed roster to `talkoot.preview` as `text`, so the daemon
-checks every roster rule before you create the team.
-
-To make a template from a team you tuned, choose **Save as template** beside
-the team's budget in the Talkoot app, or call `talkoot.save_template`. terva
-writes the roster to `$TERVA_HOME/talkoot-templates/<name>.md`. It keeps the
-members, the budget, and the charter, and leaves out `home`, `color`, and
-`team_budget_waived`, which belong to the one team. A saved name that the
-built-in set also uses hides the built-in template.
 
 ## Drivers
 

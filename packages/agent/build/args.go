@@ -274,8 +274,11 @@ type Args struct {
 	Session  string
 	NoSess   bool
 
-	CWD     string
-	NoTools bool
+	CWD string
+	// CWDExplicit is true when --cwd named the workspace, so the desktop
+	// window keeps it rather than reopen a remembered one.
+	CWDExplicit bool
+	NoTools     bool
 	// NoWorkspaceTools drops only the built-in workspace tools (read/write/
 	// edit/bash/grep/glob/status/ask) while KEEPING extension + MCP + skill
 	// tools and the normal identity. The least-privilege middle ground between
@@ -1186,6 +1189,7 @@ func ParseArgs(in []string) (Args, error) {
 				return a, err
 			}
 			a.CWD = v
+			a.CWDExplicit = true
 		case "--add-dir":
 			v, err := want(&i, arg)
 			if err != nil {

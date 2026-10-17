@@ -284,6 +284,15 @@ func (s *wsSession) settingsView() ctrlproto.SettingsView {
 			Note:        i18n.T("applies live per spawn"),
 		})
 	}
+	// 🔑 Talkoot names what its members may do and spend, so only the user
+	// layer turns it on, and this row writes nowhere else (MutateConfig). The
+	// daemon mounts /talkoot/ when it starts, so a change waits for a restart.
+	items = append(items, ctrlproto.SettingItem{
+		Key: "talkoot", Group: "agents", Label: i18n.T("Talkoot teams"), Type: "bool",
+		Value:       boolStr(cfg.TalkootEnabled != nil && *cfg.TalkootEnabled),
+		Description: i18n.T("Run persistent teams of agents that talk in a shared room, and serve the Talkoot app at /talkoot/. Each team's roster sets what its members may do and spend."),
+		Note:        i18n.T("applies after the daemon restarts"),
+	})
 	items = append(items, ctrlproto.SettingItem{
 		Key: "lazy_tools", Group: "context", Label: i18n.T("Lazy tool loading"), Type: "bool",
 		Value:       boolStr(cfg.LazyToolsOn()),
@@ -755,6 +764,13 @@ func (s *wsSession) settingsAction(action string, args map[string]string) error 
 		// newRunner is deliberately unconditional (it must revive persisted ones).
 		on := val == "true"
 		if err := config.MutateConfig(func(c *config.Config) { c.ExternalWorkersEnabled = &on }); err != nil {
+			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
+		}
+	case "talkoot":
+		// Persist only. The daemon reads talkoot_enabled when it starts and
+		// mounts the app then, so the row's note asks for a restart.
+		on := val == "true"
+		if err := config.MutateConfig(func(c *config.Config) { c.TalkootEnabled = &on }); err != nil {
 			return ctrlproto.Errorf(ctrlproto.CodeInternal, "save config: %v", err)
 		}
 	case "language":
