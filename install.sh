@@ -91,10 +91,18 @@ esac
 # desktop stack needs it), so on a musl system such as Alpine it does not
 # start. The lean build is static; install that instead. The archive still
 # unpacks a `terva` binary.
+#
+# ⚠️ musl's `ldd --version` exits 1. Under pipefail a `ldd | grep` pipeline
+# then fails even when grep matches, and the check falls through to the full
+# build. Capture the output and match it instead.
 FLAVOR="$BINARY"
-if [ "$OS" = linux ] && ldd --version 2>&1 | grep -qi musl; then
-  FLAVOR="${BINARY}-min"
-  msg "musl libc detected; installing the lean ${FLAVOR} build"
+if [ "$OS" = linux ]; then
+  case "$(ldd --version 2>&1 || true)" in
+    *musl*)
+      FLAVOR="${BINARY}-min"
+      msg "musl libc detected; installing the lean ${FLAVOR} build"
+      ;;
+  esac
 fi
 
 # ---- resolve version ----
