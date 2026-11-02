@@ -11,6 +11,20 @@ its changes are listed here and nowhere else.
 Versions before v0.104.0 predate this release flow and are not
 itemised; v0.104.0 is the first curated release.
 
+## [v0.141.5](https://github.com/terva-sh/terva/releases/tag/v0.141.5) — 2026-10-17
+
+### Features
+
+- desktop: a Talkoot window that remembers you and opens on your teams
+- talkoot: a team manager that drafts and changes whole teams
+- talkoot: build a team in the app, from six templates or member by member
+- talkoot: notify you when a card waits
+- web: one app switcher, shared deep links, and a session quick switcher
+
+### Fixes
+
+- install: install terva-min on musl systems such as Alpine
+
 ## [v0.141.4](https://github.com/terva-sh/terva/releases/tag/v0.141.4) — 2026-10-14
 
 ### Features
