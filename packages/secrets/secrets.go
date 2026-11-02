@@ -15,6 +15,11 @@
 //     single-line and round-trip-safe through any load/save that treats it as
 //     an opaque string.
 //
+// The field format is terva.sh/seal's, and that module carries its
+// specification. This package calls seal for every v2 field and keeps only
+// what is terva's own: the unbound v1 encoding that migration still has to
+// open, whole-file sealing, key location, and the shared-file Envelope.
+//
 // The key is an X25519 identity (the age-keygen file format). The asymmetry is
 // deliberate even though encrypt and decrypt usually happen in one process:
 // the RECIPIENT is not a secret, so tooling — or a model editing config — can
@@ -51,20 +56,20 @@ package secrets
 import (
 	"bytes"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
 
 	"filippo.io/age"
+	"terva.sh/seal"
 )
 
 // FieldPrefix marks a field-encrypted value: "enc:age:v2:" + base64 of the
 // binary age ciphertext, whose plaintext is a bound value (see the package
 // doc). Versioned so a future scheme can coexist during a migration instead of
-// guessing from shape.
-const FieldPrefix = "enc:age:v2:"
+// guessing from shape. It is seal.Prefix; terva.sh/seal specifies the format.
+const FieldPrefix = seal.Prefix
 
 // LegacyFieldPrefix marks the original UNBOUND encoding, whose plaintext was
 // the raw value. It is still openable — migration and rotation must be able to
@@ -87,9 +92,7 @@ func IsAgeFile(data []byte) bool { return bytes.HasPrefix(data, []byte(fileHeade
 // IsEncryptedField reports whether s carries EITHER field encoding. Callers
 // asking "is this still plaintext?" want both; callers that must open a value
 // go through DecodeField, which accepts only the bound one.
-func IsEncryptedField(s string) bool {
-	return strings.HasPrefix(s, FieldPrefix) || strings.HasPrefix(s, LegacyFieldPrefix)
-}
+func IsEncryptedField(s string) bool { return seal.IsSealed(s) || IsLegacyField(s) }
 
 // IsLegacyField reports whether s carries the unbound v1 encoding.
 func IsLegacyField(s string) bool { return strings.HasPrefix(s, LegacyFieldPrefix) }
@@ -99,16 +102,8 @@ func IsLegacyField(s string) bool { return strings.HasPrefix(s, LegacyFieldPrefi
 // and status output already speak ("extensions.memory.api_key"), a shared
 // component file uses a JSON Pointer — because a binding only has to be stable
 // and unambiguous within its scope, and reusing the vocabulary the surface
-// already prints keeps the mismatch error readable.
-func Binding(scope, location string) string { return scope + "|" + location }
-
-// boundValue is what a v2 field actually seals. Short keys because this is
-// encrypted overhead on every secret, and the shape is closed — an unknown
-// field would mean a v3.
-type boundValue struct {
-	B string `json:"b"`
-	V string `json:"v"`
-}
+// already prints keeps the mismatch error readable. It is seal.Binding.
+func Binding(scope, location string) string { return seal.Binding(scope, location) }
 
 // GenerateIdentity mints a fresh X25519 identity.
 func GenerateIdentity() (*age.X25519Identity, error) { return age.GenerateX25519Identity() }
@@ -117,32 +112,15 @@ func GenerateIdentity() (*age.X25519Identity, error) { return age.GenerateX25519
 // format: any number of blank or #-comment lines around a single
 // AGE-SECRET-KEY-1… line. Trailing material after the first key line is
 // rejected rather than ignored — two keys in one file is a confused state,
-// not a choice.
+// not a choice. It is seal.ParseIdentity, whose errors never quote the line.
 func ParseIdentity(content string) (*age.X25519Identity, error) {
-	var found *age.X25519Identity
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if found != nil {
-			return nil, errors.New("secrets key holds more than one non-comment line")
-		}
-		id, err := age.ParseX25519Identity(line)
-		if err != nil {
-			return nil, fmt.Errorf("parse secrets key: %w", err)
-		}
-		found = id
-	}
-	if found == nil {
-		return nil, errors.New("secrets key holds no AGE-SECRET-KEY line")
-	}
-	return found, nil
+	return seal.ParseIdentity(content)
 }
 
-// ParseRecipient parses an age1… recipient string.
+// ParseRecipient parses an age1… recipient string, ignoring surrounding
+// whitespace. It is seal.ParseRecipient.
 func ParseRecipient(s string) (*age.X25519Recipient, error) {
-	return age.ParseX25519Recipient(strings.TrimSpace(s))
+	return seal.ParseRecipient(s)
 }
 
 // Encrypt seals plaintext in the binary age format, readable by ANY of the
@@ -181,24 +159,15 @@ func Decrypt(id age.Identity, ciphertext []byte) ([]byte, error) {
 
 // EncodeField seals value into the single-line field encoding, BOUND to the
 // location it is being stored at (see Binding) and readable by any of the given
-// recipients.
+// recipients. It is seal.Seal.
 //
 // An empty binding is refused rather than treated as "unbound": every caller
 // knows where it is writing, and a silent unbound seal would be a value that
-// can be moved.
+// can be moved. A binding or value that is not valid UTF-8 is refused too,
+// because JSON would replace the invalid bytes and the field would open to a
+// different string.
 func EncodeField(binding, value string, recipients ...age.Recipient) (string, error) {
-	if binding == "" {
-		return "", errors.New("encode field: refusing to seal a value with no binding")
-	}
-	plain, err := json.Marshal(boundValue{B: binding, V: value})
-	if err != nil {
-		return "", err
-	}
-	ct, err := Encrypt(plain, recipients...)
-	if err != nil {
-		return "", err
-	}
-	return FieldPrefix + base64.StdEncoding.EncodeToString(ct), nil
+	return seal.Seal(binding, value, recipients...)
 }
 
 // DecodeField opens a field-encoded value and verifies it was sealed FOR the
@@ -207,18 +176,15 @@ func EncodeField(binding, value string, recipients ...age.Recipient) (string, er
 // not been moved) and a binding mismatch is refused (it has been). A string
 // without either prefix is an error too — the caller decides whether unprefixed
 // means legacy plaintext, this package does not guess.
+//
+// The error wraps seal.ErrVersion for a v1 value, seal.ErrNotSealed for an
+// unprefixed string, and seal.ErrMismatch for a moved one, so callers test
+// with errors.Is rather than the message.
 func DecodeField(id age.Identity, binding, s string) (string, error) {
 	if IsLegacyField(s) {
-		return "", fmt.Errorf("value uses the unbound %q encoding and cannot prove it belongs at %q; re-seal it with `terva secret migrate`", LegacyFieldPrefix, binding)
+		return "", fmt.Errorf("value uses the unbound %q encoding and cannot prove it belongs at %q; re-seal it with `terva secret migrate`: %w", LegacyFieldPrefix, binding, seal.ErrVersion)
 	}
-	got, plain, err := decodeAny(id, s)
-	if err != nil {
-		return "", err
-	}
-	if got != binding {
-		return "", fmt.Errorf("encrypted value is bound to %q but was found at %q — it has been moved, and opening it here would hand it to the wrong consumer", got, binding)
-	}
-	return plain, nil
+	return seal.Open(binding, s, id)
 }
 
 // DecodeAnyField opens a field-encoded value of EITHER version without checking
@@ -226,7 +192,8 @@ func DecodeField(id age.Identity, binding, s string) (string, error) {
 //
 // Only migration and rotation may use it: they rewrite a value in place, so
 // they need to open one whose binding is absent (v1) or wrong (moved) in order
-// to report it. Every other caller wants DecodeField.
+// to report it. Every other caller wants DecodeField. A v2 value goes through
+// seal.OpenUnchecked.
 func DecodeAnyField(id age.Identity, s string) (binding, value string, err error) {
 	if b64, ok := strings.CutPrefix(s, LegacyFieldPrefix); ok {
 		ct, err := base64.StdEncoding.DecodeString(b64)
@@ -239,32 +206,7 @@ func DecodeAnyField(id age.Identity, s string) (binding, value string, err error
 		}
 		return "", string(plain), nil
 	}
-	return decodeAny(id, s)
-}
-
-// decodeAny opens a v2 field and returns its declared binding, without judging
-// it.
-func decodeAny(id age.Identity, s string) (binding, value string, err error) {
-	b64, ok := strings.CutPrefix(s, FieldPrefix)
-	if !ok {
-		return "", "", fmt.Errorf("not a %q-encoded value", FieldPrefix)
-	}
-	ct, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil {
-		return "", "", fmt.Errorf("decode encrypted field: %w", err)
-	}
-	plain, err := Decrypt(id, ct)
-	if err != nil {
-		return "", "", err
-	}
-	var bv boundValue
-	if err := json.Unmarshal(plain, &bv); err != nil {
-		return "", "", fmt.Errorf("encrypted value is not a bound value: %w", err)
-	}
-	if bv.B == "" {
-		return "", "", errors.New("encrypted value carries an empty binding")
-	}
-	return bv.B, bv.V, nil
+	return seal.OpenUnchecked(s, id)
 }
 
 // Codec is the whole-file encrypt/decrypt handle a store threads through its

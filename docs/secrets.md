@@ -100,6 +100,11 @@ Three shapes, because the files are used differently:
   working; re-seal it at its new path instead. `terva secret migrate` upgrades
   values sealed by an older terva (`enc:age:v1:…`, unbound) in place.
 
+  The `enc:age:v2:` format belongs to the Go module
+  [`terva.sh/seal`](https://terva.sh/seal), which specifies it and which
+  terva uses to seal and open these values. Another program can read or
+  write them with that module and the same key.
+
 MCP `env` and `headers` values are deliberately NOT encrypted. The sanctioned
 way to keep a token out of that file is the existing `${ENV}` reference or
 `auth.bearer_env`.

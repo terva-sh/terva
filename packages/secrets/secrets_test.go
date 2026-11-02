@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"filippo.io/age"
+	"terva.sh/seal"
 )
 
 func TestEncryptDecryptRoundTrip(t *testing.T) {
@@ -120,6 +121,43 @@ func TestLegacyFieldOpensOnlyForMigration(t *testing.T) {
 	}
 	if binding != "" || value != "hunter2" {
 		t.Fatalf("migration decode of a v1 value = (%q, %q)", binding, value)
+	}
+}
+
+// Each way a point of use refuses a field is one of seal's sentinels, so a
+// caller can tell a moved value from an old encoding without reading the
+// message. The v1 refusal is terva's own and must still say how to recover.
+func TestDecodeFieldErrorsWrapSealSentinels(t *testing.T) {
+	id, _ := GenerateIdentity()
+	here := Binding("config", "extensions.weather.api_key")
+
+	ct, err := Encrypt([]byte("hunter2"), id.Recipient())
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := LegacyFieldPrefix + base64.StdEncoding.EncodeToString(ct)
+	_, err = DecodeField(id, here, legacy)
+	if !errors.Is(err, seal.ErrVersion) {
+		t.Errorf("v1 refusal = %v, want seal.ErrVersion", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "terva secret migrate") {
+		t.Errorf("v1 refusal does not name the recovery command: %v", err)
+	}
+
+	if _, err := DecodeField(id, here, "hunter2"); !errors.Is(err, seal.ErrNotSealed) {
+		t.Errorf("unprefixed value = %v, want seal.ErrNotSealed", err)
+	}
+
+	moved, err := EncodeField(Binding("config", "image.backends.local.api_key"), "hunter2", id.Recipient())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = DecodeField(id, here, moved)
+	if !errors.Is(err, seal.ErrMismatch) {
+		t.Errorf("moved value = %v, want seal.ErrMismatch", err)
+	}
+	if err != nil && strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("mismatch error quotes the value: %v", err)
 	}
 }
 
