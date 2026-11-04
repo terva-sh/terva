@@ -23,8 +23,21 @@ func Gone(pid int) bool {
 	if err := syscall.Kill(pid, 0); err != nil {
 		return true // ESRCH: reaped and gone
 	}
-	return Zombie(pid)
+	if zombieState(pid) {
+		return true
+	}
+	// The state lookup is not atomic with the kill above. On a host without
+	// /proc it forks ps(1), and that takes about 10ms on macOS. A child that
+	// was mid-exit at the kill is fully reaped inside the window, and ps then
+	// names no process, which is not a zombie. That answer alone calls a dead
+	// child alive, the false "still ran when Stop returned" the macOS runner
+	// reports. Ask the kernel a second time, which answers in one syscall.
+	return syscall.Kill(pid, 0) != nil
 }
+
+// zombieState reports whether pid is a zombie. Gone reads the lookup through
+// this variable, so a test can stand in for the window the lookup leaves open.
+var zombieState = Zombie
 
 // Zombie reports whether pid is a zombie. Linux answers from the state field of
 // /proc/<pid>/stat. A host without /proc (macOS, the BSDs) answers from
@@ -37,10 +50,11 @@ func Zombie(pid int) bool {
 }
 
 // psZombie reads the process state from ps(1). The stat column starts with Z
-// for a zombie, and ps exits non-zero when pid names no process. A process
-// that has begun to exit carries the E flag before it shows Z. On macOS CI a
-// kill(2) on the group already found no member while this helper, reading
-// only Z, still called the exiting member alive. It counts as gone here.
+// for a zombie. A process that has begun to exit carries the E flag before it
+// shows Z, and it counts as a zombie here, because a kill(2) on the group had
+// already found no member while this helper, reading only Z, called that
+// exiting member alive. ps exits non-zero when pid names no process, and a
+// reaped process is not a zombie, so that answers false. Gone closes the gap.
 func psZombie(pid int) bool {
 	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {

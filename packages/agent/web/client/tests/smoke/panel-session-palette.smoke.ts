@@ -7,6 +7,11 @@ import { SMOKE_SESSION, installMockBackend, panelSessionURL } from './support'
 // are not visible there. A real browser decides whether Ctrl+K reaches the page
 // at all, and from inside the composer too. happy-dom also has no layout, so a
 // palette wider than a phone looks the same as one that fits.
+//
+// The shortcut is Mod+K, and isPaletteShortcut wants Meta on a Mac and refuses
+// Control there. So these presses ask for ControlOrMeta, which Playwright maps
+// the same way. A literal Control+k passes on the Linux runner and fails for
+// anyone who runs `just ci` on a Mac.
 
 const SESSIONS = [
   { id: SMOKE_SESSION, current: true, title: 'the session you are in', model: 'gpt-5.6-sol', messages: 58 },
@@ -32,7 +37,7 @@ test('panel: Ctrl+K from the composer jumps to another session', async ({ page }
 
   // From the composer, where the person is typing when the thought arrives.
   await page.locator('footer.composer textarea').focus()
-  await page.keyboard.press('Control+k')
+  await page.keyboard.press('ControlOrMeta+k')
   const dialog = page.getByRole('dialog', { name: 'Jump to a session' })
   await expect(dialog).toBeVisible()
   const input = dialog.getByRole('combobox')
@@ -55,7 +60,7 @@ test('panel: Escape closes the quick switcher and gives focus back', async ({ pa
   await page.goto(panelSessionURL)
   const ta = page.locator('footer.composer textarea')
   await ta.focus()
-  await page.keyboard.press('Control+k')
+  await page.keyboard.press('ControlOrMeta+k')
   await expect(page.getByRole('dialog', { name: 'Jump to a session' })).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog', { name: 'Jump to a session' })).toBeHidden()
@@ -67,7 +72,7 @@ test('panel: Enter on the focused board button opens the board, not a session', 
   await mock(page)
   await page.goto(panelSessionURL)
   await expect(page.locator('.topbar .sess-title')).toHaveText('the session you are in')
-  await page.keyboard.press('Control+k')
+  await page.keyboard.press('ControlOrMeta+k')
   const dialog = page.getByRole('dialog', { name: 'Jump to a session' })
   await expect(dialog).toBeVisible()
   await page.keyboard.press('Tab')
